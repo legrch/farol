@@ -74,7 +74,7 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 	if launch.StartupMode != "" && launch.StartupMode != "normal" && launch.StartupMode != "fresh" {
 		return nil, profileFailure(ProfileInvalid)
 	}
-	if launch.StartupMode == "fresh" && (launch.PreviousHostDrainConfirmed || launch.SettingsMutations || launch.CodexRead != nil || launch.shell != nil || launch.HostLifetimeID == "" || launch.ChildLaunchID == "") {
+	if launch.StartupMode == "fresh" && (launch.PreviousHostDrainConfirmed || launch.HostLifetimeID == "" || launch.ChildLaunchID == "") {
 		return nil, profileFailure(ProfileInvalid)
 	}
 	if launch.CodexRead != nil && !launch.CodexRead.valid() {
@@ -194,6 +194,12 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 		if err != nil {
 			return fail(err)
 		}
+		if runtime.fresh != nil {
+			err = runtime.mutationStore.InspectFreshProcesses(ctx, mutationrepo.SettledSelection{OwnerID: launch.OwnerID, ProfileID: launch.Profile.ProfileID, ComputerID: launch.ComputerID})
+			if err != nil {
+				return fail(errors.Join(errors.New("FRESH_SESSION_PROCESS_SAFETY_UNCONFIRMED"), err))
+			}
+		}
 		runtime.mutations, err = settingsMutationIngress(runtime.ingress, computerMutationDependencies{repository: runtime.mutationStore, native: fileOwners, digester: filesystem.Digester{}})
 		if err != nil {
 			return fail(err)
@@ -257,8 +263,8 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 // Close releases only this lifetime's descriptors once. It neither unlinks a
 // journal claim nor qualifies clean retirement. EOF/exit alone cannot authorize
 // reopen, admission restoration, a new root or recovery of an unknown publication.
-// Root/host still must retain an actual clean-retirement receipt, explicit durable
-// initiating ACK and this backend's exact terminal observation before successor.
+// Previous-session successors retain their receipt/ACK/terminal requirements.
+// Fresh admission qualifies new owners separately and never reopens this session.
 func (r *NativeRuntime) Close() error {
 	if r == nil {
 		return nil

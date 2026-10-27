@@ -1112,10 +1112,11 @@ export async function spawnCore(
         !native.childLaunchId ||
         (native.previousHostDrainConfirmed !== undefined &&
           native.previousHostDrainConfirmed !== false) ||
-        (native.settingsMutations !== undefined &&
-          native.settingsMutations !== false) ||
-        codexRead !== undefined ||
-        native.shellMetadata !== undefined)
+        (native.startupMode === "recovery" &&
+          ((native.settingsMutations !== undefined &&
+            native.settingsMutations !== false) ||
+            codexRead !== undefined ||
+            native.shellMetadata !== undefined)))
     )
       throw new BridgeError("refused", "invalid_recovery_launch");
     if (!isAbsolute(executable))

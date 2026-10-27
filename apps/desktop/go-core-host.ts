@@ -88,6 +88,7 @@ export type DesktopCoreSelection = Readonly<{
   // host's confirmed drain can clear that marker; Go terminal bytes cannot.
   previousHostDrainConfirmed: boolean;
   startupPurpose?: "fresh";
+  withInactiveMcp?<T>(start: () => Promise<T>): Promise<T>;
   build: BuildIdentity;
   artifactRoot: string;
   stateRoot: string;
@@ -176,6 +177,9 @@ export class DesktopGoCore {
   }
   get independentSession(): boolean {
     return this.freshSession;
+  }
+  get limitedSession(): boolean {
+    return this.freshSession && !this.hasMutationStorage;
   }
   get chat(): ChatBridge {
     if (!this.chatBridge || this.closeResult || this.pump?.state !== "running")
@@ -631,9 +635,24 @@ export class DesktopGoCore {
 export async function startDesktopGoCore(
   selection: DesktopCoreSelection,
 ): Promise<DesktopGoCore> {
+  if (selection.startupPurpose === "fresh") {
+    if (selection.previousHostDrainConfirmed)
+      throw new BridgeError("refused", "invalid_fresh_launch");
+    if (typeof selection.withInactiveMcp !== "function")
+      throw new BridgeError("refused", "fresh_mcp_owner_unconfirmed");
+    return selection.withInactiveMcp(() =>
+      startSelectedDesktopGoCore(selection),
+    );
+  }
+  return startSelectedDesktopGoCore(selection);
+}
+
+async function startSelectedDesktopGoCore(
+  selection: DesktopCoreSelection,
+): Promise<DesktopGoCore> {
   const codexRead = copyNativeCodexReadLaunch(selection);
   const fresh = selection.startupPurpose === "fresh";
-  if (fresh && (selection.previousHostDrainConfirmed || codexRead))
+  if (fresh && selection.previousHostDrainConfirmed)
     throw new BridgeError("refused", "invalid_fresh_launch");
   if (
     selection.startupPurpose !== "fresh" &&
@@ -645,7 +664,7 @@ export async function startDesktopGoCore(
   const artifact = readDesktopCoreDeclaration(selection.artifactRoot, expected);
   // Capture trusted inputs before yielding to resource IO. The support parser
   // freezes its copy; the source copy cannot be changed by the caller later.
-  const selectedShell = fresh ? undefined : selection.compiledShell;
+  const selectedShell = selection.compiledShell;
   if (
     selectedShell &&
     (!(selectedShell.watchdogSource instanceof Uint8Array) ||
@@ -750,7 +769,7 @@ export async function startDesktopGoCore(
       ownerId: "owner-desktop",
       computerId: settings.computer.computerId,
       storeMode: storage.storeMode,
-      settingsMutations: fresh ? false : storage.settingsMutations,
+      settingsMutations: storage.settingsMutations,
       ...(fresh ? { startupMode: "fresh" as const } : {}),
       previousHostDrainConfirmed: selection.previousHostDrainConfirmed,
       hostLifetimeId,
@@ -773,7 +792,7 @@ export async function startDesktopGoCore(
     client,
     selection.settings,
     (ack) => attested.completeRetirement(ack),
-    fresh ? false : storage.settingsMutations,
+    storage.settingsMutations,
     selection.build.buildId,
     qualifiedShell,
     fresh,

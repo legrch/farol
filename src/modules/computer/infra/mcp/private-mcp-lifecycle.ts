@@ -45,6 +45,7 @@ export class PrivateMcpLifecycle {
   private stopRevision = 0;
   private preparationRevision = 0;
   private confirmedStopRevision: number | null = null;
+  private freshStartRevision: number | null = null;
 
   constructor(private readonly root: string) {
     if (!path.isAbsolute(root) || root.includes("\0"))
@@ -380,8 +381,30 @@ export class PrivateMcpLifecycle {
   async hasUnconfirmedStop(): Promise<boolean> {
     return (
       (await this.existingMarker("stopping")) &&
-      this.confirmedStopRevision !== this.stopRevision
+      this.confirmedStopRevision !== this.stopRevision &&
+      this.freshStartRevision !== this.stopRevision
     );
+  }
+
+  /** Current startup only: borrow the existing MCP exclusion through native
+   * admission. Old launch contracts are revoked, never replayed or settled.
+   * This records no old Quit/stop acknowledgement and removes no history.
+   */
+  async withInactiveForFreshStart<T>(start: () => Promise<T>): Promise<T> {
+    const lease = await this.lock(true, 0);
+    try {
+      await this.reconciliationComplete();
+      await this.validateInactiveInstances();
+      await this.shellGroupsGone();
+      await this.revokePrepared();
+      this.freshStartRevision = this.stopRevision;
+      return await start();
+    } catch (error) {
+      this.freshStartRevision = null;
+      throw error;
+    } finally {
+      await lease.close();
+    }
   }
 
   /** Startup only, under the primary host's promotion exclusion, before IPC

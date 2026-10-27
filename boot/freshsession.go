@@ -23,11 +23,11 @@ func (r *NativeRuntime) freshSessionMethods() map[string]desktop.Method {
 		fail := func() (*desktop.Outcome, error) {
 			return &desktop.Outcome{Status: "unknown", Code: "FRESH_SESSION_DRAIN_UNCONFIRMED"}, nil
 		}
-		if r.fresh.verify() != nil || r.ingress.freezeForRetirement(ctx) != nil {
+		if r.fresh.verify() != nil || r.closeCodexRead() != nil || r.ingress.freezeForRetirement(ctx) != nil {
 			return fail()
 		}
 		r.historyAuthority.close()
-		if r.connector.drainProcessesForRetirement(ctx) != nil || r.chat.FreezeAdmissions(ctx) != nil {
+		if r.settingsDelivery.freezeForRetirement(ctx) != nil || r.connector.drainProcessesForRetirement(ctx) != nil || r.mutations.freezeForRetirement() != nil || r.chat.FreezeAdmissions(ctx) != nil {
 			return fail()
 		}
 		if _, err := r.chat.Retire(ctx); err != nil {

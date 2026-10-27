@@ -1670,7 +1670,7 @@ function bootstrap() {
       error: "SETTINGS_READ_FAILED",
     },
     runtimeState,
-    independentSession: desktopGoCore?.independentSession === true,
+    independentSession: desktopGoCore?.limitedSession === true,
     browserRouteState:
       selectedTaskId === ""
         ? { state: chatGptRoute?.loadState() ?? "loading" }
@@ -12140,18 +12140,9 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT",
       );
       let admissionReady = clean;
-      // A clean legacy successor keeps its existing route. Once fresh sessions
-      // exist, every later launch stays independent of the old Chat handoff.
-      const priorFreshSession = await lstat(
-        path.join(stateRoot, "go-core", "chat", "fresh-session.claim"),
-      ).then(
-        () => true,
-        (error: unknown) => {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-          throw error;
-        },
-      );
-      freshStartup = compiledGoCore !== null && (!clean || priorFreshSession);
+      // Ordinary Go startup creates current work independently of old sessions.
+      // Permanent lock files exclude owners; their presence selects no mode.
+      freshStartup = compiledGoCore !== null;
       if (freshStartup) {
         if (!clean) {
           // Current Settings integrity remains mandatory; no default/repair path.
@@ -12505,7 +12496,13 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         previousHostDrainConfirmed: freshStartup
           ? false
           : previousHostAdmissionReady,
-        ...(freshStartup ? { startupPurpose: "fresh" as const } : {}),
+        ...(freshStartup
+          ? {
+              startupPurpose: "fresh" as const,
+              withInactiveMcp: <T>(start: () => Promise<T>) =>
+                computerMcpLifecycle().withInactiveForFreshStart(start),
+            }
+          : {}),
         build: buildIdentity,
         // The attested path must remain immutable through spawn and lifetime.
         // Shared installation paths are writable by other administrator accounts.

@@ -470,6 +470,52 @@ describe.skipIf(process.platform !== "darwin")(
       ).toHaveLength(1);
     });
 
+    it("holds the existing exclusive MCP lock through fresh native admission without acknowledging the old Quit", async () => {
+      const { root, lifecycle } = await fixture();
+      await lifecycle.prepare(oldDigest);
+      const live = await lifecycle.join(oldDigest);
+      await lifecycle.beginStop();
+      const start = vi.fn(async () => "current-native-owner");
+      await expect(lifecycle.withInactiveForFreshStart(start)).rejects.toThrow(
+        "COMPUTER_MCP_LIFECYCLE_UNVERIFIED",
+      );
+      expect(start).not.toHaveBeenCalled();
+      await live.release({ effectsUnresolved: true });
+      await expect(
+        lifecycle.withInactiveForFreshStart(async () => {
+          await expect(lifecycle.join(oldDigest)).rejects.toThrow(
+            "COMPUTER_MCP_LIFECYCLE_UNVERIFIED",
+          );
+          return start();
+        }),
+      ).resolves.toBe("current-native-owner");
+      expect(await lifecycle.hasUnconfirmedStop()).toBe(false);
+      expect(await new PrivateMcpLifecycle(root).hasUnconfirmedStop()).toBe(
+        true,
+      );
+      expect(
+        (await fs.readdir(path.join(root, "mcp-lifecycle"))).filter((name) =>
+          name.startsWith("active-"),
+        ),
+      ).toHaveLength(1);
+      await expect(lifecycle.join(oldDigest)).rejects.toThrow(
+        "COMPUTER_MCP_LIFECYCLE_REVOKED",
+      );
+      await lifecycle.beginStop();
+      expect(await lifecycle.hasUnconfirmedStop()).toBe(true);
+    });
+
+    it("retains the original stop when fresh native admission fails", async () => {
+      const { lifecycle } = await fixture();
+      await lifecycle.beginStop();
+      await expect(
+        lifecycle.withInactiveForFreshStart(async () => {
+          throw Error("native owner busy");
+        }),
+      ).rejects.toThrow("native owner busy");
+      expect(await lifecycle.hasUnconfirmedStop()).toBe(true);
+    });
+
     it("retires an inactive instance only through explicit, fenced reconciliation, without confirming its old stop", async () => {
       const { root, lifecycle } = await fixture();
       await lifecycle.prepare(oldDigest);

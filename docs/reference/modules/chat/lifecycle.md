@@ -336,9 +336,9 @@ digest, the complete selected owner-mutation set and future maintenance
 identities remain independently supplied and verified. The known-scope
 observation and preparation entries retain their existing requirements.
 
-The previous-session startup composition makes one preserving-maintenance
-attempt before launching its selected read-only or successor child. Ordinary
-independent fresh startup now has a separate current-claim path described in
+The explicitly selected previous-session composition retains its guarded
+preserving-maintenance path before a read-only or successor child. Ordinary
+compiled-Go startup selects the separate current-claim path described in
 [Startup recovery](../../../startup-recovery.md#independent-fresh-admission); it
 does not call this previous-session composition or Consume. It borrows the
 original admission handle and full verifier; the enclosing Electron owner

@@ -148,7 +148,7 @@ func Run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostics io.Wri
 		fmt.Fprintln(diagnostics, err)
 		return 2
 	}
-	if (*startupMode == "recovery" || *startupMode == "fresh") && (*root == "" || (*storeMode != "open" && !(*startupMode == "fresh" && *storeMode == "create")) || *hostLifetime == "" || *childLaunch == "" || *settingsMutations || *previousDrain || *shellFD != 0 || codexRead != nil) {
+	if (*startupMode == "recovery" || *startupMode == "fresh") && (*root == "" || (*storeMode != "open" && !(*startupMode == "fresh" && *storeMode == "create")) || *hostLifetime == "" || *childLaunch == "" || *previousDrain || *startupMode == "recovery" && (*settingsMutations || *shellFD != 0 || codexRead != nil)) {
 		return 2
 	}
 	var launch *NativeLaunch

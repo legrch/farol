@@ -866,3 +866,29 @@ describe("explicit existing-profile recovery launch", () => {
     expect(f.profile.close).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("explicit fresh launch", () => {
+  it("keeps current mutation and Codex-read selections without an old drain acknowledgement", async () => {
+    const f = fixture();
+    const client = await spawnCore("/owned/backend", "profile", "test", 1000, {
+      ...f.native,
+      startupMode: "fresh",
+      hostLifetimeId: "fresh-host",
+      childLaunchId: "fresh-child",
+      settingsMutations: true,
+      codexRead: { hostId: "codex", trustedTemp: "/fixture/tmp" },
+    });
+    const args = vi.mocked(spawn).mock.calls[0]![1]!;
+    expect(args).toContain("--settings-mutations");
+    expect(args).toContain("--codex-read-host");
+    expect(
+      args.slice(
+        args.indexOf("--startup-mode"),
+        args.indexOf("--startup-mode") + 2,
+      ),
+    ).toEqual(["--startup-mode", "fresh"]);
+    expect(args).not.toContain("--previous-host-drain-confirmed");
+    expect(spawn).toHaveBeenCalledTimes(1);
+    await client.close();
+  });
+});

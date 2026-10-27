@@ -188,49 +188,65 @@ running artifact or its declarations is not supported.
 
 ## Independent fresh admission
 
-Ordinary Go desktop startup selects fresh admission after an unconfirmed host,
-or when the profile already contains independent sessions. A clean legacy
-successor retains its existing strict retirement route. Fresh admission never
-sets `previousHostDrainConfirmed`, calls previous `Consume`, replays stored work,
-or feeds connector/process records into the owner-settings Completed consumer.
+Ordinary compiled-Go desktop startup selects fresh admission, including after a
+clean Quit. It never sets `previousHostDrainConfirmed`, calls previous `Consume`,
+replays stored work, or feeds connector/process records into the owner-settings
+Completed consumer. Explicit previous-session maintenance keeps its own guards.
 
-The host retains its real startup promotion lease and singleton ownership while
+The host retains its startup promotion lease and singleton ownership while
 preserving the original run marker and optional Quit bytes in a private,
 append-only `run-history/<UUID>` directory. It refuses an alive or unidentified
 marker owner. A dead marker owner permits preservation only, not a claim that
-the old process or operation succeeded. The ordinary new-host run marker is
-published separately. Settings integrity remains mandatory; no reset, default
-repair or permission migration is used to qualify an interrupted profile.
+the old process or operation succeeded. Settings integrity remains mandatory;
+no reset, default repair or permission migration qualifies an interrupted profile.
 
 The new Go child obtains the existing exclusive Computer owner before creating
-any new Chat state. It also holds a permanent fresh-session claim and the
-existing lifecycle, handoff and result claims when present. Busy, partial or
-changed claims refuse. An append-only `chat/fresh-<generation-hash>/chat` root
-holds this run's lifecycle/results; its generation directory is created
-exclusively and never reopened, even after an abandoned startup. Original Chat,
-mutation and Task journals remain in place. Historical UNKNOWN stays UNKNOWN.
-Every native request checks the retained claims before and after dispatch.
+new Chat state. It holds the existing fresh-session, lifecycle, handoff and result
+claims when present. The fresh-session claim is a retained flock resource, not a
+permanent restriction on future capabilities. Busy, partial or changed claims
+refuse. Each new `chat/fresh-<generation-hash>/chat` is created exclusively and
+never reopened. Original Chat, mutation and Task journals remain in place.
+Historical UNKNOWN stays UNKNOWN. Every native request rechecks retained claims.
 
-**This first independent mode is limited.** It composes a fresh Chat session and
-the independently qualified Computer reader, without mutation storage, Shell
-or Codex read selection. A new run/claim does not prove arbitrary old workspace
-descendants stopped. Home states that file changes and commands are paused;
-it does not claim all tools work or repeat completed Setup. Current shared
-Computer/Chat owners can still block the backend because this composition
-depends on their actual claims. No isolated workspace/output bypass is added.
+Desktop holds the existing MCP exclusive lifetime lock through Go admission.
+Active MCP leases refuse startup; safe old instance markers are retained as
+history. Original prepared launches are revoked, not replayed. Unconfirmed
+legacy shell-group markers and incomplete reconciliation still refuse. The
+in-memory current-start permission neither fabricates an old stop ACK nor
+survives a new stop revision or a new lifecycle owner.
+
+Fresh admission forwards separately qualified mutation storage, Shell resources
+and Codex read selection. Their existing authority and confinement still apply.
+The existing mutation writer lock also protects a read-only process-history
+inspection before new mutable work is composed. All canonical records, output
+chunks and original owner/profile/computer bindings must qualify within the
+existing 128-record bound. Corruption, unsupported records, changed roots or
+excess inventory refuse as `FRESH_SESSION_PROCESS_SAFETY_UNCONFIRMED`.
+
+An old writable process reservation or terminal with unconfirmed cleanup refuses
+with nested `FRESH_SESSION_PROCESS_SCOPE_UNAVAILABLE`. Its stored cwd/root does
+not identify every originally writable resource: RootScoped Shell can access
+other approved roots too. Flock and successful supervisor Wait cannot supply
+missing cleanup or resource-scope evidence. This checkpoint therefore does not
+admit a profile containing that ambiguity; it does not globally strip tools or
+pretend that a cwd-only restriction safely isolates an old group. Resource-local
+admission for such legacy records remains BLOCKED without adequate original
+facts. No new PID scanner, cleanup retry or lease protocol is introduced.
 
 `core.fresh.close` freezes and drains only this session and is admitted once.
-The host requires its confirmed reply and the original child's actual normal,
-unforced exit. Unknown drain or terminal remains unconfirmed without retry.
-This protocol records no previous-session retirement, ACK or terminal. A
-retained legacy tunnel not owned by this run is not stopped during its Quit;
-an actually owned running/uncertain connector keeps its existing strict drain.
-Build ownership remains a separate guard.
+It drains current Settings delivery, process publication and mutation owners,
+Codex read, Chat and browser exchanges. A no-op Cancel after reap does not create
+UNKNOWN; only original exit plus confirmed group/descendant cleanup and durable
+publication settle a process. Known results with unverified cleanup remain
+recorded without being rewritten. The host still requires the original child's
+actual normal, unforced exit. Unknown drain or terminal is never retried. This
+protocol records no previous-session retirement, ACK or terminal.
 
-Disposable native tests qualify current claim conflicts, two fresh generations,
-unchanged historical bytes, refused generation reuse and lost claims. Host,
-protocol and renderer fixtures cover routing, current-only drain, preserved
-markers/57 synthetic UNKNOWN and the limited Home warning. They do not establish
-live-provider behavior, arbitrary descendant cleanup, Electron restart, actual
-owner-profile admission or package/installed acceptance. No live recovery is
-implied by these tests.
+Disposable native tests qualify two new Go runtime generations with real file
+edit receipts and delivery ACKs while retaining the original UNKNOWN and history.
+The Settings-store/consent peer is explicit fixture input. A separate read-only
+CLI journey qualifies two real Go child processes over framed IPC. Controlled
+collector tests qualify reap→Cancel→publication ordering. None of these proves
+one assembled writable Shell→Quit→Electron-reopen journey, live provider tools,
+actual owner-profile admission, package or installed acceptance. These remain
+separate gates. No live recovery is implied by these tests.

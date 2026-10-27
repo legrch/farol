@@ -4,13 +4,75 @@ package boot
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	wire "github.com/legrch/farol/gen/desktop/v1"
+	delivery "github.com/legrch/farol/modules/computer/app/services/settingsdelivery"
 	"github.com/legrch/farol/transport/desktop"
 	"golang.org/x/sys/unix"
 )
+
+// Native journal/filesystem and real Go delivery policy, with an explicit
+// Settings-store/consent fixture. Separate OS-process framing is tested by the
+// read-only CLI journey; this does not claim real Electron/MCP/Shell acceptance.
+func TestFreshSessionWritableReopenRetainsOriginalUnknown(t *testing.T) {
+	launch, workspace, _ := recoveryNativeFixture(t)
+	before := recoverySnapshot(t, launch.Profile.Root)
+	launch.StartupMode, launch.SettingsMutations = "fresh", true
+	for n := 0; n < 2; n++ {
+		r, err := NewNativeRuntime(context.Background(), launch, fmt.Sprintf("fresh-writable-%d", n))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.retirement != nil || r.mutations == nil {
+			t.Fatal("fresh native mutation composition unavailable")
+		}
+		generation := n + 2
+		r.settingsDelivery.store = &deliveryStoreFixture{value: delivery.Snapshot{Revision: 1, Current: delivery.Identity{ProfileID: launch.Profile.ProfileID, OwnerID: launch.OwnerID, ComputerID: launch.ComputerID, Generation: uint64(generation)}}}
+		publication := nativeSettingsPublication(t, r, workspace, generation)
+		name := fmt.Sprintf("new-canary-%d.txt", n)
+		if err := os.WriteFile(filepath.Join(workspace, name), []byte("before"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		hash := sha256.Sum256([]byte("before"))
+		request := wire.ComputerSettingsEditRequest{Publication: publication, WorkspaceId: "00000000-0000-4000-8000-000000000004", RelativePath: name, ExpectedSHA256: hex.EncodeToString(hash[:]), Edits: []wire.ComputerTextEdit{{OldText: "before", NewText: "after"}}}
+		out := nativeSettingsCall(t, r, "computer.settings.delivery.apply", fmt.Sprintf("00000000-0000-4000-8000-%012d", n+1000), wire.SettingsDeliveryApply{DeadlineMillis: fmt.Sprint(time.Now().Add(10 * time.Second).UnixMilli()), Request: request})
+		var offered wire.SettingsDeliveryResult
+		if out.Status != "ok" || json.Unmarshal(out.Data, &offered) != nil || offered.Result == nil || offered.Result.Phase != "completed" || offered.Result.Publication != "durable" || offered.ReceiptId == nil {
+			t.Fatalf("fresh real mutation receipt unavailable: %#v", out)
+		}
+		data, err := os.ReadFile(filepath.Join(workspace, name))
+		if err != nil || string(data) != "after" {
+			t.Fatal("new file edit did not execute exactly once", err)
+		}
+		ack := nativeSettingsCall(t, r, "computer.settings.delivery.ack", fmt.Sprintf("new-ack-%d", n), wire.SettingsDeliveryACK{DeadlineMillis: fmt.Sprint(time.Now().Add(10 * time.Second).UnixMilli()), ReceiptId: *offered.ReceiptId, Pending: offered.Pending})
+		if ack.Status != "ok" {
+			t.Fatal("current delivery ACK unconfirmed", ack)
+		}
+		closed := nativeSettingsCall(t, r, "core.fresh.close", "close-current", wire.CoreFreshClose{})
+		if closed.Status != "ok" || r.Close() != nil {
+			t.Fatal("current fresh drain failed", closed)
+		}
+		after := recoverySnapshot(t, launch.Profile.Root)
+		for key, original := range before {
+			// New canary publication intentionally changes this directory's
+			// version. Every pre-existing file and journal stays exact.
+			if key == "/workspace" {
+				continue
+			}
+			if after[key] != original {
+				t.Fatal("fresh write/reopen changed original UNKNOWN or history", key)
+			}
+		}
+	}
+}
 
 // Disposable native stores only, with no Electron, provider, Shell, process
 // cleanup or real-profile admission. Existing UNKNOWN bytes remain historical.
@@ -223,10 +285,8 @@ func TestFreshSessionRefusesUnsafeOrPartialOriginalClaims(t *testing.T) {
 func TestFreshAdmissionRejectsContradictionsWithoutChangingHistory(t *testing.T) {
 	for name, change := range map[string]func(*NativeLaunch){
 		"previous-drain": func(l *NativeLaunch) { l.PreviousHostDrainConfirmed = true },
-		"mutations":      func(l *NativeLaunch) { l.SettingsMutations = true },
 		"missing-host":   func(l *NativeLaunch) { l.HostLifetimeID = "" },
 		"missing-child":  func(l *NativeLaunch) { l.ChildLaunchID = "" },
-		"shell":          func(l *NativeLaunch) { l.shell = &connectorShellConfig{} },
 		"codex-read":     func(l *NativeLaunch) { l.CodexRead = &NativeCodexReadSelection{} },
 	} {
 		t.Run(name, func(t *testing.T) {

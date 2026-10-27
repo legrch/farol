@@ -248,6 +248,12 @@ func observePreservedPolicy(ctx context.Context, expected []ExpectedPreservedRec
 // Every chunk must be named by exactly one selected result, and every named
 // chunk must be selected. Orphans and partial terminal publications refuse.
 func qualifyPreservedProcessOutputs(entries []settledBytes, expected []ExpectedPreservedRecord) error {
+	return qualifyRetainedProcessOutputs(entries, expected, false)
+}
+
+// Original preservation keeps its v6-only policy. Fresh admission can also
+// observe canonical v5 cohort results; neither path changes the result or ACK.
+func qualifyRetainedProcessOutputs(entries []settledBytes, expected []ExpectedPreservedRecord, legacyCohort bool) error {
 	named := make(map[string]string)
 	selected := make(map[string]ExpectedPreservedRecord, len(expected))
 	for _, e := range expected {
@@ -262,7 +268,7 @@ func qualifyPreservedProcessOutputs(entries []settledBytes, expected []ExpectedP
 		if decodeStrict(entry.raw, &header) != nil {
 			return preservedRefusal()
 		}
-		if header.Version != 6 || header.Kind != "workspace_connector_process_terminal" {
+		if (header.Version != 6 && !(legacyCohort && header.Version == 5)) || header.Kind != "workspace_connector_process_terminal" {
 			continue
 		}
 		_, terminal, err := decodeProcessTerminal(entry.raw)

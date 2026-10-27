@@ -1934,24 +1934,60 @@ it("observes the original recovery pipe loss without a request, replacement or n
 });
 
 // Fresh admission has its own current-session drain, never a previous ACK.
-it("starts an independent fresh session without previous drain and withholds mutations/Shell", async () => {
+it("starts a fresh session under MCP exclusion with the qualified mutation storage", async () => {
   const f = transport();
   start.mockResolvedValueOnce(f.client);
   const host = await startDesktopGoCore({
     ...selection,
     startupPurpose: "fresh",
+    withInactiveMcp: async (start) => start(),
     previousHostDrainConfirmed: false,
   });
   expect(start.mock.calls[0]?.[1]).toMatchObject({
     startupMode: "fresh",
     previousHostDrainConfirmed: false,
-    settingsMutations: false,
+    settingsMutations: true,
   });
   await host.close();
   expect(f.events).toContain("core.fresh.close");
   expect(f.events).not.toContain("core.retirement.prepare");
   expect(AttestedCore.prototype.completeRetirement).not.toHaveBeenCalled();
   expect(f.closeAndObserve).toHaveBeenCalledOnce();
+  expect(host.limitedSession).toBe(false);
+});
+
+it("forwards qualified Shell resources in fresh admission without a prior drain ACK", async () => {
+  const f = transport();
+  start.mockResolvedValueOnce(f.client);
+  const host = await startDesktopGoCore({
+    ...shellSelection(),
+    startupPurpose: "fresh",
+    previousHostDrainConfirmed: false,
+    withInactiveMcp: async (start) => start(),
+  });
+  const native = start.mock.calls[0]![1]!;
+  expect(native.startupMode).toBe("fresh");
+  expect(native.settingsMutations).toBe(true);
+  expect(native.shellMetadata).toBeDefined();
+  const payload = JSON.parse(Buffer.from(native.shellMetadata!).toString());
+  expect(payload.HostLifetimeID).toBe(native.hostLifetimeId);
+  expect(payload.ChildLaunchID).toBe(native.childLaunchId);
+  expect(host.limitedSession).toBe(false);
+  await host.close();
+  expect(f.events).toContain("core.fresh.close");
+  expect(f.events).not.toContain("core.retirement.prepare");
+});
+
+it("refuses fresh startup before artifact IO without the current MCP exclusion", async () => {
+  await expect(
+    startDesktopGoCore({
+      ...selection,
+      startupPurpose: "fresh",
+      previousHostDrainConfirmed: false,
+    }),
+  ).rejects.toMatchObject({ code: "fresh_mcp_owner_unconfirmed" });
+  expect(start).not.toHaveBeenCalled();
+  expect(ports.provision).not.toHaveBeenCalled();
 });
 it.each(["drain", "terminal"] as const)(
   "keeps fresh %s uncertainty unconfirmed without retry",
@@ -1975,6 +2011,7 @@ it.each(["drain", "terminal"] as const)(
     const host = await startDesktopGoCore({
       ...selection,
       startupPurpose: "fresh",
+      withInactiveMcp: async (start) => start(),
       previousHostDrainConfirmed: false,
     });
     await expect(host.close()).rejects.toMatchObject({
