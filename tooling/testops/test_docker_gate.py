@@ -670,7 +670,7 @@ class ClientConfigCleanup(unittest.TestCase):
         listener.bind(str(self.socket_path))
         self.addCleanup(listener.close)
 
-    def main(self, outcome, refuse=None):
+    def main(self, outcome, refuse=None, launch=False):
         from docker_gate import main
         scope = "farol-testops-0a1b2c3d"
         argv = ["docker_gate.py", "--docker", str(self.docker), "--socket", str(self.socket_path),
@@ -679,9 +679,25 @@ class ClientConfigCleanup(unittest.TestCase):
                 "--dependency-reference-sha256", "c" * 64, "--jobs", "1", "--output", "failed-run"]
         tree = {"algorithm": "node-modules-tree-v1", "treeSha256": "d" * 64, "files": 1, "logicalBytes": 1}
 
-        def scheduler(*args, **kwargs):
+        def scheduler(root, jobs, budget, platform, binding, execute, *rest):
             if refuse:
                 raise refuse
+            if launch:
+                # Run one executor up to its container launch, then stop it there.
+                probe = self.parent / "probe-job"
+                probe.mkdir()
+                real_popen = subprocess.Popen
+                launches = []
+
+                def popen(command, *args, **kwargs):
+                    if "run" in command:  # the container launch, not an engine read
+                        launches.append(command)
+                        raise RuntimeError("stop at launch")
+                    return real_popen(command, *args, **kwargs)
+                with patch("docker_gate.subprocess.Popen", side_effect=popen):
+                    probed = execute(jobs[0], probe, binding())
+                self.assertEqual(probed.status, "UNKNOWN")
+                self.assertEqual(len(launches), 1)
             (self.parent / "failed-run").mkdir()
             return outcome
 
@@ -721,8 +737,13 @@ class ClientConfigCleanup(unittest.TestCase):
         self.assertEqual(events, [("lock", self.root, 120), ("unlock",)])
 
     def test_unconfirmed_container_retirement_keeps_the_bind_mounted_config(self):
-        self.assertEqual(self.main({"status": "UNKNOWN", "leaseRetained": True}), 1)
+        self.assertEqual(self.main({"status": "UNKNOWN", "leaseRetained": True}, launch=True), 1)
         self.assertEqual(len(list(self.parent.glob("docker-client-*"))), 1)
+
+    def test_a_retained_lease_without_any_container_launch_removes_the_config(self):
+        # E.g. the executor's engine check raised before Popen.
+        self.assertEqual(self.main({"status": "UNKNOWN", "leaseRetained": True}), 1)
+        self.assertEqual(list(self.parent.glob("docker-client-*")), [])
 
     def test_engine_error_still_removes_client_config(self):
         self.fail_info.write_text("")

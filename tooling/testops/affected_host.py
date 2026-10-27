@@ -342,9 +342,6 @@ def iterate(options, parent, source, bound_source, config, state):
     control = CancellationControl(config / "control", nonce)
 
     def execute(job, directory, bound):
-        # From the first container on, keep the bind-mounted config until the
-        # scheduler reports every container retired.
-        state["retain"] = True
         if docker.engine() != engine:
             return Outcome("BLOCKED", True, reason="ENGINE_IDENTITY_CHANGED")
         if stop.is_set():
@@ -357,6 +354,9 @@ def iterate(options, parent, source, bound_source, config, state):
         with (directory / "docker.stdout.log").open("xb") as stdout, (directory / "docker.stderr.log").open("xb") as stderr:
             if stop.is_set():
                 return Outcome("BLOCKED", True, reason="CANCELLED_BEFORE_DOCKER")
+            # From the first container launch on, keep the bind-mounted config
+            # until the scheduler reports every container retired.
+            state["retain"] = state["launched"] = True
             child = subprocess.Popen(command, env=docker.env, stdin=subprocess.DEVNULL,
                                      stdout=stdout, stderr=stderr, start_new_session=True)
             try:
@@ -380,7 +380,7 @@ def iterate(options, parent, source, bound_source, config, state):
 
     result = run(ROOT, [Job("affected", cpu=2, memory_mib=3072, effects="owned-fixture")],
                  Budget(1, 2, 3072), "linux", bound_source, execute, options.output, stop)
-    state["retain"] = bool(result.get("leaseRetained"))
+    state["retain"] = state.get("launched", False) and bool(result.get("leaseRetained"))
     print(json.dumps({"status": result["status"], "acceptance": False,
                       "report": str(parent / options.output / "report.json"),
                       "limits": ["Opt-in iteration only; public task remains PLAN_ONLY; full CI/native/package gates remain mandatory"]}))

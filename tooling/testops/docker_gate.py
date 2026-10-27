@@ -302,7 +302,8 @@ def container_command(job, directory, source, options, docker, nonce, *, depende
     return name, docker.prefix + args
 
 
-def execute_container(job, directory, binding, options, docker, nonce, engine, stop, deadline_hit):
+def execute_container(job, directory, binding, options, docker, nonce, engine, stop, deadline_hit,
+                      on_launch=None):
     if docker.engine() != engine:
         return Outcome("BLOCKED", True, reason="ENGINE_IDENTITY_CHANGED")
     if stop.is_set():
@@ -317,6 +318,8 @@ def execute_container(job, directory, binding, options, docker, nonce, engine, s
         with (directory / "docker.stdout.log").open("xb") as stdout, (directory / "docker.stderr.log").open("xb") as stderr:
             if stop.is_set():
                 return Outcome("BLOCKED", True, reason="CANCELLED_BEFORE_DOCKER")
+            if on_launch is not None:
+                on_launch()
             child = subprocess.Popen(command, env=docker.env, stdin=subprocess.DEVNULL,
                                      stdout=stdout, stderr=stderr, start_new_session=True)
             code, timed_out = wait_container(child, job, name, directory, options, docker, stop, deadline_hit, engine)
@@ -412,16 +415,18 @@ def gate(options, parent, source, source_binding, config, state):
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
 
+    def launched():
+        # From the first container launch on, keep the bind-mounted config until
+        # the scheduler reports every container retired.
+        state["retain"] = state["launched"] = True
+
     def execute(job, directory, binding):
-        # From the first container on, keep the bind-mounted config until the
-        # scheduler reports every container retired. A refusal before any
-        # executor starts leaves nothing that mounts it.
-        state["retain"] = True
-        return execute_container(job, directory, binding, options, docker, nonce, engine, stop, deadline_hit)
+        return execute_container(job, directory, binding, options, docker, nonce, engine, stop, deadline_hit,
+                                 on_launch=launched)
 
     result = run(ROOT, jobs, Budget(options.jobs, 4, 6144), "linux", source_binding,
                  execute, options.output, stop)
-    state["retain"] = bool(result.get("leaseRetained"))
+    state["retain"] = state.get("launched", False) and bool(result.get("leaseRetained"))
     result["engine"] = engine
     if deadline_hit.is_set():
         result["schedulerStatus"] = result["status"]
