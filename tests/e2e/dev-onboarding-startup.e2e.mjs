@@ -921,6 +921,7 @@ try {
       await button("Toggle sidebar").click();
     await settingsPage(reopenedWindow, "Appearance");
     await button(theme).click();
+    await button("Back to Farol").click();
     await button("ChatGPT").click();
     const normal = await geometry("full");
     await checkSearchOverlay(theme.toLowerCase(), "full", normal);
@@ -1000,6 +1001,7 @@ try {
       exact: true,
     })
     .click();
+  await button("Back to Farol").click();
   await button("ChatGPT").click();
   if (originalShell.sidebar !== "full") await button("Toggle sidebar").click();
   await application.evaluate(
