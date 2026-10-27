@@ -3071,10 +3071,25 @@ export class ChatGptRoute {
     }
     let answer: unknown;
     try {
-      answer = await candidate.webContents.executeJavaScript(
-        readinessProbe,
-        userGesture,
-      );
+      // Read the exact current frame directly. WebContents execution can queue
+      // behind did-stop-loading while a remote page still loads other resources.
+      // This remains a bounded pure read, with document checks before and after.
+      const frame = candidate.webContents.mainFrame;
+      if (frame && (frame.isDestroyed() || frame.url !== currentUrl))
+        return { observation: unrecognized, reason: "probe-threw" };
+      answer = frame
+        ? await frame.executeJavaScript(readinessProbe, userGesture)
+        : await candidate.webContents.executeJavaScript(
+            readinessProbe,
+            userGesture,
+          );
+      if (
+        frame &&
+        (candidate.webContents.mainFrame !== frame ||
+          frame.isDestroyed() ||
+          frame.url !== currentUrl)
+      )
+        return { observation: unrecognized, reason: "probe-threw" };
     } catch {
       return { observation: unrecognized, reason: "probe-threw" };
     }

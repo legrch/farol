@@ -2700,6 +2700,42 @@ describe("readiness ordering and document identity (local surface fixtures)", ()
     beforeEach(() => vi.useFakeTimers());
     afterEach(() => vi.useRealTimers());
 
+    it("reads the current native frame without queued WebContents loading listeners", async () => {
+      const { candidate, surface, execute } = readinessRoute();
+      const frame = {
+        url: surface.webContents.getURL(),
+        isDestroyed: () => false,
+        executeJavaScript: vi.fn(async () => ready),
+      };
+      Reflect.set(surface.webContents, "mainFrame", frame);
+      const observed = await candidate.observeSignInStatus();
+      expect(observed.state).toBe("authenticated");
+      expect(candidate.isCurrentSignInStatus(observed)).toBe(true);
+      expect(frame.executeJavaScript).toHaveBeenCalledExactlyOnceWith(
+        readinessProbe,
+        false,
+      );
+      expect(execute).not.toHaveBeenCalled();
+    });
+
+    it("rejects a native frame replaced while its pure probe was pending", async () => {
+      const { candidate, surface, execute } = readinessRoute();
+      const frame = {
+        url: surface.webContents.getURL(),
+        isDestroyed: () => false,
+        executeJavaScript: vi.fn(async () => {
+          Reflect.set(surface.webContents, "mainFrame", { ...frame });
+          return ready;
+        }),
+      };
+      Reflect.set(surface.webContents, "mainFrame", frame);
+      expect(await candidate.observeSignInStatus()).toEqual({
+        state: "unknown",
+        binding: null,
+      });
+      expect(execute).not.toHaveBeenCalled();
+    });
+
     it.each([
       [ready, "authenticated"],
       [signedOut, "signed_out"],
@@ -6430,6 +6466,11 @@ describe("ChatGPT sign-in return", () => {
       url: "https://chatgpt.com/",
     };
     const executeJavaScript = vi.fn(() => new Promise(() => undefined));
+    Object.assign(mainFrame, {
+      isDestroyed: () => destroyed,
+      executeJavaScript: (...args: unknown[]) =>
+        Reflect.apply(contents.executeJavaScript, contents, args),
+    });
     const contents = Object.assign(new EventEmitter(), {
       mainFrame,
       getURL: () => "https://chatgpt.com/",
@@ -6746,6 +6787,15 @@ describe("ChatGPT sign-in return", () => {
         composerVisible: false,
         signInVisible: true,
       })),
+    });
+    Object.assign(mainFrame, {
+      isDestroyed: () => base.isDestroyed(),
+      executeJavaScript: (...args: unknown[]) =>
+        Reflect.apply(
+          Reflect.get(base.webContents, "executeJavaScript"),
+          base.webContents,
+          args,
+        ),
     });
     const close = vi.fn(() => base.destroy());
     const surface = { ...base, kind: "window" as const, close };
