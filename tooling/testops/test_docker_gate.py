@@ -670,7 +670,7 @@ class ClientConfigCleanup(unittest.TestCase):
         listener.bind(str(self.socket_path))
         self.addCleanup(listener.close)
 
-    def main(self, outcome):
+    def main(self, outcome, refuse=None):
         from docker_gate import main
         scope = "farol-testops-0a1b2c3d"
         argv = ["docker_gate.py", "--docker", str(self.docker), "--socket", str(self.socket_path),
@@ -680,6 +680,8 @@ class ClientConfigCleanup(unittest.TestCase):
         tree = {"algorithm": "node-modules-tree-v1", "treeSha256": "d" * 64, "files": 1, "logicalBytes": 1}
 
         def scheduler(*args, **kwargs):
+            if refuse:
+                raise refuse
             (self.parent / "failed-run").mkdir()
             return outcome
 
@@ -700,6 +702,11 @@ class ClientConfigCleanup(unittest.TestCase):
         self.assertEqual(self.main({"status": "FAIL", "leaseRetained": False}), 1)
         self.assertEqual(json.loads((self.parent / "failed-run/report.json").read_text())["status"], "FAIL")
         self.assert_clean()
+
+    def test_a_refusal_before_any_container_removes_the_config(self):
+        with self.assertRaises(RuntimeError):
+            self.main({"status": "FAIL"}, refuse=RuntimeError("OUTPUT_ALREADY_EXISTS"))
+        self.assertEqual(list(self.parent.glob("docker-client-*")), [])
 
     def test_volume_admission_holds_the_lifecycle_lock(self):
         import contextlib

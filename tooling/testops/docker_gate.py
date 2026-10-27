@@ -413,10 +413,12 @@ def gate(options, parent, source, source_binding, config, state):
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
 
     def execute(job, directory, binding):
+        # From the first container on, keep the bind-mounted config until the
+        # scheduler reports every container retired. A refusal before any
+        # executor starts leaves nothing that mounts it.
+        state["retain"] = True
         return execute_container(job, directory, binding, options, docker, nonce, engine, stop, deadline_hit)
 
-    # Until the scheduler reports every container retired, keep the bind-mounted config.
-    state["retain"] = True
     result = run(ROOT, jobs, Budget(options.jobs, 4, 6144), "linux", source_binding,
                  execute, options.output, stop)
     state["retain"] = bool(result.get("leaseRetained"))

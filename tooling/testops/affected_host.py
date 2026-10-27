@@ -342,6 +342,9 @@ def iterate(options, parent, source, bound_source, config, state):
     control = CancellationControl(config / "control", nonce)
 
     def execute(job, directory, bound):
+        # From the first container on, keep the bind-mounted config until the
+        # scheduler reports every container retired.
+        state["retain"] = True
         if docker.engine() != engine:
             return Outcome("BLOCKED", True, reason="ENGINE_IDENTITY_CHANGED")
         if stop.is_set():
@@ -375,7 +378,6 @@ def iterate(options, parent, source, bound_source, config, state):
         report = json.loads(evidence_bytes(directory / "report.json"))
         return Outcome("PASS", True, iteration_receipt(report, bound, directory, options.focused))
 
-    state["retain"] = True
     result = run(ROOT, [Job("affected", cpu=2, memory_mib=3072, effects="owned-fixture")],
                  Budget(1, 2, 3072), "linux", bound_source, execute, options.output, stop)
     state["retain"] = bool(result.get("leaseRetained"))
