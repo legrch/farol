@@ -4,6 +4,78 @@ import type {
 } from "../../pkg/product-settings/contract";
 import { connectorRuntimeUncertain } from "../../pkg/product-settings/connector-uncertainty";
 import { identityBoundWorkspaces } from "./identity-bound-workspaces";
+import { selectedConnectorApp } from "../../pkg/product-settings/connector-app-selection";
+import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
+
+export type ResumedConnectorCheck = Readonly<{
+  tunnelId: string;
+  connectorGeneration: number;
+  computerGeneration: number;
+  runtimeGeneration: string;
+  challengeSha256: string;
+  buildId: string;
+  workspaceId: string | null;
+  appName: string;
+}>;
+
+/** One fresh check after resuming a previously verified app. Historical or
+ * uncertain checks are never replayed, and a changed selection needs a click.
+ */
+export function resumedConnectorCheck(
+  before: ProductConfigurationSnapshot,
+  after: ProductConfigurationSnapshot,
+  buildId: string,
+): ResumedConnectorCheck | null {
+  if (before.status !== "ready" || after.status !== "ready") return null;
+  const prior = before.settings.connectors.secureMcp;
+  const current = after.settings.connectors.secureMcp;
+  const historical = prior.attachment ?? prior.lastVerifiedAttachment;
+  const appName = selectedConnectorApp(current);
+  const runtime = current.runtime;
+  const challenge = current.challenge;
+  const workspaceId = connectorWorkspaceSelection(after.settings);
+  if (
+    !historical ||
+    historical.tunnelId !== prior.tunnelId ||
+    appName === null ||
+    appName !== selectedConnectorApp(prior) ||
+    current.tunnelId === null ||
+    current.tunnelId !== prior.tunnelId ||
+    prior.appVerificationPending === true ||
+    current.appVerificationPending === true ||
+    before.settings.setup.connect.outcomeUnknown ||
+    after.settings.setup.connect.outcomeUnknown ||
+    before.settings.setup.chatgpt.outcomeUnknown ||
+    after.settings.setup.chatgpt.outcomeUnknown ||
+    !before.settings.setup.chatgpt.configured ||
+    before.settings.setup.chatgpt.verified === null ||
+    after.settings.computer.pendingEdit !== null ||
+    connectorRuntimeUncertain(after.settings) ||
+    current.attachment !== null ||
+    runtime?.state !== "ready" ||
+    runtime.runtimeGeneration === historical.runtimeGeneration ||
+    runtime.buildId !== buildId ||
+    runtime.connectorGeneration !== current.generation ||
+    runtime.computerGeneration !== after.settings.computer.generation ||
+    challenge === null ||
+    challenge.runtimeGeneration !== runtime.runtimeGeneration ||
+    challenge.buildId !== buildId ||
+    challenge.computerGeneration !== runtime.computerGeneration ||
+    challenge.challengeSha256 === historical.challengeSha256 ||
+    workspaceId === undefined
+  )
+    return null;
+  return {
+    tunnelId: current.tunnelId,
+    connectorGeneration: current.generation,
+    computerGeneration: runtime.computerGeneration,
+    runtimeGeneration: runtime.runtimeGeneration,
+    challengeSha256: challenge.challengeSha256,
+    buildId,
+    workspaceId,
+    appName,
+  };
+}
 
 /** Restore a confirmed, same-session update drain only after admission releases.
  * This never retries a task, a refused start, or an unknown stop/helper effect.

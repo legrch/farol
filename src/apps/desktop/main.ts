@@ -520,6 +520,8 @@ import {
 import {
   createUpdateAbortConnectorRecovery,
   resumeComputerConnector,
+  resumedConnectorCheck,
+  type ResumedConnectorCheck,
 } from "./connector-resume-policy";
 import { identityBoundWorkspaces } from "./identity-bound-workspaces";
 import { AuthorityTransitionReservation } from "./authority-transition";
@@ -5678,11 +5680,11 @@ async function checkSecureMcpAttachment(
   }
 }
 
-// One explicit owner click sends one small app-bound ChatGPT message. The
-// existing route proves the exact selected app before submit; only the local
-// Computer MCP receipt can complete the attachment, never the model's prose.
+// A manual check or one admitted restart check owns a separate hidden page.
+// Only its exact Computer MCP receipt can complete the attachment.
 async function verifySecureMcpApp(
   separate?: SeparateAppVerificationScope,
+  automatic?: ResumedConnectorCheck,
 ): Promise<ProductConfigurationResult> {
   if (!embeddedBrowserEnabled()) {
     return configurationFailure("CONNECTOR_APP_VERIFICATION_UNAVAILABLE");
@@ -5703,11 +5705,17 @@ async function verifySecureMcpApp(
   let requestedWorkspaceId: string | null | undefined;
   let receiptPending = false;
   let expectedBinding: ConnectorAppVerificationBinding | null = null;
+  let verificationRoute: ChatGptRoute | null = null;
   try {
     const snapshot = configuration.snapshot();
     if (snapshot.status !== "ready")
       return configurationFailure("SETTINGS_UNAVAILABLE");
     const settings = snapshot.settings;
+    if (
+      automatic &&
+      (separate || !connectorAppBindingCurrent(settings, automatic))
+    )
+      return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
     const connector = settings.connectors.secureMcp;
     const runtime = connector.runtime;
     const challenge = connector.challenge;
@@ -5716,7 +5724,9 @@ async function verifySecureMcpApp(
       return configurationFailure("CONNECTOR_APP_TARGET_REQUIRED");
     const workspaceId = connectorWorkspaceSelection(settings);
     if (
-      !chatGptTaskAdmissionReady() ||
+      (!automatic && !chatGptTaskAdmissionReady()) ||
+      quitInProgress ||
+      installedUpdateAdmission ||
       !secureMcpConnectorRuntime.isRunning() ||
       connector.tunnelId === null ||
       runtime?.state !== "ready" ||
@@ -5872,13 +5882,53 @@ async function verifySecureMcpApp(
         "CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE",
       );
     }
+    // Never navigate the retained owner conversation, including an unsaved
+    // temporary chat or its draft. Only the authenticated partition is shared.
+    verificationRoute = createManagedChatGptRoute({
+      homeUrl: chatGptHomeUrl,
+      initialUrl: chatGptHomeUrl,
+      e2eOrigin: chatGptE2eOrigin,
+      parent: () => null,
+      windowPresentation: { mode: "hidden" },
+      title: "Farol · Connection check",
+      ...(process.env.FAROL_E2E === "1" && chatGptE2eOrigin !== null
+        ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
+        : {}),
+    });
+    if (automatic) {
+      const opened = await verificationRoute.preload();
+      const observed =
+        opened.status === "opened" ? await verificationRoute.observe() : null;
+      const latest = configuration.snapshot();
+      if (
+        quitInProgress ||
+        installedUpdateAdmission ||
+        desktopGoCore !== verificationCore ||
+        latest.status !== "ready" ||
+        !connectorAppBindingCurrent(latest.settings, automatic)
+      )
+        return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
+      if (observed?.state !== "authenticated")
+        return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
+      const signedIn = await configuration.recordChatGptObservation(
+        {
+          state: "authenticated",
+          profile: "chatgpt.app-partition/1",
+          runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
+          buildId: buildIdentity.buildId,
+          protocol: "chatgpt-page-readiness/1",
+        },
+        true,
+      );
+      if (!signedIn.ok) return ProductConfigurationResultSchema.parse(signedIn);
+    }
     const prompt =
       workspaceId === null
         ? `Use the selected ${appName} app to call farol_connector_verify_catalogue once with challenge "${challenge.value}". No workspace is configured. Do not read files or run commands. Reply briefly with the result.`
         : `Use the selected ${appName} app to call farol_connector_verify once with challenge "${challenge.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`;
     let claimed = false;
     const timingId = runtimeEnvironment === "dev" ? randomUUID() : null;
-    const result = await chatGptRoute.runReadonlyTask(
+    const result = await verificationRoute.runReadonlyTask(
       prompt,
       [],
       {
@@ -5923,9 +5973,12 @@ async function verifySecureMcpApp(
           if (claimed) return;
           const admitted = configuration!.snapshot();
           if (
+            quitInProgress ||
+            installedUpdateAdmission ||
             desktopGoCore !== verificationCore ||
             admitted.status !== "ready" ||
             expectedBinding === null ||
+            (automatic && admitted.settings.setup.chatgpt.outcomeUnknown) ||
             (separateAttempt &&
               !separateAppVerificationScopeCurrent(
                 admitted.settings,
@@ -6005,8 +6058,12 @@ async function verifySecureMcpApp(
       return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
     }
   } finally {
-    chatGptTaskAdmission = false;
-    connectorTaskAdmission = false;
+    try {
+      verificationRoute?.dispose();
+    } finally {
+      chatGptTaskAdmission = false;
+      connectorTaskAdmission = false;
+    }
   }
   if (requestedWorkspaceId === undefined || expectedBinding === null) {
     return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE");
@@ -13041,13 +13098,14 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   });
   quitSignals.ready();
   installedUpdaterInitialization = initializeInstalledUpdater();
+  const beforeConnectorResume = configuration.snapshot();
   void resumeComputerConnector(
     {
       environment: runtimeEnvironment,
       buildEnvironment,
       buildId: buildIdentity.buildId,
       previousRunClean: previousHostAdmissionReady,
-      snapshot: configuration.snapshot(),
+      snapshot: beforeConnectorResume,
     },
     {
       current: () => configuration!.snapshot(),
@@ -13073,6 +13131,37 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       if (!quitInProgress && window && !window.isDestroyed())
         window.webContents.send(channels.configurationChanged);
       startConnectorTransportWatch();
+      const check =
+        status === "started" && !quitInProgress && !installedUpdateAdmission
+          ? resumedConnectorCheck(
+              beforeConnectorResume,
+              configuration!.snapshot(),
+              buildIdentity.buildId,
+            )
+          : null;
+      if (check) {
+        // Startup has one continuation only. Durable challenge claims and the
+        // ordinary admissions still forbid a second Send after UNKNOWN.
+        void observeOperation(
+          operationsStore(),
+          {
+            source: "Setup",
+            kind: "connector.verify-app",
+            target: { workspace: check.workspaceId ?? undefined },
+          },
+          () => verifySecureMcpApp(undefined, check),
+        ).then(
+          () => {
+            if (!quitInProgress && window && !window.isDestroyed())
+              window.webContents.send(channels.configurationChanged);
+          },
+          () => {
+            console.warn(
+              "Automatic connection check did not finish; its original result is retained in Activity.",
+            );
+          },
+        );
+      }
     },
     () => {
       startupStage("connector-resume-failed");

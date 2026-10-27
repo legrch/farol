@@ -76,7 +76,11 @@ const executablePath = path.join(
 );
 async function runScenario(scenario) {
   const separate = scenario === "separate-after-unknown";
-  const expectedFinalSends = separate || repeatAfterFinish ? 2 : 1;
+  const expectedFinalSends = finishReopen
+    ? 3
+    : separate || repeatAfterFinish
+      ? 2
+      : 1;
   const trackQuits = finishReopen || separate || repeatAfterFinish;
   const appName = `${productName} Setup Fixture`;
   const id = randomUUID();
@@ -342,7 +346,7 @@ async function runScenario(scenario) {
     const starts = entries.filter((e) => e.lifecycle?.phase === "started");
     if (kind !== "connector.check-attachment")
       assert.ok(
-        starts.length <= (repeatAfterFinish ? 2 : 1),
+        starts.length <= expectedFinalSends,
         "SETUP_VERIFICATION_REPLAYED",
       );
     if (starts.length === 0) return null;
@@ -667,6 +671,24 @@ async function runScenario(scenario) {
       ),
       true,
     );
+    const preservedOwner =
+      scenario === "happy"
+        ? await application.evaluate(async ({ webContents }, origin) => {
+            const candidates = webContents.getAllWebContents().filter((c) => {
+              try {
+                return new URL(c.getURL()).origin === origin;
+              } catch {
+                return false;
+              }
+            });
+            if (candidates.length !== 1) throw Error("OWNER_CHAT_AMBIGUOUS");
+            const owner = candidates[0];
+            await owner.executeJavaScript(
+              "document.getElementById('prompt-textarea').innerText = 'unsent fixture draft'",
+            );
+            return { id: owner.id, url: owner.getURL() };
+          }, new URL(fixture.url).origin)
+        : null;
     await testAction.click();
     if (separate) {
       const old = await poll(
@@ -939,6 +961,39 @@ async function runScenario(scenario) {
       "SETUP_MATCHING_RECEIPT_NOT_CONFIRMED",
       30000,
     );
+    if (preservedOwner) {
+      const preserved = await application.evaluate(
+        async ({ webContents, BrowserWindow }, expected) => {
+          const owner = webContents.fromId(expected.id);
+          return {
+            url: owner?.getURL(),
+            draft: await owner?.executeJavaScript(
+              "document.getElementById('prompt-textarea').innerText",
+            ),
+            visibleWindows: BrowserWindow.getAllWindows().filter((w) =>
+              w.isVisible(),
+            ).length,
+            focusedWindows: BrowserWindow.getAllWindows().filter((w) =>
+              w.isFocused(),
+            ).length,
+          };
+        },
+        preservedOwner,
+      );
+      assert.equal(
+        preserved.url,
+        preservedOwner.url,
+        "OWNER_CONVERSATION_NAVIGATED",
+      );
+      assert.equal(
+        preserved.draft,
+        "unsent fixture draft",
+        "OWNER_DRAFT_REPLACED",
+      );
+      assert.equal(preserved.visibleWindows, 0, "CHECK_WINDOW_BECAME_VISIBLE");
+      assert.equal(preserved.focusedWindows, 0, "CHECK_WINDOW_STOLE_FOCUS");
+      report.ownerConversationPreserved = true;
+    }
     if (scenario !== "late-receipt")
       await page
         .getByRole("button", { name: "Back to setup", exact: true })
@@ -1068,7 +1123,8 @@ async function runScenario(scenario) {
       let previousBackend = completed.backendGeneration;
       for (const ordinal of [1, 2]) {
         // The original fixture Finish is the only setup transition. Reopen the
-        // same private profile; do not navigate, reconnect or send again.
+        // same private profile. Startup owns exactly one fresh check; the
+        // harness never presses Test, reconnects or reuses the old proof.
         if (rebuildReopen && ordinal === 2) {
           const before = build.identity.buildId;
           const builder = spawn(
@@ -1175,7 +1231,12 @@ async function runScenario(scenario) {
         await page
           .getByRole("heading", { name: "Home", exact: true })
           .waitFor();
-        await page.locator(".home-health-warning").waitFor();
+        await poll(
+          () => readSetupSettings(page),
+          (v) => v.connectors.secureMcp.attachment !== null,
+          "AUTO_HOME_FRESH_ATTACHMENT_NOT_CONFIRMED",
+          30000,
+        );
         const observed = await page.evaluate(async () => {
           const b = await window.farol.bootstrap();
           return {
@@ -1216,21 +1277,24 @@ async function runScenario(scenario) {
         );
         assert.equal(
           observed.currentAttachment,
-          false,
-          "AUTO_HOME_BORROWED_ATTACHMENT",
+          true,
+          "AUTO_HOME_FRESH_ATTACHMENT_MISSING",
         );
         assert.equal(
           observed.homeHealthWarning,
-          true,
-          "AUTO_HOME_MISSING_LIVE_WARNING",
+          false,
+          "AUTO_HOME_STALE_LIVE_WARNING",
         );
         assert.equal(
           observed.finishSetupCard,
           false,
           "AUTO_HOME_REPEATS_SETUP",
         );
-        assert.match(observed.setupBadge ?? "", /[0-3] of 4 checks current/u);
-        assert.equal(sendCount, 1, "AUTO_HOME_SENT_AGAIN");
+        assert.equal(
+          sendCount,
+          1 + ordinal,
+          "AUTO_HOME_CHECK_NOT_ONCE_PER_LIFETIME",
+        );
         await page.screenshot({
           path: path.join(output, `automatic-home-${ordinal}.png`),
         });

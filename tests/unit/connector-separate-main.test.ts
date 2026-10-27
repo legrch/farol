@@ -86,6 +86,14 @@ function fixture() {
       return { state: "outcome_unknown" };
     },
   );
+  const dispose = vi.fn();
+  const ownerRoute = { runReadonlyTask: vi.fn() };
+  const createRoute = vi.fn((_options: unknown) => ({
+    runReadonlyTask: route,
+    dispose,
+    preload: vi.fn(async () => ({ status: "opened" })),
+    observe: vi.fn(async () => ({ state: "authenticated" })),
+  }));
   const context = vm.createContext({
     Error,
     Object,
@@ -93,9 +101,20 @@ function fixture() {
     configuration: {
       snapshot: () => ({ status: "ready", settings }),
       recordSecureMcpAppPending: async () => ({ ok: true }),
+      recordChatGptObservation: async () => ({ ok: true }),
       clearSecureMcpAppPendingBeforeSubmit: clearOld,
     },
-    chatGptRoute: { runReadonlyTask: route },
+    chatGptRoute: ownerRoute,
+    createManagedChatGptRoute: createRoute,
+    chatGptHomeUrl: "https://chatgpt.com/",
+    chatGptE2eOrigin: null,
+    runtimeEnvironment: "owner-preview",
+    activeDesktopIdentity: {
+      chatGptPartition: "persist:farol-owner-preview-chatgpt",
+    },
+    quitInProgress: false,
+    installedUpdateAdmission: false,
+    process: { env: {} },
     secureMcpConnectorRuntime: { isRunning: () => true },
     desktopGoCore: { observeComputerConnectorVerification: readGo },
     window: { isDestroyed: () => false },
@@ -117,7 +136,10 @@ function fixture() {
   const verify = vm.runInContext(
     stripTypeScriptTypes(`${functions}\nverifySecureMcpApp;`),
     context,
-  ) as (scope?: typeof expected) => Promise<{ ok: false; error: string }>;
+  ) as (
+    scope?: typeof expected,
+    automatic?: typeof expected,
+  ) => Promise<{ ok: false; error: string }>;
   return {
     expected,
     settings,
@@ -130,10 +152,36 @@ function fixture() {
     verify,
     context,
     binding,
+    createRoute,
+    ownerRoute,
+    dispose,
   };
 }
 
 describe("actual separate-check desktop admission", () => {
+  it("runs an automatic fresh check on a hidden page while the owner route is untouched", async () => {
+    const f = fixture();
+    f.settings.setup.connect.outcomeUnknown = false;
+    f.settings.connectors.secureMcp.appVerificationPending = false;
+    expect(await f.verify(undefined, f.expected)).toMatchObject({
+      error: "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN",
+    });
+    expect(f.createRoute).toHaveBeenCalledTimes(1);
+    expect(f.send).toHaveBeenCalledTimes(1);
+    expect(f.ownerRoute.runReadonlyTask).not.toHaveBeenCalled();
+    expect(f.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not dispatch an automatic check after its captured lifetime changes", async () => {
+    const f = fixture();
+    f.settings.setup.connect.outcomeUnknown = false;
+    f.settings.connectors.secureMcp.runtime!.runtimeGeneration = "f".repeat(64);
+    expect(await f.verify(undefined, f.expected)).toMatchObject({
+      error: "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
+    });
+    expect(f.createRoute).not.toHaveBeenCalled();
+    expect(f.send).not.toHaveBeenCalled();
+  });
   it("keeps legacy Test fenced without opening a native approval", async () => {
     const f = fixture();
     expect(await f.verify()).toEqual({
@@ -168,6 +216,17 @@ describe("actual separate-check desktop admission", () => {
     expect(f.send).toHaveBeenCalledTimes(1);
     expect(f.clearOld).not.toHaveBeenCalled();
     expect(f.settings.setup.connect.outcomeUnknown).toBe(true);
+    expect(f.ownerRoute.runReadonlyTask).not.toHaveBeenCalled();
+    expect(f.createRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        homeUrl: "https://chatgpt.com/",
+        initialUrl: "https://chatgpt.com/",
+        windowPresentation: { mode: "hidden" },
+      }),
+    );
+    const options = f.createRoute.mock.calls[0]![0] as { parent(): unknown };
+    expect(options.parent()).toBeNull();
+    expect(f.dispose).toHaveBeenCalledTimes(1);
   });
   it("does not dispatch after scope drift during native approval", async () => {
     const f = fixture();
@@ -207,5 +266,6 @@ describe("actual separate-check desktop admission", () => {
     expect(f.clearOld).not.toHaveBeenCalled();
     expect(f.settings.setup.connect.outcomeUnknown).toBe(true);
     expect(f.settings.connectors.secureMcp.appVerificationPending).toBe(true);
+    expect(f.dispose).toHaveBeenCalledTimes(1);
   });
 });
