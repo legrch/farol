@@ -866,7 +866,26 @@ let app, exit, launch;
 try {
   report.preservedBaseline = await preserved();
   freshSite =
-    savedSettings && !computerStoreRefusal ? await startChatGptFixture() : null;
+    savedSettings && !computerStoreRefusal
+      ? await startChatGptFixture({
+          controlledScenario: {
+            conversationId: "fresh-startup-observation",
+            selection: {
+              model: "Test model",
+              effort: "Light",
+              connector: null,
+            },
+            turns: [
+              {
+                userId: "startup-user",
+                replyId: "startup-reply",
+                prompt: "This startup fixture must never receive a message.",
+                segments: [{ id: "startup-segment", text: "Unexpected Send." }],
+              },
+            ],
+          },
+        })
+      : null;
   await save();
   for (let ordinal = 1; ordinal <= 2; ordinal++) {
     launch = { ordinal, closeRequested: false, cleanupConfirmed: false };

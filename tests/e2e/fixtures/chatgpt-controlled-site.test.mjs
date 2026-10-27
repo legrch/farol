@@ -1,6 +1,8 @@
 import { productName } from "../../../tooling/harness-identity.ts";
 import assert from "node:assert/strict";
 import { request as httpRequest } from "node:http";
+import { readFile } from "node:fs/promises";
+import vm from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import { startChatGptFixture, stopChatGptFixture } from "./chatgpt-site.mjs";
 
@@ -11,6 +13,25 @@ import { startChatGptFixture, stopChatGptFixture } from "./chatgpt-site.mjs";
 const sites = [];
 afterEach(async () => {
   await Promise.all(sites.splice(0).map(stopChatGptFixture));
+});
+it("startup recovery selects a fixture with a real zero-Send ledger", async () => {
+  const source = await readFile("tests/e2e/startup-recovery.e2e.mjs", "utf8");
+  const start = source.indexOf("  freshSite =");
+  const end = source.indexOf("  await save();", start);
+  assert.ok(start >= 0 && end > start, "STARTUP_FIXTURE_SELECTION_MISSING");
+  const select = (savedSettings, computerStoreRefusal) =>
+    vm.runInNewContext(
+      `(async () => { let freshSite; ${source.slice(start, end)} return freshSite; })()`,
+      { savedSettings, computerStoreRefusal, startChatGptFixture },
+    );
+  const fixture = await select(true, false);
+  sites.push(fixture);
+  assert.equal(typeof fixture.driver?.snapshot, "function");
+  assert.equal(fixture.driver.snapshot().acceptedSends, 0);
+  assert.equal((await fetch(fixture.url)).status, 200);
+  assert.equal(fixture.driver.snapshot().acceptedSends, 0);
+  assert.equal(await select(false, false), null);
+  assert.equal(await select(true, true), null);
 });
 const scenario = () => ({
   conversationId: "fixture-conversation",
