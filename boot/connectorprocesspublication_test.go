@@ -30,7 +30,7 @@ func TestConnectorProcessPublicationReconnectAndColdLifetimeKeepOriginal(t *test
 	close(child.completed)
 	awaitProcessCollectionDone(t, collectionDone)
 	if publisher.publishes != 1 || publisher.result == nil || publisher.result.Scope != scope || publisher.result.Intent != intent ||
-		!s.mutations.operations[start.OperationID].settled || s.current == originalSlot {
+		s.mutations.operations[start.OperationID].settled || s.current == originalSlot {
 		t.Fatal("connector replacement lost original publication or provenance")
 	}
 	request := processct.ReadRequest{Handle: start.Handle}
@@ -95,15 +95,15 @@ func TestConnectorProcessPublicationAuthorityChangesDoNotLosePrivateResult(t *te
 			close(child.completed)
 			awaitProcessCollectionDone(t, collectionDone)
 			if publisher.result == nil || publisher.result.Scope != scope || publisher.result.Intent != intent ||
-				string(publisher.result.Observation.Stdout) != "saved" || !s.mutations.operations[start.OperationID].settled {
+				string(publisher.result.Observation.Stdout) != "saved" || s.mutations.operations[start.OperationID].settled {
 				t.Fatal("late READ fence discarded private original output")
 			}
 			if out, err := s.observeProcess(context.Background(), s.current, start.OperationID, processct.ReadRequest{Handle: start.Handle}); out != nil || err == nil {
 				t.Fatal("private retention bypassed current authority or physical root", out, err)
 			}
 			if publisher.publishes != 1 || child.reads != 1 || child.spawns != 1 || journal.reserves != 1 ||
-				s.drainProcessesForRetirement(context.Background()) != nil || s.mutations.freezeForRetirement() != nil {
-				t.Fatal("READ refusal tainted known publication or repeated an effect")
+				s.drainProcessesForRetirement(context.Background()) == nil || s.mutations.freezeForRetirement() == nil {
+				t.Fatal("publication settled unverified cleanup or READ refusal repeated an effect")
 			}
 		})
 	}

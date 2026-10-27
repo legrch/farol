@@ -35,8 +35,8 @@ func (s *computerConnector) collectProcess(record *settingsMutationOperation, op
 // attempts before the journal's final freeze verdict. It neither retries a
 // publication nor signals a process. A running/unknown execution owner or lost
 // ACK remains a failed retirement, even if later disk bytes look complete.
-// Known supervisor exit can settle that owner with descendant cleanup explicitly
-// unverified; this gate does not attest arbitrary detached-process termination.
+// Known supervisor exit preserves its result but cannot settle unverified group
+// cleanup. A published result is never rewritten to manufacture settlement.
 func (s *computerConnector) drainProcessesForRetirement(ctx context.Context) error {
 	if s == nil || s.mutations == nil {
 		return nil

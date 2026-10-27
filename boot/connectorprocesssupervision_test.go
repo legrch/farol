@@ -14,7 +14,7 @@ import (
 
 // These controlled child/repository values exercise the actual collector and
 // current read guards; they do not qualify a native supervisor or public Shell.
-func TestConnectorSupervisedResultPreservesFactsAndRetiresOriginal(t *testing.T) {
+func TestConnectorSupervisedResultPreservesFactsWithoutSettlingUnknownGroup(t *testing.T) {
 	s, _, journal, child, _ := connectorProcessFixture(t)
 	publisher := &connectorProcessPublisherDouble{connectorProcessJournalDouble: journal, s: s, digest: strings.Repeat("a", 64)}
 	s.mutations.dependencies.repository = publisher
@@ -31,8 +31,8 @@ func TestConnectorSupervisedResultPreservesFactsAndRetiresOriginal(t *testing.T)
 		string(publisher.result.Observation.Stdout) != "saved" || child.spawns != 1 || journal.reserves != 1 || child.probes != 0 {
 		t.Fatal("original supervised result was lost, replayed or promoted")
 	}
-	if s.drainProcessesForRetirement(context.Background()) != nil || s.mutations.freezeForRetirement() != nil {
-		t.Fatal("known publication did not settle the original execution owner")
+	if s.drainProcessesForRetirement(context.Background()) == nil || s.mutations.freezeForRetirement() == nil {
+		t.Fatal("known supervisor publication settled unverified group cleanup")
 	}
 }
 

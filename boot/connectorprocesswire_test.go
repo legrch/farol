@@ -20,11 +20,12 @@ import (
 // No shell, OS process, socket, native qualification or external caller runs.
 type processWireNative struct {
 	*connectorProcessNativeDouble
-	requests  []connectorShellRequest
-	cancels   int
-	cancelIO  func()
-	cancelErr error
-	selection connectorShellSelection
+	requests     []connectorShellRequest
+	cancels      int
+	cancelIO     func()
+	cancelErr    error
+	cancelStatus processsvc.CancelStatus
+	selection    connectorShellSelection
 }
 
 func (n *processWireNative) selectShell(ctx context.Context, lease *execution.Lease, request connectorShellRequest) (processsvc.Prepared, processsvc.ObservationWorkspace, error) {
@@ -52,7 +53,11 @@ func (n *processWireNative) Cancel(context.Context) (*processsvc.CancelReceipt, 
 	if n.cancelErr != nil {
 		return nil, n.cancelErr
 	}
-	return &processsvc.CancelReceipt{Handle: n.Handle(), Status: processsvc.CancelRequested}, nil
+	status := n.cancelStatus
+	if status == "" {
+		status = processsvc.CancelRequested
+	}
+	return &processsvc.CancelReceipt{Handle: n.Handle(), Status: status}, nil
 }
 func processWireFixture(t *testing.T) (*computerConnector, *connectorProcessJournalDouble, *processWireNative, wire.ComputerConnectorOpen) {
 	t.Helper()
@@ -406,5 +411,36 @@ func TestConnectorCancelAfterPublishedExitDoesNotSignalOrInventUnknown(t *testin
 				t.Fatal("old unknown cleared")
 			}
 		})
+	}
+}
+
+// Real Go owner/collector/wire, controlled native child and journal. This checks
+// publication ordering, not actual POSIX group cleanup or Electron reopening.
+func TestConnectorNoOpCancelBeforeExitPublicationDrainsWithoutRewritingResult(t *testing.T) {
+	s, journal, child, _ := processWireFixture(t)
+	publisher := &connectorProcessPublisherDouble{connectorProcessJournalDouble: journal, s: s, digest: strings.Repeat("a", 64)}
+	s.mutations.dependencies.repository = publisher
+	processWireStarted(t, s)
+	child.terminal, child.cancelStatus = true, processsvc.AlreadyTerminal
+	out := connectorMutationInvoke(t, s, "computer.process.cancel", "cancel-after-reap", processWireCancel(s))
+	var cancelled wire.ComputerConnectorProcessCancelled
+	if out.Status != "ok" || json.Unmarshal(out.Data, &cancelled) != nil || cancelled.Status != "already_terminal" || child.cancels != 1 {
+		t.Fatal("no-op Cancel poisoned the reaped process", out)
+	}
+	s.mutations.mu.Lock()
+	record := s.mutations.operations["wire-process"]
+	premature := record.settled || publisher.publishes != 0 || record.process.cancelUnknown
+	s.mutations.mu.Unlock()
+	if premature {
+		t.Fatal("Cancel ACK published or settled an unobserved exit")
+	}
+	done := processCollectionDone(s, "wire-process")
+	close(child.completed)
+	awaitProcessCollectionDone(t, done)
+	if publisher.publishes != 1 || publisher.result == nil || publisher.result.Observation.GroupCleanup != processsvc.CleanupConfirmed || s.drainProcessesForRetirement(context.Background()) != nil {
+		t.Fatal("original exit and cleanup did not close the operation exactly once")
+	}
+	if out := connectorMutationInvoke(t, s, "computer.process.cancel", "cancel-after-publication", processWireCancel(s)); out.Status != "refused" || child.cancels != 1 || publisher.publishes != 1 {
+		t.Fatal("late Cancel overwrote or repeated the published result", out)
 	}
 }
