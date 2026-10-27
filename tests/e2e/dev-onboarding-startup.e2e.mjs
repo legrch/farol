@@ -690,7 +690,7 @@ try {
       theme: element.dataset.theme,
       sidebar: element.dataset.sidebar,
       width: Number.parseFloat(
-        getComputedStyle(element).getPropertyValue("--page-list-width"),
+        getComputedStyle(element).getPropertyValue("--rail-width"),
       ),
     }));
   async function setContentSize(width) {
@@ -716,20 +716,15 @@ try {
       "REQUESTED_CONTENT_SIZE_REQUIRED",
     );
   }
-  async function assertBrowserGeometry(theme, sidebar, pageListWidth) {
+  async function assertBrowserGeometry(theme, sidebar) {
     await reopenedWindow.waitForFunction(
-      ({ theme, sidebar, pageListWidth }) => {
+      ({ theme, sidebar }) => {
         const shell = document.querySelector(".desktop");
         return (
-          shell?.dataset.theme === theme &&
-          shell.dataset.sidebar === sidebar &&
-          shell.dataset.sidebarResizing === "false" &&
-          Number.parseFloat(
-            getComputedStyle(shell).getPropertyValue("--page-list-width"),
-          ) === pageListWidth
+          shell?.dataset.theme === theme && shell.dataset.sidebar === sidebar
         );
       },
-      { theme, sidebar, pageListWidth },
+      { theme, sidebar },
     );
     let native;
     let expected;
@@ -754,7 +749,7 @@ try {
       }, originalWindow.id);
       const x =
         shellRailWidth(native.size[0]) +
-        (sidebar === "full" ? pageListWidth : 0);
+        (sidebar === "full" ? shellGeometry.pageListMin : 0);
       expected = {
         x,
         y: shellGeometry.windowBar,
@@ -787,27 +782,13 @@ try {
           height: bounds.height,
         };
       };
-      const sidebar = document.querySelector(".contextual-sidebar");
-      const divider = document.querySelector(".page-list-resizer");
-      const line = divider && getComputedStyle(divider, "::after");
       return {
         size: [window.innerWidth, window.innerHeight],
         stage: rect(".stage"),
         rail: rect(".rail"),
         toolbar: rect(".toolbar"),
-        sidebar: sidebar ? rect(".contextual-sidebar") : null,
-        divider: divider
-          ? {
-              count: document.querySelectorAll(".page-list-resizer").length,
-              right: divider.getBoundingClientRect().right,
-              lineWidth: line.width,
-              content: line.content,
-              background: line.backgroundColor,
-              sidebarBorder: getComputedStyle(sidebar).borderRightWidth,
-              stageBorder: getComputedStyle(document.querySelector(".stage"))
-                .borderLeftWidth,
-            }
-          : null,
+        retiredSidebar: document.querySelector(".contextual-sidebar") !== null,
+        retiredDivider: document.querySelector(".page-list-resizer") !== null,
       };
     });
     assert.deepEqual(
@@ -820,39 +801,19 @@ try {
       expected,
       "RENDERER_NATIVE_BROWSER_BOUNDS_DRIFT",
     );
-    assert.equal(dom.rail.width, shellRailWidth(native.size[0]));
+    assert.equal(dom.rail.width, expected.x);
     assert.equal(dom.toolbar.height, shellGeometry.windowBar);
-    if (sidebar === "full") {
-      assert.deepEqual(dom.sidebar, {
-        x: shellRailWidth(native.size[0]),
-        y: expected.y,
-        width: pageListWidth,
-        height: expected.height,
-      });
-      assert.equal(dom.divider.count, 1, "SINGLE_PAGE_LIST_DIVIDER_REQUIRED");
-      assert.equal(dom.divider.right, expected.x);
-      assert.equal(dom.divider.lineWidth, "1px");
-      assert.equal(dom.divider.content, '""');
-      assert.notEqual(dom.divider.background, "rgba(0, 0, 0, 0)");
-      assert.equal(
-        dom.divider.sidebarBorder,
-        "0px",
-        "DUPLICATE_SIDEBAR_DIVIDER",
-      );
-      assert.equal(dom.divider.stageBorder, "0px", "DUPLICATE_STAGE_DIVIDER");
-    } else {
-      assert.equal(dom.sidebar, null);
-      assert.equal(dom.divider, null);
-    }
+    assert.equal(dom.retiredSidebar, false);
+    assert.equal(dom.retiredDivider, false);
     assert.equal(
       (await fixtureContents(retainedTaskId)).id,
       reopenedContents.id,
       "RESTORED_BROWSER_IDENTITY_DRIFT",
     );
     report.checks.push(
-      `restored-idle-${theme}-${sidebar}-${pageListWidth}-bounds:${JSON.stringify(expected)}`,
+      `restored-idle-${theme}-${sidebar}-bounds:${JSON.stringify(expected)}`,
     );
-    return { size: native.size, stage: dom.stage, sidebar: dom.sidebar };
+    return { size: native.size, stage: dom.stage, rail: dom.rail };
   }
   // A local DOM probe records whether renderer-directed overlay interaction
   // leaked into this exact synthetic provider. Never send input via its owner.
@@ -908,8 +869,6 @@ try {
   }
   const geometryByTheme = [];
   for (const theme of ["Light", "Graphite"]) {
-    const geometry = (sidebar, width = originalShell.width) =>
-      assertBrowserGeometry(theme.toLowerCase(), sidebar, width);
     await setContentSize(
       shellGeometry.compactMaxWidth + shellGeometry.pageListDefault,
     );
@@ -918,70 +877,25 @@ try {
         .locator(".desktop")
         .getAttribute("data-sidebar")) !== "full"
     )
-      await button("Toggle sidebar").click();
+      await button("Expand sidebar").click();
     await settingsPage(reopenedWindow, "Appearance");
     await button(theme).click();
     await button("Back to Farol").click();
     await button("ChatGPT").click();
-    const normal = await geometry("full");
+    const normal = await assertBrowserGeometry(theme.toLowerCase(), "full");
     await checkSearchOverlay(theme.toLowerCase(), "full", normal);
-    const divider = reopenedWindow.getByRole("separator", {
-      name: "Resize page list",
-      exact: true,
-    });
-    for (const [key, width] of [
-      ["Home", shellGeometry.pageListMin],
-      ["ArrowLeft", shellGeometry.pageListMin],
-      ["End", shellGeometry.pageListMax],
-      ["ArrowRight", shellGeometry.pageListMax],
-    ]) {
-      await divider.press(key);
-      await geometry("full", width);
-    }
-    // Restore the non-step-aligned original width through the actual resizer.
-    const handle = await divider.boundingBox();
-    assert.ok(handle, "PAGE_LIST_RESIZER_BOUNDS_REQUIRED");
-    await reopenedWindow.mouse.move(
-      handle.x + handle.width / 2,
-      handle.y + handle.height / 2,
-    );
-    await reopenedWindow.mouse.down();
-    await reopenedWindow.mouse.move(
-      handle.x +
-        handle.width / 2 +
-        originalShell.width -
-        shellGeometry.pageListMax,
-      handle.y + handle.height / 2,
-    );
-    await assertBrowserDetached();
-    await reopenedWindow.mouse.up();
-    assert.deepEqual(
-      await geometry("full"),
-      normal,
-      "RESIZE_RESTORE_WIDTH_DRIFT",
-    );
-    await button("Toggle sidebar").click();
-    await geometry("rail");
-    await button("Toggle sidebar").click();
-    await geometry("full");
+    await button("Collapse sidebar").click();
+    await assertBrowserGeometry(theme.toLowerCase(), "rail");
+    await button("Expand sidebar").click();
+    await assertBrowserGeometry(theme.toLowerCase(), "full");
     await setContentSize(
       Math.max(
         640,
         shellGeometry.compactMaxWidth - shellGeometry.pageListDefault,
       ),
     );
-    const compact = await geometry("rail");
-    await button("Toggle sidebar").click();
-    await reopenedWindow.locator(".sidebar-overlay").waitFor();
-    await assertOverlayBlocksBrowser();
-    await button("Toggle sidebar").press("ArrowDown");
-    await assertOverlayBlocksBrowser();
-    await button("Close sidebar").click();
-    assert.deepEqual(
-      await geometry("rail"),
-      compact,
-      "SIDEBAR_DISMISS_WIDTH_DRIFT",
-    );
+    const compact = await assertBrowserGeometry(theme.toLowerCase(), "rail");
+    assert.equal(await reopenedWindow.locator(".sidebar-overlay").count(), 0);
     await checkSearchOverlay(theme.toLowerCase(), "rail", compact);
     geometryByTheme.push({ normal, compact });
   }
@@ -993,7 +907,6 @@ try {
   await setContentSize(
     shellGeometry.compactMaxWidth + shellGeometry.pageListDefault,
   );
-  await button("Toggle sidebar").click();
   await settingsPage(reopenedWindow, "Appearance");
   await reopenedWindow
     .getByRole("button", {
@@ -1003,7 +916,8 @@ try {
     .click();
   await button("Back to Farol").click();
   await button("ChatGPT").click();
-  if (originalShell.sidebar !== "full") await button("Toggle sidebar").click();
+  if (originalShell.sidebar !== "full")
+    await button("Collapse sidebar").click();
   await application.evaluate(
     ({ BrowserWindow }, original) =>
       BrowserWindow.fromId(original.id).setBounds(original.bounds),
@@ -1023,7 +937,7 @@ try {
     "ORIGINAL_WINDOW_BOUNDS_NOT_RESTORED",
   );
   report.checks.push(
-    "restored-idle-Light-Graphite-normal-compact-bounded-resize-single-divider-overlay-detach-no-renderer-input-original-state-restored",
+    "restored-idle-Light-Graphite-normal-compact-rail-search-detach-no-renderer-input-original-state-restored",
   );
   await save();
   await reopenedWindow
