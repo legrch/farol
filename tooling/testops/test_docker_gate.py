@@ -671,6 +671,7 @@ class ClientConfigCleanup(unittest.TestCase):
         self.addCleanup(listener.close)
 
     def main(self, outcome, refuse=None, launch=False):
+        real_euid = os.geteuid()
         from docker_gate import main
         scope = "farol-testops-0a1b2c3d"
         argv = ["docker_gate.py", "--docker", str(self.docker), "--socket", str(self.socket_path),
@@ -695,7 +696,10 @@ class ClientConfigCleanup(unittest.TestCase):
                         launches.append(command)
                         raise RuntimeError("stop at launch")
                     return real_popen(command, *args, **kwargs)
-                with patch("docker_gate.subprocess.Popen", side_effect=popen):
+                # The gate's host-UID check is stubbed to 501; host records check
+                # the probe directory against the real owner of this process.
+                with patch("docker_gate.subprocess.Popen", side_effect=popen), \
+                        patch("docker_gate.os.geteuid", return_value=real_euid):
                     probed = execute(jobs[0], probe, binding())
                 self.assertEqual(probed.status, "UNKNOWN")
                 self.assertEqual(len(launches), 1)
