@@ -12,6 +12,7 @@ import {
   verifyInputManifest,
 } from "./build-contract.mjs";
 import { assertBuildIdentity } from "./build-identity-contract.mjs";
+import { requiresGoCore } from "./release-identity.mjs";
 import { GEIST_VERSION, verifyGeistBuild } from "./font-contract.mjs";
 import {
   NATIVE_SAFE_OPEN_HELPER,
@@ -84,12 +85,9 @@ export async function verifyPackageContent({
     artifact.treeDigestVersion === TREE_DIGEST_VERSION,
     "PACKAGE_TREE_DIGEST_VERSION_INVALID",
   );
-  // Match the producer's 0.2/0.3 Go requirement before observing package bytes.
+  // Match the producer's permanent Go requirement before observing package bytes.
   requireValue(
-    layout.core ||
-      ![artifact.version, expectedVersion].some(
-        (version) => typeof version === "string" && /^0\.[23]\./u.test(version),
-      ),
+    layout.core || ![artifact.version, expectedVersion].some(requiresGoCore),
     "PACKAGE_GO_CORE_REQUIRED",
   );
   // A Go-core target may omit the retired Python update helper (the bridge rule

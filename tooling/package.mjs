@@ -2,7 +2,7 @@ import { GO_CORE_ENTRIES, verifyGoCoreArtifact } from "./go-core-artifact.mjs";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { releaseBuildFields } from "./release-identity.mjs";
+import { releaseBuildFields, requiresGoCore } from "./release-identity.mjs";
 import { TREE_DIGEST_VERSION, treeDigest } from "./artifact-digest.mjs";
 import { BUILD_ENTRIES, verifyBuildEntries } from "./build-contract.mjs";
 import { assertBuildIdentity } from "./build-identity-contract.mjs";
@@ -55,8 +55,8 @@ exec "$contents_dir/Frameworks/Electron Runtime.app/Contents/MacOS/Electron" \\
 const manifest = JSON.parse(
   await fs.readFile(path.join(builtRoot, "build-manifest.json"), "utf8"),
 );
-// The 0.2 and 0.3 release lines ship the Go core.
-if (/^0\.[23]\./u.test(previewVersion) && manifest.schema !== 4)
+// The Go requirement applies to every release from 0.2 onward.
+if (requiresGoCore(previewVersion) && manifest.schema !== 4)
   throw new Error("PACKAGE_GO_CORE_REQUIRED");
 if (
   ![3, 4].includes(manifest.schema) ||

@@ -110,6 +110,13 @@ describe("shared package Go version admission", () => {
       currentVersion,
       "0.2.12-owner.beta.0",
       "0.3.0-owner.beta.1",
+      "0.4.0",
+      "0.4.1",
+      "0.10.0",
+      "0.20.0",
+      "1.0.0",
+      "10.2.0",
+      "9007199254740993.0.0",
     ])(`requires Go core for %s claiming schema ${schema}`, async (version) => {
       await refusesBeforeObservation(
         fixture(schema, version),
@@ -121,8 +128,12 @@ describe("shared package Go version admission", () => {
       [historicalVersion, currentVersion],
       [null, currentVersion],
       [currentVersion, undefined],
+      ["0.4.0", historicalVersion],
+      [historicalVersion, "0.4.1"],
+      ["1.0.0", historicalVersion],
+      [historicalVersion, "1.0.0"],
     ])(
-      `requires Go core when either claimed or expected version is 0.2 with schema ${schema}: %s / %s`,
+      `requires Go core when either version requires it with schema ${schema}: %s / %s`,
       async (version, expectedVersion) => {
         const input = fixture(schema, version);
         input.expectedVersion = expectedVersion;
@@ -193,8 +204,6 @@ describe("shared package Go version admission", () => {
     [7, historicalVersion, currentVersion],
     [7, currentVersion, historicalVersion],
     [6, historicalVersion, "0.1.1-owner.beta.1"],
-    [6, "10.2.0", historicalVersion],
-    [6, "0.20.0", historicalVersion],
     [6, "00.2.0", historicalVersion],
     [6, null, historicalVersion],
     [6, 2, historicalVersion],

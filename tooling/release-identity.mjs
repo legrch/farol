@@ -1,4 +1,14 @@
 // Only committed package metadata chooses this channel; no environment or workspace URL.
+export function requiresGoCore(version) {
+  if (typeof version !== "string") return false;
+  const prefix = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\./u.exec(version);
+  // Only the historical 0.0/0.1 lines predate the mandatory Go core. Compare
+  // decimal components as strings so large future versions cannot overflow.
+  return (
+    prefix !== null && (prefix[1] !== "0" || !["0", "1"].includes(prefix[2]))
+  );
+}
+
 export function releaseBuildFields(packageDocument) {
   const release = packageDocument.farolRelease;
   if (release === undefined) return {};
