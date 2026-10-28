@@ -47,7 +47,7 @@ func ProjectAuditCommand(value string, filter AuditScalarFilter) AuditCommand {
 var sensitive = regexp.MustCompile(`(?i)(authorization|set-cookie|cookie\s*[:=]|bearer\s+|basic\s+|password|passwd|passphrase|secret|credential|api[_-]?key|\btoken\b|access[_-]?token|refresh[_-]?token|private[_ -]?key|base64\s+(--decode|-d)|-----begin [a-z ]*private key-----|https?://[^/\s]+@|[?&](token|key|auth|password)=|\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})`)
 var opaqueHex = regexp.MustCompile(`(?i)\b[0-9a-f]{96,}\b`)
 var opaqueBase64 = regexp.MustCompile(`[A-Za-z0-9+/]{96,}={0,2}`)
-var inlineInterpreter = regexp.MustCompile(`(?:^|[\s;&|()])(?:[^\s;&|()]*/)?(?:python[0-9.]*|node|ruby|perl|bash|sh|zsh)(?:\s+-[A-Za-z0-9]+)*\s+-[A-Za-z]*[ce][^\s]*`)
+var inlineInterpreter = regexp.MustCompile(`(?:^|[\s;&|()])(?:[^\s;&|()]*/)?(?:python[0-9.]*|node|ruby|perl|bash|sh|zsh)[^\n]*\s+-[A-Za-z]*[ce][^\s]*`)
 
 // Long encoded material can contain secrets even without a recognizable key.
 // Preserve ordinary long identifiers unless they have base64-like mixed classes.

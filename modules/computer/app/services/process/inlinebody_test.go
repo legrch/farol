@@ -8,6 +8,7 @@ func TestInlineCommandBodiesAreNotRetained(t *testing.T) {
 		"python3 -c 'print(42)'",
 		"python3 -B -c 'print(42)'",
 		"python3 -Bc 'print(42)'",
+		"python3 -W ignore -c 'print(42)'",
 		"/usr/bin/node -e 'console.log(42)'",
 		"pwd && bash -c 'echo 42'",
 		"cat <<EOF\nprivate fixture\nEOF",
