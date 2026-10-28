@@ -208,9 +208,10 @@ This source change performs no staging, tag push, dispatch or publication.
 
 Only `publish` has `contents: write`. Its `actions: read` is needed to read the
 prior/current run and job metadata, not to download Actions artifacts. Before
-download it verifies dispatch SHA/checkout/main ancestry, strict owner-beta
-version, exact repository ID/name and workflow ID/path, a distinct earlier
-successful **tag** run at the same source and its exact current attempt, and
+download it verifies dispatch SHA/checkout/main ancestry, a strict stable or
+owner-beta version with its matching channel, exact repository ID/name and
+workflow ID/path, a distinct earlier successful **tag** run at the same source
+and its exact current attempt, and
 exactly two completed jobs (`build: success`, `publish: skipped`). Failed,
 running, unknown, foreign, publish-only, same-run or prepare-dispatch candidates
 refuse. Incomplete job or release listings fail closed.
