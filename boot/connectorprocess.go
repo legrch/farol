@@ -49,6 +49,8 @@ type connectorProcessOperation struct {
 	auditCommand     output.Command
 	auditOnce        sync.Once
 	auditDone        chan struct{}
+	auditMu          sync.Mutex
+	auditFinal       bool
 	auditDetails     output.Details
 	auditAvailable   bool
 }

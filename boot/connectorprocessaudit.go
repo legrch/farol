@@ -89,21 +89,48 @@ func (s *computerConnector) processTerminalAuditDetails(ctx context.Context, ope
 			filter := s.auditFilter
 			go func() {
 				defer func() { <-s.auditSlots; close(p.auditDone) }()
-				p.auditDetails, p.auditAvailable = processsvc.ProjectTerminalDetails(*result, p.auditCommand, filter)
+				details, available := processsvc.ProjectTerminalDetails(*result, p.auditCommand, filter)
+				p.auditMu.Lock()
+				if !p.auditFinal {
+					p.auditDetails, p.auditAvailable, p.auditFinal = details, available, true
+				}
+				p.auditMu.Unlock()
 			}()
 		default:
+			p.auditMu.Lock()
+			p.auditFinal = true
+			p.auditMu.Unlock()
 			close(p.auditDone)
 		}
 	})
+	p.auditMu.Lock()
+	if p.auditFinal {
+		details, available := p.auditDetails, p.auditAvailable
+		p.auditMu.Unlock()
+		return details, available
+	}
+	p.auditMu.Unlock()
 	timer := time.NewTimer(100 * time.Millisecond)
 	defer timer.Stop()
 	select {
 	case <-p.auditDone:
-		return p.auditDetails, p.auditAvailable
+		p.auditMu.Lock()
+		details, available := p.auditDetails, p.auditAvailable
+		p.auditMu.Unlock()
+		return details, available
 	case <-ctx.Done():
+		p.auditMu.Lock()
+		p.auditFinal = true
+		p.auditMu.Unlock()
 		return output.Details{}, false
 	case <-timer.C:
-		return output.Details{}, false
+		p.auditMu.Lock()
+		if !p.auditFinal {
+			p.auditFinal = true
+		}
+		details, available := p.auditDetails, p.auditAvailable
+		p.auditMu.Unlock()
+		return details, available
 	}
 }
 

@@ -120,7 +120,12 @@ func TestSlowAuditFilterDoesNotHoldExecutionOrTerminalObservation(t *testing.T) 
 	s.mutations.dependencies.repository = publisher
 	gate := make(chan struct{})
 	s.auditFilter = func(value string) (string, error) { <-gate; return value, nil }
-	t.Cleanup(func() { close(gate) })
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			close(gate)
+		}
+	})
 	startAt := time.Now()
 	command := s.auditCommandProjection(context.Background(), "private input")
 	if time.Since(startAt) > time.Second {
@@ -141,5 +146,47 @@ func TestSlowAuditFilterDoesNotHoldExecutionOrTerminalObservation(t *testing.T) 
 	}
 	if _, ok := s.processTerminalAudit(start.OperationID, journal.scope.Host.BuildID, journal.scope.Host.RuntimeID); !ok {
 		t.Fatal("slow filter hid terminal metadata")
+	}
+	close(gate)
+	closed = true
+	s.mutations.mu.Lock()
+	auditDone := s.mutations.operations[start.OperationID].process.auditDone
+	s.mutations.mu.Unlock()
+	select {
+	case <-auditDone:
+	case <-time.After(time.Second):
+		t.Fatal("late filter did not settle")
+	}
+	if _, ok := s.processTerminalAuditDetails(context.Background(), start.OperationID, journal.scope.Host.BuildID, journal.scope.Host.RuntimeID); ok {
+		t.Fatal("late filter replaced finalized unavailable details")
+	}
+}
+
+func TestAuditHostMethodNeverTransportsRawProcessSecrets(t *testing.T) {
+	for _, filterAvailable := range []bool{false, true} {
+		s, _, journal, child, _ := connectorProcessFixture(t)
+		publisher := &connectorProcessPublisherDouble{connectorProcessJournalDouble: journal, s: s, digest: strings.Repeat("a", 64)}
+		s.mutations.dependencies.repository = publisher
+		child.stdoutData, child.stderrData = []byte("password=PRIVATE-STDOUT"), []byte("token=PRIVATE-STDERR")
+		if filterAvailable {
+			s.auditFilter = func(value string) (string, error) { return value, nil }
+		}
+		command := output.ProjectCommand("password=PRIVATE-COMMAND", s.auditFilter)
+		start, err := s.startProcessWithAudit(context.Background(), s.current, "secret-audit", "call", child.selectLaunch, command)
+		if err != nil || start == nil {
+			t.Fatal("process did not start")
+		}
+		child.terminal = true
+		done := processCollectionDone(s, start.OperationID)
+		close(child.completed)
+		awaitProcessCollectionDone(t, done)
+		body, err := json.Marshal(wire.ComputerProcessAuditRequest{OperationId: start.OperationID, BuildId: journal.scope.Host.BuildID, RuntimeId: journal.scope.Host.RuntimeID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := s.processAuditMethod().Handle(context.Background(), desktop.Request{Body: body})
+		if err != nil || result.Status != "ok" || wire.Validate("ComputerProcessAuditResult", result.Data) != nil || strings.Contains(string(result.Data), "PRIVATE-") {
+			t.Fatal("audit transport exposed source material")
+		}
 	}
 }

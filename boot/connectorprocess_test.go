@@ -66,6 +66,8 @@ type connectorProcessNativeDouble struct {
 	groupGone     bool
 	completed     chan struct{}
 	completionErr error
+	stdoutData    []byte
+	stderrData    []byte
 }
 
 func (n *connectorProcessNativeDouble) WaitForCompletion(ctx context.Context) error {
@@ -140,9 +142,16 @@ func (n *connectorProcessNativeDouble) Read(_ context.Context, window processsvc
 	if n.readErr != nil {
 		return nil, n.readErr
 	}
+	stdout, stderr := n.stdoutData, n.stderrData
+	if stdout == nil {
+		stdout = []byte("saved")
+	}
+	if stderr == nil {
+		stderr = []byte("err")
+	}
 	out := &processsvc.Observation{Handle: n.Handle(), Root: processsvc.RootRunning, GroupCleanup: processsvc.CleanupPending, DescendantCleanup: processsvc.CleanupPending,
-		Stdout: []byte("saved"), Stderr: []byte("err"), StdoutOffset: window.StdoutOffset, StderrOffset: window.StderrOffset,
-		StdoutNext: window.StdoutOffset + 5, StderrNext: window.StderrOffset + 3, StdoutBytes: window.StdoutOffset + 5, StderrBytes: window.StderrOffset + 3}
+		Stdout: stdout, Stderr: stderr, StdoutOffset: window.StdoutOffset, StderrOffset: window.StderrOffset,
+		StdoutNext: window.StdoutOffset + uint64(len(stdout)), StderrNext: window.StderrOffset + uint64(len(stderr)), StdoutBytes: window.StdoutOffset + uint64(len(stdout)), StderrBytes: window.StderrOffset + uint64(len(stderr))}
 	if n.terminal {
 		code := 7
 		out.Root, out.Waited, out.ExitCode = processsvc.RootExited, true, &code
