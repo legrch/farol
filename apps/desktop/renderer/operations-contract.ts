@@ -109,6 +109,8 @@ const OperationReferenceSchema = z.strictObject({
 const CleanupSchema = z.enum(["pending", "confirmed", "unverified"]);
 const OperationEntryV2Schema = OperationEntryV1Schema.extend({
   schema: z.literal("farol.operation/2"),
+  // Terminal observations can arrive without a measured duration.
+  durationMs: OperationDurationSchema.nullable(),
   operationRef: OperationReferenceSchema.nullable(),
   subjectRef: OperationReferenceSchema.nullable(),
   timing: z

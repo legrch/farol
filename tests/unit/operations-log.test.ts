@@ -254,6 +254,7 @@ it("reads mixed V1 and bounded V2 observations without rewriting history or acce
     ...v1,
     id: "c7b853ec-0862-4540-8e29-e1b680d5149d",
     schema: "farol.operation/2",
+    durationMs: null,
     operationRef: {
       owner: "computer.process",
       operationId: "start-1",

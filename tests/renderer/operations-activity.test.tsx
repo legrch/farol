@@ -63,6 +63,31 @@ const entries: ActivityEntry[] = [
     generation: 0,
   },
 ];
+it("shows an unknown observation duration without inventing zero milliseconds", async () => {
+  const f = fixture(),
+    c = new WindowController(f.api);
+  await c.start();
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  try {
+    await act(async () =>
+      root.render(
+        <OperationsActivity
+          snapshot={{
+            ...c.getSnapshot(),
+            activity: [{ ...entries[0]!, durationMs: null }],
+          }}
+          facade={{} as RendererFacade}
+        />,
+      ),
+    );
+    expect(host.textContent).toContain("Unavailable");
+    expect(host.textContent).not.toContain("0 ms");
+  } finally {
+    await act(async () => root.unmount());
+    c.dispose();
+  }
+});
 it("shows a slow activity read as updating, not as a failed log write", async () => {
   const f = fixture(),
     c = new WindowController(f.api);

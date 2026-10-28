@@ -145,7 +145,7 @@ export type ActivityEntry = Readonly<{
   source?: OperationEntry["source"];
   outcome?: OperationEntry["outcome"];
   target?: OperationEntry["target"];
-  durationMs?: number;
+  durationMs?: number | null;
   id: string;
   taskId: string;
   turnId: string;

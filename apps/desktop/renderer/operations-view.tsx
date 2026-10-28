@@ -144,7 +144,12 @@ export function OperationsActivity({
                 ["Target", row.operation || "App"],
                 ["Outcome", row.outcome],
                 ["Code", row.code ?? "—"],
-                ["Duration", `${row.durationMs ?? 0} ms`],
+                [
+                  "Duration",
+                  row.durationMs === null
+                    ? "Unavailable"
+                    : `${row.durationMs} ms`,
+                ],
               ].map(([key, value]) => (
                 <div key={key}>
                   <dt>{key}</dt>
