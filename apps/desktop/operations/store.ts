@@ -30,7 +30,12 @@ type SegmentIndex = {
   last: number | null;
   count: number;
 };
-type QueuedEntry = { entry: OperationEntry; droppable: boolean };
+type QueuedEntry = {
+  encoded: Buffer;
+  at: number;
+  lifecycle: OperationEntry["lifecycle"];
+  droppable: boolean;
+};
 type Labels = readonly { workspaceId: string; label: string }[];
 
 /** One bounded, serial writer. No filesystem work runs in recording callers.
@@ -44,6 +49,8 @@ export class OperationsStore implements OperationsRecorder {
   private droppedEntries = 0;
   private unrecordedUncertainEntries = 0;
   private readonly queue: QueuedEntry[] = [];
+  // Includes the active batch until its write, sync and close have settled.
+  private pendingBytes = 0;
   private labels: Labels | undefined;
   private currentLabels: Labels | undefined;
   private readLabelsCache: Labels = [];
@@ -96,6 +103,7 @@ export class OperationsStore implements OperationsRecorder {
     } = operationsLimits,
     private readonly io = fs.promises,
     private readonly queueLimit = 1024,
+    private readonly queueByteLimit = 1024 * 1024,
   ) {
     this.writer = `${String(this.now()).padStart(13, "0")}-${randomUUID()}`;
     this.requestRetention();
@@ -307,31 +315,70 @@ export class OperationsStore implements OperationsRecorder {
   private enqueue(entry: OperationEntry): boolean {
     const lifecycle = entry.lifecycle;
     const item = {
-      entry,
+      encoded: Buffer.from(JSON.stringify(entry) + "\n"),
+      at: entry.at,
+      lifecycle,
       droppable: entry.outcome !== "pending" && entry.outcome !== "unknown",
     };
-    if (item.droppable && lifecycle?.phase === "observed") {
-      const start = this.queue.find(
-        (q) =>
-          q.entry.lifecycle?.id === lifecycle.id &&
-          q.entry.lifecycle.phase === "started",
-      );
-      if (start) start.droppable = true;
-    }
     if (this.closed) {
       this.lost([item]);
       return false;
     }
     this.schedule();
-    if (this.queue.length >= this.queueLimit) {
-      const index = this.queue.findIndex((q) => q.droppable);
-      if (index < 0) {
-        this.lost([item]);
-        return false;
-      }
-      this.lost(this.queue.splice(index, 1));
+    // An oversized entry cannot fit even after eviction. Keep existing rows.
+    if (item.encoded.length > this.queueByteLimit) {
+      this.lost([item]);
+      return false;
+    }
+    const victims: number[] = [];
+    let count = this.queue.length;
+    let bytes = this.pendingBytes;
+    for (
+      let index = 0;
+      index < this.queue.length &&
+      (count >= this.queueLimit ||
+        bytes + item.encoded.length > this.queueByteLimit);
+      index++
+    ) {
+      const queued = this.queue[index]!;
+      const replacesStart =
+        item.droppable &&
+        lifecycle?.phase === "observed" &&
+        queued.lifecycle?.id === lifecycle.id &&
+        queued.lifecycle.phase === "started";
+      if (!queued.droppable && !replacesStart) continue;
+      victims.push(index);
+      count--;
+      bytes -= queued.encoded.length;
+    }
+    if (
+      count >= this.queueLimit ||
+      bytes + item.encoded.length > this.queueByteLimit
+    ) {
+      this.lost([item]);
+      return false;
+    }
+    for (const index of victims.reverse()) {
+      const removed = this.queue.splice(index, 1);
+      if (
+        removed[0]!.lifecycle?.id === lifecycle?.id &&
+        lifecycle?.phase === "observed"
+      )
+        removed[0]!.droppable = true;
+      this.pendingBytes -= removed[0]!.encoded.length;
+      this.lost(removed);
     }
     this.queue.push(item);
+    this.pendingBytes += item.encoded.length;
+    // A start becomes evictable only after its observation was admitted.
+    // Otherwise a rejected observation could discard the sole pending record.
+    if (item.droppable && lifecycle?.phase === "observed") {
+      const start = this.queue.find(
+        (q) =>
+          q.lifecycle?.id === lifecycle.id && q.lifecycle.phase === "started",
+      );
+      if (start) start.droppable = true;
+    }
     return true;
   }
   /** Append an observation without changing the original MCP result. The
@@ -489,26 +536,31 @@ export class OperationsStore implements OperationsRecorder {
       const labels = this.labels;
       this.labels = undefined;
       try {
-        await this.prepare();
-      } catch {
-        // Rejected preparation grants no maintenance through this path. Consume
-        // the batch once and retain diagnostics in memory until a future pass.
-        this.writeFailures++;
-        this.lost(batch);
-        diagnosticsFailed = true;
-        continue;
-      }
-      try {
-        if (labels)
-          await this.replace(
-            path.join(this.directory, "workspace-labels.json"),
-            Object.fromEntries(labels.map((w) => [w.workspaceId, w.label])),
-          );
-        if (batch.length) await this.writeBatch(batch);
-      } catch {
-        // Never replay an uncertain/partially written batch. Keep counters only.
-        this.writeFailures++;
-        this.lost(batch);
+        try {
+          await this.prepare();
+        } catch {
+          // Rejected preparation grants no maintenance through this path. Consume
+          // the batch once and retain diagnostics in memory until a future pass.
+          this.writeFailures++;
+          this.lost(batch);
+          diagnosticsFailed = true;
+          continue;
+        }
+        try {
+          if (labels)
+            await this.replace(
+              path.join(this.directory, "workspace-labels.json"),
+              Object.fromEntries(labels.map((w) => [w.workspaceId, w.label])),
+            );
+          if (batch.length) await this.writeBatch(batch);
+        } catch {
+          // Never replay an uncertain/partially written batch. Keep counters only.
+          this.writeFailures++;
+          this.lost(batch);
+        }
+      } finally {
+        for (const item of batch) this.pendingBytes -= item.encoded.length;
+        batch.length = 0;
       }
       try {
         await this.prune();
@@ -563,8 +615,8 @@ export class OperationsStore implements OperationsRecorder {
       }
     };
     try {
-      for (const { entry } of batch) {
-        const day = Math.floor(entry.at / dayMs);
+      for (const { at, encoded } of batch) {
+        const day = Math.floor(at / dayMs);
         if (this.segment && day !== this.segmentDay) {
           await close();
           this.segment = "";
@@ -590,9 +642,8 @@ export class OperationsStore implements OperationsRecorder {
             }
           }
         }
-        const line = JSON.stringify(entry) + "\n";
-        await handle.writeFile(line);
-        size += Buffer.byteLength(line);
+        await handle.writeFile(encoded);
+        size += encoded.length;
         if (size >= this.limits.segmentBytes) {
           await close();
           this.segment = "";

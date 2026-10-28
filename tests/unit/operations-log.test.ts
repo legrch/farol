@@ -1195,7 +1195,11 @@ function deferred() {
   });
   return { promise, resolve };
 }
-function injectedStore(io: typeof fs.promises, queueLimit = 4) {
+function injectedStore(
+  io: typeof fs.promises,
+  queueLimit = 4,
+  queueByteLimit?: number,
+) {
   const { directory } = setup();
   const store = new OperationsStore(
     directory,
@@ -1203,10 +1207,358 @@ function injectedStore(io: typeof fs.promises, queueLimit = 4) {
     { days: 30, bytes: 8192, segmentBytes: 4096, entries: 100 },
     io,
     queueLimit,
+    queueByteLimit,
   );
   stores.push(store);
   return { store, directory };
 }
+function queuedLine(
+  outcome: "done" | "unknown" | "pending",
+  durationMs = 1,
+  target: OperationMetadata["target"] = {},
+) {
+  return Buffer.from(
+    JSON.stringify(
+      OperationEntrySchema.parse({
+        ...metadata,
+        target,
+        id: "11111111-1111-4111-8111-111111111111",
+        at: 1792670400000,
+        outcome,
+        code: null,
+        durationMs,
+      }),
+    ) + "\n",
+  );
+}
+
+it("preserves pending records when a larger completion cannot fit", async () => {
+  const lifecycle = "11111111-1111-4111-8111-111111111111";
+  const entry = (id: string, phase: "started" | "observed") =>
+    OperationEntrySchema.parse({
+      ...metadata,
+      id,
+      at: 1792670400000,
+      outcome: phase === "started" ? "pending" : "done",
+      code: phase === "started" ? null : "PHYSICAL_TERMINAL_CONFIRMED",
+      durationMs: 0,
+      lifecycle: { id: lifecycle, phase },
+    });
+  const first = entry("22222222-2222-4222-8222-222222222222", "started");
+  const second = {
+    ...first,
+    id: "33333333-3333-4333-8333-333333333333",
+    lifecycle: {
+      id: "44444444-4444-4444-8444-444444444444",
+      phase: "started" as const,
+    },
+  };
+  const completion = entry("55555555-5555-4555-8555-555555555555", "observed");
+  const bytes = (value: unknown) =>
+    Buffer.byteLength(JSON.stringify(value) + "\n");
+  const { store } = injectedStore(fs.promises, 8, bytes(first) + bytes(second));
+  const enqueue = (
+    store as unknown as { enqueue: (value: typeof first) => boolean }
+  ).enqueue.bind(store);
+  expect(enqueue(first)).toBe(true);
+  expect(enqueue(second)).toBe(true);
+  expect(enqueue(completion)).toBe(false);
+  expect(await store.flush(5000)).toBe(true);
+  const snapshot = await store.snapshot(5000);
+  expect(snapshot.entries.map((value) => value.id)).toEqual([
+    first.id,
+    second.id,
+  ]);
+  expect(snapshot.droppedEntries).toBe(1);
+});
+
+it("bounds queued and in-flight bytes under slow writer pressure while preserving uncertain rows", async () => {
+  const entered = deferred(),
+    release = deferred();
+  let block = true;
+  const io = {
+    ...fs.promises,
+    open: async (...args: Parameters<typeof fs.promises.open>) => {
+      const handle = await fs.promises.open(...args);
+      if (String(args[0]).endsWith(".jsonl")) {
+        const writeFile = handle.writeFile.bind(handle);
+        handle.writeFile = async (...writeArgs) => {
+          if (block) {
+            entered.resolve();
+            await release.promise;
+          }
+          return writeFile(...writeArgs);
+        };
+      }
+      return handle;
+    },
+  };
+  const budget =
+    queuedLine("done").length +
+    queuedLine("unknown").length +
+    queuedLine("pending").length +
+    2 * queuedLine("done", 10).length;
+  const { store } = injectedStore(io, 128, budget);
+  store.record(metadata, "done", null, 1);
+  await entered.promise;
+  try {
+    store.record(metadata, "unknown", null, 1);
+    store.record(metadata, "pending", null, 1);
+    for (let duration = 10; duration < 20; duration++)
+      store.record(metadata, "done", null, duration);
+    expect(await store.flush(10)).toBe(false);
+  } finally {
+    block = false;
+    release.resolve();
+  }
+  expect(await store.flush(5000)).toBe(true);
+  expect(await store.snapshot(5000)).toMatchObject({
+    entries: [
+      { outcome: "done", durationMs: 1 },
+      { outcome: "unknown" },
+      { outcome: "pending" },
+      { outcome: "done", durationMs: 18 },
+      { outcome: "done", durationMs: 19 },
+    ],
+    droppedEntries: 8,
+    unrecordedUncertainEntries: 0,
+  });
+});
+
+it.each(["writeFile", "sync", "close"] as const)(
+  "reserves the whole active batch through %s and releases bytes after settlement",
+  async (method) => {
+    const entered = deferred(),
+      release = deferred();
+    let block = true;
+    const io = {
+      ...fs.promises,
+      open: async (...args: Parameters<typeof fs.promises.open>) => {
+        const handle = await fs.promises.open(...args);
+        if (
+          String(args[0]).endsWith(".jsonl") &&
+          (Number(args[1]) & fs.constants.O_APPEND) !== 0
+        ) {
+          const wait = async () => {
+            if (block) {
+              entered.resolve();
+              await release.promise;
+            }
+          };
+          if (method === "writeFile") {
+            const original = handle.writeFile.bind(handle);
+            handle.writeFile = async (...writeArgs) => {
+              await wait();
+              return original(...writeArgs);
+            };
+          } else {
+            const original = handle[method].bind(handle);
+            handle[method] = async () => {
+              await wait();
+              return original();
+            };
+          }
+        }
+        return handle;
+      },
+    };
+    const { store } = injectedStore(io, 128, 2 * queuedLine("done").length);
+    store.record(metadata, "done", null, 1);
+    store.record(metadata, "done", null, 1);
+    await entered.promise;
+    try {
+      // Even settled rows in the active batch cannot be evicted or replayed.
+      store.record(metadata, "done", null, 1);
+      store.record(metadata, "unknown", null, 1);
+      store.record(metadata, "pending", null, 1);
+      expect(await store.flush(10)).toBe(false);
+    } finally {
+      block = false;
+      release.resolve();
+    }
+    expect(await store.flush(5000)).toBe(true);
+    expect(await store.snapshot(5000)).toMatchObject({
+      entries: [{ outcome: "done" }, { outcome: "done" }],
+      droppedEntries: 3,
+      unrecordedUncertainEntries: 2,
+    });
+    // Rejected rows reserve nothing; the completed batch releases its full budget.
+    store.record(metadata, "done", null, 1);
+    store.record(metadata, "done", null, 1);
+    expect(await store.flush(5000)).toBe(true);
+    const after = await store.snapshot(5000);
+    expect(after.entries).toHaveLength(4);
+    expect(after.droppedEntries).toBe(3);
+  },
+);
+
+it("counts encoded UTF-8 bytes and rejects oversized rows without evicting existing rows or raw fallback", async () => {
+  const labels = [{ workspaceId: "w", label: "界".repeat(100) }];
+  const target = resolveOperationTarget(
+    { workspace: "w" },
+    labels,
+    "identifier",
+  );
+  const encoded = queuedLine("done", 1, target);
+  expect(encoded.length).toBeGreaterThan(encoded.toString("utf8").length);
+  const { store, directory } = injectedStore(
+    fs.promises,
+    128,
+    encoded.length - 1,
+  );
+  store.setWorkspaceLabels(labels);
+  store.record(metadata, "done", null, 1);
+  for (const outcome of ["done", "unknown", "pending"] as const)
+    store.record(
+      { ...metadata, target: { workspace: "w", relativePath: "PRIVATE-RAW" } },
+      outcome,
+      null,
+      1,
+    );
+  expect(await store.flush(5000)).toBe(true);
+  expect(await store.snapshot(5000)).toMatchObject({
+    entries: [{ target: {}, outcome: "done" }],
+    droppedEntries: 3,
+    unrecordedUncertainEntries: 2,
+  });
+  const raw = segmentFiles(directory)
+    .map((name) => fs.readFileSync(path.join(directory, name), "utf8"))
+    .join("");
+  expect(raw).not.toContain("PRIVATE-RAW");
+  expect(raw.trim().split("\n")).toHaveLength(1);
+  store.record(metadata, "done", null, 1);
+  expect(await store.flush(5000)).toBe(true);
+  expect((await store.snapshot(5000)).entries).toHaveLength(2);
+});
+
+it("evicts multiple settled rows to admit a UTF-8 entry at the exact byte limit", async () => {
+  const labels = [{ workspaceId: "w", label: "界".repeat(100) }];
+  const target = resolveOperationTarget(
+    { workspace: "w" },
+    labels,
+    "identifier",
+  );
+  const budget = queuedLine("unknown", 1, target).length;
+  const settledCount = Math.floor(budget / queuedLine("done").length);
+  expect(settledCount).toBeGreaterThan(1);
+  const { store } = injectedStore(fs.promises, 128, budget);
+  store.setWorkspaceLabels(labels);
+  for (let i = 0; i < settledCount; i++)
+    store.record(metadata, "done", null, 1);
+  store.record({ ...metadata, target: { workspace: "w" } }, "unknown", null, 1);
+  expect(await store.flush(5000)).toBe(true);
+  expect(await store.snapshot(5000)).toMatchObject({
+    entries: [{ outcome: "unknown", target }],
+    droppedEntries: settledCount,
+    unrecordedUncertainEntries: 0,
+  });
+  // Evictions and the completed batch both release exactly their own bytes.
+  store.record({ ...metadata, target: { workspace: "w" } }, "unknown", null, 1);
+  expect(await store.flush(5000)).toBe(true);
+  expect((await store.snapshot(5000)).entries).toHaveLength(2);
+});
+
+it("reports protected byte exhaustion across restart without evicting pending or unknown rows", async () => {
+  const { store, directory } = injectedStore(
+    fs.promises,
+    128,
+    queuedLine("pending").length + queuedLine("unknown").length,
+  );
+  store.record(metadata, "pending", null, 1);
+  store.record(metadata, "unknown", null, 1);
+  store.record(metadata, "unknown", null, 1);
+  store.record(metadata, "done", null, 1);
+  expect(await store.flush(5000)).toBe(true);
+  const reader = new OperationsStore(directory, () => 1792670400000);
+  stores.push(reader);
+  expect(await reader.snapshot(5000)).toMatchObject({
+    entries: [{ outcome: "pending" }, { outcome: "unknown" }],
+    droppedEntries: 2,
+    unrecordedUncertainEntries: 1,
+  });
+});
+
+it.each(["prepare", "writeFile", "sync", "close"] as const)(
+  "releases byte reservations after %s failure without retrying unknown writes",
+  async (failure) => {
+    let fail = true;
+    let writes = 0;
+    const io = {
+      ...fs.promises,
+      mkdir: (async (...args: Parameters<typeof fs.promises.mkdir>) => {
+        if (failure === "prepare" && fail) {
+          fail = false;
+          throw Error("injected preparation failure");
+        }
+        return fs.promises.mkdir(...args);
+      }) as typeof fs.promises.mkdir,
+      open: async (...args: Parameters<typeof fs.promises.open>) => {
+        const handle = await fs.promises.open(...args);
+        if (
+          String(args[0]).endsWith(".jsonl") &&
+          (Number(args[1]) & fs.constants.O_APPEND) !== 0
+        ) {
+          const writeFile = handle.writeFile.bind(handle);
+          handle.writeFile = async (...writeArgs) => {
+            writes++;
+            await writeFile(...writeArgs);
+            if (failure === "writeFile" && fail) {
+              fail = false;
+              throw Error("injected unknown write");
+            }
+          };
+          if (failure === "sync" || failure === "close") {
+            const original = handle[failure].bind(handle);
+            handle[failure] = async () => {
+              await original();
+              if (fail) {
+                fail = false;
+                throw Error("injected unknown durability");
+              }
+            };
+          }
+        }
+        return handle;
+      },
+    };
+    const { store, directory } = injectedStore(
+      io,
+      128,
+      queuedLine("unknown").length,
+    );
+    store.record(metadata, "unknown", null, 1);
+    expect(await store.flush(5000)).toBe(false);
+    expect(await store.snapshot(5000)).toMatchObject({
+      writeFailures: 1,
+      droppedEntries: 1,
+      unrecordedUncertainEntries: 1,
+    });
+    const attempts = writes;
+    await store.flush(5000);
+    expect(writes).toBe(attempts);
+    store.record(metadata, "done", null, 1);
+    await store.flush(5000);
+    expect(writes).toBe(attempts + 1);
+    const after = await store.snapshot(5000);
+    expect(
+      after.entries.filter((entry) => entry.outcome === "done"),
+    ).toHaveLength(1);
+    expect(after).toMatchObject({
+      writeFailures: 1,
+      droppedEntries: 1,
+      unrecordedUncertainEntries: 1,
+    });
+    const raw = segmentFiles(directory)
+      .flatMap((name) =>
+        fs.readFileSync(path.join(directory, name), "utf8").trim().split("\n"),
+      )
+      .map((line) => JSON.parse(line));
+    expect(raw.filter((entry) => entry.outcome === "unknown")).toHaveLength(
+      failure === "prepare" ? 0 : 1,
+    );
+  },
+);
+
 it("does not start a new retention scan for an already drained shutdown", async () => {
   const readdir = vi.fn(fs.promises.readdir);
   const { store } = injectedStore({
