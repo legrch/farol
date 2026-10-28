@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import {
   TUNNEL_CLIENT,
   TUNNEL_CLIENT_NOTICES,
@@ -274,22 +273,4 @@ async function prepareTunnelClientArchive(root, bytes) {
     // This private data stage has no running client or unknown-effect consumer.
     await fs.rm(stage, { recursive: true, force: true });
   }
-}
-
-if (
-  process.argv[1] &&
-  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
-  const args = process.argv.slice(2);
-  if (args.length === 1 && args[0] === "--download") {
-    await provisionTunnelClientInput(process.cwd());
-  } else if (args.length === 1 && args[0].startsWith("--source=")) {
-    await prepareTunnelClientInput(
-      process.cwd(),
-      path.resolve(args[0].slice("--source=".length)),
-    );
-  } else throw new Error("TUNNEL_CLIENT_INPUT_SOURCE_REQUIRED");
-  process.stdout.write(
-    `Reviewed tunnel-client ${TUNNEL_CLIENT.version} input prepared.\n`,
-  );
 }

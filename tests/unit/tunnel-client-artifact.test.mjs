@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { buildSync } from "esbuild";
 import { syntheticTunnelArchive } from "../fixtures/tunnel-archive-fixture.mjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -68,6 +70,32 @@ afterEach(async () => {
 });
 
 describe("bundled Tunnel Client input", () => {
+  it("does not run the input CLI when the package verifier is bundled", () => {
+    const verifier = path.join(root, "update-package.mjs");
+    buildSync({
+      entryPoints: ["tooling/verify-package-standalone.mjs"],
+      outfile: verifier,
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      logLevel: "silent",
+    });
+    const result = spawnSync(process.execPath, [verifier], {
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("PACKAGE_ARGUMENTS_INVALID");
+    expect(result.stderr).not.toContain("TUNNEL_CLIENT_INPUT_SOURCE_REQUIRED");
+
+    const cli = spawnSync(
+      process.execPath,
+      ["tooling/prepare-tunnel-client.mjs", "--invalid"],
+      { encoding: "utf8" },
+    );
+    expect(cli.status).toBe(1);
+    expect(cli.stderr).toContain("TUNNEL_CLIENT_INPUT_SOURCE_REQUIRED");
+  });
+
   it("copies reviewed bytes with private modes and preserves source", async () => {
     const output = await prepareTunnelClientInput(root, source);
     expect(output).toBe(tunnelClientInputDirectory(root));
