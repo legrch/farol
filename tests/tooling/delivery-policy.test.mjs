@@ -13,6 +13,16 @@ const release = readWorkflow(".github/workflows/release.yml");
 const setup = readWorkflow(".github/actions/setup-ci/action.yml");
 
 describe("repository delivery policy", () => {
+  it("prepares the tunnel input through the actual CLI in clean CI", () => {
+    const steps = setup.runs.steps.filter(
+      (step) => step.name === "Prepare the pinned Tunnel Client build input",
+    );
+    expect(steps).toHaveLength(1);
+    expect(steps[0].run).toBe(
+      "node tooling/prepare-tunnel-client.mjs --download",
+    );
+  });
+
   it("parses the complete workflows and matches the checked-in delivery contract", () => {
     expect(fs.readdirSync(".github/workflows").sort()).toEqual([
       "pr.yml",
