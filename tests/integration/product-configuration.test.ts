@@ -574,6 +574,7 @@ function setupRendererSnapshot(
     runtime: context.current ? "ready" : "failed",
     buildId: context.buildId,
     configuration: { status: "ready", settings },
+    activity: [],
     intents: {},
     update: { phase: "idle" },
     signInObservation: context.signInObservation,

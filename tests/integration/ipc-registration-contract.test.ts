@@ -71,6 +71,7 @@ describe("privileged IPC registration contract", () => {
       "task",
       "navigationShortcuts",
       "control",
+      "browserHistory",
       "layout",
     ]);
 

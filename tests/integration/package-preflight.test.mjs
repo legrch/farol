@@ -36,11 +36,19 @@ it("refuses a core-less 0.2 candidate before changing the retained package", asy
       "source-identity.mjs",
       "source-git-blobs.mjs",
       "package-layout.mjs",
+      "tunnel-client-artifact.mjs",
     ])
       await fs.copyFile(
         path.join(tooling, name),
         path.join(fixtureTooling, name),
       );
+
+    const desktop = path.join(root, "apps/desktop");
+    await fs.mkdir(desktop, { recursive: true });
+    await fs.copyFile(
+      path.join(tooling, "../apps/desktop/tunnel-client-contract.ts"),
+      path.join(desktop, "tunnel-client-contract.ts"),
+    );
 
     const digestDirectory = path.join(root, "src/pkg/artifact-tree-digest");
     await fs.mkdir(digestDirectory, { recursive: true });
@@ -50,6 +58,7 @@ it("refuses a core-less 0.2 candidate before changing the retained package", asy
     );
 
     const document = {
+      type: "module",
       version: "0.2.0-owner.beta.3",
       farolRelease: {
         buildVersion: "17",
