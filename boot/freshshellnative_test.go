@@ -216,6 +216,7 @@ func TestNativeFreshShellChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	peer := openNativeMutationPeer(t, r, *publication, strconv.Itoa(generation))
+	checkNativeSelfTestShell(t, r, f.Generation)
 	op := fmt.Sprintf("00000000-0000-4000-8000-%012d", f.Generation+100)
 	command := fmt.Sprintf("printf native > shell-%d.txt", f.Generation)
 	if f.Generation == 2 {
