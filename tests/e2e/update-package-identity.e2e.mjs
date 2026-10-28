@@ -9,6 +9,8 @@ import {
   assertCanonicalArtifactPath,
   candidatePaths,
 } from "../../tooling/candidate-contract.mjs";
+import { sourceIdentity } from "../../tooling/source-identity.mjs";
+import { assertUpdatePackageSource } from "../../tooling/update-package-candidate.mjs";
 
 // Real local package verification only; this is not GitHub or installed-update acceptance.
 assert.equal(process.argv.length, 2, "UPDATE_PACKAGE_TEST_ARGUMENTS_INVALID");
@@ -16,6 +18,7 @@ const root = path.resolve(import.meta.dirname, "../..");
 const { artifactFile, appPath } = candidatePaths(root);
 const artifact = JSON.parse(await fs.readFile(artifactFile, "utf8"));
 assertCanonicalArtifactPath(root, artifact);
+assertUpdatePackageSource(artifact, sourceIdentity(root));
 assert.ok(
   ["github-owner-beta", "github-stable"].includes(artifact.updateChannel),
 );
