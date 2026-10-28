@@ -7,6 +7,14 @@ repository is published separately under the owner-approved source policy.
 A successful preparation is evidence for Lead's publication decision; it does not authorize publication or establish installed
 OTA acceptance.
 
+The historical `tests/e2e/owner-beta-update-pair.e2e.mjs` entrypoint also accepts
+two exact stable candidates, including `0.4.0` and `0.4.1`. Both candidates must
+use the same release channel. Its native scenario measures direct helper apply,
+rollback, clean Quit and explicitly driven reopen in disposable signed-out state.
+It retains `relaunch:false` and reports the normal installed updater, automatic
+relaunch, live profile and recovery as NOT RUN. This local test does not publish
+assets or substitute for the pinned GitHub feed and installed baseline checks.
+
 Lead first builds and qualifies the candidate through `task package` from clean,
 committed bytes. Run the producer from that same checkout, with the full expected
 HEAD and a new output directory whose existing parent has a physical, canonical

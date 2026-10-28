@@ -14,6 +14,7 @@ import {
   assertExactSourceIdentity,
 } from "../../../tooling/candidate-contract.mjs";
 import { assertBuildIdentity } from "../../../tooling/build-identity-contract.mjs";
+import { releaseBuildFields } from "../../../tooling/release-identity.mjs";
 import {
   BUILD_ENTRIES,
   bridgeEntrySets,
@@ -59,6 +60,20 @@ const code = (name) => new Error(`OWNER_BETA_${name}`);
 const check = (condition, name) => {
   if (!condition) throw code(name);
 };
+function releaseChannel(version) {
+  if (typeof version !== "string" || version.length > 255) return null;
+  const updateChannel = version.includes("-owner.beta.")
+    ? "github-owner-beta"
+    : "github-stable";
+  try {
+    return releaseBuildFields({
+      version,
+      farolRelease: { updateChannel, buildVersion: "1" },
+    }).updateChannel;
+  } catch {
+    return null;
+  }
+}
 export const LIMITS = Object.freeze({
   frame: 4096,
   request: 16384,
@@ -250,7 +265,7 @@ export async function checkCandidate(expected, provenance = sourceIdentity) {
   assertExactSourceIdentity(current, build);
   check(
     build.buildId === expected.buildId &&
-      build.updateChannel === "github-owner-beta" &&
+      releaseChannel(build.version) === build.updateChannel &&
       artifact.updateChannel === build.updateChannel &&
       artifact.version === build.version &&
       artifact.bundleId === build.bundleId &&
@@ -344,6 +359,10 @@ export async function checkPair(selection, provenance = sourceIdentity) {
   validateSelection(selection);
   const source = await checkCandidate(selection.source, provenance);
   const target = await checkCandidate(selection.target, provenance);
+  check(
+    source.build.updateChannel === target.build.updateChannel,
+    "PAIR_CHANNEL_MISMATCH",
+  );
   return { source, target };
 }
 // Native effects are a separate capability invoked only AFTER both complete
@@ -599,9 +618,14 @@ function validateRequest(request) {
       keys(build, ["buildId", "digest", "version"]) &&
         SHA64.test(build.buildId) &&
         SHA64.test(build.digest) &&
-        /^[0-9]+\.[0-9]+\.[0-9]+-owner\.beta\.[0-9]+$/u.test(build.version),
+        releaseChannel(build.version) !== null,
       "REQUEST_BUILD",
     );
+  check(
+    releaseChannel(request.source.version) ===
+      releaseChannel(request.target.version),
+    "REQUEST_CHANNEL_MISMATCH",
+  );
   check(
     request.source.digest !== request.target.digest &&
       isDeepStrictEqual(request.drain, {
@@ -1165,11 +1189,15 @@ export async function runNativePair(pair) {
     runId: randomUUID(),
     status: "running",
     source: {
+      version: pair.source.build.version,
+      channel: pair.source.build.updateChannel,
       sourceSHA: pair.source.sourceSHA,
       buildId: pair.source.buildId,
       artifactSha256: pair.source.artifactSha256,
     },
     target: {
+      version: pair.target.build.version,
+      channel: pair.target.build.updateChannel,
       sourceSHA: pair.target.sourceSHA,
       buildId: pair.target.buildId,
       artifactSha256: pair.target.artifactSha256,

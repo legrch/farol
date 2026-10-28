@@ -101,7 +101,7 @@ afterEach(async () => {
   for (const root of roots.splice(0))
     await fs.rm(root, { recursive: true, force: true });
 });
-async function fixture(ordinal) {
+async function fixture(ordinal, channel = "github-owner-beta") {
   const root = await temporary();
   const appPath = path.join(root, "_output/package/Farol.app");
   const resources = path.join(appPath, "Contents/Resources/app");
@@ -109,9 +109,12 @@ async function fixture(ordinal) {
   await fs.mkdir(path.join(root, "src/apps/desktop"), { recursive: true });
   await fs.mkdir(path.join(root, "boot"));
   const build = createBuildIdentity({
-    version: `0.2.7-owner.beta.${ordinal}`,
+    version:
+      channel === "github-stable"
+        ? `0.4.${ordinal - 1}`
+        : `0.2.7-owner.beta.${ordinal}`,
     buildVersion: `${ordinal}`,
-    updateChannel: "github-owner-beta",
+    updateChannel: channel,
     builtAt: "2026-10-23T00:00:00.000Z",
     sourceCommit: `${ordinal}`.repeat(40),
     sourceTreeDigest: `${ordinal}`.repeat(64),
@@ -222,9 +225,12 @@ async function fixture(ordinal) {
     },
   };
 }
-async function pairFixture() {
-  const source = await fixture(1),
-    target = await fixture(2);
+async function pairFixture(
+  sourceChannel = "github-owner-beta",
+  targetChannel = sourceChannel,
+) {
+  const source = await fixture(1, sourceChannel),
+    target = await fixture(2, targetChannel);
   const selection = {
     mode: "--check",
     source: source.expected,
@@ -285,17 +291,27 @@ it("requires both explicit pins and rejects arbitrary home/slot/report or unknow
 });
 
 describe("preflight has no native/allocation capability", () => {
-  it("checks two sealed inert trees without calling any effect", async () => {
-    const f = await pairFixture();
-    const result = await preflightWithoutEffects(f.selection, f);
-    expect(result.status).toBe("checked");
-    expect(result.native).toBe("NOT RUN");
-    expect(f.counts).toEqual({
-      gitOwner: 4,
-      allocation: 0,
-      helper: 0,
-      electron: 0,
-    });
+  it.each(["github-owner-beta", "github-stable"])(
+    "checks two sealed %s trees without calling any effect",
+    async (channel) => {
+      const f = await pairFixture(channel);
+      const result = await preflightWithoutEffects(f.selection, f);
+      expect(result.status).toBe("checked");
+      expect(result.native).toBe("NOT RUN");
+      expect(f.counts).toEqual({
+        gitOwner: 4,
+        allocation: 0,
+        helper: 0,
+        electron: 0,
+      });
+    },
+  );
+  it("refuses a cross-channel pair before any native effect", async () => {
+    const f = await pairFixture("github-owner-beta", "github-stable");
+    await expect(preflightWithoutEffects(f.selection, f)).rejects.toThrow(
+      "OWNER_BETA_PAIR_CHANNEL_MISMATCH",
+    );
+    expect(f.counts.allocation).toBe(0);
   });
   it.each([
     "schema",
@@ -488,12 +504,38 @@ function terminate(child, bytes, exit = { code: 0, signal: null }) {
   setImmediate(() => child.emit("close", exit.code, exit.signal));
 }
 
-it.each(["apply", "rollback"])(
-  "uses strict fd3 request/fd4 ACK and one exact terminal for %s",
-  async (action) => {
+it.each(["0.4.00", "0.4.1-beta.1", "0.4.1-owner.beta.1"])(
+  "refuses an invalid or cross-channel stable request target %s before spawn",
+  (version) => {
+    const r = request();
+    r.source.version = "0.4.0";
+    r.target.version = version;
+    const launch = vi.fn();
+    expect(() =>
+      startLiveHelper("/inert/farol-backend", r, {}, launch),
+    ).toThrow(
+      version.includes("owner.beta")
+        ? "OWNER_BETA_REQUEST_CHANNEL_MISMATCH"
+        : "OWNER_BETA_REQUEST_BUILD",
+    );
+    expect(launch).not.toHaveBeenCalled();
+  },
+);
+
+it.each(
+  ["apply", "rollback"].flatMap((action) =>
+    ["github-owner-beta", "github-stable"].map((channel) => [action, channel]),
+  ),
+)(
+  "uses strict fd3 request/fd4 ACK and one exact terminal for %s in %s",
+  async (action, channel) => {
     const r = request(action),
       calls = [],
       receipt = {};
+    if (channel === "github-stable") {
+      r.source.version = "0.4.0";
+      r.target.version = "0.4.1";
+    }
     const helper = startLiveHelper(
       "/inert/farol-backend",
       r,
