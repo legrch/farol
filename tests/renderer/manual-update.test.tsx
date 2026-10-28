@@ -38,6 +38,38 @@ async function controller(update: InstalledUpdateView = ready) {
   return { f, c };
 }
 
+it.each([
+  [{ phase: "idle", checkedAt: null }, "applied"],
+  [
+    { phase: "failed", code: "UPDATE_HANDOFF_UNKNOWN", recoveryRequired: true },
+    "unknown",
+  ],
+] as const)(
+  "acknowledges the classified direct result with its original operation id",
+  async (reply, outcome) => {
+    const f = fixture();
+    const settle = vi.fn();
+    const api = { ...f.api, settleUpdateDirect: settle };
+    vi.mocked(api.installedUpdate).mockResolvedValue({
+      phase: "idle",
+      checkedAt: null,
+    });
+    const c = new WindowController(api);
+    await c.start();
+    cleanups.push(async () => c.dispose());
+    vi.mocked(api.installedUpdate).mockClear();
+    vi.mocked(api.installedUpdate).mockResolvedValue(reply);
+    expect((await c.update("check")).state).toBe(outcome);
+    expect(api.installedUpdate).toHaveBeenCalledTimes(1);
+    const id = vi.mocked(api.installedUpdate).mock.calls[0]?.[1];
+    expect(id).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(settle).toHaveBeenCalledExactlyOnceWith({
+      operationId: id,
+      outcome,
+    });
+  },
+);
+
 it.each<InstalledUpdateView>([
   { phase: "ready", version: "0.2.4", deferred: false, blockedBy: null },
   { phase: "failed", code: "UPDATE_HANDOFF_UNKNOWN", recoveryRequired: true },

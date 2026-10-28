@@ -213,6 +213,26 @@ export class InstalledUpdater {
     };
   }
 
+  /** A renderer owner may change only while every updater-owned effect is quiet. */
+  ownerHandoffSafe(): boolean {
+    const view = this.view;
+    return (
+      this.initialized &&
+      !this.isClosing() &&
+      !this.busy &&
+      !this.scheduledChecking &&
+      !this.preferenceWriting &&
+      !this.noticeWriting &&
+      this.automaticPreference.status === "confirmed" &&
+      this.quitPreference.status === "confirmed" &&
+      (view.phase === "idle" ||
+        view.phase === "available" ||
+        (view.phase === "ready" && view.blockedBy === null)) &&
+      (!("notice" in view) || !view.notice?.blockedBy) &&
+      (!("blockedBy" in view) || !view.blockedBy)
+    );
+  }
+
   private isClosing(): boolean {
     return this.closed || this.normalQuitState.status !== "idle";
   }

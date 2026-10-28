@@ -57,6 +57,7 @@ vi.mock("electron", () => {
         return this.destroyed;
       }
       close() {
+        this.emit("close");
         this.destroy();
       }
       destroy() {
@@ -99,10 +100,11 @@ beforeEach(() => {
 });
 async function fixture(
   mode: "default" | "hidden" | "secondary-visible" = "hidden",
+  hostCanTransfer: () => boolean = () => true,
 ) {
   const owner = new BrowserWindow({});
   await owner.loadURL(pathToFileURL("/app/shell.html").href);
-  const panel = new DesktopUpdatesPanel();
+  const panel = new DesktopUpdatesPanel(hostCanTransfer);
   panel.bindOwner(owner, "/app");
   panel.publish(event(owner), projection);
   let admitted = true;
@@ -222,6 +224,139 @@ describe("Updates panel native fixture (no Electron process or installed updater
     f.panel.relay(event(harness.windows[2]), { kind: "check" });
     expect(f.panel.state()).toMatchObject({ pending: true });
     expect(f.owner.webContents.send).toHaveBeenCalledTimes(1);
+  });
+  it("rebinds after an ordinary close with no unconfirmed update command", async () => {
+    const f = await fixture();
+    f.window.close();
+    f.owner.close();
+    const replacement = new BrowserWindow({});
+    await replacement.loadURL("file:///app/shell.html");
+    f.panel.bindOwner(replacement, "/app");
+    f.panel.publish(event(replacement), projection);
+    await f.panel.open({ ...f.options, owner: replacement });
+    expect(f.panel.state()).toMatchObject({ status: "ready", pending: false });
+    expect(harness.windows[3].options.parent).toBe(replacement);
+    // Late destruction events from the old window cannot fence its successor.
+    f.owner.webContents.emit("destroyed");
+    expect(f.panel.state()).toMatchObject({ status: "ready" });
+  });
+  it("waits for the updater host to become quiescent before rebinding", async () => {
+    let quiet = false;
+    const f = await fixture("hidden", () => quiet);
+    f.window.close();
+    f.owner.close();
+    const replacement = new BrowserWindow({});
+    await replacement.loadURL("file:///app/shell.html");
+    f.panel.bindOwner(replacement, "/app");
+    f.panel.publish(event(replacement), projection);
+    expect(f.panel.state()).toEqual({ status: "unavailable" });
+    quiet = true;
+    f.panel.bindOwner(replacement, "/app");
+    f.panel.publish(event(replacement), projection);
+    expect(f.panel.state()).toMatchObject({ status: "ready" });
+  });
+  it("rebinds after the original direct operation receives a classified acknowledgement", async () => {
+    const f = await fixture();
+    const id = "d49013b5-0283-4c16-9a7d-578a9c22f1e9";
+    f.panel.publish(event(f.owner), { ...projection, outcome: "pending" });
+    f.panel.beginDirect(event(f.owner), id);
+    f.panel.endDirect(event(f.owner), id, true);
+    f.panel.publish(event(f.owner), { ...projection, outcome: "applied" });
+    f.panel.settleDirect(event(f.owner), {
+      operationId: id,
+      outcome: "applied",
+    });
+    f.window.close();
+    f.owner.close();
+    const replacement = new BrowserWindow({});
+    await replacement.loadURL("file:///app/shell.html");
+    f.panel.bindOwner(replacement, "/app");
+    f.panel.publish(event(replacement), projection);
+    expect(f.panel.state()).toMatchObject({ status: "ready" });
+  });
+  it.each([
+    "in-flight",
+    "reply-unobserved",
+    "invalid-id",
+    "failed",
+    "wrong-ack",
+    "unknown",
+  ])("does not rebind after a direct command with %s", async (condition) => {
+    const f = await fixture();
+    const id =
+      condition === "invalid-id"
+        ? "invalid"
+        : "d49013b5-0283-4c16-9a7d-578a9c22f1e9";
+    f.panel.publish(event(f.owner), { ...projection, outcome: "pending" });
+    f.panel.beginDirect(event(f.owner), id);
+    if (condition !== "in-flight")
+      f.panel.endDirect(event(f.owner), id, condition !== "failed");
+    // An unrelated or stale ready observation cannot settle an in-flight
+    // command, and a returned reply still needs the owner's later projection.
+    if (condition === "in-flight") f.panel.publish(event(f.owner), projection);
+    if (condition === "invalid-id" || condition === "failed")
+      f.panel.publish(event(f.owner), { ...projection, outcome: "applied" });
+    if (condition === "wrong-ack")
+      f.panel.settleDirect(event(f.owner), {
+        operationId: "b7a447f6-2337-4c99-b0ed-914d28164d65",
+        outcome: "applied",
+      });
+    if (condition === "unknown")
+      f.panel.settleDirect(event(f.owner), {
+        operationId: id,
+        outcome: "unknown",
+      });
+    f.window.close();
+    f.owner.close();
+    const replacement = new BrowserWindow({});
+    await replacement.loadURL("file:///app/shell.html");
+    f.panel.bindOwner(replacement, "/app");
+    f.panel.publish(event(replacement), projection);
+    expect(f.panel.state()).toEqual({ status: "unavailable" });
+    expect((replacement as any).webContents.send).not.toHaveBeenCalled();
+  });
+  it("does not settle concurrent direct calls until all have returned and the owner classifies them", async () => {
+    const f = await fixture();
+    const first = "d49013b5-0283-4c16-9a7d-578a9c22f1e9";
+    const second = "b7a447f6-2337-4c99-b0ed-914d28164d65";
+    f.panel.publish(event(f.owner), { ...projection, outcome: "pending" });
+    f.panel.beginDirect(event(f.owner), first);
+    f.panel.beginDirect(event(f.owner), second);
+    f.panel.endDirect(event(f.owner), first, true);
+    f.panel.settleDirect(event(f.owner), {
+      operationId: first,
+      outcome: "applied",
+    });
+    f.panel.publish(event(f.owner), { ...projection, outcome: "applied" });
+    f.panel.endDirect(event(f.owner), second, true);
+    f.window.close();
+    f.owner.close();
+    const replacement = new BrowserWindow({});
+    await replacement.loadURL("file:///app/shell.html");
+    f.panel.bindOwner(replacement, "/app");
+    f.panel.publish(event(replacement), projection);
+    expect(f.panel.state()).toEqual({ status: "unavailable" });
+  });
+  it("rejects direct acknowledgements from another window or before the host reply", async () => {
+    const f = await fixture();
+    const id = "d49013b5-0283-4c16-9a7d-578a9c22f1e9";
+    f.panel.beginDirect(event(f.owner), id);
+    f.panel.settleDirect(event(f.owner), {
+      operationId: id,
+      outcome: "applied",
+    });
+    f.panel.endDirect(event(f.owner), id, true);
+    f.panel.settleDirect(event(f.window), {
+      operationId: id,
+      outcome: "applied",
+    });
+    f.window.close();
+    f.owner.close();
+    const replacement = new BrowserWindow({});
+    await replacement.loadURL("file:///app/shell.html");
+    f.panel.bindOwner(replacement, "/app");
+    f.panel.publish(event(replacement), projection);
+    expect(f.panel.state()).toEqual({ status: "unavailable" });
   });
   it.each(["closed", "render-process-gone", "destroyed", "navigation"])(
     "permanently fails closed after owner %s, preserving the original relay",

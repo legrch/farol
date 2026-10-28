@@ -48,8 +48,14 @@ if (process.argv.includes("--farol-startup-recovery")) {
       ipcRenderer.send(updatesChannels.settled, value),
     operations: () =>
       ipcRenderer.invoke(channels.operations) as Promise<unknown>,
-    installedUpdate: (command: unknown) =>
-      ipcRenderer.invoke(channels.installedUpdate, command) as Promise<unknown>,
+    installedUpdate: (command: unknown, operationId?: string) =>
+      ipcRenderer.invoke(
+        channels.installedUpdate,
+        command,
+        operationId,
+      ) as Promise<unknown>,
+    settleUpdateDirect: (value: unknown) =>
+      ipcRenderer.send(updatesChannels.directSettled, value),
     onInstalledUpdateState: (listener: (state: unknown) => void) => {
       const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) =>
         listener(value);

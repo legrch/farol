@@ -8,6 +8,7 @@ export const updatesChannels = Object.freeze({
   intent: "farol:updates:intent",
   command: "farol:updates:command",
   settled: "farol:updates:settled",
+  directSettled: "farol:updates:direct-settled",
   close: "farol:updates:close",
 });
 export const updatesDocumentHash = "#farol-updates";
@@ -38,6 +39,10 @@ export const UpdatesCommandSchema = z.strictObject({
 });
 export const UpdatesSettlementSchema = z.strictObject({
   sequence: z.number().int().positive(),
+});
+export const UpdatesDirectSettlementSchema = z.strictObject({
+  operationId: z.string().uuid(),
+  outcome: z.enum(["applied", "refused", "unknown"]),
 });
 export const UpdatesProjectionSchema = z.strictObject({
   update: InstalledUpdateViewSchema,

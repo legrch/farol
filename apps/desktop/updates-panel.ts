@@ -9,6 +9,7 @@ import {
 } from "electron";
 import {
   UpdatesIntentSchema,
+  UpdatesDirectSettlementSchema,
   UpdatesProjectionSchema,
   UpdatesSettlementSchema,
   updatesChannels,
@@ -28,8 +29,8 @@ type Options = {
 };
 
 /** Native view/relay only. The shell controller retains every command latch.
- * A lost owner permanently fences this session, including after reload/reopen.
- * No timeout, readback or panel close can settle an unacknowledged relay.
+ * Owner transfer requires a normal close and confirmed settlement of all
+ * original renderer commands. A crash, lost reply or unknown stays fenced.
  */
 export class DesktopUpdatesPanel {
   private panel: BrowserWindow | null = null;
@@ -39,22 +40,68 @@ export class DesktopUpdatesPanel {
   private projection: UpdatesProjection | null = null;
   private pending: number | null = null;
   private sequence = 0;
+  private closeRequested = false;
+  private hardOwnerLoss = false;
+  private normalOwnerClosed = false;
+  private direct = new Map<string, "in-flight" | "returned">();
+  private directAmbiguous = false;
+
+  constructor(private readonly hostCanTransfer: () => boolean = () => false) {}
 
   bindOwner(owner: BrowserWindow, directory: string): void {
-    if (this.owner === owner || this.ownerLost) return;
+    if (this.owner === owner) return;
+    if (this.ownerLost) {
+      if (
+        !this.normalOwnerClosed ||
+        this.hardOwnerLoss ||
+        this.pending !== null ||
+        this.direct.size !== 0 ||
+        this.directAmbiguous ||
+        !this.projection ||
+        this.projection.outcome === "pending" ||
+        this.projection.outcome === "unknown" ||
+        (this.panel !== null && !this.panel.isDestroyed()) ||
+        !this.hostCanTransfer()
+      )
+        return;
+      this.owner = null;
+      this.ownerLost = false;
+      this.normalOwnerClosed = false;
+      this.closeRequested = false;
+      this.projection = null;
+      this.options = null;
+    }
     if (this.owner) {
       this.loseOwner();
       return;
     }
     this.owner = owner;
     this.ownerURL = pathToFileURL(path.join(directory, "shell.html")).href;
-    owner.once("closed", () => this.loseOwner());
-    owner.webContents.on("render-process-gone", () => this.loseOwner());
-    owner.webContents.once("destroyed", () => this.loseOwner());
+    owner.on("close", () => {
+      if (this.owner === owner) this.closeRequested = true;
+    });
+    owner.once("closed", () => {
+      if (this.owner !== owner) return;
+      this.normalOwnerClosed = this.closeRequested && !this.hardOwnerLoss;
+      this.loseOwner();
+    });
+    owner.webContents.on("render-process-gone", () => {
+      if (this.owner !== owner) return;
+      this.hardOwnerLoss = true;
+      this.loseOwner();
+    });
+    owner.webContents.once("destroyed", () => {
+      if (this.owner !== owner) return;
+      if (!this.closeRequested) this.hardOwnerLoss = true;
+      this.loseOwner();
+    });
     owner.webContents.on(
       "did-start-navigation",
       (_event, _url, _inPlace, mainFrame) => {
-        if (mainFrame) this.loseOwner();
+        if (this.owner === owner && mainFrame) {
+          this.hardOwnerLoss = true;
+          this.loseOwner();
+        }
       },
     );
   }
@@ -87,6 +134,47 @@ export class DesktopUpdatesPanel {
     // Malformed projection withdraws authority, without clearing a pending relay.
     this.projection = parsed.success ? parsed.data : null;
     this.broadcast();
+  }
+  beginDirect(event: Sender, operationId: unknown): void {
+    const parsed = UpdatesDirectSettlementSchema.safeParse({
+      operationId,
+      outcome: "applied",
+    });
+    if (
+      !this.isOwner(event) ||
+      !parsed.success ||
+      this.direct.has(parsed.data.operationId)
+    ) {
+      this.directAmbiguous = true;
+      return;
+    }
+    this.direct.set(parsed.data.operationId, "in-flight");
+  }
+  endDirect(event: Sender, operationId: unknown, returned: boolean): void {
+    if (
+      typeof operationId !== "string" ||
+      this.direct.get(operationId) !== "in-flight" ||
+      !returned ||
+      !this.isOwner(event)
+    ) {
+      this.directAmbiguous = true;
+      return;
+    }
+    this.direct.set(operationId, "returned");
+  }
+  settleDirect(event: Sender, value: unknown): void {
+    const parsed = UpdatesDirectSettlementSchema.safeParse(value);
+    if (
+      !this.isOwner(event) ||
+      !parsed.success ||
+      this.direct.get(parsed.data.operationId) !== "returned"
+    )
+      return;
+    if (parsed.data.outcome === "unknown") {
+      this.directAmbiguous = true;
+      return;
+    }
+    this.direct.delete(parsed.data.operationId);
   }
   settle(event: Sender, value: unknown): void {
     const parsed = UpdatesSettlementSchema.safeParse(value);

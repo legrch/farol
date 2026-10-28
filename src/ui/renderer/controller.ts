@@ -1997,6 +1997,32 @@ export class WindowController implements RendererFacade {
       return { id: intention, state: "applied", code: null };
     });
   }
+  private dispatchUpdate(
+    key: string,
+    payload: unknown,
+    run: (operationId: string) => Promise<Intent>,
+  ): Promise<Intent> {
+    let operationId: string | undefined;
+    const result = this.dispatch(key, payload, () => {
+      operationId = crypto.randomUUID();
+      return run(operationId);
+    });
+    return result.then((intent) => {
+      if (operationId && intent.state !== "pending")
+        this.api.settleUpdateDirect?.({ operationId, outcome: intent.state });
+      return intent;
+    });
+  }
+
+  private invokeTrackedUpdate(
+    command: Parameters<PreloadApi["installedUpdate"]>[0],
+    operationId: string,
+  ): Promise<unknown> {
+    return this.api.settleUpdateDirect
+      ? this.api.installedUpdate(command, operationId)
+      : this.api.installedUpdate(command);
+  }
+
   update(action: UpdateAction, noticeKey?: string): Promise<Intent> {
     // A retained renderer may still name the retired command. Refuse locally
     // without replacing its current update intent or sending another effect.
@@ -2024,43 +2050,52 @@ export class WindowController implements RendererFacade {
           state: "refused",
           code: "UPDATE_NOTICE_NOT_AVAILABLE",
         });
-      return this.dispatch("update-notice", { action, noticeKey }, async () => {
-        const revision = this.updateRevision;
-        const value = InstalledUpdateViewSchema.safeParse(
-          await this.api.installedUpdate({
-            kind: "notice-seen",
-            noticeKey: notice.key,
-          }),
-        );
-        if (
-          !value.success ||
-          !("notice" in value.data) ||
-          !value.data.notice ||
-          value.data.notice.key !== notice.key ||
-          JSON.stringify({ ...value.data, notice: undefined }) !==
-            JSON.stringify({ ...current, notice: undefined })
-        )
+      return this.dispatchUpdate(
+        "update-notice",
+        { action, noticeKey },
+        async (operationId) => {
+          const revision = this.updateRevision;
+          const value = InstalledUpdateViewSchema.safeParse(
+            await this.invokeTrackedUpdate(
+              {
+                kind: "notice-seen",
+                noticeKey: notice.key,
+              },
+              operationId,
+            ),
+          );
+          if (
+            !value.success ||
+            !("notice" in value.data) ||
+            !value.data.notice ||
+            value.data.notice.key !== notice.key ||
+            JSON.stringify({ ...value.data, notice: undefined }) !==
+              JSON.stringify({ ...current, notice: undefined })
+          )
+            return {
+              id: "update-notice",
+              state: "unknown",
+              code: "UPDATE_NOTICE_OUTCOME_UNKNOWN",
+            };
+          // The reply acknowledges its bound notice, not a newer event. The
+          // command's own published event may already have supplied this state.
+          if (this.updateRevision === revision) this.adoptUpdate(value.data);
+          const blocked = value.data.notice.blockedBy;
           return {
             id: "update-notice",
-            state: "unknown",
-            code: "UPDATE_NOTICE_OUTCOME_UNKNOWN",
+            state: blocked?.includes("UNKNOWN")
+              ? "unknown"
+              : blocked || !value.data.notice.seen
+                ? "refused"
+                : "applied",
+            code:
+              blocked ??
+              (value.data.notice.seen
+                ? null
+                : "UPDATE_NOTICE_NOT_ACKNOWLEDGED"),
           };
-        // The reply acknowledges its bound notice, not a newer event. The
-        // command's own published event may already have supplied this state.
-        if (this.updateRevision === revision) this.adoptUpdate(value.data);
-        const blocked = value.data.notice.blockedBy;
-        return {
-          id: "update-notice",
-          state: blocked?.includes("UNKNOWN")
-            ? "unknown"
-            : blocked || !value.data.notice.seen
-              ? "refused"
-              : "applied",
-          code:
-            blocked ??
-            (value.data.notice.seen ? null : "UPDATE_NOTICE_NOT_ACKNOWLEDGED"),
-        };
-      });
+        },
+      );
     }
     if (
       (action === "download" || action === "skip") &&
@@ -2092,39 +2127,44 @@ export class WindowController implements RendererFacade {
         state: "refused",
         code: "UPDATE_NOT_READY",
       });
-    return this.dispatch("update", { action, version: noticeKey }, async () => {
-      const revision = this.updateRevision;
-      const value = InstalledUpdateViewSchema.safeParse(
-        await this.api.installedUpdate(
-          action === "restart-confirmed"
-            ? { kind: "restart-confirmed", version: noticeKey! }
-            : { kind: action },
-        ),
-      );
-      if (!value.success)
+    return this.dispatchUpdate(
+      "update",
+      { action, version: noticeKey },
+      async (operationId) => {
+        const revision = this.updateRevision;
+        const value = InstalledUpdateViewSchema.safeParse(
+          await this.invokeTrackedUpdate(
+            action === "restart-confirmed"
+              ? { kind: "restart-confirmed", version: noticeKey! }
+              : { kind: action },
+            operationId,
+          ),
+        );
+        if (!value.success)
+          return {
+            id: "update",
+            state: "unknown",
+            code: "UPDATE_OUTCOME_UNKNOWN",
+          };
+        // The reply settles this command, not a more recent progress observation.
+        if (this.updateRevision === revision) this.adoptUpdate(value.data);
         return {
           id: "update",
-          state: "unknown",
-          code: "UPDATE_OUTCOME_UNKNOWN",
+          state:
+            value.data.phase === "unavailable"
+              ? "refused"
+              : value.data.phase === "failed"
+                ? value.data.code.includes("UNKNOWN")
+                  ? "unknown"
+                  : "refused"
+                : "applied",
+          code:
+            value.data.phase === "failed" || value.data.phase === "unavailable"
+              ? value.data.code
+              : null,
         };
-      // The reply settles this command, not a more recent progress observation.
-      if (this.updateRevision === revision) this.adoptUpdate(value.data);
-      return {
-        id: "update",
-        state:
-          value.data.phase === "unavailable"
-            ? "refused"
-            : value.data.phase === "failed"
-              ? value.data.code.includes("UNKNOWN")
-                ? "unknown"
-                : "refused"
-              : "applied",
-        code:
-          value.data.phase === "failed" || value.data.phase === "unavailable"
-            ? value.data.code
-            : null,
-      };
-    });
+      },
+    );
   }
   setAutomaticDownloads(enabled: boolean): Promise<Intent> {
     const key = "update-automatic-downloads";
@@ -2142,14 +2182,17 @@ export class WindowController implements RendererFacade {
       preference.scope === "download-and-install"
     )
       return Promise.resolve({ id: key, state: "applied", code: null });
-    return this.dispatch(key, enabled, async () => {
+    return this.dispatchUpdate(key, enabled, async (operationId) => {
       const revision = this.updateRevision;
       const parsed = InstalledUpdateViewSchema.safeParse(
-        await this.api.installedUpdate({
-          kind: "set-automatic-update-preference",
-          enabled,
-          scope: "download-and-install",
-        }),
+        await this.invokeTrackedUpdate(
+          {
+            kind: "set-automatic-update-preference",
+            enabled,
+            scope: "download-and-install",
+          },
+          operationId,
+        ),
       );
       if (!parsed.success || !parsed.data.automaticUpdatePreference)
         return {
@@ -2190,7 +2233,7 @@ export class WindowController implements RendererFacade {
       });
     if (this.state.update.installOnQuitPreference?.enabled === enabled)
       return Promise.resolve({ id: key, state: "applied", code: null });
-    return this.dispatch(key, enabled, async () => {
+    return this.dispatchUpdate(key, enabled, async (operationId) => {
       // The digest await may have delivered a new admission fence. This
       // command's own pending intent is a latch, not an eligibility failure.
       if (!installOnQuitPreferenceEligible(this.state))
@@ -2201,10 +2244,13 @@ export class WindowController implements RendererFacade {
         };
       const revision = this.updateRevision;
       const parsed = InstalledUpdateViewSchema.safeParse(
-        await this.api.installedUpdate({
-          kind: "set-install-on-quit-preference",
-          enabled,
-        }),
+        await this.invokeTrackedUpdate(
+          {
+            kind: "set-install-on-quit-preference",
+            enabled,
+          },
+          operationId,
+        ),
       );
       if (!parsed.success || !parsed.data.installOnQuitPreference)
         return {

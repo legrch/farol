@@ -890,7 +890,13 @@ if (process.platform === "darwin") {
 let window: BrowserWindow | null = null;
 let aboutOpen = false;
 let aboutPanel: DesktopAboutPanel | null = null;
-const updatesPanel = new DesktopUpdatesPanel();
+const updatesPanel = new DesktopUpdatesPanel(
+  () =>
+    !quitInProgress &&
+    !installedUpdateAdmission &&
+    (buildEnvironment !== "preview" ||
+      (installedUpdater !== null && installedUpdater.ownerHandoffSafe())),
+);
 let runtimeChild: ChildProcess | null = null;
 let localRuntimeGeneration = 0;
 const ownedLocalRuntimes = new Map<LocalRuntimeLifetime, string>();
@@ -11830,6 +11836,9 @@ function installIpc(): void {
   ipcMain.on(updatesChannels.settled, (event, value: unknown) =>
     updatesPanel.settle(event, value),
   );
+  ipcMain.on(updatesChannels.directSettled, (event, value: unknown) =>
+    updatesPanel.settleDirect(event, value),
+  );
   ipcMain.on(updatesChannels.intent, (event, value: unknown) =>
     updatesPanel.relay(event, value),
   );
@@ -11874,10 +11883,26 @@ function installIpc(): void {
       connectionChecking: startupConnectionChecking || connectorTaskAdmission,
     };
   });
-  ipcMain.handle(channels.installedUpdate, (event, value: unknown) =>
-    isTrustedIpcSender(event, window)
-      ? installedUpdateCommand(value)
-      : { error: "IPC_SENDER_DENIED" },
+  ipcMain.handle(
+    channels.installedUpdate,
+    async (event, value: unknown, operationId: unknown) => {
+      if (!isTrustedIpcSender(event, window))
+        return { error: "IPC_SENDER_DENIED" };
+      const parsed = InstalledUpdateCommandSchema.safeParse(value);
+      const tracked =
+        installedUpdater !== null &&
+        parsed.success &&
+        parsed.data.kind !== "status";
+      if (tracked) updatesPanel.beginDirect(event, operationId);
+      let returned = false;
+      try {
+        const result = await installedUpdateCommand(value);
+        returned = true;
+        return result;
+      } finally {
+        if (tracked) updatesPanel.endDirect(event, operationId, returned);
+      }
+    },
   );
   ipcMain.handle(channels.bootstrap, (event) =>
     isTrustedIpcSender(event, window)

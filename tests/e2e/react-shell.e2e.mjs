@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { once } from "node:events";
@@ -23,6 +24,7 @@ import {
 
 const root = await fs.realpath(process.cwd());
 const buildRoot = path.join(root, "_output/build/app");
+const shellURL = pathToFileURL(path.join(buildRoot, "shell.html")).href;
 const attemptId = randomUUID();
 const output = path.join(root, "_output/evidence/react-shell", attemptId);
 const expectedSource = sourceIdentity(root, ".");
@@ -239,6 +241,9 @@ try {
     "OWNED_WINDOW_UNCONFIRMED",
   );
   await waitForReactShell(page);
+  const originalWindowId = await (
+    await app.browserWindow(page)
+  ).evaluate((window) => window.id);
   assert.deepEqual(
     await app.evaluate(({ app }) => ({
       home: app.getPath("home"),
@@ -266,8 +271,10 @@ try {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Appearance", exact: true }).click();
   await page.getByRole("button", { name: "Light", exact: true }).click();
-  await app.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows()[0].setContentSize(1180, 760),
+  await app.evaluate(
+    ({ BrowserWindow }, id) =>
+      BrowserWindow.fromId(id).setContentSize(1180, 760),
+    originalWindowId,
   );
   await page.screenshot({ path: path.join(output, "appearance-light.png") });
   const light = await page
@@ -451,8 +458,10 @@ try {
   // Resize and compact sidebar are host-owned geometry, not CSS stacking proof.
   const sidebarToggle = page.locator('button[aria-controls="main-sidebar"]');
   await sidebarToggle.click();
-  await app.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows()[0].setContentSize(740, 620),
+  await app.evaluate(
+    ({ BrowserWindow }, id) =>
+      BrowserWindow.fromId(id).setContentSize(740, 620),
+    originalWindowId,
   );
   await page.waitForTimeout(100);
   let compactState = await surfaces();
@@ -485,35 +494,40 @@ try {
     true,
     "COMPACT_LABEL_TOGGLE_HID_BROWSER",
   );
-  await app.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows()[0].setContentSize(1180, 760),
+  await app.evaluate(
+    ({ BrowserWindow }, id) =>
+      BrowserWindow.fromId(id).setContentSize(1180, 760),
+    originalWindowId,
   );
   await sidebarToggle.click();
   // Synthetic task projection through the real named preload event. This
   // qualifies Chromium field behavior, not backend task admission/lifetime.
   const taskId = "renderer-composition-fixture";
-  await app.evaluate(({ BrowserWindow }, taskId) => {
-    const contents = BrowserWindow.getAllWindows()[0].webContents;
-    contents.send("farol:tasks-state", {
-      revision: 1,
-      tasks: [
-        {
-          taskId,
-          sessionId: taskId,
-          turnId: taskId,
-          label: "Composition fixture",
-          provider: "chatgpt",
-          requestedModel: null,
-          observedModel: null,
-          requestedMode: null,
-          observedMode: null,
-          hasComputer: false,
-          pinned: false,
-          lifecycle: "idle",
-        },
-      ],
-    });
-  }, taskId);
+  await app.evaluate(
+    ({ BrowserWindow }, { taskId, id }) => {
+      const contents = BrowserWindow.fromId(id).webContents;
+      contents.send("farol:tasks-state", {
+        revision: 1,
+        tasks: [
+          {
+            taskId,
+            sessionId: taskId,
+            turnId: taskId,
+            label: "Composition fixture",
+            provider: "chatgpt",
+            requestedModel: null,
+            observedModel: null,
+            requestedMode: null,
+            observedMode: null,
+            hasComputer: false,
+            pinned: false,
+            lifecycle: "idle",
+          },
+        ],
+      });
+    },
+    { taskId, id: originalWindowId },
+  );
   // Layout events are mirrors, not selection authority. Select this synthetic
   // projection through the current search UI before opening its draft editor.
   await page.getByRole("button", { name: "Find a page", exact: true }).click();
@@ -552,23 +566,26 @@ try {
     end: input.selectionEnd,
   }));
 
-  await app.evaluate(({ BrowserWindow }, taskId) => {
-    const contents = BrowserWindow.getAllWindows()[0].webContents;
-    for (let n = 0; n < 24; n++) {
-      contents.send("farol:layout", {
-        section: "browser",
-        taskId,
-        setupOpen: false,
-        sidebar: "full",
-        overlay: "none",
-      });
-      contents.send("farol:window-state", {
-        focused: false,
-        fullScreen: false,
-        trafficLightPosition: { x: 14, y: 18 },
-      });
-    }
-  }, taskId);
+  await app.evaluate(
+    ({ BrowserWindow }, { taskId, id }) => {
+      const contents = BrowserWindow.fromId(id).webContents;
+      for (let n = 0; n < 24; n++) {
+        contents.send("farol:layout", {
+          section: "browser",
+          taskId,
+          setupOpen: false,
+          sidebar: "full",
+          overlay: "none",
+        });
+        contents.send("farol:window-state", {
+          focused: false,
+          fullScreen: false,
+          trafficLightPosition: { x: 14, y: 18 },
+        });
+      }
+    },
+    { taskId, id: originalWindowId },
+  );
   await page.waitForTimeout(100);
   assert.equal(
     await field.evaluate((input) => input === window.__ownedDraftNode),
@@ -653,8 +670,9 @@ try {
   });
   const requestsBeforeClose = documentRequests;
   const closed = page.waitForEvent("close", { timeout: 10000 });
-  await app.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows()[0].close(),
+  await app.evaluate(
+    ({ BrowserWindow }, id) => BrowserWindow.fromId(id).close(),
+    originalWindowId,
   );
   await closed;
   assert.equal((await surfaces()).length, 0, "CLOSED_WINDOW_NOT_REMOVED");
@@ -675,26 +693,62 @@ try {
     item.click();
   });
   const replacement = await replacementPromise;
-  await replacement
-    .getByRole("dialog", { name: "Updates unavailable", exact: true })
-    .waitFor({ state: "visible", timeout: 10000 });
+  await waitForReactShell(replacement);
+  let updates;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const candidates = app
+      .windows()
+      .filter((candidate) => candidate.url() === `${shellURL}#farol-updates`);
+    assert.ok(candidates.length <= 1, "DUPLICATE_UPDATES_WINDOWS");
+    if (candidates.length === 1) {
+      updates = candidates[0];
+      break;
+    }
+    await replacement.waitForTimeout(100);
+  }
+  assert.ok(updates, "REOPENED_UPDATES_WINDOW_MISSING");
+  await updates.getByRole("main", { name: "Farol Updates" }).waitFor();
+  const nativeWindows = await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().map((w) => ({
+      id: w.id,
+      url: w.webContents.getURL(),
+      parentId: w.getParentWindow()?.id ?? null,
+      modal: w.isModal(),
+      visible: w.isVisible(),
+    })),
+  );
+  assert.equal(nativeWindows.length, 2, "REOPENED_WINDOW_COUNT");
+  const mainWindow = nativeWindows.find((w) => w.url === shellURL);
+  const updatesWindow = nativeWindows.find(
+    (w) => w.url === `${shellURL}#farol-updates`,
+  );
+  assert.ok(mainWindow && updatesWindow, "REOPENED_WINDOWS_NOT_DISTINCT");
+  assert.notEqual(mainWindow.id, updatesWindow.id);
+  assert.notEqual(mainWindow.id, originalWindowId);
+  assert.equal(updatesWindow.parentId, mainWindow.id);
+  assert.equal(updatesWindow.modal, false);
+  await updates.waitForFunction(async () => {
+    const value = await window.farolUpdates.state();
+    return value.status === "ready" && value.pending === false;
+  });
+  const updateState = await updates.evaluate(() => window.farolUpdates.state());
+  assert.equal(
+    updateState.status,
+    "ready",
+    "REOPENED_UPDATES_OWNER_UNAVAILABLE",
+  );
+  assert.equal(updateState.pending, false);
+  assert.equal(updateState.projection.update.phase, "unavailable");
+  assert.equal(updateState.projection.update.code, "UPDATE_NOT_INSTALLED");
   assert.equal(
     await replacement.locator(".toolbar-title strong").textContent(),
     "Overview",
-    "MENU_UPDATE_OVERLAY_KEEPS_REOPENED_HOME",
+    "MENU_UPDATE_WINDOW_KEEPS_REOPENED_HOME",
   );
   assert.ok(
     (await surfaces()).every((w) => !w.visible),
     "REPLACEMENT_WINDOW_TOOK_FOCUS",
   );
-  await assertBrowserDetachedAndAlive(
-    await surfaces(),
-    "REOPEN_UPDATE_OVERLAY_NOT_OCCLUDED",
-  );
-  await replacement
-    .getByRole("dialog", { name: "Updates unavailable", exact: true })
-    .getByRole("button", { name: "Close", exact: true })
-    .click();
   await replacement
     .getByRole("button", { name: "ChatGPT", exact: true })
     .first()
@@ -715,6 +769,9 @@ try {
     requestsBeforeClose,
     "WINDOW_REOPEN_RELOADED_DOCUMENT",
   );
+  const updatesClosed = updates.waitForEvent("close", { timeout: 10000 });
+  await updates.getByRole("button", { name: "Done", exact: true }).click();
+  await updatesClosed;
   observations.push({
     menuUpdatesAfterClose: true,
     replacementHidden: true,

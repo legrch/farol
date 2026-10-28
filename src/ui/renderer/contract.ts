@@ -38,7 +38,14 @@ export type PreloadApi = Readonly<{
   chatHistory?(request: unknown): Promise<unknown>;
   retiredReplies?(request: unknown): Promise<unknown>;
   task(command: ProductTaskCommand): Promise<unknown>;
-  installedUpdate(command: InstalledUpdateCommand): Promise<unknown>;
+  installedUpdate(
+    command: InstalledUpdateCommand,
+    operationId?: string,
+  ): Promise<unknown>;
+  settleUpdateDirect?(settlement: {
+    operationId: string;
+    outcome: "applied" | "refused" | "unknown";
+  }): void;
   setNavigationShortcuts(shortcuts: unknown): Promise<unknown>;
   layout(
     section: string,
