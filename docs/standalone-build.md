@@ -70,6 +70,15 @@ path declarations. Tests use disposable homes. Its synthetic mutation tests
 prove detection and declared-churn exceptions; the guard is not a write sandbox.
 The tunnel-client version and digests required by tests are frozen separately in
 `tooling/external-dependencies.json`, without importing the V0 runtime registry.
+The bundled full CLI is pinned to upstream 0.0.16. Passive connection status
+consumes its aggregate `/health?details=true` endpoint. The 0.0.14 health listener
+only exposed `/healthz`, `/readyz` and metrics; a successful connection check on
+those older bytes could therefore coexist with an unavailable passive status.
+See the upstream [0.0.14 listener](https://github.com/openai/tunnel-client/blob/v0.0.14/pkg/runtimehealth/health.go)
+and [0.0.16 listener](https://github.com/openai/tunnel-client/blob/v0.0.16/pkg/runtimehealth/health.go).
+Both architecture inventories and the packaged arm64 archive, executable and
+license/notice digests stay independently pinned. Build-time archive preparation
+copies only the named client and notices, not the separate cloudflared executable.
 
 Native packaged checks remain separate:
 

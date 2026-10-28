@@ -1,17 +1,18 @@
-// Reviewed upstream v0.0.14, not a locally learned executable expectation.
+// Reviewed upstream v0.0.16, not a locally learned executable expectation.
 // The app uses the full CLI: configure/init, doctor and run.
+// Passive connection status requires its aggregate /health endpoint.
 export const TUNNEL_CLIENT = Object.freeze({
-  version: "0.0.14",
+  version: "0.0.16",
   entry: "tunnel-client",
   platform: "darwin",
   arch: "arm64",
-  size: 20_405_442,
-  sha256: "309fd85da5a8c2ca8dae920deea8ac10a4d7934ed18ac46e7df0c200139cc9c5",
-  upstream: "https://github.com/openai/tunnel-client/releases/tag/v0.0.14",
+  size: 21_099_522,
+  sha256: "6f1e8d5494d6c4d6c45cd4f6e07b5291459c0b23f4b8cd8266c7a64be3d9a2a0",
+  upstream: "https://github.com/openai/tunnel-client/releases/tag/v0.0.16",
   archiveURL:
-    "https://persistent.oaistatic.com/tunnel-client/v0.0.14/tunnel-client-v0.0.14-darwin-arm64.zip",
+    "https://persistent.oaistatic.com/tunnel-client/v0.0.16/tunnel-client-v0.0.16-darwin-arm64.zip",
   archiveSHA256:
-    "b540493c5bdbcdbb755700c8e2e16597e28b1569e425007e0f73111047bd6a64",
+    "a160820d45089b5253d8d671fe2a689bde0f73d78c135d1497a7b33f28a3ac62",
 });
 
 export const TUNNEL_CLIENT_NOTICES = Object.freeze([

@@ -23,7 +23,7 @@ function harness(fixture?: string, running = false) {
   const probe = {
     executablePath: path.join(directory, TUNNEL_CLIENT.entry),
     executableSha256: TUNNEL_CLIENT.sha256,
-    version: "0.0.14",
+    version: TUNNEL_CLIENT.version,
     protocol: "openai-tunnel-client/v1",
   };
   const probeTunnelClient = vi.fn(async () => probe);

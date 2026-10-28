@@ -1,15 +1,15 @@
 {
   "dependencies": {
     "tunnelClient": {
-      "version": "0.0.14+0f870e50a973fa820d4c409000059e181e8d242b (git sha: 0f870e50a973fa820d4c409000059e181e8d242b)",
+      "version": "0.0.16+5f99daabd4aa4a77049e6d81d54a0d8c18335397 (git sha: 5f99daabd4aa4a77049e6d81d54a0d8c18335397)",
       "builds": {
         "arm64": {
-          "bytes": 20405442,
-          "sha256": "309fd85da5a8c2ca8dae920deea8ac10a4d7934ed18ac46e7df0c200139cc9c5"
+          "bytes": 21099522,
+          "sha256": "6f1e8d5494d6c4d6c45cd4f6e07b5291459c0b23f4b8cd8266c7a64be3d9a2a0"
         },
         "x86_64": {
-          "bytes": 21877984,
-          "sha256": "89478d1d58350818275b852169745e1af0e18c02ff9b5b46d50df22018c95be9"
+          "bytes": 22652704,
+          "sha256": "e2a96aa858c9cba1ca8f20d7dd0c2c0a2a468b98471e620a2c9703589c2d26aa"
         }
       }
     }

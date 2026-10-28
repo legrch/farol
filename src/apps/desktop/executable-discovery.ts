@@ -138,17 +138,17 @@ export type DiscoveryDependencies = Readonly<{
 
 /**
  * The reviewed tunnel-client builds, pinned by SHA-256 per architecture.
- * Mirrors `integrations/registry.json` → `dependencies.tunnelClient.builds`;
+ * Mirrors `tooling/external-dependencies.json` → `dependencies.tunnelClient.builds`;
  * a dedicated test keeps the two in sync so this file cannot drift silently.
  */
 export const REVIEWED_TUNNEL_CLIENT_DIGESTS: ReviewedTunnelClientDigests = {
   arm64: {
-    sha256: "309fd85da5a8c2ca8dae920deea8ac10a4d7934ed18ac46e7df0c200139cc9c5",
-    bytes: 20_405_442,
+    sha256: "6f1e8d5494d6c4d6c45cd4f6e07b5291459c0b23f4b8cd8266c7a64be3d9a2a0",
+    bytes: 21_099_522,
   },
   x86_64: {
-    sha256: "89478d1d58350818275b852169745e1af0e18c02ff9b5b46d50df22018c95be9",
-    bytes: 21_877_984,
+    sha256: "e2a96aa858c9cba1ca8f20d7dd0c2c0a2a468b98471e620a2c9703589c2d26aa",
+    bytes: 22_652_704,
   },
 };
 
