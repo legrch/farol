@@ -491,9 +491,24 @@ try {
   assert.equal(await window.getByRole("dialog").count(), 0);
   assert.equal(await window.locator("main").getAttribute("inert"), null);
   await window.getByRole("button", { name: "Activity", exact: true }).click();
-  await window.keyboard.press("Meta+[");
+  const sendHistoryShortcut = async (keyCode) =>
+    application.evaluate(({ BrowserWindow }, key) => {
+      const contents = BrowserWindow.getAllWindows()[0]?.webContents;
+      if (!contents || contents.isDestroyed()) throw Error("SHELL_MISSING");
+      contents.sendInputEvent({
+        type: "keyDown",
+        keyCode: key,
+        modifiers: ["meta"],
+      });
+      contents.sendInputEvent({
+        type: "keyUp",
+        keyCode: key,
+        modifiers: ["meta"],
+      });
+    }, keyCode);
+  await sendHistoryShortcut("[");
   await window.getByRole("heading", { name: "Home", exact: true }).waitFor();
-  await window.keyboard.press("Meta+]");
+  await sendHistoryShortcut("]");
   await window.getByRole("searchbox", { name: "Search activity" }).waitFor();
   report.checks.push("hidden-native-history-keyboard-shortcuts");
   await save();
