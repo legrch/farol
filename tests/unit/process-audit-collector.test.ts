@@ -270,6 +270,47 @@ it("rotates fairly through more unresolved processes than available observation 
   expect(reader.read.mock.calls.at(-1)?.[0].operationId).toBe("process-0");
 });
 
+it("keeps a lost read fenced when other observation slots rotate", async () => {
+  const reader = {
+    read: vi.fn(
+      async (value: {
+        operationId: string;
+        buildId: string;
+        runtimeId: string;
+      }) => {
+        if (value.operationId === "lost")
+          throw new Error("original reply lost");
+        return null;
+      },
+    ),
+  };
+  const writer = {
+    recordTerminalObservation: vi.fn().mockResolvedValue("recorded" as const),
+  };
+  const collector = new ProcessAuditCollector(writer, () => 0, "current");
+  const entries = Array.from({ length: 1100 }, (_, i) => ({
+    ...entry,
+    operationRef: {
+      ...ref,
+      operationId: i === 0 ? "lost" : `process-${i}`,
+      backendGeneration: "current",
+    },
+  }));
+  for (let i = 0; i < 1200; i++) {
+    collector.observe({ ...snapshot, entries }, reader, () => true);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  expect(
+    reader.read.mock.calls.filter(([value]) => value.operationId === "lost"),
+  ).toHaveLength(1);
+  expect(
+    reader.read.mock.calls.some(
+      ([value]) => value.operationId === "process-1099",
+    ),
+  ).toBe(true);
+  expect(writer.recordTerminalObservation).not.toHaveBeenCalled();
+});
+
 it("releases a confirmed slot only after its terminal appears in the journal", async () => {
   const reader = { read: vi.fn().mockResolvedValue(fact) };
   const writer = {
