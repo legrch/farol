@@ -490,6 +490,13 @@ try {
     .click();
   assert.equal(await window.getByRole("dialog").count(), 0);
   assert.equal(await window.locator("main").getAttribute("inert"), null);
+  await window.getByRole("button", { name: "Activity", exact: true }).click();
+  await window.keyboard.press("Meta+[");
+  await window.getByRole("heading", { name: "Home", exact: true }).waitFor();
+  await window.keyboard.press("Meta+]");
+  await window.getByRole("searchbox", { name: "Search activity" }).waitFor();
+  report.checks.push("hidden-native-history-keyboard-shortcuts");
+  await save();
   // Establish admission using the existing production observation command.
   // Only the test side operates the local fixture's synthetic login control;
   // no ready settings or expected provider answer enter the adapter directly.
