@@ -78,6 +78,29 @@ function fixture() {
 }
 
 describe("installed update orchestration (port fixture, no native or GitHub acceptance)", () => {
+  it("admits owner handoff only after initialization and the original check settles", async () => {
+    const f = fixture();
+    let finish!: (
+      value: Awaited<ReturnType<InstalledUpdaterPorts["discover"]>>,
+    ) => void;
+    f.ports.discover.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    expect(f.updater.ownerHandoffSafe()).toBe(false);
+    await f.updater.initialize();
+    expect(f.updater.ownerHandoffSafe()).toBe(true);
+    const checking = f.updater.check(true);
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    expect(f.updater.ownerHandoffSafe()).toBe(false);
+    finish({ ok: true, available: false });
+    await checking;
+    expect(f.updater.ownerHandoffSafe()).toBe(true);
+    await f.updater.close();
+    expect(f.updater.ownerHandoffSafe()).toBe(false);
+  });
   it("bounds and throttles original transfer observations without making a package ready", async () => {
     const f = fixture();
     let report!: NonNullable<Parameters<InstalledUpdaterPorts["download"]>[0]>;
