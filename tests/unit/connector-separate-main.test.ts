@@ -139,6 +139,8 @@ function fixture() {
     buildIdentity: { buildId: fixtureBuildId },
     chatGptTaskAdmission: false,
     connectorTaskAdmission: false,
+    connectorConnection: { sample: vi.fn(async () => {}) },
+    currentConnectionStatus: vi.fn(),
     configurationFailure: (error: string) => ({ ok: false, error }),
     chatGptTaskAdmissionReady: () => true,
     selectedConnectorApp,
@@ -217,6 +219,9 @@ describe("actual separate-check desktop admission", () => {
 
   it("runs an automatic fresh check by navigating the retained browser", async () => {
     const f = fixture();
+    f.context.connectorConnection.sample.mockImplementation(async () => {
+      expect(f.context.connectorTaskAdmission).toBe(false);
+    });
     f.settings.setup.connect.outcomeUnknown = false;
     f.settings.connectors.secureMcp.appVerificationPending = false;
     expect(await f.verify(undefined, f.expected)).toMatchObject({
@@ -224,8 +229,30 @@ describe("actual separate-check desktop admission", () => {
     });
     expect(f.createRoute).not.toHaveBeenCalled();
     expect(f.send).toHaveBeenCalledTimes(1);
+    expect(f.context.connectorConnection.sample).toHaveBeenCalledTimes(2);
+    expect(f.context.connectorTaskAdmission).toBe(false);
     expect(f.ownerRoute.openTemporaryChat).toHaveBeenCalledTimes(1);
     expect(f.dispose).not.toHaveBeenCalled();
+  });
+
+  it("joins an earlier observation before requesting a post-check sample", async () => {
+    const f = fixture();
+    let finishPrevious!: () => void;
+    const previous = new Promise<void>((resolve) => {
+      finishPrevious = resolve;
+    });
+    f.context.connectorConnection.sample
+      .mockReturnValueOnce(previous)
+      .mockResolvedValue(undefined);
+    f.settings.setup.connect.outcomeUnknown = false;
+    f.settings.connectors.secureMcp.appVerificationPending = false;
+    await f.verify(undefined, f.expected);
+    expect(f.context.connectorConnection.sample).toHaveBeenCalledTimes(1);
+    expect(f.context.connectorTaskAdmission).toBe(false);
+    finishPrevious();
+    await previous;
+    await Promise.resolve();
+    expect(f.context.connectorConnection.sample).toHaveBeenCalledTimes(2);
   });
 
   it("does not dispatch an automatic check after its captured lifetime changes", async () => {

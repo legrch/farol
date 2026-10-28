@@ -6150,6 +6150,13 @@ async function verifySecureMcpApp(
   } finally {
     chatGptTaskAdmission = false;
     connectorTaskAdmission = false;
+    // Join any observation started before the fence ended, then take a fresh
+    // passive sample. The observer owns identity, expiry and shutdown checks.
+    void connectorConnection
+      .sample()
+      .then(() => connectorConnection.sample())
+      .then(currentConnectionStatus)
+      .catch(() => undefined);
     // The managed task can temporarily suppress pure page observations. Ask
     // the renderer to read the retained document again after that fence ends.
     try {
