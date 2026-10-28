@@ -5773,6 +5773,69 @@ describe("ChatGPT embedded task surface", () => {
     candidate.dispose();
   });
 
+  it.each(["opened", "failed", "update", "task", "sign-in"])(
+    "joins one cold preload without a replacement load when its result is %s",
+    async (result) => {
+      const surface = embeddedSurface();
+      const factory = vi.fn(() => surface);
+      let resolveLoad!: () => void;
+      let resolveReached!: () => void;
+      const waiting = new Promise<void>((resolve) => {
+        resolveLoad = resolve;
+      });
+      const reached = new Promise<void>((resolve) => {
+        resolveReached = resolve;
+      });
+      const originalLoad = surface.loadURL.getMockImplementation()!;
+      surface.loadURL.mockImplementation(async (url) => {
+        resolveReached();
+        await waiting;
+        if (result === "failed") throw Error("fixture original load failed");
+        await originalLoad(url);
+      });
+      const candidate = new ChatGptRoute({
+        homeUrl: "https://chatgpt.com/",
+        initialUrl: "https://chatgpt.com/",
+        e2eOrigin: null,
+        parent: () => null,
+        surfaceFactory: factory as unknown as ChatGptRouteSurfaceFactory,
+      });
+      try {
+        const preload = candidate.preload();
+        await reached;
+        let settled = false;
+        const opened = candidate.retryFailedOpen().finally(() => {
+          settled = true;
+        });
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        expect(factory).toHaveBeenCalledTimes(1);
+        expect(surface.loadURL).toHaveBeenCalledTimes(1);
+        expect(surface.destroy).not.toHaveBeenCalled();
+        if (result === "update")
+          Reflect.set(candidate, "updateAdmission", true);
+        if (result === "task") Reflect.set(candidate, "taskInFlight", true);
+        if (result === "sign-in") Reflect.set(candidate, "signInMode", true);
+        resolveLoad();
+        await preload;
+        expect(await opened).toEqual({
+          status: result === "opened" ? "opened" : "unreachable",
+        });
+        expect(factory).toHaveBeenCalledTimes(1);
+        expect(surface.loadURL).toHaveBeenCalledTimes(1);
+        expect(surface.reveal).toHaveBeenCalledTimes(
+          result === "opened" ? 1 : 0,
+        );
+        expect(surface.focus).toHaveBeenCalledTimes(
+          result === "opened" ? 1 : 0,
+        );
+      } finally {
+        resolveLoad();
+        candidate.dispose();
+      }
+    },
+  );
+
   it("uses the injected task-owned surface without creating a separate window", async () => {
     const surface = embeddedSurface();
     const surfaceFactory = vi.fn(() => surface);

@@ -2450,13 +2450,21 @@ export class ChatGptRoute {
   // refuses. An explicit owner retry may discard only that failed surface;
   // it never repeats a model submission or resets a successful conversation.
   async retryFailedOpen(): Promise<ChatGptOpenResult> {
-    if (
-      this.updateAdmission ||
-      this.taskInFlight ||
-      this.signInMode ||
-      this.opening
-    ) {
+    if (this.updateAdmission || this.taskInFlight || this.signInMode) {
       return { status: "unreachable" };
+    }
+    if (this.opening) {
+      // Join the original cold preload. A navigation request is not a failed
+      // page retry, and must not create another surface or repeat its load.
+      const opened = await this.opening;
+      if (
+        opened.status !== "opened" ||
+        this.updateAdmission ||
+        this.taskInFlight ||
+        this.signInMode
+      )
+        return { status: "unreachable" };
+      return this.open();
     }
     if (this.load === "failed" && this.routeWindow) {
       const failed = this.routeWindow;
