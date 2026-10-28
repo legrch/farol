@@ -10,6 +10,7 @@ import type {
 import { bootstrap, fixture, settings, task, deferred } from "./fixture";
 import { readySettings } from "./setup-fixture";
 import { connectionPresentation } from "../../apps/desktop/renderer/connection-presentation";
+import { unavailableConnectionStatus } from "../../apps/desktop/renderer/connection-status";
 
 // DOM + scripted evidence only; no live connection, account or filesystem.
 (
@@ -61,6 +62,20 @@ it("keeps an existing current connection visible while a new verification is in 
   ).toBe("Checking connection…");
   expect(
     connectionPresentation({ ...snapshot, runtime: "failed" }, [pending]).text,
+  ).not.toBe("Connected");
+  const transport = unavailableConnectionStatus;
+  expect(
+    connectionPresentation(
+      {
+        ...snapshot,
+        connectionStatus: {
+          ...transport,
+          state: "unavailable",
+          validUntilMillis: Date.now() + 1000,
+        },
+      },
+      [pending],
+    ).text,
   ).not.toBe("Connected");
   c.dispose();
 });
