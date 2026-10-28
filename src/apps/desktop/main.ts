@@ -11893,7 +11893,8 @@ function installIpc(): void {
         installedUpdater !== null &&
         parsed.success &&
         parsed.data.kind !== "status";
-      if (tracked) updatesPanel.beginDirect(event, operationId);
+      if (tracked && !updatesPanel.beginDirect(event, operationId))
+        return { phase: "unavailable", code: "UPDATE_ACTION_INVALID" };
       let returned = false;
       try {
         const result = await installedUpdateCommand(value);

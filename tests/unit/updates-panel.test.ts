@@ -274,47 +274,41 @@ describe("Updates panel native fixture (no Electron process or installed updater
     f.panel.publish(event(replacement), projection);
     expect(f.panel.state()).toMatchObject({ status: "ready" });
   });
-  it.each([
-    "in-flight",
-    "reply-unobserved",
-    "invalid-id",
-    "failed",
-    "wrong-ack",
-    "unknown",
-  ])("does not rebind after a direct command with %s", async (condition) => {
-    const f = await fixture();
-    const id =
-      condition === "invalid-id"
-        ? "invalid"
-        : "d49013b5-0283-4c16-9a7d-578a9c22f1e9";
-    f.panel.publish(event(f.owner), { ...projection, outcome: "pending" });
-    f.panel.beginDirect(event(f.owner), id);
-    if (condition !== "in-flight")
-      f.panel.endDirect(event(f.owner), id, condition !== "failed");
-    // An unrelated or stale ready observation cannot settle an in-flight
-    // command, and a returned reply still needs the owner's later projection.
-    if (condition === "in-flight") f.panel.publish(event(f.owner), projection);
-    if (condition === "invalid-id" || condition === "failed")
-      f.panel.publish(event(f.owner), { ...projection, outcome: "applied" });
-    if (condition === "wrong-ack")
-      f.panel.settleDirect(event(f.owner), {
-        operationId: "b7a447f6-2337-4c99-b0ed-914d28164d65",
-        outcome: "applied",
-      });
-    if (condition === "unknown")
-      f.panel.settleDirect(event(f.owner), {
-        operationId: id,
-        outcome: "unknown",
-      });
-    f.window.close();
-    f.owner.close();
-    const replacement = new BrowserWindow({});
-    await replacement.loadURL("file:///app/shell.html");
-    f.panel.bindOwner(replacement, "/app");
-    f.panel.publish(event(replacement), projection);
-    expect(f.panel.state()).toEqual({ status: "unavailable" });
-    expect((replacement as any).webContents.send).not.toHaveBeenCalled();
-  });
+  it.each(["in-flight", "reply-unobserved", "failed", "wrong-ack", "unknown"])(
+    "does not rebind after a direct command with %s",
+    async (condition) => {
+      const f = await fixture();
+      const id = "d49013b5-0283-4c16-9a7d-578a9c22f1e9";
+      f.panel.publish(event(f.owner), { ...projection, outcome: "pending" });
+      f.panel.beginDirect(event(f.owner), id);
+      if (condition !== "in-flight")
+        f.panel.endDirect(event(f.owner), id, condition !== "failed");
+      // An unrelated or stale ready observation cannot settle an in-flight
+      // command, and a returned reply still needs the owner's later projection.
+      if (condition === "in-flight")
+        f.panel.publish(event(f.owner), projection);
+      if (condition === "failed")
+        f.panel.publish(event(f.owner), { ...projection, outcome: "applied" });
+      if (condition === "wrong-ack")
+        f.panel.settleDirect(event(f.owner), {
+          operationId: "b7a447f6-2337-4c99-b0ed-914d28164d65",
+          outcome: "applied",
+        });
+      if (condition === "unknown")
+        f.panel.settleDirect(event(f.owner), {
+          operationId: id,
+          outcome: "unknown",
+        });
+      f.window.close();
+      f.owner.close();
+      const replacement = new BrowserWindow({});
+      await replacement.loadURL("file:///app/shell.html");
+      f.panel.bindOwner(replacement, "/app");
+      f.panel.publish(event(replacement), projection);
+      expect(f.panel.state()).toEqual({ status: "unavailable" });
+      expect((replacement as any).webContents.send).not.toHaveBeenCalled();
+    },
+  );
   it("does not settle concurrent direct calls until all have returned and the owner classifies them", async () => {
     const f = await fixture();
     const first = "d49013b5-0283-4c16-9a7d-578a9c22f1e9";
@@ -387,6 +381,20 @@ describe("Updates panel native fixture (no Electron process or installed updater
       expect((replacement as any).webContents.send).not.toHaveBeenCalled();
     },
   );
+  it("rejects invalid and reused direct identifiers before a new effect", async () => {
+    const f = await fixture();
+    const id = "d49013b5-0283-4c16-9a7d-578a9c22f1e9";
+    expect(f.panel.beginDirect(event(f.owner), "invalid")).toBe(false);
+    expect(f.panel.beginDirect(event(f.window), id)).toBe(false);
+    expect(f.panel.beginDirect(event(f.owner), id)).toBe(true);
+    expect(f.panel.beginDirect(event(f.owner), id)).toBe(false);
+    f.panel.endDirect(event(f.owner), id, true);
+    f.panel.settleDirect(event(f.owner), {
+      operationId: id,
+      outcome: "applied",
+    });
+    expect(f.panel.beginDirect(event(f.owner), id)).toBe(false);
+  });
   it.each(["pending", "unknown"] as const)(
     "fences a lost owner with a direct update %s and no panel relay",
     async (outcome) => {

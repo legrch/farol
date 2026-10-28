@@ -44,6 +44,7 @@ export class DesktopUpdatesPanel {
   private hardOwnerLoss = false;
   private normalOwnerClosed = false;
   private direct = new Map<string, "in-flight" | "returned">();
+  private directSeen = new Set<string>();
   private directAmbiguous = false;
 
   constructor(private readonly hostCanTransfer: () => boolean = () => false) {}
@@ -70,6 +71,7 @@ export class DesktopUpdatesPanel {
       this.closeRequested = false;
       this.projection = null;
       this.options = null;
+      this.directSeen.clear();
     }
     if (this.owner) {
       this.loseOwner();
@@ -135,7 +137,7 @@ export class DesktopUpdatesPanel {
     this.projection = parsed.success ? parsed.data : null;
     this.broadcast();
   }
-  beginDirect(event: Sender, operationId: unknown): void {
+  beginDirect(event: Sender, operationId: unknown): boolean {
     const parsed = UpdatesDirectSettlementSchema.safeParse({
       operationId,
       outcome: "applied",
@@ -143,12 +145,15 @@ export class DesktopUpdatesPanel {
     if (
       !this.isOwner(event) ||
       !parsed.success ||
-      this.direct.has(parsed.data.operationId)
+      this.directAmbiguous ||
+      this.directSeen.has(parsed.data.operationId) ||
+      this.directSeen.size >= 4096
     ) {
-      this.directAmbiguous = true;
-      return;
+      return false;
     }
+    this.directSeen.add(parsed.data.operationId);
     this.direct.set(parsed.data.operationId, "in-flight");
+    return true;
   }
   endDirect(event: Sender, operationId: unknown, returned: boolean): void {
     if (
