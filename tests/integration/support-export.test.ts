@@ -346,6 +346,86 @@ describe("content-free support export", () => {
       };
     }
 
+    it("retains an UNKNOWN V2 operation and terminal metadata across both export boundaries", async () => {
+      const root = await temporaryRoot();
+      const operations = {
+        entries: [
+          {
+            id: "22222222-2222-4222-8222-222222222222",
+            at: 1,
+            source: "ChatGPT" as const,
+            kind: "computer_shell_start" as const,
+            target: {},
+            outcome: "unknown" as const,
+            code: null,
+            durationMs: null,
+            schema: "farol.operation/2" as const,
+            operationRef: {
+              owner: "computer.process" as const,
+              operationId: "operation-1",
+              buildId: "build-1",
+              runtimeId: "runtime-1",
+              binding: "accepted" as const,
+            },
+            subjectRef: null,
+            timing: { requestedAt: 1, startedAt: null, endedAt: null },
+            exit: null,
+            executionFacts: null,
+          },
+          {
+            id: "33333333-3333-4333-8333-333333333333",
+            at: 2,
+            source: "ChatGPT" as const,
+            kind: "computer.process.terminal" as const,
+            target: {},
+            outcome: "done" as const,
+            code: null,
+            durationMs: null,
+            schema: "farol.operation/2" as const,
+            operationRef: {
+              owner: "computer.process" as const,
+              operationId: "operation-1",
+              buildId: "build-1",
+              runtimeId: "runtime-1",
+              binding: "accepted" as const,
+            },
+            subjectRef: null,
+            timing: null,
+            exit: { kind: "code" as const, value: 0 },
+            executionFacts: {
+              rootWaited: true,
+              outputDrained: true,
+              groupCleanup: "confirmed" as const,
+              descendantCleanup: "unverified" as const,
+              timedOut: false,
+              authorityLost: false,
+            },
+          },
+        ],
+        corruptLines: 0,
+        writeFailures: 0,
+        droppedEntries: 0,
+        unrecordedUncertainEntries: 0,
+        unmappedCodes: 0,
+      };
+      const report = createSupportExport({ ...input(), operations });
+      const file = path.join(root, "Farol-Support.json");
+      await writeSupportExport(file, report);
+      const saved = JSON.parse(await fs.readFile(file, "utf8"));
+      expect(saved.operations.entries[0]).toMatchObject({
+        outcome: "unknown",
+        operationRef: { operationId: "operation-1" },
+        executionFacts: null,
+      });
+      expect(saved.operations.entries[1]).toMatchObject({
+        outcome: "done",
+        executionFacts: {
+          groupCleanup: "confirmed",
+          descendantCleanup: "unverified",
+        },
+      });
+    });
+
     it("revalidates identity at both export boundaries after a rename or reused label", async () => {
       const root = await temporaryRoot();
       const configuration = new ProductConfigurationService(
