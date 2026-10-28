@@ -23,7 +23,7 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
     releaseJobs: ["build", "publish"],
     tagPattern: "v*",
     versionSource: "package.json",
-    prerelease: true,
+    prerelease: "version-channel",
   });
   assert.deepEqual(Object.keys(pr.on), [policy.ci]);
   assert.deepEqual(Object.keys(pr.on.pull_request), ["types"]);
@@ -168,7 +168,7 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
       release.jobs.build.steps[0].uses,
       "Fetch the pushed tag object as published",
       "./.github/actions/setup-ci",
-      "Verify exact owner-beta source and accepted-main ancestry",
+      "Verify exact release channel, source and accepted-main ancestry",
       "Provision approved backend build inputs",
       "Run the full unchanged source gate including secret scans",
       "Build the exact clean candidate",

@@ -63,6 +63,8 @@ installed/live and actual owner gates. Only then, under Root's release authority
 the operator creates the exact annotated accepted-main version tag, waits for
 its actual successful full tag build, and stages only those qualified local
 files with `gh release create --draft --verify-tag --prerelease --latest=false`.
+That example selects owner-beta. Stable versions omit `--prerelease`; the
+committed package version/channel and private draft flag must agree.
 Draft releases are private to push-access users. Preserve the draft release ID,
 uploaded asset IDs/names/sizes and the local manifest SHA256; private evidence
 stays local. The complete gated command sequence and GitHub visibility sources
@@ -75,7 +77,7 @@ prior successful tag run with `build: success`, `publish: skipped`, matching
 repository/workflow/source/current attempt qualifies; prepare dispatches do not.
 The supplied manifest digest is an exact-byte assertion after qualification,
 not proof of that qualification. The publisher verifies checkout/dispatch SHA,
-main ancestry, exact annotated remote tag, unpublished prerelease draft ID and
+main ancestry, exact annotated remote tag, unpublished draft ID with the version's matching prerelease flag and
 exactly three uploaded asset IDs/names/sizes, including complete matching asset
 and release listings. Existing public releases, other same-tag drafts, extra or
 private files, missing assets and tag mismatches refuse.
@@ -89,7 +91,7 @@ archive/checksum/source verification. Before mutation it re-fetches and checks
 the same run/attempt, remote tag, draft and asset identities. It never rebuilds,
 creates tags/releases, uploads/replaces assets, deletes or edits an already
 published release. Its only final mutation is PATCH of that same still-draft
-release with `{draft:false, prerelease:true, make_latest:"false"}`. Root keeps
+release with `{draft:false, prerelease:<selected channel flag>, make_latest:"false"}`. Root keeps
 the selected draft/assets/tag quiescent during this final read gate; the API
 provides no atomic compare-and-swap here.
 

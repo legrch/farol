@@ -130,8 +130,12 @@ publication and consumer contracts.
 The hosted build is source/package evidence. A `v*` push or an explicit
 `workflow_dispatch` with `action: prepare` runs the same full `task ci`, clean
 `task package`, offline three-asset preparation and `verifyReleaseAssets` gates.
-The exact owner-beta version and `github-owner-beta` channel come from
-`package.json`, and the source must be an ancestor of accepted `origin/main`.
+The exact version and channel come from `package.json`: ordinary semantic
+versions select `github-stable`; `-owner.beta.N` versions select
+`github-owner-beta`. The private draft and final publication must have the
+matching GitHub prerelease flag. Publication keeps `make_latest: false` and
+changes only the qualified draft; it never changes tags or chooses another
+candidate. The source must be an ancestor of accepted `origin/main`.
 Tag runs also verify the exact annotated remote version tag. Neither route
 publishes automatically or uploads binary artifacts. Do not transfer the hosted
 rebuild through Actions artifacts, caches or workflow logs, or fall back to a
@@ -165,9 +169,13 @@ This source change performs no staging, tag push, dispatch or publication.
 3. Stage **only** the three qualified local files with the normal operator
    command below. First reconcile any existing release/draft; there is no
    overwrite, clobber, asset replacement or public-upload fallback. The draft
-   must stay unpublished and prerelease. Preserve its immutable release ID and
+   must stay unpublished with the version's matching prerelease flag. Preserve its immutable release ID and
    the three uploaded asset IDs, names and sizes. Never include `private/` or
    recursively upload the output directory.
+
+   This example is for an owner-beta candidate. For an ordinary stable version,
+   omit `--prerelease` and use an unsigned stable title. Both routes stay private
+   drafts until separately qualified and explicitly published.
 
    ```sh
    gh release create "v<version>" \
@@ -201,7 +209,7 @@ refuse. Incomplete job or release listings fail closed.
 
 The exact remote tag must already be annotated, name this version and point
 directly to this source commit. The supplied release ID must identify the
-unpublished private draft for that tag with `prerelease: true`,
+unpublished private draft for that tag with the matching `prerelease` flag,
 `published_at: null` and exactly three uploaded assets with unique immutable
 IDs, expected names and bounded sizes. The separate asset listing must agree.
 An existing public release, another same-tag draft, extra/private file, missing
@@ -225,7 +233,7 @@ re-fetches run/attempt, remote tag object, draft and asset identities before
 mutation and refuses any change. It does not rebuild, create a tag/release,
 upload/replace assets, delete or edit a published release. Its only final
 mutation is `PATCH /repos/legrch/farol/releases/<same-id>` with
-`{draft:false, prerelease:true, make_latest:"false"}`. This is a final read gate,
+`{draft:false, prerelease:<selected channel flag>, make_latest:"false"}`. This is a final read gate,
 not an atomic compare-and-swap: Root must keep the selected tag/draft/assets
 quiescent while the serialized workflow runs. No separate concurrent writer is
 authorized by this sequence.

@@ -25,7 +25,8 @@ afterEach(() => {
     fs.rmSync(root, { recursive: true, force: true });
 });
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
-function fixture() {
+function fixture(selectedDocument = document) {
+  const { version } = selectedDocument;
   const root = fs.realpathSync(
     fs.mkdtempSync(path.join(os.tmpdir(), "farol-candidate-")),
   );
@@ -83,7 +84,12 @@ function fixture() {
     conclusion: null,
     created_at: "2026-10-23T10:00:00Z",
   };
-  const identity = candidateIdentity(document, head, run.id, run.run_attempt);
+  const identity = candidateIdentity(
+    selectedDocument,
+    head,
+    run.id,
+    run.run_attempt,
+  );
   const metadata = {
     current,
     run,
@@ -115,7 +121,8 @@ function fixture() {
     id: 300,
     tag_name: identity.tag,
     draft: true,
-    prerelease: true,
+    prerelease:
+      selectedDocument.farolRelease.updateChannel === "github-owner-beta",
     published_at: null,
     assets,
   };
@@ -599,7 +606,7 @@ describe("private qualified draft publication (mocked HTTP only)", () => {
     "0.2.8-rc.1",
     "0.2.8-owner.beta.01",
     "v0.2.8-owner.beta.1",
-  ])("requires strict owner-beta: %s", (version) => {
+  ])("requires the declared channel and strict version: %s", (version) => {
     expect(() =>
       candidateIdentity({ ...document, version }, head, 100, 1),
     ).toThrow();
@@ -908,6 +915,73 @@ describe("fixed GitHub API transport", () => {
     await expect(
       githubApi("synthetic-token", request)("/repos/legrch/farol/releases/300"),
     ).rejects.toThrow(/^RELEASE_CANDIDATE_GITHUB_[A-Z_]+$/u);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("stable release channel (synthetic transport only)", () => {
+  const stable = {
+    version: "0.4.0",
+    farolRelease: { updateChannel: "github-stable", buildVersion: "54" },
+  };
+  it("publishes only the qualified stable draft once with matching metadata", async () => {
+    const f = fixture(stable);
+    await publishCandidate(f.options);
+    expect(f.metadata.identity.tag).toBe("v0.4.0");
+    expect(f.effects).toEqual([
+      {
+        endpoint: `${f.base}/releases/300`,
+        method: "PATCH",
+        body: { draft: false, prerelease: false, make_latest: "false" },
+      },
+    ]);
+  });
+  it("refuses a prerelease draft for a stable candidate before any PATCH", async () => {
+    const f = fixture(stable);
+    f.draft.prerelease = true;
+    await expect(publishCandidate(f.options)).rejects.toThrow(
+      "PRIVATE_DRAFT_REQUIRED",
+    );
+    expect(f.effects).toHaveLength(0);
+  });
+  it("preserves an unknown stable publication response without retry", async () => {
+    const f = fixture(stable),
+      api = f.options.api;
+    f.options.api = async (endpoint, options) => {
+      const response = await api(endpoint, options);
+      return options?.body ? { ...response, prerelease: true } : response;
+    };
+    await expect(publishCandidate(f.options)).rejects.toThrow(
+      "PUBLICATION_RESPONSE_UNKNOWN",
+    );
+    expect(f.effects).toHaveLength(1);
+  });
+  it("admits only matching stable metadata, with no beta or arbitrary suffix fallback", () => {
+    for (const version of ["0.4.0-owner.beta.1", "0.4.0-rc.1", "0.4", "00.4.0"])
+      expect(() =>
+        candidateIdentity({ ...stable, version }, head, 100, 1),
+      ).toThrow();
+  });
+  it("allows only the exact stable draft PATCH body in the pinned API adapter", async () => {
+    const request = vi.fn(async () => new Response("{}"));
+    const api = githubApi("synthetic-token", request);
+    await api("/repos/legrch/farol/releases/300", {
+      method: "PATCH",
+      body: { draft: false, prerelease: false, make_latest: "false" },
+    });
+    for (const body of [
+      { draft: true, prerelease: false, make_latest: "false" },
+      { draft: false, prerelease: false, make_latest: "true" },
+      {
+        draft: false,
+        prerelease: false,
+        make_latest: "false",
+        tag_name: "v0.4.1",
+      },
+    ])
+      await expect(
+        api("/repos/legrch/farol/releases/300", { method: "PATCH", body }),
+      ).rejects.toThrow("METHOD_INVALID");
     expect(request).toHaveBeenCalledTimes(1);
   });
 });

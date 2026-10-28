@@ -135,3 +135,12 @@ describe("repository delivery policy", () => {
     expect(() => assertDeliveryPolicy(policy, p, r, setup)).toThrow();
   });
 });
+
+it.each([true, false])(
+  "refuses a fixed prerelease=%s policy that discards version channels",
+  (prerelease) => {
+    expect(() =>
+      assertDeliveryPolicy({ ...policy, prerelease }, pr, release, setup),
+    ).toThrow();
+  },
+);

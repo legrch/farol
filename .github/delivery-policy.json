@@ -10,5 +10,5 @@
   "releaseJobs": ["build", "publish"],
   "tagPattern": "v*",
   "versionSource": "package.json",
-  "prerelease": true
+  "prerelease": "version-channel"
 }

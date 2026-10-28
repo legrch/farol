@@ -26,13 +26,43 @@ function limits(identity) {
     ["SHA256SUMS", 1024],
   ]);
 }
-export function candidateIdentity(document, head, runId, attempt) {
+function candidatePrerelease(identity) {
+  const version = identity?.version;
+  requireThat(typeof version === "string", "IDENTITY_INVALID");
+  if (/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u.test(version))
+    return false;
   requireThat(
-    releaseBuildFields(document).updateChannel === "github-owner-beta",
-    "OWNER_BETA_REQUIRED",
+    /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-owner\.beta\.(0|[1-9][0-9]*)$/u.test(
+      version,
+    ),
+    "IDENTITY_INVALID",
+  );
+  return true;
+}
+function publicationBody(identity) {
+  return {
+    draft: false,
+    prerelease: candidatePrerelease(identity),
+    make_latest: "false",
+  };
+}
+export function candidateIdentity(document, head, runId, attempt) {
+  const channel = releaseBuildFields(document).updateChannel;
+  requireThat(
+    channel === "github-owner-beta" || channel === "github-stable",
+    "CHANNEL_REQUIRED",
   );
   requireThat(sha.test(head) && id(runId) && id(attempt), "IDENTITY_INVALID");
-  return { version: document.version, tag: `v${document.version}`, head };
+  const identity = {
+    version: document.version,
+    tag: `v${document.version}`,
+    head,
+  };
+  requireThat(
+    candidatePrerelease(identity) === (channel === "github-owner-beta"),
+    "CHANNEL_MISMATCH",
+  );
+  return identity;
 }
 
 // Preparation dispatches are useful source evidence, but only the exact prior
@@ -165,7 +195,7 @@ function validateDraft(release, releaseId, identity) {
       release?.id === releaseId &&
       release.tag_name === identity.tag &&
       release.draft === true &&
-      release.prerelease === true &&
+      release.prerelease === candidatePrerelease(identity) &&
       release.published_at === null,
     "PRIVATE_DRAFT_REQUIRED",
   );
@@ -273,13 +303,13 @@ export async function publishCandidate({
   );
   const published = await api(`${base}/releases/${releaseId}`, {
     method: "PATCH",
-    body: { draft: false, prerelease: true, make_latest: "false" },
+    body: publicationBody(metadata.identity),
   });
   requireThat(
     published?.id === releaseId &&
       published.tag_name === draft.tag &&
       published.draft === false &&
-      published.prerelease === true &&
+      published.prerelease === candidatePrerelease(metadata.identity) &&
       Number.isFinite(Date.parse(published.published_at)) &&
       JSON.stringify(assetIdentities(published.assets, metadata.identity)) ===
         JSON.stringify(draft.assets),
@@ -303,12 +333,15 @@ export function githubApi(token, fetchImpl = fetch) {
       (method === "GET" && body === undefined) ||
         (method === "PATCH" &&
           /^\/repos\/legrch\/farol\/releases\/[1-9][0-9]*$/u.test(endpoint) &&
-          JSON.stringify(body) ===
-            JSON.stringify({
-              draft: false,
-              prerelease: true,
-              make_latest: "false",
-            })),
+          [true, false].some(
+            (prerelease) =>
+              JSON.stringify(body) ===
+              JSON.stringify({
+                draft: false,
+                prerelease,
+                make_latest: "false",
+              }),
+          )),
       "API_METHOD_INVALID",
     );
     let response;
