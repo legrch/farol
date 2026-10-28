@@ -11,7 +11,10 @@ import {
 } from "../../../apps/desktop/operations/model-turn";
 import { operationsDirectory } from "../../../apps/desktop/operations/paths";
 import { OperationsStore } from "../../../apps/desktop/operations/store";
-import { ProcessAuditCollector } from "../../../apps/desktop/operations/process-audit-collector";
+import {
+  ProcessAuditCollector,
+  ProcessAuditObserver,
+} from "../../../apps/desktop/operations/process-audit-collector";
 import { observeOperation } from "../../../apps/desktop/operations/observe";
 import { recordInterruptedCommand } from "../../../apps/desktop/operations/interrupted-command";
 import {
@@ -6865,6 +6868,7 @@ async function configureSaveAndConnect(
 
 let operationsLog: OperationsStore | undefined;
 let processAuditCollector: ProcessAuditCollector | undefined;
+let processAuditObserver: ProcessAuditObserver | undefined;
 function operationsStore(): OperationsStore {
   return (operationsLog ??= new OperationsStore(
     operationsDirectory(app.getPath("userData")),
@@ -11880,17 +11884,6 @@ function installIpc(): void {
     if (!isTrustedIpcSender(event, window))
       return { entries: [], corruptLines: 0, writeFailures: 1 };
     const snapshot = await operationsStore().snapshot();
-    const core = desktopGoCore;
-    if (core && !quitInProgress) {
-      processAuditCollector ??= new ProcessAuditCollector(operationsStore());
-      processAuditCollector.observe(
-        snapshot,
-        core.processAudit,
-        // A read already admitted before Quit may still append its original
-        // observation; Quit prevents new observations above and drains this one.
-        () => desktopGoCore === core,
-      );
-    }
     return {
       ...snapshot,
       connectionChecking: startupConnectionChecking || connectorTaskAdmission,
@@ -12843,6 +12836,15 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       // Observation failure cannot turn old uncertainty into a startup fence.
       console.warn("The interrupted command notice is unavailable.");
     }
+    const auditCore = desktopGoCore;
+    processAuditCollector = new ProcessAuditCollector(operationsStore());
+    processAuditObserver = new ProcessAuditObserver(
+      processAuditCollector,
+      () => operationsStore().snapshot(),
+      auditCore.processAudit,
+      () => desktopGoCore === auditCore,
+    );
+    processAuditObserver.start();
     if (runtimeEnvironment === "dev")
       console.info(
         "FAROL_DEV_SHELL:" +
@@ -13308,6 +13310,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   });
   app.on("before-quit", (event) => {
     quitInProgress = true;
+    processAuditObserver?.stop();
     connectorTransportWatch?.close();
     if (connectorTransportTimer) clearInterval(connectorTransportTimer);
     connectorConnection.close();

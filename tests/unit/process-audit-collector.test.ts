@@ -1,5 +1,8 @@
 import { expect, it, vi } from "vitest";
-import { ProcessAuditCollector } from "../../apps/desktop/operations/process-audit-collector";
+import {
+  ProcessAuditCollector,
+  ProcessAuditObserver,
+} from "../../apps/desktop/operations/process-audit-collector";
 import {
   OperationEntrySchema,
   type OperationsSnapshot,
@@ -49,6 +52,30 @@ const snapshot: OperationsSnapshot = {
   unrecordedUncertainEntries: 0,
   unmappedCodes: 0,
 };
+
+it("does not start an audit after stopping during a pending snapshot", async () => {
+  let complete!: (value: OperationsSnapshot) => void;
+  const reader = { read: vi.fn().mockResolvedValue(fact) };
+  const writer = {
+    recordTerminalObservation: vi.fn().mockResolvedValue("recorded" as const),
+  };
+  const collector = new ProcessAuditCollector(writer);
+  const observer = new ProcessAuditObserver(
+    collector,
+    () =>
+      new Promise((resolve) => {
+        complete = resolve;
+      }),
+    reader,
+    () => true,
+  );
+  observer.start();
+  observer.stop();
+  complete(snapshot);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(reader.read).not.toHaveBeenCalled();
+  expect(writer.recordTerminalObservation).not.toHaveBeenCalled();
+});
 
 it("observes the exact original reference once and keeps the MCP record untouched", async () => {
   const reader = { read: vi.fn().mockResolvedValue(fact) };

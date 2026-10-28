@@ -3,8 +3,87 @@ import os from "node:os";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { OperationsStore } from "../../apps/desktop/operations/store";
-import { ProcessAuditCollector } from "../../apps/desktop/operations/process-audit-collector";
+import {
+  ProcessAuditCollector,
+  ProcessAuditObserver,
+} from "../../apps/desktop/operations/process-audit-collector";
 import { ProcessAuditBridge } from "../../apps/desktop/bridge/process-audit";
+
+it("collects a terminal without a renderer and retains UNKNOWN after reopen", async () => {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "farol-audit-background-"),
+  );
+  const store = new OperationsStore(directory);
+  const ref = {
+    owner: "computer.process" as const,
+    operationId: "background",
+    buildId: "build",
+    runtimeId: "runtime",
+    binding: "requested" as const,
+  };
+  const reader = {
+    read: vi
+      .fn()
+      .mockResolvedValue({
+        operationId: ref.operationId,
+        buildId: ref.buildId,
+        runtimeId: ref.runtimeId,
+        exitCode: 0,
+        exitSignal: 0,
+        rootWaited: true,
+        outputDrained: true,
+        groupCleanup: "confirmed",
+        descendantCleanup: "unverified",
+        timedOut: false,
+        authorityLost: false,
+      }),
+  };
+  const collector = new ProcessAuditCollector(store);
+  const observer = new ProcessAuditObserver(
+    collector,
+    () => store.snapshot(5000),
+    reader,
+    () => true,
+    10,
+  );
+  try {
+    const finish = store.beginExecution(
+      { source: "ChatGPT", kind: "computer_shell_start", target: {} },
+      { operationRef: ref, subjectRef: null },
+    );
+    finish("unknown", "PROCESS_OUTCOME_UNKNOWN", 12);
+    expect(await store.flush(5000)).toBe(true);
+    observer.start();
+    await vi.waitFor(async () =>
+      expect((await store.snapshot(5000)).entries).toHaveLength(2),
+    );
+    observer.stop();
+    expect(await collector.drain(1000)).toBe(true);
+    expect(await store.shutdown(5000)).toBe(true);
+    const reopened = new OperationsStore(directory);
+    try {
+      expect((await reopened.snapshot(5000)).entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "computer_shell_start",
+            outcome: "unknown",
+          }),
+          expect.objectContaining({
+            kind: "computer.process.terminal",
+            exit: { kind: "code", value: 0 },
+          }),
+        ]),
+      );
+      expect(reader.read).toHaveBeenCalledOnce();
+    } finally {
+      await reopened.shutdown(5000);
+    }
+  } finally {
+    observer.stop();
+    await store.shutdown(5000);
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 // Synthetic transport response; this test does not launch Go or a native child.
 it("carries a late original terminal observation into Activity without replacing UNKNOWN", async () => {

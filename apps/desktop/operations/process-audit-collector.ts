@@ -19,8 +19,8 @@ type Writer = {
 };
 type Attempt = { count: number; nextAt: number; stopped: boolean };
 
-// Observational work is driven by existing Activity refreshes. It never runs a
-// command, creates a journal, or changes the original MCP result. A lost RPC or
+// Observational work never runs a command, creates a journal, or changes the
+// original MCP result. A lost RPC or
 // write ACK fences that exact observation for this collector lifetime.
 export class ProcessAuditCollector {
   private readonly attempts = new Map<string, Attempt>();
@@ -128,6 +128,47 @@ export class ProcessAuditCollector {
       ]);
     } finally {
       clearTimeout(timer);
+    }
+  }
+}
+
+/** Runs independently of renderer visibility; stopping never starts new reads. */
+export class ProcessAuditObserver {
+  private timer: ReturnType<typeof setInterval> | undefined;
+  private reading = false;
+  private stopped = false;
+  constructor(
+    private readonly collector: ProcessAuditCollector,
+    private readonly snapshot: () => Promise<OperationsSnapshot>,
+    private readonly reader: Reader,
+    private readonly current: () => boolean,
+    private readonly intervalMs = 1500,
+  ) {}
+
+  start(): void {
+    if (this.timer || this.stopped) return;
+    void this.tick();
+    this.timer = setInterval(() => void this.tick(), this.intervalMs);
+    this.timer.unref();
+  }
+
+  stop(): void {
+    this.stopped = true;
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
+  }
+
+  private async tick(): Promise<void> {
+    if (this.stopped || this.reading || !this.current()) return;
+    this.reading = true;
+    try {
+      const snapshot = await this.snapshot();
+      if (!this.stopped && this.current())
+        this.collector.observe(snapshot, this.reader, this.current);
+    } catch {
+      // Diagnostics cannot interrupt the application or fabricate an outcome.
+    } finally {
+      this.reading = false;
     }
   }
 }
