@@ -17,7 +17,12 @@ type Writer = {
     fact: ComputerProcessTerminalAudit,
   ): Promise<"recorded" | "duplicate" | "conflict" | "unavailable" | "unknown">;
 };
-type Attempt = { count: number; nextAt: number; stopped: boolean };
+type Attempt = {
+  count: number;
+  nextAt: number;
+  stopped: boolean;
+  recorded: boolean;
+};
 
 // Observational work never runs a command, creates a journal, or changes the
 // original MCP result. A lost RPC or
@@ -59,6 +64,11 @@ export class ProcessAuditCollector {
           : [],
       ),
     );
+    // Free only completed observations which the journal itself now proves.
+    // Lost RPCs, conflicting facts and unknown writes keep their lifetime fence.
+    for (const [key, attempt] of this.attempts) {
+      if (attempt.recorded && terminals.has(key)) this.attempts.delete(key);
+    }
     for (const entry of snapshot.entries) {
       if (
         !("schema" in entry) ||
@@ -76,7 +86,7 @@ export class ProcessAuditCollector {
         // An unseen reference must not starve already tracked observations
         // when the bounded attempt table is full. Keep all existing fences.
         if (this.attempts.size >= 1024) continue;
-        attempt = { count: 0, nextAt: 0, stopped: false };
+        attempt = { count: 0, nextAt: 0, stopped: false, recorded: false };
         this.attempts.set(key, attempt);
       }
       if (attempt.stopped || attempt.nextAt > this.now()) continue;
@@ -101,6 +111,7 @@ export class ProcessAuditCollector {
           const result = await this.writer.recordTerminalObservation(ref, fact);
           // Never issue the same read after delivery or an uncertain write.
           if (result !== "unavailable") state.stopped = true;
+          state.recorded = result === "recorded" || result === "duplicate";
         })
         .catch(() => {
           state.stopped = true;

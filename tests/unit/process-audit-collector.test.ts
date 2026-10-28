@@ -189,6 +189,62 @@ it("continues tracking known observations when new references exceed the limit",
   });
 });
 
+it("releases a confirmed slot only after its terminal appears in the journal", async () => {
+  const reader = { read: vi.fn().mockResolvedValue(fact) };
+  const writer = {
+    recordTerminalObservation: vi
+      .fn<() => Promise<"recorded" | "unknown">>()
+      .mockResolvedValue("unknown"),
+  };
+  writer.recordTerminalObservation.mockResolvedValueOnce("recorded");
+  const collector = new ProcessAuditCollector(writer);
+  for (let i = 0; i < 1024; i++) {
+    const tracked = {
+      ...entry,
+      operationRef: { ...ref, operationId: `tracked-${i}` },
+    };
+    collector.observe({ ...snapshot, entries: [tracked] }, reader, () => true);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  const unseen = { ...entry, operationRef: { ...ref, operationId: "new" } };
+  collector.observe({ ...snapshot, entries: [unseen] }, reader, () => true);
+  expect(reader.read).toHaveBeenCalledTimes(1024);
+  const terminal = OperationEntrySchema.parse({
+    ...entry,
+    kind: "computer.process.terminal",
+    outcome: "done",
+    code: null,
+    operationRef: { ...ref, operationId: "tracked-0", binding: "accepted" },
+    exit: { kind: "code", value: 0 },
+  });
+  collector.observe(
+    { ...snapshot, entries: [terminal, unseen] },
+    reader,
+    () => true,
+  );
+  expect(reader.read).toHaveBeenCalledTimes(1025);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  // The unknown write keeps its fence even if a later snapshot contains a terminal.
+  const unknownTerminal = {
+    ...terminal,
+    operationRef: {
+      ...ref,
+      binding: "accepted" as const,
+      operationId: "tracked-1",
+    },
+  };
+  const another = {
+    ...entry,
+    operationRef: { ...ref, operationId: "another" },
+  };
+  collector.observe(
+    { ...snapshot, entries: [unknownTerminal, another] },
+    reader,
+    () => true,
+  );
+  expect(reader.read).toHaveBeenCalledTimes(1025);
+});
+
 it("observes a long-running process after the initial twelve checks", async () => {
   let now = 0;
   const reader = {
