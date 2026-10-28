@@ -36,6 +36,7 @@ import {
   assertPreservedEntries,
 } from "./fixtures/fresh-startup-witness.ts";
 import { reportRetiredJourney } from "../../tooling/setup-journey-retirement.mjs";
+import { assertArchivedMarker } from "./fixtures/startup-marker-evidence.mjs";
 
 const {
   savedSettings,
@@ -529,6 +530,15 @@ const preserved = async (includeStateFiles = true) => {
   }
   return result;
 };
+// Fresh admission archives the predecessor before publishing this host's run
+// marker. A later Go refusal does not put the predecessor back at that path.
+async function assertOriginalMarkerArchive(launch) {
+  launch.originalMarkerArchive = await assertArchivedMarker(
+    stateRoot,
+    retained.get("running.json"),
+    retained.get("last-quit.json"),
+  );
+}
 // Wait for these exact observed PIDs only; never kill a child to make the
 // assertion pass. Timeout retains the disposable profile and original evidence.
 async function waitForObservedChildrenExit(observed) {
@@ -808,26 +818,7 @@ async function runFreshLaunch(application, page, child, launch, before) {
   );
   // Original journals stay in place. New fresh namespaces are append-only extras.
   await preserved(false);
-  const archives = await fs.readdir(path.join(stateRoot, "run-history"));
-  const originalMarker = retained.get("running.json");
-  const matching = [];
-  for (const name of archives) {
-    const copy = await fs.readFile(
-      path.join(stateRoot, "run-history", name, "running.json"),
-    );
-    if (copy.equals(originalMarker)) matching.push(name);
-  }
-  assert.equal(matching.length, 1, "ORIGINAL_FAILED_MARKER_COPY_NOT_UNIQUE");
-  launch.originalMarkerArchive = matching[0];
-  const originalQuit = retained.get("last-quit.json");
-  const quitCopy = path.join(
-    stateRoot,
-    "run-history",
-    matching[0],
-    "last-quit.json",
-  );
-  if (originalQuit) assert.deepEqual(await fs.readFile(quitCopy), originalQuit);
-  else await assert.rejects(fs.lstat(quitCopy), { code: "ENOENT" });
+  await assertOriginalMarkerArchive(launch);
   launch.coverage = {
     home: "PASS",
     globallyLimited: false,
@@ -981,8 +972,27 @@ try {
       if (!savedSettings)
         assert.equal(launch.startupCodes[0], "SETTINGS_CORRUPT");
       launch.blocker = launch.startupCodes[0];
-      await preserved();
-      launch.cleanupConfirmed = true;
+      if (computerStoreRefusal) {
+        assert.equal(
+          JSON.parse(await fs.readFile(path.join(stateRoot, "running.json")))
+            .pid,
+          child.pid,
+          "CURRENT_FAILED_MARKER_OWNER_MISMATCH",
+        );
+        for (const name of ["config.json", "last-quit.json"])
+          assert.deepEqual(
+            await fs.readFile(path.join(stateRoot, name)),
+            retained.get(name),
+            `PREDECESSOR_CHANGED:${name}`,
+          );
+        await assertOriginalMarkerArchive(launch);
+        await preserved(false);
+        // A startup rejection does not prove settlement of its Go child.
+        launch.cleanupConfirmed = false;
+      } else {
+        await preserved();
+        launch.cleanupConfirmed = true;
+      }
       report.status = "BLOCKED";
       report.profileRetained = true;
       process.exitCode = 2;
