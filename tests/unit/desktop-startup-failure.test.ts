@@ -89,6 +89,32 @@ describe("desktop startup failure boundary", () => {
     expect(exit).toHaveBeenCalledExactlyOnceWith(1);
   });
 
+  it.each(["dev", "preview"] as const)(
+    "does not suggest restarting an unknown startup in %s, including known bridge codes",
+    async (environment) => {
+      for (const code of ["transport_ended", "backend_unavailable"]) {
+        const action = vi.fn(() => {
+          throw new BridgeError("unknown", code);
+        });
+        const failure = await runDesktopStartupBoundary(
+          "go-core",
+          action,
+        ).catch((error: unknown) => error);
+        const write = vi.fn<(message: string) => void>();
+        terminateDesktopStartup(failure, environment, {
+          write,
+          exit: () => undefined,
+        });
+        const report = write.mock.calls[0]?.[0];
+        expect(report).toContain("startup outcome is unconfirmed");
+        expect(report).toContain("Do not repeat an unconfirmed operation");
+        expect(report).not.toContain("run 'task dev' again");
+        expect(report).not.toContain("Rebuild the exact candidate");
+        expect(action).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
   it.each(["unknown", "refused", "unavailable", "unsupported"] as const)(
     "retains %s classification while redacting arbitrary bridge codes",
     async (state) => {

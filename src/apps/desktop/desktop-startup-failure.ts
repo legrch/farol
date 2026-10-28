@@ -41,6 +41,7 @@ class StartupBoundaryFailure extends Error {
   constructor(
     readonly phase: StartupPhase,
     code: string,
+    readonly outcomeUnknown: boolean,
   ) {
     super(code);
   }
@@ -56,7 +57,11 @@ export async function runDesktopStartupBoundary<T>(
   try {
     return await run();
   } catch (error) {
-    throw new StartupBoundaryFailure(phase, desktopStartupFailureCode(error));
+    throw new StartupBoundaryFailure(
+      phase,
+      desktopStartupFailureCode(error),
+      error instanceof BridgeError && error.state === "unknown",
+    );
   }
 }
 const DISPLAY_PRECONDITION_CODES = new Set([
@@ -162,28 +167,34 @@ export function desktopStartupFailureReport(
         ? "Farol Preview"
         : "Farol";
   const notice = desktopStartupFailureNotice(code);
+  const outcomeUnknown =
+    (error instanceof BridgeError && error.state === "unknown") ||
+    (error instanceof StartupBoundaryFailure && error.outcomeUnknown) ||
+    code === "GO_CORE_UNKNOWN";
   const remedy =
     code === "DEV_SECONDARY_DISPLAY_UNAVAILABLE"
       ? "No non-primary display is available. Connect a second display, then run task dev -- --display=secondary again."
       : code === "DEV_SECONDARY_DISPLAY_TOO_SMALL"
         ? "The non-primary display work area is smaller than 640 by 520. Increase its available work area before launching Dev there."
-        : notice
-          ? notice.message
-          : QUALIFICATION_DEADLINE_CODES.has(code)
-            ? "Checking the app's files exceeded the startup budget. Preserve the profile and startup records; inspect the qualification diagnostics and previous shutdown state before another launch."
-            : PREVIOUS_DRAIN_FAILURE_CODES.has(code)
-              ? "The previous session did not confirm shutdown. Preserve the existing profile and its recovery records; rebuilding the app does not settle this state. Use a qualified recovery procedure before reopening that profile."
-              : DISPLAY_PRECONDITION_CODES.has(code)
-                ? "The visible-test display requirements are not met. Check available displays and the requested viewport before launching again. For ordinary Dev that fits a second display, use task dev -- --display=secondary. Use hidden mode only for an equivalent check."
-                : environment === "owner-preview" &&
-                    code === "OWNER_PREVIEW_PROFILE_DIRECTORY_UNSAFE"
-                  ? "The Preview profile or its parent is aliased or unsafe. Preserve the existing directories and resolve their physical separation before another launch; rebuilding does not repair this state."
-                  : environment === "dev" &&
-                      code === "DEV_PROFILE_DIRECTORY_AMBIGUOUS"
-                    ? "Two distinct Dev profiles exist. Stop here and choose a profile explicitly; neither was moved or merged."
-                    : environment === "dev"
-                      ? "Fix the reported local build or configuration issue, then run 'task dev' again."
-                      : "Rebuild the exact candidate, then launch it again.";
+        : outcomeUnknown
+          ? "The startup outcome is unconfirmed. Preserve the profile and startup records, and inspect the original process and its result before deciding what to do next. Do not repeat an unconfirmed operation."
+          : notice
+            ? notice.message
+            : QUALIFICATION_DEADLINE_CODES.has(code)
+              ? "Checking the app's files exceeded the startup budget. Preserve the profile and startup records; inspect the qualification diagnostics and previous shutdown state before another launch."
+              : PREVIOUS_DRAIN_FAILURE_CODES.has(code)
+                ? "The previous session did not confirm shutdown. Preserve the existing profile and its recovery records; rebuilding the app does not settle this state. Use a qualified recovery procedure before reopening that profile."
+                : DISPLAY_PRECONDITION_CODES.has(code)
+                  ? "The visible-test display requirements are not met. Check available displays and the requested viewport before launching again. For ordinary Dev that fits a second display, use task dev -- --display=secondary. Use hidden mode only for an equivalent check."
+                  : environment === "owner-preview" &&
+                      code === "OWNER_PREVIEW_PROFILE_DIRECTORY_UNSAFE"
+                    ? "The Preview profile or its parent is aliased or unsafe. Preserve the existing directories and resolve their physical separation before another launch; rebuilding does not repair this state."
+                    : environment === "dev" &&
+                        code === "DEV_PROFILE_DIRECTORY_AMBIGUOUS"
+                      ? "Two distinct Dev profiles exist. Stop here and choose a profile explicitly; neither was moved or merged."
+                      : environment === "dev"
+                        ? "Fix the reported local build or configuration issue, then run 'task dev' again."
+                        : "Rebuild the exact candidate, then launch it again.";
   return (
     `${product} main-process startup failed before the app became ready (${code}). ${remedy}\n` +
     (error instanceof StartupBoundaryFailure
