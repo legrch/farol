@@ -32,6 +32,16 @@ type Details struct {
 	Stderr  Excerpt `json:"stderr"`
 }
 
+// Command holds only an already projected excerpt, never the original input.
+// Its zero value represents unavailable data rather than an unfiltered command.
+type Command struct{ excerpt Excerpt }
+
+// ProjectCommand runs while the original request is available. Retaining the
+// result does not retain command input, stdin or environment values.
+func ProjectCommand(value string, filter ScalarFilter) Command {
+	return Command{excerpt: cleanText(value, true, filter)}
+}
+
 // Conservative whole-field masking retains ordinary diagnostic output while
 // avoiding unqualified substring parsing of shell, URLs, headers, or credentials.
 var sensitive = regexp.MustCompile(`(?i)(authorization|set-cookie|cookie\s*[:=]|bearer\s+|basic\s+|password|passwd|passphrase|secret|credential|api[_-]?key|\btoken\b|access[_-]?token|refresh[_-]?token|private[_ -]?key|base64\s+(--decode|-d)|-----begin [a-z ]*private key-----|https?://[^/\s]+@|[?&](token|key|auth|password)=|\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})`)
@@ -132,12 +142,22 @@ func cleanBytes(value []byte, filter ScalarFilter) Excerpt {
 // Project must receive reassembled original streams, not independent read pages.
 // Unknown or incomplete capture never exposes a prefix or fallback error text.
 func Project(in Input, filter ScalarFilter) Details {
-	command := cleanText(in.Command, true, filter)
+	return ProjectWithCommand(in, ProjectCommand(in.Command, filter), filter)
+}
+
+// ProjectWithCommand combines a pre-filtered command with complete terminal
+// streams. It deliberately ignores Input.Command so raw input need not survive
+// until the process exits.
+func ProjectWithCommand(in Input, command Command, filter ScalarFilter) Details {
+	commandExcerpt := command.excerpt
+	if commandExcerpt.State == "" {
+		commandExcerpt = empty("unavailable", "filter_unavailable")
+	}
 	var details Details
 	if !in.OutputDrained || in.OutputLimited || in.StdoutOffset != 0 || in.StderrOffset != 0 || in.StdoutNext != uint64(len(in.Stdout)) || in.StderrNext != uint64(len(in.Stderr)) || in.StdoutBytes != in.StdoutNext || in.StderrBytes != in.StderrNext {
-		details = Details{Command: command, Stdout: empty("unavailable", "source_incomplete"), Stderr: empty("unavailable", "source_incomplete")}
+		details = Details{Command: commandExcerpt, Stdout: empty("unavailable", "source_incomplete"), Stderr: empty("unavailable", "source_incomplete")}
 	} else {
-		details = Details{Command: command, Stdout: cleanBytes(in.Stdout, filter), Stderr: cleanBytes(in.Stderr, filter)}
+		details = Details{Command: commandExcerpt, Stdout: cleanBytes(in.Stdout, filter), Stderr: cleanBytes(in.Stderr, filter)}
 	}
 	if encoded, err := json.Marshal(details); err != nil || len(encoded) > entryLimit {
 		if details.Stdout.State == "filtered" || details.Stdout.State == "filtered-truncated" {

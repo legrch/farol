@@ -109,3 +109,17 @@ func TestProjectionBoundsEncodedEntryWhenOutputIsIncomplete(t *testing.T) {
 		t.Fatal("incomplete capture exceeded encoded entry limit")
 	}
 }
+
+func TestCommandIsFilteredBeforeRetainedAndRawInputIsIgnored(t *testing.T) {
+	command := ProjectCommand("git --password=FAKE_SECRET", identity)
+	in := complete("raw FAKE_SECRET", "ordinary output", "")
+	got := ProjectWithCommand(in, command, identity)
+	encoded, err := json.Marshal(got)
+	if err != nil || strings.Contains(string(encoded), "FAKE_SECRET") || got.Command.Text != "[REDACTED]" || got.Stdout.Text != "ordinary output" {
+		t.Fatal("command was not filtered before retention")
+	}
+	got = ProjectWithCommand(in, Command{}, identity)
+	if got.Command.State != "unavailable" || got.Command.Text != "" {
+		t.Fatal("zero command exposed unfiltered input")
+	}
+}
