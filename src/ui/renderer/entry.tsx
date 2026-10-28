@@ -2,6 +2,11 @@ import {
   isStartupRecoveryDocument,
   startStartupRecovery,
 } from "../../../apps/desktop/renderer/recovery/entry";
+import {
+  attachUpdatesOwner,
+  startUpdatesWindow,
+} from "../../../apps/desktop/renderer/updates/entry";
+import { isUpdatesDocument } from "../../../apps/desktop/renderer/updates/contract";
 import { isCompactShell } from "../../pkg/shell-layout/geometry";
 import { parseNavigationShortcuts } from "../../pkg/ipc/navigation-shortcuts";
 import { StrictMode, useLayoutEffect, useRef } from "react";
@@ -96,6 +101,7 @@ function startApplication(): void {
   const host = document.getElementById("root");
   if (!host) throw new Error("RENDERER_ROOT_MISSING");
   const root = createRoot(host);
+  const detachUpdates = attachUpdatesOwner(controller, api);
   root.render(
     <StrictMode>
       <Services value={controller}>
@@ -119,6 +125,7 @@ function startApplication(): void {
     "pagehide",
     () => {
       root.unmount();
+      detachUpdates();
       controller.dispose();
     },
     { once: true },
@@ -128,6 +135,8 @@ function startApplication(): void {
 const documentUrl = new URL(window.location.href);
 if (isStartupRecoveryDocument(documentUrl)) {
   startStartupRecovery();
+} else if (isUpdatesDocument(documentUrl)) {
+  startUpdatesWindow();
 } else if (documentUrl.hash !== "") {
   if (!isGuideDocument(documentUrl)) {
     throw new Error("GUIDE_DOCUMENT_MODE_INVALID");

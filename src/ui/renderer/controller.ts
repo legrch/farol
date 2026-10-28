@@ -2716,6 +2716,10 @@ export class WindowController implements RendererFacade {
     // Applying admission owns presentation until a newer update result settles.
     // Host layout rejects these changes too; keep both owners on the same view.
     if (this.disposed || this.state.update.phase === "applying") return;
+    if (kind === "update" && this.api.openUpdates) {
+      this.api.openUpdates();
+      return;
+    }
     this.presentationRevision++;
     this.patch({ overlay: kind });
     this.presentation();

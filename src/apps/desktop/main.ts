@@ -44,6 +44,11 @@ import {
   ABOUT_PANEL_SIZE,
   DesktopAboutPanel,
 } from "../../../apps/desktop/about-panel";
+import {
+  DesktopUpdatesPanel,
+  UPDATES_PANEL_SIZE,
+} from "../../../apps/desktop/updates-panel";
+import { updatesChannels } from "../../../apps/desktop/renderer/updates/contract";
 import { connectorRuntimeUncertain } from "../../pkg/product-settings/connector-uncertainty";
 import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
 import { connectorVerificationProof } from "./connector-verification-proof";
@@ -884,6 +889,7 @@ if (process.platform === "darwin") {
 let window: BrowserWindow | null = null;
 let aboutOpen = false;
 let aboutPanel: DesktopAboutPanel | null = null;
+const updatesPanel = new DesktopUpdatesPanel();
 let runtimeChild: ChildProcess | null = null;
 let localRuntimeGeneration = 0;
 const ownedLocalRuntimes = new Map<LocalRuntimeLifetime, string>();
@@ -11799,6 +11805,51 @@ async function runContextFixtureControl(
 }
 
 function installIpc(): void {
+  ipcMain.on(updatesChannels.projection, (event, value: unknown) => {
+    if (
+      !isTrustedIpcSender(event, window) ||
+      !window ||
+      event.senderFrame !== window.webContents.mainFrame
+    )
+      return;
+    updatesPanel.bindOwner(window, desktopExecutionResources().directory);
+    updatesPanel.publish(event, value);
+  });
+  ipcMain.on(updatesChannels.settled, (event, value: unknown) =>
+    updatesPanel.settle(event, value),
+  );
+  ipcMain.on(updatesChannels.intent, (event, value: unknown) =>
+    updatesPanel.relay(event, value),
+  );
+  ipcMain.on(updatesChannels.close, (event) => updatesPanel.close(event));
+  ipcMain.handle(updatesChannels.state, (event) =>
+    updatesPanel.isPanel(event)
+      ? updatesPanel.state()
+      : { status: "unavailable" },
+  );
+  ipcMain.on(updatesChannels.open, (event) => {
+    if (
+      !updatesPanel.isOwner(event) ||
+      !window ||
+      quitInProgress ||
+      installedUpdateAdmission
+    )
+      return;
+    const owner = window;
+    void updatesPanel
+      .open({
+        owner,
+        directory: desktopExecutionResources().directory,
+        mode: windowMode,
+        place: () => selectedVisibleTestPlacement(UPDATES_PANEL_SIZE).bounds,
+        admitted: () =>
+          window === owner &&
+          !owner.isDestroyed() &&
+          !quitInProgress &&
+          !installedUpdateAdmission,
+      })
+      .catch(() => console.error("DESKTOP_UPDATES_PRESENTATION_FAILED"));
+  });
   const settings = configuration?.snapshot();
   if (settings?.status === "ready")
     operationsStore().setWorkspaceLabels(settings.settings.computer.workspaces);
@@ -12122,6 +12173,7 @@ function revealWindow(): void {
 function reconcileVisibleTestDisplay(): void {
   if (windowMode !== "secondary-visible") return;
   aboutPanel?.reconcile();
+  updatesPanel.reconcile();
   if (windowPresentationReady && window !== null && !window.isDestroyed()) {
     window.hide();
     try {

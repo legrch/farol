@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { recoveryChannels } from "../../../apps/desktop/renderer/recovery/contract";
 import { channels } from "../../pkg/ipc/channels";
+import { updatesChannels } from "../../../apps/desktop/renderer/updates/contract";
 
 // Recovery uses the existing attested entry with a separately selected, narrow API.
 // Recovery exposes no normal desktop handlers, publications or mutation actions.
@@ -15,8 +16,36 @@ if (process.argv.includes("--farol-startup-recovery")) {
       quit: () => ipcRenderer.send(recoveryChannels.quit),
     }),
   );
+} else if (process.argv.includes("--farol-updates")) {
+  contextBridge.exposeInMainWorld(
+    "farolUpdates",
+    Object.freeze({
+      state: () =>
+        ipcRenderer.invoke(updatesChannels.state) as Promise<unknown>,
+      onState: (listener: (state: unknown) => void) => {
+        const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) =>
+          listener(value);
+        ipcRenderer.on(updatesChannels.state, wrapped);
+        return () => ipcRenderer.removeListener(updatesChannels.state, wrapped);
+      },
+      intent: (value: unknown) =>
+        ipcRenderer.send(updatesChannels.intent, value),
+      close: () => ipcRenderer.send(updatesChannels.close),
+    }),
+  );
 } else {
   contextBridge.exposeInMainWorld("farol", {
+    openUpdates: () => ipcRenderer.send(updatesChannels.open),
+    publishUpdates: (value: unknown) =>
+      ipcRenderer.send(updatesChannels.projection, value),
+    onUpdatesCommand: (listener: (value: unknown) => void) => {
+      const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) =>
+        listener(value);
+      ipcRenderer.on(updatesChannels.command, wrapped);
+      return () => ipcRenderer.removeListener(updatesChannels.command, wrapped);
+    },
+    settleUpdates: (value: unknown) =>
+      ipcRenderer.send(updatesChannels.settled, value),
     operations: () =>
       ipcRenderer.invoke(channels.operations) as Promise<unknown>,
     installedUpdate: (command: unknown) =>

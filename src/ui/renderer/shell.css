@@ -1832,3 +1832,40 @@ kbd {
   font-size: 12px;
   z-index: 5;
 }
+body.native-updates-document {
+  overflow: auto;
+  background: var(--bg, #faf9fc);
+}
+.native-updates-document #root {
+  height: auto;
+  min-height: 100vh;
+}
+.native-updates {
+  display: block;
+  height: auto;
+  min-height: 100vh;
+  overflow: auto;
+  padding: 44px 28px 24px;
+  max-width: 480px;
+  margin: 0 auto;
+}
+.native-updates h1 {
+  font-size: 22px;
+  line-height: 1.25;
+}
+.native-updates::before {
+  content: "";
+  position: fixed;
+  inset: 0 0 auto;
+  height: 30px;
+  -webkit-app-region: drag;
+}
+.native-updates p {
+  margin: 14px 0;
+}
+.native-updates-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 24px;
+}

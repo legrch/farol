@@ -1,3 +1,4 @@
+import type { UpdatesProjection } from "../../../apps/desktop/renderer/updates/contract";
 import type { OperationEntry } from "../../../apps/desktop/renderer/operations-contract";
 import type { ConnectionStatusView } from "../../../apps/desktop/renderer/connection-status";
 import type { NavigationShortcuts } from "../../pkg/ipc/navigation-shortcuts";
@@ -26,6 +27,10 @@ import type {
 
 /** F0 is a window-local presentation facade, not the Desktop/Core wire API. */
 export type PreloadApi = Readonly<{
+  openUpdates?(): void;
+  publishUpdates?(value: UpdatesProjection): void;
+  onUpdatesCommand?(listener: (value: unknown) => void): () => void;
+  settleUpdates?(value: { sequence: number }): void;
   operations?(): Promise<unknown>;
   bootstrap(): Promise<unknown>;
   snapshot(): Promise<unknown>;

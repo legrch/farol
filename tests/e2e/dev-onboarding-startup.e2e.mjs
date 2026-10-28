@@ -452,6 +452,38 @@ try {
     "current-Settings-navigation-with-native-update-menu-and-no-Updates-page",
   );
   await save();
+  const updatePanelPromise = application.waitForEvent("window", {
+    timeout: 15000,
+  });
+  await application.evaluate(({ Menu }) => {
+    const find = (items) => {
+      for (const item of items) {
+        if (item.label === "Check for Updates…") return item;
+        const nested = item.submenu && find(item.submenu.items);
+        if (nested) return nested;
+      }
+      return null;
+    };
+    const item = find(Menu.getApplicationMenu()?.items ?? []);
+    if (!item) throw Error("UPDATE_MENU_MISSING");
+    item.click();
+  });
+  const updatePanel = await updatePanelPromise;
+  await updatePanel.getByRole("main", { name: "Farol Updates" }).waitFor();
+  assert.equal(
+    await application.evaluate(
+      ({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows().filter((item) => item.isModal()).length,
+    ),
+    0,
+  );
+  await assertHiddenWindows(application);
+  await updatePanel.getByRole("button", { name: "Done", exact: true }).click();
+  await window
+    .getByRole("button", { name: "Back to Farol", exact: true })
+    .waitFor();
+  report.checks.push("hidden-separate-nonmodal-updates-window");
+  await save();
   await settingsPage(window, "Appearance");
   await window.getByRole("button", { name: "Graphite", exact: true }).click();
   await window
