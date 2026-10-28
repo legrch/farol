@@ -16,10 +16,9 @@ export class ProcessAuditBridge {
   ): Promise<ComputerProcessTerminalAudit | null> {
     if (!validate("ComputerProcessAuditRequest", reference))
       throw new BridgeError("refused", "process_audit_reference_invalid");
-    const outcome = await this.client.request(
-      "computer.process.audit",
-      { ...reference },
-    );
+    const outcome = await this.client.request("computer.process.audit", {
+      ...reference,
+    });
     if (
       outcome.status !== "ok" ||
       !validate("ComputerProcessAuditResult", outcome.data)
