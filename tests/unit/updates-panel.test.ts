@@ -283,6 +283,11 @@ describe("Updates panel native fixture (no Electron process or installed updater
     {
       phase: "idle",
       checkedAt: null,
+      blockedBy: "UPDATE_QUIT_ELIGIBILITY_UNCONFIRMED",
+    },
+    {
+      phase: "idle",
+      checkedAt: null,
       automaticUpdatePreference: {
         status: "unknown",
         enabled: false,

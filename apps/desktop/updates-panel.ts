@@ -192,7 +192,11 @@ export class DesktopUpdatesPanel {
           ? view.installOnQuitPreference.code
           : undefined,
     ];
-    if (codes.some((code) => code?.includes("UNKNOWN"))) {
+    if (
+      codes.some(
+        (code) => code?.includes("UNKNOWN") || code?.includes("UNCONFIRMED"),
+      )
+    ) {
       this.directAmbiguous = true;
       return;
     }
