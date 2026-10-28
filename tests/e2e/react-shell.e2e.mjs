@@ -393,7 +393,7 @@ try {
   );
   for (const x of [
     shellGeometry.sidebarRail,
-    shellGeometry.sidebarRail + shellGeometry.pageListDefault,
+    shellGeometry.sidebarRail + shellGeometry.pageListMin,
   ]) {
     await app.evaluate(({ Menu }) =>
       Menu.getApplicationMenu().getMenuItemById("view.toggle-sidebar").click(),
@@ -406,8 +406,8 @@ try {
       "NATIVE_MENU_SIDEBAR_BOUNDS",
     );
     assert.equal(
-      await page.locator(".contextual-sidebar").count(),
-      x === shellGeometry.sidebarRail ? 0 : 1,
+      await page.locator(".desktop").getAttribute("data-sidebar"),
+      x === shellGeometry.sidebarRail ? "rail" : "full",
       "NATIVE_MENU_RENDERER_SIDEBAR",
     );
   }
@@ -449,9 +449,8 @@ try {
     "BROWSER_LIFETIME_CHANGED",
   );
   // Resize and compact sidebar are host-owned geometry, not CSS stacking proof.
-  await page
-    .getByRole("button", { name: "Toggle sidebar", exact: true })
-    .click();
+  const sidebarToggle = page.locator('button[aria-controls="main-sidebar"]');
+  await sidebarToggle.click();
   await app.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows()[0].setContentSize(740, 620),
   );
@@ -469,24 +468,27 @@ try {
     true,
     "COMPACT_RAIL_HID_BROWSER",
   );
-  await page
-    .getByRole("button", { name: "Toggle sidebar", exact: true })
-    .click();
+  await sidebarToggle.click();
   await page.waitForTimeout(100);
   compactState = await surfaces();
-  await assertBrowserDetachedAndAlive(
-    compactState,
-    "COMPACT_SIDEBAR_OCCLUSION",
+  assert.equal(
+    compactState
+      .flatMap((window) => window.views)
+      .find((view) => view.id === browserId)?.bounds.x,
+    shellRailWidth(740),
+    "COMPACT_LABEL_TOGGLE_CHANGED_BROWSER_BOUNDS",
   );
-  await page
-    .getByRole("button", { name: "Close sidebar", exact: true })
-    .click();
+  assert.equal(
+    compactState
+      .flatMap((window) => window.views)
+      .find((view) => view.id === browserId)?.visible,
+    true,
+    "COMPACT_LABEL_TOGGLE_HID_BROWSER",
+  );
   await app.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows()[0].setContentSize(1180, 760),
   );
-  await page
-    .getByRole("button", { name: "Toggle sidebar", exact: true })
-    .click();
+  await sidebarToggle.click();
   // Synthetic task projection through the real named preload event. This
   // qualifies Chromium field behavior, not backend task admission/lifetime.
   const taskId = "renderer-composition-fixture";

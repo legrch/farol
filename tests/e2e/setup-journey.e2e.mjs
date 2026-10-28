@@ -1297,12 +1297,14 @@ async function runScenario(scenario) {
           () =>
             page.evaluate(() => ({
               warning: document.querySelector(".home-health-warning") !== null,
-              badge: document
-                .querySelector('.rail [aria-label="Setup"]')
-                ?.getAttribute("title"),
+              checking:
+                document.querySelector(".home-connection-progress") !== null,
+              confirmed:
+                document.querySelector(
+                  '.home-status-card[aria-label="Connection status"] h2',
+                )?.textContent === "Farol is working",
             })),
-          (value) =>
-            !value.warning && value.badge?.includes("4 of 4 checks current"),
+          (value) => !value.warning && !value.checking && value.confirmed,
           "AUTO_HOME_RENDERER_CHECK_UNSETTLED",
           30000,
         );
