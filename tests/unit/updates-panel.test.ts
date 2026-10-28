@@ -252,6 +252,29 @@ describe("Updates panel native fixture (no Electron process or installed updater
       expect((replacement as any).webContents.send).not.toHaveBeenCalled();
     },
   );
+  it.each(["pending", "unknown"] as const)(
+    "fences a lost owner with a direct update %s and no panel relay",
+    async (outcome) => {
+      const f = await fixture();
+      // A Settings or notification command can be unresolved without ever
+      // entering the panel relay. Its projection is not permission to retry.
+      f.panel.publish(event(f.owner), {
+        ...projection,
+        outcome,
+        allowed: { ...projection.allowed, check: false, automatic: false },
+      });
+      f.owner.close();
+      const replacement = new BrowserWindow({});
+      await replacement.loadURL("file:///app/shell.html");
+      f.panel.bindOwner(replacement, "/app");
+      f.panel.publish(event(replacement), projection);
+      await f.panel.open({ ...f.options, owner: replacement });
+      f.panel.relay(event(f.window), { kind: "check" });
+      expect(f.panel.state()).toEqual({ status: "unavailable" });
+      expect(f.owner.webContents.send).not.toHaveBeenCalled();
+      expect((replacement as any).webContents.send).not.toHaveBeenCalled();
+    },
+  );
   it("retains UNKNOWN through a later ready projection and panel reopening", async () => {
     const f = await fixture();
     f.panel.publish(event(f.owner), {
