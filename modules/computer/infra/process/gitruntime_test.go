@@ -207,7 +207,7 @@ func TestGitRuntimeEmptyDataAndFrozenInput(t *testing.T) {
 }
 
 func TestGitRuntimeDeclaredProfileFitsNativeCommandLimit(t *testing.T) {
-	raw, err := os.ReadFile("../../../../tooling/shell-platform.json")
+	raw, err := os.ReadFile("../../../../tests/fixtures/shell-platform-clt-legacy.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +331,7 @@ func TestGitRuntimeRetainedDescriptorsConsumeOnResourceDrift(t *testing.T) {
 
 // Literal declaration fixtures only; packaged native preparation is separate.
 func TestGitRuntimePackagedProfileReusesPathParameters(t *testing.T) {
-	raw, err := os.ReadFile("../../../../tooling/shell-platform.json")
+	raw, err := os.ReadFile("../../../../tests/fixtures/shell-platform-clt-legacy.json")
 	if err != nil {
 		t.Fatal(err)
 	}

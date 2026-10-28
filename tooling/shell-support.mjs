@@ -231,6 +231,9 @@ export async function declareShellSupport(repositoryRoot, core, identity) {
     mechanism: SHELL_PLATFORM.mechanism,
     imports: SHELL_PLATFORM.imports,
     executables: SHELL_PLATFORM.executables,
+    ...(SHELL_PLATFORM.hostRuntimePolicy
+      ? { hostRuntimePolicy: SHELL_PLATFORM.hostRuntimePolicy }
+      : {}),
     ...(SHELL_PLATFORM.gitRuntimeResources
       ? { gitRuntimeResources: SHELL_PLATFORM.gitRuntimeResources }
       : {}),

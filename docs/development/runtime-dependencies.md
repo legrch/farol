@@ -55,6 +55,42 @@ Explicit user-selected Codex/Claude executables and authorized user Git hooks ma
 require their own toolchains, including Python. No runtime guard grants those
 tools authority or widens generic Shell networking.
 
+## Installed Shell programs
+
+The selected `installed-host-runtime-v1` policy discovers supported installed
+Git and Python layouts in Homebrew Cellar, Command Line Tools, or Xcode. They
+remain optional user tools, not Farol runtime dependencies or bundled programs.
+An absent or unsupported optional installation contributes no authority and does
+not disable the base Shell or Computer file operations. Discovery does not run
+version commands, package managers, shell startup files, or ambient PATH tools.
+
+The Go owner binds canonical image paths, owner/mode, physical identities, SHA-256,
+Mach-O architecture/dependencies, directory membership and symlink targets into
+the original invocation. The bounded inventory is checked again under the same
+preparation deadline before dispatch. A changed inventory refuses that attempt;
+it does not refresh the plan, extend its deadline, or replay an operation.
+
+This is an explicitly accepted mutable installed environment assurance. Selected
+Homebrew ancestors can be group-writable and are recorded as such. They never
+qualify as protected platform paths, and this policy promises no atomic defence
+against a concurrent replacement by the same account. The guest cannot write
+its selected runtime files or ancestors. Root-volume restrictions, approved data
+roots, credential exclusions and Shell NoNetwork remain effective. Arbitrary
+external interpreters or unknown installation layouts are not silently admitted.
+
+Only selected runtime data trees and literal executable files are granted.
+`site-packages` and `.git` subtrees are excluded. The command environment uses
+selected physical binary directories before the fixed system base, without
+inheriting ambient PATH. Python cannot write bytecode or load user site packages.
+Git system configuration is suppressed; approved user Git settings retain their
+existing literal read scope. Without that approval global configuration stays
+suppressed. Hooks execute through Git within the same approved workspace policy;
+this does not grant a hook additional data or network access.
+
+Historical fixed CLT declarations remain explicit compatibility fixtures. Their
+nil/default compiler digests and confinement predicates are unchanged; they do
+not describe the selected installed-runtime mode.
+
 ## Lightweight regression checks
 
 Run `npm run runtime:check`. The existing CI includes it. The semantic manifest

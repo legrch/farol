@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,13 +23,26 @@ import (
 
 // Actual CLT data and Seatbelt, using disposable HOME/project only. No extra
 // toolchain workspace, system-config override, external MCP or product claim.
-func TestNativeCLTGitRuntimeResources(t *testing.T) { nativeCLTGitRuntimeResources(t, false, false) }
-func TestNativePinnedPythonGitHooks(t *testing.T)   { nativeCLTGitRuntimeResources(t, true, false) }
-func TestNativePinnedPythonGitScopeRefusals(t *testing.T) {
-	nativeCLTGitRuntimeResources(t, true, true)
+func TestNativeCLTGitRuntimeResources(t *testing.T) {
+	nativeCLTGitRuntimeResources(t, false, false, false)
 }
-func nativeCLTGitRuntimeResources(t *testing.T, python, security bool) {
-	raw, err := os.ReadFile("../../../../tooling/shell-platform.json")
+func TestNativePinnedPythonGitHooks(t *testing.T) {
+	nativeCLTGitRuntimeResources(t, true, false, false)
+}
+func TestNativePinnedPythonGitScopeRefusals(t *testing.T) {
+	nativeCLTGitRuntimeResources(t, true, true, false)
+}
+
+// Uses installed program discovery and disposable HOME/project only. This is
+// a native confinement journey, not product packaging or live MCP acceptance.
+func TestNativeInstalledPythonGitHooks(t *testing.T) {
+	nativeCLTGitRuntimeResources(t, true, false, true)
+}
+func TestNativeInstalledPythonGitScopeRefusals(t *testing.T) {
+	nativeCLTGitRuntimeResources(t, true, true, true)
+}
+func nativeCLTGitRuntimeResources(t *testing.T, python, security, installed bool) {
+	raw, err := os.ReadFile("../../../../tests/fixtures/shell-platform-clt-legacy.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,6 +59,26 @@ func nativeCLTGitRuntimeResources(t *testing.T, python, security bool) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
+	var hostRuntime *HostRuntimePlan
+	if installed {
+		hostRuntime, err = DiscoverInstalledHostRuntime(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(hostRuntime.frozen.Installations) != 2 {
+			t.Skip("Git/Python native journey requires optional installed programs")
+		}
+		r = &GitRuntimeResources{}
+		for _, image := range hostRuntime.frozen.Installations {
+			if image.Kind == "git" {
+				for _, n := range hostRuntime.frozen.Nodes {
+					if n.Path == image.Image {
+						r.Git = ExecutablePin{n.Path, n.SHA256}
+					}
+				}
+			}
+		}
+	}
 	for _, pin := range r.resourceFiles() {
 		f, err := (nativePlatformFacts{}).gitRuntimeFile(ctx, pin.Path)
 		if err != nil || f.sha256 != pin.SHA256 || f.uid != 0 || f.links != 1 {
@@ -112,7 +146,7 @@ func nativeCLTGitRuntimeResources(t *testing.T, python, security bool) {
 	for _, p := range []string{project, home, linked, filepath.Join(project, ".git"), filepath.Join(project, ".git/hooks")} {
 		must(os.Mkdir(p, 0700))
 	}
-	must(os.WriteFile(filepath.Join(home, ".gitconfig"), []byte("[user]\n\tname = Farol fixture\n\temail = fixture@example.invalid\n[core]\n\tuntrackedCache = true\n"), 0600))
+	must(os.WriteFile(filepath.Join(home, ".gitconfig"), []byte("[user]\n\tname = Farol fixture\n\temail = fixture@example.invalid\n[init]\n\tdefaultBranch = main\n[core]\n\tuntrackedCache = true\n"), 0600))
 	must(os.WriteFile(filepath.Join(project, "source.txt"), []byte("fixture\n"), 0600))
 	must(os.WriteFile(filepath.Join(project, ".git/hooks/pre-commit"), []byte("#!/bin/sh\nset -eu\nproof=$(git rev-parse --git-path hook-proof)\nprintf 'hook-ran\\n' > \"$proof\"\n"), 0700))
 	s, command := rootScopedFixture(t)
@@ -146,7 +180,18 @@ Path(proof).write_text('hook-ran\n')
 		r = cloneGitRuntime(r)
 		r.Python = nil
 	}
+	s.UserGitSettings = true
+	s.Snapshot.Approval.Workspaces[0].GitHistoryApproved = true
 	s.GitRuntimeResources = r
+	if installed {
+		s.GitRuntimeResources = nil
+		s.HostRuntime = hostRuntime
+		raw, e := os.ReadFile("../../../../tooling/shell-platform.json")
+		must(e)
+		var base struct{ Executables []ExecutablePin }
+		must(json.Unmarshal(raw, &base))
+		s.Executables = base.Executables
+	}
 	s.RootVolumeOnly = true
 	s.Snapshot.Participant.Grant.Workspaces[0].Root = base
 	s.Snapshot.Approval.Workspaces[0].Root = base
@@ -154,6 +199,11 @@ Path(proof).write_text('hook-ran\n')
 	command.Root, command.Cwd, command.RootIdentity = base, project, identity(base)
 	command.Executable, command.ExecutableSHA256 = "/bin/bash", s.Executables[0].SHA256
 	script := "set -eu\ngit=\"$1\"\nlinked=\"$2\"\n\"$git\" init -q\nattributes=$(\"$git\" check-attr diff -- fixture.swift)\ntest \"$attributes\" = \"fixture.swift: diff: swift\"\ntest \"$(\"$git\" config --get init.defaultBranch)\" = main\ntest -f .git/hooks/pre-push.sample\n\"$git\" add source.txt\n\"$git\" commit -qm 'fixture: verify CLT runtime resources'\ntest \"$(cat .git/hook-proof)\" = hook-ran\ntest \"$(\"$git\" log -1 --format=%s)\" = 'fixture: verify CLT runtime resources'\nstatus=$(\"$git\" status --porcelain)\ntest -z \"$status\"\n\"$git\" worktree add -q -b linked \"$linked\"\nprintf 'linked\\n' > \"$linked/linked.txt\"\n\"$git\" -C \"$linked\" add linked.txt\n\"$git\" -C \"$linked\" commit -qm 'fixture: verify CLT linked worktree'\nstatus=$(\"$git\" -C \"$linked\" status --porcelain)\ntest -z \"$status\"\ntest \"$(cat .git/worktrees/linked/hook-proof)\" = hook-ran\nprintf 'git-resource-journey-completed\\n'\n"
+	if installed {
+		script = strings.Replace(script, `attributes=$("$git" check-attr diff -- fixture.swift)
+test "$attributes" = "fixture.swift: diff: swift"
+`, "", 1)
+	}
 	if python {
 		script = strings.Replace(script, `"$git" add source.txt`, `"$git" add source.txt policies`, 1)
 		negative := `
@@ -173,7 +223,15 @@ printf 'fixture\n' > source.txt
 		script = strings.Replace(script, `"$git" add source.txt policies`, `"$git" add source.txt policies foreign-hook foreign-interpreter foreign-dependency`, 1)
 		must(os.WriteFile(filepath.Join(denied, "canary"), []byte("denied-unchanged\n"), 0600))
 		must(os.WriteFile(filepath.Join(denied, "commit-msg"), []byte("#!/bin/sh\nexit 0\n"), 0700))
-		image, e := os.ReadFile(pythonRuntimeImage)
+		pythonImage := pythonRuntimeImage
+		if installed {
+			for _, v := range hostRuntime.frozen.Installations {
+				if v.Kind == "python" {
+					pythonImage = v.Image
+				}
+			}
+		}
+		image, e := os.ReadFile(pythonImage)
 		must(e)
 		must(os.WriteFile(filepath.Join(denied, "python3"), image, 0700))
 		must(os.WriteFile(filepath.Join(denied, "forbidden.py"), []byte("verified=True\n"), 0600))
@@ -186,6 +244,8 @@ printf 'fixture\n' > source.txt
 		must(os.WriteFile(filepath.Join(project, "foreign-dependency/commit-msg"), []byte("#!/usr/bin/env python3\nimport sys\nsys.path.insert(0,"+strconv.Quote(denied)+")\nimport forbidden\n"), 0700))
 		negative := `
 head=$(git rev-parse HEAD)
+if result=$(python3 -c 'import socket; s=socket.socket(); s.connect(("127.0.0.1", __FAROL_NETWORK_PORT__))' 2>&1); then exit 83; else test "$?" = 1; fi
+case "$result" in *"Operation not permitted"*) ;; *) exit 84;; esac
 for hooks in foreign-hook foreign-interpreter foreign-dependency; do
     if result=$("$PWD/$hooks/commit-msg" .git/COMMIT_EDITMSG 2>&1); then exit 73; else code=$?; fi
     if test "$hooks" = foreign-dependency; then test "$code" = 1; else test "$code" = 126; fi
@@ -208,8 +268,25 @@ case "$result" in *"Operation not permitted"*) ;; *) exit 77;; esac
 `
 		script = strings.Replace(script, "printf 'git-resource-journey-completed", negative+"\nprintf 'git-resource-journey-completed", 1)
 	}
+	if security {
+		listener, e := net.Listen("tcp4", "127.0.0.1:0")
+		must(e)
+		defer listener.Close()
+		script = strings.ReplaceAll(script, "__FAROL_NETWORK_PORT__", strconv.Itoa(listener.Addr().(*net.TCPAddr).Port))
+	}
 	command.Args, command.Write = []string{"-c", script, "fixture", r.Git.Path, linked, denied}, true
 	command.Environment = seatbeltEnvironment(s, true)
+	if security {
+		// Existing root-scoped policy refuses preparation when an old explicit
+		// exclusion overlaps the selected root. Do not silently discard it.
+		excluded := s
+		approval := s.Snapshot.Approval.Clone()
+		approval.ExcludedPaths = append(approval.ExcludedPaths, authority.Exclusion{WorkspaceID: s.WorkspaceID, Path: filepath.Join(home, ".ssh")})
+		excluded.Snapshot.Approval = &approval
+		if _, err := compileSeatbelt(excluded, command); err == nil {
+			t.Fatal("explicit exclusion discarded")
+		}
+	}
 	plan, err := compileSeatbelt(s, command)
 	must(err)
 	policy, err := NewSeatbelt(s, &confinementEvidenceDouble{})
@@ -230,7 +307,7 @@ case "$result" in *"Operation not permitted"*) ;; *) exit 77;; esac
 	child.Stdout, child.Stderr = out, diagnostic
 	must(configure(child))
 	must(child.Start())
-	t.Logf("one CLT native journey: pid=%d GitSHA256=%s profileSHA256=%s", child.Process.Pid, r.Git.SHA256, plan.digest)
+	t.Logf("one scoped native journey: pid=%d GitSHA256=%s profileSHA256=%s", child.Process.Pid, r.Git.SHA256, plan.digest)
 	done := make(chan error, 1)
 	go func() { done <- child.Wait() }()
 	select {
@@ -263,8 +340,8 @@ case "$result" in *"Operation not permitted"*) ;; *) exit 77;; esac
 		if string(actual) != "denied-unchanged\n" {
 			t.Fatal("outside canary changed")
 		}
-		t.Log("direct outside hook symlink/interpreter/dependency execution and configuration/file reads refused; HEAD and canary unchanged; Git skipping inaccessible hooks is not certified")
+		t.Log("connection to an owned live loopback listener, preparation with explicit exclusions, direct outside hook symlink/interpreter/dependency execution and configuration/file reads refused; HEAD and canary unchanged; Git skipping inaccessible hooks is not certified")
 	}
 	accepted = true
-	t.Log("actual CLT config/templates, ordinary synthetic HOME config, hooks, init/commit/log/worktree and root/output terminal passed; no live MCP or arbitrary descendant claim")
+	t.Log("selected runtime templates, ordinary synthetic HOME config, hooks, init/commit/log/worktree and root/output terminal passed; no live MCP or arbitrary descendant claim")
 }

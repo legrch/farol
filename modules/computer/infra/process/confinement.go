@@ -94,6 +94,7 @@ type SeatbeltSelection struct {
 	Git                 GitPolicy
 	GitRead             *GitReadSelection
 	GitRuntimeResources *GitRuntimeResources `json:",omitempty"`
+	HostRuntime         *HostRuntimePlan     `json:",omitempty"`
 	// Exact owner-approved read-only Git configuration literals, never HOME access.
 	UserGitSettings bool `json:",omitempty"`
 }
@@ -117,6 +118,7 @@ type confinedLaunch struct {
 	protectedBundle     *ProtectedBundle
 	qualification       Qualification
 	gitRuntimeResources *GitRuntimeResources
+	hostRuntime         *HostRuntimePlan
 }
 
 func NewSeatbelt(selection SeatbeltSelection, qualification Qualification) (*Seatbelt, error) {
@@ -144,6 +146,7 @@ func NewSeatbelt(selection SeatbeltSelection, qualification Qualification) (*Sea
 	selection.ProtectedBundle = cloneProtectedBundle(selection.ProtectedBundle)
 	selection.MountDenials = slices.Clone(selection.MountDenials)
 	selection.GitRuntimeResources = cloneGitRuntime(selection.GitRuntimeResources)
+	selection.HostRuntime = cloneHostRuntime(selection.HostRuntime)
 	if selection.GitRead != nil {
 		binding := *selection.GitRead
 		selection.GitRead = &binding
@@ -194,7 +197,7 @@ func selectedLaunch(qualification Qualification, command Command) (*confinedLaun
 		return nil, &processsvc.NativeFailure{}
 	}
 	return &confinedLaunch{command: wrapped, pins: slices.Concat([]ExecutablePin{{seatbeltExecutable, selected.selection.MechanismSHA256}}, selected.selection.Executables, selected.selection.ProtectedImages),
-		gitRuntimeResources: cloneGitRuntime(selected.selection.GitRuntimeResources), protectedBundle: cloneProtectedBundle(selected.selection.ProtectedBundle), roots: append([]rootScopeBinding(nil), plan.roots...), gitDirectories: append([]gitReadDirectory(nil), plan.gitDirectories...), scratch: selected.selection.Scratch, scratchIdentity: selected.selection.ScratchIdentity, qualification: selected.qualification}, nil
+		gitRuntimeResources: cloneGitRuntime(selected.selection.GitRuntimeResources), hostRuntime: cloneHostRuntime(selected.selection.HostRuntime), protectedBundle: cloneProtectedBundle(selected.selection.ProtectedBundle), roots: append([]rootScopeBinding(nil), plan.roots...), gitDirectories: append([]gitReadDirectory(nil), plan.gitDirectories...), scratch: selected.selection.Scratch, scratchIdentity: selected.selection.ScratchIdentity, qualification: selected.qualification}, nil
 }
 
 // Qualify delegates the exact wrapped invocation to the existing evidence port.
@@ -270,6 +273,9 @@ func protectedScope(root, home string) bool {
 }
 
 func validSelection(s SeatbeltSelection) bool {
+	if s.HostRuntime != nil && (!s.HostRuntime.valid() || s.GitRuntimeResources != nil || s.FilePolicy != authority.RootScopedFiles) {
+		return false
+	}
 	if s.UserGitSettings {
 		if s.FilePolicy != authority.RootScopedFiles || s.Git != RootScopedGit || s.Snapshot.Approval == nil {
 			return false
@@ -422,7 +428,7 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 	}
 	add("subpath", s.Scratch, &reads)
 	add("subpath", s.Scratch, &writes)
-	var resourceVolume, pythonRules []string
+	var resourceVolume, pythonRules, hostVolume []string
 	if r := s.GitRuntimeResources; r != nil {
 		for _, file := range r.resourceFiles() {
 			if insidePolicy(pythonRuntimeRoot, file.Path) {
@@ -454,6 +460,42 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 					seenParents[ancestor] = true
 					add("literal", ancestor, &parents)
 				}
+			}
+		}
+	}
+	if r := s.HostRuntime; r != nil {
+		underTree := func(p string) bool {
+			return slices.ContainsFunc(r.frozen.ReadTrees, func(root string) bool { return insidePolicy(root, p) })
+		}
+		literal := func(kind, p string) string { return fmt.Sprintf("(%s %s)", kind, strconv.Quote(p)) }
+		for _, root := range r.frozen.ReadTrees {
+			rule := literal("subpath", root)
+			reads = append(reads, rule)
+			executableWrites = append(executableWrites, rule)
+			hostVolume = append(hostVolume, rule)
+			for _, child := range []string{"site-packages", ".git"} {
+				denies = append(denies, literal("subpath", filepath.Join(root, child)))
+			}
+		}
+		for _, root := range r.frozen.DeniedTrees {
+			denies = append(denies, literal("subpath", root))
+		}
+		for _, file := range r.frozen.ReadFiles {
+			if !underTree(file) {
+				rule := literal("literal", file)
+				reads = append(reads, rule)
+				executableWrites = append(executableWrites, rule)
+				hostVolume = append(hostVolume, rule)
+			}
+		}
+		for _, file := range r.frozen.ExecFiles {
+			execs = append(execs, literal("literal", file))
+		}
+		for _, node := range r.frozen.Nodes {
+			if node.Kind != "file" && !underTree(node.Path) {
+				rule := literal("literal", node.Path)
+				parents = append(parents, rule)
+				executableWrites = append(executableWrites, rule)
 			}
 		}
 	}
@@ -560,6 +602,9 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		source += "\n(deny process-exec " + strings.Join(resourceVolume, " ") + ")"
 		source += "\n(deny file-read* file-write* process-exec (require-all (require-any " + strings.Join(resourceVolume, " ") + ") (require-not (require-all (mount-root-literal \"/\") (filesystem-name \"apfs\")))))"
 	}
+	if len(hostVolume) > 0 {
+		source += "\n(deny file-read* file-write* process-exec (require-all (require-any " + strings.Join(hostVolume, " ") + ") (require-not (require-all (mount-root-literal \"/\") (filesystem-name \"apfs\")))))"
+	}
 	if s.RootVolumeOnly {
 		// The kernel evaluates the mount root on every access, including volumes
 		// attached after execution starts. Data firmlinks have logical mount root /.
@@ -642,7 +687,8 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		ProtectedBundle     *ProtectedBundle     `json:",omitempty"`
 		GitRuntimeResources *GitRuntimeResources `json:",omitempty"`
 		UserGitSettings     bool                 `json:",omitempty"`
-	}{source, arguments, s.ScratchIdentity, s.Executables, s.ProtectedImages, sealedRoots, s.GitRead, gitDirectories, s.ProtectedBundle, s.GitRuntimeResources, s.UserGitSettings})
+		HostRuntime         *HostRuntimePlan     `json:",omitempty"`
+	}{source, arguments, s.ScratchIdentity, s.Executables, s.ProtectedImages, sealedRoots, s.GitRead, gitDirectories, s.ProtectedBundle, s.GitRuntimeResources, s.UserGitSettings, s.HostRuntime})
 	if err != nil {
 		return refuse()
 	}
@@ -663,6 +709,15 @@ func seatbeltEnvironment(s SeatbeltSelection, write bool) []string {
 		}
 	}
 	slices.Sort(dirs)
+	if s.HostRuntime != nil {
+		selected := slices.Clone(s.HostRuntime.frozen.Path)
+		for _, dir := range dirs {
+			if !slices.Contains(selected, dir) {
+				selected = append(selected, dir)
+			}
+		}
+		dirs = selected
+	}
 	locks := "0"
 	if write {
 		locks = "1"
@@ -673,6 +728,12 @@ func seatbeltEnvironment(s SeatbeltSelection, write bool) []string {
 		// hooks keep their normal scoped behavior. HOME alone grants no access.
 		environment := []string{"HOME=" + s.Home, "TMPDIR=" + s.Scratch, "XDG_CONFIG_HOME=" + filepath.Join(s.Home, ".config"),
 			"PATH=" + strings.Join(dirs, ":"), "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=" + locks, "LANG=C", "LC_ALL=C"}
+		if s.HostRuntime != nil {
+			environment = append(environment, "PYTHONDONTWRITEBYTECODE=1", "PYTHONNOUSERSITE=1", "GIT_CONFIG_SYSTEM=/dev/null")
+			if s.HostRuntime.frozen.GitExecPath != "" {
+				environment = append(environment, "GIT_EXEC_PATH="+s.HostRuntime.frozen.GitExecPath, "GIT_TEMPLATE_DIR="+s.HostRuntime.frozen.GitTemplateDirectory)
+			}
+		}
 		if s.Git == RootScopedGit && !s.UserGitSettings {
 			environment[2] = "XDG_CONFIG_HOME=" + s.Scratch
 			environment = append(environment, "GIT_CONFIG_GLOBAL=/dev/null")

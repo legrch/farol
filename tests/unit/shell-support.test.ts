@@ -783,3 +783,26 @@ describe("finite CLT Python resource boundary", () => {
     expect(get).not.toHaveBeenCalled();
   });
 });
+
+it("requires an explicit closed installed-runtime policy bound to trusted support", () => {
+  const input = {
+    ...fixture(),
+    hostRuntimePolicy: "installed-host-runtime-v1",
+  };
+  expect(parseShellSupportDeclaration(input).hostRuntimePolicy).toBe(
+    "installed-host-runtime-v1",
+  );
+  expect(() =>
+    bindShellSupportDeclaration(input, fixture(), input.core),
+  ).toThrow("shell_support_binding_mismatch");
+  for (const policy of [
+    undefined,
+    null,
+    "",
+    "ambient-path",
+    "installed-host-runtime-v2",
+    true,
+  ]) {
+    invalid({ ...fixture(), hostRuntimePolicy: policy });
+  }
+});

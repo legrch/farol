@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"reflect"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -387,4 +388,59 @@ func TestRetainedMeasurementLateImageDriftRefusesInitialCapture(t *testing.T) {
 	}
 	assertMeasurementRefused(t, err)
 	fs.assertCloses(t, 1)
+}
+
+type hostRuntimeMeasurementFilesystemDouble struct {
+	*measurementFilesystemDouble
+	runtime *hostRuntimeFixtureFS
+}
+
+func (f *hostRuntimeMeasurementFilesystemDouble) checkHostRuntime(ctx context.Context, p *HostRuntimePlan) error {
+	return p.recheck(ctx, f.runtime)
+}
+func TestRetainedInstalledRuntimeCannotRefreshOrRenewPreparation(t *testing.T) {
+	for _, mode := range []string{"drift", "cancelled", "missing-reader"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			runtime := runtimeFixture()
+			p, err := buildRuntimeFixture(runtime)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, command, launch, base := rootMeasurementFixture(t)
+			launch.hostRuntime = p
+			var fs launchFilesystem = &hostRuntimeMeasurementFilesystemDouble{base, runtime}
+			if mode == "missing-reader" {
+				fs = base
+			}
+			m, err := retainLaunchFiles(ctx, command, launch, fs)
+			if mode == "missing-reader" {
+				if err == nil {
+					m.Close()
+					t.Fatal("unimplemented runtime fact reader accepted")
+				}
+				base.assertCloses(t, 1)
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m.Recheck(context.Background()) != nil {
+				t.Fatal("initial immutable plan refused")
+			}
+			// A caller cannot swap the snapshot retained by this original invocation.
+			p.frozen.ExecFiles = nil
+			if mode == "drift" {
+				n := runtime.nodes["/install/bin/git-real"]
+				n.SHA256 = strings.Repeat("f", 64)
+				runtime.nodes[n.Path] = n
+			} else {
+				cancel()
+			}
+			assertMeasurementRefused(t, m.Recheck(context.Background()))
+			assertMeasurementRefused(t, m.Recheck(context.Background()))
+			base.assertCloses(t, 1)
+		})
+	}
 }

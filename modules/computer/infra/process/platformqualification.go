@@ -44,6 +44,7 @@ type RootScopedPlatformSupport struct {
 	Executables                                                     []ExecutablePin
 	ProtectedBundle                                                 *ProtectedBundle     `json:",omitempty"`
 	GitRuntimeResources                                             *GitRuntimeResources `json:",omitempty"`
+	HostRuntimePolicy                                               string               `json:",omitempty"`
 }
 
 // PlatformStrategyBinding is value-only input to the original supervised
@@ -132,6 +133,9 @@ func newRootScopedPlatformStrategy(ctx context.Context, support RootScopedPlatfo
 var platformBuildPattern = regexp.MustCompile(`^[0-9]{1,3}[A-Z][0-9]{1,6}[a-z]?$`)
 
 func validPlatformSupport(s RootScopedPlatformSupport) bool {
+	if s.HostRuntimePolicy != "" && (s.HostRuntimePolicy != InstalledHostRuntimeAssurance || s.GitRuntimeResources != nil || s.FilesystemClass != rootScopedMountBoundaryClass) {
+		return false
+	}
 	if !validGitRuntime(s.GitRuntimeResources, s.Executables) || (s.GitRuntimeResources != nil && s.FilesystemClass != rootScopedMountBoundaryClass) {
 		return false
 	}
@@ -299,6 +303,10 @@ func (s *RootScopedPlatformStrategy) Select(ctx context.Context, policy Seatbelt
 		return refuse()
 	}
 	d := s.frozen.descriptor
+	if (d.HostRuntimePolicy == InstalledHostRuntimeAssurance) != (policy.HostRuntime != nil) ||
+		(policy.HostRuntime != nil && !policy.HostRuntime.valid()) {
+		return refuse()
+	}
 	if !sameGitRuntime(policy.GitRuntimeResources, d.GitRuntimeResources) || !sameProtectedBundle(policy.ProtectedBundle, d.ProtectedBundle) || policy.MechanismSHA256 != d.Mechanism.SHA256 || !slices.Equal(policy.Executables, d.Executables) ||
 		watchdog.Executable != d.Watchdog || watchdog.SourceSHA256 != d.WatchdogSourceSHA256 ||
 		len(watchdog.Source) == 0 || len(watchdog.Source) > 64*1024 || !utf8.Valid(watchdog.Source) {
@@ -320,6 +328,7 @@ func (s *RootScopedPlatformStrategy) Select(ctx context.Context, policy Seatbelt
 	policy.ProtectedBundle = cloneProtectedBundle(policy.ProtectedBundle)
 	policy.MountDenials = slices.Clone(policy.MountDenials)
 	policy.GitRuntimeResources = cloneGitRuntime(policy.GitRuntimeResources)
+	policy.HostRuntime = cloneHostRuntime(policy.HostRuntime)
 	if !s.mountBoundariesCurrent(ctx, policy, original) {
 		return refuse()
 	}
@@ -340,6 +349,9 @@ func (s *RootScopedPlatformStrategy) Select(ctx context.Context, policy Seatbelt
 		return refuse()
 	}
 	binding := s.Binding()
+	if policy.HostRuntime != nil {
+		binding.AssuranceID = InstalledHostRuntimeAssurance
+	}
 	binding.SelectionSHA256 = digest
 	selected := &RootScopedPlatformSelection{&platformSelection{strategy: *s, policy: policy, original: original, wrapped: wrapped, binding: binding}}
 	// Reject unsupported roots during preparation, before the caller reserves an
@@ -441,6 +453,14 @@ type platformDirectoryBinding struct {
 
 func (s *platformSelection) inspectDirectories(ctx context.Context) ([]platformDirectoryBinding, error) {
 	refuse := func() ([]platformDirectoryBinding, error) { return nil, &processsvc.NativeFailure{} }
+	if s.policy.HostRuntime != nil {
+		reader, ok := s.strategy.frozen.facts.(interface {
+			hostRuntime(context.Context, *HostRuntimePlan) error
+		})
+		if !ok || reader.hostRuntime(ctx, s.policy.HostRuntime) != nil {
+			return refuse()
+		}
+	}
 	plan, err := compileSeatbelt(s.policy, s.original)
 	if err != nil || !s.strategy.mountBoundariesCurrent(ctx, s.policy, s.original) {
 		return refuse()

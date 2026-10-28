@@ -87,6 +87,9 @@ export function encodeShellLaunch(
         Compiler: support.qualification.compiler,
         FilesystemClass: support.qualification.filesystemClass,
         HostTrust: support.qualification.hostTrust,
+        ...(support.hostRuntimePolicy
+          ? { HostRuntimePolicy: support.hostRuntimePolicy }
+          : {}),
         Backend: {
           Path: path.join(root, "Contents/Resources/app/farol-backend"),
           SHA256: support.core.binary.sha256,

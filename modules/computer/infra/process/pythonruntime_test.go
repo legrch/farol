@@ -11,7 +11,7 @@ import (
 // Literal declaration/CPU policy tests, not native or installed authority.
 func declaredPythonFixture(t *testing.T) (*GitRuntimeResources, []ExecutablePin) {
 	t.Helper()
-	raw, err := os.ReadFile("../../../../tooling/shell-platform.json")
+	raw, err := os.ReadFile("../../../../tests/fixtures/shell-platform-clt-legacy.json")
 	if err != nil {
 		t.Fatal(err)
 	}

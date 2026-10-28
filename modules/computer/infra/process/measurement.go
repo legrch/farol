@@ -49,13 +49,16 @@ func measureRetainedLaunch(ctx context.Context, command Command, launch *confine
 
 // retainedLaunchMeasurement is invocation-owned and used serially. Its observations
 // grant no lease authority and are snapshots, not continuous kernel proof. Recheck
-// never opens replacements; any failure consumes and closes this measurement.
+// keeps base descriptors pinned. The separate mutable installed-runtime class
+// re-observes its frozen paths without refreshing its plan or authority. Any
+// failure consumes and closes this measurement.
 type retainedLaunchMeasurement struct {
 	context     context.Context
 	fs          launchFilesystem
 	pins        []io.Closer
 	executables []executableMeasurement
 	directories []directoryCheck
+	hostRuntime *HostRuntimePlan
 	closed      bool
 }
 type directoryCheck struct {
@@ -101,6 +104,14 @@ func (m *retainedLaunchMeasurement) Recheck(ctx context.Context) error {
 	stop := context.AfterFunc(m.context, cancel)
 	defer stop()
 	defer cancel()
+	if m.hostRuntime != nil {
+		reader, ok := m.fs.(interface {
+			checkHostRuntime(context.Context, *HostRuntimePlan) error
+		})
+		if !ok || reader.checkHostRuntime(bounded, m.hostRuntime) != nil {
+			return refuse()
+		}
+	}
 	for _, pin := range m.executables {
 		if bounded.Err() != nil || m.context.Err() != nil || pin.recheck(bounded) != nil {
 			return refuse()
@@ -132,7 +143,7 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 	if ctx == nil || ctx.Err() != nil || launch == nil || fs == nil {
 		return refuse()
 	}
-	measurement := &retainedLaunchMeasurement{context: ctx, fs: fs}
+	measurement := &retainedLaunchMeasurement{context: ctx, fs: fs, hostRuntime: cloneHostRuntime(launch.hostRuntime)}
 	retained := false
 	defer func() {
 		if !retained {
