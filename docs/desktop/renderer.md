@@ -86,7 +86,12 @@ viewing the outcome. Unknown acknowledgement retains the same latch and pending
 record. Render/unmount never sends an acknowledgement or repeats an edit.
 
 Release phases are presentation of existing authoritative eligibility. Later,
-restart, recover and rollback are distinct commands sharing one update latch.
+restart share one update latch. User updates are forward-only: the public command
+schema rejects manual rollback and effectful recovery, and a stale renderer naming
+either receives a local refusal without changing its retained intent. Recovery
+presentation is read-only and cannot resume a helper.
+Predecessor metadata remains readable for transaction safety; internal helper
+compensation and existing recovery ownership are unchanged.
 Unavailable/refused/unknown states never imply successful application. Automatic checks already belong to the host: initialization starts a check and
 `UPDATE_RECHECK_MS` schedules later checks. The facade exposes explicit check
 and current state but no scheduling preference. Automatic installation and

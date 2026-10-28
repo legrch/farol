@@ -102,6 +102,7 @@ export type UpdateAction =
   | "later"
   | "restart"
   | "restart-confirmed"
+  /** Retained only to classify stale renderer intent as a local refusal. */
   | "recover"
   | "rollback"
   | "notice-seen";

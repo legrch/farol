@@ -195,22 +195,22 @@ export function canRecheckUpdateAdmission(code: string): boolean {
   return recheckableAdmissionBlocks.has(code);
 }
 
+const retiredInstalledUpdateCommand = z.object({
+  kind: z.enum(["recover", "rollback"]),
+});
+// Classification only. Retired commands never grant an update effect, even if
+// an older renderer includes fields that the current command schema rejects.
+export function isRetiredInstalledUpdateCommand(value: unknown): boolean {
+  return retiredInstalledUpdateCommand.safeParse(value).success;
+}
+
 export const InstalledUpdateCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("restart-confirmed"),
     version: z.string().min(1).max(128),
   }),
   z.strictObject({
-    kind: z.enum([
-      "status",
-      "check",
-      "download",
-      "skip",
-      "later",
-      "restart",
-      "recover",
-      "rollback",
-    ]),
+    kind: z.enum(["status", "check", "download", "skip", "later", "restart"]),
   }),
   z.strictObject({
     kind: z.literal("set-automatic-update-preference"),

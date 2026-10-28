@@ -1998,6 +1998,14 @@ export class WindowController implements RendererFacade {
     });
   }
   update(action: UpdateAction, noticeKey?: string): Promise<Intent> {
+    // A retained renderer may still name the retired command. Refuse locally
+    // without replacing its current update intent or sending another effect.
+    if (action === "rollback" || action === "recover")
+      return Promise.resolve({
+        id: "update",
+        state: "refused",
+        code: "UPDATE_FORWARD_ONLY",
+      });
     if (action === "notice-seen") {
       const current = this.state.update;
       const notice = "notice" in current ? current.notice : undefined;

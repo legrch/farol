@@ -125,6 +125,7 @@ import {
 import { drainInstalledComputer } from "./installed-computer-drain";
 import {
   InstalledUpdateCommandSchema,
+  isRetiredInstalledUpdateCommand,
   type InstalledUpdateView,
   type NormalQuitApplyContext,
 } from "../../modules/release/contract/installed-update";
@@ -992,6 +993,8 @@ function publishInstalledUpdate(view: InstalledUpdateView): void {
 async function installedUpdateCommand(
   value: unknown,
 ): Promise<InstalledUpdateView> {
+  if (isRetiredInstalledUpdateCommand(value))
+    return { phase: "unavailable", code: "UPDATE_FORWARD_ONLY" };
   const command = InstalledUpdateCommandSchema.safeParse(value);
   if (!command.success || !installedUpdater || quitInProgress)
     return installedUpdateView;
@@ -1013,8 +1016,6 @@ async function installedUpdateCommand(
   } else if (command.data.kind === "restart-confirmed")
     await installedUpdater.restartConfirmed(command.data.version);
   else if (command.data.kind === "restart") await installedUpdater.restart();
-  else if (command.data.kind === "recover" || command.data.kind === "rollback")
-    await installedUpdater.restore(command.data.kind);
   return installedUpdateView;
 }
 async function initializeInstalledUpdater(): Promise<void> {

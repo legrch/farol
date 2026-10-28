@@ -2342,6 +2342,8 @@ describe("automatic update preference (ports only; no automatic release acceptan
       }),
     ).toEqual({ kind: "set-automatic-update-preference", enabled: false });
     for (const invalid of [
+      { kind: "rollback" },
+      { kind: "recover" },
       { kind: "set-automatic-update-preference" },
       { kind: "set-automatic-update-preference", enabled: "true" },
       { kind: "set-automatic-update-preference", enabled: true, restart: true },

@@ -2529,6 +2529,32 @@ it("R30 repeated native actions and background completion do not navigate", asyn
   expect(c.getSnapshot().sidebar).toBe("full");
   c.dispose();
 });
+it.each(["rollback", "recover"] as const)(
+  "refuses retired %s intent without changing an unknown update or dispatching",
+  async (action) => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    f.emit("update", {
+      phase: "idle",
+      checkedAt: null,
+      rollbackVersion: "0.9",
+    });
+    vi.mocked(f.api.installedUpdate).mockRejectedValueOnce(
+      new Error("reply lost"),
+    );
+    expect((await c.update("check")).state).toBe("unknown");
+    const before = c.getSnapshot();
+    vi.mocked(f.api.installedUpdate).mockClear();
+    expect(await c.update(action)).toMatchObject({
+      state: "refused",
+      code: "UPDATE_FORWARD_ONLY",
+    });
+    expect(c.getSnapshot()).toBe(before);
+    expect(f.api.installedUpdate).not.toHaveBeenCalled();
+    c.dispose();
+  },
+);
 it("R20 observes exact pending edit without sending an acknowledgement or new effect", async () => {
   const f = fixture();
   const c = new WindowController(f.api);

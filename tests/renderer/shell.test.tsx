@@ -685,8 +685,8 @@ it("R16 R23 R24 distinct update controls preserve exact operations and pending f
     f.emit("update", { phase: "recovery", version: "1.0", blockedBy: null });
     c.overlay("update-recovery");
   });
-  await act(async () => button(host, "Recover").click());
-  expect(f.api.installedUpdate).toHaveBeenCalledWith({ kind: "recover" });
+  expect(host.querySelector("dialog")?.textContent).not.toContain("Recover");
+  expect(f.api.installedUpdate).not.toHaveBeenCalledWith({ kind: "recover" });
   await act(async () => {
     f.emit("update", {
       phase: "idle",
@@ -695,8 +695,11 @@ it("R16 R23 R24 distinct update controls preserve exact operations and pending f
     });
     c.overlay("update-recovery");
   });
-  await act(async () => button(host, "Roll Back").click());
-  expect(f.api.installedUpdate).toHaveBeenCalledWith({ kind: "rollback" });
+  expect(host.querySelector("dialog")?.textContent).toContain(
+    "Previous version 0.9 is retained for update safety.",
+  );
+  expect(host.querySelector("dialog")?.textContent).not.toContain("Roll Back");
+  expect(f.api.installedUpdate).not.toHaveBeenCalledWith({ kind: "rollback" });
 });
 it("offers Download only for a current available release", async () => {
   const { host, c, f } = await mount();
@@ -987,8 +990,9 @@ it("keeps real recovery refusals visible and fenced", async () => {
     "Recovery is blocked",
   );
   expect(block.querySelector("details code")?.textContent).toBe("WORK_PENDING");
-  expect(button(host, "Recover").disabled).toBe(true);
-  await act(async () => button(host, "Recover").click());
+  expect(
+    [...host.querySelectorAll("dialog button")].map((node) => node.textContent),
+  ).not.toContain("Recover");
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
 });
 
@@ -1678,7 +1682,7 @@ it.each(["applied", "refused", "unknown"] as const)(
   },
 );
 
-it("R24 checking and rollback controls follow recovery and drain eligibility", async () => {
+it("R24 checking follows recovery eligibility without offering a downgrade", async () => {
   const { host, c, f } = await mount();
   for (const update of [
     { phase: "unavailable", code: "NOT_INSTALLED" },
@@ -1705,7 +1709,7 @@ it("R24 checking and rollback controls follow recovery and drain eligibility", a
     });
     c.overlay("update-recovery");
   });
-  expect(button(host, "Roll Back").disabled).toBe(true);
+  expect(host.querySelector("dialog")?.textContent).not.toContain("Roll Back");
   expect(f.api.installedUpdate).not.toHaveBeenCalledWith({ kind: "rollback" });
 });
 
@@ -1917,7 +1921,7 @@ it("normal failed Updates omits optional rollback and keeps update checking", as
   expect(dialog.querySelector(".update-check")).toBeNull();
 });
 it.each(["WORK_PENDING", "UPDATE_BROWSER_STATE_UNKNOWN"])(
-  "Diagnostics rollback retains the backend admission fence %s",
+  "Diagnostics retains predecessor evidence without a downgrade command: %s",
   async (blockedBy) => {
     const { host, c, f } = await mount();
     vi.mocked(f.api.installedUpdate).mockClear();
@@ -1931,18 +1935,15 @@ it.each(["WORK_PENDING", "UPDATE_BROWSER_STATE_UNKNOWN"])(
       c.overlay("update-recovery");
     });
     const dialog = host.querySelector("dialog")!;
-    expect(dialog.querySelector(".update-block")?.textContent).toContain(
-      "Roll back is blocked",
+    expect(dialog.textContent).toContain(
+      "Previous version 0.9 is retained for update safety.",
     );
-    expect(dialog.querySelector(".update-block")?.textContent).toContain(
-      blockedBy,
-    );
-    expect(button(dialog, "Roll Back").disabled).toBe(true);
-    await act(async () => button(dialog, "Roll Back").click());
+    expect(dialog.textContent).toContain("Farol installs newer releases only.");
+    expect(dialog.textContent).not.toContain("Roll Back");
     expect(f.api.installedUpdate).not.toHaveBeenCalled();
   },
 );
-it("Diagnostics rollback remains inspectable but disabled when the snapshot becomes stale", async () => {
+it("Diagnostics keeps predecessor evidence read-only when the snapshot becomes stale", async () => {
   const { host, c, f } = await mount();
   vi.mocked(f.api.installedUpdate).mockClear();
   await act(async () => {
@@ -1962,9 +1963,10 @@ it("Diagnostics rollback remains inspectable but disabled when the snapshot beco
   });
   expect(c.getSnapshot().status).toBe("stale");
   const dialog = host.querySelector("dialog")!;
-  expect(dialog.textContent).toContain("Restore previous version 0.9.");
-  expect(button(dialog, "Roll Back").disabled).toBe(true);
-  await act(async () => button(dialog, "Roll Back").click());
+  expect(dialog.textContent).toContain(
+    "Previous version 0.9 is retained for update safety.",
+  );
+  expect(dialog.textContent).not.toContain("Roll Back");
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
 });
 it.each(["available", "ready"] as const)(
@@ -2016,8 +2018,10 @@ it("Recovery overlay stays isolated from Updates and closes without dispatch", a
   expect(c.getSnapshot().overlay).toBe("update-recovery");
   const dialog = host.querySelector("dialog")!;
   expect(dialog.getAttribute("aria-label")).toBe("Update recovery");
-  expect(dialog.textContent).toContain("Restore previous version 0.9.");
-  expect(button(dialog, "Roll Back").disabled).toBe(false);
+  expect(dialog.textContent).toContain(
+    "Previous version 0.9 is retained for update safety.",
+  );
+  expect(dialog.textContent).not.toContain("Roll Back");
   expect(dialog.textContent).not.toContain("No updates available");
   expect(dialog.querySelector(".update-check")).toBeNull();
   expect(host.querySelector("main")?.hasAttribute("inert")).toBe(true);
@@ -2050,7 +2054,7 @@ it.each([
     blockedBy: "WORK_PENDING",
   },
 ] satisfies WindowSnapshot["update"][])(
-  "recovery overlay honestly reports unavailable restoration for %j without update controls",
+  "recovery overlay reports no interrupted update for %j without update controls",
   async (update) => {
     const { host, c, f } = await mount();
     vi.mocked(f.api.installedUpdate).mockClear();
@@ -2061,7 +2065,7 @@ it.each([
     const dialog = host.querySelector("dialog")!;
     expect(dialog.getAttribute("aria-label")).toBe("Update recovery");
     expect(dialog.textContent).toContain(
-      "No previous version is available to restore",
+      "No interrupted update needs recovery.",
     );
     expect(dialog.textContent).not.toMatch(
       /Roll Back|Check for Updates|Download Update|Install and Relaunch|Skip This Version|Remind Me Later|Update settings|What’s new|WORK_PENDING/,
@@ -2075,30 +2079,11 @@ it.each([
 
 // B04 DOM fixtures: presentation and dispatch fences, not native recovery proof.
 it.each([
-  [{ phase: "recovery", version: "1.0", blockedBy: null }, "Recover", "1.0"],
-  [
-    { phase: "failed", code: "RECOVERY_REQUIRED", recoveryRequired: true },
-    "Recover",
-    null,
-  ],
-  [
-    { phase: "idle", checkedAt: null, rollbackVersion: "0.9" },
-    "Roll Back",
-    "0.9",
-  ],
-  [
-    {
-      phase: "failed",
-      code: "UPDATE_FAILED",
-      recoveryRequired: false,
-      rollbackVersion: "0.9",
-    },
-    "Roll Back",
-    "0.9",
-  ],
-] satisfies [WindowSnapshot["update"], string, string | null][])(
-  "B04 %j explains closure and a separate verified start before %s",
-  async (update, action, version) => {
+  { phase: "recovery", version: "1.0", blockedBy: null },
+  { phase: "failed", code: "RECOVERY_REQUIRED", recoveryRequired: true },
+] satisfies WindowSnapshot["update"][])(
+  "B04 %j keeps unfinished update diagnostics read-only",
+  async (update) => {
     const { host, c, f } = await mount();
     await act(async () => {
       f.emit("update", update);
@@ -2107,22 +2092,19 @@ it.each([
     const copy = host
       .querySelector("dialog")!
       .textContent!.replace(/\s+/gu, " ");
-    expect(copy).toContain("Farol will quit");
     expect(copy).toContain(
-      "stays closed until recovery completion is confirmed",
+      "Viewing it does not resume the helper or repeat the update.",
     );
-    expect(copy).toContain(
-      "after confirmation, then verify that start before resuming work",
-    );
-    if (version) expect(copy).toContain(version);
+    expect(copy).toContain("Farol installs newer releases only.");
+    expect(copy).not.toContain("Farol will quit");
     if (update.phase === "recovery") {
-      expect(copy).toContain(`recovery of version ${update.version}.`);
       expect(host.querySelector("dialog .update-state")?.textContent).toBe(
         "The update didn’t finish. Check Diagnostics to confirm the installed application.",
       );
       expect(copy).not.toContain("still installed and works");
     }
-    expect(button(host, action).disabled).toBe(false);
+    expect(copy).not.toContain("Recover");
+    expect(copy).not.toContain("Roll Back");
     expect(copy).not.toContain("restart into the new version");
     expect(f.api.installedUpdate).not.toHaveBeenCalledWith({ kind: "recover" });
     expect(f.api.installedUpdate).not.toHaveBeenCalledWith({
@@ -2196,16 +2178,6 @@ it("native menu preserves the current destination and downloaded update without 
 });
 const boundedUpdateActions = [
   [
-    { phase: "recovery", version: "1.0", blockedBy: null },
-    "Recover",
-    "recover",
-  ],
-  [
-    { phase: "idle", checkedAt: null, rollbackVersion: "0.9" },
-    "Roll Back",
-    "rollback",
-  ],
-  [
     { phase: "ready", version: "1.0", deferred: false, blockedBy: null },
     "Install and Relaunch",
     "restart-confirmed",
@@ -2213,7 +2185,7 @@ const boundedUpdateActions = [
 ] satisfies [
   WindowSnapshot["update"],
   string,
-  "recover" | "rollback" | "restart-confirmed",
+  "recover" | "restart-confirmed",
 ][];
 it.each(boundedUpdateActions)(
   "B04 blocked current work fences %j while %s remains inspectable",
@@ -2243,9 +2215,7 @@ it.each(boundedUpdateActions)(
     await act(async () => button(host, action).click());
     expect(c.getSnapshot().intents.update?.state).toBe("pending");
     expect(button(host, action).disabled).toBe(true);
-    if (kind === "rollback")
-      expect(host.querySelector(".update-check")).toBeNull();
-    else expect(host.querySelector(".update-check")).toBeNull();
+    expect(host.querySelector(".update-check")).toBeNull();
     await act(async () => button(host, action).click());
     await act(async () => operation.reject(new Error("reply lost")));
     expect(c.getSnapshot().intents.update?.state).toBe("unknown");
@@ -2257,9 +2227,7 @@ it.each(boundedUpdateActions)(
       c.overlay(kind === "restart-confirmed" ? "update" : "update-recovery"),
     );
     expect(button(host, action).disabled).toBe(true);
-    if (kind === "rollback")
-      expect(host.querySelector(".update-check")).toBeNull();
-    else expect(host.querySelector(".update-check")).toBeNull();
+    expect(host.querySelector(".update-check")).toBeNull();
     await act(async () => button(host, action).click());
     expect(
       vi
@@ -3009,7 +2977,7 @@ it("normal update recovery stays separate from Unresolved actions", async () => 
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
   await act(async () => c.overlay("update-recovery"));
   expect(c.getSnapshot().overlay).toBe("update-recovery");
-  expect(button(host, "Recover").disabled).toBe(false);
+  expect(host.querySelector("dialog")?.textContent).not.toContain("Recover");
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
 });
 

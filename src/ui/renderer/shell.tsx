@@ -599,9 +599,7 @@ function Update({
   const release =
     !recoveryMode && (update.phase === "available" || update.phase === "ready");
   const blockedBy =
-    (recovery ||
-      rollbackVersion ||
-      (!recoveryMode && update.phase === "ready")) &&
+    (recovery || (!recoveryMode && update.phase === "ready")) &&
     "blockedBy" in update
       ? update.blockedBy
       : undefined;
@@ -611,8 +609,8 @@ function Update({
       ? "Update status could not be confirmed. Review Diagnostics."
       : recoveryMode && !recovery
         ? rollbackVersion
-          ? `Restore previous version ${rollbackVersion}.`
-          : "No previous version is available to restore in the current update state."
+          ? `Previous version ${rollbackVersion} is retained for update safety.`
+          : "No interrupted update needs recovery."
         : update.phase === "ready"
           ? `Version ${updateVersionLabel(update.version)} is ready to install.`
           : update.phase === "available"
@@ -734,19 +732,14 @@ function Update({
       )}
       {recoveryMode && recovery ? (
         <p className="description">
-          Farol will quit to finish recovery
-          {update.phase === "recovery" ? ` of version ${update.version}` : ""}.
-          If recovery restores the previous version, it stays closed until
-          recovery completion is confirmed. Start the restored version
-          separately after confirmation, then verify that start before resuming
-          work.
+          This is the recorded state of an unfinished installation. Viewing it
+          does not resume the helper or repeat the update. Farol installs newer
+          releases only.
         </p>
       ) : rollbackVersion ? (
         <p className="description">
-          Version {rollbackVersion} is available to restore. Farol will quit to
-          roll back, and the restored version stays closed until recovery
-          completion is confirmed. Start it separately after confirmation, then
-          verify that start before resuming work.
+          Farol installs newer releases only. The retained image belongs to the
+          existing update transaction and cannot be selected for a downgrade.
         </p>
       ) : !recoveryMode && update.phase === "available" ? (
         <p className="description">
@@ -764,11 +757,9 @@ function Update({
             <strong>
               {recovery
                 ? "Recovery is blocked"
-                : rollbackVersion
-                  ? "Roll back is blocked"
-                  : confirmedRestartAllowed(update)
-                    ? "Restart postponed"
-                    : "Update needs attention"}
+                : confirmedRestartAllowed(update)
+                  ? "Restart postponed"
+                  : "Update needs attention"}
             </strong>
             <p>
               {recoveryMode || recovery
@@ -873,19 +864,6 @@ function Update({
             </button>
           </>
         )}
-        {recoveryMode &&
-          (update.phase === "recovery" ||
-            (update.phase === "failed" && update.recoveryRequired)) && (
-            <button
-              disabled={
-                disabled ||
-                (update.phase === "recovery" && update.blockedBy !== null)
-              }
-              onClick={() => void facade.update("recover")}
-            >
-              Recover
-            </button>
-          )}
         {!recoveryMode &&
           unresolvedActions(snapshot, retainedSetupIntents(facade, snapshot))
             .length > 0 &&
@@ -895,20 +873,6 @@ function Update({
             update.phase === "unavailable") && (
             <button onClick={() => facade.overlay("unresolved-actions")}>
               Unresolved actions
-            </button>
-          )}
-        {recoveryMode &&
-          (update.phase === "idle" ||
-            (update.phase === "failed" && !update.recoveryRequired)) &&
-          update.rollbackVersion && (
-            <button
-              disabled={
-                disabled ||
-                (update.phase === "idle" && Boolean(update.blockedBy))
-              }
-              onClick={() => void facade.update("rollback")}
-            >
-              Roll Back
             </button>
           )}
       </div>
