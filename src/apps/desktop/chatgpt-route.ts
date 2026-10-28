@@ -607,6 +607,33 @@ export const focusInstantPowerSliderScript = `(() => {
   return { ready: true, atMinimum: current === minimum };
 })()`;
 
+// Native sendInputEvent requires an active BrowserWindow. Connection checks
+// also run in background views, so address the page's own keyboard handlers.
+// Neither acknowledgement is model proof: the caller rereads the slider and
+// visible Instant label on the original document before preparing any message.
+export const lowerInstantPowerSliderScript = `(() => {
+  const sliders = [...document.querySelectorAll('[role="slider"],input[type="range"]')]
+    .filter((element) => element.getClientRects().length > 0);
+  if (sliders.length !== 1) return false;
+  const slider = sliders[0];
+  if (!(slider instanceof HTMLElement)) return false;
+  slider.focus();
+  slider.dispatchEvent(new KeyboardEvent("keydown", {
+    key: "ArrowLeft", code: "ArrowLeft", bubbles: true, cancelable: true
+  }));
+  slider.dispatchEvent(new KeyboardEvent("keyup", {
+    key: "ArrowLeft", code: "ArrowLeft", bubbles: true, cancelable: true
+  }));
+  return true;
+})()`;
+
+export const dismissInstantPowerPickerScript = `(() => {
+  document.dispatchEvent(new KeyboardEvent("keydown", {
+    key: "Escape", code: "Escape", bubbles: true, cancelable: true
+  }));
+  return true;
+})()`;
+
 const temporaryInstantProfileSchema = z.object({
   composerReady: z.boolean(),
   draftPresent: z.boolean(),
@@ -3290,13 +3317,25 @@ export class ChatGptRoute {
           minimumObserved = true;
           break;
         }
-        contents.sendInputEvent({ type: "keyDown", keyCode: "Left" });
-        contents.sendInputEvent({ type: "keyUp", keyCode: "Left" });
+        if (
+          (await contents.executeJavaScript(
+            lowerInstantPowerSliderScript,
+            true,
+          )) !== true ||
+          profileIdentityLost()
+        )
+          return refuseInstant();
         await delay(80);
       }
       if (!minimumObserved) return refuseInstant();
-      contents.sendInputEvent({ type: "keyDown", keyCode: "Escape" });
-      contents.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
+      if (
+        (await contents.executeJavaScript(
+          dismissInstantPowerPickerScript,
+          true,
+        )) !== true ||
+        profileIdentityLost()
+      )
+        return refuseInstant();
     } catch {
       return refuseInstant();
     }

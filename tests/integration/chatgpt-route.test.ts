@@ -43,6 +43,8 @@ import {
   instantModelLabelPattern,
   openInstantPowerPickerScript,
   focusInstantPowerSliderScript,
+  lowerInstantPowerSliderScript,
+  dismissInstantPowerPickerScript,
   openTemporaryPersonalizationScript,
   selectTemporaryPersonalizationScript,
   taskProbeScript,
@@ -179,8 +181,7 @@ describe("temporary Instant connector profile", () => {
       current = hydrating ?? afterLoad;
     });
     const sendInputEvent = vi.fn(() => {
-      minimum = true;
-      current = { ...current, instant: true };
+      throw new Error("Background native keyboard must not be used");
     });
     const executeJavaScript = vi.fn(
       async (script: string): Promise<unknown> => {
@@ -203,6 +204,12 @@ describe("temporary Instant connector profile", () => {
         }
         if (script === focusInstantPowerSliderScript)
           return { ready: true, atMinimum: minimum };
+        if (script === lowerInstantPowerSliderScript) {
+          minimum = true;
+          current = { ...current, instant: true };
+          return true;
+        }
+        if (script === dismissInstantPowerPickerScript) return true;
         throw new Error("Unexpected provider script");
       },
     );
@@ -264,15 +271,32 @@ describe("temporary Instant connector profile", () => {
     expect(route.loadURL).toHaveBeenCalledWith(
       "https://chatgpt.com/?temporary-chat=true",
     );
-    expect(route.sendInputEvent).toHaveBeenCalledWith({
-      type: "keyDown",
-      keyCode: "Left",
-    });
+    expect(route.executeJavaScript).toHaveBeenCalledWith(
+      lowerInstantPowerSliderScript,
+      true,
+    );
+    expect(route.sendInputEvent).not.toHaveBeenCalled();
     expect(route.pickerOpens()).toBe(1);
-    expect(route.sendInputEvent).toHaveBeenCalledWith({
-      type: "keyDown",
-      keyCode: "Escape",
-    });
+    expect(route.executeJavaScript).toHaveBeenCalledWith(
+      dismissInstantPowerPickerScript,
+      true,
+    );
+  });
+
+  it("refuses an unacknowledged page-control action without preparing a message", async () => {
+    const route = profileRoute();
+    const execute = route.executeJavaScript.getMockImplementation()!;
+    route.executeJavaScript.mockImplementation(async (script: string) =>
+      script === lowerInstantPowerSliderScript ? false : execute(script),
+    );
+    await expect(route.prepare()).resolves.toBe(
+      "CHATGPT_INSTANT_MODEL_REQUIRED",
+    );
+    expect(route.executeJavaScript).not.toHaveBeenCalledWith(
+      dismissInstantPowerPickerScript,
+      true,
+    );
+    expect(route.sendInputEvent).not.toHaveBeenCalled();
   });
 
   it("binds a same-document hydration update before opening the model picker", async () => {
@@ -318,10 +342,11 @@ describe("temporary Instant connector profile", () => {
     await expect(route.prepare()).resolves.toBeNull();
     expect(sliderReads).toBeGreaterThan(2);
     expect(route.pickerOpens()).toBe(1);
-    expect(route.sendInputEvent).toHaveBeenCalledWith({
-      type: "keyDown",
-      keyCode: "Left",
-    });
+    expect(route.executeJavaScript).toHaveBeenCalledWith(
+      lowerInstantPowerSliderScript,
+      true,
+    );
+    expect(route.sendInputEvent).not.toHaveBeenCalled();
   });
 
   it("stops waiting for an unavailable picker without typing or reopening it", async () => {
@@ -493,10 +518,10 @@ describe("temporary Instant connector profile", () => {
     vi.spyOn(Date, "now").mockImplementation(() => (now += 1_000));
     route.executeJavaScript.mockImplementation(async (script: string) => {
       if (script === openTemporaryPersonalizationScript)
-        expect(route.sendInputEvent).toHaveBeenCalledWith({
-          type: "keyDown",
-          keyCode: "Left",
-        });
+        expect(route.executeJavaScript).toHaveBeenCalledWith(
+          lowerInstantPowerSliderScript,
+          true,
+        );
       const result = await execute(script);
       return script === temporaryInstantProfileProbe &&
         typeof result === "object" &&
