@@ -484,7 +484,13 @@ export async function run(input: {
               operationsDirectoryFromLifecycleRoot(lifecycleRoot),
             );
             try {
-              const collector = new ProcessAuditCollector(store);
+              const context = host!.historyContext;
+              assert.ok(context, "verified Go context is unavailable");
+              const collector = new ProcessAuditCollector(
+                store,
+                Date.now,
+                context.backendGeneration,
+              );
               const deadline = Date.now() + 12000;
               let observed = false;
               while (Date.now() < deadline && !observed) {
@@ -503,6 +509,10 @@ export async function run(input: {
                     entry.exit.value === 0,
                 );
                 if (terminal && "schema" in terminal) {
+                  assert.equal(
+                    terminal.operationRef?.backendGeneration,
+                    context.backendGeneration,
+                  );
                   assert.deepEqual(terminal.auditDetails, {
                     command: {
                       state: "unavailable",
