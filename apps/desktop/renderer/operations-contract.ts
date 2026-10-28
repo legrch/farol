@@ -99,13 +99,18 @@ const OperationEntryV1Schema = z.strictObject({
 const ExecutionIdentifierSchema = z
   .string()
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u);
-const OperationReferenceSchema = z.strictObject({
+export const OperationReferenceSchema = z.strictObject({
   owner: z.enum(["computer.process", "computer.mutation", "release"]),
   operationId: ExecutionIdentifierSchema,
   buildId: ExecutionIdentifierSchema.max(120),
   runtimeId: ExecutionIdentifierSchema.max(120),
   binding: z.enum(["requested", "accepted"]),
 });
+export type OperationReference = z.infer<typeof OperationReferenceSchema>;
+export type ExecutionReferences = Readonly<{
+  operationRef: OperationReference | null;
+  subjectRef: OperationReference | null;
+}>;
 const CleanupSchema = z.enum(["pending", "confirmed", "unverified"]);
 const OperationEntryV2Schema = OperationEntryV1Schema.extend({
   schema: z.literal("farol.operation/2"),
@@ -191,6 +196,14 @@ export type OperationsSnapshot = z.infer<typeof OperationsSnapshotSchema>;
  * Implementations must be total observers: use createTotalOperationsRecorder
  * at the recorder boundary so no method or finish handle throws or rejects. */
 export interface OperationsRecorder {
+  beginExecution?(
+    metadata: OperationMetadata,
+    references: ExecutionReferences,
+  ): (
+    outcome: OperationEntry["outcome"],
+    code: string | null,
+    durationMs: number,
+  ) => void;
   begin?(
     metadata: OperationMetadata,
   ): (

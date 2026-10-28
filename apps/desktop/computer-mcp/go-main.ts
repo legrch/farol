@@ -80,6 +80,10 @@ export async function runGoComputerMcp(file: string): Promise<void> {
         client.verifiedContext,
         {
           operations,
+          executionOrigin: {
+            buildId: launch.opened.endpoint.binding.buildId,
+            runtimeId: launch.opened.endpoint.binding.runtimeId,
+          },
           lifecycle,
           fence,
           verification,

@@ -8,6 +8,7 @@ import {
   OperationOutcomeSchema,
   OperationDurationSchema,
   OperationWorkspaceLabelsSchema,
+  OperationReferenceSchema,
 } from "../renderer/operations-contract";
 import {
   resolveOperationTarget,
@@ -48,6 +49,9 @@ type Labels = readonly { workspaceId: string; label: string }[];
 /** Untrusted observer implementation; even a synchronous API may reject. */
 export interface RecorderSink {
   begin?(metadata: OperationMetadata): unknown;
+  beginExecution?(
+    ...args: Parameters<NonNullable<OperationsRecorder["beginExecution"]>>
+  ): unknown;
   record(...args: Parameters<OperationsRecorder["record"]>): unknown;
   setWorkspaceLabels?(workspaces: Labels): unknown;
 }
@@ -55,6 +59,7 @@ export interface RecorderSink {
 /** All methods return synchronously and never throw or expose a rejection.
  * A failed begin returns an inert finish handle, without retry or fallback. */
 export interface TotalOperationsRecorder extends OperationsRecorder {
+  beginExecution: NonNullable<OperationsRecorder["beginExecution"]>;
   begin(metadata: OperationMetadata): Finish;
   setWorkspaceLabels(workspaces: Labels): void;
   diagnostics(): {
@@ -126,6 +131,48 @@ export function createTotalOperationsRecorder(
     };
   };
   const recorder: TotalOperationsRecorder = {
+    beginExecution(metadata, references) {
+      try {
+        const safe = recordableMetadata(metadata, workspaces());
+        const refs = {
+          operationRef:
+            references.operationRef === null
+              ? null
+              : OperationReferenceSchema.parse(references.operationRef),
+          subjectRef:
+            references.subjectRef === null
+              ? null
+              : OperationReferenceSchema.parse(references.subjectRef),
+        };
+        if (!sink.beginExecution) return recorder.begin(safe);
+        const finish = sink.beginExecution(safe, refs);
+        if (typeof finish !== "function") {
+          void Promise.resolve(finish).catch(() => {});
+          failed("pending");
+          return inert;
+        }
+        return (outcome, code, durationMs) => {
+          let recordedOutcome = outcome;
+          observe(
+            () => {
+              const classified = classification(outcome, code);
+              recordedOutcome = classified.outcome;
+              return finish(
+                classified.outcome,
+                classified.code,
+                OperationDurationSchema.parse(
+                  Math.max(0, Math.round(durationMs)),
+                ),
+              );
+            },
+            () => recordedOutcome,
+          );
+        };
+      } catch {
+        failed("pending");
+        return inert;
+      }
+    },
     begin(metadata) {
       try {
         const safe = recordableMetadata(metadata, workspaces());

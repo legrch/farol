@@ -292,6 +292,81 @@ it("reads mixed V1 and bounded V2 observations without rewriting history or acce
   expect(fs.readFileSync(file, "utf8")).toBe(savedBytes);
   expect(savedBytes.startsWith(v1Bytes)).toBe(true);
 });
+it("persists requested process identity separately from a distinct cancel subject", async () => {
+  const { store, directory } = setup();
+  const ref = {
+    owner: "computer.process" as const,
+    operationId: "start-id",
+    buildId: "build",
+    runtimeId: "runtime",
+    binding: "requested" as const,
+  };
+  const start = store.beginExecution(
+    {
+      source: "ChatGPT",
+      kind: "computer_shell_start",
+      target: { command: "secret command" },
+    },
+    { operationRef: ref, subjectRef: null },
+  );
+  start("unknown", "UNCONFIRMED", 23);
+  const cancel = store.beginExecution(
+    { source: "ChatGPT", kind: "computer_shell_cancel", target: {} },
+    { operationRef: { ...ref, operationId: "cancel-id" }, subjectRef: ref },
+  );
+  cancel("done", null, 10);
+  await store.flush(5000);
+  const snapshot = await store.snapshot(5000);
+  expect(snapshot.entries).toHaveLength(2);
+  expect(snapshot.entries).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        schema: "farol.operation/2",
+        outcome: "unknown",
+        operationRef: ref,
+        subjectRef: null,
+      }),
+      expect.objectContaining({
+        schema: "farol.operation/2",
+        outcome: "done",
+        operationRef: { ...ref, operationId: "cancel-id" },
+        subjectRef: ref,
+      }),
+    ]),
+  );
+  const all = fs
+    .readdirSync(directory)
+    .filter((name) => name.endsWith(".jsonl"))
+    .map((name) => fs.readFileSync(path.join(directory, name), "utf8"))
+    .join("");
+  expect(all).not.toContain("secret command");
+});
+it("marks the start binding accepted only after a confirmed start response", async () => {
+  const { store } = setup();
+  const ref = {
+    owner: "computer.process" as const,
+    operationId: "start-id",
+    buildId: "build",
+    runtimeId: "runtime",
+    binding: "requested" as const,
+  };
+  const finish = store.beginExecution(
+    { source: "ChatGPT", kind: "computer_shell_start", target: {} },
+    { operationRef: ref, subjectRef: null },
+  );
+  await store.flush(5000);
+  expect((await store.snapshot(5000)).entries).toEqual([
+    expect.objectContaining({ outcome: "pending", operationRef: ref }),
+  ]);
+  finish("done", null, 5);
+  await store.flush(5000);
+  expect((await store.snapshot(5000)).entries).toEqual([
+    expect.objectContaining({
+      outcome: "done",
+      operationRef: { ...ref, binding: "accepted" },
+    }),
+  ]);
+});
 it("bounds disk bytes, age and entry count across independent writer lifetimes", async () => {
   const f = setup({ days: 30, bytes: 1500, segmentBytes: 300, entries: 4 });
   for (let i = 0; i < 20; i++) {

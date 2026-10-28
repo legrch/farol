@@ -32,6 +32,7 @@ export type GoComputerMcpFence = Readonly<{
 }>;
 export type GoComputerMcpOptions = Readonly<{
   operations?: OperationsRecorder;
+  executionOrigin?: Readonly<{ buildId: string; runtimeId: string }>;
   fence: GoComputerMcpFence;
   lifecycle?: GoComputerMcpLifecycle;
   verification?: Pick<
@@ -268,7 +269,37 @@ export function createGoComputerMcpServer(
     effect = false,
   ): Promise<CallToolResult> => {
     const started = performance.now();
+    const origin = options.executionOrigin;
+    const reference = (id: string) =>
+      origin && {
+        owner: "computer.process" as const,
+        operationId: id,
+        buildId: origin.buildId,
+        runtimeId: origin.runtimeId,
+        binding: "requested" as const,
+      };
+    const processOperation =
+      metadata.kind === "computer_shell_start" ||
+      metadata.kind === "computer_shell_read" ||
+      metadata.kind === "computer_shell_cancel";
+    const references =
+      origin && processOperation && operationId
+        ? {
+            operationRef:
+              metadata.kind === "computer_shell_start"
+                ? reference(operationId)!
+                : cancelOperationId
+                  ? reference(cancelOperationId)!
+                  : null,
+            subjectRef:
+              metadata.kind === "computer_shell_start"
+                ? null
+                : reference(operationId)!,
+          }
+        : undefined;
     const finish =
+      (references &&
+        options.operations?.beginExecution?.(metadata, references)) ??
       options.operations?.begin?.(metadata) ??
       ((
         outcome: "done" | "refused" | "failed" | "unknown" | "pending",

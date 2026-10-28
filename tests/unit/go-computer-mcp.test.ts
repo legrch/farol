@@ -129,6 +129,7 @@ function wireReply(method: string, params: Json, id: string) {
 async function setup(
   options: {
     operations?: GoComputerMcpOptions["operations"];
+    executionOrigin?: GoComputerMcpOptions["executionOrigin"];
     connectionStatus?: GoComputerMcpOptions["connectionStatus"];
     codexRead?: GoComputerMcpOptions["codexRead"];
     binding?: ComputerConnectorExecution;
@@ -159,6 +160,9 @@ async function setup(
     options.context ?? context,
     {
       ...(options.operations ? { operations: options.operations } : {}),
+      ...(options.executionOrigin
+        ? { executionOrigin: options.executionOrigin }
+        : {}),
       ...(options.connectionStatus
         ? { connectionStatus: options.connectionStatus }
         : {}),
@@ -247,6 +251,48 @@ describe("selected Go process MCP projection", () => {
         }),
       ),
     }) satisfies Processes;
+
+  it("records distinct start and cancel identities without command data", async () => {
+    const beginExecution = vi.fn((_metadata, _references) => vi.fn());
+    const selected = await setup({
+      processes: ports(),
+      executionOrigin: { buildId: "build", runtimeId: "runtime" },
+      operations: { beginExecution, record: vi.fn() },
+    });
+    await selected.client.callTool({
+      name: "computer_shell_start",
+      arguments: startInput,
+    });
+    await selected.client.callTool({
+      name: "computer_shell_read",
+      arguments: target,
+    });
+    await selected.client.callTool({
+      name: "computer_shell_cancel",
+      arguments: { ...target, cancelOperationId: "cancel-effect" },
+    });
+    expect(beginExecution).toHaveBeenCalledTimes(3);
+    expect(beginExecution.mock.calls[0]?.[1]).toMatchObject({
+      operationRef: {
+        operationId: "original-process",
+        binding: "requested",
+        buildId: "build",
+        runtimeId: "runtime",
+      },
+      subjectRef: null,
+    });
+    expect(beginExecution.mock.calls[1]?.[1]).toMatchObject({
+      operationRef: null,
+      subjectRef: { operationId: "original-process" },
+    });
+    expect(beginExecution.mock.calls[2]?.[1]).toMatchObject({
+      operationRef: { operationId: "cancel-effect" },
+      subjectRef: { operationId: "original-process" },
+    });
+    expect(JSON.stringify(beginExecution.mock.calls)).not.toContain(
+      "synthetic command",
+    );
+  });
 
   it("exposes the complete slice only for the selected Go port", async () => {
     const unavailable = await setup();

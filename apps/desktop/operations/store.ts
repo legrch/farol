@@ -10,6 +10,7 @@ import {
   type OperationEntry,
   type OperationsRecorder,
   type OperationsSnapshot,
+  type ExecutionReferences,
 } from "../renderer/operations-contract";
 
 export const operationsLimits = {
@@ -62,6 +63,8 @@ export class OperationsStore implements OperationsRecorder {
   private readonly recorder = createTotalOperationsRecorder(
     {
       begin: (metadata) => this.beginEntry(metadata),
+      beginExecution: (metadata, references) =>
+        this.beginEntry(metadata, references),
       record: (metadata, outcome, code, durationMs) =>
         this.append(metadata, outcome, code, durationMs),
       setWorkspaceLabels: (workspaces) => this.updateLabels(workspaces),
@@ -73,6 +76,7 @@ export class OperationsStore implements OperationsRecorder {
     () => this.currentLabels ?? [],
   );
   readonly begin = this.recorder.begin;
+  readonly beginExecution = this.recorder.beginExecution;
   readonly record = this.recorder.record;
   readonly setWorkspaceLabels = this.recorder.setWorkspaceLabels;
   constructor(
@@ -211,9 +215,21 @@ export class OperationsStore implements OperationsRecorder {
       clearTimeout(timer);
     }
   }
-  private beginEntry(metadata: OperationMetadata) {
+  private beginEntry(
+    metadata: OperationMetadata,
+    references?: ExecutionReferences,
+  ) {
     const id = randomUUID();
-    this.append(metadata, "pending", null, 0, { id, phase: "started" });
+    const requestedAt = this.now();
+    this.append(
+      metadata,
+      "pending",
+      null,
+      0,
+      { id, phase: "started" },
+      references,
+      requestedAt,
+    );
     this.activeLifecycles.add(id);
     let observed = false;
     return (
@@ -224,10 +240,26 @@ export class OperationsStore implements OperationsRecorder {
       if (observed) return;
       observed = true;
       this.activeLifecycles.delete(id);
-      this.append(metadata, outcome, code, durationMs, {
-        id,
-        phase: "observed",
-      });
+      this.append(
+        metadata,
+        outcome,
+        code,
+        durationMs,
+        {
+          id,
+          phase: "observed",
+        },
+        references &&
+          outcome === "done" &&
+          metadata.kind === "computer_shell_start" &&
+          references.operationRef
+          ? {
+              ...references,
+              operationRef: { ...references.operationRef, binding: "accepted" },
+            }
+          : references,
+        requestedAt,
+      );
     };
   }
   private lost(items: readonly QueuedEntry[]): void {
@@ -243,6 +275,8 @@ export class OperationsStore implements OperationsRecorder {
     code: string | null,
     durationMs: number,
     lifecycle?: NonNullable<OperationEntry["lifecycle"]>,
+    references?: ExecutionReferences,
+    requestedAt?: number,
   ): void {
     const entry = OperationEntrySchema.parse({
       ...metadata,
@@ -252,6 +286,15 @@ export class OperationsStore implements OperationsRecorder {
       outcome,
       code,
       durationMs: Math.max(0, Math.round(durationMs)),
+      ...(references
+        ? {
+            schema: "farol.operation/2",
+            ...references,
+            timing: { requestedAt, startedAt: null, endedAt: null },
+            exit: null,
+            executionFacts: null,
+          }
+        : {}),
     });
     const item = {
       entry,
