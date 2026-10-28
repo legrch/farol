@@ -15,6 +15,7 @@ import {
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 import { qualifyGoBuild } from "./qualified-go-build.mjs";
 import { waitForReactShell } from "./current-react-setup.mjs";
+import { desktopIdentity } from "../../tooling/harness-identity.ts";
 import {
   shellGeometry,
   shellRailWidth,
@@ -59,12 +60,14 @@ const executable = path.join(
 const directory = await fs.realpath(
   await fs.mkdtemp(path.join(os.tmpdir(), "farol-e2e-home-")),
 );
+const appData = path.join(directory, "app-data");
+const expectedUserData = desktopIdentity("dev", appData).userData;
 const proof = randomUUID();
 await fs.mkdir(output, { recursive: true, mode: 0o700 });
 await fs.writeFile(path.join(directory, ".farol-e2e-root"), proof, {
   mode: 0o600,
 });
-await fs.mkdir(path.join(directory, "app-data"), { mode: 0o700 });
+await fs.mkdir(appData, { mode: 0o700 });
 const workspace = path.join(directory, "approved-folder");
 await fs.mkdir(workspace, { mode: 0o700 });
 let serverViolation = null;
@@ -179,7 +182,6 @@ try {
     executablePath: executable,
     args: [
       path.join(root, "_output/build/app/main.cjs"),
-      `--user-data-dir=${path.join(directory, "user-data")}`,
       "--preview-window-mode=hidden",
     ],
     env: {
@@ -189,7 +191,7 @@ try {
       LANG: "en_US.UTF-8",
       FAROL_E2E: "1",
       FAROL_ENVIRONMENT: "dev",
-      FAROL_E2E_APP_DATA: path.join(directory, "app-data"),
+      FAROL_E2E_APP_DATA: appData,
       FAROL_E2E_TEST_ROOT: directory,
       FAROL_E2E_TEST_PROOF: proof,
       FAROL_E2E_WORKSPACE_ROOT: workspace,
@@ -237,6 +239,19 @@ try {
     "OWNED_WINDOW_UNCONFIRMED",
   );
   await waitForReactShell(page);
+  assert.deepEqual(
+    await app.evaluate(({ app }) => ({
+      home: app.getPath("home"),
+      userData: app.getPath("userData"),
+      sessionData: app.getPath("sessionData"),
+    })),
+    {
+      home: directory,
+      userData: expectedUserData,
+      sessionData: expectedUserData,
+    },
+    "DISPOSABLE_DEV_PROFILE_REQUIRED",
+  );
   const initialProjection = await page.evaluate(() => window.farol.bootstrap());
   assert.equal(
     initialProjection.environment,
