@@ -20,6 +20,10 @@
       "sha256": "0ecd1dedacd271ec870df94cd75d32e7eed28bfad85c2540358e48c6b3f4bd7e"
     },
     {
+      "path": "modules/computer/infra/process/auditscalar.go",
+      "sha256": "0d789ea3e2f884590518b2e044ebf723452aff025eef1f084ac216b999a11734"
+    },
+    {
       "path": "modules/computer/infra/process/cancel.go",
       "sha256": "cc3a03fe971e439b16dd9b583c14ee6e93715af11f62d414c323314705f73455"
     },
