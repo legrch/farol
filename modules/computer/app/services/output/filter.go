@@ -1,6 +1,6 @@
-// Package auditfilter projects complete, bounded execution text for local Activity.
+// Package output projects complete, bounded execution text for local Activity.
 // It is not a guarantee that every unknown secret or personal value is detected.
-package auditfilter
+package output
 
 import (
 	"encoding/json"

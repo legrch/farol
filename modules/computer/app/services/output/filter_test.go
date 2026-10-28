@@ -1,4 +1,4 @@
-package auditfilter
+package output
 
 import (
 	"encoding/json"
