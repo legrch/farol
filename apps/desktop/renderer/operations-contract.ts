@@ -102,8 +102,8 @@ const ExecutionIdentifierSchema = z
 const OperationReferenceSchema = z.strictObject({
   owner: z.enum(["computer.process", "computer.mutation", "release"]),
   operationId: ExecutionIdentifierSchema,
-  buildId: z.string().regex(/^[a-f0-9]{64}$/u),
-  runtimeId: ExecutionIdentifierSchema,
+  buildId: ExecutionIdentifierSchema.max(120),
+  runtimeId: ExecutionIdentifierSchema.max(120),
   binding: z.enum(["requested", "accepted"]),
 });
 const CleanupSchema = z.enum(["pending", "confirmed", "unverified"]);

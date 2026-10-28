@@ -257,7 +257,7 @@ it("reads mixed V1 and bounded V2 observations without rewriting history or acce
     operationRef: {
       owner: "computer.process",
       operationId: "start-1",
-      buildId: "a".repeat(64),
+      buildId: "build",
       runtimeId: "runtime-1",
       binding: "accepted",
     },
