@@ -8,6 +8,7 @@ import { readGoBuildInputs } from "./go-build-inputs.mjs";
 import { embedBuiltCore, GO_CORE_ENTRIES } from "./go-core-artifact.mjs";
 import { declareCoreResources } from "./core-resources.mjs";
 import { verifyRuntimeExecutableClosure } from "./runtime-launch-manifest.mjs";
+import { embedTunnelClient } from "./tunnel-client-artifact.mjs";
 import {
   declareShellSupport,
   verifyHostShellResources,
@@ -331,6 +332,8 @@ const nativeArchive = await compileNativeArchive({
   root,
   readSource: readBuildInput,
 });
+const tunnelInput = await embedTunnelClient(output, root);
+inputRecords.set(`dependency:${tunnelInput.path}`, tunnelInput);
 assertNativeArchiveBytes(nativeArchive.bytes);
 await fs.writeFile(
   path.join(output, NATIVE_ARCHIVE_OUTPUT),

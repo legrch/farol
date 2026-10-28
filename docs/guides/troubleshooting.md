@@ -24,7 +24,11 @@ Closing a window leaves Farol running. If changing between already accepted buil
 
 In **Setup → Connect this Mac**, **Connect** discovers and validates the helper before using it. Review the displayed cause and recovery action if it fails. A candidate path or saved setting alone is insufficient. If the result is pending or unknown, observe it through [Recovery](recovery.md) before another connection attempt.
 
-A clean-machine helper installation/distribution path is still an open readiness gate. If the displayed cause says the helper is unavailable, use **Open OpenAI Tunnels** for OpenAI's supported `tunnel-client` installation instructions for the same macOS account. Return to **Connect** only after the earlier attempt has a known result. If no supported helper can be found, retain the diagnostic and ask the maintainer for the accepted prerequisite. This guide does not invent a download or executable-selection workaround.
+Current source selects the connection helper bundled with Farol. If it cannot
+be verified, retain the diagnostic and reinstall the accepted Farol release;
+installing another `tunnel-client` outside the app does not repair its resources.
+Return to **Connect** only after the earlier attempt has a known result.
+Clean-machine and signed-distribution acceptance remain separate readiness gates.
 
 ## Tunnel or credentials are refused
 

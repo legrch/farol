@@ -13,6 +13,7 @@ import {
 } from "./build-contract.mjs";
 import { assertBuildIdentity } from "./build-identity-contract.mjs";
 import { requiresGoCore } from "./release-identity.mjs";
+import { verifyBundledTunnelClient } from "./tunnel-client-artifact.mjs";
 import { GEIST_VERSION, verifyGeistBuild } from "./font-contract.mjs";
 import {
   NATIVE_SAFE_OPEN_HELPER,
@@ -243,6 +244,10 @@ export async function verifyPackageContent({
     "PACKAGE_EMBEDDED_ENTRY_SET_INVALID",
   );
   await verifyBuildEntries(resources, embedded.entrySha256, entries);
+  // Entry hashes alone are self-consistency. Bundled vendor bytes must also
+  // match the independently reviewed upstream identity before any execution.
+  if (entries.includes("tunnel-client"))
+    await verifyBundledTunnelClient(resources);
   if (layout.core)
     await verifyRuntimeExecutableClosure({
       directory: resources,

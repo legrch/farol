@@ -180,6 +180,7 @@ import {
 import os from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { TUNNEL_CLIENT } from "../../../apps/desktop/tunnel-client-contract";
 import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
@@ -452,10 +453,8 @@ import {
 import { probeCodexHost } from "./codex-host-probe";
 import {
   discoverExecutables,
-  REVIEWED_TUNNEL_CLIENT_DIGESTS,
   type DiscoveryCandidate,
 } from "./executable-discovery";
-import { adoptReviewedTunnelClient } from "./tunnel-client-adoption";
 import {
   UNTRUSTED_CANDIDATE_DIALOG,
   reverifyDiscoveredCandidate as reverifyDiscoveredCandidateImpl,
@@ -4381,18 +4380,7 @@ async function selectedTunnelClientExecutable(): Promise<
 > {
   const testExecutable = e2eTunnelClientExecutable();
   if (testExecutable !== undefined) return testExecutable;
-  if (!window) return "invalid";
-  const result = await dialog.showOpenDialog(window, {
-    title: "Choose the tunnel-client executable",
-    buttonLabel: "Verify tunnel-client",
-    properties: ["openFile"],
-    securityScopedBookmarks: false,
-  });
-  if (result.canceled || result.filePaths.length !== 1) return "cancelled";
-  const selected = result.filePaths[0];
-  return selected && path.isAbsolute(selected) && !selected.includes("\0")
-    ? selected
-    : "invalid";
+  return path.join(directory, TUNNEL_CLIENT.entry);
 }
 
 async function verifyTunnelClientExecutable(
@@ -4401,9 +4389,20 @@ async function verifyTunnelClientExecutable(
 ): Promise<ProductConfigurationResult> {
   if (!configuration) return configurationFailure("SETTINGS_UNAVAILABLE");
   try {
+    const fixture = e2eTunnelClientExecutable();
+    const bundledPath = path.join(directory, TUNNEL_CLIENT.entry);
+    const fixtureSelected =
+      fixture !== undefined &&
+      fixture !== "invalid" &&
+      fixture === executablePath;
+    if (!fixtureSelected && executablePath !== bundledPath)
+      return configurationFailure("TUNNEL_CLIENT_EXECUTABLE_UNSAFE");
+    const expected = fixtureSelected
+      ? expectedDiscovery
+      : { canonicalPath: bundledPath, sha256: TUNNEL_CLIENT.sha256 };
     const probe = await probeTunnelClient({
       executablePath,
-      ...(expectedDiscovery ? { expectedDiscovery } : {}),
+      ...(expected ? { expectedDiscovery: expected } : {}),
     });
     if (secureMcpConnectorRuntime?.isRunning()) {
       return configurationFailure("CONNECTOR_STOP_REQUIRED");
@@ -5292,11 +5291,11 @@ async function startAdmittedSecureMcpConnector(
   // cannot fall back to a separate TS authority or native helper.
   const core = desktopGoCore;
   if (!core) return configurationFailure("CONNECTOR_START_FAILED");
-  const snapshot = configuration.snapshot();
+  let snapshot = configuration.snapshot();
   if (snapshot.status !== "ready") {
     return configurationFailure("SETTINGS_UNAVAILABLE");
   }
-  const connector = snapshot.settings.connectors.secureMcp;
+  let connector = snapshot.settings.connectors.secureMcp;
   if (connectorRuntimeUncertain(snapshot.settings))
     return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
   if (!connector.tunnelClient || !connector.tunnelId) {
@@ -5307,6 +5306,27 @@ async function startAdmittedSecureMcpConnector(
   // refused or lost before the credential state became durable.
   if (connector.credential !== "stored")
     return configurationFailure("CONNECTOR_CREDENTIAL_REQUIRED");
+  // The old owner is already stopped above. Rebind the reviewed app-owned
+  // executable without replaying any previous configure/start operation.
+  if (
+    e2eTunnelClientExecutable() === undefined &&
+    connector.tunnelClient.executablePath !==
+      path.join(directory, TUNNEL_CLIENT.entry)
+  ) {
+    const selected = await verifyTunnelClientExecutable(
+      path.join(directory, TUNNEL_CLIENT.entry),
+    );
+    if (!selected.ok) return selected;
+    snapshot = configuration.snapshot();
+    if (
+      snapshot.status !== "ready" ||
+      !snapshot.settings.connectors.secureMcp.tunnelClient
+    )
+      return configurationFailure("SETTINGS_UNAVAILABLE");
+    connector = snapshot.settings.connectors.secureMcp;
+  }
+  if (!connector.tunnelClient || !connector.tunnelId)
+    return configurationFailure("CONNECTOR_CONFIGURE_FAILED");
   // Settings pin canonical bytes, not just a command pathname. Recheck
   // before configure/doctor/start can execute the saved selection.
   try {
@@ -7422,68 +7442,16 @@ async function configureAdmittedProduct(
         if (testExecutable !== undefined) {
           return verifyTunnelClientExecutable(testExecutable);
         }
-        const discovered = await discoverExecutables("tunnel-client");
-        for (const candidate of discovered.candidates) {
-          if (candidate.verdict !== "offer") continue;
-          if (!candidate.sha256) continue;
-          const verified = await verifyTunnelClientExecutable(candidate.path, {
-            canonicalPath: candidate.path,
-            sha256: candidate.sha256,
-          });
-          if (verified.ok) return verified;
-        }
-        // A build another macOS user owns (Homebrew installed by the Mac's
-        // first account) is refused as is; copy it into this user's reviewed
-        // build directory, accepted only on the pinned digest, and verify the
-        // copy the same way.
-        for (const candidate of discovered.candidates) {
-          if (candidate.refusalReason !== "wrong-owner") continue;
-          const adopted = await adoptReviewedTunnelClient(candidate.path, {
-            home: os.homedir(),
-            arch: process.arch,
-            reviewedDigests: REVIEWED_TUNNEL_CLIENT_DIGESTS,
-          });
-          if (!adopted.ok) continue;
-          const verified = await verifyTunnelClientExecutable(adopted.path, {
-            canonicalPath: adopted.path,
-            sha256: adopted.sha256,
-          });
-          if (verified.ok) return verified;
-        }
-        return ProductConfigurationResultSchema.parse({
-          ok: true,
-          snapshot: configuration.snapshot(),
-          evidence: {
-            kind: "connector.client-discovery",
-            candidates: discovered.candidates,
-            searched: discovered.searched,
-          },
-        });
+        return verifyTunnelClientExecutable(
+          path.join(directory, TUNNEL_CLIENT.entry),
+        );
       } catch {
         return configurationFailure("TUNNEL_CLIENT_DISCOVERY_FAILED");
       }
     }
     case "connector.select-discovered-client": {
-      if (secureMcpConnectorRuntime?.isRunning()) {
-        return configurationFailure("CONNECTOR_STOP_REQUIRED");
-      }
-      const candidate = await reverifyDiscoveredCandidate(
-        "tunnel-client",
-        command.path,
-      );
-      if (candidate === "stale") {
-        return configurationFailure("TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE");
-      }
-      if (candidate === "declined") {
-        return configurationFailure("TUNNEL_CLIENT_PICKER_CANCELLED");
-      }
-      if (!candidate.sha256) {
-        return configurationFailure("TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE");
-      }
-      return verifyTunnelClientExecutable(candidate.path, {
-        canonicalPath: candidate.path,
-        sha256: candidate.sha256,
-      });
+      // Retained requests cannot select an external executable in a bundled build.
+      return configurationFailure("TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE");
     }
     case "connector.save-and-connect":
       // Combined requests enter only through the retained, reservation-owned route.

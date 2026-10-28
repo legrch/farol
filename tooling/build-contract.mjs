@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { BRAND_RESOURCES } from "./brand-contract.mjs";
+import { TUNNEL_CLIENT_ENTRIES } from "../apps/desktop/tunnel-client-contract.ts";
 
 export const LEGACY_BUILD_ENTRIES = Object.freeze([
   "Geist-OFL.txt",
@@ -28,6 +29,7 @@ export const LEGACY_BUILD_ENTRIES = Object.freeze([
 export const BUILD_ENTRIES = Object.freeze(
   [
     ...LEGACY_BUILD_ENTRIES,
+    ...TUNNEL_CLIENT_ENTRIES,
     ...BRAND_RESOURCES.map((resource) => resource.output),
   ].sort(),
 );

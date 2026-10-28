@@ -221,7 +221,7 @@ export function setupStepCheck(
   const refusalCause =
     preSubmitRemedy ??
     (helperMissing
-      ? "This Mac could not find a usable connection helper. Install tunnel-client for this account."
+      ? "Farol could not verify its bundled connection helper. Reinstall Farol from a trusted release."
       : keyRejected
         ? "OpenAI did not accept this key. It may be revoked or belong to another tunnel."
         : refusal?.code === "CONNECTOR_CREDENTIAL_STORE_FAILED"
@@ -240,7 +240,7 @@ export function setupStepCheck(
     label: keyRejected
       ? "Create a new key in OpenAI Tunnels"
       : helperMissing
-        ? "How to install tunnel-client"
+        ? "Read the installation guide"
         : "Read the setup guide",
     destination: keyRejected ? "tunnels" : "setup-guide",
   };

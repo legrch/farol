@@ -4,6 +4,11 @@ Whoever creates disk output removes it. Retention is explicit, bounded and
 reported. Nothing accumulates silently in `_output`, Docker or a private
 recovery store.
 
+The reviewed Tunnel Client build input occupies one fixed
+`_output/tunnel-client` slot, verified before embedding by
+`tooling/tunnel-client-artifact.mjs`. It is a current dependency input, not a
+versioned archive or a source of authority for other unknown output.
+
 ## Rules
 
 1. **Creators clean up.** A producer removes its own scratch on success, failure

@@ -182,7 +182,8 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
       "runCommand",
       "execFile",
       "command.executablePath",
-      "optional-user-executable",
+      "app-owned-go-executable",
+      ["tunnel-client"],
     ),
     launch(
       "desktop.connector-runtime",
@@ -199,7 +200,8 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
       "runProbe",
       "execFile",
       "command.executablePath",
-      "optional-user-executable",
+      "app-owned-go-executable",
+      ["tunnel-client"],
     ),
     launch(
       "task.shared-proxy",
@@ -378,7 +380,7 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
     {
       file: desktop + "secure-mcp-connector-runtime.ts",
       symbol: "CONNECTOR_GROUP_ANCHOR",
-      classification: "optional-user-executable",
+      classification: "app-owned-go-executable",
       expressions: ["process.argv[1]"],
     },
   ],
@@ -403,6 +405,13 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
     },
   ],
   resources: [
+    {
+      key: "tunnel-client",
+      ledger: "build",
+      kind: "go-macho",
+      owner: "tooling/tunnel-client-artifact.mjs",
+      mode: "executable",
+    },
     {
       key: "farol-backend",
       ledger: "core",

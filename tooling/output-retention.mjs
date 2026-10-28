@@ -83,6 +83,7 @@ export const CURRENT_OUTPUTS = Object.freeze([
   "tests",
   "tmp",
   "toolchains",
+  "tunnel-client",
 ]);
 
 // The process table and open files in one observation. A failed read is

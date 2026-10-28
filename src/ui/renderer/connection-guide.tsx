@@ -19,8 +19,8 @@ export function ConnectionGuide() {
           <li>
             <strong>Connect this Mac.</strong> Create a tunnel named Farol and a
             Restricted key with Tunnels: Read and Use in OpenAI. Enter the
-            Tunnel ID and Key, then choose Connect. Farol finds the helper,
-            saves the key, connects and checks health.
+            Tunnel ID and Key, then choose Connect. Farol uses its bundled
+            helper, saves the key, connects and checks health.
           </li>
           <li>
             <strong>Add to ChatGPT.</strong> In Settings → Apps, create Farol

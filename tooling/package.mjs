@@ -14,6 +14,7 @@ import {
   runtimeClosure,
 } from "./runtime-contract.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
+import { verifyBundledTunnelClient } from "./tunnel-client-artifact.mjs";
 import { packageInfoPlist } from "./package-platform.mjs";
 import {
   PACKAGE_SCHEMA,
@@ -80,6 +81,7 @@ if (
   throw new Error("BUILD_ENTRY_SET_INVALID");
 }
 await verifyBuildEntries(builtRoot, manifest.entrySha256, entries);
+await verifyBundledTunnelClient(builtRoot);
 const buildIdentity = assertBuildIdentity(
   JSON.parse(
     await fs.readFile(path.join(builtRoot, "build-identity.json"), "utf8"),

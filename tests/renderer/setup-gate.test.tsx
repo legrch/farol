@@ -22,6 +22,36 @@ const steps: readonly SetupCheckpoint[] = [
   "connection",
   "attachment",
 ];
+
+it("reports an unavailable bundled helper without asking for a separate installation", async () => {
+  const h = await mount({ step: "connection" });
+  const snapshot = syntheticSnapshot(
+    h.c.getSnapshot(),
+    "connection",
+    "refused",
+  );
+  if (snapshot.configuration?.status !== "ready")
+    throw new Error("fixture unavailable");
+  snapshot.configuration.settings.connectors.secureMcp.tunnelClient = null;
+  const id = "settings:connector.discover-client:synthetic";
+  const result = setupStepCheck(
+    {
+      ...snapshot,
+      intents: {
+        [id]: { id, state: "refused", code: "TUNNEL_CLIENT_EXECUTABLE_UNSAFE" },
+      },
+    },
+    "connection",
+  );
+  expect(result.allowed).toBe(false);
+  expect(result.cause).toContain("bundled connection helper");
+  expect(result.cause).not.toContain("Install tunnel-client");
+  expect(result.action).toEqual({
+    kind: "guide",
+    label: "Read the installation guide",
+    destination: "setup-guide",
+  });
+});
 const states = [
   "success-current",
   "success-stale",

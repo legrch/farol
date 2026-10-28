@@ -175,6 +175,7 @@ describe("_output retention", () => {
   it("reports top-level entries no producer owns without removing them", async () => {
     const legacy = await entry("preserved-package-old", { ageDays: 60 });
     await entry("build/app");
+    await entry("tunnel-client");
     const report = await inspectOutput(root, {
       observation: observe(),
       now: NOW,
@@ -189,6 +190,7 @@ describe("_output retention", () => {
     expect(states).toMatchObject({
       "preserved-package-old": "unknown",
       build: "current",
+      "tunnel-client": "current",
     });
     await prune(observe());
     expect(await exists(legacy)).toBe(true);

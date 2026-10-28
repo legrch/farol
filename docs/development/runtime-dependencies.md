@@ -8,6 +8,15 @@ installation acceptance.
 
 ## Current selected source owners
 
+The connection path selects the app-owned full Tunnel Client CLI, with its
+reviewed upstream hash checked independently of the build entry ledger before
+packaging. Build preparation supplies the reviewed raw executable and notices
+in one `_output/tunnel-client` slot. Existing external selections cannot override
+the bundle; an admitted replacement requires the previous connector owner to
+be confirmed stopped. The init, doctor and run protocol and UNKNOWN fences
+remain unchanged. Source wiring does not establish native or signed-release
+acceptance, or completion of third-party dependency notice qualification.
+
 | Capability                                                      | Selected owner and adapter                                                                                                                                                                                                                                                                                             | Remaining retirement exit                                                                                                                                                                      |
 | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Computer file operations and Settings search in Go-aware builds | Electron command/IPC → Go Computer authority/service → existing Go filesystem owner. Selected failures do not dispatch Python.                                                                                                                                                                                         | Native, packaged-process and installed qualification; preserve explicit legacy/dev helper compatibility until separately retired.                                                              |
