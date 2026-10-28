@@ -250,6 +250,42 @@ func (s *computerConnector) cancelProcess(ctx context.Context, slot *connectorSl
 	return out, nil
 }
 
+// startQualifiedShell is the owner-bound path for connector commands. It can
+// also be reused by a foreground check without manufacturing a task, lease,
+// producer, or replacement operation. The original slot remains authoritative.
+func (s *computerConnector) startQualifiedShell(ctx context.Context, slot *connectorSlot, current wire.ComputerConnectorExecution, operation, call string, request connectorShellRequest, selectLaunch connectorShellSelection) (*processct.StartResponse, error) {
+	if ctx == nil || selectLaunch == nil || !shellRelativeCwd(request.RelativeCwd) || strings.ContainsRune(request.Command, 0) {
+		return nil, connectorProcessRefusal("PROCESS_INPUT_INVALID")
+	}
+	if err := s.checkMutationSlot(ctx, slot, current); err != nil {
+		return nil, err
+	}
+	// Only the filtered command enters the ledger.
+	command := s.auditCommandProjection(ctx, request.Command)
+	out, err := s.startProcessWithAudit(ctx, slot, operation, call, func(ctx context.Context, lease *execution.Lease) (processsvc.Prepared, processsvc.ObservationWorkspace, error) {
+		prepared, workspace, err := selectLaunch(ctx, lease, request)
+		if err != nil || prepared == nil || workspace == nil {
+			return nil, nil, connectorPreparationFailure(err)
+		}
+		seal := prepared.Seal()
+		cwd := seal.Root
+		if request.RelativeCwd != "." {
+			cwd += "/" + request.RelativeCwd
+		}
+		if seal.WorkspaceID != request.WorkspaceID || seal.Cwd != cwd || seal.Write != request.Write {
+			return nil, nil, connectorProcessRefusal("PROCESS_PREPARATION_SCOPE_REFUSED")
+		}
+		return prepared, workspace, nil
+	}, command)
+	if err != nil {
+		return nil, err
+	}
+	if out == nil || out.OperationID != operation || !validIngressID(out.Handle) {
+		return nil, connectorProcessUnknown()
+	}
+	return out, nil
+}
+
 func (s *computerConnector) processMethods(slot *connectorSlot, selectLaunch connectorShellSelection) map[string]desktop.Method {
 	if selectLaunch == nil || s.mutations == nil {
 		return nil
@@ -263,31 +299,11 @@ func (s *computerConnector) processMethods(slot *connectorSlot, selectLaunch con
 			if !valid(r, "ComputerConnectorProcessStart", true) || json.Unmarshal(r.Body, &in) != nil || !shellRelativeCwd(in.RelativeCwd) || strings.ContainsRune(in.Command, 0) {
 				return invalidIngress()
 			}
-			if err := s.checkMutationSlot(ctx, slot, in.Execution); err != nil {
-				return connectorProcessOutcome(nil, err)
-			}
 			request := connectorShellRequest{WorkspaceID: in.WorkspaceId, RelativeCwd: in.RelativeCwd, Command: in.Command, Write: in.Write}
 			if in.Stdin != nil {
 				request.Stdin = *in.Stdin
 			}
-			// Only the filtered value enters the ledger; stdin and raw command stay
-			// with the original execution request and its existing producer.
-			command := s.auditCommandProjection(ctx, in.Command)
-			out, err := s.startProcessWithAudit(ctx, slot, r.OperationID, in.CallId, func(ctx context.Context, lease *execution.Lease) (processsvc.Prepared, processsvc.ObservationWorkspace, error) {
-				prepared, workspace, err := selectLaunch(ctx, lease, request)
-				if err != nil || prepared == nil || workspace == nil {
-					return nil, nil, connectorPreparationFailure(err)
-				}
-				seal := prepared.Seal()
-				cwd := seal.Root
-				if request.RelativeCwd != "." {
-					cwd += "/" + request.RelativeCwd
-				}
-				if seal.WorkspaceID != request.WorkspaceID || seal.Cwd != cwd || seal.Write != request.Write {
-					return nil, nil, connectorProcessRefusal("PROCESS_PREPARATION_SCOPE_REFUSED")
-				}
-				return prepared, workspace, nil
-			}, command)
+			out, err := s.startQualifiedShell(ctx, slot, in.Execution, r.OperationID, in.CallId, request, selectLaunch)
 			if err != nil {
 				return connectorProcessOutcome(nil, err)
 			}
