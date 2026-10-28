@@ -42,6 +42,7 @@ func TestProcessTerminalAuditReadsOnlyOriginalPublishedFacts(t *testing.T) {
 
 func TestProcessAuditHostMethodDoesNotDiscloseRawOutput(t *testing.T) {
 	s, _, journal, child, _ := connectorProcessFixture(t)
+	s.auditFilter = nil // Explicitly exercise the unavailable-filter path.
 	publisher := &connectorProcessPublisherDouble{connectorProcessJournalDouble: journal, s: s, digest: strings.Repeat("a", 64)}
 	s.mutations.dependencies.repository = publisher
 	start := startConnectorProcessFixture(t, s, child)
@@ -168,8 +169,8 @@ func TestAuditHostMethodNeverTransportsRawProcessSecrets(t *testing.T) {
 		publisher := &connectorProcessPublisherDouble{connectorProcessJournalDouble: journal, s: s, digest: strings.Repeat("a", 64)}
 		s.mutations.dependencies.repository = publisher
 		child.stdoutData, child.stderrData = []byte("password=PRIVATE-STDOUT"), []byte("token=PRIVATE-STDERR")
-		if filterAvailable {
-			s.auditFilter = func(value string) (string, error) { return value, nil }
+		if !filterAvailable {
+			s.auditFilter = nil
 		}
 		command := processsvc.ProjectAuditCommand("password=PRIVATE-COMMAND", s.auditFilter)
 		start, err := s.startProcessWithAudit(context.Background(), s.current, "secret-audit", "call", child.selectLaunch, command)
@@ -188,5 +189,34 @@ func TestAuditHostMethodNeverTransportsRawProcessSecrets(t *testing.T) {
 		if err != nil || result.Status != "ok" || wire.Validate("ComputerProcessAuditResult", result.Data) != nil || strings.Contains(string(result.Data), "PRIVATE-") {
 			t.Fatal("audit transport exposed source material")
 		}
+	}
+}
+
+func TestProductionAuditHostMethodMasksLibraryCredential(t *testing.T) {
+	s, _, journal, child, _ := connectorProcessFixture(t)
+	publisher := &connectorProcessPublisherDouble{connectorProcessJournalDouble: journal, s: s, digest: strings.Repeat("a", 64)}
+	s.mutations.dependencies.repository = publisher
+	secret := "ghp_" + strings.Repeat("A", 30)
+	child.stdoutData, child.stderrData = []byte("credential "+secret), []byte("fatal: not a git repository\n")
+	command := s.auditCommandProjection(context.Background(), "git status")
+	start, err := s.startProcessWithAudit(context.Background(), s.current, "production-audit", "call", child.selectLaunch, command)
+	if err != nil || start == nil {
+		t.Fatal("process did not start")
+	}
+	child.terminal = true
+	done := processCollectionDone(s, start.OperationID)
+	close(child.completed)
+	awaitProcessCollectionDone(t, done)
+	body, err := json.Marshal(wire.ComputerProcessAuditRequest{OperationId: start.OperationID, BuildId: journal.scope.Host.BuildID, RuntimeId: journal.scope.Host.RuntimeID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.processAuditMethod().Handle(context.Background(), desktop.Request{Body: body})
+	var result wire.ComputerProcessAuditResult
+	if err != nil || out.Status != "ok" || json.Unmarshal(out.Data, &result) != nil || result.Fact == nil || result.Fact.AuditDetails == nil {
+		t.Fatal("original terminal audit unavailable")
+	}
+	if strings.Contains(string(out.Data), secret) || result.Fact.AuditDetails.Stdout.Text == nil || *result.Fact.AuditDetails.Stdout.Text != "[REDACTED]" || result.Fact.AuditDetails.Stderr.Text == nil || *result.Fact.AuditDetails.Stderr.Text != string(child.stderrData) {
+		t.Fatal("production audit did not protect the secret and retain the diagnostic")
 	}
 }

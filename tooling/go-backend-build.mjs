@@ -247,8 +247,11 @@ function assertSource(snapshot, identity) {
 // Deliberately bounded to this accepted root graph. Changing these versions,
 // root directives, sums or cache formats requires a new caller contract.
 const REQUIRED_MODULES = new Map([
-  ["golang.org/x/sys", "v0.35.0"],
-  ["golang.org/x/text", "v0.28.0"],
+  ["github.com/google/go-cmp", { version: "v0.6.0", go: "1.13" }],
+  ["github.com/m-mizutani/gt", { version: "v0.1.0", go: "1.19" }],
+  ["github.com/m-mizutani/masq", { version: "v0.2.3", go: "1.24" }],
+  ["golang.org/x/sys", { version: "v0.35.0", go: "1.23.0" }],
+  ["golang.org/x/text", { version: "v0.28.0", go: "1.23.0" }],
 ]);
 const ZIP_LIMIT = 128 * 1024 * 1024;
 const CONTENT_LIMIT = 256 * 1024 * 1024;
@@ -275,7 +278,7 @@ function dependencySums(snapshot) {
     .trim()
     .split(/\s+/u);
   const wanted = ["module", MODULE, "go", "1.26.2", "require", "("];
-  for (const [modulePath, version] of REQUIRED_MODULES)
+  for (const [modulePath, { version }] of REQUIRED_MODULES)
     wanted.push(modulePath, version);
   wanted.push(")");
   if (JSON.stringify(tokens) !== JSON.stringify(wanted))
@@ -289,7 +292,7 @@ function dependencySums(snapshot) {
     const match = /^(\S+) (\S+) (h1:[A-Za-z0-9+/]{43}=)$/u.exec(line);
     if (!match) fail("MODULE_SUM_INVALID");
     const [, modulePath, version, sum] = match;
-    const expected = REQUIRED_MODULES.get(modulePath);
+    const expected = REQUIRED_MODULES.get(modulePath)?.version;
     const key = `${modulePath} ${version}`;
     if (
       !expected ||
@@ -327,7 +330,7 @@ function declareModuleInputs(inputs) {
     const frozen = Object.freeze({ ...input });
     if (
       !REQUIRED_MODULES.has(frozen.modulePath) ||
-      REQUIRED_MODULES.get(frozen.modulePath) !== frozen.version ||
+      REQUIRED_MODULES.get(frozen.modulePath).version !== frozen.version ||
       selected.has(frozen.modulePath)
     )
       fail("MODULE_INPUT_DECLARATION_INVALID");
@@ -641,9 +644,15 @@ async function authenticateModules(inputs, sums) {
       fail("MODULE_EXTRACTION_MISMATCH");
     const text = mod.bytes.toString("utf8").replace(/\/\/[^\n]*/gu, "");
     if (/^\s*replace\b/mu.test(text)) fail("MODULE_REPLACEMENT_UNSUPPORTED");
+    const goDirectives = text
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .filter((line) => /^go\b/u.test(line));
     if (
       !text.startsWith(`module ${input.modulePath}\n`) ||
-      !/^go 1\.23\.0\s*$/mu.test(text)
+      goDirectives.length !== 1 ||
+      goDirectives[0].split(/\s+/u).join(" ") !==
+        `go ${REQUIRED_MODULES.get(input.modulePath).go}`
     )
       fail("MODULE_GRAPH_UNSUPPORTED");
     const zipHash = input.zipHashPath
@@ -967,7 +976,7 @@ function assertEmbeddedBuildId(bytes, symbols, platform, expected) {
  * toolchain = { root: canonical SDK, treeSha256: APPROVED full-SDK digest,
  *   version: 'go1.26.2', goos: 'darwin', goarch: 'arm64' | 'amd64' }.
  * platform must match that declaration. This is a CGO-free production build.
- * moduleInputs must explicitly name BOTH pinned modules (see REQUIRED_MODULES):
+ * moduleInputs must explicitly name every pinned module (see REQUIRED_MODULES):
  * [{ modulePath, version, zipPath, modPath, contentRoot, zipHashPath? }]. Paths
  * must be canonical absolute regular inputs. contentRoot holds the exact ZIP
  * contents without module@version/. zipHashPath is an optional checked claim.

@@ -201,8 +201,9 @@ JSON file must have schema `farol-go-build-inputs/1` and these fields:
 - `toolchain`: canonical absolute SDK `root`, independently approved full-SDK
   `treeSha256`, `version: "go1.26.2"`, `goos: "darwin"`, and `goarch: "arm64"`
   for the current desktop target. A freshly measured digest is not approval.
-- `moduleInputs`: explicit entries for `golang.org/x/sys` `v0.35.0` and
-  `golang.org/x/text` `v0.28.0`, each with `modulePath`, `version`, `zipPath`,
+- `moduleInputs`: explicit entries for `github.com/google/go-cmp` `v0.6.0`,
+  `github.com/m-mizutani/gt` `v0.1.0`, `github.com/m-mizutani/masq` `v0.2.3`,
+  `golang.org/x/sys` `v0.35.0`, and `golang.org/x/text` `v0.28.0`, each with `modulePath`, `version`, `zipPath`,
   `modPath`, `contentRoot` and optional `zipHashPath`. Supply canonical absolute
   local paths; authentication uses committed `go.sum` and fails on missing inputs.
 

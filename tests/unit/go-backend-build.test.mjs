@@ -87,8 +87,21 @@ function git(root, ...args) {
 }
 
 const moduleVersions = [
-  ["golang.org/x/sys", "v0.35.0"],
-  ["golang.org/x/text", "v0.28.0"],
+  ["github.com/google/go-cmp", "v0.6.0", "1.13"],
+  [
+    "github.com/m-mizutani/gt",
+    "v0.1.0",
+    "1.19",
+    "require github.com/google/go-cmp v0.6.0\n",
+  ],
+  [
+    "github.com/m-mizutani/masq",
+    "v0.2.3",
+    "1.24",
+    "require (\n\tgithub.com/google/go-cmp v0.6.0\n\tgithub.com/m-mizutani/gt v0.1.0\n)\n",
+  ],
+  ["golang.org/x/sys", "v0.35.0", "1.23.0"],
+  ["golang.org/x/text", "v0.28.0", "1.23.0"],
 ];
 // Test input construction, with a published .mod h1 vector below as an
 // independent anchor. Synthetic ZIP contents are NOT the real Go modules.
@@ -157,12 +170,16 @@ async function moduleFixture(base, options = {}) {
   const inputs = [];
   const sums = [];
   const filesByModule = [];
-  for (const [index, [modulePath, version]] of moduleVersions.entries()) {
+  for (const [
+    index,
+    [modulePath, version, goVersion, requirements = ""],
+  ] of moduleVersions.entries()) {
     const directory = path.join(base, `module-${index}`);
     const contentRoot = path.join(directory, "content");
     await fs.mkdir(path.join(contentRoot, "lib"), { recursive: true });
     const mod = Buffer.from(
-      options.modOverrides?.[index] ?? `module ${modulePath}\n\ngo 1.23.0\n`,
+      options.modOverrides?.[index] ??
+        `module ${modulePath}\n\ngo ${goVersion}\n${requirements}`,
     );
     const prefix = `${modulePath}@${version}/`;
     const files = new Map([
@@ -243,7 +260,7 @@ async function fixture(options = {}) {
   await fs.writeFile(path.join(root, ".gitignore"), "_output/\nignored.go\n");
   await fs.writeFile(
     path.join(root, "go.mod"),
-    `module ${MODULE}\n\ngo 1.26.2\n\nrequire (\n\tgolang.org/x/sys v0.35.0\n\tgolang.org/x/text v0.28.0\n)\n`,
+    `module ${MODULE}\n\ngo 1.26.2\n\nrequire (\n${moduleVersions.map(([modulePath, version]) => `\t${modulePath} ${version}\n`).join("")})\n`,
   );
   await fs.writeFile(
     path.join(root, "cmd/farol/main.go"),
@@ -328,9 +345,14 @@ case "$1" in
     [ ! -e ignored.go ] && [ ! -e .git ]
     [ -d "$GOMODCACHE" ] && [ -d "$GOCACHE" ] && [ -z "$(ls -A "$GOCACHE")" ]
     [ ! -e "$GOMODCACHE/foreign" ]
-    [ -f "$GOMODCACHE/golang.org/x/sys@v0.35.0/go.mod" ]
-    [ -f "$GOMODCACHE/golang.org/x/text@v0.28.0/lib/source.go" ]
-    cmp "$GOMODCACHE/golang.org/x/sys@v0.35.0/go.mod" "$GOMODCACHE/cache/download/golang.org/x/sys/@v/v0.35.0.mod"
+    ${modules.inputs
+      .map(
+        ({ modulePath, version }) => `
+    [ -f "$GOMODCACHE/${modulePath}@${version}/lib/source.go" ]
+    cmp "$GOMODCACHE/${modulePath}@${version}/go.mod" "$GOMODCACHE/cache/download/${modulePath}/@v/${version}.mod"
+    [ "$(stat ${process.platform === "darwin" ? "-f %Lp" : "-c %a"} "$GOMODCACHE/${modulePath}@${version}/go.mod")" = 400 ]`,
+      )
+      .join("\n")}
     [ "$*" = ${quote(`build -p=2 -compiler=gc -buildmode=exe -trimpath -buildvcs=false -mod=${"readonly"} -ldflags=-X=${SYMBOL}=${identity.buildId}`)}" -o $(dirname \"$TMPDIR\")/farol-backend ./cmd/farol" ]
     ${options.buildAction ?? ""}
     while [ "$1" != -o ]; do shift; done
@@ -755,8 +777,19 @@ describe("explicit committed-sum-bound offline module inputs", () => {
     });
     expect(first.dependencies).toEqual(second.dependencies);
     expect(first.dependencyDigest).toBe(second.dependencyDigest);
-    expect(first.dependencies).toHaveLength(2);
-    expect(first.dependencies[0]).toMatchObject({
+    expect(
+      first.dependencies.map(({ modulePath, version }) => [
+        modulePath,
+        version,
+      ]),
+    ).toEqual(
+      moduleVersions.map(([modulePath, version]) => [modulePath, version]),
+    );
+    expect(
+      first.dependencies.find(
+        ({ modulePath }) => modulePath === "golang.org/x/sys",
+      ),
+    ).toMatchObject({
       modulePath: "golang.org/x/sys",
       version: "v0.35.0",
       fileCount: 5,
@@ -804,7 +837,7 @@ describe("explicit committed-sum-bound offline module inputs", () => {
   it("needs no caller ziphash and derives the owned cache claim from authenticated ZIP bytes", async () => {
     const f = await fixture();
     for (const input of f.options.moduleInputs) delete input.zipHashPath;
-    expect((await buildGoBackend(f.options)).dependencies).toHaveLength(2);
+    expect((await buildGoBackend(f.options)).dependencies).toHaveLength(5);
   });
 
   it.each([undefined, [], [{}]])(
@@ -850,6 +883,63 @@ describe("explicit committed-sum-bound offline module inputs", () => {
     );
     await inputRefuses(f, "MODULE_GRAPH_UNSUPPORTED");
   });
+  it.each(moduleVersions)(
+    "rejects omitted or unpinned root dependency %s@%s",
+    async (modulePath, version) => {
+      for (const replacement of ["", `\t${modulePath} v9.9.9\n`]) {
+        const f = await fixture();
+        const mod = await fs.readFile(path.join(f.root, "go.mod"), "utf8");
+        await committedChange(
+          f,
+          "go.mod",
+          mod.replace(`\t${modulePath} ${version}\n`, replacement),
+        );
+        await inputRefuses(f, "MODULE_GRAPH_UNSUPPORTED");
+      }
+    },
+  );
+  it.each(["reordered", "extra"])(
+    "rejects %s root requirements",
+    async (attack) => {
+      const f = await fixture();
+      const mod = await fs.readFile(path.join(f.root, "go.mod"), "utf8");
+      const first = moduleVersions
+        .slice(0, 2)
+        .map(([name, version]) => `\t${name} ${version}\n`);
+      await committedChange(
+        f,
+        "go.mod",
+        attack === "extra"
+          ? mod.replace(")", "\texample.invalid/foreign v1.0.0\n)")
+          : mod.replace(first.join(""), first.reverse().join("")),
+      );
+      await inputRefuses(f, "MODULE_GRAPH_UNSUPPORTED");
+    },
+  );
+  it.each(moduleVersions)(
+    "requires explicit inputs and both committed hashes for %s@%s",
+    async (modulePath, version) => {
+      const missing = await fixture();
+      missing.options.moduleInputs = missing.options.moduleInputs.filter(
+        (input) => input.modulePath !== modulePath,
+      );
+      await inputRefuses(missing, "MODULE_INPUT_DECLARATION_INVALID");
+      for (const suffix of ["", "/go.mod"]) {
+        const f = await fixture();
+        await committedChange(
+          f,
+          "go.sum",
+          f.modules.sums
+            .split("\n")
+            .filter(
+              (line) => !line.startsWith(`${modulePath} ${version}${suffix} `),
+            )
+            .join("\n"),
+        );
+        await inputRefuses(f, "MODULE_SUM_INVALID");
+      }
+    },
+  );
   it.each(["missing", "duplicate", "unknown", "malformed"])(
     "rejects %s committed checksum records",
     async (attack) => {
@@ -915,7 +1005,7 @@ describe("explicit committed-sum-bound offline module inputs", () => {
     const files = new Map(f.modules.filesByModule[0]);
     files.set(
       `${input.modulePath}@${input.version}/go.mod`,
-      Buffer.from("module golang.org/x/sys\n\ngo 1.23.0\n// zip differs\n"),
+      Buffer.from(`module ${input.modulePath}\n\ngo 1.13\n// zip differs\n`),
     );
     await fs.writeFile(input.zipPath, zipFixture(files));
     const sum = f.modules.sums.replace(
@@ -1009,20 +1099,36 @@ describe("explicit committed-sum-bound offline module inputs", () => {
     await fs.writeFile(f.modules.inputs[0].zipPath, bytes);
     await inputRefuses(f, "MODULE_ZIP_");
   });
-  it("rejects authenticated module replacements", async () => {
-    const f = await fixture({
-      modOverrides: {
-        0: "module golang.org/x/sys\n\ngo 1.23.0\nreplace foreign => /outside\n",
-      },
-    });
-    await inputRefuses(f, "MODULE_REPLACEMENT_UNSUPPORTED");
-  });
-  it("rejects authenticated module Go version drift", async () => {
-    const f = await fixture({
-      modOverrides: { 0: "module golang.org/x/sys\n\ngo 1.27.0\n" },
-    });
-    await inputRefuses(f, "MODULE_GRAPH_UNSUPPORTED");
-  });
+  it.each(moduleVersions)(
+    "rejects authenticated replacements in %s@%s",
+    async (modulePath, _version, goVersion) => {
+      const index = moduleVersions.findIndex(([name]) => name === modulePath);
+      const f = await fixture({
+        modOverrides: {
+          [index]: `module ${modulePath}\n\ngo ${goVersion}\nreplace foreign => /outside\n`,
+        },
+      });
+      await inputRefuses(f, "MODULE_REPLACEMENT_UNSUPPORTED");
+    },
+  );
+  it.each(moduleVersions)(
+    "rejects authenticated Go directive drift for %s@%s (expected %s)",
+    async (modulePath, _version, goVersion) => {
+      const index = moduleVersions.findIndex(([name]) => name === modulePath);
+      const otherVersion = goVersion === "1.23.0" ? "1.24" : "1.23.0";
+      for (const directive of [
+        `go ${otherVersion}`,
+        "go 1.27.0",
+        "",
+        `go ${goVersion}\ngo 1.27.0`,
+      ]) {
+        const f = await fixture({
+          modOverrides: { [index]: `module ${modulePath}\n\n${directive}\n` },
+        });
+        await inputRefuses(f, "MODULE_GRAPH_UNSUPPORTED");
+      }
+    },
+  );
   it.each([
     { Path: "golang.org/x/tools", Version: "v0.35.0", Sum: "forged" },
     { Path: "golang.org/x/sys", Version: "v0.36.0", Sum: "forged" },
@@ -1064,9 +1170,10 @@ describe("explicit committed-sum-bound offline module inputs", () => {
   });
   it("rejects duplicate binary module identities", async () => {
     const f = await fixture();
+    const input = f.modules.inputs[0];
     const dependency = {
-      Path: "golang.org/x/sys",
-      Version: "v0.35.0",
+      Path: input.modulePath,
+      Version: input.version,
       Sum: testH1(f.modules.filesByModule[0]),
     };
     // Replace metadata within the synthetic SDK, then declare its new test hash.
@@ -1101,7 +1208,7 @@ describe("explicit committed-sum-bound offline module inputs", () => {
   it("allows authenticated upstream metadata requirements without provisioning extra modules", async () => {
     const f = await fixture({
       modOverrides: {
-        1: "module golang.org/x/text\n\ngo 1.23.0\nrequire golang.org/x/tools v0.35.0 // unused tool-only graph in this fixture\n",
+        4: "module golang.org/x/text\n\ngo 1.23.0\nrequire golang.org/x/tools v0.35.0 // unused tool-only graph in this fixture\n",
       },
     });
     expect(

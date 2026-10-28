@@ -378,6 +378,10 @@ export async function verifyPackageContent({
     notices.includes("ws 8.22.0 (MIT)"),
     "PACKAGE_WS_NOTICE_INVALID",
   );
+  requireValue(
+    notices.includes("github.com/m-mizutani/masq v0.2.3 (Apache-2.0)"),
+    "PACKAGE_MASQ_NOTICE_INVALID",
+  );
 
   const launcherPath = path.join(appPath, "Contents/MacOS/Farol");
   const launcherStat = await fs.lstat(launcherPath);
