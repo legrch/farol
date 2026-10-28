@@ -35,12 +35,12 @@ func newComputerReaders(home string) (*computerFileOwners, error) {
 	return &computerFileOwners{legacyRead: legacyRead, rootRead: rootRead}, nil
 }
 
-func newComputerFileOwners(home string) (*computerFileOwners, error) {
+func newComputerFileOwners(home string, protected ...port.Root) (*computerFileOwners, error) {
 	image, err := currentComputerImageRoot()
 	if err != nil {
 		return nil, err
 	}
-	return newComputerFileOwnersWithImage(home, image)
+	return newComputerFileOwnersWithImage(home, image, protected...)
 }
 
 // The kernel executable, never a transport field or Shell setting, identifies
@@ -69,16 +69,23 @@ func currentComputerImageRoot() (port.Root, error) {
 	return port.Root{Path: image, Device: strconv.FormatUint(uint64(identity.Dev), 10), Inode: strconv.FormatUint(uint64(identity.Ino), 10)}, nil
 }
 
-func newComputerFileOwnersWithImage(home string, image port.Root) (*computerFileOwners, error) {
+// protectedComputerRoot is denial-only metadata from the qualified profile owner.
+// It does not grant access or replace the owner's lifetime checks.
+func protectedComputerRoot(root NativeRoot) port.Root {
+	return port.Root{Path: root.Path, Device: strconv.FormatUint(root.Device, 10), Inode: strconv.FormatUint(root.Inode, 10)}
+}
+
+func newComputerFileOwnersWithImage(home string, image port.Root, protected ...port.Root) (*computerFileOwners, error) {
+	protected = append([]port.Root{image}, protected...)
 	readers, err := newComputerReaders(home)
 	if err != nil {
 		return nil, err
 	}
-	legacyMutation, err := filesystem.NewMutableWithFilePolicy(home, authority.LegacyProtectedFiles, image)
+	legacyMutation, err := filesystem.NewMutableWithFilePolicy(home, authority.LegacyProtectedFiles, protected...)
 	if err != nil {
 		return nil, err
 	}
-	rootMutation, err := filesystem.NewMutableWithFilePolicy(home, authority.RootScopedFiles, image)
+	rootMutation, err := filesystem.NewMutableWithFilePolicy(home, authority.RootScopedFiles, protected...)
 	if err != nil {
 		return nil, err
 	}

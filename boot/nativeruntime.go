@@ -168,7 +168,7 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 	if err != nil {
 		return fail(err)
 	}
-	fileOwners, err := newComputerFileOwners(launch.Home)
+	fileOwners, err := newComputerFileOwners(launch.Home, protectedComputerRoot(computer))
 	if err != nil {
 		return fail(err)
 	}
