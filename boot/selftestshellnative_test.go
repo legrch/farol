@@ -67,4 +67,23 @@ func checkNativeSelfTestShell(t *testing.T, r *NativeRuntime, generation int) {
 			t.Fatal("self-test publication unconfirmed")
 		}
 	}
+	for _, kind := range []selfTestShellKind{selfTestShellQuick, selfTestShellCancel} {
+		op := fmt.Sprintf("self-check-%d-%d", generation, kind)
+		check, err := newSelfTestShell(r.connector, r.connector.current, workspace, op, op+"-call", op+"-cancel", kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		result := check.check(ctx)
+		cancel()
+		if result.Status != "pass" || result.Operation != op || result.Handle == "" {
+			t.Fatal("composed self-test failed", result)
+		}
+		select {
+		case <-processCollectionDone(r.connector, op):
+		case <-time.After(2 * time.Second):
+			t.Fatal("composed self-test publication unconfirmed")
+		}
+	}
+
 }
