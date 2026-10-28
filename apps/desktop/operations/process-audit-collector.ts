@@ -72,7 +72,9 @@ export class ProcessAuditCollector {
       if (terminals.has(key)) continue;
       let attempt = this.attempts.get(key);
       if (!attempt) {
-        if (this.attempts.size >= 1024) return;
+        // An unseen reference must not starve already tracked observations
+        // when the bounded attempt table is full. Keep all existing fences.
+        if (this.attempts.size >= 1024) continue;
         attempt = { count: 0, nextAt: 0, stopped: false };
         this.attempts.set(key, attempt);
       }

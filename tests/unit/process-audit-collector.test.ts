@@ -126,3 +126,38 @@ it("backs off when no terminal is observed without changing the original result"
   expect(reader.read).toHaveBeenCalledTimes(2);
   expect(writer.recordTerminalObservation).not.toHaveBeenCalled();
 });
+
+it("continues tracking known observations when new references exceed the limit", async () => {
+  let now = 0;
+  const reader = { read: vi.fn().mockResolvedValue(null) };
+  const writer = {
+    recordTerminalObservation: vi.fn().mockResolvedValue("recorded" as const),
+  };
+  const collector = new ProcessAuditCollector(writer, () => now);
+  for (let i = 0; i < 1024; i++) {
+    const tracked = {
+      ...entry,
+      operationRef: { ...ref, operationId: `tracked-${i}` },
+    };
+    collector.observe({ ...snapshot, entries: [tracked] }, reader, () => true);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  expect(reader.read).toHaveBeenCalledTimes(1024);
+  now = 5000;
+  const unseen = { ...entry, operationRef: { ...ref, operationId: "unseen" } };
+  const tracked = {
+    ...entry,
+    operationRef: { ...ref, operationId: "tracked-0" },
+  };
+  collector.observe(
+    { ...snapshot, entries: [unseen, tracked] },
+    reader,
+    () => true,
+  );
+  expect(reader.read).toHaveBeenCalledTimes(1025);
+  expect(reader.read).toHaveBeenLastCalledWith({
+    operationId: "tracked-0",
+    buildId: "build",
+    runtimeId: "runtime",
+  });
+});
