@@ -38,6 +38,7 @@ export class ProcessAuditCollector {
     if (
       this.busy ||
       snapshot.readPending ||
+      snapshot.readIncomplete ||
       snapshot.corruptLines > 0 ||
       !current()
     )

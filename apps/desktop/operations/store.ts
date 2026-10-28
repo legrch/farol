@@ -375,8 +375,8 @@ export class OperationsStore implements OperationsRecorder {
         const snapshot = await this.snapshot(5000);
         if (
           snapshot.readPending ||
-          snapshot.corruptLines > 0 ||
-          snapshot.writeFailures > 0
+          snapshot.readIncomplete ||
+          snapshot.corruptLines > 0
         )
           return "unavailable" as const;
         const matches = (entry: OperationEntry) =>
@@ -809,6 +809,7 @@ export class OperationsStore implements OperationsRecorder {
   private async readSnapshot(): Promise<OperationsSnapshot> {
     const cutoff = this.now() - this.limits.days * dayMs;
     let corruptLines = 0;
+    let readIncomplete = false;
     const entries: OperationEntry[] = [];
     const labels = this.currentLabels ?? (await this.readLabels());
     this.readLabelsCache = labels;
@@ -916,10 +917,16 @@ export class OperationsStore implements OperationsRecorder {
                 if (parsed.success) {
                   if (parsed.data.at >= cutoff) entries.push(parsed.data);
                 } else if (!incomplete) corruptLines++;
-                else if (!tailCompleted) diagnostics.writeFailures++;
+                else if (!tailCompleted) {
+                  diagnostics.writeFailures++;
+                  readIncomplete = true;
+                }
               } catch {
                 if (!incomplete) corruptLines++;
-                else if (!tailCompleted) diagnostics.writeFailures++;
+                else if (!tailCompleted) {
+                  diagnostics.writeFailures++;
+                  readIncomplete = true;
+                }
               }
             }
           }
@@ -945,6 +952,7 @@ export class OperationsStore implements OperationsRecorder {
         .sort((a, b) => a.at - b.at)
         .slice(-this.limits.entries),
       corruptLines,
+      ...(readIncomplete ? { readIncomplete: true } : {}),
       ...diagnostics,
     };
   }

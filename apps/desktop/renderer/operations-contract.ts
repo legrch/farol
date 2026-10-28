@@ -188,6 +188,9 @@ export const OperationsSnapshotSchema = z.strictObject({
   connectionChecking: z.boolean().optional(),
   // A bounded read has not finished; cached rows may be stale.
   readPending: z.boolean().optional(),
+  // A current segment could not be read completely; historical diagnostics
+  // alone do not imply that the present snapshot is incomplete.
+  readIncomplete: z.boolean().optional(),
   entries: z.array(OperationEntrySchema).max(20000),
   corruptLines: z.number().int().nonnegative().safe(),
 });

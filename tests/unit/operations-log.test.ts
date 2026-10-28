@@ -500,10 +500,45 @@ it("does not append a terminal observation when the journal snapshot is unreliab
   const baseline = await store.snapshot(5000);
   const read = vi
     .spyOn(store, "snapshot")
-    .mockResolvedValueOnce({ ...baseline, writeFailures: 1 });
+    .mockResolvedValueOnce({ ...baseline, readIncomplete: true });
   expect(await store.recordTerminalObservation(ref, fact)).toBe("unavailable");
   read.mockRestore();
   expect((await store.snapshot(5000)).entries).toHaveLength(1);
+});
+it("does not confuse a historical write failure with an incomplete current snapshot", async () => {
+  const { store } = setup();
+  const ref = {
+    owner: "computer.process" as const,
+    operationId: "start-id",
+    buildId: "build",
+    runtimeId: "runtime",
+    binding: "requested" as const,
+  };
+  const fact = {
+    operationId: "start-id",
+    buildId: "build",
+    runtimeId: "runtime",
+    exitCode: 0,
+    exitSignal: 0,
+    rootWaited: true,
+    outputDrained: true,
+    groupCleanup: "confirmed" as const,
+    descendantCleanup: "confirmed" as const,
+    timedOut: false,
+    authorityLost: false,
+  };
+  store.beginExecution(
+    { source: "ChatGPT", kind: "computer_shell_start", target: {} },
+    { operationRef: ref, subjectRef: null },
+  )("unknown", "PROCESS_OUTCOME_UNKNOWN", 1);
+  await store.flush(5000);
+  const baseline = await store.snapshot(5000);
+  vi.spyOn(store, "snapshot").mockResolvedValueOnce({
+    ...baseline,
+    writeFailures: 1,
+  });
+  expect(await store.recordTerminalObservation(ref, fact)).toBe("recorded");
+  vi.restoreAllMocks();
 });
 it("bounds disk bytes, age and entry count across independent writer lifetimes", async () => {
   const f = setup({ days: 30, bytes: 1500, segmentBytes: 300, entries: 4 });
@@ -3385,6 +3420,9 @@ it.each([
       corruptLines: 0,
       writeFailures: kind === "same-tail" || kind === "same-tail-utf8" ? 0 : 1,
     });
+    expect(during.readIncomplete === true).toBe(
+      kind !== "same-tail" && kind !== "same-tail-utf8",
+    );
     expect(during.entries).toHaveLength(2);
     expect(during.activeLifecycleIds).toEqual(
       kind === "same-tail" || kind === "same-tail-utf8" ? [liveId] : [],
