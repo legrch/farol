@@ -78,6 +78,11 @@ export function OperationsActivity({
         </label>
       </div>
       {notifications.error && <p role="status">{notifications.error}</p>}
+      {diagnostics?.readPending && (
+        <p role="status">
+          Updating activity… Recent events may not appear yet.
+        </p>
+      )}
       {diagnostics &&
       (diagnostics.corruptLines > 0 ||
         diagnostics.writeFailures > 0 ||

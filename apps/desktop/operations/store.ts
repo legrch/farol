@@ -587,9 +587,9 @@ export class OperationsStore implements OperationsRecorder {
             () =>
               resolve({
                 ...this.cached,
-                // Legacy counter covers unavailable reads as well as writes.
-                // A deadline says nothing about the stored line integrity.
-                writeFailures: this.cached.writeFailures + 1,
+                // A deadline is not a failed write or a corrupt record.
+                // Retain conservative lifecycle handling until the read ends.
+                readPending: true,
               }),
             deadlineMs,
           );
@@ -602,6 +602,7 @@ export class OperationsStore implements OperationsRecorder {
           ...diagnostics,
           activeLifecycleIds:
             this.closed ||
+            snapshot.readPending === true ||
             snapshot.corruptLines > 0 ||
             diagnostics.writeFailures > 0 ||
             diagnostics.droppedEntries > 0

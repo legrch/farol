@@ -175,6 +175,7 @@ export type WindowSnapshot = Readonly<{
   /** Current host work, independent of journal reads; never connection proof. */
   connectionChecking?: boolean;
   activityDiagnostics?: Readonly<{
+    readPending?: boolean;
     corruptLines: number;
     writeFailures: number;
     droppedEntries?: number;

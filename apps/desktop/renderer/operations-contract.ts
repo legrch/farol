@@ -127,6 +127,8 @@ export const OperationsSnapshotSchema = z.strictObject({
   activeLifecycleIds: z.array(z.string().uuid()).max(20000).optional(),
   // Current host presentation only; never journal evidence or launch authority.
   connectionChecking: z.boolean().optional(),
+  // A bounded read has not finished; cached rows may be stale.
+  readPending: z.boolean().optional(),
   entries: z.array(OperationEntrySchema).max(20000),
   corruptLines: z.number().int().nonnegative().safe(),
 });

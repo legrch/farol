@@ -936,6 +936,7 @@ export class WindowController implements RendererFacade {
               .join(" · ") || null,
         })),
         activityDiagnostics: {
+          readPending: result.readPending === true,
           corruptLines: result.corruptLines,
           writeFailures: result.writeFailures,
           droppedEntries: result.droppedEntries,

@@ -63,6 +63,36 @@ const entries: ActivityEntry[] = [
     generation: 0,
   },
 ];
+it("shows a slow activity read as updating, not as a failed log write", async () => {
+  const f = fixture(),
+    c = new WindowController(f.api);
+  await c.start();
+  const snapshot = {
+    ...c.getSnapshot(),
+    activityDiagnostics: {
+      readPending: true,
+      corruptLines: 0,
+      writeFailures: 0,
+    },
+  };
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  try {
+    await act(async () =>
+      root.render(
+        <OperationsActivity
+          snapshot={snapshot}
+          facade={{} as RendererFacade}
+        />,
+      ),
+    );
+    expect(host.textContent).toContain("Updating activity");
+    expect(host.textContent).not.toContain("unavailable");
+  } finally {
+    await act(async () => root.unmount());
+    c.dispose();
+  }
+});
 it("filters shared operations, expands metadata and links attention to the unresolved sheet", async () => {
   const f = fixture(),
     c = new WindowController(f.api);

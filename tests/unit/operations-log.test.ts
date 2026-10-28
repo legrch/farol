@@ -1119,7 +1119,8 @@ it("bounds stalled snapshot reads without delaying operation recording", async (
     const started = performance.now();
     expect(await store.snapshot(10)).toMatchObject({
       corruptLines: 0,
-      writeFailures: 1,
+      writeFailures: 0,
+      readPending: true,
     });
     const finish = store.begin(metadata);
     finish("done", null, 1);
@@ -2294,7 +2295,7 @@ it.each([
       const fallback = await store.snapshot(10);
       expect(performance.now() - started).toBeLessThan(500);
       expect(fallback.corruptLines).toBe(0);
-      expect(fallback.writeFailures).toBeGreaterThan(0);
+      expect(fallback.readPending).toBe(true);
       expect(fallback.entries[0]!.target).toEqual(expected);
     } finally {
       stalled = false;
@@ -2944,6 +2945,47 @@ it.each([0, 128])(
     ).toBe("unknown");
   },
 );
+
+it("reports a slow snapshot as updating without inventing a failed write or trusting cached lifecycles", async () => {
+  let block = false;
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const io = {
+    ...fs.promises,
+    readdir: async (...args: Parameters<typeof fs.promises.readdir>) => {
+      if (block) await pending;
+      return fs.promises.readdir(...args);
+    },
+  } as typeof fs.promises;
+  const { store } = injectedStore(io);
+  store.record(metadata, "unknown", "PROCESS_OUTCOME_UNKNOWN", 1);
+  const finish = store.begin({
+    source: "You",
+    kind: "connection.start",
+    target: {},
+  });
+  await store.flush(5000);
+  const before = await store.snapshot(5000);
+  expect(before.activeLifecycleIds).toHaveLength(1);
+  block = true;
+  const during = await store.snapshot(1);
+  expect(during).toMatchObject({
+    readPending: true,
+    writeFailures: 0,
+    activeLifecycleIds: [],
+  });
+  expect(during.entries.some((entry) => entry.outcome === "unknown")).toBe(
+    true,
+  );
+  block = false;
+  release();
+  const after = await store.snapshot(5000);
+  expect(after.readPending).toBeUndefined();
+  expect(after.activeLifecycleIds).toHaveLength(1);
+  finish("unknown", "OPERATION_OUTCOME_UNKNOWN", 1);
+});
 
 it("reads complete log records across a partial append without inventing corruption or losing UNKNOWN", async () => {
   const { store, directory } = setup();
