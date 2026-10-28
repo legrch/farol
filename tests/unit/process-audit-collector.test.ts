@@ -184,3 +184,30 @@ it("observes a long-running process after the initial twelve checks", async () =
   expect(reader.read).toHaveBeenCalledTimes(13);
   expect(snapshot.entries[0]?.outcome).toBe("unknown");
 });
+
+it("drains an already admitted observation without dispatching another read", async () => {
+  let complete!: (value: typeof fact) => void;
+  const reader = {
+    read: vi.fn(
+      () =>
+        new Promise<typeof fact>((resolve) => {
+          complete = resolve;
+        }),
+    ),
+  };
+  const writer = {
+    recordTerminalObservation: vi.fn().mockResolvedValue("recorded" as const),
+  };
+  const collector = new ProcessAuditCollector(writer);
+  collector.observe(snapshot, reader, () => true);
+  expect(await collector.drain(0)).toBe(false);
+  const drain = collector.drain(1000);
+  complete(fact);
+  expect(await drain).toBe(true);
+  expect(writer.recordTerminalObservation).toHaveBeenCalledExactlyOnceWith(
+    ref,
+    fact,
+  );
+  expect(reader.read).toHaveBeenCalledOnce();
+  expect(snapshot.entries[0]?.outcome).toBe("unknown");
+});

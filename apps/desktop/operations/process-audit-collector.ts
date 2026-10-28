@@ -25,6 +25,7 @@ type Attempt = { count: number; nextAt: number; stopped: boolean };
 export class ProcessAuditCollector {
   private readonly attempts = new Map<string, Attempt>();
   private busy = false;
+  private inFlight: Promise<void> | undefined;
   constructor(
     private readonly writer: Writer,
     private readonly now = Date.now,
@@ -85,7 +86,7 @@ export class ProcessAuditCollector {
       attempt.nextAt = this.now() + attempt.count * 5000;
       this.busy = true;
       const state = attempt;
-      void reader
+      const work = reader
         .read({
           operationId: ref.operationId,
           buildId: ref.buildId,
@@ -106,8 +107,27 @@ export class ProcessAuditCollector {
         })
         .finally(() => {
           this.busy = false;
+          if (this.inFlight === work) this.inFlight = undefined;
         });
+      this.inFlight = work;
       return;
+    }
+  }
+
+  /** Wait only for an already admitted observation; never dispatch a read. */
+  async drain(deadlineMs: number): Promise<boolean> {
+    const pending = this.inFlight;
+    if (!pending) return true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        pending.then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), Math.max(0, deadlineMs));
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
     }
   }
 }

@@ -76,3 +76,73 @@ it("carries a late original terminal observation into Activity without replacing
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+it("retains an admitted terminal observation through a bounded close and reopen", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "farol-audit-quit-"));
+  const store = new OperationsStore(directory);
+  const ref = {
+    owner: "computer.process" as const,
+    operationId: "process-quit",
+    buildId: "build",
+    runtimeId: "runtime",
+    binding: "requested" as const,
+  };
+  try {
+    const finish = store.beginExecution(
+      { source: "ChatGPT", kind: "computer_shell_start", target: {} },
+      { operationRef: ref, subjectRef: null },
+    );
+    finish("unknown", "PROCESS_OUTCOME_UNKNOWN", 12);
+    expect(await store.flush(5000)).toBe(true);
+    const fact = {
+      operationId: ref.operationId,
+      buildId: ref.buildId,
+      runtimeId: ref.runtimeId,
+      exitCode: 0,
+      exitSignal: 0,
+      rootWaited: true,
+      outputDrained: true,
+      groupCleanup: "confirmed" as const,
+      descendantCleanup: "unverified" as const,
+      timedOut: false,
+      authorityLost: false,
+    };
+    let complete!: (value: typeof fact) => void;
+    const reader = {
+      read: vi.fn(
+        () =>
+          new Promise<typeof fact>((resolve) => {
+            complete = resolve;
+          }),
+      ),
+    };
+    const collector = new ProcessAuditCollector(store);
+    collector.observe(await store.snapshot(5000), reader, () => true);
+    const draining = collector.drain(1000);
+    complete(fact);
+    expect(await draining).toBe(true);
+    expect(await store.shutdown(5000)).toBe(true);
+    const reopened = new OperationsStore(directory);
+    try {
+      const entries = (await reopened.snapshot(5000)).entries;
+      expect(entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "computer_shell_start",
+            outcome: "unknown",
+          }),
+          expect.objectContaining({
+            kind: "computer.process.terminal",
+            exit: { kind: "code", value: 0 },
+          }),
+        ]),
+      );
+      expect(reader.read).toHaveBeenCalledOnce();
+    } finally {
+      await reopened.shutdown(5000);
+    }
+  } finally {
+    await store.shutdown(5000);
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

@@ -11886,7 +11886,9 @@ function installIpc(): void {
       processAuditCollector.observe(
         snapshot,
         core.processAudit,
-        () => desktopGoCore === core && !quitInProgress,
+        // A read already admitted before Quit may still append its original
+        // observation; Quit prevents new observations above and drains this one.
+        () => desktopGoCore === core,
       );
     }
     return {
@@ -13147,6 +13149,20 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       // absolute recording deadline. Logging supplies no child-drain authority.
       if (operationsLog) {
         let flushed = false;
+        try {
+          if (
+            processAuditCollector &&
+            !(await processAuditCollector.drain(QUIT_RECORD_RESERVE_MS / 4))
+          ) {
+            try {
+              console.warn("FAROL_PROCESS_AUDIT_DRAIN_UNCONFIRMED");
+            } catch {
+              // Diagnostics cannot prevent the remaining journal flush.
+            }
+          }
+        } catch {
+          // An unavailable audit observer must not suppress the journal flush.
+        }
         try {
           // Reserve half of Quit's existing recording budget for final metadata.
           // A populated Activity journal can need more than 250 ms to fsync and
