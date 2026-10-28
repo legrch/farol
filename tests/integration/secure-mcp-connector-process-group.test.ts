@@ -30,7 +30,7 @@ it.skipIf(process.platform !== "darwin")(
     const executable = path.join(root, "local-child.cjs");
     await fs.writeFile(
       executable,
-      "#!/usr/bin/env node\n" +
+      `#!${process.execPath}\n` +
         'const fs = require("node:fs");\n' +
         "const option = (name) => process.argv[process.argv.indexOf(name) + 1];\n" +
         'fs.writeFileSync(option("--pid.file"), String(process.pid));\n' +
@@ -162,7 +162,7 @@ it.skipIf(process.platform !== "darwin")(
     );
     await fs.writeFile(
       executable,
-      "#!/usr/bin/env node\n" +
+      `#!${process.execPath}\n` +
         'const fs = require("node:fs");\n' +
         'const { spawn } = require("node:child_process");\n' +
         "const option = (name) => process.argv[process.argv.indexOf(name) + 1];\n" +
@@ -269,7 +269,7 @@ it.skipIf(process.platform !== "darwin")(
     );
     await fs.writeFile(
       executable,
-      "#!/usr/bin/env node\n" +
+      `#!${process.execPath}\n` +
         'const fs = require("node:fs");\n' +
         'const { spawn } = require("node:child_process");\n' +
         "const option = (name) => process.argv[process.argv.indexOf(name) + 1];\n" +
@@ -365,7 +365,7 @@ it.skipIf(process.platform !== "darwin")(
     const executable = path.join(root, "local-child.cjs");
     await fs.writeFile(
       executable,
-      "#!/usr/bin/env node\n" +
+      `#!${process.execPath}\n` +
         'const fs = require("node:fs");\n' +
         "const option = name => process.argv[process.argv.indexOf(name) + 1];\n" +
         'process.on("SIGTERM", () => {});\n' +

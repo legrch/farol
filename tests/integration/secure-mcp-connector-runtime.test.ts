@@ -25,6 +25,7 @@ const roots: string[] = [];
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   await Promise.all(
     roots
       .splice(0)
@@ -1322,6 +1323,11 @@ describe("secure MCP connector runtime", () => {
 
   it("configures, diagnoses, starts, proves ready, and stops one owned daemon", async () => {
     const selected = await fixture();
+    selected.executablePath =
+      "/Applications/Farol.app/Contents/Resources/app/tunnel-client";
+    vi.stubEnv("PATH", "/untrusted/bin");
+    vi.stubEnv("CLOUDFLARED_PATH", "/untrusted/cloudflared");
+    vi.stubEnv("NODE_OPTIONS", "untrusted-options");
     const run = vi.fn<ConnectorCommandRunner>(async () => ({
       stdout: "{}\n",
       stderr: "",
@@ -1406,6 +1412,16 @@ describe("secure MCP connector runtime", () => {
       "--explain",
     ]);
     expect(start).toHaveBeenCalledTimes(1);
+    for (const command of [
+      ...run.mock.calls.map(([command]) => command),
+      ...start.mock.calls.map(([command]) => command),
+    ]) {
+      expect(command.environment.PATH).toBe(
+        "/Applications/Farol.app/Contents/Resources/app:/usr/bin:/bin:/usr/sbin:/sbin",
+      );
+      expect(command.environment).not.toHaveProperty("CLOUDFLARED_PATH");
+      expect(command.environment).not.toHaveProperty("NODE_OPTIONS");
+    }
     const runCommand = start.mock.calls[0]?.[0];
     expect(runCommand?.arguments[0]).toBe("run");
     expect(runCommand?.environment.TUNNEL_CLIENT_STATE_DIR).toBe(

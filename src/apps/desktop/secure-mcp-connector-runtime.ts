@@ -11,14 +11,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-const SAFE_PATH = [
-  "/opt/homebrew/bin",
-  "/usr/local/bin",
-  "/usr/bin",
-  "/bin",
-  "/usr/sbin",
-  "/sbin",
-].join(":");
+const SAFE_PATH = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(":");
 const PROFILE = "farol";
 const HEALTH_URL_FILE = "health.url";
 const PID_FILE = "tunnel-client.pid";
