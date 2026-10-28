@@ -37,6 +37,9 @@ func idleServer(t *testing.T) *Server {
 			data, err := json.Marshal(state)
 			return &Outcome{Status: "ok", Data: data}, err
 		}},
+		"computer.process.audit": {Handle: func(context.Context, Request) (*Outcome, error) {
+			return &Outcome{Status: "ok", Data: json.RawMessage(`{"state":"not_observed"}`)}, nil
+		}},
 		"core.retirement.prepare": {Handle: func(context.Context, Request) (*Outcome, error) {
 			return &Outcome{Status: "ok", Data: json.RawMessage(`{}`)}, nil
 		}},
@@ -48,6 +51,43 @@ func idleServer(t *testing.T) *Server {
 		t.Fatal(err)
 	}
 	return s
+}
+
+func TestAuditPollRetainsBoundedHistoryAndRejectsForgedReads(t *testing.T) {
+	s := idleServer(t)
+	ctx := s.context()
+	var frames bytes.Buffer
+	appendFrame := func(raw []byte) {
+		t.Helper()
+		if err := ipc.WriteFrame(&frames, raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendFrame(request("hello", "core.handshake", `{"protocolMajor":1,"protocolMinor":0,"buildId":"build","profileId":"test"}`, nil))
+	body := `{"operationId":"operation","buildId":"build","runtimeId":"runtime"}`
+	for i := 1; i <= 5000; i++ {
+		appendFrame(request(fmt.Sprintf("desktop-poll-audit:%s:%d", idleNonce, i), "computer.process.audit", body, &ctx))
+	}
+	appendFrame(request("status", "core.status", `{}`, &ctx))
+	out := &bufferWriter{}
+	if err := s.Serve(context.Background(), io.NopCloser(&frames), out); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.seen) != 2 || len(s.polls) != 1 || s.polls["audit"] != 5000 {
+		t.Fatalf("audit poll history not bounded: seen=%d polls=%v", len(s.seen), s.polls)
+	}
+	for _, item := range []struct{ id, method, body string }{
+		{fmt.Sprintf("desktop-poll-audit:%s:5000", idleNonce), "computer.process.audit", body},
+		{fmt.Sprintf("desktop-poll-audit:%s:5001", idleNonce), "core.retirement.prepare", body},
+		{fmt.Sprintf("desktop-poll-audit:%s:5001", idleNonce), "computer.process.audit", `{}`},
+	} {
+		if response := s.dispatch(context.Background(), request(item.id, item.method, item.body, &ctx)); response.Error == nil || s.pollAdmitted {
+			t.Fatalf("forged audit poll admitted: %+v", item)
+		}
+	}
+	if response := s.dispatch(context.Background(), request(fmt.Sprintf("desktop-poll-audit:%s:5001", idleNonce), "computer.process.audit", body, &ctx)); response.Result == nil || !s.pollAdmitted {
+		t.Fatal("invalid requests consumed the next audit sequence")
+	}
 }
 
 func TestIdlePollLifetimeRetainsBoundedHistoryAndRetirement(t *testing.T) {

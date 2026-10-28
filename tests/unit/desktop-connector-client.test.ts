@@ -1570,6 +1570,37 @@ function healthRequest(withSnapshot = true): ComputerConnectorHealthRequest {
   };
 }
 
+it("uses ordered read-only IDs for process audit without spending effect IDs", async () => {
+  const f = await healthPipePeer();
+  try {
+    const body = {
+      operationId: "operation",
+      buildId: "build",
+      runtimeId: "runtime",
+    };
+    let nonce = "";
+    for (let sequence = 1; sequence <= 2; sequence++) {
+      const pending = f.client.request("computer.process.audit", body);
+      const request = f.calls.at(-1)!;
+      const match = /^desktop-poll-audit:([^:]+):([0-9]+)$/u.exec(request.id);
+      expect(match).not.toBeNull();
+      if (sequence === 1) nonce = match![1]!;
+      expect(match![1]).toBe(nonce);
+      expect(match![2]).toBe(String(sequence));
+      f.receive(response(request.id, { state: "not_observed" }));
+      await expect(pending).resolves.toMatchObject({ status: "ok" });
+    }
+    await expect(
+      f.client.request("computer.process.audit", {}),
+    ).rejects.toMatchObject({ code: "invalid_request" });
+    await expect(f.client.request("core.status", {})).resolves.toMatchObject({
+      status: "ok",
+    });
+  } finally {
+    await f.client.close();
+  }
+});
+
 function healthResult(request: Request) {
   const original = request.params
     .body as unknown as ComputerConnectorHealthRequest;

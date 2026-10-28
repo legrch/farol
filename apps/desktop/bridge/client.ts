@@ -224,7 +224,7 @@ export class Client {
   // requests and the existing retirement reserve stay independent.
   private expiredDiagnostics = new Map<string, DiagnosticObservation>();
   private used = new Set<string>();
-  // Only the two reciprocal host polls and health reads use constant-space
+  // Only registered read-only host polls use constant-space
   // ordered wire IDs. Effect/command IDs keep their lifetime replay fence.
   private readonly pollNonce = randomUUID();
   private readonly polls = new Map<string, bigint>();
@@ -525,7 +525,9 @@ export class Client {
           ? "settings"
           : method === "computer.connector.health"
             ? "health"
-            : undefined;
+            : method === "computer.process.audit"
+              ? "audit"
+              : undefined;
     const pollingObservation = method === "computer.connector.polling";
     const retiring =
       method === "computer.connector.close" ||
@@ -574,7 +576,9 @@ export class Client {
               ? "BrowserNext"
               : readLane === "settings"
                 ? "SettingsStoreNext"
-                : "ComputerConnectorHealthRequest",
+                : readLane === "audit"
+                  ? "ComputerProcessAuditRequest"
+                  : "ComputerConnectorHealthRequest",
             body,
           )))
     )
@@ -640,7 +644,7 @@ export class Client {
         // Reciprocal command polls retain their one-IO-turn empty-poll grace.
         // Pure diagnostics expire independently, with bounded late-reply
         // correlation; they cannot poison unrelated work merely for lateness.
-        if (readLane !== undefined && readLane !== "health") {
+        if (readLane === "browser" || readLane === "settings") {
           const pending = this.pending.get(wireId);
           if (pending) pending.timeoutCheck = setImmediate(expire);
         } else expire();
@@ -650,7 +654,7 @@ export class Client {
         resolve,
         reject,
         timer,
-        ...(readLane === undefined || readLane === "health"
+        ...(readLane !== "browser" && readLane !== "settings"
           ? {}
           : {
               poll: {
