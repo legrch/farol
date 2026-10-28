@@ -45,6 +45,12 @@ describe("package Git witness original admission evidence", () => {
                 calls++;
                 expect(method).toBe("tools/call");
                 expect(args.name).toBe("computer_shell_start");
+                expect(
+                  await fs.readFile(
+                    path.join(writer, ".gitattributes"),
+                    "utf8",
+                  ),
+                ).toBe("*.swift diff=swift\n");
                 return { isError: true, structuredContent: { status, code } };
               },
               call: async () => {

@@ -79,6 +79,15 @@ export async function runGitShellJourney(input: {
   checkpoint: () => Promise<unknown>;
 }) {
   const { fixture: f, peer } = input;
+  // Installed Git runs with system attributes disabled. Exercise a real
+  // workspace-owned attribute instead of assuming Apple's CLT defaults.
+  await fs.writeFile(
+    path.join(f.writer, ".gitattributes"),
+    "*.swift diff=swift\n",
+    {
+      mode: 0o600,
+    },
+  );
   const hooks = path.join(f.home, ".config/git/hooks");
   const policy = path.join(f.repository, "system/hooks");
   await fs.mkdir(policy, { recursive: true, mode: 0o700 });
