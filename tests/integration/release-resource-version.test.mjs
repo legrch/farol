@@ -25,7 +25,12 @@ it("keeps checked-in release and resource identities consistent", () => {
     assertPackageResourceManifest(
       {
         ...resources,
-        product: { ...resources.product, version: `${pkg.version}0` },
+        product: {
+          ...resources.product,
+          version: pkg.version.replace(/[0-9]+$/u, (value) =>
+            String(BigInt(value) + 1n),
+          ),
+        },
       },
       artifact,
       pkg.version,
