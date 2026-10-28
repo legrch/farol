@@ -63,6 +63,44 @@ const entries: ActivityEntry[] = [
     generation: 0,
   },
 ];
+it("shows local filtered details and explains withheld output", async () => {
+  const f = fixture(),
+    c = new WindowController(f.api);
+  await c.start();
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  try {
+    await act(async () =>
+      root.render(
+        <OperationsActivity
+          snapshot={{
+            ...c.getSnapshot(),
+            activity: [
+              {
+                ...entries[0]!,
+                auditDetails: {
+                  command: { state: "filtered", text: "git status" },
+                  stdout: { state: "filtered-truncated", text: "short output" },
+                  stderr: { state: "withheld", reason: "ambiguous_control" },
+                },
+              },
+            ],
+          }}
+          facade={{} as RendererFacade}
+        />,
+      ),
+    );
+    expect(host.textContent).toContain("git status");
+    expect(host.textContent).toContain("short output");
+    expect(host.textContent).toContain("Excerpt truncated");
+    expect(host.textContent).toContain(
+      "Withheld · Contains unsupported control characters",
+    );
+  } finally {
+    await act(async () => root.unmount());
+    c.dispose();
+  }
+});
 it("shows an unknown observation duration without inventing zero milliseconds", async () => {
   const f = fixture(),
     c = new WindowController(f.api);

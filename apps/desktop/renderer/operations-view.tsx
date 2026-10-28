@@ -6,6 +6,17 @@ import type {
   WindowSnapshot,
 } from "../../../src/ui/renderer/contract";
 
+const auditReason: Record<string, string> = {
+  invalid_utf8: "Not valid text",
+  source_too_large: "Original output exceeds the size limit",
+  ambiguous_control: "Contains unsupported control characters",
+  inline_body: "Contains an inline body",
+  entry_limit: "Activity entry exceeds the size limit",
+  filter_failed: "Filtering could not be completed",
+  filter_unavailable: "Filtering is unavailable",
+  source_incomplete: "Original output is incomplete",
+};
+
 export function OperationsActivity({
   snapshot,
   facade,
@@ -197,6 +208,34 @@ export function OperationsActivity({
                 </div>
               ))}
             </dl>
+            {row.auditDetails && (
+              <dl className="activity-facts">
+                {(
+                  [
+                    ["Command", row.auditDetails.command],
+                    ["Standard output", row.auditDetails.stdout],
+                    ["Standard error", row.auditDetails.stderr],
+                  ] as const
+                ).map(([label, excerpt]) => (
+                  <div key={label}>
+                    <dt>{label}</dt>
+                    <dd>
+                      {excerpt.state === "filtered" ||
+                      excerpt.state === "filtered-truncated" ? (
+                        <pre>
+                          {excerpt.text || "(empty)"}
+                          {excerpt.state === "filtered-truncated"
+                            ? "\n[Excerpt truncated]"
+                            : ""}
+                        </pre>
+                      ) : (
+                        `${excerpt.state === "withheld" ? "Withheld" : "Unavailable"} · ${auditReason[excerpt.reason]}`
+                      )}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            )}
             {row.outcome === "pending" && (
               <p role="status">
                 Waiting for the result. This entry updates when the operation

@@ -68,6 +68,11 @@ describe("content-free support export", () => {
       code: null,
       durationMs: null,
       schema: "farol.operation/2",
+      auditDetails: {
+        command: { state: "filtered", text: "LOCAL-COMMAND-CANARY" },
+        stdout: { state: "filtered", text: "LOCAL-OUTPUT-CANARY" },
+        stderr: { state: "unavailable", reason: "source_incomplete" },
+      },
       operationRef: {
         owner: "computer.process",
         operationId: "op",

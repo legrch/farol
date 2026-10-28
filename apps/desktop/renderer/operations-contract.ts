@@ -112,6 +112,52 @@ export type ExecutionReferences = Readonly<{
   subjectRef: OperationReference | null;
 }>;
 const CleanupSchema = z.enum(["pending", "confirmed", "unverified"]);
+// Local-only excerpts arrive from the Go filter; closed states prohibit text
+// on withheld/unavailable values. The display boundary checks bytes and control
+// characters again and never treats these fields as support-export metadata.
+const AuditTextSchema = z
+  .string()
+  .refine(
+    (value) =>
+      value.length <= 2048 &&
+      new TextEncoder().encode(value).length <= 2048 &&
+      !/[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u.test(
+        value.replaceAll("\n", "").replaceAll("\t", ""),
+      ),
+  );
+const AuditExcerptSchema = z.discriminatedUnion("state", [
+  z.strictObject({
+    state: z.literal("filtered"),
+    text: AuditTextSchema.optional(),
+  }),
+  z.strictObject({
+    state: z.literal("filtered-truncated"),
+    text: AuditTextSchema,
+  }),
+  z.strictObject({
+    state: z.literal("withheld"),
+    reason: z.enum([
+      "invalid_utf8",
+      "source_too_large",
+      "ambiguous_control",
+      "inline_body",
+      "entry_limit",
+    ]),
+  }),
+  z.strictObject({
+    state: z.literal("unavailable"),
+    reason: z.enum([
+      "filter_failed",
+      "filter_unavailable",
+      "source_incomplete",
+    ]),
+  }),
+]);
+export const AuditDetailsSchema = z.strictObject({
+  command: AuditExcerptSchema,
+  stdout: AuditExcerptSchema,
+  stderr: AuditExcerptSchema,
+});
 const OperationEntryV2Schema = OperationEntryV1Schema.extend({
   schema: z.literal("farol.operation/2"),
   // Terminal observations can arrive without a measured duration.
@@ -147,6 +193,7 @@ const OperationEntryV2Schema = OperationEntryV1Schema.extend({
       authorityLost: z.boolean(),
     })
     .nullable(),
+  auditDetails: AuditDetailsSchema.optional(),
 });
 // strict V1 prevents unknown future schema versions from being read as V1.
 export const OperationEntrySchema = z.union([

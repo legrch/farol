@@ -159,6 +159,10 @@ export type ActivityEntry = Readonly<{
     OperationEntry,
     { schema: "farol.operation/2" }
   >["executionFacts"];
+  auditDetails?: Extract<
+    OperationEntry,
+    { schema: "farol.operation/2" }
+  >["auditDetails"];
   id: string;
   taskId: string;
   turnId: string;

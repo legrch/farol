@@ -1552,6 +1552,12 @@ kbd {
   font-size: 12px;
   margin: 4px 0 0;
 }
+
+.activity-facts pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .activity-facts dd,
 .activity-event strong {
   overflow-wrap: anywhere;
