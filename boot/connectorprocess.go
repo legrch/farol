@@ -8,6 +8,7 @@ import (
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/app/services/execution"
+	"github.com/legrch/farol/modules/computer/app/services/output"
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	processct "github.com/legrch/farol/modules/computer/contracts/process"
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -45,6 +46,7 @@ type connectorProcessOperation struct {
 	cancelDone       chan struct{}
 	collectionDone   chan struct{}
 	collectionErr    error
+	auditCommand     output.Command
 }
 
 func connectorProcessRefusal(code string) error {
@@ -119,6 +121,10 @@ func (s *computerConnector) processSlot(slot *connectorSlot) bool {
 // composition method is shared by the optional wire adapter; startup without
 // qualified native support supplies no process producer.
 func (s *computerConnector) startProcess(ctx context.Context, slot *connectorSlot, operation, call string, selectLaunch connectorProcessSelection) (*processct.StartResponse, error) {
+	return s.startProcessWithAudit(ctx, slot, operation, call, selectLaunch, output.Command{})
+}
+
+func (s *computerConnector) startProcessWithAudit(ctx context.Context, slot *connectorSlot, operation, call string, selectLaunch connectorProcessSelection, command output.Command) (*processct.StartResponse, error) {
 	if !s.processSlot(slot) || ctx == nil || ctx.Err() != nil || !validIngressID(operation) || !validIngressID(call) || selectLaunch == nil {
 		return nil, connectorProcessRefusal("PROCESS_INPUT_INVALID")
 	}
@@ -140,7 +146,7 @@ func (s *computerConnector) startProcess(ctx context.Context, slot *connectorSlo
 		ledger.mu.Unlock()
 		return nil, connectorProcessUnknown()
 	}
-	record := &settingsMutationOperation{generation: generation, pending: true, connectorScope: true, process: &connectorProcessOperation{owner: slot, collectionDone: make(chan struct{})}}
+	record := &settingsMutationOperation{generation: generation, pending: true, connectorScope: true, process: &connectorProcessOperation{owner: slot, collectionDone: make(chan struct{}), auditCommand: command}}
 	ledger.operations[operation] = record
 	ledger.mu.Unlock()
 	finish := func(err error, beforeStart bool) {

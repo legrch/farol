@@ -14,6 +14,7 @@ import (
 	"github.com/legrch/farol/modules/computer/app/port"
 	connectorsvc "github.com/legrch/farol/modules/computer/app/services/connector"
 	"github.com/legrch/farol/modules/computer/app/services/execution"
+	"github.com/legrch/farol/modules/computer/app/services/output"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	"github.com/legrch/farol/pkg/ipc"
 	"github.com/legrch/farol/transport/desktop"
@@ -47,10 +48,12 @@ type computerConnector struct {
 	start     connectorStart
 	mutations *SettingsMutationIngress
 	processes connectorShellSelection
-	codexRead *connectorCodexRead
-	current   *connectorSlot
-	attempts  uint64
-	closed    *connectorRecoveryOrigin // effects-owned, exact successful Close only
+	// Selected by trusted composition only; nil makes audit text unavailable.
+	auditFilter output.ScalarFilter
+	codexRead   *connectorCodexRead
+	current     *connectorSlot
+	attempts    uint64
+	closed      *connectorRecoveryOrigin // effects-owned, exact successful Close only
 }
 type connectorSlot struct {
 	guard                 *connectorHostGuard

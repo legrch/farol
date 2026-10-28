@@ -9,6 +9,7 @@ import (
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	"github.com/legrch/farol/modules/computer/app/services/execution"
+	"github.com/legrch/farol/modules/computer/app/services/output"
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	processct "github.com/legrch/farol/modules/computer/contracts/process"
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -113,6 +114,39 @@ func TestConnectorProcessWireNormalStartupDoesNotAdvertiseUnqualifiedShell(t *te
 	}
 	if _, err := s.current.route.issuer.Admit(context.Background(), "shell"); err == nil {
 		t.Fatal("normal startup admitted Shell")
+	}
+}
+
+func TestConnectorProcessWireRetainsOnlyPreFilteredAuditCommand(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		filter      output.ScalarFilter
+		state, text string
+	}{
+		{"unavailable", nil, "unavailable", ""},
+		{"filtered", func(s string) (string, error) { return s, nil }, "filtered", "[REDACTED]"},
+		{"failure", func(string) (string, error) { panic("PRIVATE-PANIC") }, "unavailable", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s, _, native, _ := processWireFixture(t)
+			s.auditFilter = test.filter
+			request := processWireStart(s)
+			request.Command = "git --password=PRIVATE-COMMAND"
+			request.Stdin = new(string)
+			*request.Stdin = "PRIVATE-STDIN"
+			out := connectorMutationInvoke(t, s, "computer.process.start", "wire-process", request)
+			if out.Status != "ok" || native.spawns != 1 {
+				t.Fatal("audit affected process start")
+			}
+			s.mutations.mu.Lock()
+			command := s.mutations.operations["wire-process"].process.auditCommand
+			s.mutations.mu.Unlock()
+			details := output.ProjectWithCommand(output.Input{}, command, test.filter)
+			encoded, err := json.Marshal(details)
+			if err != nil || details.Command.State != test.state || details.Command.Text != test.text || strings.Contains(string(encoded), "PRIVATE-") {
+				t.Fatal("unfiltered input escaped into audit data")
+			}
+		})
 	}
 }
 
