@@ -260,7 +260,10 @@ describe("Updates panel native fixture (no Electron process or installed updater
     const id = "d49013b5-0283-4c16-9a7d-578a9c22f1e9";
     f.panel.publish(event(f.owner), { ...projection, outcome: "pending" });
     f.panel.beginDirect(event(f.owner), id);
-    f.panel.endDirect(event(f.owner), id, true);
+    f.panel.endDirect(event(f.owner), id, true, {
+      phase: "idle",
+      checkedAt: null,
+    });
     f.panel.publish(event(f.owner), { ...projection, outcome: "applied" });
     f.panel.settleDirect(event(f.owner), {
       operationId: id,
@@ -274,6 +277,50 @@ describe("Updates panel native fixture (no Electron process or installed updater
     f.panel.publish(event(replacement), projection);
     expect(f.panel.state()).toMatchObject({ status: "ready" });
   });
+  it.each([
+    { phase: "failed", code: "UPDATE_OUTCOME_UNKNOWN", recoveryRequired: true },
+    { phase: "unavailable", code: "UPDATE_OUTCOME_UNKNOWN" },
+    {
+      phase: "idle",
+      checkedAt: null,
+      automaticUpdatePreference: {
+        status: "unknown",
+        enabled: false,
+        code: "SETTINGS_UNAVAILABLE",
+      },
+    },
+    {
+      phase: "idle",
+      checkedAt: null,
+      installOnQuitPreference: {
+        status: "blocked",
+        enabled: false,
+        code: "UPDATE_OUTCOME_UNKNOWN",
+      },
+    },
+    { phase: "idle", checkedAt: null, blockedBy: "UPDATE_OUTCOME_UNKNOWN" },
+    { phase: "unexpected" },
+  ])(
+    "keeps an uncertain host result fenced despite a refusal acknowledgement: %j",
+    async (result) => {
+      const f = await fixture();
+      const id = "d49013b5-0283-4c16-9a7d-578a9c22f1e9";
+      f.panel.beginDirect(event(f.owner), id);
+      f.panel.endDirect(event(f.owner), id, true, result);
+      f.panel.publish(event(f.owner), { ...projection, outcome: "refused" });
+      f.panel.settleDirect(event(f.owner), {
+        operationId: id,
+        outcome: "refused",
+      });
+      f.window.close();
+      f.owner.close();
+      const replacement = new BrowserWindow({});
+      await replacement.loadURL("file:///app/shell.html");
+      f.panel.bindOwner(replacement, "/app");
+      f.panel.publish(event(replacement), projection);
+      expect(f.panel.state()).toEqual({ status: "unavailable" });
+    },
+  );
   it.each(["in-flight", "reply-unobserved", "failed", "wrong-ack", "unknown"])(
     "does not rebind after a direct command with %s",
     async (condition) => {
@@ -282,7 +329,10 @@ describe("Updates panel native fixture (no Electron process or installed updater
       f.panel.publish(event(f.owner), { ...projection, outcome: "pending" });
       f.panel.beginDirect(event(f.owner), id);
       if (condition !== "in-flight")
-        f.panel.endDirect(event(f.owner), id, condition !== "failed");
+        f.panel.endDirect(event(f.owner), id, condition !== "failed", {
+          phase: "idle",
+          checkedAt: null,
+        });
       // An unrelated or stale ready observation cannot settle an in-flight
       // command, and a returned reply still needs the owner's later projection.
       if (condition === "in-flight")
@@ -316,13 +366,19 @@ describe("Updates panel native fixture (no Electron process or installed updater
     f.panel.publish(event(f.owner), { ...projection, outcome: "pending" });
     f.panel.beginDirect(event(f.owner), first);
     f.panel.beginDirect(event(f.owner), second);
-    f.panel.endDirect(event(f.owner), first, true);
+    f.panel.endDirect(event(f.owner), first, true, {
+      phase: "idle",
+      checkedAt: null,
+    });
     f.panel.settleDirect(event(f.owner), {
       operationId: first,
       outcome: "applied",
     });
     f.panel.publish(event(f.owner), { ...projection, outcome: "applied" });
-    f.panel.endDirect(event(f.owner), second, true);
+    f.panel.endDirect(event(f.owner), second, true, {
+      phase: "idle",
+      checkedAt: null,
+    });
     f.window.close();
     f.owner.close();
     const replacement = new BrowserWindow({});
@@ -339,7 +395,10 @@ describe("Updates panel native fixture (no Electron process or installed updater
       operationId: id,
       outcome: "applied",
     });
-    f.panel.endDirect(event(f.owner), id, true);
+    f.panel.endDirect(event(f.owner), id, true, {
+      phase: "idle",
+      checkedAt: null,
+    });
     f.panel.settleDirect(event(f.window), {
       operationId: id,
       outcome: "applied",
@@ -388,7 +447,10 @@ describe("Updates panel native fixture (no Electron process or installed updater
     expect(f.panel.beginDirect(event(f.window), id)).toBe(false);
     expect(f.panel.beginDirect(event(f.owner), id)).toBe(true);
     expect(f.panel.beginDirect(event(f.owner), id)).toBe(false);
-    f.panel.endDirect(event(f.owner), id, true);
+    f.panel.endDirect(event(f.owner), id, true, {
+      phase: "idle",
+      checkedAt: null,
+    });
     f.panel.settleDirect(event(f.owner), {
       operationId: id,
       outcome: "applied",

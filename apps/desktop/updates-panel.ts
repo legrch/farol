@@ -1,5 +1,6 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { InstalledUpdateViewSchema } from "../../src/modules/release/contract/installed-update";
 import {
   BrowserWindow,
   screen,
@@ -155,13 +156,43 @@ export class DesktopUpdatesPanel {
     this.direct.set(parsed.data.operationId, "in-flight");
     return true;
   }
-  endDirect(event: Sender, operationId: unknown, returned: boolean): void {
+  endDirect(
+    event: Sender,
+    operationId: unknown,
+    returned: boolean,
+    result: unknown,
+  ): void {
     if (
       typeof operationId !== "string" ||
       this.direct.get(operationId) !== "in-flight" ||
       !returned ||
       !this.isOwner(event)
     ) {
+      this.directAmbiguous = true;
+      return;
+    }
+    const parsed = InstalledUpdateViewSchema.safeParse(result);
+    if (!parsed.success) {
+      this.directAmbiguous = true;
+      return;
+    }
+    const view = parsed.data;
+    const codes = [
+      "code" in view ? view.code : undefined,
+      "blockedBy" in view ? view.blockedBy : undefined,
+      "notice" in view ? view.notice?.blockedBy : undefined,
+      view.automaticUpdatePreference?.status === "unknown"
+        ? "UNKNOWN"
+        : view.automaticUpdatePreference?.status === "blocked"
+          ? view.automaticUpdatePreference.code
+          : undefined,
+      view.installOnQuitPreference?.status === "unknown"
+        ? "UNKNOWN"
+        : view.installOnQuitPreference?.status === "blocked"
+          ? view.installOnQuitPreference.code
+          : undefined,
+    ];
+    if (codes.some((code) => code?.includes("UNKNOWN"))) {
       this.directAmbiguous = true;
       return;
     }

@@ -11896,12 +11896,15 @@ function installIpc(): void {
       if (tracked && !updatesPanel.beginDirect(event, operationId))
         return { phase: "unavailable", code: "UPDATE_ACTION_INVALID" };
       let returned = false;
+      let hostResult: unknown;
       try {
         const result = await installedUpdateCommand(value);
+        hostResult = result;
         returned = true;
         return result;
       } finally {
-        if (tracked) updatesPanel.endDirect(event, operationId, returned);
+        if (tracked)
+          updatesPanel.endDirect(event, operationId, returned, hostResult);
       }
     },
   );
