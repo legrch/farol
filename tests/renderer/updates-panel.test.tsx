@@ -272,3 +272,25 @@ it("renders a nonmodal projection and does not initiate a check on mount", async
   expect(host.textContent).not.toContain("Install and Relaunch");
   await act(async () => root.unmount());
 });
+it("explains why the updater is unavailable in an uninstalled Dev", async () => {
+  const f = await owner({ phase: "unavailable", code: "UPDATE_NOT_INSTALLED" });
+  const api: UpdatesAPI = {
+    state: async () => ({
+      status: "ready",
+      projection: projectUpdates(f.c.getSnapshot()),
+      pending: false,
+    }),
+    onState: () => () => {},
+    intent: vi.fn(),
+    close: vi.fn(),
+  };
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  await act(async () => root.render(<UpdatesWindow api={api} />));
+  expect(host.textContent).toContain("Updates unavailable");
+  expect(host.textContent).toContain(
+    "Update checks are available in an installed Farol.",
+  );
+  expect(api.intent).not.toHaveBeenCalled();
+  await act(async () => root.unmount());
+});

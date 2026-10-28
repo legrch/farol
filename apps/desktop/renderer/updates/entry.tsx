@@ -124,9 +124,11 @@ export function UpdatesWindow({ api }: { api: UpdatesAPI }) {
                   ? "Update needs recovery"
                   : update.phase === "failed"
                     ? "The update did not finish"
-                    : update.phase === "idle" && update.checkedAt !== null
-                      ? "You’re up to date"
-                      : "Farol Updates";
+                    : update.phase === "unavailable"
+                      ? "Updates unavailable"
+                      : update.phase === "idle" && update.checkedAt !== null
+                        ? "You’re up to date"
+                        : "Farol Updates";
   return (
     <main
       className="desktop native-updates"
@@ -157,7 +159,11 @@ export function UpdatesWindow({ api }: { api: UpdatesAPI }) {
             )}
           </p>
         ) : update.phase === "unavailable" ? (
-          <p>{updateResultMessage("unavailable", false, update.code)}</p>
+          <p>
+            {update.code === "UPDATE_NOT_INSTALLED"
+              ? "Update checks are available in an installed Farol."
+              : updateResultMessage("unavailable", false, update.code)}
+          </p>
         ) : update.phase === "downloading" ? (
           <>
             <p>{updateDownloadMessage(update)}</p>
