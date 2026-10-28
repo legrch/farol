@@ -729,7 +729,7 @@ func seatbeltEnvironment(s SeatbeltSelection, write bool) []string {
 		environment := []string{"HOME=" + s.Home, "TMPDIR=" + s.Scratch, "XDG_CONFIG_HOME=" + filepath.Join(s.Home, ".config"),
 			"PATH=" + strings.Join(dirs, ":"), "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=" + locks, "LANG=C", "LC_ALL=C"}
 		if s.HostRuntime != nil {
-			environment = append(environment, "PYTHONDONTWRITEBYTECODE=1", "PYTHONNOUSERSITE=1", "GIT_CONFIG_SYSTEM=/dev/null")
+			environment = append(environment, "PYTHONDONTWRITEBYTECODE=1", "PYTHONNOUSERSITE=1", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_ATTR_NOSYSTEM=1")
 			if s.HostRuntime.frozen.GitExecPath != "" {
 				environment = append(environment, "GIT_EXEC_PATH="+s.HostRuntime.frozen.GitExecPath, "GIT_TEMPLATE_DIR="+s.HostRuntime.frozen.GitTemplateDirectory)
 			}

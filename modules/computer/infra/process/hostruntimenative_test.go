@@ -96,7 +96,11 @@ func TestNativeHostRuntimeLayoutBoundaries(t *testing.T) {
 						}
 						for _, selected := range plan.frozen.Installations {
 							if selected.Kind == kind {
-								t.Fatal("group-writable installation was granted authority")
+								if selected.Image == physical {
+									t.Fatal("group-writable installation was granted authority")
+								}
+								t.Logf("shared-writable candidate refused; selected another qualified %s installation", kind)
+								return
 							}
 						}
 						for _, unavailable := range plan.frozen.Unavailable {

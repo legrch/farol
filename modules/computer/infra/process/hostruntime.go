@@ -16,6 +16,7 @@ const InstalledHostRuntimeAssurance = "installed-host-runtime-v1"
 const hostRuntimeScriptType uint32 = 0xffffffff
 
 var errHostRuntime = errors.New("HOST_RUNTIME_UNQUALIFIED")
+var errHostRuntimeSharedWritable = errors.New("HOST_RUNTIME_SHARED_WRITABLE")
 
 const hostRuntimeMaxNodes = 8192
 const hostRuntimeMaxBytes int64 = 384 << 20
@@ -218,8 +219,11 @@ func (b *hostRuntimeBuilder) observe(p string) (hostRuntimeNode, error) {
 		// executable after recheck and before the shell opens it. The accepted
 		// mutable-runtime contract covers the owner's own account, not other
 		// accounts with access through a shared group.
-		if !n.Mode.IsDir() || n.Mode.Perm()&0020 != 0 {
+		if !n.Mode.IsDir() {
 			return n, errHostRuntime
+		}
+		if n.Mode.Perm()&0020 != 0 {
+			return n, errHostRuntimeSharedWritable
 		}
 	case "alias":
 		if n.Mode&os.ModeSymlink == 0 || n.Links != 1 || n.LinkTarget == "" || strings.ContainsRune(n.LinkTarget, 0) {
@@ -566,6 +570,7 @@ func discoverHostRuntime(ctx context.Context, fs hostRuntimeFilesystem) (*HostRu
 	aggregate := newHostRuntimeBuilder(ctx, fs)
 	for _, kind := range []string{"git", "python"} {
 		found := false
+		skippedSharedWritable := false
 		for _, alias := range hostRuntimeCandidates(kind) {
 			physical, err := fs.resolve(ctx, alias)
 			if errors.Is(err, os.ErrNotExist) {
@@ -573,11 +578,13 @@ func discoverHostRuntime(ctx context.Context, fs hostRuntimeFilesystem) (*HostRu
 			}
 			found = true
 			if err != nil {
+				skippedSharedWritable = false
 				aggregate.snapshot.Unavailable = append(aggregate.snapshot.Unavailable, hostRuntimeUnavailable{kind, "HOST_RUNTIME_DISCOVERY_UNAVAILABLE"})
 				break
 			}
 			layout, boundaries, err := hostRuntimeLayoutFor(kind, alias, physical)
 			if err != nil {
+				skippedSharedWritable = false
 				aggregate.snapshot.Unavailable = append(aggregate.snapshot.Unavailable, hostRuntimeUnavailable{kind, "HOST_RUNTIME_LAYOUT_UNSUPPORTED"})
 				break
 			}
@@ -614,6 +621,11 @@ func discoverHostRuntime(ctx context.Context, fs hostRuntimeFilesystem) (*HostRu
 				if ctx.Err() != nil {
 					return nil, ctx.Err()
 				}
+				if errors.Is(err, errHostRuntimeSharedWritable) {
+					skippedSharedWritable = true
+					continue
+				}
+				skippedSharedWritable = false
 				aggregate.snapshot.Unavailable = append(aggregate.snapshot.Unavailable, hostRuntimeUnavailable{kind, "HOST_RUNTIME_QUALIFICATION_UNAVAILABLE"})
 				break
 			}
@@ -642,10 +654,13 @@ func discoverHostRuntime(ctx context.Context, fs hostRuntimeFilesystem) (*HostRu
 				aggregate.snapshot.GitExecPath = layout.root + "/libexec/git-core"
 				aggregate.snapshot.GitTemplateDirectory = layout.root + "/share/git-core/templates"
 			}
+			skippedSharedWritable = false
 			break
 		}
 		if !found {
 			aggregate.snapshot.Unavailable = append(aggregate.snapshot.Unavailable, hostRuntimeUnavailable{kind, "HOST_RUNTIME_NOT_INSTALLED"})
+		} else if skippedSharedWritable {
+			aggregate.snapshot.Unavailable = append(aggregate.snapshot.Unavailable, hostRuntimeUnavailable{kind, "HOST_RUNTIME_QUALIFICATION_UNAVAILABLE"})
 		}
 	}
 	return aggregate.finish()

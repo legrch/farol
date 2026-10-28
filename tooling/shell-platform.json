@@ -25,7 +25,7 @@
     },
     {
       "path": "modules/computer/infra/process/confinement.go",
-      "sha256": "3654e7c6d675a14622c852143403f896b4ff60830fda58979f6eef363edb73ea"
+      "sha256": "f2f2bfafec2ecbf1e70daacfb641865f9e94b3d74e520b86fae30badeacbe4cf"
     },
     {
       "path": "modules/computer/infra/process/darwin.go",
@@ -61,7 +61,7 @@
     },
     {
       "path": "modules/computer/infra/process/hostruntime.go",
-      "sha256": "747020f2f621bb9c300a36294d44307dcf50e85a39f22b18cef90cdd20efc7cf"
+      "sha256": "15ebaff32ad9ed69b4db5d6e1613231e7438df53986fed7975a8e9e5b12c47b3"
     },
     {
       "path": "modules/computer/infra/process/hostruntimedarwin.go",

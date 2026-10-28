@@ -166,6 +166,39 @@ func TestHostRuntimeRefusesGroupWritableInstallationAncestor(t *testing.T) {
 		t.Fatal("group-writable ancestor allowed another account to replace an executable")
 	}
 }
+
+func TestHostRuntimeUsesSafeInstalledAlternativeAfterSharedWritableCandidate(t *testing.T) {
+	f := &hostRuntimeFixtureFS{nodes: map[string]hostRuntimeNode{}, importsByPath: map[string]hostMachOImports{}}
+	for _, p := range []string{
+		"/opt", "/opt/homebrew", "/opt/homebrew/bin", "/opt/homebrew/Cellar", "/opt/homebrew/Cellar/git", "/opt/homebrew/Cellar/git/1", "/opt/homebrew/Cellar/git/1/bin",
+		"/Library", "/Library/Developer", "/Library/Developer/CommandLineTools", "/Library/Developer/CommandLineTools/usr", "/Library/Developer/CommandLineTools/usr/bin", "/Library/Developer/CommandLineTools/usr/libexec", "/Library/Developer/CommandLineTools/usr/libexec/git-core", "/Library/Developer/CommandLineTools/usr/share", "/Library/Developer/CommandLineTools/usr/share/git-core", "/Library/Developer/CommandLineTools/usr/share/git-core/templates",
+	} {
+		f.nodes[p] = fixtureRuntimeNode(p, "directory", os.ModeDir|0755)
+	}
+	n := f.nodes["/opt/homebrew/bin"]
+	n.Mode = os.ModeDir | 0775
+	f.nodes[n.Path] = n
+	brew := "/opt/homebrew/Cellar/git/1/bin/git"
+	f.nodes[brew] = fixtureRuntimeNode(brew, "file", 0555)
+	alias := fixtureRuntimeNode("/opt/homebrew/bin/git", "alias", os.ModeSymlink|0777)
+	alias.LinkTarget = brew
+	f.nodes[alias.Path] = alias
+	apple := "/Library/Developer/CommandLineTools/usr/bin/git"
+	f.nodes[apple] = fixtureRuntimeNode(apple, "file", 0555)
+	f.importsByPath[apple] = hostMachOImports{fileType: 2}
+	p, err := discoverHostRuntime(context.Background(), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(p.frozen.ExecFiles, []string{apple}) || slices.Contains(p.frozen.Path, "/opt/homebrew/bin") {
+		t.Fatalf("untrusted candidate was granted or safe candidate was lost: %+v", p.frozen)
+	}
+	for _, unavailable := range p.frozen.Unavailable {
+		if unavailable.Kind == "git" {
+			t.Fatal("safe alternative was reported unavailable")
+		}
+	}
+}
 func TestHostRuntimeRefusesUnsafeFilesAndUnknownHardlinks(t *testing.T) {
 	for _, field := range []string{"owner", "writable", "link", "world-parent", "setuid"} {
 		t.Run(field, func(t *testing.T) {
@@ -278,6 +311,9 @@ func TestHostRuntimeMissingProgramsLeaveBaseShellAvailable(t *testing.T) {
 	s, command := rootScopedFixture(t)
 	s.HostRuntime = p
 	command.Environment = seatbeltEnvironment(s, command.Write)
+	if !slices.Contains(command.Environment, "GIT_CONFIG_NOSYSTEM=1") || !slices.Contains(command.Environment, "GIT_ATTR_NOSYSTEM=1") {
+		t.Fatal("installed Git may read system config or attributes outside its approved scope")
+	}
 	if _, err := compileSeatbelt(s, command); err != nil {
 		t.Fatal("base Shell refused", err)
 	}
