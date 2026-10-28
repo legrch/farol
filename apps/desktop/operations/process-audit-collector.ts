@@ -31,6 +31,8 @@ export class ProcessAuditCollector {
   private readonly attempts = new Map<string, Attempt>();
   private busy = false;
   private inFlight: Promise<void> | undefined;
+  private cursor: string | undefined;
+  private preferNew = false;
   constructor(
     private readonly writer: Writer,
     private readonly now = Date.now,
@@ -70,6 +72,8 @@ export class ProcessAuditCollector {
     for (const [key, attempt] of this.attempts) {
       if (attempt.recorded && terminals.has(key)) this.attempts.delete(key);
     }
+    const candidates: { key: string; ref: OperationReference }[] = [];
+    const unique = new Set<string>();
     for (const entry of snapshot.entries) {
       if (
         !("schema" in entry) ||
@@ -88,49 +92,77 @@ export class ProcessAuditCollector {
       )
         continue;
       const key = JSON.stringify([ref.buildId, ref.runtimeId, ref.operationId]);
-      if (terminals.has(key)) continue;
-      let attempt = this.attempts.get(key);
-      if (!attempt) {
-        // An unseen reference must not starve already tracked observations
-        // when the bounded attempt table is full. Keep all existing fences.
-        if (this.attempts.size >= 1024) continue;
-        attempt = { count: 0, nextAt: 0, stopped: false, recorded: false };
-        this.attempts.set(key, attempt);
-      }
-      if (attempt.stopped || attempt.nextAt > this.now()) continue;
-      // A process can legitimately run for longer than a minute. Keep its
-      // read-only observation eligible, with bounded backoff, until it settles.
-      attempt.count = Math.min(attempt.count + 1, 12);
-      attempt.nextAt = this.now() + attempt.count * 5000;
-      this.busy = true;
-      const state = attempt;
-      const work = reader
-        .read({
-          operationId: ref.operationId,
-          buildId: ref.buildId,
-          runtimeId: ref.runtimeId,
-        })
-        .then(async (fact) => {
-          if (!current()) {
-            state.stopped = true;
-            return;
-          }
-          if (!fact) return;
-          const result = await this.writer.recordTerminalObservation(ref, fact);
-          // Never issue the same read after delivery or an uncertain write.
-          if (result !== "unavailable") state.stopped = true;
-          state.recorded = result === "recorded" || result === "duplicate";
-        })
-        .catch(() => {
-          state.stopped = true;
-        })
-        .finally(() => {
-          this.busy = false;
-          if (this.inFlight === work) this.inFlight = undefined;
-        });
-      this.inFlight = work;
-      return;
+      if (terminals.has(key) || unique.has(key)) continue;
+      unique.add(key);
+      candidates.push({ key, ref });
     }
+    // Rotate through the current snapshot rather than letting the first 1024
+    // long-running processes permanently occupy every observation slot.
+    const previous = candidates.findIndex(
+      (candidate) => candidate.key === this.cursor,
+    );
+    const ordered = candidates
+      .slice(previous + 1)
+      .concat(candidates.slice(0, previous + 1));
+    const due = ordered.find(({ key }) => {
+      const attempt = this.attempts.get(key);
+      return attempt && !attempt.stopped && attempt.nextAt <= this.now();
+    });
+    const canAdmit =
+      this.attempts.size < 1024 ||
+      [...this.attempts.values()].some((attempt) => !attempt.stopped);
+    const unseen = canAdmit
+      ? ordered.find(({ key }) => !this.attempts.has(key))
+      : undefined;
+    const selected = this.preferNew ? (unseen ?? due) : (due ?? unseen);
+    if (!selected) return;
+    const { key, ref } = selected;
+    let attempt = this.attempts.get(key);
+    if (!attempt) {
+      if (this.attempts.size >= 1024) {
+        // Only a read that definitively returned not_observed (or an append
+        // which never started) is evictable. Unknowns retain their fence.
+        const evict = [...this.attempts].find(([, value]) => !value.stopped);
+        if (!evict) return;
+        this.attempts.delete(evict[0]);
+      }
+      attempt = { count: 0, nextAt: 0, stopped: false, recorded: false };
+      this.attempts.set(key, attempt);
+    }
+    this.cursor = key;
+    this.preferNew = !this.preferNew;
+    // A process can legitimately run for longer than a minute. Keep its
+    // read-only observation eligible, with bounded backoff, until it settles.
+    attempt.count = Math.min(attempt.count + 1, 12);
+    attempt.nextAt = this.now() + attempt.count * 5000;
+    this.busy = true;
+    const state = attempt;
+    const work = reader
+      .read({
+        operationId: ref.operationId,
+        buildId: ref.buildId,
+        runtimeId: ref.runtimeId,
+      })
+      .then(async (fact) => {
+        if (!current()) {
+          state.stopped = true;
+          return;
+        }
+        if (!fact) return;
+        const result = await this.writer.recordTerminalObservation(ref, fact);
+        // Never issue the same read after delivery or an uncertain write.
+        if (result !== "unavailable") state.stopped = true;
+        state.recorded = result === "recorded" || result === "duplicate";
+      })
+      .catch(() => {
+        state.stopped = true;
+      })
+      .finally(() => {
+        this.busy = false;
+        if (this.inFlight === work) this.inFlight = undefined;
+      });
+    this.inFlight = work;
+    return;
   }
 
   /** Wait only for an already admitted observation; never dispatch a read. */

@@ -233,6 +233,43 @@ it("continues tracking known observations when new references exceed the limit",
   });
 });
 
+it("rotates fairly through more unresolved processes than available observation slots", async () => {
+  const reader = {
+    read: vi.fn(
+      async (_ref: {
+        operationId: string;
+        buildId: string;
+        runtimeId: string;
+      }) => null,
+    ),
+  };
+  const writer = {
+    recordTerminalObservation: vi.fn().mockResolvedValue("recorded" as const),
+  };
+  const collector = new ProcessAuditCollector(writer, () => 0, "current");
+  const entries = Array.from({ length: 1100 }, (_, i) => ({
+    ...entry,
+    operationRef: {
+      ...ref,
+      operationId: `process-${i}`,
+      backendGeneration: "current",
+    },
+  }));
+  for (let i = 0; i < 1100; i++) {
+    collector.observe({ ...snapshot, entries }, reader, () => true);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  const observed = new Set(
+    reader.read.mock.calls.map(([value]) => value.operationId),
+  );
+  expect(observed.size).toBe(1100);
+  expect(entries.every((value) => value.outcome === "unknown")).toBe(true);
+  expect(writer.recordTerminalObservation).not.toHaveBeenCalled();
+  collector.observe({ ...snapshot, entries }, reader, () => true);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(reader.read.mock.calls.at(-1)?.[0].operationId).toBe("process-0");
+});
+
 it("releases a confirmed slot only after its terminal appears in the journal", async () => {
   const reader = { read: vi.fn().mockResolvedValue(fact) };
   const writer = {
