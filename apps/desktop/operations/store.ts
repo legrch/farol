@@ -1,16 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
+import { validate, type ComputerProcessTerminalAudit } from "../bridge/wire";
 import { randomUUID } from "node:crypto";
 import { createTotalOperationsRecorder } from "./recorder";
 import { resolveOperationTarget, resolveOperationsSnapshot } from "./target";
 import {
   OperationEntrySchema,
+  OperationReferenceSchema,
   OperationsDiagnosticsSchema,
   type OperationMetadata,
   type OperationEntry,
   type OperationsRecorder,
   type OperationsSnapshot,
   type ExecutionReferences,
+  type OperationReference,
 } from "../renderer/operations-contract";
 
 export const operationsLimits = {
@@ -60,6 +63,9 @@ export class OperationsStore implements OperationsRecorder {
     unmappedCodes: 0,
   };
   private reading: Promise<OperationsSnapshot> | undefined;
+  private terminalWrites: Promise<void> = Promise.resolve();
+  private terminalPending = 0;
+  private readonly terminalUnknown = new Set<string>();
   private readonly recorder = createTotalOperationsRecorder(
     {
       begin: (metadata) => this.beginEntry(metadata),
@@ -296,9 +302,13 @@ export class OperationsStore implements OperationsRecorder {
           }
         : {}),
     });
+    this.enqueue(entry);
+  }
+  private enqueue(entry: OperationEntry): boolean {
+    const lifecycle = entry.lifecycle;
     const item = {
       entry,
-      droppable: outcome !== "pending" && outcome !== "unknown",
+      droppable: entry.outcome !== "pending" && entry.outcome !== "unknown",
     };
     if (item.droppable && lifecycle?.phase === "observed") {
       const start = this.queue.find(
@@ -310,18 +320,144 @@ export class OperationsStore implements OperationsRecorder {
     }
     if (this.closed) {
       this.lost([item]);
-      return;
+      return false;
     }
     this.schedule();
     if (this.queue.length >= this.queueLimit) {
       const index = this.queue.findIndex((q) => q.droppable);
       if (index < 0) {
         this.lost([item]);
-        return;
+        return false;
       }
       this.lost(this.queue.splice(index, 1));
     }
     this.queue.push(item);
+    return true;
+  }
+  /** Append an observation without changing the original MCP result. The
+   * original reference must already exist in this store. A timed-out write is
+   * never repeated in this owner lifetime. */
+  recordTerminalObservation(
+    reference: OperationReference,
+    fact: ComputerProcessTerminalAudit,
+  ): Promise<
+    "recorded" | "duplicate" | "conflict" | "unavailable" | "unknown"
+  > {
+    if (this.closed || this.terminalPending >= 64)
+      return Promise.resolve("unavailable");
+    this.terminalPending++;
+    let attemptedKey: string | undefined;
+    const work = this.terminalWrites
+      .then(async () => {
+        if (
+          !OperationReferenceSchema.safeParse(reference).success ||
+          !validate("ComputerProcessTerminalAudit", fact) ||
+          reference.owner !== "computer.process" ||
+          reference.operationId !== fact.operationId ||
+          reference.buildId !== fact.buildId ||
+          reference.runtimeId !== fact.runtimeId ||
+          !fact.rootWaited ||
+          !fact.outputDrained ||
+          fact.groupCleanup === "pending" ||
+          fact.descendantCleanup === "pending" ||
+          !(fact.exitCode !== undefined
+            ? fact.exitCode <= 255 && fact.exitSignal === 0
+            : fact.exitSignal >= 1 && fact.exitSignal <= 128)
+        )
+          return "unavailable" as const;
+        const key = JSON.stringify([
+          fact.buildId,
+          fact.runtimeId,
+          fact.operationId,
+        ]);
+        if (this.terminalUnknown.has(key)) return "unknown" as const;
+        if (this.terminalUnknown.size >= 1024) return "unavailable" as const;
+        const snapshot = await this.snapshot(5000);
+        if (
+          snapshot.readPending ||
+          snapshot.corruptLines > 0 ||
+          snapshot.writeFailures > 0
+        )
+          return "unavailable" as const;
+        const matches = (entry: OperationEntry) =>
+          "schema" in entry &&
+          entry.operationRef?.owner === "computer.process" &&
+          entry.operationRef.operationId === fact.operationId &&
+          entry.operationRef.buildId === fact.buildId &&
+          entry.operationRef.runtimeId === fact.runtimeId;
+        if (
+          !snapshot.entries.some(
+            (entry) => matches(entry) && entry.kind === "computer_shell_start",
+          )
+        )
+          return "unavailable" as const;
+        const exit =
+          fact.exitCode !== undefined
+            ? { kind: "code" as const, value: fact.exitCode }
+            : { kind: "signal" as const, value: fact.exitSignal };
+        const executionFacts = {
+          rootWaited: fact.rootWaited,
+          outputDrained: fact.outputDrained,
+          groupCleanup: fact.groupCleanup,
+          descendantCleanup: fact.descendantCleanup,
+          timedOut: fact.timedOut,
+          authorityLost: fact.authorityLost,
+        };
+        const prior = snapshot.entries.find(
+          (entry) =>
+            matches(entry) && entry.kind === "computer.process.terminal",
+        );
+        if (prior && "schema" in prior)
+          return JSON.stringify(prior.exit) === JSON.stringify(exit) &&
+            JSON.stringify(prior.executionFacts) ===
+              JSON.stringify(executionFacts)
+            ? ("duplicate" as const)
+            : ("conflict" as const);
+        const id = randomUUID();
+        const entry = OperationEntrySchema.parse({
+          id,
+          at: this.now(),
+          source: "ChatGPT",
+          kind: "computer.process.terminal",
+          target: {},
+          outcome: "done",
+          code: null,
+          durationMs: null,
+          schema: "farol.operation/2",
+          operationRef: { ...reference, binding: "accepted" },
+          subjectRef: null,
+          timing: null,
+          exit,
+          executionFacts,
+        });
+        attemptedKey = key;
+        if (!this.enqueue(entry)) {
+          attemptedKey = undefined;
+          return "unavailable" as const;
+        }
+        if (!(await this.flush(5000))) {
+          this.terminalUnknown.add(key);
+          return "unknown" as const;
+        }
+        const after = await this.snapshot(5000);
+        if (
+          after.readPending ||
+          !after.entries.some((item) => item.id === id)
+        ) {
+          this.terminalUnknown.add(key);
+          return "unknown" as const;
+        }
+        return "recorded" as const;
+      })
+      .catch(() => {
+        if (attemptedKey) this.terminalUnknown.add(attemptedKey);
+        return "unknown" as const;
+      })
+      .finally(() => {
+        this.terminalPending--;
+      });
+    this.terminalWrites = work.then(() => undefined);
+    return work;
   }
   private schedule(): void {
     if (this.running || this.scheduled || this.closed) return;

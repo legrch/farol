@@ -89,6 +89,7 @@
     "computer.process.held.release": "effect",
     "computer.process.start": "effect",
     "computer.process.read": "read",
+    "computer.process.audit": "read",
     "computer.process.cancel": "effect",
     "computer.connector.catalogueverify": "read",
     "computer.settings.search": "read",
@@ -4927,6 +4928,43 @@
         "stderrOffset": {
           "type": "decimal"
         }
+      }
+    },
+    "ComputerProcessAuditRequest": {
+      "type": "object",
+      "fields": {
+        "operationId": { "type": "id" },
+        "buildId": { "type": "id" },
+        "runtimeId": { "type": "id" }
+      }
+    },
+    "ComputerProcessTerminalAudit": {
+      "type": "object",
+      "fields": {
+        "operationId": { "type": "id" },
+        "buildId": { "type": "id" },
+        "runtimeId": { "type": "id" },
+        "exitCode": { "type": "uint32", "optional": true },
+        "exitSignal": { "type": "uint32" },
+        "rootWaited": { "type": "boolean" },
+        "outputDrained": { "type": "boolean" },
+        "groupCleanup": {
+          "type": "string",
+          "values": ["pending", "confirmed", "unverified"]
+        },
+        "descendantCleanup": {
+          "type": "string",
+          "values": ["pending", "confirmed", "unverified"]
+        },
+        "timedOut": { "type": "boolean" },
+        "authorityLost": { "type": "boolean" }
+      }
+    },
+    "ComputerProcessAuditResult": {
+      "type": "object",
+      "fields": {
+        "state": { "type": "string", "values": ["observed", "not_observed"] },
+        "fact": { "type": "ComputerProcessTerminalAudit", "optional": true }
       }
     },
     "ComputerConnectorProcessResult": {

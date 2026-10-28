@@ -11,6 +11,7 @@ import {
 } from "../../../apps/desktop/operations/model-turn";
 import { operationsDirectory } from "../../../apps/desktop/operations/paths";
 import { OperationsStore } from "../../../apps/desktop/operations/store";
+import { ProcessAuditCollector } from "../../../apps/desktop/operations/process-audit-collector";
 import { observeOperation } from "../../../apps/desktop/operations/observe";
 import { recordInterruptedCommand } from "../../../apps/desktop/operations/interrupted-command";
 import {
@@ -6863,6 +6864,7 @@ async function configureSaveAndConnect(
 }
 
 let operationsLog: OperationsStore | undefined;
+let processAuditCollector: ProcessAuditCollector | undefined;
 function operationsStore(): OperationsStore {
   return (operationsLog ??= new OperationsStore(
     operationsDirectory(app.getPath("userData")),
@@ -11878,6 +11880,15 @@ function installIpc(): void {
     if (!isTrustedIpcSender(event, window))
       return { entries: [], corruptLines: 0, writeFailures: 1 };
     const snapshot = await operationsStore().snapshot();
+    const core = desktopGoCore;
+    if (core && !quitInProgress) {
+      processAuditCollector ??= new ProcessAuditCollector(operationsStore());
+      processAuditCollector.observe(
+        snapshot,
+        core.processAudit,
+        () => desktopGoCore === core && !quitInProgress,
+      );
+    }
     return {
       ...snapshot,
       connectionChecking: startupConnectionChecking || connectorTaskAdmission,

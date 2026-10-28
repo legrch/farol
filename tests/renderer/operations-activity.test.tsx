@@ -88,6 +88,56 @@ it("shows an unknown observation duration without inventing zero milliseconds", 
     c.dispose();
   }
 });
+it("shows terminal evidence without treating a nonzero exit as successful execution", async () => {
+  const f = fixture(),
+    c = new WindowController(f.api);
+  await c.start();
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  try {
+    await act(async () =>
+      root.render(
+        <OperationsActivity
+          snapshot={{
+            ...c.getSnapshot(),
+            activity: [
+              {
+                ...entries[0]!,
+                kind: "computer.process.terminal",
+                label: "Process terminal",
+                durationMs: null,
+                operationRef: {
+                  owner: "computer.process",
+                  operationId: "start-id",
+                  buildId: "build",
+                  runtimeId: "runtime",
+                  binding: "accepted",
+                },
+                exit: { kind: "code", value: 3 },
+                executionFacts: {
+                  rootWaited: true,
+                  outputDrained: true,
+                  groupCleanup: "confirmed",
+                  descendantCleanup: "unverified",
+                  timedOut: false,
+                  authorityLost: false,
+                },
+              },
+            ],
+          }}
+          facade={{} as RendererFacade}
+        />,
+      ),
+    );
+    expect(host.textContent).toContain("observed");
+    expect(host.textContent).toContain("Code 3");
+    expect(host.textContent).toContain("unverified");
+    expect(host.textContent).toContain("start-id");
+  } finally {
+    await act(async () => root.unmount());
+    c.dispose();
+  }
+});
 it("shows a slow activity read as updating, not as a failed log write", async () => {
   const f = fixture(),
     c = new WindowController(f.api);

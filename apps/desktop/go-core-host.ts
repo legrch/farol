@@ -13,6 +13,7 @@ import {
   type NativeCodexReadSelection,
 } from "./bridge/client.ts";
 import { ComputerBridge } from "./bridge/computer.ts";
+import { ProcessAuditBridge } from "./bridge/process-audit.ts";
 import { ConnectorHostBridge } from "./bridge/connector-host.ts";
 import { BrowserPump, type BrowserDriver } from "./bridge/browser.ts";
 import { ChatBridge } from "./bridge/chat.ts";
@@ -102,6 +103,7 @@ export type DesktopCoreSelection = Readonly<{
 // One normal Electron-owned backend lifetime. This class only composes the real
 // Go authorities and typed adapters; it cannot grant permission or restart work.
 export class DesktopGoCore {
+  readonly processAudit: ProcessAuditBridge;
   private readonly authority: GoComputerAuthority;
   private readonly computer: ComputerBridge;
   private readonly connector: ConnectorHostBridge | undefined;
@@ -132,6 +134,7 @@ export class DesktopGoCore {
     private readonly qualifiedShell = false,
     private readonly freshSession = false,
   ) {
+    this.processAudit = new ProcessAuditBridge(client);
     this.authority = new GoComputerAuthority(client, client.verifiedContext);
     this.computer = new ComputerBridge(client);
     this.connector =

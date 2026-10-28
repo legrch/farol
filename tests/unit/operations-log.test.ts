@@ -367,6 +367,144 @@ it("marks the start binding accepted only after a confirmed start response", asy
     }),
   ]);
 });
+it("appends a late terminal fact once without replacing the original unknown", async () => {
+  const { store, directory } = setup();
+  const ref = {
+    owner: "computer.process" as const,
+    operationId: "start-id",
+    buildId: "build",
+    runtimeId: "runtime",
+    binding: "requested" as const,
+  };
+  const fact = {
+    operationId: "start-id",
+    buildId: "build",
+    runtimeId: "runtime",
+    exitCode: 7,
+    exitSignal: 0,
+    rootWaited: true,
+    outputDrained: true,
+    groupCleanup: "confirmed" as const,
+    descendantCleanup: "unverified" as const,
+    timedOut: false,
+    authorityLost: false,
+  };
+  const finish = store.beginExecution(
+    { source: "ChatGPT", kind: "computer_shell_start", target: {} },
+    { operationRef: ref, subjectRef: null },
+  );
+  finish("unknown", "UNCONFIRMED", 12);
+  await store.flush(5000);
+  const file = path.join(
+    directory,
+    fs.readdirSync(directory).find((name) => name.endsWith(".jsonl"))!,
+  );
+  const before = fs.readFileSync(file, "utf8");
+  expect(
+    await Promise.all([
+      store.recordTerminalObservation(ref, fact),
+      store.recordTerminalObservation(ref, fact),
+    ]),
+  ).toEqual(["recorded", "duplicate"]);
+  expect(
+    await store.recordTerminalObservation(ref, { ...fact, exitCode: 9 }),
+  ).toBe("conflict");
+  expect(
+    await store.recordTerminalObservation(ref, {
+      ...fact,
+      runtimeId: "foreign",
+    }),
+  ).toBe("unavailable");
+  const entries = (await store.snapshot(5000)).entries;
+  expect(entries).toHaveLength(2);
+  expect(entries).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        outcome: "unknown",
+        kind: "computer_shell_start",
+        operationRef: ref,
+      }),
+      expect.objectContaining({
+        kind: "computer.process.terminal",
+        durationMs: null,
+        exit: { kind: "code", value: 7 },
+        operationRef: { ...ref, binding: "accepted" },
+      }),
+    ]),
+  );
+  expect(fs.readFileSync(file, "utf8").startsWith(before)).toBe(true);
+});
+
+it("does not repeat a terminal journal write whose acknowledgement is unknown", async () => {
+  const { store } = setup();
+  const ref = {
+    owner: "computer.process" as const,
+    operationId: "start-id",
+    buildId: "build",
+    runtimeId: "runtime",
+    binding: "requested" as const,
+  };
+  const fact = {
+    operationId: "start-id",
+    buildId: "build",
+    runtimeId: "runtime",
+    exitCode: 0,
+    exitSignal: 0,
+    rootWaited: true,
+    outputDrained: true,
+    groupCleanup: "confirmed" as const,
+    descendantCleanup: "confirmed" as const,
+    timedOut: false,
+    authorityLost: false,
+  };
+  const finish = store.beginExecution(
+    { source: "ChatGPT", kind: "computer_shell_start", target: {} },
+    { operationRef: ref, subjectRef: null },
+  );
+  finish("unknown", "UNCONFIRMED", 1);
+  await store.flush(5000);
+  const flush = vi.spyOn(store, "flush").mockResolvedValueOnce(false);
+  expect(await store.recordTerminalObservation(ref, fact)).toBe("unknown");
+  expect(await store.recordTerminalObservation(ref, fact)).toBe("unknown");
+  expect(flush).toHaveBeenCalledTimes(1);
+  flush.mockRestore();
+});
+it("does not append a terminal observation when the journal snapshot is unreliable", async () => {
+  const { store } = setup();
+  const ref = {
+    owner: "computer.process" as const,
+    operationId: "start-id",
+    buildId: "build",
+    runtimeId: "runtime",
+    binding: "requested" as const,
+  };
+  const fact = {
+    operationId: "start-id",
+    buildId: "build",
+    runtimeId: "runtime",
+    exitCode: 0,
+    exitSignal: 0,
+    rootWaited: true,
+    outputDrained: true,
+    groupCleanup: "confirmed" as const,
+    descendantCleanup: "confirmed" as const,
+    timedOut: false,
+    authorityLost: false,
+  };
+  const finish = store.beginExecution(
+    { source: "ChatGPT", kind: "computer_shell_start", target: {} },
+    { operationRef: ref, subjectRef: null },
+  );
+  finish("unknown", "PROCESS_OUTCOME_UNKNOWN", 1);
+  await store.flush(5000);
+  const baseline = await store.snapshot(5000);
+  const read = vi
+    .spyOn(store, "snapshot")
+    .mockResolvedValueOnce({ ...baseline, writeFailures: 1 });
+  expect(await store.recordTerminalObservation(ref, fact)).toBe("unavailable");
+  read.mockRestore();
+  expect((await store.snapshot(5000)).entries).toHaveLength(1);
+});
 it("bounds disk bytes, age and entry count across independent writer lifetimes", async () => {
   const f = setup({ days: 30, bytes: 1500, segmentBytes: 300, entries: 4 });
   for (let i = 0; i < 20; i++) {

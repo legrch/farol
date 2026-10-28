@@ -59,6 +59,7 @@ export const operationKinds = [
   "computer_shell_cancel",
   "computer_shell_read",
   "computer_shell_start",
+  "computer.process.terminal",
   "computer_workspace_bootstrap",
   "computer_workspace_catalogue",
   "computer_workspace_edit",

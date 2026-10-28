@@ -52,6 +52,8 @@ export const operationCodesByOutcome = {
     "supported",
   ],
   refused: [
+    "UPDATE_FORWARD_ONLY",
+    "process_audit_reference_invalid",
     "invalid_fresh_status",
     "FRESH_START_SETTINGS_UNAVAILABLE",
     "STARTUP_PRESERVED_MUTATION_CONTRACT_UNSUPPORTED",
@@ -1883,6 +1885,9 @@ export const operationCodesByOutcome = {
     "write-failed",
   ],
   unknown: [
+    "process_audit_unavailable",
+    "process_audit_crossed_or_invalid",
+    "not_observed",
     "FRESH_SESSION_INTERRUPTED_COMMAND_UNKNOWN",
     "FRESH_SESSION_PROCESS_SCOPE_UNAVAILABLE",
     "FRESH_START_CURRENT_OWNER_UNCONFIRMED",

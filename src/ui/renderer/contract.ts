@@ -146,6 +146,19 @@ export type ActivityEntry = Readonly<{
   outcome?: OperationEntry["outcome"];
   target?: OperationEntry["target"];
   durationMs?: number | null;
+  operationRef?: Extract<
+    OperationEntry,
+    { schema: "farol.operation/2" }
+  >["operationRef"];
+  subjectRef?: Extract<
+    OperationEntry,
+    { schema: "farol.operation/2" }
+  >["subjectRef"];
+  exit?: Extract<OperationEntry, { schema: "farol.operation/2" }>["exit"];
+  executionFacts?: Extract<
+    OperationEntry,
+    { schema: "farol.operation/2" }
+  >["executionFacts"];
   id: string;
   taskId: string;
   turnId: string;

@@ -442,6 +442,7 @@ func (s *computerConnector) Methods() map[string]desktop.Method {
 		return nil
 	}
 	return map[string]desktop.Method{
+		"computer.process.audit":          s.processAuditMethod(),
 		"computer.connector.health":       s.healthMethod(),
 		"computer.connector.polling":      s.pollingMethod(),
 		"computer.connector.verification": s.verificationObservationMethod(),

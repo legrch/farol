@@ -131,7 +131,9 @@ export function OperationsActivity({
                 </small>
               </span>
               <span className="operation-outcome" data-outcome={row.outcome}>
-                {row.outcome}
+                {row.kind === "computer.process.terminal"
+                  ? "observed"
+                  : row.outcome}
               </span>
             </summary>
             <dl className="activity-facts">
@@ -146,10 +148,48 @@ export function OperationsActivity({
                 ["Code", row.code ?? "—"],
                 [
                   "Duration",
-                  row.durationMs === null
+                  row.durationMs == null
                     ? "Unavailable"
                     : `${row.durationMs} ms`,
                 ],
+                ...(row.operationRef
+                  ? [["Operation ID", row.operationRef.operationId]]
+                  : []),
+                ...(row.subjectRef
+                  ? [["Process ID", row.subjectRef.operationId]]
+                  : []),
+                ...(row.exit
+                  ? [
+                      [
+                        "Exit",
+                        row.exit.kind === "code"
+                          ? `Code ${row.exit.value}`
+                          : `Signal ${row.exit.value}`,
+                      ],
+                    ]
+                  : []),
+                ...(row.executionFacts
+                  ? [
+                      [
+                        "Root waited",
+                        row.executionFacts.rootWaited ? "Yes" : "No",
+                      ],
+                      [
+                        "Output drained",
+                        row.executionFacts.outputDrained ? "Yes" : "No",
+                      ],
+                      ["Group cleanup", row.executionFacts.groupCleanup],
+                      [
+                        "Descendant cleanup",
+                        row.executionFacts.descendantCleanup,
+                      ],
+                      ["Timed out", row.executionFacts.timedOut ? "Yes" : "No"],
+                      [
+                        "Authority lost",
+                        row.executionFacts.authorityLost ? "Yes" : "No",
+                      ],
+                    ]
+                  : []),
               ].map(([key, value]) => (
                 <div key={key}>
                   <dt>{key}</dt>
