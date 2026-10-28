@@ -229,6 +229,68 @@ it("survives restart and skips/counts corrupt and content-bearing lines", async 
   expect(fs.statSync(file).mode & 0o777).toBe(0o600);
   expect(fs.statSync(directory).mode & 0o777).toBe(0o700);
 });
+
+it("reads mixed V1 and bounded V2 observations without rewriting history or accepting future schemas", async () => {
+  const { store, directory } = setup({
+    days: 30,
+    bytes: 8192,
+    segmentBytes: 4096,
+    entries: 100,
+  });
+  store.record(
+    { source: "You", kind: "hub.start", target: {} },
+    "unknown",
+    "UNCONFIRMED",
+    12,
+  );
+  await store.flush(5000);
+  const file = path.join(
+    directory,
+    fs.readdirSync(directory).find((name) => name.endsWith(".jsonl"))!,
+  );
+  const v1Bytes = fs.readFileSync(file, "utf8");
+  const v1 = JSON.parse(v1Bytes);
+  const v2 = {
+    ...v1,
+    id: "c7b853ec-0862-4540-8e29-e1b680d5149d",
+    schema: "farol.operation/2",
+    operationRef: {
+      owner: "computer.process",
+      operationId: "start-1",
+      buildId: "a".repeat(64),
+      runtimeId: "runtime-1",
+      binding: "accepted",
+    },
+    subjectRef: null,
+    timing: { requestedAt: v1.at, startedAt: null, endedAt: null },
+    exit: null,
+    executionFacts: null,
+  };
+  fs.appendFileSync(
+    file,
+    JSON.stringify(v2) +
+      "\n" +
+      JSON.stringify({ ...v2, schema: "farol.operation/3" }) +
+      "\n" +
+      JSON.stringify({ ...v2, stdout: "PRIVATE-CANARY" }) +
+      "\n",
+  );
+  const savedBytes = fs.readFileSync(file, "utf8");
+  const restarted = new OperationsStore(directory, () => 1792670400000);
+  stores.push(restarted);
+  const snapshot = await restarted.snapshot(5000);
+  expect(snapshot.entries).toHaveLength(2);
+  expect(snapshot.entries).toContainEqual(v2);
+  expect(
+    snapshot.entries.some(
+      (entry) => entry.outcome === "unknown" && !("schema" in entry),
+    ),
+  ).toBe(true);
+  expect(snapshot.corruptLines).toBe(2);
+  expect(JSON.stringify(snapshot)).not.toContain("PRIVATE-CANARY");
+  expect(fs.readFileSync(file, "utf8")).toBe(savedBytes);
+  expect(savedBytes.startsWith(v1Bytes)).toBe(true);
+});
 it("bounds disk bytes, age and entry count across independent writer lifetimes", async () => {
   const f = setup({ days: 30, bytes: 1500, segmentBytes: 300, entries: 4 });
   for (let i = 0; i < 20; i++) {

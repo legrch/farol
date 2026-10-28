@@ -80,7 +80,7 @@ export const OperationMetadataSchema = z.strictObject({
 });
 export const OperationOutcomeSchema = z.enum(operationOutcomes);
 export const OperationDurationSchema = z.number().int().nonnegative().safe();
-export const OperationEntrySchema = z.strictObject({
+const OperationEntryV1Schema = z.strictObject({
   id: z.string().uuid(),
   at: z.number().int().nonnegative().safe(),
   ...OperationMetadataSchema.shape,
@@ -94,6 +94,58 @@ export const OperationEntrySchema = z.strictObject({
     })
     .optional(),
 });
+// V2 deliberately carries only bounded identities and observed facts. Command
+// text and process output require the separately qualified redaction boundary.
+const ExecutionIdentifierSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u);
+const OperationReferenceSchema = z.strictObject({
+  owner: z.enum(["computer.process", "computer.mutation", "release"]),
+  operationId: ExecutionIdentifierSchema,
+  buildId: z.string().regex(/^[a-f0-9]{64}$/u),
+  runtimeId: ExecutionIdentifierSchema,
+  binding: z.enum(["requested", "accepted"]),
+});
+const CleanupSchema = z.enum(["pending", "confirmed", "unverified"]);
+const OperationEntryV2Schema = OperationEntryV1Schema.extend({
+  schema: z.literal("farol.operation/2"),
+  operationRef: OperationReferenceSchema.nullable(),
+  subjectRef: OperationReferenceSchema.nullable(),
+  timing: z
+    .strictObject({
+      requestedAt: OperationDurationSchema,
+      startedAt: OperationDurationSchema.nullable(),
+      endedAt: OperationDurationSchema.nullable(),
+    })
+    .nullable(),
+  exit: z
+    .discriminatedUnion("kind", [
+      z.strictObject({
+        kind: z.literal("code"),
+        value: z.number().int().min(0).max(255),
+      }),
+      z.strictObject({
+        kind: z.literal("signal"),
+        value: z.number().int().min(1).max(128),
+      }),
+    ])
+    .nullable(),
+  executionFacts: z
+    .strictObject({
+      rootWaited: z.boolean(),
+      outputDrained: z.boolean(),
+      groupCleanup: CleanupSchema,
+      descendantCleanup: CleanupSchema,
+      timedOut: z.boolean(),
+      authorityLost: z.boolean(),
+    })
+    .nullable(),
+});
+// strict V1 prevents unknown future schema versions from being read as V1.
+export const OperationEntrySchema = z.union([
+  OperationEntryV1Schema,
+  OperationEntryV2Schema,
+]);
 export type OperationEntry = z.infer<typeof OperationEntrySchema>;
 /** Adapter workspace values are unresolved IDs, never display labels. The
  * recorder resolves them against owner configuration before any sink sees them. */
