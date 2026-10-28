@@ -520,6 +520,25 @@ try {
   );
   assert.equal(opened.ok, true, JSON.stringify(opened));
   const fixtureHome = await fixtureContents();
+  await window.getByRole("button", { name: "ChatGPT", exact: true }).click();
+  await application.evaluate(({ webContents }, id) => {
+    const contents = webContents.fromId(id);
+    if (!contents || contents.isDestroyed())
+      throw Error("FIXTURE_CONTENTS_MISSING");
+    contents.sendInputEvent({
+      type: "keyDown",
+      keyCode: "[",
+      modifiers: ["meta"],
+    });
+    contents.sendInputEvent({
+      type: "keyUp",
+      keyCode: "[",
+      modifiers: ["meta"],
+    });
+  }, fixtureHome.id);
+  await window.getByRole("searchbox", { name: "Search activity" }).waitFor();
+  report.checks.push("hidden-embedded-history-keyboard-shortcut");
+  await save();
   // A real hidden WebContentsView, with a synthetic page-declared drag region.
   // This proves computed CSS on the built application; it is not OS hit-testing.
   const pageDrag = await application.evaluate(async ({ webContents }, id) => {
