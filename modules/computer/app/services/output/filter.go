@@ -133,13 +133,19 @@ func cleanBytes(value []byte, filter ScalarFilter) Excerpt {
 // Unknown or incomplete capture never exposes a prefix or fallback error text.
 func Project(in Input, filter ScalarFilter) Details {
 	command := cleanText(in.Command, true, filter)
+	var details Details
 	if !in.OutputDrained || in.OutputLimited || in.StdoutOffset != 0 || in.StderrOffset != 0 || in.StdoutNext != uint64(len(in.Stdout)) || in.StderrNext != uint64(len(in.Stderr)) || in.StdoutBytes != in.StdoutNext || in.StderrBytes != in.StderrNext {
-		return Details{Command: command, Stdout: empty("unavailable", "source_incomplete"), Stderr: empty("unavailable", "source_incomplete")}
+		details = Details{Command: command, Stdout: empty("unavailable", "source_incomplete"), Stderr: empty("unavailable", "source_incomplete")}
+	} else {
+		details = Details{Command: command, Stdout: cleanBytes(in.Stdout, filter), Stderr: cleanBytes(in.Stderr, filter)}
 	}
-	details := Details{Command: command, Stdout: cleanBytes(in.Stdout, filter), Stderr: cleanBytes(in.Stderr, filter)}
 	if encoded, err := json.Marshal(details); err != nil || len(encoded) > entryLimit {
-		details.Stdout = empty("withheld", "entry_limit")
-		details.Stderr = empty("withheld", "entry_limit")
+		if details.Stdout.State == "filtered" || details.Stdout.State == "filtered-truncated" {
+			details.Stdout = empty("withheld", "entry_limit")
+		}
+		if details.Stderr.State == "filtered" || details.Stderr.State == "filtered-truncated" {
+			details.Stderr = empty("withheld", "entry_limit")
+		}
 		if encoded, err = json.Marshal(details); err != nil || len(encoded) > entryLimit {
 			details.Command = empty("withheld", "entry_limit")
 		}

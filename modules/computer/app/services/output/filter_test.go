@@ -99,3 +99,13 @@ func TestProjectionBoundsEncodedEntry(t *testing.T) {
 		t.Fatal("encoded entry exceeded limit")
 	}
 }
+
+func TestProjectionBoundsEncodedEntryWhenOutputIsIncomplete(t *testing.T) {
+	in := complete(strings.Repeat("&", excerptLimit), "partial", "")
+	in.OutputLimited = true
+	got := Project(in, identity)
+	encoded, err := json.Marshal(got)
+	if err != nil || len(encoded) > entryLimit || got.Command.State != "withheld" || got.Command.Reason != "entry_limit" || got.Stdout.Reason != "source_incomplete" || got.Stderr.Reason != "source_incomplete" {
+		t.Fatal("incomplete capture exceeded encoded entry limit")
+	}
+}
