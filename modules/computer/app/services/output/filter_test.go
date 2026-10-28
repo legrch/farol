@@ -40,6 +40,8 @@ func TestProjectionSyntheticCorpus(t *testing.T) {
 		{"pem", "-----BEGIN PRIVATE KEY-----\nFAKE_SECRET", "filtered", "[REDACTED]"},
 		{"jwt", "eyJabcdefghij.abcdefghij.abcdefghij", "filtered", "[REDACTED]"},
 		{"encoded-context", "base64 --decode FAKE_SECRET", "filtered", "[REDACTED]"},
+		{"opaque-hex", strings.Repeat("0a1b", 25), "filtered", "[REDACTED]"},
+		{"opaque-base64", strings.Repeat("aB3d", 25), "filtered", "[REDACTED]"},
 		{"too-large", strings.Repeat("x", sourceLimit+1), "withheld", ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {

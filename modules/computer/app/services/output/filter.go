@@ -35,6 +35,45 @@ type Details struct {
 // Conservative whole-field masking retains ordinary diagnostic output while
 // avoiding unqualified substring parsing of shell, URLs, headers, or credentials.
 var sensitive = regexp.MustCompile(`(?i)(authorization|set-cookie|cookie\s*[:=]|bearer\s+|basic\s+|password|passwd|passphrase|secret|credential|api[_-]?key|\btoken\b|access[_-]?token|refresh[_-]?token|private[_ -]?key|base64\s+(--decode|-d)|-----begin [a-z ]*private key-----|https?://[^/\s]+@|[?&](token|key|auth|password)=|\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})`)
+var opaqueHex = regexp.MustCompile(`(?i)\b[0-9a-f]{96,}\b`)
+var opaqueBase64 = regexp.MustCompile(`[A-Za-z0-9+/]{96,}={0,2}`)
+
+// Long encoded material can contain secrets even without a recognizable key.
+// Preserve ordinary long identifiers unless they have base64-like mixed classes.
+func hasOpaqueEncoding(value string) bool {
+	for _, part := range opaqueHex.FindAllString(value, -1) {
+		var seen [256]bool
+		distinct := 0
+		for i := 0; i < len(part); i++ {
+			if !seen[part[i]] {
+				seen[part[i]] = true
+				distinct++
+			}
+		}
+		if distinct >= 4 {
+			return true
+		}
+	}
+	for _, part := range opaqueBase64.FindAllString(value, -1) {
+		var lower, upper, digit, special bool
+		for _, ch := range part {
+			switch {
+			case ch >= 'a' && ch <= 'z':
+				lower = true
+			case ch >= 'A' && ch <= 'Z':
+				upper = true
+			case ch >= '0' && ch <= '9':
+				digit = true
+			default:
+				special = true
+			}
+		}
+		if (lower && upper && digit) || special {
+			return true
+		}
+	}
+	return false
+}
 
 func empty(state, reason string) Excerpt { return Excerpt{State: state, Reason: reason} }
 
@@ -61,11 +100,11 @@ func cleanText(value string, command bool, filter ScalarFilter) (out Excerpt) {
 	if filter == nil {
 		return empty("unavailable", "filter_unavailable")
 	}
-	if sensitive.MatchString(value) {
+	if sensitive.MatchString(value) || hasOpaqueEncoding(value) {
 		value = "[REDACTED]"
 	}
 	filtered, err := filter(value)
-	if err != nil || !utf8.ValidString(filtered) || len(filtered) > sourceLimit || sensitive.MatchString(filtered) {
+	if err != nil || !utf8.ValidString(filtered) || len(filtered) > sourceLimit || sensitive.MatchString(filtered) || hasOpaqueEncoding(filtered) {
 		return empty("unavailable", "filter_failed")
 	}
 	for _, r := range filtered {
