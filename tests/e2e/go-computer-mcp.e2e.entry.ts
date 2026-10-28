@@ -494,7 +494,7 @@ export async function run(input: {
                   host!.processAudit,
                   () => !hostClosed,
                 );
-                observed = snapshot.entries.some(
+                const terminal = snapshot.entries.find(
                   (entry) =>
                     "schema" in entry &&
                     entry.kind === "computer.process.terminal" &&
@@ -502,6 +502,23 @@ export async function run(input: {
                     entry.exit?.kind === "code" &&
                     entry.exit.value === 0,
                 );
+                if (terminal && "schema" in terminal) {
+                  assert.deepEqual(terminal.auditDetails, {
+                    command: {
+                      state: "unavailable",
+                      reason: "filter_unavailable",
+                    },
+                    stdout: {
+                      state: "unavailable",
+                      reason: "filter_unavailable",
+                    },
+                    stderr: {
+                      state: "unavailable",
+                      reason: "filter_unavailable",
+                    },
+                  });
+                  observed = true;
+                }
                 if (!observed)
                   await new Promise((resolve) => setTimeout(resolve, 250));
               }
