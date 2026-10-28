@@ -143,6 +143,9 @@ const (
 	connectorStartEndpointConfig
 	connectorStartSocketListen
 	connectorStartSocketQualify
+	connectorStartSocketPermission
+	connectorStartSocketPathTooLong
+	connectorStartSocketAddressInUse
 )
 
 // String exposes only fixed diagnostic labels, never startup inputs or OS errors.
@@ -166,8 +169,29 @@ func (stage connectorStartStage) String() string {
 		return "socket-listen"
 	case connectorStartSocketQualify:
 		return "socket-qualify"
+	case connectorStartSocketPermission:
+		return "socket-listen-permission"
+	case connectorStartSocketPathTooLong:
+		return "socket-listen-path-too-long"
+	case connectorStartSocketAddressInUse:
+		return "socket-listen-address-in-use"
 	default:
 		return "unknown"
+	}
+}
+
+// Retain only fixed diagnostic categories. Never expose the host error or
+// socket pathname, and never turn a failed listen into a retry authorization.
+func connectorSocketFailure(err error) connectorStartStage {
+	switch {
+	case errors.Is(err, syscall.EPERM), errors.Is(err, syscall.EACCES):
+		return connectorStartSocketPermission
+	case errors.Is(err, syscall.ENAMETOOLONG):
+		return connectorStartSocketPathTooLong
+	case errors.Is(err, syscall.EADDRINUSE):
+		return connectorStartSocketAddressInUse
+	default:
+		return connectorStartSocketListen
 	}
 }
 
@@ -205,7 +229,7 @@ func startConnector(ctx context.Context, binding wire.ComputerConnectorBinding, 
 	}
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: endpoint.SocketPath, Net: "unix"})
 	if err != nil {
-		return nil, connectorStartSocketListen, ErrConnectorUnavailable
+		return nil, connectorSocketFailure(err), ErrConnectorUnavailable
 	}
 	listener.SetUnlinkOnClose(false)
 	// The private 0700 directory controls endpoint access. Preserve the socket's
