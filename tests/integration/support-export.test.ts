@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import { createHash } from "node:crypto";
 import { OperationsStore } from "../../apps/desktop/operations/store";
+import { supportOperationMetadata } from "../../apps/desktop/operations/support-projection";
+import type { OperationEntry } from "../../apps/desktop/renderer/operations-contract";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -34,6 +36,70 @@ async function temporaryRoot(): Promise<string> {
 }
 
 describe("content-free support export", () => {
+  it("does not transfer future local Activity detail fields", () => {
+    const entry = {
+      id: "22222222-2222-4222-8222-222222222222",
+      at: 1,
+      source: "ChatGPT",
+      kind: "computer_shell_start",
+      target: { futureDetails: "LOCAL-TARGET-CANARY" },
+      outcome: "unknown",
+      code: null,
+      durationMs: 2,
+      auditDetails: {
+        command: "LOCAL-COMMAND-CANARY",
+        stdout: "LOCAL-OUTPUT-CANARY",
+      },
+    } as unknown as OperationEntry;
+    const result = JSON.stringify(supportOperationMetadata(entry));
+    expect(result).not.toContain("LOCAL-COMMAND-CANARY");
+    expect(result).not.toContain("LOCAL-OUTPUT-CANARY");
+    expect(result).not.toContain("LOCAL-TARGET-CANARY");
+    expect(result).toContain('"outcome":"unknown"');
+  });
+  it("preserves V2 facts while excluding future nested detail fields", () => {
+    const entry = {
+      id: "22222222-2222-4222-8222-222222222222",
+      at: 1,
+      source: "ChatGPT",
+      kind: "computer_shell_start",
+      target: {},
+      outcome: "unknown",
+      code: null,
+      durationMs: null,
+      schema: "farol.operation/2",
+      operationRef: {
+        owner: "computer.process",
+        operationId: "op",
+        buildId: "build",
+        runtimeId: "runtime",
+        binding: "accepted",
+        detail: "REF-CANARY",
+      },
+      subjectRef: null,
+      timing: {
+        requestedAt: 1,
+        startedAt: null,
+        endedAt: null,
+        detail: "TIME-CANARY",
+      },
+      exit: { kind: "code", value: 0, detail: "EXIT-CANARY" },
+      executionFacts: {
+        rootWaited: true,
+        outputDrained: true,
+        groupCleanup: "confirmed",
+        descendantCleanup: "unverified",
+        timedOut: false,
+        authorityLost: false,
+        detail: "FACT-CANARY",
+      },
+    } as unknown as OperationEntry;
+    const result = JSON.stringify(supportOperationMetadata(entry));
+    expect(result).not.toContain("CANARY");
+    expect(result).toContain('"operationId":"op"');
+    expect(result).toContain('"descendantCleanup":"unverified"');
+    expect(result).toContain('"outcome":"unknown"');
+  });
   it("reports the exact build and readiness without owner content", async () => {
     const root = await temporaryRoot();
     let id = 0;

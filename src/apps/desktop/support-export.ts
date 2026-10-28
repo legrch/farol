@@ -3,6 +3,7 @@ import {
   type OperationWorkspaceLabels,
 } from "../../../apps/desktop/operations/target";
 import { type OperationsSnapshot } from "../../../apps/desktop/renderer/operations-contract";
+import { supportOperationMetadata } from "../../../apps/desktop/operations/support-projection";
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
@@ -18,6 +19,17 @@ const MAX_SUPPORT_EXPORT_BYTES = 64 * 1024;
 const MAX_SUPPORT_WITH_OPERATIONS_BYTES = 12 * 1024 * 1024;
 const CLOSE_ON_EXEC =
   (fsConstants as typeof fsConstants & { O_CLOEXEC?: number }).O_CLOEXEC ?? 0;
+
+function supportOperations(
+  snapshot: OperationsSnapshot,
+  workspaces: OperationWorkspaceLabels,
+): OperationsSnapshot {
+  const resolved = resolveOperationsSnapshot(snapshot, workspaces);
+  return {
+    ...resolved,
+    entries: resolved.entries.map(supportOperationMetadata),
+  };
+}
 
 export type SupportRuntimeErrorCode =
   | "process_exited"
@@ -210,7 +222,7 @@ export function createSupportExport(input: SupportExportInput) {
     ...(input.operations === undefined
       ? {}
       : {
-          operations: resolveOperationsSnapshot(
+          operations: supportOperations(
             input.operations,
             input.configuration.status === "ready"
               ? input.configuration.settings.computer.workspaces
@@ -293,7 +305,7 @@ export async function writeSupportExport(
     try {
       report = {
         ...reportRecord,
-        operations: resolveOperationsSnapshot(
+        operations: supportOperations(
           reportRecord.operations as OperationsSnapshot,
           workspaces,
         ),
