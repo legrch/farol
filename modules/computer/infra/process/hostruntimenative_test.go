@@ -88,6 +88,25 @@ func TestNativeHostRuntimeLayoutBoundaries(t *testing.T) {
 				b.mainExecutable = physical
 				image, err := b.physical(alias, boundaries)
 				if err != nil {
+					info, statErr := os.Lstat(f.last)
+					if statErr == nil && info.IsDir() && info.Mode().Perm()&0020 != 0 {
+						plan, discoverErr := DiscoverInstalledHostRuntime(ctx)
+						if discoverErr != nil {
+							t.Fatal(discoverErr)
+						}
+						for _, selected := range plan.frozen.Installations {
+							if selected.Kind == kind {
+								t.Fatal("group-writable installation was granted authority")
+							}
+						}
+						for _, unavailable := range plan.frozen.Unavailable {
+							if unavailable.Kind == kind && unavailable.Code == "HOST_RUNTIME_QUALIFICATION_UNAVAILABLE" {
+								t.Logf("untrusted group-writable directory refused: %s", f.last)
+								return
+							}
+						}
+						t.Fatal("unsafe installation was not reported unavailable")
+					}
 					t.Fatalf("image selection: %v last=%s", err, f.last)
 				}
 				if err := b.file(image, boundaries); err != nil {

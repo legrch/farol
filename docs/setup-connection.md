@@ -32,13 +32,13 @@ The three cards show **Create a tunnel → Create a key → Copy both here**. Se
 3. In the same organization's API keys, create a key named **Farol** with **Restricted** permissions. Allow **Tunnels: Read and Use**. Copy the key when it is shown.
 4. Enter the **Tunnel ID** and **Key** in Farol, then choose **Connect** once.
 
-Connect finds and validates `tunnel-client`, including the existing account-owned adoption path when applicable, saves the key through Farol's credential owner, starts the connection and checks its health. Only **✓ Connected** lets you continue. This is a local connection check; the next step separately verifies access from ChatGPT.
+Connect validates the `tunnel-client` bundled with Farol, saves the key through Farol's credential owner, starts the connection and checks its health. Only **✓ Connected** lets you continue. This is a local connection check; the next step separately verifies access from ChatGPT.
 
 A saved key is never read back into the form. The field clears on submission. For a returning profile, leave the field empty to use the saved key; enter a replacement only when details need to change. Connect uses the existing stop operation before replacing details on a running connection.
 
 ### If tunnel-client is unavailable
 
-Install OpenAI's supported `tunnel-client` for the same macOS account that runs Farol, following the installation instructions on the OpenAI Tunnels page. Return to Farol and choose **Connect**. Farol validates the executable and may adopt an existing supported installation into its own account-owned location. It will not use an unchecked helper or assume another account's installation is usable.
+Check that the Farol installation is intact. The connection uses the validated client included with Farol; installing a separate client does not replace it. If the bundled client is unavailable, reinstall Farol from a verified package before trying a new connection.
 
 If a key cannot be saved, check this account's key storage before reconnecting. A local storage error does not prove that OpenAI rejected the key. If connection health cannot be confirmed, keep the saved key and follow the displayed action. Never resubmit an action with an unconfirmed outcome.
 

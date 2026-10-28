@@ -214,14 +214,12 @@ func (b *hostRuntimeBuilder) observe(p string) (hostRuntimeNode, error) {
 		}
 		b.bytes += n.Size
 	case "directory":
-		if !n.Mode.IsDir() {
+		// A different account in the directory's group could replace a selected
+		// executable after recheck and before the shell opens it. The accepted
+		// mutable-runtime contract covers the owner's own account, not other
+		// accounts with access through a shared group.
+		if !n.Mode.IsDir() || n.Mode.Perm()&0020 != 0 {
 			return n, errHostRuntime
-		}
-		// A group-writable installation ancestor is an observed residual risk in
-		// this explicitly selected class, never protected-platform evidence. The
-		// guest still receives no runtime/ancestor write permission.
-		if n.Mode.Perm()&0020 != 0 {
-			b.snapshot.MutableParents = append(b.snapshot.MutableParents, p)
 		}
 	case "alias":
 		if n.Mode&os.ModeSymlink == 0 || n.Links != 1 || n.LinkTarget == "" || strings.ContainsRune(n.LinkTarget, 0) {

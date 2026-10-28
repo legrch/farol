@@ -76,9 +76,10 @@ preparation deadline before dispatch. A changed inventory refuses that attempt;
 it does not refresh the plan, extend its deadline, or replay an operation.
 
 This is an explicitly accepted mutable installed environment assurance. Selected
-Homebrew ancestors can be group-writable and are recorded as such. They never
-qualify as protected platform paths, and this policy promises no atomic defence
-against a concurrent replacement by the same account. The guest cannot write
+directories must not be group- or world-writable. A Homebrew installation with
+group-writable ancestors is unavailable to this policy until its permissions are
+made suitable; Farol does not change those permissions. This policy promises no
+atomic defence against a concurrent replacement by the same account. The guest cannot write
 its selected runtime files or ancestors. Root-volume restrictions, approved data
 roots, credential exclusions and Shell NoNetwork remain effective. Arbitrary
 external interpreters or unknown installation layouts are not silently admitted.

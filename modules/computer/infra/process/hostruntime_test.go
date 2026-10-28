@@ -157,17 +157,13 @@ func TestHostRuntimeRejectsInventoryDrift(t *testing.T) {
 		})
 	}
 }
-func TestHostRuntimeDoesNotClaimProtectedMutableParent(t *testing.T) {
+func TestHostRuntimeRefusesGroupWritableInstallationAncestor(t *testing.T) {
 	f := runtimeFixture()
 	n := f.nodes["/install"]
 	n.Mode = os.ModeDir | 0775
 	f.nodes[n.Path] = n
-	p, err := buildRuntimeFixture(f)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if p.frozen.Assurance != InstalledHostRuntimeAssurance || !slices.Equal(p.frozen.MutableParents, []string{"/install"}) {
-		t.Fatal("mutable ancestry hidden")
+	if _, err := buildRuntimeFixture(f); err == nil {
+		t.Fatal("group-writable ancestor allowed another account to replace an executable")
 	}
 }
 func TestHostRuntimeRefusesUnsafeFilesAndUnknownHardlinks(t *testing.T) {
