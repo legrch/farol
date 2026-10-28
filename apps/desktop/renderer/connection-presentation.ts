@@ -16,7 +16,8 @@ export function connectionPresentation(
     (snapshot.connectionChecking === true ||
       snapshot.status === "starting" ||
       snapshot.runtime === "starting" ||
-      connectorVerificationInFlight(snapshot, local));
+      (connectorVerificationInFlight(snapshot, local) &&
+        !computer.externalAccessVerified));
   const connected = !checking && computer.externalAccessVerified;
   const label = checking
     ? "Checking connection…"

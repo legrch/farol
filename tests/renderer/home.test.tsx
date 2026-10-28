@@ -9,6 +9,7 @@ import type {
 } from "../../src/ui/renderer/contract";
 import { bootstrap, fixture, settings, task, deferred } from "./fixture";
 import { readySettings } from "./setup-fixture";
+import { connectionPresentation } from "../../apps/desktop/renderer/connection-presentation";
 
 // DOM + scripted evidence only; no live connection, account or filesystem.
 (
@@ -39,6 +40,27 @@ function working(): Partial<WindowSnapshot> {
     },
   };
 }
+it("keeps an existing current connection visible while a new verification is in flight", async () => {
+  const f = fixture();
+  const c = new WindowController(f.api);
+  await c.start();
+  const snapshot = { ...c.getSnapshot(), ...working() };
+  const pending = {
+    id: `settings:connector.verify-app:${"a".repeat(64)}`,
+    state: "pending" as const,
+    code: null,
+    inFlight: true as const,
+  };
+  expect(connectionPresentation(snapshot, [pending]).text).toBe("Connected");
+  expect(
+    connectionPresentation({ ...snapshot, connectionChecking: true }, [pending])
+      .text,
+  ).toBe("Checking connection…");
+  expect(
+    connectionPresentation({ ...snapshot, runtime: "failed" }, [pending]).text,
+  ).not.toBe("Connected");
+  c.dispose();
+});
 const event = (id: string, at: number): ActivityEntry => ({
   id,
   at,

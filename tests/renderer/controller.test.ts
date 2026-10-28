@@ -22,6 +22,67 @@ import { ProductConfigurationCommandSchema } from "../../src/pkg/product-setting
 import type { ConnectorSetupReceipt } from "../../src/pkg/product-settings/connector-setup-receipt";
 
 describe("Goal17 explicit ChatGPT presentation", () => {
+  it("reads the current confirmation after an overlapping refresh supersedes the completed check", async () => {
+    const f = fixture();
+    const data = bootstrap();
+    data.configuration.settings = readySettings();
+    const verified = readySettings(true);
+    verified.revision = data.configuration.settings.revision + 1;
+    let current = data.configuration;
+    vi.mocked(f.api.bootstrap).mockImplementation(async () => ({
+      ...data,
+      configuration: current,
+    }));
+    const reply = deferred<unknown>();
+    vi.mocked(f.api.configure).mockImplementation((command) =>
+      command.kind === "connector.verify-app"
+        ? reply.promise
+        : Promise.resolve({ ok: true, snapshot: current }),
+    );
+    const c = new WindowController(f.api);
+    await c.start();
+    const attempt = c.configure(
+      { kind: "connector.verify-app" },
+      `settings:connector.verify-app:${"a".repeat(64)}`,
+    );
+    await c.refresh();
+    current = { status: "ready", settings: verified };
+    reply.resolve({ ok: true, snapshot: current });
+    expect((await attempt).state).toBe("applied");
+    await vi.waitFor(() =>
+      expect(computerSetup(c.getSnapshot()).externalAccessVerified).toBe(true),
+    );
+    expect(
+      vi
+        .mocked(f.api.configure)
+        .mock.calls.filter(
+          ([command]) => command.kind === "connector.verify-app",
+        ),
+    ).toHaveLength(1);
+    c.dispose();
+  });
+  it("routes history shortcut events through the same back and forward navigation", async () => {
+    const f = fixture();
+    const c = new WindowController(f.api);
+    await c.start();
+    c.navigate({ area: "activity" });
+    c.navigate({ area: "setup", setupStep: "folders" });
+    const emit = (action: "history-back" | "history-forward") =>
+      f.emit("action", {
+        action,
+        source: "history-shortcut-command",
+        eventId: crypto.randomUUID(),
+        authWindowGeneration: null,
+      });
+    emit("history-back");
+    expect(c.getSnapshot().destination.area).toBe("activity");
+    emit("history-forward");
+    expect(c.getSnapshot().destination.area).toBe("setup");
+    c.overlay("unresolved-actions");
+    emit("history-back");
+    expect(c.getSnapshot().destination.area).toBe("setup");
+    c.dispose();
+  });
   // Projection-only: this fixture proves neither native placement nor provider state.
   it.each(["loading", "loaded", "failed"] as const)(
     "presents the retained %s route and returns to Setup without opening or selecting another task",

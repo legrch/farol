@@ -1386,6 +1386,16 @@ export class WindowController implements RendererFacade {
       if (result.state !== "unknown" && !retainSettlement)
         this.commands.delete(key);
       this.patch({ intents: { ...this.state.intents, [key]: result } });
+      // A concurrent bootstrap read can supersede the verification response
+      // while still containing its earlier settings. Read the authoritative
+      // state once more after confirmed completion; never repeat the test.
+      if (
+        result.state === "applied" &&
+        /^settings:connector\.(?:verify-app|verify-separate-app):(?:[a-f0-9]{64})?$/u.test(
+          key,
+        )
+      )
+        void this.refresh();
       // A read may have settled behind this command's pending fence (notably
       // Back to setup). Reconsider it only after the original command settles;
       // commandAllowed still preserves every pending/unknown writer fence.
@@ -2843,6 +2853,12 @@ export class WindowController implements RendererFacade {
           presentationRevision: this.presentationRevision,
         };
       else this.applySectionNavigation(action);
+    } else if (
+      action.action === "history-back" ||
+      action.action === "history-forward"
+    ) {
+      if (!this.booting && this.state.overlay === "none")
+        this.travel(action.action === "history-back" ? -1 : 1);
     } else if (action.action === "toggle-sidebar")
       this.toggleSidebar(this.compactViewport());
     else if (action.action === "open-quick-switcher") this.overlay("search");

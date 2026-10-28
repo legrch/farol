@@ -191,6 +191,17 @@ describe("closed renderer destinations", () => {
 });
 
 describe("Unresolved actions sheet", () => {
+  it("dismisses on backdrop click without changing the retained unknown", async () => {
+    const h = await mount({ page: "general", shell: true });
+    await unknown(h);
+    await act(async () => h.c.overlay("unresolved-actions"));
+    const dialog = h.host.querySelector<HTMLDialogElement>(selector)!;
+    await act(async () => dialog.click());
+    expect(h.host.querySelector(selector)).toBeNull();
+    expect(
+      h.c.getSnapshot().intents["settings:chatgpt.open-browser:"]?.state,
+    ).toBe("unknown");
+  });
   it("hides entry points when no actions are unresolved", async () => {
     const h = await mount({ page: "general", shell: true });
     expect(h.button("Review unresolved actions")).toBeUndefined();

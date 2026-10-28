@@ -94,7 +94,7 @@ it("filters shared operations, expands metadata and links attention to the unres
     expect(host.textContent).toContain(
       "4 unmapped result codes were recorded as unknown",
     );
-    expect(host.textContent).toContain("2 log writes or reads unavailable");
+    expect(host.textContent).toContain("2 log reads or writes unavailable");
     expect(
       host.textContent?.match(/7 entries were not recorded/g),
     ).toHaveLength(1);

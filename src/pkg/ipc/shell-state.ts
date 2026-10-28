@@ -51,6 +51,7 @@ export const ShellActionSourceSchema = z.enum([
   "settings-command",
   "sidebar-command",
   "section-shortcut-command",
+  "history-shortcut-command",
   "update-command",
   "quick-switcher-command",
   "overlay-dismissed",
@@ -83,7 +84,16 @@ export const ShellActionSchema = z.discriminatedUnion("action", [
       "sign-in-returned",
       "close-overlay",
     ]),
-    source: ShellActionSourceSchema.exclude(["section-shortcut-command"]),
+    source: ShellActionSourceSchema.exclude([
+      "section-shortcut-command",
+      "history-shortcut-command",
+    ]),
+  }),
+  z.strictObject({
+    ...ShellActionEnvelope,
+    action: z.enum(["history-back", "history-forward"]),
+    source: z.literal("history-shortcut-command"),
+    authWindowGeneration: z.null(),
   }),
   z.strictObject({
     ...ShellActionEnvelope,

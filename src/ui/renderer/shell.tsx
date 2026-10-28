@@ -1548,6 +1548,7 @@ export function Shell() {
       {state.overlay === "unresolved-actions" && (
         <Overlay
           title="Unresolved actions"
+          className="unresolved-actions-sheet"
           onClose={() => facade.overlay("none")}
         >
           <Settings snapshot={state} facade={facade} unresolvedSheet />

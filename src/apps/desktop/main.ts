@@ -11306,6 +11306,22 @@ function installNetworkFence(): Electron.Session | null {
 function handleShortcut(input: Input): boolean {
   if (input.isComposing || input.isAutoRepeat) return false;
   const key = input.key.toLowerCase();
+  if (
+    input.type === "keyDown" &&
+    input.meta &&
+    !input.control &&
+    !input.alt &&
+    !input.shift &&
+    (input.key === "[" || input.key === "]") &&
+    shellOverlay === "none"
+  ) {
+    if (!quitInProgress && !installedUpdateAdmission)
+      publishShellAction(
+        input.key === "[" ? "history-back" : "history-forward",
+        "history-shortcut-command",
+      );
+    return true;
+  }
   if (input.meta && input.key === ",") {
     requestSettings();
     return true;

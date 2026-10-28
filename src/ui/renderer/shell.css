@@ -1046,7 +1046,15 @@ kbd {
 }
 .sheet-content .section-heading button {
   background: transparent;
-  padding: 5px;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 8px;
+}
+.unresolved-actions-sheet .section-heading {
+  position: sticky;
+  top: -24px;
+  z-index: 1;
+  background: var(--sheet);
 }
 .search-results {
   display: flex;

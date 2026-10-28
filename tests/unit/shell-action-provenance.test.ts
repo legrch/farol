@@ -1,5 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import vm from "node:vm";
+import { stripTypeScriptTypes } from "node:module";
 import { parse } from "@babel/parser";
 import { describe, expect, it } from "vitest";
 
@@ -85,6 +87,7 @@ describe("shell action provenance", () => {
       "settings-command",
       "sidebar-command",
       "section-shortcut-command",
+      "history-shortcut-command",
       "update-command",
       "quick-switcher-command",
       "overlay-dismissed",
@@ -108,7 +111,7 @@ describe("shell action provenance", () => {
     const calls = [...source.matchAll(/publishShellAction\(\s*([^;]*?)\)/gsu)]
       .map((match) => match[1] ?? "")
       .filter((body) => !body.includes("action:"));
-    expect(calls).toHaveLength(8);
+    expect(calls).toHaveLength(9);
     expect(
       calls.filter((body) => body.includes('"update-command"')),
     ).toHaveLength(1);
@@ -136,7 +139,7 @@ describe("shell action provenance", () => {
     // Every publish is stamped: no call site may omit provenance.
     for (const body of calls) {
       expect(body).toMatch(
-        /"(settings-command|sidebar-command|section-shortcut-command|update-command|quick-switcher-command|overlay-dismissed|sign-in-return-command|verification-completed|auth-window-closed)"/u,
+        /"(settings-command|sidebar-command|section-shortcut-command|history-shortcut-command|update-command|quick-switcher-command|overlay-dismissed|sign-in-return-command|verification-completed|auth-window-closed)"/u,
       );
     }
   });
@@ -221,9 +224,54 @@ describe("shell action provenance", () => {
       handler.match(/if \(installedUpdateAdmission\) return true;/gu),
     ).toHaveLength(2);
     expect(handler).not.toMatch(
-      /section =|shellOverlay =|sidebarMode =|applyLayout\(\)|publishLayout\(\)/u,
+      /(?:section|shellOverlay|sidebarMode)\s*=(?!=)|applyLayout\(\)|publishLayout\(\)/u,
     );
     expect(handler).toContain("input.isComposing || input.isAutoRepeat");
+  });
+  it("routes Cmd brackets once and leaves modified keys and modal input alone", async () => {
+    const source = await readFile(mainSource, "utf8");
+    const node = parse(source, {
+      sourceType: "module",
+      plugins: ["typescript"],
+    }).program.body.find(
+      (item) =>
+        item.type === "FunctionDeclaration" &&
+        item.id?.name === "handleShortcut",
+    );
+    if (!node || node.start == null || node.end == null)
+      throw new Error("Missing shortcut handler");
+    const calls: unknown[][] = [];
+    const context = {
+      shellOverlay: "none",
+      quitInProgress: false,
+      installedUpdateAdmission: false,
+      setupOpen: true,
+      publishShellAction: (...args: unknown[]) => calls.push(args),
+    };
+    const handler = vm.runInNewContext(
+      `(${stripTypeScriptTypes(source.slice(node.start, node.end))})`,
+      context,
+    ) as (input: object) => boolean;
+    const input = {
+      type: "keyDown",
+      meta: true,
+      control: false,
+      alt: false,
+      shift: false,
+      isComposing: false,
+      isAutoRepeat: false,
+      key: "[",
+    };
+    expect(handler(input)).toBe(true);
+    expect(handler({ ...input, key: "]" })).toBe(true);
+    expect(handler({ ...input, type: "keyUp" })).toBe(false);
+    expect(handler({ ...input, shift: true })).toBe(false);
+    context.shellOverlay = "task-menu";
+    expect(handler(input)).toBe(false);
+    expect(calls).toEqual([
+      ["history-back", "history-shortcut-command"],
+      ["history-forward", "history-shortcut-command"],
+    ]);
   });
   it("S35-TA-16 a fresh eventId is minted per publish, not reused", async () => {
     const source = await readFile(mainSource, "utf8");
