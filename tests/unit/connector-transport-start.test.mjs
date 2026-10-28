@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AuthorityTransitionReservation } from "../../src/apps/desktop/authority-transition.ts";
 import { ConnectorTransportWatch } from "../../apps/desktop/connector-transport-watch.ts";
 import { ConnectorHostError } from "../../apps/desktop/bridge/connector-host.ts";
+import { TUNNEL_CLIENT } from "../../apps/desktop/tunnel-client-contract.ts";
 import { ConnectorRuntimeEffectUnknown } from "../../src/apps/desktop/secure-mcp-connector-runtime.ts";
 
 // Source-level host sequencing only. The actual AST-extracted start and recovery
@@ -94,7 +95,7 @@ function fixture({ pause, startResult = originalStart, openError } = {}) {
           credential: "stored",
           tunnelId: "fixture-tunnel",
           tunnelClient: {
-            executablePath: "/controlled/tunnel-client",
+            executablePath: path.join("/controlled/app", TUNNEL_CLIENT.entry),
             executableSha256: "c".repeat(64),
           },
           runtime: {
@@ -222,6 +223,8 @@ function fixture({ pause, startResult = originalStart, openError } = {}) {
     computerConnectorAdmission: vi.fn(() => ({ admissible: true })),
     codexAgentOperationActive: () => false,
     verifySelectedTunnelClient: port("verify"),
+    e2eTunnelClientExecutable: () => undefined,
+    TUNNEL_CLIENT,
     clearConnectorVerificationReceipt: port("receipt-clear"),
     secureMcpLaunchRoot: () => "/controlled/launch",
     computerMcpLifecycle: () => lifecycle,
@@ -293,7 +296,13 @@ function fixture({ pause, startResult = originalStart, openError } = {}) {
     snapshot,
     events,
     watch,
-    reached: reached.promise,
+    waitForBarrier: (pending) =>
+      Promise.race([
+        reached.promise,
+        pending.then(() => {
+          throw Error(`FIXTURE_BARRIER_NOT_REACHED: ${pause}`);
+        }),
+      ]),
     resume: () => resume.resolve(),
     result: () => recoveryResult,
     closure: () => closure,
@@ -331,12 +340,24 @@ function assertNoReadiness(f, result) {
 }
 
 describe("actual admitted transport start with controlled IO", () => {
+  it("reports a failed sequencing dependency instead of waiting for an unreachable barrier", async () => {
+    const f = fixture({ pause: "resources" });
+    delete f.context.e2eTunnelClientExecutable;
+    const pending = f.watch.check();
+    await expect(f.waitForBarrier(pending)).rejects.toThrow(
+      "e2eTunnelClientExecutable is not defined",
+    );
+    expect(f.core.openComputerConnector).not.toHaveBeenCalled();
+    expect(f.runtime.configure).not.toHaveBeenCalled();
+    assertFinishedOwner(f);
+  });
+
   it.each(["quitInProgress", "installedUpdateAdmission"])(
     "%s during resources recheck prevents Configure/Doctor/Start",
     async (flag) => {
       const f = fixture({ pause: "resources" });
       const original = f.watch.check();
-      await f.reached;
+      await f.waitForBarrier(original);
       f.context[flag] = true;
       f.resume();
       await original;
@@ -491,7 +512,7 @@ describe("actual admitted transport start with controlled IO", () => {
       async (phase) => {
         const f = fixture({ pause: phase });
         const pending = f.watch.check();
-        await f.reached;
+        await f.waitForBarrier(pending);
         const index = phases.indexOf(phase);
         expect(f.events).toEqual([
           "stop-check",
@@ -560,7 +581,7 @@ describe("actual admitted transport start with controlled IO", () => {
   it("rechecks the epoch after recording an already dispatched Start result", async () => {
     const f = fixture({ pause: "record-runtime" });
     const pending = f.watch.check();
-    await f.reached;
+    await f.waitForBarrier(pending);
     f.watch.invalidate();
     f.resume();
     await pending;
@@ -582,7 +603,7 @@ describe("actual admitted transport start with controlled IO", () => {
       const startResult = { ...originalStart, state };
       const f = fixture({ pause: "start", startResult });
       const pending = f.watch.check();
-      await f.reached;
+      await f.waitForBarrier(pending);
       f.watch.invalidate();
       f.resume();
       await pending;
@@ -608,7 +629,7 @@ describe("actual admitted transport start with controlled IO", () => {
     );
     const f = fixture({ pause: "open", openError });
     const pending = f.watch.check();
-    await f.reached;
+    await f.waitForBarrier(pending);
     f.watch.invalidate();
     f.resume();
     await pending;
