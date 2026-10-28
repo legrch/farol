@@ -104,6 +104,8 @@ export const OperationReferenceSchema = z.strictObject({
   operationId: ExecutionIdentifierSchema,
   buildId: ExecutionIdentifierSchema.max(120),
   runtimeId: ExecutionIdentifierSchema.max(120),
+  // Added for host-lifetime observation; older history has no such binding.
+  backendGeneration: ExecutionIdentifierSchema.max(120).optional(),
   binding: z.enum(["requested", "accepted"]),
 });
 export type OperationReference = z.infer<typeof OperationReferenceSchema>;

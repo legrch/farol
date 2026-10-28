@@ -83,6 +83,7 @@ export async function runGoComputerMcp(file: string): Promise<void> {
           executionOrigin: {
             buildId: launch.opened.endpoint.binding.buildId,
             runtimeId: launch.opened.endpoint.binding.runtimeId,
+            backendGeneration: launch.opened.endpoint.binding.backendGeneration,
           },
           lifecycle,
           fence,

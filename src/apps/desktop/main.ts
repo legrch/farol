@@ -12837,14 +12837,21 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       console.warn("The interrupted command notice is unavailable.");
     }
     const auditCore = desktopGoCore;
-    processAuditCollector = new ProcessAuditCollector(operationsStore());
-    processAuditObserver = new ProcessAuditObserver(
-      processAuditCollector,
-      () => operationsStore().snapshot(),
-      auditCore.processAudit,
-      () => desktopGoCore === auditCore,
-    );
-    processAuditObserver.start();
+    const auditContext = auditCore.historyContext;
+    if (auditContext) {
+      processAuditCollector = new ProcessAuditCollector(
+        operationsStore(),
+        Date.now,
+        auditContext.backendGeneration,
+      );
+      processAuditObserver = new ProcessAuditObserver(
+        processAuditCollector,
+        () => operationsStore().snapshot(),
+        auditCore.processAudit,
+        () => desktopGoCore === auditCore,
+      );
+      processAuditObserver.start();
+    }
     if (runtimeEnvironment === "dev")
       console.info(
         "FAROL_DEV_SHELL:" +

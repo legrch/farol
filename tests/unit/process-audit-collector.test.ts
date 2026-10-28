@@ -53,6 +53,50 @@ const snapshot: OperationsSnapshot = {
   unmappedCodes: 0,
 };
 
+it("observes only the original backend generation, including after tunnel changes", async () => {
+  const reader = {
+    read: vi.fn().mockResolvedValue({ ...fact, runtimeId: "previous-tunnel" }),
+  };
+  const writer = {
+    recordTerminalObservation: vi.fn().mockResolvedValue("recorded" as const),
+  };
+  const collector = new ProcessAuditCollector(
+    writer,
+    () => 0,
+    "backend-current",
+  );
+  const oldEntries = Array.from({ length: 1100 }, (_, i) => ({
+    ...entry,
+    operationRef: {
+      ...ref,
+      operationId: `old-${i}`,
+      backendGeneration: "backend-old",
+    },
+  }));
+  const legacy = { ...entry, operationRef: { ...ref, operationId: "legacy" } };
+  const current = {
+    ...entry,
+    operationRef: {
+      ...ref,
+      runtimeId: "previous-tunnel",
+      backendGeneration: "backend-current",
+    },
+  };
+  collector.observe(
+    { ...snapshot, entries: [...oldEntries, legacy, current] },
+    reader,
+    () => true,
+  );
+  expect(reader.read).toHaveBeenCalledExactlyOnceWith({
+    operationId: "original",
+    buildId: "build",
+    runtimeId: "previous-tunnel",
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(oldEntries[0]?.outcome).toBe("unknown");
+  expect(legacy.outcome).toBe("unknown");
+});
+
 it("does not start an audit after stopping during a pending snapshot", async () => {
   let complete!: (value: OperationsSnapshot) => void;
   const reader = { read: vi.fn().mockResolvedValue(fact) };

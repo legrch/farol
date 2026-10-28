@@ -256,7 +256,11 @@ describe("selected Go process MCP projection", () => {
     const beginExecution = vi.fn((_metadata, _references) => vi.fn());
     const selected = await setup({
       processes: ports(),
-      executionOrigin: { buildId: "build", runtimeId: "runtime" },
+      executionOrigin: {
+        buildId: "build",
+        runtimeId: "runtime",
+        backendGeneration: "backend",
+      },
       operations: { beginExecution, record: vi.fn() },
     });
     await selected.client.callTool({
@@ -278,6 +282,7 @@ describe("selected Go process MCP projection", () => {
         binding: "requested",
         buildId: "build",
         runtimeId: "runtime",
+        backendGeneration: "backend",
       },
       subjectRef: null,
     });

@@ -34,6 +34,7 @@ export class ProcessAuditCollector {
   constructor(
     private readonly writer: Writer,
     private readonly now = Date.now,
+    private readonly backendGeneration?: string,
   ) {}
 
   observe(
@@ -79,6 +80,13 @@ export class ProcessAuditCollector {
       )
         continue;
       const ref = entry.operationRef;
+      // The original Go owner retains process facts only for its lifetime.
+      // A legacy or foreign generation is history, not a source to poll.
+      if (
+        this.backendGeneration !== undefined &&
+        ref.backendGeneration !== this.backendGeneration
+      )
+        continue;
       const key = JSON.stringify([ref.buildId, ref.runtimeId, ref.operationId]);
       if (terminals.has(key)) continue;
       let attempt = this.attempts.get(key);

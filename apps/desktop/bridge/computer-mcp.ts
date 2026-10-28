@@ -32,7 +32,11 @@ export type GoComputerMcpFence = Readonly<{
 }>;
 export type GoComputerMcpOptions = Readonly<{
   operations?: OperationsRecorder;
-  executionOrigin?: Readonly<{ buildId: string; runtimeId: string }>;
+  executionOrigin?: Readonly<{
+    buildId: string;
+    runtimeId: string;
+    backendGeneration?: string;
+  }>;
   fence: GoComputerMcpFence;
   lifecycle?: GoComputerMcpLifecycle;
   verification?: Pick<
@@ -276,6 +280,9 @@ export function createGoComputerMcpServer(
         operationId: id,
         buildId: origin.buildId,
         runtimeId: origin.runtimeId,
+        ...(origin.backendGeneration === undefined
+          ? {}
+          : { backendGeneration: origin.backendGeneration }),
         binding: "requested" as const,
       };
     const processOperation =
