@@ -33,6 +33,15 @@ the exact source, including the watchdog cancellation and transport tests with
 hardlink gate, which stays unqualified. `process.go` was the only drifted pinned
 input. Never refresh a pin from source measurements without such a native run.
 
+Platform record `macos-26A434-arm64-installed-runtime-v16` binds the protected
+Computer state deny to the original Shell selection. On macOS 27.0.1 build
+`26A434` arm64, the native process suite passed with the documented legacy
+credential-alias exclusion; the native root-scoped state test also verified
+read, write, execution, APFS aliases and ancestor renames. Separate native
+boot tests exercised Shell and Quit/reopen. This does not establish package,
+installed, live-provider or descendant-cleanup qualification. The current
+system-volume policy also refuses a protected profile on another volume.
+
 Source registration is not release qualification. Disposable packaged MCP checks
 cover bounded Bash, synthetic Git and observation of an original result after
 MCP reconnect. Ordinary Git configuration/hooks, external Shell, cancellation and

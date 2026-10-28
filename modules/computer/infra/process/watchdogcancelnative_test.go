@@ -48,10 +48,19 @@ func TestNativeWatchdogObservedCancellation(t *testing.T) {
 	}
 	f.settle(t)
 	out, err := f.observed.Read(context.Background(), processsvc.Window{})
+	// Group confirmation is valid only when the original decoder retained
+	// the helper-exit and group-gone witness. Descendants remain independent.
+	f.decoder.mutex.Lock()
+	witness := f.decoder.result
+	f.decoder.mutex.Unlock()
+	group := processsvc.CleanupUnverified
+	if witness.supervisorExited && witness.groupGone {
+		group = processsvc.CleanupConfirmed
+	}
 	if err != nil || out.Root != processsvc.RootExited || out.Supervisor != processsvc.SupervisorExited ||
 		!out.Waited || !out.OutputDrained || out.ExitCode != nil || out.ExitSignal != int(syscall.SIGKILL) ||
 		!out.CancelRequested || !bytes.Equal(out.Stdout, []byte{0, 255, 'A', '\n'}) ||
-		out.GroupCleanup != processsvc.CleanupUnverified || out.DescendantCleanup != processsvc.CleanupUnverified {
+		out.GroupCleanup != group || out.DescendantCleanup != processsvc.CleanupUnverified {
 		f.fail(t, "cancelled root result was lost or cleanup invented", err)
 	}
 	f.helperExit(t, true)
