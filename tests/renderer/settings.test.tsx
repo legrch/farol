@@ -55,6 +55,19 @@ describe("Settings", () => {
     await act(async () =>
       h.c.navigate({ area: "settings", page: "shortcuts" }),
     );
+    for (const [label, digit] of [
+      ["Home", "1"],
+      ["ChatGPT", "2"],
+      ["Activity", "3"],
+      ["Setup", "4"],
+    ]) {
+      expect(
+        h.host.querySelector<HTMLSelectElement>(
+          `select[aria-label="${label} shortcut"]`,
+        )?.value,
+      ).toBe(digit);
+    }
+    expect(h.host.textContent).toContain("Settings always opens with ⌘,");
     await h.click("Save shortcuts");
     expect(h.f.api.setNavigationShortcuts).toHaveBeenCalledTimes(1);
     expect(h.f.api.configure).not.toHaveBeenCalled();

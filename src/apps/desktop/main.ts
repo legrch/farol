@@ -11339,7 +11339,15 @@ function handleShortcut(input: Input): boolean {
     requestSettings();
     return true;
   }
-  if (setupOpen) return false;
+  const shortcut =
+    input.type === "keyDown" &&
+    input.meta &&
+    !input.control &&
+    !input.alt &&
+    !input.shift
+      ? sectionForShortcut(navigationShortcuts, input.key)
+      : null;
+  if (setupOpen && !shortcut) return false;
   if (
     input.control &&
     input.meta &&
@@ -11378,10 +11386,6 @@ function handleShortcut(input: Input): boolean {
     }
     return true;
   }
-  const shortcut =
-    input.meta && !input.control && !input.alt && !input.shift
-      ? sectionForShortcut(navigationShortcuts, input.key)
-      : null;
   if (shortcut) {
     if (installedUpdateAdmission) return true;
     publishShellAction("navigate-section", "section-shortcut-command", null, {

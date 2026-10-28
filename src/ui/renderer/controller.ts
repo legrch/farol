@@ -2809,16 +2809,20 @@ export class WindowController implements RendererFacade {
     });
     this.navigate({
       area:
-        action.section === "browser"
-          ? "chatgpt"
-          : action.section === "activity"
-            ? "activity"
-            : action.section === "computer"
-              ? "setup"
-              : "settings",
+        action.section === "home"
+          ? "home"
+          : action.section === "browser"
+            ? "chatgpt"
+            : action.section === "activity"
+              ? "activity"
+              : action.section === "computer" || action.section === "setup"
+                ? "setup"
+                : "settings",
       ...(action.section === "computer"
         ? { setupStep: "folders" as const }
-        : {}),
+        : action.section === "setup"
+          ? { setupStep: "overview" as const }
+          : {}),
       page: "general",
       taskId: action.taskId,
     });
@@ -2885,7 +2889,7 @@ export class WindowController implements RendererFacade {
         this.observeSignIn();
       }
       if (action.source === "settings-command")
-        this.navigate({ area: "setup", setupStep: "connection" });
+        this.navigate({ area: "settings", page: "general" });
       void this.refresh();
     }
   }

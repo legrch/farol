@@ -100,7 +100,14 @@ export const ShellActionSchema = z.discriminatedUnion("action", [
     action: z.literal("navigate-section"),
     source: z.literal("section-shortcut-command"),
     authWindowGeneration: z.null(),
-    section: SurfaceSectionSchema,
+    section: z.enum([
+      "home",
+      "browser",
+      "activity",
+      "setup",
+      "computer",
+      "settings",
+    ]),
     taskId: z.string(),
     /** Monotonic for the native publisher; old or reordered intent cannot replay. */
     sequence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),

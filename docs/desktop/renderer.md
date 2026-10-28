@@ -73,6 +73,11 @@ appearance or reopening a menu cannot refresh. Native folder selections remain
 opaque; typed paths cannot create approval. Read, write, exclusions and full-Git
 approval remain independent existing commands. Explicit shortcuts save through
 one latch; valid stored shortcuts activate in the window lifecycle outside React.
+The default page shortcuts follow the sidebar order: Home (⌘1), ChatGPT (⌘2),
+Activity (⌘3) and Setup (⌘4). Settings always uses ⌘,. Previously saved defaults
+migrate to this order; supported custom page assignments remain assigned, with
+the former This Mac assignment opening Setup. These commands also work while
+Setup is open and keep the native action provenance and update admission fence.
 New profiles start Home. Configured profiles preserve the existing launch choices.
 
 Only an exact, schema-valid observed edit result matching both the pending

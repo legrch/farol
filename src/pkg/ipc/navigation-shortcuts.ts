@@ -1,8 +1,8 @@
 export const shortcutSections = [
+  "home",
   "browser",
-  "computer",
   "activity",
-  "settings",
+  "setup",
 ] as const;
 
 export type ShortcutSection = (typeof shortcutSections)[number];
@@ -12,10 +12,10 @@ export type NavigationShortcuts = Record<ShortcutSection, number> & {
 };
 
 export const defaultNavigationShortcuts: NavigationShortcuts = {
-  browser: 1,
-  computer: 2,
+  home: 1,
+  browser: 2,
   activity: 3,
-  settings: 4,
+  setup: 4,
   sidebar: "s",
 };
 
@@ -25,6 +25,36 @@ export function parseNavigationShortcuts(
   if (typeof input !== "object" || input === null || Array.isArray(input))
     return null;
   const values = input as Record<string, unknown>;
+  const legacySections = ["browser", "computer", "activity", "settings"];
+  if (
+    legacySections.every((section) => Object.hasOwn(values, section)) &&
+    Object.keys(values).every(
+      (key) => key === "sidebar" || legacySections.includes(key),
+    )
+  ) {
+    const digits = legacySections.map((section) => values[section]);
+    if (
+      digits.some(
+        (digit) =>
+          !Number.isInteger(digit) || Number(digit) < 0 || Number(digit) > 4,
+      ) ||
+      new Set(digits.filter((digit) => digit !== 0)).size !==
+        digits.filter((digit) => digit !== 0).length
+    )
+      return null;
+    const wasDefault = digits.every((digit, index) => digit === index + 1);
+    return parseNavigationShortcuts({
+      ...(wasDefault
+        ? defaultNavigationShortcuts
+        : {
+            home: 0,
+            browser: values.browser,
+            activity: values.activity,
+            setup: values.computer,
+          }),
+      sidebar: values.sidebar === undefined ? "s" : values.sidebar,
+    });
+  }
   if (
     (Object.keys(values).length !== shortcutSections.length &&
       Object.keys(values).length !== shortcutSections.length + 1) ||

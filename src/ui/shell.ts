@@ -1260,7 +1260,10 @@ function renderSignals(): void {
       const signal = signals[route];
       const badge = button.querySelector<HTMLElement>(".nav-signal");
       if (!badge) return;
-      const digit = navigationShortcuts[route];
+      const digit =
+        route === "settings"
+          ? 0
+          : navigationShortcuts[route === "computer" ? "setup" : route];
       const shortcut =
         route === "settings"
           ? digit === 0
@@ -6932,7 +6935,10 @@ async function start(): Promise<void> {
       const next = sectionForShortcut(navigationShortcuts, event.key);
       if (next) {
         event.preventDefault();
-        selectSection(next);
+        // The retained legacy shell has no separate Home surface.
+        selectSection(
+          next === "setup" ? "computer" : next === "home" ? "browser" : next,
+        );
       }
     } else if (event.ctrlKey && event.key === "Tab") {
       event.preventDefault();

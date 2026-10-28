@@ -2147,7 +2147,7 @@ describe("F0 window owner", () => {
     for (const overrides of [
       { source: "auth-window-closed" },
       { authWindowGeneration: 1 },
-      { section: "home" },
+      { section: "unexpected" },
       { sequence: 0 },
       { sequence: Number.MAX_SAFE_INTEGER + 1 },
       { taskId: null },
@@ -2506,9 +2506,8 @@ it("R30 repeated native actions and background completion do not navigate", asyn
     source: "settings-command",
   });
   expect(c.getSnapshot().destination).toMatchObject({
-    area: "setup",
+    area: "settings",
     page: "general",
-    setupStep: "connection",
   });
   f.emit("action", {
     ...action,
@@ -2636,13 +2635,13 @@ it("R35 shortcut validation, accepted persistence and unknown latch are distinct
   const c = new WindowController(f.api, undefined, persist);
   await c.start();
   const value = {
-    browser: 1,
-    computer: 2,
+    home: 1,
+    browser: 2,
     activity: 3,
-    settings: 4,
+    setup: 4,
     sidebar: "b",
   } as const;
-  expect((await c.shortcuts({ ...value, computer: 1 })).state).toBe("refused");
+  expect((await c.shortcuts({ ...value, setup: 1 })).state).toBe("refused");
   expect(f.api.setNavigationShortcuts).not.toHaveBeenCalled();
   await c.shortcuts(value);
   expect(c.getSnapshot().shortcuts.sidebar).toBe("b");
@@ -4416,10 +4415,12 @@ it.each(["chatgpt.open-sign-in", "chatgpt.open-browser"] as const)(
     await c.configure({ kind }, `settings:${kind}:`);
     expect(c.getSnapshot().destination.taskId).toBe("");
     const targets = [
+      ["home", "home"],
       ["activity", "activity"],
       ["settings", "settings"],
       ["computer", "setup"],
       ["browser", "chatgpt"],
+      ["setup", "setup"],
     ];
     for (const [index, [section, area]] of targets.entries()) {
       const count = vi.mocked(f.api.layout).mock.calls.length;
@@ -4428,7 +4429,10 @@ it.each(["chatgpt.open-sign-in", "chatgpt.open-browser"] as const)(
       expect(f.api.layout).toHaveBeenCalledTimes(count + 1);
     }
     const selected = c.getSnapshot().destination;
-    f.emit("action", sectionIntent("activity", 5, "unrecognized"));
+    f.emit(
+      "action",
+      sectionIntent("activity", targets.length + 1, "unrecognized"),
+    );
     expect(c.getSnapshot().destination).toBe(selected);
     expect(f.api.task).not.toHaveBeenCalled();
     c.dispose();

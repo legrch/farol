@@ -2187,10 +2187,10 @@ function Shortcuts({ snapshot, facade }: PageProps) {
         </p>
         {(
           [
+            ["home", "Home"],
             ["browser", "ChatGPT"],
-            ["computer", "This Mac"],
             ["activity", "Activity"],
-            ["settings", "Settings"],
+            ["setup", "Setup"],
           ] as const
         ).map(([key, label]) => (
           <label className="setting-row" key={key}>
@@ -2210,6 +2210,7 @@ function Shortcuts({ snapshot, facade }: PageProps) {
             </select>
           </label>
         ))}
+        <p className="description">Settings always opens with ⌘,.</p>
         <label className="setting-row">
           Toggle sidebar
           <select

@@ -4,6 +4,10 @@ import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
 import { parse } from "@babel/parser";
 import { describe, expect, it } from "vitest";
+import {
+  defaultNavigationShortcuts,
+  sectionForShortcut,
+} from "../../src/pkg/ipc/navigation-shortcuts";
 
 import {
   ShellActionSchema,
@@ -159,7 +163,7 @@ describe("shell action provenance", () => {
   );
   it.each([
     { name: "missing section", field: "section", value: undefined },
-    { name: "unknown section", field: "section", value: "home" },
+    { name: "unknown section", field: "section", value: "unexpected" },
     { name: "missing task", field: "taskId", value: undefined },
     { name: "missing sequence", field: "sequence", value: undefined },
     { name: "zero sequence", field: "sequence", value: 0 },
@@ -246,6 +250,13 @@ describe("shell action provenance", () => {
       quitInProgress: false,
       installedUpdateAdmission: false,
       setupOpen: true,
+      navigationShortcuts: defaultNavigationShortcuts,
+      sectionForShortcut,
+      liveTaskRoutes: new Map(),
+      selectedTaskId: "",
+      sectionNavigationSequence: 0,
+      focusForLayout: () => {},
+      requestSettings: () => calls.push(["settings"]),
       publishShellAction: (...args: unknown[]) => calls.push(args),
     };
     const handler = vm.runInNewContext(
@@ -272,6 +283,15 @@ describe("shell action provenance", () => {
       ["history-back", "history-shortcut-command"],
       ["history-forward", "history-shortcut-command"],
     ]);
+    calls.length = 0;
+    context.shellOverlay = "none";
+    for (const key of ["1", "2", "3", "4"])
+      expect(handler({ ...input, key })).toBe(true);
+    expect(
+      calls.map((call) => (call[3] as { section: string }).section),
+    ).toEqual(["home", "browser", "activity", "setup"]);
+    expect(handler({ ...input, key: "," })).toBe(true);
+    expect(calls.at(-1)).toEqual(["settings"]);
   });
   it("S35-TA-16 a fresh eventId is minted per publish, not reused", async () => {
     const source = await readFile(mainSource, "utf8");
