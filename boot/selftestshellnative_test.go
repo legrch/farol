@@ -76,7 +76,7 @@ func checkNativeSelfTestShell(t *testing.T, r *NativeRuntime, generation int) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		result := check.check(ctx)
 		cancel()
-		if result.Status != "pass" || result.Operation != op || result.Handle == "" {
+		if result.Status != "pass" || result.Operation != op || result.Handle == "" || !result.RootWaited || !result.OutputDrained || result.GroupCleanup != "confirmed" || result.DescendantCleanup != "unverified" {
 			t.Fatal("composed self-test failed", result)
 		}
 		select {

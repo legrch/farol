@@ -12,10 +12,20 @@ import (
 // create an execution authority. A timeout after Start is always unknown.
 type shellCheckResult struct {
 	Status, Code, Operation, Handle, CancelOperation string
+	Supervisor                                       processct.SupervisorState
+	GroupCleanup, DescendantCleanup                  processct.Cleanup
+	RootWaited, OutputDrained                        bool
 }
 
 func (s *selfTestShell) check(ctx context.Context) shellCheckResult {
 	result := shellCheckResult{Status: "unknown", Operation: s.operation}
+	recordTerminal := func(out *processct.ReadResponse) {
+		result.Supervisor = out.Supervisor
+		result.RootWaited = out.RootWaited
+		result.GroupCleanup = out.GroupCleanup
+		result.DescendantCleanup = out.DescendantCleanup
+		result.OutputDrained = out.OutputDrained
+	}
 	classify := func(err error) shellCheckResult {
 		outcome, _ := connectorProcessOutcome(nil, err)
 		if outcome != nil {
@@ -41,6 +51,7 @@ func (s *selfTestShell) check(ctx context.Context) shellCheckResult {
 			return result
 		}
 		if read.State != processct.Running {
+			recordTerminal(read)
 			if (read.State != processct.Terminal && read.State != processct.Exited) || read.RootState != processct.RootExited || read.Supervisor != processct.SupervisorExited || !read.RootWaited || read.GroupCleanup != processct.CleanupConfirmed {
 				result.Code = "PROCESS_OUTCOME_UNKNOWN"
 				return result
@@ -68,6 +79,7 @@ func (s *selfTestShell) check(ctx context.Context) shellCheckResult {
 			return result
 		}
 		if out.State != processct.Running {
+			recordTerminal(out)
 			if (out.State != processct.Terminal && out.State != processct.Exited) || out.RootState != processct.RootExited || out.Supervisor != processct.SupervisorExited || !out.RootWaited || out.GroupCleanup != processct.CleanupConfirmed || !out.OutputDrained || out.OutputLimitReached || out.AuthorityLost || out.TimedOut {
 				result.Code = "PROCESS_OUTCOME_UNKNOWN"
 				return result
