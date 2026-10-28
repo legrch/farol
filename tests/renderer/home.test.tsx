@@ -55,6 +55,9 @@ it("keeps an existing current connection visible while a new verification is in 
   expect(
     connectionPresentation({ ...snapshot, connectionChecking: true }, [pending])
       .text,
+  ).toBe("Connected");
+  expect(
+    connectionPresentation({ ...snapshot, connectionChecking: true }).text,
   ).toBe("Checking connection…");
   expect(
     connectionPresentation({ ...snapshot, runtime: "failed" }, [pending]).text,

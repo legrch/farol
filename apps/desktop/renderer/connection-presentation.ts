@@ -8,6 +8,7 @@ export function connectionPresentation(
   local: readonly Intent[] = [],
 ) {
   const computer = computerSetup(snapshot);
+  const verifying = connectorVerificationInFlight(snapshot, local);
   const checking =
     !snapshot.independentSession &&
     snapshot.status !== "unavailable" &&
@@ -16,8 +17,8 @@ export function connectionPresentation(
     (snapshot.connectionChecking === true ||
       snapshot.status === "starting" ||
       snapshot.runtime === "starting" ||
-      (connectorVerificationInFlight(snapshot, local) &&
-        !computer.externalAccessVerified));
+      verifying) &&
+    !(verifying && computer.externalAccessVerified);
   const connected = !checking && computer.externalAccessVerified;
   const label = checking
     ? "Checking connection…"
