@@ -220,7 +220,7 @@ describe("Unresolved actions sheet", () => {
       h.c.getSnapshot().intents["settings:chatgpt.open-browser:"]?.state,
     ).toBe("unknown");
   });
-  it("lists pending only while it exists and can close without cancelling it", async () => {
+  it("keeps live pending work out of incidents and can close without cancelling it", async () => {
     const h = await mount({ page: "general", shell: true });
     const pending = deferred<unknown>();
     h.reply(() => pending.promise);
@@ -235,7 +235,16 @@ describe("Unresolved actions sheet", () => {
     expect(h.button("Review unresolved actions")).toBeUndefined();
     await act(async () => h.c.overlay("unresolved-actions"));
     expect(h.host.querySelector(selector)?.textContent).toContain(
-      "still waiting for its result",
+      "No unresolved actions.",
+    );
+    const active = h.c.getSnapshot();
+    expect(unresolvedActions(active)).toEqual([]);
+    // Losing the current window does not erase this pending operation.
+    expect(unresolvedActions({ ...active, status: "stale" })).toContainEqual(
+      expect.objectContaining({
+        id: "settings:chatgpt.open-browser:",
+        state: "pending",
+      }),
     );
     await h.click("Close");
     expect(

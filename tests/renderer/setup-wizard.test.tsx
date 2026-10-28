@@ -66,9 +66,10 @@ describe("linear Setup", () => {
       });
       await h.click("+ Add workspace");
       expect(count()).toBe(complete ? 4 : 1);
-      expect(h.host.querySelector(".setup-count")?.textContent).toBe(
-        complete ? "✓" : "1 of 4",
-      );
+      // The rail has one connection status; progress belongs to Setup itself.
+      // Retaining the checklist above does not reopen any pending admission.
+      expect(h.host.querySelector(".setup-count")).toBeNull();
+      expect(h.button("Setup")).toBeDefined();
       const pending = h.c.getSnapshot();
       expect(setupStepCheck(pending, "signin").allowed).toBe(false);
       expect(setupStepCheck(pending, "folders").allowed).toBe(false);
