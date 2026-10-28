@@ -23,6 +23,7 @@ installation on PATH before installing or checking dependencies.
 npm ci --ignore-scripts --no-audit --no-fund
 node node_modules/esbuild/install.js
 node node_modules/electron/install.js
+node tooling/tunnel-client-artifact.mjs --download
 npm run check:toolchain
 task ci:fast
 ```

@@ -11,7 +11,12 @@ installation acceptance.
 The connection path selects the app-owned full Tunnel Client CLI, with its
 reviewed upstream hash checked independently of the build entry ledger before
 packaging. Build preparation supplies the reviewed raw executable and notices
-in one `_output/tunnel-client` slot. Existing external selections cannot override
+in one `_output/tunnel-client` slot. Clean CI explicitly prepares this slot from
+the pinned official archive URL, verifies the archive digest before reading only
+the selected client/license/notice entries, then verifies their independent pins.
+It never installs Homebrew or executes the downloaded client during preparation.
+A failed download has no retry or alternative endpoint. This is build tooling;
+the installed application uses the embedded executable and does not download it. Existing external selections cannot override
 the bundle; an admitted replacement requires the previous connector owner to
 be confirmed stopped. The init, doctor and run protocol and UNKNOWN fences
 remain unchanged. Source wiring does not establish native or signed-release

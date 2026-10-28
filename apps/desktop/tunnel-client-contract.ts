@@ -8,6 +8,8 @@ export const TUNNEL_CLIENT = Object.freeze({
   size: 20_405_442,
   sha256: "309fd85da5a8c2ca8dae920deea8ac10a4d7934ed18ac46e7df0c200139cc9c5",
   upstream: "https://github.com/openai/tunnel-client/releases/tag/v0.0.14",
+  archiveURL:
+    "https://persistent.oaistatic.com/tunnel-client/v0.0.14/tunnel-client-v0.0.14-darwin-arm64.zip",
   archiveSHA256:
     "b540493c5bdbcdbb755700c8e2e16597e28b1569e425007e0f73111047bd6a64",
 });

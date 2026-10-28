@@ -60,6 +60,9 @@ runs:
           node node_modules/electron/install.js
         fi
         git diff --exit-code -- package-lock.json
+    - name: Prepare the pinned Tunnel Client build input
+      shell: bash
+      run: node tooling/tunnel-client-artifact.mjs --download
     - name: Install gate tools and resolve Go inputs
       shell: bash
       run: |

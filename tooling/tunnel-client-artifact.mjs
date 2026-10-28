@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   TUNNEL_CLIENT,
@@ -173,17 +174,121 @@ export async function embedTunnelClient(directory, root) {
   };
 }
 
+// Build-time input preparation only. The installed application does not fetch
+// archives, invoke unzip, use Homebrew, or learn a new expected executable hash.
+const maximumArchiveBytes = 64 * 1024 * 1024;
+export async function provisionTunnelClientInput(root, fetchImpl = fetch) {
+  const physicalRoot = await fs.realpath(root);
+  const destination = tunnelClientInputDirectory(physicalRoot);
+  const exists = await fs.lstat(destination).then(
+    () => true,
+    (e) => {
+      if (e.code === "ENOENT") return false;
+      throw e;
+    },
+  );
+  if (exists) {
+    if ((await fs.realpath(destination)) !== destination) fail();
+    await verifyBundledTunnelClient(destination);
+    return destination;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60000);
+  let reader;
+  try {
+    const response = await fetchImpl(TUNNEL_CLIENT.archiveURL, {
+      redirect: "error",
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+      signal: controller.signal,
+    });
+    if (
+      response.status !== 200 ||
+      !response.body ||
+      (response.headers.get("content-encoding") &&
+        response.headers.get("content-encoding") !== "identity")
+    )
+      fail();
+    const size = response.headers.get("content-length");
+    if (
+      size !== null &&
+      (!/^[1-9][0-9]*$/u.test(size) || Number(size) > maximumArchiveBytes)
+    )
+      fail();
+    reader = response.body.getReader({ mode: "byob" });
+    const chunks = [];
+    let count = 0;
+    while (true) {
+      const { done, value } = await reader.read(
+        new Uint8Array(Math.min(65536, maximumArchiveBytes + 1 - count)),
+      );
+      if (done) break;
+      count += value.byteLength;
+      if (count > maximumArchiveBytes) fail();
+      chunks.push(Buffer.from(value));
+    }
+    if (size !== null && Number(size) !== count) fail();
+    const bytes = Buffer.concat(chunks);
+    if (digest(bytes) !== TUNNEL_CLIENT.archiveSHA256) fail();
+    return await prepareTunnelClientArchive(physicalRoot, bytes);
+  } catch {
+    // A single failed/unknown read does not trigger a retry or alternate URL.
+    throw new Error("TUNNEL_CLIENT_DOWNLOAD_UNAVAILABLE");
+  } finally {
+    controller.abort();
+    clearTimeout(timer);
+    await reader?.cancel().catch(() => {});
+  }
+}
+async function prepareTunnelClientArchive(root, bytes) {
+  const output = path.join(root, "_output");
+  await fs.mkdir(output, { recursive: true });
+  if ((await fs.realpath(output)) !== output) fail();
+  const parent = path.join(output, "tmp");
+  await fs.mkdir(parent, { recursive: true });
+  if ((await fs.realpath(parent)) !== parent) fail();
+  const stage = await fs.mkdtemp(path.join(parent, "tunnel-client-input-"));
+  try {
+    await fs.chmod(stage, 0o700);
+    const archive = path.join(stage, "upstream.zip");
+    await fs.writeFile(archive, bytes, { flag: "wx", mode: 0o400 });
+    for (const [name, maximum] of [
+      [TUNNEL_CLIENT.entry, TUNNEL_CLIENT.size],
+      ...TUNNEL_CLIENT_NOTICES.map((n) => [n.source, 256 * 1024]),
+    ]) {
+      // Only named entries reach stdout. The archive cannot choose output paths
+      // or execute code; independent executable/notice pins are checked next.
+      const extracted = execFileSync("/usr/bin/unzip", ["-p", archive, name], {
+        timeout: 10000,
+        maxBuffer: maximum + 1,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      if (extracted.length < 1 || extracted.length > maximum) fail();
+      await fs.writeFile(path.join(stage, name), extracted, {
+        flag: "wx",
+        mode: 0o400,
+      });
+    }
+    return await prepareTunnelClientInput(root, stage);
+  } finally {
+    // This private data stage has no running client or unknown-effect consumer.
+    await fs.rm(stage, { recursive: true, force: true });
+  }
+}
+
 if (
   process.argv[1] &&
   path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
   const args = process.argv.slice(2);
-  if (args.length !== 1 || !args[0].startsWith("--source="))
-    throw new Error("TUNNEL_CLIENT_INPUT_SOURCE_REQUIRED");
-  await prepareTunnelClientInput(
-    process.cwd(),
-    path.resolve(args[0].slice("--source=".length)),
-  );
+  if (args.length === 1 && args[0] === "--download") {
+    await provisionTunnelClientInput(process.cwd());
+  } else if (args.length === 1 && args[0].startsWith("--source=")) {
+    await prepareTunnelClientInput(
+      process.cwd(),
+      path.resolve(args[0].slice("--source=".length)),
+    );
+  } else throw new Error("TUNNEL_CLIENT_INPUT_SOURCE_REQUIRED");
   process.stdout.write(
     `Reviewed tunnel-client ${TUNNEL_CLIENT.version} input prepared.\n`,
   );

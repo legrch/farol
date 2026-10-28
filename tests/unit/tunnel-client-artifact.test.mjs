@@ -1,12 +1,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { syntheticTunnelArchive } from "../fixtures/tunnel-archive-fixture.mjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Synthetic identity only: these tests qualify bounded copying and refusal,
 // not the upstream executable, its licenses or native execution.
 vi.mock("../../apps/desktop/tunnel-client-contract.ts", async () => {
   const { createHash } = await import("node:crypto");
+  const { syntheticTunnelArchive } =
+    await import("../fixtures/tunnel-archive-fixture.mjs");
   const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
   const binary = Buffer.alloc(1024);
   binary.writeUInt32LE(0xfeedfacf, 0);
@@ -14,6 +17,8 @@ vi.mock("../../apps/desktop/tunnel-client-contract.ts", async () => {
   return {
     TUNNEL_CLIENT: Object.freeze({
       version: "fixture",
+      archiveURL: "https://fixture.invalid/upstream.zip",
+      archiveSHA256: sha256(syntheticTunnelArchive()),
       entry: "tunnel-client",
       size: binary.length,
       sha256: sha256(binary),
@@ -36,6 +41,7 @@ vi.mock("../../apps/desktop/tunnel-client-contract.ts", async () => {
 import { TUNNEL_CLIENT } from "../../apps/desktop/tunnel-client-contract.ts";
 import {
   embedTunnelClient,
+  provisionTunnelClientInput,
   prepareTunnelClientInput,
   tunnelClientInputDirectory,
   verifyBundledTunnelClient,
@@ -174,4 +180,80 @@ describe("bundled Tunnel Client input", () => {
       binary,
     );
   });
+});
+
+describe("explicit pinned archive preparation (synthetic HTTP and ZIP)", () => {
+  it("reads only selected entries after archive authentication and cleans scratch", async () => {
+    const fetchImpl = vi.fn(async () => new Response(syntheticTunnelArchive()));
+    const result = await provisionTunnelClientInput(root, fetchImpl);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0][0]).toBe(TUNNEL_CLIENT.archiveURL);
+    expect(fetchImpl.mock.calls[0][1]).toMatchObject({
+      redirect: "error",
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+    });
+    expect(fetchImpl.mock.calls[0][1].signal.aborted).toBe(true);
+    await expect(verifyBundledTunnelClient(result)).resolves.toBeUndefined();
+    expect((await fs.readdir(result)).sort()).toEqual(
+      [
+        "tunnel-client",
+        "tunnel-client-LICENSE.txt",
+        "tunnel-client-NOTICE.txt",
+      ].sort(),
+    );
+    expect(await fs.readdir(path.join(root, "_output/tmp"))).toEqual([]);
+  });
+  it("refuses redirected output before making a foreign scratch directory", async () => {
+    const foreign = path.join(root, "foreign");
+    await fs.mkdir(foreign);
+    await fs.symlink(foreign, path.join(root, "_output"));
+    const fetchImpl = vi.fn(async () => new Response(syntheticTunnelArchive()));
+    await expect(provisionTunnelClientInput(root, fetchImpl)).rejects.toThrow(
+      "TUNNEL_CLIENT_DOWNLOAD_UNAVAILABLE",
+    );
+    expect(await fs.readdir(foreign)).toEqual([]);
+  });
+  it("reuses verified input without another network request", async () => {
+    await prepareTunnelClientInput(root, source);
+    const fetchImpl = vi.fn();
+    await provisionTunnelClientInput(root, fetchImpl);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+  it("refuses a corrupt existing input without fetching or overwriting", async () => {
+    const input = await prepareTunnelClientInput(root, source);
+    const target = path.join(input, "tunnel-client");
+    await fs.chmod(target, 0o600);
+    await fs.writeFile(target, "changed");
+    const fetchImpl = vi.fn();
+    await expect(provisionTunnelClientInput(root, fetchImpl)).rejects.toThrow(
+      "BUNDLED_TUNNEL_CLIENT_INVALID",
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(await fs.readFile(target, "utf8")).toBe("changed");
+  });
+  it.each(["transport", "http", "digest", "declared-size", "encoding"])(
+    "refuses %s without retries or a published input",
+    async (kind) => {
+      const fetchImpl = vi.fn(async () => {
+        if (kind === "transport") throw new Error("private transport detail");
+        if (kind === "http") return new Response(null, { status: 403 });
+        if (kind === "digest") return new Response("wrong archive");
+        if (kind === "encoding")
+          return new Response(syntheticTunnelArchive(), {
+            headers: { "content-encoding": "gzip" },
+          });
+        return new Response(syntheticTunnelArchive(), {
+          headers: { "content-length": String(64 * 1024 * 1024 + 1) },
+        });
+      });
+      await expect(provisionTunnelClientInput(root, fetchImpl)).rejects.toThrow(
+        /^TUNNEL_CLIENT_DOWNLOAD_UNAVAILABLE$/,
+      );
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      await expect(
+        fs.lstat(tunnelClientInputDirectory(root)),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 });
