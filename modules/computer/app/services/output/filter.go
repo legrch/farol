@@ -83,6 +83,13 @@ func cleanText(value string, command bool, filter ScalarFilter) (out Excerpt) {
 	return Excerpt{State: "filtered-truncated", Text: filtered[:end]}
 }
 
+func cleanBytes(value []byte, filter ScalarFilter) Excerpt {
+	if len(value) > sourceLimit {
+		return empty("withheld", "source_too_large")
+	}
+	return cleanText(string(value), false, filter)
+}
+
 // Project must receive reassembled original streams, not independent read pages.
 // Unknown or incomplete capture never exposes a prefix or fallback error text.
 func Project(in Input, filter ScalarFilter) Details {
@@ -90,7 +97,7 @@ func Project(in Input, filter ScalarFilter) Details {
 	if !in.OutputDrained || in.OutputLimited || in.StdoutOffset != 0 || in.StderrOffset != 0 || in.StdoutNext != uint64(len(in.Stdout)) || in.StderrNext != uint64(len(in.Stderr)) || in.StdoutBytes != in.StdoutNext || in.StderrBytes != in.StderrNext {
 		return Details{Command: command, Stdout: empty("unavailable", "source_incomplete"), Stderr: empty("unavailable", "source_incomplete")}
 	}
-	details := Details{Command: command, Stdout: cleanText(string(in.Stdout), false, filter), Stderr: cleanText(string(in.Stderr), false, filter)}
+	details := Details{Command: command, Stdout: cleanBytes(in.Stdout, filter), Stderr: cleanBytes(in.Stderr, filter)}
 	if encoded, err := json.Marshal(details); err != nil || len(encoded) > entryLimit {
 		details.Stdout = empty("withheld", "entry_limit")
 		details.Stderr = empty("withheld", "entry_limit")
