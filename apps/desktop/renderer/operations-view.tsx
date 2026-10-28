@@ -33,7 +33,15 @@ export function OperationsActivity({
             : outcome === "attention"
               ? row.outcome === "unknown" || row.outcome === "pending"
               : row.outcome === outcome)) &&
-        [row.kind, row.source, row.outcome, row.operation, row.code]
+        [
+          row.kind,
+          row.source,
+          row.outcome,
+          row.operation,
+          row.code,
+          row.target?.workspace,
+          row.target?.relativePath,
+        ]
           .filter(Boolean)
           .join(" ")
           .toLowerCase()
@@ -115,8 +123,10 @@ export function OperationsActivity({
               <span>
                 <strong>{row.label}</strong>
                 <small>
-                  {row.kind} · {row.source} ·{" "}
-                  {new Date(row.at).toLocaleString()}
+                  <time dateTime={new Date(row.at).toISOString()}>
+                    {new Date(row.at).toLocaleString()}
+                  </time>{" "}
+                  · {row.kind} · {row.source}
                   {row.operation ? ` · ${row.operation}` : ""}
                 </small>
               </span>

@@ -1729,10 +1729,18 @@ kbd {
 .operation-outcome {
   color: var(--muted);
   font-size: 12px;
+  font-weight: 600;
 }
-.operation-outcome[data-outcome="unknown"],
 .operation-outcome[data-outcome="pending"] {
   color: var(--accent);
+}
+.operation-outcome[data-outcome="done"] {
+  color: var(--good);
+}
+.operation-outcome[data-outcome="unknown"],
+.operation-outcome[data-outcome="refused"],
+.operation-outcome[data-outcome="failed"] {
+  color: var(--warn);
 }
 
 /* Keep the return action aligned and visible above the native browser. */

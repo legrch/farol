@@ -93,6 +93,52 @@ it("shows a slow activity read as updating, not as a failed log write", async ()
     c.dispose();
   }
 });
+it("shows the time first and searches recorded workspace metadata", async () => {
+  const f = fixture(),
+    c = new WindowController(f.api);
+  await c.start();
+  const snapshot = {
+    ...c.getSnapshot(),
+    activity: [{ ...entries[0]!, operation: null }, entries[1]!],
+  };
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  try {
+    await act(async () =>
+      root.render(
+        <OperationsActivity
+          snapshot={snapshot}
+          facade={{} as RendererFacade}
+        />,
+      ),
+    );
+    const summaries = host.querySelectorAll("summary");
+    expect(summaries[0]?.querySelector("time")?.getAttribute("datetime")).toBe(
+      new Date(entries[1]!.at).toISOString(),
+    );
+    expect(
+      summaries[0]?.querySelector("small")?.firstElementChild?.tagName,
+    ).toBe("TIME");
+    const search = host.querySelector<HTMLInputElement>(
+      'input[type="search"]',
+    )!;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!;
+      setter.call(search, "Docs");
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(host.querySelectorAll("details")).toHaveLength(1);
+    expect(host.querySelector("summary")?.textContent).toContain(
+      "workspace add",
+    );
+  } finally {
+    await act(async () => root.unmount());
+    c.dispose();
+  }
+});
 it("filters shared operations, expands metadata and links attention to the unresolved sheet", async () => {
   const f = fixture(),
     c = new WindowController(f.api);
