@@ -520,12 +520,13 @@ export async function run(input: {
                   );
                   assert.equal(
                     terminal.auditDetails?.command.state,
-                    "filtered",
+                    "withheld",
                   );
-                  assert.match(
-                    terminal.auditDetails.command.text ?? "",
-                    /git commit/u,
+                  assert.equal(
+                    terminal.auditDetails.command.reason,
+                    "inline_body",
                   );
+                  assert.equal("text" in terminal.auditDetails.command, false);
                   assert.equal(terminal.auditDetails.stdout.state, "filtered");
                   assert.equal(
                     terminal.auditDetails.stdout.text,
