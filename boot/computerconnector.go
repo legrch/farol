@@ -50,6 +50,7 @@ type computerConnector struct {
 	processes connectorShellSelection
 	// Selected by trusted composition only; nil makes audit text unavailable.
 	auditFilter output.ScalarFilter
+	auditSlots  chan struct{}
 	codexRead   *connectorCodexRead
 	current     *connectorSlot
 	attempts    uint64
@@ -102,7 +103,7 @@ func newComputerConnector(ctx context.Context, root *ComputerIngress, journal po
 		return nil, computerUnavailable()
 	}
 	lifetime, cancel := context.WithCancel(ctx)
-	return &computerConnector{root: root, journal: journal, lifetime: lifetime, cancel: cancel, clock: clock, start: start, effects: make(chan struct{}, 1)}, nil
+	return &computerConnector{root: root, journal: journal, lifetime: lifetime, cancel: cancel, clock: clock, start: start, effects: make(chan struct{}, 1), auditSlots: make(chan struct{}, 2)}, nil
 }
 
 func (s *computerConnector) enter(ctx context.Context) error {

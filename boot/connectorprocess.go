@@ -47,6 +47,10 @@ type connectorProcessOperation struct {
 	collectionDone   chan struct{}
 	collectionErr    error
 	auditCommand     output.Command
+	auditOnce        sync.Once
+	auditDone        chan struct{}
+	auditDetails     output.Details
+	auditAvailable   bool
 }
 
 func connectorProcessRefusal(code string) error {

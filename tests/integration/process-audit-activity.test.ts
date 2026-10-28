@@ -36,6 +36,11 @@ it("carries a late original terminal observation into Activity without replacing
       descendantCleanup: "unverified",
       timedOut: false,
       authorityLost: false,
+      auditDetails: {
+        command: { state: "filtered", text: "git status" },
+        stdout: { state: "filtered", text: "clean" },
+        stderr: { state: "unavailable", reason: "source_incomplete" },
+      },
     };
     const request = vi
       .fn()
@@ -59,6 +64,7 @@ it("carries a late original terminal observation into Activity without replacing
           durationMs: null,
           exit: { kind: "code", value: 3 },
           operationRef: { ...ref, binding: "accepted" },
+          auditDetails: fact.auditDetails,
         }),
       ]),
     );

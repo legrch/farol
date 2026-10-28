@@ -10,7 +10,6 @@ import (
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	"github.com/legrch/farol/modules/computer/app/services/execution"
-	"github.com/legrch/farol/modules/computer/app/services/output"
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	processct "github.com/legrch/farol/modules/computer/contracts/process"
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -273,7 +272,7 @@ func (s *computerConnector) processMethods(slot *connectorSlot, selectLaunch con
 			}
 			// Only the filtered value enters the ledger; stdin and raw command stay
 			// with the original execution request and its existing producer.
-			command := output.ProjectCommand(in.Command, s.auditFilter)
+			command := s.auditCommandProjection(ctx, in.Command)
 			out, err := s.startProcessWithAudit(ctx, slot, r.OperationID, in.CallId, func(ctx context.Context, lease *execution.Lease) (processsvc.Prepared, processsvc.ObservationWorkspace, error) {
 				prepared, workspace, err := selectLaunch(ctx, lease, request)
 				if err != nil || prepared == nil || workspace == nil {

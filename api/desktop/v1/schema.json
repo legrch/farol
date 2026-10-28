@@ -4938,6 +4938,43 @@
         "runtimeId": { "type": "id" }
       }
     },
+    "ComputerProcessAuditExcerpt": {
+      "type": "object",
+      "fields": {
+        "state": {
+          "type": "string",
+          "values": [
+            "filtered",
+            "filtered-truncated",
+            "withheld",
+            "unavailable"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "values": [
+            "invalid_utf8",
+            "source_too_large",
+            "ambiguous_control",
+            "inline_body",
+            "entry_limit",
+            "filter_failed",
+            "filter_unavailable",
+            "source_incomplete"
+          ],
+          "optional": true
+        },
+        "text": { "type": "string", "maxBytes": 2048, "optional": true }
+      }
+    },
+    "ComputerProcessAuditDetails": {
+      "type": "object",
+      "fields": {
+        "command": { "type": "ComputerProcessAuditExcerpt" },
+        "stdout": { "type": "ComputerProcessAuditExcerpt" },
+        "stderr": { "type": "ComputerProcessAuditExcerpt" }
+      }
+    },
     "ComputerProcessTerminalAudit": {
       "type": "object",
       "fields": {
@@ -4957,7 +4994,11 @@
           "values": ["pending", "confirmed", "unverified"]
         },
         "timedOut": { "type": "boolean" },
-        "authorityLost": { "type": "boolean" }
+        "authorityLost": { "type": "boolean" },
+        "auditDetails": {
+          "type": "ComputerProcessAuditDetails",
+          "optional": true
+        }
       }
     },
     "ComputerProcessAuditResult": {

@@ -401,9 +401,29 @@ it("appends a late terminal fact once without replacing the original unknown", a
   );
   const before = fs.readFileSync(file, "utf8");
   expect(
+    await store.recordTerminalObservation(ref, {
+      ...fact,
+      auditDetails: {
+        command: {
+          state: "withheld",
+          reason: "inline_body",
+          text: "PRIVATE-CANARY",
+        },
+        stdout: { state: "filtered" },
+        stderr: { state: "filtered" },
+      },
+    }),
+  ).toBe("unavailable");
+  expect(fs.readFileSync(file, "utf8")).not.toContain("PRIVATE-CANARY");
+  const large = { state: "filtered" as const, text: "\n".repeat(2048) };
+  const largeFact = {
+    ...fact,
+    auditDetails: { command: large, stdout: large, stderr: large },
+  };
+  expect(
     await Promise.all([
-      store.recordTerminalObservation(ref, fact),
-      store.recordTerminalObservation(ref, fact),
+      store.recordTerminalObservation(ref, largeFact),
+      store.recordTerminalObservation(ref, largeFact),
     ]),
   ).toEqual(["recorded", "duplicate"]);
   expect(
@@ -429,6 +449,11 @@ it("appends a late terminal fact once without replacing the original unknown", a
         durationMs: null,
         exit: { kind: "code", value: 7 },
         operationRef: { ...ref, binding: "accepted" },
+        auditDetails: {
+          command: { state: "withheld", reason: "entry_limit" },
+          stdout: { state: "withheld", reason: "entry_limit" },
+          stderr: { state: "withheld", reason: "entry_limit" },
+        },
       }),
     ]),
   );

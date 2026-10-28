@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { createTotalOperationsRecorder } from "./recorder";
 import { resolveOperationTarget, resolveOperationsSnapshot } from "./target";
 import {
+  AuditDetailsSchema,
   OperationEntrySchema,
   OperationReferenceSchema,
   OperationsDiagnosticsSchema,
@@ -412,6 +413,12 @@ export class OperationsStore implements OperationsRecorder {
             : fact.exitSignal >= 1 && fact.exitSignal <= 128)
         )
           return "unavailable" as const;
+        const auditDetails =
+          fact.auditDetails === undefined
+            ? undefined
+            : AuditDetailsSchema.safeParse(fact.auditDetails);
+        if (auditDetails && !auditDetails.success)
+          return "unavailable" as const;
         const key = JSON.stringify([
           fact.buildId,
           fact.runtimeId,
@@ -461,7 +468,7 @@ export class OperationsStore implements OperationsRecorder {
             ? ("duplicate" as const)
             : ("conflict" as const);
         const id = randomUUID();
-        const entry = OperationEntrySchema.parse({
+        let entry = OperationEntrySchema.parse({
           id,
           at: this.now(),
           source: "ChatGPT",
@@ -476,7 +483,28 @@ export class OperationsStore implements OperationsRecorder {
           timing: null,
           exit,
           executionFacts,
+          ...(auditDetails?.success ? { auditDetails: auditDetails.data } : {}),
         });
+        // The cap applies to the complete encoded record, not just its details.
+        if (
+          Buffer.byteLength(JSON.stringify(entry) + "\n", "utf8") > 12 * 1024 &&
+          auditDetails?.success
+        ) {
+          const withheld = (value: typeof auditDetails.data.command) =>
+            value.state === "filtered" || value.state === "filtered-truncated"
+              ? { state: "withheld" as const, reason: "entry_limit" as const }
+              : value;
+          entry = OperationEntrySchema.parse({
+            ...entry,
+            auditDetails: {
+              command: withheld(auditDetails.data.command),
+              stdout: withheld(auditDetails.data.stdout),
+              stderr: withheld(auditDetails.data.stderr),
+            },
+          });
+        }
+        if (Buffer.byteLength(JSON.stringify(entry) + "\n", "utf8") > 12 * 1024)
+          return "unavailable" as const;
         attemptedKey = key;
         if (!this.enqueue(entry)) {
           attemptedKey = undefined;
