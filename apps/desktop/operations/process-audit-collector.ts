@@ -78,10 +78,11 @@ export class ProcessAuditCollector {
         attempt = { count: 0, nextAt: 0, stopped: false };
         this.attempts.set(key, attempt);
       }
-      if (attempt.stopped || attempt.count >= 12 || attempt.nextAt > this.now())
-        continue;
-      attempt.count++;
-      attempt.nextAt = this.now() + 5000;
+      if (attempt.stopped || attempt.nextAt > this.now()) continue;
+      // A process can legitimately run for longer than a minute. Keep its
+      // read-only observation eligible, with bounded backoff, until it settles.
+      attempt.count = Math.min(attempt.count + 1, 12);
+      attempt.nextAt = this.now() + attempt.count * 5000;
       this.busy = true;
       const state = attempt;
       void reader

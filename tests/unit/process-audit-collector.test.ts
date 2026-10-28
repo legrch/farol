@@ -161,3 +161,26 @@ it("continues tracking known observations when new references exceed the limit",
     runtimeId: "runtime",
   });
 });
+
+it("observes a long-running process after the initial twelve checks", async () => {
+  let now = 0;
+  const reader = {
+    read: vi.fn<() => Promise<typeof fact | null>>().mockResolvedValue(null),
+  };
+  const writer = {
+    recordTerminalObservation: vi.fn().mockResolvedValue("recorded" as const),
+  };
+  const collector = new ProcessAuditCollector(writer, () => now);
+  for (let i = 0; i < 12; i++) {
+    collector.observe(snapshot, reader, () => true);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    now += (i + 1) * 5000;
+  }
+  reader.read.mockResolvedValueOnce(fact);
+  collector.observe(snapshot, reader, () => true);
+  await vi.waitFor(() =>
+    expect(writer.recordTerminalObservation).toHaveBeenCalledOnce(),
+  );
+  expect(reader.read).toHaveBeenCalledTimes(13);
+  expect(snapshot.entries[0]?.outcome).toBe("unknown");
+});
