@@ -225,7 +225,7 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 			identity = facts.identity
 		}
 		c := directoryCheck{pin: pin, path: path, identity: identity, private: private,
-			protected: launch.protectedBundle != nil && path == launch.protectedBundle.Path}
+			protected: (launch.protectedBundle != nil && path == launch.protectedBundle.Path) || (launch.protectedState != nil && path == launch.protectedState.Path)}
 		if c.protected {
 			facts, err := pin.inspect(path)
 			if err != nil {
@@ -255,6 +255,13 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 		bundle := *launch.protectedBundle
 		if !validProtectedBundle(&bundle) || comparableOverlap(bundle.Path, launch.scratch) ||
 			add(bundle.Path, bundle.Identity, false, nil, "") == nil {
+			return refuse()
+		}
+	}
+	if launch.protectedState != nil {
+		state := *launch.protectedState
+		if !validProtectedBundle(&state) || comparableOverlap(state.Path, launch.scratch) ||
+			add(state.Path, state.Identity, true, nil, "") == nil {
 			return refuse()
 		}
 	}

@@ -326,6 +326,7 @@ func (s *RootScopedPlatformStrategy) Select(ctx context.Context, policy Seatbelt
 	policy.Executables = slices.Clone(policy.Executables)
 	policy.ProtectedImages = slices.Clone(policy.ProtectedImages)
 	policy.ProtectedBundle = cloneProtectedBundle(policy.ProtectedBundle)
+	policy.ProtectedState = cloneProtectedBundle(policy.ProtectedState)
 	policy.MountDenials = slices.Clone(policy.MountDenials)
 	policy.GitRuntimeResources = cloneGitRuntime(policy.GitRuntimeResources)
 	policy.HostRuntime = cloneHostRuntime(policy.HostRuntime)
@@ -476,6 +477,10 @@ func (s *platformSelection) inspectDirectories(ctx context.Context) ([]platformD
 	if s.policy.ProtectedBundle != nil {
 		bundle := s.policy.ProtectedBundle
 		directories = append(directories, directory{bundle.Path, bundle.Identity, bundle.Identity.Device})
+	}
+	if s.policy.ProtectedState != nil {
+		state := s.policy.ProtectedState
+		directories = append(directories, directory{state.Path, state.Identity, state.Identity.Device})
 	}
 	for _, root := range plan.roots {
 		directories = append(directories, directory{root.ApprovedRoot, root.RootIdentity, root.RootIdentity.Device},

@@ -87,6 +87,8 @@ type SeatbeltSelection struct {
 	// ProtectedImages are measured and write-protected without read/exec grants.
 	ProtectedImages []ExecutablePin
 	ProtectedBundle *ProtectedBundle `json:",omitempty"`
+	// ProtectedState is a qualified denial-only Computer state directory.
+	ProtectedState *ProtectedBundle `json:",omitempty"`
 	// Measured mount boundaries only restrict existing roots; they never grant access.
 	MountDenials        []string `json:",omitempty"`
 	RootVolumeOnly      bool     `json:",omitempty"`
@@ -116,6 +118,7 @@ type confinedLaunch struct {
 	scratch             string
 	scratchIdentity     authority.RootIdentity
 	protectedBundle     *ProtectedBundle
+	protectedState      *ProtectedBundle
 	qualification       Qualification
 	gitRuntimeResources *GitRuntimeResources
 	hostRuntime         *HostRuntimePlan
@@ -144,6 +147,7 @@ func NewSeatbelt(selection SeatbeltSelection, qualification Qualification) (*Sea
 	selection.Executables = append([]ExecutablePin(nil), selection.Executables...)
 	selection.ProtectedImages = append([]ExecutablePin(nil), selection.ProtectedImages...)
 	selection.ProtectedBundle = cloneProtectedBundle(selection.ProtectedBundle)
+	selection.ProtectedState = cloneProtectedBundle(selection.ProtectedState)
 	selection.MountDenials = slices.Clone(selection.MountDenials)
 	selection.GitRuntimeResources = cloneGitRuntime(selection.GitRuntimeResources)
 	selection.HostRuntime = cloneHostRuntime(selection.HostRuntime)
@@ -197,7 +201,7 @@ func selectedLaunch(qualification Qualification, command Command) (*confinedLaun
 		return nil, &processsvc.NativeFailure{}
 	}
 	return &confinedLaunch{command: wrapped, pins: slices.Concat([]ExecutablePin{{seatbeltExecutable, selected.selection.MechanismSHA256}}, selected.selection.Executables, selected.selection.ProtectedImages),
-		gitRuntimeResources: cloneGitRuntime(selected.selection.GitRuntimeResources), hostRuntime: cloneHostRuntime(selected.selection.HostRuntime), protectedBundle: cloneProtectedBundle(selected.selection.ProtectedBundle), roots: append([]rootScopeBinding(nil), plan.roots...), gitDirectories: append([]gitReadDirectory(nil), plan.gitDirectories...), scratch: selected.selection.Scratch, scratchIdentity: selected.selection.ScratchIdentity, qualification: selected.qualification}, nil
+		gitRuntimeResources: cloneGitRuntime(selected.selection.GitRuntimeResources), hostRuntime: cloneHostRuntime(selected.selection.HostRuntime), protectedBundle: cloneProtectedBundle(selected.selection.ProtectedBundle), protectedState: cloneProtectedBundle(selected.selection.ProtectedState), roots: append([]rootScopeBinding(nil), plan.roots...), gitDirectories: append([]gitReadDirectory(nil), plan.gitDirectories...), scratch: selected.selection.Scratch, scratchIdentity: selected.selection.ScratchIdentity, qualification: selected.qualification}, nil
 }
 
 // Qualify delegates the exact wrapped invocation to the existing evidence port.
@@ -290,8 +294,9 @@ func validSelection(s SeatbeltSelection) bool {
 	}
 	if s.Snapshot.Participant == nil || s.Snapshot.Approval == nil || !bindingID(s.RuntimeID) || !bindingID(s.WorkspaceID) || !absolutePolicyPath(s.Home) || !absolutePolicyPath(s.Scratch) ||
 		!digestValue(s.MechanismSHA256) || s.ScratchIdentity.Device == "" || s.ScratchIdentity.Inode == "" || len(s.Executables) == 0 || len(s.Executables) > 16 || len(s.ProtectedImages) > 16 ||
-		(s.FilePolicy != authority.RootScopedFiles && (len(s.ProtectedImages) != 0 || s.ProtectedBundle != nil)) ||
-		!validProtectedBundle(s.ProtectedBundle) ||
+		(s.FilePolicy != authority.RootScopedFiles && (len(s.ProtectedImages) != 0 || s.ProtectedBundle != nil || s.ProtectedState != nil)) ||
+		!validProtectedBundle(s.ProtectedBundle) || !validProtectedBundle(s.ProtectedState) ||
+		(s.ProtectedState != nil && comparableOverlap(s.ProtectedState.Path, s.Scratch)) ||
 		(s.ProtectedBundle != nil && comparableOverlap(s.ProtectedBundle.Path, s.Scratch)) ||
 		filepath.Dir(s.Scratch) != "/private/tmp" || !strings.HasPrefix(filepath.Base(s.Scratch), "farol-") || !s.FilePolicy.Valid() || !seatbeltNetworkAllowed(s) ||
 		(s.FilePolicy == authority.LegacyProtectedFiles && (s.Git != DenyGit && s.Git != WorkspaceGit && s.Git != QualifiedGitRead)) ||
@@ -335,6 +340,18 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		p.Grant.Commands != authority.WorkspaceCommands || a.Commands != authority.WorkspaceCommands || !slices.Contains(p.Grant.Capabilities, authority.Shell) || !slices.Contains(a.Capabilities, authority.Shell) ||
 		(command.Write && (scope.Access != authority.WriteAccess || workspace.Access != authority.WriteAccess || p.MutationOwnership != authority.TaskOwnership)) {
 		return refuse()
+	}
+	if s.ProtectedState != nil {
+		for _, alias := range mountDenialAliases(s.ProtectedState.Path) {
+			if authority.ComparableWithin(alias, command.Cwd) || authority.ComparableWithin(alias, s.Scratch) {
+				return refuse()
+			}
+			for _, pin := range slices.Concat(s.Executables, s.ProtectedImages) {
+				if authority.ComparableWithin(alias, pin.Path) {
+					return refuse()
+				}
+			}
+		}
 	}
 	matched := false
 	for _, pin := range s.ProtectedImages {
@@ -512,6 +529,15 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		add("literal", s.ProtectedBundle.Path, &executableWrites)
 		add("subpath", s.ProtectedBundle.Path, &executableWrites)
 	}
+	if s.ProtectedState != nil {
+		for _, alias := range mountDenialAliases(s.ProtectedState.Path) {
+			add("subpath", alias, &mountDenies)
+			add("literal", alias, &rootAnchors)
+			for ancestor := filepath.Dir(alias); ancestor != "/"; ancestor = filepath.Dir(ancestor) {
+				add("literal", ancestor, &rootAnchors)
+			}
+		}
+	}
 	if s.FilePolicy == authority.RootScopedFiles {
 		// Protect image ancestors regardless of textual root membership: APFS
 		// firmlinks can give the approved root another spelling. These literal
@@ -685,10 +711,11 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		GitRead             *GitReadSelection    `json:",omitempty"`
 		GitDirectories      []gitReadDirectory   `json:",omitempty"`
 		ProtectedBundle     *ProtectedBundle     `json:",omitempty"`
+		ProtectedState      *ProtectedBundle     `json:",omitempty"`
 		GitRuntimeResources *GitRuntimeResources `json:",omitempty"`
 		UserGitSettings     bool                 `json:",omitempty"`
 		HostRuntime         *HostRuntimePlan     `json:",omitempty"`
-	}{source, arguments, s.ScratchIdentity, s.Executables, s.ProtectedImages, sealedRoots, s.GitRead, gitDirectories, s.ProtectedBundle, s.GitRuntimeResources, s.UserGitSettings, s.HostRuntime})
+	}{source, arguments, s.ScratchIdentity, s.Executables, s.ProtectedImages, sealedRoots, s.GitRead, gitDirectories, s.ProtectedBundle, s.ProtectedState, s.GitRuntimeResources, s.UserGitSettings, s.HostRuntime})
 	if err != nil {
 		return refuse()
 	}

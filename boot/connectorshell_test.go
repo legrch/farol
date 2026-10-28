@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/app/services/execution"
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	processct "github.com/legrch/farol/modules/computer/contracts/process"
@@ -76,7 +77,7 @@ func newShellFactoryFixtureWithApproval(t *testing.T, configure func(*authority.
 	pin := func(path string) nativeprocess.ExecutablePin {
 		return nativeprocess.ExecutablePin{Path: path, SHA256: strings.Repeat("a", 64)}
 	}
-	f := &connectorShellFactory{lifetime: context.Background(), clock: access.clock, config: connectorShellConfig{
+	f := &connectorShellFactory{lifetime: context.Background(), clock: access.clock, protectedState: &nativeprocess.ProtectedBundle{Path: "/Users/owner/.farol/computer", Identity: authority.RootIdentity{Device: "1", Inode: "9"}}, config: connectorShellConfig{
 		runtimeID: "shell-runtime", home: "/Users/owner", support: nativeprocess.RootScopedPlatformSupport{
 			Backend: pin("/app/Farol.app/Contents/Resources/backend"), Watchdog: pin("/app/Farol.app/Contents/MacOS/helper"),
 			Mechanism: pin("/usr/bin/sandbox-exec"), Executables: []nativeprocess.ExecutablePin{pin("/bin/bash"), pin("/usr/bin/git")},
@@ -136,6 +137,9 @@ func TestConnectorShellFactoryUsesOriginalLeaseAndPolicy(t *testing.T) {
 		f.command.Executable != "/bin/bash" || f.command.Environment != nil || f.policy.FilePolicy != authority.RootScopedFiles ||
 		f.policy.Network != authority.NoNetwork || f.policy.Git != nativeprocess.RootScopedGit || f.policy.Scratch != "/private/tmp/farol-shell-cpu" {
 		t.Fatal("crossed root-owned inputs")
+	}
+	if f.policy.ProtectedState == nil || *f.policy.ProtectedState != *f.factory.protectedState {
+		t.Fatal("qualified state did not reach policy")
 	}
 	if f.invocation.RuntimeID != "shell-runtime" || f.invocation.SessionID != f.lease.Binding().SessionID || f.invocation.ModelID != "chatgpt" ||
 		f.invocation.AdmissionID != f.policy.Snapshot.Participant.Grant.AuthorityID ||
@@ -217,7 +221,7 @@ func TestConnectorShellFactoryRefusesExpiredRevokedOrCancelledSelection(t *testi
 }
 
 func TestConnectorShellFactoryDoesNotReplaceMissingSupport(t *testing.T) {
-	if f, err := newConnectorShellFactory(context.Background(), connectorShellConfig{}, &computerClockFixture{}); err == nil || f != nil {
+	if f, err := newConnectorShellFactory(context.Background(), connectorShellConfig{}, &computerClockFixture{}, port.Root{}); err == nil || f != nil {
 		t.Fatal("missing support enabled Shell")
 	}
 	if scratch, err := newConnectorShellScratch(nil); err == nil || scratch.path != "" {
@@ -275,5 +279,14 @@ func TestConnectorShellPreparationSanitizesScratchErrors(t *testing.T) {
 				t.Fatal("scratch classification was lost or leaked")
 			}
 		})
+	}
+}
+
+func TestConnectorShellRefusesMissingStateBeforeAllocation(t *testing.T) {
+	f := newShellFactoryFixture(t)
+	f.factory.protectedState = nil
+	selected, observer, err := f.factory.selectShell(context.Background(), f.lease, shellFactoryRequest())
+	if err == nil || selected != nil || observer != nil || f.allocations != 0 || f.preparations != 0 {
+		t.Fatal("missing state reached native preparation")
 	}
 }

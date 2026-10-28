@@ -27,7 +27,7 @@ import (
 func TestNativeRootScopedSeatbelt(t *testing.T) {
 	for _, write := range []bool{false, true} {
 		if !t.Run("write="+strconv.FormatBool(write), func(t *testing.T) {
-			nativeRootScopedSeatbelt(t, write, false, false)
+			nativeRootScopedSeatbelt(t, write, false, false, false)
 		}) {
 			return // Preserve a failed/unknown attempt; never launch its successor.
 		}
@@ -37,6 +37,7 @@ func TestNativeRootScopedSeatbelt(t *testing.T) {
 type rootScopedProbe struct {
 	Sysctls       []string
 	Reads, Writes map[string]string
+	Executables   map[string]string
 	Listeners     map[string]string
 	Renames       map[string][2]string
 	Links         map[string][2]string
@@ -45,6 +46,7 @@ type rootScopedProbe struct {
 type rootScopedProbeResult struct {
 	Sysctls                map[string]string
 	Reads, Writes, Network map[string]string
+	Executables            map[string]string
 	Renames                map[string]string
 	Links, AliasWrites     map[string]string
 }
@@ -68,7 +70,7 @@ func TestNativeRootScopedProbeHelper(t *testing.T) {
 	if json.Unmarshal([]byte(os.Args[len(os.Args)-1]), &probe) != nil {
 		os.Exit(90)
 	}
-	out := rootScopedProbeResult{Sysctls: map[string]string{}, Reads: map[string]string{}, Writes: map[string]string{}, Network: map[string]string{}, Renames: map[string]string{}, Links: map[string]string{}, AliasWrites: map[string]string{}}
+	out := rootScopedProbeResult{Sysctls: map[string]string{}, Reads: map[string]string{}, Writes: map[string]string{}, Network: map[string]string{}, Renames: map[string]string{}, Links: map[string]string{}, AliasWrites: map[string]string{}, Executables: map[string]string{}}
 	for _, name := range probe.Sysctls {
 		_, err := syscall.Sysctl(name)
 		out.Sysctls[name] = probeFailure(err) // Never emit kernel/host values.
@@ -94,6 +96,9 @@ func TestNativeRootScopedProbeHelper(t *testing.T) {
 			out.AliasWrites[name] = probeFailure(os.WriteFile(paths[1], []byte("synthetic replacement\n"), 0600))
 		}
 	}
+	for name, path := range probe.Executables {
+		out.Executables[name] = probeFailure(exec.Command(path).Run())
+	}
 	for network, address := range probe.Listeners {
 		connection, err := net.DialTimeout(network, address, time.Second)
 		out.Network[network] = probeFailure(err)
@@ -107,7 +112,7 @@ func TestNativeRootScopedProbeHelper(t *testing.T) {
 	os.Exit(0)
 }
 
-func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool, protectBundle bool) {
+func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool, protectBundle bool, protectState bool) {
 	t.Helper()
 	base, err := os.MkdirTemp("/private/tmp", "farol-root-policy-")
 	if err != nil {
@@ -241,6 +246,40 @@ func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool, prot
 			"apps-parent": {container, container + "-moved"},
 		}
 	}
+	if protectState {
+		parent := filepath.Join(root, "internal")
+		state := filepath.Join(parent, "computer")
+		must(os.Mkdir(parent, 0700))
+		must(os.Mkdir(state, 0700))
+		file := filepath.Join(state, "state.txt")
+		must(os.WriteFile(file, []byte("synthetic baseline\n"), 0600))
+		s.ProtectedState = &ProtectedBundle{Path: state, Identity: identity(state)}
+		binary, err := os.ReadFile(image)
+		must(err)
+		stateBinary := filepath.Join(state, "state-executable")
+		must(os.WriteFile(stateBinary, binary, 0700))
+		probe.Executables = map[string]string{"protected-state": stateBinary, "protected-state-data-alias": dataVolumePath + stateBinary}
+		probe.Reads["protected-state"] = file
+		probe.Writes["protected-state"] = file
+		baseline["protected-state"] = hash(file)
+		dataAlias := dataVolumePath + file
+		if other, err := os.Stat(dataAlias); err != nil {
+			t.Fatal("native Data alias unavailable", err)
+		} else if original, err := os.Stat(file); err != nil || !os.SameFile(original, other) {
+			t.Fatal("native Data alias has another identity", err)
+		}
+		probe.Reads["protected-state-data-alias"] = dataAlias
+		probe.Writes["protected-state-data-alias"] = dataAlias
+		baseline["protected-state-data-alias"] = hash(file)
+		alias := filepath.Join(root, "state-symlink")
+		must(os.Symlink(file, alias))
+		probe.Reads["protected-state-symlink"] = alias
+		baseline["protected-state-symlink"] = hash(file)
+		probe.Renames = map[string][2]string{"state": {state, state + "-moved"}, "state-parent": {parent, parent + "-moved"}, "state-data-alias": {dataVolumePath + state, dataVolumePath + state + "-moved"}, "state-parent-data-alias": {dataVolumePath + parent, dataVolumePath + parent + "-moved"}}
+		ordinary := filepath.Join(root, "ordinary-link-source")
+		must(os.WriteFile(ordinary, []byte("synthetic baseline\n"), 0600))
+		probe.Links = map[string][2]string{"protected": {file, filepath.Join(root, "state-hardlink")}, "ordinary": {ordinary, filepath.Join(root, "ordinary-hardlink")}}
+	}
 	s.Snapshot.Participant.Grant.Workspaces[0].Root = root
 	s.Snapshot.Approval.Workspaces[0].Root = root
 	s.Snapshot.Approval.Workspaces[0].RootIdentity = identity(root)
@@ -290,7 +329,7 @@ func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool, prot
 		}
 	}
 	for name, expected := range baseline {
-		if name == "outside" || name == "outside-symlink" || name == "home" {
+		if name == "outside" || name == "outside-symlink" || name == "home" || name == "protected-state" || name == "protected-state-symlink" || name == "protected-state-data-alias" {
 			expected = "denied"
 		}
 		// The allowed hardlink is intentionally readable under path grants.
@@ -307,6 +346,11 @@ func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool, prot
 		must(err)
 		if out.Writes[name] != expected || string(data) != text {
 			t.Fatalf("write %s differs from permission and independent readback", name)
+		}
+	}
+	for name := range probe.Executables {
+		if out.Executables[name] != "denied" {
+			t.Fatalf("state exec %s: %s", name, out.Executables[name])
 		}
 	}
 	for network := range probe.Listeners {
@@ -342,11 +386,16 @@ func nativeRootScopedSeatbelt(t *testing.T, write bool, protectImages bool, prot
 // A fresh writable-root fixture also protects an owner-owned app image and its
 // namespace. Ordinary workspace writes remain allowed. No production activation.
 func TestNativeRootScopedProtectedImages(t *testing.T) {
-	nativeRootScopedSeatbelt(t, true, true, false)
+	nativeRootScopedSeatbelt(t, true, true, false, false)
 }
 
 // Whole app subtree protection covers unpinned resources and their aliases while
 // preserving ordinary sibling writes. No package byte attestation is implied.
 func TestNativeRootScopedProtectedBundle(t *testing.T) {
-	nativeRootScopedSeatbelt(t, true, false, true)
+	nativeRootScopedSeatbelt(t, true, false, true, false)
+}
+
+// The kernel denies access to a qualified state subtree even under a broad writable root.
+func TestNativeRootScopedProtectedState(t *testing.T) {
+	nativeRootScopedSeatbelt(t, true, false, false, true)
 }

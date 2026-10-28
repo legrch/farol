@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -32,16 +33,30 @@ type connectorShellScratch struct {
 }
 
 type connectorShellFactory struct {
-	config   connectorShellConfig
-	lifetime context.Context
-	clock    port.Clock
-	scratch  func(context.Context) (connectorShellScratch, error)
-	prepare  func(context.Context, nativeprocess.Command, nativeprocess.SeatbeltSelection, processsvc.Invocation) (processsvc.Selected, error)
+	config         connectorShellConfig
+	lifetime       context.Context
+	clock          port.Clock
+	protectedState *nativeprocess.ProtectedBundle
+	scratch        func(context.Context) (connectorShellScratch, error)
+	prepare        func(context.Context, nativeprocess.Command, nativeprocess.SeatbeltSelection, processsvc.Invocation) (processsvc.Selected, error)
 }
 
-func newConnectorShellFactory(ctx context.Context, config connectorShellConfig, clock port.Clock) (*connectorShellFactory, error) {
+func validProtectedState(state port.Root) bool {
+	if !validProfilePath(state.Path) {
+		return false
+	}
+	for _, value := range []string{state.Device, state.Inode} {
+		n, err := strconv.ParseUint(value, 10, 64)
+		if err != nil || strconv.FormatUint(n, 10) != value {
+			return false
+		}
+	}
+	return state.Inode != "0"
+}
+
+func newConnectorShellFactory(ctx context.Context, config connectorShellConfig, clock port.Clock, state port.Root) (*connectorShellFactory, error) {
 	if ctx == nil || ctx.Err() != nil || clock == nil || !validIngressID(config.runtimeID) || strings.Contains(config.runtimeID, "/") ||
-		!validProfilePath(config.home) || config.support.ProtectedBundle == nil || config.support.Architecture != "arm64" ||
+		!validProfilePath(config.home) || !validProtectedState(state) || config.support.ProtectedBundle == nil || config.support.Architecture != "arm64" ||
 		config.watchdog.Executable != config.support.Watchdog || config.watchdog.SourceSHA256 != config.support.WatchdogSourceSHA256 ||
 		len(config.watchdog.Source) == 0 || len(config.watchdog.Source) > 64*1024 || !utf8.Valid(config.watchdog.Source) {
 		return nil, connectorProcessRefusal("PROCESS_PREPARATION_UNAVAILABLE")
@@ -62,7 +77,7 @@ func newConnectorShellFactory(ctx context.Context, config connectorShellConfig, 
 	if err != nil {
 		return nil, connectorProcessRefusal("PROCESS_PREPARATION_UNAVAILABLE")
 	}
-	f := &connectorShellFactory{config: config, lifetime: ctx, clock: clock, scratch: newConnectorShellScratch}
+	f := &connectorShellFactory{config: config, lifetime: ctx, clock: clock, protectedState: &nativeprocess.ProtectedBundle{Path: state.Path, Identity: authority.RootIdentity{Device: state.Device, Inode: state.Inode}}, scratch: newConnectorShellScratch}
 	f.prepare = func(ctx context.Context, command nativeprocess.Command, policy nativeprocess.SeatbeltSelection, invocation processsvc.Invocation) (processsvc.Selected, error) {
 		preparer, err := nativeprocess.NewRootScopedSupervisedPreparer(config.runtimeID, command, policy, strategy, config.watchdog, f.lifetime, clock)
 		if err != nil {
@@ -89,7 +104,7 @@ func (f *connectorShellFactory) selectShell(ctx context.Context, lease *executio
 	refuse := func(err error) (processsvc.Prepared, processsvc.ObservationWorkspace, error) {
 		return nil, nil, connectorPreparationFailure(err)
 	}
-	if f == nil || f.clock == nil || f.lifetime == nil || f.scratch == nil || f.prepare == nil || ctx == nil || lease == nil {
+	if f == nil || f.clock == nil || f.lifetime == nil || f.scratch == nil || f.prepare == nil || f.protectedState == nil || ctx == nil || lease == nil {
 		return refuse(nil)
 	}
 	// These are pre-dispatch facts, not guesses about an attempted child effect.
@@ -177,7 +192,7 @@ func (f *connectorShellFactory) selectShell(ctx context.Context, lease *executio
 		MechanismSHA256: f.config.support.Mechanism.SHA256, Executables: slices.Clone(f.config.support.Executables),
 		ProtectedImages:     []nativeprocess.ExecutablePin{f.config.support.Backend, f.config.support.Watchdog},
 		GitRuntimeResources: f.config.support.GitRuntimeResources, ProtectedBundle: f.config.support.ProtectedBundle, Network: authority.NoNetwork, Git: nativeprocess.RootScopedGit,
-		UserGitSettings: workspace.GitHistoryApproved, HostRuntime: hostRuntime}
+		UserGitSettings: workspace.GitHistoryApproved, HostRuntime: hostRuntime, ProtectedState: f.protectedState}
 	invocation := processsvc.Invocation{RuntimeID: f.config.runtimeID, SessionID: lease.Binding().SessionID, ModelID: "chatgpt",
 		AdmissionID: snapshot.Participant.Grant.AuthorityID, Arguments: []string{"--noprofile", "--norc", "-c", request.Command}, Input: []byte(request.Stdin)}
 	selected, err := f.prepare(preparation, command, policy, invocation)

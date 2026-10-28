@@ -181,7 +181,16 @@ func TestNativeFreshShellChild(t *testing.T) {
 	if _, err := nativeprocess.NewRootScopedPlatformStrategy(context.Background(), support, accessrepo.Clock{}); err != nil {
 		t.Fatal("native platform facts refused before any Shell admission", err)
 	}
-	if _, err := newConnectorShellFactory(context.Background(), *f.Launch.shell, accessrepo.Clock{}); err != nil {
+	q, err := QualifyProfile(f.Launch.Profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	computer, _, err := q.Roots()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = q.Close()
+	if _, err := newConnectorShellFactory(context.Background(), *f.Launch.shell, accessrepo.Clock{}, protectedComputerRoot(computer)); err != nil {
 		t.Fatal("native Shell factory preflight refused before dispatch", err)
 	}
 

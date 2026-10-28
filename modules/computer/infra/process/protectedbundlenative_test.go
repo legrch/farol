@@ -145,3 +145,54 @@ func TestProtectedBundleNativeInvalidIdentityAndPartialCapture(t *testing.T) {
 		t.Fatal("wrong bundle inode admitted")
 	}
 }
+
+// State is private and stays bound to its retained identity across preparation.
+// These are descriptor tests; no process is launched.
+func TestProtectedStateNativeRetainedDirectoryReplacement(t *testing.T) {
+	for _, mode := range []string{"current", "replacement", "mode-drift", "initial-public"} {
+		t.Run(mode, func(t *testing.T) {
+			command, launch := nativeBundleFixture(t)
+			launch.protectedState, launch.protectedBundle = launch.protectedBundle, nil
+			state := *launch.protectedState
+			if err := os.Chmod(state.Path, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "initial-public" {
+				if err := os.Chmod(state.Path, 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			measurement, err := retainLaunch(context.Background(), command, launch)
+			if mode == "initial-public" {
+				if err == nil || measurement != nil {
+					if measurement != nil {
+						measurement.Close()
+					}
+					t.Fatal("nonprivate state admitted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer measurement.Close()
+			switch mode {
+			case "replacement":
+				if err := os.Rename(state.Path, state.Path+"-old"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(state.Path, 0700); err != nil {
+					t.Fatal(err)
+				}
+			case "mode-drift":
+				if err := os.Chmod(state.Path, 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err = measurement.Recheck(context.Background())
+			if (err == nil) != (mode == "current") {
+				t.Fatal("incorrect state recheck", mode, err)
+			}
+		})
+	}
+}

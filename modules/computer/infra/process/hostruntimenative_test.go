@@ -4,6 +4,7 @@ package process
 
 import (
 	"context"
+	"github.com/legrch/farol/modules/computer/domain/authority"
 	"os"
 	"path/filepath"
 	"testing"
@@ -141,6 +142,8 @@ func TestNativeHostRuntimeProfileFitsOriginalCommandBudget(t *testing.T) {
 	}
 	s, command := rootScopedFixture(t)
 	s.HostRuntime = p
+	s.ProtectedBundle = &ProtectedBundle{Path: "/Users/owner/Applications/Farol.app", Identity: authority.RootIdentity{Device: "1", Inode: "42"}}
+	s.ProtectedState = &ProtectedBundle{Path: "/Users/owner/Library/Application Support/io.github.legrch.farol/go-core/computer", Identity: authority.RootIdentity{Device: "1", Inode: "43"}}
 	command.Environment = seatbeltEnvironment(s, command.Write)
 	plan, err := compileSeatbelt(s, command)
 	if err != nil {

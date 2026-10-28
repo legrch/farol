@@ -222,7 +222,7 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 		if launch.shell != nil {
 			// Unsupported or changed native support withholds only Shell. The
 			// established file Computer keeps its own independently valid route.
-			factory, shellErr := newConnectorShellFactory(lifetime, *launch.shell, accessrepo.Clock{})
+			factory, shellErr := newConnectorShellFactory(lifetime, *launch.shell, accessrepo.Clock{}, protectedComputerRoot(computer))
 			if shellErr == nil {
 				runtime.connector.processes = factory.selectShell
 			}
