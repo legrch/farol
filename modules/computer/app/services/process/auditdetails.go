@@ -1,16 +1,14 @@
 package process
 
-import "github.com/legrch/farol/modules/computer/app/services/output"
-
 // ProjectTerminalDetails accepts only the original validated terminal result.
 // The caller supplies a command filtered before it entered any audit queue or store.
 // A missing filter is deliberately unavailable, never an unfiltered fallback.
-func ProjectTerminalDetails(result TerminalResult, command output.Command, filter output.ScalarFilter) (output.Details, bool) {
+func ProjectTerminalDetails(result TerminalResult, command AuditCommand, filter AuditScalarFilter) (AuditDetails, bool) {
 	if !ValidTerminalResult(result) {
-		return output.Details{}, false
+		return AuditDetails{}, false
 	}
 	o := result.Observation
-	return output.ProjectWithCommand(output.Input{
+	return ProjectAuditWithCommand(AuditInput{
 		Stdout: o.Stdout, Stderr: o.Stderr,
 		OutputDrained: o.OutputDrained, OutputLimited: o.OutputLimitReached,
 		StdoutOffset: o.StdoutOffset, StderrOffset: o.StderrOffset,

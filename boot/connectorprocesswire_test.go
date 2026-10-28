@@ -9,7 +9,6 @@ import (
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	"github.com/legrch/farol/modules/computer/app/services/execution"
-	"github.com/legrch/farol/modules/computer/app/services/output"
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	processct "github.com/legrch/farol/modules/computer/contracts/process"
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -120,7 +119,7 @@ func TestConnectorProcessWireNormalStartupDoesNotAdvertiseUnqualifiedShell(t *te
 func TestConnectorProcessWireRetainsOnlyPreFilteredAuditCommand(t *testing.T) {
 	for _, test := range []struct {
 		name        string
-		filter      output.ScalarFilter
+		filter      processsvc.AuditScalarFilter
 		state, text string
 	}{
 		{"unavailable", nil, "unavailable", ""},
@@ -141,7 +140,7 @@ func TestConnectorProcessWireRetainsOnlyPreFilteredAuditCommand(t *testing.T) {
 			s.mutations.mu.Lock()
 			command := s.mutations.operations["wire-process"].process.auditCommand
 			s.mutations.mu.Unlock()
-			details := output.ProjectWithCommand(output.Input{}, command, test.filter)
+			details := processsvc.ProjectAuditWithCommand(processsvc.AuditInput{}, command, test.filter)
 			encoded, err := json.Marshal(details)
 			if err != nil || details.Command.State != test.state || details.Command.Text != test.text || strings.Contains(string(encoded), "PRIVATE-") {
 				t.Fatal("unfiltered input escaped into audit data")

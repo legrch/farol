@@ -1,4 +1,4 @@
-package output
+package process
 
 import (
 	"encoding/json"
@@ -9,8 +9,8 @@ import (
 )
 
 func identity(value string) (string, error) { return value, nil }
-func complete(command, stdout, stderr string) Input {
-	return Input{Command: command, Stdout: []byte(stdout), Stderr: []byte(stderr), OutputDrained: true, StdoutNext: uint64(len(stdout)), StdoutBytes: uint64(len(stdout)), StderrNext: uint64(len(stderr)), StderrBytes: uint64(len(stderr))}
+func complete(command, stdout, stderr string) AuditInput {
+	return AuditInput{Command: command, Stdout: []byte(stdout), Stderr: []byte(stderr), OutputDrained: true, StdoutNext: uint64(len(stdout)), StdoutBytes: uint64(len(stdout)), StderrNext: uint64(len(stderr)), StderrBytes: uint64(len(stderr))}
 }
 
 func TestProjectionSyntheticCorpus(t *testing.T) {
@@ -45,7 +45,7 @@ func TestProjectionSyntheticCorpus(t *testing.T) {
 		{"too-large", strings.Repeat("x", sourceLimit+1), "withheld", ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got := Project(complete("git status", test.value, ""), identity).Stdout
+			got := ProjectAudit(complete("git status", test.value, ""), identity).Stdout
 			if got.State != test.state || got.Text != test.want || strings.Contains(got.Text, "FAKE_SECRET") {
 				t.Fatalf("unexpected filtered projection: %#v", got)
 			}
@@ -56,25 +56,25 @@ func TestProjectionSyntheticCorpus(t *testing.T) {
 func TestProjectionNeverExposesIncompleteOrInlineInputs(t *testing.T) {
 	in := complete("cat <<EOF\nFAKE_SECRET\nEOF", "partial", "error")
 	in.OutputLimited = true
-	got := Project(in, identity)
+	got := ProjectAudit(in, identity)
 	if got.Command.State != "withheld" || got.Command.Text != "" || got.Stdout.State != "unavailable" || got.Stdout.Text != "" || got.Stderr.Text != "" {
 		t.Fatal("incomplete input escaped")
 	}
 	in = complete("pwd", "text", "")
 	in.StdoutNext--
-	if out := Project(in, identity).Stdout; out.State != "unavailable" || out.Text != "" {
+	if out := ProjectAudit(in, identity).Stdout; out.State != "unavailable" || out.Text != "" {
 		t.Fatal("invalid offsets escaped")
 	}
 }
 
 func TestProjectionFiltersBeforeValidUTF8Truncation(t *testing.T) {
 	in := complete("git status", strings.Repeat("a", excerptLimit-1)+"é"+"\npassword=FAKE_SECRET", "")
-	got := Project(in, identity).Stdout
+	got := ProjectAudit(in, identity).Stdout
 	if got.Text != "[REDACTED]" || strings.Contains(got.Text, "FAKE_SECRET") {
 		t.Fatal("secret beyond excerpt boundary escaped filtering")
 	}
 	in = complete("git status", strings.Repeat("a", excerptLimit-1)+"é", "")
-	got = Project(in, identity).Stdout
+	got = ProjectAudit(in, identity).Stdout
 	if got.State != "filtered-truncated" || !utf8.ValidString(got.Text) || len(got.Text) > excerptLimit {
 		t.Fatal("invalid truncated text")
 	}
@@ -82,8 +82,8 @@ func TestProjectionFiltersBeforeValidUTF8Truncation(t *testing.T) {
 
 func TestProjectionFilterFailureNeverReturnsInput(t *testing.T) {
 	in := complete("git status", "example", "")
-	for _, filter := range []ScalarFilter{nil, func(string) (string, error) { return "private error", errors.New("private error") }, func(string) (string, error) { panic("private panic") }} {
-		got := Project(in, filter)
+	for _, filter := range []AuditScalarFilter{nil, func(string) (string, error) { return "private error", errors.New("private error") }, func(string) (string, error) { panic("private panic") }} {
+		got := ProjectAudit(in, filter)
 		encoded, err := json.Marshal(got)
 		if err != nil || got.Stdout.State != "unavailable" || strings.Contains(string(encoded), "example") || strings.Contains(string(encoded), "private") {
 			t.Fatal("failure exposed data")
@@ -93,7 +93,7 @@ func TestProjectionFilterFailureNeverReturnsInput(t *testing.T) {
 
 func TestProjectionBoundsEncodedEntry(t *testing.T) {
 	in := complete(strings.Repeat("\"", excerptLimit), strings.Repeat("\"", excerptLimit), strings.Repeat("\"", excerptLimit))
-	got := Project(in, identity)
+	got := ProjectAudit(in, identity)
 	encoded, err := json.Marshal(got)
 	if err != nil || len(encoded) > entryLimit {
 		t.Fatal("encoded entry exceeded limit")
@@ -103,7 +103,7 @@ func TestProjectionBoundsEncodedEntry(t *testing.T) {
 func TestProjectionBoundsEncodedEntryWhenOutputIsIncomplete(t *testing.T) {
 	in := complete(strings.Repeat("&", excerptLimit), "partial", "")
 	in.OutputLimited = true
-	got := Project(in, identity)
+	got := ProjectAudit(in, identity)
 	encoded, err := json.Marshal(got)
 	if err != nil || len(encoded) > entryLimit || got.Command.State != "withheld" || got.Command.Reason != "entry_limit" || got.Stdout.Reason != "source_incomplete" || got.Stderr.Reason != "source_incomplete" {
 		t.Fatal("incomplete capture exceeded encoded entry limit")
@@ -111,14 +111,14 @@ func TestProjectionBoundsEncodedEntryWhenOutputIsIncomplete(t *testing.T) {
 }
 
 func TestCommandIsFilteredBeforeRetainedAndRawInputIsIgnored(t *testing.T) {
-	command := ProjectCommand("git --password=FAKE_SECRET", identity)
+	command := ProjectAuditCommand("git --password=FAKE_SECRET", identity)
 	in := complete("raw FAKE_SECRET", "ordinary output", "")
-	got := ProjectWithCommand(in, command, identity)
+	got := ProjectAuditWithCommand(in, command, identity)
 	encoded, err := json.Marshal(got)
 	if err != nil || strings.Contains(string(encoded), "FAKE_SECRET") || got.Command.Text != "[REDACTED]" || got.Stdout.Text != "ordinary output" {
 		t.Fatal("command was not filtered before retention")
 	}
-	got = ProjectWithCommand(in, Command{}, identity)
+	got = ProjectAuditWithCommand(in, AuditCommand{}, identity)
 	if got.Command.State != "unavailable" || got.Command.Text != "" {
 		t.Fatal("zero command exposed unfiltered input")
 	}

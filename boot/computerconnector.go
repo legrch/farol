@@ -14,7 +14,7 @@ import (
 	"github.com/legrch/farol/modules/computer/app/port"
 	connectorsvc "github.com/legrch/farol/modules/computer/app/services/connector"
 	"github.com/legrch/farol/modules/computer/app/services/execution"
-	"github.com/legrch/farol/modules/computer/app/services/output"
+	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	"github.com/legrch/farol/pkg/ipc"
 	"github.com/legrch/farol/transport/desktop"
@@ -49,7 +49,7 @@ type computerConnector struct {
 	mutations *SettingsMutationIngress
 	processes connectorShellSelection
 	// Selected by trusted composition only; nil makes audit text unavailable.
-	auditFilter output.ScalarFilter
+	auditFilter processsvc.AuditScalarFilter
 	auditSlots  chan struct{}
 	codexRead   *connectorCodexRead
 	current     *connectorSlot

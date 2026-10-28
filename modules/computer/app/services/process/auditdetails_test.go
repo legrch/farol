@@ -4,15 +4,13 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-
-	"github.com/legrch/farol/modules/computer/app/services/output"
 )
 
 func TestProjectTerminalDetailsUsesCompleteValidatedOriginal(t *testing.T) {
 	result, _, _, _, _ := retainedFixture([]byte("git status clean"), []byte("password=example-secret"))
 	result.Observation.OutputLimitReached = false
 	filter := func(s string) (string, error) { return s, nil }
-	details, ok := ProjectTerminalDetails(result, output.ProjectCommand("git status --short", filter), filter)
+	details, ok := ProjectTerminalDetails(result, ProjectAuditCommand("git status --short", filter), filter)
 	if !ok || details.Command.Text != "git status --short" || details.Stdout.Text != "git status clean" || details.Stderr.Text != "[REDACTED]" {
 		t.Fatalf("unexpected projection: %+v, valid=%v", details, ok)
 	}
@@ -25,17 +23,17 @@ func TestProjectTerminalDetailsUsesCompleteValidatedOriginal(t *testing.T) {
 func TestProjectTerminalDetailsWithholdsTruncatedAndUnavailable(t *testing.T) {
 	result, _, _, _, _ := retainedFixture([]byte("partial output"), nil)
 	filter := func(s string) (string, error) { return s, nil }
-	details, ok := ProjectTerminalDetails(result, output.ProjectCommand("pwd", filter), filter)
+	details, ok := ProjectTerminalDetails(result, ProjectAuditCommand("pwd", filter), filter)
 	if !ok || details.Stdout.State != "unavailable" || details.Stdout.Text != "" || details.Stderr.State != "unavailable" {
 		t.Fatal("limited capture exposed a partial stream")
 	}
 	result.Observation.OutputLimitReached = false
-	details, ok = ProjectTerminalDetails(result, output.ProjectCommand("pwd", nil), nil)
+	details, ok = ProjectTerminalDetails(result, ProjectAuditCommand("pwd", nil), nil)
 	if !ok || details.Command.State != "unavailable" || details.Stdout.State != "unavailable" || details.Stdout.Text != "" {
 		t.Fatal("missing filter exposed data")
 	}
 	result.Observation.StdoutNext++
-	if _, ok = ProjectTerminalDetails(result, output.Command{}, nil); ok {
+	if _, ok = ProjectTerminalDetails(result, AuditCommand{}, nil); ok {
 		t.Fatal("invalid terminal observation accepted")
 	}
 }

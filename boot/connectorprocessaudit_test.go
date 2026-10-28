@@ -9,7 +9,7 @@ import (
 	"time"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
-	"github.com/legrch/farol/modules/computer/app/services/output"
+	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	"github.com/legrch/farol/transport/desktop"
 )
 
@@ -91,7 +91,7 @@ func TestProcessAuditProjectsOriginalDetailsOnce(t *testing.T) {
 	s.mutations.dependencies.repository = publisher
 	calls := 0
 	s.auditFilter = func(value string) (string, error) { calls++; return value, nil }
-	command := output.ProjectCommand("git status", s.auditFilter)
+	command := processsvc.ProjectAuditCommand("git status", s.auditFilter)
 	start, err := s.startProcessWithAudit(context.Background(), s.current, "audit-process", "call", child.selectLaunch, command)
 	if err != nil || start == nil {
 		t.Fatal("process did not start")
@@ -171,7 +171,7 @@ func TestAuditHostMethodNeverTransportsRawProcessSecrets(t *testing.T) {
 		if filterAvailable {
 			s.auditFilter = func(value string) (string, error) { return value, nil }
 		}
-		command := output.ProjectCommand("password=PRIVATE-COMMAND", s.auditFilter)
+		command := processsvc.ProjectAuditCommand("password=PRIVATE-COMMAND", s.auditFilter)
 		start, err := s.startProcessWithAudit(context.Background(), s.current, "secret-audit", "call", child.selectLaunch, command)
 		if err != nil || start == nil {
 			t.Fatal("process did not start")

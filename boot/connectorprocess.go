@@ -8,7 +8,6 @@ import (
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/app/services/execution"
-	"github.com/legrch/farol/modules/computer/app/services/output"
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	processct "github.com/legrch/farol/modules/computer/contracts/process"
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -46,12 +45,12 @@ type connectorProcessOperation struct {
 	cancelDone       chan struct{}
 	collectionDone   chan struct{}
 	collectionErr    error
-	auditCommand     output.Command
+	auditCommand     processsvc.AuditCommand
 	auditOnce        sync.Once
 	auditDone        chan struct{}
 	auditMu          sync.Mutex
 	auditFinal       bool
-	auditDetails     output.Details
+	auditDetails     processsvc.AuditDetails
 	auditAvailable   bool
 }
 
@@ -127,10 +126,10 @@ func (s *computerConnector) processSlot(slot *connectorSlot) bool {
 // composition method is shared by the optional wire adapter; startup without
 // qualified native support supplies no process producer.
 func (s *computerConnector) startProcess(ctx context.Context, slot *connectorSlot, operation, call string, selectLaunch connectorProcessSelection) (*processct.StartResponse, error) {
-	return s.startProcessWithAudit(ctx, slot, operation, call, selectLaunch, output.Command{})
+	return s.startProcessWithAudit(ctx, slot, operation, call, selectLaunch, processsvc.AuditCommand{})
 }
 
-func (s *computerConnector) startProcessWithAudit(ctx context.Context, slot *connectorSlot, operation, call string, selectLaunch connectorProcessSelection, command output.Command) (*processct.StartResponse, error) {
+func (s *computerConnector) startProcessWithAudit(ctx context.Context, slot *connectorSlot, operation, call string, selectLaunch connectorProcessSelection, command processsvc.AuditCommand) (*processct.StartResponse, error) {
 	if !s.processSlot(slot) || ctx == nil || ctx.Err() != nil || !validIngressID(operation) || !validIngressID(call) || selectLaunch == nil {
 		return nil, connectorProcessRefusal("PROCESS_INPUT_INVALID")
 	}

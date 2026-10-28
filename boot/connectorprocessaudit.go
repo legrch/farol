@@ -6,7 +6,6 @@ import (
 	"time"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
-	"github.com/legrch/farol/modules/computer/app/services/output"
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	"github.com/legrch/farol/pkg/ipc"
 	"github.com/legrch/farol/transport/desktop"
@@ -15,20 +14,20 @@ import (
 // Audit is best effort: a slow filter must not hold a process start or Quit.
 // Worker capacity is shared with terminal projection and remains bounded even
 // if a defective filter never returns.
-func (s *computerConnector) auditCommandProjection(ctx context.Context, value string) output.Command {
+func (s *computerConnector) auditCommandProjection(ctx context.Context, value string) processsvc.AuditCommand {
 	filter := s.auditFilter
 	if filter == nil {
-		return output.ProjectCommand(value, nil)
+		return processsvc.ProjectAuditCommand(value, nil)
 	}
 	select {
 	case s.auditSlots <- struct{}{}:
 	default:
-		return output.Command{}
+		return processsvc.AuditCommand{}
 	}
-	done := make(chan output.Command, 1)
+	done := make(chan processsvc.AuditCommand, 1)
 	go func() {
 		defer func() { <-s.auditSlots }()
-		done <- output.ProjectCommand(value, filter)
+		done <- processsvc.ProjectAuditCommand(value, filter)
 	}()
 	timer := time.NewTimer(100 * time.Millisecond)
 	defer timer.Stop()
@@ -36,9 +35,9 @@ func (s *computerConnector) auditCommandProjection(ctx context.Context, value st
 	case command := <-done:
 		return command
 	case <-ctx.Done():
-		return output.Command{}
+		return processsvc.AuditCommand{}
 	case <-timer.C:
-		return output.Command{}
+		return processsvc.AuditCommand{}
 	}
 }
 
@@ -65,21 +64,21 @@ func (s *computerConnector) processTerminalAudit(operation, build, runtime strin
 // Details are projected once from the immutable original retained result. The
 // potentially expensive filter runs without an owner lock and is never an
 // execution or publication prerequisite.
-func (s *computerConnector) processTerminalAuditDetails(ctx context.Context, operation, build, runtime string) (output.Details, bool) {
+func (s *computerConnector) processTerminalAuditDetails(ctx context.Context, operation, build, runtime string) (processsvc.AuditDetails, bool) {
 	if s == nil || s.mutations == nil || ctx == nil || ctx.Err() != nil || !validIngressID(operation) || !validIngressID(build) || !validIngressID(runtime) {
-		return output.Details{}, false
+		return processsvc.AuditDetails{}, false
 	}
 	s.mutations.mu.Lock()
 	record := s.mutations.operations[operation]
 	if record == nil || record.process == nil || record.process.publication == "" || record.process.result == nil {
 		s.mutations.mu.Unlock()
-		return output.Details{}, false
+		return processsvc.AuditDetails{}, false
 	}
 	p := record.process
 	result := p.result
 	if result.Scope != p.origin || result.Intent.OperationID != operation || result.Scope.Host.BuildID != build || result.Scope.Host.RuntimeID != runtime {
 		s.mutations.mu.Unlock()
-		return output.Details{}, false
+		return processsvc.AuditDetails{}, false
 	}
 	s.mutations.mu.Unlock()
 	p.auditOnce.Do(func() {
@@ -122,7 +121,7 @@ func (s *computerConnector) processTerminalAuditDetails(ctx context.Context, ope
 		p.auditMu.Lock()
 		p.auditFinal = true
 		p.auditMu.Unlock()
-		return output.Details{}, false
+		return processsvc.AuditDetails{}, false
 	case <-timer.C:
 		p.auditMu.Lock()
 		if !p.auditFinal {
@@ -134,7 +133,7 @@ func (s *computerConnector) processTerminalAuditDetails(ctx context.Context, ope
 	}
 }
 
-func auditExcerptWire(value output.Excerpt) wire.ComputerProcessAuditExcerpt {
+func auditExcerptWire(value processsvc.AuditExcerpt) wire.ComputerProcessAuditExcerpt {
 	result := wire.ComputerProcessAuditExcerpt{State: value.State}
 	if value.Reason != "" {
 		result.Reason = &value.Reason

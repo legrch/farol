@@ -1,6 +1,6 @@
-// Package output projects complete, bounded execution text for local Activity.
+// Process audit filtering projects complete, bounded execution text for local Activity.
 // It is not a guarantee that every unknown secret or personal value is detected.
-package output
+package process
 
 import (
 	"encoding/json"
@@ -14,32 +14,32 @@ const sourceLimit = 64 * 1024
 const excerptLimit = 2 * 1024
 const entryLimit = 12 * 1024
 
-type ScalarFilter func(string) (string, error)
-type Input struct {
+type AuditScalarFilter func(string) (string, error)
+type AuditInput struct {
 	Command                                                                      string
 	Stdout, Stderr                                                               []byte
 	OutputDrained, OutputLimited                                                 bool
 	StdoutOffset, StderrOffset, StdoutNext, StderrNext, StdoutBytes, StderrBytes uint64
 }
-type Excerpt struct {
+type AuditExcerpt struct {
 	State  string `json:"state"`
 	Reason string `json:"reason,omitempty"`
 	Text   string `json:"text,omitempty"`
 }
-type Details struct {
-	Command Excerpt `json:"command"`
-	Stdout  Excerpt `json:"stdout"`
-	Stderr  Excerpt `json:"stderr"`
+type AuditDetails struct {
+	Command AuditExcerpt `json:"command"`
+	Stdout  AuditExcerpt `json:"stdout"`
+	Stderr  AuditExcerpt `json:"stderr"`
 }
 
-// Command holds only an already projected excerpt, never the original input.
+// AuditCommand holds only an already projected excerpt, never the original input.
 // Its zero value represents unavailable data rather than an unfiltered command.
-type Command struct{ excerpt Excerpt }
+type AuditCommand struct{ excerpt AuditExcerpt }
 
-// ProjectCommand runs while the original request is available. Retaining the
+// ProjectAuditCommand runs while the original request is available. Retaining the
 // result does not retain command input, stdin or environment values.
-func ProjectCommand(value string, filter ScalarFilter) Command {
-	return Command{excerpt: cleanText(value, true, filter)}
+func ProjectAuditCommand(value string, filter AuditScalarFilter) AuditCommand {
+	return AuditCommand{excerpt: cleanText(value, true, filter)}
 }
 
 // Conservative whole-field masking retains ordinary diagnostic output while
@@ -85,9 +85,9 @@ func hasOpaqueEncoding(value string) bool {
 	return false
 }
 
-func empty(state, reason string) Excerpt { return Excerpt{State: state, Reason: reason} }
+func empty(state, reason string) AuditExcerpt { return AuditExcerpt{State: state, Reason: reason} }
 
-func cleanText(value string, command bool, filter ScalarFilter) (out Excerpt) {
+func cleanText(value string, command bool, filter AuditScalarFilter) (out AuditExcerpt) {
 	defer func() {
 		if recover() != nil {
 			out = empty("unavailable", "filter_failed")
@@ -123,41 +123,41 @@ func cleanText(value string, command bool, filter ScalarFilter) (out Excerpt) {
 		}
 	}
 	if len(filtered) <= excerptLimit {
-		return Excerpt{State: "filtered", Text: filtered}
+		return AuditExcerpt{State: "filtered", Text: filtered}
 	}
 	end := excerptLimit
 	for end > 0 && !utf8.ValidString(filtered[:end]) {
 		end--
 	}
-	return Excerpt{State: "filtered-truncated", Text: filtered[:end]}
+	return AuditExcerpt{State: "filtered-truncated", Text: filtered[:end]}
 }
 
-func cleanBytes(value []byte, filter ScalarFilter) Excerpt {
+func cleanBytes(value []byte, filter AuditScalarFilter) AuditExcerpt {
 	if len(value) > sourceLimit {
 		return empty("withheld", "source_too_large")
 	}
 	return cleanText(string(value), false, filter)
 }
 
-// Project must receive reassembled original streams, not independent read pages.
+// ProjectAudit must receive reassembled original streams, not independent read pages.
 // Unknown or incomplete capture never exposes a prefix or fallback error text.
-func Project(in Input, filter ScalarFilter) Details {
-	return ProjectWithCommand(in, ProjectCommand(in.Command, filter), filter)
+func ProjectAudit(in AuditInput, filter AuditScalarFilter) AuditDetails {
+	return ProjectAuditWithCommand(in, ProjectAuditCommand(in.Command, filter), filter)
 }
 
-// ProjectWithCommand combines a pre-filtered command with complete terminal
-// streams. It deliberately ignores Input.Command so raw input need not survive
+// ProjectAuditWithCommand combines a pre-filtered command with complete terminal
+// streams. It deliberately ignores AuditInput.Command so raw input need not survive
 // until the process exits.
-func ProjectWithCommand(in Input, command Command, filter ScalarFilter) Details {
+func ProjectAuditWithCommand(in AuditInput, command AuditCommand, filter AuditScalarFilter) AuditDetails {
 	commandExcerpt := command.excerpt
 	if commandExcerpt.State == "" {
 		commandExcerpt = empty("unavailable", "filter_unavailable")
 	}
-	var details Details
+	var details AuditDetails
 	if !in.OutputDrained || in.OutputLimited || in.StdoutOffset != 0 || in.StderrOffset != 0 || in.StdoutNext != uint64(len(in.Stdout)) || in.StderrNext != uint64(len(in.Stderr)) || in.StdoutBytes != in.StdoutNext || in.StderrBytes != in.StderrNext {
-		details = Details{Command: commandExcerpt, Stdout: empty("unavailable", "source_incomplete"), Stderr: empty("unavailable", "source_incomplete")}
+		details = AuditDetails{Command: commandExcerpt, Stdout: empty("unavailable", "source_incomplete"), Stderr: empty("unavailable", "source_incomplete")}
 	} else {
-		details = Details{Command: commandExcerpt, Stdout: cleanBytes(in.Stdout, filter), Stderr: cleanBytes(in.Stderr, filter)}
+		details = AuditDetails{Command: commandExcerpt, Stdout: cleanBytes(in.Stdout, filter), Stderr: cleanBytes(in.Stderr, filter)}
 	}
 	if encoded, err := json.Marshal(details); err != nil || len(encoded) > entryLimit {
 		if details.Stdout.State == "filtered" || details.Stdout.State == "filtered-truncated" {
