@@ -20,6 +20,9 @@ import {
 } from "../../src/apps/desktop/product-configuration.ts";
 import { PrivateMcpLifecycle } from "../../src/modules/computer/infra/mcp/private-mcp-lifecycle.ts";
 import type { BuildIdentity } from "../../src/pkg/build-info/identity.ts";
+import { OperationsStore } from "../../apps/desktop/operations/store.ts";
+import { operationsDirectoryFromLifecycleRoot } from "../../apps/desktop/operations/paths.ts";
+import { ProcessAuditCollector } from "../../apps/desktop/operations/process-audit-collector.ts";
 
 import { createOrdinaryGitEnvironment } from "../fixtures/ordinary-git-environment.mjs";
 import {
@@ -470,6 +473,48 @@ export async function run(input: {
           report: input.report,
           checkpoint: () => diagnostics.checkpoint("git-shell-progress"),
         });
+        await diagnostics.stage(
+          "go-process-audit",
+          BUDGETS.request,
+          "PROCESS_AUDIT_WITNESS_FAILED",
+          async () => {
+            const operationId = object(input.report.gitShell).operationId;
+            assert.equal(typeof operationId, "string");
+            const store = new OperationsStore(
+              operationsDirectoryFromLifecycleRoot(lifecycleRoot),
+            );
+            try {
+              const collector = new ProcessAuditCollector(store);
+              const deadline = Date.now() + 12000;
+              let observed = false;
+              while (Date.now() < deadline && !observed) {
+                const snapshot = await store.snapshot(5000);
+                collector.observe(
+                  snapshot,
+                  host!.processAudit,
+                  () => !hostClosed,
+                );
+                observed = snapshot.entries.some(
+                  (entry) =>
+                    "schema" in entry &&
+                    entry.kind === "computer.process.terminal" &&
+                    entry.operationRef?.operationId === operationId &&
+                    entry.exit?.kind === "code" &&
+                    entry.exit.value === 0,
+                );
+                if (!observed)
+                  await new Promise((resolve) => setTimeout(resolve, 250));
+              }
+              assert.ok(observed, "original terminal fact was not recorded");
+              observations.push({
+                stage: "original-process-terminal-in-activity",
+                operationId,
+              });
+            } finally {
+              assert.equal(await store.shutdown(5000), true);
+            }
+          },
+        );
         await runShellControlJourney({
           peer,
           workspaceId: gitWorkspaceId,
