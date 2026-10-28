@@ -79,7 +79,12 @@ export async function run(input: {
   const home = gitFixture?.home ?? path.join(temporary, "home"),
     stateRoot = path.join(temporary, "state"),
     workspace = path.join(temporary, "workspace"),
-    lifecycleRoot = path.join(temporary, "connector");
+    lifecycleRoot = path.join(
+      temporary,
+      "farol-private",
+      "secure-mcp-connector",
+      "computer-authority",
+    );
   for (const root of [home, stateRoot, workspace, lifecycleRoot])
     await fs.mkdir(root, { mode: 0o700, recursive: true });
   const initialRoot = await fs.lstat(temporary, { bigint: true });
@@ -513,20 +518,21 @@ export async function run(input: {
                     terminal.operationRef?.backendGeneration,
                     context.backendGeneration,
                   );
-                  assert.deepEqual(terminal.auditDetails, {
-                    command: {
-                      state: "unavailable",
-                      reason: "filter_unavailable",
-                    },
-                    stdout: {
-                      state: "unavailable",
-                      reason: "filter_unavailable",
-                    },
-                    stderr: {
-                      state: "unavailable",
-                      reason: "filter_unavailable",
-                    },
-                  });
+                  assert.equal(
+                    terminal.auditDetails?.command.state,
+                    "filtered",
+                  );
+                  assert.match(
+                    terminal.auditDetails.command.text ?? "",
+                    /git commit/u,
+                  );
+                  assert.equal(terminal.auditDetails.stdout.state, "filtered");
+                  assert.equal(
+                    terminal.auditDetails.stdout.text,
+                    `git-shell-accepted=${object(input.report.gitShell).commit}\n`,
+                  );
+                  assert.equal(terminal.auditDetails.stderr.state, "filtered");
+                  assert.equal(terminal.auditDetails.stderr.text ?? "", "");
                   observed = true;
                 }
                 if (!observed)
