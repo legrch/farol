@@ -95,3 +95,12 @@ type MutationReceipt struct {
 type MutableWorkspace interface {
 	Mutate(context.Context, MutationRequest) (*MutationReceipt, error)
 }
+
+// StagedMutableWorkspace is a private Scratch-only execution port. The
+// implementation calls finish exactly once, synchronously, after its native
+// owner has closed and rechecked its pinned resources, while its stage gate
+// still prevents conflicting process admission. An error or missing callback
+// cannot authorize replay. Existing journal records never enter this port.
+type StagedMutableWorkspace interface {
+	MutateAndFinish(context.Context, MutationRequest, func(*MutationReceipt, error) error) error
+}

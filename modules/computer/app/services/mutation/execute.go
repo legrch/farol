@@ -3,6 +3,7 @@ package mutation
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -126,13 +127,75 @@ func (s *Service) executeBound(ctx context.Context, binding state.Binding, op st
 		_, err := s.current(ctx, binding.WorkspaceID, op.Path(), &descriptor, nil)
 		return err
 	}
+	request := port.MutationRequest{Workspace: descriptor, Operation: op.Clone(), BeforePublish: errGuard,
+		WithPublication: func(ctx context.Context, publish func() error) error {
+			_, err := s.current(ctx, binding.WorkspaceID, op.Path(), &descriptor, publish)
+			return err
+		}}
 	if err = errGuard(ctx); err == nil {
-		native, err = s.native.Mutate(ctx, port.MutationRequest{Workspace: descriptor, Operation: op.Clone(), BeforePublish: errGuard,
-			WithPublication: func(ctx context.Context, publish func() error) error {
-				_, err := s.current(ctx, binding.WorkspaceID, op.Path(), &descriptor, publish)
-				return err
-			}})
+		if _, scratch := op.(state.Scratch); scratch {
+			terminal, publication, finalErr := s.stagedNative(ctx, op, record, request)
+			return finish(terminal, publication, finalErr)
+		}
+		native, err = s.native.Mutate(ctx, request)
 	}
+	terminal, publication, err := s.terminalNative(ctx, op, record, native, err)
+	return finish(terminal, publication, err)
+}
+
+// stagedNative keeps the single terminal save inside the stage lifetime. A
+// missing, duplicate, late or contradictory callback never starts another
+// native attempt or overwrites the original terminal result.
+func (s *Service) stagedNative(ctx context.Context, op state.Operation, record state.State, request port.MutationRequest) (*state.State, string, error) {
+	stage, ok := s.native.(port.StagedMutableWorkspace)
+	if !ok {
+		return nil, "", unknown("native-workspace")
+	}
+	var mu sync.Mutex
+	var terminal *state.State
+	var publication string
+	var finalErr error
+	called, closed, duplicate, finished := false, false, false, false
+	done := make(chan struct{})
+	finish := func(receipt *port.MutationReceipt, nativeErr error) error {
+		mu.Lock()
+		if closed || called {
+			duplicate = true
+			mu.Unlock()
+			return unknown("native-workspace")
+		}
+		called = true
+		mu.Unlock()
+		result, outcome, err := s.terminalNative(ctx, op, record, receipt, nativeErr)
+		mu.Lock()
+		terminal, publication, finalErr, finished = result, outcome, err, true
+		close(done)
+		mu.Unlock()
+		return err
+	}
+	stageErr := stage.MutateAndFinish(ctx, request, finish)
+	mu.Lock()
+	closed = true
+	if !called {
+		mu.Unlock()
+		// The gate may already be gone. Preserve the durable Prepared record;
+		// no late terminal write can establish its original effect.
+		return nil, "", unknown("native-workspace")
+	}
+	completedSynchronously := finished
+	mu.Unlock()
+	<-done
+	mu.Lock()
+	defer mu.Unlock()
+	if !completedSynchronously || duplicate || (stageErr != nil && finalErr == nil) {
+		return terminal, publication, unknown("native-workspace")
+	}
+	return terminal, publication, finalErr
+}
+
+// terminalNative classifies the original attempt and makes one terminal save.
+// It is called only after the native lifetime has finished.
+func (s *Service) terminalNative(ctx context.Context, op state.Operation, record state.State, native *port.MutationReceipt, err error) (*state.State, string, error) {
 	var terminal *state.State
 	if err == nil && native != nil {
 		receipt := state.Receipt{Operation: state.Kind(native.Operation), RelativePath: native.RelativePath, Bytes: native.Bytes, Replacements: native.Replacements, BeforeSHA256: cloneHash(native.BeforeSHA256), AfterSHA256: native.AfterSHA256, Directory: native.Directory}
@@ -166,7 +229,7 @@ func (s *Service) executeBound(ctx context.Context, binding state.Binding, op st
 		}
 	}
 	if terminal == nil {
-		return finish(nil, "", unknown("operation-store"))
+		return nil, "", unknown("operation-store")
 	}
 	publication := "durable"
 	// One terminal publication attempt. Memory retains the known result even
@@ -175,7 +238,7 @@ func (s *Service) executeBound(ctx context.Context, binding state.Binding, op st
 	if err := s.repository.Save(ctx, &copy); err != nil {
 		publication = "memory_only"
 	}
-	return finish(terminal, publication, nil)
+	return terminal, publication, nil
 }
 func preimageMatches(op state.Operation, observed *string) bool {
 	switch v := op.(type) {
