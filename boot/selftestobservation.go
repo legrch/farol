@@ -26,7 +26,11 @@ func (s *computerConnector) observeConnectorSelfTest(ctx context.Context, slot *
 	if err != nil {
 		return unknown, err
 	}
-	child := state.Identity{Scope: state.ScopeConnector, OperationID: binding.Identity.OperationID + "-st1-write", OwnerID: binding.Identity.OwnerID, ProfileID: binding.Identity.ProfileID, ComputerID: binding.Identity.ComputerID}
+	suffix := "-st1-write"
+	if binding.Version == 2 {
+		suffix = "-st2-write"
+	}
+	child := state.Identity{Scope: state.ScopeConnector, OperationID: binding.Identity.OperationID + suffix, OwnerID: binding.Identity.OwnerID, ProfileID: binding.Identity.ProfileID, ComputerID: binding.Identity.ComputerID}
 	path := state.ScratchPath(binding.Identity.OperationID) + "/check.txt"
 	check := func() error {
 		return guard.WithMutationObservation(ctx, child, binding.WorkspaceID, path, func() error { return nil })

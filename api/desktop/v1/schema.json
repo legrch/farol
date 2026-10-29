@@ -5874,13 +5874,14 @@
       "fields": {
         "operationId": { "type": "id" },
         "workspaceId": { "type": "id" },
-        "computerGeneration": { "type": "decimal" }
+        "computerGeneration": { "type": "decimal" },
+        "planVersion": { "type": "text", "values": ["1", "2"], "optional": true }
       }
     },
     "ComputerSelfTestStep": {
       "type": "object",
       "fields": {
-        "name": { "type": "text", "values": ["scratch", "write", "edit", "mutation read", "cleanup", "shell", "shell cancel", "workspace reads", "git and hooks"] },
+        "name": { "type": "text", "values": ["scratch", "write", "edit", "mutation read", "catalogue", "bootstrap", "list", "read", "search", "cleanup", "shell", "shell cancel", "workspace reads", "git and hooks"] },
         "status": { "type": "text", "values": ["pass", "fail", "unknown", "not_tested"] },
         "code": { "type": "id", "optional": true },
         "operationId": { "type": "id", "optional": true },
@@ -5895,6 +5896,7 @@
         "operationId": { "type": "id" },
         "workspaceId": { "type": "id" },
         "computerGeneration": { "type": "decimal" },
+        "planVersion": { "type": "text", "values": ["1", "2"], "optional": true },
         "status": { "type": "text", "values": ["partial", "fail", "unknown"] },
         "steps": { "type": "ComputerSelfTestStep[]", "maxItems": 16 }
       }

@@ -34,6 +34,7 @@ func selfTestWireResult(binding state.SelfTestBinding, report selfTestReport) (*
 		copy := v
 		return &copy
 	}
+	out.PlanVersion = optional(strconv.FormatUint(uint64(binding.Version), 10))
 	for _, step := range report.Steps {
 		out.Steps = append(out.Steps, wire.ComputerSelfTestStep{Name: step.Name, Status: step.Status, Code: optional(step.Code), OperationId: optional(step.Operation), Handle: optional(step.Handle), CancelOperationId: optional(step.CancelOperation), DescendantCleanup: optional(step.DescendantCleanup)})
 	}
@@ -86,7 +87,11 @@ func (s *computerConnector) selfTestMethods() map[string]desktop.Method {
 			if err != nil {
 				return &desktop.Outcome{Status: "unavailable", Code: "COMPUTER_AUTHORITY_STORE_UNAVAILABLE"}, nil
 			}
-			binding := state.SelfTestBinding{Identity: state.Identity{Scope: state.ScopeOwnerSettings, OperationID: in.OperationId, OwnerID: s.root.ownerID, ProfileID: s.root.peer.ProfileId, ComputerID: s.root.computerID}, WorkspaceID: in.WorkspaceId, ComputerGeneration: generation, Version: 1}
+			version := uint8(1)
+			if in.PlanVersion != nil && *in.PlanVersion == "2" {
+				version = 2
+			}
+			binding := state.SelfTestBinding{Identity: state.Identity{Scope: state.ScopeOwnerSettings, OperationID: in.OperationId, OwnerID: s.root.ownerID, ProfileID: s.root.peer.ProfileId, ComputerID: s.root.computerID}, WorkspaceID: in.WorkspaceId, ComputerGeneration: generation, Version: version}
 			report, err := s.observeConnectorSelfTest(ctx, slot, binding)
 			if err != nil {
 				return &desktop.Outcome{Status: "unavailable", Code: "COMPUTER_AUTHORITY_STORE_UNAVAILABLE"}, nil

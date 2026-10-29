@@ -57,3 +57,39 @@ func TestSelfTestCodecAndFreshHistoryPreserveUnknown(t *testing.T) {
 		}
 	}
 }
+
+func TestSelfTestCodecPreservesVersionTwoInterruptedRead(t *testing.T) {
+	b := domain.SelfTestBinding{Identity: domain.Identity{Scope: domain.ScopeOwnerSettings, OperationID: scratchTestRun, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 2}
+	id := b.Identity.OperationID
+	result := &domain.SelfTestResult{Status: "unknown", Steps: []domain.SelfTestStep{
+		{Name: "scratch", Status: "pass", Operation: id},
+		{Name: "write", Status: "pass", Operation: id + "-st2-write"},
+		{Name: "edit", Status: "pass", Operation: id + "-st2-edit"},
+		{Name: "mutation read", Status: "pass", Operation: id + "-st2-edit"},
+		{Name: "catalogue", Status: "unknown", Operation: id + "-st2-catalogue"},
+	}}
+	original, err := domain.RestoreSelfTest(b, domain.OutcomeUnknown, result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := encodeSelfTest(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := decodeSelfTest(raw)
+	if err != nil || got.Binding() != b || got.Phase() != domain.OutcomeUnknown || got.Result().Steps[4] != result.Steps[4] {
+		t.Fatal("version or interrupted result lost", err)
+	}
+	key, err := selfTestKey(b.Identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection := SettledSelection{OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}
+	if _, err := qualifyFreshProcessHistory([]settledBytes{{key: key, raw: raw}}, selection); err != nil {
+		t.Fatal("fresh startup rejected retained version two history", err)
+	}
+	eligible, err := qualifyStagingHistory([]settledBytes{{key: key, raw: raw}}, selection)
+	if err != nil || eligible {
+		t.Fatal("unknown history admitted as settled", eligible, err)
+	}
+}
