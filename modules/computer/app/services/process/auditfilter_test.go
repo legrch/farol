@@ -129,7 +129,7 @@ func TestCommandIsFilteredBeforeRetainedAndRawInputIsIgnored(t *testing.T) {
 }
 
 func TestCommandMasksAdditionalCredentialForms(t *testing.T) {
-	for _, command := range []string{"curl -u fake:FAKE_SECRET example.test", "tool --auth FAKE_SECRET", "git fetch ssh://fake:FAKE_SECRET@example.test/repo"} {
+	for _, command := range []string{"curl -u fake:FAKE_SECRET example.test", "curl -ufake:FAKE_SECRET example.test", "tool --auth FAKE_SECRET", "git fetch ssh://fake:FAKE_SECRET@example.test/repo"} {
 		got := ProjectAuditCommand(command, identity).excerpt
 		if got.State != "filtered" || got.Text != "[REDACTED]" {
 			t.Fatalf("credential-bearing command escaped masking: %#v", got)

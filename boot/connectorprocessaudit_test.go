@@ -220,3 +220,30 @@ func TestProductionAuditHostMethodMasksLibraryCredential(t *testing.T) {
 		t.Fatal("production audit did not protect the secret and retain the diagnostic")
 	}
 }
+
+// An owner observation may only transport already filtered command and output.
+func TestAuditHostMasksCredentialArgumentsBeforeTransport(t *testing.T) {
+	for _, value := range []string{"curl -ufake:FAKE_SECRET example.test", "--auth FAKE_SECRET", "ftp://fake:FAKE_SECRET@example.test"} {
+		s, _, journal, child, _ := connectorProcessFixture(t)
+		publisher := &connectorProcessPublisherDouble{connectorProcessJournalDouble: journal, s: s, digest: strings.Repeat("a", 64)}
+		s.mutations.dependencies.repository = publisher
+		child.stdoutData = []byte(value)
+		command := s.auditCommandProjection(context.Background(), value)
+		start, err := s.startProcessWithAudit(context.Background(), s.current, "credential-audit", "call", child.selectLaunch, command)
+		if err != nil || start == nil {
+			t.Fatal("process did not start")
+		}
+		child.terminal = true
+		done := processCollectionDone(s, start.OperationID)
+		close(child.completed)
+		awaitProcessCollectionDone(t, done)
+		body, err := json.Marshal(wire.ComputerProcessAuditRequest{OperationId: start.OperationID, BuildId: journal.scope.Host.BuildID, RuntimeId: journal.scope.Host.RuntimeID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := s.processAuditMethod().Handle(context.Background(), desktop.Request{Body: body})
+		if err != nil || out.Status != "ok" || strings.Contains(string(out.Data), "FAKE_SECRET") || !strings.Contains(string(out.Data), "[REDACTED]") {
+			t.Fatal("credential escaped audit transport", err)
+		}
+	}
+}
