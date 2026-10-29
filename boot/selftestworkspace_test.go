@@ -2,17 +2,87 @@ package boot
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	state "github.com/legrch/farol/modules/computer/domain/mutation"
+	"github.com/legrch/farol/modules/computer/infra/filesystem"
+	"golang.org/x/sys/unix"
 )
 
 type selfTestWorkspaceNative struct {
 	*selfTestReadNative
 	scanLimited bool
 	afterSearch func()
+}
+
+// Real disposable filesystem and connector/authority contracts; custody and
+// journal are injected. This is not live provider or process evidence.
+func TestSelfTestDirectorySearchThroughConnectorOnDisposableFilesystem(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const runID = "00000000-0000-4000-8000-000000000001"
+	leaf := state.ScratchPath(runID)
+	dir, file := filepath.Join(root, leaf), filepath.Join(root, leaf, "check.txt")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte(selfTestFileAfter), 0600); err != nil {
+		t.Fatal(err)
+	}
+	identity := func(path string) state.DirectoryIdentity {
+		t.Helper()
+		var st unix.Stat_t
+		if err := unix.Lstat(path, &st); err != nil {
+			t.Fatal(err)
+		}
+		return state.DirectoryIdentity{Device: strconv.FormatUint(uint64(st.Dev), 10), Inode: strconv.FormatUint(st.Ino, 10)}
+	}
+	rootID, dirID, fileID := identity(root), identity(dir), identity(file)
+	s, access, _, _, input := newConnectorFixture(t)
+	access.approval.Capabilities = []authority.Capability{authority.List, authority.Read, authority.Write, authority.Search}
+	access.approval.Workspaces[0].Access = authority.WriteAccess
+	access.approval.Workspaces[0].Root = root
+	access.approval.Workspaces[0].RootIdentity = authority.RootIdentity{Device: rootID.Device, Inode: rootID.Inode}
+	access.PutApproval(access.approval)
+	s.root.publication.approval = access.approval.Clone()
+	s.root.native = filesystem.New(root + "-home")
+	deps, _, _ := chatMutationDependencies()
+	s.mutations, err = settingsMutationIngress(s.root, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Open(context.Background(), "open", input); err != nil {
+		t.Fatal(err)
+	}
+	s.mutations.stageBaseline, s.mutations.stageOwner, s.mutations.stageLifetime = true, &computerStageOwner{}, context.Background()
+	run, err := s.mutations.beginSelfTestRun(context.Background(), runID, "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.scratchIdentity, run.scratchCustody = dirID, &fileWorkspaceHold{}
+	run.fixtureFileIdentity, run.fixtureCustody = fileID, &fileWorkspaceHold{}
+	run.fixtureFileHash, run.fixtureEditStarted, run.fixtureOperation = selfTestFileHash(selfTestFileAfter), true, "original-edit"
+	s.mutations.operations[runID] = &settingsMutationOperation{workspace: "work", stageScratch: true, scratchCreated: true, settled: true, selfTestRun: run}
+	ids, _ := selfTestIDsV3(runID)
+	plan := &connectorSelfTestPlan{connector: s, slot: s.current, workspace: "work", ids: ids, run: run}
+	result := plan.workspaceCheck(context.Background(), "directory search", ids.directorySearch)
+	if result.Status != "pass" || result.Operation != ids.directorySearch {
+		t.Fatal("real scratch search failed", result)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "unowned"), []byte("private"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	result = plan.workspaceCheck(context.Background(), "directory search", ids.directorySearch+"-extra")
+	if result.Status != "unknown" {
+		t.Fatal("unexpected file accepted", result)
+	}
 }
 
 func (n *selfTestWorkspaceNative) Read(context.Context, port.ReadRequest) (*port.ReadResponse, error) {
