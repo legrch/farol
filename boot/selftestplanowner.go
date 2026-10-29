@@ -14,6 +14,7 @@ import (
 type selfTestIDs struct {
 	run, write, writeCall, edit, editCall, quick, quickCall, quickCancel, cancel, cancelCall, cancelOperation string
 	catalogue, bootstrap, list, read, search, directorySearch                                                 string
+	gitVersion, gitVersionCall, gitVersionCancel                                                              string
 }
 
 // Versioned, bounded derivation ties each child to the original durable
@@ -30,6 +31,11 @@ func selfTestIDsV2(run string) (selfTestIDs, bool) {
 
 func selfTestIDsV3(run string) (selfTestIDs, bool) {
 	ids := selfTestIDs{run: run, write: run + "-st3-write", writeCall: run + "-st3-write-call", edit: run + "-st3-edit", editCall: run + "-st3-edit-call", quick: run + "-st3-quick", quickCall: run + "-st3-quick-call", quickCancel: run + "-st3-quick-unused-cancel", cancel: run + "-st3-cancel", cancelCall: run + "-st3-cancel-call", cancelOperation: run + "-st3-cancel-op", catalogue: run + "-st3-catalogue", bootstrap: run + "-st3-bootstrap", list: run + "-st3-list", read: run + "-st3-read", search: run + "-st3-search", directorySearch: run + "-st3-directory-search"}
+	return ids, ids.valid()
+}
+
+func selfTestIDsV4(run string) (selfTestIDs, bool) {
+	ids := selfTestIDs{run: run, write: run + "-st4-write", writeCall: run + "-st4-write-call", edit: run + "-st4-edit", editCall: run + "-st4-edit-call", quick: run + "-st4-quick", quickCall: run + "-st4-quick-call", quickCancel: run + "-st4-quick-unused-cancel", cancel: run + "-st4-cancel", cancelCall: run + "-st4-cancel-call", cancelOperation: run + "-st4-cancel-op", catalogue: run + "-st4-catalogue", bootstrap: run + "-st4-bootstrap", list: run + "-st4-list", read: run + "-st4-read", search: run + "-st4-search", directorySearch: run + "-st4-directory-search", gitVersion: run + "-st4-git-version", gitVersionCall: run + "-st4-git-version-call", gitVersionCancel: run + "-st4-git-version-unused-cancel"}
 	return ids, ids.valid()
 }
 
@@ -55,6 +61,17 @@ func (ids selfTestIDs) valid() bool {
 	}
 	if ids.directorySearch != "" && (!validIngressID(ids.directorySearch) || seen[ids.directorySearch]) {
 		return false
+	}
+	if ids.directorySearch != "" {
+		seen[ids.directorySearch] = true
+	}
+	if ids.gitVersion != "" || ids.gitVersionCall != "" || ids.gitVersionCancel != "" {
+		for _, id := range []string{ids.gitVersion, ids.gitVersionCall, ids.gitVersionCancel} {
+			if !validIngressID(id) || seen[id] {
+				return false
+			}
+			seen[id] = true
+		}
 	}
 	return true
 }
@@ -89,7 +106,9 @@ func selfTestFailure(name, operation string, err error) selfTestStep {
 func (p *connectorSelfTestPlan) create(ctx context.Context) selfTestStep {
 	step := selfTestStep{Name: "scratch", Status: "unknown", Operation: p.ids.run}
 	expectedIDs, validIDs := selfTestIDsV1(p.ids.run)
-	if p.ids.directorySearch != "" {
+	if p.ids.gitVersion != "" {
+		expectedIDs, validIDs = selfTestIDsV4(p.ids.run)
+	} else if p.ids.directorySearch != "" {
 		expectedIDs, validIDs = selfTestIDsV3(p.ids.run)
 	} else if p.ids.catalogue != "" {
 		expectedIDs, validIDs = selfTestIDsV2(p.ids.run)
@@ -186,6 +205,8 @@ func (p *connectorSelfTestPlan) shell(ctx context.Context, kind selfTestShellKin
 	name, operation, call, cancel := "shell", p.ids.quick, p.ids.quickCall, p.ids.quickCancel
 	if kind == selfTestShellCancel {
 		name, operation, call, cancel = "shell cancel", p.ids.cancel, p.ids.cancelCall, p.ids.cancelOperation
+	} else if kind == selfTestShellGitVersion {
+		name, operation, call, cancel = "git availability", p.ids.gitVersion, p.ids.gitVersionCall, p.ids.gitVersionCancel
 	}
 	step := selfTestStep{Name: name, Status: "unknown", Operation: operation}
 	check, err := newSelfTestShell(p.connector, p.slot, p.workspace, operation, call, cancel, kind)

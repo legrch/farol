@@ -52,7 +52,9 @@ func (e *selfTestExecution) execute(ctx context.Context) selfTestReport {
 	e.started = true
 	e.mu.Unlock()
 	var out selfTestReport
-	if e.version == 3 {
+	if e.version == 4 {
+		out = runSelfTestPlanV4(ctx, e.owner)
+	} else if e.version == 3 {
 		out = runSelfTestPlanV3(ctx, e.owner)
 	} else if e.version == 2 {
 		out = runSelfTestPlanV2(ctx, e.owner)
@@ -71,14 +73,18 @@ type selfTestWorkspaceOwner interface {
 }
 
 func runSelfTestPlanV2(ctx context.Context, owner selfTestPlanOwner) selfTestReport {
-	return runSelfTestReadPlan(ctx, owner, false)
+	return runSelfTestReadPlan(ctx, owner, false, false)
 }
 
 func runSelfTestPlanV3(ctx context.Context, owner selfTestPlanOwner) selfTestReport {
-	return runSelfTestReadPlan(ctx, owner, true)
+	return runSelfTestReadPlan(ctx, owner, true, false)
 }
 
-func runSelfTestReadPlan(ctx context.Context, owner selfTestPlanOwner, directory bool) selfTestReport {
+func runSelfTestPlanV4(ctx context.Context, owner selfTestPlanOwner) selfTestReport {
+	return runSelfTestReadPlan(ctx, owner, true, true)
+}
+
+func runSelfTestReadPlan(ctx context.Context, owner selfTestPlanOwner, directory, git bool) selfTestReport {
 	report := selfTestReport{Status: "unknown"}
 	read, ok := owner.(selfTestWorkspaceOwner)
 	if ctx == nil || ctx.Err() != nil || owner == nil || !ok {
@@ -105,6 +111,9 @@ func runSelfTestReadPlan(ctx context.Context, owner selfTestPlanOwner, directory
 		func(ctx context.Context) selfTestStep { return owner.shell(ctx, selfTestShellQuick) },
 		func(ctx context.Context) selfTestStep { return owner.shell(ctx, selfTestShellCancel) },
 	)
+	if git {
+		steps = append(steps, func(ctx context.Context) selfTestStep { return owner.shell(ctx, selfTestShellGitVersion) })
+	}
 	for index, step := range steps {
 		if ctx.Err() != nil {
 			return report

@@ -61,7 +61,35 @@ func (p *plannedSelfTest) shell(_ context.Context, kind selfTestShellKind) selfT
 	if kind == selfTestShellQuick {
 		return p.step("shell")
 	}
+	if kind == selfTestShellGitVersion {
+		return p.step("git availability")
+	}
 	return p.step("shell cancel")
+}
+
+func TestSelfTestV4RunsGitAvailabilityOnceAndDoesNotClaimHooks(t *testing.T) {
+	ids, ok := selfTestIDsV4("00000000-0000-4000-8000-000000000001")
+	if !ok {
+		t.Fatal("invalid v4 identities")
+	}
+	duplicate := ids
+	duplicate.gitVersionCall = ids.gitVersion
+	if duplicate.valid() {
+		t.Fatal("Git identities overlap")
+	}
+	for _, status := range []string{"pass", "fail", "unknown"} {
+		p := &plannedSelfTestV2{plannedSelfTest: &plannedSelfTest{failAt: "git availability", status: status}, ids: ids}
+		out := runSelfTestPlanV4(context.Background(), p)
+		if len(p.calls) != 14 || p.calls[10] != "cleanup" || p.calls[13] != "git availability" || out.Steps[13].Status != status {
+			t.Fatal("Git check order or outcome incorrect", status, out, p.calls)
+		}
+		if status == "pass" && (out.Status != "partial" || len(out.Steps) != 15 || out.Steps[14].Status != "not_tested") {
+			t.Fatal("Git availability promoted to hooks proof", out)
+		}
+		if status != "pass" && (out.Status != map[string]string{"fail": "fail", "unknown": "unknown"}[status] || len(out.Steps) != 14) {
+			t.Fatal("Git failure or unknown was hidden", out)
+		}
+	}
 }
 
 func TestSelfTestPlanRunsCleanupBeforeShellAndStopsUnknown(t *testing.T) {

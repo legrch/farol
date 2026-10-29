@@ -189,6 +189,9 @@ func (p *durablePlanFake) shell(_ context.Context, kind selfTestShellKind) selfT
 	if kind == selfTestShellQuick {
 		return p.step("shell", p.ids.quick)
 	}
+	if kind == selfTestShellGitVersion {
+		return p.step("git availability", p.ids.gitVersion)
+	}
 	return p.step("shell cancel", p.ids.cancel)
 }
 
