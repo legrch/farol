@@ -10,9 +10,10 @@ import (
 )
 
 type durablePlanStore struct {
-	record            *state.SelfTestState
-	admits, saves     int
-	admitErr, saveErr error
+	record               *state.SelfTestState
+	admits, saves, loads int
+	admitErr, saveErr    error
+	afterLoad            func()
 }
 
 func (s *durablePlanStore) AdmitSelfTest(_ context.Context, v *state.SelfTestState) (port.SelfTestAdmission, error) {
@@ -27,6 +28,10 @@ func (s *durablePlanStore) AdmitSelfTest(_ context.Context, v *state.SelfTestSta
 	return port.SelfTestAdmission{Status: port.MutationAdmitted, Record: v}, nil
 }
 func (s *durablePlanStore) LoadSelfTest(context.Context, state.SelfTestBinding) (*state.SelfTestState, error) {
+	s.loads++
+	if s.afterLoad != nil {
+		s.afterLoad()
+	}
 	return s.record, nil
 }
 func (s *durablePlanStore) SaveSelfTest(_ context.Context, v *state.SelfTestState) error {
