@@ -86,7 +86,7 @@ func (s *SettingsMutationIngress) cleanupSelfTestScratchForRun(ctx context.Conte
 	}
 	s.mu.Lock()
 	record := s.operations[run.operation]
-	if s.selfTestRun != run || run.ledger != s || run.active || run.cleanupStarted || run.ctx.Err() != nil || s.stageClosed || s.frozen || s.stagePending || s.processDraining || s.recoveryReserved || s.retirementErr != nil || s.stageOwner == nil || record == nil || !record.stageScratch || record.selfTestRun != run || record.pending || !record.settled || record.scratch == nil || record.workspace != run.workspace || record.generation != generation {
+	if s.selfTestRun != run || run.ledger != s || run.active || run.cleanupStarted || run.ctx.Err() != nil || s.stageClosed || s.frozen || s.stagePending || s.processDraining || s.recoveryReserved || s.retirementErr != nil || s.stageOwner == nil || record == nil || !record.stageScratch || !record.scratchCreated || record.selfTestRun != run || record.pending || !record.settled || record.scratch == nil || record.workspace != run.workspace || record.generation != generation {
 		s.mu.Unlock()
 		return nil, computerUnavailable()
 	}

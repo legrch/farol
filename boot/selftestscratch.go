@@ -105,14 +105,15 @@ func (s *SettingsMutationIngress) createSelfTestScratchForRun(ctx context.Contex
 	record := &settingsMutationOperation{workspace: workspace, path: leaf, generation: generation, pending: true, stageScratch: true, selfTestRun: run, scratchDone: make(chan struct{})}
 	s.operations[operation] = record
 	s.mu.Unlock()
-	finish := func(service *mutationsvc.OwnerService, err error, settled bool) {
+	finish := func(service *mutationsvc.OwnerService, err error, settled, created bool) {
 		s.mu.Lock()
 		record.scratch, record.failure, record.pending, record.settled = service, err, false, settled
+		record.scratchCreated = created
 		close(record.scratchDone)
 		s.mu.Unlock()
 	}
 	if err = s.computer.claim(operation); err != nil {
-		finish(nil, err, true)
+		finish(nil, err, true, false)
 		return nil, err
 	}
 	var clock computerport.Clock = s.computer.clock
@@ -122,12 +123,12 @@ func (s *SettingsMutationIngress) createSelfTestScratchForRun(ctx context.Contex
 	stage := &stagedScratchWorkspace{ledger: s, operation: operation, native: native}
 	service, err := mutationsvc.NewForOwnerExecution(ctx, s.selection(operation, generation), current, s.dependencies.repository, stage, s.dependencies.digester, &sync.Mutex{}, clock)
 	if err != nil {
-		finish(nil, err, true)
+		finish(nil, err, true, false)
 		return nil, err
 	}
 	result, err := service.CreateScratch(ctx, workspace)
 	settled := err == nil && result != nil && result.Publication == "durable" && (result.Phase == "completed" || result.Phase == "failed")
-	finish(service, err, settled)
+	finish(service, err, settled, settled && result.Phase == "completed")
 	return result, err
 }
 

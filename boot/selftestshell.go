@@ -27,6 +27,7 @@ type selfTestShell struct {
 	kind                                        selfTestShellKind
 	attempted, cancelAttempted                  bool
 	handle                                      string
+	run                                         *selfTestRunLease
 }
 
 func newSelfTestShell(owner *computerConnector, slot *connectorSlot, workspace, operation, call, cancelOperation string, kind selfTestShellKind) (*selfTestShell, error) {
@@ -48,7 +49,7 @@ func (s *selfTestShell) start(ctx context.Context) (*processct.StartResponse, er
 		command = "/bin/sleep 30"
 	}
 	request := connectorShellRequest{WorkspaceID: s.workspace, RelativeCwd: ".", Command: command, Write: false}
-	out, err := s.owner.startQualifiedShell(ctx, s.slot, s.execution, s.operation, s.call, request, s.selectLaunch)
+	out, err := s.owner.startQualifiedShellForRun(ctx, s.slot, s.execution, s.operation, s.call, request, s.selectLaunch, s.run)
 	if err != nil {
 		return nil, err
 	}

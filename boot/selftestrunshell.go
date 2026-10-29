@@ -6,6 +6,7 @@ import (
 	"time"
 
 	processct "github.com/legrch/farol/modules/computer/contracts/process"
+	"github.com/legrch/farol/modules/computer/domain/mutation"
 )
 
 // shellCheckResult reports only bounded facts; it does not retain raw output or
@@ -15,6 +16,46 @@ type shellCheckResult struct {
 	Supervisor                                       processct.SupervisorState
 	GroupCleanup, DescendantCleanup                  processct.Cleanup
 	RootWaited, OutputDrained                        bool
+}
+
+// checkShellForRun reserves a single check inside the original whole-run
+// fence. A returned process result is not proof that its journal collector or
+// descendants have settled; cleanup independently checks those owners.
+func (r *selfTestRunLease) checkShellForRun(ctx context.Context, check *selfTestShell) shellCheckResult {
+	refused := shellCheckResult{Status: "fail", Code: "PROCESS_UNAVAILABLE"}
+	if r == nil || r.ledger == nil || ctx == nil || ctx.Err() != nil || check == nil || check.owner == nil || check.owner.mutations != r.ledger || check.workspace != r.workspace || check.operation == r.operation {
+		return refused
+	}
+	s := r.ledger
+	s.mu.Lock()
+	record := s.operations[r.operation]
+	if s.selfTestRun != r || r.active || r.cleanupStarted || r.ctx.Err() != nil || s.stagePending || s.stageClosed || s.frozen || s.processDraining || s.recoveryReserved || s.retirementErr != nil || record == nil || !record.stageScratch || !record.scratchCreated || record.selfTestRun != r || record.pending || !record.settled || record.scratch == nil || record.path != mutation.ScratchPath(r.operation) {
+		s.mu.Unlock()
+		return refused
+	}
+	check.mu.Lock()
+	if check.attempted || check.run != nil {
+		check.mu.Unlock()
+		s.mu.Unlock()
+		return refused
+	}
+	check.run = r
+	check.mu.Unlock()
+	r.active = true
+	r.callDone = make(chan struct{})
+	done := r.callDone
+	s.mu.Unlock()
+	bounded, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(r.ctx, cancel)
+	defer func() {
+		stop()
+		cancel()
+		s.mu.Lock()
+		r.active = false
+		close(done)
+		s.mu.Unlock()
+	}()
+	return check.check(bounded)
 }
 
 func (s *selfTestShell) check(ctx context.Context) shellCheckResult {

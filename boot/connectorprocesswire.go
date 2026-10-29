@@ -254,7 +254,14 @@ func (s *computerConnector) cancelProcess(ctx context.Context, slot *connectorSl
 // also be reused by a foreground check without manufacturing a task, lease,
 // producer, or replacement operation. The original slot remains authoritative.
 func (s *computerConnector) startQualifiedShell(ctx context.Context, slot *connectorSlot, current wire.ComputerConnectorExecution, operation, call string, request connectorShellRequest, selectLaunch connectorShellSelection) (*processct.StartResponse, error) {
+	return s.startQualifiedShellForRun(ctx, slot, current, operation, call, request, selectLaunch, nil)
+}
+
+func (s *computerConnector) startQualifiedShellForRun(ctx context.Context, slot *connectorSlot, current wire.ComputerConnectorExecution, operation, call string, request connectorShellRequest, selectLaunch connectorShellSelection, run *selfTestRunLease) (*processct.StartResponse, error) {
 	if ctx == nil || selectLaunch == nil || !shellRelativeCwd(request.RelativeCwd) || strings.ContainsRune(request.Command, 0) {
+		return nil, connectorProcessRefusal("PROCESS_INPUT_INVALID")
+	}
+	if run != nil && (request.WorkspaceID != run.workspace || request.RelativeCwd != "." || request.Write) {
 		return nil, connectorProcessRefusal("PROCESS_INPUT_INVALID")
 	}
 	if err := s.checkMutationSlot(ctx, slot, current); err != nil {
@@ -262,7 +269,7 @@ func (s *computerConnector) startQualifiedShell(ctx context.Context, slot *conne
 	}
 	// Only the filtered command enters the ledger.
 	command := s.auditCommandProjection(ctx, request.Command)
-	out, err := s.startProcessWithAudit(ctx, slot, operation, call, func(ctx context.Context, lease *execution.Lease) (processsvc.Prepared, processsvc.ObservationWorkspace, error) {
+	out, err := s.startProcessWithAuditForRun(ctx, slot, operation, call, func(ctx context.Context, lease *execution.Lease) (processsvc.Prepared, processsvc.ObservationWorkspace, error) {
 		prepared, workspace, err := selectLaunch(ctx, lease, request)
 		if err != nil || prepared == nil || workspace == nil {
 			return nil, nil, connectorPreparationFailure(err)
@@ -276,7 +283,7 @@ func (s *computerConnector) startQualifiedShell(ctx context.Context, slot *conne
 			return nil, nil, connectorProcessRefusal("PROCESS_PREPARATION_SCOPE_REFUSED")
 		}
 		return prepared, workspace, nil
-	}, command)
+	}, command, run)
 	if err != nil {
 		return nil, err
 	}

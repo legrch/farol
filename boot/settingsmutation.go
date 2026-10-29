@@ -54,6 +54,7 @@ type settingsMutationOperation struct {
 	process         *connectorProcessOperation
 	connectorScope  bool
 	stageScratch    bool // Set only by the trusted self-test admission owner.
+	scratchCreated  bool // The original creation was completed and durable.
 	stageAttempted  bool // Sticky once the original staging attempt is entered.
 	selfTestRun     *selfTestRunLease
 	failure         error

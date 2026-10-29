@@ -130,6 +130,12 @@ func (s *computerConnector) startProcess(ctx context.Context, slot *connectorSlo
 }
 
 func (s *computerConnector) startProcessWithAudit(ctx context.Context, slot *connectorSlot, operation, call string, selectLaunch connectorProcessSelection, command processsvc.AuditCommand) (*processct.StartResponse, error) {
+	return s.startProcessWithAuditForRun(ctx, slot, operation, call, selectLaunch, command, nil)
+}
+
+// The run token is accepted only by the private foreground self-test owner.
+// It never weakens ordinary connector admission or grants process authority.
+func (s *computerConnector) startProcessWithAuditForRun(ctx context.Context, slot *connectorSlot, operation, call string, selectLaunch connectorProcessSelection, command processsvc.AuditCommand, run *selfTestRunLease) (*processct.StartResponse, error) {
 	if !s.processSlot(slot) || ctx == nil || ctx.Err() != nil || !validIngressID(operation) || !validIngressID(call) || selectLaunch == nil {
 		return nil, connectorProcessRefusal("PROCESS_INPUT_INVALID")
 	}
@@ -147,7 +153,8 @@ func (s *computerConnector) startProcessWithAudit(ctx context.Context, slot *con
 	}
 	ledger := s.mutations
 	ledger.mu.Lock()
-	if ledger.scratchAdmissionPendingLocked() {
+	runOwnsAdmission := run != nil && ledger.selfTestRun == run && run.ledger == ledger && run.active && run.ctx.Err() == nil && !run.cleanupStarted && !ledger.stagePending && !ledger.stageClosed && ledger.scratchPreflight == nil
+	if run != nil && !runOwnsAdmission || ledger.scratchAdmissionPendingLocked() && !runOwnsAdmission {
 		ledger.mu.Unlock()
 		return nil, connectorProcessRefusal("PROCESS_UNAVAILABLE")
 	}
