@@ -13,6 +13,11 @@ export class SelfTestManager {
     ReturnType<typeof openSelfTestOwner>
   >();
   private readonly context: Readonly<Context>;
+  private readonly unknown = new Map<string, SelfTestSelection>();
+  private readonly opened = new Map<
+    string,
+    Awaited<ReturnType<typeof openSelfTestOwner>>
+  >();
   constructor(
     private readonly client: Pick<Client, "request">,
     context: Context,
@@ -41,6 +46,7 @@ export class SelfTestManager {
       });
     }
     const result = await pending;
+    this.opened.set(workspaceId, result);
     this.checkLive();
     return result;
   }
@@ -64,7 +70,10 @@ export class SelfTestManager {
   async start(workspaceId: string) {
     const owner = await this.owner(workspaceId);
     this.checkLive();
-    return owner.bridge.start(this.publication(), workspaceId);
+    const result = await owner.bridge.start(this.publication(), workspaceId);
+    if (result.state === "unknown" || result.report?.status === "unknown")
+      this.unknown.set(workspaceId, result.selection);
+    return result;
   }
 
   async observe(workspaceId: string, selection: SelfTestSelection) {
@@ -72,6 +81,21 @@ export class SelfTestManager {
       throw new BridgeError("refused", "invalid_self_test_observation");
     const owner = await this.owner(workspaceId);
     this.checkLive();
-    return owner.bridge.observe(selection);
+    const result = await owner.bridge.observe(selection);
+    if (
+      result.state === "observed" &&
+      result.report &&
+      result.report.status !== "unknown" &&
+      this.unknown.get(workspaceId)?.operationId === selection.operationId
+    )
+      this.unknown.delete(workspaceId);
+    return result;
+  }
+
+  pending(workspaceId: string): SelfTestSelection | undefined {
+    return (
+      this.unknown.get(workspaceId) ??
+      this.opened.get(workspaceId)?.bridge.unresolvedSelection
+    );
   }
 }

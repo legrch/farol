@@ -3,6 +3,12 @@ import { SelfTestManager } from "../../apps/desktop/bridge/self-test-manager";
 import type { Json, Outcome } from "../../apps/desktop/bridge/wire";
 
 const context = { profileId: "profile", backendGeneration: "backend" };
+const prior = {
+  operationId: "00000000-0000-4000-8000-000000000001",
+  workspaceId: "work",
+  computerGeneration: "1",
+  planVersion: "2" as const,
+};
 const publication = {
   fence: "1",
   storeRevision: "1",
@@ -69,6 +75,13 @@ it("retains one original owner for concurrent calls and never repeats unknown", 
     "fulfilled",
     "rejected",
   ]);
+  const successful =
+    first.status === "fulfilled"
+      ? first.value
+      : second.status === "fulfilled"
+        ? second.value
+        : undefined;
+  expect(manager.pending("work")).toEqual(successful?.selection);
   expect(
     request.mock.calls.filter(
       ([method]) => method === "computer.selftest.marker.begin",
@@ -82,6 +95,97 @@ it("retains one original owner for concurrent calls and never repeats unknown", 
       ([method]) => method === "computer.selftest.start",
     ),
   ).toHaveLength(1);
+});
+
+it("exposes a restored original while refusing a replacement start", async () => {
+  const request = vi.fn(
+    async (
+      method: string,
+      _body: Json,
+      options: { id?: string },
+    ): Promise<Outcome> => ({
+      status: "ok",
+      requestId: options.id!,
+      context,
+      data: {
+        workspaceId: "work",
+        entries:
+          method === "computer.selftest.marker.history"
+            ? [{ selection: prior, phase: "selected" }]
+            : [],
+      },
+    }),
+  );
+  const manager = new SelfTestManager(
+    { request },
+    context,
+    () => {},
+    () => publication,
+  );
+  await expect(manager.start("work")).rejects.toMatchObject({
+    code: "self_test_unresolved",
+  });
+  expect(manager.pending("work")).toEqual(prior);
+  expect(
+    request.mock.calls.every(([method]) => method.endsWith("history")),
+  ).toBe(true);
+});
+
+it("keeps original unresolved if the connector changes during observation", async () => {
+  let live = true;
+  const request = vi.fn(
+    async (
+      method: string,
+      _body: Json,
+      options: { id?: string },
+    ): Promise<Outcome> => {
+      if (method === "computer.selftest.observe") {
+        live = false;
+        return {
+          status: "ok",
+          requestId: options.id!,
+          context,
+          data: {
+            ...prior,
+            status: "fail",
+            steps: [
+              {
+                name: "scratch",
+                status: "fail",
+                operationId: prior.operationId,
+              },
+            ],
+          },
+        };
+      }
+      return {
+        status: "ok",
+        requestId: options.id!,
+        context,
+        data: {
+          workspaceId: "work",
+          entries:
+            method === "computer.selftest.marker.history"
+              ? [{ selection: prior, phase: "selected" }]
+              : [],
+        },
+      };
+    },
+  );
+  const manager = new SelfTestManager(
+    { request },
+    context,
+    () => {
+      if (!live) throw new Error("changed");
+    },
+    () => publication,
+  );
+  expect(await manager.observe("work", prior)).toEqual({
+    selection: prior,
+    state: "unknown",
+  });
+  expect(manager.pending("work")).toEqual(prior);
+  expect(request.mock.calls.at(-1)?.[0]).toBe("computer.selftest.observe");
 });
 
 it("does not dispatch after host is closed during history observation", async () => {

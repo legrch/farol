@@ -42,6 +42,9 @@ export class SelfTestBridge {
   private unresolved: SelfTestSelection | undefined;
   private settlementAttempted = false;
   private readonly context: Readonly<Context>;
+  get unresolvedSelection(): SelfTestSelection | undefined {
+    return this.unresolved;
+  }
   constructor(
     private readonly client: Pick<Client, "request">,
     context: Context,
@@ -102,16 +105,29 @@ export class SelfTestBridge {
       body as unknown as Json,
       selection,
     );
+    try {
+      this.checkLive();
+    } catch {
+      this.pending = false;
+      return Object.freeze({ selection, state: "unknown" });
+    }
     if (result.state === "observed" && result.report?.status !== "unknown") {
       this.settlementAttempted = true;
       try {
-        if ((await this.store.settle(selection)) === "durable")
+        if ((await this.store.settle(selection)) === "durable") {
+          this.checkLive();
           this.unresolved = undefined;
+        }
       } catch {
         // A lost settlement acknowledgement preserves the original fence.
       }
     }
     this.pending = false;
+    try {
+      this.checkLive();
+    } catch {
+      return Object.freeze({ selection, state: "unknown" });
+    }
     if (
       this.unresolved &&
       result.state === "observed" &&
@@ -125,11 +141,21 @@ export class SelfTestBridge {
     const selection = Object.freeze({ ...input });
     if (!validate("ComputerSelfTestObserve", selection))
       throw new BridgeError("refused", "invalid_self_test_observation");
+    try {
+      this.checkLive();
+    } catch {
+      return Object.freeze({ selection, state: "unknown" });
+    }
     const result = await this.request(
       "computer.selftest.observe",
       selection as unknown as Json,
       selection,
     );
+    try {
+      this.checkLive();
+    } catch {
+      return Object.freeze({ selection, state: "unknown" });
+    }
     if (
       !this.pending &&
       !this.settlementAttempted &&
@@ -145,13 +171,20 @@ export class SelfTestBridge {
       this.pending = true;
       this.settlementAttempted = true;
       try {
-        if ((await this.store.settle(selection)) === "durable")
+        if ((await this.store.settle(selection)) === "durable") {
+          this.checkLive();
           this.unresolved = undefined;
+        }
       } catch {
         // Do not repeat an uncertain settlement.
       } finally {
         this.pending = false;
       }
+    }
+    try {
+      this.checkLive();
+    } catch {
+      return Object.freeze({ selection, state: "unknown" });
     }
     if (
       this.unresolved &&

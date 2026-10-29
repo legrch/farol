@@ -16,6 +16,55 @@ const publication = {
   publishOperationId: "publish",
 };
 
+it("withholds a report and keeps the original when the owner changes during settlement", async () => {
+  let live = true;
+  const request = vi.fn(
+    async (
+      _method: string,
+      _body: Json,
+      options: { id?: string; operationId?: string },
+    ): Promise<Outcome> => ({
+      status: "ok",
+      requestId: options.id!,
+      operationId: options.operationId!,
+      context,
+      data: {
+        operationId: options.operationId!,
+        workspaceId: "work",
+        computerGeneration: "1",
+        planVersion: "2",
+        status: "fail",
+        steps: [
+          {
+            name: "scratch",
+            status: "fail",
+            operationId: options.operationId!,
+          },
+        ],
+      },
+    }),
+  );
+  const bridge = new SelfTestBridge(
+    { request },
+    context,
+    "none",
+    {
+      reserve: async () => "durable",
+      settle: async () => {
+        live = false;
+        return "durable";
+      },
+    },
+    () => {
+      if (!live) throw new Error("changed");
+    },
+  );
+  const result = await bridge.start(publication, "work");
+  expect(result.state).toBe("unknown");
+  expect(result.report).toBeUndefined();
+  expect(bridge.unresolvedSelection).toEqual(result.selection);
+});
+
 it("retains the original attempt and only observes that identity", async () => {
   const request = vi.fn(
     async (
