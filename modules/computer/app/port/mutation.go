@@ -82,6 +82,7 @@ type MutationReceipt struct {
 	Replacements            uint32
 	BeforeSHA256            *string
 	AfterSHA256             string
+	Directory               mutation.DirectoryIdentity
 }
 
 // Native mutation is one admitted attempt. Cancellation before possible effects

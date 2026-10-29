@@ -16,6 +16,7 @@ type Receipt struct {
 	Replacements            uint32
 	BeforeSHA256            *string
 	AfterSHA256             string
+	Directory               state.DirectoryIdentity
 }
 type ExecuteResponse struct {
 	OperationID, WorkspaceID, CallID, TurnID string
@@ -24,7 +25,10 @@ type ExecuteResponse struct {
 	Receipt                                  *Receipt
 	Failure                                  *Failure
 }
-type Failure struct{ Code, Source string }
+type Failure struct {
+	Code, Source string
+	Directory    state.DirectoryIdentity
+}
 
 func (s *Service) Execute(ctx context.Context, r ExecuteRequest) (*ExecuteResponse, error) {
 	if !s.matches(r) {
@@ -131,7 +135,7 @@ func (s *Service) executeBound(ctx context.Context, binding state.Binding, op st
 	}
 	var terminal *state.State
 	if err == nil && native != nil {
-		receipt := state.Receipt{Operation: state.Kind(native.Operation), RelativePath: native.RelativePath, Bytes: native.Bytes, Replacements: native.Replacements, BeforeSHA256: cloneHash(native.BeforeSHA256), AfterSHA256: native.AfterSHA256}
+		receipt := state.Receipt{Operation: state.Kind(native.Operation), RelativePath: native.RelativePath, Bytes: native.Bytes, Replacements: native.Replacements, BeforeSHA256: cloneHash(native.BeforeSHA256), AfterSHA256: native.AfterSHA256, Directory: native.Directory}
 		if state.ValidNativeReceipt(receipt, op) && preimageMatches(op, receipt.BeforeSHA256) {
 			terminal, err = record.Complete(receipt)
 		} else {
@@ -148,6 +152,12 @@ func (s *Service) executeBound(ctx context.Context, binding state.Binding, op st
 				failure = state.NativeFailure(f.Code)
 			} else {
 				failure = state.Failure{Code: f.Code, Source: f.Source}
+			}
+		}
+		if _, ok := op.(state.Scratch); ok && native != nil && native.Directory != (state.DirectoryIdentity{}) {
+			failure = state.Failure{Code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", Source: "native-workspace"}
+			if native.Directory.Valid() {
+				failure.Directory = native.Directory
 			}
 		}
 		terminal, err = record.Refuse(failure)
@@ -169,6 +179,8 @@ func (s *Service) executeBound(ctx context.Context, binding state.Binding, op st
 }
 func preimageMatches(op state.Operation, observed *string) bool {
 	switch v := op.(type) {
+	case state.Scratch:
+		return observed == nil
 	case state.Write:
 		return v.ExpectedSHA256 == nil && observed == nil || v.ExpectedSHA256 != nil && observed != nil && *v.ExpectedSHA256 == *observed
 	case state.Edit:
@@ -186,10 +198,10 @@ type attemptResult struct {
 func resultOf(record *state.State, publication string) *attemptResult {
 	out := &attemptResult{Phase: string(record.Phase()), Publication: publication}
 	if receipt := record.Receipt(); receipt != nil {
-		out.Receipt = &Receipt{Operation: string(receipt.Operation), RelativePath: receipt.RelativePath, Bytes: receipt.Bytes, Replacements: receipt.Replacements, BeforeSHA256: cloneHash(receipt.BeforeSHA256), AfterSHA256: receipt.AfterSHA256}
+		out.Receipt = &Receipt{Operation: string(receipt.Operation), RelativePath: receipt.RelativePath, Bytes: receipt.Bytes, Replacements: receipt.Replacements, BeforeSHA256: cloneHash(receipt.BeforeSHA256), AfterSHA256: receipt.AfterSHA256, Directory: receipt.Directory}
 	}
 	if failure := record.Failure(); failure != nil {
-		out.Failure = &Failure{Code: failure.Code, Source: failure.Source}
+		out.Failure = &Failure{Code: failure.Code, Source: failure.Source, Directory: failure.Directory}
 	}
 	if record.Phase() == state.Prepared {
 		out.Phase = string(state.OutcomeUnknown)
