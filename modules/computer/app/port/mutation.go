@@ -198,3 +198,18 @@ type ScratchFileCleanupRepository interface {
 type ScratchCleanupWorkspace interface {
 	RemoveEmptyScratch(context.Context, ScratchCleanupRequest) error
 }
+
+// ScratchFileCleanupRequest borrows both continuously held descriptors. They
+// neither grant authority nor substitute for a durable cleanup admission.
+type ScratchFileCleanupRequest struct {
+	Workspace       MutationDescriptor
+	Inventory       mutation.ScratchFileInventory
+	DirectoryHold   ScratchDirectoryCustody
+	FileHold        ScratchFileCustody
+	BeforePublish   func(context.Context) error
+	WithPublication func(context.Context, func() error) error
+}
+
+type ScratchFileCleanupWorkspace interface {
+	RemoveScratchFile(context.Context, ScratchFileCleanupRequest) error
+}
