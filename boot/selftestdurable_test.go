@@ -15,11 +15,120 @@ type durablePlanStore struct {
 	admits, saves, loads int
 	admitErr, saveErr    error
 	afterLoad            func()
+	marker               *state.SelfTestMarker
+	markerAdmissions     int
+}
+
+func (s *durablePlanStore) AdmitSelfTestMarker(_ context.Context, marker *state.SelfTestMarker) (port.SelfTestMarkerAdmission, error) {
+	s.markerAdmissions++
+	if s.marker != nil {
+		return port.SelfTestMarkerAdmission{Status: port.MutationExisting, Record: s.marker}, nil
+	}
+	s.marker = marker
+	return port.SelfTestMarkerAdmission{Status: port.MutationAdmitted, Record: marker}, nil
+}
+func (s *durablePlanStore) LoadSelfTestMarker(context.Context, state.SelfTestBinding) (*state.SelfTestMarker, error) {
+	return s.marker, nil
+}
+func (s *durablePlanStore) BeginSelfTestMarkerSettlement(context.Context, state.SelfTestBinding) error {
+	return errors.New("not implemented in fixture")
+}
+func (s *durablePlanStore) FinishSelfTestMarker(context.Context, state.SelfTestBinding) error {
+	return errors.New("not implemented in fixture")
 }
 
 type blockingReservationStore struct {
 	*durablePlanStore
 	entered, release chan struct{}
+}
+
+type blockingMarkerStore struct {
+	*durablePlanStore
+	entered, release chan struct{}
+}
+
+func (s *blockingMarkerStore) AdmitSelfTestMarker(ctx context.Context, marker *state.SelfTestMarker) (port.SelfTestMarkerAdmission, error) {
+	close(s.entered)
+	<-s.release
+	return s.durablePlanStore.AdmitSelfTestMarker(ctx, marker)
+}
+
+func TestSelfTestMarkerLivePermitNeverComesFromRestoredMarker(t *testing.T) {
+	b := state.SelfTestBinding{Identity: state.Identity{Scope: state.ScopeOwnerSettings, OperationID: "00000000-0000-4000-8000-000000000001", OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 2}
+	marker, _ := state.RestoreSelfTestMarker(b, state.SelfTestMarkerSelected)
+	store := &durablePlanStore{marker: marker}
+	owner := &durableSelfTestExecution{binding: b, preflight: func(context.Context) error { return nil }, gate: &selfTestParentGate{}}
+	if owner.admitMarker(context.Background(), store) || owner.hasLiveMarker() || store.markerAdmissions != 1 {
+		t.Fatal("restored marker granted a permit")
+	}
+	if owner.admitMarker(context.Background(), store) || store.markerAdmissions != 1 {
+		t.Fatal("unknown marker retried")
+	}
+}
+
+func TestSelfTestMarkerPostWriteRefusalDoesNotPublishPermit(t *testing.T) {
+	b := state.SelfTestBinding{Identity: state.Identity{Scope: state.ScopeOwnerSettings, OperationID: "00000000-0000-4000-8000-000000000001", OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 2}
+	store := &durablePlanStore{}
+	calls := 0
+	owner := &durableSelfTestExecution{binding: b, preflight: func(context.Context) error {
+		calls++
+		if calls > 1 {
+			return errors.New("slot changed")
+		}
+		return nil
+	}, gate: &selfTestParentGate{}}
+	if owner.admitMarker(context.Background(), store) || owner.hasLiveMarker() || store.markerAdmissions != 1 {
+		t.Fatal("unconfirmed marker granted a permit")
+	}
+	if owner.admitMarker(context.Background(), store) || store.markerAdmissions != 1 {
+		t.Fatal("unconfirmed marker repeated")
+	}
+}
+
+func TestSelfTestReservationPostWriteRefusalDoesNotPublishPermit(t *testing.T) {
+	ids, _ := selfTestIDsV2("00000000-0000-4000-8000-000000000001")
+	b := state.SelfTestBinding{Identity: state.Identity{Scope: state.ScopeOwnerSettings, OperationID: ids.run, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 2}
+	store, plan := &durablePlanStore{}, &durablePlanFake{ids: ids}
+	calls := 0
+	owner := &durableSelfTestExecution{binding: b, repository: store, preflight: func(context.Context) error {
+		calls++
+		if calls > 1 {
+			return errors.New("slot changed")
+		}
+		return nil
+	}, execution: &selfTestExecution{owner: plan, version: 2}, gate: &selfTestParentGate{}}
+	if owner.reserveForStart(context.Background()) || store.admits != 1 {
+		t.Fatal("unconfirmed reservation granted")
+	}
+	if out := owner.executeReserved(context.Background()); out.Status != "unknown" || plan.calls != 0 {
+		t.Fatal("unconfirmed reservation executed", out)
+	}
+}
+
+func TestSelfTestMarkerShutdownJoinsOriginalWrite(t *testing.T) {
+	b := state.SelfTestBinding{Identity: state.Identity{Scope: state.ScopeOwnerSettings, OperationID: "00000000-0000-4000-8000-000000000001", OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 2}
+	store := &blockingMarkerStore{durablePlanStore: &durablePlanStore{}, entered: make(chan struct{}), release: make(chan struct{})}
+	gate := &selfTestParentGate{}
+	owner := &durableSelfTestExecution{binding: b, preflight: func(ctx context.Context) error { return ctx.Err() }, gate: gate}
+	result := make(chan bool, 1)
+	go func() { result <- owner.admitMarker(context.Background(), store) }()
+	<-store.entered
+	gate.stop()
+	joined := make(chan struct{})
+	go func() { gate.wait(); close(joined) }()
+	select {
+	case <-joined:
+		t.Fatal("shutdown passed in-flight marker")
+	default:
+	}
+	close(store.release)
+	if <-result || owner.hasLiveMarker() {
+		t.Fatal("cancelled write granted permit")
+	}
+	<-joined
+	if gate.disposition() != "operation_unknown" {
+		t.Fatal("lost marker not fenced")
+	}
 }
 
 func (s *blockingReservationStore) AdmitSelfTest(ctx context.Context, value *state.SelfTestState) (port.SelfTestAdmission, error) {

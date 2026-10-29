@@ -16,6 +16,7 @@ import (
 type durableSelfTestExecution struct {
 	mu                                                             sync.Mutex
 	started, finished                                              bool
+	markerAttempted, markerAdmitted                                bool
 	reservationAttempted, reservationAdmitted, reservationConsumed bool
 	reservationRunning                                             bool
 	reservationMayExist                                            bool
@@ -34,6 +35,84 @@ type durableSelfTestExecution struct {
 	execution                                                      *selfTestExecution
 	originSlot                                                     *connectorSlot
 	originPublication                                              wire.ComputerAuthorityPublication
+}
+
+// admitMarker is tied to this live execution. A restored marker is never a
+// permit, and closing the runtime joins this original journal operation.
+func (d *durableSelfTestExecution) admitMarker(ctx context.Context, repo port.SelfTestMarkerRepository) bool {
+	if d == nil || ctx == nil || ctx.Err() != nil || repo == nil || d.preflight == nil || !d.binding.Valid() {
+		return false
+	}
+	d.mu.Lock()
+	if d.markerAttempted || d.started || d.reservationAttempted {
+		d.mu.Unlock()
+		return false
+	}
+	d.markerAttempted = true
+	d.mu.Unlock()
+	bounded, cancel := context.WithCancel(ctx)
+	admitted := true
+	if d.ledger != nil {
+		admitted = d.ledger.beginSelfTestParent(d.binding.Identity.OperationID, cancel)
+	} else if d.gate != nil {
+		admitted = d.gate.begin(d.binding.Identity.OperationID, cancel)
+	}
+	if !admitted {
+		cancel()
+		return false
+	}
+	uncertain := false
+	released := false
+	defer func() {
+		cancel()
+		if released {
+			return
+		}
+		if d.ledger != nil {
+			d.ledger.selfTestParent.finish(uncertain)
+		} else if d.gate != nil {
+			d.gate.finish(uncertain)
+		}
+	}()
+	if d.preflight(bounded) != nil {
+		return false
+	}
+	marker, err := state.RestoreSelfTestMarker(d.binding, state.SelfTestMarkerSelected)
+	if err != nil {
+		return false
+	}
+	uncertain = true
+	result, err := repo.AdmitSelfTestMarker(bounded, marker)
+	if err != nil || result.Status != port.MutationAdmitted || result.Record == nil || result.Record.Binding() != d.binding || result.Record.Phase() != state.SelfTestMarkerSelected || bounded.Err() != nil || d.preflight(bounded) != nil {
+		return false
+	}
+	publish := func() { d.mu.Lock(); d.markerAdmitted = true; d.mu.Unlock() }
+	if d.ledger != nil {
+		if !d.ledger.selfTestParent.finishMarker(bounded, publish) {
+			return false
+		}
+	} else if d.gate != nil {
+		if !d.gate.finishMarker(bounded, publish) {
+			return false
+		}
+	} else {
+		if bounded.Err() != nil {
+			return false
+		}
+		publish()
+	}
+	released = true
+	uncertain = false
+	return true
+}
+
+func (d *durableSelfTestExecution) hasLiveMarker() bool {
+	if d == nil {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.markerAdmitted
 }
 
 func (d *durableSelfTestExecution) execute(ctx context.Context) selfTestReport {
@@ -171,13 +250,13 @@ func (d *durableSelfTestExecution) reserveForStart(ctx context.Context) bool {
 	d.reservationMayExist = true
 	d.mu.Unlock()
 	admission, err := d.repository.AdmitSelfTest(bounded, prepared)
-	if err != nil || admission.Status != port.MutationAdmitted || admission.Record == nil || admission.Record.Binding() != d.binding || admission.Record.Phase() != state.Prepared || bounded.Err() != nil {
+	if err != nil || admission.Status != port.MutationAdmitted || admission.Record == nil || admission.Record.Binding() != d.binding || admission.Record.Phase() != state.Prepared || bounded.Err() != nil || d.preflight(bounded) != nil {
 		cancelHold()
 		return false
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.started || d.reservationConsumed || hold.Err() != nil {
+	if d.started || d.reservationConsumed || hold.Err() != nil || bounded.Err() != nil {
 		cancelHold()
 		return false
 	}

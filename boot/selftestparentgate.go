@@ -76,6 +76,24 @@ func (g *selfTestParentGate) finish(uncertain bool) {
 	close(g.done)
 }
 
+// Publish a live marker permit only while closing its original gate. The
+// cancel/closed check and publication are serialized with stop and freeze.
+func (g *selfTestParentGate) finishMarker(ctx context.Context, publish func()) bool {
+	if g == nil || ctx == nil || publish == nil {
+		return false
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.active || g.closed || ctx.Err() != nil {
+		return false
+	}
+	pubDone := g.done
+	g.active, g.cancel = false, nil
+	publish()
+	close(pubDone)
+	return true
+}
+
 // stop closes admission and signals only the original attempt. It never
 // retries it. wait is separate so no owner lock is held during a join.
 func (g *selfTestParentGate) stop() {

@@ -28,6 +28,10 @@ func TestSelfTestWireStartOnceAndObserveOriginal(t *testing.T) {
 	startBody, _ := json.Marshal(wire.ComputerSelfTestStart{Publication: in.Publication, WorkspaceId: "work"})
 	start := desktop.Request{RequestID: "start", OperationID: id, Body: startBody}
 	methods := s.Methods()
+	marked, err := methods["computer.selftest.marker.begin"].Handle(context.Background(), desktop.Request{RequestID: "marker", OperationID: id, Body: startBody})
+	if err != nil || marked == nil || marked.Status != "ok" || store.markerAdmissions != 1 {
+		t.Fatal("marker admission failed", marked, err)
+	}
 	reserved, err := methods["computer.selftest.reserve"].Handle(context.Background(), desktop.Request{RequestID: "reserve", OperationID: id, Body: startBody})
 	if err != nil || reserved == nil || reserved.Status != "ok" || wire.Validate("ComputerSelfTestObserve", reserved.Data) != nil || plan.calls != 0 || store.durablePlanStore.admits != 1 {
 		t.Fatal("reservation did not durably precede start", reserved, err)
@@ -93,10 +97,11 @@ func TestSelfTestWireRejectsMalformedRequestsBeforeAdmission(t *testing.T) {
 	s, _, journal, native, _ := connectorMutationFixture(t)
 	methods := s.Methods()
 	for name, req := range map[string]desktop.Request{
-		"computer.selftest.history": {RequestID: "history", OperationID: "unexpected", Body: []byte(`{}`)},
-		"computer.selftest.reserve": {RequestID: "reserve", OperationID: "bad", Body: []byte(`{}`)},
-		"computer.selftest.start":   {RequestID: "start", OperationID: "bad", Body: []byte(`{}`)},
-		"computer.selftest.observe": {RequestID: "observe", OperationID: "unexpected", Body: []byte(`{}`)},
+		"computer.selftest.marker.begin": {RequestID: "marker", OperationID: "bad", Body: []byte(`{}`)},
+		"computer.selftest.history":      {RequestID: "history", OperationID: "unexpected", Body: []byte(`{}`)},
+		"computer.selftest.reserve":      {RequestID: "reserve", OperationID: "bad", Body: []byte(`{}`)},
+		"computer.selftest.start":        {RequestID: "start", OperationID: "bad", Body: []byte(`{}`)},
+		"computer.selftest.observe":      {RequestID: "observe", OperationID: "unexpected", Body: []byte(`{}`)},
 	} {
 		out, err := methods[name].Handle(context.Background(), req)
 		if err != nil || out == nil || out.Status != "refused" || journal.admits != 0 || native.calls != 0 {
@@ -144,8 +149,16 @@ func TestSelfTestWireStartRequiresOriginalLiveReservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err = methods["computer.selftest.reserve"].Handle(context.Background(), desktop.Request{RequestID: "reserve", OperationID: id, Body: body})
-	if err != nil || out == nil || out.Status != "unknown" || store.durablePlanStore.admits != 1 || native.calls != 0 {
+	if err != nil || out == nil || out.Status != "refused" || store.durablePlanStore.admits != 0 || native.calls != 0 {
 		t.Fatal("old reservation became a permit", out, err)
+	}
+	store.marker, err = state.RestoreSelfTestMarker(binding, state.SelfTestMarkerSelected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = methods["computer.selftest.marker.begin"].Handle(context.Background(), desktop.Request{RequestID: "marker", OperationID: id, Body: body})
+	if err != nil || out == nil || out.Status != "unknown" || store.markerAdmissions != 1 || store.durablePlanStore.admits != 0 {
+		t.Fatal("old marker granted permit", out, err)
 	}
 	out, err = methods["computer.selftest.start"].Handle(context.Background(), desktop.Request{RequestID: "late-start", OperationID: id, Body: body})
 	if err != nil || out == nil || native.calls != 0 || store.durablePlanStore.saves != 0 {

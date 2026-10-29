@@ -63,6 +63,31 @@ func TestSelfTestParentGateAllowsNextAfterKnownResult(t *testing.T) {
 	gate.finish(false)
 }
 
+func TestSelfTestMarkerPermitPublishesTogetherWithGateRelease(t *testing.T) {
+	var gate selfTestParentGate
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if !gate.begin("marker", cancel) {
+		t.Fatal("marker refused")
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	finished := make(chan bool, 1)
+	go func() { finished <- gate.finishMarker(ctx, func() { close(entered); <-release }) }()
+	<-entered
+	reserved := make(chan bool, 1)
+	go func() { reserved <- gate.begin("reservation", cancel) }()
+	select {
+	case <-reserved:
+		t.Fatal("reservation crossed publication")
+	default:
+	}
+	close(release)
+	if !<-finished || !<-reserved {
+		t.Fatal("reservation lost after publication")
+	}
+	gate.finish(false)
+}
+
 func TestSelfTestParentGateBlocksCleanRetirementUntilSettled(t *testing.T) {
 	for _, mode := range []string{"active", "unknown", "settled"} {
 		t.Run(mode, func(t *testing.T) {

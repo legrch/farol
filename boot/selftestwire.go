@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
+	"github.com/legrch/farol/modules/computer/app/port"
 	state "github.com/legrch/farol/modules/computer/domain/mutation"
 	"github.com/legrch/farol/pkg/ipc"
 	"github.com/legrch/farol/transport/desktop"
@@ -46,6 +47,32 @@ func selfTestWireResult(binding state.SelfTestBinding, report selfTestReport) (*
 
 func (s *computerConnector) selfTestMethods() map[string]desktop.Method {
 	return map[string]desktop.Method{
+		"computer.selftest.marker.begin": {Concurrent: true, Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
+			if r.OperationID == "" || ipc.ValidateJSON(r.Body) != nil || wire.Validate("ComputerSelfTestStart", r.Body) != nil {
+				return invalidIngress()
+			}
+			var in wire.ComputerSelfTestStart
+			if json.Unmarshal(r.Body, &in) != nil {
+				return invalidIngress()
+			}
+			slot, err := s.currentSelfTestSlot(ctx)
+			if err != nil {
+				return &desktop.Outcome{Status: "unavailable", Code: "COMPUTER_AUTHORITY_STORE_UNAVAILABLE"}, nil
+			}
+			execution, err := s.selectSelfTest(ctx, slot, in.WorkspaceId, r.OperationID, in.Publication)
+			if err != nil {
+				return &desktop.Outcome{Status: "refused", Code: "COMPUTER_SELFTEST_UNAVAILABLE"}, nil
+			}
+			repo, ok := s.mutations.dependencies.repository.(port.SelfTestMarkerRepository)
+			if !ok || repo == nil {
+				return &desktop.Outcome{Status: "unavailable", Code: "COMPUTER_AUTHORITY_STORE_UNAVAILABLE"}, nil
+			}
+			if !execution.admitMarker(ctx, repo) {
+				return &desktop.Outcome{Status: "unknown", Code: "COMPUTER_SELFTEST_MARKER_UNKNOWN"}, nil
+			}
+			version := "2"
+			return ingressOutcome(&wire.ComputerSelfTestObserve{OperationId: r.OperationID, WorkspaceId: in.WorkspaceId, ComputerGeneration: in.Publication.Generation, PlanVersion: &version}, nil)
+		}},
 		"computer.selftest.history": {Concurrent: true, Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
 			if r.OperationID != "" || ipc.ValidateJSON(r.Body) != nil || wire.Validate("ComputerSelfTestHistoryRequest", r.Body) != nil {
 				return invalidIngress()
@@ -85,11 +112,11 @@ func (s *computerConnector) selfTestMethods() map[string]desktop.Method {
 			if err != nil {
 				return &desktop.Outcome{Status: "unavailable", Code: "COMPUTER_AUTHORITY_STORE_UNAVAILABLE"}, nil
 			}
-			execution, err := s.selectSelfTest(ctx, slot, in.WorkspaceId, r.OperationID, in.Publication)
-			if err != nil {
+			execution, err := s.reservedSelfTest(slot, in.WorkspaceId, r.OperationID, in.Publication)
+			if err != nil || !execution.hasLiveMarker() {
 				return &desktop.Outcome{Status: "refused", Code: "COMPUTER_SELFTEST_UNAVAILABLE"}, nil
 			}
-			if !execution.reserveForStart(ctx) || s.checkMutationSlot(ctx, slot, slot.opened.Execution) != nil {
+			if !execution.reserveForStart(ctx) {
 				return &desktop.Outcome{Status: "unknown", Code: "COMPUTER_SELFTEST_RESERVATION_UNKNOWN"}, nil
 			}
 			version := "2"
