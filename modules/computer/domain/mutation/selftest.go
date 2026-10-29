@@ -10,7 +10,7 @@ type SelfTestBinding struct {
 }
 
 func (b SelfTestBinding) Valid() bool {
-	return ValidIdentity(b.Identity) && b.Identity.Scope == ScopeOwnerSettings && ScratchLeaf(ScratchPath(b.Identity.OperationID)) && Identifier(b.WorkspaceID, 120) && b.ComputerGeneration <= MaxSafeInteger && b.Version == 1
+	return ValidIdentity(b.Identity) && b.Identity.Scope == ScopeOwnerSettings && ScratchLeaf(ScratchPath(b.Identity.OperationID)) && Identifier(b.WorkspaceID, 120) && b.ComputerGeneration <= MaxSafeInteger && (b.Version == 1 || b.Version == 2)
 }
 
 type SelfTestStep struct {
@@ -56,6 +56,9 @@ func selfTestToken(value string, max int) bool {
 }
 
 func (r SelfTestResult) bound(binding SelfTestBinding) bool {
+	if binding.Version == 2 {
+		return r.boundV2(binding)
+	}
 	names := []string{"scratch", "write", "edit", "mutation read", "cleanup", "shell", "shell cancel", "workspace reads", "git and hooks"}
 	operations := []string{binding.Identity.OperationID, binding.Identity.OperationID + "-st1-write", binding.Identity.OperationID + "-st1-edit", binding.Identity.OperationID + "-st1-edit", binding.Identity.OperationID, binding.Identity.OperationID + "-st1-quick", binding.Identity.OperationID + "-st1-cancel", "", ""}
 	if len(r.Steps) > len(names) {
@@ -78,6 +81,42 @@ func (r SelfTestResult) bound(binding SelfTestBinding) bool {
 			return false
 		}
 		if i < len(r.Steps)-1 && i < 7 && s.Status != "pass" {
+			return false
+		}
+	}
+	if r.Status == "partial" {
+		return len(r.Steps) == len(names)
+	}
+	if len(r.Steps) == 0 {
+		return r.Status == "unknown"
+	}
+	last := r.Steps[len(r.Steps)-1]
+	return r.Status == "failed" && last.Status == "fail" || r.Status == "unknown" && (last.Status == "unknown" || last.Status == "pass")
+}
+
+// Version 1 records keep their original interpretation. Version 2 records
+// individual read checks before cleanup and never carry their data contents.
+func (r SelfTestResult) boundV2(binding SelfTestBinding) bool {
+	id := binding.Identity.OperationID
+	names := []string{"scratch", "write", "edit", "mutation read", "catalogue", "bootstrap", "list", "read", "search", "cleanup", "shell", "shell cancel", "git and hooks"}
+	operations := []string{id, id + "-st2-write", id + "-st2-edit", id + "-st2-edit", id + "-st2-catalogue", id + "-st2-bootstrap", id + "-st2-list", id + "-st2-read", id + "-st2-search", id, id + "-st2-quick", id + "-st2-cancel", ""}
+	if len(r.Steps) > len(names) {
+		return false
+	}
+	for i, s := range r.Steps {
+		if s.Name != names[i] || s.Operation != operations[i] {
+			return false
+		}
+		if i != 11 && s.CancelOperation != "" || i == 11 && s.CancelOperation != "" && s.CancelOperation != id+"-st2-cancel-op" {
+			return false
+		}
+		if i != 10 && i != 11 && (s.Handle != "" || s.DescendantCleanup != "") {
+			return false
+		}
+		if i == 12 && (s.Status != "not_tested" || s.Code != "") {
+			return false
+		}
+		if i < len(r.Steps)-1 && i < 12 && s.Status != "pass" {
 			return false
 		}
 	}
