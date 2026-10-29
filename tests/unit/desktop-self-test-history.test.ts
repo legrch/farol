@@ -33,6 +33,52 @@ it("reads the original prepared attempt without dispatching it", async () => {
   expect(Object.isFrozen(history[0]?.selection)).toBe(true);
 });
 
+it("preserves mixed-version completed and unconfirmed history", async () => {
+  const entries = [
+    { selection: { ...original, planVersion: "1" }, phase: "completed" },
+    {
+      selection: {
+        ...original,
+        operationId: "00000000-0000-4000-8000-000000000002",
+        planVersion: "2",
+      },
+      phase: "failed",
+    },
+    {
+      selection: {
+        ...original,
+        operationId: "00000000-0000-4000-8000-000000000003",
+        planVersion: "3",
+      },
+      phase: "outcome_unknown",
+    },
+    {
+      selection: {
+        ...original,
+        operationId: "00000000-0000-4000-8000-000000000004",
+        planVersion: "4",
+      },
+      phase: "prepared",
+    },
+  ];
+  const request = vi.fn(
+    async (
+      _method: string,
+      _body: Json,
+      options: { id?: string },
+    ): Promise<Outcome> => ({
+      status: "ok",
+      requestId: options.id!,
+      context,
+      data: { workspaceId: "work", entries },
+    }),
+  );
+  const history = await readSelfTestHistory({ request }, context, "work");
+  expect(history).toEqual(entries);
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(request.mock.calls[0]?.[0]).toBe("computer.selftest.history");
+});
+
 it.each([
   "context",
   "workspace",
