@@ -28,7 +28,10 @@ function sameSelection(a: SelfTestSelection, b: SelfTestSelection): boolean {
 // restarts. The implementation owns the single-writer and durability proof.
 export interface SelfTestMarker {
   load(workspaceId: string): Promise<"none" | PriorSelfTest>;
-  begin(selection: SelfTestSelection): Promise<"durable" | "unknown">;
+  begin(
+    selection: SelfTestSelection,
+    publication: ComputerAuthorityPublication,
+  ): Promise<"durable" | "unknown">;
   finish(selection: SelfTestSelection): Promise<"durable" | "unknown">;
 }
 
@@ -57,7 +60,8 @@ class CoreSelectionStore implements SelfTestSelectionStore {
       return "unknown";
     const id = randomUUID();
     try {
-      if ((await this.marker.begin(selection)) !== "durable") return "unknown";
+      if ((await this.marker.begin(selection, publication)) !== "durable")
+        return "unknown";
       const out = await this.client.request(
         "computer.selftest.reserve",
         { workspaceId: selection.workspaceId, publication } as unknown as Json,
