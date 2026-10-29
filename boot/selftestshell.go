@@ -13,6 +13,7 @@ type selfTestShellKind uint8
 const (
 	selfTestShellQuick selfTestShellKind = iota + 1
 	selfTestShellCancel
+	selfTestShellGitVersion
 )
 
 // selfTestShell owns one foreground canary in the already admitted connector.
@@ -31,7 +32,7 @@ type selfTestShell struct {
 }
 
 func newSelfTestShell(owner *computerConnector, slot *connectorSlot, workspace, operation, call, cancelOperation string, kind selfTestShellKind) (*selfTestShell, error) {
-	if owner == nil || slot == nil || owner.processes == nil || !validIngressID(workspace) || !validIngressID(operation) || !validIngressID(call) || !validIngressID(cancelOperation) || operation == cancelOperation || (kind != selfTestShellQuick && kind != selfTestShellCancel) {
+	if owner == nil || slot == nil || owner.processes == nil || !validIngressID(workspace) || !validIngressID(operation) || !validIngressID(call) || !validIngressID(cancelOperation) || operation == cancelOperation || (kind != selfTestShellQuick && kind != selfTestShellCancel && kind != selfTestShellGitVersion) {
 		return nil, connectorProcessRefusal("PROCESS_INPUT_INVALID")
 	}
 	return &selfTestShell{owner: owner, slot: slot, execution: slot.opened.Execution, selectLaunch: owner.processes, workspace: workspace, operation: operation, call: call, cancelOperation: cancelOperation, kind: kind}, nil
@@ -47,6 +48,8 @@ func (s *selfTestShell) start(ctx context.Context) (*processct.StartResponse, er
 	command := "printf 'farol self-test\\n'"
 	if s.kind == selfTestShellCancel {
 		command = "/bin/sleep 30"
+	} else if s.kind == selfTestShellGitVersion {
+		command = "git --version"
 	}
 	request := connectorShellRequest{WorkspaceID: s.workspace, RelativeCwd: ".", Command: command, Write: false}
 	out, err := s.owner.startQualifiedShellForRun(ctx, s.slot, s.execution, s.operation, s.call, request, s.selectLaunch, s.run)

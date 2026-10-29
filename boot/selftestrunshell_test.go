@@ -140,3 +140,40 @@ func TestSelfTestShellCheckReadFailureDoesNotSettleStartedProcess(t *testing.T) 
 		t.Fatal("read failure misclassified", result)
 	}
 }
+
+func TestSelfTestGitVersionUsesOneReadOnlyConfinedCommand(t *testing.T) {
+	s, journal, native, _ := processWireFixture(t)
+	check, err := newSelfTestShell(s, s.current, "work", "git-check", "git-call", "git-unused-cancel", selfTestShellGitVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := check.start(context.Background())
+	if err != nil || started == nil || native.spawns != 1 || journal.reserves != 1 || len(native.requests) != 1 {
+		t.Fatal("Git check did not start once", started, err, native.spawns, journal.reserves)
+	}
+	request := native.requests[0]
+	if request.Command != "git --version" || request.Write || request.WorkspaceID != "work" || request.RelativeCwd != "." {
+		t.Fatal("Git check widened its scope", request)
+	}
+	if _, err := check.start(context.Background()); err == nil || native.spawns != 1 {
+		t.Fatal("original Git check was repeated", err)
+	}
+}
+
+func TestSelfTestGitVersionOutputIsBoundedAndNotRepositoryProof(t *testing.T) {
+	for _, value := range []string{"git version 2.45.0\n", "git version 2.39.3 (Apple Git-145)\n"} {
+		if !validSelfTestGitVersion([]byte(value)) {
+			t.Fatal("valid version refused", value)
+		}
+	}
+	for _, value := range []string{"", "git version \n", "git version unknown\n", "git version 2\nprivate\n", "git version 2\x00\n", "git version 2"} {
+		if validSelfTestGitVersion([]byte(value)) {
+			t.Fatal("invalid version accepted", value)
+		}
+	}
+	tooLong := append([]byte("git version 2"), make([]byte, 512)...)
+	tooLong = append(tooLong, '\n')
+	if validSelfTestGitVersion(tooLong) || validSelfTestGitVersion([]byte{'g', 'i', 't', ' ', 'v', 'e', 'r', 's', 'i', 'o', 'n', ' ', '2', 0xff, '\n'}) {
+		t.Fatal("oversized or malformed output accepted")
+	}
+}

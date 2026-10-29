@@ -3,7 +3,9 @@ package boot
 import (
 	"context"
 	"encoding/base64"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	processct "github.com/legrch/farol/modules/computer/contracts/process"
 	"github.com/legrch/farol/modules/computer/domain/mutation"
@@ -125,9 +127,10 @@ func (s *selfTestShell) check(ctx context.Context) shellCheckResult {
 				result.Code = "PROCESS_OUTCOME_UNKNOWN"
 				return result
 			}
-			if s.kind == selfTestShellQuick {
+			if s.kind == selfTestShellQuick || s.kind == selfTestShellGitVersion {
 				output, err := base64.StdEncoding.Strict().DecodeString(out.StdoutBase64)
-				if err != nil || out.StdoutOffset != 0 || out.StdoutNext != uint64(len(output)) || out.StdoutBytes != out.StdoutNext || out.StderrOffset != 0 || out.StderrNext != 0 || out.StderrBytes != 0 || out.StderrBase64 != "" || out.ExitCode == nil || *out.ExitCode != 0 || string(output) != "farol self-test\n" {
+				validOutput := s.kind == selfTestShellQuick && string(output) == "farol self-test\n" || s.kind == selfTestShellGitVersion && validSelfTestGitVersion(output)
+				if err != nil || out.StdoutOffset != 0 || out.StdoutNext != uint64(len(output)) || out.StdoutBytes != out.StdoutNext || out.StderrOffset != 0 || out.StderrNext != 0 || out.StderrBytes != 0 || out.StderrBase64 != "" || out.ExitCode == nil || *out.ExitCode != 0 || !validOutput {
 					result.Status, result.Code = "fail", "SELF_TEST_OUTPUT_MISMATCH"
 					return result
 				}
@@ -147,4 +150,22 @@ func (s *selfTestShell) check(ctx context.Context) shellCheckResult {
 		case <-timer.C:
 		}
 	}
+}
+
+// Availability only: this does not establish repository or hook behavior.
+func validSelfTestGitVersion(output []byte) bool {
+	if len(output) > 512 || !utf8.Valid(output) {
+		return false
+	}
+	line := string(output)
+	const prefix = "git version "
+	if !strings.HasPrefix(line, prefix) || !strings.HasSuffix(line, "\n") || len(line) <= len(prefix)+1 || line[len(prefix)] < '0' || line[len(prefix)] > '9' {
+		return false
+	}
+	for _, r := range strings.TrimSuffix(line, "\n") {
+		if r < 32 || r == 127 {
+			return false
+		}
+	}
+	return true
 }
