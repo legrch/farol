@@ -258,3 +258,62 @@ it.each([
     ).toBe(true);
   },
 );
+
+it("preserves an old v2 terminal and a new v3 unknown across the same inventory", async () => {
+  const current = {
+    ...selection,
+    operationId: "00000000-0000-4000-8000-000000000002",
+    planVersion: "3" as const,
+  };
+  const request = vi.fn(
+    async (
+      method: string,
+      _body: Json,
+      options: { id?: string },
+    ): Promise<Outcome> => ({
+      status: "ok",
+      requestId: options.id!,
+      context,
+      data:
+        method === "computer.selftest.observe"
+          ? {
+              ...selection,
+              status: "fail",
+              steps: [
+                {
+                  name: "scratch",
+                  status: "fail",
+                  operationId: selection.operationId,
+                },
+              ],
+            }
+          : {
+              workspaceId: "work",
+              entries:
+                method === "computer.selftest.marker.history"
+                  ? [
+                      { selection, phase: "selected" },
+                      { selection: current, phase: "selected" },
+                    ]
+                  : [
+                      { selection, phase: "failed" },
+                      { selection: current, phase: "outcome_unknown" },
+                    ],
+            },
+    }),
+  );
+  const marker = new CoreSelfTestMarker({ request }, context, "work");
+  expect(await marker.load("work")).toEqual({
+    selection: current,
+    settlementAttempted: false,
+  });
+  expect(
+    request.mock.calls.every(([method]) =>
+      [
+        "computer.selftest.marker.history",
+        "computer.selftest.history",
+        "computer.selftest.observe",
+      ].includes(method),
+    ),
+  ).toBe(true);
+});
