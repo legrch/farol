@@ -22,7 +22,7 @@ func (m *Mutable) Mutate(ctx context.Context, request port.MutationRequest) (rec
 	if m == nil || m.fs == nil {
 		return nil, refusal("WORKSPACE_PATH_REFUSED")
 	}
-	if mutation.ValidateNative(request.Operation) != nil || !mutation.Identifier(request.Workspace.WorkspaceID, 160) {
+	if request.HoldScratchDirectory || mutation.ValidateNative(request.Operation) != nil || !mutation.Identifier(request.Workspace.WorkspaceID, 160) {
 		return nil, refusal("WORKSPACE_INVALID_REQUEST")
 	}
 	request.Operation = request.Operation.Clone()

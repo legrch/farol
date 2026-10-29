@@ -39,7 +39,7 @@ func (m scratchSyncMutation) sync(fd int) error {
 // Disposable native filesystem only. Same-account adversarial processes and
 // the full owner, journal, shell and desktop lifecycle are outside this test.
 func TestNativeStagedScratchPublicationAndRefusal(t *testing.T) {
-	for _, name := range []string{"publish", "collision", "guard_refused", "wrong_stage", "wrong_root", "source_replaced", "published_replaced", "cancel_after_publish", "replaced_after_sync", "cancel_after_sync", "cancel_before_mkdir", "cancel_after_mkdir"} {
+	for _, name := range []string{"publish", "publish_held", "collision", "guard_refused", "wrong_stage", "wrong_root", "source_replaced", "published_replaced", "cancel_after_publish", "replaced_after_sync", "cancel_after_sync", "cancel_before_mkdir", "cancel_after_mkdir"} {
 		t.Run(name, func(t *testing.T) {
 			base, err := os.MkdirTemp("/private/tmp", "farol-scratch-")
 			if err != nil {
@@ -117,6 +117,7 @@ func TestNativeStagedScratchPublicationAndRefusal(t *testing.T) {
 				}
 				return nil
 			}}
+			r.HoldScratchDirectory = name == "publish_held"
 			if name == "collision" {
 				if err := os.Mkdir(filepath.Join(workspace, op.Path()), 0700); err != nil {
 					t.Fatal(err)
@@ -148,13 +149,40 @@ func TestNativeStagedScratchPublicationAndRefusal(t *testing.T) {
 				t.Fatal(listErr)
 			}
 			switch name {
-			case "publish":
+			case "publish", "publish_held":
 				if err != nil || result == nil || !result.Directory.Valid() || guards != 1 || len(entries) != 0 {
 					t.Fatalf("publication: %#v %v guards=%d stage=%d", result, err, guards, len(entries))
 				}
 				var got unix.Stat_t
 				if err := unix.Lstat(filepath.Join(workspace, op.Path()), &got); err != nil || result.Directory.Device != strconv.FormatUint(uint64(got.Dev), 10) || result.Directory.Inode != strconv.FormatUint(got.Ino, 10) {
 					t.Fatalf("identity: %#v %v", got, err)
+				}
+				if name == "publish_held" {
+					if result.ScratchDirectory == nil || result.ScratchDirectory.Check(result.Directory) != nil {
+						t.Fatal("missing original descriptor")
+					}
+					path := filepath.Join(workspace, op.Path())
+					if err := os.Remove(path); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Mkdir(path, 0700); err != nil {
+						t.Fatal(err)
+					}
+					var replacement unix.Stat_t
+					if err := unix.Lstat(path, &replacement); err != nil || replacement.Ino == got.Ino {
+						t.Fatal("held inode reused", err)
+					}
+					if err := result.ScratchDirectory.Close(); err != nil {
+						t.Fatal(err)
+					}
+					if err := result.ScratchDirectory.Close(); err != nil {
+						t.Fatal(err)
+					}
+					if err := result.ScratchDirectory.Check(result.Directory); err == nil {
+						t.Fatal("closed descriptor accepted")
+					}
+				} else if result.ScratchDirectory != nil {
+					t.Fatal("unrequested custody")
 				}
 			case "wrong_stage", "wrong_root":
 				if err == nil || result != nil || guards != 0 || len(entries) != 0 {

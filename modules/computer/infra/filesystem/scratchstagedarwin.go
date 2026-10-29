@@ -125,6 +125,13 @@ func (m *Mutable) CreateStagedScratch(ctx context.Context, r port.MutationReques
 	if ctx.Err() != nil || walk.check() != nil || unix.Fstat(child, &pinned) != nil || unix.Fstatat(destination, op.Path(), &published, unix.AT_SYMLINK_NOFOLLOW) != nil || pinned.Dev != created.Dev || pinned.Ino != created.Ino || pinned.Mode != created.Mode || pinned.Uid != created.Uid || published.Dev != created.Dev || published.Ino != created.Ino || published.Mode != created.Mode || published.Uid != created.Uid {
 		return receipt, mutationError("MUTATION_OUTCOME_UNKNOWN")
 	}
+	if r.HoldScratchDirectory {
+		hold, err := unix.FcntlInt(uintptr(child), unix.F_DUPFD_CLOEXEC, 0)
+		if err != nil {
+			return receipt, mutationError("MUTATION_OUTCOME_UNKNOWN")
+		}
+		receipt.ScratchDirectory = &scratchDirectoryCustody{fd: hold, identity: receipt.Directory, uid: m.fs.uid()}
+	}
 	return receipt, nil
 }
 
