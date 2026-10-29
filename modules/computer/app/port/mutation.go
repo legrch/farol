@@ -111,3 +111,13 @@ type StagedMutation interface {
 	Execute(context.Context) (*MutationReceipt, error)
 	Release()
 }
+
+// ScratchCleanupRequest carries the original immutable creation facts. The
+// caller owns journal admission, process exclusion, current authority and the
+// terminal result; this value does not supply any of those proofs.
+type ScratchCleanupRequest struct {
+	Workspace       MutationDescriptor
+	Binding         mutation.ScratchCleanupBinding
+	BeforePublish   func(context.Context) error
+	WithPublication func(context.Context, func() error) error
+}

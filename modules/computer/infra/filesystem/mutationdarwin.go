@@ -20,7 +20,8 @@ func (darwinMutation) root() (int, error) {
 func (darwinMutation) open(parent int, name string, flags int, mode uint32) (int, error) {
 	return unix.Openat(parent, name, flags, mode)
 }
-func (darwinMutation) close(fd int) { _ = unix.Close(fd) }
+func (darwinMutation) close(fd int)              { _ = unix.Close(fd) }
+func (darwinMutation) closeChecked(fd int) error { return unix.Close(fd) }
 func (darwinMutation) stat(fd int) (fileVersion, error) {
 	var s unix.Stat_t
 	err := unix.Fstat(fd, &s)
