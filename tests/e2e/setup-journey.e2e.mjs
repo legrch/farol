@@ -1295,15 +1295,19 @@ async function runScenario(scenario) {
         previousVerification = automaticCheck.lifecycle.id;
         await poll(
           () =>
-            page.evaluate(() => ({
-              warning: document.querySelector(".home-health-warning") !== null,
-              checking:
-                document.querySelector(".home-connection-progress") !== null,
-              confirmed:
-                document.querySelector(
-                  '.home-status-card[aria-label="Connection status"] h2',
-                )?.textContent === "Farol is working",
-            })),
+            page.evaluate(
+              (expectedTitle) => ({
+                warning:
+                  document.querySelector(".home-health-warning") !== null,
+                checking:
+                  document.querySelector(".home-connection-progress") !== null,
+                confirmed:
+                  document.querySelector(
+                    '.home-status-card[aria-label="Connection status"] h2',
+                  )?.textContent === expectedTitle,
+              }),
+              `${productName} is working`,
+            ),
           (value) => !value.warning && !value.checking && value.confirmed,
           "AUTO_HOME_RENDERER_CHECK_UNSETTLED",
           30000,

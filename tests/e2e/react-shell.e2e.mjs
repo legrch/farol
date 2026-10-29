@@ -16,7 +16,10 @@ import {
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 import { qualifyGoBuild } from "./qualified-go-build.mjs";
 import { waitForReactShell } from "./current-react-setup.mjs";
-import { desktopIdentity } from "../../tooling/harness-identity.ts";
+import {
+  desktopIdentity,
+  productName,
+} from "../../tooling/harness-identity.ts";
 import {
   shellGeometry,
   shellRailWidth,
@@ -707,7 +710,7 @@ try {
     await replacement.waitForTimeout(100);
   }
   assert.ok(updates, "REOPENED_UPDATES_WINDOW_MISSING");
-  await updates.getByRole("main", { name: "Farol Updates" }).waitFor();
+  await updates.getByRole("main", { name: `${productName} Updates` }).waitFor();
   const nativeWindows = await app.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows().map((w) => ({
       id: w.id,
@@ -727,11 +730,12 @@ try {
   assert.notEqual(mainWindow.id, originalWindowId);
   assert.equal(updatesWindow.parentId, mainWindow.id);
   assert.equal(updatesWindow.modal, false);
-  await updates.waitForFunction(async () => {
-    const value = await window.farolUpdates.state();
-    return value.status === "ready" && value.pending === false;
-  });
-  const updateState = await updates.evaluate(() => window.farolUpdates.state());
+  let updateState;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    updateState = await updates.evaluate(() => window.farolUpdates.state());
+    if (updateState.status === "ready" && updateState.pending === false) break;
+    await updates.waitForTimeout(100);
+  }
   assert.equal(
     updateState.status,
     "ready",
