@@ -3,7 +3,6 @@ package mutation
 import (
 	"context"
 	"errors"
-	"sync"
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -143,54 +142,24 @@ func (s *Service) executeBound(ctx context.Context, binding state.Binding, op st
 	return finish(terminal, publication, err)
 }
 
-// stagedNative keeps the single terminal save inside the stage lifetime. A
-// missing, duplicate, late or contradictory callback never starts another
-// native attempt or overwrites the original terminal result.
+// stagedNative owns the gate across native execution and the single terminal
+// save. No producer callback can outlive the gate or write a late result.
 func (s *Service) stagedNative(ctx context.Context, op state.Operation, record state.State, request port.MutationRequest) (*state.State, string, error) {
 	stage, ok := s.native.(port.StagedMutableWorkspace)
 	if !ok {
 		return nil, "", unknown("native-workspace")
 	}
-	var mu sync.Mutex
-	var terminal *state.State
-	var publication string
-	var finalErr error
-	called, closed, duplicate, finished := false, false, false, false
-	done := make(chan struct{})
-	finish := func(receipt *port.MutationReceipt, nativeErr error) error {
-		mu.Lock()
-		if closed || called {
-			duplicate = true
-			mu.Unlock()
-			return unknown("native-workspace")
+	attempt, err := stage.BeginStage(ctx, request)
+	if err != nil || attempt == nil {
+		if attempt != nil {
+			attempt.Release()
 		}
-		called = true
-		mu.Unlock()
-		result, outcome, err := s.terminalNative(ctx, op, record, receipt, nativeErr)
-		mu.Lock()
-		terminal, publication, finalErr, finished = result, outcome, err, true
-		close(done)
-		mu.Unlock()
-		return err
-	}
-	stageErr := stage.MutateAndFinish(ctx, request, finish)
-	mu.Lock()
-	closed = true
-	if !called {
-		mu.Unlock()
-		// The gate may already be gone. Preserve the durable Prepared record;
-		// no late terminal write can establish its original effect.
+		// No late write: retain the original durable Prepared evidence.
 		return nil, "", unknown("native-workspace")
 	}
-	completedSynchronously := finished
-	mu.Unlock()
-	<-done
-	mu.Lock()
-	defer mu.Unlock()
-	if !completedSynchronously || duplicate || (stageErr != nil && finalErr == nil) {
-		return terminal, publication, unknown("native-workspace")
-	}
-	return terminal, publication, finalErr
+	defer attempt.Release()
+	receipt, nativeErr := attempt.Execute(ctx)
+	return s.terminalNative(ctx, op, record, receipt, nativeErr)
 }
 
 // terminalNative classifies the original attempt and makes one terminal save.

@@ -96,11 +96,18 @@ type MutableWorkspace interface {
 	Mutate(context.Context, MutationRequest) (*MutationReceipt, error)
 }
 
-// StagedMutableWorkspace is a private Scratch-only execution port. The
-// implementation calls finish exactly once, synchronously, after its native
-// owner has closed and rechecked its pinned resources, while its stage gate
-// still prevents conflicting process admission. An error or missing callback
-// cannot authorize replay. Existing journal records never enter this port.
+// StagedMutableWorkspace is a private Scratch-only execution port. BeginStage
+// retains the process exclusion gate but performs no native effect. The caller
+// owns exactly one Execute and must Release only after terminal persistence.
+// Existing journal records never enter this port.
 type StagedMutableWorkspace interface {
-	MutateAndFinish(context.Context, MutationRequest, func(*MutationReceipt, error) error) error
+	BeginStage(context.Context, MutationRequest) (StagedMutation, error)
+}
+
+// StagedMutation keeps its gate through Execute, the caller's terminal Save,
+// and Release. Execute joins the native descriptor close and its post-check.
+// Release is an idempotent synchronous in-memory gate release, not a native effect.
+type StagedMutation interface {
+	Execute(context.Context) (*MutationReceipt, error)
+	Release()
 }
