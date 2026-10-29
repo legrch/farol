@@ -27,6 +27,14 @@ func qualifyStagingHistory(entries []settledBytes, selection SettledSelection) (
 			return false, preservedRefusal()
 		}
 		switch {
+		case header.Version == scratchCleanupVersion && header.Kind == scratchCleanupKind:
+			state, err := decodeScratchCleanup(entry.raw)
+			if err != nil || state == nil {
+				return false, preservedRefusal()
+			}
+			if state.Phase() == domain.Prepared || state.Phase() == domain.OutcomeUnknown {
+				return false, nil
+			}
 		case header.Version == scratchVersion && header.Kind == scratchKind:
 			state, err := decode(entry.raw)
 			if err != nil || state == nil {

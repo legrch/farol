@@ -16,8 +16,15 @@ func qualifyFreshProcessHistory(entries []settledBytes, selection SettledSelecti
 	}
 	unknownWrite := false
 	parents := map[string]domain.Identity{}
+	scratchParents := map[string]*domain.State{}
+	cleanupChildren := map[string]*domain.ScratchCleanupState{}
+	seen := map[string]bool{}
 	expected := make([]ExpectedPreservedRecord, len(entries))
 	for n, entry := range entries {
+		if seen[entry.key] {
+			return false, preservedRefusal()
+		}
+		seen[entry.key] = true
 		var header struct {
 			Version uint8           `json:"schemaVersion"`
 			Kind    string          `json:"kind"`
@@ -29,6 +36,7 @@ func qualifyFreshProcessHistory(entries []settledBytes, selection SettledSelecti
 		digest := sha256.Sum256(entry.raw)
 		expected[n] = ExpectedPreservedRecord{Key: entry.key, SHA256: hex.EncodeToString(digest[:])}
 		var identity domain.Identity
+		var cleanupKey string
 		switch {
 		case header.Version == 2 && header.Kind == "workspace_owner_mutation", header.Version == 3 && header.Kind == "workspace_connector_mutation", header.Version == scratchVersion && header.Kind == scratchKind:
 			state, err := decode(entry.raw)
@@ -36,6 +44,20 @@ func qualifyFreshProcessHistory(entries []settledBytes, selection SettledSelecti
 				return false, preservedRefusal()
 			}
 			identity = state.Binding().Identity
+			if header.Version == scratchVersion && header.Kind == scratchKind {
+				scratchParents[entry.key] = state
+			}
+		case header.Version == scratchCleanupVersion && header.Kind == scratchCleanupKind:
+			state, err := decodeScratchCleanup(entry.raw)
+			if err != nil || state == nil {
+				return false, preservedRefusal()
+			}
+			identity = state.Binding().Creation.Identity
+			cleanupKey, err = scratchCleanupKey(identity)
+			if err != nil {
+				return false, preservedRefusal()
+			}
+			cleanupChildren[entry.key] = state
 		case header.Version == 4 && header.Kind == "workspace_connector_process":
 			scope, intent, err := decodeProcess(entry.raw)
 			if err != nil {
@@ -63,10 +85,24 @@ func qualifyFreshProcessHistory(entries []settledBytes, selection SettledSelecti
 			return false, preservedRefusal()
 		}
 		key, err := recordKey(identity)
+		if cleanupKey != "" {
+			key = cleanupKey
+		}
 		if err != nil || key != entry.key || identity.OwnerID != selection.OwnerID || identity.ProfileID != selection.ProfileID || identity.ComputerID != selection.ComputerID {
 			return false, preservedRefusal()
 		}
 		expected[n].Identity = identity
+	}
+	for _, cleanup := range cleanupChildren {
+		binding := cleanup.Binding()
+		parentKey, err := recordKey(binding.Creation.Identity)
+		if err != nil {
+			return false, preservedRefusal()
+		}
+		parent := scratchParents[parentKey]
+		if parent == nil || parent.Phase() != domain.Completed || parent.Binding() != binding.Creation || parent.Receipt() == nil || parent.Receipt().Operation != domain.ScratchKind || parent.Receipt().Directory != binding.Directory {
+			return false, preservedRefusal()
+		}
 	}
 	for n, entry := range entries {
 		if expected[n].Identity.OwnerID != "" {
