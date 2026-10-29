@@ -149,7 +149,7 @@ it("checks a terminal that appears between the two history snapshots", async () 
 });
 
 it("requires the exact one-shot marker acknowledgement", async () => {
-  const current = { ...selection, planVersion: "3" as const };
+  const current = { ...selection, planVersion: "4" as const };
   const request = vi.fn(
     async (
       _method: string,
@@ -186,7 +186,7 @@ it("does not repeat a lost marker admission", async () => {
     await beginSelfTestMarker(
       { request },
       context,
-      { ...selection, planVersion: "3" },
+      { ...selection, planVersion: "4" },
       publication,
     ),
   ).toBe("unknown");

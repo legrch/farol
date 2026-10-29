@@ -62,6 +62,7 @@ type connectorProcessNativeDouble struct {
 	afterProbe    func()
 	readErr       error
 	terminal      bool
+	terminalCode  *int
 	supervisor    processsvc.SupervisorState
 	groupGone     bool
 	completed     chan struct{}
@@ -154,6 +155,9 @@ func (n *connectorProcessNativeDouble) Read(_ context.Context, window processsvc
 		StdoutNext: window.StdoutOffset + uint64(len(stdout)), StderrNext: window.StderrOffset + uint64(len(stderr)), StdoutBytes: window.StdoutOffset + uint64(len(stdout)), StderrBytes: window.StderrOffset + uint64(len(stderr))}
 	if n.terminal {
 		code := 7
+		if n.terminalCode != nil {
+			code = *n.terminalCode
+		}
 		out.Root, out.Waited, out.ExitCode = processsvc.RootExited, true, &code
 		out.GroupCleanup, out.DescendantCleanup, out.OutputDrained = processsvc.CleanupConfirmed, processsvc.CleanupConfirmed, true
 	}

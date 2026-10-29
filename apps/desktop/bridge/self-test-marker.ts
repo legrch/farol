@@ -204,7 +204,7 @@ export async function beginSelfTestMarker(
 ): Promise<"durable" | "unknown"> {
   const body = { workspaceId: selection.workspaceId, publication };
   if (
-    selection.planVersion !== "3" ||
+    selection.planVersion !== "4" ||
     selection.computerGeneration !== publication.generation ||
     !validate("Context", context) ||
     !validate("ComputerSelfTestObserve", selection) ||

@@ -21,9 +21,9 @@ func TestSelfTestWireStartOnceAndObserveOriginal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ids, _ := selfTestIDsV3(id)
+	ids, _ := selfTestIDsV4(id)
 	plan := &durablePlanFake{ids: ids}
-	execution.execution = &selfTestExecution{owner: plan, version: 3}
+	execution.execution = &selfTestExecution{owner: plan, version: 4}
 	s.selfTests.entries = map[string]*durableSelfTestExecution{id: execution}
 	startBody, _ := json.Marshal(wire.ComputerSelfTestStart{Publication: in.Publication, WorkspaceId: "work"})
 	start := desktop.Request{RequestID: "start", OperationID: id, Body: startBody}
@@ -42,20 +42,20 @@ func TestSelfTestWireStartOnceAndObserveOriginal(t *testing.T) {
 			t.Fatal("start response", out, err)
 		}
 		var report wire.ComputerSelfTestReport
-		if json.Unmarshal(out.Data, &report) != nil || report.OperationId != id || report.Status != "partial" || len(report.Steps) != 14 {
+		if json.Unmarshal(out.Data, &report) != nil || report.OperationId != id || report.Status != "partial" || len(report.Steps) != 15 {
 			t.Fatal("wrong report", report)
 		}
-		if report.PlanVersion == nil || *report.PlanVersion != "3" || report.Steps[9].Name != "directory search" || report.Steps[9].Status != "pass" || report.Steps[9].OperationId == nil || *report.Steps[9].OperationId != ids.directorySearch || report.Steps[13].Name != "git and hooks" || report.Steps[13].Status != "not_tested" {
+		if report.PlanVersion == nil || *report.PlanVersion != "4" || report.Steps[9].Name != "directory search" || report.Steps[9].Status != "pass" || report.Steps[9].OperationId == nil || *report.Steps[9].OperationId != ids.directorySearch || report.Steps[13].Name != "git availability" || report.Steps[13].Status != "pass" || report.Steps[13].OperationId == nil || *report.Steps[13].OperationId != ids.gitVersion || report.Steps[14].Name != "git and hooks" || report.Steps[14].Status != "not_tested" {
 			t.Fatal("directory coverage or remaining limits misreported", report)
 		}
 	}
-	if plan.calls != 13 || store.durablePlanStore.admits != 1 || store.durablePlanStore.saves != 1 || native.calls != 0 {
+	if plan.calls != 14 || store.durablePlanStore.admits != 1 || store.durablePlanStore.saves != 1 || native.calls != 0 {
 		t.Fatal("repeated child effects")
 	}
-	version := "3"
+	version := "4"
 	body, _ := json.Marshal(wire.ComputerSelfTestObserve{OperationId: id, WorkspaceId: "work", ComputerGeneration: in.Publication.Generation, PlanVersion: &version})
 	out, err := methods["computer.selftest.observe"].Handle(context.Background(), desktop.Request{RequestID: "observe", Body: body})
-	if err != nil || out == nil || out.Status != "ok" || wire.Validate("ComputerSelfTestReport", out.Data) != nil || plan.calls != 13 {
+	if err != nil || out == nil || out.Status != "ok" || wire.Validate("ComputerSelfTestReport", out.Data) != nil || plan.calls != 14 {
 		t.Fatal("observation dispatched", out, err)
 	}
 	var report wire.ComputerSelfTestReport

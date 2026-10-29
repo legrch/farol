@@ -7,6 +7,7 @@ import (
 	"time"
 
 	mutationsvc "github.com/legrch/farol/modules/computer/app/services/mutation"
+	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	"github.com/legrch/farol/modules/computer/domain/mutation"
 )
 
@@ -175,5 +176,30 @@ func TestSelfTestGitVersionOutputIsBoundedAndNotRepositoryProof(t *testing.T) {
 	tooLong = append(tooLong, '\n')
 	if validSelfTestGitVersion(tooLong) || validSelfTestGitVersion([]byte{'g', 'i', 't', ' ', 'v', 'e', 'r', 's', 'i', 'o', 'n', ' ', '2', 0xff, '\n'}) {
 		t.Fatal("oversized or malformed output accepted")
+	}
+}
+
+func TestSelfTestGitVersionReportsOnlyConfirmedBoundedOutput(t *testing.T) {
+	for _, scenario := range []string{"success", "bad-output", "unconfirmed-group"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, _, native, _ := processWireFixture(t)
+			zero := 0
+			native.terminal, native.terminalCode = true, &zero
+			native.supervisor, native.groupGone = processsvc.SupervisorExited, scenario != "unconfirmed-group"
+			native.stdoutData, native.stderrData = []byte("git version 2.45.0\n"), []byte{}
+			if scenario == "bad-output" {
+				native.stdoutData = []byte("unexpected output\n")
+			}
+			check, err := newSelfTestShell(s, s.current, "work", "git-check", "git-call", "git-unused-cancel", selfTestShellGitVersion)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := check.check(context.Background())
+			close(native.completed)
+			want := map[string]string{"success": "pass", "bad-output": "fail", "unconfirmed-group": "unknown"}[scenario]
+			if out.Status != want || native.spawns != 1 {
+				t.Fatal("Git outcome misclassified", scenario, out)
+			}
+		})
 	}
 }

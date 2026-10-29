@@ -183,7 +183,7 @@ it("withholds a report and keeps the original when the owner changes during sett
         operationId: options.operationId!,
         workspaceId: "work",
         computerGeneration: "1",
-        planVersion: "3",
+        planVersion: "4",
         status: "fail",
         steps: [
           {
@@ -236,7 +236,7 @@ it("retains the original attempt and only observes that identity", async () => {
           operationId,
           workspaceId: "work",
           computerGeneration: "1",
-          planVersion: "3",
+          planVersion: "4",
           status: "unknown",
           steps: [],
         },
@@ -288,7 +288,7 @@ it("permits a separate test only after the first result is settled", async () =>
         operationId: options.operationId!,
         workspaceId: "work",
         computerGeneration: "1",
-        planVersion: "3",
+        planVersion: "4",
         status: "partial",
         steps: [
           "scratch",
@@ -304,28 +304,30 @@ it("permits a separate test only after the first result is settled", async () =>
           "cleanup",
           "shell",
           "shell cancel",
+          "git availability",
           "git and hooks",
         ].map((name, index) => ({
           name,
-          status: index < 13 ? "pass" : "not_tested",
-          ...(index < 13
+          status: index < 14 ? "pass" : "not_tested",
+          ...(index < 14
             ? {
                 operationId:
                   options.operationId! +
                   [
                     "",
-                    "-st3-write",
-                    "-st3-edit",
-                    "-st3-edit",
-                    "-st3-catalogue",
-                    "-st3-bootstrap",
-                    "-st3-list",
-                    "-st3-read",
-                    "-st3-search",
-                    "-st3-directory-search",
+                    "-st4-write",
+                    "-st4-edit",
+                    "-st4-edit",
+                    "-st4-catalogue",
+                    "-st4-bootstrap",
+                    "-st4-list",
+                    "-st4-read",
+                    "-st4-search",
+                    "-st4-directory-search",
                     "",
-                    "-st3-quick",
-                    "-st3-cancel",
+                    "-st4-quick",
+                    "-st4-cancel",
+                    "-st4-git-version",
                   ][index],
               }
             : {}),

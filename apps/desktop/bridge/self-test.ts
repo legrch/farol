@@ -79,7 +79,7 @@ export class SelfTestBridge {
       operationId: randomUUID(),
       workspaceId,
       computerGeneration: publication.generation,
-      planVersion: "3" as const,
+      planVersion: "4" as const,
     });
     this.pending = true;
     this.unresolved = selection;

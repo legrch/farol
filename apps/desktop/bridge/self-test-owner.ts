@@ -49,7 +49,7 @@ class CoreSelectionStore implements SelfTestSelectionStore {
   ): Promise<"durable" | "unknown"> {
     if (
       selection.workspaceId !== this.workspaceId ||
-      selection.planVersion !== "3" ||
+      selection.planVersion !== "4" ||
       selection.computerGeneration !== publication.generation ||
       !validate("ComputerSelfTestObserve", selection) ||
       !validate("ComputerSelfTestStart", {

@@ -271,6 +271,15 @@ export function SelfTestPanel({
                 ignore rules are not checked.
               </p>
             )}
+            {observation.report.steps.some(
+              (step) =>
+                step.name === "git availability" && step.status === "pass",
+            ) && (
+              <p>
+                Git availability checks the installed program’s version.
+                Repository operations and hooks are not checked.
+              </p>
+            )}
           </>
         )}
         {records.some(
