@@ -79,14 +79,20 @@ func (m *Mutable) RemoveScratchFile(ctx context.Context, in port.ScratchFileClea
 		named, e2 := m.fs.lstat(dir, "check.txt")
 		return in.FileHold.Check(i.File) == nil && e1 == nil && e2 == nil && opened == version && named == version
 	}
-	if !validDir() || !validFile() || !scratchInventoryHasOnly(dir, "check.txt") {
+	directoryVersion, err := m.fs.stat(dir)
+	if err != nil || !validDir() || !validFile() || !scratchInventoryHasOnly(dir, "check.txt") {
+		return refusal("WORKSPACE_MUTATION_CONFLICT")
+	}
+	afterInventory, err := m.fs.stat(dir)
+	if err != nil || afterInventory != directoryVersion {
 		return refusal("WORKSPACE_MUTATION_CONFLICT")
 	}
 	if err = checkMutation(ctx, request, walk); err != nil {
 		return err
 	}
 	uncertain, err := withMutationPublication(ctx, request, walk, func() error {
-		if !validDir() || !validFile() || !scratchInventoryHasOnly(dir, "check.txt") {
+		currentDirectory, statErr := m.fs.stat(dir)
+		if !validDir() || !validFile() || statErr != nil || currentDirectory != directoryVersion {
 			return refusal("WORKSPACE_MUTATION_CONFLICT")
 		}
 		attempted = true
@@ -101,8 +107,11 @@ func (m *Mutable) RemoveScratchFile(ctx context.Context, in port.ScratchFileClea
 	if err = checkMutation(ctx, request, walk); err != nil {
 		return err
 	}
+	if !scratchInventoryMatches(dir) {
+		return refusal("WORKSPACE_MUTATION_CONFLICT")
+	}
 	uncertain, err = withMutationPublication(ctx, request, walk, func() error {
-		if !validDir() || !scratchInventoryMatches(dir) {
+		if !validDir() {
 			return refusal("WORKSPACE_MUTATION_CONFLICT")
 		}
 		return unix.Unlinkat(parent, c.RelativePath, unix.AT_REMOVEDIR)
