@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +20,102 @@ import (
 )
 
 type scratchCustodyCloseFailure struct{ port.ScratchDirectoryCustody }
+
+// The test injects a connector journal terminal after native file publication.
+// It exercises the real profile, journal, cleanup owner and filesystem, but
+// does not qualify live connector execution or Shell.
+func TestNativeScratchFileCleanupJoinsJournalAndCustody(t *testing.T) {
+	launch, runtime := retirementStorageFixture(t, true)
+	workspace := filepath.Join(launch.Profile.Root, "workspace")
+	if err := os.Mkdir(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	publication := nativeSettingsPublication(t, runtime, workspace, 1)
+	const id = "00000000-0000-4000-8000-000000000005"
+	const ws = "00000000-0000-4000-8000-000000000004"
+	run, err := runtime.mutations.beginSelfTestRun(context.Background(), id, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := runtime.mutations.createSelfTestScratchForRun(context.Background(), run, id, ws, publication)
+	if err != nil || created == nil || created.Receipt == nil {
+		t.Fatal("create", created, err)
+	}
+	owner := runtime.mutations.computer
+	creationID := state.Identity{Scope: state.ScopeOwnerSettings, OperationID: id, OwnerID: owner.ownerID, ProfileID: owner.peer.ProfileId, ComputerID: owner.computerID}
+	creation, err := runtime.mutations.dependencies.repository.Load(context.Background(), creationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup, err := state.NewScratchCleanup(creation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rootStat unix.Stat_t
+	if err := unix.Lstat(workspace, &rootStat); err != nil {
+		t.Fatal(err)
+	}
+	root := port.Root{Path: workspace, Device: strconv.FormatUint(uint64(rootStat.Dev), 10), Inode: strconv.FormatUint(rootStat.Ino, 10)}
+	native, ok := runtime.mutations.dependencies.native.(port.ScratchBoundMutableWorkspace)
+	if !ok {
+		t.Fatal("scratch native unavailable")
+	}
+	path := created.Scratch.Leaf + "/check.txt"
+	receipt, err := native.MutateScratch(context.Background(), port.MutationRequest{Workspace: port.MutationDescriptor{WorkspaceID: ws, Root: workspace, ApprovedRoot: root}, Operation: state.Write{RelativePath: path, Content: selfTestFileBefore}, ScratchDirectoryHold: run.scratchCustody, HoldScratchFile: true, BeforePublish: func(context.Context) error { return nil }, WithPublication: func(_ context.Context, fn func() error) error { return fn() }}, cleanup.Binding())
+	if err != nil || receipt == nil || receipt.ScratchFileHold == nil {
+		t.Fatal("file publication", receipt, err)
+	}
+	t.Cleanup(func() {
+		if run.fixtureCustody != nil {
+			_ = run.fixtureCustody.Close()
+		}
+	})
+	fileID := state.Identity{Scope: state.ScopeConnector, OperationID: "test-file-op", OwnerID: owner.ownerID, ProfileID: owner.peer.ProfileId, ComputerID: owner.computerID}
+	b := state.Binding{Identity: fileID, ComputerGeneration: created.ComputerGeneration, WorkspaceID: ws, RelativePath: path, RequestDigest: strings.Repeat("b", 64), Connector: state.ConnectorOrigin{BuildID: "build", BackendGeneration: "backend", RuntimeID: "runtime", ConnectorGeneration: 2, SessionID: "session", TaskID: "task", ParticipantID: "participant", TurnID: "turn", CallID: "call", TaskEpoch: 3, Generation: 4, Operation: state.WriteKind}}
+	prepared, err := state.NewPrepared(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, err := runtime.mutations.dependencies.repository.Admit(context.Background(), prepared)
+	if err != nil || admission.Status != port.MutationAdmitted {
+		t.Fatal("admit file", err)
+	}
+	terminal, err := prepared.Complete(state.Receipt{Operation: state.WriteKind, RelativePath: path, Bytes: receipt.Bytes, AfterSHA256: receipt.AfterSHA256})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.mutations.dependencies.repository.Save(context.Background(), terminal); err != nil {
+		t.Fatal(err)
+	}
+	run.fixtureWriteStarted, run.fixtureCustody, run.fixtureFileIdentity, run.fixtureFileHash, run.fixtureOperation = true, receipt.ScratchFileHold, receipt.ScratchFile, receipt.AfterSHA256, fileID.OperationID
+	loaded, err := runtime.mutations.dependencies.repository.Load(context.Background(), fileID)
+	if err != nil || loaded == nil {
+		t.Fatal("load file", err)
+	}
+	witness, err := state.NewScratchFileInventory(creation, loaded, receipt.ScratchFile)
+	if err != nil || witness == nil {
+		t.Fatal("file witness", err)
+	}
+	if _, ok := runtime.mutations.dependencies.native.(port.ScratchFileCleanupWorkspace); !ok {
+		t.Fatalf("missing file cleanup port: %T", runtime.mutations.dependencies.native)
+	}
+	if _, ok := runtime.mutations.dependencies.repository.(port.ScratchFileCleanupRepository); !ok {
+		t.Fatalf("missing file cleanup repository: %T", runtime.mutations.dependencies.repository)
+	}
+	cleaned, err := runtime.mutations.cleanupSelfTestScratchForRun(context.Background(), run, publication)
+	if err != nil || cleaned == nil || cleaned.Phase != "completed" || cleaned.Publication != "durable" || runtime.mutations.selfTestRun != nil {
+		t.Fatal("cleanup", cleaned, err)
+	}
+	if _, err := os.Lstat(filepath.Join(workspace, created.Scratch.Leaf)); !os.IsNotExist(err) {
+		t.Fatal("scratch remains", err)
+	}
+	if observed, err := runtime.mutations.dependencies.repository.Load(context.Background(), fileID); err != nil || observed == nil || observed.Phase() != state.Completed || observed.Receipt().AfterSHA256 != receipt.AfterSHA256 {
+		t.Fatal("original history changed", err)
+	}
+	if _, err := runtime.mutations.cleanupSelfTestScratchForRun(context.Background(), run, publication); err == nil {
+		t.Fatal("cleanup repeated")
+	}
+}
 
 func (f scratchCustodyCloseFailure) Close() error {
 	return errors.Join(f.ScratchDirectoryCustody.Close(), errors.New("synthetic close failure"))

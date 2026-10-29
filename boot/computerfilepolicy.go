@@ -216,3 +216,20 @@ func (o *computerFileOwners) RemoveEmptyScratch(ctx context.Context, request por
 	}
 	return cleanup.RemoveEmptyScratch(ctx, request)
 }
+
+// File cleanup stays on the same selected policy producer as file mutation.
+func (o *computerFileOwners) RemoveScratchFile(ctx context.Context, request port.ScratchFileCleanupRequest) error {
+	policy := request.Workspace.FilePolicy
+	if o == nil || !policy.Valid() {
+		return authority.Fail("WORKSPACE_INVALID_REQUEST", "file-policy")
+	}
+	selected := o.legacyMutation
+	if policy == authority.RootScopedFiles {
+		selected = o.rootMutation
+	}
+	cleanup, ok := selected.(port.ScratchFileCleanupWorkspace)
+	if !ok || cleanup == nil {
+		return authority.Fail("WORKSPACE_INVALID_REQUEST", "file-policy")
+	}
+	return cleanup.RemoveScratchFile(ctx, request)
+}

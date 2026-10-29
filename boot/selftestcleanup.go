@@ -121,15 +121,15 @@ func (s *SettingsMutationIngress) cleanupSelfTestScratchForRun(ctx context.Conte
 			return nil, computerUnavailable()
 		}
 	}
-	// A nonempty fixture cannot use the empty-inventory journal. Refuse before
-	// admitting a cleanup record until file custody and inventory are durable.
-	if run.fixtureWriteStarted || run.fixtureFileIdentity.Valid() || run.fixtureFileHash != "" {
+	hasFile := run.fixtureFileIdentity.Valid() && run.fixtureFileHash != "" && run.fixtureOperation != "" && run.fixtureCustody != nil
+	if (run.fixtureWriteStarted || run.fixtureFileIdentity.Valid() || run.fixtureFileHash != "") && !hasFile {
 		s.mu.Unlock()
 		return nil, computerUnavailable()
 	}
 	run.cleanupStarted, run.active = true, true
 	run.callDone = make(chan struct{})
 	done, owner, custody, identity := run.callDone, s.stageOwner, run.scratchCustody, run.scratchIdentity
+	fileCustody, fileIdentity, fileOperation, fileHash := run.fixtureCustody, run.fixtureFileIdentity, run.fixtureOperation, run.fixtureFileHash
 	s.mu.Unlock()
 	bounded, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(run.ctx, cancel)
@@ -167,6 +167,35 @@ func (s *SettingsMutationIngress) cleanupSelfTestScratchForRun(ctx context.Conte
 	service, err := mutationsvc.NewForOwnerExecution(bounded, s.selection(run.operation, generation), current, s.dependencies.repository, s.dependencies.native, s.dependencies.digester, &sync.Mutex{}, clock)
 	if err != nil {
 		return nil, err
+	}
+	if hasFile {
+		fileNative, ok := s.dependencies.native.(port.ScratchFileCleanupWorkspace)
+		if !ok || fileNative == nil {
+			return nil, computerUnavailable()
+		}
+		creationID := state.Identity{Scope: state.ScopeOwnerSettings, OperationID: run.operation, OwnerID: s.computer.ownerID, ProfileID: s.computer.peer.ProfileId, ComputerID: s.computer.computerID}
+		fileID := state.Identity{Scope: state.ScopeConnector, OperationID: fileOperation, OwnerID: s.computer.ownerID, ProfileID: s.computer.peer.ProfileId, ComputerID: s.computer.computerID}
+		creation, e1 := s.dependencies.repository.Load(bounded, creationID)
+		file, e2 := s.dependencies.repository.Load(bounded, fileID)
+		if e1 != nil || e2 != nil {
+			return nil, computerUnavailable()
+		}
+		inventory, e := state.NewScratchFileInventory(creation, file, fileIdentity)
+		if e != nil || inventory == nil || inventory.Creation.Directory != identity || inventory.SHA256 != fileHash {
+			return nil, computerUnavailable()
+		}
+		worker := &runScratchFileCleanup{owner: owner, native: fileNative, directory: custody, file: fileCustody}
+		out, err = service.CleanupScratchFile(bounded, run.workspace, *inventory, custody, fileCustody, worker)
+		if worker.closeAttempted {
+			s.mu.Lock()
+			run.scratchCustody, run.fixtureCustody = nil, nil
+			s.mu.Unlock()
+		}
+		if err == nil && out != nil && out.Phase == string(state.Completed) && out.Publication == "durable" && !worker.closed {
+			out = nil
+			return nil, computerUnavailable()
+		}
+		return out, err
 	}
 	worker := &runScratchCleanup{owner: owner, native: native, custody: custody}
 	out, err = service.CleanupScratch(bounded, run.workspace, worker)
