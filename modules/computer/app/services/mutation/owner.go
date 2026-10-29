@@ -25,6 +25,7 @@ type OwnerResponse struct {
 	OperationID, WorkspaceID string
 	ComputerGeneration       uint64
 	Phase, Publication       string
+	Scratch                  state.ScratchBinding
 	Receipt                  *Receipt
 	Failure                  *Failure
 }
@@ -193,5 +194,7 @@ func observeOwnerRecord(selected OwnerSelection, r OwnerObservation, record *sta
 	if receipt := record.Receipt(); receipt != nil && receipt.RelativePath != r.RelativePath {
 		return nil, authority.Fail("COMPUTER_MUTATION_OPERATION_CONFLICT", "operation-store")
 	}
-	return ownerResponse(selected, r.WorkspaceID, resultOf(record, publication)), nil
+	out := ownerResponse(selected, r.WorkspaceID, resultOf(record, publication))
+	out.Scratch = binding.Scratch
+	return out, nil
 }
