@@ -31,8 +31,12 @@ type OwnerResponse struct {
 }
 
 type OwnerService struct {
-	selected OwnerSelection
-	engine   *Service
+	selected         OwnerSelection
+	engine           *Service
+	cleanupStarted   bool
+	cleanupWorkspace string
+	cleanupResult    *ScratchCleanupResponse
+	cleanupError     error
 }
 
 func (s OwnerSelection) identity() state.Identity {
