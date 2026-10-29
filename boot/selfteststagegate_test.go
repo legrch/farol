@@ -16,7 +16,7 @@ func TestStageGateNeverClaimsAdmissionWithoutEvidence(t *testing.T) {
 		{stageBaseline: true, stageOwner: &computerStageOwner{}, operations: nil},
 	} {
 		called := false
-		if err := ledger.withSelfTestStage(context.Background(), func(context.Context, int, NativeRoot) error { called = true; return nil }, func(err error) error { return err }); err == nil || called || ledger.stagePending {
+		if err := ledger.withSelfTestStage(context.Background(), "00000000-0000-4000-8000-000000000001", func(context.Context, int, NativeRoot) error { called = true; return nil }, func(err error) error { return err }); err == nil || called || ledger.stagePending {
 			t.Fatal("stage admitted without evidence")
 		}
 	}

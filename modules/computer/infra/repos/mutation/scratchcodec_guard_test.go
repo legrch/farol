@@ -1,15 +1,16 @@
 package mutation
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
 	domain "github.com/legrch/farol/modules/computer/domain/mutation"
 )
 
-// Until a dedicated codec is connected, never discard the original scratch
-// binding or its unknown directory evidence into a legacy envelope.
-func TestLegacyCodecRefusesScratchWithoutPublishing(t *testing.T) {
+// Scratch is never projected into the older envelopes; every phase roundtrips
+// its original binding and uncertain directory evidence.
+func TestScratchNeverUsesLegacyCodecOrFreshKey(t *testing.T) {
 	r, disk, original := ownerFixture(t)
 	b := original.Binding()
 	b.Identity.OperationID = "00000000-0000-4000-8000-000000000001"
@@ -29,11 +30,19 @@ func TestLegacyCodecRefusesScratchWithoutPublishing(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, state := range []*domain.State{prepared, completed, unknown} {
-		if raw, err := encode(state); err == nil || raw != nil {
-			t.Fatal("legacy codec dropped scratch facts")
+		raw, err := encode(state)
+		if err != nil || !bytes.Contains(raw, []byte(`"schemaVersion":7`)) {
+			t.Fatal("scratch encoded in legacy envelope", err)
+		}
+		decoded, err := decode(raw)
+		if err != nil || decoded.Binding() != b || decoded.Phase() != state.Phase() {
+			t.Fatal("scratch facts lost", err)
 		}
 	}
-	if _, err := r.Admit(context.Background(), prepared); err == nil || disk.creates != 0 || len(disk.files) != 0 {
-		t.Fatal("unencodable scratch was published", err)
+	if admission, err := r.Admit(context.Background(), prepared); err != nil || admission.Record == nil || disk.creates != 1 {
+		t.Fatal("scratch admission unavailable", err)
+	}
+	if admission, err := r.Admit(context.Background(), prepared); err != nil || admission.Record == nil || disk.creates != 1 {
+		t.Fatal("same operation was admitted twice", err)
 	}
 }

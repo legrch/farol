@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/legrch/farol/modules/computer/domain/mutation"
 	mutationrepo "github.com/legrch/farol/modules/computer/infra/repos/mutation"
 	"golang.org/x/sys/unix"
 )
@@ -54,22 +55,34 @@ func TestNativeComputerStageOwnerJoinsOriginalDescriptor(t *testing.T) {
 	}
 	connector, _, journal, native, _ := connectorProcessFixture(t)
 	ledger := connector.mutations
+	stageOperation := "00000000-0000-4000-8000-000000000001"
+	ledger.operations[stageOperation] = &settingsMutationOperation{stageScratch: true, pending: true, path: mutation.ScratchPath(stageOperation)}
 	ledger.stageOwner = o
 	ledger.stageLifetime = context.Background()
 	calledBefore := false
-	if err := ledger.withSelfTestStage(context.Background(), func(context.Context, int, NativeRoot) error { calledBefore = true; return nil }, func(err error) error { return err }); err == nil || calledBefore {
+	if err := ledger.withSelfTestStage(context.Background(), stageOperation, func(context.Context, int, NativeRoot) error { calledBefore = true; return nil }, func(err error) error { return err }); err == nil || calledBefore {
 		t.Fatal("unknown history admitted")
 	}
 	ledger.stageBaseline = true
+	ledger.operations[stageOperation].path = "wrong"
+	if err := ledger.withSelfTestStage(context.Background(), stageOperation, func(context.Context, int, NativeRoot) error { calledBefore = true; return nil }, func(err error) error { return err }); err == nil || calledBefore {
+		t.Fatal("crossed scratch path admitted")
+	}
+	ledger.operations[stageOperation].path = mutation.ScratchPath(stageOperation)
 	ledger.operations["old-process"] = &settingsMutationOperation{pending: true, process: &connectorProcessOperation{}}
-	if err := ledger.withSelfTestStage(context.Background(), func(context.Context, int, NativeRoot) error { calledBefore = true; return nil }, func(err error) error { return err }); err == nil || calledBefore {
+	if err := ledger.withSelfTestStage(context.Background(), stageOperation, func(context.Context, int, NativeRoot) error { calledBefore = true; return nil }, func(err error) error { return err }); err == nil || calledBefore {
 		t.Fatal("pending process admitted")
 	}
 	delete(ledger.operations, "old-process")
+	ledger.operations["old-scratch"] = &settingsMutationOperation{stageScratch: true, settled: false}
+	if err := ledger.withSelfTestStage(context.Background(), stageOperation, func(context.Context, int, NativeRoot) error { calledBefore = true; return nil }, func(err error) error { return err }); err == nil || calledBefore {
+		t.Fatal("unconfirmed scratch admitted another stage")
+	}
+	delete(ledger.operations, "old-scratch")
 	entered, release, returned := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 	finishEntered, finishRelease := make(chan struct{}), make(chan struct{})
 	go func() {
-		returned <- ledger.withSelfTestStage(context.Background(), func(_ context.Context, fd int, selected NativeRoot) error {
+		returned <- ledger.withSelfTestStage(context.Background(), stageOperation, func(_ context.Context, fd int, selected NativeRoot) error {
 			var actual unix.Stat_t
 			if err := unix.Fstat(fd, &actual); err != nil {
 				return err
@@ -106,7 +119,7 @@ func TestNativeComputerStageOwnerJoinsOriginalDescriptor(t *testing.T) {
 	}
 	ledger.closeSelfTestStageAdmission()
 	calledAfterClose := false
-	if err := ledger.withSelfTestStage(context.Background(), func(context.Context, int, NativeRoot) error { calledAfterClose = true; return nil }, func(err error) error { return err }); err == nil || calledAfterClose {
+	if err := ledger.withSelfTestStage(context.Background(), stageOperation, func(context.Context, int, NativeRoot) error { calledAfterClose = true; return nil }, func(err error) error { return err }); err == nil || calledAfterClose {
 		t.Fatal("closing ledger admitted stage")
 	}
 	closed := make(chan error, 1)
@@ -168,10 +181,10 @@ func TestNativeComputerStageOwnerJoinsOriginalDescriptor(t *testing.T) {
 		t.Fatal(err)
 	}
 	lifetime, cancelLifetime := context.WithCancel(context.Background())
-	cancelLedger := &SettingsMutationIngress{stageBaseline: true, stageOwner: cancelOwner, stageLifetime: lifetime, operations: make(map[string]*settingsMutationOperation)}
+	cancelLedger := &SettingsMutationIngress{stageBaseline: true, stageOwner: cancelOwner, stageLifetime: lifetime, operations: map[string]*settingsMutationOperation{stageOperation: {stageScratch: true, pending: true, path: mutation.ScratchPath(stageOperation)}}}
 	cancelEntered, cancelResult := make(chan struct{}), make(chan error, 1)
 	go func() {
-		cancelResult <- cancelLedger.withSelfTestStage(context.Background(), func(ctx context.Context, _ int, _ NativeRoot) error {
+		cancelResult <- cancelLedger.withSelfTestStage(context.Background(), stageOperation, func(ctx context.Context, _ int, _ NativeRoot) error {
 			close(cancelEntered)
 			<-ctx.Done()
 			return ctx.Err()
@@ -191,11 +204,30 @@ func TestNativeComputerStageOwnerJoinsOriginalDescriptor(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("runtime cancellation did not reach callback")
 	}
+	replayed := false
+	if err := cancelLedger.withSelfTestStage(context.Background(), stageOperation, func(context.Context, int, NativeRoot) error { replayed = true; return nil }, func(err error) error { return err }); err == nil || replayed {
+		t.Fatal("original stage attempt replayed")
+	}
 	cancelLedger.closeSelfTestStageAdmission()
 	if err := cancelOwner.Close(); err != nil {
 		t.Fatal(err)
 	}
 	cancelLedger.waitSelfTestStage()
+	replayOwner, err := newComputerStageOwner(q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayLedger := &SettingsMutationIngress{stageBaseline: true, stageOwner: replayOwner, stageLifetime: context.Background(), operations: map[string]*settingsMutationOperation{stageOperation: {stageScratch: true, pending: true, path: mutation.ScratchPath(stageOperation)}}}
+	if err := replayLedger.withSelfTestStage(context.Background(), stageOperation, func(context.Context, int, NativeRoot) error { return nil }, func(err error) error { return err }); err != nil {
+		t.Fatal(err)
+	}
+	replayed = false
+	if err := replayLedger.withSelfTestStage(context.Background(), stageOperation, func(context.Context, int, NativeRoot) error { replayed = true; return nil }, func(err error) error { return err }); err == nil || replayed {
+		t.Fatal("completed stage attempt replayed")
+	}
+	if err := replayOwner.Close(); err != nil {
+		t.Fatal(err)
+	}
 	failedClose, err := newComputerStageOwner(q)
 	if err != nil {
 		t.Fatal(err)
@@ -297,12 +329,13 @@ func TestNativeRuntimeCloseJoinsStageFinalization(t *testing.T) {
 		t.Fatal(err)
 	}
 	lifetime, cancel := context.WithCancel(context.Background())
-	ledger := &SettingsMutationIngress{stageBaseline: true, stageOwner: owner, stageLifetime: lifetime, operations: make(map[string]*settingsMutationOperation)}
+	stageOperation := "00000000-0000-4000-8000-000000000002"
+	ledger := &SettingsMutationIngress{stageBaseline: true, stageOwner: owner, stageLifetime: lifetime, operations: map[string]*settingsMutationOperation{stageOperation: {stageScratch: true, pending: true, path: mutation.ScratchPath(stageOperation)}}}
 	runtime := &NativeRuntime{profile: q, stageOwner: owner, mutations: ledger, mutationStore: journal, cancel: cancel}
 	entered, nativeRelease, finalEntered, finalRelease := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
 	attempt := make(chan error, 1)
 	go func() {
-		attempt <- ledger.withSelfTestStage(context.Background(), func(context.Context, int, NativeRoot) error { close(entered); <-nativeRelease; return nil }, func(err error) error { close(finalEntered); <-finalRelease; return err })
+		attempt <- ledger.withSelfTestStage(context.Background(), stageOperation, func(context.Context, int, NativeRoot) error { close(entered); <-nativeRelease; return nil }, func(err error) error { close(finalEntered); <-finalRelease; return err })
 	}()
 	select {
 	case <-entered:

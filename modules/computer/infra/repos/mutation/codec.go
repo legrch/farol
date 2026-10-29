@@ -193,13 +193,12 @@ func encode(state *domain.State) ([]byte, error) {
 		return nil, failure("WORKSPACE_MUTATION_STATE_INVALID")
 	}
 	b := state.Binding()
-	// Legacy envelopes cannot encode scratch binding or directory evidence.
-	// Refuse rather than silently dropping facts before its dedicated codec exists.
-	if b.Scratch != (domain.ScratchBinding{}) {
-		return nil, failure("WORKSPACE_MUTATION_STATE_INVALID")
-	}
 	if _, err := domain.Restore(b, state.Phase(), state.Receipt(), state.Failure()); err != nil {
 		return nil, failure("WORKSPACE_MUTATION_STATE_INVALID")
+	}
+	// Scratch uses a distinct canonical envelope; legacy bytes stay unchanged.
+	if b.Scratch != (domain.ScratchBinding{}) {
+		return encodeScratch(state)
 	}
 	r := record{Identity: toIdentity(b.Identity), WorkspaceID: b.WorkspaceID, RequestDigest: b.RequestDigest, Phase: state.Phase()}
 	if v := state.Receipt(); v != nil {
@@ -296,6 +295,8 @@ func decode(raw []byte) (*domain.State, error) {
 	var phase domain.Phase
 	var result *outcome
 	switch {
+	case header.Version == scratchVersion && header.Kind == scratchKind:
+		return decodeScratch(raw)
 	case header.Version == 1 && header.Kind == "workspace_mutation":
 		var e envelope
 		if decodeStrict(raw, &e) != nil {

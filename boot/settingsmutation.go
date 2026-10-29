@@ -49,6 +49,8 @@ type settingsMutationOperation struct {
 	connector       *mutationsvc.ConnectorService
 	process         *connectorProcessOperation
 	connectorScope  bool
+	stageScratch    bool // Set only by the trusted self-test admission owner.
+	stageAttempted  bool // Sticky once the original staging attempt is entered.
 	failure         error
 }
 

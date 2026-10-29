@@ -2,6 +2,8 @@ package mutation
 
 import (
 	"encoding/json"
+
+	domain "github.com/legrch/farol/modules/computer/domain/mutation"
 )
 
 // qualifyStagingHistory is a denial-only observation over the already bounded
@@ -25,6 +27,14 @@ func qualifyStagingHistory(entries []settledBytes, selection SettledSelection) (
 			return false, preservedRefusal()
 		}
 		switch {
+		case header.Version == scratchVersion && header.Kind == scratchKind:
+			state, err := decode(entry.raw)
+			if err != nil || state == nil {
+				return false, preservedRefusal()
+			}
+			if state.Phase() == domain.Prepared || state.Phase() == domain.OutcomeUnknown {
+				return false, nil
+			}
 		case header.Version == 4 && header.Kind == "workspace_connector_process":
 			_, intent, err := decodeProcess(entry.raw)
 			if err != nil {

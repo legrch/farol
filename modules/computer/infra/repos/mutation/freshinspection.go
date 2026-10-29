@@ -30,7 +30,7 @@ func qualifyFreshProcessHistory(entries []settledBytes, selection SettledSelecti
 		expected[n] = ExpectedPreservedRecord{Key: entry.key, SHA256: hex.EncodeToString(digest[:])}
 		var identity domain.Identity
 		switch {
-		case header.Version == 2 && header.Kind == "workspace_owner_mutation", header.Version == 3 && header.Kind == "workspace_connector_mutation":
+		case header.Version == 2 && header.Kind == "workspace_owner_mutation", header.Version == 3 && header.Kind == "workspace_connector_mutation", header.Version == scratchVersion && header.Kind == scratchKind:
 			state, err := decode(entry.raw)
 			if err != nil {
 				return false, preservedRefusal()
