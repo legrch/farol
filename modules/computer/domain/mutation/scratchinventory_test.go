@@ -26,6 +26,55 @@ func inventoryFixture(t *testing.T) (*State, *State) {
 	return creation, file
 }
 
+func TestScratchFileCleanupRetainsExactInventoryAndTerminal(t *testing.T) {
+	creation, file := inventoryFixture(t)
+	inventory, err := NewScratchFileInventory(creation, file, DirectoryIdentity{Device: "1", Inode: "80"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := RestoreScratchFileCleanup(*inventory, Prepared, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, phase := range []Phase{Completed, Failed, OutcomeUnknown} {
+		var failure *Failure
+		if phase == Failed {
+			failure = &Failure{Code: "WORKSPACE_MUTATION_CONFLICT", Source: "native-workspace"}
+		}
+		if phase == OutcomeUnknown {
+			failure = &Failure{Code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", Source: "native-workspace"}
+		}
+		terminal, err := RestoreScratchFileCleanup(*inventory, phase, failure)
+		if err != nil {
+			t.Fatal(err)
+		}
+		accepted, err := prepared.Apply(*terminal)
+		if err != nil || accepted.Phase() != phase {
+			t.Fatal("terminal refused", err)
+		}
+		if _, err := accepted.Apply(*prepared); err == nil {
+			t.Fatal("terminal reopened")
+		}
+		if failure != nil {
+			copy := accepted.Failure()
+			copy.Code = "changed"
+			if accepted.Failure().Code != failure.Code {
+				t.Fatal("failure alias leaked")
+			}
+		}
+	}
+	changed := *inventory
+	changed.File.Inode = "81"
+	other, _ := RestoreScratchFileCleanup(changed, Completed, nil)
+	if _, err := prepared.Apply(*other); err == nil {
+		t.Fatal("changed file identity accepted")
+	}
+	changed.SHA256 = "invalid"
+	if _, err := RestoreScratchFileCleanup(changed, Prepared, nil); err == nil {
+		t.Fatal("invalid digest accepted")
+	}
+}
+
 func TestScratchFileInventoryBindsExactDurableRecords(t *testing.T) {
 	creation, file := inventoryFixture(t)
 	witness, err := NewScratchFileInventory(creation, file, DirectoryIdentity{Device: "1", Inode: "80"})
