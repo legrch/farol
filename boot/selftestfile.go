@@ -120,11 +120,13 @@ func (r *selfTestRunLease) mutateFixture(ctx context.Context, connector *compute
 		s.mu.Lock()
 		r.fixtureWriteHash = out.Receipt.AfterSHA256
 		r.fixtureFileIdentity = published
+		r.fixtureFileHash = out.Receipt.AfterSHA256
 		s.mu.Unlock()
 	}
 	if edit && out.Phase == "completed" && out.Publication == "durable" && out.OperationID == operation && out.RelativePath == path && out.Receipt != nil && out.Receipt.Operation == "edit" && out.Receipt.AfterSHA256 == selfTestFileHash(selfTestFileAfter) && published.Valid() {
 		s.mu.Lock()
 		r.fixtureFileIdentity = published
+		r.fixtureFileHash = out.Receipt.AfterSHA256
 		s.mu.Unlock()
 	}
 	return out, nil

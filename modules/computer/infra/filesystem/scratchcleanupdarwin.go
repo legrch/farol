@@ -13,7 +13,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// RemoveEmptyScratch performs exactly one guarded removal. This private native
+// RemoveEmptyScratch performs one guarded cleanup of an empty scratch directory.
+// This private native
 // primitive neither admits nor records an operation; the caller retains the
 // original journal, whole-run fence and current owner throughout its use.
 // A same-UID process outside those owners can race pathname checks on macOS.
@@ -69,25 +70,14 @@ func (m *Mutable) RemoveEmptyScratch(ctx context.Context, in port.ScratchCleanup
 	if !valid() {
 		return refusal("WORKSPACE_MUTATION_CONFLICT")
 	}
-	duplicate, err := unix.FcntlInt(uintptr(fd), unix.F_DUPFD_CLOEXEC, 0)
-	if err != nil {
-		return refusal("WORKSPACE_PATH_REFUSED")
-	}
-	inventory := os.NewFile(uintptr(duplicate), "scratch-cleanup-inventory")
-	if inventory == nil {
-		_ = unix.Close(duplicate)
-		return refusal("WORKSPACE_PATH_REFUSED")
-	}
-	entries, readErr := inventory.Readdirnames(1)
-	closeErr := inventory.Close()
-	if len(entries) != 0 || readErr != io.EOF || closeErr != nil {
+	if !scratchInventoryMatches(fd) {
 		return refusal("WORKSPACE_MUTATION_CONFLICT")
 	}
 	if err = checkMutation(ctx, request, walk); err != nil {
 		return err
 	}
 	uncertain, err := withMutationPublication(ctx, request, walk, func() error {
-		if !valid() {
+		if !valid() || !scratchInventoryMatches(fd) {
 			return refusal("WORKSPACE_MUTATION_CONFLICT")
 		}
 		attempted = true
@@ -104,4 +94,24 @@ func (m *Mutable) RemoveEmptyScratch(ctx context.Context, in port.ScratchCleanup
 		return mutationError("MUTATION_OUTCOME_UNKNOWN")
 	}
 	return nil
+}
+
+// Open a fresh directory description for each bounded inventory. Duplicating
+// fd would share its read offset and could hide a foreign entry on recheck.
+func scratchInventoryMatches(fd int) bool {
+	copyFD, err := unix.Openat(fd, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return false
+	}
+	listing := os.NewFile(uintptr(copyFD), "scratch-cleanup-inventory")
+	if listing == nil {
+		_ = unix.Close(copyFD)
+		return false
+	}
+	entries, readErr := listing.Readdirnames(2)
+	closeErr := listing.Close()
+	if closeErr != nil || readErr != nil && !errors.Is(readErr, io.EOF) {
+		return false
+	}
+	return len(entries) == 0
 }

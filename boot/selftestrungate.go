@@ -24,6 +24,7 @@ type selfTestRunLease struct {
 	fixtureEditStarted   bool                       // protected by ledger.mu; never retried
 	fixtureWriteHash     string                     // set only from the durable original receipt
 	fixtureFileIdentity  mutation.DirectoryIdentity // in-memory native publication witness
+	fixtureFileHash      string                     // bound to that exact witness
 }
 
 func (s *SettingsMutationIngress) beginSelfTestRun(ctx context.Context, operation, workspace string) (*selfTestRunLease, error) {

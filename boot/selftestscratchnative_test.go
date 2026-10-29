@@ -6,12 +6,15 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
+	"github.com/legrch/farol/modules/computer/app/port"
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	state "github.com/legrch/farol/modules/computer/domain/mutation"
+	"golang.org/x/sys/unix"
 )
 
 // Actual native profile, owner approval, journal, staging descriptor and
@@ -200,6 +203,66 @@ func TestNativeScratchRunRetainsUnexpectedContentsAndFence(t *testing.T) {
 	}
 	if repeated, err := runtime.mutations.cleanupSelfTestScratchForRun(context.Background(), run, publication); err == nil || repeated != nil {
 		t.Fatal("unconfirmed cleanup repeated")
+	}
+}
+
+// The fixture creates the test file and injects its observed identity; it
+// exercises the real cleanup owner, not the connector's publication path.
+func TestNativeScratchRunRetainsFileWithoutCustodyProof(t *testing.T) {
+	launch, runtime := retirementStorageFixture(t, true)
+	workspace := filepath.Join(launch.Profile.Root, "workspace")
+	if err := os.Mkdir(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	publication := nativeSettingsPublication(t, runtime, workspace, 1)
+	const id = "00000000-0000-4000-8000-000000000005"
+	const ws = "00000000-0000-4000-8000-000000000004"
+	run, err := runtime.mutations.beginSelfTestRun(context.Background(), id, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := runtime.mutations.createSelfTestScratchForRun(context.Background(), run, id, ws, publication)
+	if err != nil || created == nil || created.Phase != "completed" {
+		t.Fatalf("create %#v %v", created, err)
+	}
+	file := filepath.Join(workspace, created.Scratch.Leaf, "check.txt")
+	if err := os.WriteFile(file, []byte(selfTestFileAfter), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var stat unix.Stat_t
+	if err := unix.Lstat(file, &stat); err != nil {
+		t.Fatal(err)
+	}
+	runtime.mutations.mu.Lock()
+	run.fixtureFileIdentity = state.DirectoryIdentity{Device: strconv.FormatUint(uint64(stat.Dev), 10), Inode: strconv.FormatUint(stat.Ino, 10)}
+	run.fixtureFileHash = selfTestFileHash(selfTestFileAfter)
+	runtime.mutations.mu.Unlock()
+	cleaned, err := runtime.mutations.cleanupSelfTestScratchForRun(context.Background(), run, publication)
+	if err == nil || cleaned != nil {
+		t.Fatalf("cleanup %#v %v", cleaned, err)
+	}
+	if _, err := os.Lstat(file); err != nil {
+		t.Fatal("fixture not retained", err)
+	}
+	if runtime.mutations.selfTestRun != run || run.cleanupStarted {
+		t.Fatal("unqualified cleanup released fence")
+	}
+	identity := state.Identity{Scope: state.ScopeOwnerSettings, OperationID: id, OwnerID: runtime.mutations.computer.ownerID, ProfileID: runtime.mutations.computer.peer.ProfileId, ComputerID: runtime.mutations.computer.computerID}
+	creation, err := runtime.mutations.dependencies.repository.Load(context.Background(), identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := state.NewScratchCleanup(creation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, ok := runtime.mutations.dependencies.repository.(port.ScratchCleanupRepository)
+	if !ok {
+		t.Fatal("cleanup journal unavailable")
+	}
+	stored, err := journal.LoadScratchCleanup(context.Background(), prepared.Binding())
+	if err != nil || stored != nil {
+		t.Fatal("nonempty fixture admitted empty cleanup", stored, err)
 	}
 }
 

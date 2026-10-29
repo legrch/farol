@@ -96,6 +96,12 @@ func (s *SettingsMutationIngress) cleanupSelfTestScratchForRun(ctx context.Conte
 			return nil, computerUnavailable()
 		}
 	}
+	// A nonempty fixture cannot use the empty-inventory journal. Refuse before
+	// admitting a cleanup record until file custody and inventory are durable.
+	if run.fixtureWriteStarted || run.fixtureFileIdentity.Valid() || run.fixtureFileHash != "" {
+		s.mu.Unlock()
+		return nil, computerUnavailable()
+	}
 	run.cleanupStarted, run.active = true, true
 	run.callDone = make(chan struct{})
 	done, owner := run.callDone, s.stageOwner
