@@ -19,6 +19,7 @@ type selfTestRunLease struct {
 	released             chan struct{}
 	active               bool          // protected by ledger.mu
 	callDone             chan struct{} // protected by ledger.mu
+	cleanupStarted       bool          // protected by ledger.mu; never retried
 }
 
 func (s *SettingsMutationIngress) beginSelfTestRun(ctx context.Context, operation, workspace string) (*selfTestRunLease, error) {

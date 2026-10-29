@@ -179,3 +179,21 @@ func (o *computerFileOwners) CreateStagedScratch(ctx context.Context, request po
 	}
 	return staged.CreateStagedScratch(ctx, request, fd, root)
 }
+
+// RemoveEmptyScratch uses the original workspace file-policy owner. The
+// caller still owns journal admission and the whole-run exclusion fence.
+func (o *computerFileOwners) RemoveEmptyScratch(ctx context.Context, request port.ScratchCleanupRequest) error {
+	policy := request.Workspace.FilePolicy
+	if o == nil || !policy.Valid() {
+		return authority.Fail("WORKSPACE_INVALID_REQUEST", "file-policy")
+	}
+	selected := o.legacyMutation
+	if policy == authority.RootScopedFiles {
+		selected = o.rootMutation
+	}
+	cleanup, ok := selected.(port.ScratchCleanupWorkspace)
+	if !ok || cleanup == nil {
+		return authority.Fail("WORKSPACE_INVALID_REQUEST", "file-policy")
+	}
+	return cleanup.RemoveEmptyScratch(ctx, request)
+}

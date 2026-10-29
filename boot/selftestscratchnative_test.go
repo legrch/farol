@@ -128,6 +128,149 @@ func TestNativeScratchRetainsWholeRunFenceAfterPublication(t *testing.T) {
 	}
 }
 
+// This exercises the private run, real journal and native empty-directory
+// cleanup. It does not claim Shell, ChatGPT or packaged-runtime coverage.
+func TestNativeScratchRunCleansOnceAndReleasesFence(t *testing.T) {
+	launch, runtime := retirementStorageFixture(t, true)
+	workspace := filepath.Join(launch.Profile.Root, "workspace")
+	if err := os.Mkdir(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	publication := nativeSettingsPublication(t, runtime, workspace, 1)
+	const id = "00000000-0000-4000-8000-000000000005"
+	const ws = "00000000-0000-4000-8000-000000000004"
+	run, err := runtime.mutations.beginSelfTestRun(context.Background(), id, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := runtime.mutations.createSelfTestScratchForRun(context.Background(), run, id, ws, publication)
+	if err != nil || created == nil || created.Phase != "completed" || created.Publication != "durable" {
+		t.Fatalf("create %#v %v", created, err)
+	}
+	cleaned, err := runtime.mutations.cleanupSelfTestScratchForRun(context.Background(), run, publication)
+	if err != nil || cleaned == nil || cleaned.Phase != "completed" || cleaned.Publication != "durable" {
+		t.Fatalf("cleanup %#v %v", cleaned, err)
+	}
+	if _, err := os.Lstat(filepath.Join(workspace, created.Scratch.Leaf)); !os.IsNotExist(err) {
+		t.Fatal("directory not removed", err)
+	}
+	if runtime.mutations.selfTestRun != nil {
+		t.Fatal("completed cleanup retained run fence")
+	}
+	if repeated, err := runtime.mutations.cleanupSelfTestScratchForRun(context.Background(), run, publication); err == nil || repeated != nil {
+		t.Fatal("cleanup repeated")
+	}
+	observed, err := runtime.mutations.observeSelfTestScratch(context.Background(), id, ws, created.ComputerGeneration)
+	if err != nil || observed == nil || observed.Phase != "completed" || observed.Receipt == nil || observed.Receipt.Directory != created.Receipt.Directory {
+		t.Fatalf("creation history changed %#v %v", observed, err)
+	}
+}
+
+func TestNativeScratchRunRetainsUnexpectedContentsAndFence(t *testing.T) {
+	launch, runtime := retirementStorageFixture(t, true)
+	workspace := filepath.Join(launch.Profile.Root, "workspace")
+	if err := os.Mkdir(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	publication := nativeSettingsPublication(t, runtime, workspace, 1)
+	const id = "00000000-0000-4000-8000-000000000005"
+	const ws = "00000000-0000-4000-8000-000000000004"
+	run, err := runtime.mutations.beginSelfTestRun(context.Background(), id, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := runtime.mutations.createSelfTestScratchForRun(context.Background(), run, id, ws, publication)
+	if err != nil || created == nil || created.Phase != "completed" {
+		t.Fatalf("create %#v %v", created, err)
+	}
+	file := filepath.Join(workspace, created.Scratch.Leaf, "unexpected")
+	if err := os.WriteFile(file, []byte("preserve"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cleaned, err := runtime.mutations.cleanupSelfTestScratchForRun(context.Background(), run, publication)
+	if err != nil || cleaned == nil || cleaned.Phase != "failed" {
+		t.Fatalf("cleanup %#v %v", cleaned, err)
+	}
+	if data, err := os.ReadFile(file); err != nil || string(data) != "preserve" {
+		t.Fatal("unexpected data changed", err)
+	}
+	if runtime.mutations.selfTestRun != run {
+		t.Fatal("unconfirmed cleanup released run fence")
+	}
+	if repeated, err := runtime.mutations.cleanupSelfTestScratchForRun(context.Background(), run, publication); err == nil || repeated != nil {
+		t.Fatal("unconfirmed cleanup repeated")
+	}
+}
+
+func TestNativeScratchRunCloseJoinsCleanupPreflight(t *testing.T) {
+	launch, runtime := retirementStorageFixture(t, true)
+	workspace := filepath.Join(launch.Profile.Root, "workspace")
+	if err := os.Mkdir(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	publication := nativeSettingsPublication(t, runtime, workspace, 1)
+	const id = "00000000-0000-4000-8000-000000000005"
+	const ws = "00000000-0000-4000-8000-000000000004"
+	run, err := runtime.mutations.beginSelfTestRun(context.Background(), id, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := runtime.mutations.createSelfTestScratchForRun(context.Background(), run, id, ws, publication)
+	if err != nil || created == nil || created.Phase != "completed" {
+		t.Fatalf("create %#v %v", created, err)
+	}
+	runtime.ingress.effects.Lock()
+	returned := make(chan error, 1)
+	go func() {
+		_, err := runtime.mutations.cleanupSelfTestScratchForRun(context.Background(), run, publication)
+		returned <- err
+	}()
+	deadline := time.After(time.Second)
+	for {
+		runtime.mutations.mu.Lock()
+		active := run.active
+		runtime.mutations.mu.Unlock()
+		if active {
+			break
+		}
+		select {
+		case <-deadline:
+			runtime.ingress.effects.Unlock()
+			<-returned
+			t.Fatal("cleanup preflight did not start")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	runtime.mutations.closeSelfTestStageAdmission()
+	joined := make(chan struct{})
+	go func() { runtime.mutations.waitSelfTestStage(); close(joined) }()
+	select {
+	case <-joined:
+		runtime.ingress.effects.Unlock()
+		<-returned
+		t.Fatal("close did not join cleanup")
+	case <-time.After(20 * time.Millisecond):
+	}
+	runtime.ingress.effects.Unlock()
+	if err := <-returned; err == nil {
+		t.Fatal("cancelled cleanup proceeded")
+	}
+	select {
+	case <-joined:
+	case <-time.After(time.Second):
+		t.Fatal("close did not join cleanup return")
+	}
+	if _, err := os.Lstat(filepath.Join(workspace, created.Scratch.Leaf)); err != nil {
+		t.Fatal("cancelled cleanup changed directory", err)
+	}
+	if runtime.mutations.selfTestRun != run {
+		t.Fatal("cancelled cleanup released fence")
+	}
+	if repeated, err := runtime.mutations.cleanupSelfTestScratchForRun(context.Background(), run, publication); err == nil || repeated != nil {
+		t.Fatal("cancelled cleanup repeated")
+	}
+}
+
 func TestNativeRunCloseJoinsApprovalBeforeScratchAdmission(t *testing.T) {
 	launch, runtime := retirementStorageFixture(t, true)
 	workspace := filepath.Join(launch.Profile.Root, "workspace")
