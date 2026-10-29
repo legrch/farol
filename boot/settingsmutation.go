@@ -77,7 +77,7 @@ func (s *SettingsMutationIngress) edit(ctx context.Context, operation string, in
 	// Refuse before renewal can wait on root.effects held by recovery Open.
 	// Recheck atomically with inserting the operation below.
 	s.mu.Lock()
-	reserved := s.recoveryReserved
+	reserved := s.recoveryReserved || s.scratchAdmissionPendingLocked()
 	s.mu.Unlock()
 	if reserved {
 		return nil, errors.New("settings_mutation_attempt_consumed")
@@ -94,7 +94,7 @@ func (s *SettingsMutationIngress) edit(ctx context.Context, operation string, in
 		return nil, mutationInvalid()
 	}
 	s.mu.Lock()
-	if s.frozen || s.recoveryReserved || s.operations[operation] != nil || len(s.operations) >= 4096 {
+	if s.frozen || s.recoveryReserved || s.scratchAdmissionPendingLocked() || s.operations[operation] != nil || len(s.operations) >= 4096 {
 		s.mu.Unlock()
 		return nil, errors.New("settings_mutation_attempt_consumed")
 	}

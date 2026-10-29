@@ -15,7 +15,7 @@ func stagingPriorEligible(record *settingsMutationOperation) bool {
 		return false
 	}
 	if record.process == nil {
-		return !record.stageScratch || (!record.pending && record.settled)
+		return !record.pending && record.settled
 	}
 	if record.pending || !record.settled {
 		return false
@@ -28,6 +28,20 @@ func stagingPriorEligible(record *settingsMutationOperation) bool {
 		return false
 	}
 	return !p.result.Intent.Seal.Write || p.result.Observation.DescendantCleanup == processsvc.CleanupConfirmed
+}
+
+// The same ledger lock makes the pre-admission scratch reservation visible to
+// normal file writers before any of them can claim another operation.
+func (s *SettingsMutationIngress) scratchAdmissionPendingLocked() bool {
+	if s.stagePending {
+		return true
+	}
+	for _, record := range s.operations {
+		if record != nil && record.stageScratch && record.pending {
+			return true
+		}
+	}
+	return false
 }
 
 // selfTestStageLease retains a single attempt's admission gate until Release.

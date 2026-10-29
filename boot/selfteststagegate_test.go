@@ -40,6 +40,30 @@ func TestStagingRequiresDescendantEvidenceForPriorWritableProcess(t *testing.T) 
 	}
 }
 
+func TestStagingRefusesPriorUnsettledFileMutation(t *testing.T) {
+	for _, record := range []*settingsMutationOperation{{pending: true}, {settled: false}} {
+		if stagingPriorEligible(record) {
+			t.Fatal("unsettled file mutation authorized staging")
+		}
+	}
+	if !stagingPriorEligible(&settingsMutationOperation{settled: true}) {
+		t.Fatal("settled file mutation blocked staging")
+	}
+}
+
+func TestScratchReservationBlocksFileMutationBeforeEffect(t *testing.T) {
+	s, _, journal, native, _ := connectorMutationFixture(t)
+	s.mutations.operations["scratch"] = &settingsMutationOperation{stageScratch: true, pending: true}
+	if out, err := s.mutate(context.Background(), s.current, "write", "call", connectorWriteFixture()); err == nil || out != nil || journal.admits != 0 || native.calls != 0 {
+		t.Fatal("connector mutation crossed scratch reservation", out, err)
+	}
+	owner, _, ownerJournal, ownerNative, in := settingsEditFixture(t)
+	owner.operations["scratch"] = &settingsMutationOperation{stageScratch: true, pending: true}
+	if out, err := owner.edit(context.Background(), "edit", in); err == nil || out != nil || ownerJournal.admits != 0 || ownerNative.calls != 0 {
+		t.Fatal("settings mutation crossed scratch reservation", out, err)
+	}
+}
+
 func TestStageGateNeverClaimsAdmissionWithoutEvidence(t *testing.T) {
 	for _, ledger := range []*SettingsMutationIngress{
 		{},
