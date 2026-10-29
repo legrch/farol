@@ -115,7 +115,10 @@ it("labels untested capabilities as partial rather than a full pass", async () =
             report: {
               ...selection,
               status: "partial",
-              steps: [{ name: "git and hooks", status: "not_tested" }],
+              steps: [
+                { name: "directory search", status: "pass" },
+                { name: "git and hooks", status: "not_tested" },
+              ],
             },
           },
         },
@@ -139,6 +142,9 @@ it("labels untested capabilities as partial rather than a full pass", async () =
   await act(async () => host.querySelector("button")!.click());
   expect(host.textContent).toContain("Partial result");
   expect(host.textContent).toContain("git and hooks · not tested");
+  expect(host.textContent).toContain(
+    "Nested folders and ignore rules are not checked",
+  );
   await act(async () => root.unmount());
   host.remove();
 });

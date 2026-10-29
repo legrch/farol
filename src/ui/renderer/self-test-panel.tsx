@@ -210,6 +210,15 @@ export function SelfTestPanel({
                 </li>
               ))}
             </ul>
+            {observation.report.steps.some(
+              (step) =>
+                step.name === "directory search" && step.status === "pass",
+            ) && (
+              <p>
+                Directory search covers the test folder. Nested folders and
+                ignore rules are not checked.
+              </p>
+            )}
           </>
         )}
       </div>
