@@ -28,6 +28,12 @@ func (s *SettingsMutationIngress) createSelfTestScratch(ctx context.Context, ope
 	if !ok || native == nil {
 		return nil, computerUnavailable()
 	}
+	s.mu.Lock()
+	reserved := s.recoveryReserved
+	s.mu.Unlock()
+	if reserved {
+		return nil, computerUnavailable()
+	}
 	if err := s.computer.refreshCurrentApproval(ctx); err != nil {
 		return nil, err
 	}
@@ -98,7 +104,8 @@ func (s *SettingsMutationIngress) observeSelfTestScratch(ctx context.Context, op
 	s.mu.Unlock()
 	request := mutationsvc.OwnerObservation{WorkspaceID: workspace, RelativePath: state.ScratchPath(operation)}
 	if service != nil {
-		return service.Observe(ctx, request)
+		out, err := service.Observe(ctx, request)
+		return checkedScratchObservation(operation, out, err)
 	}
 	if record != nil {
 		if failure != nil {
@@ -110,5 +117,16 @@ func (s *SettingsMutationIngress) observeSelfTestScratch(ctx context.Context, op
 	if err != nil {
 		return nil, err
 	}
-	return observer.Observe(ctx, request)
+	out, err := observer.Observe(ctx, request)
+	return checkedScratchObservation(operation, out, err)
+}
+
+func checkedScratchObservation(operation string, out *mutationsvc.OwnerResponse, err error) (*mutationsvc.OwnerResponse, error) {
+	if err != nil {
+		return nil, err
+	}
+	if out == nil || !out.Scratch.Valid() || out.Scratch.RunID != operation || out.Scratch.Leaf != state.ScratchPath(operation) {
+		return nil, mutationInvalid()
+	}
+	return out, nil
 }

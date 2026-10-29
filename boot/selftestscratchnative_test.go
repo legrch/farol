@@ -23,6 +23,11 @@ func TestNativeScratchOwnerPublishesOnceAndObservesAfterReopen(t *testing.T) {
 	publication := nativeSettingsPublication(t, runtime, workspace, 1)
 	const id = "00000000-0000-4000-8000-000000000005"
 	const ws = "00000000-0000-4000-8000-000000000004"
+	runtime.mutations.recoveryReserved = true
+	if result, err := runtime.mutations.createSelfTestScratch(context.Background(), id, ws, publication); err == nil || result != nil || runtime.mutations.operations[id] != nil {
+		t.Fatal("recovery reservation admitted scratch")
+	}
+	runtime.mutations.recoveryReserved = false
 	// A prior unconfirmed attempt must not admit another filesystem effect.
 	runtime.mutations.operations["earlier"] = &settingsMutationOperation{stageScratch: true, pending: true}
 	if result, err := runtime.mutations.createSelfTestScratch(context.Background(), id, ws, publication); err == nil || result != nil || runtime.mutations.operations[id] != nil {
@@ -64,5 +69,12 @@ func TestNativeScratchOwnerPublishesOnceAndObservesAfterReopen(t *testing.T) {
 	observed, err = next.mutations.observeSelfTestScratch(context.Background(), id, ws, result.ComputerGeneration)
 	if err != nil || observed.Phase != result.Phase || observed.Scratch != result.Scratch || observed.Receipt.Directory != result.Receipt.Directory {
 		t.Fatalf("reopened observation: %#v %v", observed, err)
+	}
+	if repeated, err := next.mutations.createSelfTestScratch(context.Background(), id, ws, publication); err == nil || repeated != nil {
+		t.Fatal("reopened runtime repeated the original operation")
+	}
+	after, err := next.mutations.observeSelfTestScratch(context.Background(), id, ws, result.ComputerGeneration)
+	if err != nil || after == nil || after.Scratch != result.Scratch || after.Receipt == nil || after.Receipt.Directory != result.Receipt.Directory {
+		t.Fatalf("original record changed after refused replay: %#v %v", after, err)
 	}
 }

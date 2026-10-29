@@ -6,6 +6,15 @@ import (
 	"testing"
 )
 
+func TestSelfTestScratchReservationBlocksConcurrentShellBeforeNativeAdmission(t *testing.T) {
+	s, journal, native, _ := processWireFixture(t)
+	s.mutations.operations["scratch"] = &settingsMutationOperation{stageScratch: true, pending: true}
+	out, err := s.startProcess(context.Background(), s.current, "concurrent-process", "concurrent-call", native.selectLaunch)
+	if err == nil || out != nil || native.selects != 0 || journal.reserves != 0 {
+		t.Fatal("shell entered while scratch admission was pending", out, err)
+	}
+}
+
 func TestSelfTestShellControlsOriginalOwnerOnce(t *testing.T) {
 	s, journal, native, _ := processWireFixture(t)
 	check, err := newSelfTestShell(s, s.current, "work", "self-process", "self-call", "self-cancel", selfTestShellCancel)

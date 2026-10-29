@@ -151,6 +151,14 @@ func (s *computerConnector) startProcessWithAudit(ctx context.Context, slot *con
 		ledger.mu.Unlock()
 		return nil, connectorProcessRefusal("PROCESS_UNAVAILABLE")
 	}
+	// Scratch reserves its admission before its durable prepare. Do not let a
+	// Shell start enter between that reservation and the native staging lease.
+	for _, prior := range ledger.operations {
+		if prior != nil && prior.stageScratch && prior.pending {
+			ledger.mu.Unlock()
+			return nil, connectorProcessRefusal("PROCESS_UNAVAILABLE")
+		}
+	}
 	if ledger.frozen || ledger.processDraining || ledger.recoveryReserved || ledger.operations[operation] != nil || len(ledger.operations) >= 4096 {
 		ledger.mu.Unlock()
 		return nil, connectorProcessUnknown()
