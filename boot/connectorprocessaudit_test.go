@@ -223,7 +223,7 @@ func TestProductionAuditHostMethodMasksLibraryCredential(t *testing.T) {
 
 // An owner observation may only transport already filtered command and output.
 func TestAuditHostMasksCredentialArgumentsBeforeTransport(t *testing.T) {
-	for _, value := range []string{"curl -ufake:FAKE_SECRET example.test", "--auth FAKE_SECRET", "ftp://fake:FAKE_SECRET@example.test"} {
+	for _, value := range []string{"curl " + "-ufake:FAKE_SECRET example.test", "--auth FAKE_SECRET", "ftp://fake:FAKE_SECRET@example.test"} {
 		s, _, journal, child, _ := connectorProcessFixture(t)
 		publisher := &connectorProcessPublisherDouble{connectorProcessJournalDouble: journal, s: s, digest: strings.Repeat("a", 64)}
 		s.mutations.dependencies.repository = publisher

@@ -41,3 +41,10 @@ dfc0ac2871e6762d347c262f1e106585921d22e9:reports/expected-git-refs.json:generic-
 # (the local-storage name of the navigation shortcuts; not a secret).
 02382cf8f5d038ba1d653c58af071ca80bf07769:src/ui/shell.ts:generic-api-key:474
 444b2a31b7389a6128d1c5e1fd3bb17899ac859b:.gitleaksignore:generic-api-key:41
+
+# Exact historical curl-auth-user matches in synthetic credential-redaction
+# tests using example.test. Other commits, paths and rules remain scanned.
+2f53e7347b4f4432ec124b835bdc009525fedef8:modules/computer/app/services/process/auditfilter_test.go:curl-auth-user:132
+5b6008e6f61fec0893e28da5a4df6183156806c6:modules/computer/app/services/process/auditfilter_test.go:curl-auth-user:42
+5b6008e6f61fec0893e28da5a4df6183156806c6:modules/computer/app/services/process/auditfilter_test.go:curl-auth-user:132
+2f53e7347b4f4432ec124b835bdc009525fedef8:boot/connectorprocessaudit_test.go:curl-auth-user:226
