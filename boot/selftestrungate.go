@@ -26,6 +26,8 @@ type selfTestRunLease struct {
 	fixtureWriteHash     string                       // set only from the durable original receipt
 	fixtureFileIdentity  mutation.DirectoryIdentity   // in-memory native publication witness
 	fixtureFileHash      string                       // bound to that exact witness
+	fixtureOperation     string                       // exact durable connector operation
+	fixtureCustody       port.ScratchFileCustody      // protected by ledger.mu
 	scratchCustody       port.ScratchDirectoryCustody // protected by ledger.mu
 	scratchIdentity      mutation.DirectoryIdentity
 }

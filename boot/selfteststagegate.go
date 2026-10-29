@@ -2,6 +2,7 @@ package boot
 
 import (
 	"context"
+	"errors"
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	"github.com/legrch/farol/modules/computer/domain/mutation"
 	"sync"
@@ -216,16 +217,22 @@ func (s *SettingsMutationIngress) closeSelfTestCustody() error {
 		return nil
 	}
 	s.mu.Lock()
-	var custody interface{ Close() error }
+	var custody, fileCustody interface{ Close() error }
 	if s.selfTestRun != nil {
 		custody = s.selfTestRun.scratchCustody
 		s.selfTestRun.scratchCustody = nil
+		fileCustody = s.selfTestRun.fixtureCustody
+		s.selfTestRun.fixtureCustody = nil
 	}
 	s.mu.Unlock()
-	if custody != nil {
-		return custody.Close()
+	var fileErr, directoryErr error
+	if fileCustody != nil {
+		fileErr = fileCustody.Close()
 	}
-	return nil
+	if custody != nil {
+		directoryErr = custody.Close()
+	}
+	return errors.Join(fileErr, directoryErr)
 }
 
 // closeSelfTestStageAdmission must precede the owner join. The same lock

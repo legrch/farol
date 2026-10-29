@@ -2,11 +2,13 @@ package boot
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	mutationsvc "github.com/legrch/farol/modules/computer/app/services/mutation"
+	mutationct "github.com/legrch/farol/modules/computer/contracts/mutation"
 	state "github.com/legrch/farol/modules/computer/domain/mutation"
 )
 
@@ -29,8 +31,73 @@ func (n *selfTestFileNative) MutateScratch(ctx context.Context, request port.Mut
 			inode = "21"
 		}
 		out.ScratchFile = state.DirectoryIdentity{Device: "1", Inode: inode}
+		out.ScratchFileHold = &fileWorkspaceHold{}
 	}
 	return out, err
+}
+
+func TestSelfTestFileUsesRetainedCustodyThroughWriteAndEdit(t *testing.T) {
+	s, run, journal, native := selfTestFileFixture(t)
+	run.scratchCustody = &fileWorkspaceHold{}
+	run.scratchIdentity = state.DirectoryIdentity{Device: "1", Inode: "10"}
+	write, err := run.mutateFixture(context.Background(), s, s.current, "self-write", "write-call", false)
+	if err != nil || write == nil || write.Phase != "completed" || write.Publication != "durable" || run.fixtureCustody == nil || run.fixtureOperation != "self-write" {
+		t.Fatal("write", write, err)
+	}
+	old := run.fixtureCustody.(*fileWorkspaceHold)
+	edit, err := run.mutateFixture(context.Background(), s, s.current, "self-edit", "edit-call", true)
+	if err != nil || edit == nil || edit.Phase != "completed" || edit.Publication != "durable" || old.closed != 1 || run.fixtureCustody == nil || run.fixtureOperation != "self-edit" || run.fixtureFileIdentity.Inode != "21" || run.fixtureFileHash != selfTestFileHash(selfTestFileAfter) {
+		t.Fatal("edit", edit, err)
+	}
+	observation, err := s.observeMutation(context.Background(), s.current, "self-edit", mutationct.ConnectorObservation{WorkspaceID: "work", RelativePath: state.ScratchPath(run.operation) + "/check.txt"})
+	if err != nil || observation == nil || observation.Receipt == nil || observation.Receipt.AfterSHA256 != selfTestFileHash(selfTestFileAfter) {
+		t.Fatal("observation", observation, err)
+	}
+	if out, err := s.mutate(context.Background(), s.current, "ordinary-write", "ordinary-call", connectorWriteFixture()); err == nil || out != nil {
+		t.Fatal("run fence bypassed")
+	}
+	if native.bound != 2 || journal.admits != 2 || journal.saves != 2 {
+		t.Fatal("wrong operation count")
+	}
+	fileHold, dirHold := run.fixtureCustody.(*fileWorkspaceHold), run.scratchCustody.(*fileWorkspaceHold)
+	if err := s.mutations.closeSelfTestCustody(); err != nil || fileHold.closed != 1 || dirHold.closed != 1 {
+		t.Fatal("shutdown custody", err)
+	}
+}
+
+func TestSelfTestFileLostSaveDoesNotTransferCustodyOrRepeat(t *testing.T) {
+	s, run, journal, native := selfTestFileFixture(t)
+	run.scratchCustody = &fileWorkspaceHold{}
+	run.scratchIdentity = state.DirectoryIdentity{Device: "1", Inode: "10"}
+	journal.saveFault = "after"
+	out, err := run.mutateFixture(context.Background(), s, s.current, "self-write", "write-call", false)
+	if (err == nil && (out == nil || out.Publication != "memory_only")) || run.fixtureCustody != nil || native.bound != 1 {
+		t.Fatal("unconfirmed write", out, err)
+	}
+	if out, err := run.mutateFixture(context.Background(), s, s.current, "self-edit", "edit-call", true); err == nil || out != nil || native.bound != 1 {
+		t.Fatal("unconfirmed write authorized edit")
+	}
+}
+
+func TestSelfTestFileCloseUnknownDoesNotCloseOldHandleTwice(t *testing.T) {
+	s, run, _, native := selfTestFileFixture(t)
+	run.scratchCustody = &fileWorkspaceHold{}
+	run.scratchIdentity = state.DirectoryIdentity{Device: "1", Inode: "10"}
+	if out, err := run.mutateFixture(context.Background(), s, s.current, "self-write", "write-call", false); err != nil || out == nil || out.Phase != "completed" {
+		t.Fatal("write", out, err)
+	}
+	old := run.fixtureCustody.(*fileWorkspaceHold)
+	old.closeErr = errors.New("lost close acknowledgement")
+	out, err := run.mutateFixture(context.Background(), s, s.current, "self-edit", "edit-call", true)
+	if err != nil || out == nil || out.Phase != "outcome_unknown" || old.closed != 1 || run.fixtureCustody != nil {
+		t.Fatal("close uncertainty", out, err)
+	}
+	if err := s.mutations.closeSelfTestCustody(); err != nil || old.closed != 1 {
+		t.Fatal("old close repeated", err, old.closed)
+	}
+	if out, err := run.mutateFixture(context.Background(), s, s.current, "edit-again", "another-call", true); err == nil || out != nil || native.bound != 2 {
+		t.Fatal("uncertain edit repeated")
+	}
 }
 
 // Real connector/mutation policy owners with injected journal and filesystem.
