@@ -108,7 +108,7 @@ it("withholds a report and keeps the original when the owner changes during sett
         operationId: options.operationId!,
         workspaceId: "work",
         computerGeneration: "1",
-        planVersion: "2",
+        planVersion: "3",
         status: "fail",
         steps: [
           {
@@ -161,7 +161,7 @@ it("retains the original attempt and only observes that identity", async () => {
           operationId,
           workspaceId: "work",
           computerGeneration: "1",
-          planVersion: "2",
+          planVersion: "3",
           status: "unknown",
           steps: [],
         },
@@ -213,7 +213,7 @@ it("permits a separate test only after the first result is settled", async () =>
         operationId: options.operationId!,
         workspaceId: "work",
         computerGeneration: "1",
-        planVersion: "2",
+        planVersion: "3",
         status: "partial",
         steps: [
           "scratch",
@@ -225,31 +225,32 @@ it("permits a separate test only after the first result is settled", async () =>
           "list",
           "read",
           "search",
+          "directory search",
           "cleanup",
           "shell",
           "shell cancel",
-          "directory search",
           "git and hooks",
         ].map((name, index) => ({
           name,
-          status: index < 12 ? "pass" : "not_tested",
-          ...(index < 12
+          status: index < 13 ? "pass" : "not_tested",
+          ...(index < 13
             ? {
                 operationId:
                   options.operationId! +
                   [
                     "",
-                    "-st2-write",
-                    "-st2-edit",
-                    "-st2-edit",
-                    "-st2-catalogue",
-                    "-st2-bootstrap",
-                    "-st2-list",
-                    "-st2-read",
-                    "-st2-search",
+                    "-st3-write",
+                    "-st3-edit",
+                    "-st3-edit",
+                    "-st3-catalogue",
+                    "-st3-bootstrap",
+                    "-st3-list",
+                    "-st3-read",
+                    "-st3-search",
+                    "-st3-directory-search",
                     "",
-                    "-st2-quick",
-                    "-st2-cancel",
+                    "-st3-quick",
+                    "-st3-cancel",
                   ][index],
               }
             : {}),

@@ -60,7 +60,7 @@ it("reserves the exact durable parent before sending one start", async () => {
             operationId: options.operationId!,
             workspaceId: "work",
             computerGeneration: "1",
-            planVersion: "2",
+            planVersion: "3",
           },
         };
       return {
@@ -72,7 +72,7 @@ it("reserves the exact durable parent before sending one start", async () => {
           operationId: options.operationId!,
           workspaceId: "work",
           computerGeneration: "1",
-          planVersion: "2",
+          planVersion: "3",
           status: "unknown",
           steps: [],
         },
@@ -169,7 +169,11 @@ it("settles a known failure only by observing its original terminal record", asy
           context,
           data: { workspaceId: "work", entries: terminal ? [terminal] : [] },
         };
-      const selection = { ...original, operationId: options.operationId! };
+      const selection = {
+        ...original,
+        planVersion: "3",
+        operationId: options.operationId!,
+      };
       if (method === "computer.selftest.reserve")
         return {
           status: "ok",

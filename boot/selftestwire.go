@@ -97,7 +97,7 @@ func (s *computerConnector) selfTestMethods() map[string]desktop.Method {
 			if !execution.admitMarker(ctx, repo) {
 				return &desktop.Outcome{Status: "unknown", Code: "COMPUTER_SELFTEST_MARKER_UNKNOWN"}, nil
 			}
-			version := "2"
+			version := strconv.FormatUint(uint64(execution.binding.Version), 10)
 			return ingressOutcome(&wire.ComputerSelfTestObserve{OperationId: r.OperationID, WorkspaceId: in.WorkspaceId, ComputerGeneration: in.Publication.Generation, PlanVersion: &version}, nil)
 		}},
 		"computer.selftest.history": {Concurrent: true, Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
@@ -146,7 +146,7 @@ func (s *computerConnector) selfTestMethods() map[string]desktop.Method {
 			if !execution.reserveForStart(ctx) {
 				return &desktop.Outcome{Status: "unknown", Code: "COMPUTER_SELFTEST_RESERVATION_UNKNOWN"}, nil
 			}
-			version := "2"
+			version := strconv.FormatUint(uint64(execution.binding.Version), 10)
 			return ingressOutcome(&wire.ComputerSelfTestObserve{OperationId: r.OperationID, WorkspaceId: in.WorkspaceId, ComputerGeneration: in.Publication.Generation, PlanVersion: &version}, nil)
 		}},
 		"computer.selftest.start": {Concurrent: true, Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {

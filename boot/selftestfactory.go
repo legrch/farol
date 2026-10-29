@@ -13,7 +13,7 @@ import (
 // It performs no journal write, approval renewal, or native filesystem effect.
 // The caller must retain the returned execution for its entire lifetime.
 func (s *computerConnector) newConnectorSelfTest(ctx context.Context, slot *connectorSlot, workspace, operation string, publication wire.ComputerAuthorityPublication) (*durableSelfTestExecution, error) {
-	ids, valid := selfTestIDsV2(operation)
+	ids, valid := selfTestIDsV3(operation)
 	if s == nil || s.root == nil || s.mutations == nil || s.mutations.computer != s.root || slot == nil || slot.guard == nil || !valid || !state.Identifier(workspace, 120) || slot.guard.publication != publication {
 		return nil, computerUnavailable()
 	}
@@ -31,7 +31,7 @@ func (s *computerConnector) newConnectorSelfTest(ctx context.Context, slot *conn
 	if !ok || repo == nil {
 		return nil, computerUnavailable()
 	}
-	binding := state.SelfTestBinding{Identity: state.Identity{Scope: state.ScopeOwnerSettings, OperationID: operation, OwnerID: s.root.ownerID, ProfileID: s.root.peer.ProfileId, ComputerID: s.root.computerID}, WorkspaceID: workspace, ComputerGeneration: generation, Version: 2}
+	binding := state.SelfTestBinding{Identity: state.Identity{Scope: state.ScopeOwnerSettings, OperationID: operation, OwnerID: s.root.ownerID, ProfileID: s.root.peer.ProfileId, ComputerID: s.root.computerID}, WorkspaceID: workspace, ComputerGeneration: generation, Version: 3}
 	if !binding.Valid() {
 		return nil, mutationInvalid()
 	}
@@ -43,5 +43,5 @@ func (s *computerConnector) newConnectorSelfTest(ctx context.Context, slot *conn
 		_, err := s.root.settingsAuthority(ctx, publication)
 		return err
 	}
-	return &durableSelfTestExecution{binding: binding, repository: repo, preflight: preflight, gate: &s.mutations.selfTestParent, ledger: s.mutations, execution: &selfTestExecution{owner: plan, version: 2}, originSlot: slot, originPublication: publication}, nil
+	return &durableSelfTestExecution{binding: binding, repository: repo, preflight: preflight, gate: &s.mutations.selfTestParent, ledger: s.mutations, execution: &selfTestExecution{owner: plan, version: 3}, originSlot: slot, originPublication: publication}, nil
 }

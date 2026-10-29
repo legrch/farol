@@ -149,6 +149,7 @@ it("checks a terminal that appears between the two history snapshots", async () 
 });
 
 it("requires the exact one-shot marker acknowledgement", async () => {
+  const current = { ...selection, planVersion: "3" as const };
   const request = vi.fn(
     async (
       _method: string,
@@ -159,17 +160,17 @@ it("requires the exact one-shot marker acknowledgement", async () => {
       requestId: options.id!,
       operationId: options.operationId!,
       context,
-      data: selection,
+      data: current,
     }),
   );
   expect(
-    await beginSelfTestMarker({ request }, context, selection, publication),
+    await beginSelfTestMarker({ request }, context, current, publication),
   ).toBe("durable");
   expect(request.mock.calls.map(([method]) => method)).toEqual([
     "computer.selftest.marker.begin",
   ]);
   expect(
-    await beginSelfTestMarker({ request }, context, selection, {
+    await beginSelfTestMarker({ request }, context, current, {
       ...publication,
       generation: "2",
     }),
@@ -182,7 +183,12 @@ it("does not repeat a lost marker admission", async () => {
     throw new Error("lost");
   });
   expect(
-    await beginSelfTestMarker({ request }, context, selection, publication),
+    await beginSelfTestMarker(
+      { request },
+      context,
+      { ...selection, planVersion: "3" },
+      publication,
+    ),
   ).toBe("unknown");
   expect(request).toHaveBeenCalledTimes(1);
 });
