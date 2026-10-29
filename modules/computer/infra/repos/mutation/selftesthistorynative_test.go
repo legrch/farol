@@ -61,4 +61,8 @@ func TestSelfTestMarkerNativePersistsOriginalSelection(t *testing.T) {
 	if err != nil || len(entries) != 0 {
 		t.Fatal("marker confused with a run", entries, err)
 	}
+	markers, err := r.ListSelfTestMarkers(context.Background(), "owner", "profile", "computer")
+	if err != nil || len(markers) != 1 || markers[0].Binding != b || markers[0].Phase != domain.SelfTestMarkerSelected {
+		t.Fatal("marker inventory lost", markers, err)
+	}
 }

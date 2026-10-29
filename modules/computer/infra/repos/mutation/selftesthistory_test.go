@@ -18,6 +18,29 @@ type historyMemory struct {
 	err            error
 }
 
+func TestSelfTestMarkerHistoryRetainsSelectedAndRejectsChangingInventory(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		_, original, _ := fixture()
+		disk := &historyMemory{memory: original, changeOnSecond: changed}
+		b := domain.SelfTestBinding{Identity: domain.Identity{Scope: domain.ScopeOwnerSettings, OperationID: scratchTestRun, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 2}
+		marker, _ := domain.RestoreSelfTestMarker(b, domain.SelfTestMarkerSelected)
+		raw, _ := encodeSelfTestMarker(marker)
+		key, _ := selfTestMarkerKey(b)
+		disk.files[key] = bytes.Clone(raw)
+		out, err := newRepository(disk).ListSelfTestMarkers(context.Background(), "owner", "profile", "computer")
+		if changed {
+			if err == nil || out != nil {
+				t.Fatal("changing inventory accepted", out, err)
+			}
+		} else if err != nil || len(out) != 1 || out[0].Binding != b || out[0].Phase != domain.SelfTestMarkerSelected {
+			t.Fatal("marker lost", out, err)
+		}
+		if disk.creates != 0 || disk.replaces != 0 || !bytes.Equal(disk.files[key], raw) {
+			t.Fatal("history changed")
+		}
+	}
+}
+
 func TestSelfTestHistoryRejectsUnsupportedAndChangingInventory(t *testing.T) {
 	for _, mode := range []string{"unsupported", "wrong-key", "changed-bytes", "excess"} {
 		t.Run(mode, func(t *testing.T) {

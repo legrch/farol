@@ -235,6 +235,16 @@ type SelfTestMarkerRepository interface {
 	FinishSelfTestMarker(context.Context, mutation.SelfTestBinding) error
 }
 
+type SelfTestMarkerHistoryEntry struct {
+	Binding mutation.SelfTestBinding
+	Phase   mutation.SelfTestMarkerPhase
+}
+
+// The inventory must be complete and cannot mutate or settle a marker.
+type SelfTestMarkerHistoryRepository interface {
+	ListSelfTestMarkers(context.Context, string, string, string) ([]SelfTestMarkerHistoryEntry, error)
+}
+
 // ScratchCleanupWorkspace performs one already admitted, guarded attempt.
 type ScratchCleanupWorkspace interface {
 	RemoveEmptyScratch(context.Context, ScratchCleanupRequest) error

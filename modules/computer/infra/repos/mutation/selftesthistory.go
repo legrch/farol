@@ -22,6 +22,18 @@ type historyKeys interface{ keys() ([]string, error) }
 // The two passes detect concurrent changes; they do not provide an atomic
 // snapshot against a noncooperating process running as the same user.
 func (r *Repository) ListSelfTests(ctx context.Context, owner, profile, computer string) ([]port.SelfTestHistoryEntry, error) {
+	return r.listSelfTestInventory(ctx, owner, profile, computer, nil)
+}
+
+func (r *Repository) ListSelfTestMarkers(ctx context.Context, owner, profile, computer string) ([]port.SelfTestMarkerHistoryEntry, error) {
+	markers := make([]port.SelfTestMarkerHistoryEntry, 0)
+	if _, err := r.listSelfTestInventory(ctx, owner, profile, computer, &markers); err != nil {
+		return nil, err
+	}
+	return markers, nil
+}
+
+func (r *Repository) listSelfTestInventory(ctx context.Context, owner, profile, computer string, markers *[]port.SelfTestMarkerHistoryEntry) ([]port.SelfTestHistoryEntry, error) {
 	if r == nil || !domain.Identifier(owner, 160) || !domain.Identifier(profile, 160) || !domain.Identifier(computer, 160) {
 		return nil, unavailable()
 	}
@@ -64,6 +76,18 @@ func (r *Repository) ListSelfTests(ctx context.Context, owner, profile, computer
 		if decodeStrict(raw, &header) != nil || header.Kind == "" || len(header.Record) == 0 {
 			return nil, unavailable()
 		}
+		if markers != nil && header.Version == selfTestMarkerVersion && header.Kind == selfTestMarkerKind {
+			marker, err := decodeSelfTestMarker(raw)
+			if err != nil || marker == nil || len(*markers) >= maxSelfTestHistory {
+				return nil, unavailable()
+			}
+			binding := marker.Binding()
+			key, err := selfTestMarkerKey(binding)
+			if err != nil || key != name || binding.Identity.OwnerID != owner || binding.Identity.ProfileID != profile || binding.Identity.ComputerID != computer {
+				return nil, unavailable()
+			}
+			*markers = append(*markers, port.SelfTestMarkerHistoryEntry{Binding: binding, Phase: marker.Phase()})
+		}
 		if header.Version != selfTestVersion || header.Kind != selfTestKind {
 			continue
 		}
@@ -103,3 +127,4 @@ func (r *Repository) ListSelfTests(ctx context.Context, owner, profile, computer
 }
 
 var _ port.SelfTestHistoryRepository = (*Repository)(nil)
+var _ port.SelfTestMarkerHistoryRepository = (*Repository)(nil)
