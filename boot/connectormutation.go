@@ -35,10 +35,10 @@ func connectorMutationTarget(op mutationct.Operation) (string, state.Kind) {
 // Trusted composition selects slot and the existing shared mutation owner.
 // External routing is a separate gate; this join opens no storage or endpoint.
 func (s *computerConnector) mutate(ctx context.Context, slot *connectorSlot, operation, call string, request mutationct.ConnectorRequest) (*mutationct.ConnectorResponse, error) {
-	return s.mutateForSelfTest(ctx, slot, operation, call, request, nil, nil)
+	return s.mutateForSelfTest(ctx, slot, operation, call, request, nil, nil, nil, nil)
 }
 
-func (s *computerConnector) mutateForSelfTest(ctx context.Context, slot *connectorSlot, operation, call string, request mutationct.ConnectorRequest, run *selfTestRunLease, binding *state.ScratchCleanupBinding) (*mutationct.ConnectorResponse, error) {
+func (s *computerConnector) mutateForSelfTest(ctx context.Context, slot *connectorSlot, operation, call string, request mutationct.ConnectorRequest, run *selfTestRunLease, binding *state.ScratchCleanupBinding, expected *state.DirectoryIdentity, published *state.DirectoryIdentity) (*mutationct.ConnectorResponse, error) {
 	if s == nil || s.mutations == nil || s.mutations.computer != s.root || slot == nil || slot.route == nil || slot.route.issuer == nil || slot.guard == nil || slot.guard.root != s.root ||
 		ctx == nil || ctx.Err() != nil || !validIngressID(operation) || !validIngressID(call) {
 		return nil, mutationInvalid()
@@ -58,8 +58,8 @@ func (s *computerConnector) mutateForSelfTest(ctx context.Context, slot *connect
 		if !ok || bound == nil || binding == nil || !binding.Valid() || binding.Creation.Identity.OperationID != run.operation || binding.Creation.WorkspaceID != run.workspace || request.WorkspaceID != run.workspace || path != state.ScratchPath(run.operation)+"/check.txt" || !validSelfTestFileOperation(request.Operation) {
 			return nil, mutationInvalid()
 		}
-		native = &selfTestBoundWorkspace{native: bound, binding: *binding}
-	} else if binding != nil {
+		native = &selfTestBoundWorkspace{native: bound, binding: *binding, expected: expected, published: published}
+	} else if binding != nil || expected != nil || published != nil {
 		return nil, mutationInvalid()
 	}
 	generation, err := strconv.ParseUint(slot.guard.publication.Generation, 10, 64)

@@ -20,7 +20,18 @@ type selfTestFileNative struct {
 func (n *selfTestFileNative) MutateScratch(ctx context.Context, request port.MutationRequest, binding state.ScratchCleanupBinding) (*port.MutationReceipt, error) {
 	n.bound++
 	n.binding = binding
-	return n.chatMutationNative.Mutate(ctx, request)
+	if n.bound == 2 && (request.ScratchExpectedFile == nil || request.ScratchExpectedFile.Inode != "20") {
+		return nil, mutationInvalid()
+	}
+	out, err := n.chatMutationNative.Mutate(ctx, request)
+	if err == nil && out != nil {
+		inode := "20"
+		if n.bound == 2 {
+			inode = "21"
+		}
+		out.ScratchFile = state.DirectoryIdentity{Device: "1", Inode: inode}
+	}
+	return out, err
 }
 
 // Real connector/mutation policy owners with injected journal and filesystem.
@@ -71,7 +82,7 @@ func TestSelfTestFileUsesOriginalReceiptAndOneShotMutations(t *testing.T) {
 	if repeated, err := run.mutateFixture(context.Background(), s, s.current, "edit-again", "edit-call-2", true); err == nil || repeated != nil {
 		t.Fatal("edit repeated")
 	}
-	if native.bound != 2 || native.calls != 2 || journal.admits != 2 || journal.saves != 2 {
+	if native.bound != 2 || native.calls != 2 || journal.admits != 2 || journal.saves != 2 || run.fixtureFileIdentity.Inode != "21" {
 		t.Fatal("unexpected effects")
 	}
 	observation, err := s.observeMutation(context.Background(), s.current, "self-edit", mutationct.ConnectorObservation{WorkspaceID: "work", RelativePath: state.ScratchPath(run.operation) + "/check.txt"})

@@ -57,11 +57,21 @@ func TestNativeScratchMutationRejectsDisplacedParent(t *testing.T) {
 			}}
 			out, err := NewMutable(base).Mutate(context.Background(), request)
 			if !displaced {
-				if err != nil || out == nil {
+				if err != nil || out == nil || !out.ScratchFile.Valid() {
 					t.Fatalf("write %#v %v", out, err)
 				}
 				if b, err := os.ReadFile(filepath.Join(dir, "check.txt")); err != nil || string(b) != "test" {
 					t.Fatal("write not visible", err)
+				}
+				edit := request
+				edit.Operation = mutation.Edit{RelativePath: leaf + "/check.txt", ExpectedSHA256: payloadHash([]byte("test")), Edits: []mutation.TextEdit{{OldText: "test", NewText: "updated"}}}
+				edit.ScratchExpectedFile = &out.ScratchFile
+				edited, err := NewMutable(base).Mutate(context.Background(), edit)
+				if err != nil || edited == nil || !edited.ScratchFile.Valid() || edited.ScratchFile == out.ScratchFile {
+					t.Fatalf("edit %#v %v", edited, err)
+				}
+				if b, err := os.ReadFile(filepath.Join(dir, "check.txt")); err != nil || string(b) != "updated" {
+					t.Fatal("edit not visible", err)
 				}
 			} else {
 				if err == nil || out != nil {

@@ -69,6 +69,9 @@ type MutationRequest struct {
 	// must pin this exact previously created parent, refuse missing parents and
 	// recheck its physical identity through publication. It grants no authority.
 	ScratchParent *mutation.ScratchCleanupBinding
+	// Only scratch edits supply this original file identity. It is enforced by
+	// the scratch-capable native producer before the existing guarded swap.
+	ScratchExpectedFile *mutation.DirectoryIdentity
 	// Rechecks the SAME selected execution lease, outside owner callbacks.
 	// Required before the first directory effect and publication preparation.
 	BeforePublish func(context.Context) error
@@ -87,6 +90,9 @@ type MutationReceipt struct {
 	BeforeSHA256            *string
 	AfterSHA256             string
 	Directory               mutation.DirectoryIdentity
+	// Physical identity of a successful scratch file publication only. This is
+	// an in-memory cleanup witness, not a public or durable mutation receipt.
+	ScratchFile mutation.DirectoryIdentity
 }
 
 // Native mutation is one admitted attempt. Cancellation before possible effects

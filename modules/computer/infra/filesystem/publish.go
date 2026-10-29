@@ -12,7 +12,7 @@ import (
 // publish is one admitted attempt. A swap verification failure may perform at
 // most one internal guarded undo before returning. There is no retry/fallback
 // after a reported unknown/refusal. See mutation.md for same-user race residuals.
-func (m *Mutable) publish(ctx context.Context, request port.MutationRequest, walk *mutationWalk, parent int, leaf string, payload []byte, previous *fileVersion) (err error) {
+func (m *Mutable) publish(ctx context.Context, request port.MutationRequest, walk *mutationWalk, parent int, leaf string, payload []byte, previous *fileVersion, result *fileVersion) (err error) {
 	if len(payload) > mutation.MaxBytes {
 		return refusal("WORKSPACE_FILE_TOO_LARGE")
 	}
@@ -199,6 +199,9 @@ func (m *Mutable) publish(ctx context.Context, request port.MutationRequest, wal
 	}
 	if ctx.Err() != nil || walk.check() != nil || !m.unchanged(parent, leaf, written, hash, false) {
 		return mutationError("MUTATION_OUTCOME_UNKNOWN")
+	}
+	if result != nil {
+		*result = written
 	}
 	return nil
 }

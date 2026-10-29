@@ -26,6 +26,13 @@ func (m *Mutable) Mutate(ctx context.Context, request port.MutationRequest) (rec
 		return nil, refusal("WORKSPACE_INVALID_REQUEST")
 	}
 	request.Operation = request.Operation.Clone()
+	if request.ScratchExpectedFile != nil {
+		expected := *request.ScratchExpectedFile
+		request.ScratchExpectedFile = &expected
+		if request.ScratchParent == nil || !expected.Valid() || request.Operation.Kind() != mutation.EditKind {
+			return nil, refusal("WORKSPACE_INVALID_REQUEST")
+		}
+	}
 	if request.ScratchParent != nil {
 		bound := *request.ScratchParent
 		request.ScratchParent = &bound
@@ -109,6 +116,11 @@ func (m *Mutable) Mutate(ctx context.Context, request port.MutationRequest) (rec
 	if err != nil {
 		return nil, err
 	}
+	if request.ScratchParent != nil && request.Operation.Kind() == mutation.EditKind {
+		if request.ScratchExpectedFile == nil || previous == nil || strconv.FormatUint(previous.dev, 10) != request.ScratchExpectedFile.Device || strconv.FormatUint(previous.ino, 10) != request.ScratchExpectedFile.Inode {
+			return nil, refusal("WORKSPACE_MUTATION_CONFLICT")
+		}
+	}
 	var before *string
 	if previous != nil {
 		hash := payloadHash(data)
@@ -129,10 +141,18 @@ func (m *Mutable) Mutate(ctx context.Context, request port.MutationRequest) (rec
 			return nil, err
 		}
 	}
-	if err = m.publish(ctx, request, walk, parent, leaf, payload, previous); err != nil {
+	var published fileVersion
+	if err = m.publish(ctx, request, walk, parent, leaf, payload, previous, &published); err != nil {
 		return nil, err
 	}
-	return &port.MutationReceipt{Operation: string(request.Operation.Kind()), RelativePath: request.Operation.Path(), Bytes: uint64(len(payload)), Replacements: replacements, BeforeSHA256: before, AfterSHA256: payloadHash(payload)}, nil
+	result := &port.MutationReceipt{Operation: string(request.Operation.Kind()), RelativePath: request.Operation.Path(), Bytes: uint64(len(payload)), Replacements: replacements, BeforeSHA256: before, AfterSHA256: payloadHash(payload)}
+	if request.ScratchParent != nil {
+		result.ScratchFile = mutation.DirectoryIdentity{Device: strconv.FormatUint(published.dev, 10), Inode: strconv.FormatUint(published.ino, 10)}
+		if !result.ScratchFile.Valid() {
+			return nil, mutationError("MUTATION_OUTCOME_UNKNOWN")
+		}
+	}
+	return result, nil
 }
 func (m *Mutable) original(parent int, leaf string) (*fileVersion, []byte, error) {
 	listed, err := m.fs.lstat(parent, leaf)

@@ -56,3 +56,34 @@ func TestScratchMutationPinsOriginalParentAndNeverCreatesIt(t *testing.T) {
 		})
 	}
 }
+
+func TestScratchMutationEditRequiresOriginalFileIdentity(t *testing.T) {
+	for _, replaced := range []bool{false, true} {
+		t.Run(strconv.FormatBool(replaced), func(t *testing.T) {
+			m, f := fakeMutable()
+			id := "00000000-0000-4000-8000-000000000001"
+			leaf := mutation.ScratchPath(id)
+			dir := f.directory(0700)
+			f.work.children[leaf] = dir
+			b := mutation.ScratchCleanupBinding{Creation: mutation.Binding{Identity: mutation.Identity{Scope: mutation.ScopeOwnerSettings, OperationID: id, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", RequestDigest: strings.Repeat("a", 64), RelativePath: leaf, Scratch: mutation.ScratchBinding{RunID: id, Root: "/work", Leaf: leaf, RootIdentity: mutation.DirectoryIdentity{Device: "7", Inode: "2"}, ExpectedInventory: mutation.EmptyScratchInventory}}, Directory: mutation.DirectoryIdentity{Device: "7", Inode: strconv.FormatUint(dir.v.ino, 10)}}
+			path := leaf + "/check.txt"
+			created, err := m.MutateScratch(context.Background(), fakeRequest(mutation.Write{RelativePath: path, Content: "old"}), b)
+			if err != nil || created == nil || !created.ScratchFile.Valid() {
+				t.Fatalf("creation %#v %v", created, err)
+			}
+			if replaced {
+				dir.children["check.txt"] = f.file("old")
+			}
+			request := fakeRequest(mutation.Edit{RelativePath: path, ExpectedSHA256: payloadHash([]byte("old")), Edits: []mutation.TextEdit{{OldText: "old", NewText: "new"}}})
+			request.ScratchExpectedFile = &created.ScratchFile
+			result, err := m.MutateScratch(context.Background(), request, b)
+			if replaced {
+				if err == nil || result != nil || string(dir.children["check.txt"].data) != "old" || f.swaps != 0 {
+					t.Fatal("same-content replacement edited")
+				}
+			} else if err != nil || result == nil || !result.ScratchFile.Valid() || result.ScratchFile == created.ScratchFile || string(dir.children["check.txt"].data) != "new" {
+				t.Fatalf("edit %#v %v", result, err)
+			}
+		})
+	}
+}

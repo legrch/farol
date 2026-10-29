@@ -17,12 +17,13 @@ type selfTestRunLease struct {
 	stop                 func() bool
 	autoStop             func() bool
 	released             chan struct{}
-	active               bool          // protected by ledger.mu
-	callDone             chan struct{} // protected by ledger.mu
-	cleanupStarted       bool          // protected by ledger.mu; never retried
-	fixtureWriteStarted  bool          // protected by ledger.mu; never retried
-	fixtureEditStarted   bool          // protected by ledger.mu; never retried
-	fixtureWriteHash     string        // set only from the durable original receipt
+	active               bool                       // protected by ledger.mu
+	callDone             chan struct{}              // protected by ledger.mu
+	cleanupStarted       bool                       // protected by ledger.mu; never retried
+	fixtureWriteStarted  bool                       // protected by ledger.mu; never retried
+	fixtureEditStarted   bool                       // protected by ledger.mu; never retried
+	fixtureWriteHash     string                     // set only from the durable original receipt
+	fixtureFileIdentity  mutation.DirectoryIdentity // in-memory native publication witness
 }
 
 func (s *SettingsMutationIngress) beginSelfTestRun(ctx context.Context, operation, workspace string) (*selfTestRunLease, error) {

@@ -14,15 +14,24 @@ const selfTestFileBefore = "Farol self-test\n"
 const selfTestFileAfter = "Farol self-test verified\n"
 
 type selfTestBoundWorkspace struct {
-	native  port.ScratchBoundMutableWorkspace
-	binding state.ScratchCleanupBinding
+	native              port.ScratchBoundMutableWorkspace
+	binding             state.ScratchCleanupBinding
+	expected, published *state.DirectoryIdentity
 }
 
 func (w *selfTestBoundWorkspace) Mutate(ctx context.Context, request port.MutationRequest) (*port.MutationReceipt, error) {
-	if w == nil || w.native == nil || request.ScratchParent != nil {
+	if w == nil || w.native == nil || request.ScratchParent != nil || request.ScratchExpectedFile != nil || w.published == nil {
 		return nil, computerUnavailable()
 	}
-	return w.native.MutateScratch(ctx, request, w.binding)
+	if w.expected != nil {
+		copy := *w.expected
+		request.ScratchExpectedFile = &copy
+	}
+	out, err := w.native.MutateScratch(ctx, request, w.binding)
+	if err == nil && out != nil {
+		*w.published = out.ScratchFile
+	}
+	return out, err
 }
 
 func selfTestFileHash(value string) string {
@@ -51,7 +60,7 @@ func (r *selfTestRunLease) mutateFixture(ctx context.Context, connector *compute
 	s := r.ledger
 	s.mu.Lock()
 	original := s.operations[r.operation]
-	if s.selfTestRun != r || r.active || r.cleanupStarted || r.ctx.Err() != nil || s.stagePending || s.stageClosed || s.frozen || s.processDraining || s.recoveryReserved || s.retirementErr != nil || original == nil || !original.stageScratch || !original.scratchCreated || original.selfTestRun != r || original.pending || !original.settled || original.scratch == nil || original.workspace != r.workspace || (edit && (r.fixtureEditStarted || r.fixtureWriteHash != selfTestFileHash(selfTestFileBefore))) || (!edit && r.fixtureWriteStarted) {
+	if s.selfTestRun != r || r.active || r.cleanupStarted || r.ctx.Err() != nil || s.stagePending || s.stageClosed || s.frozen || s.processDraining || s.recoveryReserved || s.retirementErr != nil || original == nil || !original.stageScratch || !original.scratchCreated || original.selfTestRun != r || original.pending || !original.settled || original.scratch == nil || original.workspace != r.workspace || (edit && (r.fixtureEditStarted || r.fixtureWriteHash != selfTestFileHash(selfTestFileBefore) || !r.fixtureFileIdentity.Valid())) || (!edit && r.fixtureWriteStarted) {
 		s.mu.Unlock()
 		return nil, computerUnavailable()
 	}
@@ -68,7 +77,7 @@ func (r *selfTestRunLease) mutateFixture(ctx context.Context, connector *compute
 	}
 	r.active = true
 	r.callDone = make(chan struct{})
-	done, generation := r.callDone, original.generation
+	done, generation, originalFile := r.callDone, original.generation, r.fixtureFileIdentity
 	s.mu.Unlock()
 	bounded, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(r.ctx, cancel)
@@ -98,13 +107,24 @@ func (r *selfTestRunLease) mutateFixture(ctx context.Context, connector *compute
 	if edit {
 		op = mutationct.Edit{RelativePath: path, ExpectedSHA256: selfTestFileHash(selfTestFileBefore), Edits: []mutationct.TextEdit{{OldText: selfTestFileBefore, NewText: selfTestFileAfter}}}
 	}
-	out, err := connector.mutateForSelfTest(bounded, slot, operation, call, mutationct.ConnectorRequest{WorkspaceID: r.workspace, Operation: op}, r, &binding)
+	var expected *state.DirectoryIdentity
+	if edit {
+		expected = &originalFile
+	}
+	var published state.DirectoryIdentity
+	out, err := connector.mutateForSelfTest(bounded, slot, operation, call, mutationct.ConnectorRequest{WorkspaceID: r.workspace, Operation: op}, r, &binding, expected, &published)
 	if err != nil || out == nil {
 		return out, err
 	}
-	if !edit && out.Phase == "completed" && out.Publication == "durable" && out.OperationID == operation && out.RelativePath == path && out.Receipt != nil && out.Receipt.Operation == "write" && out.Receipt.AfterSHA256 == selfTestFileHash(selfTestFileBefore) {
+	if !edit && out.Phase == "completed" && out.Publication == "durable" && out.OperationID == operation && out.RelativePath == path && out.Receipt != nil && out.Receipt.Operation == "write" && out.Receipt.AfterSHA256 == selfTestFileHash(selfTestFileBefore) && published.Valid() {
 		s.mu.Lock()
 		r.fixtureWriteHash = out.Receipt.AfterSHA256
+		r.fixtureFileIdentity = published
+		s.mu.Unlock()
+	}
+	if edit && out.Phase == "completed" && out.Publication == "durable" && out.OperationID == operation && out.RelativePath == path && out.Receipt != nil && out.Receipt.Operation == "edit" && out.Receipt.AfterSHA256 == selfTestFileHash(selfTestFileAfter) && published.Valid() {
+		s.mu.Lock()
+		r.fixtureFileIdentity = published
 		s.mu.Unlock()
 	}
 	return out, nil
