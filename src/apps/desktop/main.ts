@@ -5328,8 +5328,9 @@ async function startAdmittedSecureMcpConnector(
   // executable without replaying any previous configure/start operation.
   if (
     e2eTunnelClientExecutable() === undefined &&
-    connector.tunnelClient.executablePath !==
-      path.join(directory, TUNNEL_CLIENT.entry)
+    (connector.tunnelClient.executablePath !==
+      path.join(directory, TUNNEL_CLIENT.entry) ||
+      connector.tunnelClient.executableSha256 !== TUNNEL_CLIENT.sha256)
   ) {
     const selected = await verifyTunnelClientExecutable(
       path.join(directory, TUNNEL_CLIENT.entry),

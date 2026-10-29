@@ -96,7 +96,7 @@ function fixture({ pause, startResult = originalStart, openError } = {}) {
           tunnelId: "fixture-tunnel",
           tunnelClient: {
             executablePath: path.join("/controlled/app", TUNNEL_CLIENT.entry),
-            executableSha256: "c".repeat(64),
+            executableSha256: TUNNEL_CLIENT.sha256,
           },
           runtime: {
             state: "ready",
@@ -223,6 +223,12 @@ function fixture({ pause, startResult = originalStart, openError } = {}) {
     computerConnectorAdmission: vi.fn(() => ({ admissible: true })),
     codexAgentOperationActive: () => false,
     verifySelectedTunnelClient: port("verify"),
+    verifyTunnelClientExecutable: vi.fn(async () => {
+      events.push("verify-bundled");
+      snapshot.settings.connectors.secureMcp.tunnelClient.executableSha256 =
+        TUNNEL_CLIENT.sha256;
+      return { ok: true };
+    }),
     e2eTunnelClientExecutable: () => undefined,
     TUNNEL_CLIENT,
     clearConnectorVerificationReceipt: port("receipt-clear"),
@@ -436,6 +442,40 @@ describe("actual admitted transport start with controlled IO", () => {
       assertFinishedOwner(f);
     },
   );
+
+  it("rechecks the bundled client when the saved digest is stale at the same path", async () => {
+    const f = fixture();
+    f.snapshot.settings.connectors.secureMcp.tunnelClient.executableSha256 =
+      "c".repeat(64);
+    const result = await f.direct(originalBinding, () => true);
+    expect(result.ok).toBe(true);
+    expect(
+      f.context.verifyTunnelClientExecutable,
+    ).toHaveBeenCalledExactlyOnceWith(
+      path.join("/controlled/app", TUNNEL_CLIENT.entry),
+    );
+    expect(f.events.indexOf("verify-bundled")).toBeLessThan(
+      f.events.indexOf("verify"),
+    );
+  });
+
+  it("does not start when rechecking the bundled client fails", async () => {
+    const f = fixture();
+    f.snapshot.settings.connectors.secureMcp.tunnelClient.executableSha256 =
+      "c".repeat(64);
+    f.context.verifyTunnelClientExecutable.mockResolvedValueOnce({
+      ok: false,
+      error: "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE",
+    });
+    const result = await f.direct(originalBinding, () => true);
+    expect(result).toEqual({
+      ok: false,
+      error: "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE",
+    });
+    expect(f.context.verifySelectedTunnelClient).not.toHaveBeenCalled();
+    expect(f.core.openComputerConnector).not.toHaveBeenCalled();
+    expect(f.runtime.start).not.toHaveBeenCalled();
+  });
 
   it("rebinds the saved same-tunnel app choice after a known ready start", async () => {
     const f = fixture();
