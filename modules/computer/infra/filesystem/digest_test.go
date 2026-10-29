@@ -28,3 +28,36 @@ func TestMutationDigestJSONStringifyUnicodeControlsAndOrderedEdits(t *testing.T)
 		t.Fatal("lost edit order")
 	}
 }
+
+func TestScratchDigestBindsOriginalDirectoryIdentity(t *testing.T) {
+	id := "00000000-0000-4000-8000-000000000001"
+	binding := mutation.ScratchBinding{RunID: id, Root: "/work", Leaf: mutation.ScratchPath(id),
+		RootIdentity: mutation.DirectoryIdentity{Device: "7", Inode: "42"}, ExpectedInventory: mutation.EmptyScratchInventory}
+	digest := func(workspace string, b mutation.ScratchBinding) string {
+		t.Helper()
+		got, err := (Digester{}).Digest(port.MutationDigestInput{WorkspaceID: workspace, Operation: mutation.Scratch{Binding: b}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	baseline := digest("work", binding)
+	want := payloadHash([]byte(`["work","workspace.self-test-scratch",".farol-self-test-00000000-0000-4000-8000-000000000001","00000000-0000-4000-8000-000000000001","/work","7","42","empty"]`))
+	if baseline != want {
+		t.Fatalf("scratch fingerprint %s, want %s", baseline, want)
+	}
+	changes := []mutation.ScratchBinding{binding, binding, binding, binding}
+	changes[0].Root = "/other"
+	changes[1].RootIdentity.Device = "8"
+	changes[2].RootIdentity.Inode = "43"
+	changes[3].RunID = "00000000-0000-4000-8000-000000000002"
+	changes[3].Leaf = mutation.ScratchPath(changes[3].RunID)
+	for _, changed := range changes {
+		if digest("work", changed) == baseline {
+			t.Fatalf("scratch fingerprint ignored a changed binding: %#v", changed)
+		}
+	}
+	if digest("other", binding) == baseline {
+		t.Fatal("scratch fingerprint ignored workspace")
+	}
+}

@@ -26,6 +26,12 @@ func (Digester) Digest(input port.MutationDigestInput) (string, error) {
 	quoteJS(&b, input.Operation.Path())
 	b.WriteByte(',')
 	switch v := input.Operation.(type) {
+	case mutation.Scratch:
+		quoteJS(&b, v.Binding.RunID)
+		for _, value := range []string{v.Binding.Root, v.Binding.RootIdentity.Device, v.Binding.RootIdentity.Inode, v.Binding.ExpectedInventory} {
+			b.WriteByte(',')
+			quoteJS(&b, value)
+		}
 	case mutation.Write:
 		if v.ExpectedSHA256 == nil {
 			b.WriteString("null")
