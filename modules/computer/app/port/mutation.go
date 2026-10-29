@@ -226,8 +226,8 @@ type SelfTestMarkerAdmission struct {
 
 // All marker transitions are one-shot writes by the existing journal owner.
 // Existing records never grant permission to repeat their original operation.
-// This per-operation store does not serialize distinct IDs for one workspace;
-// the composing owner must retain that exclusion before attempting admission.
+// Admission excludes other unresolved markers and original tests in the same
+// workspace under the same writer lock. Authority is independently required.
 type SelfTestMarkerRepository interface {
 	AdmitSelfTestMarker(context.Context, *mutation.SelfTestMarker) (SelfTestMarkerAdmission, error)
 	LoadSelfTestMarker(context.Context, mutation.SelfTestBinding) (*mutation.SelfTestMarker, error)

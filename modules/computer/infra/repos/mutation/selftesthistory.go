@@ -33,12 +33,22 @@ func (r *Repository) ListSelfTestMarkers(ctx context.Context, owner, profile, co
 	return markers, nil
 }
 
+type selfTestInventoryStats struct {
+	names []string
+	bytes int
+}
+
 func (r *Repository) listSelfTestInventory(ctx context.Context, owner, profile, computer string, markers *[]port.SelfTestMarkerHistoryEntry) ([]port.SelfTestHistoryEntry, error) {
 	if r == nil || !domain.Identifier(owner, 160) || !domain.Identifier(profile, 160) || !domain.Identifier(computer, 160) {
 		return nil, unavailable()
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.listSelfTestInventoryLocked(ctx, owner, profile, computer, markers, nil)
+}
+
+// Caller retains the same writer mutex through any following admission.
+func (r *Repository) listSelfTestInventoryLocked(ctx context.Context, owner, profile, computer string, markers *[]port.SelfTestMarkerHistoryEntry, stats *selfTestInventoryStats) ([]port.SelfTestHistoryEntry, error) {
 	if err := r.ready(ctx); err != nil {
 		return nil, err
 	}
@@ -122,6 +132,10 @@ func (r *Repository) listSelfTestInventory(ctx context.Context, owner, profile, 
 	}
 	if err := r.ready(ctx); err != nil {
 		return nil, err
+	}
+	if stats != nil {
+		stats.names = slices.Clone(names)
+		stats.bytes = total
 	}
 	return entries, nil
 }

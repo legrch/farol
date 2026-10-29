@@ -3,6 +3,8 @@ package mutation
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/legrch/farol/modules/computer/app/port"
@@ -10,7 +12,9 @@ import (
 )
 
 func TestSelfTestMarkerRepositoryRequiresOriginalTerminalAndSingleTransitions(t *testing.T) {
-	r, disk, _ := fixture()
+	_, memoryDisk, _ := fixture()
+	disk := &historyMemory{memory: memoryDisk}
+	r := newRepository(disk)
 	b := domain.SelfTestBinding{Identity: domain.Identity{Scope: domain.ScopeOwnerSettings, OperationID: scratchTestRun, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 2}
 	marker, _ := domain.RestoreSelfTestMarker(b, domain.SelfTestMarkerSelected)
 	admission, err := r.AdmitSelfTestMarker(context.Background(), marker)
@@ -54,7 +58,9 @@ func TestSelfTestMarkerRepositoryRequiresOriginalTerminalAndSingleTransitions(t 
 }
 
 func TestSelfTestMarkerRepositoryFencesLostAdmission(t *testing.T) {
-	r, disk, _ := fixture()
+	_, memoryDisk, _ := fixture()
+	disk := &historyMemory{memory: memoryDisk}
+	r := newRepository(disk)
 	b := domain.SelfTestBinding{Identity: domain.Identity{Scope: domain.ScopeOwnerSettings, OperationID: scratchTestRun, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 2}
 	marker, _ := domain.RestoreSelfTestMarker(b, domain.SelfTestMarkerSelected)
 	disk.createErr, disk.visibleBeforeError = errors.New("lost"), true
@@ -73,8 +79,108 @@ func TestSelfTestMarkerRepositoryFencesLostAdmission(t *testing.T) {
 	}
 }
 
+func TestSelfTestMarkerRepositoryExcludesDifferentUnresolvedIDsInWorkspace(t *testing.T) {
+	_, memoryDisk, _ := fixture()
+	disk := &historyMemory{memory: memoryDisk}
+	r := newRepository(disk)
+	b := domain.SelfTestBinding{Identity: domain.Identity{Scope: domain.ScopeOwnerSettings, OperationID: scratchTestRun, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 2}
+	first, _ := domain.RestoreSelfTestMarker(b, domain.SelfTestMarkerSelected)
+	if _, err := r.AdmitSelfTestMarker(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	b.Identity.OperationID = "00000000-0000-4000-8000-000000000098"
+	second, _ := domain.RestoreSelfTestMarker(b, domain.SelfTestMarkerSelected)
+	if _, err := r.AdmitSelfTestMarker(context.Background(), second); err == nil || disk.creates != 1 {
+		t.Fatal("unresolved marker admitted a second operation", err)
+	}
+	b.WorkspaceID = "other"
+	third, _ := domain.RestoreSelfTestMarker(b, domain.SelfTestMarkerSelected)
+	if _, err := r.AdmitSelfTestMarker(context.Background(), third); err != nil || disk.creates != 2 {
+		t.Fatal("other workspace rejected", err)
+	}
+}
+
+func TestSelfTestMarkerAdmissionSerializesConcurrentWorkspaceAttempts(t *testing.T) {
+	_, original, _ := fixture()
+	disk := &historyMemory{memory: original}
+	r := newRepository(disk)
+	var wg sync.WaitGroup
+	admitted := make(chan bool, 12)
+	for i := range 12 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			b := domain.SelfTestBinding{Identity: domain.Identity{Scope: domain.ScopeOwnerSettings, OperationID: fmt.Sprintf("00000000-0000-4000-8000-%012d", i), OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 2}
+			marker, err := domain.RestoreSelfTestMarker(b, domain.SelfTestMarkerSelected)
+			if err != nil {
+				admitted <- false
+				return
+			}
+			result, err := r.AdmitSelfTestMarker(context.Background(), marker)
+			admitted <- err == nil && result.Status == port.MutationAdmitted
+		}(i)
+	}
+	wg.Wait()
+	close(admitted)
+	count := 0
+	for ok := range admitted {
+		if ok {
+			count++
+		}
+	}
+	if count != 1 || disk.creates != 1 {
+		t.Fatal("concurrent admissions", count, disk.creates)
+	}
+}
+
+func TestSelfTestMarkerAdmissionRetainsOlderUnknownWithoutMarker(t *testing.T) {
+	_, original, _ := fixture()
+	disk := &historyMemory{memory: original}
+	r := newRepository(disk)
+	b := domain.SelfTestBinding{Identity: domain.Identity{Scope: domain.ScopeOwnerSettings, OperationID: scratchTestRun, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 2}
+	old, _ := domain.RestoreSelfTest(b, domain.OutcomeUnknown, &domain.SelfTestResult{Status: "unknown"})
+	raw, _ := encodeSelfTest(old)
+	key, _ := selfTestKey(b.Identity)
+	disk.files[key] = raw
+	b.Identity.OperationID = "00000000-0000-4000-8000-000000000098"
+	marker, _ := domain.RestoreSelfTestMarker(b, domain.SelfTestMarkerSelected)
+	if _, err := r.AdmitSelfTestMarker(context.Background(), marker); err == nil || disk.creates != 0 {
+		t.Fatal("unknown history was ignored", err)
+	}
+}
+
+func TestSelfTestMarkerAdmissionDoesNotOverflowReadableHistory(t *testing.T) {
+	_, original, _ := fixture()
+	disk := &historyMemory{memory: original}
+	r := newRepository(disk)
+	b := domain.SelfTestBinding{Identity: domain.Identity{Scope: domain.ScopeOwnerSettings, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 2}
+	for i := range maxSelfTestHistory {
+		b.Identity.OperationID = fmt.Sprintf("00000000-0000-4000-8000-%012d", i)
+		b.WorkspaceID = fmt.Sprintf("work-%d", i)
+		marker, err := domain.RestoreSelfTestMarker(b, domain.SelfTestMarkerSelected)
+		if err != nil {
+			t.Fatal(err)
+		}
+		key, _ := selfTestMarkerKey(b)
+		raw, _ := encodeSelfTestMarker(marker)
+		disk.files[key] = raw
+	}
+	b.Identity.OperationID = "00000000-0000-4000-8000-999999999999"
+	b.WorkspaceID = "new-work"
+	marker, _ := domain.RestoreSelfTestMarker(b, domain.SelfTestMarkerSelected)
+	if _, err := r.AdmitSelfTestMarker(context.Background(), marker); err == nil || disk.creates != 0 {
+		t.Fatal("history overflow accepted", err)
+	}
+	markers, err := r.ListSelfTestMarkers(context.Background(), "owner", "profile", "computer")
+	if err != nil || len(markers) != maxSelfTestHistory {
+		t.Fatal("existing history became unreadable", len(markers), err)
+	}
+}
+
 func TestSelfTestMarkerRepositoryDoesNotRepeatUnconfirmedTransition(t *testing.T) {
-	r, disk, _ := fixture()
+	_, memoryDisk, _ := fixture()
+	disk := &historyMemory{memory: memoryDisk}
+	r := newRepository(disk)
 	b := domain.SelfTestBinding{Identity: domain.Identity{Scope: domain.ScopeOwnerSettings, OperationID: scratchTestRun, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 2}
 	marker, _ := domain.RestoreSelfTestMarker(b, domain.SelfTestMarkerSelected)
 	if _, err := r.AdmitSelfTestMarker(context.Background(), marker); err != nil {
