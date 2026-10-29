@@ -70,6 +70,25 @@ func (r *Repository) AdmitSelfTest(ctx context.Context, state *domain.SelfTestSt
 		if marker == nil || marker.Phase() != domain.SelfTestMarkerSelected {
 			return out, failure("COMPUTER_SELFTEST_MARKER_REQUIRED")
 		}
+		markers := make([]port.SelfTestMarkerHistoryEntry, 0)
+		var stats selfTestInventoryStats
+		history, err := r.listSelfTestInventoryLocked(ctx, binding.Identity.OwnerID, binding.Identity.ProfileID, binding.Identity.ComputerID, &markers, &stats)
+		if err != nil {
+			return out, err
+		}
+		if len(history) >= maxSelfTestHistory || len(stats.names) >= maxSelfTestInventory || stats.bytes+len(raw) > maxSelfTestInventoryBytes {
+			return out, failure("COMPUTER_SELFTEST_HISTORY_FULL")
+		}
+		for _, other := range markers {
+			if other.Binding.WorkspaceID == binding.WorkspaceID && other.Binding != binding && other.Phase != domain.SelfTestMarkerSettled {
+				return out, failure("COMPUTER_SELFTEST_UNRESOLVED")
+			}
+		}
+		for _, other := range history {
+			if other.Binding.WorkspaceID == binding.WorkspaceID && (other.Phase == domain.Prepared || other.Phase == domain.OutcomeUnknown) {
+				return out, failure("COMPUTER_SELFTEST_UNRESOLVED")
+			}
+		}
 	}
 	if err = r.ready(ctx); err != nil {
 		return out, err

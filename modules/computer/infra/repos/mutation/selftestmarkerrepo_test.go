@@ -36,6 +36,27 @@ func TestSelfTestVersionTwoAdmissionRequiresMatchingSelectedMarker(t *testing.T)
 	}
 }
 
+func TestSelfTestParentAdmissionRejectsAnotherUnknownOriginal(t *testing.T) {
+	_, original, _ := fixture()
+	disk := &historyMemory{memory: original}
+	r := newRepository(disk)
+	b := domain.SelfTestBinding{Identity: domain.Identity{Scope: domain.ScopeOwnerSettings, OperationID: scratchTestRun, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 2}
+	marker, _ := domain.RestoreSelfTestMarker(b, domain.SelfTestMarkerSelected)
+	if _, err := r.AdmitSelfTestMarker(context.Background(), marker); err != nil {
+		t.Fatal(err)
+	}
+	other := b
+	other.Identity.OperationID = "00000000-0000-4000-8000-000000000098"
+	unknownParent, _ := domain.RestoreSelfTest(other, domain.OutcomeUnknown, &domain.SelfTestResult{Status: "unknown"})
+	raw, _ := encodeSelfTest(unknownParent)
+	key, _ := selfTestKey(other.Identity)
+	disk.files[key] = raw
+	parent, _ := domain.RestoreSelfTest(b, domain.Prepared, nil)
+	if _, err := r.AdmitSelfTest(context.Background(), parent); err == nil || disk.creates != 1 {
+		t.Fatal("unresolved original ignored", err)
+	}
+}
+
 func TestSelfTestMarkerRepositoryRequiresOriginalTerminalAndSingleTransitions(t *testing.T) {
 	_, memoryDisk, _ := fixture()
 	disk := &historyMemory{memory: memoryDisk}
