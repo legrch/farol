@@ -36,6 +36,10 @@ func TestProjectionSyntheticCorpus(t *testing.T) {
 		{"token-flag", "--token FAKE_SECRET", "filtered", "[REDACTED]"},
 		{"password", "password=FAKE_SECRET", "filtered", "[REDACTED]"},
 		{"userinfo", "https://fake:FAKE_SECRET@example.test", "filtered", "[REDACTED]"},
+		{"non-http-userinfo", "ftp://fake:FAKE_SECRET@example.test", "filtered", "[REDACTED]"},
+		{"auth-flag", "--auth FAKE_SECRET", "filtered", "[REDACTED]"},
+		{"user-flag", "--user fake:FAKE_SECRET", "filtered", "[REDACTED]"},
+		{"short-user-flag", "curl -u fake:FAKE_SECRET example.test", "filtered", "[REDACTED]"},
 		{"query", "https://example.test/?token=FAKE_SECRET", "filtered", "[REDACTED]"},
 		{"pem", "-----BEGIN PRIVATE KEY-----\nFAKE_SECRET", "filtered", "[REDACTED]"},
 		{"jwt", "eyJabcdefghij.abcdefghij.abcdefghij", "filtered", "[REDACTED]"},
@@ -121,5 +125,14 @@ func TestCommandIsFilteredBeforeRetainedAndRawInputIsIgnored(t *testing.T) {
 	got = ProjectAuditWithCommand(in, AuditCommand{}, identity)
 	if got.Command.State != "unavailable" || got.Command.Text != "" {
 		t.Fatal("zero command exposed unfiltered input")
+	}
+}
+
+func TestCommandMasksAdditionalCredentialForms(t *testing.T) {
+	for _, command := range []string{"curl -u fake:FAKE_SECRET example.test", "tool --auth FAKE_SECRET", "git fetch ssh://fake:FAKE_SECRET@example.test/repo"} {
+		got := ProjectAuditCommand(command, identity).excerpt
+		if got.State != "filtered" || got.Text != "[REDACTED]" {
+			t.Fatalf("credential-bearing command escaped masking: %#v", got)
+		}
 	}
 }
