@@ -38,14 +38,20 @@ func (s *computerConnector) observeConnectorSelfTest(ctx context.Context, slot *
 	if err != nil {
 		return unknown, err
 	}
-	if err := check(); err != nil {
+	var disclosed selfTestReport
+	err = guard.WithMutationObservation(ctx, child, binding.WorkspaceID, path, func() error {
+		if record == nil {
+			disclosed = unknown
+			return nil
+		}
+		if record.Binding() != binding {
+			return computerUnavailable()
+		}
+		disclosed = observeSelfTestState(record)
+		return nil
+	})
+	if err != nil {
 		return unknown, err
 	}
-	if record == nil {
-		return unknown, nil
-	}
-	if record.Binding() != binding {
-		return unknown, computerUnavailable()
-	}
-	return observeSelfTestState(record), nil
+	return disclosed, nil
 }

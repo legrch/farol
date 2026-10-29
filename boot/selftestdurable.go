@@ -16,6 +16,7 @@ type durableSelfTestExecution struct {
 	started, finished bool
 	result            selfTestReport
 	gate              *selfTestParentGate
+	ledger            *SettingsMutationIngress
 	uncertain         bool
 	binding           state.SelfTestBinding
 	repository        port.SelfTestRepository
@@ -39,7 +40,13 @@ func (d *durableSelfTestExecution) execute(ctx context.Context) selfTestReport {
 	d.started = true
 	d.mu.Unlock()
 	bounded, cancel := context.WithCancel(ctx)
-	if d.gate != nil && !d.gate.begin(d.binding.Identity.OperationID, cancel) {
+	admitted := true
+	if d.ledger != nil {
+		admitted = d.ledger.beginSelfTestParent(d.binding.Identity.OperationID, cancel)
+	} else if d.gate != nil {
+		admitted = d.gate.begin(d.binding.Identity.OperationID, cancel)
+	}
+	if !admitted {
 		cancel()
 		d.mu.Lock()
 		d.result, d.finished = unknown, true
@@ -48,7 +55,9 @@ func (d *durableSelfTestExecution) execute(ctx context.Context) selfTestReport {
 	}
 	out := d.executeOnce(bounded)
 	cancel()
-	if d.gate != nil {
+	if d.ledger != nil {
+		d.ledger.selfTestParent.finish(d.uncertain)
+	} else if d.gate != nil {
 		d.gate.finish(d.uncertain)
 	}
 	d.mu.Lock()

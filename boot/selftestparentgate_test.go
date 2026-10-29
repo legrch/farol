@@ -117,3 +117,35 @@ func TestSelfTestCollectorJoinWaitsForOriginalOnly(t *testing.T) {
 	}
 	close(unrelated)
 }
+
+func TestSelfTestParentAndRecoveryExcludeEachOther(t *testing.T) {
+	s, _, _, _, _ := connectorMutationFixture(t)
+	ledger := s.mutations
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ledger.mu.Lock()
+	ledger.recoveryReserved = true
+	ledger.mu.Unlock()
+	if ledger.beginSelfTestParent("original", cancel) {
+		t.Fatal("parent crossed recovery reservation")
+	}
+	ledger.mu.Lock()
+	ledger.recoveryReserved = false
+	ledger.mu.Unlock()
+	if !ledger.beginSelfTestParent("original", cancel) {
+		t.Fatal("parent refused")
+	}
+	ledger.mu.Lock()
+	disposition := ledger.recoveryDispositionLocked(false)
+	ledger.mu.Unlock()
+	if disposition != "pending_operation" {
+		t.Fatal("recovery missed active parent", disposition)
+	}
+	ledger.selfTestParent.finish(true)
+	ledger.mu.Lock()
+	disposition = ledger.recoveryDispositionLocked(false)
+	ledger.mu.Unlock()
+	if disposition != "operation_unknown" {
+		t.Fatal("recovery missed unknown parent", disposition)
+	}
+}

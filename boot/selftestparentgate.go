@@ -38,6 +38,31 @@ func (g *selfTestParentGate) originalOperation() string {
 	return g.operation
 }
 
+// Caller holds ledger.mu when coordinating with recovery reservation.
+func (g *selfTestParentGate) disposition() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.blocked {
+		return "operation_unknown"
+	}
+	if g.active {
+		return "pending_operation"
+	}
+	return "settled"
+}
+
+func (s *SettingsMutationIngress) beginSelfTestParent(operation string, cancel context.CancelFunc) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.frozen || s.stageClosed || s.processDraining || s.recoveryReserved || s.retirementErr != nil {
+		return false
+	}
+	return s.selfTestParent.begin(operation, cancel)
+}
+
 func (g *selfTestParentGate) finish(uncertain bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()

@@ -69,6 +69,9 @@ func (s *SettingsMutationIngress) recoveryDispositionLocked(reserved bool) strin
 		s.frozen || s.processDraining || s.retirementErr != nil || s.recoveryReserved != reserved {
 		return "unavailable"
 	}
+	if parent := s.selfTestParent.disposition(); parent != "settled" {
+		return parent
+	}
 	pending := s.stagePending || s.selfTestRun != nil || s.scratchPreflight != nil
 	for _, record := range s.operations {
 		if record == nil {
