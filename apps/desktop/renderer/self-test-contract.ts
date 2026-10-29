@@ -18,7 +18,7 @@ export const SelfTestSelectionSchema = z.strictObject({
   operationId: operation,
   workspaceId: workspace,
   computerGeneration: decimal,
-  planVersion: z.enum(["1", "2", "3"]),
+  planVersion: z.enum(["1", "2", "3", "4"]),
 });
 export const SelfTestCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("history"), workspaceId: workspace }),
@@ -52,6 +52,7 @@ const SelfTestStepSchema = z.strictObject({
     "shell cancel",
     "workspace reads",
     "directory search",
+    "git availability",
     "git and hooks",
   ]),
   status: z.enum(["pass", "fail", "unknown", "not_tested"]),
@@ -65,7 +66,7 @@ const report = z.strictObject({
   operationId: operation,
   workspaceId: workspace,
   computerGeneration: decimal,
-  planVersion: z.enum(["1", "2", "3"]).optional(),
+  planVersion: z.enum(["1", "2", "3", "4"]).optional(),
   status: z.enum(["partial", "fail", "unknown"]),
   steps: z.array(SelfTestStepSchema).max(16),
 });

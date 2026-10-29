@@ -197,6 +197,8 @@ func (s *computerConnector) selfTestMethods() map[string]desktop.Method {
 					version = 2
 				case "3":
 					version = 3
+				case "4":
+					version = 4
 				}
 			}
 			binding := state.SelfTestBinding{Identity: state.Identity{Scope: state.ScopeOwnerSettings, OperationID: in.OperationId, OwnerID: s.root.ownerID, ProfileID: s.root.peer.ProfileId, ComputerID: s.root.computerID}, WorkspaceID: in.WorkspaceId, ComputerGeneration: generation, Version: version}

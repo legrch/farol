@@ -17,6 +17,81 @@ const publication = {
 };
 
 it.each([false, true])(
+  "observes version four Git availability only with its original identity, forged=%s",
+  async (forged) => {
+    const prior = {
+      operationId: "00000000-0000-4000-8000-000000000001",
+      workspaceId: "work",
+      computerGeneration: "1",
+      planVersion: "4" as const,
+    };
+    const names = [
+      "scratch",
+      "write",
+      "edit",
+      "mutation read",
+      "catalogue",
+      "bootstrap",
+      "list",
+      "read",
+      "search",
+      "directory search",
+      "cleanup",
+      "shell",
+      "shell cancel",
+      "git availability",
+      "git and hooks",
+    ];
+    const suffix = [
+      "",
+      "-st4-write",
+      "-st4-edit",
+      "-st4-edit",
+      "-st4-catalogue",
+      "-st4-bootstrap",
+      "-st4-list",
+      "-st4-read",
+      "-st4-search",
+      "-st4-directory-search",
+      "",
+      "-st4-quick",
+      "-st4-cancel",
+      "-st4-git-version",
+    ];
+    const request = vi.fn(
+      async (
+        _method: string,
+        _body: Json,
+        options: { id?: string },
+      ): Promise<Outcome> => ({
+        status: "ok",
+        requestId: options.id!,
+        context,
+        data: {
+          ...prior,
+          status: "partial",
+          steps: names.map((name, index) => ({
+            name,
+            status: index < 14 ? "pass" : "not_tested",
+            ...(index < 14
+              ? {
+                  operationId:
+                    prior.operationId +
+                    (forged && index === 13 ? "-st3-quick" : suffix[index]),
+                }
+              : {}),
+          })),
+        },
+      }),
+    );
+    const bridge = new SelfTestBridge({ request }, context, "none", store());
+    const result = await bridge.observe(prior);
+    expect(result.state).toBe(forged ? "unknown" : "observed");
+    expect(result.report?.status).toBe(forged ? undefined : "partial");
+  },
+);
+
+it.each([false, true])(
   "observes version three only with its exact directory step, forged=%s",
   async (forged) => {
     const prior = {

@@ -5881,7 +5881,7 @@
         "computerGeneration": { "type": "decimal" },
         "planVersion": {
           "type": "text",
-          "values": ["1", "2", "3"],
+          "values": ["1", "2", "3", "4"],
           "optional": true
         }
       }
@@ -5946,6 +5946,7 @@
             "shell cancel",
             "workspace reads",
             "directory search",
+            "git availability",
             "git and hooks"
           ]
         },
@@ -5972,7 +5973,7 @@
         "computerGeneration": { "type": "decimal" },
         "planVersion": {
           "type": "text",
-          "values": ["1", "2", "3"],
+          "values": ["1", "2", "3", "4"],
           "optional": true
         },
         "status": { "type": "text", "values": ["partial", "fail", "unknown"] },

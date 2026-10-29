@@ -12,7 +12,7 @@ export type SelfTestSelection = Readonly<{
   operationId: string;
   workspaceId: string;
   computerGeneration: string;
-  planVersion: "1" | "2" | "3";
+  planVersion: "1" | "2" | "3" | "4";
 }>;
 export type SelfTestObservation = Readonly<{
   selection: SelfTestSelection;
@@ -233,7 +233,10 @@ export class SelfTestBridge {
         (report.planVersion ?? "1") !== selection.planVersion
       )
         return unknown();
-      if (report.status === "partial" && selection.planVersion === "3") {
+      if (
+        report.status === "partial" &&
+        (selection.planVersion === "3" || selection.planVersion === "4")
+      ) {
         const id = selection.operationId;
         const names = [
           "scratch",
@@ -249,6 +252,7 @@ export class SelfTestBridge {
           "cleanup",
           "shell",
           "shell cancel",
+          ...(selection.planVersion === "4" ? ["git availability"] : []),
           "git and hooks",
         ];
         const operations = [
@@ -265,14 +269,20 @@ export class SelfTestBridge {
           id,
           id + "-st3-quick",
           id + "-st3-cancel",
+          ...(selection.planVersion === "4" ? [id + "-st3-git-version"] : []),
           undefined,
-        ];
+        ].map((value) =>
+          selection.planVersion === "4"
+            ? value?.replace("-st3-", "-st4-")
+            : value,
+        );
         if (
           report.steps.length !== names.length ||
           report.steps.some(
             (step, index) =>
               step.name !== names[index] ||
-              step.status !== (index < 13 ? "pass" : "not_tested") ||
+              step.status !==
+                (index < names.length - 1 ? "pass" : "not_tested") ||
               step.operationId !== operations[index],
           )
         )
@@ -374,7 +384,7 @@ function validFailedReport(
   selection: SelfTestSelection,
 ): boolean {
   const id = selection.operationId;
-  if (selection.planVersion === "3") {
+  if (selection.planVersion === "3" || selection.planVersion === "4") {
     const names = [
       "scratch",
       "write",
@@ -389,6 +399,7 @@ function validFailedReport(
       "cleanup",
       "shell",
       "shell cancel",
+      ...(selection.planVersion === "4" ? ["git availability"] : []),
     ];
     const suffixes = [
       "",
@@ -404,7 +415,10 @@ function validFailedReport(
       "",
       "-st3-quick",
       "-st3-cancel",
-    ];
+      ...(selection.planVersion === "4" ? ["-st3-git-version"] : []),
+    ].map((value) =>
+      selection.planVersion === "4" ? value.replace("-st3-", "-st4-") : value,
+    );
     if (
       report.steps.length === 0 ||
       report.steps.length > names.length ||
