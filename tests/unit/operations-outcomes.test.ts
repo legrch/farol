@@ -163,6 +163,21 @@ it("never assigns a terminal class to codes that declare uncertain outcomes", ()
   }
 });
 
+it("keeps self-test uncertainty and redaction metadata distinct", () => {
+  for (const code of [
+    "self_test_original_unconfirmed",
+    "SELF_TEST_START_UNCONFIRMED",
+    "FAROL_PROCESS_AUDIT_DRAIN_UNCONFIRMED",
+  ])
+    expect(operationResult({ status: "done", code })).toEqual({
+      outcome: "unknown",
+      code,
+    });
+  expect(operationResult({ phase: "settling" }).outcome).toBe("pending");
+  expect(declaredOperationOutcomes().has("filtered-truncated")).toBe(false);
+  expect(mappedOperationOutcome("filtered-truncated")).toBeUndefined();
+});
+
 it("uses the same mapping for string errors, object errors, Go kinds and nested receipts", () => {
   for (const [outcome, codes] of Object.entries(operationCodesByOutcome)) {
     for (const code of codes) {

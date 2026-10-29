@@ -110,7 +110,29 @@ export function declaredOperationOutcomes(): Map<string, Set<string>> {
       sourceType: "module",
       plugins: ["typescript", "jsx"],
     });
+    // Excerpt state/reason classify redaction, not operation outcomes. Their
+    // generic values must not be promoted into the operation result mapping.
+    let auditExcerpt: { start: number; end: number } | undefined;
+    if (file === "apps/desktop/bridge/wire.ts")
+      walk(tree, (node) => {
+        if (
+          node.type === "TSInterfaceDeclaration" &&
+          (node.id as Node)?.name === "ComputerProcessAuditExcerpt" &&
+          typeof node.start === "number" &&
+          typeof node.end === "number"
+        )
+          auditExcerpt = { start: node.start, end: node.end };
+      });
     walk(tree, (node) => {
+      if (
+        node.type === "TSPropertySignature" &&
+        auditExcerpt &&
+        typeof node.start === "number" &&
+        typeof node.end === "number" &&
+        node.start >= auditExcerpt.start &&
+        node.end <= auditExcerpt.end
+      )
+        return;
       if (
         node.type === "StringLiteral" &&
         typeof node.value === "string" &&

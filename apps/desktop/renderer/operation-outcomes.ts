@@ -6,6 +6,7 @@
  */
 export const operationCodesByOutcome = {
   done: [
+    "pass",
     "COMPLETED",
     "HOST_ACKNOWLEDGED",
     "NORMAL_EXIT",
@@ -52,6 +53,17 @@ export const operationCodesByOutcome = {
     "supported",
   ],
   refused: [
+    "COMPUTER_SELFTEST_HISTORY_FULL",
+    "COMPUTER_SELFTEST_MARKER_REQUIRED",
+    "COMPUTER_SELFTEST_UNRESOLVED",
+    "SELF_TEST_INVALID_REQUEST",
+    "SELF_TEST_UNAVAILABLE",
+    "invalid_self_test_history",
+    "invalid_self_test_marker",
+    "invalid_self_test_observation",
+    "invalid_self_test_request",
+    "multiple_self_tests_unresolved",
+    "self_test_unresolved",
     "UPDATE_FORWARD_ONLY",
     "process_audit_reference_invalid",
     "invalid_fresh_status",
@@ -1763,6 +1775,7 @@ export const operationCodesByOutcome = {
     "wrong-owner",
   ],
   failed: [
+    "fail",
     "AGENT_ASSIGNMENT_FAILED",
     "AGENT_DELIVERY_FAILED",
     "AGENT_LIVE_FAILED",
@@ -1885,6 +1898,14 @@ export const operationCodesByOutcome = {
     "write-failed",
   ],
   unknown: [
+    "FAROL_PROCESS_AUDIT_DRAIN_UNCONFIRMED",
+    "SELF_TEST_START_UNCONFIRMED",
+    "self_test_original_unconfirmed",
+    "self_test_history_unavailable",
+    "self_test_marker_unavailable",
+    "self_test_report_unavailable",
+    "not_tested",
+    "partial",
     "process_audit_unavailable",
     "process_audit_crossed_or_invalid",
     "not_observed",
@@ -2234,6 +2255,7 @@ export const operationCodesByOutcome = {
     "unverified",
   ],
   pending: [
+    "settling",
     "AGENT_ALREADY_RUNNING",
     "AGENT_STILL_RUNNING",
     "AUTHORITY_CHANGE_IN_PROGRESS",
