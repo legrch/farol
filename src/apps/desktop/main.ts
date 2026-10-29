@@ -87,6 +87,7 @@ import {
   type ReadConversationProjection,
 } from "../../../apps/desktop/bridge/read-conversation";
 import { readChatHistoryView } from "../../../apps/desktop/chat-history-view";
+import { runSelfTestCommand } from "../../../apps/desktop/self-test-ipc";
 import { readRetiredRepliesView } from "../../../apps/desktop/retired-replies-view";
 import { projectReadConversation } from "../../../apps/desktop/read-conversation-projection";
 import { ReadConversationPromptSchema } from "../../pkg/product-settings/chat-conversation";
@@ -11889,6 +11890,16 @@ function installIpc(): void {
       connectionChecking: startupConnectionChecking || connectorTaskAdmission,
     };
   });
+  ipcMain.handle(channels.selfTest, (event, value: unknown) =>
+    isTrustedIpcSender(event, window) &&
+    event.senderFrame === event.sender.mainFrame
+      ? runSelfTestCommand(
+          () => desktopGoCore,
+          () => !quitInProgress && !installedUpdateAdmission,
+          value,
+        )
+      : { ok: false, code: "SELF_TEST_UNAVAILABLE" },
+  );
   ipcMain.handle(
     channels.installedUpdate,
     async (event, value: unknown, operationId: unknown) => {

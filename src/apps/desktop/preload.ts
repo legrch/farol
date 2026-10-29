@@ -48,6 +48,8 @@ if (process.argv.includes("--farol-startup-recovery")) {
       ipcRenderer.send(updatesChannels.settled, value),
     operations: () =>
       ipcRenderer.invoke(channels.operations) as Promise<unknown>,
+    selfTest: (command: unknown) =>
+      ipcRenderer.invoke(channels.selfTest, command) as Promise<unknown>,
     installedUpdate: (command: unknown, operationId?: string) =>
       ipcRenderer.invoke(
         channels.installedUpdate,

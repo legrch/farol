@@ -381,6 +381,7 @@ declare global {
       onInstalledUpdateState(listener: (state: unknown) => void): () => void;
       onConfigurationChanged(listener: () => void): () => void;
       bootstrap(): Promise<unknown>;
+      selfTest(command: unknown): Promise<unknown>;
       snapshot(): Promise<unknown>;
       configure(command: unknown): Promise<unknown>;
       task(command: unknown): Promise<unknown>;

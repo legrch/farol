@@ -32,6 +32,7 @@ export type PreloadApi = Readonly<{
   onUpdatesCommand?(listener: (value: unknown) => void): () => void;
   settleUpdates?(value: { sequence: number }): void;
   operations?(): Promise<unknown>;
+  selfTest?(command: unknown): Promise<unknown>;
   bootstrap(): Promise<unknown>;
   snapshot(): Promise<unknown>;
   configure(command: ProductConfigurationCommand): Promise<unknown>;

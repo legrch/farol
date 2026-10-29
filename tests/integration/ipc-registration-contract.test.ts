@@ -55,6 +55,13 @@ async function registrations(): Promise<
 }
 
 describe("privileged IPC registration contract", () => {
+  it("limits the self-test effect to the trusted main frame", async () => {
+    const found = await registrations();
+    const selfTest = found.find((entry) => entry.channel === "selfTest");
+    expect(selfTest?.body).toContain(
+      "event.senderFrame === event.sender.mainFrame",
+    );
+  });
   it("S35-TA-9 every ipcMain registration checks the sender through the named predicate", async () => {
     const found = await registrations();
 
@@ -62,6 +69,7 @@ describe("privileged IPC registration contract", () => {
     // channel must be added here deliberately, with its check.
     expect(found.map((entry) => entry.channel)).toEqual([
       "operations",
+      "selfTest",
       "installedUpdate",
       "bootstrap",
       "snapshot",

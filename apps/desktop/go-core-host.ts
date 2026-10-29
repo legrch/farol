@@ -521,6 +521,9 @@ export class DesktopGoCore {
   startSelfTest(workspaceId: string) {
     return this.selfTestManager().start(workspaceId);
   }
+  pendingSelfTest(workspaceId: string) {
+    return this.selfTests?.pending(workspaceId);
+  }
   observeSelfTest(workspaceId: string, selection: SelfTestSelection) {
     if (
       this.selfTests &&
