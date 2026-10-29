@@ -15,6 +15,8 @@ type durableSelfTestExecution struct {
 	mu                sync.Mutex
 	started, finished bool
 	result            selfTestReport
+	gate              *selfTestParentGate
+	uncertain         bool
 	binding           state.SelfTestBinding
 	repository        port.SelfTestRepository
 	preflight         func(context.Context) error
@@ -36,7 +38,19 @@ func (d *durableSelfTestExecution) execute(ctx context.Context) selfTestReport {
 	}
 	d.started = true
 	d.mu.Unlock()
-	out := d.executeOnce(ctx)
+	bounded, cancel := context.WithCancel(ctx)
+	if d.gate != nil && !d.gate.begin(cancel) {
+		cancel()
+		d.mu.Lock()
+		d.result, d.finished = unknown, true
+		d.mu.Unlock()
+		return unknown
+	}
+	out := d.executeOnce(bounded)
+	cancel()
+	if d.gate != nil {
+		d.gate.finish(d.uncertain)
+	}
 	d.mu.Lock()
 	d.result, d.finished = copySelfTestReport(out), true
 	d.mu.Unlock()
@@ -52,11 +66,15 @@ func (d *durableSelfTestExecution) executeOnce(ctx context.Context) selfTestRepo
 	if err != nil {
 		return unknown
 	}
+	d.uncertain = true
 	admission, err := d.repository.AdmitSelfTest(ctx, prepared)
 	if err != nil || admission.Record == nil || admission.Record.Binding() != d.binding {
 		return unknown
 	}
 	if admission.Status == port.MutationExisting {
+		if admission.Record.Phase() == state.Completed || admission.Record.Phase() == state.Failed {
+			d.uncertain = false
+		}
 		return observeSelfTestState(admission.Record)
 	}
 	if admission.Status != port.MutationAdmitted || admission.Record.Phase() != state.Prepared {
@@ -78,6 +96,9 @@ func (d *durableSelfTestExecution) executeOnce(ctx context.Context) selfTestRepo
 	if err != nil || d.repository.SaveSelfTest(ctx, terminal) != nil {
 		out.Status = "unknown"
 		return out
+	}
+	if phase != state.OutcomeUnknown {
+		d.uncertain = false
 	}
 	return out
 }

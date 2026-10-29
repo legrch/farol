@@ -36,6 +36,7 @@ type SettingsMutationIngress struct {
 	stageBaseline    bool
 	stageOwner       *computerStageOwner
 	selfTestRun      *selfTestRunLease
+	selfTestParent   selfTestParentGate
 	scratchPreflight chan struct{} // Standalone original call, including approval refresh.
 	retirementErr    error
 	// Temporary admission exclusion for the existing connector's recovery Open.
@@ -211,6 +212,7 @@ func (s *SettingsMutationIngress) freezeForRetirement() error {
 	if s == nil {
 		return nil
 	}
+	parentUnconfirmed := s.selfTestParent.freeze()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.frozen {
@@ -220,7 +222,7 @@ func (s *SettingsMutationIngress) freezeForRetirement() error {
 	if s.selfTestRun != nil {
 		s.selfTestRun.abandonUnstartedLocked()
 	}
-	if s.stagePending || s.selfTestRun != nil || s.scratchPreflight != nil {
+	if parentUnconfirmed || s.stagePending || s.selfTestRun != nil || s.scratchPreflight != nil {
 		s.retirementErr = &mutationct.Failure{Code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", Source: "operation-store", Retry: "never"}
 		return s.retirementErr
 	}

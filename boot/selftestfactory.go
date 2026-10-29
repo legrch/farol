@@ -43,5 +43,5 @@ func (s *computerConnector) newConnectorSelfTest(ctx context.Context, slot *conn
 		_, err := s.root.settingsAuthority(ctx, publication)
 		return err
 	}
-	return &durableSelfTestExecution{binding: binding, repository: repo, preflight: preflight, execution: &selfTestExecution{owner: plan}}, nil
+	return &durableSelfTestExecution{binding: binding, repository: repo, preflight: preflight, gate: &s.mutations.selfTestParent, execution: &selfTestExecution{owner: plan}}, nil
 }

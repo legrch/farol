@@ -298,12 +298,14 @@ func (r *NativeRuntime) closeResources() error {
 	// Close admission under the ledger lock before joining native and terminal work.
 	if r.mutations != nil {
 		r.mutations.closeSelfTestStageAdmission()
+		r.mutations.selfTestParent.stop()
 	}
 	if r.stageOwner != nil {
 		failures = append(failures, r.stageOwner.Close())
 	}
 	if r.mutations != nil {
 		r.mutations.waitSelfTestStage()
+		r.mutations.selfTestParent.wait()
 		failures = append(failures, r.mutations.closeSelfTestCustody())
 	}
 	failures = append(failures, r.closeCodexRead())

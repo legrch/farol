@@ -110,3 +110,19 @@ func TestDurableSelfTestAdmissionPrecedesEveryChildAndNeverReplays(t *testing.T)
 		})
 	}
 }
+
+func TestDurableSelfTestLostParentAdmissionFencesAnotherRun(t *testing.T) {
+	ids, _ := selfTestIDsV1("00000000-0000-4000-8000-000000000001")
+	binding := state.SelfTestBinding{Identity: state.Identity{Scope: state.ScopeOwnerSettings, OperationID: ids.run, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 1}
+	store, owner, gate := &durablePlanStore{admitErr: errors.New("lost admission")}, &durablePlanFake{ids: ids}, &selfTestParentGate{}
+	makeExecution := func() *durableSelfTestExecution {
+		return &durableSelfTestExecution{binding: binding, repository: store, preflight: func(context.Context) error { return nil }, gate: gate, execution: &selfTestExecution{owner: owner}}
+	}
+	if out := makeExecution().execute(context.Background()); out.Status != "unknown" || store.admits != 1 || owner.calls != 0 {
+		t.Fatal("lost admission", out)
+	}
+	store.admitErr = nil
+	if out := makeExecution().execute(context.Background()); out.Status != "unknown" || store.admits != 1 || owner.calls != 0 {
+		t.Fatal("unknown allowed new admission", out)
+	}
+}
