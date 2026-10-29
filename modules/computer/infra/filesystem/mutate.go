@@ -26,6 +26,9 @@ func (m *Mutable) Mutate(ctx context.Context, request port.MutationRequest) (rec
 		return nil, refusal("WORKSPACE_INVALID_REQUEST")
 	}
 	request.Operation = request.Operation.Clone()
+	if request.HoldScratchFile && request.ScratchParent == nil {
+		return nil, refusal("WORKSPACE_INVALID_REQUEST")
+	}
 	if request.ScratchExpectedFile != nil {
 		expected := *request.ScratchExpectedFile
 		request.ScratchExpectedFile = &expected
@@ -142,16 +145,21 @@ func (m *Mutable) Mutate(ctx context.Context, request port.MutationRequest) (rec
 		}
 	}
 	var published fileVersion
-	if err = m.publish(ctx, request, walk, parent, leaf, payload, previous, &published); err != nil {
+	var custody port.ScratchFileCustody
+	if err = m.publish(ctx, request, walk, parent, leaf, payload, previous, &published, &custody); err != nil {
 		return nil, err
 	}
 	result := &port.MutationReceipt{Operation: string(request.Operation.Kind()), RelativePath: request.Operation.Path(), Bytes: uint64(len(payload)), Replacements: replacements, BeforeSHA256: before, AfterSHA256: payloadHash(payload)}
 	if request.ScratchParent != nil {
 		result.ScratchFile = mutation.DirectoryIdentity{Device: strconv.FormatUint(published.dev, 10), Inode: strconv.FormatUint(published.ino, 10)}
 		if !result.ScratchFile.Valid() {
+			if custody != nil {
+				_ = custody.Close()
+			}
 			return nil, mutationError("MUTATION_OUTCOME_UNKNOWN")
 		}
 	}
+	result.ScratchFileHold = custody
 	return result, nil
 }
 func (m *Mutable) original(parent int, leaf string) (*fileVersion, []byte, error) {

@@ -12,7 +12,7 @@ import (
 // publish is one admitted attempt. A swap verification failure may perform at
 // most one internal guarded undo before returning. There is no retry/fallback
 // after a reported unknown/refusal. See mutation.md for same-user race residuals.
-func (m *Mutable) publish(ctx context.Context, request port.MutationRequest, walk *mutationWalk, parent int, leaf string, payload []byte, previous *fileVersion, result *fileVersion) (err error) {
+func (m *Mutable) publish(ctx context.Context, request port.MutationRequest, walk *mutationWalk, parent int, leaf string, payload []byte, previous *fileVersion, result *fileVersion, output *port.ScratchFileCustody) (err error) {
 	if len(payload) > mutation.MaxBytes {
 		return refusal("WORKSPACE_FILE_TOO_LARGE")
 	}
@@ -70,6 +70,15 @@ func (m *Mutable) publish(ctx context.Context, request port.MutationRequest, wal
 		return mutationError("MUTATION_OUTCOME_UNKNOWN")
 	}
 	owned = &opened
+	var custody port.ScratchFileCustody
+	defer func() {
+		if custody != nil {
+			if closeErr := custody.Close(); closeErr != nil {
+				settled = true // Preserve candidate after an unconfirmed close.
+				err = mutationError("MUTATION_OUTCOME_UNKNOWN")
+			}
+		}
+	}()
 	mode := uint32(0644)
 	if previous != nil {
 		mode = previous.mode & 07777
@@ -81,6 +90,19 @@ func (m *Mutable) publish(ctx context.Context, request port.MutationRequest, wal
 		err = m.fs.sync(fd)
 	}
 	written, statErr := m.fs.stat(fd)
+	if err == nil && statErr == nil && request.HoldScratchFile {
+		holder, ok := m.fs.(interface {
+			holdScratchFile(int, fileVersion) (port.ScratchFileCustody, error)
+		})
+		if !ok || output == nil {
+			m.fs.close(fd)
+			return mutationError("MUTATION_OUTCOME_UNKNOWN")
+		}
+		custody, err = holder.holdScratchFile(fd, written)
+		if err == nil && custody == nil {
+			err = mutationError("MUTATION_OUTCOME_UNKNOWN")
+		}
+	}
 	m.fs.close(fd)
 	if err != nil || statErr != nil {
 		return mutationError("MUTATION_OUTCOME_UNKNOWN")
@@ -202,6 +224,10 @@ func (m *Mutable) publish(ctx context.Context, request port.MutationRequest, wal
 	}
 	if result != nil {
 		*result = written
+	}
+	if custody != nil {
+		*output = custody
+		custody = nil
 	}
 	return nil
 }

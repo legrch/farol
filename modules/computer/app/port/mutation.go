@@ -68,6 +68,9 @@ type MutationRequest struct {
 	// Private scratch producer only. The caller must retain and close any
 	// returned descriptor even when the enclosing attempt returns an error.
 	HoldScratchDirectory bool
+	// Scratch file producer only; retained descriptor ownership transfers to
+	// the caller even if a later outer operation cannot confirm its result.
+	HoldScratchFile bool
 	// Optional private self-test constraint. When present the native producer
 	// must pin this exact previously created parent, refuse missing parents and
 	// recheck its physical identity through publication. It grants no authority.
@@ -97,11 +100,19 @@ type MutationReceipt struct {
 	// an in-memory cleanup witness, not a public or durable mutation receipt.
 	ScratchFile      mutation.DirectoryIdentity
 	ScratchDirectory ScratchDirectoryCustody
+	ScratchFileHold  ScratchFileCustody
 }
 
 // ScratchDirectoryCustody pins the original directory inode in one lifetime.
 // It supplies no authority, durable admission or named-path guarantee.
 type ScratchDirectoryCustody interface {
+	Check(mutation.DirectoryIdentity) error
+	Close() error
+}
+
+// ScratchFileCustody pins the original published inode, without granting
+// authority or proving that a pathname still names it.
+type ScratchFileCustody interface {
 	Check(mutation.DirectoryIdentity) error
 	Close() error
 }

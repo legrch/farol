@@ -2,13 +2,76 @@ package filesystem
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/mutation"
 	"golang.org/x/sys/unix"
 )
+
+type testScratchFileHold struct {
+	closed   int
+	closeErr error
+}
+
+func (h *testScratchFileHold) Check(mutation.DirectoryIdentity) error { return nil }
+func (h *testScratchFileHold) Close() error                           { h.closed++; return h.closeErr }
+
+type testHeldMutation struct {
+	mutationFS
+	hold *testScratchFileHold
+}
+
+func (h testHeldMutation) holdScratchFile(int, fileVersion) (port.ScratchFileCustody, error) {
+	return h.hold, nil
+}
+
+func TestScratchMutationLostPublicationClosesOriginalFileHold(t *testing.T) {
+	m, f := fakeMutable()
+	hold := &testScratchFileHold{}
+	m.fs = testHeldMutation{mutationFS: f, hold: hold}
+	id := "00000000-0000-4000-8000-000000000001"
+	leaf := mutation.ScratchPath(id)
+	dir := f.directory(0700)
+	f.work.children[leaf] = dir
+	b := mutation.ScratchCleanupBinding{Creation: mutation.Binding{Identity: mutation.Identity{Scope: mutation.ScopeOwnerSettings, OperationID: id, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", RequestDigest: strings.Repeat("a", 64), RelativePath: leaf, Scratch: mutation.ScratchBinding{RunID: id, Root: "/work", Leaf: leaf, RootIdentity: mutation.DirectoryIdentity{Device: "7", Inode: "2"}, ExpectedInventory: mutation.EmptyScratchInventory}}, Directory: mutation.DirectoryIdentity{Device: "7", Inode: strconv.FormatUint(dir.v.ino, 10)}}
+	r := fakeRequest(mutation.Write{RelativePath: leaf + "/check.txt", Content: "new"})
+	r.HoldScratchFile = true
+	r.WithPublication = func(_ context.Context, publish func() error) error {
+		if err := publish(); err != nil {
+			return err
+		}
+		return errors.New("lost acknowledgement")
+	}
+	out, err := m.MutateScratch(context.Background(), r, b)
+	nativeCode(t, err, "WORKSPACE_MUTATION_OUTCOME_UNKNOWN")
+	if out != nil || f.links != 1 || hold.closed != 1 {
+		t.Fatal("lost publication leaked or repeated its original hold", out, f.links, hold.closed)
+	}
+}
+
+func TestScratchMutationUnconfirmedHoldClosePreservesCandidate(t *testing.T) {
+	m, f := fakeMutable()
+	hold := &testScratchFileHold{closeErr: errors.New("unconfirmed close")}
+	m.fs = testHeldMutation{mutationFS: f, hold: hold}
+	id := "00000000-0000-4000-8000-000000000001"
+	leaf := mutation.ScratchPath(id)
+	dir := f.directory(0700)
+	f.work.children[leaf] = dir
+	b := mutation.ScratchCleanupBinding{Creation: mutation.Binding{Identity: mutation.Identity{Scope: mutation.ScopeOwnerSettings, OperationID: id, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", RequestDigest: strings.Repeat("a", 64), RelativePath: leaf, Scratch: mutation.ScratchBinding{RunID: id, Root: "/work", Leaf: leaf, RootIdentity: mutation.DirectoryIdentity{Device: "7", Inode: "2"}, ExpectedInventory: mutation.EmptyScratchInventory}}, Directory: mutation.DirectoryIdentity{Device: "7", Inode: strconv.FormatUint(dir.v.ino, 10)}}
+	r := fakeRequest(mutation.Write{RelativePath: leaf + "/check.txt", Content: "new"})
+	r.HoldScratchFile = true
+	r.WithPublication = func(context.Context, func() error) error { return errors.New("guard refusal") }
+	out, err := m.MutateScratch(context.Background(), r, b)
+	nativeCode(t, err, "WORKSPACE_MUTATION_OUTCOME_UNKNOWN")
+	stage := dir.children[".farol-mutation-0123456789abcdef"]
+	if out != nil || hold.closed != 1 || f.unlinks != 0 || stage == nil || stage.children["candidate"] == nil {
+		t.Fatal("uncertain close allowed cleanup", out, hold.closed, f.unlinks)
+	}
+}
 
 // An injected descriptor/inode model; this is not native filesystem evidence.
 func TestScratchMutationPinsOriginalParentAndNeverCreatesIt(t *testing.T) {
