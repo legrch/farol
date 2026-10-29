@@ -12,6 +12,10 @@ type Observation = Extract<
   { ok: true; kind: "start" | "observe" }
 >["observation"];
 type Workspace = Readonly<{ workspaceId: string; label: string }>;
+type HistoryRecord = Extract<
+  SelfTestResponse,
+  { ok: true; kind: "history" }
+>["history"]["records"][number];
 
 // A missing or invalid response is never evidence that an effect did not run.
 export function SelfTestPanel({
@@ -26,6 +30,7 @@ export function SelfTestPanel({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [unresolved, setUnresolved] = useState<Selection[]>([]);
+  const [records, setRecords] = useState<HistoryRecord[]>([]);
   const [observation, setObservation] = useState<Observation | null>(null);
   const flight = useRef(false);
   const generation = useRef(0);
@@ -35,6 +40,7 @@ export function SelfTestPanel({
     const current = ++token.current;
     setReady(false);
     setUnresolved([]);
+    setRecords([]);
     setObservation(null);
     setNotice("");
     if (!workspaceId || !facade.selfTest) return;
@@ -54,14 +60,16 @@ export function SelfTestPanel({
           return;
         }
         if (
-          response.data.history.unresolved.some(
-            (item) => item.workspaceId !== workspaceId,
-          )
+          [
+            ...response.data.history.unresolved,
+            ...response.data.history.records.map((entry) => entry.selection),
+          ].some((item) => item.workspaceId !== workspaceId)
         ) {
           setNotice("Test history does not match this workspace.");
           return;
         }
         setUnresolved(response.data.history.unresolved);
+        setRecords(response.data.history.records);
         setReady(true);
       })
       .catch(() => {
@@ -130,6 +138,16 @@ export function SelfTestPanel({
         );
         setReady(false);
       } else {
+        setRecords((old) => [
+          ...old.filter(
+            (entry) =>
+              entry.selection.operationId !== result.selection.operationId,
+          ),
+          {
+            selection: result.selection,
+            phase: result.report!.status === "fail" ? "failed" : "completed",
+          },
+        ]);
         setUnresolved((old) =>
           old.filter(
             (item) => item.operationId !== result.selection.operationId,
@@ -142,6 +160,40 @@ export function SelfTestPanel({
         "The test result could not be confirmed. Do not start it again.",
       );
       setReady(false);
+    } finally {
+      flight.current = false;
+      setBusy(false);
+    }
+  }
+
+  async function inspectSaved(selection: Selection) {
+    if (flight.current || !facade.selfTest) return;
+    flight.current = true;
+    setBusy(true);
+    setNotice("");
+    try {
+      const parsed = SelfTestResponseSchema.safeParse(
+        await facade.selfTest({ kind: "observe", workspaceId, selection }),
+      );
+      if (!parsed.success || !parsed.data.ok || parsed.data.kind !== "observe")
+        throw new Error("unavailable");
+      const result = parsed.data.observation;
+      if (
+        result.selection.operationId !== selection.operationId ||
+        result.selection.workspaceId !== selection.workspaceId ||
+        result.selection.computerGeneration !== selection.computerGeneration ||
+        result.selection.planVersion !== selection.planVersion
+      )
+        throw new Error("crossed");
+      setObservation(result);
+      if (!result.report)
+        setNotice(
+          "The saved result is currently unavailable. No action was repeated.",
+        );
+    } catch {
+      setNotice(
+        "The saved result is currently unavailable. No action was repeated.",
+      );
     } finally {
       flight.current = false;
       setBusy(false);
@@ -220,6 +272,32 @@ export function SelfTestPanel({
               </p>
             )}
           </>
+        )}
+        {records.some(
+          (entry) => entry.phase === "completed" || entry.phase === "failed",
+        ) && (
+          <details>
+            <summary>Previous test results</summary>
+            <ul>
+              {records
+                .filter(
+                  (entry) =>
+                    entry.phase === "completed" || entry.phase === "failed",
+                )
+                .map((entry) => (
+                  <li key={entry.selection.operationId}>
+                    {entry.phase === "completed" ? "Completed" : "Failed"} ·{" "}
+                    {entry.selection.operationId}{" "}
+                    <button
+                      disabled={busy}
+                      onClick={() => void inspectSaved(entry.selection)}
+                    >
+                      View result
+                    </button>
+                  </li>
+                ))}
+            </ul>
+          </details>
         )}
       </div>
     </section>
