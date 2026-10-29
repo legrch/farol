@@ -194,6 +194,20 @@ type ScratchFileCleanupRepository interface {
 	SaveScratchFileCleanup(context.Context, *mutation.ScratchFileCleanupState) error
 }
 
+type SelfTestAdmission struct {
+	Status MutationAdmissionStatus
+	Record *mutation.SelfTestState
+}
+
+// SelfTestRepository stores the parent before any child effect or renewal.
+// Existing records are observation only; neither absence nor a result grants
+// authority to access a workspace or execute a replacement attempt.
+type SelfTestRepository interface {
+	AdmitSelfTest(context.Context, *mutation.SelfTestState) (SelfTestAdmission, error)
+	LoadSelfTest(context.Context, mutation.SelfTestBinding) (*mutation.SelfTestState, error)
+	SaveSelfTest(context.Context, *mutation.SelfTestState) error
+}
+
 // ScratchCleanupWorkspace performs one already admitted, guarded attempt.
 type ScratchCleanupWorkspace interface {
 	RemoveEmptyScratch(context.Context, ScratchCleanupRequest) error
