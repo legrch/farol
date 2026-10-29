@@ -181,6 +181,19 @@ type ScratchCleanupRepository interface {
 	SaveScratchCleanup(context.Context, *mutation.ScratchCleanupState) error
 }
 
+type ScratchFileCleanupAdmission struct {
+	Status MutationAdmissionStatus
+	Record *mutation.ScratchFileCleanupState
+}
+
+// The exact creation and file terminals are checked under the same writer
+// lock as admission. Existing records are observation only, never a retry.
+type ScratchFileCleanupRepository interface {
+	AdmitScratchFileCleanup(context.Context, *mutation.ScratchFileCleanupState) (ScratchFileCleanupAdmission, error)
+	LoadScratchFileCleanup(context.Context, mutation.ScratchFileInventory) (*mutation.ScratchFileCleanupState, error)
+	SaveScratchFileCleanup(context.Context, *mutation.ScratchFileCleanupState) error
+}
+
 // ScratchCleanupWorkspace performs one already admitted, guarded attempt.
 type ScratchCleanupWorkspace interface {
 	RemoveEmptyScratch(context.Context, ScratchCleanupRequest) error
