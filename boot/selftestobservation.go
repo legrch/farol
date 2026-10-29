@@ -7,6 +7,67 @@ import (
 	state "github.com/legrch/farol/modules/computer/domain/mutation"
 )
 
+// Marker history is observation only. It is scoped and rechecked under the
+// current read lease before exposing any original operation identity.
+func (s *computerConnector) listConnectorSelfTestMarkers(ctx context.Context, slot *connectorSlot, workspace string) ([]port.SelfTestMarkerHistoryEntry, error) {
+	if s == nil || s.root == nil || s.mutations == nil || s.mutations.computer != s.root || slot == nil || !state.Identifier(workspace, 120) {
+		return nil, mutationInvalid()
+	}
+	if err := s.checkMutationSlot(ctx, slot, slot.opened.Execution); err != nil {
+		return nil, err
+	}
+	repo, ok := s.mutations.dependencies.repository.(port.SelfTestMarkerHistoryRepository)
+	if !ok || repo == nil {
+		return nil, computerUnavailable()
+	}
+	guard, err := s.mutationObservation(ctx, slot)
+	if err != nil {
+		return nil, err
+	}
+	check := func(b state.SelfTestBinding) error {
+		suffix := "-st1-write"
+		if b.Version == 2 {
+			suffix = "-st2-write"
+		}
+		child := state.Identity{Scope: state.ScopeConnector, OperationID: b.Identity.OperationID + suffix, OwnerID: b.Identity.OwnerID, ProfileID: b.Identity.ProfileID, ComputerID: b.Identity.ComputerID}
+		return guard.WithMutationObservation(ctx, child, workspace, state.ScratchPath(b.Identity.OperationID)+"/check.txt", func() error { return nil })
+	}
+	probe := state.SelfTestBinding{Identity: state.Identity{Scope: state.ScopeOwnerSettings, OperationID: "00000000-0000-4000-8000-000000000000", OwnerID: s.root.ownerID, ProfileID: s.root.peer.ProfileId, ComputerID: s.root.computerID}, WorkspaceID: workspace, Version: 2}
+	if err := check(probe); err != nil {
+		return nil, err
+	}
+	entries, err := repo.ListSelfTestMarkers(ctx, s.root.ownerID, s.root.peer.ProfileId, s.root.computerID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]port.SelfTestMarkerHistoryEntry, 0)
+	for _, entry := range entries {
+		b := entry.Binding
+		if !b.Valid() || b.Identity.OwnerID != s.root.ownerID || b.Identity.ProfileID != s.root.peer.ProfileId || b.Identity.ComputerID != s.root.computerID {
+			return nil, computerUnavailable()
+		}
+		switch entry.Phase {
+		case state.SelfTestMarkerSelected, state.SelfTestMarkerSettling, state.SelfTestMarkerSettled:
+		default:
+			return nil, computerUnavailable()
+		}
+		if b.WorkspaceID != workspace {
+			continue
+		}
+		if err := check(b); err != nil {
+			return nil, err
+		}
+		out = append(out, entry)
+	}
+	if err := check(probe); err != nil {
+		return nil, err
+	}
+	if err := s.checkMutationSlot(ctx, slot, slot.opened.Execution); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // listConnectorSelfTests discovers original identities without renewing them.
 // Every returned item is qualified against the current workspace read lease.
 // A refused or incomplete inventory must not be represented as an empty one.

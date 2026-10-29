@@ -12,8 +12,67 @@ import (
 type observationHistoryJournal struct {
 	*factoryJournal
 	entries   []port.SelfTestHistoryEntry
+	markers   []port.SelfTestMarkerHistoryEntry
 	afterList func()
 	err       error
+}
+
+func (j *observationHistoryJournal) ListSelfTestMarkers(_ context.Context, _, _, _ string) ([]port.SelfTestMarkerHistoryEntry, error) {
+	if j.afterList != nil {
+		j.afterList()
+	}
+	return j.markers, j.err
+}
+
+func TestSelfTestMarkerHistoryChecksCurrentAuthorityAndNeverDispatches(t *testing.T) {
+	for _, mode := range []string{"current", "revoked", "other", "unavailable", "bad-phase", "unauthorized-empty"} {
+		t.Run(mode, func(t *testing.T) {
+			s, access, journal, native, in := connectorMutationFixture(t)
+			store := &observationHistoryJournal{factoryJournal: &factoryJournal{chatMutationJournal: journal, durablePlanStore: &durablePlanStore{}}}
+			s.mutations.dependencies.repository = store
+			execution, err := s.newConnectorSelfTest(context.Background(), s.current, "work", "00000000-0000-4000-8000-000000000001", in.Publication)
+			if err != nil {
+				t.Fatal(err)
+			}
+			binding := execution.binding
+			if mode == "other" {
+				binding.WorkspaceID = "other"
+			}
+			store.markers = []port.SelfTestMarkerHistoryEntry{{Binding: binding, Phase: state.SelfTestMarkerSelected}}
+			if mode == "bad-phase" {
+				store.markers[0].Phase = "invalid"
+			}
+			if mode == "revoked" {
+				store.afterList = func() { access.approval.Generation++; access.PutApproval(access.approval) }
+			}
+			if mode == "unavailable" {
+				store.err = errors.New("unavailable")
+			}
+			workspace := "work"
+			if mode == "unauthorized-empty" {
+				workspace = "other"
+				store.markers = nil
+			}
+			out, err := s.listConnectorSelfTestMarkers(context.Background(), s.current, workspace)
+			switch mode {
+			case "current":
+				if err != nil || len(out) != 1 || out[0].Binding != binding {
+					t.Fatal("marker missing", out, err)
+				}
+			case "other":
+				if err != nil || len(out) != 0 {
+					t.Fatal("marker disclosed", out, err)
+				}
+			default:
+				if err == nil || out != nil {
+					t.Fatal("invalid inventory disclosed", out, err)
+				}
+			}
+			if store.markerAdmissions != 0 || journal.admits != 0 || native.calls != 0 {
+				t.Fatal("observation caused effect")
+			}
+		})
+	}
 }
 
 func (j *observationHistoryJournal) ListSelfTests(_ context.Context, _, _, _ string) ([]port.SelfTestHistoryEntry, error) {

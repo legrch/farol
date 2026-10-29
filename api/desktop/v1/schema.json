@@ -102,6 +102,7 @@
     "computer.connector.health": "read",
     "computer.settings.inspect": "read",
     "computer.selftest.marker.begin": "effect",
+    "computer.selftest.marker.history": "read",
     "computer.selftest.reserve": "effect",
     "computer.selftest.start": "effect",
     "computer.selftest.observe": "read",
@@ -5892,6 +5893,20 @@
       "fields": {
         "selection": { "type": "ComputerSelfTestObserve" },
         "phase": { "type": "text", "values": ["prepared", "completed", "failed", "outcome_unknown"] }
+      }
+    },
+    "ComputerSelfTestMarkerEntry": {
+      "type": "object",
+      "fields": {
+        "selection": { "type": "ComputerSelfTestObserve" },
+        "phase": { "type": "text", "values": ["selected", "settling", "settled"] }
+      }
+    },
+    "ComputerSelfTestMarkerHistory": {
+      "type": "object",
+      "fields": {
+        "workspaceId": { "type": "id" },
+        "entries": { "type": "ComputerSelfTestMarkerEntry[]", "maxItems": 256 }
       }
     },
     "ComputerSelfTestHistory": {

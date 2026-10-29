@@ -97,16 +97,38 @@ func TestSelfTestWireRejectsMalformedRequestsBeforeAdmission(t *testing.T) {
 	s, _, journal, native, _ := connectorMutationFixture(t)
 	methods := s.Methods()
 	for name, req := range map[string]desktop.Request{
-		"computer.selftest.marker.begin": {RequestID: "marker", OperationID: "bad", Body: []byte(`{}`)},
-		"computer.selftest.history":      {RequestID: "history", OperationID: "unexpected", Body: []byte(`{}`)},
-		"computer.selftest.reserve":      {RequestID: "reserve", OperationID: "bad", Body: []byte(`{}`)},
-		"computer.selftest.start":        {RequestID: "start", OperationID: "bad", Body: []byte(`{}`)},
-		"computer.selftest.observe":      {RequestID: "observe", OperationID: "unexpected", Body: []byte(`{}`)},
+		"computer.selftest.marker.history": {RequestID: "markers", OperationID: "unexpected", Body: []byte(`{}`)},
+		"computer.selftest.marker.begin":   {RequestID: "marker", OperationID: "bad", Body: []byte(`{}`)},
+		"computer.selftest.history":        {RequestID: "history", OperationID: "unexpected", Body: []byte(`{}`)},
+		"computer.selftest.reserve":        {RequestID: "reserve", OperationID: "bad", Body: []byte(`{}`)},
+		"computer.selftest.start":          {RequestID: "start", OperationID: "bad", Body: []byte(`{}`)},
+		"computer.selftest.observe":        {RequestID: "observe", OperationID: "unexpected", Body: []byte(`{}`)},
 	} {
 		out, err := methods[name].Handle(context.Background(), req)
 		if err != nil || out == nil || out.Status != "refused" || journal.admits != 0 || native.calls != 0 {
 			t.Fatal("malformed request admitted", name, out, err)
 		}
+	}
+}
+
+func TestSelfTestWireMarkerHistoryReadsOriginalSelection(t *testing.T) {
+	s, _, journal, native, in := connectorMutationFixture(t)
+	store := &observationHistoryJournal{factoryJournal: &factoryJournal{chatMutationJournal: journal, durablePlanStore: &durablePlanStore{}}}
+	s.mutations.dependencies.repository = store
+	const id = "00000000-0000-4000-8000-000000000001"
+	execution, err := s.newConnectorSelfTest(context.Background(), s.current, "work", id, in.Publication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.markers = []port.SelfTestMarkerHistoryEntry{{Binding: execution.binding, Phase: state.SelfTestMarkerSettling}}
+	body, _ := json.Marshal(wire.ComputerSelfTestHistoryRequest{WorkspaceId: "work"})
+	out, err := s.Methods()["computer.selftest.marker.history"].Handle(context.Background(), desktop.Request{RequestID: "markers", Body: body})
+	var result wire.ComputerSelfTestMarkerHistory
+	if err != nil || out == nil || out.Status != "ok" || json.Unmarshal(out.Data, &result) != nil || len(result.Entries) != 1 || result.Entries[0].Selection.OperationId != id || result.Entries[0].Phase != "settling" {
+		t.Fatal("marker not observed", out, err)
+	}
+	if store.markerAdmissions != 0 || journal.admits != 0 || native.calls != 0 {
+		t.Fatal("history caused effects")
 	}
 }
 

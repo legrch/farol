@@ -47,6 +47,33 @@ func selfTestWireResult(binding state.SelfTestBinding, report selfTestReport) (*
 
 func (s *computerConnector) selfTestMethods() map[string]desktop.Method {
 	return map[string]desktop.Method{
+		"computer.selftest.marker.history": {Concurrent: true, Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
+			if r.OperationID != "" || ipc.ValidateJSON(r.Body) != nil || wire.Validate("ComputerSelfTestHistoryRequest", r.Body) != nil {
+				return invalidIngress()
+			}
+			var in wire.ComputerSelfTestHistoryRequest
+			if json.Unmarshal(r.Body, &in) != nil {
+				return invalidIngress()
+			}
+			slot, err := s.currentSelfTestSlot(ctx)
+			if err != nil {
+				return &desktop.Outcome{Status: "unavailable", Code: "COMPUTER_AUTHORITY_STORE_UNAVAILABLE"}, nil
+			}
+			entries, err := s.listConnectorSelfTestMarkers(ctx, slot, in.WorkspaceId)
+			if err != nil {
+				return &desktop.Outcome{Status: "unavailable", Code: "COMPUTER_AUTHORITY_STORE_UNAVAILABLE"}, nil
+			}
+			result := &wire.ComputerSelfTestMarkerHistory{WorkspaceId: in.WorkspaceId, Entries: make([]wire.ComputerSelfTestMarkerEntry, 0, len(entries))}
+			for _, entry := range entries {
+				b := entry.Binding
+				version := strconv.FormatUint(uint64(b.Version), 10)
+				result.Entries = append(result.Entries, wire.ComputerSelfTestMarkerEntry{Selection: wire.ComputerSelfTestObserve{OperationId: b.Identity.OperationID, WorkspaceId: b.WorkspaceID, ComputerGeneration: decimal(b.ComputerGeneration), PlanVersion: &version}, Phase: string(entry.Phase)})
+			}
+			if validateIngress("ComputerSelfTestMarkerHistory", result) != nil {
+				return &desktop.Outcome{Status: "unavailable", Code: "COMPUTER_AUTHORITY_STORE_UNAVAILABLE"}, nil
+			}
+			return ingressOutcome(result, nil)
+		}},
 		"computer.selftest.marker.begin": {Concurrent: true, Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
 			if r.OperationID == "" || ipc.ValidateJSON(r.Body) != nil || wire.Validate("ComputerSelfTestStart", r.Body) != nil {
 				return invalidIngress()
