@@ -106,6 +106,39 @@ func TestSelfTestV2CleansOnceAfterKnownReadFailure(t *testing.T) {
 	}
 }
 
+func TestSelfTestV3DirectoryCheckPrecedesCleanupAndRetainsUnknown(t *testing.T) {
+	ids, ok := selfTestIDsV3("00000000-0000-4000-8000-000000000001")
+	if !ok || ids.directorySearch != ids.run+"-st3-directory-search" {
+		t.Fatal("invalid v3 IDs", ids)
+	}
+	duplicate := ids
+	duplicate.directorySearch = duplicate.write
+	if duplicate.valid() {
+		t.Fatal("directory identity aliases a mutation")
+	}
+	for _, status := range []string{"pass", "fail", "unknown"} {
+		p := &plannedSelfTestV2{plannedSelfTest: &plannedSelfTest{failAt: "directory search", status: status}, ids: ids}
+		out := runSelfTestPlanV3(context.Background(), p)
+		if out.Steps[9].Name != "directory search" || out.Steps[9].Operation != ids.directorySearch || out.Steps[9].Status != status {
+			t.Fatal("directory check lost", status, out)
+		}
+		switch status {
+		case "pass":
+			if out.Status != "partial" || len(out.Steps) != 14 || p.calls[10] != "cleanup" || out.Steps[13].Status != "not_tested" {
+				t.Fatal("wrong v3 success ordering", out, p.calls)
+			}
+		case "fail":
+			if out.Status != "fail" || len(out.Steps) != 11 || p.calls[len(p.calls)-1] != "cleanup" {
+				t.Fatal("known failure did not clean once", out, p.calls)
+			}
+		case "unknown":
+			if out.Status != "unknown" || len(out.Steps) != 10 || p.calls[len(p.calls)-1] != "directory search" {
+				t.Fatal("unknown check repeated or cleaned", out, p.calls)
+			}
+		}
+	}
+}
+
 func TestSelfTestUnsettledErrorNeverBecomesRefusal(t *testing.T) {
 	err := &connectorMutationUnsettled{cause: &mutationct.Failure{Code: "AUTHORITY_PATH_DENIED", Retry: "never"}}
 	if out := selfTestFailure("write", "op", err); out.Status != "unknown" || out.Operation != "op" {

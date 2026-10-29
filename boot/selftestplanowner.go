@@ -13,7 +13,7 @@ import (
 // no transport or renderer entry point and grants no execution authority.
 type selfTestIDs struct {
 	run, write, writeCall, edit, editCall, quick, quickCall, quickCancel, cancel, cancelCall, cancelOperation string
-	catalogue, bootstrap, list, read, search                                                                  string
+	catalogue, bootstrap, list, read, search, directorySearch                                                 string
 }
 
 // Versioned, bounded derivation ties each child to the original durable
@@ -25,6 +25,11 @@ func selfTestIDsV1(run string) (selfTestIDs, bool) {
 
 func selfTestIDsV2(run string) (selfTestIDs, bool) {
 	ids := selfTestIDs{run: run, write: run + "-st2-write", writeCall: run + "-st2-write-call", edit: run + "-st2-edit", editCall: run + "-st2-edit-call", quick: run + "-st2-quick", quickCall: run + "-st2-quick-call", quickCancel: run + "-st2-quick-unused-cancel", cancel: run + "-st2-cancel", cancelCall: run + "-st2-cancel-call", cancelOperation: run + "-st2-cancel-op", catalogue: run + "-st2-catalogue", bootstrap: run + "-st2-bootstrap", list: run + "-st2-list", read: run + "-st2-read", search: run + "-st2-search"}
+	return ids, ids.valid()
+}
+
+func selfTestIDsV3(run string) (selfTestIDs, bool) {
+	ids := selfTestIDs{run: run, write: run + "-st3-write", writeCall: run + "-st3-write-call", edit: run + "-st3-edit", editCall: run + "-st3-edit-call", quick: run + "-st3-quick", quickCall: run + "-st3-quick-call", quickCancel: run + "-st3-quick-unused-cancel", cancel: run + "-st3-cancel", cancelCall: run + "-st3-cancel-call", cancelOperation: run + "-st3-cancel-op", catalogue: run + "-st3-catalogue", bootstrap: run + "-st3-bootstrap", list: run + "-st3-list", read: run + "-st3-read", search: run + "-st3-search", directorySearch: run + "-st3-directory-search"}
 	return ids, ids.valid()
 }
 
@@ -47,6 +52,9 @@ func (ids selfTestIDs) valid() bool {
 			}
 			seen[id] = true
 		}
+	}
+	if ids.directorySearch != "" && (!validIngressID(ids.directorySearch) || seen[ids.directorySearch]) {
+		return false
 	}
 	return true
 }
@@ -81,7 +89,9 @@ func selfTestFailure(name, operation string, err error) selfTestStep {
 func (p *connectorSelfTestPlan) create(ctx context.Context) selfTestStep {
 	step := selfTestStep{Name: "scratch", Status: "unknown", Operation: p.ids.run}
 	expectedIDs, validIDs := selfTestIDsV1(p.ids.run)
-	if p.ids.catalogue != "" {
+	if p.ids.directorySearch != "" {
+		expectedIDs, validIDs = selfTestIDsV3(p.ids.run)
+	} else if p.ids.catalogue != "" {
 		expectedIDs, validIDs = selfTestIDsV2(p.ids.run)
 	}
 	if p.connector == nil || p.connector.mutations == nil || p.slot == nil || p.slot.guard == nil || p.slot.guard.publication != p.publication || !validIDs || p.ids != expectedIDs || !state.Identifier(p.workspace, 120) {

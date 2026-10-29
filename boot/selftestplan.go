@@ -52,7 +52,9 @@ func (e *selfTestExecution) execute(ctx context.Context) selfTestReport {
 	e.started = true
 	e.mu.Unlock()
 	var out selfTestReport
-	if e.version == 2 {
+	if e.version == 3 {
+		out = runSelfTestPlanV3(ctx, e.owner)
+	} else if e.version == 2 {
 		out = runSelfTestPlanV2(ctx, e.owner)
 	} else {
 		out = runSelfTestPlan(ctx, e.owner)
@@ -69,6 +71,14 @@ type selfTestWorkspaceOwner interface {
 }
 
 func runSelfTestPlanV2(ctx context.Context, owner selfTestPlanOwner) selfTestReport {
+	return runSelfTestReadPlan(ctx, owner, false)
+}
+
+func runSelfTestPlanV3(ctx context.Context, owner selfTestPlanOwner) selfTestReport {
+	return runSelfTestReadPlan(ctx, owner, true)
+}
+
+func runSelfTestReadPlan(ctx context.Context, owner selfTestPlanOwner, directory bool) selfTestReport {
 	report := selfTestReport{Status: "unknown"}
 	read, ok := owner.(selfTestWorkspaceOwner)
 	if ctx == nil || ctx.Err() != nil || owner == nil || !ok {
@@ -82,11 +92,19 @@ func runSelfTestPlanV2(ctx context.Context, owner selfTestPlanOwner) selfTestRep
 		func(ctx context.Context) selfTestStep { return read.workspaceCheck(ctx, "list", ids.list) },
 		func(ctx context.Context) selfTestStep { return read.workspaceCheck(ctx, "read", ids.read) },
 		func(ctx context.Context) selfTestStep { return read.workspaceCheck(ctx, "search", ids.search) },
+	}
+	checks := []selfTestStep{{Name: "catalogue", Operation: ids.catalogue}, {Name: "bootstrap", Operation: ids.bootstrap}, {Name: "list", Operation: ids.list}, {Name: "read", Operation: ids.read}, {Name: "search", Operation: ids.search}}
+	if directory {
+		steps = append(steps, func(ctx context.Context) selfTestStep {
+			return read.workspaceCheck(ctx, "directory search", ids.directorySearch)
+		})
+		checks = append(checks, selfTestStep{Name: "directory search", Operation: ids.directorySearch})
+	}
+	steps = append(steps,
 		owner.cleanup,
 		func(ctx context.Context) selfTestStep { return owner.shell(ctx, selfTestShellQuick) },
 		func(ctx context.Context) selfTestStep { return owner.shell(ctx, selfTestShellCancel) },
-	}
-	checks := []selfTestStep{{Name: "catalogue", Operation: ids.catalogue}, {Name: "bootstrap", Operation: ids.bootstrap}, {Name: "list", Operation: ids.list}, {Name: "read", Operation: ids.read}, {Name: "search", Operation: ids.search}}
+	)
 	for index, step := range steps {
 		if ctx.Err() != nil {
 			return report
@@ -96,7 +114,7 @@ func runSelfTestPlanV2(ctx context.Context, owner selfTestPlanOwner) selfTestRep
 		if result.Status != "pass" {
 			if result.Status == "fail" {
 				report.Status = "fail"
-				if index >= 4 && index <= 8 && ctx.Err() == nil {
+				if index >= 4 && index < 4+len(checks) && ctx.Err() == nil {
 					for _, skipped := range checks[index-3:] {
 						skipped.Status = "not_tested"
 						report.Steps = append(report.Steps, skipped)
@@ -111,7 +129,10 @@ func runSelfTestPlanV2(ctx context.Context, owner selfTestPlanOwner) selfTestRep
 			return report
 		}
 	}
-	report.Steps = append(report.Steps, selfTestStep{Name: "directory search", Status: "not_tested"}, selfTestStep{Name: "git and hooks", Status: "not_tested"})
+	if !directory {
+		report.Steps = append(report.Steps, selfTestStep{Name: "directory search", Status: "not_tested"})
+	}
+	report.Steps = append(report.Steps, selfTestStep{Name: "git and hooks", Status: "not_tested"})
 	report.Status = "partial"
 	return report
 }
