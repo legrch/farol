@@ -53,6 +53,7 @@ type computerConnector struct {
 	auditFilter processsvc.AuditScalarFilter
 	auditSlots  chan struct{}
 	codexRead   *connectorCodexRead
+	selfTests   selfTestRegistry
 	current     *connectorSlot
 	attempts    uint64
 	closed      *connectorRecoveryOrigin // effects-owned, exact successful Close only
@@ -446,7 +447,7 @@ func (s *computerConnector) Methods() map[string]desktop.Method {
 	if s == nil {
 		return nil
 	}
-	return map[string]desktop.Method{
+	methods := map[string]desktop.Method{
 		"computer.process.audit":          s.processAuditMethod(),
 		"computer.connector.health":       s.healthMethod(),
 		"computer.connector.polling":      s.pollingMethod(),
@@ -478,4 +479,8 @@ func (s *computerConnector) Methods() map[string]desktop.Method {
 			return ingressOutcome(value, err)
 		}},
 	}
+	for name, method := range s.selfTestMethods() {
+		methods[name] = method
+	}
+	return methods
 }

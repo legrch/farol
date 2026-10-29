@@ -100,7 +100,9 @@
     "chat.archive.read": "read",
     "computer.connector.polling": "read",
     "computer.connector.health": "read",
-    "computer.settings.inspect": "read"
+    "computer.settings.inspect": "read",
+    "computer.selftest.start": "effect",
+    "computer.selftest.observe": "read"
   },
   "definitions": {
     "Context": {
@@ -5858,6 +5860,43 @@
           "type": "decimal",
           "optional": true
         }
+      }
+    },
+    "ComputerSelfTestStart": {
+      "type": "object",
+      "fields": {
+        "publication": { "type": "ComputerAuthorityPublication" },
+        "workspaceId": { "type": "id" }
+      }
+    },
+    "ComputerSelfTestObserve": {
+      "type": "object",
+      "fields": {
+        "operationId": { "type": "id" },
+        "workspaceId": { "type": "id" },
+        "computerGeneration": { "type": "decimal" }
+      }
+    },
+    "ComputerSelfTestStep": {
+      "type": "object",
+      "fields": {
+        "name": { "type": "text", "values": ["scratch", "write", "edit", "mutation read", "cleanup", "shell", "shell cancel", "workspace reads", "git and hooks"] },
+        "status": { "type": "text", "values": ["pass", "fail", "unknown", "not_tested"] },
+        "code": { "type": "id", "optional": true },
+        "operationId": { "type": "id", "optional": true },
+        "handle": { "type": "id", "optional": true },
+        "cancelOperationId": { "type": "id", "optional": true },
+        "descendantCleanup": { "type": "text", "values": ["pending", "confirmed", "unverified"], "optional": true }
+      }
+    },
+    "ComputerSelfTestReport": {
+      "type": "object",
+      "fields": {
+        "operationId": { "type": "id" },
+        "workspaceId": { "type": "id" },
+        "computerGeneration": { "type": "decimal" },
+        "status": { "type": "text", "values": ["partial", "fail", "unknown"] },
+        "steps": { "type": "ComputerSelfTestStep[]", "maxItems": 16 }
       }
     },
     "ComputerSettingsInspectRequest": {
