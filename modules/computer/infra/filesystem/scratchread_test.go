@@ -31,6 +31,67 @@ func scratchReadIdentity(t *testing.T, path string) mutation.DirectoryIdentity {
 	return mutation.DirectoryIdentity{Device: strconv.FormatUint(uint64(st.Dev), 10), Inode: strconv.FormatUint(st.Ino, 10)}
 }
 
+func TestScratchDirectorySearchIsConfinedToRetainedFixture(t *testing.T) {
+	for _, scenario := range []string{"stable", "extra-file", "extra-directory", "extra-symlink", "extra-hardlink", "scratch-ignore", "added-during-read"} {
+		t.Run(scenario, func(t *testing.T) {
+			d := fixture(t)
+			const run = "00000000-0000-4000-8000-000000000001"
+			leaf := mutation.ScratchPath(run)
+			dir, file := filepath.Join(d.Root, leaf), filepath.Join(d.Root, leaf, "check.txt")
+			if err := os.Mkdir(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(file, []byte("known\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			// A user-owned ancestor ignore file must not be read or applied.
+			if err := os.WriteFile(filepath.Join(d.Root, ".gitignore"), []byte("*\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			dirID, fileID := scratchReadIdentity(t, dir), scratchReadIdentity(t, file)
+			binding := port.ScratchReadBinding{RunID: run, Directory: dirID, File: fileID, DirectoryHold: scratchReadHold{dirID}, FileHold: scratchReadHold{fileID}}
+			var err error
+			switch scenario {
+			case "extra-file":
+				err = os.WriteFile(filepath.Join(dir, "other"), []byte("private\n"), 0600)
+			case "extra-directory":
+				err = os.Mkdir(filepath.Join(dir, "other"), 0700)
+			case "extra-symlink":
+				err = os.Symlink(file, filepath.Join(dir, "other"))
+			case "extra-hardlink":
+				err = os.Link(file, filepath.Join(dir, "other"))
+			case "scratch-ignore":
+				err = os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*\n"), 0600)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			reads := 0
+			w := New(d.Root + "-home")
+			w.afterRead = func() {
+				reads++
+				if scenario == "added-during-read" {
+					if err := os.WriteFile(filepath.Join(dir, "other"), []byte("private\n"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			out, err := w.SearchScratch(context.Background(), port.SearchRequest{Workspace: d, RelativePath: leaf, Pattern: "known"}, binding)
+			if scenario == "stable" {
+				if err != nil || out == nil || len(out.Matches) != 1 || out.Matches[0].Path != leaf+"/check.txt" || reads != 1 {
+					t.Fatal("expected one retained fixture read", out, err, reads)
+				}
+			} else if scenario == "added-during-read" {
+				if err == nil || out != nil || reads != 1 {
+					t.Fatal("directory changed during search", out, err, reads)
+				}
+			} else if err == nil || out != nil || reads != 0 {
+				t.Fatal("unexpected entry must be refused before reading", scenario, out, err, reads)
+			}
+		})
+	}
+}
+
 func TestScratchReadBindsOpenedFileAndDirectory(t *testing.T) {
 	for _, scenario := range []string{"stable", "file-replaced", "directory-replaced", "file-replaced-before", "file-symlink", "hold-mismatch"} {
 		t.Run(scenario, func(t *testing.T) {

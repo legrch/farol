@@ -15,7 +15,7 @@ import (
 
 // Disposable native filesystem only; no connector, user profile or live data.
 func TestNativeScratchReadRetainsRealCustody(t *testing.T) {
-	for _, action := range []string{"read", "list", "search"} {
+	for _, action := range []string{"read", "list", "search", "directory-search"} {
 		for _, scenario := range []string{"stable", "closed-file", "closed-directory", "replace-file", "replace-directory"} {
 			t.Run(action+"/"+scenario, func(t *testing.T) {
 				d := fixture(t)
@@ -84,6 +84,9 @@ func TestNativeScratchReadRetainsRealCustody(t *testing.T) {
 				case "search":
 					out, e := w.SearchScratch(context.Background(), port.SearchRequest{Workspace: d, RelativePath: leaf + "/check.txt", Pattern: "known"}, binding)
 					err, present = e, out != nil
+				case "directory-search":
+					out, e := w.SearchScratch(context.Background(), port.SearchRequest{Workspace: d, RelativePath: leaf, Pattern: "known"}, binding)
+					err, present = e, out != nil && len(out.Matches) == 1 && out.Matches[0].Path == leaf+"/check.txt"
 				}
 				if scenario == "stable" && (err != nil || !present) || scenario != "stable" && (err == nil || present) {
 					t.Fatal("custody result incorrect", action, scenario, present, err)

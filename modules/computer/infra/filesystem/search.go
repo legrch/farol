@@ -44,7 +44,8 @@ func (w *Workspace) Search(ctx context.Context, request port.SearchRequest) (*po
 }
 
 func (w *Workspace) SearchScratch(ctx context.Context, request port.SearchRequest, binding port.ScratchReadBinding) (*port.SearchResponse, error) {
-	if !validScratchReadBinding(binding) || request.RelativePath != mutation.ScratchPath(binding.RunID)+"/check.txt" {
+	leaf := mutation.ScratchPath(binding.RunID)
+	if !validScratchReadBinding(binding) || (request.RelativePath != leaf+"/check.txt" && request.RelativePath != leaf) {
 		return nil, refusal("WORKSPACE_INVALID_REQUEST")
 	}
 	return w.search(ctx, request, &binding)
@@ -95,7 +96,7 @@ func (w *Workspace) search(ctx context.Context, request port.SearchRequest, scra
 		if err := unix.Fstatat(parent, parts[len(parts)-1], &listed, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 			return nil, openError(err)
 		}
-		if scratch != nil && listed.Mode&unix.S_IFMT != unix.S_IFREG {
+		if scratch != nil && listed.Mode&unix.S_IFMT != unix.S_IFREG && listed.Mode&unix.S_IFMT != unix.S_IFDIR {
 			return nil, refusal("WORKSPACE_RACE_DETECTED")
 		}
 		if listed.Mode&unix.S_IFMT == unix.S_IFDIR {
@@ -104,9 +105,13 @@ func (w *Workspace) search(ctx context.Context, request port.SearchRequest, scra
 			}
 			// Load root-to-parent ignore rules, as the native helper does. Explicit
 			// directory selection bypasses ignore on that directory, not its children.
-			rules, ruleErr := scan.ancestorRules(parts[:len(parts)-1])
-			if ruleErr != nil {
-				return nil, ruleErr
+			var rules []searchIgnoreRule
+			if scratch == nil {
+				var ruleErr error
+				rules, ruleErr = scan.ancestorRules(parts[:len(parts)-1])
+				if ruleErr != nil {
+					return nil, ruleErr
+				}
 			}
 			child, openErr := directory(parent, parts[len(parts)-1])
 			if openErr != nil {
@@ -116,6 +121,19 @@ func (w *Workspace) search(ctx context.Context, request port.SearchRequest, scra
 			if statErr != nil || !stable(listed, opened) {
 				unix.Close(child)
 				return nil, refusal("WORKSPACE_RACE_DETECTED")
+			}
+			if scratch != nil {
+				fixture, _, openErr := regular(child, "check.txt")
+				if openErr != nil {
+					unix.Close(child)
+					return nil, refusal("WORKSPACE_RACE_DETECTED")
+				}
+				matches := scratchOpenedMatches(root, child, fixture, *scratch)
+				unix.Close(fixture)
+				if !matches {
+					unix.Close(child)
+					return nil, refusal("WORKSPACE_RACE_DETECTED")
+				}
 			}
 			err = scan.directory(child, parts, rules, 0)
 			unix.Close(child)
@@ -447,9 +465,12 @@ func (s *searchScan) directory(fd int, parts []string, inherited []searchIgnoreR
 	if err != nil {
 		return refusal("WORKSPACE_PATH_REFUSED")
 	}
-	rules, err := s.ignoreRules(fd, strings.Join(parts, "/"), inherited)
-	if err != nil {
-		return err
+	rules := inherited
+	if s.scratch == nil {
+		rules, err = s.ignoreRules(fd, strings.Join(parts, "/"), inherited)
+		if err != nil {
+			return err
+		}
 	}
 	// Reopen "." rather than Dup: directory offsets must not be shared with an
 	// ancestor or another operation (the repeated Markdown discovery invariant).
@@ -465,6 +486,11 @@ func (s *searchScan) directory(fd int, parts []string, inherited []searchIgnoreR
 	}
 	if overflow {
 		s.result.ScanLimited = true
+	}
+	// Diagnostic traversal may read only the retained fixture, never user
+	// files, ignore metadata, symlinks or nested directories.
+	if s.scratch != nil && (depth != 0 || overflow || len(names) != 1 || names[0] != "check.txt") {
+		return refusal("WORKSPACE_RACE_DETECTED")
 	}
 	fold := cases.Fold()
 	folder := fold.String
@@ -500,6 +526,9 @@ func (s *searchScan) directory(fd int, parts []string, inherited []searchIgnoreR
 			return refusal("WORKSPACE_RACE_DETECTED")
 		}
 		kind := listed.Mode & unix.S_IFMT
+		if s.scratch != nil && (kind != unix.S_IFREG || listed.Nlink != 1) {
+			return refusal("WORKSPACE_RACE_DETECTED")
+		}
 		if searchIgnored(rules, path, kind == unix.S_IFDIR) {
 			continue
 		}
