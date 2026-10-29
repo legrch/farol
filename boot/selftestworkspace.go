@@ -28,7 +28,8 @@ func (w *selfTestSearchListWorkspace) List(ctx context.Context, request port.Lis
 	return w.list.ListScratch(ctx, request, w.binding)
 }
 func (w *selfTestSearchListWorkspace) Search(ctx context.Context, request port.SearchRequest) (*port.SearchResponse, error) {
-	if w.search == nil || request.Workspace.WorkspaceID != w.workspace || request.RelativePath != state.ScratchPath(w.binding.RunID)+"/check.txt" {
+	leaf := state.ScratchPath(w.binding.RunID)
+	if w.search == nil || request.Workspace.WorkspaceID != w.workspace || (request.RelativePath != leaf+"/check.txt" && request.RelativePath != leaf) {
 		return nil, computerUnavailable()
 	}
 	return w.search.SearchScratch(ctx, request, w.binding)
@@ -108,10 +109,10 @@ func (p *connectorSelfTestPlan) workspaceCheck(ctx context.Context, name, call s
 	}
 	binding := operationBinding(e.OwnerId, e.SessionId, e.TaskId, epoch, e.ParticipantId, e.TurnId)
 	route := *p.slot.route
-	if name == "list" || name == "search" {
+	if name == "list" || name == "search" || name == "directory search" {
 		list, _ := route.workspace.(port.ScratchBoundList)
 		search, _ := route.workspace.(port.ScratchBoundSearch)
-		if name == "list" && list == nil || name == "search" && search == nil {
+		if name == "list" && list == nil || (name == "search" || name == "directory search") && search == nil {
 			return step
 		}
 		route.workspace = &selfTestSearchListWorkspace{list: list, search: search, workspace: p.workspace, binding: fixture}
@@ -124,10 +125,10 @@ func (p *connectorSelfTestPlan) workspaceCheck(ctx context.Context, name, call s
 		if name == "list" {
 			capability = authority.List
 		}
-		if name == "search" {
+		if name == "search" || name == "directory search" {
 			capability = authority.Search
 		}
-		if name != "bootstrap" && name != "list" && name != "search" {
+		if name != "bootstrap" && name != "list" && name != "search" && name != "directory search" {
 			return step
 		}
 		contract, err = route.selectContract(ctx, binding, capability)
@@ -160,11 +161,15 @@ func (p *connectorSelfTestPlan) workspaceCheck(ctx context.Context, name, call s
 			return step
 		}
 		match = out != nil && !out.Truncated && len(out.Entries) == 1 && out.Entries[0] == "check.txt"
-	case "search":
+	case "search", "directory search":
 		var out *workspacect.SearchResponse
-		// This is an explicit-file search. It does not prove recursive traversal
-		// or ignore-rule behavior.
-		out, err = contract.Search(ctx, workspacect.SearchRequest{OwnerID: e.OwnerId, SessionID: e.SessionId, TaskID: e.TaskId, TaskEpoch: epoch, ParticipantID: e.ParticipantId, TurnID: e.TurnId, Generation: generation, CallID: call, WorkspaceID: p.workspace, RelativePath: leaf + "/check.txt", Pattern: "Farol self-test verified"})
+		// The directory variant traverses only the retained fixture; neither
+		// variant proves nested traversal or ordinary ignore-rule behavior.
+		path := leaf + "/check.txt"
+		if name == "directory search" {
+			path = leaf
+		}
+		out, err = contract.Search(ctx, workspacect.SearchRequest{OwnerID: e.OwnerId, SessionID: e.SessionId, TaskID: e.TaskId, TaskEpoch: epoch, ParticipantID: e.ParticipantId, TurnID: e.TurnId, Generation: generation, CallID: call, WorkspaceID: p.workspace, RelativePath: path, Pattern: "Farol self-test verified"})
 		if err == nil && out != nil && (out.ResultLimited || out.ScanLimited) {
 			step.Code = "SELF_TEST_SCAN_LIMITED"
 			return step

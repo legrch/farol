@@ -31,10 +31,25 @@ func (n *selfTestWorkspaceNative) Search(_ context.Context, in port.SearchReques
 	if n.afterSearch != nil {
 		n.afterSearch()
 	}
-	return &port.SearchResponse{Binding: &port.DirectoryBinding{RelativePath: in.RelativePath, Root: in.Workspace.Root, ApprovedRoot: in.Workspace.ApprovedRoot}, Matches: []port.SearchMatch{{Path: in.RelativePath, Line: 1, Text: "Farol self-test verified"}}, ScanLimited: n.scanLimited}, nil
+	path := in.RelativePath
+	if state.ScratchLeaf(path) {
+		path += "/check.txt"
+	}
+	return &port.SearchResponse{Binding: &port.DirectoryBinding{RelativePath: in.RelativePath, Root: in.Workspace.Root, ApprovedRoot: in.Workspace.ApprovedRoot}, Matches: []port.SearchMatch{{Path: path, Line: 1, Text: "Farol self-test verified"}}, ScanLimited: n.scanLimited}, nil
 }
 func (n *selfTestWorkspaceNative) SearchScratch(ctx context.Context, in port.SearchRequest, _ port.ScratchReadBinding) (*port.SearchResponse, error) {
 	return n.Search(ctx, in)
+}
+
+func TestDiagnosticSearchAdapterRejectsOtherPathsBeforeCallingNative(t *testing.T) {
+	called := false
+	native := &selfTestWorkspaceNative{afterSearch: func() { called = true }}
+	binding := port.ScratchReadBinding{RunID: "00000000-0000-4000-8000-000000000001"}
+	w := &selfTestSearchListWorkspace{search: native, workspace: "work", binding: binding}
+	_, err := w.Search(context.Background(), port.SearchRequest{Workspace: port.Descriptor{WorkspaceID: "work"}, RelativePath: "."})
+	if err == nil || called {
+		t.Fatal("diagnostic search escaped its fixture", err, called)
+	}
 }
 
 // Real connector/authority owners with injected native workspace and journal.
@@ -57,52 +72,59 @@ func TestSelfTestWorkspaceCallsAreBoundToCurrentConnector(t *testing.T) {
 		}
 	}
 	// Search has not been granted by this fixture. The diagnostic cannot widen it.
-	out := plan.workspaceCheck(context.Background(), "search", ids.search)
-	if out.Status != "fail" || out.Code != "AUTHORITY_CAPABILITY_DENIED" {
-		t.Fatal("search authority widened", out)
+	for _, name := range []string{"search", "directory search"} {
+		out := plan.workspaceCheck(context.Background(), name, ids.search)
+		if out.Status != "fail" || out.Code != "AUTHORITY_CAPABILITY_DENIED" {
+			t.Fatal("search authority widened", name, out)
+		}
 	}
 }
 
 func TestSelfTestSearchRejectsLimitedAndRevokedResults(t *testing.T) {
-	for _, scenario := range []string{"success", "limited", "withdraw"} {
-		t.Run(scenario, func(t *testing.T) {
-			s, access, native, _, input := newConnectorFixture(t)
-			access.approval.Capabilities = []authority.Capability{authority.List, authority.Read, authority.Write, authority.Search}
-			access.approval.Workspaces[0].Access = authority.WriteAccess
-			access.PutApproval(access.approval)
-			s.root.publication.approval = access.approval.Clone()
-			deps, _, _ := chatMutationDependencies()
-			var err error
-			s.mutations, err = settingsMutationIngress(s.root, deps)
-			if err != nil {
-				t.Fatal(err)
-			}
-			wrapper := &selfTestWorkspaceNative{selfTestReadNative: &selfTestReadNative{Workspace: native}, scanLimited: scenario == "limited"}
-			s.root.native = wrapper
-			if _, err := s.Open(context.Background(), "open", input); err != nil {
-				t.Fatal(err)
-			}
-			s.mutations.stageBaseline, s.mutations.stageOwner, s.mutations.stageLifetime = true, &computerStageOwner{}, context.Background()
-			const runID = "00000000-0000-4000-8000-000000000001"
-			run, err := s.mutations.beginSelfTestRun(context.Background(), runID, "work")
-			if err != nil {
-				t.Fatal(err)
-			}
-			run.scratchIdentity = state.DirectoryIdentity{Device: "1", Inode: "10"}
-			run.scratchCustody = &fileWorkspaceHold{}
-			run.fixtureFileIdentity = state.DirectoryIdentity{Device: "1", Inode: "20"}
-			run.fixtureCustody = &fileWorkspaceHold{}
-			run.fixtureFileHash, run.fixtureEditStarted, run.fixtureOperation = selfTestFileHash(selfTestFileAfter), true, "original-edit"
-			s.mutations.operations[runID] = &settingsMutationOperation{workspace: "work", stageScratch: true, scratchCreated: true, settled: true, selfTestRun: run}
-			if scenario == "withdraw" {
-				wrapper.afterSearch = func() { access.approval.Generation++; access.PutApproval(access.approval) }
-			}
-			ids, _ := selfTestIDsV2(runID)
-			plan := &connectorSelfTestPlan{connector: s, slot: s.current, workspace: "work", ids: ids, run: run}
-			out := plan.workspaceCheck(context.Background(), "search", ids.search)
-			if scenario == "success" && out.Status != "pass" || scenario != "success" && out.Status == "pass" {
-				t.Fatal("incorrect search result", scenario, out)
-			}
-		})
+	for _, name := range []string{"search", "directory search"} {
+		for _, scenario := range []string{"success", "limited", "withdraw"} {
+			t.Run(name+"/"+scenario, func(t *testing.T) {
+				s, access, native, _, input := newConnectorFixture(t)
+				access.approval.Capabilities = []authority.Capability{authority.List, authority.Read, authority.Write, authority.Search}
+				access.approval.Workspaces[0].Access = authority.WriteAccess
+				access.PutApproval(access.approval)
+				s.root.publication.approval = access.approval.Clone()
+				deps, _, _ := chatMutationDependencies()
+				var err error
+				s.mutations, err = settingsMutationIngress(s.root, deps)
+				if err != nil {
+					t.Fatal(err)
+				}
+				wrapper := &selfTestWorkspaceNative{selfTestReadNative: &selfTestReadNative{Workspace: native}, scanLimited: scenario == "limited"}
+				s.root.native = wrapper
+				if _, err := s.Open(context.Background(), "open", input); err != nil {
+					t.Fatal(err)
+				}
+				s.mutations.stageBaseline, s.mutations.stageOwner, s.mutations.stageLifetime = true, &computerStageOwner{}, context.Background()
+				const runID = "00000000-0000-4000-8000-000000000001"
+				run, err := s.mutations.beginSelfTestRun(context.Background(), runID, "work")
+				if err != nil {
+					t.Fatal(err)
+				}
+				run.scratchIdentity = state.DirectoryIdentity{Device: "1", Inode: "10"}
+				run.scratchCustody = &fileWorkspaceHold{}
+				run.fixtureFileIdentity = state.DirectoryIdentity{Device: "1", Inode: "20"}
+				run.fixtureCustody = &fileWorkspaceHold{}
+				run.fixtureFileHash, run.fixtureEditStarted, run.fixtureOperation = selfTestFileHash(selfTestFileAfter), true, "original-edit"
+				s.mutations.operations[runID] = &settingsMutationOperation{workspace: "work", stageScratch: true, scratchCreated: true, settled: true, selfTestRun: run}
+				if scenario == "withdraw" {
+					wrapper.afterSearch = func() { access.approval.Generation++; access.PutApproval(access.approval) }
+				}
+				ids, _ := selfTestIDsV2(runID)
+				plan := &connectorSelfTestPlan{connector: s, slot: s.current, workspace: "work", ids: ids, run: run}
+				out := plan.workspaceCheck(context.Background(), name, ids.search)
+				if scenario == "success" && out.Status != "pass" || scenario != "success" && out.Status == "pass" {
+					t.Fatal("incorrect search result", scenario, out)
+				}
+				if scenario == "limited" && (out.Status != "unknown" || out.Code != "SELF_TEST_SCAN_LIMITED") {
+					t.Fatal("limited search must remain unknown", out)
+				}
+			})
+		}
 	}
 }
