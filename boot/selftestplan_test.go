@@ -75,6 +75,14 @@ func TestSelfTestUnsettledErrorNeverBecomesRefusal(t *testing.T) {
 }
 
 func TestSelfTestPlanIDsAreBoundAndDistinct(t *testing.T) {
+	first, ok := selfTestIDsV1("00000000-0000-4000-8000-000000000001")
+	second, okAgain := selfTestIDsV1("00000000-0000-4000-8000-000000000001")
+	if !ok || !okAgain || first != second || first.write != first.run+"-st1-write" {
+		t.Fatal("child IDs not deterministic", first)
+	}
+	if _, ok := selfTestIDsV1("invalid"); ok {
+		t.Fatal("invalid parent accepted")
+	}
 	ids := selfTestIDs{run: "00000000-0000-4000-8000-000000000001", write: "write", writeCall: "write-call", edit: "edit", editCall: "edit-call", quick: "quick", quickCall: "quick-call", quickCancel: "quick-cancel", cancel: "cancel", cancelCall: "cancel-call", cancelOperation: "cancel-op"}
 	if !ids.valid() {
 		t.Fatal("valid IDs refused")

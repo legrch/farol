@@ -15,6 +15,13 @@ type selfTestIDs struct {
 	run, write, writeCall, edit, editCall, quick, quickCall, quickCancel, cancel, cancelCall, cancelOperation string
 }
 
+// Versioned, bounded derivation ties each child to the original durable
+// scratch identity. This is correlation only, never an admission decision.
+func selfTestIDsV1(run string) (selfTestIDs, bool) {
+	ids := selfTestIDs{run: run, write: run + "-st1-write", writeCall: run + "-st1-write-call", edit: run + "-st1-edit", editCall: run + "-st1-edit-call", quick: run + "-st1-quick", quickCall: run + "-st1-quick-call", quickCancel: run + "-st1-quick-unused-cancel", cancel: run + "-st1-cancel", cancelCall: run + "-st1-cancel-call", cancelOperation: run + "-st1-cancel-op"}
+	return ids, ids.valid()
+}
+
 func (ids selfTestIDs) valid() bool {
 	if !state.ScratchLeaf(state.ScratchPath(ids.run)) {
 		return false
