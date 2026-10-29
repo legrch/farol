@@ -18,13 +18,28 @@ import (
 // removal and fd close. Once the callback starts, any lost outer result is
 // unknown: the filesystem effect may have occurred.
 type runScratchCleanup struct {
-	owner  *computerStageOwner
-	native port.ScratchCleanupWorkspace
+	owner          *computerStageOwner
+	native         port.ScratchCleanupWorkspace
+	custody        port.ScratchDirectoryCustody
+	closed         bool
+	closeAttempted bool
 }
 
 func (w *runScratchCleanup) RemoveEmptyScratch(ctx context.Context, request port.ScratchCleanupRequest) error {
-	if w == nil || w.owner == nil || w.native == nil {
+	if w == nil || w.owner == nil || w.native == nil || w.custody == nil || request.WithPublication == nil {
 		return authority.Fail("WORKSPACE_PATH_REFUSED", "native-workspace")
+	}
+	if err := w.custody.Check(request.Binding.Directory); err != nil {
+		return err
+	}
+	guard := request.WithPublication
+	request.WithPublication = func(ctx context.Context, publish func() error) error {
+		return guard(ctx, func() error {
+			if err := w.custody.Check(request.Binding.Directory); err != nil {
+				return err
+			}
+			return publish()
+		})
 	}
 	entered := false
 	var callbackErr error
@@ -38,6 +53,16 @@ func (w *runScratchCleanup) RemoveEmptyScratch(ctx context.Context, request port
 			return callbackErr
 		}
 		return authority.Fail("WORKSPACE_MUTATION_OUTCOME_UNKNOWN", "native-workspace")
+	}
+	if err == nil {
+		// This close is part of the original attempt and must precede the
+		// service's single terminal Save. Never report durable completion if
+		// descriptor closure is not confirmed.
+		w.closeAttempted = true
+		if err := w.custody.Close(); err != nil {
+			return authority.Fail("WORKSPACE_MUTATION_OUTCOME_UNKNOWN", "native-workspace")
+		}
+		w.closed = true
 	}
 	return err
 }
@@ -86,7 +111,7 @@ func (s *SettingsMutationIngress) cleanupSelfTestScratchForRun(ctx context.Conte
 	}
 	s.mu.Lock()
 	record := s.operations[run.operation]
-	if s.selfTestRun != run || run.ledger != s || run.active || run.cleanupStarted || run.ctx.Err() != nil || s.stageClosed || s.frozen || s.stagePending || s.processDraining || s.recoveryReserved || s.retirementErr != nil || s.stageOwner == nil || record == nil || !record.stageScratch || !record.scratchCreated || record.selfTestRun != run || record.pending || !record.settled || record.scratch == nil || record.workspace != run.workspace || record.generation != generation {
+	if s.selfTestRun != run || run.ledger != s || run.active || run.cleanupStarted || run.ctx.Err() != nil || s.stageClosed || s.frozen || s.stagePending || s.processDraining || s.recoveryReserved || s.retirementErr != nil || s.stageOwner == nil || run.scratchCustody == nil || !run.scratchIdentity.Valid() || record == nil || !record.stageScratch || !record.scratchCreated || record.selfTestRun != run || record.pending || !record.settled || record.scratch == nil || record.workspace != run.workspace || record.generation != generation {
 		s.mu.Unlock()
 		return nil, computerUnavailable()
 	}
@@ -104,7 +129,7 @@ func (s *SettingsMutationIngress) cleanupSelfTestScratchForRun(ctx context.Conte
 	}
 	run.cleanupStarted, run.active = true, true
 	run.callDone = make(chan struct{})
-	done, owner := run.callDone, s.stageOwner
+	done, owner, custody, identity := run.callDone, s.stageOwner, run.scratchCustody, run.scratchIdentity
 	s.mu.Unlock()
 	bounded, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(run.ctx, cancel)
@@ -125,6 +150,9 @@ func (s *SettingsMutationIngress) cleanupSelfTestScratchForRun(ctx context.Conte
 		}
 		s.mu.Unlock()
 	}()
+	if err := custody.Check(identity); err != nil {
+		return nil, err
+	}
 	if err = s.computer.refreshCurrentApproval(bounded); err != nil {
 		return nil, err
 	}
@@ -140,6 +168,20 @@ func (s *SettingsMutationIngress) cleanupSelfTestScratchForRun(ctx context.Conte
 	if err != nil {
 		return nil, err
 	}
-	out, err = service.CleanupScratch(bounded, run.workspace, &runScratchCleanup{owner: owner, native: native})
+	worker := &runScratchCleanup{owner: owner, native: native, custody: custody}
+	out, err = service.CleanupScratch(bounded, run.workspace, worker)
+	if worker.closeAttempted {
+		// Close belongs to the original attempt even when its result is
+		// unknown. Never close that same descriptor a second time at shutdown.
+		s.mu.Lock()
+		run.scratchCustody = nil
+		s.mu.Unlock()
+	}
+	if err == nil && out != nil && out.Phase == string(state.Completed) && out.Publication == "durable" {
+		if !worker.closed {
+			out = nil
+			return nil, computerUnavailable()
+		}
+	}
 	return out, err
 }

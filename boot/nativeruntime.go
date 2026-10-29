@@ -304,6 +304,7 @@ func (r *NativeRuntime) closeResources() error {
 	}
 	if r.mutations != nil {
 		r.mutations.waitSelfTestStage()
+		failures = append(failures, r.mutations.closeSelfTestCustody())
 	}
 	failures = append(failures, r.closeCodexRead())
 	if r.ingress != nil {

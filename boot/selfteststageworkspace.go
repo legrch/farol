@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/legrch/farol/modules/computer/app/port"
+	"github.com/legrch/farol/modules/computer/domain/authority"
 	"github.com/legrch/farol/modules/computer/domain/mutation"
 )
 
@@ -19,6 +20,8 @@ type stagedScratchWorkspace struct {
 	ledger    *SettingsMutationIngress
 	operation string
 	native    stagedScratchNative
+	hold      bool
+	custody   port.ScratchDirectoryCustody
 }
 
 var _ port.MutableWorkspace = (*stagedScratchWorkspace)(nil)
@@ -43,13 +46,15 @@ func (w *stagedScratchWorkspace) BeginStage(ctx context.Context, request port.Mu
 	if err != nil {
 		return nil, err
 	}
-	return &stagedScratchAttempt{lease: lease, native: w.native, request: request}, nil
+	request.HoldScratchDirectory = w.hold
+	return &stagedScratchAttempt{lease: lease, native: w.native, request: request, parent: w}, nil
 }
 
 type stagedScratchAttempt struct {
 	lease   *selfTestStageLease
 	native  stagedScratchNative
 	request port.MutationRequest
+	parent  *stagedScratchWorkspace
 }
 
 func (a *stagedScratchAttempt) Execute(ctx context.Context) (*port.MutationReceipt, error) {
@@ -64,6 +69,19 @@ func (a *stagedScratchAttempt) Execute(ctx context.Context) (*port.MutationRecei
 		receipt, err = a.native.CreateStagedScratch(ctx, a.request, fd, port.Root{Path: root.Path, Device: strconv.FormatUint(root.Device, 10), Inode: strconv.FormatUint(root.Inode, 10)})
 		return err
 	})
+	if receipt != nil && receipt.ScratchDirectory != nil {
+		a.parent.custody = receipt.ScratchDirectory
+		receipt.ScratchDirectory = nil
+	}
+	if a.parent.hold && err == nil && (receipt == nil || a.parent.custody == nil || a.parent.custody.Check(receipt.Directory) != nil) {
+		err = authority.Fail("WORKSPACE_MUTATION_OUTCOME_UNKNOWN", "native-workspace")
+	}
+	if err != nil && a.parent.custody != nil {
+		if closeErr := a.parent.custody.Close(); closeErr != nil {
+			err = authority.Fail("WORKSPACE_MUTATION_OUTCOME_UNKNOWN", "native-workspace")
+		}
+		a.parent.custody = nil
+	}
 	return receipt, err
 }
 

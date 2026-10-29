@@ -4,6 +4,7 @@ package boot
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,6 +17,12 @@ import (
 	state "github.com/legrch/farol/modules/computer/domain/mutation"
 	"golang.org/x/sys/unix"
 )
+
+type scratchCustodyCloseFailure struct{ port.ScratchDirectoryCustody }
+
+func (f scratchCustodyCloseFailure) Close() error {
+	return errors.Join(f.ScratchDirectoryCustody.Close(), errors.New("synthetic close failure"))
+}
 
 // Actual native profile, owner approval, journal, staging descriptor and
 // filesystem publication in a disposable fixture. No Shell, UI or provider.
@@ -148,8 +155,12 @@ func TestNativeScratchRunCleansOnceAndReleasesFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	created, err := runtime.mutations.createSelfTestScratchForRun(context.Background(), run, id, ws, publication)
-	if err != nil || created == nil || created.Phase != "completed" || created.Publication != "durable" {
+	if err != nil || created == nil || created.Phase != "completed" || created.Publication != "durable" || created.Receipt == nil {
 		t.Fatalf("create %#v %v", created, err)
+	}
+	custody := run.scratchCustody
+	if custody == nil || custody.Check(created.Receipt.Directory) != nil {
+		t.Fatal("original custody missing")
 	}
 	cleaned, err := runtime.mutations.cleanupSelfTestScratchForRun(context.Background(), run, publication)
 	if err != nil || cleaned == nil || cleaned.Phase != "completed" || cleaned.Publication != "durable" {
@@ -161,12 +172,130 @@ func TestNativeScratchRunCleansOnceAndReleasesFence(t *testing.T) {
 	if runtime.mutations.selfTestRun != nil {
 		t.Fatal("completed cleanup retained run fence")
 	}
+	if custody.Check(created.Receipt.Directory) == nil {
+		t.Fatal("completed cleanup leaked original descriptor")
+	}
 	if repeated, err := runtime.mutations.cleanupSelfTestScratchForRun(context.Background(), run, publication); err == nil || repeated != nil {
 		t.Fatal("cleanup repeated")
 	}
 	observed, err := runtime.mutations.observeSelfTestScratch(context.Background(), id, ws, created.ComputerGeneration)
 	if err != nil || observed == nil || observed.Phase != "completed" || observed.Receipt == nil || observed.Receipt.Directory != created.Receipt.Directory {
 		t.Fatalf("creation history changed %#v %v", observed, err)
+	}
+}
+
+func TestNativeScratchShutdownClosesHeldDirectoryWithoutDeleting(t *testing.T) {
+	launch, runtime := retirementStorageFixture(t, true)
+	workspace := filepath.Join(launch.Profile.Root, "workspace")
+	if err := os.Mkdir(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	publication := nativeSettingsPublication(t, runtime, workspace, 1)
+	const id = "00000000-0000-4000-8000-000000000005"
+	const ws = "00000000-0000-4000-8000-000000000004"
+	run, err := runtime.mutations.beginSelfTestRun(context.Background(), id, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := runtime.mutations.createSelfTestScratchForRun(context.Background(), run, id, ws, publication)
+	if err != nil || created == nil || created.Receipt == nil {
+		t.Fatal("create", err)
+	}
+	custody := run.scratchCustody
+	if custody == nil || custody.Check(created.Receipt.Directory) != nil {
+		t.Fatal("missing custody")
+	}
+	runtime.mutations.closeSelfTestStageAdmission()
+	runtime.mutations.waitSelfTestStage()
+	if err := runtime.mutations.closeSelfTestCustody(); err != nil {
+		t.Fatal(err)
+	}
+	if custody.Check(created.Receipt.Directory) == nil {
+		t.Fatal("shutdown retained descriptor")
+	}
+	if _, err := os.Lstat(filepath.Join(workspace, created.Scratch.Leaf)); err != nil {
+		t.Fatal("shutdown removed fixture", err)
+	}
+	if runtime.mutations.selfTestRun != run {
+		t.Fatal("shutdown erased historical run")
+	}
+}
+
+func TestNativeScratchCleanupRefusesLostCustody(t *testing.T) {
+	launch, runtime := retirementStorageFixture(t, true)
+	workspace := filepath.Join(launch.Profile.Root, "workspace")
+	if err := os.Mkdir(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	publication := nativeSettingsPublication(t, runtime, workspace, 1)
+	const id = "00000000-0000-4000-8000-000000000005"
+	const ws = "00000000-0000-4000-8000-000000000004"
+	run, err := runtime.mutations.beginSelfTestRun(context.Background(), id, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := runtime.mutations.createSelfTestScratchForRun(context.Background(), run, id, ws, publication)
+	if err != nil || created == nil || run.scratchCustody == nil {
+		t.Fatal("create", err)
+	}
+	if err := run.scratchCustody.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runtime.mutations.cleanupSelfTestScratchForRun(context.Background(), run, publication); err == nil || out != nil {
+		t.Fatal("closed custody authorized cleanup", out, err)
+	}
+	if _, err := os.Lstat(filepath.Join(workspace, created.Scratch.Leaf)); err != nil {
+		t.Fatal("lost custody removed fixture", err)
+	}
+	if runtime.mutations.selfTestRun != run {
+		t.Fatal("lost custody released fence")
+	}
+}
+
+func TestNativeScratchCleanupPersistsUnknownWhenCustodyCloseFails(t *testing.T) {
+	launch, runtime := retirementStorageFixture(t, true)
+	workspace := filepath.Join(launch.Profile.Root, "workspace")
+	if err := os.Mkdir(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	publication := nativeSettingsPublication(t, runtime, workspace, 1)
+	const id = "00000000-0000-4000-8000-000000000005"
+	const ws = "00000000-0000-4000-8000-000000000004"
+	run, err := runtime.mutations.beginSelfTestRun(context.Background(), id, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := runtime.mutations.createSelfTestScratchForRun(context.Background(), run, id, ws, publication)
+	if err != nil || created == nil || run.scratchCustody == nil {
+		t.Fatal("create", err)
+	}
+	run.scratchCustody = scratchCustodyCloseFailure{run.scratchCustody}
+	out, err := runtime.mutations.cleanupSelfTestScratchForRun(context.Background(), run, publication)
+	if err != nil || out == nil || out.Phase != "outcome_unknown" || out.Publication != "durable" {
+		t.Fatalf("close failure lost %#v %v", out, err)
+	}
+	identity := state.Identity{Scope: state.ScopeOwnerSettings, OperationID: id, OwnerID: runtime.mutations.computer.ownerID, ProfileID: runtime.mutations.computer.peer.ProfileId, ComputerID: runtime.mutations.computer.computerID}
+	creation, err := runtime.mutations.dependencies.repository.Load(context.Background(), identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := state.NewScratchCleanup(creation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal := runtime.mutations.dependencies.repository.(port.ScratchCleanupRepository)
+	stored, err := journal.LoadScratchCleanup(context.Background(), prepared.Binding())
+	if err != nil || stored == nil || stored.Phase() != state.OutcomeUnknown {
+		t.Fatal("unknown not retained in journal", stored, err)
+	}
+	if runtime.mutations.selfTestRun != run {
+		t.Fatal("unknown cleanup released run")
+	}
+	if repeated, err := runtime.mutations.cleanupSelfTestScratchForRun(context.Background(), run, publication); err == nil || repeated != nil {
+		t.Fatal("unknown cleanup repeated")
+	}
+	if run.scratchCustody != nil {
+		t.Fatal("uncertain close remained eligible for retry")
 	}
 }
 

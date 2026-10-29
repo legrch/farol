@@ -3,6 +3,7 @@ package boot
 import (
 	"context"
 
+	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/mutation"
 )
 
@@ -17,14 +18,16 @@ type selfTestRunLease struct {
 	stop                 func() bool
 	autoStop             func() bool
 	released             chan struct{}
-	active               bool                       // protected by ledger.mu
-	callDone             chan struct{}              // protected by ledger.mu
-	cleanupStarted       bool                       // protected by ledger.mu; never retried
-	fixtureWriteStarted  bool                       // protected by ledger.mu; never retried
-	fixtureEditStarted   bool                       // protected by ledger.mu; never retried
-	fixtureWriteHash     string                     // set only from the durable original receipt
-	fixtureFileIdentity  mutation.DirectoryIdentity // in-memory native publication witness
-	fixtureFileHash      string                     // bound to that exact witness
+	active               bool                         // protected by ledger.mu
+	callDone             chan struct{}                // protected by ledger.mu
+	cleanupStarted       bool                         // protected by ledger.mu; never retried
+	fixtureWriteStarted  bool                         // protected by ledger.mu; never retried
+	fixtureEditStarted   bool                         // protected by ledger.mu; never retried
+	fixtureWriteHash     string                       // set only from the durable original receipt
+	fixtureFileIdentity  mutation.DirectoryIdentity   // in-memory native publication witness
+	fixtureFileHash      string                       // bound to that exact witness
+	scratchCustody       port.ScratchDirectoryCustody // protected by ledger.mu
+	scratchIdentity      mutation.DirectoryIdentity
 }
 
 func (s *SettingsMutationIngress) beginSelfTestRun(ctx context.Context, operation, workspace string) (*selfTestRunLease, error) {

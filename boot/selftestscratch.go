@@ -120,7 +120,7 @@ func (s *SettingsMutationIngress) createSelfTestScratchForRun(ctx context.Contex
 	if clock == nil {
 		clock = accessrepo.Clock{}
 	}
-	stage := &stagedScratchWorkspace{ledger: s, operation: operation, native: native}
+	stage := &stagedScratchWorkspace{ledger: s, operation: operation, native: native, hold: run != nil}
 	service, err := mutationsvc.NewForOwnerExecution(ctx, s.selection(operation, generation), current, s.dependencies.repository, stage, s.dependencies.digester, &sync.Mutex{}, clock)
 	if err != nil {
 		finish(nil, err, true, false)
@@ -128,6 +128,23 @@ func (s *SettingsMutationIngress) createSelfTestScratchForRun(ctx context.Contex
 	}
 	result, err := service.CreateScratch(ctx, workspace)
 	settled := err == nil && result != nil && result.Publication == "durable" && (result.Phase == "completed" || result.Phase == "failed")
+	if run != nil && settled && result.Phase == "completed" {
+		if stage.custody == nil || result.Receipt == nil {
+			settled = false
+			err = computerUnavailable()
+		} else {
+			s.mu.Lock()
+			run.scratchCustody, run.scratchIdentity = stage.custody, result.Receipt.Directory
+			s.mu.Unlock()
+			stage.custody = nil
+		}
+	}
+	if stage.custody != nil {
+		if closeErr := stage.custody.Close(); closeErr != nil {
+			settled = false
+			err = computerUnavailable()
+		}
+	}
 	finish(service, err, settled, settled && result.Phase == "completed")
 	return result, err
 }

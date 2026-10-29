@@ -209,6 +209,25 @@ func (s *SettingsMutationIngress) waitSelfTestStage() {
 	}
 }
 
+// closeSelfTestCustody is called after closing admission and joining the run.
+// It releases only the original descriptor; it never retries a filesystem effect.
+func (s *SettingsMutationIngress) closeSelfTestCustody() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	var custody interface{ Close() error }
+	if s.selfTestRun != nil {
+		custody = s.selfTestRun.scratchCustody
+		s.selfTestRun.scratchCustody = nil
+	}
+	s.mu.Unlock()
+	if custody != nil {
+		return custody.Close()
+	}
+	return nil
+}
+
 // closeSelfTestStageAdmission must precede the owner join. The same lock
 // makes a later begin impossible before waitSelfTestStage observes stageDone.
 func (s *SettingsMutationIngress) closeSelfTestStageAdmission() {
