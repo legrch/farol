@@ -10,7 +10,7 @@ type SelfTestBinding struct {
 }
 
 func (b SelfTestBinding) Valid() bool {
-	return ValidIdentity(b.Identity) && b.Identity.Scope == ScopeOwnerSettings && ScratchLeaf(ScratchPath(b.Identity.OperationID)) && Identifier(b.WorkspaceID, 120) && b.ComputerGeneration <= MaxSafeInteger && (b.Version == 1 || b.Version == 2)
+	return ValidIdentity(b.Identity) && b.Identity.Scope == ScopeOwnerSettings && ScratchLeaf(ScratchPath(b.Identity.OperationID)) && Identifier(b.WorkspaceID, 120) && b.ComputerGeneration <= MaxSafeInteger && (b.Version == 1 || b.Version == 2 || b.Version == 3)
 }
 
 type SelfTestStep struct {
@@ -56,6 +56,9 @@ func selfTestToken(value string, max int) bool {
 }
 
 func (r SelfTestResult) bound(binding SelfTestBinding) bool {
+	if binding.Version == 3 {
+		return r.boundV3(binding)
+	}
 	if binding.Version == 2 {
 		return r.boundV2(binding)
 	}
@@ -83,6 +86,58 @@ func (r SelfTestResult) bound(binding SelfTestBinding) bool {
 		if i < len(r.Steps)-1 && i < 7 && s.Status != "pass" {
 			return false
 		}
+	}
+	if r.Status == "partial" {
+		return len(r.Steps) == len(names)
+	}
+	if len(r.Steps) == 0 {
+		return r.Status == "unknown"
+	}
+	last := r.Steps[len(r.Steps)-1]
+	return r.Status == "failed" && last.Status == "fail" || r.Status == "unknown" && (last.Status == "unknown" || last.Status == "pass")
+}
+
+// Version 3 checks directory traversal while the scratch fixture is retained.
+// Earlier records keep their original version and ordering.
+func (r SelfTestResult) boundV3(binding SelfTestBinding) bool {
+	id := binding.Identity.OperationID
+	names := []string{"scratch", "write", "edit", "mutation read", "catalogue", "bootstrap", "list", "read", "search", "directory search", "cleanup", "shell", "shell cancel", "git and hooks"}
+	operations := []string{id, id + "-st3-write", id + "-st3-edit", id + "-st3-edit", id + "-st3-catalogue", id + "-st3-bootstrap", id + "-st3-list", id + "-st3-read", id + "-st3-search", id + "-st3-directory-search", id, id + "-st3-quick", id + "-st3-cancel", ""}
+	if len(r.Steps) > len(names) {
+		return false
+	}
+	readFailure := false
+	for i, s := range r.Steps {
+		if s.Name != names[i] || s.Operation != operations[i] {
+			return false
+		}
+		if i != 12 && s.CancelOperation != "" || i == 12 && s.CancelOperation != "" && s.CancelOperation != id+"-st3-cancel-op" {
+			return false
+		}
+		if i != 11 && i != 12 && (s.Handle != "" || s.DescendantCleanup != "") {
+			return false
+		}
+		if i == 13 && (s.Status != "not_tested" || s.Code != "") {
+			return false
+		}
+		if i < len(r.Steps)-1 && i < 13 {
+			if !readFailure && i >= 4 && i <= 9 && s.Status == "fail" {
+				readFailure = true
+			} else if readFailure && i >= 4 && i <= 9 {
+				if s.Status != "not_tested" || s.Code != "" {
+					return false
+				}
+			} else if s.Status != "pass" {
+				return false
+			}
+		}
+	}
+	if readFailure {
+		if len(r.Steps) != 11 {
+			return false
+		}
+		cleanup := r.Steps[10].Status
+		return r.Status == "failed" && (cleanup == "pass" || cleanup == "fail") || r.Status == "unknown" && cleanup == "unknown"
 	}
 	if r.Status == "partial" {
 		return len(r.Steps) == len(names)

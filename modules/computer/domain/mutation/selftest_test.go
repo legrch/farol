@@ -125,3 +125,56 @@ func TestSelfTestPlanVersionsKeepDistinctHistory(t *testing.T) {
 		t.Fatal("different plan identity accepted")
 	}
 }
+
+func TestSelfTestVersionThreeBindsDirectoryCheckAndPreservesUnknown(t *testing.T) {
+	b := SelfTestBinding{Identity: Identity{Scope: ScopeOwnerSettings, OperationID: "00000000-0000-4000-8000-000000000001", OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 3}
+	id := b.Identity.OperationID
+	steps := []SelfTestStep{
+		{Name: "scratch", Status: "pass", Operation: id},
+		{Name: "write", Status: "pass", Operation: id + "-st3-write"},
+		{Name: "edit", Status: "pass", Operation: id + "-st3-edit"},
+		{Name: "mutation read", Status: "pass", Operation: id + "-st3-edit"},
+		{Name: "catalogue", Status: "pass", Operation: id + "-st3-catalogue"},
+		{Name: "bootstrap", Status: "pass", Operation: id + "-st3-bootstrap"},
+		{Name: "list", Status: "pass", Operation: id + "-st3-list"},
+		{Name: "read", Status: "pass", Operation: id + "-st3-read"},
+		{Name: "search", Status: "pass", Operation: id + "-st3-search"},
+		{Name: "directory search", Status: "pass", Operation: id + "-st3-directory-search"},
+		{Name: "cleanup", Status: "pass", Operation: id},
+		{Name: "shell", Status: "pass", Operation: id + "-st3-quick"},
+		{Name: "shell cancel", Status: "pass", Operation: id + "-st3-cancel", CancelOperation: id + "-st3-cancel-op"},
+		{Name: "git and hooks", Status: "not_tested"},
+	}
+	if _, err := RestoreSelfTest(b, Completed, &SelfTestResult{Status: "partial", Steps: steps}); err != nil {
+		t.Fatal("valid v3 result rejected", err)
+	}
+	old := b
+	old.Version = 2
+	if _, err := RestoreSelfTest(old, Completed, &SelfTestResult{Status: "partial", Steps: steps}); err == nil {
+		t.Fatal("v3 history interpreted as v2")
+	}
+	interrupted := append([]SelfTestStep(nil), steps[:10]...)
+	interrupted[9].Status = "unknown"
+	original, err := RestoreSelfTest(b, OutcomeUnknown, &SelfTestResult{Status: "unknown", Steps: interrupted})
+	if err != nil || original.Result().Steps[9].Status != "unknown" {
+		t.Fatal("interrupted directory search not retained", err)
+	}
+	interrupted[9].Operation = id + "-st2-search"
+	if _, err := RestoreSelfTest(b, OutcomeUnknown, &SelfTestResult{Status: "unknown", Steps: interrupted}); err == nil {
+		t.Fatal("foreign operation identity accepted")
+	}
+	for failure := 4; failure <= 9; failure++ {
+		failureSteps := append([]SelfTestStep(nil), steps[:11]...)
+		failureSteps[failure].Status = "fail"
+		for i := failure + 1; i < 10; i++ {
+			failureSteps[i].Status = "not_tested"
+		}
+		if _, err := RestoreSelfTest(b, Failed, &SelfTestResult{Status: "failed", Steps: failureSteps}); err != nil {
+			t.Fatal("failure and cleanup not retained", failure, err)
+		}
+		failureSteps[10].Status = "unknown"
+		if _, err := RestoreSelfTest(b, OutcomeUnknown, &SelfTestResult{Status: "unknown", Steps: failureSteps}); err != nil {
+			t.Fatal("unknown cleanup not retained", failure, err)
+		}
+	}
+}

@@ -26,7 +26,9 @@ func (s *computerConnector) listConnectorSelfTestMarkers(ctx context.Context, sl
 	}
 	check := func(b state.SelfTestBinding) error {
 		suffix := "-st1-write"
-		if b.Version == 2 {
+		if b.Version == 3 {
+			suffix = "-st3-write"
+		} else if b.Version == 2 {
 			suffix = "-st2-write"
 		}
 		child := state.Identity{Scope: state.ScopeConnector, OperationID: b.Identity.OperationID + suffix, OwnerID: b.Identity.OwnerID, ProfileID: b.Identity.ProfileID, ComputerID: b.Identity.ComputerID}
@@ -113,7 +115,9 @@ func (s *computerConnector) listConnectorSelfTests(ctx context.Context, slot *co
 			continue
 		}
 		suffix := "-st1-write"
-		if binding.Version == 2 {
+		if binding.Version == 3 {
+			suffix = "-st3-write"
+		} else if binding.Version == 2 {
 			suffix = "-st2-write"
 		}
 		child := state.Identity{Scope: state.ScopeConnector, OperationID: binding.Identity.OperationID + suffix, OwnerID: binding.Identity.OwnerID, ProfileID: binding.Identity.ProfileID, ComputerID: binding.Identity.ComputerID}
@@ -152,7 +156,9 @@ func (s *computerConnector) observeConnectorSelfTest(ctx context.Context, slot *
 		return unknown, err
 	}
 	suffix := "-st1-write"
-	if binding.Version == 2 {
+	if binding.Version == 3 {
+		suffix = "-st3-write"
+	} else if binding.Version == 2 {
 		suffix = "-st2-write"
 	}
 	child := state.Identity{Scope: state.ScopeConnector, OperationID: binding.Identity.OperationID + suffix, OwnerID: binding.Identity.OwnerID, ProfileID: binding.Identity.ProfileID, ComputerID: binding.Identity.ComputerID}

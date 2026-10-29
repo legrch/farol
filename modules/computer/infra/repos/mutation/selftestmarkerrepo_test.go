@@ -37,6 +37,31 @@ func TestSelfTestVersionTwoAdmissionRequiresMatchingSelectedMarker(t *testing.T)
 	}
 }
 
+func TestSelfTestVersionThreeAdmissionStillRequiresSelectedMarker(t *testing.T) {
+	_, original, _ := fixture()
+	disk := &historyMemory{memory: original}
+	r := newRepository(disk)
+	b := domain.SelfTestBinding{Identity: domain.Identity{Scope: domain.ScopeOwnerSettings, OperationID: scratchTestRun, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 3}
+	parent, err := domain.RestoreSelfTest(b, domain.Prepared, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.AdmitSelfTest(context.Background(), parent); err == nil || disk.creates != 0 {
+		t.Fatal("v3 admitted without original marker", err)
+	}
+	marker, err := domain.RestoreSelfTestMarker(b, domain.SelfTestMarkerSelected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.AdmitSelfTestMarker(context.Background(), marker); err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.AdmitSelfTest(context.Background(), parent)
+	if err != nil || out.Status != port.MutationAdmitted {
+		t.Fatal("selected v3 original refused", out, err)
+	}
+}
+
 func TestSelfTestParentAdmissionRejectsAnotherUnknownOriginal(t *testing.T) {
 	_, original, _ := fixture()
 	disk := &historyMemory{memory: original}
