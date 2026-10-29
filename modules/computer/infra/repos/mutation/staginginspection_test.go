@@ -5,7 +5,39 @@ import (
 	"testing"
 
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
+	domain "github.com/legrch/farol/modules/computer/domain/mutation"
 )
+
+func TestKnownSelfTestTerminalDoesNotHideUnknownScratchCleanup(t *testing.T) {
+	_, disk, creation, cleanup := cleanupFixture(t)
+	unknown, err := domain.RestoreScratchCleanup(cleanup.Binding(), domain.OutcomeUnknown, &domain.Failure{Code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", Source: "operation-store"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupRaw, err := encodeScratchCleanup(unknown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupKey, _ := scratchCleanupKey(creation.Binding().Identity)
+	disk.files[cleanupKey] = cleanupRaw
+	b := domain.SelfTestBinding{Identity: creation.Binding().Identity, WorkspaceID: creation.Binding().WorkspaceID, ComputerGeneration: creation.Binding().ComputerGeneration, Version: 2}
+	marker, _ := domain.RestoreSelfTestMarker(b, domain.SelfTestMarkerSelected)
+	markerRaw, _ := encodeSelfTestMarker(marker)
+	markerKey, _ := selfTestMarkerKey(b)
+	disk.files[markerKey] = markerRaw
+	parent, _ := domain.RestoreSelfTest(b, domain.Failed, &domain.SelfTestResult{Status: "failed", Steps: []domain.SelfTestStep{{Name: "scratch", Status: "fail", Operation: b.Identity.OperationID}}})
+	parentRaw, _ := encodeSelfTest(parent)
+	parentKey, _ := selfTestKey(b.Identity)
+	disk.files[parentKey] = parentRaw
+	entries := make([]settledBytes, 0, len(disk.files))
+	for key, raw := range disk.files {
+		entries = append(entries, settledBytes{key: key, raw: bytes.Clone(raw)})
+	}
+	allowed, err := qualifyStagingHistory(entries, SettledSelection{OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"})
+	if err != nil || allowed {
+		t.Fatal("unknown cleanup admitted", allowed, err)
+	}
+}
 
 func TestStagingHistoryRequiresCompleteOldWritableCleanup(t *testing.T) {
 	selection := SettledSelection{OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}

@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { BridgeError, type Client } from "./client.ts";
-import type { SelfTestSelection } from "./self-test.ts";
+import {
+  SelfTestBridge,
+  type PriorSelfTest,
+  type SelfTestSelection,
+} from "./self-test.ts";
+import type { SelfTestMarker } from "./self-test-owner.ts";
+import { readSelfTestHistory } from "./self-test-history.ts";
 import {
   validate,
   type ComputerAuthorityPublication,
@@ -13,6 +19,115 @@ export type SelfTestMarkerEntry = Readonly<{
   selection: SelfTestSelection;
   phase: "selected" | "settling" | "settled";
 }>;
+
+// Marker phases are never rewritten to settle a test. A known terminal is
+// derived from read-only qualified history; old settling stays unresolved.
+export class CoreSelfTestMarker implements SelfTestMarker {
+  private readonly context: Readonly<Context>;
+  constructor(
+    private readonly client: Pick<Client, "request">,
+    context: Context,
+    private readonly workspaceId: string,
+  ) {
+    this.context = Object.freeze({ ...context });
+  }
+
+  async load(workspaceId: string): Promise<"none" | PriorSelfTest> {
+    if (workspaceId !== this.workspaceId)
+      throw new BridgeError("refused", "invalid_self_test_marker");
+    const markers = await readSelfTestMarkers(
+      this.client,
+      this.context,
+      workspaceId,
+    );
+    const parents = await readSelfTestHistory(
+      this.client,
+      this.context,
+      workspaceId,
+    );
+    const pending: SelfTestMarkerEntry[] = [];
+    for (const entry of markers) {
+      const original = parents.find(
+        (parent) =>
+          sameSelection(parent.selection, entry.selection) &&
+          (parent.phase === "completed" || parent.phase === "failed"),
+      );
+      if (entry.phase === "settling" || !original) {
+        pending.push(entry);
+        continue;
+      }
+      if (!(await this.observeTerminal(entry.selection, original.phase)))
+        throw new BridgeError("unavailable", "self_test_report_unavailable");
+    }
+    if (pending.length > 1)
+      throw new BridgeError("refused", "multiple_self_tests_unresolved");
+    return pending[0]
+      ? {
+          selection: pending[0].selection,
+          settlementAttempted: pending[0].phase === "settling",
+        }
+      : "none";
+  }
+
+  async begin(
+    selection: SelfTestSelection,
+    publication: ComputerAuthorityPublication,
+  ): Promise<"durable" | "unknown"> {
+    if (selection.workspaceId !== this.workspaceId) return "unknown";
+    return beginSelfTestMarker(
+      this.client,
+      this.context,
+      selection,
+      publication,
+    );
+  }
+
+  async finish(selection: SelfTestSelection): Promise<"durable" | "unknown"> {
+    if (selection.workspaceId !== this.workspaceId) return "unknown";
+    try {
+      const markers = await readSelfTestMarkers(
+        this.client,
+        this.context,
+        this.workspaceId,
+      );
+      const marker = markers.find((entry) =>
+        sameSelection(entry.selection, selection),
+      );
+      if (!marker || marker.phase === "settling") return "unknown";
+      const parents = await readSelfTestHistory(
+        this.client,
+        this.context,
+        this.workspaceId,
+      );
+      const original = parents.find(
+        (parent) =>
+          sameSelection(parent.selection, selection) &&
+          (parent.phase === "completed" || parent.phase === "failed"),
+      );
+      if (!original) return "unknown";
+      return (await this.observeTerminal(selection, original.phase))
+        ? "durable"
+        : "unknown";
+    } catch {
+      return "unknown";
+    }
+  }
+
+  private async observeTerminal(
+    selection: SelfTestSelection,
+    phase: string,
+  ): Promise<boolean> {
+    const observer = new SelfTestBridge(this.client, this.context, "none", {
+      reserve: async () => "unknown",
+      settle: async () => "unknown",
+    });
+    const report = await observer.observe(selection);
+    return (
+      report.state === "observed" &&
+      report.report?.status === (phase === "completed" ? "partial" : "fail")
+    );
+  }
+}
 
 function sameSelection(a: SelfTestSelection, b: SelfTestSelection): boolean {
   return (

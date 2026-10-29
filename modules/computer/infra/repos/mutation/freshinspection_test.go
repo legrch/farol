@@ -61,6 +61,33 @@ func TestFreshHistoryRejectsSelectedMarkerBoundToDifferentParent(t *testing.T) {
 	}
 }
 
+func TestStagingHistoryAcceptsSelectedMarkerOnlyWithExactKnownTerminal(t *testing.T) {
+	selection := SettledSelection{OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}
+	b := domain.SelfTestBinding{Identity: domain.Identity{Scope: domain.ScopeOwnerSettings, OperationID: scratchTestRun, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 2}
+	marker, _ := domain.RestoreSelfTestMarker(b, domain.SelfTestMarkerSelected)
+	markerRaw, _ := encodeSelfTestMarker(marker)
+	markerKey, _ := selfTestMarkerKey(b)
+	for _, phase := range []domain.Phase{domain.Prepared, domain.OutcomeUnknown, domain.Failed} {
+		var result *domain.SelfTestResult
+		if phase == domain.OutcomeUnknown {
+			result = &domain.SelfTestResult{Status: "unknown"}
+		}
+		if phase == domain.Failed {
+			result = &domain.SelfTestResult{Status: "failed", Steps: []domain.SelfTestStep{{Name: "scratch", Status: "fail", Operation: scratchTestRun}}}
+		}
+		parent, err := domain.RestoreSelfTest(b, phase, result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parentRaw, _ := encodeSelfTest(parent)
+		parentKey, _ := selfTestKey(b.Identity)
+		allowed, err := qualifyStagingHistory([]settledBytes{{key: markerKey, raw: markerRaw}, {key: parentKey, raw: parentRaw}}, selection)
+		if err != nil || allowed != (phase == domain.Failed) {
+			t.Fatal("incorrect marker qualification", phase, allowed, err)
+		}
+	}
+}
+
 func TestFreshProcessHistorySeparatesReservationExitAndCleanup(t *testing.T) {
 	selection := SettledSelection{OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}
 	for _, kind := range []string{"read-reservation", "write-reservation", "clean-terminal", "group-only-terminal", "unconfirmed-terminal", "read-unconfirmed-terminal"} {

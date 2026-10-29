@@ -27,7 +27,7 @@ export interface SelfTestSelectionStore {
     selection: SelfTestSelection,
     publication: ComputerAuthorityPublication,
   ): Promise<"durable" | "unknown">;
-  // Owns one-shot settlement and must retain attempted/unknown across restart.
+  // Observes the original terminal without retrying any effect.
   settle(selection: SelfTestSelection): Promise<"durable" | "unknown">;
 }
 export type PriorSelfTest = Readonly<{

@@ -80,7 +80,7 @@ func (r *Repository) AdmitSelfTest(ctx context.Context, state *domain.SelfTestSt
 			return out, failure("COMPUTER_SELFTEST_HISTORY_FULL")
 		}
 		for _, other := range markers {
-			if other.Binding.WorkspaceID == binding.WorkspaceID && other.Binding != binding && other.Phase != domain.SelfTestMarkerSettled {
+			if other.Binding.WorkspaceID == binding.WorkspaceID && other.Binding != binding && !selfTestMarkerHasKnownTerminal(other, history) {
 				return out, failure("COMPUTER_SELFTEST_UNRESOLVED")
 			}
 		}

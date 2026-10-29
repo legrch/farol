@@ -67,7 +67,7 @@ func (r *Repository) AdmitSelfTestMarker(ctx context.Context, marker *domain.Sel
 		return out, failure("COMPUTER_SELFTEST_HISTORY_FULL")
 	}
 	for _, prior := range markers {
-		if prior.Binding.WorkspaceID == binding.WorkspaceID && prior.Phase != domain.SelfTestMarkerSettled {
+		if prior.Binding.WorkspaceID == binding.WorkspaceID && !selfTestMarkerHasKnownTerminal(prior, entries) {
 			return out, failure("COMPUTER_SELFTEST_UNRESOLVED")
 		}
 	}
@@ -117,11 +117,11 @@ func (r *Repository) LoadSelfTestMarker(ctx context.Context, binding domain.Self
 	return marker, nil
 }
 
-func (r *Repository) BeginSelfTestMarkerSettlement(ctx context.Context, binding domain.SelfTestBinding) error {
+func (r *Repository) beginSelfTestMarkerSettlement(ctx context.Context, binding domain.SelfTestBinding) error {
 	return r.transitionSelfTestMarker(ctx, binding, false)
 }
 
-func (r *Repository) FinishSelfTestMarker(ctx context.Context, binding domain.SelfTestBinding) error {
+func (r *Repository) finishSelfTestMarker(ctx context.Context, binding domain.SelfTestBinding) error {
 	return r.transitionSelfTestMarker(ctx, binding, true)
 }
 

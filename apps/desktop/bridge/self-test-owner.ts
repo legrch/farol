@@ -23,9 +23,8 @@ function sameSelection(a: SelfTestSelection, b: SelfTestSelection): boolean {
   );
 }
 
-// The host must persist the selection before the core call. A failed begin
-// never dispatches reserve; uncertain settlement must remain attempted across
-// restarts. The implementation owns the single-writer and durability proof.
+// The host persists the selection before the core call. Finish only observes
+// the exact original terminal; it cannot write, resume or repeat an operation.
 export interface SelfTestMarker {
   load(workspaceId: string): Promise<"none" | PriorSelfTest>;
   begin(

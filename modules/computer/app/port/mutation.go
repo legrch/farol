@@ -231,8 +231,6 @@ type SelfTestMarkerAdmission struct {
 type SelfTestMarkerRepository interface {
 	AdmitSelfTestMarker(context.Context, *mutation.SelfTestMarker) (SelfTestMarkerAdmission, error)
 	LoadSelfTestMarker(context.Context, mutation.SelfTestBinding) (*mutation.SelfTestMarker, error)
-	BeginSelfTestMarkerSettlement(context.Context, mutation.SelfTestBinding) error
-	FinishSelfTestMarker(context.Context, mutation.SelfTestBinding) error
 }
 
 type SelfTestMarkerHistoryEntry struct {

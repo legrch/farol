@@ -3,6 +3,7 @@ package mutation
 import (
 	"encoding/json"
 
+	"github.com/legrch/farol/modules/computer/app/port"
 	domain "github.com/legrch/farol/modules/computer/domain/mutation"
 )
 
@@ -16,6 +17,24 @@ func qualifyStagingHistory(entries []settledBytes, selection SettledSelection) (
 	unknown, err := qualifyFreshProcessHistory(entries, selection)
 	if err != nil || unknown {
 		return false, err
+	}
+	parents := make([]port.SelfTestHistoryEntry, 0)
+	for _, entry := range entries {
+		var header struct {
+			Version uint8           `json:"schemaVersion"`
+			Kind    string          `json:"kind"`
+			Record  json.RawMessage `json:"record"`
+		}
+		if decodeStrict(entry.raw, &header) != nil {
+			return false, preservedRefusal()
+		}
+		if header.Version == selfTestVersion && header.Kind == selfTestKind {
+			value, err := decodeSelfTest(entry.raw)
+			if err != nil || value == nil {
+				return false, preservedRefusal()
+			}
+			parents = append(parents, port.SelfTestHistoryEntry{Binding: value.Binding(), Phase: value.Phase()})
+		}
 	}
 	for _, entry := range entries {
 		var header struct {
@@ -32,7 +51,7 @@ func qualifyStagingHistory(entries []settledBytes, selection SettledSelection) (
 			if err != nil || marker == nil {
 				return false, preservedRefusal()
 			}
-			if marker.Phase() != domain.SelfTestMarkerSettled {
+			if !selfTestMarkerHasKnownTerminal(port.SelfTestMarkerHistoryEntry{Binding: marker.Binding(), Phase: marker.Phase()}, parents) {
 				return false, nil
 			}
 		case header.Version == selfTestVersion && header.Kind == selfTestKind:

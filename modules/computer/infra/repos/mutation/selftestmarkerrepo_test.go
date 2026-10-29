@@ -1,6 +1,7 @@
 package mutation
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -71,30 +72,30 @@ func TestSelfTestMarkerRepositoryRequiresOriginalTerminalAndSingleTransitions(t 
 	if err != nil || second.Status != port.MutationExisting || disk.creates != 1 {
 		t.Fatal("marker admitted twice", second, err)
 	}
-	if err := r.BeginSelfTestMarkerSettlement(context.Background(), b); err == nil {
+	if err := r.beginSelfTestMarkerSettlement(context.Background(), b); err == nil {
 		t.Fatal("missing original accepted")
 	}
 	parent, _ := domain.RestoreSelfTest(b, domain.Prepared, nil)
 	if _, err := r.AdmitSelfTest(context.Background(), parent); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.BeginSelfTestMarkerSettlement(context.Background(), b); err == nil {
+	if err := r.beginSelfTestMarkerSettlement(context.Background(), b); err == nil {
 		t.Fatal("prepared original accepted")
 	}
 	failed, _ := domain.RestoreSelfTest(b, domain.Failed, &domain.SelfTestResult{Status: "failed", Steps: []domain.SelfTestStep{{Name: "scratch", Status: "fail", Operation: scratchTestRun}}})
 	if err := r.SaveSelfTest(context.Background(), failed); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.BeginSelfTestMarkerSettlement(context.Background(), b); err != nil {
+	if err := r.beginSelfTestMarkerSettlement(context.Background(), b); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.BeginSelfTestMarkerSettlement(context.Background(), b); err == nil {
+	if err := r.beginSelfTestMarkerSettlement(context.Background(), b); err == nil {
 		t.Fatal("settlement intent repeated")
 	}
-	if err := r.FinishSelfTestMarker(context.Background(), b); err != nil {
+	if err := r.finishSelfTestMarker(context.Background(), b); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.FinishSelfTestMarker(context.Background(), b); err == nil {
+	if err := r.finishSelfTestMarker(context.Background(), b); err == nil {
 		t.Fatal("settlement repeated")
 	}
 	got, err := r.LoadSelfTestMarker(context.Background(), b)
@@ -195,6 +196,37 @@ func TestSelfTestMarkerAdmissionRetainsOlderUnknownWithoutMarker(t *testing.T) {
 	}
 }
 
+func TestKnownOriginalTerminalAllowsSeparateAttemptWithoutRewritingMarker(t *testing.T) {
+	_, original, _ := fixture()
+	disk := &historyMemory{memory: original}
+	r := newRepository(disk)
+	b := domain.SelfTestBinding{Identity: domain.Identity{Scope: domain.ScopeOwnerSettings, OperationID: scratchTestRun, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 2}
+	marker, _ := domain.RestoreSelfTestMarker(b, domain.SelfTestMarkerSelected)
+	if _, err := r.AdmitSelfTestMarker(context.Background(), marker); err != nil {
+		t.Fatal(err)
+	}
+	parent, _ := domain.RestoreSelfTest(b, domain.Prepared, nil)
+	if _, err := r.AdmitSelfTest(context.Background(), parent); err != nil {
+		t.Fatal(err)
+	}
+	failed, _ := domain.RestoreSelfTest(b, domain.Failed, &domain.SelfTestResult{Status: "failed", Steps: []domain.SelfTestStep{{Name: "scratch", Status: "fail", Operation: scratchTestRun}}})
+	if err := r.SaveSelfTest(context.Background(), failed); err != nil {
+		t.Fatal(err)
+	}
+	key, _ := selfTestMarkerKey(b)
+	before := bytes.Clone(disk.files[key])
+	reopened := newRepository(disk)
+	b.Identity.OperationID = "00000000-0000-4000-8000-000000000098"
+	next, _ := domain.RestoreSelfTestMarker(b, domain.SelfTestMarkerSelected)
+	admission, err := reopened.AdmitSelfTestMarker(context.Background(), next)
+	if err != nil || admission.Status != port.MutationAdmitted {
+		t.Fatal("known original blocked separate attempt", admission, err)
+	}
+	if !bytes.Equal(before, disk.files[key]) {
+		t.Fatal("old marker rewritten")
+	}
+}
+
 func TestSelfTestMarkerAdmissionDoesNotOverflowReadableHistory(t *testing.T) {
 	_, original, _ := fixture()
 	disk := &historyMemory{memory: original}
@@ -241,7 +273,7 @@ func TestSelfTestMarkerRepositoryDoesNotRepeatUnconfirmedTransition(t *testing.T
 		t.Fatal(err)
 	}
 	disk.replaceErr, disk.visibleBeforeError = errors.New("lost"), true
-	if err := r.BeginSelfTestMarkerSettlement(context.Background(), b); err == nil || !r.fenced {
+	if err := r.beginSelfTestMarkerSettlement(context.Background(), b); err == nil || !r.fenced {
 		t.Fatal("unknown transition accepted")
 	}
 	disk.replaceErr = nil
@@ -251,7 +283,7 @@ func TestSelfTestMarkerRepositoryDoesNotRepeatUnconfirmedTransition(t *testing.T
 		t.Fatal("intent not retained", got, err)
 	}
 	replaces := disk.replaces
-	if err := reopened.BeginSelfTestMarkerSettlement(context.Background(), b); err == nil || disk.replaces != replaces {
+	if err := reopened.beginSelfTestMarkerSettlement(context.Background(), b); err == nil || disk.replaces != replaces {
 		t.Fatal("intent repeated")
 	}
 }
