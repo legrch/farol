@@ -91,3 +91,54 @@ it("does not start when history cannot be read", async () => {
   await act(async () => root.unmount());
   host.remove();
 });
+
+it("labels untested capabilities as partial rather than a full pass", async () => {
+  const selection = {
+    operationId: "e0b07fee-f300-46c6-a6e0-33a31aa25639",
+    workspaceId: "ws",
+    computerGeneration: "1",
+    planVersion: "2" as const,
+  };
+  const selfTest = vi.fn(async (command: { kind: string }) =>
+    command.kind === "history"
+      ? {
+          ok: true,
+          kind: "history",
+          history: { markers: [], records: [], unresolved: [] },
+        }
+      : {
+          ok: true,
+          kind: "start",
+          observation: {
+            selection,
+            state: "observed",
+            report: {
+              ...selection,
+              status: "partial",
+              steps: [{ name: "git and hooks", status: "not_tested" }],
+            },
+          },
+        },
+  );
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () =>
+    root.render(
+      <SelfTestPanel
+        facade={{ selfTest } as unknown as RendererFacade}
+        workspaces={[{ workspaceId: "ws", label: "Test" }]}
+      />,
+    ),
+  );
+  const select = host.querySelector("select")!;
+  await act(async () => {
+    select.value = "ws";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await act(async () => host.querySelector("button")!.click());
+  expect(host.textContent).toContain("Partial result");
+  expect(host.textContent).toContain("git and hooks · not tested");
+  await act(async () => root.unmount());
+  host.remove();
+});
