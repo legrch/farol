@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	state "github.com/legrch/farol/modules/computer/domain/mutation"
@@ -24,8 +25,22 @@ func TestNativeScratchOwnerPublishesOnceAndObservesAfterReopen(t *testing.T) {
 	const id = "00000000-0000-4000-8000-000000000005"
 	const ws = "00000000-0000-4000-8000-000000000004"
 	runtime.mutations.recoveryReserved = true
-	if result, err := runtime.mutations.createSelfTestScratch(context.Background(), id, ws, publication); err == nil || result != nil || runtime.mutations.operations[id] != nil {
-		t.Fatal("recovery reservation admitted scratch")
+	runtime.mutations.computer.effects.Lock()
+	refused := make(chan bool, 1)
+	go func() {
+		result, err := runtime.mutations.createSelfTestScratch(context.Background(), id, ws, publication)
+		refused <- err != nil && result == nil
+	}()
+	select {
+	case ok := <-refused:
+		runtime.mutations.computer.effects.Unlock()
+		if !ok || runtime.mutations.operations[id] != nil {
+			t.Fatal("recovery reservation admitted scratch")
+		}
+	case <-time.After(time.Second):
+		runtime.mutations.computer.effects.Unlock()
+		<-refused
+		t.Fatal("scratch waited on recovery effects")
 	}
 	runtime.mutations.recoveryReserved = false
 	// A prior unconfirmed attempt must not admit another filesystem effect.
