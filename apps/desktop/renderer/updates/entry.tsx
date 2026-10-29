@@ -287,8 +287,7 @@ export function UpdatesWindow({ api }: { api: UpdatesAPI }) {
           )}
         {update &&
           (update.phase === "recovery" ||
-            (update.phase === "failed" && update.recoveryRequired) ||
-            ("rollbackVersion" in update && update.rollbackVersion)) && (
+            (update.phase === "failed" && update.recoveryRequired)) && (
             <button
               disabled={disabled("recovery")}
               onClick={() => {

@@ -294,3 +294,45 @@ it("explains why the updater is unavailable in an uninstalled Dev", async () => 
   expect(api.intent).not.toHaveBeenCalled();
   await act(async () => root.unmount());
 });
+
+it("offers recovery only for an interrupted update, not a retained predecessor", async () => {
+  const f = await owner({
+    phase: "idle",
+    checkedAt: null,
+    rollbackVersion: "0.3.0",
+  });
+  let emit!: (state: unknown) => void;
+  const api: UpdatesAPI = {
+    state: async () => ({
+      status: "ready",
+      projection: projectUpdates(f.c.getSnapshot()),
+      pending: false,
+    }),
+    onState: (listener) => {
+      emit = listener;
+      return () => {};
+    },
+    intent: vi.fn(),
+    close: vi.fn(),
+  };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => root.render(<UpdatesWindow api={api} />));
+  expect(host.textContent).not.toContain("Review Recovery in Farol");
+  const recovery = await owner({
+    phase: "recovery",
+    version: "0.4.1",
+    blockedBy: null,
+  });
+  await act(async () =>
+    emit({
+      status: "ready",
+      projection: projectUpdates(recovery.c.getSnapshot()),
+      pending: false,
+    }),
+  );
+  expect(host.textContent).toContain("Review Recovery in Farol");
+  expect(api.intent).not.toHaveBeenCalled();
+  await act(async () => root.unmount());
+});

@@ -19,8 +19,6 @@ function description(view: InstalledUpdateView): string {
       return `An interrupted update was found. Quit to finish recovery of ${updateName(view.version)}. No update will be downloaded or applied again. If recovery restores the previous version, it stays closed until completion is verified.${view.blockedBy ? ` ${updateBlockMessage(view.blockedBy)}` : ""}`;
     case "idle":
       if (view.blockedBy) return updateBlockMessage(view.blockedBy);
-      if (view.rollbackVersion)
-        return `The previous accepted version, ${updateName(view.rollbackVersion)}, is available to restore. Farol will quit and the restored version will stay closed until completion is verified. Your settings and folders are kept.`;
       return view.checkedAt === null
         ? "Check for a newer version of Farol when you’re ready."
         : "You’re up to date.";
@@ -49,9 +47,7 @@ function description(view: InstalledUpdateView): string {
       );
       if (view.recoveryRequired)
         return `${reason} Updating is paused until recovery is complete. Review Settings → Diagnostics.`;
-      return view.rollbackVersion
-        ? `${reason} The previous accepted version, ${updateName(view.rollbackVersion)}, is still available to restore. Farol will quit and the restored version will stay closed until completion is verified. Your settings and folders are kept.`
-        : `${reason} You can check for updates again when you’re ready.`;
+      return `${reason} You can check for updates again when you’re ready.`;
     }
   }
 }
@@ -192,11 +188,7 @@ export function createInstalledUpdateView(
       for (const { node, kind } of controls) {
         if (kind === "recover" || kind === "rollback") {
           const available =
-            kind === "recover"
-              ? view.phase === "recovery"
-              : (view.phase === "idle" ||
-                  (view.phase === "failed" && !view.recoveryRequired)) &&
-                !!view.rollbackVersion;
+            kind === "recover" ? view.phase === "recovery" : false;
           node.hidden = !available;
           node.disabled = !available;
           node.title = message;

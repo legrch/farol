@@ -146,7 +146,7 @@ describe("installed update view", () => {
     f.node("check").click();
     expect(f.onCommand).not.toHaveBeenCalled();
   });
-  it("exposes only measured recovery or rollback and never dispatches while rendering", () => {
+  it("offers recovery but never offers a manual rollback", () => {
     const f = fixture();
     f.view.render({
       phase: "recovery",
@@ -166,9 +166,10 @@ describe("installed update view", () => {
     });
     f.node("rollback").click();
     f.node("rollback").click();
-    expect(f.onCommand.mock.calls).toEqual([["recover"], ["rollback"]]);
+    expect(f.node("rollback").hidden).toBe(true);
+    expect(f.onCommand.mock.calls).toEqual([["recover"]]);
   });
-  it("keeps local rollback visible after a known network failure, with no automatic action", () => {
+  it("does not offer a manual rollback after a known network failure", () => {
     const f = fixture();
     const state = InstalledUpdateViewSchema.parse({
       phase: "failed",
@@ -177,16 +178,16 @@ describe("installed update view", () => {
       rollbackVersion: "0.1.0-owner.beta.1",
     });
     f.view.render(state);
-    expect(f.node("rollback").hidden).toBe(false);
-    expect(f.node("rollback").disabled).toBe(false);
-    expect(f.node("summary").textContent).toContain(
+    expect(f.node("rollback").hidden).toBe(true);
+    expect(f.node("rollback").disabled).toBe(true);
+    expect(f.node("summary").textContent).not.toContain(
       "previous accepted version",
     );
     expect(f.node("summary").textContent).toContain("couldn’t");
     expect(f.onCommand).not.toHaveBeenCalled();
     f.node("rollback").click();
     f.node("rollback").click();
-    expect(f.onCommand.mock.calls).toEqual([["rollback"]]);
+    expect(f.onCommand).not.toHaveBeenCalled();
     expect(
       InstalledUpdateViewSchema.safeParse({ ...state, recoveryRequired: true })
         .success,
@@ -198,7 +199,7 @@ describe("installed update view", () => {
     });
     expect(f.node("rollback").hidden).toBe(true);
     f.node("rollback").click();
-    expect(f.onCommand).toHaveBeenCalledTimes(1);
+    expect(f.onCommand).not.toHaveBeenCalled();
   });
 
   it("starts passive and keeps idle checks in Preferences without a rail notice", () => {
