@@ -2,8 +2,6 @@ package mutation
 
 import (
 	"encoding/json"
-
-	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 )
 
 // qualifyStagingHistory is a denial-only observation over the already bounded
@@ -40,7 +38,7 @@ func qualifyStagingHistory(entries []settledBytes, selection SettledSelection) (
 			if err != nil || result == nil {
 				return false, preservedRefusal()
 			}
-			if result.Intent.Seal.Write && (result.Observation.GroupCleanup != processsvc.CleanupConfirmed || result.Observation.DescendantCleanup != processsvc.CleanupConfirmed) {
+			if result.Intent.Seal.Write && (!processTerminalAllCleanupConfirmed(result)) {
 				return false, nil
 			}
 		}

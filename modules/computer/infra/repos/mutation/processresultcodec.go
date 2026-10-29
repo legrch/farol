@@ -237,6 +237,12 @@ func decodeProcessOutput(raw []byte, parent, stream string, d processOutputDiges
 }
 
 // A valid stored exit remains separate from the positive owned-group witness.
+// Only explicit descendant evidence can qualify staging custody; group-only
+// evidence remains sufficient solely for the existing process settlement path.
+func processTerminalAllCleanupConfirmed(result *processsvc.TerminalResult) bool {
+	return result != nil && result.Observation.GroupCleanup == processsvc.CleanupConfirmed && result.Observation.DescendantCleanup == processsvc.CleanupConfirmed
+}
+
 func processTerminalGroupConfirmed(result *processsvc.TerminalResult) bool {
 	return result != nil && result.Observation.GroupCleanup == processsvc.CleanupConfirmed
 }

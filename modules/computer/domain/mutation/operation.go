@@ -17,8 +17,9 @@ const MaxSafeInteger uint64 = 9007199254740991
 type Kind string
 
 const (
-	WriteKind Kind = "write"
-	EditKind  Kind = "edit"
+	WriteKind   Kind = "write"
+	EditKind    Kind = "edit"
+	ScratchKind Kind = "self-test-scratch"
 )
 
 type Operation interface {
@@ -111,6 +112,8 @@ func inputText(v string) bool {
 func ValidateInput(op Operation) error {
 	valid := false
 	switch v := op.(type) {
+	case Scratch:
+		valid = v.Binding.Valid()
 	case Write:
 		valid = RelativePath(v.RelativePath) && inputText(v.Content) && (v.ExpectedSHA256 == nil || SHA256(*v.ExpectedSHA256))
 	case Edit:

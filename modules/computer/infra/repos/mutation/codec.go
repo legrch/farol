@@ -193,6 +193,11 @@ func encode(state *domain.State) ([]byte, error) {
 		return nil, failure("WORKSPACE_MUTATION_STATE_INVALID")
 	}
 	b := state.Binding()
+	// Legacy envelopes cannot encode scratch binding or directory evidence.
+	// Refuse rather than silently dropping facts before its dedicated codec exists.
+	if b.Scratch != (domain.ScratchBinding{}) {
+		return nil, failure("WORKSPACE_MUTATION_STATE_INVALID")
+	}
 	if _, err := domain.Restore(b, state.Phase(), state.Receipt(), state.Failure()); err != nil {
 		return nil, failure("WORKSPACE_MUTATION_STATE_INVALID")
 	}

@@ -34,6 +34,7 @@ type Binding struct {
 	ComputerGeneration         uint64
 	RelativePath               string
 	Connector                  ConnectorOrigin
+	Scratch                    ScratchBinding
 }
 type Receipt struct {
 	Operation    Kind
@@ -42,11 +43,15 @@ type Receipt struct {
 	Replacements uint32
 	BeforeSHA256 *string
 	AfterSHA256  string
+	Directory    DirectoryIdentity
 }
 
 func (r Receipt) Clone() Receipt { r.BeforeSHA256 = cloneHash(r.BeforeSHA256); return r }
 
-type Failure struct{ Code, Source string }
+type Failure struct {
+	Code, Source string
+	Directory    DirectoryIdentity
+}
 type Phase string
 
 const (
@@ -104,11 +109,11 @@ func validBinding(b Binding) bool {
 	}
 	switch b.Identity.Scope {
 	case "":
-		return b.ComputerGeneration == 0 && b.RelativePath == "" && b.Connector == (ConnectorOrigin{})
+		return b.Scratch == (ScratchBinding{}) && b.ComputerGeneration == 0 && b.RelativePath == "" && b.Connector == (ConnectorOrigin{})
 	case ScopeOwnerSettings:
-		return RelativePath(b.RelativePath) && b.Connector == (ConnectorOrigin{})
+		return RelativePath(b.RelativePath) && b.Connector == (ConnectorOrigin{}) && (b.Scratch == (ScratchBinding{}) || b.Scratch.Valid() && b.Scratch.RunID == b.Identity.OperationID && b.Scratch.Leaf == b.RelativePath)
 	case ScopeConnector:
-		return RelativePath(b.RelativePath) && b.Connector.Valid()
+		return b.Scratch == (ScratchBinding{}) && RelativePath(b.RelativePath) && b.Connector.Valid()
 	default:
 		return false
 	}
@@ -117,13 +122,19 @@ func validBinding(b Binding) bool {
 // Stored receipt policy matches the existing private journal schema. Native
 // receipt correlation/operation constraints are checked separately.
 func ValidStoredReceipt(r Receipt) bool {
+	if r.Operation == ScratchKind {
+		return ScratchLeaf(r.RelativePath) && r.Bytes == 0 && r.Replacements == 0 && r.BeforeSHA256 == nil && r.AfterSHA256 == "" && r.Directory.Valid()
+	}
+	if r.Directory != (DirectoryIdentity{}) {
+		return false
+	}
 	return (r.Operation == WriteKind || r.Operation == EditKind) && Identifier(r.RelativePath, 4096) && r.Bytes <= MaxBytes && r.Replacements <= MaxEdits && (r.BeforeSHA256 == nil || SHA256(*r.BeforeSHA256)) && SHA256(r.AfterSHA256)
 }
 func ValidNativeReceipt(r Receipt, op Operation) bool {
 	if ValidateNative(op) != nil || !ValidStoredReceipt(r) || r.RelativePath != op.Path() || r.Operation != op.Kind() {
 		return false
 	}
-	return r.Operation == WriteKind && r.Replacements == 0 || r.Operation == EditKind && r.Replacements >= 1
+	return r.Operation == ScratchKind || r.Operation == WriteKind && r.Replacements == 0 || r.Operation == EditKind && r.Replacements >= 1
 }
 func NewPrepared(b Binding) (*State, error) { return Restore(b, Prepared, nil, nil) }
 
@@ -141,6 +152,12 @@ func Restore(b Binding, phase Phase, receipt *Receipt, failure *Failure) (*State
 		valid = valid && receipt == nil && failure != nil && validFailure(*failure, true)
 	default:
 		valid = false
+	}
+	if receipt != nil {
+		valid = valid && (receipt.Operation == ScratchKind) == (b.Scratch != (ScratchBinding{}))
+	}
+	if failure != nil && failure.Directory != (DirectoryIdentity{}) {
+		valid = valid && b.Scratch != (ScratchBinding{}) && phase == OutcomeUnknown && failure.Directory.Valid()
 	}
 	if !valid {
 		return nil, stateError("WORKSPACE_MUTATION_STATE_INVALID")
