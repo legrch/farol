@@ -56,8 +56,11 @@ func selfTestFailure(name, operation string, err error) selfTestStep {
 
 func (p *connectorSelfTestPlan) create(ctx context.Context) selfTestStep {
 	step := selfTestStep{Name: "scratch", Status: "unknown", Operation: p.ids.run}
-	if p.connector == nil || p.connector.mutations == nil || !p.ids.valid() {
+	if p.connector == nil || p.connector.mutations == nil || p.slot == nil || p.slot.guard == nil || p.slot.guard.publication != p.publication || !p.ids.valid() || !state.Identifier(p.workspace, 120) {
 		return step
+	}
+	if err := p.connector.checkMutationSlot(ctx, p.slot, p.slot.opened.Execution); err != nil {
+		return selfTestFailure(step.Name, step.Operation, err)
 	}
 	run, err := p.connector.mutations.beginSelfTestRun(ctx, p.ids.run, p.workspace)
 	if err != nil {

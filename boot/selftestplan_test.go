@@ -49,7 +49,7 @@ func TestSelfTestPlanRunsCleanupBeforeShellAndStopsUnknown(t *testing.T) {
 		p := &plannedSelfTest{failAt: name, status: "unknown"}
 		out := runSelfTestPlan(context.Background(), p)
 		if name == "" {
-			if out.Status != "pass" || len(p.calls) != 7 || p.calls[4] != "cleanup" || p.calls[5] != "shell" {
+			if out.Status != "partial" || len(out.Steps) != 9 || len(p.calls) != 7 || p.calls[4] != "cleanup" || p.calls[5] != "shell" {
 				t.Fatal("wrong success order", out, p.calls)
 			}
 			continue
@@ -89,6 +89,15 @@ func TestSelfTestPlanIDsAreBoundAndDistinct(t *testing.T) {
 	}
 }
 
+func TestSelfTestPlanRefusesMissingConnectorBeforeScratch(t *testing.T) {
+	connector, _, journal, _ := selfTestFileFixture(t)
+	plan := &connectorSelfTestPlan{connector: connector, workspace: "work", ids: selfTestIDs{run: "00000000-0000-4000-8000-000000000002", write: "write", writeCall: "write-call", edit: "edit", editCall: "edit-call", quick: "quick", quickCall: "quick-call", quickCancel: "quick-cancel", cancel: "cancel", cancelCall: "cancel-call", cancelOperation: "cancel-op"}}
+	out := plan.create(context.Background())
+	if out.Status != "unknown" || plan.run != nil || journal.admits != 0 {
+		t.Fatal("missing slot admitted scratch", out)
+	}
+}
+
 func TestSelfTestExecutionNeverRepeatsOriginalAttempt(t *testing.T) {
 	owner := &blockingSelfTest{plannedSelfTest: &plannedSelfTest{}, entered: make(chan struct{}), release: make(chan struct{})}
 	execution := &selfTestExecution{owner: owner}
@@ -100,12 +109,12 @@ func TestSelfTestExecutionNeverRepeatsOriginalAttempt(t *testing.T) {
 	}
 	close(owner.release)
 	first := <-done
-	if first.Status != "pass" || len(owner.calls) != 7 {
+	if first.Status != "partial" || len(owner.calls) != 7 {
 		t.Fatal("original incomplete", first)
 	}
 	first.Steps[0].Status = "tampered"
 	again := execution.execute(context.Background())
-	if again.Status != "pass" || again.Steps[0].Status != "pass" || len(owner.calls) != 7 {
+	if again.Status != "partial" || again.Steps[0].Status != "pass" || len(owner.calls) != 7 {
 		t.Fatal("replayed or aliased", again)
 	}
 }

@@ -90,6 +90,12 @@ func runSelfTestPlan(ctx context.Context, owner selfTestPlanOwner) selfTestRepor
 			return report
 		}
 	}
-	report.Status = "pass"
+	// This plan does not yet exercise the workspace read/search catalogue or
+	// Git/hook capabilities. A green subset is not a full diagnostic pass.
+	report.Steps = append(report.Steps,
+		selfTestStep{Name: "workspace reads", Status: "not_tested"},
+		selfTestStep{Name: "git and hooks", Status: "not_tested"},
+	)
+	report.Status = "partial"
 	return report
 }
