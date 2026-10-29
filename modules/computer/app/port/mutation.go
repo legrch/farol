@@ -121,3 +121,24 @@ type ScratchCleanupRequest struct {
 	BeforePublish   func(context.Context) error
 	WithPublication func(context.Context, func() error) error
 }
+
+// ScratchCleanupAdmission is permission to execute only when Status is
+// MutationAdmitted. An existing record, including Prepared, is observation.
+type ScratchCleanupAdmission struct {
+	Status MutationAdmissionStatus
+	Record *mutation.ScratchCleanupState
+}
+
+// ScratchCleanupRepository binds a cleanup attempt to its durable creation.
+// Neither admission nor a stored record supplies current authority or process
+// exclusion. A failed admission or terminal save must never be retried.
+type ScratchCleanupRepository interface {
+	AdmitScratchCleanup(context.Context, *mutation.ScratchCleanupState) (ScratchCleanupAdmission, error)
+	LoadScratchCleanup(context.Context, mutation.ScratchCleanupBinding) (*mutation.ScratchCleanupState, error)
+	SaveScratchCleanup(context.Context, *mutation.ScratchCleanupState) error
+}
+
+// ScratchCleanupWorkspace performs one already admitted, guarded attempt.
+type ScratchCleanupWorkspace interface {
+	RemoveEmptyScratch(context.Context, ScratchCleanupRequest) error
+}

@@ -9,10 +9,9 @@ import (
 	domain "github.com/legrch/farol/modules/computer/domain/mutation"
 )
 
-type ScratchCleanupAdmission struct {
-	Status port.MutationAdmissionStatus
-	Record *domain.ScratchCleanupState
-}
+type ScratchCleanupAdmission = port.ScratchCleanupAdmission
+
+var _ port.ScratchCleanupRepository = (*Repository)(nil)
 
 // cleanupParent is called under the same exclusive writer lock as cleanup IO.
 // Neither the supplied binding nor the presence of a name proves ownership.
