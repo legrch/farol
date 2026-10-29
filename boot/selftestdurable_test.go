@@ -48,6 +48,11 @@ type durablePlanFake struct {
 	calls int
 }
 
+func (p *durablePlanFake) workspaceIDs() selfTestIDs { return p.ids }
+func (p *durablePlanFake) workspaceCheck(_ context.Context, name, operation string) selfTestStep {
+	return p.step(name, operation)
+}
+
 func (p *durablePlanFake) step(name, id string) selfTestStep {
 	p.calls++
 	return selfTestStep{Name: name, Status: "pass", Operation: id}

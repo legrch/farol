@@ -5881,7 +5881,7 @@
     "ComputerSelfTestStep": {
       "type": "object",
       "fields": {
-        "name": { "type": "text", "values": ["scratch", "write", "edit", "mutation read", "catalogue", "bootstrap", "list", "read", "search", "cleanup", "shell", "shell cancel", "workspace reads", "git and hooks"] },
+        "name": { "type": "text", "values": ["scratch", "write", "edit", "mutation read", "catalogue", "bootstrap", "list", "read", "search", "cleanup", "shell", "shell cancel", "workspace reads", "directory search", "git and hooks"] },
         "status": { "type": "text", "values": ["pass", "fail", "unknown", "not_tested"] },
         "code": { "type": "id", "optional": true },
         "operationId": { "type": "id", "optional": true },

@@ -18,6 +18,26 @@ type blockingSelfTest struct {
 	entered, release chan struct{}
 }
 
+type plannedSelfTestV2 struct {
+	*plannedSelfTest
+	ids           selfTestIDs
+	cleanupStatus string
+}
+
+func (p *plannedSelfTestV2) workspaceIDs() selfTestIDs { return p.ids }
+func (p *plannedSelfTestV2) workspaceCheck(_ context.Context, name, operation string) selfTestStep {
+	out := p.step(name)
+	out.Operation = operation
+	return out
+}
+func (p *plannedSelfTestV2) cleanup(context.Context) selfTestStep {
+	out := p.step("cleanup")
+	if p.cleanupStatus != "" {
+		out.Status = p.cleanupStatus
+	}
+	return out
+}
+
 func (p *blockingSelfTest) create(ctx context.Context) selfTestStep {
 	close(p.entered)
 	<-p.release
@@ -61,6 +81,28 @@ func TestSelfTestPlanRunsCleanupBeforeShellAndStopsUnknown(t *testing.T) {
 	p := &plannedSelfTest{failAt: "write", status: "fail"}
 	if out := runSelfTestPlan(context.Background(), p); out.Status != "fail" || len(p.calls) != 2 {
 		t.Fatal("refusal continued", out)
+	}
+}
+
+func TestSelfTestV2CleansOnceAfterKnownReadFailure(t *testing.T) {
+	ids, _ := selfTestIDsV2("00000000-0000-4000-8000-000000000001")
+	for _, name := range []string{"catalogue", "bootstrap", "list", "read", "search"} {
+		for _, cleanupStatus := range []string{"pass", "fail", "unknown"} {
+			p := &plannedSelfTestV2{plannedSelfTest: &plannedSelfTest{failAt: name, status: "fail"}, ids: ids, cleanupStatus: cleanupStatus}
+			out := runSelfTestPlanV2(context.Background(), p)
+			want := "fail"
+			if cleanupStatus == "unknown" {
+				want = "unknown"
+			}
+			if out.Status != want || len(out.Steps) != 10 || p.calls[len(p.calls)-1] != "cleanup" || out.Steps[9].Status != cleanupStatus {
+				t.Fatal("failed read did not retain and clean", name, cleanupStatus, out, p.calls)
+			}
+		}
+		p := &plannedSelfTestV2{plannedSelfTest: &plannedSelfTest{failAt: name, status: "unknown"}, ids: ids}
+		out := runSelfTestPlanV2(context.Background(), p)
+		if out.Status != "unknown" || p.calls[len(p.calls)-1] != name {
+			t.Fatal("unknown was repeated or cleaned", name, out, p.calls)
+		}
 	}
 }
 

@@ -97,12 +97,20 @@ func (r SelfTestResult) bound(binding SelfTestBinding) bool {
 // Version 1 records keep their original interpretation. Version 2 records
 // individual read checks before cleanup and never carry their data contents.
 func (r SelfTestResult) boundV2(binding SelfTestBinding) bool {
+	// Accept the original v2 partial record without rewriting it. That plan
+	// predates the explicit directory-search coverage marker.
+	if r.Status == "partial" && len(r.Steps) == 13 && r.Steps[12].Name == "git and hooks" {
+		steps := append([]SelfTestStep(nil), r.Steps[:12]...)
+		steps = append(steps, SelfTestStep{Name: "directory search", Status: "not_tested"}, r.Steps[12])
+		return (SelfTestResult{Status: r.Status, Steps: steps}).boundV2(binding)
+	}
 	id := binding.Identity.OperationID
-	names := []string{"scratch", "write", "edit", "mutation read", "catalogue", "bootstrap", "list", "read", "search", "cleanup", "shell", "shell cancel", "git and hooks"}
-	operations := []string{id, id + "-st2-write", id + "-st2-edit", id + "-st2-edit", id + "-st2-catalogue", id + "-st2-bootstrap", id + "-st2-list", id + "-st2-read", id + "-st2-search", id, id + "-st2-quick", id + "-st2-cancel", ""}
+	names := []string{"scratch", "write", "edit", "mutation read", "catalogue", "bootstrap", "list", "read", "search", "cleanup", "shell", "shell cancel", "directory search", "git and hooks"}
+	operations := []string{id, id + "-st2-write", id + "-st2-edit", id + "-st2-edit", id + "-st2-catalogue", id + "-st2-bootstrap", id + "-st2-list", id + "-st2-read", id + "-st2-search", id, id + "-st2-quick", id + "-st2-cancel", "", ""}
 	if len(r.Steps) > len(names) {
 		return false
 	}
+	readFailure := false
 	for i, s := range r.Steps {
 		if s.Name != names[i] || s.Operation != operations[i] {
 			return false
@@ -113,12 +121,27 @@ func (r SelfTestResult) boundV2(binding SelfTestBinding) bool {
 		if i != 10 && i != 11 && (s.Handle != "" || s.DescendantCleanup != "") {
 			return false
 		}
-		if i == 12 && (s.Status != "not_tested" || s.Code != "") {
+		if i >= 12 && (s.Status != "not_tested" || s.Code != "") {
 			return false
 		}
-		if i < len(r.Steps)-1 && i < 12 && s.Status != "pass" {
+		if i < len(r.Steps)-1 && i < 12 {
+			if !readFailure && i >= 4 && i <= 8 && s.Status == "fail" {
+				readFailure = true
+			} else if readFailure && i >= 4 && i <= 8 {
+				if s.Status != "not_tested" || s.Code != "" {
+					return false
+				}
+			} else if s.Status != "pass" {
+				return false
+			}
+		}
+	}
+	if readFailure {
+		if len(r.Steps) != 10 {
 			return false
 		}
+		cleanup := r.Steps[9].Status
+		return r.Status == "failed" && (cleanup == "pass" || cleanup == "fail") || r.Status == "unknown" && cleanup == "unknown"
 	}
 	if r.Status == "partial" {
 		return len(r.Steps) == len(names)

@@ -71,10 +71,40 @@ func TestSelfTestPlanVersionsKeepDistinctHistory(t *testing.T) {
 		{Name: "cleanup", Status: "pass", Operation: id},
 		{Name: "shell", Status: "pass", Operation: id + "-st2-quick"},
 		{Name: "shell cancel", Status: "pass", Operation: id + "-st2-cancel", CancelOperation: id + "-st2-cancel-op"},
+		{Name: "directory search", Status: "not_tested"},
 		{Name: "git and hooks", Status: "not_tested"},
 	}}
 	if _, err := RestoreSelfTest(b, Completed, result); err != nil {
 		t.Fatal(err)
+	}
+	oldSteps := append([]SelfTestStep(nil), result.Steps[:12]...)
+	oldSteps = append(oldSteps, result.Steps[13])
+	oldState, err := RestoreSelfTest(b, Completed, &SelfTestResult{Status: "partial", Steps: oldSteps})
+	if err != nil || len(oldState.Result().Steps) != 13 || oldState.Result().Steps[12].Name != "git and hooks" {
+		t.Fatal("original version two history changed", err)
+	}
+	for failure := 4; failure <= 8; failure++ {
+		for _, cleanup := range []string{"pass", "fail", "unknown"} {
+			steps := append([]SelfTestStep(nil), result.Steps[:10]...)
+			steps[failure].Status, steps[failure].Code = "fail", "AUTHORITY_CAPABILITY_DENIED"
+			for i := failure + 1; i < 9; i++ {
+				steps[i].Status = "not_tested"
+			}
+			steps[9].Status = cleanup
+			phase, status := Failed, "failed"
+			if cleanup == "unknown" {
+				phase, status = OutcomeUnknown, "unknown"
+			}
+			if _, err := RestoreSelfTest(b, phase, &SelfTestResult{Status: status, Steps: steps}); err != nil {
+				t.Fatal("failed read history lost", failure, cleanup, err)
+			}
+			steps[failure+1].Status = "pass" // Skipped checks cannot be forged as executed.
+			if failure < 8 {
+				if _, err := RestoreSelfTest(b, phase, &SelfTestResult{Status: status, Steps: steps}); err == nil {
+					t.Fatal("check ran after refusal", failure)
+				}
+			}
+		}
 	}
 	old := b
 	old.Version = 1

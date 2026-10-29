@@ -93,3 +93,29 @@ func TestSelfTestCodecPreservesVersionTwoInterruptedRead(t *testing.T) {
 		t.Fatal("unknown history admitted as settled", eligible, err)
 	}
 }
+
+func TestSelfTestCodecPreservesOriginalVersionTwoPartial(t *testing.T) {
+	b := domain.SelfTestBinding{Identity: domain.Identity{Scope: domain.ScopeOwnerSettings, OperationID: scratchTestRun, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 2}
+	id := b.Identity.OperationID
+	steps := []domain.SelfTestStep{{Name: "scratch", Operation: id}, {Name: "write", Operation: id + "-st2-write"}, {Name: "edit", Operation: id + "-st2-edit"}, {Name: "mutation read", Operation: id + "-st2-edit"}, {Name: "catalogue", Operation: id + "-st2-catalogue"}, {Name: "bootstrap", Operation: id + "-st2-bootstrap"}, {Name: "list", Operation: id + "-st2-list"}, {Name: "read", Operation: id + "-st2-read"}, {Name: "search", Operation: id + "-st2-search"}, {Name: "cleanup", Operation: id}, {Name: "shell", Operation: id + "-st2-quick"}, {Name: "shell cancel", Operation: id + "-st2-cancel"}}
+	for i := range steps {
+		steps[i].Status = "pass"
+	}
+	steps = append(steps, domain.SelfTestStep{Name: "git and hooks", Status: "not_tested"})
+	original, err := domain.RestoreSelfTest(b, domain.Completed, &domain.SelfTestResult{Status: "partial", Steps: steps})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := encodeSelfTest(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed, err := decodeSelfTest(raw)
+	if err != nil || len(observed.Result().Steps) != 13 {
+		t.Fatal("original record not readable", err)
+	}
+	again, err := encodeSelfTest(observed)
+	if err != nil || !bytes.Equal(raw, again) {
+		t.Fatal("original record was rewritten", err)
+	}
+}

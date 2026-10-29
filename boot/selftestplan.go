@@ -31,6 +31,7 @@ type selfTestPlanOwner interface {
 type selfTestExecution struct {
 	mu                sync.Mutex
 	owner             selfTestPlanOwner
+	version           uint8
 	started, finished bool
 	result            selfTestReport
 }
@@ -50,11 +51,69 @@ func (e *selfTestExecution) execute(ctx context.Context) selfTestReport {
 	}
 	e.started = true
 	e.mu.Unlock()
-	out := runSelfTestPlan(ctx, e.owner)
+	var out selfTestReport
+	if e.version == 2 {
+		out = runSelfTestPlanV2(ctx, e.owner)
+	} else {
+		out = runSelfTestPlan(ctx, e.owner)
+	}
 	e.mu.Lock()
 	e.result, e.finished = copySelfTestReport(out), true
 	e.mu.Unlock()
 	return copySelfTestReport(out)
+}
+
+type selfTestWorkspaceOwner interface {
+	workspaceCheck(context.Context, string, string) selfTestStep
+	workspaceIDs() selfTestIDs
+}
+
+func runSelfTestPlanV2(ctx context.Context, owner selfTestPlanOwner) selfTestReport {
+	report := selfTestReport{Status: "unknown"}
+	read, ok := owner.(selfTestWorkspaceOwner)
+	if ctx == nil || ctx.Err() != nil || owner == nil || !ok {
+		return report
+	}
+	ids := read.workspaceIDs()
+	steps := []func(context.Context) selfTestStep{
+		owner.create, owner.write, owner.edit, owner.observe,
+		func(ctx context.Context) selfTestStep { return read.workspaceCheck(ctx, "catalogue", ids.catalogue) },
+		func(ctx context.Context) selfTestStep { return read.workspaceCheck(ctx, "bootstrap", ids.bootstrap) },
+		func(ctx context.Context) selfTestStep { return read.workspaceCheck(ctx, "list", ids.list) },
+		func(ctx context.Context) selfTestStep { return read.workspaceCheck(ctx, "read", ids.read) },
+		func(ctx context.Context) selfTestStep { return read.workspaceCheck(ctx, "search", ids.search) },
+		owner.cleanup,
+		func(ctx context.Context) selfTestStep { return owner.shell(ctx, selfTestShellQuick) },
+		func(ctx context.Context) selfTestStep { return owner.shell(ctx, selfTestShellCancel) },
+	}
+	checks := []selfTestStep{{Name: "catalogue", Operation: ids.catalogue}, {Name: "bootstrap", Operation: ids.bootstrap}, {Name: "list", Operation: ids.list}, {Name: "read", Operation: ids.read}, {Name: "search", Operation: ids.search}}
+	for index, step := range steps {
+		if ctx.Err() != nil {
+			return report
+		}
+		result := step(ctx)
+		report.Steps = append(report.Steps, result)
+		if result.Status != "pass" {
+			if result.Status == "fail" {
+				report.Status = "fail"
+				if index >= 4 && index <= 8 && ctx.Err() == nil {
+					for _, skipped := range checks[index-3:] {
+						skipped.Status = "not_tested"
+						report.Steps = append(report.Steps, skipped)
+					}
+					cleanup := owner.cleanup(ctx)
+					report.Steps = append(report.Steps, cleanup)
+					if cleanup.Status == "unknown" {
+						report.Status = "unknown"
+					}
+				}
+			}
+			return report
+		}
+	}
+	report.Steps = append(report.Steps, selfTestStep{Name: "directory search", Status: "not_tested"}, selfTestStep{Name: "git and hooks", Status: "not_tested"})
+	report.Status = "partial"
+	return report
 }
 
 func copySelfTestReport(in selfTestReport) selfTestReport {

@@ -60,6 +60,8 @@ type connectorSelfTestPlan struct {
 	run         *selfTestRunLease
 }
 
+func (p *connectorSelfTestPlan) workspaceIDs() selfTestIDs { return p.ids }
+
 func selfTestFailure(name, operation string, err error) selfTestStep {
 	step := selfTestStep{Name: name, Status: "unknown", Operation: operation}
 	var unsettled *connectorMutationUnsettled
@@ -79,6 +81,9 @@ func selfTestFailure(name, operation string, err error) selfTestStep {
 func (p *connectorSelfTestPlan) create(ctx context.Context) selfTestStep {
 	step := selfTestStep{Name: "scratch", Status: "unknown", Operation: p.ids.run}
 	expectedIDs, validIDs := selfTestIDsV1(p.ids.run)
+	if p.ids.catalogue != "" {
+		expectedIDs, validIDs = selfTestIDsV2(p.ids.run)
+	}
 	if p.connector == nil || p.connector.mutations == nil || p.slot == nil || p.slot.guard == nil || p.slot.guard.publication != p.publication || !validIDs || p.ids != expectedIDs || !state.Identifier(p.workspace, 120) {
 		return step
 	}

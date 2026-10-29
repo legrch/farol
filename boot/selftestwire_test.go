@@ -20,9 +20,9 @@ func TestSelfTestWireStartOnceAndObserveOriginal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ids, _ := selfTestIDsV1(id)
+	ids, _ := selfTestIDsV2(id)
 	plan := &durablePlanFake{ids: ids}
-	execution.execution = &selfTestExecution{owner: plan}
+	execution.execution = &selfTestExecution{owner: plan, version: 2}
 	s.selfTests.entries = map[string]*durableSelfTestExecution{id: execution}
 	startBody, _ := json.Marshal(wire.ComputerSelfTestStart{Publication: in.Publication, WorkspaceId: "work"})
 	start := desktop.Request{RequestID: "start", OperationID: id, Body: startBody}
@@ -33,16 +33,17 @@ func TestSelfTestWireStartOnceAndObserveOriginal(t *testing.T) {
 			t.Fatal("start response", out, err)
 		}
 		var report wire.ComputerSelfTestReport
-		if json.Unmarshal(out.Data, &report) != nil || report.OperationId != id || report.Status != "partial" || len(report.Steps) != 9 {
+		if json.Unmarshal(out.Data, &report) != nil || report.OperationId != id || report.Status != "partial" || len(report.Steps) != 14 {
 			t.Fatal("wrong report", report)
 		}
 	}
-	if plan.calls != 7 || store.durablePlanStore.admits != 1 || store.durablePlanStore.saves != 1 || native.calls != 0 {
+	if plan.calls != 12 || store.durablePlanStore.admits != 1 || store.durablePlanStore.saves != 1 || native.calls != 0 {
 		t.Fatal("repeated child effects")
 	}
-	body, _ := json.Marshal(wire.ComputerSelfTestObserve{OperationId: id, WorkspaceId: "work", ComputerGeneration: in.Publication.Generation})
+	version := "2"
+	body, _ := json.Marshal(wire.ComputerSelfTestObserve{OperationId: id, WorkspaceId: "work", ComputerGeneration: in.Publication.Generation, PlanVersion: &version})
 	out, err := methods["computer.selftest.observe"].Handle(context.Background(), desktop.Request{RequestID: "observe", Body: body})
-	if err != nil || out == nil || out.Status != "ok" || wire.Validate("ComputerSelfTestReport", out.Data) != nil || plan.calls != 7 {
+	if err != nil || out == nil || out.Status != "ok" || wire.Validate("ComputerSelfTestReport", out.Data) != nil || plan.calls != 12 {
 		t.Fatal("observation dispatched", out, err)
 	}
 	var report wire.ComputerSelfTestReport
