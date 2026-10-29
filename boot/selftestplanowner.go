@@ -13,12 +13,18 @@ import (
 // no transport or renderer entry point and grants no execution authority.
 type selfTestIDs struct {
 	run, write, writeCall, edit, editCall, quick, quickCall, quickCancel, cancel, cancelCall, cancelOperation string
+	catalogue, bootstrap, list, read, search                                                                  string
 }
 
 // Versioned, bounded derivation ties each child to the original durable
 // scratch identity. This is correlation only, never an admission decision.
 func selfTestIDsV1(run string) (selfTestIDs, bool) {
 	ids := selfTestIDs{run: run, write: run + "-st1-write", writeCall: run + "-st1-write-call", edit: run + "-st1-edit", editCall: run + "-st1-edit-call", quick: run + "-st1-quick", quickCall: run + "-st1-quick-call", quickCancel: run + "-st1-quick-unused-cancel", cancel: run + "-st1-cancel", cancelCall: run + "-st1-cancel-call", cancelOperation: run + "-st1-cancel-op"}
+	return ids, ids.valid()
+}
+
+func selfTestIDsV2(run string) (selfTestIDs, bool) {
+	ids := selfTestIDs{run: run, write: run + "-st2-write", writeCall: run + "-st2-write-call", edit: run + "-st2-edit", editCall: run + "-st2-edit-call", quick: run + "-st2-quick", quickCall: run + "-st2-quick-call", quickCancel: run + "-st2-quick-unused-cancel", cancel: run + "-st2-cancel", cancelCall: run + "-st2-cancel-call", cancelOperation: run + "-st2-cancel-op", catalogue: run + "-st2-catalogue", bootstrap: run + "-st2-bootstrap", list: run + "-st2-list", read: run + "-st2-read", search: run + "-st2-search"}
 	return ids, ids.valid()
 }
 
@@ -32,6 +38,15 @@ func (ids selfTestIDs) valid() bool {
 			return false
 		}
 		seen[id] = true
+	}
+	reads := []string{ids.catalogue, ids.bootstrap, ids.list, ids.read, ids.search}
+	if reads[0] != "" || reads[1] != "" || reads[2] != "" || reads[3] != "" || reads[4] != "" {
+		for _, id := range reads {
+			if !validIngressID(id) || seen[id] {
+				return false
+			}
+			seen[id] = true
+		}
 	}
 	return true
 }

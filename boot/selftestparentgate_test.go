@@ -118,6 +118,33 @@ func TestSelfTestCollectorJoinWaitsForOriginalOnly(t *testing.T) {
 	close(unrelated)
 }
 
+func TestSelfTestCollectorJoinWaitsForVersionTwo(t *testing.T) {
+	ids, _ := selfTestIDsV2("00000000-0000-4000-8000-000000000001")
+	done := make(chan struct{})
+	ledger := &SettingsMutationIngress{operations: map[string]*settingsMutationOperation{
+		ids.cancel: {process: &connectorProcessOperation{collectionDone: done}},
+	}}
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if !ledger.selfTestParent.begin(ids.run, cancel) {
+		t.Fatal("parent refused")
+	}
+	ledger.selfTestParent.finish(true)
+	joined := make(chan struct{})
+	go func() { ledger.waitSelfTestCollectors(); close(joined) }()
+	select {
+	case <-joined:
+		t.Fatal("version two collector not joined")
+	default:
+	}
+	close(done)
+	select {
+	case <-joined:
+	case <-time.After(time.Second):
+		t.Fatal("settled version two collector not joined")
+	}
+}
+
 func TestSelfTestParentAndRecoveryExcludeEachOther(t *testing.T) {
 	s, _, _, _, _ := connectorMutationFixture(t)
 	ledger := s.mutations

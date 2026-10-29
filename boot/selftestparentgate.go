@@ -122,13 +122,14 @@ func (s *SettingsMutationIngress) waitSelfTestCollectors() {
 	if s == nil {
 		return
 	}
-	ids, ok := selfTestIDsV1(s.selfTestParent.originalOperation())
-	if !ok {
+	old, oldOK := selfTestIDsV1(s.selfTestParent.originalOperation())
+	current, currentOK := selfTestIDsV2(s.selfTestParent.originalOperation())
+	if !oldOK || !currentOK {
 		return
 	}
 	s.mu.Lock()
 	var pending []<-chan struct{}
-	for _, operation := range []string{ids.quick, ids.cancel} {
+	for _, operation := range []string{old.quick, old.cancel, current.quick, current.cancel} {
 		if record := s.operations[operation]; record != nil && record.process != nil && record.process.collectionDone != nil {
 			pending = append(pending, record.process.collectionDone)
 		}

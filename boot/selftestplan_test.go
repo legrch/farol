@@ -83,6 +83,20 @@ func TestSelfTestPlanIDsAreBoundAndDistinct(t *testing.T) {
 	if _, ok := selfTestIDsV1("invalid"); ok {
 		t.Fatal("invalid parent accepted")
 	}
+	newIDs, valid := selfTestIDsV2(first.run)
+	if !valid || newIDs.write == first.write || newIDs.catalogue != first.run+"-st2-catalogue" || newIDs.search != first.run+"-st2-search" {
+		t.Fatal("version two identities crossed original plan", newIDs)
+	}
+	duplicate := newIDs
+	duplicate.read = duplicate.write
+	if duplicate.valid() {
+		t.Fatal("read identity aliases an effect")
+	}
+	duplicate = newIDs
+	duplicate.search = ""
+	if duplicate.valid() {
+		t.Fatal("incomplete read identities accepted")
+	}
 	ids := selfTestIDs{run: "00000000-0000-4000-8000-000000000001", write: "write", writeCall: "write-call", edit: "edit", editCall: "edit-call", quick: "quick", quickCall: "quick-call", quickCancel: "quick-cancel", cancel: "cancel", cancelCall: "cancel-call", cancelOperation: "cancel-op"}
 	if !ids.valid() {
 		t.Fatal("valid IDs refused")
