@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/legrch/farol/modules/computer/app/port"
 	mutationsvc "github.com/legrch/farol/modules/computer/app/services/mutation"
 	mutationct "github.com/legrch/farol/modules/computer/contracts/mutation"
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -35,10 +34,6 @@ func connectorMutationTarget(op mutationct.Operation) (string, state.Kind) {
 // Trusted composition selects slot and the existing shared mutation owner.
 // External routing is a separate gate; this join opens no storage or endpoint.
 func (s *computerConnector) mutate(ctx context.Context, slot *connectorSlot, operation, call string, request mutationct.ConnectorRequest) (*mutationct.ConnectorResponse, error) {
-	return s.mutateForSelfTest(ctx, slot, operation, call, request, nil, nil, nil, nil)
-}
-
-func (s *computerConnector) mutateForSelfTest(ctx context.Context, slot *connectorSlot, operation, call string, request mutationct.ConnectorRequest, run *selfTestRunLease, binding *state.ScratchCleanupBinding, expected *state.DirectoryIdentity, published *state.DirectoryIdentity) (*mutationct.ConnectorResponse, error) {
 	if s == nil || s.mutations == nil || s.mutations.computer != s.root || slot == nil || slot.route == nil || slot.route.issuer == nil || slot.guard == nil || slot.guard.root != s.root ||
 		ctx == nil || ctx.Err() != nil || !validIngressID(operation) || !validIngressID(call) {
 		return nil, mutationInvalid()
@@ -52,16 +47,6 @@ func (s *computerConnector) mutateForSelfTest(ctx context.Context, slot *connect
 		return nil, mutationInvalid()
 	}
 	path, kind := connectorMutationTarget(request.Operation)
-	var native port.MutableWorkspace = s.mutations.dependencies.native
-	if run != nil {
-		bound, ok := native.(port.ScratchBoundMutableWorkspace)
-		if !ok || bound == nil || binding == nil || !binding.Valid() || binding.Creation.Identity.OperationID != run.operation || binding.Creation.WorkspaceID != run.workspace || request.WorkspaceID != run.workspace || path != state.ScratchPath(run.operation)+"/check.txt" || !validSelfTestFileOperation(request.Operation) {
-			return nil, mutationInvalid()
-		}
-		native = &selfTestBoundWorkspace{native: bound, binding: *binding, expected: expected, published: published}
-	} else if binding != nil || expected != nil || published != nil {
-		return nil, mutationInvalid()
-	}
 	generation, err := strconv.ParseUint(slot.guard.publication.Generation, 10, 64)
 	if err != nil || generation > state.MaxSafeInteger {
 		return nil, mutationInvalid()
@@ -72,8 +57,7 @@ func (s *computerConnector) mutateForSelfTest(ctx context.Context, slot *connect
 	}
 	ledger := s.mutations
 	ledger.mu.Lock()
-	runOwnsAdmission := run != nil && ledger.selfTestRun == run && run.ledger == ledger && run.active && run.ctx.Err() == nil && !run.cleanupStarted && !ledger.stagePending && !ledger.stageClosed && ledger.scratchPreflight == nil && binding.Creation.ComputerGeneration == generation
-	if run != nil && !runOwnsAdmission || ledger.scratchAdmissionPendingLocked() && !runOwnsAdmission {
+	if ledger.scratchAdmissionPendingLocked() {
 		ledger.mu.Unlock()
 		return nil, &mutationct.Failure{Code: "COMPUTER_MUTATION_IN_PROGRESS", Source: "operation-store", Retry: "never"}
 	}
@@ -81,7 +65,7 @@ func (s *computerConnector) mutateForSelfTest(ctx context.Context, slot *connect
 		ledger.mu.Unlock()
 		return nil, &mutationct.Failure{Code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", Source: "operation-store", Retry: "never"}
 	}
-	record := &settingsMutationOperation{workspace: request.WorkspaceID, path: path, generation: generation, pending: true, connectorScope: true, selfTestRun: run}
+	record := &settingsMutationOperation{workspace: request.WorkspaceID, path: path, generation: generation, pending: true, connectorScope: true}
 	ledger.operations[operation] = record
 	ledger.mu.Unlock()
 	finish := func(service *mutationsvc.ConnectorService, err error, settled bool) {
@@ -102,7 +86,7 @@ func (s *computerConnector) mutateForSelfTest(ctx context.Context, slot *connect
 	selected := mutationsvc.ConnectorSelection{ConnectorOwner: mutationsvc.ConnectorOwner{OperationID: operation, OwnerID: s.root.ownerID, ProfileID: s.root.peer.ProfileId, ComputerID: s.root.computerID},
 		ComputerGeneration: generation, Origin: state.ConnectorOrigin{BuildID: h.BuildID, BackendGeneration: h.BackendGeneration, RuntimeID: h.RuntimeID, ConnectorGeneration: h.ConnectorGeneration,
 			SessionID: b.SessionID, TaskID: b.TaskID, TaskEpoch: b.TaskEpoch, ParticipantID: b.ParticipantID, TurnID: b.TurnID, CallID: call, Generation: callGeneration, Operation: kind}}
-	service, err := mutationsvc.NewForConnectorExecution(selected, lease, ledger.dependencies.repository, native, ledger.dependencies.digester, &sync.Mutex{}, s.clock)
+	service, err := mutationsvc.NewForConnectorExecution(selected, lease, ledger.dependencies.repository, ledger.dependencies.native, ledger.dependencies.digester, &sync.Mutex{}, s.clock)
 	if err != nil {
 		finish(nil, err, true)
 		return nil, err

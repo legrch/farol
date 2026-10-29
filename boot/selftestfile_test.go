@@ -7,7 +7,6 @@ import (
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	mutationsvc "github.com/legrch/farol/modules/computer/app/services/mutation"
-	mutationct "github.com/legrch/farol/modules/computer/contracts/mutation"
 	state "github.com/legrch/farol/modules/computer/domain/mutation"
 )
 
@@ -63,67 +62,15 @@ func selfTestFileFixture(t *testing.T) (*computerConnector, *selfTestRunLease, *
 	return s, run, journal, native
 }
 
-func TestSelfTestFileUsesOriginalReceiptAndOneShotMutations(t *testing.T) {
+func TestSelfTestFileRefusesWithoutContinuousCustody(t *testing.T) {
 	s, run, journal, native := selfTestFileFixture(t)
-	write, err := run.mutateFixture(context.Background(), s, s.current, "self-write", "write-call", false)
-	if err != nil || write == nil || write.Phase != "completed" || write.Publication != "durable" || write.Receipt == nil || write.Receipt.AfterSHA256 != selfTestFileHash(selfTestFileBefore) {
-		t.Fatalf("write %#v %v", write, err)
-	}
-	if native.bound != 1 || native.binding.Directory.Inode != "10" {
-		t.Fatal("original parent not bound")
-	}
-	if repeated, err := run.mutateFixture(context.Background(), s, s.current, "write-again", "write-call-2", false); err == nil || repeated != nil {
-		t.Fatal("write repeated")
-	}
-	edit, err := run.mutateFixture(context.Background(), s, s.current, "self-edit", "edit-call", true)
-	if err != nil || edit == nil || edit.Phase != "completed" || edit.Receipt == nil || edit.Receipt.AfterSHA256 != selfTestFileHash(selfTestFileAfter) || edit.Receipt.BeforeSHA256 == nil || *edit.Receipt.BeforeSHA256 != write.Receipt.AfterSHA256 {
-		t.Fatalf("edit %#v %v", edit, err)
-	}
-	if repeated, err := run.mutateFixture(context.Background(), s, s.current, "edit-again", "edit-call-2", true); err == nil || repeated != nil {
-		t.Fatal("edit repeated")
-	}
-	if native.bound != 2 || native.calls != 2 || journal.admits != 2 || journal.saves != 2 || run.fixtureFileIdentity.Inode != "21" {
-		t.Fatal("unexpected effects")
-	}
-	observation, err := s.observeMutation(context.Background(), s.current, "self-edit", mutationct.ConnectorObservation{WorkspaceID: "work", RelativePath: state.ScratchPath(run.operation) + "/check.txt"})
-	if err != nil || observation == nil || observation.OperationID != "self-edit" || observation.Receipt == nil || observation.Receipt.AfterSHA256 != edit.Receipt.AfterSHA256 {
-		t.Fatalf("original observation %#v %v", observation, err)
-	}
-	if out, err := s.mutate(context.Background(), s.current, "ordinary-write", "ordinary-call", connectorWriteFixture()); err == nil || out != nil || native.calls != 2 {
-		t.Fatal("ordinary write crossed self-test fence")
-	}
-}
-
-func TestSelfTestFilePreservesUnconfirmedWriteAndRefusesEdit(t *testing.T) {
-	s, run, journal, native := selfTestFileFixture(t)
-	journal.saveFault = "after"
-	write, err := run.mutateFixture(context.Background(), s, s.current, "self-write", "write-call", false)
-	if err != nil || write == nil || write.Publication != "memory_only" || native.calls != 1 {
-		t.Fatalf("write %#v %v", write, err)
-	}
-	if out, err := run.mutateFixture(context.Background(), s, s.current, "self-edit", "edit-call", true); err == nil || out != nil || native.calls != 1 {
-		t.Fatal("unconfirmed write authorized edit")
-	}
-	if out, err := run.mutateFixture(context.Background(), s, s.current, "new-write", "new-call", false); err == nil || out != nil || native.calls != 1 {
-		t.Fatal("unconfirmed write repeated")
-	}
-}
-
-func TestSelfTestFileHoldsFenceUntilOriginalMutationReturns(t *testing.T) {
-	s, run, journal, native := selfTestFileFixture(t)
-	native.after = func() {
-		if out, err := run.mutateFixture(context.Background(), s, s.current, "parallel-edit", "parallel-call", true); err == nil || out != nil {
-			t.Fatal("parallel fixture operation admitted")
-		}
-		if out, err := s.mutate(context.Background(), s.current, "ordinary-write", "ordinary-call", connectorWriteFixture()); err == nil || out != nil {
-			t.Fatal("ordinary operation crossed the fence")
-		}
-		if err := run.abandonUnstarted(); err == nil {
-			t.Fatal("run released while mutation was active")
+	for _, edit := range []bool{false, true} {
+		out, err := run.mutateFixture(context.Background(), s, s.current, "fixture-operation", "fixture-call", edit)
+		if err == nil || out != nil || native.calls != 0 || native.bound != 0 || journal.admits != 0 {
+			t.Fatal("unqualified file mutation had effects", out, err)
 		}
 	}
-	write, err := run.mutateFixture(context.Background(), s, s.current, "self-write", "write-call", false)
-	if err != nil || write == nil || write.Phase != "completed" || native.calls != 1 || journal.admits != 1 {
-		t.Fatalf("write %#v %v", write, err)
+	if !s.mutations.scratchAdmissionPendingLocked() || run.cleanupStarted {
+		t.Fatal("refusal released or consumed the original run")
 	}
 }
