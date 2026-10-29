@@ -23,7 +23,10 @@ export type SelfTestObservation = Readonly<{
 // The host selects a durable owner. Reserve is write-once and must acknowledge
 // the exact identity before transport; settle preserves the original record.
 export interface SelfTestSelectionStore {
-  reserve(selection: SelfTestSelection): Promise<"durable" | "unknown">;
+  reserve(
+    selection: SelfTestSelection,
+    publication: ComputerAuthorityPublication,
+  ): Promise<"durable" | "unknown">;
   // Owns one-shot settlement and must retain attempted/unknown across restart.
   settle(selection: SelfTestSelection): Promise<"durable" | "unknown">;
 }
@@ -79,7 +82,7 @@ export class SelfTestBridge {
     this.settlementAttempted = false;
     let reserved: "durable" | "unknown" = "unknown";
     try {
-      reserved = await this.store.reserve(selection);
+      reserved = await this.store.reserve(selection, body.publication);
     } catch {
       // The original reserve may have reached durable storage; never repeat it.
     }
