@@ -206,6 +206,9 @@ func TestNativeFreshShellChild(t *testing.T) {
 	if r.connector.processes == nil || r.mutations == nil {
 		t.Fatal("full fresh native Shell/mutation composition absent")
 	}
+	if r.mutations.stageBaseline != (f.Generation == 1) {
+		t.Fatal("staging baseline lost previous unverified descendants", f.Generation, r.mutations.stageBaseline)
+	}
 	// Explicit disposable workspace consent, through the production publisher.
 	var ws unix.Stat_t
 	if err := unix.Lstat(f.Workspace, &ws); err != nil {

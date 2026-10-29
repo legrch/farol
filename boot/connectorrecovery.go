@@ -69,7 +69,7 @@ func (s *SettingsMutationIngress) recoveryDispositionLocked(reserved bool) strin
 		s.frozen || s.processDraining || s.retirementErr != nil || s.recoveryReserved != reserved {
 		return "unavailable"
 	}
-	pending := false
+	pending := s.stagePending
 	for _, record := range s.operations {
 		if record == nil {
 			return "operation_unknown"

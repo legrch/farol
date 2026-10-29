@@ -57,6 +57,7 @@ type NativeRuntime struct {
 	settingsDelivery         *SettingsDeliveryIngress
 	settingsStore            *SettingsStoreExchange
 	mutationStore            *mutationrepo.Repository
+	stageOwner               *computerStageOwner
 	closed                   atomic.Bool
 	closeOnce                sync.Once
 	closeErr                 error
@@ -201,10 +202,21 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 				return fail(errors.Join(errors.New("FRESH_SESSION_PROCESS_SAFETY_UNCONFIRMED"), err))
 			}
 		}
+		// The baseline is captured under the original writer before any runtime
+		// methods are exposed. Failure withholds only the optional self-test.
+		stageBaseline, stageErr := runtime.mutationStore.InspectStagingProcesses(ctx, mutationrepo.SettledSelection{OwnerID: launch.OwnerID, ProfileID: launch.Profile.ProfileID, ComputerID: launch.ComputerID})
+		if stageErr != nil {
+			stageBaseline = false
+		}
+		runtime.stageOwner, err = newComputerStageOwner(qualified)
+		if err != nil {
+			return fail(err)
+		}
 		runtime.mutations, err = settingsMutationIngress(runtime.ingress, computerMutationDependencies{repository: runtime.mutationStore, native: fileOwners, digester: filesystem.Digester{}})
 		if err != nil {
 			return fail(err)
 		}
+		runtime.mutations.stageBaseline, runtime.mutations.stageOwner, runtime.mutations.stageLifetime = stageBaseline, runtime.stageOwner, lifetime
 		runtime.settingsStore, err = NewSettingsStoreExchange(lifetime, peer)
 		if err != nil {
 			return fail(err)
@@ -283,6 +295,16 @@ func (r *NativeRuntime) closeResources() error {
 		r.cancel()
 	}
 	var failures []error
+	// Close admission under the ledger lock before joining native and terminal work.
+	if r.mutations != nil {
+		r.mutations.closeSelfTestStageAdmission()
+	}
+	if r.stageOwner != nil {
+		failures = append(failures, r.stageOwner.Close())
+	}
+	if r.mutations != nil {
+		r.mutations.waitSelfTestStage()
+	}
 	failures = append(failures, r.closeCodexRead())
 	if r.ingress != nil {
 		_, err := r.ingress.guard.deactivate()

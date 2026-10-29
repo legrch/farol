@@ -29,7 +29,7 @@ func newComputerStageOwner(profile *QualifiedProfile) (*computerStageOwner, erro
 // run registers before borrowing, so Close joins the actual callback and fd
 // close, not merely cancellation of its context. No owner mutex is held while
 // native code or a publication callback executes.
-func (o *computerStageOwner) run(ctx context.Context, use func(int, NativeRoot) error) (err error) {
+func (o *computerStageOwner) run(ctx context.Context, use func(context.Context, int, NativeRoot) error) (err error) {
 	if o == nil || ctx == nil || ctx.Err() != nil || use == nil {
 		return profileFailure(ProfileUnavailable)
 	}
@@ -64,7 +64,7 @@ func (o *computerStageOwner) run(ctx context.Context, use func(int, NativeRoot) 
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	err = use(fd, root)
+	err = use(ctx, fd, root)
 	// Losing the original profile after a possible effect remains visible to
 	// the caller, which owns the original publication/UNKNOWN classification.
 	_, _, checkErr := o.profile.Roots()
