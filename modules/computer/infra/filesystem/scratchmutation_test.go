@@ -21,7 +21,6 @@ func TestScratchMutationPinsOriginalParentAndNeverCreatesIt(t *testing.T) {
 			f.work.children[leaf] = original
 			b := mutation.ScratchCleanupBinding{Creation: mutation.Binding{Identity: mutation.Identity{Scope: mutation.ScopeOwnerSettings, OperationID: id, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", RequestDigest: strings.Repeat("a", 64), RelativePath: leaf, Scratch: mutation.ScratchBinding{RunID: id, Root: "/work", Leaf: leaf, RootIdentity: mutation.DirectoryIdentity{Device: "7", Inode: "2"}, ExpectedInventory: mutation.EmptyScratchInventory}}, Directory: mutation.DirectoryIdentity{Device: "7", Inode: strconv.FormatUint(original.v.ino, 10)}}
 			r := fakeRequest(mutation.Write{RelativePath: leaf + "/check.txt", Content: "new"})
-			r.ScratchParent = &b
 			switch mode {
 			case "missing":
 				delete(f.work.children, leaf)
@@ -43,7 +42,7 @@ func TestScratchMutationPinsOriginalParentAndNeverCreatesIt(t *testing.T) {
 					return nil
 				}
 			}
-			out, err := m.Mutate(context.Background(), r)
+			out, err := m.MutateScratch(context.Background(), r, b)
 			if mode == "exact" {
 				if err != nil || out == nil || f.links != 1 || string(original.children["check.txt"].data) != "new" {
 					t.Fatalf("create %#v %v", out, err)

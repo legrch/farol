@@ -9,6 +9,7 @@ import (
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/authority"
+	"github.com/legrch/farol/modules/computer/domain/mutation"
 	"github.com/legrch/farol/modules/computer/infra/filesystem"
 )
 
@@ -17,6 +18,24 @@ import (
 type computerFileOwners struct {
 	legacyRead, rootRead         port.Workspace
 	legacyMutation, rootMutation port.MutableWorkspace
+}
+
+// MutateScratch never falls back to a generic producer that might ignore the
+// original directory identity. File policy remains selected by current owner.
+func (o *computerFileOwners) MutateScratch(ctx context.Context, request port.MutationRequest, binding mutation.ScratchCleanupBinding) (*port.MutationReceipt, error) {
+	policy := request.Workspace.FilePolicy
+	if o == nil || !policy.Valid() {
+		return nil, authority.Fail("WORKSPACE_INVALID_REQUEST", "file-policy")
+	}
+	selected := o.legacyMutation
+	if policy == authority.RootScopedFiles {
+		selected = o.rootMutation
+	}
+	bound, ok := selected.(port.ScratchBoundMutableWorkspace)
+	if !ok || bound == nil {
+		return nil, authority.Fail("WORKSPACE_INVALID_REQUEST", "file-policy")
+	}
+	return bound.MutateScratch(ctx, request, binding)
 }
 
 var _ port.DirectoryInspector = (*computerFileOwners)(nil)

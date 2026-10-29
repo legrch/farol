@@ -10,6 +10,14 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func (m *Mutable) MutateScratch(ctx context.Context, request port.MutationRequest, binding mutation.ScratchCleanupBinding) (*port.MutationReceipt, error) {
+	if request.ScratchParent != nil || !binding.Valid() {
+		return nil, refusal("WORKSPACE_INVALID_REQUEST")
+	}
+	request.ScratchParent = &binding
+	return m.Mutate(ctx, request)
+}
+
 func (m *Mutable) Mutate(ctx context.Context, request port.MutationRequest) (receipt *port.MutationReceipt, err error) {
 	if m == nil || m.fs == nil {
 		return nil, refusal("WORKSPACE_PATH_REFUSED")

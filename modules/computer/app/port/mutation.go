@@ -100,6 +100,13 @@ type MutableWorkspace interface {
 	Mutate(context.Context, MutationRequest) (*MutationReceipt, error)
 }
 
+// ScratchBoundMutableWorkspace is implemented only by producers that enforce
+// the supplied original scratch parent. The caller still owns admission and
+// the whole-run process fence; a generic MutableWorkspace is not enough.
+type ScratchBoundMutableWorkspace interface {
+	MutateScratch(context.Context, MutationRequest, mutation.ScratchCleanupBinding) (*MutationReceipt, error)
+}
+
 // StagedMutableWorkspace is a private Scratch-only execution port. BeginStage
 // retains the process exclusion gate but performs no native effect. The caller
 // owns exactly one Execute and must Release only after terminal persistence.

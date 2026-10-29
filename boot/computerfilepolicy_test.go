@@ -71,6 +71,42 @@ type fileOwnerDouble struct {
 	mutation                port.MutationRequest
 }
 
+type scratchFileOwnerDouble struct {
+	fileOwnerDouble
+	boundCalls int
+	binding    mutation.ScratchCleanupBinding
+}
+
+func (d *scratchFileOwnerDouble) MutateScratch(_ context.Context, _ port.MutationRequest, binding mutation.ScratchCleanupBinding) (*port.MutationReceipt, error) {
+	d.boundCalls++
+	d.binding = binding
+	return &port.MutationReceipt{}, nil
+}
+
+func TestScratchFileOwnerRequiresSelectedBoundProducer(t *testing.T) {
+	for _, policy := range []authority.FilePolicy{authority.LegacyProtectedFiles, authority.RootScopedFiles} {
+		legacy, root := &scratchFileOwnerDouble{}, &scratchFileOwnerDouble{}
+		owners := &computerFileOwners{legacyMutation: legacy, rootMutation: root}
+		request := port.MutationRequest{Workspace: port.MutationDescriptor{FilePolicy: policy}}
+		binding := mutation.ScratchCleanupBinding{Directory: mutation.DirectoryIdentity{Device: "7", Inode: "12"}}
+		if _, err := owners.MutateScratch(context.Background(), request, binding); err != nil {
+			t.Fatal(err)
+		}
+		chosen, other := legacy, root
+		if policy == authority.RootScopedFiles {
+			chosen, other = root, legacy
+		}
+		if chosen.boundCalls != 1 || chosen.binding != binding || other.boundCalls != 0 || chosen.mutations != 0 {
+			t.Fatal("wrong scratch producer")
+		}
+	}
+	ordinary := &fileOwnerDouble{}
+	owners := &computerFileOwners{legacyMutation: ordinary}
+	if _, err := owners.MutateScratch(context.Background(), port.MutationRequest{Workspace: port.MutationDescriptor{FilePolicy: authority.LegacyProtectedFiles}}, mutation.ScratchCleanupBinding{}); err == nil || ordinary.mutations != 0 {
+		t.Fatal("fell back to generic mutation")
+	}
+}
+
 func (d *fileOwnerDouble) Read(_ context.Context, r port.ReadRequest) (*port.ReadResponse, error) {
 	d.reads++
 	d.descriptor = r.Workspace
