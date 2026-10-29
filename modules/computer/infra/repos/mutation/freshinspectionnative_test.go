@@ -31,6 +31,9 @@ func TestNativeProcessRootsBorrowOriginalWriterAndPreserveRecords(t *testing.T) 
 			if unknown, err := r.InspectFreshProcesses(context.Background(), selection); err != nil || unknown != write {
 				t.Fatal("historical reservation blocked startup or lost its unknown observation", err)
 			}
+			if eligible, err := r.InspectStagingProcesses(context.Background(), selection); err != nil || eligible == write {
+				t.Fatal("staging history inspection changed admission or lost original reservation", eligible, err)
+			}
 			if other, err := New(context.Background(), root); other != nil || err == nil {
 				if other != nil {
 					_ = other.Close()

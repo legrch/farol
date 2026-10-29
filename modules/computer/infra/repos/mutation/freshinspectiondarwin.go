@@ -14,7 +14,17 @@ import (
 // InspectFreshProcesses borrows this already-held writer lock and existing
 // record reader. It performs no recovery, PID lookup, write or state transition.
 // The existing 128-record inspection bound and final byte/root checks remain.
-func (r *Repository) InspectFreshProcesses(ctx context.Context, selection SettledSelection) (unknown bool, err error) {
+func (r *Repository) InspectFreshProcesses(ctx context.Context, selection SettledSelection) (bool, error) {
+	return r.inspectProcessHistory(ctx, selection, qualifyFreshProcessHistory)
+}
+
+// InspectStagingProcesses is read-only and borrows the same writer and pinned
+// inventory. Eligibility is a snapshot, not an admission or process fence.
+func (r *Repository) InspectStagingProcesses(ctx context.Context, selection SettledSelection) (bool, error) {
+	return r.inspectProcessHistory(ctx, selection, qualifyStagingHistory)
+}
+
+func (r *Repository) inspectProcessHistory(ctx context.Context, selection SettledSelection, qualify func([]settledBytes, SettledSelection) (bool, error)) (unknown bool, err error) {
 	if r == nil || ctx == nil {
 		return false, unavailable()
 	}
@@ -60,7 +70,7 @@ func (r *Repository) InspectFreshProcesses(ctx context.Context, selection Settle
 	if err != nil {
 		return false, err
 	}
-	unknown, err = qualifyFreshProcessHistory(entries, selection)
+	unknown, err = qualify(entries, selection)
 	if err != nil {
 		return false, err
 	}
