@@ -12,7 +12,7 @@ export type SelfTestSelection = Readonly<{
   operationId: string;
   workspaceId: string;
   computerGeneration: string;
-  planVersion: "1" | "2";
+  planVersion: "1" | "2" | "3";
 }>;
 export type SelfTestObservation = Readonly<{
   selection: SelfTestSelection;
@@ -233,6 +233,51 @@ export class SelfTestBridge {
         (report.planVersion ?? "1") !== selection.planVersion
       )
         return unknown();
+      if (report.status === "partial" && selection.planVersion === "3") {
+        const id = selection.operationId;
+        const names = [
+          "scratch",
+          "write",
+          "edit",
+          "mutation read",
+          "catalogue",
+          "bootstrap",
+          "list",
+          "read",
+          "search",
+          "directory search",
+          "cleanup",
+          "shell",
+          "shell cancel",
+          "git and hooks",
+        ];
+        const operations = [
+          id,
+          id + "-st3-write",
+          id + "-st3-edit",
+          id + "-st3-edit",
+          id + "-st3-catalogue",
+          id + "-st3-bootstrap",
+          id + "-st3-list",
+          id + "-st3-read",
+          id + "-st3-search",
+          id + "-st3-directory-search",
+          id,
+          id + "-st3-quick",
+          id + "-st3-cancel",
+          undefined,
+        ];
+        if (
+          report.steps.length !== names.length ||
+          report.steps.some(
+            (step, index) =>
+              step.name !== names[index] ||
+              step.status !== (index < 13 ? "pass" : "not_tested") ||
+              step.operationId !== operations[index],
+          )
+        )
+          return unknown();
+      }
       if (report.status === "partial" && selection.planVersion === "2") {
         const names = [
           "scratch",
@@ -329,6 +374,64 @@ function validFailedReport(
   selection: SelfTestSelection,
 ): boolean {
   const id = selection.operationId;
+  if (selection.planVersion === "3") {
+    const names = [
+      "scratch",
+      "write",
+      "edit",
+      "mutation read",
+      "catalogue",
+      "bootstrap",
+      "list",
+      "read",
+      "search",
+      "directory search",
+      "cleanup",
+      "shell",
+      "shell cancel",
+    ];
+    const suffixes = [
+      "",
+      "-st3-write",
+      "-st3-edit",
+      "-st3-edit",
+      "-st3-catalogue",
+      "-st3-bootstrap",
+      "-st3-list",
+      "-st3-read",
+      "-st3-search",
+      "-st3-directory-search",
+      "",
+      "-st3-quick",
+      "-st3-cancel",
+    ];
+    if (
+      report.steps.length === 0 ||
+      report.steps.length > names.length ||
+      report.steps.some(
+        (step, index) =>
+          step.name !== names[index] ||
+          step.operationId !== id + suffixes[index],
+      )
+    )
+      return false;
+    const failure = report.steps.findIndex((step) => step.status === "fail");
+    if (
+      failure < 0 ||
+      report.steps.slice(0, failure).some((step) => step.status !== "pass")
+    )
+      return false;
+    if (failure === report.steps.length - 1) return true;
+    return (
+      failure >= 4 &&
+      failure <= 9 &&
+      report.steps.length === 11 &&
+      report.steps
+        .slice(failure + 1, 10)
+        .every((step) => step.status === "not_tested") &&
+      ["pass", "fail"].includes(report.steps[10]?.status ?? "")
+    );
+  }
   const v2 = selection.planVersion === "2";
   const names = v2
     ? [

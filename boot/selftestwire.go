@@ -191,8 +191,13 @@ func (s *computerConnector) selfTestMethods() map[string]desktop.Method {
 				return &desktop.Outcome{Status: "unavailable", Code: "COMPUTER_AUTHORITY_STORE_UNAVAILABLE"}, nil
 			}
 			version := uint8(1)
-			if in.PlanVersion != nil && *in.PlanVersion == "2" {
-				version = 2
+			if in.PlanVersion != nil {
+				switch *in.PlanVersion {
+				case "2":
+					version = 2
+				case "3":
+					version = 3
+				}
 			}
 			binding := state.SelfTestBinding{Identity: state.Identity{Scope: state.ScopeOwnerSettings, OperationID: in.OperationId, OwnerID: s.root.ownerID, ProfileID: s.root.peer.ProfileId, ComputerID: s.root.computerID}, WorkspaceID: in.WorkspaceId, ComputerGeneration: generation, Version: version}
 			report, err := s.observeConnectorSelfTest(ctx, slot, binding)

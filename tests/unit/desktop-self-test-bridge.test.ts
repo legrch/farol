@@ -16,6 +16,82 @@ const publication = {
   publishOperationId: "publish",
 };
 
+it.each([false, true])(
+  "observes version three only with its exact directory step, forged=%s",
+  async (forged) => {
+    const prior = {
+      operationId: "00000000-0000-4000-8000-000000000001",
+      workspaceId: "work",
+      computerGeneration: "1",
+      planVersion: "3" as const,
+    };
+    const names = [
+      "scratch",
+      "write",
+      "edit",
+      "mutation read",
+      "catalogue",
+      "bootstrap",
+      "list",
+      "read",
+      "search",
+      "directory search",
+      "cleanup",
+      "shell",
+      "shell cancel",
+      "git and hooks",
+    ];
+    const suffix = [
+      "",
+      "-st3-write",
+      "-st3-edit",
+      "-st3-edit",
+      "-st3-catalogue",
+      "-st3-bootstrap",
+      "-st3-list",
+      "-st3-read",
+      "-st3-search",
+      "-st3-directory-search",
+      "",
+      "-st3-quick",
+      "-st3-cancel",
+    ];
+    const request = vi.fn(
+      async (
+        _method: string,
+        _body: Json,
+        options: { id?: string },
+      ): Promise<Outcome> => ({
+        status: "ok",
+        requestId: options.id!,
+        context,
+        data: {
+          ...prior,
+          status: "partial",
+          steps: names.map((name, index) => ({
+            name,
+            status: index < 13 ? "pass" : "not_tested",
+            ...(index < 13
+              ? {
+                  operationId:
+                    prior.operationId +
+                    (forged && index === 9 ? "-st2-search" : suffix[index]),
+                }
+              : {}),
+          })),
+        },
+      }),
+    );
+    const bridge = new SelfTestBridge({ request }, context, "none", store());
+    const result = await bridge.observe(prior);
+    expect(result.state).toBe(forged ? "unknown" : "observed");
+    expect(result.report?.status).toBe(forged ? undefined : "partial");
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "computer.selftest.observe",
+    ]);
+  },
+);
+
 it("withholds a report and keeps the original when the owner changes during settlement", async () => {
   let live = true;
   const request = vi.fn(

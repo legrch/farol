@@ -5879,7 +5879,11 @@
         "operationId": { "type": "id" },
         "workspaceId": { "type": "id" },
         "computerGeneration": { "type": "decimal" },
-        "planVersion": { "type": "text", "values": ["1", "2"], "optional": true }
+        "planVersion": {
+          "type": "text",
+          "values": ["1", "2", "3"],
+          "optional": true
+        }
       }
     },
     "ComputerSelfTestHistoryRequest": {
@@ -5892,14 +5896,20 @@
       "type": "object",
       "fields": {
         "selection": { "type": "ComputerSelfTestObserve" },
-        "phase": { "type": "text", "values": ["prepared", "completed", "failed", "outcome_unknown"] }
+        "phase": {
+          "type": "text",
+          "values": ["prepared", "completed", "failed", "outcome_unknown"]
+        }
       }
     },
     "ComputerSelfTestMarkerEntry": {
       "type": "object",
       "fields": {
         "selection": { "type": "ComputerSelfTestObserve" },
-        "phase": { "type": "text", "values": ["selected", "settling", "settled"] }
+        "phase": {
+          "type": "text",
+          "values": ["selected", "settling", "settled"]
+        }
       }
     },
     "ComputerSelfTestMarkerHistory": {
@@ -5919,13 +5929,39 @@
     "ComputerSelfTestStep": {
       "type": "object",
       "fields": {
-        "name": { "type": "text", "values": ["scratch", "write", "edit", "mutation read", "catalogue", "bootstrap", "list", "read", "search", "cleanup", "shell", "shell cancel", "workspace reads", "directory search", "git and hooks"] },
-        "status": { "type": "text", "values": ["pass", "fail", "unknown", "not_tested"] },
+        "name": {
+          "type": "text",
+          "values": [
+            "scratch",
+            "write",
+            "edit",
+            "mutation read",
+            "catalogue",
+            "bootstrap",
+            "list",
+            "read",
+            "search",
+            "cleanup",
+            "shell",
+            "shell cancel",
+            "workspace reads",
+            "directory search",
+            "git and hooks"
+          ]
+        },
+        "status": {
+          "type": "text",
+          "values": ["pass", "fail", "unknown", "not_tested"]
+        },
         "code": { "type": "id", "optional": true },
         "operationId": { "type": "id", "optional": true },
         "handle": { "type": "id", "optional": true },
         "cancelOperationId": { "type": "id", "optional": true },
-        "descendantCleanup": { "type": "text", "values": ["pending", "confirmed", "unverified"], "optional": true }
+        "descendantCleanup": {
+          "type": "text",
+          "values": ["pending", "confirmed", "unverified"],
+          "optional": true
+        }
       }
     },
     "ComputerSelfTestReport": {
@@ -5934,7 +5970,11 @@
         "operationId": { "type": "id" },
         "workspaceId": { "type": "id" },
         "computerGeneration": { "type": "decimal" },
-        "planVersion": { "type": "text", "values": ["1", "2"], "optional": true },
+        "planVersion": {
+          "type": "text",
+          "values": ["1", "2", "3"],
+          "optional": true
+        },
         "status": { "type": "text", "values": ["partial", "fail", "unknown"] },
         "steps": { "type": "ComputerSelfTestStep[]", "maxItems": 16 }
       }
