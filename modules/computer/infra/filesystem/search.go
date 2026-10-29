@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/legrch/farol/modules/computer/app/port"
+	"github.com/legrch/farol/modules/computer/domain/mutation"
 	"golang.org/x/sys/unix"
 	"golang.org/x/text/cases"
 )
@@ -39,6 +40,17 @@ var _ port.Search = (*Workspace)(nil)
 // Result flags are independent: neither an empty nor a partial result proves
 // absence. Like List/Read, this is not an atomic snapshot of the whole tree.
 func (w *Workspace) Search(ctx context.Context, request port.SearchRequest) (*port.SearchResponse, error) {
+	return w.search(ctx, request, nil)
+}
+
+func (w *Workspace) SearchScratch(ctx context.Context, request port.SearchRequest, binding port.ScratchReadBinding) (*port.SearchResponse, error) {
+	if !validScratchReadBinding(binding) || request.RelativePath != mutation.ScratchPath(binding.RunID)+"/check.txt" {
+		return nil, refusal("WORKSPACE_INVALID_REQUEST")
+	}
+	return w.search(ctx, request, &binding)
+}
+
+func (w *Workspace) search(ctx context.Context, request port.SearchRequest, scratch *port.ScratchReadBinding) (*port.SearchResponse, error) {
 	if err := cancelled(ctx); err != nil {
 		return nil, err
 	}
@@ -67,7 +79,7 @@ func (w *Workspace) Search(ctx context.Context, request port.SearchRequest) (*po
 		return nil, refusal("WORKSPACE_PATH_REFUSED")
 	}
 	binding.RelativePath = request.RelativePath
-	scan := searchScan{ctx: ctx, deadline: time.Now().Add(5 * time.Second), workspace: w, root: root, policy: p, expression: expression, result: &port.SearchResponse{Binding: binding, Matches: make([]port.SearchMatch, 0)}}
+	scan := searchScan{ctx: ctx, deadline: time.Now().Add(5 * time.Second), workspace: w, root: root, policy: p, expression: expression, result: &port.SearchResponse{Binding: binding, Matches: make([]port.SearchMatch, 0)}, scratch: scratch}
 	if len(parts) == 0 {
 		if p.exact != nil {
 			return nil, refusal("WORKSPACE_PATH_REFUSED")
@@ -82,6 +94,9 @@ func (w *Workspace) Search(ctx context.Context, request port.SearchRequest) (*po
 		var listed unix.Stat_t
 		if err := unix.Fstatat(parent, parts[len(parts)-1], &listed, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 			return nil, openError(err)
+		}
+		if scratch != nil && listed.Mode&unix.S_IFMT != unix.S_IFREG {
+			return nil, refusal("WORKSPACE_RACE_DETECTED")
 		}
 		if listed.Mode&unix.S_IFMT == unix.S_IFDIR {
 			if p.exact != nil {
@@ -242,6 +257,7 @@ type searchScan struct {
 	result                              *port.SearchResponse
 	entries, directories, bytes, output int
 	stop                                bool
+	scratch                             *port.ScratchReadBinding
 }
 
 func (s *searchScan) checkpoint() error {
@@ -262,6 +278,9 @@ func (s *searchScan) readSearchBytes(parent int, name string, ceiling int, expli
 		return nil, err
 	}
 	defer unix.Close(fd)
+	if s.scratch != nil && !scratchOpenedMatches(s.root, parent, fd, *s.scratch) {
+		return nil, refusal("WORKSPACE_RACE_DETECTED")
+	}
 	allowed, err := s.allowBytes(before.Size, ceiling, explicit)
 	if err != nil || !allowed {
 		return nil, err
@@ -288,7 +307,7 @@ func (s *searchScan) readSearchBytes(parent int, name string, ceiling int, expli
 	}
 	after, err := stat(fd)
 	var current unix.Stat_t
-	if err != nil || !stable(before, after) || after.Nlink != 1 || unix.Fstatat(parent, name, &current, unix.AT_SYMLINK_NOFOLLOW) != nil || !stable(before, current) || current.Nlink != 1 {
+	if err != nil || !stable(before, after) || after.Nlink != 1 || unix.Fstatat(parent, name, &current, unix.AT_SYMLINK_NOFOLLOW) != nil || !stable(before, current) || current.Nlink != 1 || s.scratch != nil && !scratchOpenedMatches(s.root, parent, fd, *s.scratch) {
 		return nil, refusal("WORKSPACE_RACE_DETECTED")
 	}
 	s.bytes += len(raw)

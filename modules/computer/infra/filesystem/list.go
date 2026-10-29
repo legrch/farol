@@ -9,12 +9,24 @@ import (
 	"strings"
 
 	"github.com/legrch/farol/modules/computer/app/port"
+	"github.com/legrch/farol/modules/computer/domain/mutation"
 	"golang.org/x/sys/unix"
 )
 
 // List returns visible regular files and directories. Omitted names are not
 // evidence of absence: denied paths, links and unsupported types are excluded.
 func (w *Workspace) List(ctx context.Context, request port.ListRequest) (*port.ListResponse, error) {
+	return w.list(ctx, request, nil)
+}
+
+func (w *Workspace) ListScratch(ctx context.Context, request port.ListRequest, binding port.ScratchReadBinding) (*port.ListResponse, error) {
+	if !validScratchReadBinding(binding) || request.RelativePath != mutation.ScratchPath(binding.RunID) {
+		return nil, refusal("WORKSPACE_INVALID_REQUEST")
+	}
+	return w.list(ctx, request, &binding)
+}
+
+func (w *Workspace) list(ctx context.Context, request port.ListRequest, scratch *port.ScratchReadBinding) (*port.ListResponse, error) {
 	if err := cancelled(ctx); err != nil {
 		return nil, err
 	}
@@ -44,6 +56,17 @@ func (w *Workspace) List(ctx context.Context, request port.ListRequest) (*port.L
 	}
 	file := os.NewFile(uintptr(fd), "workspace-directory")
 	defer file.Close()
+	fixtureFD := -1
+	if scratch != nil {
+		fixtureFD, _, err = regular(fd, "check.txt")
+		if err != nil {
+			return nil, err
+		}
+		defer unix.Close(fixtureFD)
+		if !scratchOpenedMatches(root, fd, fixtureFD, *scratch) {
+			return nil, refusal("WORKSPACE_RACE_DETECTED")
+		}
+	}
 	before, err := stat(fd)
 	if err != nil {
 		return nil, refusal("WORKSPACE_PATH_REFUSED")
@@ -100,7 +123,7 @@ func (w *Workspace) List(ctx context.Context, request port.ListRequest) (*port.L
 		w.afterRead()
 	}
 	after, err := stat(fd)
-	if err != nil || !stable(before, after) {
+	if err != nil || !stable(before, after) || scratch != nil && !scratchOpenedMatches(root, fd, fixtureFD, *scratch) {
 		return nil, refusal("WORKSPACE_RACE_DETECTED")
 	}
 	if err := recheckRoot(request.Workspace, rootInfo); err != nil {

@@ -43,6 +43,8 @@ var _ port.DirectoryInspector = (*computerFileOwners)(nil)
 var _ port.Search = (*computerFileOwners)(nil)
 
 var _ port.ScratchBoundWorkspace = (*computerFileOwners)(nil)
+var _ port.ScratchBoundList = (*computerFileOwners)(nil)
+var _ port.ScratchBoundSearch = (*computerFileOwners)(nil)
 
 func newComputerReaders(home string) (*computerFileOwners, error) {
 	legacyRead, err := filesystem.NewWithFilePolicy(home, authority.LegacyProtectedFiles)
@@ -148,6 +150,30 @@ func (o *computerFileOwners) ReadScratch(ctx context.Context, request port.ReadR
 		return nil, authority.Fail("WORKSPACE_HELPER_FAILED", "native-workspace")
 	}
 	return bound.ReadScratch(ctx, request, binding)
+}
+
+func (o *computerFileOwners) ListScratch(ctx context.Context, request port.ListRequest, binding port.ScratchReadBinding) (*port.ListResponse, error) {
+	selected, err := o.reader(request.Workspace.FilePolicy)
+	if err != nil {
+		return nil, err
+	}
+	bound, ok := selected.(port.ScratchBoundList)
+	if !ok || bound == nil {
+		return nil, authority.Fail("WORKSPACE_HELPER_FAILED", "native-workspace")
+	}
+	return bound.ListScratch(ctx, request, binding)
+}
+
+func (o *computerFileOwners) SearchScratch(ctx context.Context, request port.SearchRequest, binding port.ScratchReadBinding) (*port.SearchResponse, error) {
+	selected, err := o.reader(request.Workspace.FilePolicy)
+	if err != nil {
+		return nil, err
+	}
+	bound, ok := selected.(port.ScratchBoundSearch)
+	if !ok || bound == nil {
+		return nil, authority.Fail("WORKSPACE_HELPER_FAILED", "native-workspace")
+	}
+	return bound.SearchScratch(ctx, request, binding)
 }
 
 func (o *computerFileOwners) List(ctx context.Context, request port.ListRequest) (*port.ListResponse, error) {

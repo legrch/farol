@@ -75,6 +75,12 @@ type ScratchReadBinding struct {
 type ScratchBoundWorkspace interface {
 	ReadScratch(context.Context, ReadRequest, ScratchReadBinding) (*ReadResponse, error)
 }
+type ScratchBoundList interface {
+	ListScratch(context.Context, ListRequest, ScratchReadBinding) (*ListResponse, error)
+}
+type ScratchBoundSearch interface {
+	SearchScratch(context.Context, SearchRequest, ScratchReadBinding) (*SearchResponse, error)
+}
 
 // DirectoryInspector checks a selected physical directory without listing its
 // contents. It proves access and binding, not a stable directory snapshot.
