@@ -304,6 +304,7 @@ export type NativeRefreshResult =
         | "not-adopted";
     }>;
 export interface RendererFacade {
+  selfTest?(command: unknown): Promise<unknown>;
   readonly draft: AgentDraftStore;
   readonly conversationDraft: ConversationDraftStore;
   getSnapshot(): WindowSnapshot;

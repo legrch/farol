@@ -1221,6 +1221,11 @@ export class WindowController implements RendererFacade {
       throw new Error("CHAT_HISTORY_CROSSED");
     return immutable(reply);
   }
+  async selfTest(command: unknown): Promise<unknown> {
+    if (this.disposed || !this.api.selfTest)
+      return { ok: false, code: "SELF_TEST_UNAVAILABLE" };
+    return this.api.selfTest(command);
+  }
   async readRetiredReplies(query: unknown): Promise<unknown> {
     const before = this.state;
     const context = before.chatHistoryContext;

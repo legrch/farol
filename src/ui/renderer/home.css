@@ -8,6 +8,13 @@
 .home-candidate > h1 {
   margin-bottom: 24px;
 }
+.home-self-test {
+  margin-top: 32px;
+}
+.home-self-test p {
+  margin: 8px 0 12px;
+  color: var(--muted);
+}
 .home-setup-card,
 .home-status-card {
   border: 1px solid var(--line);
