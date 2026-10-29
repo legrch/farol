@@ -13,10 +13,11 @@ type selfTestParentGate struct {
 	active, blocked, closed bool
 	done                    chan struct{}
 	cancel                  context.CancelFunc
+	operation               string
 }
 
-func (g *selfTestParentGate) begin(cancel context.CancelFunc) bool {
-	if g == nil || cancel == nil {
+func (g *selfTestParentGate) begin(operation string, cancel context.CancelFunc) bool {
+	if g == nil || cancel == nil || operation == "" {
 		return false
 	}
 	g.mu.Lock()
@@ -24,8 +25,17 @@ func (g *selfTestParentGate) begin(cancel context.CancelFunc) bool {
 	if g.active || g.blocked || g.closed {
 		return false
 	}
-	g.active, g.cancel, g.done = true, cancel, make(chan struct{})
+	g.active, g.cancel, g.done, g.operation = true, cancel, make(chan struct{}), operation
 	return true
+}
+
+func (g *selfTestParentGate) originalOperation() string {
+	if g == nil {
+		return ""
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.operation
 }
 
 func (g *selfTestParentGate) finish(uncertain bool) {
@@ -76,6 +86,30 @@ func (g *selfTestParentGate) wait() {
 	active := g.active
 	g.mu.Unlock()
 	if active && done != nil {
+		<-done
+	}
+}
+
+// The parent may return UNKNOWN after cancellation while its original Shell
+// collector is still finishing. Join only the two fixed children of that
+// original parent before closing the journal; never start or cancel again.
+func (s *SettingsMutationIngress) waitSelfTestCollectors() {
+	if s == nil {
+		return
+	}
+	ids, ok := selfTestIDsV1(s.selfTestParent.originalOperation())
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	var pending []<-chan struct{}
+	for _, operation := range []string{ids.quick, ids.cancel} {
+		if record := s.operations[operation]; record != nil && record.process != nil && record.process.collectionDone != nil {
+			pending = append(pending, record.process.collectionDone)
+		}
+	}
+	s.mu.Unlock()
+	for _, done := range pending {
 		<-done
 	}
 }

@@ -39,7 +39,7 @@ func (d *durableSelfTestExecution) execute(ctx context.Context) selfTestReport {
 	d.started = true
 	d.mu.Unlock()
 	bounded, cancel := context.WithCancel(ctx)
-	if d.gate != nil && !d.gate.begin(cancel) {
+	if d.gate != nil && !d.gate.begin(d.binding.Identity.OperationID, cancel) {
 		cancel()
 		d.mu.Lock()
 		d.result, d.finished = unknown, true

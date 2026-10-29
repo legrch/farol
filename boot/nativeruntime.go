@@ -316,6 +316,9 @@ func (r *NativeRuntime) closeResources() error {
 	if r.connector != nil {
 		failures = append(failures, r.connector.Shutdown())
 	}
+	if r.mutations != nil {
+		r.mutations.waitSelfTestCollectors()
+	}
 	if r.chat != nil {
 		failures = append(failures, r.chat.FreezeAdmissions(context.Background()))
 	}

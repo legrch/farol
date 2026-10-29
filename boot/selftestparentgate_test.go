@@ -10,11 +10,11 @@ func TestSelfTestParentGateExcludesConcurrentAndUnknown(t *testing.T) {
 	var gate selfTestParentGate
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if !gate.begin(cancel) || gate.begin(cancel) {
+	if !gate.begin("original", cancel) || gate.begin("other", cancel) {
 		t.Fatal("concurrent parent admitted")
 	}
 	gate.finish(true)
-	if gate.begin(cancel) {
+	if gate.begin("other", cancel) {
 		t.Fatal("unknown parent allowed another run")
 	}
 }
@@ -22,7 +22,7 @@ func TestSelfTestParentGateExcludesConcurrentAndUnknown(t *testing.T) {
 func TestSelfTestParentGateStopsAndJoinsOriginal(t *testing.T) {
 	var gate selfTestParentGate
 	ctx, cancel := context.WithCancel(context.Background())
-	if !gate.begin(cancel) {
+	if !gate.begin("original", cancel) {
 		t.Fatal("parent refused")
 	}
 	gate.stop()
@@ -44,7 +44,7 @@ func TestSelfTestParentGateStopsAndJoinsOriginal(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("parent not joined")
 	}
-	if gate.begin(cancel) {
+	if gate.begin("other", cancel) {
 		t.Fatal("closed admission reopened")
 	}
 }
@@ -53,11 +53,11 @@ func TestSelfTestParentGateAllowsNextAfterKnownResult(t *testing.T) {
 	var gate selfTestParentGate
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if !gate.begin(cancel) {
+	if !gate.begin("original", cancel) {
 		t.Fatal("first refused")
 	}
 	gate.finish(false)
-	if !gate.begin(cancel) {
+	if !gate.begin("other", cancel) {
 		t.Fatal("settled parent blocked next")
 	}
 	gate.finish(false)
@@ -69,7 +69,7 @@ func TestSelfTestParentGateBlocksCleanRetirementUntilSettled(t *testing.T) {
 			s, _, _, _, _ := connectorMutationFixture(t)
 			_, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			if !s.mutations.selfTestParent.begin(cancel) {
+			if !s.mutations.selfTestParent.begin("original", cancel) {
 				t.Fatal("parent refused")
 			}
 			if mode != "active" {
@@ -79,7 +79,7 @@ func TestSelfTestParentGateBlocksCleanRetirementUntilSettled(t *testing.T) {
 			if (err == nil) != (mode == "settled") {
 				t.Fatal("incorrect retirement", mode, err)
 			}
-			if s.mutations.selfTestParent.begin(cancel) {
+			if s.mutations.selfTestParent.begin("other", cancel) {
 				t.Fatal("frozen parent admitted")
 			}
 			if mode == "active" {
@@ -87,4 +87,33 @@ func TestSelfTestParentGateBlocksCleanRetirementUntilSettled(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSelfTestCollectorJoinWaitsForOriginalOnly(t *testing.T) {
+	ids, _ := selfTestIDsV1("00000000-0000-4000-8000-000000000001")
+	known, unrelated := make(chan struct{}), make(chan struct{})
+	ledger := &SettingsMutationIngress{operations: map[string]*settingsMutationOperation{
+		ids.quick:   {process: &connectorProcessOperation{collectionDone: known}},
+		"unrelated": {process: &connectorProcessOperation{collectionDone: unrelated}},
+	}}
+	_, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if !ledger.selfTestParent.begin(ids.run, cancel) {
+		t.Fatal("parent refused")
+	}
+	ledger.selfTestParent.finish(true)
+	joined := make(chan struct{})
+	go func() { ledger.waitSelfTestCollectors(); close(joined) }()
+	select {
+	case <-joined:
+		t.Fatal("collector not joined")
+	default:
+	}
+	close(known)
+	select {
+	case <-joined:
+	case <-time.After(time.Second):
+		t.Fatal("unrelated collector blocked join")
+	}
+	close(unrelated)
 }
