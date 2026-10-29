@@ -65,6 +65,10 @@ type MutationDescriptor struct {
 type MutationRequest struct {
 	Workspace MutationDescriptor
 	Operation mutation.Operation
+	// Optional private self-test constraint. When present the native producer
+	// must pin this exact previously created parent, refuse missing parents and
+	// recheck its physical identity through publication. It grants no authority.
+	ScratchParent *mutation.ScratchCleanupBinding
 	// Rechecks the SAME selected execution lease, outside owner callbacks.
 	// Required before the first directory effect and publication preparation.
 	BeforePublish func(context.Context) error

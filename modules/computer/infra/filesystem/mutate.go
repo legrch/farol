@@ -3,6 +3,7 @@ package filesystem
 import (
 	"context"
 	"errors"
+	"strconv"
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/mutation"
@@ -17,6 +18,15 @@ func (m *Mutable) Mutate(ctx context.Context, request port.MutationRequest) (rec
 		return nil, refusal("WORKSPACE_INVALID_REQUEST")
 	}
 	request.Operation = request.Operation.Clone()
+	if request.ScratchParent != nil {
+		bound := *request.ScratchParent
+		request.ScratchParent = &bound
+		b := bound.Creation
+		parts, partErr := components(request.Operation.Path(), false, false)
+		if !bound.Valid() || partErr != nil || len(parts) != 2 || parts[0] != b.Scratch.Leaf || request.Workspace.WorkspaceID != b.WorkspaceID || request.Workspace.Root != b.Scratch.Root || request.Workspace.ApprovedRoot.Path != b.Scratch.Root || request.Workspace.ApprovedRoot.Device != b.Scratch.RootIdentity.Device || request.Workspace.ApprovedRoot.Inode != b.Scratch.RootIdentity.Inode {
+			return nil, refusal("WORKSPACE_INVALID_REQUEST")
+		}
+	}
 	if err = m.policy(request.Workspace, request.Operation.Path()); err != nil {
 		return nil, err
 	}
@@ -39,6 +49,9 @@ func (m *Mutable) Mutate(ctx context.Context, request port.MutationRequest) (rec
 	for _, part := range parts[:len(parts)-1] {
 		child, openErr := walk.add(parent, part)
 		if openErr != nil {
+			if request.ScratchParent != nil {
+				return nil, refusal("WORKSPACE_MUTATION_CONFLICT")
+			}
 			// Only proven absence permits mkdir, and only writes create parents.
 			_, lookupErr := m.fs.lstat(parent, part)
 			if !errors.Is(lookupErr, unix.ENOENT) || request.Operation.Kind() != mutation.WriteKind {
@@ -72,6 +85,13 @@ func (m *Mutable) Mutate(ctx context.Context, request port.MutationRequest) (rec
 			child, err = walk.add(parent, part)
 			if err != nil {
 				return nil, err
+			}
+		}
+		if request.ScratchParent != nil {
+			v := walk.pins[len(walk.pins)-1].version
+			bound := request.ScratchParent.Directory
+			if strconv.FormatUint(v.dev, 10) != bound.Device || strconv.FormatUint(v.ino, 10) != bound.Inode || v.mode&07777 != 0700 || v.uid != m.fs.uid() {
+				return nil, refusal("WORKSPACE_MUTATION_CONFLICT")
 			}
 		}
 		parent = child
