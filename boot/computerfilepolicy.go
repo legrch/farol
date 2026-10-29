@@ -161,3 +161,21 @@ func (o *computerFileOwners) Mutate(ctx context.Context, request port.MutationRe
 	}
 	return selected.Mutate(ctx, request)
 }
+
+// CreateStagedScratch selects the same qualified file-policy owner as Mutate.
+// The borrowed staging descriptor remains owned by the original stage lease.
+func (o *computerFileOwners) CreateStagedScratch(ctx context.Context, request port.MutationRequest, fd int, root port.Root) (*port.MutationReceipt, error) {
+	policy := request.Workspace.FilePolicy
+	if o == nil || !policy.Valid() {
+		return nil, authority.Fail("WORKSPACE_INVALID_REQUEST", "file-policy")
+	}
+	selected := o.legacyMutation
+	if policy == authority.RootScopedFiles {
+		selected = o.rootMutation
+	}
+	staged, ok := selected.(stagedScratchNative)
+	if !ok || staged == nil {
+		return nil, authority.Fail("WORKSPACE_INVALID_REQUEST", "file-policy")
+	}
+	return staged.CreateStagedScratch(ctx, request, fd, root)
+}

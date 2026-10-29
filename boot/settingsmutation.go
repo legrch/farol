@@ -46,6 +46,7 @@ type settingsMutationOperation struct {
 	pending         bool
 	settled         bool
 	contract        *mutationct.OwnerContract
+	scratch         *mutationsvc.OwnerService
 	connector       *mutationsvc.ConnectorService
 	process         *connectorProcessOperation
 	connectorScope  bool

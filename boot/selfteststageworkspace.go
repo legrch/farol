@@ -6,15 +6,19 @@ import (
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/mutation"
-	"github.com/legrch/farol/modules/computer/infra/filesystem"
 )
+
+type stagedScratchNative interface {
+	port.MutableWorkspace
+	CreateStagedScratch(context.Context, port.MutationRequest, int, port.Root) (*port.MutationReceipt, error)
+}
 
 // stagedScratchWorkspace is private composition for an already selected owner
 // operation. Ordinary writes remain on their existing native path.
 type stagedScratchWorkspace struct {
 	ledger    *SettingsMutationIngress
 	operation string
-	native    *filesystem.Mutable
+	native    stagedScratchNative
 }
 
 var _ port.MutableWorkspace = (*stagedScratchWorkspace)(nil)
@@ -44,7 +48,7 @@ func (w *stagedScratchWorkspace) BeginStage(ctx context.Context, request port.Mu
 
 type stagedScratchAttempt struct {
 	lease   *selfTestStageLease
-	native  *filesystem.Mutable
+	native  stagedScratchNative
 	request port.MutationRequest
 }
 
