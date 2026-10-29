@@ -58,6 +58,19 @@ func (r *Repository) AdmitSelfTest(ctx context.Context, state *domain.SelfTestSt
 		}
 		return port.SelfTestAdmission{Status: port.MutationExisting, Record: existing}, nil
 	}
+	if binding.Version == 2 {
+		markerKey, err := selfTestMarkerKey(binding)
+		if err != nil {
+			return out, err
+		}
+		marker, _, err := r.loadSelfTestMarker(markerKey, binding)
+		if err != nil {
+			return out, err
+		}
+		if marker == nil || marker.Phase() != domain.SelfTestMarkerSelected {
+			return out, failure("COMPUTER_SELFTEST_MARKER_REQUIRED")
+		}
+	}
 	if err = r.ready(ctx); err != nil {
 		return out, err
 	}

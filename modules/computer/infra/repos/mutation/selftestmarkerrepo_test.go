@@ -11,6 +11,31 @@ import (
 	domain "github.com/legrch/farol/modules/computer/domain/mutation"
 )
 
+func TestSelfTestVersionTwoAdmissionRequiresMatchingSelectedMarker(t *testing.T) {
+	_, original, _ := fixture()
+	disk := &historyMemory{memory: original}
+	r := newRepository(disk)
+	b := domain.SelfTestBinding{Identity: domain.Identity{Scope: domain.ScopeOwnerSettings, OperationID: scratchTestRun, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 2}
+	parent, _ := domain.RestoreSelfTest(b, domain.Prepared, nil)
+	if _, err := r.AdmitSelfTest(context.Background(), parent); err == nil || disk.creates != 0 {
+		t.Fatal("missing marker admitted")
+	}
+	marker, _ := domain.RestoreSelfTestMarker(b, domain.SelfTestMarkerSelected)
+	if _, err := r.AdmitSelfTestMarker(context.Background(), marker); err != nil {
+		t.Fatal(err)
+	}
+	crossed := b
+	crossed.ComputerGeneration++
+	crossedParent, _ := domain.RestoreSelfTest(crossed, domain.Prepared, nil)
+	if _, err := r.AdmitSelfTest(context.Background(), crossedParent); err == nil || disk.creates != 1 {
+		t.Fatal("crossed marker admitted")
+	}
+	out, err := r.AdmitSelfTest(context.Background(), parent)
+	if err != nil || out.Status != port.MutationAdmitted || disk.creates != 2 {
+		t.Fatal("selected original refused", out, err)
+	}
+}
+
 func TestSelfTestMarkerRepositoryRequiresOriginalTerminalAndSingleTransitions(t *testing.T) {
 	_, memoryDisk, _ := fixture()
 	disk := &historyMemory{memory: memoryDisk}

@@ -15,7 +15,7 @@ import (
 func TestSelfTestHistoryNativePreservesPreparedBytes(t *testing.T) {
 	root, _, _ := nativeProcessFixture(t)
 	r := openProcessRepository(t, root)
-	b := domain.SelfTestBinding{Identity: domain.Identity{Scope: domain.ScopeOwnerSettings, OperationID: "00000000-0000-4000-8000-000000000099", OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "workspace", ComputerGeneration: 7, Version: 2}
+	b := domain.SelfTestBinding{Identity: domain.Identity{Scope: domain.ScopeOwnerSettings, OperationID: "00000000-0000-4000-8000-000000000099", OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "workspace", ComputerGeneration: 7, Version: 1}
 	state, err := domain.RestoreSelfTest(b, domain.Prepared, nil)
 	if err != nil {
 		t.Fatal(err)
