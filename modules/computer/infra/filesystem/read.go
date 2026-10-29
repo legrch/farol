@@ -6,13 +6,28 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"math"
+	"strconv"
 	"unicode/utf8"
 
 	"github.com/legrch/farol/modules/computer/app/port"
+	"github.com/legrch/farol/modules/computer/domain/mutation"
 	"golang.org/x/sys/unix"
 )
 
 func (w *Workspace) Read(ctx context.Context, request port.ReadRequest) (*port.ReadResponse, error) {
+	return w.read(ctx, request, nil)
+}
+
+// ReadScratch verifies the actual opened descriptors against the original
+// diagnostic custody. The ordinary read policy and disclosure checks still apply.
+func (w *Workspace) ReadScratch(ctx context.Context, request port.ReadRequest, binding port.ScratchReadBinding) (*port.ReadResponse, error) {
+	if !mutation.ScratchLeaf(mutation.ScratchPath(binding.RunID)) || request.RelativePath != mutation.ScratchPath(binding.RunID)+"/check.txt" || request.Range != nil || !binding.Directory.Valid() || !binding.File.Valid() || binding.DirectoryHold == nil || binding.FileHold == nil {
+		return nil, refusal("WORKSPACE_INVALID_REQUEST")
+	}
+	return w.read(ctx, request, &binding)
+}
+
+func (w *Workspace) read(ctx context.Context, request port.ReadRequest, binding *port.ScratchReadBinding) (*port.ReadResponse, error) {
 	if err := cancelled(ctx); err != nil {
 		return nil, err
 	}
@@ -49,6 +64,22 @@ func (w *Workspace) Read(ctx context.Context, request port.ReadRequest) (*port.R
 		return nil, err
 	}
 	defer unix.Close(fd)
+	checkScratch := func() bool {
+		if binding == nil {
+			return true
+		}
+		var directory, namedDirectory, openedFile, namedFile unix.Stat_t
+		return binding.DirectoryHold.Check(binding.Directory) == nil && binding.FileHold.Check(binding.File) == nil &&
+			unix.Fstat(parent, &directory) == nil && unix.Fstatat(root, parts[0], &namedDirectory, unix.AT_SYMLINK_NOFOLLOW) == nil &&
+			unix.Fstat(fd, &openedFile) == nil && unix.Fstatat(parent, "check.txt", &namedFile, unix.AT_SYMLINK_NOFOLLOW) == nil &&
+			strconv.FormatUint(uint64(directory.Dev), 10) == binding.Directory.Device && strconv.FormatUint(directory.Ino, 10) == binding.Directory.Inode &&
+			stable(directory, namedDirectory) && directory.Mode&unix.S_IFMT == unix.S_IFDIR &&
+			strconv.FormatUint(uint64(openedFile.Dev), 10) == binding.File.Device && strconv.FormatUint(openedFile.Ino, 10) == binding.File.Inode &&
+			stable(openedFile, namedFile) && openedFile.Mode&unix.S_IFMT == unix.S_IFREG && openedFile.Nlink == 1
+	}
+	if !checkScratch() {
+		return nil, refusal("WORKSPACE_RACE_DETECTED")
+	}
 	if before.Size < 0 {
 		return nil, refusal("WORKSPACE_RACE_DETECTED")
 	}
@@ -91,7 +122,7 @@ func (w *Workspace) Read(ctx context.Context, request port.ReadRequest) (*port.R
 	if err != nil {
 		return nil, refusal("WORKSPACE_RACE_DETECTED")
 	}
-	if !stable(before, after) || after.Nlink != 1 {
+	if !stable(before, after) || after.Nlink != 1 || !checkScratch() {
 		return nil, refusal("WORKSPACE_RACE_DETECTED")
 	}
 	if err := recheckRoot(request.Workspace, rootInfo); err != nil {

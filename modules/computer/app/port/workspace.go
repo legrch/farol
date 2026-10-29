@@ -5,6 +5,7 @@ import (
 	"context"
 
 	"github.com/legrch/farol/modules/computer/domain/authority"
+	"github.com/legrch/farol/modules/computer/domain/mutation"
 )
 
 type Root struct{ Path, Device, Inode string }
@@ -60,6 +61,19 @@ type ListResponse struct {
 type Workspace interface {
 	Read(context.Context, ReadRequest) (*ReadResponse, error)
 	List(context.Context, ListRequest) (*ListResponse, error)
+}
+
+// ScratchReadBinding is supplied only by the private diagnostic owner holding
+// both original descriptors. It grants no workspace authority.
+type ScratchReadBinding struct {
+	RunID           string
+	Directory, File mutation.DirectoryIdentity
+	DirectoryHold   ScratchDirectoryCustody
+	FileHold        ScratchFileCustody
+}
+
+type ScratchBoundWorkspace interface {
+	ReadScratch(context.Context, ReadRequest, ScratchReadBinding) (*ReadResponse, error)
 }
 
 // DirectoryInspector checks a selected physical directory without listing its
