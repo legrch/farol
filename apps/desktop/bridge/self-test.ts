@@ -20,24 +20,42 @@ export type SelfTestObservation = Readonly<{
   state: "observed" | "unknown";
 }>;
 
+// The host selects a durable owner. Reserve is write-once and must acknowledge
+// the exact identity before transport; settle preserves the original record.
+export interface SelfTestSelectionStore {
+  reserve(selection: SelfTestSelection): Promise<"durable" | "unknown">;
+  // Owns one-shot settlement and must retain attempted/unknown across restart.
+  settle(selection: SelfTestSelection): Promise<"durable" | "unknown">;
+}
+export type PriorSelfTest = Readonly<{
+  selection: SelfTestSelection;
+  settlementAttempted: boolean;
+}>;
+
 // An unresolved original retains its identity and is observed only through
 // the read method, never dispatched again. A settled run permits a new request.
 export class SelfTestBridge {
   private pending = false;
   private unresolved: SelfTestSelection | undefined;
+  private settlementAttempted = false;
   private readonly context: Readonly<Context>;
   constructor(
     private readonly client: Pick<Client, "request">,
     context: Context,
-    prior: "none" | SelfTestSelection,
+    prior: "none" | PriorSelfTest,
+    private readonly store: SelfTestSelectionStore,
   ) {
     if (!validate("Context", context))
       throw new BridgeError("refused", "invalid_core_context");
     this.context = Object.freeze({ ...context });
     if (prior !== "none") {
-      if (!validate("ComputerSelfTestObserve", prior))
+      if (
+        !validate("ComputerSelfTestObserve", prior.selection) ||
+        typeof prior.settlementAttempted !== "boolean"
+      )
         throw new BridgeError("refused", "invalid_self_test_observation");
-      this.unresolved = Object.freeze({ ...prior });
+      this.unresolved = Object.freeze({ ...prior.selection });
+      this.settlementAttempted = prior.settlementAttempted;
     }
   }
 
@@ -57,14 +75,39 @@ export class SelfTestBridge {
       planVersion: "2" as const,
     });
     this.pending = true;
+    this.unresolved = selection;
+    this.settlementAttempted = false;
+    let reserved: "durable" | "unknown" = "unknown";
+    try {
+      reserved = await this.store.reserve(selection);
+    } catch {
+      // The original reserve may have reached durable storage; never repeat it.
+    }
+    if (reserved !== "durable") {
+      this.pending = false;
+      return Object.freeze({ selection, state: "unknown" });
+    }
     const result = await this.request(
       "computer.selftest.start",
       body as unknown as Json,
       selection,
     );
+    if (result.state === "observed" && result.report?.status !== "unknown") {
+      this.settlementAttempted = true;
+      try {
+        if ((await this.store.settle(selection)) === "durable")
+          this.unresolved = undefined;
+      } catch {
+        // A lost settlement acknowledgement preserves the original fence.
+      }
+    }
     this.pending = false;
-    if (result.state === "unknown" || result.report?.status === "unknown")
-      this.unresolved = selection;
+    if (
+      this.unresolved &&
+      result.state === "observed" &&
+      result.report?.status !== "unknown"
+    )
+      return Object.freeze({ ...result, state: "unknown" });
     return result;
   }
 
@@ -79,6 +122,7 @@ export class SelfTestBridge {
     );
     if (
       !this.pending &&
+      !this.settlementAttempted &&
       this.unresolved &&
       Object.keys(selection).every(
         (key) =>
@@ -87,8 +131,25 @@ export class SelfTestBridge {
       ) &&
       result.state === "observed" &&
       result.report?.status !== "unknown"
+    ) {
+      this.pending = true;
+      this.settlementAttempted = true;
+      try {
+        if ((await this.store.settle(selection)) === "durable")
+          this.unresolved = undefined;
+      } catch {
+        // Do not repeat an uncertain settlement.
+      } finally {
+        this.pending = false;
+      }
+    }
+    if (
+      this.unresolved &&
+      this.unresolved.operationId === selection.operationId &&
+      result.state === "observed" &&
+      result.report?.status !== "unknown"
     )
-      this.unresolved = undefined;
+      return Object.freeze({ ...result, state: "unknown" });
     return result;
   }
 

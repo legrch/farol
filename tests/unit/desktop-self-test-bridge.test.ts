@@ -3,6 +3,10 @@ import { SelfTestBridge } from "../../apps/desktop/bridge/self-test";
 import type { Json, Outcome } from "../../apps/desktop/bridge/wire";
 
 const context = { profileId: "profile", backendGeneration: "backend" };
+const store = () => ({
+  reserve: vi.fn(async () => "durable" as const),
+  settle: vi.fn(async () => "durable" as const),
+});
 const publication = {
   fence: "1",
   storeRevision: "1",
@@ -39,7 +43,7 @@ it("retains the original attempt and only observes that identity", async () => {
       };
     },
   );
-  const bridge = new SelfTestBridge({ request }, context, "none");
+  const bridge = new SelfTestBridge({ request }, context, "none", store());
   const first = await bridge.start(publication, "work");
   expect(first.state).toBe("observed");
   expect(first.report?.status).toBe("unknown");
@@ -59,7 +63,7 @@ it("keeps an unconfirmed original id after a lost or crossed response", async ()
   const request = vi.fn(async (): Promise<Outcome> => {
     throw new Error("transport failed");
   });
-  const bridge = new SelfTestBridge({ request }, context, "none");
+  const bridge = new SelfTestBridge({ request }, context, "none", store());
   const first = await bridge.start(publication, "work");
   expect(first.state).toBe("unknown");
   expect(first.selection.operationId).toMatch(/^[0-9a-f-]{36}$/u);
@@ -128,7 +132,7 @@ it("permits a separate test only after the first result is settled", async () =>
       },
     }),
   );
-  const bridge = new SelfTestBridge({ request }, context, "none");
+  const bridge = new SelfTestBridge({ request }, context, "none", store());
   const first = await bridge.start(publication, "work");
   const second = await bridge.start(publication, "work");
   expect(first.report?.status).toBe("partial");
@@ -155,7 +159,12 @@ it("keeps restored unknown fenced when an observation has a forged failure", asy
       data: { ...prior, status: "fail", steps: [] },
     }),
   );
-  const bridge = new SelfTestBridge({ request }, context, prior);
+  const bridge = new SelfTestBridge(
+    { request },
+    context,
+    { selection: prior, settlementAttempted: false },
+    store(),
+  );
   expect((await bridge.observe(prior)).state).toBe("unknown");
   await expect(bridge.start(publication, "work")).rejects.toMatchObject({
     code: "self_test_unresolved",
@@ -188,9 +197,75 @@ it("only releases a restored fence after observing its own settled result", asyn
       },
     }),
   );
-  const bridge = new SelfTestBridge({ request }, context, prior);
+  const bridge = new SelfTestBridge(
+    { request },
+    context,
+    { selection: prior, settlementAttempted: false },
+    store(),
+  );
   expect((await bridge.observe(prior)).report?.status).toBe("fail");
   const second = await bridge.start(publication, "work");
   expect(second.selection.operationId).not.toBe(prior.operationId);
   expect(request).toHaveBeenCalledTimes(2);
+});
+
+it("never dispatches when reservation acknowledgement is lost", async () => {
+  const request = vi.fn(async (): Promise<Outcome> => {
+    throw new Error("unexpected request");
+  });
+  const persistence = {
+    reserve: vi.fn(async () => "unknown" as const),
+    settle: vi.fn(async () => "durable" as const),
+  };
+  const bridge = new SelfTestBridge({ request }, context, "none", persistence);
+  const out = await bridge.start(publication, "work");
+  expect(out.state).toBe("unknown");
+  expect(request).not.toHaveBeenCalled();
+  await expect(bridge.start(publication, "work")).rejects.toMatchObject({
+    code: "self_test_unresolved",
+  });
+  expect(persistence.reserve).toHaveBeenCalledTimes(1);
+});
+
+it("does not repeat an uncertain settlement", async () => {
+  const prior = {
+    operationId: "00000000-0000-4000-8000-000000000001",
+    workspaceId: "work",
+    computerGeneration: "1",
+    planVersion: "2" as const,
+  };
+  const request = vi.fn(
+    async (
+      _method: string,
+      body: Json,
+      options: { id?: string } = {},
+    ): Promise<Outcome> => ({
+      status: "ok",
+      requestId: options.id!,
+      context,
+      data: {
+        ...(body as Record<string, Json>),
+        status: "fail",
+        steps: [
+          { name: "scratch", status: "fail", operationId: prior.operationId },
+        ],
+      },
+    }),
+  );
+  const persistence = {
+    reserve: vi.fn(async () => "durable" as const),
+    settle: vi.fn(async () => "unknown" as const),
+  };
+  const bridge = new SelfTestBridge(
+    { request },
+    context,
+    { selection: prior, settlementAttempted: false },
+    persistence,
+  );
+  expect((await bridge.observe(prior)).state).toBe("unknown");
+  expect((await bridge.observe(prior)).state).toBe("unknown");
+  expect(persistence.settle).toHaveBeenCalledTimes(1);
+  await expect(bridge.start(publication, "work")).rejects.toMatchObject({
+    code: "self_test_unresolved",
+  });
 });
