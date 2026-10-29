@@ -67,6 +67,7 @@ it("retains one original owner for concurrent calls and never repeats unknown", 
     () => {},
     () => publication,
   );
+  expect(manager.canRetire()).toBe(true);
   const [first, second] = await Promise.allSettled([
     manager.start("work"),
     manager.start("work"),
@@ -82,6 +83,7 @@ it("retains one original owner for concurrent calls and never repeats unknown", 
         ? second.value
         : undefined;
   expect(manager.pending("work")).toEqual(successful?.selection);
+  expect(manager.canRetire()).toBe(false);
   expect(
     request.mock.calls.filter(
       ([method]) => method === "computer.selftest.marker.begin",
@@ -95,6 +97,27 @@ it("retains one original owner for concurrent calls and never repeats unknown", 
       ([method]) => method === "computer.selftest.start",
     ),
   ).toHaveLength(1);
+});
+
+it("cannot retire an owner while its initial inventory is in flight", async () => {
+  let release!: (value: Outcome) => void;
+  const request = vi.fn(
+    () =>
+      new Promise<Outcome>((resolve) => {
+        release = resolve;
+      }),
+  );
+  const manager = new SelfTestManager(
+    { request },
+    context,
+    () => {},
+    () => publication,
+  );
+  const pending = manager.start("work");
+  expect(manager.canRetire()).toBe(false);
+  release({ status: "refused", requestId: "not-matching", context });
+  await expect(pending).rejects.toBeDefined();
+  expect(manager.canRetire()).toBe(true);
 });
 
 it("exposes a restored original while refusing a replacement start", async () => {

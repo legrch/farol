@@ -14,6 +14,7 @@ export class SelfTestManager {
   >();
   private readonly context: Readonly<Context>;
   private readonly unknown = new Map<string, SelfTestSelection>();
+  private active = 0;
   private readonly opened = new Map<
     string,
     Awaited<ReturnType<typeof openSelfTestOwner>>
@@ -52,44 +53,69 @@ export class SelfTestManager {
   }
 
   async history(workspaceId: string) {
-    await this.owner(workspaceId);
-    const markers = await readSelfTestMarkers(
-      this.client,
-      this.context,
-      workspaceId,
-    );
-    const records = await readSelfTestHistory(
-      this.client,
-      this.context,
-      workspaceId,
-    );
-    this.checkLive();
-    return Object.freeze({ markers, records });
+    this.active++;
+    try {
+      await this.owner(workspaceId);
+      const markers = await readSelfTestMarkers(
+        this.client,
+        this.context,
+        workspaceId,
+      );
+      const records = await readSelfTestHistory(
+        this.client,
+        this.context,
+        workspaceId,
+      );
+      this.checkLive();
+      return Object.freeze({ markers, records });
+    } finally {
+      this.active--;
+    }
   }
 
   async start(workspaceId: string) {
-    const owner = await this.owner(workspaceId);
-    this.checkLive();
-    const result = await owner.bridge.start(this.publication(), workspaceId);
-    if (result.state === "unknown" || result.report?.status === "unknown")
-      this.unknown.set(workspaceId, result.selection);
-    return result;
+    this.active++;
+    try {
+      const owner = await this.owner(workspaceId);
+      this.checkLive();
+      const result = await owner.bridge.start(this.publication(), workspaceId);
+      if (result.state === "unknown" || result.report?.status === "unknown")
+        this.unknown.set(workspaceId, result.selection);
+      return result;
+    } finally {
+      this.active--;
+    }
   }
 
   async observe(workspaceId: string, selection: SelfTestSelection) {
     if (selection.workspaceId !== workspaceId)
       throw new BridgeError("refused", "invalid_self_test_observation");
-    const owner = await this.owner(workspaceId);
-    this.checkLive();
-    const result = await owner.bridge.observe(selection);
-    if (
-      result.state === "observed" &&
-      result.report &&
-      result.report.status !== "unknown" &&
-      this.unknown.get(workspaceId)?.operationId === selection.operationId
-    )
-      this.unknown.delete(workspaceId);
-    return result;
+    this.active++;
+    try {
+      const owner = await this.owner(workspaceId);
+      this.checkLive();
+      const result = await owner.bridge.observe(selection);
+      if (
+        result.state === "observed" &&
+        result.report &&
+        result.report.status !== "unknown" &&
+        this.unknown.get(workspaceId)?.operationId === selection.operationId
+      )
+        this.unknown.delete(workspaceId);
+      return result;
+    } finally {
+      this.active--;
+    }
+  }
+
+  canRetire(): boolean {
+    return (
+      this.active === 0 &&
+      this.unknown.size === 0 &&
+      [...this.opened.values()].every(
+        (owner) => !owner.bridge.unresolvedSelection,
+      )
+    );
   }
 
   pending(workspaceId: string): SelfTestSelection | undefined {

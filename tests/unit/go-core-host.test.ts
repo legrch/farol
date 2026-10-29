@@ -495,6 +495,44 @@ afterEach(() => {
 });
 
 describe("normal Go host startup", () => {
+  it("replaces a settled self-test manager after a connector binding change", () => {
+    const f = transport();
+    const host = new DesktopGoCore(f.client, () => settings);
+    const internal = host as unknown as {
+      connector: unknown;
+      selfTests: unknown;
+      selfTestBinding: unknown;
+      settingsMutationProfile: () => string;
+      selfTestManager: () => unknown;
+    };
+    internal.settingsMutationProfile = () => "profile";
+    const old = { canRetire: () => true };
+    internal.selfTests = old;
+    internal.selfTestBinding = { generation: 1 };
+    internal.connector = { availableBinding: { generation: 2 } };
+    expect(internal.selfTestManager()).not.toBe(old);
+  });
+
+  it("keeps an unresolved self-test manager on a connector binding change", () => {
+    const f = transport();
+    const host = new DesktopGoCore(f.client, () => settings);
+    const internal = host as unknown as {
+      connector: unknown;
+      selfTests: unknown;
+      selfTestBinding: unknown;
+      settingsMutationProfile: () => string;
+      selfTestManager: () => unknown;
+    };
+    internal.settingsMutationProfile = () => "profile";
+    const old = { canRetire: () => false };
+    internal.selfTests = old;
+    internal.selfTestBinding = { generation: 1 };
+    internal.connector = { availableBinding: { generation: 2 } };
+    expect(() => internal.selfTestManager()).toThrow(
+      "self_test_original_unconfirmed",
+    );
+    expect(internal.selfTests).toBe(old);
+  });
   it("withdraws backend availability when the original verified pipe ends without a new request", async () => {
     const f = transport();
     const host = new DesktopGoCore(f.client, () => settings);

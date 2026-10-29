@@ -463,6 +463,15 @@ export class DesktopGoCore {
     this.settingsMutationProfile();
     if (!this.connector || !this.connector.availableBinding)
       throw new BridgeError("unavailable", "host_connector_unavailable");
+    if (
+      this.selfTests &&
+      !isDeepStrictEqual(this.connector.availableBinding, this.selfTestBinding)
+    ) {
+      if (!this.selfTests.canRetire())
+        throw new BridgeError("unavailable", "self_test_original_unconfirmed");
+      this.selfTests = undefined;
+      this.selfTestBinding = undefined;
+    }
     if (!this.selfTests) {
       const originalBinding = Object.freeze({
         ...this.connector.availableBinding,
