@@ -63,7 +63,8 @@ func selfTestFailure(name, operation string, err error) selfTestStep {
 
 func (p *connectorSelfTestPlan) create(ctx context.Context) selfTestStep {
 	step := selfTestStep{Name: "scratch", Status: "unknown", Operation: p.ids.run}
-	if p.connector == nil || p.connector.mutations == nil || p.slot == nil || p.slot.guard == nil || p.slot.guard.publication != p.publication || !p.ids.valid() || !state.Identifier(p.workspace, 120) {
+	expectedIDs, validIDs := selfTestIDsV1(p.ids.run)
+	if p.connector == nil || p.connector.mutations == nil || p.slot == nil || p.slot.guard == nil || p.slot.guard.publication != p.publication || !validIDs || p.ids != expectedIDs || !state.Identifier(p.workspace, 120) {
 		return step
 	}
 	if err := p.connector.checkMutationSlot(ctx, p.slot, p.slot.opened.Execution); err != nil {

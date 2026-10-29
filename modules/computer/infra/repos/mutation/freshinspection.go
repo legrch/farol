@@ -72,6 +72,16 @@ func qualifyFreshProcessHistory(entries []settledBytes, selection SettledSelecti
 				return false, preservedRefusal()
 			}
 			fileCleanupChildren[entry.key] = state
+		case header.Version == selfTestVersion && header.Kind == selfTestKind:
+			state, err := decodeSelfTest(entry.raw)
+			if err != nil || state == nil {
+				return false, preservedRefusal()
+			}
+			identity = state.Binding().Identity
+			cleanupKey, err = selfTestKey(identity)
+			if err != nil {
+				return false, preservedRefusal()
+			}
 		case header.Version == 4 && header.Kind == "workspace_connector_process":
 			scope, intent, err := decodeProcess(entry.raw)
 			if err != nil {
