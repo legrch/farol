@@ -51,6 +51,24 @@ func TestStagingRefusesPriorUnsettledFileMutation(t *testing.T) {
 	}
 }
 
+func TestCleanupRequiresConfirmedTestOwnedDescendants(t *testing.T) {
+	run := &selfTestRunLease{}
+	terminal := &processsvc.TerminalResult{Intent: processsvc.Intent{Seal: processsvc.Seal{Write: false}}, Observation: processsvc.Observation{GroupCleanup: processsvc.CleanupConfirmed, DescendantCleanup: processsvc.CleanupUnverified}}
+	prior := &settingsMutationOperation{settled: true, selfTestRun: run, process: &connectorProcessOperation{result: terminal, publication: "durable"}}
+	if !stagingPriorEligible(prior) || cleanupPriorEligible(prior, run) {
+		t.Fatal("group-only settlement allowed removal after test-owned shell")
+	}
+	terminal.Observation.DescendantCleanup = processsvc.CleanupConfirmed
+	if !cleanupPriorEligible(prior, run) {
+		t.Fatal("confirmed test-owned process refused")
+	}
+	terminal.Observation.DescendantCleanup = processsvc.CleanupUnverified
+	prior.selfTestRun = nil
+	if !cleanupPriorEligible(prior, run) {
+		t.Fatal("unrelated read-only process changed staging policy")
+	}
+}
+
 func TestScratchReservationBlocksFileMutationBeforeEffect(t *testing.T) {
 	s, _, journal, native, _ := connectorMutationFixture(t)
 	s.mutations.operations["scratch"] = &settingsMutationOperation{stageScratch: true, pending: true}

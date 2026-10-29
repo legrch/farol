@@ -170,7 +170,7 @@ func (s *computerConnector) startProcessWithAuditForRun(ctx context.Context, slo
 		ledger.mu.Unlock()
 		return nil, connectorProcessUnknown()
 	}
-	record := &settingsMutationOperation{generation: generation, pending: true, connectorScope: true, process: &connectorProcessOperation{owner: slot, collectionDone: make(chan struct{}), auditCommand: command}}
+	record := &settingsMutationOperation{generation: generation, pending: true, connectorScope: true, selfTestRun: run, process: &connectorProcessOperation{owner: slot, collectionDone: make(chan struct{}), auditCommand: command}}
 	ledger.operations[operation] = record
 	ledger.mu.Unlock()
 	finish := func(err error, beforeStart bool) {

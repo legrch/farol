@@ -10,6 +10,7 @@ import (
 	"time"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
+	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	state "github.com/legrch/farol/modules/computer/domain/mutation"
 )
 
@@ -199,6 +200,38 @@ func TestNativeScratchRunRetainsUnexpectedContentsAndFence(t *testing.T) {
 	}
 	if repeated, err := runtime.mutations.cleanupSelfTestScratchForRun(context.Background(), run, publication); err == nil || repeated != nil {
 		t.Fatal("unconfirmed cleanup repeated")
+	}
+}
+
+func TestNativeScratchRunRetainsFixtureForUnverifiedTestDescendants(t *testing.T) {
+	launch, runtime := retirementStorageFixture(t, true)
+	workspace := filepath.Join(launch.Profile.Root, "workspace")
+	if err := os.Mkdir(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	publication := nativeSettingsPublication(t, runtime, workspace, 1)
+	const id = "00000000-0000-4000-8000-000000000005"
+	const ws = "00000000-0000-4000-8000-000000000004"
+	run, err := runtime.mutations.beginSelfTestRun(context.Background(), id, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := runtime.mutations.createSelfTestScratchForRun(context.Background(), run, id, ws, publication)
+	if err != nil || created == nil || created.Phase != "completed" {
+		t.Fatalf("create %#v %v", created, err)
+	}
+	runtime.mutations.mu.Lock()
+	runtime.mutations.operations["synthetic-test-process"] = &settingsMutationOperation{settled: true, selfTestRun: run, process: &connectorProcessOperation{publication: "durable", result: &processsvc.TerminalResult{Intent: processsvc.Intent{Seal: processsvc.Seal{Write: false}}, Observation: processsvc.Observation{GroupCleanup: processsvc.CleanupConfirmed, DescendantCleanup: processsvc.CleanupUnverified}}}}
+	runtime.mutations.mu.Unlock()
+	cleaned, err := runtime.mutations.cleanupSelfTestScratchForRun(context.Background(), run, publication)
+	if err == nil || cleaned != nil {
+		t.Fatal("cleanup accepted unverified test descendant", cleaned, err)
+	}
+	if _, err := os.Lstat(filepath.Join(workspace, created.Scratch.Leaf)); err != nil {
+		t.Fatal("fixture removed", err)
+	}
+	if runtime.mutations.selfTestRun != run || run.cleanupStarted {
+		t.Fatal("refused eligibility consumed or released the run")
 	}
 }
 

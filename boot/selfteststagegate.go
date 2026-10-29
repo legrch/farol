@@ -30,6 +30,18 @@ func stagingPriorEligible(record *settingsMutationOperation) bool {
 	return !p.result.Intent.Seal.Write || p.result.Observation.DescendantCleanup == processsvc.CleanupConfirmed
 }
 
+// The test owns its own child lifetime even for read-only shell checks. Its
+// fixture must remain when that child's descendants are not confirmed gone.
+func cleanupPriorEligible(record *settingsMutationOperation, run *selfTestRunLease) bool {
+	if !stagingPriorEligible(record) {
+		return false
+	}
+	if record.selfTestRun != run || record.process == nil || record.process.result == nil {
+		return true
+	}
+	return record.process.result.Observation.DescendantCleanup == processsvc.CleanupConfirmed
+}
+
 // The same ledger lock makes the pre-admission scratch reservation visible to
 // normal file writers before any of them can claim another operation.
 func (s *SettingsMutationIngress) scratchAdmissionPendingLocked() bool {

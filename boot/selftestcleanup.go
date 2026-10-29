@@ -91,7 +91,7 @@ func (s *SettingsMutationIngress) cleanupSelfTestScratchForRun(ctx context.Conte
 		return nil, computerUnavailable()
 	}
 	for id, previous := range s.operations {
-		if id != run.operation && !stagingPriorEligible(previous) {
+		if id != run.operation && !cleanupPriorEligible(previous, run) {
 			s.mu.Unlock()
 			return nil, computerUnavailable()
 		}
