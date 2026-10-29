@@ -27,6 +27,10 @@ func TestSelfTestWireStartOnceAndObserveOriginal(t *testing.T) {
 	startBody, _ := json.Marshal(wire.ComputerSelfTestStart{Publication: in.Publication, WorkspaceId: "work"})
 	start := desktop.Request{RequestID: "start", OperationID: id, Body: startBody}
 	methods := s.Methods()
+	reserved, err := methods["computer.selftest.reserve"].Handle(context.Background(), desktop.Request{RequestID: "reserve", OperationID: id, Body: startBody})
+	if err != nil || reserved == nil || reserved.Status != "ok" || wire.Validate("ComputerSelfTestObserve", reserved.Data) != nil || plan.calls != 0 || store.durablePlanStore.admits != 1 {
+		t.Fatal("reservation did not durably precede start", reserved, err)
+	}
 	for range 2 {
 		out, err := methods["computer.selftest.start"].Handle(context.Background(), start)
 		if err != nil || out == nil || out.Status != "ok" || wire.Validate("ComputerSelfTestReport", out.Data) != nil {
@@ -88,6 +92,7 @@ func TestSelfTestWireRejectsMalformedRequestsBeforeAdmission(t *testing.T) {
 	s, _, journal, native, _ := connectorMutationFixture(t)
 	methods := s.Methods()
 	for name, req := range map[string]desktop.Request{
+		"computer.selftest.reserve": {RequestID: "reserve", OperationID: "bad", Body: []byte(`{}`)},
 		"computer.selftest.start":   {RequestID: "start", OperationID: "bad", Body: []byte(`{}`)},
 		"computer.selftest.observe": {RequestID: "observe", OperationID: "unexpected", Body: []byte(`{}`)},
 	} {
@@ -95,5 +100,32 @@ func TestSelfTestWireRejectsMalformedRequestsBeforeAdmission(t *testing.T) {
 		if err != nil || out == nil || out.Status != "refused" || journal.admits != 0 || native.calls != 0 {
 			t.Fatal("malformed request admitted", name, out, err)
 		}
+	}
+}
+
+func TestSelfTestWireStartRequiresOriginalLiveReservation(t *testing.T) {
+	s, _, journal, native, in := connectorMutationFixture(t)
+	store := &factoryJournal{chatMutationJournal: journal, durablePlanStore: &durablePlanStore{}}
+	s.mutations.dependencies.repository = store
+	const id = "00000000-0000-4000-8000-000000000001"
+	body, _ := json.Marshal(wire.ComputerSelfTestStart{Publication: in.Publication, WorkspaceId: "work"})
+	methods := s.Methods()
+	out, err := methods["computer.selftest.start"].Handle(context.Background(), desktop.Request{RequestID: "start", OperationID: id, Body: body})
+	if err != nil || out == nil || out.Status != "refused" || store.durablePlanStore.admits != 0 || native.calls != 0 {
+		t.Fatal("unreserved start dispatched", out, err)
+	}
+	// A durable Prepared record read after restart never supplies a live permit.
+	binding := state.SelfTestBinding{Identity: state.Identity{Scope: state.ScopeOwnerSettings, OperationID: id, OwnerID: s.root.ownerID, ProfileID: s.root.peer.ProfileId, ComputerID: s.root.computerID}, WorkspaceID: "work", ComputerGeneration: 3, Version: 2}
+	store.record, err = state.RestoreSelfTest(binding, state.Prepared, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = methods["computer.selftest.reserve"].Handle(context.Background(), desktop.Request{RequestID: "reserve", OperationID: id, Body: body})
+	if err != nil || out == nil || out.Status != "unknown" || store.durablePlanStore.admits != 1 || native.calls != 0 {
+		t.Fatal("old reservation became a permit", out, err)
+	}
+	out, err = methods["computer.selftest.start"].Handle(context.Background(), desktop.Request{RequestID: "late-start", OperationID: id, Body: body})
+	if err != nil || out == nil || native.calls != 0 || store.durablePlanStore.saves != 0 {
+		t.Fatal("old reservation executed", out, err)
 	}
 }

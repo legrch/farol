@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	wire "github.com/legrch/farol/gen/desktop/v1"
 	"github.com/legrch/farol/modules/computer/app/port"
 	state "github.com/legrch/farol/modules/computer/domain/mutation"
 )
@@ -31,6 +32,8 @@ type durableSelfTestExecution struct {
 	repository                                                     port.SelfTestRepository
 	preflight                                                      func(context.Context) error
 	execution                                                      *selfTestExecution
+	originSlot                                                     *connectorSlot
+	originPublication                                              wire.ComputerAuthorityPublication
 }
 
 func (d *durableSelfTestExecution) execute(ctx context.Context) selfTestReport {

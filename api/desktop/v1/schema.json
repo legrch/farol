@@ -101,6 +101,7 @@
     "computer.connector.polling": "read",
     "computer.connector.health": "read",
     "computer.settings.inspect": "read",
+    "computer.selftest.reserve": "effect",
     "computer.selftest.start": "effect",
     "computer.selftest.observe": "read"
   },

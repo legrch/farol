@@ -46,7 +46,7 @@ func selfTestWireResult(binding state.SelfTestBinding, report selfTestReport) (*
 
 func (s *computerConnector) selfTestMethods() map[string]desktop.Method {
 	return map[string]desktop.Method{
-		"computer.selftest.start": {Concurrent: true, Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
+		"computer.selftest.reserve": {Concurrent: true, Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
 			if r.OperationID == "" || ipc.ValidateJSON(r.Body) != nil || wire.Validate("ComputerSelfTestStart", r.Body) != nil {
 				return invalidIngress()
 			}
@@ -62,7 +62,29 @@ func (s *computerConnector) selfTestMethods() map[string]desktop.Method {
 			if err != nil {
 				return &desktop.Outcome{Status: "refused", Code: "COMPUTER_SELFTEST_UNAVAILABLE"}, nil
 			}
-			_ = execution.execute(ctx)
+			if !execution.reserveForStart(ctx) || s.checkMutationSlot(ctx, slot, slot.opened.Execution) != nil {
+				return &desktop.Outcome{Status: "unknown", Code: "COMPUTER_SELFTEST_RESERVATION_UNKNOWN"}, nil
+			}
+			version := "2"
+			return ingressOutcome(&wire.ComputerSelfTestObserve{OperationId: r.OperationID, WorkspaceId: in.WorkspaceId, ComputerGeneration: in.Publication.Generation, PlanVersion: &version}, nil)
+		}},
+		"computer.selftest.start": {Concurrent: true, Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
+			if r.OperationID == "" || ipc.ValidateJSON(r.Body) != nil || wire.Validate("ComputerSelfTestStart", r.Body) != nil {
+				return invalidIngress()
+			}
+			var in wire.ComputerSelfTestStart
+			if json.Unmarshal(r.Body, &in) != nil {
+				return invalidIngress()
+			}
+			slot, err := s.currentSelfTestSlot(ctx)
+			if err != nil {
+				return &desktop.Outcome{Status: "unavailable", Code: "COMPUTER_AUTHORITY_STORE_UNAVAILABLE"}, nil
+			}
+			execution, err := s.reservedSelfTest(slot, in.WorkspaceId, r.OperationID, in.Publication)
+			if err != nil {
+				return &desktop.Outcome{Status: "refused", Code: "COMPUTER_SELFTEST_UNAVAILABLE"}, nil
+			}
+			_ = execution.executeReserved(ctx)
 			// Only a freshly authorized read of the durable parent is disclosed.
 			report, err := s.observeConnectorSelfTest(ctx, slot, execution.binding)
 			if err != nil {

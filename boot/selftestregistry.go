@@ -38,3 +38,18 @@ func (s *computerConnector) selectSelfTest(ctx context.Context, slot *connectorS
 	r.entries[operation] = selected
 	return selected, nil
 }
+
+// Only the owner created by this process's original reservation can consume
+// the in-memory permit. A new factory selection never reconstructs it.
+func (s *computerConnector) reservedSelfTest(slot *connectorSlot, workspace, operation string, publication wire.ComputerAuthorityPublication) (*durableSelfTestExecution, error) {
+	if s == nil || slot == nil || slot.guard == nil || slot.guard.publication != publication {
+		return nil, mutationInvalid()
+	}
+	s.selfTests.mu.Lock()
+	defer s.selfTests.mu.Unlock()
+	execution := s.selfTests.entries[operation]
+	if execution == nil || execution.binding.Identity.OperationID != operation || execution.binding.WorkspaceID != workspace || decimal(execution.binding.ComputerGeneration) != publication.Generation || execution.execution == nil || execution.originSlot != slot || execution.originPublication != publication {
+		return nil, computerUnavailable()
+	}
+	return execution, nil
+}
