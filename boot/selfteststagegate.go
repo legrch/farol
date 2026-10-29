@@ -2,9 +2,33 @@ package boot
 
 import (
 	"context"
+	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	"github.com/legrch/farol/modules/computer/domain/mutation"
 	"sync"
 )
+
+// stagingPriorEligible is evaluated under the ledger lock. Group settlement is
+// sufficient for ordinary retirement, but a writable process may have escaped
+// its group and retained access to a future test directory.
+func stagingPriorEligible(record *settingsMutationOperation) bool {
+	if record == nil {
+		return false
+	}
+	if record.process == nil {
+		return !record.stageScratch || (!record.pending && record.settled)
+	}
+	if record.pending || !record.settled {
+		return false
+	}
+	p := record.process
+	if p.result == nil {
+		return p.service == nil && record.failure != nil
+	}
+	if p.publication == "" || p.collectionErr != nil || p.cancelUnknown || p.result.Observation.GroupCleanup != processsvc.CleanupConfirmed {
+		return false
+	}
+	return !p.result.Intent.Seal.Write || p.result.Observation.DescendantCleanup == processsvc.CleanupConfirmed
+}
 
 // selfTestStageLease retains a single attempt's admission gate until Release.
 // Native use is synchronous and one-shot; cancellation never releases the gate.
@@ -49,7 +73,7 @@ func (s *SettingsMutationIngress) beginSelfTestStageBound(ctx context.Context, o
 		return nil, computerUnavailable()
 	}
 	for key, record := range s.operations {
-		if key != operation && (record == nil || ((record.process != nil || record.stageScratch) && (record.pending || !record.settled))) {
+		if key != operation && !stagingPriorEligible(record) {
 			s.mu.Unlock()
 			return nil, computerUnavailable()
 		}

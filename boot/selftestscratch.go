@@ -47,7 +47,7 @@ func (s *SettingsMutationIngress) createSelfTestScratch(ctx context.Context, ope
 		return nil, computerUnavailable()
 	}
 	for _, previous := range s.operations {
-		if previous == nil || ((previous.process != nil || previous.stageScratch) && (previous.pending || !previous.settled)) {
+		if !stagingPriorEligible(previous) {
 			s.mu.Unlock()
 			return nil, computerUnavailable()
 		}
