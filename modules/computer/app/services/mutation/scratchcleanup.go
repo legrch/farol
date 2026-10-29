@@ -33,7 +33,7 @@ func (s *OwnerService) CleanupScratch(ctx context.Context, workspaceID string, n
 		return nil, authority.Fail("COMPUTER_MUTATION_IN_PROGRESS", "operation-store")
 	}
 	if s.cleanupStarted {
-		if workspaceID != s.cleanupWorkspace {
+		if workspaceID != s.cleanupWorkspace || s.cleanupInventory != nil {
 			s.engine.gate.Unlock()
 			return nil, authority.Fail("COMPUTER_MUTATION_OPERATION_CONFLICT", "operation-store")
 		}

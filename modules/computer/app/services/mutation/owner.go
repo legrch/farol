@@ -35,6 +35,7 @@ type OwnerService struct {
 	engine           *Service
 	cleanupStarted   bool
 	cleanupWorkspace string
+	cleanupInventory *state.ScratchFileInventory
 	cleanupResult    *ScratchCleanupResponse
 	cleanupError     error
 }
