@@ -27,6 +27,14 @@ func qualifyStagingHistory(entries []settledBytes, selection SettledSelection) (
 			return false, preservedRefusal()
 		}
 		switch {
+		case header.Version == selfTestMarkerVersion && header.Kind == selfTestMarkerKind:
+			marker, err := decodeSelfTestMarker(entry.raw)
+			if err != nil || marker == nil {
+				return false, preservedRefusal()
+			}
+			if marker.Phase() != domain.SelfTestMarkerSettled {
+				return false, nil
+			}
 		case header.Version == selfTestVersion && header.Kind == selfTestKind:
 			state, err := decodeSelfTest(entry.raw)
 			if err != nil || state == nil {

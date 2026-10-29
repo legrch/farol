@@ -5,7 +5,61 @@ import (
 	"testing"
 
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
+	domain "github.com/legrch/farol/modules/computer/domain/mutation"
 )
+
+func TestFreshHistoryPreservesMarkerAndChecksSettledParent(t *testing.T) {
+	selection := SettledSelection{OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}
+	b := domain.SelfTestBinding{Identity: domain.Identity{Scope: domain.ScopeOwnerSettings, OperationID: scratchTestRun, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 2}
+	key, _ := selfTestMarkerKey(b)
+	for _, phase := range []domain.SelfTestMarkerPhase{domain.SelfTestMarkerSelected, domain.SelfTestMarkerSettling, domain.SelfTestMarkerSettled} {
+		marker, _ := domain.RestoreSelfTestMarker(b, phase)
+		raw, err := encodeSelfTestMarker(marker)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries := []settledBytes{{key: key, raw: raw}}
+		_, err = qualifyFreshProcessHistory(entries, selection)
+		if (phase != domain.SelfTestMarkerSelected) != (err != nil) {
+			t.Fatal("invalid marker qualification", phase, err)
+		}
+		if phase == domain.SelfTestMarkerSelected {
+			ok, err := qualifyStagingHistory(entries, selection)
+			if err != nil || ok {
+				t.Fatal("unsettled marker granted staging", phase, err)
+			}
+			continue
+		}
+		parent, err := domain.RestoreSelfTest(b, domain.Failed, &domain.SelfTestResult{Status: "failed", Steps: []domain.SelfTestStep{{Name: "scratch", Status: "fail", Operation: scratchTestRun}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		parentRaw, _ := encodeSelfTest(parent)
+		parentKey, _ := selfTestKey(b.Identity)
+		entries = append(entries, settledBytes{key: parentKey, raw: parentRaw})
+		if _, err := qualifyFreshProcessHistory(entries, selection); err != nil {
+			t.Fatal("valid marker rejected", err)
+		}
+		if ok, err := qualifyStagingHistory(entries, selection); err != nil || ok != (phase == domain.SelfTestMarkerSettled) {
+			t.Fatal("settled marker rejected", err)
+		}
+	}
+}
+
+func TestFreshHistoryRejectsSelectedMarkerBoundToDifferentParent(t *testing.T) {
+	selection := SettledSelection{OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}
+	b := domain.SelfTestBinding{Identity: domain.Identity{Scope: domain.ScopeOwnerSettings, OperationID: scratchTestRun, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 2}
+	marker, _ := domain.RestoreSelfTestMarker(b, domain.SelfTestMarkerSelected)
+	markerRaw, _ := encodeSelfTestMarker(marker)
+	markerKey, _ := selfTestMarkerKey(b)
+	b.WorkspaceID = "other"
+	parent, _ := domain.RestoreSelfTest(b, domain.Prepared, nil)
+	parentRaw, _ := encodeSelfTest(parent)
+	parentKey, _ := selfTestKey(b.Identity)
+	if _, err := qualifyFreshProcessHistory([]settledBytes{{key: markerKey, raw: markerRaw}, {key: parentKey, raw: parentRaw}}, selection); err == nil {
+		t.Fatal("crossed binding accepted")
+	}
+}
 
 func TestFreshProcessHistorySeparatesReservationExitAndCleanup(t *testing.T) {
 	selection := SettledSelection{OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}

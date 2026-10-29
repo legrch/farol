@@ -219,6 +219,22 @@ type SelfTestHistoryRepository interface {
 	ListSelfTests(context.Context, string, string, string) ([]SelfTestHistoryEntry, error)
 }
 
+type SelfTestMarkerAdmission struct {
+	Status MutationAdmissionStatus
+	Record *mutation.SelfTestMarker
+}
+
+// All marker transitions are one-shot writes by the existing journal owner.
+// Existing records never grant permission to repeat their original operation.
+// This per-operation store does not serialize distinct IDs for one workspace;
+// the composing owner must retain that exclusion before attempting admission.
+type SelfTestMarkerRepository interface {
+	AdmitSelfTestMarker(context.Context, *mutation.SelfTestMarker) (SelfTestMarkerAdmission, error)
+	LoadSelfTestMarker(context.Context, mutation.SelfTestBinding) (*mutation.SelfTestMarker, error)
+	BeginSelfTestMarkerSettlement(context.Context, mutation.SelfTestBinding) error
+	FinishSelfTestMarker(context.Context, mutation.SelfTestBinding) error
+}
+
 // ScratchCleanupWorkspace performs one already admitted, guarded attempt.
 type ScratchCleanupWorkspace interface {
 	RemoveEmptyScratch(context.Context, ScratchCleanupRequest) error

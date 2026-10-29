@@ -24,6 +24,8 @@ func qualifyProcessHistoryBounded(entries []settledBytes, selection SettledSelec
 	cleanupChildren := map[string]*domain.ScratchCleanupState{}
 	fileCleanupChildren := map[string]*domain.ScratchFileCleanupState{}
 	mutationParents := map[string]*domain.State{}
+	selfTestParents := map[string]*domain.SelfTestState{}
+	selfTestMarkers := map[string]*domain.SelfTestMarker{}
 	seen := map[string]bool{}
 	expected := make([]ExpectedPreservedRecord, len(entries))
 	for n, entry := range entries {
@@ -82,10 +84,22 @@ func qualifyProcessHistoryBounded(entries []settledBytes, selection SettledSelec
 				return false, preservedRefusal()
 			}
 			identity = state.Binding().Identity
+			selfTestParents[entry.key] = state
 			cleanupKey, err = selfTestKey(identity)
 			if err != nil {
 				return false, preservedRefusal()
 			}
+		case header.Version == selfTestMarkerVersion && header.Kind == selfTestMarkerKind:
+			marker, err := decodeSelfTestMarker(entry.raw)
+			if err != nil || marker == nil {
+				return false, preservedRefusal()
+			}
+			identity = marker.Binding().Identity
+			cleanupKey, err = selfTestMarkerKey(marker.Binding())
+			if err != nil {
+				return false, preservedRefusal()
+			}
+			selfTestMarkers[entry.key] = marker
 		case header.Version == 4 && header.Kind == "workspace_connector_process":
 			scope, intent, err := decodeProcess(entry.raw)
 			if err != nil {
@@ -120,6 +134,22 @@ func qualifyProcessHistoryBounded(entries []settledBytes, selection SettledSelec
 			return false, preservedRefusal()
 		}
 		expected[n].Identity = identity
+	}
+	for _, marker := range selfTestMarkers {
+		key, err := selfTestKey(marker.Binding().Identity)
+		if err != nil {
+			return false, preservedRefusal()
+		}
+		parent := selfTestParents[key]
+		if parent != nil && parent.Binding() != marker.Binding() {
+			return false, preservedRefusal()
+		}
+		if marker.Phase() == domain.SelfTestMarkerSelected {
+			continue
+		}
+		if parent == nil || parent.Binding() != marker.Binding() || (parent.Phase() != domain.Completed && parent.Phase() != domain.Failed) {
+			return false, preservedRefusal()
+		}
 	}
 	for _, cleanup := range cleanupChildren {
 		binding := cleanup.Binding()
