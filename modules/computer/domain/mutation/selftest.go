@@ -10,7 +10,7 @@ type SelfTestBinding struct {
 }
 
 func (b SelfTestBinding) Valid() bool {
-	return ValidIdentity(b.Identity) && b.Identity.Scope == ScopeOwnerSettings && ScratchLeaf(ScratchPath(b.Identity.OperationID)) && Identifier(b.WorkspaceID, 120) && b.ComputerGeneration <= MaxSafeInteger && (b.Version == 1 || b.Version == 2 || b.Version == 3)
+	return ValidIdentity(b.Identity) && b.Identity.Scope == ScopeOwnerSettings && ScratchLeaf(ScratchPath(b.Identity.OperationID)) && Identifier(b.WorkspaceID, 120) && b.ComputerGeneration <= MaxSafeInteger && (b.Version == 1 || b.Version == 2 || b.Version == 3 || b.Version == 4)
 }
 
 type SelfTestStep struct {
@@ -56,7 +56,7 @@ func selfTestToken(value string, max int) bool {
 }
 
 func (r SelfTestResult) bound(binding SelfTestBinding) bool {
-	if binding.Version == 3 {
+	if binding.Version == 3 || binding.Version == 4 {
 		return r.boundV3(binding)
 	}
 	if binding.Version == 2 {
@@ -97,12 +97,22 @@ func (r SelfTestResult) bound(binding SelfTestBinding) bool {
 	return r.Status == "failed" && last.Status == "fail" || r.Status == "unknown" && (last.Status == "unknown" || last.Status == "pass")
 }
 
-// Version 3 checks directory traversal while the scratch fixture is retained.
+// Version 3 checks a retained directory. Version 4 also checks Git availability.
 // Earlier records keep their original version and ordering.
 func (r SelfTestResult) boundV3(binding SelfTestBinding) bool {
 	id := binding.Identity.OperationID
-	names := []string{"scratch", "write", "edit", "mutation read", "catalogue", "bootstrap", "list", "read", "search", "directory search", "cleanup", "shell", "shell cancel", "git and hooks"}
-	operations := []string{id, id + "-st3-write", id + "-st3-edit", id + "-st3-edit", id + "-st3-catalogue", id + "-st3-bootstrap", id + "-st3-list", id + "-st3-read", id + "-st3-search", id + "-st3-directory-search", id, id + "-st3-quick", id + "-st3-cancel", ""}
+	prefix := "-st3-"
+	if binding.Version == 4 {
+		prefix = "-st4-"
+	}
+	names := []string{"scratch", "write", "edit", "mutation read", "catalogue", "bootstrap", "list", "read", "search", "directory search", "cleanup", "shell", "shell cancel"}
+	operations := []string{id, id + prefix + "write", id + prefix + "edit", id + prefix + "edit", id + prefix + "catalogue", id + prefix + "bootstrap", id + prefix + "list", id + prefix + "read", id + prefix + "search", id + prefix + "directory-search", id, id + prefix + "quick", id + prefix + "cancel"}
+	if binding.Version == 4 {
+		names = append(names, "git availability")
+		operations = append(operations, id+prefix+"git-version")
+	}
+	names = append(names, "git and hooks")
+	operations = append(operations, "")
 	if len(r.Steps) > len(names) {
 		return false
 	}
@@ -111,16 +121,16 @@ func (r SelfTestResult) boundV3(binding SelfTestBinding) bool {
 		if s.Name != names[i] || s.Operation != operations[i] {
 			return false
 		}
-		if i != 12 && s.CancelOperation != "" || i == 12 && s.CancelOperation != "" && s.CancelOperation != id+"-st3-cancel-op" {
+		if i != 12 && s.CancelOperation != "" || i == 12 && s.CancelOperation != "" && s.CancelOperation != id+prefix+"cancel-op" {
 			return false
 		}
-		if i != 11 && i != 12 && (s.Handle != "" || s.DescendantCleanup != "") {
+		if i != 11 && i != 12 && !(binding.Version == 4 && i == 13) && (s.Handle != "" || s.DescendantCleanup != "") {
 			return false
 		}
-		if i == 13 && (s.Status != "not_tested" || s.Code != "") {
+		if i == len(names)-1 && (s.Status != "not_tested" || s.Code != "") {
 			return false
 		}
-		if i < len(r.Steps)-1 && i < 13 {
+		if i < len(r.Steps)-1 && i < len(names)-1 {
 			if !readFailure && i >= 4 && i <= 9 && s.Status == "fail" {
 				readFailure = true
 			} else if readFailure && i >= 4 && i <= 9 {

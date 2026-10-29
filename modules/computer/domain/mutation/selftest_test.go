@@ -1,6 +1,9 @@
 package mutation
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSelfTestStateRetainsOriginalUnknown(t *testing.T) {
 	b := SelfTestBinding{Identity: Identity{Scope: ScopeOwnerSettings, OperationID: "00000000-0000-4000-8000-000000000001", OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", ComputerGeneration: 7, Version: 1}
@@ -176,5 +179,23 @@ func TestSelfTestVersionThreeBindsDirectoryCheckAndPreservesUnknown(t *testing.T
 		if _, err := RestoreSelfTest(b, OutcomeUnknown, &SelfTestResult{Status: "unknown", Steps: failureSteps}); err != nil {
 			t.Fatal("unknown cleanup not retained", failure, err)
 		}
+	}
+	v4 := b
+	v4.Version = 4
+	next := append([]SelfTestStep(nil), steps[:13]...)
+	for i := range next {
+		next[i].Operation = strings.Replace(next[i].Operation, "-st3-", "-st4-", 1)
+		next[i].CancelOperation = strings.Replace(next[i].CancelOperation, "-st3-", "-st4-", 1)
+	}
+	next = append(next, SelfTestStep{Name: "git availability", Status: "pass", Operation: id + "-st4-git-version"}, SelfTestStep{Name: "git and hooks", Status: "not_tested"})
+	if _, err := RestoreSelfTest(v4, Completed, &SelfTestResult{Status: "partial", Steps: next}); err != nil {
+		t.Fatal("valid v4 result rejected", err)
+	}
+	if _, err := RestoreSelfTest(b, Completed, &SelfTestResult{Status: "partial", Steps: next}); err == nil {
+		t.Fatal("v4 result interpreted as v3")
+	}
+	next[13].Status = "unknown"
+	if _, err := RestoreSelfTest(v4, OutcomeUnknown, &SelfTestResult{Status: "unknown", Steps: next[:14]}); err != nil {
+		t.Fatal("unknown Git check was lost", err)
 	}
 }

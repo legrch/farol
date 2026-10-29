@@ -26,7 +26,9 @@ func (s *computerConnector) listConnectorSelfTestMarkers(ctx context.Context, sl
 	}
 	check := func(b state.SelfTestBinding) error {
 		suffix := "-st1-write"
-		if b.Version == 3 {
+		if b.Version == 4 {
+			suffix = "-st4-write"
+		} else if b.Version == 3 {
 			suffix = "-st3-write"
 		} else if b.Version == 2 {
 			suffix = "-st2-write"
@@ -115,7 +117,9 @@ func (s *computerConnector) listConnectorSelfTests(ctx context.Context, slot *co
 			continue
 		}
 		suffix := "-st1-write"
-		if binding.Version == 3 {
+		if binding.Version == 4 {
+			suffix = "-st4-write"
+		} else if binding.Version == 3 {
 			suffix = "-st3-write"
 		} else if binding.Version == 2 {
 			suffix = "-st2-write"
@@ -156,7 +160,9 @@ func (s *computerConnector) observeConnectorSelfTest(ctx context.Context, slot *
 		return unknown, err
 	}
 	suffix := "-st1-write"
-	if binding.Version == 3 {
+	if binding.Version == 4 {
+		suffix = "-st4-write"
+	} else if binding.Version == 3 {
 		suffix = "-st3-write"
 	} else if binding.Version == 2 {
 		suffix = "-st2-write"
