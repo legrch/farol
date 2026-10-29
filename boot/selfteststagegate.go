@@ -24,6 +24,17 @@ type selfTestStageLease struct {
 // beginSelfTestStage only reserves the gate. It does not authorize, admit or
 // execute a mutation. The caller must already own the original admitted attempt.
 func (s *SettingsMutationIngress) beginSelfTestStage(ctx context.Context, operation string) (*selfTestStageLease, error) {
+	return s.beginSelfTestStageBound(ctx, operation, "")
+}
+
+func (s *SettingsMutationIngress) beginSelfTestStageForWorkspace(ctx context.Context, operation, workspace string) (*selfTestStageLease, error) {
+	if !mutation.Identifier(workspace, 120) {
+		return nil, computerUnavailable()
+	}
+	return s.beginSelfTestStageBound(ctx, operation, workspace)
+}
+
+func (s *SettingsMutationIngress) beginSelfTestStageBound(ctx context.Context, operation, workspace string) (*selfTestStageLease, error) {
 	if s == nil || ctx == nil || ctx.Err() != nil || !mutation.ScratchLeaf(mutation.ScratchPath(operation)) {
 		return nil, computerUnavailable()
 	}
@@ -33,7 +44,7 @@ func (s *SettingsMutationIngress) beginSelfTestStage(ctx context.Context, operat
 		return nil, computerUnavailable()
 	}
 	own := s.operations[operation]
-	if own == nil || !own.stageScratch || own.stageAttempted || !own.pending || own.settled || own.process != nil || own.path != mutation.ScratchPath(operation) {
+	if own == nil || (workspace != "" && own.workspace != workspace) || !own.stageScratch || own.stageAttempted || !own.pending || own.settled || own.process != nil || own.path != mutation.ScratchPath(operation) {
 		s.mu.Unlock()
 		return nil, computerUnavailable()
 	}

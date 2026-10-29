@@ -49,6 +49,9 @@ func (m *Mutable) CreateStagedScratch(ctx context.Context, r port.MutationReques
 	if err != nil {
 		return nil, refusal("WORKSPACE_PATH_REFUSED")
 	}
+	if ctx.Err() != nil {
+		return nil, refusal("WORKSPACE_MUTATION_CANCELLED")
+	}
 	// Once mkdir is attempted, an uncertain error or any later failure cannot
 	// authorize another attempt or delete the possible candidate.
 	attempted := true

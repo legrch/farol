@@ -39,7 +39,7 @@ func (m scratchSyncMutation) sync(fd int) error {
 // Disposable native filesystem only. Same-account adversarial processes and
 // the full owner, journal, shell and desktop lifecycle are outside this test.
 func TestNativeStagedScratchPublicationAndRefusal(t *testing.T) {
-	for _, name := range []string{"publish", "collision", "guard_refused", "wrong_stage", "wrong_root", "source_replaced", "published_replaced", "cancel_after_publish", "replaced_after_sync", "cancel_after_sync"} {
+	for _, name := range []string{"publish", "collision", "guard_refused", "wrong_stage", "wrong_root", "source_replaced", "published_replaced", "cancel_after_publish", "replaced_after_sync", "cancel_after_sync", "cancel_before_mkdir", "cancel_after_mkdir"} {
 		t.Run(name, func(t *testing.T) {
 			base, err := os.MkdirTemp("/private/tmp", "farol-scratch-")
 			if err != nil {
@@ -77,6 +77,9 @@ func TestNativeStagedScratchPublicationAndRefusal(t *testing.T) {
 			guards, checks := 0, 0
 			r := port.MutationRequest{Workspace: port.MutationDescriptor{WorkspaceID: "work", Root: workspace, ApprovedRoot: root}, Operation: op, BeforePublish: func(context.Context) error {
 				checks++
+				if (name == "cancel_before_mkdir" && checks == 1) || (name == "cancel_after_mkdir" && checks == 2) {
+					cancel()
+				}
 				if name == "source_replaced" && checks == 2 {
 					entries, err := os.ReadDir(stagePath)
 					if err != nil || len(entries) != 1 {
@@ -165,6 +168,15 @@ func TestNativeStagedScratchPublicationAndRefusal(t *testing.T) {
 				var failure *authority.Failure
 				if !errors.As(err, &failure) || failure.Code != "WORKSPACE_MUTATION_OUTCOME_UNKNOWN" || result == nil || !result.Directory.Valid() || guards != 1 {
 					t.Fatalf("post-publication outcome: %#v %v guards=%d", result, err, guards)
+				}
+			case "cancel_before_mkdir":
+				if err == nil || result != nil || guards != 0 || len(entries) != 0 {
+					t.Fatalf("cancel created candidate: %#v %v", result, err)
+				}
+			case "cancel_after_mkdir":
+				var failure *authority.Failure
+				if !errors.As(err, &failure) || failure.Code != "WORKSPACE_MUTATION_OUTCOME_UNKNOWN" || result == nil || len(entries) != 1 {
+					t.Fatalf("cancel lost candidate: %#v %v", result, err)
 				}
 			case "source_replaced":
 				var failure *authority.Failure
