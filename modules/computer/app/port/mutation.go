@@ -208,6 +208,17 @@ type SelfTestRepository interface {
 	SaveSelfTest(context.Context, *mutation.SelfTestState) error
 }
 
+type SelfTestHistoryEntry struct {
+	Binding mutation.SelfTestBinding
+	Phase   mutation.Phase
+}
+
+// Inventory is observation only. It neither settles a record nor authorizes a
+// start; callers must separately check current disclosure authority.
+type SelfTestHistoryRepository interface {
+	ListSelfTests(context.Context, string, string, string) ([]SelfTestHistoryEntry, error)
+}
+
 // ScratchCleanupWorkspace performs one already admitted, guarded attempt.
 type ScratchCleanupWorkspace interface {
 	RemoveEmptyScratch(context.Context, ScratchCleanupRequest) error

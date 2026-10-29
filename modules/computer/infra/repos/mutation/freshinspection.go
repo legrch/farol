@@ -11,7 +11,11 @@ import (
 // Historical process uncertainty is an observation, never permission to replay
 // or proof of cleanup. Fresh startup holds the old core and MCP owner locks.
 func qualifyFreshProcessHistory(entries []settledBytes, selection SettledSelection) (bool, error) {
-	if len(entries) > maxPreservedRecords || !domain.Identifier(selection.OwnerID, 160) || !domain.Identifier(selection.ProfileID, 160) || !domain.Identifier(selection.ComputerID, 160) {
+	return qualifyProcessHistoryBounded(entries, selection, maxPreservedRecords)
+}
+
+func qualifyProcessHistoryBounded(entries []settledBytes, selection SettledSelection, limit int) (bool, error) {
+	if len(entries) > limit || !domain.Identifier(selection.OwnerID, 160) || !domain.Identifier(selection.ProfileID, 160) || !domain.Identifier(selection.ComputerID, 160) {
 		return false, preservedRefusal()
 	}
 	unknownWrite := false

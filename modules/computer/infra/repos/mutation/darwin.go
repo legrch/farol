@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -154,6 +155,32 @@ func validKey(name string) bool {
 		}
 	}
 	return true
+}
+
+// keys observes the complete bounded namespace while the original writer lock
+// remains held. It never repairs or removes unexpected entries.
+func (d *disk) keys() ([]string, error) {
+	if d.check() != nil {
+		return nil, unavailable()
+	}
+	fd, err := unix.Openat(d.dir, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, unavailable()
+	}
+	f := os.NewFile(uintptr(fd), "mutation-inventory")
+	names, readErr := f.Readdirnames(maxSelfTestInventory + 1)
+	extra, endErr := f.Readdirnames(1)
+	closeErr := f.Close()
+	if closeErr != nil || readErr != nil && readErr != io.EOF || endErr != io.EOF || len(extra) != 0 || len(names) > maxSelfTestInventory || d.check() != nil {
+		return nil, unavailable()
+	}
+	sort.Strings(names)
+	for i, name := range names {
+		if !validKey(name) || i > 0 && name == names[i-1] {
+			return nil, unavailable()
+		}
+	}
+	return names, nil
 }
 func (d *disk) read(key string) ([]byte, error) {
 	if !validKey(key) || d.check() != nil {
