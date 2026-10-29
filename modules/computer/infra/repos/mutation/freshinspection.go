@@ -18,6 +18,8 @@ func qualifyFreshProcessHistory(entries []settledBytes, selection SettledSelecti
 	parents := map[string]domain.Identity{}
 	scratchParents := map[string]*domain.State{}
 	cleanupChildren := map[string]*domain.ScratchCleanupState{}
+	fileCleanupChildren := map[string]*domain.ScratchFileCleanupState{}
+	mutationParents := map[string]*domain.State{}
 	seen := map[string]bool{}
 	expected := make([]ExpectedPreservedRecord, len(entries))
 	for n, entry := range entries {
@@ -44,6 +46,7 @@ func qualifyFreshProcessHistory(entries []settledBytes, selection SettledSelecti
 				return false, preservedRefusal()
 			}
 			identity = state.Binding().Identity
+			mutationParents[entry.key] = state
 			if header.Version == scratchVersion && header.Kind == scratchKind {
 				scratchParents[entry.key] = state
 			}
@@ -58,6 +61,17 @@ func qualifyFreshProcessHistory(entries []settledBytes, selection SettledSelecti
 				return false, preservedRefusal()
 			}
 			cleanupChildren[entry.key] = state
+		case header.Version == scratchFileCleanupVersion && header.Kind == scratchFileCleanupKind:
+			state, err := decodeScratchFileCleanup(entry.raw)
+			if err != nil || state == nil {
+				return false, preservedRefusal()
+			}
+			identity = state.Inventory().Creation.Creation.Identity
+			cleanupKey, err = scratchCleanupKey(identity)
+			if err != nil {
+				return false, preservedRefusal()
+			}
+			fileCleanupChildren[entry.key] = state
 		case header.Version == 4 && header.Kind == "workspace_connector_process":
 			scope, intent, err := decodeProcess(entry.raw)
 			if err != nil {
@@ -101,6 +115,21 @@ func qualifyFreshProcessHistory(entries []settledBytes, selection SettledSelecti
 		}
 		parent := scratchParents[parentKey]
 		if parent == nil || parent.Phase() != domain.Completed || parent.Binding() != binding.Creation || parent.Receipt() == nil || parent.Receipt().Operation != domain.ScratchKind || parent.Receipt().Directory != binding.Directory {
+			return false, preservedRefusal()
+		}
+	}
+	for _, cleanup := range fileCleanupChildren {
+		inventory := cleanup.Inventory()
+		parentKey, err := recordKey(inventory.Creation.Creation.Identity)
+		if err != nil {
+			return false, preservedRefusal()
+		}
+		fileKey, err := recordKey(inventory.Mutation.Identity)
+		if err != nil {
+			return false, preservedRefusal()
+		}
+		witness, err := domain.NewScratchFileInventory(scratchParents[parentKey], mutationParents[fileKey], inventory.File)
+		if err != nil || witness == nil || *witness != inventory {
 			return false, preservedRefusal()
 		}
 	}
