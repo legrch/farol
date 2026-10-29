@@ -22,21 +22,19 @@ it("collects a terminal without a renderer and retains UNKNOWN after reopen", as
     binding: "requested" as const,
   };
   const reader = {
-    read: vi
-      .fn()
-      .mockResolvedValue({
-        operationId: ref.operationId,
-        buildId: ref.buildId,
-        runtimeId: ref.runtimeId,
-        exitCode: 0,
-        exitSignal: 0,
-        rootWaited: true,
-        outputDrained: true,
-        groupCleanup: "confirmed",
-        descendantCleanup: "unverified",
-        timedOut: false,
-        authorityLost: false,
-      }),
+    read: vi.fn().mockResolvedValue({
+      operationId: ref.operationId,
+      buildId: ref.buildId,
+      runtimeId: ref.runtimeId,
+      exitCode: 0,
+      exitSignal: 0,
+      rootWaited: true,
+      outputDrained: true,
+      groupCleanup: "confirmed",
+      descendantCleanup: "unverified",
+      timedOut: false,
+      authorityLost: false,
+    }),
   };
   const collector = new ProcessAuditCollector(store);
   const observer = new ProcessAuditObserver(
