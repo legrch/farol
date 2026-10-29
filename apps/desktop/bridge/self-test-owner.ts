@@ -40,6 +40,7 @@ class CoreSelectionStore implements SelfTestSelectionStore {
     private readonly context: Context,
     private readonly workspaceId: string,
     private readonly marker: SelfTestMarker,
+    private readonly checkLive: () => void,
   ) {}
 
   async reserve(
@@ -61,6 +62,7 @@ class CoreSelectionStore implements SelfTestSelectionStore {
     try {
       if ((await this.marker.begin(selection, publication)) !== "durable")
         return "unknown";
+      this.checkLive();
       const out = await this.client.request(
         "computer.selftest.reserve",
         { workspaceId: selection.workspaceId, publication } as unknown as Json,
@@ -114,6 +116,7 @@ export async function openSelfTestOwner(
   context: Context,
   workspaceId: string,
   marker: SelfTestMarker,
+  checkLive: () => void = () => {},
 ): Promise<{
   bridge: SelfTestBridge;
   history: Awaited<ReturnType<typeof readSelfTestHistory>>;
@@ -145,7 +148,13 @@ export async function openSelfTestOwner(
       : unresolved[0]
         ? { selection: unresolved[0].selection, settlementAttempted: false }
         : "none";
-  const store = new CoreSelectionStore(client, snapshot, workspaceId, marker);
+  const store = new CoreSelectionStore(
+    client,
+    snapshot,
+    workspaceId,
+    marker,
+    checkLive,
+  );
   // A terminal phase alone is not evidence that its original report can be read.
   const observer = new SelfTestBridge(client, snapshot, "none", store);
   for (const entry of history) {
@@ -159,7 +168,7 @@ export async function openSelfTestOwner(
       throw new BridgeError("unavailable", "self_test_report_unavailable");
   }
   return {
-    bridge: new SelfTestBridge(client, snapshot, prior, store),
+    bridge: new SelfTestBridge(client, snapshot, prior, store, checkLive),
     history,
   };
 }

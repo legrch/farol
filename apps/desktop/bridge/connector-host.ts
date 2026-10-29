@@ -372,6 +372,13 @@ export class ConnectorHostBridge {
   get currentBinding() {
     return this.current?.endpoint.binding;
   }
+  // A retained binding is evidence, not a live admission while closing or
+  // after an unknown lifecycle outcome.
+  get availableBinding() {
+    return this.pending || this.blocked || this.closeInFlight
+      ? undefined
+      : this.current?.endpoint.binding;
+  }
   get closureReceipt(): ConnectorClosureReceipt | undefined {
     return this.closure;
   }

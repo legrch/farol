@@ -1,5 +1,6 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { AttestedCore } from "./bridge/attested-core.ts";
 import {
   desktopCoreExpectation,
@@ -14,6 +15,8 @@ import {
 } from "./bridge/client.ts";
 import { ComputerBridge } from "./bridge/computer.ts";
 import { ProcessAuditBridge } from "./bridge/process-audit.ts";
+import { SelfTestManager } from "./bridge/self-test-manager.ts";
+import type { SelfTestSelection } from "./bridge/self-test.ts";
 import { ConnectorHostBridge } from "./bridge/connector-host.ts";
 import { BrowserPump, type BrowserDriver } from "./bridge/browser.ts";
 import { ChatBridge } from "./bridge/chat.ts";
@@ -114,6 +117,7 @@ export class DesktopGoCore {
   private readonly taskModelPolicy: TaskModelPolicyBridge;
   private readonly taskModelCatalogue: TaskModelCatalogueBridge;
   private readonly taskCurrentSettings: TaskCurrentSettingsBridge;
+  private selfTests: SelfTestManager | undefined;
   private settingsStorePump: SettingsStorePump | undefined;
   private readonly sessionId = randomUUID();
   private browser: DesktopBrowserConnection | undefined;
@@ -451,6 +455,43 @@ export class DesktopGoCore {
     )
       throw new BridgeError("unavailable", "host_mutation_storage_unavailable");
     return this.client.verifiedContext.profileId;
+  }
+
+  private selfTestManager(): SelfTestManager {
+    this.settingsMutationProfile();
+    if (!this.connector || !this.connector.availableBinding)
+      throw new BridgeError("unavailable", "host_connector_unavailable");
+    if (!this.selfTests) {
+      const originalBinding = Object.freeze({
+        ...this.connector.availableBinding,
+      });
+      this.selfTests = new SelfTestManager(
+        this.client,
+        this.client.verifiedContext,
+        () => {
+          this.settingsMutationProfile();
+          if (
+            !this.connector?.availableBinding ||
+            !isDeepStrictEqual(this.connector.availableBinding, originalBinding)
+          )
+            throw new BridgeError("unavailable", "host_connector_unavailable");
+        },
+        () =>
+          this.authority.settingsMutationPublication(
+            this.settings().computer.generation,
+          ),
+      );
+    }
+    return this.selfTests;
+  }
+  selfTestHistory(workspaceId: string) {
+    return this.selfTestManager().history(workspaceId);
+  }
+  startSelfTest(workspaceId: string) {
+    return this.selfTestManager().start(workspaceId);
+  }
+  observeSelfTest(workspaceId: string, selection: SelfTestSelection) {
+    return this.selfTestManager().observe(workspaceId, selection);
   }
   editSettingsWorkspace(
     operationId: string,

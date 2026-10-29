@@ -244,9 +244,11 @@ it.each(["unknown", "lost"])(
   async (mode) => {
     const { request, host } = fixture();
     await host.open(input);
+    expect(host.availableBinding).toEqual(binding);
     const reply = deferredOutcome();
     request.mockReturnValueOnce(reply.promise);
     const first = host.close();
+    expect(host.availableBinding).toBeUndefined();
     const second = host.close();
     const completed = vi.fn();
     const results = Promise.allSettled([first, second]).then((outcomes) => {
@@ -266,6 +268,7 @@ it.each(["unknown", "lost"])(
         : new Error("lost close response");
     reply.reject(error);
     const outcomes = await results;
+    expect(host.availableBinding).toBeUndefined();
     for (const outcome of outcomes) {
       expect(outcome.status).toBe("rejected");
       expect((outcome as PromiseRejectedResult).reason).toBeInstanceOf(

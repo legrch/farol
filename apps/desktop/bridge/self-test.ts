@@ -47,6 +47,7 @@ export class SelfTestBridge {
     context: Context,
     prior: "none" | PriorSelfTest,
     private readonly store: SelfTestSelectionStore,
+    private readonly checkLive: () => void = () => {},
   ) {
     if (!validate("Context", context))
       throw new BridgeError("refused", "invalid_core_context");
@@ -87,6 +88,12 @@ export class SelfTestBridge {
       // The original reserve may have reached durable storage; never repeat it.
     }
     if (reserved !== "durable") {
+      this.pending = false;
+      return Object.freeze({ selection, state: "unknown" });
+    }
+    try {
+      this.checkLive();
+    } catch {
       this.pending = false;
       return Object.freeze({ selection, state: "unknown" });
     }
