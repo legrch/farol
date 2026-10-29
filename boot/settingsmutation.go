@@ -23,19 +23,21 @@ import (
 // NativeRuntime owns this journal only in a qualified version 2 profile.
 // The host route and legacy writer cutover have separate acceptance gates.
 type SettingsMutationIngress struct {
-	mu              sync.Mutex
-	computer        *ComputerIngress
-	dependencies    computerMutationDependencies
-	operations      map[string]*settingsMutationOperation
-	frozen          bool
-	processDraining bool
-	stagePending    bool
-	stageDone       chan struct{}
-	stageClosed     bool
-	stageLifetime   context.Context
-	stageBaseline   bool
-	stageOwner      *computerStageOwner
-	retirementErr   error
+	mu               sync.Mutex
+	computer         *ComputerIngress
+	dependencies     computerMutationDependencies
+	operations       map[string]*settingsMutationOperation
+	frozen           bool
+	processDraining  bool
+	stagePending     bool
+	stageDone        chan struct{}
+	stageClosed      bool
+	stageLifetime    context.Context
+	stageBaseline    bool
+	stageOwner       *computerStageOwner
+	selfTestRun      *selfTestRunLease
+	scratchPreflight chan struct{} // Standalone original call, including approval refresh.
+	retirementErr    error
 	// Temporary admission exclusion for the existing connector's recovery Open.
 	// Unlike retirement this never freezes the ledger or discards its records.
 	recoveryReserved bool
@@ -47,11 +49,13 @@ type settingsMutationOperation struct {
 	settled         bool
 	contract        *mutationct.OwnerContract
 	scratch         *mutationsvc.OwnerService
+	scratchDone     chan struct{} // Original attempt, including terminal publication.
 	connector       *mutationsvc.ConnectorService
 	process         *connectorProcessOperation
 	connectorScope  bool
 	stageScratch    bool // Set only by the trusted self-test admission owner.
 	stageAttempted  bool // Sticky once the original staging attempt is entered.
+	selfTestRun     *selfTestRunLease
 	failure         error
 }
 
@@ -212,7 +216,10 @@ func (s *SettingsMutationIngress) freezeForRetirement() error {
 		return s.retirementErr
 	}
 	s.frozen = true
-	if s.stagePending {
+	if s.selfTestRun != nil {
+		s.selfTestRun.abandonUnstartedLocked()
+	}
+	if s.stagePending || s.selfTestRun != nil || s.scratchPreflight != nil {
 		s.retirementErr = &mutationct.Failure{Code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", Source: "operation-store", Retry: "never"}
 		return s.retirementErr
 	}

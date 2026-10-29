@@ -147,7 +147,7 @@ func (s *computerConnector) startProcessWithAudit(ctx context.Context, slot *con
 	}
 	ledger := s.mutations
 	ledger.mu.Lock()
-	if ledger.stagePending {
+	if ledger.scratchAdmissionPendingLocked() {
 		ledger.mu.Unlock()
 		return nil, connectorProcessRefusal("PROCESS_UNAVAILABLE")
 	}

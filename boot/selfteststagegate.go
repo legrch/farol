@@ -33,7 +33,7 @@ func stagingPriorEligible(record *settingsMutationOperation) bool {
 // The same ledger lock makes the pre-admission scratch reservation visible to
 // normal file writers before any of them can claim another operation.
 func (s *SettingsMutationIngress) scratchAdmissionPendingLocked() bool {
-	if s.stagePending {
+	if s.stagePending || s.selfTestRun != nil || s.scratchPreflight != nil {
 		return true
 	}
 	for _, record := range s.operations {
@@ -83,6 +83,10 @@ func (s *SettingsMutationIngress) beginSelfTestStageBound(ctx context.Context, o
 	}
 	own := s.operations[operation]
 	if own == nil || (workspace != "" && own.workspace != workspace) || !own.stageScratch || own.stageAttempted || !own.pending || own.settled || own.process != nil || own.path != mutation.ScratchPath(operation) {
+		s.mu.Unlock()
+		return nil, computerUnavailable()
+	}
+	if s.selfTestRun != own.selfTestRun || (own.selfTestRun != nil && (own.selfTestRun.operation != operation || own.selfTestRun.workspace != own.workspace || own.selfTestRun.ctx.Err() != nil)) {
 		s.mu.Unlock()
 		return nil, computerUnavailable()
 	}
@@ -172,9 +176,24 @@ func (s *SettingsMutationIngress) waitSelfTestStage() {
 	}
 	s.mu.Lock()
 	done := s.stageDone
+	var attempts []<-chan struct{}
+	if s.scratchPreflight != nil {
+		attempts = append(attempts, s.scratchPreflight)
+	}
+	if s.selfTestRun != nil && s.selfTestRun.active && s.selfTestRun.callDone != nil {
+		attempts = append(attempts, s.selfTestRun.callDone)
+	}
+	for _, record := range s.operations {
+		if record != nil && record.stageScratch && record.pending && record.scratchDone != nil {
+			attempts = append(attempts, record.scratchDone)
+		}
+	}
 	s.mu.Unlock()
 	if done != nil {
 		<-done
+	}
+	for _, attemptDone := range attempts {
+		<-attemptDone
 	}
 }
 
@@ -186,5 +205,8 @@ func (s *SettingsMutationIngress) closeSelfTestStageAdmission() {
 	}
 	s.mu.Lock()
 	s.stageClosed = true
+	if s.selfTestRun != nil {
+		s.selfTestRun.cancel()
+	}
 	s.mu.Unlock()
 }

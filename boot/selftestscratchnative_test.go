@@ -93,3 +93,165 @@ func TestNativeScratchOwnerPublishesOnceAndObservesAfterReopen(t *testing.T) {
 		t.Fatalf("original record changed after refused replay: %#v %v", after, err)
 	}
 }
+
+// A whole-run reservation stays held after the native creation receipt. This
+// fixture contains no Shell and is removed only by its disposable test owner.
+func TestNativeScratchRetainsWholeRunFenceAfterPublication(t *testing.T) {
+	launch, runtime := retirementStorageFixture(t, true)
+	workspace := filepath.Join(launch.Profile.Root, "workspace")
+	if err := os.Mkdir(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	publication := nativeSettingsPublication(t, runtime, workspace, 1)
+	const id = "00000000-0000-4000-8000-000000000005"
+	const ws = "00000000-0000-4000-8000-000000000004"
+	run, err := runtime.mutations.beginSelfTestRun(context.Background(), id, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := runtime.mutations.createSelfTestScratch(context.Background(), id, ws, publication); err == nil || out != nil {
+		t.Fatal("unbound creator crossed the run fence")
+	}
+	result, err := runtime.mutations.createSelfTestScratchForRun(context.Background(), run, id, ws, publication)
+	if err != nil || result == nil || result.Phase != string(state.Completed) || result.Publication != "durable" {
+		t.Fatal("bound native scratch failed", result, err)
+	}
+	if err := run.abandonUnstarted(); err == nil {
+		t.Fatal("published scratch was released without cleanup")
+	}
+	if runtime.mutations.selfTestRun != run || runtime.mutations.stagePending {
+		t.Fatal("whole-run fence ended with staging")
+	}
+	observed, err := runtime.mutations.observeSelfTestScratch(context.Background(), id, ws, result.ComputerGeneration)
+	if err != nil || observed == nil || observed.Scratch != result.Scratch || observed.Receipt == nil || result.Receipt == nil || observed.Receipt.Directory != result.Receipt.Directory {
+		t.Fatal("bound run lost original result", observed, err)
+	}
+}
+
+func TestNativeRunCloseJoinsApprovalBeforeScratchAdmission(t *testing.T) {
+	launch, runtime := retirementStorageFixture(t, true)
+	workspace := filepath.Join(launch.Profile.Root, "workspace")
+	if err := os.Mkdir(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	publication := nativeSettingsPublication(t, runtime, workspace, 1)
+	const id = "00000000-0000-4000-8000-000000000005"
+	const ws = "00000000-0000-4000-8000-000000000004"
+	run, err := runtime.mutations.beginSelfTestRun(context.Background(), id, ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.ingress.effects.Lock()
+	returned := make(chan error, 1)
+	go func() {
+		_, err := runtime.mutations.createSelfTestScratchForRun(context.Background(), run, id, ws, publication)
+		returned <- err
+	}()
+	deadline := time.After(time.Second)
+	for {
+		runtime.mutations.mu.Lock()
+		active := run.active
+		runtime.mutations.mu.Unlock()
+		if active {
+			break
+		}
+		select {
+		case <-deadline:
+			runtime.ingress.effects.Unlock()
+			<-returned
+			t.Fatal("scratch call did not enter its original lifetime")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	runtime.mutations.closeSelfTestStageAdmission()
+	joined := make(chan struct{})
+	go func() { runtime.mutations.waitSelfTestStage(); close(joined) }()
+	select {
+	case <-joined:
+		runtime.ingress.effects.Unlock()
+		<-returned
+		t.Fatal("close did not join the approval refresh")
+	case <-time.After(20 * time.Millisecond):
+	}
+	runtime.ingress.effects.Unlock()
+	if err := <-returned; err == nil {
+		t.Fatal("cancelled run reached scratch admission")
+	}
+	select {
+	case <-joined:
+	case <-time.After(time.Second):
+		t.Fatal("close did not observe the original call's return")
+	}
+	runtime.mutations.mu.Lock()
+	record, activeRun := runtime.mutations.operations[id], runtime.mutations.selfTestRun
+	runtime.mutations.mu.Unlock()
+	if record != nil || activeRun != nil {
+		t.Fatal("cancelled pre-admission run did not release cleanly")
+	}
+}
+
+func TestNativeStandaloneScratchJoinsApprovalBeforeAdmission(t *testing.T) {
+	launch, runtime := retirementStorageFixture(t, true)
+	workspace := filepath.Join(launch.Profile.Root, "workspace")
+	if err := os.Mkdir(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	publication := nativeSettingsPublication(t, runtime, workspace, 1)
+	const id = "00000000-0000-4000-8000-000000000005"
+	const ws = "00000000-0000-4000-8000-000000000004"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtime.ingress.effects.Lock()
+	returned := make(chan error, 1)
+	go func() {
+		_, err := runtime.mutations.createSelfTestScratch(ctx, id, ws, publication)
+		returned <- err
+	}()
+	deadline := time.After(time.Second)
+	for {
+		runtime.mutations.mu.Lock()
+		active := runtime.mutations.scratchPreflight != nil
+		runtime.mutations.mu.Unlock()
+		if active {
+			break
+		}
+		select {
+		case <-deadline:
+			runtime.ingress.effects.Unlock()
+			<-returned
+			t.Fatal("standalone call did not reserve preflight")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if run, err := runtime.mutations.beginSelfTestRun(context.Background(), id, ws); err == nil || run != nil {
+		runtime.ingress.effects.Unlock()
+		<-returned
+		t.Fatal("run crossed standalone preflight")
+	}
+	runtime.mutations.closeSelfTestStageAdmission()
+	cancel()
+	joined := make(chan struct{})
+	go func() { runtime.mutations.waitSelfTestStage(); close(joined) }()
+	select {
+	case <-joined:
+		runtime.ingress.effects.Unlock()
+		<-returned
+		t.Fatal("close did not join standalone refresh")
+	case <-time.After(20 * time.Millisecond):
+	}
+	runtime.ingress.effects.Unlock()
+	if err := <-returned; err == nil {
+		t.Fatal("cancelled standalone call reached admission")
+	}
+	select {
+	case <-joined:
+	case <-time.After(time.Second):
+		t.Fatal("close did not join standalone return")
+	}
+	runtime.mutations.mu.Lock()
+	record, pending := runtime.mutations.operations[id], runtime.mutations.scratchPreflight
+	runtime.mutations.mu.Unlock()
+	if record != nil || pending != nil {
+		t.Fatal("cancelled standalone preflight left an operation")
+	}
+}
