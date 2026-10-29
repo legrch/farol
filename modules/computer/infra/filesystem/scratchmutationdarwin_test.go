@@ -44,6 +44,12 @@ func TestNativeScratchMutationRejectsDisplacedParent(t *testing.T) {
 			}
 			root := port.Root{Path: workspace, Device: strconv.FormatUint(uint64(rootStat.Dev), 10), Inode: strconv.FormatUint(rootStat.Ino, 10)}
 			binding := mutation.ScratchCleanupBinding{Creation: mutation.Binding{Identity: mutation.Identity{Scope: mutation.ScopeOwnerSettings, OperationID: id, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", RequestDigest: strings.Repeat("a", 64), RelativePath: leaf, Scratch: mutation.ScratchBinding{RunID: id, Root: workspace, Leaf: leaf, RootIdentity: mutation.DirectoryIdentity{Device: root.Device, Inode: root.Inode}, ExpectedInventory: mutation.EmptyScratchInventory}}, Directory: mutation.DirectoryIdentity{Device: strconv.FormatUint(uint64(dirStat.Dev), 10), Inode: strconv.FormatUint(dirStat.Ino, 10)}}
+			fd, err := unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			directoryHold := &scratchDirectoryCustody{fd: fd, identity: binding.Directory, uid: uint32(os.Getuid())}
+			t.Cleanup(func() { _ = directoryHold.Close() })
 			request := port.MutationRequest{Workspace: port.MutationDescriptor{WorkspaceID: "work", Root: workspace, ApprovedRoot: root}, Operation: mutation.Write{RelativePath: leaf + "/check.txt", Content: "test"}, ScratchParent: &binding, BeforePublish: func(context.Context) error { return nil }, WithPublication: func(_ context.Context, fn func() error) error {
 				if displaced {
 					if err := os.Rename(dir, dir+"-held"); err != nil {
@@ -56,6 +62,7 @@ func TestNativeScratchMutationRejectsDisplacedParent(t *testing.T) {
 				return fn()
 			}}
 			request.HoldScratchFile = true
+			request.ScratchDirectoryHold = directoryHold
 			out, err := NewMutable(base).Mutate(context.Background(), request)
 			if !displaced {
 				if err != nil || out == nil || !out.ScratchFile.Valid() || out.ScratchFileHold == nil || out.ScratchFileHold.Check(out.ScratchFile) != nil {
@@ -67,6 +74,7 @@ func TestNativeScratchMutationRejectsDisplacedParent(t *testing.T) {
 				edit := request
 				edit.Operation = mutation.Edit{RelativePath: leaf + "/check.txt", ExpectedSHA256: payloadHash([]byte("test")), Edits: []mutation.TextEdit{{OldText: "test", NewText: "updated"}}}
 				edit.ScratchExpectedFile = &out.ScratchFile
+				edit.ScratchPreviousFile = out.ScratchFileHold
 				edited, err := NewMutable(base).Mutate(context.Background(), edit)
 				if err != nil || edited == nil || !edited.ScratchFile.Valid() || edited.ScratchFile == out.ScratchFile || edited.ScratchFileHold == nil || edited.ScratchFileHold.Check(edited.ScratchFile) != nil {
 					t.Fatalf("edit %#v %v", edited, err)

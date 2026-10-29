@@ -29,6 +29,9 @@ func (m *Mutable) Mutate(ctx context.Context, request port.MutationRequest) (rec
 	if request.HoldScratchFile && request.ScratchParent == nil {
 		return nil, refusal("WORKSPACE_INVALID_REQUEST")
 	}
+	if request.ScratchParent == nil && (request.ScratchDirectoryHold != nil || request.ScratchPreviousFile != nil) {
+		return nil, refusal("WORKSPACE_INVALID_REQUEST")
+	}
 	if request.ScratchExpectedFile != nil {
 		expected := *request.ScratchExpectedFile
 		request.ScratchExpectedFile = &expected
@@ -39,6 +42,9 @@ func (m *Mutable) Mutate(ctx context.Context, request port.MutationRequest) (rec
 	if request.ScratchParent != nil {
 		bound := *request.ScratchParent
 		request.ScratchParent = &bound
+		if request.ScratchDirectoryHold == nil || (request.Operation.Kind() == mutation.EditKind && (request.ScratchExpectedFile == nil || request.ScratchPreviousFile == nil)) || (request.Operation.Kind() != mutation.EditKind && request.ScratchPreviousFile != nil) {
+			return nil, refusal("WORKSPACE_INVALID_REQUEST")
+		}
 		b := bound.Creation
 		parts, partErr := components(request.Operation.Path(), false, false)
 		if !bound.Valid() || partErr != nil || len(parts) != 2 || parts[0] != b.Scratch.Leaf || request.Workspace.WorkspaceID != b.WorkspaceID || request.Workspace.Root != b.Scratch.Root || request.Workspace.ApprovedRoot.Path != b.Scratch.Root || request.Workspace.ApprovedRoot.Device != b.Scratch.RootIdentity.Device || request.Workspace.ApprovedRoot.Inode != b.Scratch.RootIdentity.Inode {

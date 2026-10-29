@@ -31,7 +31,11 @@ func withMutationPublication(ctx context.Context, request port.MutationRequest, 
 		}
 		if ctx == nil || ctx.Err() != nil {
 			result = refusal("WORKSPACE_MUTATION_CANCELLED")
-		} else if result = walk.check(); result == nil {
+		} else if result = checkScratchMutationCustody(request); result == nil {
+			result = walk.check()
+			if result != nil {
+				return result
+			}
 			attempted = true
 			result = publish()
 		}

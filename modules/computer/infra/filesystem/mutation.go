@@ -206,7 +206,23 @@ func checkMutation(ctx context.Context, request port.MutationRequest, walk *muta
 	if err := request.BeforePublish(ctx); err != nil {
 		return err
 	}
+	if err := checkScratchMutationCustody(request); err != nil {
+		return err
+	}
 	return walk.check()
+}
+
+func checkScratchMutationCustody(request port.MutationRequest) error {
+	if request.ScratchParent == nil {
+		return nil
+	}
+	if request.ScratchDirectoryHold == nil || request.ScratchDirectoryHold.Check(request.ScratchParent.Directory) != nil {
+		return refusal("WORKSPACE_MUTATION_CONFLICT")
+	}
+	if request.Operation.Kind() == mutation.EditKind && (request.ScratchExpectedFile == nil || request.ScratchPreviousFile == nil || request.ScratchPreviousFile.Check(*request.ScratchExpectedFile) != nil) {
+		return refusal("WORKSPACE_MUTATION_CONFLICT")
+	}
+	return nil
 }
 func mutationError(code string) error { return refusal("WORKSPACE_" + code) }
 func expectedHash(op mutation.Operation) *string {

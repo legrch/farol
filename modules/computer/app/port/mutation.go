@@ -75,9 +75,13 @@ type MutationRequest struct {
 	// must pin this exact previously created parent, refuse missing parents and
 	// recheck its physical identity through publication. It grants no authority.
 	ScratchParent *mutation.ScratchCleanupBinding
+	// Lifetime-local custody must accompany the stored parent identity.
+	ScratchDirectoryHold ScratchDirectoryCustody
 	// Only scratch edits supply this original file identity. It is enforced by
 	// the scratch-capable native producer before the existing guarded swap.
 	ScratchExpectedFile *mutation.DirectoryIdentity
+	// Scratch edits retain the original file through the guarded swap.
+	ScratchPreviousFile ScratchFileCustody
 	// Rechecks the SAME selected execution lease, outside owner callbacks.
 	// Required before the first directory effect and publication preparation.
 	BeforePublish func(context.Context) error

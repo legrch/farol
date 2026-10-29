@@ -17,8 +17,13 @@ type testScratchFileHold struct {
 	closeErr error
 }
 
-func (h *testScratchFileHold) Check(mutation.DirectoryIdentity) error { return nil }
-func (h *testScratchFileHold) Close() error                           { h.closed++; return h.closeErr }
+func (h *testScratchFileHold) Check(mutation.DirectoryIdentity) error {
+	if h.closed != 0 {
+		return errors.New("custody closed")
+	}
+	return nil
+}
+func (h *testScratchFileHold) Close() error { h.closed++; return h.closeErr }
 
 type testHeldMutation struct {
 	mutationFS
@@ -39,6 +44,7 @@ func TestScratchMutationLostPublicationClosesOriginalFileHold(t *testing.T) {
 	f.work.children[leaf] = dir
 	b := mutation.ScratchCleanupBinding{Creation: mutation.Binding{Identity: mutation.Identity{Scope: mutation.ScopeOwnerSettings, OperationID: id, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", RequestDigest: strings.Repeat("a", 64), RelativePath: leaf, Scratch: mutation.ScratchBinding{RunID: id, Root: "/work", Leaf: leaf, RootIdentity: mutation.DirectoryIdentity{Device: "7", Inode: "2"}, ExpectedInventory: mutation.EmptyScratchInventory}}, Directory: mutation.DirectoryIdentity{Device: "7", Inode: strconv.FormatUint(dir.v.ino, 10)}}
 	r := fakeRequest(mutation.Write{RelativePath: leaf + "/check.txt", Content: "new"})
+	r.ScratchDirectoryHold = &testScratchFileHold{}
 	r.HoldScratchFile = true
 	r.WithPublication = func(_ context.Context, publish func() error) error {
 		if err := publish(); err != nil {
@@ -63,6 +69,7 @@ func TestScratchMutationUnconfirmedHoldClosePreservesCandidate(t *testing.T) {
 	f.work.children[leaf] = dir
 	b := mutation.ScratchCleanupBinding{Creation: mutation.Binding{Identity: mutation.Identity{Scope: mutation.ScopeOwnerSettings, OperationID: id, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", RequestDigest: strings.Repeat("a", 64), RelativePath: leaf, Scratch: mutation.ScratchBinding{RunID: id, Root: "/work", Leaf: leaf, RootIdentity: mutation.DirectoryIdentity{Device: "7", Inode: "2"}, ExpectedInventory: mutation.EmptyScratchInventory}}, Directory: mutation.DirectoryIdentity{Device: "7", Inode: strconv.FormatUint(dir.v.ino, 10)}}
 	r := fakeRequest(mutation.Write{RelativePath: leaf + "/check.txt", Content: "new"})
+	r.ScratchDirectoryHold = &testScratchFileHold{}
 	r.HoldScratchFile = true
 	r.WithPublication = func(context.Context, func() error) error { return errors.New("guard refusal") }
 	out, err := m.MutateScratch(context.Background(), r, b)
@@ -84,6 +91,7 @@ func TestScratchMutationPinsOriginalParentAndNeverCreatesIt(t *testing.T) {
 			f.work.children[leaf] = original
 			b := mutation.ScratchCleanupBinding{Creation: mutation.Binding{Identity: mutation.Identity{Scope: mutation.ScopeOwnerSettings, OperationID: id, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", RequestDigest: strings.Repeat("a", 64), RelativePath: leaf, Scratch: mutation.ScratchBinding{RunID: id, Root: "/work", Leaf: leaf, RootIdentity: mutation.DirectoryIdentity{Device: "7", Inode: "2"}, ExpectedInventory: mutation.EmptyScratchInventory}}, Directory: mutation.DirectoryIdentity{Device: "7", Inode: strconv.FormatUint(original.v.ino, 10)}}
 			r := fakeRequest(mutation.Write{RelativePath: leaf + "/check.txt", Content: "new"})
+			r.ScratchDirectoryHold = &testScratchFileHold{}
 			switch mode {
 			case "missing":
 				delete(f.work.children, leaf)
@@ -130,7 +138,9 @@ func TestScratchMutationEditRequiresOriginalFileIdentity(t *testing.T) {
 			f.work.children[leaf] = dir
 			b := mutation.ScratchCleanupBinding{Creation: mutation.Binding{Identity: mutation.Identity{Scope: mutation.ScopeOwnerSettings, OperationID: id, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", RequestDigest: strings.Repeat("a", 64), RelativePath: leaf, Scratch: mutation.ScratchBinding{RunID: id, Root: "/work", Leaf: leaf, RootIdentity: mutation.DirectoryIdentity{Device: "7", Inode: "2"}, ExpectedInventory: mutation.EmptyScratchInventory}}, Directory: mutation.DirectoryIdentity{Device: "7", Inode: strconv.FormatUint(dir.v.ino, 10)}}
 			path := leaf + "/check.txt"
-			created, err := m.MutateScratch(context.Background(), fakeRequest(mutation.Write{RelativePath: path, Content: "old"}), b)
+			create := fakeRequest(mutation.Write{RelativePath: path, Content: "old"})
+			create.ScratchDirectoryHold = &testScratchFileHold{}
+			created, err := m.MutateScratch(context.Background(), create, b)
 			if err != nil || created == nil || !created.ScratchFile.Valid() {
 				t.Fatalf("creation %#v %v", created, err)
 			}
@@ -139,6 +149,8 @@ func TestScratchMutationEditRequiresOriginalFileIdentity(t *testing.T) {
 			}
 			request := fakeRequest(mutation.Edit{RelativePath: path, ExpectedSHA256: payloadHash([]byte("old")), Edits: []mutation.TextEdit{{OldText: "old", NewText: "new"}}})
 			request.ScratchExpectedFile = &created.ScratchFile
+			request.ScratchDirectoryHold = create.ScratchDirectoryHold
+			request.ScratchPreviousFile = &testScratchFileHold{}
 			result, err := m.MutateScratch(context.Background(), request, b)
 			if replaced {
 				if err == nil || result != nil || string(dir.children["check.txt"].data) != "old" || f.swaps != 0 {
@@ -146,6 +158,50 @@ func TestScratchMutationEditRequiresOriginalFileIdentity(t *testing.T) {
 				}
 			} else if err != nil || result == nil || !result.ScratchFile.Valid() || result.ScratchFile == created.ScratchFile || string(dir.children["check.txt"].data) != "new" {
 				t.Fatalf("edit %#v %v", result, err)
+			}
+		})
+	}
+}
+
+func TestScratchMutationRejectsLostCustodyBeforePublication(t *testing.T) {
+	for _, mode := range []string{"missing directory", "closed directory", "closed file"} {
+		t.Run(mode, func(t *testing.T) {
+			m, f := fakeMutable()
+			id := "00000000-0000-4000-8000-000000000001"
+			leaf := mutation.ScratchPath(id)
+			dir := f.directory(0700)
+			f.work.children[leaf] = dir
+			b := mutation.ScratchCleanupBinding{Creation: mutation.Binding{Identity: mutation.Identity{Scope: mutation.ScopeOwnerSettings, OperationID: id, OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}, WorkspaceID: "work", RequestDigest: strings.Repeat("a", 64), RelativePath: leaf, Scratch: mutation.ScratchBinding{RunID: id, Root: "/work", Leaf: leaf, RootIdentity: mutation.DirectoryIdentity{Device: "7", Inode: "2"}, ExpectedInventory: mutation.EmptyScratchInventory}}, Directory: mutation.DirectoryIdentity{Device: "7", Inode: strconv.FormatUint(dir.v.ino, 10)}}
+			directory := &testScratchFileHold{}
+			create := fakeRequest(mutation.Write{RelativePath: leaf + "/check.txt", Content: "old"})
+			create.ScratchDirectoryHold = directory
+			if mode == "missing directory" {
+				create.ScratchDirectoryHold = nil
+				if out, err := m.MutateScratch(context.Background(), create, b); err == nil || out != nil || f.links != 0 {
+					t.Fatal("missing custody admitted")
+				}
+				return
+			}
+			if mode == "closed directory" {
+				create.WithPublication = func(_ context.Context, publish func() error) error {
+					_ = directory.Close()
+					return publish()
+				}
+				if out, err := m.MutateScratch(context.Background(), create, b); err == nil || out != nil || f.links != 0 {
+					t.Fatal("lost directory custody admitted")
+				}
+				return
+			}
+			created, err := m.MutateScratch(context.Background(), create, b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			file := &testScratchFileHold{}
+			edit := fakeRequest(mutation.Edit{RelativePath: leaf + "/check.txt", ExpectedSHA256: payloadHash([]byte("old")), Edits: []mutation.TextEdit{{OldText: "old", NewText: "new"}}})
+			edit.ScratchDirectoryHold, edit.ScratchPreviousFile, edit.ScratchExpectedFile = directory, file, &created.ScratchFile
+			edit.WithPublication = func(_ context.Context, publish func() error) error { _ = file.Close(); return publish() }
+			if out, err := m.MutateScratch(context.Background(), edit, b); err == nil || out != nil || f.swaps != 0 || string(dir.children["check.txt"].data) != "old" {
+				t.Fatal("lost file custody admitted")
 			}
 		})
 	}
