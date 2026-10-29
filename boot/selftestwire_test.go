@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
+	"github.com/legrch/farol/modules/computer/app/port"
 	state "github.com/legrch/farol/modules/computer/domain/mutation"
 	"github.com/legrch/farol/transport/desktop"
 )
@@ -92,6 +93,7 @@ func TestSelfTestWireRejectsMalformedRequestsBeforeAdmission(t *testing.T) {
 	s, _, journal, native, _ := connectorMutationFixture(t)
 	methods := s.Methods()
 	for name, req := range map[string]desktop.Request{
+		"computer.selftest.history": {RequestID: "history", OperationID: "unexpected", Body: []byte(`{}`)},
 		"computer.selftest.reserve": {RequestID: "reserve", OperationID: "bad", Body: []byte(`{}`)},
 		"computer.selftest.start":   {RequestID: "start", OperationID: "bad", Body: []byte(`{}`)},
 		"computer.selftest.observe": {RequestID: "observe", OperationID: "unexpected", Body: []byte(`{}`)},
@@ -100,6 +102,27 @@ func TestSelfTestWireRejectsMalformedRequestsBeforeAdmission(t *testing.T) {
 		if err != nil || out == nil || out.Status != "refused" || journal.admits != 0 || native.calls != 0 {
 			t.Fatal("malformed request admitted", name, out, err)
 		}
+	}
+}
+
+func TestSelfTestWireHistoryReturnsOriginalWithoutExecution(t *testing.T) {
+	s, _, journal, native, in := connectorMutationFixture(t)
+	store := &observationHistoryJournal{factoryJournal: &factoryJournal{chatMutationJournal: journal, durablePlanStore: &durablePlanStore{}}}
+	s.mutations.dependencies.repository = store
+	const id = "00000000-0000-4000-8000-000000000001"
+	execution, err := s.newConnectorSelfTest(context.Background(), s.current, "work", id, in.Publication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.entries = []port.SelfTestHistoryEntry{{Binding: execution.binding, Phase: state.Prepared}}
+	body, _ := json.Marshal(wire.ComputerSelfTestHistoryRequest{WorkspaceId: "work"})
+	out, err := s.Methods()["computer.selftest.history"].Handle(context.Background(), desktop.Request{RequestID: "history", Body: body})
+	var history wire.ComputerSelfTestHistory
+	if err != nil || out == nil || out.Status != "ok" || json.Unmarshal(out.Data, &history) != nil || len(history.Entries) != 1 || history.Entries[0].Selection.OperationId != id || history.Entries[0].Phase != "prepared" {
+		t.Fatal("original history not observed", out, err)
+	}
+	if store.durablePlanStore.admits != 0 || journal.admits != 0 || native.calls != 0 {
+		t.Fatal("history caused effects")
 	}
 }
 

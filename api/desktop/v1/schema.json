@@ -103,7 +103,8 @@
     "computer.settings.inspect": "read",
     "computer.selftest.reserve": "effect",
     "computer.selftest.start": "effect",
-    "computer.selftest.observe": "read"
+    "computer.selftest.observe": "read",
+    "computer.selftest.history": "read"
   },
   "definitions": {
     "Context": {
@@ -5877,6 +5878,26 @@
         "workspaceId": { "type": "id" },
         "computerGeneration": { "type": "decimal" },
         "planVersion": { "type": "text", "values": ["1", "2"], "optional": true }
+      }
+    },
+    "ComputerSelfTestHistoryRequest": {
+      "type": "object",
+      "fields": {
+        "workspaceId": { "type": "id" }
+      }
+    },
+    "ComputerSelfTestHistoryEntry": {
+      "type": "object",
+      "fields": {
+        "selection": { "type": "ComputerSelfTestObserve" },
+        "phase": { "type": "text", "values": ["prepared", "completed", "failed", "outcome_unknown"] }
+      }
+    },
+    "ComputerSelfTestHistory": {
+      "type": "object",
+      "fields": {
+        "workspaceId": { "type": "id" },
+        "entries": { "type": "ComputerSelfTestHistoryEntry[]", "maxItems": 256 }
       }
     },
     "ComputerSelfTestStep": {
