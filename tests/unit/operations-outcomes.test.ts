@@ -31,6 +31,48 @@ const closedContractCoverage: [
 const metadata = { source: "You", kind: "general.update", target: {} } as const;
 
 it.each([
+  "PROCESS_PREPARATION_DEADLINE",
+  "PROCESS_PREPARATION_SCOPE_REFUSED",
+  "PROCESS_PREPARATION_POLICY_MISMATCH",
+  "PROCESS_PREPARATION_AUTHORIZATION_CHANGED",
+  "PROCESS_CONTROL_LIFETIME_MISMATCH",
+])("records known preparation refusal %s without promoting UNKNOWN", (code) => {
+  expect(operationResult({ status: "refused", code })).toEqual({
+    outcome: "refused",
+    code,
+  });
+  expect(operationResult({ status: "outcome_unknown", code })).toEqual({
+    outcome: "unknown",
+    code,
+  });
+  expect(operationResult({ status: "unknown", code })).toEqual({
+    outcome: "unknown",
+    code,
+  });
+});
+
+it("observes a preparation refusal without altering the original reply", async () => {
+  const record = vi.fn();
+  const reply = {
+    status: "refused",
+    error: { code: "PROCESS_PREPARATION_DEADLINE" },
+  };
+  const original = Promise.resolve(reply);
+  expect(
+    observeOperation(
+      { record },
+      { ...metadata, kind: "computer_shell_start" },
+      () => original,
+    ),
+  ).toBe(original);
+  expect(await original).toBe(reply);
+  expect(record.mock.calls[0]?.slice(1, 3)).toEqual([
+    "refused",
+    "PROCESS_PREPARATION_DEADLINE",
+  ]);
+});
+
+it.each([
   ["computer_shell_read", { state: "running" }],
   ["computer_shell_cancel", { status: "requested" }],
 ] as const)(
@@ -135,6 +177,12 @@ it("maps every declared TS contract/producer code and Go result kind exactly onc
   ).toEqual([]);
   // Ensure the inventory reaches each required owner, rather than testing the
   // mapping against a duplicate hand-maintained list of its own keys.
+  expect(declared.get("PROCESS_PREPARATION_DEADLINE")).toContain(
+    "boot/connectorprocess.go",
+  );
+  expect(declared.get("PROCESS_CONTROL_LIFETIME_MISMATCH")).toContain(
+    "boot/connectorprocesswire.go",
+  );
   expect(declared.get("CHATGPT_CONVERSATION_UNCONFIRMED")).toContain(
     "src/pkg/product-settings/contract.ts",
   );

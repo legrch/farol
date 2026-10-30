@@ -87,6 +87,13 @@ export function declaredOperationOutcomes(): Map<string, Set<string>> {
     }
   };
   roots.forEach(discover);
+  // Computer's connector preparation converts failures in root composition,
+  // outside the module trees above. Scan these actual producers as well.
+  for (const file of [
+    "boot/connectorprocess.go",
+    "boot/connectorprocesswire.go",
+  ])
+    sources.add(file);
   for (const file of sources) {
     const source = fs.readFileSync(file, "utf8");
     if (file.endsWith(".go")) {
