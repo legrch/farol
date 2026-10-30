@@ -42,6 +42,28 @@ describe("version-bound tunnel notices", () => {
     expect(evidence.modules).toHaveLength(46);
     expect(seen.size).toBe(58);
   });
+  it("retains the pinned embedded Svelte license byte-for-byte", () => {
+    const embedded = evidence.embeddedAdminUI;
+    expect(embedded.package).toBe("svelte");
+    expect(embedded.version).toBe("4.2.20");
+    const header = Buffer.from(
+      `\n${"=".repeat(72)}\nSvelte 4.2.20 / LICENSE.md\n${"=".repeat(72)}\n`,
+    );
+    const index = bytes.indexOf(header);
+    expect(index).toBeGreaterThanOrEqual(0);
+    expect(bytes.indexOf(header, index + 1)).toBe(-1);
+    const content = bytes.subarray(
+      index + header.length,
+      index + header.length + embedded.licenseBytes,
+    );
+    expect(content.length).toBe(1117);
+    expect(createHash("sha256").update(content).digest("hex")).toBe(
+      "97a941bae1c510c556c5daf017180e4939ea392357d9a7bae2657e3e20c69c42",
+    );
+    expect(embedded.licenseSha256).toBe(
+      createHash("sha256").update(content).digest("hex"),
+    );
+  });
   it.each([
     "schema",
     "tunnelVersion",

@@ -8,7 +8,7 @@
   "upstreamSpdxSha256": "2d116935e74f5571a0880e7d1ccda1ffe57332ab8b8b5f0a1fe447b58502457a",
   "goRuntimeVersion": "go1.27.0",
   "goRuntimeLicenseSha256": "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad",
-  "noticeSha256": "55ef393f7c7cc69b987fa2ac554cc2420d5a9a14f601b69e475891c930804a03",
+  "noticeSha256": "19a06330388178627d2da8b1c6c6c4a1f3f16ca7fae2034d43fc85e0572ed9da",
   "modules": [
     {
       "module": "github.com/bahlo/generic-list-go",
@@ -624,5 +624,14 @@
     }
   ],
   "goRuntimePatentsSha256": "96f408bfae65bf137fc2525d3ecb030271c50c1e90799f87abf8846d8dd505cc",
-  "tunnelVersion": "0.0.16"
+  "tunnelVersion": "0.0.16",
+  "embeddedAdminUI": {
+    "upstreamCommit": "5f99daabd4aa4a77049e6d81d54a0d8c18335397",
+    "appJsSha256": "6ce6d5cce56c13a1077159e6b4886a83a61063ace2a9f45049e5f37e347b7acd",
+    "package": "svelte",
+    "version": "4.2.20",
+    "licensePath": "LICENSE.md",
+    "licenseSha256": "97a941bae1c510c556c5daf017180e4939ea392357d9a7bae2657e3e20c69c42",
+    "licenseBytes": 1117
+  }
 }
