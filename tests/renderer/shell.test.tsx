@@ -3165,7 +3165,7 @@ it("compact collapse keeps the expanded preference and never opens a page-list o
     });
   }
 });
-it("Setup keeps navigation stable and progress inside its own page", async () => {
+it("Setup keeps navigation stable and shows incomplete current checks", async () => {
   const { host, c } = await mount(bootstrap());
   await act(async () => c.toggleSidebar(false));
   await act(async () => c.navigate({ area: "setup", setupStep: "connection" }));
@@ -3181,8 +3181,8 @@ it("Setup keeps navigation stable and progress inside its own page", async () =>
     host.querySelector('.rail [aria-label="Setup"]')?.getAttribute("title"),
   ).toBe("Setup · Current page");
   expect(
-    host.querySelector('.rail [aria-label="Setup"] .setup-count'),
-  ).toBeNull();
+    host.querySelector('.rail [aria-label="Setup"] .setup-count')?.textContent,
+  ).toBe("0 of 4");
 });
 it("does not show a complete Setup checkmark when the saved connection is offline", async () => {
   const data = completedBootstrap();
@@ -3192,7 +3192,7 @@ it("does not show a complete Setup checkmark when the saved connection is offlin
   const { host } = await mount(data);
   const setup = host.querySelector('.rail [aria-label="Setup"]')!;
   expect(setup.querySelector(".setup-count")?.textContent).not.toBe("✓");
-  expect(setup.querySelector(".setup-count")).toBeNull();
+  expect(setup.querySelector(".setup-count")?.textContent).toBe("1 of 4");
   expect(setup.getAttribute("title")).toBe("Setup · Open page");
 });
 it("labels a challenge-scoped connection test as checking while it is in flight", async () => {

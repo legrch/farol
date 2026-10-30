@@ -4651,6 +4651,121 @@ it("can present despite a failed Settings read without adopting its reply snapsh
 });
 
 describe("automatic Setup sign-in after the owner login flow", () => {
+  it("does not infer a configured sign-in from a completed-setup flag alone", async () => {
+    const f = fixture();
+    const data = {
+      ...bootstrap(),
+      browserRouteState: { state: "loaded" as const },
+    };
+    data.configuration.settings.setup.journey.dismissed = true;
+    vi.mocked(f.api.bootstrap).mockResolvedValue(data);
+    const c = new WindowController(f.api);
+    try {
+      await c.start();
+      expect(f.api.configure).not.toHaveBeenCalled();
+    } finally {
+      c.dispose();
+    }
+  });
+  it("does not renew a completed setup across a saved unknown sign-in outcome", async () => {
+    const f = fixture();
+    const data = {
+      ...bootstrap(),
+      browserRouteState: { state: "loaded" as const },
+    };
+    data.configuration.settings = readySettings();
+    data.configuration.settings.setup.journey.dismissed = true;
+    data.configuration.settings.setup.chatgpt.verified = null;
+    data.configuration.settings.setup.chatgpt.outcomeUnknown = true;
+    vi.mocked(f.api.bootstrap).mockResolvedValue(data);
+    vi.mocked(f.api.configure).mockImplementation(async (command) => {
+      if (command.kind === "chatgpt.observe-sign-in")
+        return signInReply(command, "authenticated", {
+          status: "ready",
+          settings: data.configuration.settings,
+        });
+      throw Error("unexpected effect");
+    });
+    const c = new WindowController(f.api);
+    try {
+      await c.start();
+      await vi.waitFor(() =>
+        expect(c.getSnapshot().signInObservation?.pending).toBe(false),
+      );
+      c.navigate({ area: "setup", setupStep: "signin" });
+      f.emit("route", { state: "loaded" });
+      expect(
+        vi
+          .mocked(f.api.configure)
+          .mock.calls.filter(([c]) => c.kind === "chatgpt.verify"),
+      ).toHaveLength(0);
+      const configuration = c.getSnapshot().configuration;
+      expect(
+        configuration?.status === "ready" &&
+          configuration.settings.setup.chatgpt.outcomeUnknown,
+      ).toBe(true);
+    } finally {
+      c.dispose();
+    }
+  });
+  it.each([false, true])(
+    "renews a completed setup with no saved sign-in receipt once; uncertain=%s",
+    async (uncertain) => {
+      const f = fixture();
+      const data = {
+        ...bootstrap(),
+        browserRouteState: { state: "loaded" as const },
+      };
+      data.configuration.settings = readySettings();
+      data.configuration.settings.setup.journey.dismissed = true;
+      data.configuration.settings.setup.chatgpt.verified = null;
+      vi.mocked(f.api.bootstrap).mockResolvedValue(data);
+      let checks = 0;
+      vi.mocked(f.api.configure).mockImplementation(async (command) => {
+        if (command.kind === "chatgpt.observe-sign-in")
+          return signInReply(command, "authenticated", {
+            status: "ready",
+            settings: data.configuration.settings,
+          });
+        if (command.kind === "chatgpt.verify") {
+          checks++;
+          if (uncertain) throw Error("fixture lost verifier reply");
+          return {
+            ok: true,
+            snapshot: { status: "ready", settings: readySettings() },
+            evidence: {
+              kind: "chatgpt.readiness",
+              state: "authenticated",
+              code: null,
+            },
+          };
+        }
+        throw Error("unexpected effect");
+      });
+      const c = new WindowController(f.api);
+      try {
+        await c.start();
+        await vi.waitFor(() =>
+          expect(
+            c.getSnapshot().intents["settings:chatgpt.verify:"]?.state,
+          ).toBe(uncertain ? "unknown" : "applied"),
+        );
+        const original = c.getSnapshot().intents["settings:chatgpt.verify:"];
+        f.emit("route", { state: "loaded" });
+        c.navigate({ area: "setup", setupStep: "signin" });
+        await vi.waitFor(() =>
+          expect(c.getSnapshot().signInObservation?.pending).toBe(false),
+        );
+        expect(checks).toBe(1);
+        expect(c.getSnapshot().intents["settings:chatgpt.verify:"]).toBe(
+          original,
+        );
+        expect(f.api.task).not.toHaveBeenCalled();
+      } finally {
+        c.dispose();
+      }
+    },
+  );
   it.each([false, true])(
     "confirms the authenticated page while the owner stays in ChatGPT; uncertain=%s",
     async (uncertain) => {

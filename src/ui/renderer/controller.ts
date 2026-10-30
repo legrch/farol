@@ -2492,7 +2492,9 @@ export class WindowController implements RendererFacade {
         this.state.destination.area === "chatgpt" &&
         this.state.setupSignInReturn !== null) ||
       (this.state.configuration?.status === "ready" &&
-        this.state.configuration.settings.setup.chatgpt.verified !== null)
+        (this.state.configuration.settings.setup.chatgpt.verified !== null ||
+          (this.state.configuration.settings.setup.journey.dismissed &&
+            this.state.configuration.settings.setup.chatgpt.configured)))
     );
   }
   private retireSignInObservation(): void {
@@ -2610,7 +2612,9 @@ export class WindowController implements RendererFacade {
     const state = this.state;
     const saved =
       state.configuration?.status === "ready"
-        ? state.configuration.settings.setup.chatgpt.verified
+        ? state.configuration.settings.setup.chatgpt.verified !== null ||
+          (state.configuration.settings.setup.journey.dismissed &&
+            state.configuration.settings.setup.chatgpt.configured)
         : null;
     if (
       this.disposed ||
@@ -2632,7 +2636,9 @@ export class WindowController implements RendererFacade {
       const current = this.state;
       const verified =
         current.configuration?.status === "ready"
-          ? current.configuration.settings.setup.chatgpt.verified
+          ? current.configuration.settings.setup.chatgpt.verified !== null ||
+            (current.configuration.settings.setup.journey.dismissed &&
+              current.configuration.settings.setup.chatgpt.configured)
           : null;
       if (
         this.disposed ||
@@ -2657,9 +2663,13 @@ export class WindowController implements RendererFacade {
       state.configuration?.status === "ready"
         ? state.configuration.settings.setup.chatgpt.verified
         : null;
-    // Passive inspection alone never starts a settings writer. Confirm after
-    // the owner's login flow, or renew a previously verified session.
-    if (!this.automaticSignInRequested && !saved) return;
+    // Confirm after the owner's login flow, or renew a previously configured
+    // completed setup. An unfinished setup never gains a passive writer.
+    const completedSetup =
+      state.configuration?.status === "ready" &&
+      state.configuration.settings.setup.journey.dismissed &&
+      state.configuration.settings.setup.chatgpt.configured;
+    if (!this.automaticSignInRequested && !saved && !completedSetup) return;
     if (
       !this.isSetupSignInObservationEntry() ||
       state.route !== "loaded" ||

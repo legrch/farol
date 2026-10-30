@@ -29,13 +29,15 @@ const text = (state: State) =>
       ? "Testing in a new temporary ChatGPT chat…"
       : state.phase === "done"
         ? "ChatGPT confirmed this connection."
-        : state.code === "CHATGPT_COMPOSER_DRAFT_PRESENT"
-          ? "Finish or clear the current draft before testing. Nothing was sent."
-          : state.phase === "unknown"
-            ? "The test has no confirmed result. Its original record stays in Activity."
-            : state.phase === "refused"
-              ? `The connection test needs attention. ${state.code ?? "Review the connection in Setup."}`
-              : "";
+        : state.phase === "unknown"
+          ? "The test has no confirmed result. Its original record stays in Activity."
+          : state.code === "CHATGPT_COMPOSER_DRAFT_PRESENT"
+            ? "Finish or clear the current draft before testing. Nothing was sent."
+            : state.code === "CONNECTOR_APP_VERIFICATION_NOT_READY"
+              ? "Check sign-in and connection in Setup."
+              : state.phase === "refused"
+                ? `The connection test needs attention. ${state.code ?? "Review the connection in Setup."}`
+                : "";
 
 /** Check the live route without disturbing its proof. When recovery is needed,
  * prepare a distinct runtime through confirmed stop/start; never replay a claim. */
@@ -312,10 +314,12 @@ export function ConnectionTestButton({
   facade,
   disabled = false,
   primary = false,
+  toolbar = false,
 }: {
   facade: RendererFacade;
   disabled?: boolean;
   primary?: boolean;
+  toolbar?: boolean;
 }) {
   const test = useConnectionTest(facade),
     snapshot = facade.getSnapshot();
@@ -323,7 +327,15 @@ export function ConnectionTestButton({
     commandAllowed(snapshot, "connector.repair") &&
     computerSetup(snapshot).canReconnect;
   return (
-    <div className="connection-test-control">
+    <div
+      className="connection-test-control"
+      data-toolbar={toolbar || undefined}
+    >
+      {toolbar && test.message && (
+        <span role="status" className="connection-test-feedback">
+          {test.message}
+        </span>
+      )}
       <button
         className={primary ? "primary" : undefined}
         title="Send one new connection test in a temporary ChatGPT chat"
@@ -332,7 +344,7 @@ export function ConnectionTestButton({
       >
         {test.busy ? "Testing…" : "Test in ChatGPT"}
       </button>
-      {test.message && (
+      {!toolbar && test.message && (
         <span role="status" className="connection-test-feedback">
           {test.message}
         </span>

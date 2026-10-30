@@ -1604,7 +1604,7 @@ function SignInStep({ snapshot, facade, actions }: PageProps) {
             {signIn.pending
               ? "Checking sign-in…"
               : signIn.signedIn
-                ? "You’re signed in. Farol is confirming this step automatically."
+                ? "You’re signed in. Check sign-in to continue."
                 : "Sign in to your ChatGPT account, then return here."}
           </p>
           <Command

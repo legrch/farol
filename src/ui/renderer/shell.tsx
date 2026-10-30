@@ -22,7 +22,7 @@ import { ChatDirect } from "./chat-direct";
 import { ChatReadonly } from "./chat-readonly";
 import { ChatHistory } from "./chat-history";
 import { RetiredReplies } from "./retired-replies";
-import { setupSteps } from "./setup-navigation";
+import { setupChecklist, setupSteps } from "./setup-navigation";
 import { designIconPath, designIconViewBox } from "./design-icons";
 import { UpdateNotice, acknowledgeUpdateNotice } from "./update-notice";
 import {
@@ -1004,8 +1004,19 @@ export function Shell() {
   }, [facade, state.sidebar, state.status]);
   const settings = destination.area === "settings";
   const retained = useSetupIntents(facade, state);
+  const setupEntries = setupChecklist(state, false, retained).entries;
+  const setupReadyCount = setupEntries.filter(
+    (entry) => entry.liveState === "verified",
+  ).length;
   const notifications = useActivityNotifications(state, retained);
   const connectionState = connectionPresentation(state, retained);
+  const showSetupCount =
+    state.status === "current" &&
+    state.runtime === "ready" &&
+    state.configuration?.status === "ready" &&
+    !connectionState.checking &&
+    !setupEntries.some((entry) => entry.liveState === "pending") &&
+    setupReadyCount < setupEntries.length;
   const connected = connectionState.connected;
   const connectionLabel = connectionState.label;
   const sidebarLabel = expanded ? "Collapse sidebar" : "Expand sidebar";
@@ -1153,7 +1164,7 @@ export function Shell() {
           <kbd>⌘ K</kbd>
         </button>
         {destination.area === "chatgpt" && !state.setupSignInReturn && (
-          <ConnectionTestButton facade={facade} />
+          <ConnectionTestButton facade={facade} toolbar />
         )}
         <button
           className="notifications-trigger"
@@ -1229,6 +1240,11 @@ export function Shell() {
                 >
                   <Icon name={area} />
                   <span className="rail-label">{label}</span>
+                  {area === "setup" && showSetupCount && (
+                    <span className="setup-count rail-label">
+                      {setupReadyCount} of {setupEntries.length}
+                    </span>
+                  )}
                 </button>
               );
             })}

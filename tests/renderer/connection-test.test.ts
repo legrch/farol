@@ -1,5 +1,10 @@
 import { expect, it, vi } from "vitest";
-import { runFreshConnectionTest } from "../../apps/desktop/renderer/connection-test";
+import { act, createElement } from "react";
+import { createRoot } from "react-dom/client";
+import {
+  ConnectionTestButton,
+  runFreshConnectionTest,
+} from "../../apps/desktop/renderer/connection-test";
 import { commandAllowed } from "../../src/ui/renderer/command-eligibility";
 import { WindowController } from "../../src/ui/renderer/controller";
 import type {
@@ -66,6 +71,54 @@ async function setup() {
     cleanup: () => controller.dispose(),
   };
 }
+it.each([
+  ["refused", "Check sign-in and connection in Setup."],
+  [
+    "unknown",
+    "The test has no confirmed result. Its original record stays in Activity.",
+  ],
+] as const)(
+  "keeps %s visible in the toolbar without repeating the check",
+  async (state, message) => {
+    const h = await setup();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    h.configure.mockResolvedValue({
+      id: "check",
+      state,
+      code: "CONNECTOR_APP_VERIFICATION_NOT_READY",
+    });
+    try {
+      await act(async () => {
+        root.render(
+          createElement(ConnectionTestButton, {
+            facade: h.facade,
+            toolbar: true,
+          }),
+        );
+      });
+      await act(async () => {
+        await runFreshConnectionTest(h.facade);
+      });
+      const toolbar = host.querySelector(
+        ".connection-test-control[data-toolbar]",
+      );
+      expect(toolbar?.querySelector('[role="status"]')?.textContent).toBe(
+        message,
+      );
+      expect(
+        toolbar?.querySelector('[role="status"]')?.nextElementSibling
+          ?.textContent,
+      ).toBe("Test in ChatGPT");
+      expect(h.configure).toHaveBeenCalledTimes(1);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      h.cleanup();
+    }
+  },
+);
 it("repeated checks use fresh observation identities without repairing a healthy connection", async () => {
   const h = await setup();
   try {

@@ -1832,6 +1832,22 @@ kbd {
   position: relative;
   flex: none;
 }
+.connection-test-control[data-toolbar] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.connection-test-control[data-toolbar] .connection-test-feedback {
+  position: static;
+  width: 230px;
+  max-width: 22vw;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 11px;
+  line-height: 1.2;
+}
 .connection-test-feedback {
   position: absolute;
   right: 0;
