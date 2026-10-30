@@ -8,6 +8,51 @@ import type { RendererFacade } from "../../src/ui/renderer/contract";
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
+it("selects the sole workspace and checks its history without starting a test", async () => {
+  const selfTest = vi.fn(async () => ({
+    ok: true,
+    kind: "history",
+    history: { markers: [], records: [], unresolved: [] },
+  }));
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const facade = { selfTest } as unknown as RendererFacade;
+  await act(async () =>
+    root.render(<SelfTestPanel facade={facade} workspaces={[]} />),
+  );
+  expect(host.querySelector("button")!.disabled).toBe(true);
+  await act(async () =>
+    root.render(
+      <SelfTestPanel
+        facade={facade}
+        workspaces={[{ workspaceId: "ws", label: "Test" }]}
+      />,
+    ),
+  );
+  expect(host.querySelector("select")!.value).toBe("ws");
+  expect(selfTest).toHaveBeenCalledExactlyOnceWith({
+    kind: "history",
+    workspaceId: "ws",
+  });
+  expect(host.querySelector("button")!.disabled).toBe(false);
+  await act(async () =>
+    root.render(
+      <SelfTestPanel
+        facade={facade}
+        workspaces={[
+          { workspaceId: "ws", label: "Test" },
+          { workspaceId: "other", label: "Other" },
+        ]}
+      />,
+    ),
+  );
+  expect(host.querySelector("select")!.value).toBe("");
+  expect(host.querySelector("button")!.disabled).toBe(true);
+  await act(async () => root.unmount());
+  host.remove();
+});
+
 it("preserves an unconfirmed selection and observes it without starting again", async () => {
   const selection = {
     operationId: "e0b07fee-f300-46c6-a6e0-33a31aa25639",
@@ -61,6 +106,106 @@ it("preserves an unconfirmed selection and observes it without starting again", 
     "observe",
   ]);
   expect(start.disabled).toBe(true);
+  await act(async () => root.unmount());
+  host.remove();
+});
+
+it("keeps a sole workspace blocked when its history has an unconfirmed result", async () => {
+  const selection = {
+    operationId: "e0b07fee-f300-46c6-a6e0-33a31aa25639",
+    workspaceId: "ws",
+    computerGeneration: "1",
+    planVersion: "2" as const,
+  };
+  const selfTest = vi.fn(async () => ({
+    ok: true,
+    kind: "history",
+    history: { markers: [], records: [], unresolved: [selection] },
+  }));
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () =>
+    root.render(
+      <SelfTestPanel
+        facade={{ selfTest } as unknown as RendererFacade}
+        workspaces={[{ workspaceId: "ws", label: "Test" }]}
+      />,
+    ),
+  );
+  expect(host.querySelector("select")!.value).toBe("ws");
+  expect(host.querySelector("button")!.disabled).toBe(true);
+  expect(host.textContent).toContain(selection.operationId);
+  expect(selfTest).toHaveBeenCalledExactlyOnceWith({
+    kind: "history",
+    workspaceId: "ws",
+  });
+  await act(async () => root.unmount());
+  host.remove();
+});
+
+it("does not show a late test result under a different workspace", async () => {
+  let finish!: (value: unknown) => void;
+  const pending = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const selfTest = vi.fn(async (command: { kind: string }) =>
+    command.kind === "history"
+      ? {
+          ok: true,
+          kind: "history",
+          history: { markers: [], records: [], unresolved: [] },
+        }
+      : pending,
+  );
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const facade = { selfTest } as unknown as RendererFacade;
+  await act(async () =>
+    root.render(
+      <SelfTestPanel
+        facade={facade}
+        workspaces={[{ workspaceId: "a", label: "A" }]}
+      />,
+    ),
+  );
+  await act(async () => {
+    host.querySelector("button")!.click();
+  });
+  await act(async () =>
+    root.render(
+      <SelfTestPanel
+        facade={facade}
+        workspaces={[{ workspaceId: "b", label: "B" }]}
+      />,
+    ),
+  );
+  await act(async () =>
+    finish({
+      ok: true,
+      kind: "start",
+      observation: {
+        selection: {
+          operationId: "e0b07fee-f300-46c6-a6e0-33a31aa25639",
+          workspaceId: "a",
+          computerGeneration: "1",
+          planVersion: "2",
+        },
+        state: "unknown",
+      },
+    }),
+  );
+  expect(host.querySelector("select")!.value).toBe("b");
+  expect(host.textContent).not.toContain(
+    "e0b07fee-f300-46c6-a6e0-33a31aa25639",
+  );
+  expect(host.querySelector("button")!.disabled).toBe(false);
+  expect(selfTest.mock.calls.map(([command]) => command.kind)).toEqual([
+    "history",
+    "start",
+    "history",
+  ]);
   await act(async () => root.unmount());
   host.remove();
 });

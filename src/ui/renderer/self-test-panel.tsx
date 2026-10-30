@@ -25,8 +25,16 @@ export function SelfTestPanel({
   facade: RendererFacade;
   workspaces: readonly Workspace[];
 }) {
-  const [workspaceId, setWorkspaceId] = useState("");
-  const [ready, setReady] = useState(false);
+  const [selectedWorkspaceId, setWorkspaceId] = useState("");
+  const workspaceId =
+    workspaces.length === 1
+      ? (workspaces[0]?.workspaceId ?? "")
+      : workspaces.some(
+            (workspace) => workspace.workspaceId === selectedWorkspaceId,
+          )
+        ? selectedWorkspaceId
+        : "";
+  const [readyWorkspaceId, setReadyWorkspaceId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [unresolved, setUnresolved] = useState<Selection[]>([]);
@@ -38,7 +46,7 @@ export function SelfTestPanel({
   useEffect(() => {
     const token = generation;
     const current = ++token.current;
-    setReady(false);
+    setReadyWorkspaceId(null);
     setUnresolved([]);
     setRecords([]);
     setObservation(null);
@@ -70,7 +78,7 @@ export function SelfTestPanel({
         }
         setUnresolved(response.data.history.unresolved);
         setRecords(response.data.history.records);
-        setReady(true);
+        setReadyWorkspaceId(workspaceId);
       })
       .catch(() => {
         if (token.current === current)
@@ -85,12 +93,14 @@ export function SelfTestPanel({
 
   async function run(command: Exclude<SelfTestCommand, { kind: "history" }>) {
     if (flight.current || !facade.selfTest) return;
+    const current = generation.current;
     flight.current = true;
     setBusy(true);
     setNotice("");
-    if (command.kind === "start") setReady(false);
+    if (command.kind === "start") setReadyWorkspaceId(null);
     try {
       const raw = await facade.selfTest(command);
+      if (generation.current !== current) return;
       const response = SelfTestResponseSchema.safeParse(raw);
       if (
         !response.success ||
@@ -107,7 +117,7 @@ export function SelfTestPanel({
         setNotice(
           "The test result could not be confirmed. Do not start it again.",
         );
-        setReady(false);
+        setReadyWorkspaceId(null);
         return;
       }
       const result = response.data.observation;
@@ -122,7 +132,7 @@ export function SelfTestPanel({
         setNotice(
           "The test result could not be matched. Do not start it again.",
         );
-        setReady(false);
+        setReadyWorkspaceId(null);
         return;
       }
       setObservation(result);
@@ -136,7 +146,7 @@ export function SelfTestPanel({
             ? old
             : [...old, result.selection],
         );
-        setReady(false);
+        setReadyWorkspaceId(null);
       } else {
         setRecords((old) => [
           ...old.filter(
@@ -153,13 +163,14 @@ export function SelfTestPanel({
             (item) => item.operationId !== result.selection.operationId,
           ),
         );
-        setReady(true);
+        setReadyWorkspaceId(workspaceId);
       }
     } catch {
+      if (generation.current !== current) return;
       setNotice(
         "The test result could not be confirmed. Do not start it again.",
       );
-      setReady(false);
+      setReadyWorkspaceId(null);
     } finally {
       flight.current = false;
       setBusy(false);
@@ -168,6 +179,7 @@ export function SelfTestPanel({
 
   async function inspectSaved(selection: Selection) {
     if (flight.current || !facade.selfTest) return;
+    const current = generation.current;
     flight.current = true;
     setBusy(true);
     setNotice("");
@@ -175,6 +187,7 @@ export function SelfTestPanel({
       const parsed = SelfTestResponseSchema.safeParse(
         await facade.selfTest({ kind: "observe", workspaceId, selection }),
       );
+      if (generation.current !== current) return;
       if (!parsed.success || !parsed.data.ok || parsed.data.kind !== "observe")
         throw new Error("unavailable");
       const result = parsed.data.observation;
@@ -191,6 +204,7 @@ export function SelfTestPanel({
           "The saved result is currently unavailable. No action was repeated.",
         );
     } catch {
+      if (generation.current !== current) return;
       setNotice(
         "The saved result is currently unavailable. No action was repeated.",
       );
@@ -223,7 +237,12 @@ export function SelfTestPanel({
         </select>
       </label>{" "}
       <button
-        disabled={!workspaceId || !ready || busy || unresolved.length > 0}
+        disabled={
+          !workspaceId ||
+          readyWorkspaceId !== workspaceId ||
+          busy ||
+          unresolved.length > 0
+        }
         onClick={() => void run({ kind: "start", workspaceId })}
       >
         {busy ? "Checking…" : "Run deep test"}
