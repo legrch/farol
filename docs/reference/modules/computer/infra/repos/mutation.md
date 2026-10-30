@@ -83,6 +83,10 @@ not change that recovery limit or grant permission to replay an unknown effect.
 The fresh inspection also fails closed above 4,096 retained files or its byte
 budget. Further native qualification should cover the 4,096/4,097 boundaries,
 partial directory reads, individual close failures and cold-start performance.
+The separate staging baseline still inspects at most 128 records; beyond that,
+the optional Deep test is unavailable. Historical writable processes without
+confirmed descendant cleanup can independently withhold that test. Supporting
+such profiles remains future work and must not infer settlement or replay.
 
 `InspectOwnerCompleted(ctx, root, OwnerSelection, []ExpectedOwnerRecord, visit)`
 is a separately selected read-only observation of an existing private store.
