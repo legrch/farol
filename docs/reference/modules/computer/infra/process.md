@@ -42,6 +42,13 @@ boot tests exercised Shell and Quit/reopen. This does not establish package,
 installed, live-provider or descendant-cleanup qualification. The current
 system-volume policy also refuses a protected profile on another volume.
 
+Platform record `macos-26A434-arm64-installed-runtime-v17` additionally binds
+the installed-runtime ACL checks at source `5f626eee`. On macOS build `26A434`
+arm64, the native process suite passed with the same documented credential-alias
+exclusion; the ACL matrix, protected-state test, installed Git hook journey,
+and fresh Shell Quit/reopen fixture also passed. This is native candidate
+evidence, not package, installed, live-provider or descendant-cleanup acceptance.
+
 Source registration is not release qualification. Disposable packaged MCP checks
 cover bounded Bash, synthetic Git and observation of an original result after
 MCP reconnect. Ordinary Git configuration/hooks, external Shell, cancellation and
