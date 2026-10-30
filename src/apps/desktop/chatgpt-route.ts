@@ -553,7 +553,8 @@ export const temporaryInstantProfileProbe = `(() => {
   const modelButtons = controls.filter((button) =>
     button.getAttribute("aria-label") === "Select ChatGPT model");
   const modelButton = modelButtons[0];
-  const instant = modelButton && new RegExp(${JSON.stringify(instantModelLabelPattern.source)}, "iu").test((modelButton.innerText || "").trim());
+  const modelReady = modelButtons.length === 1 && !modelButton.disabled && modelButton.getAttribute("aria-disabled") !== "true";
+  const instant = modelReady && new RegExp(${JSON.stringify(instantModelLabelPattern.source)}, "iu").test((modelButton.innerText || "").trim());
   // This is the selected public model control only. Retain a bounded label
   // solely when every token belongs to the known model vocabulary; redact
   // unrecognized text instead of emitting arbitrary provider content.
@@ -562,7 +563,7 @@ export const temporaryInstantProfileProbe = `(() => {
     /(?:Instant|Thinking|Pro|Auto)/u.test(label) &&
     /^(?:(?:ChatGPT|GPT|Instant|Thinking|effort|Pro|Auto|Fast)|[0-9.\\s\\p{Cf} -])+$/u.test(label) ? label : null;
   return { composerReady: !!composer, draftPresent: draft.trim().length > 0,
-    temporary, personalized, personalizationReady, instant: !!instant, modelReady: !!modelButton, visibleModelLabel,
+    temporary, personalized, personalizationReady, instant: !!instant, modelReady: !!modelReady, visibleModelLabel,
     modelControlCount: Math.min(modelButtons.length, 100),
     labelHasInstant: /Instant/u.test(label),
     labelHasThinkingEffort: /Thinking\\s*effort/iu.test(label),
@@ -570,11 +571,16 @@ export const temporaryInstantProfileProbe = `(() => {
 })()`;
 
 export const openInstantPowerPickerScript = `(() => {
-  const modelButton = [...document.querySelectorAll("button")].find((button) =>
-    button.getAttribute("aria-label") === "Select ChatGPT model" && !button.disabled &&
-    button.getClientRects().length > 0);
-  if (!modelButton) return false;
-  modelButton.click();
+  const visible = (element) => {
+    if (!(element instanceof HTMLElement)) return false;
+    const style = getComputedStyle(element);
+    const box = element.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
+  };
+  const buttons = [...document.querySelectorAll("button")].filter((button) =>
+    button.getAttribute("aria-label") === "Select ChatGPT model" && visible(button));
+  if (buttons.length !== 1 || buttons[0].disabled || buttons[0].getAttribute("aria-disabled") === "true") return false;
+  buttons[0].click();
   return true;
 })()`;
 
@@ -3283,14 +3289,29 @@ export class ChatGptRoute {
 
     stage = "picker";
     try {
-      if (
-        (await contents.executeJavaScript(
+      // A false result guarantees the opener did not click. Wait for a
+      // temporarily disabled/replaced control, but never repeat an action
+      // after an acknowledged click, exception or changed document identity.
+      const openDeadline = Date.now() + 2_000;
+      let opened = false;
+      for (let attempt = 0; attempt < 20 && !opened; attempt += 1) {
+        if (Date.now() >= openDeadline || profileIdentityLost())
+          return refuseInstant();
+        const result = await contents.executeJavaScript(
           openInstantPowerPickerScript,
           true,
-        )) !== true ||
-        profileIdentityLost()
-      )
-        return refuseInstant();
+        );
+        if (profileIdentityLost()) return refuseInstant();
+        if (result === true) {
+          opened = true;
+          break;
+        }
+        if (result !== false || Date.now() >= openDeadline)
+          return refuseInstant();
+        await delay(100);
+        if (profileIdentityLost()) return refuseInstant();
+      }
+      if (!opened) return refuseInstant();
       // Opening a provider menu does not acknowledge that its controls have
       // rendered. Observe the same opened picker for a bounded interval; never
       // click it again or reinterpret an unrecognized result as readiness.

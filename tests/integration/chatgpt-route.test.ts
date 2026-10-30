@@ -283,6 +283,90 @@ describe("temporary Instant connector profile", () => {
     );
   });
 
+  it("waits for the picker without clicking again after acknowledgement", async () => {
+    const route = profileRoute();
+    const execute = route.executeJavaScript.getMockImplementation()!;
+    let attempts = 0;
+    route.executeJavaScript.mockImplementation(async (script: string) => {
+      if (script === openInstantPowerPickerScript && ++attempts <= 2)
+        return false;
+      return execute(script);
+    });
+    await expect(route.prepare()).resolves.toBeNull();
+    expect(attempts).toBe(3);
+    expect(route.pickerOpens()).toBe(1);
+  });
+
+  it.each(["unknown result", "exception"])(
+    "does not retry a picker with an %s",
+    async (outcome) => {
+      const route = profileRoute();
+      const execute = route.executeJavaScript.getMockImplementation()!;
+      let attempts = 0;
+      route.executeJavaScript.mockImplementation(async (script: string) => {
+        if (script !== openInstantPowerPickerScript) return execute(script);
+        attempts++;
+        if (outcome === "exception") throw new Error("unknown picker result");
+        return undefined;
+      });
+      await expect(route.prepare()).resolves.toBe(
+        "CHATGPT_INSTANT_MODEL_REQUIRED",
+      );
+      expect(attempts).toBe(1);
+      expect(route.executeJavaScript).not.toHaveBeenCalledWith(
+        lowerInstantPowerSliderScript,
+        true,
+      );
+    },
+  );
+
+  it("refuses a model control that never becomes actionable", async () => {
+    const route = profileRoute();
+    const execute = route.executeJavaScript.getMockImplementation()!;
+    let now = 0;
+    let attempts = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => (now += 1000));
+    route.executeJavaScript.mockImplementation(async (script: string) => {
+      if (script === openInstantPowerPickerScript) {
+        attempts++;
+        return false;
+      }
+      return execute(script);
+    });
+    await expect(route.prepare()).resolves.toBe(
+      "CHATGPT_INSTANT_MODEL_REQUIRED",
+    );
+    expect(attempts).toBeLessThanOrEqual(20);
+    expect(route.pickerOpens()).toBe(0);
+    expect(route.executeJavaScript).not.toHaveBeenCalledWith(
+      lowerInstantPowerSliderScript,
+      true,
+    );
+  });
+
+  it("does not click a control after the picker deadline", async () => {
+    const route = profileRoute();
+    const execute = route.executeJavaScript.getMockImplementation()!;
+    let now = 0;
+    let attempts = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => (now += 1000));
+    route.executeJavaScript.mockImplementation(async (script: string) => {
+      if (script === openInstantPowerPickerScript) {
+        attempts++;
+        return attempts > 1;
+      }
+      return execute(script);
+    });
+    await expect(route.prepare()).resolves.toBe(
+      "CHATGPT_INSTANT_MODEL_REQUIRED",
+    );
+    expect(attempts).toBe(1);
+    expect(route.executeJavaScript).not.toHaveBeenCalledWith(
+      lowerInstantPowerSliderScript,
+      true,
+    );
+  });
+
   it("refuses an unacknowledged page-control action without preparing a message", async () => {
     const route = profileRoute();
     const execute = route.executeJavaScript.getMockImplementation()!;
