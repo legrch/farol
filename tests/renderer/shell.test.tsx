@@ -3187,6 +3187,11 @@ it("Setup keeps navigation stable and shows incomplete current checks", async ()
   expect(
     host.querySelector('.rail [aria-label="Setup"] .setup-count')?.textContent,
   ).toBe("0 of 4");
+  expect(
+    host
+      .querySelector('.rail [aria-label="Setup"]')
+      ?.getAttribute("aria-describedby"),
+  ).toBe("setup-check-count");
 });
 it("does not show a complete Setup checkmark when the saved connection is offline", async () => {
   const data = completedBootstrap();

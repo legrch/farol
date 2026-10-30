@@ -1239,6 +1239,11 @@ export function Shell() {
                 <button
                   key={area}
                   aria-label={label}
+                  aria-describedby={
+                    area === "setup" && showSetupCount
+                      ? "setup-check-count"
+                      : undefined
+                  }
                   title={`${label} · ${detail}`}
                   aria-current={destination.area === area ? "page" : undefined}
                   onClick={() => facade.navigate({ area })}
@@ -1246,7 +1251,10 @@ export function Shell() {
                   <Icon name={area} />
                   <span className="rail-label">{label}</span>
                   {area === "setup" && showSetupCount && (
-                    <span className="setup-count rail-label">
+                    <span
+                      id="setup-check-count"
+                      className="setup-count rail-label"
+                    >
                       {setupReadyCount} of {setupEntries.length}
                     </span>
                   )}
