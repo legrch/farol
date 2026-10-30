@@ -5,6 +5,7 @@ package process
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -13,11 +14,110 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
 
 type nativeHostRuntimeFilesystem struct{}
+
+// Extended ACL qualification. POSIX mode bits cannot express an macOS ACL
+// grant, so a file that another account may replace or rewrite through an
+// allow entry is not a qualified runtime image even when its mode is private.
+// The ACL of the exact vnode held by the descriptor is read with
+// fgetattrlist(ATTR_CMN_EXTENDED_SECURITY); the returned bytes follow the
+// public kauth_filesec shape of sys/kauth.h behind a fixed
+// [total][prologue][length] prefix (measured on APFS, macOS 27 arm64). Every
+// deviation from that layout, any unknown kind/flag/right bit and any allow
+// entry carrying an effective modification right fails the descriptor closed.
+// Deny entries and read-only allows never extend modification rights and are
+// accepted. Symlinks are never opened here (O_NOFOLLOW) and carry no ACL.
+const hostRuntimeACLAttrExtendedSecurity = 0x00400000 // ATTR_CMN_EXTENDED_SECURITY
+const hostRuntimeACLPrologueWords = 8                 // measured constant prefix word
+const hostRuntimeACLFilesecHeader = 44                // magic + owner GUID + group GUID + entrycount + flags
+const hostRuntimeACLFilesecMagic = 0x012cc16d         // KAUTH_FILESEC_MAGIC
+const hostRuntimeACLNoEntries = 0xffffffff            // KAUTH_FILESEC_NOACL
+const hostRuntimeACLMaxEntries = 128                  // KAUTH_ACL_MAX_ENTRIES
+type hostRuntimeACLAttrList struct {
+	Bitmapcount uint16
+	Reserved    uint16
+	Commonattr  uint32
+	Volattr     uint32
+	Dirattr     uint32
+	Fileattr    uint32
+	Forkattr    uint32
+}
+
+const (
+	hostRuntimeACEKindMask    = 0xf // KAUTH_ACE_KINDMASK
+	hostRuntimeACEPermit      = 1   // KAUTH_ACE_PERMIT
+	hostRuntimeACEDeny        = 2   // KAUTH_ACE_DENY
+	hostRuntimeACEKnownFlags  = hostRuntimeACEKindMask | 1<<4 | 1<<5 | 1<<6 | 1<<7 | 1<<8
+	hostRuntimeACEModify      = 1<<2 | 1<<4 | 1<<5 | 1<<6 | 1<<8 | 1<<10 | 1<<12 | 1<<13 | 1<<21 | 1<<23
+	hostRuntimeACEKnownRights = (1<<1 | 1<<2 | 1<<3 | 1<<4 | 1<<5 | 1<<6 | 1<<7 | 1<<8 | 1<<9 | 1<<10 | 1<<11 | 1<<12 | 1<<13) | (1<<20 | 1<<21 | 1<<22 | 1<<23 | 1<<24 | 1<<25 | 1<<26)
+)
+
+func hostRuntimeACLVerdict(fd int) error {
+	var buffer [4 + 8 + hostRuntimeACLFilesecHeader + hostRuntimeACLMaxEntries*24]byte
+	// The syscall only reads these pinned Go buffers and writes the result
+	// buffer; nothing escapes as a retained pointer.
+	list := hostRuntimeACLAttrList{Bitmapcount: 5, Commonattr: hostRuntimeACLAttrExtendedSecurity} // ATTR_BIT_MAP_COUNT, ATTR_CMN_EXTENDED_SECURITY
+	if _, _, errno := unix.Syscall6(unix.SYS_FGETATTRLIST, uintptr(fd), uintptr(unsafe.Pointer(&list)), uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)), 0, 0); errno != 0 {
+		return errno
+	}
+	// On success the syscall returns zero; the byte count is the first word.
+	return hostRuntimeACLFromBuffer(buffer[:])
+}
+
+func hostRuntimeACLFromBuffer(buffer []byte) error {
+	if len(buffer) < 12 {
+		return errHostRuntime
+	}
+	total := int(binary.LittleEndian.Uint32(buffer[0:4]))
+	if total < 12 || total > len(buffer) || binary.LittleEndian.Uint32(buffer[4:8]) != hostRuntimeACLPrologueWords {
+		return errHostRuntime
+	}
+	size := int(binary.LittleEndian.Uint32(buffer[8:12]))
+	if size == 0 {
+		if total != 12 {
+			return errHostRuntime
+		}
+		return nil // the vnode carries no extended security
+	}
+	if size < hostRuntimeACLFilesecHeader || size != total-12 || size > hostRuntimeACLFilesecHeader+hostRuntimeACLMaxEntries*24 {
+		return errHostRuntime
+	}
+	fsec := buffer[12:]
+	if binary.LittleEndian.Uint32(fsec[0:4]) != hostRuntimeACLFilesecMagic {
+		return errHostRuntime
+	}
+	count := binary.LittleEndian.Uint32(fsec[36:40])
+	if count == hostRuntimeACLNoEntries {
+		return nil
+	}
+	if count > hostRuntimeACLMaxEntries || hostRuntimeACLFilesecHeader+24*int(count) != size {
+		return errHostRuntime
+	}
+	for i := 0; i < int(count); i++ {
+		ace := fsec[hostRuntimeACLFilesecHeader+24*i:]
+		flags := binary.LittleEndian.Uint32(ace[16:20])
+		rights := binary.LittleEndian.Uint32(ace[20:24])
+		if flags&^hostRuntimeACEKnownFlags != 0 || rights&^hostRuntimeACEKnownRights != 0 {
+			return errHostRuntime
+		}
+		switch flags & hostRuntimeACEKindMask {
+		case hostRuntimeACEDeny:
+			// A deny never grants a modification right.
+		case hostRuntimeACEPermit:
+			if rights&hostRuntimeACEModify != 0 {
+				return errHostRuntime
+			}
+		default:
+			return errHostRuntime // audit/alarm kinds are not implemented by the kernel
+		}
+	}
+	return nil
+}
 
 func (nativeHostRuntimeFilesystem) uid() uint32 { return uint32(os.Geteuid()) }
 func (nativeHostRuntimeFilesystem) resolve(ctx context.Context, p string) (string, error) {
@@ -79,6 +179,9 @@ func hostRuntimeOpen(ctx context.Context, p string) (*os.File, os.FileInfo, erro
 	}
 	mount := strings.TrimRight(string(volume.Mntonname[:]), "\x00")
 	if mount != "/" && mount != "/System/Volumes/Data" {
+		return fail()
+	}
+	if err := hostRuntimeACLVerdict(int(file.Fd())); err != nil {
 		return fail()
 	}
 	if ctx.Err() != nil {

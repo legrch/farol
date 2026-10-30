@@ -73,23 +73,45 @@ const ACL_CHANGE = new Set([
   "writesecurity",
   "chown",
 ]);
+// Unknown future rights cannot be assumed to be read-only. The known set is
+// deliberately bounded to macOS ls -le permission vocabulary.
+const ACL_READ = new Set([
+  "read",
+  "execute",
+  "list",
+  "search",
+  "readattr",
+  "readextattr",
+  "readsecurity",
+  "synchronize",
+]);
+const ACL_KNOWN = new Set([...ACL_READ, ...ACL_CHANGE]);
+const ACL_MODE_HEADER =
+  /^[-bcdlps][rwxstST-]{9}([+@]?)[ \t]+[0-9]+[ \t]+\S+[ \t]+\S+[ \t]+.+$/u;
 const ACL_ENTRY =
-  /^ *\d+: (?:\S+:)?\S+ (?:inherited )?(allow|deny) ([a-z_,]+)$/u;
+  /^ *([0-9]+): (?:\S+:)?\S+ (?:inherited )?(allow|deny) ([a-z_,]+)$/u;
 
-// `ls -lde` prints the mode line, then one line per ACL entry. Any entry that
-// allows a change, or any line that does not parse, is unsafe.
+// `ls -lde` supplies a long-format header and zero-based numbered ACL rows.
+// A '+' marker with no rows is truncated evidence; unknown rights, malformed
+// rows, or missing row numbers cannot authorize adoption. The ls path/text
+// snapshot is not descriptor-bound and is NOT installed-host-runtime assurance.
 export function aclVerdict(listing: string): "safe" | "unsafe" {
   const lines = listing.split("\n").filter((line) => line !== "");
-  for (const line of lines.slice(1)) {
-    const entry = ACL_ENTRY.exec(line);
-    if (entry === null) return "unsafe";
+  const mode = ACL_MODE_HEADER.exec(lines[0] ?? "");
+  if (mode === null || (mode[1] === "+" && lines.length === 1)) return "unsafe";
+  for (let i = 1; i < lines.length; i++) {
+    const entry = ACL_ENTRY.exec(lines[i] ?? "");
+    if (entry === null || Number(entry[1]) !== i - 1) return "unsafe";
+    const rights = (entry[3] ?? "").split(",");
     if (
-      entry[1] === "allow" &&
-      (entry[2] ?? "").split(",").some((right) => ACL_CHANGE.has(right))
+      rights.some((right) => !ACL_KNOWN.has(right)) ||
+      new Set(rights).size !== rights.length
     )
       return "unsafe";
+    if (entry[2] === "allow" && rights.some((right) => ACL_CHANGE.has(right)))
+      return "unsafe";
   }
-  return lines.length === 0 ? "unsafe" : "safe";
+  return "safe";
 }
 
 async function aclOutcome(entryPath: string): Promise<DirectoryOutcome> {
