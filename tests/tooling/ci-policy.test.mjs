@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
 import { afterEach, describe, it, expect } from "vitest";
 import { readWorkflow } from "../../tooling/delivery-policy.mjs";
 import { docsOnly } from "../../tooling/ci-paths.mjs";
@@ -114,6 +115,73 @@ describe("CI safety and selection", () => {
       return remote;
     };
   const publishedAnnotated = `${tagObject}\trefs/tags/v${version}\n${head}\trefs/tags/v${version}^{}`;
+  it("verifies the published annotated tag when checkout created a peeled local tag", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "farol-ci-tag-"));
+    owned.push(root);
+    const remote = path.join(root, "remote.git");
+    const source = path.join(root, "source");
+    const checkout = path.join(root, "checkout");
+    const template = path.join(root, "empty-template");
+    fs.mkdirSync(template);
+    const env = {
+      PATH: process.env.PATH ?? "/usr/bin:/bin",
+      LC_ALL: "C",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_TEMPLATE_DIR: template,
+      GIT_TERMINAL_PROMPT: "0",
+    };
+    const git = (cwd, ...args) =>
+      execFileSync("git", args, {
+        cwd,
+        env,
+        timeout: 10000,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    git(root, "init", "--bare", remote);
+    git(root, "init", "-b", "main", source);
+    git(source, "config", "user.name", "Fixture");
+    git(source, "config", "user.email", "fixture@example.invalid");
+    fs.writeFileSync(path.join(source, "fixture"), "fixture\n");
+    git(source, "add", "fixture");
+    git(source, "commit", "-m", "fixture");
+    git(source, "tag", "-a", `v${version}`, "-m", "fixture");
+    git(source, "remote", "add", "origin", remote);
+    git(source, "push", "origin", "main", `refs/tags/v${version}`);
+    git(root, "clone", "--branch", "main", remote, checkout);
+    const sourceHead = git(checkout, "rev-parse", "HEAD");
+    git(checkout, "update-ref", `refs/tags/v${version}`, sourceHead);
+    expect(
+      spawnSync(
+        "git",
+        [
+          "fetch",
+          "--no-tags",
+          "origin",
+          `refs/tags/v${version}:refs/tags/v${version}`,
+        ],
+        { cwd: checkout, env, timeout: 10000 },
+      ).status,
+    ).not.toBe(0);
+    git(
+      checkout,
+      "fetch",
+      "--no-tags",
+      "origin",
+      `refs/tags/v${version}:refs/farol/published-release-tag`,
+    );
+    expect(
+      verifyReleaseTag(
+        `v${version}`,
+        (...args) => git(checkout, ...args),
+        "refs/farol/published-release-tag",
+      ),
+    ).toBe(sourceHead);
+    expect(git(checkout, "cat-file", "-t", `refs/tags/v${version}`)).toBe(
+      "commit",
+    );
+  });
   it("accepts an annotated tag on accepted main whose remote matches", () => {
     const calls = [];
     expect(

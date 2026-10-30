@@ -14,16 +14,17 @@ export function verifyReleaseTag(
   tag,
   git = (...args) =>
     execFileSync("git", args, { encoding: "utf8", timeout: 30000 }).trim(),
+  tagRef = `refs/tags/${tag}`,
 ) {
   const { version } = JSON.parse(readFileSync("package.json", "utf8"));
   verifyVersion(tag, version);
   const head = git("rev-parse", "HEAD");
-  const tagged = git("rev-parse", `refs/tags/${tag}^{commit}`);
+  const tagged = git("rev-parse", `${tagRef}^{commit}`);
   if (tagged !== head) throw Error("RELEASE_TAG_HEAD_MISMATCH");
-  const tagObject = git("rev-parse", `refs/tags/${tag}`);
+  const tagObject = git("rev-parse", tagRef);
   // A lightweight tag carries no tagger or message; only an annotated tag
   // object may start a release.
-  if (tagObject === head || git("cat-file", "-t", `refs/tags/${tag}`) !== "tag")
+  if (tagObject === head || git("cat-file", "-t", tagRef) !== "tag")
     throw Error("RELEASE_TAG_NOT_ANNOTATED");
   git("merge-base", "--is-ancestor", head, "refs/remotes/origin/main");
   const remote = git(

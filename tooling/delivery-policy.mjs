@@ -154,6 +154,10 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
   );
   assert.equal(release.jobs.publish.needs, undefined);
   const build = commands(release.jobs.build);
+  assert.match(
+    build,
+    /refs\/tags\/\$RELEASE_TAG:refs\/farol\/published-release-tag/u,
+  );
   assert.match(build, /node tooling\/release-candidate\.mjs prepare/u);
   assert.match(build, /tooling\/ci-go-inputs\.mjs/u);
   assert.match(build, /task ci\n/u);

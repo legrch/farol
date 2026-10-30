@@ -577,7 +577,7 @@ async function main() {
         process.env.GITHUB_REF === `refs/tags/${identity.tag}`,
         "TAG_REF_INVALID",
       );
-      verifyReleaseTag(identity.tag, git);
+      verifyReleaseTag(identity.tag, git, "refs/farol/published-release-tag");
     } else
       requireThat(
         process.env.GITHUB_EVENT_NAME === "workflow_dispatch" &&
