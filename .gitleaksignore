@@ -48,3 +48,9 @@ dfc0ac2871e6762d347c262f1e106585921d22e9:reports/expected-git-refs.json:generic-
 5b6008e6f61fec0893e28da5a4df6183156806c6:modules/computer/app/services/process/auditfilter_test.go:curl-auth-user:42
 5b6008e6f61fec0893e28da5a4df6183156806c6:modules/computer/app/services/process/auditfilter_test.go:curl-auth-user:132
 2f53e7347b4f4432ec124b835bdc009525fedef8:boot/connectorprocessaudit_test.go:curl-auth-user:226
+
+# Byte-identical copies of the synthetic redaction fixtures listed above.
+8a40bfd226b9c0596a959547e81c01e8319ff64b:modules/computer/app/services/process/auditfilter_test.go:curl-auth-user:132
+8a40bfd226b9c0596a959547e81c01e8319ff64b:modules/computer/app/services/process/auditfilter_test.go:curl-auth-user:42
+de974607dc6362953bde9482ce8567810fbafc25:boot/connectorprocessaudit_test.go:curl-auth-user:226
+de974607dc6362953bde9482ce8567810fbafc25:modules/computer/app/services/process/auditfilter_test.go:curl-auth-user:132
