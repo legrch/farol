@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { connectorVerificationInFlight, setupStepCheck } from "./setup-gate";
 import type { RendererFacade, WindowSnapshot } from "./contract";
 import { Settings, retainedSetupIntents, useSetupIntents } from "./settings";
@@ -6,7 +6,11 @@ import { setupChecklist } from "./setup-navigation";
 import { adjacentSetupSection, visibleSetupSection } from "./setup-checklist";
 import type { SetupSection } from "./setup-checklist";
 
-type Props = { snapshot: WindowSnapshot; facade: RendererFacade };
+type Props = {
+  snapshot: WindowSnapshot;
+  facade: RendererFacade;
+  onInputsChanged?: (dirty: boolean) => void;
+};
 const context: Record<SetupSection, { title: string; description: string }> = {
   overview: {
     title: "Welcome to Farol",
@@ -80,10 +84,11 @@ export function SetupNavigation({
     </ol>
   );
 }
-export function Setup({ snapshot, facade }: Props) {
+export function Setup({ snapshot, facade, onInputsChanged }: Props) {
   const root = useRef<HTMLDivElement>(null);
   const step = visibleSetupSection(snapshot.destination.setupStep);
   const [inputsChanged, setInputsChanged] = useState(false);
+  useEffect(() => () => onInputsChanged?.(false), [onInputsChanged]);
   const changed = useRef(false);
   const [testActionHost, setTestActionHost] = useState<HTMLElement | null>(
     null,
@@ -268,6 +273,7 @@ export function Setup({ snapshot, facade }: Props) {
           onSetupInputsChange={(dirty) => {
             changed.current = dirty;
             setInputsChanged(dirty);
+            onInputsChanged?.(dirty);
           }}
         />
       </div>

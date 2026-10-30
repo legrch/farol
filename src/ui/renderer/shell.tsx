@@ -1003,8 +1003,13 @@ export function Shell() {
     }
   }, [facade, state.sidebar, state.status]);
   const settings = destination.area === "settings";
+  const [setupInputsChanged, setSetupInputsChanged] = useState(false);
   const retained = useSetupIntents(facade, state);
-  const setupEntries = setupChecklist(state, false, retained).entries;
+  const setupEntries = setupChecklist(
+    state,
+    setupInputsChanged,
+    retained,
+  ).entries;
   const setupReadyCount = setupEntries.filter(
     (entry) => entry.liveState === "verified",
   ).length;
@@ -1014,11 +1019,6 @@ export function Shell() {
     state.status === "current" &&
     state.runtime === "ready" &&
     state.configuration?.status === "ready" &&
-    !(
-      destination.area === "setup" &&
-      (destination.setupStep === "connection" ||
-        destination.setupStep === "attachment")
-    ) &&
     !connectionState.checking &&
     !setupEntries.some((entry) => entry.liveState === "pending") &&
     setupReadyCount < setupEntries.length;
@@ -1344,7 +1344,11 @@ export function Shell() {
           {destination.area === "home" ? (
             <Home snapshot={state} facade={facade} />
           ) : destination.area === "setup" ? (
-            <Setup snapshot={state} facade={facade} />
+            <Setup
+              snapshot={state}
+              facade={facade}
+              onInputsChanged={setSetupInputsChanged}
+            />
           ) : destination.area === "settings" ? (
             <Settings snapshot={state} facade={facade} />
           ) : destination.area === "activity" ? (

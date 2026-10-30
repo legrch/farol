@@ -3181,8 +3181,8 @@ it("Setup keeps navigation stable and shows incomplete current checks", async ()
     host.querySelector('.rail [aria-label="Setup"]')?.getAttribute("title"),
   ).toBe("Setup · Current page");
   expect(
-    host.querySelector('.rail [aria-label="Setup"] .setup-count'),
-  ).toBeNull();
+    host.querySelector('.rail [aria-label="Setup"] .setup-count')?.textContent,
+  ).toBe("0 of 4");
   await act(async () => c.navigate({ area: "setup", setupStep: "overview" }));
   expect(
     host.querySelector('.rail [aria-label="Setup"] .setup-count')?.textContent,

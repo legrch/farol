@@ -37,6 +37,30 @@ describe("linear Setup", () => {
       ),
     ).toBe(false);
   });
+  it("keeps the sidebar count aligned with an unsaved tunnel draft on Overview", async () => {
+    const value = readySettings(true);
+    value.setup.journey.dismissed = true;
+    const h = await mount({
+      step: "connection",
+      value,
+      shell: true,
+      signIn: "authenticated",
+    });
+    await h.confirmSignIn();
+    const input = [...h.host.querySelectorAll<HTMLInputElement>("input")].find(
+      (item) =>
+        item.closest("label")?.textContent?.trim().startsWith("Tunnel ID"),
+    );
+    expect(input).toBeTruthy();
+    await change(input!, "synthetic-tunnel-draft");
+    await h.navigate("overview");
+    const sidebar = h.host.querySelector(".setup-count")?.textContent;
+    expect(sidebar).toMatch(/^[0-3] of 4$/);
+    expect(
+      h.host.querySelector('[aria-label="Setup overview"]')?.textContent,
+    ).toContain(`${sidebar} current checks are ready`);
+  });
+
   it.each([false, true])(
     "retains confirmed progress during the workspace chooser without opening gates (%s)",
     async (complete) => {
