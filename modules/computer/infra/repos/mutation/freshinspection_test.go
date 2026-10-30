@@ -9,6 +9,20 @@ import (
 	domain "github.com/legrch/farol/modules/computer/domain/mutation"
 )
 
+func TestFreshCancelledEmptyHistoryRefuses(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	selection := SettledSelection{OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}
+	unknown, err := qualifyProcessHistoryBoundedContext(ctx, nil, selection, 0)
+	if unknown || err == nil || err.Error() != "COMPUTER_MUTATION_STORE_UNAVAILABLE" {
+		t.Fatalf("cancelled history accepted: %v %v", unknown, err)
+	}
+	err = qualifyRetainedProcessOutputsContext(ctx, nil, nil, true)
+	if err == nil || err.Error() != "COMPUTER_MUTATION_STORE_UNAVAILABLE" {
+		t.Fatalf("cancelled output validation accepted: %v", err)
+	}
+}
+
 func TestFreshHistoryCancelledQualificationRefuses(t *testing.T) {
 	selection, entries := freshHistoryBoundaryFixtureForCancellation(t)
 	ctx, cancel := context.WithCancel(context.Background())

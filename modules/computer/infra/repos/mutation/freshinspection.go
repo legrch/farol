@@ -20,6 +20,9 @@ func qualifyProcessHistoryBounded(entries []settledBytes, selection SettledSelec
 }
 
 func qualifyProcessHistoryBoundedContext(ctx context.Context, entries []settledBytes, selection SettledSelection, limit int) (bool, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return false, unavailable()
+	}
 	if len(entries) > limit || !domain.Identifier(selection.OwnerID, 160) || !domain.Identifier(selection.ProfileID, 160) || !domain.Identifier(selection.ComputerID, 160) {
 		return false, preservedRefusal()
 	}
@@ -211,8 +214,14 @@ func qualifyProcessHistoryBoundedContext(ctx context.Context, entries []settledB
 		}
 		expected[n].Identity, expected[n].OutputParent = identity, envelope.Record.Parent
 	}
-	if qualifyRetainedProcessOutputsContext(ctx, entries, expected, true) != nil {
+	if err := qualifyRetainedProcessOutputsContext(ctx, entries, expected, true); err != nil {
+		if ctx.Err() != nil {
+			return false, unavailable()
+		}
 		return false, preservedRefusal()
+	}
+	if ctx.Err() != nil {
+		return false, unavailable()
 	}
 	if unknownWrite {
 		return true, nil

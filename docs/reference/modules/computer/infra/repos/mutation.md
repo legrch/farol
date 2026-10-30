@@ -80,6 +80,9 @@ shell/process execution, Task/provider activation and packaging remain unactivat
 Known limitation: the separately selected preserved-record inspection and its
 IPC contract remain limited to 128 records. Fresh-start history inspection does
 not change that recovery limit or grant permission to replay an unknown effect.
+The fresh inspection also fails closed above 4,096 retained files or its byte
+budget. Further native qualification should cover the 4,096/4,097 boundaries,
+partial directory reads, individual close failures and cold-start performance.
 
 `InspectOwnerCompleted(ctx, root, OwnerSelection, []ExpectedOwnerRecord, visit)`
 is a separately selected read-only observation of an existing private store.

@@ -258,6 +258,9 @@ func qualifyRetainedProcessOutputs(entries []settledBytes, expected []ExpectedPr
 }
 
 func qualifyRetainedProcessOutputsContext(ctx context.Context, entries []settledBytes, expected []ExpectedPreservedRecord, legacyCohort bool) error {
+	if ctx == nil || ctx.Err() != nil {
+		return unavailable()
+	}
 	named := make(map[string]string)
 	selected := make(map[string]ExpectedPreservedRecord, len(expected))
 	byKey := make(map[string][]byte, len(entries))

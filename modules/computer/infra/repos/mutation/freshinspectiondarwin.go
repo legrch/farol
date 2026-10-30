@@ -13,7 +13,11 @@ import (
 
 // This is a resource budget, not permission to remove retained history.
 // All record descriptors remain open through the final observation.
-const freshInventoryBytes = 64 * 1024 * 1024
+const (
+	freshInventoryBytes = 64 * 1024 * 1024
+	// This bounds retained descriptors; exceeding it never prunes history.
+	freshInventoryMaxFiles = 4096
+)
 
 func closeFreshFiles(ctx context.Context, files []settledFile, closeFile func(*os.File) error) error {
 	failed := false
@@ -32,7 +36,7 @@ func closeFreshFiles(ctx context.Context, files []settledFile, closeFile func(*o
 // record reader. It performs no recovery, PID lookup, write or state transition.
 // The fresh-history bound and final byte/root checks remain.
 func (r *Repository) InspectFreshProcesses(ctx context.Context, selection SettledSelection) (bool, error) {
-	return r.inspectProcessHistory(ctx, selection, 0, freshInventoryBytes, func(entries []settledBytes, selection SettledSelection) (bool, error) {
+	return r.inspectProcessHistory(ctx, selection, freshInventoryMaxFiles, freshInventoryBytes, func(entries []settledBytes, selection SettledSelection) (bool, error) {
 		return qualifyProcessHistoryBoundedContext(ctx, entries, selection, len(entries))
 	})
 }
@@ -71,6 +75,10 @@ func (r *Repository) inspectProcessHistory(ctx context.Context, selection Settle
 		}
 		var batch []string
 		batch, readErr = f.Readdirnames(256)
+		if len(batch) == 0 && readErr == nil {
+			readErr = unavailable()
+			break
+		}
 		for _, name := range batch {
 			namesBytes += uint64(len(name)) + 512
 			if namesBytes > freshInventoryBytes || (maxEntries > 0 && len(names) >= maxEntries) {
