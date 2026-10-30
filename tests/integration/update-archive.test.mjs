@@ -114,6 +114,50 @@ describe("disposable release archive extraction", () => {
       },
     );
   });
+  it("refuses a truncated or byte-damaged archive against its declared size and digest", async () => {
+    const parent = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-archive-damaged-"),
+    );
+    try {
+      const archive = path.join(parent, "archive.zip");
+      const stage = path.join(parent, "stage");
+      await fs.mkdir(stage, { mode: 0o700 });
+      const made = spawnSync(
+        "/usr/bin/python3",
+        ["-I", "-S", "-B", "-c", makeZip, archive, JSON.stringify(base)],
+        { encoding: "utf8" },
+      );
+      expect(made.status, made.stderr).toBe(0);
+      const intact = await fs.readFile(archive);
+      const declaredSize = String(intact.length);
+      const declaredDigest = createHash("sha256").update(intact).digest("hex");
+      // A download truncated in storage: the staged file is shorter than the
+      // manifest's declared archive size, before any central directory parse.
+      await fs.writeFile(archive, intact.subarray(0, intact.length - 8));
+      const truncated = spawnSync(
+        helper,
+        [archive, stage, declaredSize, declaredDigest],
+        { encoding: "utf8" },
+      );
+      expect(truncated.status).not.toBe(0);
+      expect(truncated.stderr).toContain("ARCHIVE_SIZE_MISMATCH");
+      expect(await fs.readdir(stage)).toEqual([]);
+      // Same-size corruption: the declared digest no longer matches the bytes.
+      const damaged = Buffer.from(intact);
+      damaged[intact.length - 4] ^= 0xff;
+      await fs.writeFile(archive, damaged);
+      const mismatched = spawnSync(
+        helper,
+        [archive, stage, declaredSize, declaredDigest],
+        { encoding: "utf8" },
+      );
+      expect(mismatched.status).not.toBe(0);
+      expect(mismatched.stderr).toContain("ARCHIVE_DIGEST_MISMATCH");
+      expect(await fs.readdir(stage)).toEqual([]);
+    } finally {
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
   it("allows a contained vendor-style symlink and extracts plain files", async () => {
     await fixture(
       [

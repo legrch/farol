@@ -3308,6 +3308,47 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     expect(release).toHaveBeenCalledOnce();
     expect(quit).not.toHaveBeenCalled();
   });
+  it("classifies a storage-full staging copy as a retryable blocked prepare without a helper", async () => {
+    const controller = await prepared();
+    mocks.copyApp.mockRejectedValueOnce(
+      Object.assign(new Error("fixture staging ENOSPC"), { code: "ENOSPC" }),
+    );
+    await controller.restart();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "ready",
+      version: manifest.version,
+      deferred: true,
+      blockedBy: "UPDATE_PREPARE_FAILED",
+    });
+    // The refused attempt dispatched no helper and reclaimed its staged copy;
+    // the retained archive stays bound for a later explicit attempt.
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
+    const retainedRecord = JSON.parse(await fs.readFile(ready, "utf8"));
+    expect(retainedRecord).toMatchObject({ operation: null });
+    expect(retainedRecord.preparation).toBeUndefined();
+    const operations = (
+      await fs.readdir(path.join(userData, "installed-updates"))
+    ).filter((name) => /^[0-9a-f]{32}$/.test(name));
+    expect(operations).toHaveLength(1);
+    expect(
+      await fs.readdir(
+        path.join(userData, "installed-updates", operations[0]!),
+      ),
+    ).toEqual(["slot-binding.json"]);
+    // The same lifetime stays fenced after a known prepare refusal; a fresh
+    // lifetime re-adopts the retained archive and may attempt installation.
+    await controller.restart();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "ready",
+      blockedBy: "UPDATE_PREPARE_FAILED",
+    });
+    expect(mocks.copyApp).toHaveBeenCalledTimes(1);
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
+    expect(quit).not.toHaveBeenCalled();
+  });
   it("classifies an admission exception before helper dispatch and retains the refusal", async () => {
     const acquireAdmission = vi.fn(async () => {
       throw new Error("fixture admission release unconfirmed");
