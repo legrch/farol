@@ -15,6 +15,7 @@ import {
 } from "./runtime-contract.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
 import { verifyBundledTunnelClient } from "./tunnel-client-artifact.mjs";
+import { validateTunnelNotice } from "./tunnel-notice.mjs";
 import { packageInfoPlist } from "./package-platform.mjs";
 import {
   PACKAGE_SCHEMA,
@@ -31,6 +32,20 @@ const runtimeRelativePath = "Contents/Frameworks/Electron Runtime.app";
 const runtimeApp = path.join(appPath, runtimeRelativePath);
 const repositoryRoot = root;
 const scope = ".";
+// Validate the version-bound notice input before replacing a retained package.
+const tunnelNoticeBytes = await fs.readFile(
+  path.join(root, "resources/native/go/TUNNEL_CLIENT_NOTICES.txt"),
+);
+const tunnelAttribution = JSON.parse(
+  await fs.readFile(
+    path.join(root, "resources/native/go/TUNNEL_CLIENT_ATTRIBUTION.json"),
+    "utf8",
+  ),
+);
+const tunnelNotices = validateTunnelNotice(
+  tunnelNoticeBytes,
+  tunnelAttribution,
+);
 const packageDocument = JSON.parse(
   await fs.readFile(path.join(root, "package.json"), "utf8"),
 );
@@ -218,7 +233,7 @@ const nativeNotices = await fs.readFile(
 );
 await fs.writeFile(
   path.join(appResources, "THIRD_PARTY_NOTICES.txt"),
-  `Farol direct runtime notice\n\n${reactNotices.join("\n\n")}\n\nGeist ${GEIST_VERSION} (SIL Open Font License 1.1)\n${geistHashes}\n\n${geistLicense}\n\n@modelcontextprotocol/server 2.0.0 (MIT)\n${mcpServerLicense}\n\n@modelcontextprotocol/core 2.0.0 (MIT)\n${mcpCoreLicense}\n\nZod 4.6.5 (MIT)\n${zodLicense}\n\nws 8.22.0 (MIT)\n${wsLicense}\n\n${nativeNotices}\n\nElectron's own license and Chromium notices are retained in Contents/Resources.\n`,
+  `Farol direct runtime notice\n\n${reactNotices.join("\n\n")}\n\nGeist ${GEIST_VERSION} (SIL Open Font License 1.1)\n${geistHashes}\n\n${geistLicense}\n\n@modelcontextprotocol/server 2.0.0 (MIT)\n${mcpServerLicense}\n\n@modelcontextprotocol/core 2.0.0 (MIT)\n${mcpCoreLicense}\n\nZod 4.6.5 (MIT)\n${zodLicense}\n\nws 8.22.0 (MIT)\n${wsLicense}\n\n${nativeNotices}\n\n${tunnelNotices}\n\nElectron's own license and Chromium notices are retained in Contents/Resources.\n`,
 );
 if ((await treeDigest(runtimeApp)) !== electronSourceSha256) {
   throw new Error("PACKAGE_RUNTIME_COPY_MISMATCH");

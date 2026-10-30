@@ -37,6 +37,7 @@ it("refuses a core-less 0.2 candidate before changing the retained package", asy
       "source-git-blobs.mjs",
       "package-layout.mjs",
       "tunnel-client-artifact.mjs",
+      "tunnel-notice.mjs",
     ])
       await fs.copyFile(
         path.join(tooling, name),
@@ -49,6 +50,16 @@ it("refuses a core-less 0.2 candidate before changing the retained package", asy
       path.join(tooling, "../apps/desktop/tunnel-client-contract.ts"),
       path.join(desktop, "tunnel-client-contract.ts"),
     );
+    const notices = path.join(root, "resources/native/go");
+    await fs.mkdir(notices, { recursive: true });
+    for (const name of [
+      "TUNNEL_CLIENT_NOTICES.txt",
+      "TUNNEL_CLIENT_ATTRIBUTION.json",
+    ])
+      await fs.copyFile(
+        path.join(tooling, "../resources/native/go", name),
+        path.join(notices, name),
+      );
 
     const digestDirectory = path.join(root, "src/pkg/artifact-tree-digest");
     await fs.mkdir(digestDirectory, { recursive: true });
@@ -125,6 +136,54 @@ it("refuses a core-less 0.2 candidate before changing the retained package", asy
       "sentinel",
     ]);
     expect(await fs.readFile(sentinelPath)).toEqual(sentinel);
+    const after = await fs.lstat(packageRoot, { bigint: true });
+    for (const key of ["dev", "ino", "mtimeNs", "ctimeNs"])
+      expect(after[key], key).toBe(before[key]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+it("refuses a changed tunnel notice before touching a retained package", async () => {
+  const root = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-notice-preflight-")),
+  );
+  try {
+    const noticeRoot = path.join(root, "resources/native/go");
+    const packageRoot = path.join(root, "_output/package");
+    await fs.mkdir(noticeRoot, { recursive: true });
+    await fs.mkdir(packageRoot, { recursive: true });
+    await fs.copyFile(
+      path.join(
+        tooling,
+        "../resources/native/go/TUNNEL_CLIENT_ATTRIBUTION.json",
+      ),
+      path.join(noticeRoot, "TUNNEL_CLIENT_ATTRIBUTION.json"),
+    );
+    await fs.writeFile(
+      path.join(noticeRoot, "TUNNEL_CLIENT_NOTICES.txt"),
+      "changed notice",
+    );
+    const sentinel = Buffer.from("retained package evidence\0\xff", "latin1");
+    await fs.writeFile(path.join(packageRoot, "sentinel"), sentinel);
+    const before = await fs.lstat(packageRoot, { bigint: true });
+    const result = spawnSync(
+      process.execPath,
+      [path.join(tooling, "package.mjs")],
+      {
+        cwd: root,
+        env: { PATH: "/usr/bin:/bin", TMPDIR: os.tmpdir() },
+        encoding: "utf8",
+        timeout: 5000,
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("PACKAGE_TUNNEL_NOTICE_MISMATCH");
+    expect(await fs.readdir(packageRoot)).toEqual(["sentinel"]);
+    expect(await fs.readFile(path.join(packageRoot, "sentinel"))).toEqual(
+      sentinel,
+    );
     const after = await fs.lstat(packageRoot, { bigint: true });
     for (const key of ["dev", "ino", "mtimeNs", "ctimeNs"])
       expect(after[key], key).toBe(before[key]);
