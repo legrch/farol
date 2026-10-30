@@ -1847,6 +1847,7 @@ kbd {
   box-shadow: none;
   font-size: 11px;
   line-height: 1.2;
+  overflow-wrap: anywhere;
 }
 .connection-test-feedback {
   position: absolute;

@@ -1014,6 +1014,11 @@ export function Shell() {
     state.status === "current" &&
     state.runtime === "ready" &&
     state.configuration?.status === "ready" &&
+    !(
+      destination.area === "setup" &&
+      (destination.setupStep === "connection" ||
+        destination.setupStep === "attachment")
+    ) &&
     !connectionState.checking &&
     !setupEntries.some((entry) => entry.liveState === "pending") &&
     setupReadyCount < setupEntries.length;

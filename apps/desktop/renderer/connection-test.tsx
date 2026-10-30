@@ -36,7 +36,7 @@ const text = (state: State) =>
             : state.code === "CONNECTOR_APP_VERIFICATION_NOT_READY"
               ? "Check sign-in and connection in Setup."
               : state.phase === "refused"
-                ? `The connection test needs attention. ${state.code ?? "Review the connection in Setup."}`
+                ? "The check didn’t finish. Review the connection in Setup."
                 : "";
 
 /** Check the live route without disturbing its proof. When recovery is needed,
