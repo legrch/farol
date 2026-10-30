@@ -11,21 +11,40 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// This is a resource budget, not permission to remove retained history.
+// All record descriptors remain open through the final observation.
+const freshInventoryBytes = 64 * 1024 * 1024
+
+func closeFreshFiles(ctx context.Context, files []settledFile, closeFile func(*os.File) error) error {
+	failed := false
+	for _, file := range files {
+		if closeFile(file.file) != nil {
+			failed = true
+		}
+	}
+	if failed || ctx.Err() != nil {
+		return unavailable()
+	}
+	return nil
+}
+
 // InspectFreshProcesses borrows this already-held writer lock and existing
 // record reader. It performs no recovery, PID lookup, write or state transition.
-// The existing 128-record inspection bound and final byte/root checks remain.
+// The fresh-history bound and final byte/root checks remain.
 func (r *Repository) InspectFreshProcesses(ctx context.Context, selection SettledSelection) (bool, error) {
-	return r.inspectProcessHistory(ctx, selection, qualifyFreshProcessHistory)
+	return r.inspectProcessHistory(ctx, selection, 0, freshInventoryBytes, func(entries []settledBytes, selection SettledSelection) (bool, error) {
+		return qualifyProcessHistoryBoundedContext(ctx, entries, selection, len(entries))
+	})
 }
 
 // InspectStagingProcesses is read-only and borrows the same writer and pinned
 // inventory. Eligibility is a snapshot, not an admission or process fence.
 func (r *Repository) InspectStagingProcesses(ctx context.Context, selection SettledSelection) (bool, error) {
-	return r.inspectProcessHistory(ctx, selection, qualifyStagingHistory)
+	return r.inspectProcessHistory(ctx, selection, maxPreservedRecords, freshInventoryBytes, qualifyStagingHistory)
 }
 
-func (r *Repository) inspectProcessHistory(ctx context.Context, selection SettledSelection, qualify func([]settledBytes, SettledSelection) (bool, error)) (unknown bool, err error) {
-	if r == nil || ctx == nil {
+func (r *Repository) inspectProcessHistory(ctx context.Context, selection SettledSelection, maxEntries int, maxBytes int64, qualify func([]settledBytes, SettledSelection) (bool, error)) (unknown bool, err error) {
+	if r == nil || ctx == nil || maxBytes <= 0 {
 		return false, unavailable()
 	}
 	r.mu.Lock()
@@ -42,10 +61,30 @@ func (r *Repository) inspectProcessHistory(ctx context.Context, selection Settle
 		return false, unavailable()
 	}
 	f := os.NewFile(uintptr(fd), "retained-process-inventory")
-	names, readErr := f.Readdirnames(maxPreservedRecords + 1)
-	extra, endErr := f.Readdirnames(1)
+	var names []string
+	var namesBytes uint64
+	var readErr error
+	for {
+		if ctx.Err() != nil {
+			readErr = unavailable()
+			break
+		}
+		var batch []string
+		batch, readErr = f.Readdirnames(256)
+		for _, name := range batch {
+			namesBytes += uint64(len(name)) + 512
+			if namesBytes > freshInventoryBytes || (maxEntries > 0 && len(names) >= maxEntries) {
+				readErr = unavailable()
+				break
+			}
+			names = append(names, name)
+		}
+		if readErr != nil {
+			break
+		}
+	}
 	closeErr := f.Close()
-	if closeErr != nil || readErr != nil && readErr != io.EOF || endErr != io.EOF || len(extra) != 0 || len(names) > maxPreservedRecords {
+	if closeErr != nil || readErr != io.EOF {
 		return false, unavailable()
 	}
 	// Borrow the same descriptors. Capture current versions after the writer's
@@ -58,12 +97,10 @@ func (r *Repository) inspectProcessHistory(ctx context.Context, selection Settle
 			return false, unavailable()
 		}
 	}
-	observation := &nativeSettledObservation{d: &copy, recordCount: len(names)}
+	observation := &nativeSettledObservation{d: &copy, recordCount: len(names), maxBytes: maxBytes, ctx: ctx}
 	defer func() {
-		for _, file := range observation.files {
-			if file.file.Close() != nil {
-				err = unavailable()
-			}
+		if closeFreshFiles(ctx, observation.files, (*os.File).Close) != nil {
+			err = unavailable()
 		}
 	}()
 	entries, err := observation.inventory()
@@ -75,7 +112,7 @@ func (r *Repository) inspectProcessHistory(ctx context.Context, selection Settle
 		return false, err
 	}
 	if observation.recheck(entries) != nil || ctx.Err() != nil {
-		return false, unavailable()
+		return unknown, unavailable()
 	}
 	return unknown, nil
 }

@@ -1,5 +1,11 @@
 # App operations log
 
+Future work for 0.4.2: load Activity in bounded pages while preserving global
+search, notifications, lifecycle pairing and unknown outcomes. The current
+snapshot reads retained entries together. Full process auditing is also future
+work: present command and output excerpts are filtered, bounded and may be
+withheld or unavailable; they are not a complete transcript.
+
 The desktop records content-free operation observations in the current profile's
 `farol-state/operations/` directory. It never uses a global state directory.
 Production, Dev, Owner Preview and disposable test profiles keep their existing

@@ -1,6 +1,7 @@
 package mutation
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,10 +12,14 @@ import (
 // Historical process uncertainty is an observation, never permission to replay
 // or proof of cleanup. Fresh startup holds the old core and MCP owner locks.
 func qualifyFreshProcessHistory(entries []settledBytes, selection SettledSelection) (bool, error) {
-	return qualifyProcessHistoryBounded(entries, selection, maxPreservedRecords)
+	return qualifyProcessHistoryBounded(entries, selection, len(entries))
 }
 
 func qualifyProcessHistoryBounded(entries []settledBytes, selection SettledSelection, limit int) (bool, error) {
+	return qualifyProcessHistoryBoundedContext(context.Background(), entries, selection, limit)
+}
+
+func qualifyProcessHistoryBoundedContext(ctx context.Context, entries []settledBytes, selection SettledSelection, limit int) (bool, error) {
 	if len(entries) > limit || !domain.Identifier(selection.OwnerID, 160) || !domain.Identifier(selection.ProfileID, 160) || !domain.Identifier(selection.ComputerID, 160) {
 		return false, preservedRefusal()
 	}
@@ -29,6 +34,9 @@ func qualifyProcessHistoryBounded(entries []settledBytes, selection SettledSelec
 	seen := map[string]bool{}
 	expected := make([]ExpectedPreservedRecord, len(entries))
 	for n, entry := range entries {
+		if ctx.Err() != nil {
+			return false, unavailable()
+		}
 		if seen[entry.key] {
 			return false, preservedRefusal()
 		}
@@ -136,6 +144,9 @@ func qualifyProcessHistoryBounded(entries []settledBytes, selection SettledSelec
 		expected[n].Identity = identity
 	}
 	for _, marker := range selfTestMarkers {
+		if ctx.Err() != nil {
+			return false, unavailable()
+		}
 		key, err := selfTestKey(marker.Binding().Identity)
 		if err != nil {
 			return false, preservedRefusal()
@@ -152,6 +163,9 @@ func qualifyProcessHistoryBounded(entries []settledBytes, selection SettledSelec
 		}
 	}
 	for _, cleanup := range cleanupChildren {
+		if ctx.Err() != nil {
+			return false, unavailable()
+		}
 		binding := cleanup.Binding()
 		parentKey, err := recordKey(binding.Creation.Identity)
 		if err != nil {
@@ -163,6 +177,9 @@ func qualifyProcessHistoryBounded(entries []settledBytes, selection SettledSelec
 		}
 	}
 	for _, cleanup := range fileCleanupChildren {
+		if ctx.Err() != nil {
+			return false, unavailable()
+		}
 		inventory := cleanup.Inventory()
 		parentKey, err := recordKey(inventory.Creation.Creation.Identity)
 		if err != nil {
@@ -178,6 +195,9 @@ func qualifyProcessHistoryBounded(entries []settledBytes, selection SettledSelec
 		}
 	}
 	for n, entry := range entries {
+		if ctx.Err() != nil {
+			return false, unavailable()
+		}
 		if expected[n].Identity.OwnerID != "" {
 			continue
 		}
@@ -191,7 +211,7 @@ func qualifyProcessHistoryBounded(entries []settledBytes, selection SettledSelec
 		}
 		expected[n].Identity, expected[n].OutputParent = identity, envelope.Record.Parent
 	}
-	if qualifyRetainedProcessOutputs(entries, expected, true) != nil {
+	if qualifyRetainedProcessOutputsContext(ctx, entries, expected, true) != nil {
 		return false, preservedRefusal()
 	}
 	if unknownWrite {

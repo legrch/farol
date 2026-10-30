@@ -77,6 +77,10 @@ shell/process execution, Task/provider activation and packaging remain unactivat
 
 ## Preselected owner Completed observation
 
+Known limitation: the separately selected preserved-record inspection and its
+IPC contract remain limited to 128 records. Fresh-start history inspection does
+not change that recovery limit or grant permission to replay an unknown effect.
+
 `InspectOwnerCompleted(ctx, root, OwnerSelection, []ExpectedOwnerRecord, visit)`
 is a separately selected read-only observation of an existing private store.
 `OwnerSelection` binds owner, profile and computer. Composition independently

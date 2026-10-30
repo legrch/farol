@@ -14,7 +14,7 @@ import (
 // separately establish protections for its own processes; old opaque seals do
 // not supply that fact.
 func qualifyStagingHistory(entries []settledBytes, selection SettledSelection) (bool, error) {
-	unknown, err := qualifyFreshProcessHistory(entries, selection)
+	unknown, err := qualifyProcessHistoryBounded(entries, selection, maxPreservedRecords)
 	if err != nil || unknown {
 		return false, err
 	}

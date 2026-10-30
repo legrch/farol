@@ -23,6 +23,8 @@ type nativeSettledObservation struct {
 	d           *disk
 	files       []settledFile
 	recordCount int
+	maxBytes    int64           // optional additional fresh-history memory budget
+	ctx         context.Context // optional cancellation for borrowed fresh inspection
 }
 
 func inspectSettledExisting(ctx context.Context, root Root, expected [settledRecordCount]ExpectedSettledRecord, visit func(SettledInspection) error) (*SettledInspection, error) {
@@ -83,6 +85,9 @@ func inspectBoundedNative(ctx context.Context, root Root, count int, observe fun
 
 func (o *nativeSettledObservation) check() error {
 	d := o.d
+	if o.ctx != nil && o.ctx.Err() != nil {
+		return unavailable()
+	}
 	if d.check() != nil {
 		return unavailable()
 	}
@@ -154,6 +159,7 @@ func (o *nativeSettledObservation) inventory() ([]settledBytes, error) {
 		return nil, err
 	}
 	entries := make([]settledBytes, 0, len(names))
+	var totalBytes int64
 	for _, key := range names {
 		fd, err := unix.Openat(o.d.dir, key, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 		if err != nil {
@@ -168,6 +174,12 @@ func (o *nativeSettledObservation) inventory() ([]settledBytes, error) {
 			return nil, unavailable()
 		}
 		o.files[len(o.files)-1] = f
+		if o.maxBytes > 0 {
+			if f.initial.Size < 0 || f.initial.Size > o.maxBytes-totalBytes {
+				return nil, unavailable()
+			}
+			totalBytes += f.initial.Size
+		}
 		raw, err := o.read(f)
 		if err != nil {
 			return nil, err
@@ -194,6 +206,9 @@ func (o *nativeSettledObservation) recheck(entries []settledBytes) error {
 	// A later record read must not hide a change to an earlier pinned record.
 	// Qualify all descriptor/name versions again after the fresh byte pass.
 	for _, f := range o.files {
+		if o.ctx != nil && o.ctx.Err() != nil {
+			return unavailable()
+		}
 		current, err := stat(int(f.file.Fd()))
 		var named unix.Stat_t
 		if err != nil || !stable(f.initial, current) || unix.Fstatat(o.d.dir, f.key, &named, unix.AT_SYMLINK_NOFOLLOW) != nil || !stable(current, named) {

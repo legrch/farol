@@ -2,11 +2,35 @@ package mutation
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	domain "github.com/legrch/farol/modules/computer/domain/mutation"
 )
+
+func TestFreshHistoryCancelledQualificationRefuses(t *testing.T) {
+	selection, entries := freshHistoryBoundaryFixtureForCancellation(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := qualifyProcessHistoryBoundedContext(ctx, entries, selection, len(entries)); err == nil {
+		t.Fatal("cancelled qualification was accepted")
+	}
+}
+
+func freshHistoryBoundaryFixtureForCancellation(t *testing.T) (SettledSelection, []settledBytes) {
+	t.Helper()
+	_, _, scope, intent := processFixture()
+	raw, err := encodeProcess(scope, intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := recordKey(processIdentity(scope, intent.OperationID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return SettledSelection{OwnerID: scope.OwnerID, ProfileID: scope.Host.ProfileID, ComputerID: scope.ComputerID}, []settledBytes{{key: key, raw: raw}}
+}
 
 func TestFreshHistoryPreservesMarkerAndChecksSettledParent(t *testing.T) {
 	selection := SettledSelection{OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}
@@ -144,7 +168,7 @@ func TestFreshProcessHistorySeparatesReservationExitAndCleanup(t *testing.T) {
 func TestFreshProcessHistoryRefusesUnsupportedOrExcessInventory(t *testing.T) {
 	selection := SettledSelection{OwnerID: "owner", ProfileID: "profile", ComputerID: "computer"}
 	for _, entries := range [][]settledBytes{
-		make([]settledBytes, maxPreservedRecords+1),
+		make([]settledBytes, 2),
 		{{key: "unknown", raw: []byte(`{"schemaVersion":99,"kind":"workspace_connector_process","record":{}}`)}},
 	} {
 		if _, err := qualifyFreshProcessHistory(entries, selection); err == nil {

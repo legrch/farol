@@ -254,12 +254,32 @@ func qualifyPreservedProcessOutputs(entries []settledBytes, expected []ExpectedP
 // Original preservation keeps its v6-only policy. Fresh admission can also
 // observe canonical v5 cohort results; neither path changes the result or ACK.
 func qualifyRetainedProcessOutputs(entries []settledBytes, expected []ExpectedPreservedRecord, legacyCohort bool) error {
+	return qualifyRetainedProcessOutputsContext(context.Background(), entries, expected, legacyCohort)
+}
+
+func qualifyRetainedProcessOutputsContext(ctx context.Context, entries []settledBytes, expected []ExpectedPreservedRecord, legacyCohort bool) error {
 	named := make(map[string]string)
 	selected := make(map[string]ExpectedPreservedRecord, len(expected))
+	byKey := make(map[string][]byte, len(entries))
+	for _, entry := range entries {
+		if ctx.Err() != nil {
+			return unavailable()
+		}
+		if _, exists := byKey[entry.key]; exists {
+			return preservedRefusal()
+		}
+		byKey[entry.key] = entry.raw
+	}
 	for _, e := range expected {
+		if ctx.Err() != nil {
+			return unavailable()
+		}
 		selected[e.Key] = e
 	}
 	for _, entry := range entries {
+		if ctx.Err() != nil {
+			return unavailable()
+		}
 		var header struct {
 			Version uint8           `json:"schemaVersion"`
 			Kind    string          `json:"kind"`
@@ -280,26 +300,25 @@ func qualifyRetainedProcessOutputs(entries []settledBytes, expected []ExpectedPr
 			chunks []processOutputDigest
 		}{{"stdout", terminal.Record.Stdout}, {"stderr", terminal.Record.Stderr}} {
 			for _, chunk := range stream.chunks {
+				if ctx.Err() != nil {
+					return unavailable()
+				}
 				key := processOutputKey(entry.key, stream.name, chunk)
 				e, ok := selected[key]
 				if !ok || e.OutputParent != entry.key || e.Identity != selected[entry.key].Identity || named[key] != "" {
 					return preservedRefusal()
 				}
 				named[key] = entry.key
-				var raw []byte
-				for _, candidate := range entries {
-					if candidate.key == key {
-						raw = candidate.raw
-						break
-					}
-				}
-				if _, err := decodeProcessOutput(raw, entry.key, stream.name, chunk); err != nil {
+				if _, err := decodeProcessOutput(byKey[key], entry.key, stream.name, chunk); err != nil {
 					return preservedRefusal()
 				}
 			}
 		}
 	}
 	for _, e := range expected {
+		if ctx.Err() != nil {
+			return unavailable()
+		}
 		if e.OutputParent != "" && named[e.Key] != e.OutputParent {
 			return preservedRefusal()
 		}
