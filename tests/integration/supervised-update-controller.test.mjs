@@ -692,6 +692,157 @@ describe("supervised update composition (mocked lifecycle)", () => {
   );
 });
 
+// Regression coverage for the beta-only supervised handoff. This is NOT the
+// normal stable-channel updater or a real installed 0.4.0 -> 0.4.1 journey.
+describe("supervised handoff security gaps (owned disposable fixtures)", () => {
+  it("refuses stable 0.4.0 -> 0.4.1 through the beta-only supervisor, before any effect", async () => {
+    input.expectedSource.version = "0.4.0";
+    input.expected.version = "0.4.1";
+    input.expected.buildVersion = "55";
+    input.manifest = {
+      ...input.manifest,
+      channel: "stable",
+      version: "0.4.1",
+      buildVersion: "55",
+      archiveName: "Farol-0.4.1-darwin-arm64.zip",
+    };
+    await expect(runSupervisedUpdate(input)).rejects.toThrow(
+      "UPDATE_SELECTED_IDENTITIES_INVALID",
+    );
+    expect(ports.capture).not.toHaveBeenCalled();
+    expect(ports.acquire).not.toHaveBeenCalled();
+    expect(ports.create).not.toHaveBeenCalled();
+  });
+
+  it.each(["slot-repair", "closed-repair"])(
+    "retains an existing %s journal and refuses Quit",
+    async (kind) => {
+      const slot = path.join(root, "Applications/Farol.app");
+      const journal =
+        kind === "slot-repair"
+          ? slot + ".repair.json"
+          : path.join(path.dirname(slot), ".farol-closed-repair.json");
+      await fs.mkdir(path.dirname(journal), { recursive: true });
+      const original = "retained repair outcome unknown";
+      await fs.writeFile(journal, original, { mode: 0o600 });
+      const result = await runSupervisedUpdate(input);
+      expect(result).toMatchObject({
+        status: "blocked",
+        code: "UPDATE_EXISTING_OPERATION_REQUIRES_REVIEW",
+        predecessorClosed: false,
+      });
+      expect(await fs.readFile(journal, "utf8")).toBe(original);
+      expect(predecessor.requestQuit).not.toHaveBeenCalled();
+      expect(ports.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["symlink", "shared-writable"])(
+    "refuses unsafe installed-updates %s without deleting private state",
+    async (kind) => {
+      const directory = path.join(
+        root,
+        "Library/Application Support/io.github.legrch.farol/installed-updates",
+      );
+      await fs.mkdir(path.dirname(directory), { recursive: true });
+      const retained = path.join(root, "owned-unknown-evidence");
+      await fs.mkdir(retained, { mode: 0o700 });
+      await fs.writeFile(path.join(retained, "receipt"), "UNKNOWN");
+      if (kind === "symlink") {
+        await fs.symlink(retained, directory);
+      } else {
+        await fs.mkdir(directory, { mode: 0o700 });
+        await fs.chmod(directory, 0o770);
+      }
+      const result = await runSupervisedUpdate(input);
+      expect(result).toMatchObject({
+        status: "blocked",
+        code: "UPDATE_EXISTING_STATE_UNSAFE",
+        predecessorClosed: false,
+      });
+      expect(await fs.readFile(path.join(retained, "receipt"), "utf8")).toBe(
+        "UNKNOWN",
+      );
+      expect(predecessor.requestQuit).not.toHaveBeenCalled();
+      expect(ports.backup).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses an archive changed after resource capture and before byte verification", async () => {
+    ports.resources.mockImplementationOnce(async () => {
+      await fs.writeFile(input.archivePath, "changed input after selection");
+      return resource;
+    });
+    const result = await runSupervisedUpdate(input);
+    expect(result).toMatchObject({
+      status: "blocked",
+      code: "UPDATE_ARCHIVE_UNSAFE",
+      predecessorClosed: false,
+    });
+    expect(predecessor.requestQuit).not.toHaveBeenCalled();
+    expect(ports.backup).not.toHaveBeenCalled();
+    expect(runtime.restart).not.toHaveBeenCalled();
+  });
+
+  it("blocks a competing supervised invocation at its promotion lease without a second Quit", async () => {
+    let hasLease = false;
+    ports.acquire.mockImplementation(async () => {
+      if (hasLease) return null;
+      hasLease = true;
+      return { file: "one-owned-promotion-lease" };
+    });
+    ports.observe.mockImplementation(async () =>
+      events.includes("restart") ? target : source,
+    );
+    let releaseFirstQuit;
+    predecessor.requestQuit.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          events.push("quit");
+          releaseFirstQuit = resolve;
+        }),
+    );
+    const original = runSupervisedUpdate(input);
+    await vi.waitFor(() => expect(releaseFirstQuit).toBeTypeOf("function"));
+    const competitor = await runSupervisedUpdate(input);
+    expect(competitor).toMatchObject({
+      status: "blocked",
+      code: "UPDATE_PROMOTION_BUSY",
+      predecessorClosed: false,
+    });
+    expect(predecessor.requestQuit).toHaveBeenCalledTimes(1);
+    expect(ports.backup).not.toHaveBeenCalled();
+    releaseFirstQuit();
+    expect(await original).toMatchObject({
+      status: "verified_closed",
+      predecessorClosed: true,
+    });
+    expect(predecessor.requestQuit).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not dispatch a helper after ENOSPC while preserving the original archive", async () => {
+    const priorArchive = await fs.readFile(input.archivePath);
+    ports.backup.mockRejectedValue(
+      Object.assign(new Error("ENOSPC"), {
+        code: "ENOSPC",
+      }),
+    );
+    const result = await runSupervisedUpdate(input);
+    expect(result).toMatchObject({
+      status: "blocked",
+      stage: "preserve",
+      code: "ENOSPC",
+      predecessorClosed: true,
+      helper: null,
+      backup: null,
+    });
+    expect(runtime.prepareLocal).not.toHaveBeenCalled();
+    expect(runtime.restart).not.toHaveBeenCalled();
+    expect(ports.release).toHaveBeenCalledTimes(1);
+    expect(await fs.readFile(input.archivePath)).toEqual(priorArchive);
+  });
+});
+
 describe("supervisor reporting with the real updater lifecycle", () => {
   function useRealUpdater() {
     const effects = {
