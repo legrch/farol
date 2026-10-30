@@ -80,4 +80,48 @@ describe("version-bound tunnel notices", () => {
       validateTunnelNotice(Buffer.concat([bytes, Buffer.from("x")]), evidence),
     ).toThrow("PACKAGE_TUNNEL_NOTICE_MISMATCH");
   });
+  it("refuses dependency version drift even when the notice hash is unchanged", () => {
+    const changedModule = structuredClone(evidence);
+    changedModule.modules[0].version = "v999.0.0";
+    expect(() => validateTunnelNotice(bytes, changedModule)).toThrow(
+      "PACKAGE_TUNNEL_NOTICE_MISMATCH",
+    );
+    const changedUI = structuredClone(evidence);
+    changedUI.embeddedAdminUI.version = "4.2.21";
+    expect(() => validateTunnelNotice(bytes, changedUI)).toThrow(
+      "PACKAGE_TUNNEL_NOTICE_MISMATCH",
+    );
+    expect(() =>
+      validateTunnelNotice(bytes, { ...evidence, goRuntimeVersion: "go9.0" }),
+    ).toThrow("PACKAGE_TUNNEL_NOTICE_MISMATCH");
+  });
+  it("refuses absent module or embedded UI evidence", () => {
+    for (const key of ["modules", "embeddedAdminUI"]) {
+      expect(() =>
+        validateTunnelNotice(bytes, { ...evidence, [key]: undefined }),
+      ).toThrow("PACKAGE_TUNNEL_NOTICE_MISMATCH");
+    }
+  });
+  it("refuses a changed tunnel identity with old dependency evidence", () => {
+    const changed = {
+      ...evidence,
+      tunnelVersion: "0.0.17",
+      binarySha256: "a".repeat(64),
+      archiveSha256: "b".repeat(64),
+    };
+    expect(() =>
+      validateTunnelNotice(bytes, changed, {
+        version: changed.tunnelVersion,
+        sha256: changed.binarySha256,
+        archiveSHA256: changed.archiveSha256,
+      }),
+    ).toThrow("PACKAGE_TUNNEL_NOTICE_MISMATCH");
+  });
+  it("refuses substituted notices even when their supplied digest matches", () => {
+    const altered = Buffer.from("incomplete notices\n");
+    const noticeSha256 = createHash("sha256").update(altered).digest("hex");
+    expect(() =>
+      validateTunnelNotice(altered, { ...evidence, noticeSha256 }),
+    ).toThrow("PACKAGE_TUNNEL_NOTICE_MISMATCH");
+  });
 });
