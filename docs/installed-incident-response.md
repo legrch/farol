@@ -64,6 +64,24 @@ A failed notice acknowledgement or uncertain idle observation must not alone
 prevent a separately authorized manual update; integrity and process ownership
 checks remain effective.
 
+### Missing helper terminal after Quit
+
+Preserve the original helper identity, phase log and physical application pair
+before reopening the predecessor. A later startup classification of `rolled_back`
+does not prove that the original helper swapped the pair or completed rollback.
+An absent process without its original terminal observation remains UNKNOWN.
+
+The `rejection_opened` phase followed by an absent `journal.json` does not locate
+the interruption strictly before `Prepare`. Tree verification repeats before the
+first journal CAS, which creates and syncs `.journal-*` before publishing the
+journal. Record any temporary entries without removing or completing them.
+
+Use a separate disposable diagnostic to observe the original child exit status
+and stderr outside the desktop's lifetime. A successful detached-helper test,
+including one launched by a visible Electron application, does not qualify the
+shared `/Applications` slot, ordinary installed updater or automatic relaunch.
+Do not repeat the uncertain update to obtain missing diagnostics.
+
 ## Evidence and follow-up
 
 The recovery backend separates stored archive observations from Computer
