@@ -184,17 +184,27 @@ type closedHelperNativeCommand struct {
 	stdout, stderr bytes.Buffer
 	name, dir      string
 	waited         bool
+	waitBudget     time.Duration
+	traceStall     bool
 }
 
 func (c *closedHelperNativeCommand) wait(t *testing.T) error {
 	t.Helper()
+	budget := c.waitBudget
+	if budget == 0 {
+		budget = 8 * time.Second
+	}
+	if c.traceStall {
+		timer := time.AfterFunc(budget/2, func() { _ = c.cmd.Process.Signal(unix.SIGQUIT) })
+		defer timer.Stop()
+	}
 	done := make(chan error, 1)
 	go func() { done <- c.cmd.Wait() }()
 	var err error
 	forced := false
 	select {
 	case err = <-done:
-	case <-time.After(8 * time.Second):
+	case <-time.After(budget):
 		forced = true
 		killErr := c.cmd.Process.Kill() // The exact retained fixture child only.
 		err = errors.Join(<-done, killErr, errors.New("fixture forced cleanup; not accepted"))

@@ -253,6 +253,18 @@ The retained historical Dev witness `node tests/e2e/connector-polling.e2e.mjs --
 
 ## Unsigned beta updater diagnostics
 
+`TestLiveHelperNativePackagedTrees` is an opt-in Darwin regression for real
+packaged source/target trees. Root first qualifies the exact package manifests
+and content, then sets `FAROL_LIVE_HELPER_NATIVE=1`,
+`FAROL_TEST_SOURCE_PACKAGE` and `FAROL_TEST_TARGET_PACKAGE` to those checkouts.
+The default exercises a freshly compiled helper; the separately selected
+`FAROL_TEST_PACKAGED_HELPER=1` lane uses the target package's backend. Both copy
+only into a new disposable home and use an owned `cat` predecessor. A stalled
+test helper receives SIGQUIT through its original child handle for diagnostic
+stacks before bounded teardown. Failed/uncertain state remains retained;
+successful, joined fixtures are removed. These lanes do not qualify the normal
+installed updater, shared Applications path, automatic relaunch or GitHub OTA.
+
 For an interrupted update, preserve `<operationId>/journal.json` and
 `helper.log.jsonl` under the approved profile's `installed-updates` directory.
 The helper log records phase, classified code, UTC timestamp and PID, without
