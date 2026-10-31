@@ -11,6 +11,7 @@ import {
 import { createTotalOperationsRecorder } from "../../apps/desktop/operations/recorder";
 import { recordedModelTurn } from "../../apps/desktop/operations/model-turn";
 import { declaredOperationOutcomes } from "./operations-outcome-inventory";
+import { recordableOperationCode } from "../../apps/desktop/renderer/operations-vocabulary";
 import type { ProductConfigurationResult } from "../../src/pkg/product-settings/contract";
 import type { ProductTaskCommandResult } from "../../src/modules/chat/contract/product-task";
 import type { ReadonlyComputerCallResponse } from "../../src/modules/computer/contract/readonly-computer-contract";
@@ -29,6 +30,20 @@ const closedContractCoverage: [
 ] = [true, true, true, true, true];
 
 const metadata = { source: "You", kind: "general.update", target: {} } as const;
+
+it.each(["helper_lifetime_deadline_expired", "helper_lifetime_unknown"])(
+  "preserves the original helper lifetime uncertainty code %s",
+  (code) => {
+    expect(recordableOperationCode(code)).toBe(code);
+    expect(
+      operationResult({ status: "outcome_unknown", reason: code }),
+    ).toEqual({ outcome: "unknown", code });
+    expect(operationResult({ ok: true, code })).toEqual({
+      outcome: "unknown",
+      code,
+    });
+  },
+);
 
 it.each([
   "PROCESS_PREPARATION_DEADLINE",

@@ -1,16 +1,17 @@
 package desktop
 
 import (
-	"github.com/legrch/farol/modules/release/app/port"
 	"strings"
 	"testing"
+
+	"github.com/legrch/farol/modules/release/app/port"
 )
 
 func binding() port.DesktopLifetimeBinding {
 	return port.DesktopLifetimeBinding{Schema: "farol.desktop-helper-lifetime/1", OperationID: strings.Repeat("a", 32), Action: "apply", Location: "shared",
-		Source:      port.DesktopLifetimeBuild{strings.Repeat("b", 64), strings.Repeat("c", 64), "0.5.2"},
-		Target:      port.DesktopLifetimeBuild{strings.Repeat("d", 64), strings.Repeat("e", 64), "0.5.3"},
-		Predecessor: port.DesktopLifetimeProcess{10, "Sat Oct 31 23:31:30 2026"}, Helper: port.DesktopLifetimeProcess{11, "Sat Oct 31 23:31:35 2026"}, Deadline: 1001}
+		Source:      port.DesktopLifetimeBuild{BuildID: strings.Repeat("b", 64), Digest: strings.Repeat("c", 64), Version: "0.5.2"},
+		Target:      port.DesktopLifetimeBuild{BuildID: strings.Repeat("d", 64), Digest: strings.Repeat("e", 64), Version: "0.5.3"},
+		Predecessor: port.DesktopLifetimeProcess{PID: 10, Start: "Sat Oct 31 23:31:30 2026"}, Helper: port.DesktopLifetimeProcess{PID: 11, Start: "Sat Oct 31 23:31:35 2026"}, Deadline: 1001}
 }
 
 func TestBindingRefusesWrongCustodyAndRenewedDeadline(t *testing.T) {

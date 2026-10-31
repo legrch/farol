@@ -132,6 +132,9 @@ func Run(executable string, args []string, input, output *os.File, diagnostics i
 	command.Env = append(withoutLifetimeEnvironment(os.Environ()), "ELECTRON_FORCE_IS_PACKAGED=true", "FAROL_DESKTOP_LIFETIME=1")
 	// Electron fd7/8 are this private metadata/ACK channel. Helper fd3/4 and
 	// borrowed promotion lease/continue fd5/6 keep their existing meanings.
+	// On the pinned Go Unix runtime, nil File.Fd() is the closed-slot sentinel;
+	// the child fd map closes these reserved slots before exec, rather than
+	// borrowing any parent descriptor. Native launch tests exercise this layout.
 	command.ExtraFiles = []*os.File{nil, nil, nil, nil, childMetadata, childACK}
 	if command.Start() != nil {
 		return 78

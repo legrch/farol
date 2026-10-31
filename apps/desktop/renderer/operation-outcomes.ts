@@ -2220,6 +2220,8 @@ export const operationCodesByOutcome = {
     "empty_recovery_unconfirmed",
     "exited",
     "failure_unobserved",
+    "helper_lifetime_deadline_expired",
+    "helper_lifetime_unknown",
     "host_browser_creation_unconfirmed",
     "host_chat_browser_open_unconfirmed",
     "indeterminate",
