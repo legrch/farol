@@ -105,12 +105,15 @@ func TestNativeHostRuntimeLayoutBoundaries(t *testing.T) {
 							}
 						}
 						for _, unavailable := range plan.frozen.Unavailable {
-							if unavailable.Kind == kind && unavailable.Code == "HOST_RUNTIME_QUALIFICATION_UNAVAILABLE" {
-								t.Logf("untrusted group-writable directory refused: %s", f.last)
-								return
+							if unavailable.Kind == kind {
+								switch unavailable.Code {
+								case "HOST_RUNTIME_QUALIFICATION_UNAVAILABLE", "HOST_RUNTIME_DISCOVERY_UNAVAILABLE", "HOST_RUNTIME_LAYOUT_UNSUPPORTED":
+									t.Logf("untrusted group-writable candidate refused; %s unavailable: %s", kind, unavailable.Code)
+									return
+								}
 							}
 						}
-						t.Fatal("unsafe installation was not reported unavailable")
+						t.Fatalf("unsafe installation was not reported unavailable: %+v", plan.frozen.Unavailable)
 					}
 					t.Fatalf("image selection: %v last=%s", err, f.last)
 				}

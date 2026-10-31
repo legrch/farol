@@ -199,6 +199,37 @@ func TestHostRuntimeUsesSafeInstalledAlternativeAfterSharedWritableCandidate(t *
 		}
 	}
 }
+func TestHostRuntimeRejectsSharedWritablePythonBeforeUnsupportedAlternative(t *testing.T) {
+	f := &hostRuntimeFixtureFS{nodes: map[string]hostRuntimeNode{}, importsByPath: map[string]hostMachOImports{}}
+	for _, p := range []string{
+		"/opt", "/opt/homebrew", "/opt/homebrew/bin", "/opt/homebrew/Cellar", "/opt/homebrew/Cellar/python@3.13", "/opt/homebrew/Cellar/python@3.13/1", "/opt/homebrew/Cellar/python@3.13/1/Frameworks", "/opt/homebrew/Cellar/python@3.13/1/Frameworks/Python.framework", "/opt/homebrew/Cellar/python@3.13/1/Frameworks/Python.framework/Versions", "/opt/homebrew/Cellar/python@3.13/1/Frameworks/Python.framework/Versions/3.13", "/opt/homebrew/Cellar/python@3.13/1/Frameworks/Python.framework/Versions/3.13/bin",
+		"/usr", "/usr/local", "/usr/local/bin",
+	} {
+		f.nodes[p] = fixtureRuntimeNode(p, "directory", os.ModeDir|0755)
+	}
+	n := f.nodes["/opt/homebrew/bin"]
+	n.Mode = os.ModeDir | 0775
+	f.nodes[n.Path] = n
+	brew := "/opt/homebrew/Cellar/python@3.13/1/Frameworks/Python.framework/Versions/3.13/bin/python3.13"
+	f.nodes[brew] = fixtureRuntimeNode(brew, "file", 0555)
+	alias := fixtureRuntimeNode("/opt/homebrew/bin/python3", "alias", os.ModeSymlink|0777)
+	alias.LinkTarget = brew
+	f.nodes[alias.Path] = alias
+	f.nodes["/usr/local/bin/python3"] = fixtureRuntimeNode("/usr/local/bin/python3", "file", 0555)
+	p, err := discoverHostRuntime(context.Background(), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.frozen.Installations) != 0 || len(p.frozen.ExecFiles) != 0 || len(p.frozen.ReadFiles) != 0 || len(p.frozen.ReadTrees) != 0 || len(p.frozen.Path) != 0 {
+		t.Fatal("unavailable installations retained runtime authority")
+	}
+	for _, unavailable := range p.frozen.Unavailable {
+		if unavailable.Kind == "python" && unavailable.Code == "HOST_RUNTIME_LAYOUT_UNSUPPORTED" {
+			return
+		}
+	}
+	t.Fatalf("unsupported alternative was not reported unavailable: %+v", p.frozen.Unavailable)
+}
 func TestHostRuntimeRefusesUnsafeFilesAndUnknownHardlinks(t *testing.T) {
 	for _, field := range []string{"owner", "writable", "link", "world-parent", "setuid"} {
 		t.Run(field, func(t *testing.T) {
