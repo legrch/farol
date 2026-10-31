@@ -271,6 +271,182 @@ async function adoptedFixture() {
   return { ...f, baseline };
 }
 
+// Explicit v4 keeps a normal promotion receipt while preserving an incomplete
+// updater record pair. Native custody retains all bytes; no history is settled.
+async function preservedNormalFixture() {
+  const f = await fixture();
+  const build = JSON.parse(
+    await fs.readFile(
+      path.join(f.oldApp, "Contents/Resources/app/build-identity.json"),
+      "utf8",
+    ),
+  );
+  await fs.unlink(path.join(f.updates, "ready.json"));
+  const helper = { pid: 2147483646, processStart: "Sun Nov  1 00:00:00 2026" };
+  await fs.writeFile(
+    path.join(f.updates, "last-update.json"),
+    JSON.stringify({
+      schema: "farol.ready-update/1",
+      handle: "/unused-fixture-archive",
+      manifest: { fixtureOnly: true },
+      operation: null,
+      helper,
+      observedAt: "2026-11-01T00:00:00Z",
+      phase: "rolled_back",
+      runningBuildId: build.buildId,
+    }),
+    { mode: 0o600 },
+  );
+  const older = path.join(f.updates, "c".repeat(32));
+  await fs.mkdir(older, { mode: 0o700 });
+  await fs.writeFile(
+    path.join(older, "journal.json"),
+    '{"outcome":"UNKNOWN","fixtureOnly":true}\n',
+    { mode: 0o600 },
+  );
+  f.selection = {
+    ...f.selection,
+    schema: "farol.installed-replacement-selection/4",
+    installLocation: "legacy",
+    baseline: "normal",
+    preserveUnconfirmedUpdates: true,
+    candidateRoot: process.cwd(),
+    helpers: [helper],
+    snapshot: await snapshotInstalledReplacement(
+      f.home,
+      "legacy",
+      "normal",
+      true,
+    ),
+  };
+  return f;
+}
+
+describe("explicit normal baseline preservation", () => {
+  it("custodies an incomplete record pair, normal receipt and all UNKNOWN bytes without settlement", async () => {
+    const f = await preservedNormalFixture();
+    const updatesDigest = await treeDigest(f.updates);
+    const updatesIdentity = await fs.stat(f.updates, { bigint: true });
+    const receiptIdentity = await fs.stat(f.oldApp + ".receipt.json", {
+      bigint: true,
+    });
+    const history = path.join(f.userData, "history-fixture.ndjson");
+    await fs.writeFile(history, '{"outcome":"UNKNOWN"}\n', { mode: 0o600 });
+    const historyBefore = await fs.stat(history, { bigint: true });
+    const plan = await replaceInstalledPreview(f.selection, false, f.deps);
+    expect(plan.operation).toBe("plan-only");
+    const result = await replaceInstalledPreview(f.selection, true, f.deps);
+    expect(result.operation).toBe("completed");
+    expect(result.historicalOperationsReconciled).toBe(false);
+    const retained = path.join(f.custody, "installed-updates");
+    expect(await treeDigest(retained)).toBe(updatesDigest);
+    const retainedIdentity = await fs.stat(retained, { bigint: true });
+    expect([retainedIdentity.dev, retainedIdentity.ino]).toEqual([
+      updatesIdentity.dev,
+      updatesIdentity.ino,
+    ]);
+    const retainedReceipt = path.join(f.custody, "previous.receipt.json");
+    expect(await fs.readFile(retainedReceipt, "utf8")).toBe(f.oldReceipt);
+    expect((await fs.stat(retainedReceipt, { bigint: true })).ino).toBe(
+      receiptIdentity.ino,
+    );
+    await expect(
+      fs.lstat(path.join(retained, "ready.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readFile(history, "utf8")).toBe('{"outcome":"UNKNOWN"}\n');
+    expect((await fs.stat(history, { bigint: true })).ino).toBe(
+      historyBefore.ino,
+    );
+    expect(
+      JSON.parse(await fs.readFile(f.oldApp + ".receipt.json", "utf8"))
+        .sourceCommit,
+    ).toBe(f.artifact.sourceCommit);
+    await expect(
+      fs.lstat(
+        path.join(f.userData, "farol-state/installed-replacement.pending"),
+      ),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  it.each([1, 2])(
+    "keeps version %s refusal for that same incomplete normal history",
+    async (version) => {
+      const f = await preservedNormalFixture();
+      const selection = {
+        schema: `farol.installed-replacement-selection/${version}`,
+        sourceCommit: f.selection.sourceCommit,
+        operationId: f.selection.operationId,
+        helpers: f.selection.helpers,
+        snapshot: await snapshotInstalledReplacement(f.home),
+      };
+      if (version === 2) selection.installLocation = "legacy";
+      await expect(
+        replaceInstalledPreview(selection, false, f.deps),
+      ).rejects.toThrow("REPLACEMENT_UPDATE_RECEIPT_UNCONFIRMED");
+      await expect(fs.lstat(f.custody)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
+  it.each([
+    "missing preservation",
+    "false preservation",
+    "adopted baseline",
+    "relative candidate",
+    "missing discriminator",
+  ])("refuses %s before effects", async (fault) => {
+    const f = await preservedNormalFixture();
+    if (fault === "missing preservation")
+      delete f.selection.preserveUnconfirmedUpdates;
+    if (fault === "false preservation")
+      f.selection.preserveUnconfirmedUpdates = false;
+    if (fault === "adopted baseline") f.selection.baseline = "adopted";
+    if (fault === "relative candidate") f.selection.candidateRoot = "relative";
+    if (fault === "missing discriminator")
+      delete f.selection.snapshot.receiptKind;
+    const before = await treeDigest(f.apps);
+    await expect(
+      replaceInstalledPreview(f.selection, false, f.deps),
+    ).rejects.toThrow();
+    expect(await treeDigest(f.apps)).toBe(before);
+    await expect(fs.lstat(f.custody)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  it("requires the exact selected historical helper even when retaining its namespace", async () => {
+    const f = await preservedNormalFixture();
+    f.selection.helpers = [];
+    await expect(
+      replaceInstalledPreview(f.selection, false, f.deps),
+    ).rejects.toThrow("REPLACEMENT_HELPER_SELECTION_MISSING");
+    await expect(fs.lstat(f.custody)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  it("refuses normal receipt drift and a malformed saved record before custody", async () => {
+    const f = await preservedNormalFixture();
+    const original = await fs.readFile(f.oldApp + ".receipt.json");
+    await fs.writeFile(
+      f.oldApp + ".receipt.json",
+      Buffer.concat([original, Buffer.from(" ")]),
+    );
+    await expect(
+      replaceInstalledPreview(f.selection, false, f.deps),
+    ).rejects.toThrow("REPLACEMENT_SNAPSHOT_CHANGED");
+    await fs.writeFile(f.oldApp + ".receipt.json", original);
+    await fs.writeFile(
+      path.join(f.updates, "last-update.json"),
+      '{"phase":"rolled_back"}',
+      { mode: 0o600 },
+    );
+    f.selection.snapshot = await snapshotInstalledReplacement(
+      f.home,
+      "legacy",
+      "normal",
+      true,
+    );
+    await expect(
+      replaceInstalledPreview(f.selection, false, f.deps),
+    ).rejects.toThrow("REPLACEMENT_UPDATE_RECEIPT_UNCONFIRMED");
+    await expect(fs.lstat(f.custody)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
 describe("explicit replacement of an adopted baseline", () => {
   it("retains the exact adopted baseline and unconfirmed history without creating an old promotion receipt", async () => {
     const f = await adoptedFixture();
@@ -1077,15 +1253,23 @@ os.write(1, b"EXIT\n")
         ["partial-intent", true],
         ["placement-lost-result", true],
         ["completion-lost-result", true],
+        ["partial-intent", "normal-preserved"],
+        ["placement-lost-result", "normal-preserved"],
+        ["completion-lost-result", "normal-preserved"],
       ]),
   )(
-    "retains both original locks and live owner after %s (adopted=%s), regardless of pending presence after original child close",
-    async (fault, adopted) => {
+    "retains both original locks and live owner after %s (baseline=%s), regardless of pending presence after original child close",
+    async (fault, baseline) => {
+      const adopted = baseline === true;
       // Observe within this case's existing 15 s lifetime budget. A separate
       // 5 s poll deadline could kill the owner before its original native
       // child reported closure on a loaded host. Leave 1 s for assertions.
       const observationDeadline = Date.now() + 14_000;
-      const f = adopted ? await adoptedFixture() : await fixture();
+      const f = adopted
+        ? await adoptedFixture()
+        : baseline === "normal-preserved"
+          ? await preservedNormalFixture()
+          : await fixture();
       if (fault === "custody-substituted-before-open")
         await fs.chmod(f.oldApp, 0o700);
       const packet = path.join(f.r, "fault-fixture.json");
@@ -1232,9 +1416,11 @@ deps.native = async (request, lease, updater, register) => {
     return runReplacementNative(request, lease, updater, register);
   const helper = await fs.readFile(${JSON.stringify(helperFile)});
   const library = await fs.readFile(${JSON.stringify(libraryFile)});
-  if (sha(helper) !== "08212da5ae0b8b4a78692aea01acc9ea74c5148eb67b761475fcb765e1e59997" ||
-      sha(library) !== "be78ebefca9280329b766c0aee9dbfdd9adfdab2020f373df236441fdb476ec6")
+  if (sha(helper) !== "cb8278d91fbe8b67d0039a360a649b8c7eec4cf3b43ca5f375041a956880446d" ||
+      sha(library) !== "be78ebefca9280329b766c0aee9dbfdd9adfdab2020f373df236441fdb476ec6") {
+    process.send({ kind: "original-native-not-issued", reason: "fixture-attestation-mismatch" });
     throw Error("FIXTURE_HELPER_ATTESTATION_FAILED");
+  }
   const child = spawn("/usr/bin/python3", ["-I", "-S", "-B", "-"], {
     cwd: "/", env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" },
     stdio: ["pipe", "pipe", "pipe", "pipe", "ignore", "ignore", promotionLeaseDescriptor(lease), updater.fd, "pipe", "pipe"],
@@ -1280,7 +1466,8 @@ catch (error) { process.send({ kind: "replacement-failed", message: error.messag
         if (
           message.kind === "original-native-child-closed" ||
           message.kind === "original-placement-child-closed" ||
-          message.kind === "original-completion-child-closed"
+          message.kind === "original-completion-child-closed" ||
+          message.kind === "original-native-not-issued"
         )
           unconfirmedHelpers.delete(f.r);
       });
@@ -1454,6 +1641,7 @@ catch (error) { process.send({ kind: "replacement-failed", message: error.messag
               schema: 1,
               ownerPid: owner.child.pid,
               fault,
+              originalObservations: messages,
               originalNativeTerminal: "unknown",
             }) + "\n",
             { mode: 0o600, flag: "wx" },

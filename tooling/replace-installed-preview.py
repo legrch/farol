@@ -131,7 +131,7 @@ def exclusive(src, name, dst, target):
 
 def run(r):
     schema = r.get("schema")
-    if schema not in ("farol.installed-replacement-native/1", "farol.installed-replacement-native/2", "farol.installed-replacement-native/3") or r.get("action") not in ("custody", "complete", "initialize-clean-lock") or not re.fullmatch("[a-f0-9]{32}", r.get("operationId", "")):
+    if schema not in ("farol.installed-replacement-native/1", "farol.installed-replacement-native/2", "farol.installed-replacement-native/3", "farol.installed-replacement-native/4") or r.get("action") not in ("custody", "complete", "initialize-clean-lock") or not re.fullmatch("[a-f0-9]{32}", r.get("operationId", "")):
         raise RuntimeError("REPLACEMENT_INPUT_INVALID")
     if schema == "farol.installed-replacement-native/1":
         if "installLocation" in r or r.get("action") == "initialize-clean-lock":
@@ -140,6 +140,8 @@ def run(r):
         raise RuntimeError("REPLACEMENT_INPUT_INVALID")
     adopted = schema == "farol.installed-replacement-native/3"
     if adopted != (r.get("snapshot", {}).get("receiptKind") == "adopted") or adopted and r.get("action") == "initialize-clean-lock":
+        raise RuntimeError("REPLACEMENT_INPUT_INVALID")
+    if schema == "farol.installed-replacement-native/4" and (r.get("snapshot", {}).get("receiptKind") != "normal" or r.get("action") == "initialize-clean-lock"):
         raise RuntimeError("REPLACEMENT_INPUT_INVALID")
     opened = []
     def directory(target):
