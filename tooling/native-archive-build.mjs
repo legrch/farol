@@ -138,10 +138,16 @@ async function snapshotTree(root, maximumBytes = MAX_SDK_BYTES) {
   return { records, sha256: digest(serialized), total };
 }
 
-async function compiler() {
+async function compiler(selectedExecutable) {
   if (process.platform !== "darwin" || process.arch !== "arm64")
     refuse("NATIVE_ARCHIVE_COMPILER_PLATFORM_UNSUPPORTED");
-  const executable = await fs.realpath("/opt/homebrew/bin/go");
+  if (
+    typeof selectedExecutable !== "string" ||
+    !path.isAbsolute(selectedExecutable) ||
+    path.resolve(selectedExecutable) !== selectedExecutable
+  )
+    refuse("NATIVE_ARCHIVE_COMPILER_UNTRUSTED");
+  const executable = await fs.realpath(selectedExecutable);
   const sdk = path.dirname(path.dirname(executable));
   const binarySha256 =
     path.basename(executable) === "go" &&
@@ -245,8 +251,9 @@ export async function compileNativeArchive({
   root,
   readSource,
   check = false,
+  compilerExecutable = process.env.FAROL_TEST_GO ?? "/opt/homebrew/bin/go",
 }) {
-  const selected = await compiler();
+  const selected = await compiler(compilerExecutable);
   const moduleRoot = path.join(root, "resources/native/go");
   const files = [];
   async function collect(directory) {

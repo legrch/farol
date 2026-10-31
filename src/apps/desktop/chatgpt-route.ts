@@ -1727,6 +1727,7 @@ export class ChatGptRoute {
   private routeSession: Session | null = null;
   private load: "failed" | "loaded" = "failed";
   private routeDocumentLoadFailed = false;
+  private routeDocumentAwaitingCommit = false;
   private routeDocumentGeneration = 0;
   private disposing = false;
   private taskInFlight = false;
@@ -2624,6 +2625,7 @@ export class ChatGptRoute {
         })
       : this.createWindowSurface();
     this.routeDocumentLoadFailed = false;
+    this.routeDocumentAwaitingCommit = false;
     this.routeWindow = candidate;
     this.disposing = false;
     this.hardenContents(candidate.webContents, true);
@@ -2727,6 +2729,7 @@ export class ChatGptRoute {
               if (
                 this.ownsRouteContents(candidate.webContents) &&
                 !this.routeDocumentLoadFailed &&
+                !this.routeDocumentAwaitingCommit &&
                 allowedChatGptPageUrl(
                   candidate.webContents.getURL(),
                   this.options.e2eOrigin,
@@ -2744,7 +2747,7 @@ export class ChatGptRoute {
         ordinaryReady ? Promise.race([navigation, ordinaryReady]) : navigation,
         openDeadline,
       );
-      if (this.routeDocumentLoadFailed) {
+      if (this.routeDocumentLoadFailed || this.routeDocumentAwaitingCommit) {
         if (this.options.requireAppForManualMessages === true) candidate.hide();
         return { status: "unreachable" };
       }
@@ -2758,7 +2761,7 @@ export class ChatGptRoute {
         this.blockUnsafeManualSurface(candidate.webContents);
         return { status: "unreachable" };
       }
-      if (this.routeDocumentLoadFailed) {
+      if (this.routeDocumentLoadFailed || this.routeDocumentAwaitingCommit) {
         if (this.options.requireAppForManualMessages === true) candidate.hide();
         return { status: "unreachable" };
       }
@@ -3052,6 +3055,7 @@ export class ChatGptRoute {
       !this.opening &&
       !this.taskInFlight &&
       !this.updateAdmission &&
+      !this.routeDocumentAwaitingCommit &&
       !this.routeWindow?.webContents.isDestroyed()
     );
   }
@@ -3076,6 +3080,7 @@ export class ChatGptRoute {
       this.routeWindow === read.surface &&
       !read.surface.isDestroyed() &&
       this.routeDocumentGeneration === read.documentGeneration &&
+      !this.routeDocumentAwaitingCommit &&
       read.surface.webContents.getURL() === read.url &&
       this.load === "loaded"
     );
@@ -3103,7 +3108,7 @@ export class ChatGptRoute {
     if (!candidate || candidate.isDestroyed()) {
       return { observation: unreachable, reason: "no-window" };
     }
-    if (this.load === "failed") {
+    if (this.load === "failed" || this.routeDocumentAwaitingCommit) {
       return { observation: unreachable, reason: "load-failed" };
     }
     const currentUrl = candidate.webContents.getURL();
@@ -5417,7 +5422,17 @@ export class ChatGptRoute {
       };
       contents.on("did-redirect-navigation", trackNavigationUrl);
       contents.on("did-navigate", (_event, url) => {
-        if (this.ownsRouteContents(contents)) currentNavigationUrl = url;
+        if (
+          !this.ownsRouteContents(contents) ||
+          !allowed(url) ||
+          (currentNavigationUrl !== null && url !== currentNavigationUrl)
+        )
+          return;
+        currentNavigationUrl = url;
+        // Electron emits did-navigate only for a committed non-error page.
+        // Its commit supersedes failures from an earlier same-URL navigation.
+        this.routeDocumentLoadFailed = false;
+        this.routeDocumentAwaitingCommit = false;
       });
       contents.on("dom-ready", () => {
         // Ordinary browser readiness belongs to every committed document, not
@@ -5427,6 +5442,7 @@ export class ChatGptRoute {
           this.options.requireAppForManualMessages === true ||
           !this.ownsRouteContents(contents) ||
           this.routeDocumentLoadFailed ||
+          this.routeDocumentAwaitingCommit ||
           !allowed(contents.getURL()) ||
           this.load === "loaded"
         )
@@ -5445,7 +5461,10 @@ export class ChatGptRoute {
           // that commits or fails anyway is caught by did-navigate and
           // did-fail-load.
           if (!allowed(url)) return;
-          if (!inPlace) currentNavigationUrl = url;
+          if (!inPlace) {
+            currentNavigationUrl = url;
+            this.routeDocumentAwaitingCommit = true;
+          }
           this.routeDocumentGeneration += 1;
           if (!inPlace) this.chatPhysicalDocumentGeneration += 1;
           if (!inPlace) this.routeDocumentLoadFailed = false;
@@ -5460,6 +5479,9 @@ export class ChatGptRoute {
         "did-fail-load",
         (_event, code, _description, url, isMainFrame) => {
           if (isMainFrame && this.ownsRouteContents(contents)) {
+            // Cancellation does not describe the successor's document. This
+            // grants no readiness: a full navigation still needs its commit.
+            if (code === -3) return;
             // A cancelled earlier auth navigation can fail after its successor
             // has begun. It must not poison that successor's readiness.
             if (currentNavigationUrl !== null && url !== currentNavigationUrl)
@@ -5474,7 +5496,8 @@ export class ChatGptRoute {
       );
       contents.on("did-finish-load", () => {
         if (!this.ownsRouteContents(contents)) return;
-        if (this.routeDocumentLoadFailed) return;
+        if (this.routeDocumentLoadFailed || this.routeDocumentAwaitingCommit)
+          return;
         void (async () => {
           const gate =
             await this.installCurrentRouteAppSubmissionGate(contents);
@@ -5530,6 +5553,7 @@ export class ChatGptRoute {
       });
       contents.on("did-navigate-in-page", (_event, _url, isMainFrame) => {
         if (!isMainFrame || !this.ownsRouteContents(contents)) return;
+        if (!this.routeDocumentAwaitingCommit) currentNavigationUrl = _url;
         this.routeDocumentGeneration += 1;
         this.options.onLoadStateChanged?.(this.load);
         this.reportConversationUrl(contents);

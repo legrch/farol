@@ -5,6 +5,7 @@ package boot
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -668,9 +669,67 @@ func TestLiveHelperNativeApplyAfterElectronQuit(t *testing.T) {
 		t.Skip("explicit reviewed Electron required")
 	}
 	f := newLiveNativeFixture(t, true)
+	t.Cleanup(func() {
+		if f.pred != nil {
+			f.pred.stop(t)
+		}
+		data, err := os.ReadFile(filepath.Join(f.dir, "helper-pid.json"))
+		if errors.Is(err, os.ErrNotExist) {
+			return // No recorded spawn; the predecessor has been joined.
+		}
+		var identity struct {
+			PID   int    `json:"pid"`
+			Start string `json:"start"`
+		}
+		if err != nil || json.Unmarshal(data, &identity) != nil || identity.Start == "" {
+			t.Error("detached fixture helper identity unavailable; retain evidence")
+			return
+		}
+		probe, err := processprobe.New(identity.PID)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer func() {
+			if err := probe.Join(); err != nil {
+				t.Error(err)
+			}
+		}()
+		until := time.Now().Add(5 * time.Second)
+		stopped := false
+		for {
+			observed, err := probe.Observe(context.Background(), time.Now().Add(time.Second))
+			if err != nil {
+				t.Error("detached helper cleanup unconfirmed", err)
+				return
+			}
+			if observed.Presence == releaseport.ProcessAbsent {
+				return
+			}
+			if observed.Presence != releaseport.ProcessPresent || observed.Start != identity.Start {
+				t.Error("detached helper identity changed; refusing termination")
+				return
+			}
+			if time.Now().After(until) {
+				if stopped {
+					t.Error("detached helper termination unconfirmed")
+					return
+				}
+				// Only the original spawn and its matching start token qualify.
+				if err := syscall.Kill(identity.PID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+					t.Error(err)
+					return
+				}
+				t.Error("detached fixture helper required forced termination")
+				stopped = true
+				until = time.Now().Add(3 * time.Second)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
 	script := filepath.Join(f.dir, "electron-helper.cjs")
 	const source = `const {app}=require('electron');
-const fs=require('node:fs'); const path=require('node:path'); const {spawn}=require('node:child_process');
+const fs=require('node:fs'); const path=require('node:path'); const {spawn,execFileSync}=require('node:child_process');
 const root=process.argv[2]; app.setPath('userData',path.join(root,'electron-profile'));
 app.whenReady().then(()=>{app.dock?.hide(); let input='';
 process.stdin.setEncoding('utf8'); process.stdin.on('data',chunk=>{input+=chunk; if(!input.includes('\n')) return;
@@ -679,10 +738,13 @@ const out=fs.openSync(path.join(root,'terminal.json'),'wx',0o600);
 const err=fs.openSync(path.join(root,'stderr.log'),'wx',0o600);
 const child=spawn(plan.binary,['run-live-release-helper'],{cwd:'/',env:{PATH:'/usr/bin:/bin',LANG:'C.UTF-8'},detached:true,stdio:['ignore',out,err,'pipe','pipe']});
 fs.closeSync(out); fs.closeSync(err); child.unref();
+const identityFile=path.join(root,'helper-pid.json');
+fs.writeFileSync(identityFile,JSON.stringify({pid:child.pid,start:''}),{mode:0o600});
+const start=execFileSync('/bin/ps',['-p',String(child.pid),'-o','lstart='],{encoding:'utf8',env:{PATH:'/usr/bin:/bin',LANG:'C.UTF-8'}}).trim();
+fs.writeFileSync(identityFile,JSON.stringify({pid:child.pid,start}),{mode:0o600});
 child.stdio[3].end(JSON.stringify(plan.request)+'\n'); let ack='';
 child.stdio[4].on('data',chunk=>{ack+=chunk;}); child.stdio[4].on('end',()=>{
 fs.writeFileSync(path.join(root,'ack.json'),ack,{mode:0o600});
-fs.writeFileSync(path.join(root,'helper-pid.json'),JSON.stringify(child.pid),{mode:0o600});
 fs.writeFileSync(path.join(plan.state,'last-quit.json'),JSON.stringify({schema:1,at:new Date().toISOString(),drained:true,unconfirmed:[]}),{mode:0o600});
 fs.unlinkSync(path.join(plan.state,'running.json')); app.quit();});
 }); process.stdin.on('end',()=>app.quit());});`

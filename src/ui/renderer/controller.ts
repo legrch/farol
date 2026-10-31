@@ -2586,8 +2586,10 @@ export class WindowController implements RendererFacade {
           binding: exact ? evidence.binding : null,
         },
       });
-      if (exact && evidence.state === "authenticated")
+      if (exact && evidence.state === "authenticated") {
         this.confirmSetupSignIn();
+        this.completeConfirmedSetup();
+      }
       this.scheduleSavedSignInObservation();
     };
     // Host observation is bounded to two seconds. A lost IPC reply also expires;
@@ -2607,6 +2609,9 @@ export class WindowController implements RendererFacade {
   private reconcileSavedSignIn(): void {
     if (this.state.route === "loaded" && this.state.signInObservation === null)
       this.observeSignIn();
+    // Configuration refresh can publish the final receipt after the sign-in
+    // observation settled. Reevaluate the same one-shot completion predicate.
+    this.completeConfirmedSetup();
     this.scheduleSavedSignInObservation();
   }
   private resetSavedSignInObservation(): void {

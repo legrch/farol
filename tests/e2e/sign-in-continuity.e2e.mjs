@@ -374,6 +374,71 @@ try {
   report.explicitHostSignIn = "opened-once-on-retained-document";
   await observe("opened-wide", documentId, true);
   await screenshot("wide", documentId);
+  assert.equal(await page.locator(".sign-in-context").count(), 1);
+  assert.deepEqual(await page.evaluate(() => window.__continuityActions), []);
+  // Exercise a full local Next/Continue navigation on the retained embedded
+  // browser before any Back-to-Setup workaround. This is not Google MFA.
+  await application.evaluate(
+    ({ webContents }, id) =>
+      webContents
+        .fromId(id)
+        .executeJavaScript(
+          "document.querySelector('[data-testid=next-page-button]').click()",
+        ),
+    documentId,
+  );
+  const next = await poll(
+    () =>
+      application.evaluate(
+        async ({ webContents, BrowserWindow }, input) => {
+          const c = webContents.fromId(input.id);
+          const main = BrowserWindow.fromId(input.mainId);
+          return {
+            id: c.id,
+            ready: await c.executeJavaScript(
+              "Boolean(document.querySelector('[data-testid=next-page-ready]'))",
+            ),
+            attached: main.contentView.children.some(
+              (v) => v.webContents?.id === c.id && v.getVisible(),
+            ),
+          };
+        },
+        { id: documentId, mainId },
+      ),
+    (s) => s.ready && s.attached,
+    "SIGN_IN_NEXT_NOT_INTERACTIVE",
+  );
+  assert.equal(next.id, documentId);
+  await screenshot("next-before-return", documentId);
+  await application.evaluate(
+    ({ webContents }, id) =>
+      webContents
+        .fromId(id)
+        .executeJavaScript(
+          "document.querySelector('[data-testid=next-page-return]').click()",
+        ),
+    documentId,
+  );
+  const returned = await poll(
+    native,
+    (s) => s.documents.length === 1 && s.documents[0].id === documentId,
+    "SIGN_IN_NEXT_RETURN_LOST_DOCUMENT",
+  );
+  assert.equal(returned.documents[0].submits, 0);
+  assert.equal(await page.locator(".sign-in-context").count(), 1);
+  assert.deepEqual(await page.evaluate(() => window.__continuityActions), []);
+  report.checks.push("local-next-and-continue-without-setup-workaround");
+  // Next intentionally replaces the DOM in the same WebContents. Establish
+  // the next canary before testing Setup return/reopen preservation.
+  await application.evaluate(
+    ({ webContents }, { id, marker }) =>
+      webContents
+        .fromId(id)
+        .executeJavaScript(
+          "window.__continuityMarker = " + JSON.stringify(marker),
+        ),
+    { id: documentId, marker: attemptId },
+  );
   // The popup is an entirely local synthetic auth cancellation, with no login.
   await application.evaluate(
     ({ webContents }, id) =>
@@ -478,61 +543,11 @@ try {
     "single-shell-and-correct-native-bounds",
     "popup-cancellation-no-navigation-or-destruction",
     "explicit-return-to-signin",
-    "same-document-after-navigation",
+    "same-browser-after-setup-navigation",
     "search-detaches-native-input",
     "compact-controls-fit",
     "zero-submits",
   );
-  // Exercise a full local Next/Continue navigation on the retained embedded
-  // browser before any Back-to-Setup workaround. This is not Google MFA.
-  await application.evaluate(
-    ({ webContents }, id) =>
-      webContents
-        .fromId(id)
-        .executeJavaScript(
-          "document.querySelector('[data-testid=next-page-button]').click()",
-        ),
-    documentId,
-  );
-  const next = await poll(
-    () =>
-      application.evaluate(
-        async ({ webContents, BrowserWindow }, input) => {
-          const c = webContents.fromId(input.id);
-          const main = BrowserWindow.fromId(input.mainId);
-          return {
-            id: c.id,
-            ready: await c.executeJavaScript(
-              "Boolean(document.querySelector('[data-testid=next-page-ready]'))",
-            ),
-            attached: main.contentView.children.some(
-              (v) => v.webContents?.id === c.id && v.getVisible(),
-            ),
-          };
-        },
-        { id: documentId, mainId },
-      ),
-    (s) => s.ready && s.attached,
-    "SIGN_IN_NEXT_NOT_INTERACTIVE",
-  );
-  assert.equal(next.id, documentId);
-  await screenshot("next-before-return", documentId);
-  await application.evaluate(
-    ({ webContents }, id) =>
-      webContents
-        .fromId(id)
-        .executeJavaScript(
-          "document.querySelector('[data-testid=next-page-return]').click()",
-        ),
-    documentId,
-  );
-  const returned = await poll(
-    native,
-    (s) => s.documents.length === 1 && s.documents[0].id === documentId,
-    "SIGN_IN_NEXT_RETURN_LOST_DOCUMENT",
-  );
-  assert.equal(returned.documents[0].submits, 0);
-  report.checks.push("local-next-and-continue-without-setup-workaround");
   await close();
   assert.doesNotMatch(
     stderr,

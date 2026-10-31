@@ -6039,6 +6039,7 @@ describe("ChatGPT embedded task surface", () => {
     const nextUrl = "https://chatgpt.com/c/new-document";
     await surface.loadURL(nextUrl);
     contents.emit("did-start-navigation", {}, nextUrl, false, true);
+    contents.emit("did-navigate", {}, nextUrl);
     contents.emit("did-finish-load");
     await vi.waitFor(() =>
       expect(contents.executeJavaScript).toHaveBeenCalledTimes(2),
@@ -9106,6 +9107,7 @@ it.each([-3, -105])(
         auth,
         true,
       );
+      surface.webContents.emit("did-navigate", {}, currentUrl);
       surface.webContents.emit("dom-ready");
       expect((await candidate.observeSignInStatus()).state).toBe(
         "authenticated",
@@ -9123,6 +9125,125 @@ it.each([-3, -105])(
       );
       surface.webContents.emit("dom-ready");
       expect((await candidate.observeSignInStatus()).state).toBe("unknown");
+    } finally {
+      candidate.dispose();
+    }
+  },
+);
+
+it.each([-3, -105])(
+  "a committed same-URL successor supersedes earlier failure %s without reloading",
+  async (code) => {
+    const surface = embeddedSurface();
+    const url = "https://chatgpt.com/";
+    Object.assign(surface.webContents, {
+      getURL: () => url,
+      executeJavaScript: vi.fn(async () => ({
+        composerVisible: true,
+        signInVisible: false,
+      })),
+    });
+    const route = new ChatGptRoute({
+      homeUrl: url,
+      initialUrl: url,
+      e2eOrigin: null,
+      parent: () => null,
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+    });
+    try {
+      await route.preload();
+      surface.webContents.emit("did-start-navigation", {}, url, false, true);
+      surface.webContents.emit("did-start-navigation", {}, url, false, true);
+      surface.webContents.emit(
+        "did-fail-load",
+        {},
+        code,
+        "superseded",
+        url,
+        true,
+      );
+      surface.webContents.emit("dom-ready");
+      expect((await route.observeSignInStatus()).state).toBe("unknown");
+      surface.webContents.emit("did-navigate", {}, url);
+      surface.webContents.emit("dom-ready");
+      expect((await route.observeSignInStatus()).state).toBe("authenticated");
+      surface.webContents.emit(
+        "did-fail-load",
+        {},
+        -3,
+        "late cancellation",
+        url,
+        true,
+      );
+      expect((await route.observeSignInStatus()).state).toBe("authenticated");
+      surface.webContents.emit(
+        "did-fail-load",
+        {},
+        -105,
+        "current failure",
+        url,
+        true,
+      );
+      surface.webContents.emit("dom-ready");
+      expect((await route.observeSignInStatus()).state).toBe("unknown");
+      expect(surface.loadURL).toHaveBeenCalledTimes(1);
+    } finally {
+      route.dispose();
+    }
+  },
+);
+
+it.each([false, true])(
+  "does not observe the old DOM during a pending full navigation (same URL: %s)",
+  async (sameUrl) => {
+    const surface = embeddedSurface();
+    let currentUrl = "https://chatgpt.com/";
+    Object.assign(surface.webContents, {
+      getURL: () => currentUrl,
+      executeJavaScript: vi.fn(async () => ({
+        composerVisible: true,
+        signInVisible: false,
+      })),
+    });
+    const candidate = new ChatGptRoute({
+      homeUrl: currentUrl,
+      initialUrl: currentUrl,
+      e2eOrigin: null,
+      parent: () => null,
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+    });
+    try {
+      await candidate.preload();
+      const old = await candidate.observeSignInStatus();
+      expect(old.state).toBe("authenticated");
+      const destination = sameUrl
+        ? currentUrl
+        : "https://chatgpt.com/auth/login";
+      surface.webContents.emit(
+        "did-start-navigation",
+        {},
+        destination,
+        false,
+        true,
+      );
+      surface.webContents.emit("dom-ready");
+      surface.webContents.emit("did-finish-load");
+      await Promise.resolve();
+      expect(await candidate.observeSignInStatus()).toEqual({
+        state: "unknown",
+        binding: null,
+      });
+      expect(candidate.isCurrentSignInStatus(old)).toBe(false);
+      currentUrl = destination;
+      surface.webContents.emit("did-navigate", {}, destination);
+      surface.webContents.emit("dom-ready");
+      const fresh = await candidate.observeSignInStatus();
+      expect(fresh.state).toBe("authenticated");
+      expect(candidate.isCurrentSignInStatus(fresh)).toBe(true);
+      expect(fresh.binding?.documentGeneration).not.toBe(
+        old.binding?.documentGeneration,
+      );
+      expect(surface.loadURL).toHaveBeenCalledTimes(1);
     } finally {
       candidate.dispose();
     }

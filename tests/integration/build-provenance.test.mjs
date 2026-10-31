@@ -401,3 +401,29 @@ describe("F3-5 build provenance", () => {
     expect(commit).toMatch(/^[a-f0-9]{40}$/u);
   }, 120_000);
 });
+
+describe("explicit pinned native archive compiler", () => {
+  it.each(["relative/go", "/usr/bin/false"])(
+    "refuses untrusted compiler %s before reading build source",
+    async (compilerExecutable) => {
+      const { compileNativeArchive } =
+        await import("../../tooling/native-archive-build.mjs");
+      let reads = 0;
+      await expect(
+        compileNativeArchive({
+          root: vnextRoot,
+          compilerExecutable,
+          readSource: async () => {
+            reads++;
+            throw Error("must not read source");
+          },
+        }),
+      ).rejects.toThrow(
+        process.platform === "darwin" && process.arch === "arm64"
+          ? "NATIVE_ARCHIVE_COMPILER_UNTRUSTED"
+          : "NATIVE_ARCHIVE_COMPILER_PLATFORM_UNSUPPORTED",
+      );
+      expect(reads).toBe(0);
+    },
+  );
+});

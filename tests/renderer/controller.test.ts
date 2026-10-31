@@ -21,9 +21,14 @@ import { commandAllowed } from "../../src/ui/renderer/command-eligibility";
 import { ProductConfigurationCommandSchema } from "../../src/pkg/product-settings/contract";
 import type { ConnectorSetupReceipt } from "../../src/pkg/product-settings/connector-setup-receipt";
 
-it.each([false, true])(
-  "finishes all four confirmed setup steps once (lost completion reply: %s)",
-  async (lostReply) => {
+it.each([
+  [false, false],
+  [true, false],
+  [false, true],
+  [true, true],
+])(
+  "finishes all four confirmed setup steps once (lost completion reply: %s, delayed observation: %s)",
+  async (lostReply, delayedObservation) => {
     const f = fixture();
     const data = bootstrap();
     data.configuration.settings = readySettings(true);
@@ -33,9 +38,17 @@ it.each([false, true])(
       ...data,
       configuration: current,
     }));
+    let observations = 0;
+    let releaseObservation: (() => void) | undefined;
     vi.mocked(f.api.configure).mockImplementation(async (command) => {
-      if (command.kind === "chatgpt.observe-sign-in")
+      if (command.kind === "chatgpt.observe-sign-in") {
+        observations++;
+        if (delayedObservation && observations === 2)
+          await new Promise<void>((resolve) => {
+            releaseObservation = resolve;
+          });
         return signInReply(command, "authenticated", current);
+      }
       if (command.kind === "chatgpt.verify")
         return {
           ok: true,
@@ -60,6 +73,16 @@ it.each([false, true])(
     try {
       await c.start();
       f.emit("route", { state: "loaded" });
+      if (delayedObservation) {
+        await vi.waitFor(() =>
+          expect(releaseObservation).toBeTypeOf("function"),
+        );
+        expect(c.getSnapshot().signInObservation?.pending).toBe(true);
+        expect(
+          c.getSnapshot().intents["settings:setup.progress:"],
+        ).toBeUndefined();
+        releaseObservation!();
+      }
       await vi.waitFor(() =>
         expect(c.getSnapshot().intents["settings:setup.progress:"]?.state).toBe(
           lostReply ? "unknown" : "applied",
@@ -78,6 +101,87 @@ it.each([false, true])(
         snapshot.configuration?.status === "ready" &&
           snapshot.configuration.settings.setup.journey.dismissed,
       ).toBe(!lostReply);
+    } finally {
+      c.dispose();
+    }
+  },
+);
+
+it.each([false, true])(
+  "finishes Setup when a concurrent refresh supplies the final receipt (lost reply: %s)",
+  async (lostReply) => {
+    const f = fixture();
+    const data = bootstrap();
+    data.configuration.settings = readySettings();
+    const verified = readySettings(true);
+    verified.revision = data.configuration.settings.revision + 1;
+    const read = deferred<unknown>();
+    const check = deferred<unknown>();
+    let reads = 0;
+    vi.mocked(f.api.bootstrap).mockImplementation(() =>
+      ++reads === 1 ? Promise.resolve(data) : read.promise,
+    );
+    vi.mocked(f.api.configure).mockImplementation(async (command) => {
+      if (command.kind === "chatgpt.observe-sign-in")
+        return signInReply(command, "authenticated", {
+          status: "ready",
+          settings: data.configuration.settings,
+        });
+      if (command.kind === "chatgpt.verify") return check.promise;
+      if (command.kind === "setup.progress") {
+        if (lostReply) throw Error("completion acknowledgement lost");
+        const settings = structuredClone(verified);
+        settings.revision++;
+        settings.setup.journey.dismissed = true;
+        return { ok: true, snapshot: { status: "ready", settings } };
+      }
+      throw Error("unexpected command");
+    });
+    const c = new WindowController(f.api);
+    try {
+      await c.start();
+      f.emit("route", { state: "loaded" });
+      await vi.waitFor(() =>
+        expect(
+          vi
+            .mocked(f.api.configure)
+            .mock.calls.some(([v]) => v.kind === "chatgpt.verify"),
+        ).toBe(true),
+      );
+      const refresh = c.refresh();
+      check.resolve({
+        ok: true,
+        snapshot: { status: "ready", settings: verified },
+        evidence: {
+          kind: "chatgpt.readiness",
+          state: "authenticated",
+          code: null,
+        },
+      });
+      await vi.waitFor(() =>
+        expect(c.getSnapshot().intents["settings:chatgpt.verify:"]?.state).toBe(
+          "applied",
+        ),
+      );
+      expect(
+        c.getSnapshot().intents["settings:setup.progress:"],
+      ).toBeUndefined();
+      read.resolve({
+        ...data,
+        configuration: { status: "ready", settings: verified },
+      });
+      await refresh;
+      await vi.waitFor(() =>
+        expect(c.getSnapshot().intents["settings:setup.progress:"]?.state).toBe(
+          lostReply ? "unknown" : "applied",
+        ),
+      );
+      await c.refresh();
+      expect(
+        vi
+          .mocked(f.api.configure)
+          .mock.calls.filter(([v]) => v.kind === "setup.progress"),
+      ).toHaveLength(1);
     } finally {
       c.dispose();
     }
