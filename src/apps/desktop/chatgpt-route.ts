@@ -5424,10 +5424,14 @@ export class ChatGptRoute {
       contents.on("did-navigate", (_event, url) => {
         if (
           !this.ownsRouteContents(contents) ||
+          !allowed(url) ||
           (currentNavigationUrl !== null && url !== currentNavigationUrl)
         )
           return;
         currentNavigationUrl = url;
+        // Electron emits did-navigate only for a committed non-error page.
+        // Its commit supersedes failures from an earlier same-URL navigation.
+        this.routeDocumentLoadFailed = false;
         this.routeDocumentAwaitingCommit = false;
       });
       contents.on("dom-ready", () => {
@@ -5475,6 +5479,9 @@ export class ChatGptRoute {
         "did-fail-load",
         (_event, code, _description, url, isMainFrame) => {
           if (isMainFrame && this.ownsRouteContents(contents)) {
+            // Cancellation does not describe the successor's document. This
+            // grants no readiness: a full navigation still needs its commit.
+            if (code === -3) return;
             // A cancelled earlier auth navigation can fail after its successor
             // has begun. It must not poison that successor's readiness.
             if (currentNavigationUrl !== null && url !== currentNavigationUrl)

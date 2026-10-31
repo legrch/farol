@@ -9131,6 +9131,68 @@ it.each([-3, -105])(
   },
 );
 
+it.each([-3, -105])(
+  "a committed same-URL successor supersedes earlier failure %s without reloading",
+  async (code) => {
+    const surface = embeddedSurface();
+    const url = "https://chatgpt.com/";
+    Object.assign(surface.webContents, {
+      getURL: () => url,
+      executeJavaScript: vi.fn(async () => ({
+        composerVisible: true,
+        signInVisible: false,
+      })),
+    });
+    const route = new ChatGptRoute({
+      homeUrl: url,
+      initialUrl: url,
+      e2eOrigin: null,
+      parent: () => null,
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+    });
+    try {
+      await route.preload();
+      surface.webContents.emit("did-start-navigation", {}, url, false, true);
+      surface.webContents.emit("did-start-navigation", {}, url, false, true);
+      surface.webContents.emit(
+        "did-fail-load",
+        {},
+        code,
+        "superseded",
+        url,
+        true,
+      );
+      surface.webContents.emit("dom-ready");
+      expect((await route.observeSignInStatus()).state).toBe("unknown");
+      surface.webContents.emit("did-navigate", {}, url);
+      surface.webContents.emit("dom-ready");
+      expect((await route.observeSignInStatus()).state).toBe("authenticated");
+      surface.webContents.emit(
+        "did-fail-load",
+        {},
+        -3,
+        "late cancellation",
+        url,
+        true,
+      );
+      expect((await route.observeSignInStatus()).state).toBe("authenticated");
+      surface.webContents.emit(
+        "did-fail-load",
+        {},
+        -105,
+        "current failure",
+        url,
+        true,
+      );
+      surface.webContents.emit("dom-ready");
+      expect((await route.observeSignInStatus()).state).toBe("unknown");
+      expect(surface.loadURL).toHaveBeenCalledTimes(1);
+    } finally {
+      route.dispose();
+    }
+  },
+);
+
 it.each([false, true])(
   "does not observe the old DOM during a pending full navigation (same URL: %s)",
   async (sameUrl) => {

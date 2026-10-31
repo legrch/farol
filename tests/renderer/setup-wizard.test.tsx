@@ -259,7 +259,7 @@ describe("linear Setup", () => {
       }
     },
   );
-  it("all four checks without finishing Setup still open Welcome", async () => {
+  it("finishes confirmed Setup automatically and reopens the configured page", async () => {
     const f = fixture();
     const data = bootstrap();
     const configuration = {
@@ -269,8 +269,13 @@ describe("linear Setup", () => {
     configuration.settings.general.openAtLaunch = "activity";
     data.configuration = configuration;
     vi.mocked(f.api.bootstrap).mockResolvedValue(data);
-    vi.mocked(f.api.configure).mockImplementation(async (command) =>
-      command.kind === "chatgpt.observe-sign-in"
+    vi.mocked(f.api.configure).mockImplementation(async (command) => {
+      if (command.kind === "setup.progress") {
+        configuration.settings.revision++;
+        configuration.settings.setup.journey.dismissed = command.dismissed;
+        return { ok: true, snapshot: configuration };
+      }
+      return command.kind === "chatgpt.observe-sign-in"
         ? signInReply(command, "authenticated", configuration)
         : {
             ok: true,
@@ -280,8 +285,8 @@ describe("linear Setup", () => {
               state: "authenticated",
               code: null,
             },
-          },
-    );
+          };
+    });
     const c = new WindowController(f.api);
     await c.start();
     c.navigate({ area: "setup", setupStep: "signin" });
@@ -289,17 +294,23 @@ describe("linear Setup", () => {
       expect(c.getSnapshot().signInObservation?.state).toBe("authenticated"),
     );
     await c.configure({ kind: "chatgpt.verify" }, "settings:chatgpt.verify:");
-    expect(setupChecklist(c.getSnapshot()).ready).toBe(true);
+    await vi.waitFor(() =>
+      expect(configuration.settings.setup.journey.dismissed).toBe(true),
+    );
+    expect(
+      vi
+        .mocked(f.api.configure)
+        .mock.calls.filter(([v]) => v.kind === "setup.progress"),
+    ).toHaveLength(1);
     c.dispose();
 
     const restarted = new WindowController(f.api);
     await restarted.start();
     expect(restarted.getSnapshot().destination).toMatchObject({
-      area: "setup",
-      setupStep: "overview",
+      area: "activity",
     });
     expect(computerSetup(restarted.getSnapshot()).ready).toBe(true);
-    expect(data.configuration.settings.setup.journey.dismissed).toBe(false);
+    expect(data.configuration.settings.setup.journey.dismissed).toBe(true);
     restarted.dispose();
   });
 
@@ -1009,11 +1020,13 @@ describe("always-open Setup instructions", () => {
       ready.connectors.secureMcp.runtime!.runtimeGeneration = "e".repeat(64);
       ready.connectors.secureMcp.attachment!.runtimeGeneration = "e".repeat(64);
       ready.setup.connect.verified!.runtimeGeneration = "e".repeat(64);
+      // The existing confirmed setup was already completed before renaming.
+      ready.setup.journey.dismissed = true;
       return { ok: true, snapshot: { status: "ready", settings: ready } };
     });
     await h.click("Test in ChatGPT");
     await h.navigate("attachment");
-    expect(h.button("Start using Farol")?.disabled).toBe(false);
+    expect(h.button("Back to Home")?.disabled).toBe(false);
     expect(h.host.textContent).toContain("✓ Everything works");
   });
 

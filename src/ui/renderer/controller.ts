@@ -2609,6 +2609,9 @@ export class WindowController implements RendererFacade {
   private reconcileSavedSignIn(): void {
     if (this.state.route === "loaded" && this.state.signInObservation === null)
       this.observeSignIn();
+    // Configuration refresh can publish the final receipt after the sign-in
+    // observation settled. Reevaluate the same one-shot completion predicate.
+    this.completeConfirmedSetup();
     this.scheduleSavedSignInObservation();
   }
   private resetSavedSignInObservation(): void {
