@@ -21,9 +21,14 @@ import { commandAllowed } from "../../src/ui/renderer/command-eligibility";
 import { ProductConfigurationCommandSchema } from "../../src/pkg/product-settings/contract";
 import type { ConnectorSetupReceipt } from "../../src/pkg/product-settings/connector-setup-receipt";
 
-it.each([false, true])(
-  "finishes all four confirmed setup steps once (lost completion reply: %s)",
-  async (lostReply) => {
+it.each([
+  [false, false],
+  [true, false],
+  [false, true],
+  [true, true],
+])(
+  "finishes all four confirmed setup steps once (lost completion reply: %s, delayed observation: %s)",
+  async (lostReply, delayedObservation) => {
     const f = fixture();
     const data = bootstrap();
     data.configuration.settings = readySettings(true);
@@ -33,9 +38,17 @@ it.each([false, true])(
       ...data,
       configuration: current,
     }));
+    let observations = 0;
+    let releaseObservation: (() => void) | undefined;
     vi.mocked(f.api.configure).mockImplementation(async (command) => {
-      if (command.kind === "chatgpt.observe-sign-in")
+      if (command.kind === "chatgpt.observe-sign-in") {
+        observations++;
+        if (delayedObservation && observations === 2)
+          await new Promise<void>((resolve) => {
+            releaseObservation = resolve;
+          });
         return signInReply(command, "authenticated", current);
+      }
       if (command.kind === "chatgpt.verify")
         return {
           ok: true,
@@ -60,6 +73,16 @@ it.each([false, true])(
     try {
       await c.start();
       f.emit("route", { state: "loaded" });
+      if (delayedObservation) {
+        await vi.waitFor(() =>
+          expect(releaseObservation).toBeTypeOf("function"),
+        );
+        expect(c.getSnapshot().signInObservation?.pending).toBe(true);
+        expect(
+          c.getSnapshot().intents["settings:setup.progress:"],
+        ).toBeUndefined();
+        releaseObservation!();
+      }
       await vi.waitFor(() =>
         expect(c.getSnapshot().intents["settings:setup.progress:"]?.state).toBe(
           lostReply ? "unknown" : "applied",

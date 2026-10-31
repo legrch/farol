@@ -2586,8 +2586,10 @@ export class WindowController implements RendererFacade {
           binding: exact ? evidence.binding : null,
         },
       });
-      if (exact && evidence.state === "authenticated")
+      if (exact && evidence.state === "authenticated") {
         this.confirmSetupSignIn();
+        this.completeConfirmedSetup();
+      }
       this.scheduleSavedSignInObservation();
     };
     // Host observation is bounded to two seconds. A lost IPC reply also expires;
