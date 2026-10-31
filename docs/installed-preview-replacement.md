@@ -23,9 +23,10 @@ external process that ignores the lease.
 
 ## Required producer contract
 
-The owner maintenance entry uses the fixed trusted home `/Users/ac`,
-canonical app `/Users/ac/Applications/Farol.app`, normal receipt
-`Farol.app.receipt.json`, and runtime-owned updater root
+The owner maintenance entry uses the fixed trusted home `/Users/ac` and only
+`~/Applications/Farol.app` or `/Applications/Farol.app`, as selected below. It
+pins the original normal receipt or an authenticated adopted baseline, and the
+runtime-owned updater root
 `<userData>/installed-updates`. Browser, authentication and other profile state
 remain in place. A plan must perform no writes, lease acquisition or placement.
 Apply must be an explicit, exact one-shot selection; unknown effects cannot be
@@ -36,8 +37,9 @@ fresh source/package verification, genuine activation drain, expected normal
 receipt and updater metadata snapshots, and app/backend/connector/helper process
 proof. A completed-looking journal or diagnostic lease record is not terminal
 proof. Helper processes must be correlated through the existing operation,
-helper process-start and lease structures. Unknown or unexpected records refuse
-the operation.
+helper process-start and lease structures. Unexpected or malformed records refuse
+the operation. Only explicit preservation selections may retain incomplete
+historical record pairs without reconciling their UNKNOWN outcomes.
 
 Publish and fsync a private mode-0600 non-overwriting intent in the fixed slot,
 then read it back under pinned directory identities. Custody must use private
@@ -89,21 +91,40 @@ repair receipts or journals are refused and require their owning reconciliation.
 
 Use `node tooling/replace-installed-preview.mjs --selection /absolute/selection.json
 --selection-sha <sha256>` for plan-only, adding `--apply` only for an explicit
-production step. Selection is a private regular file with schema
-`farol.installed-replacement-selection/1`, exact `sourceCommit`, a fresh
-32-character hexadecimal `operationId`, `snapshot`, and `helpers` (exact PID and
-process-start pairs). `snapshotInstalledReplacement(home)` defines the snapshot
-shape for the parent: app/receipt digests and inodes, build metadata, pinned
-directory/lock identities, root and immediate child metadata, and exact JSON
-record digests. Archive and stage contents are not scanned. The CLI has no home,
-candidate, process, helper or force overrides. Module-only seams are fixtures.
+production step. Selection is a private regular file. Every schema requires
+an exact candidate `sourceCommit`, a fresh 32-character hexadecimal `operationId`,
+`snapshot`, and `helpers` (exact PID and process-start pairs).
+
+| Selection schema suffix | Installation and baseline                                                             | Additional fields and snapshot                                                                                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/1`                    | Frozen normal receipt in `~/Applications`                                             | `snapshotInstalledReplacement(home)`                                                                                                                                  |
+| `/2`                    | Normal receipt in explicitly selected `legacy` or `shared` location                   | `installLocation`; `snapshotInstalledReplacement(home, location)`                                                                                                     |
+| `/3`                    | Authenticated adopted baseline; normal receipt must be absent                         | `installLocation`, `baseline: "adopted"`, `preserveUnconfirmedUpdates: true`, physical `candidateRoot`; `snapshotInstalledReplacement(home, location, "adopted")`     |
+| `/4`                    | Authenticated normal receipt, with explicit preservation of incomplete update history | `installLocation`, `baseline: "normal"`, `preserveUnconfirmedUpdates: true`, physical `candidateRoot`; `snapshotInstalledReplacement(home, location, "normal", true)` |
+
+Each full schema starts with `farol.installed-replacement-selection`. `legacy`
+selects only `~/Applications/Farol.app`; `shared` selects only
+`/Applications/Farol.app`. Versions 3 and 4 require clean committed maintenance
+source and authenticate the separately selected candidate checkout, artifact and
+package. They preserve every original updater byte and UNKNOWN, without claiming
+historical completion. Versions 1 and 2 retain their incomplete-record refusal.
+See [incident response](installed-incident-response.md#explicit-preservation-of-a-normal-installations-incomplete-update-history)
+for the normal-history preservation boundary.
+
+Snapshots bind app/receipt digests and inodes, build metadata, pinned directory
+and lock identities, immediate child metadata, and JSON record digests. Archive
+and stage contents are not scanned. No command-line override bypasses home,
+package/source qualification, process absence, selected helpers or native guards.
+Module-only dependency seams are fixtures.
 Plan and apply reject serialized intent of 64 KiB or more before marking effects
 started or creating a native effect child; the check counts UTF-8 bytes against
 the native record reader's cap.
 
-Custody is `/Users/ac/Applications/.farol-replacement-<operationId>`. A completed
-operation retains `previous.app`, `previous.receipt.json`, the entire
-`installed-updates`, intent and completion records there. No rollback or replay
+Custody is `.farol-replacement-<operationId>` in the selected Applications
+directory. A completed operation retains `previous.app`, the entire
+`installed-updates`, intent and completion records there. Normal baselines retain
+`previous.receipt.json`; an adopted baseline stays inside its original updater
+namespace and no old normal receipt is fabricated. No rollback or replay
 entry is provided. The candidate must be clean exact schema 7, with increasing
 release and build versions. The new receipt is the ordinary promotion schema.
 
