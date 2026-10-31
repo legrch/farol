@@ -174,7 +174,7 @@ func TestNativeFreshShellChild(t *testing.T) {
 	support := nativeprocess.RootScopedPlatformSupport{ReleaseID: "native-fixture-not-release", QualificationSHA256: sourceSHA, CompilerSHA256: sourceSHA,
 		OS: "darwin", OSBuild: build, Architecture: runtime.GOARCH, Compiler: "approved-roots-seatbelt-v1", FilesystemClass: "system-apfs-kernel-mount-boundaries-v1", HostTrust: "protected-host-pathnames-v1",
 		Backend: pin(self), Watchdog: watchdog, Mechanism: pin("/usr/bin/sandbox-exec"), WatchdogSourceSHA256: sourceSHA,
-		Imports: []nativeprocess.ExecutablePin{pin("/System/Library/Sandbox/Profiles/dyld-support.sb")}, Executables: []nativeprocess.ExecutablePin{pin("/bin/bash"), pin("/bin/sleep")},
+		Imports: []nativeprocess.ExecutablePin{pin("/System/Library/Sandbox/Profiles/dyld-support.sb")}, Executables: []nativeprocess.ExecutablePin{pin("/bin/bash"), pin("/bin/sleep"), pin("/bin/rm")},
 		ProtectedBundle: &nativeprocess.ProtectedBundle{Path: f.Bundle, Identity: authority.RootIdentity{Device: fmt.Sprint(st.Dev), Inode: fmt.Sprint(st.Ino)}}}
 	f.Launch.HostLifetimeID, f.Launch.ChildLaunchID = fmt.Sprintf("shell-host-%d", f.Generation), fmt.Sprintf("shell-child-%d", f.Generation)
 	f.Launch.shell = &connectorShellConfig{runtimeID: f.Launch.ChildLaunchID, home: f.Launch.Home, support: support, watchdog: nativeprocess.WatchdogSelection{Executable: watchdog, Source: []byte(f.Source), SourceSHA256: sourceSHA}}
@@ -230,7 +230,13 @@ func TestNativeFreshShellChild(t *testing.T) {
 	peer := openNativeMutationPeer(t, r, *publication, strconv.Itoa(generation))
 	checkNativeSelfTestShell(t, r, f.Generation)
 	op := fmt.Sprintf("00000000-0000-4000-8000-%012d", f.Generation+100)
+	outside := filepath.Join(f.Launch.Home, "outside-shell-workspace.txt")
+	if err := os.WriteFile(outside, []byte("must remain"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	command := fmt.Sprintf("printf native > shell-%d.txt", f.Generation)
+	command += "; printf temporary > remove-me.txt && rm remove-me.txt && test ! -e remove-me.txt"
+	command += fmt.Sprintf("; if /bin/rm -- %q 2>/dev/null; then exit 19; fi", outside)
 	if f.Generation == 2 {
 		command += "; /bin/sleep 8 &"
 	}
@@ -269,6 +275,12 @@ func TestNativeFreshShellChild(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(f.Workspace, fmt.Sprintf("shell-%d.txt", f.Generation)))
 	if err != nil || string(data) != "native" {
 		t.Fatal("actual Shell write absent", err)
+	}
+	if _, err := os.Lstat(filepath.Join(f.Workspace, "remove-me.txt")); !os.IsNotExist(err) {
+		t.Fatal("approved temporary file was not removed", err)
+	}
+	if data, err := os.ReadFile(outside); err != nil || string(data) != "must remain" {
+		t.Fatal("Shell escaped its approved workspace", err)
 	}
 	if err := peer.stream.Close(); err != nil {
 		t.Fatal(err)

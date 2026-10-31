@@ -185,6 +185,13 @@ func validPlatformSupport(s RootScopedPlatformSupport) bool {
 	return dyld != ""
 }
 
+// macOS ships rm and unlink as two names for one root-owned system image.
+// Only that fixed physical path admits two links; content pins, protected parents
+// and unchanged inode/metadata checks still apply at qualification and dispatch.
+func platformExecutableLinksAllowed(path string, uid uint32, links uint64) bool {
+	return links == 1 || path == "/bin/rm" && uid == 0 && links == 2
+}
+
 func platformPins(s RootScopedPlatformSupport) []ExecutablePin {
 	return slices.Concat([]ExecutablePin{s.Backend, s.Watchdog, s.Mechanism}, s.Imports, s.Executables)
 }
@@ -225,7 +232,7 @@ func (s *RootScopedPlatformStrategy) observe(ctx context.Context) ([]platformFil
 		ownerAllowed := actual.uid == 0 || (!system && actual.uid == s.frozen.ownerUID)
 		if err != nil || actual.path != pin.Path || actual.sha256 != pin.SHA256 ||
 			!actual.mode.IsRegular() || actual.mode&os.ModeSymlink != 0 || !ownerAllowed ||
-			actual.mode.Perm()&0022 != 0 || actual.links != 1 || actual.size <= 0 || actual.size > 128*1024*1024 ||
+			actual.mode.Perm()&0022 != 0 || !platformExecutableLinksAllowed(pin.Path, actual.uid, actual.links) || actual.size <= 0 || actual.size > 128*1024*1024 ||
 			actual.identity.Device == "" || actual.identity.Inode == "" || (!imported && actual.mode.Perm()&0111 == 0) {
 			return refuse()
 		}

@@ -444,3 +444,18 @@ func TestRetainedInstalledRuntimeCannotRefreshOrRenewPreparation(t *testing.T) {
 		})
 	}
 }
+
+func TestRetainedSystemRmHardlinksStillRejectDrift(t *testing.T) {
+	m, pin, file, _ := retainedImageFixture(t)
+	pin.selected.Path = "/bin/rm"
+	file.info.stat.Uid = 0
+	file.info.stat.Nlink = 2
+	pin.original = file.info
+	if err := m.Recheck(context.Background()); err != nil {
+		t.Fatal("pinned system pair refused", err)
+	}
+	file.info.stat.Nlink = 1
+	if err := m.Recheck(context.Background()); err == nil {
+		t.Fatal("changed system link count accepted")
+	}
+}

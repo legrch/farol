@@ -603,3 +603,41 @@ func TestRootScopedPlatformRevalidatesDriftAndDirectoryClass(t *testing.T) {
 		t.Fatal("nil clock accepted")
 	}
 }
+
+func TestRootScopedPlatformSystemRmHardlinkBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		path  string
+		uid   uint32
+		links uint64
+		want  bool
+	}{
+		{"system-rm-pair", "/bin/rm", 0, 2, true},
+		{"system-single", "/bin/rm", 0, 1, true},
+		{"extra-alias", "/bin/rm", 0, 3, false},
+		{"owner-linked", "/bin/rm", 501, 2, false},
+		{"other-system", "/bin/bash", 0, 2, false},
+		{"owner-alias", "/Users/owner/rm", 0, 2, false},
+		{"unlinked", "/bin/rm", 0, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := platformExecutableLinksAllowed(tc.path, tc.uid, tc.links); got != tc.want {
+				t.Fatal("unexpected link admission", got)
+			}
+		})
+	}
+	f := platformFixtureCPU(t)
+	rm := ExecutablePin{"/bin/rm", strings.Repeat("b", 64)}
+	f.descriptor.Executables = append(f.descriptor.Executables, rm)
+	f.facts.files[rm.Path] = platformFileFacts{identity: authority.RootIdentity{Device: "1", Inode: "rm"}, size: 4096, path: rm.Path, sha256: rm.SHA256, mode: 0555, uid: 0, links: 2}
+	s, err := newRootScopedPlatformStrategy(context.Background(), f.descriptor, f.clock, f.facts)
+	if err != nil {
+		t.Fatal("pinned system pair refused", err)
+	}
+	changed := f.facts.files[rm.Path]
+	changed.links = 1
+	f.facts.files[rm.Path] = changed
+	if s.inspect(context.Background()) == nil {
+		t.Fatal("link count drift accepted")
+	}
+}

@@ -139,7 +139,7 @@ func platformMeasuredFile(ctx context.Context, path string, minimum, maximum int
 		return refuse()
 	}
 	stat, ok := before.Sys().(*syscall.Stat_t)
-	if !ok || (stat.Uid != 0 && stat.Uid != uint32(os.Geteuid())) || stat.Nlink != 1 || before.Mode().Perm()&0022 != 0 {
+	if !ok || (stat.Uid != 0 && stat.Uid != uint32(os.Geteuid())) || !platformExecutableLinksAllowed(path, stat.Uid, uint64(stat.Nlink)) || before.Mode().Perm()&0022 != 0 {
 		return refuse()
 	}
 	hash := sha256.New()

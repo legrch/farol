@@ -95,7 +95,7 @@ func (p *darwinExecutableMeasurement) unchanged(info os.FileInfo) bool {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	original, originalOK := p.original.Sys().(*syscall.Stat_t)
 	return ok && originalOK && stat.Dev == original.Dev && stat.Ino == original.Ino &&
-		stat.Nlink == 1 && stat.Uid == original.Uid &&
+		stat.Nlink == original.Nlink && platformExecutableLinksAllowed(p.selected.Path, stat.Uid, uint64(stat.Nlink)) && stat.Uid == original.Uid &&
 		(stat.Uid == 0 || (!p.dataOnly && int(stat.Uid) == p.ownerUID)) &&
 		(!p.dataOnly || stat.Gid == original.Gid && stat.Ctimespec == original.Ctimespec)
 }

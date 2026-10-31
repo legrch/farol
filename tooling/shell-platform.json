@@ -1,6 +1,6 @@
 {
   "schema": "farol-shell-platform/1",
-  "id": "macos-26A434-arm64-installed-runtime-v17",
+  "id": "macos-26A434-arm64-installed-runtime-v18",
   "osBuild": "26A434",
   "compiler": "approved-roots-seatbelt-v1",
   "filesystemClass": "system-apfs-kernel-mount-boundaries-v1",
@@ -81,7 +81,7 @@
     },
     {
       "path": "modules/computer/infra/process/measuredarwin.go",
-      "sha256": "9860c4a5e5e97ea8ff345bb484f1f8f9ba5c3a27398773be61b5ab25e45d32c2"
+      "sha256": "2b636658b69e40c40fc80794eb5d1c6cf6e17dab5c9f1213f267140292414393"
     },
     {
       "path": "modules/computer/infra/process/measurement.go",
@@ -121,11 +121,11 @@
     },
     {
       "path": "modules/computer/infra/process/platformqualification.go",
-      "sha256": "9adb4948c93596520b09e080731212a3a9ece61253c513b7931aa71323b0be8a"
+      "sha256": "47bc37fa81ff1e0231a7c6abb5c30848fc58d2df2c725d8934596041672bc33b"
     },
     {
       "path": "modules/computer/infra/process/platformqualificationdarwin.go",
-      "sha256": "a0b95e5b1464d22b10290ffc2f591a83d24cb217a9a7014af198acb803065123"
+      "sha256": "985795e8bd82db90429134bf3ed7f67cbfc3888878c134749ae13daa44b9090a"
     },
     {
       "path": "modules/computer/infra/process/platformqualificationother.go",
@@ -173,7 +173,7 @@
     },
     {
       "path": "modules/computer/infra/process/spawn.go",
-      "sha256": "424f6306f9cf7a9659fb8adbbbe71fa0f6fcb0670762a2f02c36e1986fe1ca57"
+      "sha256": "75d20b71f607ae83a119a5f2de65c747d4e6c1e6e82edbda1b2856810855f45f"
     },
     {
       "path": "modules/computer/infra/process/unsupported.go",
@@ -235,6 +235,10 @@
     {
       "path": "/usr/bin/env",
       "sha256": "2b2a1145527f00e8369fda0d2ffc523b520201bb08dbaf4b0bded837f7652ce0"
+    },
+    {
+      "path": "/bin/rm",
+      "sha256": "a28fd10330466ee02c66cdbc4e2b0af23c236b773b1a8a3b210ff9613d9319d8"
     }
   ],
   "watchdogSHA256": "ad321e34b2795d1910ff1a24f2b4249269f556dc7184ea64f353a851339f1582",

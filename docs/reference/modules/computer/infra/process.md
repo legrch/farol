@@ -49,6 +49,17 @@ exclusion; the ACL matrix, protected-state test, installed Git hook journey,
 and fresh Shell Quit/reopen fixture also passed. This is native candidate
 evidence, not package, installed, live-provider or descendant-cleanup acceptance.
 
+Platform record `macos-26A434-arm64-installed-runtime-v18` adds the pinned
+system `/bin/rm` image. macOS ships it with two hard links; only this fixed
+root-owned path admits exactly two links. All other multi-link images remain
+refused. Qualification and dispatch still verify content, protected parents,
+owner, modes, named inode and the original link count. The native process suite
+passed on build `26A434` arm64 with the same documented legacy credential-alias
+exclusion. The fresh Shell fixture passed across two ordinary Quit/reopen
+lifetimes, removed its own workspace file, and confirmed that a sibling outside
+the workspace remained unchanged. These are disposable native witnesses,
+not installed application or live-provider acceptance.
+
 Source registration is not release qualification. Disposable packaged MCP checks
 cover bounded Bash, synthetic Git and observation of an original result after
 MCP reconnect. Ordinary Git configuration/hooks, external Shell, cancellation and

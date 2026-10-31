@@ -83,7 +83,7 @@ func pinnedExecutable(pin ExecutablePin) (*os.File, error) {
 		return refuse()
 	}
 	identity, ok := before.Sys().(*syscall.Stat_t)
-	if !ok || identity.Nlink != 1 || (identity.Uid != 0 && int(identity.Uid) != os.Geteuid()) {
+	if !ok || !platformExecutableLinksAllowed(pin.Path, identity.Uid, uint64(identity.Nlink)) || (identity.Uid != 0 && int(identity.Uid) != os.Geteuid()) {
 		return refuse()
 	}
 	hash := sha256.New()
@@ -93,6 +93,12 @@ func pinnedExecutable(pin ExecutablePin) (*os.File, error) {
 	after, err := file.Stat()
 	named, namedErr := os.Lstat(pin.Path)
 	if err != nil || namedErr != nil || !os.SameFile(before, after) || !os.SameFile(after, named) || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) || named.Mode()&os.ModeSymlink != 0 {
+		return refuse()
+	}
+	afterIdentity, afterOK := after.Sys().(*syscall.Stat_t)
+	namedIdentity, namedOK := named.Sys().(*syscall.Stat_t)
+	if !afterOK || !namedOK || afterIdentity.Nlink != identity.Nlink || namedIdentity.Nlink != identity.Nlink ||
+		afterIdentity.Uid != identity.Uid || namedIdentity.Uid != identity.Uid || after.Mode() != before.Mode() || named.Mode() != before.Mode() {
 		return refuse()
 	}
 	return file, nil
