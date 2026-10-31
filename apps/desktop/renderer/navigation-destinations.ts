@@ -16,6 +16,8 @@ export const navigationAreas = [
   "settings",
 ] as const;
 export const sheets = [
+  "connection-tests",
+  "deep-test",
   "chat-conversations",
   "search",
   "task",
