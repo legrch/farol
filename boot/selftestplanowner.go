@@ -6,6 +6,7 @@ import (
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	mutationct "github.com/legrch/farol/modules/computer/contracts/mutation"
+	workspacect "github.com/legrch/farol/modules/computer/contracts/workspace"
 	state "github.com/legrch/farol/modules/computer/domain/mutation"
 )
 
@@ -99,6 +100,13 @@ func selfTestFailure(name, operation string, err error) selfTestStep {
 		if f.Retry == "never" && f.Code != "WORKSPACE_MUTATION_OUTCOME_UNKNOWN" {
 			step.Status = "fail"
 		}
+		return step
+	}
+	var workspace *workspacect.Failure
+	if errors.As(err, &workspace) && workspace != nil {
+		// This error also covers missing custody after a possible effect. Keep
+		// UNKNOWN, including cold child records absent from the in-memory ledger.
+		step.Code = workspace.Code
 	}
 	return step
 }

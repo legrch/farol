@@ -64,6 +64,35 @@ A failed notice acknowledgement or uncertain idle observation must not alone
 prevent a separately authorized manual update; integrity and process ownership
 checks remain effective.
 
+### Missing helper terminal after Quit
+
+Preserve the original helper identity, phase log and physical application pair
+before reopening the predecessor. A later startup classification of `rolled_back`
+does not prove that the original helper swapped the pair or completed rollback.
+Missing original terminal evidence remains unobserved. It does not override the
+existing startup owner's separate qualification of exact installed content and
+helper exit. A later deliberate action still needs its ordinary admission; it
+must not reopen the historical operation or repeat an uncertain launch.
+
+The `rejection_opened` phase followed by an absent `journal.json` does not locate
+the interruption strictly before `Prepare`. Tree verification repeats before the
+first journal CAS, which creates and syncs `.journal-*` before publishing the
+journal. Record any temporary entries without removing or completing them.
+
+Use a separate disposable diagnostic to observe the original child exit status
+and stderr outside the desktop's lifetime. A successful detached-helper test,
+including one launched by a visible Electron application, does not qualify the
+shared `/Applications` slot, ordinary installed updater or automatic relaunch.
+Do not repeat the uncertain update to obtain missing diagnostics.
+
+The explicit `FAROL_SHARED_READONLY_NATIVE=1` boot probes read the canonical
+shared application with pinned `FAROL_TEST_SHARED_SOURCE_DIGEST` and a selected
+`FAROL_TEST_TARGET_PACKAGE`. All home-bound state and locks are disposable. One
+case denies every journal CAS; another allows only the first private `prepared`
+CAS. Both deny every shared namespace effect and expose no relaunch capability.
+Expected injected uncertainty is not an OTA success. The probes read back the
+shared app identity and full digest and join their own native cleanup.
+
 ## Evidence and follow-up
 
 The recovery backend separates stored archive observations from Computer
