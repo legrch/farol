@@ -477,6 +477,7 @@ export class WindowController implements RendererFacade {
   private signInCounter = 0;
   private readonly automaticSignInChecks = new Set<string>();
   private readonly automaticSetupCompletions = new Set<string>();
+  private readonly refusedAutomaticSetupProofs = new Map<string, string>();
   private automaticSignInRequested = false;
   private signInTimer: ReturnType<typeof setTimeout> | null = null;
   private savedSignInReadTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2732,13 +2733,30 @@ export class WindowController implements RendererFacade {
     const settings = state.configuration.settings;
     const key = `${state.buildId}:${settings.computer.generation}:${settings.connectors.secureMcp.generation}`;
     if (this.automaticSetupCompletions.has(key)) return;
+    const binding = state.signInObservation?.binding;
+    if (!binding) return;
+    const proof = `${binding.documentGeneration}:${binding.sequence}`;
+    if (this.refusedAutomaticSetupProofs.get(key) === proof) return;
     // One completion write after confirmed checks. An uncertain result keeps
     // its original intent; rendering, polling and navigation never repeat it.
     this.automaticSetupCompletions.add(key);
     void this.configure(
       { kind: "setup.progress", currentStep: "connect", dismissed: true },
       "settings:setup.progress:",
-    );
+    ).then((result) => {
+      // These refusals precede transport or the host's Settings publication.
+      // A fresh document observation may rearm them, never the same poll.
+      // Unknown replies and potentially published writes keep the old latch.
+      if (
+        result.state !== "refused" ||
+        (result.code !== "CURRENT_STATE_REQUIRED" &&
+          result.code !== "SETUP_INCOMPLETE")
+      )
+        return;
+      this.refusedAutomaticSetupProofs.set(key, proof);
+      this.automaticSetupCompletions.delete(key);
+      this.completeConfirmedSetup();
+    });
   }
   private presentBrowser(): Promise<Intent> {
     const intention = "settings:chatgpt.present-browser:";
