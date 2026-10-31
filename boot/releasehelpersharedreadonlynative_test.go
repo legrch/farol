@@ -96,8 +96,8 @@ func (*sharedProbeChannels) Close() error { return nil }
 
 // Explicit read-only shared-slot diagnosis. Only /Applications/Farol.app is
 // read from the real installation; every state, lock, marker and repository is
-// in a disposable home. Production admissions remain intact. The first journal
-// write is unconditionally intercepted, so the real app slot cannot be moved.
+// in a disposable home. Production admissions remain intact. The first case
+// intercepts the journal write; both cases deny every shared namespace effect.
 // This source-composed probe is not shipped-helper, Desktop or OTA acceptance.
 func TestLiveHelperNativeSharedReadOnlyBeforeFirstCAS(t *testing.T) {
 	sharedReadOnlyProbe(t, false)
