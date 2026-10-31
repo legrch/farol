@@ -21,6 +21,69 @@ import { commandAllowed } from "../../src/ui/renderer/command-eligibility";
 import { ProductConfigurationCommandSchema } from "../../src/pkg/product-settings/contract";
 import type { ConnectorSetupReceipt } from "../../src/pkg/product-settings/connector-setup-receipt";
 
+it.each([false, true])(
+  "finishes all four confirmed setup steps once (lost completion reply: %s)",
+  async (lostReply) => {
+    const f = fixture();
+    const data = bootstrap();
+    data.configuration.settings = readySettings(true);
+    data.configuration.settings.setup.journey.dismissed = false;
+    let current = { ...data.configuration, status: "ready" as const };
+    vi.mocked(f.api.bootstrap).mockImplementation(async () => ({
+      ...data,
+      configuration: current,
+    }));
+    vi.mocked(f.api.configure).mockImplementation(async (command) => {
+      if (command.kind === "chatgpt.observe-sign-in")
+        return signInReply(command, "authenticated", current);
+      if (command.kind === "chatgpt.verify")
+        return {
+          ok: true,
+          snapshot: current,
+          evidence: {
+            kind: "chatgpt.readiness",
+            state: "authenticated",
+            code: null,
+          },
+        };
+      if (command.kind === "setup.progress") {
+        if (lostReply) throw Error("completion acknowledgement lost");
+        const settings = structuredClone(current.settings);
+        settings.revision++;
+        settings.setup.journey.dismissed = true;
+        current = { status: "ready", settings };
+        return { ok: true, snapshot: current };
+      }
+      throw Error("unexpected command");
+    });
+    const c = new WindowController(f.api);
+    try {
+      await c.start();
+      f.emit("route", { state: "loaded" });
+      await vi.waitFor(() =>
+        expect(c.getSnapshot().intents["settings:setup.progress:"]?.state).toBe(
+          lostReply ? "unknown" : "applied",
+        ),
+      );
+      await c.refresh();
+      c.navigate({ area: "setup", setupStep: "overview" });
+      c.navigate({ area: "home" });
+      expect(
+        vi
+          .mocked(f.api.configure)
+          .mock.calls.filter(([command]) => command.kind === "setup.progress"),
+      ).toHaveLength(1);
+      const snapshot = c.getSnapshot();
+      expect(
+        snapshot.configuration?.status === "ready" &&
+          snapshot.configuration.settings.setup.journey.dismissed,
+      ).toBe(!lostReply);
+    } finally {
+      c.dispose();
+    }
+  },
+);
+
 describe("Goal17 explicit ChatGPT presentation", () => {
   it("reads the current confirmation after an overlapping refresh supersedes the completed check", async () => {
     const f = fixture();
@@ -5136,9 +5199,13 @@ it("renews sign-in on the final Setup step after a connector check navigates its
   }
 });
 
-it.each([false, true])(
-  "rechecks a hydrating session without a click or Send (same build: %s)",
-  async (sameBuild) => {
+it.each(
+  [false, true].flatMap((sameBuild) =>
+    [1, 4].map((unknownReads) => [sameBuild, unknownReads] as const),
+  ),
+)(
+  "rechecks a hydrating session without a click or Send (same build: %s, delayed reads: %s)",
+  async (sameBuild, unknownReads) => {
     vi.useFakeTimers();
     const f = fixture();
     const data = bootstrap();
@@ -5153,7 +5220,7 @@ it.each([false, true])(
       if (command.kind === "chatgpt.observe-sign-in")
         return signInReply(
           command,
-          ++observations === 1 ? "unknown" : "authenticated",
+          ++observations <= unknownReads ? "unknown" : "authenticated",
           { status: "ready", settings: data.configuration.settings },
         );
       if (command.kind === "chatgpt.verify") {
@@ -5176,7 +5243,7 @@ it.each([false, true])(
     try {
       await c.start();
       f.emit("route", { state: "loaded" });
-      await vi.advanceTimersByTimeAsync(600);
+      await vi.advanceTimersByTimeAsync(30_000);
       expect(c.getSnapshot().setupSignInCheck).toBeTruthy();
       expect(setupChecklist(c.getSnapshot()).entries[0]?.state).toBe(
         "verified",
@@ -5310,8 +5377,8 @@ it.each(["unknown", "signed_out"] as const)(
     try {
       await c.start();
       f.emit("route", { state: "loaded" });
-      await vi.advanceTimersByTimeAsync(20_000);
-      const perDocument = answer === "unknown" ? 4 : 1;
+      await vi.advanceTimersByTimeAsync(40_000);
+      const perDocument = answer === "unknown" ? 7 : 1;
       expect(f.api.configure).toHaveBeenCalledTimes(perDocument);
       const checks = setupChecklist(c.getSnapshot());
       expect(checks.entries[0]?.state).not.toBe("verified");
@@ -5321,7 +5388,7 @@ it.each(["unknown", "signed_out"] as const)(
       expect(checks.ready).toBe(false);
       f.emit("route", { state: "loading" });
       f.emit("route", { state: "loaded" });
-      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.advanceTimersByTimeAsync(40_000);
       expect(f.api.configure).toHaveBeenCalledTimes(perDocument * 2);
       expect(c.getSnapshot().configuration).toMatchObject({
         settings: { setup: { connect: { outcomeUnknown: true } } },

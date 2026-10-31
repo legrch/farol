@@ -5405,6 +5405,36 @@ export class ChatGptRoute {
       }
     });
     if (tracksRouteReadiness) {
+      let currentNavigationUrl: string | null = null;
+      const trackNavigationUrl = (
+        _event: unknown,
+        url: string,
+        _inPlace: boolean,
+        isMainFrame: boolean,
+      ) => {
+        if (isMainFrame && this.ownsRouteContents(contents) && allowed(url))
+          currentNavigationUrl = url;
+      };
+      contents.on("did-redirect-navigation", trackNavigationUrl);
+      contents.on("did-navigate", (_event, url) => {
+        if (this.ownsRouteContents(contents)) currentNavigationUrl = url;
+      });
+      contents.on("dom-ready", () => {
+        // Ordinary browser readiness belongs to every committed document, not
+        // just the initial loadURL promise. This permits a read of the current
+        // DOM while slow subresources load; it never authorizes submission.
+        if (
+          this.options.requireAppForManualMessages === true ||
+          !this.ownsRouteContents(contents) ||
+          this.routeDocumentLoadFailed ||
+          !allowed(contents.getURL()) ||
+          this.load === "loaded"
+        )
+          return;
+        this.load = "loaded";
+        this.options.onLoadStateChanged?.("loaded");
+        this.reportConversationUrl(contents);
+      });
       contents.on(
         "did-start-navigation",
         (_event, url, inPlace, isMainFrame) => {
@@ -5415,6 +5445,7 @@ export class ChatGptRoute {
           // that commits or fails anyway is caught by did-navigate and
           // did-fail-load.
           if (!allowed(url)) return;
+          if (!inPlace) currentNavigationUrl = url;
           this.routeDocumentGeneration += 1;
           if (!inPlace) this.chatPhysicalDocumentGeneration += 1;
           if (!inPlace) this.routeDocumentLoadFailed = false;
@@ -5427,8 +5458,12 @@ export class ChatGptRoute {
       );
       contents.on(
         "did-fail-load",
-        (_event, code, _description, _url, isMainFrame) => {
+        (_event, code, _description, url, isMainFrame) => {
           if (isMainFrame && this.ownsRouteContents(contents)) {
+            // A cancelled earlier auth navigation can fail after its successor
+            // has begun. It must not poison that successor's readiness.
+            if (currentNavigationUrl !== null && url !== currentNavigationUrl)
+              return;
             this.routeDocumentGeneration += 1;
             this.routeDocumentLoadFailed = true;
             this.load = "failed";

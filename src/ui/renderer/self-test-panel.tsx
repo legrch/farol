@@ -33,7 +33,7 @@ export function SelfTestPanel({
             (workspace) => workspace.workspaceId === selectedWorkspaceId,
           )
         ? selectedWorkspaceId
-        : "";
+        : (workspaces[0]?.workspaceId ?? "");
   const [readyWorkspaceId, setReadyWorkspaceId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
@@ -218,8 +218,8 @@ export function SelfTestPanel({
     <section className="home-self-test" aria-labelledby="self-test-title">
       <h2 id="self-test-title">Deep test</h2>
       <p>
-        Choose a workspace to check file operations and commands. The test
-        creates a temporary folder and removes it when safe.
+        Check file operations and commands. The test uses the selected
+        workspace, creates a temporary folder and removes it when safe.
       </p>
       <label>
         Workspace{" "}

@@ -47,8 +47,8 @@ it("selects the sole workspace and checks its history without starting a test", 
       />,
     ),
   );
-  expect(host.querySelector("select")!.value).toBe("");
-  expect(host.querySelector("button")!.disabled).toBe(true);
+  expect(host.querySelector("select")!.value).toBe("ws");
+  expect(host.querySelector("button")!.disabled).toBe(false);
   await act(async () => root.unmount());
   host.remove();
 });

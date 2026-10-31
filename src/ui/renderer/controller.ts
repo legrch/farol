@@ -2,6 +2,7 @@ import {
   browserPresentationAllowed,
   commandAllowed,
 } from "./command-eligibility";
+import { setupCompletionAllowed } from "../setup-completion";
 import { defaultSidebarPreference } from "../../../apps/desktop/renderer/sidebar-presentation";
 import { OperationsSnapshotSchema } from "../../../apps/desktop/renderer/operations-contract";
 import {
@@ -475,6 +476,7 @@ export class WindowController implements RendererFacade {
   private eventOrdinal = 0;
   private signInCounter = 0;
   private readonly automaticSignInChecks = new Set<string>();
+  private readonly automaticSetupCompletions = new Set<string>();
   private automaticSignInRequested = false;
   private signInTimer: ReturnType<typeof setTimeout> | null = null;
   private savedSignInReadTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1419,6 +1421,14 @@ export class WindowController implements RendererFacade {
         this.observeSignIn();
       }
       this.confirmSetupSignIn();
+      if (
+        result.state === "applied" &&
+        (key === "settings:chatgpt.verify:" ||
+          /^settings:connector\.(?:verify-app|verify-separate-app):(?:[a-f0-9]{64})?$/u.test(
+            key,
+          ))
+      )
+        this.completeConfirmedSetup();
       resolve(result);
     })();
     return promise;
@@ -2620,7 +2630,7 @@ export class WindowController implements RendererFacade {
       this.disposed ||
       this.booting ||
       this.savedSignInReadTimer !== null ||
-      this.savedSignInReadAttempts >= 3 ||
+      this.savedSignInReadAttempts >= 6 ||
       state.route !== "loaded" ||
       state.status !== "current" ||
       state.runtime !== "ready" ||
@@ -2630,7 +2640,9 @@ export class WindowController implements RendererFacade {
       state.signInObservation?.state === "signed_out"
     )
       return;
-    const delays = [500, 1_500, 3_000];
+    // Restored provider sessions can hydrate slowly on a cold launch. These
+    // bounded page reads never resend a login, verification or settings write.
+    const delays = [500, 1_500, 3_000, 5_000, 8_000, 10_000];
     this.savedSignInReadTimer = setTimeout(() => {
       this.savedSignInReadTimer = null;
       const current = this.state;
@@ -2693,6 +2705,35 @@ export class WindowController implements RendererFacade {
     // retains its original fence; neither refresh nor navigation retries it.
     this.automaticSignInChecks.add(key);
     void this.configure({ kind: "chatgpt.verify" }, "settings:chatgpt.verify:");
+  }
+  private completeConfirmedSetup(): void {
+    const state = this.state;
+    if (
+      this.disposed ||
+      state.configuration?.status !== "ready" ||
+      state.configuration.settings.setup.journey.dismissed ||
+      !commandAllowed(state, "setup.progress") ||
+      !setupCompletionAllowed(state.configuration.settings, {
+        buildId: state.buildId ?? "",
+        current:
+          state.status === "current" &&
+          state.runtime === "ready" &&
+          state.update.phase !== "applying",
+        signInObservation: state.signInObservation,
+        signInCheck: state.setupSignInCheck ?? null,
+      })
+    )
+      return;
+    const settings = state.configuration.settings;
+    const key = `${state.buildId}:${settings.computer.generation}:${settings.connectors.secureMcp.generation}`;
+    if (this.automaticSetupCompletions.has(key)) return;
+    // One completion write after confirmed checks. An uncertain result keeps
+    // its original intent; rendering, polling and navigation never repeat it.
+    this.automaticSetupCompletions.add(key);
+    void this.configure(
+      { kind: "setup.progress", currentStep: "connect", dismissed: true },
+      "settings:setup.progress:",
+    );
   }
   private presentBrowser(): Promise<Intent> {
     const intention = "settings:chatgpt.present-browser:";

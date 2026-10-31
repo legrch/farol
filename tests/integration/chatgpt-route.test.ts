@@ -8991,7 +8991,7 @@ it("accepts a current ordinary DOM before slow subresources finish without revea
     expect((await candidate.observeSignInStatus()).state).toBe("authenticated");
     expect(surface.reveal).not.toHaveBeenCalled();
     expect(surface.focus).not.toHaveBeenCalled();
-    expect(surface.webContents.listenerCount("dom-ready")).toBe(0);
+    expect(surface.webContents.listenerCount("dom-ready")).toBe(1);
   } finally {
     candidate.dispose();
   }
@@ -9067,3 +9067,64 @@ it("toggles the current provider's Toggle sidebar control", () => {
   ).toBe(true);
   expect(click).toHaveBeenCalledOnce();
 });
+
+it.each([-3, -105])(
+  "ignores superseded auth failure %s and observes the current ordinary DOM",
+  async (code) => {
+    const surface = embeddedSurface();
+    let currentUrl = "https://chatgpt.com/";
+    Object.assign(surface.webContents, {
+      getURL: () => currentUrl,
+      executeJavaScript: vi.fn(async () => ({
+        composerVisible: true,
+        signInVisible: false,
+      })),
+    });
+    const candidate = new ChatGptRoute({
+      homeUrl: currentUrl,
+      initialUrl: currentUrl,
+      e2eOrigin: null,
+      parent: () => null,
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+    });
+    try {
+      await candidate.preload();
+      const auth = "https://accounts.google.com/";
+      surface.webContents.emit("did-start-navigation", {}, auth, false, true);
+      surface.webContents.emit(
+        "did-start-navigation",
+        {},
+        currentUrl,
+        false,
+        true,
+      );
+      surface.webContents.emit(
+        "did-fail-load",
+        {},
+        code,
+        "superseded",
+        auth,
+        true,
+      );
+      surface.webContents.emit("dom-ready");
+      expect((await candidate.observeSignInStatus()).state).toBe(
+        "authenticated",
+      );
+      expect(surface.loadURL).toHaveBeenCalledTimes(1);
+      expect(surface.reveal).not.toHaveBeenCalled();
+      // A failure of the actual current document remains authoritative.
+      surface.webContents.emit(
+        "did-fail-load",
+        {},
+        -105,
+        "current failure",
+        currentUrl,
+        true,
+      );
+      surface.webContents.emit("dom-ready");
+      expect((await candidate.observeSignInStatus()).state).toBe("unknown");
+    } finally {
+      candidate.dispose();
+    }
+  },
+);
