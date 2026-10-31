@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -57,6 +58,12 @@ func TestLifetimeActor(t *testing.T) {
 		c.Env = append(withoutActorEnvironment(os.Environ()), "FAROL_LIFETIME_TEST_ACTOR="+role, "FAROL_LIFETIME_TEST_ROOT="+root)
 		c.Stdout, c.Stderr = os.Stdout, os.Stderr
 		return c
+	}
+	if role == "diagnostics" {
+		diagnostics, release := nonFatalDiagnostics(os.Stderr)
+		_, _ = io.WriteString(diagnostics, "closed diagnostic observer\n")
+		release()
+		os.Exit(0)
 	}
 	if role == "helper" {
 		// The fixture's Go desktop does not have libuv's spawn fd closure.
@@ -133,7 +140,7 @@ func TestLifetimeActor(t *testing.T) {
 		}
 		os.Exit(0)
 	}
-	if role == "guardian" || role == "guardian-lost-ack" {
+	if role == "guardian" || role == "guardian-lost-ack" || role == "guardian-closed-diagnostics" {
 		q, err := unix.Kqueue()
 		if err != nil {
 			os.Exit(80)
@@ -159,7 +166,11 @@ func TestLifetimeActor(t *testing.T) {
 			c.Wait()
 			os.Exit(82)
 		}
-		os.Exit(hold(c, desktop, q, r, aw, ackLossReporter{root: root}, desktopapp.Valid))
+		var diagnostics io.Writer = ackLossReporter{root: root}
+		if role == "guardian-closed-diagnostics" {
+			diagnostics = os.Stderr
+		}
+		os.Exit(hold(c, desktop, q, r, aw, diagnostics, desktopapp.Valid))
 	}
 	os.Exit(83)
 }
@@ -193,6 +204,26 @@ func TestLifetimeNativeLostACKKeepsOriginalHelperCustody(t *testing.T) {
 	testGuardianActor(t, "guardian-lost-ack")
 }
 
+func TestLifetimeNativeClosedDiagnosticsKeepsHelperCustody(t *testing.T) {
+	testGuardianActor(t, "guardian-closed-diagnostics")
+}
+
+func TestLifetimeNativeClosedDiagnosticsDoesNotRaiseSIGPIPE(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	defer w.Close()
+	executable, _ := os.Executable()
+	c := exec.Command(executable, "-test.run=^TestLifetimeActor$")
+	c.Env = append(os.Environ(), "FAROL_LIFETIME_TEST_ACTOR=diagnostics")
+	c.Stderr = w
+	if err := c.Run(); err != nil {
+		t.Fatalf("closed diagnostics terminated the original child: %v", err)
+	}
+}
+
 func testGuardianActor(t *testing.T, role string) {
 	t.Helper()
 	root, err := os.MkdirTemp("", "farol-lifetime-loop-")
@@ -207,13 +238,22 @@ func testGuardianActor(t *testing.T, role string) {
 	c.Env = append(os.Environ(), "FAROL_LIFETIME_TEST_ACTOR="+role, "FAROL_LIFETIME_TEST_ROOT="+root)
 	var out bytes.Buffer
 	c.Stdout, c.Stderr = &out, &out
+	if role == "guardian-closed-diagnostics" {
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Close()
+		defer w.Close()
+		c.Stderr = w
+	}
 	if err := c.Run(); err != nil {
 		t.Fatalf("guardian actor: %v %s", err, out.String())
 	}
 	if _, err := os.Stat(filepath.Join(root, "helper-finished")); err != nil {
 		t.Fatalf("guardian retired before helper: %v %s", err, out.String())
 	}
-	if !strings.Contains(out.String(), "desktop_launcher_desktop_exit") || !strings.Contains(out.String(), "desktop_launcher_helper_exit") || !strings.Contains(out.String(), "waitStatus=0") {
+	if role != "guardian-closed-diagnostics" && (!strings.Contains(out.String(), "desktop_launcher_desktop_exit") || !strings.Contains(out.String(), "desktop_launcher_helper_exit") || !strings.Contains(out.String(), "waitStatus=0")) {
 		t.Fatal(out.String())
 	}
 	if role == "guardian-lost-ack" && !strings.Contains(out.String(), "desktop_launcher_ack_unknown") {

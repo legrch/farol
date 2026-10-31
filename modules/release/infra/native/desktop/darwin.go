@@ -100,6 +100,8 @@ func enroll(queue int, desktop identity, b port.DesktopLifetimeBinding) error {
 // Run starts the already packaged runtime. executable is captured before any
 // update can replace canonical bundle paths. No path is executed after Quit.
 func Run(executable string, args []string, input, output *os.File, diagnostics io.Writer, validate func(port.DesktopLifetimeBinding, int, int64) bool) int {
+	diagnostics, releaseDiagnostics := nonFatalDiagnostics(diagnostics)
+	defer releaseDiagnostics()
 	if validate == nil {
 		return 78
 	}
@@ -162,7 +164,28 @@ func withoutLifetimeEnvironment(env []string) []string {
 	return result
 }
 
+// Go deliberately raises SIGPIPE for EPIPE on fd1/2. An owned duplicate above
+// those slots keeps a vanished diagnostic reader from terminating custody.
+// Failure to attach diagnostics discards logs, never lifetime ownership.
+func nonFatalDiagnostics(writer io.Writer) (io.Writer, func()) {
+	if writer == nil {
+		return io.Discard, func() {}
+	}
+	file, ok := writer.(*os.File)
+	if !ok || file.Fd() > 2 {
+		return writer, func() {}
+	}
+	fd, err := unix.FcntlInt(file.Fd(), unix.F_DUPFD_CLOEXEC, 3)
+	if err != nil {
+		return io.Discard, func() {}
+	}
+	owned := os.NewFile(uintptr(fd), "desktop-launcher-diagnostics")
+	return owned, func() { _ = owned.Close() }
+}
+
 func hold(command *exec.Cmd, desktop identity, queue int, metadata, ack *os.File, diagnostics io.Writer, validate func(port.DesktopLifetimeBinding, int, int64) bool) int {
+	diagnostics, releaseDiagnostics := nonFatalDiagnostics(diagnostics)
+	defer releaseDiagnostics()
 	frames := make(chan []byte)
 	done := make(chan struct{})
 	readerDone := make(chan struct{})
