@@ -30,10 +30,15 @@ import {
 import { runPromotionApply } from "./promotion-apply.mjs";
 import { preparePromotionParent } from "./promotion-destination.mjs";
 import { compareReleaseVersions } from "../src/modules/release/domain/github-version.ts";
+import { parseGithubReleaseManifest } from "../src/modules/release/app/github-release.ts";
+import {
+  AdoptedBaseline,
+  manifestDescribesRunningBuild,
+} from "../src/apps/desktop/installed-adoption.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const HELPER_SHA256 =
-  "6556805b67a67c9c22de3f46b879cda857e2a58be48569b263f01a59c6ae1326";
+  "08212da5ae0b8b4a78692aea01acc9ea74c5148eb67b761475fcb765e1e59997";
 const LIBRARY_SHA256 =
   "be78ebefca9280329b766c0aee9dbfdd9adfdab2020f373df236441fdb476ec6";
 const sha = (raw) => createHash("sha256").update(raw).digest("hex");
@@ -135,6 +140,13 @@ const Selection = z.discriminatedUnion("schema", [
     schema: z.literal("farol.installed-replacement-selection/2"),
     installLocation: z.enum(["legacy", "shared"]),
   }),
+  LegacySelection.extend({
+    schema: z.literal("farol.installed-replacement-selection/3"),
+    installLocation: z.enum(["legacy", "shared"]),
+    baseline: z.literal("adopted"),
+    preserveUnconfirmedUpdates: z.literal(true),
+    candidateRoot: z.string().min(1).max(4096),
+  }),
 ]);
 
 // Explicit new selections admit only the two already supported installations.
@@ -228,6 +240,7 @@ async function updaterSnapshot(updates) {
     "automatic-update-preference.json",
     "install-on-quit-preference.json",
     "installed-execution",
+    "adopted-baseline.json",
   ]);
   const items = [];
   for (const name of names.sort()) {
@@ -348,7 +361,10 @@ async function confirmCompletedUpdate(updates, appSha256, build) {
 export async function snapshotInstalledReplacement(
   home,
   installLocation = "legacy",
+  baseline = "normal",
 ) {
+  if (!["normal", "adopted"].includes(baseline))
+    fail("REPLACEMENT_BASELINE_INVALID");
   const userData = promotionUserData(home);
   const apps = replacementApplications(home, installLocation);
   const state = path.join(userData, "farol-state");
@@ -359,7 +375,12 @@ export async function snapshotInstalledReplacement(
   await absent(path.join(state, "installed-replacement.pending"));
   await absent(path.join(apps, "Farol.app.repair.json"));
   await absent(path.join(apps, ".farol-closed-repair.json"));
-  const receipt = await bytes(app + ".receipt.json");
+  const receiptFile =
+    baseline === "adopted"
+      ? path.join(updates, "adopted-baseline.json")
+      : app + ".receipt.json";
+  if (baseline === "adopted") await absent(app + ".receipt.json");
+  const receipt = await bytes(receiptFile);
   let r;
   try {
     r = JSON.parse(receipt);
@@ -367,7 +388,7 @@ export async function snapshotInstalledReplacement(
     fail("REPLACEMENT_NORMAL_RECEIPT_UNCONFIRMED");
   }
   // Validate only; retain the original JSON value and exact stored bytes.
-  if (!NormalPromotionReceipt.safeParse(r).success)
+  if (baseline === "normal" && !NormalPromotionReceipt.safeParse(r).success)
     fail("REPLACEMENT_NORMAL_RECEIPT_UNCONFIRMED");
   const build = assertBuildIdentity(
     JSON.parse(
@@ -379,27 +400,44 @@ export async function snapshotInstalledReplacement(
     ),
   );
   const appSha256 = await treeDigest(app);
-  if (
-    r.destination !== app ||
-    r.receipt !== app + ".receipt.json" ||
-    r.activation.userData !== userData ||
-    r.artifactSha256 !== r.verifiedDestinationSha256
-  )
-    fail("REPLACEMENT_NORMAL_RECEIPT_UNCONFIRMED");
-  const initialInstall =
-    r.artifactSha256 === appSha256 &&
-    r.sourceCommit === build.sourceCommit &&
-    r.sourceTreeDigest === build.sourceTreeDigest &&
-    r.version === build.version;
-  if (!initialInstall) await confirmCompletedUpdate(updates, appSha256, build);
+  if (baseline === "adopted") {
+    const parsed = AdoptedBaseline.safeParse(r);
+    const manifest = parsed.success
+      ? parseGithubReleaseManifest(parsed.data.manifest)
+      : null;
+    if (
+      !parsed.success ||
+      parsed.data.slot !== app ||
+      parsed.data.userData !== userData ||
+      !manifest?.ok ||
+      !manifestDescribesRunningBuild(manifest.value, build) ||
+      manifest.value.artifactSha256 !== appSha256
+    )
+      fail("REPLACEMENT_ADOPTED_BASELINE_UNCONFIRMED");
+  }
+  if (baseline === "normal") {
+    if (
+      r.destination !== app ||
+      r.receipt !== app + ".receipt.json" ||
+      r.activation.userData !== userData ||
+      r.artifactSha256 !== r.verifiedDestinationSha256
+    )
+      fail("REPLACEMENT_NORMAL_RECEIPT_UNCONFIRMED");
+    const initialInstall =
+      r.artifactSha256 === appSha256 &&
+      r.sourceCommit === build.sourceCommit &&
+      r.sourceTreeDigest === build.sourceTreeDigest &&
+      r.version === build.version;
+    if (!initialInstall)
+      await confirmCompletedUpdate(updates, appSha256, build);
+  }
   return {
+    ...(baseline === "adopted" ? { receiptKind: "adopted" } : {}),
     applicationsIdentity: identity(applications),
     profileIdentity: identity(await safeDirectory(userData, true)),
     stateIdentity: identity(await safeDirectory(state, true)),
     appIdentity: identity(await safeDirectory(app)),
-    receiptIdentity: identity(
-      await fs.lstat(app + ".receipt.json", { bigint: true }),
-    ),
+    receiptIdentity: identity(await fs.lstat(receiptFile, { bigint: true })),
     appSha256,
     receiptSha256: sha(receipt),
     installedBuild: build,
@@ -557,17 +595,17 @@ export async function prepareCleanReplacementLock(
   }
 }
 
-function verifyPackage(artifact, app) {
+function verifyPackage(artifact, app, candidateRoot = root) {
   const result = spawnSync(
     process.execPath,
     [
-      path.join(root, "tooling/verify-package.mjs"),
+      path.join(candidateRoot, "tooling/verify-package.mjs"),
       "--artifact",
       artifact,
       "--app",
       app,
     ],
-    { cwd: root, encoding: "utf8", timeout: 180000, maxBuffer: 65536 },
+    { cwd: candidateRoot, encoding: "utf8", timeout: 180000, maxBuffer: 65536 },
   );
   if (result.error || result.status !== 0) fail("REPLACEMENT_PACKAGE_INVALID");
 }
@@ -671,6 +709,8 @@ export async function replaceInstalledPreview(
   dependencies = {},
 ) {
   selection = Selection.parse(selection);
+  const adopted =
+    selection.schema === "farol.installed-replacement-selection/3";
   const home = dependencies.home ?? "/Users/ac";
   if (
     !dependencies.home &&
@@ -683,20 +723,31 @@ export async function replaceInstalledPreview(
   )
     fail("REPLACEMENT_HOST_UNTRUSTED");
   const installLocation =
-    selection.schema === "farol.installed-replacement-selection/2"
+    selection.schema !== "farol.installed-replacement-selection/1"
       ? selection.installLocation
       : "legacy";
   const userData = promotionUserData(home),
     apps = replacementApplications(home, installLocation),
     custody = path.join(apps, `.farol-replacement-${selection.operationId}`);
-  const current = dependencies.sourceIdentity ?? (() => sourceIdentity(root));
-  const candidate = dependencies.candidate ?? candidatePaths(root);
+  const candidateRoot = adopted ? selection.candidateRoot : root;
+  if (
+    !path.isAbsolute(candidateRoot) ||
+    path.resolve(candidateRoot) !== candidateRoot ||
+    (await fs.realpath(candidateRoot)) !== candidateRoot
+  )
+    fail("REPLACEMENT_CANDIDATE_ROOT_INVALID");
+  if (adopted && !dependencies.home && sourceIdentity(root).dirty)
+    fail("REPLACEMENT_MAINTENANCE_SOURCE_DIRTY");
+  const current =
+    dependencies.sourceIdentity ?? (() => sourceIdentity(candidateRoot));
+  const candidate = dependencies.candidate ?? candidatePaths(candidateRoot);
   const artifact =
     dependencies.artifact ??
     (await readArtifactManifest(candidate.artifactFile));
   if (artifact.schema !== 7 || artifact.sourceCommit !== selection.sourceCommit)
     fail("REPLACEMENT_SCHEMA_OR_SOURCE_INVALID");
-  if (!dependencies.candidate) assertCanonicalArtifactPath(root, artifact);
+  if (!dependencies.candidate)
+    assertCanonicalArtifactPath(candidateRoot, artifact);
   assertExactSourceIdentity(current(), artifact);
   let lease,
     updaterLock,
@@ -752,7 +803,12 @@ export async function replaceInstalledPreview(
       )
         fail("REPLACEMENT_UPDATER_LOCK_UNSAFE");
     }
-    const fresh = await snapshotInstalledReplacement(home, installLocation);
+    const baseline = adopted ? "adopted" : "normal";
+    const fresh = await snapshotInstalledReplacement(
+      home,
+      installLocation,
+      baseline,
+    );
     if (!same(fresh, selection.snapshot)) fail("REPLACEMENT_SNAPSHOT_CHANGED");
     await absent(custody);
     const checkProcesses = dependencies.processProof ?? processProof;
@@ -765,11 +821,12 @@ export async function replaceInstalledPreview(
     // A missing half or any historical operation/download without its records
     // remains unconfirmed; absence must not conceal a possibly started helper.
     if (
-      updateRecords.length === 1 ||
-      (updateRecords.length === 0 &&
-        fresh.updater.some((item) =>
-          /^(?:download-)?[a-f0-9]{32}$/u.test(item.name),
-        ))
+      !adopted &&
+      (updateRecords.length === 1 ||
+        (updateRecords.length === 0 &&
+          fresh.updater.some((item) =>
+            /^(?:download-)?[a-f0-9]{32}$/u.test(item.name),
+          )))
     )
       fail("REPLACEMENT_UPDATE_RECEIPT_UNCONFIRMED");
     for (const name of updateRecords
@@ -778,6 +835,12 @@ export async function replaceInstalledPreview(
       const record = JSON.parse(
         await bytes(path.join(userData, "installed-updates", name)),
       );
+      if (
+        adopted &&
+        !(name === "ready.json" ? Retained : SavedReceipt).safeParse(record)
+          .success
+      )
+        fail("REPLACEMENT_UPDATE_RECEIPT_UNCONFIRMED");
       if (
         record.helper &&
         !selection.helpers.some(
@@ -795,6 +858,7 @@ export async function replaceInstalledPreview(
     await (dependencies.verify ?? verifyPackage)(
       candidate.artifactFile,
       candidate.appPath,
+      candidateRoot,
     );
     assertExactSourceIdentity(current(), artifact);
     if (
@@ -804,7 +868,12 @@ export async function replaceInstalledPreview(
         1
     )
       fail("REPLACEMENT_NOT_INCREASING");
-    if (!same(await snapshotInstalledReplacement(home, installLocation), fresh))
+    if (
+      !same(
+        await snapshotInstalledReplacement(home, installLocation, baseline),
+        fresh,
+      )
+    )
       fail("REPLACEMENT_SNAPSHOT_CHANGED");
     checkProcesses(home, selection.helpers, installLocation);
     assertActivationDrained(
@@ -833,7 +902,9 @@ export async function replaceInstalledPreview(
     if (!(await verifyPromotionLease(lease))) fail("REPLACEMENT_LEASE_LOST");
     const leaseInfo = await fs.lstat(lease.file, { bigint: true });
     const request = {
-      schema: "farol.installed-replacement-native/2",
+      schema: adopted
+        ? "farol.installed-replacement-native/3"
+        : "farol.installed-replacement-native/2",
       installLocation,
       action: "custody",
       home,
@@ -910,6 +981,7 @@ export async function replaceInstalledPreview(
     await (dependencies.verify ?? verifyPackage)(
       candidate.artifactFile,
       receipt.destination,
+      candidateRoot,
     );
     assertExactSourceIdentity(current(), artifact);
     if (!(await bytes(receipt.receipt)).equals(Buffer.from(receiptText)))

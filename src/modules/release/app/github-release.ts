@@ -19,13 +19,13 @@ import {
   type RetainedReleaseRecord,
   type UpdateCandidate,
   type VerifiedGithubUpdate,
-} from "../domain/github-release-contract";
+} from "../domain/github-release-contract.ts";
 import {
   compareReleaseVersions,
   parseReleaseVersion,
   versionBelongsToChannel,
   type ReleaseChannel,
-} from "../domain/github-version";
+} from "../domain/github-version.ts";
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const SHA1 = /^[a-f0-9]{40}$/u;

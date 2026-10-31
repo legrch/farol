@@ -3,7 +3,7 @@ import { z } from "zod";
 import {
   findGithubReleaseManifest,
   parseGithubReleaseManifest,
-} from "../../modules/release/app/github-release";
+} from "../../modules/release/app/github-release.ts";
 import type { ReleaseManifest } from "../../modules/release/domain/github-release-contract";
 import type { BuildIdentity } from "../../pkg/build-info/identity";
 

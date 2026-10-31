@@ -72,7 +72,7 @@ def stamp(info):
 
 def updater(fd):
     result = []
-    known = {"ready.json", "last-update.json", "lock", "notice-preferences.json", "preferences.json", "automatic-update-preference.json", "install-on-quit-preference.json", "installed-execution"}
+    known = {"ready.json", "last-update.json", "lock", "notice-preferences.json", "preferences.json", "automatic-update-preference.json", "install-on-quit-preference.json", "installed-execution", "adopted-baseline.json"}
     for name in sorted(os.listdir(fd)):
         if name not in known and not re.fullmatch(r"(?:download-)?[a-f0-9]{32}", name):
             raise RuntimeError("REPLACEMENT_UPDATER_UNEXPECTED")
@@ -131,12 +131,15 @@ def exclusive(src, name, dst, target):
 
 def run(r):
     schema = r.get("schema")
-    if schema not in ("farol.installed-replacement-native/1", "farol.installed-replacement-native/2") or r.get("action") not in ("custody", "complete", "initialize-clean-lock") or not re.fullmatch("[a-f0-9]{32}", r.get("operationId", "")):
+    if schema not in ("farol.installed-replacement-native/1", "farol.installed-replacement-native/2", "farol.installed-replacement-native/3") or r.get("action") not in ("custody", "complete", "initialize-clean-lock") or not re.fullmatch("[a-f0-9]{32}", r.get("operationId", "")):
         raise RuntimeError("REPLACEMENT_INPUT_INVALID")
     if schema == "farol.installed-replacement-native/1":
         if "installLocation" in r or r.get("action") == "initialize-clean-lock":
             raise RuntimeError("REPLACEMENT_INPUT_INVALID")
     elif r.get("installLocation") not in ("legacy", "shared"):
+        raise RuntimeError("REPLACEMENT_INPUT_INVALID")
+    adopted = schema == "farol.installed-replacement-native/3"
+    if adopted != (r.get("snapshot", {}).get("receiptKind") == "adopted") or adopted and r.get("action") == "initialize-clean-lock":
         raise RuntimeError("REPLACEMENT_INPUT_INVALID")
     opened = []
     def directory(target):
@@ -221,7 +224,16 @@ def run(r):
             app = b["open_directory"](apps, "Farol.app")
             opened.append(app)
             check(apps, "Farol.app", s["appIdentity"])
-            if b["digest_tree"](app) != s["appSha256"] or hashlib.sha256(bytes_at(apps, "Farol.app.receipt.json")).hexdigest() != s["receiptSha256"]:
+            baseline_parent, baseline_name = (updates, "adopted-baseline.json") if adopted else (apps, "Farol.app.receipt.json")
+            check(baseline_parent, baseline_name, s["receiptIdentity"])
+            if adopted:
+                try:
+                    os.stat("Farol.app.receipt.json", dir_fd=apps, follow_symlinks=False)
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise RuntimeError("REPLACEMENT_BASELINE_COLLISION")
+            if b["digest_tree"](app) != s["appSha256"] or hashlib.sha256(bytes_at(baseline_parent, baseline_name)).hexdigest() != s["receiptSha256"]:
                 raise RuntimeError("REPLACEMENT_SNAPSHOT_CHANGED")
             # Refuse occupied custody BEFORE publishing intent; mkdir remains
             # authoritative and non-overwriting even if an external actor races.
@@ -253,12 +265,13 @@ def run(r):
             exclusive(apps, "Farol.app", custody, "previous.app")
             check(custody, "previous.app", s["appIdentity"])
             locks(updates)
-            check(apps, "Farol.app.receipt.json", s["receiptIdentity"])
-            if hashlib.sha256(bytes_at(apps, "Farol.app.receipt.json")).hexdigest() != s["receiptSha256"]:
+            check(baseline_parent, baseline_name, s["receiptIdentity"])
+            if hashlib.sha256(bytes_at(baseline_parent, baseline_name)).hexdigest() != s["receiptSha256"]:
                 raise RuntimeError("REPLACEMENT_RECEIPT_CHANGED")
-            exclusive(apps, "Farol.app.receipt.json", custody, "previous.receipt.json")
-            if hashlib.sha256(bytes_at(custody, "previous.receipt.json")).hexdigest() != s["receiptSha256"]:
-                raise RuntimeError("REPLACEMENT_RECEIPT_CHANGED")
+            if not adopted:
+                exclusive(apps, "Farol.app.receipt.json", custody, "previous.receipt.json")
+                if hashlib.sha256(bytes_at(custody, "previous.receipt.json")).hexdigest() != s["receiptSha256"]:
+                    raise RuntimeError("REPLACEMENT_RECEIPT_CHANGED")
             exclusive(profile, "installed-updates", custody, "installed-updates")
             check(custody, "installed-updates", s["updaterIdentity"])
             locks(updates)
@@ -272,6 +285,7 @@ def run(r):
         check(apps, name, r["custodyIdentity"])
         updates = b["open_directory"](custody, "installed-updates")
         opened.append(updates)
+        baseline_parent, baseline_name = (updates, "adopted-baseline.json") if adopted else (custody, "previous.receipt.json")
         locks(updates)
         check(state, "installed-replacement.pending", r["pendingIdentity"])
         check(custody, "previous.app", s["appIdentity"])
@@ -280,7 +294,8 @@ def run(r):
         if b["digest_tree"](previous) != s["appSha256"]:
             raise RuntimeError("REPLACEMENT_PREVIOUS_APP_CHANGED")
         check(custody, "installed-updates", s["updaterIdentity"])
-        if updater(updates) != s["updater"] or hashlib.sha256(bytes_at(custody, "previous.receipt.json")).hexdigest() != s["receiptSha256"] or bytes_at(state, "installed-replacement.pending") != r["intentText"].encode():
+        check(baseline_parent, baseline_name, s["receiptIdentity"])
+        if updater(updates) != s["updater"] or hashlib.sha256(bytes_at(baseline_parent, baseline_name)).hexdigest() != s["receiptSha256"] or bytes_at(state, "installed-replacement.pending") != r["intentText"].encode():
             raise RuntimeError("REPLACEMENT_CUSTODY_CHANGED")
         new_receipt = ident(os.stat("Farol.app.receipt.json", dir_fd=apps, follow_symlinks=False))
         if hashlib.sha256(bytes_at(apps, "Farol.app.receipt.json")).hexdigest() != r["newReceiptSha256"]:
@@ -296,13 +311,13 @@ def run(r):
             b["recheck_parent"](r, home, apps)
             check(apps, name, r["custodyIdentity"])
             check(custody, "previous.app", s["appIdentity"])
-            check(custody, "previous.receipt.json", s["receiptIdentity"])
+            check(baseline_parent, baseline_name, s["receiptIdentity"])
             check(custody, "installed-updates", s["updaterIdentity"])
             check(apps, "Farol.app", new_app)
             check(apps, "Farol.app.receipt.json", new_receipt)
             if hashlib.sha256(bytes_at(apps, "Farol.app.receipt.json")).hexdigest() != r["newReceiptSha256"]:
                 raise RuntimeError("REPLACEMENT_NEW_RECEIPT_CHANGED")
-            if hashlib.sha256(bytes_at(custody, "previous.receipt.json")).hexdigest() != s["receiptSha256"] or updater(updates) != s["updater"]:
+            if hashlib.sha256(bytes_at(baseline_parent, baseline_name)).hexdigest() != s["receiptSha256"] or updater(updates) != s["updater"]:
                 raise RuntimeError("REPLACEMENT_CUSTODY_CHANGED")
 
         recheck_completion_names()
