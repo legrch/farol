@@ -418,7 +418,11 @@ describe("explicit pinned native archive compiler", () => {
             throw Error("must not read source");
           },
         }),
-      ).rejects.toThrow("NATIVE_ARCHIVE_COMPILER_UNTRUSTED");
+      ).rejects.toThrow(
+        process.platform === "darwin" && process.arch === "arm64"
+          ? "NATIVE_ARCHIVE_COMPILER_UNTRUSTED"
+          : "NATIVE_ARCHIVE_COMPILER_PLATFORM_UNSUPPORTED",
+      );
       expect(reads).toBe(0);
     },
   );
