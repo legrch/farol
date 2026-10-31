@@ -116,6 +116,32 @@ the original owner and lease. Select a fresh replacement snapshot only after
 this preparation completes; a visible lock file alone cannot settle an unknown
 preparation. Ordinary plan-only replacement does not initialize that lock.
 
+### Explicit custody of a Finder-installed baseline
+
+Selection version 3 is a separate manual maintenance action for a genuinely
+adopted installation. It requires `baseline: "adopted"`,
+`preserveUnconfirmedUpdates: true`, an explicit physical `candidateRoot`, and
+the exact candidate source commit. The maintenance checkout must be committed
+and clean. Package and source verification run against the selected candidate
+checkout; selecting a different root never substitutes test verification ports.
+
+The normal promotion receipt must be absent by ENOENT. The existing strict
+adoption parser authenticates the exact slot, profile, published manifest,
+build/source/version/channel and measured installed tree. Native custody checks
+the adopted record's original inode and bytes under the same two locks. It
+retains that record inside the entire old updater directory, together with all
+uncertain operations and accepted private images. It does not invent an old
+promotion receipt, repair a journal, replay an operation or settle UNKNOWN.
+
+This explicit selection permits incomplete retained update-record pairs because
+the whole namespace goes into custody. Existing record shapes, helper selection,
+closed-app/process checks, activation drain, exclusive moves, same-device checks,
+pending-state fences and uncertain-effect lock retention remain effective.
+Only confirmed placement creates the new candidate's genuine promotion receipt.
+Activity and Computer history stay at their original paths. Maintenance success
+is not evidence that the original OTA succeeded; ordinary installed OTA and
+automatic relaunch must subsequently be qualified separately.
+
 ## Cold backend startup deadline
 
 The desktop uses a bounded 15-second budget for the original Go startup,
