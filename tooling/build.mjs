@@ -331,6 +331,9 @@ await Promise.all([
 const nativeArchive = await compileNativeArchive({
   root,
   readSource: readBuildInput,
+  ...(goInputs
+    ? { compilerExecutable: path.join(goInputs.toolchain.root, "bin/go") }
+    : {}),
 });
 const tunnelInput = await embedTunnelClient(output, root);
 inputRecords.set(`dependency:${tunnelInput.path}`, tunnelInput);
