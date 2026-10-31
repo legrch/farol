@@ -260,7 +260,9 @@ it("renders a nonmodal projection and does not initiate a check on mount", async
     finishRead({ status: "unavailable" });
   });
   expect(host.querySelector("dialog")).toBeNull();
-  expect(host.textContent).toContain("Waiting for the original update command");
+  expect(host.textContent).toContain(
+    "The update will continue in the background.",
+  );
   expect(
     [...host.querySelectorAll("button")].find(
       (button) => button.textContent === "Install and Relaunch",

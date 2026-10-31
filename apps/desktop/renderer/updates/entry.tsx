@@ -184,8 +184,9 @@ export function UpdatesWindow({ api }: { api: UpdatesAPI }) {
       )}
       {state.status === "ready" && state.pending && (
         <p role="status">
-          Waiting for the original update command. Closing this window will not
-          cancel it.
+          {update?.phase === "applying"
+            ? "Farol is preparing the update and will restart when ready."
+            : "You can close this window. The update will continue in the background."}
         </p>
       )}
       {projection?.outcome === "unknown" && (

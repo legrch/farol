@@ -71,13 +71,18 @@ func (p *liveNativePredecessor) stop(t *testing.T) {
 
 type liveNativeFixture struct {
 	execNativeFixture
-	pred     *liveNativePredecessor
-	quitHook func()
+	pred         *liveNativePredecessor
+	quitHook     func()
+	dropObserver bool
 }
 
 func newLiveNativeFixture(t *testing.T, trees bool) *liveNativeFixture {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "farol-live-helper-")
+	parent, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(parent, "farol-live-helper-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,12 +124,17 @@ func newLiveNativeFixture(t *testing.T, trees bool) *liveNativeFixture {
 // the marker and used by the request, to model a reused or mismatched identity.
 func (f *liveNativeFixture) arm(t *testing.T, markerStart string) {
 	t.Helper()
-	if f.pred != nil {
-		f.pred.stop(t)
-	}
 	cmd := exec.Command("/bin/cat")
 	cmd.Dir = "/"
 	cmd.Env = []string{"PATH=/usr/bin:/bin"}
+	f.armCommand(t, markerStart, cmd)
+}
+
+func (f *liveNativeFixture) armCommand(t *testing.T, markerStart string, cmd *exec.Cmd) {
+	t.Helper()
+	if f.pred != nil {
+		f.pred.stop(t)
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -229,12 +239,26 @@ func (f *liveNativeFixture) run(t *testing.T, request map[string]any, quit bool,
 	c.cmd.Dir = "/"
 	c.cmd.WaitDelay = time.Second
 	c.cmd.Stdout, c.cmd.Stderr = &c.stdout, &c.stderr
+	var observerRead, observerWrite *os.File
+	if f.dropObserver {
+		observerRead, observerWrite, err = os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer observerRead.Close()
+		defer observerWrite.Close()
+		c.cmd.Stdout = observerWrite
+		c.cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	}
 	stdin, err := c.cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err = c.cmd.Start(); err != nil {
 		t.Fatal(err)
+	}
+	if observerWrite != nil {
+		_ = observerWrite.Close()
 	}
 	_ = stdin.Close()
 	_ = requestRead.Close()
@@ -258,6 +282,9 @@ func (f *liveNativeFixture) run(t *testing.T, request map[string]any, quit bool,
 		t.Fatal("relaunch refusal fixture unexpectedly admitted Quit")
 	}
 	if waiting && quit {
+		if observerRead != nil {
+			_ = observerRead.Close()
+		}
 		if f.quitHook != nil {
 			f.quitHook()
 		} else {
@@ -274,6 +301,22 @@ func (f *liveNativeFixture) run(t *testing.T, request map[string]any, quit bool,
 		t.Fatal(waitErr)
 	}
 	return liveNativeOutcome{execNativeOutcome: execNativeOutcome{ack: ack, stdout: c.stdout.Bytes(), stderr: c.stderr.Bytes(), exit: exit, cmd: c.cmd}, waitingFrame: waiting}
+}
+
+// Losing the original desktop's terminal reader must not cancel an admitted
+// update. This uses a disposable predecessor and a detached native helper; it
+// does not qualify LaunchServices or the shared /Applications slot.
+func TestLiveHelperNativeApplySurvivesClosedObserver(t *testing.T) {
+	liveNativeRequire(t)
+	f := newLiveNativeFixture(t, true)
+	f.dropObserver = true
+	f.arm(t, "")
+	request := f.request("apply", false)
+	o := f.run(t, request, true)
+	f.wantWaitingFrame(t, request, o.ack)
+	if o.exit != 0 || f.phase(t) != "verified" {
+		t.Fatalf("detached update did not survive its observer: exit=%d phase=%s stderr=%s", o.exit, f.phase(t), o.stderr)
+	}
 }
 
 func (f *liveNativeFixture) wantWaitingFrame(t *testing.T, request map[string]any, got []byte) {
@@ -614,4 +657,86 @@ func TestLiveHelperNativeSuccessorMarkerRefusesBeforeMutation(t *testing.T) {
 	if execNativeRead(t, filepath.Join(f.home, "Applications/Farol.app/Contents/Info.plist")) != execNativeTestdata(t, "oracle.xml") {
 		t.Fatal("successor bundle was replaced")
 	}
+}
+
+// Real Electron creates the detached helper, then quits after the original ACK.
+// No windows, account, owner profile, shared slot or LaunchServices participates.
+func TestLiveHelperNativeApplyAfterElectronQuit(t *testing.T) {
+	liveNativeRequire(t)
+	electron := os.Getenv("FAROL_TEST_HELPER_ELECTRON")
+	if !filepath.IsAbs(electron) {
+		t.Skip("explicit reviewed Electron required")
+	}
+	f := newLiveNativeFixture(t, true)
+	script := filepath.Join(f.dir, "electron-helper.cjs")
+	const source = `const {app}=require('electron');
+const fs=require('node:fs'); const path=require('node:path'); const {spawn}=require('node:child_process');
+const root=process.argv[2]; app.setPath('userData',path.join(root,'electron-profile'));
+app.whenReady().then(()=>{app.dock?.hide(); let input='';
+process.stdin.setEncoding('utf8'); process.stdin.on('data',chunk=>{input+=chunk; if(!input.includes('\n')) return;
+process.stdin.removeAllListeners('data'); const plan=JSON.parse(input);
+const out=fs.openSync(path.join(root,'terminal.json'),'wx',0o600);
+const err=fs.openSync(path.join(root,'stderr.log'),'wx',0o600);
+const child=spawn(plan.binary,['run-live-release-helper'],{cwd:'/',env:{PATH:'/usr/bin:/bin',LANG:'C.UTF-8'},detached:true,stdio:['ignore',out,err,'pipe','pipe']});
+fs.closeSync(out); fs.closeSync(err); child.unref();
+child.stdio[3].end(JSON.stringify(plan.request)+'\n'); let ack='';
+child.stdio[4].on('data',chunk=>{ack+=chunk;}); child.stdio[4].on('end',()=>{
+fs.writeFileSync(path.join(root,'ack.json'),ack,{mode:0o600});
+fs.writeFileSync(path.join(root,'helper-pid.json'),JSON.stringify(child.pid),{mode:0o600});
+fs.writeFileSync(path.join(plan.state,'last-quit.json'),JSON.stringify({schema:1,at:new Date().toISOString(),drained:true,unconfirmed:[]}),{mode:0o600});
+fs.unlinkSync(path.join(plan.state,'running.json')); app.quit();});
+}); process.stdin.on('end',()=>app.quit());});`
+	if err := os.WriteFile(script, []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(electron, script, f.dir)
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8"}
+	cmd.Dir = "/"
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	f.armCommand(t, "", cmd)
+	request := f.request("apply", false)
+	request["waitSeconds"] = 10
+	protocol, err := protocolapp.Bind(context.Background(), closedHelperJSON(t, request), inputapp.New(inputnative.JSONDecoder{}), protocolnative.JSONCodec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot, err := protocol.BuildSlotBinding(context.Background(), protocolnative.JSONCodec{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(f.operation, "slot-binding.json"), slot, 0600); err != nil {
+		t.Fatal(err)
+	}
+	plan := closedHelperJSON(t, map[string]any{"binary": execNativeCompiled(t), "request": request, "state": f.statePath})
+	if _, err = f.pred.stdin.Write(append(plan, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	var ack []byte
+	for time.Now().Before(deadline) {
+		ack, err = os.ReadFile(filepath.Join(f.dir, "ack.json"))
+		if err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("Electron ACK missing: %v %s", err, stderr.String())
+	}
+	f.wantWaitingFrame(t, request, ack)
+	f.pred.stop(t)
+	for time.Now().Before(deadline) {
+		terminal, _ := os.ReadFile(filepath.Join(f.dir, "terminal.json"))
+		if bytes.Contains(terminal, []byte(`"phase": "verified"`)) {
+			if f.phase(t) != "verified" {
+				t.Fatal("journal did not verify")
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	logs, _ := os.ReadFile(filepath.Join(f.operation, "helper.log.jsonl"))
+	helperError, _ := os.ReadFile(filepath.Join(f.dir, "stderr.log"))
+	t.Fatalf("helper did not complete after Electron quit: %s %s %s", logs, helperError, stderr.String())
 }

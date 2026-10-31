@@ -104,6 +104,16 @@ func closedHelperExecute(ctx context.Context, in closedHelperExecution) (result 
 	if ctx == nil || in.milestone == nil || in.readiness == nil || in.files.Operation == nil {
 		return nil, closedHelperFail(false)
 	}
+	writeReleaseHelperLog(in.files.Operation, "execution_started", "")
+	defer func() {
+		if p := recover(); p != nil {
+			writeReleaseHelperLog(in.files.Operation, "execution_failed", "helper_panicked")
+			panic(p)
+		}
+		if err != nil {
+			writeReleaseHelperLog(in.files.Operation, "execution_failed", helperLogCode(err))
+		}
+	}()
 	operation, binding, directory := closedHelperOperationBinding(in.request, in.files)
 	admission := &closedHelperJournalAdmission{helper: in.helper, gate: releasestate.New(), operation: operation, binding: binding}
 	closeOwner := func(closeFn func() error) {
@@ -117,11 +127,13 @@ func closedHelperExecute(ctx context.Context, in closedHelperExecution) (result 
 		return nil, err
 	}
 	defer closeOwner(repository.Close)
+	writeReleaseHelperLog(in.files.Operation, "journal_opened", "")
 	rejected, err := rejection.New(ctx, in.files.Operation, binding, operation, admission, in.until)
 	if err != nil {
 		return nil, err
 	}
 	defer closeOwner(rejected.Close)
+	writeReleaseHelperLog(in.files.Operation, "rejection_opened", "")
 	err = executionnative.WithAdmittedInstallation(ctx, closedHelperNativeConfig(in, repository, rejected), func(native executionnative.AdmittedInstallation) error {
 		executed, e := in.milestone.Execute(ctx, native, in.readiness, native)
 		if e == nil {
@@ -214,9 +226,12 @@ func (s closedReleaseHelper) execute(ctx context.Context) (result *executionapp.
 	if ctx == nil || !o.updateHeld || o.execution == nil || o.milestone == nil || o.readiness == nil {
 		return nil, closedHelperFail(false)
 	}
+	writeReleaseHelperLog(o.files.Operation, "execution_recheck_started", "")
 	if err = s.reverify(ctx, o.request); err != nil {
+		writeReleaseHelperLog(o.files.Operation, "execution_recheck_failed", helperLogCode(err))
 		return nil, err
 	}
+	writeReleaseHelperLog(o.files.Operation, "execution_recheck_completed", "")
 	effective, cancel := closedHelperEffective(ctx, o.original, o.until)
 	defer cancel()
 	var executed *executionapp.Result
