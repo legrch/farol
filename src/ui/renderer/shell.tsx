@@ -17,6 +17,7 @@ import { computerSetup } from "./computer-setup";
 import { connectionPresentation } from "../../../apps/desktop/renderer/connection-presentation";
 import { TaskEditor } from "./task";
 import { Home } from "./home";
+import { SelfTestPanel } from "./self-test-panel";
 import { Setup } from "./setup";
 import { ChatDirect } from "./chat-direct";
 import { ChatReadonly } from "./chat-readonly";
@@ -957,6 +958,7 @@ export function Shell() {
   const destination = state.destination;
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>("all");
   const stage = useRef<HTMLElement>(null);
+  const deepTestMenuItem = useRef<HTMLButtonElement>(null);
   const activityHeading = useRef<HTMLHeadingElement>(null);
   const preferenceLoaded = useRef(false);
   const scrollPositions = useRef(
@@ -1368,6 +1370,37 @@ export function Shell() {
         </PanelBoundary>
       </main>
       <UpdateNotice snapshot={state} facade={facade} />
+      {state.overlay === "connection-tests" && (
+        <Overlay
+          title="Connection tests"
+          className="connection-tests-menu"
+          initialFocus={deepTestMenuItem}
+          onClose={() => facade.overlay("none")}
+        >
+          <button
+            ref={deepTestMenuItem}
+            onClick={() => facade.overlay("deep-test")}
+          >
+            Deep test
+          </button>
+        </Overlay>
+      )}
+      {state.overlay === "deep-test" && (
+        <Overlay
+          title="Deep test"
+          className="deep-test-sheet"
+          onClose={() => facade.overlay("none")}
+        >
+          <SelfTestPanel
+            facade={facade}
+            workspaces={
+              state.configuration?.status === "ready"
+                ? state.configuration.settings.computer.workspaces
+                : []
+            }
+          />
+        </Overlay>
+      )}
       {state.overlay === "chat-conversations" && (
         <Overlay
           title="Chat conversations"

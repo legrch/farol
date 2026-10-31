@@ -1837,6 +1837,31 @@ kbd {
   align-items: center;
   gap: 8px;
 }
+.connection-test-menu-trigger {
+  min-width: 30px;
+  padding-inline: 8px;
+}
+.sheet.connection-tests-menu {
+  inset: 54px 16px auto auto;
+  margin: 0;
+  width: min(240px, calc(100vw - 32px));
+}
+.connection-tests-menu .sheet-content {
+  padding: 12px;
+}
+.connection-tests-menu .section-heading h2 {
+  font-size: 14px;
+}
+.connection-tests-menu .sheet-content > button {
+  width: 100%;
+  text-align: left;
+}
+.deep-test-sheet .home-self-test {
+  margin-top: 0;
+}
+.deep-test-sheet .home-self-test > h2 {
+  display: none;
+}
 .connection-test-control[data-toolbar] .connection-test-feedback {
   position: static;
   width: 230px;

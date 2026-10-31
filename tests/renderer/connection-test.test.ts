@@ -110,7 +110,7 @@ it.each([
       expect(
         toolbar?.querySelector('[role="status"]')?.nextElementSibling
           ?.textContent,
-      ).toBe("Test in ChatGPT");
+      ).toBe("Test connection");
       expect(h.configure).toHaveBeenCalledTimes(1);
     } finally {
       await act(async () => root.unmount());
@@ -119,6 +119,35 @@ it.each([
     }
   },
 );
+it("publishes the toolbar menu through the host presentation owner without starting a test", async () => {
+  const h = await setup();
+  const overlay = vi.fn();
+  const facade = { ...h.facade, overlay } as RendererFacade;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () =>
+      root.render(
+        createElement(ConnectionTestButton, { facade, toolbar: true }),
+      ),
+    );
+    await act(async () =>
+      host
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="More connection tests"]',
+        )!
+        .click(),
+    );
+    expect(overlay).toHaveBeenCalledExactlyOnceWith("connection-tests");
+    expect(h.configure).not.toHaveBeenCalled();
+    expect(host.querySelector("dialog")).toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+    h.cleanup();
+  }
+});
 it("repeated checks use fresh observation identities without repairing a healthy connection", async () => {
   const h = await setup();
   try {

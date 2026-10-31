@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import type { RendererFacade, Intent } from "../../../src/ui/renderer/contract";
 import { commandAllowed } from "../../../src/ui/renderer/command-eligibility";
 import { computerSetup } from "../../../src/ui/renderer/computer-setup";
@@ -323,6 +323,19 @@ export function ConnectionTestButton({
 }) {
   const test = useConnectionTest(facade),
     snapshot = facade.getSnapshot();
+  const arrow = useRef<HTMLButtonElement>(null);
+  const previousOverlay = useRef(snapshot.overlay);
+  const menuOpen = toolbar && snapshot.overlay === "connection-tests";
+  useEffect(() => {
+    if (
+      toolbar &&
+      snapshot.overlay === "none" &&
+      (previousOverlay.current === "connection-tests" ||
+        previousOverlay.current === "deep-test")
+    )
+      arrow.current?.focus();
+    previousOverlay.current = snapshot.overlay;
+  }, [snapshot.overlay, toolbar]);
   const allowed =
     commandAllowed(snapshot, "connector.repair") &&
     computerSetup(snapshot).canReconnect;
@@ -342,8 +355,26 @@ export function ConnectionTestButton({
         disabled={disabled || test.busy || !allowed}
         onClick={() => void runFreshConnectionTest(facade)}
       >
-        {test.busy ? "Testing…" : "Test in ChatGPT"}
+        {test.busy
+          ? "Testing…"
+          : toolbar
+            ? "Test connection"
+            : "Test in ChatGPT"}
       </button>
+      {toolbar && (
+        <button
+          ref={arrow}
+          type="button"
+          className="connection-test-menu-trigger"
+          aria-label="More connection tests"
+          aria-haspopup="dialog"
+          aria-expanded={menuOpen}
+          disabled={disabled}
+          onClick={() => facade.overlay(menuOpen ? "none" : "connection-tests")}
+        >
+          <span aria-hidden="true">▾</span>
+        </button>
+      )}
       {!toolbar && test.message && (
         <span role="status" className="connection-test-feedback">
           {test.message}

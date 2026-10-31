@@ -91,9 +91,12 @@ const event = (id: string, at: number): ActivityEntry => ({
   operation: null,
   code: null,
 });
-async function mount(initial: Partial<WindowSnapshot> = {}) {
+async function mount(
+  initial: Partial<WindowSnapshot> = {},
+  selfTest = vi.fn(async () => undefined),
+) {
   const f = fixture();
-  const c = new WindowController(f.api);
+  const c = new WindowController({ ...f.api, selfTest });
   await c.start();
   let patch = initial;
   const host = document.createElement("div");
@@ -120,6 +123,7 @@ async function mount(initial: Partial<WindowSnapshot> = {}) {
     f,
     c,
     host,
+    selfTest,
     set: async (value: Partial<WindowSnapshot>) => {
       patch = value;
       await render();
@@ -133,6 +137,11 @@ async function mount(initial: Partial<WindowSnapshot> = {}) {
     },
   };
 }
+it("does not mount the deep test or read its history from Home", async () => {
+  const h = await mount(working());
+  expect(h.host.querySelector(".home-self-test")).toBeNull();
+  expect(h.selfTest).not.toHaveBeenCalled();
+});
 it("shows only Finish setup and the four truthful steps when unfinished", async () => {
   const h = await mount();
   expect(h.host.querySelectorAll("section")).toHaveLength(1);

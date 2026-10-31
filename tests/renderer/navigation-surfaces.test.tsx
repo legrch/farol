@@ -106,6 +106,48 @@ describe("closed renderer destinations", () => {
       ).toBeTruthy();
     }
   });
+  it("hides the native ChatGPT view for both test surfaces and never starts a deep test on open", async () => {
+    const h = await mount({
+      page: "general",
+      shell: true,
+      value: readySettings(true),
+      signIn: "authenticated",
+    });
+    await act(async () => h.c.navigate({ area: "chatgpt" }));
+    const selfTest = vi
+      .spyOn(h.c, "selfTest")
+      .mockRejectedValue(new Error("history unavailable"));
+    vi.mocked(h.f.api.configure).mockClear();
+    const arrow = h.host.querySelector<HTMLButtonElement>(
+      '[aria-label="More connection tests"]',
+    )!;
+    await act(async () => arrow.click());
+    expect(h.c.getSnapshot().overlay).toBe("connection-tests");
+    expect(
+      h.host.querySelector('dialog[aria-label="Connection tests"]'),
+    ).toBeTruthy();
+    expect(vi.mocked(h.f.api.layout).mock.calls.at(-1)?.[5]).toBe("task-menu");
+    expect(selfTest).not.toHaveBeenCalled();
+    await h.click("Deep test");
+    expect(h.c.getSnapshot().overlay).toBe("deep-test");
+    const dialog = h.host.querySelector('dialog[aria-label="Deep test"]')!;
+    expect(dialog).toBeTruthy();
+    expect(vi.mocked(h.f.api.layout).mock.calls.at(-1)?.[5]).toBe("task-menu");
+    expect(selfTest).toHaveBeenCalled();
+    expect(
+      selfTest.mock.calls.every(
+        ([command]) => (command as { kind: string }).kind === "history",
+      ),
+    ).toBe(true);
+    expect(dialog.textContent).toContain("Test history is unavailable");
+    expect(h.f.api.configure).not.toHaveBeenCalled();
+    await act(async () =>
+      dialog.dispatchEvent(new Event("cancel", { cancelable: true })),
+    );
+    expect(h.c.getSnapshot().overlay).toBe("none");
+    expect(vi.mocked(h.f.api.layout).mock.calls.at(-1)?.[5]).toBe("none");
+    expect(document.activeElement).toBe(arrow);
+  });
   it("keeps retained Chat flows inert without advertising an extra toolbar entry", async () => {
     const h = await mount({ page: "general", shell: true });
     expect(h.button("Chat conversations")).toBeUndefined();
