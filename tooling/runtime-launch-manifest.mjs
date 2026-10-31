@@ -268,6 +268,14 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
       "legacy-system-tool",
     ),
     launch(
+      "release.desktop-lifetime-runtime",
+      "modules/release/infra/native/desktop/darwin.go",
+      "Run",
+      "go.Command",
+      "runtime",
+      "app-bundled-electron",
+    ),
+    launch(
       "release.go-process-observation",
       "modules/release/infra/native/processprobe/native.go",
       "nativeBoundary.prepare",

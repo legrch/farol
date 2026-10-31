@@ -57,6 +57,36 @@ const accepted: InstalledUpdateRequest = {
 };
 
 describe("installed update launcher", () => {
+  it("refuses before spawn when lifetime custody or the durable spawn recorder is missing", async () => {
+    const retain = vi.fn();
+    const unavailable = await startInstalledUpdateHelper(
+      goSelection(),
+      accepted,
+      {
+        lifetime: { available: () => false, retain },
+        recordSpawn: async () => undefined,
+      },
+    );
+    expect(unavailable).toMatchObject({
+      status: "not_started",
+      reason: "helper_lifetime_unavailable",
+      operation: { pid: null },
+    });
+    const unrecorded = await startInstalledUpdateHelper(
+      goSelection(),
+      accepted,
+      {
+        lifetime: { available: () => true, retain },
+      },
+    );
+    expect(unrecorded).toMatchObject({
+      status: "not_started",
+      reason: "spawn_record_required",
+      operation: { pid: null },
+    });
+    expect(retain).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
   it.each([
     ["0.1.11-owner.beta.1", "0.2.0-owner.beta.2"],
     ["0.2.0-owner.beta.3", "0.2.0-owner.beta.5"],

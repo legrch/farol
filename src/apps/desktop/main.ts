@@ -122,6 +122,7 @@ import {
   desktopDevShellImageMatches,
 } from "../../../apps/desktop/dev-core-layout";
 import { promises as rawFs } from "original-fs";
+import { createDesktopHelperLifetime } from "../../modules/release/infra/native/desktop-helper-lifetime";
 import {
   createInstalledUpdateRuntime,
   waitForInstalledUpdateRelaunch,
@@ -1035,6 +1036,7 @@ async function initializeInstalledUpdater(): Promise<void> {
   if (buildEnvironment !== "preview") return;
   try {
     installedUpdater = await createInstalledUpdateRuntime({
+      helperLifetime: createDesktopHelperLifetime(),
       operations: operationsStore(),
       directory,
       userData: app.getPath("userData"),

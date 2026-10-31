@@ -2,6 +2,32 @@
 
 This is the narrow N → N+1 replacement mechanism for the **NEW** `io.github.legrch.farol` app. It is not the release feed, package verifier, promotion authority, active-work drain, or acceptance ledger. Initial installation still uses the existing promotion flow. No Git checkout, V0 path, privileged install, Gatekeeper setting, or quarantine change is used.
 
+## macOS launcher lifetime
+
+The packaged outer launcher starts the compiled backend's
+`run-desktop-launcher` mode before Electron. This LaunchServices root runs no
+updater policy and owns no profile, journal or promotion lease. Electron is
+still the actual predecessor PID/start token. Before the existing helper request
+is sent, the desktop durably records the original spawn and sends a private,
+bounded binding on Electron fd7. The root observes that helper's kernel lifetime,
+rechecks its parent and microsecond start identity, and echoes the binding on
+fd8. The helper's request/ACK fd3/4 and closed lease/continue fd5/6 are unchanged.
+The same absolute readiness deadline covers this transfer; a late/lost ACK
+cannot authorize another helper or a request after the bound.
+
+Normal Electron Quit leaves this root alive until every enrolled original helper
+has an exit event. Signal forwarding and the sole Electron reap share one owner,
+so forwarding never uses a reaped PID. An explicit root termination is an abort,
+not helper success. If kernel observation fails, new enrollment closes and the
+root retains uncertain lifetime custody until explicitly terminated; it neither
+guesses completion nor starts a replacement observer or helper.
+
+The package producer and verifier bind the same exact outer-launcher bytes.
+The corrected launcher must be in the running seed as well as its successor.
+A green source or disposable lifecycle test does not qualify packaged startup,
+Dock/Quit, installed apply, target readiness or live connection. Existing release
+tags/assets remain immutable.
+
 ## Unsigned beta reliability contract (2026-10-22)
 
 The active Go live helper keeps the atomic App/Staged exchange and saves the

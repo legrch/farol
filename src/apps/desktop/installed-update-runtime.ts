@@ -48,6 +48,7 @@ import {
   type InstalledUpdateOperation,
   type InstalledUpdateLaunch,
   type InstalledUpdateHelperSelection,
+  type InstalledHelperLifetime,
 } from "../../modules/release/infra/native/installed-update-helper";
 import {
   BuildIdentitySchema,
@@ -1658,6 +1659,7 @@ async function recheckAdmission(
   }
 }
 export type InstalledUpdateRuntimeOptions = Readonly<{
+  helperLifetime?: InstalledHelperLifetime;
   operations?: OperationsRecorder;
   directory: string;
   userData: string;
@@ -3808,6 +3810,12 @@ async function createRuntime(
         return { status: "blocked", code: "UPDATE_RESTORE_NOT_READY" };
       if (action === "recover" && !(await originalHelperEnded(restorable!)))
         return { status: "blocked", code: "UPDATE_HELPER_EXIT_UNCONFIRMED" };
+      const helperLifetime = options.helperLifetime;
+      if (!helperLifetime?.available())
+        return {
+          status: "blocked",
+          code: "UPDATE_HELPER_LIFETIME_UNAVAILABLE",
+        };
       const admission = await acquireAdmission();
       if (!admission.ok) return { status: "blocked", code: admission.code };
       let keepAdmission = false;
@@ -3857,6 +3865,7 @@ async function createRuntime(
               relaunch: true,
             },
             {
+              lifetime: helperLifetime,
               recordSpawn: async (spawned) => {
                 operation = spawned;
                 if (spawned.pid === null)
@@ -3972,6 +3981,8 @@ async function createRuntime(
     // run no update helper, so refuse before any admission, copy or binding.
     if (options.goCoreArtifact === undefined)
       return { status: "blocked", code: "UPDATE_HELPER_GO_CORE_REQUIRED" };
+    if (!supervised && !options.helperLifetime?.available())
+      return { status: "blocked", code: "UPDATE_HELPER_LIFETIME_UNAVAILABLE" };
     const confirmedManifest = confirmation
       ? parseRetainedGithubReleaseManifest(retained)
       : null;
@@ -4274,6 +4285,9 @@ async function createRuntime(
               relaunch: !supervised && !quitContext,
             },
             {
+              ...(!supervised && options.helperLifetime
+                ? { lifetime: options.helperLifetime }
+                : {}),
               ...(supervised ? { promotionLease: supervised.transfer } : {}),
               ...(quitContext
                 ? {

@@ -187,6 +187,7 @@ function compiledFor(selected: typeof build) {
 }
 function options() {
   return {
+    helperLifetime: { available: () => true, retain: async () => undefined },
     directory: path.join(slot, "Contents/Resources/app"),
     userData,
     build,
@@ -7839,6 +7840,24 @@ describe("immutable operation binding recovery (disposable bytes, mocked effects
 });
 
 describe("attested Go update helper (no Python alternative; mocked launch seam)", () => {
+  it("keeps a verified download ready when the running seed has no lifetime guardian", async () => {
+    const { helperLifetime: _omitted, ...rest } = options();
+    const controller = await createInstalledUpdateRuntime(rest);
+    await controller!.initialize();
+    await controller!.check();
+    await controller!.download();
+    await controller!.restart();
+    expect(controller!.snapshot()).toMatchObject({
+      phase: "ready",
+      blockedBy: "UPDATE_HELPER_LIFETIME_UNAVAILABLE",
+    });
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(mocks.copyApp).not.toHaveBeenCalled();
+    expect(mocks.publishBinding).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+    expect(JSON.parse(await fs.readFile(ready, "utf8")).operation).toBeNull();
+    await controller!.close();
+  });
   async function legacy() {
     const { goCoreArtifact: _omitted, ...rest } = options();
     const controller = await createInstalledUpdateRuntime(rest);

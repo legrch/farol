@@ -75,6 +75,16 @@ export type InstalledUpdateRequest = InstalledUpdateFields &
       }>
   );
 
+/** Private host custody; no updater lease, authority or renderer input. */
+export interface InstalledHelperLifetime {
+  available(): boolean;
+  retain(
+    request: InstalledUpdateRequest,
+    helper: Readonly<{ pid: number; processStart: string }>,
+    deadlineAt: number,
+  ): Promise<void>;
+}
+
 function validInode(value: InstalledUpdateInode): boolean {
   return (
     !!value &&
@@ -221,6 +231,7 @@ export type InstalledUpdateLaunch =
         | "owner_home_invalid"
         | "promotion_lease_unconfirmed"
         | "spawn_record_required"
+        | "helper_lifetime_unavailable"
         | QuitEffectRefusal;
       operation: InstalledUpdateOperation;
     }>
@@ -398,6 +409,7 @@ export async function startInstalledUpdateHelper(
     deadlineAt?: number;
     canStartEffect?(): boolean;
     promotionLease?: PromotionLeaseTransfer;
+    lifetime?: InstalledHelperLifetime;
     // The application records this actual handle before any helper program or
     // operation bytes are sent. Failure remains an observed, unknown launch.
     recordSpawn?(operation: InstalledUpdateOperation): Promise<void>;
@@ -428,6 +440,8 @@ export async function startInstalledUpdateHelper(
     deadlineAt === undefined
       ? undefined
       : Math.min(deadlineAt, Date.now() + readinessTimeoutMs);
+  const lifetimeDeadlineAt =
+    readinessDeadlineAt ?? Date.now() + readinessTimeoutMs;
   const waitBudgetMs = (): number =>
     readinessDeadlineAt === undefined
       ? readinessTimeoutMs
@@ -501,6 +515,7 @@ export async function startInstalledUpdateHelper(
       | "owner_home_invalid"
       | "promotion_lease_unconfirmed"
       | "spawn_record_required"
+      | "helper_lifetime_unavailable"
       | QuitEffectRefusal,
   ): InstalledUpdateLaunch => {
     // This receipt explicitly has no process and no process exit code. It is
@@ -524,6 +539,10 @@ export async function startInstalledUpdateHelper(
   };
   const initialRefusal = effectRefusal();
   if (initialRefusal) return beforeSpawn(initialRefusal);
+  if (options.lifetime && !options.lifetime.available())
+    return beforeSpawn("helper_lifetime_unavailable");
+  if (options.lifetime && !options.recordSpawn)
+    return beforeSpawn("spawn_record_required");
   // A legacy build, or a Go capability the host could not select, starts no
   // process at all. The retired interpreter is never an alternative.
   if (selection.kind === "refused") return beforeSpawn(selection.reason);
@@ -659,6 +678,10 @@ export async function startInstalledUpdateHelper(
   };
   const canSendEffect = (): boolean => {
     if (settled) return false;
+    if (options.lifetime && Date.now() >= lifetimeDeadlineAt) {
+      unknown("helper_lifetime_deadline_expired");
+      return false;
+    }
     const reason = effectRefusal();
     if (reason) {
       unknown(reason);
@@ -912,7 +935,7 @@ export async function startInstalledUpdateHelper(
   };
   child.once("spawn", () => {
     spawned = true;
-    if (!options.recordSpawn && !lease) {
+    if (!options.recordSpawn && !lease && !options.lifetime) {
       sendRequest();
       return;
     }
@@ -921,6 +944,21 @@ export async function startInstalledUpdateHelper(
         if (options.recordSpawn) await options.recordSpawn(operation);
       } catch {
         unknown("spawn_record_failed");
+        return;
+      }
+      try {
+        if (options.lifetime) {
+          if (!canSendEffect() || child.pid === undefined) return;
+          const processStart = await captureInstalledProcessStart(child.pid);
+          if (!canSendEffect()) return;
+          await options.lifetime.retain(
+            pinned,
+            { pid: child.pid, processStart },
+            lifetimeDeadlineAt,
+          );
+        }
+      } catch {
+        unknown("helper_lifetime_unknown");
         return;
       }
       if (!canSendEffect()) return;
