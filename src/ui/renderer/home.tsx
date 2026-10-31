@@ -7,7 +7,6 @@ import { useSetupIntents, retainedSetupIntents } from "./settings";
 import { unresolvedActions } from "../../../apps/desktop/renderer/unresolved-actions";
 import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
 import { selectedConnectorApp } from "../../pkg/product-settings/connector-app-selection";
-import { SelfTestPanel } from "./self-test-panel";
 import type { RendererFacade, WindowSnapshot } from "./contract";
 
 type Props = { snapshot: WindowSnapshot; facade: RendererFacade };
@@ -436,12 +435,6 @@ export function Home({ snapshot, facade }: Props) {
             </section>
           )}
         </>
-      )}
-      {checklist.completed && snapshot.configuration?.status === "ready" && (
-        <SelfTestPanel
-          facade={facade}
-          workspaces={snapshot.configuration.settings.computer.workspaces}
-        />
       )}
       {(working || recent.length > 0) && (
         <section className="home-recent" aria-labelledby="home-recent-title">

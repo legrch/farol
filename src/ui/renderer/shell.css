@@ -1837,6 +1837,57 @@ kbd {
   align-items: center;
   gap: 8px;
 }
+.connection-test-menu-trigger {
+  min-width: 30px;
+  padding-inline: 8px;
+}
+.connection-test-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 150px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--sheet);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+}
+.connection-test-menu button {
+  width: 100%;
+  text-align: left;
+}
+.connection-test-dialog-backdrop {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(0 0 0 / 42%);
+}
+.connection-test-dialog {
+  width: min(620px, 100%);
+  max-height: min(80vh, 760px);
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--sheet);
+  box-shadow: 0 16px 48px rgb(0 0 0 / 24%);
+}
+.connection-test-dialog-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.connection-test-dialog-heading h2 {
+  margin: 0;
+}
+.connection-test-dialog .home-self-test {
+  margin-top: 12px;
+}
 .connection-test-control[data-toolbar] .connection-test-feedback {
   position: static;
   width: 230px;

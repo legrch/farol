@@ -110,7 +110,7 @@ it.each([
       expect(
         toolbar?.querySelector('[role="status"]')?.nextElementSibling
           ?.textContent,
-      ).toBe("Test in ChatGPT");
+      ).toBe("Test connection");
       expect(h.configure).toHaveBeenCalledTimes(1);
     } finally {
       await act(async () => root.unmount());
@@ -119,6 +119,65 @@ it.each([
     }
   },
 );
+it("opens deep test from the toolbar menu without starting it and dismisses accessibly", async () => {
+  const h = await setup();
+  const selfTest = vi.fn(async () => {
+    throw new Error("history unavailable in fixture");
+  });
+  const facade = { ...h.facade, selfTest } as RendererFacade;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => {
+      root.render(
+        createElement(ConnectionTestButton, { facade, toolbar: true }),
+      );
+    });
+    const quick = [...host.querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === "Test connection",
+    );
+    expect(quick).toBeTruthy();
+    await act(async () => {
+      host
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="More connection tests"]',
+        )!
+        .click();
+    });
+    expect(selfTest).not.toHaveBeenCalled();
+    await act(async () => {
+      [...host.querySelectorAll("[role=menuitem]")][0]!.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+    });
+    await act(async () => Promise.resolve());
+    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(selfTest).toHaveBeenCalledTimes(1);
+    expect(selfTest).toHaveBeenCalledWith({
+      kind: "history",
+      workspaceId: expect.any(String),
+    });
+    expect(
+      selfTest.mock.calls.some(
+        ([command]) => (command as { kind: string }).kind === "start",
+      ),
+    ).toBe(false);
+    await act(async () => {
+      document.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    });
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(
+      host.querySelector('[aria-label="More connection tests"]'),
+    );
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+    h.cleanup();
+  }
+});
 it("repeated checks use fresh observation identities without repairing a healthy connection", async () => {
   const h = await setup();
   try {
