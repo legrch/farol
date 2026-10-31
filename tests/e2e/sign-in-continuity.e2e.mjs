@@ -483,6 +483,56 @@ try {
     "compact-controls-fit",
     "zero-submits",
   );
+  // Exercise a full local Next/Continue navigation on the retained embedded
+  // browser before any Back-to-Setup workaround. This is not Google MFA.
+  await application.evaluate(
+    ({ webContents }, id) =>
+      webContents
+        .fromId(id)
+        .executeJavaScript(
+          "document.querySelector('[data-testid=next-page-button]').click()",
+        ),
+    documentId,
+  );
+  const next = await poll(
+    () =>
+      application.evaluate(
+        async ({ webContents, BrowserWindow }, input) => {
+          const c = webContents.fromId(input.id);
+          const main = BrowserWindow.fromId(input.mainId);
+          return {
+            id: c.id,
+            ready: await c.executeJavaScript(
+              "Boolean(document.querySelector('[data-testid=next-page-ready]'))",
+            ),
+            attached: main.contentView.children.some(
+              (v) => v.webContents?.id === c.id && v.getVisible(),
+            ),
+          };
+        },
+        { id: documentId, mainId },
+      ),
+    (s) => s.ready && s.attached,
+    "SIGN_IN_NEXT_NOT_INTERACTIVE",
+  );
+  assert.equal(next.id, documentId);
+  await screenshot("next-before-return", documentId);
+  await application.evaluate(
+    ({ webContents }, id) =>
+      webContents
+        .fromId(id)
+        .executeJavaScript(
+          "document.querySelector('[data-testid=next-page-return]').click()",
+        ),
+    documentId,
+  );
+  const returned = await poll(
+    native,
+    (s) => s.documents.length === 1 && s.documents[0].id === documentId,
+    "SIGN_IN_NEXT_RETURN_LOST_DOCUMENT",
+  );
+  assert.equal(returned.documents[0].submits, 0);
+  report.checks.push("local-next-and-continue-without-setup-workaround");
   await close();
   assert.doesNotMatch(
     stderr,
@@ -502,6 +552,10 @@ try {
     throw error;
   } finally {
     await stopChatGptFixture(fixture);
+    if (report.status === "PASS" && application === null) {
+      await fs.rm(profile, { recursive: true });
+      report.profileReleased = true;
+    }
     await save();
     console.log(
       JSON.stringify({

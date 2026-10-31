@@ -89,7 +89,7 @@ export async function startChatGptFixture(options = {}) {
       response.end(`<!doctype html>
         <html><head><meta charset="utf-8"><title>ChatGPT next-step fixture</title>
         <style>body{background:#111216;color:#f7f7f8;font:16px sans-serif;padding:32px}</style></head>
-        <body><p data-testid="next-page-ready">Next step reached</p></body></html>`);
+        <body><p data-testid="next-page-ready">Next step reached</p><a data-testid="next-page-return" href="/chatgpt">Continue</a></body></html>`);
       return;
     }
     if (
