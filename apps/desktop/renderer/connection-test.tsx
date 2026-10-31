@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import type { RendererFacade, Intent } from "../../../src/ui/renderer/contract";
 import { commandAllowed } from "../../../src/ui/renderer/command-eligibility";
 import { computerSetup } from "../../../src/ui/renderer/computer-setup";
 import { SeparateAppVerificationScopeSchema } from "../../../src/pkg/product-settings/contract";
 import { connectorWorkspaceSelection } from "../../../src/pkg/product-settings/connector-workspace-selection";
-import { SelfTestPanel } from "../../../src/ui/renderer/self-test-panel";
 
 type State = Readonly<{
   phase: "idle" | "preparing" | "testing" | "done" | "refused" | "unknown";
@@ -324,57 +323,26 @@ export function ConnectionTestButton({
 }) {
   const test = useConnectionTest(facade),
     snapshot = facade.getSnapshot();
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [deepTestOpen, setDeepTestOpen] = useState(false);
-  const control = useRef<HTMLDivElement>(null);
-  const menuItem = useRef<HTMLButtonElement>(null);
-  const dialogClose = useRef<HTMLButtonElement>(null);
   const arrow = useRef<HTMLButtonElement>(null);
+  const previousOverlay = useRef(snapshot.overlay);
+  const menuOpen = toolbar && snapshot.overlay === "connection-tests";
+  useEffect(() => {
+    if (
+      toolbar &&
+      snapshot.overlay === "none" &&
+      (previousOverlay.current === "connection-tests" ||
+        previousOverlay.current === "deep-test")
+    )
+      arrow.current?.focus();
+    previousOverlay.current = snapshot.overlay;
+  }, [snapshot.overlay, toolbar]);
   const allowed =
     commandAllowed(snapshot, "connector.repair") &&
     computerSetup(snapshot).canReconnect;
-  useEffect(() => {
-    if (menuOpen) menuItem.current?.focus();
-  }, [menuOpen]);
-  useEffect(() => {
-    if (deepTestOpen) dialogClose.current?.focus();
-  }, [deepTestOpen]);
-  useEffect(() => {
-    if (!menuOpen && !deepTestOpen) return;
-    const dismissOnOutside = (event: PointerEvent) => {
-      if (control.current && !control.current.contains(event.target as Node)) {
-        setMenuOpen(false);
-        setDeepTestOpen(false);
-      }
-    };
-    const dismissOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      if (deepTestOpen) {
-        setDeepTestOpen(false);
-        setMenuOpen(false);
-        arrow.current?.focus();
-      } else {
-        setMenuOpen(false);
-        arrow.current?.focus();
-      }
-    };
-    document.addEventListener("pointerdown", dismissOnOutside);
-    document.addEventListener("keydown", dismissOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", dismissOnOutside);
-      document.removeEventListener("keydown", dismissOnEscape);
-    };
-  }, [menuOpen, deepTestOpen]);
-  const workspaces =
-    snapshot.configuration?.status === "ready"
-      ? snapshot.configuration.settings.computer.workspaces
-      : [];
   return (
     <div
       className="connection-test-control"
       data-toolbar={toolbar || undefined}
-      ref={control}
     >
       {toolbar && test.message && (
         <span role="status" className="connection-test-feedback">
@@ -387,103 +355,25 @@ export function ConnectionTestButton({
         disabled={disabled || test.busy || !allowed}
         onClick={() => void runFreshConnectionTest(facade)}
       >
-        {toolbar
-          ? test.busy
-            ? "Testing…"
-            : "Test connection"
-          : test.busy
-            ? "Testing…"
+        {test.busy
+          ? "Testing…"
+          : toolbar
+            ? "Test connection"
             : "Test in ChatGPT"}
       </button>
       {toolbar && (
-        <>
-          <button
-            ref={arrow}
-            type="button"
-            className="connection-test-menu-trigger"
-            aria-label="More connection tests"
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            disabled={disabled}
-            onClick={() => setMenuOpen((open) => !open)}
-          >
-            <span aria-hidden="true">▾</span>
-          </button>
-          {menuOpen && (
-            <div
-              className="connection-test-menu"
-              role="menu"
-              aria-label="Connection tests"
-            >
-              <button
-                ref={menuItem}
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMenuOpen(false);
-                  setDeepTestOpen(true);
-                }}
-              >
-                Deep test
-              </button>
-            </div>
-          )}
-          {deepTestOpen && (
-            <div
-              className="connection-test-dialog-backdrop"
-              onMouseDown={(event) => {
-                if (event.target === event.currentTarget) {
-                  setDeepTestOpen(false);
-                  arrow.current?.focus();
-                }
-              }}
-            >
-              <section
-                className="connection-test-dialog"
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="deep-test-dialog-title"
-                onKeyDown={(event) => {
-                  if (event.key !== "Tab") return;
-                  const focusable = [
-                    ...event.currentTarget.querySelectorAll<HTMLElement>(
-                      'button:not(:disabled), select:not(:disabled), [href], [tabindex]:not([tabindex="-1"])',
-                    ),
-                  ];
-                  const first = focusable[0];
-                  const last = focusable.at(-1);
-                  if (!first || !last) return;
-                  if (event.shiftKey && document.activeElement === first) {
-                    event.preventDefault();
-                    last.focus();
-                  } else if (
-                    !event.shiftKey &&
-                    document.activeElement === last
-                  ) {
-                    event.preventDefault();
-                    first.focus();
-                  }
-                }}
-              >
-                <div className="connection-test-dialog-heading">
-                  <h2 id="deep-test-dialog-title">Deep test</h2>
-                  <button
-                    ref={dialogClose}
-                    type="button"
-                    aria-label="Close deep test"
-                    onClick={() => {
-                      setDeepTestOpen(false);
-                      arrow.current?.focus();
-                    }}
-                  >
-                    ×
-                  </button>
-                </div>
-                <SelfTestPanel facade={facade} workspaces={workspaces} />
-              </section>
-            </div>
-          )}
-        </>
+        <button
+          ref={arrow}
+          type="button"
+          className="connection-test-menu-trigger"
+          aria-label="More connection tests"
+          aria-haspopup="dialog"
+          aria-expanded={menuOpen}
+          disabled={disabled}
+          onClick={() => facade.overlay(menuOpen ? "none" : "connection-tests")}
+        >
+          <span aria-hidden="true">▾</span>
+        </button>
       )}
       {!toolbar && test.message && (
         <span role="status" className="connection-test-feedback">

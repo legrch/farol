@@ -96,8 +96,7 @@ async function mount(
   selfTest = vi.fn(async () => undefined),
 ) {
   const f = fixture();
-  f.api.selfTest = selfTest;
-  const c = new WindowController(f.api);
+  const c = new WindowController({ ...f.api, selfTest });
   await c.start();
   let patch = initial;
   const host = document.createElement("div");
