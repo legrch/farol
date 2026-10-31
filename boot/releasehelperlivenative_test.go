@@ -72,9 +72,11 @@ func (p *liveNativePredecessor) stop(t *testing.T) {
 
 type liveNativeFixture struct {
 	execNativeFixture
-	pred         *liveNativePredecessor
-	quitHook     func()
-	dropObserver bool
+	pred             *liveNativePredecessor
+	quitHook         func()
+	dropObserver     bool
+	traceStall       bool
+	helperExecutable string
 }
 
 func newLiveNativeFixture(t *testing.T, trees bool) *liveNativeFixture {
@@ -118,6 +120,22 @@ func newLiveNativeFixture(t *testing.T, trees bool) *liveNativeFixture {
 		}
 	})
 	return f
+}
+
+func (f *liveNativeFixture) removeAfterSuccess(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() {
+		if t.Failed() {
+			return
+		}
+		if f.pred != nil && !f.pred.waited {
+			t.Error("fixture predecessor is not joined; retain evidence")
+			return
+		}
+		if err := os.RemoveAll(f.dir); err != nil {
+			t.Error(err)
+		}
+	})
 }
 
 // arm spawns the scratch "live app", records its identity and publishes the
@@ -233,10 +251,20 @@ func (f *liveNativeFixture) run(t *testing.T, request map[string]any, quit bool,
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := &closedHelperNativeCommand{name: "live-helper", dir: f.dir}
-	c.cmd = exec.Command(execNativeCompiled(t), append([]string{liveReleaseHelperCommand}, args...)...)
+	c := &closedHelperNativeCommand{name: "live-helper", dir: f.dir, traceStall: f.traceStall}
+	if f.traceStall {
+		c.waitBudget = 40 * time.Second
+	}
+	executable := f.helperExecutable
+	if executable == "" {
+		executable = execNativeCompiled(t)
+	}
+	c.cmd = exec.Command(executable, append([]string{liveReleaseHelperCommand}, args...)...)
 	c.cmd.ExtraFiles = []*os.File{requestRead, ackWrite}
 	c.cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8"}
+	if f.traceStall {
+		c.cmd.Env = append(c.cmd.Env, "GOTRACEBACK=all")
+	}
 	c.cmd.Dir = "/"
 	c.cmd.WaitDelay = time.Second
 	c.cmd.Stdout, c.cmd.Stderr = &c.stdout, &c.stderr
@@ -310,6 +338,7 @@ func (f *liveNativeFixture) run(t *testing.T, request map[string]any, quit bool,
 func TestLiveHelperNativeApplySurvivesClosedObserver(t *testing.T) {
 	liveNativeRequire(t)
 	f := newLiveNativeFixture(t, true)
+	f.removeAfterSuccess(t)
 	f.dropObserver = true
 	f.arm(t, "")
 	request := f.request("apply", false)
@@ -669,6 +698,7 @@ func TestLiveHelperNativeApplyAfterElectronQuit(t *testing.T) {
 		t.Skip("explicit reviewed Electron required")
 	}
 	f := newLiveNativeFixture(t, true)
+	f.removeAfterSuccess(t)
 	t.Cleanup(func() {
 		if f.pred != nil {
 			f.pred.stop(t)
