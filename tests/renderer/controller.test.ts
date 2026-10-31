@@ -188,6 +188,80 @@ it.each([false, true])(
   },
 );
 
+it.each(["SETUP_INCOMPLETE", "SETTINGS_WRITE_FAILED", "unknown"])(
+  "rearms automatic completion only after a non-writing refusal and fresh sign-in proof (%s)",
+  async (outcome) => {
+    const f = fixture();
+    const data = bootstrap();
+    data.configuration.settings = readySettings(true);
+    let current = { ...data.configuration, status: "ready" as const };
+    let sequence = 0,
+      completions = 0;
+    vi.mocked(f.api.bootstrap).mockImplementation(async () => ({
+      ...data,
+      configuration: current,
+    }));
+    vi.mocked(f.api.configure).mockImplementation(async (command) => {
+      if (command.kind === "chatgpt.observe-sign-in") {
+        const reply = signInReply(command, "authenticated", current);
+        reply.evidence.binding!.sequence = ++sequence;
+        return reply;
+      }
+      if (command.kind === "chatgpt.verify")
+        return {
+          ok: true,
+          snapshot: current,
+          evidence: {
+            kind: "chatgpt.readiness",
+            state: "authenticated",
+            code: null,
+          },
+        };
+      if (command.kind === "setup.progress") {
+        completions++;
+        if (completions === 1) {
+          if (outcome === "unknown") throw Error("reply lost");
+          return { ok: false, error: outcome, snapshot: current };
+        }
+        const settings = structuredClone(current.settings);
+        settings.revision++;
+        settings.setup.journey.dismissed = true;
+        current = { status: "ready", settings };
+        return { ok: true, snapshot: current };
+      }
+      throw Error("unexpected command");
+    });
+    const c = new WindowController(f.api);
+    try {
+      await c.start();
+      f.emit("route", { state: "loaded" });
+      await vi.waitFor(() =>
+        expect(c.getSnapshot().intents["settings:setup.progress:"]?.state).toBe(
+          outcome === "SETUP_INCOMPLETE" ? "refused" : "unknown",
+        ),
+      );
+      for (let i = 0; i < 3; i++) await c.refresh();
+      expect(completions).toBe(1);
+      f.emit("route", { state: "loading" });
+      f.emit("route", { state: "loaded" });
+      if (outcome === "SETUP_INCOMPLETE") {
+        await vi.waitFor(() =>
+          expect(
+            c.getSnapshot().intents["settings:setup.progress:"]?.state,
+          ).toBe("applied"),
+        );
+        expect(completions).toBe(2);
+        expect(current.settings.setup.journey.dismissed).toBe(true);
+      } else {
+        await c.refresh();
+        expect(completions).toBe(1);
+      }
+    } finally {
+      c.dispose();
+    }
+  },
+);
+
 describe("Goal17 explicit ChatGPT presentation", () => {
   it("reads the current confirmation after an overlapping refresh supersedes the completed check", async () => {
     const f = fixture();

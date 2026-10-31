@@ -82,7 +82,7 @@ describe("step four primary action", () => {
     },
   );
 
-  it("switches to Finish only with current matching 4/4", async () => {
+  it("completes Setup only with current matching 4/4 and offers Home", async () => {
     const h = await mount({
       step: "attachment",
       value: pending(),
@@ -91,10 +91,9 @@ describe("step four primary action", () => {
     await h.confirmSignIn();
     expect(h.button("Test in ChatGPT")?.disabled).toBe(false);
     await h.publish(readySettings(true));
-    expect(h.button("Test in ChatGPT")).toBeUndefined();
-    expect(h.button("Start using Farol")?.disabled).toBe(false);
-    await h.click("Start using Farol");
     expect(h.configuration().settings.setup.journey.dismissed).toBe(true);
+    expect(h.button("Back to Home")?.disabled).toBe(false);
+    await h.click("Back to Home");
     expect(h.c.getSnapshot().destination.area).toBe("home");
   });
 
