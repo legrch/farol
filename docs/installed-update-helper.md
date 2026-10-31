@@ -28,6 +28,14 @@ A green source or disposable lifecycle test does not qualify packaged startup,
 Dock/Quit, installed apply, target readiness or live connection. Existing release
 tags/assets remain immutable.
 
+Current beta qualification covers matching English process-start tokens in the
+caller and native helper contexts. Localized `LC_TIME` and custom `TZ` contexts
+remain unqualified; a mismatch refuses enrollment before the helper request.
+Saved process-start tokens remain opaque. Do not normalize historical marker
+readers or rewrite saved tokens to make an update proceed. The native helper's
+existing process observer also has its own fixed locale, so changing only the
+guardian formatter would not qualify localized OTA.
+
 ## Unsigned beta reliability contract (2026-10-22)
 
 The active Go live helper keeps the atomic App/Staged exchange and saves the

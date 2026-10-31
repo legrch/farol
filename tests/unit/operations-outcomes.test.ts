@@ -36,6 +36,8 @@ it.each([
   "PROCESS_PREPARATION_POLICY_MISMATCH",
   "PROCESS_PREPARATION_AUTHORIZATION_CHANGED",
   "PROCESS_CONTROL_LIFETIME_MISMATCH",
+  "UPDATE_HELPER_LIFETIME_UNAVAILABLE",
+  "helper_lifetime_unavailable",
 ])("records known preparation refusal %s without promoting UNKNOWN", (code) => {
   expect(operationResult({ status: "refused", code })).toEqual({
     outcome: "refused",
