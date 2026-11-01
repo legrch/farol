@@ -114,9 +114,7 @@ describe("closed renderer destinations", () => {
       signIn: "authenticated",
     });
     await act(async () => h.c.navigate({ area: "chatgpt" }));
-    const selfTest = vi
-      .spyOn(h.c, "selfTest")
-      .mockRejectedValue(new Error("history unavailable"));
+    const selfTest = vi.spyOn(h.c, "selfTest");
     vi.mocked(h.f.api.configure).mockClear();
     const arrow = h.host.querySelector<HTMLButtonElement>(
       '[aria-label="More connection tests"]',
@@ -133,13 +131,17 @@ describe("closed renderer destinations", () => {
     const dialog = h.host.querySelector('dialog[aria-label="Deep test"]')!;
     expect(dialog).toBeTruthy();
     expect(vi.mocked(h.f.api.layout).mock.calls.at(-1)?.[5]).toBe("task-menu");
-    expect(selfTest).toHaveBeenCalled();
-    expect(
-      selfTest.mock.calls.every(
-        ([command]) => (command as { kind: string }).kind === "history",
-      ),
-    ).toBe(true);
-    expect(dialog.textContent).toContain("Test history is unavailable");
+    expect(selfTest).not.toHaveBeenCalled();
+    expect(dialog.textContent).toContain(
+      "Farol does not send it automatically",
+    );
+    const prompt = dialog.querySelector("textarea")!;
+    expect(prompt.readOnly).toBe(true);
+    expect(prompt.value).toContain("list the approved workspaces");
+    expect(prompt.value).toContain(
+      "Stop on an unknown outcome and do not retry",
+    );
+    expect(dialog.querySelector("select")).toBeNull();
     expect(h.f.api.configure).not.toHaveBeenCalled();
     await act(async () =>
       dialog.dispatchEvent(new Event("cancel", { cancelable: true })),

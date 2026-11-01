@@ -1856,12 +1856,6 @@ kbd {
   width: 100%;
   text-align: left;
 }
-.deep-test-sheet .home-self-test {
-  margin-top: 0;
-}
-.deep-test-sheet .home-self-test > h2 {
-  display: none;
-}
 .connection-test-control[data-toolbar] .connection-test-feedback {
   position: static;
   width: 230px;

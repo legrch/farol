@@ -17,7 +17,7 @@ import { computerSetup } from "./computer-setup";
 import { connectionPresentation } from "../../../apps/desktop/renderer/connection-presentation";
 import { TaskEditor } from "./task";
 import { Home } from "./home";
-import { SelfTestPanel } from "./self-test-panel";
+import { DeepTestPrompt } from "./deep-test-prompt";
 import { Setup } from "./setup";
 import { ChatDirect } from "./chat-direct";
 import { ChatReadonly } from "./chat-readonly";
@@ -1391,14 +1391,7 @@ export function Shell() {
           className="deep-test-sheet"
           onClose={() => facade.overlay("none")}
         >
-          <SelfTestPanel
-            facade={facade}
-            workspaces={
-              state.configuration?.status === "ready"
-                ? state.configuration.settings.computer.workspaces
-                : []
-            }
-          />
+          <DeepTestPrompt />
         </Overlay>
       )}
       {state.overlay === "chat-conversations" && (
