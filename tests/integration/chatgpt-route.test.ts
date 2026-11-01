@@ -89,6 +89,7 @@ describe("main auth presentation composes automatic primary fitting", () => {
       windowMode: "secondary-visible",
       devSecondaryDisplay: false,
       explicitPreviewWindowSize: false,
+      sidecarDisplayOnly: false,
       selectedVisibleTestPlacement: (requested: {
         width: number;
         height: number;
@@ -179,6 +180,9 @@ describe("temporary Instant connector profile", () => {
     const loadURL = vi.fn(async (url: string) => {
       currentUrl = url;
       current = hydrating ?? afterLoad;
+      surface.webContents.emit("did-start-navigation", {}, url, false, true);
+      surface.webContents.emit("did-navigate", {}, url);
+      surface.webContents.emit("dom-ready");
     });
     const sendInputEvent = vi.fn(() => {
       throw new Error("Background native keyboard must not be used");
@@ -216,13 +220,15 @@ describe("temporary Instant connector profile", () => {
     const surface = {
       isDestroyed: () => false,
       loadURL,
-      webContents: {
+      webContents: Object.assign(new EventEmitter(), {
+        setWindowOpenHandler: vi.fn(),
         executeJavaScript,
         sendInputEvent,
         getURL: () => currentUrl,
-      },
+      }),
     };
     Reflect.set(route, "routeWindow", surface);
+    Reflect.get(route, "hardenContents").call(route, surface.webContents, true);
     const prepare = Reflect.get(route, "prepareTemporaryInstantProfile") as (
       candidate: typeof surface,
       temporary?: boolean,
@@ -761,12 +767,16 @@ describe("temporary Instant connector profile", () => {
   );
 
   it("fails closed when ChatGPT does not confirm temporary mode", async () => {
-    const route = profileRoute(regular, regular);
-    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(13_000);
-    await expect(route.prepare()).resolves.toBe(
-      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
-    );
-    expect(route.sendInputEvent).not.toHaveBeenCalled();
+    vi.useFakeTimers();
+    try {
+      const route = profileRoute(regular, regular);
+      const pending = route.prepare();
+      await vi.advanceTimersByTimeAsync(13_001);
+      expect(await pending).toBe("CHATGPT_TEMPORARY_CHAT_REQUIRED");
+      expect(route.sendInputEvent).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each(["https://chatgpt.com/?temporary-chat=true", "https://chatgpt.com/"])(
@@ -4827,15 +4837,15 @@ describe("ChatGPT route submission boundary", () => {
   });
 
   it("keeps a positively observed pre-click refusal retry-safe", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(3000);
     const executeJavaScript = vi
       .fn()
       .mockResolvedValueOnce(prepared)
-      .mockResolvedValueOnce({ activated: false });
-    vi.spyOn(Date, "now")
-      .mockReturnValueOnce(3_000)
-      .mockReturnValueOnce(6_000)
-      .mockReturnValue(9_000);
-
+      .mockImplementationOnce(async () => {
+        vi.setSystemTime(9000);
+        return { activated: false };
+      });
     await expect(
       taskRoute(executeJavaScript).runReadonlyTask("read the selected file"),
     ).resolves.toMatchObject({
@@ -4843,6 +4853,7 @@ describe("ChatGPT route submission boundary", () => {
       code: "CHATGPT_SUBMIT_UNAVAILABLE",
     });
     expect(executeJavaScript).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
   });
 
   it("uses the same unknown boundary after an attachment upload", async () => {
@@ -9349,3 +9360,75 @@ it.each([false, true])(
     }
   },
 );
+
+describe("task execution in a loading current frame", () => {
+  function loadingFrame(execute: ReturnType<typeof vi.fn>, timeout = 1000) {
+    const candidate = taskRoute(execute);
+    Reflect.get(candidate, "options").taskTimeoutMs = timeout;
+    const contents = Reflect.get(candidate, "routeWindow").webContents;
+    const frame = {
+      url: contents.getURL(),
+      isDestroyed: () => false,
+      executeJavaScript: contents.executeJavaScript,
+    };
+    contents.mainFrame = frame;
+    const queued = vi.fn(() => new Promise(() => {}));
+    contents.executeJavaScript = queued;
+    return { candidate, contents, frame, queued };
+  }
+  it("completes a known no-click refusal without using the full-load queue", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ navigated: true });
+    const f = loadingFrame(execute);
+    expect(
+      await f.candidate.runReadonlyTask("loading frame check"),
+    ).toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+    });
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(f.queued).not.toHaveBeenCalled();
+  });
+  it("refuses a replaced frame before activation", async () => {
+    const execute = vi.fn();
+    const f = loadingFrame(execute);
+    execute.mockImplementationOnce(async () => {
+      f.contents.mainFrame = { ...f.frame };
+      return prepared;
+    });
+    expect(
+      await f.candidate.runReadonlyTask("frame replacement check"),
+    ).toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+    });
+    expect(execute).toHaveBeenCalledOnce();
+    expect(f.queued).not.toHaveBeenCalled();
+  });
+  it.each(["before-send", "activation"] as const)(
+    "bounds a hung %s script without repeating it",
+    async (stage) => {
+      vi.useFakeTimers();
+      try {
+        const execute = vi.fn();
+        if (stage === "activation") execute.mockResolvedValueOnce(prepared);
+        execute.mockImplementationOnce(() => new Promise(() => {}));
+        const f = loadingFrame(execute, 20);
+        const pending = f.candidate.runReadonlyTask(
+          "bounded loading frame check",
+        );
+        await vi.advanceTimersByTimeAsync(21);
+        expect(await pending).toMatchObject({
+          state:
+            stage === "activation" ? "outcome_unknown" : "failed_before_submit",
+        });
+        expect(execute).toHaveBeenCalledTimes(stage === "activation" ? 2 : 1);
+        expect(f.queued).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+});

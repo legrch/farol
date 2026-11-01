@@ -295,6 +295,33 @@ describe("explicit iPad test presentation", () => {
       bounds: { x: -1118, y: 39, width: 1100, height: 740 },
     });
   });
+  it("fits a relaunched default viewport to a smaller permitted Sidecar", () => {
+    const result = selectPreviewWindowPlacement(
+      [externalPrimary, sidecar],
+      5,
+      { width: 1180, height: 760 },
+      false,
+      false,
+      true,
+      true,
+    );
+    expect(result).toMatchObject({
+      displayId: 7,
+      primary: false,
+      bounds: { x: -1135, y: 30, width: 1135, height: 759 },
+    });
+    expect(() =>
+      selectPreviewWindowPlacement(
+        [externalPrimary],
+        5,
+        { width: 1180, height: 760 },
+        false,
+        false,
+        true,
+        true,
+      ),
+    ).toThrow("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
+  });
   it("refuses a missing Sidecar while another secondary remains connected", () => {
     expect(() =>
       selectPreviewWindowPlacement(

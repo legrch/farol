@@ -176,3 +176,17 @@ closed its handles and removed its fixture tree. The earlier sandbox refusal
 remains a refusal; this is a distinct run. It does not establish installed
 replacement, profile compatibility, post-start recovery or a normal N → N+1
 update, and did not touch the installed application.
+
+## Explicit Sidecar test presentation
+
+An ordinary live request may carry `relaunchPresentation: "sidecar-only"` only
+when relaunch is enabled. The desktop derives this closed selection from its
+trusted test arguments. The request snapshot, readiness comparison and private
+ACK correlation retain the exact value; it never grants Computer authority.
+Both native launch validators accept only the ordinary five arguments or the
+same arguments followed by `--preview-window-mode=secondary-visible` and
+`--sidecar-display-only`. Verified image binding remains independent of that
+argument grammar. Target launch and internal rollback launch preserve the same
+selection. An implicit Sidecar viewport fits the permitted display; an explicit
+viewport keeps its exact test contract. Missing Sidecar never implies permission
+to use the primary display. Ordinary owner launches keep their existing behavior.

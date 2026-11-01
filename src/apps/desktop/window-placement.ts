@@ -127,6 +127,7 @@ export function selectPreviewWindowPlacement(
   allowPrimaryDisplay = false,
   builtInDisplayOnly = false,
   sidecarDisplayOnly = false,
+  fitSidecar = false,
 ): PreviewWindowPlacement {
   if (displays.length === 0) {
     throw new Error("WINDOW_DISPLAY_UNAVAILABLE");
@@ -153,8 +154,10 @@ export function selectPreviewWindowPlacement(
   const selected =
     preferred.find(
       (d) =>
-        d.workArea.width >= requested.width &&
-        d.workArea.height >= requested.height,
+        d.workArea.width >=
+          (sidecarDisplayOnly && fitSidecar ? 640 : requested.width) &&
+        d.workArea.height >=
+          (sidecarDisplayOnly && fitSidecar ? 520 : requested.height),
     ) ??
     (allowPrimaryDisplay || (!sidecarDisplayOnly && secondary.length === 0)
       ? primary
@@ -176,7 +179,7 @@ export function selectPreviewWindowPlacement(
     selection,
     bounds: centeredBounds(
       selected.workArea,
-      isPrimary
+      isPrimary || (sidecarDisplayOnly && fitSidecar)
         ? {
             width: Math.min(requested.width, selected.workArea.width),
             height: Math.min(requested.height, selected.workArea.height),

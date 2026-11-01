@@ -206,3 +206,22 @@ func TestLaunchArgumentsMustNameTheVerifiedImage(t *testing.T) {
 		t.Fatal("request without a home accepted")
 	}
 }
+
+func TestSidecarArgumentsStayBoundToRequestAndImage(t *testing.T) {
+	mode := "sidecar-only"
+	r := port.HelperRequest{Home: "/Users/owner", RelaunchPresentation: &mode}
+	base := []string{"/usr/bin/open", "-a", r.Home + "/Applications/Farol.app", "--args", "--farol-installed-update-relaunch={}"}
+	args := append(append([]string(nil), base...), "--preview-window-mode=secondary-visible", "--sidecar-display-only")
+	if !launchBound(r, false, "", args) || launchBound(r, false, "", base) {
+		t.Fatal("requested presentation lost")
+	}
+	r.RelaunchPresentation = nil
+	if launchBound(r, false, "", args) {
+		t.Fatal("unsolicited presentation admitted")
+	}
+	r.RelaunchPresentation = &mode
+	args[2] = "/Applications/Other.app"
+	if launchBound(r, false, "", args) {
+		t.Fatal("presentation redirected verified image")
+	}
+}

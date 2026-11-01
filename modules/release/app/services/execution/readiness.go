@@ -205,6 +205,10 @@ func sameJournalValue(a, b *release.Journal) bool {
 	return *a == *b
 }
 func sameHelperRequest(a, b port.HelperRequest) bool {
+	if (a.RelaunchPresentation == nil) != (b.RelaunchPresentation == nil) || a.RelaunchPresentation != nil && *a.RelaunchPresentation != *b.RelaunchPresentation {
+		return false
+	}
+	a.RelaunchPresentation, b.RelaunchPresentation = nil, nil
 	if (a.InstallLocation == nil) != (b.InstallLocation == nil) || (a.Predecessor == nil) != (b.Predecessor == nil) || (a.LeaseIdentity == nil) != (b.LeaseIdentity == nil) {
 		return false
 	}

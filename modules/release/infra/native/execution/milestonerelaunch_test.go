@@ -482,6 +482,37 @@ func TestPostSwapContentMismatchRollsBackAndRelaunchesPrevious(t *testing.T) {
 	f.physical(t, f.repo, "rollback_completed")
 }
 
+func TestSidecarPostSwapCompensationRelaunchesPrevious(t *testing.T) {
+	f := newFakeRelaunchLifecycle(t)
+	mode := "sidecar-only"
+	f.config.Request.RelaunchPresentation = &mode
+	m, ready := f.prepare(t, "apply", true)
+	reverify := f.config.Reverify
+	changed := false
+	f.config.Reverify = func(ctx context.Context, request port.HelperRequest) error {
+		if err := reverify(ctx, request); err != nil {
+			return err
+		}
+		if !changed && f.diskPhase(t) == "new_installed" {
+			changed = true
+			return os.WriteFile(filepath.Join(f.app, "Contents/Info.plist"), []byte("invalid target content"), 0644)
+		}
+		return nil
+	}
+	result, err := f.run(t, m, ready)
+	if err != nil {
+		t.Fatal(describe(err))
+	}
+	if !changed || result == nil || result.Phase != "rollback_completed" || result.Code != "target_verification" || f.fake.opens != 1 || f.fake.arguments[0][2] != f.app {
+		t.Fatal(result, f.fake.arguments)
+	}
+	if len(f.fake.arguments[0]) != 7 || f.fake.arguments[0][5] != "--preview-window-mode=secondary-visible" || f.fake.arguments[0][6] != "--sidecar-display-only" {
+		t.Fatal("compensation dropped Sidecar", f.fake.arguments)
+	}
+	lifecycleRequireTree(t, f.app, f.source)
+	f.physical(t, f.repo, "rollback_completed")
+}
+
 func TestPostSwapMetadataOnlyChangeVerifiesAndRelaunchesTarget(t *testing.T) {
 	f := newFakeRelaunchLifecycle(t)
 	m, ready := f.prepare(t, "apply", true)

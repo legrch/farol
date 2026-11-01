@@ -7,13 +7,35 @@ import { createRequire } from "node:module";
 import { buildSync } from "esbuild";
 
 // Real hidden Electron with a loopback DOM and deliberately unfinished image.
-// This qualifies navigation/readiness only: no provider, Send, owner profile or OTA.
+// Exercises the full connector caller with one synthetic Send; no provider, owner profile or OTA.
 const root = path.resolve(import.meta.dirname, "../..");
 const scratch = await fs.mkdtemp(
   path.join(os.tmpdir(), "farol-readiness-native-"),
 );
 const entry = path.join(scratch, "fixture.mjs");
 let confirmed = false;
+const syntheticPage = `<!doctype html><html><body>
+<textarea id="prompt-textarea"></textarea>
+<button type="button" aria-label="Turn off temporary chat">Temporary chat</button>
+<button type="button">Personalized</button>
+<button type="button" aria-label="Select ChatGPT model" onclick="document.getElementById('power').hidden=false">6 Instant</button>
+<input id="power" type="range" min="0" max="2" value="0" hidden>
+<span data-testid="composer-app-chip" data-plugin-id="plugin_asdk_app_ReadinessFixture" data-app-name="Farol Fixture">Farol Fixture</span>
+<button type="button" data-testid="send-button" disabled>Send</button>
+<section id="conversation"></section>{{held-image}}
+<script>
+const composer=document.getElementById('prompt-textarea');
+const send=document.querySelector('[data-testid="send-button"]');
+composer.addEventListener('input',()=>{send.disabled=!composer.value.trim();});
+document.addEventListener('keydown',event=>{if(event.key==='Escape')document.getElementById('power').hidden=true;});
+send.onclick=()=>{
+ const user=document.createElement('article'); user.setAttribute('data-message-author-role','user');user.setAttribute('data-message-id','fixture-user');user.textContent=composer.value;
+ const reply=document.createElement('article');reply.setAttribute('data-message-author-role','assistant');reply.setAttribute('data-message-id','fixture-answer');reply.textContent='Synthetic connection receipt is ready.';
+ document.getElementById('conversation').append(user,reply);composer.value='';
+ fetch('/receipt',{method:'POST'}).catch(()=>{});
+};
+</script></body></html>`;
+
 try {
   buildSync({
     stdin: {
@@ -27,10 +49,11 @@ app.setPath('userData', ${JSON.stringify(path.join(scratch, "profile"))});
 app.dock?.hide();
 let route;
 const held = new Set();
-let temporaryNavigations = 0, nonGetRequests = 0, finishLoads = 0;
+let temporaryNavigations = 0, nonGetRequests = 0, finishLoads = 0, syntheticSends = 0;
 const server = http.createServer((req, res) => {
   if (req.method !== 'GET') nonGetRequests++;
   const url = new URL(req.url, 'http://127.0.0.1');
+  if (url.pathname === '/receipt' && req.method === 'POST') { syntheticSends++; res.writeHead(200).end('{}'); return; }
   if (url.pathname === '/held.svg') {
     held.add(res);
     res.once('close', () => held.delete(res));
@@ -40,8 +63,7 @@ const server = http.createServer((req, res) => {
   const temporary = url.searchParams.get('temporary-chat') === 'true';
   if (temporary) temporaryNavigations++;
   res.writeHead(200, { 'content-type': 'text/html' });
-  res.end('<!doctype html><html><body><textarea id="prompt-textarea"></textarea>' +
-    (temporary ? '<img src="/held.svg">' : '') + '</body></html>');
+  res.end(${JSON.stringify(syntheticPage)}.replace('{{held-image}}', temporary ? '<img src="/held.svg">' : ''));
 });
 const closeServer = async () => {
   for (const res of held) res.end();
@@ -53,7 +75,7 @@ app.whenReady().then(async () => {
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const origin = 'http://127.0.0.1:' + server.address().port;
     route = new ChatGptRoute({ homeUrl:origin+'/', initialUrl:origin+'/',
-      e2eOrigin:origin, parent:()=>null, windowPresentation:{mode:'hidden'} });
+      e2eOrigin:origin, parent:()=>null, windowPresentation:{mode:'hidden'},taskTimeoutMs:10000,taskPollMs:30 });
     assert.deepEqual(await route.preload(), {status:'opened'});
     const windows = BrowserWindow.getAllWindows();
     assert.equal(windows.length, 1);
@@ -73,11 +95,25 @@ app.whenReady().then(async () => {
     assert.equal(nonGetRequests, 0);
     assert.equal(windows[0].isVisible(), false);
     assert.equal(windows[0].isFocused(), false);
+    let observedOutput = false, claims = 0;
+    const result = await route.runReadonlyTask('Synthetic startup connector check', [], {
+      readConnectorReceipt:async()=>syntheticSends===1 && observedOutput,
+      onDispatchIntent:async()=>{claims++;},
+      onTextDelta:async()=>{observedOutput=true;},
+    }, 'temporary-instant', {name:'Farol Fixture'});
+    assert.equal(result.state,'receipt_confirmed', JSON.stringify(result));
+    assert.equal(observedOutput,true);
+    assert.equal(syntheticSends,1);
+    assert.equal(claims,1);
+    assert.equal(finishLoads,0);
+    assert.equal(temporaryNavigations,1);
+    assert.equal(held.size,1);
+
     process.stdout.write(JSON.stringify({result:'PASS', mode:'hidden-disposable-electron',
       temporaryNavigations, fullLoadFinished:false, heldSubresources:held.size,
       authenticatedCurrentDocument:true, priorObservationInvalidated:true,
       elapsedMs:Math.round(performance.now()-started), provider:'NOT_RUN',
-      installedProfile:'NOT_TOUCHED', sends:0})+'\\n');
+      installedProfile:'NOT_TOUCHED', syntheticSends, claims, fullConnectorTask:result.state, responseProbeObserved:observedOutput})+'\\n');
   } finally {
     route?.dispose();
     await closeServer();

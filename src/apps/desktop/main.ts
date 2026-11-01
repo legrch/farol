@@ -12195,6 +12195,7 @@ function selectedVisibleTestPlacement(
     allowPrimaryDisplay,
     builtInDisplayOnly,
     sidecarDisplayOnly,
+    sidecarDisplayOnly && !explicitPreviewWindowSize,
   );
 }
 
@@ -12206,7 +12207,11 @@ function chatGptWindowPresentation(): ChatGptWindowPresentation | undefined {
     // Fixed test viewports stay exact. An explicit interactive viewport and
     // ordinary Dev may fit auth windows within their selected display.
     size:
-      buildEnvironment === "dev" || explicitPreviewWindowSize ? "fit" : "exact",
+      buildEnvironment === "dev" ||
+      explicitPreviewWindowSize ||
+      sidecarDisplayOnly
+        ? "fit"
+        : "exact",
     place: (requested) =>
       selectedVisibleTestPlacement(
         explicitPreviewWindowSize

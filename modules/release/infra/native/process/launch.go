@@ -68,6 +68,17 @@ func (d *drain) complete() bool {
 	return d.eof && !d.overflow
 }
 
+// ValidOpenArguments recognizes only the ordinary or closed Sidecar launch shape.
+func ValidOpenArguments(arguments []string) bool {
+	if len(arguments) != 5 && len(arguments) != 7 {
+		return false
+	}
+	if arguments[0] != "/usr/bin/open" || arguments[1] != "-a" || arguments[3] != "--args" || !strings.HasPrefix(arguments[4], "--farol-installed-update-relaunch=") {
+		return false
+	}
+	return len(arguments) == 5 || arguments[5] == "--preview-window-mode=secondary-visible" && arguments[6] == "--sidecar-display-only"
+}
+
 // Open receives only arguments built by the existing helper protocol owner.
 // A failed launch is never retried or compensated. The original bound is
 // shortened by the reference's ten-second launch cap, never renewed.
@@ -75,7 +86,7 @@ func Open(ctx context.Context, until time.Time, arguments []string, fence func(c
 	fail := func(internal bool, cause error) error {
 		return &port.HelperRecoveryFailure{Code: "launch_failed", Phase: "refused", Internal: internal, Uncertain: true, Cause: cause}
 	}
-	if ctx == nil || until.IsZero() || fence == nil || len(arguments) != 5 || arguments[0] != "/usr/bin/open" || arguments[1] != "-a" || arguments[3] != "--args" || !strings.HasPrefix(arguments[4], "--farol-installed-update-relaunch=") {
+	if ctx == nil || until.IsZero() || fence == nil || !ValidOpenArguments(arguments) {
 		return fail(true, nil)
 	}
 	end := time.Now().Add(10 * time.Second)

@@ -2438,6 +2438,24 @@ export class ChatGptRoute {
     if (!current || current.isDestroyed()) return { status: "unreachable" };
     const url = new URL(this.options.homeUrl);
     url.searchParams.set("temporary-chat", "true");
+    try {
+      await this.navigateRouteDocument(
+        current,
+        url.href,
+        Date.now() + ROUTE_OPEN_DEADLINE_MS,
+      );
+      this.options.onNavigationHistoryChanged?.(this.navigationHistory());
+      return { status: "opened" };
+    } catch {
+      return { status: "unreachable" };
+    }
+  }
+
+  private async navigateRouteDocument(
+    current: ChatGptRouteSurface,
+    url: string,
+    deadline: number,
+  ): Promise<void> {
     const beforeDocument = this.chatPhysicalDocumentGeneration;
     let readyDocument: number | null = null;
     let domReady: (() => void) | undefined;
@@ -2466,11 +2484,11 @@ export class ChatGptRoute {
             current.webContents.on("dom-ready", domReady);
           });
     try {
-      const navigation = current.loadURL(url.href);
+      const navigation = current.loadURL(url);
       await this.awaitRouteOpenStep(
         current,
         ordinaryReady ? Promise.race([navigation, ordinaryReady]) : navigation,
-        Date.now() + ROUTE_OPEN_DEADLINE_MS,
+        deadline,
       );
       if (
         this.routeWindow !== current ||
@@ -2480,11 +2498,7 @@ export class ChatGptRoute {
         (readyDocument !== null &&
           readyDocument !== this.chatPhysicalDocumentGeneration)
       )
-        return { status: "unreachable" };
-      this.options.onNavigationHistoryChanged?.(this.navigationHistory());
-      return { status: "opened" };
-    } catch {
-      return { status: "unreachable" };
+        throw new Error("CHATGPT_DOCUMENT_CHANGED");
     } finally {
       if (domReady) current.webContents.removeListener("dom-ready", domReady);
     }
@@ -3186,9 +3200,67 @@ export class ChatGptRoute {
     };
   }
 
+  // Execute against the captured frame rather than WebContents' full-load queue.
+  // The caller retains one deadline and its dispatch/UNKNOWN custody. Send alone
+  // may navigate before its original acknowledgement returns; it proves no auth.
+  private async executeTaskDocumentScript(
+    contents: WebContents,
+    script: string,
+    gesture: boolean,
+    deadline: number,
+    operationGeneration: number,
+    allowNavigationAfter = false,
+  ): Promise<unknown> {
+    const surface = this.routeWindow;
+    const documentGeneration = this.chatPhysicalDocumentGeneration;
+    const url = contents.getURL();
+    const frame = contents.mainFrame;
+    const sameOperation = () =>
+      surface !== null &&
+      this.routeWindow === surface &&
+      !surface.isDestroyed() &&
+      !this.disposing &&
+      surface.webContents === contents &&
+      this.taskObservationGeneration === operationGeneration;
+    const sameDocument = () =>
+      sameOperation() &&
+      !this.routeDocumentLoadFailed &&
+      !this.routeDocumentAwaitingCommit &&
+      this.chatPhysicalDocumentGeneration === documentGeneration &&
+      contents.getURL() === url &&
+      (!frame ||
+        (contents.mainFrame === frame &&
+          !frame.isDestroyed() &&
+          frame.url === url));
+    if (!sameDocument() || Date.now() >= deadline)
+      throw new Error("CHATGPT_TASK_DOCUMENT_UNAVAILABLE");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const value: unknown = await Promise.race([
+        frame
+          ? frame.executeJavaScript(script, gesture)
+          : contents.executeJavaScript(script, gesture),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("CHATGPT_TASK_DEADLINE")),
+            Math.max(0, deadline - Date.now()),
+          );
+        }),
+      ]);
+      if (Date.now() >= deadline) throw new Error("CHATGPT_TASK_DEADLINE");
+      if (!allowNavigationAfter && frame && !sameDocument())
+        throw new Error("CHATGPT_TASK_DOCUMENT_UNAVAILABLE");
+      return value;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
   private async prepareTemporaryInstantProfile(
     candidate: ChatGptRouteSurface,
     temporary = true,
+    taskDeadline = Date.now() + 180_000,
+    operationGeneration = this.taskObservationGeneration,
   ): Promise<
     | "CHATGPT_COMPOSER_DRAFT_PRESENT"
     | "CHATGPT_TEMPORARY_CHAT_REQUIRED"
@@ -3196,11 +3268,19 @@ export class ChatGptRoute {
     | null
   > {
     const contents = candidate.webContents;
+    const execute = (script: string, gesture: boolean) =>
+      this.executeTaskDocumentScript(
+        contents,
+        script,
+        gesture,
+        taskDeadline,
+        operationGeneration,
+      );
     let observed: ChatGptProfilePreparationDiagnostic["probe"] = null;
     const read = async () => {
       try {
         const result = temporaryInstantProfileSchema.safeParse(
-          await contents.executeJavaScript(temporaryInstantProfileProbe, true),
+          await execute(temporaryInstantProfileProbe, true),
         );
         observed = result.success
           ? {
@@ -3237,7 +3317,11 @@ export class ChatGptRoute {
         contents.getURL() !== temporaryUrl.href ||
         initial.data.temporary !== temporary
       )
-        await candidate.loadURL(temporaryUrl.href);
+        await this.navigateRouteDocument(
+          candidate,
+          temporaryUrl.href,
+          Math.min(taskDeadline, Date.now() + ROUTE_OPEN_DEADLINE_MS),
+        );
     } catch {
       return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
     }
@@ -3281,7 +3365,7 @@ export class ChatGptRoute {
       }
       return "CHATGPT_INSTANT_MODEL_REQUIRED";
     };
-    const deadline = Date.now() + 12_000;
+    const deadline = Math.min(taskDeadline, Date.now() + 12_000);
     let profile = await read();
     while (
       Date.now() < deadline &&
@@ -3339,10 +3423,7 @@ export class ChatGptRoute {
       for (let attempt = 0; attempt < 20 && !opened; attempt += 1) {
         if (Date.now() >= openDeadline || profileIdentityLost())
           return refuseInstant();
-        const result = await contents.executeJavaScript(
-          openInstantPowerPickerScript,
-          true,
-        );
+        const result = await execute(openInstantPowerPickerScript, true);
         if (profileIdentityLost()) return refuseInstant();
         if (result === true) {
           opened = true;
@@ -3363,7 +3444,7 @@ export class ChatGptRoute {
       for (let attempt = 0; attempt < 8; attempt += 1) {
         if (profileIdentityLost()) return refuseInstant();
         let slider = instantPowerSliderSchema.safeParse(
-          await contents.executeJavaScript(focusInstantPowerSliderScript, true),
+          await execute(focusInstantPowerSliderScript, true),
         );
         while (
           slider.success &&
@@ -3373,10 +3454,7 @@ export class ChatGptRoute {
           await delay(100);
           if (profileIdentityLost()) return refuseInstant();
           slider = instantPowerSliderSchema.safeParse(
-            await contents.executeJavaScript(
-              focusInstantPowerSliderScript,
-              true,
-            ),
+            await execute(focusInstantPowerSliderScript, true),
           );
         }
         sliderReady = slider.success && slider.data.ready;
@@ -3389,10 +3467,7 @@ export class ChatGptRoute {
           break;
         }
         if (
-          (await contents.executeJavaScript(
-            lowerInstantPowerSliderScript,
-            true,
-          )) !== true ||
+          (await execute(lowerInstantPowerSliderScript, true)) !== true ||
           profileIdentityLost()
         )
           return refuseInstant();
@@ -3400,10 +3475,7 @@ export class ChatGptRoute {
       }
       if (!minimumObserved) return refuseInstant();
       if (
-        (await contents.executeJavaScript(
-          dismissInstantPowerPickerScript,
-          true,
-        )) !== true ||
+        (await execute(dismissInstantPowerPickerScript, true)) !== true ||
         profileIdentityLost()
       )
         return refuseInstant();
@@ -3464,10 +3536,7 @@ export class ChatGptRoute {
     if (!profile.data.personalized) {
       try {
         if (
-          (await contents.executeJavaScript(
-            openTemporaryPersonalizationScript,
-            true,
-          )) !== true ||
+          (await execute(openTemporaryPersonalizationScript, true)) !== true ||
           profileIdentityLost()
         )
           return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
@@ -3475,10 +3544,7 @@ export class ChatGptRoute {
         for (let attempt = 0; attempt < 10; attempt += 1) {
           if (profileIdentityLost()) return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
           if (
-            (await contents.executeJavaScript(
-              selectTemporaryPersonalizationScript,
-              true,
-            )) === true
+            (await execute(selectTemporaryPersonalizationScript, true)) === true
           ) {
             selected = true;
             break;
@@ -3587,6 +3653,21 @@ export class ChatGptRoute {
     };
     timing("started");
     const observationGeneration = ++this.taskObservationGeneration;
+    const deadline = Date.now() + (this.options.taskTimeoutMs ?? 180_000);
+    const execute = (
+      contents: WebContents,
+      script: string,
+      gesture: boolean,
+      allowNavigationAfter = false,
+    ) =>
+      this.executeTaskDocumentScript(
+        contents,
+        script,
+        gesture,
+        deadline,
+        observationGeneration,
+        allowNavigationAfter,
+      );
     let publicTurn: ChatGptPublicTurn | null = null;
     const semanticOutput =
       this.options.publicOutputProfile === "message-anchors-v1";
@@ -3650,8 +3731,11 @@ export class ChatGptRoute {
         };
       }
       if (profile === "temporary-instant" || profile === "connector-instant") {
-        const running = await candidate.webContents
-          .executeJavaScript(activityProbe, true)
+        const running = await execute(
+          candidate.webContents,
+          activityProbe,
+          true,
+        )
           .then((answer) => activityProbeSchema.safeParse(answer))
           .catch(() => activityProbeSchema.safeParse(null));
         if (!running.success || running.data.running) {
@@ -3666,6 +3750,8 @@ export class ChatGptRoute {
         const profileFailure = await this.prepareTemporaryInstantProfile(
           candidate,
           profile === "temporary-instant",
+          deadline,
+          observationGeneration,
         );
         if (profileFailure !== null) {
           return {
@@ -3754,7 +3840,8 @@ export class ChatGptRoute {
       };
       let activityCandidate: unknown;
       try {
-        activityCandidate = await candidate.webContents.executeJavaScript(
+        activityCandidate = await execute(
+          candidate.webContents,
           activityProbe,
           true,
         );
@@ -3801,7 +3888,8 @@ export class ChatGptRoute {
       if (requiredAppName !== undefined) {
         let appBindingCandidate: unknown;
         try {
-          appBindingCandidate = await candidate.webContents.executeJavaScript(
+          appBindingCandidate = await execute(
+            candidate.webContents,
             bindChatGptAppScript(requiredAppName, dispatchIdentityUrl),
             true,
           );
@@ -3855,7 +3943,8 @@ export class ChatGptRoute {
         };
       }
       const prepared = preparedTaskSchema.safeParse(
-        await candidate.webContents.executeJavaScript(
+        await execute(
+          candidate.webContents,
           prepareTaskScript(prompt, dispatchIdentityUrl, requiredAppName),
           true,
         ),
@@ -3955,7 +4044,8 @@ export class ChatGptRoute {
         }
         if (requiredAppName !== undefined) {
           const selected = appBindingSchema.safeParse(
-            await candidate.webContents.executeJavaScript(
+            await execute(
+              candidate.webContents,
               verifyChatGptAppScript(requiredAppName, dispatchIdentityUrl),
               true,
             ),
@@ -4011,13 +4101,15 @@ export class ChatGptRoute {
         let acknowledgementTimer: ReturnType<typeof setTimeout> | undefined;
         const activated = activatedTaskSchema.safeParse(
           await Promise.race([
-            candidate.webContents.executeJavaScript(
+            execute(
+              candidate.webContents,
               activateTaskScript(
                 dispatchIdentityUrl,
                 requiredAppName,
                 profile === "temporary-instant",
                 profile === "connector-instant",
               ),
+              true,
               true,
             ),
             new Promise<null>((resolve) => {
@@ -4102,7 +4194,6 @@ export class ChatGptRoute {
         this.options.e2eOrigin,
       );
       const pollMs = this.options.taskPollMs ?? 250;
-      const deadline = Date.now() + (this.options.taskTimeoutMs ?? 180_000);
       const probePending = Symbol("probe pending");
       let connectorProbe: Promise<unknown> | null = null;
       while (Date.now() < deadline) {
@@ -4226,7 +4317,8 @@ export class ChatGptRoute {
           }
         }
         const readProbe = () =>
-          active.webContents.executeJavaScript(
+          execute(
+            active.webContents,
             taskProbeScript(
               prompt,
               preparedTask.baselineMessageIds,
@@ -4461,7 +4553,10 @@ export class ChatGptRoute {
         outputText: observedText,
         ...correlation(),
       };
-    } catch {
+    } catch (error) {
+      const documentChanged =
+        error instanceof Error &&
+        error.message === "CHATGPT_TASK_DOCUMENT_UNAVAILABLE";
       const submissionMayHaveOccurred =
         submissionPhase === "awaiting_acknowledgement" ||
         submissionPhase === "submitted";
@@ -4470,8 +4565,12 @@ export class ChatGptRoute {
           ? "outcome_unknown"
           : "failed_before_submit",
         code: submissionMayHaveOccurred
-          ? "CHATGPT_TASK_ERROR"
-          : "CHATGPT_SUBMIT_UNAVAILABLE",
+          ? documentChanged
+            ? "CHATGPT_TASK_PAGE_LOST"
+            : "CHATGPT_TASK_ERROR"
+          : documentChanged
+            ? "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT"
+            : "CHATGPT_SUBMIT_UNAVAILABLE",
         deltaCount,
         observedCharacters,
         outputText: observedText,

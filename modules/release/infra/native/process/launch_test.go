@@ -51,6 +51,26 @@ func TestRelaunchDeterministicBoundsAndDrain(t *testing.T) {
 	})
 }
 
+func TestClosedSidecarArgumentsReachTheOriginalFence(t *testing.T) {
+	base := []string{"/usr/bin/open", "-a", "/never-opened.app", "--args", "--farol-installed-update-relaunch={}"}
+	sidecar := append(append([]string(nil), base...), "--preview-window-mode=secondary-visible", "--sidecar-display-only")
+	stop := errors.New("stop before native launch")
+	for _, args := range [][]string{base, sidecar} {
+		called := false
+		err := Open(context.Background(), time.Now().Add(time.Minute), args, func(context.Context) error { called = true; return stop })
+		if !called || !errors.Is(err, stop) {
+			t.Fatal("valid closed arguments never reached the fence", args, err)
+		}
+	}
+	for _, suffix := range [][]string{{"--sidecar-display-only"}, {"--sidecar-display-only", "--preview-window-mode=secondary-visible"}, {"--preview-window-mode=secondary-visible", "--allow-primary-display"}, {"--preview-window-mode=secondary-visible", "--sidecar-display-only", "extra"}} {
+		args := append(append([]string(nil), base...), suffix...)
+		called := false
+		if err := Open(context.Background(), time.Now().Add(time.Minute), args, func(context.Context) error { called = true; return stop }); err == nil || called {
+			t.Fatal("open suffix escaped its closed grammar", args, err)
+		}
+	}
+}
+
 // One real fixed Open child against an absent bundle in a fresh private namespace.
 // Its terminal error and joined EOF do not prove successful application relaunch.
 func TestOpenNativeMissingBundle(t *testing.T) {
