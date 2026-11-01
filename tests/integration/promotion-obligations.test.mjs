@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { PrivateChatGptTaskJournal } from "../../src/apps/desktop/chatgpt-task-journal.ts";
 import { afterEach, describe, expect, it } from "vitest";
 import { serializeQuitReceipt } from "../../src/apps/desktop/quit-receipt.ts";
 import {
@@ -132,6 +134,85 @@ async function writeTasks(root, tasks, overrides = {}) {
 }
 
 describe("Q-08 activation obligations", () => {
+  it("fences separate deep-test attempts through crash recovery and preserves unknowns", async () => {
+    const root = await userData();
+    const attempts = path.join(root, "farol-state", "deep-test-attempts");
+    await fs.mkdir(attempts, { mode: 0o700 });
+    const id = randomUUID();
+    const owner = new PrivateChatGptTaskJournal({
+      root: path.join(attempts, id),
+    });
+    await owner.prepare({ operationId: id, kind: "readonly" });
+    expect((await activationObligations(root)).obligations).toContain(
+      "DEEP_TEST_PENDING:1",
+    );
+    await owner.markDispatchIntent(id);
+    await owner.reconcileAfterRestart();
+    expect((await activationObligations(root)).obligations).toContain(
+      "DEEP_TEST_PENDING:1",
+    );
+    await owner.acknowledgeDelivery(id);
+    expect((await activationObligations(root)).obligations).toContain(
+      "DEEP_TEST_PENDING:1",
+    );
+  });
+
+  it("allows an acknowledged known result but refuses mismatched attempt identity", async () => {
+    const root = await userData();
+    const attempts = path.join(root, "farol-state", "deep-test-attempts");
+    await fs.mkdir(attempts, { mode: 0o700 });
+    const id = randomUUID();
+    const dir = path.join(attempts, id);
+    const owner = new PrivateChatGptTaskJournal({ root: dir });
+    await owner.prepare({ operationId: id, kind: "readonly" });
+    await owner.markDispatchIntent(id);
+    await owner.retainResult(id, {
+      state: "completed",
+      code: null,
+      deltaCount: 0,
+      observedCharacters: 0,
+    });
+    await owner.acknowledgeDelivery(id);
+    expect((await activationObligations(root)).drained).toBe(true);
+    const file = path.join(dir, "chatgpt-task-journal.json");
+    const record = JSON.parse(await fs.readFile(file, "utf8"));
+    record.operationId = randomUUID();
+    await fs.writeFile(file, JSON.stringify(record));
+    expect((await activationObligations(root)).unreadable).toContain(
+      "deep-test-attempts:MALFORMED",
+    );
+  });
+
+  it("detects an attempt created during update observation and refuses incomplete roots", async () => {
+    const root = await userData();
+    const attempts = path.join(root, "farol-state", "deep-test-attempts");
+    const id = randomUUID();
+    const report = await activationObligations(root, {
+      beforeConfirmation: async () => {
+        await fs.mkdir(attempts, { mode: 0o700 });
+        const owner = new PrivateChatGptTaskJournal({
+          root: path.join(attempts, id),
+        });
+        await owner.prepare({ operationId: id, kind: "readonly" });
+      },
+    });
+    expect(report.changed).toContain("deep-test-attempts");
+    expect(report.drained).toBe(false);
+    await fs.mkdir(path.join(attempts, randomUUID()), { mode: 0o700 });
+    expect((await activationObligations(root)).unreadable).toContain(
+      "deep-test-attempts:INCOMPLETE",
+    );
+  });
+
+  it("refuses symlinked attempt roots without following them", async () => {
+    const root = await userData();
+    const attempts = path.join(root, "farol-state", "deep-test-attempts");
+    await fs.mkdir(attempts, { mode: 0o700 });
+    await fs.symlink(root, path.join(attempts, randomUUID()));
+    const report = await activationObligations(root);
+    expect(report.drained).toBe(false);
+    expect(report.unreadable).toContain("deep-test-attempts:UNSAFE");
+  });
   it("finds nothing to drain in a fresh or idle user-data root", async () => {
     const fresh = await userData();
     await expect(activationObligations(fresh)).resolves.toMatchObject({

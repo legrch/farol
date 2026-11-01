@@ -12,6 +12,7 @@ import { ProductSettingsSchema } from "../../pkg/product-settings/contract.ts";
 import {
   CHATGPT_TASK_JOURNAL_FILE_NAME,
   ChatGptTaskJournalRecordSchema,
+  ChatGptTaskJournalOperationIdSchema,
   MAX_CHATGPT_TASK_JOURNAL_BYTES,
 } from "./chatgpt-task-journal-record.ts";
 import {
@@ -232,11 +233,79 @@ async function readState<T>(
 const STATE_FILES = [
   "live-tasks",
   "chatgpt-task-journal",
+  "deep-test-attempts",
   "product-settings",
   "legacy-config",
   "last-quit",
   "running",
 ] as const;
+
+// Separate attempt roots preserve the legacy journal and each attempt's bytes.
+// The name is a protocol shared by the writer, startup and update readers.
+export const DEEP_TEST_ATTEMPTS_DIRECTORY = "deep-test-attempts";
+const MAX_DEEP_TEST_ATTEMPTS = 256;
+
+async function readDeepTestAttempts(
+  state: string,
+): Promise<ReadState<readonly { phase: string; unknown: boolean }[]>> {
+  const root = path.join(state, DEEP_TEST_ATTEMPTS_DIRECTORY);
+  try {
+    const info = await fs.lstat(root);
+    if (
+      !info.isDirectory() ||
+      info.isSymbolicLink() ||
+      (process.geteuid?.() !== undefined && info.uid !== process.geteuid?.()) ||
+      (info.mode & 0o077) !== 0
+    )
+      return { status: "unreadable", digest: null, reason: "UNSAFE" };
+    const names = (await fs.readdir(root)).sort();
+    if (names.length > MAX_DEEP_TEST_ATTEMPTS)
+      return { status: "unreadable", digest: null, reason: "OVERSIZED" };
+    const records: { phase: string; unknown: boolean }[] = [];
+    const digest = createHash("sha256");
+    for (const name of names) {
+      if (!ChatGptTaskJournalOperationIdSchema.safeParse(name).success)
+        return { status: "unreadable", digest: null, reason: "UNSAFE" };
+      const dir = path.join(root, name);
+      const item = await fs.lstat(dir);
+      if (
+        !item.isDirectory() ||
+        item.isSymbolicLink() ||
+        (process.geteuid?.() !== undefined &&
+          item.uid !== process.geteuid?.()) ||
+        (item.mode & 0o077) !== 0
+      )
+        return { status: "unreadable", digest: null, reason: "UNSAFE" };
+      const entry = await readState(
+        path.join(dir, CHATGPT_TASK_JOURNAL_FILE_NAME),
+        taskJournal,
+        MAX_CHATGPT_TASK_JOURNAL_BYTES,
+      );
+      if (entry.status !== "read")
+        return {
+          status: "unreadable",
+          digest: null,
+          reason: entry.status === "absent" ? "INCOMPLETE" : entry.reason,
+        };
+      if (entry.value.operationId !== name || entry.value.kind !== "readonly")
+        return { status: "unreadable", digest: null, reason: "MALFORMED" };
+      digest.update(name).update("\0").update(entry.digest).update("\0");
+      records.push({
+        phase: entry.value.phase,
+        unknown: entry.value.result?.state === "outcome_unknown",
+      });
+    }
+    return { status: "read", digest: digest.digest("hex"), value: records };
+  } catch (error) {
+    return (error as NodeJS.ErrnoException)?.code === "ENOENT" &&
+      (await fs.lstat(root).then(
+        () => false,
+        (e: NodeJS.ErrnoException) => e.code === "ENOENT",
+      ))
+      ? { status: "absent", digest: null }
+      : { status: "unreadable", digest: null, reason: "UNSAFE" };
+  }
+}
 
 async function readLegacyConfig(state: string): Promise<ReadState<never>> {
   // Presence only: never open a legacy FIFO or decode a legacy config.
@@ -267,6 +336,7 @@ async function readStateFiles(state: string) {
       taskJournal,
       MAX_CHATGPT_TASK_JOURNAL_BYTES,
     ),
+    "deep-test-attempts": await readDeepTestAttempts(state),
     "product-settings": await readState(
       path.join(state, "config.json"),
       productSettings,
@@ -312,7 +382,9 @@ export async function activationObligations(
   await options.beforeConfirmation?.();
   const confirmed = await readStateFiles(state);
   const changed = STATE_FILES.filter(
-    (name) => first[name].digest !== confirmed[name].digest,
+    (name) =>
+      first[name].status !== confirmed[name].status ||
+      first[name].digest !== confirmed[name].digest,
   );
 
   const tasks = confirmed["live-tasks"];
@@ -350,6 +422,16 @@ export async function activationObligations(
     } else if (phase === "prepared") {
       obligations.push("CHATGPT_DISPATCH_PREPARED");
     }
+  }
+
+  const deepTests = confirmed["deep-test-attempts"];
+  if (deepTests.status === "unreadable")
+    unreadable.push(`deep-test-attempts:${deepTests.reason}`);
+  else if (deepTests.status === "read") {
+    const outstanding = deepTests.value.filter(
+      (entry) => entry.unknown || entry.phase !== "delivery_acknowledged",
+    ).length;
+    if (outstanding > 0) obligations.push(`DEEP_TEST_PENDING:${outstanding}`);
   }
 
   if (confirmed["legacy-config"].status !== "absent")

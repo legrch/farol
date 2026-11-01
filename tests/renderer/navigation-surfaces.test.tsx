@@ -132,15 +132,8 @@ describe("closed renderer destinations", () => {
     expect(dialog).toBeTruthy();
     expect(vi.mocked(h.f.api.layout).mock.calls.at(-1)?.[5]).toBe("task-menu");
     expect(selfTest).not.toHaveBeenCalled();
-    expect(dialog.textContent).toContain(
-      "Farol does not send it automatically",
-    );
-    const prompt = dialog.querySelector("textarea")!;
-    expect(prompt.readOnly).toBe(true);
-    expect(prompt.value).toContain("list the approved workspaces");
-    expect(prompt.value).toContain(
-      "Stop on an unknown outcome and do not retry",
-    );
+    expect(dialog.textContent).toContain("Deep test is unavailable");
+    expect(dialog.querySelector("textarea")).toBeNull();
     expect(dialog.querySelector("select")).toBeNull();
     expect(h.f.api.configure).not.toHaveBeenCalled();
     await act(async () =>
