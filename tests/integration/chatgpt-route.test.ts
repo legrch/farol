@@ -167,12 +167,13 @@ describe("temporary Instant connector profile", () => {
     initial: Profile = regular,
     afterLoad: Profile = temporary,
     hydrating?: Profile,
+    initialUrl = "https://chatgpt.com/",
   ) {
     const route = devTaskRoute(vi.fn());
     const diagnostic = vi.fn();
     Reflect.get(route, "options").onProfilePreparationDiagnostic = diagnostic;
     let current = initial;
-    let currentUrl = "https://chatgpt.com/";
+    let currentUrl = initialUrl;
     let minimum = false;
     let pickerOpens = 0;
     let personalizationOpens = 0;
@@ -232,16 +233,23 @@ describe("temporary Instant connector profile", () => {
     const prepare = Reflect.get(route, "prepareTemporaryInstantProfile") as (
       candidate: typeof surface,
       temporary?: boolean,
+      deadline?: number,
     ) => Promise<string | null>;
     return {
-      prepare: (temporary = true) => prepare.call(route, surface, temporary),
+      prepare: (temporary = true, deadline?: number) =>
+        prepare.call(route, surface, temporary, deadline),
       diagnostic,
+      setProfile: (profile: Profile) => {
+        current = profile;
+      },
       loadURL,
       sendInputEvent,
       executeJavaScript,
       pickerOpens: () => pickerOpens,
       personalizationOpens: () => personalizationOpens,
       close: () => Reflect.set(route, "routeWindow", null),
+      replaceFrame: () => Reflect.set(surface.webContents, "mainFrame", {}),
+      retireOperation: () => Reflect.set(route, "taskObservationGeneration", 1),
       navigate: (url?: string) => {
         if (url !== undefined) currentUrl = url;
         Reflect.set(
@@ -689,6 +697,87 @@ describe("temporary Instant connector profile", () => {
           : "CHATGPT_TEMPORARY_CHAT_REQUIRED",
       );
       expect(route.pickerOpens()).toBe(1);
+    },
+  );
+
+  it("waits on the existing temporary document before any navigation or control click", async () => {
+    const loading = { ...temporary, temporary: false };
+    const fixture = profileRoute(
+      loading,
+      temporary,
+      undefined,
+      "https://chatgpt.com/?temporary-chat=true",
+    );
+    const execute = fixture.executeJavaScript.getMockImplementation()!;
+    let reads = 0;
+    fixture.executeJavaScript.mockImplementation(async (script) => {
+      if (script === temporaryInstantProfileProbe && ++reads === 2) {
+        fixture.setProfile(temporary);
+        return temporary;
+      }
+      return execute(script);
+    });
+    const pending = fixture.prepare(true, Date.now() + 3_000);
+    await vi.waitFor(() => expect(reads).toBe(1));
+    expect(fixture.loadURL).not.toHaveBeenCalled();
+    expect(fixture.pickerOpens()).toBe(0);
+    expect(fixture.personalizationOpens()).toBe(0);
+    await expect(pending).resolves.toBeNull();
+    expect(fixture.loadURL).not.toHaveBeenCalled();
+    expect(fixture.pickerOpens()).toBe(1);
+  });
+
+  it.each([
+    "timeout",
+    "draft",
+    "navigation",
+    "frame",
+    "operation",
+    "loading",
+    "unknown",
+  ] as const)(
+    "refuses %s during existing temporary document hydration without mutation",
+    async (reason) => {
+      const loading = { ...temporary, temporary: false };
+      const fixture = profileRoute(
+        loading,
+        temporary,
+        undefined,
+        "https://chatgpt.com/?temporary-chat=true",
+      );
+      const execute = fixture.executeJavaScript.getMockImplementation()!;
+      let reads = 0;
+      fixture.executeJavaScript.mockImplementation(async (script) => {
+        if (script === temporaryInstantProfileProbe && ++reads > 1) {
+          if (reason === "draft") return { ...loading, draftPresent: true };
+          if (reason === "loading") return { ...loading, composerReady: false };
+          if (reason === "unknown") return { invalid: true };
+        }
+        return execute(script);
+      });
+      const pending = fixture.prepare(
+        true,
+        Date.now() + (reason === "timeout" ? 350 : 3_000),
+      );
+      await vi.waitFor(() => expect(reads).toBe(1));
+      if (reason === "navigation") fixture.navigate();
+      if (reason === "frame") fixture.replaceFrame();
+      if (reason === "operation") fixture.retireOperation();
+      await expect(pending).resolves.toBe(
+        reason === "draft"
+          ? "CHATGPT_COMPOSER_DRAFT_PRESENT"
+          : "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      );
+      if (reason === "draft" || reason === "loading" || reason === "unknown")
+        expect(reads).toBe(2);
+      expect(fixture.loadURL).not.toHaveBeenCalled();
+      expect(fixture.pickerOpens()).toBe(0);
+      expect(fixture.personalizationOpens()).toBe(0);
+      expect(
+        fixture.executeJavaScript.mock.calls.every(
+          ([script]) => script === temporaryInstantProfileProbe,
+        ),
+      ).toBe(true);
     },
   );
 

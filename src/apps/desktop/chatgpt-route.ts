@@ -3399,19 +3399,23 @@ export class ChatGptRoute {
     | null
   > {
     const contents = candidate.webContents;
-    const execute = (script: string, gesture: boolean) =>
+    const execute = (
+      script: string,
+      gesture: boolean,
+      deadline = taskDeadline,
+    ) =>
       this.executeTaskDocumentScript(
         contents,
         script,
         gesture,
-        taskDeadline,
+        deadline,
         operationGeneration,
       );
     let observed: ChatGptProfilePreparationDiagnostic["probe"] = null;
-    const read = async () => {
+    const read = async (deadline = taskDeadline) => {
       try {
         const result = temporaryInstantProfileSchema.safeParse(
-          await execute(temporaryInstantProfileProbe, true),
+          await execute(temporaryInstantProfileProbe, true, deadline),
         );
         observed = result.success
           ? {
@@ -3434,14 +3438,61 @@ export class ChatGptRoute {
         return temporaryInstantProfileSchema.safeParse(null);
       }
     };
-    const initial = await read();
-    if (!initial.success || !initial.data.composerReady)
-      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    if (initial.data.draftPresent) return "CHATGPT_COMPOSER_DRAFT_PRESENT";
-
     const temporaryUrl = new URL(this.options.homeUrl);
     if (temporary) temporaryUrl.searchParams.set("temporary-chat", "true");
     else temporaryUrl.searchParams.delete("temporary-chat");
+    const waitForExistingTemporary =
+      temporary && contents.getURL() === temporaryUrl.href;
+    const initialDocumentGeneration = this.routeDocumentGeneration;
+    const initialPhysicalGeneration = this.chatPhysicalDocumentGeneration;
+    const initialFrame = contents.mainFrame;
+    const initialIdentityLost = () =>
+      this.routeWindow !== candidate ||
+      candidate.isDestroyed() ||
+      this.disposing ||
+      this.routeDocumentLoadFailed ||
+      this.routeDocumentAwaitingCommit ||
+      this.routeDocumentGeneration !== initialDocumentGeneration ||
+      this.chatPhysicalDocumentGeneration !== initialPhysicalGeneration ||
+      this.taskObservationGeneration !== operationGeneration ||
+      contents.getURL() !== temporaryUrl.href ||
+      contents.mainFrame !== initialFrame ||
+      (initialFrame &&
+        (initialFrame.isDestroyed() || initialFrame.url !== temporaryUrl.href));
+    const initialDeadline = Math.min(taskDeadline, Date.now() + 12_000);
+    if (
+      waitForExistingTemporary &&
+      (initialIdentityLost() || Date.now() >= initialDeadline)
+    )
+      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+    let initial = await read(
+      waitForExistingTemporary ? initialDeadline : taskDeadline,
+    );
+    if (waitForExistingTemporary && initialIdentityLost())
+      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+    if (!initial.success) return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+    if (initial.data.draftPresent) return "CHATGPT_COMPOSER_DRAFT_PRESENT";
+    if (!initial.data.composerReady) return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+    if (waitForExistingTemporary) {
+      while (!initial.data.temporary && Date.now() < initialDeadline) {
+        await delay(Math.min(200, Math.max(0, initialDeadline - Date.now())));
+        if (initialIdentityLost() || Date.now() >= initialDeadline)
+          return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+        initial = await read(initialDeadline);
+        if (initialIdentityLost() || !initial.success)
+          return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+        if (initial.data.draftPresent) return "CHATGPT_COMPOSER_DRAFT_PRESENT";
+        if (!initial.data.composerReady)
+          return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+      }
+      if (
+        !initial.data.temporary ||
+        Date.now() >= initialDeadline ||
+        initialIdentityLost()
+      )
+        return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+    }
+
     try {
       if (
         !temporary ||
