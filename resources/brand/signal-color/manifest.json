@@ -63,6 +63,22 @@
       "sha256": "17655e603019d11a309ab94da781c3b39c000a45521bcd8bee6881d9b7b484d9",
       "bytes": 629928
     },
+    "menu-bar-attention-template.png": {
+      "sha256": "143a5726329b457f8e38063bc34c6f50e7d6a5130f806ee5009bb42f30393e09",
+      "bytes": 331
+    },
+    "menu-bar-attention-template@2x.png": {
+      "sha256": "ae5b957a7433eea0d5d4d431ed0bf9e827c05c2ea088e21cf35734edc4342e3c",
+      "bytes": 614
+    },
+    "menu-bar-hollow-template.png": {
+      "sha256": "87a0972e222932899185e8285e66b9f26e5d15a9377e11acacd0bb3026e0fa93",
+      "bytes": 296
+    },
+    "menu-bar-hollow-template@2x.png": {
+      "sha256": "f287e7fcd0dbff000c9ce4f055fc74608b8ae2d60c31ba3d87537c3466b6fb6a",
+      "bytes": 572
+    },
     "menu-bar-template.png": {
       "sha256": "4e312343ba54e00e892ee242f987fb49d34587b9622292e43ce51691aa8478e5",
       "bytes": 339
