@@ -13,6 +13,7 @@ import { z } from "zod";
 // `.mjs` CLI.
 
 export const CHATGPT_TASK_JOURNAL_FILE_NAME = "chatgpt-task-journal.json";
+export const DEEP_TEST_JOURNAL_PREFIX = "deep-test-";
 export const LEGACY_PREPARATION_ARCHIVE_NAME = "legacy-chatgpt-prepared.json";
 // The journal refuses to decode a file larger than this before parsing it;
 // the promotion reader must refuse the same bytes.
@@ -28,6 +29,10 @@ export const ChatGptTaskJournalOperationIdSchema = z
   .regex(
     /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
   );
+
+export function deepTestJournalFileName(operationId: string): string {
+  return `${DEEP_TEST_JOURNAL_PREFIX}${ChatGptTaskJournalOperationIdSchema.parse(operationId)}.json`;
+}
 
 export const ChatGptTaskJournalResultSchema = z.strictObject({
   state: z.enum([

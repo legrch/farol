@@ -7,6 +7,7 @@ import {
 /** Static recording vocabulary. Never extend it from runtime/provider values. */
 export const operationKinds = [
   "chat.turn",
+  "chatgpt.ack-deep-test",
   "chatgpt.ack-readonly-conversation",
   "chatgpt.ack-task-result",
   "chatgpt.approve-readonly-account",
@@ -14,6 +15,7 @@ export const operationKinds = [
   "chatgpt.cancel-readonly-task",
   "chatgpt.consult.send",
   "chatgpt.consult.turn",
+  "chatgpt.deep-test-status",
   "chatgpt.follow-readonly-conversation",
   "chatgpt.inspect-chat-account",
   "chatgpt.inspect-readonly-account",
@@ -26,6 +28,7 @@ export const operationKinds = [
   "chatgpt.present-browser",
   "chatgpt.recover-task-result",
   "chatgpt.reset-conversation",
+  "chatgpt.run-deep-test",
   "chatgpt.sign-in-return",
   "chatgpt.start-conversation",
   "chatgpt.submit-attachment-task",

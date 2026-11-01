@@ -6,6 +6,7 @@ import {
 } from "../../apps/desktop/renderer/operation-outcomes";
 import {
   operationResult,
+  observedOperationResult,
   observeOperation,
 } from "../../apps/desktop/operations/observe";
 import { createTotalOperationsRecorder } from "../../apps/desktop/operations/recorder";
@@ -30,6 +31,24 @@ const closedContractCoverage: [
 ] = [true, true, true, true, true];
 
 const metadata = { source: "You", kind: "general.update", target: {} } as const;
+
+it("records a proven Deep test pre-submit refusal without inventing an unknown send", () => {
+  const evidence = {
+    kind: "chatgpt.deep-test-result",
+    operationId: "44444444-4444-4444-8444-444444444444",
+    state: "failed_before_submit",
+    code: "CHATGPT_APP_SELECTION_LOST",
+  };
+  expect(
+    observedOperationResult("chatgpt.run-deep-test", { ok: true, evidence }),
+  ).toEqual({ outcome: "refused", code: "CHATGPT_APP_SELECTION_LOST" });
+  expect(
+    observedOperationResult("chatgpt.run-deep-test", {
+      ok: true,
+      evidence: { ...evidence, state: "outcome_unknown" },
+    }),
+  ).toEqual({ outcome: "unknown", code: "CHATGPT_APP_SELECTION_LOST" });
+});
 
 it.each(["helper_lifetime_deadline_expired", "helper_lifetime_unknown"])(
   "preserves the original helper lifetime uncertainty code %s",

@@ -1,8 +1,61 @@
-export function DeepTestPrompt() {
+import type { RendererFacade, WindowSnapshot } from "./contract";
+import { PreviousSelfTests } from "./previous-self-tests";
+
+export function DeepTestPrompt({
+  snapshot,
+  facade,
+}: Readonly<{ snapshot: WindowSnapshot; facade: RendererFacade }>) {
+  const evidence = snapshot.evidence?.value;
+  const attempts =
+    evidence?.kind === "chatgpt.deep-test-status" ? evidence.attempts : [];
+  const active = Object.values(snapshot.intents).some(
+    (intent) => intent.id.startsWith("deep-test:run:") && intent.inFlight,
+  );
   return (
-    <p role="status">
-      Deep test is unavailable until Farol can safely start and recover a
-      tool-enabled ChatGPT request.
-    </p>
+    <section>
+      <button
+        type="button"
+        disabled={active}
+        onClick={() =>
+          void facade.configure(
+            { kind: "chatgpt.deep-test-status" },
+            "deep-test:status",
+          )
+        }
+      >
+        Review test results
+      </button>
+      {attempts.map((attempt) => (
+        <div key={attempt.operationId}>
+          <p>
+            {attempt.state} · {attempt.operationId}
+            {attempt.code ? ` · ${attempt.code}` : ""}
+          </p>
+          <button
+            type="button"
+            disabled={active}
+            onClick={() =>
+              void facade.configure(
+                {
+                  kind: "chatgpt.ack-deep-test",
+                  operationId: attempt.operationId,
+                },
+                `deep-test:ack:${attempt.operationId}`,
+              )
+            }
+          >
+            Acknowledge result
+          </button>
+        </div>
+      ))}
+      <PreviousSelfTests
+        facade={facade}
+        workspaces={
+          snapshot.configuration?.status === "ready"
+            ? snapshot.configuration.settings.computer.workspaces
+            : []
+        }
+      />
+    </section>
   );
 }

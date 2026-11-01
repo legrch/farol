@@ -157,6 +157,33 @@ export function observedOperationResult(
 ): ReturnType<typeof operationResult> {
   const result = object(value),
     data = object(result.data);
+  const evidence = object(result.evidence);
+  if (
+    kind === "chatgpt.run-deep-test" &&
+    result.ok === true &&
+    evidence.kind === "chatgpt.deep-test-result" &&
+    typeof evidence.operationId === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
+      evidence.operationId,
+    )
+  ) {
+    const code = recordableOperationCode(evidence.code);
+    if (
+      evidence.code != null &&
+      mappedOperationOutcome(evidence.code) === undefined
+    )
+      return { outcome: "unknown", code: "OPERATION_CODE_UNMAPPED" };
+    if (
+      evidence.state === "failed_before_submit" ||
+      evidence.state === "not_authenticated"
+    )
+      return { outcome: "refused", code };
+    if (evidence.state === "outcome_unknown")
+      return { outcome: "unknown", code };
+    if (evidence.state === "completed" && evidence.code === null)
+      return { outcome: "done", code: null };
+    return { outcome: "unknown", code: "OPERATION_RESULT_UNCONFIRMED" };
+  }
   if (
     result.status === "ok" &&
     kind === "computer_shell_read" &&

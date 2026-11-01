@@ -26,6 +26,61 @@ async function temporaryRoot(): Promise<string> {
 }
 
 describe("private ChatGPT task journal", () => {
+  it("refuses an insecure shared state root without changing its permissions", async () => {
+    const root = await temporaryRoot();
+    await fs.chmod(root, 0o755);
+    const operationId = randomUUID();
+    const attempt = new PrivateChatGptTaskJournal({
+      root,
+      deepTestOperationId: operationId,
+    });
+    await expect(
+      attempt.prepare({ operationId, kind: "readonly" }),
+    ).rejects.toThrow("CHATGPT_TASK_JOURNAL_UNSAFE");
+    expect((await fs.stat(root)).mode & 0o777).toBe(0o755);
+  });
+  it("keeps independent flat attempts without replacing legacy or prior unknown records", async () => {
+    const root = await temporaryRoot();
+    const legacy = new PrivateChatGptTaskJournal({ root });
+    const prior = randomUUID();
+    await legacy.prepare({ operationId: prior, kind: "readonly" });
+    const before = await fs.readFile(
+      path.join(root, "chatgpt-task-journal.json"),
+    );
+    const firstId = randomUUID();
+    const first = new PrivateChatGptTaskJournal({
+      root,
+      deepTestOperationId: firstId,
+    });
+    await first.prepare({ operationId: firstId, kind: "readonly" });
+    await first.markDispatchIntent(firstId);
+    expect(await first.reconcileAfterRestart()).toMatchObject({
+      result: { state: "outcome_unknown" },
+    });
+    await first.acknowledgeDelivery(firstId);
+    await expect(
+      first.prepare({ operationId: firstId, kind: "readonly" }),
+    ).rejects.toThrow("CHATGPT_TASK_JOURNAL_ACTIVE");
+    const secondId = randomUUID();
+    await new PrivateChatGptTaskJournal({
+      root,
+      deepTestOperationId: secondId,
+    }).prepare({ operationId: secondId, kind: "readonly" });
+    expect(await first.load()).toMatchObject({
+      phase: "delivery_acknowledged",
+      result: { state: "outcome_unknown" },
+    });
+    expect(
+      await fs.readFile(path.join(root, "chatgpt-task-journal.json")),
+    ).toEqual(before);
+    expect(
+      () =>
+        new PrivateChatGptTaskJournal({
+          root,
+          deepTestOperationId: "../escape",
+        }),
+    ).toThrow();
+  });
   it("turns a restart after dispatch intent into one retained unknown result", async () => {
     const root = await temporaryRoot();
     const operationId = randomUUID();

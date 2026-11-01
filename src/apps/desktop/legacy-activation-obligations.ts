@@ -13,7 +13,9 @@ import {
   CHATGPT_TASK_JOURNAL_FILE_NAME,
   ChatGptTaskJournalRecordSchema,
   ChatGptTaskJournalOperationIdSchema,
+  DEEP_TEST_JOURNAL_PREFIX,
   MAX_CHATGPT_TASK_JOURNAL_BYTES,
+  type ChatGptTaskJournalRecord,
 } from "./chatgpt-task-journal-record.ts";
 import {
   LIVE_TASK_FILE_NAME,
@@ -233,67 +235,85 @@ async function readState<T>(
 const STATE_FILES = [
   "live-tasks",
   "chatgpt-task-journal",
-  "deep-test-attempts",
+  "deep-test-records",
   "product-settings",
   "legacy-config",
   "last-quit",
   "running",
 ] as const;
 
-// Separate attempt roots preserve the legacy journal and each attempt's bytes.
-// The name is a protocol shared by the writer, startup and update readers.
-export const DEEP_TEST_ATTEMPTS_DIRECTORY = "deep-test-attempts";
+// Flat attempt files preserve the legacy journal and each attempt's bytes.
+// This inherits the private farol-state owner boundary used by the existing
+// journal: child opens are path-based, not openat. The held root descriptor,
+// identity checks and two scans detect ordinary displacement, but do not claim
+// confinement against a same-UID process that can swap and restore the root
+// entirely between checks. Such a process can already rewrite private state.
 const MAX_DEEP_TEST_ATTEMPTS = 256;
 
-async function readDeepTestAttempts(
+export async function readFlatDeepTestRecords(
   state: string,
-): Promise<ReadState<readonly { phase: string }[]>> {
-  const root = path.join(state, DEEP_TEST_ATTEMPTS_DIRECTORY);
-  const handles: FileHandle[] = [];
+): Promise<ReadState<readonly ChatGptTaskJournalRecord[]>> {
+  let handle: FileHandle | undefined;
+  let rootSeen = false;
   try {
-    const held: Array<{ path: string; handle: FileHandle; identity: string }> =
-      [];
-    const identity = (info: import("node:fs").BigIntStats) =>
+    const before = await fs.lstat(state, { bigint: true });
+    rootSeen = true;
+    if (
+      !before.isDirectory() ||
+      (process.geteuid?.() !== undefined &&
+        before.uid !== BigInt(process.geteuid!())) ||
+      (before.mode & 0o077n) !== 0n
+    )
+      return { status: "unreadable", digest: null, reason: "UNSAFE" };
+    const key = (info: import("node:fs").BigIntStats) =>
       [info.dev, info.ino, info.mode, info.uid, info.gid, info.ctimeNs].join(
         ":",
       );
-    const holdDirectory = async (directory: string) => {
-      const info = await fs.lstat(directory, { bigint: true });
-      if (
-        !info.isDirectory() ||
-        (process.geteuid?.() !== undefined &&
-          info.uid !== BigInt(process.geteuid!())) ||
-        (info.mode & 0o077n) !== 0n
+    handle = await fs.open(
+      state,
+      fsConstants.O_RDONLY |
+        (fsConstants.O_DIRECTORY ?? 0) |
+        NO_FOLLOW |
+        CLOSE_ON_EXEC,
+    );
+    const rootIdentity = key(before);
+    if (key(await handle.stat({ bigint: true })) !== rootIdentity)
+      throw new Error("CHANGED");
+    const names = (await fs.readdir(state))
+      .filter((name) => name.startsWith(DEEP_TEST_JOURNAL_PREFIX))
+      .sort();
+    if (
+      names.some(
+        (name) =>
+          !name.endsWith(".json") ||
+          !ChatGptTaskJournalOperationIdSchema.safeParse(
+            name.slice(DEEP_TEST_JOURNAL_PREFIX.length, -5),
+          ).success,
       )
-        throw new Error("UNSAFE");
-      const handle = await fs.open(
-        directory,
-        fsConstants.O_RDONLY |
-          (fsConstants.O_DIRECTORY ?? 0) |
-          NO_FOLLOW |
-          CLOSE_ON_EXEC,
-      );
-      handles.push(handle);
-      const id = identity(info);
-      if (identity(await handle.stat({ bigint: true })) !== id)
-        throw new Error("CHANGED");
-      held.push({ path: directory, handle, identity: id });
-      return id;
-    };
-    const rootIdentity = await holdDirectory(root);
-    const names = (await fs.readdir(root)).sort();
+    )
+      return { status: "unreadable", digest: null, reason: "MALFORMED" };
     if (names.length > MAX_DEEP_TEST_ATTEMPTS)
       return { status: "unreadable", digest: null, reason: "OVERSIZED" };
-    const records: { phase: string }[] = [];
-    const digest = createHash("sha256");
-    digest.update(rootIdentity).update("\0");
+    const records: ChatGptTaskJournalRecord[] = [];
+    const digest = createHash("sha256")
+      .update(
+        [before.dev, before.ino, before.mode, before.uid, before.gid].join(":"),
+      )
+      .update("\0");
     for (const name of names) {
-      if (!ChatGptTaskJournalOperationIdSchema.safeParse(name).success)
-        return { status: "unreadable", digest: null, reason: "UNSAFE" };
-      const dir = path.join(root, name);
-      const dirIdentity = await holdDirectory(dir);
+      const id = name.slice(DEEP_TEST_JOURNAL_PREFIX.length, -5);
+      const file = path.join(state, name);
+      const fileBefore = await fs.lstat(file, { bigint: true });
+      const fileIdentity = [
+        fileBefore.dev,
+        fileBefore.ino,
+        fileBefore.mode,
+        fileBefore.uid,
+        fileBefore.gid,
+        fileBefore.ctimeNs,
+      ].join(":");
       const entry = await readState(
-        path.join(dir, CHATGPT_TASK_JOURNAL_FILE_NAME),
+        file,
         taskJournal,
         MAX_CHATGPT_TASK_JOURNAL_BYTES,
       );
@@ -303,39 +323,41 @@ async function readDeepTestAttempts(
           digest: null,
           reason: entry.status === "absent" ? "INCOMPLETE" : entry.reason,
         };
-      if (entry.value.operationId !== name || entry.value.kind !== "readonly")
+      if (entry.value.operationId !== id || entry.value.kind !== "readonly")
         return { status: "unreadable", digest: null, reason: "MALFORMED" };
+      const fileAfter = await fs.lstat(file, { bigint: true });
+      if (
+        [
+          fileAfter.dev,
+          fileAfter.ino,
+          fileAfter.mode,
+          fileAfter.uid,
+          fileAfter.gid,
+          fileAfter.ctimeNs,
+        ].join(":") !== fileIdentity
+      )
+        throw new Error("CHANGED");
       digest
         .update(name)
         .update("\0")
-        .update(dirIdentity)
+        .update(fileIdentity)
         .update("\0")
         .update(entry.digest)
         .update("\0");
-      records.push({
-        phase: entry.value.phase,
-      });
+      records.push(entry.value);
     }
-    for (const entry of held) {
-      if (
-        identity(await entry.handle.stat({ bigint: true })) !==
-          entry.identity ||
-        identity(await fs.lstat(entry.path, { bigint: true })) !==
-          entry.identity
-      )
-        throw new Error("CHANGED");
-    }
+    if (
+      key(await handle.stat({ bigint: true })) !== rootIdentity ||
+      key(await fs.lstat(state, { bigint: true })) !== rootIdentity
+    )
+      throw new Error("CHANGED");
     return { status: "read", digest: digest.digest("hex"), value: records };
   } catch (error) {
-    return (error as NodeJS.ErrnoException)?.code === "ENOENT" &&
-      (await fs.lstat(root).then(
-        () => false,
-        (e: NodeJS.ErrnoException) => e.code === "ENOENT",
-      ))
+    return (error as NodeJS.ErrnoException).code === "ENOENT" && !rootSeen
       ? { status: "absent", digest: null }
       : { status: "unreadable", digest: null, reason: "UNSAFE" };
   } finally {
-    await Promise.all(handles.map((handle) => handle.close()));
+    await handle?.close();
   }
 }
 
@@ -368,7 +390,7 @@ async function readStateFiles(state: string) {
       taskJournal,
       MAX_CHATGPT_TASK_JOURNAL_BYTES,
     ),
-    "deep-test-attempts": await readDeepTestAttempts(state),
+    "deep-test-records": await readFlatDeepTestRecords(state),
     "product-settings": await readState(
       path.join(state, "config.json"),
       productSettings,
@@ -456,11 +478,11 @@ export async function activationObligations(
     }
   }
 
-  const deepTests = confirmed["deep-test-attempts"];
-  if (deepTests.status === "unreadable")
-    unreadable.push(`deep-test-attempts:${deepTests.reason}`);
-  else if (deepTests.status === "read") {
-    const outstanding = deepTests.value.filter(
+  const flatDeepTests = confirmed["deep-test-records"];
+  if (flatDeepTests.status === "unreadable")
+    unreadable.push(`deep-test-records:${flatDeepTests.reason}`);
+  else if (flatDeepTests.status === "read") {
+    const outstanding = flatDeepTests.value.filter(
       (entry) => entry.phase !== "delivery_acknowledged",
     ).length;
     if (outstanding > 0) obligations.push(`DEEP_TEST_PENDING:${outstanding}`);

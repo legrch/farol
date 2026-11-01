@@ -1564,6 +1564,17 @@ export class WindowController implements RendererFacade {
             state: "unknown",
             code: "CONFIGURATION_OUTCOME_UNKNOWN",
           };
+        if (
+          command.kind === "chatgpt.run-deep-test" &&
+          outcome.result.ok &&
+          (outcome.result.evidence?.kind !== "chatgpt.deep-test-result" ||
+            outcome.result.evidence.operationId !== command.operationId)
+        )
+          return {
+            id: intention,
+            state: "unknown",
+            code: "CHATGPT_CONVERSATION_UNCONFIRMED",
+          };
         if (command.kind === "connector.save-and-connect") {
           const receipt = outcome.result.connectorSetup;
           if (
@@ -1780,7 +1791,11 @@ export class WindowController implements RendererFacade {
         const result: Intent = {
           id: intention,
           state: configurationEffectOutcome(outcome),
-          code: outcome.result.ok ? null : outcome.result.error,
+          code: outcome.result.ok
+            ? outcome.result.evidence?.kind === "chatgpt.deep-test-result"
+              ? outcome.result.evidence.code
+              : null
+            : outcome.result.error,
           ...(outcome.result.connectorSetup
             ? { connectorSetup: outcome.result.connectorSetup }
             : {}),
@@ -1920,6 +1935,23 @@ export class WindowController implements RendererFacade {
         ? command.operationId
         : undefined,
     );
+  }
+  markDeepTestUnconfirmed(operationId: string): void {
+    if (this.disposed) return;
+    const key = `deep-test:run:${operationId}`;
+    const current = this.state.intents[key];
+    if (current && current.state !== "pending" && current.state !== "unknown")
+      return;
+    this.patch({
+      intents: {
+        ...this.state.intents,
+        [key]: {
+          id: key,
+          state: "unknown",
+          code: "CHATGPT_CONVERSATION_UNCONFIRMED",
+        },
+      },
+    });
   }
   private sameEditOwner(
     receipt: EditReceipt,

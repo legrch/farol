@@ -718,6 +718,16 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("chatgpt.prepare-attachment-task") }),
   z.strictObject({ kind: z.literal("chatgpt.recover-task-result") }),
   z.strictObject({
+    kind: z.literal("chatgpt.run-deep-test"),
+    operationId: IdentifierSchema,
+    taskId: z.string().max(120),
+  }),
+  z.strictObject({ kind: z.literal("chatgpt.deep-test-status") }),
+  z.strictObject({
+    kind: z.literal("chatgpt.ack-deep-test"),
+    operationId: IdentifierSchema,
+  }),
+  z.strictObject({
     kind: z.literal("chatgpt.inspect-chat-account"),
     operationId: IdentifierSchema,
   }),
@@ -922,6 +932,34 @@ const DiscoveryCandidateSchema = z.strictObject({
 });
 
 export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("chatgpt.deep-test-result"),
+    operationId: IdentifierSchema,
+    state: z.enum([
+      "completed",
+      "not_authenticated",
+      "failed_before_submit",
+      "outcome_unknown",
+    ]),
+    code: z.string().max(120).nullable(),
+  }),
+  z.strictObject({
+    kind: z.literal("chatgpt.deep-test-status"),
+    attempts: z
+      .array(
+        z.strictObject({
+          operationId: IdentifierSchema,
+          state: z.enum([
+            "completed",
+            "not_authenticated",
+            "failed_before_submit",
+            "outcome_unknown",
+          ]),
+          code: z.string().max(120).nullable(),
+        }),
+      )
+      .max(256),
+  }),
   ReadConversationViewSchema,
   z
     .strictObject({

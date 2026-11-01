@@ -1905,6 +1905,10 @@ export const operationCodesByOutcome = {
     "write-failed",
   ],
   unknown: [
+    "DEEP_TEST_RECOVERY_UNAVAILABLE",
+    "DEEP_TEST_CHANGED",
+    "DEEP_TEST_UNAVAILABLE",
+    "DEEP_TEST_RESULT_MISSING",
     "FAROL_PROCESS_AUDIT_DRAIN_UNCONFIRMED",
     "SELF_TEST_START_UNCONFIRMED",
     "self_test_original_unconfirmed",

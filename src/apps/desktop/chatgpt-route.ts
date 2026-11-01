@@ -1691,6 +1691,8 @@ export type ChatGptTaskObserver = Readonly<{
   // one turn, never both. Items describe visible output, not tool execution.
   onVisibleItem?: (item: VisibleOutputItem) => void | Promise<void>;
   onDispatchIntent?: () => void | Promise<void>;
+  // Synchronous owner fence after the final awaited page verification.
+  beforeSend?: () => boolean;
   // Only an app-bound connector check may finish from its exact
   // local receipt. This proves the connector effect, never a model answer.
   readConnectorReceipt?: () => Promise<boolean>;
@@ -4156,6 +4158,15 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
+        if (observer.beforeSend && !observer.beforeSend()) {
+          return {
+            state: "failed_before_submit",
+            code: "CHATGPT_SUBMIT_UNAVAILABLE",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
         submissionPhase = "awaiting_acknowledgement";
         let acknowledgementTimer: ReturnType<typeof setTimeout> | undefined;
         const activated = activatedTaskSchema.safeParse(
@@ -4969,6 +4980,28 @@ export class ChatGptRoute {
     this.load = "failed";
     this.disposing = false;
     this.options.onConversationChanged?.(null);
+  }
+
+  // Pin the exact existing manual document before an asynchronous UI transition.
+  captureManualTaskTarget(): (() => boolean) | null {
+    const surface = this.routeWindow;
+    if (
+      !surface ||
+      surface.isDestroyed() ||
+      surface.webContents.isDestroyed() ||
+      this.load !== "loaded"
+    )
+      return null;
+    const url = surface.webContents.getURL();
+    if (!allowedChatGptPageUrl(url, this.options.e2eOrigin)) return null;
+    const generation = this.routeDocumentGeneration;
+    return () =>
+      this.routeWindow === surface &&
+      !surface.isDestroyed() &&
+      !surface.webContents.isDestroyed() &&
+      this.load === "loaded" &&
+      this.routeDocumentGeneration === generation &&
+      surface.webContents.getURL() === url;
   }
 
   // Physical generations only. No queue, turn state, journal or retry decision.

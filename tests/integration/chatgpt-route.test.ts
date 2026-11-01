@@ -4782,6 +4782,19 @@ describe("ChatGPT route submission boundary", () => {
     });
     expect(executeJavaScript).not.toHaveBeenCalled();
   });
+  it("fences a captured manual target after navigation even to the same URL", () => {
+    const candidate = taskRoute(vi.fn());
+    const surface = Reflect.get(candidate, "routeWindow");
+    surface.webContents.isDestroyed = () => false;
+    const current = candidate.captureManualTaskTarget();
+    expect(current?.()).toBe(true);
+    Reflect.set(
+      candidate,
+      "routeDocumentGeneration",
+      Number(Reflect.get(candidate, "routeDocumentGeneration")) + 1,
+    );
+    expect(current?.()).toBe(false);
+  });
 
   it("blocks an indeterminate page activity probe before touching the composer", async () => {
     const executeJavaScript = vi.fn();
@@ -4815,6 +4828,21 @@ describe("ChatGPT route submission boundary", () => {
     });
     expect(submissions).toBe(1);
     expect(executeJavaScript).toHaveBeenCalledTimes(2);
+  });
+
+  it("rechecks the owner synchronously after preparation and before the click", async () => {
+    const executeJavaScript = vi.fn().mockResolvedValueOnce(prepared);
+    const beforeSend = vi.fn(() => false);
+    await expect(
+      taskRoute(executeJavaScript).runReadonlyTask("bounded fixture", [], {
+        beforeSend,
+      }),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_SUBMIT_UNAVAILABLE",
+    });
+    expect(beforeSend).toHaveBeenCalledOnce();
+    expect(executeJavaScript).toHaveBeenCalledTimes(1);
   });
 
   it("treats a malformed send acknowledgement as unknown without retrying", async () => {

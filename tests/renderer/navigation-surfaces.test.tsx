@@ -126,13 +126,15 @@ describe("closed renderer destinations", () => {
     ).toBeTruthy();
     expect(vi.mocked(h.f.api.layout).mock.calls.at(-1)?.[5]).toBe("task-menu");
     expect(selfTest).not.toHaveBeenCalled();
-    await h.click("Deep test");
+    await h.click("Previous test results");
     expect(h.c.getSnapshot().overlay).toBe("deep-test");
-    const dialog = h.host.querySelector('dialog[aria-label="Deep test"]')!;
+    const dialog = h.host.querySelector(
+      'dialog[aria-label="Previous test results"]',
+    )!;
     expect(dialog).toBeTruthy();
     expect(vi.mocked(h.f.api.layout).mock.calls.at(-1)?.[5]).toBe("task-menu");
     expect(selfTest).not.toHaveBeenCalled();
-    expect(dialog.textContent).toContain("Deep test is unavailable");
+    expect(dialog.textContent).toContain("Previous local results");
     expect(dialog.querySelector("textarea")).toBeNull();
     expect(dialog.querySelector("select")).toBeNull();
     expect(h.f.api.configure).not.toHaveBeenCalled();
@@ -142,6 +144,182 @@ describe("closed renderer destinations", () => {
     expect(h.c.getSnapshot().overlay).toBe("none");
     expect(vi.mocked(h.f.api.layout).mock.calls.at(-1)?.[5]).toBe("none");
     expect(document.activeElement).toBe(arrow);
+  });
+  it("dispatches one new Deep test only from the explicit run click", async () => {
+    const h = await mount({
+      page: "general",
+      shell: true,
+      value: readySettings(true),
+      signIn: "authenticated",
+    });
+    await act(async () => h.c.navigate({ area: "chatgpt" }));
+    vi.mocked(h.f.api.configure).mockClear();
+    await act(async () =>
+      h.host
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="More connection tests"]',
+        )!
+        .click(),
+    );
+    expect(h.f.api.configure).not.toHaveBeenCalled();
+    const button = h.button("Deep test")!;
+    await act(async () => {
+      button.click();
+      button.click();
+    });
+    expect(h.c.getSnapshot().overlay).toBe("none");
+    expect(
+      vi
+        .mocked(h.f.api.configure)
+        .mock.calls.filter(
+          ([command]) => command.kind === "chatgpt.run-deep-test",
+        ),
+    ).toHaveLength(1);
+  });
+  it("shows the original local unknown by explicit read only, without a workspace picker", async () => {
+    const h = await mount({
+      page: "general",
+      shell: true,
+      value: readySettings(true),
+      signIn: "authenticated",
+    });
+    await act(async () => h.c.navigate({ area: "chatgpt" }));
+    const selection = {
+      operationId,
+      workspaceId,
+      computerGeneration: "1",
+      planVersion: "1",
+    };
+    const read = vi.spyOn(h.c, "selfTest").mockResolvedValue({
+      ok: true,
+      kind: "history",
+      history: { markers: [], records: [], unresolved: [selection] },
+    });
+    await act(async () =>
+      h.host
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="More connection tests"]',
+        )!
+        .click(),
+    );
+    await h.click("Previous test results");
+    expect(read).not.toHaveBeenCalled();
+    expect(h.host.querySelector("dialog select")).toBeNull();
+    await h.click("Previous local results");
+    expect(read).toHaveBeenCalledExactlyOnceWith({
+      kind: "history",
+      workspaceId,
+    });
+    expect(h.host.textContent).toContain(operationId);
+    expect(h.host.textContent).toContain("outcome_unknown");
+    expect(
+      read.mock.calls.every(
+        ([command]) => (command as { kind: string }).kind !== "start",
+      ),
+    ).toBe(true);
+  });
+  it.each([
+    [
+      "failed_before_submit",
+      "CHATGPT_COMPOSER_DRAFT_PRESENT",
+      "Deep test was not submitted",
+    ],
+    [
+      "outcome_unknown",
+      "CHATGPT_TASK_ERROR",
+      "Deep test outcome is unconfirmed",
+    ],
+  ] as const)(
+    "keeps %s feedback visible after the overlay closes",
+    async (state, code, text) => {
+      const h = await mount({
+        page: "general",
+        shell: true,
+        value: readySettings(true),
+        signIn: "authenticated",
+      });
+      await act(async () => h.c.navigate({ area: "chatgpt" }));
+      h.reply((command) => ({
+        ok: true,
+        snapshot: h.c.getSnapshot().configuration,
+        evidence:
+          command.kind === "chatgpt.run-deep-test"
+            ? {
+                kind: "chatgpt.deep-test-result",
+                operationId: command.operationId,
+                state,
+                code,
+              }
+            : undefined,
+      }));
+      await act(async () =>
+        h.host
+          .querySelector<HTMLButtonElement>(
+            '[aria-label="More connection tests"]',
+          )!
+          .click(),
+      );
+      await h.click("Deep test");
+      expect(h.c.getSnapshot().overlay).toBe("none");
+      expect(h.host.textContent).toContain(text);
+      expect(
+        vi
+          .mocked(h.f.api.configure)
+          .mock.calls.filter(
+            ([command]) => command.kind === "chatgpt.run-deep-test",
+          ),
+      ).toHaveLength(1);
+    },
+  );
+  it("shows an unconfirmed result if the facade promise rejects after closing", async () => {
+    const h = await mount({
+      page: "general",
+      shell: true,
+      value: readySettings(true),
+      signIn: "authenticated",
+    });
+    await act(async () => h.c.navigate({ area: "chatgpt" }));
+    await act(async () =>
+      h.host
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="More connection tests"]',
+        )!
+        .click(),
+    );
+    const send = vi
+      .spyOn(h.c, "configure")
+      .mockRejectedValueOnce(Error("lost"));
+    await h.click("Deep test");
+    expect(h.host.textContent).toContain("Deep test outcome is unconfirmed");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+  it("keeps a lost IPC reply unknown after the menu closes without resending", async () => {
+    const h = await mount({
+      page: "general",
+      shell: true,
+      value: readySettings(true),
+      signIn: "authenticated",
+    });
+    await act(async () => h.c.navigate({ area: "chatgpt" }));
+    h.reply(async () => {
+      throw Error("lost transport reply");
+    });
+    await act(async () =>
+      h.host
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="More connection tests"]',
+        )!
+        .click(),
+    );
+    await h.click("Deep test");
+    expect(h.host.textContent).toContain("Deep test outcome is unconfirmed");
+    expect(
+      vi
+        .mocked(h.f.api.configure)
+        .mock.calls.filter(
+          ([command]) => command.kind === "chatgpt.run-deep-test",
+        ),
+    ).toHaveLength(1);
   });
   it("keeps retained Chat flows inert without advertising an extra toolbar entry", async () => {
     const h = await mount({ page: "general", shell: true });

@@ -313,6 +313,7 @@ export interface RendererFacade {
     command: ProductConfigurationCommand,
     intention: string,
   ): Promise<Intent>;
+  markDeepTestUnconfirmed(operationId: string): void;
   task(command: ProductTaskCommand, intention: string): Promise<Intent>;
   update(action: UpdateAction, noticeKey?: string): Promise<Intent>;
   setAutomaticDownloads(enabled: boolean): Promise<Intent>;
