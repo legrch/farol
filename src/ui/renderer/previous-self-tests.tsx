@@ -29,6 +29,7 @@ export function PreviousSelfTests({
     const expected = generation.current;
     flight.current = true;
     setMessage("");
+    setReport([]);
     try {
       const raw = await facade.selfTest(
         selection
