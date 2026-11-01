@@ -8,14 +8,10 @@ export function DeepTestPrompt({
   const evidence = snapshot.evidence?.value;
   const attempts =
     evidence?.kind === "chatgpt.deep-test-status" ? evidence.attempts : [];
-  const active = Object.values(snapshot.intents).some(
-    (intent) => intent.id.startsWith("deep-test:run:") && intent.inFlight,
-  );
   return (
     <section>
       <button
         type="button"
-        disabled={active}
         onClick={() =>
           void facade.configure(
             { kind: "chatgpt.deep-test-status" },
@@ -33,7 +29,6 @@ export function DeepTestPrompt({
           </p>
           <button
             type="button"
-            disabled={active}
             onClick={() =>
               void facade.configure(
                 {

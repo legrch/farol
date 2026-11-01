@@ -12,6 +12,19 @@ export function PreviousSelfTests({
   facade,
   workspaces,
 }: Readonly<{ facade: RendererFacade; workspaces: readonly Workspace[] }>) {
+  return (
+    <PreviousSelfTestsForWorkspaces
+      key={JSON.stringify(workspaces.map((workspace) => workspace.workspaceId))}
+      facade={facade}
+      workspaces={workspaces}
+    />
+  );
+}
+
+function PreviousSelfTestsForWorkspaces({
+  facade,
+  workspaces,
+}: Readonly<{ facade: RendererFacade; workspaces: readonly Workspace[] }>) {
   const [chosen, setChosen] = useState("");
   const [records, setRecords] = useState<
     readonly { selection: Selection; phase: string }[]

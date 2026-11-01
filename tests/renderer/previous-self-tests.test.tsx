@@ -79,6 +79,17 @@ it("clears the previous report while a different original result fails to load",
       "observe",
       "observe",
     ]);
+    await act(async () =>
+      root.render(
+        <PreviousSelfTests
+          facade={{ selfTest } as unknown as RendererFacade}
+          workspaces={[{ workspaceId: "other", label: "Other" }]}
+        />,
+      ),
+    );
+    expect(host.textContent).not.toContain(a.operationId);
+    expect(host.textContent).not.toContain(b.operationId);
+    expect(host.textContent).not.toContain("scratch · pass");
   } finally {
     await act(async () => root.unmount());
     host.remove();
