@@ -9,6 +9,7 @@ import {
   type InstalledUpdateOperation,
   type InstalledUpdateRequest,
   type PromotionLeaseTransfer,
+  type InstalledHelperLifetime,
 } from "../../src/modules/release/infra/native/installed-update-helper.js";
 import {
   FIXTURE_GO_EXECUTABLE,
@@ -112,6 +113,7 @@ async function launch(
   quitOptions: Readonly<{
     deadlineAt?: number;
     canStartEffect?(): boolean;
+    lifetime?: InstalledHelperLifetime;
   }> = {},
   selected: InstalledUpdateHelperSelection = selection,
 ) {
@@ -145,6 +147,68 @@ async function launch(
 }
 
 describe("installed helper bounded readiness protocol", () => {
+  it("sends no request after lifetime acceptance returns past the original bound", async () => {
+    const transport = new Transport();
+    Object.defineProperty(transport, "pid", { value: process.pid });
+    const retain = vi.fn(async (_request, _helper, deadline: number) => {
+      vi.spyOn(Date, "now").mockReturnValue(deadline);
+    });
+    const { child, pending } = await launch(
+      3000,
+      request,
+      async () => undefined,
+      undefined,
+      transport,
+      { lifetime: { available: () => true, retain } },
+    );
+    expect(await pending).toMatchObject({
+      status: "outcome_unknown",
+      reason: "helper_lifetime_deadline_expired",
+    });
+    expect(retain).toHaveBeenCalledOnce();
+    expect(child.requests).toHaveLength(0);
+    child.finish(79);
+    await tick();
+  });
+  it("holds request bytes behind the durable spawn record and private lifetime ACK", async () => {
+    // A real ps observation of this still-live test process supplies the helper
+    // lstart token. Transport itself remains a pipe/event double.
+    const transport = new Transport();
+    Object.defineProperty(transport, "pid", { value: process.pid });
+    const order: string[] = [];
+    let accept!: () => void;
+    const held = new Promise<void>((resolve) => {
+      accept = resolve;
+    });
+    const retain = vi.fn(async (_request, helper, deadline) => {
+      expect(transport.requests).toHaveLength(0);
+      expect(helper.pid).toBe(process.pid);
+      expect(helper.processStart.length).toBeGreaterThan(0);
+      expect(deadline).toBeLessThanOrEqual(Date.now() + 3000);
+      order.push("lifetime");
+      await held;
+    });
+    const { child, pending } = await launch(
+      3000,
+      request,
+      async () => {
+        order.push("record");
+      },
+      undefined,
+      transport,
+      { lifetime: { available: () => true, retain } },
+    );
+    await vi.waitFor(() => expect(retain).toHaveBeenCalledOnce());
+    expect(order).toEqual(["record", "lifetime"]);
+    expect(child.requests).toHaveLength(0);
+    accept();
+    await tick();
+    expect(child.requests).toHaveLength(1);
+    child.ack.end(JSON.stringify(event()) + "\n");
+    expect((await pending).status).toBe("ready");
+    child.finish(0);
+    await tick();
+  });
   it("ends the fixture when helper qualification refuses before spawn", async () => {
     const refusing = fakeGoHelper(async () => {
       throw new Error("fixture qualification refused");

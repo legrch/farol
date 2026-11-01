@@ -1,12 +1,16 @@
 # Release Go preparation
 
-Two native capabilities of this module are selected by Go-aware desktop builds:
+Native capabilities of this module are selected by Go-aware desktop builds:
 
 - the [Go slot-binding publisher](slot-binding.md);
 - the Go apply/recovery/rollback helper entries (`run-closed-release-helper`,
   `run-live-release-helper`), which the desktop runs with no Python fallback.
   The Python helper file stays shipped under the
   [bridge rule](../../../installed-update-helper.md#retiring-the-python-helper-bridge-rule).
+- the macOS desktop lifetime root (`run-desktop-launcher`). It starts Electron
+  and holds the original helper's lifetime after Electron Quit. It has no
+  update, rollback, journal or promotion-lease authority. Electron remains the
+  predecessor; private metadata/ACK fd7/8 do not replace helper fd3/4/5/6.
 
 The updater policy and controller are not cut over. The active updater remains
 the TypeScript `installed-updater.ts` and `installed-update-runtime.ts`, which

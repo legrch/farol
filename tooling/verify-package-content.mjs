@@ -42,8 +42,7 @@ esac
 macos_dir=\${launcher_path%/*}
 contents_dir=\${macos_dir%/*}
 export ELECTRON_FORCE_IS_PACKAGED=true
-exec "$contents_dir/Frameworks/Electron Runtime.app/Contents/MacOS/Electron" \\
-  "$contents_dir/Resources/app" "$@"
+exec "$contents_dir/Resources/app/farol-backend" run-desktop-launcher "$@"
 `;
 function requireValue(condition, code) {
   if (!condition) throw new Error(code);
