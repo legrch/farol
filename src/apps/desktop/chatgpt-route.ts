@@ -1204,8 +1204,21 @@ function manualDeepTestDraftGuard(
     }
     if (!(manualComposer instanceof HTMLElement) || !manualForm || manualComposers.length !== 1 || manualComposers[0] !== manualComposer || manualInputs.length !== 1 || manualAttachments || manualUnknownControls || manualUnknownImage ||
         manualInputs.some((input) => !(input instanceof HTMLInputElement) || !input.files || input.files.length > 0) ||
-        manualText !== manualExpected)
+        manualText !== manualExpected) {
+      console.info('FAROL_MANUAL_GUARD_PROBE:' + JSON.stringify({
+        composer: manualComposer instanceof HTMLElement,
+        form: !!manualForm,
+        composerCount: Math.min(manualComposers.length, 10),
+        inputCount: Math.min(manualInputs.length, 10),
+        attachments: manualAttachments,
+        controls: manualUnknownControls,
+        media: manualUnknownImage,
+        files: manualInputs.some((input) => !input.files || input.files.length > 0),
+        textMatches: manualText === manualExpected,
+        textEmpty: manualText.length === 0
+      }));
       ${refusal}
+    }
   `;
 }
 
@@ -5846,6 +5859,36 @@ export class ChatGptRoute {
         // embedded frame of another origin on a ChatGPT page must not be able
         // to close the sign-in window.
         const frame = details.frame;
+        if (details.message.startsWith("FAROL_MANUAL_GUARD_PROBE:")) {
+          try {
+            const data = JSON.parse(
+              details.message.slice("FAROL_MANUAL_GUARD_PROBE:".length),
+            );
+            const safe = Object.fromEntries(
+              Object.entries(data).filter(
+                ([key, value]) =>
+                  ([
+                    "composer",
+                    "form",
+                    "attachments",
+                    "controls",
+                    "media",
+                    "files",
+                    "textMatches",
+                    "textEmpty",
+                  ].includes(key) &&
+                    typeof value === "boolean") ||
+                  (["composerCount", "inputCount"].includes(key) &&
+                    Number.isInteger(value) &&
+                    Number(value) >= 0 &&
+                    Number(value) <= 10),
+              ),
+            );
+            console.info("FAROL_MANUAL_GUARD_PROBE:" + JSON.stringify(safe));
+          } catch {
+            /* Diagnostic input never affects admission. */
+          }
+        }
         if (
           this.signInMode &&
           details.message === SIGN_IN_RETURN_SENTINEL &&
