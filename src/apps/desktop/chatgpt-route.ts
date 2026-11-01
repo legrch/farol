@@ -72,12 +72,19 @@ const probeSchema = z.strictObject({
 // nothing — not the composer, not the send control — and says only that.
 const navigatedTaskSchema = z.strictObject({ navigated: z.literal(true) });
 
+// Bound the in-page snapshot to the existing ChatGPT prompt limit.
+const MAX_PREPARED_COMPOSER_CHARACTERS = 128 * 1_024;
+
 const preparedTaskSchema = z.union([
   navigatedTaskSchema,
   z.strictObject({ appSelectionLost: z.literal(true) }),
   z.strictObject({ draftPresent: z.literal(true) }),
   z.strictObject({
     ready: z.boolean(),
+    preparedComposerText: z
+      .string()
+      .max(MAX_PREPARED_COMPOSER_CHARACTERS)
+      .optional(),
     baselineAssistantCount: z.number().int().nonnegative(),
     baselineUserCount: z.number().int().nonnegative(),
     baselineMessageIds: z
@@ -1158,6 +1165,8 @@ export function installManualAppGateScript(appName: string): string {
 function manualDeepTestDraftGuard(
   expectedText: string,
   refusal = "return { draftPresent: true };",
+  mode: "initial" | "exact" = "initial",
+  expectedExpression?: string,
 ): string {
   return `
     const manualComposer = findComposer();
@@ -1173,7 +1182,7 @@ function manualDeepTestDraftGuard(
     const manualAttachments = manualForm ? [...manualForm.querySelectorAll(
       '[data-testid="attachment-preview"],[data-testid="composer-attachment"],[data-testid*="file-chip"],[data-testid*="attachment-chip"],[aria-label*="remove file" i],[aria-label*="remove attachment" i]'
     )].some(manualVisible) : true;
-    const manualAllowedLabels = new Set(['Add files', 'Add files and more', 'Select ChatGPT model', 'Dictate', 'Start Voice', 'Start voice mode', 'Start Voice Mode', 'Send prompt', 'Send message', 'Send']);
+    const manualAllowedLabels = new Set(['Add files', 'Add files and more', 'Select ChatGPT model', 'Dictate', 'Start Voice', 'Start voice mode', 'Start Voice Mode', 'Expand', 'Send prompt', 'Send message', 'Send']);
     const manualControlSelector = 'button,[role="button"],input[type="button"],input[type="submit"]';
     const manualUnknownControls = manualForm ? [...new Set([
       ...manualForm.querySelectorAll(manualControlSelector),
@@ -1186,8 +1195,8 @@ function manualDeepTestDraftGuard(
     const manualUnknownImage = manualForm ? [...manualForm.querySelectorAll('img,video,audio')]
       .filter(manualVisible).some((element) => !element.closest(selectedSelector)) : true;
     let manualText = composerDraftText(manualComposer);
-    const manualExpected = ${JSON.stringify(expectedText)};
-    if (manualExpected && manualComposer instanceof HTMLElement && !(manualComposer instanceof HTMLTextAreaElement) &&
+    const manualExpected = ${expectedExpression ?? JSON.stringify(expectedText)};
+    if (manualComposer instanceof HTMLElement && !(manualComposer instanceof HTMLTextAreaElement) &&
         appSelectionFor(manualComposer).state === 'bound') {
       const liveLinks = [...manualComposer.querySelectorAll('a[href*="/plugins/plugin_asdk_app_"]')]
         .filter((link) => appElementVisible(link) && normalizedLabel(link) === requiredAppName);
@@ -1202,9 +1211,18 @@ function manualDeepTestDraftGuard(
         }
       }
     }
-    if (!(manualComposer instanceof HTMLElement) || !manualForm || manualComposers.length !== 1 || manualComposers[0] !== manualComposer || manualInputs.length !== 1 || manualAttachments || manualUnknownControls || manualUnknownImage ||
+    if (!(manualComposer instanceof HTMLElement) || !manualForm || manualComposers.length !== 1 || manualComposers[0] !== manualComposer || manualInputs.length === 0 || manualAttachments || manualUnknownControls || manualUnknownImage ||
         manualInputs.some((input) => !(input instanceof HTMLInputElement) || !input.files || input.files.length > 0) ||
-        manualText !== manualExpected)
+        ${
+          mode === "initial"
+            ? `!(manualText === '' || (
+          manualComposer instanceof HTMLElement && !(manualComposer instanceof HTMLTextAreaElement) &&
+          appSelectionFor(manualComposer).state === 'bound' &&
+          [...manualComposer.querySelectorAll(selectedSelector + ',a[href*="/plugins/plugin_asdk_app_"]')]
+            .some((element) => appElementVisible(element)) && manualText.trim() === ''
+        ))`
+            : "manualText !== manualExpected"
+        })
       ${refusal}
   `;
 }
@@ -1229,6 +1247,12 @@ export function prepareTaskScript(
     ${requiredAppName ? appSelectionPrelude(requiredAppName) : ""}
     ${requiredAppName ? 'if (appSelection().state !== "bound") return { appSelectionLost: true };' : ""}
     ${manualDeepTest && requiredAppName ? manualDeepTestDraftGuard("") : ""}
+    ${
+      manualDeepTest && requiredAppName
+        ? `const manualInitialText = manualText;
+    if (manualInitialText.length + prompt.length > ${MAX_PREPARED_COMPOSER_CHARACTERS}) return { draftPresent: true };`
+        : ""
+    }
     const visible = (element) => {
       if (!(element instanceof HTMLElement)) return false;
       const style = getComputedStyle(element);
@@ -1290,6 +1314,15 @@ export function prepareTaskScript(
       }));`
       }
     }
+    ${
+      manualDeepTest && requiredAppName
+        ? `{
+      if (appSelection().state !== "bound") return { appSelectionLost: true };
+      ${manualDeepTestDraftGuard("", undefined, "exact", "manualInitialText + prompt")}
+      return { ready: true, baselineAssistantCount, baselineUserCount, baselineMessageIds, preparedComposerText: manualText };
+    }`
+        : ""
+    }
     return { ready: true, baselineAssistantCount, baselineUserCount, baselineMessageIds };
   })()`;
 }
@@ -1330,7 +1363,7 @@ export function activateTaskScript(
     }
     ${requiredAppName ? appSelectionPrelude(requiredAppName) : ""}
     ${requiredAppName ? 'if (appSelection().state !== "bound") return { appSelectionLost: true };' : ""}
-    ${manualDeepTestPrompt !== undefined && requiredAppName ? manualDeepTestDraftGuard(manualDeepTestPrompt) : ""}
+    ${manualDeepTestPrompt !== undefined && requiredAppName ? manualDeepTestDraftGuard(manualDeepTestPrompt, undefined, "exact") : ""}
     const visible = (element) => {
       if (!(element instanceof HTMLElement)) return false;
       const style = getComputedStyle(element);
@@ -3366,19 +3399,23 @@ export class ChatGptRoute {
     | null
   > {
     const contents = candidate.webContents;
-    const execute = (script: string, gesture: boolean) =>
+    const execute = (
+      script: string,
+      gesture: boolean,
+      deadline = taskDeadline,
+    ) =>
       this.executeTaskDocumentScript(
         contents,
         script,
         gesture,
-        taskDeadline,
+        deadline,
         operationGeneration,
       );
     let observed: ChatGptProfilePreparationDiagnostic["probe"] = null;
-    const read = async () => {
+    const read = async (deadline = taskDeadline) => {
       try {
         const result = temporaryInstantProfileSchema.safeParse(
-          await execute(temporaryInstantProfileProbe, true),
+          await execute(temporaryInstantProfileProbe, true, deadline),
         );
         observed = result.success
           ? {
@@ -3401,14 +3438,61 @@ export class ChatGptRoute {
         return temporaryInstantProfileSchema.safeParse(null);
       }
     };
-    const initial = await read();
-    if (!initial.success || !initial.data.composerReady)
-      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    if (initial.data.draftPresent) return "CHATGPT_COMPOSER_DRAFT_PRESENT";
-
     const temporaryUrl = new URL(this.options.homeUrl);
     if (temporary) temporaryUrl.searchParams.set("temporary-chat", "true");
     else temporaryUrl.searchParams.delete("temporary-chat");
+    const waitForExistingTemporary =
+      temporary && contents.getURL() === temporaryUrl.href;
+    const initialDocumentGeneration = this.routeDocumentGeneration;
+    const initialPhysicalGeneration = this.chatPhysicalDocumentGeneration;
+    const initialFrame = contents.mainFrame;
+    const initialIdentityLost = () =>
+      this.routeWindow !== candidate ||
+      candidate.isDestroyed() ||
+      this.disposing ||
+      this.routeDocumentLoadFailed ||
+      this.routeDocumentAwaitingCommit ||
+      this.routeDocumentGeneration !== initialDocumentGeneration ||
+      this.chatPhysicalDocumentGeneration !== initialPhysicalGeneration ||
+      this.taskObservationGeneration !== operationGeneration ||
+      contents.getURL() !== temporaryUrl.href ||
+      contents.mainFrame !== initialFrame ||
+      (initialFrame &&
+        (initialFrame.isDestroyed() || initialFrame.url !== temporaryUrl.href));
+    const initialDeadline = Math.min(taskDeadline, Date.now() + 12_000);
+    if (
+      waitForExistingTemporary &&
+      (initialIdentityLost() || Date.now() >= initialDeadline)
+    )
+      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+    let initial = await read(
+      waitForExistingTemporary ? initialDeadline : taskDeadline,
+    );
+    if (waitForExistingTemporary && initialIdentityLost())
+      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+    if (!initial.success) return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+    if (initial.data.draftPresent) return "CHATGPT_COMPOSER_DRAFT_PRESENT";
+    if (!initial.data.composerReady) return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+    if (waitForExistingTemporary) {
+      while (!initial.data.temporary && Date.now() < initialDeadline) {
+        await delay(Math.min(200, Math.max(0, initialDeadline - Date.now())));
+        if (initialIdentityLost() || Date.now() >= initialDeadline)
+          return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+        initial = await read(initialDeadline);
+        if (initialIdentityLost() || !initial.success)
+          return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+        if (initial.data.draftPresent) return "CHATGPT_COMPOSER_DRAFT_PRESENT";
+        if (!initial.data.composerReady)
+          return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+      }
+      if (
+        !initial.data.temporary ||
+        Date.now() >= initialDeadline ||
+        initialIdentityLost()
+      )
+        return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+    }
+
     try {
       if (
         !temporary ||
@@ -4125,6 +4209,17 @@ export class ChatGptRoute {
           observedCharacters,
         };
       }
+      if (
+        observer.manualDeepTest &&
+        preparedTask.preparedComposerText === undefined
+      ) {
+        return {
+          state: "failed_before_submit",
+          code: "CHATGPT_COMPOSER_UNAVAILABLE",
+          deltaCount,
+          observedCharacters,
+        };
+      }
       if (attachments.length > 0) {
         const beforeUpload = dispatchReadinessRefusal();
         if (beforeUpload) return beforeUpload;
@@ -4246,7 +4341,9 @@ export class ChatGptRoute {
                 requiredAppName,
                 profile === "temporary-instant",
                 profile === "connector-instant",
-                observer.manualDeepTest ? prompt : undefined,
+                observer.manualDeepTest
+                  ? preparedTask.preparedComposerText
+                  : undefined,
               ),
               true,
               true,

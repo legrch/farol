@@ -162,7 +162,16 @@ it("sends the bounded prompt once and retains the exact result", async () => {
     evidence: { state: "completed" },
   });
   expect(f.send).toHaveBeenCalledTimes(1);
-  expect(f.send.mock.calls[0]![0]).toContain(`farol-deep-test-${id}`);
+  expect(f.send.mock.calls[0]![0]).toContain(`farol-deep-test-${id}.txt`);
+  expect(f.send.mock.calls[0]![0]).toContain(
+    "expectedSha256: null (create-only)",
+  );
+  expect(f.send.mock.calls[0]![0]).toContain(
+    "Do not list or read that nonexistent test path before creating it",
+  );
+  expect(f.send.mock.calls[0]![0]).toContain(
+    "Never clean up after an unknown effect",
+  );
   const journal = new PrivateChatGptTaskJournal({
     root: path.join(f.root, "farol-state"),
     deepTestOperationId: id,
