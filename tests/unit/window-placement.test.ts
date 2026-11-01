@@ -339,6 +339,20 @@ describe("explicit iPad test presentation", () => {
       ),
     ).toThrow("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
   });
+  it("keeps a strict Sidecar run off the sole remaining primary after disconnection", () => {
+    for (const display of [externalPrimary, builtInSecondary, sidecar]) {
+      expect(() =>
+        selectPreviewWindowPlacement(
+          [display],
+          display.id,
+          { width: 900, height: 600 },
+          false,
+          false,
+          true,
+        ),
+      ).toThrow("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
+    }
+  });
   it("allows explicit primary permission when the preferred test surface is unavailable", () => {
     expect(
       selectPreviewWindowPlacement(

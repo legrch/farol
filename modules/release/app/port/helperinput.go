@@ -10,6 +10,7 @@ type HelperRequest struct {
 	ProcessStart                      string
 	WaitSeconds                       int
 	Relaunch                          bool
+	RelaunchPresentation              *string
 	InstallLocation                   *string
 	Predecessor                       *HelperPredecessor
 	LeaseIdentity                     *HelperIdentity

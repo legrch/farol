@@ -1659,6 +1659,8 @@ async function recheckAdmission(
   }
 }
 export type InstalledUpdateRuntimeOptions = Readonly<{
+  /** Explicit test presentation from trusted process argv only. */
+  relaunchPresentation?: "sidecar-only";
   helperLifetime?: InstalledHelperLifetime;
   operations?: OperationsRecorder;
   directory: string;
@@ -3863,6 +3865,9 @@ async function createRuntime(
               processStart,
               waitSeconds: 120,
               relaunch: true,
+              ...(options.relaunchPresentation
+                ? { relaunchPresentation: options.relaunchPresentation }
+                : {}),
             },
             {
               lifetime: helperLifetime,
@@ -4283,6 +4288,9 @@ async function createRuntime(
               // First-transition recovery must be qualified before the target
               // can write its state. Ordinary installed updates still relaunch.
               relaunch: !supervised && !quitContext,
+              ...(!supervised && !quitContext && options.relaunchPresentation
+                ? { relaunchPresentation: options.relaunchPresentation }
+                : {}),
             },
             {
               ...(!supervised && options.helperLifetime

@@ -148,14 +148,17 @@ export function selectPreviewWindowPlacement(
           ...secondary.filter((d) => d.internal),
           ...secondary.filter((d) => !d.internal),
         ];
-  // A sole display never blocks startup. With other displays connected, preserve
-  // the requested test surface instead of silently taking the owner’s primary.
+  // Ordinary preview may use a sole display. Sidecar selection has no implicit
+  // primary fallback; an explicit primary-display allowance remains separate.
   const selected =
     preferred.find(
       (d) =>
         d.workArea.width >= requested.width &&
         d.workArea.height >= requested.height,
-    ) ?? (secondary.length === 0 || allowPrimaryDisplay ? primary : undefined);
+    ) ??
+    (allowPrimaryDisplay || (!sidecarDisplayOnly && secondary.length === 0)
+      ? primary
+      : undefined);
   if (!selected) throw new Error("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
   const isPrimary = selected.id === primaryDisplayId;
   const selection = isPrimary

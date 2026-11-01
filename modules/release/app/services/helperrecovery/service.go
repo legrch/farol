@@ -95,6 +95,10 @@ func ObserveCaptured(ctx context.Context, r port.HelperRequest, observation port
 }
 
 func copyRequest(r port.HelperRequest) port.HelperRequest {
+	if r.RelaunchPresentation != nil {
+		v := *r.RelaunchPresentation
+		r.RelaunchPresentation = &v
+	}
 	if r.Predecessor != nil {
 		v := *r.Predecessor
 		r.Predecessor = &v

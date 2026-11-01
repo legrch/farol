@@ -45,6 +45,13 @@ func (s *Service) Parse(ctx context.Context, input []byte) (port.HelperRequest, 
 		return refuse("input")
 	}
 	// The decoder may retain its own DTOs. Each result owns its optional values.
+	if r.RelaunchPresentation != nil {
+		v := *r.RelaunchPresentation
+		r.RelaunchPresentation = &v
+		if v != "sidecar-only" || !r.Relaunch || r.Predecessor != nil {
+			return refuse("input")
+		}
+	}
 	if r.InstallLocation != nil {
 		v := *r.InstallLocation
 		r.InstallLocation = &v

@@ -23,6 +23,36 @@ type golden struct {
 	Continue     string
 }
 
+func TestSidecarPresentationSurvivesHandoffAndContinueCodec(t *testing.T) {
+	mode := "sidecar-only"
+	c := port.HelperCorrelation{OperationID: "fixture", RelaunchPresentation: &mode}
+	codec := helperprotocol.JSONCodec{}
+	b, err := codec.Handoff(port.HelperHandoffFrame{Schema: "fixture", Phase: "waiting_for_exit", Correlation: c})
+	if err != nil || !bytes.Contains(b, []byte(`"relaunchPresentation":"sidecar-only"`)) {
+		t.Fatal("missing presentation in ACK", err)
+	}
+	var wire map[string]any
+	if json.Unmarshal(b, &wire) != nil {
+		t.Fatal("invalid frame")
+	}
+	delete(wire, "phase")
+	b, err = json.Marshal(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := codec.Continue(b)
+	if err != nil || f.Correlation.RelaunchPresentation == nil || *f.Correlation.RelaunchPresentation != mode {
+		t.Fatal("presentation lost in continuation", err)
+	}
+	for _, bad := range []any{nil, true, []string{"sidecar-only"}} {
+		wire["relaunchPresentation"] = bad
+		b, _ = json.Marshal(wire)
+		if _, err := codec.Continue(b); err == nil {
+			t.Fatal("invalid presentation structure accepted")
+		}
+	}
+}
+
 func goldens(t *testing.T) []golden {
 	t.Helper()
 	b, err := os.ReadFile("testdata/golden.json")

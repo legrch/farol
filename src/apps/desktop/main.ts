@@ -1036,6 +1036,11 @@ async function initializeInstalledUpdater(): Promise<void> {
   if (buildEnvironment !== "preview") return;
   try {
     installedUpdater = await createInstalledUpdateRuntime({
+      ...(windowMode === "secondary-visible" &&
+      sidecarDisplayOnly &&
+      !allowPrimaryDisplay
+        ? { relaunchPresentation: "sidecar-only" as const }
+        : {}),
       helperLifetime: createDesktopHelperLifetime(),
       operations: operationsStore(),
       directory,
@@ -12241,8 +12246,8 @@ function reconcileVisibleTestDisplay(): void {
       window.setBounds(selectedVisibleTestPlacement(initialWindowSize).bounds);
       window.showInactive();
     } catch {
-      // A missing secondary falls back to primary. Invalid/unavailable display
-      // geometry still waits for the next topology event on this owned window.
+      // An unavailable permitted display keeps this window hidden until the
+      // next topology event. Sidecar has no implicit primary fallback.
     }
   }
   for (const route of managedChatGptRoutes) {

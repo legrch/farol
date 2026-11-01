@@ -25,7 +25,7 @@ func (JSONDecoder) Decode(input []byte) (port.HelperRequest, error) {
 	}
 	m, ok := object(input,
 		[]string{"schema", "action", "home", "operationId", "source", "target", "drain", "pid", "processStart", "waitSeconds", "relaunch"},
-		[]string{"installLocation", "predecessor", "leaseIdentity"})
+		[]string{"installLocation", "predecessor", "leaseIdentity", "relaunchPresentation"})
 	if !ok || !texts(m, map[string]*string{"schema": &r.Schema, "action": &r.Action, "home": &r.Home, "operationId": &r.OperationID, "processStart": &r.ProcessStart}) ||
 		!build(m["source"], &r.Source) || !build(m["target"], &r.Target) || !drain(m["drain"], &r.Drain) {
 		return port.HelperRequest{}, errInput
@@ -52,6 +52,13 @@ func (JSONDecoder) Decode(input []byte) (port.HelperRequest, error) {
 			return port.HelperRequest{}, errInput
 		}
 		r.InstallLocation = &v
+	}
+	if raw, present := m["relaunchPresentation"]; present {
+		var v string
+		if !text(raw, &v) {
+			return port.HelperRequest{}, errInput
+		}
+		r.RelaunchPresentation = &v
 	}
 	if raw, present := m["predecessor"]; present {
 		v := new(port.HelperPredecessor)

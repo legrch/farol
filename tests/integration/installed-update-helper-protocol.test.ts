@@ -57,6 +57,9 @@ const event = (selected: InstalledUpdateRequest = request) => ({
   target: selected.target,
   pid: selected.pid,
   processStart: selected.processStart,
+  ...(selected.relaunchPresentation
+    ? { relaunchPresentation: selected.relaunchPresentation }
+    : {}),
 });
 
 // This fixture models only Node's private pipe transport and lifecycle events.
@@ -147,6 +150,52 @@ async function launch(
 }
 
 describe("installed helper bounded readiness protocol", () => {
+  it("pins Sidecar presentation in request bytes and requires its exact ACK", async () => {
+    const selected: InstalledUpdateRequest = {
+      ...request,
+      relaunch: true,
+      relaunchPresentation: "sidecar-only",
+    };
+    const { child, pending } = await launch(1000, selected);
+    await tick();
+    expect(
+      JSON.parse(Buffer.concat(child.requests).toString("utf8")),
+    ).toMatchObject({ relaunchPresentation: "sidecar-only" });
+    child.ack.end(JSON.stringify(event(selected)) + "\n");
+    const result = await pending;
+    expect(result.status).toBe("ready");
+    child.finish(0);
+    await result.operation.completion;
+  });
+  it.each(["missing", "changed", "unsolicited"] as const)(
+    "refuses a %s presentation ACK without another spawn",
+    async (kind) => {
+      const selected: InstalledUpdateRequest =
+        kind === "unsolicited"
+          ? request
+          : {
+              ...request,
+              relaunch: true,
+              relaunchPresentation: "sidecar-only",
+            };
+      const { child, pending } = await launch(1000, selected);
+      const frame: Record<string, unknown> = event(selected);
+      if (kind === "missing") delete frame["relaunchPresentation"];
+      else
+        frame["relaunchPresentation"] =
+          kind === "changed" ? "primary" : "sidecar-only";
+      child.ack.end(JSON.stringify(frame) + "\n");
+      const result = await pending;
+      expect(result).toMatchObject({
+        status: "outcome_unknown",
+        reason: "readiness_malformed",
+      });
+      child.finish(79, "unknown");
+      await result.operation.completion;
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(child.kill).not.toHaveBeenCalled();
+    },
+  );
   it("sends no request after lifetime acceptance returns past the original bound", async () => {
     const transport = new Transport();
     Object.defineProperty(transport, "pid", { value: process.pid });

@@ -13,6 +13,24 @@ type relaunchCodecFunc func(port.HelperRelaunchHint) ([]byte, error)
 
 func (f relaunchCodecFunc) Relaunch(h port.HelperRelaunchHint) ([]byte, error) { return f(h) }
 
+func TestSidecarRelaunchAddsOnlyClosedExistingPresentationArguments(t *testing.T) {
+	r := requestFixture()
+	r.Predecessor, r.LeaseIdentity = nil, nil
+	mode := "sidecar-only"
+	r.RelaunchPresentation = &mode
+	s := bindFixture(t, r, codecFixture{})
+	mode = "primary"
+	p := r.Home + "/Library/Application Support/io.github.legrch.farol/installed-updates/" + r.OperationID + "/launch-Farol.app"
+	args, err := s.BuildRelaunchArguments(context.Background(), "completed", port.HelperSelfIdentity{PID: 5678, ProcessStart: "original helper"}, &p, relaunchCodecFunc(func(port.HelperRelaunchHint) ([]byte, error) { return []byte(`{}`), nil }))
+	if err != nil || len(args) != 7 || args[2] != p || args[4] != "--farol-installed-update-relaunch={}" || args[5] != "--preview-window-mode=secondary-visible" || args[6] != "--sidecar-display-only" {
+		t.Fatalf("presentation binding changed: %v %v", args, err)
+	}
+	got, err := s.Request(context.Background())
+	if err != nil || got.RelaunchPresentation == nil || *got.RelaunchPresentation != "sidecar-only" {
+		t.Fatal("request did not retain its own presentation copy")
+	}
+}
+
 func TestRelaunchBindsTargetAndOwnHelperWithoutDispatch(t *testing.T) {
 	r := requestFixture()
 	s := bindFixture(t, r, codecFixture{})
