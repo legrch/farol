@@ -5,6 +5,10 @@ import { setupChecklist } from "./setup-navigation";
 import { connectorVerificationInFlight } from "./setup-gate";
 import { useSetupIntents, retainedSetupIntents } from "./settings";
 import { unresolvedActions } from "../../../apps/desktop/renderer/unresolved-actions";
+import {
+  activityCategory,
+  activityResult,
+} from "../../../apps/desktop/renderer/activity-presentation";
 import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
 import { selectedConnectorApp } from "../../pkg/product-settings/connector-app-selection";
 import type { RendererFacade, WindowSnapshot } from "./contract";
@@ -101,7 +105,10 @@ export function Home({ snapshot, facade }: Props) {
   const refused = Object.values(snapshot.intents).filter(
     (intent) => intent.state === "refused",
   );
-  const recent = [...snapshot.activity].sort((a, b) => b.at - a.at).slice(0, 3);
+  const recent = [...snapshot.activity]
+    .filter((row) => activityCategory(row) === "requests")
+    .sort((a, b) => b.at - a.at)
+    .slice(0, 3);
   const workspaceCount =
     snapshot.configuration?.status === "ready"
       ? snapshot.configuration.settings.computer.workspaces.length
@@ -462,7 +469,9 @@ export function Home({ snapshot, facade }: Props) {
               </time>
               <span className="home-row-label">{event.label}</span>
               <span className="home-event-state">
-                {eventState(event.phase)}
+                {event.kind === "computer.process.terminal"
+                  ? activityResult(event).text
+                  : eventState(event.phase)}
               </span>
             </button>
           ))}

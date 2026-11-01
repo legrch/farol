@@ -31,6 +31,7 @@ import {
 } from "../../../apps/desktop/owner-stop-presentation";
 
 import { ConnectionStatusTracker } from "../../../apps/desktop/connection-status";
+import { passiveHealthObserver } from "../../../apps/desktop/operations/passive-health";
 import {
   unavailableConnectionStatus,
   type ConnectionStatusView,
@@ -4946,6 +4947,8 @@ function observedConnectorHealth(
 }
 function startConnectorTransportWatch(): void {
   if (connectorTransportWatch || quitInProgress) return;
+  const observePassiveHealth =
+    passiveHealthObserver<SecureMcpConnectorRuntime>(operationsStore());
   connectorTransportWatch = new ConnectorTransportWatch({
     capture: captureConnectorTransport,
     current: connectorTransportCurrent,
@@ -4953,7 +4956,11 @@ function startConnectorTransportWatch(): void {
       // Tunnel HTTP readiness cannot stand in for the original Go owner.
       // Lost backend settlement fences recovery; never respawn it here.
       if (!original.core.backendAvailable) return "unknown";
-      const healthy = await observedConnectorHealth(original.connector);
+      const healthy = await observePassiveHealth(
+        original.connector,
+        () => original.connector.checkHealth(),
+        () => connectorTransportCurrent(original),
+      );
       if (!original.core.backendAvailable) return "unknown";
       const terminal = original.connector.getTunnelObservation();
       if (terminal && terminal.runtimeGeneration !== original.runtimeGeneration)

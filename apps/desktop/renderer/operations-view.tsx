@@ -1,5 +1,10 @@
 import { useState } from "react";
 import { operationSources, operationOutcomes } from "./operations-contract";
+import {
+  activityCategory,
+  activityResult,
+  activitySearchText,
+} from "./activity-presentation";
 import type {
   RendererFacade,
   WindowSnapshot,
@@ -24,30 +29,31 @@ export function OperationsActivity({
   facade: RendererFacade;
 }) {
   const [source, setSource] = useState("all");
+  const [category, setCategory] = useState("requests");
   const [outcome, setOutcome] = useState("all");
   const [query, setQuery] = useState("");
   const rows = [...snapshot.activity]
     .sort((a, b) => b.at - a.at)
     .filter(
       (row) =>
+        (category === "all" ||
+          activityCategory(row) === category ||
+          (category === "requests" &&
+            row.id === snapshot.destination.activityId)) &&
         (source === "all" || row.source === source) &&
         (outcome === "all" ||
           (outcome === "attention"
             ? row.outcome === "unknown" || row.outcome === "pending"
-            : row.outcome === outcome)) &&
-        [
-          row.kind,
-          row.source,
-          row.outcome,
-          row.operation,
-          row.code,
-          row.target?.workspace,
-          row.target?.relativePath,
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase()
-          .includes(query.toLowerCase()),
+            : outcome === "issues"
+              ? activityResult(row).issue
+              : outcome === "failed"
+                ? row.outcome === "failed" ||
+                  activityResult(row).outcome === "failed"
+                : outcome === "done"
+                  ? row.outcome === "done" &&
+                    activityResult(row).outcome === "done"
+                  : row.outcome === outcome)) &&
+        activitySearchText(row).includes(query.toLowerCase()),
     );
   const diagnostics = snapshot.activityDiagnostics;
   return (
@@ -57,6 +63,17 @@ export function OperationsActivity({
         days within the storage limit.
       </p>
       <div className="operations-filters">
+        <label>
+          Category
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+          >
+            <option value="requests">Requests</option>
+            <option value="system">System</option>
+            <option value="all">All</option>
+          </select>
+        </label>
         <label>
           Source
           <select value={source} onChange={(e) => setSource(e.target.value)}>
@@ -71,6 +88,7 @@ export function OperationsActivity({
           <select value={outcome} onChange={(e) => setOutcome(e.target.value)}>
             <option value="all">All outcomes</option>
             <option value="attention">Unconfirmed results</option>
+            <option value="issues">Issues</option>
             {operationOutcomes.map((s) => (
               <option key={s}>{s}</option>
             ))}
@@ -130,10 +148,11 @@ export function OperationsActivity({
                   {row.operation ? ` · ${row.operation}` : ""}
                 </small>
               </span>
-              <span className="operation-outcome" data-outcome={row.outcome}>
-                {row.kind === "computer.process.terminal"
-                  ? "observed"
-                  : row.outcome}
+              <span
+                className="operation-outcome"
+                data-outcome={activityResult(row).outcome}
+              >
+                {activityResult(row).text}
               </span>
             </summary>
             <dl className="activity-facts">
@@ -145,6 +164,9 @@ export function OperationsActivity({
                 ["Command category", row.target?.command ?? "—"],
                 ["Target", row.operation || "App"],
                 ["Outcome", row.outcome],
+                ...(row.kind === "computer.process.terminal"
+                  ? [["Observation", "Recorded"]]
+                  : []),
                 ["Code", row.code ?? "—"],
                 [
                   "Duration",

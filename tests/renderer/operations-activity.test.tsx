@@ -167,10 +167,105 @@ it("shows terminal evidence without treating a nonzero exit as successful execut
         />,
       ),
     );
-    expect(host.textContent).toContain("observed");
+    expect(host.textContent).toContain("Exit 3");
+    expect(
+      host.querySelector('.operation-outcome[data-outcome="failed"]'),
+    ).not.toBeNull();
+    expect(host.textContent).toContain("Recorded");
     expect(host.textContent).toContain("Code 3");
     expect(host.textContent).toContain("unverified");
     expect(host.textContent).toContain("start-id");
+  } finally {
+    await act(async () => root.unmount());
+    c.dispose();
+  }
+});
+it("defaults to requests, keeps external status visible and finds a failed exit by ID and code", async () => {
+  const f = fixture(),
+    c = new WindowController(f.api);
+  await c.start();
+  const terminal: ActivityEntry = {
+    ...entries[0]!,
+    id: "terminal",
+    source: "ChatGPT",
+    kind: "computer.process.terminal",
+    label: "Process terminal",
+    operationRef: {
+      owner: "computer.process",
+      operationId: "brain-check-01",
+      buildId: "b",
+      runtimeId: "r",
+      binding: "accepted",
+    },
+    exit: { kind: "code", value: 126 },
+  };
+  const snapshot = {
+    ...c.getSnapshot(),
+    activity: [
+      {
+        ...entries[0]!,
+        id: "health",
+        source: "Setup" as const,
+        kind: "connection.health",
+        label: "Passive health",
+      },
+      {
+        ...entries[0]!,
+        id: "external",
+        source: "ChatGPT" as const,
+        kind: "computer_connection_status",
+        label: "External status",
+      },
+      terminal,
+    ],
+  };
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  const select = async (label: string, value: string) => {
+    const control = [...host.querySelectorAll("label")]
+      .find((node) => node.textContent?.includes(label))!
+      .querySelector("select")!;
+    await act(async () => {
+      control.value = value;
+      control.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  };
+  try {
+    await act(async () =>
+      root.render(
+        <OperationsActivity
+          snapshot={snapshot}
+          facade={{} as RendererFacade}
+        />,
+      ),
+    );
+    expect(host.textContent).toContain("External status");
+    expect(host.textContent).not.toContain("Passive health");
+    await select("Outcome", "failed");
+    expect(host.textContent).toContain("Exit 126");
+    expect(host.querySelectorAll("details")).toHaveLength(1);
+    const input = host.querySelector<HTMLInputElement>('input[type="search"]')!;
+    for (const value of ["126", "brain-check-01"]) {
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          "value",
+        )!.set!.call(input, value);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(host.querySelectorAll("details")).toHaveLength(1);
+    }
+    await select("Outcome", "all");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await select("Category", "system");
+    expect(host.textContent).toContain("Passive health");
+    expect(host.textContent).not.toContain("External status");
   } finally {
     await act(async () => root.unmount());
     c.dispose();
@@ -289,8 +384,8 @@ it("filters shared operations, expands metadata and links attention to the unres
     ).toHaveLength(1);
     const selects = host.querySelectorAll("select");
     await act(async () => {
-      selects[1]!.value = "attention";
-      selects[1]!.dispatchEvent(new Event("change", { bubbles: true }));
+      selects[2]!.value = "attention";
+      selects[2]!.dispatchEvent(new Event("change", { bubbles: true }));
     });
     expect(host.querySelectorAll("details")).toHaveLength(2);
     await act(async () =>
@@ -300,8 +395,8 @@ it("filters shared operations, expands metadata and links attention to the unres
     );
     expect(overlay).toHaveBeenCalledWith("unresolved-actions");
     await act(async () => {
-      selects[0]!.value = "ChatGPT";
-      selects[0]!.dispatchEvent(new Event("change", { bubbles: true }));
+      selects[1]!.value = "ChatGPT";
+      selects[1]!.dispatchEvent(new Event("change", { bubbles: true }));
     });
     expect(host.querySelectorAll("details")).toHaveLength(1);
     const details = host.querySelector("details")!;
@@ -388,6 +483,44 @@ it("Home shows the same recorded operations while Setup is unfinished", async ()
     await act(async () => root.unmount());
     c.dispose();
     host.remove();
+  }
+});
+
+it("Home hides passive health and presents a nonzero process exit", async () => {
+  const f = fixture(),
+    c = new WindowController(f.api);
+  await c.start();
+  const snapshot = {
+    ...c.getSnapshot(),
+    activity: [
+      {
+        ...entries[0]!,
+        id: "process",
+        kind: "computer.process.terminal",
+        label: "Process",
+        exit: { kind: "code" as const, value: 126 },
+      },
+      {
+        ...entries[0]!,
+        id: "health",
+        source: "Setup" as const,
+        kind: "connection.health",
+        label: "Passive health",
+        at: 99,
+      },
+    ],
+  };
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  try {
+    await act(async () => root.render(<Home snapshot={snapshot} facade={c} />));
+    const recent = host.querySelector(".home-recent")!;
+    expect(recent.textContent).toContain("Exit 126");
+    expect(recent.textContent).not.toContain("Passive health");
+    expect(recent.textContent).not.toContain("Done");
+  } finally {
+    await act(async () => root.unmount());
+    c.dispose();
   }
 });
 

@@ -1,4 +1,5 @@
 import { observeOperation } from "../../apps/desktop/operations/observe";
+import { passiveHealthObserver } from "../../apps/desktop/operations/passive-health";
 import fs from "node:fs";
 import vm from "node:vm";
 import { EventEmitter } from "node:events";
@@ -68,6 +69,7 @@ function fixture({ e2e = false, statusKind = "running" } = {}) {
   let eligible = true;
   const context = {
     observeOperation,
+    passiveHealthObserver,
     operationsStore: () => ({ record() {} }),
     process: new EventEmitter(),
     isolatedE2EHome: e2e ? "/private/tmp/owned-native-test-home" : undefined,
