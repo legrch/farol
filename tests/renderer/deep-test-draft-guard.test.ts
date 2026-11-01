@@ -169,3 +169,67 @@ it("refuses changed whitespace in a prepared prompt", () => {
   ).toEqual({ draftPresent: true });
   expect(click).not.toHaveBeenCalled();
 });
+
+// Live ChatGPT has four form-associated pickers even with an empty composer.
+// These DOM fixtures prove admission behavior, not live-provider execution.
+function multiplePickers() {
+  const fixture = composer();
+  const form = document.querySelector("form")!;
+  form.id = "composer-form";
+  for (let i = 0; i < 3; i++) {
+    const picker = document.createElement("input");
+    picker.type = "file";
+    if (i === 2) {
+      picker.setAttribute("form", form.id);
+      document.body.append(picker);
+    } else form.append(picker);
+  }
+  return fixture;
+}
+
+it("binds, prepares and sends with four empty form-associated pickers", async () => {
+  const { text, click } = multiplePickers();
+  await expect(
+    window.eval(bindChatGptAppScript("Farol", location.href, true)),
+  ).resolves.toEqual({ state: "bound" });
+  expect(
+    window.eval(
+      prepareTaskScript("check", location.href, "Farol", undefined, true),
+    ),
+  ).toMatchObject({ ready: true });
+  expect(text.value).toBe("check");
+  expect(
+    window.eval(
+      activateTaskScript(location.href, "Farol", false, false, "check"),
+    ),
+  ).toEqual({ activated: true });
+  expect(click).toHaveBeenCalledOnce();
+});
+
+it.each([0, 1, 2, 3])(
+  "refuses selected files in picker %i of four before binding, typing or Send",
+  async (selected) => {
+    const { text, click } = multiplePickers();
+    const picker = document.querySelectorAll('input[type="file"]')[selected]!;
+    Object.defineProperty(picker, "files", {
+      configurable: true,
+      value: { length: 1 },
+    });
+    await expect(
+      window.eval(bindChatGptAppScript("Farol", location.href, true)),
+    ).resolves.toEqual({ state: "blocked", reason: "draft_present" });
+    expect(
+      window.eval(
+        prepareTaskScript("check", location.href, "Farol", undefined, true),
+      ),
+    ).toEqual({ draftPresent: true });
+    expect(text.value).toBe("");
+    text.value = "check";
+    expect(
+      window.eval(
+        activateTaskScript(location.href, "Farol", false, false, "check"),
+      ),
+    ).toEqual({ draftPresent: true });
+    expect(click).not.toHaveBeenCalled();
+  },
+);
