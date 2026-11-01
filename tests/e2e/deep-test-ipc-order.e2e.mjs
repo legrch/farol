@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { buildSync } from "esbuild";
+import { productName } from "../../tooling/harness-identity.ts";
 
 // Hidden disposable Electron; synthetic app and connector. This proves IPC
 // scheduling and the real host function, not provider/native/install behavior.
@@ -47,7 +48,7 @@ const liveTaskRoutes=new Map(), buildIdentity={buildId:'build'}, liveTaskRegistr
 let selectedTaskId='', deepTestRecoveryReady=true, recoverableDeepTests=[], quitInProgress=false, installedUpdateAdmission=false, chatGptTaskAdmission=false, connectorTaskAdmission=false, connectorStartInFlight=null, browserHomeSurfaceOpen=true, section='browser', shellOverlay='task-menu', pendingChatGptReadonlyTask=null, pendingChatGptAttachmentTask=null, recoverableChatGptTask=null;
 const chatGptConversationAdmissionFailure=()=>null;
 const connectorRuntimeUncertain=()=>false, computerConnectorAdmission=()=>({admissible:true}), summaryFenceRecovery={};
-const chatGptTaskAdmissionReady=()=>true, currentSurfaceLayout=()=>({pageVisible:shellOverlay==='none'}), currentConnectorAttachment=()=>({challengeSha256:'hash',workspaceId:null}), selectedConnectorApp=()=> 'Farol', connectorAppBindingCurrent=()=>true;
+const chatGptTaskAdmissionReady=()=>true, currentSurfaceLayout=()=>({pageVisible:shellOverlay==='none'}), currentConnectorAttachment=()=>({challengeSha256:'hash',workspaceId:null}), selectedConnectorApp=()=> ${JSON.stringify(productName)}, connectorAppBindingCurrent=()=>true;
 const journalUnderPromotionLease=async(_owner,work)=>work(), configurationFailure=(error)=>({ok:false,error}), ProductConfigurationResultSchema={parse:(v)=>v};
 ${source.slice(begin, end)}
 app.whenReady().then(async()=>{

@@ -16,7 +16,10 @@ it.each(["fifo", "symlink", "regular"])(
       });
     });
     const lstat = vi.spyOn(fs, "lstat").mockImplementation(async (file) => {
-      expect(file).toBe(old);
+      if (file !== old)
+        throw Object.assign(new Error("absent fixture state"), {
+          code: "ENOENT",
+        });
       return {
         isFIFO: () => kind === "fifo",
         isSymbolicLink: () => kind === "symlink",
@@ -25,7 +28,7 @@ it.each(["fifo", "symlink", "regular"])(
     const result = await activationObligations("/fixture/preview");
     expect(result.drained).toBe(false);
     expect(result.unreadable).toContain("legacy-config:CONFIG_RENAME_REQUIRED");
-    expect(lstat).toHaveBeenCalledTimes(2);
+    expect(lstat.mock.calls.filter(([file]) => file === old)).toHaveLength(2);
     expect(
       open.mock.calls.every(
         ([file]) => path.basename(file) !== "product-settings.json",

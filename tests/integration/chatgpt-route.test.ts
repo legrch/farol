@@ -8579,26 +8579,31 @@ describe("connector receipt completion before provider output", () => {
   it.each(["temporary-instant", "connector-instant"] as const)(
     "keeps a missing or rejected proof unknown without a second send (%s)",
     async (profile) => {
-      const { execute, candidate } = fixture();
-      const readConnectorReceipt = vi.fn(async () => false);
-      expect(
-        await candidate.runReadonlyTask(
+      vi.useFakeTimers();
+      try {
+        const { execute, candidate } = fixture();
+        const readConnectorReceipt = vi.fn(async () => false);
+        const running = candidate.runReadonlyTask(
           "connection fixture",
           [],
           { readConnectorReceipt },
           profile,
           { name: "NEW fixture" },
-        ),
-      ).toMatchObject({
-        state: "outcome_unknown",
-        code: "CHATGPT_TASK_TIMEOUT",
-      });
-      expect(readConnectorReceipt).toHaveBeenCalled();
-      expect(
-        execute.mock.calls.filter(([script]) =>
-          String(script).includes("send.click()"),
-        ),
-      ).toHaveLength(1);
+        );
+        await vi.advanceTimersByTimeAsync(100);
+        expect(await running).toMatchObject({
+          state: "outcome_unknown",
+          code: "CHATGPT_TASK_TIMEOUT",
+        });
+        expect(readConnectorReceipt).toHaveBeenCalled();
+        expect(
+          execute.mock.calls.filter(([script]) =>
+            String(script).includes("send.click()"),
+          ),
+        ).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
     },
   );
 
