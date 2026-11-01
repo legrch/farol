@@ -72,12 +72,19 @@ const probeSchema = z.strictObject({
 // nothing — not the composer, not the send control — and says only that.
 const navigatedTaskSchema = z.strictObject({ navigated: z.literal(true) });
 
+// Bound the in-page snapshot to the existing ChatGPT prompt limit.
+const MAX_PREPARED_COMPOSER_CHARACTERS = 128 * 1_024;
+
 const preparedTaskSchema = z.union([
   navigatedTaskSchema,
   z.strictObject({ appSelectionLost: z.literal(true) }),
   z.strictObject({ draftPresent: z.literal(true) }),
   z.strictObject({
     ready: z.boolean(),
+    preparedComposerText: z
+      .string()
+      .max(MAX_PREPARED_COMPOSER_CHARACTERS)
+      .optional(),
     baselineAssistantCount: z.number().int().nonnegative(),
     baselineUserCount: z.number().int().nonnegative(),
     baselineMessageIds: z
@@ -1158,6 +1165,8 @@ export function installManualAppGateScript(appName: string): string {
 function manualDeepTestDraftGuard(
   expectedText: string,
   refusal = "return { draftPresent: true };",
+  mode: "initial" | "exact" = "initial",
+  expectedExpression?: string,
 ): string {
   return `
     const manualComposer = findComposer();
@@ -1186,8 +1195,8 @@ function manualDeepTestDraftGuard(
     const manualUnknownImage = manualForm ? [...manualForm.querySelectorAll('img,video,audio')]
       .filter(manualVisible).some((element) => !element.closest(selectedSelector)) : true;
     let manualText = composerDraftText(manualComposer);
-    const manualExpected = ${JSON.stringify(expectedText)};
-    if (manualExpected && manualComposer instanceof HTMLElement && !(manualComposer instanceof HTMLTextAreaElement) &&
+    const manualExpected = ${expectedExpression ?? JSON.stringify(expectedText)};
+    if (manualComposer instanceof HTMLElement && !(manualComposer instanceof HTMLTextAreaElement) &&
         appSelectionFor(manualComposer).state === 'bound') {
       const liveLinks = [...manualComposer.querySelectorAll('a[href*="/plugins/plugin_asdk_app_"]')]
         .filter((link) => appElementVisible(link) && normalizedLabel(link) === requiredAppName);
@@ -1204,23 +1213,17 @@ function manualDeepTestDraftGuard(
     }
     if (!(manualComposer instanceof HTMLElement) || !manualForm || manualComposers.length !== 1 || manualComposers[0] !== manualComposer || manualInputs.length === 0 || manualAttachments || manualUnknownControls || manualUnknownImage ||
         manualInputs.some((input) => !(input instanceof HTMLInputElement) || !input.files || input.files.length > 0) ||
-        manualText !== manualExpected) {
-      console.info('FAROL_MANUAL_GUARD_PROBE:' + JSON.stringify({
-        composer: manualComposer instanceof HTMLElement,
-        form: !!manualForm,
-        composerCount: Math.min(manualComposers.length, 10),
-        inputCount: Math.min(manualInputs.length, 10),
-        attachments: manualAttachments,
-        controls: manualUnknownControls,
-        media: manualUnknownImage,
-        files: manualInputs.some((input) => !input.files || input.files.length > 0),
-        textMatches: manualText === manualExpected,
-        textEmpty: manualText.length === 0,
-        textWhitespaceOnly: manualText.length > 0 && manualText.trim().length === 0,
-        chipCount: Math.min(manualComposer?.querySelectorAll(selectedSelector).length || 0, 10)
-      }));
+        ${
+          mode === "initial"
+            ? `!(manualText === '' || (
+          manualComposer instanceof HTMLElement && !(manualComposer instanceof HTMLTextAreaElement) &&
+          appSelectionFor(manualComposer).state === 'bound' &&
+          [...manualComposer.querySelectorAll(selectedSelector + ',a[href*="/plugins/plugin_asdk_app_"]')]
+            .some((element) => appElementVisible(element)) && manualText.trim() === ''
+        ))`
+            : "manualText !== manualExpected"
+        })
       ${refusal}
-    }
   `;
 }
 
@@ -1244,6 +1247,12 @@ export function prepareTaskScript(
     ${requiredAppName ? appSelectionPrelude(requiredAppName) : ""}
     ${requiredAppName ? 'if (appSelection().state !== "bound") return { appSelectionLost: true };' : ""}
     ${manualDeepTest && requiredAppName ? manualDeepTestDraftGuard("") : ""}
+    ${
+      manualDeepTest && requiredAppName
+        ? `const manualInitialText = manualText;
+    if (manualInitialText.length + prompt.length > ${MAX_PREPARED_COMPOSER_CHARACTERS}) return { draftPresent: true };`
+        : ""
+    }
     const visible = (element) => {
       if (!(element instanceof HTMLElement)) return false;
       const style = getComputedStyle(element);
@@ -1305,6 +1314,15 @@ export function prepareTaskScript(
       }));`
       }
     }
+    ${
+      manualDeepTest && requiredAppName
+        ? `{
+      if (appSelection().state !== "bound") return { appSelectionLost: true };
+      ${manualDeepTestDraftGuard("", undefined, "exact", "manualInitialText + prompt")}
+      return { ready: true, baselineAssistantCount, baselineUserCount, baselineMessageIds, preparedComposerText: manualText };
+    }`
+        : ""
+    }
     return { ready: true, baselineAssistantCount, baselineUserCount, baselineMessageIds };
   })()`;
 }
@@ -1345,7 +1363,7 @@ export function activateTaskScript(
     }
     ${requiredAppName ? appSelectionPrelude(requiredAppName) : ""}
     ${requiredAppName ? 'if (appSelection().state !== "bound") return { appSelectionLost: true };' : ""}
-    ${manualDeepTestPrompt !== undefined && requiredAppName ? manualDeepTestDraftGuard(manualDeepTestPrompt) : ""}
+    ${manualDeepTestPrompt !== undefined && requiredAppName ? manualDeepTestDraftGuard(manualDeepTestPrompt, undefined, "exact") : ""}
     const visible = (element) => {
       if (!(element instanceof HTMLElement)) return false;
       const style = getComputedStyle(element);
@@ -4140,6 +4158,17 @@ export class ChatGptRoute {
           observedCharacters,
         };
       }
+      if (
+        observer.manualDeepTest &&
+        preparedTask.preparedComposerText === undefined
+      ) {
+        return {
+          state: "failed_before_submit",
+          code: "CHATGPT_COMPOSER_UNAVAILABLE",
+          deltaCount,
+          observedCharacters,
+        };
+      }
       if (attachments.length > 0) {
         const beforeUpload = dispatchReadinessRefusal();
         if (beforeUpload) return beforeUpload;
@@ -4261,7 +4290,9 @@ export class ChatGptRoute {
                 requiredAppName,
                 profile === "temporary-instant",
                 profile === "connector-instant",
-                observer.manualDeepTest ? prompt : undefined,
+                observer.manualDeepTest
+                  ? preparedTask.preparedComposerText
+                  : undefined,
               ),
               true,
               true,
@@ -5861,37 +5892,6 @@ export class ChatGptRoute {
         // embedded frame of another origin on a ChatGPT page must not be able
         // to close the sign-in window.
         const frame = details.frame;
-        if (details.message.startsWith("FAROL_MANUAL_GUARD_PROBE:")) {
-          try {
-            const data = JSON.parse(
-              details.message.slice("FAROL_MANUAL_GUARD_PROBE:".length),
-            );
-            const safe = Object.fromEntries(
-              Object.entries(data).filter(
-                ([key, value]) =>
-                  ([
-                    "composer",
-                    "form",
-                    "attachments",
-                    "controls",
-                    "media",
-                    "files",
-                    "textMatches",
-                    "textEmpty",
-                    "textWhitespaceOnly",
-                  ].includes(key) &&
-                    typeof value === "boolean") ||
-                  (["composerCount", "inputCount", "chipCount"].includes(key) &&
-                    Number.isInteger(value) &&
-                    Number(value) >= 0 &&
-                    Number(value) <= 10),
-              ),
-            );
-            console.info("FAROL_MANUAL_GUARD_PROBE:" + JSON.stringify(safe));
-          } catch {
-            /* Diagnostic input never affects admission. */
-          }
-        }
         if (
           this.signInMode &&
           details.message === SIGN_IN_RETURN_SENTINEL &&

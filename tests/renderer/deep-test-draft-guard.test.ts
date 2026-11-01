@@ -233,3 +233,189 @@ it.each([0, 1, 2, 3])(
     expect(click).not.toHaveBeenCalled();
   },
 );
+
+// This fixture models the observed chip scaffold, not ChatGPT's live editor.
+function richComposer() {
+  document.body.innerHTML = `<form id="composer-form"><div id="prompt-textarea" contenteditable="true" data-virtualkeyboard="true">\n<span data-prompt-link-href="app://asdk_app_abcdef">Farol</span> </div><input type="file"><input type="file"><input type="file"><button type="button" data-testid="send-button">Send</button></form><input type="file" form="composer-form">`;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+    width: 100,
+    height: 20,
+  } as DOMRect);
+  const editor = document.querySelector<HTMLElement>("#prompt-textarea")!;
+  const click = vi.spyOn(
+    document.querySelector<HTMLButtonElement>("button")!,
+    "click",
+  );
+  const insert = vi.fn((_command: string, _ui: boolean, value: string) => {
+    editor.append(document.createTextNode(value));
+    return true;
+  });
+  Object.defineProperty(document, "execCommand", {
+    configurable: true,
+    value: insert,
+  });
+  return { editor, click, insert };
+}
+
+it("prepares the exact prompt after a selected chip scaffold and sends its unchanged snapshot", async () => {
+  const { click } = richComposer();
+  await expect(
+    window.eval(bindChatGptAppScript("Farol", location.href, true)),
+  ).resolves.toEqual({ state: "bound" });
+  const prepared = window.eval(
+    prepareTaskScript("check", location.href, "Farol", undefined, true),
+  );
+  expect(prepared).toMatchObject({
+    ready: true,
+    preparedComposerText: "\n check",
+  });
+  expect(
+    window.eval(
+      activateTaskScript(
+        location.href,
+        "Farol",
+        false,
+        false,
+        prepared.preparedComposerText,
+      ),
+    ),
+  ).toEqual({ activated: true });
+  expect(click).toHaveBeenCalledOnce();
+});
+
+it.each([0, 1, 2, 3])(
+  "refuses rich editor picker %i when a file is selected",
+  async (index) => {
+    const { click, insert } = richComposer();
+    Object.defineProperty(
+      document.querySelectorAll('input[type="file"]')[index]!,
+      "files",
+      {
+        configurable: true,
+        value: { length: 1 },
+      },
+    );
+    await expect(
+      window.eval(bindChatGptAppScript("Farol", location.href, true)),
+    ).resolves.toEqual({ state: "blocked", reason: "draft_present" });
+    expect(
+      window.eval(
+        prepareTaskScript("check", location.href, "Farol", undefined, true),
+      ),
+    ).toEqual({ draftPresent: true });
+    expect(
+      window.eval(
+        activateTaskScript(location.href, "Farol", false, false, "\n check"),
+      ),
+    ).toEqual({ draftPresent: true });
+    expect(insert).not.toHaveBeenCalled();
+    expect(click).not.toHaveBeenCalled();
+  },
+);
+
+it("refuses owner text before preparation and exact changes after preparation", () => {
+  const { editor, click, insert } = richComposer();
+  editor.append("owner draft");
+  expect(
+    window.eval(
+      prepareTaskScript("check", location.href, "Farol", undefined, true),
+    ),
+  ).toEqual({ draftPresent: true });
+  expect(insert).not.toHaveBeenCalled();
+  editor.lastChild!.remove();
+  const prepared = window.eval(
+    prepareTaskScript("check", location.href, "Farol", undefined, true),
+  );
+  expect(prepared.ready).toBe(true);
+  editor.append(" ");
+  expect(
+    window.eval(
+      activateTaskScript(
+        location.href,
+        "Farol",
+        false,
+        false,
+        prepared.preparedComposerText,
+      ),
+    ),
+  ).toEqual({ draftPresent: true });
+  editor.lastChild!.remove();
+  editor.append("owner edit");
+  expect(
+    window.eval(
+      activateTaskScript(
+        location.href,
+        "Farol",
+        false,
+        false,
+        prepared.preparedComposerText,
+      ),
+    ),
+  ).toEqual({ draftPresent: true });
+  expect(click).not.toHaveBeenCalled();
+});
+
+it("refuses an unexpected edit during native insertion", () => {
+  const { editor, click } = richComposer();
+  Object.defineProperty(document, "execCommand", {
+    configurable: true,
+    value: () => {
+      editor.append("check extra");
+      return true;
+    },
+  });
+  expect(
+    window.eval(
+      prepareTaskScript("check", location.href, "Farol", undefined, true),
+    ),
+  ).toEqual({ draftPresent: true });
+  expect(click).not.toHaveBeenCalled();
+});
+
+it("preserves the exact scaffold around an inline plugin link", () => {
+  const { editor, click } = richComposer();
+  editor.innerHTML = '\n<a href="/plugins/plugin_asdk_app_abcdef">Farol</a> ';
+  const prepared = window.eval(
+    prepareTaskScript("check", location.href, "Farol", undefined, true),
+  );
+  expect(prepared).toMatchObject({
+    ready: true,
+    preparedComposerText: "\n check",
+  });
+  expect(
+    window.eval(
+      activateTaskScript(
+        location.href,
+        "Farol",
+        false,
+        false,
+        prepared.preparedComposerText,
+      ),
+    ),
+  ).toEqual({ activated: true });
+  expect(click).toHaveBeenCalledOnce();
+});
+
+it("does not treat whitespace in a textarea as a selected-chip scaffold", () => {
+  const { text, click } = composer();
+  text.value = " ";
+  expect(
+    window.eval(
+      prepareTaskScript("check", location.href, "Farol", undefined, true),
+    ),
+  ).toEqual({ draftPresent: true });
+  expect(text.value).toBe(" ");
+  expect(click).not.toHaveBeenCalled();
+});
+
+it("refuses an oversized prepared snapshot before native insertion", () => {
+  const { editor, insert, click } = richComposer();
+  editor.append(" ".repeat(128 * 1024));
+  expect(
+    window.eval(
+      prepareTaskScript("check", location.href, "Farol", undefined, true),
+    ),
+  ).toEqual({ draftPresent: true });
+  expect(insert).not.toHaveBeenCalled();
+  expect(click).not.toHaveBeenCalled();
+});
