@@ -7,17 +7,31 @@ import type { ChatGptRoute } from "../../../src/apps/desktop/chatgpt-route";
 export async function waitForConnectorCheckReadiness(
   route: Pick<
     ChatGptRoute,
-    "open" | "observeSignInStatus" | "isCurrentSignInStatus"
+    | "open"
+    | "observeSignInStatus"
+    | "isCurrentSignInStatus"
+    | "hasPendingReadinessDocument"
   >,
   current: () => boolean,
-  timing = {
+  timing: {
+    now: () => number;
+    wait: (ms: number) => Promise<unknown>;
+    timeoutMs: number;
+    deadlineAt?: number;
+  } = {
     now: () => performance.now(),
     wait: (ms: number) => delay(ms),
     timeoutMs: 20_000,
   },
 ): Promise<boolean> {
-  const deadline = timing.now() + timing.timeoutMs;
-  if (!current() || (await route.open()).status !== "opened") return false;
+  const deadline = timing.deadlineAt ?? timing.now() + timing.timeoutMs;
+  if (!current() || !Number.isFinite(deadline) || timing.now() >= deadline)
+    return false;
+  const opened = await route.open();
+  // Only ordinary browser hydration can remain observable after a transient
+  // loading result. A failed/protected surface is never admitted this way.
+  if (opened.status !== "opened" && !route.hasPendingReadinessDocument())
+    return false;
   while (current() && timing.now() < deadline) {
     const observed = await route.observeSignInStatus();
     if (!current() || timing.now() >= deadline) return false;
@@ -26,8 +40,55 @@ export async function waitForConnectorCheckReadiness(
       route.isCurrentSignInStatus(observed)
     )
       return true;
-    if (observed.state === "signed_out") return false;
-    await timing.wait(150);
+    // A login control may precede session hydration. This original pure-read
+    // budget can observe a later state; only a new current positive admits Send.
+    await timing.wait(Math.min(150, Math.max(0, deadline - timing.now())));
   }
   return false;
+}
+
+/** One original preflight, one temporary navigation, no provider submission. */
+export async function prepareConnectorCheckDocument(
+  route: Pick<
+    ChatGptRoute,
+    | "open"
+    | "openTemporaryChat"
+    | "observeSignInStatus"
+    | "isCurrentSignInStatus"
+    | "hasPendingReadinessDocument"
+  >,
+  current: () => boolean,
+  timing = {
+    now: () => performance.now(),
+    wait: (ms: number) => delay(ms),
+    timeoutMs: 20_000,
+  },
+): Promise<
+  | { ready: true }
+  | {
+      ready: false;
+      reason:
+        | "initial-readiness"
+        | "binding-invalidated"
+        | "temporary-navigation"
+        | "temporary-readiness";
+    }
+> {
+  const bounded = { ...timing, deadlineAt: timing.now() + timing.timeoutMs };
+  if (!(await waitForConnectorCheckReadiness(route, current, bounded)))
+    return {
+      ready: false,
+      reason: current() ? "initial-readiness" : "binding-invalidated",
+    };
+  if (!current()) return { ready: false, reason: "binding-invalidated" };
+  if (timing.now() >= bounded.deadlineAt)
+    return { ready: false, reason: "initial-readiness" };
+  if ((await route.openTemporaryChat()).status !== "opened")
+    return { ready: false, reason: "temporary-navigation" };
+  return (await waitForConnectorCheckReadiness(route, current, bounded))
+    ? { ready: true }
+    : {
+        ready: false,
+        reason: current() ? "temporary-readiness" : "binding-invalidated",
+      };
 }

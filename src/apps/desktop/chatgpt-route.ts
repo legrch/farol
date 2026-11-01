@@ -3108,6 +3108,23 @@ export class ChatGptRoute {
     return false;
   }
 
+  // This is permission to keep observing a loading ordinary browser, never
+  // authentication or permission to retry a failed/protected opener. The load
+  // slot stays "failed" until DOM readiness; terminal failure has its own flag.
+  hasPendingReadinessDocument(): boolean {
+    return (
+      this.options.requireAppForManualMessages !== true &&
+      !this.disposing &&
+      !this.taskInFlight &&
+      !this.updateAdmission &&
+      this.load === "failed" &&
+      this.chatPhysicalDocumentGeneration > 0 &&
+      !this.routeDocumentLoadFailed &&
+      this.routeWindow !== null &&
+      !this.routeWindow.isDestroyed()
+    );
+  }
+
   private readinessObservationAvailable(): boolean {
     return (
       !this.disposing &&

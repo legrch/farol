@@ -9495,3 +9495,18 @@ describe("task execution in a loading current frame", () => {
     },
   );
 });
+
+it("permits only observation of an ordinary pending document, never failed or protected openers", () => {
+  const candidate = taskRoute(vi.fn());
+  Reflect.set(candidate, "load", "failed");
+  Reflect.set(candidate, "chatPhysicalDocumentGeneration", 2);
+  expect(candidate.hasPendingReadinessDocument()).toBe(true);
+  Reflect.set(candidate, "routeDocumentLoadFailed", true);
+  expect(candidate.hasPendingReadinessDocument()).toBe(false);
+  Reflect.set(candidate, "routeDocumentLoadFailed", false);
+  Reflect.get(candidate, "options").requireAppForManualMessages = true;
+  expect(candidate.hasPendingReadinessDocument()).toBe(false);
+  Reflect.get(candidate, "options").requireAppForManualMessages = false;
+  Reflect.set(candidate, "updateAdmission", {});
+  expect(candidate.hasPendingReadinessDocument()).toBe(false);
+});

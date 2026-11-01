@@ -207,3 +207,13 @@ This is not a universal task cancellation contract. Attachment/debugger waits
 and durable observer callbacks retain their existing lifetime semantics. Startup
 connector checks attach no files. Abandoning a durable dispatch claim on a timer
 would not prove that no Send occurred; UNKNOWN custody remains authoritative.
+
+The connector preflight also joins a retained ordinary document that starts
+loading after preload completes. It observes initial and temporary documents
+within one original 20-second readiness budget and performs at most one temporary
+navigation. Transient login controls during session hydration do not create
+positive evidence: only a fresh current authentication observation admits the
+next step. Protected or terminally failed openers remain refused. Binding change,
+Quit and deadline expiry stop this original check without another navigation or
+Send. Fixed preflight reason tokens distinguish the failed stage without logging
+provider HTML, prompts or credentials.

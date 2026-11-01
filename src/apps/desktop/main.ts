@@ -2,7 +2,7 @@ import "../../../apps/desktop/bridge/e2e-window-bootstrap.ts";
 import { guardDiagnosticPipes } from "./diagnostic-pipes";
 import { preventEmbeddedWindowDrag } from "./embedded-web-drag";
 import { separateAppVerificationScopeCurrent } from "../../pkg/product-settings/separate-app-verification";
-import { waitForConnectorCheckReadiness } from "../../../apps/desktop/bridge/connector-check-readiness";
+import { prepareConnectorCheckDocument } from "../../../apps/desktop/bridge/connector-check-readiness";
 import type { SeparateAppVerificationScope } from "../../pkg/product-settings/contract";
 import type { SeparateAppVerification } from "./connector-app-verification-attempt";
 import {
@@ -5766,7 +5766,7 @@ async function checkSecureMcpAttachment(
   }
 }
 
-// A manual check or one admitted restart check owns a separate visible page.
+// A manual check or one admitted restart check owns one retained browser document.
 // Only its exact Computer MCP receipt can complete the attachment.
 async function verifySecureMcpApp(
   separate?: SeparateAppVerificationScope,
@@ -5983,9 +5983,7 @@ async function verifySecureMcpApp(
     // Use the retained browser as a browser. A new temporary document keeps
     // Chromium history, without a second window or a parallel conversation.
     verificationRoute = chatGptRoute;
-    if ((await verificationRoute.openTemporaryChat()).status !== "opened")
-      return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
-    const ready = await waitForConnectorCheckReadiness(
+    const preparedDocument = await prepareConnectorCheckDocument(
       verificationRoute,
       () => {
         const latest = configuration!.snapshot();
@@ -5999,8 +5997,12 @@ async function verifySecureMcpApp(
         );
       },
     );
-    if (!ready)
+    if (!preparedDocument.ready) {
+      console.warn(
+        `FAROL_CONNECTOR_CHECK_PREFLIGHT:${JSON.stringify({ schema: 1, reason: preparedDocument.reason })}`,
+      );
       return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
+    }
     if (automatic) {
       const latest = configuration.snapshot();
       if (

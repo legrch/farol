@@ -23,8 +23,9 @@ const syntheticPage = `<!doctype html><html><body>
 <input id="power" type="range" min="0" max="2" value="0" hidden>
 <span data-testid="composer-app-chip" data-plugin-id="plugin_asdk_app_ReadinessFixture" data-app-name="${fixtureAppName}">${fixtureAppName}</span>
 <button type="button" data-testid="send-button" disabled>Send</button>
-<section id="conversation"></section>{{held-image}}
+<section id="conversation"></section>{{held-image}}{{hydration}}
 <script>
+setTimeout(()=>document.getElementById('session-hydration')?.remove(),1500);
 const composer=document.getElementById('prompt-textarea');
 const send=document.querySelector('[data-testid="send-button"]');
 composer.addEventListener('input',()=>{send.disabled=!composer.value.trim();});
@@ -45,7 +46,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { app, BrowserWindow } from 'electron';
 import { ChatGptRoute } from './src/apps/desktop/chatgpt-route.ts';
-import { waitForConnectorCheckReadiness } from './apps/desktop/bridge/connector-check-readiness.ts';
+import { prepareConnectorCheckDocument } from './apps/desktop/bridge/connector-check-readiness.ts';
 app.setPath('userData', ${JSON.stringify(path.join(scratch, "profile"))});
 app.dock?.hide();
 let route;
@@ -53,6 +54,9 @@ const held = new Set();
 let acknowledgeHeld;
 const heldArrived = new Promise(resolve => { acknowledgeHeld = resolve; });
 let temporaryNavigations = 0, nonGetRequests = 0, finishLoads = 0, syntheticSends = 0;
+let acknowledgeRetained, releaseRetained;
+const retainedRequested = new Promise(resolve => { acknowledgeRetained = resolve; });
+const renderPage = temporary => ${JSON.stringify(syntheticPage)}.replace('{{held-image}}', temporary ? '<img src="/held.svg">' : '').replace('{{hydration}}',temporary?'<button id="session-hydration">Log in</button>':'');
 const server = http.createServer((req, res) => {
   if (req.method !== 'GET') nonGetRequests++;
   const url = new URL(req.url, 'http://127.0.0.1');
@@ -67,7 +71,10 @@ const server = http.createServer((req, res) => {
   const temporary = url.searchParams.get('temporary-chat') === 'true';
   if (temporary) temporaryNavigations++;
   res.writeHead(200, { 'content-type': 'text/html' });
-  res.end(${JSON.stringify(syntheticPage)}.replace('{{held-image}}', temporary ? '<img src="/held.svg">' : ''));
+  if (url.searchParams.get('retained-load') === 'true') {
+    releaseRetained=()=>res.end(renderPage(false));
+    acknowledgeRetained();
+  } else res.end(renderPage(temporary));
 });
 const closeServer = async () => {
   for (const res of held) res.end();
@@ -89,9 +96,26 @@ app.whenReady().then(async () => {
     });
     const initialObservation = await route.observeSignInStatus();
     assert.equal(initialObservation.state, 'authenticated');
+    // Begin a second document after the original preload latch was released.
+    // Only the first actual unknown observation releases its original response.
+    const retainedNavigation = contents.loadURL(origin+'/?retained-load=true');
+    retainedNavigation.catch(()=>{});
+    await retainedRequested;
+    assert.equal(route.hasPendingReadinessDocument(),true);
+    let loadingObservations=0;
+    const observeOriginal=route.observeSignInStatus.bind(route);
+    route.observeSignInStatus=async()=>{
+      const observed=await observeOriginal();
+      if(observed.state==='unknown' && releaseRetained){
+        loadingObservations++;const release=releaseRetained;releaseRetained=null;release();
+      }
+      return observed;
+    };
     const started = performance.now();
-    assert.deepEqual(await route.openTemporaryChat(), {status:'opened'});
-    assert.equal(await waitForConnectorCheckReadiness(route, () => true), true);
+    assert.deepEqual(await prepareConnectorCheckDocument(route, () => true), {ready:true});
+    await retainedNavigation;
+    assert.equal(loadingObservations,1);
+    assert.ok(performance.now()-started>=1200,'Transient login must not admit early');
     assert.equal(route.isCurrentSignInStatus(initialObservation), false);
     assert.equal(temporaryNavigations, 1);
     assert.equal(finishLoads, 0);
@@ -120,7 +144,7 @@ app.whenReady().then(async () => {
     assert.equal(held.size,1);
 
     process.stdout.write(JSON.stringify({result:'PASS', mode:'hidden-disposable-electron',
-      temporaryNavigations, fullLoadFinished:false, heldSubresources:held.size,
+      temporaryNavigations, retainedLoadingJoined:loadingObservations===1, transientLoginAwaited:true, fullLoadFinished:false, heldSubresources:held.size,
       authenticatedCurrentDocument:true, priorObservationInvalidated:true,
       elapsedMs:Math.round(performance.now()-started), provider:'NOT_RUN',
       installedProfile:'NOT_TOUCHED', syntheticSends, claims, fullConnectorTask:result.state, responseProbeObserved:observedOutput})+'\\n');
