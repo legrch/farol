@@ -1156,8 +1156,15 @@ export function prepareTaskScript(
   prompt: string,
   expectedHref: string,
   requiredAppName?: string,
+  deadlineAt?: number,
 ): string {
+  if (
+    deadlineAt !== undefined &&
+    (!Number.isSafeInteger(deadlineAt) || deadlineAt <= 0)
+  )
+    throw new Error("Invalid task preparation deadline");
   return `(() => {
+    ${deadlineAt === undefined ? "" : `if (Date.now() >= ${deadlineAt}) return { ready: false };`}
     const expectedHref = ${JSON.stringify(expectedHref)};
     if (location.href !== expectedHref) return { navigated: true };
     const prompt = ${JSON.stringify(prompt)};
@@ -1185,6 +1192,7 @@ export function prepareTaskScript(
       return { ready: false, baselineAssistantCount, baselineUserCount, baselineMessageIds };
     }
     ${requiredAppName ? "if (composerDraftText(composer).trim().length > 0) return { draftPresent: true };" : ""}
+    ${deadlineAt === undefined ? "" : `if (Date.now() >= ${deadlineAt}) return { ready: false };`}
     composer.focus();
     if (composer instanceof HTMLTextAreaElement) {
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
@@ -2498,7 +2506,7 @@ export class ChatGptRoute {
         (readyDocument !== null &&
           readyDocument !== this.chatPhysicalDocumentGeneration)
       )
-        throw new Error("CHATGPT_DOCUMENT_CHANGED");
+        throw new Error("ChatGPT document changed");
     } finally {
       if (domReady) current.webContents.removeListener("dom-ready", domReady);
     }
@@ -3209,7 +3217,7 @@ export class ChatGptRoute {
     gesture: boolean,
     deadline: number,
     operationGeneration: number,
-    allowNavigationAfter = false,
+    allowNavigationAfter: boolean | "response" = false,
   ): Promise<unknown> {
     const surface = this.routeWindow;
     const documentGeneration = this.chatPhysicalDocumentGeneration;
@@ -3222,18 +3230,18 @@ export class ChatGptRoute {
       !this.disposing &&
       surface.webContents === contents &&
       this.taskObservationGeneration === operationGeneration;
-    const sameDocument = () =>
+    const samePhysicalDocument = () =>
       sameOperation() &&
       !this.routeDocumentLoadFailed &&
       !this.routeDocumentAwaitingCommit &&
       this.chatPhysicalDocumentGeneration === documentGeneration &&
+      (!frame || (contents.mainFrame === frame && !frame.isDestroyed()));
+    const sameDocument = () =>
+      samePhysicalDocument() &&
       contents.getURL() === url &&
-      (!frame ||
-        (contents.mainFrame === frame &&
-          !frame.isDestroyed() &&
-          frame.url === url));
+      (!frame || frame.url === url);
     if (!sameDocument() || Date.now() >= deadline)
-      throw new Error("CHATGPT_TASK_DOCUMENT_UNAVAILABLE");
+      throw new Error("ChatGPT task document unavailable");
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const value: unknown = await Promise.race([
@@ -3242,14 +3250,22 @@ export class ChatGptRoute {
           : contents.executeJavaScript(script, gesture),
         new Promise<never>((_resolve, reject) => {
           timer = setTimeout(
-            () => reject(new Error("CHATGPT_TASK_DEADLINE")),
+            () => reject(new Error("ChatGPT task deadline exceeded")),
             Math.max(0, deadline - Date.now()),
           );
         }),
       ]);
-      if (Date.now() >= deadline) throw new Error("CHATGPT_TASK_DEADLINE");
-      if (!allowNavigationAfter && frame && !sameDocument())
-        throw new Error("CHATGPT_TASK_DOCUMENT_UNAVAILABLE");
+      if (Date.now() >= deadline)
+        throw new Error("ChatGPT task deadline exceeded");
+      // Response polling owns the allowed first in-place conversation transition.
+      // It still cannot adopt a replaced physical document or retired task.
+      if (
+        frame &&
+        (allowNavigationAfter === "response"
+          ? !samePhysicalDocument()
+          : !allowNavigationAfter && !sameDocument())
+      )
+        throw new Error("ChatGPT task document unavailable");
       return value;
     } finally {
       if (timer !== undefined) clearTimeout(timer);
@@ -3658,7 +3674,7 @@ export class ChatGptRoute {
       contents: WebContents,
       script: string,
       gesture: boolean,
-      allowNavigationAfter = false,
+      allowNavigationAfter: boolean | "response" = false,
     ) =>
       this.executeTaskDocumentScript(
         contents,
@@ -3668,6 +3684,27 @@ export class ChatGptRoute {
         observationGeneration,
         allowNavigationAfter,
       );
+    const observeTaskReadiness = async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        if (Date.now() >= deadline)
+          throw new Error("ChatGPT task deadline exceeded");
+        return await Promise.race([
+          this.observe(),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(
+              () => {
+                ++this.readinessReadSequence;
+                reject(new Error("ChatGPT task deadline exceeded"));
+              },
+              Math.max(0, deadline - Date.now()),
+            );
+          }),
+        ]);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    };
     let publicTurn: ChatGptPublicTurn | null = null;
     const semanticOutput =
       this.options.publicOutputProfile === "message-anchors-v1";
@@ -3698,7 +3735,7 @@ export class ChatGptRoute {
           outputText: observedText,
         };
       }
-      const readiness = await this.observe();
+      const readiness = await observeTaskReadiness();
       if (readiness.state === "signed_out") {
         return {
           state: "not_authenticated",
@@ -3771,7 +3808,7 @@ export class ChatGptRoute {
       if (profile === "temporary-instant" || profile === "connector-instant") {
         // Profile preparation may navigate. Its composer/model probes are not
         // authentication evidence for the new document's dispatch.
-        const currentReadiness = await this.observe();
+        const currentReadiness = await observeTaskReadiness();
         if (currentReadiness.state !== "authenticated") {
           return {
             state:
@@ -3945,7 +3982,12 @@ export class ChatGptRoute {
       const prepared = preparedTaskSchema.safeParse(
         await execute(
           candidate.webContents,
-          prepareTaskScript(prompt, dispatchIdentityUrl, requiredAppName),
+          prepareTaskScript(
+            prompt,
+            dispatchIdentityUrl,
+            requiredAppName,
+            deadline,
+          ),
           true,
         ),
       );
@@ -4330,6 +4372,7 @@ export class ChatGptRoute {
               requiredAppName,
             ),
             true,
+            "response",
           );
         let probeValue: unknown;
         if (appTarget !== undefined && observer.readConnectorReceipt) {
@@ -4556,7 +4599,7 @@ export class ChatGptRoute {
     } catch (error) {
       const documentChanged =
         error instanceof Error &&
-        error.message === "CHATGPT_TASK_DOCUMENT_UNAVAILABLE";
+        error.message === "ChatGPT task document unavailable";
       const submissionMayHaveOccurred =
         submissionPhase === "awaiting_acknowledgement" ||
         submissionPhase === "submitted";

@@ -14,13 +14,14 @@ const scratch = await fs.mkdtemp(
 );
 const entry = path.join(scratch, "fixture.mjs");
 let confirmed = false;
+const fixtureAppName = "Readiness Fixture";
 const syntheticPage = `<!doctype html><html><body>
 <textarea id="prompt-textarea"></textarea>
 <button type="button" aria-label="Turn off temporary chat">Temporary chat</button>
 <button type="button">Personalized</button>
 <button type="button" aria-label="Select ChatGPT model" onclick="document.getElementById('power').hidden=false">6 Instant</button>
 <input id="power" type="range" min="0" max="2" value="0" hidden>
-<span data-testid="composer-app-chip" data-plugin-id="plugin_asdk_app_ReadinessFixture" data-app-name="Farol Fixture">Farol Fixture</span>
+<span data-testid="composer-app-chip" data-plugin-id="plugin_asdk_app_ReadinessFixture" data-app-name="${fixtureAppName}">${fixtureAppName}</span>
 <button type="button" data-testid="send-button" disabled>Send</button>
 <section id="conversation"></section>{{held-image}}
 <script>
@@ -100,7 +101,7 @@ app.whenReady().then(async () => {
       readConnectorReceipt:async()=>syntheticSends===1 && observedOutput,
       onDispatchIntent:async()=>{claims++;},
       onTextDelta:async()=>{observedOutput=true;},
-    }, 'temporary-instant', {name:'Farol Fixture'});
+    }, 'temporary-instant', {name:${JSON.stringify(fixtureAppName)}});
     assert.equal(result.state,'receipt_confirmed', JSON.stringify(result));
     assert.equal(observedOutput,true);
     assert.equal(syntheticSends,1);

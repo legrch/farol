@@ -5383,6 +5383,15 @@ describe("ChatGPT route streaming observation", () => {
       },
     });
 
+    const contents = Reflect.get(candidate, "routeWindow").webContents;
+    contents.mainFrame = {
+      get url() {
+        return contents.getURL();
+      },
+      isDestroyed: () => false,
+      executeJavaScript: contents.executeJavaScript,
+    };
+
     await expect(
       candidate.runReadonlyTask("read the selected file"),
     ).resolves.toMatchObject({
@@ -7555,6 +7564,22 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
     expect(contacts.events).toEqual([]);
   });
 
+  it("does not type a queued preparation after its original deadline", () => {
+    const { context, contacts } = pageContext(expectedHref);
+    const source = prepareTaskScript(
+      "Expired prompt",
+      expectedHref,
+      undefined,
+      1000,
+    );
+    context.Date = { now: () => 1000 };
+    expect(vm.runInContext(source, context)).toEqual({ ready: false });
+    expect(contacts.focused).toBe(0);
+    expect(contacts.typed).toEqual([]);
+    expect(contacts.replaced).toBe(0);
+    expect(contacts.events).toEqual([]);
+  });
+
   it("activateTaskScript returns { navigated: true } and never clicks send when the page has navigated", () => {
     const { context, contacts } = pageContext("https://chatgpt.com/c/other");
     const result = vm.runInContext(activateTaskScript(expectedHref), context);
@@ -9376,6 +9401,33 @@ describe("task execution in a loading current frame", () => {
     contents.executeJavaScript = queued;
     return { candidate, contents, frame, queued };
   }
+  it("bounds a hung initial readiness read and discards its late answer", async () => {
+    vi.useFakeTimers();
+    try {
+      const execute = vi.fn();
+      const f = loadingFrame(execute, 20);
+      let answer!: (value: unknown) => void;
+      f.frame.executeJavaScript = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      );
+      const pending = f.candidate.runReadonlyTask("readiness deadline");
+      await vi.advanceTimersByTimeAsync(21);
+      expect(await pending).toMatchObject({ state: "failed_before_submit" });
+      expect(Reflect.get(f.candidate, "taskInFlight")).toBe(false);
+      answer({ composerVisible: true, signInVisible: false });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(Reflect.get(f.candidate, "latestReadiness")).toBeNull();
+      expect(execute).not.toHaveBeenCalled();
+      expect(f.queued).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("completes a known no-click refusal without using the full-load queue", async () => {
     const execute = vi
       .fn()

@@ -190,3 +190,20 @@ argument grammar. Target launch and internal rollback launch preserve the same
 selection. An implicit Sidecar viewport fits the permitted display; an explicit
 viewport keeps its exact test contract. Missing Sidecar never implies permission
 to use the primary display. Ordinary owner launches keep their existing behavior.
+
+## Startup connector regression boundary
+
+The hidden Electron startup fixture holds a subresource open while the current
+ChatGPT document reaches DOM readiness. It exercises temporary-chat navigation,
+current-document authentication, one synthetic connector Send and its response
+probe/receipt. It does not establish live-provider, installed-profile or OTA
+acceptance. Task page execution and readiness reads retain the original task
+deadline; queued composer preparation checks that deadline inside the page before
+typing. Response observation permits the first in-place conversation transition
+while retaining physical-frame and task ownership. A second conversation is
+refused with the original submission kept uncertain.
+
+This is not a universal task cancellation contract. Attachment/debugger waits
+and durable observer callbacks retain their existing lifetime semantics. Startup
+connector checks attach no files. Abandoning a durable dispatch claim on a timer
+would not prove that no Send occurred; UNKNOWN custody remains authoritative.
