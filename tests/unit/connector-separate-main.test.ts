@@ -7,6 +7,7 @@ import { confirmSeparateAppVerificationAttempt } from "../../src/apps/desktop/co
 import { separateAppVerificationScopeCurrent } from "../../src/pkg/product-settings/separate-app-verification";
 import { selectedConnectorApp } from "../../src/pkg/product-settings/connector-app-selection";
 import { connectorWorkspaceSelection } from "../../src/pkg/product-settings/connector-workspace-selection";
+import { prepareConnectorCheckDocument } from "../../apps/desktop/bridge/connector-check-readiness";
 import { currentConnectorAttachment } from "../../src/apps/desktop/connector-app-receipt-wait";
 import {
   fixtureBuildId,
@@ -91,7 +92,15 @@ function fixture() {
     },
   );
   const dispose = vi.fn();
+  const authenticated = {
+    state: "authenticated" as const,
+    binding: { sequence: 1, documentGeneration: 1 },
+  };
   const ownerRoute = {
+    open: vi.fn(async () => ({ status: "opened" as const })),
+    observeSignInStatus: vi.fn(async () => authenticated),
+    isCurrentSignInStatus: (value: unknown) => value === authenticated,
+    hasPendingReadinessDocument: () => false,
     runReadonlyTask: route,
     openTemporaryChat: vi.fn(async () => ({ status: "opened" })),
   };
@@ -119,7 +128,7 @@ function fixture() {
     runtimeEnvironment: "owner-preview",
     randomUUID: () => "status-check-fixture",
     currentConnectorAttachment,
-    waitForConnectorCheckReadiness: async () => true,
+    prepareConnectorCheckDocument,
     chatGptWindowPresentationOption: () => ({
       windowPresentation: { mode: "hidden" },
     }),

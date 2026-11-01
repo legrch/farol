@@ -5,15 +5,29 @@ import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { buildSync } from "esbuild";
+import { OWNER_FILE, writeOwner } from "../../tooling/owned-scratch.mjs";
+import { observeProcesses } from "../../tooling/output-retention.mjs";
 
 // Real hidden Electron with a loopback DOM and deliberately unfinished image.
 // Exercises the full connector caller with one synthetic Send; no provider, owner profile or OTA.
 const root = path.resolve(import.meta.dirname, "../..");
+const arguments_ = process.argv.slice(2);
+const cleanupFailureFixture =
+  arguments_.length === 1 && arguments_[0] === "--cleanup-failure-fixture";
+assert.ok(
+  arguments_.length === 0 || cleanupFailureFixture,
+  "Unknown fixture selection",
+);
+const scratchParent = path.join(root, "_output", "tmp");
+await fs.mkdir(scratchParent, { recursive: true });
 const scratch = await fs.mkdtemp(
-  path.join(os.tmpdir(), "farol-readiness-native-"),
+  path.join(scratchParent, "chatgpt-readiness-native-"),
 );
 const entry = path.join(scratch, "fixture.mjs");
-let confirmed = false;
+let issued = false,
+  terminalObserved = false,
+  injectedFailure = false,
+  scratchRemoved = false;
 const fixtureAppName = "Readiness Fixture";
 const syntheticPage = `<!doctype html><html><body>
 <textarea id="prompt-textarea"></textarea>
@@ -39,6 +53,8 @@ send.onclick=()=>{
 </script></body></html>`;
 
 try {
+  await writeOwner(scratch);
+  await fs.access(path.join(scratch, OWNER_FILE));
   buildSync({
     stdin: {
       contents: `
@@ -173,6 +189,7 @@ app.whenReady().then(async () => {
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
+  issued = true;
   let stdout = "",
     stderr = "";
   child.stdout.on("data", (chunk) => {
@@ -184,17 +201,53 @@ app.whenReady().then(async () => {
   const timeout = setTimeout(() => child.kill("SIGTERM"), 45_000);
   const terminal = await new Promise((resolve, reject) => {
     child.once("error", reject);
-    child.once("close", (code, signal) => resolve({ code, signal }));
+    child.once("close", (code, signal) => {
+      terminalObserved = true;
+      resolve({ code, signal });
+    });
   }).finally(() => clearTimeout(timeout));
   assert.deepEqual(terminal, { code: 0, signal: null }, stderr);
   const report = JSON.parse(stdout.trim());
   assert.equal(report.result, "PASS");
-  confirmed = true;
+  if (cleanupFailureFixture)
+    throw new Error("Synthetic post-child cleanup failure");
   process.stdout.write(JSON.stringify(report) + "\n");
+} catch (error) {
+  if (
+    !cleanupFailureFixture ||
+    !terminalObserved ||
+    error?.message !== "Synthetic post-child cleanup failure"
+  )
+    throw error;
+  injectedFailure = true;
 } finally {
-  if (confirmed) await fs.rm(scratch, { recursive: true, force: true });
-  else
+  const observation = observeProcesses();
+  const referenced =
+    observation &&
+    (observation.processes.some((p) => p.command.includes(scratch)) ||
+      observation.open.some(
+        (file) => file === scratch || file.startsWith(scratch + path.sep),
+      ));
+  if ((!issued || terminalObserved) && observation && !referenced) {
+    await fs.rm(scratch, { recursive: true, force: true });
+    scratchRemoved = true;
+  } else {
     process.stderr.write(
-      `Retained failed or unconfirmed fixture: ${scratch}\n`,
+      `Retained owned fixture with unconfirmed cleanup: ${scratch}\n`,
     );
+    process.exitCode = 1;
+  }
+}
+if (cleanupFailureFixture) {
+  assert.ok(
+    injectedFailure && scratchRemoved,
+    "Original fixture cleanup was not confirmed",
+  );
+  process.stdout.write(
+    JSON.stringify({
+      result: "PASS",
+      mode: "injected-post-child-failure",
+      scratchRemoved: true,
+    }) + "\n",
+  );
 }

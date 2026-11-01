@@ -67,7 +67,7 @@ export async function prepareConnectorCheckDocument(
   | { ready: true }
   | {
       ready: false;
-      reason:
+      stage:
         | "initial-readiness"
         | "binding-invalidated"
         | "temporary-navigation"
@@ -78,17 +78,17 @@ export async function prepareConnectorCheckDocument(
   if (!(await waitForConnectorCheckReadiness(route, current, bounded)))
     return {
       ready: false,
-      reason: current() ? "initial-readiness" : "binding-invalidated",
+      stage: current() ? "initial-readiness" : "binding-invalidated",
     };
-  if (!current()) return { ready: false, reason: "binding-invalidated" };
+  if (!current()) return { ready: false, stage: "binding-invalidated" };
   if (timing.now() >= bounded.deadlineAt)
-    return { ready: false, reason: "initial-readiness" };
+    return { ready: false, stage: "initial-readiness" };
   if ((await route.openTemporaryChat()).status !== "opened")
-    return { ready: false, reason: "temporary-navigation" };
+    return { ready: false, stage: "temporary-navigation" };
   return (await waitForConnectorCheckReadiness(route, current, bounded))
     ? { ready: true }
     : {
         ready: false,
-        reason: current() ? "temporary-readiness" : "binding-invalidated",
+        stage: current() ? "temporary-readiness" : "binding-invalidated",
       };
 }

@@ -5999,7 +5999,7 @@ async function verifySecureMcpApp(
     );
     if (!preparedDocument.ready) {
       console.warn(
-        `FAROL_CONNECTOR_CHECK_PREFLIGHT:${JSON.stringify({ schema: 1, reason: preparedDocument.reason })}`,
+        `FAROL_CONNECTOR_CHECK_PREFLIGHT:${JSON.stringify({ schema: 1, stage: preparedDocument.stage })}`,
       );
       return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
     }

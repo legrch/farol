@@ -274,6 +274,7 @@ tasks:
     platforms: [darwin]
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run test:e2e:chatgpt-startup-readiness
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tests/e2e/chatgpt-startup-readiness.e2e.mjs --cleanup-failure-fixture
 
   test:e2e:guided-setup:
     desc: Check normal Preview and Dev Setup/Browser using owned hidden fixtures
