@@ -145,6 +145,36 @@ describe("closed renderer destinations", () => {
     expect(vi.mocked(h.f.api.layout).mock.calls.at(-1)?.[5]).toBe("none");
     expect(document.activeElement).toBe(arrow);
   });
+  it("allows a fresh read after a Deep test status reply is lost", async () => {
+    const h = await mount({
+      page: "general",
+      shell: true,
+      value: readySettings(true),
+      signIn: "authenticated",
+    });
+    await act(async () => h.c.navigate({ area: "chatgpt" }));
+    await act(async () =>
+      h.host
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="More connection tests"]',
+        )!
+        .click(),
+    );
+    await h.click("Previous test results");
+    vi.mocked(h.f.api.configure).mockClear();
+    h.reply(async () => {
+      throw new Error("scripted lost status reply");
+    });
+    await h.click("Review test results");
+    await h.click("Review test results");
+    expect(
+      vi
+        .mocked(h.f.api.configure)
+        .mock.calls.filter(
+          ([command]) => command.kind === "chatgpt.deep-test-status",
+        ),
+    ).toHaveLength(2);
+  });
   it("dispatches one new Deep test only from the explicit run click", async () => {
     const h = await mount({
       page: "general",

@@ -104,6 +104,14 @@ export function dependencyFences(
     // refused receipt is not proof that its publication never happened.
     if (intent.code === "SETTINGS_WRITE_FAILED") unknown = true;
     if (intent.state !== "pending" && intent.state !== "unknown") return;
+    // These commands use their own attempt journals and never write product
+    // settings. Keep their original unknown intents for deduplication without
+    // treating them as uncertainty in unrelated configuration operations.
+    if (
+      key === intent.id &&
+      /^deep-test:(?:status|run|ack):[0-9a-f-]{36}$/u.test(key)
+    )
+      return;
     let source =
       key === intent.id && retained ? intentDependency(intent.id) : "shared";
     if (

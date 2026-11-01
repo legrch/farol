@@ -19,7 +19,7 @@ export function DeepTestPrompt({
         onClick={() =>
           void facade.configure(
             { kind: "chatgpt.deep-test-status" },
-            "deep-test:status",
+            `deep-test:status:${crypto.randomUUID()}`,
           )
         }
       >

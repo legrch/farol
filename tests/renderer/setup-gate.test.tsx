@@ -884,6 +884,39 @@ it("allows only receipt readback while app Send is unknown, and qualifies matchi
   expect(setupStepCheck(saveUnknown, "attachment").allowed).toBe(false);
 });
 
+it.each(["status", "run", "ack"])(
+  "keeps unknown deep-test %s separate from settings admission",
+  async (action) => {
+    const h = await mount({ step: "attachment" });
+    const snapshot = syntheticSnapshot(
+      h.c.getSnapshot(),
+      "attachment",
+      "success-current",
+    );
+    const id = `deep-test:${action}:${crypto.randomUUID()}`;
+    const previous = {
+      id,
+      state: "unknown" as const,
+      code: "CONFIGURATION_OUTCOME_UNKNOWN",
+    };
+    const withUnknown = { ...snapshot, intents: { [id]: previous } };
+    expect(commandAllowed(withUnknown, "setup.progress")).toBe(true);
+    expect(withUnknown.intents[id]).toBe(previous);
+    const malformed = "deep-test:run:not-an-id";
+    expect(
+      commandAllowed(
+        {
+          ...snapshot,
+          intents: {
+            [malformed]: { ...previous, id: malformed },
+          },
+        },
+        "setup.progress",
+      ),
+    ).toBe(false);
+  },
+);
+
 it.each(["", "a".repeat(64)])(
   "explains a busy connection-test browser for suffix %s without granting completion",
   async (suffix) => {
