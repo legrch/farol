@@ -185,11 +185,11 @@ func validPlatformSupport(s RootScopedPlatformSupport) bool {
 	return dyld != ""
 }
 
-// macOS ships rm and unlink as two names for one root-owned system image.
-// Only that fixed physical path admits two links; content pins, protected parents
+// macOS ships rm/unlink and readlink/stat as root-owned system image pairs.
+// Only the selected fixed physical paths admit two links; content pins, protected parents
 // and unchanged inode/metadata checks still apply at qualification and dispatch.
 func platformExecutableLinksAllowed(path string, uid uint32, links uint64) bool {
-	return links == 1 || path == "/bin/rm" && uid == 0 && links == 2
+	return links == 1 || (path == "/bin/rm" || path == "/usr/bin/readlink") && uid == 0 && links == 2
 }
 
 func platformPins(s RootScopedPlatformSupport) []ExecutablePin {
