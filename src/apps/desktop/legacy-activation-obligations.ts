@@ -247,35 +247,51 @@ const MAX_DEEP_TEST_ATTEMPTS = 256;
 
 async function readDeepTestAttempts(
   state: string,
-): Promise<ReadState<readonly { phase: string; unknown: boolean }[]>> {
+): Promise<ReadState<readonly { phase: string }[]>> {
   const root = path.join(state, DEEP_TEST_ATTEMPTS_DIRECTORY);
+  const handles: FileHandle[] = [];
   try {
-    const info = await fs.lstat(root);
-    if (
-      !info.isDirectory() ||
-      info.isSymbolicLink() ||
-      (process.geteuid?.() !== undefined && info.uid !== process.geteuid?.()) ||
-      (info.mode & 0o077) !== 0
-    )
-      return { status: "unreadable", digest: null, reason: "UNSAFE" };
+    const held: Array<{ path: string; handle: FileHandle; identity: string }> =
+      [];
+    const identity = (info: import("node:fs").BigIntStats) =>
+      [info.dev, info.ino, info.mode, info.uid, info.gid, info.ctimeNs].join(
+        ":",
+      );
+    const holdDirectory = async (directory: string) => {
+      const info = await fs.lstat(directory, { bigint: true });
+      if (
+        !info.isDirectory() ||
+        (process.geteuid?.() !== undefined &&
+          info.uid !== BigInt(process.geteuid!())) ||
+        (info.mode & 0o077n) !== 0n
+      )
+        throw new Error("UNSAFE");
+      const handle = await fs.open(
+        directory,
+        fsConstants.O_RDONLY |
+          (fsConstants.O_DIRECTORY ?? 0) |
+          NO_FOLLOW |
+          CLOSE_ON_EXEC,
+      );
+      handles.push(handle);
+      const id = identity(info);
+      if (identity(await handle.stat({ bigint: true })) !== id)
+        throw new Error("CHANGED");
+      held.push({ path: directory, handle, identity: id });
+      return id;
+    };
+    const rootIdentity = await holdDirectory(root);
     const names = (await fs.readdir(root)).sort();
     if (names.length > MAX_DEEP_TEST_ATTEMPTS)
       return { status: "unreadable", digest: null, reason: "OVERSIZED" };
-    const records: { phase: string; unknown: boolean }[] = [];
+    const records: { phase: string }[] = [];
     const digest = createHash("sha256");
+    digest.update(rootIdentity).update("\0");
     for (const name of names) {
       if (!ChatGptTaskJournalOperationIdSchema.safeParse(name).success)
         return { status: "unreadable", digest: null, reason: "UNSAFE" };
       const dir = path.join(root, name);
-      const item = await fs.lstat(dir);
-      if (
-        !item.isDirectory() ||
-        item.isSymbolicLink() ||
-        (process.geteuid?.() !== undefined &&
-          item.uid !== process.geteuid?.()) ||
-        (item.mode & 0o077) !== 0
-      )
-        return { status: "unreadable", digest: null, reason: "UNSAFE" };
+      const dirIdentity = await holdDirectory(dir);
       const entry = await readState(
         path.join(dir, CHATGPT_TASK_JOURNAL_FILE_NAME),
         taskJournal,
@@ -289,11 +305,25 @@ async function readDeepTestAttempts(
         };
       if (entry.value.operationId !== name || entry.value.kind !== "readonly")
         return { status: "unreadable", digest: null, reason: "MALFORMED" };
-      digest.update(name).update("\0").update(entry.digest).update("\0");
+      digest
+        .update(name)
+        .update("\0")
+        .update(dirIdentity)
+        .update("\0")
+        .update(entry.digest)
+        .update("\0");
       records.push({
         phase: entry.value.phase,
-        unknown: entry.value.result?.state === "outcome_unknown",
       });
+    }
+    for (const entry of held) {
+      if (
+        identity(await entry.handle.stat({ bigint: true })) !==
+          entry.identity ||
+        identity(await fs.lstat(entry.path, { bigint: true })) !==
+          entry.identity
+      )
+        throw new Error("CHANGED");
     }
     return { status: "read", digest: digest.digest("hex"), value: records };
   } catch (error) {
@@ -304,6 +334,8 @@ async function readDeepTestAttempts(
       ))
       ? { status: "absent", digest: null }
       : { status: "unreadable", digest: null, reason: "UNSAFE" };
+  } finally {
+    await Promise.all(handles.map((handle) => handle.close()));
   }
 }
 
@@ -429,7 +461,7 @@ export async function activationObligations(
     unreadable.push(`deep-test-attempts:${deepTests.reason}`);
   else if (deepTests.status === "read") {
     const outstanding = deepTests.value.filter(
-      (entry) => entry.unknown || entry.phase !== "delivery_acknowledged",
+      (entry) => entry.phase !== "delivery_acknowledged",
     ).length;
     if (outstanding > 0) obligations.push(`DEEP_TEST_PENDING:${outstanding}`);
   }

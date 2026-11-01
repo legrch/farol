@@ -134,7 +134,7 @@ async function writeTasks(root, tasks, overrides = {}) {
 }
 
 describe("Q-08 activation obligations", () => {
-  it("fences separate deep-test attempts through crash recovery and preserves unknowns", async () => {
+  it("preserves acknowledged unknowns while a running task still fences promotion", async () => {
     const root = await userData();
     const attempts = path.join(root, "farol-state", "deep-test-attempts");
     await fs.mkdir(attempts, { mode: 0o700 });
@@ -151,10 +151,21 @@ describe("Q-08 activation obligations", () => {
     expect((await activationObligations(root)).obligations).toContain(
       "DEEP_TEST_PENDING:1",
     );
+    await writeTasks(root, [task({ lifecycle: "running" })]);
     await owner.acknowledgeDelivery(id);
-    expect((await activationObligations(root)).obligations).toContain(
-      "DEEP_TEST_PENDING:1",
-    );
+    const held = await activationObligations(root);
+    expect(held.obligations).not.toContain("DEEP_TEST_PENDING:1");
+    expect(held.obligations).toContain("TASK_RUNNING:1");
+    expect(held.drained).toBe(false);
+    expect(await owner.load()).toMatchObject({
+      phase: "delivery_acknowledged",
+      result: {
+        state: "outcome_unknown",
+        code: "CHATGPT_TASK_INTERRUPTED_AFTER_INTENT",
+      },
+    });
+    await writeTasks(root, [task({ lifecycle: "completed" })]);
+    expect((await activationObligations(root)).drained).toBe(true);
   });
 
   it("allows an acknowledged known result but refuses mismatched attempt identity", async () => {
@@ -213,6 +224,37 @@ describe("Q-08 activation obligations", () => {
     expect(report.drained).toBe(false);
     expect(report.unreadable).toContain("deep-test-attempts:UNSAFE");
   });
+
+  it.each(["root", "attempt"])(
+    "detects same-content %s directory replacement between reads",
+    async (which) => {
+      const root = await userData();
+      const attempts = path.join(root, "farol-state", "deep-test-attempts");
+      await fs.mkdir(attempts, { mode: 0o700 });
+      const id = randomUUID();
+      const dir = path.join(attempts, id);
+      const owner = new PrivateChatGptTaskJournal({ root: dir });
+      await owner.prepare({ operationId: id, kind: "readonly" });
+      await owner.markDispatchIntent(id);
+      await owner.retainResult(id, {
+        state: "completed",
+        code: null,
+        deltaCount: 0,
+        observedCharacters: 0,
+      });
+      await owner.acknowledgeDelivery(id);
+      const target = which === "root" ? attempts : dir;
+      const saved = path.join(root, `saved-${which}`);
+      const report = await activationObligations(root, {
+        beforeConfirmation: async () => {
+          await fs.rename(target, saved);
+          await fs.cp(saved, target, { recursive: true });
+        },
+      });
+      expect(report.changed).toContain("deep-test-attempts");
+      expect(report.drained).toBe(false);
+    },
+  );
   it("finds nothing to drain in a fresh or idle user-data root", async () => {
     const fresh = await userData();
     await expect(activationObligations(fresh)).resolves.toMatchObject({
