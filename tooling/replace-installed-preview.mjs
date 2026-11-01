@@ -38,7 +38,7 @@ import {
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const HELPER_SHA256 =
-  "08212da5ae0b8b4a78692aea01acc9ea74c5148eb67b761475fcb765e1e59997";
+  "cb8278d91fbe8b67d0039a360a649b8c7eec4cf3b43ca5f375041a956880446d";
 const LIBRARY_SHA256 =
   "be78ebefca9280329b766c0aee9dbfdd9adfdab2020f373df236441fdb476ec6";
 const sha = (raw) => createHash("sha256").update(raw).digest("hex");
@@ -144,6 +144,13 @@ const Selection = z.discriminatedUnion("schema", [
     schema: z.literal("farol.installed-replacement-selection/3"),
     installLocation: z.enum(["legacy", "shared"]),
     baseline: z.literal("adopted"),
+    preserveUnconfirmedUpdates: z.literal(true),
+    candidateRoot: z.string().min(1).max(4096),
+  }),
+  LegacySelection.extend({
+    schema: z.literal("farol.installed-replacement-selection/4"),
+    installLocation: z.enum(["legacy", "shared"]),
+    baseline: z.literal("normal"),
     preserveUnconfirmedUpdates: z.literal(true),
     candidateRoot: z.string().min(1).max(4096),
   }),
@@ -362,8 +369,13 @@ export async function snapshotInstalledReplacement(
   home,
   installLocation = "legacy",
   baseline = "normal",
+  preserveUnconfirmedUpdates = false,
 ) {
-  if (!["normal", "adopted"].includes(baseline))
+  if (
+    !["normal", "adopted"].includes(baseline) ||
+    typeof preserveUnconfirmedUpdates !== "boolean" ||
+    (preserveUnconfirmedUpdates && baseline !== "normal")
+  )
     fail("REPLACEMENT_BASELINE_INVALID");
   const userData = promotionUserData(home);
   const apps = replacementApplications(home, installLocation);
@@ -432,7 +444,11 @@ export async function snapshotInstalledReplacement(
       await confirmCompletedUpdate(updates, appSha256, build);
   }
   return {
-    ...(baseline === "adopted" ? { receiptKind: "adopted" } : {}),
+    ...(baseline === "adopted"
+      ? { receiptKind: "adopted" }
+      : preserveUnconfirmedUpdates
+        ? { receiptKind: "normal" }
+        : {}),
     applicationsIdentity: identity(applications),
     profileIdentity: identity(await safeDirectory(userData, true)),
     stateIdentity: identity(await safeDirectory(state, true)),
@@ -711,6 +727,10 @@ export async function replaceInstalledPreview(
   selection = Selection.parse(selection);
   const adopted =
     selection.schema === "farol.installed-replacement-selection/3";
+  const preservedNormal =
+    selection.schema === "farol.installed-replacement-selection/4";
+  const separateCandidate = adopted || preservedNormal;
+  const preserveHistory = adopted || preservedNormal;
   const home = dependencies.home ?? "/Users/ac";
   if (
     !dependencies.home &&
@@ -729,14 +749,14 @@ export async function replaceInstalledPreview(
   const userData = promotionUserData(home),
     apps = replacementApplications(home, installLocation),
     custody = path.join(apps, `.farol-replacement-${selection.operationId}`);
-  const candidateRoot = adopted ? selection.candidateRoot : root;
+  const candidateRoot = separateCandidate ? selection.candidateRoot : root;
   if (
     !path.isAbsolute(candidateRoot) ||
     path.resolve(candidateRoot) !== candidateRoot ||
     (await fs.realpath(candidateRoot)) !== candidateRoot
   )
     fail("REPLACEMENT_CANDIDATE_ROOT_INVALID");
-  if (adopted && !dependencies.home && sourceIdentity(root).dirty)
+  if (separateCandidate && !dependencies.home && sourceIdentity(root).dirty)
     fail("REPLACEMENT_MAINTENANCE_SOURCE_DIRTY");
   const current =
     dependencies.sourceIdentity ?? (() => sourceIdentity(candidateRoot));
@@ -808,6 +828,7 @@ export async function replaceInstalledPreview(
       home,
       installLocation,
       baseline,
+      preservedNormal,
     );
     if (!same(fresh, selection.snapshot)) fail("REPLACEMENT_SNAPSHOT_CHANGED");
     await absent(custody);
@@ -817,11 +838,11 @@ export async function replaceInstalledPreview(
     const updateRecords = fresh.updater.filter(
       (item) => item.name === "ready.json" || item.name === "last-update.json",
     );
-    // A fresh updater may have only preferences and accepted execution images.
-    // A missing half or any historical operation/download without its records
-    // remains unconfirmed; absence must not conceal a possibly started helper.
+    // Ordinary replacement refuses incomplete history. Only an explicit
+    // preservation selection custodies that entire namespace without settlement;
+    // present records, selected helpers and all closed-app guards still apply.
     if (
-      !adopted &&
+      !preserveHistory &&
       (updateRecords.length === 1 ||
         (updateRecords.length === 0 &&
           fresh.updater.some((item) =>
@@ -836,7 +857,7 @@ export async function replaceInstalledPreview(
         await bytes(path.join(userData, "installed-updates", name)),
       );
       if (
-        adopted &&
+        preserveHistory &&
         !(name === "ready.json" ? Retained : SavedReceipt).safeParse(record)
           .success
       )
@@ -870,7 +891,12 @@ export async function replaceInstalledPreview(
       fail("REPLACEMENT_NOT_INCREASING");
     if (
       !same(
-        await snapshotInstalledReplacement(home, installLocation, baseline),
+        await snapshotInstalledReplacement(
+          home,
+          installLocation,
+          baseline,
+          preservedNormal,
+        ),
         fresh,
       )
     )
@@ -902,9 +928,11 @@ export async function replaceInstalledPreview(
     if (!(await verifyPromotionLease(lease))) fail("REPLACEMENT_LEASE_LOST");
     const leaseInfo = await fs.lstat(lease.file, { bigint: true });
     const request = {
-      schema: adopted
-        ? "farol.installed-replacement-native/3"
-        : "farol.installed-replacement-native/2",
+      schema: preservedNormal
+        ? "farol.installed-replacement-native/4"
+        : adopted
+          ? "farol.installed-replacement-native/3"
+          : "farol.installed-replacement-native/2",
       installLocation,
       action: "custody",
       home,

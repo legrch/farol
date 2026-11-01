@@ -240,6 +240,25 @@ shutdown, disconnect and SIGTERM handlers before its asynchronous initialization
 a late startup result is closed rather than published after parent loss. This
 root-process observation does not qualify arbitrary descendant cleanup.
 
+### Explicit preservation of a normal installation's incomplete update history
+
+Selection version 4 requires `baseline: "normal"`,
+`preserveUnconfirmedUpdates: true`, an explicit installation location, physical
+`candidateRoot` and the exact qualified candidate commit. It authenticates the
+existing normal promotion receipt and installed content exactly as before;
+it does not adopt or remove that receipt to gain admission. Snapshot selection
+uses `snapshotInstalledReplacement(home, location, "normal", true)` and binds
+`receiptKind: "normal"`. Versions 1 and 2 keep their record-pair refusal.
+
+This explicit maintenance selection may retain an incomplete ready/saved record
+pair. Every present record must still parse and every recorded helper must be
+selected and confirmed absent. The native version 4 boundary accepts only normal
+receipt custody and completion, never clean-lock initialization. Existing locks,
+drain, process checks, inode/digest rechecks and whole-namespace custody remain
+unchanged. The original normal receipt moves to `previous.receipt.json`, and all
+old update directories, journals and UNKNOWN bytes remain together. Placement
+creates the new candidate receipt; historical reconciliation remains false.
+
 ## Shared replacement completion observation
 
 After hashing the held candidate descriptor, replacement rechecks the named
