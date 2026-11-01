@@ -85,6 +85,10 @@ func NewCaptured(ctx context.Context, r port.HelperRequest, runtime port.HelperI
 }
 
 func captureRequest(r port.HelperRequest) port.HelperRequest {
+	if r.RelaunchPresentation != nil {
+		v := *r.RelaunchPresentation
+		r.RelaunchPresentation = &v
+	}
 	if r.InstallLocation != nil {
 		v := *r.InstallLocation
 		r.InstallLocation = &v

@@ -295,6 +295,33 @@ describe("explicit iPad test presentation", () => {
       bounds: { x: -1118, y: 39, width: 1100, height: 740 },
     });
   });
+  it("fits a relaunched default viewport to a smaller permitted Sidecar", () => {
+    const result = selectPreviewWindowPlacement(
+      [externalPrimary, sidecar],
+      5,
+      { width: 1180, height: 760 },
+      false,
+      false,
+      true,
+      true,
+    );
+    expect(result).toMatchObject({
+      displayId: 7,
+      primary: false,
+      bounds: { x: -1135, y: 30, width: 1135, height: 759 },
+    });
+    expect(() =>
+      selectPreviewWindowPlacement(
+        [externalPrimary],
+        5,
+        { width: 1180, height: 760 },
+        false,
+        false,
+        true,
+        true,
+      ),
+    ).toThrow("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
+  });
   it("refuses a missing Sidecar while another secondary remains connected", () => {
     expect(() =>
       selectPreviewWindowPlacement(
@@ -338,6 +365,20 @@ describe("explicit iPad test presentation", () => {
         true,
       ),
     ).toThrow("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
+  });
+  it("keeps a strict Sidecar run off the sole remaining primary after disconnection", () => {
+    for (const display of [externalPrimary, builtInSecondary, sidecar]) {
+      expect(() =>
+        selectPreviewWindowPlacement(
+          [display],
+          display.id,
+          { width: 900, height: 600 },
+          false,
+          false,
+          true,
+        ),
+      ).toThrow("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
+    }
   });
   it("allows explicit primary permission when the preferred test surface is unavailable", () => {
     expect(

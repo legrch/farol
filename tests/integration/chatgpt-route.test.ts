@@ -89,6 +89,7 @@ describe("main auth presentation composes automatic primary fitting", () => {
       windowMode: "secondary-visible",
       devSecondaryDisplay: false,
       explicitPreviewWindowSize: false,
+      sidecarDisplayOnly: false,
       selectedVisibleTestPlacement: (requested: {
         width: number;
         height: number;
@@ -179,6 +180,9 @@ describe("temporary Instant connector profile", () => {
     const loadURL = vi.fn(async (url: string) => {
       currentUrl = url;
       current = hydrating ?? afterLoad;
+      surface.webContents.emit("did-start-navigation", {}, url, false, true);
+      surface.webContents.emit("did-navigate", {}, url);
+      surface.webContents.emit("dom-ready");
     });
     const sendInputEvent = vi.fn(() => {
       throw new Error("Background native keyboard must not be used");
@@ -216,13 +220,15 @@ describe("temporary Instant connector profile", () => {
     const surface = {
       isDestroyed: () => false,
       loadURL,
-      webContents: {
+      webContents: Object.assign(new EventEmitter(), {
+        setWindowOpenHandler: vi.fn(),
         executeJavaScript,
         sendInputEvent,
         getURL: () => currentUrl,
-      },
+      }),
     };
     Reflect.set(route, "routeWindow", surface);
+    Reflect.get(route, "hardenContents").call(route, surface.webContents, true);
     const prepare = Reflect.get(route, "prepareTemporaryInstantProfile") as (
       candidate: typeof surface,
       temporary?: boolean,
@@ -761,12 +767,16 @@ describe("temporary Instant connector profile", () => {
   );
 
   it("fails closed when ChatGPT does not confirm temporary mode", async () => {
-    const route = profileRoute(regular, regular);
-    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(13_000);
-    await expect(route.prepare()).resolves.toBe(
-      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
-    );
-    expect(route.sendInputEvent).not.toHaveBeenCalled();
+    vi.useFakeTimers();
+    try {
+      const route = profileRoute(regular, regular);
+      const pending = route.prepare();
+      await vi.advanceTimersByTimeAsync(13_001);
+      expect(await pending).toBe("CHATGPT_TEMPORARY_CHAT_REQUIRED");
+      expect(route.sendInputEvent).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each(["https://chatgpt.com/?temporary-chat=true", "https://chatgpt.com/"])(
@@ -4772,6 +4782,19 @@ describe("ChatGPT route submission boundary", () => {
     });
     expect(executeJavaScript).not.toHaveBeenCalled();
   });
+  it("fences a captured manual target after navigation even to the same URL", () => {
+    const candidate = taskRoute(vi.fn());
+    const surface = Reflect.get(candidate, "routeWindow");
+    surface.webContents.isDestroyed = () => false;
+    const current = candidate.captureManualTaskTarget();
+    expect(current?.()).toBe(true);
+    Reflect.set(
+      candidate,
+      "routeDocumentGeneration",
+      Number(Reflect.get(candidate, "routeDocumentGeneration")) + 1,
+    );
+    expect(current?.()).toBe(false);
+  });
 
   it("blocks an indeterminate page activity probe before touching the composer", async () => {
     const executeJavaScript = vi.fn();
@@ -4807,6 +4830,21 @@ describe("ChatGPT route submission boundary", () => {
     expect(executeJavaScript).toHaveBeenCalledTimes(2);
   });
 
+  it("rechecks the owner synchronously after preparation and before the click", async () => {
+    const executeJavaScript = vi.fn().mockResolvedValueOnce(prepared);
+    const beforeSend = vi.fn(() => false);
+    await expect(
+      taskRoute(executeJavaScript).runReadonlyTask("bounded fixture", [], {
+        beforeSend,
+      }),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_SUBMIT_UNAVAILABLE",
+    });
+    expect(beforeSend).toHaveBeenCalledOnce();
+    expect(executeJavaScript).toHaveBeenCalledTimes(1);
+  });
+
   it("treats a malformed send acknowledgement as unknown without retrying", async () => {
     const executeJavaScript = vi
       .fn()
@@ -4827,15 +4865,15 @@ describe("ChatGPT route submission boundary", () => {
   });
 
   it("keeps a positively observed pre-click refusal retry-safe", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(3000);
     const executeJavaScript = vi
       .fn()
       .mockResolvedValueOnce(prepared)
-      .mockResolvedValueOnce({ activated: false });
-    vi.spyOn(Date, "now")
-      .mockReturnValueOnce(3_000)
-      .mockReturnValueOnce(6_000)
-      .mockReturnValue(9_000);
-
+      .mockImplementationOnce(async () => {
+        vi.setSystemTime(9000);
+        return { activated: false };
+      });
     await expect(
       taskRoute(executeJavaScript).runReadonlyTask("read the selected file"),
     ).resolves.toMatchObject({
@@ -4843,6 +4881,7 @@ describe("ChatGPT route submission boundary", () => {
       code: "CHATGPT_SUBMIT_UNAVAILABLE",
     });
     expect(executeJavaScript).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
   });
 
   it("uses the same unknown boundary after an attachment upload", async () => {
@@ -5237,6 +5276,11 @@ describe("ChatGPT route streaming observation", () => {
   });
 
   it("returns the observed user-message identity when a correlated reply is still late", async () => {
+    // Advance logical time only after correlation was observed. A real 20ms
+    // budget can expire inside a probe under coverage, exercising a different
+    // failure path instead of the late-reply timeout this fixture owns.
+    let now = 10_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
     const executeJavaScript = vi
       .fn()
       .mockResolvedValueOnce(prepared)
@@ -5253,6 +5297,12 @@ describe("ChatGPT route streaming observation", () => {
     await expect(
       streamingTaskRoute(executeJavaScript, 20).runReadonlyTask(
         "preserve this context",
+        [],
+        {
+          onCorrelation: () => {
+            now += 21;
+          },
+        },
       ),
     ).resolves.toMatchObject({
       state: "outcome_unknown",
@@ -5371,6 +5421,15 @@ describe("ChatGPT route streaming observation", () => {
               : "https://chatgpt.com/c/other-conversation-0002",
       },
     });
+
+    const contents = Reflect.get(candidate, "routeWindow").webContents;
+    contents.mainFrame = {
+      get url() {
+        return contents.getURL();
+      },
+      isDestroyed: () => false,
+      executeJavaScript: contents.executeJavaScript,
+    };
 
     await expect(
       candidate.runReadonlyTask("read the selected file"),
@@ -5728,6 +5787,106 @@ describe("ChatGPT embedded task surface", () => {
     expect(history.goForward).not.toHaveBeenCalled();
     candidate.dispose();
   });
+
+  it("opens one committed temporary document before slow subresources finish", async () => {
+    const surface = embeddedSurface();
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+    });
+    await candidate.preload();
+    const originalLoad = surface.loadURL.getMockImplementation()!;
+    let finish!: () => void;
+    surface.loadURL.mockImplementation(async (url) => {
+      await originalLoad(url);
+      surface.webContents.emit("did-start-navigation", {}, url, false, true);
+      surface.webContents.emit("did-navigate", {}, url);
+      surface.webContents.emit("dom-ready");
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+    });
+    try {
+      expect(await candidate.openTemporaryChat()).toEqual({ status: "opened" });
+      expect(surface.loadURL).toHaveBeenCalledTimes(2);
+      expect(surface.webContents.listenerCount("dom-ready")).toBe(1);
+    } finally {
+      finish();
+      candidate.dispose();
+    }
+  });
+
+  it.each([
+    "old-document",
+    "uncommitted",
+    "failed",
+    "retired",
+    "protected",
+  ] as const)(
+    "does not admit a %s temporary DOM while navigation stays pending",
+    async (kind) => {
+      vi.useFakeTimers();
+      const surface = embeddedSurface();
+      Object.assign(surface.webContents, {
+        executeJavaScript: vi.fn(async () => true),
+      });
+      const candidate = new ChatGptRoute({
+        homeUrl: "https://chatgpt.com/",
+        initialUrl: "https://chatgpt.com/",
+        e2eOrigin: null,
+        parent: () => null,
+        ...(kind === "protected"
+          ? { requireAppForManualMessages: true, requiredAppName: "Farol Dev" }
+          : {}),
+        surfaceFactory: (() =>
+          surface) as unknown as ChatGptRouteSurfaceFactory,
+      });
+      await candidate.preload();
+      const originalLoad = surface.loadURL.getMockImplementation()!;
+      let finish!: () => void;
+      surface.loadURL.mockImplementation(async (url) => {
+        await originalLoad(url);
+        if (kind !== "old-document")
+          surface.webContents.emit(
+            "did-start-navigation",
+            {},
+            url,
+            false,
+            true,
+          );
+        if (kind !== "uncommitted" && kind !== "old-document")
+          surface.webContents.emit("did-navigate", {}, url);
+        if (kind === "failed")
+          surface.webContents.emit(
+            "did-fail-load",
+            {},
+            -105,
+            "failed",
+            url,
+            true,
+          );
+        if (kind === "retired") candidate.dispose();
+        surface.webContents.emit("dom-ready");
+        await new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+      });
+      try {
+        const opening = candidate.openTemporaryChat();
+        await vi.advanceTimersByTimeAsync(30_001);
+        expect(await opening).toEqual({ status: "unreachable" });
+        expect(surface.loadURL).toHaveBeenCalledTimes(2);
+        expect(surface.webContents.listenerCount("dom-ready")).toBe(1);
+      } finally {
+        finish?.();
+        candidate.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("ignores closing and navigation events from a retired surface", async () => {
     const surface = embeddedSurface();
@@ -7444,6 +7603,22 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
     expect(contacts.events).toEqual([]);
   });
 
+  it("does not type a queued preparation after its original deadline", () => {
+    const { context, contacts } = pageContext(expectedHref);
+    const source = prepareTaskScript(
+      "Expired prompt",
+      expectedHref,
+      undefined,
+      1000,
+    );
+    context.Date = { now: () => 1000 };
+    expect(vm.runInContext(source, context)).toEqual({ ready: false });
+    expect(contacts.focused).toBe(0);
+    expect(contacts.typed).toEqual([]);
+    expect(contacts.replaced).toBe(0);
+    expect(contacts.events).toEqual([]);
+  });
+
   it("activateTaskScript returns { navigated: true } and never clicks send when the page has navigated", () => {
     const { context, contacts } = pageContext("https://chatgpt.com/c/other");
     const result = vm.runInContext(activateTaskScript(expectedHref), context);
@@ -8404,26 +8579,31 @@ describe("connector receipt completion before provider output", () => {
   it.each(["temporary-instant", "connector-instant"] as const)(
     "keeps a missing or rejected proof unknown without a second send (%s)",
     async (profile) => {
-      const { execute, candidate } = fixture();
-      const readConnectorReceipt = vi.fn(async () => false);
-      expect(
-        await candidate.runReadonlyTask(
+      vi.useFakeTimers();
+      try {
+        const { execute, candidate } = fixture();
+        const readConnectorReceipt = vi.fn(async () => false);
+        const running = candidate.runReadonlyTask(
           "connection fixture",
           [],
           { readConnectorReceipt },
           profile,
           { name: "NEW fixture" },
-        ),
-      ).toMatchObject({
-        state: "outcome_unknown",
-        code: "CHATGPT_TASK_TIMEOUT",
-      });
-      expect(readConnectorReceipt).toHaveBeenCalled();
-      expect(
-        execute.mock.calls.filter(([script]) =>
-          String(script).includes("send.click()"),
-        ),
-      ).toHaveLength(1);
+        );
+        await vi.advanceTimersByTimeAsync(100);
+        expect(await running).toMatchObject({
+          state: "outcome_unknown",
+          code: "CHATGPT_TASK_TIMEOUT",
+        });
+        expect(readConnectorReceipt).toHaveBeenCalled();
+        expect(
+          execute.mock.calls.filter(([script]) =>
+            String(script).includes("send.click()"),
+          ),
+        ).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
     },
   );
 
@@ -9249,3 +9429,117 @@ it.each([false, true])(
     }
   },
 );
+
+describe("task execution in a loading current frame", () => {
+  function loadingFrame(execute: ReturnType<typeof vi.fn>, timeout = 1000) {
+    const candidate = taskRoute(execute);
+    Reflect.get(candidate, "options").taskTimeoutMs = timeout;
+    const contents = Reflect.get(candidate, "routeWindow").webContents;
+    const frame = {
+      url: contents.getURL(),
+      isDestroyed: () => false,
+      executeJavaScript: contents.executeJavaScript,
+    };
+    contents.mainFrame = frame;
+    const queued = vi.fn(() => new Promise(() => {}));
+    contents.executeJavaScript = queued;
+    return { candidate, contents, frame, queued };
+  }
+  it("bounds a hung initial readiness read and discards its late answer", async () => {
+    vi.useFakeTimers();
+    try {
+      const execute = vi.fn();
+      const f = loadingFrame(execute, 20);
+      let answer!: (value: unknown) => void;
+      f.frame.executeJavaScript = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      );
+      const pending = f.candidate.runReadonlyTask("readiness deadline");
+      await vi.advanceTimersByTimeAsync(21);
+      expect(await pending).toMatchObject({ state: "failed_before_submit" });
+      expect(Reflect.get(f.candidate, "taskInFlight")).toBe(false);
+      answer({ composerVisible: true, signInVisible: false });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(Reflect.get(f.candidate, "latestReadiness")).toBeNull();
+      expect(execute).not.toHaveBeenCalled();
+      expect(f.queued).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("completes a known no-click refusal without using the full-load queue", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ navigated: true });
+    const f = loadingFrame(execute);
+    expect(
+      await f.candidate.runReadonlyTask("loading frame check"),
+    ).toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+    });
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(f.queued).not.toHaveBeenCalled();
+  });
+  it("refuses a replaced frame before activation", async () => {
+    const execute = vi.fn();
+    const f = loadingFrame(execute);
+    execute.mockImplementationOnce(async () => {
+      f.contents.mainFrame = { ...f.frame };
+      return prepared;
+    });
+    expect(
+      await f.candidate.runReadonlyTask("frame replacement check"),
+    ).toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+    });
+    expect(execute).toHaveBeenCalledOnce();
+    expect(f.queued).not.toHaveBeenCalled();
+  });
+  it.each(["before-send", "activation"] as const)(
+    "bounds a hung %s script without repeating it",
+    async (stage) => {
+      vi.useFakeTimers();
+      try {
+        const execute = vi.fn();
+        if (stage === "activation") execute.mockResolvedValueOnce(prepared);
+        execute.mockImplementationOnce(() => new Promise(() => {}));
+        const f = loadingFrame(execute, 20);
+        const pending = f.candidate.runReadonlyTask(
+          "bounded loading frame check",
+        );
+        await vi.advanceTimersByTimeAsync(21);
+        expect(await pending).toMatchObject({
+          state:
+            stage === "activation" ? "outcome_unknown" : "failed_before_submit",
+        });
+        expect(execute).toHaveBeenCalledTimes(stage === "activation" ? 2 : 1);
+        expect(f.queued).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+});
+
+it("permits only observation of an ordinary pending document, never failed or protected openers", () => {
+  const candidate = taskRoute(vi.fn());
+  Reflect.set(candidate, "load", "failed");
+  Reflect.set(candidate, "chatPhysicalDocumentGeneration", 2);
+  expect(candidate.hasPendingReadinessDocument()).toBe(true);
+  Reflect.set(candidate, "routeDocumentLoadFailed", true);
+  expect(candidate.hasPendingReadinessDocument()).toBe(false);
+  Reflect.set(candidate, "routeDocumentLoadFailed", false);
+  Reflect.get(candidate, "options").requireAppForManualMessages = true;
+  expect(candidate.hasPendingReadinessDocument()).toBe(false);
+  Reflect.get(candidate, "options").requireAppForManualMessages = false;
+  Reflect.set(candidate, "updateAdmission", {});
+  expect(candidate.hasPendingReadinessDocument()).toBe(false);
+});

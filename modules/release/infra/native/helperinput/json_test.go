@@ -90,6 +90,24 @@ func TestProducerShapedRequests(t *testing.T) {
 	}
 }
 
+func TestSidecarPresentationIsClosedAndLiveRelaunchOnly(t *testing.T) {
+	r := fixture(false)
+	r["relaunchPresentation"] = "sidecar-only"
+	got := parse(t, marshal(t, r), "")
+	if got.RelaunchPresentation == nil || *got.RelaunchPresentation != "sidecar-only" {
+		t.Fatal("presentation lost")
+	}
+	for _, value := range []any{nil, true, 1, []any{"sidecar-only"}, "", "primary", "--allow-primary-display"} {
+		r["relaunchPresentation"] = value
+		parse(t, marshal(t, r), "input")
+	}
+	r["relaunchPresentation"], r["relaunch"] = "sidecar-only", false
+	parse(t, marshal(t, r), "input")
+	r = fixture(true)
+	r["relaunchPresentation"] = "sidecar-only"
+	parse(t, marshal(t, r), "input")
+}
+
 func boolName(v bool) string {
 	if v {
 		return "true"

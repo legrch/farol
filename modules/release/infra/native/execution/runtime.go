@@ -71,6 +71,10 @@ var _ port.HelperRecoveryRuntime = (*runtime)(nil)
 var _ port.HelperInstallationRuntime = (*runtime)(nil)
 
 func copyRequest(r port.HelperRequest) port.HelperRequest {
+	if r.RelaunchPresentation != nil {
+		v := *r.RelaunchPresentation
+		r.RelaunchPresentation = &v
+	}
 	if r.InstallLocation != nil {
 		v := *r.InstallLocation
 		r.InstallLocation = &v

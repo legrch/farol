@@ -51,17 +51,18 @@ type wirePredecessor struct {
 }
 
 type wireHandoff struct {
-	Schema        string           `json:"schema"`
-	Phase         string           `json:"phase"`
-	OperationID   string           `json:"operationId"`
-	Action        string           `json:"action"`
-	Source        wireBuild        `json:"source"`
-	Target        wireBuild        `json:"target"`
-	PID           int64            `json:"pid"`
-	ProcessStart  string           `json:"processStart"`
-	Predecessor   *wirePredecessor `json:"predecessor,omitempty"`
-	LeaseIdentity *wireIdentity    `json:"leaseIdentity,omitempty"`
-	Error         *string          `json:"error,omitempty"`
+	Schema               string           `json:"schema"`
+	Phase                string           `json:"phase"`
+	OperationID          string           `json:"operationId"`
+	Action               string           `json:"action"`
+	Source               wireBuild        `json:"source"`
+	Target               wireBuild        `json:"target"`
+	PID                  int64            `json:"pid"`
+	ProcessStart         string           `json:"processStart"`
+	RelaunchPresentation *string          `json:"relaunchPresentation,omitempty"`
+	Predecessor          *wirePredecessor `json:"predecessor,omitempty"`
+	LeaseIdentity        *wireIdentity    `json:"leaseIdentity,omitempty"`
+	Error                *string          `json:"error,omitempty"`
 }
 
 func (JSONCodec) Handoff(frame port.HelperHandoffFrame) ([]byte, error) {
@@ -75,6 +76,11 @@ func (JSONCodec) Handoff(frame port.HelperHandoffFrame) ([]byte, error) {
 	values := []string{w.Schema, w.Phase, w.OperationID, w.Action, w.Source.Digest,
 		w.Source.Version, w.Source.BuildID, w.Target.Digest, w.Target.Version,
 		w.Target.BuildID, w.ProcessStart}
+	if c.RelaunchPresentation != nil {
+		v := *c.RelaunchPresentation
+		w.RelaunchPresentation = &v
+		values = append(values, v)
+	}
 	if c.Predecessor != nil {
 		p := c.Predecessor
 		w.Predecessor = &wirePredecessor{p.Kind, p.StartedAt, p.LastQuitSHA256,
@@ -142,12 +148,19 @@ func (JSONCodec) Continue(input []byte) (port.HelperContinueFrame, error) {
 	}
 	var out port.HelperContinueFrame
 	c := &out.Correlation
-	m, ok := object(input, []string{"schema", "operationId", "action", "source", "target", "pid", "processStart"}, []string{"predecessor", "leaseIdentity"})
+	m, ok := object(input, []string{"schema", "operationId", "action", "source", "target", "pid", "processStart"}, []string{"predecessor", "leaseIdentity", "relaunchPresentation"})
 	if !ok || !texts(m, map[string]*string{"schema": &out.Schema, "operationId": &c.OperationID, "action": &c.Action, "processStart": &c.ProcessStart}) ||
 		!build(m["source"], &c.Source) || !build(m["target"], &c.Target) {
 		return port.HelperContinueFrame{}, errInput
 	}
 	var err error
+	if raw, present := m["relaunchPresentation"]; present {
+		var v string
+		if !text(raw, &v) {
+			return port.HelperContinueFrame{}, errInput
+		}
+		c.RelaunchPresentation = &v
+	}
 	c.PID, err = strconv.ParseInt(string(bytes.TrimSpace(m["pid"])), 10, 64)
 	if err != nil {
 		return port.HelperContinueFrame{}, errInput

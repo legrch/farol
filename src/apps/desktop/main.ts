@@ -2,7 +2,7 @@ import "../../../apps/desktop/bridge/e2e-window-bootstrap.ts";
 import { guardDiagnosticPipes } from "./diagnostic-pipes";
 import { preventEmbeddedWindowDrag } from "./embedded-web-drag";
 import { separateAppVerificationScopeCurrent } from "../../pkg/product-settings/separate-app-verification";
-import { waitForConnectorCheckReadiness } from "../../../apps/desktop/bridge/connector-check-readiness";
+import { prepareConnectorCheckDocument } from "../../../apps/desktop/bridge/connector-check-readiness";
 import type { SeparateAppVerificationScope } from "../../pkg/product-settings/contract";
 import type { SeparateAppVerification } from "./connector-app-verification-attempt";
 import {
@@ -88,6 +88,8 @@ import {
 } from "../../../apps/desktop/bridge/read-conversation";
 import { readChatHistoryView } from "../../../apps/desktop/chat-history-view";
 import { runSelfTestCommand } from "../../../apps/desktop/self-test-ipc";
+import { recoverDeepTestAttempts } from "./deep-test-recovery";
+import { readFlatDeepTestRecords } from "./legacy-activation-obligations";
 import { readRetiredRepliesView } from "../../../apps/desktop/retired-replies-view";
 import { projectReadConversation } from "../../../apps/desktop/read-conversation-projection";
 import { ReadConversationPromptSchema } from "../../pkg/product-settings/chat-conversation";
@@ -116,7 +118,7 @@ declare const __FAROL_GO_SHELL__: {
   readonly support: unknown;
   readonly watchdogSourceBase64: string;
 } | null;
-import { createMenuBar } from "./menu-bar";
+import { createMenuBar, menuBarIconState } from "./menu-bar";
 import {
   desktopCoreArtifactRoot,
   desktopDevShellImageMatches,
@@ -458,6 +460,7 @@ import {
   type ChatGptTaskJournalRecord,
   type ChatGptTaskJournalResult,
 } from "./chatgpt-task-journal";
+import { ChatGptTaskJournalOperationIdSchema } from "./chatgpt-task-journal-record";
 import {
   PrivateChatGptConversationStore,
   type ChatGptConversationRecord,
@@ -1036,6 +1039,11 @@ async function initializeInstalledUpdater(): Promise<void> {
   if (buildEnvironment !== "preview") return;
   try {
     installedUpdater = await createInstalledUpdateRuntime({
+      ...(windowMode === "secondary-visible" &&
+      sidecarDisplayOnly &&
+      !allowPrimaryDisplay
+        ? { relaunchPresentation: "sidecar-only" as const }
+        : {}),
       helperLifetime: createDesktopHelperLifetime(),
       operations: operationsStore(),
       directory,
@@ -1425,6 +1433,16 @@ let pendingChatGptAttachmentTask: PendingChatGptAttachmentTask | null = null;
 let attachmentStagingReady = true;
 let chatGptTaskJournal: PrivateChatGptTaskJournal | null = null;
 let recoverableChatGptTask: ChatGptTaskJournalRecord | null = null;
+let recoverableDeepTests: readonly ChatGptTaskJournalRecord[] = [];
+let deepTestRecoveryReady = false;
+const deepTestRequests = new Map<
+  string,
+  { taskId: string; promise: Promise<ProductConfigurationResult> }
+>();
+const deepTestAcknowledgements = new Map<
+  string,
+  Promise<ProductConfigurationResult>
+>();
 let recoverableChatGptObservationPersisted = false;
 let chatGptConversationStore: PrivateChatGptConversationStore | null = null;
 let chatGptConversation: ChatGptConversationRecord | null = null;
@@ -5761,7 +5779,7 @@ async function checkSecureMcpAttachment(
   }
 }
 
-// A manual check or one admitted restart check owns a separate visible page.
+// A manual check or one admitted restart check owns one retained browser document.
 // Only its exact Computer MCP receipt can complete the attachment.
 async function verifySecureMcpApp(
   separate?: SeparateAppVerificationScope,
@@ -5978,9 +5996,7 @@ async function verifySecureMcpApp(
     // Use the retained browser as a browser. A new temporary document keeps
     // Chromium history, without a second window or a parallel conversation.
     verificationRoute = chatGptRoute;
-    if ((await verificationRoute.openTemporaryChat()).status !== "opened")
-      return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
-    const ready = await waitForConnectorCheckReadiness(
+    const preparedDocument = await prepareConnectorCheckDocument(
       verificationRoute,
       () => {
         const latest = configuration!.snapshot();
@@ -5994,8 +6010,12 @@ async function verifySecureMcpApp(
         );
       },
     );
-    if (!ready)
+    if (!preparedDocument.ready) {
+      console.warn(
+        `FAROL_CONNECTOR_CHECK_PREFLIGHT:${JSON.stringify({ schema: 1, stage: preparedDocument.stage })}`,
+      );
       return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
+    }
     if (automatic) {
       const latest = configuration.snapshot();
       if (
@@ -6909,6 +6929,40 @@ async function configureProductObserved(
   value: unknown,
 ): Promise<ProductConfigurationResult> {
   const parsed = ProductConfigurationCommandSchema.safeParse(value);
+  if (parsed.success && parsed.data.kind === "chatgpt.ack-deep-test") {
+    const id = parsed.data.operationId;
+    const existing = deepTestAcknowledgements.get(id);
+    if (existing) return existing;
+    const attempt = Promise.resolve().then(() =>
+      configureNewProductRequest(parsed.data),
+    );
+    deepTestAcknowledgements.set(id, attempt);
+    void attempt.then(
+      (result) => {
+        if (
+          !result.ok &&
+          result.error !== "CHATGPT_CONVERSATION_UNCONFIRMED" &&
+          deepTestAcknowledgements.get(id) === attempt
+        )
+          deepTestAcknowledgements.delete(id);
+      },
+      () => {},
+    );
+    return attempt;
+  }
+  if (parsed.success && parsed.data.kind === "chatgpt.run-deep-test") {
+    const id = parsed.data.operationId;
+    const existing = deepTestRequests.get(id);
+    if (existing)
+      return existing.taskId === parsed.data.taskId
+        ? existing.promise
+        : configurationFailure("CHATGPT_CONVERSATION_REFUSED");
+    const attempt = Promise.resolve().then(() =>
+      configureNewProductRequest(parsed.data),
+    );
+    deepTestRequests.set(id, { taskId: parsed.data.taskId, promise: attempt });
+    return attempt;
+  }
   if (
     parsed.success &&
     [
@@ -7225,10 +7279,273 @@ function deliverConfigurationReply(
   return new Promise<ProductConfigurationResult>(() => {});
 }
 
+async function runManualDeepTest(
+  operationId: string,
+  expectedTaskId: string,
+): Promise<ProductConfigurationResult> {
+  if (!ChatGptTaskJournalOperationIdSchema.safeParse(operationId).success)
+    return configurationFailure("SETTINGS_INPUT_INVALID");
+  const owner = configuration;
+  const core = desktopGoCore;
+  const connector = secureMcpConnectorRuntime;
+  const snapshot = owner?.snapshot();
+  const originalRoute =
+    expectedTaskId === "" ? chatGptRoute : liveTaskRoutes.get(expectedTaskId);
+  const targetCurrent = originalRoute?.captureManualTaskTarget();
+  if (selectedTaskId !== expectedTaskId || !originalRoute || !targetCurrent)
+    return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
+  const deadline = performance.now() + 1500;
+  while (
+    shellOverlay === "task-menu" &&
+    selectedTaskId === expectedTaskId &&
+    section === "browser" &&
+    !quitInProgress &&
+    !installedUpdateAdmission &&
+    performance.now() < deadline
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  const routeTaskId = selectedTaskId;
+  const route =
+    routeTaskId === "" ? chatGptRoute : liveTaskRoutes.get(routeTaskId);
+  const binding = core?.currentComputerConnectorBinding();
+  if (
+    routeTaskId !== expectedTaskId ||
+    !owner ||
+    !core ||
+    !core.backendAvailable ||
+    !connector ||
+    !route ||
+    route !== originalRoute ||
+    !targetCurrent() ||
+    !binding ||
+    snapshot?.status !== "ready" ||
+    !deepTestRecoveryReady ||
+    quitInProgress ||
+    installedUpdateAdmission ||
+    chatGptTaskAdmission ||
+    connectorTaskAdmission ||
+    pendingChatGptReadonlyTask !== null ||
+    pendingChatGptAttachmentTask !== null ||
+    recoverableChatGptTask !== null ||
+    connectorStartInFlight !== null ||
+    !chatGptTaskAdmissionReady() ||
+    !connector.isRunning() ||
+    connector.getTunnelObservation() !== null ||
+    connector.hasUnresolvedEffect() ||
+    !currentSurfaceLayout()?.pageVisible ||
+    section !== "browser" ||
+    shellOverlay !== "none" ||
+    (routeTaskId === "" && !browserHomeSurfaceOpen)
+  )
+    return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+  const conversationFailure = chatGptConversationAdmissionFailure();
+  if (conversationFailure) return conversationFailure;
+  const settings = snapshot.settings;
+  if (
+    settings.computer.pendingEdit ||
+    settings.setup.computer.outcomeUnknown ||
+    connectorRuntimeUncertain(settings) ||
+    !computerConnectorAdmission(summaryFenceRecovery).admissible
+  )
+    return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+  const selected = settings.connectors.secureMcp;
+  const attachment = currentConnectorAttachment(
+    settings,
+    buildIdentity.buildId,
+  );
+  const appName = selectedConnectorApp(selected);
+  if (
+    !attachment ||
+    !appName ||
+    !selected.runtime ||
+    !selected.tunnelId ||
+    selected.appVerificationPending === true ||
+    binding.buildId !== buildIdentity.buildId ||
+    binding.connectorGeneration !== String(selected.generation)
+  )
+    return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
+  const expected: ConnectorAppVerificationBinding = {
+    tunnelId: selected.tunnelId,
+    connectorGeneration: selected.generation,
+    computerGeneration: settings.computer.generation,
+    runtimeGeneration: selected.runtime.runtimeGeneration,
+    challengeSha256: attachment.challengeSha256,
+    buildId: buildIdentity.buildId,
+    workspaceId: attachment.workspaceId,
+    appName,
+  };
+  const isCurrent = () => {
+    const latest = owner.snapshot();
+    return (
+      configuration === owner &&
+      desktopGoCore === core &&
+      core.backendAvailable &&
+      secureMcpConnectorRuntime === connector &&
+      connector.isRunning() &&
+      connector.getTunnelObservation() === null &&
+      targetCurrent() &&
+      !connector.hasUnresolvedEffect() &&
+      core.currentComputerConnectorBinding() === binding &&
+      !quitInProgress &&
+      !installedUpdateAdmission &&
+      selectedTaskId === routeTaskId &&
+      (routeTaskId === ""
+        ? chatGptRoute === route && browserHomeSurfaceOpen
+        : liveTaskRoutes.get(routeTaskId) === route) &&
+      section === "browser" &&
+      shellOverlay === "none" &&
+      currentSurfaceLayout()?.pageVisible === true &&
+      latest.status === "ready" &&
+      !latest.settings.computer.pendingEdit &&
+      !latest.settings.setup.computer.outcomeUnknown &&
+      !connectorRuntimeUncertain(latest.settings) &&
+      computerConnectorAdmission(summaryFenceRecovery).admissible &&
+      !latest.settings.setup.chatgpt.outcomeUnknown &&
+      latest.settings.connectors.secureMcp.appVerificationPending !== true &&
+      connectorAppBindingCurrent(latest.settings, expected) &&
+      currentConnectorAttachment(latest.settings, buildIdentity.buildId) !==
+        null
+    );
+  };
+  chatGptTaskAdmission = true;
+  connectorTaskAdmission = true;
+  let prepared = false;
+  let intent = false;
+  try {
+    const journal = new PrivateChatGptTaskJournal({
+      root: path.join(app.getPath("userData"), "farol-state"),
+      deepTestOperationId: operationId,
+    });
+    await journalUnderPromotionLease(liveTaskRegistry, async () => {
+      if (!isCurrent()) throw new Error("DEEP_TEST_CHANGED");
+      const scan = await readFlatDeepTestRecords(
+        path.join(app.getPath("userData"), "farol-state"),
+      );
+      if (
+        scan.status === "unreadable" ||
+        (scan.status === "read" && scan.value.length >= 256) ||
+        !isCurrent()
+      )
+        throw new Error("DEEP_TEST_UNAVAILABLE");
+      await journal.prepare({ operationId, kind: "readonly" });
+      prepared = true;
+    });
+    const prompt = `Run a manual Deep test using the selected ${appName} app. List approved workspaces and choose the first available yourself; if none is available, stop. Exercise connection status and bounded file listing and reading without opening secrets or unrelated personal data. Where the existing grant permits, test safe write and edit only inside a new uniquely named folder farol-deep-test-${operationId}; if it already exists, do not modify it. Where granted, run only a harmless bounded shell check in that new folder. Never modify or delete pre-existing items, bypass permissions or confirmations, or retry a refused or uncertain effect. Clean up only the fresh test artifacts created by this run when their identity and contents are confirmed and existing tools and permissions allow it; otherwise leave them and report cleanup NOT RUN. Never clean up after an unknown effect. Stop on any unknown outcome. Report each capability as PASS, FAIL, or NOT RUN with observed evidence and limitations.`;
+    const result = await route.runReadonlyTask(
+      prompt,
+      [],
+      {
+        manualDeepTest: true,
+        beforeSend: isCurrent,
+        onDispatchIntent: async () => {
+          if (!isCurrent()) throw new Error("DEEP_TEST_CHANGED");
+          if (!intent) {
+            await journalUnderPromotionLease(liveTaskRegistry, () =>
+              journal.markDispatchIntent(operationId),
+            );
+            intent = true;
+          }
+          if (!isCurrent()) throw new Error("DEEP_TEST_CHANGED");
+        },
+      },
+      "ordinary",
+      { name: appName },
+    );
+    const journalResult = {
+      state: result.state,
+      code: result.code,
+      deltaCount: result.deltaCount,
+      observedCharacters: result.observedCharacters,
+    };
+    if (intent) await journal.retainResult(operationId, journalResult);
+    else await journal.retainPreDispatchResult(operationId, journalResult);
+    const retained = await journal.load();
+    if (!retained) throw new Error("DEEP_TEST_RESULT_MISSING");
+    recoverableDeepTests = [...recoverableDeepTests, retained];
+    return ProductConfigurationResultSchema.parse({
+      ok: true,
+      snapshot: owner.snapshot(),
+      evidence: {
+        kind: "chatgpt.deep-test-result",
+        operationId,
+        state: result.state,
+        code: result.code,
+      },
+    });
+  } catch {
+    if (prepared) deepTestRecoveryReady = false;
+    return configurationFailure(
+      prepared
+        ? "CHATGPT_CONVERSATION_UNCONFIRMED"
+        : "CHATGPT_TASK_JOURNAL_FAILED",
+    );
+  } finally {
+    chatGptTaskAdmission = false;
+    connectorTaskAdmission = false;
+  }
+}
+
+function deepTestStatus(): ProductConfigurationResult {
+  if (!configuration || !deepTestRecoveryReady)
+    return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
+  return ProductConfigurationResultSchema.parse({
+    ok: true,
+    snapshot: configuration.snapshot(),
+    evidence: {
+      kind: "chatgpt.deep-test-status",
+      attempts: recoverableDeepTests
+        .filter(
+          (record) =>
+            record.phase === "result_retained" && record.result !== null,
+        )
+        .map((record) => ({
+          operationId: record.operationId,
+          state: record.result!.state,
+          code: record.result!.code,
+        })),
+    },
+  });
+}
+
 async function configureAdmittedProduct(
   command: ProductConfigurationCommand,
 ): Promise<ProductConfigurationResult> {
   if (!configuration) return configurationFailure("SETTINGS_UNAVAILABLE");
+  if (command.kind === "chatgpt.run-deep-test")
+    return runManualDeepTest(command.operationId, command.taskId);
+  if (command.kind === "chatgpt.deep-test-status") return deepTestStatus();
+  if (command.kind === "chatgpt.ack-deep-test") {
+    if (
+      chatGptTaskAdmission ||
+      connectorTaskAdmission ||
+      !deepTestRecoveryReady
+    )
+      return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+    const record = recoverableDeepTests.find(
+      (item) =>
+        item.operationId === command.operationId &&
+        item.phase === "result_retained" &&
+        item.result !== null,
+    );
+    if (!record) return configurationFailure("CHATGPT_TASK_RESULT_NOT_FOUND");
+    const journal = new PrivateChatGptTaskJournal({
+      root: path.join(app.getPath("userData"), "farol-state"),
+      deepTestOperationId: record.operationId,
+    });
+    try {
+      await journalUnderPromotionLease(liveTaskRegistry, () =>
+        journal.acknowledgeDelivery(record.operationId),
+      );
+      recoverableDeepTests = recoverableDeepTests.filter(
+        (item) => item !== record,
+      );
+      return deepTestStatus();
+    } catch {
+      deepTestRecoveryReady = false;
+      return configurationFailure("CHATGPT_CONVERSATION_UNCONFIRMED");
+    }
+  }
   switch (command.kind) {
     case "chatgpt.inspect-chat-account": {
       const route = chatGptRoute;
@@ -12190,6 +12507,7 @@ function selectedVisibleTestPlacement(
     allowPrimaryDisplay,
     builtInDisplayOnly,
     sidecarDisplayOnly,
+    sidecarDisplayOnly && !explicitPreviewWindowSize,
   );
 }
 
@@ -12201,7 +12519,11 @@ function chatGptWindowPresentation(): ChatGptWindowPresentation | undefined {
     // Fixed test viewports stay exact. An explicit interactive viewport and
     // ordinary Dev may fit auth windows within their selected display.
     size:
-      buildEnvironment === "dev" || explicitPreviewWindowSize ? "fit" : "exact",
+      buildEnvironment === "dev" ||
+      explicitPreviewWindowSize ||
+      sidecarDisplayOnly
+        ? "fit"
+        : "exact",
     place: (requested) =>
       selectedVisibleTestPlacement(
         explicitPreviewWindowSize
@@ -12241,8 +12563,8 @@ function reconcileVisibleTestDisplay(): void {
       window.setBounds(selectedVisibleTestPlacement(initialWindowSize).bounds);
       window.showInactive();
     } catch {
-      // A missing secondary falls back to primary. Invalid/unavailable display
-      // geometry still waits for the next topology event on this owned window.
+      // An unavailable permitted display keeps this window hidden until the
+      // next topology event. Sidecar has no implicit primary fallback.
     }
   }
   for (const route of managedChatGptRoutes) {
@@ -12589,7 +12911,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
                           ? "Farol · Closing recovery"
                           : "Farol · Startup recovery required",
                         current: null,
-                        attention: !quitInProgress,
+                        icon: "attention",
                       })),
                   }
                 : {}),
@@ -13002,6 +13324,15 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   }
   let chatGptInitialUrl = chatGptUrl;
   try {
+    recoverableDeepTests = await recoverDeepTestAttempts(
+      path.join(app.getPath("userData"), "farol-state"),
+      (work) => journalUnderPromotionLease(liveTaskRegistry, work),
+    );
+    deepTestRecoveryReady = true;
+  } catch {
+    deepTestRecoveryReady = false;
+  }
+  try {
     chatGptConversationStore = new PrivateChatGptConversationStore({
       root: chatGptConversationStoreRoot(),
     });
@@ -13132,15 +13463,32 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
             app.quit();
           },
         },
-        () => ({
-          label: "Farol · " + currentConnectionStatus().label,
-          attention: currentConnectionStatus().attention,
-          marker: currentConnectionStatus().marker,
-          current:
-            productTasksState().tasks.find(
-              (task) => task.lifecycle === "running",
-            )?.label ?? null,
-        }),
+        () => {
+          const status = currentConnectionStatus();
+          const capture = captureConnectionStatus();
+          const snapshot = configuration?.snapshot();
+          const attached =
+            status.state === "recent_transport" &&
+            capture?.kind === "running" &&
+            connectionStatusCurrent(capture) &&
+            snapshot?.status === "ready" &&
+            !workspaceMutationAdmission &&
+            !connectorRuntimeUncertain(snapshot.settings) &&
+            snapshot.settings.computer.pendingEdit === null &&
+            !snapshot.settings.setup.computer.outcomeUnknown &&
+            currentConnectorAttachment(
+              snapshot.settings,
+              buildIdentity.buildId,
+            ) !== null;
+          return {
+            label: "Farol · " + status.label,
+            icon: menuBarIconState(status.state, attached),
+            current:
+              productTasksState().tasks.find(
+                (task) => task.lifecycle === "running",
+              )?.label ?? null,
+          };
+        },
       ),
     );
     app.once("will-quit", disposeMenuBar);

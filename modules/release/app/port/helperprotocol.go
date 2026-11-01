@@ -4,12 +4,13 @@ package port
 // admission or readiness witness. The application constructs it from the
 // validated HelperRequest and compares every value before accepting continuation.
 type HelperCorrelation struct {
-	OperationID, Action string
-	Source, Target      HelperBuild
-	PID                 int64
-	ProcessStart        string
-	Predecessor         *HelperPredecessor
-	LeaseIdentity       *HelperIdentity
+	OperationID, Action  string
+	Source, Target       HelperBuild
+	PID                  int64
+	ProcessStart         string
+	RelaunchPresentation *string
+	Predecessor          *HelperPredecessor
+	LeaseIdentity        *HelperIdentity
 }
 
 type HelperHandoffFrame struct {

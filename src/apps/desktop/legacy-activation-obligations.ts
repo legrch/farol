@@ -12,7 +12,10 @@ import { ProductSettingsSchema } from "../../pkg/product-settings/contract.ts";
 import {
   CHATGPT_TASK_JOURNAL_FILE_NAME,
   ChatGptTaskJournalRecordSchema,
+  ChatGptTaskJournalOperationIdSchema,
+  DEEP_TEST_JOURNAL_PREFIX,
   MAX_CHATGPT_TASK_JOURNAL_BYTES,
+  type ChatGptTaskJournalRecord,
 } from "./chatgpt-task-journal-record.ts";
 import {
   LIVE_TASK_FILE_NAME,
@@ -232,11 +235,131 @@ async function readState<T>(
 const STATE_FILES = [
   "live-tasks",
   "chatgpt-task-journal",
+  "deep-test-records",
   "product-settings",
   "legacy-config",
   "last-quit",
   "running",
 ] as const;
+
+// Flat attempt files preserve the legacy journal and each attempt's bytes.
+// This inherits the private farol-state owner boundary used by the existing
+// journal: child opens are path-based, not openat. The held root descriptor,
+// identity checks and two scans detect ordinary displacement, but do not claim
+// confinement against a same-UID process that can swap and restore the root
+// entirely between checks. Such a process can already rewrite private state.
+const MAX_DEEP_TEST_ATTEMPTS = 256;
+
+export async function readFlatDeepTestRecords(
+  state: string,
+): Promise<ReadState<readonly ChatGptTaskJournalRecord[]>> {
+  let handle: FileHandle | undefined;
+  let rootSeen = false;
+  try {
+    const before = await fs.lstat(state, { bigint: true });
+    rootSeen = true;
+    if (
+      !before.isDirectory() ||
+      (process.geteuid?.() !== undefined &&
+        before.uid !== BigInt(process.geteuid!())) ||
+      (before.mode & 0o077n) !== 0n
+    )
+      return { status: "unreadable", digest: null, reason: "UNSAFE" };
+    const key = (info: import("node:fs").BigIntStats) =>
+      [info.dev, info.ino, info.mode, info.uid, info.gid, info.ctimeNs].join(
+        ":",
+      );
+    handle = await fs.open(
+      state,
+      fsConstants.O_RDONLY |
+        (fsConstants.O_DIRECTORY ?? 0) |
+        NO_FOLLOW |
+        CLOSE_ON_EXEC,
+    );
+    const rootIdentity = key(before);
+    if (key(await handle.stat({ bigint: true })) !== rootIdentity)
+      throw new Error("CHANGED");
+    const names = (await fs.readdir(state))
+      .filter((name) => name.startsWith(DEEP_TEST_JOURNAL_PREFIX))
+      .sort();
+    if (
+      names.some(
+        (name) =>
+          !name.endsWith(".json") ||
+          !ChatGptTaskJournalOperationIdSchema.safeParse(
+            name.slice(DEEP_TEST_JOURNAL_PREFIX.length, -5),
+          ).success,
+      )
+    )
+      return { status: "unreadable", digest: null, reason: "MALFORMED" };
+    if (names.length > MAX_DEEP_TEST_ATTEMPTS)
+      return { status: "unreadable", digest: null, reason: "OVERSIZED" };
+    const records: ChatGptTaskJournalRecord[] = [];
+    const digest = createHash("sha256")
+      .update(
+        [before.dev, before.ino, before.mode, before.uid, before.gid].join(":"),
+      )
+      .update("\0");
+    for (const name of names) {
+      const id = name.slice(DEEP_TEST_JOURNAL_PREFIX.length, -5);
+      const file = path.join(state, name);
+      const fileBefore = await fs.lstat(file, { bigint: true });
+      const fileIdentity = [
+        fileBefore.dev,
+        fileBefore.ino,
+        fileBefore.mode,
+        fileBefore.uid,
+        fileBefore.gid,
+        fileBefore.ctimeNs,
+      ].join(":");
+      const entry = await readState(
+        file,
+        taskJournal,
+        MAX_CHATGPT_TASK_JOURNAL_BYTES,
+      );
+      if (entry.status !== "read")
+        return {
+          status: "unreadable",
+          digest: null,
+          reason: entry.status === "absent" ? "INCOMPLETE" : entry.reason,
+        };
+      if (entry.value.operationId !== id || entry.value.kind !== "readonly")
+        return { status: "unreadable", digest: null, reason: "MALFORMED" };
+      const fileAfter = await fs.lstat(file, { bigint: true });
+      if (
+        [
+          fileAfter.dev,
+          fileAfter.ino,
+          fileAfter.mode,
+          fileAfter.uid,
+          fileAfter.gid,
+          fileAfter.ctimeNs,
+        ].join(":") !== fileIdentity
+      )
+        throw new Error("CHANGED");
+      digest
+        .update(name)
+        .update("\0")
+        .update(fileIdentity)
+        .update("\0")
+        .update(entry.digest)
+        .update("\0");
+      records.push(entry.value);
+    }
+    if (
+      key(await handle.stat({ bigint: true })) !== rootIdentity ||
+      key(await fs.lstat(state, { bigint: true })) !== rootIdentity
+    )
+      throw new Error("CHANGED");
+    return { status: "read", digest: digest.digest("hex"), value: records };
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" && !rootSeen
+      ? { status: "absent", digest: null }
+      : { status: "unreadable", digest: null, reason: "UNSAFE" };
+  } finally {
+    await handle?.close();
+  }
+}
 
 async function readLegacyConfig(state: string): Promise<ReadState<never>> {
   // Presence only: never open a legacy FIFO or decode a legacy config.
@@ -267,6 +390,7 @@ async function readStateFiles(state: string) {
       taskJournal,
       MAX_CHATGPT_TASK_JOURNAL_BYTES,
     ),
+    "deep-test-records": await readFlatDeepTestRecords(state),
     "product-settings": await readState(
       path.join(state, "config.json"),
       productSettings,
@@ -312,7 +436,9 @@ export async function activationObligations(
   await options.beforeConfirmation?.();
   const confirmed = await readStateFiles(state);
   const changed = STATE_FILES.filter(
-    (name) => first[name].digest !== confirmed[name].digest,
+    (name) =>
+      first[name].status !== confirmed[name].status ||
+      first[name].digest !== confirmed[name].digest,
   );
 
   const tasks = confirmed["live-tasks"];
@@ -350,6 +476,16 @@ export async function activationObligations(
     } else if (phase === "prepared") {
       obligations.push("CHATGPT_DISPATCH_PREPARED");
     }
+  }
+
+  const flatDeepTests = confirmed["deep-test-records"];
+  if (flatDeepTests.status === "unreadable")
+    unreadable.push(`deep-test-records:${flatDeepTests.reason}`);
+  else if (flatDeepTests.status === "read") {
+    const outstanding = flatDeepTests.value.filter(
+      (entry) => entry.phase !== "delivery_acknowledged",
+    ).length;
+    if (outstanding > 0) obligations.push(`DEEP_TEST_PENDING:${outstanding}`);
   }
 
   if (confirmed["legacy-config"].status !== "absent")

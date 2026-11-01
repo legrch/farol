@@ -5,6 +5,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
   CHATGPT_TASK_JOURNAL_FILE_NAME,
+  deepTestJournalFileName,
   ChatGptTaskJournalOperationIdSchema,
   ChatGptTaskJournalRecordSchema,
   ChatGptTaskJournalResultSchema,
@@ -36,7 +37,7 @@ type ResultInput = Readonly<{
   stagingCleanup?: "removed" | "pending_startup_cleanup" | null;
 }>;
 
-type JournalOptions = Readonly<{ root: string }>;
+type JournalOptions = Readonly<{ root: string; deepTestOperationId?: string }>;
 type JournalDependencies = Readonly<{
   now?: () => number;
   beforeCommit?: () => Promise<void>;
@@ -48,6 +49,7 @@ function journalError(code: string): never {
 
 export class PrivateChatGptTaskJournal {
   private readonly now: () => number;
+  private readonly fileName: string;
 
   constructor(
     private readonly options: JournalOptions,
@@ -57,6 +59,10 @@ export class PrivateChatGptTaskJournal {
       throw new Error("CHATGPT_TASK_JOURNAL_ROOT_NOT_ABSOLUTE");
     }
     this.now = dependencies.now ?? Date.now;
+    this.fileName =
+      options.deepTestOperationId === undefined
+        ? CHATGPT_TASK_JOURNAL_FILE_NAME
+        : deepTestJournalFileName(options.deepTestOperationId);
   }
 
   async load(): Promise<ChatGptTaskJournalRecord | null> {
@@ -64,7 +70,7 @@ export class PrivateChatGptTaskJournal {
     let handle;
     try {
       handle = await fs.open(
-        path.join(this.options.root, CHATGPT_TASK_JOURNAL_FILE_NAME),
+        path.join(this.options.root, this.fileName),
         fsConstants.O_RDONLY | NO_FOLLOW | CLOSE_ON_EXEC,
       );
     } catch (error) {
@@ -83,6 +89,12 @@ export class PrivateChatGptTaskJournal {
         JSON.parse(await handle.readFile("utf8")) as unknown,
       );
       if (!parsed.success) journalError("CHATGPT_TASK_JOURNAL_CORRUPT");
+      if (
+        this.options.deepTestOperationId !== undefined &&
+        (parsed.data.operationId !== this.options.deepTestOperationId ||
+          parsed.data.kind !== "readonly")
+      )
+        journalError("CHATGPT_TASK_JOURNAL_CORRUPT");
       return parsed.data;
     } catch (error) {
       if (error instanceof SyntaxError) {
@@ -101,7 +113,15 @@ export class PrivateChatGptTaskJournal {
     }>,
   ): Promise<void> {
     const operationId = operationIdSchema.parse(input.operationId);
+    if (
+      this.options.deepTestOperationId !== undefined &&
+      (operationId !== this.options.deepTestOperationId ||
+        input.kind !== "readonly")
+    )
+      journalError("CHATGPT_TASK_JOURNAL_CONFLICT");
     const current = await this.load();
+    if (this.options.deepTestOperationId !== undefined && current !== null)
+      journalError("CHATGPT_TASK_JOURNAL_ACTIVE");
     if (current && current.phase !== "delivery_acknowledged") {
       if (
         current.phase === "prepared" &&
@@ -152,6 +172,31 @@ export class PrivateChatGptTaskJournal {
     if (current.phase !== "dispatch_intent") {
       journalError("CHATGPT_TASK_JOURNAL_TRANSITION");
     }
+    await this.save({
+      ...current,
+      phase: "result_retained",
+      updatedAt: this.timestamp(),
+      result,
+    });
+  }
+
+  async retainPreDispatchResult(
+    operationId: string,
+    input: ResultInput,
+  ): Promise<void> {
+    const current = await this.requireOperation(operationId);
+    if (
+      current.phase !== "prepared" ||
+      (input.state !== "failed_before_submit" &&
+        input.state !== "not_authenticated")
+    )
+      journalError("CHATGPT_TASK_JOURNAL_TRANSITION");
+    const result = resultSchema.parse({
+      ...input,
+      attachmentCount: 0,
+      totalBytes: 0,
+      stagingCleanup: null,
+    });
     await this.save({
       ...current,
       phase: "result_retained",
@@ -224,11 +269,11 @@ export class PrivateChatGptTaskJournal {
     const validated = recordSchema.parse(record);
     await this.ensureRoot();
     const serialized = `${JSON.stringify(validated, null, 2)}\n`;
-    const target = path.join(this.options.root, CHATGPT_TASK_JOURNAL_FILE_NAME);
+    const target = path.join(this.options.root, this.fileName);
     await this.assertReplaceableTarget(target);
     const temporary = path.join(
       this.options.root,
-      `.${CHATGPT_TASK_JOURNAL_FILE_NAME}.${randomUUID()}.tmp`,
+      `.${this.fileName}.${randomUUID()}.tmp`,
     );
     let handle;
     try {
@@ -266,7 +311,11 @@ export class PrivateChatGptTaskJournal {
     ) {
       journalError("CHATGPT_TASK_JOURNAL_UNSAFE");
     }
-    if ((info.mode & 0o077) !== 0) await fs.chmod(this.options.root, 0o700);
+    if ((info.mode & 0o077) !== 0) {
+      if (this.options.deepTestOperationId !== undefined)
+        journalError("CHATGPT_TASK_JOURNAL_UNSAFE");
+      await fs.chmod(this.options.root, 0o700);
+    }
   }
 
   private assertPrivateFile(info: Stats): void {

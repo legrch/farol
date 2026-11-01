@@ -17,7 +17,7 @@ import { computerSetup } from "./computer-setup";
 import { connectionPresentation } from "../../../apps/desktop/renderer/connection-presentation";
 import { TaskEditor } from "./task";
 import { Home } from "./home";
-import { SelfTestPanel } from "./self-test-panel";
+import { DeepTestPrompt } from "./deep-test-prompt";
 import { Setup } from "./setup";
 import { ChatDirect } from "./chat-direct";
 import { ChatReadonly } from "./chat-readonly";
@@ -956,9 +956,13 @@ export function Shell() {
   const { snapshot, facade } = useRenderer();
   const state = snapshot;
   const destination = state.destination;
+  const deepTestIntent = Object.values(state.intents)
+    .filter((intent) => intent.id.startsWith("deep-test:run:"))
+    .at(-1);
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>("all");
   const stage = useRef<HTMLElement>(null);
   const deepTestMenuItem = useRef<HTMLButtonElement>(null);
+  const deepTestBusy = useRef(false);
   const activityHeading = useRef<HTMLHeadingElement>(null);
   const preferenceLoaded = useRef(false);
   const scrollPositions = useRef(
@@ -1199,6 +1203,17 @@ export function Shell() {
             <Icon name="settings" />
           </button>
         )}
+        {destination.area === "chatgpt" && deepTestIntent && (
+          <div className="notice" role="status">
+            {deepTestIntent.state === "pending"
+              ? "Deep test is starting or running in ChatGPT."
+              : deepTestIntent.state === "unknown"
+                ? "Deep test outcome is unconfirmed. Do not repeat that request."
+                : deepTestIntent.state === "refused"
+                  ? `Deep test was not submitted${deepTestIntent.code ? ` · ${deepTestIntent.code}` : ""}.`
+                  : "Deep test response is available in ChatGPT."}
+          </div>
+        )}
       </header>
       <nav
         id="main-sidebar"
@@ -1379,26 +1394,40 @@ export function Shell() {
         >
           <button
             ref={deepTestMenuItem}
-            onClick={() => facade.overlay("deep-test")}
+            disabled={
+              state.status !== "current" || Boolean(deepTestIntent?.inFlight)
+            }
+            onClick={() => {
+              if (deepTestBusy.current) return;
+              deepTestBusy.current = true;
+              const operationId = crypto.randomUUID();
+              const taskId = state.destination.taskId;
+              facade.overlay("none");
+              void facade
+                .configure(
+                  { kind: "chatgpt.run-deep-test", operationId, taskId },
+                  `deep-test:run:${operationId}`,
+                )
+                .catch(() => facade.markDeepTestUnconfirmed(operationId))
+                .finally(() => {
+                  deepTestBusy.current = false;
+                });
+            }}
           >
             Deep test
+          </button>
+          <button onClick={() => facade.overlay("deep-test")}>
+            Previous test results
           </button>
         </Overlay>
       )}
       {state.overlay === "deep-test" && (
         <Overlay
-          title="Deep test"
+          title="Previous test results"
           className="deep-test-sheet"
           onClose={() => facade.overlay("none")}
         >
-          <SelfTestPanel
-            facade={facade}
-            workspaces={
-              state.configuration?.status === "ready"
-                ? state.configuration.settings.computer.workspaces
-                : []
-            }
-          />
+          <DeepTestPrompt snapshot={state} facade={facade} />
         </Overlay>
       )}
       {state.overlay === "chat-conversations" && (

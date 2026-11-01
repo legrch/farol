@@ -278,10 +278,13 @@ darwin("K1 real TS Client -> Go transport -> Computer native read", () => {
     await expect(
       spawnCore(join(directory, "missing"), "test", "development"),
     ).rejects.toMatchObject({ state: "unavailable" });
-    const client = await spawnCore(production, "test", "development");
+    // The native availability fixture has a scheduling budget under coverage.
+    const client = await spawnCore(production, "test", "development", 10_000);
     try {
       expect(
-        await client.request("computer.workspace.read", body(request)),
+        await client.request("computer.workspace.read", body(request), {
+          timeoutMs: 10_000,
+        }),
       ).toMatchObject({
         status: "unavailable",
         code: "capability_unavailable",
@@ -289,7 +292,8 @@ darwin("K1 real TS Client -> Go transport -> Computer native read", () => {
     } finally {
       await client.close();
     }
-  });
+    expect(client.cleanupState).toBe("confirmed");
+  }, 30_000);
 
   it("refuses stale backend generation before native read", async () => {
     const root = mkdtempSync(join(directory, "stale-"));

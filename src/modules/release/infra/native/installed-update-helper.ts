@@ -56,6 +56,8 @@ interface InstalledUpdateFields {
   readonly processStart: string;
   readonly waitSeconds: number;
   readonly relaunch: boolean;
+  /** Closed presentation selection from the trusted desktop, never renderer data. */
+  readonly relaunchPresentation?: "sidecar-only";
 }
 
 export type InstalledUpdateRequest = InstalledUpdateFields &
@@ -103,6 +105,10 @@ function assertInput(input: InstalledUpdateRequest): void {
     sha.test(value.buildId) &&
     /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/u.test(value.version);
   if (
+    ("relaunchPresentation" in input &&
+      (input.relaunchPresentation !== "sidecar-only" ||
+        !input.relaunch ||
+        "predecessor" in input)) ||
     ("installLocation" in input &&
       !["shared", "legacy"].includes(input.installLocation as string)) ||
     !["apply", "recover", "rollback"].includes(input.action) ||
@@ -270,6 +276,9 @@ function correlation(
     target: input.target,
     pid: input.pid,
     processStart: input.processStart,
+    ...(input.relaunchPresentation !== undefined
+      ? { relaunchPresentation: input.relaunchPresentation }
+      : {}),
     ...(input.predecessor
       ? { predecessor: input.predecessor, leaseIdentity: lease }
       : {}),
@@ -317,6 +326,7 @@ function parseHandoff(
       event["action"] !== expected.action ||
       event["pid"] !== expected.pid ||
       event["processStart"] !== expected.processStart ||
+      event["relaunchPresentation"] !== expected.relaunchPresentation ||
       !sameBuild(event["source"], expected.source) ||
       !sameBuild(event["target"], expected.target)
     )
@@ -337,7 +347,8 @@ function parseHandoff(
         return null;
       if (
         event["phase"] === "closed_predecessor_ready" &&
-        Object.keys(event).length === 10
+        Object.keys(event).length ===
+          10 + (expected.relaunchPresentation ? 1 : 0)
       )
         return { phase: "closed_predecessor_ready" };
     }
@@ -345,13 +356,14 @@ function parseHandoff(
       event["phase"] === "waiting_for_exit" &&
       !closed &&
       (expected.action !== "recover" || expected.relaunch) &&
-      Object.keys(event).length === 8
+      Object.keys(event).length === 8 + (expected.relaunchPresentation ? 1 : 0)
     ) {
       return { phase: "waiting_for_exit" };
     }
     if (
       event["phase"] === "refused" &&
-      Object.keys(event).length === (closed ? 11 : 9) &&
+      Object.keys(event).length ===
+        (closed ? 11 : 9) + (expected.relaunchPresentation ? 1 : 0) &&
       typeof event["error"] === "string" &&
       /^[a-z][a-z0-9_]{0,79}$/u.test(event["error"])
     ) {
@@ -467,6 +479,9 @@ export async function startInstalledUpdateHelper(
   // Pin the request before asynchronous preflight; later caller mutation cannot
   // change either the bytes sent or the identity expected in the acknowledgment.
   const fields: InstalledUpdateFields = {
+    ...(input.relaunchPresentation !== undefined
+      ? { relaunchPresentation: input.relaunchPresentation }
+      : {}),
     ...(input.installLocation !== undefined
       ? { installLocation: input.installLocation }
       : {}),

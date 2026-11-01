@@ -176,3 +176,48 @@ closed its handles and removed its fixture tree. The earlier sandbox refusal
 remains a refusal; this is a distinct run. It does not establish installed
 replacement, profile compatibility, post-start recovery or a normal N → N+1
 update, and did not touch the installed application.
+
+## Explicit Sidecar test presentation
+
+An ordinary live request may carry `relaunchPresentation: "sidecar-only"` only
+when relaunch is enabled. The desktop derives this closed selection from its
+trusted test arguments. The request snapshot, readiness comparison and private
+ACK correlation retain the exact value; it never grants Computer authority.
+Both native launch validators accept only the ordinary five arguments or the
+same arguments followed by `--preview-window-mode=secondary-visible` and
+`--sidecar-display-only`. Verified image binding remains independent of that
+argument grammar. Target launch and internal rollback launch preserve the same
+selection. An implicit Sidecar viewport fits the permitted display; an explicit
+viewport keeps its exact test contract. Missing Sidecar never implies permission
+to use the primary display. Ordinary owner launches keep their existing behavior.
+
+## Startup connector regression boundary
+
+The hidden Electron startup fixture holds a subresource open while the current
+ChatGPT document reaches DOM readiness. It exercises temporary-chat navigation,
+current-document authentication, one synthetic connector Send and its response
+probe/receipt. It does not establish live-provider, installed-profile or OTA
+acceptance. Task page execution and readiness reads retain the original task
+deadline; queued composer preparation checks that deadline inside the page before
+typing. Response observation permits the first in-place conversation transition
+while retaining physical-frame and task ownership. A second conversation is
+refused with the original submission kept uncertain.
+
+This is not a universal task cancellation contract. Attachment/debugger waits
+and durable observer callbacks retain their existing lifetime semantics. Startup
+connector checks attach no files. Abandoning a durable dispatch claim on a timer
+would not prove that no Send occurred; UNKNOWN custody remains authoritative.
+
+The connector preflight also joins a retained ordinary document that starts
+loading after preload completes. It observes initial and temporary documents
+within one original 20-second readiness budget and performs at most one temporary
+navigation. Transient login controls during session hydration do not create
+positive evidence: only a fresh current authentication observation admits the
+next step. Protected or terminally failed openers remain refused. Binding change,
+Quit and deadline expiry stop this original check without another navigation or
+Send. Fixed preflight reason tokens distinguish the failed stage without logging
+provider HTML, prompts or credentials.
+
+The readiness budget bounds admission, not wall-clock cancellation of an existing
+navigation wait. Those waits retain their own bounds; an expired shared readiness
+deadline still cannot admit a provider submission.

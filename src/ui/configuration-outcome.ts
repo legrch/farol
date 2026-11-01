@@ -76,7 +76,17 @@ export function configurationEffectOutcome(
 ): "applied" | "refused" | "unknown" {
   if (outcome.kind === "unconfirmed") return "unknown";
   if (outcome.result.connectorSetup?.state === "unknown") return "unknown";
-  if (outcome.kind === "applied") return "applied";
+  if (outcome.kind === "applied") {
+    if (outcome.result.evidence?.kind === "chatgpt.deep-test-result") {
+      const state = outcome.result.evidence.state;
+      return state === "outcome_unknown"
+        ? "unknown"
+        : state === "completed"
+          ? "applied"
+          : "refused";
+    }
+    return "applied";
+  }
   if (outcome.result.connectorAttempt?.outcome === "unknown") return "unknown";
   return [
     "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",

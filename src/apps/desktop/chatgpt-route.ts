@@ -96,6 +96,7 @@ const activatedTaskSchema = z.union([
   navigatedTaskSchema,
   z.strictObject({ appSelectionLost: z.literal(true) }),
   z.strictObject({ profileLost: z.literal(true) }),
+  z.strictObject({ draftPresent: z.literal(true) }),
   activatedControlSchema,
 ]);
 
@@ -820,11 +821,13 @@ function appSelectionPrelude(appName: string): string {
 export function bindChatGptAppScript(
   appName: string,
   expectedHref: string,
+  manualDeepTest = false,
 ): string {
   return `(async () => {
     const expectedHref = ${JSON.stringify(expectedHref)};
     if (location.href !== expectedHref) return { state: "navigated" };
     ${appSelectionPrelude(appName)}
+    ${manualDeepTest ? manualDeepTestDraftGuard("", 'return { state: "blocked", reason: "draft_present" };') : ""}
     const input = findComposer();
     if (!(input instanceof HTMLElement)) return { state: "blocked", reason: "missing" };
     if (composerDraftText(input).trim().length > 0) {
@@ -1152,17 +1155,80 @@ export function installManualAppGateScript(appName: string): string {
 // evaluate these exact source strings in `node:vm` against a stub page:
 // the guard has to be proven on the bytes that are dispatched, not on a
 // paraphrase of them.
+function manualDeepTestDraftGuard(
+  expectedText: string,
+  refusal = "return { draftPresent: true };",
+): string {
+  return `
+    const manualComposer = findComposer();
+    const manualForm = manualComposer instanceof HTMLElement ? manualComposer.closest('form') : null;
+    const manualVisible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const style = getComputedStyle(element), box = element.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && box.width > 0 && box.height > 0;
+    };
+    const manualInputs = manualForm ? [...document.querySelectorAll('input[type="file"]')]
+      .filter((element) => manualForm.contains(element) || element.form === manualForm) : [];
+    const manualComposers = [...new Set(document.querySelectorAll('#prompt-textarea,[data-testid="prompt-textarea"],[contenteditable="true"][data-virtualkeyboard="true"]'))].filter(manualVisible);
+    const manualAttachments = manualForm ? [...manualForm.querySelectorAll(
+      '[data-testid="attachment-preview"],[data-testid="composer-attachment"],[data-testid*="file-chip"],[data-testid*="attachment-chip"],[aria-label*="remove file" i],[aria-label*="remove attachment" i]'
+    )].some(manualVisible) : true;
+    const manualAllowedLabels = new Set(['Add files', 'Add files and more', 'Select ChatGPT model', 'Dictate', 'Start Voice', 'Start voice mode', 'Start Voice Mode', 'Send prompt', 'Send message', 'Send']);
+    const manualControlSelector = 'button,[role="button"],input[type="button"],input[type="submit"]';
+    const manualUnknownControls = manualForm ? [...new Set([
+      ...manualForm.querySelectorAll(manualControlSelector),
+      ...[...document.querySelectorAll(manualControlSelector)].filter((element) => element.form === manualForm)
+    ])]
+      .filter(manualVisible).some((element) =>
+        !element.closest(selectedSelector) &&
+        element.getAttribute('data-testid') !== 'send-button' &&
+        !manualAllowedLabels.has(element.getAttribute('aria-label'))) : true;
+    const manualUnknownImage = manualForm ? [...manualForm.querySelectorAll('img,video,audio')]
+      .filter(manualVisible).some((element) => !element.closest(selectedSelector)) : true;
+    let manualText = composerDraftText(manualComposer);
+    const manualExpected = ${JSON.stringify(expectedText)};
+    if (manualExpected && manualComposer instanceof HTMLElement && !(manualComposer instanceof HTMLTextAreaElement) &&
+        appSelectionFor(manualComposer).state === 'bound') {
+      const liveLinks = [...manualComposer.querySelectorAll('a[href*="/plugins/plugin_asdk_app_"]')]
+        .filter((link) => appElementVisible(link) && normalizedLabel(link) === requiredAppName);
+      if (liveLinks.length === 1) {
+        const clone = manualComposer.cloneNode(true);
+        if (clone instanceof HTMLElement) {
+          for (const marker of clone.querySelectorAll(selectedSelector)) marker.remove();
+          const clonedLinks = [...clone.querySelectorAll('a[href*="/plugins/plugin_asdk_app_"]')]
+            .filter((link) => normalizedLabel(link) === requiredAppName);
+          if (clonedLinks.length === 1) clonedLinks[0].remove();
+          if (clonedLinks.length <= 1) manualText = clone.innerText || clone.textContent || '';
+        }
+      }
+    }
+    if (!(manualComposer instanceof HTMLElement) || !manualForm || manualComposers.length !== 1 || manualComposers[0] !== manualComposer || manualInputs.length !== 1 || manualAttachments || manualUnknownControls || manualUnknownImage ||
+        manualInputs.some((input) => !(input instanceof HTMLInputElement) || !input.files || input.files.length > 0) ||
+        manualText !== manualExpected)
+      ${refusal}
+  `;
+}
+
 export function prepareTaskScript(
   prompt: string,
   expectedHref: string,
   requiredAppName?: string,
+  deadlineAt?: number,
+  manualDeepTest = false,
 ): string {
+  if (
+    deadlineAt !== undefined &&
+    (!Number.isSafeInteger(deadlineAt) || deadlineAt <= 0)
+  )
+    throw new Error("Invalid task preparation deadline");
   return `(() => {
+    ${deadlineAt === undefined ? "" : `if (Date.now() >= ${deadlineAt}) return { ready: false };`}
     const expectedHref = ${JSON.stringify(expectedHref)};
     if (location.href !== expectedHref) return { navigated: true };
     const prompt = ${JSON.stringify(prompt)};
     ${requiredAppName ? appSelectionPrelude(requiredAppName) : ""}
     ${requiredAppName ? 'if (appSelection().state !== "bound") return { appSelectionLost: true };' : ""}
+    ${manualDeepTest && requiredAppName ? manualDeepTestDraftGuard("") : ""}
     const visible = (element) => {
       if (!(element instanceof HTMLElement)) return false;
       const style = getComputedStyle(element);
@@ -1185,6 +1251,7 @@ export function prepareTaskScript(
       return { ready: false, baselineAssistantCount, baselineUserCount, baselineMessageIds };
     }
     ${requiredAppName ? "if (composerDraftText(composer).trim().length > 0) return { draftPresent: true };" : ""}
+    ${deadlineAt === undefined ? "" : `if (Date.now() >= ${deadlineAt}) return { ready: false };`}
     composer.focus();
     if (composer instanceof HTMLTextAreaElement) {
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
@@ -1232,6 +1299,7 @@ export function activateTaskScript(
   requiredAppName?: string,
   requireTemporaryInstant = false,
   requireOrdinaryInstant = false,
+  manualDeepTestPrompt?: string,
 ): string {
   return `(() => {
     const expectedHref = ${JSON.stringify(expectedHref)};
@@ -1262,6 +1330,7 @@ export function activateTaskScript(
     }
     ${requiredAppName ? appSelectionPrelude(requiredAppName) : ""}
     ${requiredAppName ? 'if (appSelection().state !== "bound") return { appSelectionLost: true };' : ""}
+    ${manualDeepTestPrompt !== undefined && requiredAppName ? manualDeepTestDraftGuard(manualDeepTestPrompt) : ""}
     const visible = (element) => {
       if (!(element instanceof HTMLElement)) return false;
       const style = getComputedStyle(element);
@@ -1275,6 +1344,7 @@ export function activateTaskScript(
       document.querySelector('button[aria-label="Send"]')
     ].find((element) => visible(element) && element instanceof HTMLButtonElement && !element.disabled);
     if (!(send instanceof HTMLButtonElement)) return { activated: false };
+    ${manualDeepTestPrompt !== undefined && requiredAppName ? "if (send.form !== manualForm) return { draftPresent: true };" : ""}
     send.click();
     return { activated: true };
   })()`;
@@ -1683,6 +1753,9 @@ export type ChatGptTaskObserver = Readonly<{
   // one turn, never both. Items describe visible output, not tool execution.
   onVisibleItem?: (item: VisibleOutputItem) => void | Promise<void>;
   onDispatchIntent?: () => void | Promise<void>;
+  // Synchronous owner fence after the final awaited page verification.
+  beforeSend?: () => boolean;
+  manualDeepTest?: boolean;
   // Only an app-bound connector check may finish from its exact
   // local receipt. This proves the connector effect, never a model answer.
   readConnectorReceipt?: () => Promise<boolean>;
@@ -2439,17 +2512,68 @@ export class ChatGptRoute {
     const url = new URL(this.options.homeUrl);
     url.searchParams.set("temporary-chat", "true");
     try {
-      await this.awaitRouteOpenStep(
+      await this.navigateRouteDocument(
         current,
-        current.loadURL(url.href),
+        url.href,
         Date.now() + ROUTE_OPEN_DEADLINE_MS,
       );
-      if (this.routeWindow !== current || current.isDestroyed())
-        return { status: "unreachable" };
       this.options.onNavigationHistoryChanged?.(this.navigationHistory());
       return { status: "opened" };
     } catch {
       return { status: "unreachable" };
+    }
+  }
+
+  private async navigateRouteDocument(
+    current: ChatGptRouteSurface,
+    url: string,
+    deadline: number,
+  ): Promise<void> {
+    const beforeDocument = this.chatPhysicalDocumentGeneration;
+    let readyDocument: number | null = null;
+    let domReady: (() => void) | undefined;
+    // The same ordinary-browser milestone used by initial opening also applies
+    // here. Slow subresources must not turn a usable new document into a timeout.
+    // An event from the retained document cannot complete this navigation.
+    const ordinaryReady =
+      this.options.requireAppForManualMessages === true
+        ? null
+        : new Promise<void>((resolve) => {
+            domReady = () => {
+              if (
+                this.ownsRouteContents(current.webContents) &&
+                this.chatPhysicalDocumentGeneration > beforeDocument &&
+                !this.routeDocumentLoadFailed &&
+                !this.routeDocumentAwaitingCommit &&
+                allowedChatGptPageUrl(
+                  current.webContents.getURL(),
+                  this.options.e2eOrigin,
+                )
+              ) {
+                readyDocument = this.chatPhysicalDocumentGeneration;
+                resolve();
+              }
+            };
+            current.webContents.on("dom-ready", domReady);
+          });
+    try {
+      const navigation = current.loadURL(url);
+      await this.awaitRouteOpenStep(
+        current,
+        ordinaryReady ? Promise.race([navigation, ordinaryReady]) : navigation,
+        deadline,
+      );
+      if (
+        this.routeWindow !== current ||
+        current.isDestroyed() ||
+        this.routeDocumentLoadFailed ||
+        this.routeDocumentAwaitingCommit ||
+        (readyDocument !== null &&
+          readyDocument !== this.chatPhysicalDocumentGeneration)
+      )
+        throw new Error("ChatGPT document changed");
+    } finally {
+      if (domReady) current.webContents.removeListener("dom-ready", domReady);
     }
   }
 
@@ -3049,6 +3173,23 @@ export class ChatGptRoute {
     return false;
   }
 
+  // This is permission to keep observing a loading ordinary browser, never
+  // authentication or permission to retry a failed/protected opener. The load
+  // slot stays "failed" until DOM readiness; terminal load errors have a separate flag.
+  hasPendingReadinessDocument(): boolean {
+    return (
+      this.options.requireAppForManualMessages !== true &&
+      !this.disposing &&
+      !this.taskInFlight &&
+      !this.updateAdmission &&
+      this.load === "failed" &&
+      this.chatPhysicalDocumentGeneration > 0 &&
+      !this.routeDocumentLoadFailed &&
+      this.routeWindow !== null &&
+      !this.routeWindow.isDestroyed()
+    );
+  }
+
   private readinessObservationAvailable(): boolean {
     return (
       !this.disposing &&
@@ -3149,9 +3290,75 @@ export class ChatGptRoute {
     };
   }
 
+  // Execute against the captured frame rather than WebContents' full-load queue.
+  // The caller retains one deadline and its dispatch/UNKNOWN custody. Send alone
+  // may navigate before its original acknowledgement returns; it proves no auth.
+  private async executeTaskDocumentScript(
+    contents: WebContents,
+    script: string,
+    gesture: boolean,
+    deadline: number,
+    operationGeneration: number,
+    allowNavigationAfter: boolean | "response" = false,
+  ): Promise<unknown> {
+    const surface = this.routeWindow;
+    const documentGeneration = this.chatPhysicalDocumentGeneration;
+    const url = contents.getURL();
+    const frame = contents.mainFrame;
+    const sameOperation = () =>
+      surface !== null &&
+      this.routeWindow === surface &&
+      !surface.isDestroyed() &&
+      !this.disposing &&
+      surface.webContents === contents &&
+      this.taskObservationGeneration === operationGeneration;
+    const samePhysicalDocument = () =>
+      sameOperation() &&
+      !this.routeDocumentLoadFailed &&
+      !this.routeDocumentAwaitingCommit &&
+      this.chatPhysicalDocumentGeneration === documentGeneration &&
+      (!frame || (contents.mainFrame === frame && !frame.isDestroyed()));
+    const sameDocument = () =>
+      samePhysicalDocument() &&
+      contents.getURL() === url &&
+      (!frame || frame.url === url);
+    if (!sameDocument() || Date.now() >= deadline)
+      throw new Error("ChatGPT task document unavailable");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const value: unknown = await Promise.race([
+        frame
+          ? frame.executeJavaScript(script, gesture)
+          : contents.executeJavaScript(script, gesture),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("ChatGPT task deadline exceeded")),
+            Math.max(0, deadline - Date.now()),
+          );
+        }),
+      ]);
+      if (Date.now() >= deadline)
+        throw new Error("ChatGPT task deadline exceeded");
+      // Response polling owns the allowed first in-place conversation transition.
+      // It still cannot adopt a replaced physical document or retired task.
+      if (
+        frame &&
+        (allowNavigationAfter === "response"
+          ? !samePhysicalDocument()
+          : !allowNavigationAfter && !sameDocument())
+      )
+        throw new Error("ChatGPT task document unavailable");
+      return value;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
   private async prepareTemporaryInstantProfile(
     candidate: ChatGptRouteSurface,
     temporary = true,
+    taskDeadline = Date.now() + 180_000,
+    operationGeneration = this.taskObservationGeneration,
   ): Promise<
     | "CHATGPT_COMPOSER_DRAFT_PRESENT"
     | "CHATGPT_TEMPORARY_CHAT_REQUIRED"
@@ -3159,11 +3366,19 @@ export class ChatGptRoute {
     | null
   > {
     const contents = candidate.webContents;
+    const execute = (script: string, gesture: boolean) =>
+      this.executeTaskDocumentScript(
+        contents,
+        script,
+        gesture,
+        taskDeadline,
+        operationGeneration,
+      );
     let observed: ChatGptProfilePreparationDiagnostic["probe"] = null;
     const read = async () => {
       try {
         const result = temporaryInstantProfileSchema.safeParse(
-          await contents.executeJavaScript(temporaryInstantProfileProbe, true),
+          await execute(temporaryInstantProfileProbe, true),
         );
         observed = result.success
           ? {
@@ -3200,7 +3415,11 @@ export class ChatGptRoute {
         contents.getURL() !== temporaryUrl.href ||
         initial.data.temporary !== temporary
       )
-        await candidate.loadURL(temporaryUrl.href);
+        await this.navigateRouteDocument(
+          candidate,
+          temporaryUrl.href,
+          Math.min(taskDeadline, Date.now() + ROUTE_OPEN_DEADLINE_MS),
+        );
     } catch {
       return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
     }
@@ -3244,7 +3463,7 @@ export class ChatGptRoute {
       }
       return "CHATGPT_INSTANT_MODEL_REQUIRED";
     };
-    const deadline = Date.now() + 12_000;
+    const deadline = Math.min(taskDeadline, Date.now() + 12_000);
     let profile = await read();
     while (
       Date.now() < deadline &&
@@ -3302,10 +3521,7 @@ export class ChatGptRoute {
       for (let attempt = 0; attempt < 20 && !opened; attempt += 1) {
         if (Date.now() >= openDeadline || profileIdentityLost())
           return refuseInstant();
-        const result = await contents.executeJavaScript(
-          openInstantPowerPickerScript,
-          true,
-        );
+        const result = await execute(openInstantPowerPickerScript, true);
         if (profileIdentityLost()) return refuseInstant();
         if (result === true) {
           opened = true;
@@ -3326,7 +3542,7 @@ export class ChatGptRoute {
       for (let attempt = 0; attempt < 8; attempt += 1) {
         if (profileIdentityLost()) return refuseInstant();
         let slider = instantPowerSliderSchema.safeParse(
-          await contents.executeJavaScript(focusInstantPowerSliderScript, true),
+          await execute(focusInstantPowerSliderScript, true),
         );
         while (
           slider.success &&
@@ -3336,10 +3552,7 @@ export class ChatGptRoute {
           await delay(100);
           if (profileIdentityLost()) return refuseInstant();
           slider = instantPowerSliderSchema.safeParse(
-            await contents.executeJavaScript(
-              focusInstantPowerSliderScript,
-              true,
-            ),
+            await execute(focusInstantPowerSliderScript, true),
           );
         }
         sliderReady = slider.success && slider.data.ready;
@@ -3352,10 +3565,7 @@ export class ChatGptRoute {
           break;
         }
         if (
-          (await contents.executeJavaScript(
-            lowerInstantPowerSliderScript,
-            true,
-          )) !== true ||
+          (await execute(lowerInstantPowerSliderScript, true)) !== true ||
           profileIdentityLost()
         )
           return refuseInstant();
@@ -3363,10 +3573,7 @@ export class ChatGptRoute {
       }
       if (!minimumObserved) return refuseInstant();
       if (
-        (await contents.executeJavaScript(
-          dismissInstantPowerPickerScript,
-          true,
-        )) !== true ||
+        (await execute(dismissInstantPowerPickerScript, true)) !== true ||
         profileIdentityLost()
       )
         return refuseInstant();
@@ -3427,10 +3634,7 @@ export class ChatGptRoute {
     if (!profile.data.personalized) {
       try {
         if (
-          (await contents.executeJavaScript(
-            openTemporaryPersonalizationScript,
-            true,
-          )) !== true ||
+          (await execute(openTemporaryPersonalizationScript, true)) !== true ||
           profileIdentityLost()
         )
           return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
@@ -3438,10 +3642,7 @@ export class ChatGptRoute {
         for (let attempt = 0; attempt < 10; attempt += 1) {
           if (profileIdentityLost()) return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
           if (
-            (await contents.executeJavaScript(
-              selectTemporaryPersonalizationScript,
-              true,
-            )) === true
+            (await execute(selectTemporaryPersonalizationScript, true)) === true
           ) {
             selected = true;
             break;
@@ -3550,6 +3751,42 @@ export class ChatGptRoute {
     };
     timing("started");
     const observationGeneration = ++this.taskObservationGeneration;
+    const deadline = Date.now() + (this.options.taskTimeoutMs ?? 180_000);
+    const execute = (
+      contents: WebContents,
+      script: string,
+      gesture: boolean,
+      allowNavigationAfter: boolean | "response" = false,
+    ) =>
+      this.executeTaskDocumentScript(
+        contents,
+        script,
+        gesture,
+        deadline,
+        observationGeneration,
+        allowNavigationAfter,
+      );
+    const observeTaskReadiness = async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        if (Date.now() >= deadline)
+          throw new Error("ChatGPT task deadline exceeded");
+        return await Promise.race([
+          this.observe(),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(
+              () => {
+                ++this.readinessReadSequence;
+                reject(new Error("ChatGPT task deadline exceeded"));
+              },
+              Math.max(0, deadline - Date.now()),
+            );
+          }),
+        ]);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    };
     let publicTurn: ChatGptPublicTurn | null = null;
     const semanticOutput =
       this.options.publicOutputProfile === "message-anchors-v1";
@@ -3580,7 +3817,7 @@ export class ChatGptRoute {
           outputText: observedText,
         };
       }
-      const readiness = await this.observe();
+      const readiness = await observeTaskReadiness();
       if (readiness.state === "signed_out") {
         return {
           state: "not_authenticated",
@@ -3613,8 +3850,11 @@ export class ChatGptRoute {
         };
       }
       if (profile === "temporary-instant" || profile === "connector-instant") {
-        const running = await candidate.webContents
-          .executeJavaScript(activityProbe, true)
+        const running = await execute(
+          candidate.webContents,
+          activityProbe,
+          true,
+        )
           .then((answer) => activityProbeSchema.safeParse(answer))
           .catch(() => activityProbeSchema.safeParse(null));
         if (!running.success || running.data.running) {
@@ -3629,6 +3869,8 @@ export class ChatGptRoute {
         const profileFailure = await this.prepareTemporaryInstantProfile(
           candidate,
           profile === "temporary-instant",
+          deadline,
+          observationGeneration,
         );
         if (profileFailure !== null) {
           return {
@@ -3648,7 +3890,7 @@ export class ChatGptRoute {
       if (profile === "temporary-instant" || profile === "connector-instant") {
         // Profile preparation may navigate. Its composer/model probes are not
         // authentication evidence for the new document's dispatch.
-        const currentReadiness = await this.observe();
+        const currentReadiness = await observeTaskReadiness();
         if (currentReadiness.state !== "authenticated") {
           return {
             state:
@@ -3717,7 +3959,8 @@ export class ChatGptRoute {
       };
       let activityCandidate: unknown;
       try {
-        activityCandidate = await candidate.webContents.executeJavaScript(
+        activityCandidate = await execute(
+          candidate.webContents,
           activityProbe,
           true,
         );
@@ -3764,8 +4007,13 @@ export class ChatGptRoute {
       if (requiredAppName !== undefined) {
         let appBindingCandidate: unknown;
         try {
-          appBindingCandidate = await candidate.webContents.executeJavaScript(
-            bindChatGptAppScript(requiredAppName, dispatchIdentityUrl),
+          appBindingCandidate = await execute(
+            candidate.webContents,
+            bindChatGptAppScript(
+              requiredAppName,
+              dispatchIdentityUrl,
+              observer.manualDeepTest === true,
+            ),
             true,
           );
         } catch {
@@ -3818,8 +4066,15 @@ export class ChatGptRoute {
         };
       }
       const prepared = preparedTaskSchema.safeParse(
-        await candidate.webContents.executeJavaScript(
-          prepareTaskScript(prompt, dispatchIdentityUrl, requiredAppName),
+        await execute(
+          candidate.webContents,
+          prepareTaskScript(
+            prompt,
+            dispatchIdentityUrl,
+            requiredAppName,
+            deadline,
+            observer.manualDeepTest === true,
+          ),
           true,
         ),
       );
@@ -3918,7 +4173,8 @@ export class ChatGptRoute {
         }
         if (requiredAppName !== undefined) {
           const selected = appBindingSchema.safeParse(
-            await candidate.webContents.executeJavaScript(
+            await execute(
+              candidate.webContents,
               verifyChatGptAppScript(requiredAppName, dispatchIdentityUrl),
               true,
             ),
@@ -3970,17 +4226,29 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
+        if (observer.beforeSend && !observer.beforeSend()) {
+          return {
+            state: "failed_before_submit",
+            code: "CHATGPT_SUBMIT_UNAVAILABLE",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
         submissionPhase = "awaiting_acknowledgement";
         let acknowledgementTimer: ReturnType<typeof setTimeout> | undefined;
         const activated = activatedTaskSchema.safeParse(
           await Promise.race([
-            candidate.webContents.executeJavaScript(
+            execute(
+              candidate.webContents,
               activateTaskScript(
                 dispatchIdentityUrl,
                 requiredAppName,
                 profile === "temporary-instant",
                 profile === "connector-instant",
+                observer.manualDeepTest ? prompt : undefined,
               ),
+              true,
               true,
             ),
             new Promise<null>((resolve) => {
@@ -4035,6 +4303,16 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
+        if ("draftPresent" in activated.data) {
+          submissionPhase = "not_attempted";
+          return {
+            state: "failed_before_submit",
+            code: "CHATGPT_COMPOSER_DRAFT_PRESENT",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
         if (activated.data.activated) {
           submissionPhase = "submitted";
           timing("send_acknowledged");
@@ -4065,7 +4343,6 @@ export class ChatGptRoute {
         this.options.e2eOrigin,
       );
       const pollMs = this.options.taskPollMs ?? 250;
-      const deadline = Date.now() + (this.options.taskTimeoutMs ?? 180_000);
       const probePending = Symbol("probe pending");
       let connectorProbe: Promise<unknown> | null = null;
       while (Date.now() < deadline) {
@@ -4189,7 +4466,8 @@ export class ChatGptRoute {
           }
         }
         const readProbe = () =>
-          active.webContents.executeJavaScript(
+          execute(
+            active.webContents,
             taskProbeScript(
               prompt,
               preparedTask.baselineMessageIds,
@@ -4201,6 +4479,7 @@ export class ChatGptRoute {
               requiredAppName,
             ),
             true,
+            "response",
           );
         let probeValue: unknown;
         if (appTarget !== undefined && observer.readConnectorReceipt) {
@@ -4424,7 +4703,10 @@ export class ChatGptRoute {
         outputText: observedText,
         ...correlation(),
       };
-    } catch {
+    } catch (error) {
+      const documentChanged =
+        error instanceof Error &&
+        error.message === "ChatGPT task document unavailable";
       const submissionMayHaveOccurred =
         submissionPhase === "awaiting_acknowledgement" ||
         submissionPhase === "submitted";
@@ -4433,8 +4715,12 @@ export class ChatGptRoute {
           ? "outcome_unknown"
           : "failed_before_submit",
         code: submissionMayHaveOccurred
-          ? "CHATGPT_TASK_ERROR"
-          : "CHATGPT_SUBMIT_UNAVAILABLE",
+          ? documentChanged
+            ? "CHATGPT_TASK_PAGE_LOST"
+            : "CHATGPT_TASK_ERROR"
+          : documentChanged
+            ? "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT"
+            : "CHATGPT_SUBMIT_UNAVAILABLE",
         deltaCount,
         observedCharacters,
         outputText: observedText,
@@ -4773,6 +5059,28 @@ export class ChatGptRoute {
     this.load = "failed";
     this.disposing = false;
     this.options.onConversationChanged?.(null);
+  }
+
+  // Pin the exact existing manual document before an asynchronous UI transition.
+  captureManualTaskTarget(): (() => boolean) | null {
+    const surface = this.routeWindow;
+    if (
+      !surface ||
+      surface.isDestroyed() ||
+      surface.webContents.isDestroyed() ||
+      this.load !== "loaded"
+    )
+      return null;
+    const url = surface.webContents.getURL();
+    if (!allowedChatGptPageUrl(url, this.options.e2eOrigin)) return null;
+    const generation = this.routeDocumentGeneration;
+    return () =>
+      this.routeWindow === surface &&
+      !surface.isDestroyed() &&
+      !surface.webContents.isDestroyed() &&
+      this.load === "loaded" &&
+      this.routeDocumentGeneration === generation &&
+      surface.webContents.getURL() === url;
   }
 
   // Physical generations only. No queue, turn state, journal or retry decision.

@@ -32,6 +32,9 @@ func (s *Service) BuildRelaunchArguments(ctx context.Context, completion string,
 		capturedPath = &value
 	}
 	r := s.request
+	if r.RelaunchPresentation != nil && (*r.RelaunchPresentation != "sidecar-only" || !r.Relaunch || r.Predecessor != nil) {
+		return nil, failure("launch_presentation")
+	}
 	hint, err := codec.Relaunch(port.HelperRelaunchHint{OperationID: r.OperationID, Action: r.Action, Phase: completion, BuildID: r.Target.BuildID, Helper: helper})
 	if ctx.Err() != nil {
 		return nil, failure("canceled")
@@ -58,6 +61,9 @@ func (s *Service) BuildRelaunchArguments(ctx context.Context, completion string,
 		return nil, failure("launch_image_unexpected")
 	}
 	arguments := []string{"/usr/bin/open", "-a", selected, "--args", "--farol-installed-update-relaunch=" + string(append([]byte(nil), hint...))}
+	if r.RelaunchPresentation != nil {
+		arguments = append(arguments, "--preview-window-mode=secondary-visible", "--sidecar-display-only")
+	}
 	if ctx.Err() != nil {
 		return nil, failure("canceled")
 	}

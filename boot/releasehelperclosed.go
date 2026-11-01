@@ -453,6 +453,10 @@ func withClosedReleaseHelperDependencies(ctx context.Context, files closedHelper
 }
 
 func closedHelperRequestCopy(r releaseport.HelperRequest) releaseport.HelperRequest {
+	if r.RelaunchPresentation != nil {
+		v := *r.RelaunchPresentation
+		r.RelaunchPresentation = &v
+	}
 	if r.InstallLocation != nil {
 		v := *r.InstallLocation
 		r.InstallLocation = &v

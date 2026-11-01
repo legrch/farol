@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -109,6 +110,32 @@ it("embeds exact approved native template pixels without expanding the package c
         `resources/brand/signal-color/menu-bar-template${scale === 2 ? "@2x" : ""}.png`,
       ),
     );
+  }
+  const manifest = JSON.parse(
+    await fs.readFile("resources/brand/signal-color/manifest.json", "utf8"),
+  );
+  for (const state of ["Hollow", "Attention"]) {
+    for (const scale of [1, 2]) {
+      const match = source.match(
+        new RegExp(
+          `menuBar${state}Template${scale}x\\s*=\\s*"([A-Za-z0-9+/=]+)"`,
+        ),
+      );
+      expect(match).not.toBeNull();
+      const image = Buffer.from(match[1], "base64");
+      expect(image).toEqual(
+        await fs.readFile(
+          `resources/brand/signal-color/menu-bar-${state.toLowerCase()}-template${scale === 2 ? "@2x" : ""}.png`,
+        ),
+      );
+      const assetName = `menu-bar-${state.toLowerCase()}-template${scale === 2 ? "@2x" : ""}.png`;
+      expect(manifest.files[assetName]).toEqual({
+        sha256: createHash("sha256").update(image).digest("hex"),
+        bytes: image.length,
+      });
+      expect(image.readUInt32BE(16)).toBe(18 * scale);
+      expect(image.readUInt32BE(20)).toBe(18 * scale);
+    }
   }
   expect(BRAND_RESOURCES.map((resource) => resource.output)).toEqual([
     "farol-mark.svg",

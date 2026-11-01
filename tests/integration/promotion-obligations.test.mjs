@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { PrivateChatGptTaskJournal } from "../../src/apps/desktop/chatgpt-task-journal.ts";
 import { afterEach, describe, expect, it } from "vitest";
 import { serializeQuitReceipt } from "../../src/apps/desktop/quit-receipt.ts";
 import {
@@ -33,6 +35,7 @@ async function userData() {
   await fs.mkdir(path.join(root, "farol-state", "chatgpt-task-journal"), {
     recursive: true,
   });
+  await fs.chmod(path.join(root, "farol-state"), 0o700);
   return root;
 }
 
@@ -132,6 +135,60 @@ async function writeTasks(root, tasks, overrides = {}) {
 }
 
 describe("Q-08 activation obligations", () => {
+  it("refuses malformed reserved names while excluding unrelated and temporary files", async () => {
+    const root = await userData();
+    const state = path.join(root, "farol-state");
+    await writeFile(path.join(state, "another.json"), "arbitrary");
+    await writeFile(path.join(state, ".deep-test-incomplete.tmp"), "staged");
+    expect((await activationObligations(root)).drained).toBe(true);
+    await writeFile(path.join(state, "deep-test-broken.json"), "bad");
+    expect((await activationObligations(root)).unreadable).toContain(
+      "deep-test-records:MALFORMED",
+    );
+  });
+  it("refuses a symlinked flat test record", async () => {
+    const root = await userData();
+    const state = path.join(root, "farol-state");
+    const outside = path.join(root, "outside.json");
+    await writeFile(outside, JSON.stringify(journal()));
+    await fs.symlink(
+      outside,
+      path.join(state, `deep-test-${randomUUID()}.json`),
+    );
+    expect((await activationObligations(root)).unreadable).toContain(
+      "deep-test-records:SYMLINK",
+    );
+  });
+  it("fences flat attempt records and ignores unrelated files", async () => {
+    const root = await userData();
+    const state = path.join(root, "farol-state");
+    await writeFile(path.join(state, "unrelated.json"), "unrelated");
+    const id = randomUUID();
+    const owner = new PrivateChatGptTaskJournal({
+      root: state,
+      deepTestOperationId: id,
+    });
+    await owner.prepare({ operationId: id, kind: "readonly" });
+    expect((await activationObligations(root)).obligations).toContain(
+      "DEEP_TEST_PENDING:1",
+    );
+    await owner.markDispatchIntent(id);
+    await owner.reconcileAfterRestart();
+    await owner.acknowledgeDelivery(id);
+    expect((await owner.load()).result.state).toBe("outcome_unknown");
+    expect((await activationObligations(root)).drained).toBe(true);
+    const report = await activationObligations(root, {
+      beforeConfirmation: async () => {
+        const file = path.join(state, `deep-test-${id}.json`);
+        const bytes = await fs.readFile(file);
+        const temp = path.join(state, "replacement");
+        await fs.writeFile(temp, bytes, { mode: 0o600 });
+        await fs.rename(temp, file);
+      },
+    });
+    expect(report.changed).toContain("deep-test-records");
+    expect(report.drained).toBe(false);
+  });
   it("finds nothing to drain in a fresh or idle user-data root", async () => {
     const fresh = await userData();
     await expect(activationObligations(fresh)).resolves.toMatchObject({

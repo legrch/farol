@@ -743,6 +743,8 @@ func TestFailedBytesNeedOnlyOwnedDirectoryInSettledRollback(t *testing.T) {
 
 func TestBindingCopiesInputAndEveryOptionalRequestValue(t *testing.T) {
 	r := requestFixture()
+	presentation := "sidecar-only"
+	r.RelaunchPresentation = &presentation
 	r.Action = "apply"
 	r.Predecessor = &port.HelperPredecessor{Kind: "confirmed_closed", StartedAt: "2026-10-15T12:00:00Z", LastQuitSHA256: strings.Repeat("f", 64), StateIdentity: port.HelperIdentity{Device: "1", Inode: "2"}}
 	r.LeaseIdentity = &port.HelperIdentity{Device: "1", Inode: "3"}
@@ -760,6 +762,7 @@ func TestBindingCopiesInputAndEveryOptionalRequestValue(t *testing.T) {
 		t.Fatal("bind effects/alias", err, f.trace)
 	}
 	original := copyRequest(r)
+	*r.RelaunchPresentation = "changed"
 	*r.InstallLocation = "legacy"
 	r.Predecessor.Kind = "changed"
 	r.LeaseIdentity.Inode = "999"
@@ -769,6 +772,7 @@ func TestBindingCopiesInputAndEveryOptionalRequestValue(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(got, original) {
 			t.Fatal("bound values drifted", got, err)
 		}
+		*got.RelaunchPresentation = "returned changed"
 		*got.InstallLocation = "changed"
 		got.Predecessor.Kind = "changed"
 		got.LeaseIdentity.Inode = "changed"

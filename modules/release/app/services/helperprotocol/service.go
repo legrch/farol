@@ -69,6 +69,10 @@ func Bind(ctx context.Context, input []byte, parser port.HelperRequestParser, co
 }
 
 func copyRequest(r port.HelperRequest) port.HelperRequest {
+	if r.RelaunchPresentation != nil {
+		v := *r.RelaunchPresentation
+		r.RelaunchPresentation = &v
+	}
 	if r.Predecessor != nil {
 		v := *r.Predecessor
 		r.Predecessor = &v
@@ -104,7 +108,7 @@ func (s *Service) Request(ctx context.Context) (port.HelperRequest, error) {
 
 func correlation(request port.HelperRequest) port.HelperCorrelation {
 	r := copyRequest(request)
-	return port.HelperCorrelation{OperationID: r.OperationID, Action: r.Action, Source: r.Source, Target: r.Target, PID: r.PID, ProcessStart: r.ProcessStart, Predecessor: r.Predecessor, LeaseIdentity: r.LeaseIdentity}
+	return port.HelperCorrelation{OperationID: r.OperationID, Action: r.Action, Source: r.Source, Target: r.Target, PID: r.PID, ProcessStart: r.ProcessStart, Predecessor: r.Predecessor, LeaseIdentity: r.LeaseIdentity, RelaunchPresentation: r.RelaunchPresentation}
 }
 
 // BuildHandoff prepares values only. The caller must obtain all actual custody,
@@ -198,6 +202,9 @@ func (s *Service) ValidateContinuation(ctx context.Context, input []byte) error 
 }
 
 func sameCorrelation(a, b port.HelperCorrelation) bool {
+	if (a.RelaunchPresentation == nil) != (b.RelaunchPresentation == nil) || a.RelaunchPresentation != nil && *a.RelaunchPresentation != *b.RelaunchPresentation {
+		return false
+	}
 	if a.OperationID != b.OperationID || a.Action != b.Action || a.Source != b.Source || a.Target != b.Target || a.PID != b.PID || a.ProcessStart != b.ProcessStart {
 		return false
 	}

@@ -205,7 +205,14 @@ func (r *runtime) LaunchTarget(ctx context.Context, self port.HelperSelfIdentity
 // cannot redirect the launch to another image. Like the reference helper, the
 // launch is still by pathname; see the release helper-recovery reference.
 func launchBound(request port.HelperRequest, shared bool, capturePath string, arguments []string) bool {
-	if len(arguments) != 5 || request.Home == "" {
+	if !helperprocess.ValidOpenArguments(arguments) || request.Home == "" {
+		return false
+	}
+	if request.RelaunchPresentation == nil {
+		if len(arguments) != 5 {
+			return false
+		}
+	} else if *request.RelaunchPresentation != "sidecar-only" || len(arguments) != 7 {
 		return false
 	}
 	expected := request.Home + "/Applications/Farol.app"
@@ -258,6 +265,13 @@ func (r *runtime) LaunchPrevious(ctx context.Context) error {
 		if open == nil {
 			open = helperprocess.Open
 		}
-		return open(c, r.until, []string{"/usr/bin/open", "-a", app, "--args", "--farol-installed-update-relaunch=" + string(hint)}, verify)
+		arguments := []string{"/usr/bin/open", "-a", app, "--args", "--farol-installed-update-relaunch=" + string(hint)}
+		if mode := r.config.Request.RelaunchPresentation; mode != nil {
+			if *mode != "sidecar-only" {
+				return fail("launch_image_unconfirmed", false, false, nil)
+			}
+			arguments = append(arguments, "--preview-window-mode=secondary-visible", "--sidecar-display-only")
+		}
+		return open(c, r.until, arguments, verify)
 	})
 }

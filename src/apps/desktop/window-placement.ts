@@ -127,6 +127,7 @@ export function selectPreviewWindowPlacement(
   allowPrimaryDisplay = false,
   builtInDisplayOnly = false,
   sidecarDisplayOnly = false,
+  fitSidecar = false,
 ): PreviewWindowPlacement {
   if (displays.length === 0) {
     throw new Error("WINDOW_DISPLAY_UNAVAILABLE");
@@ -148,14 +149,19 @@ export function selectPreviewWindowPlacement(
           ...secondary.filter((d) => d.internal),
           ...secondary.filter((d) => !d.internal),
         ];
-  // A sole display never blocks startup. With other displays connected, preserve
-  // the requested test surface instead of silently taking the owner’s primary.
+  // Ordinary preview may use a sole display. Sidecar selection has no implicit
+  // primary fallback; an explicit primary-display allowance remains separate.
   const selected =
     preferred.find(
       (d) =>
-        d.workArea.width >= requested.width &&
-        d.workArea.height >= requested.height,
-    ) ?? (secondary.length === 0 || allowPrimaryDisplay ? primary : undefined);
+        d.workArea.width >=
+          (sidecarDisplayOnly && fitSidecar ? 640 : requested.width) &&
+        d.workArea.height >=
+          (sidecarDisplayOnly && fitSidecar ? 520 : requested.height),
+    ) ??
+    (allowPrimaryDisplay || (!sidecarDisplayOnly && secondary.length === 0)
+      ? primary
+      : undefined);
   if (!selected) throw new Error("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
   const isPrimary = selected.id === primaryDisplayId;
   const selection = isPrimary
@@ -173,7 +179,7 @@ export function selectPreviewWindowPlacement(
     selection,
     bounds: centeredBounds(
       selected.workArea,
-      isPrimary
+      isPrimary || (sidecarDisplayOnly && fitSidecar)
         ? {
             width: Math.min(requested.width, selected.workArea.width),
             height: Math.min(requested.height, selected.workArea.height),
