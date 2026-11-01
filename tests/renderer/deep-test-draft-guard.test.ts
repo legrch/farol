@@ -140,3 +140,32 @@ it("refuses an ambiguous composer or a Send button owned by another form", () =>
   ).toEqual({ draftPresent: true });
   expect(click).not.toHaveBeenCalled();
 });
+
+it("accepts the exact prompt beside the selected inline app link", () => {
+  document.body.innerHTML = `<form><div id="prompt-textarea" contenteditable="true" data-virtualkeyboard="true"><a href="/plugins/plugin_asdk_app_abcdef">Farol</a>check</div><input type="file"><button type="button" data-testid="send-button">Send</button></form>`;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+    width: 100,
+    height: 20,
+  } as DOMRect);
+  const click = vi.spyOn(
+    document.querySelector<HTMLButtonElement>("button")!,
+    "click",
+  );
+  expect(
+    window.eval(
+      activateTaskScript(location.href, "Farol", false, false, "check"),
+    ),
+  ).toEqual({ activated: true });
+  expect(click).toHaveBeenCalledOnce();
+});
+
+it("refuses changed whitespace in a prepared prompt", () => {
+  const { text, click } = composer();
+  text.value = " check";
+  expect(
+    window.eval(
+      activateTaskScript(location.href, "Farol", false, false, "check"),
+    ),
+  ).toEqual({ draftPresent: true });
+  expect(click).not.toHaveBeenCalled();
+});

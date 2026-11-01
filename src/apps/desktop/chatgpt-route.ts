@@ -1185,9 +1185,26 @@ function manualDeepTestDraftGuard(
         !manualAllowedLabels.has(element.getAttribute('aria-label'))) : true;
     const manualUnknownImage = manualForm ? [...manualForm.querySelectorAll('img,video,audio')]
       .filter(manualVisible).some((element) => !element.closest(selectedSelector)) : true;
+    let manualText = composerDraftText(manualComposer);
+    const manualExpected = ${JSON.stringify(expectedText)};
+    if (manualExpected && manualComposer instanceof HTMLElement && !(manualComposer instanceof HTMLTextAreaElement) &&
+        appSelectionFor(manualComposer).state === 'bound') {
+      const liveLinks = [...manualComposer.querySelectorAll('a[href*="/plugins/plugin_asdk_app_"]')]
+        .filter((link) => appElementVisible(link) && normalizedLabel(link) === requiredAppName);
+      if (liveLinks.length === 1) {
+        const clone = manualComposer.cloneNode(true);
+        if (clone instanceof HTMLElement) {
+          for (const marker of clone.querySelectorAll(selectedSelector)) marker.remove();
+          const clonedLinks = [...clone.querySelectorAll('a[href*="/plugins/plugin_asdk_app_"]')]
+            .filter((link) => normalizedLabel(link) === requiredAppName);
+          if (clonedLinks.length === 1) clonedLinks[0].remove();
+          if (clonedLinks.length <= 1) manualText = clone.innerText || clone.textContent || '';
+        }
+      }
+    }
     if (!(manualComposer instanceof HTMLElement) || !manualForm || manualComposers.length !== 1 || manualComposers[0] !== manualComposer || manualInputs.length !== 1 || manualAttachments || manualUnknownControls || manualUnknownImage ||
         manualInputs.some((input) => !(input instanceof HTMLInputElement) || !input.files || input.files.length > 0) ||
-        composerDraftText(manualComposer).trim() !== ${JSON.stringify(expectedText.trim())})
+        manualText !== manualExpected)
       ${refusal}
   `;
 }
