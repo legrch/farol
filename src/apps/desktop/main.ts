@@ -927,6 +927,15 @@ let connectorCredentialStore: PrivateConnectorKeyStore | null = null;
 let secureMcpConnectorRuntime: SecureMcpConnectorRuntime | null = null;
 let modelLifecycle: FarolModelLifecycle | null = null;
 let connectorTaskAdmission = false;
+// Manual chat diagnostics reserve dispatch, but do not alter the connector.
+let connectorTaskAdmissionPurpose: "manual-diagnostic" | null = null;
+
+function connectionAdmissionInProgress(): boolean {
+  return (
+    connectorTaskAdmission &&
+    connectorTaskAdmissionPurpose !== "manual-diagnostic"
+  );
+}
 // Presentation spans workspace admission, tunnel startup and the app check.
 // It conveys no authority and is never restored from Activity or saved settings.
 let startupConnectionChecking = true;
@@ -4883,7 +4892,7 @@ function ownerStoppedCurrent(original: OwnerStoppedCapture): boolean {
 }
 
 function captureConnectionStatus(): ConnectionStatusCapture | null {
-  if (connectorTaskAdmission) return null;
+  if (connectionAdmissionInProgress()) return null;
   const running = captureConnectorHealth();
   if (running) return { kind: "running", original: running };
   const stopped = completedOwnerStop;
@@ -4893,7 +4902,7 @@ function captureConnectionStatus(): ConnectionStatusCapture | null {
 }
 
 function connectionStatusCurrent(capture: ConnectionStatusCapture): boolean {
-  if (connectorTaskAdmission) return false;
+  if (connectionAdmissionInProgress()) return false;
   return capture.kind === "running"
     ? connectorHealthCurrent(capture.original)
     : ownerStoppedCurrent(capture.original);
@@ -7409,6 +7418,7 @@ async function runManualDeepTest(
     );
   };
   chatGptTaskAdmission = true;
+  connectorTaskAdmissionPurpose = "manual-diagnostic";
   connectorTaskAdmission = true;
   let prepared = false;
   let intent = false;
@@ -7483,6 +7493,7 @@ async function runManualDeepTest(
   } finally {
     chatGptTaskAdmission = false;
     connectorTaskAdmission = false;
+    connectorTaskAdmissionPurpose = null;
   }
 }
 
@@ -12207,7 +12218,8 @@ function installIpc(): void {
     const snapshot = await operationsStore().snapshot();
     return {
       ...snapshot,
-      connectionChecking: startupConnectionChecking || connectorTaskAdmission,
+      connectionChecking:
+        startupConnectionChecking || connectionAdmissionInProgress(),
     };
   });
   ipcMain.handle(channels.selfTest, (event, value: unknown) =>
