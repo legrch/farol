@@ -8433,6 +8433,81 @@ describe("per-operation NEW app verification target", () => {
   });
 });
 
+describe("manual Deep test prepared composer handoff", () => {
+  it("passes the exact prepared scaffold and prompt to the activation script", async () => {
+    const prompt = "owned manual test prompt";
+    const snapshot = `\n ${prompt}`;
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({ state: "bound" })
+      .mockResolvedValueOnce({ ...prepared, preparedComposerText: snapshot })
+      .mockResolvedValueOnce({ state: "bound" })
+      // Stop at the page's no-Send navigation refusal after observing dispatch.
+      .mockResolvedValueOnce({ navigated: true });
+    const candidate = devTaskRoute(execute);
+
+    await expect(
+      candidate.runReadonlyTask(prompt, [], { manualDeepTest: true }),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+    });
+    expect(execute).toHaveBeenCalledTimes(4);
+    const activation = execute.mock.calls[3]![0] as string;
+    expect(activation).toBe(
+      activateTaskScript(
+        "https://chatgpt.com/",
+        "Farol DEV",
+        false,
+        false,
+        snapshot,
+      ),
+    );
+    expect(activation).not.toBe(
+      activateTaskScript(
+        "https://chatgpt.com/",
+        "Farol DEV",
+        false,
+        false,
+        prompt,
+      ),
+    );
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["oversized", "x".repeat(128 * 1_024 + 1)],
+  ])("refuses a %s prepared snapshot before Send", async (_label, snapshot) => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({ state: "bound" })
+      .mockResolvedValueOnce(
+        snapshot === undefined
+          ? prepared
+          : { ...prepared, preparedComposerText: snapshot },
+      );
+    const candidate = devTaskRoute(execute);
+    const dispatchIntent = vi.fn();
+
+    await expect(
+      candidate.runReadonlyTask("owned manual test prompt", [], {
+        manualDeepTest: true,
+        onDispatchIntent: dispatchIntent,
+      }),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_COMPOSER_UNAVAILABLE",
+    });
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(dispatchIntent).not.toHaveBeenCalled();
+    expect(
+      execute.mock.calls.some(([script]) =>
+        (script as string).includes("send.click()"),
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("connector receipt completion before provider output", () => {
   function fixture(activation: unknown = { activated: true }) {
     const execute = vi

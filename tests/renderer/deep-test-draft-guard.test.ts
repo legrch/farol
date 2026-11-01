@@ -3,7 +3,6 @@ import {
   activateTaskScript,
   bindChatGptAppScript,
   prepareTaskScript,
-  parseManualDeepTestProbe,
 } from "../../src/apps/desktop/chatgpt-route";
 
 afterEach(() => {
@@ -421,63 +420,34 @@ it("refuses an oversized prepared snapshot before native insertion", () => {
   expect(click).not.toHaveBeenCalled();
 });
 
-it("emits bounded content-free structural probes when native insertion extends the selected mark", () => {
-  const { editor } = richComposer();
-  const marker = editor.querySelector("[data-prompt-link-href]")!;
-  const log = vi.spyOn(console, "info").mockImplementation(() => {});
-  const prompt = "private-test-prompt";
-  Object.defineProperty(document, "execCommand", {
-    configurable: true,
-    value: () => {
-      marker.append(` ${prompt}`);
-      const range = document.createRange();
-      range.selectNodeContents(marker);
-      range.collapse(false);
-      const selection = document.getSelection()!;
-      selection.removeAllRanges();
-      selection.addRange(range);
-      return true;
-    },
+it("accepts the known Expand control appearing when the native editor receives a long prompt", () => {
+  const { editor, click, insert } = richComposer();
+  insert.mockImplementation((_command: string, _ui: boolean, value: string) => {
+    editor.append(document.createTextNode(value));
+    const expand = document.createElement("button");
+    expand.type = "button";
+    expand.setAttribute("aria-label", "Expand");
+    expand.setAttribute("aria-pressed", "false");
+    document.querySelector("form")!.append(expand);
+    return true;
   });
-  const result = window.eval(
-    prepareTaskScript(prompt, location.href, "Farol", undefined, true, true),
+  const prepared = window.eval(
+    prepareTaskScript("check", location.href, "Farol", undefined, true),
   );
-  expect(result).toEqual({ appSelectionLost: true });
-  expect(log).toHaveBeenCalledTimes(2);
-  const messages = log.mock.calls.map(([message]) => String(message));
-  for (const message of messages) {
-    expect(message).not.toContain(prompt);
-    expect(message).not.toContain("asdk_app_");
-  }
-  const prefix = "FAROL_MANUAL_STRUCTURE_PROBE:";
-  const before = parseManualDeepTestProbe(messages[0]!.slice(prefix.length));
-  const after = parseManualDeepTestProbe(messages[1]!.slice(prefix.length));
-  expect(before).toMatchObject({
-    stage: "before_insert",
-    selectedCount: 1,
-    selectedMarkerContainsPrompt: false,
-    candidates: [
-      {
-        kind: "selected",
-        tag: "span",
-        isAppOnlyText: true,
-        descendantOfComposer: true,
-        hasPromptLinkHref: true,
-      },
-    ],
-  });
-  expect(after).toMatchObject({
-    stage: "after_insert",
-    selectedMarkerContainsPrompt: true,
-    anchorInsideSelectedMarker: true,
-    focusInsideSelectedMarker: true,
-    candidates: [{ isAppOnlyText: false, containsExactlyOwnedPrompt: true }],
+  expect(prepared).toMatchObject({
+    ready: true,
+    preparedComposerText: "\n check",
   });
   expect(
-    parseManualDeepTestProbe(JSON.stringify({ ...after, leaked: prompt })),
-  ).toBeNull();
-  expect(
-    parseManualDeepTestProbe(JSON.stringify({ ...after, stage: prompt })),
-  ).toBeNull();
-  expect(parseManualDeepTestProbe("x".repeat(16_385))).toBeNull();
+    window.eval(
+      activateTaskScript(
+        location.href,
+        "Farol",
+        false,
+        false,
+        prepared.preparedComposerText,
+      ),
+    ),
+  ).toEqual({ activated: true });
+  expect(click).toHaveBeenCalledOnce();
 });

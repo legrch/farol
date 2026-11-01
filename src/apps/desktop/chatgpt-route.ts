@@ -95,46 +95,6 @@ const preparedTaskSchema = z.union([
   }),
 ]);
 
-const manualProbeCandidateSchema = z.strictObject({
-  kind: z.enum(["selected", "plugin_link"]),
-  tag: z.enum(["a", "span", "div", "button", "p", "other"]),
-  isAppOnlyText: z.boolean(),
-  containsExactlyOwnedPrompt: z.boolean(),
-  descendantOfComposer: z.boolean(),
-  anchorInside: z.boolean(),
-  focusInside: z.boolean(),
-  hasTestId: z.boolean(),
-  hasPromptLinkHref: z.boolean(),
-  hasHref: z.boolean(),
-  hasAppId: z.boolean(),
-  hasPluginId: z.boolean(),
-  hasAriaLabel: z.boolean(),
-  hasContentEditable: z.boolean(),
-  hasRole: z.boolean(),
-});
-const manualProbeSchema = z.strictObject({
-  stage: z.enum(["before_insert", "after_insert"]),
-  selectedCount: z.number().int().min(0).max(10),
-  pluginLinkCount: z.number().int().min(0).max(10),
-  candidates: z.array(manualProbeCandidateSchema).max(20),
-  selectedMarkerContainsPrompt: z.boolean(),
-  anchorInsideSelectedMarker: z.boolean(),
-  focusInsideSelectedMarker: z.boolean(),
-  canonicalTextMatches: z.boolean(),
-  textWhitespaceOnly: z.boolean(),
-});
-
-// Page console messages are untrusted, including messages with our prefix.
-export function parseManualDeepTestProbe(value: string) {
-  if (value.length > 16_384) return null;
-  try {
-    const parsed = manualProbeSchema.safeParse(JSON.parse(value));
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
-  }
-}
-
 // A control click's acknowledgement (the stop control on cancel).
 const activatedControlSchema = z.strictObject({ activated: z.boolean() });
 
@@ -1222,7 +1182,7 @@ function manualDeepTestDraftGuard(
     const manualAttachments = manualForm ? [...manualForm.querySelectorAll(
       '[data-testid="attachment-preview"],[data-testid="composer-attachment"],[data-testid*="file-chip"],[data-testid*="attachment-chip"],[aria-label*="remove file" i],[aria-label*="remove attachment" i]'
     )].some(manualVisible) : true;
-    const manualAllowedLabels = new Set(['Add files', 'Add files and more', 'Select ChatGPT model', 'Dictate', 'Start Voice', 'Start voice mode', 'Start Voice Mode', 'Send prompt', 'Send message', 'Send']);
+    const manualAllowedLabels = new Set(['Add files', 'Add files and more', 'Select ChatGPT model', 'Dictate', 'Start Voice', 'Start voice mode', 'Start Voice Mode', 'Expand', 'Send prompt', 'Send message', 'Send']);
     const manualControlSelector = 'button,[role="button"],input[type="button"],input[type="submit"]';
     const manualUnknownControls = manualForm ? [...new Set([
       ...manualForm.querySelectorAll(manualControlSelector),
@@ -1273,7 +1233,6 @@ export function prepareTaskScript(
   requiredAppName?: string,
   deadlineAt?: number,
   manualDeepTest = false,
-  manualDeepTestDiagnostic = false,
 ): string {
   if (
     deadlineAt !== undefined &&
@@ -1286,71 +1245,6 @@ export function prepareTaskScript(
     if (location.href !== expectedHref) return { navigated: true };
     const prompt = ${JSON.stringify(prompt)};
     ${requiredAppName ? appSelectionPrelude(requiredAppName) : ""}
-    ${
-      manualDeepTest && requiredAppName && manualDeepTestDiagnostic
-        ? `
-    const manualProbe = (stage, expected) => {
-      try {
-        const input = findComposer();
-        if (!(input instanceof HTMLElement)) return;
-        const root = input.closest('form') || input;
-        const selected = [...root.querySelectorAll(selectedSelector)];
-        const links = [...root.querySelectorAll('a[href*="/plugins/plugin_asdk_app_"]')];
-        const selection = document.getSelection();
-        const inside = (element, node) => !!node && element.contains(node);
-        const containsPrompt = (element) => {
-          const text = element.textContent || '';
-          const index = prompt ? text.indexOf(prompt) : -1;
-          return index >= 0 && index === text.lastIndexOf(prompt);
-        };
-        const candidate = (element, kind) => {
-          const tag = element.tagName.toLowerCase();
-          return {
-            kind, tag: ['a','span','div','button','p'].includes(tag) ? tag : 'other',
-            isAppOnlyText: (element.textContent || '').trim() === requiredAppName,
-            containsExactlyOwnedPrompt: containsPrompt(element),
-            descendantOfComposer: input.contains(element),
-            anchorInside: inside(element, selection?.anchorNode),
-            focusInside: inside(element, selection?.focusNode),
-            hasTestId: element.hasAttribute('data-testid'),
-            hasPromptLinkHref: element.hasAttribute('data-prompt-link-href'),
-            hasHref: element.hasAttribute('href'),
-            hasAppId: element.hasAttribute('data-app-id'),
-            hasPluginId: element.hasAttribute('data-plugin-id'),
-            hasAriaLabel: element.hasAttribute('aria-label'),
-            hasContentEditable: element.hasAttribute('contenteditable'),
-            hasRole: element.hasAttribute('role')
-          };
-        };
-        let text = composerDraftText(input);
-        if (!(input instanceof HTMLTextAreaElement) && appSelectionFor(input).state === 'bound') {
-          const liveLinks = [...input.querySelectorAll('a[href*="/plugins/plugin_asdk_app_"]')]
-            .filter((link) => appElementVisible(link) && normalizedLabel(link) === requiredAppName);
-          if (liveLinks.length === 1) {
-            const clone = input.cloneNode(true);
-            if (clone instanceof HTMLElement) {
-              for (const marker of clone.querySelectorAll(selectedSelector)) marker.remove();
-              const clonedLinks = [...clone.querySelectorAll('a[href*="/plugins/plugin_asdk_app_"]')]
-                .filter((link) => normalizedLabel(link) === requiredAppName);
-              if (clonedLinks.length === 1) clonedLinks[0].remove();
-              if (clonedLinks.length <= 1) text = clone.innerText || clone.textContent || '';
-            }
-          }
-        }
-        console.info('FAROL_MANUAL_STRUCTURE_PROBE:' + JSON.stringify({
-          stage, selectedCount: Math.min(selected.length, 10), pluginLinkCount: Math.min(links.length, 10),
-          candidates: [...selected.slice(0,10).map((item) => candidate(item, 'selected')),
-            ...links.slice(0,10).map((item) => candidate(item, 'plugin_link'))],
-          selectedMarkerContainsPrompt: selected.some(containsPrompt),
-          anchorInsideSelectedMarker: selected.some((item) => inside(item, selection?.anchorNode)),
-          focusInsideSelectedMarker: selected.some((item) => inside(item, selection?.focusNode)),
-          canonicalTextMatches: text === expected,
-          textWhitespaceOnly: text.length > 0 && text.trim().length === 0
-        }));
-      } catch { /* Diagnostic failure never changes admission. */ }
-    };`
-        : ""
-    }
     ${requiredAppName ? 'if (appSelection().state !== "bound") return { appSelectionLost: true };' : ""}
     ${manualDeepTest && requiredAppName ? manualDeepTestDraftGuard("") : ""}
     ${
@@ -1384,7 +1278,6 @@ export function prepareTaskScript(
     ${deadlineAt === undefined ? "" : `if (Date.now() >= ${deadlineAt}) return { ready: false };`}
     composer.focus();
     if (composer instanceof HTMLTextAreaElement) {
-      ${manualDeepTest && requiredAppName && manualDeepTestDiagnostic ? "manualProbe('before_insert', '');" : ""}
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
       if (!setter) return { ready: false, baselineAssistantCount, baselineUserCount };
       setter.call(composer, prompt);
@@ -1408,7 +1301,6 @@ export function prepareTaskScript(
       range.collapse(false);
       selection.removeAllRanges();
       selection.addRange(range);
-      ${manualDeepTest && requiredAppName && manualDeepTestDiagnostic ? "manualProbe('before_insert', '');" : ""}
       if (!document.execCommand("insertText", false, prompt)) {
         return { ready: false, baselineAssistantCount, baselineUserCount, baselineMessageIds };
       }
@@ -1422,7 +1314,6 @@ export function prepareTaskScript(
       }));`
       }
     }
-    ${manualDeepTest && requiredAppName && manualDeepTestDiagnostic ? "manualProbe('after_insert', manualInitialText + prompt);" : ""}
     ${
       manualDeepTest && requiredAppName
         ? `{
@@ -4216,7 +4107,6 @@ export class ChatGptRoute {
             requiredAppName,
             deadline,
             observer.manualDeepTest === true,
-            this.options.partition === "persist:farol-dev-chatgpt",
           ),
           true,
         ),
@@ -6002,21 +5892,6 @@ export class ChatGptRoute {
         // embedded frame of another origin on a ChatGPT page must not be able
         // to close the sign-in window.
         const frame = details.frame;
-        const probePrefix = "FAROL_MANUAL_STRUCTURE_PROBE:";
-        if (
-          this.options.partition === "persist:farol-dev-chatgpt" &&
-          details.message.startsWith(probePrefix) &&
-          frame != null &&
-          frame.processId === contents.mainFrame.processId &&
-          frame.routingId === contents.mainFrame.routingId &&
-          isChatGptPage(frame.url, this.options.homeUrl) &&
-          this.ownsRouteContents(contents)
-        ) {
-          const probe = parseManualDeepTestProbe(
-            details.message.slice(probePrefix.length),
-          );
-          if (probe) console.info(probePrefix + JSON.stringify(probe));
-        }
         if (
           this.signInMode &&
           details.message === SIGN_IN_RETURN_SENTINEL &&
