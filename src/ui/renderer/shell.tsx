@@ -12,7 +12,6 @@ import { PanelBoundary } from "./boundary";
 import { Settings, useSetupIntents, retainedSetupIntents } from "./settings";
 import type { RendererFacade, SettingsPage, WindowSnapshot } from "./contract";
 import { unresolvedActions } from "../../../apps/desktop/renderer/unresolved-actions";
-import { useActivityNotifications } from "../../../apps/desktop/renderer/activity-notifications";
 import { computerSetup } from "./computer-setup";
 import { connectionPresentation } from "../../../apps/desktop/renderer/connection-presentation";
 import { TaskEditor } from "./task";
@@ -1019,7 +1018,6 @@ export function Shell() {
   const setupReadyCount = setupEntries.filter(
     (entry) => entry.liveState === "verified",
   ).length;
-  const notifications = useActivityNotifications(state, retained);
   const connectionState = connectionPresentation(state, retained);
   const showSetupCount =
     state.status === "current" &&
@@ -1191,22 +1189,6 @@ export function Shell() {
             }
           />
         )}
-        <button
-          className="notifications-trigger"
-          aria-label="Notifications"
-          aria-description={`${notifications.unread.length} unread`}
-          title="Notifications"
-          onClick={() => facade.overlay("notifications")}
-        >
-          <Icon name="notifications" />
-          {notifications.unread.length > 0 && (
-            <span className="notification-count">
-              {notifications.unread.length > 99
-                ? "99+"
-                : notifications.unread.length}
-            </span>
-          )}
-        </button>
         {destination.area === "chatgpt" && destination.taskId && (
           <button
             aria-label="Chat options"
@@ -1373,6 +1355,13 @@ export function Shell() {
             <Settings snapshot={state} facade={facade} />
           ) : destination.area === "activity" ? (
             <div className="activity-page">
+              {unresolvedActions(state, retained).some(
+                (action) => !action.inProgress,
+              ) && (
+                <button onClick={() => facade.overlay("unresolved-actions")}>
+                  Review unresolved actions
+                </button>
+              )}
               <Activity
                 snapshot={state}
                 facade={facade}
@@ -1536,77 +1525,6 @@ export function Shell() {
       {state.overlay === "update-recovery" && (
         <Update snapshot={state} facade={facade} recoveryMode />
       )}{" "}
-      {state.overlay === "notifications" && (
-        <Overlay title="Notifications" onClose={() => facade.overlay("none")}>
-          <p className="description">
-            Read notifications stay in Activity. Marking one as read does not
-            change or repeat its original result.
-          </p>
-          {notifications.error && <p role="status">{notifications.error}</p>}
-          {notifications.unread.length > 0 ? (
-            <>
-              <button onClick={() => notifications.markRead()}>
-                Mark all as read
-              </button>
-              <ul className="notification-list">
-                {notifications.unread.map((row) => (
-                  <li key={row.id}>
-                    <strong>{row.label}</strong>
-                    {row.at !== undefined &&
-                    Number.isFinite(new Date(row.at).getTime()) ? (
-                      <time
-                        className="notification-time"
-                        dateTime={new Date(row.at).toISOString()}
-                      >
-                        {new Date(row.at).toLocaleString()}
-                      </time>
-                    ) : (
-                      <span className="notification-time">
-                        Time unavailable
-                      </span>
-                    )}
-                    <p>{row.cause}</p>
-                    {row.code && <code>{row.code}</code>}
-                    <div>
-                      <button onClick={() => notifications.markRead([row])}>
-                        Mark as read
-                      </button>
-                      <button
-                        onClick={() => {
-                          facade.overlay("none");
-                          if (row.id.startsWith("operation:"))
-                            facade.navigate({
-                              area: "activity",
-                              activityId: row.id.slice(10),
-                            });
-                          else facade.overlay("unresolved-actions");
-                        }}
-                      >
-                        {row.id.startsWith("operation:")
-                          ? "View in Activity"
-                          : "Review action"}
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </>
-          ) : (
-            <p role="status">No unread notifications.</p>
-          )}
-          <button onClick={() => facade.overlay("unresolved-actions")}>
-            Review unconfirmed actions
-          </button>
-          <button
-            onClick={() => {
-              facade.overlay("none");
-              facade.navigate({ area: "activity" });
-            }}
-          >
-            Open Activity
-          </button>
-        </Overlay>
-      )}
       {state.overlay === "unresolved-actions" && (
         <Overlay
           title="Unresolved actions"

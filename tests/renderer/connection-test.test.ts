@@ -322,7 +322,7 @@ it.each(["lost-ack", "same-binding", "changed-owner", "stale"])(
     }
   },
 );
-it("scoped unknown remains unknown and reading notifications cannot release another writer fence", async () => {
+it("scoped unknown cannot release another writer fence", async () => {
   const h = await setup();
   try {
     const key = `settings:connector.verify-app:${"c".repeat(64)}`;
