@@ -50,6 +50,8 @@ app.setPath('userData', ${JSON.stringify(path.join(scratch, "profile"))});
 app.dock?.hide();
 let route;
 const held = new Set();
+let acknowledgeHeld;
+const heldArrived = new Promise(resolve => { acknowledgeHeld = resolve; });
 let temporaryNavigations = 0, nonGetRequests = 0, finishLoads = 0, syntheticSends = 0;
 const server = http.createServer((req, res) => {
   if (req.method !== 'GET') nonGetRequests++;
@@ -57,6 +59,7 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/receipt' && req.method === 'POST') { syntheticSends++; res.writeHead(200).end('{}'); return; }
   if (url.pathname === '/held.svg') {
     held.add(res);
+    acknowledgeHeld();
     res.once('close', () => held.delete(res));
     return;
   }
@@ -92,6 +95,12 @@ app.whenReady().then(async () => {
     assert.equal(route.isCurrentSignInStatus(initialObservation), false);
     assert.equal(temporaryNavigations, 1);
     assert.equal(finishLoads, 0);
+    // DOM readiness can precede delivery of the image request to this server.
+    // Join that original request; never issue a second navigation or request.
+    let heldTimer;
+    await Promise.race([heldArrived,new Promise((_resolve,reject)=>{
+      heldTimer=setTimeout(()=>reject(Error('Original held resource was not observed')),5000);
+    })]).finally(()=>clearTimeout(heldTimer));
     assert.equal(held.size, 1);
     assert.equal(nonGetRequests, 0);
     assert.equal(windows[0].isVisible(), false);
