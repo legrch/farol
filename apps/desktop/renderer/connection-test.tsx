@@ -8,6 +8,7 @@ import { connectorWorkspaceSelection } from "../../../src/pkg/product-settings/c
 type State = Readonly<{
   phase: "idle" | "preparing" | "testing" | "done" | "refused" | "unknown";
   code: string | null;
+  manual?: boolean;
 }>;
 const idle: State = { phase: "idle", code: null };
 const owners = new WeakMap<
@@ -23,21 +24,88 @@ function owner(facade: RendererFacade) {
   return value;
 }
 const text = (state: State) =>
-  state.phase === "preparing"
-    ? "Preparing a new connection test…"
-    : state.phase === "testing"
-      ? "Testing in a new temporary ChatGPT chat…"
+  state.manual
+    ? state.phase === "preparing" || state.phase === "testing"
+      ? "Preparing connection test…"
       : state.phase === "done"
-        ? "ChatGPT confirmed this connection."
+        ? "Send requested. View ChatGPT."
         : state.phase === "unknown"
-          ? "The test has no confirmed result. Its original record stays in Activity."
-          : state.code === "CHATGPT_COMPOSER_DRAFT_PRESENT"
-            ? "Finish or clear the current draft before testing. Nothing was sent."
-            : state.code === "CONNECTOR_APP_VERIFICATION_NOT_READY"
-              ? "Check sign-in and connection in Setup."
-              : state.phase === "refused"
-                ? "The check didn’t finish. Review the connection in Setup."
-                : "";
+          ? "Could not confirm whether the request was sent. Check this chat before starting a new test."
+          : state.phase === "refused"
+            ? "Connection test was not sent."
+            : ""
+    : state.phase === "preparing"
+      ? "Preparing a new connection test…"
+      : state.phase === "testing"
+        ? "Testing in a new temporary ChatGPT chat…"
+        : state.phase === "done"
+          ? "ChatGPT confirmed this connection."
+          : state.phase === "unknown"
+            ? "The test has no confirmed result. Its original record stays in Activity."
+            : state.code === "CHATGPT_COMPOSER_DRAFT_PRESENT"
+              ? "Finish or clear the current draft before testing. Nothing was sent."
+              : state.code === "CONNECTOR_APP_VERIFICATION_NOT_READY"
+                ? "Check sign-in and connection in Setup."
+                : state.phase === "refused"
+                  ? "The check didn’t finish. Review the connection in Setup."
+                  : "";
+
+export async function runManualConnectionPrompt(
+  facade: RendererFacade,
+): Promise<Intent> {
+  const active = owner(facade),
+    id = "connection-test";
+  if (active.running)
+    return { id, state: "refused", code: "CONNECTION_TEST_IN_PROGRESS" };
+  const publish = (state: State) => {
+    active.state = { ...state, manual: true };
+    for (const listener of active.listeners) listener();
+  };
+  const snapshot = facade.getSnapshot();
+  if (
+    snapshot.destination.area !== "chatgpt" ||
+    !commandAllowed(snapshot, "chatgpt.run-deep-test")
+  ) {
+    publish({
+      phase: "refused",
+      code: "CONNECTION_TEST_PREREQUISITES_REQUIRED",
+    });
+    return {
+      id,
+      state: "refused",
+      code: "CONNECTION_TEST_PREREQUISITES_REQUIRED",
+    };
+  }
+  active.running = true;
+  publish({ phase: "preparing", code: null });
+  const operationId = crypto.randomUUID();
+  try {
+    const result = await facade.configure(
+      {
+        kind: "chatgpt.run-deep-test",
+        operationId,
+        taskId: snapshot.destination.taskId,
+        test: "connection",
+      },
+      `connection-test:run:${operationId}`,
+    );
+    publish({
+      phase:
+        result.state === "applied"
+          ? "done"
+          : result.state === "unknown" || result.state === "pending"
+            ? "unknown"
+            : "refused",
+      code: result.code ?? null,
+    });
+    return result;
+  } catch {
+    publish({ phase: "unknown", code: "CHATGPT_CONVERSATION_UNCONFIRMED" });
+    return { id, state: "unknown", code: "CHATGPT_CONVERSATION_UNCONFIRMED" };
+  } finally {
+    active.running = false;
+  }
+}
 
 /** Check the live route without disturbing its proof. When recovery is needed,
  * prepare a distinct runtime through confirmed stop/start; never replay a claim. */
@@ -338,9 +406,10 @@ export function ConnectionTestButton({
       arrow.current?.focus();
     previousOverlay.current = snapshot.overlay;
   }, [snapshot.overlay, toolbar]);
-  const allowed =
-    commandAllowed(snapshot, "connector.repair") &&
-    computerSetup(snapshot).canReconnect;
+  const allowed = toolbar
+    ? commandAllowed(snapshot, "chatgpt.run-deep-test")
+    : commandAllowed(snapshot, "connector.repair") &&
+      computerSetup(snapshot).canReconnect;
   return (
     <div
       className="connection-test-control"
@@ -358,9 +427,17 @@ export function ConnectionTestButton({
       )}
       <button
         className={primary ? "primary" : undefined}
-        title="Send one new connection test in a temporary ChatGPT chat"
+        title={
+          toolbar
+            ? "Send a connection test in this ChatGPT chat"
+            : "Send one new connection test in a temporary ChatGPT chat"
+        }
         disabled={disabled || test.busy || !allowed}
-        onClick={() => void runFreshConnectionTest(facade)}
+        onClick={() =>
+          void (toolbar
+            ? runManualConnectionPrompt(facade)
+            : runFreshConnectionTest(facade))
+        }
       >
         {test.busy
           ? "Testing…"

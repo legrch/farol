@@ -29,6 +29,7 @@ export const operationKinds = [
   "chatgpt.recover-task-result",
   "chatgpt.reset-conversation",
   "chatgpt.run-deep-test",
+  "chatgpt.run-connection-test",
   "chatgpt.sign-in-return",
   "chatgpt.start-conversation",
   "chatgpt.submit-attachment-task",

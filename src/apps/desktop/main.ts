@@ -1446,7 +1446,11 @@ let recoverableDeepTests: readonly ChatGptTaskJournalRecord[] = [];
 let deepTestRecoveryReady = false;
 const deepTestRequests = new Map<
   string,
-  { taskId: string; promise: Promise<ProductConfigurationResult> }
+  {
+    taskId: string;
+    test: "connection" | "deep";
+    promise: Promise<ProductConfigurationResult>;
+  }
 >();
 const deepTestAcknowledgements = new Map<
   string,
@@ -6963,13 +6967,18 @@ async function configureProductObserved(
     const id = parsed.data.operationId;
     const existing = deepTestRequests.get(id);
     if (existing)
-      return existing.taskId === parsed.data.taskId
+      return existing.taskId === parsed.data.taskId &&
+        existing.test === (parsed.data.test ?? "deep")
         ? existing.promise
         : configurationFailure("CHATGPT_CONVERSATION_REFUSED");
     const attempt = Promise.resolve().then(() =>
       configureNewProductRequest(parsed.data),
     );
-    deepTestRequests.set(id, { taskId: parsed.data.taskId, promise: attempt });
+    deepTestRequests.set(id, {
+      taskId: parsed.data.taskId,
+      test: parsed.data.test ?? "deep",
+      promise: attempt,
+    });
     return attempt;
   }
   if (
@@ -7291,6 +7300,7 @@ function deliverConfigurationReply(
 async function runManualDeepTest(
   operationId: string,
   expectedTaskId: string,
+  test: "connection" | "deep" = "deep",
 ): Promise<ProductConfigurationResult> {
   if (!ChatGptTaskJournalOperationIdSchema.safeParse(operationId).success)
     return configurationFailure("SETTINGS_INPUT_INVALID");
@@ -7441,7 +7451,10 @@ async function runManualDeepTest(
       await journal.prepare({ operationId, kind: "readonly" });
       prepared = true;
     });
-    const prompt = `Run a manual Deep test using the selected ${appName} app. List approved workspaces and choose the first available yourself; if none is available, stop. Exercise connection status and bounded file listing and reading without opening secrets or unrelated personal data. Where the existing grant permits, create only the new uniquely named root-level file farol-deep-test-${operationId}.txt with computer_workspace_write and expectedSha256: null (create-only). Do not list or read that nonexistent test path before creating it, and do not create a directory. If creation is refused, stop without changing the operation ID. After confirmed creation, read only this new file and test edit with its returned exact SHA-256. Where granted, run only harmless bounded pwd and printf shell checks in the selected workspace. Never modify or delete pre-existing items, bypass permissions or confirmations, or retry a refused or uncertain effect. Clean up only the fresh test artifacts created by this run when their identity and contents are confirmed and existing tools and permissions allow it; otherwise leave them and report cleanup NOT RUN. Never clean up after an unknown effect. Stop on any unknown outcome. Report each capability as PASS, FAIL, or NOT RUN with observed evidence and limitations.`;
+    const prompt =
+      test === "connection"
+        ? `Use the selected ${appName} app to call computer_connection_status once. Report the observed result briefly; do not read or change files.`
+        : `Run a manual Deep test using the selected ${appName} app. List approved workspaces and choose the first available yourself; if none is available, stop. Exercise connection status and bounded file listing and reading without opening secrets or unrelated personal data. Where the existing grant permits, create only the new uniquely named root-level file farol-deep-test-${operationId}.txt with computer_workspace_write and expectedSha256: null (create-only). Do not list or read that nonexistent test path before creating it, and do not create a directory. If creation is refused, stop without changing the operation ID. After confirmed creation, read only this new file and test edit with its returned exact SHA-256. Where granted, run only harmless bounded pwd and printf shell checks in the selected workspace. Never modify or delete pre-existing items, bypass permissions or confirmations, or retry a refused or uncertain effect. Clean up only the fresh test artifacts created by this run when their identity and contents are confirmed and existing tools and permissions allow it; otherwise leave them and report cleanup NOT RUN. Never clean up after an unknown effect. Stop on any unknown outcome. Report each capability as PASS, FAIL, or NOT RUN with observed evidence and limitations.`;
     const result = await route.runReadonlyTask(
       prompt,
       [],
@@ -7525,7 +7538,11 @@ async function configureAdmittedProduct(
 ): Promise<ProductConfigurationResult> {
   if (!configuration) return configurationFailure("SETTINGS_UNAVAILABLE");
   if (command.kind === "chatgpt.run-deep-test")
-    return runManualDeepTest(command.operationId, command.taskId);
+    return runManualDeepTest(
+      command.operationId,
+      command.taskId,
+      command.test ?? "deep",
+    );
   if (command.kind === "chatgpt.deep-test-status") return deepTestStatus();
   if (command.kind === "chatgpt.ack-deep-test") {
     if (

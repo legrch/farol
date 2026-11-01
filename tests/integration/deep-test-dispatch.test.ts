@@ -137,6 +137,7 @@ async function fixture(stale = false) {
   ) as (
     id: string,
     taskId: string,
+    test?: "connection" | "deep",
   ) => Promise<{
     ok: boolean;
     error?: string;
@@ -156,6 +157,18 @@ async function fixture(stale = false) {
     },
   };
 }
+it("sends a connection prompt without file operations", async () => {
+  const f = await fixture();
+  expect(await f.run(randomUUID(), "", "connection")).toMatchObject({
+    ok: true,
+    evidence: { state: "send_requested" },
+  });
+  expect(f.send).toHaveBeenCalledTimes(1);
+  const prompt = f.send.mock.calls[0]![0] as string;
+  expect(prompt).toContain("computer_connection_status");
+  expect(prompt).toContain("do not read or change files");
+  expect(prompt).not.toContain("computer_workspace_write");
+});
 it("sends the bounded prompt once and retains the exact result", async () => {
   const f = await fixture();
   const id = randomUUID();

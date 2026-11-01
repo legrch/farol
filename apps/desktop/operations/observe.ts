@@ -159,7 +159,8 @@ export function observedOperationResult(
     data = object(result.data);
   const evidence = object(result.evidence);
   if (
-    kind === "chatgpt.run-deep-test" &&
+    (kind === "chatgpt.run-deep-test" ||
+      kind === "chatgpt.run-connection-test") &&
     result.ok === true &&
     evidence.kind === "chatgpt.deep-test-result" &&
     typeof evidence.operationId === "string" &&

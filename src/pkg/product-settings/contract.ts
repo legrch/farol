@@ -721,6 +721,7 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
     kind: z.literal("chatgpt.run-deep-test"),
     operationId: IdentifierSchema,
     taskId: z.string().max(120),
+    test: z.enum(["connection", "deep"]).optional(),
   }),
   z.strictObject({ kind: z.literal("chatgpt.deep-test-status") }),
   z.strictObject({

@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import {
   ConnectionTestButton,
   runFreshConnectionTest,
+  runManualConnectionPrompt,
 } from "../../apps/desktop/renderer/connection-test";
 import { commandAllowed } from "../../src/ui/renderer/command-eligibility";
 import { WindowController } from "../../src/ui/renderer/controller";
@@ -71,6 +72,24 @@ async function setup() {
     cleanup: () => controller.dispose(),
   };
 }
+it("sends the toolbar test as one manual chat request without repair or setup verification", async () => {
+  const h = await setup();
+  try {
+    h.set({
+      ...h.snapshot,
+      destination: { ...h.snapshot.destination, area: "chatgpt", taskId: "" },
+    });
+    expect((await runManualConnectionPrompt(h.facade)).state).toBe("applied");
+    expect(h.configure).toHaveBeenCalledTimes(1);
+    expect(h.configure.mock.calls[0]![0]).toMatchObject({
+      kind: "chatgpt.run-deep-test",
+      test: "connection",
+      taskId: "",
+    });
+  } finally {
+    h.cleanup();
+  }
+});
 it.each([
   ["refused", "Check sign-in and connection in Setup."],
   [

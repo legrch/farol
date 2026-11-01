@@ -109,7 +109,9 @@ export function dependencyFences(
     // treating them as uncertainty in unrelated configuration operations.
     if (
       key === intent.id &&
-      /^deep-test:(?:status|run|ack):[0-9a-f-]{36}$/u.test(key)
+      /^(?:deep-test:(?:status|run|ack)|connection-test:run):[0-9a-f-]{36}$/u.test(
+        key,
+      )
     )
       return;
     let source =
