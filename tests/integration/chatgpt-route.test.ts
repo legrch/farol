@@ -8523,6 +8523,74 @@ describe("per-operation NEW app verification target", () => {
 });
 
 describe("manual Deep test prepared composer handoff", () => {
+  it("returns the click acknowledgement without observing the assistant response", async () => {
+    const prompt = "owned manual test prompt";
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({ state: "bound" })
+      .mockResolvedValueOnce({ ...prepared, preparedComposerText: prompt })
+      .mockResolvedValueOnce({ state: "bound" })
+      .mockResolvedValueOnce({ activated: true });
+    const intent = vi.fn();
+    const candidate = devTaskRoute(execute);
+    await expect(
+      candidate.runReadonlyTask(
+        prompt,
+        [],
+        {
+          manualDeepTest: true,
+          manualSubmissionOnly: true,
+          onDispatchIntent: intent,
+        },
+        "ordinary",
+        { name: "Farol DEV" },
+      ),
+    ).resolves.toMatchObject({
+      state: "send_requested",
+      code: null,
+      deltaCount: 0,
+      observedCharacters: 0,
+    });
+    expect(intent).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledTimes(4);
+    expect(execute.mock.calls[3]![0]).toContain("send.click()");
+  });
+
+  it.each([null, { malformed: true }, new Error("lost acknowledgement")])(
+    "retains an ambiguous manual Send as unknown and never submits again: %s",
+    async (reply) => {
+      const prompt = "owned manual test prompt";
+      const execute = vi
+        .fn()
+        .mockResolvedValueOnce({ state: "bound" })
+        .mockResolvedValueOnce({ ...prepared, preparedComposerText: prompt })
+        .mockResolvedValueOnce({ state: "bound" })
+        .mockImplementationOnce(async () => {
+          if (reply instanceof Error) throw reply;
+          return reply;
+        });
+      const intent = vi.fn();
+      await expect(
+        devTaskRoute(execute).runReadonlyTask(
+          prompt,
+          [],
+          {
+            manualDeepTest: true,
+            manualSubmissionOnly: true,
+            onDispatchIntent: intent,
+          },
+          "ordinary",
+          { name: "Farol DEV" },
+        ),
+      ).resolves.toMatchObject({
+        state: "outcome_unknown",
+        code: "CHATGPT_TASK_ERROR",
+      });
+      expect(intent).toHaveBeenCalledOnce();
+      expect(execute).toHaveBeenCalledTimes(4);
+    },
+  );
+
   it("passes the exact prepared scaffold and prompt to the activation script", async () => {
     const prompt = "owned manual test prompt";
     const snapshot = `\n ${prompt}`;

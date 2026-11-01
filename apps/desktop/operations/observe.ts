@@ -180,7 +180,10 @@ export function observedOperationResult(
       return { outcome: "refused", code };
     if (evidence.state === "outcome_unknown")
       return { outcome: "unknown", code };
-    if (evidence.state === "completed" && evidence.code === null)
+    if (
+      (evidence.state === "completed" || evidence.state === "send_requested") &&
+      evidence.code === null
+    )
       return { outcome: "done", code: null };
     return { outcome: "unknown", code: "OPERATION_RESULT_UNCONFIRMED" };
   }

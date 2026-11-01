@@ -1773,6 +1773,10 @@ export type ChatGptConnectorCheckResult =
       Omit<ChatGptReadonlyTaskResult, "state"> & { state: "receipt_confirmed" }
     >;
 
+export type ChatGptSubmissionResult = Readonly<
+  Omit<ChatGptReadonlyTaskResult, "state"> & { state: "send_requested" }
+>;
+
 export type ChatGptTaskTextDelta = Readonly<{
   sequence: number;
   delta: string;
@@ -1789,6 +1793,9 @@ export type ChatGptTaskObserver = Readonly<{
   // Synchronous owner fence after the final awaited page verification.
   beforeSend?: () => boolean;
   manualDeepTest?: boolean;
+  // Manual diagnostics end at the original click acknowledgement. This is not
+  // evidence that the provider accepted the turn or completed a test.
+  manualSubmissionOnly?: boolean;
   // Only an app-bound connector check may finish from its exact
   // local receipt. This proves the connector effect, never a model answer.
   readConnectorReceipt?: () => Promise<boolean>;
@@ -3761,6 +3768,16 @@ export class ChatGptRoute {
     prompt: string,
     attachments: readonly StagedChatGptAttachment[],
     observer: ChatGptTaskObserver & {
+      manualDeepTest: true;
+      manualSubmissionOnly: true;
+    },
+    profile: "ordinary",
+    appTarget: Readonly<{ name: string }>,
+  ): Promise<ChatGptReadonlyTaskResult | ChatGptSubmissionResult>;
+  async runReadonlyTask(
+    prompt: string,
+    attachments: readonly StagedChatGptAttachment[],
+    observer: ChatGptTaskObserver & {
       readConnectorReceipt: () => Promise<boolean>;
     },
     profile: "temporary-instant" | "connector-instant",
@@ -3780,10 +3797,24 @@ export class ChatGptRoute {
     profile:
       "ordinary" | "temporary-instant" | "connector-instant" = "ordinary",
     appTarget?: Readonly<{ name: string }>,
-  ): Promise<ChatGptConnectorCheckResult> {
+  ): Promise<ChatGptConnectorCheckResult | ChatGptSubmissionResult> {
     // Capture this operation's explicit target before any navigation. Never
     // mutate the route's default/manual-message binding for a one-shot check.
     const requiredAppName = appTarget?.name ?? this.options.requiredAppName;
+    if (
+      observer.manualSubmissionOnly &&
+      (!observer.manualDeepTest ||
+        !appTarget ||
+        attachments.length !== 0 ||
+        observer.readConnectorReceipt)
+    ) {
+      return {
+        state: "failed_before_submit",
+        code: "CHATGPT_SUBMIT_UNAVAILABLE",
+        deltaCount: 0,
+        observedCharacters: 0,
+      };
+    }
     if (
       requiredAppName !== undefined &&
       !/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$/u.test(requiredAppName)
@@ -3835,7 +3866,11 @@ export class ChatGptRoute {
     };
     timing("started");
     const observationGeneration = ++this.taskObservationGeneration;
-    const deadline = Date.now() + (this.options.taskTimeoutMs ?? 180_000);
+    const deadline =
+      Date.now() +
+      (observer.manualSubmissionOnly
+        ? 15_000
+        : (this.options.taskTimeoutMs ?? 180_000));
     const execute = (
       contents: WebContents,
       script: string,
@@ -4425,6 +4460,15 @@ export class ChatGptRoute {
           deltaCount,
           observedCharacters,
           outputText: observedText,
+        };
+      }
+
+      if (observer.manualSubmissionOnly) {
+        return {
+          state: "send_requested",
+          code: null,
+          deltaCount: 0,
+          observedCharacters: 0,
         };
       }
 

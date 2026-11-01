@@ -1175,7 +1175,21 @@ export function Shell() {
           <kbd>⌘ K</kbd>
         </button>
         {destination.area === "chatgpt" && !state.setupSignInReturn && (
-          <ConnectionTestButton facade={facade} toolbar />
+          <ConnectionTestButton
+            facade={facade}
+            toolbar
+            manualFeedback={
+              !deepTestIntent
+                ? ""
+                : deepTestIntent.state === "pending"
+                  ? "Preparing Deep test…"
+                  : deepTestIntent.state === "unknown"
+                    ? "Could not confirm whether the request was sent. Check this chat before starting a new test."
+                    : deepTestIntent.state === "refused"
+                      ? "Deep test was not sent."
+                      : "Send requested. View ChatGPT."
+            }
+          />
         )}
         <button
           className="notifications-trigger"
@@ -1202,17 +1216,6 @@ export function Shell() {
           >
             <Icon name="settings" />
           </button>
-        )}
-        {destination.area === "chatgpt" && deepTestIntent && (
-          <div className="notice" role="status">
-            {deepTestIntent.state === "pending"
-              ? "Deep test is starting or running in ChatGPT."
-              : deepTestIntent.state === "unknown"
-                ? "Deep test outcome is unconfirmed. Do not repeat that request."
-                : deepTestIntent.state === "refused"
-                  ? `Deep test was not submitted${deepTestIntent.code ? ` · ${deepTestIntent.code}` : ""}.`
-                  : "Deep test response is available in ChatGPT."}
-          </div>
         )}
       </header>
       <nav

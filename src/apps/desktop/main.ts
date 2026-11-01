@@ -7447,6 +7447,7 @@ async function runManualDeepTest(
       [],
       {
         manualDeepTest: true,
+        manualSubmissionOnly: true,
         beforeSend: isCurrent,
         onDispatchIntent: async () => {
           if (!isCurrent()) throw new Error("DEEP_TEST_CHANGED");

@@ -37,6 +37,7 @@ export function deepTestJournalFileName(operationId: string): string {
 export const ChatGptTaskJournalResultSchema = z.strictObject({
   state: z.enum([
     "completed",
+    "send_requested",
     "not_authenticated",
     "failed_before_submit",
     "outcome_unknown",

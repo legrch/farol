@@ -63,6 +63,7 @@ async function fixture(stale = false) {
   const route = {
     captureManualTaskTarget: () => () => targetValid,
     runReadonlyTask: vi.fn(async (prompt, _attachments, observer) => {
+      expect(observer.manualSubmissionOnly).toBe(true);
       if (stale) changed = true;
       await observer.onDispatchIntent();
       if (!observer.beforeSend())
@@ -74,10 +75,10 @@ async function fixture(stale = false) {
         } as never;
       send(prompt);
       return {
-        state: "completed",
+        state: "send_requested",
         code: null,
-        deltaCount: 1,
-        observedCharacters: 10,
+        deltaCount: 0,
+        observedCharacters: 0,
       };
     }),
   };
@@ -99,6 +100,7 @@ async function fixture(stale = false) {
     installedUpdateAdmission: false,
     chatGptTaskAdmission: false,
     connectorTaskAdmission: false,
+    connectorTaskAdmissionPurpose: null,
     pendingChatGptReadonlyTask: null,
     pendingChatGptAttachmentTask: null,
     recoverableChatGptTask: null,
@@ -159,7 +161,7 @@ it("sends the bounded prompt once and retains the exact result", async () => {
   const id = randomUUID();
   expect(await f.run(id, "")).toMatchObject({
     ok: true,
-    evidence: { state: "completed" },
+    evidence: { state: "send_requested" },
   });
   expect(f.send).toHaveBeenCalledTimes(1);
   expect(f.send.mock.calls[0]![0]).toContain(`farol-deep-test-${id}.txt`);
@@ -178,7 +180,7 @@ it("sends the bounded prompt once and retains the exact result", async () => {
   });
   expect(await journal.load()).toMatchObject({
     phase: "result_retained",
-    result: { state: "completed" },
+    result: { state: "send_requested" },
   });
   expect((await f.run(id, "")).ok).toBe(false);
   expect(f.send).toHaveBeenCalledTimes(1);
@@ -228,7 +230,7 @@ it("waits for the original overlay dismissal before sending exactly once", async
   }, 30);
   expect(await pending).toMatchObject({
     ok: true,
-    evidence: { state: "completed" },
+    evidence: { state: "send_requested" },
   });
   expect(f.send).toHaveBeenCalledTimes(1);
 });
@@ -257,7 +259,7 @@ it("holds both host admissions through the original in-flight request", async ()
       started();
       await gate;
       return {
-        state: "completed",
+        state: "send_requested",
         code: null,
         deltaCount: 0,
         observedCharacters: 0,
@@ -337,7 +339,7 @@ it("retains an unknown result without re-sending", async () => {
   const freshId = randomUUID();
   expect(await f.run(freshId, "")).toMatchObject({
     ok: true,
-    evidence: { state: "completed" },
+    evidence: { state: "send_requested" },
   });
   expect(f.route.runReadonlyTask).toHaveBeenCalledTimes(2);
   expect(

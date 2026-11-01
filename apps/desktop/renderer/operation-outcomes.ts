@@ -50,6 +50,7 @@ export const operationCodesByOutcome = {
     "response.completed",
     "rolled_back",
     "settled",
+    "send_requested",
     "supported",
   ],
   refused: [

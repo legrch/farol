@@ -937,6 +937,7 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
     operationId: IdentifierSchema,
     state: z.enum([
       "completed",
+      "send_requested",
       "not_authenticated",
       "failed_before_submit",
       "outcome_unknown",
@@ -951,6 +952,7 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
           operationId: IdentifierSchema,
           state: z.enum([
             "completed",
+            "send_requested",
             "not_authenticated",
             "failed_before_submit",
             "outcome_unknown",

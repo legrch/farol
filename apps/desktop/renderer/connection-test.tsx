@@ -315,11 +315,13 @@ export function ConnectionTestButton({
   disabled = false,
   primary = false,
   toolbar = false,
+  manualFeedback = "",
 }: {
   facade: RendererFacade;
   disabled?: boolean;
   primary?: boolean;
   toolbar?: boolean;
+  manualFeedback?: string;
 }) {
   const test = useConnectionTest(facade),
     snapshot = facade.getSnapshot();
@@ -347,6 +349,11 @@ export function ConnectionTestButton({
       {toolbar && test.message && (
         <span role="status" className="connection-test-feedback">
           {test.message}
+        </span>
+      )}
+      {toolbar && manualFeedback && (
+        <span role="status" className="connection-test-feedback">
+          {manualFeedback}
         </span>
       )}
       <button
