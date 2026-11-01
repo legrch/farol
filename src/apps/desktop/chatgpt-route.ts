@@ -2438,18 +2438,55 @@ export class ChatGptRoute {
     if (!current || current.isDestroyed()) return { status: "unreachable" };
     const url = new URL(this.options.homeUrl);
     url.searchParams.set("temporary-chat", "true");
+    const beforeDocument = this.chatPhysicalDocumentGeneration;
+    let readyDocument: number | null = null;
+    let domReady: (() => void) | undefined;
+    // The same ordinary-browser milestone used by initial opening also applies
+    // here. Slow subresources must not turn a usable new document into a timeout.
+    // An event from the retained document cannot complete this navigation.
+    const ordinaryReady =
+      this.options.requireAppForManualMessages === true
+        ? null
+        : new Promise<void>((resolve) => {
+            domReady = () => {
+              if (
+                this.ownsRouteContents(current.webContents) &&
+                this.chatPhysicalDocumentGeneration > beforeDocument &&
+                !this.routeDocumentLoadFailed &&
+                !this.routeDocumentAwaitingCommit &&
+                allowedChatGptPageUrl(
+                  current.webContents.getURL(),
+                  this.options.e2eOrigin,
+                )
+              ) {
+                readyDocument = this.chatPhysicalDocumentGeneration;
+                resolve();
+              }
+            };
+            current.webContents.on("dom-ready", domReady);
+          });
     try {
+      const navigation = current.loadURL(url.href);
       await this.awaitRouteOpenStep(
         current,
-        current.loadURL(url.href),
+        ordinaryReady ? Promise.race([navigation, ordinaryReady]) : navigation,
         Date.now() + ROUTE_OPEN_DEADLINE_MS,
       );
-      if (this.routeWindow !== current || current.isDestroyed())
+      if (
+        this.routeWindow !== current ||
+        current.isDestroyed() ||
+        this.routeDocumentLoadFailed ||
+        this.routeDocumentAwaitingCommit ||
+        (readyDocument !== null &&
+          readyDocument !== this.chatPhysicalDocumentGeneration)
+      )
         return { status: "unreachable" };
       this.options.onNavigationHistoryChanged?.(this.navigationHistory());
       return { status: "opened" };
     } catch {
       return { status: "unreachable" };
+    } finally {
+      if (domReady) current.webContents.removeListener("dom-ready", domReady);
     }
   }
 

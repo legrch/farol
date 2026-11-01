@@ -22,6 +22,7 @@ tasks:
       - task: output:guard
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run ci
       - task: test:core
+      - task: test:e2e:chatgpt-startup-readiness
       - task: test:tooling
       - task: test:witness-inputs
       - task: output:check
@@ -267,6 +268,12 @@ tasks:
     desc: Exercise the packaged preview; explicit test display, fault runs hidden
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run test:e2e -- {{.CLI_ARGS}}
+
+  test:e2e:chatgpt-startup-readiness:
+    desc: Check committed temporary-chat readiness with slow resources in hidden disposable Electron
+    platforms: [darwin]
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run test:e2e:chatgpt-startup-readiness
 
   test:e2e:guided-setup:
     desc: Check normal Preview and Dev Setup/Browser using owned hidden fixtures

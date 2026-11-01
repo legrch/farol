@@ -5729,6 +5729,106 @@ describe("ChatGPT embedded task surface", () => {
     candidate.dispose();
   });
 
+  it("opens one committed temporary document before slow subresources finish", async () => {
+    const surface = embeddedSurface();
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+    });
+    await candidate.preload();
+    const originalLoad = surface.loadURL.getMockImplementation()!;
+    let finish!: () => void;
+    surface.loadURL.mockImplementation(async (url) => {
+      await originalLoad(url);
+      surface.webContents.emit("did-start-navigation", {}, url, false, true);
+      surface.webContents.emit("did-navigate", {}, url);
+      surface.webContents.emit("dom-ready");
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+    });
+    try {
+      expect(await candidate.openTemporaryChat()).toEqual({ status: "opened" });
+      expect(surface.loadURL).toHaveBeenCalledTimes(2);
+      expect(surface.webContents.listenerCount("dom-ready")).toBe(1);
+    } finally {
+      finish();
+      candidate.dispose();
+    }
+  });
+
+  it.each([
+    "old-document",
+    "uncommitted",
+    "failed",
+    "retired",
+    "protected",
+  ] as const)(
+    "does not admit a %s temporary DOM while navigation stays pending",
+    async (kind) => {
+      vi.useFakeTimers();
+      const surface = embeddedSurface();
+      Object.assign(surface.webContents, {
+        executeJavaScript: vi.fn(async () => true),
+      });
+      const candidate = new ChatGptRoute({
+        homeUrl: "https://chatgpt.com/",
+        initialUrl: "https://chatgpt.com/",
+        e2eOrigin: null,
+        parent: () => null,
+        ...(kind === "protected"
+          ? { requireAppForManualMessages: true, requiredAppName: "Farol Dev" }
+          : {}),
+        surfaceFactory: (() =>
+          surface) as unknown as ChatGptRouteSurfaceFactory,
+      });
+      await candidate.preload();
+      const originalLoad = surface.loadURL.getMockImplementation()!;
+      let finish!: () => void;
+      surface.loadURL.mockImplementation(async (url) => {
+        await originalLoad(url);
+        if (kind !== "old-document")
+          surface.webContents.emit(
+            "did-start-navigation",
+            {},
+            url,
+            false,
+            true,
+          );
+        if (kind !== "uncommitted" && kind !== "old-document")
+          surface.webContents.emit("did-navigate", {}, url);
+        if (kind === "failed")
+          surface.webContents.emit(
+            "did-fail-load",
+            {},
+            -105,
+            "failed",
+            url,
+            true,
+          );
+        if (kind === "retired") candidate.dispose();
+        surface.webContents.emit("dom-ready");
+        await new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+      });
+      try {
+        const opening = candidate.openTemporaryChat();
+        await vi.advanceTimersByTimeAsync(30_001);
+        expect(await opening).toEqual({ status: "unreachable" });
+        expect(surface.loadURL).toHaveBeenCalledTimes(2);
+        expect(surface.webContents.listenerCount("dom-ready")).toBe(1);
+      } finally {
+        finish?.();
+        candidate.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("ignores closing and navigation events from a retired surface", async () => {
     const surface = embeddedSurface();
     const onConversationChanged = vi.fn();
