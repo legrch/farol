@@ -217,3 +217,7 @@ next step. Protected or terminally failed openers remain refused. Binding change
 Quit and deadline expiry stop this original check without another navigation or
 Send. Fixed preflight reason tokens distinguish the failed stage without logging
 provider HTML, prompts or credentials.
+
+The readiness budget bounds admission, not wall-clock cancellation of an existing
+navigation wait. Those waits retain their own bounds; an expired shared readiness
+deadline still cannot admit a provider submission.
