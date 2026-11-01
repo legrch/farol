@@ -5248,6 +5248,11 @@ describe("ChatGPT route streaming observation", () => {
   });
 
   it("returns the observed user-message identity when a correlated reply is still late", async () => {
+    // Advance logical time only after correlation was observed. A real 20ms
+    // budget can expire inside a probe under coverage, exercising a different
+    // failure path instead of the late-reply timeout this fixture owns.
+    let now = 10_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
     const executeJavaScript = vi
       .fn()
       .mockResolvedValueOnce(prepared)
@@ -5264,6 +5269,12 @@ describe("ChatGPT route streaming observation", () => {
     await expect(
       streamingTaskRoute(executeJavaScript, 20).runReadonlyTask(
         "preserve this context",
+        [],
+        {
+          onCorrelation: () => {
+            now += 21;
+          },
+        },
       ),
     ).resolves.toMatchObject({
       state: "outcome_unknown",
