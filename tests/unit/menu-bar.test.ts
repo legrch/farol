@@ -1,7 +1,10 @@
 // Mocked native menu policy; no visible macOS menu/focus acceptance.
 import type { EventEmitter } from "node:events";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createMenuBar } from "../../src/apps/desktop/menu-bar";
+import {
+  createMenuBar,
+  menuBarIconState,
+} from "../../src/apps/desktop/menu-bar";
 type Item = { label?: string; click?: () => void; enabled?: boolean };
 type Menu = { items: Item[] };
 type OwnedTray = EventEmitter & {
@@ -9,9 +12,16 @@ type OwnedTray = EventEmitter & {
   popUpContextMenu: ReturnType<typeof vi.fn>;
   destroy: ReturnType<typeof vi.fn>;
   setToolTip: ReturnType<typeof vi.fn>;
+  setImage: ReturnType<typeof vi.fn>;
   setTitle: ReturnType<typeof vi.fn>;
 };
-const owned = vi.hoisted(() => ({ trays: [] as OwnedTray[] }));
+const owned = vi.hoisted(() => ({
+  trays: [] as OwnedTray[],
+  images: [] as {
+    addRepresentation: ReturnType<typeof vi.fn>;
+    setTemplateImage: ReturnType<typeof vi.fn>;
+  }[],
+}));
 vi.mock("electron", async () => {
   const { EventEmitter } = await import("node:events");
   class Tray extends EventEmitter {
@@ -20,6 +30,7 @@ vi.mock("electron", async () => {
     destroy = vi.fn();
     setToolTip = vi.fn();
     setTitle = vi.fn();
+    setImage = vi.fn();
     setIgnoreDoubleClickEvents = vi.fn();
     constructor() {
       super();
@@ -30,16 +41,21 @@ vi.mock("electron", async () => {
     Tray,
     Menu: { buildFromTemplate: (items: Item[]) => ({ items }) },
     nativeImage: {
-      createFromBuffer: () => ({
-        addRepresentation: vi.fn(),
-        isEmpty: () => false,
-        setTemplateImage: vi.fn(),
-      }),
+      createFromBuffer: () => {
+        const image = {
+          addRepresentation: vi.fn(),
+          isEmpty: () => false,
+          setTemplateImage: vi.fn(),
+        };
+        owned.images.push(image);
+        return image;
+      },
     },
   };
 });
 beforeEach(() => {
   owned.trays.length = 0;
+  owned.images.length = 0;
   vi.useFakeTimers();
 });
 afterEach(() => {
@@ -54,7 +70,11 @@ function fixture() {
     updates: vi.fn(),
     quit: vi.fn(),
   };
-  let status: { label: string; current: string | null; attention?: boolean } = {
+  let status: {
+    label: string;
+    current: string | null;
+    icon?: "filled" | "hollow" | "attention";
+  } = {
     label: "Service unavailable",
     current: null,
   };
@@ -134,13 +154,13 @@ it("refreshes native status without a click and releases its owned timer", () =>
   f.setStatus({
     label: "Startup recovery required",
     current: null,
-    attention: true,
+    icon: "attention",
   });
   vi.advanceTimersByTime(1_000);
   expect(f.tray.setToolTip).toHaveBeenLastCalledWith(
     "Startup recovery required",
   );
-  expect(f.tray.setTitle).toHaveBeenLastCalledWith("!");
+  expect(f.tray.setTitle).not.toHaveBeenCalled();
   expect(f.tray.popUpContextMenu).not.toHaveBeenCalled();
   Object.values(f.actions).forEach((action) =>
     expect(action).not.toHaveBeenCalled(),
@@ -202,7 +222,7 @@ it("expires a throwing status producer to an explicit unavailable projection", (
   let unavailable = false;
   const dispose = createMenuBar({ open: vi.fn(), quit: vi.fn() }, () => {
     if (unavailable) throw new Error("projection unavailable");
-    return { label: "Original observation", current: null };
+    return { label: "Original observation", current: null, icon: "filled" };
   });
   const tray = owned.trays[0]!;
   unavailable = true;
@@ -210,29 +230,52 @@ it("expires a throwing status producer to an explicit unavailable projection", (
   expect(tray.setToolTip).toHaveBeenLastCalledWith(
     "Farol · Status unavailable",
   );
-  expect(tray.setTitle).toHaveBeenLastCalledWith("!");
+  expect(tray.setTitle).not.toHaveBeenCalled();
+  expect(tray.setImage).toHaveBeenCalled();
   tray.emit("click");
   const menu = tray.popUpContextMenu.mock.lastCall?.[0] as Menu;
   expect(menu.items[0]?.label).toBe("Farol · Status unavailable");
   dispose();
 });
 
-it("updates the supplied status shape without click or command dispatch", () => {
+it.each([
+  ["recent_transport", true, "filled"],
+  ["recent_transport", false, "hollow"],
+  ["checking", true, "hollow"],
+  ["reconnecting", true, "hollow"],
+  ["unavailable", true, "attention"],
+  ["unobserved", true, "attention"],
+  ["action_required", true, "attention"],
+  ["stopped", true, "attention"],
+] as const)("maps %s with attachment %s to %s", (state, attached, expected) => {
+  expect(menuBarIconState(state, attached)).toBe(expected);
+});
+
+it("changes only the template image during passive status refresh", () => {
   const actions = { open: vi.fn(), quit: vi.fn() };
-  let marker: "✓" | "…" | "?" = "✓";
+  let icon: "filled" | "hollow" | "attention" = "filled";
   const dispose = createMenuBar(actions, () => ({
     label: "Observed status",
     current: null,
-    marker,
+    icon,
   }));
   const tray = owned.trays[0]!;
-  expect(tray.setTitle).toHaveBeenLastCalledWith("✓");
-  marker = "…";
+  expect(owned.images).toHaveLength(3);
+  for (const image of owned.images) {
+    expect(image.setTemplateImage).toHaveBeenCalledWith(true);
+    expect(image.addRepresentation).toHaveBeenCalledWith({
+      scaleFactor: 2,
+      buffer: expect.any(Buffer),
+    });
+  }
+  expect(tray.setImage).toHaveBeenCalledTimes(1);
+  icon = "hollow";
   vi.advanceTimersByTime(1000);
-  expect(tray.setTitle).toHaveBeenLastCalledWith("…");
-  marker = "?";
+  icon = "attention";
   vi.advanceTimersByTime(1000);
-  expect(tray.setTitle).toHaveBeenLastCalledWith("?");
+  expect(tray.setImage).toHaveBeenCalledTimes(3);
+  expect(tray.setTitle).not.toHaveBeenCalled();
+  expect(tray.setToolTip).toHaveBeenLastCalledWith("Observed status");
   expect(actions.open).not.toHaveBeenCalled();
   expect(actions.quit).not.toHaveBeenCalled();
   dispose();

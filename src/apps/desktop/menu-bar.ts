@@ -1,11 +1,28 @@
 import { Menu, Tray, nativeImage } from "electron";
-import { menuBarTemplate1x, menuBarTemplate2x } from "./menu-bar-assets";
+import {
+  menuBarTemplate1x,
+  menuBarTemplate2x,
+  menuBarHollowTemplate1x,
+  menuBarHollowTemplate2x,
+  menuBarAttentionTemplate1x,
+  menuBarAttentionTemplate2x,
+} from "./menu-bar-assets";
+import type { ConnectionStatusView } from "../../../apps/desktop/renderer/connection-status";
+
+type IconState = "filled" | "hollow" | "attention";
+export function menuBarIconState(
+  state: ConnectionStatusView["state"],
+  attached: boolean,
+): IconState {
+  if (state === "checking" || state === "reconnecting") return "hollow";
+  if (state === "recent_transport") return attached ? "filled" : "hollow";
+  return "attention";
+}
 
 type MenuBarStatus = Readonly<{
   label: string;
   current: string | null;
-  attention?: boolean;
-  marker?: "✓" | "…" | "↻" | "!" | "?" | "–";
+  icon?: IconState;
 }>;
 
 /** Native lifetime owned by the host. Commands use the same app routing. */
@@ -18,16 +35,26 @@ export function createMenuBar(
   }>,
   status: () => MenuBarStatus,
 ): () => void {
-  const image = nativeImage.createFromBuffer(
-    Buffer.from(menuBarTemplate1x, "base64"),
-  );
-  image.addRepresentation({
-    scaleFactor: 2,
-    buffer: Buffer.from(menuBarTemplate2x, "base64"),
-  });
-  if (image.isEmpty()) throw new Error("MENU_BAR_TEMPLATE_INVALID");
-  image.setTemplateImage(true);
-  const tray = new Tray(image);
+  const makeImage = (one: string, two: string) => {
+    const image = nativeImage.createFromBuffer(Buffer.from(one, "base64"));
+    image.addRepresentation({
+      scaleFactor: 2,
+      buffer: Buffer.from(two, "base64"),
+    });
+    if (image.isEmpty()) throw new Error("MENU_BAR_TEMPLATE_INVALID");
+    image.setTemplateImage(true);
+    return image;
+  };
+  const images = {
+    filled: makeImage(menuBarTemplate1x, menuBarTemplate2x),
+    hollow: makeImage(menuBarHollowTemplate1x, menuBarHollowTemplate2x),
+    attention: makeImage(
+      menuBarAttentionTemplate1x,
+      menuBarAttentionTemplate2x,
+    ),
+  };
+  const tray = new Tray(images.attention);
+  let currentIcon: IconState = "attention";
   let disposed = false;
   let timer: ReturnType<typeof setInterval> | null = null;
   const readStatus = (): MenuBarStatus => {
@@ -37,7 +64,7 @@ export function createMenuBar(
       return {
         label: "Farol · Status unavailable",
         current: null,
-        attention: true,
+        icon: "attention",
       };
     }
   };
@@ -73,7 +100,11 @@ export function createMenuBar(
     if (disposed) return;
     const value = readStatus();
     tray.setToolTip(value.label);
-    tray.setTitle(value.marker ?? (value.attention ? "!" : ""));
+    const icon = value.icon ?? "attention";
+    if (icon !== currentIcon) {
+      tray.setImage(images[icon]);
+      currentIcon = icon;
+    }
   };
   try {
     tray.setIgnoreDoubleClickEvents(true);

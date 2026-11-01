@@ -116,7 +116,7 @@ declare const __FAROL_GO_SHELL__: {
   readonly support: unknown;
   readonly watchdogSourceBase64: string;
 } | null;
-import { createMenuBar } from "./menu-bar";
+import { createMenuBar, menuBarIconState } from "./menu-bar";
 import {
   desktopCoreArtifactRoot,
   desktopDevShellImageMatches,
@@ -12601,7 +12601,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
                           ? "Farol · Closing recovery"
                           : "Farol · Startup recovery required",
                         current: null,
-                        attention: !quitInProgress,
+                        icon: "attention",
                       })),
                   }
                 : {}),
@@ -13144,15 +13144,32 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
             app.quit();
           },
         },
-        () => ({
-          label: "Farol · " + currentConnectionStatus().label,
-          attention: currentConnectionStatus().attention,
-          marker: currentConnectionStatus().marker,
-          current:
-            productTasksState().tasks.find(
-              (task) => task.lifecycle === "running",
-            )?.label ?? null,
-        }),
+        () => {
+          const status = currentConnectionStatus();
+          const capture = captureConnectionStatus();
+          const snapshot = configuration?.snapshot();
+          const attached =
+            status.state === "recent_transport" &&
+            capture?.kind === "running" &&
+            connectionStatusCurrent(capture) &&
+            snapshot?.status === "ready" &&
+            !workspaceMutationAdmission &&
+            !connectorRuntimeUncertain(snapshot.settings) &&
+            snapshot.settings.computer.pendingEdit === null &&
+            !snapshot.settings.setup.computer.outcomeUnknown &&
+            currentConnectorAttachment(
+              snapshot.settings,
+              buildIdentity.buildId,
+            ) !== null;
+          return {
+            label: "Farol · " + status.label,
+            icon: menuBarIconState(status.state, attached),
+            current:
+              productTasksState().tasks.find(
+                (task) => task.lifecycle === "running",
+              )?.label ?? null,
+          };
+        },
       ),
     );
     app.once("will-quit", disposeMenuBar);

@@ -110,6 +110,24 @@ it("embeds exact approved native template pixels without expanding the package c
       ),
     );
   }
+  for (const state of ["Hollow", "Attention"]) {
+    for (const scale of [1, 2]) {
+      const match = source.match(
+        new RegExp(
+          `menuBar${state}Template${scale}x\\s*=\\s*"([A-Za-z0-9+/=]+)"`,
+        ),
+      );
+      expect(match).not.toBeNull();
+      const image = Buffer.from(match[1], "base64");
+      expect(image).toEqual(
+        await fs.readFile(
+          `resources/brand/signal-color/menu-bar-${state.toLowerCase()}-template${scale === 2 ? "@2x" : ""}.png`,
+        ),
+      );
+      expect(image.readUInt32BE(16)).toBe(18 * scale);
+      expect(image.readUInt32BE(20)).toBe(18 * scale);
+    }
+  }
   expect(BRAND_RESOURCES.map((resource) => resource.output)).toEqual([
     "farol-mark.svg",
     "farol-dev-mark.svg",
