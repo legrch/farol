@@ -96,6 +96,7 @@ const activatedTaskSchema = z.union([
   navigatedTaskSchema,
   z.strictObject({ appSelectionLost: z.literal(true) }),
   z.strictObject({ profileLost: z.literal(true) }),
+  z.strictObject({ draftPresent: z.literal(true) }),
   activatedControlSchema,
 ]);
 
@@ -820,11 +821,13 @@ function appSelectionPrelude(appName: string): string {
 export function bindChatGptAppScript(
   appName: string,
   expectedHref: string,
+  manualDeepTest = false,
 ): string {
   return `(async () => {
     const expectedHref = ${JSON.stringify(expectedHref)};
     if (location.href !== expectedHref) return { state: "navigated" };
     ${appSelectionPrelude(appName)}
+    ${manualDeepTest ? manualDeepTestDraftGuard("", 'return { state: "blocked", reason: "draft_present" };') : ""}
     const input = findComposer();
     if (!(input instanceof HTMLElement)) return { state: "blocked", reason: "missing" };
     if (composerDraftText(input).trim().length > 0) {
@@ -1152,11 +1155,49 @@ export function installManualAppGateScript(appName: string): string {
 // evaluate these exact source strings in `node:vm` against a stub page:
 // the guard has to be proven on the bytes that are dispatched, not on a
 // paraphrase of them.
+function manualDeepTestDraftGuard(
+  expectedText: string,
+  refusal = "return { draftPresent: true };",
+): string {
+  return `
+    const manualComposer = findComposer();
+    const manualForm = manualComposer instanceof HTMLElement ? manualComposer.closest('form') : null;
+    const manualVisible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const style = getComputedStyle(element), box = element.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && box.width > 0 && box.height > 0;
+    };
+    const manualInputs = manualForm ? [...document.querySelectorAll('input[type="file"]')]
+      .filter((element) => manualForm.contains(element) || element.form === manualForm) : [];
+    const manualComposers = [...new Set(document.querySelectorAll('#prompt-textarea,[data-testid="prompt-textarea"],[contenteditable="true"][data-virtualkeyboard="true"]'))].filter(manualVisible);
+    const manualAttachments = manualForm ? [...manualForm.querySelectorAll(
+      '[data-testid="attachment-preview"],[data-testid="composer-attachment"],[data-testid*="file-chip"],[data-testid*="attachment-chip"],[aria-label*="remove file" i],[aria-label*="remove attachment" i]'
+    )].some(manualVisible) : true;
+    const manualAllowedLabels = new Set(['Add files', 'Add files and more', 'Select ChatGPT model', 'Dictate', 'Start Voice', 'Start voice mode', 'Start Voice Mode', 'Send prompt', 'Send message', 'Send']);
+    const manualControlSelector = 'button,[role="button"],input[type="button"],input[type="submit"]';
+    const manualUnknownControls = manualForm ? [...new Set([
+      ...manualForm.querySelectorAll(manualControlSelector),
+      ...[...document.querySelectorAll(manualControlSelector)].filter((element) => element.form === manualForm)
+    ])]
+      .filter(manualVisible).some((element) =>
+        !element.closest(selectedSelector) &&
+        element.getAttribute('data-testid') !== 'send-button' &&
+        !manualAllowedLabels.has(element.getAttribute('aria-label'))) : true;
+    const manualUnknownImage = manualForm ? [...manualForm.querySelectorAll('img,video,audio')]
+      .filter(manualVisible).some((element) => !element.closest(selectedSelector)) : true;
+    if (!(manualComposer instanceof HTMLElement) || !manualForm || manualComposers.length !== 1 || manualComposers[0] !== manualComposer || manualInputs.length !== 1 || manualAttachments || manualUnknownControls || manualUnknownImage ||
+        manualInputs.some((input) => !(input instanceof HTMLInputElement) || !input.files || input.files.length > 0) ||
+        composerDraftText(manualComposer).trim() !== ${JSON.stringify(expectedText.trim())})
+      ${refusal}
+  `;
+}
+
 export function prepareTaskScript(
   prompt: string,
   expectedHref: string,
   requiredAppName?: string,
   deadlineAt?: number,
+  manualDeepTest = false,
 ): string {
   if (
     deadlineAt !== undefined &&
@@ -1170,6 +1211,7 @@ export function prepareTaskScript(
     const prompt = ${JSON.stringify(prompt)};
     ${requiredAppName ? appSelectionPrelude(requiredAppName) : ""}
     ${requiredAppName ? 'if (appSelection().state !== "bound") return { appSelectionLost: true };' : ""}
+    ${manualDeepTest && requiredAppName ? manualDeepTestDraftGuard("") : ""}
     const visible = (element) => {
       if (!(element instanceof HTMLElement)) return false;
       const style = getComputedStyle(element);
@@ -1240,6 +1282,7 @@ export function activateTaskScript(
   requiredAppName?: string,
   requireTemporaryInstant = false,
   requireOrdinaryInstant = false,
+  manualDeepTestPrompt?: string,
 ): string {
   return `(() => {
     const expectedHref = ${JSON.stringify(expectedHref)};
@@ -1270,6 +1313,7 @@ export function activateTaskScript(
     }
     ${requiredAppName ? appSelectionPrelude(requiredAppName) : ""}
     ${requiredAppName ? 'if (appSelection().state !== "bound") return { appSelectionLost: true };' : ""}
+    ${manualDeepTestPrompt !== undefined && requiredAppName ? manualDeepTestDraftGuard(manualDeepTestPrompt) : ""}
     const visible = (element) => {
       if (!(element instanceof HTMLElement)) return false;
       const style = getComputedStyle(element);
@@ -1283,6 +1327,7 @@ export function activateTaskScript(
       document.querySelector('button[aria-label="Send"]')
     ].find((element) => visible(element) && element instanceof HTMLButtonElement && !element.disabled);
     if (!(send instanceof HTMLButtonElement)) return { activated: false };
+    ${manualDeepTestPrompt !== undefined && requiredAppName ? "if (send.form !== manualForm) return { draftPresent: true };" : ""}
     send.click();
     return { activated: true };
   })()`;
@@ -1693,6 +1738,7 @@ export type ChatGptTaskObserver = Readonly<{
   onDispatchIntent?: () => void | Promise<void>;
   // Synchronous owner fence after the final awaited page verification.
   beforeSend?: () => boolean;
+  manualDeepTest?: boolean;
   // Only an app-bound connector check may finish from its exact
   // local receipt. This proves the connector effect, never a model answer.
   readConnectorReceipt?: () => Promise<boolean>;
@@ -3946,7 +3992,11 @@ export class ChatGptRoute {
         try {
           appBindingCandidate = await execute(
             candidate.webContents,
-            bindChatGptAppScript(requiredAppName, dispatchIdentityUrl),
+            bindChatGptAppScript(
+              requiredAppName,
+              dispatchIdentityUrl,
+              observer.manualDeepTest === true,
+            ),
             true,
           );
         } catch {
@@ -4006,6 +4056,7 @@ export class ChatGptRoute {
             dispatchIdentityUrl,
             requiredAppName,
             deadline,
+            observer.manualDeepTest === true,
           ),
           true,
         ),
@@ -4178,6 +4229,7 @@ export class ChatGptRoute {
                 requiredAppName,
                 profile === "temporary-instant",
                 profile === "connector-instant",
+                observer.manualDeepTest ? prompt : undefined,
               ),
               true,
               true,
@@ -4229,6 +4281,16 @@ export class ChatGptRoute {
           return {
             state: "failed_before_submit",
             code: "CHATGPT_INSTANT_MODEL_REQUIRED",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
+        if ("draftPresent" in activated.data) {
+          submissionPhase = "not_attempted";
+          return {
+            state: "failed_before_submit",
+            code: "CHATGPT_COMPOSER_DRAFT_PRESENT",
             deltaCount,
             observedCharacters,
             outputText: observedText,
