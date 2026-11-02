@@ -100,6 +100,54 @@ it("retains a correlated safe diagnostic on the original read lifecycle", async 
     readDiagnostic: { stage: "policy", reason: "policy_denied" },
   });
 });
+it("looks up one bounded diagnostic only while its exact target is authorized", async () => {
+  const { store } = setup();
+  store.setWorkspaceLabels([{ workspaceId: "workspace", label: "Docs" }]);
+  const metadata: OperationMetadata = {
+    source: "ChatGPT",
+    kind: "computer_workspace_read",
+    target: { workspace: "workspace", relativePath: "note.md" },
+    requestId: "07f13182-1414-4e08-b579-f468c6fa2e64",
+  };
+  const finish = store.begin(metadata);
+  metadata.readDiagnostic = { stage: "target", reason: "link_not_supported" };
+  finish("refused", "WORKSPACE_PATH_REFUSED", 1);
+  expect(await store.flush(5000)).toBe(true);
+  const allow = vi.fn(async () => true);
+  expect(
+    await store.lookupReadDiagnostic(
+      metadata.requestId!,
+      "workspace",
+      "note.md",
+      allow,
+    ),
+  ).toEqual({
+    status: "found",
+    requestId: metadata.requestId,
+    diagnostic: { stage: "target", reason: "link_not_supported" },
+  });
+  expect(allow).toHaveBeenCalledTimes(2);
+  const revoked = vi
+    .fn()
+    .mockResolvedValueOnce(true)
+    .mockResolvedValueOnce(false);
+  expect(
+    await store.lookupReadDiagnostic(
+      metadata.requestId!,
+      "workspace",
+      "note.md",
+      revoked,
+    ),
+  ).toEqual({ status: "unavailable" });
+  expect(
+    await store.lookupReadDiagnostic(
+      metadata.requestId!,
+      "workspace",
+      "other.md",
+      allow,
+    ),
+  ).toEqual({ status: "not_retained" });
+});
 it("persists unmapped-code counts across restart and exposes only safe unknown records", async () => {
   const { store, directory } = setup();
   const metadata = {

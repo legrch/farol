@@ -873,6 +873,76 @@ export class OperationsStore implements OperationsRecorder {
       clearTimeout(timer);
     }
   }
+
+  /** Internal lookup only. The caller must supply an existing Go-owned current
+   * path-authority check; this method neither grants nor infers authority. */
+  async lookupReadDiagnostic(
+    requestId: string,
+    workspaceId: string,
+    relativePath: string,
+    authorize: (workspaceId: string, relativePath: string) => Promise<boolean>,
+  ): Promise<
+    | {
+        status: "found";
+        requestId: string;
+        diagnostic: NonNullable<OperationEntry["readDiagnostic"]>;
+      }
+    | { status: "unavailable" | "incomplete" | "not_retained" }
+  > {
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+        requestId,
+      )
+    )
+      return { status: "unavailable" };
+    const permitted = async () => {
+      try {
+        return (await authorize(workspaceId, relativePath)) === true;
+      } catch {
+        return false;
+      }
+    };
+    if (!(await permitted())) return { status: "unavailable" };
+    const snapshot = await this.snapshot(5000);
+    // No cached/incomplete or corrupt view may prove uniqueness or absence.
+    if (
+      snapshot.readPending ||
+      snapshot.readIncomplete ||
+      snapshot.corruptLines ||
+      snapshot.writeFailures ||
+      snapshot.droppedEntries ||
+      snapshot.entries.length >= this.limits.entries
+    )
+      return { status: "incomplete" };
+    let expected;
+    try {
+      expected = resolveOperationTarget(
+        { workspace: workspaceId, relativePath },
+        this.currentLabels ?? this.readLabelsCache,
+        "identifier",
+      );
+    } catch {
+      return { status: "unavailable" };
+    }
+    if (!expected.workspaceIdentity || expected.relativePath !== relativePath)
+      return { status: "unavailable" };
+    const matches = snapshot.entries.filter(
+      (entry) =>
+        entry.requestId === requestId &&
+        entry.kind === "computer_workspace_read" &&
+        entry.target.workspaceIdentity === expected.workspaceIdentity &&
+        entry.target.relativePath === relativePath &&
+        entry.readDiagnostic !== undefined,
+    );
+    if (matches.length !== 1)
+      return { status: matches.length ? "incomplete" : "not_retained" };
+    if (!(await permitted())) return { status: "unavailable" };
+    return {
+      status: "found",
+      requestId,
+      diagnostic: matches[0]!.readDiagnostic!,
+    };
+  }
   private mergeDiagnostics(snapshot: OperationsSnapshot) {
     // readSnapshot includes other writers only; our counters are always current.
     const current = this.diagnostics();
