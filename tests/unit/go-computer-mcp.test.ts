@@ -388,6 +388,41 @@ describe("selected Go process MCP projection", () => {
     expect(processes.cancel).not.toHaveBeenCalled();
   });
 
+  it("records the same request ID and safe reason returned by a refused read", async () => {
+    const record = vi.fn();
+    const recorder = createTotalOperationsRecorder({ record });
+    const { client } = await setup({
+      operations: recorder,
+      respond: (_method, params, id) => ({
+        status: "refused",
+        requestId: id,
+        context,
+        code: "WORKSPACE_PATH_REFUSED",
+        data: {
+          request: params,
+          code: "WORKSPACE_PATH_REFUSED",
+          source: "native-workspace",
+          retry: "never",
+          stage: "policy",
+          reason: "policy_denied",
+        },
+      }),
+    });
+    const reply = await client.callTool({
+      name: "computer_workspace_read",
+      arguments: { workspaceId: "workspace", relativePath: "note.md" },
+    });
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record.mock.calls[0]![0]).toMatchObject({
+      requestId: (reply.structuredContent as { requestId: string }).requestId,
+      readDiagnostic: { stage: "policy", reason: "policy_denied" },
+    });
+    expect(record.mock.calls[0]!.slice(1, 3)).toEqual([
+      "refused",
+      "WORKSPACE_PATH_REFUSED",
+    ]);
+  });
+
   it("keeps stopping and lost-fence outcomes distinct without a second process call", async () => {
     const processes = ports();
     const stopping = await setup({
@@ -1961,7 +1996,7 @@ it.each([
         throw new BridgeError("refused", "OPERATION_REFUSED");
       },
     });
-    await client.callTool({
+    const result = await client.callTool({
       name: "computer_workspace_read",
       arguments: { workspaceId: "workspace", relativePath },
     });
@@ -1970,6 +2005,7 @@ it.each([
     expect(record.mock.calls[0]![0]).toEqual({
       source: "ChatGPT",
       kind: "computer_workspace_read",
+      requestId: (result.structuredContent as { requestId: string }).requestId,
       target: {
         workspace: "Owner Docs",
         workspaceIdentity: createHash("sha256")
@@ -2137,6 +2173,12 @@ it.each(
       kind: name,
       source: name === "codex_selected_thread_read" ? "Codex" : "ChatGPT",
       target: safeTarget,
+      ...(name === "computer_workspace_read"
+        ? {
+            requestId: (reply.structuredContent as { requestId: string })
+              .requestId,
+          }
+        : {}),
     });
     expect(outcome).toBe(name === "computer_shell_start" ? "done" : "refused");
     expect(code).toBe(

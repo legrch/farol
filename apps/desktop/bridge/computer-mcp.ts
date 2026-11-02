@@ -2,6 +2,7 @@ import type {
   OperationMetadata,
   OperationsRecorder,
 } from "../renderer/operations-contract";
+import { WorkspaceReadDiagnosticSchema } from "../renderer/operations-contract";
 import { observedOperationResult } from "../operations/observe";
 import { randomUUID } from "node:crypto";
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
@@ -304,6 +305,12 @@ export function createGoComputerMcpServer(
                 : reference(operationId)!,
           }
         : undefined;
+    const call = Object.freeze({
+      requestId: randomUUID(),
+      context: selectedContext,
+    });
+    if (metadata.kind === "computer_workspace_read")
+      metadata.requestId = call.requestId;
     const finish =
       (references &&
         options.operations?.beginExecution?.(metadata, references)) ??
@@ -313,10 +320,6 @@ export function createGoComputerMcpServer(
         code: string | null,
         durationMs: number,
       ) => options.operations?.record(metadata, outcome, code, durationMs));
-    const call = Object.freeze({
-      requestId: randomUUID(),
-      context: selectedContext,
-    });
     const failure = (status: "refused" | "unknown", code: string) =>
       encode(
         {
@@ -451,6 +454,30 @@ export function createGoComputerMcpServer(
       metadata.kind,
       result.structuredContent,
     );
+    if (
+      metadata.kind === "computer_workspace_read" &&
+      recorded.outcome === "refused" &&
+      recorded.code === "WORKSPACE_PATH_REFUSED"
+    ) {
+      const content = result.structuredContent;
+      if (
+        content &&
+        typeof content === "object" &&
+        "refusal" in content &&
+        content.refusal &&
+        typeof content.refusal === "object"
+      ) {
+        const refusal = content.refusal as {
+          stage?: unknown;
+          reason?: unknown;
+        };
+        const diagnostic = WorkspaceReadDiagnosticSchema.safeParse({
+          stage: refusal.stage,
+          reason: refusal.reason,
+        });
+        if (diagnostic.success) metadata.readDiagnostic = diagnostic.data;
+      }
+    }
     finish(recorded.outcome, recorded.code, performance.now() - started);
     return result;
   };

@@ -79,6 +79,27 @@ function setup(
     store,
   };
 }
+it("retains a correlated safe diagnostic on the original read lifecycle", async () => {
+  const { store } = setup();
+  const metadata: OperationMetadata = {
+    source: "ChatGPT",
+    kind: "computer_workspace_read",
+    target: {},
+    requestId: "07f13182-1414-4e08-b579-f468c6fa2e64",
+  };
+  const finish = store.begin(metadata);
+  metadata.readDiagnostic = { stage: "policy", reason: "policy_denied" };
+  finish("refused", "WORKSPACE_PATH_REFUSED", 1);
+  expect(await store.flush(5000)).toBe(true);
+  const snapshot = await store.snapshot(5000);
+  expect(snapshot.entries).toHaveLength(1);
+  expect(snapshot.entries[0]).toMatchObject({
+    requestId: metadata.requestId,
+    outcome: "refused",
+    code: "WORKSPACE_PATH_REFUSED",
+    readDiagnostic: { stage: "policy", reason: "policy_denied" },
+  });
+});
 it("persists unmapped-code counts across restart and exposes only safe unknown records", async () => {
   const { store, directory } = setup();
   const metadata = {
