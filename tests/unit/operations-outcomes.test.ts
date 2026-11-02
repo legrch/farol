@@ -237,6 +237,12 @@ it("maps every declared TS contract/producer code and Go result kind exactly onc
   expect(
     unmapped.map(([code, sources]) => ({ code, sources: [...sources] })),
   ).toEqual([]);
+  // A diagnostic's internal lookup state and native reason are not operation
+  // outcome codes and must not become user-facing error classifications.
+  for (const detail of ["found", "not_retained", "link_not_supported"]) {
+    expect(declared.has(detail)).toBe(false);
+    expect(mappedOperationOutcome(detail)).toBeUndefined();
+  }
   // Ensure the inventory reaches each required owner, rather than testing the
   // mapping against a duplicate hand-maintained list of its own keys.
   expect(declared.get("PROCESS_PREPARATION_DEADLINE")).toContain(
