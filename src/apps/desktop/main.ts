@@ -7557,6 +7557,15 @@ async function configureAdmittedProduct(
   command: ProductConfigurationCommand,
 ): Promise<ProductConfigurationResult> {
   if (!configuration) return configurationFailure("SETTINGS_UNAVAILABLE");
+  // These legacy checks hard-code a model the owner no longer permits.
+  // Refuse before starting a host or changing verification evidence; retain
+  // the old reader and the separate cleanup route for existing assignments.
+  if (
+    new Set<string>(["host.run-codex-smoke", "host.run-codex-agent-check"]).has(
+      command.kind,
+    )
+  )
+    return configurationFailure("CODEX_HOST_MODEL_UNAVAILABLE");
   if (command.kind === "chatgpt.run-deep-test")
     return runManualDeepTest(
       command.operationId,
