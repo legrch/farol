@@ -413,7 +413,9 @@ export async function run(input: {
       "computer_workspace_search",
       "computer_workspace_write",
       "computer_workspace_edit",
+      "computer_workspace_remove",
       "computer_mutation_read",
+      "computer_workspace_diagnostic_read",
     ])
       assert.ok(names.includes(name), name);
     assert.ok(!names.includes("computer_workspace_shell_start"));
@@ -693,6 +695,74 @@ export async function run(input: {
       finalSha256: hash(finalBytes),
       retainedOrigin: object(created.data).origin,
     });
+    // Exercise a new, disposable refusal once, then look up its original
+    // receipt without opening the refused target again.
+    const link = "diagnostic-link.md";
+    await fs.symlink("note space 日本語.md", path.join(workspace, link));
+    const refused = await peer.call(
+      "computer_workspace_read",
+      { workspaceId, relativePath: link },
+      true,
+    );
+    assert.equal(refused.code, "WORKSPACE_PATH_REFUSED");
+    assert.equal(typeof refused.requestId, "string");
+    const diagnostic = await peer.call("computer_workspace_diagnostic_read", {
+      requestId: refused.requestId as string,
+      workspaceId,
+      relativePath: link,
+    });
+    assert.deepEqual(object(diagnostic.data), {
+      lookup: "found",
+      subjectRequestId: refused.requestId,
+      diagnostic: { stage: "target", reason: "link_not_supported" },
+    });
+
+    // Observe the original successful remove after an external replacement;
+    // observation must never delete that replacement or the neighboring file.
+    const removeTarget = "remove-once.md",
+      removeText = "disposable removal fixture\n",
+      removeId = randomUUID();
+    const removeCreate = await peer.call("computer_workspace_write", {
+      operationId: randomUUID(),
+      workspaceId,
+      relativePath: removeTarget,
+      content: removeText,
+      expectedSha256: null,
+    });
+    assert.equal(object(removeCreate.data).publication, "durable");
+    const removed = await peer.call("computer_workspace_remove", {
+      operationId: removeId,
+      workspaceId,
+      relativePath: removeTarget,
+      expectedSha256: hash(removeText),
+    });
+    assert.equal(object(removed.data).phase, "completed");
+    assert.equal(object(removed.data).publication, "durable");
+    await assert.rejects(fs.lstat(path.join(workspace, removeTarget)), {
+      code: "ENOENT",
+    });
+    await fs.writeFile(path.join(workspace, removeTarget), "replacement\n", {
+      flag: "wx",
+    });
+    const removalObservation = await peer.call("computer_mutation_read", {
+      operationId: removeId,
+      workspaceId,
+      relativePath: removeTarget,
+    });
+    assert.equal(object(removalObservation.data).phase, "completed");
+    assert.equal(
+      object(object(removalObservation.data).removeReceipt).beforeSHA256,
+      hash(removeText),
+    );
+    assert.equal(
+      await fs.readFile(path.join(workspace, removeTarget), "utf8"),
+      "replacement\n",
+    );
+    assert.deepEqual(
+      await fs.readFile(path.join(workspace, target)),
+      finalBytes,
+    );
+    observations.push({ stage: "diagnostic-and-remove-original-observation" });
     await diagnostics.stage(
       "go-withdraw",
       BUDGETS.request,
