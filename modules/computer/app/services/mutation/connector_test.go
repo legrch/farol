@@ -144,6 +144,29 @@ func TestConnectorRemoveOriginalOperationIsNotReplayed(t *testing.T) {
 	}
 }
 
+func TestConnectorRemoveUnknownNeverRepeats(t *testing.T) {
+	f := newConnectorFixture(t)
+	selection := f.selection
+	selection.Origin.Operation = state.RemoveKind
+	service, err := NewForConnectorExecution(selection, f.lease, f.store, f.native, removeTestDigest{}, &sync.Mutex{}, f.clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.native.run = func(context.Context, port.MutationRequest) (*port.MutationReceipt, error) {
+		return nil, authority.Fail("WORKSPACE_MUTATION_OUTCOME_UNKNOWN", "native-workspace")
+	}
+	request := ConnectorRequest{WorkspaceID: "work", Operation: Remove{RelativePath: "note.md", ExpectedSHA256: strings.Repeat("a", 64)}}
+	for i := 0; i < 2; i++ {
+		out, err := service.Execute(context.Background(), request)
+		if err != nil || out == nil || out.Phase != "outcome_unknown" || out.Failure == nil || out.Failure.Code != "WORKSPACE_MUTATION_OUTCOME_UNKNOWN" {
+			t.Fatalf("unknown outcome lost: %+v %v", out, err)
+		}
+	}
+	if f.native.calls != 1 || f.store.admissions != 1 {
+		t.Fatal("unknown remove was replayed")
+	}
+}
+
 func TestConnectorMutationFullUint64ConnectorGenerationPreserved(t *testing.T) {
 	for name, generation := range map[string]uint64{"above-js-safe-integer": 9007199254740993, "max-uint64": ^uint64(0)} {
 		t.Run(name, func(t *testing.T) {

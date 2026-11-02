@@ -46,6 +46,7 @@ export type GoComputerMcpOptions = Readonly<{
   >;
   connectionStatus?: Pick<ConnectorVerificationBridge, "observe">;
   mutations?: Pick<ConnectorMutationBridge, "write" | "edit" | "read">;
+  removal?: Pick<ConnectorMutationBridge, "remove">;
   processes?: Pick<ConnectorProcessBridge, "start" | "read" | "cancel">;
   codexRead?: Pick<SelectedCodexReadBridge, "read">;
   diagnosticLookup?: (
@@ -129,6 +130,10 @@ const MutationTargetSchema = {
   workspaceId: IdentifierSchema,
   relativePath: z.string().refine((value) => relativePath(value, false)),
 };
+const RemoveInputSchema = z.strictObject({
+  ...MutationTargetSchema,
+  expectedSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+});
 const HashSchema = z.string().regex(/^[a-f0-9]{64}$/u);
 const ProcessIDSchema = z.string().refine((value) => validate("id", value));
 const ProcessTargetSchema = {
@@ -698,6 +703,37 @@ export function createGoComputerMcpServer(
           input.operationId,
         ),
     );
+    if (options.removal) {
+      const removal = options.removal;
+      server.registerTool(
+        "computer_workspace_remove",
+        {
+          title: "Remove one approved workspace file",
+          description:
+            "Remove one ordinary file through the selected Go owner using its exact current SHA-256. No directories, recursion or globs. The preimage check is not an atomic compare-and-delete against external writers. Supply a new operationId; never retry a refused or uncertain effect. Observe the original operation with computer_mutation_read. memory_only is not durable publication.",
+          inputSchema: RemoveInputSchema,
+          annotations: effectAnnotations,
+        },
+        async ({ operationId, expectedSha256, ...input }, ctx) =>
+          run(
+            {
+              source: "ChatGPT",
+              kind: "computer_workspace_remove",
+              target: operationTarget(input),
+            },
+            ctx.mcpReq.signal,
+            (call) =>
+              removal.remove(
+                { ...input, expectedSHA256: expectedSha256 },
+                operationId,
+                call,
+              ),
+            operationId,
+            undefined,
+            true,
+          ),
+      );
+    }
   }
 
   if (options.processes) {

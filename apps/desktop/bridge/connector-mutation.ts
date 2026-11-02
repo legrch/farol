@@ -15,6 +15,7 @@ import {
   type ComputerConnectorOpened,
   type ComputerConnectorWrite,
   type ComputerConnectorEdit,
+  type ComputerConnectorRemove,
   type ComputerConnectorMutationRead,
   type ComputerConnectorMutationResponse,
 } from "./wire.ts";
@@ -46,6 +47,10 @@ export type ConnectorWriteInput = Omit<
 >;
 export type ConnectorEditInput = Omit<
   ComputerConnectorEdit,
+  "execution" | "callId"
+>;
+export type ConnectorRemoveInput = Omit<
+  ComputerConnectorRemove,
   "execution" | "callId"
 >;
 export type ConnectorMutationReadInput = Omit<
@@ -236,6 +241,13 @@ export class ConnectorMutationBridge {
   ): Promise<ConnectorMutationResult> {
     return this.request("edit", input, operationId, call);
   }
+  remove(
+    input: ConnectorRemoveInput,
+    operationId: string,
+    call: ComputerCall,
+  ): Promise<ConnectorMutationResult> {
+    return this.request("remove", input, operationId, call);
+  }
   read(
     input: ConnectorMutationReadInput,
     call: ComputerCall,
@@ -244,7 +256,7 @@ export class ConnectorMutationBridge {
   }
 
   private async request(
-    kind: "write" | "edit" | "read",
+    kind: "write" | "edit" | "remove" | "read",
     input: unknown,
     suppliedOperationId: string | undefined,
     call: ComputerCall,
@@ -253,6 +265,7 @@ export class ConnectorMutationBridge {
     let body:
       | ComputerConnectorWrite
       | ComputerConnectorEdit
+      | ComputerConnectorRemove
       | ComputerConnectorMutationRead;
     let operationId: string;
     try {
@@ -311,7 +324,9 @@ export class ConnectorMutationBridge {
         !validate(
           kind === "write"
             ? "ComputerConnectorWrite"
-            : "ComputerConnectorMutationRead",
+            : kind === "remove"
+              ? "ComputerConnectorRemove"
+              : "ComputerConnectorMutationRead",
           body,
         ) ||
         (kind === "write" && !text((body as ComputerConnectorWrite).content))
@@ -404,51 +419,70 @@ export class ConnectorMutationBridge {
       )
         throw Error();
       if (data.phase === "completed") {
-        const receipt = data.receipt;
-        if (
-          !receipt ||
-          data.failure !== undefined ||
-          receipt.operation !== origin.operation ||
-          receipt.relativePath !== body.relativePath ||
-          BigInt(receipt.bytes) > 8n * 1024n * 1024n ||
-          (receipt.operation === "write"
-            ? receipt.replacements !== 0
-            : receipt.replacements < 1 ||
-              receipt.replacements > 256 ||
-              receipt.beforeSHA256 === undefined)
-        )
-          throw Error();
-        if (
-          kind !== "read" &&
-          receipt.beforeSHA256 !==
-            (body as ComputerConnectorWrite | ComputerConnectorEdit)
-              .expectedSHA256
-        )
-          throw Error();
-        if (
-          kind === "write" &&
-          (receipt.bytes !==
-            String(
-              Buffer.byteLength(
-                (body as ComputerConnectorWrite).content,
-                "utf8",
-              ),
-            ) ||
-            receipt.afterSHA256 !==
-              createHash("sha256")
-                .update((body as ComputerConnectorWrite).content)
-                .digest("hex"))
-        )
-          throw Error();
-        if (
-          kind === "edit" &&
-          receipt.replacements !== (body as ComputerConnectorEdit).edits.length
-        )
-          throw Error();
+        if (origin.operation === "remove") {
+          const receipt = data.removeReceipt;
+          if (
+            !receipt ||
+            data.receipt !== undefined ||
+            data.failure !== undefined ||
+            receipt.operation !== "remove" ||
+            receipt.relativePath !== body.relativePath ||
+            (kind !== "read" &&
+              (kind !== "remove" ||
+                receipt.beforeSHA256 !==
+                  (body as ComputerConnectorRemove).expectedSHA256))
+          )
+            throw Error();
+        } else {
+          const receipt = data.receipt;
+          if (
+            !receipt ||
+            data.removeReceipt !== undefined ||
+            data.failure !== undefined ||
+            receipt.operation !== origin.operation ||
+            receipt.relativePath !== body.relativePath ||
+            BigInt(receipt.bytes) > 8n * 1024n * 1024n ||
+            (receipt.operation === "write"
+              ? receipt.replacements !== 0
+              : receipt.replacements < 1 ||
+                receipt.replacements > 256 ||
+                receipt.beforeSHA256 === undefined)
+          )
+            throw Error();
+          if (
+            kind !== "read" &&
+            receipt.beforeSHA256 !==
+              (body as ComputerConnectorWrite | ComputerConnectorEdit)
+                .expectedSHA256
+          )
+            throw Error();
+          if (
+            kind === "write" &&
+            (receipt.bytes !==
+              String(
+                Buffer.byteLength(
+                  (body as ComputerConnectorWrite).content,
+                  "utf8",
+                ),
+              ) ||
+              receipt.afterSHA256 !==
+                createHash("sha256")
+                  .update((body as ComputerConnectorWrite).content)
+                  .digest("hex"))
+          )
+            throw Error();
+          if (
+            kind === "edit" &&
+            receipt.replacements !==
+              (body as ComputerConnectorEdit).edits.length
+          )
+            throw Error();
+        }
       } else {
         const f = data.failure;
         if (
           data.receipt !== undefined ||
+          data.removeReceipt !== undefined ||
           !f ||
           (data.phase === "outcome_unknown"
             ? f.code !== "WORKSPACE_MUTATION_OUTCOME_UNKNOWN" ||

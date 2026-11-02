@@ -68,6 +68,56 @@ func TestConnectorMutationWireRoundTripAndReadAfterReconnect(t *testing.T) {
 	}
 }
 
+func TestConnectorRemoveWireRetainsOriginalResultWithoutReplay(t *testing.T) {
+	s, _, journal, native, launch := connectorMutationFixture(t)
+	in := wire.ComputerConnectorRemove{Execution: s.current.opened.Execution, CallId: "remove-call", WorkspaceId: "work", RelativePath: "note.md", ExpectedSHA256: strings.Repeat("a", 64)}
+	first := connectorWireResult(t, connectorMutationInvoke(t, s, "computer.workspace.remove", "remove-operation", in))
+	if first.Receipt != nil || first.RemoveReceipt == nil || first.RemoveReceipt.BeforeSHA256 != in.ExpectedSHA256 || first.Origin.Operation != "remove" {
+		t.Fatal("remove receipt was crossed or replaced")
+	}
+	reconnectMutationFixture(t, s, launch)
+	read := wire.ComputerConnectorMutationRead{Execution: s.current.opened.Execution, CallId: "observe-call", OperationId: "remove-operation", WorkspaceId: "work", RelativePath: "note.md"}
+	observed := connectorWireResult(t, connectorMutationInvoke(t, s, "computer.workspace.mutation.read", "", read))
+	if observed.RemoveReceipt == nil || *observed.RemoveReceipt != *first.RemoveReceipt || observed.Origin != first.Origin || native.calls != 1 || journal.admits != 1 {
+		t.Fatal("remove replayed or original receipt lost")
+	}
+}
+
+func TestConnectorRemoveRequiresWriteGrantAndApprovedTarget(t *testing.T) {
+	for _, mode := range []string{"read-only", "outside"} {
+		t.Run(mode, func(t *testing.T) {
+			s, access, journal, native, _ := connectorMutationFixture(t)
+			in := wire.ComputerConnectorRemove{Execution: s.current.opened.Execution, CallId: "remove", WorkspaceId: "work", RelativePath: "note.md", ExpectedSHA256: strings.Repeat("a", 64)}
+			if mode == "read-only" {
+				access.approval.Workspaces[0].Access = authority.ReadAccess
+				access.PutApproval(access.approval)
+			} else {
+				in.WorkspaceId = "unapproved"
+			}
+			out := connectorMutationInvoke(t, s, "computer.workspace.remove", "denied-remove", in)
+			if out.Status == "ok" || native.calls != 0 || journal.admits != 0 {
+				t.Fatal("unapproved removal reached mutation owner")
+			}
+		})
+	}
+}
+
+func TestConnectorRemoveLostPublicationStaysMemoryOnly(t *testing.T) {
+	s, _, journal, native, launch := connectorMutationFixture(t)
+	journal.saveFault = "after"
+	in := wire.ComputerConnectorRemove{Execution: s.current.opened.Execution, CallId: "remove", WorkspaceId: "work", RelativePath: "note.md", ExpectedSHA256: strings.Repeat("a", 64)}
+	first := connectorWireResult(t, connectorMutationInvoke(t, s, "computer.workspace.remove", "remove-operation", in))
+	if first.Publication != "memory_only" || first.RemoveReceipt == nil {
+		t.Fatal("uncertain publication promoted")
+	}
+	reconnectMutationFixture(t, s, launch)
+	read := wire.ComputerConnectorMutationRead{Execution: s.current.opened.Execution, CallId: "observe", OperationId: "remove-operation", WorkspaceId: in.WorkspaceId, RelativePath: in.RelativePath}
+	observed := connectorWireResult(t, connectorMutationInvoke(t, s, "computer.workspace.mutation.read", "", read))
+	if observed.Publication != "memory_only" || observed.RemoveReceipt == nil || observed.Origin != first.Origin || native.calls != 1 || journal.admits != 1 {
+		t.Fatal("lost removal publication upgraded or replayed")
+	}
+}
+
 func TestConnectorMutationWireRejectsEveryCrossedExecution(t *testing.T) {
 	changes := []func(*wire.ComputerConnectorExecution){
 		func(v *wire.ComputerConnectorExecution) { v.OwnerId = "other" }, func(v *wire.ComputerConnectorExecution) { v.SessionId = "other" },

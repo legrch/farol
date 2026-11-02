@@ -57,6 +57,8 @@ func connectorMutationWireResult(slot *connectorSlot, call, operation, workspace
 			before = v.ExpectedSHA256
 		case mutationct.Edit:
 			before = &v.ExpectedSHA256
+		case mutationct.Remove:
+			before = &v.ExpectedSHA256
 		default:
 			return invalid()
 		}
@@ -72,10 +74,17 @@ func connectorMutationWireResult(slot *connectorSlot, call, operation, workspace
 		if input != nil && ((before == nil) != (v.BeforeSHA256 == nil) || before != nil && *before != *v.BeforeSHA256) {
 			return invalid()
 		}
-		result.Receipt = &wire.ComputerMutationReceipt{Operation: v.Operation, RelativePath: v.RelativePath, Bytes: decimal(v.Bytes), Replacements: v.Replacements, AfterSHA256: v.AfterSHA256}
-		if v.BeforeSHA256 != nil {
-			hash := *v.BeforeSHA256
-			result.Receipt.BeforeSHA256 = &hash
+		if v.Operation == "remove" {
+			if v.BeforeSHA256 == nil || v.Bytes != 0 || v.Replacements != 0 || v.AfterSHA256 != "" {
+				return invalid()
+			}
+			result.RemoveReceipt = &wire.ComputerRemoveReceipt{Operation: "remove", RelativePath: v.RelativePath, BeforeSHA256: *v.BeforeSHA256}
+		} else {
+			result.Receipt = &wire.ComputerMutationReceipt{Operation: v.Operation, RelativePath: v.RelativePath, Bytes: decimal(v.Bytes), Replacements: v.Replacements, AfterSHA256: v.AfterSHA256}
+			if v.BeforeSHA256 != nil {
+				hash := *v.BeforeSHA256
+				result.Receipt.BeforeSHA256 = &hash
+			}
 		}
 	case "failed", "outcome_unknown":
 		v := out.Failure
@@ -144,6 +153,16 @@ func (s *computerConnector) mutationMethods(slot *connectorSlot) map[string]desk
 				edits[i] = mutationct.TextEdit{OldText: v.OldText, NewText: v.NewText}
 			}
 			return execute(ctx, r, in.Execution, in.CallId, in.WorkspaceId, mutationct.Edit{RelativePath: in.RelativePath, ExpectedSHA256: in.ExpectedSHA256, Edits: edits})
+		}},
+		"computer.workspace.remove": {Concurrent: true, Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
+			if !valid(r, "ComputerConnectorRemove", true) {
+				return invalidIngress()
+			}
+			var in wire.ComputerConnectorRemove
+			if json.Unmarshal(r.Body, &in) != nil {
+				return invalidIngress()
+			}
+			return execute(ctx, r, in.Execution, in.CallId, in.WorkspaceId, mutationct.Remove{RelativePath: in.RelativePath, ExpectedSHA256: in.ExpectedSHA256})
 		}},
 		"computer.workspace.mutation.read": {Concurrent: true, Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
 			if !valid(r, "ComputerConnectorMutationRead", false) {

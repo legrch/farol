@@ -102,6 +102,7 @@ const workspaceMethods = new Set([
 const effectMethods = new Set([
   "computer.workspace.write",
   "computer.workspace.edit",
+  "computer.workspace.remove",
   "computer.process.start",
   "computer.process.cancel",
 ]);

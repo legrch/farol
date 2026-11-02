@@ -204,3 +204,43 @@ func TestNativeConnectorMutationNormalRuntimeSocketAndReconnect(t *testing.T) {
 		t.Fatal("connector did not use the same bounded mutation ledger")
 	}
 }
+
+func TestNativeConnectorRemoveRetainsOriginalAndPreservesReplacement(t *testing.T) {
+	launch, runtime := retirementStorageFixture(t, true)
+	workspace := filepath.Join(launch.Profile.Root, "workspace")
+	if err := os.Mkdir(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	publication := nativeSettingsPublication(t, runtime, workspace, 1)
+	peer := openNativeMutationPeer(t, runtime, publication, "1")
+	const workspaceID = "00000000-0000-4000-8000-000000000004"
+	write := wire.ComputerConnectorWrite{Execution: peer.opened.Execution, CallId: "create", WorkspaceId: workspaceID, RelativePath: "owned.md", Content: "owned"}
+	created := nativeMutationResult(t, peer.call(t, "computer.workspace.write", "create-owned", write), "completed")
+	if err := os.WriteFile(filepath.Join(workspace, "neighbor.md"), []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	remove := wire.ComputerConnectorRemove{Execution: peer.opened.Execution, CallId: "remove", WorkspaceId: workspaceID, RelativePath: write.RelativePath, ExpectedSHA256: created.Receipt.AfterSHA256}
+	removed := nativeMutationResult(t, peer.call(t, "computer.workspace.remove", "remove-owned", remove), "completed")
+	if removed.RemoveReceipt == nil || removed.RemoveReceipt.BeforeSHA256 != remove.ExpectedSHA256 || removed.Receipt != nil {
+		t.Fatal("bad removal receipt")
+	}
+	if _, err := os.Lstat(filepath.Join(workspace, write.RelativePath)); !os.IsNotExist(err) {
+		t.Fatalf("target not removed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, write.RelativePath), []byte("replacement"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	read := wire.ComputerConnectorMutationRead{Execution: peer.opened.Execution, CallId: "observe", WorkspaceId: workspaceID, RelativePath: write.RelativePath, OperationId: "remove-owned"}
+	observed := nativeMutationResult(t, peer.call(t, "computer.workspace.mutation.read", "", read), "completed")
+	if observed.RemoveReceipt == nil || *observed.RemoveReceipt != *removed.RemoveReceipt {
+		t.Fatal("original removal receipt lost")
+	}
+	content, err := os.ReadFile(filepath.Join(workspace, write.RelativePath))
+	if err != nil || string(content) != "replacement" {
+		t.Fatal("observation repeated removal")
+	}
+	neighbor, err := os.ReadFile(filepath.Join(workspace, "neighbor.md"))
+	if err != nil || string(neighbor) != "keep" {
+		t.Fatal("neighbor changed")
+	}
+}

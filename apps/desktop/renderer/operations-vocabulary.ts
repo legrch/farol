@@ -70,6 +70,7 @@ export const operationKinds = [
   "computer_workspace_diagnostic_read",
   "computer_workspace_list",
   "computer_workspace_read",
+  "computer_workspace_remove",
   "computer_workspace_search",
   "computer_workspace_write",
   "connection.health",

@@ -139,6 +139,7 @@ async function setup(
     fence?: GoComputerMcpFence;
     verification?: GoComputerMcpOptions["verification"];
     mutations?: GoComputerMcpOptions["mutations"];
+    removal?: GoComputerMcpOptions["removal"];
     processes?: GoComputerMcpOptions["processes"];
     onEffectUnknown?: () => void;
     respond?: (method: string, params: Json, id: string) => unknown;
@@ -175,6 +176,7 @@ async function setup(
       ...(options.lifecycle ? { lifecycle: options.lifecycle } : {}),
       ...(options.verification ? { verification: options.verification } : {}),
       ...(options.mutations ? { mutations: options.mutations } : {}),
+      ...(options.removal ? { removal: options.removal } : {}),
       ...(options.processes ? { processes: options.processes } : {}),
       ...(options.onEffectUnknown
         ? { onEffectUnknown: options.onEffectUnknown }
@@ -1608,6 +1610,55 @@ describe("Go Computer mutation MCP (pure/in-memory only)", () => {
         retry: "never" as const,
       })),
     }) satisfies NonNullable<GoComputerMcpOptions["mutations"]>;
+
+  it("submits one exact removal and retains UNKNOWN for original-ID observation", async () => {
+    const selected = mutations();
+    const remove = vi.fn(
+      async (
+        ...[_input, operationId, call]: Parameters<
+          NonNullable<GoComputerMcpOptions["removal"]>["remove"]
+        >
+      ) => ({
+        status: "unknown" as const,
+        operationId,
+        requestId: call.requestId,
+        context: call.context,
+        code: "response_timeout",
+        retry: "never" as const,
+      }),
+    );
+    const onEffectUnknown = vi.fn();
+    const { client } = await setup({
+      mutations: selected,
+      removal: { remove },
+      onEffectUnknown,
+    });
+    const result = await client.callTool({
+      name: "computer_workspace_remove",
+      arguments: { ...target, expectedSha256: "a".repeat(64) },
+    });
+    expect(result.structuredContent).toMatchObject({
+      status: "unknown",
+      operationId: target.operationId,
+      retry: "never",
+    });
+    expect(remove).toHaveBeenCalledExactlyOnceWith(
+      {
+        workspaceId: "workspace",
+        relativePath: "note.md",
+        expectedSHA256: "a".repeat(64),
+      },
+      target.operationId,
+      expect.objectContaining({ context }),
+    );
+    expect(onEffectUnknown).toHaveBeenCalledOnce();
+    await client.callTool({
+      name: "computer_mutation_read",
+      arguments: target,
+    });
+    expect(selected.read).toHaveBeenCalledOnce();
+    expect(remove).toHaveBeenCalledOnce();
+  });
 
   it("advertises effects only when the host supplies mutations and requires operationId", async () => {
     const absent = await setup();

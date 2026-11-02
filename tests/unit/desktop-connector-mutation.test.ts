@@ -142,6 +142,59 @@ it("uses the same selected client for edit and preimage validation", async () =>
       .status,
   ).toBe("unknown");
 });
+it("validates a distinct removal receipt and observes the original ID", async () => {
+  const base = result();
+  const { receipt: _receipt, ...rest } = base;
+  const removed: ComputerConnectorMutationResponse = {
+    ...rest,
+    origin: { ...base.origin, operation: "remove" },
+    removeReceipt: {
+      operation: "remove",
+      relativePath: input.relativePath,
+      beforeSHA256: hash,
+    },
+  };
+  const removeInput = {
+    workspaceId: input.workspaceId,
+    relativePath: input.relativePath,
+    expectedSHA256: hash,
+  };
+  const { bridge, request } = setup(outcome(removed));
+  expect(await bridge.remove(removeInput, "operation", call)).toMatchObject({
+    status: "ok",
+    data: { removeReceipt: { beforeSHA256: hash } },
+  });
+  expect(request).toHaveBeenCalledOnce();
+  expect(request.mock.calls[0]?.[0]).toBe("computer.workspace.remove");
+  expect(
+    await setup(outcome(removed, false)).bridge.read(readInput, call),
+  ).toMatchObject({
+    status: "ok",
+    data: { removeReceipt: { operation: "remove" } },
+  });
+  const crossed = {
+    ...removed,
+    removeReceipt: { ...removed.removeReceipt!, beforeSHA256: "b".repeat(64) },
+  };
+  expect(
+    (
+      await setup(outcome(crossed)).bridge.remove(
+        removeInput,
+        "operation",
+        call,
+      )
+    ).status,
+  ).toBe("unknown");
+  expect(
+    (
+      await setup(outcome({ ...removed, receipt: base.receipt })).bridge.remove(
+        removeInput,
+        "operation",
+        call,
+      )
+    ).status,
+  ).toBe("unknown");
+});
 it("retained read preserves old binding/execution/call and omits the outer operation ID", async () => {
   const old = result();
   const data = {

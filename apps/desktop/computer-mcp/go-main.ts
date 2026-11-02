@@ -34,6 +34,7 @@ export async function runGoComputerMcp(file: string): Promise<void> {
   let codexRead: SelectedCodexReadBridge | undefined;
   let connectionStatusAvailable = false;
   let readDiagnosticAuthorizationAvailable = false;
+  let removalAvailable = false;
   try {
     const identity = await client.connect();
     codexRead = selectedCodexReadBridge(client, launch.opened, identity);
@@ -44,6 +45,9 @@ export async function runGoComputerMcp(file: string): Promise<void> {
     );
     readDiagnosticAuthorizationAvailable = identity.capabilities.includes(
       "computer.workspace.readdiagnosticauthorize",
+    );
+    removalAvailable = identity.capabilities.includes(
+      "computer.workspace.remove",
     );
     if (connectorSupportsMutations(identity)) {
       mutations = new ConnectorMutationBridge(
@@ -132,6 +136,7 @@ export async function runGoComputerMcp(file: string): Promise<void> {
             ? { connectionStatus: verification }
             : {}),
           ...(mutations ? { mutations } : {}),
+          ...(mutations && removalAvailable ? { removal: mutations } : {}),
           ...(processes ? { processes } : {}),
           ...(codexRead ? { codexRead } : {}),
         },

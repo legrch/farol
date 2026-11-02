@@ -27,12 +27,12 @@ type ConnectorConfig struct {
 
 func validateConnectorConfig(config ConnectorConfig) error {
 	raw, err := json.Marshal(config.Endpoint)
-	if err != nil || wire.Validate("ComputerConnectorEndpoint", raw) != nil || len(config.Methods) == 0 || len(config.Methods) > 16 {
+	if err != nil || wire.Validate("ComputerConnectorEndpoint", raw) != nil || len(config.Methods) == 0 || len(config.Methods) > 17 {
 		return ErrConnectorUnavailable
 	}
 	for name, method := range config.Methods {
 		switch name {
-		case "computer.workspace.search", "computer.workspace.read", "computer.workspace.readdiagnosticauthorize", "computer.workspace.list", "computer.workspace.catalogue", "computer.workspace.bootstrap", "computer.connector.verify", "computer.connector.catalogueverify", "computer.connector.verification", "computer.workspace.write", "computer.workspace.edit", "computer.workspace.mutation.read":
+		case "computer.workspace.search", "computer.workspace.read", "computer.workspace.readdiagnosticauthorize", "computer.workspace.list", "computer.workspace.catalogue", "computer.workspace.bootstrap", "computer.connector.verify", "computer.connector.catalogueverify", "computer.connector.verification", "computer.workspace.write", "computer.workspace.edit", "computer.workspace.remove", "computer.workspace.mutation.read":
 			if method.Handle == nil {
 				return ErrConnectorUnavailable
 			}
