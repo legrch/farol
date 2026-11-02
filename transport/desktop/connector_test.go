@@ -73,6 +73,9 @@ func TestConnectionVerificationObservationHandshakeAndReadOnlyDispatch(t *testin
 func TestConnectionCatalogueVerificationHandshakeAndReadOnlyDispatch(t *testing.T) {
 	testConnectionVerificationReadOnly(t, "computer.connector.catalogueverify")
 }
+func TestConnectionSelectedCodexHandshakeAndReadOnlyDispatch(t *testing.T) {
+	testConnectionVerificationReadOnly(t, "task.codex.selected.read")
+}
 func testConnectionVerificationReadOnly(t *testing.T, method string) {
 	t.Helper()
 	client, config, calls, done := connectorFixture(t, method)
