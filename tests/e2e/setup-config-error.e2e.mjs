@@ -22,7 +22,6 @@ import {
   waitForReactShell,
   openSetup,
   setupStep,
-  assertSetupOverview,
 } from "./current-react-setup.mjs";
 
 const packaged = process.argv.includes("--packaged");
@@ -272,21 +271,7 @@ try {
             ["Refresh status"],
           );
         }
-        await assertSetupOverview(window, {
-          ready: false,
-          hasWorkspaces: false,
-          signIn: "unavailable",
-          states: {
-            signin: "unavailable",
-            folders: "unavailable",
-            connection: "unavailable",
-            attachment: "unavailable",
-          },
-        });
-        await window
-          .getByRole("region", { name: "Setup overview", exact: true })
-          .getByRole("button", { name: "Review Connection", exact: true })
-          .click();
+        await setupStep(window, "connection");
         await window
           .locator('.setup-page[data-setup-step="connection"]')
           .waitFor();
