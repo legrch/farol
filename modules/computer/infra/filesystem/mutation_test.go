@@ -272,7 +272,7 @@ func TestMutationRemoveExactFileAndPreserveNeighbor(t *testing.T) {
 }
 
 func TestMutationRemoveFailureIsNotReplayed(t *testing.T) {
-	for _, scenario := range []string{"wrong-hash", "changed-before-unlink", "guard-refused", "unlink-error", "sync-error"} {
+	for _, scenario := range []string{"wrong-hash", "changed-before-unlink", "guard-refused", "unlink-error", "sync-error", "lost-ack", "duplicate-callback", "recreated-after-unlink"} {
 		t.Run(scenario, func(t *testing.T) {
 			m, f := fakeMutable()
 			f.work.children["note.md"] = f.file("old")
@@ -300,6 +300,28 @@ func TestMutationRemoveFailureIsNotReplayed(t *testing.T) {
 			case "sync-error":
 				f.onSync = func(*fakeNode) error { return unix.EIO }
 				want = "WORKSPACE_MUTATION_OUTCOME_UNKNOWN"
+			case "lost-ack":
+				request.WithPublication = func(_ context.Context, publish func() error) error {
+					if err := publish(); err != nil {
+						return err
+					}
+					return errors.New("ack lost")
+				}
+				want = "WORKSPACE_MUTATION_OUTCOME_UNKNOWN"
+			case "duplicate-callback":
+				request.WithPublication = func(_ context.Context, publish func() error) error {
+					if err := publish(); err != nil {
+						return err
+					}
+					return publish()
+				}
+				want = "WORKSPACE_MUTATION_OUTCOME_UNKNOWN"
+			case "recreated-after-unlink":
+				f.onSync = func(*fakeNode) error {
+					f.work.children["note.md"] = f.file("replacement")
+					return nil
+				}
+				want = "WORKSPACE_MUTATION_OUTCOME_UNKNOWN"
 			}
 			out, err := m.Mutate(context.Background(), request)
 			if out != nil {
@@ -308,6 +330,9 @@ func TestMutationRemoveFailureIsNotReplayed(t *testing.T) {
 			nativeCode(t, err, want)
 			if f.unlinks > 1 || string(f.work.children["neighbor.md"].data) != "neighbor" {
 				t.Fatal("replayed unlink or changed neighbor")
+			}
+			if scenario == "recreated-after-unlink" && string(f.work.children["note.md"].data) != "replacement" {
+				t.Fatal("replacement was removed")
 			}
 		})
 	}
