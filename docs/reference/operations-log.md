@@ -1,7 +1,7 @@
 # App operations log
 
 Future work for 0.4.2: load Activity in bounded pages while preserving global
-search, notifications, lifecycle pairing and unknown outcomes. The current
+search, lifecycle pairing and unknown outcomes. The current
 snapshot reads retained entries together. Full process auditing is also future
 work: present command and output excerpts are filtered, bounded and may be
 withheld or unavailable; they are not a complete transcript.

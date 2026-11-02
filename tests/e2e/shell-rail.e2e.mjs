@@ -572,24 +572,17 @@ app.whenReady().then(async()=>{const w=new BrowserWindow({width:1100,height:760,
   );
   await page.evaluate(() => localStorage.setItem("notification-fixture", "on"));
   await page.reload();
-  await page.locator(".notification-count").waitFor();
   assert.equal(await page.locator(".rail .attention-action").count(), 0);
-  await page
-    .getByRole("button", { name: "Notifications", exact: true })
-    .click();
-  await capture(page, "notifications-unread");
-  await page
-    .getByRole("button", { name: "Mark all as read", exact: true })
-    .click();
-  await page.getByText("No unread notifications.", { exact: true }).waitFor();
-  await page.reload();
-  await page
-    .getByRole("button", { name: "Notifications", exact: true })
-    .click();
-  await page.getByText("No unread notifications.", { exact: true }).waitFor();
   assert.equal(await page.locator(".notification-count").count(), 0);
+  assert.equal(
+    await page
+      .getByRole("button", { name: "Notifications", exact: true })
+      .count(),
+    0,
+  );
   await page
-    .getByRole("button", { name: "Open Activity", exact: true })
+    .locator(".rail")
+    .getByRole("button", { name: "Activity", exact: true })
     .click();
   await page.locator(".operation-row").waitFor();
   assert.equal(
@@ -597,10 +590,9 @@ app.whenReady().then(async()=>{const w=new BrowserWindow({width:1100,height:760,
     1,
   );
   await capture(page, "activity-read-history");
-  report.notifications = {
-    readSurvivesRendererReload: true,
+  report.activity = {
     unknownPreserved: true,
-    railEntryAbsent: true,
+    notificationInboxAbsent: true,
     liveSend: 0,
   };
   await page.evaluate(() =>

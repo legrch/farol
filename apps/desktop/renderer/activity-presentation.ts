@@ -139,5 +139,25 @@ export function activityGroupResult(group: readonly ActivityEntry[]) {
       issue: true,
     };
   }
+  if (observed.issue) return observed;
+  const problem = group.find(
+    (row) => row.outcome === "failed" || row.outcome === "refused",
+  );
+  if (problem) {
+    return {
+      text: terminal
+        ? `${observed.text} · request ${problem.outcome}`
+        : `Request ${problem.outcome}`,
+      outcome: problem.outcome!,
+      issue: true,
+    };
+  }
+  if (group.some((row) => row.outcome === "pending")) {
+    return {
+      text: terminal ? `${observed.text} · request pending` : "Request pending",
+      outcome: "pending",
+      issue: false,
+    };
+  }
   return observed;
 }

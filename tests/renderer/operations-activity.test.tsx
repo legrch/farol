@@ -82,6 +82,47 @@ it("does not turn an unknown process start into success after a later exit obser
     text: "Exit 0 · result unconfirmed",
   });
 });
+it.each(["pending", "refused", "failed"] as const)(
+  "does not present a process group as done when a related request is %s",
+  (outcome) => {
+    const start: ActivityEntry = {
+      ...entries[0]!,
+      kind: "computer_shell_start",
+    };
+    const terminal: ActivityEntry = {
+      ...entries[0]!,
+      kind: "computer.process.terminal",
+      exit: { kind: "code", value: 0 },
+    };
+    const request: ActivityEntry = {
+      ...entries[0]!,
+      kind: "computer_shell_cancel",
+      outcome,
+    };
+    expect(activityGroupResult([terminal, start, request])).toMatchObject({
+      outcome,
+      issue: outcome !== "pending",
+      text: `Exit 0 · request ${outcome}`,
+    });
+  },
+);
+it("preserves a failed terminal result when another request is pending", () => {
+  const terminal: ActivityEntry = {
+    ...entries[0]!,
+    kind: "computer.process.terminal",
+    exit: { kind: "code", value: 126 },
+  };
+  const request: ActivityEntry = {
+    ...entries[0]!,
+    kind: "computer_shell_cancel",
+    outcome: "pending",
+  };
+  expect(activityGroupResult([terminal, request])).toMatchObject({
+    outcome: "failed",
+    issue: true,
+    text: "Exit 126",
+  });
+});
 it("labels a send acknowledgement without presenting a completed test", () => {
   expect(
     activityResult({

@@ -22,6 +22,8 @@ const pairs = [
   ["0.2.0-owner.beta.11", "0.2.0-owner.beta.13", true],
   ["0.2.0-owner.beta.11", "0.2.0", true],
   ["0.2.0-owner.beta.11", "0.3.0", true],
+  ["0.5.7", "0.5.8", true],
+  ["0.5.7", "0.5.7", false],
   // These pairs are outside this known legacy refusal, not qualified rollback.
   ["0.2.0-owner.beta.10", "0.2.0-owner.beta.11", false],
   ["0.2.0-owner.beta.11", "0.2.0-owner.beta.11", false],
