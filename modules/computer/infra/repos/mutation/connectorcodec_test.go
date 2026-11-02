@@ -113,7 +113,7 @@ func TestConnectorV3CanonicalFixtureAndLegacyNamespaces(t *testing.T) {
 
 func TestConnectorV3RoundTripPhases(t *testing.T) {
 	_, _, original := connectorV3Fixture(t)
-	for _, kind := range []domain.Kind{domain.WriteKind, domain.EditKind} {
+	for _, kind := range []domain.Kind{domain.WriteKind, domain.EditKind, domain.RemoveKind} {
 		t.Run(string(kind), func(t *testing.T) {
 			b := original.Binding()
 			b.Connector.Operation = kind
@@ -126,6 +126,11 @@ func TestConnectorV3RoundTripPhases(t *testing.T) {
 			if kind == domain.EditKind {
 				receipt.BeforeSHA256 = &before
 				receipt.Replacements = 1
+			}
+			if kind == domain.RemoveKind {
+				receipt.BeforeSHA256 = &before
+				receipt.AfterSHA256 = ""
+				receipt.Bytes = 0
 			}
 			final, err := prepared.Complete(receipt)
 			if err != nil {

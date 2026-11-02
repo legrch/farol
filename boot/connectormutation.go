@@ -27,6 +27,8 @@ func connectorMutationTarget(op mutationct.Operation) (string, state.Kind) {
 		return v.RelativePath, state.WriteKind
 	case mutationct.Edit:
 		return v.RelativePath, state.EditKind
+	case mutationct.Remove:
+		return v.RelativePath, state.RemoveKind
 	default:
 		return "", ""
 	}

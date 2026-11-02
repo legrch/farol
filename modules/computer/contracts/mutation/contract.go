@@ -25,9 +25,11 @@ type Edit struct {
 	Edits          []TextEdit
 	ExpectedSHA256 string
 }
+type Remove struct{ RelativePath, ExpectedSHA256 string }
 
-func (Write) operation() {}
-func (Edit) operation()  {}
+func (Write) operation()  {}
+func (Edit) operation()   {}
+func (Remove) operation() {}
 
 type CheckRequest struct {
 	OperationID, OwnerID, SessionID, TaskID string
@@ -91,6 +93,8 @@ func toAppOperation(operation Operation) mutationsvc.Operation {
 			edits = append(edits, mutationsvc.TextEdit{OldText: e.OldText, NewText: e.NewText})
 		}
 		return mutationsvc.Edit{RelativePath: v.RelativePath, Edits: edits, ExpectedSHA256: v.ExpectedSHA256}
+	case Remove:
+		return mutationsvc.Remove{RelativePath: v.RelativePath, ExpectedSHA256: v.ExpectedSHA256}
 	}
 	return nil
 }

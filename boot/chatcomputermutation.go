@@ -71,6 +71,8 @@ func mutationInputCopy(input mutationct.Operation) mutationct.Operation {
 	case mutationct.Edit:
 		value.Edits = slices.Clone(value.Edits)
 		return value
+	case mutationct.Remove:
+		return value
 	default:
 		return nil
 	}
