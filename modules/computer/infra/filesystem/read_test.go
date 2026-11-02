@@ -162,6 +162,8 @@ func TestReadPathRefusalReportsSafeReason(t *testing.T) {
 		{"policy", "policy", "policy_denied"},
 		{"symlink", "target", "link_not_supported"},
 		{"hardlink", "target", "hardlink_not_supported"},
+		{"ancestor-symlink", "ancestor", "link_not_supported"},
+		{"unsafe-root", "root", "unsafe_root"},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			d := fixture(t)
@@ -178,6 +180,18 @@ func TestReadPathRefusalReportsSafeReason(t *testing.T) {
 			case "hardlink":
 				name = "hard.md"
 				if err := os.Link(filepath.Join(d.Root, "original.md"), filepath.Join(d.Root, name)); err != nil {
+					t.Fatal(err)
+				}
+			case "ancestor-symlink":
+				if err := os.Mkdir(filepath.Join(d.Root, "real"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("real", filepath.Join(d.Root, "alias")); err != nil {
+					t.Fatal(err)
+				}
+				name = "alias/note.md"
+			case "unsafe-root":
+				if err := os.Chmod(d.Root, 0770); err != nil {
 					t.Fatal(err)
 				}
 			}
