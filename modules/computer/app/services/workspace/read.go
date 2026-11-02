@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"errors"
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -48,7 +49,16 @@ func (s *Service) Read(ctx context.Context, request ReadRequest) (*ReadResponse,
 	}
 	result, err := s.workspace.Read(ctx, native)
 	if err != nil {
-		return nil, nativeFailure(err)
+		failure := nativeReadFailure(err)
+		var classified *authority.Failure
+		if errors.As(failure, &classified) && classified.Stage != "" {
+			// A diagnostic is information about the target. Recheck the same
+			// authority used for successful disclosure before returning it.
+			if err := s.disclose(ctx, caller, *admitted, func() {}); err != nil {
+				return nil, err
+			}
+		}
+		return nil, failure
 	}
 	if result == nil {
 		return nil, authority.Fail("WORKSPACE_HELPER_FAILED", "native-workspace")
@@ -68,4 +78,13 @@ func (s *Service) Read(ctx context.Context, request ReadRequest) (*ReadResponse,
 		return nil, err
 	}
 	return response, nil
+}
+
+func nativeReadFailure(err error) error {
+	out := nativeFailure(err).(*authority.Failure)
+	var classified *authority.Failure
+	if errors.As(err, &classified) && classified != nil && classified.Code == "WORKSPACE_PATH_REFUSED" && classified.Source == "native-workspace" && authority.SafeWorkspaceReadDiagnostic(classified.Stage, classified.Reason) {
+		out.Stage, out.Reason = classified.Stage, classified.Reason
+	}
+	return out
 }

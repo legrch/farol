@@ -27,6 +27,7 @@ func (c readClock) Now() time.Time { return c.at }
 
 type readWorkspace struct {
 	result  port.ReadResponse
+	err     error
 	calls   int
 	request port.ReadRequest
 }
@@ -34,6 +35,9 @@ type readWorkspace struct {
 func (w *readWorkspace) Read(_ context.Context, r port.ReadRequest) (*port.ReadResponse, error) {
 	w.calls++
 	w.request = r
+	if w.err != nil {
+		return nil, w.err
+	}
 	return &w.result, nil
 }
 func (w *readWorkspace) List(context.Context, port.ListRequest) (*port.ListResponse, error) {
@@ -146,6 +150,19 @@ func TestReadClassifiedRefusalCarriesOnlySafePair(t *testing.T) {
 		if tc.want && (*result.Stage != tc.stage || *result.Reason != tc.reason) {
 			t.Fatalf("wrong values: %+v", result)
 		}
+	}
+}
+
+func TestReadNativeDiagnosticCrossesServiceContractAndWire(t *testing.T) {
+	method, native, _, body := readFixture(t)
+	native.err = &authority.Failure{Code: "WORKSPACE_PATH_REFUSED", Source: "native-workspace", Retry: "never", Stage: "policy", Reason: "policy_denied"}
+	out := invokeRead(t, method, body)
+	var result wire.ComputerReadRefusal
+	if err := json.Unmarshal(out.Data, &result); err != nil || wire.Validate("ComputerReadRefusal", out.Data) != nil {
+		t.Fatalf("invalid refusal: %s %v", out.Data, err)
+	}
+	if out.Status != "refused" || result.Stage == nil || *result.Stage != "policy" || result.Reason == nil || *result.Reason != "policy_denied" || result.Retry != "never" || native.calls != 1 {
+		t.Fatalf("diagnostic lost: %+v", result)
 	}
 }
 func TestReadRejectsMalformedTypedBodiesBeforeOwner(t *testing.T) {

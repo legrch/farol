@@ -35,17 +35,7 @@ func failure(err error) error {
 
 // SafePathReason is the complete set of path-free diagnostic pairs.
 func SafePathReason(stage, reason string) bool {
-	switch stage {
-	case "policy":
-		return reason == "policy_denied"
-	case "root":
-		return reason == "unsafe_root" || reason == "os_permission_denied"
-	case "ancestor":
-		return reason == "link_not_supported" || reason == "os_permission_denied"
-	case "target":
-		return reason == "link_not_supported" || reason == "hardlink_not_supported" || reason == "os_permission_denied"
-	}
-	return false
+	return authority.SafeWorkspaceReadDiagnostic(stage, reason)
 }
 
 var codes = map[string]bool{

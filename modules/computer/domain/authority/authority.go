@@ -167,6 +167,21 @@ type NativeHost struct {
 // only allowlisted error codes, never raw native diagnostics or private paths.
 type Failure struct{ Code, Source, Retry, Stage, Reason string }
 
+// SafeWorkspaceReadDiagnostic admits only path-free native diagnostic pairs.
+func SafeWorkspaceReadDiagnostic(stage, reason string) bool {
+	switch stage {
+	case "policy":
+		return reason == "policy_denied"
+	case "root":
+		return reason == "unsafe_root" || reason == "os_permission_denied"
+	case "ancestor":
+		return reason == "link_not_supported" || reason == "os_permission_denied"
+	case "target":
+		return reason == "link_not_supported" || reason == "hardlink_not_supported" || reason == "os_permission_denied"
+	}
+	return false
+}
+
 func (f *Failure) Error() string               { return f.Code + " (" + f.Source + ")" }
 func Fail(code, source string) *Failure        { return &Failure{Code: code, Source: source, Retry: "never"} }
 func fail(code string, source Source) *Failure { return Fail(code, string(source)) }

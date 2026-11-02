@@ -102,6 +102,32 @@ func expectFailure(t *testing.T, err error, code, source string) {
 		t.Fatalf("got %v, want %s from %s", err, code, source)
 	}
 }
+
+func TestReadDiagnosticRechecksAuthorityBeforeDisclosure(t *testing.T) {
+	for _, revoked := range []bool{false, true} {
+		s, _, approval, n, _, r := fixture(t)
+		n.err = &authority.Failure{Code: "WORKSPACE_PATH_REFUSED", Source: "native-workspace", Retry: "never", Stage: "target", Reason: "link_not_supported"}
+		if revoked {
+			n.hook = func() { approval.a.Capabilities = nil }
+		}
+		out, err := s.Read(context.Background(), r)
+		if out != nil || n.reads != 1 {
+			t.Fatal("unexpected disclosure or repeated read")
+		}
+		if revoked {
+			expectFailure(t, err, "AUTHORITY_CAPABILITY_DENIED", "computer-policy")
+			var failure *authority.Failure
+			if !errors.As(err, &failure) || failure.Stage != "" || failure.Reason != "" {
+				t.Fatalf("revoked diagnostic leaked: %v", err)
+			}
+		} else {
+			var failure *authority.Failure
+			if !errors.As(err, &failure) || failure.Code != "WORKSPACE_PATH_REFUSED" || failure.Stage != "target" || failure.Reason != "link_not_supported" {
+				t.Fatalf("diagnostic lost: %v", err)
+			}
+		}
+	}
+}
 func listRequest(r ReadRequest) ListRequest {
 	return ListRequest{OwnerID: r.OwnerID, SessionID: r.SessionID, TaskID: r.TaskID, TaskEpoch: r.TaskEpoch, ParticipantID: r.ParticipantID, TurnID: r.TurnID, Generation: r.Generation, CallID: r.CallID, WorkspaceID: r.WorkspaceID, RelativePath: "."}
 }
