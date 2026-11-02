@@ -355,9 +355,7 @@ app.whenReady().then(async()=>{const w=new BrowserWindow({width:1100,height:760,
     "Setup",
   );
   assert.equal(await page.locator(".setup-progress").count(), 1);
-  await page
-    .getByRole("button", { name: "Back to Home", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Back to Home", exact: true }).click();
   await page
     .locator(".rail")
     .getByRole("button", { name: "Home", exact: true })
