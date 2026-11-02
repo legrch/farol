@@ -360,6 +360,14 @@ export async function run(input: {
         });
       }
     }
+    // The normal desktop publishes workspace labels to the shared operations
+    // store before the separate MCP adapter starts. This headless host has no
+    // desktop renderer, so reproduce that owner publication explicitly.
+    const labels = new OperationsStore(
+      operationsDirectoryFromLifecycleRoot(lifecycleRoot),
+    );
+    labels.setWorkspaceLabels(settings().computer.workspaces);
+    assert.equal(await labels.shutdown(5000), true);
     const challenge = randomUUID();
     const opened = await diagnostics.stage(
       "go-connector-open",
