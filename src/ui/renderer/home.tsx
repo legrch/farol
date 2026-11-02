@@ -477,7 +477,8 @@ export function Home({ snapshot, facade }: Props) {
                 <span className="home-row-label">{event.label}</span>
                 <span className="home-event-state">
                   {group.length > 1 ||
-                  event.kind === "computer.process.terminal"
+                  event.kind === "computer.process.terminal" ||
+                  event.code === "CHATGPT_SEND_REQUESTED"
                     ? result.text
                     : eventState(event.phase)}
                 </span>

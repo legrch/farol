@@ -8,6 +8,7 @@ export const operationCodesByOutcome = {
   done: [
     "pass",
     "COMPLETED",
+    "CHATGPT_SEND_REQUESTED",
     "HOST_ACKNOWLEDGED",
     "NORMAL_EXIT",
     "ORIGIN_CAPTURED",

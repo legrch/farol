@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { OperationsActivity } from "../../apps/desktop/renderer/operations-view";
 import { activityGroupResult } from "../../apps/desktop/renderer/activity-presentation";
+import { activityResult } from "../../apps/desktop/renderer/activity-presentation";
 import { unresolvedActions } from "../../apps/desktop/renderer/unresolved-actions";
 import { WindowController } from "../../src/ui/renderer/controller";
 import { fixture } from "./fixture";
@@ -80,6 +81,15 @@ it("does not turn an unknown process start into success after a later exit obser
     issue: true,
     text: "Exit 0 · result unconfirmed",
   });
+});
+it("labels a send acknowledgement without presenting a completed test", () => {
+  expect(
+    activityResult({
+      ...entries[0]!,
+      kind: "chatgpt.run-connection-test",
+      code: "CHATGPT_SEND_REQUESTED",
+    }).text,
+  ).toBe("Send requested");
 });
 it("shows local filtered details and explains withheld output", async () => {
   const f = fixture(),

@@ -12,6 +12,8 @@ export function activityResult(row: ActivityEntry): {
   outcome: string;
   issue: boolean;
 } {
+  if (row.code === "CHATGPT_SEND_REQUESTED" && row.outcome === "done")
+    return { text: "Send requested", outcome: "done", issue: false };
   if (row.kind === "computer.process.terminal") {
     const exit = row.exit;
     const issue = Boolean(

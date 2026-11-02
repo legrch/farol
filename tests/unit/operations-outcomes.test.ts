@@ -55,7 +55,7 @@ it("records the connection prompt separately and only acknowledges its send", ()
         code: null,
       },
     }),
-  ).toEqual({ outcome: "done", code: null });
+  ).toEqual({ outcome: "done", code: "CHATGPT_SEND_REQUESTED" });
 });
 
 it("records a proven Deep test pre-submit refusal without inventing an unknown send", () => {
