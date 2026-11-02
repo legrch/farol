@@ -307,14 +307,14 @@ app.whenReady().then(async()=>{const w=new BrowserWindow({width:1100,height:760,
     .getByRole("button", { name: "Check sign-in", exact: true })
     .click();
   await page.getByText("✓ Sign-in checked", { exact: true }).waitFor();
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await page.getByRole("button", { name: "Next", exact: true }).click();
   await page
     .getByRole("button", { name: "Collapse sidebar", exact: true })
     .click();
   await capture(page, "setup-rail");
   await captureWalkthrough("b3-connect-this-mac");
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Next", exact: true }).click();
   await page
     .getByRole("heading", {
       name: `4. Add ${productName} to ChatGPT`,
@@ -338,7 +338,7 @@ app.whenReady().then(async()=>{const w=new BrowserWindow({width:1100,height:760,
   );
   await page.waitForFunction(() => innerWidth === 620);
   await captureWalkthrough("b3-connect-this-mac-compact");
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Next", exact: true }).click();
   await captureWalkthrough("b3-add-to-chatgpt-compact");
   await app.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows()[0].setContentSize(1100, 760),
@@ -356,7 +356,7 @@ app.whenReady().then(async()=>{const w=new BrowserWindow({width:1100,height:760,
   );
   assert.equal(await page.locator(".setup-progress").count(), 1);
   await page
-    .getByRole("button", { name: `Start using ${productName}`, exact: true })
+    .getByRole("button", { name: "Back to Home", exact: true })
     .click();
   await page
     .locator(".rail")
