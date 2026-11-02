@@ -1709,12 +1709,14 @@ kbd {
   flex: 1;
   min-width: 180px;
 }
-.operation-row {
+.operation-row,
+.operation-group {
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 14px;
 }
-.operation-row summary {
+.operation-row > summary,
+.operation-group > summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1729,8 +1731,12 @@ kbd {
   color: var(--muted);
   overflow-wrap: anywhere;
 }
-.operation-row[open] summary {
+.operation-row[open] > summary,
+.operation-group[open] > summary {
   margin-bottom: 16px;
+}
+.operation-group > .operation-row + .operation-row {
+  margin-top: 8px;
 }
 .operation-outcome {
   color: var(--muted);

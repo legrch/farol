@@ -7,7 +7,8 @@ import { useSetupIntents, retainedSetupIntents } from "./settings";
 import { unresolvedActions } from "../../../apps/desktop/renderer/unresolved-actions";
 import {
   activityCategory,
-  activityResult,
+  activityGroups,
+  activityGroupResult,
 } from "../../../apps/desktop/renderer/activity-presentation";
 import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
 import { selectedConnectorApp } from "../../pkg/product-settings/connector-app-selection";
@@ -105,10 +106,11 @@ export function Home({ snapshot, facade }: Props) {
   const refused = Object.values(snapshot.intents).filter(
     (intent) => intent.state === "refused",
   );
-  const recent = [...snapshot.activity]
-    .filter((row) => activityCategory(row) === "requests")
-    .sort((a, b) => b.at - a.at)
-    .slice(0, 3);
+  const recent = activityGroups(
+    [...snapshot.activity]
+      .filter((row) => activityCategory(row) === "requests")
+      .sort((a, b) => b.at - a.at),
+  ).slice(0, 3);
   const workspaceCount =
     snapshot.configuration?.status === "ready"
       ? snapshot.configuration.settings.computer.workspaces.length
@@ -451,30 +453,37 @@ export function Home({ snapshot, facade }: Props) {
               Show all
             </button>
           </div>
-          {recent.map((event) => (
-            <button
-              className="home-row"
-              key={event.id}
-              onClick={() =>
-                facade.navigate({ area: "activity", activityId: event.id })
-              }
-            >
-              <time>
-                {Number.isFinite(event.at) && Math.abs(event.at) <= 8.64e15
-                  ? new Date(event.at).toLocaleTimeString(undefined, {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })
-                  : "Time unavailable"}
-              </time>
-              <span className="home-row-label">{event.label}</span>
-              <span className="home-event-state">
-                {event.kind === "computer.process.terminal"
-                  ? activityResult(event).text
-                  : eventState(event.phase)}
-              </span>
-            </button>
-          ))}
+          {recent.map((group) => {
+            const event =
+              group.find((item) => item.kind === "computer_shell_start") ??
+              group[0]!;
+            const result = activityGroupResult(group);
+            return (
+              <button
+                className="home-row"
+                key={event.id}
+                onClick={() =>
+                  facade.navigate({ area: "activity", activityId: event.id })
+                }
+              >
+                <time>
+                  {Number.isFinite(event.at) && Math.abs(event.at) <= 8.64e15
+                    ? new Date(event.at).toLocaleTimeString(undefined, {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })
+                    : "Time unavailable"}
+                </time>
+                <span className="home-row-label">{event.label}</span>
+                <span className="home-event-state">
+                  {group.length > 1 ||
+                  event.kind === "computer.process.terminal"
+                    ? result.text
+                    : eventState(event.phase)}
+                </span>
+              </button>
+            );
+          })}
           {!recent.length && (
             <p className="description">
               Activity will appear here as you use Farol.

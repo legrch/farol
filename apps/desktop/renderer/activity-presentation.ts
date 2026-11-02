@@ -64,3 +64,78 @@ export function activitySearchText(row: ActivityEntry): string {
     .join(" ")
     .toLowerCase();
 }
+
+// Correlate only records carrying the same bounded process identity. Older
+// records without a reference remain separate and are never guessed together.
+export function activityGroups(
+  rows: readonly ActivityEntry[],
+): ActivityEntry[][] {
+  const referenceKey = (
+    reference: NonNullable<ActivityEntry["operationRef"]>,
+  ) =>
+    JSON.stringify([
+      reference.owner,
+      reference.operationId,
+      reference.buildId,
+      reference.runtimeId,
+      reference.backendGeneration ?? null,
+    ]);
+  const key = (row: ActivityEntry): string | null => {
+    if (
+      ![
+        "computer_shell_start",
+        "computer_shell_read",
+        "computer_shell_cancel",
+        "computer.process.terminal",
+      ].includes(row.kind)
+    )
+      return null;
+    const ref =
+      row.kind === "computer_shell_read" || row.kind === "computer_shell_cancel"
+        ? row.subjectRef
+        : row.operationRef;
+    return ref?.owner === "computer.process" ? referenceKey(ref) : null;
+  };
+  const starts = new Set(
+    rows
+      .filter((row) => row.kind === "computer_shell_start")
+      .map(key)
+      .filter((value): value is string => value !== null),
+  );
+  const groups: ActivityEntry[][] = [],
+    byKey = new Map<string, ActivityEntry[]>();
+  for (const row of rows) {
+    const id = key(row);
+    if (!id || !starts.has(id)) {
+      groups.push([row]);
+      continue;
+    }
+    let group = byKey.get(id);
+    if (!group) {
+      group = [];
+      byKey.set(id, group);
+      groups.push(group);
+    }
+    group.push(row);
+  }
+  return groups;
+}
+
+export function activityGroupResult(group: readonly ActivityEntry[]) {
+  const terminal = group.find(
+    (row) => row.kind === "computer.process.terminal",
+  );
+  const original =
+    group.find((row) => row.kind === "computer_shell_start") ?? group[0]!;
+  const observed = activityResult(terminal ?? original);
+  if (group.some((row) => row.outcome === "unknown")) {
+    return {
+      text: terminal
+        ? `${observed.text} · result unconfirmed`
+        : "Result unconfirmed",
+      outcome: "unknown",
+      issue: true,
+    };
+  }
+  return observed;
+}

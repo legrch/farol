@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { OperationsActivity } from "../../apps/desktop/renderer/operations-view";
+import { activityGroupResult } from "../../apps/desktop/renderer/activity-presentation";
 import { unresolvedActions } from "../../apps/desktop/renderer/unresolved-actions";
 import { WindowController } from "../../src/ui/renderer/controller";
 import { fixture } from "./fixture";
@@ -63,6 +64,23 @@ const entries: ActivityEntry[] = [
     generation: 0,
   },
 ];
+it("does not turn an unknown process start into success after a later exit observation", () => {
+  const start: ActivityEntry = {
+    ...entries[0]!,
+    kind: "computer_shell_start",
+    outcome: "unknown",
+  };
+  const terminal: ActivityEntry = {
+    ...entries[0]!,
+    kind: "computer.process.terminal",
+    exit: { kind: "code", value: 0 },
+  };
+  expect(activityGroupResult([terminal, start])).toMatchObject({
+    outcome: "unknown",
+    issue: true,
+    text: "Exit 0 · result unconfirmed",
+  });
+});
 it("shows local filtered details and explains withheld output", async () => {
   const f = fixture(),
     c = new WindowController(f.api);
@@ -518,6 +536,95 @@ it("Home hides passive health and presents a nonzero process exit", async () => 
     expect(recent.textContent).toContain("Exit 126");
     expect(recent.textContent).not.toContain("Passive health");
     expect(recent.textContent).not.toContain("Done");
+  } finally {
+    await act(async () => root.unmount());
+    c.dispose();
+  }
+});
+
+it("groups only observations bound to the same process and searches the group by exit", async () => {
+  const f = fixture(),
+    c = new WindowController(f.api);
+  await c.start();
+  const ref = {
+    owner: "computer.process" as const,
+    operationId: "start-1",
+    buildId: "build",
+    runtimeId: "runtime",
+    binding: "accepted" as const,
+  };
+  const base = { ...entries[0]!, source: "ChatGPT" as const };
+  const snapshot = {
+    ...c.getSnapshot(),
+    activity: [
+      {
+        ...base,
+        id: "start",
+        kind: "computer_shell_start",
+        label: "Shell command",
+        operationRef: ref,
+      },
+      {
+        ...base,
+        id: "read",
+        kind: "computer_shell_read",
+        label: "Shell read",
+        subjectRef: ref,
+        at: 2,
+      },
+      {
+        ...base,
+        id: "terminal",
+        kind: "computer.process.terminal",
+        label: "Process terminal",
+        operationRef: ref,
+        exit: { kind: "code" as const, value: 126 },
+        at: 3,
+      },
+      {
+        ...base,
+        id: "other",
+        kind: "computer.process.terminal",
+        label: "Other process",
+        operationRef: { ...ref, runtimeId: "other-runtime" },
+        exit: { kind: "code" as const, value: 0 },
+        at: 4,
+      },
+    ],
+  };
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  try {
+    await act(async () =>
+      root.render(
+        <OperationsActivity
+          snapshot={snapshot}
+          facade={{} as RendererFacade}
+        />,
+      ),
+    );
+    expect(host.querySelectorAll(".operation-group")).toHaveLength(1);
+    expect(
+      host.querySelectorAll(".operation-group .operation-row"),
+    ).toHaveLength(3);
+    expect(
+      host.querySelector(".operation-group > summary")?.textContent,
+    ).toContain("Exit 126");
+    expect(
+      host.querySelectorAll(".operations-activity > .operation-row"),
+    ).toHaveLength(1);
+    const input = host.querySelector<HTMLInputElement>('input[type="search"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "126");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(
+      host.querySelectorAll(".operation-group .operation-row"),
+    ).toHaveLength(3);
+    expect(host.textContent).not.toContain("Other process");
   } finally {
     await act(async () => root.unmount());
     c.dispose();
