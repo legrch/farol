@@ -461,7 +461,13 @@ import {
   type ChatGptTaskJournalRecord,
   type ChatGptTaskJournalResult,
 } from "./chatgpt-task-journal";
-import { ChatGptTaskJournalOperationIdSchema } from "./chatgpt-task-journal-record";
+import {
+  ChatGptTaskJournalOperationIdSchema,
+  MAX_CHATGPT_TASK_JOURNAL_BYTES,
+  MAX_DEEP_TEST_HISTORY_BYTES,
+  MAX_DEEP_TEST_HISTORY_RECORDS,
+  MAX_DEEP_TEST_OUTSTANDING,
+} from "./chatgpt-task-journal-record";
 import {
   PrivateChatGptConversationStore,
   type ChatGptConversationRecord,
@@ -7451,7 +7457,14 @@ async function runManualDeepTest(
       );
       if (
         scan.status === "unreadable" ||
-        (scan.status === "read" && scan.value.length >= 256) ||
+        (scan.status === "read" &&
+          (scan.value.length >= MAX_DEEP_TEST_HISTORY_RECORDS ||
+            scan.totalBytes +
+              MAX_CHATGPT_TASK_JOURNAL_BYTES * (MAX_DEEP_TEST_OUTSTANDING + 1) >
+              MAX_DEEP_TEST_HISTORY_BYTES ||
+            scan.value.filter(
+              (record) => record.phase !== "delivery_acknowledged",
+            ).length >= MAX_DEEP_TEST_OUTSTANDING)) ||
         !isCurrent()
       )
         throw new Error("DEEP_TEST_UNAVAILABLE");

@@ -18,6 +18,10 @@ export const LEGACY_PREPARATION_ARCHIVE_NAME = "legacy-chatgpt-prepared.json";
 // The journal refuses to decode a file larger than this before parsing it;
 // the promotion reader must refuse the same bytes.
 export const MAX_CHATGPT_TASK_JOURNAL_BYTES = 64 * 1_024;
+// History is retained for no-replay; outstanding work has a separate bound.
+export const MAX_DEEP_TEST_HISTORY_RECORDS = 16_384;
+export const MAX_DEEP_TEST_HISTORY_BYTES = 32 * 1_024 * 1_024;
+export const MAX_DEEP_TEST_OUTSTANDING = 256;
 
 const canonicalTimestampSchema = z.string().refine((value) => {
   const parsed = new Date(value);

@@ -6,7 +6,13 @@ import vm from "node:vm";
 import { transformSync } from "esbuild";
 import { afterEach, expect, it, vi } from "vitest";
 import { PrivateChatGptTaskJournal } from "../../src/apps/desktop/chatgpt-task-journal";
-import { ChatGptTaskJournalOperationIdSchema } from "../../src/apps/desktop/chatgpt-task-journal-record";
+import {
+  ChatGptTaskJournalOperationIdSchema,
+  MAX_CHATGPT_TASK_JOURNAL_BYTES,
+  MAX_DEEP_TEST_HISTORY_BYTES,
+  MAX_DEEP_TEST_HISTORY_RECORDS,
+  MAX_DEEP_TEST_OUTSTANDING,
+} from "../../src/apps/desktop/chatgpt-task-journal-record";
 import { readFlatDeepTestRecords } from "../../src/apps/desktop/legacy-activation-obligations";
 
 // Exercises the actual main-process orchestration with disposable state and a scripted route.
@@ -84,6 +90,10 @@ async function fixture(stale = false) {
   };
   const context = {
     ChatGptTaskJournalOperationIdSchema,
+    MAX_CHATGPT_TASK_JOURNAL_BYTES,
+    MAX_DEEP_TEST_HISTORY_BYTES,
+    MAX_DEEP_TEST_HISTORY_RECORDS,
+    MAX_DEEP_TEST_OUTSTANDING,
     PrivateChatGptTaskJournal,
     readFlatDeepTestRecords,
     path,
@@ -168,6 +178,84 @@ it("sends a connection prompt without file operations", async () => {
   expect(prompt).toContain("computer_connection_status");
   expect(prompt).toContain("do not read or change files");
   expect(prompt).not.toContain("computer_workspace_write");
+});
+
+it("admits a new request after 256 acknowledged records while retaining unknown history and no-replay", async () => {
+  const f = await fixture();
+  const root = path.join(f.root, "farol-state");
+  const original = randomUUID();
+  const unknown = {
+    state: "outcome_unknown",
+    code: "CHATGPT_TASK_TIMEOUT",
+    deltaCount: 0,
+    observedCharacters: 0,
+    attachmentCount: 0,
+    totalBytes: 0,
+    stagingCleanup: null,
+  };
+  const writeRecord = async (id: string, phase: string) => {
+    const record = {
+      schema: 1,
+      operationId: id,
+      kind: "readonly",
+      phase,
+      createdAt: "2026-11-02T00:00:00.000Z",
+      updatedAt: "2026-11-02T00:00:00.000Z",
+      result: unknown,
+    };
+    await fs.writeFile(
+      path.join(root, `deep-test-${id}.json`),
+      JSON.stringify(record),
+      { mode: 0o600 },
+    );
+  };
+  await Promise.all(
+    Array.from({ length: 256 }, () =>
+      writeRecord(randomUUID(), "delivery_acknowledged"),
+    ),
+  );
+  await writeRecord(original, "result_retained");
+  const originalBytes = await fs.readFile(
+    path.join(root, `deep-test-${original}.json`),
+  );
+  expect(await f.run(randomUUID(), "", "connection")).toMatchObject({
+    ok: true,
+    evidence: { state: "send_requested" },
+  });
+  expect(f.send).toHaveBeenCalledTimes(1);
+  expect((await f.run(original, "")).ok).toBe(false);
+  expect(f.send).toHaveBeenCalledTimes(1);
+  expect(
+    await fs.readFile(path.join(root, `deep-test-${original}.json`)),
+  ).toEqual(originalBytes);
+});
+
+it("refuses a new send when 256 original results remain unacknowledged", async () => {
+  const f = await fixture();
+  const root = path.join(f.root, "farol-state");
+  const record = (id: string) => ({
+    schema: 1,
+    operationId: id,
+    kind: "readonly",
+    phase: "dispatch_intent",
+    createdAt: "2026-11-02T00:00:00.000Z",
+    updatedAt: "2026-11-02T00:00:00.000Z",
+    result: null,
+  });
+  await Promise.all(
+    Array.from({ length: 256 }, async () => {
+      const id = randomUUID();
+      await fs.writeFile(
+        path.join(root, `deep-test-${id}.json`),
+        JSON.stringify(record(id)),
+        { mode: 0o600 },
+      );
+    }),
+  );
+  expect((await f.run(randomUUID(), "", "connection")).ok).toBe(false);
+  expect(f.send).not.toHaveBeenCalled();
+  expect(f.route.runReadonlyTask).not.toHaveBeenCalled();
+  expect((await readFlatDeepTestRecords(root)).status).toBe("read");
 });
 it("sends the bounded prompt once and retains the exact result", async () => {
   const f = await fixture();
