@@ -41,8 +41,16 @@ func connectorFixture(t *testing.T, readMethods ...string) (net.Conn, ConnectorC
 }
 
 func TestConnectorConfigAcceptsCompleteSelectedCapabilitiesOnly(t *testing.T) {
-	_, config, _, _ := connectorFixture(t)
-	handler := config.Methods["computer.workspace.list"]
+	handler := Method{Handle: func(context.Context, Request) (*Outcome, error) {
+		return &Outcome{Status: "ok", Data: json.RawMessage(`{}`)}, nil
+	}}
+	config := ConnectorConfig{
+		Endpoint: wire.ComputerConnectorEndpoint{
+			Binding:    wire.ComputerConnectorBinding{BuildId: "build", ProfileId: "profile", BackendGeneration: "backend", RuntimeId: "connector-runtime", ConnectorGeneration: "1"},
+			SocketPath: "/private/tmp/fixture.sock", Token: strings.Repeat("a", 64),
+		},
+		Methods: map[string]Method{"computer.workspace.list": handler},
+	}
 	for _, name := range []string{
 		"computer.workspace.search", "computer.workspace.read", "computer.workspace.readdiagnosticauthorize",
 		"computer.workspace.catalogue", "computer.workspace.bootstrap", "computer.connector.verify",
