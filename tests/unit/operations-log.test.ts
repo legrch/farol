@@ -3106,6 +3106,35 @@ it("bounds MCP label loading and records unknown targets when the owner index st
   });
 });
 
+it("does not let an older MCP label refresh replace a newer owner update", async () => {
+  const { store } = setup();
+  let finish!: (labels: OperationWorkspaceLabels) => void;
+  const oldRead = new Promise<OperationWorkspaceLabels>((resolve) => {
+    finish = resolve;
+  });
+  const reader = store as unknown as {
+    readLabels(): Promise<OperationWorkspaceLabels>;
+  };
+  const read = vi.spyOn(reader, "readLabels").mockReturnValueOnce(oldRead);
+  const refreshing = store.loadWorkspaceLabels(5000, true);
+  store.setWorkspaceLabels([{ workspaceId: "new", label: "New Docs" }]);
+  finish([{ workspaceId: "old", label: "Old Docs" }]);
+  await refreshing;
+  read.mockRestore();
+  store.record(
+    { ...metadata, target: { workspace: "new", relativePath: "note.md" } },
+    "done",
+    null,
+    1,
+  );
+  expect(await store.flush(5000)).toBe(true);
+  expect((await store.snapshot(5000)).entries[0]!.target).toEqual({
+    workspace: "New Docs",
+    workspaceIdentity: identity("new"),
+    relativePath: "note.md",
+  });
+});
+
 it("never reattaches a removed workspace's path to a different ID with the same label", async () => {
   const { store, directory } = setup(retentionLimits);
   store.setWorkspaceLabels([{ workspaceId: "original", label: "Shared" }]);

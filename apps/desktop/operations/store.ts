@@ -54,6 +54,7 @@ export class OperationsStore implements OperationsRecorder {
   private pendingBytes = 0;
   private labels: Labels | undefined;
   private currentLabels: Labels | undefined;
+  private labelRefreshSequence = 0;
   private readLabelsCache: Labels = [];
   private running: Promise<void> | undefined;
   private scheduled: NodeJS.Immediate | undefined;
@@ -154,6 +155,7 @@ export class OperationsStore implements OperationsRecorder {
   }
   private updateLabels(workspaces: Labels): void {
     if (this.closed) return;
+    this.labelRefreshSequence++;
     // Coalesced and bounded, through the same writer as observations.
     const labels = workspaces
       .slice(0, 128)
@@ -216,7 +218,8 @@ export class OperationsStore implements OperationsRecorder {
   }
   /** Load the private owner index before a separate MCP writer serves requests.
    * Missing/unreadable configuration leaves all workspace targets unresolved. */
-  async loadWorkspaceLabels(deadlineMs = 100): Promise<void> {
+  async loadWorkspaceLabels(deadlineMs = 100, refresh = false): Promise<void> {
+    const sequence = refresh ? ++this.labelRefreshSequence : 0;
     let timer: NodeJS.Timeout | undefined;
     try {
       const labels = await Promise.race([
@@ -225,7 +228,10 @@ export class OperationsStore implements OperationsRecorder {
           timer = setTimeout(() => resolve([]), Math.max(0, deadlineMs));
         }),
       ]);
-      this.currentLabels ??= labels;
+      if (refresh) {
+        if (sequence === this.labelRefreshSequence && !this.closed)
+          this.currentLabels = labels;
+      } else this.currentLabels ??= labels;
     } finally {
       clearTimeout(timer);
     }

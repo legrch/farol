@@ -33,6 +33,7 @@ export type GoComputerMcpFence = Readonly<{
 }>;
 export type GoComputerMcpOptions = Readonly<{
   operations?: OperationsRecorder;
+  refreshWorkspaceLabels?: () => Promise<void>;
   executionOrigin?: Readonly<{
     buildId: string;
     runtimeId: string;
@@ -333,6 +334,18 @@ export function createGoComputerMcpServer(
     });
     if (metadata.kind === "computer_workspace_read")
       metadata.requestId = call.requestId;
+    if (
+      (metadata.kind === "computer_workspace_read" ||
+        metadata.kind === "computer_workspace_diagnostic_read") &&
+      !signal.aborted &&
+      options.refreshWorkspaceLabels
+    ) {
+      try {
+        await options.refreshWorkspaceLabels();
+      } catch {
+        // Activity is observational and cannot change the actual operation.
+      }
+    }
     const finish =
       (references &&
         options.operations?.beginExecution?.(metadata, references)) ??

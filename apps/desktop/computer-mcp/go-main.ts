@@ -89,6 +89,8 @@ export async function runGoComputerMcp(file: string): Promise<void> {
         client.verifiedContext,
         {
           operations,
+          refreshWorkspaceLabels: () =>
+            operations.loadWorkspaceLabels(100, true),
           executionOrigin: {
             buildId: launch.opened.endpoint.binding.buildId,
             runtimeId: launch.opened.endpoint.binding.runtimeId,
