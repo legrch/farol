@@ -40,6 +40,33 @@ func connectorFixture(t *testing.T, readMethods ...string) (net.Conn, ConnectorC
 	return client, config, calls, done
 }
 
+func TestConnectorConfigAcceptsCompleteSelectedCapabilitiesOnly(t *testing.T) {
+	_, config, _, _ := connectorFixture(t)
+	handler := config.Methods["computer.workspace.list"]
+	for _, name := range []string{
+		"computer.workspace.search", "computer.workspace.read", "computer.workspace.readdiagnosticauthorize",
+		"computer.workspace.catalogue", "computer.workspace.bootstrap", "computer.connector.verify",
+		"computer.connector.catalogueverify", "computer.connector.verification", "computer.workspace.write",
+		"computer.workspace.edit", "computer.workspace.remove", "computer.workspace.mutation.read",
+		"computer.process.start", "computer.process.read", "computer.process.cancel", "task.codex.selected.read",
+	} {
+		config.Methods[name] = handler
+	}
+	if len(config.Methods) != 17 || validateConnectorConfig(config) != nil {
+		t.Fatal("complete selected capability set rejected")
+	}
+	delete(config.Methods, "computer.process.cancel")
+	if validateConnectorConfig(config) == nil {
+		t.Fatal("incomplete process capability set accepted")
+	}
+	config.Methods["computer.process.cancel"] = handler
+	delete(config.Methods, "computer.workspace.remove")
+	config.Methods["computer.authority.publish"] = handler
+	if validateConnectorConfig(config) == nil {
+		t.Fatal("unselected authority route accepted")
+	}
+}
+
 func TestConnectionVerificationObservationHandshakeAndReadOnlyDispatch(t *testing.T) {
 	testConnectionVerificationReadOnly(t, "computer.connector.verification")
 }
