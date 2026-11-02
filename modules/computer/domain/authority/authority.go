@@ -165,7 +165,7 @@ type NativeHost struct {
 
 // Failure is classified and never authorizes automatic retry. Adapters preserve
 // only allowlisted error codes, never raw native diagnostics or private paths.
-type Failure struct{ Code, Source, Retry string }
+type Failure struct{ Code, Source, Retry, Stage, Reason string }
 
 func (f *Failure) Error() string               { return f.Code + " (" + f.Source + ")" }
 func Fail(code, source string) *Failure        { return &Failure{Code: code, Source: source, Retry: "never"} }

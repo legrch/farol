@@ -45,6 +45,11 @@ func refusal(code string) error {
 	return &authority.Failure{Code: code, Source: "native-workspace", Retry: "never"}
 }
 
+// pathRefusal records only fixed categories, never native error text or paths.
+func pathRefusal(stage, reason string) error {
+	return &authority.Failure{Code: "WORKSPACE_PATH_REFUSED", Source: "native-workspace", Retry: "never", Stage: stage, Reason: reason}
+}
+
 // Native request roots and approved ancestors require a named component,
 // matching the TS adapter and safe_open.py. Pure authority accepts "/" for
 // scope algebra; that alone does not establish native execution capability.
@@ -169,14 +174,20 @@ func openError(err error) error {
 	}
 	return refusal("WORKSPACE_PATH_REFUSED")
 }
+func openAtError(err error, stage string) error {
+	if errors.Is(err, unix.EACCES) || errors.Is(err, unix.EPERM) {
+		return pathRefusal(stage, "os_permission_denied")
+	}
+	return openError(err)
+}
 func directory(parent int, name string) (int, error) {
 	fd, err := unix.Openat(parent, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil { // ENOTDIR also names a refused symlink, not an absent path.
 		var s unix.Stat_t
 		if unix.Fstatat(parent, name, &s, unix.AT_SYMLINK_NOFOLLOW) == nil && s.Mode&unix.S_IFMT == unix.S_IFLNK {
-			return -1, refusal("WORKSPACE_PATH_REFUSED")
+			return -1, pathRefusal("ancestor", "link_not_supported")
 		}
-		return -1, openError(err)
+		return -1, openAtError(err, "ancestor")
 	}
 	return fd, nil
 }
@@ -226,7 +237,7 @@ func openedRoot(d port.Descriptor) (int, *port.DirectoryBinding, error) {
 	}
 	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return -1, nil, openError(err)
+		return -1, nil, openAtError(err, "root")
 	}
 	for i, part := range parts {
 		child, err := directory(fd, part)
@@ -248,9 +259,13 @@ func openedRoot(d port.Descriptor) (int, *port.DirectoryBinding, error) {
 		}
 	}
 	s, err := stat(fd)
-	if err != nil || s.Uid != uint32(os.Getuid()) || s.Mode&0022 != 0 {
+	if err != nil {
 		unix.Close(fd)
 		return -1, nil, refusal("WORKSPACE_PATH_REFUSED")
+	}
+	if s.Uid != uint32(os.Getuid()) || s.Mode&0022 != 0 {
+		unix.Close(fd)
+		return -1, nil, pathRefusal("root", "unsafe_root")
 	}
 	return fd, &port.DirectoryBinding{
 		Root:         "/" + strings.Join(parts, "/"),
@@ -278,20 +293,20 @@ func walk(root int, parts []string) (int, error) {
 func regular(parent int, name string) (int, unix.Stat_t, error) {
 	var listed unix.Stat_t
 	if err := unix.Fstatat(parent, name, &listed, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-		return -1, listed, openError(err)
+		return -1, listed, openAtError(err, "target")
 	}
 	if listed.Mode&unix.S_IFMT == unix.S_IFLNK {
-		return -1, listed, refusal("WORKSPACE_PATH_REFUSED")
+		return -1, listed, pathRefusal("target", "link_not_supported")
 	}
 	if listed.Mode&unix.S_IFMT != unix.S_IFREG {
 		return -1, listed, refusal("WORKSPACE_NOT_A_FILE")
 	}
 	if listed.Nlink != 1 {
-		return -1, listed, refusal("WORKSPACE_PATH_REFUSED")
+		return -1, listed, pathRefusal("target", "hardlink_not_supported")
 	}
 	fd, err := unix.Openat(parent, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return -1, listed, openError(err)
+		return -1, listed, openAtError(err, "target")
 	}
 	opened, err := stat(fd)
 	if err != nil || !stable(listed, opened) || opened.Nlink != 1 {

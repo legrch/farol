@@ -1272,6 +1272,42 @@ describe("Go Computer MCP codec (pure/in-memory only)", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    ["policy", "policy_denied", "refused"],
+    ["target", "os_permission_denied", "refused"],
+    ["policy", "unsafe_root", "unknown"],
+  ])(
+    "projects a bounded read diagnostic %s/%s",
+    async (stage, reason, status) => {
+      const { client, request } = await setup({
+        respond: (_method, params, id) => ({
+          status: "refused",
+          requestId: id,
+          context,
+          code: "WORKSPACE_PATH_REFUSED",
+          data: {
+            request: params,
+            code: "WORKSPACE_PATH_REFUSED",
+            source: "native-workspace",
+            retry: "never",
+            stage,
+            reason,
+          },
+        }),
+      });
+      const result = await client.callTool({
+        name: "computer_workspace_read",
+        arguments: { workspaceId: "workspace", relativePath: "note.md" },
+      });
+      expect(result.structuredContent).toMatchObject({
+        status,
+        retry: "never",
+        ...(status === "refused" ? { refusal: { stage, reason } } : {}),
+      });
+      expect(request).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it.each([true, "reject", "no-handler"])(
     "fails closed on lifecycle admission %#",
     async (mode) => {

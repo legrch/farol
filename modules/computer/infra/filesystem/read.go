@@ -39,7 +39,7 @@ func (w *Workspace) read(ctx context.Context, request port.ReadRequest, binding 
 		return nil, err
 	}
 	if p.denies(parts) || !p.permitsFile(request.RelativePath) {
-		return nil, refusal("WORKSPACE_PATH_REFUSED")
+		return nil, pathRefusal("policy", "policy_denied")
 	}
 	if request.Range != nil && (request.Range.Length < 4 || request.Range.Length > maxReadBytes || request.Range.Offset > 9007199254740991) {
 		return nil, refusal("WORKSPACE_INVALID_REQUEST")

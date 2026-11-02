@@ -65,7 +65,7 @@ func ReadMethodForOperation(resolve ReadFactory, peer wire.Context) Method {
 		if err != nil {
 			var failure *workspacect.Failure
 			if errors.As(err, &failure) && failure.Retry == "never" {
-				refused := readRefusal(&body, failure.Code, failure.Source)
+				refused := readClassifiedRefusal(&body, failure)
 				if wire.Validate("ComputerReadRefusal", refused.Data) == nil {
 					return refused, nil
 				}
@@ -81,7 +81,7 @@ func ReadMethodForOperation(resolve ReadFactory, peer wire.Context) Method {
 		if err != nil {
 			var failure *workspacect.Failure
 			if errors.As(err, &failure) && failure.Retry == "never" {
-				refused := readRefusal(&body, failure.Code, failure.Source)
+				refused := readClassifiedRefusal(&body, failure)
 				if wire.Validate("ComputerReadRefusal", refused.Data) == nil {
 					return refused, nil
 				}
@@ -126,4 +126,13 @@ func ReadMethodForOperation(resolve ReadFactory, peer wire.Context) Method {
 func readRefusal(request *wire.ComputerReadRequest, code, source string) *Outcome {
 	data, _ := json.Marshal(wire.ComputerReadRefusal{Request: request, Code: code, Source: source, Retry: "never"})
 	return &Outcome{Status: "refused", Code: code, Data: data}
+}
+
+func readClassifiedRefusal(request *wire.ComputerReadRequest, failure *workspacect.Failure) *Outcome {
+	result := wire.ComputerReadRefusal{Request: request, Code: failure.Code, Source: failure.Source, Retry: "never"}
+	if failure.Code == "WORKSPACE_PATH_REFUSED" && failure.Source == "native-workspace" && workspacect.SafePathReason(failure.Stage, failure.Reason) {
+		result.Stage, result.Reason = &failure.Stage, &failure.Reason
+	}
+	data, _ := json.Marshal(result)
+	return &Outcome{Status: "refused", Code: failure.Code, Data: data}
 }

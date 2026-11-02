@@ -16,15 +16,36 @@ type Contract struct{ service *workspacesvc.Service }
 func New(service *workspacesvc.Service) *Contract { return &Contract{service: service} }
 
 // Failure is safe to cross the module boundary. No raw native error is exposed.
-type Failure struct{ Code, Source, Retry string }
+type Failure struct{ Code, Source, Retry, Stage, Reason string }
 
 func (f *Failure) Error() string { return f.Code + " (" + f.Source + ")" }
 func failure(err error) error {
 	var classified *authority.Failure
 	if errors.As(err, &classified) && codes[classified.Code] && sources[classified.Source] {
-		return &Failure{Code: classified.Code, Source: classified.Source, Retry: "never"}
+		out := &Failure{Code: classified.Code, Source: classified.Source, Retry: "never"}
+		// Both fields and their association are allowlisted. Unknown and private
+		// native details stay absent, including on other error codes or sources.
+		if classified.Code == "WORKSPACE_PATH_REFUSED" && classified.Source == "native-workspace" && SafePathReason(classified.Stage, classified.Reason) {
+			out.Stage, out.Reason = classified.Stage, classified.Reason
+		}
+		return out
 	}
 	return &Failure{Code: "WORKSPACE_HELPER_FAILED", Source: "native-workspace", Retry: "never"}
+}
+
+// SafePathReason is the complete set of path-free diagnostic pairs.
+func SafePathReason(stage, reason string) bool {
+	switch stage {
+	case "policy":
+		return reason == "policy_denied"
+	case "root":
+		return reason == "unsafe_root" || reason == "os_permission_denied"
+	case "ancestor":
+		return reason == "link_not_supported" || reason == "os_permission_denied"
+	case "target":
+		return reason == "link_not_supported" || reason == "hardlink_not_supported" || reason == "os_permission_denied"
+	}
+	return false
 }
 
 var codes = map[string]bool{

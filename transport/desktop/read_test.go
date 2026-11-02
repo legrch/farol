@@ -124,6 +124,30 @@ func TestReadRefusalPreservesOwnerSourceAndRetry(t *testing.T) {
 		})
 	}
 }
+
+func TestReadClassifiedRefusalCarriesOnlySafePair(t *testing.T) {
+	for _, tc := range []struct {
+		stage, reason string
+		want          bool
+	}{
+		{"policy", "policy_denied", true},
+		{"target", "link_not_supported", true},
+		{"policy", "unsafe_root", false},
+		{"target", "/private/path", false},
+	} {
+		out := readClassifiedRefusal(nil, &workspacect.Failure{Code: "WORKSPACE_PATH_REFUSED", Source: "native-workspace", Retry: "never", Stage: tc.stage, Reason: tc.reason})
+		var result wire.ComputerReadRefusal
+		if err := json.Unmarshal(out.Data, &result); err != nil || wire.Validate("ComputerReadRefusal", out.Data) != nil {
+			t.Fatalf("invalid refusal: %s %v", out.Data, err)
+		}
+		if (result.Stage != nil) != tc.want || (result.Reason != nil) != tc.want || result.Retry != "never" {
+			t.Fatalf("wrong diagnostic: %+v", result)
+		}
+		if tc.want && (*result.Stage != tc.stage || *result.Reason != tc.reason) {
+			t.Fatalf("wrong values: %+v", result)
+		}
+	}
+}
 func TestReadRejectsMalformedTypedBodiesBeforeOwner(t *testing.T) {
 	method, native, _, body := readFixture(t)
 	raw, _ := json.Marshal(body)

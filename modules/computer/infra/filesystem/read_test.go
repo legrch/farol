@@ -156,6 +156,49 @@ func TestReadRefusals(t *testing.T) {
 	_, err = New(d.Root+"-home").Read(context.Background(), port.ReadRequest{Workspace: d, RelativePath: "denied.md"})
 	expectCode(t, err, "WORKSPACE_PATH_REFUSED")
 }
+
+func TestReadPathRefusalReportsSafeReason(t *testing.T) {
+	for _, scenario := range []struct{ name, stage, reason string }{
+		{"policy", "policy", "policy_denied"},
+		{"symlink", "target", "link_not_supported"},
+		{"hardlink", "target", "hardlink_not_supported"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			d := fixture(t)
+			put(t, d, "original.md", []byte("disposable"))
+			name := "original.md"
+			switch scenario.name {
+			case "policy":
+				d.DeniedPaths = []string{name}
+			case "symlink":
+				name = "link.md"
+				if err := os.Symlink("original.md", filepath.Join(d.Root, name)); err != nil {
+					t.Fatal(err)
+				}
+			case "hardlink":
+				name = "hard.md"
+				if err := os.Link(filepath.Join(d.Root, "original.md"), filepath.Join(d.Root, name)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			out, err := New(d.Root+"-home").Read(context.Background(), port.ReadRequest{Workspace: d, RelativePath: name})
+			var failure *authority.Failure
+			if out != nil || !errors.As(err, &failure) || failure.Code != "WORKSPACE_PATH_REFUSED" || failure.Retry != "never" || failure.Stage != scenario.stage || failure.Reason != scenario.reason {
+				t.Fatalf("wrong refusal: %+v, %v", out, err)
+			}
+		})
+	}
+}
+
+func TestOpenPermissionErrorsAreClassifiedWithoutRawDetails(t *testing.T) {
+	for _, cause := range []error{unix.EACCES, unix.EPERM} {
+		var failure *authority.Failure
+		if !errors.As(openAtError(cause, "target"), &failure) || failure.Code != "WORKSPACE_PATH_REFUSED" || failure.Stage != "target" || failure.Reason != "os_permission_denied" || failure.Retry != "never" {
+			t.Fatalf("wrong permission classification: %+v", failure)
+		}
+	}
+	expectCode(t, openAtError(unix.ENOENT, "target"), "WORKSPACE_NOT_FOUND")
+}
 func TestReadRejectsLinksAndFIFO(t *testing.T) {
 	d := fixture(t)
 	put(t, d, "note.md", []byte("note"))

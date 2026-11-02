@@ -474,6 +474,22 @@
         "retry": {
           "type": "text",
           "values": ["never"]
+        },
+        "stage": {
+          "type": "text",
+          "values": ["policy", "root", "ancestor", "target"],
+          "optional": true
+        },
+        "reason": {
+          "type": "text",
+          "values": [
+            "policy_denied",
+            "unsafe_root",
+            "link_not_supported",
+            "hardlink_not_supported",
+            "os_permission_denied"
+          ],
+          "optional": true
         }
       }
     },

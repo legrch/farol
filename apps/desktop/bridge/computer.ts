@@ -451,7 +451,9 @@ export class ComputerBridge {
         if (
           refusal.code !== code ||
           (refusal.request !== undefined &&
-            !matches(body, refusal.request, true))
+            !matches(body, refusal.request, true)) ||
+          (method === "read" &&
+            !validReadDiagnostic(refusal as ComputerReadRefusal))
         )
           return failure("unknown", "crossed_computer_response");
         return Object.freeze({
@@ -468,6 +470,28 @@ export class ComputerBridge {
       return failure("unknown", "invalid_computer_result");
     }
   }
+}
+
+function validReadDiagnostic(refusal: ComputerReadRefusal): boolean {
+  const { stage, reason } = refusal;
+  if (stage === undefined && reason === undefined) return true;
+  if (
+    refusal.code !== "WORKSPACE_PATH_REFUSED" ||
+    refusal.source !== "native-workspace"
+  )
+    return false;
+  if (stage === "policy") return reason === "policy_denied";
+  if (stage === "root")
+    return reason === "unsafe_root" || reason === "os_permission_denied";
+  if (stage === "ancestor")
+    return reason === "link_not_supported" || reason === "os_permission_denied";
+  if (stage === "target")
+    return (
+      reason === "link_not_supported" ||
+      reason === "hardlink_not_supported" ||
+      reason === "os_permission_denied"
+    );
+  return false;
 }
 
 function matches(request: Json, response: unknown, refusal: boolean): boolean {
