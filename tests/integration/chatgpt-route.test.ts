@@ -5342,18 +5342,28 @@ describe("ChatGPT route streaming observation", () => {
   });
 
   it("does not accept an uncorrelated late response as the current turn", async () => {
+    // Advance the deadline after the uncorrelated probe has returned. A real
+    // 20 ms budget can expire inside document execution on a loaded runner,
+    // which exercises the script-error path instead of this timeout case.
+    let now = 10_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
     const executeJavaScript = vi
       .fn()
       .mockResolvedValueOnce(prepared)
       .mockResolvedValueOnce({ activated: true })
-      .mockResolvedValue(
-        correlatedProbe("Late response from an older turn", {
-          busy: false,
-          sendVisible: true,
-          turnUserId: null,
-          turnAssistantId: null,
-        }),
-      );
+      .mockImplementation(() => {
+        setTimeout(() => {
+          now += 21;
+        }, 0);
+        return Promise.resolve(
+          correlatedProbe("Late response from an older turn", {
+            busy: false,
+            sendVisible: true,
+            turnUserId: null,
+            turnAssistantId: null,
+          }),
+        );
+      });
 
     await expect(
       streamingTaskRoute(executeJavaScript, 20).runReadonlyTask("new turn"),
@@ -5362,6 +5372,7 @@ describe("ChatGPT route streaming observation", () => {
       code: "CHATGPT_TASK_TIMEOUT",
       outputText: "",
     });
+    expect(executeJavaScript).toHaveBeenCalledTimes(3);
   });
 
   it("returns the observed user-message identity when a correlated reply is still late", async () => {
