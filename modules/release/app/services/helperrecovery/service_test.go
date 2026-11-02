@@ -200,6 +200,18 @@ func TestOriginalPythonBranchPhasePairMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The static oracle was generated before the 0.5.7/0.5.8 boundary.
+	// Require and remove exactly that narrow addition to check the original
+	// helper bytes; a separate recovery test covers the new boundary.
+	for _, line := range []string{
+		"    # 0.5.7 cannot read 0.5.8 send-requested or extended history records.\n",
+		"            or (source == \"0.5.7\" and target == \"0.5.8\")\n",
+	} {
+		if strings.Count(string(source), line) != 1 {
+			t.Fatal("expected reviewed predecessor boundary missing or duplicated")
+		}
+		source = []byte(strings.Replace(string(source), line, "", 1))
+	}
 	digest := sha256.Sum256(source)
 	if hex.EncodeToString(digest[:]) != fixture.SHA256 {
 		t.Fatal("original helper changed; regenerate and review static oracle")
@@ -300,6 +312,38 @@ func TestExactEffectAndJournalOrder(t *testing.T) {
 			p, err := s.Reconcile(ctx)
 			if err != nil || p != c.result || !reflect.DeepEqual(f.trace, c.trace) {
 				t.Fatal(p, err, f.trace, "want", c.trace)
+			}
+		})
+	}
+}
+
+func TestDiagnosticHistoryBoundaryRetainsVerifiedTarget(t *testing.T) {
+	r := requestFixture()
+	r.Source.Version = "0.5.7"
+	r.Target.Version = "0.5.8"
+	f := newRuntime(t, r, "rollback_started", "t-s-")
+	s := bind(t, r, f)
+	phase, err := s.Reconcile(context.Background())
+	want := []string{"phase", "entries", "entries", "matches:app:t", "matches:previous:s", "fence", "entries", "matches:app:t", "matches:previous:s", "write:verified"}
+	if err != nil || phase != "verified" || !reflect.DeepEqual(f.trace, want) {
+		t.Fatal(phase, err, f.trace, "want", want)
+	}
+}
+
+func TestDiagnosticHistoryBoundaryRefusesUnsafeRecoveryPairs(t *testing.T) {
+	for _, pattern := range []string{"s-t-", "--sx", "t-sx"} {
+		t.Run(pattern, func(t *testing.T) {
+			r := requestFixture()
+			r.Source.Version = "0.5.7"
+			r.Target.Version = "0.5.8"
+			f := newRuntime(t, r, "rollback_started", pattern)
+			s := bind(t, r, f)
+			_, err := s.Reconcile(context.Background())
+			requireFailure(t, err, "predecessor_state_unqualified", "refused", false, false)
+			for _, call := range f.trace {
+				if isEffect(call) {
+					t.Fatal("unsafe recovery changed state", f.trace)
+				}
 			}
 		})
 	}

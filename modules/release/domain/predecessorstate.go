@@ -13,6 +13,7 @@ func PredecessorStateUnqualified(sourceVersion, targetVersion string) bool {
 	}
 	return strings.HasPrefix(sourceVersion, "0.1.") && !strings.HasPrefix(targetVersion, "0.1.") ||
 		sourceVersion == "0.2.0-owner.beta.3" ||
+		sourceVersion == "0.5.7" && targetVersion == "0.5.8" ||
 		stateReader(sourceVersion) && !stateReader(targetVersion) ||
 		processReader(sourceVersion) && !processReader(targetVersion)
 }
