@@ -201,7 +201,23 @@ export function Home({ snapshot, facade }: Props) {
           </div>
         </section>
       ) : null}
-      {progress ? (
+      {snapshot.configuration?.status === "error" ? (
+        <section className="home-status-card home-health-warning" role="status">
+          <div>
+            <h2>Setup evidence is unavailable</h2>
+            <p>
+              Review Setup before making changes to your saved configuration.
+            </p>
+          </div>
+          <button
+            onClick={() =>
+              facade.navigate({ area: "setup", setupStep: "connection" })
+            }
+          >
+            Review setup
+          </button>
+        </section>
+      ) : progress ? (
         <section
           className="home-status-card home-connection-progress"
           role="status"

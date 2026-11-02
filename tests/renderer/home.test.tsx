@@ -310,6 +310,19 @@ it("missing configuration cannot become a fabricated zero-workspace success", as
   expect(h.host.textContent).not.toContain("0 workspaces · checked");
 });
 
+it("shows a configuration error without presenting it as unfinished setup", async () => {
+  const h = await mount({
+    configuration: { status: "error", error: "CONFIG_RENAME_REQUIRED" },
+  });
+  expect(h.host.textContent).toContain("Setup evidence is unavailable");
+  expect(h.host.textContent).not.toContain("Finish setup");
+  await h.click("Review setup");
+  expect(h.c.getSnapshot().destination).toMatchObject({
+    area: "setup",
+    setupStep: "connection",
+  });
+});
+
 it("routes unresolved update evidence to the existing sheet from working Home", async () => {
   const h = await mount({
     ...working(),

@@ -217,10 +217,6 @@ try {
         // Configuration availability and snapshot freshness are independent.
         // Home must expose the retained fault even when its snapshot is current.
         await window
-          .getByRole("navigation", { name: "Home views", exact: true })
-          .getByRole("button", { name: /^Needs attention\b/u })
-          .click();
-        await window
           .getByText("Setup evidence is unavailable", { exact: true })
           .waitFor();
         await openSetup(window);
