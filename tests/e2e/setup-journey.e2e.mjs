@@ -1036,7 +1036,21 @@ async function runScenario(scenario) {
         .click();
     await page.getByText("✓ Everything works", { exact: true }).waitFor();
     assert.equal(sendCount, separate ? 2 : 1);
-    assert.equal(await finish.isEnabled(), true);
+    // Current Setup completes once its receipt-based checks are confirmed.
+    // Returning to the completed flow offers the originating page instead
+    // of a second Finish write.
+    await poll(
+      () => readSetupSettings(page),
+      (v) => v.setup.journey.dismissed === true,
+      "AUTO_SETUP_COMPLETION_NOT_SAVED",
+    );
+    assert.equal(await finish.count(), 0);
+    const returnToOrigin = page
+      .locator(".setup-wizard-footer")
+      .getByRole("button", {
+        name: /^Back to (?:Home|ChatGPT|Activity|Settings)$/u,
+      });
+    assert.equal(await returnToOrigin.isEnabled(), true);
     report.steps.attachment = "PASS";
     if (scenario === "stale-receipt") {
       const replacement = "Changed Setup Fixture";
@@ -1053,6 +1067,7 @@ async function runScenario(scenario) {
       );
       assert.equal(changed.connectors.secureMcp.attachment, null);
       assert.equal(changed.connectors.secureMcp.lastVerifiedAttachment, null);
+      assert.equal(changed.setup.journey.dismissed, true);
       assert.equal(await finish.count(), 0);
       assert.equal(sendCount, 1);
       report.finalState = "Stale receipt blocked";
@@ -1065,7 +1080,11 @@ async function runScenario(scenario) {
         report: path.join(output, "report.json"),
       };
     }
-    await finish.click();
+    await returnToOrigin.click();
+    await page
+      .locator(".rail")
+      .getByRole("button", { name: "Home", exact: true })
+      .click();
     await poll(
       () => readSetupSettings(page),
       (v) => v.setup.journey.dismissed === true,
@@ -1167,7 +1186,7 @@ async function runScenario(scenario) {
       await quit();
       let previousBackend = completed.backendGeneration;
       for (const ordinal of [1, 2]) {
-        // The original fixture Finish is the only setup transition. Reopen the
+        // The original automatic completion is the only setup transition. Reopen the
         // same private profile. Startup owns exactly one fresh check; the
         // harness never presses Test, reconnects or reuses the old proof.
         if (rebuildReopen && ordinal === 2) {
