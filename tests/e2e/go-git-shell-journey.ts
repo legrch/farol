@@ -79,6 +79,14 @@ export async function runGitShellJourney(input: {
   checkpoint: () => Promise<unknown>;
 }) {
   const { fixture: f, peer } = input;
+  // Model the launcher discovery that needs dirname, pwd and readlink. Both
+  // entrypoints live only in the disposable workspace used by this witness.
+  await fs.writeFile(
+    path.join(f.writer, "brain-like"),
+    '#!/usr/bin/env bash\nset -eu\nsource=$0\nif [[ -L $source ]]; then source=$(/usr/bin/readlink "$source"); fi\ndir=$(/usr/bin/dirname "$source")\ncd "$dir"\n/bin/pwd\nprintf "discovery-complete\\n"\n',
+    { mode: 0o700 },
+  );
+  await fs.symlink("brain-like", path.join(f.writer, "brain-link"));
   // Installed Git runs with system attributes disabled. Exercise a real
   // workspace-owned attribute instead of assuming Apple's CLT defaults.
   await fs.writeFile(
@@ -129,8 +137,13 @@ if Path('.fixture-reject').exists():
   input.report.gitShell = witness;
   await input.checkpoint();
   const script = `set -eu
-stage=user-name
+stage=launcher
 trap 'code=$?; if test "$code" -ne 0; then printf "git-fixture-failed=%s\\n" "$stage" >&2; fi' EXIT
+canonical=$(./brain-like)
+linked=$(./brain-link)
+test "$canonical" = "$linked"
+case "$canonical" in *discovery-complete) ;; *) exit 73 ;; esac
+stage=user-name
 # HOME, PATH and Git configuration are supplied only by the product host.
 test "$(git config --get user.name)" = '${productName} Fixture Author'
 stage=xdg-config
