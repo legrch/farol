@@ -89,6 +89,7 @@ it("retains a correlated safe diagnostic on the original read lifecycle", async 
   };
   const finish = store.begin(metadata);
   metadata.readDiagnostic = { stage: "policy", reason: "policy_denied" };
+  metadata.diagnosticBinding = "a".repeat(64);
   finish("refused", "WORKSPACE_PATH_REFUSED", 1);
   expect(await store.flush(5000)).toBe(true);
   const snapshot = await store.snapshot(5000);
@@ -111,9 +112,10 @@ it("looks up one bounded diagnostic only while its exact target is authorized", 
   };
   const finish = store.begin(metadata);
   metadata.readDiagnostic = { stage: "target", reason: "link_not_supported" };
+  metadata.diagnosticBinding = "a".repeat(64);
   finish("refused", "WORKSPACE_PATH_REFUSED", 1);
   expect(await store.flush(5000)).toBe(true);
-  const allow = vi.fn(async () => true);
+  const allow = vi.fn(async () => "a".repeat(64));
   expect(
     await store.lookupReadDiagnostic(
       metadata.requestId!,
@@ -129,14 +131,22 @@ it("looks up one bounded diagnostic only while its exact target is authorized", 
   expect(allow).toHaveBeenCalledTimes(2);
   const revoked = vi
     .fn()
-    .mockResolvedValueOnce(true)
-    .mockResolvedValueOnce(false);
+    .mockResolvedValueOnce("a".repeat(64))
+    .mockResolvedValueOnce(null);
   expect(
     await store.lookupReadDiagnostic(
       metadata.requestId!,
       "workspace",
       "note.md",
       revoked,
+    ),
+  ).toEqual({ status: "unavailable" });
+  expect(
+    await store.lookupReadDiagnostic(
+      metadata.requestId!,
+      "workspace",
+      "note.md",
+      async () => "b".repeat(64),
     ),
   ).toEqual({ status: "unavailable" });
   expect(

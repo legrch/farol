@@ -132,7 +132,56 @@ func readClassifiedRefusal(request *wire.ComputerReadRequest, failure *workspace
 	result := wire.ComputerReadRefusal{Request: request, Code: failure.Code, Source: failure.Source, Retry: "never"}
 	if failure.Code == "WORKSPACE_PATH_REFUSED" && failure.Source == "native-workspace" && workspacect.SafePathReason(failure.Stage, failure.Reason) {
 		result.Stage, result.Reason = &failure.Stage, &failure.Reason
+		if len(failure.DiagnosticBinding) == 64 {
+			result.DiagnosticBinding = &failure.DiagnosticBinding
+		}
 	}
 	data, _ := json.Marshal(result)
 	return &Outcome{Status: "refused", Code: failure.Code, Data: data}
+}
+
+// ReadDiagnosticAuthorizationMethod checks current authority only; it never
+// opens the requested path and cannot turn a refusal into a repeated read.
+func ReadDiagnosticAuthorizationMethod(resolve ReadFactory) Method {
+	return Method{Handle: func(ctx context.Context, request Request) (*Outcome, error) {
+		if ipc.ValidateJSON(request.Body) != nil || wire.Validate("ComputerReadRequest", request.Body) != nil {
+			return readRefusal(nil, "invalid_read_request", "transport"), nil
+		}
+		var body wire.ComputerReadRequest
+		if json.Unmarshal(request.Body, &body) != nil || body.Range != nil {
+			return readRefusal(nil, "invalid_read_request", "transport"), nil
+		}
+		epoch, _ := strconv.ParseUint(body.TaskEpoch, 10, 64)
+		generation, _ := strconv.ParseUint(body.Generation, 10, 64)
+		input := workspacect.ReadRequest{OwnerID: body.OwnerId, SessionID: body.SessionId, TaskID: body.TaskId, TaskEpoch: epoch, ParticipantID: body.ParticipantId, TurnID: body.TurnId, Generation: generation, CallID: body.CallId, WorkspaceID: body.WorkspaceId, RelativePath: body.RelativePath}
+		if resolve == nil {
+			return &Outcome{Status: "unavailable", Code: "capability_unavailable"}, nil
+		}
+		contract, err := resolve(ctx, ReadOperation{RequestID: request.RequestID, Input: input})
+		var binding string
+		if err == nil && contract != nil {
+			binding, err = contract.AuthorizeReadDiagnostic(ctx, input)
+		}
+		if err != nil {
+			var failure *workspacect.Failure
+			if errors.As(err, &failure) && failure != nil && failure.Retry == "never" {
+				out := readClassifiedRefusal(&body, failure)
+				if wire.Validate("ComputerReadRefusal", out.Data) == nil {
+					return out, nil
+				}
+			}
+			return nil, err
+		}
+		if contract == nil {
+			return &Outcome{Status: "unavailable", Code: "capability_unavailable"}, nil
+		}
+		data, err := json.Marshal(wire.ComputerReadDiagnosticAuthorizationResponse{Request: body, DiagnosticBinding: binding})
+		if err != nil {
+			return nil, err
+		}
+		if wire.Validate("ComputerReadDiagnosticAuthorizationResponse", data) != nil {
+			return nil, errors.New("invalid diagnostic authorization result")
+		}
+		return &Outcome{Status: "ok", Data: data}, nil
+	}}
 }

@@ -10,6 +10,7 @@
     "core.status": "read",
     "core.operation.status": "read",
     "computer.workspace.read": "read",
+    "computer.workspace.readdiagnosticauthorize": "read",
     "task.create": "effect",
     "chat.turn": "effect",
     "chat.retired.list": "read",
@@ -490,6 +491,23 @@
             "os_permission_denied"
           ],
           "optional": true
+        },
+        "diagnosticBinding": {
+          "type": "string",
+          "minBytes": 64,
+          "maxBytes": 64,
+          "optional": true
+        }
+      }
+    },
+    "ComputerReadDiagnosticAuthorizationResponse": {
+      "type": "object",
+      "fields": {
+        "request": { "type": "ComputerReadRequest" },
+        "diagnosticBinding": {
+          "type": "string",
+          "minBytes": 64,
+          "maxBytes": 64
         }
       }
     },

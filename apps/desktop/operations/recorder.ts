@@ -203,18 +203,19 @@ export function createTotalOperationsRecorder(
               const classified = classification(outcome, code);
               // Only the original read's classified refusal may enrich its
               // lifecycle; correlation remains the ID fixed at begin time.
-              const diagnostic = recordableMetadata(
-                metadata,
-                workspaces(),
-              ).readDiagnostic;
+              const refreshed = recordableMetadata(metadata, workspaces());
+              const diagnostic = refreshed.readDiagnostic;
               if (
                 safe.kind === "computer_workspace_read" &&
                 safe.requestId &&
                 classified.outcome === "refused" &&
                 classified.code === "WORKSPACE_PATH_REFUSED" &&
-                diagnostic
-              )
+                diagnostic &&
+                refreshed.diagnosticBinding
+              ) {
                 safe.readDiagnostic = diagnostic;
+                safe.diagnosticBinding = refreshed.diagnosticBinding;
+              }
               recordedOutcome = classified.outcome;
               return finish(
                 classified.outcome,

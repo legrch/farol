@@ -165,7 +165,7 @@ type NativeHost struct {
 
 // Failure is classified and never authorizes automatic retry. Adapters preserve
 // only allowlisted error codes, never raw native diagnostics or private paths.
-type Failure struct{ Code, Source, Retry, Stage, Reason string }
+type Failure struct{ Code, Source, Retry, Stage, Reason, DiagnosticBinding string }
 
 // SafeWorkspaceReadDiagnostic admits only path-free native diagnostic pairs.
 func SafeWorkspaceReadDiagnostic(stage, reason string) bool {

@@ -4,6 +4,7 @@ package workspace
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"slices"
 
@@ -16,7 +17,7 @@ type Contract struct{ service *workspacesvc.Service }
 func New(service *workspacesvc.Service) *Contract { return &Contract{service: service} }
 
 // Failure is safe to cross the module boundary. No raw native error is exposed.
-type Failure struct{ Code, Source, Retry, Stage, Reason string }
+type Failure struct{ Code, Source, Retry, Stage, Reason, DiagnosticBinding string }
 
 func (f *Failure) Error() string { return f.Code + " (" + f.Source + ")" }
 func failure(err error) error {
@@ -27,6 +28,11 @@ func failure(err error) error {
 		// native details stay absent, including on other error codes or sources.
 		if classified.Code == "WORKSPACE_PATH_REFUSED" && classified.Source == "native-workspace" && SafePathReason(classified.Stage, classified.Reason) {
 			out.Stage, out.Reason = classified.Stage, classified.Reason
+			if len(classified.DiagnosticBinding) == 64 {
+				if _, err := hex.DecodeString(classified.DiagnosticBinding); err == nil {
+					out.DiagnosticBinding = classified.DiagnosticBinding
+				}
+			}
 		}
 		return out
 	}
@@ -81,6 +87,19 @@ type ReadResponse struct {
 	Bytes                             uint64
 	SHA256                            string
 	Page                              *Page
+}
+
+func (c *Contract) AuthorizeReadDiagnostic(ctx context.Context, request ReadRequest) (string, error) {
+	input := workspacesvc.ReadRequest{OwnerID: request.OwnerID, SessionID: request.SessionID, TaskID: request.TaskID, TaskEpoch: request.TaskEpoch,
+		ParticipantID: request.ParticipantID, TurnID: request.TurnID, Generation: request.Generation, CallID: request.CallID, WorkspaceID: request.WorkspaceID, RelativePath: request.RelativePath}
+	if request.Range != nil {
+		return "", failure(authority.Fail("COMPUTER_INVALID_REQUEST", "contract"))
+	}
+	binding, err := c.service.AuthorizeReadDiagnostic(ctx, input)
+	if err != nil {
+		return "", failure(err)
+	}
+	return binding, nil
 }
 
 func (c *Contract) Read(ctx context.Context, request ReadRequest) (*ReadResponse, error) {

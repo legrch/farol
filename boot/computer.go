@@ -155,6 +155,10 @@ func (r *ComputerRoute) Methods(peer wire.Context) map[string]desktop.Method {
 			in := op.Input
 			return r.selectContract(ctx, operationBinding(in.OwnerID, in.SessionID, in.TaskID, in.TaskEpoch, in.ParticipantID, in.TurnID), authority.Read)
 		}, peer),
+		"computer.workspace.readdiagnosticauthorize": desktop.ReadDiagnosticAuthorizationMethod(func(ctx context.Context, op desktop.ReadOperation) (*workspacect.Contract, error) {
+			in := op.Input
+			return r.selectContract(ctx, operationBinding(in.OwnerID, in.SessionID, in.TaskID, in.TaskEpoch, in.ParticipantID, in.TurnID), authority.Read)
+		}),
 		"computer.workspace.catalogue": desktop.CatalogueMethod(func(ctx context.Context, in workspacect.CatalogueRequest) (*workspacect.Contract, error) {
 			return r.selectCatalogueContract(ctx, operationBinding(in.OwnerID, in.SessionID, in.TaskID, in.TaskEpoch, in.ParticipantID, in.TurnID))
 		}, peer),

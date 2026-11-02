@@ -48,6 +48,18 @@ export type GoComputerMcpOptions = Readonly<{
   mutations?: Pick<ConnectorMutationBridge, "write" | "edit" | "read">;
   processes?: Pick<ConnectorProcessBridge, "start" | "read" | "cancel">;
   codexRead?: Pick<SelectedCodexReadBridge, "read">;
+  diagnosticLookup?: (
+    requestId: string,
+    workspaceId: string,
+    relativePath: string,
+  ) => Promise<
+    | {
+        status: "found";
+        requestId: string;
+        diagnostic: z.infer<typeof WorkspaceReadDiagnosticSchema>;
+      }
+    | { status: "unavailable" | "incomplete" | "not_retained" }
+  >;
   onEffectUnknown?: () => void;
 }>;
 
@@ -98,6 +110,11 @@ const ReadInputSchema = z.strictObject({
   relativePath: z.string().refine((value) => relativePath(value, false)),
   offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
   length: z.number().int().min(4).max(262144).optional(),
+});
+const ReadDiagnosticInputSchema = z.strictObject({
+  requestId: z.string().uuid(),
+  workspaceId: IdentifierSchema,
+  relativePath: z.string().refine((value) => relativePath(value, false)),
 });
 const MutationTextSchema = z
   .string()
@@ -470,12 +487,20 @@ export function createGoComputerMcpServer(
         const refusal = content.refusal as {
           stage?: unknown;
           reason?: unknown;
+          diagnosticBinding?: unknown;
         };
         const diagnostic = WorkspaceReadDiagnosticSchema.safeParse({
           stage: refusal.stage,
           reason: refusal.reason,
         });
-        if (diagnostic.success) metadata.readDiagnostic = diagnostic.data;
+        if (
+          diagnostic.success &&
+          typeof refusal.diagnosticBinding === "string" &&
+          /^[a-f0-9]{64}$/u.test(refusal.diagnosticBinding)
+        ) {
+          metadata.readDiagnostic = diagnostic.data;
+          metadata.diagnosticBinding = refusal.diagnosticBinding;
+        }
       }
     }
     finish(recorded.outcome, recorded.code, performance.now() - started);
@@ -940,6 +965,43 @@ export function createGoComputerMcpServer(
           ),
       ),
   );
+  if (options.diagnosticLookup) {
+    const lookup = options.diagnosticLookup;
+    server.registerTool(
+      "computer_workspace_diagnostic_read",
+      {
+        title: "Read a workspace diagnostic receipt",
+        description:
+          "Look up one retained read diagnostic by its original request ID and exact workspace path. Current read authority is checked before and after lookup. No file is opened; unavailable, incomplete or not_retained never proves the old operation was absent or safe to retry.",
+        inputSchema: ReadDiagnosticInputSchema,
+        annotations,
+      },
+      async ({ requestId, workspaceId, relativePath }, ctx) =>
+        run(
+          {
+            source: "ChatGPT",
+            kind: "computer_workspace_diagnostic_read",
+            target: operationTarget({ workspaceId, relativePath }),
+          },
+          ctx.mcpReq.signal,
+          async (call) => {
+            const result = await lookup(requestId, workspaceId, relativePath);
+            return {
+              ...call,
+              status: "ok",
+              data:
+                result.status === "found"
+                  ? {
+                      lookup: "found",
+                      subjectRequestId: result.requestId,
+                      diagnostic: result.diagnostic,
+                    }
+                  : { lookup: result.status },
+            };
+          },
+        ),
+    );
+  }
   server.registerTool(
     "computer_workspace_search",
     {

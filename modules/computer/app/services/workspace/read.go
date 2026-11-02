@@ -2,6 +2,9 @@ package workspace
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 
 	"github.com/legrch/farol/modules/computer/app/port"
@@ -37,6 +40,45 @@ type ReadResponse struct {
 	Page                              *Page
 }
 
+// AuthorizeReadDiagnostic checks the current read grant without opening a file.
+// The second snapshot rechecks revocation and descriptor changes before return.
+func (s *Service) AuthorizeReadDiagnostic(ctx context.Context, request ReadRequest) (string, error) {
+	if request.Range != nil {
+		return "", authority.Fail("COMPUTER_INVALID_REQUEST", "contract")
+	}
+	caller := caller{identity: authority.Identity{OwnerID: request.OwnerID, SessionID: request.SessionID, TaskID: request.TaskID, TaskEpoch: request.TaskEpoch}, participantID: request.ParticipantID, workspaceID: request.WorkspaceID, relativePath: request.RelativePath}
+	admitted, err := s.admit(ctx, caller, authority.Read)
+	if err != nil {
+		return "", err
+	}
+	policy, ok := s.workspace.(port.ReadDiagnosticPolicy)
+	if !ok {
+		return "", authority.Fail("WORKSPACE_HELPER_FAILED", "native-workspace")
+	}
+	if err := policy.AuthorizeReadDiagnostic(ctx, port.ReadRequest{Workspace: cloneDescriptor(admitted.descriptor), RelativePath: request.RelativePath}); err != nil {
+		return "", nativeFailure(err)
+	}
+	var binding string
+	if err := s.disclose(ctx, caller, *admitted, func() { binding = readDiagnosticBinding(caller, *admitted) }); err != nil {
+		return "", err
+	}
+	return binding, nil
+}
+
+func readDiagnosticBinding(c caller, a admission) string {
+	value := struct {
+		WorkspaceID, RelativePath, AuthorityID, ComputerID string
+		Identity                                           authority.Identity
+		ParticipantID                                      string
+		ComputerGeneration                                 uint64
+		Mode                                               authority.Mode
+		Descriptor                                         port.Descriptor
+	}{c.workspaceID, c.relativePath, a.authorityID, a.computerID, c.identity, c.participantID, a.computerGeneration, a.mode, a.descriptor}
+	raw, _ := json.Marshal(value)
+	digest := sha256.Sum256(raw)
+	return hex.EncodeToString(digest[:])
+}
+
 func (s *Service) Read(ctx context.Context, request ReadRequest) (*ReadResponse, error) {
 	caller := caller{identity: authority.Identity{OwnerID: request.OwnerID, SessionID: request.SessionID, TaskID: request.TaskID, TaskEpoch: request.TaskEpoch}, participantID: request.ParticipantID, workspaceID: request.WorkspaceID, relativePath: request.RelativePath}
 	admitted, err := s.admit(ctx, caller, authority.Read)
@@ -54,7 +96,7 @@ func (s *Service) Read(ctx context.Context, request ReadRequest) (*ReadResponse,
 		if errors.As(failure, &classified) && classified.Stage != "" {
 			// A diagnostic is information about the target. Recheck the same
 			// authority used for successful disclosure before returning it.
-			if err := s.disclose(ctx, caller, *admitted, func() {}); err != nil {
+			if err := s.disclose(ctx, caller, *admitted, func() { classified.DiagnosticBinding = readDiagnosticBinding(caller, *admitted) }); err != nil {
 				return nil, err
 			}
 		}

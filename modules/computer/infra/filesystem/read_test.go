@@ -213,6 +213,23 @@ func TestOpenPermissionErrorsAreClassifiedWithoutRawDetails(t *testing.T) {
 	}
 	expectCode(t, openAtError(unix.ENOENT, "target"), "WORKSPACE_NOT_FOUND")
 }
+
+func TestDiagnosticPolicyChecksScopeWithoutOpeningTarget(t *testing.T) {
+	d := fixture(t)
+	w := New(d.Root + "-home")
+	request := port.ReadRequest{Workspace: d, RelativePath: "missing.md"}
+	if err := w.AuthorizeReadDiagnostic(context.Background(), request); err != nil {
+		t.Fatalf("policy tried to open missing target: %v", err)
+	}
+	request.Workspace.DeniedPaths = []string{"missing.md"}
+	expectCode(t, w.AuthorizeReadDiagnostic(context.Background(), request), "WORKSPACE_PATH_REFUSED")
+	request.Workspace.DeniedPaths = nil
+	request.Workspace.ExactFilePaths = []string{}
+	expectCode(t, w.AuthorizeReadDiagnostic(context.Background(), request), "WORKSPACE_PATH_REFUSED")
+	request.Workspace.ExactFilePaths = nil
+	request.RelativePath = ".env"
+	expectCode(t, w.AuthorizeReadDiagnostic(context.Background(), request), "WORKSPACE_PATH_REFUSED")
+}
 func TestReadRejectsLinksAndFIFO(t *testing.T) {
 	d := fixture(t)
 	put(t, d, "note.md", []byte("note"))

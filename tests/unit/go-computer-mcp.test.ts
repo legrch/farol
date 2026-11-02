@@ -132,6 +132,7 @@ async function setup(
     executionOrigin?: GoComputerMcpOptions["executionOrigin"];
     connectionStatus?: GoComputerMcpOptions["connectionStatus"];
     codexRead?: GoComputerMcpOptions["codexRead"];
+    diagnosticLookup?: GoComputerMcpOptions["diagnosticLookup"];
     binding?: ComputerConnectorExecution;
     context?: Context;
     lifecycle?: GoComputerMcpLifecycle;
@@ -167,6 +168,9 @@ async function setup(
         ? { connectionStatus: options.connectionStatus }
         : {}),
       ...(options.codexRead ? { codexRead: options.codexRead } : {}),
+      ...(options.diagnosticLookup
+        ? { diagnosticLookup: options.diagnosticLookup }
+        : {}),
       fence: options.fence ?? fixtureOptions().fence,
       ...(options.lifecycle ? { lifecycle: options.lifecycle } : {}),
       ...(options.verification ? { verification: options.verification } : {}),
@@ -204,6 +208,75 @@ function handlerContext(signal: AbortSignal): ServerContext {
     mcpReq: { id: "caller-chosen-id", signal },
   } as unknown as ServerContext;
 }
+
+it("offers a bounded diagnostic lookup without dispatching a file read", async () => {
+  const diagnosticLookup = vi.fn(async (requestId: string) => ({
+    status: "found" as const,
+    requestId,
+    diagnostic: {
+      stage: "target" as const,
+      reason: "link_not_supported" as const,
+    },
+  }));
+  const { client, request } = await setup({ diagnosticLookup });
+  const original = "07f13182-1414-4e08-b579-f468c6fa2e64";
+  const result = await client.callTool({
+    name: "computer_workspace_diagnostic_read",
+    arguments: {
+      requestId: original,
+      workspaceId: "workspace",
+      relativePath: "note.md",
+    },
+  });
+  expect(result.structuredContent).toMatchObject({
+    status: "ok",
+    data: {
+      lookup: "found",
+      subjectRequestId: original,
+      diagnostic: { stage: "target", reason: "link_not_supported" },
+    },
+  });
+  expect(diagnosticLookup).toHaveBeenCalledOnce();
+  expect(request).not.toHaveBeenCalled();
+});
+
+it("validates diagnostic authorization correlation and binding", async () => {
+  const body = {
+    ...binding,
+    callId: "authorization",
+    workspaceId: "workspace",
+    relativePath: "note.md",
+  };
+  const request = vi.fn(async (_method: string, params: Json) => ({
+    status: "ok" as const,
+    requestId: "authorization",
+    context,
+    data: { request: params, diagnosticBinding: "a".repeat(64) },
+  }));
+  const bridge = new ComputerBridge({ request });
+  expect(
+    await bridge.authorizeReadDiagnostic(body, {
+      requestId: "authorization",
+      context,
+    }),
+  ).toMatchObject({
+    status: "ok",
+    data: { diagnosticBinding: "a".repeat(64) },
+  });
+  expect(request).toHaveBeenCalledOnce();
+  request.mockImplementationOnce(async (_method, params) => ({
+    status: "ok" as const,
+    requestId: "authorization",
+    context,
+    data: { request: params, diagnosticBinding: "X".repeat(64) },
+  }));
+  expect(
+    await bridge.authorizeReadDiagnostic(body, {
+      requestId: "authorization",
+      context,
+    }),
+  ).toMatchObject({ status: "unknown", retry: "never" });
+});
 
 describe("selected Go process MCP projection", () => {
   type Processes = NonNullable<GoComputerMcpOptions["processes"]>;
@@ -405,6 +478,7 @@ describe("selected Go process MCP projection", () => {
           retry: "never",
           stage: "policy",
           reason: "policy_denied",
+          diagnosticBinding: "a".repeat(64),
         },
       }),
     });
@@ -1327,6 +1401,7 @@ describe("Go Computer MCP codec (pure/in-memory only)", () => {
             retry: "never",
             stage,
             reason,
+            diagnosticBinding: "a".repeat(64),
           },
         }),
       });

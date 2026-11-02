@@ -83,7 +83,7 @@ func (s *ComputerIngress) Methods() map[string]desktop.Method {
 	}}
 	// Selector closures capture the actual holder, not a nil startup route or a
 	// mutable method map; the selected route itself rechecks its immutable fence.
-	for _, name := range []string{"computer.workspace.catalogue", "computer.workspace.bootstrap", "computer.workspace.read", "computer.workspace.list", "computer.workspace.search"} {
+	for _, name := range []string{"computer.workspace.catalogue", "computer.workspace.bootstrap", "computer.workspace.read", "computer.workspace.readdiagnosticauthorize", "computer.workspace.list", "computer.workspace.search"} {
 		methods[name] = desktop.Method{Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
 			selected, err := s.selectedRoute()
 			if err != nil {

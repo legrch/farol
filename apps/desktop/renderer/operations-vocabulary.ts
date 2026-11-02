@@ -67,6 +67,7 @@ export const operationKinds = [
   "computer_workspace_bootstrap",
   "computer_workspace_catalogue",
   "computer_workspace_edit",
+  "computer_workspace_diagnostic_read",
   "computer_workspace_list",
   "computer_workspace_read",
   "computer_workspace_search",

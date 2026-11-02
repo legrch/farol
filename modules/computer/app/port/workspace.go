@@ -63,6 +63,12 @@ type Workspace interface {
 	List(context.Context, ListRequest) (*ListResponse, error)
 }
 
+// ReadDiagnosticPolicy checks descriptor/path policy only. It must not open or
+// inspect the target and never establishes Computer authority by itself.
+type ReadDiagnosticPolicy interface {
+	AuthorizeReadDiagnostic(context.Context, ReadRequest) error
+}
+
 // ScratchReadBinding is supplied only by the private diagnostic owner holding
 // both original descriptors. It grants no workspace authority.
 type ScratchReadBinding struct {

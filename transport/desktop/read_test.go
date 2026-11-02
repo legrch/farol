@@ -40,6 +40,7 @@ func (w *readWorkspace) Read(_ context.Context, r port.ReadRequest) (*port.ReadR
 	}
 	return &w.result, nil
 }
+func (w *readWorkspace) AuthorizeReadDiagnostic(context.Context, port.ReadRequest) error { return nil }
 func (w *readWorkspace) List(context.Context, port.ListRequest) (*port.ListResponse, error) {
 	panic("not used")
 }
@@ -154,7 +155,8 @@ func TestReadClassifiedRefusalCarriesOnlySafePair(t *testing.T) {
 }
 
 func TestReadNativeDiagnosticCrossesServiceContractAndWire(t *testing.T) {
-	method, native, _, body := readFixture(t)
+	contract, native, _, body := readContractFixture(t)
+	method := ReadMethod(contract, wire.Context{ProfileId: "test", BackendGeneration: "generation"})
 	native.err = &authority.Failure{Code: "WORKSPACE_PATH_REFUSED", Source: "native-workspace", Retry: "never", Stage: "policy", Reason: "policy_denied"}
 	out := invokeRead(t, method, body)
 	var result wire.ComputerReadRefusal
@@ -163,6 +165,24 @@ func TestReadNativeDiagnosticCrossesServiceContractAndWire(t *testing.T) {
 	}
 	if out.Status != "refused" || result.Stage == nil || *result.Stage != "policy" || result.Reason == nil || *result.Reason != "policy_denied" || result.Retry != "never" || native.calls != 1 {
 		t.Fatalf("diagnostic lost: %+v", result)
+	}
+	authorize := ReadDiagnosticAuthorizationMethod(func(context.Context, ReadOperation) (*workspacect.Contract, error) { return contract, nil })
+	authorized := invokeRead(t, authorize, body)
+	var proof wire.ComputerReadDiagnosticAuthorizationResponse
+	if json.Unmarshal(authorized.Data, &proof) != nil || authorized.Status != "ok" || result.DiagnosticBinding == nil || len(proof.DiagnosticBinding) != 64 || *result.DiagnosticBinding != proof.DiagnosticBinding || native.calls != 1 {
+		t.Fatal("authorization did not bind the original refusal without another read")
+	}
+}
+
+func TestDiagnosticAuthorizationUsesCurrentGrantWithoutNativeRead(t *testing.T) {
+	contract, native, access, body := readContractFixture(t)
+	method := ReadDiagnosticAuthorizationMethod(func(context.Context, ReadOperation) (*workspacect.Contract, error) { return contract, nil })
+	if out := invokeRead(t, method, body); out.Status != "ok" || native.calls != 0 {
+		t.Fatalf("authorization did not remain policy-only: %+v", out)
+	}
+	access.RevokeParticipant("participant")
+	if out := invokeRead(t, method, body); out.Status != "refused" || native.calls != 0 {
+		t.Fatalf("revoked authority disclosed: %+v", out)
 	}
 }
 func TestReadRejectsMalformedTypedBodiesBeforeOwner(t *testing.T) {

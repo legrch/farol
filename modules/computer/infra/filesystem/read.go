@@ -17,6 +17,27 @@ func (w *Workspace) Read(ctx context.Context, request port.ReadRequest) (*port.R
 	return w.read(ctx, request, nil)
 }
 
+func (w *Workspace) AuthorizeReadDiagnostic(ctx context.Context, request port.ReadRequest) error {
+	if err := cancelled(ctx); err != nil {
+		return err
+	}
+	if request.Range != nil {
+		return refusal("WORKSPACE_INVALID_REQUEST")
+	}
+	parts, err := components(request.RelativePath, false, false)
+	if err != nil {
+		return err
+	}
+	p, err := w.parsePolicy(request.Workspace)
+	if err != nil {
+		return err
+	}
+	if p.denies(parts) || !p.permitsFile(request.RelativePath) {
+		return refusal("WORKSPACE_PATH_REFUSED")
+	}
+	return cancelled(ctx)
+}
+
 // ReadScratch verifies the actual opened descriptors against the original
 // diagnostic custody. The ordinary read policy and disclosure checks still apply.
 func (w *Workspace) ReadScratch(ctx context.Context, request port.ReadRequest, binding port.ScratchReadBinding) (*port.ReadResponse, error) {

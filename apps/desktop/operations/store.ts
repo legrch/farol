@@ -880,7 +880,10 @@ export class OperationsStore implements OperationsRecorder {
     requestId: string,
     workspaceId: string,
     relativePath: string,
-    authorize: (workspaceId: string, relativePath: string) => Promise<boolean>,
+    authorize: (
+      workspaceId: string,
+      relativePath: string,
+    ) => Promise<string | null>,
   ): Promise<
     | {
         status: "found";
@@ -889,6 +892,7 @@ export class OperationsStore implements OperationsRecorder {
       }
     | { status: "unavailable" | "incomplete" | "not_retained" }
   > {
+    if (this.closed) return { status: "unavailable" };
     if (
       !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
         requestId,
@@ -897,12 +901,17 @@ export class OperationsStore implements OperationsRecorder {
       return { status: "unavailable" };
     const permitted = async () => {
       try {
-        return (await authorize(workspaceId, relativePath)) === true;
+        const binding = await authorize(workspaceId, relativePath);
+        return typeof binding === "string" && /^[a-f0-9]{64}$/u.test(binding)
+          ? binding
+          : null;
       } catch {
-        return false;
+        return null;
       }
     };
-    if (!(await permitted())) return { status: "unavailable" };
+    const binding = await permitted();
+    if (!binding) return { status: "unavailable" };
+    if (!(await this.flush(5000))) return { status: "incomplete" };
     const snapshot = await this.snapshot(5000);
     // No cached/incomplete or corrupt view may prove uniqueness or absence.
     if (
@@ -934,9 +943,11 @@ export class OperationsStore implements OperationsRecorder {
         entry.target.relativePath === relativePath &&
         entry.readDiagnostic !== undefined,
     );
+    if ((await permitted()) !== binding) return { status: "unavailable" };
     if (matches.length !== 1)
       return { status: matches.length ? "incomplete" : "not_retained" };
-    if (!(await permitted())) return { status: "unavailable" };
+    if (matches[0]!.diagnosticBinding !== binding)
+      return { status: "unavailable" };
     return {
       status: "found",
       requestId,

@@ -123,6 +123,15 @@ func TestComputerNativeSelectedChatJournalToWorkspace(t *testing.T) {
 		return out
 	}
 	out := invoke("computer.workspace.read", read)
+	// Authorization is a separate policy-only operation: a missing file is not
+	// opened and legacy protected names remain withheld.
+	probe := read
+	probe.RelativePath = "missing-diagnostic-fixture.md"
+	invoke("computer.workspace.readdiagnosticauthorize", probe)
+	probe.RelativePath = ".env"
+	if denied := computerInvoke(t, methods["computer.workspace.readdiagnosticauthorize"], probe); denied.Status != "refused" {
+		t.Fatalf("protected diagnostic was authorized: %+v", denied)
+	}
 	var decoded map[string]any
 	if json.Unmarshal(out.Data, &decoded) != nil || decoded["text"] != contents {
 		t.Fatalf("native read payload: %s", out.Data)

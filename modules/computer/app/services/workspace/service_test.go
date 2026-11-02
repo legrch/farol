@@ -69,6 +69,7 @@ func (n *native) Read(ctx context.Context, r port.ReadRequest) (*port.ReadRespon
 	}
 	return n.read, n.err
 }
+func (n *native) AuthorizeReadDiagnostic(context.Context, port.ReadRequest) error { return nil }
 func (n *native) List(ctx context.Context, r port.ListRequest) (*port.ListResponse, error) {
 	n.lists++
 	n.listRequest = r
@@ -126,6 +127,51 @@ func TestReadDiagnosticRechecksAuthorityBeforeDisclosure(t *testing.T) {
 				t.Fatalf("diagnostic lost: %v", err)
 			}
 		}
+	}
+}
+
+func TestAuthorizeReadDiagnosticDoesNotReadAndRechecksRevocation(t *testing.T) {
+	for _, revoke := range []bool{false, true} {
+		s, p, a, n, _, r := fixture(t)
+		snapshots := 0
+		p.hook = func() {
+			snapshots++
+			if revoke && snapshots == 2 {
+				a.a.Capabilities = nil
+			}
+		}
+		binding, err := s.AuthorizeReadDiagnostic(context.Background(), r)
+		if n.reads != 0 || n.lists != 0 || snapshots != 2 {
+			t.Fatalf("unexpected native call or admission count: %+v %d", n, snapshots)
+		}
+		if revoke {
+			expectFailure(t, err, "AUTHORITY_CAPABILITY_DENIED", "computer-policy")
+		} else if err != nil || len(binding) != 64 {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestDiagnosticBindingChangesWithGrantAndTarget(t *testing.T) {
+	s, p, a, _, _, r := fixture(t)
+	first, err := s.AuthorizeReadDiagnostic(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.p.Grant.AuthorityID = "new-grant"
+	second, err := s.AuthorizeReadDiagnostic(context.Background(), r)
+	if err != nil || first == second {
+		t.Fatal("grant replacement did not change binding")
+	}
+	r.RelativePath = "another"
+	third, err := s.AuthorizeReadDiagnostic(context.Background(), r)
+	if err != nil || second == third {
+		t.Fatal("target replacement did not change binding")
+	}
+	a.a.Workspaces[0].RootIdentity.Inode = "3"
+	fourth, err := s.AuthorizeReadDiagnostic(context.Background(), r)
+	if err != nil || fourth == third {
+		t.Fatal("root replacement did not change binding")
 	}
 }
 func listRequest(r ReadRequest) ListRequest {
