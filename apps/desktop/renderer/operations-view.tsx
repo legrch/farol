@@ -47,21 +47,21 @@ export function OperationsActivity({
     );
   const groups = activityGroups(rows).filter(
     (group) =>
-      group.some(
-        (row) =>
-          outcome === "all" ||
-          (outcome === "attention"
-            ? row.outcome === "unknown" || row.outcome === "pending"
-            : outcome === "issues"
-              ? activityResult(row).issue
-              : outcome === "failed"
-                ? row.outcome === "failed" ||
-                  activityResult(row).outcome === "failed"
-                : outcome === "done"
-                  ? row.outcome === "done" &&
-                    activityResult(row).outcome === "done"
-                  : row.outcome === outcome),
-      ) &&
+      (outcome === "done"
+        ? activityGroupResult(group).outcome === "done" &&
+          !activityGroupResult(group).issue
+        : group.some(
+            (row) =>
+              outcome === "all" ||
+              (outcome === "attention"
+                ? row.outcome === "unknown" || row.outcome === "pending"
+                : outcome === "issues"
+                  ? activityResult(row).issue
+                  : outcome === "failed"
+                    ? row.outcome === "failed" ||
+                      activityResult(row).outcome === "failed"
+                    : row.outcome === outcome),
+          )) &&
       group.some((row) =>
         activitySearchText(row).includes(query.toLowerCase()),
       ),

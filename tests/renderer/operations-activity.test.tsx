@@ -623,6 +623,21 @@ it("groups only observations bound to the same process and searches the group by
     expect(
       host.querySelectorAll(".operations-activity > .operation-row"),
     ).toHaveLength(1);
+    const outcome = [...host.querySelectorAll("label")]
+      .find((label) => label.textContent?.includes("Outcome"))!
+      .querySelector("select")!;
+    await act(async () => {
+      outcome.value = "done";
+      outcome.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(host.querySelector(".operation-group")).toBeNull();
+    expect(host.textContent).toContain("Other process");
+    await act(async () => {
+      outcome.value = "failed";
+      outcome.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(host.querySelector(".operation-group")).not.toBeNull();
+    expect(host.textContent).not.toContain("Other process");
     const input = host.querySelector<HTMLInputElement>('input[type="search"]')!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(
