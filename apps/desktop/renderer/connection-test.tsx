@@ -98,6 +98,15 @@ export async function runManualConnectionPrompt(
             : "refused",
       code: result.code ?? null,
     });
+    // Only the delivered click acknowledgement is acknowledged here. An
+    // ambiguous Send stays retained for the user and is never repeated.
+    if (result.state === "applied")
+      void facade
+        .configure(
+          { kind: "chatgpt.ack-deep-test", operationId },
+          `deep-test:ack:${operationId}`,
+        )
+        .catch(() => undefined);
     return result;
   } catch {
     publish({ phase: "unknown", code: "CHATGPT_CONVERSATION_UNCONFIRMED" });

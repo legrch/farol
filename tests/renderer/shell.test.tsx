@@ -76,6 +76,32 @@ function button(host: Element, label: string) {
   if (!found) throw new Error(`BUTTON_MISSING:${label}`);
   return found;
 }
+it.each(["applied", "unknown"] as const)(
+  "acknowledges only a delivered Deep-test send request: %s",
+  async (state) => {
+    const { c, host } = await mount();
+    const configure = vi.spyOn(c, "configure").mockResolvedValue({
+      id: "fixture",
+      state,
+      code: null,
+    });
+    await act(async () => c.overlay("connection-tests"));
+    await act(async () => button(host, "Deep test").click());
+    const requests = configure.mock.calls.filter(
+      ([command]) => command.kind === "chatgpt.run-deep-test",
+    );
+    const acknowledgements = configure.mock.calls.filter(
+      ([command]) => command.kind === "chatgpt.ack-deep-test",
+    );
+    expect(requests).toHaveLength(1);
+    expect(acknowledgements).toHaveLength(state === "applied" ? 1 : 0);
+    if (state === "applied")
+      expect(acknowledgements[0]![0]).toEqual({
+        kind: "chatgpt.ack-deep-test",
+        operationId: (requests[0]![0] as { operationId: string }).operationId,
+      });
+  },
+);
 it("keeps an unconfirmed event in Activity without a notifications inbox", async () => {
   const f = fixture();
   vi.mocked(f.api.bootstrap).mockResolvedValue(completedBootstrap());

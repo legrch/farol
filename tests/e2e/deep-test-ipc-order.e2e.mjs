@@ -33,7 +33,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { PrivateChatGptTaskJournal } from './src/apps/desktop/chatgpt-task-journal.ts';
-import { ChatGptTaskJournalOperationIdSchema } from './src/apps/desktop/chatgpt-task-journal-record.ts';
+import { ChatGptTaskJournalOperationIdSchema, MAX_CHATGPT_TASK_JOURNAL_BYTES, MAX_DEEP_TEST_HISTORY_BYTES, MAX_DEEP_TEST_HISTORY_RECORDS, MAX_DEEP_TEST_OUTSTANDING } from './src/apps/desktop/chatgpt-task-journal-record.ts';
 import { readFlatDeepTestRecords } from './src/apps/desktop/legacy-activation-obligations.ts';
 const root = ${JSON.stringify(scratch)};
 app.setPath('userData', root); app.dock?.hide();
@@ -43,9 +43,9 @@ const secureMcpConnectorRuntime = { isRunning: () => true, hasUnresolvedEffect: 
 const snapshot = { status:'ready', settings:{ setup:{chatgpt:{outcomeUnknown:false},computer:{outcomeUnknown:false}}, computer:{generation:1,pendingEdit:null}, connectors:{secureMcp:{tunnelId:'tunnel',generation:1,runtime:{runtimeGeneration:'runtime'}}}} };
 const configuration = {snapshot:()=>snapshot};
 let sends=0, observedOverlay='';
-const chatGptRoute = {captureManualTaskTarget:()=>()=>true,runReadonlyTask:async(prompt,_attachments,observer)=>{ observedOverlay=shellOverlay; await observer.onDispatchIntent(); assert.equal(observer.beforeSend(),true); sends++; return {state:'completed',code:null,deltaCount:1,observedCharacters:1}; }};
+const chatGptRoute = {captureManualTaskTarget:()=>()=>true,runReadonlyTask:async(prompt,_attachments,observer)=>{ observedOverlay=shellOverlay; await observer.onDispatchIntent(); assert.equal(observer.beforeSend(),true); assert.equal(observer.manualSubmissionOnly,true); sends++; return {state:'send_requested',code:null,deltaCount:0,observedCharacters:0}; }};
 const liveTaskRoutes=new Map(), buildIdentity={buildId:'build'}, liveTaskRegistry={};
-let selectedTaskId='', deepTestRecoveryReady=true, recoverableDeepTests=[], quitInProgress=false, installedUpdateAdmission=false, chatGptTaskAdmission=false, connectorTaskAdmission=false, connectorStartInFlight=null, browserHomeSurfaceOpen=true, section='browser', shellOverlay='task-menu', pendingChatGptReadonlyTask=null, pendingChatGptAttachmentTask=null, recoverableChatGptTask=null;
+let selectedTaskId='', deepTestRecoveryReady=true, recoverableDeepTests=[], quitInProgress=false, installedUpdateAdmission=false, chatGptTaskAdmission=false, connectorTaskAdmission=false, connectorTaskAdmissionPurpose=null, connectorStartInFlight=null, browserHomeSurfaceOpen=true, section='browser', shellOverlay='task-menu', pendingChatGptReadonlyTask=null, pendingChatGptAttachmentTask=null, recoverableChatGptTask=null;
 const chatGptConversationAdmissionFailure=()=>null;
 const connectorRuntimeUncertain=()=>false, computerConnectorAdmission=()=>({admissible:true}), summaryFenceRecovery={};
 const chatGptTaskAdmissionReady=()=>true, currentSurfaceLayout=()=>({pageVisible:shellOverlay==='none'}), currentConnectorAttachment=()=>({challengeSha256:'hash',workspaceId:null}), selectedConnectorApp=()=> ${JSON.stringify(productName)}, connectorAppBindingCurrent=()=>true;
@@ -59,7 +59,7 @@ app.whenReady().then(async()=>{
     const win=new BrowserWindow({show:false,focusable:false,webPreferences:{nodeIntegration:true,contextIsolation:false,sandbox:false}});
     await win.loadURL('data:text/html,<html><body>fixture</body></html>');
     const result=await win.webContents.executeJavaScript(\`(async()=>{const {ipcRenderer}=require('electron');ipcRenderer.send('fixture-layout');return ipcRenderer.invoke('fixture-run',\${JSON.stringify(randomUUID())});})()\`);
-    assert.equal(result.ok,true); assert.equal(result.evidence.state,'completed'); assert.equal(observedOverlay,'none'); assert.equal(sends,1);
+    assert.equal(result.ok,true); assert.equal(result.evidence.state,'send_requested'); assert.equal(observedOverlay,'none'); assert.equal(sends,1);
     assert.equal(win.isVisible(),false); win.destroy(); process.stdout.write('DEEP_TEST_IPC_ORDER_OK\\n'); app.exit(0);
   } catch(e) { console.error(e); app.exit(1); }
 });

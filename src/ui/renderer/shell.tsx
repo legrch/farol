@@ -1400,6 +1400,15 @@ export function Shell() {
                   { kind: "chatgpt.run-deep-test", operationId, taskId },
                   `deep-test:run:${operationId}`,
                 )
+                .then((result) => {
+                  if (result.state === "applied")
+                    void facade
+                      .configure(
+                        { kind: "chatgpt.ack-deep-test", operationId },
+                        `deep-test:ack:${operationId}`,
+                      )
+                      .catch(() => undefined);
+                })
                 .catch(() => facade.markDeepTestUnconfirmed(operationId))
                 .finally(() => {
                   deepTestBusy.current = false;
