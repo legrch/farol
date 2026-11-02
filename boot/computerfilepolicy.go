@@ -47,6 +47,18 @@ var _ port.ScratchBoundList = (*computerFileOwners)(nil)
 var _ port.ScratchBoundSearch = (*computerFileOwners)(nil)
 var _ port.ReadDiagnosticPolicy = (*computerFileOwners)(nil)
 
+func (o *computerFileOwners) BindReadDiagnostic(request port.ReadRequest, value []byte) (string, error) {
+	selected, err := o.reader(request.Workspace.FilePolicy)
+	if err != nil {
+		return "", err
+	}
+	policy, ok := selected.(port.ReadDiagnosticPolicy)
+	if !ok {
+		return "", authority.Fail("WORKSPACE_HELPER_FAILED", "native-workspace")
+	}
+	return policy.BindReadDiagnostic(request, value)
+}
+
 func newComputerReaders(home string) (*computerFileOwners, error) {
 	legacyRead, err := filesystem.NewWithFilePolicy(home, authority.LegacyProtectedFiles)
 	if err != nil {

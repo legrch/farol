@@ -17,6 +17,12 @@ func (w *Workspace) Read(ctx context.Context, request port.ReadRequest) (*port.R
 	return w.read(ctx, request, nil)
 }
 
+// BindReadDiagnostic hashes only the application-owned authority snapshot; it
+// does not access the workspace or establish any authority.
+func (w *Workspace) BindReadDiagnostic(_ port.ReadRequest, value []byte) (string, error) {
+	return payloadHash(value), nil
+}
+
 func (w *Workspace) AuthorizeReadDiagnostic(ctx context.Context, request port.ReadRequest) error {
 	if err := cancelled(ctx); err != nil {
 		return err

@@ -2,10 +2,9 @@ package workspace
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -59,13 +58,14 @@ func (s *Service) AuthorizeReadDiagnostic(ctx context.Context, request ReadReque
 		return "", nativeFailure(err)
 	}
 	var binding string
-	if err := s.disclose(ctx, caller, *admitted, func() { binding = readDiagnosticBinding(caller, *admitted) }); err != nil {
+	var bindingErr error
+	if err := s.disclose(ctx, caller, *admitted, func() { binding, bindingErr = s.readDiagnosticBinding(caller, *admitted) }); err != nil {
 		return "", err
 	}
-	return binding, nil
+	return binding, bindingErr
 }
 
-func readDiagnosticBinding(c caller, a admission) string {
+func (s *Service) readDiagnosticBinding(c caller, a admission) (string, error) {
 	value := struct {
 		WorkspaceID, RelativePath, AuthorityID, ComputerID string
 		Identity                                           authority.Identity
@@ -74,9 +74,16 @@ func readDiagnosticBinding(c caller, a admission) string {
 		Mode                                               authority.Mode
 		Descriptor                                         port.Descriptor
 	}{c.workspaceID, c.relativePath, a.authorityID, a.computerID, c.identity, c.participantID, a.computerGeneration, a.mode, a.descriptor}
-	raw, _ := json.Marshal(value)
-	digest := sha256.Sum256(raw)
-	return hex.EncodeToString(digest[:])
+	raw, err := json.Marshal(value)
+	policy, ok := s.workspace.(port.ReadDiagnosticPolicy)
+	if err != nil || !ok {
+		return "", authority.Fail("WORKSPACE_HELPER_FAILED", "native-workspace")
+	}
+	binding, err := policy.BindReadDiagnostic(port.ReadRequest{Workspace: cloneDescriptor(a.descriptor), RelativePath: c.relativePath}, raw)
+	if err != nil || len(binding) != 64 || strings.Trim(binding, "0123456789abcdef") != "" {
+		return "", authority.Fail("WORKSPACE_HELPER_FAILED", "native-workspace")
+	}
+	return binding, nil
 }
 
 func (s *Service) Read(ctx context.Context, request ReadRequest) (*ReadResponse, error) {
@@ -96,8 +103,14 @@ func (s *Service) Read(ctx context.Context, request ReadRequest) (*ReadResponse,
 		if errors.As(failure, &classified) && classified.Stage != "" {
 			// A diagnostic is information about the target. Recheck the same
 			// authority used for successful disclosure before returning it.
-			if err := s.disclose(ctx, caller, *admitted, func() { classified.DiagnosticBinding = readDiagnosticBinding(caller, *admitted) }); err != nil {
+			var bindingErr error
+			if err := s.disclose(ctx, caller, *admitted, func() { classified.DiagnosticBinding, bindingErr = s.readDiagnosticBinding(caller, *admitted) }); err != nil {
 				return nil, err
+			}
+			if bindingErr != nil {
+				// The original refusal is still authoritative; without its
+				// binding the detailed diagnostic cannot be retained safely.
+				classified.Stage, classified.Reason, classified.DiagnosticBinding = "", "", ""
 			}
 		}
 		return nil, failure

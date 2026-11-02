@@ -3,8 +3,10 @@ package desktop
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"strconv"
@@ -41,6 +43,9 @@ func (w *readWorkspace) Read(_ context.Context, r port.ReadRequest) (*port.ReadR
 	return &w.result, nil
 }
 func (w *readWorkspace) AuthorizeReadDiagnostic(context.Context, port.ReadRequest) error { return nil }
+func (w *readWorkspace) BindReadDiagnostic(_ port.ReadRequest, value []byte) (string, error) {
+	return fmt.Sprintf("%x", sha256.Sum256(value)), nil
+}
 func (w *readWorkspace) List(context.Context, port.ListRequest) (*port.ListResponse, error) {
 	panic("not used")
 }

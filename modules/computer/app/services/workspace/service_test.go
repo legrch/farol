@@ -2,7 +2,9 @@ package workspace
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -55,6 +57,7 @@ type native struct {
 	listRequest  port.ListRequest
 	hook         func()
 	err          error
+	bindErr      error
 	read         *port.ReadResponse
 	list         *port.ListResponse
 	ctx          context.Context
@@ -70,6 +73,12 @@ func (n *native) Read(ctx context.Context, r port.ReadRequest) (*port.ReadRespon
 	return n.read, n.err
 }
 func (n *native) AuthorizeReadDiagnostic(context.Context, port.ReadRequest) error { return nil }
+func (n *native) BindReadDiagnostic(_ port.ReadRequest, value []byte) (string, error) {
+	if n.bindErr != nil {
+		return "", n.bindErr
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(value)), nil
+}
 func (n *native) List(ctx context.Context, r port.ListRequest) (*port.ListResponse, error) {
 	n.lists++
 	n.listRequest = r
@@ -127,6 +136,17 @@ func TestReadDiagnosticRechecksAuthorityBeforeDisclosure(t *testing.T) {
 				t.Fatalf("diagnostic lost: %v", err)
 			}
 		}
+	}
+}
+
+func TestReadDiagnosticBindingFailurePreservesOriginalRefusal(t *testing.T) {
+	s, _, _, n, _, request := fixture(t)
+	n.err = &authority.Failure{Code: "WORKSPACE_PATH_REFUSED", Source: "native-workspace", Retry: "never", Stage: "target", Reason: "link_not_supported"}
+	n.bindErr = errors.New("private binding failure")
+	result, err := s.Read(context.Background(), request)
+	var failure *authority.Failure
+	if result != nil || !errors.As(err, &failure) || failure.Code != "WORKSPACE_PATH_REFUSED" || failure.Retry != "never" || failure.Stage != "" || failure.Reason != "" || failure.DiagnosticBinding != "" {
+		t.Fatalf("original refusal changed or unbound detail leaked: %+v", failure)
 	}
 }
 
