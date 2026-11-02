@@ -275,6 +275,17 @@ it("sends the bounded prompt once and retains the exact result", async () => {
   expect(f.send.mock.calls[0]![0]).toContain(
     "Never clean up after an unknown effect",
   );
+  expect(f.send.mock.calls[0]![0]).toContain("For shell smoke");
+  expect(f.send.mock.calls[0]![0]).toContain(
+    "Treat cleanup as a separate case",
+  );
+  expect(f.send.mock.calls[0]![0]).toContain("write:true and pinned /bin/rm");
+  expect(f.send.mock.calls[0]![0]).toContain(
+    "do not use globs or recursive removal",
+  );
+  expect(f.send.mock.calls[0]![0]).toContain(
+    "not an atomic compare-and-delete",
+  );
   const journal = new PrivateChatGptTaskJournal({
     root: path.join(f.root, "farol-state"),
     deepTestOperationId: id,
