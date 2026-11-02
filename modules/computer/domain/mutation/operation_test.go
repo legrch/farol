@@ -36,6 +36,25 @@ func TestCreateOnlyAndExactHashPreconditions(t *testing.T) {
 	malformed := "private malformed observation"
 	expectCode(t, CheckPrecondition(edit, &malformed), "WORKSPACE_HELPER_FAILED", "native-workspace")
 }
+
+func TestRemoveRequiresExactPathAndExistingPreimage(t *testing.T) {
+	op := Remove{RelativePath: "notes/a.md", ExpectedSHA256: digest("a")}
+	if err := CheckPrecondition(op, hash("a")); err != nil {
+		t.Fatal(err)
+	}
+	expectCode(t, CheckPrecondition(op, nil), "WORKSPACE_NOT_FOUND", "native-workspace")
+	expectCode(t, CheckPrecondition(op, hash("b")), "WORKSPACE_MUTATION_CONFLICT", "native-workspace")
+	expectCode(t, ValidateInput(Remove{RelativePath: "../outside", ExpectedSHA256: digest("a")}), "COMPUTER_INVALID_REQUEST", "contract")
+	expectCode(t, ValidateInput(Remove{RelativePath: "file", ExpectedSHA256: ""}), "COMPUTER_INVALID_REQUEST", "contract")
+	receipt := Receipt{Operation: RemoveKind, RelativePath: op.RelativePath, BeforeSHA256: hash("a")}
+	if !ValidNativeReceipt(receipt, op) {
+		t.Fatal("valid removal receipt refused")
+	}
+	receipt.AfterSHA256 = digest("a")
+	if ValidStoredReceipt(receipt) {
+		t.Fatal("removed file claimed an after hash")
+	}
+}
 func TestInputPathHashAndEditBounds(t *testing.T) {
 	for _, path := range []string{"", ".", "/absolute", "a/../b", "a//b", "a/./b", "a/", "a\\b", "a\x00b", "a\nb", strings.Repeat("😀", 2049)} {
 		expectCode(t, ValidateInput(Write{RelativePath: path}), "COMPUTER_INVALID_REQUEST", "contract")

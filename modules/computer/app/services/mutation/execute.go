@@ -217,6 +217,8 @@ func preimageMatches(op state.Operation, observed *string) bool {
 		return v.ExpectedSHA256 == nil && observed == nil || v.ExpectedSHA256 != nil && observed != nil && *v.ExpectedSHA256 == *observed
 	case state.Edit:
 		return observed != nil && v.ExpectedSHA256 == *observed
+	case state.Remove:
+		return observed != nil && v.ExpectedSHA256 == *observed
 	}
 	return false
 }

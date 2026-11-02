@@ -19,7 +19,7 @@ func (o ConnectorOrigin) Valid() bool {
 	return Identifier(o.BuildID, 120) && Identifier(o.BackendGeneration, 120) && Identifier(o.RuntimeID, 120) &&
 		o.ConnectorGeneration > 0 && Identifier(o.SessionID, 120) &&
 		Identifier(o.TaskID, 120) && Identifier(o.ParticipantID, 120) && Identifier(o.TurnID, 120) && Identifier(o.CallID, 120) &&
-		o.TaskEpoch <= MaxSafeInteger && o.Generation <= MaxSafeInteger && (o.Operation == WriteKind || o.Operation == EditKind)
+		o.TaskEpoch <= MaxSafeInteger && o.Generation <= MaxSafeInteger && (o.Operation == WriteKind || o.Operation == EditKind || o.Operation == RemoveKind)
 }
 
 type Identity struct {
@@ -128,13 +128,16 @@ func ValidStoredReceipt(r Receipt) bool {
 	if r.Directory != (DirectoryIdentity{}) {
 		return false
 	}
+	if r.Operation == RemoveKind {
+		return RelativePath(r.RelativePath) && r.Bytes == 0 && r.Replacements == 0 && r.BeforeSHA256 != nil && SHA256(*r.BeforeSHA256) && r.AfterSHA256 == ""
+	}
 	return (r.Operation == WriteKind || r.Operation == EditKind) && Identifier(r.RelativePath, 4096) && r.Bytes <= MaxBytes && r.Replacements <= MaxEdits && (r.BeforeSHA256 == nil || SHA256(*r.BeforeSHA256)) && SHA256(r.AfterSHA256)
 }
 func ValidNativeReceipt(r Receipt, op Operation) bool {
 	if ValidateNative(op) != nil || !ValidStoredReceipt(r) || r.RelativePath != op.Path() || r.Operation != op.Kind() {
 		return false
 	}
-	return r.Operation == ScratchKind || r.Operation == WriteKind && r.Replacements == 0 || r.Operation == EditKind && r.Replacements >= 1
+	return r.Operation == ScratchKind || r.Operation == RemoveKind || r.Operation == WriteKind && r.Replacements == 0 || r.Operation == EditKind && r.Replacements >= 1
 }
 func NewPrepared(b Binding) (*State, error) { return Restore(b, Prepared, nil, nil) }
 

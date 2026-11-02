@@ -54,6 +54,8 @@ func (Digester) Digest(input port.MutationDigestInput) (string, error) {
 			b.WriteByte(']')
 		}
 		b.WriteByte(']')
+	case mutation.Remove:
+		quoteJS(&b, v.ExpectedSHA256)
 	}
 	b.WriteByte(']')
 	return payloadHash([]byte(b.String())), nil
