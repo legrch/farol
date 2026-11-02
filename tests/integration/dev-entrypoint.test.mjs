@@ -505,6 +505,24 @@ describe("dev.mjs main() orchestration with an already-declared toolchain", () =
     ]);
   });
 
+  it.each([
+    { status: 1, text: "" },
+    { status: 1, text: "123 /usr/bin/partial" },
+    { status: 0, text: "" },
+    { status: 0, text: "123 /usr/bin/example\nmalformed" },
+  ])(
+    "stops before dependency and build writes for incomplete inventory %j",
+    async (inventory) => {
+      const { validatedDevInventory } =
+        await import("../../tooling/dev-process-control.mjs");
+      const { overrides, calls } = baseOverrides({
+        prepareBuild: async () => validatedDevInventory(inventory),
+      });
+      await main([], overrides);
+      expect(calls).toEqual(["exit:1"]);
+    },
+  );
+
   it.each([[[]], [["--acceptance-profile"]]])(
     "reopens the exact selected profile without dependencies, rebuild or stop (%j)",
     async (flags) => {
