@@ -142,6 +142,7 @@ import {
   runHistoryReadJourney,
 } from "./lib/chat-history-witness.mjs";
 import { browserFailureCollector } from "./lib/browser-failure-witness.mjs";
+import { readOwnedChildProcesses } from "./runtime-process.mjs";
 import { reportRetiredJourney } from "../../tooling/setup-journey-retirement.mjs";
 
 const root = path.resolve(
@@ -151,6 +152,62 @@ const root = path.resolve(
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const hex40 = /^[a-f0-9]{40}$/u;
 const hex64 = /^[a-f0-9]{64}$/u;
+
+// The packaged launcher is a retained Go guardian; Electron is its child.
+// The Dev launcher still directly owns Electron under the same PID contract.
+// This qualifies identity only, never terminal or descendant-cleanup evidence.
+function qualifyDesktopMain({
+  packaged,
+  guardianPid,
+  marker,
+  desktop,
+  children,
+  expectedExecutable,
+}) {
+  assert.ok(
+    Number.isSafeInteger(guardianPid) && guardianPid > 1,
+    "GUARDIAN_PID_INVALID",
+  );
+  assert.ok(
+    Number.isSafeInteger(desktop.pid) && desktop.pid > 1,
+    "DESKTOP_PID_INVALID",
+  );
+  assert.equal(marker.pid, desktop.pid, "RUN_MARKER_DESKTOP_MISMATCH");
+  if (!packaged) {
+    assert.equal(desktop.pid, guardianPid, "DEV_MAIN_PID_MISMATCH");
+    return { guardianPid, desktopPid: desktop.pid };
+  }
+  assert.notEqual(desktop.pid, guardianPid, "PACKAGED_GUARDIAN_IS_DESKTOP");
+  assert.equal(desktop.ppid, guardianPid, "DESKTOP_PARENT_MISMATCH");
+  assert.equal(
+    desktop.executable,
+    expectedExecutable,
+    "DESKTOP_EXECUTABLE_MISMATCH",
+  );
+  const matches = children.filter((entry) => entry.pid === desktop.pid);
+  assert.equal(matches.length, 1, "DESKTOP_CHILD_UNCONFIRMED");
+  const observed = matches[0];
+  assert.equal(
+    observed.parentPid,
+    guardianPid,
+    "DESKTOP_CHILD_PARENT_MISMATCH",
+  );
+  assert.equal(
+    observed.processStart,
+    marker.processStart,
+    "DESKTOP_START_MISMATCH",
+  );
+  assert.ok(
+    observed.command.startsWith(`${expectedExecutable} `),
+    "DESKTOP_COMMAND_MISMATCH",
+  );
+  return {
+    guardianPid,
+    desktopPid: desktop.pid,
+    desktopStart: observed.processStart,
+  };
+}
+
 const contract = Object.freeze({
   schema: "farol-go-core-startup-harness/1",
   applicationUnderTest:
@@ -1808,11 +1865,28 @@ async function native(selected, inputs, report, save) {
         4096,
       );
       assert.equal(launch.runMarker.value.schema, 1);
-      assert.equal(
-        launch.runMarker.value.pid,
-        child.pid,
-        "RUN_MARKER_CHILD_MISMATCH",
+      const desktop = await bounded(
+        application.evaluate(() => ({
+          pid: process.pid,
+          ppid: process.ppid,
+          executable: process.execPath,
+        })),
+        3000,
+        "DESKTOP_IDENTITY_UNKNOWN",
       );
+      launch.desktopIdentity = qualifyDesktopMain({
+        packaged: Boolean(selected.packaged),
+        guardianPid: child.pid,
+        marker: launch.runMarker.value,
+        desktop,
+        children: selected.packaged ? readOwnedChildProcesses(child.pid) : [],
+        expectedExecutable: selected.packaged
+          ? path.join(
+              selected.packaged,
+              "Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron",
+            )
+          : undefined,
+      });
       assert.ok(
         Number.isFinite(Date.parse(launch.runMarker.value.startedAt)),
         "RUN_MARKER_TIME_UNKNOWN",
@@ -3092,6 +3166,47 @@ function selfTest() {
     assert.throws(call);
     checks++;
   };
+  const launcherFixture = {
+    packaged: true,
+    guardianPid: 100,
+    marker: { pid: 101, processStart: "start" },
+    desktop: { pid: 101, ppid: 100, executable: "/app/Electron" },
+    children: [
+      {
+        pid: 101,
+        parentPid: 100,
+        processStart: "start",
+        command: "/app/Electron /app/main",
+      },
+    ],
+    expectedExecutable: "/app/Electron",
+  };
+  pass(() => qualifyDesktopMain(launcherFixture));
+  pass(() =>
+    qualifyDesktopMain({
+      ...launcherFixture,
+      packaged: false,
+      guardianPid: 101,
+    }),
+  );
+  for (const changed of [
+    { marker: { ...launcherFixture.marker, pid: 102 } },
+    { marker: { ...launcherFixture.marker, processStart: "changed" } },
+    { desktop: { ...launcherFixture.desktop, ppid: 99 } },
+    { desktop: { ...launcherFixture.desktop, executable: "/other/Electron" } },
+    { children: [] },
+    { children: [launcherFixture.children[0], launcherFixture.children[0]] },
+    { children: [{ ...launcherFixture.children[0], parentPid: 99 }] },
+    {
+      children: [
+        {
+          ...launcherFixture.children[0],
+          command: "/other/Electron /app/main",
+        },
+      ],
+    },
+  ])
+    reject(() => qualifyDesktopMain({ ...launcherFixture, ...changed }));
   const profile = {
     schema: "farol-native-profile/2",
     profileId: "12345678-1234-1234-1234-123456789abc",
