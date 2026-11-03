@@ -2693,6 +2693,56 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     await second!.close();
   });
 
+  it("retires an operation-free older download after a newer build is accepted", async () => {
+    const first = await prepared();
+    await first.close();
+    const record = JSON.parse(await fs.readFile(ready, "utf8"));
+    record.manifest = {
+      ...record.manifest,
+      version: "0.0.9-owner.beta.1",
+      buildVersion: "1",
+      archiveName: "Farol-0.0.9-owner.beta.1-darwin-arm64.zip",
+    };
+    await fs.writeFile(ready, JSON.stringify(record), { mode: 0o600 });
+    const second = await createInstalledUpdateRuntime(options());
+    await second!.initialize();
+    expect(second!.snapshot()).toMatchObject({ phase: "idle" });
+    expect(mocks.reclaimArchive).toHaveBeenCalledExactlyOnceWith(
+      record.handle,
+      expect.objectContaining({ version: "0.0.9-owner.beta.1" }),
+    );
+    await expect(fs.lstat(ready)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+    await second!.close();
+  });
+
+  it("does not retire an older download that still records a helper", async () => {
+    const first = await prepared();
+    await first.close();
+    const record = JSON.parse(await fs.readFile(ready, "utf8"));
+    record.manifest = {
+      ...record.manifest,
+      version: "0.0.9-owner.beta.1",
+      buildVersion: "1",
+      archiveName: "Farol-0.0.9-owner.beta.1-darwin-arm64.zip",
+    };
+    record.helper = { pid: 12345, processStart: "fixture-start" };
+    await fs.writeFile(ready, JSON.stringify(record), { mode: 0o600 });
+    const original = await fs.readFile(ready);
+    const second = await createInstalledUpdateRuntime(options());
+    await second!.initialize();
+    expect(second!.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+      code: "UPDATE_RETAINED_VERSION_MISMATCH",
+    });
+    expect(await fs.readFile(ready)).toEqual(original);
+    expect(mocks.reclaimArchive).not.toHaveBeenCalled();
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await second!.close();
+  });
+
   it.each([
     "changed-digest",
     "wrong-channel",

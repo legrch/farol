@@ -3489,11 +3489,24 @@ async function createRuntime(
         current.version !== options.build.version
       )
         return known("UPDATE_SOURCE_IDENTITY_MISMATCH");
-      // A downloaded update may already have been installed manually before
-      // this process adopted the exact published build. It is safe to retire
-      // only a ready-only record for that same authenticated physical build;
-      // pending download, helper, preparation and operation records remain
-      // subject to their existing recovery paths.
+      // A ready-only download can have been installed manually, or superseded
+      // by a later authenticated build. Pending download, helper, preparation
+      // and operation records remain subject to their existing recovery paths.
+      const retainedOrder = compareReleaseVersions(
+        parsed.value.version,
+        options.build.version,
+      );
+      const exactInstalledBuild =
+        retainedOrder === 0 &&
+        parsed.value.buildVersion === options.build.buildVersion &&
+        parsed.value.buildId === options.build.buildId &&
+        parsed.value.sourceCommit === options.build.sourceCommit &&
+        parsed.value.sourceTreeDigest === options.build.sourceTreeDigest &&
+        parsed.value.artifactSha256 === current.digest;
+      const olderRetainedBuild =
+        retainedOrder !== null &&
+        retainedOrder < 0 &&
+        BigInt(parsed.value.buildVersion) < BigInt(options.build.buildVersion!);
       if (
         fromReady &&
         retained.operation === null &&
@@ -3503,12 +3516,7 @@ async function createRuntime(
         !downloadIntent &&
         parsed.value.repository === "legrch/farol" &&
         parsed.value.channel === adoptionChannel(options.build) &&
-        parsed.value.version === options.build.version &&
-        parsed.value.buildVersion === options.build.buildVersion &&
-        parsed.value.buildId === options.build.buildId &&
-        parsed.value.sourceCommit === options.build.sourceCommit &&
-        parsed.value.sourceTreeDigest === options.build.sourceTreeDigest &&
-        parsed.value.artifactSha256 === current.digest
+        (exactInstalledBuild || olderRetainedBuild)
       ) {
         const reclaimed = await transport.reclaimRetained(
           retained.handle,
