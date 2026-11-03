@@ -2662,6 +2662,84 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     expect(quit).not.toHaveBeenCalled();
   });
 
+  it("retires a ready-only download when its exact build is already installed", async () => {
+    const first = await prepared();
+    await first.close();
+    const record = JSON.parse(await fs.readFile(ready, "utf8"));
+    record.manifest = {
+      ...record.manifest,
+      version: build.version,
+      buildVersion: build.buildVersion,
+      buildId: build.buildId,
+      sourceCommit: build.sourceCommit,
+      sourceTreeDigest: build.sourceTreeDigest,
+      artifactSha256: source.digest,
+      archiveName: `Farol-${build.version}-darwin-arm64.zip`,
+    };
+    await fs.writeFile(ready, JSON.stringify(record), { mode: 0o600 });
+    const second = await createInstalledUpdateRuntime(options());
+    await second!.initialize();
+    expect(second!.snapshot()).not.toMatchObject({
+      phase: "failed",
+      code: "UPDATE_RETAINED_VERSION_MISMATCH",
+    });
+    expect(mocks.reclaimArchive).toHaveBeenCalledExactlyOnceWith(
+      record.handle,
+      expect.objectContaining({ buildId: build.buildId }),
+    );
+    await expect(fs.lstat(ready)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(quit).not.toHaveBeenCalled();
+    await second!.close();
+  });
+
+  it.each(["changed-digest", "helper-present", "cleanup-refused"] as const)(
+    "preserves the ready record when same-build retirement is unsafe: %s",
+    async (scenario) => {
+      const first = await prepared();
+      await first.close();
+      const record = JSON.parse(await fs.readFile(ready, "utf8"));
+      record.manifest = {
+        ...record.manifest,
+        version: build.version,
+        buildVersion: build.buildVersion,
+        buildId: build.buildId,
+        sourceCommit: build.sourceCommit,
+        sourceTreeDigest: build.sourceTreeDigest,
+        artifactSha256:
+          scenario === "changed-digest" ? "0".repeat(64) : source.digest,
+        archiveName: `Farol-${build.version}-darwin-arm64.zip`,
+      };
+      if (scenario === "helper-present")
+        record.helper = { pid: 12345, processStart: "fixture-start" };
+      if (scenario === "cleanup-refused")
+        mocks.reclaimArchive.mockResolvedValue({
+          ok: false,
+          kind: "interrupted",
+          certainty: "unknown",
+          reason: "stage_cleanup",
+        });
+      await fs.writeFile(ready, JSON.stringify(record), { mode: 0o600 });
+      const original = await fs.readFile(ready);
+      const second = await createInstalledUpdateRuntime(options());
+      await second!.initialize();
+      expect(second!.snapshot()).toMatchObject({
+        phase: "failed",
+        recoveryRequired: true,
+        code:
+          scenario === "cleanup-refused"
+            ? "UPDATE_ARCHIVE_CLEANUP_UNCONFIRMED"
+            : "UPDATE_RETAINED_VERSION_MISMATCH",
+      });
+      expect(await fs.readFile(ready)).toEqual(original);
+      if (scenario !== "cleanup-refused")
+        expect(mocks.reclaimArchive).not.toHaveBeenCalled();
+      expect(mocks.helper).not.toHaveBeenCalled();
+      expect(quit).not.toHaveBeenCalled();
+      await second!.close();
+    },
+  );
+
   it.each(ineligibleTargets)(
     "refuses an ineligible retained target before restoring Ready: %j",
     async (change) => {

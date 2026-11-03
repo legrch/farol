@@ -3488,6 +3488,34 @@ async function createRuntime(
         current.version !== options.build.version
       )
         return known("UPDATE_SOURCE_IDENTITY_MISMATCH");
+      // A downloaded update may already have been installed manually before
+      // this process adopted the exact published build. It is safe to retire
+      // only a ready-only record for that same authenticated physical build;
+      // pending download, helper, preparation and operation records remain
+      // subject to their existing recovery paths.
+      if (
+        fromReady &&
+        retained.operation === null &&
+        !retained.preparation &&
+        !retained.helper &&
+        !retained.archiveReleased &&
+        !downloadIntent &&
+        parsed.value.version === options.build.version &&
+        parsed.value.buildVersion === options.build.buildVersion &&
+        parsed.value.buildId === options.build.buildId &&
+        parsed.value.sourceCommit === options.build.sourceCommit &&
+        parsed.value.sourceTreeDigest === options.build.sourceTreeDigest &&
+        parsed.value.artifactSha256 === current.digest
+      ) {
+        const reclaimed = await transport.reclaimRetained(
+          retained.handle,
+          parsed.value,
+        );
+        if (!reclaimed.ok) return known("UPDATE_ARCHIVE_CLEANUP_UNCONFIRMED");
+        await fs.unlink(readyFile);
+        retained = null;
+        return { ok: true, update: null };
+      }
       if (
         !isIncreasingUpdate(
           parsed.value,
