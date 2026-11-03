@@ -6998,6 +6998,28 @@ describe("selected shared slot (redirected disposable filesystem, mocked helper)
       return controller;
     }
 
+    it("recovers a same-build download after shared-slot adoption", async () => {
+      const first = await prepared();
+      await first.close();
+      const retained = JSON.parse(await fs.readFile(ready, "utf8"));
+      retained.manifest = published();
+      await fs.writeFile(ready, JSON.stringify(retained), { mode: 0o600 });
+      await dragged();
+      await writeAdopted(recordFor());
+      const baseline = await fs.readFile(adoptedFile());
+      const controller = (await createInstalledUpdateRuntime(options()))!;
+      await controller.initialize();
+      expect(controller.snapshot()).toMatchObject({ phase: "idle" });
+      expect(mocks.reclaimArchive).toHaveBeenCalledExactlyOnceWith(
+        retained.handle,
+        expect.objectContaining({ buildId: build.buildId }),
+      );
+      expect(await fs.readFile(adoptedFile())).toEqual(baseline);
+      await expect(fs.lstat(ready)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(mocks.helper).not.toHaveBeenCalled();
+      await controller.close();
+    });
+
     it("never adopts by itself: without a record the shared runtime reports an unconfirmed source", async () => {
       await dragged();
       const controller = await checked();
