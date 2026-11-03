@@ -117,6 +117,14 @@ mutation, parent fsync and final descriptor readback require the candidate's ino
 single link, mode/owner, size, modification time and exact digest. Failure/cancel
 then is unknown. A later writer after the final observation is a separate write.
 
+Single-file removal moves the named entry once into a private sibling stage with
+Darwin no-replace rename, then checks the moved inode and digest before disposal.
+A replacement moved at the syscall boundary or an uncertain move acknowledgement
+is retained in that stage and reported as unknown; it is never retried or silently
+deleted. A successful removal syncs and removes the empty stage. This reduces
+the ordinary target-name replacement race but does not provide atomic hash/delete
+against a writer with access to the staged inode or directory.
+
 This is the existing bounded swap/verify/guarded-undo algorithm, **not adversarial
 same-user isolation or atomic hash CAS**. Residuals include an already-open original
 written after its digest check, an already-open candidate changed after undo

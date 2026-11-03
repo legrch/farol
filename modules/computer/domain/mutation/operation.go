@@ -40,8 +40,9 @@ type Edit struct {
 	ExpectedSHA256 string
 }
 
-// Remove checks an exact preimage before one unlink. It is not an atomic CAS
-// against external writers that do not participate in the owner gate.
+// Remove moves one entry to a private stage and checks the exact preimage
+// before disposal. It is not an atomic CAS against external writers that can
+// change the staged inode or directory outside the owner gate.
 type Remove struct{ RelativePath, ExpectedSHA256 string }
 
 func (Write) operation()          {}

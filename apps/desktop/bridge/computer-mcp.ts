@@ -723,7 +723,7 @@ export function createGoComputerMcpServer(
         {
           title: "Remove one approved workspace file",
           description:
-            "Remove one ordinary file through the selected Go owner using its exact current SHA-256. No directories, recursion or globs. The preimage check is not an atomic compare-and-delete against external writers. Supply a new operationId; never retry a refused or uncertain effect. Observe the original operation with computer_mutation_read. memory_only is not durable publication.",
+            "Remove one ordinary file through the selected Go owner using its exact current SHA-256. No directories, recursion or globs. The preimage check is not an atomic compare-and-delete against external writers. An uncertain operation can retain an internally staged entry. Supply a new operationId; never retry a refused or uncertain effect. Observe the original operation with computer_mutation_read. memory_only is not durable publication.",
           inputSchema: RemoveInputSchema,
           annotations: effectAnnotations,
         },

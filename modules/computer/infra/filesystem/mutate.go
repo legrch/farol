@@ -142,29 +142,8 @@ func (m *Mutable) Mutate(ctx context.Context, request port.MutationRequest) (rec
 		if request.ScratchParent != nil || request.HoldScratchFile || previous == nil {
 			return nil, refusal("WORKSPACE_INVALID_REQUEST")
 		}
-		if err = checkMutation(ctx, request, walk); err != nil {
+		if err = m.removeExact(ctx, request, walk, parent, leaf, *previous, before); err != nil {
 			return nil, err
-		}
-		// This last named-entry check is not an atomic compare-and-unlink with
-		// writers outside Farol's publication gate.
-		uncertain, removeErr := withMutationPublication(ctx, request, walk, func() error {
-			current, lookupErr := m.fs.lstat(parent, leaf)
-			if lookupErr != nil || current != *previous {
-				return refusal("WORKSPACE_MUTATION_CONFLICT")
-			}
-			if unlinkErr := m.fs.unlink(parent, leaf, false); unlinkErr != nil {
-				return mutationError("MUTATION_OUTCOME_UNKNOWN")
-			}
-			return nil
-		})
-		if uncertain || removeErr != nil {
-			return nil, removeErr
-		}
-		if m.fs.sync(parent) != nil || checkMutation(ctx, request, walk) != nil {
-			return nil, mutationError("MUTATION_OUTCOME_UNKNOWN")
-		}
-		if _, lookupErr := m.fs.lstat(parent, leaf); !errors.Is(lookupErr, unix.ENOENT) {
-			return nil, mutationError("MUTATION_OUTCOME_UNKNOWN")
 		}
 		return &port.MutationReceipt{Operation: string(mutation.RemoveKind), RelativePath: request.Operation.Path(), BeforeSHA256: before}, nil
 	}
