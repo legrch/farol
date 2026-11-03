@@ -72,6 +72,7 @@ import {
   SHARED_SLOT,
   adoptedRecordFor,
   adoptionBuildEligible,
+  adoptionChannel,
   publishAdoptedRecord,
   readAdoptedRecord,
   recordAbsent,
@@ -3500,6 +3501,8 @@ async function createRuntime(
         !retained.helper &&
         !retained.archiveReleased &&
         !downloadIntent &&
+        parsed.value.repository === "legrch/farol" &&
+        parsed.value.channel === adoptionChannel(options.build) &&
         parsed.value.version === options.build.version &&
         parsed.value.buildVersion === options.build.buildVersion &&
         parsed.value.buildId === options.build.buildId &&

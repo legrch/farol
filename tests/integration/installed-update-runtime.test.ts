@@ -2693,7 +2693,13 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     await second!.close();
   });
 
-  it.each(["changed-digest", "helper-present", "cleanup-refused"] as const)(
+  it.each([
+    "changed-digest",
+    "wrong-channel",
+    "old-repository",
+    "helper-present",
+    "cleanup-refused",
+  ] as const)(
     "preserves the ready record when same-build retirement is unsafe: %s",
     async (scenario) => {
       const first = await prepared();
@@ -2708,6 +2714,11 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
         sourceTreeDigest: build.sourceTreeDigest,
         artifactSha256:
           scenario === "changed-digest" ? "0".repeat(64) : source.digest,
+        channel: scenario === "wrong-channel" ? "stable" : manifest.channel,
+        repository:
+          scenario === "old-repository"
+            ? "legrch/farol-releases"
+            : manifest.repository,
         archiveName: `Farol-${build.version}-darwin-arm64.zip`,
       };
       if (scenario === "helper-present")
@@ -2729,7 +2740,9 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
         code:
           scenario === "cleanup-refused"
             ? "UPDATE_ARCHIVE_CLEANUP_UNCONFIRMED"
-            : "UPDATE_RETAINED_VERSION_MISMATCH",
+            : scenario === "wrong-channel"
+              ? "UPDATE_RETAINED_MANIFEST_INVALID"
+              : "UPDATE_RETAINED_VERSION_MISMATCH",
       });
       expect(await fs.readFile(ready)).toEqual(original);
       if (scenario !== "cleanup-refused")
