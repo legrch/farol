@@ -829,6 +829,37 @@ function cleanClosure(cleanup) {
   assert.equal(cleanup.siteClosed, true, "FIXTURE_CLOSE_UNKNOWN");
 }
 
+function statusAfterObservedQuit(launch) {
+  return launch.journeyError === undefined
+    ? "confirmed-clean-quit"
+    : "failed-or-unknown";
+}
+
+function assertProfileDisposalEligible(report, expectedLaunches) {
+  for (const receipt of report.launches) {
+    cleanLaunchClosure(receipt.cleanup);
+    assert.equal(
+      receipt.status,
+      "confirmed-clean-quit",
+      "LIFECYCLE_EVIDENCE_UNCONFIRMED",
+    );
+    assert.equal(
+      receipt.journeyError,
+      undefined,
+      "JOURNEY_FAILURE_RETAINS_PROFILE",
+    );
+    assert.ok(receipt.desktopIdentity, "DESKTOP_IDENTITY_UNCONFIRMED");
+  }
+  assert.equal(
+    report.launches.length,
+    expectedLaunches,
+    "LAUNCH_SEQUENCE_INCOMPLETE",
+  );
+  cleanClosure(report.cleanup);
+  assert.equal(report.cleanup.ledgerError, undefined);
+  assert.equal(report.scenarioPassed, true, "SCENARIO_FAILURE_RETAINS_PROFILE");
+}
+
 function retainedSettings(current, previous) {
   for (const key of ["computerId", "name", "generation"])
     assert.equal(
@@ -1690,7 +1721,7 @@ async function native(selected, inputs, report, save) {
         );
         await save();
       }
-      launch.status = "confirmed-clean-quit";
+      launch.status = statusAfterObservedQuit(launch);
     } catch (error) {
       if (launch.status !== "quit-go-core-unconfirmed")
         launch.status = "failed-or-unknown";
@@ -3115,27 +3146,10 @@ async function native(selected, inputs, report, save) {
     process.off("SIGINT", cancel);
     process.off("SIGTERM", cancel);
     try {
-      for (const receipt of report.launches) {
-        cleanLaunchClosure(receipt.cleanup);
-        assert.equal(
-          receipt.status,
-          "confirmed-clean-quit",
-          "LIFECYCLE_EVIDENCE_UNCONFIRMED",
-        );
-      }
-      assert.equal(
-        report.launches.length,
+      assertProfileDisposalEligible(
+        report,
         selected.reopen || selected.chatHistoryReopen ? 2 : 1,
-        "LAUNCH_SEQUENCE_INCOMPLETE",
       );
-      cleanClosure(report.cleanup);
-      assert.equal(report.cleanup.ledgerError, undefined);
-      if (selected.reopen || selected.chatTwoTurn)
-        assert.equal(
-          report.scenarioPassed,
-          true,
-          "REOPEN_EVIDENCE_RETAINED_AFTER_FAILURE",
-        );
       await fs.rm(temporary, { recursive: true });
       report.cleanup.temporaryRemoved = true;
     } catch (error) {
@@ -3366,6 +3380,50 @@ function selfTest() {
           typeof value === "boolean" ? false : key === "signal" ? "SIGKILL" : 1,
       }),
     );
+  const failedIdentity = { journeyError: "DESKTOP_IDENTITY_UNKNOWN" };
+  pass(() =>
+    assert.equal(statusAfterObservedQuit(failedIdentity), "failed-or-unknown"),
+  );
+  pass(() => assert.equal(statusAfterObservedQuit({}), "confirmed-clean-quit"));
+  const disposal = {
+    launches: [
+      {
+        status: "confirmed-clean-quit",
+        cleanup,
+        desktopIdentity: { guardianPid: 100, desktopPid: 101 },
+      },
+    ],
+    cleanup,
+    scenarioPassed: true,
+  };
+  pass(() => assertProfileDisposalEligible(disposal, 1));
+  reject(() =>
+    assertProfileDisposalEligible({ ...disposal, scenarioPassed: false }, 1),
+  );
+  reject(() =>
+    assertProfileDisposalEligible(
+      {
+        ...disposal,
+        launches: [
+          {
+            ...disposal.launches[0],
+            journeyError: failedIdentity.journeyError,
+            status: statusAfterObservedQuit(failedIdentity),
+          },
+        ],
+      },
+      1,
+    ),
+  );
+  reject(() =>
+    assertProfileDisposalEligible(
+      {
+        ...disposal,
+        launches: [{ ...disposal.launches[0], desktopIdentity: undefined }],
+      },
+      1,
+    ),
+  );
   const args = [
     "--candidate-root",
     "/tmp/candidate",
