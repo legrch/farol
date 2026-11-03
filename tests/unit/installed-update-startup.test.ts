@@ -1046,6 +1046,27 @@ describe("installed updater startup correlation (pure ports only)", () => {
     },
   );
 
+  it("retains a completed shared OTA when a later build is copied over it", async () => {
+    const f = unboundSharedFixture("completed");
+    f.records.set(
+      path.join(opRoot, "slot-binding.json"),
+      JSON.parse(installedSlotBindingBytes(operation, "shared").toString()),
+    );
+    const next = identity("0.1.2-owner.beta.1", "3", "5");
+    f.builds.set("/Applications/Farol.app", {
+      digest: "6".repeat(64),
+      version: next.version,
+      buildId: next.buildId,
+    });
+    const original = structuredClone([...f.records]);
+    await expect(
+      waitForInstalledUpdateRelaunch({ ...f.options, build: next }),
+    ).rejects.toThrow("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+    expect([...f.records]).toEqual(original);
+    expect(captureMock).not.toHaveBeenCalled();
+    expect(adoptionMocks.find).not.toHaveBeenCalled();
+  });
+
   it.each(["legacy", "shared"] as const)(
     "does not grant a correlated %s updater relaunch from an unbound operation",
     async (location) => {
