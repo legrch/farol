@@ -3408,6 +3408,20 @@ function selfTest() {
           {
             ...disposal.launches[0],
             journeyError: failedIdentity.journeyError,
+          },
+        ],
+      },
+      1,
+    ),
+  );
+  reject(() =>
+    assertProfileDisposalEligible(
+      {
+        ...disposal,
+        launches: [
+          {
+            ...disposal.launches[0],
+            journeyError: failedIdentity.journeyError,
             status: statusAfterObservedQuit(failedIdentity),
           },
         ],
