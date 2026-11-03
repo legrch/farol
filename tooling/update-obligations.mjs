@@ -2,7 +2,9 @@ import { activationObligations } from "./promotion-obligations.mjs";
 const [userData, pid] = process.argv.slice(2);
 if (!userData || !/^[1-9][0-9]*$/u.test(pid ?? "") || process.argv.length !== 4)
   throw new Error("UPDATE_OBLIGATION_ARGUMENTS_INVALID");
-const report = await activationObligations(userData);
+const report = await activationObligations(userData, {
+  allowSettledDeepTestResults: true,
+});
 // Only this exact running app is expected. Every other existing obligation
 // remains blocking; the caller holds the same admission lease through Quit.
 const obligations = report.obligations.filter(

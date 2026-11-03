@@ -189,6 +189,90 @@ describe("Q-08 activation obligations", () => {
     expect(report.changed).toContain("deep-test-records");
     expect(report.drained).toBe(false);
   });
+  it.each(["completed", "failed_before_submit", "not_authenticated"])(
+    "allows only the updater to retain a known terminal deep-test result: %s",
+    async (resultState) => {
+      const root = await userData();
+      const state = path.join(root, "farol-state");
+      const id = randomUUID();
+      const owner = new PrivateChatGptTaskJournal({
+        root: state,
+        deepTestOperationId: id,
+      });
+      await owner.prepare({ operationId: id, kind: "readonly" });
+      const result = {
+        state: resultState,
+        code: null,
+        deltaCount: 0,
+        observedCharacters: 0,
+      };
+      if (resultState === "completed") {
+        await owner.markDispatchIntent(id);
+        await owner.retainResult(id, result);
+      } else await owner.retainPreDispatchResult(id, result);
+      const file = path.join(state, `deep-test-${id}.json`);
+      const before = await fs.readFile(file);
+      expect((await activationObligations(root)).obligations).toContain(
+        "DEEP_TEST_PENDING:1",
+      );
+      expect(
+        await activationObligations(root, {
+          allowSettledDeepTestResults: true,
+        }),
+      ).toMatchObject({ drained: true, obligations: [] });
+      expect(await fs.readFile(file)).toEqual(before);
+    },
+  );
+  it("keeps an outcome-unknown deep test blocking the updater", async () => {
+    const root = await userData();
+    const id = randomUUID();
+    const owner = new PrivateChatGptTaskJournal({
+      root: path.join(root, "farol-state"),
+      deepTestOperationId: id,
+    });
+    await owner.prepare({ operationId: id, kind: "readonly" });
+    await owner.markDispatchIntent(id);
+    await owner.reconcileAfterRestart();
+    expect(
+      (await activationObligations(root, { allowSettledDeepTestResults: true }))
+        .obligations,
+    ).toContain("DEEP_TEST_PENDING:1");
+    expect((await owner.load()).result.state).toBe("outcome_unknown");
+  });
+  it.each(["send_requested", "attachment", "cleanup"])(
+    "keeps nonterminal or attachment deep-test work blocking the updater: %s",
+    async (scenario) => {
+      const root = await userData();
+      const id = randomUUID();
+      const state = path.join(root, "farol-state");
+      const value = journal({
+        operationId: id,
+        kind: scenario === "attachment" ? "attachment" : "readonly",
+        phase: "result_retained",
+        result: {
+          state: scenario === "send_requested" ? "send_requested" : "completed",
+          code: null,
+          deltaCount: 0,
+          observedCharacters: 0,
+          attachmentCount: scenario === "attachment" ? 1 : 0,
+          totalBytes: scenario === "attachment" ? 1 : 0,
+          stagingCleanup:
+            scenario === "cleanup" ? "pending_startup_cleanup" : null,
+        },
+      });
+      await writeFile(
+        path.join(state, `deep-test-${id}.json`),
+        JSON.stringify(value),
+      );
+      const report = await activationObligations(root, {
+        allowSettledDeepTestResults: true,
+      });
+      expect(report.drained).toBe(false);
+      if (scenario !== "attachment")
+        expect(report.obligations).toContain("DEEP_TEST_PENDING:1");
+      else expect(report.unreadable).not.toEqual([]);
+    },
+  );
   it("finds nothing to drain in a fresh or idle user-data root", async () => {
     const fresh = await userData();
     await expect(activationObligations(fresh)).resolves.toMatchObject({
