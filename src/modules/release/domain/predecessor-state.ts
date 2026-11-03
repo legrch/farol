@@ -5,6 +5,8 @@
  * Computer authority reader rejects retained no-access approvals/participants.
  * Through beta11, completed Shell results also reject the v6 supervised
  * process format written from beta12. No app+state downgrade is qualified yet.
+ * The 0.5.7 diagnostic reader also rejects 0.5.8 send-requested records
+ * and histories exceeding its 256-record limit.
  * Versions come from the
  * verified app pair; this guard refuses that restoration, not just its launch.
  * It does not attest state compatibility for any other release transition.
@@ -18,6 +20,7 @@ export function legacyPredecessorRequiresStateRecovery(
   return (
     (sourceVersion.startsWith("0.1.") && !targetVersion.startsWith("0.1.")) ||
     sourceVersion === "0.2.0-owner.beta.3" ||
+    (sourceVersion === "0.5.7" && targetVersion === "0.5.8") ||
     (previousStateReader.test(sourceVersion) &&
       !previousStateReader.test(targetVersion)) ||
     (previousProcessReader.test(sourceVersion) &&

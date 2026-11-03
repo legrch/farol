@@ -111,6 +111,62 @@ func TestConnectorMutationAtMostOnceAndOriginalOrigin(t *testing.T) {
 	}
 }
 
+type removeTestDigest struct{}
+
+func (removeTestDigest) Digest(port.MutationDigestInput) (string, error) {
+	return strings.Repeat("a", 64), nil
+}
+
+func TestConnectorRemoveOriginalOperationIsNotReplayed(t *testing.T) {
+	f := newConnectorFixture(t)
+	selection := f.selection
+	selection.Origin.Operation = state.RemoveKind
+	service, err := NewForConnectorExecution(selection, f.lease, f.store, f.native, removeTestDigest{}, &sync.Mutex{}, f.clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := strings.Repeat("a", 64)
+	f.native.run = func(ctx context.Context, r port.MutationRequest) (*port.MutationReceipt, error) {
+		if err := r.BeforePublish(ctx); err != nil {
+			return nil, err
+		}
+		return &port.MutationReceipt{Operation: "remove", RelativePath: r.Operation.Path(), BeforeSHA256: &hash}, nil
+	}
+	request := ConnectorRequest{WorkspaceID: "work", Operation: Remove{RelativePath: "note.md", ExpectedSHA256: hash}}
+	for i := 0; i < 2; i++ {
+		out, err := service.Execute(context.Background(), request)
+		if err != nil || out == nil || out.Phase != "completed" || out.Publication != "durable" || out.Receipt == nil || out.Receipt.Operation != "remove" || out.Receipt.BeforeSHA256 == nil || *out.Receipt.BeforeSHA256 != hash || out.Receipt.AfterSHA256 != "" {
+			t.Fatalf("bad retained result: %+v %v", out, err)
+		}
+	}
+	if f.native.calls != 1 || f.store.admissions != 1 || f.store.saves != 1 {
+		t.Fatal("remove was replayed")
+	}
+}
+
+func TestConnectorRemoveUnknownNeverRepeats(t *testing.T) {
+	f := newConnectorFixture(t)
+	selection := f.selection
+	selection.Origin.Operation = state.RemoveKind
+	service, err := NewForConnectorExecution(selection, f.lease, f.store, f.native, removeTestDigest{}, &sync.Mutex{}, f.clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.native.run = func(context.Context, port.MutationRequest) (*port.MutationReceipt, error) {
+		return nil, authority.Fail("WORKSPACE_MUTATION_OUTCOME_UNKNOWN", "native-workspace")
+	}
+	request := ConnectorRequest{WorkspaceID: "work", Operation: Remove{RelativePath: "note.md", ExpectedSHA256: strings.Repeat("a", 64)}}
+	for i := 0; i < 2; i++ {
+		out, err := service.Execute(context.Background(), request)
+		if err != nil || out == nil || out.Phase != "outcome_unknown" || out.Failure == nil || out.Failure.Code != "WORKSPACE_MUTATION_OUTCOME_UNKNOWN" {
+			t.Fatalf("unknown outcome lost: %+v %v", out, err)
+		}
+	}
+	if f.native.calls != 1 || f.store.admissions != 1 {
+		t.Fatal("unknown remove was replayed")
+	}
+}
+
 func TestConnectorMutationFullUint64ConnectorGenerationPreserved(t *testing.T) {
 	for name, generation := range map[string]uint64{"above-js-safe-integer": 9007199254740993, "max-uint64": ^uint64(0)} {
 		t.Run(name, func(t *testing.T) {

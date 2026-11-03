@@ -613,6 +613,10 @@ func TestRootScopedPlatformSystemRmHardlinkBoundary(t *testing.T) {
 		want  bool
 	}{
 		{"system-rm-pair", "/bin/rm", 0, 2, true},
+		{"system-readlink-pair", "/usr/bin/readlink", 0, 2, true},
+		{"system-readlink-extra", "/usr/bin/readlink", 0, 3, false},
+		{"owner-readlink-pair", "/usr/bin/readlink", 501, 2, false},
+		{"unselected-stat", "/usr/bin/stat", 0, 2, false},
 		{"system-single", "/bin/rm", 0, 1, true},
 		{"extra-alias", "/bin/rm", 0, 3, false},
 		{"owner-linked", "/bin/rm", 501, 2, false},

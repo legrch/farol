@@ -76,7 +76,33 @@ function button(host: Element, label: string) {
   if (!found) throw new Error(`BUTTON_MISSING:${label}`);
   return found;
 }
-it("shows the recorded event time in notifications without changing the outcome", async () => {
+it.each(["applied", "unknown"] as const)(
+  "acknowledges only a delivered Deep-test send request: %s",
+  async (state) => {
+    const { c, host } = await mount();
+    const configure = vi.spyOn(c, "configure").mockResolvedValue({
+      id: "fixture",
+      state,
+      code: null,
+    });
+    await act(async () => c.overlay("connection-tests"));
+    await act(async () => button(host, "Deep test").click());
+    const requests = configure.mock.calls.filter(
+      ([command]) => command.kind === "chatgpt.run-deep-test",
+    );
+    const acknowledgements = configure.mock.calls.filter(
+      ([command]) => command.kind === "chatgpt.ack-deep-test",
+    );
+    expect(requests).toHaveLength(1);
+    expect(acknowledgements).toHaveLength(state === "applied" ? 1 : 0);
+    if (state === "applied")
+      expect(acknowledgements[0]![0]).toEqual({
+        kind: "chatgpt.ack-deep-test",
+        operationId: (requests[0]![0] as { operationId: string }).operationId,
+      });
+  },
+);
+it("keeps an unconfirmed event in Activity without a notifications inbox", async () => {
   const f = fixture();
   vi.mocked(f.api.bootstrap).mockResolvedValue(completedBootstrap());
   const at = Date.UTC(2026, 9, 27, 14, 30);
@@ -113,15 +139,11 @@ it("shows the recorded event time in notifications without changing the outcome"
         </Services>,
       ),
     );
-    await act(async () => button(host, "Notifications").click());
-    const time = host.querySelector<HTMLTimeElement>(".notification-list time");
+    expect(host.querySelector('[aria-label="Notifications"]')).toBeNull();
+    await act(async () => c.navigate({ area: "activity" }));
+    const time = host.querySelector<HTMLTimeElement>(".operation-row time");
     expect(time?.dateTime).toBe(new Date(at).toISOString());
     expect(time?.textContent).toBe(new Date(at).toLocaleString());
-    vi.mocked(f.api.task).mockRejectedValueOnce(new Error("result lost"));
-    await act(async () => c.task({ kind: "task.create-chatgpt" }, "task:new"));
-    expect(host.querySelector(".notification-list")?.textContent).toContain(
-      "Time unavailable",
-    );
     expect(c.getSnapshot().activity[0]?.outcome).toBe("unknown");
     expect(f.api.configure).not.toHaveBeenCalled();
   } finally {
@@ -1772,7 +1794,8 @@ it.each(["full", "rail", "overlay"] as const)(
     const original = c.getSnapshot().intents["task:new"];
     expect(original?.state).toBe("unknown");
     expect(host.querySelector('[aria-label="New chat"]')).toBeNull();
-    await act(async () => button(host, "Notifications").click());
+    await act(async () => c.navigate({ area: "activity" }));
+    await act(async () => button(host, "Review unresolved actions").click());
     expect(c.getSnapshot().intents["task:new"]?.state).toBe("unknown");
     await act(async () => c.navigate({ area: "home" }));
     await act(async () => c.refresh());
@@ -1825,8 +1848,9 @@ it("keeps unknown task work discoverable after its options are dismissed and Hom
   await act(async () => c.toggleSidebar(false));
   expect(
     host.querySelector('.toolbar [aria-label="Notifications"]'),
-  ).not.toBeNull();
-  await act(async () => button(host, "Notifications").click());
+  ).toBeNull();
+  await act(async () => c.navigate({ area: "activity" }));
+  await act(async () => button(host, "Review unresolved actions").click());
   expect(
     Object.values(c.getSnapshot().intents).some(
       (intent) => intent.code === "TASK_CANCEL_FAILED",
@@ -3398,7 +3422,7 @@ it("shows a connected local tunnel separately from an uncertain app check", asyn
   expect(h.host.textContent).not.toContain(
     "Connected — ChatGPT can reach this Mac",
   );
-  expect(h.host.querySelector(".notification-count")).toBeTruthy();
+  expect(h.host.querySelector(".notification-count")).toBeNull();
   expect(
     vi
       .mocked(h.f.api.configure)
@@ -3433,5 +3457,5 @@ it("keeps a live workspace chooser out of attention until its result is unknown"
   expect(
     c.getSnapshot().intents["settings:computer.choose-workspace:"]?.inFlight,
   ).toBeUndefined();
-  expect(host.querySelector(".notification-count")).not.toBeNull();
+  expect(host.querySelector(".notification-count")).toBeNull();
 });

@@ -1,6 +1,6 @@
 {
   "schema": "farol-shell-platform/1",
-  "id": "macos-26A434-arm64-installed-runtime-v18",
+  "id": "macos-26A434-arm64-installed-runtime-v19",
   "osBuild": "26A434",
   "compiler": "approved-roots-seatbelt-v1",
   "filesystemClass": "system-apfs-kernel-mount-boundaries-v1",
@@ -121,7 +121,7 @@
     },
     {
       "path": "modules/computer/infra/process/platformqualification.go",
-      "sha256": "47bc37fa81ff1e0231a7c6abb5c30848fc58d2df2c725d8934596041672bc33b"
+      "sha256": "47011ec25749259a7b16a027ef09b54a6279c3cae35745a9bd69d2a4a1303493"
     },
     {
       "path": "modules/computer/infra/process/platformqualificationdarwin.go",
@@ -239,6 +239,18 @@
     {
       "path": "/bin/rm",
       "sha256": "a28fd10330466ee02c66cdbc4e2b0af23c236b773b1a8a3b210ff9613d9319d8"
+    },
+    {
+      "path": "/usr/bin/dirname",
+      "sha256": "e40020bf0d44992e1441ef735e5ae7a82662732435ebd13b10692b5c6257e1fa"
+    },
+    {
+      "path": "/bin/pwd",
+      "sha256": "aac9c568ec5dcb2c8caaba95500cfc4644f4930bf30aca812f3e30e75b643732"
+    },
+    {
+      "path": "/usr/bin/readlink",
+      "sha256": "2dc55748b64cf63d2452300bcf2cd3fc337425e76c76f8c484212026840d5a3c"
     }
   ],
   "watchdogSHA256": "ad321e34b2795d1910ff1a24f2b4249269f556dc7184ea64f353a851339f1582",

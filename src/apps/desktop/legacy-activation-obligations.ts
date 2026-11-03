@@ -15,6 +15,8 @@ import {
   ChatGptTaskJournalOperationIdSchema,
   DEEP_TEST_JOURNAL_PREFIX,
   MAX_CHATGPT_TASK_JOURNAL_BYTES,
+  MAX_DEEP_TEST_HISTORY_BYTES,
+  MAX_DEEP_TEST_HISTORY_RECORDS,
   type ChatGptTaskJournalRecord,
 } from "./chatgpt-task-journal-record.ts";
 import {
@@ -248,11 +250,19 @@ const STATE_FILES = [
 // identity checks and two scans detect ordinary displacement, but do not claim
 // confinement against a same-UID process that can swap and restore the root
 // entirely between checks. Such a process can already rewrite private state.
-const MAX_DEEP_TEST_ATTEMPTS = 256;
+
+type FlatDeepTestRead =
+  | Exclude<ReadState<readonly ChatGptTaskJournalRecord[]>, { status: "read" }>
+  | {
+      status: "read";
+      digest: string;
+      value: readonly ChatGptTaskJournalRecord[];
+      totalBytes: number;
+    };
 
 export async function readFlatDeepTestRecords(
   state: string,
-): Promise<ReadState<readonly ChatGptTaskJournalRecord[]>> {
+): Promise<FlatDeepTestRead> {
   let handle: FileHandle | undefined;
   let rootSeen = false;
   try {
@@ -292,9 +302,10 @@ export async function readFlatDeepTestRecords(
       )
     )
       return { status: "unreadable", digest: null, reason: "MALFORMED" };
-    if (names.length > MAX_DEEP_TEST_ATTEMPTS)
+    if (names.length > MAX_DEEP_TEST_HISTORY_RECORDS)
       return { status: "unreadable", digest: null, reason: "OVERSIZED" };
     const records: ChatGptTaskJournalRecord[] = [];
+    let totalBytes = 0n;
     const digest = createHash("sha256")
       .update(
         [before.dev, before.ino, before.mode, before.uid, before.gid].join(":"),
@@ -304,6 +315,9 @@ export async function readFlatDeepTestRecords(
       const id = name.slice(DEEP_TEST_JOURNAL_PREFIX.length, -5);
       const file = path.join(state, name);
       const fileBefore = await fs.lstat(file, { bigint: true });
+      totalBytes += fileBefore.size;
+      if (totalBytes > BigInt(MAX_DEEP_TEST_HISTORY_BYTES))
+        return { status: "unreadable", digest: null, reason: "OVERSIZED" };
       const fileIdentity = [
         fileBefore.dev,
         fileBefore.ino,
@@ -351,7 +365,12 @@ export async function readFlatDeepTestRecords(
       key(await fs.lstat(state, { bigint: true })) !== rootIdentity
     )
       throw new Error("CHANGED");
-    return { status: "read", digest: digest.digest("hex"), value: records };
+    return {
+      status: "read",
+      digest: digest.digest("hex"),
+      value: records,
+      totalBytes: Number(totalBytes),
+    };
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === "ENOENT" && !rootSeen
       ? { status: "absent", digest: null }

@@ -3,8 +3,10 @@ package desktop
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"strconv"
@@ -27,6 +29,7 @@ func (c readClock) Now() time.Time { return c.at }
 
 type readWorkspace struct {
 	result  port.ReadResponse
+	err     error
 	calls   int
 	request port.ReadRequest
 }
@@ -34,7 +37,14 @@ type readWorkspace struct {
 func (w *readWorkspace) Read(_ context.Context, r port.ReadRequest) (*port.ReadResponse, error) {
 	w.calls++
 	w.request = r
+	if w.err != nil {
+		return nil, w.err
+	}
 	return &w.result, nil
+}
+func (w *readWorkspace) AuthorizeReadDiagnostic(context.Context, port.ReadRequest) error { return nil }
+func (w *readWorkspace) BindReadDiagnostic(_ port.ReadRequest, value []byte) (string, error) {
+	return fmt.Sprintf("%x", sha256.Sum256(value)), nil
 }
 func (w *readWorkspace) List(context.Context, port.ListRequest) (*port.ListResponse, error) {
 	panic("not used")
@@ -122,6 +132,62 @@ func TestReadRefusalPreservesOwnerSourceAndRetry(t *testing.T) {
 				t.Fatalf("wrong refusal %+v, calls %d", refused, native.calls)
 			}
 		})
+	}
+}
+
+func TestReadClassifiedRefusalCarriesOnlySafePair(t *testing.T) {
+	for _, tc := range []struct {
+		stage, reason string
+		want          bool
+	}{
+		{"policy", "policy_denied", true},
+		{"target", "link_not_supported", true},
+		{"policy", "unsafe_root", false},
+		{"target", "/private/path", false},
+	} {
+		out := readClassifiedRefusal(nil, &workspacect.Failure{Code: "WORKSPACE_PATH_REFUSED", Source: "native-workspace", Retry: "never", Stage: tc.stage, Reason: tc.reason})
+		var result wire.ComputerReadRefusal
+		if err := json.Unmarshal(out.Data, &result); err != nil || wire.Validate("ComputerReadRefusal", out.Data) != nil {
+			t.Fatalf("invalid refusal: %s %v", out.Data, err)
+		}
+		if (result.Stage != nil) != tc.want || (result.Reason != nil) != tc.want || result.Retry != "never" {
+			t.Fatalf("wrong diagnostic: %+v", result)
+		}
+		if tc.want && (*result.Stage != tc.stage || *result.Reason != tc.reason) {
+			t.Fatalf("wrong values: %+v", result)
+		}
+	}
+}
+
+func TestReadNativeDiagnosticCrossesServiceContractAndWire(t *testing.T) {
+	contract, native, _, body := readContractFixture(t)
+	method := ReadMethod(contract, wire.Context{ProfileId: "test", BackendGeneration: "generation"})
+	native.err = &authority.Failure{Code: "WORKSPACE_PATH_REFUSED", Source: "native-workspace", Retry: "never", Stage: "policy", Reason: "policy_denied"}
+	out := invokeRead(t, method, body)
+	var result wire.ComputerReadRefusal
+	if err := json.Unmarshal(out.Data, &result); err != nil || wire.Validate("ComputerReadRefusal", out.Data) != nil {
+		t.Fatalf("invalid refusal: %s %v", out.Data, err)
+	}
+	if out.Status != "refused" || result.Stage == nil || *result.Stage != "policy" || result.Reason == nil || *result.Reason != "policy_denied" || result.Retry != "never" || native.calls != 1 {
+		t.Fatalf("diagnostic lost: %+v", result)
+	}
+	authorize := ReadDiagnosticAuthorizationMethod(func(context.Context, ReadOperation) (*workspacect.Contract, error) { return contract, nil })
+	authorized := invokeRead(t, authorize, body)
+	var proof wire.ComputerReadDiagnosticAuthorizationResponse
+	if json.Unmarshal(authorized.Data, &proof) != nil || authorized.Status != "ok" || result.DiagnosticBinding == nil || len(proof.DiagnosticBinding) != 64 || *result.DiagnosticBinding != proof.DiagnosticBinding || native.calls != 1 {
+		t.Fatal("authorization did not bind the original refusal without another read")
+	}
+}
+
+func TestDiagnosticAuthorizationUsesCurrentGrantWithoutNativeRead(t *testing.T) {
+	contract, native, access, body := readContractFixture(t)
+	method := ReadDiagnosticAuthorizationMethod(func(context.Context, ReadOperation) (*workspacect.Contract, error) { return contract, nil })
+	if out := invokeRead(t, method, body); out.Status != "ok" || native.calls != 0 {
+		t.Fatalf("authorization did not remain policy-only: %+v", out)
+	}
+	access.RevokeParticipant("participant")
+	if out := invokeRead(t, method, body); out.Status != "refused" || native.calls != 0 {
+		t.Fatalf("revoked authority disclosed: %+v", out)
 	}
 }
 func TestReadRejectsMalformedTypedBodiesBeforeOwner(t *testing.T) {

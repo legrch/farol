@@ -1,5 +1,6 @@
 import { operationsDirectoryFromLifecycleRoot } from "../operations/paths";
 import { OperationsStore } from "../operations/store";
+import { randomUUID } from "node:crypto";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import {
   ConnectorMutationBridge,
@@ -32,6 +33,8 @@ export async function runGoComputerMcp(file: string): Promise<void> {
   let processes: ConnectorProcessBridge | undefined;
   let codexRead: SelectedCodexReadBridge | undefined;
   let connectionStatusAvailable = false;
+  let readDiagnosticAuthorizationAvailable = false;
+  let removalAvailable = false;
   try {
     const identity = await client.connect();
     codexRead = selectedCodexReadBridge(client, launch.opened, identity);
@@ -39,6 +42,12 @@ export async function runGoComputerMcp(file: string): Promise<void> {
     // without this method must not advertise a status tool that cannot work.
     connectionStatusAvailable = identity.capabilities.includes(
       "computer.connector.verification",
+    );
+    readDiagnosticAuthorizationAvailable = identity.capabilities.includes(
+      "computer.workspace.readdiagnosticauthorize",
+    );
+    removalAvailable = identity.capabilities.includes(
+      "computer.workspace.remove",
     );
     if (connectorSupportsMutations(identity)) {
       mutations = new ConnectorMutationBridge(
@@ -80,6 +89,8 @@ export async function runGoComputerMcp(file: string): Promise<void> {
         client.verifiedContext,
         {
           operations,
+          refreshWorkspaceLabels: () =>
+            operations.loadWorkspaceLabels(100, true),
           executionOrigin: {
             buildId: launch.opened.endpoint.binding.buildId,
             runtimeId: launch.opened.endpoint.binding.runtimeId,
@@ -88,6 +99,38 @@ export async function runGoComputerMcp(file: string): Promise<void> {
           lifecycle,
           fence,
           verification,
+          ...(readDiagnosticAuthorizationAvailable
+            ? {
+                diagnosticLookup: (
+                  requestId: string,
+                  workspaceId: string,
+                  relativePath: string,
+                ) =>
+                  operations.lookupReadDiagnostic(
+                    requestId,
+                    workspaceId,
+                    relativePath,
+                    async (workspace, target) => {
+                      const call = {
+                        requestId: randomUUID(),
+                        context: client.verifiedContext,
+                      };
+                      const result = await bridge.authorizeReadDiagnostic(
+                        {
+                          ...launch.opened.execution,
+                          callId: call.requestId,
+                          workspaceId: workspace,
+                          relativePath: target,
+                        },
+                        call,
+                      );
+                      return result.status === "ok"
+                        ? result.data.diagnosticBinding
+                        : null;
+                    },
+                  ),
+              }
+            : {}),
           onEffectUnknown: () => {
             effectOutcomeUnknown = true;
           },
@@ -95,6 +138,7 @@ export async function runGoComputerMcp(file: string): Promise<void> {
             ? { connectionStatus: verification }
             : {}),
           ...(mutations ? { mutations } : {}),
+          ...(mutations && removalAvailable ? { removal: mutations } : {}),
           ...(processes ? { processes } : {}),
           ...(codexRead ? { codexRead } : {}),
         },

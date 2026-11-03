@@ -252,13 +252,14 @@ describe("closed renderer destinations", () => {
     [
       "failed_before_submit",
       "CHATGPT_COMPOSER_DRAFT_PRESENT",
-      "Deep test was not submitted",
+      "Deep test was not sent",
     ],
     [
       "outcome_unknown",
       "CHATGPT_TASK_ERROR",
-      "Deep test outcome is unconfirmed",
+      "Could not confirm whether the request was sent",
     ],
+    ["send_requested", null, "Send requested. View ChatGPT."],
   ] as const)(
     "keeps %s feedback visible after the overlay closes",
     async (state, code, text) => {
@@ -320,7 +321,9 @@ describe("closed renderer destinations", () => {
       .spyOn(h.c, "configure")
       .mockRejectedValueOnce(Error("lost"));
     await h.click("Deep test");
-    expect(h.host.textContent).toContain("Deep test outcome is unconfirmed");
+    expect(h.host.textContent).toContain(
+      "Could not confirm whether the request was sent",
+    );
     expect(send).toHaveBeenCalledTimes(1);
   });
   it("keeps a lost IPC reply unknown after the menu closes without resending", async () => {
@@ -342,7 +345,9 @@ describe("closed renderer destinations", () => {
         .click(),
     );
     await h.click("Deep test");
-    expect(h.host.textContent).toContain("Deep test outcome is unconfirmed");
+    expect(h.host.textContent).toContain(
+      "Could not confirm whether the request was sent",
+    );
     expect(
       vi
         .mocked(h.f.api.configure)
@@ -456,7 +461,7 @@ describe("Unresolved actions sheet", () => {
   it("shows unknown cause and retained identity, never resubmits, and restores focus after Escape", async () => {
     const h = await mount({ page: "general", shell: true });
     await unknown(h);
-    const trigger = h.button("Notifications")!;
+    const trigger = h.button("Find a page")!;
     trigger.focus();
     vi.mocked(h.f.api.configure).mockClear();
     await act(async () => h.c.overlay("unresolved-actions"));
@@ -565,12 +570,6 @@ describe("Unresolved actions sheet", () => {
 describe("former callers open their real home", () => {
   const callers = [
     {
-      name: "shell notifications action",
-      from: "rail",
-      to: "notifications",
-      control: '[aria-label="Notifications"]',
-    },
-    {
       name: "ChatGPT placeholder unresolved action",
       from: "browser",
       to: "unresolved-actions",
@@ -654,12 +653,7 @@ describe("former callers open their real home", () => {
     vi.mocked(h.f.api.configure).mockClear();
     vi.mocked(h.f.api.task).mockClear();
     await act(async () => control!.click());
-    if (caller.to === "notifications") {
-      expect(
-        h.host.querySelector('dialog[aria-label="Notifications"]'),
-      ).toBeTruthy();
-      expect(h.c.getSnapshot().overlay).toBe("notifications");
-    } else if (caller.to === "unresolved-actions") {
+    if (caller.to === "unresolved-actions") {
       expect(h.host.querySelector(selector)).toBeTruthy();
       expect(h.c.getSnapshot().overlay).toBe("unresolved-actions");
     } else {

@@ -1709,12 +1709,14 @@ kbd {
   flex: 1;
   min-width: 180px;
 }
-.operation-row {
+.operation-row,
+.operation-group {
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 14px;
 }
-.operation-row summary {
+.operation-row > summary,
+.operation-group > summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1729,8 +1731,12 @@ kbd {
   color: var(--muted);
   overflow-wrap: anywhere;
 }
-.operation-row[open] summary {
+.operation-row[open] > summary,
+.operation-group[open] > summary {
   margin-bottom: 16px;
+}
+.operation-group > .operation-row + .operation-row {
+  margin-top: 8px;
 }
 .operation-outcome {
   color: var(--muted);
@@ -1786,46 +1792,6 @@ kbd {
   .sign-in-context > span {
     display: none;
   }
-}
-
-.notifications-trigger {
-  position: relative;
-  flex: none;
-}
-.notification-count {
-  position: absolute;
-  top: -3px;
-  right: -4px;
-  min-width: 16px;
-  padding: 0 3px;
-  border-radius: 8px;
-  background: var(--accent);
-  color: white;
-  font-size: 10px;
-  line-height: 16px;
-}
-.notification-list {
-  list-style: none;
-  margin: 16px 0;
-  padding: 0;
-}
-.notification-list li {
-  padding: 16px 0;
-  border-top: 1px solid var(--line);
-}
-.notification-list p {
-  color: var(--muted);
-}
-.notification-time {
-  display: block;
-  color: var(--muted);
-  font-size: 12px;
-  margin-top: 4px;
-}
-.notification-list li > div {
-  display: flex;
-  gap: 8px;
-  margin-top: 8px;
 }
 
 .connection-test-control {

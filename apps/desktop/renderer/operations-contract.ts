@@ -73,10 +73,39 @@ export const OperationTargetSchema = z.strictObject({
   handle: z.literal("unrecognized").optional(),
   start: z.literal("unknown").optional(),
 });
+// Path-free native categories only; a diagnostic is never an authority grant.
+export const WorkspaceReadDiagnosticSchema = z.discriminatedUnion("stage", [
+  z.strictObject({
+    stage: z.literal("policy"),
+    reason: z.literal("policy_denied"),
+  }),
+  z.strictObject({
+    stage: z.literal("root"),
+    reason: z.enum(["unsafe_root", "os_permission_denied"]),
+  }),
+  z.strictObject({
+    stage: z.literal("ancestor"),
+    reason: z.enum(["link_not_supported", "os_permission_denied"]),
+  }),
+  z.strictObject({
+    stage: z.literal("target"),
+    reason: z.enum([
+      "link_not_supported",
+      "hardlink_not_supported",
+      "os_permission_denied",
+    ]),
+  }),
+]);
 export const OperationMetadataSchema = z.strictObject({
   source: z.enum(operationSources),
   kind: z.enum(operationKinds),
   target: OperationTargetSchema,
+  requestId: z.string().uuid().optional(),
+  readDiagnostic: WorkspaceReadDiagnosticSchema.optional(),
+  diagnosticBinding: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/u)
+    .optional(),
 });
 export const OperationOutcomeSchema = z.enum(operationOutcomes);
 export const OperationDurationSchema = z.number().int().nonnegative().safe();
@@ -198,15 +227,28 @@ const OperationEntryV2Schema = OperationEntryV1Schema.extend({
   auditDetails: AuditDetailsSchema.optional(),
 });
 // strict V1 prevents unknown future schema versions from being read as V1.
-export const OperationEntrySchema = z.union([
-  OperationEntryV1Schema,
-  OperationEntryV2Schema,
-]);
+export const OperationEntrySchema = z
+  .union([OperationEntryV1Schema, OperationEntryV2Schema])
+  .refine(
+    (entry) =>
+      (entry.readDiagnostic === undefined &&
+        entry.diagnosticBinding === undefined) ||
+      (entry.readDiagnostic !== undefined &&
+        entry.kind === "computer_workspace_read" &&
+        entry.outcome === "refused" &&
+        entry.code === "WORKSPACE_PATH_REFUSED" &&
+        entry.requestId !== undefined &&
+        entry.diagnosticBinding !== undefined),
+    "Read diagnostics require a correlated refused workspace read",
+  );
 export type OperationEntry = z.infer<typeof OperationEntrySchema>;
 /** Adapter workspace values are unresolved IDs, never display labels. The
  * recorder resolves them against owner configuration before any sink sees them. */
 export type OperationMetadata = Pick<OperationEntry, "source"> & {
   kind: string;
+  requestId?: string | undefined;
+  readDiagnostic?: z.infer<typeof WorkspaceReadDiagnosticSchema> | undefined;
+  diagnosticBinding?: string | undefined;
   target: Omit<
     OperationEntry["target"],
     "command" | "handle" | "workspaceIdentity"

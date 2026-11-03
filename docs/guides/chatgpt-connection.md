@@ -22,4 +22,10 @@ Farol checks the exact selection and retains the attempt. If the check becomes u
 
 Use [Troubleshooting](troubleshooting.md) for a mismatch and [Recovery](recovery.md) for an unknown result. Review [Workspace access](folder-access.md) before asking ChatGPT to read project files.
 
+## Manual tests in ChatGPT
+
+The ChatGPT toolbar offers **Test connection** and **Deep test** as requests in the current chat. Farol checks the selected app and the existing draft before requesting one Send; **Send requested** confirms the click acknowledgement, while the response and its diagnostic findings appear in ChatGPT. Starting or running a manual test does not itself change the verified Setup receipt or connection status; a real connection change remains visible. If Send cannot be confirmed, check the chat before starting a new test.
+
+**Activity** shows requests by default. Select **System** to inspect background connection observations or **All** to see both. A terminal process record displays its exit separately from the fact that the observation was recorded; expand the entry for its details.
+
 [User guides](README.md) · [Documentation](../README.md)

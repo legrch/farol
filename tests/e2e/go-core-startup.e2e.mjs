@@ -44,6 +44,7 @@ import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness
  * then completes normal Settings/Go retirement without replacing the backend.
  */
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
@@ -142,6 +143,7 @@ import {
   runHistoryReadJourney,
 } from "./lib/chat-history-witness.mjs";
 import { browserFailureCollector } from "./lib/browser-failure-witness.mjs";
+import { readOwnedChildProcesses } from "./runtime-process.mjs";
 import { reportRetiredJourney } from "../../tooling/setup-journey-retirement.mjs";
 
 const root = path.resolve(
@@ -151,6 +153,131 @@ const root = path.resolve(
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const hex40 = /^[a-f0-9]{40}$/u;
 const hex64 = /^[a-f0-9]{64}$/u;
+
+// Process titles on macOS may replace argv. Ask the kernel for the executable
+// instead of treating the display title as an executable path.
+const executableWitnessScript = `function run(argv) {
+  ObjC.import("Foundation");
+  ObjC.bindFunction("proc_pidpath", ["int", ["int", "void *", "uint32_t"]]);
+  ObjC.bindFunction("proc_pidinfo", ["int", ["int", "int", "uint64_t", "void *", "int"]]);
+  const pid = Number(argv[0]);
+  if (!Number.isSafeInteger(pid) || pid < 2) throw Error("invalid pid");
+  function info() {
+    const data = $.NSMutableData.dataWithLength(136);
+    if ($.proc_pidinfo(pid, 3, 0, data.mutableBytes, 136) !== 136)
+      throw Error("proc_pidinfo failed");
+    return ObjC.unwrap(data.base64EncodedStringWithOptions(0));
+  }
+  const before = info();
+  const buffer = $.NSMutableData.dataWithLength(4096);
+  const length = $.proc_pidpath(pid, buffer.mutableBytes, 4096);
+  if (length <= 0 || length >= 4096) throw Error("proc_pidpath failed");
+  const executable = ObjC.unwrap($.NSString.alloc.initWithDataEncoding(
+    buffer.subdataWithRange($.NSMakeRange(0, length)), $.NSUTF8StringEncoding));
+  return JSON.stringify({ before, executable, after: info() });
+}`;
+
+function parseNativeExecutableWitness(witness, pid) {
+  const decode = (raw) => {
+    const value = Buffer.from(raw, "base64");
+    assert.equal(value.length, 136, "DESKTOP_NATIVE_INFO_INVALID");
+    return {
+      pid: value.readUInt32LE(12),
+      parentPid: value.readUInt32LE(16),
+      startSeconds: value.readBigUInt64LE(120),
+      startMicroseconds: value.readBigUInt64LE(128),
+    };
+  };
+  const before = decode(witness.before);
+  const after = decode(witness.after);
+  assert.deepEqual(after, before, "DESKTOP_NATIVE_LIFETIME_CHANGED");
+  assert.equal(before.pid, pid, "DESKTOP_NATIVE_PID_MISMATCH");
+  return {
+    executable: witness.executable,
+    parentPid: before.parentPid,
+    startSeconds: before.startSeconds.toString(),
+    startMicroseconds: before.startMicroseconds.toString(),
+  };
+}
+
+function nativeExecutableWitness(pid) {
+  assert.ok(Number.isSafeInteger(pid) && pid > 1, "DESKTOP_PID_INVALID");
+  const output = execFileSync(
+    "/usr/bin/osascript",
+    ["-l", "JavaScript", "-e", executableWitnessScript, "--", String(pid)],
+    { encoding: "utf8", timeout: 3000, maxBuffer: 8192 },
+  );
+  return parseNativeExecutableWitness(JSON.parse(output), pid);
+}
+
+// The packaged launcher is a retained Go guardian; Electron is its child.
+// The Dev launcher still directly owns Electron under the same PID contract.
+// This qualifies identity only, never terminal or descendant-cleanup evidence.
+function qualifyDesktopMain({
+  packaged,
+  guardianPid,
+  marker,
+  desktop,
+  children,
+  expectedExecutable,
+  nativeExecutable,
+  nativeExecutableBefore,
+}) {
+  assert.ok(
+    Number.isSafeInteger(guardianPid) && guardianPid > 1,
+    "GUARDIAN_PID_INVALID",
+  );
+  assert.ok(
+    Number.isSafeInteger(desktop.pid) && desktop.pid > 1,
+    "DESKTOP_PID_INVALID",
+  );
+  assert.equal(marker.pid, desktop.pid, "RUN_MARKER_DESKTOP_MISMATCH");
+  if (!packaged) {
+    assert.equal(desktop.pid, guardianPid, "DEV_MAIN_PID_MISMATCH");
+    return { guardianPid, desktopPid: desktop.pid };
+  }
+  assert.notEqual(desktop.pid, guardianPid, "PACKAGED_GUARDIAN_IS_DESKTOP");
+  assert.equal(desktop.ppid, guardianPid, "DESKTOP_PARENT_MISMATCH");
+  assert.equal(
+    desktop.executable,
+    expectedExecutable,
+    "DESKTOP_EXECUTABLE_MISMATCH",
+  );
+  const matches = children.filter((entry) => entry.pid === desktop.pid);
+  assert.equal(matches.length, 1, "DESKTOP_CHILD_UNCONFIRMED");
+  const observed = matches[0];
+  assert.equal(
+    observed.parentPid,
+    guardianPid,
+    "DESKTOP_CHILD_PARENT_MISMATCH",
+  );
+  assert.equal(
+    observed.processStart,
+    marker.processStart,
+    "DESKTOP_START_MISMATCH",
+  );
+  assert.equal(
+    nativeExecutable?.executable,
+    expectedExecutable,
+    "DESKTOP_NATIVE_EXECUTABLE_MISMATCH",
+  );
+  assert.equal(
+    nativeExecutable?.parentPid,
+    guardianPid,
+    "DESKTOP_NATIVE_PARENT_MISMATCH",
+  );
+  assert.deepEqual(
+    nativeExecutable,
+    nativeExecutableBefore,
+    "DESKTOP_NATIVE_LIFETIME_CHANGED",
+  );
+  return {
+    guardianPid,
+    desktopPid: desktop.pid,
+    desktopStart: observed.processStart,
+  };
+}
+
 const contract = Object.freeze({
   schema: "farol-go-core-startup-harness/1",
   applicationUnderTest:
@@ -772,6 +899,37 @@ function cleanClosure(cleanup) {
   assert.equal(cleanup.siteClosed, true, "FIXTURE_CLOSE_UNKNOWN");
 }
 
+function statusAfterObservedQuit(launch) {
+  return launch.journeyError === undefined
+    ? "confirmed-clean-quit"
+    : "failed-or-unknown";
+}
+
+function assertProfileDisposalEligible(report, expectedLaunches) {
+  for (const receipt of report.launches) {
+    cleanLaunchClosure(receipt.cleanup);
+    assert.equal(
+      receipt.status,
+      "confirmed-clean-quit",
+      "LIFECYCLE_EVIDENCE_UNCONFIRMED",
+    );
+    assert.equal(
+      receipt.journeyError,
+      undefined,
+      "JOURNEY_FAILURE_RETAINS_PROFILE",
+    );
+    assert.ok(receipt.desktopIdentity, "DESKTOP_IDENTITY_UNCONFIRMED");
+  }
+  assert.equal(
+    report.launches.length,
+    expectedLaunches,
+    "LAUNCH_SEQUENCE_INCOMPLETE",
+  );
+  cleanClosure(report.cleanup);
+  assert.equal(report.cleanup.ledgerError, undefined);
+  assert.equal(report.scenarioPassed, true, "SCENARIO_FAILURE_RETAINS_PROFILE");
+}
+
 function retainedSettings(current, previous) {
   for (const key of ["computerId", "name", "generation"])
     assert.equal(
@@ -913,7 +1071,7 @@ function handoffWitness(record, scope, buildId, previous) {
   }
 }
 
-function permitCleanReopen(launch) {
+function permitCleanReopen(launch, fresh = false) {
   assert.equal(
     launch.status,
     "confirmed-clean-quit",
@@ -921,13 +1079,25 @@ function permitCleanReopen(launch) {
   );
   cleanLaunchClosure(launch.cleanup);
   assert.ok(
-    launch.quitReceipt && launch.retiredJournal && launch.terminalHandoff,
+    launch.quitReceipt &&
+      launch.retiredJournal &&
+      (fresh || launch.terminalHandoff),
     "FIRST_TERMINAL_EVIDENCE_MISSING",
   );
 }
-function permitReopen(launch) {
-  permitCleanReopen(launch);
+function permitReopen(launch, fresh = false) {
+  permitCleanReopen(launch, fresh);
   zeroSends(launch.terminalLedger);
+}
+
+function freshChatRootPath(parent, context) {
+  assert.ok(
+    context &&
+      typeof context.backendGeneration === "string" &&
+      context.backendGeneration.length > 0,
+    "FRESH_GENERATION_UNKNOWN",
+  );
+  return path.join(parent, `fresh-${hash(context.backendGeneration)}`, "chat");
 }
 
 function quitWitness(quit, marker, previous) {
@@ -999,6 +1169,14 @@ function unconfigured(bootstrap) {
 
 async function native(selected, inputs, report, save) {
   assert.equal(process.platform, "darwin", "DARWIN_NATIVE_LANE_REQUIRED");
+  // The basic packaged restart uses the current independent fresh-session
+  // contract. Legacy handoff witnesses retain their original strict behavior.
+  const freshReopen =
+    selected.reopen &&
+    !selected.readDiscard &&
+    !selected.settingsEditMutation &&
+    !selected.settingsIdleDelay &&
+    !selected.chatHistoryReopen;
   // Explicit dependency location uses installed bytes; never install or link.
   assert.equal(
     await fs.realpath(selected.dependencyRoot),
@@ -1377,14 +1555,31 @@ async function native(selected, inputs, report, save) {
   };
   const captureJournal = async (label, previous, retired = false) => {
     const coreRoot = await physicalDirectory(path.join(stateRoot, "go-core"));
-    const chatRoot = await physicalDirectory(path.join(coreRoot.path, "chat"));
+    const chatParent = path.join(coreRoot.path, "chat");
+    const chatRoot = await physicalDirectory(
+      freshReopen
+        ? freshChatRootPath(chatParent, launch.historyContext)
+        : chatParent,
+    );
     if (report.launches[0].physical) {
       assert.deepEqual(
-        { coreRoot, chatRoot },
-        report.launches[0].physical,
+        coreRoot,
+        report.launches[0].physical.coreRoot,
         "REOPEN_PHYSICAL_ROOT_CHANGED",
       );
+      if (!freshReopen)
+        assert.deepEqual(
+          chatRoot,
+          report.launches[0].physical.chatRoot,
+          "REOPEN_PHYSICAL_ROOT_CHANGED",
+        );
     }
+    if (launch.physical)
+      assert.deepEqual(
+        { coreRoot, chatRoot },
+        launch.physical,
+        "CURRENT_PHYSICAL_ROOT_CHANGED",
+      );
     launch.physical = { coreRoot, chatRoot };
     const profile = await document(
       path.join(coreRoot.path, "profile.json"),
@@ -1425,8 +1620,23 @@ async function native(selected, inputs, report, save) {
         journal.value,
         profile.value.profileId,
         chatRoot,
-        previous,
+        freshReopen ? undefined : previous,
         retired,
+      );
+    if (freshReopen && previous)
+      assert.notEqual(
+        journal.value.scope.BackendGeneration,
+        previous.scope.BackendGeneration,
+        "BACKEND_GENERATION_REUSED",
+      );
+    if (freshReopen)
+      assert.deepEqual(
+        journal.value.scope,
+        {
+          ProfileID: launch.historyContext.profileId,
+          BackendGeneration: launch.historyContext.backendGeneration,
+        },
+        "FRESH_CONTEXT_MISMATCH",
       );
     if (retired) {
       assert.ok(launch.readyJournal, "READY_JOURNAL_NOT_OBSERVED");
@@ -1610,7 +1820,7 @@ async function native(selected, inputs, report, save) {
             : undefined,
           true,
         );
-        await captureHandoff();
+        if (!freshReopen) await captureHandoff();
       }
       cleanLaunchClosure(launch.cleanup);
       if (typedAuthorityError) throw typedAuthorityError;
@@ -1633,7 +1843,7 @@ async function native(selected, inputs, report, save) {
         );
         await save();
       }
-      launch.status = "confirmed-clean-quit";
+      launch.status = statusAfterObservedQuit(launch);
     } catch (error) {
       if (launch.status !== "quit-go-core-unconfirmed")
         launch.status = "failed-or-unknown";
@@ -1744,6 +1954,7 @@ async function native(selected, inputs, report, save) {
       exited.catch(() => undefined);
       const window = await application.firstWindow({ timeout: 15000 });
       const bootstrap = await ready(window, active);
+      if (freshReopen) launch.historyContext = bootstrap.chatHistoryContext;
       const settings =
         (hasWorkspace || selected.chatTyped) && ordinal === 2
           ? bootstrap.configuration.settings
@@ -1808,11 +2019,35 @@ async function native(selected, inputs, report, save) {
         4096,
       );
       assert.equal(launch.runMarker.value.schema, 1);
-      assert.equal(
-        launch.runMarker.value.pid,
-        child.pid,
-        "RUN_MARKER_CHILD_MISMATCH",
+      const nativeExecutableBefore = selected.packaged
+        ? nativeExecutableWitness(launch.runMarker.value.pid)
+        : undefined;
+      const desktop = await bounded(
+        application.evaluate(() => ({
+          pid: process.pid,
+          ppid: process.ppid,
+          executable: process.execPath,
+        })),
+        3000,
+        "DESKTOP_IDENTITY_UNKNOWN",
       );
+      launch.desktopIdentity = qualifyDesktopMain({
+        packaged: Boolean(selected.packaged),
+        guardianPid: child.pid,
+        marker: launch.runMarker.value,
+        desktop,
+        children: selected.packaged ? readOwnedChildProcesses(child.pid) : [],
+        expectedExecutable: selected.packaged
+          ? path.join(
+              selected.packaged,
+              "Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron",
+            )
+          : undefined,
+        nativeExecutable: selected.packaged
+          ? nativeExecutableWitness(desktop.pid)
+          : undefined,
+        nativeExecutableBefore,
+      });
       assert.ok(
         Number.isFinite(Date.parse(launch.runMarker.value.startedAt)),
         "RUN_MARKER_TIME_UNKNOWN",
@@ -1910,7 +2145,7 @@ async function native(selected, inputs, report, save) {
       .getByRole("button", { name: "Settings", exact: true })
       .click({ timeout: 5000 });
     await window
-      .locator(".contextual-sidebar")
+      .getByRole("navigation", { name: "Settings navigation" })
       .getByRole("button", { name: "Appearance", exact: true })
       .click({ timeout: 5000 });
     await window
@@ -2689,7 +2924,7 @@ async function native(selected, inputs, report, save) {
           report.launches[0].readyJournal.value,
           historyOriginals(report.chatTwoTurn),
         );
-      } else permitReopen(report.launches[0]);
+      } else permitReopen(report.launches[0], freshReopen);
       active();
       const reattested = await attest(selected);
       assert.deepEqual(reattested, inputs, "ARTIFACT_CHANGED_BEFORE_REOPEN");
@@ -2739,7 +2974,8 @@ async function native(selected, inputs, report, save) {
         "reopen-ready",
         report.launches[0].readyJournal.value,
       );
-      await captureHandoff(report.launches[0].terminalHandoff);
+      if (!freshReopen)
+        await captureHandoff(report.launches[0].terminalHandoff);
       if (selected.chatHistoryReopen) {
         retainedApprovedSettings(reopened.settings, savedSettings.value);
         if (selected.chatTyped)
@@ -3041,27 +3277,10 @@ async function native(selected, inputs, report, save) {
     process.off("SIGINT", cancel);
     process.off("SIGTERM", cancel);
     try {
-      for (const receipt of report.launches) {
-        cleanLaunchClosure(receipt.cleanup);
-        assert.equal(
-          receipt.status,
-          "confirmed-clean-quit",
-          "LIFECYCLE_EVIDENCE_UNCONFIRMED",
-        );
-      }
-      assert.equal(
-        report.launches.length,
+      assertProfileDisposalEligible(
+        report,
         selected.reopen || selected.chatHistoryReopen ? 2 : 1,
-        "LAUNCH_SEQUENCE_INCOMPLETE",
       );
-      cleanClosure(report.cleanup);
-      assert.equal(report.cleanup.ledgerError, undefined);
-      if (selected.reopen || selected.chatTwoTurn)
-        assert.equal(
-          report.scenarioPassed,
-          true,
-          "REOPEN_EVIDENCE_RETAINED_AFTER_FAILURE",
-        );
       await fs.rm(temporary, { recursive: true });
       report.cleanup.temporaryRemoved = true;
     } catch (error) {
@@ -3092,6 +3311,93 @@ function selfTest() {
     assert.throws(call);
     checks++;
   };
+  const nativeInfo = (microseconds) => {
+    const value = Buffer.alloc(136);
+    value.writeUInt32LE(101, 12);
+    value.writeUInt32LE(100, 16);
+    value.writeBigUInt64LE(42n, 120);
+    value.writeBigUInt64LE(microseconds, 128);
+    return value.toString("base64");
+  };
+  const nativeFixture = {
+    before: nativeInfo(1n),
+    after: nativeInfo(1n),
+    executable: "/app/Electron",
+  };
+  pass(() =>
+    assert.deepEqual(parseNativeExecutableWitness(nativeFixture, 101), {
+      executable: "/app/Electron",
+      parentPid: 100,
+      startSeconds: "42",
+      startMicroseconds: "1",
+    }),
+  );
+  reject(() =>
+    parseNativeExecutableWitness(
+      { ...nativeFixture, after: nativeInfo(2n) },
+      101,
+    ),
+  );
+  reject(() => parseNativeExecutableWitness(nativeFixture, 102));
+  reject(() =>
+    parseNativeExecutableWitness({ ...nativeFixture, before: "" }, 101),
+  );
+  const launcherFixture = {
+    packaged: true,
+    guardianPid: 100,
+    marker: { pid: 101, processStart: "start" },
+    desktop: { pid: 101, ppid: 100, executable: "/app/Electron" },
+    children: [
+      {
+        pid: 101,
+        parentPid: 100,
+        processStart: "start",
+        command: "/app/Electron /app/main",
+      },
+    ],
+    expectedExecutable: "/app/Electron",
+    nativeExecutable: {
+      executable: "/app/Electron",
+      parentPid: 100,
+      startSeconds: "42",
+      startMicroseconds: "1",
+    },
+    nativeExecutableBefore: {
+      executable: "/app/Electron",
+      parentPid: 100,
+      startSeconds: "42",
+      startMicroseconds: "1",
+    },
+  };
+  pass(() => qualifyDesktopMain(launcherFixture));
+  pass(() =>
+    qualifyDesktopMain({
+      ...launcherFixture,
+      packaged: false,
+      guardianPid: 101,
+    }),
+  );
+  for (const changed of [
+    { marker: { ...launcherFixture.marker, pid: 102 } },
+    { marker: { ...launcherFixture.marker, processStart: "changed" } },
+    { desktop: { ...launcherFixture.desktop, ppid: 99 } },
+    { desktop: { ...launcherFixture.desktop, executable: "/other/Electron" } },
+    { children: [] },
+    { children: [launcherFixture.children[0], launcherFixture.children[0]] },
+    { children: [{ ...launcherFixture.children[0], parentPid: 99 }] },
+    { nativeExecutable: { executable: "/other/Electron", parentPid: 100 } },
+    { nativeExecutable: { executable: "/app/Electron", parentPid: 99 } },
+    {
+      nativeExecutable: {
+        executable: "/app/Electron",
+        parentPid: 100,
+        startSeconds: "42",
+        startMicroseconds: "2",
+      },
+    },
+    { nativeExecutable: null },
+  ])
+    reject(() => qualifyDesktopMain({ ...launcherFixture, ...changed }));
   const profile = {
     schema: "farol-native-profile/2",
     profileId: "12345678-1234-1234-1234-123456789abc",
@@ -3251,6 +3557,64 @@ function selfTest() {
           typeof value === "boolean" ? false : key === "signal" ? "SIGKILL" : 1,
       }),
     );
+  const failedIdentity = { journeyError: "DESKTOP_IDENTITY_UNKNOWN" };
+  pass(() =>
+    assert.equal(statusAfterObservedQuit(failedIdentity), "failed-or-unknown"),
+  );
+  pass(() => assert.equal(statusAfterObservedQuit({}), "confirmed-clean-quit"));
+  const disposal = {
+    launches: [
+      {
+        status: "confirmed-clean-quit",
+        cleanup,
+        desktopIdentity: { guardianPid: 100, desktopPid: 101 },
+      },
+    ],
+    cleanup,
+    scenarioPassed: true,
+  };
+  pass(() => assertProfileDisposalEligible(disposal, 1));
+  reject(() =>
+    assertProfileDisposalEligible({ ...disposal, scenarioPassed: false }, 1),
+  );
+  reject(() =>
+    assertProfileDisposalEligible(
+      {
+        ...disposal,
+        launches: [
+          {
+            ...disposal.launches[0],
+            journeyError: failedIdentity.journeyError,
+          },
+        ],
+      },
+      1,
+    ),
+  );
+  reject(() =>
+    assertProfileDisposalEligible(
+      {
+        ...disposal,
+        launches: [
+          {
+            ...disposal.launches[0],
+            journeyError: failedIdentity.journeyError,
+            status: statusAfterObservedQuit(failedIdentity),
+          },
+        ],
+      },
+      1,
+    ),
+  );
+  reject(() =>
+    assertProfileDisposalEligible(
+      {
+        ...disposal,
+        launches: [{ ...disposal.launches[0], desktopIdentity: undefined }],
+      },
+      1,
+    ),
+  );
   const args = [
     "--candidate-root",
     "/tmp/candidate",
@@ -3600,6 +3964,17 @@ function selfTest() {
     terminalLedger: ledger,
   };
   pass(() => permitReopen(launch));
+  pass(() => permitReopen({ ...launch, terminalHandoff: undefined }, true));
+  reject(() => permitReopen({ ...launch, retiredJournal: undefined }, true));
+  reject(() => permitReopen({ ...launch, status: "failed-or-unknown" }, true));
+  pass(() =>
+    assert.equal(
+      freshChatRootPath("/chat", { backendGeneration: "generation" }),
+      path.join("/chat", `fresh-${hash("generation")}`, "chat"),
+    ),
+  );
+  reject(() => freshChatRootPath("/chat", null));
+  reject(() => freshChatRootPath("/chat", { backendGeneration: "" }));
   for (const status of [
     "launch-attempted",
     "ready",

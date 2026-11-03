@@ -78,7 +78,6 @@ identities. See [identity cutover](docs/identity-cutover.md).
 - **Final/package/release candidate:** run the applicable full CI, native, package,
   installation/live and release gates against exact committed bytes. Preserve
   separate evidence for source acceptance, packaging, installation and live use.
-- **Farol reviewer assignments:** General/Specialists use Luna High; Strong/R3 uses GPT-6.1 Sol High; Frontier/R4 uses GPT-6 Astra Max after accepted Strong. Claude review is optional for a specific unresolved question, not a required R3/R4 gate.
 - Owner-reported installed launch, connection, or update failures are incidents.
   Prioritize restoring a usable installation under the current owner grant; follow
   `docs/installed-incident-response.md` before resuming broad acceptance reviews.

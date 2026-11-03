@@ -132,12 +132,14 @@ async function setup(
     executionOrigin?: GoComputerMcpOptions["executionOrigin"];
     connectionStatus?: GoComputerMcpOptions["connectionStatus"];
     codexRead?: GoComputerMcpOptions["codexRead"];
+    diagnosticLookup?: GoComputerMcpOptions["diagnosticLookup"];
     binding?: ComputerConnectorExecution;
     context?: Context;
     lifecycle?: GoComputerMcpLifecycle;
     fence?: GoComputerMcpFence;
     verification?: GoComputerMcpOptions["verification"];
     mutations?: GoComputerMcpOptions["mutations"];
+    removal?: GoComputerMcpOptions["removal"];
     processes?: GoComputerMcpOptions["processes"];
     onEffectUnknown?: () => void;
     respond?: (method: string, params: Json, id: string) => unknown;
@@ -167,10 +169,14 @@ async function setup(
         ? { connectionStatus: options.connectionStatus }
         : {}),
       ...(options.codexRead ? { codexRead: options.codexRead } : {}),
+      ...(options.diagnosticLookup
+        ? { diagnosticLookup: options.diagnosticLookup }
+        : {}),
       fence: options.fence ?? fixtureOptions().fence,
       ...(options.lifecycle ? { lifecycle: options.lifecycle } : {}),
       ...(options.verification ? { verification: options.verification } : {}),
       ...(options.mutations ? { mutations: options.mutations } : {}),
+      ...(options.removal ? { removal: options.removal } : {}),
       ...(options.processes ? { processes: options.processes } : {}),
       ...(options.onEffectUnknown
         ? { onEffectUnknown: options.onEffectUnknown }
@@ -204,6 +210,75 @@ function handlerContext(signal: AbortSignal): ServerContext {
     mcpReq: { id: "caller-chosen-id", signal },
   } as unknown as ServerContext;
 }
+
+it("offers a bounded diagnostic lookup without dispatching a file read", async () => {
+  const diagnosticLookup = vi.fn(async (requestId: string) => ({
+    status: "found" as const,
+    requestId,
+    diagnostic: {
+      stage: "target" as const,
+      reason: "link_not_supported" as const,
+    },
+  }));
+  const { client, request } = await setup({ diagnosticLookup });
+  const original = "07f13182-1414-4e08-b579-f468c6fa2e64";
+  const result = await client.callTool({
+    name: "computer_workspace_diagnostic_read",
+    arguments: {
+      requestId: original,
+      workspaceId: "workspace",
+      relativePath: "note.md",
+    },
+  });
+  expect(result.structuredContent).toMatchObject({
+    status: "ok",
+    data: {
+      lookup: "found",
+      subjectRequestId: original,
+      diagnostic: { stage: "target", reason: "link_not_supported" },
+    },
+  });
+  expect(diagnosticLookup).toHaveBeenCalledOnce();
+  expect(request).not.toHaveBeenCalled();
+});
+
+it("validates diagnostic authorization correlation and binding", async () => {
+  const body = {
+    ...binding,
+    callId: "authorization",
+    workspaceId: "workspace",
+    relativePath: "note.md",
+  };
+  const request = vi.fn(async (_method: string, params: Json) => ({
+    status: "ok" as const,
+    requestId: "authorization",
+    context,
+    data: { request: params, diagnosticBinding: "a".repeat(64) },
+  }));
+  const bridge = new ComputerBridge({ request });
+  expect(
+    await bridge.authorizeReadDiagnostic(body, {
+      requestId: "authorization",
+      context,
+    }),
+  ).toMatchObject({
+    status: "ok",
+    data: { diagnosticBinding: "a".repeat(64) },
+  });
+  expect(request).toHaveBeenCalledOnce();
+  request.mockImplementationOnce(async (_method, params) => ({
+    status: "ok" as const,
+    requestId: "authorization",
+    context,
+    data: { request: params, diagnosticBinding: "X".repeat(64) },
+  }));
+  expect(
+    await bridge.authorizeReadDiagnostic(body, {
+      requestId: "authorization",
+      context,
+    }),
+  ).toMatchObject({ status: "unknown", retry: "never" });
+});
 
 describe("selected Go process MCP projection", () => {
   type Processes = NonNullable<GoComputerMcpOptions["processes"]>;
@@ -386,6 +461,42 @@ describe("selected Go process MCP projection", () => {
     expect(processes.start).not.toHaveBeenCalled();
     expect(processes.read).not.toHaveBeenCalled();
     expect(processes.cancel).not.toHaveBeenCalled();
+  });
+
+  it("records the same request ID and safe reason returned by a refused read", async () => {
+    const record = vi.fn();
+    const recorder = createTotalOperationsRecorder({ record });
+    const { client } = await setup({
+      operations: recorder,
+      respond: (_method, params, id) => ({
+        status: "refused",
+        requestId: id,
+        context,
+        code: "WORKSPACE_PATH_REFUSED",
+        data: {
+          request: params,
+          code: "WORKSPACE_PATH_REFUSED",
+          source: "native-workspace",
+          retry: "never",
+          stage: "policy",
+          reason: "policy_denied",
+          diagnosticBinding: "a".repeat(64),
+        },
+      }),
+    });
+    const reply = await client.callTool({
+      name: "computer_workspace_read",
+      arguments: { workspaceId: "workspace", relativePath: "note.md" },
+    });
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record.mock.calls[0]![0]).toMatchObject({
+      requestId: (reply.structuredContent as { requestId: string }).requestId,
+      readDiagnostic: { stage: "policy", reason: "policy_denied" },
+    });
+    expect(record.mock.calls[0]!.slice(1, 3)).toEqual([
+      "refused",
+      "WORKSPACE_PATH_REFUSED",
+    ]);
   });
 
   it("keeps stopping and lost-fence outcomes distinct without a second process call", async () => {
@@ -1272,6 +1383,43 @@ describe("Go Computer MCP codec (pure/in-memory only)", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    ["policy", "policy_denied", "refused"],
+    ["target", "os_permission_denied", "refused"],
+    ["policy", "unsafe_root", "unknown"],
+  ])(
+    "projects a bounded read diagnostic %s/%s",
+    async (stage, reason, status) => {
+      const { client, request } = await setup({
+        respond: (_method, params, id) => ({
+          status: "refused",
+          requestId: id,
+          context,
+          code: "WORKSPACE_PATH_REFUSED",
+          data: {
+            request: params,
+            code: "WORKSPACE_PATH_REFUSED",
+            source: "native-workspace",
+            retry: "never",
+            stage,
+            reason,
+            diagnosticBinding: "a".repeat(64),
+          },
+        }),
+      });
+      const result = await client.callTool({
+        name: "computer_workspace_read",
+        arguments: { workspaceId: "workspace", relativePath: "note.md" },
+      });
+      expect(result.structuredContent).toMatchObject({
+        status,
+        retry: "never",
+        ...(status === "refused" ? { refusal: { stage, reason } } : {}),
+      });
+      expect(request).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it.each([true, "reject", "no-handler"])(
     "fails closed on lifecycle admission %#",
     async (mode) => {
@@ -1462,6 +1610,55 @@ describe("Go Computer mutation MCP (pure/in-memory only)", () => {
         retry: "never" as const,
       })),
     }) satisfies NonNullable<GoComputerMcpOptions["mutations"]>;
+
+  it("submits one exact removal and retains UNKNOWN for original-ID observation", async () => {
+    const selected = mutations();
+    const remove = vi.fn(
+      async (
+        ...[_input, operationId, call]: Parameters<
+          NonNullable<GoComputerMcpOptions["removal"]>["remove"]
+        >
+      ) => ({
+        status: "unknown" as const,
+        operationId,
+        requestId: call.requestId,
+        context: call.context,
+        code: "response_timeout",
+        retry: "never" as const,
+      }),
+    );
+    const onEffectUnknown = vi.fn();
+    const { client } = await setup({
+      mutations: selected,
+      removal: { remove },
+      onEffectUnknown,
+    });
+    const result = await client.callTool({
+      name: "computer_workspace_remove",
+      arguments: { ...target, expectedSha256: "a".repeat(64) },
+    });
+    expect(result.structuredContent).toMatchObject({
+      status: "unknown",
+      operationId: target.operationId,
+      retry: "never",
+    });
+    expect(remove).toHaveBeenCalledExactlyOnceWith(
+      {
+        workspaceId: "workspace",
+        relativePath: "note.md",
+        expectedSHA256: "a".repeat(64),
+      },
+      target.operationId,
+      expect.objectContaining({ context }),
+    );
+    expect(onEffectUnknown).toHaveBeenCalledOnce();
+    await client.callTool({
+      name: "computer_mutation_read",
+      arguments: target,
+    });
+    expect(selected.read).toHaveBeenCalledOnce();
+    expect(remove).toHaveBeenCalledOnce();
+  });
 
   it("advertises effects only when the host supplies mutations and requires operationId", async () => {
     const absent = await setup();
@@ -1925,7 +2122,7 @@ it.each([
         throw new BridgeError("refused", "OPERATION_REFUSED");
       },
     });
-    await client.callTool({
+    const result = await client.callTool({
       name: "computer_workspace_read",
       arguments: { workspaceId: "workspace", relativePath },
     });
@@ -1934,6 +2131,7 @@ it.each([
     expect(record.mock.calls[0]![0]).toEqual({
       source: "ChatGPT",
       kind: "computer_workspace_read",
+      requestId: (result.structuredContent as { requestId: string }).requestId,
       target: {
         workspace: "Owner Docs",
         workspaceIdentity: createHash("sha256")
@@ -2101,6 +2299,12 @@ it.each(
       kind: name,
       source: name === "codex_selected_thread_read" ? "Codex" : "ChatGPT",
       target: safeTarget,
+      ...(name === "computer_workspace_read"
+        ? {
+            requestId: (reply.structuredContent as { requestId: string })
+              .requestId,
+          }
+        : {}),
     });
     expect(outcome).toBe(name === "computer_shell_start" ? "done" : "refused");
     expect(code).toBe(

@@ -2,7 +2,9 @@ package workspace
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -55,6 +57,7 @@ type native struct {
 	listRequest  port.ListRequest
 	hook         func()
 	err          error
+	bindErr      error
 	read         *port.ReadResponse
 	list         *port.ListResponse
 	ctx          context.Context
@@ -68,6 +71,13 @@ func (n *native) Read(ctx context.Context, r port.ReadRequest) (*port.ReadRespon
 		n.hook()
 	}
 	return n.read, n.err
+}
+func (n *native) AuthorizeReadDiagnostic(context.Context, port.ReadRequest) error { return nil }
+func (n *native) BindReadDiagnostic(_ port.ReadRequest, value []byte) (string, error) {
+	if n.bindErr != nil {
+		return "", n.bindErr
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(value)), nil
 }
 func (n *native) List(ctx context.Context, r port.ListRequest) (*port.ListResponse, error) {
 	n.lists++
@@ -100,6 +110,88 @@ func expectFailure(t *testing.T, err error, code, source string) {
 	var f *authority.Failure
 	if !errors.As(err, &f) || f.Code != code || f.Source != source || f.Retry != "never" {
 		t.Fatalf("got %v, want %s from %s", err, code, source)
+	}
+}
+
+func TestReadDiagnosticRechecksAuthorityBeforeDisclosure(t *testing.T) {
+	for _, revoked := range []bool{false, true} {
+		s, _, approval, n, _, r := fixture(t)
+		n.err = &authority.Failure{Code: "WORKSPACE_PATH_REFUSED", Source: "native-workspace", Retry: "never", Stage: "target", Reason: "link_not_supported"}
+		if revoked {
+			n.hook = func() { approval.a.Capabilities = nil }
+		}
+		out, err := s.Read(context.Background(), r)
+		if out != nil || n.reads != 1 {
+			t.Fatal("unexpected disclosure or repeated read")
+		}
+		if revoked {
+			expectFailure(t, err, "AUTHORITY_CAPABILITY_DENIED", "computer-policy")
+			var failure *authority.Failure
+			if !errors.As(err, &failure) || failure.Stage != "" || failure.Reason != "" {
+				t.Fatalf("revoked diagnostic leaked: %v", err)
+			}
+		} else {
+			var failure *authority.Failure
+			if !errors.As(err, &failure) || failure.Code != "WORKSPACE_PATH_REFUSED" || failure.Stage != "target" || failure.Reason != "link_not_supported" {
+				t.Fatalf("diagnostic lost: %v", err)
+			}
+		}
+	}
+}
+
+func TestReadDiagnosticBindingFailurePreservesOriginalRefusal(t *testing.T) {
+	s, _, _, n, _, request := fixture(t)
+	n.err = &authority.Failure{Code: "WORKSPACE_PATH_REFUSED", Source: "native-workspace", Retry: "never", Stage: "target", Reason: "link_not_supported"}
+	n.bindErr = errors.New("private binding failure")
+	result, err := s.Read(context.Background(), request)
+	var failure *authority.Failure
+	if result != nil || !errors.As(err, &failure) || failure.Code != "WORKSPACE_PATH_REFUSED" || failure.Retry != "never" || failure.Stage != "" || failure.Reason != "" || failure.DiagnosticBinding != "" {
+		t.Fatalf("original refusal changed or unbound detail leaked: %+v", failure)
+	}
+}
+
+func TestAuthorizeReadDiagnosticDoesNotReadAndRechecksRevocation(t *testing.T) {
+	for _, revoke := range []bool{false, true} {
+		s, p, a, n, _, r := fixture(t)
+		snapshots := 0
+		p.hook = func() {
+			snapshots++
+			if revoke && snapshots == 2 {
+				a.a.Capabilities = nil
+			}
+		}
+		binding, err := s.AuthorizeReadDiagnostic(context.Background(), r)
+		if n.reads != 0 || n.lists != 0 || snapshots != 2 {
+			t.Fatalf("unexpected native call or admission count: %+v %d", n, snapshots)
+		}
+		if revoke {
+			expectFailure(t, err, "AUTHORITY_CAPABILITY_DENIED", "computer-policy")
+		} else if err != nil || len(binding) != 64 {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestDiagnosticBindingChangesWithGrantAndTarget(t *testing.T) {
+	s, p, a, _, _, r := fixture(t)
+	first, err := s.AuthorizeReadDiagnostic(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.p.Grant.AuthorityID = "new-grant"
+	second, err := s.AuthorizeReadDiagnostic(context.Background(), r)
+	if err != nil || first == second {
+		t.Fatal("grant replacement did not change binding")
+	}
+	r.RelativePath = "another"
+	third, err := s.AuthorizeReadDiagnostic(context.Background(), r)
+	if err != nil || second == third {
+		t.Fatal("target replacement did not change binding")
+	}
+	a.a.Workspaces[0].RootIdentity.Inode = "3"
+	fourth, err := s.AuthorizeReadDiagnostic(context.Background(), r)
+	if err != nil || fourth == third {
+		t.Fatal("root replacement did not change binding")
 	}
 }
 func listRequest(r ReadRequest) ListRequest {

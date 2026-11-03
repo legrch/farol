@@ -159,7 +159,8 @@ export function observedOperationResult(
     data = object(result.data);
   const evidence = object(result.evidence);
   if (
-    kind === "chatgpt.run-deep-test" &&
+    (kind === "chatgpt.run-deep-test" ||
+      kind === "chatgpt.run-connection-test") &&
     result.ok === true &&
     evidence.kind === "chatgpt.deep-test-result" &&
     typeof evidence.operationId === "string" &&
@@ -180,6 +181,8 @@ export function observedOperationResult(
       return { outcome: "refused", code };
     if (evidence.state === "outcome_unknown")
       return { outcome: "unknown", code };
+    if (evidence.state === "send_requested" && evidence.code === null)
+      return { outcome: "done", code: "CHATGPT_SEND_REQUESTED" };
     if (evidence.state === "completed" && evidence.code === null)
       return { outcome: "done", code: null };
     return { outcome: "unknown", code: "OPERATION_RESULT_UNCONFIRMED" };

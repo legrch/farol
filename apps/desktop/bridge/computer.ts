@@ -20,6 +20,7 @@ import {
   type ComputerReadRequest,
   type ComputerReadResponse,
   type ComputerReadRefusal,
+  type ComputerReadDiagnosticAuthorizationResponse,
   type ComputerListRequest,
   type ComputerListResponse,
   type ComputerListRefusal,
@@ -85,6 +86,7 @@ const names = {
   catalogue: "ComputerCatalogue",
   bootstrap: "ComputerBootstrap",
   read: "ComputerRead",
+  readdiagnosticauthorize: "ComputerRead",
   list: "ComputerList",
   search: "ComputerSearch",
 } as const;
@@ -333,6 +335,21 @@ export class ComputerBridge {
     return this.invoke("read", request, call, read);
   }
 
+  authorizeReadDiagnostic(
+    request: ComputerReadRequest,
+    call: ComputerCall,
+  ): Promise<ComputerResult<ComputerReadDiagnosticAuthorizationResponse>> {
+    return this.invoke("readdiagnosticauthorize", request, call, (value) => {
+      const result = dto<ComputerReadDiagnosticAuthorizationResponse>(
+        "ComputerReadDiagnosticAuthorizationResponse",
+        value,
+      );
+      if (!/^[a-f0-9]{64}$/u.test(result.diagnosticBinding))
+        throw Error("invalid_computer_result");
+      return result;
+    });
+  }
+
   list(
     request: ComputerListRequest,
     call: ComputerCall,
@@ -439,7 +456,15 @@ export class ComputerBridge {
         if (Object.hasOwn(result, "code"))
           throw Error("invalid_computer_result");
         const data = parse(result.data, body);
-        if (!matches(body, data, false))
+        if (
+          !matches(
+            body,
+            method === "readdiagnosticauthorize"
+              ? (data as ComputerReadDiagnosticAuthorizationResponse).request
+              : data,
+            method === "readdiagnosticauthorize",
+          )
+        )
           return failure("unknown", "crossed_computer_response");
         return Object.freeze({ ...identity, status: "ok", data });
       }
@@ -451,7 +476,9 @@ export class ComputerBridge {
         if (
           refusal.code !== code ||
           (refusal.request !== undefined &&
-            !matches(body, refusal.request, true))
+            !matches(body, refusal.request, true)) ||
+          ((method === "read" || method === "readdiagnosticauthorize") &&
+            !validReadDiagnostic(refusal as ComputerReadRefusal))
         )
           return failure("unknown", "crossed_computer_response");
         return Object.freeze({
@@ -468,6 +495,38 @@ export class ComputerBridge {
       return failure("unknown", "invalid_computer_result");
     }
   }
+}
+
+function validReadDiagnostic(refusal: ComputerReadRefusal): boolean {
+  const { stage, reason, diagnosticBinding } = refusal;
+  if (
+    stage === undefined &&
+    reason === undefined &&
+    diagnosticBinding === undefined
+  )
+    return true;
+  if (
+    diagnosticBinding === undefined ||
+    !/^[a-f0-9]{64}$/u.test(diagnosticBinding)
+  )
+    return false;
+  if (
+    refusal.code !== "WORKSPACE_PATH_REFUSED" ||
+    refusal.source !== "native-workspace"
+  )
+    return false;
+  if (stage === "policy") return reason === "policy_denied";
+  if (stage === "root")
+    return reason === "unsafe_root" || reason === "os_permission_denied";
+  if (stage === "ancestor")
+    return reason === "link_not_supported" || reason === "os_permission_denied";
+  if (stage === "target")
+    return (
+      reason === "link_not_supported" ||
+      reason === "hardlink_not_supported" ||
+      reason === "os_permission_denied"
+    );
+  return false;
 }
 
 function matches(request: Json, response: unknown, refusal: boolean): boolean {

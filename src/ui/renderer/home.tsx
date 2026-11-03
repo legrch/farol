@@ -5,6 +5,11 @@ import { setupChecklist } from "./setup-navigation";
 import { connectorVerificationInFlight } from "./setup-gate";
 import { useSetupIntents, retainedSetupIntents } from "./settings";
 import { unresolvedActions } from "../../../apps/desktop/renderer/unresolved-actions";
+import {
+  activityCategory,
+  activityGroups,
+  activityGroupResult,
+} from "../../../apps/desktop/renderer/activity-presentation";
 import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
 import { selectedConnectorApp } from "../../pkg/product-settings/connector-app-selection";
 import type { RendererFacade, WindowSnapshot } from "./contract";
@@ -101,7 +106,11 @@ export function Home({ snapshot, facade }: Props) {
   const refused = Object.values(snapshot.intents).filter(
     (intent) => intent.state === "refused",
   );
-  const recent = [...snapshot.activity].sort((a, b) => b.at - a.at).slice(0, 3);
+  const recent = activityGroups(
+    [...snapshot.activity]
+      .filter((row) => activityCategory(row) === "requests")
+      .sort((a, b) => b.at - a.at),
+  ).slice(0, 3);
   const workspaceCount =
     snapshot.configuration?.status === "ready"
       ? snapshot.configuration.settings.computer.workspaces.length
@@ -192,7 +201,23 @@ export function Home({ snapshot, facade }: Props) {
           </div>
         </section>
       ) : null}
-      {progress ? (
+      {snapshot.configuration?.status === "error" ? (
+        <section className="home-status-card home-health-warning" role="status">
+          <div>
+            <h2>Setup evidence is unavailable</h2>
+            <p>
+              Review Setup before making changes to your saved configuration.
+            </p>
+          </div>
+          <button
+            onClick={() =>
+              facade.navigate({ area: "setup", setupStep: "connection" })
+            }
+          >
+            Review setup
+          </button>
+        </section>
+      ) : progress ? (
         <section
           className="home-status-card home-connection-progress"
           role="status"
@@ -444,28 +469,38 @@ export function Home({ snapshot, facade }: Props) {
               Show all
             </button>
           </div>
-          {recent.map((event) => (
-            <button
-              className="home-row"
-              key={event.id}
-              onClick={() =>
-                facade.navigate({ area: "activity", activityId: event.id })
-              }
-            >
-              <time>
-                {Number.isFinite(event.at) && Math.abs(event.at) <= 8.64e15
-                  ? new Date(event.at).toLocaleTimeString(undefined, {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })
-                  : "Time unavailable"}
-              </time>
-              <span className="home-row-label">{event.label}</span>
-              <span className="home-event-state">
-                {eventState(event.phase)}
-              </span>
-            </button>
-          ))}
+          {recent.map((group) => {
+            const event =
+              group.find((item) => item.kind === "computer_shell_start") ??
+              group[0]!;
+            const result = activityGroupResult(group);
+            return (
+              <button
+                className="home-row"
+                key={event.id}
+                onClick={() =>
+                  facade.navigate({ area: "activity", activityId: event.id })
+                }
+              >
+                <time>
+                  {Number.isFinite(event.at) && Math.abs(event.at) <= 8.64e15
+                    ? new Date(event.at).toLocaleTimeString(undefined, {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })
+                    : "Time unavailable"}
+                </time>
+                <span className="home-row-label">{event.label}</span>
+                <span className="home-event-state">
+                  {group.length > 1 ||
+                  event.kind === "computer.process.terminal" ||
+                  event.code === "CHATGPT_SEND_REQUESTED"
+                    ? result.text
+                    : eventState(event.phase)}
+                </span>
+              </button>
+            );
+          })}
           {!recent.length && (
             <p className="description">
               Activity will appear here as you use Farol.

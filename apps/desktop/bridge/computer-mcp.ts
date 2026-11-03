@@ -2,6 +2,7 @@ import type {
   OperationMetadata,
   OperationsRecorder,
 } from "../renderer/operations-contract";
+import { WorkspaceReadDiagnosticSchema } from "../renderer/operations-contract";
 import { observedOperationResult } from "../operations/observe";
 import { randomUUID } from "node:crypto";
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
@@ -32,6 +33,7 @@ export type GoComputerMcpFence = Readonly<{
 }>;
 export type GoComputerMcpOptions = Readonly<{
   operations?: OperationsRecorder;
+  refreshWorkspaceLabels?: () => Promise<void>;
   executionOrigin?: Readonly<{
     buildId: string;
     runtimeId: string;
@@ -45,8 +47,21 @@ export type GoComputerMcpOptions = Readonly<{
   >;
   connectionStatus?: Pick<ConnectorVerificationBridge, "observe">;
   mutations?: Pick<ConnectorMutationBridge, "write" | "edit" | "read">;
+  removal?: Pick<ConnectorMutationBridge, "remove">;
   processes?: Pick<ConnectorProcessBridge, "start" | "read" | "cancel">;
   codexRead?: Pick<SelectedCodexReadBridge, "read">;
+  diagnosticLookup?: (
+    requestId: string,
+    workspaceId: string,
+    relativePath: string,
+  ) => Promise<
+    | {
+        status: "found";
+        requestId: string;
+        diagnostic: z.infer<typeof WorkspaceReadDiagnosticSchema>;
+      }
+    | { status: "unavailable" | "incomplete" | "not_retained" }
+  >;
   onEffectUnknown?: () => void;
 }>;
 
@@ -98,6 +113,11 @@ const ReadInputSchema = z.strictObject({
   offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
   length: z.number().int().min(4).max(262144).optional(),
 });
+const ReadDiagnosticInputSchema = z.strictObject({
+  requestId: z.string().uuid(),
+  workspaceId: IdentifierSchema,
+  relativePath: z.string().refine((value) => relativePath(value, false)),
+});
 const MutationTextSchema = z
   .string()
   .refine(
@@ -111,6 +131,10 @@ const MutationTargetSchema = {
   workspaceId: IdentifierSchema,
   relativePath: z.string().refine((value) => relativePath(value, false)),
 };
+const RemoveInputSchema = z.strictObject({
+  ...MutationTargetSchema,
+  expectedSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+});
 const HashSchema = z.string().regex(/^[a-f0-9]{64}$/u);
 const ProcessIDSchema = z.string().refine((value) => validate("id", value));
 const ProcessTargetSchema = {
@@ -304,6 +328,24 @@ export function createGoComputerMcpServer(
                 : reference(operationId)!,
           }
         : undefined;
+    const call = Object.freeze({
+      requestId: randomUUID(),
+      context: selectedContext,
+    });
+    if (metadata.kind === "computer_workspace_read")
+      metadata.requestId = call.requestId;
+    if (
+      (metadata.kind === "computer_workspace_read" ||
+        metadata.kind === "computer_workspace_diagnostic_read") &&
+      !signal.aborted &&
+      options.refreshWorkspaceLabels
+    ) {
+      try {
+        await options.refreshWorkspaceLabels();
+      } catch {
+        // Activity is observational and cannot change the actual operation.
+      }
+    }
     const finish =
       (references &&
         options.operations?.beginExecution?.(metadata, references)) ??
@@ -313,10 +355,6 @@ export function createGoComputerMcpServer(
         code: string | null,
         durationMs: number,
       ) => options.operations?.record(metadata, outcome, code, durationMs));
-    const call = Object.freeze({
-      requestId: randomUUID(),
-      context: selectedContext,
-    });
     const failure = (status: "refused" | "unknown", code: string) =>
       encode(
         {
@@ -451,6 +489,38 @@ export function createGoComputerMcpServer(
       metadata.kind,
       result.structuredContent,
     );
+    if (
+      metadata.kind === "computer_workspace_read" &&
+      recorded.outcome === "refused" &&
+      recorded.code === "WORKSPACE_PATH_REFUSED"
+    ) {
+      const content = result.structuredContent;
+      if (
+        content &&
+        typeof content === "object" &&
+        "refusal" in content &&
+        content.refusal &&
+        typeof content.refusal === "object"
+      ) {
+        const refusal = content.refusal as {
+          stage?: unknown;
+          reason?: unknown;
+          diagnosticBinding?: unknown;
+        };
+        const diagnostic = WorkspaceReadDiagnosticSchema.safeParse({
+          stage: refusal.stage,
+          reason: refusal.reason,
+        });
+        if (
+          diagnostic.success &&
+          typeof refusal.diagnosticBinding === "string" &&
+          /^[a-f0-9]{64}$/u.test(refusal.diagnosticBinding)
+        ) {
+          metadata.readDiagnostic = diagnostic.data;
+          metadata.diagnosticBinding = refusal.diagnosticBinding;
+        }
+      }
+    }
     finish(recorded.outcome, recorded.code, performance.now() - started);
     return result;
   };
@@ -646,6 +716,37 @@ export function createGoComputerMcpServer(
           input.operationId,
         ),
     );
+    if (options.removal) {
+      const removal = options.removal;
+      server.registerTool(
+        "computer_workspace_remove",
+        {
+          title: "Remove one approved workspace file",
+          description:
+            "Remove one ordinary file through the selected Go owner using its exact current SHA-256. No directories, recursion or globs. The preimage check is not an atomic compare-and-delete against external writers. An uncertain operation can retain an internally staged entry. Supply a new operationId; never retry a refused or uncertain effect. Observe the original operation with computer_mutation_read. memory_only is not durable publication.",
+          inputSchema: RemoveInputSchema,
+          annotations: effectAnnotations,
+        },
+        async ({ operationId, expectedSha256, ...input }, ctx) =>
+          run(
+            {
+              source: "ChatGPT",
+              kind: "computer_workspace_remove",
+              target: operationTarget(input),
+            },
+            ctx.mcpReq.signal,
+            (call) =>
+              removal.remove(
+                { ...input, expectedSHA256: expectedSha256 },
+                operationId,
+                call,
+              ),
+            operationId,
+            undefined,
+            true,
+          ),
+      );
+    }
   }
 
   if (options.processes) {
@@ -913,6 +1014,43 @@ export function createGoComputerMcpServer(
           ),
       ),
   );
+  if (options.diagnosticLookup) {
+    const lookup = options.diagnosticLookup;
+    server.registerTool(
+      "computer_workspace_diagnostic_read",
+      {
+        title: "Read a workspace diagnostic receipt",
+        description:
+          "Look up one retained read diagnostic by its original request ID and exact workspace path. Current read authority is checked before and after lookup. No file is opened; unavailable, incomplete or not_retained never proves the old operation was absent or safe to retry.",
+        inputSchema: ReadDiagnosticInputSchema,
+        annotations,
+      },
+      async ({ requestId, workspaceId, relativePath }, ctx) =>
+        run(
+          {
+            source: "ChatGPT",
+            kind: "computer_workspace_diagnostic_read",
+            target: operationTarget({ workspaceId, relativePath }),
+          },
+          ctx.mcpReq.signal,
+          async (call) => {
+            const result = await lookup(requestId, workspaceId, relativePath);
+            return {
+              ...call,
+              status: "ok",
+              data:
+                result.status === "found"
+                  ? {
+                      lookup: "found",
+                      subjectRequestId: result.requestId,
+                      diagnostic: result.diagnostic,
+                    }
+                  : { lookup: result.status },
+            };
+          },
+        ),
+    );
+  }
   server.registerTool(
     "computer_workspace_search",
     {

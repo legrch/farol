@@ -22,7 +22,6 @@ import {
   waitForReactShell,
   openSetup,
   setupStep,
-  assertSetupOverview,
 } from "./current-react-setup.mjs";
 
 const packaged = process.argv.includes("--packaged");
@@ -217,10 +216,6 @@ try {
         // Configuration availability and snapshot freshness are independent.
         // Home must expose the retained fault even when its snapshot is current.
         await window
-          .getByRole("navigation", { name: "Home views", exact: true })
-          .getByRole("button", { name: /^Needs attention\b/u })
-          .click();
-        await window
           .getByText("Setup evidence is unavailable", { exact: true })
           .waitFor();
         await openSetup(window);
@@ -276,21 +271,7 @@ try {
             ["Refresh status"],
           );
         }
-        await assertSetupOverview(window, {
-          ready: false,
-          hasWorkspaces: false,
-          signIn: "unavailable",
-          states: {
-            signin: "unavailable",
-            folders: "unavailable",
-            connection: "unavailable",
-            attachment: "unavailable",
-          },
-        });
-        await window
-          .getByRole("region", { name: "Setup overview", exact: true })
-          .getByRole("button", { name: "Review Connection", exact: true })
-          .click();
+        await setupStep(window, "connection");
         await window
           .locator('.setup-page[data-setup-step="connection"]')
           .waitFor();

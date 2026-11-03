@@ -89,6 +89,7 @@ function terminalReason(code: string): ConnectorTerminal["reason"] {
 
 const workspaceMethods = new Set([
   "computer.workspace.read",
+  "computer.workspace.readdiagnosticauthorize",
   "computer.workspace.list",
   "computer.workspace.search",
   "computer.workspace.catalogue",
@@ -101,6 +102,7 @@ const workspaceMethods = new Set([
 const effectMethods = new Set([
   "computer.workspace.write",
   "computer.workspace.edit",
+  "computer.workspace.remove",
   "computer.process.start",
   "computer.process.cancel",
 ]);

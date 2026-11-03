@@ -159,6 +159,18 @@ export class PrivateChatGptTaskJournal {
 
   async retainResult(operationId: string, input: ResultInput): Promise<void> {
     const current = await this.requireOperation(operationId);
+    if (
+      input.state === "send_requested" &&
+      (this.options.deepTestOperationId === undefined ||
+        current.kind !== "readonly" ||
+        input.code !== null ||
+        input.deltaCount !== 0 ||
+        input.observedCharacters !== 0 ||
+        (input.attachmentCount ?? 0) !== 0 ||
+        (input.totalBytes ?? 0) !== 0 ||
+        input.stagingCleanup != null)
+    )
+      journalError("CHATGPT_TASK_JOURNAL_TRANSITION");
     const result = resultSchema.parse({
       ...input,
       attachmentCount: input.attachmentCount ?? 0,

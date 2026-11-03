@@ -119,8 +119,11 @@ export function declaredOperationOutcomes(): Map<string, Set<string>> {
     });
     // Excerpt state/reason classify redaction, not operation outcomes. Their
     // generic values must not be promoted into the operation result mapping.
-    let auditExcerpt: { start: number; end: number } | undefined;
-    if (file === "apps/desktop/bridge/wire.ts")
+    const nonOutcomeProperties: { start: number; end: number }[] = [];
+    if (
+      file === "apps/desktop/bridge/wire.ts" ||
+      file === "apps/desktop/bridge/computer-mcp.ts"
+    )
       walk(tree, (node) => {
         if (
           node.type === "TSInterfaceDeclaration" &&
@@ -128,16 +131,41 @@ export function declaredOperationOutcomes(): Map<string, Set<string>> {
           typeof node.start === "number" &&
           typeof node.end === "number"
         )
-          auditExcerpt = { start: node.start, end: node.end };
+          nonOutcomeProperties.push({ start: node.start, end: node.end });
+        if (
+          node.type === "TSInterfaceDeclaration" &&
+          (node.id as Node)?.name === "ComputerReadRefusal"
+        )
+          walk(node.body, (property) => {
+            if (
+              property.type === "TSPropertySignature" &&
+              (property.key as Node)?.name === "reason" &&
+              typeof property.start === "number" &&
+              typeof property.end === "number"
+            )
+              nonOutcomeProperties.push({
+                start: property.start,
+                end: property.end,
+              });
+          });
+        if (
+          file === "apps/desktop/bridge/computer-mcp.ts" &&
+          node.type === "TSPropertySignature" &&
+          (node.key as Node)?.name === "diagnosticLookup" &&
+          typeof node.start === "number" &&
+          typeof node.end === "number"
+        )
+          nonOutcomeProperties.push({ start: node.start, end: node.end });
       });
     walk(tree, (node) => {
       if (
         node.type === "TSPropertySignature" &&
-        auditExcerpt &&
         typeof node.start === "number" &&
         typeof node.end === "number" &&
-        node.start >= auditExcerpt.start &&
-        node.end <= auditExcerpt.end
+        nonOutcomeProperties.some(
+          (range) =>
+            Number(node.start) >= range.start && Number(node.end) <= range.end,
+        )
       )
         return;
       if (

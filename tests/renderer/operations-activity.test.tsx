@@ -3,6 +3,8 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { OperationsActivity } from "../../apps/desktop/renderer/operations-view";
+import { activityGroupResult } from "../../apps/desktop/renderer/activity-presentation";
+import { activityResult } from "../../apps/desktop/renderer/activity-presentation";
 import { unresolvedActions } from "../../apps/desktop/renderer/unresolved-actions";
 import { WindowController } from "../../src/ui/renderer/controller";
 import { fixture } from "./fixture";
@@ -63,6 +65,73 @@ const entries: ActivityEntry[] = [
     generation: 0,
   },
 ];
+it("does not turn an unknown process start into success after a later exit observation", () => {
+  const start: ActivityEntry = {
+    ...entries[0]!,
+    kind: "computer_shell_start",
+    outcome: "unknown",
+  };
+  const terminal: ActivityEntry = {
+    ...entries[0]!,
+    kind: "computer.process.terminal",
+    exit: { kind: "code", value: 0 },
+  };
+  expect(activityGroupResult([terminal, start])).toMatchObject({
+    outcome: "unknown",
+    issue: true,
+    text: "Exit 0 · result unconfirmed",
+  });
+});
+it.each(["pending", "refused", "failed"] as const)(
+  "does not present a process group as done when a related request is %s",
+  (outcome) => {
+    const start: ActivityEntry = {
+      ...entries[0]!,
+      kind: "computer_shell_start",
+    };
+    const terminal: ActivityEntry = {
+      ...entries[0]!,
+      kind: "computer.process.terminal",
+      exit: { kind: "code", value: 0 },
+    };
+    const request: ActivityEntry = {
+      ...entries[0]!,
+      kind: "computer_shell_cancel",
+      outcome,
+    };
+    expect(activityGroupResult([terminal, start, request])).toMatchObject({
+      outcome,
+      issue: outcome !== "pending",
+      text: `Exit 0 · request ${outcome}`,
+    });
+  },
+);
+it("preserves a failed terminal result when another request is pending", () => {
+  const terminal: ActivityEntry = {
+    ...entries[0]!,
+    kind: "computer.process.terminal",
+    exit: { kind: "code", value: 126 },
+  };
+  const request: ActivityEntry = {
+    ...entries[0]!,
+    kind: "computer_shell_cancel",
+    outcome: "pending",
+  };
+  expect(activityGroupResult([terminal, request])).toMatchObject({
+    outcome: "failed",
+    issue: true,
+    text: "Exit 126",
+  });
+});
+it("labels a send acknowledgement without presenting a completed test", () => {
+  expect(
+    activityResult({
+      ...entries[0]!,
+      kind: "chatgpt.run-connection-test",
+      code: "CHATGPT_SEND_REQUESTED",
+    }).text,
+  ).toBe("Send requested");
+});
 it("shows local filtered details and explains withheld output", async () => {
   const f = fixture(),
     c = new WindowController(f.api);
@@ -167,10 +236,105 @@ it("shows terminal evidence without treating a nonzero exit as successful execut
         />,
       ),
     );
-    expect(host.textContent).toContain("observed");
+    expect(host.textContent).toContain("Exit 3");
+    expect(
+      host.querySelector('.operation-outcome[data-outcome="failed"]'),
+    ).not.toBeNull();
+    expect(host.textContent).toContain("Recorded");
     expect(host.textContent).toContain("Code 3");
     expect(host.textContent).toContain("unverified");
     expect(host.textContent).toContain("start-id");
+  } finally {
+    await act(async () => root.unmount());
+    c.dispose();
+  }
+});
+it("defaults to requests, keeps external status visible and finds a failed exit by ID and code", async () => {
+  const f = fixture(),
+    c = new WindowController(f.api);
+  await c.start();
+  const terminal: ActivityEntry = {
+    ...entries[0]!,
+    id: "terminal",
+    source: "ChatGPT",
+    kind: "computer.process.terminal",
+    label: "Process terminal",
+    operationRef: {
+      owner: "computer.process",
+      operationId: "brain-check-01",
+      buildId: "b",
+      runtimeId: "r",
+      binding: "accepted",
+    },
+    exit: { kind: "code", value: 126 },
+  };
+  const snapshot = {
+    ...c.getSnapshot(),
+    activity: [
+      {
+        ...entries[0]!,
+        id: "health",
+        source: "Setup" as const,
+        kind: "connection.health",
+        label: "Passive health",
+      },
+      {
+        ...entries[0]!,
+        id: "external",
+        source: "ChatGPT" as const,
+        kind: "computer_connection_status",
+        label: "External status",
+      },
+      terminal,
+    ],
+  };
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  const select = async (label: string, value: string) => {
+    const control = [...host.querySelectorAll("label")]
+      .find((node) => node.textContent?.includes(label))!
+      .querySelector("select")!;
+    await act(async () => {
+      control.value = value;
+      control.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  };
+  try {
+    await act(async () =>
+      root.render(
+        <OperationsActivity
+          snapshot={snapshot}
+          facade={{} as RendererFacade}
+        />,
+      ),
+    );
+    expect(host.textContent).toContain("External status");
+    expect(host.textContent).not.toContain("Passive health");
+    await select("Outcome", "failed");
+    expect(host.textContent).toContain("Exit 126");
+    expect(host.querySelectorAll("details")).toHaveLength(1);
+    const input = host.querySelector<HTMLInputElement>('input[type="search"]')!;
+    for (const value of ["126", "brain-check-01"]) {
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          "value",
+        )!.set!.call(input, value);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(host.querySelectorAll("details")).toHaveLength(1);
+    }
+    await select("Outcome", "all");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await select("Category", "system");
+    expect(host.textContent).toContain("Passive health");
+    expect(host.textContent).not.toContain("External status");
   } finally {
     await act(async () => root.unmount());
     c.dispose();
@@ -289,8 +453,8 @@ it("filters shared operations, expands metadata and links attention to the unres
     ).toHaveLength(1);
     const selects = host.querySelectorAll("select");
     await act(async () => {
-      selects[1]!.value = "attention";
-      selects[1]!.dispatchEvent(new Event("change", { bubbles: true }));
+      selects[2]!.value = "attention";
+      selects[2]!.dispatchEvent(new Event("change", { bubbles: true }));
     });
     expect(host.querySelectorAll("details")).toHaveLength(2);
     await act(async () =>
@@ -300,8 +464,8 @@ it("filters shared operations, expands metadata and links attention to the unres
     );
     expect(overlay).toHaveBeenCalledWith("unresolved-actions");
     await act(async () => {
-      selects[0]!.value = "ChatGPT";
-      selects[0]!.dispatchEvent(new Event("change", { bubbles: true }));
+      selects[1]!.value = "ChatGPT";
+      selects[1]!.dispatchEvent(new Event("change", { bubbles: true }));
     });
     expect(host.querySelectorAll("details")).toHaveLength(1);
     const details = host.querySelector("details")!;
@@ -388,6 +552,148 @@ it("Home shows the same recorded operations while Setup is unfinished", async ()
     await act(async () => root.unmount());
     c.dispose();
     host.remove();
+  }
+});
+
+it("Home hides passive health and presents a nonzero process exit", async () => {
+  const f = fixture(),
+    c = new WindowController(f.api);
+  await c.start();
+  const snapshot = {
+    ...c.getSnapshot(),
+    activity: [
+      {
+        ...entries[0]!,
+        id: "process",
+        kind: "computer.process.terminal",
+        label: "Process",
+        exit: { kind: "code" as const, value: 126 },
+      },
+      {
+        ...entries[0]!,
+        id: "health",
+        source: "Setup" as const,
+        kind: "connection.health",
+        label: "Passive health",
+        at: 99,
+      },
+    ],
+  };
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  try {
+    await act(async () => root.render(<Home snapshot={snapshot} facade={c} />));
+    const recent = host.querySelector(".home-recent")!;
+    expect(recent.textContent).toContain("Exit 126");
+    expect(recent.textContent).not.toContain("Passive health");
+    expect(recent.textContent).not.toContain("Done");
+  } finally {
+    await act(async () => root.unmount());
+    c.dispose();
+  }
+});
+
+it("groups only observations bound to the same process and searches the group by exit", async () => {
+  const f = fixture(),
+    c = new WindowController(f.api);
+  await c.start();
+  const ref = {
+    owner: "computer.process" as const,
+    operationId: "start-1",
+    buildId: "build",
+    runtimeId: "runtime",
+    binding: "accepted" as const,
+  };
+  const base = { ...entries[0]!, source: "ChatGPT" as const };
+  const snapshot = {
+    ...c.getSnapshot(),
+    activity: [
+      {
+        ...base,
+        id: "start",
+        kind: "computer_shell_start",
+        label: "Shell command",
+        operationRef: ref,
+      },
+      {
+        ...base,
+        id: "read",
+        kind: "computer_shell_read",
+        label: "Shell read",
+        subjectRef: ref,
+        at: 2,
+      },
+      {
+        ...base,
+        id: "terminal",
+        kind: "computer.process.terminal",
+        label: "Process terminal",
+        operationRef: ref,
+        exit: { kind: "code" as const, value: 126 },
+        at: 3,
+      },
+      {
+        ...base,
+        id: "other",
+        kind: "computer.process.terminal",
+        label: "Other process",
+        operationRef: { ...ref, runtimeId: "other-runtime" },
+        exit: { kind: "code" as const, value: 0 },
+        at: 4,
+      },
+    ],
+  };
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  try {
+    await act(async () =>
+      root.render(
+        <OperationsActivity
+          snapshot={snapshot}
+          facade={{} as RendererFacade}
+        />,
+      ),
+    );
+    expect(host.querySelectorAll(".operation-group")).toHaveLength(1);
+    expect(
+      host.querySelectorAll(".operation-group .operation-row"),
+    ).toHaveLength(3);
+    expect(
+      host.querySelector(".operation-group > summary")?.textContent,
+    ).toContain("Exit 126");
+    expect(
+      host.querySelectorAll(".operations-activity > .operation-row"),
+    ).toHaveLength(1);
+    const outcome = [...host.querySelectorAll("label")]
+      .find((label) => label.textContent?.includes("Outcome"))!
+      .querySelector("select")!;
+    await act(async () => {
+      outcome.value = "done";
+      outcome.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(host.querySelector(".operation-group")).toBeNull();
+    expect(host.textContent).toContain("Other process");
+    await act(async () => {
+      outcome.value = "failed";
+      outcome.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(host.querySelector(".operation-group")).not.toBeNull();
+    expect(host.textContent).not.toContain("Other process");
+    const input = host.querySelector<HTMLInputElement>('input[type="search"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )!.set!.call(input, "126");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(
+      host.querySelectorAll(".operation-group .operation-row"),
+    ).toHaveLength(3);
+    expect(host.textContent).not.toContain("Other process");
+  } finally {
+    await act(async () => root.unmount());
+    c.dispose();
   }
 });
 

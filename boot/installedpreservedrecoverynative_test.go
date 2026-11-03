@@ -99,6 +99,70 @@ func TestNativeInstalledPreservedRecoveryKeepsUnknownReservationsAndWriterClaim(
 	}
 }
 
+func TestNativeInstalledPreservedRecoveryAcceptsCompletedRemoval(t *testing.T) {
+	in := installedPreservedRecoveryFixture(t)
+	profile, err := QualifyProfile(in.Profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	computer, _, err := profile.Roots()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := profile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	root := mutationrepo.Root{Path: computer.Path, Device: computer.Device, Inode: computer.Inode, OwnerUID: computer.OwnerUID}
+	repo, err := mutationrepo.New(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := domain.Identity{Scope: domain.ScopeConnector, OperationID: "removed-fixture", OwnerID: in.OwnerID, ProfileID: in.Profile.ProfileID, ComputerID: in.ComputerID}
+	binding := domain.Binding{Identity: identity, WorkspaceID: "synthetic", ComputerGeneration: 1, RelativePath: "removed.md", RequestDigest: strings.Repeat("a", 64), Connector: domain.ConnectorOrigin{BuildID: BuildID, BackendGeneration: "failed-current", RuntimeID: "synthetic-runtime", ConnectorGeneration: 1, SessionID: "synthetic-session", TaskID: "synthetic-task", ParticipantID: "synthetic-participant", TurnID: "synthetic-turn", CallID: "remove-call", TaskEpoch: 1, Generation: 1, Operation: domain.RemoveKind}}
+	prepared, err := domain.NewPrepared(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Admit(context.Background(), prepared); err != nil {
+		t.Fatal(err)
+	}
+	hash := strings.Repeat("c", 64)
+	completed, err := prepared.Complete(domain.Receipt{Operation: domain.RemoveKind, RelativePath: binding.RelativePath, BeforeSHA256: &hash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Save(context.Background(), completed); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Close(); err != nil {
+		t.Fatal(err)
+	}
+	keyInput, _ := json.Marshal([]string{"external-connector-v3", identity.OperationID, identity.OwnerID, identity.ProfileID, identity.ComputerID})
+	keySum := sha256.Sum256(keyInput)
+	key := hex.EncodeToString(keySum[:]) + ".json"
+	raw, err := os.ReadFile(filepath.Join(computer.Path, "mutations", key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	in.Preserved = append(in.Preserved, mutationrepo.ExpectedPreservedRecord{Key: key, SHA256: hex.EncodeToString(sum[:]), Identity: identity})
+	visits := 0
+	err = inspectEmptyRecovery(context.Background(), in, func(v emptyRecoveryInspection) error {
+		visits++
+		if v.PreservedRetained == nil || len(v.PreservedRetained.Retained) != 4 {
+			t.Fatal("missing retained removal")
+		}
+		return nil
+	})
+	if err != nil || visits != 1 {
+		t.Fatal(visits, err)
+	}
+	after, err := os.ReadFile(filepath.Join(computer.Path, "mutations", key))
+	if err != nil || !bytes.Equal(raw, after) {
+		t.Fatal("removal record changed", err)
+	}
+}
+
 func TestNativeInstalledPreservedRecoveryRejectsCrossedSelection(t *testing.T) {
 	for _, fault := range []string{"empty-mode", "dev-mode", "missing-set", "wrong-digest", "late-record", "task-record"} {
 		t.Run(fault, func(t *testing.T) {

@@ -54,6 +54,7 @@ export class OperationsStore implements OperationsRecorder {
   private pendingBytes = 0;
   private labels: Labels | undefined;
   private currentLabels: Labels | undefined;
+  private labelRefreshSequence = 0;
   private readLabelsCache: Labels = [];
   private running: Promise<void> | undefined;
   private scheduled: NodeJS.Immediate | undefined;
@@ -154,6 +155,7 @@ export class OperationsStore implements OperationsRecorder {
   }
   private updateLabels(workspaces: Labels): void {
     if (this.closed) return;
+    this.labelRefreshSequence++;
     // Coalesced and bounded, through the same writer as observations.
     const labels = workspaces
       .slice(0, 128)
@@ -216,7 +218,8 @@ export class OperationsStore implements OperationsRecorder {
   }
   /** Load the private owner index before a separate MCP writer serves requests.
    * Missing/unreadable configuration leaves all workspace targets unresolved. */
-  async loadWorkspaceLabels(deadlineMs = 100): Promise<void> {
+  async loadWorkspaceLabels(deadlineMs = 100, refresh = false): Promise<void> {
+    const sequence = refresh ? ++this.labelRefreshSequence : 0;
     let timer: NodeJS.Timeout | undefined;
     try {
       const labels = await Promise.race([
@@ -225,7 +228,10 @@ export class OperationsStore implements OperationsRecorder {
           timer = setTimeout(() => resolve([]), Math.max(0, deadlineMs));
         }),
       ]);
-      this.currentLabels ??= labels;
+      if (refresh) {
+        if (sequence === this.labelRefreshSequence && !this.closed)
+          this.currentLabels = labels;
+      } else this.currentLabels ??= labels;
     } finally {
       clearTimeout(timer);
     }
@@ -872,6 +878,87 @@ export class OperationsStore implements OperationsRecorder {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /** Internal lookup only. The caller must supply an existing Go-owned current
+   * path-authority check; this method neither grants nor infers authority. */
+  async lookupReadDiagnostic(
+    requestId: string,
+    workspaceId: string,
+    relativePath: string,
+    authorize: (
+      workspaceId: string,
+      relativePath: string,
+    ) => Promise<string | null>,
+  ): Promise<
+    | {
+        status: "found";
+        requestId: string;
+        diagnostic: NonNullable<OperationEntry["readDiagnostic"]>;
+      }
+    | { status: "unavailable" | "incomplete" | "not_retained" }
+  > {
+    if (this.closed) return { status: "unavailable" };
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+        requestId,
+      )
+    )
+      return { status: "unavailable" };
+    const permitted = async () => {
+      try {
+        const binding = await authorize(workspaceId, relativePath);
+        return typeof binding === "string" && /^[a-f0-9]{64}$/u.test(binding)
+          ? binding
+          : null;
+      } catch {
+        return null;
+      }
+    };
+    const binding = await permitted();
+    if (!binding) return { status: "unavailable" };
+    if (!(await this.flush(5000))) return { status: "incomplete" };
+    const snapshot = await this.snapshot(5000);
+    // No cached/incomplete or corrupt view may prove uniqueness or absence.
+    if (
+      snapshot.readPending ||
+      snapshot.readIncomplete ||
+      snapshot.corruptLines ||
+      snapshot.writeFailures ||
+      snapshot.droppedEntries ||
+      snapshot.entries.length >= this.limits.entries
+    )
+      return { status: "incomplete" };
+    let expected;
+    try {
+      expected = resolveOperationTarget(
+        { workspace: workspaceId, relativePath },
+        this.currentLabels ?? this.readLabelsCache,
+        "identifier",
+      );
+    } catch {
+      return { status: "unavailable" };
+    }
+    if (!expected.workspaceIdentity || expected.relativePath !== relativePath)
+      return { status: "unavailable" };
+    const matches = snapshot.entries.filter(
+      (entry) =>
+        entry.requestId === requestId &&
+        entry.kind === "computer_workspace_read" &&
+        entry.target.workspaceIdentity === expected.workspaceIdentity &&
+        entry.target.relativePath === relativePath &&
+        entry.readDiagnostic !== undefined,
+    );
+    if ((await permitted()) !== binding) return { status: "unavailable" };
+    if (matches.length !== 1)
+      return { status: matches.length ? "incomplete" : "not_retained" };
+    if (matches[0]!.diagnosticBinding !== binding)
+      return { status: "unavailable" };
+    return {
+      status: "found",
+      requestId,
+      diagnostic: matches[0]!.readDiagnostic!,
+    };
   }
   private mergeDiagnostics(snapshot: OperationsSnapshot) {
     // readSnapshot includes other writers only; our counters are always current.

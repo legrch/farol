@@ -45,6 +45,19 @@ var _ port.Search = (*computerFileOwners)(nil)
 var _ port.ScratchBoundWorkspace = (*computerFileOwners)(nil)
 var _ port.ScratchBoundList = (*computerFileOwners)(nil)
 var _ port.ScratchBoundSearch = (*computerFileOwners)(nil)
+var _ port.ReadDiagnosticPolicy = (*computerFileOwners)(nil)
+
+func (o *computerFileOwners) BindReadDiagnostic(request port.ReadRequest, value []byte) (string, error) {
+	selected, err := o.reader(request.Workspace.FilePolicy)
+	if err != nil {
+		return "", err
+	}
+	policy, ok := selected.(port.ReadDiagnosticPolicy)
+	if !ok {
+		return "", authority.Fail("WORKSPACE_HELPER_FAILED", "native-workspace")
+	}
+	return policy.BindReadDiagnostic(request, value)
+}
 
 func newComputerReaders(home string) (*computerFileOwners, error) {
 	legacyRead, err := filesystem.NewWithFilePolicy(home, authority.LegacyProtectedFiles)
@@ -136,6 +149,18 @@ func (o *computerFileOwners) Read(ctx context.Context, request port.ReadRequest)
 		return nil, err
 	}
 	return selected.Read(ctx, request)
+}
+
+func (o *computerFileOwners) AuthorizeReadDiagnostic(ctx context.Context, request port.ReadRequest) error {
+	selected, err := o.reader(request.Workspace.FilePolicy)
+	if err != nil {
+		return err
+	}
+	policy, ok := selected.(port.ReadDiagnosticPolicy)
+	if !ok || policy == nil {
+		return authority.Fail("WORKSPACE_HELPER_FAILED", "native-workspace")
+	}
+	return policy.AuthorizeReadDiagnostic(ctx, request)
 }
 
 // Diagnostic reads use the same selected policy owner as ordinary reads and

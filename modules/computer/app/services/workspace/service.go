@@ -252,7 +252,7 @@ func cancelled(ctx context.Context) error {
 }
 func nativeFailure(err error) error {
 	var failure *authority.Failure
-	if errors.As(err, &failure) {
+	if errors.As(err, &failure) && failure != nil {
 		return authority.Fail(failure.Code, "native-workspace")
 	}
 	return authority.Fail("WORKSPACE_HELPER_FAILED", "native-workspace")

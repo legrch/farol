@@ -88,10 +88,12 @@ task test:e2e:setup-config-error:package
 task test:e2e:update:package
 ```
 
-These consume the sealed package. The guided behavior journey saves file policy,
-Quits and reopens disposable state; its local attachment fixture is not an external
-ChatGPT witness. Configuration-fault and updater tests do not prove an installed
-swap, app-and-state restoration or the first launch after helper completion.
+These consume the sealed package, except that the retired guided composite reports
+`NOT_RUN` and supplies no acceptance evidence. The current source-build Setup
+journey uses disposable state and a local attachment fixture; it does not qualify
+the packaged UI or external ChatGPT. Configuration-fault and updater tests do not
+prove an installed swap, app-and-state restoration or the first launch after helper
+completion. See [test scopes](testing-standalone.md) for the current boundaries.
 
 The broader preview fixture suite has separate display requirements:
 

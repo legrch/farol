@@ -794,6 +794,7 @@ def require_predecessor_state(request):
     # state. Through beta11, completed Shell readers also reject the v6
     # supervised format written from beta12. Keep both boundaries in sync
     # with release/domain/predecessor-state.
+    # 0.5.7 cannot read 0.5.8 send-requested or extended history records.
     # No app+state downgrade is qualified for these predecessors.
     # Refuse before restoring its app; never launch it against newer settings.
     # This is not a compatibility claim for other release transitions.
@@ -803,6 +804,7 @@ def require_predecessor_state(request):
     previous_process_readers = {f"0.2.0-owner.beta.{n}" for n in range(1, 12)}
     if ((source.startswith("0.1.") and not target.startswith("0.1."))
             or source == "0.2.0-owner.beta.3"
+            or (source == "0.5.7" and target == "0.5.8")
             or (source in previous_state_readers
                 and target not in previous_state_readers)
             or (source in previous_process_readers

@@ -83,6 +83,22 @@ function ps(args, budget = 3000) {
   return { status: result.status, text: result.stdout.trim() };
 }
 
+// A global inventory is complete only after successful enumeration. Scoped
+// PID lookups retain their separate status-1/absence confirmation contract.
+export function validatedDevInventory(inventory) {
+  if (
+    inventory?.status !== 0 ||
+    typeof inventory.text !== "string" ||
+    !inventory.text.trim() ||
+    inventory.text.includes("\0")
+  )
+    throw Error("DEV_PROCESS_INVENTORY_UNREADABLE");
+  const lines = inventory.text.split("\n");
+  if (lines.some((line) => !/^\s*\d+\s+\S.*$/u.test(line)))
+    throw Error("DEV_PROCESS_INVENTORY_UNREADABLE");
+  return lines;
+}
+
 // Pure correlation of an independently observed native lifetime with the
 // private run marker and this exact checkout's Electron command.
 export function correlateDevCommand(line, marker, scope, native, bootTime) {
@@ -488,7 +504,7 @@ async function prepareDevBuildOnce(
   // outputs must also be absent. They are never killed by this launcher.
   const inventory = ps(["-ww", "-axo", "pid=,command="]);
   const ownedRoots = devOwnedOutputRoots(writerRoot, profilePath);
-  for (const line of inventory.text.split("\n")) {
+  for (const line of validatedDevInventory(inventory)) {
     if (devInventoryOwnsLine(line, ownedRoots))
       throw Error(
         "DEV_BUILD_OWNED_PROCESSES_REMAIN: Another Dev profile or child uses this checkout. Quit it normally before switching profiles or rebuilding.",

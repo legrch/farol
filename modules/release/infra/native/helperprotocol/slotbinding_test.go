@@ -112,7 +112,7 @@ func TestSlotBindingOriginalPythonASTGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest := sha256.Sum256(original)
+	digest := sha256.Sum256(normalizeOriginalHelper(t, original))
 	if hex.EncodeToString(digest[:]) != "9bd3bf1e06984deeae37cdc61c30063d01b466d26a518952c599fba9c1142c02" {
 		t.Fatal("original slot producer source identity changed")
 	}
@@ -238,6 +238,11 @@ import sys
 import types
 
 source = pathlib.Path(sys.argv[1]).read_bytes()
+# Recover the exact historical source; the added state boundary has its own tests.
+for line in (b"    # 0.5.7 cannot read 0.5.8 send-requested or extended history records.\n",
+             b"            or (source == \"0.5.7\" and target == \"0.5.8\")\n"):
+    assert source.count(line) == 1, "reviewed boundary missing or duplicated"
+    source = source.replace(line, b"", 1)
 digest = "9bd3bf1e06984deeae37cdc61c30063d01b466d26a518952c599fba9c1142c02"
 assert hashlib.sha256(source).hexdigest() == digest, "original producer changed"
 functions = ["fail", "slot_binding_bytes", "canonical_slot_binding", "verify_slot_binding",

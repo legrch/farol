@@ -71,6 +71,35 @@ type fileOwnerDouble struct {
 	mutation                port.MutationRequest
 }
 
+type diagnosticPolicyDouble struct {
+	fileOwnerDouble
+	calls int
+	binds int
+	err   error
+}
+
+func (d *diagnosticPolicyDouble) AuthorizeReadDiagnostic(context.Context, port.ReadRequest) error {
+	d.calls++
+	return d.err
+}
+func (d *diagnosticPolicyDouble) BindReadDiagnostic(port.ReadRequest, []byte) (string, error) {
+	d.binds++
+	return "test-binding", d.err
+}
+
+func TestDiagnosticPolicyUsesOnlySelectedFileOwner(t *testing.T) {
+	legacy, root := &diagnosticPolicyDouble{}, &diagnosticPolicyDouble{}
+	owners := &computerFileOwners{legacyRead: legacy, rootRead: root}
+	request := port.ReadRequest{Workspace: port.Descriptor{FilePolicy: authority.RootScopedFiles}, RelativePath: "note.md"}
+	root.err = errors.New("refused")
+	if err := owners.AuthorizeReadDiagnostic(context.Background(), request); err != root.err || root.calls != 1 || legacy.calls != 0 || root.reads != 0 {
+		t.Fatal("wrong owner, fallback or file read")
+	}
+	if _, err := owners.BindReadDiagnostic(request, []byte("snapshot")); err != root.err || root.binds != 1 || legacy.binds != 0 || root.reads != 0 {
+		t.Fatal("binding used the wrong owner, fallback or file read")
+	}
+}
+
 type scratchFileOwnerDouble struct {
 	fileOwnerDouble
 	boundCalls int

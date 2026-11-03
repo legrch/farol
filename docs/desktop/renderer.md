@@ -12,12 +12,7 @@ not provide durable exactly-once execution. The authoritative backend still owns
 operation binding. Distinct intentions have distinct IDs. A conflicting payload
 for a pending/unknown ID is refused; a lost reply is unknown, never safe to replay.
 
-The legacy adapter has no authenticated runtime incarnation, per-stream sequence,
-or general retained operation query. F0 reports those capabilities as unavailable,
-with only the existing workspace-edit observation supported. Task revisions,
-configuration request order, and native layout are separate clocks. A mirrored
-host overlay cannot close a renderer-owned overlay. Transcript deltas never enter
-renderer Activity. Activity is bounded, window-local metadata, not durable history.
+The legacy adapter has no authenticated runtime incarnation, per-stream sequence, or general retained operation query. F0 reports those capabilities as unavailable, with only the existing workspace-edit observation supported. Task revisions, configuration request order, and native layout are separate clocks. A mirrored host overlay cannot close a renderer-owned overlay. Transcript deltas never enter renderer Activity. The fallback Activity projection is window-local; the current OperationsStore separately persists bounded operation metadata and projects retained records into the renderer.
 
 Core's host-only generated bridge is `apps/desktop/bridge/{wire,client}.ts`.
 A future capability adapter consumes it in the trusted host, maps safe projections

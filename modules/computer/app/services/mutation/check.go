@@ -19,9 +19,11 @@ type Edit struct {
 	Edits          []TextEdit
 	ExpectedSHA256 string
 }
+type Remove struct{ RelativePath, ExpectedSHA256 string }
 
-func (Write) operation() {}
-func (Edit) operation()  {}
+func (Write) operation()  {}
+func (Edit) operation()   {}
+func (Remove) operation() {}
 
 type CheckRequest struct {
 	OperationID, OwnerID, SessionID, TaskID string
@@ -77,6 +79,10 @@ func (s *Service) Check(_ context.Context, r CheckRequest) (*CheckResponse, erro
 		op = mutation.Edit{RelativePath: v.RelativePath, Edits: edits, ExpectedSHA256: v.ExpectedSHA256}
 		hash := v.ExpectedSHA256
 		summary = Summary{Kind: "workspace.edit", RelativePath: v.RelativePath, ExpectedSHA256: &hash}
+	case Remove:
+		op = mutation.Remove{RelativePath: v.RelativePath, ExpectedSHA256: v.ExpectedSHA256}
+		hash := v.ExpectedSHA256
+		summary = Summary{Kind: "workspace.remove", RelativePath: v.RelativePath, ExpectedSHA256: &hash}
 	}
 	if err := mutation.ValidateInput(op); err != nil {
 		return nil, err

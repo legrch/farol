@@ -79,6 +79,9 @@ func (darwinMutation) link(from int, name string, to int, target string) error {
 func (darwinMutation) swap(from int, name string, to int, target string) error {
 	return unix.RenameatxNp(from, name, to, target, unix.RENAME_SWAP)
 }
+func (darwinMutation) moveExclusive(from int, name string, to int, target string) error {
+	return unix.RenameatxNp(from, name, to, target, unix.RENAME_EXCL|unix.RENAME_NOFOLLOW_ANY)
+}
 func (darwinMutation) unlink(parent int, name string, directory bool) error {
 	flags := 0
 	if directory {

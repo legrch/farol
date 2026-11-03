@@ -108,6 +108,13 @@ func (n *chatMutationNative) Mutate(ctx context.Context, input computerport.Muta
 		for _, edit := range value.Edits {
 			text += edit.NewText
 		}
+	case mutation.Remove:
+		hash := value.ExpectedSHA256
+		receipt.BeforeSHA256 = &hash
+		if n.after != nil {
+			n.after()
+		}
+		return receipt, nil
 	default:
 		return nil, errors.New("unexpected controlled operation")
 	}

@@ -10,6 +10,7 @@
     "core.status": "read",
     "core.operation.status": "read",
     "computer.workspace.read": "read",
+    "computer.workspace.readdiagnosticauthorize": "read",
     "task.create": "effect",
     "chat.turn": "effect",
     "chat.retired.list": "read",
@@ -84,6 +85,7 @@
     "computer.workspace.search": "read",
     "computer.workspace.write": "effect",
     "computer.workspace.edit": "effect",
+    "computer.workspace.remove": "effect",
     "computer.workspace.mutation.read": "read",
     "computer.process.held.ready": "read",
     "computer.process.held.release": "effect",
@@ -474,6 +476,39 @@
         "retry": {
           "type": "text",
           "values": ["never"]
+        },
+        "stage": {
+          "type": "text",
+          "values": ["policy", "root", "ancestor", "target"],
+          "optional": true
+        },
+        "reason": {
+          "type": "text",
+          "values": [
+            "policy_denied",
+            "unsafe_root",
+            "link_not_supported",
+            "hardlink_not_supported",
+            "os_permission_denied"
+          ],
+          "optional": true
+        },
+        "diagnosticBinding": {
+          "type": "string",
+          "minBytes": 64,
+          "maxBytes": 64,
+          "optional": true
+        }
+      }
+    },
+    "ComputerReadDiagnosticAuthorizationResponse": {
+      "type": "object",
+      "fields": {
+        "request": { "type": "ComputerReadRequest" },
+        "diagnosticBinding": {
+          "type": "string",
+          "minBytes": 64,
+          "maxBytes": 64
         }
       }
     },
@@ -4734,6 +4769,24 @@
         }
       }
     },
+    "ComputerConnectorRemove": {
+      "type": "object",
+      "fields": {
+        "execution": { "type": "ComputerConnectorExecution" },
+        "callId": { "type": "id" },
+        "workspaceId": { "type": "id" },
+        "relativePath": { "type": "string", "minBytes": 1, "maxBytes": 4096 },
+        "expectedSHA256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "ComputerRemoveReceipt": {
+      "type": "object",
+      "fields": {
+        "operation": { "type": "string", "values": ["remove"] },
+        "relativePath": { "type": "string", "minBytes": 1, "maxBytes": 4096 },
+        "beforeSHA256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
     "ComputerConnectorMutationRead": {
       "type": "object",
       "fields": {
@@ -4770,7 +4823,7 @@
         },
         "operation": {
           "type": "string",
-          "values": ["write", "edit"]
+          "values": ["write", "edit", "remove"]
         }
       }
     },
@@ -4812,6 +4865,7 @@
           "type": "ComputerMutationReceipt",
           "optional": true
         },
+        "removeReceipt": { "type": "ComputerRemoveReceipt", "optional": true },
         "failure": {
           "type": "ComputerMutationFailure",
           "optional": true

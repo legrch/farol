@@ -79,6 +79,85 @@ function setup(
     store,
   };
 }
+it("retains a correlated safe diagnostic on the original read lifecycle", async () => {
+  const { store } = setup();
+  const metadata: OperationMetadata = {
+    source: "ChatGPT",
+    kind: "computer_workspace_read",
+    target: {},
+    requestId: "07f13182-1414-4e08-b579-f468c6fa2e64",
+  };
+  const finish = store.begin(metadata);
+  metadata.readDiagnostic = { stage: "policy", reason: "policy_denied" };
+  metadata.diagnosticBinding = "a".repeat(64);
+  finish("refused", "WORKSPACE_PATH_REFUSED", 1);
+  expect(await store.flush(5000)).toBe(true);
+  const snapshot = await store.snapshot(5000);
+  expect(snapshot.entries).toHaveLength(1);
+  expect(snapshot.entries[0]).toMatchObject({
+    requestId: metadata.requestId,
+    outcome: "refused",
+    code: "WORKSPACE_PATH_REFUSED",
+    readDiagnostic: { stage: "policy", reason: "policy_denied" },
+  });
+});
+it("looks up one bounded diagnostic only while its exact target is authorized", async () => {
+  const { store } = setup();
+  store.setWorkspaceLabels([{ workspaceId: "workspace", label: "Docs" }]);
+  const metadata: OperationMetadata = {
+    source: "ChatGPT",
+    kind: "computer_workspace_read",
+    target: { workspace: "workspace", relativePath: "note.md" },
+    requestId: "07f13182-1414-4e08-b579-f468c6fa2e64",
+  };
+  const finish = store.begin(metadata);
+  metadata.readDiagnostic = { stage: "target", reason: "link_not_supported" };
+  metadata.diagnosticBinding = "a".repeat(64);
+  finish("refused", "WORKSPACE_PATH_REFUSED", 1);
+  expect(await store.flush(5000)).toBe(true);
+  const allow = vi.fn(async () => "a".repeat(64));
+  expect(
+    await store.lookupReadDiagnostic(
+      metadata.requestId!,
+      "workspace",
+      "note.md",
+      allow,
+    ),
+  ).toEqual({
+    status: "found",
+    requestId: metadata.requestId,
+    diagnostic: { stage: "target", reason: "link_not_supported" },
+  });
+  expect(allow).toHaveBeenCalledTimes(2);
+  const revoked = vi
+    .fn()
+    .mockResolvedValueOnce("a".repeat(64))
+    .mockResolvedValueOnce(null);
+  expect(
+    await store.lookupReadDiagnostic(
+      metadata.requestId!,
+      "workspace",
+      "note.md",
+      revoked,
+    ),
+  ).toEqual({ status: "unavailable" });
+  expect(
+    await store.lookupReadDiagnostic(
+      metadata.requestId!,
+      "workspace",
+      "note.md",
+      async () => "b".repeat(64),
+    ),
+  ).toEqual({ status: "unavailable" });
+  expect(
+    await store.lookupReadDiagnostic(
+      metadata.requestId!,
+      "workspace",
+      "other.md",
+      allow,
+    ),
+  ).toEqual({ status: "not_retained" });
+});
 it("persists unmapped-code counts across restart and exposes only safe unknown records", async () => {
   const { store, directory } = setup();
   const metadata = {
@@ -3024,6 +3103,35 @@ it("bounds MCP label loading and records unknown targets when the owner index st
   expect(await store.flush(5000)).toBe(true);
   expect((await store.snapshot(5000)).entries[0]!.target).toEqual({
     workspace: unknownWorkspace,
+  });
+});
+
+it("does not let an older MCP label refresh replace a newer owner update", async () => {
+  const { store } = setup();
+  let finish!: (labels: OperationWorkspaceLabels) => void;
+  const oldRead = new Promise<OperationWorkspaceLabels>((resolve) => {
+    finish = resolve;
+  });
+  const reader = store as unknown as {
+    readLabels(): Promise<OperationWorkspaceLabels>;
+  };
+  const read = vi.spyOn(reader, "readLabels").mockReturnValueOnce(oldRead);
+  const refreshing = store.loadWorkspaceLabels(5000, true);
+  store.setWorkspaceLabels([{ workspaceId: "new", label: "New Docs" }]);
+  finish([{ workspaceId: "old", label: "Old Docs" }]);
+  await refreshing;
+  read.mockRestore();
+  store.record(
+    { ...metadata, target: { workspace: "new", relativePath: "note.md" } },
+    "done",
+    null,
+    1,
+  );
+  expect(await store.flush(5000)).toBe(true);
+  expect((await store.snapshot(5000)).entries[0]!.target).toEqual({
+    workspace: "New Docs",
+    workspaceIdentity: identity("new"),
+    relativePath: "note.md",
   });
 });
 

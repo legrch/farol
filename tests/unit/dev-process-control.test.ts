@@ -332,6 +332,27 @@ it("requires exact native exclusion before ignoring a named inventory process", 
     expect(control.devInventoryCandidateAbsent(seen)).toBe(false);
 });
 
+it("refuses incomplete global process inventories before owner selection", () => {
+  for (const result of [
+    { status: 1, text: "" },
+    { status: 1, text: "123 /usr/bin/example" },
+    { status: 0, text: "" },
+    { status: 0, text: "123 /usr/bin/example\nnot a process row" },
+    { status: 0, text: "123 /usr/bin/example\0bad" },
+    { status: 0, text: "123" },
+  ]) {
+    expect(() => control.validatedDevInventory(result)).toThrow(
+      "DEV_PROCESS_INVENTORY_UNREADABLE",
+    );
+  }
+  expect(
+    control.validatedDevInventory({
+      status: 0,
+      text: "123 /usr/bin/example\n456 /bin/ps -axo",
+    }),
+  ).toEqual(["123 /usr/bin/example", "456 /bin/ps -axo"]);
+});
+
 it("refuses retained core backend or watchdog paths independently of a fresh-review profile", () => {
   const roots = control.devOwnedOutputRoots(root, "/fixture/daily-profile");
   for (const executable of [

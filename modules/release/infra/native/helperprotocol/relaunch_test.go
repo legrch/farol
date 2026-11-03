@@ -46,7 +46,7 @@ func TestRelaunchComposesActualInputPolicyAndCodecAgainstOriginalPython(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest := sha256.Sum256(original)
+	digest := sha256.Sum256(normalizeOriginalHelper(t, original))
 	if hex.EncodeToString(digest[:]) != fixture.SHA256 {
 		t.Fatal("original helper source identity changed")
 	}

@@ -40,11 +40,49 @@ func connectorFixture(t *testing.T, readMethods ...string) (net.Conn, ConnectorC
 	return client, config, calls, done
 }
 
+func TestConnectorConfigAcceptsCompleteSelectedCapabilitiesOnly(t *testing.T) {
+	handler := Method{Handle: func(context.Context, Request) (*Outcome, error) {
+		return &Outcome{Status: "ok", Data: json.RawMessage(`{}`)}, nil
+	}}
+	config := ConnectorConfig{
+		Endpoint: wire.ComputerConnectorEndpoint{
+			Binding:    wire.ComputerConnectorBinding{BuildId: "build", ProfileId: "profile", BackendGeneration: "backend", RuntimeId: "connector-runtime", ConnectorGeneration: "1"},
+			SocketPath: "/private/tmp/fixture.sock", Token: strings.Repeat("a", 64),
+		},
+		Methods: map[string]Method{"computer.workspace.list": handler},
+	}
+	for _, name := range []string{
+		"computer.workspace.search", "computer.workspace.read", "computer.workspace.readdiagnosticauthorize",
+		"computer.workspace.catalogue", "computer.workspace.bootstrap", "computer.connector.verify",
+		"computer.connector.catalogueverify", "computer.connector.verification", "computer.workspace.write",
+		"computer.workspace.edit", "computer.workspace.remove", "computer.workspace.mutation.read",
+		"computer.process.start", "computer.process.read", "computer.process.cancel", "task.codex.selected.read",
+	} {
+		config.Methods[name] = handler
+	}
+	if len(config.Methods) != 17 || validateConnectorConfig(config) != nil {
+		t.Fatal("complete selected capability set rejected")
+	}
+	delete(config.Methods, "computer.process.cancel")
+	if validateConnectorConfig(config) == nil {
+		t.Fatal("incomplete process capability set accepted")
+	}
+	config.Methods["computer.process.cancel"] = handler
+	delete(config.Methods, "computer.workspace.remove")
+	config.Methods["computer.authority.publish"] = handler
+	if validateConnectorConfig(config) == nil {
+		t.Fatal("unselected authority route accepted")
+	}
+}
+
 func TestConnectionVerificationObservationHandshakeAndReadOnlyDispatch(t *testing.T) {
 	testConnectionVerificationReadOnly(t, "computer.connector.verification")
 }
 func TestConnectionCatalogueVerificationHandshakeAndReadOnlyDispatch(t *testing.T) {
 	testConnectionVerificationReadOnly(t, "computer.connector.catalogueverify")
+}
+func TestConnectionSelectedCodexHandshakeAndReadOnlyDispatch(t *testing.T) {
+	testConnectionVerificationReadOnly(t, "task.codex.selected.read")
 }
 func testConnectionVerificationReadOnly(t *testing.T, method string) {
 	t.Helper()

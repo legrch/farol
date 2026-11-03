@@ -6,7 +6,10 @@ import type { OperationMetadata } from "../renderer/operations-contract";
 export function configurationOperation(
   value: ProductConfigurationCommand,
 ): OperationMetadata {
-  const kind = value.kind;
+  const kind =
+    value.kind === "chatgpt.run-deep-test" && value.test === "connection"
+      ? "chatgpt.run-connection-test"
+      : value.kind;
   const source =
     kind.startsWith("host.") || kind.startsWith("model.")
       ? "Codex"

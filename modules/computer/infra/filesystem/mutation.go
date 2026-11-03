@@ -63,7 +63,7 @@ func (v fileVersion) candidate(w fileVersion) bool {
 }
 
 // Effect calls are synchronous single attempts. Read/write may transfer bounded
-// chunks, never replay publication. No recursive removal or ordinary rename.
+// chunks, never replay publication. No recursive removal or weak rename fallback.
 type mutationFS interface {
 	root() (int, error)
 	open(int, string, int, uint32) (int, error)
@@ -77,6 +77,7 @@ type mutationFS interface {
 	mkdir(int, string, uint32) error
 	link(int, string, int, string) error
 	swap(int, string, int, string) error
+	moveExclusive(int, string, int, string) error
 	unlink(int, string, bool) error
 	uid() uint32
 	name() (string, error)

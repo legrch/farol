@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import {
   ConnectionTestButton,
   runFreshConnectionTest,
+  runManualConnectionPrompt,
 } from "../../apps/desktop/renderer/connection-test";
 import { commandAllowed } from "../../src/ui/renderer/command-eligibility";
 import { WindowController } from "../../src/ui/renderer/controller";
@@ -71,6 +72,47 @@ async function setup() {
     cleanup: () => controller.dispose(),
   };
 }
+it("sends the toolbar test as one manual chat request without repair or setup verification", async () => {
+  const h = await setup();
+  try {
+    h.set({
+      ...h.snapshot,
+      destination: { ...h.snapshot.destination, area: "chatgpt", taskId: "" },
+    });
+    expect((await runManualConnectionPrompt(h.facade)).state).toBe("applied");
+    expect(h.configure).toHaveBeenCalledTimes(2);
+    expect(h.configure.mock.calls[0]![0]).toMatchObject({
+      kind: "chatgpt.run-deep-test",
+      test: "connection",
+      taskId: "",
+    });
+    expect(h.configure.mock.calls[1]![0]).toEqual({
+      kind: "chatgpt.ack-deep-test",
+      operationId: (h.configure.mock.calls[0]![0] as { operationId: string })
+        .operationId,
+    });
+  } finally {
+    h.cleanup();
+  }
+});
+it("does not acknowledge an ambiguous manual send", async () => {
+  const h = await setup();
+  try {
+    h.set({
+      ...h.snapshot,
+      destination: { ...h.snapshot.destination, area: "chatgpt", taskId: "" },
+    });
+    h.configure.mockResolvedValue({
+      id: "check",
+      state: "unknown",
+      code: null,
+    });
+    expect((await runManualConnectionPrompt(h.facade)).state).toBe("unknown");
+    expect(h.configure).toHaveBeenCalledTimes(1);
+  } finally {
+    h.cleanup();
+  }
+});
 it.each([
   ["refused", "Check sign-in and connection in Setup."],
   [
@@ -303,7 +345,7 @@ it.each(["lost-ack", "same-binding", "changed-owner", "stale"])(
     }
   },
 );
-it("scoped unknown remains unknown and reading notifications cannot release another writer fence", async () => {
+it("scoped unknown cannot release another writer fence", async () => {
   const h = await setup();
   try {
     const key = `settings:connector.verify-app:${"c".repeat(64)}`;

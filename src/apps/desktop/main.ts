@@ -31,6 +31,7 @@ import {
 } from "../../../apps/desktop/owner-stop-presentation";
 
 import { ConnectionStatusTracker } from "../../../apps/desktop/connection-status";
+import { passiveHealthObserver } from "../../../apps/desktop/operations/passive-health";
 import {
   unavailableConnectionStatus,
   type ConnectionStatusView,
@@ -460,7 +461,13 @@ import {
   type ChatGptTaskJournalRecord,
   type ChatGptTaskJournalResult,
 } from "./chatgpt-task-journal";
-import { ChatGptTaskJournalOperationIdSchema } from "./chatgpt-task-journal-record";
+import {
+  ChatGptTaskJournalOperationIdSchema,
+  MAX_CHATGPT_TASK_JOURNAL_BYTES,
+  MAX_DEEP_TEST_HISTORY_BYTES,
+  MAX_DEEP_TEST_HISTORY_RECORDS,
+  MAX_DEEP_TEST_OUTSTANDING,
+} from "./chatgpt-task-journal-record";
 import {
   PrivateChatGptConversationStore,
   type ChatGptConversationRecord,
@@ -927,6 +934,15 @@ let connectorCredentialStore: PrivateConnectorKeyStore | null = null;
 let secureMcpConnectorRuntime: SecureMcpConnectorRuntime | null = null;
 let modelLifecycle: FarolModelLifecycle | null = null;
 let connectorTaskAdmission = false;
+// Manual chat diagnostics reserve dispatch, but do not alter the connector.
+let connectorTaskAdmissionPurpose: "manual-diagnostic" | null = null;
+
+function connectionAdmissionInProgress(): boolean {
+  return (
+    connectorTaskAdmission &&
+    connectorTaskAdmissionPurpose !== "manual-diagnostic"
+  );
+}
 // Presentation spans workspace admission, tunnel startup and the app check.
 // It conveys no authority and is never restored from Activity or saved settings.
 let startupConnectionChecking = true;
@@ -1437,7 +1453,11 @@ let recoverableDeepTests: readonly ChatGptTaskJournalRecord[] = [];
 let deepTestRecoveryReady = false;
 const deepTestRequests = new Map<
   string,
-  { taskId: string; promise: Promise<ProductConfigurationResult> }
+  {
+    taskId: string;
+    test: "connection" | "deep";
+    promise: Promise<ProductConfigurationResult>;
+  }
 >();
 const deepTestAcknowledgements = new Map<
   string,
@@ -4883,7 +4903,7 @@ function ownerStoppedCurrent(original: OwnerStoppedCapture): boolean {
 }
 
 function captureConnectionStatus(): ConnectionStatusCapture | null {
-  if (connectorTaskAdmission) return null;
+  if (connectionAdmissionInProgress()) return null;
   const running = captureConnectorHealth();
   if (running) return { kind: "running", original: running };
   const stopped = completedOwnerStop;
@@ -4893,7 +4913,7 @@ function captureConnectionStatus(): ConnectionStatusCapture | null {
 }
 
 function connectionStatusCurrent(capture: ConnectionStatusCapture): boolean {
-  if (connectorTaskAdmission) return false;
+  if (connectionAdmissionInProgress()) return false;
   return capture.kind === "running"
     ? connectorHealthCurrent(capture.original)
     : ownerStoppedCurrent(capture.original);
@@ -4933,6 +4953,8 @@ function observedConnectorHealth(
 }
 function startConnectorTransportWatch(): void {
   if (connectorTransportWatch || quitInProgress) return;
+  const observePassiveHealth =
+    passiveHealthObserver<SecureMcpConnectorRuntime>(operationsStore());
   connectorTransportWatch = new ConnectorTransportWatch({
     capture: captureConnectorTransport,
     current: connectorTransportCurrent,
@@ -4940,7 +4962,11 @@ function startConnectorTransportWatch(): void {
       // Tunnel HTTP readiness cannot stand in for the original Go owner.
       // Lost backend settlement fences recovery; never respawn it here.
       if (!original.core.backendAvailable) return "unknown";
-      const healthy = await observedConnectorHealth(original.connector);
+      const healthy = await observePassiveHealth(
+        original.connector,
+        () => original.connector.checkHealth(),
+        () => connectorTransportCurrent(original),
+      );
       if (!original.core.backendAvailable) return "unknown";
       const terminal = original.connector.getTunnelObservation();
       if (terminal && terminal.runtimeGeneration !== original.runtimeGeneration)
@@ -6954,13 +6980,18 @@ async function configureProductObserved(
     const id = parsed.data.operationId;
     const existing = deepTestRequests.get(id);
     if (existing)
-      return existing.taskId === parsed.data.taskId
+      return existing.taskId === parsed.data.taskId &&
+        existing.test === (parsed.data.test ?? "deep")
         ? existing.promise
         : configurationFailure("CHATGPT_CONVERSATION_REFUSED");
     const attempt = Promise.resolve().then(() =>
       configureNewProductRequest(parsed.data),
     );
-    deepTestRequests.set(id, { taskId: parsed.data.taskId, promise: attempt });
+    deepTestRequests.set(id, {
+      taskId: parsed.data.taskId,
+      test: parsed.data.test ?? "deep",
+      promise: attempt,
+    });
     return attempt;
   }
   if (
@@ -7282,6 +7313,7 @@ function deliverConfigurationReply(
 async function runManualDeepTest(
   operationId: string,
   expectedTaskId: string,
+  test: "connection" | "deep" = "deep",
 ): Promise<ProductConfigurationResult> {
   if (!ChatGptTaskJournalOperationIdSchema.safeParse(operationId).success)
     return configurationFailure("SETTINGS_INPUT_INVALID");
@@ -7409,6 +7441,7 @@ async function runManualDeepTest(
     );
   };
   chatGptTaskAdmission = true;
+  connectorTaskAdmissionPurpose = "manual-diagnostic";
   connectorTaskAdmission = true;
   let prepared = false;
   let intent = false;
@@ -7424,19 +7457,30 @@ async function runManualDeepTest(
       );
       if (
         scan.status === "unreadable" ||
-        (scan.status === "read" && scan.value.length >= 256) ||
+        (scan.status === "read" &&
+          (scan.value.length >= MAX_DEEP_TEST_HISTORY_RECORDS ||
+            scan.totalBytes +
+              MAX_CHATGPT_TASK_JOURNAL_BYTES * (MAX_DEEP_TEST_OUTSTANDING + 1) >
+              MAX_DEEP_TEST_HISTORY_BYTES ||
+            scan.value.filter(
+              (record) => record.phase !== "delivery_acknowledged",
+            ).length >= MAX_DEEP_TEST_OUTSTANDING)) ||
         !isCurrent()
       )
         throw new Error("DEEP_TEST_UNAVAILABLE");
       await journal.prepare({ operationId, kind: "readonly" });
       prepared = true;
     });
-    const prompt = `Run a manual Deep test using the selected ${appName} app. List approved workspaces and choose the first available yourself; if none is available, stop. Exercise connection status and bounded file listing and reading without opening secrets or unrelated personal data. Where the existing grant permits, create only the new uniquely named root-level file farol-deep-test-${operationId}.txt with computer_workspace_write and expectedSha256: null (create-only). Do not list or read that nonexistent test path before creating it, and do not create a directory. If creation is refused, stop without changing the operation ID. After confirmed creation, read only this new file and test edit with its returned exact SHA-256. Where granted, run only harmless bounded pwd and printf shell checks in the selected workspace. Never modify or delete pre-existing items, bypass permissions or confirmations, or retry a refused or uncertain effect. Clean up only the fresh test artifacts created by this run when their identity and contents are confirmed and existing tools and permissions allow it; otherwise leave them and report cleanup NOT RUN. Never clean up after an unknown effect. Stop on any unknown outcome. Report each capability as PASS, FAIL, or NOT RUN with observed evidence and limitations.`;
+    const prompt =
+      test === "connection"
+        ? `Use the selected ${appName} app to call computer_connection_status once. Report the observed result briefly; do not read or change files.`
+        : `Run a manual Deep test using the selected ${appName} app. List approved workspaces and choose the first available yourself; if none is available, stop. Exercise connection status and bounded file listing and reading without opening secrets or unrelated personal data. Where the existing grant permits, create only the new uniquely named root-level file farol-deep-test-${operationId}.txt with computer_workspace_write and expectedSha256: null (create-only). Do not list or read that nonexistent test path before creating it, and do not create a directory. If creation is refused, stop without changing the operation ID. After confirmed creation, read only this new file and test edit with its returned exact SHA-256. For shell smoke, where granted, run only bounded pwd and printf checks in the selected workspace. Treat cleanup as a separate case: only if this run's create and edit outcomes are known, the exact file path and current contents are confirmed, no external writer is expected, and the current write grant allows it, you may use Shell with write:true and pinned /bin/rm on that one exact path. Use a separate operation ID and observe its original result; do not use globs or recursive removal. After known success, verify the target is absent and any test canary is preserved. A pre-removal check is not an atomic compare-and-delete against external writers. If these conditions are not met, leave the file and report cleanup NOT RUN. Never modify or delete pre-existing items, bypass permissions or confirmations, or retry a refused or uncertain effect. Never clean up after an unknown effect. Stop on any unknown outcome. Report shell smoke and cleanup separately as PASS, FAIL, or NOT RUN, and report each other capability with observed evidence and limitations; do not claim full success when a case was not run.`;
     const result = await route.runReadonlyTask(
       prompt,
       [],
       {
         manualDeepTest: true,
+        manualSubmissionOnly: true,
         beforeSend: isCurrent,
         onDispatchIntent: async () => {
           if (!isCurrent()) throw new Error("DEEP_TEST_CHANGED");
@@ -7483,6 +7527,7 @@ async function runManualDeepTest(
   } finally {
     chatGptTaskAdmission = false;
     connectorTaskAdmission = false;
+    connectorTaskAdmissionPurpose = null;
   }
 }
 
@@ -7512,8 +7557,21 @@ async function configureAdmittedProduct(
   command: ProductConfigurationCommand,
 ): Promise<ProductConfigurationResult> {
   if (!configuration) return configurationFailure("SETTINGS_UNAVAILABLE");
+  // These legacy checks hard-code a model the owner no longer permits.
+  // Refuse before starting a host or changing verification evidence; retain
+  // the old reader and the separate cleanup route for existing assignments.
+  if (
+    new Set<string>(["host.run-codex-smoke", "host.run-codex-agent-check"]).has(
+      command.kind,
+    )
+  )
+    return configurationFailure("CODEX_HOST_MODEL_UNAVAILABLE");
   if (command.kind === "chatgpt.run-deep-test")
-    return runManualDeepTest(command.operationId, command.taskId);
+    return runManualDeepTest(
+      command.operationId,
+      command.taskId,
+      command.test ?? "deep",
+    );
   if (command.kind === "chatgpt.deep-test-status") return deepTestStatus();
   if (command.kind === "chatgpt.ack-deep-test") {
     if (
@@ -12207,7 +12265,8 @@ function installIpc(): void {
     const snapshot = await operationsStore().snapshot();
     return {
       ...snapshot,
-      connectionChecking: startupConnectionChecking || connectorTaskAdmission,
+      connectionChecking:
+        startupConnectionChecking || connectionAdmissionInProgress(),
     };
   });
   ipcMain.handle(channels.selfTest, (event, value: unknown) =>

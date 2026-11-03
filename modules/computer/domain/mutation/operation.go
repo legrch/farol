@@ -19,6 +19,7 @@ type Kind string
 const (
 	WriteKind   Kind = "write"
 	EditKind    Kind = "edit"
+	RemoveKind  Kind = "remove"
 	ScratchKind Kind = "self-test-scratch"
 )
 
@@ -39,14 +40,23 @@ type Edit struct {
 	ExpectedSHA256 string
 }
 
-func (Write) operation()         {}
-func (Edit) operation()          {}
-func (Write) Kind() Kind         { return WriteKind }
-func (Edit) Kind() Kind          { return EditKind }
-func (v Write) Path() string     { return v.RelativePath }
-func (v Edit) Path() string      { return v.RelativePath }
-func (v Write) Clone() Operation { v.ExpectedSHA256 = cloneHash(v.ExpectedSHA256); return v }
-func (v Edit) Clone() Operation  { v.Edits = slices.Clone(v.Edits); return v }
+// Remove moves one entry to a private stage and checks the exact preimage
+// before disposal. It is not an atomic CAS against external writers that can
+// change the staged inode or directory outside the owner gate.
+type Remove struct{ RelativePath, ExpectedSHA256 string }
+
+func (Write) operation()          {}
+func (Edit) operation()           {}
+func (Remove) operation()         {}
+func (Write) Kind() Kind          { return WriteKind }
+func (Edit) Kind() Kind           { return EditKind }
+func (Remove) Kind() Kind         { return RemoveKind }
+func (v Write) Path() string      { return v.RelativePath }
+func (v Edit) Path() string       { return v.RelativePath }
+func (v Remove) Path() string     { return v.RelativePath }
+func (v Write) Clone() Operation  { v.ExpectedSHA256 = cloneHash(v.ExpectedSHA256); return v }
+func (v Edit) Clone() Operation   { v.Edits = slices.Clone(v.Edits); return v }
+func (v Remove) Clone() Operation { return v }
 func cloneHash(v *string) *string {
 	if v == nil {
 		return nil
@@ -121,6 +131,8 @@ func ValidateInput(op Operation) error {
 		for _, edit := range v.Edits {
 			valid = valid && edit.OldText != "" && edit.OldText != edit.NewText && inputText(edit.OldText) && inputText(edit.NewText)
 		}
+	case Remove:
+		valid = RelativePath(v.RelativePath) && SHA256(v.ExpectedSHA256)
 	}
 	if !valid {
 		return authority.Fail("COMPUTER_INVALID_REQUEST", "contract")
@@ -162,6 +174,11 @@ func CheckPrecondition(op Operation, observed *string) error {
 	case Write:
 		expected = v.ExpectedSHA256
 	case Edit:
+		if observed == nil {
+			return authority.Fail("WORKSPACE_NOT_FOUND", "native-workspace")
+		}
+		expected = &v.ExpectedSHA256
+	case Remove:
 		if observed == nil {
 			return authority.Fail("WORKSPACE_NOT_FOUND", "native-workspace")
 		}

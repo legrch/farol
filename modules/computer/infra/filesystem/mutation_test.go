@@ -27,6 +27,10 @@ type fakeMutationFS struct {
 	swaps, links, mkdirs, unlinks int
 	afterSwap                     func(int)
 	beforeSwap                    func(int)
+	beforeMove                    func()
+	afterMove                     func() error
+	moves                         int
+	unlinkNames                   []string
 	afterLink                     func()
 	onSync                        func(*fakeNode) error
 	onMkdir                       func(string) error
@@ -204,8 +208,35 @@ func (f *fakeMutationFS) swap(from int, name string, to int, target string) erro
 	}
 	return nil
 }
+func (f *fakeMutationFS) moveExclusive(from int, name string, to int, target string) error {
+	f.moves++
+	if f.beforeMove != nil {
+		f.beforeMove()
+	}
+	source, dest := f.handles[from], f.handles[to]
+	if source == nil || dest == nil || source.children[name] == nil {
+		return unix.ENOENT
+	}
+	if dest.children[target] != nil {
+		return unix.EEXIST
+	}
+	dest.children[target] = source.children[name]
+	delete(source.children, name)
+	dest.children[target].v.ctime++
+	if f.afterMove != nil {
+		return f.afterMove()
+	}
+	return nil
+}
 func (f *fakeMutationFS) unlink(parent int, name string, dir bool) error {
 	f.unlinks++
+	if f.handles[parent] == f.work && name == "note.md" {
+		f.unlinkNames = append(f.unlinkNames, "target")
+	} else if name == "candidate" {
+		f.unlinkNames = append(f.unlinkNames, "candidate")
+	} else if dir {
+		f.unlinkNames = append(f.unlinkNames, "directory")
+	}
 	if f.onUnlink != nil {
 		if err := f.onUnlink(parent, name, dir); err != nil {
 			return err
@@ -257,6 +288,130 @@ func TestMutationInjectedCreateReplaceAndEdit(t *testing.T) {
 	}
 	if len(f.handles) != 0 {
 		t.Fatal("leaked injected descriptors")
+	}
+}
+
+func TestMutationRemoveExactFileAndPreserveNeighbor(t *testing.T) {
+	m, f := fakeMutable()
+	f.work.children["note.md"] = f.file("old")
+	f.work.children["neighbor.md"] = f.file("neighbor")
+	f.onUnlink = func(parent int, name string, directory bool) error {
+		if f.handles[parent] == f.work && name == "note.md" {
+			t.Fatal("target name must not be unlinked directly")
+		}
+		return nil
+	}
+	op := mutation.Remove{RelativePath: "note.md", ExpectedSHA256: payloadHash([]byte("old"))}
+	out, err := m.Mutate(context.Background(), fakeRequest(op))
+	if err != nil || out == nil || out.Operation != "remove" || out.BeforeSHA256 == nil || *out.BeforeSHA256 != op.ExpectedSHA256 || out.AfterSHA256 != "" || f.unlinks != 2 || stageOf(f) != nil || f.work.children["note.md"] != nil || string(f.work.children["neighbor.md"].data) != "neighbor" || len(f.handles) != 0 {
+		t.Fatalf("bad removal: %+v %v", out, err)
+	}
+}
+
+func TestMutationRemovePreservesReplacementAtMoveBoundary(t *testing.T) {
+	m, f := fakeMutable()
+	f.work.children["note.md"] = f.file("old")
+	replacement := f.file("replacement")
+	f.beforeMove = func() {
+		f.work.children["note.md"] = replacement
+	}
+	op := mutation.Remove{RelativePath: "note.md", ExpectedSHA256: payloadHash([]byte("old"))}
+	out, err := m.Mutate(context.Background(), fakeRequest(op))
+	stage := stageOf(f)
+	if err == nil || out != nil || stage == nil || stage.children["candidate"] != replacement {
+		t.Fatalf("replacement must be retained and removal must not succeed: receipt=%+v err=%v", out, err)
+	}
+	nativeCode(t, err, "WORKSPACE_MUTATION_OUTCOME_UNKNOWN")
+	if f.moves != 1 || f.unlinks != 0 {
+		t.Fatal("a displaced replacement must not be deleted or moved twice")
+	}
+}
+
+func TestMutationRemoveLostMoveAcknowledgementRetainsStagedFile(t *testing.T) {
+	m, f := fakeMutable()
+	original := f.file("old")
+	f.work.children["note.md"] = original
+	f.afterMove = func() error { return unix.EIO }
+	op := mutation.Remove{RelativePath: "note.md", ExpectedSHA256: payloadHash([]byte("old"))}
+	out, err := m.Mutate(context.Background(), fakeRequest(op))
+	nativeCode(t, err, "WORKSPACE_MUTATION_OUTCOME_UNKNOWN")
+	stage := stageOf(f)
+	if out != nil || f.moves != 1 || f.unlinks != 0 || stage == nil || stage.children["candidate"] != original {
+		t.Fatal("a move with unknown acknowledgement must retain the staged file")
+	}
+}
+
+func TestMutationRemoveFailureIsNotReplayed(t *testing.T) {
+	for _, scenario := range []string{"wrong-hash", "changed-before-unlink", "guard-refused", "unlink-error", "sync-error", "lost-ack", "duplicate-callback", "recreated-after-unlink"} {
+		t.Run(scenario, func(t *testing.T) {
+			m, f := fakeMutable()
+			f.work.children["note.md"] = f.file("old")
+			f.work.children["neighbor.md"] = f.file("neighbor")
+			op := mutation.Remove{RelativePath: "note.md", ExpectedSHA256: payloadHash([]byte("old"))}
+			request := fakeRequest(op)
+			want := "WORKSPACE_MUTATION_CONFLICT"
+			switch scenario {
+			case "wrong-hash":
+				op.ExpectedSHA256 = strings.Repeat("a", 64)
+				request.Operation = op
+			case "changed-before-unlink":
+				request.WithPublication = func(_ context.Context, publish func() error) error {
+					f.work.children["note.md"] = f.file("other")
+					return publish()
+				}
+			case "guard-refused":
+				request.WithPublication = func(context.Context, func() error) error {
+					return authority.Fail("AUTHORITY_PATH_DENIED", "task-grant")
+				}
+				want = "AUTHORITY_PATH_DENIED"
+			case "unlink-error":
+				f.onUnlink = func(int, string, bool) error { return unix.EIO }
+				want = "WORKSPACE_MUTATION_OUTCOME_UNKNOWN"
+			case "sync-error":
+				f.onSync = func(*fakeNode) error { return unix.EIO }
+				want = "WORKSPACE_MUTATION_OUTCOME_UNKNOWN"
+			case "lost-ack":
+				request.WithPublication = func(_ context.Context, publish func() error) error {
+					if err := publish(); err != nil {
+						return err
+					}
+					return errors.New("ack lost")
+				}
+				want = "WORKSPACE_MUTATION_OUTCOME_UNKNOWN"
+			case "duplicate-callback":
+				request.WithPublication = func(_ context.Context, publish func() error) error {
+					if err := publish(); err != nil {
+						return err
+					}
+					return publish()
+				}
+				want = "WORKSPACE_MUTATION_OUTCOME_UNKNOWN"
+			case "recreated-after-unlink":
+				f.onSync = func(*fakeNode) error {
+					f.work.children["note.md"] = f.file("replacement")
+					return nil
+				}
+				want = "WORKSPACE_MUTATION_OUTCOME_UNKNOWN"
+			}
+			out, err := m.Mutate(context.Background(), request)
+			if out != nil {
+				t.Fatalf("failure produced receipt: %+v", out)
+			}
+			nativeCode(t, err, want)
+			if f.unlinks > 2 || string(f.work.children["neighbor.md"].data) != "neighbor" {
+				t.Fatal("replayed unlink or changed neighbor")
+			}
+			counts := map[string]int{}
+			for _, name := range f.unlinkNames {
+				counts[name]++
+			}
+			if counts["target"] != 0 || counts["candidate"] > 1 || counts["directory"] > 1 {
+				t.Fatalf("unexpected or replayed deletion: %v", f.unlinkNames)
+			}
+			if scenario == "recreated-after-unlink" && string(f.work.children["note.md"].data) != "replacement" {
+				t.Fatal("replacement was removed")
+			}
+		})
 	}
 }
 func TestMutationInjectedCreateOnlyHashAbsentAndSpecialFiles(t *testing.T) {

@@ -75,6 +75,8 @@ func convert(op Operation) state.Operation {
 			edits[i] = state.TextEdit{OldText: e.OldText, NewText: e.NewText}
 		}
 		return state.Edit{RelativePath: v.RelativePath, Edits: edits, ExpectedSHA256: v.ExpectedSHA256}
+	case Remove:
+		return state.Remove{RelativePath: v.RelativePath, ExpectedSHA256: v.ExpectedSHA256}
 	}
 	return nil
 }

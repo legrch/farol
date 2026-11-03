@@ -68,14 +68,37 @@ vi.mock("../../apps/desktop/bridge/connector-client", () => ({
         buildId: "build",
         profileId: "profile",
         backendGeneration: "backend",
-        capabilities: [],
+        capabilities: ["computer.workspace.readdiagnosticauthorize"],
       };
     }
     async close() {}
     onTerminal() {
       return () => {};
     }
-    async request(_method: string, params: object, call: { id: string }) {
+    async request(method: string, params: object, call: { id: string }) {
+      if (method === "computer.workspace.read")
+        return {
+          status: "refused",
+          requestId: call.id,
+          context: this.verifiedContext,
+          code: "WORKSPACE_PATH_REFUSED",
+          data: {
+            request: params,
+            code: "WORKSPACE_PATH_REFUSED",
+            source: "native-workspace",
+            retry: "never",
+            stage: "target",
+            reason: "link_not_supported",
+            diagnosticBinding: "d".repeat(64),
+          },
+        };
+      if (method === "computer.workspace.readdiagnosticauthorize")
+        return {
+          status: "ok",
+          requestId: call.id,
+          context: this.verifiedContext,
+          data: { request: params, diagnosticBinding: "d".repeat(64) },
+        };
       return {
         status: "ok",
         requestId: call.id,
@@ -184,6 +207,49 @@ it("wires the admitted MCP lifecycle layout to Desktop's store and owner label i
       },
     ]);
     expect(mcp!.directory).toBe(desktop.directory);
+    // A workspace added after the MCP process started must be visible to its
+    // next read and diagnostic lookup without restarting that process.
+    desktop.setWorkspaceLabels([
+      { workspaceId: "workspace", label: "Owner Docs" },
+      { workspaceId: "new-workspace", label: "New Docs" },
+    ]);
+    expect(await desktop.flush(5000)).toBe(true);
+    const refused = await client.callTool({
+      name: "computer_workspace_read",
+      arguments: { workspaceId: "new-workspace", relativePath: "link.md" },
+    });
+    expect(refused.isError).toBe(true);
+    const content = refused.structuredContent as { requestId: string };
+    const diagnostic = await client.callTool({
+      name: "computer_workspace_diagnostic_read",
+      arguments: {
+        requestId: content.requestId,
+        workspaceId: "new-workspace",
+        relativePath: "link.md",
+      },
+    });
+    expect(diagnostic.structuredContent).toMatchObject({
+      status: "ok",
+      data: {
+        lookup: "found",
+        subjectRequestId: content.requestId,
+        diagnostic: { stage: "target", reason: "link_not_supported" },
+      },
+    });
+    desktop.setWorkspaceLabels([]);
+    expect(await desktop.flush(5000)).toBe(true);
+    const withdrawn = await client.callTool({
+      name: "computer_workspace_diagnostic_read",
+      arguments: {
+        requestId: content.requestId,
+        workspaceId: "new-workspace",
+        relativePath: "link.md",
+      },
+    });
+    expect(withdrawn.structuredContent).toMatchObject({
+      status: "ok",
+      data: { lookup: "unavailable" },
+    });
     expect(
       fs.existsSync(path.join(userData, "farol-private", "operations")),
     ).toBe(false);

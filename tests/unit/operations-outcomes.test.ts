@@ -18,6 +18,7 @@ import type { ProductTaskCommandResult } from "../../src/modules/chat/contract/p
 import type { ReadonlyComputerCallResponse } from "../../src/modules/computer/contract/readonly-computer-contract";
 import type { MutableComputerCallResponse } from "../../src/modules/computer/contract/mutable-computer-contract";
 import type { BackendLifecycleObservation } from "../../apps/desktop/bridge/client";
+import { configurationOperation } from "../../apps/desktop/operations/configuration";
 
 type Mapped<T> = Exclude<T, OperationOutcomeCode> extends never ? true : false;
 // Compiler coverage comes from the actual inferred contracts, including enums
@@ -31,6 +32,31 @@ const closedContractCoverage: [
 ] = [true, true, true, true, true];
 
 const metadata = { source: "You", kind: "general.update", target: {} } as const;
+
+it("records the connection prompt separately and only acknowledges its send", () => {
+  const operationId = "44444444-4444-4444-8444-444444444444";
+  const command = {
+    kind: "chatgpt.run-deep-test",
+    operationId,
+    taskId: "",
+    test: "connection",
+  } as const;
+  expect(configurationOperation(command)).toMatchObject({
+    source: "You",
+    kind: "chatgpt.run-connection-test",
+  });
+  expect(
+    observedOperationResult("chatgpt.run-connection-test", {
+      ok: true,
+      evidence: {
+        kind: "chatgpt.deep-test-result",
+        operationId,
+        state: "send_requested",
+        code: null,
+      },
+    }),
+  ).toEqual({ outcome: "done", code: "CHATGPT_SEND_REQUESTED" });
+});
 
 it("records a proven Deep test pre-submit refusal without inventing an unknown send", () => {
   const evidence = {
@@ -211,6 +237,12 @@ it("maps every declared TS contract/producer code and Go result kind exactly onc
   expect(
     unmapped.map(([code, sources]) => ({ code, sources: [...sources] })),
   ).toEqual([]);
+  // A diagnostic's internal lookup state and native reason are not operation
+  // outcome codes and must not become user-facing error classifications.
+  for (const detail of ["found", "not_retained", "link_not_supported"]) {
+    expect(declared.has(detail)).toBe(false);
+    expect(mappedOperationOutcome(detail)).toBeUndefined();
+  }
   // Ensure the inventory reaches each required owner, rather than testing the
   // mapping against a duplicate hand-maintained list of its own keys.
   expect(declared.get("PROCESS_PREPARATION_DEADLINE")).toContain(

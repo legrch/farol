@@ -307,14 +307,14 @@ app.whenReady().then(async()=>{const w=new BrowserWindow({width:1100,height:760,
     .getByRole("button", { name: "Check sign-in", exact: true })
     .click();
   await page.getByText("✓ Sign-in checked", { exact: true }).waitFor();
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await page.getByRole("button", { name: "Next", exact: true }).click();
   await page
     .getByRole("button", { name: "Collapse sidebar", exact: true })
     .click();
   await capture(page, "setup-rail");
   await captureWalkthrough("b3-connect-this-mac");
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Next", exact: true }).click();
   await page
     .getByRole("heading", {
       name: `4. Add ${productName} to ChatGPT`,
@@ -338,7 +338,7 @@ app.whenReady().then(async()=>{const w=new BrowserWindow({width:1100,height:760,
   );
   await page.waitForFunction(() => innerWidth === 620);
   await captureWalkthrough("b3-connect-this-mac-compact");
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await page.getByRole("button", { name: "Next", exact: true }).click();
   await captureWalkthrough("b3-add-to-chatgpt-compact");
   await app.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows()[0].setContentSize(1100, 760),
@@ -355,9 +355,7 @@ app.whenReady().then(async()=>{const w=new BrowserWindow({width:1100,height:760,
     "Setup",
   );
   assert.equal(await page.locator(".setup-progress").count(), 1);
-  await page
-    .getByRole("button", { name: `Start using ${productName}`, exact: true })
-    .click();
+  await page.getByRole("button", { name: "Back to Home", exact: true }).click();
   await page
     .locator(".rail")
     .getByRole("button", { name: "Home", exact: true })
@@ -572,24 +570,17 @@ app.whenReady().then(async()=>{const w=new BrowserWindow({width:1100,height:760,
   );
   await page.evaluate(() => localStorage.setItem("notification-fixture", "on"));
   await page.reload();
-  await page.locator(".notification-count").waitFor();
   assert.equal(await page.locator(".rail .attention-action").count(), 0);
-  await page
-    .getByRole("button", { name: "Notifications", exact: true })
-    .click();
-  await capture(page, "notifications-unread");
-  await page
-    .getByRole("button", { name: "Mark all as read", exact: true })
-    .click();
-  await page.getByText("No unread notifications.", { exact: true }).waitFor();
-  await page.reload();
-  await page
-    .getByRole("button", { name: "Notifications", exact: true })
-    .click();
-  await page.getByText("No unread notifications.", { exact: true }).waitFor();
   assert.equal(await page.locator(".notification-count").count(), 0);
+  assert.equal(
+    await page
+      .getByRole("button", { name: "Notifications", exact: true })
+      .count(),
+    0,
+  );
   await page
-    .getByRole("button", { name: "Open Activity", exact: true })
+    .locator(".rail")
+    .getByRole("button", { name: "Activity", exact: true })
     .click();
   await page.locator(".operation-row").waitFor();
   assert.equal(
@@ -597,10 +588,9 @@ app.whenReady().then(async()=>{const w=new BrowserWindow({width:1100,height:760,
     1,
   );
   await capture(page, "activity-read-history");
-  report.notifications = {
-    readSurvivesRendererReload: true,
+  report.activity = {
     unknownPreserved: true,
-    railEntryAbsent: true,
+    notificationInboxAbsent: true,
     liveSend: 0,
   };
   await page.evaluate(() =>

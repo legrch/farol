@@ -23,3 +23,19 @@ func TestUnknownNativeErrorAndPrivateDiagnosticsCannotEscape(t *testing.T) {
 		}
 	}
 }
+
+func TestPathDiagnosticAllowsOnlyBoundedPairs(t *testing.T) {
+	for _, tc := range []struct{ code, source, stage, reason, wantStage, wantReason string }{
+		{"WORKSPACE_PATH_REFUSED", "native-workspace", "policy", "policy_denied", "policy", "policy_denied"},
+		{"WORKSPACE_PATH_REFUSED", "native-workspace", "target", "hardlink_not_supported", "target", "hardlink_not_supported"},
+		{"WORKSPACE_PATH_REFUSED", "native-workspace", "target", "/private/secret", "", ""},
+		{"WORKSPACE_PATH_REFUSED", "native-workspace", "policy", "unsafe_root", "", ""},
+		{"WORKSPACE_PATH_REFUSED", "task-grant", "policy", "policy_denied", "", ""},
+		{"WORKSPACE_NOT_FOUND", "native-workspace", "policy", "policy_denied", "", ""},
+	} {
+		out := failure(&authority.Failure{Code: tc.code, Source: tc.source, Stage: tc.stage, Reason: tc.reason}).(*Failure)
+		if out.Stage != tc.wantStage || out.Reason != tc.wantReason || out.Retry != "never" {
+			t.Fatalf("unsafe or lost diagnostic: %+v", out)
+		}
+	}
+}

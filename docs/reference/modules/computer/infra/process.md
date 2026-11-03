@@ -60,6 +60,8 @@ lifetimes, removed its own workspace file, and confirmed that a sibling outside
 the workspace remained unchanged. These are disposable native witnesses,
 not installed application or live-provider acceptance.
 
+Platform record `macos-26A434-arm64-installed-runtime-v19` adds pinned `/usr/bin/dirname`, `/bin/pwd` and `/usr/bin/readlink` for bounded launcher compatibility. On macOS build `26A434` arm64, `/usr/bin/readlink` and `/usr/bin/stat` are two names for one root-owned image; the fixed readlink pathname alone admits exactly two links under the same content, ownership and identity checks. A disposable native compiler fixture observes the previous seven-image policy refuse a Brain-like launcher, and the ten-image policy run both its direct and symlink entrypoints; the stat alias remains refused. Separate native scope tests cover workspace, write and network denial. These witnesses do not establish public MCP, installed or live Sync acceptance.
+
 Source registration is not release qualification. Disposable packaged MCP checks
 cover bounded Bash, synthetic Git and observation of an original result after
 MCP reconnect. Ordinary Git configuration/hooks, external Shell, cancellation and

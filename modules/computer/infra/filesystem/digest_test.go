@@ -61,3 +61,29 @@ func TestScratchDigestBindsOriginalDirectoryIdentity(t *testing.T) {
 		t.Fatal("scratch fingerprint ignored workspace")
 	}
 }
+
+func TestRemoveDigestBindsWorkspacePathAndPreimage(t *testing.T) {
+	op := mutation.Remove{RelativePath: "note.md", ExpectedSHA256: strings.Repeat("a", 64)}
+	digest := func(workspace string, op mutation.Remove) string {
+		t.Helper()
+		got, err := (Digester{}).Digest(port.MutationDigestInput{WorkspaceID: workspace, Operation: op})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	want := payloadHash([]byte(`["work","workspace.remove","note.md","` + strings.Repeat("a", 64) + `"]`))
+	if got := digest("work", op); got != want {
+		t.Fatalf("wrong remove digest: %s", got)
+	}
+	changed := op
+	changed.ExpectedSHA256 = strings.Repeat("b", 64)
+	if digest("work", changed) == want || digest("other", op) == want {
+		t.Fatal("remove digest ignored preimage or workspace")
+	}
+	changed = op
+	changed.RelativePath = "other.md"
+	if digest("work", changed) == want {
+		t.Fatal("remove digest ignored path")
+	}
+}

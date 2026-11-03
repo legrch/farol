@@ -82,3 +82,18 @@ func TestPredecessorStateOriginalPythonOracle(t *testing.T) {
 		}
 	}
 }
+
+func TestPredecessorStateDiagnosticHistoryBoundary(t *testing.T) {
+	for _, test := range []struct {
+		source, target string
+		want           bool
+	}{
+		{"0.5.7", "0.5.8", true},
+		{"0.5.7", "0.5.7", false},
+		{"0.5.8", "0.5.8", false},
+	} {
+		if got := PredecessorStateUnqualified(test.source, test.target); got != test.want {
+			t.Fatalf("source=%q target=%q got=%t want=%t", test.source, test.target, got, test.want)
+		}
+	}
+}

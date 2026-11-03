@@ -138,6 +138,15 @@ func (m *Mutable) Mutate(ctx context.Context, request port.MutationRequest) (rec
 	if err = mutation.CheckPrecondition(request.Operation, before); err != nil {
 		return nil, err
 	}
+	if _, remove := request.Operation.(mutation.Remove); remove {
+		if request.ScratchParent != nil || request.HoldScratchFile || previous == nil {
+			return nil, refusal("WORKSPACE_INVALID_REQUEST")
+		}
+		if err = m.removeExact(ctx, request, walk, parent, leaf, *previous, before); err != nil {
+			return nil, err
+		}
+		return &port.MutationReceipt{Operation: string(mutation.RemoveKind), RelativePath: request.Operation.Path(), BeforeSHA256: before}, nil
+	}
 	var payload []byte
 	var replacements uint32
 	switch v := request.Operation.(type) {

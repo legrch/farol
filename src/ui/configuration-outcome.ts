@@ -81,7 +81,7 @@ export function configurationEffectOutcome(
       const state = outcome.result.evidence.state;
       return state === "outcome_unknown"
         ? "unknown"
-        : state === "completed"
+        : state === "completed" || state === "send_requested"
           ? "applied"
           : "refused";
     }
