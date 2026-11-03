@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseGithubReleaseManifest } from "../../src/modules/release/app/github-release";
+import { normalizePackagedFileModes } from "../../tooling/package-file-modes.mjs";
 import {
   ELECTRON_RUNTIME,
   runtimeClosure,
@@ -317,6 +318,38 @@ afterEach(async () => {
 });
 
 describe("release archive CLI fixture contract", () => {
+  it("preserves owner-writable packaged modes in the released ZIP", async () => {
+    const f = await fixture();
+    for (const [name, mode] of [
+      ["tunnel-client", 0o500],
+      ["tunnel-client-LICENSE.txt", 0o400],
+      ["tunnel-client-NOTICE.txt", 0o400],
+    ]) {
+      const file = path.join(f.resource, name);
+      await fs.writeFile(file, `fixture ${name}`, { mode });
+      await fs.chmod(file, mode);
+    }
+    await normalizePackagedFileModes(f.resource, { hasGoCore: true });
+    const result = prepare(f);
+    expect(result.status, result.stderr).toBe(0);
+    const archive = path.join(f.output, `Farol-${version}-darwin-arm64.zip`);
+    const inspected = run(
+      "/usr/bin/python3",
+      [
+        "-c",
+        `import sys,zipfile
+z=zipfile.ZipFile(sys.argv[1])
+base="Farol.app/Contents/Resources/app/"
+for name, mode in [("farol-backend",0o700),("tunnel-client",0o700),("tunnel-client-LICENSE.txt",0o600),("tunnel-client-NOTICE.txt",0o600)]:
+    assert ((z.getinfo(base+name).external_attr >> 16) & 0o7777) == mode, name
+`,
+        archive,
+      ],
+      f.root,
+    );
+    expect(inspected.status, inspected.stderr).toBe(0);
+  });
+
   // The fixture fakes the trusted extractor and verifier. It checks CLI
   // orchestration only; a real accepted package needs the bundled native tools.
   it("binds a clean source, sanitizes public artifact, and emits exactly three public assets", async () => {
