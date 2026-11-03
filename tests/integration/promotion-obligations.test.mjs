@@ -239,6 +239,34 @@ describe("Q-08 activation obligations", () => {
     ).toContain("DEEP_TEST_PENDING:1");
     expect((await owner.load()).result.state).toBe("outcome_unknown");
   });
+  it("does not ignore a terminal result that changes during updater admission", async () => {
+    const root = await userData();
+    const state = path.join(root, "farol-state");
+    const id = randomUUID();
+    const owner = new PrivateChatGptTaskJournal({
+      root: state,
+      deepTestOperationId: id,
+    });
+    await owner.prepare({ operationId: id, kind: "readonly" });
+    await owner.retainPreDispatchResult(id, {
+      state: "failed_before_submit",
+      code: null,
+      deltaCount: 0,
+      observedCharacters: 0,
+    });
+    const file = path.join(state, `deep-test-${id}.json`);
+    const report = await activationObligations(root, {
+      allowSettledDeepTestResults: true,
+      beforeConfirmation: async () => {
+        const value = JSON.parse(await fs.readFile(file, "utf8"));
+        value.phase = "dispatch_intent";
+        value.result = null;
+        await fs.writeFile(file, JSON.stringify(value), { mode: 0o600 });
+      },
+    });
+    expect(report.changed).toContain("deep-test-records");
+    expect(report.drained).toBe(false);
+  });
   it.each(["send_requested", "attachment", "cleanup"])(
     "keeps nonterminal or attachment deep-test work blocking the updater: %s",
     async (scenario) => {
