@@ -69,6 +69,47 @@ func preservedPureSelection(t *testing.T, selection SettledSelection, expected [
 	return closed
 }
 
+func TestPreservedInspectionCompletedRemovalAndUnsettledRefusals(t *testing.T) {
+	_, _, original := connectorV3Fixture(t)
+	binding := original.Binding()
+	binding.Connector.Operation = domain.RemoveKind
+	prepared, err := domain.NewPrepared(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := strings.Repeat("c", 64)
+	completed, err := prepared.Complete(domain.Receipt{Operation: domain.RemoveKind, RelativePath: binding.RelativePath, BeforeSHA256: &before})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknown, err := prepared.Refuse(domain.Failure{Code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", Source: "operation-store"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := recordKey(binding.Identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		state  *domain.State
+		accept bool
+	}{{"completed", completed, true}, {"prepared", prepared, false}, {"unknown", unknown, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := encode(tc.state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entry := settledBytes{key: key, raw: raw}
+			expected := ExpectedPreservedRecord{Key: key, SHA256: preservedDigest(raw), Identity: binding.Identity}
+			_, _, err = qualifyPreservedRecord(entry, expected)
+			if (err == nil) != tc.accept {
+				t.Fatalf("accept=%t: %v", tc.accept, err)
+			}
+		})
+	}
+}
+
 func TestPreservedInspectionPureMixedMetadataAndCopy(t *testing.T) {
 	selection, expected, entries := preservedPureFixture(t)
 	closed := preservedPureSelection(t, selection, expected)

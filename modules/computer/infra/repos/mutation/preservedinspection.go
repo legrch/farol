@@ -125,7 +125,8 @@ func qualifyPreservedRecordPolicy(entry settledBytes, expected ExpectedPreserved
 		}
 		switch state.Phase() {
 		case domain.Completed:
-			if !completedSettledReceipt(state) {
+			receipt := state.Receipt()
+			if !completedSettledReceipt(state) && (receipt == nil || receipt.Operation != domain.RemoveKind || !domain.ValidStoredReceipt(*receipt)) {
 				return refuse()
 			}
 		case domain.Failed:
