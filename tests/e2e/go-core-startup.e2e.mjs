@@ -1071,7 +1071,7 @@ function handoffWitness(record, scope, buildId, previous) {
   }
 }
 
-function permitCleanReopen(launch) {
+function permitCleanReopen(launch, fresh = false) {
   assert.equal(
     launch.status,
     "confirmed-clean-quit",
@@ -1079,13 +1079,25 @@ function permitCleanReopen(launch) {
   );
   cleanLaunchClosure(launch.cleanup);
   assert.ok(
-    launch.quitReceipt && launch.retiredJournal && launch.terminalHandoff,
+    launch.quitReceipt &&
+      launch.retiredJournal &&
+      (fresh || launch.terminalHandoff),
     "FIRST_TERMINAL_EVIDENCE_MISSING",
   );
 }
-function permitReopen(launch) {
-  permitCleanReopen(launch);
+function permitReopen(launch, fresh = false) {
+  permitCleanReopen(launch, fresh);
   zeroSends(launch.terminalLedger);
+}
+
+function freshChatRootPath(parent, context) {
+  assert.ok(
+    context &&
+      typeof context.backendGeneration === "string" &&
+      context.backendGeneration.length > 0,
+    "FRESH_GENERATION_UNKNOWN",
+  );
+  return path.join(parent, `fresh-${hash(context.backendGeneration)}`, "chat");
 }
 
 function quitWitness(quit, marker, previous) {
@@ -1157,6 +1169,14 @@ function unconfigured(bootstrap) {
 
 async function native(selected, inputs, report, save) {
   assert.equal(process.platform, "darwin", "DARWIN_NATIVE_LANE_REQUIRED");
+  // The basic packaged restart uses the current independent fresh-session
+  // contract. Legacy handoff witnesses retain their original strict behavior.
+  const freshReopen =
+    selected.reopen &&
+    !selected.readDiscard &&
+    !selected.settingsEditMutation &&
+    !selected.settingsIdleDelay &&
+    !selected.chatHistoryReopen;
   // Explicit dependency location uses installed bytes; never install or link.
   assert.equal(
     await fs.realpath(selected.dependencyRoot),
@@ -1535,14 +1555,31 @@ async function native(selected, inputs, report, save) {
   };
   const captureJournal = async (label, previous, retired = false) => {
     const coreRoot = await physicalDirectory(path.join(stateRoot, "go-core"));
-    const chatRoot = await physicalDirectory(path.join(coreRoot.path, "chat"));
+    const chatParent = path.join(coreRoot.path, "chat");
+    const chatRoot = await physicalDirectory(
+      freshReopen
+        ? freshChatRootPath(chatParent, launch.historyContext)
+        : chatParent,
+    );
     if (report.launches[0].physical) {
       assert.deepEqual(
-        { coreRoot, chatRoot },
-        report.launches[0].physical,
+        coreRoot,
+        report.launches[0].physical.coreRoot,
         "REOPEN_PHYSICAL_ROOT_CHANGED",
       );
+      if (!freshReopen)
+        assert.deepEqual(
+          chatRoot,
+          report.launches[0].physical.chatRoot,
+          "REOPEN_PHYSICAL_ROOT_CHANGED",
+        );
     }
+    if (launch.physical)
+      assert.deepEqual(
+        { coreRoot, chatRoot },
+        launch.physical,
+        "CURRENT_PHYSICAL_ROOT_CHANGED",
+      );
     launch.physical = { coreRoot, chatRoot };
     const profile = await document(
       path.join(coreRoot.path, "profile.json"),
@@ -1583,8 +1620,23 @@ async function native(selected, inputs, report, save) {
         journal.value,
         profile.value.profileId,
         chatRoot,
-        previous,
+        freshReopen ? undefined : previous,
         retired,
+      );
+    if (freshReopen && previous)
+      assert.notEqual(
+        journal.value.scope.BackendGeneration,
+        previous.scope.BackendGeneration,
+        "BACKEND_GENERATION_REUSED",
+      );
+    if (freshReopen)
+      assert.deepEqual(
+        journal.value.scope,
+        {
+          ProfileID: launch.historyContext.profileId,
+          BackendGeneration: launch.historyContext.backendGeneration,
+        },
+        "FRESH_CONTEXT_MISMATCH",
       );
     if (retired) {
       assert.ok(launch.readyJournal, "READY_JOURNAL_NOT_OBSERVED");
@@ -1768,7 +1820,7 @@ async function native(selected, inputs, report, save) {
             : undefined,
           true,
         );
-        await captureHandoff();
+        if (!freshReopen) await captureHandoff();
       }
       cleanLaunchClosure(launch.cleanup);
       if (typedAuthorityError) throw typedAuthorityError;
@@ -1902,6 +1954,7 @@ async function native(selected, inputs, report, save) {
       exited.catch(() => undefined);
       const window = await application.firstWindow({ timeout: 15000 });
       const bootstrap = await ready(window, active);
+      if (freshReopen) launch.historyContext = bootstrap.chatHistoryContext;
       const settings =
         (hasWorkspace || selected.chatTyped) && ordinal === 2
           ? bootstrap.configuration.settings
@@ -2092,7 +2145,7 @@ async function native(selected, inputs, report, save) {
       .getByRole("button", { name: "Settings", exact: true })
       .click({ timeout: 5000 });
     await window
-      .locator(".contextual-sidebar")
+      .getByRole("navigation", { name: "Settings navigation" })
       .getByRole("button", { name: "Appearance", exact: true })
       .click({ timeout: 5000 });
     await window
@@ -2871,7 +2924,7 @@ async function native(selected, inputs, report, save) {
           report.launches[0].readyJournal.value,
           historyOriginals(report.chatTwoTurn),
         );
-      } else permitReopen(report.launches[0]);
+      } else permitReopen(report.launches[0], freshReopen);
       active();
       const reattested = await attest(selected);
       assert.deepEqual(reattested, inputs, "ARTIFACT_CHANGED_BEFORE_REOPEN");
@@ -2921,7 +2974,8 @@ async function native(selected, inputs, report, save) {
         "reopen-ready",
         report.launches[0].readyJournal.value,
       );
-      await captureHandoff(report.launches[0].terminalHandoff);
+      if (!freshReopen)
+        await captureHandoff(report.launches[0].terminalHandoff);
       if (selected.chatHistoryReopen) {
         retainedApprovedSettings(reopened.settings, savedSettings.value);
         if (selected.chatTyped)
@@ -3910,6 +3964,17 @@ function selfTest() {
     terminalLedger: ledger,
   };
   pass(() => permitReopen(launch));
+  pass(() => permitReopen({ ...launch, terminalHandoff: undefined }, true));
+  reject(() => permitReopen({ ...launch, retiredJournal: undefined }, true));
+  reject(() => permitReopen({ ...launch, status: "failed-or-unknown" }, true));
+  pass(() =>
+    assert.equal(
+      freshChatRootPath("/chat", { backendGeneration: "generation" }),
+      path.join("/chat", `fresh-${hash("generation")}`, "chat"),
+    ),
+  );
+  reject(() => freshChatRootPath("/chat", null));
+  reject(() => freshChatRootPath("/chat", { backendGeneration: "" }));
   for (const status of [
     "launch-attempted",
     "ready",
