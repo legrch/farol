@@ -2743,6 +2743,42 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     await second!.close();
   });
 
+  it("preserves an older download when a download intent is unresolved", async () => {
+    const first = await prepared();
+    await first.close();
+    const record = JSON.parse(await fs.readFile(ready, "utf8"));
+    record.manifest = {
+      ...record.manifest,
+      version: "0.0.9-owner.beta.1",
+      buildVersion: "1",
+      archiveName: "Farol-0.0.9-owner.beta.1-darwin-arm64.zip",
+    };
+    await fs.writeFile(ready, JSON.stringify(record), { mode: 0o600 });
+    const pending = path.join(
+      userData,
+      "installed-updates/download-pending.json",
+    );
+    const intent = {
+      schema: "farol.update-download-intent/1",
+      buildId: record.manifest.buildId,
+      archiveSha256: record.manifest.archiveSha256,
+    };
+    await fs.writeFile(pending, JSON.stringify(intent), { mode: 0o600 });
+    const original = await fs.readFile(ready);
+    const second = await createInstalledUpdateRuntime(options());
+    await second!.initialize();
+    expect(second!.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+    });
+    expect(await fs.readFile(ready)).toEqual(original);
+    expect(JSON.parse(await fs.readFile(pending, "utf8"))).toEqual(intent);
+    expect(mocks.reclaimArchive).not.toHaveBeenCalled();
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await second!.close();
+  });
+
   it.each([
     "changed-digest",
     "wrong-channel",
