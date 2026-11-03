@@ -1,4 +1,5 @@
 import { GO_CORE_ENTRIES, verifyGoCoreArtifact } from "./go-core-artifact.mjs";
+import { verifyPackagedExecutableSignature } from "./package-code-signature.mjs";
 import { verifyRuntimeExecutableClosure } from "./runtime-launch-manifest.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
@@ -269,8 +270,10 @@ export async function verifyPackageContent({
       await fs.readFile(path.join(resources, "build-identity.json"), "utf8"),
     ),
   );
-  if (layout.core)
+  if (layout.core) {
     await verifyGoCoreArtifact(resources, embedded.core, buildIdentity);
+    verifyPackagedExecutableSignature(path.join(resources, "farol-backend"));
+  }
   requireValue(
     buildIdentity.product === artifact.product &&
       buildIdentity.version === artifact.version &&
