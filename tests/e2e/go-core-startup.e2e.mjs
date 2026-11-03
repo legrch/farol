@@ -192,14 +192,21 @@ function parseNativeExecutableWitness(witness, pid) {
   const after = decode(witness.after);
   assert.deepEqual(after, before, "DESKTOP_NATIVE_LIFETIME_CHANGED");
   assert.equal(before.pid, pid, "DESKTOP_NATIVE_PID_MISMATCH");
-  return { executable: witness.executable, parentPid: before.parentPid };
+  return {
+    executable: witness.executable,
+    parentPid: before.parentPid,
+    startSeconds: before.startSeconds.toString(),
+    startMicroseconds: before.startMicroseconds.toString(),
+  };
 }
 
 function nativeExecutableWitness(pid) {
   assert.ok(Number.isSafeInteger(pid) && pid > 1, "DESKTOP_PID_INVALID");
-  const output = execFileSync("/usr/bin/osascript", [
-    "-l", "JavaScript", "-e", executableWitnessScript, "--", String(pid),
-  ], { encoding: "utf8", timeout: 3000, maxBuffer: 8192 });
+  const output = execFileSync(
+    "/usr/bin/osascript",
+    ["-l", "JavaScript", "-e", executableWitnessScript, "--", String(pid)],
+    { encoding: "utf8", timeout: 3000, maxBuffer: 8192 },
+  );
   return parseNativeExecutableWitness(JSON.parse(output), pid);
 }
 
@@ -214,6 +221,7 @@ function qualifyDesktopMain({
   children,
   expectedExecutable,
   nativeExecutable,
+  nativeExecutableBefore,
 }) {
   assert.ok(
     Number.isSafeInteger(guardianPid) && guardianPid > 1,
@@ -248,8 +256,21 @@ function qualifyDesktopMain({
     marker.processStart,
     "DESKTOP_START_MISMATCH",
   );
-  assert.equal(nativeExecutable?.executable, expectedExecutable, "DESKTOP_NATIVE_EXECUTABLE_MISMATCH");
-  assert.equal(nativeExecutable?.parentPid, guardianPid, "DESKTOP_NATIVE_PARENT_MISMATCH");
+  assert.equal(
+    nativeExecutable?.executable,
+    expectedExecutable,
+    "DESKTOP_NATIVE_EXECUTABLE_MISMATCH",
+  );
+  assert.equal(
+    nativeExecutable?.parentPid,
+    guardianPid,
+    "DESKTOP_NATIVE_PARENT_MISMATCH",
+  );
+  assert.deepEqual(
+    nativeExecutable,
+    nativeExecutableBefore,
+    "DESKTOP_NATIVE_LIFETIME_CHANGED",
+  );
   return {
     guardianPid,
     desktopPid: desktop.pid,
@@ -1945,6 +1966,9 @@ async function native(selected, inputs, report, save) {
         4096,
       );
       assert.equal(launch.runMarker.value.schema, 1);
+      const nativeExecutableBefore = selected.packaged
+        ? nativeExecutableWitness(launch.runMarker.value.pid)
+        : undefined;
       const desktop = await bounded(
         application.evaluate(() => ({
           pid: process.pid,
@@ -1969,6 +1993,7 @@ async function native(selected, inputs, report, save) {
         nativeExecutable: selected.packaged
           ? nativeExecutableWitness(desktop.pid)
           : undefined,
+        nativeExecutableBefore,
       });
       assert.ok(
         Number.isFinite(Date.parse(launch.runMarker.value.startedAt)),
@@ -3241,14 +3266,28 @@ function selfTest() {
     return value.toString("base64");
   };
   const nativeFixture = {
-    before: nativeInfo(1n), after: nativeInfo(1n), executable: "/app/Electron",
+    before: nativeInfo(1n),
+    after: nativeInfo(1n),
+    executable: "/app/Electron",
   };
-  pass(() => assert.deepEqual(parseNativeExecutableWitness(nativeFixture, 101), {
-    executable: "/app/Electron", parentPid: 100,
-  }));
-  reject(() => parseNativeExecutableWitness({ ...nativeFixture, after: nativeInfo(2n) }, 101));
+  pass(() =>
+    assert.deepEqual(parseNativeExecutableWitness(nativeFixture, 101), {
+      executable: "/app/Electron",
+      parentPid: 100,
+      startSeconds: "42",
+      startMicroseconds: "1",
+    }),
+  );
+  reject(() =>
+    parseNativeExecutableWitness(
+      { ...nativeFixture, after: nativeInfo(2n) },
+      101,
+    ),
+  );
   reject(() => parseNativeExecutableWitness(nativeFixture, 102));
-  reject(() => parseNativeExecutableWitness({ ...nativeFixture, before: "" }, 101));
+  reject(() =>
+    parseNativeExecutableWitness({ ...nativeFixture, before: "" }, 101),
+  );
   const launcherFixture = {
     packaged: true,
     guardianPid: 100,
@@ -3263,7 +3302,18 @@ function selfTest() {
       },
     ],
     expectedExecutable: "/app/Electron",
-    nativeExecutable: { executable: "/app/Electron", parentPid: 100 },
+    nativeExecutable: {
+      executable: "/app/Electron",
+      parentPid: 100,
+      startSeconds: "42",
+      startMicroseconds: "1",
+    },
+    nativeExecutableBefore: {
+      executable: "/app/Electron",
+      parentPid: 100,
+      startSeconds: "42",
+      startMicroseconds: "1",
+    },
   };
   pass(() => qualifyDesktopMain(launcherFixture));
   pass(() =>
@@ -3283,6 +3333,14 @@ function selfTest() {
     { children: [{ ...launcherFixture.children[0], parentPid: 99 }] },
     { nativeExecutable: { executable: "/other/Electron", parentPid: 100 } },
     { nativeExecutable: { executable: "/app/Electron", parentPid: 99 } },
+    {
+      nativeExecutable: {
+        executable: "/app/Electron",
+        parentPid: 100,
+        startSeconds: "42",
+        startMicroseconds: "2",
+      },
+    },
     { nativeExecutable: null },
   ])
     reject(() => qualifyDesktopMain({ ...launcherFixture, ...changed }));
