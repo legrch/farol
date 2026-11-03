@@ -44,6 +44,7 @@ import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness
  * then completes normal Settings/Go retirement without replacing the backend.
  */
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
@@ -153,6 +154,27 @@ const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const hex40 = /^[a-f0-9]{40}$/u;
 const hex64 = /^[a-f0-9]{64}$/u;
 
+// Process titles on macOS may replace argv. Ask the kernel for the executable
+// instead of treating the display title as an executable path.
+const executableWitnessScript = `function run(argv) {
+  ObjC.import("Foundation");
+  ObjC.bindFunction("proc_pidpath", ["int", ["int", "void *", "uint32_t"]]);
+  const pid = Number(argv[0]);
+  if (!Number.isSafeInteger(pid) || pid < 2) throw Error("invalid pid");
+  const buffer = $.NSMutableData.dataWithLength(4096);
+  const length = $.proc_pidpath(pid, buffer.mutableBytes, 4096);
+  if (length <= 0 || length >= 4096) throw Error("proc_pidpath failed");
+  return ObjC.unwrap($.NSString.alloc.initWithDataEncoding(
+    buffer.subdataWithRange($.NSMakeRange(0, length)), $.NSUTF8StringEncoding));
+}`;
+
+function nativeExecutableWitness(pid) {
+  assert.ok(Number.isSafeInteger(pid) && pid > 1, "DESKTOP_PID_INVALID");
+  return execFileSync("/usr/bin/osascript", [
+    "-l", "JavaScript", "-e", executableWitnessScript, "--", String(pid),
+  ], { encoding: "utf8", timeout: 3000, maxBuffer: 8192 }).trimEnd();
+}
+
 // The packaged launcher is a retained Go guardian; Electron is its child.
 // The Dev launcher still directly owns Electron under the same PID contract.
 // This qualifies identity only, never terminal or descendant-cleanup evidence.
@@ -163,6 +185,7 @@ function qualifyDesktopMain({
   desktop,
   children,
   expectedExecutable,
+  nativeExecutable,
 }) {
   assert.ok(
     Number.isSafeInteger(guardianPid) && guardianPid > 1,
@@ -197,10 +220,7 @@ function qualifyDesktopMain({
     marker.processStart,
     "DESKTOP_START_MISMATCH",
   );
-  assert.ok(
-    observed.command.startsWith(`${expectedExecutable} `),
-    "DESKTOP_COMMAND_MISMATCH",
-  );
+  assert.equal(nativeExecutable, expectedExecutable, "DESKTOP_NATIVE_EXECUTABLE_MISMATCH");
   return {
     guardianPid,
     desktopPid: desktop.pid,
@@ -1917,6 +1937,9 @@ async function native(selected, inputs, report, save) {
               "Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron",
             )
           : undefined,
+        nativeExecutable: selected.packaged
+          ? nativeExecutableWitness(desktop.pid)
+          : undefined,
       });
       assert.ok(
         Number.isFinite(Date.parse(launch.runMarker.value.startedAt)),
@@ -3194,6 +3217,7 @@ function selfTest() {
       },
     ],
     expectedExecutable: "/app/Electron",
+    nativeExecutable: "/app/Electron",
   };
   pass(() => qualifyDesktopMain(launcherFixture));
   pass(() =>
@@ -3211,14 +3235,8 @@ function selfTest() {
     { children: [] },
     { children: [launcherFixture.children[0], launcherFixture.children[0]] },
     { children: [{ ...launcherFixture.children[0], parentPid: 99 }] },
-    {
-      children: [
-        {
-          ...launcherFixture.children[0],
-          command: "/other/Electron /app/main",
-        },
-      ],
-    },
+    { nativeExecutable: "/other/Electron" },
+    { nativeExecutable: "" },
   ])
     reject(() => qualifyDesktopMain({ ...launcherFixture, ...changed }));
   const profile = {
