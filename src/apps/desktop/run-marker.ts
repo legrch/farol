@@ -33,17 +33,13 @@ import { z } from "zod";
 //   the crashed generation "running" for as long as that unrelated process
 //   lives. A marker whose boot time is not this boot's is a crash, whatever
 //   its pid is doing now.
-// - `processStart` closes pid reuse *within* one boot, which the boot time
-//   alone cannot (S35-H1-3). It is the exact `ps -o lstart= -p <pid>` string
-//   the writer read for itself, kept verbatim and compared verbatim against
-//   the same reading for the marker's pid now: a different process wearing
-//   that number started at a different time, so the string differs and the
-//   marker is a crash. Only an exact match on a live pid on this boot is
-//   `running`. `ps` is the one reading available here, and it may be
-//   unavailable (a sandbox that denies it) or answer nothing for a pid that
-//   is alive; either way the marker is reported `boot_unknown` — unreadable,
-//   never guessed at, because guessing here either places a generation over
-//   a running app or refuses a promotion forever.
+// - `processStart` helps detect pid reuse *within* one boot (S35-H1-3).
+//   It is the exact `ps -o lstart= -p <pid>` string kept verbatim. A match
+//   on a live pid is `running`. A mismatch is `boot_unknown`: older builds
+//   inherited locale and timezone, so even a canonical-looking timestamp
+//   can differ for the same live process. This may refuse promotion for a
+//   reused pid until its marker is reconciled, but cannot admit a second
+//   generation over a live writer. Unreadable `ps` is also `boot_unknown`.
 //
 // What `processStart` does NOT close, and why that is accepted (S35-H1R).
 // `ps -o lstart=` prints whole seconds ("Sun Sep 20 14:42:06 2026"), so two
@@ -86,10 +82,6 @@ export const RUN_MARKER_FILE_NAME = "running.json";
 export const MAX_RUN_MARKER_BYTES = 4 * 1_024;
 export const SAME_BOOT_TOLERANCE_MS = 5_000;
 const BOOT_TIME_GRANULARITY_MS = 1_000;
-// Older builds inherited the user's locale when recording ps output. A live
-// marker in another format cannot be compared with the new canonical token.
-const CANONICAL_PROCESS_START =
-  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ 0-3][0-9] [0-2][0-9]:[0-5][0-9]:[0-5][0-9] [0-9]{4}$/u;
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const CLOSE_ON_EXEC =
   (fsConstants as typeof fsConstants & { O_CLOEXEC?: number }).O_CLOEXEC ?? 0;
@@ -223,7 +215,11 @@ export function readProcessStart(pid: number): string | null {
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 5_000,
       // The writer and the independent updater reader must use identical ps output.
-      env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
+      env: {
+        PATH: "/usr/bin:/bin",
+        LC_ALL: "C",
+        ...(process.env.TZ === undefined ? {} : { TZ: process.env.TZ }),
+      },
     });
   } catch {
     return null;
@@ -247,9 +243,9 @@ export function sameBoot(
  * What a present marker means. A dead pid is a crash on any boot: the
  * writer stopped without confirming its drain. A live pid is the running
  * app only when the marker was written on this boot AND the process
- * wearing that number now is the one that wrote it; on another boot, or
- * after pid reuse within this one, the number belongs to someone else and
- * the writer crashed. When either side's boot time, or either side's
+ * wearing that number now is the one that wrote it; on another boot the
+ * writer crashed. A same-boot token mismatch is unknown because legacy
+ * locale/timezone presentation can differ. When either side's boot time, or either side's
  * process start time, cannot be read, a live pid cannot be attributed at
  * all, and the reader must say so instead of guessing.
  */
@@ -271,12 +267,10 @@ export function classifyRunMarker(
   const current = probe.processStart(marker.pid);
   if (marker.processStart === null || current === null) return "boot_unknown";
   if (current === marker.processStart) return "running";
-  // Same-boot live processes from an older locale-dependent build must not
-  // be declared crashed solely because ps changed its presentation. Unknown
-  // still blocks promotion; a clean Quit removes the old marker normally.
-  return CANONICAL_PROCESS_START.test(marker.processStart)
-    ? "crashed"
-    : "boot_unknown";
+  // Older builds inherited locale and timezone. A different presentation can
+  // look canonical, so a live pid with a mismatched token remains unconfirmed.
+  // A clean Quit removes its marker; no concurrent generation is admitted.
+  return "boot_unknown";
 }
 
 async function ensureRoot(stateRoot: string): Promise<void> {

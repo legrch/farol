@@ -36,6 +36,27 @@ it.skipIf(process.platform !== "darwin")(
     }
   },
 );
+it.skipIf(process.platform !== "darwin")(
+  "captures the process start in the app timezone",
+  async () => {
+    const previous = process.env.TZ;
+    try {
+      process.env.TZ = "Pacific/Honolulu";
+      const canonical = execFileSync(
+        "/bin/ps",
+        ["-p", String(process.pid), "-o", "lstart="],
+        {
+          encoding: "utf8",
+          env: { PATH: "/usr/bin:/bin", LC_ALL: "C", TZ: process.env.TZ },
+        },
+      ).trim();
+      expect(await captureInstalledProcessStart(process.pid)).toBe(canonical);
+    } finally {
+      if (previous === undefined) delete process.env.TZ;
+      else process.env.TZ = previous;
+    }
+  },
+);
 afterEach(async () => {
   vi.restoreAllMocks();
   for (const launched of helpers.splice(0)) {

@@ -375,7 +375,7 @@ describe("run marker", () => {
   // could name a pid that now belongs to a shell or a daemon, and the boot
   // time alone would call the crashed generation "running" for as long as
   // that unrelated process lives.
-  it("S35-H1-3 a live pid on this boot whose process started at another time is a crash, not the running app", () => {
+  it("S35-H1-3 a live pid with a different token cannot authorize another generation", () => {
     const marker = {
       schema: 1 as const,
       pid: 4242,
@@ -385,21 +385,22 @@ describe("run marker", () => {
     };
     const probe = { bootTime: BOOT, isAlive: () => true };
 
-    // The number was reused: same pid, same boot, a different process.
+    // A reused pid and a legacy marker recorded under a different timezone
+    // cannot be distinguished by the rendered ps token alone.
     expect(
       classifyRunMarker(marker, { ...probe, processStart: () => REUSED_START }),
-    ).toBe("crashed");
+    ).toBe("boot_unknown");
     // Only an exact match on the writer's own recorded token is running.
     expect(
       classifyRunMarker(marker, { ...probe, processStart: () => START }),
     ).toBe("running");
-    // A canonical marker still compares verbatim; a different reading is not running.
+    // A canonical-looking legacy marker may still have used another timezone.
     expect(
       classifyRunMarker(marker, {
         ...probe,
         processStart: () => `${START} `,
       }),
-    ).toBe("crashed");
+    ).toBe("boot_unknown");
   });
 
   it("keeps a live marker from a legacy locale unconfirmed instead of calling it a crash", () => {
@@ -500,6 +501,28 @@ describe("run marker", () => {
       } finally {
         if (previous === undefined) delete process.env.LC_ALL;
         else process.env.LC_ALL = previous;
+      }
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "retains timezone parity with legacy process markers",
+    () => {
+      const previous = process.env.TZ;
+      try {
+        process.env.TZ = "Pacific/Honolulu";
+        const canonical = execFileSync(
+          "/bin/ps",
+          ["-o", "lstart=", "-p", String(process.pid)],
+          {
+            encoding: "utf8",
+            env: { PATH: "/usr/bin:/bin", LC_ALL: "C", TZ: process.env.TZ },
+          },
+        ).trim();
+        expect(readProcessStart(process.pid)).toBe(canonical);
+      } finally {
+        if (previous === undefined) delete process.env.TZ;
+        else process.env.TZ = previous;
       }
     },
   );

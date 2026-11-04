@@ -446,6 +446,7 @@ async function runInstalledTrusted(
         PATH: "/usr/bin:/bin",
         ELECTRON_RUN_AS_NODE: "1",
         ELECTRON_NO_ASAR: "1",
+        ...(process.env.TZ === undefined ? {} : { TZ: process.env.TZ }),
       },
       encoding: "utf8",
       maxBuffer: 65536,
@@ -461,7 +462,11 @@ export async function readInstalledProcess(
   return execute("/bin/ps", ["-p", String(pid), "-o", "lstart="], {
     timeout: 3000,
     maxBuffer: 4096,
-    env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
+    env: {
+      PATH: "/usr/bin:/bin",
+      LC_ALL: "C",
+      ...(process.env.TZ === undefined ? {} : { TZ: process.env.TZ }),
+    },
   });
 }
 

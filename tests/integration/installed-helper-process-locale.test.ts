@@ -22,3 +22,26 @@ it.skipIf(process.platform !== "darwin")(
     }
   },
 );
+
+it.skipIf(process.platform !== "darwin")(
+  "retains timezone parity with the installed helper",
+  async () => {
+    const previous = process.env.TZ;
+    try {
+      process.env.TZ = "Pacific/Honolulu";
+      const canonical = execFileSync(
+        "/bin/ps",
+        ["-p", String(process.pid), "-o", "lstart="],
+        {
+          encoding: "utf8",
+          env: { PATH: "/usr/bin:/bin", LC_ALL: "C", TZ: process.env.TZ },
+        },
+      ).trim();
+      const observation = await readInstalledProcess(process.pid);
+      expect(observation.stdout.trim()).toBe(canonical);
+    } finally {
+      if (previous === undefined) delete process.env.TZ;
+      else process.env.TZ = previous;
+    }
+  },
+);
