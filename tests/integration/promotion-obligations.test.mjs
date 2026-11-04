@@ -1000,10 +1000,9 @@ describe("Q-08 activation obligations", () => {
     ).resolves.toMatchObject({ drained: true });
   });
 
-  // S35-H1-3: a pid alone is not an identity within one boot. A marker left
-  // by a crash can name a number the kernel has since handed to something
-  // else, and the obligation reader must not call that the running app.
-  it("S35-H1-3 a live pid on this boot whose process start time differs is QUIT_UNCONFIRMED:crash, and an unreadable start time is never guessed", async () => {
+  // A live PID with a mismatched token may be reused, or a legacy marker
+  // rendered under another timezone. Neither proves that its writer exited.
+  it("S35-H1-3 a live pid with a different process-start token remains unconfirmed", async () => {
     const root = await userData();
     const state = path.join(root, "farol-state");
     await writeTasks(root, [task({ lifecycle: "completed" })]);
@@ -1022,11 +1021,11 @@ describe("Q-08 activation obligations", () => {
     });
     expect(reused).toMatchObject({
       drained: false,
-      unreadable: [],
-      obligations: ["QUIT_UNCONFIRMED:crash"],
+      unreadable: ["running:BOOT_UNKNOWN"],
+      obligations: [],
     });
     expect(() => assertActivationDrained(reused)).toThrow(
-      "PROMOTION_DRAIN_REQUIRED:QUIT_UNCONFIRMED:crash",
+      "PROMOTION_STATE_UNREADABLE:running:BOOT_UNKNOWN",
     );
 
     // `ps` unavailable, or silent for a pid that is alive: unreadable, so

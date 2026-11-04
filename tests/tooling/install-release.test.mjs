@@ -218,7 +218,10 @@ test("isolated installation orders checks, quit, backup and launch", () => {
       result.stdout,
       /Outer app: unsigned; executable signatures and release tree verified/,
     );
-    assert.match(result.stdout, /Updater status: not confirmed/);
+    assert.match(
+      result.stdout,
+      /Farol opened\. Check its connection and updates in the app\./,
+    );
     assert.ok(log.indexOf("codesign") < log.indexOf("osascript"));
     assert.ok(log.indexOf("osascript") < log.indexOf("ditto-backup"));
     assert.ok(log.indexOf("ditto-backup") < log.indexOf("open"));

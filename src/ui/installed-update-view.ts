@@ -27,7 +27,7 @@ function description(view: InstalledUpdateView): string {
     case "downloading":
       return "Downloading the update in the background. You can keep working.";
     case "available":
-      return `${updateName(view.version)} is available to download. It is not installed.${view.deferred ? " Saved for later; download it when you choose." : ""}`;
+      return `${updateName(view.version)} is available to download. It is not installed.${view.deferred ? " You can download it when you choose." : ""}`;
     case "ready": {
       const ready = `${updateName(view.version)} is ready to install.`;
       if (view.blockedBy !== null) {

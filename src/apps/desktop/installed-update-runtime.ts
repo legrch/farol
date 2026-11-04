@@ -455,20 +455,20 @@ async function runInstalledTrusted(
   return JSON.parse(stdout) as unknown;
 }
 
-async function readInstalledProcess(
+export async function readInstalledProcess(
   pid: number,
 ): Promise<Readonly<{ stdout: string; stderr: string }>> {
   return execute("/bin/ps", ["-p", String(pid), "-o", "lstart="], {
     timeout: 3000,
     maxBuffer: 4096,
-    env: { PATH: "/usr/bin:/bin", LANG: "C" },
+    env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
   });
 }
 
 async function observeInstalledHelper(
   helper: z.infer<typeof Retained>["helper"],
   read: typeof readInstalledProcess = readInstalledProcess,
-): Promise<"live" | "ended" | "changed" | "unknown"> {
+): Promise<"live" | "ended" | "unknown"> {
   if (!helper) return "unknown";
   try {
     const { stdout, stderr } = await read(helper.pid);
@@ -478,7 +478,9 @@ async function observeInstalledHelper(
       !ProcessStart.safeParse(stdout.trim()).success
     )
       return "unknown";
-    return stdout.trim() === helper.processStart ? "live" : "changed";
+    // A retained helper may have recorded ps under a legacy locale or TZ.
+    // Different text does not prove PID reuse or process termination.
+    return stdout.trim() === helper.processStart ? "live" : "unknown";
   } catch (error) {
     // Only the existing clean ps absence classification establishes termination.
     const result = error as {
@@ -1104,9 +1106,9 @@ function startupHelperState(
 ): "running" | "exited" | "unknown" {
   return status === "live"
     ? "running"
-    : status === "unknown"
-      ? "unknown"
-      : "exited";
+    : status === "ended"
+      ? "exited"
+      : "unknown";
 }
 
 /**
@@ -2929,7 +2931,7 @@ async function createRuntime(
     record: Pick<z.infer<typeof Retained>, "helper">,
   ) => {
     const status = await observeInstalledHelper(record.helper);
-    return status === "ended" || status === "changed";
+    return status === "ended";
   };
   const removeDownloadStage = async (
     download: z.infer<typeof DownloadStage>,

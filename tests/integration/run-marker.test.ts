@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -375,7 +375,7 @@ describe("run marker", () => {
   // could name a pid that now belongs to a shell or a daemon, and the boot
   // time alone would call the crashed generation "running" for as long as
   // that unrelated process lives.
-  it("S35-H1-3 a live pid on this boot whose process started at another time is a crash, not the running app", () => {
+  it("S35-H1-3 a live pid with a different token cannot authorize another generation", () => {
     const marker = {
       schema: 1 as const,
       pid: 4242,
@@ -385,19 +385,44 @@ describe("run marker", () => {
     };
     const probe = { bootTime: BOOT, isAlive: () => true };
 
-    // The number was reused: same pid, same boot, a different process.
+    // A reused pid and a legacy marker recorded under a different timezone
+    // cannot be distinguished by the rendered ps token alone.
     expect(
       classifyRunMarker(marker, { ...probe, processStart: () => REUSED_START }),
-    ).toBe("crashed");
+    ).toBe("boot_unknown");
     // Only an exact match on the writer's own recorded token is running.
     expect(
       classifyRunMarker(marker, { ...probe, processStart: () => START }),
     ).toBe("running");
-    // Not a prefix, not a trimmed variant: the token is compared verbatim.
+    // A canonical-looking legacy marker may still have used another timezone.
     expect(
       classifyRunMarker(marker, {
         ...probe,
         processStart: () => `${START} `,
+      }),
+    ).toBe("boot_unknown");
+  });
+
+  it("keeps a live marker from a legacy locale unconfirmed instead of calling it a crash", () => {
+    const marker = {
+      schema: 1 as const,
+      pid: 4242,
+      startedAt,
+      bootTime: BOOT,
+      processStart: "Sat 20 Sep 10:00:00 2026",
+    };
+    expect(
+      classifyRunMarker(marker, {
+        bootTime: BOOT,
+        isAlive: () => true,
+        processStart: () => START,
+      }),
+    ).toBe("boot_unknown");
+    expect(
+      classifyRunMarker(marker, {
+        bootTime: BOOT,
+        isAlive: () => false,
+        processStart: () => START,
       }),
     ).toBe("crashed");
   });
@@ -455,6 +480,47 @@ describe("run marker", () => {
     // user: `kill(1, 0)` is EPERM, and EPERM must read as alive.
     expect(processAlive(1)).toBe(true);
   });
+
+  it.skipIf(process.platform !== "darwin")(
+    "reads the same process-start identity regardless of the app locale",
+    () => {
+      const args = ["-o", "lstart=", "-p", String(process.pid)];
+      const canonical = execFileSync("/bin/ps", args, {
+        encoding: "utf8",
+        env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
+      }).trim();
+      const previous = process.env.LC_ALL;
+      try {
+        process.env.LC_ALL = "en_GB.UTF-8";
+        expect(readProcessStart(process.pid)).toBe(canonical);
+      } finally {
+        if (previous === undefined) delete process.env.LC_ALL;
+        else process.env.LC_ALL = previous;
+      }
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "uses the system timezone even when the app has a custom timezone",
+    () => {
+      const previous = process.env.TZ;
+      try {
+        process.env.TZ = "Pacific/Honolulu";
+        const canonical = execFileSync(
+          "/bin/ps",
+          ["-o", "lstart=", "-p", String(process.pid)],
+          {
+            encoding: "utf8",
+            env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
+          },
+        ).trim();
+        expect(readProcessStart(process.pid)).toBe(canonical);
+      } finally {
+        if (previous === undefined) delete process.env.TZ;
+        else process.env.TZ = previous;
+      }
+    },
+  );
 
   it("derives the boot time in whole seconds from the uptime, and reports null when the uptime cannot be read", () => {
     const instant = 1_000_000_000_000;

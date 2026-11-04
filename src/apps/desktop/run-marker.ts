@@ -33,17 +33,13 @@ import { z } from "zod";
 //   the crashed generation "running" for as long as that unrelated process
 //   lives. A marker whose boot time is not this boot's is a crash, whatever
 //   its pid is doing now.
-// - `processStart` closes pid reuse *within* one boot, which the boot time
-//   alone cannot (S35-H1-3). It is the exact `ps -o lstart= -p <pid>` string
-//   the writer read for itself, kept verbatim and compared verbatim against
-//   the same reading for the marker's pid now: a different process wearing
-//   that number started at a different time, so the string differs and the
-//   marker is a crash. Only an exact match on a live pid on this boot is
-//   `running`. `ps` is the one reading available here, and it may be
-//   unavailable (a sandbox that denies it) or answer nothing for a pid that
-//   is alive; either way the marker is reported `boot_unknown` — unreadable,
-//   never guessed at, because guessing here either places a generation over
-//   a running app or refuses a promotion forever.
+// - `processStart` helps detect pid reuse *within* one boot (S35-H1-3).
+//   It is the exact `ps -o lstart= -p <pid>` string kept verbatim. A match
+//   on a live pid is `running`. A mismatch is `boot_unknown`: older builds
+//   inherited locale and timezone, so even a canonical-looking timestamp
+//   can differ for the same live process. This may refuse promotion for a
+//   reused pid until its marker is reconciled, but cannot admit a second
+//   generation over a live writer. Unreadable `ps` is also `boot_unknown`.
 //
 // What `processStart` does NOT close, and why that is accepted (S35-H1R).
 // `ps -o lstart=` prints whole seconds ("Sun Sep 20 14:42:06 2026"), so two
@@ -218,6 +214,8 @@ export function readProcessStart(pid: number): string | null {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 5_000,
+      // The writer and the independent updater reader must use identical ps output.
+      env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
     });
   } catch {
     return null;
@@ -241,9 +239,9 @@ export function sameBoot(
  * What a present marker means. A dead pid is a crash on any boot: the
  * writer stopped without confirming its drain. A live pid is the running
  * app only when the marker was written on this boot AND the process
- * wearing that number now is the one that wrote it; on another boot, or
- * after pid reuse within this one, the number belongs to someone else and
- * the writer crashed. When either side's boot time, or either side's
+ * wearing that number now is the one that wrote it; on another boot the
+ * writer crashed. A same-boot token mismatch is unknown because legacy
+ * locale/timezone presentation can differ. When either side's boot time, or either side's
  * process start time, cannot be read, a live pid cannot be attributed at
  * all, and the reader must say so instead of guessing.
  */
@@ -264,7 +262,11 @@ export function classifyRunMarker(
   // module.
   const current = probe.processStart(marker.pid);
   if (marker.processStart === null || current === null) return "boot_unknown";
-  return current === marker.processStart ? "running" : "crashed";
+  if (current === marker.processStart) return "running";
+  // Older builds inherited locale and timezone. A different presentation can
+  // look canonical, so a live pid with a mismatched token remains unconfirmed.
+  // A clean Quit removes its marker; no concurrent generation is admitted.
+  return "boot_unknown";
 }
 
 async function ensureRoot(stateRoot: string): Promise<void> {
