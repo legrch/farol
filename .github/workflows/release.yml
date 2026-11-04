@@ -9,7 +9,7 @@ on:
         description: Run build-only checks, or publish an exact qualified private draft
         required: true
         type: choice
-        options: [prepare, publish, witness-preflight]
+        options: [prepare, publish]
         default: prepare
       candidate_run_id:
         description: Prior successful tag build-only run ID (publish only)
@@ -30,30 +30,6 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  witness-preflight:
-    if: github.event_name == 'workflow_dispatch' && inputs.action == 'witness-preflight'
-    runs-on: macos-26
-    timeout-minutes: 5
-    permissions: {}
-    steps:
-      - name: Check isolated runner admission without modifying an installed app
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "Runner architecture: $(uname -m)"
-          test "$(uname -m)" = arm64
-          echo "Runner home identity: $(id -un)"
-          test "$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory | cut -d ' ' -f 2-)" = "$HOME"
-          test ! -e /Applications/Farol.app
-          test ! -e "$HOME/Library/Application Support/io.github.legrch.farol"
-          stat -f 'Applications: mode=%Sp owner=%Su group=%Sg' /Applications
-          probe="$(mktemp -d /Applications/.farol-witness-preflight.XXXXXXXX)" || {
-            echo 'BLOCKED: /Applications is not writable without elevation'
-            exit 1
-          }
-          rmdir "$probe"
-          echo 'PREFLIGHT PASS: clean arm64 runner and writable Applications; no witness has run'
-
   build:
     if: github.event_name == 'push' || inputs.action == 'prepare'
     runs-on: macos-26
