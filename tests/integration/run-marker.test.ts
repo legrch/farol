@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -455,6 +455,30 @@ describe("run marker", () => {
     // user: `kill(1, 0)` is EPERM, and EPERM must read as alive.
     expect(processAlive(1)).toBe(true);
   });
+
+  it.skipIf(process.platform !== "darwin")(
+    "reads the same process-start identity regardless of the app locale",
+    () => {
+      const args = ["-o", "lstart=", "-p", String(process.pid)];
+      const canonical = execFileSync("/bin/ps", args, {
+        encoding: "utf8",
+        env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
+      }).trim();
+      const localized = execFileSync("/bin/ps", args, {
+        encoding: "utf8",
+        env: { PATH: "/usr/bin:/bin", LC_ALL: "en_GB.UTF-8" },
+      }).trim();
+      expect(localized).not.toBe(canonical);
+      const previous = process.env.LC_ALL;
+      try {
+        process.env.LC_ALL = "en_GB.UTF-8";
+        expect(readProcessStart(process.pid)).toBe(canonical);
+      } finally {
+        if (previous === undefined) delete process.env.LC_ALL;
+        else process.env.LC_ALL = previous;
+      }
+    },
+  );
 
   it("derives the boot time in whole seconds from the uptime, and reports null when the uptime cannot be read", () => {
     const instant = 1_000_000_000_000;

@@ -174,8 +174,14 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 for asset in "$name" farol-release.json SHA256SUMS; do
-  /usr/bin/curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --output "$tmp/$asset" "$url/$asset" || fail "download failed: $asset"
+  printf 'Downloading %s...\n' "$asset"
+  if [ -t 2 ] && [ "$asset" = "$name" ]; then
+    /usr/bin/curl --fail --show-error --progress-bar --location --proto '=https' --proto-redir '=https' --output "$tmp/$asset" "$url/$asset" || fail "download failed: $asset"
+  else
+    /usr/bin/curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --output "$tmp/$asset" "$url/$asset" || fail "download failed: $asset"
+  fi
 done
+printf '%s\n' 'Verifying the release...'
 validate_archive "$version" "$tmp/$name" "$tmp/farol-release.json" "$tmp/SHA256SUMS" "$tmp/extracted" || fail 'release validation failed'
 app="$tmp/extracted/Farol.app"
 plist="$app/Contents/Info.plist"
@@ -412,5 +418,5 @@ done
 actual=$(plist_value "$installed/Contents/Info.plist" CFBundleShortVersionString) || fail 'cannot read installed version'
 [ "$actual" = "$version" ] || fail 'installed version mismatch; predecessor retained if one existed'
 printf 'Installed and running: Farol %s\n' "$actual"
-printf '%s\n' 'Updater status: not confirmed'
+printf '%s\n' 'Farol opened. Check its connection and updates in the app.'
 retain=no
