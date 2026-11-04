@@ -264,6 +264,7 @@ for (const scenario of [
   "dev",
   "process-title",
   "cursor-farol",
+  "other-checkout",
 ]) {
   test(`isolated ${scenario} process is handled without touching unrelated apps`, () => {
     isolatedInstall(scenario, (result, _root, log) => {
@@ -277,6 +278,7 @@ for (const scenario of [
 for (const scenario of [
   "ps-failure",
   "unknown",
+  "other-farol-app",
   "stubborn",
   "quit-failure",
   "backend-remains",
@@ -341,8 +343,10 @@ else if (cmd === 'ps') {
     if (['private', 'snapshot', 'helper', 'stubborn'].includes(process.env.SCENARIO)) console.log('45 ' + app + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
   }
   if (process.env.SCENARIO === 'unknown') console.log('43 farol-backend');
+  if (process.env.SCENARIO === 'other-farol-app') console.log('44 /tmp/other/Farol.app/Contents/MacOS/Electron');
   if (process.env.SCENARIO === 'dev') console.log('44 /Applications/Farol Dev.app/Contents/MacOS/Farol Dev');
   if (process.env.SCENARIO === 'cursor-farol') console.log('44 Cursor Helper (Plugin): extension-host (user) farol [6-217]');
+  if (process.env.SCENARIO === 'other-checkout') console.log('44 /Users/ac/code/other/farol/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron');
 }
 else if (cmd === 'osascript') { log('osascript'); if (process.env.SCENARIO === 'quit-failure') process.exit(1); if (!['stubborn', 'backend-remains', 'escalate', 'unexpected-descendant'].includes(process.env.SCENARIO)) fs.rmSync(path.join(root, 'running'), {force:true}); }
 else if (cmd === 'ditto') { log(args[1].endsWith('previous.app') ? 'ditto-backup' : 'ditto-install'); fs.cpSync(args[0], args[1], {recursive:true, verbatimSymlinks:true}); }

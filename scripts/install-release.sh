@@ -261,7 +261,10 @@ try:
                 main_pids.append(int(match.group(1)))
             if mode == 'all' or executable.endswith('/Electron Runtime.app/Contents/MacOS/Electron'):
                 found = True
-        elif 'farol' in executable.lower() and not other:
+        elif not other and (
+            os.path.basename(executable).lower() in ('farol', 'farol-backend')
+            or '/farol.app/' in executable.lower()
+        ):
             raise ValueError('unclassified Farol process')
     if mode == 'main-pid':
         if len(main_pids) != 1:
