@@ -1,13 +1,15 @@
-import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import test from 'node:test';
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import test from "node:test";
 
-const script = fileURLToPath(new URL('../../scripts/install-release.sh', import.meta.url));
-const python = '/usr/bin/python3';
+const script = fileURLToPath(
+  new URL("../../scripts/install-release.sh", import.meta.url),
+);
+const python = "/usr/bin/python3";
 const fixtureCode = String.raw`
 import hashlib, json, os, pathlib, stat, sys, zipfile
 root, scenario = sys.argv[1:]
@@ -20,8 +22,8 @@ case "$launcher_path" in
   /*) ;;
   *) launcher_path="$PWD/$launcher_path" ;;
 esac
-macos_dir=${'$'}{launcher_path%/*}
-contents_dir=${'$'}{macos_dir%/*}
+macos_dir=${"$"}{launcher_path%/*}
+contents_dir=${"$"}{macos_dir%/*}
 export ELECTRON_FORCE_IS_PACKAGED=true
 exec "$contents_dir/Resources/app/farol-backend" run-desktop-launcher "$@"
 """
@@ -75,101 +77,187 @@ open(os.path.join(root, 'farol-release.json'), 'w').write(json.dumps(manifest))
 open(os.path.join(root, 'SHA256SUMS'), 'w').write(('0' * 64 if scenario == 'wrong-sums' else hash) + '  ' + name + '\n')
 `;
 function prepare(root, scenario) {
-  const setup = spawnSync(python, ['-c', fixtureCode, root, scenario], { encoding: 'utf8' });
+  const setup = spawnSync(python, ["-c", fixtureCode, root, scenario], {
+    encoding: "utf8",
+  });
   assert.equal(setup.status, 0, setup.stderr);
-  const digestModule = pathToFileURL(fileURLToPath(new URL('../../src/pkg/artifact-tree-digest/digest.ts', import.meta.url))).href;
-  const digest = spawnSync(process.execPath, ['--input-type=module', '-e',
-    `import { treeDigest } from ${JSON.stringify(digestModule)}; console.log(await treeDigest(process.argv[1]));`,
-    path.join(root, 'reference/Farol.app')], { encoding: 'utf8' });
+  const digestModule = pathToFileURL(
+    fileURLToPath(
+      new URL("../../src/pkg/artifact-tree-digest/digest.ts", import.meta.url),
+    ),
+  ).href;
+  const digest = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `import { treeDigest } from ${JSON.stringify(digestModule)}; console.log(await treeDigest(process.argv[1]));`,
+      path.join(root, "reference/Farol.app"),
+    ],
+    { encoding: "utf8" },
+  );
   assert.equal(digest.status, 0, digest.stderr);
-  const manifestPath = path.join(root, 'farol-release.json');
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-  if (scenario !== 'missing-artifact') manifest.artifactSha256 = scenario === 'wrong-artifact' ? '0'.repeat(64) : digest.stdout.trim();
+  const manifestPath = path.join(root, "farol-release.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  if (scenario !== "missing-artifact")
+    manifest.artifactSha256 =
+      scenario === "wrong-artifact" ? "0".repeat(64) : digest.stdout.trim();
   writeFileSync(manifestPath, JSON.stringify(manifest));
 }
 function run(args, options = {}) {
-  return spawnSync('/bin/sh', [script, ...args], { encoding: 'utf8', ...options });
+  return spawnSync("/bin/sh", [script, ...args], {
+    encoding: "utf8",
+    ...options,
+  });
 }
 function fixture(scenario, callback) {
-  const root = mkdtempSync(path.join(os.tmpdir(), 'farol-install-test-'));
+  const root = mkdtempSync(path.join(os.tmpdir(), "farol-install-test-"));
   try {
     prepare(root, scenario);
-    const output = path.join(root, 'output');
-    const result = run(['--validate-only', '1.2.3', path.join(root, 'Farol-1.2.3-darwin-arm64.zip'),
-      path.join(root, 'farol-release.json'), path.join(root, 'SHA256SUMS'), output]);
+    const output = path.join(root, "output");
+    const result = run([
+      "--validate-only",
+      "1.2.3",
+      path.join(root, "Farol-1.2.3-darwin-arm64.zip"),
+      path.join(root, "farol-release.json"),
+      path.join(root, "SHA256SUMS"),
+      output,
+    ]);
     callback(result, output, root);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
-test('strictly rejects non-numeric versions and extra arguments before operations', () => {
-  for (const args of [[], ['1.2'], ['01.2.3'], ['1.2.3-beta'], ['1.2.3;touch x'], ['--fresh-profile', '1.2.3'], ['1.2.3', 'extra']]) {
-    const result = run(args, { env: { PATH: '/nonexistent', TMPDIR: '/nonexistent' } });
+test("strictly rejects non-numeric versions and extra arguments before operations", () => {
+  for (const args of [
+    [],
+    ["1.2"],
+    ["01.2.3"],
+    ["1.2.3-beta"],
+    ["1.2.3;touch x"],
+    ["--fresh-profile", "1.2.3"],
+    ["1.2.3", "extra"],
+  ]) {
+    const result = run(args, {
+      env: { PATH: "/nonexistent", TMPDIR: "/nonexistent" },
+    });
     assert.equal(result.status, 2, `${args}: ${result.stderr}`);
     assert.match(result.stderr, /Usage:/);
   }
 });
 
-test('valid release extracts executable and safe framework symlink', () => {
-  fixture('valid', (result, output) => {
+test("valid release extracts executable and safe framework symlink", () => {
+  fixture("valid", (result, output) => {
     assert.equal(result.status, 0, result.stderr);
-    assert.match(readFileSync(path.join(output, 'Farol.app/Contents/MacOS/Farol'), 'utf8'), /run-desktop-launcher/);
-    assert.equal(readFileSync(path.join(output, 'Farol.app/Contents/Frameworks/Versions/Current/library'), 'utf8'), 'library');
+    assert.match(
+      readFileSync(path.join(output, "Farol.app/Contents/MacOS/Farol"), "utf8"),
+      /run-desktop-launcher/,
+    );
+    assert.equal(
+      readFileSync(
+        path.join(
+          output,
+          "Farol.app/Contents/Frameworks/Versions/Current/library",
+        ),
+        "utf8",
+      ),
+      "library",
+    );
   });
 });
 
-for (const scenario of ['wrong-version', 'wrong-repository', 'wrong-name', 'wrong-size', 'wrong-hash', 'wrong-sums', 'missing-artifact', 'wrong-artifact', 'extra-file', 'traversal', 'absolute', 'escape-link', 'chain-escape', 'under-link', 'duplicate']) {
-  test(`rejects ${scenario}`, () => fixture(scenario, (result, output, root) => {
-    assert.notEqual(result.status, 0, result.stdout);
-    assert.match(result.stderr, /Release validation failed/);
-    assert.throws(() => readFileSync(path.join(root, 'escape')));
-  }));
+for (const scenario of [
+  "wrong-version",
+  "wrong-repository",
+  "wrong-name",
+  "wrong-size",
+  "wrong-hash",
+  "wrong-sums",
+  "missing-artifact",
+  "wrong-artifact",
+  "extra-file",
+  "traversal",
+  "absolute",
+  "escape-link",
+  "chain-escape",
+  "under-link",
+  "duplicate",
+]) {
+  test(`rejects ${scenario}`, () =>
+    fixture(scenario, (result, output, root) => {
+      assert.notEqual(result.status, 0, result.stdout);
+      assert.match(result.stderr, /Release validation failed/);
+      assert.throws(() => readFileSync(path.join(root, "escape")));
+    }));
 }
 
-test('does not overwrite a caller-selected extraction directory', () => {
-  fixture('valid', (_result, output, root) => {
-    writeFileSync(path.join(output, 'sentinel'), 'keep');
-    const result = run(['--validate-only', '1.2.3', path.join(root, 'Farol-1.2.3-darwin-arm64.zip'),
-      path.join(root, 'farol-release.json'), path.join(root, 'SHA256SUMS'), output]);
+test("does not overwrite a caller-selected extraction directory", () => {
+  fixture("valid", (_result, output, root) => {
+    writeFileSync(path.join(output, "sentinel"), "keep");
+    const result = run([
+      "--validate-only",
+      "1.2.3",
+      path.join(root, "Farol-1.2.3-darwin-arm64.zip"),
+      path.join(root, "farol-release.json"),
+      path.join(root, "SHA256SUMS"),
+      output,
+    ]);
     assert.notEqual(result.status, 0);
-    assert.equal(readFileSync(path.join(output, 'sentinel'), 'utf8'), 'keep');
+    assert.equal(readFileSync(path.join(output, "sentinel"), "utf8"), "keep");
   });
 });
 
 // This copy has every host-effect command and installation path replaced with
 // fixture-owned paths. The shipped script has no environment-based routing.
-test('isolated installation orders checks, quit, backup and launch', () => {
-  isolatedInstall('success', (result, root, log) => {
+test("isolated installation orders checks, quit, backup and launch", () => {
+  isolatedInstall("success", (result, root, log) => {
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Installed and running: Farol 1\.2\.3/);
-    assert.match(result.stdout, /Outer app: unsigned; executable signatures verified/);
+    assert.match(
+      result.stdout,
+      /Outer app: unsigned; executable signatures verified/,
+    );
     assert.match(result.stdout, /Updater status: not confirmed/);
-    assert.ok(log.indexOf('codesign') < log.indexOf('osascript'));
-    assert.ok(log.indexOf('osascript') < log.indexOf('ditto-backup'));
-    assert.ok(log.indexOf('ditto-backup') < log.indexOf('open'));
-    assert.match(readFileSync(path.join(root, 'Applications/Farol.app/Contents/MacOS/Farol'), 'utf8'), /run-desktop-launcher/);
+    assert.ok(log.indexOf("codesign") < log.indexOf("osascript"));
+    assert.ok(log.indexOf("osascript") < log.indexOf("ditto-backup"));
+    assert.ok(log.indexOf("ditto-backup") < log.indexOf("open"));
+    assert.match(
+      readFileSync(
+        path.join(root, "Applications/Farol.app/Contents/MacOS/Farol"),
+        "utf8",
+      ),
+      /run-desktop-launcher/,
+    );
   });
 });
 
-test('isolated failed signature leaves the existing app untouched', () => {
-  isolatedInstall('bad-signature', (result, root, log) => {
+test("isolated failed signature leaves the existing app untouched", () => {
+  isolatedInstall("bad-signature", (result, root, log) => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /signature verification failed/);
-    assert.equal(readFileSync(path.join(root, 'Applications/Farol.app/old'), 'utf8'), 'old');
-    assert.ok(!log.includes('osascript'));
+    assert.equal(
+      readFileSync(path.join(root, "Applications/Farol.app/old"), "utf8"),
+      "old",
+    );
+    assert.ok(!log.includes("osascript"));
   });
 });
 
-test('isolated failed launch retains a recoverable predecessor', () => {
-  isolatedInstall('bad-launch', (result, _root, log) => {
+test("isolated failed launch retains a recoverable predecessor", () => {
+  isolatedInstall("bad-launch", (result, _root, log) => {
     assert.notEqual(result.status, 0);
     const retained = result.stderr.match(/Recovery files retained at: (.+)/);
     assert.ok(retained, result.stderr);
-    assert.equal(readFileSync(path.join(retained[1], 'previous.app/old'), 'utf8'), 'old');
-    assert.ok(log.includes('ditto-backup'));
+    assert.equal(
+      readFileSync(path.join(retained[1], "previous.app/old"), "utf8"),
+      "old",
+    );
+    assert.ok(log.includes("ditto-backup"));
   });
 });
 
-for (const scenario of ['private', 'snapshot', 'helper', 'dev']) {
+for (const scenario of ["private", "snapshot", "helper", "dev"]) {
   test(`isolated ${scenario} process is handled without touching unrelated apps`, () => {
     isolatedInstall(scenario, (result, _root, log) => {
       assert.equal(result.status, 0, result.stderr);
@@ -179,27 +267,43 @@ for (const scenario of ['private', 'snapshot', 'helper', 'dev']) {
   });
 }
 
-for (const scenario of ['ps-failure', 'unknown', 'stubborn', 'quit-failure', 'backend-remains', 'bad-tree']) {
+for (const scenario of [
+  "ps-failure",
+  "unknown",
+  "stubborn",
+  "quit-failure",
+  "backend-remains",
+  "bad-tree",
+]) {
   test(`isolated ${scenario} preserves the existing app and recovery files`, () => {
     isolatedInstall(scenario, (result, root, log) => {
       assert.notEqual(result.status, 0);
-      assert.equal(readFileSync(path.join(root, 'Applications/Farol.app/old'), 'utf8'), 'old');
+      assert.equal(
+        readFileSync(path.join(root, "Applications/Farol.app/old"), "utf8"),
+        "old",
+      );
       assert.doesNotMatch(log, /ditto-backup|ditto-install|open/);
       const retained = result.stderr.match(/Recovery files retained at: (.+)/);
       assert.ok(retained, result.stderr);
-      assert.ok(readFileSync(path.join(retained[1], 'farol-release.json')).length > 0);
+      assert.ok(
+        readFileSync(path.join(retained[1], "farol-release.json")).length > 0,
+      );
     });
   });
 }
 
 function isolatedInstall(scenario, callback) {
-  const root = mkdtempSync(path.join(os.tmpdir(), 'farol-install-flow-'));
+  const root = mkdtempSync(path.join(os.tmpdir(), "farol-install-flow-"));
   try {
-    prepare(root, scenario === 'bad-tree' ? 'extra-file' : 'valid');
-    const prep = spawnSync('/bin/mkdir', ['-p', path.join(root, 'Applications/Farol.app'), path.join(root, 'bin')]);
+    prepare(root, scenario === "bad-tree" ? "extra-file" : "valid");
+    const prep = spawnSync("/bin/mkdir", [
+      "-p",
+      path.join(root, "Applications/Farol.app"),
+      path.join(root, "bin"),
+    ]);
     assert.equal(prep.status, 0);
-    writeFileSync(path.join(root, 'Applications/Farol.app/old'), 'old');
-    writeFileSync(path.join(root, 'running'), 'yes');
+    writeFileSync(path.join(root, "Applications/Farol.app/old"), "old");
+    writeFileSync(path.join(root, "running"), "yes");
     const fake = String.raw`#!/usr/bin/env node
 const fs = require('fs'), path = require('path');
 const root = process.env.FIXTURE_ROOT, cmd = path.basename(process.argv[1]), args = process.argv.slice(2);
@@ -228,27 +332,72 @@ else if (cmd === 'sleep') {}
 else if (cmd === 'open') { log('open'); if (process.env.SCENARIO === 'bad-launch') process.exit(1); fs.writeFileSync(path.join(root, 'launched'), 'yes'); fs.writeFileSync(path.join(root, 'running'), 'yes'); }
 else process.exit(2);
 `;
-    const fakePath = path.join(root, 'bin/fake');
-    writeFileSync(fakePath, fake.replace('#!/usr/bin/env node', `#!${process.execPath}`), { mode: 0o755 });
-    for (const command of ['uname', 'curl', 'PlistBuddy', 'codesign', 'ps', 'osascript', 'ditto', 'open', 'sleep']) {
-      const link = spawnSync('/bin/ln', ['-s', fakePath, path.join(root, 'bin', command)]);
+    const fakePath = path.join(root, "bin/fake");
+    writeFileSync(
+      fakePath,
+      fake.replace("#!/usr/bin/env node", `#!${process.execPath}`),
+      { mode: 0o755 },
+    );
+    for (const command of [
+      "uname",
+      "curl",
+      "PlistBuddy",
+      "codesign",
+      "ps",
+      "osascript",
+      "ditto",
+      "open",
+      "sleep",
+    ]) {
+      const link = spawnSync("/bin/ln", [
+        "-s",
+        fakePath,
+        path.join(root, "bin", command),
+      ]);
       assert.equal(link.status, 0);
     }
-    let copy = readFileSync(script, 'utf8');
-    for (const command of ['uname', 'curl', 'codesign', 'osascript', 'ditto', 'open'])
-      copy = copy.replaceAll(`/usr/bin/${command}`, path.join(root, 'bin', command));
-    copy = copy.replaceAll('/usr/libexec/PlistBuddy', path.join(root, 'bin/PlistBuddy'))
-      .replaceAll('/bin/ps', path.join(root, 'bin/ps'))
-      .replaceAll('/bin/sleep', path.join(root, 'bin/sleep'))
-      .replaceAll('/Applications/Farol.app', path.join(root, 'Applications/Farol.app'))
-      .replace('/tmp/farol-release.XXXXXXXX', path.join(root, 'release.XXXXXXXX'));
-    const copyPath = path.join(root, 'isolated-installer.sh');
+    let copy = readFileSync(script, "utf8");
+    for (const command of [
+      "uname",
+      "curl",
+      "codesign",
+      "osascript",
+      "ditto",
+      "open",
+    ])
+      copy = copy.replaceAll(
+        `/usr/bin/${command}`,
+        path.join(root, "bin", command),
+      );
+    copy = copy
+      .replaceAll("/usr/libexec/PlistBuddy", path.join(root, "bin/PlistBuddy"))
+      .replaceAll("/bin/ps", path.join(root, "bin/ps"))
+      .replaceAll("/bin/sleep", path.join(root, "bin/sleep"))
+      .replaceAll(
+        "/Applications/Farol.app",
+        path.join(root, "Applications/Farol.app"),
+      )
+      .replace(
+        "/tmp/farol-release.XXXXXXXX",
+        path.join(root, "release.XXXXXXXX"),
+      );
+    const copyPath = path.join(root, "isolated-installer.sh");
     writeFileSync(copyPath, copy);
-    const result = spawnSync('/bin/sh', [copyPath, '1.2.3'], {
-      encoding: 'utf8', env: { ...process.env, HOME: root, FIXTURE_ROOT: root, SCENARIO: scenario },
+    const result = spawnSync("/bin/sh", [copyPath, "1.2.3"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: root,
+        FIXTURE_ROOT: root,
+        SCENARIO: scenario,
+      },
     });
-    let log = '';
-    try { log = readFileSync(path.join(root, 'log'), 'utf8'); } catch {}
+    let log = "";
+    try {
+      log = readFileSync(path.join(root, "log"), "utf8");
+    } catch {}
     callback(result, root, log);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
