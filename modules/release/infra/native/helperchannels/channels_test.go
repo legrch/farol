@@ -303,6 +303,33 @@ func fill(t *testing.T, f *os.File) {
 	}
 }
 
+// A timer may expire between two reads of Err. Guard must classify one
+// observation rather than combining the pre-expiry and post-expiry states.
+type expiringContext struct {
+	context.Context
+	calls int
+}
+
+func (c *expiringContext) Err() error {
+	c.calls++
+	if c.calls == 1 {
+		return nil
+	}
+	return context.DeadlineExceeded
+}
+
+func TestGuardSamplesContextDeadlineOnce(t *testing.T) {
+	ctx := &expiringContext{Context: context.Background()}
+	state := &channelState{stop: make(chan struct{})}
+	until := time.Now().Add(time.Second)
+	if got := state.guard(ctx, until); got != "" || ctx.calls != 1 {
+		t.Fatalf("first guard = %q after %d Err calls", got, ctx.calls)
+	}
+	if got := state.guard(ctx, until); got != "deadline" || ctx.calls != 2 {
+		t.Fatalf("second guard = %q after %d Err calls", got, ctx.calls)
+	}
+}
+
 func TestBackpressureCancellationAndCloseJoin(t *testing.T) {
 	for _, mode := range []string{"absolute", "context deadline", "cancel", "close"} {
 		t.Run(mode, func(t *testing.T) {

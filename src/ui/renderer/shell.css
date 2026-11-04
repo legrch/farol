@@ -333,6 +333,20 @@ kbd {
   gap: 6px;
   margin-top: auto;
 }
+.rail-version {
+  padding: 0 8px 2px 36px;
+  color: var(--muted);
+  cursor: help;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.rail-version:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.desktop[data-sidebar="rail"] .rail-version {
+  display: none;
+}
 .rail-connection {
   font-size: 12px;
   border-radius: 8px;

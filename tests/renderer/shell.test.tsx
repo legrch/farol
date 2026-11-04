@@ -33,6 +33,32 @@ function completedBootstrap() {
   data.configuration.settings.general.openAtLaunch = "home";
   return data;
 }
+it.each([
+  ["preview", "v0.1.8-owner.beta.1", "Farol 0.1.8-owner.beta.1"],
+  ["dev", "v0.1.8-owner.beta.1 · Dev", "Farol 0.1.8-owner.beta.1 · Dev"],
+  [
+    "owner-preview",
+    "v0.1.8-owner.beta.1",
+    "Farol 0.1.8-owner.beta.1 · Owner Preview",
+  ],
+] as const)(
+  "shows build identity beneath Settings in %s",
+  async (environment, label, heading) => {
+    const data = completedBootstrap();
+    data.environment = environment;
+    const { host } = await mount(data);
+    const settings = button(host, "Settings");
+    const version = settings.nextElementSibling;
+    expect(version?.textContent?.trim()).toBe(label);
+    expect(version?.getAttribute("title")).toContain(heading);
+    expect(version?.getAttribute("title")).toContain("Build 10");
+    expect(version?.getAttribute("title")).toContain("Built ");
+    expect(version?.getAttribute("title")).toContain("Source 111111111111");
+    expect(version?.getAttribute("title")).toContain(
+      `Build ID ${"3".repeat(64)}`,
+    );
+  },
+);
 async function mount(
   data = completedBootstrap(),
   compactViewport = () => false,
@@ -760,9 +786,11 @@ it("keeps the update indicator in the rail only while an update needs attention"
   await act(async () => rail.click());
   expect(c.getSnapshot().overlay).toBe("update");
   expect(rail.parentElement).toBe(host.querySelector(".rail-footer"));
-  expect(rail.parentElement?.lastElementChild?.getAttribute("aria-label")).toBe(
-    "Settings",
-  );
+  expect(
+    rail.parentElement
+      ?.querySelector(".rail-bottom")
+      ?.getAttribute("aria-label"),
+  ).toBe("Settings");
   await act(async () => {
     c.overlay("none");
     f.emit("update", { phase: "idle", checkedAt: 42 });

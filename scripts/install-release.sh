@@ -257,11 +257,18 @@ try:
         # Explicitly identified Dev and Owner Preview bundles are distinct.
         other = any('/' + name + '.app/' in executable for name in ('Farol Dev', 'Farol Owner Preview'))
         if owned:
-            if executable == installed + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron':
+            if executable == installed + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron' or (
+                executable.startswith(profile + '/') and
+                executable.endswith('/launch-Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron')
+            ):
                 main_pids.append(int(match.group(1)))
             if mode == 'all' or executable.endswith('/Electron Runtime.app/Contents/MacOS/Electron'):
                 found = True
-        elif 'farol' in executable.lower() and not other:
+        elif not other and (
+            os.path.basename(executable).lower() in ('farol', 'farol-backend')
+            or '/farol.app/' in executable.lower()
+            or '/launch-farol.app/' in executable.lower()
+        ):
             raise ValueError('unclassified Farol process')
     if mode == 'main-pid':
         if len(main_pids) != 1:
