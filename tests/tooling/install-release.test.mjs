@@ -274,6 +274,7 @@ for (const scenario of [
   "quit-failure",
   "backend-remains",
   "bad-tree",
+  "unexpected-descendant",
 ]) {
   test(`isolated ${scenario} preserves the existing app and recovery files`, () => {
     isolatedInstall(scenario, (result, root, log) => {
@@ -291,6 +292,14 @@ for (const scenario of [
     });
   });
 }
+
+test("isolated stuck application escalates TERM to KILL before replacement", () => {
+  isolatedInstall("escalate", (result, _root, log) => {
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(log.indexOf("signal-15") < log.indexOf("signal-9"));
+    assert.ok(log.indexOf("signal-9") < log.indexOf("ditto-backup"));
+  });
+});
 
 function isolatedInstall(scenario, callback) {
   const root = mkdtempSync(path.join(os.tmpdir(), "farol-install-flow-"));
@@ -322,12 +331,13 @@ else if (cmd === 'ps') {
     if (process.env.SCENARIO === 'snapshot') base = path.join(profile, 'installed-execution/snapshot/Farol.app');
     const suffix = ['helper', 'backend-remains'].includes(process.env.SCENARIO) && !fs.existsSync(path.join(root, 'launched')) ? '/Contents/Resources/app/farol-backend' : '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron';
     console.log('42 ' + (process.env.SCENARIO === 'process-title' ? 'Farol' : base + suffix));
+    if (['private', 'snapshot', 'helper', 'stubborn'].includes(process.env.SCENARIO)) console.log('45 ' + app + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
   }
   if (process.env.SCENARIO === 'unknown') console.log('43 farol-backend');
   if (process.env.SCENARIO === 'dev') console.log('44 /Applications/Farol Dev.app/Contents/MacOS/Farol Dev');
   if (process.env.SCENARIO === 'cursor-farol') console.log('44 Cursor Helper (Plugin): extension-host (user) farol [6-217]');
 }
-else if (cmd === 'osascript') { log('osascript'); if (process.env.SCENARIO === 'quit-failure') process.exit(1); if (!['stubborn', 'backend-remains'].includes(process.env.SCENARIO)) fs.rmSync(path.join(root, 'running'), {force:true}); }
+else if (cmd === 'osascript') { log('osascript'); if (process.env.SCENARIO === 'quit-failure') process.exit(1); if (!['stubborn', 'backend-remains', 'escalate', 'unexpected-descendant'].includes(process.env.SCENARIO)) fs.rmSync(path.join(root, 'running'), {force:true}); }
 else if (cmd === 'ditto') { log(args[1].endsWith('previous.app') ? 'ditto-backup' : 'ditto-install'); fs.cpSync(args[0], args[1], {recursive:true, verbatimSymlinks:true}); }
 else if (cmd === 'sleep') {}
 else if (cmd === 'open') { log('open'); if (process.env.SCENARIO === 'bad-launch') process.exit(1); fs.writeFileSync(path.join(root, 'launched'), 'yes'); fs.writeFileSync(path.join(root, 'running'), 'yes'); }
@@ -383,7 +393,7 @@ else process.exit(2);
         path.join(root, "release.XXXXXXXX"),
       )
       .replace(
-        "found = False\ntry:",
+        "found = False\nmain_pids = []\ntry:",
         `def resolve_executable(pid):
     if pid == 42:
         return installed + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron'
@@ -391,8 +401,39 @@ else process.exit(2);
         return '/Applications/Cursor.app/Contents/MacOS/Cursor'
     return '/tmp/other/farol-backend'
 found = False
+main_pids = []
 try:`,
       );
+    if (["escalate", "unexpected-descendant"].includes(scenario)) {
+      copy = copy.replace(
+        "try:\n    rows = table()",
+        `def table():
+    if not os.path.exists(os.path.join(os.environ['FIXTURE_ROOT'], 'running')):
+        return {1: (0, 'S')}
+    return {101: (1, 'S'), 102: (101, 'S')}
+def identity(pid):
+    if pid == 101:
+        path = installed + '/Contents/Resources/app/farol-backend'
+    else:
+        path = '/tmp/unrelated' if os.environ['SCENARIO'] == 'unexpected-descendant' else installed + '/Contents/MacOS/Farol'
+    return {'pid': pid, 'path': path, 'start': 'fixed'}
+class TestProc:
+    def proc_pidpath(self, pid, buf, size):
+        value = os.fsencode(identity(pid)['path'])
+        buf.value = value
+        return len(value)
+lib = TestProc()
+def fake_kill(pid, sig):
+    with open(os.path.join(os.environ['FIXTURE_ROOT'], 'log'), 'a') as f:
+        f.write('signal-%s\\n' % int(sig))
+    if sig == signal.SIGKILL and pid == 101:
+        os.unlink(os.path.join(os.environ['FIXTURE_ROOT'], 'running'))
+os.kill = fake_kill
+time.sleep = lambda _: None
+try:
+    rows = table()`,
+      );
+    }
     const copyPath = path.join(root, "isolated-installer.sh");
     writeFileSync(copyPath, copy);
     const result = spawnSync("/bin/sh", [copyPath, "1.2.3"], {
