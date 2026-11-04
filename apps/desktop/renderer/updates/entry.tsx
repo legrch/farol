@@ -134,6 +134,7 @@ export function UpdatesWindow({ api }: { api: UpdatesAPI }) {
       className="desktop native-updates"
       data-theme="system"
       aria-label="Farol Updates"
+      style={{ display: "flex", flexDirection: "column" }}
     >
       <h1>{title}</h1>
       <div role="status" aria-live="polite">
@@ -299,7 +300,20 @@ export function UpdatesWindow({ api }: { api: UpdatesAPI }) {
               Review Recovery in Farol
             </button>
           )}
-        <button onClick={() => api.close()}>Done</button>
+      </div>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          marginTop: "auto",
+          paddingTop: 24,
+        }}
+      >
+        <button onClick={() => api.close()}>
+          {update?.phase === "idle" && update.checkedAt !== null
+            ? "Done"
+            : "Close"}
+        </button>
       </div>
     </main>
   );
