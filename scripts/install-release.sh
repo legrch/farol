@@ -372,7 +372,7 @@ on run argv
   tell application "System Events"
     set targetProcesses to every application process whose unix id is targetPid
     if (count of targetProcesses) is not 1 then error "Production application PID is not unique"
-    tell item 1 of targetProcesses to click menu item "Quit Farol" of menu 1 of menu bar item 1 of menu bar 1
+    tell item 1 of targetProcesses to click menu item "Quit Farol" of menu 1 of menu bar item "Farol" of menu bar 1
   end tell
 end run
 APPLESCRIPT
