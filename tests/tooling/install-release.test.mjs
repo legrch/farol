@@ -258,7 +258,7 @@ test("isolated failed launch retains a recoverable predecessor", () => {
 });
 
 for (const scenario of [
-  "private",
+  "private-only",
   "snapshot",
   "helper",
   "dev",
@@ -280,6 +280,7 @@ for (const scenario of [
   "unknown",
   "other-farol-app",
   "other-private-launch",
+  "private-and-public",
   "stubborn",
   "quit-failure",
   "backend-remains",
@@ -337,11 +338,11 @@ else if (cmd === 'ps') {
   if (fs.existsSync(path.join(root, 'running'))) {
     const app = path.join(root, 'Applications/Farol.app');
     const profile = path.join(root, 'Library/Application Support/io.github.legrch.farol/installed-updates');
-    let base = ['private', 'helper', 'stubborn'].includes(process.env.SCENARIO) ? path.join(profile, 'op/launch-Farol.app') : app;
+    let base = ['private-and-public', 'private-only', 'helper', 'stubborn'].includes(process.env.SCENARIO) ? path.join(profile, 'op/launch-Farol.app') : app;
     if (process.env.SCENARIO === 'snapshot') base = path.join(profile, 'installed-execution/snapshot/Farol.app');
     const suffix = ['helper', 'backend-remains'].includes(process.env.SCENARIO) && !fs.existsSync(path.join(root, 'launched')) ? '/Contents/Resources/app/farol-backend' : '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron';
     console.log('42 ' + (process.env.SCENARIO === 'process-title' ? 'Farol' : base + suffix));
-    if (['private', 'snapshot', 'helper', 'stubborn'].includes(process.env.SCENARIO)) console.log('45 ' + app + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
+    if (['private-and-public', 'snapshot', 'helper', 'stubborn'].includes(process.env.SCENARIO)) console.log('45 ' + app + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
   }
   if (process.env.SCENARIO === 'unknown') console.log('43 farol-backend');
   if (process.env.SCENARIO === 'other-farol-app') console.log('44 /tmp/other/Farol.app/Contents/MacOS/Electron');
