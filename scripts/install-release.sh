@@ -370,9 +370,14 @@ if ! check_stopped; then
 on run argv
   set targetPid to (item 1 of argv) as integer
   tell application "System Events"
-    set targetProcesses to every application process whose unix id is targetPid
+    set targetProcesses to {}
+    repeat with candidate in every application process
+      if (unix id of candidate) is targetPid then set end of targetProcesses to candidate
+    end repeat
     if (count of targetProcesses) is not 1 then error "Production application PID is not unique"
-    tell item 1 of targetProcesses to click menu item "Quit Farol" of menu 1 of menu bar item 1 of menu bar 1
+    set targetProcess to item 1 of targetProcesses
+    if (unix id of targetProcess) is not targetPid then error "Production application PID changed"
+    tell targetProcess to click menu item "Quit Farol" of menu 1 of menu bar item "Farol" of menu bar 1
   end tell
 end run
 APPLESCRIPT
