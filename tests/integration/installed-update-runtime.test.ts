@@ -1124,6 +1124,194 @@ describe("installed updater composition (disposable filesystem and mocked native
     },
   );
 
+  it.each([
+    "clear",
+    "partial",
+    "conflicting",
+    "symlink",
+    "archive-temporary-sync",
+    "archive-file-sync",
+    "archive-directory-sync",
+  ] as const)(
+    "settles a second OTA with a best-effort prior receipt archive (%s)",
+    async (archiveState) => {
+      const history = await completedOtaHistory();
+      const nextManifest = {
+        ...manifest,
+        version: "0.1.2-owner.beta.1",
+        archiveName: "Farol-0.1.2-owner.beta.1-darwin-arm64.zip",
+        buildVersion: "4",
+        buildId: "8".repeat(64),
+        artifactSha256: "7".repeat(64),
+      };
+      const nextTarget = {
+        digest: nextManifest.artifactSha256,
+        version: nextManifest.version,
+        buildId: nextManifest.buildId,
+      };
+      mocks.discover.mockResolvedValueOnce({
+        ok: true,
+        value: { manifest: nextManifest },
+      });
+      mocks.download.mockResolvedValueOnce({
+        ok: true,
+        value: {
+          handle: path.join(root, "next.zip"),
+          manifest: nextManifest,
+          identity: { ...nextManifest, updateChannel: "github-owner-beta" },
+          stagedAppPath: staging,
+          stagingRoot: path.dirname(staging),
+        },
+      });
+      mocks.verify.mockResolvedValueOnce({
+        ok: true,
+        value: {
+          identity: { ...nextManifest, updateChannel: "github-owner-beta" },
+          stagedAppPath: staging,
+          stagingRoot: path.dirname(staging),
+        },
+      });
+      mocks.exec.mockImplementation(async (file: string, args: string[]) => {
+        if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+        return {
+          stdout: JSON.stringify(
+            args[0]!.endsWith("update-obligations.mjs")
+              ? {
+                  drained: true,
+                  obligationCount: 0,
+                  unreadableCount: 0,
+                  changedCount: 0,
+                }
+              : args[1]!.endsWith("staged.app")
+                ? nextTarget
+                : args[1]!.endsWith("previous.app")
+                  ? source
+                  : target,
+          ),
+        };
+      });
+      const next = (await createInstalledUpdateRuntime(
+        history.updatedOptions,
+      ))!;
+      await next.initialize();
+      await next.check(true);
+      expect(next.snapshot()).toMatchObject({
+        phase: "available",
+        version: nextManifest.version,
+      });
+      await next.download();
+      expect(next.snapshot().phase).toBe("ready");
+      await next.restart();
+      expect(next.snapshot().phase).toBe("applying");
+      const operation = JSON.parse(await fs.readFile(ready, "utf8")).operation;
+      const previousOperation = JSON.parse(
+        history.receipt.toString(),
+      ).operation;
+      expect(operation.operationId).not.toBe(previousOperation.operationId);
+      expect(operation).toMatchObject({ source: target, target: nextTarget });
+      const nextRoot = path.join(
+        userData,
+        "installed-updates",
+        operation.operationId,
+      );
+      // Model the helper's completed journal and successor build on disposable files.
+      await fs.writeFile(
+        path.join(nextRoot, "journal.json"),
+        JSON.stringify({
+          schema: "farol.installed-update-journal/1",
+          ...operation,
+          phase: "completed",
+        }),
+        { mode: 0o600 },
+      );
+      await fs.mkdir(path.join(nextRoot, "previous.app"));
+      await next.close();
+      mocks.exec.mockImplementation(async (file: string, args: string[]) => {
+        if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+        return {
+          stdout: JSON.stringify(
+            args[1]!.endsWith("previous.app") ? target : nextTarget,
+          ),
+        };
+      });
+      const successorBuild = {
+        ...build,
+        version: nextManifest.version,
+        buildVersion: nextManifest.buildVersion,
+        buildId: nextManifest.buildId,
+      };
+      const archive = path.join(
+        path.dirname(history.journalFile),
+        "settled-receipt.json",
+      );
+      if (archiveState === "partial")
+        await fs.writeFile(archive, "{", { mode: 0o600 });
+      if (archiveState === "conflicting")
+        await fs.writeFile(archive, "{}", { mode: 0o600 });
+      if (archiveState === "symlink")
+        await fs.symlink(history.receiptFile, archive);
+      const successorOptions = {
+        ...options(),
+        build: successorBuild,
+        goCoreArtifact: compiledFor(successorBuild),
+      };
+      const syncFault =
+        archiveState === "archive-temporary-sync" ||
+        archiveState === "archive-file-sync" ||
+        archiveState === "archive-directory-sync";
+      const open = fs.open.bind(fs);
+      let injected = 0;
+      let archiveOpened = false;
+      const openSpy = syncFault
+        ? vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+            const fd = await open(...args);
+            const name = String(args[0]);
+            if (name === archive) archiveOpened = true;
+            const shouldFail =
+              (archiveState === "archive-temporary-sync" &&
+                path.dirname(name) === path.dirname(archive) &&
+                /^\.settled-receipt-[0-9a-f]+$/.test(path.basename(name))) ||
+              (archiveState === "archive-file-sync" && name === archive) ||
+              (archiveState === "archive-directory-sync" &&
+                name === path.dirname(archive) &&
+                archiveOpened);
+            if (shouldFail && injected === 0) {
+              vi.spyOn(fd, "sync").mockImplementation(async () => {
+                injected++;
+                throw new Error("fixture archive durability failure");
+              });
+            }
+            return fd;
+          })
+        : null;
+      const successor = (await createInstalledUpdateRuntime(successorOptions))!;
+      await successor.initialize();
+      openSpy?.mockRestore();
+      if (syncFault) expect(injected).toBe(1);
+      if (archiveState === "symlink")
+        expect((await fs.lstat(archive)).isSymbolicLink()).toBe(true);
+      if (archiveState === "partial" || archiveState === "conflicting")
+        expect(await fs.readFile(archive, "utf8")).toBe(
+          archiveState === "partial" ? "{" : "{}",
+        );
+      expect(successor.snapshot()).toMatchObject({
+        phase: "idle",
+        rollbackVersion: target.version,
+      });
+      await successor.close();
+
+      const latest = JSON.parse(await fs.readFile(history.receiptFile, "utf8"));
+      expect(latest).toMatchObject({
+        operation,
+        runningBuildId: nextManifest.buildId,
+      });
+      expect(await fs.readFile(history.journalFile)).toEqual(history.journal);
+      if (archiveState === "clear")
+        expect(await fs.readFile(archive)).toEqual(history.receipt);
+      await expect(fs.access(ready)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
   it("keeps historic OTA evidence and refuses success while the next helper outcome is unknown", async () => {
     const history = await completedOtaHistory();
     const nextManifest = {
@@ -6983,6 +7171,71 @@ describe("selected shared slot (redirected disposable filesystem, mocked helper)
     return { stat, physical };
   }
 
+  it("quietly retires a retained 0.5.8 download after adopting 0.5.9", async () => {
+    const fixture = await shared();
+    const first = await prepared();
+    await first.close();
+    const record = JSON.parse(await fs.readFile(ready, "utf8"));
+    record.manifest = {
+      ...record.manifest,
+      channel: "stable",
+      version: "0.5.8",
+      buildVersion: "64",
+      archiveName: "Farol-0.5.8-darwin-arm64.zip",
+    };
+    await fs.writeFile(ready, JSON.stringify(record), { mode: 0o600 });
+    await fs.unlink(fixture.physical + ".receipt.json");
+    const current = {
+      ...build,
+      version: "0.5.9",
+      updateChannel: "github-stable" as const,
+      buildVersion: "65",
+      buildId: "0".repeat(64),
+    };
+    current.buildId = createHash("sha256")
+      .update(canonicalBuildIdentityPayload(current))
+      .digest("hex");
+    const expected = {
+      digest: "7".repeat(64),
+      version: current.version,
+      buildId: current.buildId,
+    };
+    const adopted = {
+      ...manifest,
+      channel: "stable",
+      version: current.version,
+      buildVersion: current.buildVersion,
+      sourceCommit: current.sourceCommit,
+      sourceTreeDigest: current.sourceTreeDigest,
+      buildId: current.buildId,
+      artifactSha256: expected.digest,
+      archiveName: "Farol-0.5.9-darwin-arm64.zip",
+    };
+    await fs.writeFile(
+      path.join(userData, "installed-updates/adopted-baseline.json"),
+      JSON.stringify({
+        schema: "farol.adopted-baseline/1",
+        slot: "/Applications/Farol.app",
+        userData,
+        manifest: adopted,
+        adoptedAt: "2026-10-21T00:00:00.000Z",
+      }),
+      { mode: 0o600 },
+    );
+    mocks.exec.mockResolvedValue({ stdout: JSON.stringify(expected) });
+    const controller = (await createInstalledUpdateRuntime({
+      ...options(),
+      build: current,
+      goCoreArtifact: compiledFor(current),
+    }))!;
+    await controller.initialize();
+    expect(controller.snapshot().phase).toBe("idle");
+    expect(mocks.reclaimArchive).toHaveBeenCalledOnce();
+    await expect(fs.lstat(ready)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await controller.close();
+  });
+
   it.each(["deadline", "host-withdrawal"] as const)(
     "does not launch an observer after %s during private resource validation",
     async (mode) => {
@@ -7197,6 +7450,99 @@ describe("selected shared slot (redirected disposable filesystem, mocked helper)
     await updated!.check(true);
     expect(updated!.snapshot().phase).toBe("idle");
     expect(mocks.helper).toHaveBeenCalledTimes(1);
+  });
+  it("checks updates after a newer adopted shared build without rewriting the completed OTA receipt", async () => {
+    await shared();
+    const first = await prepared();
+    await first.restart();
+    const retained = JSON.parse(await fs.readFile(ready, "utf8"));
+    const op = retained.operation;
+    const opRoot = path.join(userData, "installed-updates", op.operationId);
+    await fs.mkdir(path.join(opRoot, "previous.app"));
+    await fs.writeFile(
+      path.join(opRoot, "journal.json"),
+      JSON.stringify({
+        schema: "farol.installed-update-journal/1",
+        ...op,
+        phase: "completed",
+      }),
+      { mode: 0o600 },
+    );
+    await first.close();
+    mocks.exec.mockImplementation(async (file: string, args: string[]) => {
+      if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+      return {
+        stdout: JSON.stringify(
+          args[1]!.endsWith("previous.app") ? source : target,
+        ),
+      };
+    });
+    const old = (await createInstalledUpdateRuntime({
+      ...options(),
+      build: { ...build, version: target.version, buildId: target.buildId },
+    }))!;
+    await old.initialize();
+    expect(old.snapshot().phase).toBe("idle");
+    await old.close();
+    const receiptFile = path.join(
+      userData,
+      "installed-updates/last-update.json",
+    );
+    const before = await fs.readFile(receiptFile);
+    const manualBuild = {
+      ...build,
+      version: "0.1.2-owner.beta.1",
+      buildVersion: "4",
+      sourceCommit: "3".repeat(40),
+      sourceTreeDigest: "4".repeat(64),
+      buildId: "0".repeat(64),
+    };
+    manualBuild.buildId = createHash("sha256")
+      .update(canonicalBuildIdentityPayload(manualBuild))
+      .digest("hex");
+    const manualManifest = {
+      ...manifest,
+      version: manualBuild.version,
+      buildVersion: manualBuild.buildVersion,
+      sourceCommit: manualBuild.sourceCommit,
+      sourceTreeDigest: manualBuild.sourceTreeDigest,
+      buildId: manualBuild.buildId,
+      artifactSha256: "7".repeat(64),
+      archiveName: `Farol-${manualBuild.version}-darwin-arm64.zip`,
+    };
+    await fs.writeFile(
+      path.join(userData, "installed-updates/adopted-baseline.json"),
+      JSON.stringify({
+        schema: "farol.adopted-baseline/1",
+        slot: "/Applications/Farol.app",
+        userData,
+        manifest: manualManifest,
+        adoptedAt: "2026-10-21T00:00:00.000Z",
+      }),
+      { mode: 0o600 },
+    );
+    mocks.exec.mockImplementation(async (file: string) => {
+      if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+      return {
+        stdout: JSON.stringify({
+          digest: manualManifest.artifactSha256,
+          version: manualBuild.version,
+          buildId: manualBuild.buildId,
+        }),
+      };
+    });
+    const current = (await createInstalledUpdateRuntime({
+      ...options(),
+      build: manualBuild,
+      goCoreArtifact: compiledFor(manualBuild),
+    }))!;
+    await current.initialize();
+    expect(current.snapshot().phase).toBe("idle");
+    mocks.discover.mockResolvedValueOnce({ ok: true, value: null });
+    await current.check(true);
+    expect(current.snapshot().phase).toBe("idle");
+    expect(await fs.readFile(receiptFile)).toEqual(before);
+    await current.close();
   });
   it("does not consume a shared operation after reopening the legacy copy with identical builds", async () => {
     const fixture = await shared();

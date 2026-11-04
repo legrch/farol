@@ -652,12 +652,83 @@ async function observeSharedSlotStartup(
   const repair = await read(app + ".repair.json");
   const repairJournal = await read("/Applications/.farol-closed-repair.json");
   const readyRecord = ready === null ? null : Retained.parse(ready);
-  const active =
+  let active =
     readyRecord?.operation || readyRecord?.preparation
       ? readyRecord
       : saved !== null
         ? SavedReceipt.parse(saved)
         : null;
+  let manualReplacement = false;
+  if (
+    active?.operation &&
+    saved !== null &&
+    !readyRecord?.operation &&
+    !readyRecord?.preparation &&
+    ![active.operation.source, active.operation.target].some(
+      (item) =>
+        item.buildId === build.buildId && item.version === build.version,
+    )
+  ) {
+    const previous = SavedReceipt.parse(saved);
+    const op = previous.operation;
+    const parsed = parseRetainedGithubReleaseManifest(previous);
+    const absent = options.observation?.recordAbsent ?? recordAbsent;
+    if (
+      !op ||
+      previous.phase !== "completed" ||
+      previous.runningBuildId !== op.target.buildId ||
+      !parsed.ok ||
+      !sameBuild(op.target, {
+        digest: parsed.value.artifactSha256,
+        version: parsed.value.version,
+        buildId: parsed.value.buildId,
+      }) ||
+      compareReleaseVersions(build.version, op.target.version) !== 1 ||
+      BigInt(build.buildVersion!) <= BigInt(parsed.value.buildVersion) ||
+      repair !== null ||
+      repairJournal !== null ||
+      readyRecord?.helper ||
+      (readyRecord !== null &&
+        !parseRetainedGithubReleaseManifest(readyRecord).ok) ||
+      !(
+        await Promise.all(
+          [
+            "restore-pending.json",
+            "download-pending.json",
+            "package-cleanup-pending.json",
+          ].map((name) => absent(path.join(root, name))),
+        )
+      ).every(Boolean) ||
+      !(await absent(app + ".repair.json")) ||
+      !(await absent("/Applications/.farol-closed-repair.json")) ||
+      (ready === null && !(await absent(path.join(root, "ready.json"))))
+    )
+      throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+    try {
+      await readOperationBinding(root, op, "shared", read);
+      const journal = await readStartupOperationJournal(
+        root,
+        op,
+        "shared",
+        read,
+        "update",
+        absent,
+      );
+      const helper = await observeInstalledHelper(
+        previous.helper,
+        options.observation?.readProcess ?? readInstalledProcess,
+      );
+      if (
+        journal?.phase !== "completed" ||
+        startupHelperState(helper) !== "exited"
+      )
+        throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+    } catch {
+      throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+    }
+    manualReplacement = true;
+    active = null;
+  }
   if (active?.operation) {
     const record = active;
     expected = await operationImage(record);
@@ -720,25 +791,26 @@ async function observeSharedSlotStartup(
     // update and installing it, and that must not strand an adopted copy.
     const absent = options.observation?.recordAbsent ?? recordAbsent;
     if (
-      receiptRaw === null &&
-      saved === null &&
-      repair === null &&
-      repairJournal === null &&
-      // Absent, or the very retained-download record the updater itself
-      // accepts (valid manifest, non-empty handle). Anything malformed refuses.
-      (ready === null
-        ? await absent(path.join(root, "ready.json"))
-        : parseRetainedGithubReleaseManifest(Retained.parse(ready)).ok) &&
-      (
-        await Promise.all(
-          [
-            file,
-            path.join(root, "last-update.json"),
-            app + ".repair.json",
-            "/Applications/.farol-closed-repair.json",
-          ].map(absent),
-        )
-      ).every(Boolean)
+      manualReplacement ||
+      (receiptRaw === null &&
+        saved === null &&
+        repair === null &&
+        repairJournal === null &&
+        // Absent, or the very retained-download record the updater itself
+        // accepts (valid manifest, non-empty handle). Anything malformed refuses.
+        (ready === null
+          ? await absent(path.join(root, "ready.json"))
+          : parseRetainedGithubReleaseManifest(Retained.parse(ready)).ok) &&
+        (
+          await Promise.all(
+            [
+              file,
+              path.join(root, "last-update.json"),
+              app + ".repair.json",
+              "/Applications/.farol-closed-repair.json",
+            ].map(absent),
+          )
+        ).every(Boolean))
     ) {
       const adoptedFile = path.join(root, ADOPTED_BASELINE_FILE);
       const state = await readAdoptedRecord({
@@ -1493,10 +1565,12 @@ async function readRecord(
   privateMode = true,
   observeDigest?: (digest: string) => void,
   maximumBytes = MAX_RECORD_BYTES,
+  observeBytes?: (bytes: Buffer) => void,
 ): Promise<unknown | null> {
   let before;
   let value: unknown;
   let digest: string;
+  let observedBytes: Buffer | undefined;
   try {
     before = await fs.lstat(file);
   } catch (error) {
@@ -1547,6 +1621,7 @@ async function readRecord(
     const bytes = buffer.subarray(0, bytesRead);
     value = JSON.parse(bytes.toString("utf8")) as unknown;
     digest = createHash("sha256").update(bytes).digest("hex");
+    if (observeBytes) observedBytes = Buffer.from(bytes);
   } finally {
     await fd.close();
   }
@@ -1563,6 +1638,7 @@ async function readRecord(
   )
     throw new Error("UPDATE_RECORD_CHANGED");
   observeDigest?.(digest!);
+  observeBytes?.(observedBytes!);
   return value;
 }
 async function writeRecord(
@@ -1598,6 +1674,132 @@ async function writeRecord(
   } finally {
     await parent.close();
   }
+}
+
+// Preserve the exact prior receipt before a different OTA replaces its active
+// name. Publication is exclusive; a previous identical archive is re-synced
+// before use so an interrupted sync may be safely checked on the next launch.
+async function archivePreviousReceipt(
+  root: string,
+  receiptFile: string,
+  nextOperation: z.infer<typeof Operation>,
+): Promise<void> {
+  let digest: string | undefined;
+  let original: Buffer | undefined;
+  const raw = await readRecord(
+    receiptFile,
+    true,
+    (value) => {
+      digest = value;
+    },
+    MAX_RECORD_BYTES,
+    (value) => {
+      original = value;
+    },
+  );
+  if (raw === null) {
+    if (!(await recordAbsent(receiptFile))) throw new Error("HISTORY_INVALID");
+    return;
+  }
+  const previous = SavedReceipt.parse(raw);
+  if (!previous.operation || !original || !digest)
+    throw new Error("HISTORY_INVALID");
+  if (sameOperation(previous.operation, nextOperation)) return;
+  if (
+    previous.operation.operationId === nextOperation.operationId ||
+    previous.runningBuildId !== nextOperation.source.buildId ||
+    ![previous.operation.source, previous.operation.target].some((value) =>
+      sameBuild(value, nextOperation.source),
+    )
+  )
+    throw new Error("HISTORY_INVALID");
+  const directory = path.join(root, previous.operation.operationId);
+  await canonicalOwnedDirectory(root, true);
+  await canonicalOwnedDirectory(directory, true);
+  const archive = path.join(directory, "settled-receipt.json");
+  let exists = true;
+  try {
+    await fs.lstat(archive);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    exists = false;
+  }
+  if (!exists) {
+    const temporary = path.join(
+      directory,
+      `.settled-receipt-${randomBytes(12).toString("hex")}`,
+    );
+    let created = false;
+    try {
+      const fd = await fs.open(temporary, "wx", 0o600);
+      created = true;
+      try {
+        await fd.writeFile(original);
+        await fd.sync();
+      } finally {
+        await fd.close();
+      }
+      try {
+        await fs.link(temporary, archive);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+    } finally {
+      if (created) await fs.unlink(temporary);
+    }
+  }
+  const before = await fs.lstat(archive);
+  if (
+    !before.isFile() ||
+    before.isSymbolicLink() ||
+    before.uid !== process.getuid?.() ||
+    (before.mode & 0o077) !== 0 ||
+    before.size !== original.length
+  )
+    throw new Error("HISTORY_INVALID");
+  const fd = await fs.open(
+    archive,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
+  try {
+    const opened = await fd.stat();
+    if (
+      !opened.isFile() ||
+      opened.dev !== before.dev ||
+      opened.ino !== before.ino
+    )
+      throw new Error("HISTORY_CHANGED");
+    const copied = await fd.readFile();
+    if (!copied.equals(original)) throw new Error("HISTORY_CONFLICT");
+    await fd.sync();
+  } finally {
+    await fd.close();
+  }
+  const after = await fs.lstat(archive);
+  if (
+    after.dev !== before.dev ||
+    after.ino !== before.ino ||
+    after.size !== before.size ||
+    after.mtimeMs !== before.mtimeMs ||
+    after.ctimeMs !== before.ctimeMs ||
+    after.mode !== before.mode ||
+    after.uid !== before.uid
+  )
+    throw new Error("HISTORY_CHANGED");
+  const parent = await fs.open(
+    directory,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  );
+  try {
+    await parent.sync();
+  } finally {
+    await parent.close();
+  }
+  let currentDigest: string | undefined;
+  await readRecord(receiptFile, true, (value) => {
+    currentDigest = value;
+  });
+  if (currentDigest !== digest) throw new Error("HISTORY_CHANGED");
 }
 
 // A refusal acknowledgment alone is not a terminal process observation. Keep
@@ -2483,13 +2685,34 @@ async function createRuntime(
       )
         throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
       await verifyBinding(op);
-      if (TARGET_PHASES.includes(receipt.phase)) expected = op.target;
+      const manualReplacement =
+        !supervised &&
+        installLocation === "shared" &&
+        receipt.phase === "completed" &&
+        receipt.runningBuildId === op.target.buildId &&
+        options.build.buildId !== op.target.buildId &&
+        compareReleaseVersions(options.build.version, op.target.version) === 1;
+      if (manualReplacement) {
+        const oldJournal = await readOperationJournal(
+          root,
+          op,
+          installLocation,
+        );
+        const oldHelper = await observeInstalledHelper(receipt.helper);
+        if (
+          oldJournal.phase !== "completed" ||
+          startupHelperState(oldHelper) !== "exited" ||
+          !(await recordAbsent(restoreFile))
+        )
+          throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+        expected = await readAdoptedExpectation();
+      } else if (TARGET_PHASES.includes(receipt.phase)) expected = op.target;
       else if (
         [...ROLLED_BACK_PHASES, ...CANCELLED_PHASES].includes(receipt.phase)
       )
         expected = op.source;
       else throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-      if (receipt.runningBuildId !== expected.buildId)
+      if (!manualReplacement && receipt.runningBuildId !== expected.buildId)
         throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
     } else {
       // The first installed generation is anchored by the normal installer's
@@ -3253,6 +3476,33 @@ async function createRuntime(
         interruptedDownload = true;
       }
       const previous = fromReady ? null : await readRecord(receiptFile);
+      if (
+        !fromReady &&
+        previous !== null &&
+        !pending &&
+        !downloadIntent &&
+        !supervised &&
+        installLocation === "shared"
+      ) {
+        const historical = SavedReceipt.parse(previous);
+        if (
+          historical.operation &&
+          historical.phase === "completed" &&
+          historical.runningBuildId === historical.operation.target.buildId &&
+          options.build.buildId !== historical.operation.target.buildId &&
+          compareReleaseVersions(
+            options.build.version,
+            historical.operation.target.version,
+          ) === 1
+        ) {
+          try {
+            await readAcceptedSource();
+            return { ok: true, update: null };
+          } catch {
+            return known("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+          }
+        }
+      }
       if (raw === null && previous === null)
         return pending
           ? known("UPDATE_RESTORE_OUTCOME_UNKNOWN")
@@ -3411,6 +3661,13 @@ async function createRuntime(
           !(await originalHelperEnded(pending ?? retained))
         )
           return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
+        try {
+          await archivePreviousReceipt(root, receiptFile, op);
+        } catch {
+          // History retention is best-effort. Settlement still depends on the
+          // actual operation, helper and installed-build checks above.
+          console.warn("Previous update receipt could not be archived.");
+        }
         if (journal?.phase !== decision.action)
           await writeRecord(journalFile, {
             ...(journal ?? {
