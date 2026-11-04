@@ -7,7 +7,7 @@
   "release": "version-tag",
   "deploy": "verified-tag",
   "requiredChecks": ["changes", "checks", "portable", "native", "required"],
-  "releaseJobs": ["witness-native", "witness-preflight", "build", "publish"],
+  "releaseJobs": ["witness-preflight", "build", "publish"],
   "tagPattern": "v*",
   "versionSource": "package.json",
   "prerelease": "version-channel"
