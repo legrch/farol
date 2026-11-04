@@ -243,6 +243,7 @@ import {
   acquirePromotionLease,
   releasePromotionLease,
   verifyPromotionLease,
+  type PromotionLeaseHandle,
 } from "./promotion-lease";
 import { withStartupPromotionLease } from "./startup-promotion-lease";
 import {
@@ -12757,6 +12758,32 @@ function disposeChatGptRoutes(): void {
   liveTaskRoutes.clear();
 }
 
+async function withInstalledStartupFence<T>(
+  args: readonly string[],
+  userData: string,
+  generation: string,
+  observe: () => ReturnType<typeof waitForInstalledUpdateRelaunch>,
+  start: (
+    update: Awaited<ReturnType<typeof waitForInstalledUpdateRelaunch>>,
+    verify: () => Promise<boolean>,
+    lease: PromotionLeaseHandle,
+  ) => Promise<T>,
+): Promise<T> {
+  // Match the updater's hint detection, including malformed hints: its parser
+  // must reject those before a lease can block an explicit helper relaunch.
+  const hint = "--farol-installed-update-relaunch";
+  const explicit = args.some(
+    (arg) => arg === hint || arg.startsWith(hint + "="),
+  );
+  const relaunch = explicit ? await observe() : undefined;
+  return withStartupPromotionLease(
+    userData,
+    generation,
+    async (verify, lease) =>
+      start(explicit ? relaunch! : await observe(), verify, lease),
+  );
+}
+
 async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   app.on(
     "second-instance",
@@ -12764,28 +12791,31 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       void handleSecondInstance(candidate);
     },
   );
-  const updateRelaunch = await waitForInstalledUpdateRelaunch({
-    args: process.argv,
-    directory,
-    userData: app.getPath("userData"),
-    build: buildIdentity,
-    physicalFiles: rawFs,
-    copyApp: (source, destination) =>
-      rawFs.cp(source, destination, {
-        recursive: true,
-        force: false,
-        errorOnExist: true,
-        verbatimSymlinks: true,
-        preserveTimestamps: true,
-      }),
-  });
-  installedResourcesOrigin = updateRelaunch?.resourcesOrigin;
+  const observeUpdateRelaunch = () =>
+    waitForInstalledUpdateRelaunch({
+      args: process.argv,
+      directory,
+      userData: app.getPath("userData"),
+      build: buildIdentity,
+      physicalFiles: rawFs,
+      copyApp: (source, destination) =>
+        rawFs.cp(source, destination, {
+          recursive: true,
+          force: false,
+          errorOnExist: true,
+          verbatimSymlinks: true,
+          preserveTimestamps: true,
+        }),
+    });
   const stateRoot = path.join(app.getPath("userData"), "farol-state");
   let freshStartup = false;
-  const previousHostAdmissionReady = await withStartupPromotionLease(
+  const previousHostAdmissionReady = await withInstalledStartupFence(
+    process.argv,
     app.getPath("userData"),
     buildIdentity.buildId,
-    async (verify, lease) => {
+    observeUpdateRelaunch,
+    async (updateRelaunch, verify, lease) => {
+      installedResourcesOrigin = updateRelaunch?.resourcesOrigin;
       await updateRelaunch?.recheck();
       startupStage("before-ready");
       await app.whenReady();
