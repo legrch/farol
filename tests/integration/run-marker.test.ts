@@ -506,7 +506,7 @@ describe("run marker", () => {
   );
 
   it.skipIf(process.platform !== "darwin")(
-    "retains timezone parity with legacy process markers",
+    "uses the system timezone even when the app has a custom timezone",
     () => {
       const previous = process.env.TZ;
       try {
@@ -516,7 +516,7 @@ describe("run marker", () => {
           ["-o", "lstart=", "-p", String(process.pid)],
           {
             encoding: "utf8",
-            env: { PATH: "/usr/bin:/bin", LC_ALL: "C", TZ: process.env.TZ },
+            env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
           },
         ).trim();
         expect(readProcessStart(process.pid)).toBe(canonical);

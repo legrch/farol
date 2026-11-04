@@ -1272,6 +1272,7 @@ describe("installed updater startup correlation (pure ports only)", () => {
   it.each([
     { stdout: "", stderr: "" },
     { stdout: "not a process start", stderr: "" },
+    { stdout: "Tue Oct  6 13:00:00 2026", stderr: "" },
   ])("refuses changed or malformed process identity %j", async (result) => {
     const f = fixture();
     f.observation.readProcess.mockResolvedValue(result);
@@ -1628,6 +1629,7 @@ describe("shared-slot first-launch adoption at startup (pure ports; GitHub doubl
     "pending restore",
     "nonterminal journal",
     "unknown helper",
+    "mismatched helper token",
     "missing helper identity",
     "wrong slot binding",
     "changed original manifest",
@@ -1659,6 +1661,11 @@ describe("shared-slot first-launch adoption at startup (pure ports; GitHub doubl
         f.observation.readProcess.mockRejectedValue(
           new Error("observation failed"),
         );
+      if (condition === "mismatched helper token")
+        f.observation.readProcess.mockResolvedValue({
+          stdout: "Tue Oct  6 13:00:00 2026",
+          stderr: "",
+        });
       if (condition === "missing helper identity") saved.helper = null;
       if (condition === "wrong slot binding")
         f.records.set(

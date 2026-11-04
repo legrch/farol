@@ -24,7 +24,7 @@ it.skipIf(process.platform !== "darwin")(
 );
 
 it.skipIf(process.platform !== "darwin")(
-  "retains timezone parity with the installed helper",
+  "uses the same system timezone as the installed Go helper",
   async () => {
     const previous = process.env.TZ;
     try {
@@ -34,7 +34,7 @@ it.skipIf(process.platform !== "darwin")(
         ["-p", String(process.pid), "-o", "lstart="],
         {
           encoding: "utf8",
-          env: { PATH: "/usr/bin:/bin", LC_ALL: "C", TZ: process.env.TZ },
+          env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
         },
       ).trim();
       const observation = await readInstalledProcess(process.pid);

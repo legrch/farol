@@ -215,11 +215,7 @@ export function readProcessStart(pid: number): string | null {
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 5_000,
       // The writer and the independent updater reader must use identical ps output.
-      env: {
-        PATH: "/usr/bin:/bin",
-        LC_ALL: "C",
-        ...(process.env.TZ === undefined ? {} : { TZ: process.env.TZ }),
-      },
+      env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
     });
   } catch {
     return null;

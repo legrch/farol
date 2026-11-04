@@ -37,7 +37,7 @@ it.skipIf(process.platform !== "darwin")(
   },
 );
 it.skipIf(process.platform !== "darwin")(
-  "captures the process start in the app timezone",
+  "captures the process start in the system timezone used by the Go helper",
   async () => {
     const previous = process.env.TZ;
     try {
@@ -47,7 +47,7 @@ it.skipIf(process.platform !== "darwin")(
         ["-p", String(process.pid), "-o", "lstart="],
         {
           encoding: "utf8",
-          env: { PATH: "/usr/bin:/bin", LC_ALL: "C", TZ: process.env.TZ },
+          env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
         },
       ).trim();
       expect(await captureInstalledProcessStart(process.pid)).toBe(canonical);
