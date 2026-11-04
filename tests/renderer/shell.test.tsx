@@ -760,9 +760,11 @@ it("keeps the update indicator in the rail only while an update needs attention"
   await act(async () => rail.click());
   expect(c.getSnapshot().overlay).toBe("update");
   expect(rail.parentElement).toBe(host.querySelector(".rail-footer"));
-  expect(rail.parentElement?.lastElementChild?.getAttribute("aria-label")).toBe(
-    "Settings",
-  );
+  expect(
+    rail.parentElement
+      ?.querySelector(".rail-bottom")
+      ?.getAttribute("aria-label"),
+  ).toBe("Settings");
   await act(async () => {
     c.overlay("none");
     f.emit("update", { phase: "idle", checkedAt: 42 });
