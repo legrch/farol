@@ -239,6 +239,38 @@ describe("Q-08 activation obligations", () => {
     ).toContain("DEEP_TEST_PENDING:1");
     expect((await owner.load()).result.state).toBe("outcome_unknown");
   });
+  it("records delivery acknowledgement separately from each unknown outcome", async () => {
+    const root = await userData();
+    const owners = await Promise.all(
+      [randomUUID(), randomUUID()].map(async (id) => {
+        const owner = new PrivateChatGptTaskJournal({
+          root: path.join(root, "farol-state"),
+          deepTestOperationId: id,
+        });
+        await owner.prepare({ operationId: id, kind: "readonly" });
+        await owner.markDispatchIntent(id);
+        await owner.reconcileAfterRestart();
+        return { id, owner, original: (await owner.load()).result };
+      }),
+    );
+    const report = () =>
+      activationObligations(root, { allowSettledDeepTestResults: true });
+    expect((await report()).obligations).toContain("DEEP_TEST_PENDING:2");
+    await owners[0].owner.acknowledgeDelivery(owners[0].id);
+    expect((await report()).obligations).toContain("DEEP_TEST_PENDING:1");
+    expect((await owners[0].owner.load()).result).toEqual(owners[0].original);
+    expect((await owners[1].owner.load()).result).toEqual(owners[1].original);
+    // This is a delivery acknowledgement, not evidence that provider-side
+    // effects or descendant cleanup completed.
+    await owners[1].owner.acknowledgeDelivery(owners[1].id);
+    expect((await report()).drained).toBe(true);
+    for (const { owner, original } of owners) {
+      const record = await owner.load();
+      expect(record.phase).toBe("delivery_acknowledged");
+      expect(record.result).toEqual(original);
+      expect(record.result.state).toBe("outcome_unknown");
+    }
+  });
   it("does not ignore a terminal result that changes during updater admission", async () => {
     const root = await userData();
     const state = path.join(root, "farol-state");
