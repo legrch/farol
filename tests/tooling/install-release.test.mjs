@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import test from "node:test";
+import { test } from "vitest";
 
 const script = fileURLToPath(
   new URL("../../scripts/install-release.sh", import.meta.url),

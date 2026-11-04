@@ -1698,12 +1698,13 @@ async function archivePreviousReceipt(
     },
   );
   if (raw === null) {
-    if (!(await recordAbsent(receiptFile))) throw new Error("HISTORY_INVALID");
+    if (!(await recordAbsent(receiptFile)))
+      throw new Error("invalid history archive");
     return;
   }
   const previous = SavedReceipt.parse(raw);
   if (!previous.operation || !original || !digest)
-    throw new Error("HISTORY_INVALID");
+    throw new Error("invalid history archive");
   if (sameOperation(previous.operation, nextOperation)) return;
   if (
     previous.operation.operationId === nextOperation.operationId ||
@@ -1712,7 +1713,7 @@ async function archivePreviousReceipt(
       sameBuild(value, nextOperation.source),
     )
   )
-    throw new Error("HISTORY_INVALID");
+    throw new Error("invalid history archive");
   const directory = path.join(root, previous.operation.operationId);
   await canonicalOwnedDirectory(root, true);
   await canonicalOwnedDirectory(directory, true);
@@ -1756,7 +1757,7 @@ async function archivePreviousReceipt(
     (before.mode & 0o077) !== 0 ||
     before.size !== original.length
   )
-    throw new Error("HISTORY_INVALID");
+    throw new Error("invalid history archive");
   const fd = await fs.open(
     archive,
     constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
@@ -1768,9 +1769,9 @@ async function archivePreviousReceipt(
       opened.dev !== before.dev ||
       opened.ino !== before.ino
     )
-      throw new Error("HISTORY_CHANGED");
+      throw new Error("history archive changed");
     const copied = await fd.readFile();
-    if (!copied.equals(original)) throw new Error("HISTORY_CONFLICT");
+    if (!copied.equals(original)) throw new Error("history archive conflict");
     await fd.sync();
   } finally {
     await fd.close();
@@ -1785,7 +1786,7 @@ async function archivePreviousReceipt(
     after.mode !== before.mode ||
     after.uid !== before.uid
   )
-    throw new Error("HISTORY_CHANGED");
+    throw new Error("history archive changed");
   const parent = await fs.open(
     directory,
     constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
@@ -1799,7 +1800,7 @@ async function archivePreviousReceipt(
   await readRecord(receiptFile, true, (value) => {
     currentDigest = value;
   });
-  if (currentDigest !== digest) throw new Error("HISTORY_CHANGED");
+  if (currentDigest !== digest) throw new Error("history archive changed");
 }
 
 // A refusal acknowledgment alone is not a terminal process observation. Keep
