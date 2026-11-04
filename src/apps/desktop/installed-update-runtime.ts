@@ -3454,12 +3454,36 @@ async function createRuntime(
           retained = { ...retained, archiveReleased: true };
           restorable = retained;
         }
-        await writeRecord(receiptFile, {
-          ...retained,
-          observedAt: new Date().toISOString(),
-          phase: settledPhase,
-          runningBuildId: options.build.buildId,
-        });
+        // A settled receipt is historical evidence. Re-observing the same
+        // operation must not replace its timestamp or bytes on every launch.
+        // Write only when settling new evidence or when archive reclamation
+        // changed the retained record; pending work keeps its existing path.
+        const saved = previous === null ? null : SavedReceipt.parse(previous);
+        const unchangedReceipt =
+          !fromReady &&
+          !pending &&
+          saved !== null &&
+          JSON.stringify({
+            ...retained,
+            observedAt: saved.observedAt,
+            phase: settledPhase,
+            runningBuildId: options.build.buildId,
+          }) === JSON.stringify(saved);
+        if (unchangedReceipt) {
+          // A concurrent replacement is not the historical record we just
+          // verified; do not silently accept it as an unchanged settlement.
+          if (
+            JSON.stringify(await readRecord(receiptFile)) !==
+            JSON.stringify(previous)
+          )
+            return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
+        } else
+          await writeRecord(receiptFile, {
+            ...retained,
+            observedAt: new Date().toISOString(),
+            phase: settledPhase,
+            runningBuildId: options.build.buildId,
+          });
         if (fromReady) await fs.unlink(readyFile);
         if (pending) await fs.unlink(restoreFile);
         const failedApply =
