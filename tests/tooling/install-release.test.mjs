@@ -292,6 +292,8 @@ for (const scenario of [
   "bad-tree",
   "unexpected-descendant",
   "inspection-error",
+  "live-unreadable",
+  "permission-denied",
 ]) {
   test(`isolated ${scenario} preserves the existing app and recovery files`, () => {
     isolatedInstall(scenario, (result, root, log) => {
@@ -351,7 +353,7 @@ else if (cmd === 'ps') {
     if (['private-and-public', 'snapshot', 'helper', 'stubborn'].includes(process.env.SCENARIO)) console.log('45 ' + app + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
   }
   if (process.env.SCENARIO === 'unknown') console.log('43 farol-backend');
-  if (process.env.SCENARIO === 'inspection-error') console.log('43 farol-backend');
+  if (['inspection-error', 'live-unreadable', 'permission-denied'].includes(process.env.SCENARIO)) console.log('43 farol-backend');
   if (process.env.SCENARIO === 'vanished-after-quit' && !fs.existsSync(path.join(root, 'running')) && !fs.existsSync(path.join(root, 'stale-sampled'))) {
     fs.writeFileSync(path.join(root, 'stale-sampled'), 'yes');
     console.log('43 farol-backend');
@@ -416,14 +418,41 @@ else process.exit(2);
       .replace(
         "/tmp/farol-release.XXXXXXXX",
         path.join(root, "release.XXXXXXXX"),
-      )
-      .replace(
+      );
+    if (["vanished-after-quit", "inspection-error", "live-unreadable", "permission-denied"].includes(scenario)) {
+      copy = copy.replace(
+        "found = False\nmain_pids = []\ntry:",
+        `class FakePidPath:
+    def __call__(self, pid, buf, size):
+        if pid == 43:
+            if os.environ['SCENARIO'] == 'inspection-error':
+                raise RuntimeError('fixture inspection error')
+            return 0
+        value = os.fsencode(installed + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron')
+        buf.value = value
+        return len(value)
+class FakeProc:
+    def __init__(self):
+        self.proc_pidpath = FakePidPath()
+ctypes.CDLL = lambda *args, **kwargs: FakeProc()
+original_kill = os.kill
+def fake_pid_probe(pid, signal):
+    if pid == 43:
+        if os.environ['SCENARIO'] == 'vanished-after-quit':
+            raise ProcessLookupError()
+        if os.environ['SCENARIO'] == 'permission-denied':
+            raise PermissionError()
+        return None
+    return original_kill(pid, signal)
+os.kill = fake_pid_probe
+found = False
+main_pids = []
+try:`,
+      );
+    } else {
+      copy = copy.replace(
         "found = False\nmain_pids = []\ntry:",
         `def resolve_executable(pid):
-    if pid == 43 and os.environ['SCENARIO'] == 'inspection-error':
-        raise RuntimeError('fixture inspection error')
-    if pid == 43 and os.environ['SCENARIO'] == 'vanished-after-quit':
-        return None
     if pid == 42:
         return installed + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron'
     if pid == 44:
@@ -433,6 +462,7 @@ found = False
 main_pids = []
 try:`,
       );
+    }
     if (["escalate", "unexpected-descendant"].includes(scenario)) {
       const nativeProc = [
         "lib = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)",
