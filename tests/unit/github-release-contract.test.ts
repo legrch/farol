@@ -400,6 +400,20 @@ describe("GitHub update discovery", () => {
     ).toMatchObject({ ok: true, value: { tag: betaTag } });
   });
 
+  it("keeps a numeric test prerelease out of update discovery while resolving its exact published manifest", async () => {
+    const testRelease = release({ prerelease: true });
+    expect(
+      await discoverGithubUpdate("0.1.0", "stable", ports([testRelease])),
+    ).toEqual({ ok: true, value: null });
+    expect(
+      await findGithubReleaseManifest(
+        { version, buildVersion: manifest.buildVersion },
+        "stable",
+        ports([testRelease]),
+      ),
+    ).toEqual({ ok: true, value: manifest });
+  });
+
   it.each([
     [
       "old release in the new catalogue",
