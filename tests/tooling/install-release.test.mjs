@@ -257,7 +257,7 @@ test("isolated failed launch retains a recoverable predecessor", () => {
   });
 });
 
-for (const scenario of ["private", "snapshot", "helper", "dev"]) {
+for (const scenario of ["private", "snapshot", "helper", "dev", "process-title", "cursor-farol"]) {
   test(`isolated ${scenario} process is handled without touching unrelated apps`, () => {
     isolatedInstall(scenario, (result, _root, log) => {
       assert.equal(result.status, 0, result.stderr);
@@ -321,10 +321,11 @@ else if (cmd === 'ps') {
     let base = ['private', 'helper', 'stubborn'].includes(process.env.SCENARIO) ? path.join(profile, 'op/launch-Farol.app') : app;
     if (process.env.SCENARIO === 'snapshot') base = path.join(profile, 'installed-execution/snapshot/Farol.app');
     const suffix = ['helper', 'backend-remains'].includes(process.env.SCENARIO) && !fs.existsSync(path.join(root, 'launched')) ? '/Contents/Resources/app/farol-backend' : '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron';
-    console.log('42 ' + base + suffix);
+    console.log('42 ' + (process.env.SCENARIO === 'process-title' ? 'Farol' : base + suffix));
   }
   if (process.env.SCENARIO === 'unknown') console.log('43 farol-backend');
   if (process.env.SCENARIO === 'dev') console.log('44 /Applications/Farol Dev.app/Contents/MacOS/Farol Dev');
+  if (process.env.SCENARIO === 'cursor-farol') console.log('44 Cursor Helper (Plugin): extension-host (user) farol [6-217]');
 }
 else if (cmd === 'osascript') { log('osascript'); if (process.env.SCENARIO === 'quit-failure') process.exit(1); if (!['stubborn', 'backend-remains'].includes(process.env.SCENARIO)) fs.rmSync(path.join(root, 'running'), {force:true}); }
 else if (cmd === 'ditto') { log(args[1].endsWith('previous.app') ? 'ditto-backup' : 'ditto-install'); fs.cpSync(args[0], args[1], {recursive:true, verbatimSymlinks:true}); }
@@ -380,6 +381,17 @@ else process.exit(2);
       .replace(
         "/tmp/farol-release.XXXXXXXX",
         path.join(root, "release.XXXXXXXX"),
+      )
+      .replace(
+        "found = False\ntry:",
+        `def resolve_executable(pid):
+    if pid == 42:
+        return installed + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron'
+    if pid == 44:
+        return '/Applications/Cursor.app/Contents/MacOS/Cursor'
+    return '/tmp/other/farol-backend'
+found = False
+try:`,
       );
     const copyPath = path.join(root, "isolated-installer.sh");
     writeFileSync(copyPath, copy);

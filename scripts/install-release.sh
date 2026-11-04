@@ -224,8 +224,21 @@ profile="$HOME/Library/Application Support/io.github.legrch.farol/installed-upda
 running() {
   /bin/ps -ww -axo pid=,comm= > "$tmp/processes" || return 2
   /usr/bin/python3 -I - "$tmp/processes" "$installed" "$profile" "${1-all}" <<'PY'
-import os, re, sys
+import ctypes, os, re, sys
 table, installed, profile, mode = sys.argv[1:]
+def resolve_executable(pid):
+    # macOS can replace the displayed process title with a short name or a
+    # project title. Resolve such candidates to the kernel's executable path.
+    try:
+        proc = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
+        proc.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+        proc.proc_pidpath.restype = ctypes.c_int
+        buf = ctypes.create_string_buffer(4096)
+        if proc.proc_pidpath(pid, buf, len(buf)) <= 0:
+            raise ValueError('cannot resolve Farol process executable')
+        return os.fsdecode(buf.value)
+    except OSError as error:
+        raise ValueError('cannot resolve Farol process executable') from error
 found = False
 try:
     with open(table, encoding='utf-8') as stream:
@@ -237,6 +250,8 @@ try:
         if not match:
             raise ValueError('unparseable process table')
         executable = match.group(2)
+        if not executable.startswith('/') and 'farol' in executable.lower():
+            executable = resolve_executable(int(match.group(1)))
         owned = executable.startswith(installed + '/') or executable.startswith(profile + '/')
         # Explicitly identified Dev and Owner Preview bundles are distinct.
         other = any('/' + name + '.app/' in executable for name in ('Farol Dev', 'Farol Owner Preview'))
