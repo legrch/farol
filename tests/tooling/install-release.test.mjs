@@ -257,7 +257,14 @@ test("isolated failed launch retains a recoverable predecessor", () => {
   });
 });
 
-for (const scenario of ["private", "snapshot", "helper", "dev", "process-title", "cursor-farol"]) {
+for (const scenario of [
+  "private",
+  "snapshot",
+  "helper",
+  "dev",
+  "process-title",
+  "cursor-farol",
+]) {
   test(`isolated ${scenario} process is handled without touching unrelated apps`, () => {
     isolatedInstall(scenario, (result, _root, log) => {
       assert.equal(result.status, 0, result.stderr);
