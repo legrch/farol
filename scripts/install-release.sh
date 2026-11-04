@@ -264,6 +264,7 @@ try:
         elif not other and (
             os.path.basename(executable).lower() in ('farol', 'farol-backend')
             or '/farol.app/' in executable.lower()
+            or '/launch-farol.app/' in executable.lower()
         ):
             raise ValueError('unclassified Farol process')
     if mode == 'main-pid':

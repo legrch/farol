@@ -279,6 +279,7 @@ for (const scenario of [
   "ps-failure",
   "unknown",
   "other-farol-app",
+  "other-private-launch",
   "stubborn",
   "quit-failure",
   "backend-remains",
@@ -344,6 +345,7 @@ else if (cmd === 'ps') {
   }
   if (process.env.SCENARIO === 'unknown') console.log('43 farol-backend');
   if (process.env.SCENARIO === 'other-farol-app') console.log('44 /tmp/other/Farol.app/Contents/MacOS/Electron');
+  if (process.env.SCENARIO === 'other-private-launch') console.log('44 /Users/other/Library/Application Support/io.github.legrch.farol/installed-updates/operation/launch-Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
   if (process.env.SCENARIO === 'dev') console.log('44 /Applications/Farol Dev.app/Contents/MacOS/Farol Dev');
   if (process.env.SCENARIO === 'cursor-farol') console.log('44 Cursor Helper (Plugin): extension-host (user) farol [6-217]');
   if (process.env.SCENARIO === 'other-checkout') console.log('44 /Users/ac/code/other/farol/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron');
