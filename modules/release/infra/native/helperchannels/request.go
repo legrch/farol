@@ -83,10 +83,11 @@ func (r *requestState) guard(ctx context.Context, until time.Time) string {
 		return "closed"
 	default:
 	}
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+	ctxErr := ctx.Err()
+	if errors.Is(ctxErr, context.DeadlineExceeded) {
 		return "deadline"
 	}
-	if ctx.Err() != nil {
+	if ctxErr != nil {
 		return "cancelled"
 	}
 	now := time.Now()

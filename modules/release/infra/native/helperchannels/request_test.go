@@ -34,6 +34,18 @@ func receiveRequest(t *testing.T, result <-chan requestResult) requestResult {
 	}
 }
 
+func TestRequestGuardSamplesContextDeadlineOnce(t *testing.T) {
+	ctx := &expiringContext{Context: context.Background()}
+	state := &requestState{stop: make(chan struct{})}
+	until := time.Now().Add(time.Second)
+	if got := state.guard(ctx, until); got != "" || ctx.calls != 1 {
+		t.Fatalf("first guard = %q after %d Err calls", got, ctx.calls)
+	}
+	if got := state.guard(ctx, until); got != "deadline" || ctx.calls != 2 {
+		t.Fatalf("second guard = %q after %d Err calls", got, ctx.calls)
+	}
+}
+
 func TestRequestNilAndZeroFailClosed(t *testing.T) {
 	var missing *Request
 	var zero Request
