@@ -9,7 +9,7 @@ on:
         description: Run build-only checks, or publish an exact qualified private draft
         required: true
         type: choice
-        options: [prepare, publish]
+        options: [prepare, publish, diagnostic-0356]
         default: prepare
       candidate_run_id:
         description: Prior successful tag build-only run ID (publish only)
@@ -30,6 +30,49 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  api-rate-limit-diagnostic:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'diagnostic-0356'
+    runs-on: macos-26
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Compare exact release-catalogue response without and with runner token
+        shell: bash
+        env:
+          API_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          endpoint='https://api.github.com/repos/legrch/farol/releases?per_page=100'
+          headers="$RUNNER_TEMP/farol-api-rate-headers"
+          trap 'rm -f "$headers"' EXIT
+          echo 'UNAUTHENTICATED'
+          curl --silent --show-error --max-time 30 --dump-header "$headers" --output /dev/null --write-out 'HTTP status: %{http_code}\n' --header 'User-Agent: Farol' --header 'Accept: application/vnd.github+json' "$endpoint"
+          awk 'tolower($0) ~ /^x-ratelimit-(limit|remaining|reset|resource):/ {gsub("\r", "");print}' "$headers"
+          echo 'GITHUB_TOKEN'
+          printf 'header = "Authorization: Bearer %s"\n' "$API_TOKEN" | curl --config - --silent --show-error --max-time 30 --dump-header "$headers" --output /dev/null --write-out 'HTTP status: %{http_code}\n' --header 'User-Agent: Farol' --header 'Accept: application/vnd.github+json' "$endpoint"
+          awk 'tolower($0) ~ /^x-ratelimit-(limit|remaining|reset|resource):/ {gsub("\r", "");print}' "$headers"
+
+  cleanup-targeted-regression:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'diagnostic-0356'
+    runs-on: macos-26
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 1cff2cd9020a24820843dd53b8ec6b9b7656b401
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+        with:
+          native: "true"
+      - name: Run one fresh isolated revocation regression
+        run: |
+          test "$(git rev-parse HEAD)" = 1cff2cd9020a24820843dd53b8ec6b9b7656b401
+          node node_modules/vitest/vitest.mjs run tests/integration/sandboxed-workspace-shell.test.ts -t 'stops an admitted shell on current owner revocation while retaining cleanup proof'
+
   build:
     if: github.event_name == 'push' || inputs.action == 'prepare'
     runs-on: macos-26
