@@ -9,7 +9,7 @@ on:
         description: Run build-only checks, or publish an exact qualified private draft
         required: true
         type: choice
-        options: [prepare, publish, diagnostic-0356, network-0429, witness-0450]
+        options: [prepare, publish, diagnostic-0356, network-0429, witness-0450, cold-0518]
         default: prepare
       candidate_run_id:
         description: Prior successful tag build-only run ID (publish only)
@@ -30,6 +30,35 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  v058-cold-0518:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'cold-0518'
+    runs-on: macos-26
+    timeout-minutes: 15
+    permissions: {}
+    steps:
+      - name: Fetch exact public diagnostic commit without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone -q --no-checkout https://github.com/legrch/farol.git "$RUNNER_TEMP/witness-source"
+          git -C "$RUNNER_TEMP/witness-source" checkout -q --detach "$GITHUB_SHA"
+          test "$(git -C "$RUNNER_TEMP/witness-source" rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Observe cold startup with marker
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/witness-source"
+          /usr/bin/python3 -I .github/diagnostics/v058-cold-0518.py
+      - name: Preserve bounded observations
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: farol-v058-cold-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/farol-v058-witness/*.txt
+            ${{ runner.temp }}/farol-v058-witness/*.json
+          if-no-files-found: warn
+          retention-days: 7
+
   v058-preseed-witness:
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'witness-0450'
     runs-on: macos-26
