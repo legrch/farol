@@ -393,11 +393,35 @@ describe("run marker", () => {
     expect(
       classifyRunMarker(marker, { ...probe, processStart: () => START }),
     ).toBe("running");
-    // Not a prefix, not a trimmed variant: the token is compared verbatim.
+    // A canonical marker still compares verbatim; a different reading is not running.
     expect(
       classifyRunMarker(marker, {
         ...probe,
         processStart: () => `${START} `,
+      }),
+    ).toBe("crashed");
+  });
+
+  it("keeps a live marker from a legacy locale unconfirmed instead of calling it a crash", () => {
+    const marker = {
+      schema: 1 as const,
+      pid: 4242,
+      startedAt,
+      bootTime: BOOT,
+      processStart: "Sat 20 Sep 10:00:00 2026",
+    };
+    expect(
+      classifyRunMarker(marker, {
+        bootTime: BOOT,
+        isAlive: () => true,
+        processStart: () => START,
+      }),
+    ).toBe("boot_unknown");
+    expect(
+      classifyRunMarker(marker, {
+        bootTime: BOOT,
+        isAlive: () => false,
+        processStart: () => START,
       }),
     ).toBe("crashed");
   });

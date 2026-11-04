@@ -166,7 +166,11 @@ export async function captureInstalledProcessStart(
   const { stdout, stderr } = await execFileAsync(
     "/bin/ps",
     ["-p", String(pid), "-o", "lstart="],
-    { timeout: 3000, maxBuffer: 4096 },
+    {
+      timeout: 3000,
+      maxBuffer: 4096,
+      env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
+    },
   );
   if (stderr || !stdout.trim()) throw new Error("INSTALLED_UPDATE_PID_UNKNOWN");
   return stdout.trim();

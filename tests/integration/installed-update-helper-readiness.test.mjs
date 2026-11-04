@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -18,6 +18,24 @@ import { referenceGoHelper } from "./fixtures/installed-update-go-helper.ts";
 const roots = [];
 const apps = [];
 const helpers = [];
+it.skipIf(process.platform !== "darwin")(
+  "captures the installed process identity in the canonical locale",
+  async () => {
+    const args = ["-p", String(process.pid), "-o", "lstart="];
+    const canonical = execFileSync("/bin/ps", args, {
+      encoding: "utf8",
+      env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
+    }).trim();
+    const previous = process.env.LC_ALL;
+    try {
+      process.env.LC_ALL = "en_GB.UTF-8";
+      expect(await captureInstalledProcessStart(process.pid)).toBe(canonical);
+    } finally {
+      if (previous === undefined) delete process.env.LC_ALL;
+      else process.env.LC_ALL = previous;
+    }
+  },
+);
 afterEach(async () => {
   vi.restoreAllMocks();
   for (const launched of helpers.splice(0)) {

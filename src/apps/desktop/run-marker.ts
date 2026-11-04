@@ -86,6 +86,10 @@ export const RUN_MARKER_FILE_NAME = "running.json";
 export const MAX_RUN_MARKER_BYTES = 4 * 1_024;
 export const SAME_BOOT_TOLERANCE_MS = 5_000;
 const BOOT_TIME_GRANULARITY_MS = 1_000;
+// Older builds inherited the user's locale when recording ps output. A live
+// marker in another format cannot be compared with the new canonical token.
+const CANONICAL_PROCESS_START =
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ 0-3][0-9] [0-2][0-9]:[0-5][0-9]:[0-5][0-9] [0-9]{4}$/u;
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const CLOSE_ON_EXEC =
   (fsConstants as typeof fsConstants & { O_CLOEXEC?: number }).O_CLOEXEC ?? 0;
@@ -266,7 +270,13 @@ export function classifyRunMarker(
   // module.
   const current = probe.processStart(marker.pid);
   if (marker.processStart === null || current === null) return "boot_unknown";
-  return current === marker.processStart ? "running" : "crashed";
+  if (current === marker.processStart) return "running";
+  // Same-boot live processes from an older locale-dependent build must not
+  // be declared crashed solely because ps changed its presentation. Unknown
+  // still blocks promotion; a clean Quit removes the old marker normally.
+  return CANONICAL_PROCESS_START.test(marker.processStart)
+    ? "crashed"
+    : "boot_unknown";
 }
 
 async function ensureRoot(stateRoot: string): Promise<void> {
