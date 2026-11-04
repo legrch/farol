@@ -103,6 +103,9 @@ type ActivationObligationsOptions = Readonly<{
   bootTime?: number | null;
   isAlive?: typeof processAlive;
   processStart?: typeof readProcessStart;
+  // Only the installed updater, which separately drains real Computer work,
+  // may leave a known terminal manual diagnostic result in retained history.
+  allowSettledDeepTestResults?: boolean;
 }>;
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -502,7 +505,20 @@ export async function activationObligations(
     unreadable.push(`deep-test-records:${flatDeepTests.reason}`);
   else if (flatDeepTests.status === "read") {
     const outstanding = flatDeepTests.value.filter(
-      (entry) => entry.phase !== "delivery_acknowledged",
+      (entry) =>
+        entry.phase !== "delivery_acknowledged" &&
+        !(
+          options.allowSettledDeepTestResults === true &&
+          entry.kind === "readonly" &&
+          entry.phase === "result_retained" &&
+          entry.result !== null &&
+          entry.result.attachmentCount === 0 &&
+          entry.result.totalBytes === 0 &&
+          entry.result.stagingCleanup === null &&
+          ["completed", "failed_before_submit", "not_authenticated"].includes(
+            entry.result.state,
+          )
+        ),
     ).length;
     if (outstanding > 0) obligations.push(`DEEP_TEST_PENDING:${outstanding}`);
   }

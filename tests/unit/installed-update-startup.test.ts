@@ -1046,6 +1046,31 @@ describe("installed updater startup correlation (pure ports only)", () => {
     },
   );
 
+  it("retains a completed shared OTA when a later build has no published manifest", async () => {
+    const f = unboundSharedFixture("completed");
+    f.records.set(
+      path.join(opRoot, "slot-binding.json"),
+      JSON.parse(installedSlotBindingBytes(operation, "shared").toString()),
+    );
+    const next = identity("0.1.2-owner.beta.1", "3", "5");
+    f.builds.set("/Applications/Farol.app", {
+      digest: "6".repeat(64),
+      version: next.version,
+      buildId: next.buildId,
+    });
+    const original = structuredClone([...f.records]);
+    adoptionMocks.find.mockResolvedValueOnce({
+      ok: false,
+      code: "release_not_found",
+    });
+    await expect(
+      waitForInstalledUpdateRelaunch({ ...f.options, build: next }),
+    ).rejects.toThrow("UPDATE_ADOPTION_RELEASE_NOT_FOUND");
+    expect([...f.records]).toEqual(original);
+    expect(captureMock).not.toHaveBeenCalled();
+    expect(adoptionMocks.find).toHaveBeenCalledOnce();
+  });
+
   it.each(["legacy", "shared"] as const)(
     "does not grant a correlated %s updater relaunch from an unbound operation",
     async (location) => {
@@ -1550,6 +1575,119 @@ describe("shared-slot first-launch adoption at startup (pure ports; GitHub doubl
     expect(f.write).not.toHaveBeenCalled();
     expect(f.records.has(adoptedFile)).toBe(false);
   };
+
+  function completedReplacementFixture() {
+    const next = identity("0.1.2-owner.beta.1", "3", "5");
+    const nextAccepted = {
+      digest: "6".repeat(64),
+      version: next.version,
+      buildId: next.buildId,
+    };
+    const prior = unboundSharedFixture("completed");
+    const f = adoptionFixture(next, nextAccepted);
+    f.records.set(
+      path.join(root, "last-update.json"),
+      structuredClone(prior.records.get(path.join(root, "last-update.json"))),
+    );
+    f.records.set(
+      path.join(opRoot, "slot-binding.json"),
+      JSON.parse(installedSlotBindingBytes(operation, "shared").toString()),
+    );
+    f.records.set(sharedApp + ".receipt.json", {
+      schema: "farol.promotion-plan/1",
+      operation: "applied",
+      product: "Farol",
+      version: sourceBuild.version,
+      sourceCommit: sourceBuild.sourceCommit,
+      sourceTreeDigest: sourceBuild.sourceTreeDigest,
+      sourceDirty: false,
+      artifactSha256: source.digest,
+      source: "/fixture/Farol.app",
+      destination: sharedApp,
+      receipt: sharedApp + ".receipt.json",
+      overwrite: false,
+      legacyMutation: false,
+      activation: { userData: profile, drained: true, obligations: [] },
+      verifiedDestinationSha256: source.digest,
+    });
+    return f;
+  }
+
+  it("adopts a published replacement after a confirmed completed shared OTA without rewriting its evidence", async () => {
+    const f = completedReplacementFixture();
+    const original = structuredClone([...f.records]);
+    await waitForInstalledUpdateRelaunch(f.options);
+    for (const [file, value] of original)
+      expect(f.records.get(file)).toEqual(value);
+    expect(f.records.has(adoptedFile)).toBe(true);
+    expect(f.observation.readProcess).toHaveBeenCalled();
+    expect(captureMock).toHaveBeenCalled();
+  });
+
+  it.each([
+    "pending restore",
+    "nonterminal journal",
+    "unknown helper",
+    "missing helper identity",
+    "wrong slot binding",
+    "changed original manifest",
+    "changed recorded running build",
+    "missing journal",
+    "pending cleanup",
+    "pending download",
+  ] as const)(
+    "refuses replacement with %s and preserves update evidence",
+    async (condition) => {
+      const f = completedReplacementFixture();
+      const savedFile = path.join(root, "last-update.json");
+      const saved = f.records.get(savedFile) as Record<string, unknown>;
+      if (condition === "pending restore")
+        f.records.set(path.join(root, "restore-pending.json"), {
+          schema: "farol.update-restore-intent/1",
+          action: "rollback",
+          operation,
+          priorPhase: "completed",
+          helper,
+        });
+      if (condition === "nonterminal journal")
+        f.records.set(path.join(opRoot, "journal.json"), {
+          schema: "farol.installed-update-journal/1",
+          ...operation,
+          phase: "launch_requested",
+        });
+      if (condition === "unknown helper")
+        f.observation.readProcess.mockRejectedValue(
+          new Error("observation failed"),
+        );
+      if (condition === "missing helper identity") saved.helper = null;
+      if (condition === "wrong slot binding")
+        f.records.set(
+          path.join(opRoot, "slot-binding.json"),
+          JSON.parse(installedSlotBindingBytes(operation, "legacy").toString()),
+        );
+      if (condition === "changed original manifest")
+        saved.manifest = {
+          ...(saved.manifest as Record<string, unknown>),
+          artifactSha256: "e".repeat(64),
+        };
+      if (condition === "changed recorded running build")
+        saved.runningBuildId = "e".repeat(64);
+      if (condition === "missing journal")
+        f.records.delete(path.join(opRoot, "journal.json"));
+      if (condition === "pending cleanup")
+        f.records.set(path.join(root, "package-cleanup-pending.json"), {
+          schema: "unconfirmed-fixture",
+        });
+      if (condition === "pending download")
+        f.records.set(path.join(root, "download-pending.json"), {
+          schema: "unconfirmed-fixture",
+        });
+      const original = structuredClone([...f.records]);
+      await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow();
+      expect([...f.records]).toEqual(original);
+      expect(captureMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("adopts from the published manifest, captures that digest, then records once", async () => {
     const f = adoptionFixture();

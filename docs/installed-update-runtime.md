@@ -246,9 +246,12 @@ first, and a failure leaves the old record untouched. Only then is the record
 replaced atomically, and only if its bytes still equal the superseded record that
 was read. A record that changed in between belongs to a concurrent writer and is
 validated as found. A record that already describes the running build is never
-rewritten. Once an update has
-settled, `last-update.json` takes precedence over the adopted record, and an owner
-promotion receipt takes precedence over adoption.
+rewritten. A settled `last-update.json` normally takes precedence over the
+adopted record, and an owner promotion receipt takes precedence over adoption.
+For the shared slot, a newer manually copied build may instead be adopted after
+the previous completed OTA, its operation binding, journal and exited helper
+have been confirmed. Pending restore, download, cleanup or repair evidence still
+blocks this path. The new build must match its published manifest and full tree.
 
 Adoption is trust on first use. It establishes that this copy equals the build the
 GitHub release for its exact version published at the time of the first check. It
@@ -265,7 +268,7 @@ accepted baseline and exit with `DESKTOP_STARTUP_FAILED`, showing the user nothi
 AttestedCore's immutable-tree contract needs the baseline before the private
 resource image is captured, so this slot adopts at startup, not at the first check.
 
-Startup enters adoption only inside the final branch that reads
+Ordinary startup enters adoption inside the final branch that reads
 `/Applications/Farol.app.receipt.json`, after the `ready.json`, `last-update.json`
 and closed-repair branches. It requires a clean build with a `buildVersion` on the
 `github-stable` or `github-owner-beta` channel, and every other piece of baseline
@@ -280,6 +283,15 @@ malformed one refuses startup as before, and a `ready.json` with an operation is
 handled by its existing branch. A present adopted record that cannot be read or
 decoded (malformed JSON, unknown or missing fields, wrong type) is tampered and
 fails with exactly `UPDATE_ACCEPTED_SOURCE_UNCONFIRMED`.
+
+For a newer manual replacement after a completed OTA, startup may reach this
+adoption path despite the old receipt and `last-update.json` after validating the
+completed operation, slot binding, journal and helper exit. It retains the old
+records; an incomplete or unconfirmed operation still refuses. The updater uses
+the accepted adopted baseline for the new build. When a later OTA settles, it
+attempts to retain the previous receipt in that operation's
+`settled-receipt.json`. The archive is best-effort: a conflicting file or I/O
+failure is logged and does not change the independently verified OTA outcome.
 
 1. A valid `adopted-baseline.json` in the private root, with
    `slot === "/Applications/Farol.app"` and the running profile, supplies the

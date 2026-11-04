@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { RendererFacade, WindowSnapshot } from "./contract";
 import {
   isConfirmedBrowserBlock,
@@ -23,7 +24,7 @@ export function acknowledgeUpdateNotice(facade: RendererFacade): void {
   void facade.update("notice-seen", update.notice.key);
 }
 
-/** Release owns persistence; this component holds no dismissal authority. */
+/** Local dismissal only hides the popup; Release still owns saved state. */
 export function UpdateNotice({
   snapshot,
   facade,
@@ -31,10 +32,12 @@ export function UpdateNotice({
   snapshot: WindowSnapshot;
   facade: RendererFacade;
 }) {
+  const [dismissedKey, setDismissedKey] = useState<string | null>(null);
   const update = snapshot.update;
   if (
     !("notice" in update) ||
     !update.notice ||
+    update.notice.key === dismissedKey ||
     update.notice.seen ||
     snapshot.overlay !== "none" ||
     snapshot.sidebar === "overlay" ||
@@ -43,7 +46,7 @@ export function UpdateNotice({
       update.deferred)
   )
     return null;
-  const disabled =
+  const acknowledgementBlocked =
     Boolean(update.notice.blockedBy) ||
     snapshot.intents.update?.state === "pending" ||
     snapshot.intents.update?.state === "unknown" ||
@@ -73,8 +76,10 @@ export function UpdateNotice({
       </div>
       <button
         aria-label="Dismiss update notice"
-        disabled={disabled}
-        onClick={() => acknowledgeUpdateNotice(facade)}
+        onClick={() => {
+          setDismissedKey(update.notice!.key);
+          if (!acknowledgementBlocked) acknowledgeUpdateNotice(facade);
+        }}
       >
         ×
       </button>

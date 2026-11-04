@@ -247,7 +247,7 @@ it.each([
     const pending = deferred<unknown>();
     vi.mocked(f.api.installedUpdate).mockReturnValueOnce(pending.promise);
     await act(async () => button(host, "Dismiss update notice").click());
-    expect(host.querySelector('[aria-label="Update notice"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Update notice"]')).toBeNull();
     expect(c.getSnapshot().intents["update-notice"]?.state).toBe("pending");
     await act(async () => pending.resolve(withSeen(view)));
     expect(host.querySelector('[aria-label="Update notice"]')).toBeNull();
@@ -308,14 +308,14 @@ it("reopened windows hide a seen version while a newer version and failure each 
   ).toContain("The update did not finish");
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
 });
-it("missing host dispatch refuses acknowledgement without hiding or deferring the notice", async () => {
+it("missing host dispatch hides only the popup while retaining the refused acknowledgement", async () => {
   const { host, c, f } = await mount();
   await act(async () => button(host, "Dismiss update notice").click());
   expect(c.getSnapshot().intents["update-notice"]).toMatchObject({
     state: "refused",
     code: "UPDATE_NOTICE_NOT_ACKNOWLEDGED",
   });
-  expect(host.querySelector('[aria-label="Update notice"]')).not.toBeNull();
+  expect(host.querySelector('[aria-label="Update notice"]')).toBeNull();
   expect(c.getSnapshot().update).toEqual(available);
   expect(f.api.installedUpdate).toHaveBeenCalledExactlyOnceWith({
     kind: "notice-seen",
@@ -327,8 +327,7 @@ it("lost notice replies stay unknown and cannot be retried or used to release an
   vi.mocked(f.api.installedUpdate).mockRejectedValue(new Error("reply lost"));
   await act(async () => button(host, "Dismiss update notice").click());
   expect(c.getSnapshot().intents["update-notice"]?.state).toBe("unknown");
-  expect(host.querySelector('[aria-label="Update notice"]')).not.toBeNull();
-  expect(button(host, "Dismiss update notice").disabled).toBe(true);
+  expect(host.querySelector('[aria-label="Update notice"]')).toBeNull();
   await act(async () => c.update("notice-seen", available.notice!.key));
   vi.mocked(f.api.installedUpdate).mockResolvedValue({ phase: "downloading" });
   await act(async () =>
@@ -348,9 +347,10 @@ it("a known notice preference refusal remains retained without adding technical 
     },
   });
   await act(async () => button(host, "Dismiss update notice").click());
-  expect(host.querySelector('[aria-label="Update notice"]')).not.toBeNull();
-  expect(button(host, "Dismiss update notice").disabled).toBe(true);
-  await act(async () => button(host, "View update").click());
+  expect(host.querySelector('[aria-label="Update notice"]')).toBeNull();
+  await act(async () =>
+    host.querySelector<HTMLButtonElement>(".rail .update-action")!.click(),
+  );
   expect(host.querySelector("dialog")?.textContent).not.toContain(
     "Saved update notices could not be confirmed",
   );
@@ -371,7 +371,9 @@ it("acknowledging a notice never clears an unknown update intention even after a
   await act(async () => c.update("download"));
   expect(c.getSnapshot().intents.update?.state).toBe("unknown");
   await act(async () => f.emit("update", available));
-  expect(button(host, "Dismiss update notice").disabled).toBe(true);
+  expect(button(host, "Dismiss update notice").disabled).toBe(false);
+  await act(async () => button(host, "Dismiss update notice").click());
+  expect(host.querySelector('[aria-label="Update notice"]')).toBeNull();
   expect((await c.update("notice-seen", available.notice!.key)).state).toBe(
     "refused",
   );
@@ -405,8 +407,12 @@ it("unknown release state remains inspectable and cannot be acknowledged", async
     notice: { key: "failure:unknown", seen: false, blockedBy: null },
   };
   const { host, c, f } = await mount(failed);
-  expect(button(host, "Dismiss update notice").disabled).toBe(true);
-  await act(async () => button(host, "View update").click());
+  expect(button(host, "Dismiss update notice").disabled).toBe(false);
+  await act(async () => button(host, "Dismiss update notice").click());
+  expect(host.querySelector('[aria-label="Update notice"]')).toBeNull();
+  await act(async () =>
+    host.querySelector<HTMLButtonElement>(".rail .update-action")!.click(),
+  );
   expect(host.querySelector("dialog")?.textContent).not.toContain(
     "UPDATE_HANDOFF_UNKNOWN",
   );
@@ -432,7 +438,7 @@ it("offers explicit confirmation when browser activity could not be observed", a
   expect(notice.textContent).toContain("is downloaded");
   expect(notice.textContent).toContain("Ready to install");
   expect(notice.textContent).not.toContain("Do not retry this update action");
-  expect(button(notice, "Dismiss update notice").disabled).toBe(true);
+  expect(button(notice, "Dismiss update notice").disabled).toBe(false);
   await act(async () => button(notice, "View update").click());
   expect(host.querySelector("dialog")?.textContent).toContain(
     "close open ChatGPT sessions and interrupt work",

@@ -17,6 +17,7 @@ import { sourceIdentity } from "./source-identity.mjs";
 import { verifyBundledTunnelClient } from "./tunnel-client-artifact.mjs";
 import { validateTunnelNotice } from "./tunnel-notice.mjs";
 import { packageInfoPlist } from "./package-platform.mjs";
+import { normalizePackagedFileModes } from "./package-file-modes.mjs";
 import {
   PACKAGE_SCHEMA,
   GO_PACKAGE_SCHEMA,
@@ -173,8 +174,9 @@ for (const entry of entries) {
     path.join(appResources, entry),
   );
 }
-if (manifest.schema === 4)
-  await fs.chmod(path.join(appResources, "farol-backend"), 0o500);
+await normalizePackagedFileModes(appResources, {
+  hasGoCore: manifest.schema === 4,
+});
 // Schema-6 retains this transport name for older embedded verifiers. The
 // payload is the pinned Go executable and is never passed to Python.
 await fs.chmod(path.join(appResources, "update-archive.py"), 0o700);
