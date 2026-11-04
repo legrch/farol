@@ -455,13 +455,13 @@ async function runInstalledTrusted(
   return JSON.parse(stdout) as unknown;
 }
 
-async function readInstalledProcess(
+export async function readInstalledProcess(
   pid: number,
 ): Promise<Readonly<{ stdout: string; stderr: string }>> {
   return execute("/bin/ps", ["-p", String(pid), "-o", "lstart="], {
     timeout: 3000,
     maxBuffer: 4096,
-    env: { PATH: "/usr/bin:/bin", LANG: "C" },
+    env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
   });
 }
 
