@@ -290,6 +290,7 @@ describe("two-phase release workflow", () => {
     expect(release.on.workflow_dispatch.inputs.action.options).toEqual([
       "prepare",
       "publish",
+      "witness-preflight",
     ]);
     expect(release.jobs.build.if).toBe(
       "github.event_name == 'push' || inputs.action == 'prepare'",

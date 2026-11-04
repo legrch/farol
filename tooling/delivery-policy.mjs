@@ -20,7 +20,7 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
     release: "version-tag",
     deploy: "verified-tag",
     requiredChecks: ["changes", "checks", "portable", "native", "required"],
-    releaseJobs: ["build", "publish"],
+    releaseJobs: ["witness-preflight", "build", "publish"],
     tagPattern: "v*",
     versionSource: "package.json",
     prerelease: "version-channel",
@@ -45,7 +45,11 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
   ]);
   assert.equal(inputs.action.required, true);
   assert.equal(inputs.action.type, "choice");
-  assert.deepEqual(inputs.action.options, ["prepare", "publish"]);
+  assert.deepEqual(inputs.action.options, [
+    "prepare",
+    "publish",
+    "witness-preflight",
+  ]);
   assert.equal(inputs.action.default, "prepare");
   for (const key of ["candidate_run_id", "draft_release_id", "manifest_sha256"])
     assert.equal(inputs[key].type, "string");
@@ -60,7 +64,9 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
   for (const workflow of [pr, release]) {
     assert.deepEqual(workflow.permissions, { contents: "read" });
     for (const [id, job] of Object.entries(workflow.jobs)) {
-      if (workflow === release && id === "publish")
+      if (workflow === release && id === "witness-preflight")
+        assert.deepEqual(job.permissions, {});
+      else if (workflow === release && id === "publish")
         assert.deepEqual(job.permissions, {
           contents: "write",
           actions: "read",
@@ -144,6 +150,10 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
   assert.match(commands(pr.jobs.required), /test "\$PORTABLE" = success/u);
   assert.match(commands(pr.jobs.required), /test "\$NATIVE" = success/u);
   assert.equal(release.jobs.build["runs-on"], "macos-26");
+  assert.equal(
+    release.jobs["witness-preflight"].if,
+    "github.event_name == 'workflow_dispatch' && inputs.action == 'witness-preflight'",
+  );
   assert.equal(
     release.jobs.build.if,
     "github.event_name == 'push' || inputs.action == 'prepare'",
