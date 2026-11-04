@@ -412,6 +412,13 @@ main_pids = []
 try:`,
       );
     if (["escalate", "unexpected-descendant"].includes(scenario)) {
+      const nativeProc = [
+        "lib = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)",
+        "lib.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]",
+        "lib.proc_pidpath.restype = ctypes.c_int",
+      ].join("\n");
+      assert.ok(copy.includes(nativeProc));
+      copy = copy.replace(nativeProc, "lib = None");
       copy = copy.replace(
         "try:\n    rows = table()",
         `def table():
