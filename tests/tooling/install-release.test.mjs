@@ -3,14 +3,39 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 
 const script = fileURLToPath(new URL('../../scripts/install-release.sh', import.meta.url));
 const python = '/usr/bin/python3';
 const fixtureCode = String.raw`
-import hashlib, json, os, stat, sys, zipfile
+import hashlib, json, os, pathlib, stat, sys, zipfile
 root, scenario = sys.argv[1:]
+app = pathlib.Path(root) / 'reference/Farol.app'
+launcher = """#!/bin/sh
+set -eu
+
+launcher_path=$0
+case "$launcher_path" in
+  /*) ;;
+  *) launcher_path="$PWD/$launcher_path" ;;
+esac
+macos_dir=${'$'}{launcher_path%/*}
+contents_dir=${'$'}{macos_dir%/*}
+export ELECTRON_FORCE_IS_PACKAGED=true
+exec "$contents_dir/Resources/app/farol-backend" run-desktop-launcher "$@"
+"""
+for name, content, mode in [
+    ('Contents/MacOS/Farol', launcher, 0o755),
+    ('Contents/Resources/app/farol-backend', 'backend', 0o700),
+    ('Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron', 'runtime', 0o755),
+    ('Contents/Frameworks/Versions/A/library', 'library', 0o644),
+]:
+    target = app / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content)
+    target.chmod(mode)
+os.symlink('A', app / 'Contents/Frameworks/Versions/Current')
 version = '1.2.3'
 name = 'Farol-' + version + '-darwin-arm64.zip'
 archive = os.path.join(root, name)
@@ -20,11 +45,14 @@ with zipfile.ZipFile(archive, 'w') as z:
         i.create_system = 3
         i.external_attr = mode << 16
         z.writestr(i, content)
-    file('Farol.app', '', stat.S_IFDIR | 0o755)
+    file('Farol.app/', '', stat.S_IFDIR | 0o755)
     file('artifact.json', '{}')
-    file('Farol.app/Contents/MacOS/Farol', 'binary', 0o100755)
-    file('Farol.app/Contents/Frameworks/Versions/A/library', 'library')
-    file('Farol.app/Contents/Frameworks/Versions/Current', 'A', stat.S_IFLNK | 0o777)
+    for path in sorted(app.rglob('*')):
+        name_in_zip = 'Farol.app/' + path.relative_to(app).as_posix()
+        info = path.lstat()
+        if path.is_symlink(): file(name_in_zip, os.readlink(path), info.st_mode)
+        elif path.is_dir(): file(name_in_zip + '/', '', info.st_mode)
+        else: file(name_in_zip, path.read_bytes(), info.st_mode)
     if scenario == 'traversal': file('Farol.app/../../escape', 'bad')
     if scenario == 'absolute': file('/Farol.app/evil', 'bad')
     if scenario == 'escape-link': file('Farol.app/Contents/escape', '../../outside', stat.S_IFLNK | 0o777)
@@ -33,6 +61,7 @@ with zipfile.ZipFile(archive, 'w') as z:
         file('Farol.app/Contents/link2', '../../outside', stat.S_IFLNK | 0o777)
     if scenario == 'under-link': file('Farol.app/Contents/Frameworks/Versions/Current/evil', 'bad')
     if scenario == 'duplicate': file('Farol.app/Contents/MacOS/Farol', 'duplicate')
+    if scenario == 'extra-file': file('Farol.app/extra', 'tampered')
 data = open(archive, 'rb').read()
 hash = hashlib.sha256(data).hexdigest()
 manifest = dict(schema='farol.github-release/1', repository='legrch/farol', version=version,
@@ -45,14 +74,26 @@ if scenario == 'wrong-hash': manifest['archiveSha256'] = '0' * 64
 open(os.path.join(root, 'farol-release.json'), 'w').write(json.dumps(manifest))
 open(os.path.join(root, 'SHA256SUMS'), 'w').write(('0' * 64 if scenario == 'wrong-sums' else hash) + '  ' + name + '\n')
 `;
+function prepare(root, scenario) {
+  const setup = spawnSync(python, ['-c', fixtureCode, root, scenario], { encoding: 'utf8' });
+  assert.equal(setup.status, 0, setup.stderr);
+  const digestModule = pathToFileURL(fileURLToPath(new URL('../../src/pkg/artifact-tree-digest/digest.ts', import.meta.url))).href;
+  const digest = spawnSync(process.execPath, ['--input-type=module', '-e',
+    `import { treeDigest } from ${JSON.stringify(digestModule)}; console.log(await treeDigest(process.argv[1]));`,
+    path.join(root, 'reference/Farol.app')], { encoding: 'utf8' });
+  assert.equal(digest.status, 0, digest.stderr);
+  const manifestPath = path.join(root, 'farol-release.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  if (scenario !== 'missing-artifact') manifest.artifactSha256 = scenario === 'wrong-artifact' ? '0'.repeat(64) : digest.stdout.trim();
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+}
 function run(args, options = {}) {
   return spawnSync('/bin/sh', [script, ...args], { encoding: 'utf8', ...options });
 }
 function fixture(scenario, callback) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'farol-install-test-'));
   try {
-    const setup = spawnSync(python, ['-c', fixtureCode, root, scenario], { encoding: 'utf8' });
-    assert.equal(setup.status, 0, setup.stderr);
+    prepare(root, scenario);
     const output = path.join(root, 'output');
     const result = run(['--validate-only', '1.2.3', path.join(root, 'Farol-1.2.3-darwin-arm64.zip'),
       path.join(root, 'farol-release.json'), path.join(root, 'SHA256SUMS'), output]);
@@ -71,12 +112,12 @@ test('strictly rejects non-numeric versions and extra arguments before operation
 test('valid release extracts executable and safe framework symlink', () => {
   fixture('valid', (result, output) => {
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(readFileSync(path.join(output, 'Farol.app/Contents/MacOS/Farol'), 'utf8'), 'binary');
+    assert.match(readFileSync(path.join(output, 'Farol.app/Contents/MacOS/Farol'), 'utf8'), /run-desktop-launcher/);
     assert.equal(readFileSync(path.join(output, 'Farol.app/Contents/Frameworks/Versions/Current/library'), 'utf8'), 'library');
   });
 });
 
-for (const scenario of ['wrong-version', 'wrong-repository', 'wrong-name', 'wrong-size', 'wrong-hash', 'wrong-sums', 'traversal', 'absolute', 'escape-link', 'chain-escape', 'under-link', 'duplicate']) {
+for (const scenario of ['wrong-version', 'wrong-repository', 'wrong-name', 'wrong-size', 'wrong-hash', 'wrong-sums', 'missing-artifact', 'wrong-artifact', 'extra-file', 'traversal', 'absolute', 'escape-link', 'chain-escape', 'under-link', 'duplicate']) {
   test(`rejects ${scenario}`, () => fixture(scenario, (result, output, root) => {
     assert.notEqual(result.status, 0, result.stdout);
     assert.match(result.stderr, /Release validation failed/);
@@ -100,12 +141,12 @@ test('isolated installation orders checks, quit, backup and launch', () => {
   isolatedInstall('success', (result, root, log) => {
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Installed and running: Farol 1\.2\.3/);
-    assert.match(result.stdout, /Signing type: ad-hoc/);
+    assert.match(result.stdout, /Outer app: unsigned; executable signatures verified/);
     assert.match(result.stdout, /Updater status: not confirmed/);
     assert.ok(log.indexOf('codesign') < log.indexOf('osascript'));
     assert.ok(log.indexOf('osascript') < log.indexOf('ditto-backup'));
     assert.ok(log.indexOf('ditto-backup') < log.indexOf('open'));
-    assert.equal(readFileSync(path.join(root, 'Applications/Farol.app/Contents/MacOS/Farol'), 'utf8'), 'binary');
+    assert.match(readFileSync(path.join(root, 'Applications/Farol.app/Contents/MacOS/Farol'), 'utf8'), /run-desktop-launcher/);
   });
 });
 
@@ -128,11 +169,33 @@ test('isolated failed launch retains a recoverable predecessor', () => {
   });
 });
 
+for (const scenario of ['private', 'snapshot', 'helper', 'dev']) {
+  test(`isolated ${scenario} process is handled without touching unrelated apps`, () => {
+    isolatedInstall(scenario, (result, _root, log) => {
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(log, /osascript/);
+      assert.match(log, /ditto-backup/);
+    });
+  });
+}
+
+for (const scenario of ['ps-failure', 'unknown', 'stubborn', 'quit-failure', 'backend-remains', 'bad-tree']) {
+  test(`isolated ${scenario} preserves the existing app and recovery files`, () => {
+    isolatedInstall(scenario, (result, root, log) => {
+      assert.notEqual(result.status, 0);
+      assert.equal(readFileSync(path.join(root, 'Applications/Farol.app/old'), 'utf8'), 'old');
+      assert.doesNotMatch(log, /ditto-backup|ditto-install|open/);
+      const retained = result.stderr.match(/Recovery files retained at: (.+)/);
+      assert.ok(retained, result.stderr);
+      assert.ok(readFileSync(path.join(retained[1], 'farol-release.json')).length > 0);
+    });
+  });
+}
+
 function isolatedInstall(scenario, callback) {
   const root = mkdtempSync(path.join(os.tmpdir(), 'farol-install-flow-'));
   try {
-    const setup = spawnSync(python, ['-c', fixtureCode, root, 'valid'], { encoding: 'utf8' });
-    assert.equal(setup.status, 0, setup.stderr);
+    prepare(root, scenario === 'bad-tree' ? 'extra-file' : 'valid');
     const prep = spawnSync('/bin/mkdir', ['-p', path.join(root, 'Applications/Farol.app'), path.join(root, 'bin')]);
     assert.equal(prep.status, 0);
     writeFileSync(path.join(root, 'Applications/Farol.app/old'), 'old');
@@ -144,16 +207,30 @@ const log = x => fs.appendFileSync(path.join(root, 'log'), x + '\n');
 if (cmd === 'uname') { console.log(args[0] === '-s' ? 'Darwin' : 'arm64'); }
 else if (cmd === 'curl') { const dest = args[args.indexOf('--output')+1]; fs.copyFileSync(path.join(root, path.basename(dest)), dest); }
 else if (cmd === 'PlistBuddy') { const key = args[1]; console.log(key.includes('Identifier') ? 'io.github.legrch.farol' : key.includes('Executable') ? 'Farol' : '1.2.3'); }
-else if (cmd === 'codesign') { log('codesign'); if (process.env.SCENARIO === 'bad-signature') process.exit(1); if (args[0] === '-dv') console.error('Signature=adhoc'); }
-else if (cmd === 'ps') { if (fs.existsSync(path.join(root, 'running'))) console.log(path.join(root, 'Applications/Farol.app/Contents/MacOS/Farol')); }
-else if (cmd === 'osascript') { log('osascript'); fs.rmSync(path.join(root, 'running'), {force:true}); }
+else if (cmd === 'codesign') { log('codesign'); if (args[0] === '-d') { console.error('code object is not signed at all'); process.exit(1); } if (process.env.SCENARIO === 'bad-signature') process.exit(1); }
+else if (cmd === 'ps') {
+  if (process.env.SCENARIO === 'ps-failure') process.exit(1);
+  console.log('1 /sbin/launchd');
+  if (fs.existsSync(path.join(root, 'running'))) {
+    const app = path.join(root, 'Applications/Farol.app');
+    const profile = path.join(root, 'Library/Application Support/io.github.legrch.farol/installed-updates');
+    let base = ['private', 'helper', 'stubborn'].includes(process.env.SCENARIO) ? path.join(profile, 'op/launch-Farol.app') : app;
+    if (process.env.SCENARIO === 'snapshot') base = path.join(profile, 'installed-execution/snapshot/Farol.app');
+    const suffix = ['helper', 'backend-remains'].includes(process.env.SCENARIO) && !fs.existsSync(path.join(root, 'launched')) ? '/Contents/Resources/app/farol-backend' : '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron';
+    console.log('42 ' + base + suffix);
+  }
+  if (process.env.SCENARIO === 'unknown') console.log('43 farol-backend');
+  if (process.env.SCENARIO === 'dev') console.log('44 /Applications/Farol Dev.app/Contents/MacOS/Farol Dev');
+}
+else if (cmd === 'osascript') { log('osascript'); if (process.env.SCENARIO === 'quit-failure') process.exit(1); if (!['stubborn', 'backend-remains'].includes(process.env.SCENARIO)) fs.rmSync(path.join(root, 'running'), {force:true}); }
 else if (cmd === 'ditto') { log(args[1].endsWith('previous.app') ? 'ditto-backup' : 'ditto-install'); fs.cpSync(args[0], args[1], {recursive:true, verbatimSymlinks:true}); }
-else if (cmd === 'open') { log('open'); if (process.env.SCENARIO === 'bad-launch') process.exit(1); fs.writeFileSync(path.join(root, 'running'), 'yes'); }
+else if (cmd === 'sleep') {}
+else if (cmd === 'open') { log('open'); if (process.env.SCENARIO === 'bad-launch') process.exit(1); fs.writeFileSync(path.join(root, 'launched'), 'yes'); fs.writeFileSync(path.join(root, 'running'), 'yes'); }
 else process.exit(2);
 `;
     const fakePath = path.join(root, 'bin/fake');
     writeFileSync(fakePath, fake.replace('#!/usr/bin/env node', `#!${process.execPath}`), { mode: 0o755 });
-    for (const command of ['uname', 'curl', 'PlistBuddy', 'codesign', 'ps', 'osascript', 'ditto', 'open']) {
+    for (const command of ['uname', 'curl', 'PlistBuddy', 'codesign', 'ps', 'osascript', 'ditto', 'open', 'sleep']) {
       const link = spawnSync('/bin/ln', ['-s', fakePath, path.join(root, 'bin', command)]);
       assert.equal(link.status, 0);
     }
@@ -162,12 +239,13 @@ else process.exit(2);
       copy = copy.replaceAll(`/usr/bin/${command}`, path.join(root, 'bin', command));
     copy = copy.replaceAll('/usr/libexec/PlistBuddy', path.join(root, 'bin/PlistBuddy'))
       .replaceAll('/bin/ps', path.join(root, 'bin/ps'))
+      .replaceAll('/bin/sleep', path.join(root, 'bin/sleep'))
       .replaceAll('/Applications/Farol.app', path.join(root, 'Applications/Farol.app'))
       .replace('/tmp/farol-release.XXXXXXXX', path.join(root, 'release.XXXXXXXX'));
     const copyPath = path.join(root, 'isolated-installer.sh');
     writeFileSync(copyPath, copy);
     const result = spawnSync('/bin/sh', [copyPath, '1.2.3'], {
-      encoding: 'utf8', env: { ...process.env, FIXTURE_ROOT: root, SCENARIO: scenario },
+      encoding: 'utf8', env: { ...process.env, HOME: root, FIXTURE_ROOT: root, SCENARIO: scenario },
     });
     let log = '';
     try { log = readFileSync(path.join(root, 'log'), 'utf8'); } catch {}

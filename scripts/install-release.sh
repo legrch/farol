@@ -12,7 +12,7 @@ valid_version() { printf '%s\n' "$1" | /usr/bin/grep -Eq '^(0|[1-9][0-9]*)\.(0|[
 # caller-specified directory. It does not invoke any production operations.
 validate_archive() {
   /usr/bin/python3 -I - "$@" <<'PY'
-import hashlib, json, os, pathlib, re, shutil, stat, sys, zipfile
+import hashlib, json, os, pathlib, re, shutil, stat, struct, sys, zipfile
 version, archive, manifest_path, sums_path, output = sys.argv[1:]
 name = f'Farol-{version}-darwin-arm64.zip'
 def reject(message):
@@ -28,6 +28,9 @@ try:
         reject('release manifest identity mismatch')
     size = manifest.get('archiveSize')
     digest = manifest.get('archiveSha256')
+    artifact_digest = manifest.get('artifactSha256')
+    if not isinstance(artifact_digest, str) or not re.fullmatch('[0-9a-f]{64}', artifact_digest):
+        reject('invalid artifact digest')
     if type(size) is not int or size <= 0 or not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest):
         reject('invalid archive size or digest')
     if os.path.basename(archive) != name or os.path.getsize(archive) != size:
@@ -87,16 +90,58 @@ try:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 with z.open(item) as src, open(dest, 'xb') as dst:
                     shutil.copyfileobj(src, dst)
-                os.chmod(dest, (mode & 0o777) or 0o644)
+                os.chmod(dest, (mode & 0o7777) or 0o644)
         for key, target in links.items():
             dest = root.joinpath(*key.split('/'))
             dest.parent.mkdir(parents=True, exist_ok=True)
-            os.symlink(target, dest)
+            # Darwin applies umask to the link's own mode, which is part of
+            # the tree digest. Linux symlinks always have mode 0777.
+            mode = entries[key][1] & 0o777
+            old_umask = os.umask(0o777 & ~mode)
+            try:
+                os.symlink(target, dest)
+            finally:
+                os.umask(old_umask)
         app = (root / 'Farol.app').resolve(strict=True)
         for key in links:
-            resolved = root.joinpath(*key.split('/')).resolve(strict=False)
+            resolved = root.joinpath(*key.split('/')).resolve(strict=True)
             if not resolved.is_relative_to(app):
                 reject('symlink escapes app root')
+        # Directory modes must be applied after extraction, including restrictive
+        # modes. Release archives contain explicit records for all directories.
+        for key, (_, mode, kind) in sorted(entries.items(), key=lambda pair: -pair[0].count('/')):
+            if kind == stat.S_IFDIR:
+                os.chmod(root.joinpath(*key.split('/')), mode & 0o7777)
+        # Identical encoding to src/pkg/artifact-tree-digest/digest.ts v2.
+        tree = hashlib.sha256(b'farol.tree-digest/v2\0')
+        def field(value):
+            data = value.encode('utf-8')
+            return struct.pack('>I', len(data)) + data
+        def walk(directory):
+            for child in sorted(directory.iterdir(), key=lambda p: p.name.encode('utf-16-be')):
+                info = child.lstat()
+                tree.update(field(child.relative_to(app).as_posix()))
+                tree.update(b'l' if stat.S_ISLNK(info.st_mode) else b'd' if stat.S_ISDIR(info.st_mode) else b'f' if stat.S_ISREG(info.st_mode) else b'?')
+                tree.update(struct.pack('>I', stat.S_IMODE(info.st_mode)))
+                if stat.S_ISLNK(info.st_mode):
+                    target = os.readlink(child)
+                    lexical = pathlib.Path(os.path.abspath(child.parent / target))
+                    if os.path.isabs(target) or not lexical.is_relative_to(app) or not child.resolve(strict=True).is_relative_to(app):
+                        reject('unsafe artifact symlink')
+                    tree.update(field(target))
+                elif stat.S_ISDIR(info.st_mode):
+                    walk(child)
+                elif stat.S_ISREG(info.st_mode):
+                    content = hashlib.sha256()
+                    with child.open('rb') as f:
+                        for chunk in iter(lambda: f.read(1024 * 1024), b''):
+                            content.update(chunk)
+                    tree.update(content.digest())
+                else:
+                    reject('unsupported artifact entry')
+        walk(app)
+        if tree.hexdigest() != artifact_digest:
+            reject('artifact tree digest mismatch')
 except (OSError, ValueError, RuntimeError, UnicodeError, zipfile.BadZipFile, json.JSONDecodeError) as error:
     print('Release validation failed:', error, file=sys.stderr)
     sys.exit(1)
@@ -118,7 +163,7 @@ version=$1
 name="Farol-${version}-darwin-arm64.zip"
 url="https://github.com/legrch/farol/releases/download/v${version}"
 tmp=$(/usr/bin/mktemp -d "/tmp/farol-release.XXXXXXXX") || fail 'cannot create private temporary directory'
-retain=no
+retain=yes
 cleanup() {
   if [ "$retain" = yes ]; then
     printf 'Recovery files retained at: %s\n' "$tmp" >&2
@@ -139,48 +184,102 @@ plist_value() { /usr/libexec/PlistBuddy -c "Print :$2" "$1" 2>/dev/null; }
 [ "$(plist_value "$plist" CFBundleShortVersionString)" = "$version" ] || fail 'bundle version mismatch'
 executable=$(plist_value "$plist" CFBundleExecutable) || fail 'missing bundle executable'
 [ "$executable" = Farol ] || fail 'unexpected bundle executable'
-/usr/bin/codesign --verify --deep --strict "$app" || fail 'code signature verification failed'
-signature=$(/usr/bin/codesign -dv --verbose=4 "$app" 2>&1) || fail 'cannot inspect code signature'
-case "$signature" in
-  *'Signature=adhoc'*) printf '%s\n' 'Signing type: ad-hoc' ;;
-  *'Authority=Developer ID Application:'*) printf '%s\n' 'Signing type: Developer ID Application (reported by codesign)' ;;
-  *'Authority='*) printf '%s\n' 'Signing type: certificate-signed (reported by codesign)' ;;
-  *) printf '%s\n' 'Signing type: unknown' ;;
+# The launcher is a shell script, not a signed Mach-O. Verify the exact
+# launcher required by the package contract and the two executable signatures.
+cat > "$tmp/expected-launcher" <<'LAUNCHER'
+#!/bin/sh
+set -eu
+
+launcher_path=$0
+case "$launcher_path" in
+  /*) ;;
+  *) launcher_path="$PWD/$launcher_path" ;;
 esac
+macos_dir=${launcher_path%/*}
+contents_dir=${macos_dir%/*}
+export ELECTRON_FORCE_IS_PACKAGED=true
+exec "$contents_dir/Resources/app/farol-backend" run-desktop-launcher "$@"
+LAUNCHER
+launcher="$app/Contents/MacOS/Farol"
+[ -f "$launcher" ] && [ ! -L "$launcher" ] && [ -x "$launcher" ] && /usr/bin/cmp -s "$launcher" "$tmp/expected-launcher" || fail 'launcher does not match package contract'
+for binary in "$app/Contents/Resources/app/farol-backend" "$app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron"; do
+  [ -f "$binary" ] && [ ! -L "$binary" ] && [ -x "$binary" ] || fail 'packaged executable missing or invalid'
+  /usr/bin/codesign --verify --strict "$binary" || fail 'executable signature verification failed'
+done
+if signature=$(/usr/bin/codesign -d "$app" 2>&1); then
+  fail 'outer app is signed; release package contract expects an unsigned outer app'
+else
+  case "$signature" in
+    *'code object is not signed at all'*) printf '%s\n' 'Outer app: unsigned; executable signatures verified' ;;
+    *) fail 'cannot determine outer app signing status' ;;
+  esac
+fi
 installed=/Applications/Farol.app
+profile="$HOME/Library/Application Support/io.github.legrch.farol/installed-updates"
 running() {
-  /bin/ps -axo comm= > "$tmp/processes" || return 2
-  /usr/bin/awk -v expected="$installed/Contents/MacOS/Farol" '$0 == expected { found=1 } END { exit !found }' "$tmp/processes"
+  /bin/ps -ww -axo pid=,comm= > "$tmp/processes" || return 2
+  /usr/bin/python3 -I - "$tmp/processes" "$installed" "$profile" "${1-all}" <<'PY'
+import os, re, sys
+table, installed, profile, mode = sys.argv[1:]
+found = False
+try:
+    with open(table, encoding='utf-8') as stream:
+        lines = stream.read().splitlines()
+    if not lines:
+        raise ValueError('empty process table')
+    for line in lines:
+        match = re.fullmatch(r'\s*([0-9]+)\s+(.+?)\s*', line)
+        if not match:
+            raise ValueError('unparseable process table')
+        executable = match.group(2)
+        owned = executable.startswith(installed + '/') or executable.startswith(profile + '/')
+        # Explicitly identified Dev and Owner Preview bundles are distinct.
+        other = any('/' + name + '.app/' in executable for name in ('Farol Dev', 'Farol Owner Preview'))
+        if owned:
+            if mode == 'all' or executable.endswith('/Electron Runtime.app/Contents/MacOS/Electron'):
+                found = True
+        elif 'farol' in executable.lower() and not other:
+            raise ValueError('unclassified Farol process')
+    sys.exit(0 if found else 1)
+except (OSError, UnicodeError, ValueError) as error:
+    print('Process inspection failed:', error, file=sys.stderr)
+    sys.exit(2)
+PY
 }
 check_stopped() {
-  if running; then return 1; else status=$?; fi
+  if running "${1-all}"; then return 1; else status=$?; fi
   [ "$status" -eq 1 ] || fail 'cannot inspect process table'
   return 0
 }
+existing=no
 if [ -e "$installed" ] || [ -L "$installed" ]; then
   [ -d "$installed" ] && [ ! -L "$installed" ] || fail 'installed app path is not a directory'
   [ "$(plist_value "$installed/Contents/Info.plist" CFBundleIdentifier)" = io.github.legrch.farol ] || fail 'existing app identity mismatch'
-  if ! check_stopped; then
-    /usr/bin/osascript -e 'with timeout of 30 seconds' -e 'tell application "/Applications/Farol.app" to quit' -e 'end timeout' || fail 'normal Quit failed'
-    count=0
-    while ! check_stopped; do
-      [ "$count" -lt 30 ] || fail 'Farol did not quit; existing app preserved'
-      /bin/sleep 1
-      count=$((count + 1))
-    done
-  fi
+  existing=yes
+fi
+if ! check_stopped; then
+  /usr/bin/osascript -e 'with timeout of 30 seconds' -e 'tell application "System Events" to set productionCount to count (every application process whose bundle identifier is "io.github.legrch.farol")' -e 'if productionCount > 0 then tell application id "io.github.legrch.farol" to quit' -e 'end timeout' || fail 'normal Quit failed or production identity could not be inspected'
+  count=0
+  while ! check_stopped; do
+    [ "$count" -lt 30 ] || fail 'Farol did not quit; existing app preserved'
+    /bin/sleep 1
+    count=$((count + 1))
+  done
+fi
+if [ "$existing" = yes ]; then
   /usr/bin/ditto "$installed" "$tmp/previous.app" || fail 'could not preserve predecessor'
   retain=yes
+fi
+check_stopped || fail 'production process appeared; existing app preserved'
+if [ "$existing" = yes ]; then
   /bin/rm -rf "$installed" || fail 'could not remove old app; predecessor retained'
-else
-  check_stopped || fail 'production process exists without an installed app'
 fi
 if ! /usr/bin/ditto "$app" "$installed"; then
   fail 'copy failed; predecessor retained if one existed'
 fi
 /usr/bin/open "$installed" || fail 'launch request failed; predecessor retained if one existed'
 count=0
-while check_stopped; do
+while check_stopped main; do
   [ "$count" -lt 30 ] || fail 'launch not confirmed; predecessor retained if one existed'
   /bin/sleep 1
   count=$((count + 1))
