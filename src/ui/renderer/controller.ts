@@ -692,6 +692,9 @@ export class WindowController implements RendererFacade {
           installedVersion: {
             version: data.build.version,
             buildVersion: data.build.buildVersion ?? null,
+            builtAt: data.build.builtAt,
+            sourceCommit: data.build.sourceCommit,
+            sourceDirty: data.build.sourceDirty,
           },
           runtime:
             this.runtimeRevision === runtimeAtStart

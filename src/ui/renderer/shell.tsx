@@ -1028,6 +1028,16 @@ export function Shell() {
     setupReadyCount < setupEntries.length;
   const connected = connectionState.connected;
   const connectionLabel = connectionState.label;
+  const version = state.installedVersion;
+  const versionDetails = version
+    ? [
+        `Farol ${version.version}${state.environment === "dev" ? " · Dev" : state.environment === "owner-preview" ? " · Owner Preview" : ""}`,
+        ...(version.buildVersion ? [`Build ${version.buildVersion}`] : []),
+        `Built ${new Date(version.builtAt).toLocaleString("en-US")}`,
+        `Source ${version.sourceCommit.slice(0, 12)}${version.sourceDirty ? " (dirty)" : ""}`,
+        ...(state.buildId ? [`Build ID ${state.buildId}`] : []),
+      ].join("\n")
+    : null;
   const sidebarLabel = expanded ? "Collapse sidebar" : "Expand sidebar";
   const updateRailLabel =
     state.update.phase === "available"
@@ -1314,6 +1324,17 @@ export function Shell() {
               <Icon name="settings" />
               <span className="rail-label">Settings</span>
             </button>
+          )}
+          {version && versionDetails && (
+            <div
+              className="rail-version"
+              title={versionDetails}
+              aria-label={versionDetails}
+              tabIndex={0}
+            >
+              v{version.version}
+              {state.environment === "dev" ? " · Dev" : ""}
+            </div>
           )}
         </div>
       </nav>

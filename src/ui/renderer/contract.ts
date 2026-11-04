@@ -199,6 +199,9 @@ export type WindowSnapshot = Readonly<{
   installedVersion: Readonly<{
     version: string;
     buildVersion: string | null;
+    builtAt: string;
+    sourceCommit: string;
+    sourceDirty: boolean;
   }> | null;
   configuration: ProductConfigurationSnapshot | null;
   tasks: ProductTasksState;
