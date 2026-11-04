@@ -74,6 +74,8 @@ export function retainedDevMarkerMatches(markerFile, original) {
 function ps(args, budget = 3000) {
   const result = spawnSync("/bin/ps", args, {
     encoding: "utf8",
+    // Match the run marker's fixed process-start presentation.
+    env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
     timeout: devControlTimeout(budget),
     maxBuffer: 2 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],

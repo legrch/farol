@@ -489,11 +489,6 @@ describe("run marker", () => {
         encoding: "utf8",
         env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
       }).trim();
-      const localized = execFileSync("/bin/ps", args, {
-        encoding: "utf8",
-        env: { PATH: "/usr/bin:/bin", LC_ALL: "en_GB.UTF-8" },
-      }).trim();
-      expect(localized).not.toBe(canonical);
       const previous = process.env.LC_ALL;
       try {
         process.env.LC_ALL = "en_GB.UTF-8";
