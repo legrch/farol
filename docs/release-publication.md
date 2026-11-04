@@ -243,7 +243,8 @@ mutation and refuses any change. It does not rebuild, create a tag/release,
 upload/replace assets or delete a release. Only explicit promotion may edit
 the previously published numeric test release. Its only final
 mutation is `PATCH /repos/legrch/farol/releases/<same-id>` with
-`{draft:false, prerelease:<selected channel flag>, make_latest:"false"}`. This is a final read gate,
+`{draft:false, prerelease:<selected channel flag>, make_latest:"false"}`; promotion
+also changes the title from `Farol v<version> (test)` to `Farol v<version>`. This is a final read gate,
 not an atomic compare-and-swap: Root must keep the selected tag/draft/assets
 quiescent while the serialized workflow runs. No separate concurrent writer is
 authorized by this sequence.
@@ -274,7 +275,8 @@ and digest, plus `tag_object_sha` and the three recorded `asset_ids` as
 comma-separated decimal IDs. The publisher requires a public prerelease with
 that exact identity, checks and downloads its same three assets, revalidates all
 identities, then performs one PATCH setting `prerelease: false` and
-`make_latest: "false"`. It does not build, change the tag, or upload or replace
+`make_latest: "false"` and removes the test marker from the title. It does not
+build, change the tag, or upload or replace
 assets. The recorded IDs are operator assertions, not proof that real E2E or
 other acceptance gates passed. Keep the release, tag and assets quiescent during
 the operation; the final read and PATCH are not atomic. Reconcile any refused

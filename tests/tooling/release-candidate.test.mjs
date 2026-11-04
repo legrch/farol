@@ -668,7 +668,12 @@ describe("numeric test release and immutable promotion (mocked HTTP only)", () =
       {
         endpoint: `${f.base}/releases/300`,
         method: "PATCH",
-        body: { draft: false, prerelease: false, make_latest: "false" },
+        body: {
+          draft: false,
+          prerelease: false,
+          make_latest: "false",
+          name: "Farol v0.5.9",
+        },
       },
     ]);
   });
@@ -978,6 +983,24 @@ describe("fixed GitHub API transport", () => {
     );
     await expect(
       api("/repos/legrch/farol/releases", { method: "POST", body: {} }),
+    ).rejects.toThrow("METHOD_INVALID");
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+  it("allows only a numeric stable title in the promotion PATCH", async () => {
+    const request = vi.fn(async () => new Response("{}"));
+    const api = githubApi("synthetic-token", request);
+    const body = {
+      draft: false,
+      prerelease: false,
+      make_latest: "false",
+      name: "Farol v0.5.9",
+    };
+    await api("/repos/legrch/farol/releases/300", { method: "PATCH", body });
+    await expect(
+      api("/repos/legrch/farol/releases/300", {
+        method: "PATCH",
+        body: { ...body, name: "Other" },
+      }),
     ).rejects.toThrow("METHOD_INVALID");
     expect(request).toHaveBeenCalledTimes(1);
   });

@@ -46,6 +46,7 @@ function publicationBody(identity, mode) {
       mode === "test" ||
       (mode === "production" && candidatePrerelease(identity)),
     make_latest: "false",
+    ...(mode === "promote" ? { name: `Farol ${identity.tag}` } : {}),
   };
 }
 export function candidateIdentity(document, head, runId, attempt) {
@@ -358,7 +359,11 @@ export async function publishCandidate({
   requireThat(
     published?.id === releaseId &&
       published.tag_name === draft.tag &&
-      (publicationMode === "production" || published.name === draft.name) &&
+      (publicationMode === "production" ||
+        published.name ===
+          (publicationMode === "promote"
+            ? `Farol ${metadata.identity.tag}`
+            : draft.name)) &&
       published.draft === false &&
       published.prerelease ===
         publicationBody(metadata.identity, publicationMode).prerelease &&
@@ -385,7 +390,7 @@ export function githubApi(token, fetchImpl = fetch) {
       (method === "GET" && body === undefined) ||
         (method === "PATCH" &&
           /^\/repos\/legrch\/farol\/releases\/[1-9][0-9]*$/u.test(endpoint) &&
-          [true, false].some(
+          ([true, false].some(
             (prerelease) =>
               JSON.stringify(body) ===
               JSON.stringify({
@@ -393,7 +398,18 @@ export function githubApi(token, fetchImpl = fetch) {
                 prerelease,
                 make_latest: "false",
               }),
-          )),
+          ) ||
+            (typeof body?.name === "string" &&
+              /^Farol v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u.test(
+                body.name,
+              ) &&
+              JSON.stringify(body) ===
+                JSON.stringify({
+                  draft: false,
+                  prerelease: false,
+                  make_latest: "false",
+                  name: body.name,
+                })))),
       "API_METHOD_INVALID",
     );
     let response;
