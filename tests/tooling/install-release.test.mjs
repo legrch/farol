@@ -268,10 +268,12 @@ for (const scenario of [
   "process-title",
   "cursor-farol",
   "other-checkout",
+  "vanished-after-quit",
 ]) {
   test(`isolated ${scenario} process is handled without touching unrelated apps`, () => {
     isolatedInstall(scenario, (result, _root, log) => {
       assert.equal(result.status, 0, result.stderr);
+      assert.doesNotMatch(result.stderr, /Traceback|Process inspection failed/);
       assert.match(log, /osascript/);
       assert.match(log, /ditto-backup/);
     });
@@ -289,6 +291,7 @@ for (const scenario of [
   "backend-remains",
   "bad-tree",
   "unexpected-descendant",
+  "inspection-error",
 ]) {
   test(`isolated ${scenario} preserves the existing app and recovery files`, () => {
     isolatedInstall(scenario, (result, root, log) => {
@@ -348,6 +351,11 @@ else if (cmd === 'ps') {
     if (['private-and-public', 'snapshot', 'helper', 'stubborn'].includes(process.env.SCENARIO)) console.log('45 ' + app + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
   }
   if (process.env.SCENARIO === 'unknown') console.log('43 farol-backend');
+  if (process.env.SCENARIO === 'inspection-error') console.log('43 farol-backend');
+  if (process.env.SCENARIO === 'vanished-after-quit' && !fs.existsSync(path.join(root, 'running')) && !fs.existsSync(path.join(root, 'stale-sampled'))) {
+    fs.writeFileSync(path.join(root, 'stale-sampled'), 'yes');
+    console.log('43 farol-backend');
+  }
   if (process.env.SCENARIO === 'other-farol-app') console.log('44 /tmp/other/Farol.app/Contents/MacOS/Electron');
   if (process.env.SCENARIO === 'other-private-launch') console.log('44 /Users/other/Library/Application Support/io.github.legrch.farol/installed-updates/operation/launch-Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
   if (process.env.SCENARIO === 'dev') console.log('44 /Applications/Farol Dev.app/Contents/MacOS/Farol Dev');
@@ -412,6 +420,10 @@ else process.exit(2);
       .replace(
         "found = False\nmain_pids = []\ntry:",
         `def resolve_executable(pid):
+    if pid == 43 and os.environ['SCENARIO'] == 'inspection-error':
+        raise RuntimeError('fixture inspection error')
+    if pid == 43 and os.environ['SCENARIO'] == 'vanished-after-quit':
+        return None
     if pid == 42:
         return installed + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron'
     if pid == 44:
