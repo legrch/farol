@@ -3141,7 +3141,14 @@ async function native(selected, inputs, report, save) {
           await reopened.window
             .getByRole("button", { name: "Home", exact: true })
             .click({ timeout: 5000 });
-        } else retainedSettings(reopened.settings, savedSettings.value);
+        } else {
+          retainedSettings(reopened.settings, savedSettings.value);
+          // Incomplete Setup starts on Welcome even when openAtLaunch is Home.
+          // Navigate explicitly before asserting the retained Home state.
+          await reopened.window
+            .getByRole("button", { name: "Home", exact: true })
+            .click({ timeout: 5000 });
+        }
         await reopened.window
           .locator("[data-home-view]")
           .waitFor({ state: "visible", timeout: 5000 });
