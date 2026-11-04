@@ -216,7 +216,7 @@ test("isolated installation orders checks, quit, backup and launch", () => {
     assert.match(result.stdout, /Installed and running: Farol 1\.2\.3/);
     assert.match(
       result.stdout,
-      /Outer app: unsigned; executable signatures verified/,
+      /Outer app: unsigned; executable signatures and release tree verified/,
     );
     assert.match(result.stdout, /Updater status: not confirmed/);
     assert.ok(log.indexOf("codesign") < log.indexOf("osascript"));

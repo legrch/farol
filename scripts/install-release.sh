@@ -202,15 +202,20 @@ exec "$contents_dir/Resources/app/farol-backend" run-desktop-launcher "$@"
 LAUNCHER
 launcher="$app/Contents/MacOS/Farol"
 [ -f "$launcher" ] && [ ! -L "$launcher" ] && [ -x "$launcher" ] && /usr/bin/cmp -s "$launcher" "$tmp/expected-launcher" || fail 'launcher does not match package contract'
-for binary in "$app/Contents/Resources/app/farol-backend" "$app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron"; do
+backend="$app/Contents/Resources/app/farol-backend"
+electron="$app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron"
+for binary in "$backend" "$electron"; do
   [ -f "$binary" ] && [ ! -L "$binary" ] && [ -x "$binary" ] || fail 'packaged executable missing or invalid'
-  /usr/bin/codesign --verify --strict "$binary" || fail 'executable signature verification failed'
 done
+/usr/bin/codesign --verify --strict "$backend" || fail 'backend signature verification failed'
+# Electron ships with a linker ad-hoc signature and no resource seal. Verify
+# its executable signature; validate_archive already checked the entire tree.
+/usr/bin/codesign --verify --strict --ignore-resources "$electron" || fail 'Electron signature verification failed'
 if signature=$(/usr/bin/codesign -d "$app" 2>&1); then
   fail 'outer app is signed; release package contract expects an unsigned outer app'
 else
   case "$signature" in
-    *'code object is not signed at all'*) printf '%s\n' 'Outer app: unsigned; executable signatures verified' ;;
+    *'code object is not signed at all'*) printf '%s\n' 'Outer app: unsigned; executable signatures and release tree verified (Electron has no resource seal)' ;;
     *) fail 'cannot determine outer app signing status' ;;
   esac
 fi
