@@ -397,9 +397,8 @@ describe("promote-preview CLI as a process: the composition around a seeded prof
     );
     expect(await absent(f.destination)).toBe(true);
 
-    // S35-H1-3: the same live pid, on the same boot, but the process
-    // wearing the number now started at a different time — the marker's
-    // writer is gone and its number was reused.
+    // A same-boot live pid with a different token may be a reused number
+    // or a legacy marker rendered under another locale or timezone.
     await writeRunMarker(state, {
       pid: process.pid,
       now: Date.now(),
@@ -409,7 +408,7 @@ describe("promote-preview CLI as a process: the composition around a seeded prof
     const reused = await f.cli("--apply", "--destination", f.destination);
     expect(reused.code).toBe(1);
     expect(reused.stderr).toContain(
-      "PROMOTION_DRAIN_REQUIRED:QUIT_UNCONFIRMED:crash",
+      "PROMOTION_STATE_UNREADABLE:running:BOOT_UNKNOWN",
     );
     expect(reused.stderr).not.toContain("APP_RUNNING");
     expect(await absent(f.destination)).toBe(true);
