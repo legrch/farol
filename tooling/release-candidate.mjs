@@ -39,14 +39,11 @@ function candidatePrerelease(identity) {
   );
   return true;
 }
-function publicationBody(identity, mode) {
+function publicationBody(identity) {
   return {
     draft: false,
-    prerelease:
-      mode === "test" ||
-      (mode === "production" && candidatePrerelease(identity)),
+    prerelease: candidatePrerelease(identity),
     make_latest: "false",
-    ...(mode === "promote" ? { name: `Farol ${identity.tag}` } : {}),
   };
 }
 export function candidateIdentity(document, head, runId, attempt) {
@@ -192,37 +189,24 @@ function assetIdentities(assets, identity) {
     .map(({ id, name, size, state }) => ({ id, name, size, state }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
-function validateDraft(release, releaseId, identity, mode) {
-  const promote = mode === "promote";
+function validateDraft(release, releaseId, identity) {
   requireThat(
     id(releaseId) &&
       release?.id === releaseId &&
       release.tag_name === identity.tag &&
-      (mode === "production" ||
-        release.name === `Farol ${identity.tag} (test)`) &&
-      release.draft === !promote &&
-      release.prerelease ===
-        (promote || mode === "test" || candidatePrerelease(identity)) &&
-      (promote
-        ? Number.isFinite(Date.parse(release.published_at))
-        : release.published_at === null),
+      release.draft === true &&
+      release.prerelease === candidatePrerelease(identity) &&
+      release.published_at === null,
     "PRIVATE_DRAFT_REQUIRED",
   );
   return {
     id: releaseId,
     tag: identity.tag,
-    publishedAt: release.published_at,
-    ...(mode === "production" ? {} : { name: release.name }),
     assets: assetIdentities(release.assets, identity),
   };
 }
 
-export async function publicationPreconditions(
-  api,
-  identity,
-  releaseId,
-  mode = "production",
-) {
+export async function publicationPreconditions(api, identity, releaseId) {
   const ref = await api(`${base}/git/ref/tags/${identity.tag}`);
   requireThat(
     ref?.ref === `refs/tags/${identity.tag}` &&
@@ -242,7 +226,6 @@ export async function publicationPreconditions(
     await api(`${base}/releases/${releaseId}`),
     releaseId,
     identity,
-    mode,
   );
   const assets = assetIdentities(
     await api(`${base}/releases/${releaseId}/assets?per_page=100`),
@@ -264,17 +247,16 @@ export async function publicationPreconditions(
   const matching = releases.filter((item) => item.tag_name === identity.tag);
   requireThat(
     matching.length === 1 &&
-      JSON.stringify(validateDraft(matching[0], releaseId, identity, mode)) ===
+      JSON.stringify(validateDraft(matching[0], releaseId, identity)) ===
         JSON.stringify(draft),
     "RELEASE_CONFLICT",
   );
   const byTag = await api(`${base}/releases/tags/${identity.tag}`, {
     absent: true,
   });
-  if (mode === "promote") requireThat(byTag !== null, "RELEASE_CONFLICT");
   if (byTag !== null)
     requireThat(
-      JSON.stringify(validateDraft(byTag, releaseId, identity, mode)) ===
+      JSON.stringify(validateDraft(byTag, releaseId, identity)) ===
         JSON.stringify(draft),
       "RELEASE_CONFLICT",
     );
@@ -289,43 +271,15 @@ export async function publishCandidate({
   git,
   api,
   download,
-  publicationMode = "production",
-  expectedTagObject,
-  expectedAssetIds,
 }) {
-  requireThat(
-    ["production", "test", "promote"].includes(publicationMode),
-    "MODE_INVALID",
-  );
   const metadata = await readMetadata();
   validateCandidate(metadata);
-  requireThat(
-    publicationMode === "production" || !candidatePrerelease(metadata.identity),
-    "MODE_CHANNEL_MISMATCH",
-  );
   verifySource(metadata.identity, dispatchSha, git);
   const draft = await publicationPreconditions(
     api,
     metadata.identity,
     releaseId,
-    publicationMode,
   );
-  if (publicationMode === "promote") {
-    requireThat(
-      typeof expectedTagObject === "string" &&
-        sha.test(expectedTagObject) &&
-        draft.tagObject === expectedTagObject &&
-        Array.isArray(expectedAssetIds) &&
-        expectedAssetIds.length === 3 &&
-        expectedAssetIds.every(id) &&
-        new Set(expectedAssetIds).size === 3 &&
-        JSON.stringify([...expectedAssetIds].sort((a, b) => a - b)) ===
-          JSON.stringify(
-            draft.assets.map((asset) => asset.id).sort((a, b) => a - b),
-          ),
-      "PROMOTION_IDENTITY_MISMATCH",
-    );
-  }
   await download(draft.assets, directory, metadata.identity);
   await verifyCandidateAssets(
     directory,
@@ -343,30 +297,19 @@ export async function publishCandidate({
   verifySource(metadata.identity, dispatchSha, git);
   requireThat(
     JSON.stringify(
-      await publicationPreconditions(
-        api,
-        metadata.identity,
-        releaseId,
-        publicationMode,
-      ),
+      await publicationPreconditions(api, metadata.identity, releaseId),
     ) === JSON.stringify(draft),
     "DRAFT_CHANGED",
   );
   const published = await api(`${base}/releases/${releaseId}`, {
     method: "PATCH",
-    body: publicationBody(metadata.identity, publicationMode),
+    body: publicationBody(metadata.identity),
   });
   requireThat(
     published?.id === releaseId &&
       published.tag_name === draft.tag &&
-      (publicationMode === "production" ||
-        published.name ===
-          (publicationMode === "promote"
-            ? `Farol ${metadata.identity.tag}`
-            : draft.name)) &&
       published.draft === false &&
-      published.prerelease ===
-        publicationBody(metadata.identity, publicationMode).prerelease &&
+      published.prerelease === candidatePrerelease(metadata.identity) &&
       Number.isFinite(Date.parse(published.published_at)) &&
       JSON.stringify(assetIdentities(published.assets, metadata.identity)) ===
         JSON.stringify(draft.assets),
@@ -390,7 +333,7 @@ export function githubApi(token, fetchImpl = fetch) {
       (method === "GET" && body === undefined) ||
         (method === "PATCH" &&
           /^\/repos\/legrch\/farol\/releases\/[1-9][0-9]*$/u.test(endpoint) &&
-          ([true, false].some(
+          [true, false].some(
             (prerelease) =>
               JSON.stringify(body) ===
               JSON.stringify({
@@ -398,18 +341,7 @@ export function githubApi(token, fetchImpl = fetch) {
                 prerelease,
                 make_latest: "false",
               }),
-          ) ||
-            (typeof body?.name === "string" &&
-              /^Farol v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u.test(
-                body.name,
-              ) &&
-              JSON.stringify(body) ===
-                JSON.stringify({
-                  draft: false,
-                  prerelease: false,
-                  make_latest: "false",
-                  name: body.name,
-                })))),
+          )),
       "API_METHOD_INVALID",
     );
     let response;
@@ -667,18 +599,6 @@ async function main() {
     "PUBLISH_INPUT_INVALID",
   );
   requireThat(
-    ["production", "test", "promote"].includes(event.inputs.publication_mode),
-    "MODE_INVALID",
-  );
-  const expectedAssetIds = event.inputs.asset_ids
-    ?.split(",")
-    .map((value) => (/^[1-9][0-9]*$/u.test(value) ? Number(value) : NaN));
-  if (event.inputs.publication_mode !== "promote")
-    requireThat(
-      !event.inputs.tag_object_sha && !event.inputs.asset_ids,
-      "PROMOTION_INPUT_UNEXPECTED",
-    );
-  requireThat(
     isDigest(event.inputs.manifest_sha256),
     "MANIFEST_DIGEST_REQUIRED",
   );
@@ -761,9 +681,6 @@ async function main() {
   };
   await publishCandidate({
     readMetadata,
-    publicationMode: event.inputs.publication_mode,
-    expectedTagObject: event.inputs.tag_object_sha,
-    expectedAssetIds,
     releaseId: Number(event.inputs.draft_release_id),
     directory: path.join(fs.realpathSync("."), "_qualified-release-assets"),
     dispatchSha: process.env.GITHUB_SHA,

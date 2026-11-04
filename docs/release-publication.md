@@ -140,8 +140,8 @@ The hosted build is source/package evidence. A `v*` push or an explicit
 `task package`, offline three-asset preparation and `verifyReleaseAssets` gates.
 The exact version and channel come from `package.json`: ordinary semantic
 versions select `github-stable`; `-owner.beta.N` versions select
-`github-owner-beta`. Production publication requires the version-matched GitHub prerelease flag;
-the explicit numeric test and promotion modes are described below. Publication keeps `make_latest: false` and
+`github-owner-beta`. The private draft and final publication must have the
+matching GitHub prerelease flag. Publication keeps `make_latest: false` and
 changes only the qualified draft; it never changes tags or chooses another
 candidate. The source must be an ancestor of accepted `origin/main`.
 Tag runs also verify the exact annotated remote version tag. Neither route
@@ -217,8 +217,8 @@ running, unknown, foreign, publish-only, same-run or prepare-dispatch candidates
 refuse. Incomplete job or release listings fail closed.
 
 The exact remote tag must already be annotated, name this version and point
-directly to this source commit. For initial publication, the supplied release ID must identify the
-unpublished private draft for that tag with the selected mode's `prerelease` flag,
+directly to this source commit. The supplied release ID must identify the
+unpublished private draft for that tag with the matching `prerelease` flag,
 `published_at: null` and exactly three uploaded assets with unique immutable
 IDs, expected names and bounded sizes. The separate asset listing must agree.
 An existing public release, another same-tag draft, extra/private file, missing
@@ -240,11 +240,9 @@ It then binds the supplied manifest SHA256 and calls the existing
 `verifyReleaseAssets` for archive size/digest/checksums and source/version. It
 re-fetches run/attempt, remote tag object, draft and asset identities before
 mutation and refuses any change. It does not rebuild, create a tag/release,
-upload/replace assets or delete a release. Only explicit promotion may edit
-the previously published numeric test release. Its only final
+upload/replace assets, delete or edit a published release. Its only final
 mutation is `PATCH /repos/legrch/farol/releases/<same-id>` with
-`{draft:false, prerelease:<selected channel flag>, make_latest:"false"}`; promotion
-also changes the title from `Farol v<version> (test)` to `Farol v<version>`. This is a final read gate,
+`{draft:false, prerelease:<selected channel flag>, make_latest:"false"}`. This is a final read gate,
 not an atomic compare-and-swap: Root must keep the selected tag/draft/assets
 quiescent while the serialized workflow runs. No separate concurrent writer is
 authorized by this sequence.
@@ -255,33 +253,3 @@ are never logged. Reconcile the original operation; never retry an unknown or
 refused publication. Mocked transports and synthetic archive tests establish
 local refusal/order/size/redirect behavior only. They do not qualify real GitHub
 visibility or publication, hosted CI, native execution or owner acceptance.
-
-### Numeric test release and promotion
-
-For an explicitly selected numeric stable version such as `0.5.9`, the
-`github-stable` package and manifest remain unchanged. Stage its private draft
-with `--prerelease` and the exact title `Farol v<version> (test)`. Select
-`publication_mode: test` on the publish dispatch. The publisher requires that
-exact prerelease draft and sends `prerelease: true, make_latest: "false"`.
-`production` requires the ordinary version-matched draft; neither mode silently
-selects the other. `select` is invalid. Owner-beta versions continue to use
-`production` and cannot use numeric test or promotion mode.
-
-Record the exact release ID, annotated tag object SHA, all three asset IDs,
-manifest SHA256 and successful tag build run ID from the first publication.
-After real E2E and the applicable owner gates, dispatch the same workflow at
-the same source with `publication_mode: promote`, the same release ID, run ID
-and digest, plus `tag_object_sha` and the three recorded `asset_ids` as
-comma-separated decimal IDs. The publisher requires a public prerelease with
-that exact identity, checks and downloads its same three assets, revalidates all
-identities, then performs one PATCH setting `prerelease: false` and
-`make_latest: "false"` and removes the test marker from the title. It does not
-build, change the tag, or upload or replace
-assets. The recorded IDs are operator assertions, not proof that real E2E or
-other acceptance gates passed. Keep the release, tag and assets quiescent during
-the operation; the final read and PATCH are not atomic. Reconcile any refused
-or outcome-unknown publication or promotion without replaying it.
-
-The installed `0.5.8` live catalogue currently fails to parse a numeric
-prerelease. That remains a release blocker until fixed and verified in the
-real update path; these mocked tooling checks do not resolve it.

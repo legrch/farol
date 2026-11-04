@@ -36,7 +36,6 @@ type RecordValue = Record<string, unknown>;
 type Release = Readonly<{
   tag: string;
   version: string;
-  prerelease: boolean;
   assets: readonly ReleaseAsset[];
   notes?: string;
 }>;
@@ -106,10 +105,8 @@ function parseRelease(value: unknown): Outcome<Release | null> {
   const version = data.tag_name.slice(1);
   if (!parseReleaseVersion(version)) return failure("invalid_release_metadata");
   if (data.draft) return { ok: true, value: null };
-  // A semver prerelease may never be advertised as stable. A numeric version
-  // may be published temporarily as a test prerelease, without making it an
-  // update candidate for stable clients.
-  if (version.includes("-") && !data.prerelease)
+  // A stable release must not advertise a prerelease version or vice versa.
+  if (data.prerelease !== version.includes("-"))
     return failure("invalid_release_metadata");
   const assets: ReleaseAsset[] = [];
   for (const raw of data.assets) {
@@ -129,7 +126,6 @@ function parseRelease(value: unknown): Outcome<Release | null> {
     value: {
       tag: data.tag_name,
       version,
-      prerelease: data.prerelease,
       assets,
       ...(notes ? { notes } : {}),
     },
@@ -386,9 +382,6 @@ export async function discoverGithubUpdate(
     const release = parsed.value;
     if (!release || !versionBelongsToChannel(release.version, channel))
       continue;
-    // Numeric test prereleases can anchor the exact installed build, but must
-    // not be offered by normal stable update discovery before promotion.
-    if (release.prerelease && !release.version.includes("-")) continue;
     const comparison = compareReleaseVersions(
       release.version,
       installed.version,
