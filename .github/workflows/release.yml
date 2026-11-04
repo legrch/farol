@@ -11,6 +11,18 @@ on:
         type: choice
         options: [prepare, publish]
         default: prepare
+      publication_mode:
+        description: Explicit publication mode (test, production, or promotion after E2E)
+        type: choice
+        required: true
+        options: [select, production, test, promote]
+        default: select
+      tag_object_sha:
+        description: Previously recorded annotated tag object SHA (promote only)
+        type: string
+      asset_ids:
+        description: Previously recorded three asset IDs, comma-separated (promote only)
+        type: string
       candidate_run_id:
         description: Prior successful tag build-only run ID (publish only)
         type: string
@@ -90,7 +102,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24.20.0
-      - name: Verify the tag build and qualified private draft, then publish once
+      - name: Verify the tag build and exact release, then apply the selected mode once
         env:
           GH_TOKEN: ${{ github.token }}
         # Read prior run/job metadata with actions:read; only this job can PATCH

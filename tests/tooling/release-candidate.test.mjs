@@ -174,7 +174,12 @@ function fixture(selectedDocument = document) {
     api: async (endpoint, { body, method } = {}) => {
       if (body) {
         effects.push({ endpoint, body, method });
-        return { ...draft, draft: false, published_at: "2026-10-23T11:00:00Z" };
+        return {
+          ...draft,
+          ...body,
+          draft: false,
+          published_at: "2026-10-23T11:00:00Z",
+        };
       }
       reads.push(endpoint);
       if (!responses.has(endpoint)) throw Error("unexpected read");
@@ -611,6 +616,97 @@ describe("private qualified draft publication (mocked HTTP only)", () => {
       candidateIdentity({ ...document, version }, head, 100, 1),
     ).toThrow();
   });
+});
+
+describe("numeric test release and immutable promotion (mocked HTTP only)", () => {
+  const stable = {
+    version: "0.5.9",
+    farolRelease: { updateChannel: "github-stable", buildVersion: "65" },
+  };
+  function testFixture() {
+    const f = fixture(stable);
+    f.draft.prerelease = true;
+    f.draft.name = `Farol ${f.metadata.identity.tag} (test)`;
+    f.options.publicationMode = "test";
+    return f;
+  }
+  function promotionFixture() {
+    const f = testFixture();
+    f.draft.draft = false;
+    f.draft.published_at = "2026-10-23T11:00:00Z";
+    f.responses.set(
+      `${f.base}/releases/tags/${f.metadata.identity.tag}`,
+      f.draft,
+    );
+    f.options.publicationMode = "promote";
+    f.options.expectedTagObject = f.tagObject;
+    f.options.expectedAssetIds = f.assets.map((asset) => asset.id);
+    return f;
+  }
+  it("publishes a numeric test draft as a prerelease, never latest", async () => {
+    const f = testFixture();
+    await publishCandidate(f.options);
+    expect(f.effects[0].body).toEqual({
+      draft: false,
+      prerelease: true,
+      make_latest: "false",
+    });
+  });
+  it("refuses a test draft in production mode and a production draft in test mode", async () => {
+    const f = testFixture();
+    f.options.publicationMode = "production";
+    await expect(publishCandidate(f.options)).rejects.toThrow();
+    const g = fixture(stable);
+    g.options.publicationMode = "test";
+    await expect(publishCandidate(g.options)).rejects.toThrow();
+    expect([...f.effects, ...g.effects]).toEqual([]);
+  });
+  it("promotes only the same pinned public release, annotated tag and assets", async () => {
+    const f = promotionFixture();
+    await publishCandidate(f.options);
+    expect(f.effects).toEqual([
+      {
+        endpoint: `${f.base}/releases/300`,
+        method: "PATCH",
+        body: { draft: false, prerelease: false, make_latest: "false" },
+      },
+    ]);
+  });
+  it("does not retry an outcome-unknown promotion", async () => {
+    const f = promotionFixture();
+    const api = f.options.api;
+    f.options.api = async (endpoint, options = {}) => {
+      if (options.body) {
+        f.effects.push(endpoint);
+        throw Error("RELEASE_CANDIDATE_GITHUB_TRANSPORT_UNKNOWN");
+      }
+      return api(endpoint, options);
+    };
+    await expect(publishCandidate(f.options)).rejects.toThrow(
+      "TRANSPORT_UNKNOWN",
+    );
+    expect(f.effects).toEqual([`${f.base}/releases/300`]);
+  });
+  it.each(["tag", "asset", "draft", "title", "mode", "drift"])(
+    "refuses promotion with %s ambiguity",
+    async (fault) => {
+      const f = promotionFixture();
+      if (fault === "tag") f.options.expectedTagObject = "c".repeat(40);
+      if (fault === "asset") f.options.expectedAssetIds[0]++;
+      if (fault === "draft") f.draft.draft = true;
+      if (fault === "title") f.draft.name = "other";
+      if (fault === "mode") f.options.publicationMode = "other";
+      if (fault === "drift") {
+        const download = f.options.download;
+        f.options.download = async (...args) => {
+          await download(...args);
+          f.assets[0].id += 10;
+        };
+      }
+      await expect(publishCandidate(f.options)).rejects.toThrow();
+      expect(f.effects).toEqual([]);
+    },
+  );
 });
 
 describe("bounded private asset transport (no network)", () => {
