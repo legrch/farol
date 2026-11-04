@@ -9,7 +9,7 @@ on:
         description: Run build-only checks, or publish an exact qualified private draft
         required: true
         type: choice
-        options: [prepare, publish, diagnostic-0356]
+        options: [prepare, publish, diagnostic-0356, network-0429]
         default: prepare
       candidate_run_id:
         description: Prior successful tag build-only run ID (publish only)
@@ -30,6 +30,40 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  native-https-diagnostic:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'network-0429'
+    runs-on: macos-26
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Inspect direct HTTPS without starting Farol or using credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import https from 'node:https';
+          const headers = {'User-Agent':'Farol-Update/1', 'Accept':'application/vnd.github+json', 'Accept-Encoding':'identity'};
+          const request = (url) => new Promise((resolve) => {
+            const req = https.get(url, {headers, rejectUnauthorized:true, agent:false}, res => {
+              const meta = {host:new URL(url).hostname, status:res.statusCode, encoding:res.headers['content-encoding'] ?? null, length:res.headers['content-length'] ?? null, rateLimit:res.headers['x-ratelimit-limit'] ?? null, rateRemaining:res.headers['x-ratelimit-remaining'] ?? null, redirectHost:res.headers.location ? new URL(res.headers.location).hostname : null};
+              let bytes = 0; res.on('data', b => { bytes += b.length; });
+              res.on('end', () => resolve({ ...meta, bytes, complete:res.complete, location:res.headers.location ?? null }));
+              res.on('error', e => resolve({ ...meta, error:e.code ?? e.name }));
+            });
+            req.setTimeout(30000, () => req.destroy(new Error('HTTPS request timeout')));
+            req.on('error', e => resolve({host:new URL(url).hostname, error:e.code ?? e.name}));
+          });
+          console.log('node', process.version, 'platform', process.platform, process.arch);
+          for (const [name,url] of [['catalogue','https://api.github.com/repos/legrch/farol/releases?per_page=100'], ['manifest','https://github.com/legrch/farol/releases/download/v0.5.8/farol-release.json']]) {
+            const first = await request(url);
+            const { location, ...safe } = first; console.log(name, JSON.stringify(safe));
+            if (location && first.redirectHost === 'release-assets.githubusercontent.com') {
+              const next = await request(location); const { location:ignored, ...safeNext } = next;
+              console.log(name + '-cdn', JSON.stringify(safeNext));
+            }
+          }
+          NODE
+
   api-rate-limit-diagnostic:
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'diagnostic-0356'
     runs-on: macos-26
