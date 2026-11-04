@@ -112,6 +112,18 @@ describe("repository delivery policy", () => {
       },
     ],
     [
+      "witness archive upload",
+      (_p, r) => {
+        r.jobs["witness-native"].steps[2].with.path += "*.zip\n";
+      },
+    ],
+    [
+      "witness runs on release tag",
+      (_p, r) => {
+        r.jobs["witness-native"].if = "true";
+      },
+    ],
+    [
       "binary cache transfer",
       (_p, r) => {
         r.jobs.build.steps.push({

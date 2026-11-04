@@ -291,6 +291,7 @@ describe("two-phase release workflow", () => {
       "prepare",
       "publish",
       "witness-preflight",
+      "witness-native",
     ]);
     expect(release.jobs.build.if).toBe(
       "github.event_name == 'push' || inputs.action == 'prepare'",
@@ -307,7 +308,7 @@ describe("two-phase release workflow", () => {
     ])
       expect(commands).toContain(gate);
     expect(commands).not.toMatch(/gh release|git push/u);
-    expect(JSON.stringify(release)).not.toMatch(
+    expect(JSON.stringify(release.jobs.build)).not.toMatch(
       /actions\/(?:upload|download)-artifact|actions\/cache/u,
     );
   });

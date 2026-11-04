@@ -20,7 +20,7 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
     release: "version-tag",
     deploy: "verified-tag",
     requiredChecks: ["changes", "checks", "portable", "native", "required"],
-    releaseJobs: ["witness-preflight", "build", "publish"],
+    releaseJobs: ["witness-native", "witness-preflight", "build", "publish"],
     tagPattern: "v*",
     versionSource: "package.json",
     prerelease: "version-channel",
@@ -49,6 +49,7 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
     "prepare",
     "publish",
     "witness-preflight",
+    "witness-native",
   ]);
   assert.equal(inputs.action.default, "prepare");
   for (const key of ["candidate_run_id", "draft_release_id", "manifest_sha256"])
@@ -64,7 +65,10 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
   for (const workflow of [pr, release]) {
     assert.deepEqual(workflow.permissions, { contents: "read" });
     for (const [id, job] of Object.entries(workflow.jobs)) {
-      if (workflow === release && id === "witness-preflight")
+      if (
+        workflow === release &&
+        ["witness-native", "witness-preflight"].includes(id)
+      )
         assert.deepEqual(job.permissions, {});
       else if (workflow === release && id === "publish")
         assert.deepEqual(job.permissions, {
@@ -151,6 +155,10 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
   assert.match(commands(pr.jobs.required), /test "\$NATIVE" = success/u);
   assert.equal(release.jobs.build["runs-on"], "macos-26");
   assert.equal(
+    release.jobs["witness-native"].if,
+    "github.event_name == 'workflow_dispatch' && inputs.action == 'witness-native'",
+  );
+  assert.equal(
     release.jobs["witness-preflight"].if,
     "github.event_name == 'workflow_dispatch' && inputs.action == 'witness-preflight'",
   );
@@ -191,9 +199,39 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
     ],
   );
   assert.doesNotMatch(
-    JSON.stringify(release),
+    JSON.stringify({
+      on: release.on,
+      build: release.jobs.build,
+      publish: release.jobs.publish,
+      preflight: release.jobs["witness-preflight"],
+    }),
     /actions\/(?:upload|download)-artifact|actions\/cache|gh release|curl|wget/u,
   );
+  const witness = release.jobs["witness-native"];
+  assert.equal(witness.steps.length, 3);
+  assert.deepEqual(witness.steps.slice(0, 2), [
+    {
+      name: "Fetch exact public candidate without credentials",
+      shell: "bash",
+      run: 'set -euo pipefail\ngit clone -q --no-checkout https://github.com/legrch/farol.git "$RUNNER_TEMP/witness-source"\ngit -C "$RUNNER_TEMP/witness-source" checkout -q --detach "$GITHUB_SHA"\ntest "$(git -C "$RUNNER_TEMP/witness-source" rev-parse HEAD)" = "$GITHUB_SHA"\n',
+    },
+    {
+      name: "Observe published 0.5.8 on the isolated runner",
+      shell: "bash",
+      run: 'cd "$RUNNER_TEMP/witness-source"\n/usr/bin/python3 -I tooling/v058-runner-witness.py\n',
+    },
+  ]);
+  assert.deepEqual(witness.steps[2], {
+    name: "Preserve bounded witness observations",
+    if: "always()",
+    uses: "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+    with: {
+      name: "farol-v058-witness-${{ github.run_id }}",
+      path: "${{ runner.temp }}/farol-v058-witness/*.txt\n${{ runner.temp }}/farol-v058-witness/*.json\n",
+      "if-no-files-found": "warn",
+      "retention-days": 7,
+    },
+  });
   assert.doesNotMatch(build, /base64|cat |tee |git push/u);
   const publish = release.jobs.publish;
   assert.deepEqual(publish.steps.map((step) => step.run).filter(Boolean), [
