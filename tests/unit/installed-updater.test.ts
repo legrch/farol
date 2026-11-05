@@ -2081,18 +2081,15 @@ describe("automatic update preference (ports only; no automatic release acceptan
     expect(ports.download).not.toHaveBeenCalled();
   });
 
-  it("does not download a throttled manual candidate or dispatch on opt-in alone", async () => {
-    const { updater, ports, advance } = preferenceFixture();
+  it("immediately prepares a previously discovered candidate on opt-in", async () => {
+    const { updater, ports } = preferenceFixture();
     await updater.initialize();
     await updater.check(true);
     await updater.setAutomaticUpdatePreference(true);
-    await updater.scheduledCheck();
+    await vi.waitFor(() => expect(updater.snapshot().phase).toBe("ready"));
     expect(ports.discover).toHaveBeenCalledTimes(1);
-    expect(ports.download).not.toHaveBeenCalled();
-    advance(UPDATE_RECHECK_MS);
-    await updater.scheduledCheck();
-    expect(ports.discover).toHaveBeenCalledTimes(2);
     expect(ports.download).toHaveBeenCalledTimes(1);
+    await updater.close();
   });
 
   it("preserves Later and downloads a newly discovered version", async () => {
@@ -2242,7 +2239,7 @@ describe("automatic update preference (ports only; no automatic release acceptan
     },
   );
 
-  it("does not act on an opt-in that settles during an OFF tick", async () => {
+  it("acts once on an opt-in that settles during an OFF tick", async () => {
     const { updater, ports } = preferenceFixture();
     await updater.initialize();
     ports.discover.mockImplementation(async () => {
@@ -2256,7 +2253,175 @@ describe("automatic update preference (ports only; no automatic release acceptan
       };
     });
     await updater.scheduledCheck();
+    await vi.waitFor(() => expect(ports.download).toHaveBeenCalledTimes(1));
+    expect(ports.discover).toHaveBeenCalledTimes(1);
+    await updater.close();
+  });
+
+  it("reconciles a known interruption before fresh discovery and download", async () => {
+    const { updater, ports } = preferenceFixture(true);
+    const order: string[] = [];
+    ports.recover.mockImplementation(async () => {
+      order.push("reconciled");
+      return {
+        ok: false,
+        code: "UPDATE_DOWNLOAD_INTERRUPTED",
+        recoveryRequired: false,
+      };
+    });
+    ports.discover.mockImplementation(async () => {
+      order.push("discovered");
+      return {
+        ok: true,
+        available: true,
+        version: staged.manifest.version,
+        buildId: staged.manifest.buildId,
+        deferred: false,
+      };
+    });
+    ports.download.mockImplementation(async () => {
+      order.push("downloaded");
+      return { ok: true, update: staged };
+    });
+    await updater.initialize();
+    await updater.scheduledCheck();
+    expect(order).toEqual(["reconciled", "discovered", "downloaded"]);
+    await updater.close();
+  });
+
+  it("waits for startup recovery before an ON startup check", async () => {
+    const { updater, ports } = preferenceFixture(true);
+    let recover!: (value: { ok: true; update: null }) => void;
+    ports.recover.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          recover = resolve;
+        }),
+    );
+    const initializing = updater.initialize();
+    await vi.waitFor(() => expect(ports.recover).toHaveBeenCalledTimes(1));
+    await updater.scheduledCheck();
+    expect(ports.discover).not.toHaveBeenCalled();
     expect(ports.download).not.toHaveBeenCalled();
+    recover({ ok: true, update: null });
+    await initializing;
+    await updater.scheduledCheck();
+    expect(ports.discover).toHaveBeenCalledTimes(1);
+    expect(ports.download).toHaveBeenCalledTimes(1);
+    await updater.close();
+  });
+
+  it("never discovers or downloads after an unknown interrupted operation", async () => {
+    const { updater, ports } = preferenceFixture(true);
+    ports.recover.mockResolvedValue({
+      ok: false,
+      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+      recoveryRequired: true,
+    });
+    await updater.initialize();
+    await updater.scheduledCheck();
+    await updater.setAutomaticUpdatePreference(true);
+    await updater.scheduledCheck();
+    expect(ports.discover).not.toHaveBeenCalled();
+    expect(ports.download).not.toHaveBeenCalled();
+    await updater.close();
+  });
+
+  it("coalesces opt-in and concurrent ticks without waiting for transfer ACK", async () => {
+    const { updater, ports } = preferenceFixture();
+    let complete!: (value: { ok: true; update: ReadyUpdate }) => void;
+    ports.download.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+    );
+    await updater.initialize();
+    await updater.check(true);
+    expect(await updater.setAutomaticUpdatePreference(true)).toMatchObject({
+      status: "confirmed",
+      enabled: true,
+    });
+    await vi.waitFor(() => expect(ports.download).toHaveBeenCalledTimes(1));
+    await Promise.all([updater.scheduledCheck(), updater.scheduledCheck()]);
+    expect(ports.discover).toHaveBeenCalledTimes(1);
+    expect(ports.download).toHaveBeenCalledTimes(1);
+    complete({ ok: true, update: staged });
+    await vi.waitFor(() => expect(updater.snapshot().phase).toBe("ready"));
+    await updater.close();
+  });
+
+  it("honors OFF before discovery completes and during an active download", async () => {
+    const f = preferenceFixture();
+    let discover!: (
+      value: Awaited<ReturnType<InstalledUpdaterPorts["discover"]>>,
+    ) => void;
+    f.ports.discover.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          discover = resolve;
+        }),
+    );
+    await f.updater.initialize();
+    const checking = f.updater.scheduledCheck();
+    await vi.waitFor(() => expect(f.ports.discover).toHaveBeenCalledTimes(1));
+    await f.updater.setAutomaticUpdatePreference(true);
+    await f.updater.setAutomaticUpdatePreference(false);
+    discover({
+      ok: true,
+      available: true,
+      version: staged.manifest.version,
+      buildId: staged.manifest.buildId,
+      deferred: false,
+    });
+    await checking;
+    await Promise.resolve();
+    expect(f.ports.download).not.toHaveBeenCalled();
+    await f.updater.close();
+
+    const g = preferenceFixture(true);
+    g.ports.readAutomaticUpdatePreference.mockResolvedValue({
+      status: "confirmed",
+      enabled: true,
+      scope: "download-and-install",
+    });
+    let complete!: (value: { ok: true; update: ReadyUpdate }) => void;
+    g.ports.download.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve;
+        }),
+    );
+    await g.updater.initialize();
+    const downloading = g.updater.scheduledCheck();
+    await vi.waitFor(() => expect(g.ports.download).toHaveBeenCalledTimes(1));
+    await g.updater.setAutomaticUpdatePreference(false);
+    complete({ ok: true, update: staged });
+    await downloading;
+    expect(g.updater.snapshot().phase).toBe("ready");
+    expect(g.ports.restart).not.toHaveBeenCalled();
+    await g.updater.close();
+  });
+
+  it("does not prepare a deferred candidate on opt-in", async () => {
+    const { updater, ports } = preferenceFixture();
+    ports.discover.mockResolvedValue({
+      ok: true,
+      available: true,
+      version: staged.manifest.version,
+      buildId: staged.manifest.buildId,
+      deferred: true,
+    });
+    await updater.initialize();
+    await updater.check(true);
+    await updater.setAutomaticUpdatePreference(true);
+    await updater.scheduledCheck();
+    expect(ports.download).not.toHaveBeenCalled();
+    expect(updater.snapshot()).toMatchObject({
+      phase: "available",
+      deferred: true,
+    });
+    await updater.close();
   });
 
   it("ignores uninitialized, busy and reentrant ticks without duplicating download", async () => {
