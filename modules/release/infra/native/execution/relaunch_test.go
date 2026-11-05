@@ -188,8 +188,9 @@ func TestLaunchArgumentsMustNameTheVerifiedImage(t *testing.T) {
 	}{
 		{"slot install opens the owner slot", false, "", "/Users/owner/Applications/Farol.app", true},
 		{"slot install refuses another app", false, "", "/Applications/Other.app", false},
-		{"shared install opens the verified capture", true, capture, capture, true},
-		{"shared install refuses the shared slot", true, capture, "/Users/owner/Applications/Farol.app", false},
+		{"shared install opens the verified permanent slot", true, capture, "/Applications/Farol.app", true},
+		{"shared install refuses the private capture as a second app", true, capture, capture, false},
+		{"shared install refuses the owner slot", true, capture, "/Users/owner/Applications/Farol.app", false},
 		{"shared install without a capture refuses", true, "", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

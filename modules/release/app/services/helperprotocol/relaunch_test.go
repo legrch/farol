@@ -22,7 +22,7 @@ func TestSidecarRelaunchAddsOnlyClosedExistingPresentationArguments(t *testing.T
 	mode = "primary"
 	p := r.Home + "/Library/Application Support/io.github.legrch.farol/installed-updates/" + r.OperationID + "/launch-Farol.app"
 	args, err := s.BuildRelaunchArguments(context.Background(), "completed", port.HelperSelfIdentity{PID: 5678, ProcessStart: "original helper"}, &p, relaunchCodecFunc(func(port.HelperRelaunchHint) ([]byte, error) { return []byte(`{}`), nil }))
-	if err != nil || len(args) != 7 || args[2] != p || args[4] != "--farol-installed-update-relaunch={}" || args[5] != "--preview-window-mode=secondary-visible" || args[6] != "--sidecar-display-only" {
+	if err != nil || len(args) != 7 || args[2] != "/Applications/Farol.app" || args[4] != "--farol-installed-update-relaunch={}" || args[5] != "--preview-window-mode=secondary-visible" || args[6] != "--sidecar-display-only" {
 		t.Fatalf("presentation binding changed: %v %v", args, err)
 	}
 	got, err := s.Request(context.Background())
@@ -45,7 +45,7 @@ func TestRelaunchBindsTargetAndOwnHelperWithoutDispatch(t *testing.T) {
 		return encoded, nil
 	})
 	arguments, err := s.BuildRelaunchArguments(context.Background(), "completed", helper, &path, codec)
-	if err != nil || len(arguments) != 5 || arguments[0] != "/usr/bin/open" || arguments[1] != "-a" || arguments[2] != originalPath || arguments[3] != "--args" || arguments[4] != "--farol-installed-update-relaunch="+string(encoded) {
+	if err != nil || len(arguments) != 5 || arguments[0] != "/usr/bin/open" || arguments[1] != "-a" || arguments[2] != "/Applications/Farol.app" || arguments[3] != "--args" || arguments[4] != "--farol-installed-update-relaunch="+string(encoded) {
 		t.Fatalf("wrong original launch arguments: %v %v", arguments, err)
 	}
 	if seen.OperationID != r.OperationID || seen.Action != r.Action || seen.Phase != "completed" || seen.BuildID != r.Target.BuildID || seen.Helper != helper || seen.Helper.PID == r.PID {

@@ -156,27 +156,34 @@ func (r *runtime) LaunchTarget(ctx context.Context, self port.HelperSelfIdentity
 			if err != nil {
 				return err
 			}
-			var expected port.HelperIdentity
-			if r.config.Files.SharedParent {
-				if captured == nil || *captured != r.capturePath || r.capturePath == "" {
-					return fail("launch_image_unconfirmed", false, false, nil)
-				}
-				location = installmove.Location{Parent: installmove.Directory{File: r.config.Files.Operation, Identity: installmove.Identity(r.config.Files.OperationIdentity)}, Name: "launch-Farol.app"}
-				expected = r.captureIdentity
-			} else if captured != nil {
+			if r.config.Files.SharedParent && (captured == nil || *captured != r.capturePath || r.capturePath == "") {
+				return fail("launch_image_unconfirmed", false, false, nil)
+			}
+			if !r.config.Files.SharedParent && captured != nil {
 				return fail("launch_image_unexpected", false, false, nil)
 			}
-			negative, err := r.image(ctx, location, r.config.Request.Target, func(_ *os.File, actual port.HelperIdentity) error {
-				if r.config.Files.SharedParent && expected != actual {
-					return fail("launch_image_unconfirmed", false, false, nil)
-				}
-				return nil
-			})
+			// Verify the permanent slot that LaunchServices will actually open.
+			negative, err := r.image(ctx, location, r.config.Request.Target, func(*os.File, port.HelperIdentity) error { return nil })
 			if err != nil {
 				return err
 			}
 			if negative {
 				return fail("tree_mismatch", false, false, nil)
+			}
+			if r.config.Files.SharedParent {
+				location = installmove.Location{Parent: installmove.Directory{File: r.config.Files.Operation, Identity: installmove.Identity(r.config.Files.OperationIdentity)}, Name: "launch-Farol.app"}
+				negative, err = r.image(ctx, location, r.config.Request.Target, func(_ *os.File, actual port.HelperIdentity) error {
+					if r.captureIdentity != actual {
+						return fail("launch_image_unconfirmed", false, false, nil)
+					}
+					return nil
+				})
+				if err != nil {
+					return err
+				}
+				if negative {
+					return fail("tree_mismatch", false, false, nil)
+				}
 			}
 			return r.fence(ctx)
 		}
@@ -200,9 +207,10 @@ func (r *runtime) LaunchTarget(ctx context.Context, self port.HelperSelfIdentity
 }
 
 // launchBound requires the application path handed to /usr/bin/open to be the
-// image this runtime verified: the private capture for a shared install, the
-// owner's ~/Applications slot otherwise. A capability that builds arguments
-// cannot redirect the launch to another image. Like the reference helper, the
+// permanent slot this runtime verified. The shared capture is verified as a
+// separate recovery image, never opened as a second Dock application. A
+// capability that builds arguments cannot redirect the launch to another image.
+// Like the reference helper, the
 // launch is still by pathname; see the release helper-recovery reference.
 func launchBound(request port.HelperRequest, shared bool, capturePath string, arguments []string) bool {
 	if !helperprocess.ValidOpenArguments(arguments) || request.Home == "" {
@@ -217,7 +225,10 @@ func launchBound(request port.HelperRequest, shared bool, capturePath string, ar
 	}
 	expected := request.Home + "/Applications/Farol.app"
 	if shared {
-		expected = capturePath
+		if capturePath == "" {
+			return false
+		}
+		expected = "/Applications/Farol.app"
 	}
 	return expected != "" && arguments[2] == expected
 }

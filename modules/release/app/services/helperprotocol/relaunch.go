@@ -24,8 +24,8 @@ func (s *Service) BuildRelaunchArguments(ctx context.Context, completion string,
 	if helper.PID < 2 || helper.PID > 2147483647 || helper.ProcessStart == "" || !utf8.ValidString(helper.ProcessStart) {
 		return nil, failure("launch_helper_identity")
 	}
-	// Capture the optional caller value before a trusted codec call. It must
-	// not be replaced by a later path or by the shared Applications slot.
+	// Capture the optional caller value before a trusted codec call. The
+	// verified recovery image identity must not be replaced by a later path.
 	var capturedPath *string
 	if privateLaunch != nil {
 		value := *privateLaunch
@@ -56,7 +56,10 @@ func (s *Service) BuildRelaunchArguments(ctx context.Context, completion string,
 		if capturedPath == nil || *capturedPath != expected {
 			return nil, failure("launch_image_unconfirmed")
 		}
-		selected = *capturedPath
+		// The private capture is retained as a verified recovery image, but
+		// LaunchServices must open the permanent slot. Opening the capture makes
+		// macOS treat the successor as a second Dock application.
+		selected = "/Applications/Farol.app"
 	} else if capturedPath != nil {
 		return nil, failure("launch_image_unexpected")
 	}

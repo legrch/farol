@@ -64,8 +64,15 @@ func TestRelaunchComposesActualInputPolicyAndCodecAgainstOriginalPython(t *testi
 				}
 				return
 			}
-			if err != nil || !reflect.DeepEqual(arguments, c.Arguments) {
-				t.Fatalf("arguments=%q err=%v, want %q", arguments, err, c.Arguments)
+			want := append([]string(nil), c.Arguments...)
+			if c.PrivateLaunch != nil && len(want) >= 3 {
+				// The original helper opened its private capture. The product now
+				// keeps that verified image for recovery and opens the permanent
+				// Applications slot so LaunchServices retains one Dock identity.
+				want[2] = "/Applications/Farol.app"
+			}
+			if err != nil || !reflect.DeepEqual(arguments, want) {
+				t.Fatalf("arguments=%q err=%v, want %q", arguments, err, want)
 			}
 		})
 	}
