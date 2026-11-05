@@ -45,13 +45,12 @@ func TestNativeHostRuntimeKnownImages(t *testing.T) {
 func TestNativeHostRuntimeDiscoveryReadOnly(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	searchPath, pathErr := CaptureUserExecutablePath(ctx)
-	if pathErr != nil {
-		t.Fatalf("user PATH capture: %v", pathErr)
-	}
+	// Explicit test-runner PATH exercises native metadata. Login-shell capture
+	// is tested separately and may correctly refuse this account's rc closure.
+	searchPath := os.Getenv("PATH")
 	selectedGit, gitErr := firstGitOnPath(ctx, nativeHostRuntimeFilesystem{}, searchPath)
 	t.Logf("selected first Git: %s (%v)", selectedGit, gitErr)
-	plan, err := DiscoverInstalledHostRuntime(ctx)
+	plan, err := DiscoverInstalledHostRuntimeForPath(ctx, searchPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,11 +80,7 @@ func TestNativeHostRuntimeLayoutBoundaries(t *testing.T) {
 			f := &observedNativeHostRuntimeFS{}
 			candidates := hostRuntimeCandidates(kind)
 			if kind == "git" {
-				selected, err := CaptureUserExecutablePath(ctx)
-				if err != nil {
-					t.Fatal(err)
-				}
-				alias, err := firstGitOnPath(ctx, f, selected)
+				alias, err := firstGitOnPath(ctx, f, os.Getenv("PATH"))
 				if err == nil {
 					candidates = []string{alias}
 				} else if !os.IsNotExist(err) {
@@ -110,7 +105,7 @@ func TestNativeHostRuntimeLayoutBoundaries(t *testing.T) {
 				if err != nil {
 					info, statErr := os.Lstat(f.last)
 					if statErr == nil && info.IsDir() && info.Mode().Perm()&0020 != 0 {
-						plan, discoverErr := DiscoverInstalledHostRuntime(ctx)
+						plan, discoverErr := DiscoverInstalledHostRuntimeForPath(ctx, os.Getenv("PATH"))
 						if discoverErr != nil {
 							t.Fatal(discoverErr)
 						}
@@ -119,7 +114,7 @@ func TestNativeHostRuntimeLayoutBoundaries(t *testing.T) {
 								if selected.Image == physical {
 									t.Fatal("group-writable installation was granted authority")
 								}
-								t.Logf("shared-writable candidate refused; selected another qualified %s installation", kind)
+								t.Logf("shared-writable candidate refused; qualified %s installation present", kind)
 								return
 							}
 						}
@@ -158,7 +153,7 @@ func TestNativeHostRuntimeLayoutBoundaries(t *testing.T) {
 func TestNativeHostRuntimeProfileFitsOriginalCommandBudget(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	p, err := DiscoverInstalledHostRuntime(ctx)
+	p, err := DiscoverInstalledHostRuntimeForPath(ctx, os.Getenv("PATH"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -227,17 +227,19 @@ func (f *connectorShellFactory) selectShell(ctx context.Context, lease *executio
 	if f.config.support.HostRuntimePolicy == nativeprocess.InstalledHostRuntimeAssurance {
 		userEnvironment, environmentErr := f.capturedUserEnvironment(preparation)
 		if environmentErr != nil {
-			if code := nativeprocess.ShellEnvironmentFailureCode(environmentErr); code != "" {
-				return refuse(&processsvc.Failure{Code: code, Unknown: true})
+			// Environment discovery is optional to the pinned base Shell. Hold its
+			// result for this connector generation; never select another Git.
+			hostRuntime = nativeprocess.UnavailableHostRuntime(nativeprocess.ShellEnvironmentFailureCode(environmentErr))
+		} else {
+			hostRuntime, err = nativeprocess.DiscoverInstalledHostRuntimeForEnvironment(preparation, userEnvironment)
+			if err != nil {
+				return refuse(err)
 			}
-			return refuse(environmentErr)
+			if userEnvironment.Home != f.config.home || hostRuntime.BindUserEnvironment(userEnvironment, f.environmentGeneration) != nil {
+				return refuse(nil)
+			}
 		}
-		hostRuntime, err = nativeprocess.DiscoverInstalledHostRuntimeForEnvironment(preparation, userEnvironment)
-		if err != nil {
-			return refuse(err)
-		}
-		if userEnvironment.Home != f.config.home || hostRuntime.BindUserEnvironment(userEnvironment, f.environmentGeneration) != nil ||
-			hostRuntime.SetConfigMode(workspace.GitHistoryApproved) != nil {
+		if hostRuntime.SetConfigMode(workspace.GitHistoryApproved) != nil {
 			return refuse(nil)
 		}
 	}

@@ -42,6 +42,17 @@ const hostRuntimeMaxBytes int64 = 384 << 20
 // assurance from the release-qualified base; it promises neither protected
 // ancestry nor atomic execution against another process of the same account.
 type HostRuntimePlan struct{ frozen *hostRuntimeSnapshot }
+
+// A failed optional Git environment discovery must not disable file tools or
+// the base, release-pinned Shell. This plan grants no installed executable.
+func UnavailableHostRuntime(code string) *HostRuntimePlan {
+	if code != "SHELL_ENV_TIMEOUT" && code != "SHELL_ENV_OUTCOME_UNKNOWN" {
+		code = "SHELL_ENV_OUTCOME_UNKNOWN"
+	}
+	return &HostRuntimePlan{frozen: &hostRuntimeSnapshot{Assurance: InstalledHostRuntimeAssurance,
+		Unavailable: []hostRuntimeUnavailable{{Kind: "git", Code: code}}}}
+}
+
 type hostRuntimeSnapshot struct {
 	Assurance                                                          string
 	Installations                                                      []hostRuntimeInstallation
@@ -198,7 +209,8 @@ func (p *HostRuntimePlan) valid() bool {
 // BindUserEnvironment records only path metadata. It does not grant access to
 // the captured directories; the workspace's Git approval is still required.
 func (p *HostRuntimePlan) BindUserEnvironment(value UserExecutableEnvironment, generation uint64) error {
-	if p == nil || p.frozen == nil || !p.valid() || value.Source != "login-shell" || generation == 0 {
+	if p == nil || p.frozen == nil || !p.valid() || value.Source != "login-shell" || generation == 0 ||
+		(value.XDGConfigHome != "" && !insidePolicy(value.Home, value.XDGConfigHome)) {
 		return errHostRuntime
 	}
 	p.frozen.EnvironmentSource = value.Source

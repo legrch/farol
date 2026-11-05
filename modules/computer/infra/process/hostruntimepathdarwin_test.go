@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -48,10 +49,40 @@ func TestHostRuntimeIgnoresTerminalHintAndUsesAccountLoginShell(t *testing.T) {
 	t.Setenv("PATH", "/owner/first:/usr/bin")
 	selected, err := CaptureUserEnvironment(context.Background())
 	if err != nil {
-		t.Fatal(err)
+		// The installed account may source tools outside this probe's exact
+		// read/exec closure. Refusal is the safe result, not another Git.
+		if !errors.Is(err, errShellEnvironmentUnknown) {
+			t.Fatalf("unexpected native probe failure: %v", err)
+		}
+		return
 	}
 	if selected.Source != "login-shell" || !validHostSearchPath(selected.Path) || selected.Path == "/owner/first:/usr/bin" {
 		t.Fatalf("Terminal hint replaced the account's login PATH: %+v", selected)
+	}
+}
+
+func TestConfinedLoginProbeRejectsStartupWrites(t *testing.T) {
+	home, err := os.MkdirTemp("/private/tmp", "farol-login-probe-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	target := filepath.Join(home, "forbidden")
+	if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte("print -r -- forbidden > "+target+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	args, err := confinedLoginArguments("/bin/zsh", home, home, []string{"-i", "-c", "print -r -- ready"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := []string{"HOME=" + home, "ZDOTDIR=" + home, "PATH=/usr/bin:/bin", "TERM=dumb"}
+	_, probeErr := runHostProbe(context.Background(), seatbeltExecutable, args, env, home, hostEnvironmentOutputLimit)
+	_, statErr := os.Stat(target)
+	if !errors.Is(probeErr, errShellEnvironmentUnknown) {
+		t.Fatalf("startup write did not fail closed: probe=%v target=%v", probeErr, statErr)
+	}
+	if !os.IsNotExist(statErr) {
+		t.Fatalf("startup write escaped Seatbelt: %v", statErr)
 	}
 }
 

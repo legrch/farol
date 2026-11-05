@@ -87,7 +87,7 @@ func runHostProbe(ctx context.Context, executable string, args, environment []st
 		if errors.Is(err, exec.ErrWaitDelay) {
 			_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
 		}
-		if err != nil || probe.Err() != nil || stdout.overflow || stderr.overflow {
+		if err != nil || probe.Err() != nil || stdout.overflow || stderr.overflow || stderr.buffer.Len() != 0 {
 			return nil, errShellEnvironmentUnknown
 		}
 		return bytes.Clone(stdout.Bytes()), nil
@@ -127,10 +127,61 @@ func nativeLoginAccount(ctx context.Context) (username, home, shell string, err 
 	if !absolutePolicyPath(home) || !absolutePolicyPath(shell) || filepath.Clean(home) != home || filepath.Clean(shell) != shell {
 		return "", "", "", errShellEnvironmentUnknown
 	}
-	if shell != "/bin/zsh" && shell != "/bin/bash" {
-		return "", "", "", errShellEnvironmentUnknown
-	}
 	return current.Username, home, shell, nil
+}
+
+// The account's login files are executable code. Discover their PATH inside a
+// separate, read-only Seatbelt: no network, no workspace or profile access,
+// and no process-exec except the account shell. A login file that depends on
+// another program or file cannot silently expand this discovery authority.
+func confinedLoginArguments(shell, home, zDotDir string, args []string) ([]string, error) {
+	if shell != "/bin/zsh" && shell != "/bin/bash" {
+		return nil, errShellEnvironmentUnknown
+	}
+	if zDotDir == "" {
+		zDotDir = home
+	}
+	if !insidePolicy(home, zDotDir) {
+		return nil, errShellEnvironmentUnknown
+	}
+	files := []string{"/etc/zshenv", "/etc/zprofile", "/etc/zshrc", "/etc/zlogin",
+		"/private/etc/zshenv", "/private/etc/zprofile", "/private/etc/zshrc", "/private/etc/zlogin"}
+	if shell == "/bin/zsh" {
+		for _, name := range []string{".zshenv", ".zprofile", ".zshrc", ".zlogin"} {
+			files = append(files, filepath.Join(zDotDir, name))
+		}
+	} else {
+		files = append(files, "/etc/profile", "/private/etc/profile")
+		for _, name := range []string{".bash_profile", ".bash_login", ".profile", ".bashrc"} {
+			files = append(files, filepath.Join(home, name))
+		}
+	}
+	reads := []string{`(subpath "/System/Library")`, `(subpath "/usr/lib")`,
+		`(literal "/dev/null")`, `(literal "/dev/urandom")`, `(literal ` + strconv.Quote(shell) + `)`}
+	for _, file := range files {
+		info, err := os.Lstat(file)
+		if err != nil && !os.IsNotExist(err) {
+			return nil, errShellEnvironmentUnknown
+		}
+		if err == nil {
+			if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+				return nil, errShellEnvironmentUnknown
+			}
+			reads = append(reads, `(literal `+strconv.Quote(file)+`)`)
+		}
+	}
+	profile := `(version 1)
+(import "dyld-support.sb")
+(deny default)
+(allow process-fork)
+(allow signal (target self))
+(allow sysctl-read (sysctl-name "hw.pagesize_compat") (sysctl-name "hw.ncpu"))
+(allow file-read* ` + strings.Join(reads, " ") + `)
+(allow file-read-metadata (literal "/") (literal "/Users") (literal ` + strconv.Quote(home) + `) (literal ` + strconv.Quote(zDotDir) + `))
+(allow process-exec (literal ` + strconv.Quote(shell) + `))
+(allow file-write* (literal "/dev/null") (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/[0-9]+$"))
+(deny network*)`
+	return append([]string{"-p", profile, "--", shell}, args...), nil
 }
 
 func framedUserEnvironment(raw []byte, nonce string) ([4]string, error) {
@@ -190,7 +241,11 @@ func CaptureUserEnvironment(ctx context.Context) (UserExecutableEnvironment, err
 		seed = append(seed, name+"="+value)
 	}
 	script := "printf '\\000FAROL_ENV_BEGIN_" + nonce + "\\000%s\\000%s\\000%s\\000%s\\000FAROL_ENV_END_" + nonce + "\\000' \"$PATH\" \"$XDG_CONFIG_HOME\" \"$DEVELOPER_DIR\" \"$ZDOTDIR\""
-	output, err := runHostProbe(bounded, shell, []string{"-l", "-i", "-c", script}, seed, home, hostEnvironmentOutputLimit)
+	arguments, err := confinedLoginArguments(shell, home, os.Getenv("ZDOTDIR"), []string{"-e", "-l", "-i", "-c", script})
+	if err != nil {
+		return empty, err
+	}
+	output, err := runHostProbe(bounded, seatbeltExecutable, arguments, seed, home, hostEnvironmentOutputLimit)
 	if err != nil {
 		return empty, err
 	}
@@ -202,6 +257,9 @@ func CaptureUserEnvironment(ctx context.Context) (UserExecutableEnvironment, err
 		if value != "" && (!absolutePolicyPath(value) || filepath.Clean(value) != value) {
 			return empty, errShellEnvironmentUnknown
 		}
+	}
+	if fields[1] != "" && !insidePolicy(home, fields[1]) {
+		return empty, errShellEnvironmentUnknown
 	}
 	return UserExecutableEnvironment{Path: fields[0], Home: home, User: username, Shell: shell,
 		XDGConfigHome: fields[1], DeveloperDir: fields[2], ZDotDir: fields[3],

@@ -553,3 +553,13 @@ func TestHostRuntimeSupportRequiresExplicitExclusiveSelection(t *testing.T) {
 		t.Fatal("fixed and installed policies mixed")
 	}
 }
+
+func TestUnavailableHostRuntimeGrantsNoGit(t *testing.T) {
+	plan := UnavailableHostRuntime("SHELL_ENV_OUTCOME_UNKNOWN")
+	if !plan.valid() || len(plan.frozen.ExecFiles) != 0 || len(plan.frozen.ReadFiles) != 0 {
+		t.Fatal("failed environment probe granted an installed executable")
+	}
+	if path, code := plan.GitSelection(); path != "" || code != "SHELL_ENV_OUTCOME_UNKNOWN" {
+		t.Fatalf("unexpected Git selection: %q %q", path, code)
+	}
+}
