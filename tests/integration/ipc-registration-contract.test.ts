@@ -74,6 +74,7 @@ describe("privileged IPC registration contract", () => {
       "bootstrap",
       "snapshot",
       "configuration",
+      "ownerGitChoice",
       "chatHistory",
       "retiredReplies",
       "task",
@@ -87,6 +88,13 @@ describe("privileged IPC registration contract", () => {
       (entry) => !entry.body.includes("isTrustedIpcSender(event, window)"),
     );
     expect(unchecked.map((entry) => entry.channel)).toEqual([]);
+
+    const ownerGitChoice = found.find(
+      (entry) => entry.channel === "ownerGitChoice",
+    );
+    expect(ownerGitChoice?.body).toContain(
+      "event.senderFrame !== event.sender.mainFrame",
+    );
   });
 
   it("S35-TA-9 no registration compares the sender inline instead of using the predicate", async () => {
