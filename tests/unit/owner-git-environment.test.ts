@@ -35,7 +35,7 @@ it("loads Finder account PATH through login and interactive shell only", async (
       `shell chatter\n\0FAROL_ENV_BEGIN_${nonce}\0/opt/homebrew/bin:/usr/bin\0FAROL_ENV_END_${nonce}\0prompt`,
     );
   };
-  const result = await captureOwnerGitEnvironment(4, run);
+  const result = await captureOwnerGitEnvironment(4, run, "darwin");
   expect(result).toMatchObject({
     path: "/opt/homebrew/bin:/usr/bin",
     source: "desktop-login-shell",
@@ -50,8 +50,15 @@ it("unsupported account shell and bounded timeout do not select another Git", as
     Buffer.from(
       `${account.username}:*:${account.uid}:${account.gid}:::::${account.homedir}:/opt/homebrew/bin/fish\n`,
     );
-  await expect(captureOwnerGitEnvironment(1, fish)).rejects.toMatchObject({
+  await expect(
+    captureOwnerGitEnvironment(1, fish, "darwin"),
+  ).rejects.toMatchObject({
     code: "GIT_SHIM_UNSUPPORTED",
+  });
+  await expect(
+    captureOwnerGitEnvironment(1, fish, "linux"),
+  ).rejects.toMatchObject({
+    code: "SHELL_ENV_OUTCOME_UNKNOWN",
   });
   await expect(
     ownedProcess(

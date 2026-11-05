@@ -169,10 +169,11 @@ export function parseOwnerPathFrame(raw: Buffer, nonce: string): string {
 export async function captureOwnerGitEnvironment(
   generation: number,
   run: typeof ownedProcess = ownedProcess,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<OwnerGitEnvironment> {
   const account = userInfo();
   if (
-    process.platform !== "darwin" ||
+    platform !== "darwin" ||
     process.getuid?.() !== account.uid ||
     !Number.isSafeInteger(generation) ||
     generation < 1
