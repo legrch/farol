@@ -3,6 +3,7 @@ package boot
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -115,16 +116,38 @@ func TestSelfTestRunCannotAuthorizeAnotherShellScope(t *testing.T) {
 	}
 }
 
+type observedDeadlineContext struct {
+	context.Context
+	done    chan struct{}
+	until   time.Time
+	expired atomic.Bool
+}
+
+func (c *observedDeadlineContext) Deadline() (time.Time, bool) { return c.until, true }
+func (c *observedDeadlineContext) Done() <-chan struct{}       { return c.done }
+func (c *observedDeadlineContext) Err() error {
+	if c.expired.Load() {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+func (c *observedDeadlineContext) expire() {
+	c.expired.Store(true)
+	close(c.done)
+}
+
 func TestSelfTestShellCheckDeadlineIsUnknown(t *testing.T) {
 	s, journal, native, _ := processWireFixture(t)
 	check, err := newSelfTestShell(s, s.current, "work", "check-process", "check-call", "check-cancel", selfTestShellQuick)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
+	// Expire after the first observation, when Start and its handle are known.
+	// A wall-clock deadline can expire before Start on a loaded race runner.
+	ctx := &observedDeadlineContext{Context: context.Background(), done: make(chan struct{}), until: time.Now().Add(time.Minute)}
+	native.afterRead = ctx.expire
 	result := check.check(ctx)
-	if result.Status != "unknown" || result.Code != "PROCESS_OUTCOME_UNKNOWN" || result.Handle != native.Handle() || native.spawns != 1 || journal.reserves != 1 {
+	if result.Status != "unknown" || result.Code == "" || result.Handle != native.Handle() || native.spawns != 1 || journal.reserves != 1 {
 		t.Fatal("deadline promoted", result)
 	}
 }

@@ -100,6 +100,7 @@ type hostRuntimeNode struct {
 type hostRuntimeFilesystem interface {
 	resolve(context.Context, string) (string, error)
 	node(context.Context, string) (hostRuntimeNode, error)
+	executable(context.Context, string) (bool, error)
 	entries(context.Context, string) ([]string, error)
 	imports(context.Context, string) (hostMachOImports, bool, error)
 	uid() uint32
@@ -663,14 +664,27 @@ func firstGitOnPath(ctx context.Context, fs hostRuntimeFilesystem, searchPath st
 			return candidate, err
 		}
 		physical, err := fs.resolve(ctx, candidate)
+		if errors.Is(err, os.ErrNotExist) {
+			continue // dangling PATH alias is not an executable Git
+		}
 		if err != nil {
 			return candidate, err
 		}
 		node, err := fs.node(ctx, physical)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
 		if err != nil {
 			return candidate, err
 		}
-		if node.Kind != "file" || node.Mode.Perm()&0111 == 0 {
+		if node.Kind != "file" {
+			continue
+		}
+		executable, err := fs.executable(ctx, physical)
+		if err != nil {
+			return candidate, err
+		}
+		if !executable {
 			continue
 		}
 		return candidate, nil
@@ -774,6 +788,9 @@ func discoverHostRuntime(ctx context.Context, fs hostRuntimeFilesystem, searchPa
 				code := "HOST_RUNTIME_DISCOVERY_UNAVAILABLE"
 				if kind == "git" && alias == "/usr/bin/git" {
 					code = "GIT_SHIM_UNSUPPORTED"
+					if failure := ShellEnvironmentFailureCode(err); failure != "" {
+						code = failure
+					}
 				}
 				aggregate.snapshot.Unavailable = append(aggregate.snapshot.Unavailable, hostRuntimeUnavailable{kind, code, alias, err.Error()})
 				break

@@ -22,6 +22,20 @@ import (
 
 type nativeHostRuntimeFilesystem struct{ developerDir string }
 
+func (nativeHostRuntimeFilesystem) executable(ctx context.Context, path string) (bool, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return false, errHostRuntime
+	}
+	err := unix.Access(path, unix.X_OK)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, unix.EACCES) || errors.Is(err, unix.EPERM) {
+		return false, nil
+	}
+	return false, err
+}
+
 func (f nativeHostRuntimeFilesystem) appleGit(ctx context.Context) (string, error) {
 	current, err := user.Current()
 	if err != nil || !absolutePolicyPath(current.HomeDir) {

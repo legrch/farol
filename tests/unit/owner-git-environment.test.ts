@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -170,4 +171,54 @@ it("does not run the account shell at startup and saves only the clicked PATH se
   });
   await reopened.prepareStartup();
   expect(reopened.launchEnvironment()?.path).toBe(bin);
+});
+
+it("skips a dangling alias and an owner-nonexecutable file before selecting Git", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "farol-owner-git-path-"));
+  created.push(root);
+  const first = path.join(root, "first");
+  const second = path.join(root, "second");
+  mkdirSync(first);
+  mkdirSync(second);
+  const selected = path.join(second, "git");
+  writeFileSync(selected, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const owner = new OwnerGitChoice(root, async (generation) => ({
+    path: `${first}:${second}`,
+    source: "desktop-login-shell",
+    capturedAt: new Date().toISOString(),
+    generation,
+  }));
+  symlinkSync("missing", path.join(first, "git"));
+  await owner.refreshFromOwner();
+  expect(owner.status().gitAlias).toBe(selected);
+  rmSync(path.join(first, "git"));
+  writeFileSync(path.join(first, "git"), "#!/bin/sh\nexit 0\n", {
+    mode: 0o645,
+  });
+  const next = new OwnerGitChoice(root, async (generation) => ({
+    path: `${first}:${second}`,
+    source: "desktop-login-shell",
+    capturedAt: new Date().toISOString(),
+    generation,
+  }));
+  await next.refreshFromOwner();
+  expect(next.status().gitAlias).toBe(selected);
+});
+
+it("does not reissue an uncertain account-shell capture", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "farol-owner-git-unknown-"));
+  created.push(root);
+  let captures = 0;
+  const owner = new OwnerGitChoice(root, async () => {
+    captures++;
+    throw new OwnerGitEnvironmentError("SHELL_ENV_OUTCOME_UNKNOWN");
+  });
+  await expect(owner.refreshFromOwner()).rejects.toMatchObject({
+    code: "SHELL_ENV_OUTCOME_UNKNOWN",
+  });
+  await expect(owner.refreshFromOwner()).rejects.toThrow(
+    "SHELL_ENV_OUTCOME_UNKNOWN",
+  );
+  expect(captures).toBe(1);
+  expect(owner.status().failure).toBe("SHELL_ENV_OUTCOME_UNKNOWN");
 });

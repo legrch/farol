@@ -20,6 +20,7 @@ type hostRuntimeFixtureFS struct {
 	nodes         map[string]hostRuntimeNode
 	reads         []string
 	importsByPath map[string]hostMachOImports
+	appleErr      error
 }
 
 func fixtureRuntimeNode(p, kind string, mode os.FileMode) hostRuntimeNode {
@@ -43,6 +44,9 @@ func runtimeFixture() *hostRuntimeFixtureFS {
 func (f *hostRuntimeFixtureFS) uid() uint32               { return 501 }
 func (f *hostRuntimeFixtureFS) adminGID() (uint32, error) { return 80, nil }
 func (f *hostRuntimeFixtureFS) appleGit(context.Context) (string, error) {
+	if f.appleErr != nil {
+		return "", f.appleErr
+	}
 	return "/Library/Developer/CommandLineTools/usr/bin/git", nil
 }
 func (f *hostRuntimeFixtureFS) node(ctx context.Context, p string) (hostRuntimeNode, error) {
@@ -55,6 +59,16 @@ func (f *hostRuntimeFixtureFS) node(ctx context.Context, p string) (hostRuntimeN
 		return n, os.ErrNotExist
 	}
 	return n, nil
+}
+func (f *hostRuntimeFixtureFS) executable(ctx context.Context, p string) (bool, error) {
+	n, err := f.node(ctx, p)
+	if err != nil {
+		return false, err
+	}
+	if n.UID == f.uid() {
+		return n.Mode.Perm()&0100 != 0, nil
+	}
+	return n.Mode.Perm()&0001 != 0, nil
 }
 func (f *hostRuntimeFixtureFS) entries(ctx context.Context, p string) ([]string, error) {
 	if ctx.Err() != nil {
@@ -206,6 +220,43 @@ func TestFirstGitOnUserPathNeverSubstitutesLaterEntry(t *testing.T) {
 	selected, err := firstGitOnPath(context.Background(), f, "/missing:/install/bin:/fallback")
 	if err != nil || selected != "/fallback/git" {
 		t.Fatalf("first executable PATH entry was not retained: %s %v", selected, err)
+	}
+}
+
+func TestFirstGitOnPathSkipsDanglingAndOwnerNonExecutable(t *testing.T) {
+	for _, kind := range []string{"dangling", "owner-no-exec"} {
+		t.Run(kind, func(t *testing.T) {
+			f := runtimeFixture()
+			f.nodes["/fallback"] = fixtureRuntimeNode("/fallback", "directory", os.ModeDir|0755)
+			f.nodes["/fallback/git"] = fixtureRuntimeNode("/fallback/git", "file", 0755)
+			if kind == "dangling" {
+				alias := f.nodes["/install/bin/git"]
+				alias.LinkTarget = "missing"
+				f.nodes[alias.Path] = alias
+			} else {
+				f.nodes["/install/bin/git"] = fixtureRuntimeNode("/install/bin/git", "file", 0645)
+			}
+			selected, err := firstGitOnPath(context.Background(), f, "/install/bin:/fallback")
+			if err != nil || selected != "/fallback/git" {
+				t.Fatalf("selected %q, error %v", selected, err)
+			}
+		})
+	}
+}
+
+func TestAppleGitProbeUnknownIsNotReportedAsUnsupported(t *testing.T) {
+	f := runtimeFixture()
+	f.nodes["/usr"] = fixtureRuntimeNode("/usr", "directory", os.ModeDir|0755)
+	f.nodes["/usr/bin"] = fixtureRuntimeNode("/usr/bin", "directory", os.ModeDir|0755)
+	f.nodes["/usr/bin/git"] = fixtureRuntimeNode("/usr/bin/git", "file", 0755)
+	f.appleErr = errShellEnvironmentUnknown
+	plan, err := discoverHostRuntime(context.Background(), f, "/usr/bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, code := plan.GitSelection()
+	if path != "/usr/bin/git" || code != "SHELL_ENV_OUTCOME_UNKNOWN" {
+		t.Fatalf("uncertain probe was downgraded: path %q code %q", path, code)
 	}
 }
 

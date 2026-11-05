@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import {
+  accessSync,
   openSync,
   readFileSync,
   renameSync,
@@ -36,6 +37,7 @@ export class OwnerGitChoice {
   private failure: string | null = null;
   private generation = 0;
   private pendingRestart = false;
+  private uncertainCapture: string | null = null;
 
   constructor(
     userData: string,
@@ -145,8 +147,19 @@ export class OwnerGitChoice {
 
   async refreshFromOwner(): Promise<void> {
     if (this.pendingRestart) throw new Error("GIT_RESTART_REQUIRED");
+    if (this.uncertainCapture) throw new Error(this.uncertainCapture);
     const previous = this.environment;
-    const captured = await this.capturePath(++this.generation);
+    let captured: OwnerGitEnvironment;
+    try {
+      captured = await this.capturePath(++this.generation);
+    } catch (error) {
+      const code =
+        error instanceof Error ? error.message : "SHELL_ENV_OUTCOME_UNKNOWN";
+      this.failure = code;
+      if (code === "SHELL_ENV_TIMEOUT" || code === "SHELL_ENV_OUTCOME_UNKNOWN")
+        this.uncertainCapture = code;
+      throw error;
+    }
     this.environment = captured;
     const selected = this.status().gitAlias;
     if (!selected) {
@@ -192,13 +205,30 @@ export class OwnerGitChoice {
       try {
         const physical = realpathSync(candidate);
         const stat = statSync(physical);
-        if (!stat.isFile() || !(stat.mode & 0o111)) {
+        if (!stat.isFile()) {
           gitAlias = null;
           continue;
         }
+        try {
+          accessSync(physical, constants.X_OK);
+        } catch (error) {
+          if (
+            ["EACCES", "EPERM"].includes(
+              (error as NodeJS.ErrnoException).code ?? "",
+            )
+          ) {
+            gitAlias = null;
+            continue;
+          }
+          throw error;
+        }
         gitPhysical = physical;
         break;
-      } catch {
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          gitAlias = null;
+          continue;
+        }
         // An existing but unreadable first candidate is a refusal, never a
         // reason to display another Git farther down the PATH.
         break;

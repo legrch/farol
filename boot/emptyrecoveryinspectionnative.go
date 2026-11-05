@@ -63,7 +63,11 @@ func inspectEmptyRecoveryNamespaces(ctx context.Context, computer, chat, task Na
 	if err := inspectExactRecoveryDirectory(ctx, task, map[string]uint32{}); err != nil {
 		return err
 	}
-	if err := inspectExactRecoveryDirectory(ctx, computer, map[string]uint32{"computer-access.json": unix.S_IFREG, "computer-access.lock": unix.S_IFREG, ".mutation-writer.lock": unix.S_IFREG, "mutations": unix.S_IFDIR}); err != nil {
+	computerNames, err := computerRecoveryNames(computer)
+	if err != nil {
+		return err
+	}
+	if err := inspectExactRecoveryDirectory(ctx, computer, computerNames); err != nil {
 		return err
 	}
 	chatNames := map[string]uint32{"chat-lifecycle.claim": unix.S_IFREG, "chat-lifecycle.json": unix.S_IFREG, "chat-handoff.claim": unix.S_IFREG, "chat-results": unix.S_IFDIR}

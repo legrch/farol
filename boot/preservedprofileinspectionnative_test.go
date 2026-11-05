@@ -265,6 +265,30 @@ func TestPreservedProfileNativeCompositeRetainsClaimsAndBytes(t *testing.T) {
 	}
 }
 
+func TestPreservedProfileNativeRetainsOwnerGitChoice(t *testing.T) {
+	in, _ := preservedProfileFixture(t, false)
+	choice := filepath.Join(in.Profile.Root, "computer", "owner-git-choice.json")
+	contents := []byte(`{"schema":1,"enabled":true,"override":"/opt/homebrew/bin/git"}`)
+	if err := os.WriteFile(choice, contents, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	before := recoverySnapshot(t, in.Profile.Root)
+	visits := 0
+	err := inspectPreservedProfile(ctx, in, func(p preservedProfileInspection) error {
+		visits++
+		return nil
+	})
+	if err != nil || visits != 1 || !reflect.DeepEqual(before, recoverySnapshot(t, in.Profile.Root)) {
+		t.Fatalf("preserved profile changed or refused owner choice: %v, visits %d", err, visits)
+	}
+	after, err := os.ReadFile(choice)
+	if err != nil || !reflect.DeepEqual(after, contents) {
+		t.Fatalf("owner choice changed: %v", err)
+	}
+}
+
 func TestPreservedProfileNativeRefusesFinalChangeAndCancellation(t *testing.T) {
 	for _, fault := range []string{"profile-staging", "metadata-added", "task-staging", "chat-staging", "mutation-staging", "cancel", "lagging-expiry", "visitor-error"} {
 		t.Run(fault, func(t *testing.T) {

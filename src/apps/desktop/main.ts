@@ -12854,9 +12854,11 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         }),
     });
   const stateRoot = path.join(app.getPath("userData"), "farol-state");
-  // The core's protected profile root is excluded from Computer workspace tools.
-  // A broad HOME grant cannot turn an MCP file write into owner consent.
-  ownerGitChoice = new OwnerGitChoice(path.join(stateRoot, "go-core"));
+  // The qualified Computer child is denied to File and Shell writes. The
+  // go-core parent is not, so it cannot hold an owner authorization record.
+  ownerGitChoice = new OwnerGitChoice(
+    path.join(stateRoot, "go-core", "computer"),
+  );
   let freshStartup = false;
   const previousHostAdmissionReady = await withInstalledStartupFence(
     process.argv,

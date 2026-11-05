@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/legrch/farol/modules/computer/app/port"
@@ -41,6 +42,8 @@ type connectorShellFactory struct {
 	lifetime       context.Context
 	clock          port.Clock
 	protectedState *nativeprocess.ProtectedBundle
+	runtimeMu      sync.Mutex
+	runtimeHold    string // one uncertain owner probe cannot be reissued in this runtime
 	scratch        func(context.Context) (connectorShellScratch, error)
 	prepare        func(context.Context, nativeprocess.Command, nativeprocess.SeatbeltSelection, processsvc.Invocation) (processsvc.Selected, error)
 }
@@ -210,7 +213,21 @@ func (f *connectorShellFactory) selectShell(ctx context.Context, lease *executio
 			hostRuntime = nativeprocess.UnavailableHostRuntime("GIT_NOT_FOUND")
 		} else {
 			userEnvironment := *f.config.userEnvironment
-			hostRuntime, err = nativeprocess.DiscoverInstalledHostRuntimeForEnvironment(preparation, userEnvironment)
+			f.runtimeMu.Lock()
+			if f.runtimeHold != "" {
+				hostRuntime = nativeprocess.UnavailableHostRuntime(f.runtimeHold)
+			} else {
+				hostRuntime, err = nativeprocess.DiscoverInstalledHostRuntimeForEnvironment(preparation, userEnvironment)
+				if failure := nativeprocess.ShellEnvironmentFailureCode(err); failure != "" {
+					f.runtimeHold = failure
+				} else if err == nil {
+					_, code := hostRuntime.GitSelection()
+					if code == "SHELL_ENV_TIMEOUT" || code == "SHELL_ENV_OUTCOME_UNKNOWN" {
+						f.runtimeHold = code
+					}
+				}
+			}
+			f.runtimeMu.Unlock()
 			if err != nil {
 				return refuse(err)
 			}
