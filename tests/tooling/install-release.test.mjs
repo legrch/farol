@@ -497,7 +497,17 @@ function isolatedInstall(scenario, callback) {
     ]);
     assert.equal(prep.status, 0);
     writeFileSync(path.join(root, "Applications/Farol.app/old"), "old");
-    if (["stubborn", "quit-failure", "backend-remains", "unexpected-descendant", "escalate", "private-and-public", "wrong-main-title"].includes(scenario))
+    if (
+      [
+        "stubborn",
+        "quit-failure",
+        "backend-remains",
+        "unexpected-descendant",
+        "escalate",
+        "private-and-public",
+        "wrong-main-title",
+      ].includes(scenario)
+    )
       writeFileSync(path.join(root, "running"), "yes");
     const fake = String.raw`#!/usr/bin/env node
 const fs = require('fs'), path = require('path');
