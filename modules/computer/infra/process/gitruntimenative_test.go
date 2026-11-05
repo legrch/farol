@@ -61,7 +61,7 @@ func nativeCLTGitRuntimeResources(t *testing.T, python, security, installed bool
 	defer cancel()
 	var hostRuntime *HostRuntimePlan
 	if installed {
-		hostRuntime, err = DiscoverInstalledHostRuntime(ctx)
+		hostRuntime, err = DiscoverInstalledHostRuntimeForPath(ctx, os.Getenv("PATH"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -186,13 +186,13 @@ Path(proof).write_text('hook-ran\n')
 	if installed {
 		s.GitRuntimeResources = nil
 		s.HostRuntime = hostRuntime
-		xdg := filepath.Join(home, "selected-xdg")
+		xdg := filepath.Join(home, ".config")
 		must(os.Mkdir(xdg, 0700))
 		must(os.Mkdir(filepath.Join(xdg, "git"), 0700))
 		must(os.WriteFile(filepath.Join(xdg, "git/config"), []byte("[farol]\n xdgProof = selected\n"), 0600))
 		must(os.WriteFile(filepath.Join(project, ".git/farol-include.config"), []byte("[farol]\n includeProof = selected\n"), 0600))
 		must(os.WriteFile(filepath.Join(home, ".gitconfig"), []byte("[user]\n name = Farol fixture\n email = fixture@example.invalid\n[init]\n defaultBranch = main\n[core]\n untrackedCache = true\n[includeIf \"gitdir:"+filepath.Join(project, ".git")+"\"]\n path = "+filepath.Join(project, ".git/farol-include.config")+"\n"), 0600))
-		must(hostRuntime.BindUserEnvironment(UserExecutableEnvironment{Source: "login-shell", XDGConfigHome: xdg}, 1))
+		must(hostRuntime.BindUserEnvironment(UserExecutableEnvironment{Source: "desktop-login-shell", Home: home, Path: os.Getenv("PATH")}, 1))
 		raw, e := os.ReadFile("../../../../tooling/shell-platform.json")
 		must(e)
 		var base struct{ Executables []ExecutablePin }

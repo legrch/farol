@@ -1232,6 +1232,12 @@ export class WindowController implements RendererFacade {
       return { ok: false, code: "SELF_TEST_UNAVAILABLE" };
     return this.api.selfTest(command);
   }
+
+  async ownerGitChoice(action: "status" | "load" | "change"): Promise<unknown> {
+    return (
+      this.api.ownerGitChoice?.(action) ?? { error: "GIT_CHOICE_UNAVAILABLE" }
+    );
+  }
   async readRetiredReplies(query: unknown): Promise<unknown> {
     const before = this.state;
     const context = before.chatHistoryContext;

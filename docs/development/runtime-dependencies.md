@@ -62,18 +62,21 @@ tools authority or widens generic Shell networking.
 
 ## Installed Shell programs
 
-The selected `installed-host-runtime-v3` policy discovers supported installed
+The selected `installed-host-runtime-v4` policy discovers supported installed
 Git and Python layouts in Homebrew Cellar, Command Line Tools, or Xcode. They
 remain optional user tools, not Farol runtime dependencies or bundled programs.
 An absent or unsupported optional installation contributes no authority and does
 not disable the base Shell or Computer file operations. Discovery does not run
 version commands or package managers. For Git, the first executable entry
-named `git` in the account's login-shell PATH is the only candidate. GUI and
-Terminal launches use the same account-derived home and shell; `TERM` is not
-evidence of how the app started. A bounded owned login-shell probe captures
-PATH once at Shell admission with a five-second budget, explicit environment
-and one nonce-bound four-field frame. Probe failure is held for that connector
-lifetime. A
+named `git` in the owner-approved desktop PATH snapshot is the only candidate.
+The owner loads the account login-shell environment from Farol Settings; the
+desktop host runs the account startup files as trusted user code outside the
+Computer sandbox. It captures only PATH in a bounded, nonce-framed process
+group. `TERM` does not prove Terminal provenance, so an unqualified launch uses
+the account login shell. A successful snapshot is cached for the Go core launch;
+the owner explicitly refreshes it and restarts Farol to apply a change. A failed
+capture is not automatically retried and leaves basic Shell, File, and Computer
+available. MCP requests cannot trigger environment capture. A
 failed or unqualified first Git is reported with its path and reason; Farol
 never substitutes a later Git or CLT. CLT is selected only when the owner puts
 it first in PATH. Python discovery remains optional and separately bounded.
@@ -99,8 +102,8 @@ Only selected runtime data trees and literal executable files are granted.
 `site-packages` and `.git` subtrees are excluded. The command environment uses
 the selected alias directory before the fixed system base, without inheriting
 the rest of ambient PATH. Python cannot write bytecode or load user site packages.
-Approved Git workspaces retain exact user config paths, the captured XDG Git
-paths and the selected Homebrew system config path. Other workspaces keep
+Approved Git workspaces retain exact user config paths under the account home
+and the selected Homebrew system config path. Other workspaces keep
 global and system configuration suppressed. Git's chosen alias precedes
 system directories in the command PATH, including for hooks. Hooks execute
 through Git within the same approved workspace policy;

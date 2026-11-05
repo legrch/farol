@@ -196,6 +196,7 @@ import {
 import os from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { OwnerGitChoice } from "../../../apps/desktop/owner-git-choice.ts";
 import { TUNNEL_CLIENT } from "../../../apps/desktop/tunnel-client-contract";
 import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
@@ -608,6 +609,7 @@ const compiledGoShell =
         ),
       };
 let desktopGoCore: DesktopGoCore | null = null;
+let ownerGitChoice: OwnerGitChoice | null = null;
 const buildIdentity = readRuntimeBuildIdentity(directory);
 const productName = buildIdentity.product;
 const bundleId = buildIdentity.bundleId;
@@ -12321,6 +12323,49 @@ function installIpc(): void {
       ? configureProduct(value)
       : configurationFailure("SETTINGS_UNAVAILABLE"),
   );
+  ipcMain.handle(channels.ownerGitChoice, async (event, action: unknown) => {
+    if (
+      !isTrustedIpcSender(event, window) ||
+      event.senderFrame !== event.sender.mainFrame
+    )
+      return { error: "IPC_SENDER_DENIED" };
+    if (!ownerGitChoice || quitInProgress || installedUpdateAdmission)
+      return { error: "GIT_CHOICE_UNAVAILABLE" };
+    if (action === "status") return ownerGitChoice.status();
+    if (action === "load") {
+      try {
+        await ownerGitChoice.refreshFromOwner();
+      } catch (error) {
+        return {
+          error:
+            error instanceof Error
+              ? error.message
+              : "SHELL_ENV_OUTCOME_UNKNOWN",
+        };
+      }
+      return ownerGitChoice.status();
+    }
+    if (action === "change") {
+      if (!window) return { error: "GIT_CHOICE_UNAVAILABLE" };
+      const selected = await dialog.showOpenDialog(window, {
+        title: "Choose Git",
+        properties: ["openFile"],
+        buttonLabel: "Use this Git",
+      });
+      if (selected.canceled || selected.filePaths.length !== 1)
+        return ownerGitChoice.status();
+      try {
+        ownerGitChoice.selectOverrideFromOwner(selected.filePaths[0]!);
+      } catch (error) {
+        return {
+          error:
+            error instanceof Error ? error.message : "GIT_SHIM_UNSUPPORTED",
+        };
+      }
+      return ownerGitChoice.status();
+    }
+    return { error: "GIT_CHOICE_INVALID" };
+  });
   ipcMain.handle(channels.chatHistory, (event, value: unknown) =>
     isTrustedIpcSender(event, window)
       ? readChatHistoryView(() => desktopGoCore, value)
@@ -12809,6 +12854,9 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         }),
     });
   const stateRoot = path.join(app.getPath("userData"), "farol-state");
+  // The core's protected profile root is excluded from Computer workspace tools.
+  // A broad HOME grant cannot turn an MCP file write into owner consent.
+  ownerGitChoice = new OwnerGitChoice(path.join(stateRoot, "go-core"));
   let freshStartup = false;
   const previousHostAdmissionReady = await withInstalledStartupFence(
     process.argv,
@@ -13166,6 +13214,8 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   // configured Computer identity, do not provision or start a Go profile.
   // Selected Go operations still refuse when their host is unavailable.
   if (compiledGoCore !== null && configuration.snapshot().status === "ready") {
+    await ownerGitChoice?.prepareStartup();
+    const ownerGitEnvironment = ownerGitChoice?.launchEnvironment();
     const currentSettings = () => {
       const snapshot = configuration!.snapshot();
       if (snapshot.status !== "ready") throw new Error("SETTINGS_UNAVAILABLE");
@@ -13204,6 +13254,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         ),
         stateRoot,
         home: app.getPath("home"),
+        ...(ownerGitEnvironment ? { ownerGitEnvironment } : {}),
         settings: currentSettings,
         onLifecycleObservation: reportOwnedBackendLifecycle,
         ...(runtimeEnvironment === "dev" || process.env.FAROL_E2E === "1"

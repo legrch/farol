@@ -30,7 +30,7 @@ export interface ShellSupportDeclaration {
   readonly imports: readonly ShellSupportPin[];
   readonly executables: readonly ShellSupportPin[];
   readonly gitRuntimeResources?: ShellGitRuntimeResources;
-  readonly hostRuntimePolicy?: "installed-host-runtime-v3";
+  readonly hostRuntimePolicy?: "installed-host-runtime-v4";
   readonly watchdog: Readonly<{
     relativePath: "Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron";
     sha256: string;
@@ -433,7 +433,7 @@ export function parseShellSupportDeclaration(
     const hostRuntimePolicy = support.hostRuntimePolicy;
     if (
       Object.hasOwn(support, "hostRuntimePolicy") &&
-      (hostRuntimePolicy !== "installed-host-runtime-v3" ||
+      (hostRuntimePolicy !== "installed-host-runtime-v4" ||
         resourceKey.length !== 0)
     )
       return refuse();
@@ -510,7 +510,7 @@ export function parseShellSupportDeclaration(
       imports: imported,
       executables,
       ...(resources ? { gitRuntimeResources: resources } : {}),
-      ...(hostRuntimePolicy === "installed-host-runtime-v3"
+      ...(hostRuntimePolicy === "installed-host-runtime-v4"
         ? { hostRuntimePolicy }
         : {}),
       watchdog: Object.freeze({

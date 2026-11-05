@@ -36,6 +36,7 @@ export type PreloadApi = Readonly<{
   bootstrap(): Promise<unknown>;
   snapshot(): Promise<unknown>;
   configure(command: ProductConfigurationCommand): Promise<unknown>;
+  ownerGitChoice?(action: "status" | "load" | "change"): Promise<unknown>;
   chatHistory?(request: unknown): Promise<unknown>;
   retiredReplies?(request: unknown): Promise<unknown>;
   task(command: ProductTaskCommand): Promise<unknown>;
@@ -308,6 +309,7 @@ export type NativeRefreshResult =
     }>;
 export interface RendererFacade {
   selfTest?(command: unknown): Promise<unknown>;
+  ownerGitChoice?(action: "status" | "load" | "change"): Promise<unknown>;
   readonly draft: AgentDraftStore;
   readonly conversationDraft: ConversationDraftStore;
   getSnapshot(): WindowSnapshot;

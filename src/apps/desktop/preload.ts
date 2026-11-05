@@ -77,6 +77,8 @@ if (process.argv.includes("--farol-startup-recovery")) {
     snapshot: () => ipcRenderer.invoke(channels.snapshot) as Promise<unknown>,
     configure: (command: unknown) =>
       ipcRenderer.invoke(channels.configuration, command) as Promise<unknown>,
+    ownerGitChoice: (action: "status" | "load" | "change") =>
+      ipcRenderer.invoke(channels.ownerGitChoice, action) as Promise<unknown>,
     chatHistory: (request: unknown) =>
       ipcRenderer.invoke(channels.chatHistory, request) as Promise<unknown>,
     retiredReplies: (request: unknown) =>

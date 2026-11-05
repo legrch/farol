@@ -58,6 +58,7 @@ import { bindShellSupportDeclaration } from "./bridge/shell-support.ts";
 import { attestShellRuntime } from "./bridge/shell-runtime.ts";
 import type { QualificationObserver } from "./bridge/qualification-metrics.ts";
 import { encodeShellLaunch } from "./bridge/shell-launch.ts";
+import type { OwnerGitEnvironment } from "./owner-git-environment.ts";
 import { GoComputerAuthority } from "./go-computer-authority.ts";
 import type { BuildIdentity } from "../../src/pkg/build-info/identity";
 import type { ProductSettings } from "../../src/pkg/product-settings/contract";
@@ -74,6 +75,7 @@ export type DesktopBrowserConnection = Readonly<{
 }>;
 
 export type DesktopCoreSelection = Readonly<{
+  ownerGitEnvironment?: OwnerGitEnvironment;
   // Trusted opt-in only. Ordinary Electron startup leaves this unselected;
   // saved source metadata is not native/provider qualification.
   codexRead?: NativeCodexReadSelection;
@@ -883,6 +885,9 @@ async function startSelectedDesktopGoCore(
             childLaunchId,
             appRoot: shellBundle,
             watchdogSource: shell.source,
+            ...(selection.ownerGitEnvironment
+              ? { ownerGitEnvironment: selection.ownerGitEnvironment }
+              : {}),
           })
         : undefined;
     qualifiedShell = shellMetadata !== undefined;

@@ -25,6 +25,10 @@ type shellLaunchPayload struct {
 	Schema, BuildID, ProfileID, HostLifetimeID, ChildLaunchID string
 	Support                                                   nativeprocess.RootScopedPlatformSupport
 	WatchdogSourceBase64                                      string
+	OwnerGitEnvironment                                       *struct {
+		Path, Source, CapturedAt string
+		Generation               uint64
+	}
 }
 
 func shellLaunchRefusal() error { return connectorProcessRefusal("SHELL_LAUNCH_METADATA_INVALID") }
@@ -56,6 +60,17 @@ func decodeShellLaunch(raw []byte, launch NativeLaunch) (*connectorShellConfig, 
 	if hex.EncodeToString(digest[:]) != payload.Support.WatchdogSourceSHA256 {
 		return nil, shellLaunchRefusal()
 	}
-	return &connectorShellConfig{runtimeID: launch.ChildLaunchID, home: launch.Home, support: payload.Support,
-		watchdog: nativeprocess.WatchdogSelection{Executable: payload.Support.Watchdog, Source: source, SourceSHA256: payload.Support.WatchdogSourceSHA256}}, nil
+	config := &connectorShellConfig{runtimeID: launch.ChildLaunchID, home: launch.Home, support: payload.Support,
+		watchdog: nativeprocess.WatchdogSelection{Executable: payload.Support.Watchdog, Source: source, SourceSHA256: payload.Support.WatchdogSourceSHA256}}
+	if selected := payload.OwnerGitEnvironment; selected != nil {
+		if selected.Generation == 0 || selected.Generation > 1_000_000 || !nativeprocess.ValidUserExecutablePath(selected.Path) ||
+			selected.Source != "desktop-login-shell" && selected.Source != "terminal-inherited" && selected.Source != "owner-override" ||
+			len(selected.CapturedAt) > 80 {
+			return nil, shellLaunchRefusal()
+		}
+		config.userEnvironment = &nativeprocess.UserExecutableEnvironment{Path: selected.Path, Home: launch.Home,
+			Source: selected.Source, CapturedAt: selected.CapturedAt}
+		config.environmentGeneration = selected.Generation
+	}
+	return config, nil
 }

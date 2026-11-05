@@ -6,6 +6,7 @@ export const channels = Object.freeze({
   bootstrap: "farol:bootstrap",
   snapshot: "farol:snapshot",
   configuration: "farol:configuration",
+  ownerGitChoice: "farol:owner-git-choice",
   chatHistory: "farol:chat-history",
   retiredReplies: "farol:retired-replies",
   configurationChanged: "farol:configuration-changed",

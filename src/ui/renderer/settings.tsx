@@ -768,6 +768,7 @@ function General({ snapshot, facade, actions }: PageProps) {
           )}
         </Group>
       </div>
+      <OwnerGitSettings facade={facade} />
       <Group title="Something wrong?">
         <p className="description">
           Save a support file and attach it to a GitHub issue. It holds no
@@ -778,6 +779,111 @@ function General({ snapshot, facade, actions }: PageProps) {
         </Command>
       </Group>
     </>
+  );
+}
+
+type GitChoiceView = Readonly<{
+  gitAlias: string | null;
+  gitPhysical: string | null;
+  source: string | null;
+  pendingRestart: boolean;
+  failure: string | null;
+}>;
+
+function gitChoiceView(value: unknown): GitChoiceView | null {
+  if (!value || typeof value !== "object") return null;
+  const selected = value as Record<string, unknown>;
+  if (
+    !(["gitAlias", "gitPhysical", "source", "failure"] as const).every(
+      (key) => selected[key] === null || typeof selected[key] === "string",
+    ) ||
+    typeof selected.pendingRestart !== "boolean"
+  )
+    return null;
+  return selected as GitChoiceView;
+}
+
+function OwnerGitSettings({ facade }: { facade: RendererFacade }) {
+  const [choice, setChoice] = useState<GitChoiceView | null>(null);
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let current = true;
+    void facade.ownerGitChoice?.("status").then((value) => {
+      if (current) setChoice(gitChoiceView(value));
+    });
+    return () => {
+      current = false;
+    };
+  }, [facade]);
+  const run = async (action: "load" | "change") => {
+    if (!facade.ownerGitChoice || busy) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await facade.ownerGitChoice(action);
+      const parsed = gitChoiceView(result);
+      if (!parsed) {
+        setMessage(
+          (result as { error?: string })?.error ??
+            "Git selection could not be confirmed.",
+        );
+        return;
+      }
+      setChoice(parsed);
+      if (parsed.pendingRestart)
+        setMessage("Restart Farol to apply this Git selection.");
+    } catch {
+      setMessage(
+        "Git selection could not be confirmed. Refresh only when ready.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Group title="Git for Commands">
+      <p className="description">
+        Farol uses the first Git in your shell PATH. Loading your shell
+        environment runs your account startup files outside the Computer
+        sandbox, only after you choose it here.
+      </p>
+      <p className="description">
+        {choice?.gitAlias && !choice.gitPhysical
+          ? `Git candidate could not be inspected: ${choice.gitAlias}`
+          : choice?.gitPhysical
+            ? `Git: ${choice.gitAlias?.startsWith("/opt/homebrew/") || choice.gitPhysical.startsWith("/opt/homebrew/") ? "Homebrew" : "Selected"} · ${choice.gitPhysical} · ${choice.source === "owner-override" ? "chosen by you" : "from your PATH"}`
+            : "Git: not selected"}
+      </p>
+      {choice?.failure && (
+        <p className="description" role="status">
+          {choice.failure}
+        </p>
+      )}
+      {message && (
+        <p className="description" role="status">
+          {message}
+        </p>
+      )}
+      <div className="setting-row">
+        <button
+          type="button"
+          className="subtle"
+          disabled={busy}
+          onClick={() => void run("load")}
+        >
+          Load shell environment / Refresh
+        </button>
+        <button
+          type="button"
+          className="subtle"
+          disabled={busy}
+          onClick={() => void run("change")}
+        >
+          Change Git…
+        </button>
+      </div>
+    </Group>
   );
 }
 function AppearancePage({ snapshot, facade }: PageProps) {

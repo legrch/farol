@@ -152,6 +152,23 @@ func TestConnectorShellFactoryUsesOriginalLeaseAndPolicy(t *testing.T) {
 	}
 }
 
+func TestConnectorShellWithoutOwnerPathKeepsBaseShell(t *testing.T) {
+	f := newShellFactoryFixture(t)
+	f.factory.config.support.HostRuntimePolicy = nativeprocess.InstalledHostRuntimeAssurance
+	f.factory.config.support.Executables = f.factory.config.support.Executables[:1]
+	selected, _, err := f.factory.selectShell(context.Background(), f.lease, shellFactoryRequest())
+	if err != nil || selected == nil || f.policy.HostRuntime == nil {
+		t.Fatalf("base Shell was disabled by absent owner PATH: %v", err)
+	}
+	if path, code := f.policy.HostRuntime.GitSelection(); path != "" || code != "GIT_NOT_FOUND" {
+		t.Fatalf("missing owner choice selected Git: %q %q", path, code)
+	}
+	if !strings.Contains(f.invocation.Arguments[3], "GIT_NOT_FOUND") ||
+		!strings.HasSuffix(f.invocation.Arguments[3], shellFactoryRequest().Command) {
+		t.Fatal("Git refusal hid the original base Shell command")
+	}
+}
+
 func TestConnectorShellFactoryRefusesInvalidInputBeforeAllocation(t *testing.T) {
 	for _, change := range []func(*connectorShellRequest){
 		func(r *connectorShellRequest) { r.WorkspaceID = "unknown" },

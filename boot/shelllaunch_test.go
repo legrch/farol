@@ -44,6 +44,47 @@ func TestShellLaunchSharedHostProjection(t *testing.T) {
 	}
 }
 
+func TestShellLaunchOwnerPathOnly(t *testing.T) {
+	raw, launch := shellLaunchFixture(t)
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["OwnerGitEnvironment"] = map[string]any{
+		"Path": "/opt/homebrew/bin:/usr/bin", "Source": "desktop-login-shell",
+		"CapturedAt": "2026-11-05T16:00:00.000Z", "Generation": 1,
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := decodeShellLaunch(encoded, launch)
+	if err != nil || config.userEnvironment == nil || config.userEnvironment.Path != "/opt/homebrew/bin:/usr/bin" ||
+		config.userEnvironment.XDGConfigHome != "" || config.environmentGeneration != 1 {
+		t.Fatal("desktop PATH not bound", err)
+	}
+	for _, edit := range []func(map[string]any){
+		func(v map[string]any) { v["Path"] = "/usr/bin:" },
+		func(v map[string]any) { v["Path"] = "/usr/bin\x00:/bin" },
+		func(v map[string]any) { v["Source"] = "mcp" },
+		func(v map[string]any) { v["Generation"] = 0 },
+		func(v map[string]any) { v["XDGConfigHome"] = "/Users/owner/secrets" },
+	} {
+		var changed map[string]any
+		if err := json.Unmarshal(encoded, &changed); err != nil {
+			t.Fatal(err)
+		}
+		edit(changed["OwnerGitEnvironment"].(map[string]any))
+		bad, err := json.Marshal(changed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if selected, err := decodeShellLaunch(bad, launch); err == nil || selected != nil {
+			t.Fatal("untrusted environment accepted")
+		}
+	}
+}
+
 func TestShellLaunchRefusesCrossedLifetimeAndMalformedValues(t *testing.T) {
 	raw, launch := shellLaunchFixture(t)
 	for _, pair := range [][2]string{

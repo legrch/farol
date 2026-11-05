@@ -88,21 +88,54 @@ it("projects the same finite Git data group decoded by Go", () => {
 it("projects only the policy selector; installed runtime facts stay Go-owned", () => {
   const input = {
     ...structuredClone(fixture.declaration),
-    hostRuntimePolicy: "installed-host-runtime-v3",
+    hostRuntimePolicy: "installed-host-runtime-v4",
   };
   const actual = JSON.parse(
     Buffer.from(
       encodeShellLaunch(input, structuredClone(input), input.core, host()),
     ).toString("utf8"),
   );
-  expect(actual.Support.HostRuntimePolicy).toBe("installed-host-runtime-v3");
+  expect(actual.Support.HostRuntimePolicy).toBe("installed-host-runtime-v4");
   expect(actual.Support.HostRuntime).toBeUndefined();
   expect(actual.Support.GitRuntimeResources).toBeUndefined();
+});
+
+it("projects only owner-approved PATH metadata through the private launch", () => {
+  const input = structuredClone(fixture.declaration);
+  const selected = {
+    path: "/opt/homebrew/bin:/usr/bin",
+    source: "desktop-login-shell" as const,
+    capturedAt: "2026-11-05T16:00:00.000Z",
+    generation: 1,
+  };
+  const actual = JSON.parse(
+    Buffer.from(
+      encodeShellLaunch(input, structuredClone(input), input.core, {
+        ...host(),
+        ownerGitEnvironment: selected,
+      }),
+    ).toString("utf8"),
+  );
+  expect(actual.OwnerGitEnvironment).toEqual({
+    Path: selected.path,
+    Source: selected.source,
+    CapturedAt: selected.capturedAt,
+    Generation: 1,
+  });
+  expect(JSON.stringify(actual)).not.toMatch(
+    /XDG_CONFIG_HOME|DEVELOPER_DIR|ZDOTDIR/u,
+  );
+  expect(() =>
+    encodeShellLaunch(input, input, input.core, {
+      ...host(),
+      ownerGitEnvironment: { ...selected, path: "/usr/bin:" },
+    }),
+  ).toThrow("invalid_shell_launch_metadata");
 });
 it("refuses mixing fixed CLT and installed environment policy", () => {
   const input = {
     ...structuredClone(gitResourceFixture.declaration),
-    hostRuntimePolicy: "installed-host-runtime-v3",
+    hostRuntimePolicy: "installed-host-runtime-v4",
   };
   expect(() =>
     encodeShellLaunch(input, structuredClone(input), input.core, host()),

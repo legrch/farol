@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { BridgeError } from "./client.ts";
 import { bindShellSupportDeclaration } from "./shell-support.ts";
+import type { OwnerGitEnvironment } from "../owner-git-environment.ts";
+import { validOwnerSearchPath } from "../owner-git-environment.ts";
 
 export interface ShellLaunchHost {
   readonly profileId: string;
@@ -10,6 +12,7 @@ export interface ShellLaunchHost {
   // The host must separately qualify this exact app bundle and its full bytes.
   readonly appRoot: Readonly<{ path: string; device: string; inode: string }>;
   readonly watchdogSource: Uint8Array;
+  readonly ownerGitEnvironment?: OwnerGitEnvironment;
 }
 
 // Pure projection of already trusted host selections. Equality is not an issuer
@@ -66,6 +69,22 @@ export function encodeShellLaunch(
     support.watchdog.sourceSHA256
   )
     refuse();
+  if (host.ownerGitEnvironment) {
+    const selected = host.ownerGitEnvironment;
+    if (
+      typeof selected.path !== "string" ||
+      !validOwnerSearchPath(selected.path) ||
+      !["desktop-login-shell", "terminal-inherited", "owner-override"].includes(
+        selected.source,
+      ) ||
+      !Number.isSafeInteger(selected.generation) ||
+      selected.generation < 1 ||
+      selected.generation > 1_000_000 ||
+      typeof selected.capturedAt !== "string" ||
+      selected.capturedAt.length > 80
+    )
+      refuse();
+  }
   const pin = (value: Readonly<{ path: string; sha256: string }>) => ({
     Path: value.path,
     SHA256: value.sha256,
@@ -77,6 +96,16 @@ export function encodeShellLaunch(
       ProfileID: host.profileId,
       HostLifetimeID: host.hostLifetimeId,
       ChildLaunchID: host.childLaunchId,
+      ...(host.ownerGitEnvironment
+        ? {
+            OwnerGitEnvironment: {
+              Path: host.ownerGitEnvironment.path,
+              Source: host.ownerGitEnvironment.source,
+              CapturedAt: host.ownerGitEnvironment.capturedAt,
+              Generation: host.ownerGitEnvironment.generation,
+            },
+          }
+        : {}),
       Support: {
         ReleaseID: support.qualification.releaseId,
         QualificationSHA256: support.qualification.sha256,

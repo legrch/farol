@@ -59,6 +59,14 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
   roots: ["src", "apps/desktop", "modules", "boot", "cmd"],
   launches: [
     launch(
+      "desktop.owner-git-environment",
+      "apps/desktop/owner-git-environment.ts",
+      "ownedProcess",
+      "spawn",
+      "executable",
+      "optional-user-executable",
+    ),
+    launch(
       "release.update-go",
       release + "installed-update-helper.ts",
       "startInstalledUpdateHelper",

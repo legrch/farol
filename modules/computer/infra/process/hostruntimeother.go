@@ -9,23 +9,12 @@ type UserExecutableEnvironment struct {
 	Source, CapturedAt                                            string
 }
 
-func CaptureUserEnvironment(context.Context) (UserExecutableEnvironment, error) {
-	return UserExecutableEnvironment{}, errHostRuntime
-}
-
-func DiscoverInstalledHostRuntime(context.Context) (*HostRuntimePlan, error) {
-	return nil, errHostRuntime
-}
 func DiscoverInstalledHostRuntimeForPath(context.Context, string) (*HostRuntimePlan, error) {
 	return nil, errHostRuntime
 }
 func DiscoverInstalledHostRuntimeForEnvironment(context.Context, UserExecutableEnvironment) (*HostRuntimePlan, error) {
 	return nil, errHostRuntime
 }
-func CaptureUserExecutablePath(context.Context) (string, error) {
-	return "", errHostRuntime
-}
-
 func (nativePlatformFacts) hostRuntime(context.Context, *HostRuntimePlan) error {
 	return errHostRuntime
 }

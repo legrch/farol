@@ -11,10 +11,31 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode/utf8"
 )
 
-const InstalledHostRuntimeAssurance = "installed-host-runtime-v3"
+const InstalledHostRuntimeAssurance = "installed-host-runtime-v4"
 const hostRuntimePathLimit = 16384
+
+// PATH comes from an owner-controlled desktop snapshot. Validation grants no
+// executable; the selected image still goes through native qualification.
+func ValidUserExecutablePath(value string) bool {
+	if value == "" || len(value) > hostRuntimePathLimit || !utf8.ValidString(value) {
+		return false
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	for _, dir := range strings.Split(value, ":") {
+		if !absolutePolicyPath(dir) || filepath.Clean(dir) != dir {
+			return false
+		}
+	}
+	return true
+}
+
 const hostRuntimeScriptType uint32 = 0xffffffff
 
 var errHostRuntime = errors.New("HOST_RUNTIME_UNQUALIFIED")
@@ -46,7 +67,7 @@ type HostRuntimePlan struct{ frozen *hostRuntimeSnapshot }
 // A failed optional Git environment discovery must not disable file tools or
 // the base, release-pinned Shell. This plan grants no installed executable.
 func UnavailableHostRuntime(code string) *HostRuntimePlan {
-	if code != "SHELL_ENV_TIMEOUT" && code != "SHELL_ENV_OUTCOME_UNKNOWN" {
+	if code != "SHELL_ENV_TIMEOUT" && code != "SHELL_ENV_OUTCOME_UNKNOWN" && code != "GIT_NOT_FOUND" {
 		code = "SHELL_ENV_OUTCOME_UNKNOWN"
 	}
 	return &HostRuntimePlan{frozen: &hostRuntimeSnapshot{Assurance: InstalledHostRuntimeAssurance,
@@ -200,26 +221,27 @@ func (p *HostRuntimePlan) valid() bool {
 			return false
 		}
 	}
-	if p.frozen.EnvironmentGeneration != 0 && (p.frozen.EnvironmentSource != "login-shell" || len(p.frozen.LookupPath) > hostRuntimePathLimit) {
+	if p.frozen.EnvironmentGeneration != 0 && (!validOwnerEnvironmentSource(p.frozen.EnvironmentSource) || len(p.frozen.LookupPath) > hostRuntimePathLimit) {
 		return false
 	}
 	return true
 }
 
-// BindUserEnvironment records only path metadata. It does not grant access to
-// the captured directories; the workspace's Git approval is still required.
+func validOwnerEnvironmentSource(source string) bool {
+	return source == "desktop-login-shell" || source == "terminal-inherited" || source == "owner-override"
+}
+
+// BindUserEnvironment records only PATH metadata. It does not grant access to
+// other shell environment variables; the workspace's Git approval is required.
 func (p *HostRuntimePlan) BindUserEnvironment(value UserExecutableEnvironment, generation uint64) error {
-	if p == nil || p.frozen == nil || !p.valid() || value.Source != "login-shell" || generation == 0 ||
-		(value.XDGConfigHome != "" && !insidePolicy(value.Home, value.XDGConfigHome)) {
+	if p == nil || p.frozen == nil || !p.valid() || !validOwnerEnvironmentSource(value.Source) || !ValidUserExecutablePath(value.Path) || generation == 0 ||
+		value.XDGConfigHome != "" || value.DeveloperDir != "" || value.ZDotDir != "" {
 		return errHostRuntime
 	}
 	p.frozen.EnvironmentSource = value.Source
 	p.frozen.CapturedAt = value.CapturedAt
 	p.frozen.EnvironmentGeneration = generation
 	p.frozen.LookupPath = value.Path
-	p.frozen.XDGConfigHome = value.XDGConfigHome
-	p.frozen.DeveloperDir = value.DeveloperDir
-	p.frozen.ZDotDir = value.ZDotDir
 	for _, selected := range p.frozen.Installations {
 		if selected.Kind == "git" {
 			p.frozen.GitArch = "arm64"
