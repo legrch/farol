@@ -415,6 +415,27 @@ func TestMilestoneRelaunchRejectsPrivateGUIPath(t *testing.T) {
 	}
 }
 
+func TestMilestoneRelaunchRefusesInvalidInstalledExecutableSignature(t *testing.T) {
+	f := newFakeRelaunchLifecycle(t)
+	checked := 0
+	f.config.verifyExecutables = func(_ context.Context, _ time.Time, slot string) error {
+		checked++
+		if slot != f.app || f.diskPhase(t) != "launch_requested" {
+			t.Fatal("signature check did not inspect the installed slot under launch intent", slot)
+		}
+		return &port.HelperRecoveryFailure{Code: "launch_signature_refused", Phase: "refused"}
+	}
+	m, ready := f.prepare(t, "apply", true)
+	result, err := f.run(t, m, ready)
+	var failure *executionapp.Failure
+	if result != nil || !errors.As(err, &failure) || failure.Code != "launch_signature_refused" {
+		t.Fatalf("invalid executable launched or completed: result=%+v error=%v", result, describe(err))
+	}
+	if checked != 1 || f.fake.opens != 0 || f.diskPhase(t) != "launch_requested" {
+		t.Fatalf("signature refusal lost the launch intent: checks=%d opens=%d phase=%s", checked, f.fake.opens, f.diskPhase(t))
+	}
+}
+
 // Without a launch port the Milestone refuses before it writes anything past
 // verified: nothing is journalled, measured or opened.
 func TestMilestoneRelaunchWithoutALaunchPortRefusesBeforeAnyLaunchEffect(t *testing.T) {
