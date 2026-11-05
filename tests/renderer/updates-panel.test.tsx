@@ -305,6 +305,18 @@ it("shows bounded restart progress without sending another install request", asy
     expect(host.textContent).toContain("Closing ChatGPT and local services");
     await act(async () => vi.advanceTimersByTime(6000));
     expect(host.textContent).toContain("Still closing local services");
+    await act(async () =>
+      emit({
+        status: "ready",
+        projection: projectUpdates({
+          ...f.c.getSnapshot(),
+          update: { phase: "applying", version: "0.4.1" },
+        }),
+        pending: false,
+      }),
+    );
+    expect(host.textContent).toContain("Still closing local services");
+    expect(host.textContent).not.toContain("keep the update ready");
     expect(api.intent).not.toHaveBeenCalled();
   } finally {
     await act(async () => root.unmount());

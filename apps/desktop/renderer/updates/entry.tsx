@@ -102,8 +102,10 @@ export function UpdatesWindow({ api }: { api: UpdatesAPI }) {
   }, [api]);
   const projection = state.status === "ready" ? state.projection : null;
   const update = projection?.update;
-  const restarting =
-    state.status === "ready" && state.pending && update?.phase === "applying";
+  // The relay can settle after helper handoff while the drained Quit is still
+  // closing local services. Keep progress visible until the window exits or
+  // the updater publishes a different phase.
+  const restarting = state.status === "ready" && update?.phase === "applying";
   useEffect(() => {
     if (!restarting) {
       setRestartWaitSeconds(0);
@@ -198,12 +200,12 @@ export function UpdatesWindow({ api }: { api: UpdatesAPI }) {
           Installed version {projection.installedVersion}
         </p>
       )}
-      {state.status === "ready" && state.pending && (
+      {state.status === "ready" && (state.pending || restarting) && (
         <p role="status">
           {update?.phase === "applying"
             ? restartWaitSeconds < 5
               ? "Closing ChatGPT and local services…"
-              : "Still closing local services. If Farol cannot confirm their exit, it will keep the update ready and show the reason."
+              : "Still closing local services. Farol records any unconfirmed result for review."
             : "You can close this window. The update will continue in the background."}
         </p>
       )}
