@@ -6,7 +6,7 @@
 
 Find information in local files, understand a project, or make approved edits. Choose what ChatGPT can access and manage those permissions in the Farol desktop app.
 
-[Download](#download-and-installation) · [Get started](docs/start/README.md) · [User guides](docs/guides/README.md) · [Current status](docs/reference/status.md)
+[Install Farol](#install-farol) · [Get started](docs/start/README.md) · [User guides](docs/guides/README.md) · [Current status](docs/reference/status.md)
 
 ## What is Farol?
 
@@ -28,13 +28,13 @@ The supported macOS versions and clean-machine prerequisites still need first-in
 
 <a id="use-and-installation"></a>
 
-## Download and installation
+## Install Farol
 
-[**View the latest public release →**](https://github.com/legrch/farol/releases/latest)
+**Apple Silicon Mac:** [open the latest public release](https://github.com/legrch/farol/releases/latest) and read its installation notes. The release contains the Farol ZIP, `farol-release.json`, and `SHA256SUMS`.
 
-Use the latest release page for the current download and its checksums. Public downloads and qualified internal installations can have different capabilities; see [current distribution status](docs/reference/status.md).
+**First installation is still being qualified.** Downloading a ZIP or copying the app does not establish the trusted installation record required for updates. Follow [First installation](docs/start/installation.md) and check [current distribution status](docs/reference/status.md) before installing. Existing users should keep their accepted installation and update from the app.
 
-> **New installation:** downloading the ZIP is available, but first installation and setup for trusted updates are not yet a supported, tested end-to-end path. Read [First installation](docs/start/installation.md) before opening or copying the app. Existing users should keep their accepted installation and use its updater.
+The one-command installer will be recommended here after its replacement and first-launch checks pass. A GitHub **Latest** label identifies a published release; it does not by itself qualify installation on a fresh Mac.
 
 ## Connect Farol to ChatGPT
 
