@@ -7642,8 +7642,9 @@ describe("selected shared slot (redirected disposable filesystem, mocked helper)
         expect(current.snapshot().phase).toBe("ready");
         await current.restart();
         expect(current.snapshot().phase).toBe("applying");
-        const nextOperation = JSON.parse(await fs.readFile(ready, "utf8"))
-          .operation;
+        const nextOperation = JSON.parse(
+          await fs.readFile(ready, "utf8"),
+        ).operation;
         expect(nextOperation.source).toEqual(manualSource);
         const nextRoot = path.join(
           userData,
@@ -7665,9 +7666,7 @@ describe("selected shared slot (redirected disposable filesystem, mocked helper)
           if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
           return {
             stdout: JSON.stringify(
-              args[1]!.endsWith("previous.app")
-                ? manualSource
-                : nextTarget,
+              args[1]!.endsWith("previous.app") ? manualSource : nextTarget,
             ),
           };
         });
