@@ -7451,99 +7451,247 @@ describe("selected shared slot (redirected disposable filesystem, mocked helper)
     expect(updated!.snapshot().phase).toBe("idle");
     expect(mocks.helper).toHaveBeenCalledTimes(1);
   });
-  it("checks updates after a newer adopted shared build without rewriting the completed OTA receipt", async () => {
-    await shared();
-    const first = await prepared();
-    await first.restart();
-    const retained = JSON.parse(await fs.readFile(ready, "utf8"));
-    const op = retained.operation;
-    const opRoot = path.join(userData, "installed-updates", op.operationId);
-    await fs.mkdir(path.join(opRoot, "previous.app"));
-    await fs.writeFile(
-      path.join(opRoot, "journal.json"),
-      JSON.stringify({
-        schema: "farol.installed-update-journal/1",
-        ...op,
-        phase: "completed",
-      }),
-      { mode: 0o600 },
-    );
-    await first.close();
-    mocks.exec.mockImplementation(async (file: string, args: string[]) => {
-      if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
-      return {
-        stdout: JSON.stringify(
-          args[1]!.endsWith("previous.app") ? source : target,
-        ),
-      };
-    });
-    const old = (await createInstalledUpdateRuntime({
-      ...options(),
-      build: { ...build, version: target.version, buildId: target.buildId },
-    }))!;
-    await old.initialize();
-    expect(old.snapshot().phase).toBe("idle");
-    await old.close();
-    const receiptFile = path.join(
-      userData,
-      "installed-updates/last-update.json",
-    );
-    const before = await fs.readFile(receiptFile);
-    const manualBuild = {
-      ...build,
-      version: "0.1.2-owner.beta.1",
-      buildVersion: "4",
-      sourceCommit: "3".repeat(40),
-      sourceTreeDigest: "4".repeat(64),
-      buildId: "0".repeat(64),
-    };
-    manualBuild.buildId = createHash("sha256")
-      .update(canonicalBuildIdentityPayload(manualBuild))
-      .digest("hex");
-    const manualManifest = {
-      ...manifest,
-      version: manualBuild.version,
-      buildVersion: manualBuild.buildVersion,
-      sourceCommit: manualBuild.sourceCommit,
-      sourceTreeDigest: manualBuild.sourceTreeDigest,
-      buildId: manualBuild.buildId,
-      artifactSha256: "7".repeat(64),
-      archiveName: `Farol-${manualBuild.version}-darwin-arm64.zip`,
-    };
-    await fs.writeFile(
-      path.join(userData, "installed-updates/adopted-baseline.json"),
-      JSON.stringify({
-        schema: "farol.adopted-baseline/1",
-        slot: "/Applications/Farol.app",
+  it.each([
+    ["completed", false],
+    ["rolled_back", true],
+    ["rolled_back", false],
+  ] as const)(
+    "checks updates after a newer adopted shared build without rewriting the %s OTA receipt (ready=%s)",
+    async (outcome, withReady) => {
+      await shared();
+      const first = await prepared();
+      await first.restart();
+      const retained = JSON.parse(await fs.readFile(ready, "utf8"));
+      const op = retained.operation;
+      const opRoot = path.join(userData, "installed-updates", op.operationId);
+      await fs.mkdir(path.join(opRoot, "previous.app"));
+      await fs.writeFile(
+        path.join(opRoot, "journal.json"),
+        JSON.stringify({
+          schema: "farol.installed-update-journal/1",
+          ...op,
+          phase: "completed",
+        }),
+        { mode: 0o600 },
+      );
+      await first.close();
+      mocks.exec.mockImplementation(async (file: string, args: string[]) => {
+        if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+        return {
+          stdout: JSON.stringify(
+            args[1]!.endsWith("previous.app") ? source : target,
+          ),
+        };
+      });
+      const old = (await createInstalledUpdateRuntime({
+        ...options(),
+        build: { ...build, version: target.version, buildId: target.buildId },
+      }))!;
+      await old.initialize();
+      expect(old.snapshot().phase).toBe("idle");
+      await old.close();
+      const receiptFile = path.join(
         userData,
-        manifest: manualManifest,
-        adoptedAt: "2026-10-21T00:00:00.000Z",
-      }),
-      { mode: 0o600 },
-    );
-    mocks.exec.mockImplementation(async (file: string) => {
-      if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
-      return {
-        stdout: JSON.stringify({
+        "installed-updates/last-update.json",
+      );
+      if (outcome === "rolled_back") {
+        const previous = JSON.parse(await fs.readFile(receiptFile, "utf8"));
+        previous.phase = "rolled_back";
+        previous.runningBuildId = op.source.buildId;
+        await fs.writeFile(receiptFile, JSON.stringify(previous), {
+          mode: 0o600,
+        });
+        await fs.writeFile(
+          path.join(opRoot, "journal.json"),
+          JSON.stringify({
+            schema: "farol.installed-update-journal/1",
+            ...op,
+            phase: "rolled_back",
+          }),
+          { mode: 0o600 },
+        );
+        if (withReady)
+          await fs.writeFile(
+            ready,
+            JSON.stringify({
+              schema: "farol.ready-update/1",
+              handle: retained.handle,
+              manifest: retained.manifest,
+              operation: null,
+            }),
+            { mode: 0o600 },
+          );
+      }
+      const before = await fs.readFile(receiptFile);
+      const manualBuild = {
+        ...build,
+        version: "0.1.2-owner.beta.1",
+        buildVersion: "4",
+        sourceCommit: "3".repeat(40),
+        sourceTreeDigest: "4".repeat(64),
+        buildId: "0".repeat(64),
+      };
+      manualBuild.buildId = createHash("sha256")
+        .update(canonicalBuildIdentityPayload(manualBuild))
+        .digest("hex");
+      const manualManifest = {
+        ...manifest,
+        version: manualBuild.version,
+        buildVersion: manualBuild.buildVersion,
+        sourceCommit: manualBuild.sourceCommit,
+        sourceTreeDigest: manualBuild.sourceTreeDigest,
+        buildId: manualBuild.buildId,
+        artifactSha256: "7".repeat(64),
+        archiveName: `Farol-${manualBuild.version}-darwin-arm64.zip`,
+      };
+      await fs.writeFile(
+        path.join(userData, "installed-updates/adopted-baseline.json"),
+        JSON.stringify({
+          schema: "farol.adopted-baseline/1",
+          slot: "/Applications/Farol.app",
+          userData,
+          manifest: manualManifest,
+          adoptedAt: "2026-10-21T00:00:00.000Z",
+        }),
+        { mode: 0o600 },
+      );
+      mocks.exec.mockImplementation(async (file: string) => {
+        if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+        return {
+          stdout: JSON.stringify({
+            digest: manualManifest.artifactSha256,
+            version: manualBuild.version,
+            buildId: manualBuild.buildId,
+          }),
+        };
+      });
+      const current = (await createInstalledUpdateRuntime({
+        ...options(),
+        build: manualBuild,
+        goCoreArtifact: compiledFor(manualBuild),
+      }))!;
+      await current.initialize();
+      expect(current.snapshot().phase).toBe("idle");
+      if (outcome === "rolled_back")
+        await expect(fs.stat(ready)).rejects.toMatchObject({ code: "ENOENT" });
+      mocks.discover.mockResolvedValueOnce({ ok: true, value: null });
+      await current.check(true);
+      expect(current.snapshot().phase).toBe("idle");
+      expect(await fs.readFile(receiptFile)).toEqual(before);
+      if (outcome === "rolled_back" && !withReady) {
+        const nextManifest = {
+          ...manualManifest,
+          version: "0.1.3-owner.beta.1",
+          buildVersion: "5",
+          buildId: "8".repeat(64),
+          artifactSha256: "9".repeat(64),
+          archiveName: "Farol-0.1.3-owner.beta.1-darwin-arm64.zip",
+        };
+        const nextTarget = {
+          digest: nextManifest.artifactSha256,
+          version: nextManifest.version,
+          buildId: nextManifest.buildId,
+        };
+        const manualSource = {
           digest: manualManifest.artifactSha256,
           version: manualBuild.version,
           buildId: manualBuild.buildId,
-        }),
-      };
-    });
-    const current = (await createInstalledUpdateRuntime({
-      ...options(),
-      build: manualBuild,
-      goCoreArtifact: compiledFor(manualBuild),
-    }))!;
-    await current.initialize();
-    expect(current.snapshot().phase).toBe("idle");
-    mocks.discover.mockResolvedValueOnce({ ok: true, value: null });
-    await current.check(true);
-    expect(current.snapshot().phase).toBe("idle");
-    expect(await fs.readFile(receiptFile)).toEqual(before);
-    await current.close();
-  });
+        };
+        mocks.discover.mockResolvedValueOnce({
+          ok: true,
+          value: { manifest: nextManifest },
+        });
+        mocks.download.mockResolvedValueOnce({
+          ok: true,
+          value: {
+            handle: path.join(root, "after-manual.zip"),
+            manifest: nextManifest,
+            identity: { ...nextManifest, updateChannel: "github-owner-beta" },
+            stagedAppPath: staging,
+            stagingRoot: path.dirname(staging),
+          },
+        });
+        mocks.verify.mockResolvedValueOnce({
+          ok: true,
+          value: {
+            identity: { ...nextManifest, updateChannel: "github-owner-beta" },
+            stagedAppPath: staging,
+            stagingRoot: path.dirname(staging),
+          },
+        });
+        mocks.exec.mockImplementation(async (file: string, args: string[]) => {
+          if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+          return {
+            stdout: JSON.stringify(
+              args[0]!.endsWith("update-obligations.mjs")
+                ? {
+                    drained: true,
+                    obligationCount: 0,
+                    unreadableCount: 0,
+                    changedCount: 0,
+                  }
+                : args[1]!.endsWith("staged.app")
+                  ? nextTarget
+                  : manualSource,
+            ),
+          };
+        });
+        await current.check(true);
+        expect(current.snapshot().phase).toBe("available");
+        await current.download();
+        expect(current.snapshot().phase).toBe("ready");
+        await current.restart();
+        expect(current.snapshot().phase).toBe("applying");
+        const nextOperation = JSON.parse(
+          await fs.readFile(ready, "utf8"),
+        ).operation;
+        expect(nextOperation.source).toEqual(manualSource);
+        const nextRoot = path.join(
+          userData,
+          "installed-updates",
+          nextOperation.operationId,
+        );
+        await fs.writeFile(
+          path.join(nextRoot, "journal.json"),
+          JSON.stringify({
+            schema: "farol.installed-update-journal/1",
+            ...nextOperation,
+            phase: "completed",
+          }),
+          { mode: 0o600 },
+        );
+        await fs.mkdir(path.join(nextRoot, "previous.app"));
+        await current.close();
+        mocks.exec.mockImplementation(async (file: string, args: string[]) => {
+          if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+          return {
+            stdout: JSON.stringify(
+              args[1]!.endsWith("previous.app") ? manualSource : nextTarget,
+            ),
+          };
+        });
+        const nextBuild = {
+          ...manualBuild,
+          version: nextManifest.version,
+          buildVersion: nextManifest.buildVersion,
+          buildId: nextManifest.buildId,
+        };
+        const successor = (await createInstalledUpdateRuntime({
+          ...options(),
+          build: nextBuild,
+          goCoreArtifact: compiledFor(nextBuild),
+        }))!;
+        await successor.initialize();
+        expect(successor.snapshot().phase).toBe("idle");
+        expect(
+          await fs.readFile(path.join(opRoot, "settled-receipt.json")),
+        ).toEqual(before);
+        await successor.close();
+        return;
+      }
+      await current.close();
+    },
+  );
   it("does not consume a shared operation after reopening the legacy copy with identical builds", async () => {
     const fixture = await shared();
     const first = await prepared();

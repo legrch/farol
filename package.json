@@ -1,9 +1,9 @@
 {
   "name": "farol",
-  "version": "0.5.12",
+  "version": "0.5.13",
   "farolRelease": {
     "updateChannel": "github-stable",
-    "buildVersion": "68"
+    "buildVersion": "69"
   },
   "private": true,
   "description": "Isolated local preview of the Farol modular monolith.",

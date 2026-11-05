@@ -674,11 +674,17 @@ async function observeSharedSlotStartup(
     const previous = SavedReceipt.parse(saved);
     const op = previous.operation;
     const parsed = parseRetainedGithubReleaseManifest(previous);
+    const settledBuild =
+      previous.phase === "completed"
+        ? op?.target
+        : previous.phase === "rolled_back"
+          ? op?.source
+          : null;
     const absent = options.observation?.recordAbsent ?? recordAbsent;
     if (
       !op ||
-      previous.phase !== "completed" ||
-      previous.runningBuildId !== op.target.buildId ||
+      !settledBuild ||
+      previous.runningBuildId !== settledBuild.buildId ||
       !parsed.ok ||
       !sameBuild(op.target, {
         digest: parsed.value.artifactSha256,
@@ -721,7 +727,7 @@ async function observeSharedSlotStartup(
         options.observation?.readProcess ?? readInstalledProcess,
       );
       if (
-        journal?.phase !== "completed" ||
+        journal?.phase !== previous.phase ||
         startupHelperState(helper) !== "exited"
       )
         throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
@@ -1708,12 +1714,30 @@ async function archivePreviousReceipt(
   if (!previous.operation || !original || !digest)
     throw new Error("invalid history archive");
   if (sameOperation(previous.operation, nextOperation)) return;
+  const settledBuild =
+    previous.phase === "completed"
+      ? previous.operation.target
+      : previous.phase === "rolled_back"
+        ? previous.operation.source
+        : null;
+  const directPredecessor =
+    previous.runningBuildId === nextOperation.source.buildId &&
+    [previous.operation.source, previous.operation.target].some((value) =>
+      sameBuild(value, nextOperation.source),
+    );
+  // A verified manual replacement may sit between two OTA operations. Its
+  // source identity is anchored by the adopted baseline and the next OTA's
+  // admission; the older terminal receipt remains history, not its source.
+  const manualPredecessor =
+    settledBuild !== null &&
+    previous.runningBuildId === settledBuild.buildId &&
+    compareReleaseVersions(
+      nextOperation.source.version,
+      previous.operation.target.version,
+    ) === 1;
   if (
     previous.operation.operationId === nextOperation.operationId ||
-    previous.runningBuildId !== nextOperation.source.buildId ||
-    ![previous.operation.source, previous.operation.target].some((value) =>
-      sameBuild(value, nextOperation.source),
-    )
+    (!directPredecessor && !manualPredecessor)
   )
     throw new Error("invalid history archive");
   const directory = path.join(root, previous.operation.operationId);
@@ -2688,11 +2712,17 @@ async function createRuntime(
       )
         throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
       await verifyBinding(op);
+      const settledBuild =
+        receipt.phase === "completed"
+          ? op.target
+          : receipt.phase === "rolled_back"
+            ? op.source
+            : null;
       const manualReplacement =
         !supervised &&
         installLocation === "shared" &&
-        receipt.phase === "completed" &&
-        receipt.runningBuildId === op.target.buildId &&
+        settledBuild !== null &&
+        receipt.runningBuildId === settledBuild.buildId &&
         options.build.buildId !== op.target.buildId &&
         compareReleaseVersions(options.build.version, op.target.version) === 1;
       if (manualReplacement) {
@@ -2703,7 +2733,7 @@ async function createRuntime(
         );
         const oldHelper = await observeInstalledHelper(receipt.helper);
         if (
-          oldJournal.phase !== "completed" ||
+          oldJournal.phase !== receipt.phase ||
           startupHelperState(oldHelper) !== "exited" ||
           !(await recordAbsent(restoreFile))
         )
@@ -3488,10 +3518,16 @@ async function createRuntime(
         installLocation === "shared"
       ) {
         const historical = SavedReceipt.parse(previous);
+        const settledBuild =
+          historical.phase === "completed"
+            ? historical.operation?.target
+            : historical.phase === "rolled_back"
+              ? historical.operation?.source
+              : null;
         if (
           historical.operation &&
-          historical.phase === "completed" &&
-          historical.runningBuildId === historical.operation.target.buildId &&
+          settledBuild &&
+          historical.runningBuildId === settledBuild.buildId &&
           options.build.buildId !== historical.operation.target.buildId &&
           compareReleaseVersions(
             options.build.version,

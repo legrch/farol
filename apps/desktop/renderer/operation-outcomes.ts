@@ -55,6 +55,8 @@ export const operationCodesByOutcome = {
     "supported",
   ],
   refused: [
+    "INSTALL_STARTUP_PROOF_INVALID",
+    "INSTALL_STARTUP_PROOF_UNSAFE",
     "COMPUTER_SELFTEST_HISTORY_FULL",
     "COMPUTER_SELFTEST_MARKER_REQUIRED",
     "COMPUTER_SELFTEST_UNRESOLVED",

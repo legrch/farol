@@ -1577,19 +1577,37 @@ describe("shared-slot first-launch adoption at startup (pure ports; GitHub doubl
     expect(f.records.has(adoptedFile)).toBe(false);
   };
 
-  function completedReplacementFixture() {
+  function completedReplacementFixture(
+    outcome: "completed" | "rolled_back" = "completed",
+  ) {
     const next = identity("0.1.2-owner.beta.1", "3", "5");
     const nextAccepted = {
       digest: "6".repeat(64),
       version: next.version,
       buildId: next.buildId,
     };
-    const prior = unboundSharedFixture("completed");
-    const f = adoptionFixture(next, nextAccepted);
-    f.records.set(
-      path.join(root, "last-update.json"),
-      structuredClone(prior.records.get(path.join(root, "last-update.json"))),
+    const prior = unboundSharedFixture(
+      outcome === "completed" ? "completed" : "rollback",
     );
+    const f = adoptionFixture(next, nextAccepted);
+    const previous = structuredClone(
+      prior.records.get(path.join(root, "last-update.json")),
+    ) as Record<string, unknown>;
+    if (outcome === "rolled_back") {
+      previous.phase = "rolled_back";
+      f.records.set(path.join(root, "ready.json"), {
+        schema: "farol.ready-update/1",
+        handle: previous.handle,
+        manifest: previous.manifest,
+        operation: null,
+      });
+      f.records.set(path.join(opRoot, "journal.json"), {
+        schema: "farol.installed-update-journal/1",
+        ...operation,
+        phase: "rolled_back",
+      });
+    }
+    f.records.set(path.join(root, "last-update.json"), previous);
     f.records.set(
       path.join(opRoot, "slot-binding.json"),
       JSON.parse(installedSlotBindingBytes(operation, "shared").toString()),
@@ -1624,6 +1642,64 @@ describe("shared-slot first-launch adoption at startup (pure ports; GitHub doubl
     expect(f.observation.readProcess).toHaveBeenCalled();
     expect(captureMock).toHaveBeenCalled();
   });
+
+  it("adopts a published replacement after a confirmed rolled-back shared OTA without rewriting its evidence", async () => {
+    const f = completedReplacementFixture("rolled_back");
+    const original = structuredClone([...f.records]);
+    await waitForInstalledUpdateRelaunch(f.options);
+    for (const [file, value] of original)
+      expect(f.records.get(file)).toEqual(value);
+    expect(f.records.has(adoptedFile)).toBe(true);
+    expect(f.observation.readProcess).toHaveBeenCalled();
+    expect(captureMock).toHaveBeenCalled();
+  });
+
+  it.each([
+    "nonterminal journal",
+    "unknown helper",
+    "wrong running build",
+    "pending restore",
+    "ready operation",
+  ] as const)(
+    "refuses a rolled-back replacement with %s and preserves update evidence",
+    async (condition) => {
+      const f = completedReplacementFixture("rolled_back");
+      const saved = f.records.get(
+        path.join(root, "last-update.json"),
+      ) as Record<string, unknown>;
+      if (condition === "nonterminal journal")
+        f.records.set(path.join(opRoot, "journal.json"), {
+          schema: "farol.installed-update-journal/1",
+          ...operation,
+          phase: "rollback_started",
+        });
+      if (condition === "unknown helper")
+        f.observation.readProcess.mockRejectedValue(
+          new Error("observation failed"),
+        );
+      if (condition === "wrong running build")
+        saved.runningBuildId = target.buildId;
+      if (condition === "pending restore")
+        f.records.set(path.join(root, "restore-pending.json"), {
+          schema: "farol.update-restore-intent/1",
+          action: "rollback",
+          operation,
+          priorPhase: "rolled_back",
+          helper,
+        });
+      if (condition === "ready operation") {
+        const ready = f.records.get(path.join(root, "ready.json")) as Record<
+          string,
+          unknown
+        >;
+        ready.operation = operation;
+      }
+      const original = structuredClone([...f.records]);
+      await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow();
+      expect([...f.records]).toEqual(original);
+      expect(captureMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     "pending restore",

@@ -67,7 +67,8 @@ with zipfile.ZipFile(archive, 'w') as z:
 data = open(archive, 'rb').read()
 hash = hashlib.sha256(data).hexdigest()
 manifest = dict(schema='farol.github-release/1', repository='legrch/farol', version=version,
-                platform='darwin', arch='arm64', archiveName=name, archiveSha256=hash, archiveSize=len(data))
+                platform='darwin', arch='arm64', archiveName=name, archiveSha256=hash, archiveSize=len(data),
+                buildId='a' * 64)
 if scenario == 'wrong-version': manifest['version'] = '1.2.4'
 if scenario == 'wrong-repository': manifest['repository'] = 'other/farol'
 if scenario == 'wrong-name': manifest['archiveName'] = 'other.zip'
@@ -260,6 +261,50 @@ test("isolated failed launch retains a recoverable predecessor", () => {
   });
 });
 
+test("isolated immediate startup exit is reported instead of installed and running", () => {
+  isolatedInstall("early-exit", (result, _root, log) => {
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /exited before startup confirmation/);
+    assert.doesNotMatch(result.stdout, /Installed and running/);
+    const retained = result.stderr.match(/Recovery files retained at: (.+)/);
+    assert.ok(retained, result.stderr);
+    assert.equal(
+      readFileSync(path.join(retained[1], "previous.app/old"), "utf8"),
+      "old",
+    );
+    assert.ok(log.includes("open"));
+  });
+});
+
+test("isolated modal startup failure retains the working predecessor", () => {
+  isolatedInstall("modal-no-proof", (result, _root, log) => {
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /startup unconfirmed/);
+    assert.doesNotMatch(result.stdout, /Installed and running/);
+    const retained = result.stderr.match(/Recovery files retained at: (.+)/);
+    assert.ok(retained, result.stderr);
+    assert.equal(
+      readFileSync(path.join(retained[1], "previous.app/old"), "utf8"),
+      "old",
+    );
+    assert.ok(log.includes("open"));
+  });
+});
+
+test("isolated mismatched startup proof retains the working predecessor", () => {
+  isolatedInstall("wrong-proof", (result, _root, log) => {
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /startup confirmation invalid/);
+    const retained = result.stderr.match(/Recovery files retained at: (.+)/);
+    assert.ok(retained, result.stderr);
+    assert.equal(
+      readFileSync(path.join(retained[1], "previous.app/old"), "utf8"),
+      "old",
+    );
+    assert.ok(log.includes("open"));
+  });
+});
+
 for (const scenario of [
   "private-only",
   "snapshot",
@@ -340,17 +385,18 @@ if (cmd === 'uname') { console.log(args[0] === '-s' ? 'Darwin' : 'arm64'); }
 else if (cmd === 'curl') { const dest = args[args.indexOf('--output')+1]; fs.copyFileSync(path.join(root, path.basename(dest)), dest); }
 else if (cmd === 'PlistBuddy') { const key = args[1]; console.log(key.includes('Identifier') ? 'io.github.legrch.farol' : key.includes('Executable') ? 'Farol' : '1.2.3'); }
 else if (cmd === 'codesign') { log('codesign'); if (args[0] === '-d') { console.error('code object is not signed at all'); process.exit(1); } if (process.env.SCENARIO === 'bad-signature') process.exit(1); }
+else if (cmd === 'uuidgen') console.log('11111111-1111-4111-8111-111111111111');
 else if (cmd === 'ps') {
   if (process.env.SCENARIO === 'ps-failure') process.exit(1);
   console.log('1 /sbin/launchd');
   if (fs.existsSync(path.join(root, 'running'))) {
     const app = path.join(root, 'Applications/Farol.app');
     const profile = path.join(root, 'Library/Application Support/io.github.legrch.farol/installed-updates');
-    let base = ['private-and-public', 'private-only', 'helper', 'stubborn'].includes(process.env.SCENARIO) ? path.join(profile, 'op/launch-Farol.app') : app;
-    if (process.env.SCENARIO === 'snapshot') base = path.join(profile, 'installed-execution/snapshot/Farol.app');
+    let base = ['private-and-public', 'private-only', 'helper', 'stubborn'].includes(process.env.SCENARIO) && !fs.existsSync(path.join(root, 'launched')) ? path.join(profile, 'op/launch-Farol.app') : app;
+    if (process.env.SCENARIO === 'snapshot' && !fs.existsSync(path.join(root, 'launched'))) base = path.join(profile, 'installed-execution/snapshot/Farol.app');
     const suffix = ['helper', 'backend-remains'].includes(process.env.SCENARIO) && !fs.existsSync(path.join(root, 'launched')) ? '/Contents/Resources/app/farol-backend' : '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron';
     console.log('42 ' + (process.env.SCENARIO === 'process-title' ? 'Farol' : base + suffix));
-    if (['private-and-public', 'snapshot', 'helper', 'stubborn'].includes(process.env.SCENARIO)) console.log('45 ' + app + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
+    if (['private-and-public', 'stubborn'].includes(process.env.SCENARIO) || (process.env.SCENARIO === 'helper' && !fs.existsSync(path.join(root, 'launched')))) console.log('45 ' + app + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
   }
   if (process.env.SCENARIO === 'unknown') console.log('43 farol-backend');
   if (['inspection-error', 'live-unreadable', 'permission-denied'].includes(process.env.SCENARIO)) console.log('43 farol-backend');
@@ -366,8 +412,22 @@ else if (cmd === 'ps') {
 }
 else if (cmd === 'osascript') { log('osascript'); const source = fs.readFileSync(0, 'utf8'); if (!source.includes('menu bar item "Farol"') || !source.includes('repeat with candidate in every application process') || !source.includes('if (unix id of targetProcess) is not targetPid') || process.env.SCENARIO === 'quit-failure') process.exit(1); if (!['stubborn', 'backend-remains', 'escalate', 'unexpected-descendant'].includes(process.env.SCENARIO)) fs.rmSync(path.join(root, 'running'), {force:true}); }
 else if (cmd === 'ditto') { log(args[1].endsWith('previous.app') ? 'ditto-backup' : 'ditto-install'); fs.cpSync(args[0], args[1], {recursive:true, verbatimSymlinks:true}); }
-else if (cmd === 'sleep') {}
-else if (cmd === 'open') { log('open'); if (process.env.SCENARIO === 'bad-launch') process.exit(1); fs.writeFileSync(path.join(root, 'launched'), 'yes'); fs.writeFileSync(path.join(root, 'running'), 'yes'); }
+else if (cmd === 'sleep') { if (process.env.SCENARIO === 'early-exit' && fs.existsSync(path.join(root, 'launched'))) fs.rmSync(path.join(root, 'running'), {force:true}); }
+else if (cmd === 'open') {
+  log('open');
+  if (process.env.SCENARIO === 'bad-launch') process.exit(1);
+  fs.writeFileSync(path.join(root, 'launched'), 'yes');
+  fs.writeFileSync(path.join(root, 'running'), 'yes');
+  if (!['early-exit', 'modal-no-proof'].includes(process.env.SCENARIO)) {
+    const request = args.find(x => x.startsWith('--farol-install-proof='));
+    if (!request) process.exit(2);
+    const [suffix, nonce] = request.slice('--farol-install-proof='.length).split(':');
+    fs.writeFileSync(path.join(root, 'release.' + suffix, 'startup-proof.json'), JSON.stringify({
+      schema: 'farol.install-startup-proof/1', nonce,
+      buildId: 'a'.repeat(64), version: process.env.SCENARIO === 'wrong-proof' ? '1.2.4' : '1.2.3', pid: 42,
+    }), {mode: 0o600});
+  }
+}
 else process.exit(2);
 `;
     const fakePath = path.join(root, "bin/fake");
@@ -386,6 +446,7 @@ else process.exit(2);
       "ditto",
       "open",
       "sleep",
+      "uuidgen",
     ]) {
       const link = spawnSync("/bin/ln", [
         "-s",
@@ -402,6 +463,7 @@ else process.exit(2);
       "osascript",
       "ditto",
       "open",
+      "uuidgen",
     ])
       copy = copy.replaceAll(
         `/usr/bin/${command}`,

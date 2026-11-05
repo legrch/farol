@@ -284,11 +284,14 @@ handled by its existing branch. A present adopted record that cannot be read or
 decoded (malformed JSON, unknown or missing fields, wrong type) is tampered and
 fails with exactly `UPDATE_ACCEPTED_SOURCE_UNCONFIRMED`.
 
-For a newer manual replacement after a completed OTA, startup may reach this
-adoption path despite the old receipt and `last-update.json` after validating the
-completed operation, slot binding, journal and helper exit. It retains the old
-records; an incomplete or unconfirmed operation still refuses. The updater uses
-the accepted adopted baseline for the new build. When a later OTA settles, it
+For a newer manual replacement after a completed or rolled-back OTA, startup
+may reach this adoption path despite the old receipt and `last-update.json`
+after validating the terminal outcome, recorded running build, slot binding,
+journal and helper exit. A rolled-back receipt must name the original source
+build and have a matching `rolled_back` journal. It retains the old records;
+an incomplete or unconfirmed operation still refuses. A plain retained
+download may be retired by the updater after the new build is accepted. The
+updater uses the accepted adopted baseline for the new build. When a later OTA settles, it
 attempts to retain the previous receipt in that operation's
 `settled-receipt.json`. The archive is best-effort: a conflicting file or I/O
 failure is logged and does not change the independently verified OTA outcome.

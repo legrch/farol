@@ -183,6 +183,15 @@ for asset in "$name" farol-release.json SHA256SUMS; do
 done
 printf '%s\n' 'Verifying the release...'
 validate_archive "$version" "$tmp/$name" "$tmp/farol-release.json" "$tmp/SHA256SUMS" "$tmp/extracted" || fail 'release validation failed'
+manifest_build_id=$(/usr/bin/python3 -I - "$tmp/farol-release.json" <<'PY'
+import json, re, sys
+with open(sys.argv[1], encoding='utf-8') as stream:
+    build_id = json.load(stream).get('buildId')
+if not isinstance(build_id, str) or not re.fullmatch('[0-9a-f]{64}', build_id):
+    sys.exit(1)
+print(build_id)
+PY
+) || fail 'release build identity unavailable'
 app="$tmp/extracted/Farol.app"
 plist="$app/Contents/Info.plist"
 plist_value() { /usr/libexec/PlistBuddy -c "Print :$2" "$1" 2>/dev/null; }
@@ -273,7 +282,8 @@ try:
         if owned:
             if executable == installed + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron' or (
                 executable.startswith(profile + '/') and
-                executable.endswith('/launch-Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron')
+                (executable.endswith('/launch-Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron') or
+                 executable.endswith('/Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron'))
             ):
                 main_pids.append(int(match.group(1)))
             if mode == 'all' or executable.endswith('/Electron Runtime.app/Contents/MacOS/Electron'):
@@ -416,13 +426,54 @@ fi
 if ! /usr/bin/ditto "$app" "$installed"; then
   fail 'copy failed; predecessor retained if one existed'
 fi
-/usr/bin/open "$installed" || fail 'launch request failed; predecessor retained if one existed'
+nonce=$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]') || fail 'cannot create launch nonce'
+case "$nonce" in
+  ????????-????-????-????-????????????) ;;
+  *) fail 'invalid launch nonce' ;;
+esac
+proof="$tmp/startup-proof.json"
+suffix=${tmp##*.}
+/usr/bin/open "$installed" --args "--farol-install-proof=$suffix:$nonce" || fail 'launch request failed; predecessor retained if one existed'
 count=0
 while check_stopped main; do
   [ "$count" -lt 30 ] || fail 'launch not confirmed; predecessor retained if one existed'
   /bin/sleep 1
   count=$((count + 1))
 done
+# A live PID can be held by a modal startup error. Only the new primary can
+# publish this nonce-bound proof after its main startup has completed.
+count=0
+while [ ! -e "$proof" ]; do
+  check_stopped main && fail 'Farol exited before startup confirmation; predecessor retained'
+  [ "$count" -lt 45 ] || fail 'Farol startup unconfirmed; predecessor retained'
+  /bin/sleep 1
+  count=$((count + 1))
+done
+main_pid=$(running main-pid) || fail 'confirmed startup process identity unavailable'
+/usr/bin/python3 -I - "$proof" "$nonce" "$manifest_build_id" "$version" "$main_pid" <<'PY' || fail 'startup confirmation invalid; predecessor retained'
+import json, os, stat, sys
+file, nonce, build_id, version, pid = sys.argv[1:]
+before = os.lstat(file)
+if not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid() or stat.S_IMODE(before.st_mode) != 0o600:
+    sys.exit(1)
+fd = os.open(file, os.O_RDONLY | os.O_NOFOLLOW)
+try:
+    opened = os.fstat(fd)
+    if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+        sys.exit(1)
+    data = os.read(fd, 4097)
+    if len(data) > 4096:
+        sys.exit(1)
+finally:
+    os.close(fd)
+proof = json.loads(data)
+if set(proof) != {'schema', 'nonce', 'buildId', 'version', 'pid'} or proof != {
+    'schema': 'farol.install-startup-proof/1', 'nonce': nonce,
+    'buildId': build_id, 'version': version, 'pid': int(pid),
+}:
+    sys.exit(1)
+PY
+check_stopped main && fail 'Farol exited after startup confirmation; predecessor retained'
 actual=$(plist_value "$installed/Contents/Info.plist" CFBundleShortVersionString) || fail 'cannot read installed version'
 [ "$actual" = "$version" ] || fail 'installed version mismatch; predecessor retained if one existed'
 printf 'Installed and running: Farol %s\n' "$actual"

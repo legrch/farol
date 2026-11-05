@@ -2190,7 +2190,7 @@ describe.skipIf(process.platform !== "darwin")(
             operationId: "lease-running",
             workspaceId: "fixture",
             relativeCwd: ".",
-            command: "printf started; sleep 20",
+            command: "printf started; exec sleep 20",
             timeoutMs: 30_000,
             write: false,
           },
