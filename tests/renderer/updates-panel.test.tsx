@@ -274,6 +274,55 @@ it("renders a nonmodal projection and does not initiate a check on mount", async
   expect(host.textContent).not.toContain("Install and Relaunch");
   await act(async () => root.unmount());
 });
+it("shows bounded restart progress without sending another install request", async () => {
+  const f = await owner(ready);
+  let emit!: (state: unknown) => void;
+  const api: UpdatesAPI = {
+    state: async () => ({ status: "unavailable" }),
+    onState: (listener) => {
+      emit = listener;
+      return vi.fn();
+    },
+    intent: vi.fn(),
+    close: vi.fn(),
+  };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  await act(async () => root.render(<UpdatesWindow api={api} />));
+  vi.useFakeTimers();
+  try {
+    await act(async () =>
+      emit({
+        status: "ready",
+        projection: projectUpdates({
+          ...f.c.getSnapshot(),
+          update: { phase: "applying", version: "0.4.1" },
+        }),
+        pending: true,
+      }),
+    );
+    expect(host.textContent).toContain("Closing ChatGPT and local services");
+    await act(async () => vi.advanceTimersByTime(6000));
+    expect(host.textContent).toContain("Still closing local services");
+    await act(async () =>
+      emit({
+        status: "ready",
+        projection: projectUpdates({
+          ...f.c.getSnapshot(),
+          update: { phase: "applying", version: "0.4.1" },
+        }),
+        pending: false,
+      }),
+    );
+    expect(host.textContent).toContain("Still closing local services");
+    expect(host.textContent).not.toContain("keep the update ready");
+    expect(api.intent).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => root.unmount());
+    vi.useRealTimers();
+  }
+});
 it("explains why the updater is unavailable in an uninstalled Dev", async () => {
   const f = await owner({ phase: "unavailable", code: "UPDATE_NOT_INSTALLED" });
   const api: UpdatesAPI = {

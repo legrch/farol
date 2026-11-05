@@ -73,6 +73,7 @@ export function attachUpdatesOwner(
 
 export function UpdatesWindow({ api }: { api: UpdatesAPI }) {
   const [state, setState] = useState<UpdatesState>({ status: "unavailable" });
+  const [restartWaitSeconds, setRestartWaitSeconds] = useState(0);
   useEffect(() => {
     let active = true;
     let revision = 0;
@@ -101,6 +102,22 @@ export function UpdatesWindow({ api }: { api: UpdatesAPI }) {
   }, [api]);
   const projection = state.status === "ready" ? state.projection : null;
   const update = projection?.update;
+  // The relay can settle after helper handoff while the drained Quit is still
+  // closing local services. Keep progress visible until the window exits or
+  // the updater publishes a different phase.
+  const restarting = state.status === "ready" && update?.phase === "applying";
+  useEffect(() => {
+    if (!restarting) {
+      setRestartWaitSeconds(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const timer = window.setInterval(
+      () => setRestartWaitSeconds(Math.floor((Date.now() - startedAt) / 1000)),
+      1000,
+    );
+    return () => window.clearInterval(timer);
+  }, [restarting]);
   const disabled = (kind: keyof NonNullable<typeof projection>["allowed"]) =>
     state.status !== "ready" ||
     state.pending ||
@@ -183,10 +200,12 @@ export function UpdatesWindow({ api }: { api: UpdatesAPI }) {
           Installed version {projection.installedVersion}
         </p>
       )}
-      {state.status === "ready" && state.pending && (
+      {state.status === "ready" && (state.pending || restarting) && (
         <p role="status">
           {update?.phase === "applying"
-            ? "Farol is preparing the update and will restart when ready."
+            ? restartWaitSeconds < 5
+              ? "Closing ChatGPT and local services…"
+              : "Still closing local services. Farol records any unconfirmed result for review."
             : "You can close this window. The update will continue in the background."}
         </p>
       )}

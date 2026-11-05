@@ -273,7 +273,7 @@ describe("installed update view", () => {
   for (const [code, text] of [
     ["UPDATE_CONNECTOR_ACTIVE", "Disconnect the active connector"],
     ["UPDATE_TASK_ROUTE_NEEDS_DRAIN", "current task to finish"],
-    ["UPDATE_WORK_PENDING", "Finish or cancel active work"],
+    ["UPDATE_WORK_PENDING", "could not confirm that current work has stopped"],
     ["UPDATE_STATE_UNREADABLE", "couldn’t read"],
     ["UNKNOWN_REASON", "can’t restart safely"],
   ]) {

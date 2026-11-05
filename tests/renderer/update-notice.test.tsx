@@ -2,6 +2,7 @@ import { StrictMode, act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { Shell } from "../../src/ui/renderer/shell";
+import { UpdateNotice } from "../../src/ui/renderer/update-notice";
 import { Services } from "../../src/ui/renderer/services";
 import { WindowController } from "../../src/ui/renderer/controller";
 import type { InstalledUpdateView } from "../../src/modules/release/contract/installed-update";
@@ -424,6 +425,25 @@ it("unknown release state remains inspectable and cannot be acknowledged", async
     "refused",
   );
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
+});
+it("keeps a dismissed unresolved notice hidden after a component remount", async () => {
+  const failed: InstalledUpdateView = {
+    phase: "failed",
+    code: "UPDATE_HANDOFF_UNKNOWN",
+    recoveryRequired: true,
+    notice: { key: "failure:remount", seen: false, blockedBy: null },
+  };
+  const { host, c } = await mount(failed);
+  await act(async () => button(host, "Dismiss update notice").click());
+  const remount = document.createElement("div");
+  document.body.append(remount);
+  const root = createRoot(remount);
+  await act(async () =>
+    root.render(<UpdateNotice snapshot={c.getSnapshot()} facade={c} />),
+  );
+  expect(remount.querySelector('[aria-label="Update notice"]')).toBeNull();
+  expect(c.getSnapshot().update).toEqual(failed);
+  await act(async () => root.unmount());
 });
 it("offers explicit confirmation when browser activity could not be observed", async () => {
   const blocked: InstalledUpdateView = {
