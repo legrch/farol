@@ -365,6 +365,57 @@ it("shows a slow activity read as updating, not as a failed log write", async ()
     );
     expect(host.textContent).toContain("Updating activity");
     expect(host.textContent).not.toContain("unavailable");
+    const slot = host.querySelector(".activity-status-slot")!;
+    await act(async () =>
+      root.render(
+        <OperationsActivity
+          snapshot={{
+            ...snapshot,
+            activityDiagnostics: {
+              ...snapshot.activityDiagnostics,
+              readPending: false,
+            },
+          }}
+          facade={{} as RendererFacade}
+        />,
+      ),
+    );
+    expect(host.querySelector(".activity-status-slot")).toBe(slot);
+    expect(slot.textContent).toBe("");
+  } finally {
+    await act(async () => root.unmount());
+    c.dispose();
+  }
+});
+it("keeps an unmapped code in collapsed log details without a global warning", async () => {
+  const f = fixture(),
+    c = new WindowController(f.api);
+  await c.start();
+  const host = document.createElement("div"),
+    root = createRoot(host);
+  try {
+    await act(async () =>
+      root.render(
+        <OperationsActivity
+          snapshot={{
+            ...c.getSnapshot(),
+            activityDiagnostics: {
+              corruptLines: 0,
+              writeFailures: 0,
+              unmappedCodes: 1,
+            },
+          }}
+          facade={{} as RendererFacade}
+        />,
+      ),
+    );
+    expect(host.querySelector(".activity-status-slot")?.textContent).toBe("");
+    const details = host.querySelector<HTMLDetailsElement>(
+      ".activity-log-details",
+    )!;
+    expect(details.open).toBe(false);
+    expect(details.querySelector("summary")?.textContent).toBe("Log details");
+    expect(details.textContent).toContain("Unrecognized result codes: 1");
   } finally {
     await act(async () => root.unmount());
     c.dispose();
@@ -440,13 +491,17 @@ it("filters shared operations, expands metadata and links attention to the unres
     await act(async () =>
       root.render(<OperationsActivity snapshot={snapshot} facade={facade} />),
     );
-    expect(host.querySelectorAll("details")).toHaveLength(3);
+    expect(host.querySelectorAll(".operation-row")).toHaveLength(3);
     expect(host.querySelector("summary")?.textContent).toContain("model turn");
+    expect(host.querySelector(".activity-status-slot")?.textContent).toBe(
+      "Some activity may be missing. See log details below.",
+    );
+    expect(
+      host.querySelector(".activity-log-details")?.hasAttribute("open"),
+    ).toBe(false);
     expect(host.textContent).toContain("1 unreadable log lines skipped");
     expect(host.textContent).toContain("7 entries were not recorded");
-    expect(host.textContent).toContain(
-      "4 unmapped result codes were recorded as unknown",
-    );
+    expect(host.textContent).toContain("Unrecognized result codes: 4");
     expect(host.textContent).toContain("2 log reads or writes unavailable");
     expect(
       host.textContent?.match(/7 entries were not recorded/g),
@@ -456,7 +511,7 @@ it("filters shared operations, expands metadata and links attention to the unres
       selects[2]!.value = "attention";
       selects[2]!.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    expect(host.querySelectorAll("details")).toHaveLength(2);
+    expect(host.querySelectorAll(".operation-row")).toHaveLength(2);
     await act(async () =>
       [...host.querySelectorAll<HTMLButtonElement>("button")]
         .find((button) => button.textContent === "Review unresolved actions")!
@@ -467,8 +522,8 @@ it("filters shared operations, expands metadata and links attention to the unres
       selects[1]!.value = "ChatGPT";
       selects[1]!.dispatchEvent(new Event("change", { bubbles: true }));
     });
-    expect(host.querySelectorAll("details")).toHaveLength(1);
-    const details = host.querySelector("details")!;
+    expect(host.querySelectorAll(".operation-row")).toHaveLength(1);
+    const details = host.querySelector<HTMLDetailsElement>(".operation-row")!;
     details.open = true;
     expect(details.textContent).toContain("README.md");
     expect(details.textContent).toContain("2 ms");

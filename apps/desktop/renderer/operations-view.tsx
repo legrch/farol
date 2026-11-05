@@ -193,6 +193,12 @@ export function OperationsActivity({
     </details>
   );
   const diagnostics = snapshot.activityDiagnostics;
+  const logGaps =
+    (diagnostics?.corruptLines ?? 0) > 0 ||
+    (diagnostics?.writeFailures ?? 0) > 0 ||
+    (diagnostics?.droppedEntries ?? 0) > 0 ||
+    (diagnostics?.unrecordedUncertainEntries ?? 0) > 0;
+  const logDetails = logGaps || (diagnostics?.unmappedCodes ?? 0) > 0;
   return (
     <section className="operations-activity" aria-label="Operations log">
       <p className="description">
@@ -241,30 +247,13 @@ export function OperationsActivity({
           />
         </label>
       </div>
-      {diagnostics?.readPending && (
-        <p role="status">
-          Updating activity… Recent events may not appear yet.
-        </p>
-      )}
-      {diagnostics &&
-      (diagnostics.corruptLines > 0 ||
-        diagnostics.writeFailures > 0 ||
-        (diagnostics.droppedEntries ?? 0) > 0 ||
-        (diagnostics.unmappedCodes ?? 0) > 0) ? (
-        <p role="status">
-          {diagnostics.corruptLines > 0 &&
-            `${diagnostics.corruptLines} unreadable log lines skipped. `}
-          {diagnostics.writeFailures > 0 &&
-            `${diagnostics.writeFailures} log reads or writes unavailable. `}
-          {(diagnostics.droppedEntries ?? 0) > 0 &&
-            `${diagnostics.droppedEntries} entries were not recorded. `}
-          {(diagnostics.unrecordedUncertainEntries ?? 0) > 0 &&
-            `${diagnostics.unrecordedUncertainEntries} of these had pending or unknown outcomes. `}
-          {(diagnostics.unmappedCodes ?? 0) > 0 &&
-            `${diagnostics.unmappedCodes} unmapped result codes were recorded as unknown. `}
-          Do not repeat unconfirmed actions.
-        </p>
-      ) : null}
+      <div className="activity-status-slot" role="status" aria-live="polite">
+        {diagnostics?.readPending
+          ? "Updating activity…"
+          : logGaps
+            ? "Some activity may be missing. See log details below."
+            : null}
+      </div>
       {groups.length === 0 ? (
         <p role="status">No matching activity.</p>
       ) : (
@@ -297,6 +286,24 @@ export function OperationsActivity({
             </details>
           );
         })
+      )}
+      {diagnostics && logDetails && (
+        <details className="activity-log-details">
+          <summary>Log details</summary>
+          <p>
+            {diagnostics.corruptLines > 0 &&
+              `${diagnostics.corruptLines} unreadable log lines skipped. `}
+            {diagnostics.writeFailures > 0 &&
+              `${diagnostics.writeFailures} log reads or writes unavailable. `}
+            {(diagnostics.droppedEntries ?? 0) > 0 &&
+              `${diagnostics.droppedEntries} entries were not recorded. `}
+            {(diagnostics.unrecordedUncertainEntries ?? 0) > 0 &&
+              `${diagnostics.unrecordedUncertainEntries} of these had pending or unknown outcomes. `}
+            {(diagnostics.unmappedCodes ?? 0) > 0 &&
+              `Unrecognized result codes: ${diagnostics.unmappedCodes}. Affected results remain unknown. `}
+            Review entries with unconfirmed outcomes before repeating an action.
+          </p>
+        </details>
       )}
     </section>
   );
