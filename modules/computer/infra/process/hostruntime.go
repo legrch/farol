@@ -828,7 +828,9 @@ func discoverHostRuntime(ctx context.Context, fs hostRuntimeFilesystem, searchPa
 			// observed vnode (the normal /opt/homebrew/bin case). A directory
 			// reached through /opt/homebrew/opt is an alias into a keg: use its
 			// measured physical directory because the alias child has no
-			// independent vnode to seal.
+			// independent vnode to seal. For the /usr/bin/git Apple dispatcher,
+			// discovery inventories only xcrun's chosen developer-tool image;
+			// put that image's directory first so the shell executes it directly.
 			pathDir := filepath.Dir(alias)
 			if n, ok := selected.nodes[pathDir]; !ok || n.Kind != "directory" {
 				pathDir = filepath.Dir(image)

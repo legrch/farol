@@ -65,7 +65,7 @@
     },
     {
       "path": "modules/computer/infra/process/hostruntime.go",
-      "sha256": "d63fdece5fae23f458baf4b3c052a0decaf5e9cdfe9eb86f4d160bc535651304"
+      "sha256": "00060f7f7111b6d67f4162f1ff20384c8869ca0ccf532fee991d0960c8305e50"
     },
     {
       "path": "modules/computer/infra/process/hostruntimedarwin.go",

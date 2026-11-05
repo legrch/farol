@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/legrch/farol/modules/computer/domain/authority"
 )
 
 // Value-only observations. These fixtures do not establish native trust or
@@ -302,6 +304,19 @@ func TestHostRuntimeSelectsOwnerAdminHomebrewBeforeCLT(t *testing.T) {
 	p, err = discoverHostRuntime(context.Background(), f, "/usr/bin:/opt/homebrew/bin")
 	if err != nil || len(p.frozen.Installations) == 0 || p.frozen.Installations[0].Alias != "/usr/bin/git" || p.frozen.Installations[0].Image != apple {
 		t.Fatalf("Apple shim did not bind xcrun's selected Git: %+v %v", p, err)
+	}
+	// The shim is a lookup hint only. At dispatch, PATH starts with the
+	// qualified developer-tool directory, so Bash runs that exact image and
+	// never enters /usr/bin/git or xcrun inside Seatbelt.
+	if !slices.Equal(p.frozen.ExecFiles, []string{apple}) || !slices.Equal(p.frozen.Path, []string{filepath.Dir(apple)}) {
+		t.Fatalf("Apple Git runtime did not select the physical executable: %+v", p.frozen)
+	}
+	appleEnv := seatbeltEnvironment(SeatbeltSelection{FilePolicy: authority.RootScopedFiles,
+		Git: RootScopedGit, HostRuntime: p, Home: "/Users/ac", Scratch: "/private/tmp/fixture", UserGitSettings: true}, false)
+	if !slices.Contains(appleEnv, "PATH="+filepath.Dir(apple)) && !slices.ContainsFunc(appleEnv, func(value string) bool {
+		return strings.HasPrefix(value, "PATH="+filepath.Dir(apple)+":")
+	}) {
+		t.Fatalf("Apple shim could precede the qualified Git in Shell PATH: %v", appleEnv)
 	}
 	n = f.nodes["/opt/homebrew/bin"]
 	n.GID = 80
