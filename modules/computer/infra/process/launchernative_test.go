@@ -66,7 +66,7 @@ func TestNativeBrainLikeLauncher(t *testing.T) {
 	must(os.Mkdir(root, 0700))
 	must(os.Mkdir(home, 0700))
 	launcher := filepath.Join(root, "brain-like")
-	must(os.WriteFile(launcher, []byte("#!/usr/bin/env bash\nset -eu\nsource=$0\nif [[ -L $source ]]; then source=$(/usr/bin/readlink \"$source\"); fi\ndir=$(/usr/bin/dirname \"$source\")\ncd \"$dir\"\n/bin/pwd\nprintf 'discovery-complete\\n'\n"), 0700))
+	must(os.WriteFile(launcher, []byte("#!/usr/bin/env bash\nset -eu\nsource=$0\nif [[ -L $source ]]; then source=$(/usr/bin/readlink \"$source\"); fi\ndir=$(/usr/bin/dirname \"$source\")\ncd \"$dir\"\n/bin/pwd\n/usr/bin/printf 'discovery-complete\\n'\n"), 0700))
 	must(os.Symlink("brain-like", filepath.Join(root, "brain-link")))
 	raw, err := os.ReadFile("../../../../tooling/shell-platform.json")
 	must(err)
@@ -81,6 +81,7 @@ func TestNativeBrainLikeLauncher(t *testing.T) {
 		candidate   bool
 	}{
 		{"baseline-canonical", "brain-like", false},
+		{"baseline-printf-refused", "brain-like", true},
 		{"candidate-canonical", "brain-like", true},
 		{"candidate-symlink", "brain-link", true},
 		{"candidate-stat-alias-refused", "", true},
@@ -92,6 +93,9 @@ func TestNativeBrainLikeLauncher(t *testing.T) {
 			paths := []string{"/bin/bash", "/bin/sh", "/bin/cat", "/bin/ls", "/bin/sleep", "/usr/bin/env", "/bin/rm"}
 			if scenario.candidate {
 				paths = append(paths, "/usr/bin/dirname", "/bin/pwd", "/usr/bin/readlink")
+			}
+			if scenario.candidate && scenario.name != "baseline-printf-refused" {
+				paths = append(paths, "/usr/bin/printf")
 			}
 			s.Executables = nil
 			for _, p := range paths {
@@ -138,9 +142,14 @@ func TestNativeBrainLikeLauncher(t *testing.T) {
 				}
 				t.Fatalf("original child unconfirmed; exact-root stop=%v; retain fixture", stopErr)
 			}
-			if !scenario.candidate || scenario.name == "candidate-stat-alias-refused" {
+			if !scenario.candidate || scenario.name == "baseline-printf-refused" || scenario.name == "candidate-stat-alias-refused" {
 				exit, ok := result.(*exec.ExitError)
-				if !ok || exit.ExitCode() != 126 || !strings.Contains(stderr.String(), "Operation not permitted") {
+				wantExit := 126
+				if scenario.name == "baseline-printf-refused" {
+					// A script exits through set -e; Bash's direct shell tool call exits 126.
+					wantExit = 1
+				}
+				if !ok || exit.ExitCode() != wantExit || !strings.Contains(stderr.String(), "Operation not permitted") {
 					t.Fatalf("baseline refusal not confirmed: %v %q", result, stderr.String())
 				}
 				return
