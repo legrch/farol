@@ -4,9 +4,50 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin
 export PATH
 umask 077
 
-usage='Usage: scripts/install-release.sh <version>'
+usage='Usage: scripts/install-release.sh <version|latest>'
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 valid_version() { printf '%s\n' "$1" | /usr/bin/grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; }
+
+# GitHub's /releases/latest is not this product's newest release: publication
+# deliberately uses make_latest=false. Resolve the highest published stable
+# semver from one bounded page, and refuse an incomplete page or asset set.
+resolve_latest() {
+  /usr/bin/python3 -I - "$1" <<'PY'
+import json, re, sys
+try:
+    with open(sys.argv[1], 'rb') as stream:
+        raw = stream.read(2097153)
+    if len(raw) > 2097152:
+        raise ValueError('release listing exceeds limit')
+    releases = json.loads(raw)
+    if not isinstance(releases, list) or not releases or len(releases) >= 100:
+        raise ValueError('release listing is empty or incomplete')
+    stable = []
+    for release in releases:
+        if not isinstance(release, dict):
+            raise ValueError('invalid release entry')
+        tag = release.get('tag_name')
+        if release.get('draft') is not False or release.get('prerelease') is not False or not isinstance(release.get('published_at'), str):
+            continue
+        if not isinstance(tag, str) or len(tag) > 64 or not re.fullmatch(r'v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)', tag):
+            continue
+        stable.append((tuple(map(int, tag[1:].split('.'))), tag[1:], release))
+    if not stable:
+        raise ValueError('no published stable release')
+    _, version, selected = max(stable, key=lambda item: item[0])
+    assets = selected.get('assets')
+    expected = {f'Farol-{version}-darwin-arm64.zip', 'farol-release.json', 'SHA256SUMS'}
+    if not isinstance(assets, list) or any(not isinstance(asset, dict) or not isinstance(asset.get('name'), str) for asset in assets):
+        raise ValueError('newest stable release assets are incomplete')
+    by_name = {asset['name']: asset for asset in assets}
+    if len(by_name) != len(assets) or not expected.issubset(by_name) or any(by_name[name].get('state') != 'uploaded' or type(by_name[name].get('size')) is not int or by_name[name]['size'] <= 0 for name in expected):
+        raise ValueError('newest stable release assets are incomplete')
+    print(version)
+except (OSError, ValueError, TypeError, UnicodeError, json.JSONDecodeError) as error:
+    print('Latest release lookup failed:', error, file=sys.stderr)
+    sys.exit(1)
+PY
+}
 
 # Explicit, non-installing test interface: validates and extracts only to a new
 # caller-specified directory. It does not invoke any production operations.
@@ -154,14 +195,17 @@ if [ "${1-}" = '--validate-only' ]; then
   validate_archive "$@"
   exit $?
 fi
+if [ "${1-}" = '--resolve-latest' ]; then
+  [ "$#" -eq 2 ] || { printf '%s\n' 'Usage: --resolve-latest <release-list-json>' >&2; exit 2; }
+  resolve_latest "$2"
+  exit $?
+fi
 [ "$#" -eq 1 ] || { printf '%s\n' "$usage" >&2; exit 2; }
 [ "$1" != '--help' ] || { printf '%s\n' "$usage"; exit 0; }
-valid_version "$1" || { printf '%s\n' "$usage" >&2; exit 2; }
+{ [ "$1" = latest ] || valid_version "$1"; } || { printf '%s\n' "$usage" >&2; exit 2; }
 version=$1
 [ "$(/usr/bin/uname -s)" = Darwin ] || fail 'macOS is required'
 [ "$(/usr/bin/uname -m)" = arm64 ] || fail 'Apple silicon is required'
-name="Farol-${version}-darwin-arm64.zip"
-url="https://github.com/legrch/farol/releases/download/v${version}"
 tmp=$(/usr/bin/mktemp -d "/tmp/farol-release.XXXXXXXX") || fail 'cannot create private temporary directory'
 retain=yes
 cleanup() {
@@ -173,6 +217,14 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
+if [ "$version" = latest ]; then
+  printf '%s\n' 'Finding the newest published stable release...'
+  /usr/bin/curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-time 30 --max-filesize 2097152 --output "$tmp/releases.json" 'https://api.github.com/repos/legrch/farol/releases?per_page=100' || fail 'latest release lookup failed; specify a version explicitly'
+  version=$(resolve_latest "$tmp/releases.json") || fail 'latest release lookup failed; specify a version explicitly'
+  printf 'Selected Farol %s\n' "$version"
+fi
+name="Farol-${version}-darwin-arm64.zip"
+url="https://github.com/legrch/farol/releases/download/v${version}"
 for asset in "$name" farol-release.json SHA256SUMS; do
   printf 'Downloading %s...\n' "$asset"
   if [ -t 2 ] && [ "$asset" = "$name" ]; then

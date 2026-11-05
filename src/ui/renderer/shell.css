@@ -333,12 +333,43 @@ kbd {
   gap: 6px;
   margin-top: auto;
 }
-.rail-version {
+.rail .rail-version {
+  display: block;
+  min-height: 0;
   padding: 0 8px 2px 36px;
   color: var(--muted);
-  cursor: help;
+  cursor: pointer;
   font-size: 11px;
   overflow-wrap: anywhere;
+}
+.rail .rail-version:hover {
+  color: var(--fg);
+}
+.rail-version-tooltip {
+  display: none;
+  position: absolute;
+  left: calc(100% + 8px);
+  bottom: 0;
+  z-index: 10;
+  width: max-content;
+  max-width: min(300px, 60vw);
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: 0 4px 12px #0002;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+.rail-version:hover .rail-version-tooltip,
+.rail-version:focus-visible .rail-version-tooltip,
+.rail-version[aria-expanded="true"] .rail-version-tooltip {
+  display: block;
 }
 .rail-version:focus-visible {
   outline: 2px solid var(--accent);

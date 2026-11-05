@@ -148,6 +148,63 @@ test("strictly rejects non-numeric versions and extra arguments before operation
   }
 });
 
+function release(version, overrides = {}) {
+  return {
+    tag_name: `v${version}`,
+    draft: false,
+    prerelease: false,
+    published_at: "2026-11-05T06:50:25Z",
+    assets: [
+      `Farol-${version}-darwin-arm64.zip`,
+      "farol-release.json",
+      "SHA256SUMS",
+    ].map((name) => ({ name, state: "uploaded", size: 100 })),
+    ...overrides,
+  };
+}
+
+test("latest selects the highest complete published stable semver, not list order", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "farol-latest-test-"));
+  try {
+    const listing = path.join(root, "releases.json");
+    const newest = release("0.5.14");
+    newest.assets.push({ name: "install.sh", state: "uploaded", size: 100 });
+    writeFileSync(
+      listing,
+      JSON.stringify([
+        release("0.5.9"),
+        release("0.6.0", { prerelease: true }),
+        newest,
+        release("0.7.0", { draft: true }),
+        release("0.4.0"),
+      ]),
+    );
+    const result = run(["--resolve-latest", listing]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), "0.5.14");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("latest fails closed for missing assets and an incomplete page", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "farol-latest-test-"));
+  try {
+    const listing = path.join(root, "releases.json");
+    for (const releases of [
+      [release("0.5.14", { assets: [] }), release("0.5.13")],
+      Array.from({ length: 100 }, (_, index) => release(`0.5.${index + 1}`)),
+    ]) {
+      writeFileSync(listing, JSON.stringify(releases));
+      const result = run(["--resolve-latest", listing]);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /Latest release lookup failed/);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("valid release extracts executable and safe framework symlink", () => {
   fixture("valid", (result, output) => {
     assert.equal(result.status, 0, result.stderr);

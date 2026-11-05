@@ -951,29 +951,6 @@ function ChatBrowser({
     </div>
   );
 }
-function buildTooltipStyle(visible: boolean): CSSProperties {
-  return {
-    display: visible ? "block" : "none",
-    position: "absolute",
-    left: "calc(100% + 8px)",
-    bottom: 0,
-    zIndex: 10,
-    width: "max-content",
-    maxWidth: "min(300px, 60vw)",
-    padding: "10px 12px",
-    border: "1px solid var(--line)",
-    borderRadius: 8,
-    background: "var(--bg)",
-    color: "var(--fg)",
-    boxShadow: "0 4px 12px #0002",
-    fontSize: 12,
-    lineHeight: 1.5,
-    whiteSpace: "pre-line",
-    overflowWrap: "anywhere",
-    pointerEvents: "none",
-  };
-}
-
 export function Shell() {
   const { snapshot, facade } = useRenderer();
   const state = snapshot;
@@ -1032,8 +1009,7 @@ export function Shell() {
   }, [facade, state.sidebar, state.status]);
   const settings = destination.area === "settings";
   const [setupInputsChanged, setSetupInputsChanged] = useState(false);
-  const [buildTooltipHovered, setBuildTooltipHovered] = useState(false);
-  const [buildTooltipFocused, setBuildTooltipFocused] = useState(false);
+  const [versionDetailsPinned, setVersionDetailsPinned] = useState(false);
   const retained = useSetupIntents(facade, state);
   const setupEntries = setupChecklist(
     state,
@@ -1084,6 +1060,7 @@ export function Shell() {
         event.preventDefault();
         facade.overlay("search");
       } else if (event.key === "Escape") {
+        setVersionDetailsPinned(false);
         facade.dismissOverlay();
       }
     };
@@ -1354,44 +1331,41 @@ export function Shell() {
             <button
               className="rail-bottom"
               aria-label="Settings"
-              aria-describedby={
-                versionDetails ? "settings-build-details" : undefined
-              }
               title={`Settings · ${settings ? "Current page" : "Open page"}`}
               aria-current={settings ? "page" : undefined}
-              onMouseEnter={() => setBuildTooltipHovered(true)}
-              onMouseLeave={() => setBuildTooltipHovered(false)}
-              onFocus={() => setBuildTooltipFocused(true)}
-              onBlur={() => setBuildTooltipFocused(false)}
               onClick={() =>
                 facade.navigate({ area: "settings", page: "general" })
               }
             >
               <Icon name="settings" />
               <span className="rail-label">Settings</span>
-              {versionDetails && (
-                <span
-                  id="settings-build-details"
-                  role="tooltip"
-                  style={buildTooltipStyle(
-                    buildTooltipHovered || buildTooltipFocused,
-                  )}
-                >
-                  {versionDetails}
-                </span>
-              )}
             </button>
           )}
           {version && versionDetails && (
-            <div
+            <button
+              type="button"
               className="rail-version"
-              title={versionDetails}
-              aria-label={versionDetails}
-              tabIndex={0}
+              aria-label={`Farol ${version.version} build details`}
+              aria-describedby="version-build-details"
+              aria-expanded={versionDetailsPinned}
+              onClick={() => setVersionDetailsPinned((pinned) => !pinned)}
+              onBlur={() => setVersionDetailsPinned(false)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") event.currentTarget.blur();
+              }}
             >
-              v{version.version}
-              {state.environment === "dev" ? " · Dev" : ""}
-            </div>
+              <span className="rail-version-label">
+                v{version.version}
+                {state.environment === "dev" ? " · Dev" : ""}
+              </span>
+              <span
+                id="version-build-details"
+                className="rail-version-tooltip"
+                role="tooltip"
+              >
+                {versionDetails}
+              </span>
+            </button>
           )}
         </div>
       </nav>
