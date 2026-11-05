@@ -345,6 +345,9 @@ kbd {
 .rail .rail-version:hover {
   color: var(--fg);
 }
+.rail-version-compact {
+  display: none;
+}
 .rail-version-tooltip {
   display: none;
   position: absolute;
@@ -376,7 +379,15 @@ kbd {
   outline-offset: 2px;
 }
 .desktop[data-sidebar="rail"] .rail-version {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0;
+}
+.desktop[data-sidebar="rail"] .rail-version-label {
   display: none;
+}
+.desktop[data-sidebar="rail"] .rail-version-compact {
+  display: inline;
 }
 .rail-connection {
   font-size: 12px;

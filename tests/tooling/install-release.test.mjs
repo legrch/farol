@@ -205,6 +205,38 @@ test("latest fails closed for missing assets and an incomplete page", () => {
   }
 });
 
+test("latest refuses malformed classification instead of selecting an older release", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "farol-latest-test-"));
+  try {
+    const listing = path.join(root, "releases.json");
+    for (const malformed of [
+      { prerelease: undefined },
+      { draft: undefined },
+      { published_at: null },
+    ]) {
+      const candidate = release("0.5.14", malformed);
+      writeFileSync(listing, JSON.stringify([candidate, release("0.5.13")]));
+      const result = run(["--resolve-latest", listing]);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /Latest release lookup failed/);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("latest does not downgrade an installed stable version", () => {
+  for (const [installed, selected, allowed] of [
+    ["0.6.0", "0.5.14", false],
+    ["0.5.14", "0.5.14", true],
+    ["0.5.13", "0.5.14", true],
+    ["0.5.14-owner.beta.1", "0.5.14", false],
+  ]) {
+    const result = run(["--check-latest-version", installed, selected]);
+    assert.equal(result.status, allowed ? 0 : 1);
+  }
+});
+
 test("valid release extracts executable and safe framework symlink", () => {
   fixture("valid", (result, output) => {
     assert.equal(result.status, 0, result.stderr);

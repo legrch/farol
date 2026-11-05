@@ -3168,6 +3168,10 @@ it("one sidebar expands to labels and collapses to a permanent rail on every are
     await act(async () => c.navigate({ area }));
     expect(host.querySelector(".rail")).toBeTruthy();
     expect(
+      host.querySelector('.rail-version[aria-label$="build details"]'),
+    ).toBeTruthy();
+    expect(host.querySelector(".rail-version-compact")?.textContent).toBe("v");
+    expect(
       host
         .querySelector('.rail [aria-current="page"]')
         ?.getAttribute("aria-label"),

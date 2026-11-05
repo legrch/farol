@@ -27,10 +27,16 @@ try:
         if not isinstance(release, dict):
             raise ValueError('invalid release entry')
         tag = release.get('tag_name')
-        if release.get('draft') is not False or release.get('prerelease') is not False or not isinstance(release.get('published_at'), str):
+        if type(release.get('draft')) is not bool or type(release.get('prerelease')) is not bool or not isinstance(tag, str):
+            raise ValueError('invalid release classification')
+        if release['draft']:
+            continue
+        if not isinstance(release.get('published_at'), str) or not release['published_at']:
+            raise ValueError('invalid published release')
+        if release['prerelease']:
             continue
         if not isinstance(tag, str) or len(tag) > 64 or not re.fullmatch(r'v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)', tag):
-            continue
+            raise ValueError('invalid stable release version')
         stable.append((tuple(map(int, tag[1:].split('.'))), tag[1:], release))
     if not stable:
         raise ValueError('no published stable release')
@@ -46,6 +52,16 @@ try:
 except (OSError, ValueError, TypeError, UnicodeError, json.JSONDecodeError) as error:
     print('Latest release lookup failed:', error, file=sys.stderr)
     sys.exit(1)
+PY
+}
+check_latest_version() {
+  /usr/bin/python3 -I - "$1" "$2" <<'PY'
+import re, sys
+versions = sys.argv[1:]
+if any(not re.fullmatch(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)', value) for value in versions):
+    sys.exit(1)
+installed, selected = (tuple(map(int, value.split('.'))) for value in versions)
+sys.exit(0 if installed <= selected else 1)
 PY
 }
 
@@ -200,10 +216,17 @@ if [ "${1-}" = '--resolve-latest' ]; then
   resolve_latest "$2"
   exit $?
 fi
+if [ "${1-}" = '--check-latest-version' ]; then
+  [ "$#" -eq 3 ] || { printf '%s\n' 'Usage: --check-latest-version <installed> <selected>' >&2; exit 2; }
+  check_latest_version "$2" "$3"
+  exit $?
+fi
 [ "$#" -eq 1 ] || { printf '%s\n' "$usage" >&2; exit 2; }
 [ "$1" != '--help' ] || { printf '%s\n' "$usage"; exit 0; }
 { [ "$1" = latest ] || valid_version "$1"; } || { printf '%s\n' "$usage" >&2; exit 2; }
 version=$1
+requested_latest=no
+[ "$version" != latest ] || requested_latest=yes
 [ "$(/usr/bin/uname -s)" = Darwin ] || fail 'macOS is required'
 [ "$(/usr/bin/uname -m)" = arm64 ] || fail 'Apple silicon is required'
 tmp=$(/usr/bin/mktemp -d "/tmp/farol-release.XXXXXXXX") || fail 'cannot create private temporary directory'
@@ -483,6 +506,10 @@ existing=no
 if [ -e "$installed" ] || [ -L "$installed" ]; then
   [ -d "$installed" ] && [ ! -L "$installed" ] || fail 'installed app path is not a directory'
   [ "$(plist_value "$installed/Contents/Info.plist" CFBundleIdentifier)" = io.github.legrch.farol ] || fail 'existing app identity mismatch'
+  if [ "$requested_latest" = yes ]; then
+    installed_version=$(plist_value "$installed/Contents/Info.plist" CFBundleShortVersionString) || fail 'installed version unavailable'
+    check_latest_version "$installed_version" "$version" || fail 'latest is older than the installed version; specify a version to downgrade'
+  fi
   existing=yes
 fi
 if ! check_stopped; then
