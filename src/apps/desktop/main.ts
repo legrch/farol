@@ -126,6 +126,7 @@ import {
 } from "../../../apps/desktop/dev-core-layout";
 import { promises as rawFs } from "original-fs";
 import { createDesktopHelperLifetime } from "../../modules/release/infra/native/desktop-helper-lifetime";
+import { publishManualInstallStartupProof } from "./manual-install-startup-proof";
 import {
   createInstalledUpdateRuntime,
   waitForInstalledUpdateRelaunch,
@@ -13925,6 +13926,17 @@ if (
   void initialization
     .then(() => {
       if (startupRecovery !== null) return;
+      if (isPrimaryReady()) {
+        try {
+          publishManualInstallStartupProof(
+            process.argv,
+            buildIdentity,
+            process.pid,
+          );
+        } catch {
+          process.stderr.write("INSTALL_STARTUP_PROOF_UNCONFIRMED\n");
+        }
+      }
       startupStage("startup-complete");
       process.stderr.write(
         `${secondInstanceResultPrefix}${isPrimaryReady() ? "primary-started" : "reopen-failed"}\n`,
