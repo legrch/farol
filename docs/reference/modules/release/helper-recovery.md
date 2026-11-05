@@ -305,10 +305,10 @@ deterministic Milestone relaunch tests (`milestonerelaunch_test.go`, and for rec
 `FAROL_RELAUNCH_NATIVE=1`, `TestNativeMilestoneRelaunchEndToEnd` over scratch bundles,
 which replaces `open` with a direct exec of a scratch executable and covers zero and nonzero open outcomes. Boot wiring
 tests (`releasehelperliverelaunch_test.go`) cover which capabilities each helper carries.
-Not covered: the real LaunchServices `/usr/bin/open`, a shared install end to end (it
-needs a root-owned Applications parent, so its capture stays on the root-scheduled
-capture witness and its binding on `launchBound` and the argument tests), and any
-packaged or installed run.
+Not covered: the real LaunchServices `/usr/bin/open`, a shared install end to end
+(it needs a root-owned Applications parent; the canonical-slot argument binding
+is covered by `launchBound` and the argument tests), and any packaged or installed
+run. The former private capture witness no longer covers this path.
 
 The `closed_predecessor_ready` frame is selected: the desktop launcher
 (`installed-update-helper.ts`) reads it as the readiness handshake and then

@@ -49,15 +49,18 @@ launch attempt in the same scope is refused as `recovery_attempt_unknown`.
 
 ## Contract and limits
 
-The owner chose the cooperative-writer contract. A hostile process running as the
-same user is out of scope: it can already act as the owner. In scope are
-concurrent accidental writers.
+The owner chose the cooperative-writer contract. Other Farol installation
+writers are in scope and must obey the existing update lock, promotion lease
+and journal fences. A separate actor able to replace the shared Applications
+entry without those locks is outside this unsigned distribution's
+execution-authenticity guarantee, whether its action is deliberate or accidental.
 
 The launch is by pathname, like the Python reference helper. Between the final
 held-tree check and LaunchServices resolving the path, a same-user writer could
 replace the bundle (copying is not a same-user exclusion boundary, see
-[install namespace](install-namespace.md)). This runtime neither narrows nor
-widens that window, and no document, receipt or review may say it does. It also
+[install namespace](install-namespace.md)). This runtime cannot atomically bind
+the pathname to the earlier verified vnode, and no document, receipt or review
+may say it does. It also
 does not check, after `open` returns, that the process that started runs the
 verified image.
 
