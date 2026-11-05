@@ -1,4 +1,11 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { afterEach, expect, it } from "vitest";
@@ -151,7 +158,9 @@ it("does not run the account shell at startup and saves only the clicked PATH se
   expect(captures).toBe(1);
   expect(owner.status().gitAlias).toBe(git);
   expect(owner.status().pendingRestart).toBe(true);
-  expect(JSON.parse(readFileSync(path.join(root, "owner-git-choice.json"), "utf8"))).toEqual({
+  expect(
+    JSON.parse(readFileSync(path.join(root, "owner-git-choice.json"), "utf8")),
+  ).toEqual({
     schema: 1,
     enabled: true,
     override: git,

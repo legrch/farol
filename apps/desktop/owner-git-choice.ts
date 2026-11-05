@@ -39,8 +39,7 @@ export class OwnerGitChoice {
 
   constructor(
     userData: string,
-    private readonly capturePath: typeof captureOwnerGitEnvironment =
-      captureOwnerGitEnvironment,
+    private readonly capturePath: typeof captureOwnerGitEnvironment = captureOwnerGitEnvironment,
   ) {
     this.file = path.join(userData, "owner-git-choice.json");
     this.preference = this.readPreference();
