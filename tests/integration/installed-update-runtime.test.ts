@@ -7578,6 +7578,118 @@ describe("selected shared slot (redirected disposable filesystem, mocked helper)
       await current.check(true);
       expect(current.snapshot().phase).toBe("idle");
       expect(await fs.readFile(receiptFile)).toEqual(before);
+      if (outcome === "rolled_back" && !withReady) {
+        const nextManifest = {
+          ...manualManifest,
+          version: "0.1.3-owner.beta.1",
+          buildVersion: "5",
+          buildId: "8".repeat(64),
+          artifactSha256: "9".repeat(64),
+          archiveName: "Farol-0.1.3-owner.beta.1-darwin-arm64.zip",
+        };
+        const nextTarget = {
+          digest: nextManifest.artifactSha256,
+          version: nextManifest.version,
+          buildId: nextManifest.buildId,
+        };
+        const manualSource = {
+          digest: manualManifest.artifactSha256,
+          version: manualBuild.version,
+          buildId: manualBuild.buildId,
+        };
+        mocks.discover.mockResolvedValueOnce({
+          ok: true,
+          value: { manifest: nextManifest },
+        });
+        mocks.download.mockResolvedValueOnce({
+          ok: true,
+          value: {
+            handle: path.join(root, "after-manual.zip"),
+            manifest: nextManifest,
+            identity: { ...nextManifest, updateChannel: "github-owner-beta" },
+            stagedAppPath: staging,
+            stagingRoot: path.dirname(staging),
+          },
+        });
+        mocks.verify.mockResolvedValueOnce({
+          ok: true,
+          value: {
+            identity: { ...nextManifest, updateChannel: "github-owner-beta" },
+            stagedAppPath: staging,
+            stagingRoot: path.dirname(staging),
+          },
+        });
+        mocks.exec.mockImplementation(async (file: string, args: string[]) => {
+          if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+          return {
+            stdout: JSON.stringify(
+              args[0]!.endsWith("update-obligations.mjs")
+                ? {
+                    drained: true,
+                    obligationCount: 0,
+                    unreadableCount: 0,
+                    changedCount: 0,
+                  }
+                : args[1]!.endsWith("staged.app")
+                  ? nextTarget
+                  : manualSource,
+            ),
+          };
+        });
+        await current.check(true);
+        expect(current.snapshot().phase).toBe("available");
+        await current.download();
+        expect(current.snapshot().phase).toBe("ready");
+        await current.restart();
+        expect(current.snapshot().phase).toBe("applying");
+        const nextOperation = JSON.parse(await fs.readFile(ready, "utf8"))
+          .operation;
+        expect(nextOperation.source).toEqual(manualSource);
+        const nextRoot = path.join(
+          userData,
+          "installed-updates",
+          nextOperation.operationId,
+        );
+        await fs.writeFile(
+          path.join(nextRoot, "journal.json"),
+          JSON.stringify({
+            schema: "farol.installed-update-journal/1",
+            ...nextOperation,
+            phase: "completed",
+          }),
+          { mode: 0o600 },
+        );
+        await fs.mkdir(path.join(nextRoot, "previous.app"));
+        await current.close();
+        mocks.exec.mockImplementation(async (file: string, args: string[]) => {
+          if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+          return {
+            stdout: JSON.stringify(
+              args[1]!.endsWith("previous.app")
+                ? manualSource
+                : nextTarget,
+            ),
+          };
+        });
+        const nextBuild = {
+          ...manualBuild,
+          version: nextManifest.version,
+          buildVersion: nextManifest.buildVersion,
+          buildId: nextManifest.buildId,
+        };
+        const successor = (await createInstalledUpdateRuntime({
+          ...options(),
+          build: nextBuild,
+          goCoreArtifact: compiledFor(nextBuild),
+        }))!;
+        await successor.initialize();
+        expect(successor.snapshot().phase).toBe("idle");
+        expect(
+          await fs.readFile(path.join(opRoot, "settled-receipt.json")),
+        ).toEqual(before);
+        await successor.close();
+        return;
+      }
       await current.close();
     },
   );

@@ -1714,12 +1714,30 @@ async function archivePreviousReceipt(
   if (!previous.operation || !original || !digest)
     throw new Error("invalid history archive");
   if (sameOperation(previous.operation, nextOperation)) return;
+  const settledBuild =
+    previous.phase === "completed"
+      ? previous.operation.target
+      : previous.phase === "rolled_back"
+        ? previous.operation.source
+        : null;
+  const directPredecessor =
+    previous.runningBuildId === nextOperation.source.buildId &&
+    [previous.operation.source, previous.operation.target].some((value) =>
+      sameBuild(value, nextOperation.source),
+    );
+  // A verified manual replacement may sit between two OTA operations. Its
+  // source identity is anchored by the adopted baseline and the next OTA's
+  // admission; the older terminal receipt remains history, not its source.
+  const manualPredecessor =
+    settledBuild !== null &&
+    previous.runningBuildId === settledBuild.buildId &&
+    compareReleaseVersions(
+      nextOperation.source.version,
+      previous.operation.target.version,
+    ) === 1;
   if (
     previous.operation.operationId === nextOperation.operationId ||
-    previous.runningBuildId !== nextOperation.source.buildId ||
-    ![previous.operation.source, previous.operation.target].some((value) =>
-      sameBuild(value, nextOperation.source),
-    )
+    (!directPredecessor && !manualPredecessor)
   )
     throw new Error("invalid history archive");
   const directory = path.join(root, previous.operation.operationId);
