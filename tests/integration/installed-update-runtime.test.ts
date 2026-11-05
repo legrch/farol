@@ -7451,9 +7451,13 @@ describe("selected shared slot (redirected disposable filesystem, mocked helper)
     expect(updated!.snapshot().phase).toBe("idle");
     expect(mocks.helper).toHaveBeenCalledTimes(1);
   });
-  it.each(["completed", "rolled_back"] as const)(
-    "checks updates after a newer adopted shared build without rewriting the %s OTA receipt",
-    async (outcome) => {
+  it.each([
+    ["completed", false],
+    ["rolled_back", true],
+    ["rolled_back", false],
+  ] as const)(
+    "checks updates after a newer adopted shared build without rewriting the %s OTA receipt (ready=%s)",
+    async (outcome, withReady) => {
       await shared();
       const first = await prepared();
       await first.restart();
@@ -7506,16 +7510,17 @@ describe("selected shared slot (redirected disposable filesystem, mocked helper)
           }),
           { mode: 0o600 },
         );
-        await fs.writeFile(
-          ready,
-          JSON.stringify({
-            schema: "farol.ready-update/1",
-            handle: retained.handle,
-            manifest: retained.manifest,
-            operation: null,
-          }),
-          { mode: 0o600 },
-        );
+        if (withReady)
+          await fs.writeFile(
+            ready,
+            JSON.stringify({
+              schema: "farol.ready-update/1",
+              handle: retained.handle,
+              manifest: retained.manifest,
+              operation: null,
+            }),
+            { mode: 0o600 },
+          );
       }
       const before = await fs.readFile(receiptFile);
       const manualBuild = {

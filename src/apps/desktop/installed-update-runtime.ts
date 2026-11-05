@@ -3500,10 +3500,16 @@ async function createRuntime(
         installLocation === "shared"
       ) {
         const historical = SavedReceipt.parse(previous);
+        const settledBuild =
+          historical.phase === "completed"
+            ? historical.operation?.target
+            : historical.phase === "rolled_back"
+              ? historical.operation?.source
+              : null;
         if (
           historical.operation &&
-          historical.phase === "completed" &&
-          historical.runningBuildId === historical.operation.target.buildId &&
+          settledBuild &&
+          historical.runningBuildId === settledBuild.buildId &&
           options.build.buildId !== historical.operation.target.buildId &&
           compareReleaseVersions(
             options.build.version,
