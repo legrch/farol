@@ -73,6 +73,7 @@ export function attachUpdatesOwner(
 
 export function UpdatesWindow({ api }: { api: UpdatesAPI }) {
   const [state, setState] = useState<UpdatesState>({ status: "unavailable" });
+  const [restartWaitSeconds, setRestartWaitSeconds] = useState(0);
   useEffect(() => {
     let active = true;
     let revision = 0;
@@ -101,6 +102,20 @@ export function UpdatesWindow({ api }: { api: UpdatesAPI }) {
   }, [api]);
   const projection = state.status === "ready" ? state.projection : null;
   const update = projection?.update;
+  const restarting =
+    state.status === "ready" && state.pending && update?.phase === "applying";
+  useEffect(() => {
+    if (!restarting) {
+      setRestartWaitSeconds(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const timer = window.setInterval(
+      () => setRestartWaitSeconds(Math.floor((Date.now() - startedAt) / 1000)),
+      1000,
+    );
+    return () => window.clearInterval(timer);
+  }, [restarting]);
   const disabled = (kind: keyof NonNullable<typeof projection>["allowed"]) =>
     state.status !== "ready" ||
     state.pending ||
@@ -186,7 +201,9 @@ export function UpdatesWindow({ api }: { api: UpdatesAPI }) {
       {state.status === "ready" && state.pending && (
         <p role="status">
           {update?.phase === "applying"
-            ? "Farol is preparing the update and will restart when ready."
+            ? restartWaitSeconds < 5
+              ? "Closing ChatGPT and local services…"
+              : "Still closing local services. If Farol cannot confirm their exit, it will keep the update ready and show the reason."
             : "You can close this window. The update will continue in the background."}
         </p>
       )}

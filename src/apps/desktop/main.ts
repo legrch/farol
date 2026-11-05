@@ -13648,7 +13648,10 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         );
       }
     },
-    quit: () => app.quit(),
+    // QuitDrain has already waited for owned children and recorded the result.
+    // A second soft Quit can remain held by Electron windows/native handlers;
+    // finish this exact attempt without reopening the drain or another update.
+    quit: () => app.exit(0),
     collect: (context) => {
       const closers: OwnedCloser[] = [
         {

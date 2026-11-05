@@ -13,7 +13,8 @@ const messages: Readonly<Record<string, string>> = {
     "Farol could not confirm that ChatGPT is idle. Installation has not started. Keep your current work and review this result in Diagnostics. Do not retry this update action until the unknown state is resolved.",
   UPDATE_BROWSER_RELEASE_UNCONFIRMED:
     "Farol could not confirm that ChatGPT resumed. Quit Farol and reopen it before updating.",
-  UPDATE_WORK_PENDING: "Finish or cancel active work before restarting.",
+  UPDATE_WORK_PENDING:
+    "Farol could not confirm that current work has stopped. Installation has not started. Review Activity before trying again.",
   UPDATE_WORK_DRAIN_UNCONFIRMED:
     "Farol could not confirm that local work has finished. Review its current result before restarting.",
   UPDATE_HELPER_GO_CORE_REQUIRED:

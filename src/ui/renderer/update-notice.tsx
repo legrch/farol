@@ -6,6 +6,11 @@ import {
 } from "./update-eligibility";
 import { updateBlockMessage } from "../update-block-message";
 
+// The shell can remount this component while an update changes phase. A
+// dismissed popup stays hidden for this window session; the saved update and
+// its unresolved operation remain available in Updates and Activity.
+const dismissedByFacade = new WeakMap<RendererFacade, Set<string>>();
+
 export function acknowledgeUpdateNotice(facade: RendererFacade): void {
   const snapshot = facade.getSnapshot();
   const update = snapshot.update;
@@ -37,6 +42,7 @@ export function UpdateNotice({
   if (
     !("notice" in update) ||
     !update.notice ||
+    (dismissedByFacade.get(facade)?.has(update.notice.key) ?? false) ||
     update.notice.key === dismissedKey ||
     update.notice.seen ||
     snapshot.overlay !== "none" ||
@@ -77,6 +83,12 @@ export function UpdateNotice({
       <button
         aria-label="Dismiss update notice"
         onClick={() => {
+          let dismissed = dismissedByFacade.get(facade);
+          if (!dismissed) {
+            dismissed = new Set<string>();
+            dismissedByFacade.set(facade, dismissed);
+          }
+          dismissed.add(update.notice!.key);
           setDismissedKey(update.notice!.key);
           if (!acknowledgementBlocked) acknowledgeUpdateNotice(facade);
         }}
