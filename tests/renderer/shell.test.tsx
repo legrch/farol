@@ -66,9 +66,19 @@ it.each([
     });
     expect(version?.getAttribute("aria-expanded")).toBe("true");
     await act(async () => {
+      version?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(version?.getAttribute("aria-expanded")).toBe("false");
+    expect(version?.getAttribute("data-dismissed")).toBe("true");
+    await act(async () => {
+      version?.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+    });
+    expect(version?.getAttribute("data-dismissed")).toBe("false");
+    await act(async () => {
       version?.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
     });
     expect(version?.getAttribute("aria-expanded")).toBe("false");
+    expect(version?.getAttribute("data-dismissed")).toBe("true");
   },
 );
 async function mount(

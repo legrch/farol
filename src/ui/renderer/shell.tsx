@@ -1010,6 +1010,7 @@ export function Shell() {
   const settings = destination.area === "settings";
   const [setupInputsChanged, setSetupInputsChanged] = useState(false);
   const [versionDetailsPinned, setVersionDetailsPinned] = useState(false);
+  const [versionDetailsDismissed, setVersionDetailsDismissed] = useState(false);
   const retained = useSetupIntents(facade, state);
   const setupEntries = setupChecklist(
     state,
@@ -1348,10 +1349,23 @@ export function Shell() {
               aria-label={`Farol ${version.version} build details`}
               aria-describedby="version-build-details"
               aria-expanded={versionDetailsPinned}
-              onClick={() => setVersionDetailsPinned((pinned) => !pinned)}
-              onBlur={() => setVersionDetailsPinned(false)}
+              data-dismissed={versionDetailsDismissed}
+              onMouseEnter={() => setVersionDetailsDismissed(false)}
+              onFocus={() => setVersionDetailsDismissed(false)}
+              onClick={() => {
+                setVersionDetailsPinned(!versionDetailsPinned);
+                setVersionDetailsDismissed(versionDetailsPinned);
+              }}
+              onBlur={() => {
+                setVersionDetailsPinned(false);
+                setVersionDetailsDismissed(true);
+              }}
               onKeyDown={(event) => {
-                if (event.key === "Escape") event.currentTarget.blur();
+                if (event.key === "Escape") {
+                  setVersionDetailsPinned(false);
+                  setVersionDetailsDismissed(true);
+                  event.currentTarget.blur();
+                }
               }}
             >
               <span className="rail-version-label">

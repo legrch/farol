@@ -369,8 +369,8 @@ kbd {
   overflow-wrap: anywhere;
   pointer-events: none;
 }
-.rail-version:hover .rail-version-tooltip,
-.rail-version:focus-visible .rail-version-tooltip,
+.rail-version:not([data-dismissed="true"]):hover .rail-version-tooltip,
+.rail-version:not([data-dismissed="true"]):focus-visible .rail-version-tooltip,
 .rail-version[aria-expanded="true"] .rail-version-tooltip {
   display: block;
 }
