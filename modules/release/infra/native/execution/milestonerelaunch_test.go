@@ -26,9 +26,8 @@ import (
 //
 // The shared-install path cannot run end to end here: its Applications parent
 // must be root-owned (installmove.SharedApplicationsParent requires uid 0), so
-// a non-root run cannot even apply into it. Its capture is the root-scheduled
-// TestNativeHelperCapturePrivatePublication; its binding is covered below by
-// TestLaunchTargetBindsTheCaptureToTheInstallLocation and launchBound.
+// a non-root run cannot even apply into it. Canonical slot binding is covered
+// by launchBound with synthetic paths.
 
 // recordingOpen is the scripted stand-in for /usr/bin/open. It records every
 // call and, like the production open, runs the operation fence before and after
@@ -98,13 +97,10 @@ func newRelaunchLifecycle(t *testing.T, exe string, open func(*relaunchLifecycle
 		}
 		return port.HelperSelfIdentity{PID: int64(os.Getpid()), ProcessStart: relaunchSelfStart}, nil
 	}
-	f.config.RelaunchArguments = func(_ context.Context, self port.HelperSelfIdentity, captured *string) ([]string, error) {
+	f.config.RelaunchArguments = func(_ context.Context, self port.HelperSelfIdentity) ([]string, error) {
 		f.builds++
 		f.atBuild = append(f.atBuild, f.diskPhase(t))
 		app := f.app
-		if captured != nil {
-			app = *captured
-		}
 		hint, err := helperprotocol.JSONCodec{}.Relaunch(port.HelperRelaunchHint{
 			OperationID: f.config.Request.OperationID, Action: f.config.Request.Action, Phase: "completed",
 			BuildID: f.config.Request.Target.BuildID, Helper: self,
@@ -228,6 +224,14 @@ func containsInOrder(got, want []string) bool {
 
 func TestMilestoneRelaunchApplyCompletes(t *testing.T) {
 	f := newFakeRelaunchLifecycle(t)
+	var checked []string
+	f.config.verifyExecutables = func(_ context.Context, until time.Time, path string) error {
+		if until.After(f.config.Until) || f.diskPhase(t) != "launch_requested" || f.fake.opens != 0 {
+			t.Fatal("signature verification escaped the original launch fence")
+		}
+		checked = append(checked, path)
+		return nil
+	}
 	m, ready := f.prepare(t, "apply", true)
 	result, err := f.run(t, m, ready)
 	if err != nil {
@@ -241,6 +245,9 @@ func TestMilestoneRelaunchApplyCompletes(t *testing.T) {
 	// launch step ran with launch_requested already durable.
 	if want := []string{"verified", "launch_requested", "completed"}; !containsInOrder(f.phases, want) {
 		t.Fatalf("journal order %v does not contain %v", f.phases, want)
+	}
+	if len(checked) != 1 || checked[0] != f.app {
+		t.Fatalf("signature verification did not use the canonical installed slot: %q, want %q", checked, f.app)
 	}
 	if f.measures != 1 || f.builds != 1 || f.fake.opens != 1 {
 		t.Fatal("measure, arguments and open must each run once", f.measures, f.builds, f.fake.opens)
@@ -386,6 +393,28 @@ func TestMilestoneRelaunchWithoutCapabilitiesRefusesBeforeOpen(t *testing.T) {
 	}
 }
 
+// A compromised argument builder cannot redirect the verified slot to a
+// private GUI image. The launch intent is retained and open is never called.
+func TestMilestoneRelaunchRejectsPrivateGUIPath(t *testing.T) {
+	f := newFakeRelaunchLifecycle(t)
+	f.config.RelaunchArguments = func(_ context.Context, _ port.HelperSelfIdentity) ([]string, error) {
+		private := filepath.Join(f.path, "launch-Farol.app")
+		return []string{"/usr/bin/open", "-a", private, "--args", "--farol-installed-update-relaunch={}"}, nil
+	}
+	m, ready := f.prepare(t, "apply", true)
+	result, err := f.run(t, m, ready)
+	var refusal *executionapp.Failure
+	if result != nil || !errors.As(err, &refusal) || refusal.Code != "launch_image_unconfirmed" {
+		t.Fatalf("private image was not refused: result=%+v error=%v", result, describe(err))
+	}
+	if f.fake.opens != 0 || f.diskPhase(t) != "launch_requested" {
+		t.Fatalf("private image was opened or intent lost: opens=%d phase=%s", f.fake.opens, f.diskPhase(t))
+	}
+	if _, statErr := os.Lstat(filepath.Join(f.path, "launch-Farol.app")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatal("private GUI was created", statErr)
+	}
+}
+
 // Without a launch port the Milestone refuses before it writes anything past
 // verified: nothing is journalled, measured or opened.
 func TestMilestoneRelaunchWithoutALaunchPortRefusesBeforeAnyLaunchEffect(t *testing.T) {
@@ -403,56 +432,6 @@ func TestMilestoneRelaunchWithoutALaunchPortRefusesBeforeAnyLaunchEffect(t *test
 	}
 	if got := f.diskPhase(t); got != "verified" || f.fake.opens != 0 || f.measures != 0 {
 		t.Fatal("launch effect without a port", got, f.fake.opens, f.measures)
-	}
-}
-
-// The shared-install binding, which cannot run end to end without a root-owned
-// Applications parent: a shared install may launch ONLY the private capture it
-// published, and a legacy install may not be handed one. Both refuse before any
-// open, with the journal untouched.
-func TestLaunchTargetBindsTheCaptureToTheInstallLocation(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		shared   bool
-		captured func(f *relaunchFixture) *string
-		code     string
-	}{
-		{"shared without a capture", true, func(*relaunchFixture) *string { return nil }, "launch_image_unconfirmed"},
-		{"shared with another path", true, func(f *relaunchFixture) *string {
-			other := f.config.Request.Home + "/Applications/Farol.app"
-			return &other
-		}, "launch_image_unconfirmed"},
-		{"legacy with a capture", false, func(f *relaunchFixture) *string {
-			path := f.config.Request.Home + "/Library/Application Support/io.github.legrch.farol/installed-updates/" + f.config.Request.OperationID + "/launch-Farol.app"
-			return &path
-		}, "launch_image_unexpected"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			opens := 0
-			fx := newRelaunchFixture(t, func(context.Context, time.Time, []string, func(context.Context) error) error {
-				opens++
-				return nil
-			}, "")
-			location := "legacy"
-			if tc.shared {
-				location = "shared"
-				fx.config.Files.SharedParent = true
-			}
-			fx.config.Request.InstallLocation = &location
-			fx.owner.request = fx.config.Request
-			var method error
-			scope := fx.with(context.Background(), func(native port.HelperRecoveryRuntime) error {
-				effects := native.(port.HelperRelaunchEffects)
-				self, err := effects.SelfIdentity(context.Background())
-				must(t, err)
-				method = effects.LaunchTarget(context.Background(), self, tc.captured(fx))
-				return method
-			})
-			failure := recoveryFailure(t, method)
-			if failure.Code != tc.code || failure.Uncertain || opens != 0 || fx.phase(t) != "launch_requested" {
-				t.Fatalf("binding not enforced: %+v opens=%d phase=%s scope=%v", failure, opens, fx.phase(t), scope)
-			}
-		})
 	}
 }
 

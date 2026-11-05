@@ -276,21 +276,23 @@ rollback gets no post-Quit reconcile: its preflight phase set plus `Readiness.Re
 matches Python.
 
 Relaunch follows `update_helper.py` run() (1382-1403) through the existing
-`Milestone.Execute`: only a verified apply or recovery launches. After `verified` it captures the
-private `launch-Farol.app` for a shared install, journals `launch_requested`, measures
+`Milestone.Execute`: only a verified apply or recovery launches. After `verified` it verifies the
+permanent installed slot, journals `launch_requested`, measures
 this helper process, builds the hint with phase `completed` and this helper's own pid
 and start, and opens the image once with `/usr/bin/open`, following the Sparkle and
 Squirrel.Mac model the owner chose (`relaunch-image-verification.md`). A zero exit
 journals `completed`; a clean nonzero launch is `launch_failed` (exit 70, phase
-`launch_requested`). Nothing inspects the launched process afterwards. A rollback that asks for relaunch
+`launch_requested`). The helper's open result does not prove a new GUI primary;
+native installed acceptance must observe it. A rollback that asks for relaunch
 settles `rolled_back` and never launches, exactly as Python (the desktop's Roll back
 button sends it). The live helper alone supplies the launch capabilities
 (`RelaunchArguments` from the bound protocol, `MeasureSelf` over the native probe and
 the process-wait policy, joined before return); the closed helper supplies none and
 still refuses relaunch. A timeout or other unknown outcome of `open` keeps the
 journal at `launch_requested` and exits 79; the desktop reads the journal on its next
-start and reconciles it. Protection against a substituted image is the later Developer
-ID signing step.
+start and reconciles it. The accepted tree and installed Go/Electron executable
+signatures are checked before open. The outer bundle is still unsigned and the
+pathname launch has no atomic binding to the verified bytes.
 Its pre-ACK refusals (update lock, marker, readiness, process identity, custody
 fences, slot binding) follow the same refused-frame rule: a provably clean
 refusal sends one `refused` frame instead of `waiting_for_exit` and exits 70.
@@ -378,26 +380,26 @@ independent failures retain opaque joined provenance. Native observation still
 requires an independently valid original reader and custody owner; the library
 cannot manufacture pre-ACK admission.
 
-The native execution runtime implements the relaunch effects: private
-capture of the verified shared install image (itself an operation effect, with
-failed images retained), self-measurement (`MeasureSelf`), relaunch-argument
+The native execution runtime implements the relaunch effects: verification of
+the permanent installed slot, self-measurement (`MeasureSelf`), relaunch-argument
 building (`RelaunchArguments`) and the single `/usr/bin/open` launch
 (`relaunch-image-verification.md`). Self-measurement and argument building are
 optional `Config` capabilities that only trusted composition installs. The live helper (`farol run-live-release-helper`)
 installs them only for a relaunch request; the closed helper supplies none and still
 refuses relaunch. With a relaunch request and no installed capability, the runtime refuses without marking
 completed. The arguments it dispatches must name the image it verified (the
-private capture for a shared install, the owner's `~/Applications` slot
-otherwise); any other application path refuses before an effect.
+shared `/Applications/Farol.app` or the owner's `~/Applications` slot);
+any other application path refuses before an effect. Historical private
+capture records remain under their original recovery owners.
 
 Like the retained Python reference helper, the relaunch hands `/usr/bin/open -a`
 a pathname after verifying the image through held descriptors. A writer running
 as the same user can still replace that path between verification and
 LaunchServices resolution. Copying is not a same-user exclusion boundary (see
 [install namespace](install-namespace.md)), and this port neither narrows nor
-widens that window. Like Python, and like Sparkle and Squirrel.Mac, the runtime does
-not look at the launched process afterwards; protection against a substituted image
-is the later Developer ID signing step. Deterministic tests cover callback ordering,
+widens that window. The helper does not look at the launched process afterwards;
+native installed acceptance must observe the successor. The unsigned outer
+bundle has no Developer ID guarantee. Deterministic tests cover callback ordering,
 effect fencing, known versus unknown failure classification and the zero, nonzero and
 unknown `open` outcomes with disposable fixtures. The gated native lane runs the
 Milestone over scratch bundles with `open` replaced by a direct exec, but not

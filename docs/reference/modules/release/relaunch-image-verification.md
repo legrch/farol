@@ -13,12 +13,10 @@ alone installs the self measurement and the relaunch argument capability. The
 closed helper supplies neither and still refuses relaunch and recover; offline
 recover (`relaunch: false`) is refused by both.
 
-This matches the Python helper: a zero exit from `/usr/bin/open` is the end of
-the helper's work and the journal moves to `completed`. Nothing looks for the
-launched process afterwards. An earlier revision (PR #57) added a post-launch
-check that located the child, compared its kernel code-signing identity with the
-verified image and killed a mismatch. It was removed as more machinery than the
-industry model uses, with no behavior left that depends on it.
+The helper retains the existing terminal contract: a zero exit from
+`/usr/bin/open` moves the journal to `completed`. This is not proof that a new
+GUI primary started. Installed acceptance must separately observe the successor
+process, canonical bundle path, Dock identity and ordinary Quit/reopen.
 
 ## Sequence
 
@@ -28,15 +26,13 @@ launch attempt in the same scope is refused as `recovery_attempt_unknown`.
 
 1. The Milestone proceeds only from `verified`, with the target tree verified
    again through held descriptors.
-2. For a shared install the verified image is copied into a private capture
-   (`launch-Farol.app`) under the operation directory and verified again. A slot
-   install launches the owner's `~/Applications/Farol.app`.
+2. The target remains in its permanent shared or owner-home Applications slot.
+   No new private GUI capture is created.
 3. The journal moves to `launch_requested`, and the helper measures itself.
-4. `LaunchTarget` verifies the image once more under the fence (the private
-   capture's identity for a shared install), then checks that the arguments name
-   exactly that image (`launchBound`): the capture, or the owner's slot. Any
-   other application path refuses before the effect.
-5. `/usr/bin/open -a <image> --args <hint>` runs once. The hint names the
+4. `LaunchTarget` verifies the accepted tree, the installed executable
+   signatures and the held/named slot identity, then checks that the arguments
+   name exactly that permanent slot (`launchBound`). Any other path refuses.
+5. `/usr/bin/open -a <slot> --args <hint>` runs once. The hint names the
    operation id, action, build and this helper's pid and start, with phase
    `completed`. The image is verified again from the open's fence callbacks.
 6. A zero exit journals `completed` and the helper exits 0.
@@ -65,10 +61,14 @@ widens that window, and no document, receipt or review may say it does. It also
 does not check, after `open` returns, that the process that started runs the
 verified image.
 
-Protection against a substituted image is the later Developer ID signing step:
-a designated requirement and sealed resources let the operating system itself
-refuse a mismatched executable. That step is not a precondition for this
-relaunch.
+The updater checks the exact accepted tree and the signatures of the installed
+Go and Electron executables. These checks do not close the pathname race or
+establish Developer ID identity for the unsigned outer bundle. Actors capable
+of replacing the installation namespace after the final check are outside the
+current unsigned distribution's execution-authenticity guarantee. Future
+Developer ID adoption needs an explicit designated requirement and system
+assessment contract; signing alone does not imply that LaunchServices enforces
+the expected Farol Team ID.
 
 ## Tests
 

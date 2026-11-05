@@ -132,7 +132,8 @@ func newCompositionFixtureAt(t *testing.T, directory string, canonicalHome ...bo
 	f.config = Config{Request: request, Files: helperroutes.Files{
 		Applications: app, ApplicationsIdentity: ai, Operation: op, OperationIdentity: oi},
 		Journal: f.repo, Until: time.Now().Add(time.Minute), Reverify: owner.reverify,
-		Unknown: owner.retained, RetainUnknown: owner.retain}
+		verifyExecutables: func(context.Context, time.Time, string) error { return nil },
+		Unknown:           owner.retained, RetainUnknown: owner.retain}
 	return f
 }
 

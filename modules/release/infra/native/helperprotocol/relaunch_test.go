@@ -56,7 +56,23 @@ func TestRelaunchComposesActualInputPolicyAndCodecAgainstOriginalPython(t *testi
 			if err != nil {
 				t.Fatalf("real input parser refused oracle request: %v", err)
 			}
-			arguments, err := api.BuildRelaunchArguments(context.Background(), c.Completion, port.HelperSelfIdentity{PID: c.Helper.PID, ProcessStart: c.Helper.ProcessStart}, c.PrivateLaunch, nativeprotocol.JSONCodec{})
+			arguments, err := api.BuildRelaunchArguments(context.Background(), c.Completion, port.HelperSelfIdentity{PID: c.Helper.PID, ProcessStart: c.Helper.ProcessStart}, nativeprotocol.JSONCodec{})
+			// Historical oracle refusals depended only on a removed private-path
+			// parameter. The same requests now select the admitted canonical slot.
+			if c.Error == "launch_image_unconfirmed" || c.Error == "launch_image_unexpected" {
+				var request struct{ Home, InstallLocation string }
+				if json.Unmarshal(c.Request, &request) != nil {
+					t.Fatal("invalid request")
+				}
+				want := request.Home + "/Applications/Farol.app"
+				if request.InstallLocation == "shared" {
+					want = "/Applications/Farol.app"
+				}
+				if err != nil || len(arguments) != 5 || arguments[2] != want || strings.Contains(arguments[2], "launch-Farol.app") {
+					t.Fatalf("canonical launch arguments=%q err=%v", arguments, err)
+				}
+				return
+			}
 			if c.Error != "" {
 				var failure *protocolapp.Failure
 				if !errors.As(err, &failure) || failure.Code != c.Error || failure.Internal || arguments != nil {
@@ -67,8 +83,7 @@ func TestRelaunchComposesActualInputPolicyAndCodecAgainstOriginalPython(t *testi
 			want := append([]string(nil), c.Arguments...)
 			if c.PrivateLaunch != nil && len(want) >= 3 {
 				// The original helper opened its private capture. The product now
-				// keeps that verified image for recovery and opens the permanent
-				// Applications slot so LaunchServices retains one Dock identity.
+				// now opens the permanent Applications slot without a private GUI.
 				want[2] = "/Applications/Farol.app"
 			}
 			if err != nil || !reflect.DeepEqual(arguments, want) {
