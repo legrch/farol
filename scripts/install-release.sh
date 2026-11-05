@@ -418,84 +418,6 @@ except Exception as error:
     sys.exit(2)
 PY
 }
-terminate_owned() {
-  /usr/bin/python3 -I - "$installed" "$profile" "$tmp/termination-evidence.json" <<'PY'
-import ctypes, datetime, json, os, re, signal, subprocess, sys, time
-installed, profile, evidence = sys.argv[1:]
-lib = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
-lib.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
-lib.proc_pidpath.restype = ctypes.c_int
-def table():
-    out = subprocess.run(['/bin/ps', '-ww', '-axo', 'pid=,ppid=,stat='], check=True, text=True, capture_output=True).stdout
-    result = {}
-    for line in out.splitlines():
-        m = re.fullmatch(r'\s*(\d+)\s+(\d+)\s+(\S+)\s*', line)
-        if not m: raise ValueError('unparseable process table')
-        pid, parent, state = m.groups()
-        result[int(pid)] = (int(parent), state)
-    if not result: raise ValueError('empty process table')
-    return result
-def identity(pid):
-    buf = ctypes.create_string_buffer(4096)
-    if lib.proc_pidpath(pid, buf, len(buf)) <= 0: raise ValueError('process path unavailable')
-    start = subprocess.run(['/bin/ps', '-p', str(pid), '-o', 'lstart='], check=True, text=True, capture_output=True).stdout.strip()
-    if not start: raise ValueError('process start unavailable')
-    return {'pid': pid, 'path': os.fsdecode(buf.value), 'start': start}
-try:
-    rows = table()
-    roots = []
-    def production_bundle(path):
-        if path == installed + '/Contents/Resources/app/farol-backend': return installed
-        match = re.fullmatch(re.escape(profile) + r'/[a-f0-9]{32}/launch-Farol\.app/Contents/Resources/app/farol-backend', path)
-        return path[:-len('/Contents/Resources/app/farol-backend')] if match else None
-    for pid, (_, state) in rows.items():
-        if state.startswith('Z'): continue
-        buf = ctypes.create_string_buffer(4096)
-        if lib.proc_pidpath(pid, buf, len(buf)) > 0:
-            bundle = production_bundle(os.fsdecode(buf.value))
-            if bundle is not None: roots.append((pid, bundle))
-    if len(roots) != 1: raise ValueError('production launcher is not unique')
-    root_pid, bundle = roots[0]
-    owned = {root_pid}
-    while True:
-        expanded = owned | {pid for pid, (parent, _) in rows.items() if parent in owned}
-        if expanded == owned: break
-        owned = expanded
-    records = []
-    for pid in sorted(owned):
-        parent, state = rows[pid]
-        if state.startswith('Z'): continue
-        record = identity(pid)
-        path = record['path']
-        if not (path.startswith(bundle + '/') or (path.startswith(profile + '/installed-execution/') and '/Farol.app/' in path)):
-            raise ValueError('unexpected production descendant')
-        record.update(parent=parent, state=state)
-        records.append(record)
-    with open(evidence, 'x') as f:
-        json.dump({'created': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'processes': records}, f, indent=2)
-        f.flush(); os.fsync(f.fileno())
-    def send(sig):
-        current = table()
-        for record in reversed(records):
-            pid = record['pid']
-            if pid not in current or current[pid][1].startswith('Z'): continue
-            actual = identity(pid)
-            if actual['path'] != record['path'] or actual['start'] != record['start']:
-                raise ValueError('process identity changed')
-            try: os.kill(pid, sig)
-            except ProcessLookupError: pass
-    send(signal.SIGTERM)
-    time.sleep(10)
-    send(signal.SIGKILL)
-    time.sleep(1)
-    current = table()
-    if any(r['pid'] in current and not current[r['pid']][1].startswith('Z') for r in records):
-        raise ValueError('production process did not exit')
-except (OSError, ValueError, subprocess.SubprocessError) as error:
-    print('Production process termination failed:', error, file=sys.stderr)
-    sys.exit(1)
-PY
-}
 check_stopped() {
   if running "${1-all}"; then return 1; else status=$?; fi
   [ "$status" -eq 1 ] || fail 'cannot inspect process table'
@@ -511,33 +433,7 @@ if [ -e "$installed" ] || [ -L "$installed" ]; then
   fi
   existing=yes
 fi
-if ! check_stopped; then
-  main_pid=$(running main-pid) || fail 'production application identity could not be inspected'
-  /usr/bin/osascript - "$main_pid" <<'APPLESCRIPT' || fail 'normal Quit failed or production identity could not be inspected'
-on run argv
-  set targetPid to (item 1 of argv) as integer
-  tell application "System Events"
-    set targetProcesses to {}
-    repeat with candidate in every application process
-      if (unix id of candidate) is targetPid then set end of targetProcesses to candidate
-    end repeat
-    if (count of targetProcesses) is not 1 then error "Production application PID is not unique"
-    set targetProcess to item 1 of targetProcesses
-    if (unix id of targetProcess) is not targetPid then error "Production application PID changed"
-    tell targetProcess to click menu item "Quit Farol" of menu 1 of menu bar item "Farol" of menu bar 1
-  end tell
-end run
-APPLESCRIPT
-  count=0
-  while ! check_stopped; do
-    if [ "$count" -ge 30 ]; then
-      terminate_owned || fail 'Farol did not quit; existing app preserved'
-      break
-    fi
-    /bin/sleep 1
-    count=$((count + 1))
-  done
-fi
+check_stopped || fail 'Quit Farol with Command+Q, then run this installer again. No app files were changed.'
 if [ "$existing" = yes ]; then
   /usr/bin/ditto "$installed" "$tmp/previous.app" || fail 'could not preserve predecessor'
   retain=yes

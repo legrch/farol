@@ -300,7 +300,7 @@ test("does not overwrite a caller-selected extraction directory", () => {
 
 // This copy has every host-effect command and installation path replaced with
 // fixture-owned paths. The shipped script has no environment-based routing.
-test("isolated installation orders checks, quit, backup and launch", () => {
+test("isolated installation orders checks, backup and launch without GUI scripting", () => {
   isolatedInstall("success", (result, root, log) => {
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Installed and running: Farol 1\.2\.3/);
@@ -312,8 +312,8 @@ test("isolated installation orders checks, quit, backup and launch", () => {
       result.stdout,
       /Farol opened\. Check its connection and updates in the app\./,
     );
-    assert.ok(log.indexOf("codesign") < log.indexOf("osascript"));
-    assert.ok(log.indexOf("osascript") < log.indexOf("ditto-backup"));
+    assert.ok(log.indexOf("codesign") < log.indexOf("ditto-backup"));
+    assert.ok(!log.includes("osascript"));
     assert.ok(log.indexOf("ditto-backup") < log.indexOf("open"));
     assert.match(
       readFileSync(
@@ -438,7 +438,7 @@ for (const scenario of [
     isolatedInstall(scenario, (result, _root, log) => {
       assert.equal(result.status, 0, result.stderr);
       assert.doesNotMatch(result.stderr, /Traceback|Process inspection failed/);
-      assert.match(log, /osascript/);
+      assert.doesNotMatch(log, /osascript/);
       assert.match(log, /ditto-backup/);
     });
   });
@@ -451,6 +451,7 @@ for (const scenario of [
   "other-private-launch",
   "private-and-public",
   "stubborn",
+  "escalate",
   "quit-failure",
   "backend-remains",
   "bad-tree",
@@ -477,11 +478,11 @@ for (const scenario of [
   });
 }
 
-test("isolated stuck application escalates TERM to KILL before replacement", () => {
+test("isolated stuck application is refused without termination or replacement", () => {
   isolatedInstall("escalate", (result, _root, log) => {
-    assert.equal(result.status, 0, result.stderr);
-    assert.ok(log.indexOf("signal-15") < log.indexOf("signal-9"));
-    assert.ok(log.indexOf("signal-9") < log.indexOf("ditto-backup"));
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Quit Farol with Command\+Q/);
+    assert.doesNotMatch(log, /signal-|ditto-backup|ditto-install|open/);
   });
 });
 
@@ -496,7 +497,8 @@ function isolatedInstall(scenario, callback) {
     ]);
     assert.equal(prep.status, 0);
     writeFileSync(path.join(root, "Applications/Farol.app/old"), "old");
-    writeFileSync(path.join(root, "running"), "yes");
+    if (["stubborn", "quit-failure", "backend-remains", "unexpected-descendant", "escalate", "private-and-public", "wrong-main-title"].includes(scenario))
+      writeFileSync(path.join(root, "running"), "yes");
     const fake = String.raw`#!/usr/bin/env node
 const fs = require('fs'), path = require('path');
 const root = process.env.FIXTURE_ROOT, cmd = path.basename(process.argv[1]), args = process.argv.slice(2);
@@ -537,7 +539,6 @@ else if (cmd === 'ps') {
   if (process.env.SCENARIO === 'cursor-farol') console.log('44 1 Cursor Helper (Plugin): extension-host (user) farol [6-217]');
   if (process.env.SCENARIO === 'other-checkout') console.log('44 1 /Users/ac/code/other/farol/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron');
 }
-else if (cmd === 'osascript') { log('osascript'); const source = fs.readFileSync(0, 'utf8'); if (!source.includes('menu bar item "Farol"') || !source.includes('repeat with candidate in every application process') || !source.includes('if (unix id of targetProcess) is not targetPid') || process.env.SCENARIO === 'quit-failure') process.exit(1); if (!['stubborn', 'backend-remains', 'escalate', 'unexpected-descendant'].includes(process.env.SCENARIO)) fs.rmSync(path.join(root, 'running'), {force:true}); }
 else if (cmd === 'ditto') { log(args[1].endsWith('previous.app') ? 'ditto-backup' : 'ditto-install'); fs.cpSync(args[0], args[1], {recursive:true, verbatimSymlinks:true}); }
 else if (cmd === 'sleep') { if (process.env.SCENARIO === 'early-exit' && fs.existsSync(path.join(root, 'launched'))) fs.rmSync(path.join(root, 'running'), {force:true}); }
 else if (cmd === 'open') {
@@ -569,7 +570,6 @@ else process.exit(2);
       "PlistBuddy",
       "codesign",
       "ps",
-      "osascript",
       "ditto",
       "open",
       "sleep",
@@ -587,7 +587,6 @@ else process.exit(2);
       "uname",
       "curl",
       "codesign",
-      "osascript",
       "ditto",
       "open",
       "uuidgen",
@@ -667,43 +666,6 @@ try:`,
     return '/tmp/other/farol-backend'
 found = False
 try:`,
-      );
-    }
-    if (["escalate", "unexpected-descendant"].includes(scenario)) {
-      const nativeProc = [
-        "lib = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)",
-        "lib.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]",
-        "lib.proc_pidpath.restype = ctypes.c_int",
-      ].join("\n");
-      assert.ok(copy.includes(nativeProc));
-      copy = copy.replace(nativeProc, "lib = None");
-      copy = copy.replace(
-        "try:\n    rows = table()",
-        `def table():
-    if not os.path.exists(os.path.join(os.environ['FIXTURE_ROOT'], 'running')):
-        return {1: (0, 'S')}
-    return {101: (1, 'S'), 102: (101, 'S')}
-def identity(pid):
-    if pid == 101:
-        path = installed + '/Contents/Resources/app/farol-backend'
-    else:
-        path = '/tmp/unrelated' if os.environ['SCENARIO'] == 'unexpected-descendant' else installed + '/Contents/MacOS/Farol'
-    return {'pid': pid, 'path': path, 'start': 'fixed'}
-class TestProc:
-    def proc_pidpath(self, pid, buf, size):
-        value = os.fsencode(identity(pid)['path'])
-        buf.value = value
-        return len(value)
-lib = TestProc()
-def fake_kill(pid, sig):
-    with open(os.path.join(os.environ['FIXTURE_ROOT'], 'log'), 'a') as f:
-        f.write('signal-%s\\n' % int(sig))
-    if sig == signal.SIGKILL and pid == 101:
-        os.unlink(os.path.join(os.environ['FIXTURE_ROOT'], 'running'))
-os.kill = fake_kill
-time.sleep = lambda _: None
-try:
-    rows = table()`,
       );
     }
     if (scenario === "primary-exits-sidecar") {
