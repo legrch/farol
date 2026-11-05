@@ -241,7 +241,13 @@ def resolve_executable(pid):
         proc.proc_pidpath.restype = ctypes.c_int
         buf = ctypes.create_string_buffer(4096)
         if proc.proc_pidpath(pid, buf, len(buf)) <= 0:
-            raise ValueError('cannot resolve Farol process executable')
+            # A process can exit after the ps snapshot. Skip only a confirmed
+            # vanished PID; a live but unreadable process remains a refusal.
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return None
+            raise ValueError('cannot resolve live Farol process executable')
         return os.fsdecode(buf.value)
     except OSError as error:
         raise ValueError('cannot resolve Farol process executable') from error
@@ -259,6 +265,8 @@ try:
         executable = match.group(2)
         if not executable.startswith('/') and 'farol' in executable.lower():
             executable = resolve_executable(int(match.group(1)))
+            if executable is None:
+                continue
         owned = executable.startswith(installed + '/') or executable.startswith(profile + '/')
         # Explicitly identified Dev and Owner Preview bundles are distinct.
         other = any('/' + name + '.app/' in executable for name in ('Farol Dev', 'Farol Owner Preview'))
@@ -282,7 +290,7 @@ try:
         print(main_pids[0])
         sys.exit(0)
     sys.exit(0 if found else 1)
-except (OSError, UnicodeError, ValueError) as error:
+except Exception as error:
     print('Process inspection failed:', error, file=sys.stderr)
     sys.exit(2)
 PY
