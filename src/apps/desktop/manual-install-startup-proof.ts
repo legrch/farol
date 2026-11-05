@@ -2,9 +2,11 @@ import {
   closeSync,
   constants,
   fsyncSync,
+  linkSync,
   lstatSync,
   openSync,
   realpathSync,
+  unlinkSync,
   writeSync,
 } from "node:fs";
 import path from "node:path";
@@ -17,6 +19,7 @@ export function publishManualInstallStartupProof(
   build: ProofBuild,
   pid: number,
   temporaryRoot = "/private/tmp",
+  beforePublish?: () => void,
 ): boolean {
   const prefix = "--farol-install-proof=";
   const requests = args.filter((argument) => argument.startsWith(prefix));
@@ -38,8 +41,11 @@ export function publishManualInstallStartupProof(
   )
     throw new Error("INSTALL_STARTUP_PROOF_UNSAFE");
   const proof = path.join(directory, "startup-proof.json");
+  // The installer treats the final pathname as a complete receipt. Keep it
+  // invisible until the payload is durable, then publish without replacement.
+  const temporaryProof = path.join(directory, `startup-proof.${match[2]}.tmp`);
   const descriptor = openSync(
-    proof,
+    temporaryProof,
     constants.O_WRONLY |
       constants.O_CREAT |
       constants.O_EXCL |
@@ -61,6 +67,9 @@ export function publishManualInstallStartupProof(
   } finally {
     closeSync(descriptor);
   }
+  beforePublish?.();
+  linkSync(temporaryProof, proof);
+  unlinkSync(temporaryProof);
   const parent = openSync(
     directory,
     constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,

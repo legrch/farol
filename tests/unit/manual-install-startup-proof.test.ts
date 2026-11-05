@@ -6,6 +6,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  existsSync,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -71,5 +72,24 @@ describe("manual installer startup proof", () => {
         root,
       ),
     ).toThrow("INSTALL_STARTUP_PROOF_INVALID");
+  });
+
+  it("keeps the final pathname absent until the complete receipt is durable", () => {
+    const { root, directory } = fixture();
+    const proof = path.join(directory, "startup-proof.json");
+    expect(
+      publishManualInstallStartupProof([request], build, 42, root, () => {
+        expect(existsSync(proof)).toBe(false);
+        const temporary = path.join(
+          directory,
+          "startup-proof.11111111-1111-4111-8111-111111111111.tmp",
+        );
+        expect(JSON.parse(readFileSync(temporary, "utf8"))).toMatchObject({
+          buildId: build.buildId,
+          pid: 42,
+        });
+      }),
+    ).toBe(true);
+    expect(existsSync(proof)).toBe(true);
   });
 });
