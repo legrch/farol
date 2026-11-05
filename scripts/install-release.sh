@@ -237,7 +237,7 @@ fi
 installed=/Applications/Farol.app
 profile="$HOME/Library/Application Support/io.github.legrch.farol/installed-updates"
 running() {
-  /bin/ps -ww -axo pid=,comm= > "$tmp/processes" || return 2
+  /bin/ps -ww -axo pid=,ppid=,comm= > "$tmp/processes" || return 2
   /usr/bin/python3 -I - "$tmp/processes" "$installed" "$profile" "${1-all}" <<'PY'
 import ctypes, os, re, sys
 table, installed, profile, mode = sys.argv[1:]
@@ -260,32 +260,76 @@ def resolve_executable(pid):
         return os.fsdecode(buf.value)
     except OSError as error:
         raise ValueError('cannot resolve Farol process executable') from error
+def process_instance(pid):
+    # proc_bsdinfo from the macOS SDK (sys/proc_info.h), including the
+    # microsecond-resolution kernel start time. A PID alone can be reused.
+    class BsdInfo(ctypes.Structure):
+        _fields_ = ([ (name, ctypes.c_uint32) for name in
+                     ('flags', 'status', 'xstatus', 'pid', 'ppid', 'uid', 'gid',
+                      'ruid', 'rgid', 'svuid', 'svgid', 'pad') ] +
+                    [('comm', ctypes.c_char * 16), ('name', ctypes.c_char * 32)] +
+                    [ (name, ctypes.c_uint32) for name in
+                      ('nfiles', 'pgid', 'pjobc', 'tdev', 'tpgid', 'nice') ] +
+                    [('start_sec', ctypes.c_uint64), ('start_usec', ctypes.c_uint64)])
+    proc = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
+    proc.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+    proc.proc_pidinfo.restype = ctypes.c_int
+    info = BsdInfo()
+    if proc.proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info)) != ctypes.sizeof(info) or info.pid != pid or info.start_sec == 0:
+        raise ValueError('production primary instance unavailable')
+    return f'{pid}:{info.start_sec}:{info.start_usec}'
 found = False
-main_pids = []
 try:
     with open(table, encoding='utf-8') as stream:
         lines = stream.read().splitlines()
     if not lines:
         raise ValueError('empty process table')
+    rows = []
     for line in lines:
-        match = re.fullmatch(r'\s*([0-9]+)\s+(.+?)\s*', line)
+        match = re.fullmatch(r'\s*([0-9]+)\s+([0-9]+)\s+(.+?)\s*', line)
         if not match:
             raise ValueError('unparseable process table')
-        executable = match.group(2)
+        rows.append((int(match.group(1)), int(match.group(2)), match.group(3)))
+    # The app's Go launcher is the parent of its one Electron primary. Other
+    # Electron binaries in installed-execution are Computer/tunnel children and
+    # must not be mistaken for a second application primary.
+    if mode in ('main-pid', 'main-instance'):
+        def production_bundle(path):
+            if path == installed + '/Contents/Resources/app/farol-backend':
+                return installed
+            match = re.fullmatch(re.escape(profile) + r'/[a-f0-9]{32}/launch-Farol\.app/Contents/Resources/app/farol-backend', path)
+            return path[:-len('/Contents/Resources/app/farol-backend')] if match else None
+        launchers = []
+        for pid, _, title in rows:
+            if title == 'farol-backend' or title.endswith('/farol-backend'):
+                executable = resolve_executable(pid)
+                if executable is None:
+                    continue
+                bundle = production_bundle(executable)
+                if bundle is not None:
+                    launchers.append((pid, bundle))
+        if len(launchers) != 1:
+            raise ValueError('production launcher is not unique')
+        launcher_pid, bundle = launchers[0]
+        primary = bundle + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron'
+        mains = []
+        for pid, parent, title in rows:
+            if parent == launcher_pid and (title == 'Farol' or title == 'Electron' or title.endswith('/Electron')):
+                if resolve_executable(pid) == primary:
+                    mains.append(pid)
+        if len(mains) != 1:
+            raise ValueError('production application PID is not unique')
+        print(process_instance(mains[0]) if mode == 'main-instance' else mains[0])
+        sys.exit(0)
+    for pid, _, executable in rows:
         if not executable.startswith('/') and 'farol' in executable.lower():
-            executable = resolve_executable(int(match.group(1)))
+            executable = resolve_executable(pid)
             if executable is None:
                 continue
         owned = executable.startswith(installed + '/') or executable.startswith(profile + '/')
         # Explicitly identified Dev and Owner Preview bundles are distinct.
         other = any('/' + name + '.app/' in executable for name in ('Farol Dev', 'Farol Owner Preview'))
         if owned:
-            if executable == installed + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron' or (
-                executable.startswith(profile + '/') and
-                (executable.endswith('/launch-Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron') or
-                 executable.endswith('/Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron'))
-            ):
-                main_pids.append(int(match.group(1)))
             if mode == 'all' or executable.endswith('/Electron Runtime.app/Contents/MacOS/Electron'):
                 found = True
         elif not other and (
@@ -294,11 +338,6 @@ try:
             or '/launch-farol.app/' in executable.lower()
         ):
             raise ValueError('unclassified Farol process')
-    if mode == 'main-pid':
-        if len(main_pids) != 1:
-            raise ValueError('production application PID is not unique')
-        print(main_pids[0])
-        sys.exit(0)
     sys.exit(0 if found else 1)
 except Exception as error:
     print('Process inspection failed:', error, file=sys.stderr)
@@ -331,13 +370,19 @@ def identity(pid):
 try:
     rows = table()
     roots = []
+    def production_bundle(path):
+        if path == installed + '/Contents/Resources/app/farol-backend': return installed
+        match = re.fullmatch(re.escape(profile) + r'/[a-f0-9]{32}/launch-Farol\.app/Contents/Resources/app/farol-backend', path)
+        return path[:-len('/Contents/Resources/app/farol-backend')] if match else None
     for pid, (_, state) in rows.items():
         if state.startswith('Z'): continue
         buf = ctypes.create_string_buffer(4096)
-        if lib.proc_pidpath(pid, buf, len(buf)) > 0 and os.fsdecode(buf.value) == installed + '/Contents/Resources/app/farol-backend':
-            roots.append(pid)
+        if lib.proc_pidpath(pid, buf, len(buf)) > 0:
+            bundle = production_bundle(os.fsdecode(buf.value))
+            if bundle is not None: roots.append((pid, bundle))
     if len(roots) != 1: raise ValueError('production launcher is not unique')
-    owned = {roots[0]}
+    root_pid, bundle = roots[0]
+    owned = {root_pid}
     while True:
         expanded = owned | {pid for pid, (parent, _) in rows.items() if parent in owned}
         if expanded == owned: break
@@ -348,7 +393,7 @@ try:
         if state.startswith('Z'): continue
         record = identity(pid)
         path = record['path']
-        if not (path.startswith(installed + '/') or (path.startswith(profile + '/installed-execution/') and '/Farol.app/' in path)):
+        if not (path.startswith(bundle + '/') or (path.startswith(profile + '/installed-execution/') and '/Farol.app/' in path)):
             raise ValueError('unexpected production descendant')
         record.update(parent=parent, state=state)
         records.append(record)
@@ -450,9 +495,11 @@ while [ ! -e "$proof" ]; do
   count=$((count + 1))
 done
 main_pid=$(running main-pid) || fail 'confirmed startup process identity unavailable'
-/usr/bin/python3 -I - "$proof" "$nonce" "$manifest_build_id" "$version" "$main_pid" <<'PY' || fail 'startup confirmation invalid; predecessor retained'
+main_instance=$(running main-instance) || fail 'confirmed startup process instance unavailable'
+[ "${main_instance%%:*}" = "$main_pid" ] || fail 'confirmed startup process changed; predecessor retained'
+/usr/bin/python3 -I - "$proof" "$nonce" "$manifest_build_id" "$version" "$main_pid" "$main_instance" <<'PY' || fail 'startup confirmation invalid; predecessor retained'
 import json, os, stat, sys
-file, nonce, build_id, version, pid = sys.argv[1:]
+file, nonce, build_id, version, pid, instance = sys.argv[1:]
 before = os.lstat(file)
 if not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid() or stat.S_IMODE(before.st_mode) != 0o600:
     sys.exit(1)
@@ -472,8 +519,15 @@ if set(proof) != {'schema', 'nonce', 'buildId', 'version', 'pid'} or proof != {
     'buildId': build_id, 'version': version, 'pid': int(pid),
 }:
     sys.exit(1)
+_, start_sec, start_usec = (int(part) for part in instance.split(':'))
+# A replacement process with a recycled PID starts after the proof file was
+# created by the original primary. The original process must predate it.
+birth = getattr(before, 'st_birthtime', None)
+if birth is None or start_sec * 1000000 + start_usec > int(birth * 1000000):
+    sys.exit(1)
 PY
-check_stopped main && fail 'Farol exited after startup confirmation; predecessor retained'
+confirmed_main=$(running main-instance) || fail 'Farol primary exited after startup confirmation; predecessor retained'
+[ "$confirmed_main" = "$main_instance" ] || fail 'Farol primary changed after startup confirmation; predecessor retained'
 actual=$(plist_value "$installed/Contents/Info.plist" CFBundleShortVersionString) || fail 'cannot read installed version'
 [ "$actual" = "$version" ] || fail 'installed version mismatch; predecessor retained if one existed'
 printf 'Installed and running: Farol %s\n' "$actual"

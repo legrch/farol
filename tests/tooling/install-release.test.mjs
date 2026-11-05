@@ -276,6 +276,34 @@ test("isolated immediate startup exit is reported instead of installed and runni
   });
 });
 
+test("isolated surviving sidecar cannot confirm an exited primary", () => {
+  isolatedInstall("primary-exits-sidecar", (result, _root, log) => {
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /primary exited after startup confirmation/);
+    assert.doesNotMatch(result.stdout, /Installed and running/);
+    const retained = result.stderr.match(/Recovery files retained at: (.+)/);
+    assert.ok(retained, result.stderr);
+    assert.equal(
+      readFileSync(path.join(retained[1], "previous.app/old"), "utf8"),
+      "old",
+    );
+    assert.ok(log.includes("open"));
+  });
+});
+
+test("isolated recycled PID cannot reuse an older startup proof", () => {
+  isolatedInstall("reused-primary", (result, _root, _log) => {
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /startup confirmation invalid/);
+    const retained = result.stderr.match(/Recovery files retained at: (.+)/);
+    assert.ok(retained, result.stderr);
+    assert.equal(
+      readFileSync(path.join(retained[1], "previous.app/old"), "utf8"),
+      "old",
+    );
+  });
+});
+
 test("isolated modal startup failure retains the working predecessor", () => {
   isolatedInstall("modal-no-proof", (result, _root, log) => {
     assert.notEqual(result.status, 0);
@@ -308,9 +336,11 @@ test("isolated mismatched startup proof retains the working predecessor", () => 
 for (const scenario of [
   "private-only",
   "snapshot",
+  "public-with-private-sidecars",
   "helper",
   "dev",
   "process-title",
+  "short-launcher",
   "cursor-farol",
   "other-checkout",
   "vanished-after-quit",
@@ -339,6 +369,7 @@ for (const scenario of [
   "inspection-error",
   "live-unreadable",
   "permission-denied",
+  "wrong-main-title",
 ]) {
   test(`isolated ${scenario} preserves the existing app and recovery files`, () => {
     isolatedInstall(scenario, (result, root, log) => {
@@ -388,27 +419,34 @@ else if (cmd === 'codesign') { log('codesign'); if (args[0] === '-d') { console.
 else if (cmd === 'uuidgen') console.log('11111111-1111-4111-8111-111111111111');
 else if (cmd === 'ps') {
   if (process.env.SCENARIO === 'ps-failure') process.exit(1);
-  console.log('1 /sbin/launchd');
+  console.log('1 0 /sbin/launchd');
   if (fs.existsSync(path.join(root, 'running'))) {
     const app = path.join(root, 'Applications/Farol.app');
     const profile = path.join(root, 'Library/Application Support/io.github.legrch.farol/installed-updates');
-    let base = ['private-and-public', 'private-only', 'helper', 'stubborn'].includes(process.env.SCENARIO) && !fs.existsSync(path.join(root, 'launched')) ? path.join(profile, 'op/launch-Farol.app') : app;
+    let base = ['private-and-public', 'private-only', 'helper', 'stubborn'].includes(process.env.SCENARIO) && !fs.existsSync(path.join(root, 'launched')) ? path.join(profile, 'a'.repeat(32), 'launch-Farol.app') : app;
+    console.log('41 1 ' + (process.env.SCENARIO === 'short-launcher' ? 'farol-backend' : base + '/Contents/Resources/app/farol-backend'));
     if (process.env.SCENARIO === 'snapshot' && !fs.existsSync(path.join(root, 'launched'))) base = path.join(profile, 'installed-execution/snapshot/Farol.app');
-    const suffix = ['helper', 'backend-remains'].includes(process.env.SCENARIO) && !fs.existsSync(path.join(root, 'launched')) ? '/Contents/Resources/app/farol-backend' : '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron';
-    console.log('42 ' + (process.env.SCENARIO === 'process-title' ? 'Farol' : base + suffix));
-    if (['private-and-public', 'stubborn'].includes(process.env.SCENARIO) || (process.env.SCENARIO === 'helper' && !fs.existsSync(path.join(root, 'launched')))) console.log('45 ' + app + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
+    const suffix = process.env.SCENARIO === 'backend-remains' && !fs.existsSync(path.join(root, 'launched')) ? '/Contents/Resources/app/farol-backend' : '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron';
+    if (!fs.existsSync(path.join(root, 'primary-exited'))) console.log('42 41 ' + (['process-title', 'wrong-main-title'].includes(process.env.SCENARIO) ? 'Farol' : base + suffix));
+    if (process.env.SCENARIO === 'private-and-public' && !fs.existsSync(path.join(root, 'launched'))) console.log('45 1 ' + app + '/Contents/Resources/app/farol-backend');
+    if (process.env.SCENARIO === 'stubborn' || (process.env.SCENARIO === 'helper' && !fs.existsSync(path.join(root, 'launched')))) console.log('45 42 ' + base + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
+    if (['snapshot', 'public-with-private-sidecars'].includes(process.env.SCENARIO) && !fs.existsSync(path.join(root, 'launched'))) {
+      console.log('46 42 ' + profile + '/installed-execution/snapshot/Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
+      console.log('47 46 ' + profile + '/installed-execution/snapshot/Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
+    }
+    if (process.env.SCENARIO === 'primary-exits-sidecar' && fs.existsSync(path.join(root, 'launched'))) console.log('46 1 ' + profile + '/installed-execution/snapshot/Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
   }
-  if (process.env.SCENARIO === 'unknown') console.log('43 farol-backend');
-  if (['inspection-error', 'live-unreadable', 'permission-denied'].includes(process.env.SCENARIO)) console.log('43 farol-backend');
+  if (process.env.SCENARIO === 'unknown') console.log('43 1 farol-backend');
+  if (['inspection-error', 'live-unreadable', 'permission-denied'].includes(process.env.SCENARIO)) console.log('43 1 farol-backend');
   if (process.env.SCENARIO === 'vanished-after-quit' && !fs.existsSync(path.join(root, 'running')) && !fs.existsSync(path.join(root, 'stale-sampled'))) {
     fs.writeFileSync(path.join(root, 'stale-sampled'), 'yes');
-    console.log('43 farol-backend');
+    console.log('43 1 farol-backend');
   }
-  if (process.env.SCENARIO === 'other-farol-app') console.log('44 /tmp/other/Farol.app/Contents/MacOS/Electron');
-  if (process.env.SCENARIO === 'other-private-launch') console.log('44 /Users/other/Library/Application Support/io.github.legrch.farol/installed-updates/operation/launch-Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
-  if (process.env.SCENARIO === 'dev') console.log('44 /Applications/Farol Dev.app/Contents/MacOS/Farol Dev');
-  if (process.env.SCENARIO === 'cursor-farol') console.log('44 Cursor Helper (Plugin): extension-host (user) farol [6-217]');
-  if (process.env.SCENARIO === 'other-checkout') console.log('44 /Users/ac/code/other/farol/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron');
+  if (process.env.SCENARIO === 'other-farol-app') console.log('44 1 /tmp/other/Farol.app/Contents/MacOS/Electron');
+  if (process.env.SCENARIO === 'other-private-launch') console.log('44 1 /Users/other/Library/Application Support/io.github.legrch.farol/installed-updates/operation/launch-Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
+  if (process.env.SCENARIO === 'dev') console.log('44 1 /Applications/Farol Dev.app/Contents/MacOS/Farol Dev');
+  if (process.env.SCENARIO === 'cursor-farol') console.log('44 1 Cursor Helper (Plugin): extension-host (user) farol [6-217]');
+  if (process.env.SCENARIO === 'other-checkout') console.log('44 1 /Users/ac/code/other/farol/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron');
 }
 else if (cmd === 'osascript') { log('osascript'); const source = fs.readFileSync(0, 'utf8'); if (!source.includes('menu bar item "Farol"') || !source.includes('repeat with candidate in every application process') || !source.includes('if (unix id of targetProcess) is not targetPid') || process.env.SCENARIO === 'quit-failure') process.exit(1); if (!['stubborn', 'backend-remains', 'escalate', 'unexpected-descendant'].includes(process.env.SCENARIO)) fs.rmSync(path.join(root, 'running'), {force:true}); }
 else if (cmd === 'ditto') { log(args[1].endsWith('previous.app') ? 'ditto-backup' : 'ditto-install'); fs.cpSync(args[0], args[1], {recursive:true, verbatimSymlinks:true}); }
@@ -490,14 +528,14 @@ else process.exit(2);
       ].includes(scenario)
     ) {
       copy = copy.replace(
-        "found = False\nmain_pids = []\ntry:",
+        "found = False\ntry:",
         `class FakePidPath:
     def __call__(self, pid, buf, size):
         if pid == 43:
             if os.environ['SCENARIO'] == 'inspection-error':
                 raise RuntimeError('fixture inspection error')
             return 0
-        value = os.fsencode(installed + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron')
+        value = os.fsencode(installed + ('/Contents/Resources/app/farol-backend' if pid == 41 else '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron'))
         buf.value = value
         return len(value)
 class FakeProc:
@@ -515,20 +553,30 @@ def fake_pid_probe(pid, signal):
     return original_kill(pid, signal)
 os.kill = fake_pid_probe
 found = False
-main_pids = []
 try:`,
       );
     } else {
       copy = copy.replace(
-        "found = False\nmain_pids = []\ntry:",
+        "found = False\ntry:",
         `def resolve_executable(pid):
+    if pid == 41:
+        if os.environ['SCENARIO'] in ('private-only', 'private-and-public', 'helper', 'stubborn') and not os.path.exists(os.path.join(os.environ['FIXTURE_ROOT'], 'launched')):
+            return profile + '/' + 'a' * 32 + '/launch-Farol.app/Contents/Resources/app/farol-backend'
+        return installed + '/Contents/Resources/app/farol-backend'
     if pid == 42:
+        if os.environ['SCENARIO'] == 'wrong-main-title':
+            return '/tmp/unrelated'
+        if os.environ['SCENARIO'] in ('private-only', 'private-and-public', 'helper', 'stubborn') and not os.path.exists(os.path.join(os.environ['FIXTURE_ROOT'], 'launched')):
+            return profile + '/' + 'a' * 32 + '/launch-Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron'
+        return installed + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron'
+    if pid == 45:
+        if os.environ['SCENARIO'] == 'private-and-public':
+            return installed + '/Contents/Resources/app/farol-backend'
         return installed + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron'
     if pid == 44:
         return '/Applications/Cursor.app/Contents/MacOS/Cursor'
     return '/tmp/other/farol-backend'
 found = False
-main_pids = []
 try:`,
       );
     }
@@ -569,6 +617,24 @@ try:
     rows = table()`,
       );
     }
+    if (scenario === "primary-exits-sidecar") {
+      copy = copy.replace(
+        "proof = json.loads(data)",
+        "proof = json.loads(data)\nopen(os.path.join(os.environ['FIXTURE_ROOT'], 'primary-exited'), 'w').close()",
+      );
+    }
+    copy = copy.replace(
+      "found = False\ntry:",
+      `def process_instance(pid):
+    start = 3000000000 if os.environ['SCENARIO'] == 'reused-primary' else 1000000000
+    return f'{pid}:{start}:0'
+found = False
+try:`,
+    );
+    copy = copy.replace(
+      "birth = getattr(before, 'st_birthtime', None)",
+      "birth = 2000000000  # isolated fixture clock",
+    );
     const copyPath = path.join(root, "isolated-installer.sh");
     writeFileSync(copyPath, copy);
     const result = spawnSync("/bin/sh", [copyPath, "1.2.3"], {
