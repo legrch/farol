@@ -308,6 +308,7 @@ test("isolated mismatched startup proof retains the working predecessor", () => 
 for (const scenario of [
   "private-only",
   "snapshot",
+  "public-with-private-sidecars",
   "helper",
   "dev",
   "process-title",
@@ -388,27 +389,32 @@ else if (cmd === 'codesign') { log('codesign'); if (args[0] === '-d') { console.
 else if (cmd === 'uuidgen') console.log('11111111-1111-4111-8111-111111111111');
 else if (cmd === 'ps') {
   if (process.env.SCENARIO === 'ps-failure') process.exit(1);
-  console.log('1 /sbin/launchd');
+  console.log('1 0 /sbin/launchd');
   if (fs.existsSync(path.join(root, 'running'))) {
     const app = path.join(root, 'Applications/Farol.app');
     const profile = path.join(root, 'Library/Application Support/io.github.legrch.farol/installed-updates');
+    console.log('41 1 ' + app + '/Contents/Resources/app/farol-backend');
     let base = ['private-and-public', 'private-only', 'helper', 'stubborn'].includes(process.env.SCENARIO) && !fs.existsSync(path.join(root, 'launched')) ? path.join(profile, 'op/launch-Farol.app') : app;
     if (process.env.SCENARIO === 'snapshot' && !fs.existsSync(path.join(root, 'launched'))) base = path.join(profile, 'installed-execution/snapshot/Farol.app');
     const suffix = ['helper', 'backend-remains'].includes(process.env.SCENARIO) && !fs.existsSync(path.join(root, 'launched')) ? '/Contents/Resources/app/farol-backend' : '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron';
-    console.log('42 ' + (process.env.SCENARIO === 'process-title' ? 'Farol' : base + suffix));
-    if (['private-and-public', 'stubborn'].includes(process.env.SCENARIO) || (process.env.SCENARIO === 'helper' && !fs.existsSync(path.join(root, 'launched')))) console.log('45 ' + app + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
+    console.log('42 41 ' + (process.env.SCENARIO === 'process-title' ? 'Farol' : base + suffix));
+    if (['private-and-public', 'stubborn'].includes(process.env.SCENARIO) || (process.env.SCENARIO === 'helper' && !fs.existsSync(path.join(root, 'launched')))) console.log('45 41 ' + app + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
+    if (['snapshot', 'public-with-private-sidecars'].includes(process.env.SCENARIO) && !fs.existsSync(path.join(root, 'launched'))) {
+      console.log('46 42 ' + profile + '/installed-execution/snapshot/Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
+      console.log('47 46 ' + profile + '/installed-execution/snapshot/Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
+    }
   }
-  if (process.env.SCENARIO === 'unknown') console.log('43 farol-backend');
-  if (['inspection-error', 'live-unreadable', 'permission-denied'].includes(process.env.SCENARIO)) console.log('43 farol-backend');
+  if (process.env.SCENARIO === 'unknown') console.log('43 1 farol-backend');
+  if (['inspection-error', 'live-unreadable', 'permission-denied'].includes(process.env.SCENARIO)) console.log('43 1 farol-backend');
   if (process.env.SCENARIO === 'vanished-after-quit' && !fs.existsSync(path.join(root, 'running')) && !fs.existsSync(path.join(root, 'stale-sampled'))) {
     fs.writeFileSync(path.join(root, 'stale-sampled'), 'yes');
-    console.log('43 farol-backend');
+    console.log('43 1 farol-backend');
   }
-  if (process.env.SCENARIO === 'other-farol-app') console.log('44 /tmp/other/Farol.app/Contents/MacOS/Electron');
-  if (process.env.SCENARIO === 'other-private-launch') console.log('44 /Users/other/Library/Application Support/io.github.legrch.farol/installed-updates/operation/launch-Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
-  if (process.env.SCENARIO === 'dev') console.log('44 /Applications/Farol Dev.app/Contents/MacOS/Farol Dev');
-  if (process.env.SCENARIO === 'cursor-farol') console.log('44 Cursor Helper (Plugin): extension-host (user) farol [6-217]');
-  if (process.env.SCENARIO === 'other-checkout') console.log('44 /Users/ac/code/other/farol/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron');
+  if (process.env.SCENARIO === 'other-farol-app') console.log('44 1 /tmp/other/Farol.app/Contents/MacOS/Electron');
+  if (process.env.SCENARIO === 'other-private-launch') console.log('44 1 /Users/other/Library/Application Support/io.github.legrch.farol/installed-updates/operation/launch-Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron');
+  if (process.env.SCENARIO === 'dev') console.log('44 1 /Applications/Farol Dev.app/Contents/MacOS/Farol Dev');
+  if (process.env.SCENARIO === 'cursor-farol') console.log('44 1 Cursor Helper (Plugin): extension-host (user) farol [6-217]');
+  if (process.env.SCENARIO === 'other-checkout') console.log('44 1 /Users/ac/code/other/farol/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron');
 }
 else if (cmd === 'osascript') { log('osascript'); const source = fs.readFileSync(0, 'utf8'); if (!source.includes('menu bar item "Farol"') || !source.includes('repeat with candidate in every application process') || !source.includes('if (unix id of targetProcess) is not targetPid') || process.env.SCENARIO === 'quit-failure') process.exit(1); if (!['stubborn', 'backend-remains', 'escalate', 'unexpected-descendant'].includes(process.env.SCENARIO)) fs.rmSync(path.join(root, 'running'), {force:true}); }
 else if (cmd === 'ditto') { log(args[1].endsWith('previous.app') ? 'ditto-backup' : 'ditto-install'); fs.cpSync(args[0], args[1], {recursive:true, verbatimSymlinks:true}); }
@@ -490,7 +496,7 @@ else process.exit(2);
       ].includes(scenario)
     ) {
       copy = copy.replace(
-        "found = False\nmain_pids = []\ntry:",
+        "found = False\ntry:",
         `class FakePidPath:
     def __call__(self, pid, buf, size):
         if pid == 43:
@@ -515,12 +521,11 @@ def fake_pid_probe(pid, signal):
     return original_kill(pid, signal)
 os.kill = fake_pid_probe
 found = False
-main_pids = []
 try:`,
       );
     } else {
       copy = copy.replace(
-        "found = False\nmain_pids = []\ntry:",
+        "found = False\ntry:",
         `def resolve_executable(pid):
     if pid == 42:
         return installed + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron'
@@ -528,7 +533,6 @@ try:`,
         return '/Applications/Cursor.app/Contents/MacOS/Cursor'
     return '/tmp/other/farol-backend'
 found = False
-main_pids = []
 try:`,
       );
     }

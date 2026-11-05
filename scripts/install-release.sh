@@ -237,7 +237,7 @@ fi
 installed=/Applications/Farol.app
 profile="$HOME/Library/Application Support/io.github.legrch.farol/installed-updates"
 running() {
-  /bin/ps -ww -axo pid=,comm= > "$tmp/processes" || return 2
+  /bin/ps -ww -axo pid=,ppid=,comm= > "$tmp/processes" || return 2
   /usr/bin/python3 -I - "$tmp/processes" "$installed" "$profile" "${1-all}" <<'PY'
 import ctypes, os, re, sys
 table, installed, profile, mode = sys.argv[1:]
@@ -261,31 +261,45 @@ def resolve_executable(pid):
     except OSError as error:
         raise ValueError('cannot resolve Farol process executable') from error
 found = False
-main_pids = []
 try:
     with open(table, encoding='utf-8') as stream:
         lines = stream.read().splitlines()
     if not lines:
         raise ValueError('empty process table')
+    rows = []
     for line in lines:
-        match = re.fullmatch(r'\s*([0-9]+)\s+(.+?)\s*', line)
+        match = re.fullmatch(r'\s*([0-9]+)\s+([0-9]+)\s+(.+?)\s*', line)
         if not match:
             raise ValueError('unparseable process table')
-        executable = match.group(2)
+        rows.append((int(match.group(1)), int(match.group(2)), match.group(3)))
+    # The app's Go launcher is the parent of its one Electron primary. Other
+    # Electron binaries in installed-execution are Computer/tunnel children and
+    # must not be mistaken for a second application primary.
+    if mode == 'main-pid':
+        launcher = installed + '/Contents/Resources/app/farol-backend'
+        launchers = [pid for pid, _, title in rows if title == launcher]
+        if len(launchers) != 1:
+            raise ValueError('production launcher is not unique')
+        primary = installed + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron'
+        mains = [pid for pid, parent, title in rows
+                 if parent == launchers[0] and
+                 (title == 'Farol' or title == primary or
+                  (title.startswith(profile + '/') and
+                   (title.endswith('/Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron') or
+                    title.endswith('/launch-Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron'))))]
+        if len(mains) != 1:
+            raise ValueError('production application PID is not unique')
+        print(mains[0])
+        sys.exit(0)
+    for pid, _, executable in rows:
         if not executable.startswith('/') and 'farol' in executable.lower():
-            executable = resolve_executable(int(match.group(1)))
+            executable = resolve_executable(pid)
             if executable is None:
                 continue
         owned = executable.startswith(installed + '/') or executable.startswith(profile + '/')
         # Explicitly identified Dev and Owner Preview bundles are distinct.
         other = any('/' + name + '.app/' in executable for name in ('Farol Dev', 'Farol Owner Preview'))
         if owned:
-            if executable == installed + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron' or (
-                executable.startswith(profile + '/') and
-                (executable.endswith('/launch-Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron') or
-                 executable.endswith('/Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron'))
-            ):
-                main_pids.append(int(match.group(1)))
             if mode == 'all' or executable.endswith('/Electron Runtime.app/Contents/MacOS/Electron'):
                 found = True
         elif not other and (
@@ -294,11 +308,6 @@ try:
             or '/launch-farol.app/' in executable.lower()
         ):
             raise ValueError('unclassified Farol process')
-    if mode == 'main-pid':
-        if len(main_pids) != 1:
-            raise ValueError('production application PID is not unique')
-        print(main_pids[0])
-        sys.exit(0)
     sys.exit(0 if found else 1)
 except Exception as error:
     print('Process inspection failed:', error, file=sys.stderr)
