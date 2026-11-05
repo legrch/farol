@@ -39,12 +39,16 @@ function candidatePrerelease(identity) {
   );
   return true;
 }
-function publicationBody(identity) {
+function publicationBodyForPrerelease(prerelease) {
+  requireThat(typeof prerelease === "boolean", "PUBLICATION_POLICY_INVALID");
   return {
     draft: false,
-    prerelease: candidatePrerelease(identity),
-    make_latest: "false",
+    prerelease,
+    make_latest: prerelease ? "false" : "true",
   };
+}
+function publicationBody(identity) {
+  return publicationBodyForPrerelease(candidatePrerelease(identity));
 }
 export function candidateIdentity(document, head, runId, attempt) {
   const channel = releaseBuildFields(document).updateChannel;
@@ -336,11 +340,7 @@ export function githubApi(token, fetchImpl = fetch) {
           [true, false].some(
             (prerelease) =>
               JSON.stringify(body) ===
-              JSON.stringify({
-                draft: false,
-                prerelease,
-                make_latest: "false",
-              }),
+              JSON.stringify(publicationBodyForPrerelease(prerelease)),
           )),
       "API_METHOD_INVALID",
     );
