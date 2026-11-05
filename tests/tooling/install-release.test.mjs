@@ -419,7 +419,14 @@ else process.exit(2);
         "/tmp/farol-release.XXXXXXXX",
         path.join(root, "release.XXXXXXXX"),
       );
-    if (["vanished-after-quit", "inspection-error", "live-unreadable", "permission-denied"].includes(scenario)) {
+    if (
+      [
+        "vanished-after-quit",
+        "inspection-error",
+        "live-unreadable",
+        "permission-denied",
+      ].includes(scenario)
+    ) {
       copy = copy.replace(
         "found = False\nmain_pids = []\ntry:",
         `class FakePidPath:
