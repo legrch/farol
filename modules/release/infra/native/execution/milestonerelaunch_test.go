@@ -436,6 +436,28 @@ func TestMilestoneRelaunchRefusesInvalidInstalledExecutableSignature(t *testing.
 	}
 }
 
+func TestMilestoneRelaunchRefusesChangedCanonicalSlotAtOpenFence(t *testing.T) {
+	f := newFakeRelaunchLifecycle(t)
+	var launched bool
+	f.config.open = func(ctx context.Context, _ time.Time, _ []string, fence func(context.Context) error) error {
+		// A cooperative writer that changes the named slot before the final
+		// open fence must not be mistaken for the previously verified image.
+		if err := os.WriteFile(filepath.Join(f.app, "Contents/Info.plist"), []byte("changed before open"), 0644); err != nil {
+			return err
+		}
+		if err := fence(ctx); err != nil {
+			return err
+		}
+		launched = true
+		return nil
+	}
+	m, ready := f.prepare(t, "apply", true)
+	result, err := f.run(t, m, ready)
+	if err == nil || result != nil || launched || f.diskPhase(t) != "launch_requested" {
+		t.Fatalf("changed canonical slot launched or completed: result=%+v error=%v launched=%t phase=%s", result, describe(err), launched, f.diskPhase(t))
+	}
+}
+
 // Without a launch port the Milestone refuses before it writes anything past
 // verified: nothing is journalled, measured or opened.
 func TestMilestoneRelaunchWithoutALaunchPortRefusesBeforeAnyLaunchEffect(t *testing.T) {
