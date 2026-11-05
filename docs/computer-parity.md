@@ -107,11 +107,12 @@ lease and cannot extend a command. Legacy Shell remains limited to 15 seconds.
 This source capability does not establish installed activation or external
 qualification, and does not activate additional tools, filesystem roots or
 network access by itself.
-The selected Git image is the Command Line Tools binary under `/Library`.
-The system `/usr/bin/git` dispatcher is multiply linked, and Xcode's binary
-has a shared-writable `/Applications` ancestor; neither satisfies this image
-class. Selecting the Command Line Tools image does not widen its filesystem
-access or establish a successful ordinary Git journey.
+The fixed Command Line Tools image was the earlier source-only selection.
+The active installed-runtime policy now considers the first Git in the owner's
+PATH, with no fallback. The system `/usr/bin/git` dispatcher can still fail
+its image qualification; this does not authorize selecting CLT behind it.
+Selecting any Git image does not widen its filesystem access or establish a
+successful ordinary Git journey.
 
 ## Local candidate Bash and Git evidence
 

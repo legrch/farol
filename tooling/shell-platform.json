@@ -264,5 +264,5 @@
     "treeSHA256": "60551daa876998dc62293edc75eb1aca819690077fe9d48910459ce175796074",
     "distributionSHA256": "52f8354eacad1dbe43ee12345b0fa9e1fc7de137f77571abbe12efbbc896aad8"
   },
-  "hostRuntimePolicy": "installed-host-runtime-v1"
+  "hostRuntimePolicy": "installed-host-runtime-v2"
 }

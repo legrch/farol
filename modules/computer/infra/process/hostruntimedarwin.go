@@ -308,11 +308,14 @@ func (nativeHostRuntimeFilesystem) imports(ctx context.Context, p string) (hostM
 	return imports, macho, nil
 }
 
-// Discovery never runs a version probe, shell startup file or installed tool.
-// Missing/unqualified optional programs produce a sealed absent capability;
-// callers keep the independently qualified basic Shell and File Computer.
+// Discovery never runs a version probe or installed tool. Finder PATH capture
+// runs the owner's selected login shell once at the Shell-session boundary.
 func DiscoverInstalledHostRuntime(ctx context.Context) (*HostRuntimePlan, error) {
-	return discoverHostRuntime(ctx, nativeHostRuntimeFilesystem{})
+	searchPath, err := CaptureUserExecutablePath(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return DiscoverInstalledHostRuntimeForPath(ctx, searchPath)
 }
 
 func (nativePlatformFacts) hostRuntime(ctx context.Context, p *HostRuntimePlan) error {

@@ -6,23 +6,31 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 )
 
-const InstalledHostRuntimeAssurance = "installed-host-runtime-v1"
+const InstalledHostRuntimeAssurance = "installed-host-runtime-v2"
 const hostRuntimeScriptType uint32 = 0xffffffff
+
+// macOS reserves gid 80 for the local admin group. A directory writable by
+// that group is within the owner's accepted administrative trust boundary only
+// when the directory itself is owned by the current user.
+const hostRuntimeAdminGID uint32 = 80
 
 var errHostRuntime = errors.New("HOST_RUNTIME_UNQUALIFIED")
 var errHostRuntimeSharedWritable = errors.New("HOST_RUNTIME_SHARED_WRITABLE")
+var errHostRuntimeDependency = errors.New("HOST_RUNTIME_DEPENDENCY_UNAVAILABLE")
 
 const hostRuntimeMaxNodes = 8192
 const hostRuntimeMaxBytes int64 = 384 << 20
 
-// This plan is created only by the native owner, never from a renderer, MCP
-// request or ambient PATH. A mutable installed environment has a distinct
+// This plan is created only by the native owner, never from a renderer or MCP
+// request. The owner's PATH selects one candidate; it grants no authority.
+// A mutable installed environment has a distinct
 // assurance from the release-qualified base; it promises neither protected
 // ancestry nor atomic execution against another process of the same account.
 type HostRuntimePlan struct{ frozen *hostRuntimeSnapshot }
@@ -34,9 +42,9 @@ type hostRuntimeSnapshot struct {
 	GitExecPath, GitTemplateDirectory                                  string
 	Unavailable                                                        []hostRuntimeUnavailable
 }
-type hostRuntimeUnavailable struct{ Kind, Code string }
+type hostRuntimeUnavailable struct{ Kind, Code, Path, Detail string }
 
-type hostRuntimeInstallation struct{ Kind, Root, Image string }
+type hostRuntimeInstallation struct{ Kind, Root, Image, Alias string }
 type hostRuntimeNode struct {
 	Path, Kind, Device, Inode, Modified, Changed, SHA256, LinkTarget string
 	UID, GID                                                         uint32
@@ -143,7 +151,13 @@ func (p *HostRuntimePlan) valid() bool {
 		}
 	}
 	for _, installation := range p.frozen.Installations {
-		if (installation.Kind != "git" && installation.Kind != "python") || !absolutePolicyPath(installation.Root) || !insidePolicy(installation.Root, installation.Image) || !slices.Contains(p.frozen.ExecFiles, installation.Image) {
+		if (installation.Kind != "git" && installation.Kind != "python") || !absolutePolicyPath(installation.Root) || !absolutePolicyPath(installation.Alias) || !insidePolicy(installation.Root, installation.Image) || !slices.Contains(p.frozen.ExecFiles, installation.Image) {
+			return false
+		}
+	}
+	for _, unavailable := range p.frozen.Unavailable {
+		if (unavailable.Kind != "git" && unavailable.Kind != "python") ||
+			(unavailable.Path != "" && !absolutePolicyPath(unavailable.Path)) || len(unavailable.Detail) > 512 || strings.ContainsAny(unavailable.Detail, "\n\r\x00") {
 			return false
 		}
 	}
@@ -155,6 +169,36 @@ func (p *HostRuntimePlan) valid() bool {
 		}
 	}
 	return true
+}
+
+// GitSelection is diagnostic only; it grants no executable or filesystem
+// access and does not change a recorded unknown process outcome.
+func (p *HostRuntimePlan) GitSelection() (path, code string) {
+	if p == nil || p.frozen == nil || !p.valid() {
+		return "", "HOST_RUNTIME_UNQUALIFIED"
+	}
+	for _, selected := range p.frozen.Installations {
+		if selected.Kind == "git" {
+			return selected.Alias, ""
+		}
+	}
+	for _, unavailable := range p.frozen.Unavailable {
+		if unavailable.Kind == "git" {
+			return unavailable.Path, unavailable.Code
+		}
+	}
+	return "", "HOST_RUNTIME_NOT_INSTALLED"
+}
+func (p *HostRuntimePlan) GitFailureDetail() string {
+	if p == nil || !p.valid() {
+		return ""
+	}
+	for _, unavailable := range p.frozen.Unavailable {
+		if unavailable.Kind == "git" {
+			return unavailable.Detail
+		}
+	}
+	return ""
 }
 func (p *HostRuntimePlan) recheck(ctx context.Context, fs hostRuntimeFilesystem) error {
 	if !p.valid() || ctx == nil || ctx.Err() != nil || fs == nil {
@@ -222,8 +266,8 @@ func (b *hostRuntimeBuilder) observe(p string) (hostRuntimeNode, error) {
 		if !n.Mode.IsDir() {
 			return n, errHostRuntime
 		}
-		if n.Mode.Perm()&0020 != 0 {
-			return n, errHostRuntimeSharedWritable
+		if n.Mode.Perm()&0020 != 0 && !(n.UID == b.fs.uid() && n.GID == hostRuntimeAdminGID) {
+			return n, fmt.Errorf("%w: %s", errHostRuntimeSharedWritable, p)
 		}
 	case "alias":
 		if n.Mode&os.ModeSymlink == 0 || n.Links != 1 || n.LinkTarget == "" || strings.ContainsRune(n.LinkTarget, 0) {
@@ -386,7 +430,7 @@ func (b *hostRuntimeBuilder) fileForExecutable(p string, boundaries []string, ex
 		}
 		selected, err := b.resolveLibrary(p, library, imports.rpaths, boundaries, executable)
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: %s: %v", errHostRuntimeDependency, library, err)
 		}
 		if err := b.fileForExecutable(selected, boundaries, executable); err != nil {
 			return err
@@ -484,8 +528,11 @@ func (b *hostRuntimeBuilder) finish() (*HostRuntimePlan, error) {
 	b.snapshot.DeniedTrees = sortedUnique(b.snapshot.DeniedTrees)
 	b.snapshot.MutableParents = sortedUnique(b.snapshot.MutableParents)
 	p := &HostRuntimePlan{&b.snapshot}
+	if !p.valid() {
+		return nil, fmt.Errorf("%w: invalid sealed inventory", errHostRuntime)
+	}
 	if p.recheck(b.context, b.fs) != nil {
-		return nil, errHostRuntime
+		return nil, fmt.Errorf("%w: inventory changed before admission", errHostRuntime)
 	}
 	return p, nil
 }
@@ -500,10 +547,31 @@ func (p *HostRuntimePlan) digest() string {
 }
 
 func hostRuntimeCandidates(kind string) []string {
-	if kind == "git" {
-		return []string{"/opt/homebrew/bin/git", "/usr/local/bin/git", "/Library/Developer/CommandLineTools/usr/bin/git", "/Applications/Xcode.app/Contents/Developer/usr/bin/git"}
-	}
 	return []string{"/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/Current/bin/python3", "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/Current/bin/python3"}
+}
+
+// PATH is an owner-selected input, never an authority grant. Only the first
+// existing git entry is considered; a failed qualification cannot select a
+// different installation later in PATH.
+func firstGitOnPath(ctx context.Context, fs hostRuntimeFilesystem, searchPath string) (string, error) {
+	if len(searchPath) == 0 || len(searchPath) > 16384 || strings.ContainsRune(searchPath, 0) {
+		return "", errHostRuntime
+	}
+	for _, dir := range strings.Split(searchPath, ":") {
+		if !absolutePolicyPath(dir) || filepath.Clean(dir) != dir {
+			return "", errHostRuntime
+		}
+		candidate := filepath.Join(dir, "git")
+		_, err := fs.node(ctx, candidate)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return candidate, err
+		}
+		return candidate, nil
+	}
+	return "", os.ErrNotExist
 }
 func hostRuntimeLayoutFor(kind, alias, physical string) (hostRuntimeLayout, []string, error) {
 	for _, prefix := range []string{"/opt/homebrew", "/usr/local"} {
@@ -563,15 +631,24 @@ func hostPythonRoot(p, marker string) (string, string, bool) {
 	}
 	return p[:at+len(marker)] + version, version, true
 }
-func discoverHostRuntime(ctx context.Context, fs hostRuntimeFilesystem) (*HostRuntimePlan, error) {
+func discoverHostRuntime(ctx context.Context, fs hostRuntimeFilesystem, searchPath string) (*HostRuntimePlan, error) {
 	if ctx == nil || ctx.Err() != nil || fs == nil {
 		return nil, errHostRuntime
 	}
 	aggregate := newHostRuntimeBuilder(ctx, fs)
+	gitAlias, gitSearchErr := firstGitOnPath(ctx, fs, searchPath)
 	for _, kind := range []string{"git", "python"} {
 		found := false
 		skippedSharedWritable := false
-		for _, alias := range hostRuntimeCandidates(kind) {
+		sharedReason := ""
+		candidates := hostRuntimeCandidates(kind)
+		if kind == "git" {
+			candidates = nil
+			if gitAlias != "" {
+				candidates = []string{gitAlias}
+			}
+		}
+		for _, alias := range candidates {
 			physical, err := fs.resolve(ctx, alias)
 			if errors.Is(err, os.ErrNotExist) {
 				continue
@@ -579,13 +656,13 @@ func discoverHostRuntime(ctx context.Context, fs hostRuntimeFilesystem) (*HostRu
 			found = true
 			if err != nil {
 				skippedSharedWritable = false
-				aggregate.snapshot.Unavailable = append(aggregate.snapshot.Unavailable, hostRuntimeUnavailable{kind, "HOST_RUNTIME_DISCOVERY_UNAVAILABLE"})
+				aggregate.snapshot.Unavailable = append(aggregate.snapshot.Unavailable, hostRuntimeUnavailable{kind, "HOST_RUNTIME_DISCOVERY_UNAVAILABLE", alias, err.Error()})
 				break
 			}
 			layout, boundaries, err := hostRuntimeLayoutFor(kind, alias, physical)
 			if err != nil {
 				skippedSharedWritable = false
-				aggregate.snapshot.Unavailable = append(aggregate.snapshot.Unavailable, hostRuntimeUnavailable{kind, "HOST_RUNTIME_LAYOUT_UNSUPPORTED"})
+				aggregate.snapshot.Unavailable = append(aggregate.snapshot.Unavailable, hostRuntimeUnavailable{kind, "HOST_RUNTIME_LAYOUT_UNSUPPORTED", alias, "unsupported installation layout"})
 				break
 			}
 			selected := newHostRuntimeBuilder(ctx, fs)
@@ -623,10 +700,15 @@ func discoverHostRuntime(ctx context.Context, fs hostRuntimeFilesystem) (*HostRu
 				}
 				if errors.Is(err, errHostRuntimeSharedWritable) {
 					skippedSharedWritable = true
+					sharedReason = err.Error()
 					continue
 				}
 				skippedSharedWritable = false
-				aggregate.snapshot.Unavailable = append(aggregate.snapshot.Unavailable, hostRuntimeUnavailable{kind, "HOST_RUNTIME_QUALIFICATION_UNAVAILABLE"})
+				code := "HOST_RUNTIME_QUALIFICATION_UNAVAILABLE"
+				if errors.Is(err, errHostRuntimeDependency) {
+					code = "HOST_RUNTIME_DEPENDENCY_UNAVAILABLE"
+				}
+				aggregate.snapshot.Unavailable = append(aggregate.snapshot.Unavailable, hostRuntimeUnavailable{kind, code, alias, err.Error()})
 				break
 			}
 			for p, n := range selected.nodes {
@@ -643,13 +725,24 @@ func discoverHostRuntime(ctx context.Context, fs hostRuntimeFilesystem) (*HostRu
 					}
 				}
 			}
-			aggregate.snapshot.Installations = append(aggregate.snapshot.Installations, hostRuntimeInstallation{kind, layout.root, image})
+			aggregate.snapshot.Installations = append(aggregate.snapshot.Installations, hostRuntimeInstallation{kind, layout.root, image, alias})
 			aggregate.snapshot.ReadFiles = append(aggregate.snapshot.ReadFiles, plan.frozen.ReadFiles...)
 			aggregate.snapshot.ReadTrees = append(aggregate.snapshot.ReadTrees, plan.frozen.ReadTrees...)
 			aggregate.snapshot.DeniedTrees = append(aggregate.snapshot.DeniedTrees, plan.frozen.DeniedTrees...)
 			aggregate.snapshot.ExecFiles = append(aggregate.snapshot.ExecFiles, plan.frozen.ExecFiles...)
 			aggregate.snapshot.MutableParents = append(aggregate.snapshot.MutableParents, plan.frozen.MutableParents...)
-			aggregate.snapshot.Path = append(aggregate.snapshot.Path, filepath.Dir(image))
+			// Preserve the selected PATH directory when it has a directly
+			// observed vnode (the normal /opt/homebrew/bin case). A directory
+			// reached through /opt/homebrew/opt is an alias into a keg: use its
+			// measured physical directory because the alias child has no
+			// independent vnode to seal.
+			pathDir := filepath.Dir(alias)
+			if n, ok := selected.nodes[pathDir]; !ok || n.Kind != "directory" {
+				pathDir = filepath.Dir(image)
+			}
+			if !slices.Contains(aggregate.snapshot.Path, pathDir) {
+				aggregate.snapshot.Path = append(aggregate.snapshot.Path, pathDir)
+			}
 			if kind == "git" {
 				aggregate.snapshot.GitExecPath = layout.root + "/libexec/git-core"
 				aggregate.snapshot.GitTemplateDirectory = layout.root + "/share/git-core/templates"
@@ -658,9 +751,21 @@ func discoverHostRuntime(ctx context.Context, fs hostRuntimeFilesystem) (*HostRu
 			break
 		}
 		if !found {
-			aggregate.snapshot.Unavailable = append(aggregate.snapshot.Unavailable, hostRuntimeUnavailable{kind, "HOST_RUNTIME_NOT_INSTALLED"})
+			code := "HOST_RUNTIME_NOT_INSTALLED"
+			if kind == "git" && gitSearchErr != nil && !errors.Is(gitSearchErr, os.ErrNotExist) {
+				code = "HOST_RUNTIME_DISCOVERY_UNAVAILABLE"
+			}
+			path := ""
+			if kind == "git" {
+				path = gitAlias
+			}
+			aggregate.snapshot.Unavailable = append(aggregate.snapshot.Unavailable, hostRuntimeUnavailable{kind, code, path, ""})
 		} else if skippedSharedWritable {
-			aggregate.snapshot.Unavailable = append(aggregate.snapshot.Unavailable, hostRuntimeUnavailable{kind, "HOST_RUNTIME_QUALIFICATION_UNAVAILABLE"})
+			path := gitAlias
+			if kind != "git" {
+				path = ""
+			}
+			aggregate.snapshot.Unavailable = append(aggregate.snapshot.Unavailable, hostRuntimeUnavailable{kind, "HOST_RUNTIME_SHARED_WRITABLE", path, sharedReason})
 		}
 	}
 	return aggregate.finish()

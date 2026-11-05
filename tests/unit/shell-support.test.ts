@@ -787,10 +787,10 @@ describe("finite CLT Python resource boundary", () => {
 it("requires an explicit closed installed-runtime policy bound to trusted support", () => {
   const input = {
     ...fixture(),
-    hostRuntimePolicy: "installed-host-runtime-v1",
+    hostRuntimePolicy: "installed-host-runtime-v2",
   };
   expect(parseShellSupportDeclaration(input).hostRuntimePolicy).toBe(
-    "installed-host-runtime-v1",
+    "installed-host-runtime-v2",
   );
   expect(() =>
     bindShellSupportDeclaration(input, fixture(), input.core),
@@ -800,7 +800,7 @@ it("requires an explicit closed installed-runtime policy bound to trusted suppor
     null,
     "",
     "ambient-path",
-    "installed-host-runtime-v2",
+    "installed-host-runtime-v1",
     true,
   ]) {
     invalid({ ...fixture(), hostRuntimePolicy: policy });

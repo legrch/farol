@@ -62,12 +62,18 @@ tools authority or widens generic Shell networking.
 
 ## Installed Shell programs
 
-The selected `installed-host-runtime-v1` policy discovers supported installed
+The selected `installed-host-runtime-v2` policy discovers supported installed
 Git and Python layouts in Homebrew Cellar, Command Line Tools, or Xcode. They
 remain optional user tools, not Farol runtime dependencies or bundled programs.
 An absent or unsupported optional installation contributes no authority and does
 not disable the base Shell or Computer file operations. Discovery does not run
-version commands, package managers, shell startup files, or ambient PATH tools.
+version commands or package managers. For Git, the first entry named `git`
+in the owner's PATH is the only candidate. A Terminal launch uses its inherited
+PATH; a Finder launch obtains PATH from the owner's `$SHELL -lic` once at the
+first Shell session with a three-second timeout and strict framed output. A
+failed or unqualified first Git is reported with its path and reason; Farol
+never substitutes a later Git or CLT. CLT is selected only when the owner puts
+it first in PATH. Python discovery remains optional and separately bounded.
 
 The Go owner binds canonical image paths, owner/mode, physical identities, SHA-256,
 Mach-O architecture/dependencies, directory membership and symlink targets into
@@ -76,11 +82,10 @@ preparation deadline before dispatch. A changed inventory refuses that attempt;
 it does not refresh the plan, extend its deadline, or replay an operation.
 
 This is an explicitly accepted mutable installed environment assurance. Selected
-directories must not be group- or world-writable. A Homebrew installation with
-group-writable ancestors is unavailable to this policy until its permissions are
-made suitable; Farol does not change those permissions. Discovery may select a
-different supported installation only after it independently passes the same
-qualification. This policy promises no
+files must not be group- or world-writable. Directories may be group-writable
+only when owned by the current user and their group is macOS `admin` (gid 80),
+the owner's accepted administrative trust boundary; world-writable directories
+are refused. Unknown ACL write grants remain refused. This policy promises no
 atomic defence against a concurrent replacement by the same account. The guest cannot write
 its selected runtime files or ancestors. Root-volume restrictions, approved data
 roots, credential exclusions and Shell NoNetwork remain effective. Arbitrary
@@ -88,8 +93,8 @@ external interpreters or unknown installation layouts are not silently admitted.
 
 Only selected runtime data trees and literal executable files are granted.
 `site-packages` and `.git` subtrees are excluded. The command environment uses
-selected physical binary directories before the fixed system base, without
-inheriting ambient PATH. Python cannot write bytecode or load user site packages.
+the selected alias directory before the fixed system base, without inheriting
+the rest of ambient PATH. Python cannot write bytecode or load user site packages.
 Git system configuration is suppressed; approved user Git settings retain their
 existing literal read scope. Without that approval global configuration stays
 suppressed. Hooks execute through Git within the same approved workspace policy;

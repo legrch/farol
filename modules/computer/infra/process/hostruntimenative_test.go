@@ -45,6 +45,12 @@ func TestNativeHostRuntimeKnownImages(t *testing.T) {
 func TestNativeHostRuntimeDiscoveryReadOnly(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	searchPath, pathErr := CaptureUserExecutablePath(ctx)
+	if pathErr != nil {
+		t.Fatalf("user PATH capture: %v", pathErr)
+	}
+	selectedGit, gitErr := firstGitOnPath(ctx, nativeHostRuntimeFilesystem{}, searchPath)
+	t.Logf("selected first Git: %s (%v)", selectedGit, gitErr)
 	plan, err := DiscoverInstalledHostRuntime(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +79,20 @@ func TestNativeHostRuntimeLayoutBoundaries(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			f := &observedNativeHostRuntimeFS{}
-			for _, alias := range hostRuntimeCandidates(kind) {
+			candidates := hostRuntimeCandidates(kind)
+			if kind == "git" {
+				selected, err := CaptureUserExecutablePath(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				alias, err := firstGitOnPath(ctx, f, selected)
+				if err == nil {
+					candidates = []string{alias}
+				} else if !os.IsNotExist(err) {
+					t.Fatal(err)
+				}
+			}
+			for _, alias := range candidates {
 				physical, err := f.resolve(ctx, alias)
 				if os.IsNotExist(err) {
 					continue

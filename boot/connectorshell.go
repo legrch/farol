@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/legrch/farol/modules/computer/app/port"
@@ -39,6 +40,9 @@ type connectorShellFactory struct {
 	protectedState *nativeprocess.ProtectedBundle
 	scratch        func(context.Context) (connectorShellScratch, error)
 	prepare        func(context.Context, nativeprocess.Command, nativeprocess.SeatbeltSelection, processsvc.Invocation) (processsvc.Selected, error)
+	userPathOnce   sync.Once
+	userPath       string
+	userPathErr    error
 }
 
 func validProtectedState(state port.Root) bool {
@@ -95,6 +99,24 @@ func connectorBash(support nativeprocess.RootScopedPlatformSupport) (nativeproce
 		}
 	}
 	return nativeprocess.ExecutablePin{}, false
+}
+
+func shellSingleQuoted(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func gitUnavailablePreamble(path, code, detail string) string {
+	message := "Farol cannot run Git"
+	if path != "" {
+		message += " at " + path
+	} else {
+		message += " from your PATH"
+	}
+	message += ": " + code + ". Farol did not select another Git."
+	if detail != "" {
+		message += " " + detail
+	}
+	return "git() { builtin printf '%s\\n' " + shellSingleQuoted(message) + " >&2; return 126; }\n"
 }
 
 // selectShell consumes the SAME admitted lease. Native preparation happens
@@ -182,7 +204,11 @@ func (f *connectorShellFactory) selectShell(ctx context.Context, lease *executio
 		RootIdentity: workspace.RootIdentity, Executable: bash.Path, ExecutableSHA256: bash.SHA256, Write: request.Write}
 	var hostRuntime *nativeprocess.HostRuntimePlan
 	if f.config.support.HostRuntimePolicy == nativeprocess.InstalledHostRuntimeAssurance {
-		hostRuntime, err = nativeprocess.DiscoverInstalledHostRuntime(preparation)
+		f.userPathOnce.Do(func() { f.userPath, f.userPathErr = nativeprocess.CaptureUserExecutablePath(preparation) })
+		if f.userPathErr != nil {
+			return refuse(f.userPathErr)
+		}
+		hostRuntime, err = nativeprocess.DiscoverInstalledHostRuntimeForPath(preparation, f.userPath)
 		if err != nil {
 			return refuse(err)
 		}
@@ -195,6 +221,11 @@ func (f *connectorShellFactory) selectShell(ctx context.Context, lease *executio
 		UserGitSettings: workspace.GitHistoryApproved, HostRuntime: hostRuntime, ProtectedState: f.protectedState}
 	invocation := processsvc.Invocation{RuntimeID: f.config.runtimeID, SessionID: lease.Binding().SessionID, ModelID: "chatgpt",
 		AdmissionID: snapshot.Participant.Grant.AuthorityID, Arguments: []string{"--noprofile", "--norc", "-c", request.Command}, Input: []byte(request.Stdin)}
+	if hostRuntime != nil {
+		if path, code := hostRuntime.GitSelection(); code != "" {
+			invocation.Arguments[3] = gitUnavailablePreamble(path, code, hostRuntime.GitFailureDetail()) + request.Command
+		}
+	}
 	selected, err := f.prepare(preparation, command, policy, invocation)
 	if err != nil {
 		return refuse(err)
