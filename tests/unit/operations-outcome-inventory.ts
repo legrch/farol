@@ -64,7 +64,17 @@ function walk(value: unknown, visit: (node: Node) => void): void {
 export function declaredOperationOutcomes(): Map<string, Set<string>> {
   const inventory = new Map<string, Set<string>>();
   const add = (value: string, file: string) => {
-    if (!value || ["ACCESS_TOKEN", "O_NOFOLLOW", "O_CLOEXEC"].includes(value))
+    if (
+      !value ||
+      [
+        "ACCESS_TOKEN",
+        "O_NOFOLLOW",
+        "O_CLOEXEC",
+        "TERM_PROGRAM",
+        "XDG_CONFIG_HOME",
+        "DEVELOPER_DIR",
+      ].includes(value)
+    )
       return;
     const sources = inventory.get(value) ?? new Set<string>();
     sources.add(file);

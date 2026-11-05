@@ -599,11 +599,30 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		return refuse()
 	}
 	if s.UserGitSettings {
-		for _, name := range []string{".gitconfig", ".config/git/config", ".config/git/ignore", ".config/git/attributes"} {
-			add("literal", filepath.Join(s.Home, name), &reads)
+		xdg := filepath.Join(s.Home, ".config")
+		if s.HostRuntime != nil && s.HostRuntime.frozen.XDGConfigHome != "" {
+			xdg = s.HostRuntime.frozen.XDGConfigHome
 		}
-		for _, name := range []string{s.Home, filepath.Join(s.Home, ".config"), filepath.Join(s.Home, ".config", "git")} {
+		add("literal", filepath.Join(s.Home, ".gitconfig"), &reads)
+		for _, name := range []string{"config", "ignore", "attributes"} {
+			add("literal", filepath.Join(xdg, "git", name), &reads)
+		}
+		for _, name := range []string{s.Home, xdg, filepath.Join(xdg, "git")} {
 			add("literal", name, &parents)
+		}
+		if s.HostRuntime != nil {
+			for _, installation := range s.HostRuntime.frozen.Installations {
+				if installation.Kind != "git" {
+					continue
+				}
+				for _, prefix := range []string{"/opt/homebrew", "/usr/local"} {
+					if insidePolicy(prefix+"/Cellar", installation.Root) {
+						add("literal", prefix+"/etc/gitconfig", &reads)
+						add("literal", prefix+"/etc", &parents)
+						break
+					}
+				}
+			}
 		}
 	}
 	pythonDeclaration := ""
@@ -753,10 +772,17 @@ func seatbeltEnvironment(s SeatbeltSelection, write bool) []string {
 		// Explicit host values, not os.Environ: no inherited tokens/loader options.
 		// User Git config needs explicit owner approval below; project config and
 		// hooks keep their normal scoped behavior. HOME alone grants no access.
-		environment := []string{"HOME=" + s.Home, "TMPDIR=" + s.Scratch, "XDG_CONFIG_HOME=" + filepath.Join(s.Home, ".config"),
+		xdg := filepath.Join(s.Home, ".config")
+		if s.UserGitSettings && s.HostRuntime != nil && s.HostRuntime.frozen.XDGConfigHome != "" {
+			xdg = s.HostRuntime.frozen.XDGConfigHome
+		}
+		environment := []string{"HOME=" + s.Home, "TMPDIR=" + s.Scratch, "XDG_CONFIG_HOME=" + xdg,
 			"PATH=" + strings.Join(dirs, ":"), "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=" + locks, "LANG=C", "LC_ALL=C"}
 		if s.HostRuntime != nil {
-			environment = append(environment, "PYTHONDONTWRITEBYTECODE=1", "PYTHONNOUSERSITE=1", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_ATTR_NOSYSTEM=1")
+			environment = append(environment, "PYTHONDONTWRITEBYTECODE=1", "PYTHONNOUSERSITE=1")
+			if !s.UserGitSettings {
+				environment = append(environment, "GIT_CONFIG_SYSTEM=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_ATTR_NOSYSTEM=1")
+			}
 			if s.HostRuntime.frozen.GitExecPath != "" {
 				environment = append(environment, "GIT_EXEC_PATH="+s.HostRuntime.frozen.GitExecPath, "GIT_TEMPLATE_DIR="+s.HostRuntime.frozen.GitTemplateDirectory)
 			}

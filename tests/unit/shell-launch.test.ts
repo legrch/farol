@@ -88,21 +88,21 @@ it("projects the same finite Git data group decoded by Go", () => {
 it("projects only the policy selector; installed runtime facts stay Go-owned", () => {
   const input = {
     ...structuredClone(fixture.declaration),
-    hostRuntimePolicy: "installed-host-runtime-v2",
+    hostRuntimePolicy: "installed-host-runtime-v3",
   };
   const actual = JSON.parse(
     Buffer.from(
       encodeShellLaunch(input, structuredClone(input), input.core, host()),
     ).toString("utf8"),
   );
-  expect(actual.Support.HostRuntimePolicy).toBe("installed-host-runtime-v2");
+  expect(actual.Support.HostRuntimePolicy).toBe("installed-host-runtime-v3");
   expect(actual.Support.HostRuntime).toBeUndefined();
   expect(actual.Support.GitRuntimeResources).toBeUndefined();
 });
 it("refuses mixing fixed CLT and installed environment policy", () => {
   const input = {
     ...structuredClone(gitResourceFixture.declaration),
-    hostRuntimePolicy: "installed-host-runtime-v2",
+    hostRuntimePolicy: "installed-host-runtime-v3",
   };
   expect(() =>
     encodeShellLaunch(input, structuredClone(input), input.core, host()),

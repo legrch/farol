@@ -13,17 +13,25 @@ import (
 	"strings"
 )
 
-const InstalledHostRuntimeAssurance = "installed-host-runtime-v2"
+const InstalledHostRuntimeAssurance = "installed-host-runtime-v3"
+const hostRuntimePathLimit = 16384
 const hostRuntimeScriptType uint32 = 0xffffffff
-
-// macOS reserves gid 80 for the local admin group. A directory writable by
-// that group is within the owner's accepted administrative trust boundary only
-// when the directory itself is owned by the current user.
-const hostRuntimeAdminGID uint32 = 80
 
 var errHostRuntime = errors.New("HOST_RUNTIME_UNQUALIFIED")
 var errHostRuntimeSharedWritable = errors.New("HOST_RUNTIME_SHARED_WRITABLE")
 var errHostRuntimeDependency = errors.New("HOST_RUNTIME_DEPENDENCY_UNAVAILABLE")
+var errShellEnvironmentTimeout = errors.New("SHELL_ENV_TIMEOUT")
+var errShellEnvironmentUnknown = errors.New("SHELL_ENV_OUTCOME_UNKNOWN")
+
+func ShellEnvironmentFailureCode(err error) string {
+	if errors.Is(err, errShellEnvironmentTimeout) {
+		return "SHELL_ENV_TIMEOUT"
+	}
+	if errors.Is(err, errShellEnvironmentUnknown) {
+		return "SHELL_ENV_OUTCOME_UNKNOWN"
+	}
+	return ""
+}
 
 const hostRuntimeMaxNodes = 8192
 const hostRuntimeMaxBytes int64 = 384 << 20
@@ -40,6 +48,9 @@ type hostRuntimeSnapshot struct {
 	Nodes                                                              []hostRuntimeNode
 	ExecFiles, ReadFiles, ReadTrees, DeniedTrees, Path, MutableParents []string
 	GitExecPath, GitTemplateDirectory                                  string
+	EnvironmentSource, CapturedAt, LookupPath, XDGConfigHome           string
+	DeveloperDir, ZDotDir, ConfigMode, GitArch                         string
+	EnvironmentGeneration                                              uint64
 	Unavailable                                                        []hostRuntimeUnavailable
 }
 type hostRuntimeUnavailable struct{ Kind, Code, Path, Detail string }
@@ -60,6 +71,8 @@ type hostRuntimeFilesystem interface {
 	entries(context.Context, string) ([]string, error)
 	imports(context.Context, string) (hostMachOImports, bool, error)
 	uid() uint32
+	adminGID() (uint32, error)
+	appleGit(context.Context) (string, error)
 }
 type hostRuntimeLayout struct {
 	kind, alias, root string
@@ -168,7 +181,50 @@ func (p *HostRuntimePlan) valid() bool {
 			}
 		}
 	}
+	if p.frozen.XDGConfigHome != "" && !absolutePolicyPath(p.frozen.XDGConfigHome) {
+		return false
+	}
+	for _, value := range []string{p.frozen.DeveloperDir, p.frozen.ZDotDir} {
+		if value != "" && !absolutePolicyPath(value) {
+			return false
+		}
+	}
+	if p.frozen.EnvironmentGeneration != 0 && (p.frozen.EnvironmentSource != "login-shell" || len(p.frozen.LookupPath) > hostRuntimePathLimit) {
+		return false
+	}
 	return true
+}
+
+// BindUserEnvironment records only path metadata. It does not grant access to
+// the captured directories; the workspace's Git approval is still required.
+func (p *HostRuntimePlan) BindUserEnvironment(value UserExecutableEnvironment, generation uint64) error {
+	if p == nil || p.frozen == nil || !p.valid() || value.Source != "login-shell" || generation == 0 {
+		return errHostRuntime
+	}
+	p.frozen.EnvironmentSource = value.Source
+	p.frozen.CapturedAt = value.CapturedAt
+	p.frozen.EnvironmentGeneration = generation
+	p.frozen.LookupPath = value.Path
+	p.frozen.XDGConfigHome = value.XDGConfigHome
+	p.frozen.DeveloperDir = value.DeveloperDir
+	p.frozen.ZDotDir = value.ZDotDir
+	for _, selected := range p.frozen.Installations {
+		if selected.Kind == "git" {
+			p.frozen.GitArch = "arm64"
+		}
+	}
+	return nil
+}
+
+func (p *HostRuntimePlan) SetConfigMode(userGitSettings bool) error {
+	if p == nil || !p.valid() {
+		return errHostRuntime
+	}
+	p.frozen.ConfigMode = "isolated"
+	if userGitSettings {
+		p.frozen.ConfigMode = "user"
+	}
+	return nil
 }
 
 // GitSelection is diagnostic only; it grants no executable or filesystem
@@ -187,7 +243,7 @@ func (p *HostRuntimePlan) GitSelection() (path, code string) {
 			return unavailable.Path, unavailable.Code
 		}
 	}
-	return "", "HOST_RUNTIME_NOT_INSTALLED"
+	return "", "GIT_NOT_FOUND"
 }
 func (p *HostRuntimePlan) GitFailureDetail() string {
 	if p == nil || !p.valid() {
@@ -266,8 +322,12 @@ func (b *hostRuntimeBuilder) observe(p string) (hostRuntimeNode, error) {
 		if !n.Mode.IsDir() {
 			return n, errHostRuntime
 		}
-		if n.Mode.Perm()&0020 != 0 && !(n.UID == b.fs.uid() && n.GID == hostRuntimeAdminGID) {
-			return n, fmt.Errorf("%w: %s", errHostRuntimeSharedWritable, p)
+		if n.Mode.Perm()&0020 != 0 {
+			admin, lookupErr := b.fs.adminGID()
+			brew := p == "/opt/homebrew" || insidePolicy("/opt/homebrew", p) || p == "/usr/local" || insidePolicy("/usr/local", p)
+			if lookupErr != nil || !brew || (n.UID != 0 && n.UID != b.fs.uid()) || n.GID != admin {
+				return n, fmt.Errorf("%w: %s", errHostRuntimeSharedWritable, p)
+			}
 		}
 	case "alias":
 		if n.Mode&os.ModeSymlink == 0 || n.Links != 1 || n.LinkTarget == "" || strings.ContainsRune(n.LinkTarget, 0) {
@@ -550,9 +610,8 @@ func hostRuntimeCandidates(kind string) []string {
 	return []string{"/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/Current/bin/python3", "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/Current/bin/python3"}
 }
 
-// PATH is an owner-selected input, never an authority grant. Only the first
-// existing git entry is considered; a failed qualification cannot select a
-// different installation later in PATH.
+// PATH is an owner-selected input, never an authority grant. The first
+// executable git is selected; a failed qualification cannot select a later one.
 func firstGitOnPath(ctx context.Context, fs hostRuntimeFilesystem, searchPath string) (string, error) {
 	if len(searchPath) == 0 || len(searchPath) > 16384 || strings.ContainsRune(searchPath, 0) {
 		return "", errHostRuntime
@@ -568,6 +627,17 @@ func firstGitOnPath(ctx context.Context, fs hostRuntimeFilesystem, searchPath st
 		}
 		if err != nil {
 			return candidate, err
+		}
+		physical, err := fs.resolve(ctx, candidate)
+		if err != nil {
+			return candidate, err
+		}
+		node, err := fs.node(ctx, physical)
+		if err != nil {
+			return candidate, err
+		}
+		if node.Kind != "file" || node.Mode.Perm()&0111 == 0 {
+			continue
 		}
 		return candidate, nil
 	}
@@ -605,6 +675,14 @@ func hostRuntimeLayoutFor(kind, alias, physical string) (hostRuntimeLayout, []st
 			if ok {
 				return hostRuntimeLayout{kind: kind, alias: alias, root: selected, trees: []string{selected + "/bin", selected + "/lib/python" + version, selected + "/Resources"}}, []string{root}, nil
 			}
+		}
+	}
+	if kind == "git" && strings.HasPrefix(physical, "/Applications/") && strings.HasSuffix(physical, ".app/Contents/Developer/usr/bin/git") {
+		relative := strings.TrimPrefix(physical, "/Applications/")
+		parts := strings.Split(relative, "/")
+		if len(parts) == 6 && strings.HasSuffix(parts[0], ".app") && parts[0] != ".app" {
+			root := filepath.Join("/Applications", parts[0], "Contents/Developer")
+			return hostRuntimeLayout{kind: kind, alias: alias, root: root + "/usr", trees: []string{root + "/usr/libexec/git-core", root + "/usr/share/git-core/templates"}}, []string{root}, nil
 		}
 	}
 	return hostRuntimeLayout{}, nil, errHostRuntime
@@ -650,24 +728,39 @@ func discoverHostRuntime(ctx context.Context, fs hostRuntimeFilesystem, searchPa
 		}
 		for _, alias := range candidates {
 			physical, err := fs.resolve(ctx, alias)
+			if kind == "git" && alias == "/usr/bin/git" && err == nil {
+				physical, err = fs.appleGit(ctx)
+			}
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
 			found = true
 			if err != nil {
 				skippedSharedWritable = false
-				aggregate.snapshot.Unavailable = append(aggregate.snapshot.Unavailable, hostRuntimeUnavailable{kind, "HOST_RUNTIME_DISCOVERY_UNAVAILABLE", alias, err.Error()})
+				code := "HOST_RUNTIME_DISCOVERY_UNAVAILABLE"
+				if kind == "git" && alias == "/usr/bin/git" {
+					code = "GIT_SHIM_UNSUPPORTED"
+				}
+				aggregate.snapshot.Unavailable = append(aggregate.snapshot.Unavailable, hostRuntimeUnavailable{kind, code, alias, err.Error()})
 				break
 			}
 			layout, boundaries, err := hostRuntimeLayoutFor(kind, alias, physical)
 			if err != nil {
 				skippedSharedWritable = false
-				aggregate.snapshot.Unavailable = append(aggregate.snapshot.Unavailable, hostRuntimeUnavailable{kind, "HOST_RUNTIME_LAYOUT_UNSUPPORTED", alias, "unsupported installation layout"})
+				code := "HOST_RUNTIME_LAYOUT_UNSUPPORTED"
+				if kind == "git" {
+					code = "GIT_SHIM_UNSUPPORTED"
+				}
+				aggregate.snapshot.Unavailable = append(aggregate.snapshot.Unavailable, hostRuntimeUnavailable{kind, code, alias, "unsupported installation layout"})
 				break
 			}
 			selected := newHostRuntimeBuilder(ctx, fs)
 			selected.mainExecutable = physical
-			image, err := selected.physical(alias, boundaries)
+			selectedPath := alias
+			if kind == "git" && alias == "/usr/bin/git" {
+				selectedPath = physical
+			}
+			image, err := selected.physical(selectedPath, boundaries)
 			if err == nil {
 				imports, macho, e := fs.imports(ctx, image)
 				if e != nil || !macho || imports.fileType != 2 || selected.nodes[image].Mode.Perm()&0111 == 0 {
@@ -752,6 +845,9 @@ func discoverHostRuntime(ctx context.Context, fs hostRuntimeFilesystem, searchPa
 		}
 		if !found {
 			code := "HOST_RUNTIME_NOT_INSTALLED"
+			if kind == "git" {
+				code = "GIT_NOT_FOUND"
+			}
 			if kind == "git" && gitSearchErr != nil && !errors.Is(gitSearchErr, os.ErrNotExist) {
 				code = "HOST_RUNTIME_DISCOVERY_UNAVAILABLE"
 			}
@@ -765,7 +861,11 @@ func discoverHostRuntime(ctx context.Context, fs hostRuntimeFilesystem, searchPa
 			if kind != "git" {
 				path = ""
 			}
-			aggregate.snapshot.Unavailable = append(aggregate.snapshot.Unavailable, hostRuntimeUnavailable{kind, "HOST_RUNTIME_SHARED_WRITABLE", path, sharedReason})
+			code := "HOST_RUNTIME_SHARED_WRITABLE"
+			if kind == "git" {
+				code = "GIT_SHARED_WRITABLE"
+			}
+			aggregate.snapshot.Unavailable = append(aggregate.snapshot.Unavailable, hostRuntimeUnavailable{kind, code, path, sharedReason})
 		}
 	}
 	return aggregate.finish()

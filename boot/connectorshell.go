@@ -34,15 +34,16 @@ type connectorShellScratch struct {
 }
 
 type connectorShellFactory struct {
-	config         connectorShellConfig
-	lifetime       context.Context
-	clock          port.Clock
-	protectedState *nativeprocess.ProtectedBundle
-	scratch        func(context.Context) (connectorShellScratch, error)
-	prepare        func(context.Context, nativeprocess.Command, nativeprocess.SeatbeltSelection, processsvc.Invocation) (processsvc.Selected, error)
-	userPathOnce   sync.Once
-	userPath       string
-	userPathErr    error
+	config                connectorShellConfig
+	lifetime              context.Context
+	clock                 port.Clock
+	protectedState        *nativeprocess.ProtectedBundle
+	scratch               func(context.Context) (connectorShellScratch, error)
+	prepare               func(context.Context, nativeprocess.Command, nativeprocess.SeatbeltSelection, processsvc.Invocation) (processsvc.Selected, error)
+	userEnvironmentMu     sync.Mutex
+	userEnvironment       *nativeprocess.UserExecutableEnvironment
+	userEnvironmentHeld   bool
+	environmentGeneration uint64
 }
 
 func validProtectedState(state port.Root) bool {
@@ -117,6 +118,26 @@ func gitUnavailablePreamble(path, code, detail string) string {
 		message += " " + detail
 	}
 	return "git() { builtin printf '%s\\n' " + shellSingleQuoted(message) + " >&2; return 126; }\n"
+}
+
+func (f *connectorShellFactory) capturedUserEnvironment(ctx context.Context) (nativeprocess.UserExecutableEnvironment, error) {
+	f.userEnvironmentMu.Lock()
+	defer f.userEnvironmentMu.Unlock()
+	if f.userEnvironmentHeld {
+		return nativeprocess.UserExecutableEnvironment{}, &processsvc.Failure{Code: "SHELL_ENV_OUTCOME_UNKNOWN", Unknown: true}
+	}
+	if f.userEnvironment == nil {
+		captured, err := nativeprocess.CaptureUserEnvironment(ctx)
+		if err != nil {
+			// A failed native probe has no automatic retry in this connector
+			// lifetime. A new connector admission creates a new generation.
+			f.userEnvironmentHeld = true
+			return nativeprocess.UserExecutableEnvironment{}, err
+		}
+		f.userEnvironment = &captured
+		f.environmentGeneration++
+	}
+	return *f.userEnvironment, nil
 }
 
 // selectShell consumes the SAME admitted lease. Native preparation happens
@@ -204,13 +225,20 @@ func (f *connectorShellFactory) selectShell(ctx context.Context, lease *executio
 		RootIdentity: workspace.RootIdentity, Executable: bash.Path, ExecutableSHA256: bash.SHA256, Write: request.Write}
 	var hostRuntime *nativeprocess.HostRuntimePlan
 	if f.config.support.HostRuntimePolicy == nativeprocess.InstalledHostRuntimeAssurance {
-		f.userPathOnce.Do(func() { f.userPath, f.userPathErr = nativeprocess.CaptureUserExecutablePath(preparation) })
-		if f.userPathErr != nil {
-			return refuse(f.userPathErr)
+		userEnvironment, environmentErr := f.capturedUserEnvironment(preparation)
+		if environmentErr != nil {
+			if code := nativeprocess.ShellEnvironmentFailureCode(environmentErr); code != "" {
+				return refuse(&processsvc.Failure{Code: code, Unknown: true})
+			}
+			return refuse(environmentErr)
 		}
-		hostRuntime, err = nativeprocess.DiscoverInstalledHostRuntimeForPath(preparation, f.userPath)
+		hostRuntime, err = nativeprocess.DiscoverInstalledHostRuntimeForEnvironment(preparation, userEnvironment)
 		if err != nil {
 			return refuse(err)
+		}
+		if userEnvironment.Home != f.config.home || hostRuntime.BindUserEnvironment(userEnvironment, f.environmentGeneration) != nil ||
+			hostRuntime.SetConfigMode(workspace.GitHistoryApproved) != nil {
+			return refuse(nil)
 		}
 	}
 	policy := nativeprocess.SeatbeltSelection{FilePolicy: authority.RootScopedFiles, Snapshot: snapshot, RuntimeID: f.config.runtimeID,

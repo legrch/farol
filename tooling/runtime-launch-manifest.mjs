@@ -252,11 +252,11 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
       "app-bundled-electron",
     ),
     launch(
-      "computer.user-login-path",
+      "computer.user-login-environment",
       "modules/computer/infra/process/hostruntimepathdarwin.go",
-      "CaptureUserExecutablePath",
-      "go.CommandContext",
-      "shell",
+      "runHostProbe",
+      "go.Command",
+      "executable",
       "optional-user-executable",
     ),
     launch(

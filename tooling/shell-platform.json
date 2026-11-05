@@ -1,6 +1,6 @@
 {
   "schema": "farol-shell-platform/1",
-  "id": "macos-26A434-arm64-installed-runtime-v20",
+  "id": "macos-26A434-arm64-installed-runtime-v21",
   "osBuild": "26A434",
   "compiler": "approved-roots-seatbelt-v1",
   "filesystemClass": "system-apfs-kernel-mount-boundaries-v1",
@@ -29,7 +29,7 @@
     },
     {
       "path": "modules/computer/infra/process/confinement.go",
-      "sha256": "3545f59f0fbfc819f33e0442791e1b8544c231578147f97a72a9b41c390f5f25"
+      "sha256": "108d61cdb74545e0504fa54960b98ceb2db5878ad3b7be681e129f29d206127f"
     },
     {
       "path": "modules/computer/infra/process/darwin.go",
@@ -65,11 +65,11 @@
     },
     {
       "path": "modules/computer/infra/process/hostruntime.go",
-      "sha256": "15ebaff32ad9ed69b4db5d6e1613231e7438df53986fed7975a8e9e5b12c47b3"
+      "sha256": "d63fdece5fae23f458baf4b3c052a0decaf5e9cdfe9eb86f4d160bc535651304"
     },
     {
       "path": "modules/computer/infra/process/hostruntimedarwin.go",
-      "sha256": "0fa08c1f13951b161fbb62c2ee8ae8377b5b9f6b43effa2b72e749dc158f3709"
+      "sha256": "10dca842d158fbf9e757bcfc585923c41ea3233417346787abf60dea57ccb927"
     },
     {
       "path": "modules/computer/infra/process/hostruntimemacho.go",
@@ -77,7 +77,11 @@
     },
     {
       "path": "modules/computer/infra/process/hostruntimeother.go",
-      "sha256": "4e392458571aa096234bd878b146f6bacafae0aef0a185af70f78631af8b9fde"
+      "sha256": "607512ab2f8499307a5779a416a6a743c9994ee825b42f1fea25f2ec1fa80c4d"
+    },
+    {
+      "path": "modules/computer/infra/process/hostruntimepathdarwin.go",
+      "sha256": "5039f61cebe3fdfdd0de20f22d4eba0818c34252c209919d57bdd5a9506be7e2"
     },
     {
       "path": "modules/computer/infra/process/measuredarwin.go",
@@ -264,5 +268,5 @@
     "treeSHA256": "60551daa876998dc62293edc75eb1aca819690077fe9d48910459ce175796074",
     "distributionSHA256": "52f8354eacad1dbe43ee12345b0fa9e1fc7de137f77571abbe12efbbc896aad8"
   },
-  "hostRuntimePolicy": "installed-host-runtime-v2"
+  "hostRuntimePolicy": "installed-host-runtime-v3"
 }

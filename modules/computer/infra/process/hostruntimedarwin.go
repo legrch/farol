@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -19,7 +20,42 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type nativeHostRuntimeFilesystem struct{}
+type nativeHostRuntimeFilesystem struct{ developerDir string }
+
+func (f nativeHostRuntimeFilesystem) appleGit(ctx context.Context) (string, error) {
+	current, err := user.Current()
+	if err != nil || !absolutePolicyPath(current.HomeDir) {
+		return "", errHostRuntime
+	}
+	environment := []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "HOME=" + current.HomeDir, "TERM=dumb"}
+	if f.developerDir != "" {
+		if !absolutePolicyPath(f.developerDir) {
+			return "", errHostRuntime
+		}
+		environment = append(environment, "DEVELOPER_DIR="+f.developerDir)
+	}
+	output, err := runHostProbe(ctx, "/usr/bin/xcrun", []string{"--find", "git"}, environment, current.HomeDir, 4096)
+	if err != nil {
+		return "", err
+	}
+	selected := strings.TrimSpace(string(output))
+	if selected == "/Library/Developer/CommandLineTools/usr/bin/git" {
+		return selected, nil
+	}
+	if strings.HasPrefix(selected, "/Applications/") && strings.HasSuffix(selected, ".app/Contents/Developer/usr/bin/git") {
+		return selected, nil
+	}
+	return "", errHostRuntime
+}
+
+func (nativeHostRuntimeFilesystem) adminGID() (uint32, error) {
+	group, err := user.LookupGroup("admin")
+	if err != nil {
+		return 0, err
+	}
+	value, err := strconv.ParseUint(group.Gid, 10, 32)
+	return uint32(value), err
+}
 
 // Extended ACL qualification. POSIX mode bits cannot express an macOS ACL
 // grant, so a file that another account may replace or rewrite through an

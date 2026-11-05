@@ -38,7 +38,11 @@ func runtimeFixture() *hostRuntimeFixtureFS {
 	f.nodes[alias.Path] = alias
 	return f
 }
-func (f *hostRuntimeFixtureFS) uid() uint32 { return 501 }
+func (f *hostRuntimeFixtureFS) uid() uint32               { return 501 }
+func (f *hostRuntimeFixtureFS) adminGID() (uint32, error) { return 80, nil }
+func (f *hostRuntimeFixtureFS) appleGit(context.Context) (string, error) {
+	return "/Library/Developer/CommandLineTools/usr/bin/git", nil
+}
 func (f *hostRuntimeFixtureFS) node(ctx context.Context, p string) (hostRuntimeNode, error) {
 	f.reads = append(f.reads, p)
 	if ctx.Err() != nil {
@@ -174,17 +178,17 @@ func TestHostRuntimeAdminDirectoryRequiresCurrentOwner(t *testing.T) {
 		mode     os.FileMode
 		accept   bool
 	}{
-		{"owner-admin", 501, hostRuntimeAdminGID, 0775, true},
-		{"foreign-admin", 502, hostRuntimeAdminGID, 0775, false},
+		{"owner-admin", 501, 80, 0775, true},
+		{"foreign-admin", 502, 80, 0775, false},
 		{"owner-other-group", 501, 20, 0775, false},
-		{"owner-world-write", 501, hostRuntimeAdminGID, 0777, false},
+		{"owner-world-write", 501, 80, 0777, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := runtimeFixture()
-			n := f.nodes["/install"]
+			n := fixtureRuntimeNode("/opt/homebrew/bin", "directory", os.ModeDir|0755)
 			n.UID, n.GID, n.Mode = tc.uid, tc.gid, os.ModeDir|tc.mode
 			f.nodes[n.Path] = n
-			_, err := buildRuntimeFixture(f)
+			_, err := newHostRuntimeBuilder(context.Background(), f).observe(n.Path)
 			if (err == nil) != tc.accept {
 				t.Fatalf("directory qualification mismatch: %v", err)
 			}
@@ -195,10 +199,22 @@ func TestHostRuntimeAdminDirectoryRequiresCurrentOwner(t *testing.T) {
 func TestFirstGitOnUserPathNeverSubstitutesLaterEntry(t *testing.T) {
 	f := runtimeFixture()
 	f.nodes["/install/bin/git"] = fixtureRuntimeNode("/install/bin/git", "file", 0000)
+	f.nodes["/fallback"] = fixtureRuntimeNode("/fallback", "directory", os.ModeDir|0755)
 	f.nodes["/fallback/git"] = fixtureRuntimeNode("/fallback/git", "file", 0555)
 	selected, err := firstGitOnPath(context.Background(), f, "/missing:/install/bin:/fallback")
-	if err != nil || selected != "/install/bin/git" {
-		t.Fatalf("first PATH entry was not retained: %s %v", selected, err)
+	if err != nil || selected != "/fallback/git" {
+		t.Fatalf("first executable PATH entry was not retained: %s %v", selected, err)
+	}
+}
+
+func TestHostRuntimeXcodeSelectionStaysInsideChosenBundle(t *testing.T) {
+	chosen := "/Applications/Xcode-Beta.app/Contents/Developer/usr/bin/git"
+	layout, boundaries, err := hostRuntimeLayoutFor("git", "/usr/bin/git", chosen)
+	if err != nil || layout.root != "/Applications/Xcode-Beta.app/Contents/Developer/usr" || !slices.Equal(boundaries, []string{"/Applications/Xcode-Beta.app/Contents/Developer"}) {
+		t.Fatalf("Xcode selection broadened or refused: %+v %v %v", layout, boundaries, err)
+	}
+	if _, _, err := hostRuntimeLayoutFor("git", "/usr/bin/git", "/Applications/Other.app/Contents/Developer/usr/bin/wrapper"); err == nil {
+		t.Fatal("unrecognized Apple shim target accepted")
 	}
 }
 
@@ -227,6 +243,7 @@ func TestHostRuntimeOptAliasEndsAtConcreteCellarImage(t *testing.T) {
 func TestHostRuntimeSelectsOwnerAdminHomebrewBeforeCLT(t *testing.T) {
 	f := &hostRuntimeFixtureFS{nodes: map[string]hostRuntimeNode{}, importsByPath: map[string]hostMachOImports{}}
 	for _, p := range []string{
+		"/usr", "/usr/bin",
 		"/opt", "/opt/homebrew", "/opt/homebrew/bin", "/opt/homebrew/Cellar", "/opt/homebrew/Cellar/git", "/opt/homebrew/Cellar/git/1", "/opt/homebrew/Cellar/git/1/bin", "/opt/homebrew/Cellar/git/1/libexec", "/opt/homebrew/Cellar/git/1/libexec/git-core", "/opt/homebrew/Cellar/git/1/share", "/opt/homebrew/Cellar/git/1/share/git-core", "/opt/homebrew/Cellar/git/1/share/git-core/templates",
 		"/Library", "/Library/Developer", "/Library/Developer/CommandLineTools", "/Library/Developer/CommandLineTools/usr", "/Library/Developer/CommandLineTools/usr/bin", "/Library/Developer/CommandLineTools/usr/libexec", "/Library/Developer/CommandLineTools/usr/libexec/git-core", "/Library/Developer/CommandLineTools/usr/share", "/Library/Developer/CommandLineTools/usr/share/git-core", "/Library/Developer/CommandLineTools/usr/share/git-core/templates",
 	} {
@@ -234,7 +251,7 @@ func TestHostRuntimeSelectsOwnerAdminHomebrewBeforeCLT(t *testing.T) {
 	}
 	n := f.nodes["/opt/homebrew/bin"]
 	n.Mode = os.ModeDir | 0775
-	n.GID = hostRuntimeAdminGID
+	n.GID = 80
 	f.nodes[n.Path] = n
 	brew := "/opt/homebrew/Cellar/git/1/bin/git"
 	f.nodes[brew] = fixtureRuntimeNode(brew, "file", 0555)
@@ -245,6 +262,7 @@ func TestHostRuntimeSelectsOwnerAdminHomebrewBeforeCLT(t *testing.T) {
 	apple := "/Library/Developer/CommandLineTools/usr/bin/git"
 	f.nodes[apple] = fixtureRuntimeNode(apple, "file", 0555)
 	f.importsByPath[apple] = hostMachOImports{fileType: 2}
+	f.nodes["/usr/bin/git"] = fixtureRuntimeNode("/usr/bin/git", "file", 0555)
 	p, err := discoverHostRuntime(context.Background(), f, "/opt/homebrew/bin:/Library/Developer/CommandLineTools/usr/bin")
 	if err != nil {
 		t.Fatal(err)
@@ -272,7 +290,7 @@ func TestHostRuntimeSelectsOwnerAdminHomebrewBeforeCLT(t *testing.T) {
 	if len(p.frozen.Installations) != 0 || len(p.frozen.ExecFiles) != 0 || len(p.frozen.Unavailable) == 0 || p.frozen.Unavailable[0].Path != "/opt/homebrew/bin/git" {
 		t.Fatalf("unsafe first Git incorrectly fell back: %+v", p.frozen)
 	}
-	if selected, code := p.GitSelection(); selected != "/opt/homebrew/bin/git" || code != "HOST_RUNTIME_SHARED_WRITABLE" {
+	if selected, code := p.GitSelection(); selected != "/opt/homebrew/bin/git" || code != "GIT_SHARED_WRITABLE" {
 		t.Fatalf("diagnostic did not explain refusal: %s %s", selected, code)
 	}
 	// CLT is eligible only when its directory precedes Homebrew in the
@@ -281,8 +299,12 @@ func TestHostRuntimeSelectsOwnerAdminHomebrewBeforeCLT(t *testing.T) {
 	if err != nil || len(p.frozen.Installations) == 0 || p.frozen.Installations[0].Image != apple {
 		t.Fatalf("explicit PATH priority was lost: %+v %v", p, err)
 	}
+	p, err = discoverHostRuntime(context.Background(), f, "/usr/bin:/opt/homebrew/bin")
+	if err != nil || len(p.frozen.Installations) == 0 || p.frozen.Installations[0].Alias != "/usr/bin/git" || p.frozen.Installations[0].Image != apple {
+		t.Fatalf("Apple shim did not bind xcrun's selected Git: %+v %v", p, err)
+	}
 	n = f.nodes["/opt/homebrew/bin"]
-	n.GID = hostRuntimeAdminGID
+	n.GID = 80
 	f.nodes[n.Path] = n
 	f.importsByPath[brew] = hostMachOImports{fileType: 2, libraries: []string{"/unapproved/libfuture.dylib"}}
 	p, err = discoverHostRuntime(context.Background(), f, "/opt/homebrew/bin:/Library/Developer/CommandLineTools/usr/bin")
