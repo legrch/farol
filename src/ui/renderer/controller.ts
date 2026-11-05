@@ -479,6 +479,12 @@ export class WindowController implements RendererFacade {
   private readonly automaticSetupCompletions = new Set<string>();
   private readonly refusedAutomaticSetupProofs = new Map<string, string>();
   private automaticSignInRequested = false;
+  private setupSignInReturnAttempt: Readonly<{
+    destination: Destination;
+    navigationRevision: number;
+    buildId: string | null;
+    intention: string;
+  }> | null = null;
   private signInTimer: ReturnType<typeof setTimeout> | null = null;
   private savedSignInReadTimer: ReturnType<typeof setTimeout> | null = null;
   private savedSignInReadAttempts = 0;
@@ -545,6 +551,14 @@ export class WindowController implements RendererFacade {
   };
   private patch(value: Partial<WindowSnapshot>): void {
     if (this.disposed) return;
+    const attempt = this.setupSignInReturnAttempt;
+    if (
+      attempt &&
+      (this.navigationRevision !== attempt.navigationRevision ||
+        (value.buildId !== undefined && value.buildId !== attempt.buildId) ||
+        value.update?.phase === "applying")
+    )
+      this.setupSignInReturnAttempt = null;
     // General configuration publication cannot overwrite this independent read.
     // Navigation retires pending reads. A settled document sample remains visible
     // across Setup/Settings until loss of its document/runtime context.
@@ -628,9 +642,14 @@ export class WindowController implements RendererFacade {
         }
       }) ?? (() => {}),
       this.api.onBrowserRouteState((value) => {
-        this.resetSavedSignInObservation();
-        this.invalidateSignInObservation();
         const parsed = BrowserRouteStatusSchema.safeParse(value);
+        if (
+          !parsed.success ||
+          parsed.data.state !== "loaded" ||
+          this.state.route !== "loaded"
+        )
+          this.resetSavedSignInObservation();
+        this.invalidateSignInObservation();
         if (parsed.success) {
           this.browserRouteRevision++;
           this.patch({ route: parsed.data.state });
@@ -1425,6 +1444,7 @@ export class WindowController implements RendererFacade {
         this.observeSignIn();
       }
       this.confirmSetupSignIn();
+      this.returnAfterConfirmedSetupSignIn();
       if (
         result.state === "applied" &&
         (key === "settings:chatgpt.verify:" ||
@@ -1547,8 +1567,29 @@ export class WindowController implements RendererFacade {
             });
           // Commit renderer navigation before transport can reveal a native
           // surface. Host observations and late replies never own navigation.
-          if (this.state.destination === requestedDestination)
+          if (this.state.destination === requestedDestination) {
+            const revision = this.navigationRevision;
             this.navigate({ area: "chatgpt", taskId: "" });
+            if (
+              (command.kind === "chatgpt.open-sign-in" ||
+                command.kind === "chatgpt.open-browser") &&
+              requestedDestination.area === "setup" &&
+              requestedDestination.setupStep === "signin" &&
+              this.navigationRevision === revision + 1 &&
+              this.state.destination.area === "chatgpt" &&
+              this.state.destination.taskId === "" &&
+              this.state.setupSignInReturn
+            ) {
+              this.setupSignInReturnAttempt = {
+                destination: this.state.setupSignInReturn,
+                navigationRevision: this.navigationRevision,
+                buildId: this.state.buildId,
+                intention,
+              };
+              this.resetSavedSignInObservation();
+              this.scheduleSavedSignInObservation();
+            }
+          }
         }
         const order = this.configOrder.begin();
         let transport: Parameters<typeof classifyConfigurationResponse>[0];
@@ -2624,6 +2665,7 @@ export class WindowController implements RendererFacade {
       });
       if (exact && evidence.state === "authenticated") {
         this.confirmSetupSignIn();
+        this.returnAfterConfirmedSetupSignIn();
         this.completeConfirmedSetup();
       }
       this.scheduleSavedSignInObservation();
@@ -2648,6 +2690,7 @@ export class WindowController implements RendererFacade {
     // Configuration refresh can publish the final receipt after the sign-in
     // observation settled. Reevaluate the same one-shot completion predicate.
     this.completeConfirmedSetup();
+    this.returnAfterConfirmedSetupSignIn();
     this.scheduleSavedSignInObservation();
   }
   private resetSavedSignInObservation(): void {
@@ -2657,10 +2700,16 @@ export class WindowController implements RendererFacade {
     this.savedSignInReadAttempts = 0;
   }
   // Any loaded document can still be hydrating, including within the same
-  // build. Bound passive reads per document event; never retry a Settings write
-  // or an external Send. Explicit sign-out and settled answers stop the reads.
+  // build. Bound passive reads per document; never retry a Settings write or
+  // an external Send. A signed-out first login keeps its bounded read window.
   private scheduleSavedSignInObservation(): void {
     const state = this.state;
+    if (
+      this.savedSignInReadAttempts >= 6 &&
+      state.signInObservation?.pending === false &&
+      state.signInObservation.state !== "authenticated"
+    )
+      this.setupSignInReturnAttempt = null;
     const saved =
       state.configuration?.status === "ready"
         ? state.configuration.settings.setup.chatgpt.verified !== null ||
@@ -2675,10 +2724,12 @@ export class WindowController implements RendererFacade {
       state.route !== "loaded" ||
       state.status !== "current" ||
       state.runtime !== "ready" ||
-      !saved ||
+      (!saved && !this.currentSetupSignInAttempt()) ||
       state.signInObservation?.pending === true ||
       state.signInObservation?.state === "authenticated" ||
-      state.signInObservation?.state === "signed_out"
+      (state.signInObservation?.state === "signed_out" &&
+        !this.currentSetupSignInAttempt()) ||
+      state.update.phase === "applying"
     )
       return;
     // Restored provider sessions can hydrate slowly on a cold launch. These
@@ -2695,18 +2746,64 @@ export class WindowController implements RendererFacade {
           : null;
       if (
         this.disposed ||
-        !verified ||
+        (!verified && !this.currentSetupSignInAttempt()) ||
         current.signInObservation?.pending === true ||
         current.signInObservation?.state === "authenticated" ||
-        current.signInObservation?.state === "signed_out" ||
+        (current.signInObservation?.state === "signed_out" &&
+          !this.currentSetupSignInAttempt()) ||
         current.status !== "current" ||
         current.runtime !== "ready" ||
+        current.update.phase === "applying" ||
         current.route !== "loaded"
       )
         return;
       this.savedSignInReadAttempts++;
       this.observeSignIn();
     }, delays[this.savedSignInReadAttempts]);
+  }
+  private currentSetupSignInAttempt(): boolean {
+    const attempt = this.setupSignInReturnAttempt;
+    const state = this.state;
+    return (
+      !!attempt &&
+      this.navigationRevision === attempt.navigationRevision &&
+      state.buildId === attempt.buildId &&
+      state.destination.area === "chatgpt" &&
+      state.destination.taskId === "" &&
+      state.setupSignInReturn === attempt.destination &&
+      state.intents[attempt.intention]?.state !== "unknown" &&
+      state.intents[attempt.intention]?.state !== "refused"
+    );
+  }
+  private returnAfterConfirmedSetupSignIn(): void {
+    const attempt = this.setupSignInReturnAttempt;
+    const state = this.state;
+    const observation = state.signInObservation;
+    const check = state.setupSignInCheck;
+    if (
+      !attempt ||
+      !this.currentSetupSignInAttempt() ||
+      this.disposed ||
+      state.status !== "current" ||
+      state.runtime !== "ready" ||
+      state.update.phase === "applying" ||
+      state.route !== "loaded" ||
+      state.intents[attempt.intention]?.state !== "applied" ||
+      state.intents["settings:chatgpt.verify:"]?.state !== "applied" ||
+      !commandAllowed(state, "chatgpt.sign-in-return") ||
+      !observation ||
+      observation.pending ||
+      observation.state !== "authenticated" ||
+      !observation.binding ||
+      !check ||
+      check.buildId !== observation.buildId ||
+      check.binding.documentGeneration !==
+        observation.binding.documentGeneration ||
+      check.binding.sequence > observation.binding.sequence
+    )
+      return;
+    this.setupSignInReturnAttempt = null;
+    this.returnToSetup();
   }
   private confirmSetupSignIn(): void {
     const state = this.state;
@@ -2910,8 +3007,9 @@ export class WindowController implements RendererFacade {
     const destination = this.state.setupSignInReturn;
     if (!destination || this.disposed || this.state.update.phase === "applying")
       return;
+    this.setupSignInReturnAttempt = null;
     // Navigation remains available even when command evidence is stale or an
-    // earlier effect is unknown. Observation settlement owns no destination.
+    // earlier effect is unknown. Explicit return consumes any continuation.
     this.patch({ setupSignInReturn: null });
     this.navigate(destination);
     void this.configure(
