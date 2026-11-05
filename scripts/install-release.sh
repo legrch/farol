@@ -423,6 +423,10 @@ while check_stopped main; do
   /bin/sleep 1
   count=$((count + 1))
 done
+# A launch request and one observed PID are not evidence that startup survived.
+# Keep the predecessor when the new process exits during its first moments.
+/bin/sleep 3
+check_stopped main && fail 'Farol exited shortly after launch; predecessor retained'
 actual=$(plist_value "$installed/Contents/Info.plist" CFBundleShortVersionString) || fail 'cannot read installed version'
 [ "$actual" = "$version" ] || fail 'installed version mismatch; predecessor retained if one existed'
 printf 'Installed and running: Farol %s\n' "$actual"

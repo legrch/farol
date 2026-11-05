@@ -674,11 +674,17 @@ async function observeSharedSlotStartup(
     const previous = SavedReceipt.parse(saved);
     const op = previous.operation;
     const parsed = parseRetainedGithubReleaseManifest(previous);
+    const settledBuild =
+      previous.phase === "completed"
+        ? op?.target
+        : previous.phase === "rolled_back"
+          ? op?.source
+          : null;
     const absent = options.observation?.recordAbsent ?? recordAbsent;
     if (
       !op ||
-      previous.phase !== "completed" ||
-      previous.runningBuildId !== op.target.buildId ||
+      !settledBuild ||
+      previous.runningBuildId !== settledBuild.buildId ||
       !parsed.ok ||
       !sameBuild(op.target, {
         digest: parsed.value.artifactSha256,
@@ -721,7 +727,7 @@ async function observeSharedSlotStartup(
         options.observation?.readProcess ?? readInstalledProcess,
       );
       if (
-        journal?.phase !== "completed" ||
+        journal?.phase !== previous.phase ||
         startupHelperState(helper) !== "exited"
       )
         throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
@@ -2688,11 +2694,17 @@ async function createRuntime(
       )
         throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
       await verifyBinding(op);
+      const settledBuild =
+        receipt.phase === "completed"
+          ? op.target
+          : receipt.phase === "rolled_back"
+            ? op.source
+            : null;
       const manualReplacement =
         !supervised &&
         installLocation === "shared" &&
-        receipt.phase === "completed" &&
-        receipt.runningBuildId === op.target.buildId &&
+        settledBuild !== null &&
+        receipt.runningBuildId === settledBuild.buildId &&
         options.build.buildId !== op.target.buildId &&
         compareReleaseVersions(options.build.version, op.target.version) === 1;
       if (manualReplacement) {
@@ -2703,7 +2715,7 @@ async function createRuntime(
         );
         const oldHelper = await observeInstalledHelper(receipt.helper);
         if (
-          oldJournal.phase !== "completed" ||
+          oldJournal.phase !== receipt.phase ||
           startupHelperState(oldHelper) !== "exited" ||
           !(await recordAbsent(restoreFile))
         )

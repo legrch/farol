@@ -260,6 +260,21 @@ test("isolated failed launch retains a recoverable predecessor", () => {
   });
 });
 
+test("isolated immediate startup exit is reported instead of installed and running", () => {
+  isolatedInstall("early-exit", (result, _root, log) => {
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /exited shortly after launch/);
+    assert.doesNotMatch(result.stdout, /Installed and running/);
+    const retained = result.stderr.match(/Recovery files retained at: (.+)/);
+    assert.ok(retained, result.stderr);
+    assert.equal(
+      readFileSync(path.join(retained[1], "previous.app/old"), "utf8"),
+      "old",
+    );
+    assert.ok(log.includes("open"));
+  });
+});
+
 for (const scenario of [
   "private-only",
   "snapshot",
@@ -366,7 +381,7 @@ else if (cmd === 'ps') {
 }
 else if (cmd === 'osascript') { log('osascript'); const source = fs.readFileSync(0, 'utf8'); if (!source.includes('menu bar item "Farol"') || !source.includes('repeat with candidate in every application process') || !source.includes('if (unix id of targetProcess) is not targetPid') || process.env.SCENARIO === 'quit-failure') process.exit(1); if (!['stubborn', 'backend-remains', 'escalate', 'unexpected-descendant'].includes(process.env.SCENARIO)) fs.rmSync(path.join(root, 'running'), {force:true}); }
 else if (cmd === 'ditto') { log(args[1].endsWith('previous.app') ? 'ditto-backup' : 'ditto-install'); fs.cpSync(args[0], args[1], {recursive:true, verbatimSymlinks:true}); }
-else if (cmd === 'sleep') {}
+else if (cmd === 'sleep') { if (process.env.SCENARIO === 'early-exit' && fs.existsSync(path.join(root, 'launched'))) fs.rmSync(path.join(root, 'running'), {force:true}); }
 else if (cmd === 'open') { log('open'); if (process.env.SCENARIO === 'bad-launch') process.exit(1); fs.writeFileSync(path.join(root, 'launched'), 'yes'); fs.writeFileSync(path.join(root, 'running'), 'yes'); }
 else process.exit(2);
 `;
