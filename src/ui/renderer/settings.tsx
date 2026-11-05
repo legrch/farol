@@ -844,9 +844,8 @@ function OwnerGitSettings({ facade }: { facade: RendererFacade }) {
   return (
     <Group title="Git for Commands">
       <p className="description">
-        Farol uses the first Git in your shell PATH. Loading your shell
-        environment runs your account startup files outside the Computer
-        sandbox, only after you choose it here.
+        Find my Git reads the first executable Git in your account shell PATH.
+        This runs your trusted startup files only when you click the button.
       </p>
       <p className="description">
         {choice?.gitAlias && !choice.gitPhysical
@@ -872,7 +871,7 @@ function OwnerGitSettings({ facade }: { facade: RendererFacade }) {
           disabled={busy}
           onClick={() => void run("load")}
         >
-          Load shell environment / Refresh
+          Find my Git
         </button>
         <button
           type="button"
@@ -880,7 +879,7 @@ function OwnerGitSettings({ facade }: { facade: RendererFacade }) {
           disabled={busy}
           onClick={() => void run("change")}
         >
-          Change Git…
+          Choose…
         </button>
       </div>
     </Group>

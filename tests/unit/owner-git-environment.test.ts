@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { afterEach, expect, it } from "vitest";
@@ -117,4 +117,48 @@ it("persists only explicit owner Git choice and never a captured PATH", async ()
   expect(() =>
     initial.selectOverrideFromOwner("/opt/homebrew/bin/other"),
   ).toThrow();
+});
+
+it("does not run the account shell at startup and saves only the clicked PATH selection", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "farol-owner-git-click-"));
+  created.push(root);
+  const bin = path.join(root, "bin");
+  mkdirSync(bin);
+  const git = path.join(bin, "git");
+  writeFileSync(git, "#!/bin/sh\nexit 0\n");
+  chmodSync(git, 0o755);
+  writeFileSync(
+    path.join(root, "owner-git-choice.json"),
+    JSON.stringify({ schema: 1, enabled: true, override: null }),
+    { mode: 0o600 },
+  );
+  let captures = 0;
+  const capture: typeof captureOwnerGitEnvironment = async (generation) => {
+    captures++;
+    return {
+      path: `${bin}:/usr/bin`,
+      source: "desktop-login-shell",
+      capturedAt: new Date().toISOString(),
+      generation,
+    };
+  };
+  const owner = new OwnerGitChoice(root, capture);
+  await owner.prepareStartup();
+  expect(captures).toBe(0);
+  expect(owner.launchEnvironment()).toBeUndefined();
+  expect(owner.status().failure).toBe("GIT_CHOICE_UNAVAILABLE");
+  await owner.refreshFromOwner();
+  expect(captures).toBe(1);
+  expect(owner.status().gitAlias).toBe(git);
+  expect(owner.status().pendingRestart).toBe(true);
+  expect(JSON.parse(readFileSync(path.join(root, "owner-git-choice.json"), "utf8"))).toEqual({
+    schema: 1,
+    enabled: true,
+    override: git,
+  });
+  const reopened = new OwnerGitChoice(root, async () => {
+    throw new Error("unexpected shell execution");
+  });
+  await reopened.prepareStartup();
+  expect(reopened.launchEnvironment()?.path).toBe(bin);
 });

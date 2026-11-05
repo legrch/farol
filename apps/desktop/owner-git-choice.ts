@@ -37,7 +37,11 @@ export class OwnerGitChoice {
   private generation = 0;
   private pendingRestart = false;
 
-  constructor(userData: string) {
+  constructor(
+    userData: string,
+    private readonly capturePath: typeof captureOwnerGitEnvironment =
+      captureOwnerGitEnvironment,
+  ) {
     this.file = path.join(userData, "owner-git-choice.json");
     this.preference = this.readPreference();
   }
@@ -122,29 +126,35 @@ export class OwnerGitChoice {
 
   async prepareStartup(): Promise<void> {
     if (!this.preference.enabled) return;
+    // Startup never executes the account's shell. Older preferences with no
+    // explicit path wait for a fresh owner click in Settings.
+    if (!this.preference.override) {
+      this.environment = null;
+      this.failure = "GIT_CHOICE_UNAVAILABLE";
+      return;
+    }
     try {
-      this.environment = this.preference.override
-        ? this.selectedOverride(this.preference.override)
-        : await captureOwnerGitEnvironment(++this.generation);
+      this.environment = this.selectedOverride(this.preference.override);
       this.failure = null;
     } catch (error) {
       this.environment = null;
       this.failure =
         error instanceof Error ? error.message : "SHELL_ENV_OUTCOME_UNKNOWN";
-      // A failed attempt is held until a fresh owner action. Reopening the app
-      // does not automatically retry an uncertain account-shell outcome.
-      try {
-        this.save({ ...this.preference, enabled: false });
-      } catch {
-        this.failure = "SHELL_ENV_OUTCOME_UNKNOWN";
-      }
+      // An invalid saved selection remains visible until the owner changes it.
     }
   }
 
   async refreshFromOwner(): Promise<void> {
     if (this.pendingRestart) throw new Error("GIT_RESTART_REQUIRED");
-    this.environment = await captureOwnerGitEnvironment(++this.generation);
-    this.save({ schema: 1, enabled: true, override: null });
+    const previous = this.environment;
+    const captured = await this.capturePath(++this.generation);
+    this.environment = captured;
+    const selected = this.status().gitAlias;
+    if (!selected) {
+      this.environment = previous;
+      throw new Error("GIT_NOT_FOUND");
+    }
+    this.save({ schema: 1, enabled: true, override: selected });
     this.failure = null;
     this.pendingRestart = true;
   }
