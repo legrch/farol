@@ -65,7 +65,7 @@
     },
     {
       "path": "modules/computer/infra/process/hostruntime.go",
-      "sha256": "00060f7f7111b6d67f4162f1ff20384c8869ca0ccf532fee991d0960c8305e50"
+      "sha256": "14ff702b8f133717261dbda76a7b4dc1d73da8d4a60b9448d33053e88baac040"
     },
     {
       "path": "modules/computer/infra/process/hostruntimedarwin.go",
@@ -81,7 +81,7 @@
     },
     {
       "path": "modules/computer/infra/process/hostruntimepathdarwin.go",
-      "sha256": "5039f61cebe3fdfdd0de20f22d4eba0818c34252c209919d57bdd5a9506be7e2"
+      "sha256": "4e66c1683062a80690d6909c183195cb4f7e81305137e9c3898395dcf914f6e2"
     },
     {
       "path": "modules/computer/infra/process/measuredarwin.go",
