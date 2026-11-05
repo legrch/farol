@@ -276,17 +276,29 @@ try:
     # Electron binaries in installed-execution are Computer/tunnel children and
     # must not be mistaken for a second application primary.
     if mode == 'main-pid':
-        launcher = installed + '/Contents/Resources/app/farol-backend'
-        launchers = [pid for pid, _, title in rows if title == launcher]
+        def production_bundle(path):
+            if path == installed + '/Contents/Resources/app/farol-backend':
+                return installed
+            match = re.fullmatch(re.escape(profile) + r'/[a-f0-9]{32}/launch-Farol\.app/Contents/Resources/app/farol-backend', path)
+            return path[:-len('/Contents/Resources/app/farol-backend')] if match else None
+        launchers = []
+        for pid, _, title in rows:
+            if title == 'farol-backend' or title.endswith('/farol-backend'):
+                executable = resolve_executable(pid)
+                if executable is None:
+                    continue
+                bundle = production_bundle(executable)
+                if bundle is not None:
+                    launchers.append((pid, bundle))
         if len(launchers) != 1:
             raise ValueError('production launcher is not unique')
-        primary = installed + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron'
-        mains = [pid for pid, parent, title in rows
-                 if parent == launchers[0] and
-                 (title == 'Farol' or title == primary or
-                  (title.startswith(profile + '/') and
-                   (title.endswith('/Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron') or
-                    title.endswith('/launch-Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron'))))]
+        launcher_pid, bundle = launchers[0]
+        primary = bundle + '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron'
+        mains = []
+        for pid, parent, title in rows:
+            if parent == launcher_pid and (title == 'Farol' or title == 'Electron' or title.endswith('/Electron')):
+                if resolve_executable(pid) == primary:
+                    mains.append(pid)
         if len(mains) != 1:
             raise ValueError('production application PID is not unique')
         print(mains[0])
@@ -340,13 +352,19 @@ def identity(pid):
 try:
     rows = table()
     roots = []
+    def production_bundle(path):
+        if path == installed + '/Contents/Resources/app/farol-backend': return installed
+        match = re.fullmatch(re.escape(profile) + r'/[a-f0-9]{32}/launch-Farol\.app/Contents/Resources/app/farol-backend', path)
+        return path[:-len('/Contents/Resources/app/farol-backend')] if match else None
     for pid, (_, state) in rows.items():
         if state.startswith('Z'): continue
         buf = ctypes.create_string_buffer(4096)
-        if lib.proc_pidpath(pid, buf, len(buf)) > 0 and os.fsdecode(buf.value) == installed + '/Contents/Resources/app/farol-backend':
-            roots.append(pid)
+        if lib.proc_pidpath(pid, buf, len(buf)) > 0:
+            bundle = production_bundle(os.fsdecode(buf.value))
+            if bundle is not None: roots.append((pid, bundle))
     if len(roots) != 1: raise ValueError('production launcher is not unique')
-    owned = {roots[0]}
+    root_pid, bundle = roots[0]
+    owned = {root_pid}
     while True:
         expanded = owned | {pid for pid, (parent, _) in rows.items() if parent in owned}
         if expanded == owned: break
@@ -357,7 +375,7 @@ try:
         if state.startswith('Z'): continue
         record = identity(pid)
         path = record['path']
-        if not (path.startswith(installed + '/') or (path.startswith(profile + '/installed-execution/') and '/Farol.app/' in path)):
+        if not (path.startswith(bundle + '/') or (path.startswith(profile + '/installed-execution/') and '/Farol.app/' in path)):
             raise ValueError('unexpected production descendant')
         record.update(parent=parent, state=state)
         records.append(record)
@@ -482,7 +500,8 @@ if set(proof) != {'schema', 'nonce', 'buildId', 'version', 'pid'} or proof != {
 }:
     sys.exit(1)
 PY
-check_stopped main && fail 'Farol exited after startup confirmation; predecessor retained'
+confirmed_main=$(running main-pid) || fail 'Farol primary exited after startup confirmation; predecessor retained'
+[ "$confirmed_main" = "$main_pid" ] || fail 'Farol primary changed after startup confirmation; predecessor retained'
 actual=$(plist_value "$installed/Contents/Info.plist" CFBundleShortVersionString) || fail 'cannot read installed version'
 [ "$actual" = "$version" ] || fail 'installed version mismatch; predecessor retained if one existed'
 printf 'Installed and running: Farol %s\n' "$actual"
