@@ -13526,6 +13526,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   installIpc();
   installApplicationMenu();
   // Hidden tests own no visible status item. Ordinary owner launch gets one.
+  let disposeMenuBarOnQuit: (() => void) | null = null;
   if (nativeMenuBarEnabled()) {
     const disposeMenuBar = await runDesktopStartupBoundary("native-menu", () =>
       createMenuBar(
@@ -13581,6 +13582,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         },
       ),
     );
+    disposeMenuBarOnQuit = disposeMenuBar;
     app.once("will-quit", disposeMenuBar);
   }
   await runDesktopStartupBoundary("local-runtime", startRuntime);
@@ -13651,7 +13653,14 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     // QuitDrain has already waited for owned children and recorded the result.
     // A second soft Quit can remain held by Electron windows/native handlers;
     // finish this exact attempt without reopening the drain or another update.
-    quit: () => app.exit(0),
+    quit: () => {
+      try {
+        // app.exit skips will-quit; release the owned tray explicitly.
+        disposeMenuBarOnQuit?.();
+      } finally {
+        app.exit(0);
+      }
+    },
     collect: (context) => {
       const closers: OwnedCloser[] = [
         {
