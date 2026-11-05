@@ -14,7 +14,9 @@ describe("Settings", () => {
     const h = await mount({ page: "general", shell: true });
     const nav = h.host.querySelector('[aria-label="Settings navigation"]')!;
     expect(
-      [...nav.querySelectorAll("button")].map((x) => x.textContent?.trim()),
+      [...nav.querySelectorAll(":scope > button")].map((x) =>
+        x.textContent?.trim(),
+      ),
     ).toEqual(["Back to Farol", "General", "Appearance", "Keyboard shortcuts"]);
     expect(h.host.textContent).not.toContain("Start page");
     expect(h.host.querySelector("details")).toBeNull();

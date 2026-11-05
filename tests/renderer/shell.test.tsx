@@ -49,14 +49,36 @@ it.each([
     const { host } = await mount(data);
     const settings = button(host, "Settings");
     const version = settings.nextElementSibling;
-    expect(version?.textContent?.trim()).toBe(label);
-    expect(version?.getAttribute("title")).toContain(heading);
-    expect(version?.getAttribute("title")).toContain("Build 10");
-    expect(version?.getAttribute("title")).toContain("Built ");
-    expect(version?.getAttribute("title")).toContain("Source 111111111111");
-    expect(version?.getAttribute("title")).toContain(
-      `Build ID ${"3".repeat(64)}`,
-    );
+    expect(
+      version?.querySelector(".rail-version-label")?.textContent?.trim(),
+    ).toBe(label);
+    expect(version?.tagName).toBe("BUTTON");
+    expect(settings.querySelector('[role="tooltip"]')).toBeNull();
+    expect(version?.getAttribute("title")).toBeNull();
+    const details = version?.querySelector('[role="tooltip"]');
+    expect(details?.textContent).toContain(heading);
+    expect(details?.textContent).toContain("Build 10");
+    expect(details?.textContent).toContain("Built ");
+    expect(details?.textContent).toContain("Source 111111111111");
+    expect(details?.textContent).toContain(`Build ID ${"3".repeat(64)}`);
+    await act(async () => {
+      version?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(version?.getAttribute("aria-expanded")).toBe("true");
+    await act(async () => {
+      version?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(version?.getAttribute("aria-expanded")).toBe("false");
+    expect(version?.getAttribute("data-dismissed")).toBe("true");
+    await act(async () => {
+      version?.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+    });
+    expect(version?.getAttribute("data-dismissed")).toBe("false");
+    await act(async () => {
+      version?.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    });
+    expect(version?.getAttribute("aria-expanded")).toBe("false");
+    expect(version?.getAttribute("data-dismissed")).toBe("true");
   },
 );
 async function mount(
@@ -3155,6 +3177,10 @@ it("one sidebar expands to labels and collapses to a permanent rail on every are
   for (const area of ["home", "activity", "setup", "settings"] as const) {
     await act(async () => c.navigate({ area }));
     expect(host.querySelector(".rail")).toBeTruthy();
+    expect(
+      host.querySelector('.rail-version[aria-label$="build details"]'),
+    ).toBeTruthy();
+    expect(host.querySelector(".rail-version-compact")?.textContent).toBe("v");
     expect(
       host
         .querySelector('.rail [aria-current="page"]')
