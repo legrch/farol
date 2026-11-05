@@ -1,6 +1,6 @@
 # First installation
 
-Download Farol from the [public releases](https://github.com/legrch/farol/releases). Read its release notes and [current distribution status](../reference/status.md) before installing: public downloads and qualified internal builds can have different capabilities. The GitHub `/releases/latest` shortcut may point to an older release because publication does not mark a release as GitHub's latest.
+Download Farol from the [public releases](https://github.com/legrch/farol/releases). Read its release notes and [current distribution status](../reference/status.md) before installing: public downloads and qualified internal builds can have different capabilities. Future stable publication marks the release as GitHub Latest; the installer independently selects the highest published stable version with complete assets.
 
 **First installation from a public download is still being qualified.** A manual copy or successful launch does not establish the trusted installation record needed by the updater. The [readiness checklist](../reference/install-readiness.md) tracks that remaining work.
 
