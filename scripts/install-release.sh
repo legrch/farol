@@ -260,6 +260,24 @@ def resolve_executable(pid):
         return os.fsdecode(buf.value)
     except OSError as error:
         raise ValueError('cannot resolve Farol process executable') from error
+def process_instance(pid):
+    # proc_bsdinfo from the macOS SDK (sys/proc_info.h), including the
+    # microsecond-resolution kernel start time. A PID alone can be reused.
+    class BsdInfo(ctypes.Structure):
+        _fields_ = ([ (name, ctypes.c_uint32) for name in
+                     ('flags', 'status', 'xstatus', 'pid', 'ppid', 'uid', 'gid',
+                      'ruid', 'rgid', 'svuid', 'svgid', 'pad') ] +
+                    [('comm', ctypes.c_char * 16), ('name', ctypes.c_char * 32)] +
+                    [ (name, ctypes.c_uint32) for name in
+                      ('nfiles', 'pgid', 'pjobc', 'tdev', 'tpgid', 'nice') ] +
+                    [('start_sec', ctypes.c_uint64), ('start_usec', ctypes.c_uint64)])
+    proc = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
+    proc.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+    proc.proc_pidinfo.restype = ctypes.c_int
+    info = BsdInfo()
+    if proc.proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info)) != ctypes.sizeof(info) or info.pid != pid or info.start_sec == 0:
+        raise ValueError('production primary instance unavailable')
+    return f'{pid}:{info.start_sec}:{info.start_usec}'
 found = False
 try:
     with open(table, encoding='utf-8') as stream:
@@ -275,7 +293,7 @@ try:
     # The app's Go launcher is the parent of its one Electron primary. Other
     # Electron binaries in installed-execution are Computer/tunnel children and
     # must not be mistaken for a second application primary.
-    if mode == 'main-pid':
+    if mode in ('main-pid', 'main-instance'):
         def production_bundle(path):
             if path == installed + '/Contents/Resources/app/farol-backend':
                 return installed
@@ -301,7 +319,7 @@ try:
                     mains.append(pid)
         if len(mains) != 1:
             raise ValueError('production application PID is not unique')
-        print(mains[0])
+        print(process_instance(mains[0]) if mode == 'main-instance' else mains[0])
         sys.exit(0)
     for pid, _, executable in rows:
         if not executable.startswith('/') and 'farol' in executable.lower():
@@ -477,9 +495,11 @@ while [ ! -e "$proof" ]; do
   count=$((count + 1))
 done
 main_pid=$(running main-pid) || fail 'confirmed startup process identity unavailable'
-/usr/bin/python3 -I - "$proof" "$nonce" "$manifest_build_id" "$version" "$main_pid" <<'PY' || fail 'startup confirmation invalid; predecessor retained'
+main_instance=$(running main-instance) || fail 'confirmed startup process instance unavailable'
+[ "${main_instance%%:*}" = "$main_pid" ] || fail 'confirmed startup process changed; predecessor retained'
+/usr/bin/python3 -I - "$proof" "$nonce" "$manifest_build_id" "$version" "$main_pid" "$main_instance" <<'PY' || fail 'startup confirmation invalid; predecessor retained'
 import json, os, stat, sys
-file, nonce, build_id, version, pid = sys.argv[1:]
+file, nonce, build_id, version, pid, instance = sys.argv[1:]
 before = os.lstat(file)
 if not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid() or stat.S_IMODE(before.st_mode) != 0o600:
     sys.exit(1)
@@ -499,9 +519,15 @@ if set(proof) != {'schema', 'nonce', 'buildId', 'version', 'pid'} or proof != {
     'buildId': build_id, 'version': version, 'pid': int(pid),
 }:
     sys.exit(1)
+_, start_sec, start_usec = (int(part) for part in instance.split(':'))
+# A replacement process with a recycled PID starts after the proof file was
+# created by the original primary. The original process must predate it.
+birth = getattr(before, 'st_birthtime', None)
+if birth is None or start_sec * 1000000 + start_usec > int(birth * 1000000):
+    sys.exit(1)
 PY
-confirmed_main=$(running main-pid) || fail 'Farol primary exited after startup confirmation; predecessor retained'
-[ "$confirmed_main" = "$main_pid" ] || fail 'Farol primary changed after startup confirmation; predecessor retained'
+confirmed_main=$(running main-instance) || fail 'Farol primary exited after startup confirmation; predecessor retained'
+[ "$confirmed_main" = "$main_instance" ] || fail 'Farol primary changed after startup confirmation; predecessor retained'
 actual=$(plist_value "$installed/Contents/Info.plist" CFBundleShortVersionString) || fail 'cannot read installed version'
 [ "$actual" = "$version" ] || fail 'installed version mismatch; predecessor retained if one existed'
 printf 'Installed and running: Farol %s\n' "$actual"

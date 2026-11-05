@@ -283,8 +283,24 @@ test("isolated surviving sidecar cannot confirm an exited primary", () => {
     assert.doesNotMatch(result.stdout, /Installed and running/);
     const retained = result.stderr.match(/Recovery files retained at: (.+)/);
     assert.ok(retained, result.stderr);
-    assert.equal(readFileSync(path.join(retained[1], "previous.app/old"), "utf8"), "old");
+    assert.equal(
+      readFileSync(path.join(retained[1], "previous.app/old"), "utf8"),
+      "old",
+    );
     assert.ok(log.includes("open"));
+  });
+});
+
+test("isolated recycled PID cannot reuse an older startup proof", () => {
+  isolatedInstall("reused-primary", (result, _root, _log) => {
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /startup confirmation invalid/);
+    const retained = result.stderr.match(/Recovery files retained at: (.+)/);
+    assert.ok(retained, result.stderr);
+    assert.equal(
+      readFileSync(path.join(retained[1], "previous.app/old"), "utf8"),
+      "old",
+    );
   });
 });
 
@@ -607,6 +623,18 @@ try:
         "proof = json.loads(data)\nopen(os.path.join(os.environ['FIXTURE_ROOT'], 'primary-exited'), 'w').close()",
       );
     }
+    copy = copy.replace(
+      "found = False\ntry:",
+      `def process_instance(pid):
+    start = 3000000000 if os.environ['SCENARIO'] == 'reused-primary' else 1000000000
+    return f'{pid}:{start}:0'
+found = False
+try:`,
+    );
+    copy = copy.replace(
+      "birth = getattr(before, 'st_birthtime', None)",
+      "birth = 2000000000  # isolated fixture clock",
+    );
     const copyPath = path.join(root, "isolated-installer.sh");
     writeFileSync(copyPath, copy);
     const result = spawnSync("/bin/sh", [copyPath, "1.2.3"], {
