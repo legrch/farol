@@ -41,6 +41,10 @@ func TestHostRuntimeProbeTimeoutAndOverflowFailClosed(t *testing.T) {
 	if !errors.Is(err, errShellEnvironmentUnknown) {
 		t.Fatalf("overflowed probe was accepted: %v output %q", err, out)
 	}
+	if _, err := runHostProbe(context.Background(), "/bin/sh", []string{"-c", "printf 'valid'; printf 'startup denied' >&2"},
+		[]string{"PATH=/bin:/usr/bin"}, os.TempDir(), 64); !errors.Is(err, errShellEnvironmentUnknown) {
+		t.Fatalf("probe accepted a frame despite startup stderr: %v", err)
+	}
 }
 
 func TestHostRuntimeIgnoresTerminalHintAndUsesAccountLoginShell(t *testing.T) {
@@ -83,6 +87,20 @@ func TestConfinedLoginProbeRejectsStartupWrites(t *testing.T) {
 	}
 	if !os.IsNotExist(statErr) {
 		t.Fatalf("startup write escaped Seatbelt: %v", statErr)
+	}
+}
+
+func TestConfinedLoginProbeRejectsLinkedStartupFile(t *testing.T) {
+	home := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, []byte("PATH=/unapproved:$PATH\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(home, ".zshrc")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := confinedLoginArguments("/bin/zsh", home, home, []string{"-i", "-c", ":"}); !errors.Is(err, errShellEnvironmentUnknown) {
+		t.Fatalf("linked startup source was accepted: %v", err)
 	}
 }
 

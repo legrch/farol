@@ -562,4 +562,8 @@ func TestUnavailableHostRuntimeGrantsNoGit(t *testing.T) {
 	if path, code := plan.GitSelection(); path != "" || code != "SHELL_ENV_OUTCOME_UNKNOWN" {
 		t.Fatalf("unexpected Git selection: %q %q", path, code)
 	}
+	outside := UserExecutableEnvironment{Source: "login-shell", Home: "/Users/owner", Path: "/usr/bin:/bin", XDGConfigHome: "/private/tmp/other-config"}
+	if err := plan.BindUserEnvironment(outside, 1); err == nil {
+		t.Fatal("external XDG path extended Git configuration scope")
+	}
 }
