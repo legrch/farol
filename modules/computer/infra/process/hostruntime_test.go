@@ -123,6 +123,17 @@ func TestHostRuntimeSealsExactInstalledInventory(t *testing.T) {
 		t.Fatal("plan aliases mutable copy")
 	}
 }
+func TestSystemGitCandidateOrderNeverInvokesAppleShim(t *testing.T) {
+	want := []string{
+		"/Library/Developer/CommandLineTools/usr/bin/git",
+		"/Applications/Xcode.app/Contents/Developer/usr/bin/git",
+		"/opt/homebrew/bin/git",
+		"/usr/local/bin/git",
+	}
+	if got := hostRuntimeCandidates("git"); !slices.Equal(got, want) {
+		t.Fatalf("system Git order changed or shim entered discovery: got %q", got)
+	}
+}
 func TestHostRuntimeRejectsInventoryDrift(t *testing.T) {
 	for _, field := range []string{"sha", "uid", "gid", "mode", "inode", "alias", "listing"} {
 		t.Run(field, func(t *testing.T) {
@@ -170,16 +181,17 @@ func TestHostRuntimeRefusesGroupWritableInstallationAncestor(t *testing.T) {
 func TestHostRuntimeUsesSafeInstalledAlternativeAfterSharedWritableCandidate(t *testing.T) {
 	f := &hostRuntimeFixtureFS{nodes: map[string]hostRuntimeNode{}, importsByPath: map[string]hostMachOImports{}}
 	for _, p := range []string{
-		"/opt", "/opt/homebrew", "/opt/homebrew/bin", "/opt/homebrew/Cellar", "/opt/homebrew/Cellar/git", "/opt/homebrew/Cellar/git/1", "/opt/homebrew/Cellar/git/1/bin",
+		"/opt", "/opt/homebrew", "/opt/homebrew/bin", "/opt/homebrew/Cellar", "/opt/homebrew/Cellar/git", "/opt/homebrew/Cellar/git/1", "/opt/homebrew/Cellar/git/1/bin", "/opt/homebrew/Cellar/git/1/libexec", "/opt/homebrew/Cellar/git/1/libexec/git-core", "/opt/homebrew/Cellar/git/1/share", "/opt/homebrew/Cellar/git/1/share/git-core", "/opt/homebrew/Cellar/git/1/share/git-core/templates",
 		"/Library", "/Library/Developer", "/Library/Developer/CommandLineTools", "/Library/Developer/CommandLineTools/usr", "/Library/Developer/CommandLineTools/usr/bin", "/Library/Developer/CommandLineTools/usr/libexec", "/Library/Developer/CommandLineTools/usr/libexec/git-core", "/Library/Developer/CommandLineTools/usr/share", "/Library/Developer/CommandLineTools/usr/share/git-core", "/Library/Developer/CommandLineTools/usr/share/git-core/templates",
 	} {
 		f.nodes[p] = fixtureRuntimeNode(p, "directory", os.ModeDir|0755)
 	}
-	n := f.nodes["/opt/homebrew/bin"]
+	n := f.nodes["/Library/Developer/CommandLineTools/usr/bin"]
 	n.Mode = os.ModeDir | 0775
 	f.nodes[n.Path] = n
 	brew := "/opt/homebrew/Cellar/git/1/bin/git"
 	f.nodes[brew] = fixtureRuntimeNode(brew, "file", 0555)
+	f.importsByPath[brew] = hostMachOImports{fileType: 2}
 	alias := fixtureRuntimeNode("/opt/homebrew/bin/git", "alias", os.ModeSymlink|0777)
 	alias.LinkTarget = brew
 	f.nodes[alias.Path] = alias
@@ -190,13 +202,40 @@ func TestHostRuntimeUsesSafeInstalledAlternativeAfterSharedWritableCandidate(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(p.frozen.ExecFiles, []string{apple}) || slices.Contains(p.frozen.Path, "/opt/homebrew/bin") {
+	if !slices.Contains(f.reads, filepath.Dir(apple)) || !slices.Equal(p.frozen.ExecFiles, []string{brew}) || slices.Contains(p.frozen.Path, filepath.Dir(apple)) {
 		t.Fatalf("untrusted candidate was granted or safe candidate was lost: %+v", p.frozen)
 	}
 	for _, unavailable := range p.frozen.Unavailable {
 		if unavailable.Kind == "git" {
 			t.Fatal("safe alternative was reported unavailable")
 		}
+	}
+}
+func TestHostRuntimeSelectsQualifiedCLTBeforeQualifiedHomebrew(t *testing.T) {
+	f := &hostRuntimeFixtureFS{nodes: map[string]hostRuntimeNode{}, importsByPath: map[string]hostMachOImports{}}
+	brewRoot := "/opt/homebrew/Cellar/git/1"
+	cltRoot := "/Library/Developer/CommandLineTools/usr"
+	for _, p := range []string{
+		"/opt", "/opt/homebrew", "/opt/homebrew/bin", "/opt/homebrew/Cellar", "/opt/homebrew/Cellar/git", brewRoot, brewRoot + "/bin", brewRoot + "/libexec", brewRoot + "/libexec/git-core", brewRoot + "/share", brewRoot + "/share/git-core", brewRoot + "/share/git-core/templates",
+		"/Library", "/Library/Developer", "/Library/Developer/CommandLineTools", cltRoot, cltRoot + "/bin", cltRoot + "/libexec", cltRoot + "/libexec/git-core", cltRoot + "/share", cltRoot + "/share/git-core", cltRoot + "/share/git-core/templates",
+	} {
+		f.nodes[p] = fixtureRuntimeNode(p, "directory", os.ModeDir|0755)
+	}
+	clt := cltRoot + "/bin/git"
+	brew := brewRoot + "/bin/git"
+	f.nodes[clt] = fixtureRuntimeNode(clt, "file", 0555)
+	f.nodes[brew] = fixtureRuntimeNode(brew, "file", 0555)
+	f.importsByPath[clt] = hostMachOImports{fileType: 2}
+	f.importsByPath[brew] = hostMachOImports{fileType: 2}
+	alias := fixtureRuntimeNode("/opt/homebrew/bin/git", "alias", os.ModeSymlink|0777)
+	alias.LinkTarget = brew
+	f.nodes[alias.Path] = alias
+	p, err := discoverHostRuntime(context.Background(), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(p.frozen.ExecFiles, []string{clt}) || slices.Contains(p.frozen.Path, brewRoot+"/bin") {
+		t.Fatalf("qualified Homebrew Git won over qualified CLT Git: %+v", p.frozen)
 	}
 }
 func TestHostRuntimeRejectsSharedWritablePythonBeforeUnsupportedAlternative(t *testing.T) {

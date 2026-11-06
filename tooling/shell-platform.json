@@ -1,6 +1,6 @@
 {
   "schema": "farol-shell-platform/1",
-  "id": "macos-26A434-arm64-installed-runtime-v20",
+  "id": "macos-26A434-arm64-installed-runtime-v21",
   "osBuild": "26A434",
   "compiler": "approved-roots-seatbelt-v1",
   "filesystemClass": "system-apfs-kernel-mount-boundaries-v1",
@@ -65,7 +65,7 @@
     },
     {
       "path": "modules/computer/infra/process/hostruntime.go",
-      "sha256": "15ebaff32ad9ed69b4db5d6e1613231e7438df53986fed7975a8e9e5b12c47b3"
+      "sha256": "f2eb7baa4dc379504f028481a050b05eddc72f21edee271e747467235c06d464"
     },
     {
       "path": "modules/computer/infra/process/hostruntimedarwin.go",
