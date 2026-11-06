@@ -81,7 +81,7 @@ const lifetime=api.createDesktopHelperLifetime(); if(!lifetime.available())throw
 const out=fs.openSync(path.join(root,'terminal.json'),'wx',0o600), err=fs.openSync(path.join(root,'helper.stderr'),'wx',0o600);
 const child=require('node:child_process').spawn(plan.binary,['run-live-release-helper'],{cwd:'/',env:{PATH:'/usr/bin:/bin',LANG:'C.UTF-8'},detached:true,stdio:['ignore',out,err,'pipe','pipe']});
 fs.closeSync(out);fs.closeSync(err);child.unref();
-const helper={pid:child.pid,processStart:await api.captureInstalledProcessStart(child.pid)};
+const helper={pid:child.pid,processStart:execFileSync('/bin/ps',['-p',String(child.pid),'-o','lstart='],{encoding:'utf8',env:{PATH:'/usr/bin:/bin',LC_ALL:'C'}}).trim()};
 fs.writeFileSync(path.join(root,'helper.json'),JSON.stringify(helper),{mode:0o600});
 await lifetime.retain(plan.request,helper,Date.now()+15000);
 child.stdio[3].end(JSON.stringify(plan.request)+'\n');
