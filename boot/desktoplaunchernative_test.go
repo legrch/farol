@@ -4,13 +4,19 @@ package boot
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+	"unicode/utf16"
 
 	inputapp "github.com/legrch/farol/modules/release/app/services/helperinput"
 	protocolapp "github.com/legrch/farol/modules/release/app/services/helperprotocol"
@@ -23,8 +29,8 @@ import (
 // Electron uses the built production lifetime-channel adapter and the real
 // fd3/4 protocol to dispatch the Go live helper. Its explicitly bound home and
 // app trees are disposable; the desktop adapter's OS-home selection is not used.
-// No window, owner state, shared slot, target relaunch or package acceptance.
-func TestDesktopLauncherNativeLiveHelperSurvivesDesktopQuit(t *testing.T) {
+// No window, owner state, shared slot or package acceptance.
+func TestDesktopLauncherNativeRelaunchAfterHelper(t *testing.T) {
 	if os.Getenv("FAROL_DESKTOP_LAUNCHER_NATIVE") != "1" {
 		t.Skip("explicit hidden LaunchServices lane required")
 	}
@@ -97,8 +103,9 @@ fs.writeFileSync(path.join(root,'desktop.json'),JSON.stringify({pid:process.pid,
 	if err := os.WriteFile(filepath.Join(resources, "index.cjs"), []byte(script), 0600); err != nil {
 		t.Fatal(err)
 	}
-	// -g starts this completely hidden fixture without activating another app.
-	// It deliberately does not qualify the production relaunch argv contract.
+	targetDigest := desktopWitnessTarget(t, f, electron)
+	// -g starts the old fixture hidden. The helper's later launch uses the
+	// production relaunch arguments and the newly installed canonical slot.
 	if output, err := exec.Command("/usr/bin/open", "-g", "-a", app).CombinedOutput(); err != nil {
 		t.Fatalf("fixture open: %v %s", err, output)
 	}
@@ -107,7 +114,7 @@ fs.writeFileSync(path.join(root,'desktop.json'),JSON.stringify({pid:process.pid,
 		Start  string `json:"start"`
 		Parent int    `json:"parent"`
 	}
-	until := time.Now().Add(30 * time.Second)
+	until := time.Now().Add(90 * time.Second)
 	waitFile := func(name string) []byte {
 		t.Helper()
 		for time.Now().Before(until) {
@@ -151,8 +158,9 @@ fs.writeFileSync(path.join(root,'desktop.json'),JSON.stringify({pid:process.pid,
 	if err := os.WriteFile(filepath.Join(f.statePath, "running.json"), marker, 0600); err != nil {
 		t.Fatal(err)
 	}
-	request := f.request("apply", false)
-	request["waitSeconds"] = 15
+	request := f.request("apply", true)
+	request["target"].(map[string]any)["digest"] = targetDigest
+	request["waitSeconds"] = 90
 	protocol, err := protocolapp.Bind(context.Background(), closedHelperJSON(t, request), inputapp.New(inputnative.JSONDecoder{}), protocolnative.JSONCodec{})
 	if err != nil {
 		t.Fatal(err)
@@ -187,19 +195,165 @@ fs.writeFileSync(path.join(root,'desktop.json'),JSON.stringify({pid:process.pid,
 	if !strings.Contains(log, "desktop_launcher_helper_exit") || !strings.Contains(log, "waitStatus=0") || !strings.Contains(log, "desktop_launcher_desktop_exit") {
 		t.Fatal("original helper terminal missing: ", log)
 	}
-	if f.phase(t) != "verified" {
-		t.Fatal("real helper did not verify disposable apply")
+	if f.phase(t) != "completed" {
+		t.Fatal("real helper did not complete disposable relaunch")
 	}
-	if !strings.Contains(execNativeRead(t, filepath.Join(f.dir, "terminal.json")), `"phase": "verified"`) {
-		t.Fatal("real helper terminal did not verify")
+	if !strings.Contains(execNativeRead(t, filepath.Join(f.dir, "terminal.json")), `"phase": "completed"`) {
+		t.Fatal("real helper terminal did not complete")
 	}
-	if execNativeRead(t, filepath.Join(f.home, "Applications/Farol.app/Contents/Info.plist")) != execNativeTestdata(t, "oracle.bplist") {
+	if !strings.Contains(execNativeRead(t, filepath.Join(f.home, "Applications/Farol.app/Contents/Info.plist")), "<string>io.github.legrch.farol</string>") {
 		t.Fatal("target not installed")
 	}
-	t.Logf("original guardian=%d desktop=%d: %s", desktop.Parent, desktop.PID, log)
-	// Root exited only after original helper terminal; its single child was
-	// reaped inside the production loop. This fixture has no successor process.
+	var successor struct {
+		PID, Parent           int
+		Exe, AppPath, Version string
+		Argv                  []string
+	}
+	if err := json.Unmarshal(waitFile("successor.json"), &successor); err != nil || successor.PID <= 1 || successor.Parent <= 1 || successor.PID == desktop.PID || successor.Parent == desktop.Parent || successor.Version != "1.2.3" || !strings.Contains(successor.Exe, filepath.Join(f.home, "Applications/Farol.app/Contents/Frameworks/Electron Runtime.app/")) || successor.AppPath != filepath.Join(f.home, "Applications/Farol.app/Contents/Resources/app") {
+		t.Fatalf("canonical successor identity invalid: %+v %v; retain %s", successor, err, f.dir)
+	}
+	if len(successor.Argv) == 0 || !strings.HasPrefix(successor.Argv[len(successor.Argv)-1], "--farol-installed-update-relaunch=") {
+		t.Fatal("successor did not receive correlated launch hint")
+	}
+	change = unix.Kevent_t{Ident: uint64(successor.Parent), Filter: unix.EVFILT_PROC, Flags: unix.EV_ADD | unix.EV_ONESHOT | unix.EV_RECEIPT, Fflags: unix.NOTE_EXIT | unix.NOTE_EXITSTATUS | unix.NOTE_EXIT_DETAIL}
+	n, err = unix.Kevent(queue, []unix.Kevent_t{change}, receipt[:], nil)
+	if err != nil || n != 1 || receipt[0].Data != 0 {
+		t.Fatalf("successor guardian observation unavailable: %v; retain %s", err, f.dir)
+	}
+	if err := os.WriteFile(filepath.Join(f.dir, "successor.quit"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("original guardian=%d desktop=%d successor guardian=%d desktop=%d: %s", desktop.Parent, desktop.PID, successor.Parent, successor.PID, log)
+	// The test-owned successor must leave normally before its disposable tree
+	// is removed; no production process or profile was used.
+	timeout = unix.NsecToTimespec(int64((10 * time.Second)))
+	n, err = unix.Kevent(queue, nil, events[:], &timeout)
+	if err != nil || n != 1 || events[0].Fflags&unix.NOTE_EXIT == 0 || events[0].Data != 0 {
+		t.Fatalf("successor guardian terminal missing/nonzero: %d %v %+v; retain %s", n, err, events, f.dir)
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, "successor-timeout")); err == nil {
+		t.Fatalf("successor timed out; retain %s", f.dir)
+	}
 	if err := os.RemoveAll(f.dir); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// The target is a runnable, disposable image in the admitted owner-home slot.
+// The original desktop above is registered under a distinct fixture bundle ID.
+// This target retains the production bundle identity checks and a real nested
+// Electron runtime; it is never copied into the owner's /Applications.
+func desktopWitnessTarget(t *testing.T, f *liveNativeFixture, electron string) string {
+	t.Helper()
+	stage := filepath.Join(f.operation, "staged.app")
+	if err := os.RemoveAll(stage); err != nil {
+		t.Fatal(err)
+	}
+	resources := filepath.Join(stage, "Contents", "Resources", "app")
+	frameworks := filepath.Join(stage, "Contents", "Frameworks")
+	if err := os.MkdirAll(filepath.Join(stage, "Contents", "MacOS"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(resources, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(frameworks, 0755); err != nil {
+		t.Fatal(err)
+	}
+	runtimeApp := filepath.Dir(filepath.Dir(filepath.Dir(electron)))
+	if out, err := exec.Command("/usr/bin/ditto", runtimeApp, filepath.Join(frameworks, "Electron Runtime.app")).CombinedOutput(); err != nil {
+		t.Fatalf("copy fixture runtime: %v %s", err, out)
+	}
+	backend := execNativeCompiled(t)
+	if out, err := exec.Command("/usr/bin/ditto", backend, filepath.Join(resources, "farol-backend")).CombinedOutput(); err != nil {
+		t.Fatalf("copy fixture backend: %v %s", err, out)
+	}
+	plist := `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Farol</string><key>CFBundleIdentifier</key><string>io.github.legrch.farol</string><key>CFBundleName</key><string>Farol</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>1.2.3</string><key>CFBundleVersion</key><string>1</string></dict></plist>`
+	launcher := "#!/bin/sh\nexec \"" + filepath.Join(resources, "farol-backend") + "\" run-desktop-launcher 2>\"" + filepath.Join(f.dir, "successor-guardian.log") + "\"\n"
+	const successor = `const {app}=require('electron');const fs=require('node:fs');const path=require('node:path');
+const root=ROOT;app.setPath('userData',path.join(root,'successor-profile'));
+app.whenReady().then(()=>{app.dock?.hide();
+const evidence={pid:process.pid,parent:process.ppid,exe:process.execPath,appPath:app.getAppPath(),version:app.getVersion(),argv:process.argv.slice(1)};
+fs.writeFileSync(path.join(root,'successor.json'),JSON.stringify(evidence),{flag:'wx',mode:0o600});
+const watcher=fs.watch(root,()=>{if(fs.existsSync(path.join(root,'successor.quit'))){watcher.close();app.quit();}});
+setTimeout(()=>{fs.writeFileSync(path.join(root,'successor-timeout'),'fixture timeout');app.exit(79);},20000).unref();
+});`
+	files := map[string]string{
+		filepath.Join(stage, "Contents", "Info.plist"):     plist,
+		filepath.Join(stage, "Contents", "MacOS", "Farol"): launcher,
+		filepath.Join(resources, "build-identity.json"):    execNativeTestdata(t, "oracle.json"),
+		filepath.Join(resources, "package.json"):           `{"name":"farol-lifetime-successor","main":"index.cjs"}`,
+		filepath.Join(resources, "index.cjs"):              strings.ReplaceAll(successor, "ROOT", string(closedHelperJSON(t, f.dir))),
+	}
+	for path, data := range files {
+		mode := os.FileMode(0644)
+		if strings.HasSuffix(path, "/MacOS/Farol") {
+			mode = 0755
+		}
+		if err := os.WriteFile(path, []byte(data), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return desktopWitnessDigest(t, stage)
+}
+
+func desktopWitnessDigest(t *testing.T, root string) string {
+	t.Helper()
+	h := sha256.New()
+	_, _ = h.Write([]byte("farol.tree-digest/v2\x00"))
+	put32 := func(n int) { var b [4]byte; binary.BigEndian.PutUint32(b[:], uint32(n)); _, _ = h.Write(b[:]) }
+	var walk func(string, string)
+	walk = func(dir, prefix string) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sort.Slice(entries, func(i, j int) bool {
+			a, b := utf16.Encode([]rune(entries[i].Name())), utf16.Encode([]rune(entries[j].Name()))
+			for k := 0; k < len(a) && k < len(b); k++ {
+				if a[k] != b[k] {
+					return a[k] < b[k]
+				}
+			}
+			return len(a) < len(b)
+		})
+		for _, entry := range entries {
+			name := prefix + entry.Name()
+			p := filepath.Join(dir, entry.Name())
+			var st syscall.Stat_t
+			if err := syscall.Lstat(p, &st); err != nil {
+				t.Fatal(err)
+			}
+			put32(len([]byte(name)))
+			_, _ = h.Write([]byte(name))
+			switch st.Mode & syscall.S_IFMT {
+			case syscall.S_IFDIR:
+				_, _ = h.Write([]byte{'d'})
+				put32(int(st.Mode & 07777))
+				walk(p, name+"/")
+			case syscall.S_IFREG:
+				_, _ = h.Write([]byte{'f'})
+				put32(int(st.Mode & 07777))
+				data, err := os.ReadFile(p)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sum := sha256.Sum256(data)
+				_, _ = h.Write(sum[:])
+			case syscall.S_IFLNK:
+				_, _ = h.Write([]byte{'l'})
+				put32(int(st.Mode & 07777))
+				link, err := os.Readlink(p)
+				if err != nil {
+					t.Fatal(err)
+				}
+				put32(len([]byte(link)))
+				_, _ = h.Write([]byte(link))
+			default:
+				t.Fatalf("unsupported staged object: %s", p)
+			}
+		}
+	}
+	walk(root, "")
+	return hex.EncodeToString(h.Sum(nil))
 }
