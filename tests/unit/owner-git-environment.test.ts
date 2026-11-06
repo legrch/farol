@@ -205,6 +205,36 @@ it("skips a dangling alias and an owner-nonexecutable file before selecting Git"
   expect(next.status().gitAlias).toBe(selected);
 });
 
+it("refuses an uninspectable first Git without selecting a later PATH entry", async () => {
+  const root = mkdtempSync(
+    path.join(os.tmpdir(), "farol-owner-git-unreadable-"),
+  );
+  created.push(root);
+  const first = path.join(root, "first");
+  const second = path.join(root, "second");
+  mkdirSync(first);
+  mkdirSync(second);
+  writeFileSync(path.join(second, "git"), "#!/bin/sh\nexit 0\n", {
+    mode: 0o755,
+  });
+  const owner = new OwnerGitChoice(root, async (generation) => ({
+    path: `${first}:${second}`,
+    source: "desktop-login-shell",
+    capturedAt: new Date().toISOString(),
+    generation,
+  }));
+  chmodSync(first, 0o000);
+  try {
+    await expect(owner.refreshFromOwner()).rejects.toThrow(
+      "GIT_CHOICE_INVALID",
+    );
+    expect(owner.status().gitAlias).toBeNull();
+    expect(owner.status().failure).toBe("GIT_CHOICE_INVALID");
+  } finally {
+    chmodSync(first, 0o700);
+  }
+});
+
 it("does not reissue an uncertain account-shell capture", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "farol-owner-git-unknown-"));
   created.push(root);

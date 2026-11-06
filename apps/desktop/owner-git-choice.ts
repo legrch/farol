@@ -161,12 +161,13 @@ export class OwnerGitChoice {
       throw error;
     }
     this.environment = captured;
-    const selected = this.status().gitAlias;
-    if (!selected) {
+    const selection = this.status();
+    if (!selection.gitAlias) {
       this.environment = previous;
-      throw new Error("GIT_NOT_FOUND");
+      this.failure = selection.failure ?? "GIT_NOT_FOUND";
+      throw new Error(this.failure);
     }
-    this.save({ schema: 1, enabled: true, override: selected });
+    this.save({ schema: 1, enabled: true, override: selection.gitAlias });
     this.failure = null;
     this.pendingRestart = true;
   }
@@ -192,13 +193,14 @@ export class OwnerGitChoice {
   }> {
     let gitAlias: string | null = null;
     let gitPhysical: string | null = null;
+    let selectionFailure: string | null = null;
     for (const dir of this.environment?.path.split(":") ?? []) {
       const candidate = path.join(dir, "git");
       try {
         lstatSync(candidate);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-        gitAlias = candidate;
+        selectionFailure = "GIT_CHOICE_INVALID";
         break;
       }
       gitAlias = candidate;
@@ -231,6 +233,8 @@ export class OwnerGitChoice {
         }
         // An existing but unreadable first candidate is a refusal, never a
         // reason to display another Git farther down the PATH.
+        gitAlias = null;
+        selectionFailure = "GIT_CHOICE_INVALID";
         break;
       }
     }
@@ -239,7 +243,7 @@ export class OwnerGitChoice {
       gitAlias,
       gitPhysical,
       source: this.environment?.source ?? null,
-      failure: this.failure,
+      failure: selectionFailure ?? this.failure,
       pendingRestart: this.pendingRestart,
     };
   }
