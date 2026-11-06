@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -491,7 +497,10 @@ test("isolated occupied slot is refused before download or replacement", () => {
   isolatedInstall("occupied", (result, root, log) => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /Farol is already installed/);
-    assert.equal(readFileSync(path.join(root, "Applications/Farol.app/old"), "utf8"), "old");
+    assert.equal(
+      readFileSync(path.join(root, "Applications/Farol.app/old"), "utf8"),
+      "old",
+    );
     assert.equal(log, "");
   });
 });
@@ -502,11 +511,15 @@ function isolatedInstall(scenario, callback) {
     prepare(root, scenario === "bad-tree" ? "extra-file" : "valid");
     const prep = spawnSync("/bin/mkdir", [
       "-p",
-      path.join(root, scenario === "occupied" ? "Applications/Farol.app" : "Applications"),
+      path.join(
+        root,
+        scenario === "occupied" ? "Applications/Farol.app" : "Applications",
+      ),
       path.join(root, "bin"),
     ]);
     assert.equal(prep.status, 0);
-    if (scenario === "occupied") writeFileSync(path.join(root, "Applications/Farol.app/old"), "old");
+    if (scenario === "occupied")
+      writeFileSync(path.join(root, "Applications/Farol.app/old"), "old");
     if (
       [
         "stubborn",
