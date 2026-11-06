@@ -38,6 +38,9 @@ export class OwnerGitChoice {
   private generation = 0;
   private pendingRestart = false;
   private uncertainCapture: string | null = null;
+  private activeCapture: Promise<boolean> | null = null;
+  private closing = false;
+  private unconfirmedCapture = false;
 
   constructor(
     userData: string,
@@ -66,7 +69,8 @@ export class OwnerGitChoice {
         ((parsed as Preference).override !== null &&
           (typeof (parsed as Preference).override !== "string" ||
             !path.isAbsolute((parsed as Preference).override!) ||
-            path.basename((parsed as Preference).override!) !== "git"))
+            path.basename((parsed as Preference).override!) !== "git" ||
+            (parsed as Preference).override!.includes("\\")))
       )
         return defaultPreference;
       return parsed as Preference;
@@ -114,7 +118,7 @@ export class OwnerGitChoice {
       !path.isAbsolute(file) ||
       path.normalize(file) !== file ||
       path.basename(file) !== "git" ||
-      /[\u0000-\u001f\u007f:]/u.test(file)
+      /[\u0000-\u001f\u007f:\\]/u.test(file)
     )
       throw new Error("GIT_SHIM_UNSUPPORTED");
     return {
@@ -146,20 +150,36 @@ export class OwnerGitChoice {
   }
 
   async refreshFromOwner(): Promise<void> {
+    if (this.closing || this.activeCapture)
+      throw new Error("GIT_CHOICE_UNAVAILABLE");
     if (this.pendingRestart) throw new Error("GIT_RESTART_REQUIRED");
     if (this.uncertainCapture) throw new Error(this.uncertainCapture);
     const previous = this.environment;
     let captured: OwnerGitEnvironment;
+    const capture = this.capturePath(++this.generation);
+    // Quit owns the same attempt until the shell has actually closed. A
+    // rejected or unconfirmed capture must not yield a drained quit receipt.
+    this.activeCapture = capture.then(
+      () => true,
+      () => false,
+    );
     try {
-      captured = await this.capturePath(++this.generation);
+      captured = await capture;
     } catch (error) {
       const code =
         error instanceof Error ? error.message : "SHELL_ENV_OUTCOME_UNKNOWN";
       this.failure = code;
-      if (code === "SHELL_ENV_TIMEOUT" || code === "SHELL_ENV_OUTCOME_UNKNOWN")
+      if (
+        code === "SHELL_ENV_TIMEOUT" ||
+        code === "SHELL_ENV_OUTCOME_UNKNOWN"
+      ) {
         this.uncertainCapture = code;
+        this.unconfirmedCapture = true;
+      }
+      this.activeCapture = null;
       throw error;
     }
+    if (this.closing) throw new Error("GIT_CHOICE_UNAVAILABLE");
     this.environment = captured;
     const selection = this.status();
     if (!selection.gitAlias) {
@@ -170,9 +190,19 @@ export class OwnerGitChoice {
     this.save({ schema: 1, enabled: true, override: selection.gitAlias });
     this.failure = null;
     this.pendingRestart = true;
+    this.activeCapture = null;
+  }
+
+  async close(): Promise<void> {
+    this.closing = true;
+    const capture = this.activeCapture;
+    if (capture && !(await capture))
+      throw new Error("SHELL_ENV_OUTCOME_UNKNOWN");
+    if (this.unconfirmedCapture) throw new Error("SHELL_ENV_OUTCOME_UNKNOWN");
   }
 
   selectOverrideFromOwner(file: string): void {
+    if (this.closing) throw new Error("GIT_CHOICE_UNAVAILABLE");
     this.environment = this.selectedOverride(file);
     this.save({ schema: 1, enabled: true, override: file });
     this.failure = null;

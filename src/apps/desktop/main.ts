@@ -13717,6 +13717,10 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     collect: (context) => {
       const closers: OwnedCloser[] = [
         {
+          name: "owner-git-environment",
+          close: () => ownerGitChoice?.close() ?? Promise.resolve(),
+        },
+        {
           name: "installed-updater",
           close: async () => {
             await installedUpdater?.close();

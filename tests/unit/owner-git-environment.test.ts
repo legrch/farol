@@ -127,6 +127,75 @@ it("persists only explicit owner Git choice and never a captured PATH", async ()
   ).toThrow();
 });
 
+it("holds Quit through a running owner PATH capture and fences late selection", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "farol-git-quit-"));
+  created.push(root);
+  let finish!: (
+    value: Awaited<ReturnType<typeof captureOwnerGitEnvironment>>,
+  ) => void;
+  const owner = new OwnerGitChoice(
+    root,
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const refresh = owner.refreshFromOwner();
+  let drained = false;
+  const closing = owner.close().then(() => {
+    drained = true;
+  });
+  await Promise.resolve();
+  expect(drained).toBe(false);
+  finish({
+    path: "/usr/bin",
+    source: "desktop-login-shell",
+    capturedAt: new Date().toISOString(),
+    generation: 1,
+  });
+  await expect(refresh).rejects.toThrow("GIT_CHOICE_UNAVAILABLE");
+  await closing;
+  expect(drained).toBe(true);
+  expect(() => owner.selectOverrideFromOwner("/usr/bin/git")).toThrow(
+    "GIT_CHOICE_UNAVAILABLE",
+  );
+  expect(() =>
+    readFileSync(path.join(root, "owner-git-choice.json")),
+  ).toThrow();
+});
+
+it("does not report a clean Quit after an uncertain owner PATH capture", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "farol-git-unknown-quit-"));
+  created.push(root);
+  let fail!: (error: Error) => void;
+  const owner = new OwnerGitChoice(
+    root,
+    () =>
+      new Promise((_, reject) => {
+        fail = reject;
+      }),
+  );
+  const refresh = owner.refreshFromOwner();
+  const closing = owner.close();
+  fail(new OwnerGitEnvironmentError("SHELL_ENV_OUTCOME_UNKNOWN"));
+  await expect(refresh).rejects.toMatchObject({
+    code: "SHELL_ENV_OUTCOME_UNKNOWN",
+  });
+  await expect(closing).rejects.toThrow("SHELL_ENV_OUTCOME_UNKNOWN");
+});
+
+it("rejects a Git path that Go cannot represent before saving preference", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "farol-git-path-"));
+  created.push(root);
+  const owner = new OwnerGitChoice(root);
+  expect(() => owner.selectOverrideFromOwner("/tmp/with\\slash/git")).toThrow(
+    "GIT_SHIM_UNSUPPORTED",
+  );
+  expect(() =>
+    readFileSync(path.join(root, "owner-git-choice.json")),
+  ).toThrow();
+});
+
 it("does not run the account shell at startup and saves only the clicked PATH selection", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "farol-owner-git-click-"));
   created.push(root);
