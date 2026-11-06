@@ -79,6 +79,17 @@ it("unsupported account shell and bounded timeout do not select another Git", as
   ).rejects.toMatchObject({ code: "SHELL_ENV_TIMEOUT" });
 });
 
+it("confirms the process group is gone before accepting a shell result", async () => {
+  const result = await ownedProcess(
+    "/bin/sh",
+    ["-c", "sleep 10 </dev/null >/dev/null 2>&1 & printf ready"],
+    os.tmpdir(),
+    { PATH: "/usr/bin:/bin" },
+    Date.now() + 5_000,
+  );
+  expect(result.toString()).toBe("ready");
+});
+
 it("accepts one nonce-bound PATH frame with harmless shell chatter", () => {
   const nonce = "a".repeat(32);
   const raw = Buffer.from(

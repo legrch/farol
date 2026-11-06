@@ -92,26 +92,46 @@ export async function ownedProcess(
       clearTimeout(timer);
       if (waitDeadline) clearTimeout(waitDeadline);
       if (settled) return;
-      // Startup files can launch descendants. The PATH snapshot never owns a
-      // background service, even when the account shell exits successfully.
+      // A shell may have left children in its process group after closing its
+      // own pipes. A signal alone is not evidence that those children exited.
       if (child.pid) {
         try {
-          process.kill(-child.pid, "SIGTERM");
+          process.kill(-child.pid, "SIGKILL");
         } catch {
           /* no descendants */
         }
       }
-      if (timedOut) return fail("SHELL_ENV_TIMEOUT");
-      if (
-        stopped ||
-        code !== 0 ||
-        signal ||
-        outputSize > OUTPUT_LIMIT ||
-        stderrSize > OUTPUT_LIMIT
-      )
-        return fail("SHELL_ENV_OUTCOME_UNKNOWN");
-      settled = true;
-      resolve(Buffer.concat(stdout));
+      const groupGone = () => {
+        if (!child.pid) return false;
+        try {
+          process.kill(-child.pid, 0);
+          return false;
+        } catch (error) {
+          return (error as NodeJS.ErrnoException).code === "ESRCH";
+        }
+      };
+      const finish = () => {
+        if (timedOut) return fail("SHELL_ENV_TIMEOUT");
+        if (
+          stopped ||
+          code !== 0 ||
+          signal ||
+          outputSize > OUTPUT_LIMIT ||
+          stderrSize > OUTPUT_LIMIT
+        )
+          return fail("SHELL_ENV_OUTCOME_UNKNOWN");
+        settled = true;
+        resolve(Buffer.concat(stdout));
+      };
+      if (groupGone()) return finish();
+      const groupDeadline = Date.now() + 2_000;
+      const checkGroup = () => {
+        if (groupGone()) return finish();
+        if (Date.now() >= groupDeadline)
+          return fail("SHELL_ENV_OUTCOME_UNKNOWN");
+        waitDeadline = setTimeout(checkGroup, 25);
+      };
+      waitDeadline = setTimeout(checkGroup, 25);
     });
   });
 }
