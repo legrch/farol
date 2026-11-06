@@ -414,7 +414,7 @@ describe("workspace shell authority", () => {
     expect(deadlines[1]).toBeGreaterThan(deadlines[0]!);
   });
 
-  it("stops an admitted shell on current owner revocation without overstating cleanup", async () => {
+  it("stops an admitted shell on current owner revocation while retaining cleanup proof", async () => {
     const { root, approval, participant } = await fixture();
     let current = true;
     const renewed = new SandboxedWorkspaceShell(
@@ -461,13 +461,10 @@ describe("workspace shell authority", () => {
       ok: false,
       error: { code: "SHELL_AUTHORITY_REVOKED", retry: "never" },
     });
-    const stopped = await complete(renewed, started.value.handle);
-    expect(stopped.authorityExpired).toBe(true);
-    expect(stopped.state).toBe("exited");
-    expect(["confirmed", "unverified"]).toContain(stopped.groupCleanup);
-    if (stopped.groupCleanup === "unverified") {
-      expect(stopped.errorCode).not.toBeNull();
-    }
+    expect(await complete(renewed, started.value.handle)).toMatchObject({
+      authorityExpired: true,
+      groupCleanup: "confirmed",
+    });
   });
 
   it("rejects a cancelled call before reserving or starting an operation", async () => {
