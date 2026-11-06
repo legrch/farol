@@ -28,7 +28,7 @@ Pipeline:
 
 ## Reader placement
 
-The repository README uses a static light workspace preview and its optional collapsed animation. The Start index routes new readers to installation status and the connection guide. `walkthrough.md` contains the eight expanded written procedures, static alternatives and optional animations; the user guides explain everyday permissions and best practices. Keep the reproduction scripts and license notices beside these media assets. Do not autoplay eight GIFs on the main page or use the setup series as evidence of installation acceptance.
+The repository README presents a static light-theme workflow preview with an optional collapsed animation. The product overview also starts with a static read-only preview, followed by optional collapsed read-only and edit animations. The Start index routes new readers to installation status and the connection guide. `walkthrough.md` contains the eight expanded written procedures, static alternatives and optional animations; the user guides explain everyday permissions and best practices. Keep the reproduction scripts and license notices beside these media assets. Do not autoplay eight GIFs on the main page or use the setup series as evidence of installation acceptance.
 
 ## Tutorials
 
@@ -67,8 +67,8 @@ The two bundled fonts are unmodified Liberation Sans files under SIL OFL 1.1. Th
 
 Earlier preview packages are not the publication source. Use this package, which replaces their font assets and includes the complete light series.
 
-## Integration in PR #121
+## Repository integration
 
-Suggested destination: `docs/media/onboarding/` with this directory's contents. Keep `source/`, `licenses/`, build/verification scripts, requirements, notices, output GIF/PNG files, and validation files. The generated `captures/` and HTML/CSS intermediates do not need to be committed. The `.gitignore` lists them.
+This package lives in `docs/media/onboarding/` alongside the separate workflow illustrations in `docs/media/workflow/`. Keep `source/`, `licenses/`, build/verification scripts, requirements, notices, output GIF/PNG files, and validation files. The generated `captures/` and HTML/CSS intermediates do not need to be committed. The `.gitignore` lists them.
 
-Update the existing PR/README language to describe the current Read only default. Do not replace unrelated README content, change runtime behavior, create releases, or imply that live acceptance tests passed. No publication or push is performed by the build scripts.
+Keep the README and guide language aligned with the current Read only default. Do not replace unrelated README content, change runtime behavior, create releases, or imply that live acceptance tests passed. No publication or push is performed by the build scripts.

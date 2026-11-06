@@ -8,7 +8,16 @@ Find information in local files, understand a project, and make requested edits 
 
 [What Farol does](docs/start/overview.md) · [Installation](#download-and-installation) · [Setup guide](docs/start/first-connection.md) · [Best practices](docs/guides/best-practices.md)
 
-![ChatGPT requests a specific edit through an OpenAI Tunnel and Farol inside a selected Read & write workspace](docs/media/workflow/output/Farol-read-and-edit-light.gif)
+![ChatGPT requests a specific edit through an OpenAI Tunnel and Farol inside a selected Read & write workspace](docs/media/workflow/output/Farol-read-and-edit-light.png)
+
+<details>
+<summary>Watch the 15-second workflow animation</summary>
+
+![A requested edit travels through OpenAI Tunnel and Farol to a selected workspace](docs/media/workflow/output/Farol-read-and-edit-light.gif)
+
+Close this section to hide the animation.
+
+</details>
 
 [Static illustration](docs/media/workflow/output/Farol-read-and-edit-light.png) · [How it works](docs/start/overview.md) · [Step-by-step setup](docs/media/onboarding/walkthrough.md)
 

@@ -4,7 +4,16 @@ Farol connects selected folders on your Mac to ChatGPT through a Secure MCP Tunn
 
 ## Watch the workflow
 
-![A read-only request travels from ChatGPT through an OpenAI Tunnel to Farol and a selected folder](../media/workflow/output/Farol-how-it-works-light.gif)
+![A read-only request travels from ChatGPT through an OpenAI Tunnel to Farol and a selected folder](../media/workflow/output/Farol-how-it-works-light.png)
+
+<details>
+<summary>Watch the 15-second read-only workflow</summary>
+
+![Read a selected file and return its contents to ChatGPT](../media/workflow/output/Farol-how-it-works-light.gif)
+
+Close this section to hide the animation.
+
+</details>
 
 [Static read-only illustration](../media/workflow/output/Farol-how-it-works-light.png) · [Animation source and rebuild](../media/workflow/README.md)
 
