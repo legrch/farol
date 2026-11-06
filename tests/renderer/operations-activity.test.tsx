@@ -496,7 +496,7 @@ it("filters shared operations, expands metadata and links attention to the unres
     expect(host.querySelectorAll(".operation-row")).toHaveLength(3);
     expect(host.querySelector("summary")?.textContent).toContain("model turn");
     expect(host.querySelector(".activity-status-slot")?.textContent).toBe(
-      "Some activity may be missing. See log details below.",
+      "Activity may be missing; some results are unconfirmed. Review before repeating.",
     );
     expect(
       host.querySelector(".activity-log-details")?.hasAttribute("open"),
