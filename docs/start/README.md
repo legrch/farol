@@ -1,17 +1,20 @@
 # Start using Farol
 
-Farol lets ChatGPT work with folders you approve on your Mac. A folder grant is called a **workspace**. Your ChatGPT workspace is the account/team context in ChatGPT; it is separate from a local folder.
+Farol connects folders you choose on your Mac to ChatGPT. Follow the path below from understanding the product to your first file request.
 
-[What Farol does](overview.md) explains the product, its two kinds of workspace and what data can be returned to ChatGPT.
+| Step                 | Guide                                        | What you will learn                                                              |
+| -------------------- | -------------------------------------------- | -------------------------------------------------------------------------------- |
+| **Discover**         | [What Farol does](overview.md)               | What you can ask, what a workspace means, and what data is shared.               |
+| **1 · Installation** | [Install Farol on your Mac](installation.md) | Requirements, downloads, current installation limits and existing installations. |
+| **2 · Connection**   | [Connect Farol to ChatGPT](setup.md)         | The complete visual guide: sign-in, folders, tunnel, plugin and test.            |
+| **3 · First result** | [Your first workspace](first-workspace.md)   | A small read-only file exercise with an example request.                         |
 
-**New installation:** read [First installation](installation.md) first. Public ZIP downloads exist, but the first-recipient installation and updater-adoption journey is not yet qualified. This guide does not supply a substitute installer.
+**First installation?** Start with [installation and requirements](installation.md). Public ZIP downloads exist, but a supported first-install and updater-adoption procedure is still being qualified.
 
-**Existing accepted installation:** [connect this Mac](first-connection.md), attach the [ChatGPT app](../guides/chatgpt-connection.md), then try [one sample workspace](first-workspace.md).
+**Already have an accepted running installation?** Go directly to [setup](setup.md). It has written steps, static illustrations and eight optional animations. The [compact text connection reference](first-connection.md) explains the same flow without images.
 
-For visual guidance, open the [eight setup animations](../media/onboarding/walkthrough.md). Motion is optional; every step has written instructions and a static image link. Review [Best practices](../guides/best-practices.md) before increasing access.
+A **Farol workspace** is a local folder you approve. A **ChatGPT workspace** is your account/team context in ChatGPT. The tunnel connects the intended ChatGPT workspace; Farol's local folder grants determine file access.
 
-At the end, Setup should show current local and ChatGPT attachment checks. The guided flow requires at least one workspace and a current access check for every listed workspace. A connection without workspace grants provides no file access; that state does not satisfy the guided Workspaces step.
+At the end of setup, every listed folder must show a current access check and Farol must confirm the matching ChatGPT attachment check. A connection alone does not grant file access. If setup is interrupted or a result is unknown, follow [Recovery](../guides/recovery.md) before another attempt.
 
-If setup was interrupted, return to [Recovery](../guides/recovery.md) before changing credentials or starting another check. [Current status](../reference/status.md) explains which capabilities are supported by public, installed or source evidence.
-
-[Documentation](../README.md)
+[Best practices](../guides/best-practices.md) · [Privacy and security](../guides/privacy.md) · [All documentation](../README.md) · [Farol home](../../README.md)

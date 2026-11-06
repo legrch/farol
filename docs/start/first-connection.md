@@ -2,7 +2,7 @@
 
 Start from an accepted running Farol installation. New users should read [installation status](installation.md) first. These steps describe the UI in the audited source candidate; an older public or installed build may show different labels. See [current status](../reference/status.md).
 
-[Step-by-step animations and static alternatives](../media/onboarding/walkthrough.md) illustrate the same flow with synthetic data. They are not installation or live acceptance evidence.
+[Step-by-step animations and static alternatives](setup.md) illustrate the same flow with synthetic data. They are not installation or live acceptance evidence.
 
 ## Review Setup
 

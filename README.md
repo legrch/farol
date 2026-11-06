@@ -1,91 +1,105 @@
+<div align="center">
+
+<img src="resources/brand/sunrise-dock/farol-sunrise.png" alt="Farol" width="88">
+
 # Farol
 
-<img align="right" src="resources/brand/sunrise-dock/farol-sunrise.png" alt="Farol app icon" width="96">
+### Your local files, connected to ChatGPT.
 
-**Connect ChatGPT to folders you choose on your Mac.**
+Find answers in your files, understand a project, and make requested changes from the conversation. **You choose the folders Farol can access on your Mac.**
 
-Find information in local files, understand a project, and make requested edits within the access you grant. Choose the folders in Farol, then use the connected plugin in ChatGPT.
+**[Get started →](docs/start/installation.md)** · [See it in action](#see-it-in-action) · [Setup guide](docs/start/setup.md) · [Documentation](docs/README.md)
 
-[What Farol does](docs/start/overview.md) · [Installation](#download-and-installation) · [Setup guide](docs/start/first-connection.md) · [Best practices](docs/guides/best-practices.md)
+**macOS · Apple Silicon · Beta**
 
-![ChatGPT requests a specific edit through an OpenAI Tunnel and Farol inside a selected Read & write workspace](docs/media/workflow/output/Farol-read-and-edit-light.png)
+</div>
 
-<details>
-<summary>Watch the 15-second workflow animation</summary>
+![An illustrative ChatGPT file-edit result, connected through Farol to a folder with Read & write access](docs/media/workflow/output/Farol-read-and-edit-light.png)
 
-![A requested edit travels through OpenAI Tunnel and Farol to a selected workspace](docs/media/workflow/output/Farol-read-and-edit-light.gif)
+## From a question to your files
 
-Close this section to hide the animation.
+Farol is a Mac app that connects selected local folders to ChatGPT. Add a folder as a **workspace**, connect Farol in ChatGPT, and ask about the files inside it. Enable **Read & write** when a task needs edits.
 
-</details>
+| Find an answer                               | Understand a project                              | Make a requested change                             |
+| -------------------------------------------- | ------------------------------------------------- | --------------------------------------------------- |
+| “Find the notes about connection setup.”     | “Read the README and explain this project.”       | “Fix this sentence in the document.”                |
+| Search and read files in an approved folder. | Give ChatGPT the local context for your question. | Save supported file edits with Read & write access. |
 
-[Static illustration](docs/media/workflow/output/Farol-read-and-edit-light.png) · [How it works](docs/start/overview.md) · [Step-by-step setup](docs/media/onboarding/walkthrough.md)
-
-_Synthetic workflow illustration, not a screen recording or a live acceptance test. New workspaces start Read only; this edit example uses an explicit Read & write grant. Requested file contents and tool results can be returned to ChatGPT._
-
-## What is Farol?
-
-Farol is a Mac app that makes selected local folders available to ChatGPT. Each folder grant is a **workspace**. You can list, search and read its files; enable **Read & write** when you need guarded edits. **Commands** is a separate grant shared across approved workspaces.
-
-<a id="privacy-and-security"></a>
-
-Requested file contents and tool results can be returned to ChatGPT. Read-only access limits changes, not disclosure. Start with a small, non-sensitive folder.
+These are example requests; available tools and results depend on your build, saved access and ChatGPT permissions. [Explore what Farol does →](docs/start/overview.md)
 
 <a id="what-can-i-do-with-it"></a>
 
-[How it works and what it can do →](docs/start/overview.md) · [Privacy and security](docs/guides/privacy.md)
+## See it in action
 
-<a id="use-and-installation"></a>
+**Read a file. Get an answer.** Follow a request from ChatGPT to a selected folder and back. Then see how an explicitly permitted edit reaches the file.
 
-<a id="supported-macs"></a>
+<details>
+<summary><strong>▶ Watch: read a file through Farol · 15 seconds</strong></summary>
 
-## Download and installation
+![An illustrated read-only request travels from ChatGPT through Farol to a selected file and returns its contents](docs/media/workflow/output/Farol-how-it-works-light.gif)
 
-Farol is a beta for **Apple Silicon Macs**. The public download is **unsigned and not notarized**, and first installation with trusted updater setup is still being qualified. A downloaded ZIP or a successful launch does not establish a supported first-install path.
+[View the static illustration](docs/media/workflow/output/Farol-how-it-works-light.png). Collapse this section to hide the looping animation.
 
-[**View public releases →**](https://github.com/legrch/farol/releases) · [Read installation requirements and limits](docs/start/installation.md)
+</details>
 
-If you already have an accepted working installation, keep it and use its updater. Do not replace it merely to follow this guide. ChatGPT workspace support for Developer mode and Tunnel connections is also required; account availability can vary.
+<details>
+<summary><strong>▶ Watch: make a requested edit · 15 seconds</strong></summary>
 
-## Connect Farol to ChatGPT
+![An illustrated edit travels from ChatGPT through Farol to a folder with an existing Read & write grant](docs/media/workflow/output/Farol-read-and-edit-light.gif)
 
-With an accepted installation running:
+[View the static illustration](docs/media/workflow/output/Farol-read-and-edit-light.png). Collapse this section to hide the looping animation.
 
-1. **Sign in** to your own ChatGPT account inside Farol and confirm the check.
-2. **Workspaces:** add a sample folder, keep **Read only**, and wait for **✓ Works** on every listed workspace.
-3. **Connect this Mac:** create or select the intended tunnel, use a **Restricted** key with **Tunnels Read + Use**, and choose **Connect** once.
-4. **Add to ChatGPT:** attach the same tunnel, review the plugin permissions, then run **Test in ChatGPT** once. Continue after the matching check succeeds.
+</details>
 
-[**Follow the text connection guide →**](docs/start/first-connection.md) · [Watch the eight step-by-step animations](docs/media/onboarding/walkthrough.md) · [Try one sample workspace](docs/start/first-workspace.md)
+_Illustrated workflows with synthetic data, not screen recordings. The edit example assumes an existing Read & write grant. Requested file contents and tool results can be returned to ChatGPT._
 
-The animations are light-theme UI recreations with synthetic values. Each has written steps and a static alternative. They illustrate setup from a running installation, not installation acceptance. For a pending or unknown action, inspect the original result through [Recovery](docs/guides/recovery.md) before trying again.
-
+<a id="privacy-and-security"></a>
 <a id="choose-folder-access"></a>
 
-## Use Farol with clear boundaries
+## Your folders. Your access choices.
 
-Keep folder access, command access and ChatGPT's tool-confirmation setting separate. The permission review explains **Always ask**, **Allow read-only tools**, the **Allow low-risk tools** default, and the optional **Allow all tools** setting with elevated risk. It does not change your settings or promise that every tool will run.
+- **Choose what to share.** Add the folders you need as Farol workspaces; start with a small, non-sensitive sample.
+- **Start with reading.** New workspaces use Read only. Enable Read & write when you need supported file changes.
+- **Review commands separately.** Commands is a separate grant shared across approved workspaces. ChatGPT's tool-confirmation settings are another independent choice.
 
-[Best practices and permission choices →](docs/guides/best-practices.md) · [Workspace access](docs/guides/folder-access.md)
+Requested file contents and results can leave your Mac for ChatGPT. Read only limits changes, not disclosure. [Privacy and security](docs/guides/privacy.md) · [Access and permission choices](docs/guides/best-practices.md)
+
+<a id="use-and-installation"></a>
+<a id="supported-macs"></a>
+<a id="download-and-installation"></a>
+
+## Start here
+
+**[Installation and requirements →](docs/start/installation.md)**
+
+Farol is currently a beta for Apple Silicon Macs. Public downloads are unsigned and not notarized; a supported first-install procedure is still being qualified. The installation page explains what is available and where to continue. Keep an existing working accepted installation and use its updater.
+
+| Step                 | What you do                                                          | Where to go                                           |
+| -------------------- | -------------------------------------------------------------------- | ----------------------------------------------------- |
+| **1 · Installation** | Check Mac/account requirements and the current installation path.    | [Installation guide](docs/start/installation.md)      |
+| **2 · Connection**   | Sign in, choose a folder, connect this Mac and add Farol to ChatGPT. | [Visual setup guide](docs/start/setup.md)             |
+| **3 · First result** | Ask ChatGPT about a sample file with Read only access.               | [Your first workspace](docs/start/first-workspace.md) |
+
+Already have an accepted running installation? **[Go straight to setup →](docs/start/setup.md)** The guide includes all eight setup animations, written steps and static alternatives. No animation is required to follow it.
 
 <a id="updates-and-recovery"></a>
 <a id="need-help"></a>
 
-## Updates and help
+## Keep going
 
-Open the outer **Farol.app** from its [accepted installation location](docs/start/installation.md#installation-paths-and-adoption), not its nested Electron Runtime.app. For an installation already set up for trusted updates, use **Settings → General → Check for updates**. Closing the window leaves Farol running; **Command+Q** quits it.
+[Everyday use and best practices](docs/guides/best-practices.md) · [Update Farol](docs/guides/updates.md) · [Troubleshoot a connection](docs/guides/troubleshooting.md) · [Recover interrupted work](docs/guides/recovery.md)
 
-[Update Farol](docs/guides/updates.md) · [Troubleshoot a connection](docs/guides/troubleshooting.md) · [Recover interrupted work](docs/guides/recovery.md) · [Uninstall safely](docs/guides/uninstall.md)
+Open the outer **Farol.app**, not its nested Electron Runtime.app. Closing the window leaves Farol running; **Command+Q** quits it. [Installation locations](docs/start/installation.md#installation-paths-and-adoption) · [Uninstall](docs/guides/uninstall.md)
 
 <a id="develop-from-source"></a>
 <a id="declared-go-backend-inputs"></a>
 <a id="source-architecture"></a>
 <a id="status-and-scope"></a>
 
-## Development and contributing
+## For developers
 
 After `task package` builds a verified packaged candidate, `task run` opens its isolated launch snapshot; `task dev` is the separate development lane.
 
-[Current status](docs/reference/status.md) distinguishes public downloads, qualified internal installations and source candidates. Local Shell/Git evidence applies to specific builds and toolchains; Tasks, Agent workflows, Git SSH and PDF transfer still require separate acceptance.
+[Development and contributing](docs/development/README.md) · [Technical references](docs/reference/README.md) · [Go module indexes](docs/reference/modules/README.md) · [Capability evidence and limits](docs/reference/status.md) · [First-install readiness](docs/reference/install-readiness.md) · [Animation sources](docs/media/onboarding/README.md)
 
-[Development guide](docs/development/README.md) · [Technical references](docs/reference/README.md) · [Go module indexes](docs/reference/modules/README.md) · [First-install readiness](docs/reference/install-readiness.md) · [Animation source and rebuild instructions](docs/media/onboarding/README.md)
+The dated status reference separates source, package and installed evidence; it is not a live release catalogue. Tasks, Agent workflows, Git SSH and PDF transfer still require separate acceptance.
