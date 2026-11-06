@@ -9,6 +9,12 @@ import { test } from "vitest";
 const script = fileURLToPath(
   new URL("../../scripts/install-release.sh", import.meta.url),
 );
+test("installer never removes the active app before replacement", () => {
+  const source = readFileSync(script, "utf8");
+  assert.doesNotMatch(source, /\/bin\/rm\s+-rf\s+"\$installed"/);
+  assert.doesNotMatch(source, /\/usr\/bin\/ditto\s+"\$app"\s+"\$installed"/);
+  assert.match(source, /"\$backend"\s+run-install-release-swap/);
+});
 const python = "/usr/bin/python3";
 const fixtureCode = String.raw`
 import hashlib, json, os, pathlib, stat, sys, zipfile
@@ -300,7 +306,7 @@ test("does not overwrite a caller-selected extraction directory", () => {
 
 // This copy has every host-effect command and installation path replaced with
 // fixture-owned paths. The shipped script has no environment-based routing.
-test("isolated installation orders checks, backup and launch without GUI scripting", () => {
+test("isolated installation orders checks, native replacement and launch without GUI scripting", () => {
   isolatedInstall("success", (result, root, log) => {
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Installed and running: Farol 1\.2\.3/);
@@ -312,9 +318,10 @@ test("isolated installation orders checks, backup and launch without GUI scripti
       result.stdout,
       /Farol opened\. Check its connection and updates in the app\./,
     );
-    assert.ok(log.indexOf("codesign") < log.indexOf("ditto-backup"));
+    assert.ok(log.indexOf("codesign") < log.indexOf("ditto-stage"));
     assert.ok(!log.includes("osascript"));
-    assert.ok(log.indexOf("ditto-backup") < log.indexOf("open"));
+    assert.ok(log.indexOf("ditto-stage") < log.indexOf("native-swap"));
+    assert.ok(log.indexOf("native-swap") < log.indexOf("open"));
     assert.match(
       readFileSync(
         path.join(root, "Applications/Farol.app/Contents/MacOS/Farol"),
@@ -337,6 +344,18 @@ test("isolated failed signature leaves the existing app untouched", () => {
   });
 });
 
+for (const scenario of ["swap-refused", "swap-unknown"]) {
+  test(`isolated ${scenario} never falls back to destructive replacement`, () => {
+    isolatedInstall(scenario, (result, root, log) => {
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /native replacement refused or unconfirmed/);
+      assert.equal(readFileSync(path.join(root, "Applications/Farol.app/old"), "utf8"), "old");
+      assert.equal(log.split("native-swap").length - 1, 1);
+      assert.doesNotMatch(log, /open/);
+    });
+  });
+}
+
 test("isolated failed launch retains a recoverable predecessor", () => {
   isolatedInstall("bad-launch", (result, _root, log) => {
     assert.notEqual(result.status, 0);
@@ -346,7 +365,7 @@ test("isolated failed launch retains a recoverable predecessor", () => {
       readFileSync(path.join(retained[1], "previous.app/old"), "utf8"),
       "old",
     );
-    assert.ok(log.includes("ditto-backup"));
+    assert.ok(log.includes("native-swap"));
   });
 });
 
@@ -439,7 +458,7 @@ for (const scenario of [
       assert.equal(result.status, 0, result.stderr);
       assert.doesNotMatch(result.stderr, /Traceback|Process inspection failed/);
       assert.doesNotMatch(log, /osascript/);
-      assert.match(log, /ditto-backup/);
+      assert.match(log, /native-swap/);
     });
   });
 }
@@ -468,7 +487,7 @@ for (const scenario of [
         readFileSync(path.join(root, "Applications/Farol.app/old"), "utf8"),
         "old",
       );
-      assert.doesNotMatch(log, /ditto-backup|ditto-install|open/);
+      assert.doesNotMatch(log, /native-swap|open/);
       const retained = result.stderr.match(/Recovery files retained at: (.+)/);
       assert.ok(retained, result.stderr);
       assert.ok(
@@ -482,7 +501,7 @@ test("isolated stuck application is refused without termination or replacement",
   isolatedInstall("escalate", (result, _root, log) => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /Quit Farol with Command\+Q/);
-    assert.doesNotMatch(log, /signal-|ditto-backup|ditto-install|open/);
+    assert.doesNotMatch(log, /signal-|native-swap|open/);
   });
 });
 
@@ -549,7 +568,16 @@ else if (cmd === 'ps') {
   if (process.env.SCENARIO === 'cursor-farol') console.log('44 1 Cursor Helper (Plugin): extension-host (user) farol [6-217]');
   if (process.env.SCENARIO === 'other-checkout') console.log('44 1 /Users/ac/code/other/farol/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron');
 }
-else if (cmd === 'ditto') { log(args[1].endsWith('previous.app') ? 'ditto-backup' : 'ditto-install'); fs.cpSync(args[0], args[1], {recursive:true, verbatimSymlinks:true}); }
+else if (cmd === 'ditto') { log('ditto-stage'); fs.cpSync(args[0], args[1], {recursive:true, verbatimSymlinks:true}); }
+else if (cmd === 'swap') {
+  log('native-swap');
+  const staged = args[args.indexOf('--staged-app') + 1];
+  const installed = args[args.indexOf('--installed') + 1];
+  const evidence = args[args.indexOf('--evidence') + 1];
+  if (process.env.SCENARIO === 'swap-refused' || process.env.SCENARIO === 'swap-unknown') process.exit(1);
+  if (fs.existsSync(installed)) fs.renameSync(installed, path.join(evidence, 'previous.app'));
+  fs.renameSync(staged, installed);
+}
 else if (cmd === 'sleep') { if (process.env.SCENARIO === 'early-exit' && fs.existsSync(path.join(root, 'launched'))) fs.rmSync(path.join(root, 'running'), {force:true}); }
 else if (cmd === 'open') {
   log('open');
@@ -581,6 +609,7 @@ else process.exit(2);
       "codesign",
       "ps",
       "ditto",
+      "swap",
       "open",
       "sleep",
       "uuidgen",
@@ -616,7 +645,10 @@ else process.exit(2);
       .replace(
         "/tmp/farol-release.XXXXXXXX",
         path.join(root, "release.XXXXXXXX"),
-      );
+      )
+      // The isolated script exercises ordering and startup proof; the real
+      // boot.Run adapter has its own native tests and is never mocked there.
+      .replace('"$backend" run-install-release-swap', path.join(root, 'bin/swap') + ' run-install-release-swap');
     if (
       [
         "vanished-after-quit",

@@ -434,17 +434,25 @@ if [ -e "$installed" ] || [ -L "$installed" ]; then
   existing=yes
 fi
 check_stopped || fail 'Quit Farol with Command+Q, then run this installer again. No app files were changed.'
+# The backend shipped by the verified target release owns the one native
+# namespace replacement. Keep the source copy in this private operation
+# directory; its Go admission checks the complete tree, both installation
+# locks, the current slot, and the same-filesystem requirement before effect.
+# The extracted bundle is never launched as a GUI application.
+/usr/bin/ditto "$app" "$tmp/staged.app" || fail 'could not prepare staged application; installed app preserved'
+check_stopped || fail 'production process appeared; installed app preserved'
+"$backend" run-install-release-swap \
+  --staged-app "$tmp/staged.app" \
+  --manifest "$tmp/farol-release.json" \
+  --installed "$installed" \
+  --evidence "$tmp" || fail 'native replacement refused or unconfirmed; inspect retained recovery files, do not repeat'
+# An occupied slot is exchanged atomically. The old bundle remains privately
+# retained for inspected recovery; never erase it in installer teardown.
 if [ "$existing" = yes ]; then
-  /usr/bin/ditto "$installed" "$tmp/previous.app" || fail 'could not preserve predecessor'
   retain=yes
 fi
-check_stopped || fail 'production process appeared; existing app preserved'
-if [ "$existing" = yes ]; then
-  /bin/rm -rf "$installed" || fail 'could not remove old app; predecessor retained'
-fi
-if ! /usr/bin/ditto "$app" "$installed"; then
-  fail 'copy failed; predecessor retained if one existed'
-fi
+/usr/bin/codesign --verify --strict "$installed/Contents/Resources/app/farol-backend" || fail 'installed backend signature verification failed; predecessor retained'
+/usr/bin/codesign --verify --strict --ignore-resources "$installed/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron" || fail 'installed Electron signature verification failed; predecessor retained'
 nonce=$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]') || fail 'cannot create launch nonce'
 case "$nonce" in
   ????????-????-????-????-????????????) ;;
@@ -506,4 +514,4 @@ actual=$(plist_value "$installed/Contents/Info.plist" CFBundleShortVersionString
 [ "$actual" = "$version" ] || fail 'installed version mismatch; predecessor retained if one existed'
 printf 'Installed and running: Farol %s\n' "$actual"
 printf '%s\n' 'Farol opened. Check its connection and updates in the app.'
-retain=no
+[ "$existing" = yes ] || retain=no

@@ -117,6 +117,9 @@ func Run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostics io.Wri
 	if len(args) > 0 && args[0] == "record-native-terminal" {
 		return runNativeTerminal(args[1:], in, out, diagnostics)
 	}
+	if len(args) > 0 && args[0] == "run-install-release-swap" {
+		return runInstallReleaseSwap(args[1:], out, diagnostics)
+	}
 	if len(args) < 1 || args[0] != "serve" {
 		fmt.Fprintln(diagnostics, "usage: farol serve --profile <id>")
 		return 2
