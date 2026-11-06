@@ -124,7 +124,7 @@ fs.writeFileSync(path.join(root,'desktop.json'),JSON.stringify({pid:process.pid,
 			time.Sleep(10 * time.Millisecond)
 		}
 		var evidence []string
-		for _, filename := range []string{"guardian.log", "fixture-error", "helper.stderr"} {
+		for _, filename := range []string{"guardian.log", "successor-guardian.log", "fixture-error", "helper.stderr"} {
 			data, err := os.ReadFile(filepath.Join(f.dir, filename))
 			if err == nil {
 				if len(data) > 4096 {
@@ -269,7 +269,7 @@ func desktopWitnessTarget(t *testing.T, f *liveNativeFixture, electron string) s
 		t.Fatalf("copy fixture backend: %v %s", err, out)
 	}
 	plist := `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Farol</string><key>CFBundleIdentifier</key><string>io.github.legrch.farol</string><key>CFBundleName</key><string>Farol</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>1.2.3</string><key>CFBundleVersion</key><string>1</string></dict></plist>`
-	launcher := "#!/bin/sh\nexec \"" + filepath.Join(resources, "farol-backend") + "\" run-desktop-launcher 2>\"" + filepath.Join(f.dir, "successor-guardian.log") + "\"\n"
+	launcher := "#!/bin/sh\nexec \"$(/usr/bin/dirname \"$0\")/../Resources/app/farol-backend\" run-desktop-launcher 2>\"" + filepath.Join(f.dir, "successor-guardian.log") + "\"\n"
 	const successor = `const {app}=require('electron');const fs=require('node:fs');const path=require('node:path');
 const root=ROOT;app.setPath('userData',path.join(root,'successor-profile'));
 app.whenReady().then(()=>{app.dock?.hide();
