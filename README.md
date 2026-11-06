@@ -8,6 +8,10 @@ Find information in local files, understand a project, or make approved edits. C
 
 [Download](#download-and-installation) · [Get started](docs/start/README.md) · [User guides](docs/guides/README.md) · [Current status](docs/reference/status.md)
 
+![Illustration of ChatGPT reading a selected local file and applying a requested edit through Farol](resources/readme/farol-read-and-edit.gif)
+
+*Illustrative workflow, not a recording of the app. Access follows the selected settings; Read only does not allow file edits.* [Static image](resources/readme/farol-read-and-edit.png)
+
 ## What is Farol?
 
 Farol is a Mac app that connects your chosen folders to ChatGPT. Each approved folder is a **workspace**. After Setup, you can use the connected ChatGPT app in your usual browser. The guided Setup flow requires signing in inside Farol for its connection test.
@@ -39,6 +43,15 @@ Use the latest release page for the current download and its checksums. Public d
 ## Connect Farol to ChatGPT
 
 With an accepted installation running:
+
+<details>
+<summary>Watch the four-step Setup overview</summary>
+
+![Illustration of signing in, choosing workspace access, connecting a tunnel, and attaching and testing Farol in ChatGPT](resources/readme/farol-setup-guide.gif)
+
+*Illustrative guide to the current source flow, not a recorded setup test. Public or installed builds may differ. The installation limitations above still apply.* [Static image](resources/readme/farol-setup-guide.png)
+
+</details>
 
 1. Open **Setup → Start setup**. In **Sign in**, choose **Sign in** or **Open ChatGPT**, return and choose **Check sign-in**, then **Continue** after **✓ Sign-in checked**.
 2. In **Workspaces**, use **+ Add workspace** and review its **Access**. Every listed workspace must show **✓ Works**; at least one is required to continue.
