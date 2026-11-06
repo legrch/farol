@@ -130,12 +130,14 @@ jobs:
           : > "$profile/installed-updates/lock"
           : > "$profile/farol-state/promotion.lease"
           chmod 600 "$profile/installed-updates/lock" "$profile/farol-state/promotion.lease"
-          /usr/bin/python3 -I - "$evidence/farol-release.json" "$profile/installed-updates/adopted-baseline.json" <<'PY'
+          /usr/bin/python3 -I - "$evidence/farol-release.json" "$profile/installed-updates/adopted-baseline.json" "$profile" <<'PY'
           import json, sys
           with open(sys.argv[1], encoding='utf-8') as stream:
               manifest = json.load(stream)
           with open(sys.argv[2], 'w', encoding='utf-8') as stream:
-              json.dump({'manifest': manifest}, stream)
+              json.dump({'schema': 'farol.adopted-baseline/1',
+                         'slot': '/Applications/Farol.app', 'userData': sys.argv[3],
+                         'adoptedAt': '2026-11-06T00:00:00Z', 'manifest': manifest}, stream)
           PY
           second=$(mktemp -d /private/tmp/farol-installer-native.XXXXXXXX)
           chmod 700 "$second"
