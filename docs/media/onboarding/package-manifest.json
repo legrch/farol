@@ -1,0 +1,232 @@
+{
+  "files": [
+    {
+      "path": "docs/media/onboarding/.gitignore",
+      "bytes": 162,
+      "sha256": "b3d5959776cfaad3005a27c85fd9c42afd802421276d55bb88b1e0a499512d51",
+      "git_blob_sha1": "283c048a09ba144087981d8111052cb3f8fc52c8"
+    },
+    {
+      "path": "docs/media/onboarding/PROVENANCE.md",
+      "bytes": 4920,
+      "sha256": "bf91d85b6b8430cd95043d73cd650d826917fb5ab3ec4c49736c37545a784898",
+      "git_blob_sha1": "45db3182615449c0d7e7c83092ae72aa105d48ae"
+    },
+    {
+      "path": "docs/media/onboarding/README.md",
+      "bytes": 9819,
+      "sha256": "dbe3b7747ff77ce59e67f766d2f7dcc2139e40159a33587872f4a2823d5b8487",
+      "git_blob_sha1": "02af6cc981fcf3e52dff14dc50821b0400522268"
+    },
+    {
+      "path": "docs/media/onboarding/THIRD_PARTY_NOTICES.md",
+      "bytes": 1800,
+      "sha256": "622a7ef4b858e746956d4d164c7af3720bad74fc1c9e6b5d911041a900ce022d",
+      "git_blob_sha1": "b19b6fcee08b7a2f587777b4260fab3c4b624b82"
+    },
+    {
+      "path": "docs/media/onboarding/audit.json",
+      "bytes": 3173,
+      "sha256": "a2abdfa229afe2baa0b75a9669b12729b83ab46652540174d1e0fe810955fede",
+      "git_blob_sha1": "3a4942de49f016928c52e9929da410b9d43f3698"
+    },
+    {
+      "path": "docs/media/onboarding/build.py",
+      "bytes": 641,
+      "sha256": "88b0ff659132e1f02292804086fbbccfa3f47fbe4dd90994aea5ada52742e2f4",
+      "git_blob_sha1": "d07312e483184f81271b4ba0d71d548d41f03df2"
+    },
+    {
+      "path": "docs/media/onboarding/licenses/Liberation-Sans-OFL.txt",
+      "bytes": 5756,
+      "sha256": "f32df582a2aab128c07b2f7e36e7b928dc5f6bd82657b905c04f91459f9e5cf9",
+      "git_blob_sha1": "18ec71bce5102e32d01c71f1d2dd41706081a13e"
+    },
+    {
+      "path": "docs/media/onboarding/output/Farol-01-sign-in-light.gif",
+      "bytes": 611523,
+      "sha256": "2a2fb28dfb13796027a4b7eb3b24777c8b24d5cfec3bc47ec25541bcc09b8486",
+      "git_blob_sha1": "6e46ddd45d169dd530f4aac8e0c5326271126d1d"
+    },
+    {
+      "path": "docs/media/onboarding/output/Farol-01-sign-in-light.png",
+      "bytes": 94615,
+      "sha256": "66162cee0670bb885921cc6d71161c6616bd88afc662783c65173692fb1c2813",
+      "git_blob_sha1": "c1b1ed202e27a9498c3a9e348572ceff3edf1d8f"
+    },
+    {
+      "path": "docs/media/onboarding/output/Farol-02-workspace-light.gif",
+      "bytes": 458509,
+      "sha256": "9531b248e967c70edf13a33c67594db130faea9ea79e9151e0b8f4f13f9f99d8",
+      "git_blob_sha1": "b9d2e891a395fd91ddbd9eefb6d882d5e7acba20"
+    },
+    {
+      "path": "docs/media/onboarding/output/Farol-02-workspace-light.png",
+      "bytes": 105948,
+      "sha256": "faa534a65378687aabbc9c5d477e7cc869848224e95f4688024e0d3ce36100c3",
+      "git_blob_sha1": "ae18c62ba74800eef024e946843974e88005573c"
+    },
+    {
+      "path": "docs/media/onboarding/output/Farol-02b-edits-and-commands-light.gif",
+      "bytes": 225902,
+      "sha256": "5e105bc3995a8d3e33b62537b67894c9e822669126996040405fa3d094dda2b9",
+      "git_blob_sha1": "2862de6756b1af6dcd54822cef0238c0786b24a1"
+    },
+    {
+      "path": "docs/media/onboarding/output/Farol-02b-edits-and-commands-light.png",
+      "bytes": 109257,
+      "sha256": "1be5796152da2737a38abad4e1c04776d5390d11e4eed95501e3f4a512648c8d",
+      "git_blob_sha1": "ead611c927ec0b3f3065351e5023bd727832aecb"
+    },
+    {
+      "path": "docs/media/onboarding/output/Farol-03-create-tunnel-light.gif",
+      "bytes": 609816,
+      "sha256": "0e179e670938e4bccfea030309aa2473e5409c57a7a9c2085ed692b23e8b059b",
+      "git_blob_sha1": "563f8c9b6f5c816c400e61b50ed7490e2fc4e127"
+    },
+    {
+      "path": "docs/media/onboarding/output/Farol-03-create-tunnel-light.png",
+      "bytes": 79122,
+      "sha256": "90361bfaa16a50ec0ce48e2c90eae474f220e32b21e5a735c822eb213f3a0f72",
+      "git_blob_sha1": "f684aa17752c5140fbcc4964839afb61691d8fe0"
+    },
+    {
+      "path": "docs/media/onboarding/output/Farol-04-restricted-key-light.gif",
+      "bytes": 654623,
+      "sha256": "76637f89e0a0abea24cc5b5ed9d2364302fb2157e05c80c2e4fc02a9a7a1520f",
+      "git_blob_sha1": "5a8091993783d6314d60838b0a5b8e52b5b72de9"
+    },
+    {
+      "path": "docs/media/onboarding/output/Farol-04-restricted-key-light.png",
+      "bytes": 82220,
+      "sha256": "a69a029d9bf95fb6e9692607832efb25cadca1b6fb21be895f895dba7c122bff",
+      "git_blob_sha1": "341f42d1189ffc9e402372996b1d1ec0e3113078"
+    },
+    {
+      "path": "docs/media/onboarding/output/Farol-05-connect-this-mac-light.gif",
+      "bytes": 260390,
+      "sha256": "c28ab6b989e2705199b1257145583e48282ebbb5cf48f90f8a38897e2a25a511",
+      "git_blob_sha1": "2db9e5d5fb540adb8e3bd45f70cd93971268ccbc"
+    },
+    {
+      "path": "docs/media/onboarding/output/Farol-05-connect-this-mac-light.png",
+      "bytes": 89702,
+      "sha256": "8800be3b6a363384c2c4fe422ee589b8618004c31ec2f7de687140533c33a31b",
+      "git_blob_sha1": "ab6444e9dd863871dfc79509e37f27c75effcc73"
+    },
+    {
+      "path": "docs/media/onboarding/output/Farol-06-add-plugin-light.gif",
+      "bytes": 804554,
+      "sha256": "2f736bf78f6c61b09986a2d798de78e0733989a40ab4f2c822b506a09d3ebfae",
+      "git_blob_sha1": "b39e19bffeef23fc8ce968d89dd18acdf85a9b56"
+    },
+    {
+      "path": "docs/media/onboarding/output/Farol-06-add-plugin-light.png",
+      "bytes": 56821,
+      "sha256": "8ec52af4ac4b73a94fbbdb177df1a55574cc1c4fea23fd7be094b37950cad4ae",
+      "git_blob_sha1": "381d9cc6dd3d4ae0d2f6048f55992ad2f8bb776f"
+    },
+    {
+      "path": "docs/media/onboarding/output/Farol-07-test-connection-light.gif",
+      "bytes": 551624,
+      "sha256": "0a856caa17eac0167f2323096b27239d5b85834b85cd483a9a1d99deba92755a",
+      "git_blob_sha1": "d563b1d67cd77c027ff5436e5aa92c193613a9e8"
+    },
+    {
+      "path": "docs/media/onboarding/output/Farol-07-test-connection-light.png",
+      "bytes": 64607,
+      "sha256": "ff6a916abcb2ba742c9b615f45c91b0dbb6b704de37dce7a094052d907709889",
+      "git_blob_sha1": "68cb54895d5e1fe6de63e78da923aefe3d5c3996"
+    },
+    {
+      "path": "docs/media/onboarding/output/Farol-light-on-both-GitHub-themes.png",
+      "bytes": 98698,
+      "sha256": "017338ee9d68d8bb71f132ddfa33bf4d5897e4d7fd7a89f2de4039874e0e391a",
+      "git_blob_sha1": "fc0e85cd1770a48cd61e427b1dd0fe33eaba5082"
+    },
+    {
+      "path": "docs/media/onboarding/output/Farol-plugin-permissions-light.png",
+      "bytes": 98827,
+      "sha256": "e482f8fbcd283342ceb80cc2552bec5c15167cb8e351d45d65bebb6cf91f4da3",
+      "git_blob_sha1": "c29ae112dd9d6953ca783ea842d5457fc52c7e5b"
+    },
+    {
+      "path": "docs/media/onboarding/requirements.txt",
+      "bytes": 209,
+      "sha256": "1ca05560b2ca83b3b3cf2ea95610620dc2106f3c686ccd24ca7806d89fee55e8",
+      "git_blob_sha1": "961a30e13ed2262d0fa752ebd93a8e402e8a8b47"
+    },
+    {
+      "path": "docs/media/onboarding/source/LiberationSans-Bold.ttf",
+      "bytes": 414568,
+      "sha256": "1b5f2da6f4cadce4c05b9ecebe3a6fcd374eb95ae443605e799f4c3287978939",
+      "git_blob_sha1": "31ddaefd5fcd5360ce3274556ccad1720b74d746"
+    },
+    {
+      "path": "docs/media/onboarding/source/LiberationSans-Regular.ttf",
+      "bytes": 410820,
+      "sha256": "bade59d822652f76e6941aa87b40a87c13d1cc70db98ededb5011127efafd1d3",
+      "git_blob_sha1": "f5243392b49b2ff3fee0025d77dd888bdba0a564"
+    },
+    {
+      "path": "docs/media/onboarding/source/assemble.py",
+      "bytes": 7576,
+      "sha256": "e02424a28fab93a46132b1e185f271843a3302892c43c7a8fba87f8370102dbf",
+      "git_blob_sha1": "0401f0358fb7deefaf15a651b048b08aac2b518f"
+    },
+    {
+      "path": "docs/media/onboarding/source/build_remaining.py",
+      "bytes": 46068,
+      "sha256": "e5be20939907341beaca11cce0b70b169b7616f2902feb936249a7133b00127f",
+      "git_blob_sha1": "c15e08f8533edafa2f61c1d9b7e9e3c4c4128568"
+    },
+    {
+      "path": "docs/media/onboarding/source/build_screens.py",
+      "bytes": 21441,
+      "sha256": "98627c41650ad52649b15163ddd260a2ffbd02c10b62a83cd7c63f56c80a59d7",
+      "git_blob_sha1": "f1b9a1682753c89b4dab306e057fb8c88983bfce"
+    },
+    {
+      "path": "docs/media/onboarding/source/farol-sunrise.png",
+      "bytes": 897131,
+      "sha256": "f39686f1a403a2467ada335b57465c18a8d0e3fb24481cbc7afdfb8e183b933a",
+      "git_blob_sha1": "e52e15fb91d67b4abe5fd47e5737ee34d3037070"
+    },
+    {
+      "path": "docs/media/onboarding/source/render.py",
+      "bytes": 7275,
+      "sha256": "bcf732d3b8be8b06f54e5c0a7d9fdd1c81f70df0408798b22d092c451d6f9ad2",
+      "git_blob_sha1": "41a91d0142e86608e84da58ac0651bdc7086749c"
+    },
+    {
+      "path": "docs/media/onboarding/source/setup.css",
+      "bytes": 10148,
+      "sha256": "c7df5928f0742df075bc8420de2a2327a4a9164d435362473fd68467c77dea29",
+      "git_blob_sha1": "26616023769871e7cf2d1f13e19cda5d7be21286"
+    },
+    {
+      "path": "docs/media/onboarding/source/shell.css",
+      "bytes": 36451,
+      "sha256": "edf75b9d6179b6f85135b3a77be3cde5078651580d0c82fc9da80c3928d117e0",
+      "git_blob_sha1": "d6bb711af4a3c64a19536fdde5adeeb9dd434f59"
+    },
+    {
+      "path": "docs/media/onboarding/validation.json",
+      "bytes": 16074,
+      "sha256": "0e7ba9a7ef244b3b1bb286bd7872d9f322013da2b52d2f80fb2ee91c32447ae8",
+      "git_blob_sha1": "f38bd51b06f825c6170acb6e0a9d1410ae447e28"
+    },
+    {
+      "path": "docs/media/onboarding/verify.py",
+      "bytes": 5108,
+      "sha256": "80cd99f87bfb7f82b72525e2b46bddbc229313a9350d92af8c2ce4070f7e4cdb",
+      "git_blob_sha1": "7ebbe7859329cc26481e4f5cc68e3239931656ae"
+    },
+    {
+      "path": "docs/media/onboarding/walkthrough.md",
+      "bytes": 9043,
+      "sha256": "cd7751447a0909e5345d68c636d643bba500689396e7c59884344cb506df7272",
+      "git_blob_sha1": "61fc0d875ac8b5d96394c0f33b49bdc234ce45c3"
+    }
+  ]
+}

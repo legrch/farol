@@ -9,8 +9,8 @@ In Finder, create a folder named `Farol sample` in a location you control. Add a
 ## Review saved access before using it
 
 1. In **Setup → Workspaces**, choose **+ Add workspace** and select the sample folder.
-2. Review its path and **Access**. Adding a workspace saves **Read & write** and checks access; the picker does not create a read-only grant.
-3. Select **Read only** in the row's **Access** control. It saves and checks access immediately. Wait for the confirmed result. If **Check access** is offered afterward, use it and inspect its result.
+2. Review its path and **Access**. Adding a workspace saves **Read only** and checks access. Keep **Commands** off for this exercise.
+3. Wait for the confirmed result. If you are reusing a workspace with **Read & write**, choose **Read only** in the row's **Access** control and wait for that change. If **Check access** is offered afterward, use it and inspect its result.
 4. Confirm **Access: Read only** and **✓ Works** for this workspace. Every listed workspace needs a current check before **Continue** advances to **Connect this Mac**.
 
 A pending or unknown change is not a confirmed permission change. Use [Recovery](../guides/recovery.md) before another submission. Navigating away does not undo an action already submitted.

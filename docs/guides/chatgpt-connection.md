@@ -5,10 +5,14 @@ ChatGPT may call this an **app**, **connector** or **plugin**. In these guides, 
 ## Attach the intended tunnel
 
 1. In Farol, open **Setup → Add to ChatGPT** after the **Sign in**, **Workspaces** and **Connect this Mac** checks pass. Choose **Open ChatGPT Apps**.
-2. In the intended ChatGPT workspace, open **Settings → Apps → Create**. ChatGPT may require developer mode or workspace permission before Create is available.
-3. Reuse the app attached to your chosen tunnel. If none exists, create one with **Name: the editable app name shown in Farol**, **Connection: Tunnel** and the tunnel ID shown in Farol, and **Sign-in: None**.
+2. In the intended ChatGPT workspace, open **Plugins → Add → Add custom MCP server**. Reuse a plugin already attached to this tunnel instead of creating a duplicate.
+3. If a new plugin is needed, enter **Name: the editable app name shown in Farol**, **Connection: Tunnel**, the same **Tunnel ID**, and **Authentication: No authentication**. Read the risk disclosure and decide whether to accept it before choosing **Create as a plugin**.
+4. Review the separate **Connect** dialog, including its data-sharing notice. Choose **Connect** once and wait for the existing result. Find Farol in the plugin list after it connects.
+5. To review tool confirmations, use **⋯ → Manage → Permission**. The **Permissions** page offers Always ask, Allow read-only tools, Allow low-risk tools (Default), and Allow all tools (Elevated risk). See [permission choices](best-practices.md#choose-chatgpt-permissions-deliberately). Allow all tools is optional, not a setup requirement.
 
-These are the external destinations and steps bundled with the audited Farol source. Their availability depends on the current ChatGPT account and UI. If Create, developer mode or Tunnel is unavailable, stop and check workspace availability; a URL alone does not establish eligibility. Do not improvise a public server URL or substitute another environment's tunnel.
+These external screens were checked against current references from 6 November 2026. Farol's button still says **Open ChatGPT Apps**, while ChatGPT uses Plugins; account-specific labels and availability may differ. Farol may describe No authentication as None or No additional sign-in. If the creation control, Developer mode or Tunnel is unavailable, stop and check workspace availability; a URL alone does not establish eligibility. Do not improvise a public server URL or substitute another environment's tunnel.
+
+[Watch the illustrated plugin flow](../media/onboarding/walkthrough.md#6-add-farol-to-chatgpt). It shows the permission choices without changing the default or creating any real credential.
 
 ## Verify the attachment
 

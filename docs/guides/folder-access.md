@@ -4,18 +4,20 @@ A workspace is a local folder you explicitly make available to Farol. Start with
 
 ## Add or change a workspace
 
-In **Setup → Workspaces**, use **+ Add workspace** and review the selected physical path. Adding a workspace saves **Read & write** and checks access immediately. Do not infer a read-only grant from the picker.
+In **Setup → Workspaces**, use **+ Add workspace** and review the selected physical path. Adding a workspace saves **Read only** and checks access immediately. Review the saved result; an existing workspace may have a different grant.
 
 Use each row's **Access** control to choose:
 
-| Saved access     | Meaning                                                                                                        |
-| ---------------- | -------------------------------------------------------------------------------------------------------------- |
-| **Read only**    | Allows supported listing, search and reads in the approved scope.                                              |
-| **Read & write** | Allows guarded file changes; changes still require approval. It does not grant unrestricted command execution. |
+| Saved access     | Meaning                                                                                                                                     |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Read only**    | Allows supported listing, search and reads in the approved scope.                                                                           |
+| **Read & write** | Allows supported guarded file changes. ChatGPT confirmations depend on its permissions; this does not grant unrestricted command execution. |
 
 A changed choice saves and checks access immediately; wait for the confirmed result. There is no separate save or cancel action for this control. Navigating away does not undo an already submitted or uncertain change.
 
 **✓ Works** must apply to the current saved scope and build. Use **Check access** when offered. Changing access can invalidate other rows' checks; check those rows before continuing. A returning, current workspace can simply continue. The guided flow requires at least one workspace and current checks for every listed workspace.
+
+ChatGPT's plugin permissions govern its tool confirmations separately from Farol's saved access. See [Best practices](best-practices.md#choose-chatgpt-permissions-deliberately) before choosing a more permissive setting.
 
 ## Keep the scope understandable
 

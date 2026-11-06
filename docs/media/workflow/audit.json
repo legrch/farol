@@ -1,0 +1,64 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "file": "Farol-how-it-works-light.gif",
+      "all_frames_decoded": 113,
+      "duration_ms": 15000,
+      "minimum_mean_luminance": 239.09,
+      "identical_loop_endpoints": true
+    },
+    {
+      "file": "Farol-read-and-edit-light.gif",
+      "all_frames_decoded": 113,
+      "duration_ms": 15000,
+      "minimum_mean_luminance": 238.23,
+      "identical_loop_endpoints": true
+    }
+  ],
+  "fonts": [
+    {
+      "file": "LiberationSans-Regular.ttf",
+      "sha256": "bade59d822652f76e6941aa87b40a87c13d1cc70db98ededb5011127efafd1d3",
+      "license": "SIL OFL 1.1"
+    },
+    {
+      "file": "LiberationSans-Bold.ttf",
+      "sha256": "1b5f2da6f4cadce4c05b9ecebe3a6fcd374eb95ae443605e799f4c3287978939",
+      "license": "SIL OFL 1.1"
+    }
+  ],
+  "contrast_pairs": [
+    {
+      "foreground": "#29292f",
+      "background": "#f6f5f9",
+      "ratio": 13.32
+    },
+    {
+      "foreground": "#686274",
+      "background": "#f6f5f9",
+      "ratio": 5.39
+    },
+    {
+      "foreground": "#686274",
+      "background": "#eeebf5",
+      "ratio": 4.97
+    },
+    {
+      "foreground": "#2f7555",
+      "background": "#ffffff",
+      "ratio": 5.53
+    },
+    {
+      "foreground": "#6750b8",
+      "background": "#eee8fa",
+      "ratio": 5.14
+    },
+    {
+      "foreground": "#2f7555",
+      "background": "#e8f3ec",
+      "ratio": 4.86
+    }
+  ],
+  "scope": "Synthetic workflow assets only. Scoped text scan and contrast checks, not full accessibility/security audit; not runtime or installed acceptance."
+}

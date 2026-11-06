@@ -1,0 +1,42 @@
+[
+  {
+    "scene": "read-0",
+    "pages": 1,
+    "text_overflow": []
+  },
+  {
+    "scene": "read-1",
+    "pages": 1,
+    "text_overflow": []
+  },
+  {
+    "scene": "read-2",
+    "pages": 1,
+    "text_overflow": []
+  },
+  {
+    "scene": "read-3",
+    "pages": 1,
+    "text_overflow": []
+  },
+  {
+    "scene": "edit-0",
+    "pages": 1,
+    "text_overflow": []
+  },
+  {
+    "scene": "edit-1",
+    "pages": 1,
+    "text_overflow": []
+  },
+  {
+    "scene": "edit-2",
+    "pages": 1,
+    "text_overflow": []
+  },
+  {
+    "scene": "edit-3",
+    "pages": 1,
+    "text_overflow": []
+  }
+]

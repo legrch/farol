@@ -12,7 +12,7 @@ When **✓ Sign-in checked** appears, choose **Continue**. There is no skip in t
 
 ## 2. Workspaces
 
-Choose **+ Add workspace** and select a workspace in the native picker. Farol saves **Read & write** access and checks it immediately. Each row shows its path, saved access and **✓ Works** only when its access check matches this build and saved workspace identity.
+Choose **+ Add workspace** and select a workspace in the native picker. Farol saves **Read only** access and checks it immediately. Each row shows its path, saved access and **✓ Works** only when its access check matches this build and saved workspace identity.
 
 - Choose **Read only** or **Read & write** on each row. Farol saves the choice and checks access again. ChatGPT manages action confirmations; Farol enforces the workspace access you approve.
 - Use **Commands** to allow git, tests and builds. ChatGPT manages confirmations for command execution; Farol enforces your approved access. The existing command-access setting is shared across all workspaces: changing any row's toggle changes every row. These are not independent per-workspace command grants.
