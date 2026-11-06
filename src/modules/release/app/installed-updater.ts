@@ -165,6 +165,8 @@ export class InstalledUpdater {
   private initialized = false;
   private busy = false;
   private scheduledChecking = false;
+  private automaticWakePending = false;
+  private automaticWakeQueued = false;
   private automaticDeferred = false;
   private lastCheck: number | null = null;
   private closed = false;
@@ -183,6 +185,30 @@ export class InstalledUpdater {
   private finish(): void {
     this.busy = false;
     this.finishDrain();
+    this.queueAutomaticWake();
+  }
+
+  private queueAutomaticWake(): void {
+    if (
+      !this.automaticWakePending ||
+      this.automaticWakeQueued ||
+      this.isClosing()
+    )
+      return;
+    this.automaticWakeQueued = true;
+    queueMicrotask(() => {
+      this.automaticWakeQueued = false;
+      if (this.isClosing()) {
+        this.automaticWakePending = false;
+        return;
+      }
+      if (this.busy || this.scheduledChecking || this.preferenceWriting) return;
+      this.automaticWakePending = false;
+      if (this.available !== null && this.view.phase === "available")
+        void this.scheduledCheck().catch(() => {
+          // Existing effect owners retain their classified outcomes.
+        });
+    });
   }
 
   constructor(private readonly ports: InstalledUpdaterPorts) {
@@ -303,6 +329,7 @@ export class InstalledUpdater {
           };
     this.preferenceWriting = false;
     finishPreference();
+    this.queueAutomaticWake();
     if (!this.isClosing()) {
       try {
         this.ports.publish(this.snapshot());
@@ -467,7 +494,7 @@ export class InstalledUpdater {
     return this.automaticPreference;
   }
 
-  // Only an explicit command changes the choice. No release effect is dispatched.
+  // Only an explicit command changes the durable choice.
   async setAutomaticUpdatePreference(
     enabled: boolean,
     scope?: "download-and-install",
@@ -540,6 +567,12 @@ export class InstalledUpdater {
       } catch {
         /* Status can be read again. */
       }
+    }
+    if (result.status === "confirmed" && result.enabled) {
+      this.automaticWakePending = true;
+      this.queueAutomaticWake();
+    } else {
+      this.queueAutomaticWake();
     }
     return result;
   }
@@ -816,33 +849,37 @@ export class InstalledUpdater {
       this.preferenceWriting
     )
       return;
-    if (this.view.phase === "ready") {
-      await this.installWhenIdle();
-      return;
-    }
-    if (!this.canPrepare()) return;
     this.scheduledChecking = true;
-    const preference = this.automaticPreference;
-    const previousCandidate = this.available;
     try {
+      if (this.view.phase === "ready") {
+        await this.installWhenIdle();
+        return;
+      }
+      if (!this.canPrepare()) return;
+      if (await this.prepareCurrentAutomaticCandidate()) return;
       await this.check();
-      // A throttled/busy check must not download an earlier manual candidate.
-      // Re-read the choice after discovery: OFF or an unsettled write fences
-      // automatic effects even if this tick began with a confirmed opt-in.
-      if (
-        preference.status === "confirmed" &&
-        preference.enabled &&
-        this.automaticPreference.status === "confirmed" &&
-        this.automaticPreference.enabled &&
-        this.available !== previousCandidate &&
-        this.view.phase === "available" &&
-        !this.view.deferred
-      )
-        await this.download();
-      await this.installWhenIdle();
+      await this.prepareCurrentAutomaticCandidate();
     } finally {
       this.scheduledChecking = false;
+      this.queueAutomaticWake();
     }
+  }
+
+  private async prepareCurrentAutomaticCandidate(): Promise<boolean> {
+    const candidate = this.available;
+    if (
+      candidate === null ||
+      !this.canPrepare() ||
+      this.preferenceWriting ||
+      this.automaticPreference.status !== "confirmed" ||
+      !this.automaticPreference.enabled ||
+      this.view.phase !== "available" ||
+      this.view.deferred ||
+      this.view.version !== candidate.version
+    )
+      return false;
+    await this.prepareManualCandidate(candidate);
+    return true;
   }
 
   private async installWhenIdle(): Promise<void> {

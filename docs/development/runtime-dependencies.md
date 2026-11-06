@@ -68,6 +68,11 @@ remain optional user tools, not Farol runtime dependencies or bundled programs.
 An absent or unsupported optional installation contributes no authority and does
 not disable the base Shell or Computer file operations. Discovery does not run
 version commands, package managers, shell startup files, or ambient PATH tools.
+Git candidates are inspected in this order: the direct Command Line Tools
+executable, Xcode, Homebrew on Apple Silicon, then Homebrew on Intel. Discovery
+never invokes the `/usr/bin/git` shim or installs a developer toolchain. The
+first qualified candidate wins; an unsafe integrity or drift observation
+refuses instead of silently switching installations.
 
 The Go owner binds canonical image paths, owner/mode, physical identities, SHA-256,
 Mach-O architecture/dependencies, directory membership and symlink targets into

@@ -215,28 +215,19 @@ type milestoneLaunch struct {
 	runtime *milestoneRuntime
 	err     error
 	self    port.HelperSelfIdentity
-	path    string
 }
 
-func newMilestoneLaunch(request port.HelperRequest, r *milestoneRuntime) *milestoneLaunch {
-	return &milestoneLaunch{runtime: r, self: port.HelperSelfIdentity{PID: 4321, ProcessStart: "symbolic helper birth"}, path: request.Home + "/Library/Application Support/io.github.legrch.farol/installed-updates/" + request.OperationID + "/launch-Farol.app"}
-}
-func (l *milestoneLaunch) CapturePrivateTarget(context.Context) (string, error) {
-	err := l.runtime.call("capture", func() error { return nil })
-	return l.path, err
+func newMilestoneLaunch(_ port.HelperRequest, r *milestoneRuntime) *milestoneLaunch {
+	return &milestoneLaunch{runtime: r, self: port.HelperSelfIdentity{PID: 4321, ProcessStart: "symbolic helper birth"}}
 }
 func (l *milestoneLaunch) SelfIdentity(context.Context) (port.HelperSelfIdentity, error) {
 	err := l.runtime.call("self", func() error { return nil })
 	return l.self, err
 }
-func (l *milestoneLaunch) LaunchTarget(_ context.Context, self port.HelperSelfIdentity, path *string) error {
+func (l *milestoneLaunch) LaunchTarget(_ context.Context, self port.HelperSelfIdentity) error {
 	return l.runtime.call("launch", func() error {
 		if l.runtime.phase != "launch_requested" || self != l.self {
 			return errors.New("launch before durable correlation")
-		}
-		shared := l.runtime.request.InstallLocation != nil && *l.runtime.request.InstallLocation == "shared"
-		if shared && (path == nil || *path != l.path) || !shared && path != nil {
-			return errors.New("capture correlation changed")
 		}
 		return l.err
 	})
@@ -276,9 +267,6 @@ func TestHelperMilestoneApplyThroughDurableLaunch(t *testing.T) {
 				if indexTrace(t, r.trace, pair[0]) >= indexTrace(t, r.trace, pair[1]) {
 					t.Fatal("policy order changed", r.trace)
 				}
-			}
-			if location == "shared" && indexTrace(t, r.trace, "capture") >= indexTrace(t, r.trace, "write:launch_requested") {
-				t.Fatal("private image capture followed launch intent")
 			}
 			before := append([]string(nil), r.trace...)
 			copy := *milestone
@@ -401,7 +389,7 @@ func TestHelperMilestoneRecoverRollbackAndHistoricalLaunch(t *testing.T) {
 }
 
 func TestHelperMilestoneFailedOrLateLaunchNeverCompletesOrRetries(t *testing.T) {
-	for _, kind := range []string{"opaque", "cancel", "identity", "capture"} {
+	for _, kind := range []string{"opaque", "cancel", "identity"} {
 		t.Run(kind, func(t *testing.T) {
 			request, r := milestoneFixture("apply", true)
 			request.Relaunch = true
@@ -428,8 +416,6 @@ func TestHelperMilestoneFailedOrLateLaunchNeverCompletesOrRetries(t *testing.T) 
 				}
 			case "identity":
 				launch.self = port.HelperSelfIdentity{}
-			case "capture":
-				launch.path = "/unverified-path"
 			}
 			result, err := m.Execute(ctx, r, ready, launch)
 			var failure *Failure
@@ -439,7 +425,7 @@ func TestHelperMilestoneFailedOrLateLaunchNeverCompletesOrRetries(t *testing.T) 
 			if kind == "opaque" && !errors.Is(err, cause) {
 				t.Fatal("private cause lost")
 			}
-			if kind != "capture" && r.phase != "launch_requested" {
+			if r.phase != "launch_requested" {
 				t.Fatal("launch intent lost", r.phase)
 			}
 			before := append([]string(nil), r.trace...)

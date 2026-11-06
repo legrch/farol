@@ -141,7 +141,7 @@ The hosted build is source/package evidence. A `v*` push or an explicit
 The exact version and channel come from `package.json`: ordinary semantic
 versions select `github-stable`; `-owner.beta.N` versions select
 `github-owner-beta`. The private draft and final publication must have the
-matching GitHub prerelease flag. Publication keeps `make_latest: false` and
+matching GitHub prerelease flag. Publication sets `make_latest: "true"` for stable releases and `"false"` for prereleases and
 changes only the qualified draft; it never changes tags or chooses another
 candidate. The source must be an ancestor of accepted `origin/main`.
 Tag runs also verify the exact annotated remote version tag. Neither route
@@ -242,7 +242,7 @@ re-fetches run/attempt, remote tag object, draft and asset identities before
 mutation and refuses any change. It does not rebuild, create a tag/release,
 upload/replace assets, delete or edit a published release. Its only final
 mutation is `PATCH /repos/legrch/farol/releases/<same-id>` with
-`{draft:false, prerelease:<selected channel flag>, make_latest:"false"}`. This is a final read gate,
+`{draft:false, prerelease:<selected channel flag>, make_latest:<"true" for stable; "false" for prerelease>}`. This is a final read gate,
 not an atomic compare-and-swap: Root must keep the selected tag/draft/assets
 quiescent while the serialized workflow runs. No separate concurrent writer is
 authorized by this sequence.

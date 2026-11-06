@@ -180,18 +180,6 @@ func (o *operation) completeLaunch(launch port.HelperRelaunchEffects) error {
 	if err := o.verify(port.App, o.request.Target); err != nil {
 		return err
 	}
-	var private *string
-	if o.request.InstallLocation != nil && *o.request.InstallLocation == "shared" {
-		var path string
-		if err := o.call(true, func() error { var err error; path, err = launch.CapturePrivateTarget(o.ctx); return err }); err != nil {
-			return err
-		}
-		expected := o.request.Home + "/Library/Application Support/io.github.legrch.farol/installed-updates/" + o.request.OperationID + "/launch-Farol.app"
-		if path != expected {
-			return o.refuse("launch_image_unconfirmed")
-		}
-		private = &path
-	}
 	if err := o.fence(); err != nil {
 		return err
 	}
@@ -209,7 +197,7 @@ func (o *operation) completeLaunch(launch port.HelperRelaunchEffects) error {
 		return err
 	}
 	var nativeErr error
-	if err := o.call(true, func() error { nativeErr = launch.LaunchTarget(o.ctx, self, private); return nativeErr }); err != nil {
+	if err := o.call(true, func() error { nativeErr = launch.LaunchTarget(o.ctx, self); return nativeErr }); err != nil {
 		// Only a direct, actual returned nonzero launch with confirmed native
 		// cleanup may settle the original launch_failed result. Opaque/late/
 		// unknown outcomes retain uncertainty and never take this path.
