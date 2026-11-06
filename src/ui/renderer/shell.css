@@ -1765,6 +1765,25 @@ kbd {
   flex: 1;
   min-width: 180px;
 }
+.activity-status-slot {
+  min-height: 20px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-log-details {
+  color: var(--muted);
+  font-size: 12px;
+}
+.activity-log-details > summary {
+  cursor: pointer;
+}
+.activity-log-details > p {
+  margin: 8px 0 0;
+}
 .operation-row,
 .operation-group {
   border: 1px solid var(--line);
