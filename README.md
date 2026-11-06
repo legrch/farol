@@ -10,7 +10,7 @@ Find information in local files, understand a project, or make approved edits. C
 
 ![Illustration of ChatGPT reading a selected local file and applying a requested edit through Farol](resources/readme/farol-read-and-edit.gif)
 
-*Illustrative workflow, not a recording of the app. Access follows the selected settings; Read only does not allow file edits.* [Static image](resources/readme/farol-read-and-edit.png)
+_Illustrative workflow, not a recording of the app. Access follows the selected settings; Read only does not allow file edits._ [Static image](resources/readme/farol-read-and-edit.png)
 
 ## What is Farol?
 
@@ -49,7 +49,7 @@ With an accepted installation running:
 
 ![Illustration of signing in, choosing workspace access, connecting a tunnel, and attaching and testing Farol in ChatGPT](resources/readme/farol-setup-guide.gif)
 
-*Illustrative guide to the current source flow, not a recorded setup test. Public or installed builds may differ. The installation limitations above still apply.* [Static image](resources/readme/farol-setup-guide.png)
+_Illustrative guide to the current source flow, not a recorded setup test. Public or installed builds may differ. The installation limitations above still apply._ [Static image](resources/readme/farol-setup-guide.png)
 
 </details>
 
