@@ -37,11 +37,16 @@ func TestDesktopLauncherNativeLiveHelperSurvivesDesktopQuit(t *testing.T) {
 	f := newLiveNativeFixture(t, true)
 	// No t.TempDir cleanup: any unknown process/effect retains this root.
 	t.Log("LaunchServices witness:", f.dir)
+	// LaunchServices resolves the app through a separate service. Keep fixture
+	// records private while allowing traversal to the bundle and its executable.
+	if err := os.Chmod(f.dir, 0711); err != nil {
+		t.Fatal(err)
+	}
 	app := filepath.Join(f.dir, "Farol Lifetime Witness.app")
 	contents := filepath.Join(app, "Contents")
 	resources := filepath.Join(contents, "Resources", "app")
 	for _, p := range []string{resources, filepath.Join(contents, "MacOS"), filepath.Join(contents, "Frameworks")} {
-		if err := os.MkdirAll(p, 0700); err != nil {
+		if err := os.MkdirAll(p, 0755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -49,17 +54,21 @@ func TestDesktopLauncherNativeLiveHelperSurvivesDesktopQuit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(resources, "farol-backend"), binary, 0500); err != nil {
+	if err := os.WriteFile(filepath.Join(resources, "farol-backend"), binary, 0555); err != nil {
 		t.Fatal(err)
 	}
 	// Runtime is an explicit fixture input. This is not a candidate package.
 	if err := os.Symlink(filepath.Dir(filepath.Dir(filepath.Dir(electron))), filepath.Join(contents, "Frameworks", "Electron Runtime.app")); err != nil {
 		t.Fatal(err)
 	}
-	plist := `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Farol</string><key>CFBundleIdentifier</key><string>io.github.legrch.farol.lifetime-witness.` + filepath.Base(f.dir) + `</string><key>CFBundleName</key><string>Farol Lifetime Witness</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1</string></dict></plist>`
+	plist := `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Farol</string><key>CFBundleIdentifier</key><string>io.github.legrch.farol.lifetime-witness.` + filepath.Base(f.dir) + `</string><key>CFBundleName</key><string>Farol Lifetime Witness</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleInfoDictionaryVersion</key><string>6.0</string><key>CFBundleShortVersionString</key><string>0.5.16</string><key>LSMinimumSystemVersion</key><string>13.0</string><key>CFBundleDevelopmentRegion</key><string>en</string><key>CFBundleVersion</key><string>1</string></dict></plist>`
 	launcher := "#!/bin/sh\nexec \"" + filepath.Join(resources, "farol-backend") + "\" run-desktop-launcher 2>\"" + filepath.Join(f.dir, "guardian.log") + "\"\n"
 	for p, data := range map[string]string{filepath.Join(contents, "Info.plist"): plist, filepath.Join(contents, "MacOS", "Farol"): launcher, filepath.Join(resources, "package.json"): `{"name":"farol-lifetime-witness","main":"index.cjs"}`} {
-		if err := os.WriteFile(p, []byte(data), 0700); err != nil {
+		mode := os.FileMode(0644)
+		if p == filepath.Join(contents, "MacOS", "Farol") {
+			mode = 0755
+		}
+		if err := os.WriteFile(p, []byte(data), mode); err != nil {
 			t.Fatal(err)
 		}
 	}
