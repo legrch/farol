@@ -116,7 +116,19 @@ fs.writeFileSync(path.join(root,'desktop.json'),JSON.stringify({pid:process.pid,
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
-		t.Fatalf("missing %s; retain %s", name, f.dir)
+		var evidence []string
+		for _, filename := range []string{"guardian.log", "fixture-error", "helper.stderr"} {
+			data, err := os.ReadFile(filepath.Join(f.dir, filename))
+			if err == nil {
+				if len(data) > 4096 {
+					data = data[:4096]
+				}
+				evidence = append(evidence, filename+": "+string(data))
+			} else {
+				evidence = append(evidence, filename+": "+err.Error())
+			}
+		}
+		t.Fatalf("missing %s; retain %s; %s", name, f.dir, strings.Join(evidence, "; "))
 		return nil
 	}
 	if json.Unmarshal(waitFile("desktop.json"), &desktop) != nil || desktop.PID <= 1 || desktop.Parent <= 1 {
