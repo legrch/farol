@@ -22,7 +22,7 @@ The installer can select the highest published stable version with `latest`:
 curl -fsSL https://raw.githubusercontent.com/legrch/farol/main/scripts/install-release.sh | sh -s -- latest
 ```
 
-It checks the selected release assets and refuses to replace a newer installed version. Specify an exact version when you intentionally need an older one. Inspect the script before running it if you prefer not to pipe a network response into a shell.
+It checks the selected release assets. Replacing an existing accepted installation requires a newer version; an older or identical version is refused before the app changes so retained update receipts remain consistent. Inspect the script before running it if you prefer not to pipe a network response into a shell.
 
 Use the assets attached to the same latest release: the Apple Silicon ZIP, `farol-release.json` and `SHA256SUMS`. Check the ZIP in its download directory:
 

@@ -184,6 +184,9 @@ func installReleaseSwap(ctx context.Context, in installReleaseInput, out io.Writ
 		if err != nil {
 			return err
 		}
+		if !installTargetNewer(m.Version, acceptedOld.Version) {
+			return errors.New("INSTALL_TARGET_NOT_NEWER")
+		}
 		// The installer holds the same promotion lease as startup while replacing
 		// an occupied slot. Published v0.5.16 is the first predecessor for which
 		// this shared admission contract has been verified. An older app could
@@ -661,22 +664,41 @@ func settledInstallInventory(root string) error {
 }
 
 func installPredecessorUsesStartupLease(version string) bool {
-	parts := strings.Split(version, ".")
-	if len(parts) != 3 {
+	numbers, ok := installVersionParts(version)
+	return ok && (numbers[0] > 0 || numbers[1] > 5 || numbers[1] == 5 && numbers[2] >= 16)
+}
+
+func installTargetNewer(target, current string) bool {
+	a, aOK := installVersionParts(target)
+	b, bOK := installVersionParts(current)
+	if !aOK || !bOK {
 		return false
 	}
+	for i := range a {
+		if a[i] != b[i] {
+			return a[i] > b[i]
+		}
+	}
+	return false
+}
+
+func installVersionParts(version string) ([3]uint64, bool) {
 	var numbers [3]uint64
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
+		return numbers, false
+	}
 	for i, part := range parts {
 		if part == "" || len(part) > 1 && part[0] == '0' {
-			return false
+			return numbers, false
 		}
 		n, err := strconv.ParseUint(part, 10, 32)
 		if err != nil {
-			return false
+			return numbers, false
 		}
 		numbers[i] = n
 	}
-	return numbers[0] > 0 || numbers[1] > 5 || numbers[1] == 5 && numbers[2] >= 16
+	return numbers, true
 }
 
 func acceptedInstallBuild(root, profileRoot, installed string) (apptree.Expected, error) {

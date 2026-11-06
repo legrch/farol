@@ -237,3 +237,23 @@ func TestInstallReleasePredecessorRequiresStartupLeaseGeneration(t *testing.T) {
 		}
 	}
 }
+
+func TestInstallReleaseTargetMustAdvanceAcceptedVersion(t *testing.T) {
+	for _, tc := range []struct {
+		current, target string
+		allowed         bool
+	}{
+		{"0.5.16", "0.5.17", true},
+		{"0.5.16", "0.5.16", false},
+		{"0.5.16", "0.5.15", false},
+		{"0.5.19", "0.5.9", false},
+		{"0.5.99", "0.6.0", true},
+		{"0.6.0", "1.0.0", true},
+		{"0.5.16-owner.beta.1", "0.5.17", false},
+		{"0.5.16", "0.5.17-owner.beta.1", false},
+	} {
+		if got := installTargetNewer(tc.target, tc.current); got != tc.allowed {
+			t.Errorf("current %q target %q: got %v, want %v", tc.current, tc.target, got, tc.allowed)
+		}
+	}
+}
