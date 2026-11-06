@@ -34,7 +34,7 @@ The supported macOS versions and clean-machine prerequisites still need first-in
 
 **First installation is still being qualified.** Downloading a ZIP or copying the app does not establish the trusted installation record required for updates. Follow [First installation](docs/start/installation.md) and check [current distribution status](docs/reference/status.md) before installing. Existing users should keep their accepted installation and update from the app.
 
-The one-command installer will be recommended here after its replacement and first-launch checks pass. A GitHub **Latest** label identifies a published release; it does not by itself qualify installation on a fresh Mac.
+The one-command installer is being qualified for an empty `/Applications/Farol.app` slot. Existing installations update through Farol. A GitHub **Latest** label identifies a published release; it does not by itself qualify installation on a fresh Mac.
 
 ## Connect Farol to ChatGPT
 

@@ -224,10 +224,12 @@ fi
 [ "$1" != '--help' ] || { printf '%s\n' "$usage"; exit 0; }
 { [ "$1" = latest ] || valid_version "$1"; } || { printf '%s\n' "$usage" >&2; exit 2; }
 version=$1
-requested_latest=no
-[ "$version" != latest ] || requested_latest=yes
 [ "$(/usr/bin/uname -s)" = Darwin ] || fail 'macOS is required'
 [ "$(/usr/bin/uname -m)" = arm64 ] || fail 'Apple silicon is required'
+installed=/Applications/Farol.app
+if [ -e "$installed" ] || [ -L "$installed" ]; then
+  fail 'Farol is already installed. Use Check for Updates in the app; the installer accepts only an empty slot.'
+fi
 tmp=$(/usr/bin/mktemp -d "/tmp/farol-release.XXXXXXXX") || fail 'cannot create private temporary directory'
 retain=yes
 cleanup() {
@@ -308,7 +310,6 @@ else
     *) fail 'cannot determine outer app signing status' ;;
   esac
 fi
-installed=/Applications/Farol.app
 profile="$HOME/Library/Application Support/io.github.legrch.farol/installed-updates"
 running() {
   /bin/ps -ww -axo pid=,ppid=,comm= > "$tmp/processes" || return 2
@@ -423,21 +424,14 @@ check_stopped() {
   [ "$status" -eq 1 ] || fail 'cannot inspect process table'
   return 0
 }
-existing=no
 if [ -e "$installed" ] || [ -L "$installed" ]; then
-  [ -d "$installed" ] && [ ! -L "$installed" ] || fail 'installed app path is not a directory'
-  [ "$(plist_value "$installed/Contents/Info.plist" CFBundleIdentifier)" = io.github.legrch.farol ] || fail 'existing app identity mismatch'
-  if [ "$requested_latest" = yes ]; then
-    installed_version=$(plist_value "$installed/Contents/Info.plist" CFBundleShortVersionString) || fail 'installed version unavailable'
-    check_latest_version "$installed_version" "$version" || fail 'latest is older than the installed version; specify a version to downgrade'
-  fi
-  existing=yes
+  fail 'Farol appeared in Applications during download. Use Check for Updates in the app; no app files were changed.'
 fi
 check_stopped || fail 'Quit Farol with Command+Q, then run this installer again. No app files were changed.'
 # The backend shipped by the verified target release owns the one native
-# namespace replacement. Keep the source copy in this private operation
-# directory; its Go admission checks the complete tree, both installation
-# locks, the current slot, and the same-filesystem requirement before effect.
+# namespace placement. Keep the source copy in this private operation
+# directory; its Go admission checks the complete tree and empty slot
+# before effect.
 # The extracted bundle is never launched as a GUI application.
 /usr/bin/ditto "$app" "$tmp/staged.app" || fail 'could not prepare staged application; installed app preserved'
 check_stopped || fail 'production process appeared; installed app preserved'
@@ -445,14 +439,9 @@ check_stopped || fail 'production process appeared; installed app preserved'
   --staged-app "$tmp/staged.app" \
   --manifest "$tmp/farol-release.json" \
   --installed "$installed" \
-  --evidence "$tmp" || fail 'native replacement refused or unconfirmed; inspect retained recovery files, do not repeat'
-# An occupied slot is exchanged atomically. The old bundle remains privately
-# retained for inspected recovery; never erase it in installer teardown.
-if [ "$existing" = yes ]; then
-  retain=yes
-fi
-/usr/bin/codesign --verify --strict "$installed/Contents/Resources/app/farol-backend" || fail 'installed backend signature verification failed; predecessor retained'
-/usr/bin/codesign --verify --strict --ignore-resources "$installed/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron" || fail 'installed Electron signature verification failed; predecessor retained'
+  --evidence "$tmp" || fail 'native placement refused or unconfirmed; inspect retained recovery files, do not repeat'
+/usr/bin/codesign --verify --strict "$installed/Contents/Resources/app/farol-backend" || fail 'installed backend signature verification failed; inspect retained recovery files'
+/usr/bin/codesign --verify --strict --ignore-resources "$installed/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron" || fail 'installed Electron signature verification failed; inspect retained recovery files'
 nonce=$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]') || fail 'cannot create launch nonce'
 case "$nonce" in
   ????????-????-????-????-????????????) ;;
@@ -460,10 +449,10 @@ case "$nonce" in
 esac
 proof="$tmp/startup-proof.json"
 suffix=${tmp##*.}
-/usr/bin/open "$installed" --args "--farol-install-proof=$suffix:$nonce" || fail 'launch request failed; predecessor retained if one existed'
+/usr/bin/open "$installed" --args "--farol-install-proof=$suffix:$nonce" || fail 'launch request failed; inspect retained recovery files'
 count=0
 while check_stopped main; do
-  [ "$count" -lt 30 ] || fail 'launch not confirmed; predecessor retained if one existed'
+  [ "$count" -lt 30 ] || fail 'launch not confirmed; inspect retained recovery files'
   /bin/sleep 1
   count=$((count + 1))
 done
@@ -471,15 +460,15 @@ done
 # publish this nonce-bound proof after its main startup has completed.
 count=0
 while [ ! -e "$proof" ]; do
-  check_stopped main && fail 'Farol exited before startup confirmation; predecessor retained'
-  [ "$count" -lt 45 ] || fail 'Farol startup unconfirmed; predecessor retained'
+  check_stopped main && fail 'Farol exited before startup confirmation; inspect retained recovery files'
+  [ "$count" -lt 45 ] || fail 'Farol startup unconfirmed; inspect retained recovery files'
   /bin/sleep 1
   count=$((count + 1))
 done
 main_pid=$(running main-pid) || fail 'confirmed startup process identity unavailable'
 main_instance=$(running main-instance) || fail 'confirmed startup process instance unavailable'
-[ "${main_instance%%:*}" = "$main_pid" ] || fail 'confirmed startup process changed; predecessor retained'
-/usr/bin/python3 -I - "$proof" "$nonce" "$manifest_build_id" "$version" "$main_pid" "$main_instance" <<'PY' || fail 'startup confirmation invalid; predecessor retained'
+[ "${main_instance%%:*}" = "$main_pid" ] || fail 'confirmed startup process changed; inspect retained recovery files'
+/usr/bin/python3 -I - "$proof" "$nonce" "$manifest_build_id" "$version" "$main_pid" "$main_instance" <<'PY' || fail 'startup confirmation invalid; inspect retained recovery files'
 import json, os, stat, sys
 file, nonce, build_id, version, pid, instance = sys.argv[1:]
 before = os.lstat(file)
@@ -508,10 +497,10 @@ birth = getattr(before, 'st_birthtime', None)
 if birth is None or start_sec * 1000000 + start_usec > int(birth * 1000000):
     sys.exit(1)
 PY
-confirmed_main=$(running main-instance) || fail 'Farol primary exited after startup confirmation; predecessor retained'
-[ "$confirmed_main" = "$main_instance" ] || fail 'Farol primary changed after startup confirmation; predecessor retained'
+confirmed_main=$(running main-instance) || fail 'Farol primary exited after startup confirmation; inspect retained recovery files'
+[ "$confirmed_main" = "$main_instance" ] || fail 'Farol primary changed after startup confirmation; inspect retained recovery files'
 actual=$(plist_value "$installed/Contents/Info.plist" CFBundleShortVersionString) || fail 'cannot read installed version'
-[ "$actual" = "$version" ] || fail 'installed version mismatch; predecessor retained if one existed'
+[ "$actual" = "$version" ] || fail 'installed version mismatch; inspect retained recovery files'
 printf 'Installed and running: Farol %s\n' "$actual"
 printf '%s\n' 'Farol opened. Check its connection and updates in the app.'
-[ "$existing" = yes ] || retain=no
+retain=no

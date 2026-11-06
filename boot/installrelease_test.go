@@ -63,65 +63,6 @@ func TestInstallReleaseCustodyRefusesSymlinkAndChangedMode(t *testing.T) {
 	}
 }
 
-func TestInstallReleaseInventoryRefusesPendingAndUnmatchedReceipt(t *testing.T) {
-	root := t.TempDir()
-	if err := settledInstallInventory(root); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "ready.json"), []byte("{}"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := settledInstallInventory(root); err == nil {
-		t.Fatal("ready update admitted")
-	}
-	if err := os.Remove(filepath.Join(root, "ready.json")); err != nil {
-		t.Fatal(err)
-	}
-	receipt := map[string]any{"phase": "completed", "operation": map[string]any{"operationId": strings.Repeat("a", 32)}, "helper": map[string]any{"pid": 999999}}
-	b, _ := json.Marshal(receipt)
-	if err := os.WriteFile(filepath.Join(root, "last-update.json"), b, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := settledInstallInventory(root); err == nil {
-		t.Fatal("receipt without matching journal admitted")
-	}
-}
-
-func TestInstallReleaseInventoryAdmitsOnlyMatchedSettledUpdate(t *testing.T) {
-	root := t.TempDir()
-	id := strings.Repeat("a", 32)
-	op := filepath.Join(root, id)
-	if err := os.Mkdir(op, 0700); err != nil {
-		t.Fatal(err)
-	}
-	writeJSON := func(path string, value any) {
-		t.Helper()
-		b, err := json.Marshal(value)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, b, 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	writeJSON(filepath.Join(root, "last-update.json"), map[string]any{
-		"schema": "farol.ready-update/1", "phase": "completed",
-		"operation": map[string]any{"operationId": id},
-		"helper":    map[string]any{"pid": 999999},
-	})
-	writeJSON(filepath.Join(op, "slot-binding.json"), map[string]any{
-		"schema": "farol.installed-operation-slot/1", "operationId": id, "installLocation": "shared",
-	})
-	writeJSON(filepath.Join(op, "journal.json"), map[string]any{"operationId": id, "phase": "completed"})
-	if err := settledInstallInventory(root); err != nil {
-		t.Fatalf("settled update refused: %v", err)
-	}
-	writeJSON(filepath.Join(op, "journal.json"), map[string]any{"operationId": id, "phase": "unknown"})
-	if err := settledInstallInventory(root); err == nil {
-		t.Fatal("unknown update journal admitted")
-	}
-}
-
 func TestInstallReleaseEmptySlotRequiresAbsentProfileAndReceipts(t *testing.T) {
 	root := t.TempDir()
 	profile := filepath.Join(root, "profile")
@@ -143,6 +84,29 @@ func TestInstallReleaseEmptySlotRequiresAbsentProfileAndReceipts(t *testing.T) {
 	}
 	if err := installFreshProfileAbsent(profile, app); err == nil {
 		t.Fatal("empty slot with existing receipt admitted")
+	}
+}
+
+func TestInstallReleaseEmptySlotRefusesOccupiedPath(t *testing.T) {
+	root := t.TempDir()
+	app := filepath.Join(root, "Farol.app")
+	if err := installEmptySlotIdentity(app); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(app, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := installEmptySlotIdentity(app); err == nil || err.Error() != "INSTALL_OCCUPIED_SLOT_UNSUPPORTED" {
+		t.Fatalf("occupied slot admitted: %v", err)
+	}
+	if err := os.Remove(app); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(root, app); err != nil {
+		t.Fatal(err)
+	}
+	if err := installEmptySlotIdentity(app); err == nil || err.Error() != "INSTALL_OCCUPIED_SLOT_UNSUPPORTED" {
+		t.Fatalf("symlink slot admitted: %v", err)
 	}
 }
 
@@ -173,87 +137,5 @@ func TestInstallReleaseRefusesOnlyProductionProcessInventory(t *testing.T) {
 	}
 	if err := classifyInstallProcesses("unparsed process inventory\n", 42); err == nil {
 		t.Fatal("malformed process inventory was admitted")
-	}
-}
-
-func TestInstallReleaseAcceptedBaselineIsBoundToManifest(t *testing.T) {
-	root := t.TempDir()
-	profileRoot := filepath.Join(root, "profile")
-	installed := "/Applications/Farol.app"
-	record := map[string]any{"schema": "farol.adopted-baseline/1", "slot": installed, "userData": profileRoot, "adoptedAt": "2026-11-06T00:00:00Z", "manifest": map[string]any{"artifactSha256": strings.Repeat("a", 64), "version": "0.5.16", "buildId": strings.Repeat("b", 64)}}
-	write := func() {
-		t.Helper()
-		b, err := json.Marshal(record)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(root, "adopted-baseline.json"), b, 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write()
-	build, err := acceptedInstallBuild(root, profileRoot, installed)
-	if err != nil || build.Version != "0.5.16" || build.TreeSHA256 != strings.Repeat("a", 64) {
-		t.Fatalf("accepted build: %+v %v", build, err)
-	}
-	for _, field := range []string{"schema", "slot", "userData", "adoptedAt"} {
-		original := record[field]
-		delete(record, field)
-		write()
-		if _, err := acceptedInstallBuild(root, profileRoot, installed); err == nil {
-			t.Fatalf("missing %s admitted", field)
-		}
-		record[field] = "wrong"
-		write()
-		if _, err := acceptedInstallBuild(root, profileRoot, installed); err == nil && field != "adoptedAt" {
-			t.Fatalf("wrong %s admitted", field)
-		}
-		record[field] = original
-	}
-	record["manifest"].(map[string]any)["buildId"] = "invalid"
-	write()
-	if _, err := acceptedInstallBuild(root, profileRoot, installed); err == nil {
-		t.Fatal("invalid adopted identity admitted")
-	}
-}
-
-func TestInstallReleasePredecessorRequiresStartupLeaseGeneration(t *testing.T) {
-	for _, tc := range []struct {
-		version string
-		allowed bool
-	}{
-		{"0.5.15", false},
-		{"0.5.16", true},
-		{"0.5.17", true},
-		{"0.6.0", true},
-		{"1.0.0", true},
-		{"0.5.16-owner.beta.1", false},
-		{"00.5.16", false},
-		{"0.05.16", false},
-		{"", false},
-	} {
-		if got := installPredecessorUsesStartupLease(tc.version); got != tc.allowed {
-			t.Errorf("version %q: got %v, want %v", tc.version, got, tc.allowed)
-		}
-	}
-}
-
-func TestInstallReleaseTargetMustAdvanceAcceptedVersion(t *testing.T) {
-	for _, tc := range []struct {
-		current, target string
-		allowed         bool
-	}{
-		{"0.5.16", "0.5.17", true},
-		{"0.5.16", "0.5.16", false},
-		{"0.5.16", "0.5.15", false},
-		{"0.5.19", "0.5.9", false},
-		{"0.5.99", "0.6.0", true},
-		{"0.6.0", "1.0.0", true},
-		{"0.5.16-owner.beta.1", "0.5.17", false},
-		{"0.5.16", "0.5.17-owner.beta.1", false},
-	} {
-		if got := installTargetNewer(tc.target, tc.current); got != tc.allowed {
-			t.Errorf("current %q target %q: got %v, want %v", tc.current, tc.target, got, tc.allowed)
-		}
 	}
 }

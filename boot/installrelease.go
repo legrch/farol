@@ -21,7 +21,6 @@ import (
 
 	"github.com/legrch/farol/modules/release/infra/native/appidentity"
 	"github.com/legrch/farol/modules/release/infra/native/apptree"
-	"github.com/legrch/farol/modules/release/infra/native/helperlocks"
 	"github.com/legrch/farol/modules/release/infra/native/installmove"
 	"golang.org/x/sys/unix"
 )
@@ -151,107 +150,14 @@ func installReleaseSwap(ctx context.Context, in installReleaseInput, out io.Writ
 	if err = checkedInstallRecord(cache); err != nil {
 		return err
 	}
-	oldInfo, err := os.Lstat(in.installed)
-	occupied := err == nil
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return errors.New("INSTALL_SLOT_UNAVAILABLE")
-	}
-	if occupied && (!oldInfo.IsDir() || oldInfo.Mode()&os.ModeSymlink != 0) {
-		return errors.New("INSTALL_SLOT_INVALID")
-	}
-	profileRoot := filepath.Join(account.HomeDir, "Library", "Application Support", "io.github.legrch.farol")
-	if !occupied {
-		if err := installFreshProfileAbsent(profileRoot, in.installed); err != nil {
-			return err
-		}
-	}
-	if err := installProductionStopped(ctx); err != nil {
+	if err = installEmptySlotIdentity(in.installed); err != nil {
 		return err
 	}
-	var updateLease, promotionLease *helperlocks.Lease
-	var acceptedOld apptree.Expected
-	if occupied {
-		updatePath := filepath.Join(account.HomeDir, "Library", "Application Support", "io.github.legrch.farol", "installed-updates")
-		statePath := filepath.Join(account.HomeDir, "Library", "Application Support", "io.github.legrch.farol", "farol-state")
-		if err = settledInstallInventory(updatePath); err != nil {
-			return err
-		}
-		lockInfo, lockErr := os.Lstat(filepath.Join(updatePath, "lock"))
-		if lockErr != nil || !lockInfo.Mode().IsRegular() || lockInfo.Mode().Perm() != 0600 {
-			return errors.New("INSTALL_UPDATE_LOCK_UNAVAILABLE")
-		}
-		acceptedOld, err = acceptedInstallBuild(updatePath, profileRoot, in.installed)
-		if err != nil {
-			return err
-		}
-		if !installTargetNewer(m.Version, acceptedOld.Version) {
-			return errors.New("INSTALL_TARGET_NOT_NEWER")
-		}
-		// The installer holds the same promotion lease as startup while replacing
-		// an occupied slot. Published v0.5.16 is the first predecessor for which
-		// this shared admission contract has been verified. An older app could
-		// start after the final process observation and before the swap.
-		if !installPredecessorUsesStartupLease(acceptedOld.Version) {
-			return errors.New("INSTALL_PREDECESSOR_STARTUP_LEASE_UNCONFIRMED")
-		}
-		update, e := openInstallDirectory(updatePath)
-		if e != nil {
-			return e
-		}
-		defer update.Close()
-		state, e := openInstallDirectory(statePath)
-		if e != nil {
-			return e
-		}
-		defer state.Close()
-		updateID, e := installIdentity(update)
-		if e != nil {
-			return e
-		}
-		stateID, e := installIdentity(state)
-		if e != nil {
-			return e
-		}
-		until, _ := ctx.Deadline()
-		updateLease, err = helperlocks.AcquireUpdate(ctx, helperlocks.Directory{File: update, Identity: helperlocks.Identity(updateID)}, until)
-		if err != nil {
-			return errors.New("INSTALL_UPDATE_BUSY_OR_UNKNOWN")
-		}
-		defer updateLease.Close()
-		promotionLease, err = helperlocks.AcquirePromotion(ctx, helperlocks.Directory{File: state, Identity: helperlocks.Identity(stateID)}, until)
-		if err != nil {
-			return errors.New("INSTALL_PROMOTION_BUSY_OR_UNKNOWN")
-		}
-		defer promotionLease.Close()
-		if err = settledInstallInventory(updatePath); err != nil {
-			return err
-		}
+	profileRoot := filepath.Join(account.HomeDir, "Library", "Application Support", "io.github.legrch.farol")
+	if err = installFreshProfileAbsent(profileRoot, in.installed); err != nil {
+		return err
 	}
-	var oldID installmove.Identity
-	var verifyOld func(context.Context) error
-	if occupied {
-		old, e := openInstallDirectory(in.installed)
-		if e != nil {
-			return e
-		}
-		defer old.Close()
-		oldID, err = installIdentity(old)
-		if err != nil {
-			return err
-		}
-		verifyOld = func(ctx context.Context) error {
-			v, e := apptree.New(apps, old, "Farol.app", acceptedOld, appidentity.Verify)
-			if e != nil {
-				return e
-			}
-			_, e = v.Verify(ctx)
-			return e
-		}
-		if err = verifyOld(ctx); err != nil {
-			return errors.New("INSTALL_PREDECESSOR_IDENTITY_INVALID")
-		}
-	}
-	if err = installSignatureAtSlot(ctx, occupied, in.installed); err != nil {
+	if err := installProductionStopped(ctx); err != nil {
 		return err
 	}
 	parentID, err := installIdentity(stageParent)
@@ -267,46 +173,21 @@ func installReleaseSwap(ctx context.Context, in installReleaseInput, out io.Writ
 		if e := installProductionStopped(ctx); e != nil {
 			return e
 		}
-		if !occupied {
-			if e := installFreshProfileAbsent(profileRoot, in.installed); e != nil {
-				return e
-			}
-		}
-		if updateLease != nil {
-			if e := updateLease.Verify(ctx); e != nil {
-				return errors.New("INSTALL_UPDATE_LEASE_CHANGED")
-			}
-		}
-		if promotionLease != nil {
-			if e := promotionLease.Verify(ctx); e != nil {
-				return errors.New("INSTALL_PROMOTION_LEASE_CHANGED")
-			}
+		if e := installFreshProfileAbsent(profileRoot, in.installed); e != nil {
+			return e
 		}
 		if e := verifyStage(ctx); e != nil {
 			return errors.New("INSTALL_STAGED_TREE_CHANGED")
 		}
-		if e := installSlotIdentity(in.installed, occupied, oldID); e != nil {
+		if e := installEmptySlotIdentity(in.installed); e != nil {
 			return e
-		}
-		if occupied {
-			if e := verifyOld(ctx); e != nil {
-				return errors.New("INSTALL_PREDECESSOR_CHANGED")
-			}
-			if e := installBundleID(ctx, in.installed); e != nil {
-				return e
-			}
 		}
 		return nil
 	}
 	left := installmove.Location{Parent: installmove.Directory{File: stageParent, Identity: parentID, Kind: installmove.OwnedParent}, Name: "staged.app"}
 	right := installmove.Location{Parent: installmove.Directory{File: apps, Identity: appsID, Kind: installmove.SharedApplicationsParent}, Name: "Farol.app"}
 	until, _ := ctx.Deadline()
-	var operation *installmove.Operation
-	if occupied {
-		operation, err = installmove.PrepareExchange(left, right, stageID, oldID, until, fence)
-	} else {
-		operation, err = installmove.PrepareRename(left, right, stageID, until, fence)
-	}
+	operation, err := installmove.PrepareRename(left, right, stageID, until, fence)
 	if err != nil {
 		return errors.New("INSTALL_SWAP_UNAVAILABLE")
 	}
@@ -328,19 +209,11 @@ func installReleaseSwap(ctx context.Context, in installReleaseInput, out io.Writ
 	if err = verifyInstalledRelease(ctx, apps, in.installed, m); err != nil {
 		return err
 	}
-	if occupied {
-		if err = os.Rename(in.staged, filepath.Join(in.evidence, "previous.app")); err != nil {
-			return errors.New("INSTALL_PREDECESSOR_RETAINED_AT_STAGE_UNKNOWN")
-		}
-		if err = stageParent.Sync(); err != nil {
-			return errors.New("INSTALL_PREDECESSOR_DURABILITY_UNKNOWN")
-		}
-	}
 	record.Phase = "completed"
 	if err = writeInstallRecord(cache, record); err != nil {
 		return errors.New("INSTALL_COMPLETION_RECORD_UNKNOWN")
 	}
-	_, _ = fmt.Fprintln(out, "Native installation replacement completed")
+	_, _ = fmt.Fprintln(out, "Native installation placement completed")
 	return nil
 }
 
@@ -423,38 +296,15 @@ func installSignatures(ctx context.Context, app string) error {
 	}
 	return nil
 }
-func installSignatureAtSlot(ctx context.Context, occupied bool, path string) error {
-	if !occupied {
+func installEmptySlotIdentity(path string) error {
+	_, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	if err := installBundleID(ctx, path); err != nil {
-		return err
+	if err != nil {
+		return errors.New("INSTALL_SLOT_UNAVAILABLE")
 	}
-	return installSignatures(ctx, path)
-}
-func installBundleID(ctx context.Context, path string) error {
-	b, err := exec.CommandContext(ctx, "/usr/libexec/PlistBuddy", "-c", "Print :CFBundleIdentifier", filepath.Join(path, "Contents", "Info.plist")).Output()
-	if err != nil || strings.TrimSpace(string(b)) != "io.github.legrch.farol" {
-		return errors.New("INSTALL_SLOT_IDENTITY_INVALID")
-	}
-	return nil
-}
-func installSlotIdentity(path string, occupied bool, expected installmove.Identity) error {
-	s, err := os.Lstat(path)
-	if !occupied {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return errors.New("INSTALL_SLOT_CHANGED")
-	}
-	if err != nil || !s.IsDir() || s.Mode()&os.ModeSymlink != 0 {
-		return errors.New("INSTALL_SLOT_CHANGED")
-	}
-	st, ok := s.Sys().(*syscall.Stat_t)
-	if !ok || strconv.FormatUint(uint64(st.Dev), 10) != expected.Device || strconv.FormatUint(uint64(st.Ino), 10) != expected.Inode {
-		return errors.New("INSTALL_SLOT_CHANGED")
-	}
-	return nil
+	return errors.New("INSTALL_OCCUPIED_SLOT_UNSUPPORTED")
 }
 func installFreshProfileAbsent(profile, installed string) error {
 	for _, path := range []string{profile, installed + ".receipt.json", installed + ".repair.json", filepath.Join(filepath.Dir(installed), ".farol-closed-repair.json")} {
@@ -466,9 +316,8 @@ func installFreshProfileAbsent(profile, installed string) error {
 	return nil
 }
 
-// The update and promotion locks exclude cooperative new writers. A current
-// primary that already completed startup is additionally refused here. This
-// inventory is conservative: an unclassified Farol backend is a refusal.
+// A current primary is refused here. This inventory is conservative: an
+// unclassified Farol backend is a refusal.
 func installProductionStopped(ctx context.Context) error {
 	output, err := exec.CommandContext(ctx, "/bin/ps", "-ww", "-axo", "pid=,comm=").Output()
 	if err != nil || len(output) == 0 || len(output) > 4*1024*1024 {
@@ -580,193 +429,4 @@ func writeInstallRecord(dir string, r installReleaseRecord) error {
 		return errors.New("INSTALL_CUSTODY_OUTCOME_UNKNOWN")
 	}
 	return nil
-}
-func settledInstallInventory(root string) error {
-	for _, name := range []string{"ready.json", "restore-pending.json", "download-pending.json", "package-cleanup-pending.json"} {
-		_, err := os.Lstat(filepath.Join(root, name))
-		if !errors.Is(err, os.ErrNotExist) {
-			return errors.New("INSTALL_UPDATE_PENDING_OR_UNKNOWN")
-		}
-	}
-	b, err := os.ReadFile(filepath.Join(root, "last-update.json"))
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return errors.New("INSTALL_UPDATE_PENDING_OR_UNKNOWN")
-	}
-	if err == nil {
-		if len(b) > 65536 {
-			return errors.New("INSTALL_UPDATE_PENDING_OR_UNKNOWN")
-		}
-		var receipt struct {
-			Schema    string `json:"schema"`
-			Phase     string `json:"phase"`
-			Operation struct {
-				OperationID string `json:"operationId"`
-			} `json:"operation"`
-			Helper struct {
-				PID int `json:"pid"`
-			} `json:"helper"`
-		}
-		if json.Unmarshal(b, &receipt) != nil || receipt.Schema != "farol.ready-update/1" || receipt.Phase != "completed" && receipt.Phase != "rolled_back" || len(receipt.Operation.OperationID) != 32 || receipt.Helper.PID < 2 {
-			return errors.New("INSTALL_UPDATE_PENDING_OR_UNKNOWN")
-		}
-		for _, c := range receipt.Operation.OperationID {
-			if !strings.ContainsRune("0123456789abcdef", c) {
-				return errors.New("INSTALL_UPDATE_PENDING_OR_UNKNOWN")
-			}
-		}
-		binding, e := os.ReadFile(filepath.Join(root, receipt.Operation.OperationID, "slot-binding.json"))
-		if e != nil || len(binding) > 65536 {
-			return errors.New("INSTALL_UPDATE_PENDING_OR_UNKNOWN")
-		}
-		var slot struct {
-			Schema          string `json:"schema"`
-			OperationID     string `json:"operationId"`
-			InstallLocation string `json:"installLocation"`
-		}
-		if json.Unmarshal(binding, &slot) != nil || slot.Schema != "farol.installed-operation-slot/1" || slot.OperationID != receipt.Operation.OperationID || slot.InstallLocation != "shared" {
-			return errors.New("INSTALL_UPDATE_PENDING_OR_UNKNOWN")
-		}
-		journal, e := os.ReadFile(filepath.Join(root, receipt.Operation.OperationID, "journal.json"))
-		if e != nil || len(journal) > 65536 {
-			return errors.New("INSTALL_UPDATE_PENDING_OR_UNKNOWN")
-		}
-		var j struct {
-			Phase       string `json:"phase"`
-			OperationID string `json:"operationId"`
-		}
-		if json.Unmarshal(journal, &j) != nil || j.Phase != receipt.Phase || j.OperationID != receipt.Operation.OperationID {
-			return errors.New("INSTALL_UPDATE_PENDING_OR_UNKNOWN")
-		}
-		if e = syscall.Kill(receipt.Helper.PID, 0); e == nil || !errors.Is(e, syscall.ESRCH) {
-			return errors.New("INSTALL_HELPER_LIVE_OR_UNKNOWN")
-		}
-	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return errors.New("INSTALL_UPDATE_PENDING_OR_UNKNOWN")
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() || len(entry.Name()) != 32 {
-			continue
-		}
-		b, e := os.ReadFile(filepath.Join(root, entry.Name(), "journal.json"))
-		if e != nil || len(b) > 65536 {
-			return errors.New("INSTALL_UPDATE_PENDING_OR_UNKNOWN")
-		}
-		var j struct {
-			Phase string `json:"phase"`
-		}
-		if json.Unmarshal(b, &j) != nil || j.Phase != "completed" && j.Phase != "rolled_back" && j.Phase != "cancel_completed" && j.Phase != "rollback_completed" {
-			return errors.New("INSTALL_UPDATE_PENDING_OR_UNKNOWN")
-		}
-	}
-	return nil
-}
-
-func installPredecessorUsesStartupLease(version string) bool {
-	numbers, ok := installVersionParts(version)
-	return ok && (numbers[0] > 0 || numbers[1] > 5 || numbers[1] == 5 && numbers[2] >= 16)
-}
-
-func installTargetNewer(target, current string) bool {
-	a, aOK := installVersionParts(target)
-	b, bOK := installVersionParts(current)
-	if !aOK || !bOK {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return a[i] > b[i]
-		}
-	}
-	return false
-}
-
-func installVersionParts(version string) ([3]uint64, bool) {
-	var numbers [3]uint64
-	parts := strings.Split(version, ".")
-	if len(parts) != 3 {
-		return numbers, false
-	}
-	for i, part := range parts {
-		if part == "" || len(part) > 1 && part[0] == '0' {
-			return numbers, false
-		}
-		n, err := strconv.ParseUint(part, 10, 32)
-		if err != nil {
-			return numbers, false
-		}
-		numbers[i] = n
-	}
-	return numbers, true
-}
-
-func acceptedInstallBuild(root, profileRoot, installed string) (apptree.Expected, error) {
-	var result apptree.Expected
-	last, err := os.ReadFile(filepath.Join(root, "last-update.json"))
-	if err == nil {
-		if len(last) > 65536 {
-			return result, errors.New("INSTALL_PREDECESSOR_IDENTITY_UNKNOWN")
-		}
-		var receipt struct {
-			Phase          string `json:"phase"`
-			RunningBuildID string `json:"runningBuildId"`
-			Operation      struct {
-				Source struct {
-					Digest  string `json:"digest"`
-					Version string `json:"version"`
-					BuildID string `json:"buildId"`
-				} `json:"source"`
-				Target struct {
-					Digest  string `json:"digest"`
-					Version string `json:"version"`
-					BuildID string `json:"buildId"`
-				} `json:"target"`
-			} `json:"operation"`
-		}
-		if json.Unmarshal(last, &receipt) != nil {
-			return result, errors.New("INSTALL_PREDECESSOR_IDENTITY_UNKNOWN")
-		}
-		if receipt.Phase == "completed" {
-			result = apptree.Expected{TreeSHA256: receipt.Operation.Target.Digest, Version: receipt.Operation.Target.Version, BuildID: receipt.Operation.Target.BuildID}
-		} else if receipt.Phase == "rolled_back" {
-			result = apptree.Expected{TreeSHA256: receipt.Operation.Source.Digest, Version: receipt.Operation.Source.Version, BuildID: receipt.Operation.Source.BuildID}
-		} else {
-			return result, errors.New("INSTALL_PREDECESSOR_IDENTITY_UNKNOWN")
-		}
-		if receipt.RunningBuildID != result.BuildID {
-			return result, errors.New("INSTALL_PREDECESSOR_IDENTITY_UNKNOWN")
-		}
-	} else if errors.Is(err, os.ErrNotExist) {
-		adopted, e := os.ReadFile(filepath.Join(root, "adopted-baseline.json"))
-		if e != nil || len(adopted) > 65536 {
-			return result, errors.New("INSTALL_PREDECESSOR_IDENTITY_UNKNOWN")
-		}
-		var record struct {
-			Schema    string `json:"schema"`
-			Slot      string `json:"slot"`
-			UserData  string `json:"userData"`
-			AdoptedAt string `json:"adoptedAt"`
-			Manifest  struct {
-				ArtifactSha256 string `json:"artifactSha256"`
-				Version        string `json:"version"`
-				BuildID        string `json:"buildId"`
-			} `json:"manifest"`
-		}
-		if json.Unmarshal(adopted, &record) != nil || record.Schema != "farol.adopted-baseline/1" || record.Slot != installed || record.UserData != profileRoot || record.AdoptedAt == "" {
-			return result, errors.New("INSTALL_PREDECESSOR_IDENTITY_UNKNOWN")
-		}
-		result = apptree.Expected{TreeSHA256: record.Manifest.ArtifactSha256, Version: record.Manifest.Version, BuildID: record.Manifest.BuildID}
-	} else {
-		return result, errors.New("INSTALL_PREDECESSOR_IDENTITY_UNKNOWN")
-	}
-	if len(result.TreeSHA256) != 64 || len(result.BuildID) != 64 || result.Version == "" {
-		return result, errors.New("INSTALL_PREDECESSOR_IDENTITY_UNKNOWN")
-	}
-	for _, h := range []string{result.TreeSHA256, result.BuildID} {
-		if _, e := hex.DecodeString(h); e != nil || h != strings.ToLower(h) {
-			return result, errors.New("INSTALL_PREDECESSOR_IDENTITY_UNKNOWN")
-		}
-	}
-	return result, nil
 }

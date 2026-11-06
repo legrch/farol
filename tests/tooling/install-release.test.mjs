@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -9,7 +9,7 @@ import { test } from "vitest";
 const script = fileURLToPath(
   new URL("../../scripts/install-release.sh", import.meta.url),
 );
-test("installer never removes the active app before replacement", () => {
+test("installer never removes the active app", () => {
   const source = readFileSync(script, "utf8");
   assert.doesNotMatch(source, /\/bin\/rm\s+-rf\s+"\$installed"/);
   assert.doesNotMatch(source, /\/usr\/bin\/ditto\s+"\$app"\s+"\$installed"/);
@@ -306,7 +306,7 @@ test("does not overwrite a caller-selected extraction directory", () => {
 
 // This copy has every host-effect command and installation path replaced with
 // fixture-owned paths. The shipped script has no environment-based routing.
-test("isolated installation orders checks, native replacement and launch without GUI scripting", () => {
+test("isolated installation orders checks, native placement and launch without GUI scripting", () => {
   isolatedInstall("success", (result, root, log) => {
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Installed and running: Farol 1\.2\.3/);
@@ -332,114 +332,96 @@ test("isolated installation orders checks, native replacement and launch without
   });
 });
 
-test("isolated failed signature leaves the existing app untouched", () => {
+test("isolated failed signature leaves the slot empty", () => {
   isolatedInstall("bad-signature", (result, root, log) => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /signature verification failed/);
-    assert.equal(
-      readFileSync(path.join(root, "Applications/Farol.app/old"), "utf8"),
-      "old",
-    );
+    assert.ok(!existsSync(path.join(root, "Applications/Farol.app")));
     assert.ok(!log.includes("osascript"));
   });
 });
 
 for (const scenario of ["swap-refused", "swap-unknown"]) {
-  test(`isolated ${scenario} never falls back to destructive replacement`, () => {
+  test(`isolated ${scenario} never falls back to destructive placement`, () => {
     isolatedInstall(scenario, (result, root, log) => {
       assert.notEqual(result.status, 0);
-      assert.match(result.stderr, /native replacement refused or unconfirmed/);
-      assert.equal(
-        readFileSync(path.join(root, "Applications/Farol.app/old"), "utf8"),
-        "old",
-      );
+      assert.match(result.stderr, /native placement refused or unconfirmed/);
+      assert.ok(!existsSync(path.join(root, "Applications/Farol.app")));
       assert.equal(log.split("native-swap").length - 1, 1);
       assert.doesNotMatch(log, /open/);
     });
   });
 }
 
-test("isolated failed launch retains a recoverable predecessor", () => {
-  isolatedInstall("bad-launch", (result, _root, log) => {
+test("isolated failed launch retains recovery evidence", () => {
+  isolatedInstall("bad-launch", (result, root, log) => {
     assert.notEqual(result.status, 0);
     const retained = result.stderr.match(/Recovery files retained at: (.+)/);
     assert.ok(retained, result.stderr);
-    assert.equal(
-      readFileSync(path.join(retained[1], "previous.app/old"), "utf8"),
-      "old",
-    );
+    assert.ok(existsSync(path.join(root, "Applications/Farol.app")));
+    assert.ok(!existsSync(path.join(retained[1], "previous.app")));
     assert.ok(log.includes("native-swap"));
   });
 });
 
 test("isolated immediate startup exit is reported instead of installed and running", () => {
-  isolatedInstall("early-exit", (result, _root, log) => {
+  isolatedInstall("early-exit", (result, root, log) => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /exited before startup confirmation/);
     assert.doesNotMatch(result.stdout, /Installed and running/);
     const retained = result.stderr.match(/Recovery files retained at: (.+)/);
     assert.ok(retained, result.stderr);
-    assert.equal(
-      readFileSync(path.join(retained[1], "previous.app/old"), "utf8"),
-      "old",
-    );
+    assert.ok(existsSync(path.join(root, "Applications/Farol.app")));
+    assert.ok(!existsSync(path.join(retained[1], "previous.app")));
     assert.ok(log.includes("open"));
   });
 });
 
 test("isolated surviving sidecar cannot confirm an exited primary", () => {
-  isolatedInstall("primary-exits-sidecar", (result, _root, log) => {
+  isolatedInstall("primary-exits-sidecar", (result, root, log) => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /primary exited after startup confirmation/);
     assert.doesNotMatch(result.stdout, /Installed and running/);
     const retained = result.stderr.match(/Recovery files retained at: (.+)/);
     assert.ok(retained, result.stderr);
-    assert.equal(
-      readFileSync(path.join(retained[1], "previous.app/old"), "utf8"),
-      "old",
-    );
+    assert.ok(existsSync(path.join(root, "Applications/Farol.app")));
+    assert.ok(!existsSync(path.join(retained[1], "previous.app")));
     assert.ok(log.includes("open"));
   });
 });
 
 test("isolated recycled PID cannot reuse an older startup proof", () => {
-  isolatedInstall("reused-primary", (result, _root, _log) => {
+  isolatedInstall("reused-primary", (result, root, _log) => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /startup confirmation invalid/);
     const retained = result.stderr.match(/Recovery files retained at: (.+)/);
     assert.ok(retained, result.stderr);
-    assert.equal(
-      readFileSync(path.join(retained[1], "previous.app/old"), "utf8"),
-      "old",
-    );
+    assert.ok(existsSync(path.join(root, "Applications/Farol.app")));
+    assert.ok(!existsSync(path.join(retained[1], "previous.app")));
   });
 });
 
-test("isolated modal startup failure retains the working predecessor", () => {
-  isolatedInstall("modal-no-proof", (result, _root, log) => {
+test("isolated modal startup failure retains recovery evidence", () => {
+  isolatedInstall("modal-no-proof", (result, root, log) => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /startup unconfirmed/);
     assert.doesNotMatch(result.stdout, /Installed and running/);
     const retained = result.stderr.match(/Recovery files retained at: (.+)/);
     assert.ok(retained, result.stderr);
-    assert.equal(
-      readFileSync(path.join(retained[1], "previous.app/old"), "utf8"),
-      "old",
-    );
+    assert.ok(existsSync(path.join(root, "Applications/Farol.app")));
+    assert.ok(!existsSync(path.join(retained[1], "previous.app")));
     assert.ok(log.includes("open"));
   });
 });
 
-test("isolated mismatched startup proof retains the working predecessor", () => {
-  isolatedInstall("wrong-proof", (result, _root, log) => {
+test("isolated mismatched startup proof retains recovery evidence", () => {
+  isolatedInstall("wrong-proof", (result, root, log) => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /startup confirmation invalid/);
     const retained = result.stderr.match(/Recovery files retained at: (.+)/);
     assert.ok(retained, result.stderr);
-    assert.equal(
-      readFileSync(path.join(retained[1], "previous.app/old"), "utf8"),
-      "old",
-    );
+    assert.ok(existsSync(path.join(root, "Applications/Farol.app")));
+    assert.ok(!existsSync(path.join(retained[1], "previous.app")));
     assert.ok(log.includes("open"));
   });
 });
@@ -483,13 +465,10 @@ for (const scenario of [
   "permission-denied",
   "wrong-main-title",
 ]) {
-  test(`isolated ${scenario} preserves the existing app and recovery files`, () => {
+  test(`isolated ${scenario} preserves the empty slot and recovery files`, () => {
     isolatedInstall(scenario, (result, root, log) => {
       assert.notEqual(result.status, 0);
-      assert.equal(
-        readFileSync(path.join(root, "Applications/Farol.app/old"), "utf8"),
-        "old",
-      );
+      assert.ok(!existsSync(path.join(root, "Applications/Farol.app")));
       assert.doesNotMatch(log, /native-swap|open/);
       const retained = result.stderr.match(/Recovery files retained at: (.+)/);
       assert.ok(retained, result.stderr);
@@ -508,17 +487,26 @@ test("isolated stuck application is refused without termination or replacement",
   });
 });
 
+test("isolated occupied slot is refused before download or replacement", () => {
+  isolatedInstall("occupied", (result, root, log) => {
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Farol is already installed/);
+    assert.equal(readFileSync(path.join(root, "Applications/Farol.app/old"), "utf8"), "old");
+    assert.equal(log, "");
+  });
+});
+
 function isolatedInstall(scenario, callback) {
   const root = mkdtempSync(path.join(os.tmpdir(), "farol-install-flow-"));
   try {
     prepare(root, scenario === "bad-tree" ? "extra-file" : "valid");
     const prep = spawnSync("/bin/mkdir", [
       "-p",
-      path.join(root, "Applications/Farol.app"),
+      path.join(root, scenario === "occupied" ? "Applications/Farol.app" : "Applications"),
       path.join(root, "bin"),
     ]);
     assert.equal(prep.status, 0);
-    writeFileSync(path.join(root, "Applications/Farol.app/old"), "old");
+    if (scenario === "occupied") writeFileSync(path.join(root, "Applications/Farol.app/old"), "old");
     if (
       [
         "stubborn",
