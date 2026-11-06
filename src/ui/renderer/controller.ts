@@ -1487,6 +1487,15 @@ export class WindowController implements RendererFacade {
       requestedDestination.setupStep === "signin"
     ) {
       this.automaticSignInRequested = true;
+      const prior = this.state.setupSignInCheck;
+      if (
+        prior &&
+        prior.buildId === this.state.buildId &&
+        this.state.intents["settings:chatgpt.verify:"]?.state === "applied"
+      )
+        this.automaticSignInChecks.delete(
+          `${prior.buildId}:${prior.binding.documentGeneration}`,
+        );
       // A new owner sign-in attempt cannot inherit the previous document's
       // authenticated observation or its Settings verification correlation.
       this.patch({ setupSignInCheck: null });
@@ -2709,12 +2718,6 @@ export class WindowController implements RendererFacade {
   // an external Send. A signed-out first login keeps its bounded read window.
   private scheduleSavedSignInObservation(): void {
     const state = this.state;
-    if (
-      this.savedSignInReadAttempts >= 6 &&
-      state.signInObservation?.pending === false &&
-      state.signInObservation.state !== "authenticated"
-    )
-      this.setupSignInReturnAttempt = null;
     const saved =
       state.configuration?.status === "ready"
         ? state.configuration.settings.setup.chatgpt.verified !== null ||
