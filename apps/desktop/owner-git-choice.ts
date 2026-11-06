@@ -179,18 +179,21 @@ export class OwnerGitChoice {
       this.activeCapture = null;
       throw error;
     }
-    if (this.closing) throw new Error("GIT_CHOICE_UNAVAILABLE");
-    this.environment = captured;
-    const selection = this.status();
-    if (!selection.gitAlias) {
-      this.environment = previous;
-      this.failure = selection.failure ?? "GIT_NOT_FOUND";
-      throw new Error(this.failure);
+    try {
+      if (this.closing) throw new Error("GIT_CHOICE_UNAVAILABLE");
+      this.environment = captured;
+      const selection = this.status();
+      if (!selection.gitAlias) {
+        this.environment = previous;
+        this.failure = selection.failure ?? "GIT_NOT_FOUND";
+        throw new Error(this.failure);
+      }
+      this.save({ schema: 1, enabled: true, override: selection.gitAlias });
+      this.failure = null;
+      this.pendingRestart = true;
+    } finally {
+      this.activeCapture = null;
     }
-    this.save({ schema: 1, enabled: true, override: selection.gitAlias });
-    this.failure = null;
-    this.pendingRestart = true;
-    this.activeCapture = null;
   }
 
   async close(): Promise<void> {

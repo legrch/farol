@@ -207,6 +207,28 @@ it("rejects a Git path that Go cannot represent before saving preference", () =>
   ).toThrow();
 });
 
+it("allows a new owner click after a settled Git selection failure", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "farol-git-retry-click-"));
+  created.push(root);
+  const bin = path.join(root, "bin");
+  mkdirSync(bin);
+  let captures = 0;
+  const owner = new OwnerGitChoice(root, async (generation) => {
+    captures++;
+    return {
+      path: bin,
+      source: "desktop-login-shell",
+      capturedAt: new Date().toISOString(),
+      generation,
+    };
+  });
+  await expect(owner.refreshFromOwner()).rejects.toThrow("GIT_NOT_FOUND");
+  writeFileSync(path.join(bin, "git"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await owner.refreshFromOwner();
+  expect(captures).toBe(2);
+  expect(owner.status().gitAlias).toBe(path.join(bin, "git"));
+});
+
 it("does not run the account shell at startup and saves only the clicked PATH selection", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "farol-owner-git-click-"));
   created.push(root);
