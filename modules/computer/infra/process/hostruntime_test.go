@@ -123,6 +123,17 @@ func TestHostRuntimeSealsExactInstalledInventory(t *testing.T) {
 		t.Fatal("plan aliases mutable copy")
 	}
 }
+func TestSystemGitCandidateOrderNeverInvokesAppleShim(t *testing.T) {
+	want := []string{
+		"/Library/Developer/CommandLineTools/usr/bin/git",
+		"/Applications/Xcode.app/Contents/Developer/usr/bin/git",
+		"/opt/homebrew/bin/git",
+		"/usr/local/bin/git",
+	}
+	if got := hostRuntimeCandidates("git"); !slices.Equal(got, want) {
+		t.Fatalf("system Git order changed or shim entered discovery: got %q", got)
+	}
+}
 func TestHostRuntimeRejectsInventoryDrift(t *testing.T) {
 	for _, field := range []string{"sha", "uid", "gid", "mode", "inode", "alias", "listing"} {
 		t.Run(field, func(t *testing.T) {
