@@ -932,7 +932,7 @@ describe("stable release channel (synthetic transport only)", () => {
       {
         endpoint: `${f.base}/releases/300`,
         method: "PATCH",
-        body: { draft: false, prerelease: false, make_latest: "false" },
+        body: { draft: false, prerelease: false, make_latest: "true" },
       },
     ]);
   });
@@ -967,11 +967,12 @@ describe("stable release channel (synthetic transport only)", () => {
     const api = githubApi("synthetic-token", request);
     await api("/repos/legrch/farol/releases/300", {
       method: "PATCH",
-      body: { draft: false, prerelease: false, make_latest: "false" },
+      body: { draft: false, prerelease: false, make_latest: "true" },
     });
     for (const body of [
       { draft: true, prerelease: false, make_latest: "false" },
-      { draft: false, prerelease: false, make_latest: "true" },
+      { draft: false, prerelease: false, make_latest: "false" },
+      { draft: false, prerelease: true, make_latest: "true" },
       {
         draft: false,
         prerelease: false,

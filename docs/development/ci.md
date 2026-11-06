@@ -91,7 +91,7 @@ archive/checksum/source verification. Before mutation it re-fetches and checks
 the same run/attempt, remote tag, draft and asset identities. It never rebuilds,
 creates tags/releases, uploads/replaces assets, deletes or edits an already
 published release. Its only final mutation is PATCH of that same still-draft
-release with `{draft:false, prerelease:<selected channel flag>, make_latest:"false"}`. Root keeps
+release with `{draft:false, prerelease:<selected channel flag>, make_latest:<"true" for stable; "false" for prerelease>}`. Root keeps
 the selected draft/assets/tag quiescent during this final read gate; the API
 provides no atomic compare-and-swap here.
 
