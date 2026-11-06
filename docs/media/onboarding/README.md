@@ -15,7 +15,7 @@ python -m pip install -r requirements.txt
 python build.py
 ```
 
-The reference build uses Python 3.12.14 and Poppler 26.05.0. Python dependency versions are pinned. Pixel-level output can change with different Poppler, Pango, or Fontconfig versions. `validation.json` records the supplied GIF hashes and event timelines. `python verify.py` validates the output against that manifest, decodes every GIF frame, checks click bounds, verifies local font licenses, checks a light outer canvas and scene luminance in every frame, checks eight specified text/background contrast pairs, and scans publishable text for common credential/private-data patterns. These are scoped checks, not a general secret-scanner guarantee or full accessibility audit.
+The reference build uses Python 3.12.14 and Poppler 26.05.0. The listed Python dependencies are pinned, but some transitive dependencies remain unconstrained; this is not a complete dependency lock. Pixel-level output can change with different Poppler, Pango, or Fontconfig versions. `validation.json` records the supplied GIF hashes and event timelines. `python verify.py` validates the output against that manifest, decodes every GIF frame, checks click bounds, verifies local font licenses, checks a light outer canvas and scene luminance in every frame, checks eight specified text/background contrast pairs, and scans publishable text for common credential/private-data patterns. These are scoped checks, not a general secret-scanner guarantee or full accessibility audit.
 
 Pipeline:
 
