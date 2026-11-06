@@ -329,6 +329,7 @@ export class InstalledUpdater {
           };
     this.preferenceWriting = false;
     finishPreference();
+    this.queueAutomaticWake();
     if (!this.isClosing()) {
       try {
         this.ports.publish(this.snapshot());

@@ -2092,6 +2092,65 @@ describe("automatic update preference (ports only; no automatic release acceptan
     await updater.close();
   });
 
+  it("resumes an opt-in wake after a concurrent install-on-quit preference write", async () => {
+    const base = preferenceFixture();
+    const ports = {
+      ...base.ports,
+      readInstallOnQuitPreference: vi.fn().mockResolvedValue({
+        status: "confirmed",
+        scope: "install-on-normal-quit",
+        enabled: false,
+      }),
+      writeInstallOnQuitPreference: vi.fn(),
+    };
+    const updater = new InstalledUpdater(ports);
+    let finishQuitWrite!: (value: {
+      status: "confirmed";
+      scope: "install-on-normal-quit";
+      enabled: boolean;
+    }) => void;
+    ports.writeInstallOnQuitPreference.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishQuitWrite = resolve;
+        }),
+    );
+    let finishDiscovery!: (
+      value: Awaited<ReturnType<InstalledUpdaterPorts["discover"]>>,
+    ) => void;
+    ports.discover.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishDiscovery = resolve;
+        }),
+    );
+    await updater.initialize();
+    const checking = updater.check(true);
+    await vi.waitFor(() => expect(ports.discover).toHaveBeenCalledTimes(1));
+    await updater.setAutomaticUpdatePreference(true);
+    const writing = updater.setInstallOnQuitPreference(true);
+    await vi.waitFor(() =>
+      expect(ports.writeInstallOnQuitPreference).toHaveBeenCalledTimes(1),
+    );
+    finishDiscovery({
+      ok: true,
+      available: true,
+      version: staged.manifest.version,
+      buildId: staged.manifest.buildId,
+      deferred: false,
+    });
+    await checking;
+    expect(ports.download).not.toHaveBeenCalled();
+    finishQuitWrite({
+      status: "confirmed",
+      scope: "install-on-normal-quit",
+      enabled: true,
+    });
+    await writing;
+    await vi.waitFor(() => expect(ports.download).toHaveBeenCalledTimes(1));
+    await updater.close();
+  });
+
   it("preserves Later and downloads a newly discovered version", async () => {
     const { updater, ports, advance } = preferenceFixture(true);
     ports.discover.mockResolvedValue({
