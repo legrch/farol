@@ -269,7 +269,7 @@ func desktopWitnessTarget(t *testing.T, f *liveNativeFixture, electron string) s
 		t.Fatalf("copy fixture backend: %v %s", err, out)
 	}
 	plist := `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Farol</string><key>CFBundleIdentifier</key><string>io.github.legrch.farol</string><key>CFBundleName</key><string>Farol</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>1.2.3</string><key>CFBundleVersion</key><string>1</string></dict></plist>`
-	launcher := "#!/bin/sh\nexec \"$(/usr/bin/dirname \"$0\")/../Resources/app/farol-backend\" run-desktop-launcher 2>\"" + filepath.Join(f.dir, "successor-guardian.log") + "\"\n"
+	launcher := "#!/bin/sh\nexec \"$(/usr/bin/dirname \"$0\")/../Resources/app/farol-backend\" run-desktop-launcher \"$@\" 2>\"" + filepath.Join(f.dir, "successor-guardian.log") + "\"\n"
 	const successor = `const {app}=require('electron');const fs=require('node:fs');const path=require('node:path');
 const root=ROOT;app.setPath('userData',path.join(root,'successor-profile'));
 app.whenReady().then(()=>{app.dock?.hide();
@@ -282,7 +282,7 @@ setTimeout(()=>{fs.writeFileSync(path.join(root,'successor-timeout'),'fixture ti
 		filepath.Join(stage, "Contents", "Info.plist"):     plist,
 		filepath.Join(stage, "Contents", "MacOS", "Farol"): launcher,
 		filepath.Join(resources, "build-identity.json"):    execNativeTestdata(t, "oracle.json"),
-		filepath.Join(resources, "package.json"):           `{"name":"farol-lifetime-successor","main":"index.cjs"}`,
+		filepath.Join(resources, "package.json"):           `{"name":"farol-lifetime-successor","version":"1.2.3","main":"index.cjs"}`,
 		filepath.Join(resources, "index.cjs"):              strings.ReplaceAll(successor, "ROOT", string(closedHelperJSON(t, f.dir))),
 	}
 	for path, data := range files {
