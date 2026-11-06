@@ -146,6 +146,27 @@ func TestInstallReleaseEmptySlotRequiresAbsentProfileAndReceipts(t *testing.T) {
 	}
 }
 
+func TestInstallReleaseRefusesOnlyProductionProcessInventory(t *testing.T) {
+	for _, name := range []string{
+		"/Applications/Farol.app/Contents/MacOS/Farol",
+		"/Applications/Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron",
+		"/Users/runner/Library/Application Support/io.github.legrch.farol/installed-updates/op/launch-Farol.app/Contents/MacOS/Farol",
+		"farol-backend",
+	} {
+		if err := classifyInstallProcesses("/usr/bin/login\n" + name + "\n"); err == nil {
+			t.Fatalf("production process admitted: %q", name)
+		}
+	}
+	for _, name := range []string{
+		"/Applications/Farol Dev.app/Contents/MacOS/Farol Dev",
+		"/Applications/Another.app/Contents/Frameworks/Electron.app/Contents/MacOS/Electron",
+	} {
+		if err := classifyInstallProcesses("/usr/bin/login\n" + name + "\n"); err != nil {
+			t.Fatalf("unrelated process refused: %q: %v", name, err)
+		}
+	}
+}
+
 func TestInstallReleaseAcceptedBaselineIsBoundToManifest(t *testing.T) {
 	root := t.TempDir()
 	record := map[string]any{"manifest": map[string]any{"artifactSha256": strings.Repeat("a", 64), "version": "0.5.16", "buildId": strings.Repeat("b", 64)}}

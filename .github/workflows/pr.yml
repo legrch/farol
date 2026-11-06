@@ -100,6 +100,30 @@ jobs:
           /usr/bin/python3 -I scripts/assert-owner-untouched.py -- node tooling/ci-native.mjs
           task test:core
           task test:witness-inputs
+      - name: Exercise packaged installer backend in the empty shared slot
+        if: github.event.pull_request.number == 118
+        run: |
+          set -eu
+          task package
+          test ! -e /Applications/Farol.app
+          evidence=$(mktemp -d /private/tmp/farol-installer-native.XXXXXXXX)
+          chmod 700 "$evidence"
+          mkdir -p "$evidence/extracted"
+          /usr/bin/ditto _output/package/Farol.app "$evidence/extracted/Farol.app"
+          /usr/bin/ditto _output/package/Farol.app "$evidence/staged.app"
+          /usr/bin/python3 -I - "$evidence/farol-release.json" <<'PY'
+          import json, sys
+          with open('_output/package/artifact.json', encoding='utf-8') as stream:
+              artifact = json.load(stream)
+          with open(sys.argv[1], 'w', encoding='utf-8') as stream:
+              json.dump({'schema': 'farol.github-release/1', 'repository': 'legrch/farol',
+                         'version': artifact['version'], 'platform': 'darwin', 'arch': 'arm64',
+                         'artifactSha256': artifact['artifactSha256'], 'buildId': artifact['buildId']}, stream)
+          PY
+          "$evidence/extracted/Farol.app/Contents/Resources/app/farol-backend" run-install-release-swap --staged-app "$evidence/staged.app" --manifest "$evidence/farol-release.json" --installed /Applications/Farol.app --evidence "$evidence"
+          test -d /Applications/Farol.app
+          test ! -e "$evidence/staged.app"
+          printf 'PASS: packaged backend installed into empty shared slot\n'
       - name: Show the failed native cases
         if: failure()
         run: node tooling/print-failed-scope.mjs _output/evidence/test-scopes

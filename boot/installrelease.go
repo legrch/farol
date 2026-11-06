@@ -464,7 +464,10 @@ func installProductionStopped(ctx context.Context) error {
 	if err != nil || len(output) == 0 || len(output) > 4*1024*1024 {
 		return errors.New("INSTALL_PROCESS_OBSERVATION_UNKNOWN")
 	}
-	for _, line := range strings.Split(string(output), "\n") {
+	return classifyInstallProcesses(string(output))
+}
+func classifyInstallProcesses(output string) error {
+	for _, line := range strings.Split(output, "\n") {
 		name := strings.TrimSpace(line)
 		if strings.Contains(name, "/Applications/Farol.app/") || strings.Contains(name, "/launch-Farol.app/") || strings.Contains(name, "/installed-execution/") || name == "farol-backend" || name == "Farol" {
 			return errors.New("INSTALL_PRODUCTION_STILL_RUNNING")
