@@ -412,6 +412,25 @@ it("shows actionable uncertainty without exposing unmapped codes in the status",
     expect(host.querySelector(".activity-status-slot")?.textContent).toBe(
       "Some results are unconfirmed. Review them before repeating an action.",
     );
+    await act(async () =>
+      root.render(
+        <OperationsActivity
+          snapshot={{
+            ...c.getSnapshot(),
+            activityDiagnostics: {
+              corruptLines: 0,
+              writeFailures: 0,
+              unmappedCodes: 1,
+              readPending: true,
+            },
+          }}
+          facade={{} as RendererFacade}
+        />,
+      ),
+    );
+    expect(host.querySelector(".activity-status-slot")?.textContent).toBe(
+      "Some results are unconfirmed. Review them before repeating an action.",
+    );
     const details = host.querySelector<HTMLDetailsElement>(
       ".activity-log-details",
     )!;
@@ -495,6 +514,23 @@ it("filters shared operations, expands metadata and links attention to the unres
     );
     expect(host.querySelectorAll(".operation-row")).toHaveLength(3);
     expect(host.querySelector("summary")?.textContent).toContain("model turn");
+    expect(host.querySelector(".activity-status-slot")?.textContent).toBe(
+      "Activity may be missing; some results are unconfirmed. Review before repeating.",
+    );
+    await act(async () =>
+      root.render(
+        <OperationsActivity
+          snapshot={{
+            ...snapshot,
+            activityDiagnostics: {
+              ...snapshot.activityDiagnostics,
+              readPending: true,
+            },
+          }}
+          facade={facade}
+        />,
+      ),
+    );
     expect(host.querySelector(".activity-status-slot")?.textContent).toBe(
       "Activity may be missing; some results are unconfirmed. Review before repeating.",
     );

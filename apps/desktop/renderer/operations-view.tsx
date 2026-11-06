@@ -248,14 +248,14 @@ export function OperationsActivity({
         </label>
       </div>
       <div className="activity-status-slot" role="status" aria-live="polite">
-        {diagnostics?.readPending
-          ? "Updating activity…"
-          : logGaps && (diagnostics?.unmappedCodes ?? 0) > 0
-            ? "Activity may be missing; some results are unconfirmed. Review before repeating."
-            : logGaps
-              ? "Some activity may be missing. See log details below."
-              : (diagnostics?.unmappedCodes ?? 0) > 0
-                ? "Some results are unconfirmed. Review them before repeating an action."
+        {logGaps && (diagnostics?.unmappedCodes ?? 0) > 0
+          ? "Activity may be missing; some results are unconfirmed. Review before repeating."
+          : logGaps
+            ? "Some activity may be missing. See log details below."
+            : (diagnostics?.unmappedCodes ?? 0) > 0
+              ? "Some results are unconfirmed. Review them before repeating an action."
+              : diagnostics?.readPending
+                ? "Updating activity…"
                 : null}
       </div>
       {groups.length === 0 ? (
