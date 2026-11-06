@@ -4517,6 +4517,52 @@ it("an ordinary unobserved sign-in has a neutral checklist marker, unlike an unk
 
 // Shell/transport doubles only; native geometry and provider login are root gates.
 describe("Setup sign-in browser continuity", () => {
+  it("does not reuse the previous authenticated check for a new sign-in attempt", async () => {
+    const f = fixture();
+    const data = bootstrap();
+    const pending = deferred<unknown>();
+    let newAttempt = false;
+    vi.mocked(f.api.configure).mockImplementation(async (command) => {
+      if (command.kind === "chatgpt.observe-sign-in") {
+        return newAttempt
+          ? pending.promise
+          : signInReply(command, "authenticated");
+      }
+      if (command.kind === "chatgpt.verify")
+        return {
+          ok: true,
+          snapshot: data.configuration,
+          evidence: {
+            kind: "chatgpt.readiness",
+            state: "authenticated",
+            code: null,
+          },
+        };
+      return { ok: true, snapshot: data.configuration };
+    });
+    const c = new WindowController(f.api);
+    try {
+      await c.start();
+      c.navigate({ area: "setup", setupStep: "signin" });
+      f.emit("route", { state: "loaded" });
+      await vi.waitFor(() =>
+        expect(c.getSnapshot().signInObservation?.state).toBe("authenticated"),
+      );
+      await c.configure({ kind: "chatgpt.verify" }, "settings:chatgpt.verify:");
+      newAttempt = true;
+      await c.configure(
+        { kind: "chatgpt.open-sign-in" },
+        "settings:chatgpt.open-sign-in:",
+      );
+      expect(c.getSnapshot().destination.area).toBe("chatgpt");
+      expect(c.getSnapshot().setupSignInCheck).toBeNull();
+      expect(c.getSnapshot().signInObservation?.state).not.toBe(
+        "authenticated",
+      );
+    } finally {
+      c.dispose();
+    }
+  });
   it("keeps manual return when browser events do not confirm sign-in", async () => {
     const f = fixture();
     const c = new WindowController(f.api);

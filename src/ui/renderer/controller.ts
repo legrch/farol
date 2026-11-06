@@ -1485,8 +1485,13 @@ export class WindowController implements RendererFacade {
         command.kind === "chatgpt.open-browser") &&
       requestedDestination.area === "setup" &&
       requestedDestination.setupStep === "signin"
-    )
+    ) {
       this.automaticSignInRequested = true;
+      // A new owner sign-in attempt cannot inherit the previous document's
+      // authenticated observation or its Settings verification correlation.
+      this.patch({ setupSignInCheck: null });
+      this.invalidateSignInObservation();
+    }
     const signInCheck =
       command.kind === "chatgpt.verify" ? this.state.signInObservation : null;
     if (command.kind === "chatgpt.verify") {
