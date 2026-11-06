@@ -387,7 +387,7 @@ it("shows a slow activity read as updating, not as a failed log write", async ()
     c.dispose();
   }
 });
-it("keeps an unmapped code in collapsed log details without a global warning", async () => {
+it("shows actionable uncertainty without exposing unmapped codes in the status", async () => {
   const f = fixture(),
     c = new WindowController(f.api);
   await c.start();
@@ -409,7 +409,9 @@ it("keeps an unmapped code in collapsed log details without a global warning", a
         />,
       ),
     );
-    expect(host.querySelector(".activity-status-slot")?.textContent).toBe("");
+    expect(host.querySelector(".activity-status-slot")?.textContent).toBe(
+      "Some results are unconfirmed. Review them before repeating an action.",
+    );
     const details = host.querySelector<HTMLDetailsElement>(
       ".activity-log-details",
     )!;

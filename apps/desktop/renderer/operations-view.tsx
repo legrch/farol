@@ -252,7 +252,9 @@ export function OperationsActivity({
           ? "Updating activity…"
           : logGaps
             ? "Some activity may be missing. See log details below."
-            : null}
+            : (diagnostics?.unmappedCodes ?? 0) > 0
+              ? "Some results are unconfirmed. Review them before repeating an action."
+              : null}
       </div>
       {groups.length === 0 ? (
         <p role="status">No matching activity.</p>
