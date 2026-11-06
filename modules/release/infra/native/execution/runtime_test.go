@@ -99,7 +99,7 @@ func newFixture(t *testing.T) *fixture {
 			return errors.New("request mismatch")
 		}
 		return c.Err()
-	}, Unknown: func() error { f.mu.Lock(); defer f.mu.Unlock(); return f.unknown }, RetainUnknown: func(e error) { f.mu.Lock(); defer f.mu.Unlock(); f.unknown = errors.Join(f.unknown, e) }}
+	}, verifyExecutables: func(context.Context, time.Time, string) error { return nil }, Unknown: func() error { f.mu.Lock(); defer f.mu.Unlock(); return f.unknown }, RetainUnknown: func(e error) { f.mu.Lock(); defer f.mu.Unlock(); f.unknown = errors.Join(f.unknown, e) }}
 	return f
 }
 func (f *fixture) with(ctx context.Context, fn func(port.HelperRecoveryRuntime) error) error {

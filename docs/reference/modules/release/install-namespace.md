@@ -64,15 +64,16 @@ OTA acceptance remain separate and are not established by this preparation.
 
 The Go helper composition (existing input/protocol, handoff custody, process
 observation, app verification, slot and journal owners, namespace effects,
-private launch capture and terminal mapping) is selected by the desktop with no
+permanent-slot launch and terminal mapping) is selected by the desktop with no
 Python fallback. The Python file leaves the package under the
 [bridge rule](../../../installed-update-helper.md#retiring-the-python-helper-bridge-rule);
 native and installed qualification remain explicit gates.
 
 ## Private launch tree copying
 
-`infra/native/installcopy` prepares the descriptor-relative copy used before a
-shared-install target can be launched from a private image. The caller lends
+`infra/native/installcopy` retains the descriptor-relative historical copy
+contract for older private-launch records; new shared-slot updates do not create
+or launch a private GUI image. The caller lends
 two exact directory handles: an accepted source and a newly created, empty,
 private destination. `Prepare` captures their complete metadata and original
 deadline. `Run` consumes one shared attempt, including cancellation or refusal;

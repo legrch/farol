@@ -68,18 +68,14 @@ type HelperInstallationObservation interface {
 }
 
 // HelperRelaunchEffects belongs to the SAME admitted native operation owner.
-// CapturePrivateTarget must use actual held source/copy/tree/publication owners,
-// preserve failed images, and independently verify the published private image.
 // SelfIdentity measures this process, never input. LaunchTarget consumes one
 // actual dispatch and joins the exact child Wait and all output producers. A
-// returned path is correlation only; this owner retains the capture witness and
-// must reject another path, substituted image, late result or unknown cleanup.
+// substituted slot, late result or unknown cleanup remains refused.
 // Native composition retains the original deadline, routes and lease throughout.
 // These ports declare required effects; they do not supply a launch capability.
 type HelperRelaunchEffects interface {
-	CapturePrivateTarget(context.Context) (string, error)
 	SelfIdentity(context.Context) (HelperSelfIdentity, error)
-	LaunchTarget(context.Context, HelperSelfIdentity, *string) error
+	LaunchTarget(context.Context, HelperSelfIdentity) error
 }
 
 // HelperRollbackRelaunchEffects launches the verified source restored into the

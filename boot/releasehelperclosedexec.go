@@ -85,7 +85,7 @@ type closedHelperExecution struct {
 // built by the protocol owner for the already bound request, and measure
 // observes this very process.
 type closedHelperRelaunch struct {
-	arguments func(context.Context, releaseport.HelperSelfIdentity, *string) ([]string, error)
+	arguments func(context.Context, releaseport.HelperSelfIdentity) ([]string, error)
 	measure   func(context.Context, time.Time) (releaseport.HelperSelfIdentity, error)
 }
 

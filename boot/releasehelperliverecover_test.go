@@ -349,7 +349,7 @@ func TestLiveHelperRecoverHintNamesTheRecoverAction(t *testing.T) {
 	if seen.relaunch == nil || seen.relaunch.arguments == nil || seen.relaunch.measure == nil {
 		t.Fatal("a recover relaunch received no launch capabilities", seen.relaunch)
 	}
-	arguments, err := seen.relaunch.arguments(context.Background(), releaseport.HelperSelfIdentity{PID: 4321, ProcessStart: "helper birth"}, nil)
+	arguments, err := seen.relaunch.arguments(context.Background(), releaseport.HelperSelfIdentity{PID: 4321, ProcessStart: "helper birth"})
 	if err != nil || len(arguments) != 5 {
 		t.Fatal("arguments", arguments, err)
 	}

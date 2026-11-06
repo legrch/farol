@@ -268,6 +268,14 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
       "legacy-system-tool",
     ),
     launch(
+      "release.installed-executable-signatures",
+      "modules/release/infra/native/process/signatures.go",
+      "VerifyExecutableSignatures",
+      "go.CommandContext",
+      '"/usr/bin/codesign"',
+      "legacy-system-tool",
+    ),
+    launch(
       "release.desktop-lifetime-runtime",
       "modules/release/infra/native/desktop/darwin.go",
       "Run",

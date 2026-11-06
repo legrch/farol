@@ -9,18 +9,17 @@ itself, never the initiating parent identity from the request. The native codec
 preserves the original compact ASCII JSON hint, exact field order and 2048-byte
 encoded limit. It emits no trailing newline or extra process arguments.
 
-For a shared installation, the only accepted image string is the exact private
-`launch-Farol.app` path beneath the original home and operation. Passing the
-shared `/Applications/Farol.app` slot refuses. A legacy installation accepts no
-private-image parameter and retains its original home Applications route.
-Building these repeatable values neither proves the private copy nor authorizes
+For a shared installation, the only accepted image string is the fixed
+`/Applications/Farol.app` slot. A legacy installation retains its original
+home Applications route. No private-image parameter is accepted or emitted.
+Building these repeatable values neither proves the installed image nor authorizes
 a launch. The existing Release effect owner must still verify the complete
 target, preserve lease/slot/admission, durably write `launch_requested`, dispatch
 once and retain an unknown launch. No restored predecessor is relaunched under
 the helper's promotion lease.
 
-Eleven synthetic vectors preserve the exact original Python functions' argument
-or refusal result, including Unicode escaping, shared/private path choices,
+Historical Python vectors record the former private launch path. Current Go
+vectors bind the shared or legacy permanent slot, including Unicode escaping,
 target and helper correlation and hint bounds. Real Go input parsing, request
 policy and encoding are composed in the test. The vectors carry the original
 helper source digest; they do not observe a native process, prove a copied image

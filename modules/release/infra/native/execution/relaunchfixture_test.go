@@ -199,7 +199,7 @@ func newRelaunchFixture(t *testing.T, open openFunc, exe string) *relaunchFixtur
 	rf := &relaunchFixture{compositionFixture: f, app: app,
 		self: port.HelperSelfIdentity{PID: int64(os.Getpid()), ProcessStart: "scratch-" + hex.EncodeToString(nonce)}}
 	f.config.MeasureSelf = func(context.Context, time.Time) (port.HelperSelfIdentity, error) { return rf.self, nil }
-	f.config.RelaunchArguments = func(_ context.Context, self port.HelperSelfIdentity, captured *string) ([]string, error) {
+	f.config.RelaunchArguments = func(_ context.Context, self port.HelperSelfIdentity) ([]string, error) {
 		hint, err := helperprotocol.JSONCodec{}.Relaunch(port.HelperRelaunchHint{OperationID: request.OperationID, Action: request.Action, Phase: "completed", BuildID: request.Target.BuildID, Helper: self})
 		if err != nil {
 			return nil, err
