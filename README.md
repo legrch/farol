@@ -75,6 +75,8 @@ Open the outer **Farol.app** from its [accepted installation location](docs/star
 
 ## Development and contributing
 
+After `task package` builds a verified packaged candidate, `task run` opens its isolated launch snapshot; `task dev` is the separate development lane.
+
 [Current status](docs/reference/status.md) distinguishes public downloads, qualified internal installations and source candidates. Local Shell/Git evidence applies to specific builds and toolchains; Tasks, Agent workflows, Git SSH and PDF transfer still require separate acceptance.
 
 [Development guide](docs/development/README.md) · [Technical references](docs/reference/README.md) · [Go module indexes](docs/reference/modules/README.md) · [First-install readiness](docs/reference/install-readiness.md) · [Animation source and rebuild instructions](docs/media/onboarding/README.md)
