@@ -224,6 +224,11 @@ fi
 [ "$#" -eq 1 ] || { printf '%s\n' "$usage" >&2; exit 2; }
 [ "$1" != '--help' ] || { printf '%s\n' "$usage"; exit 0; }
 { [ "$1" = latest ] || valid_version "$1"; } || { printf '%s\n' "$usage" >&2; exit 2; }
+# Direct slot replacement is deferred until the install adapter is qualified.
+# Refuse before release lookup, download, GUI interaction, or local mutation.
+if [ "$1" = latest ] || valid_version "$1"; then
+  fail "Direct installation is temporarily unavailable. For a qualified existing installation, use Settings > General > Check for Updates. Otherwise, see the installation status guide."
+fi
 version=$1
 requested_latest=no
 [ "$version" != latest ] || requested_latest=yes

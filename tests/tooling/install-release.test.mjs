@@ -148,6 +148,25 @@ test("strictly rejects non-numeric versions and extra arguments before operation
   }
 });
 
+test("direct install refuses before release lookup, download or app changes", () => {
+  for (const version of ["latest", "0.5.17"]) {
+    const result = run([version], {
+      env: { PATH: "/nonexistent", TMPDIR: "/nonexistent" },
+    });
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /Direct installation is temporarily unavailable/,
+    );
+    assert.match(result.stderr, /built-in updater|Check for Updates/);
+    assert.doesNotMatch(
+      result.stdout,
+      /Finding|Downloading|Verifying|Installed/,
+    );
+    assert.doesNotMatch(result.stderr, /Recovery files retained/);
+  }
+});
+
 function release(version, overrides = {}) {
   return {
     tag_name: `v${version}`,
@@ -583,6 +602,12 @@ else process.exit(2);
       assert.equal(link.status, 0);
     }
     let copy = readFileSync(script, "utf8");
+    // Preserve coverage of the deferred implementation in a disposable fixture.
+    // The shipped entrypoint always stops at this guard, as tested above.
+    const hold =
+      'fail "Direct installation is temporarily unavailable. For a qualified existing installation, use Settings > General > Check for Updates. Otherwise, see the installation status guide."';
+    assert.ok(copy.includes(hold));
+    copy = copy.replace(hold, ":");
     for (const command of [
       "uname",
       "curl",
