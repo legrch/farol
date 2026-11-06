@@ -605,7 +605,7 @@ else process.exit(2);
     // Preserve coverage of the deferred implementation in a disposable fixture.
     // The shipped entrypoint always stops at this guard, as tested above.
     const hold =
-      'fail "Direct installation is temporarily unavailable. Update an existing Farol installation through Settings > General > Check for Updates. First installation is pending qualification."';
+      'fail "Direct installation is temporarily unavailable. For a qualified existing installation, use Settings > General > Check for Updates. Otherwise, see the installation status guide."';
     assert.ok(copy.includes(hold));
     copy = copy.replace(hold, ":");
     for (const command of [

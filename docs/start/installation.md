@@ -16,7 +16,7 @@ There is no qualified Intel, Windows or Linux package. Electron includes its Nod
 
 ## Inspect the download
 
-The direct installer is temporarily unavailable while safe replacement of an occupied application slot is being qualified. It stops before downloading or changing anything. If Farol is already installed, open **Settings > General > Check for Updates** and use the built-in updater. First installation from a public download remains under qualification.
+The direct installer is temporarily unavailable while safe replacement of an occupied application slot is being qualified. It stops before downloading or changing anything. If you have a working accepted installation, open **Settings > General > Check for Updates** and use the built-in updater. For other installations, follow the [current distribution status](../reference/status.md); first installation from a public download remains under qualification.
 
 Use the assets attached to the same latest release: the Apple Silicon ZIP, `farol-release.json` and `SHA256SUMS`. Check the ZIP in its download directory:
 

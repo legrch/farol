@@ -227,7 +227,7 @@ fi
 # Direct slot replacement is deferred until the install adapter is qualified.
 # Refuse before release lookup, download, GUI interaction, or local mutation.
 if [ "$1" = latest ] || valid_version "$1"; then
-  fail "Direct installation is temporarily unavailable. Update an existing Farol installation through Settings > General > Check for Updates. First installation is pending qualification."
+  fail "Direct installation is temporarily unavailable. For a qualified existing installation, use Settings > General > Check for Updates. Otherwise, see the installation status guide."
 fi
 version=$1
 requested_latest=no
