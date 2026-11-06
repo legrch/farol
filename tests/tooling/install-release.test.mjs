@@ -349,7 +349,10 @@ for (const scenario of ["swap-refused", "swap-unknown"]) {
     isolatedInstall(scenario, (result, root, log) => {
       assert.notEqual(result.status, 0);
       assert.match(result.stderr, /native replacement refused or unconfirmed/);
-      assert.equal(readFileSync(path.join(root, "Applications/Farol.app/old"), "utf8"), "old");
+      assert.equal(
+        readFileSync(path.join(root, "Applications/Farol.app/old"), "utf8"),
+        "old",
+      );
       assert.equal(log.split("native-swap").length - 1, 1);
       assert.doesNotMatch(log, /open/);
     });
@@ -648,7 +651,10 @@ else process.exit(2);
       )
       // The isolated script exercises ordering and startup proof; the real
       // boot.Run adapter has its own native tests and is never mocked there.
-      .replace('"$backend" run-install-release-swap', path.join(root, 'bin/swap') + ' run-install-release-swap');
+      .replace(
+        '"$backend" run-install-release-swap',
+        path.join(root, "bin/swap") + " run-install-release-swap",
+      );
     if (
       [
         "vanished-after-quit",
