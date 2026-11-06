@@ -100,6 +100,47 @@ jobs:
           /usr/bin/python3 -I scripts/assert-owner-untouched.py -- node tooling/ci-native.mjs
           task test:core
           task test:witness-inputs
+      - name: Exercise packaged installer backend in the empty shared slot
+        if: github.event.pull_request.number == 118
+        run: |
+          set -eu
+          node tooling/ci-go-inputs.mjs
+          task package -- --go-inputs="$GITHUB_WORKSPACE/_output/go-build-inputs.json"
+          test ! -e /Applications/Farol.app
+          evidence=$(mktemp -d /private/tmp/farol-installer-native.XXXXXXXX)
+          chmod 700 "$evidence"
+          mkdir -p "$evidence/extracted"
+          /usr/bin/ditto _output/package/Farol.app "$evidence/extracted/Farol.app"
+          /usr/bin/ditto _output/package/Farol.app "$evidence/staged.app"
+          /usr/bin/python3 -I - "$evidence/farol-release.json" <<'PY'
+          import json, sys
+          with open('_output/package/artifact.json', encoding='utf-8') as stream:
+              artifact = json.load(stream)
+          with open(sys.argv[1], 'w', encoding='utf-8') as stream:
+              json.dump({'schema': 'farol.github-release/1', 'repository': 'legrch/farol',
+                         'version': artifact['version'], 'platform': 'darwin', 'arch': 'arm64',
+                         'artifactSha256': artifact['artifactSha256'], 'buildId': artifact['buildId']}, stream)
+          PY
+          "$evidence/extracted/Farol.app/Contents/Resources/app/farol-backend" run-install-release-swap --staged-app "$evidence/staged.app" --manifest "$evidence/farol-release.json" --installed /Applications/Farol.app --evidence "$evidence"
+          test -d /Applications/Farol.app
+          test ! -e "$evidence/staged.app"
+          installed_identity=$(/usr/bin/stat -f '%d:%i' /Applications/Farol.app)
+          second=$(mktemp -d /private/tmp/farol-installer-native.XXXXXXXX)
+          chmod 700 "$second"
+          mkdir -p "$second/extracted"
+          /usr/bin/ditto _output/package/Farol.app "$second/extracted/Farol.app"
+          /usr/bin/ditto _output/package/Farol.app "$second/staged.app"
+          cp "$evidence/farol-release.json" "$second/farol-release.json"
+          if "$second/extracted/Farol.app/Contents/Resources/app/farol-backend" run-install-release-swap --staged-app "$second/staged.app" --manifest "$second/farol-release.json" --installed /Applications/Farol.app --evidence "$second" >"$second/stdout" 2>"$second/stderr"; then
+            echo 'occupied shared slot was unexpectedly accepted' >&2
+            exit 1
+          fi
+          grep -Fx 'INSTALL_OCCUPIED_SLOT_UNSUPPORTED' "$second/stderr"
+          test "$(/usr/bin/stat -f '%d:%i' /Applications/Farol.app)" = "$installed_identity"
+          test -d "$second/staged.app"
+          test ! -e "$second/previous.app"
+          test -d /Applications/Farol.app
+          printf 'PASS: packaged backend filled empty slot and refused occupied slot\n'
       - name: Observe hidden LaunchServices guardian and helper
         if: github.event.pull_request.number == 115
         run: |

@@ -8,9 +8,8 @@ usage='Usage: scripts/install-release.sh <version|latest>'
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 valid_version() { printf '%s\n' "$1" | /usr/bin/grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; }
 
-# GitHub's /releases/latest is not this product's newest release: publication
-# deliberately uses make_latest=false. Resolve the highest published stable
-# semver from one bounded page, and refuse an incomplete page or asset set.
+# Stable publication marks GitHub Latest. Independently resolve the highest
+# published stable semver from one bounded page and require complete assets.
 resolve_latest() {
   /usr/bin/python3 -I - "$1" <<'PY'
 import json, re, sys
@@ -225,10 +224,12 @@ fi
 [ "$1" != '--help' ] || { printf '%s\n' "$usage"; exit 0; }
 { [ "$1" = latest ] || valid_version "$1"; } || { printf '%s\n' "$usage" >&2; exit 2; }
 version=$1
-requested_latest=no
-[ "$version" != latest ] || requested_latest=yes
 [ "$(/usr/bin/uname -s)" = Darwin ] || fail 'macOS is required'
 [ "$(/usr/bin/uname -m)" = arm64 ] || fail 'Apple silicon is required'
+installed=/Applications/Farol.app
+if [ -e "$installed" ] || [ -L "$installed" ]; then
+  fail 'Farol is already installed. Use Check for Updates in the app; the installer accepts only an empty slot.'
+fi
 tmp=$(/usr/bin/mktemp -d "/tmp/farol-release.XXXXXXXX") || fail 'cannot create private temporary directory'
 retain=yes
 cleanup() {
@@ -309,7 +310,6 @@ else
     *) fail 'cannot determine outer app signing status' ;;
   esac
 fi
-installed=/Applications/Farol.app
 profile="$HOME/Library/Application Support/io.github.legrch.farol/installed-updates"
 running() {
   /bin/ps -ww -axo pid=,ppid=,comm= > "$tmp/processes" || return 2
@@ -419,137 +419,29 @@ except Exception as error:
     sys.exit(2)
 PY
 }
-terminate_owned() {
-  /usr/bin/python3 -I - "$installed" "$profile" "$tmp/termination-evidence.json" <<'PY'
-import ctypes, datetime, json, os, re, signal, subprocess, sys, time
-installed, profile, evidence = sys.argv[1:]
-lib = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
-lib.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
-lib.proc_pidpath.restype = ctypes.c_int
-def table():
-    out = subprocess.run(['/bin/ps', '-ww', '-axo', 'pid=,ppid=,stat='], check=True, text=True, capture_output=True).stdout
-    result = {}
-    for line in out.splitlines():
-        m = re.fullmatch(r'\s*(\d+)\s+(\d+)\s+(\S+)\s*', line)
-        if not m: raise ValueError('unparseable process table')
-        pid, parent, state = m.groups()
-        result[int(pid)] = (int(parent), state)
-    if not result: raise ValueError('empty process table')
-    return result
-def identity(pid):
-    buf = ctypes.create_string_buffer(4096)
-    if lib.proc_pidpath(pid, buf, len(buf)) <= 0: raise ValueError('process path unavailable')
-    start = subprocess.run(['/bin/ps', '-p', str(pid), '-o', 'lstart='], check=True, text=True, capture_output=True).stdout.strip()
-    if not start: raise ValueError('process start unavailable')
-    return {'pid': pid, 'path': os.fsdecode(buf.value), 'start': start}
-try:
-    rows = table()
-    roots = []
-    def production_bundle(path):
-        if path == installed + '/Contents/Resources/app/farol-backend': return installed
-        match = re.fullmatch(re.escape(profile) + r'/[a-f0-9]{32}/launch-Farol\.app/Contents/Resources/app/farol-backend', path)
-        return path[:-len('/Contents/Resources/app/farol-backend')] if match else None
-    for pid, (_, state) in rows.items():
-        if state.startswith('Z'): continue
-        buf = ctypes.create_string_buffer(4096)
-        if lib.proc_pidpath(pid, buf, len(buf)) > 0:
-            bundle = production_bundle(os.fsdecode(buf.value))
-            if bundle is not None: roots.append((pid, bundle))
-    if len(roots) != 1: raise ValueError('production launcher is not unique')
-    root_pid, bundle = roots[0]
-    owned = {root_pid}
-    while True:
-        expanded = owned | {pid for pid, (parent, _) in rows.items() if parent in owned}
-        if expanded == owned: break
-        owned = expanded
-    records = []
-    for pid in sorted(owned):
-        parent, state = rows[pid]
-        if state.startswith('Z'): continue
-        record = identity(pid)
-        path = record['path']
-        if not (path.startswith(bundle + '/') or (path.startswith(profile + '/installed-execution/') and '/Farol.app/' in path)):
-            raise ValueError('unexpected production descendant')
-        record.update(parent=parent, state=state)
-        records.append(record)
-    with open(evidence, 'x') as f:
-        json.dump({'created': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'processes': records}, f, indent=2)
-        f.flush(); os.fsync(f.fileno())
-    def send(sig):
-        current = table()
-        for record in reversed(records):
-            pid = record['pid']
-            if pid not in current or current[pid][1].startswith('Z'): continue
-            actual = identity(pid)
-            if actual['path'] != record['path'] or actual['start'] != record['start']:
-                raise ValueError('process identity changed')
-            try: os.kill(pid, sig)
-            except ProcessLookupError: pass
-    send(signal.SIGTERM)
-    time.sleep(10)
-    send(signal.SIGKILL)
-    time.sleep(1)
-    current = table()
-    if any(r['pid'] in current and not current[r['pid']][1].startswith('Z') for r in records):
-        raise ValueError('production process did not exit')
-except (OSError, ValueError, subprocess.SubprocessError) as error:
-    print('Production process termination failed:', error, file=sys.stderr)
-    sys.exit(1)
-PY
-}
 check_stopped() {
   if running "${1-all}"; then return 1; else status=$?; fi
   [ "$status" -eq 1 ] || fail 'cannot inspect process table'
   return 0
 }
-existing=no
 if [ -e "$installed" ] || [ -L "$installed" ]; then
-  [ -d "$installed" ] && [ ! -L "$installed" ] || fail 'installed app path is not a directory'
-  [ "$(plist_value "$installed/Contents/Info.plist" CFBundleIdentifier)" = io.github.legrch.farol ] || fail 'existing app identity mismatch'
-  if [ "$requested_latest" = yes ]; then
-    installed_version=$(plist_value "$installed/Contents/Info.plist" CFBundleShortVersionString) || fail 'installed version unavailable'
-    check_latest_version "$installed_version" "$version" || fail 'latest is older than the installed version; specify a version to downgrade'
-  fi
-  existing=yes
+  fail 'Farol appeared in Applications during download. Use Check for Updates in the app; no app files were changed.'
 fi
-if ! check_stopped; then
-  main_pid=$(running main-pid) || fail 'production application identity could not be inspected'
-  /usr/bin/osascript - "$main_pid" <<'APPLESCRIPT' || fail 'normal Quit failed or production identity could not be inspected'
-on run argv
-  set targetPid to (item 1 of argv) as integer
-  tell application "System Events"
-    set targetProcesses to {}
-    repeat with candidate in every application process
-      if (unix id of candidate) is targetPid then set end of targetProcesses to candidate
-    end repeat
-    if (count of targetProcesses) is not 1 then error "Production application PID is not unique"
-    set targetProcess to item 1 of targetProcesses
-    if (unix id of targetProcess) is not targetPid then error "Production application PID changed"
-    tell targetProcess to click menu item "Quit Farol" of menu 1 of menu bar item "Farol" of menu bar 1
-  end tell
-end run
-APPLESCRIPT
-  count=0
-  while ! check_stopped; do
-    if [ "$count" -ge 30 ]; then
-      terminate_owned || fail 'Farol did not quit; existing app preserved'
-      break
-    fi
-    /bin/sleep 1
-    count=$((count + 1))
-  done
-fi
-if [ "$existing" = yes ]; then
-  /usr/bin/ditto "$installed" "$tmp/previous.app" || fail 'could not preserve predecessor'
-  retain=yes
-fi
-check_stopped || fail 'production process appeared; existing app preserved'
-if [ "$existing" = yes ]; then
-  /bin/rm -rf "$installed" || fail 'could not remove old app; predecessor retained'
-fi
-if ! /usr/bin/ditto "$app" "$installed"; then
-  fail 'copy failed; predecessor retained if one existed'
-fi
+check_stopped || fail 'Quit Farol with Command+Q, then run this installer again. No app files were changed.'
+# The backend shipped by the verified target release owns the one native
+# namespace placement. Keep the source copy in this private operation
+# directory; its Go admission checks the complete tree and empty slot
+# before effect.
+# The extracted bundle is never launched as a GUI application.
+/usr/bin/ditto "$app" "$tmp/staged.app" || fail 'could not prepare staged application; installed app preserved'
+check_stopped || fail 'production process appeared; installed app preserved'
+"$backend" run-install-release-swap \
+  --staged-app "$tmp/staged.app" \
+  --manifest "$tmp/farol-release.json" \
+  --installed "$installed" \
+  --evidence "$tmp" || fail 'native placement refused or unconfirmed; inspect retained recovery files, do not repeat'
+/usr/bin/codesign --verify --strict "$installed/Contents/Resources/app/farol-backend" || fail 'installed backend signature verification failed; inspect retained recovery files'
+/usr/bin/codesign --verify --strict --ignore-resources "$installed/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron" || fail 'installed Electron signature verification failed; inspect retained recovery files'
 nonce=$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]') || fail 'cannot create launch nonce'
 case "$nonce" in
   ????????-????-????-????-????????????) ;;
@@ -557,10 +449,10 @@ case "$nonce" in
 esac
 proof="$tmp/startup-proof.json"
 suffix=${tmp##*.}
-/usr/bin/open "$installed" --args "--farol-install-proof=$suffix:$nonce" || fail 'launch request failed; predecessor retained if one existed'
+/usr/bin/open "$installed" --args "--farol-install-proof=$suffix:$nonce" || fail 'launch request failed; inspect retained recovery files'
 count=0
 while check_stopped main; do
-  [ "$count" -lt 30 ] || fail 'launch not confirmed; predecessor retained if one existed'
+  [ "$count" -lt 30 ] || fail 'launch not confirmed; inspect retained recovery files'
   /bin/sleep 1
   count=$((count + 1))
 done
@@ -568,15 +460,15 @@ done
 # publish this nonce-bound proof after its main startup has completed.
 count=0
 while [ ! -e "$proof" ]; do
-  check_stopped main && fail 'Farol exited before startup confirmation; predecessor retained'
-  [ "$count" -lt 45 ] || fail 'Farol startup unconfirmed; predecessor retained'
+  check_stopped main && fail 'Farol exited before startup confirmation; inspect retained recovery files'
+  [ "$count" -lt 45 ] || fail 'Farol startup unconfirmed; inspect retained recovery files'
   /bin/sleep 1
   count=$((count + 1))
 done
 main_pid=$(running main-pid) || fail 'confirmed startup process identity unavailable'
 main_instance=$(running main-instance) || fail 'confirmed startup process instance unavailable'
-[ "${main_instance%%:*}" = "$main_pid" ] || fail 'confirmed startup process changed; predecessor retained'
-/usr/bin/python3 -I - "$proof" "$nonce" "$manifest_build_id" "$version" "$main_pid" "$main_instance" <<'PY' || fail 'startup confirmation invalid; predecessor retained'
+[ "${main_instance%%:*}" = "$main_pid" ] || fail 'confirmed startup process changed; inspect retained recovery files'
+/usr/bin/python3 -I - "$proof" "$nonce" "$manifest_build_id" "$version" "$main_pid" "$main_instance" <<'PY' || fail 'startup confirmation invalid; inspect retained recovery files'
 import json, os, stat, sys
 file, nonce, build_id, version, pid, instance = sys.argv[1:]
 before = os.lstat(file)
@@ -605,10 +497,10 @@ birth = getattr(before, 'st_birthtime', None)
 if birth is None or start_sec * 1000000 + start_usec > int(birth * 1000000):
     sys.exit(1)
 PY
-confirmed_main=$(running main-instance) || fail 'Farol primary exited after startup confirmation; predecessor retained'
-[ "$confirmed_main" = "$main_instance" ] || fail 'Farol primary changed after startup confirmation; predecessor retained'
+confirmed_main=$(running main-instance) || fail 'Farol primary exited after startup confirmation; inspect retained recovery files'
+[ "$confirmed_main" = "$main_instance" ] || fail 'Farol primary changed after startup confirmation; inspect retained recovery files'
 actual=$(plist_value "$installed/Contents/Info.plist" CFBundleShortVersionString) || fail 'cannot read installed version'
-[ "$actual" = "$version" ] || fail 'installed version mismatch; predecessor retained if one existed'
+[ "$actual" = "$version" ] || fail 'installed version mismatch; inspect retained recovery files'
 printf 'Installed and running: Farol %s\n' "$actual"
 printf '%s\n' 'Farol opened. Check its connection and updates in the app.'
 retain=no
