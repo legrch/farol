@@ -180,7 +180,7 @@ func installReleaseSwap(ctx context.Context, in installReleaseInput, out io.Writ
 		if lockErr != nil || !lockInfo.Mode().IsRegular() || lockInfo.Mode().Perm() != 0600 {
 			return errors.New("INSTALL_UPDATE_LOCK_UNAVAILABLE")
 		}
-		acceptedOld, err = acceptedInstallBuild(updatePath)
+		acceptedOld, err = acceptedInstallBuild(updatePath, profileRoot, in.installed)
 		if err != nil {
 			return err
 		}
@@ -653,7 +653,7 @@ func settledInstallInventory(root string) error {
 	return nil
 }
 
-func acceptedInstallBuild(root string) (apptree.Expected, error) {
+func acceptedInstallBuild(root, profileRoot, installed string) (apptree.Expected, error) {
 	var result apptree.Expected
 	last, err := os.ReadFile(filepath.Join(root, "last-update.json"))
 	if err == nil {
@@ -695,13 +695,17 @@ func acceptedInstallBuild(root string) (apptree.Expected, error) {
 			return result, errors.New("INSTALL_PREDECESSOR_IDENTITY_UNKNOWN")
 		}
 		var record struct {
-			Manifest struct {
+			Schema    string `json:"schema"`
+			Slot      string `json:"slot"`
+			UserData  string `json:"userData"`
+			AdoptedAt string `json:"adoptedAt"`
+			Manifest  struct {
 				ArtifactSha256 string `json:"artifactSha256"`
 				Version        string `json:"version"`
 				BuildID        string `json:"buildId"`
 			} `json:"manifest"`
 		}
-		if json.Unmarshal(adopted, &record) != nil {
+		if json.Unmarshal(adopted, &record) != nil || record.Schema != "farol.adopted-baseline/1" || record.Slot != installed || record.UserData != profileRoot || record.AdoptedAt == "" {
 			return result, errors.New("INSTALL_PREDECESSOR_IDENTITY_UNKNOWN")
 		}
 		result = apptree.Expected{TreeSHA256: record.Manifest.ArtifactSha256, Version: record.Manifest.Version, BuildID: record.Manifest.BuildID}

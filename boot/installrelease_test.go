@@ -178,21 +178,41 @@ func TestInstallReleaseRefusesOnlyProductionProcessInventory(t *testing.T) {
 
 func TestInstallReleaseAcceptedBaselineIsBoundToManifest(t *testing.T) {
 	root := t.TempDir()
-	record := map[string]any{"manifest": map[string]any{"artifactSha256": strings.Repeat("a", 64), "version": "0.5.16", "buildId": strings.Repeat("b", 64)}}
-	b, _ := json.Marshal(record)
-	if err := os.WriteFile(filepath.Join(root, "adopted-baseline.json"), b, 0600); err != nil {
-		t.Fatal(err)
+	profileRoot := filepath.Join(root, "profile")
+	installed := "/Applications/Farol.app"
+	record := map[string]any{"schema": "farol.adopted-baseline/1", "slot": installed, "userData": profileRoot, "adoptedAt": "2026-11-06T00:00:00Z", "manifest": map[string]any{"artifactSha256": strings.Repeat("a", 64), "version": "0.5.16", "buildId": strings.Repeat("b", 64)}}
+	write := func() {
+		t.Helper()
+		b, err := json.Marshal(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "adopted-baseline.json"), b, 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	build, err := acceptedInstallBuild(root)
+	write()
+	build, err := acceptedInstallBuild(root, profileRoot, installed)
 	if err != nil || build.Version != "0.5.16" || build.TreeSHA256 != strings.Repeat("a", 64) {
 		t.Fatalf("accepted build: %+v %v", build, err)
 	}
-	record["manifest"].(map[string]any)["buildId"] = "invalid"
-	b, _ = json.Marshal(record)
-	if err := os.WriteFile(filepath.Join(root, "adopted-baseline.json"), b, 0600); err != nil {
-		t.Fatal(err)
+	for _, field := range []string{"schema", "slot", "userData", "adoptedAt"} {
+		original := record[field]
+		delete(record, field)
+		write()
+		if _, err := acceptedInstallBuild(root, profileRoot, installed); err == nil {
+			t.Fatalf("missing %s admitted", field)
+		}
+		record[field] = "wrong"
+		write()
+		if _, err := acceptedInstallBuild(root, profileRoot, installed); err == nil && field != "adoptedAt" {
+			t.Fatalf("wrong %s admitted", field)
+		}
+		record[field] = original
 	}
-	if _, err := acceptedInstallBuild(root); err == nil {
+	record["manifest"].(map[string]any)["buildId"] = "invalid"
+	write()
+	if _, err := acceptedInstallBuild(root, profileRoot, installed); err == nil {
 		t.Fatal("invalid adopted identity admitted")
 	}
 }
