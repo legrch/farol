@@ -2,6 +2,8 @@
 
 Start from an accepted running Farol installation. New users should read [installation status](installation.md) first. These steps describe the UI in the audited source candidate; an older public or installed build may show different labels. See [current status](../reference/status.md).
 
+[Step-by-step animations and static alternatives](../media/onboarding/walkthrough.md) illustrate the same flow with synthetic data. They are not installation or live acceptance evidence.
+
 ## Review Setup
 
 Open **Setup**, choose **Start setup**, and follow **Sign in → Workspaces → Connect this Mac → Add to ChatGPT**. **Continue** advances only after the current step passes. **Back** reviews an earlier step without repeating an action. Navigation does not save settings, grant access or submit a verification message.
@@ -10,7 +12,7 @@ In **Sign in**, choose **Sign in** or **Open ChatGPT**, finish signing in with y
 
 ## Choose workspace access
 
-In **Workspaces**, choose **+ Add workspace** and select a workspace. Adding it saves **Read & write** and checks access. For a read-only trial, select **Read only** in the row's **Access** control before asking ChatGPT to use it. The choice saves and checks access immediately; wait for its confirmed result. Use [Your first workspace](first-workspace.md) for a small sample.
+In **Workspaces**, choose **+ Add workspace** and select a workspace. Adding it saves **Read only** and checks access. Keep that default for the first trial. Select **Read & write** in the row's **Access** control only when you need edits; a changed choice saves and checks access immediately. Wait for its confirmed result. Use [Your first workspace](first-workspace.md) for a small sample.
 
 At least one workspace is required in this guided flow, and every listed workspace must show **✓ Works** before continuing. A selected path alone does not establish access. A pending or unknown change must be observed before another submission; see [Recovery](../guides/recovery.md).
 
@@ -18,7 +20,7 @@ At least one workspace is required in this guided flow, and every listed workspa
 
 1. In **Connect this Mac**, choose **Open OpenAI Tunnels**, signed in to the organization you intend to use.
 2. Create or select a tunnel associated with your intended **ChatGPT workspace**. A tunnel belonging only to a Platform organization may not appear in ChatGPT.
-3. Obtain a **Restricted** runtime key scoped to **Tunnels Read and Use** only. Use the tunnel/key instructions shown in Farol; do not substitute an admin or full-access key.
+3. Copy the complete tunnel ID and paste it into Farol before copying the key. Obtain a **Restricted** runtime key scoped to **Tunnels Read and Use** only. Use the tunnel/key instructions shown in Farol; do not substitute an admin or full-access key.
 4. Enter **Tunnel ID** and **Key** in Farol. Choose **Connect** once, then wait for **✓ Connected**.
 
 Connect discovers and validates the connection helper before using it. If it is unavailable, follow the displayed cause and [helper troubleshooting](../guides/troubleshooting.md#connection-helper-needed). A discovered candidate is not proof that it is usable.

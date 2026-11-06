@@ -42,4 +42,8 @@ Older alpha installations used `~/Applications/Farol.app`. Moving or copying one
 
 Developers have a separate controlled [source-build](../development/setup.md) and [owner-promotion](../owner-preview.md#optional-local-promotion--owner-action-only) path. It is not the recipient installation procedure, and end users should not create internal promotion receipts or run build commands.
 
+## After an accepted installation is running
+
+Continue with [First connection](first-connection.md), or use the [step-by-step animations](../media/onboarding/walkthrough.md) alongside its written instructions. The animations start inside a running app; they do not replace this installation guidance. Try [one read-only sample workspace](first-workspace.md), then review [Best practices](../guides/best-practices.md) before granting more access.
+
 [Start](README.md) · [Documentation](../README.md)
