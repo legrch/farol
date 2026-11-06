@@ -460,15 +460,30 @@ func installFreshProfileAbsent(profile, installed string) error {
 // primary that already completed startup is additionally refused here. This
 // inventory is conservative: an unclassified Farol backend is a refusal.
 func installProductionStopped(ctx context.Context) error {
-	output, err := exec.CommandContext(ctx, "/bin/ps", "-ww", "-axo", "comm=").Output()
+	output, err := exec.CommandContext(ctx, "/bin/ps", "-ww", "-axo", "pid=,comm=").Output()
 	if err != nil || len(output) == 0 || len(output) > 4*1024*1024 {
 		return errors.New("INSTALL_PROCESS_OBSERVATION_UNKNOWN")
 	}
-	return classifyInstallProcesses(string(output))
+	return classifyInstallProcesses(string(output), os.Getpid())
 }
-func classifyInstallProcesses(output string) error {
+func classifyInstallProcesses(output string, selfPID int) error {
 	for _, line := range strings.Split(output, "\n") {
-		name := strings.TrimSpace(line)
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		separator := strings.IndexAny(line, " \t")
+		if separator < 1 {
+			return errors.New("INSTALL_PROCESS_OBSERVATION_UNKNOWN")
+		}
+		pid, err := strconv.Atoi(line[:separator])
+		name := strings.TrimSpace(line[separator:])
+		if err != nil || pid < 1 || name == "" {
+			return errors.New("INSTALL_PROCESS_OBSERVATION_UNKNOWN")
+		}
+		if pid == selfPID {
+			continue
+		}
 		if strings.Contains(name, "/Applications/Farol.app/") || strings.Contains(name, "/launch-Farol.app/") || strings.Contains(name, "/installed-execution/") || name == "farol-backend" || name == "Farol" {
 			return errors.New("INSTALL_PRODUCTION_STILL_RUNNING")
 		}

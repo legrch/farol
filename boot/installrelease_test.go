@@ -153,7 +153,7 @@ func TestInstallReleaseRefusesOnlyProductionProcessInventory(t *testing.T) {
 		"/Users/runner/Library/Application Support/io.github.legrch.farol/installed-updates/op/launch-Farol.app/Contents/MacOS/Farol",
 		"farol-backend",
 	} {
-		if err := classifyInstallProcesses("/usr/bin/login\n" + name + "\n"); err == nil {
+		if err := classifyInstallProcesses("101 /usr/bin/login\n102 "+name+"\n", 42); err == nil {
 			t.Fatalf("production process admitted: %q", name)
 		}
 	}
@@ -161,9 +161,18 @@ func TestInstallReleaseRefusesOnlyProductionProcessInventory(t *testing.T) {
 		"/Applications/Farol Dev.app/Contents/MacOS/Farol Dev",
 		"/Applications/Another.app/Contents/Frameworks/Electron.app/Contents/MacOS/Electron",
 	} {
-		if err := classifyInstallProcesses("/usr/bin/login\n" + name + "\n"); err != nil {
+		if err := classifyInstallProcesses("101 /usr/bin/login\n102 "+name+"\n", 42); err != nil {
 			t.Fatalf("unrelated process refused: %q: %v", name, err)
 		}
+	}
+	if err := classifyInstallProcesses("101 /usr/bin/login\n42 /private/tmp/verified-target/farol-backend\n", 42); err != nil {
+		t.Fatalf("the adapter refused its own process: %v", err)
+	}
+	if err := classifyInstallProcesses("42 farol-backend\n43 farol-backend\n", 42); err == nil {
+		t.Fatal("a second Farol backend was admitted")
+	}
+	if err := classifyInstallProcesses("unparsed process inventory\n", 42); err == nil {
+		t.Fatal("malformed process inventory was admitted")
 	}
 }
 
