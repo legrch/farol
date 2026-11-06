@@ -936,6 +936,36 @@ describe("stable release channel (synthetic transport only)", () => {
       },
     ]);
   });
+  it("refuses to promote an older stable release to GitHub Latest", async () => {
+    const f = fixture(stable);
+    f.responses.get(`${f.base}/releases?per_page=100`).push({
+      id: 301,
+      tag_name: "v0.4.1",
+      draft: false,
+      prerelease: false,
+    });
+    await expect(publishCandidate(f.options)).rejects.toThrow(
+      "NEWER_STABLE_RELEASE_EXISTS",
+    );
+    expect(f.effects).toHaveLength(0);
+  });
+  it("ignores newer drafts and prereleases when publishing a stable release", async () => {
+    const f = fixture(stable);
+    f.responses
+      .get(`${f.base}/releases?per_page=100`)
+      .push(
+        { id: 301, tag_name: "v0.4.1", draft: true, prerelease: false },
+        {
+          id: 302,
+          tag_name: "v0.5.0-owner.beta.1",
+          draft: false,
+          prerelease: true,
+        },
+        { id: 303, tag_name: "v0.3.9", draft: false, prerelease: false },
+      );
+    await publishCandidate(f.options);
+    expect(f.effects).toHaveLength(1);
+  });
   it("refuses a prerelease draft for a stable candidate before any PATCH", async () => {
     const f = fixture(stable);
     f.draft.prerelease = true;

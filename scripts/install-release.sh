@@ -8,9 +8,9 @@ usage='Usage: scripts/install-release.sh <version|latest>'
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 valid_version() { printf '%s\n' "$1" | /usr/bin/grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; }
 
-# GitHub's /releases/latest is not this product's newest release: publication
-# deliberately uses make_latest=false. Resolve the highest published stable
-# semver from one bounded page, and refuse an incomplete page or asset set.
+# Resolve the highest published stable semver from one bounded page, and refuse
+# an incomplete page or asset set. This remains independent of GitHub's Latest
+# marker so an older release cannot change the installer's selection.
 resolve_latest() {
   /usr/bin/python3 -I - "$1" <<'PY'
 import json, re, sys

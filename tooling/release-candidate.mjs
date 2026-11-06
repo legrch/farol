@@ -50,6 +50,25 @@ function publicationBodyForPrerelease(prerelease) {
 function publicationBody(identity) {
   return publicationBodyForPrerelease(candidatePrerelease(identity));
 }
+function stableVersionParts(tag) {
+  const match = /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/u.exec(
+    tag,
+  );
+  return match ? match.slice(1).map(BigInt) : null;
+}
+function newerStableReleaseExists(releases, identity) {
+  const candidate = stableVersionParts(identity.tag);
+  return releases.some((release) => {
+    if (release.draft !== false || release.prerelease !== false) return false;
+    const version = stableVersionParts(release.tag_name);
+    if (!version) return false;
+    for (let index = 0; index < candidate.length; index++) {
+      if (version[index] !== candidate[index])
+        return version[index] > candidate[index];
+    }
+    return false;
+  });
+}
 export function candidateIdentity(document, head, runId, attempt) {
   const channel = releaseBuildFields(document).updateChannel;
   requireThat(
@@ -255,6 +274,11 @@ export async function publicationPreconditions(api, identity, releaseId) {
         JSON.stringify(draft),
     "RELEASE_CONFLICT",
   );
+  if (!candidatePrerelease(identity))
+    requireThat(
+      !newerStableReleaseExists(releases, identity),
+      "NEWER_STABLE_RELEASE_EXISTS",
+    );
   const byTag = await api(`${base}/releases/tags/${identity.tag}`, {
     absent: true,
   });
