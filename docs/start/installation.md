@@ -16,13 +16,7 @@ There is no qualified Intel, Windows or Linux package. Electron includes its Nod
 
 ## Inspect the download
 
-The installer can select the highest published stable version with `latest`:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/legrch/farol/main/scripts/install-release.sh | sh -s -- latest
-```
-
-It checks the selected release assets and refuses to replace a newer installed version. Specify an exact version when you intentionally need an older one. Inspect the script before running it if you prefer not to pipe a network response into a shell.
+The direct installer is temporarily unavailable while safe replacement of an occupied application slot is being qualified. It stops before downloading or changing anything. If Farol is already installed, open **Settings > General > Check for Updates** and use the built-in updater. First installation from a public download remains under qualification.
 
 Use the assets attached to the same latest release: the Apple Silicon ZIP, `farol-release.json` and `SHA256SUMS`. Check the ZIP in its download directory:
 
