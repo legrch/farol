@@ -210,6 +210,33 @@ func TestHostRuntimeUsesSafeInstalledAlternativeAfterSharedWritableCandidate(t *
 		}
 	}
 }
+func TestHostRuntimeSelectsQualifiedCLTBeforeQualifiedHomebrew(t *testing.T) {
+	f := &hostRuntimeFixtureFS{nodes: map[string]hostRuntimeNode{}, importsByPath: map[string]hostMachOImports{}}
+	brewRoot := "/opt/homebrew/Cellar/git/1"
+	cltRoot := "/Library/Developer/CommandLineTools/usr"
+	for _, p := range []string{
+		"/opt", "/opt/homebrew", "/opt/homebrew/bin", "/opt/homebrew/Cellar", "/opt/homebrew/Cellar/git", brewRoot, brewRoot + "/bin", brewRoot + "/libexec", brewRoot + "/libexec/git-core", brewRoot + "/share", brewRoot + "/share/git-core", brewRoot + "/share/git-core/templates",
+		"/Library", "/Library/Developer", "/Library/Developer/CommandLineTools", cltRoot, cltRoot + "/bin", cltRoot + "/libexec", cltRoot + "/libexec/git-core", cltRoot + "/share", cltRoot + "/share/git-core", cltRoot + "/share/git-core/templates",
+	} {
+		f.nodes[p] = fixtureRuntimeNode(p, "directory", os.ModeDir|0755)
+	}
+	clt := cltRoot + "/bin/git"
+	brew := brewRoot + "/bin/git"
+	f.nodes[clt] = fixtureRuntimeNode(clt, "file", 0555)
+	f.nodes[brew] = fixtureRuntimeNode(brew, "file", 0555)
+	f.importsByPath[clt] = hostMachOImports{fileType: 2}
+	f.importsByPath[brew] = hostMachOImports{fileType: 2}
+	alias := fixtureRuntimeNode("/opt/homebrew/bin/git", "alias", os.ModeSymlink|0777)
+	alias.LinkTarget = brew
+	f.nodes[alias.Path] = alias
+	p, err := discoverHostRuntime(context.Background(), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(p.frozen.ExecFiles, []string{clt}) || slices.Contains(p.frozen.Path, brewRoot+"/bin") {
+		t.Fatalf("qualified Homebrew Git won over qualified CLT Git: %+v", p.frozen)
+	}
+}
 func TestHostRuntimeRejectsSharedWritablePythonBeforeUnsupportedAlternative(t *testing.T) {
 	f := &hostRuntimeFixtureFS{nodes: map[string]hostRuntimeNode{}, importsByPath: map[string]hostMachOImports{}}
 	for _, p := range []string{
