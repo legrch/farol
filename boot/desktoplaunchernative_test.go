@@ -92,13 +92,15 @@ fs.writeFileSync(path.join(root,'helper.json'),JSON.stringify(helper),{mode:0o60
 await lifetime.retain(plan.request,helper,Date.now()+15000);
 child.stdio[3].end(JSON.stringify(plan.request)+'\n');
 const frame=await new Promise((resolve,reject)=>{let text='';child.stdio[4].on('data',b=>{text+=b;});child.stdio[4].on('error',reject);child.stdio[4].on('end',()=>resolve(JSON.parse(text)));});
-fs.writeFileSync(path.join(root,'handoff.json'),JSON.stringify(frame),{mode:0o600});
+fs.writeFileSync(path.join(root,'handoff.tmp'),JSON.stringify(frame),{flag:'wx',mode:0o600});
+fs.renameSync(path.join(root,'handoff.tmp'),path.join(root,'handoff.json'));
 if(frame.phase!=='waiting_for_exit')throw Error('fixture handoff not ready');
 fs.writeFileSync(path.join(plan.state,'last-quit.json'),JSON.stringify({schema:1,at:new Date().toISOString(),drained:true,unconfirmed:[]}),{mode:0o600});
 fs.unlinkSync(path.join(plan.state,'running.json')); app.quit();
 })().catch(e=>{fs.writeFileSync(path.join(root,'fixture-error'),String(e));app.exit(79);});});
 const start=execFileSync('/bin/ps',['-p',String(process.pid),'-o','lstart='],{encoding:'utf8'}).trim();
-fs.writeFileSync(path.join(root,'desktop.json'),JSON.stringify({pid:process.pid,start,parent:process.ppid}),{mode:0o600});});`
+fs.writeFileSync(path.join(root,'desktop.tmp'),JSON.stringify({pid:process.pid,start,parent:process.ppid}),{flag:'wx',mode:0o600});
+fs.renameSync(path.join(root,'desktop.tmp'),path.join(root,'desktop.json'));});`
 	script := strings.ReplaceAll(strings.ReplaceAll(source, "ROOT", string(closedHelperJSON(t, f.dir))), "ADAPTER", string(closedHelperJSON(t, adapter)))
 	if err := os.WriteFile(filepath.Join(resources, "index.cjs"), []byte(script), 0600); err != nil {
 		t.Fatal(err)
@@ -212,8 +214,32 @@ fs.writeFileSync(path.join(root,'desktop.json'),JSON.stringify({pid:process.pid,
 	if err := json.Unmarshal(waitFile("successor.json"), &successor); err != nil || successor.PID <= 1 || successor.Parent <= 1 || successor.PID == desktop.PID || successor.Parent == desktop.Parent || successor.Version != "1.2.3" || !strings.Contains(successor.Exe, filepath.Join(f.home, "Applications/Farol.app/Contents/Frameworks/Electron Runtime.app/")) || successor.AppPath != filepath.Join(f.home, "Applications/Farol.app/Contents/Resources/app") {
 		t.Fatalf("canonical successor identity invalid: %+v %v; retain %s", successor, err, f.dir)
 	}
-	if len(successor.Argv) == 0 || !strings.HasPrefix(successor.Argv[len(successor.Argv)-1], "--farol-installed-update-relaunch=") {
+	hintPrefix := "--farol-installed-update-relaunch="
+	if len(successor.Argv) == 0 || !strings.HasPrefix(successor.Argv[len(successor.Argv)-1], hintPrefix) {
 		t.Fatal("successor did not receive correlated launch hint")
+	}
+	var hint struct {
+		OperationID string `json:"operationId"`
+		Action      string `json:"action"`
+		Phase       string `json:"phase"`
+		BuildID     string `json:"buildId"`
+		Helper      struct {
+			PID          int64  `json:"pid"`
+			ProcessStart string `json:"processStart"`
+		} `json:"helper"`
+	}
+	var helper struct {
+		PID          int64  `json:"pid"`
+		ProcessStart string `json:"processStart"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(successor.Argv[len(successor.Argv)-1], hintPrefix)), &hint); err != nil {
+		t.Fatalf("successor launch hint invalid: %v", err)
+	}
+	if err := json.Unmarshal(waitFile("helper.json"), &helper); err != nil {
+		t.Fatalf("helper identity unavailable: %v", err)
+	}
+	if hint.OperationID != request["operationId"] || hint.Action != request["action"] || hint.Phase != "completed" || hint.BuildID != request["target"].(map[string]any)["buildId"] || hint.Helper.PID != helper.PID || hint.Helper.ProcessStart != helper.ProcessStart {
+		t.Fatal("successor launch hint does not match request and observed helper")
 	}
 	change = unix.Kevent_t{Ident: uint64(successor.Parent), Filter: unix.EVFILT_PROC, Flags: unix.EV_ADD | unix.EV_ONESHOT | unix.EV_RECEIPT, Fflags: unix.NOTE_EXIT | unix.NOTE_EXITSTATUS | unix.NOTE_EXIT_DETAIL}
 	n, err = unix.Kevent(queue, []unix.Kevent_t{change}, receipt[:], nil)
@@ -274,8 +300,12 @@ func desktopWitnessTarget(t *testing.T, f *liveNativeFixture, electron string) s
 const root=ROOT;app.setPath('userData',path.join(root,'successor-profile'));
 app.whenReady().then(()=>{app.dock?.hide();
 const evidence={pid:process.pid,parent:process.ppid,exe:process.execPath,appPath:app.getAppPath(),version:app.getVersion(),argv:process.argv.slice(1)};
-fs.writeFileSync(path.join(root,'successor.json'),JSON.stringify(evidence),{flag:'wx',mode:0o600});
-const watcher=fs.watch(root,()=>{if(fs.existsSync(path.join(root,'successor.quit'))){watcher.close();app.quit();}});
+const quit=path.join(root,'successor.quit');let done=false;
+const finish=()=>{if(done||!fs.existsSync(quit))return;done=true;watcher.close();app.quit();};
+const watcher=fs.watch(root,finish);
+fs.writeFileSync(path.join(root,'successor.tmp'),JSON.stringify(evidence),{flag:'wx',mode:0o600});
+fs.renameSync(path.join(root,'successor.tmp'),path.join(root,'successor.json'));
+finish();
 setTimeout(()=>{fs.writeFileSync(path.join(root,'successor-timeout'),'fixture timeout');app.exit(79);},20000).unref();
 });`
 	files := map[string]string{
