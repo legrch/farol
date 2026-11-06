@@ -216,3 +216,24 @@ func TestInstallReleaseAcceptedBaselineIsBoundToManifest(t *testing.T) {
 		t.Fatal("invalid adopted identity admitted")
 	}
 }
+
+func TestInstallReleasePredecessorRequiresStartupLeaseGeneration(t *testing.T) {
+	for _, tc := range []struct {
+		version string
+		allowed bool
+	}{
+		{"0.5.15", false},
+		{"0.5.16", true},
+		{"0.5.17", true},
+		{"0.6.0", true},
+		{"1.0.0", true},
+		{"0.5.16-owner.beta.1", false},
+		{"00.5.16", false},
+		{"0.05.16", false},
+		{"", false},
+	} {
+		if got := installPredecessorUsesStartupLease(tc.version); got != tc.allowed {
+			t.Errorf("version %q: got %v, want %v", tc.version, got, tc.allowed)
+		}
+	}
+}
