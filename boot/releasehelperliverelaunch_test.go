@@ -107,22 +107,17 @@ func TestLiveHelperProductionDependenciesMeasureThisProcess(t *testing.T) {
 }
 
 // The composed arguments are the protocol owner's, bound to this request: the
-// owner slot for a legacy install, the verified capture for a shared one, and
+// owner slot for a legacy install, the shared Applications slot for a shared one, and
 // always phase "completed" with this helper's pid and process start.
 func TestLiveHelperRelaunchArgumentsAreTheProtocolOwners(t *testing.T) {
 	self := releaseport.HelperSelfIdentity{PID: 4321, ProcessStart: "helper birth"}
-	capture := liveRelaunchHome + "/Library/Application Support/io.github.legrch.farol/installed-updates/" + strings.Repeat("1", 32) + "/launch-Farol.app"
 	for _, tc := range []struct {
 		name     string
 		location string
-		captured *string
 		app      string
-		refused  string
 	}{
-		{"legacy", "legacy", nil, liveRelaunchHome + "/Applications/Farol.app", ""},
-		{"shared capture", "shared", &capture, capture, ""},
-		{"shared without a capture", "shared", nil, "", "launch_image_unconfirmed"},
-		{"legacy with a capture", "legacy", &capture, "", "launch_image_unexpected"},
+		{"legacy", "legacy", liveRelaunchHome + "/Applications/Farol.app"},
+		{"shared", "shared", "/Applications/Farol.app"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var seen closedHelperExecution
@@ -134,13 +129,7 @@ func TestLiveHelperRelaunchArgumentsAreTheProtocolOwners(t *testing.T) {
 			if _, exit := f.entry(); exit != 0 || seen.relaunch == nil {
 				t.Fatal("exit", exit)
 			}
-			arguments, err := seen.relaunch.arguments(context.Background(), self, tc.captured)
-			if tc.refused != "" {
-				if err == nil || arguments != nil {
-					t.Fatal("unbound launch image accepted", arguments, err)
-				}
-				return
-			}
+			arguments, err := seen.relaunch.arguments(context.Background(), self)
 			if err != nil || len(arguments) != 5 {
 				t.Fatal("arguments", arguments, err)
 			}
@@ -229,7 +218,7 @@ func TestClosedHelperNativeConfigWiresRelaunchCapabilitiesOnlyWhenCarried(t *tes
 	measure := func(context.Context, time.Time) (releaseport.HelperSelfIdentity, error) {
 		return releaseport.HelperSelfIdentity{}, nil
 	}
-	arguments := func(context.Context, releaseport.HelperSelfIdentity, *string) ([]string, error) { return nil, nil }
+	arguments := func(context.Context, releaseport.HelperSelfIdentity) ([]string, error) { return nil, nil }
 	carried := closedHelperNativeConfig(closedHelperExecution{relaunch: &closedHelperRelaunch{arguments: arguments, measure: measure}}, nil, nil)
 	if carried.RelaunchArguments == nil || carried.MeasureSelf == nil {
 		t.Fatal("a relaunch execution lost a launch capability", carried.RelaunchArguments != nil, carried.MeasureSelf != nil)

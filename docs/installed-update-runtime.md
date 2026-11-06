@@ -65,8 +65,10 @@ A different administrator replacing the public bundle before a Finder, Dock or
 LaunchServices open is outside this preview's initial-code trust boundary. The
 host's OS and filesystem permissions govern that initial launch. No Developer ID,
 notarization or Gatekeeper admission guarantee is implemented by this snapshot.
-A correlated update relaunch uses the retained owner-private `launch-Farol.app`;
-that private launch origin differs from an ordinary initial public-slot open.
+A new correlated update relaunch opens the verified permanent Applications slot.
+Older private `launch-Farol.app` records remain recovery evidence; they are not
+created or opened by the current helper. Pathname launch does not atomically bind
+the final verification to bytes executed by LaunchServices.
 Changing the distribution trust anchor requires a separate owner decision and
 its own platform qualification, not another self-attestation inside replaced code.
 
@@ -79,21 +81,13 @@ binds the executable and scripts; physical ASAR copying and hashing use
 slot code. A target generation can authenticate from its pending operation
 before recovery writes its new settled receipt.
 
-Automatic shared-slot relaunch uses a descriptor-copied, independently verified
-`<operation>/launch-Farol.app`, retained inside the private operation directory.
-The helper publishes its launch intent only after this image is complete and
-opens that private application exactly once. It never opens the replaceable
-`/Applications/Farol.app` pathname. Correlated startup verifies the private
-image, immutable shared-slot operation, helper completion and physical accepted
-pair, then supplies its resource origin to the same updater owner. Normal reopen
-of this image without the one-shot hint requires the current settled generation
-and unchanged public target. Consumed Ready receipts do not invalidate private
-executable authority. Private launch images remain retained; this packet adds no
-background image garbage collection or replay of an unknown launch. While
-running from a retained private launch entry, normal Quit skips installation;
-the retained update remains ready without a restart blocker. Idle automatic
-installation and explicit installation use their existing successor relaunch.
-This prevents a no-relaunch Quit update from stranding that launch entry.
+For new shared-slot updates the helper verifies the accepted target tree in
+`/Applications/Farol.app`, checks the signed Go and Electron executables there,
+rechecks the held and named slot identity, and issues one LaunchServices open of
+that same permanent path. The outer bundle remains unsigned; these executable
+checks do not prove publisher identity. The existing correlated startup hint and
+operation journal remain in use. Historical private launch images are retained
+under their original operation owners; no background cleanup or replay is added.
 
 The shared `/Applications` parent must be canonical, root-owned and not world
 writable. Group write is allowed only for the standard macOS administrator group

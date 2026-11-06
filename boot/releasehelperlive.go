@@ -229,8 +229,8 @@ func withLiveReleaseHelperDependencies(ctx context.Context, files liveHelperFile
 	var relaunch *closedHelperRelaunch
 	if request.Relaunch {
 		relaunch = &closedHelperRelaunch{
-			arguments: func(c context.Context, self releaseport.HelperSelfIdentity, captured *string) ([]string, error) {
-				return protocol.BuildRelaunchArguments(c, "completed", self, captured, protocolnative.JSONCodec{})
+			arguments: func(c context.Context, self releaseport.HelperSelfIdentity) ([]string, error) {
+				return protocol.BuildRelaunchArguments(c, "completed", self, protocolnative.JSONCodec{})
 			},
 			measure: deps.measure,
 		}
