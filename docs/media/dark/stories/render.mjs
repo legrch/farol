@@ -35,7 +35,11 @@ function browserPath() {
     .sort()
     .reverse()
     .map((name) =>
-      path.join(cache, name, "chrome-headless-shell-mac-arm64/chrome-headless-shell"),
+      path.join(
+        cache,
+        name,
+        "chrome-headless-shell-mac-arm64/chrome-headless-shell",
+      ),
     )
     .find((file) => fs.existsSync(file));
   if (!found) throw new Error("No Chromium found. Set FAROL_CHROMIUM.");
@@ -56,12 +60,17 @@ try {
     );
     await page.evaluate(async () => {
       await Promise.all(
-        ["400 13px Geist", "600 13px Geist", "700 13px Geist", "400 11px GeistMono", "600 11px GeistMono"].map((font) =>
-          document.fonts.load(font),
-        ),
+        [
+          "400 13px Geist",
+          "600 13px Geist",
+          "700 13px Geist",
+          "400 11px GeistMono",
+          "600 11px GeistMono",
+        ].map((font) => document.fonts.load(font)),
       );
       await document.fonts.ready;
-      if (document.fonts.check("13px Geist") !== true) throw new Error("Geist did not load");
+      if (document.fonts.check("13px Geist") !== true)
+        throw new Error("Geist did not load");
     });
     const seconds = await page.evaluate(() => window.scenes);
     for (const [scene, length] of Object.entries(seconds)) {
@@ -70,7 +79,10 @@ try {
       fs.mkdirSync(directory);
       const frames = Math.round(length * FPS);
       for (let index = 0; index < frames; index += 1) {
-        await page.evaluate(([name, t]) => window.draw(name, t), [scene, index / FPS]);
+        await page.evaluate(
+          ([name, t]) => window.draw(name, t),
+          [scene, index / FPS],
+        );
         if (index === 0) await page.waitForLoadState("networkidle");
         await page.screenshot({
           path: path.join(directory, `${String(index).padStart(5, "0")}.png`),
@@ -80,12 +92,17 @@ try {
       const encoded = spawnSync(
         "ffmpeg",
         [
-          "-y", "-loglevel", "error",
-          "-framerate", String(FPS),
-          "-i", path.join(directory, "%05d.png"),
+          "-y",
+          "-loglevel",
+          "error",
+          "-framerate",
+          String(FPS),
+          "-i",
+          path.join(directory, "%05d.png"),
           "-filter_complex",
           "[0:v]split[a][b];[a]palettegen=max_colors=256:stats_mode=full[p];[b][p]paletteuse=dither=none:diff_mode=rectangle",
-          "-loop", "0",
+          "-loop",
+          "0",
           file,
         ],
         { stdio: "inherit" },
@@ -96,7 +113,10 @@ try {
         const step = Math.floor(frames / 6);
         for (let shot = 0; shot < 6; shot += 1) {
           fs.copyFileSync(
-            path.join(directory, `${String(shot * step + step - 1).padStart(5, "0")}.png`),
+            path.join(
+              directory,
+              `${String(shot * step + step - 1).padStart(5, "0")}.png`,
+            ),
             path.join(sheetDir, `${scene}-${theme}-${shot}.png`),
           );
         }
@@ -112,12 +132,19 @@ try {
         frames,
         illustrative: true,
       });
-      console.log(path.basename(file), (bytes.length / 1048576).toFixed(2), "MiB");
+      console.log(
+        path.basename(file),
+        (bytes.length / 1048576).toFixed(2),
+        "MiB",
+      );
     }
     await page.close();
     if (!only) {
       fs.writeFileSync(
-        path.resolve(here, `../${theme === "dark" ? "validation" : "light-validation"}.json`),
+        path.resolve(
+          here,
+          `../${theme === "dark" ? "validation" : "light-validation"}.json`,
+        ),
         `${JSON.stringify({ theme, artifacts: entries }, null, 2)}\n`,
       );
     }

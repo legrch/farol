@@ -412,7 +412,8 @@
     const seg = (t, a, b) => clamp((t - a) / (b - a));
     const ease = (x) => 1 - (1 - x) * (1 - x);
     const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
-    const typed = (s, t, a, b) => s.slice(0, Math.round(s.length * seg(t, a, b)));
+    const typed = (s, t, a, b) =>
+      s.slice(0, Math.round(s.length * seg(t, a, b)));
     const blink = (t) => Math.floor(t * 2.5) % 2 === 0;
 
     /* Flat monochrome reinterpretation of Farol's concentric light. No bitmap, blur or opacity. */
@@ -439,11 +440,15 @@
 
     const py = (line) => {
       const k = /\b(def|return|from|import|assert)\b/g;
-      if (line.startsWith('"""') || line.startsWith("#")) return `<span class="c">${esc(line)}</span>`;
+      if (line.startsWith('"""') || line.startsWith("#"))
+        return `<span class="c">${esc(line)}</span>`;
       return esc(line)
         .replace(/(f?"[^"]*"?)/g, '<span class="s">$1</span>')
         .replace(k, '<span class="k">$1</span>')
-        .replace(/\b(greeting|farewell|test_greeting)(?=\()/g, '<span class="f">$1</span>');
+        .replace(
+          /\b(greeting|farewell|test_greeting)(?=\()/g,
+          '<span class="f">$1</span>',
+        );
     };
     const md = (line) =>
       line.startsWith("#") ? `<span class="k">${esc(line)}</span>` : esc(line);
@@ -476,7 +481,8 @@
     function chat(t, prompt, typeA, typeB, sendAt, body) {
       const sent = t >= sendAt;
       let composer;
-      if (sent) composer = `<div class="composer empty">Ask anything<div class="send">↑</div></div>`;
+      if (sent)
+        composer = `<div class="composer empty">Ask anything<div class="send">↑</div></div>`;
       else if (t < typeA)
         composer = `<div class="composer empty">Ask anything<div class="send">↑</div></div>`;
       else
@@ -510,7 +516,8 @@
         seen++;
       }
       // A cut inside <code> must be closed, or the parser reopens it around everything after.
-      if (out.split("<code>").length > out.split("</code>").length) out += "</code>";
+      if (out.split("<code>").length > out.split("</code>").length)
+        out += "</code>";
       return `<div class="answer">${out}</div>`;
     };
     function mac(grant, files, active, tabName, stat, lines) {
@@ -538,8 +545,20 @@
     /* Story 1: ask a question, read the project, answer with sources. */
     function read(t) {
       const prompt = "Read my project and explain how it works.";
-      const readme = ["# my-project", "A small greeting library.", "", "## Usage", "from greeting import greeting", 'greeting("Ada")'];
-      const source = ['"""Friendly messages."""', "", "def greeting(name):", '    return f"Hello, {name}!"'];
+      const readme = [
+        "# my-project",
+        "A small greeting library.",
+        "",
+        "## Usage",
+        "from greeting import greeting",
+        'greeting("Ada")',
+      ];
+      const source = [
+        '"""Friendly messages."""',
+        "",
+        "def greeting(name):",
+        '    return f"Hello, {name}!"',
+      ];
       const onSource = t >= 8.4;
       const reading = t >= 6 && t < 11;
       const src = onSource ? source : readme;
@@ -547,7 +566,10 @@
       const a = onSource ? 8.4 : 6;
       const b = onSource ? 10.8 : 8.2;
       const lit = t >= a && t < b ? Math.floor(src.length * seg(t, a, b)) : -1;
-      const lines = src.map((l, i) => ({ html: fmt(l), cls: reading && i === lit ? "scan" : "" }));
+      const lines = src.map((l, i) => ({
+        html: fmt(l),
+        cls: reading && i === lit ? "scan" : "",
+      }));
       let body = "";
       if (t >= 4.2 && t < 6) body += chip("Asking Farol…");
       if (t >= 6) body += chip("Read README.md", t >= 8.2 ? "ok" : "");
@@ -567,22 +589,43 @@
         "Farol reads only the folder you approved",
         "The answer comes back with its sources",
       ][step];
-      const active = (t >= 4.2 && t < 11.8);
+      const active = t >= 4.2 && t < 11.8;
       stage.innerHTML =
         chat(t, prompt, 0.5, 3.4, 4, body) +
         route(t, [[4.2, 6]], [[11, 12.4]]) +
         mark(MID.x, MID.y, active, t) +
         `<div class="abs" style="left:${MID.x - 40}px;width:80px;top:${MID.y + 33}px;text-align:center;font-weight:600">Farol</div>` +
-        mac("Read only", [{ name: "README.md" }, { name: "greeting.py" }, { name: "notes.md" }], t < 6 ? "" : onSource ? "greeting.py" : "README.md", onSource ? "greeting.py" : "README.md", "", lines) +
+        mac(
+          "Read only",
+          [
+            { name: "README.md" },
+            { name: "greeting.py" },
+            { name: "notes.md" },
+          ],
+          t < 6 ? "" : onSource ? "greeting.py" : "README.md",
+          onSource ? "greeting.py" : "README.md",
+          "",
+          lines,
+        ) +
         caption(step, text);
     }
 
     /* Story 2: request a change; code is added to one file and a test file is created. */
     function edit(t) {
       const prompt = "Add a greeting(name) function and a test for it.";
-      const base = ['"""Friendly messages."""', "", "def farewell(name):", '    return f"Bye, {name}."'];
+      const base = [
+        '"""Friendly messages."""',
+        "",
+        "def farewell(name):",
+        '    return f"Bye, {name}."',
+      ];
       const added = ["", "def greeting(name):", '    return f"Hello, {name}!"'];
-      const test = ["from greeting import greeting", "", "def test_greeting():", '    assert "Ada" in greeting("Ada")'];
+      const test = [
+        "from greeting import greeting",
+        "",
+        "def test_greeting():",
+        '    assert "Ada" in greeting("Ada")',
+      ];
       const files = [{ name: "README.md" }, { name: "greeting.py" }];
       if (t >= 12.2) files.push({ name: "test_greeting.py", isNew: true });
       const typeLines = (src, a, b) => {
@@ -598,7 +641,10 @@
       if (t < 12.2) {
         lines = base.map((l, i) => ({
           html: py(l),
-          cls: t >= 6 && t < 7.6 && i === Math.floor(base.length * seg(t, 6, 7.6)) ? "scan" : "",
+          cls:
+            t >= 6 && t < 7.6 && i === Math.floor(base.length * seg(t, 6, 7.6))
+              ? "scan"
+              : "",
         }));
         typeLines(added, 8, 11.8)
           .slice(0, t >= 8 ? 3 : 0)
@@ -606,7 +652,10 @@
         tab = "greeting.py";
         stat = t >= 8 ? "+3 −0" : "";
       } else {
-        lines = typeLines(test, 12.4, 15.6).map((l) => ({ html: py(l), cls: "add" }));
+        lines = typeLines(test, 12.4, 15.6).map((l) => ({
+          html: py(l),
+          cls: "add",
+        }));
         tab = "test_greeting.py";
         stat = "new file · +4";
       }
@@ -614,7 +663,8 @@
       if (t >= 4.2 && t < 6) body += chip("Asking Farol…");
       if (t >= 6) body += chip("Read greeting.py", t >= 7.6 ? "ok" : "");
       if (t >= 8) body += chip("Edit greeting.py", t >= 11.8 ? "ok" : "");
-      if (t >= 12.2) body += chip("Create test_greeting.py", t >= 15.6 ? "ok" : "");
+      if (t >= 12.2)
+        body += chip("Create test_greeting.py", t >= 15.6 ? "ok" : "");
       if (t >= 17.2)
         body += answer(
           "Done. I added <code>greeting(name)</code> and a test in <code>test_greeting.py</code>. Review the diff in your editor.",
@@ -643,7 +693,8 @@
 
     /* Story 3: paste the command, verify, Dock bounce, the app opens on Setup. */
     function install(t) {
-      const cmd = "curl -fsSL https://raw.githubusercontent.com/legrch/farol/main/scripts/install-release.sh | sh -s -- latest";
+      const cmd =
+        "curl -fsSL https://raw.githubusercontent.com/legrch/farol/main/scripts/install-release.sh | sh -s -- latest";
       const v = "0.5.18";
       let out = `<span class="p">❯</span> ${typed(cmd, t, 0.5, 2.2)}`;
       if (t < 2.5 && blink(t)) out += '<span class="caret"></span>';
@@ -661,9 +712,17 @@
       add(6.5, "Downloading farol-release.json...", "d");
       add(6.8, "Downloading SHA256SUMS...", "d");
       add(7.1, "Verifying the release...", "d");
-      add(8, "Outer app: unsigned; executable signatures and release tree verified (Electron has no resource seal)", "d");
+      add(
+        8,
+        "Outer app: unsigned; executable signatures and release tree verified (Electron has no resource seal)",
+        "d",
+      );
       add(11.2, `Installed and running: Farol ${v}`, "ok");
-      add(11.5, "Farol opened. Check its connection and updates in the app.", "ok");
+      add(
+        11.5,
+        "Farol opened. Check its connection and updates in the app.",
+        "ok",
+      );
       const open = ease(seg(t, 12.6, 13.2));
       const started = t >= 15.4;
       // Dock icon appears, then three decaying bounces while the app launches.
@@ -707,8 +766,15 @@
           ? `<svg class="cursor" style="left:${started ? cx + 30 : curX}px;top:${started ? cy + 40 : curY}px" viewBox="0 0 14 20"><path d="M1 1v15l4-3.6 2.6 6 2.6-1.1-2.6-6H13z" fill="var(--text)" stroke="var(--bg)" stroke-width="1.2"/></svg>`
           : "";
       const step = t < 2.8 ? 1 : t < 8.6 ? 2 : t < 12.6 ? 3 : 4;
-      const text = ["", "Paste one command in Terminal", "It downloads and verifies the release", "Farol appears in your Dock", "Setup opens: follow the steps below"][step];
-      stage.innerHTML = `<div class="abs" style="left:0;top:0;right:0;bottom:44px;background:var(--desk);border-bottom:1px solid var(--line)">
+      const text = [
+        "",
+        "Paste one command in Terminal",
+        "It downloads and verifies the release",
+        "Farol appears in your Dock",
+        "Setup opens: follow the steps below",
+      ][step];
+      stage.innerHTML =
+        `<div class="abs" style="left:0;top:0;right:0;bottom:44px;background:var(--desk);border-bottom:1px solid var(--line)">
           <div class="window" style="left:60px;top:18px;width:680px;height:352px">
             <div class="bar"><span class="lights"><i></i><i></i><i></i></span>Terminal</div>
             <div class="term">${out}</div>
@@ -724,8 +790,11 @@
       edit: { draw: edit, seconds: 24 },
       install: { draw: install, seconds: 20 },
     };
-    window.scenes = Object.fromEntries(Object.entries(scenes).map(([k, v]) => [k, v.seconds]));
+    window.scenes = Object.fromEntries(
+      Object.entries(scenes).map(([k, v]) => [k, v.seconds]),
+    );
     window.draw = (name, t) => scenes[name].draw(t);
-    if (params.get("scene")) draw(params.get("scene"), Number(params.get("t") || 0));
+    if (params.get("scene"))
+      draw(params.get("scene"), Number(params.get("t") || 0));
   </script>
 </body>
