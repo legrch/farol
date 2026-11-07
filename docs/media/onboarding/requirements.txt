@@ -1,9 +1,0 @@
-# Build-only Python dependencies. No runtime dependency is added to Farol.
-WeasyPrint==66.0
-beautifulsoup4==4.15.0
-Pillow==13.0.0
-fonttools==4.68.0
-pydyf==0.13.0
-tinycss2==1.5.1
-cssselect2==0.10.1
-cffi==2.1.1
