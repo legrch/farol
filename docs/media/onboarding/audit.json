@@ -5,72 +5,72 @@
       "file": "Farol-01-sign-in-light.gif",
       "frames": 145,
       "duration_ms": 22340,
-      "sha256": "2a2fb28dfb13796027a4b7eb3b24777c8b24d5cfec3bc47ec25541bcc09b8486",
-      "minimum_mean_luminance": 244.05
+      "sha256": "70b297dabe0be8f650e9909029533bb67315928ab8be51baf0ad9459d934712d",
+      "minimum_mean_luminance": 244.28
     },
     {
       "file": "Farol-02-workspace-light.gif",
       "frames": 100,
       "duration_ms": 16300,
-      "sha256": "9531b248e967c70edf13a33c67594db130faea9ea79e9151e0b8f4f13f9f99d8",
-      "minimum_mean_luminance": 228.68
+      "sha256": "39b3f7d9003611e92573175f7ba46e1c31101225ac73702876a848c7ecb1536d",
+      "minimum_mean_luminance": 228.89
     },
     {
       "file": "Farol-02b-edits-and-commands-light.gif",
       "frames": 71,
       "duration_ms": 19660,
-      "sha256": "5e105bc3995a8d3e33b62537b67894c9e822669126996040405fa3d094dda2b9",
-      "minimum_mean_luminance": 245.03
+      "sha256": "eb1b915070f4353a463d9be52b9c1723724e71384129efbe8f949cb3cea52517",
+      "minimum_mean_luminance": 245.24
     },
     {
       "file": "Farol-03-create-tunnel-light.gif",
       "frames": 184,
       "duration_ms": 27480,
-      "sha256": "0e179e670938e4bccfea030309aa2473e5409c57a7a9c2085ed692b23e8b059b",
-      "minimum_mean_luminance": 232.12
+      "sha256": "1680a35512413865aeee82c44e59739cdcc79e985fc2baa8b4c066133f4cd4b6",
+      "minimum_mean_luminance": 232.38
     },
     {
       "file": "Farol-04-restricted-key-light.gif",
       "frames": 184,
       "duration_ms": 32580,
-      "sha256": "76637f89e0a0abea24cc5b5ed9d2364302fb2157e05c80c2e4fc02a9a7a1520f",
-      "minimum_mean_luminance": 228.71
+      "sha256": "956684a6f51518162e2ce5337dd89cdec93b6bbb2320a9fd6f674632240a6b2b",
+      "minimum_mean_luminance": 228.89
     },
     {
       "file": "Farol-05-connect-this-mac-light.gif",
       "frames": 69,
       "duration_ms": 13960,
-      "sha256": "c28ab6b989e2705199b1257145583e48282ebbb5cf48f90f8a38897e2a25a511",
-      "minimum_mean_luminance": 245.51
+      "sha256": "3db29a011e4d63680b4a6bfb6cf740ad4e524e149f3d25fedcba3fb24e7eee79",
+      "minimum_mean_luminance": 245.73
     },
     {
       "file": "Farol-06-add-plugin-light.gif",
       "frames": 280,
       "duration_ms": 49180,
-      "sha256": "2f736bf78f6c61b09986a2d798de78e0733989a40ab4f2c822b506a09d3ebfae",
-      "minimum_mean_luminance": 226.8
+      "sha256": "8718542cd3bbeceadb5c060f99bd7c8f4a7349a591074cd0d214c734164bb86d",
+      "minimum_mean_luminance": 227.02
     },
     {
       "file": "Farol-07-test-connection-light.gif",
       "frames": 70,
       "duration_ms": 16960,
-      "sha256": "0a856caa17eac0167f2323096b27239d5b85834b85cd483a9a1d99deba92755a",
-      "minimum_mean_luminance": 245.26
+      "sha256": "e3b2afaa7b56e854d0b8d052685967fdbb343be2d1cd047009b46f33506788b4",
+      "minimum_mean_luminance": 245.45
     }
   ],
   "fonts": [
     {
-      "file": "LiberationSans-Regular.ttf",
-      "license": "Licensed under the SIL Open Font License, Version 1.1",
-      "sha256": "bade59d822652f76e6941aa87b40a87c13d1cc70db98ededb5011127efafd1d3"
-    },
-    {
       "file": "LiberationSans-Bold.ttf",
       "license": "Licensed under the SIL Open Font License, Version 1.1",
       "sha256": "1b5f2da6f4cadce4c05b9ecebe3a6fcd374eb95ae443605e799f4c3287978939"
+    },
+    {
+      "file": "LiberationSans-Regular.ttf",
+      "license": "Licensed under the SIL Open Font License, Version 1.1",
+      "sha256": "bade59d822652f76e6941aa87b40a87c13d1cc70db98ededb5011127efafd1d3"
     }
   ],
-  "text_files_checked": 95,
+  "text_files_checked": 94,
   "theme": "light",
   "contrast_pairs": [
     {

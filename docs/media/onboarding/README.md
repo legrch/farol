@@ -1,12 +1,12 @@
 # Farol onboarding animations
 
-Eight short, light-theme tutorials with synthetic data, a moving cursor, click rings, and PNG alternatives. The same light asset is intended for both GitHub page themes. These are **code-rendered UI recreations, not screen recordings or live acceptance-test evidence**.
+Eight short, light-theme tutorials with synthetic data, a moving cursor, click rings, and complete written instructions. The same light asset is intended for both GitHub page themes. These are **code-rendered UI recreations, not screen recordings or live acceptance-test evidence**.
 
 ## Build
 
 The build is local and makes no network requests. It does not open Farol, sign in, create a key, create a tunnel, install a plugin, or send a chat message.
 
-Requirements: Python 3.12, Poppler (`pdftoppm`), and the Pango / Fontconfig libraries required by WeasyPrint. On Debian/Ubuntu the OS packages are `poppler-utils libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b`. On macOS, install Poppler and Pango using your usual package manager.
+Requirements: Python 3.12 or newer, Poppler (`pdftoppm`), and the Pango / Fontconfig libraries required by WeasyPrint. On Debian/Ubuntu the OS packages are `poppler-utils libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz0b`. On macOS, install Poppler and Pango using your usual package manager.
 
 ```sh
 python3 -m venv .venv
@@ -15,7 +15,7 @@ python -m pip install -r requirements.txt
 python build.py
 ```
 
-The reference build uses Python 3.12.14 and Poppler 26.05.0. The listed Python dependencies are pinned, but some transitive dependencies remain unconstrained; this is not a complete dependency lock. Pixel-level output can change with different Poppler, Pango, or Fontconfig versions. `validation.json` records the supplied GIF hashes and event timelines. `python verify.py` validates the output against that manifest, decodes every GIF frame, checks click bounds, verifies local font licenses, checks a light outer canvas and scene luminance in every frame, checks eight specified text/background contrast pairs, and scans publishable text for common credential/private-data patterns. These are scoped checks, not a general secret-scanner guarantee or full accessibility audit.
+The current rebuild uses Python 3.14.7 and Poppler 26.04.0; the original reference used Python 3.12.14 and Poppler 26.05.0. The listed Python dependencies are pinned, but some transitive dependencies remain unconstrained; this is not a complete dependency lock. Pixel-level output can change with different Poppler, Pango, or Fontconfig versions. `validation.json` records the supplied GIF hashes and event timelines. `python verify.py` validates the output against that manifest, decodes every GIF frame, checks click bounds, verifies local font licenses, checks a light outer canvas and scene luminance in every frame, checks eight specified text/background contrast pairs, and scans publishable text for common credential/private-data patterns. These are scoped checks, not a general secret-scanner guarantee or full accessibility audit.
 
 Pipeline:
 
@@ -28,7 +28,7 @@ Pipeline:
 
 ## Reader placement
 
-The repository README is the complete reader journey: both workflow GIFs are visible, followed by requirements, current installation limits, all eight setup GIFs with written steps, a first-file exercise and best practices. The owner-selected presentation keeps animations inline rather than behind disclosure controls. [Focused connection reference](../../start/setup.md) repeats the setup steps with visible GIFs for readers arriving from a support link. The optional access step remains explicitly optional even though its animation is visible. Static PNGs remain source-package alternatives; they are not the default illustrations on these reader pages. Keep the reproduction scripts and license notices beside these media assets. The setup series is not installation acceptance evidence.
+The repository README is the complete reader journey: both workflow GIFs are visible, followed by requirements, current installation limits, all eight setup GIFs with written steps, a first-file exercise and best practices. The owner-selected presentation keeps animations inline rather than behind disclosure controls. [Focused connection reference](../../start/setup.md) repeats the setup steps with visible GIFs for readers arriving from a support link. The optional access step remains explicitly optional even though its animation is visible. Standalone PNG posters are no longer exported or committed; written steps accompany every GIF. Keep the reproduction scripts and license notices beside these media assets. The setup series is not installation acceptance evidence.
 
 ## Tutorials
 
@@ -43,7 +43,7 @@ The repository README is the complete reader journey: both workflow GIFs are vis
 | `output/Farol-06-add-plugin-light.gif`          | Add custom MCP server, Tunnel, No authentication, risk warning, Connect, find plugin, Manage, review Permissions. |
 | `output/Farol-07-test-connection-light.gif`     | Run one test, wait, return, confirm success.                                                                      |
 
-Each GIF has a same-basename PNG poster. `output/Farol-plugin-permissions-light.png` is an additional static view of all four permission choices with the default unchanged. `Farol-light-on-both-GitHub-themes.png` compares the identical light asset on light and dark page backgrounds. Motion uses 50 ms frames with longer reading pauses and loops indefinitely. Prefer collapsed README sections or static links so users can choose which animation to open.
+The published tutorials are GIF-only, with complete written steps in the reader guides. Decorative top-left branding is omitted so that the instructions and demonstrated UI remain the focus. Source images, licensed fonts and verification data remain rebuild inputs; rendered scene PNGs are temporary build intermediates.
 
 ## Accuracy and intentionally omitted details
 

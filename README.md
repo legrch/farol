@@ -154,6 +154,38 @@ Compare the tool result with your local file. You have now tried the core workfl
 <a id="privacy-and-security"></a>
 <a id="choose-folder-access"></a>
 
+## Everyday use
+
+### Ask a specific question
+
+Name the workspace and the file or topic you want to inspect. For example: “In the Farol sample workspace, read hello.txt and explain what it says. Do not change anything.” For a project, try “Read the README and explain how the project is organized,” or “Find the notes about connection setup and quote the relevant section.” Review the returned files and tool results alongside the answer.
+
+### Make an edit you can verify
+
+Keep a backup or a version-controlled baseline for work you care about. Ask ChatGPT to describe the intended change first. In **Setup → Workspaces**, select **Read & write** only for the folder that needs edits and wait for its saved access check. Then request a small, specific supported edit and inspect the local file or diff. ChatGPT's confirmation policy remains a separate control; a model's success message alone does not prove the file changed.
+
+### Change or remove a workspace
+
+Open **Setup → Workspaces** to review each saved folder path, Access choice and current **✓ Works** result. Choose **Read only** to narrow file access, or **Remove [workspace name]** to remove its grant; wait for the confirmed result. Removing a workspace keeps its files on disk. Removing the last workspace leaves no file access and blocks continuing the guided setup until a folder is added and checked.
+
+If a folder moved or a volume was reconnected, inspect the reported cause. For **WORKSPACE_ROOT_CHANGED**, preserve pending work first, then deliberately remove and re-add the folder and review its new grant. A path string alone does not establish that the same physical folder is still selected. If an action is unresolved, observe that original action before changing access.
+
+## If something gets stuck
+
+Start with the state Farol actually shows. Record the version and the exact error; use the matching row below before changing settings.
+
+| What you see                                        | What to do first                                                                                                                                                                                                                                 |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **macOS refuses to open Farol**                     | Keep the warning. The public app is unsigned and not notarized, and first installation remains under qualification. A checksum does not resolve that installation issue; do not remove quarantine or disable Gatekeeper.                         |
+| **Connection helper needed**                        | Read the cause shown in Connect this Mac. Current source uses the helper bundled with Farol; installing an unrelated tunnel-client does not repair its resources. Retain the diagnostic and follow the accepted-release recovery path.           |
+| **Tunnel or key refused**                           | Check the intended ChatGPT workspace and matching tunnel ID. Use a Restricted key with Tunnels Read + Use. If **Key saved** appears, the blank key field is intentional; keep the saved key.                                                     |
+| **Farol is connected, but ChatGPT cannot reach it** | Select the plugin attached to the same tunnel and Farol instance. Reuse that plugin rather than creating another. A local Connected status alone does not establish the ChatGPT attachment.                                                      |
+| **Workspace access refused**                        | Review the saved physical path, Access choice, exclusions and **✓ Works**. Use **Check access** if offered. Every listed workspace needs a current check. Broader access is not a fix for an unavailable tool.                                   |
+| **A result is pending or unknown**                  | Open **Review unresolved actions** when offered, then inspect **Unresolved actions** and use **Refresh status** to observe the original operation. Do not repeat Connect, Test or an edit, delete state, or change tunnels to clear uncertainty. |
+| **An update is blocked**                            | Read the stated blocker. Pending work, an active session or inconsistent installation evidence can block an update. Settle the original work; do not replace the app or delete its journals.                                                     |
+
+The detailed troubleshooting and recovery references at the bottom cover cases that need more investigation. The first response is to inspect the original state, not to broaden access or repeat an uncertain operation.
+
 ## Best practices
 
 ### Start small and keep control
@@ -183,7 +215,14 @@ Choose **Connect** or **Test in ChatGPT** once and observe the original result. 
 
 ## Updates and help
 
-Closing the window leaves Farol running; **Command+Q** quits it. Use the updater for an existing installation already set up for trusted updates.
+Closing the window leaves Farol running; **Command+Q** quits it. For an existing installation already set up for trusted updates:
+
+1. Open **Settings → General → Check for updates** and review the installed version, offered version and release notes.
+2. If an update is offered, choose **Download Update** and wait for download and verification.
+3. Finish active work and review open ChatGPT sessions. When ready, choose **Install and Relaunch** once.
+4. After relaunch, check the displayed version and connection status. Inspect any request for a current workspace or attachment check before resuming work.
+
+A manually copied ZIP app may lack an accepted update baseline. An existing installation can also be newer than the public release; that does not call for a downgrade. For an interrupted update, open **Settings → General → Update recovery…** and use only the action offered for the recorded operation. Preserve the retained predecessor until recovery is confirmed.
 
 [Update Farol](docs/guides/updates.md) · [Connection troubleshooting](docs/guides/troubleshooting.md) · [Interrupted setup and recovery](docs/guides/recovery.md) · [Uninstall safely](docs/guides/uninstall.md)
 

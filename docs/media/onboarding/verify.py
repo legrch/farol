@@ -37,14 +37,9 @@ for entry in manifest['artifacts']:
         if event['target']:
             x, y = event['target_center']
             assert 40 <= x <= 1280 and 145 <= y <= 797, event
-    poster = path.with_suffix('.png')
-    assert Image.open(poster).size == (1320, 900)
     report['artifacts'].append({'file': path.name, 'frames': im.n_frames,
                                 'duration_ms': duration, 'sha256': entry['sha256'],
                                 'minimum_mean_luminance': round(minimum_mean_luminance, 2)})
-permissions = Image.open(ROOT / 'output/Farol-plugin-permissions-light.png')
-permissions.load()
-assert permissions.size == (1320, 900)
 fonts = list((ROOT / 'source').glob('*.ttf'))
 assert {p.name for p in fonts} == {'LiberationSans-Regular.ttf', 'LiberationSans-Bold.ttf'}
 for path in fonts:
