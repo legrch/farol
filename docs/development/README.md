@@ -7,6 +7,7 @@ This is the engineering entrypoint. Ordinary users should start with [installati
 - [Contributing](contributing.md) — scope, checkpoints and review.
 - [Pull request checks and tagged releases](ci.md) — CI status checks, native coverage, and the tagged release flow.
 - [Standalone build](../standalone-build.md) — compiler and dependency verification.
+- [Guest VM smoke](vm-smoke.md) — exact packaged builds, hidden/visible runs and private evidence.
 - [Testing policy](../testing.md) — source scopes, native evidence and packaged checks.
 - [Runtime dependency verification](runtime-dependencies.md) — selected Go owners, remaining interpreter paths and regression checks.
 - [Package publication preparation](../release-publication.md) — accepted bytes and offline release assets.
