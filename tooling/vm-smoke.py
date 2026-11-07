@@ -291,6 +291,11 @@ class Runner:
         self.action('click', *self.a.terminal_point)
         time.sleep(0.5)
         if self.a.bootstrap == 'finder':
+            # A first bottom-edge click can reveal the Dock before its icon is
+            # ready to activate. Keep shell typing behind a separate activation.
+            self.action('click', *self.a.terminal_point)
+            time.sleep(0.8)
+            self.screenshot('bootstrap-activated')
             self.action('key', 'cmd+shift+g')
             time.sleep(0.8)
             self.action('type', '/System/Applications/Utilities/Terminal.app')
