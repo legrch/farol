@@ -1,4 +1,4 @@
-> **Light illustration preview** · [Switch to the dark preview](../../../README.md). The stories use the same timing and drawing code in both palettes.
+> **Light illustration preview** · [Switch to the dark preview](../../../README.md). Both themes use the same scenes and timing.
 
 <div align="center">
 
@@ -102,7 +102,7 @@ Seven steps, about one screen each. Setup in the app walks you through them; the
 2. Use your own ChatGPT account, then return to Setup. If confirmation is still needed, choose **Check sign-in**.
 3. Wait for **✓ Sign-in checked**, then choose **Continue**. This does not yet grant local file access.
 
-![Sign in in Farol, return to Setup, check sign-in, and continue; illustrated with synthetic data](../../../docs/media/onboarding/output/Farol-01-sign-in-light.gif)
+![Sign in in Farol, return to Setup, check sign-in, and continue; illustrated with synthetic data](../../../docs/media/dark/output/Farol-01-sign-in-light.gif)
 
 ### 2. Add a workspace
 
@@ -112,13 +112,13 @@ A **Farol workspace** is a folder you approve on your Mac. It is not the same th
 2. Review the path and saved **Read only** access. Wait for **✓ Works**; every listed workspace needs a current check.
 3. Choose **Continue** when the checks are current.
 
-![Choose a sample folder, keep Read only, and wait for Works; illustrated with synthetic data](../../../docs/media/onboarding/output/Farol-02-workspace-light.gif)
+![Choose a sample folder, keep Read only, and wait for Works; illustrated with synthetic data](../../../docs/media/dark/output/Farol-02-workspace-light.gif)
 
 #### Optional: edits and commands
 
 Keep Read only and Commands off for the first exercise. When a task needs changes, choose **Read & write** in that workspace's row and wait for the saved access check. Review **Commands** separately: it is shared across approved workspaces, not a per-folder sandbox.
 
-![Review optional Read & write and the shared Commands grant; illustrated with synthetic data](../../../docs/media/onboarding/output/Farol-02b-edits-and-commands-light.gif)
+![Review optional Read & write and the shared Commands grant; illustrated with synthetic data](../../../docs/media/dark/output/Farol-02b-edits-and-commands-light.gif)
 
 ### 3. Create a tunnel
 
@@ -127,7 +127,7 @@ Keep Read only and Commands off for the first exercise. When a task needs change
 3. Choose **Create** once. Copy the complete tunnel ID from its row.
 4. Paste that ID into Farol **before** copying the key, so the next copy does not replace your only copy of the ID.
 
-![Create a tunnel for the intended ChatGPT workspace, copy its ID, and paste it into Farol; illustrated with synthetic data](../../../docs/media/onboarding/output/Farol-03-create-tunnel-light.gif)
+![Create a tunnel for the intended ChatGPT workspace, copy its ID, and paste it into Farol; illustrated with synthetic data](../../../docs/media/dark/output/Farol-03-create-tunnel-light.gif)
 
 ### 4. Create a restricted key
 
@@ -138,7 +138,7 @@ Keep Read only and Commands off for the first exercise. When a task needs change
 > [!WARNING]
 > Do not substitute a full-access or admin key, and never paste a key into a chat, repository, screenshot or support message.
 
-![Select Restricted and Tunnels Read plus Use, then copy the key privately; illustrated with synthetic data](../../../docs/media/onboarding/output/Farol-04-restricted-key-light.gif)
+![Select Restricted and Tunnels Read plus Use, then copy the key privately; illustrated with synthetic data](../../../docs/media/dark/output/Farol-04-restricted-key-light.gif)
 
 ### 5. Connect this Mac
 
@@ -146,7 +146,7 @@ Keep Read only and Commands off for the first exercise. When a task needs change
 2. Choose **Connect** once. Wait for the result; do not resubmit while it is pending or unknown.
 3. Continue after **✓ Connected**. If Farol says **Key saved**, the empty field keeps the saved key, so do not paste a replacement.
 
-![Use the tunnel ID and masked key, connect once, and wait for Connected; illustrated with synthetic data](../../../docs/media/onboarding/output/Farol-05-connect-this-mac-light.gif)
+![Use the tunnel ID and masked key, connect once, and wait for Connected; illustrated with synthetic data](../../../docs/media/dark/output/Farol-05-connect-this-mac-light.gif)
 
 ### 6. Add Farol to ChatGPT
 
@@ -155,7 +155,7 @@ Keep Read only and Commands off for the first exercise. When a task needs change
 3. Review the **Connect** dialog and data-sharing notice. Choose **Connect** once and find Farol in the plugin list.
 4. Open **⋯ → Manage → Permission**. **Recommended: keep Allow low-risk tools (Default).**
 
-![Create and connect the plugin, find it, and review four permission levels without changing the default; illustrated with synthetic data](../../../docs/media/onboarding/output/Farol-06-add-plugin-light.gif)
+![Create and connect the plugin, find it, and review four permission levels without changing the default; illustrated with synthetic data](../../../docs/media/dark/output/Farol-06-add-plugin-light.gif)
 
 ### 7. Test the connection
 
@@ -163,7 +163,7 @@ Keep Read only and Commands off for the first exercise. When a task needs change
 2. Wait for the original test. **Back to setup** returns without sending again.
 3. Choose **Start using Farol** after **✓ Everything works**. A model reply or plugin chip alone does not establish this result.
 
-![Run one ChatGPT test, wait for the matching receipt, and return to Setup; illustrated with synthetic data](../../../docs/media/onboarding/output/Farol-07-test-connection-light.gif)
+![Run one ChatGPT test, wait for the matching receipt, and return to Setup; illustrated with synthetic data](../../../docs/media/dark/output/Farol-07-test-connection-light.gif)
 
 ## Try your first file
 
@@ -190,6 +190,8 @@ Three separate switches decide what can happen. Changing one does not change the
 | **Workspace access** (in Farol)      | Which folders, and whether supported file edits are allowed. | **Read only**, on a project folder rather than your home     |
 | **Commands** (in Farol)              | Running commands. Shared across all approved workspaces.     | **Off**, until you have reviewed Git hooks and configuration |
 | **ChatGPT Permissions** (in ChatGPT) | When ChatGPT asks you before calling a tool.                 | **Allow low-risk tools (Default)**                           |
+
+![Set a folder back to Read only, wait for the check, then remove it; the files stay on disk](../../../docs/media/dark/output/Farol-08-change-access-light.gif)
 
 The other ChatGPT choices are **Always ask**, **Allow read-only tools** and **Allow all tools (Elevated risk)**. Allow all tools is optional and not needed for this guide. [Compare the choices](../../../docs/guides/best-practices.md#choose-chatgpt-permissions-deliberately).
 
@@ -227,6 +229,8 @@ Closing the window leaves Farol running; **Command+Q** quits it. To update an in
 2. Choose **Download Update** and wait for verification.
 3. Finish active work, then choose **Install and Relaunch** once.
 4. After relaunch, check the version and connection status.
+
+![Check for updates, download and verify, install and relaunch, then check the version](../../../docs/media/dark/output/Farol-09-updates-light.gif)
 
 For an interrupted update, open **Settings → General → Update recovery…** and use only the action offered. [Update Farol](../../../docs/guides/updates.md) · [Uninstall safely](../../../docs/guides/uninstall.md)
 

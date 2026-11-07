@@ -191,6 +191,8 @@ Three separate switches decide what can happen. Changing one does not change the
 | **Commands** (in Farol)              | Running commands. Shared across all approved workspaces.     | **Off**, until you have reviewed Git hooks and configuration |
 | **ChatGPT Permissions** (in ChatGPT) | When ChatGPT asks you before calling a tool.                 | **Allow low-risk tools (Default)**                           |
 
+![Set a folder back to Read only, wait for the check, then remove it; the files stay on disk](docs/media/dark/output/Farol-08-change-access-dark.gif)
+
 The other ChatGPT choices are **Always ask**, **Allow read-only tools** and **Allow all tools (Elevated risk)**. Allow all tools is optional and not needed for this guide. [Compare the choices](docs/guides/best-practices.md#choose-chatgpt-permissions-deliberately).
 
 - **Read only limits changes, not disclosure.** Contents ChatGPT requests go to ChatGPT, and an approved folder or its history may contain sensitive material. [Privacy and data sharing](docs/guides/privacy.md).
@@ -227,6 +229,8 @@ Closing the window leaves Farol running; **Command+Q** quits it. To update an in
 2. Choose **Download Update** and wait for verification.
 3. Finish active work, then choose **Install and Relaunch** once.
 4. After relaunch, check the version and connection status.
+
+![Check for updates, download and verify, install and relaunch, then check the version](docs/media/dark/output/Farol-09-updates-dark.gif)
 
 For an interrupted update, open **Settings → General → Update recovery…** and use only the action offered. [Update Farol](docs/guides/updates.md) · [Uninstall safely](docs/guides/uninstall.md)
 

@@ -3,8 +3,8 @@
   "artifacts": [
     {
       "file": "Farol-ask-your-files-dark.gif",
-      "sha256": "4e5a0fcde2644ab3623e0fc6427c62b7ad66365f230f1f28eb075f2fd336b9a1",
-      "bytes": 347212,
+      "sha256": "821c04e841fca8f4081841b76c0e26b4e55a8d18b5c31837c626ed1348052dfe",
+      "bytes": 347635,
       "dimensions": [1600, 1000],
       "duration_ms": 20000,
       "frames": 500,
@@ -12,8 +12,8 @@
     },
     {
       "file": "Farol-change-your-code-dark.gif",
-      "sha256": "18e1b6c485e68160708aa849764a3f93c76ea5304f5d801b77161381a8bc25fa",
-      "bytes": 488950,
+      "sha256": "bcde31bd4e5ad7acbb8f191ee010eded5bc849699d1234dd732b9a2f4afa7087",
+      "bytes": 489582,
       "dimensions": [1600, 1000],
       "duration_ms": 24000,
       "frames": 600,
@@ -26,6 +26,96 @@
       "dimensions": [1600, 1000],
       "duration_ms": 20000,
       "frames": 500,
+      "illustrative": true
+    },
+    {
+      "file": "Farol-01-sign-in-dark.gif",
+      "sha256": "a6c241c62915892a0d81900e955a4915de1509ce0e718fc67cbf7e011bb3cb68",
+      "bytes": 547935,
+      "dimensions": [1600, 1000],
+      "duration_ms": 16800,
+      "frames": 420,
+      "illustrative": true
+    },
+    {
+      "file": "Farol-02-workspace-dark.gif",
+      "sha256": "06acd31b9f499f2aa5bc90596cce44f340bd64a0ebd9af03d20bac51416b444e",
+      "bytes": 402326,
+      "dimensions": [1600, 1000],
+      "duration_ms": 14200,
+      "frames": 355,
+      "illustrative": true
+    },
+    {
+      "file": "Farol-02b-edits-and-commands-dark.gif",
+      "sha256": "ef71b19dd3dcf115dd827be9a0c18db2d22dab5e8c7d8dc0ce45bf9725594870",
+      "bytes": 195368,
+      "dimensions": [1600, 1000],
+      "duration_ms": 15600,
+      "frames": 390,
+      "illustrative": true
+    },
+    {
+      "file": "Farol-03-create-tunnel-dark.gif",
+      "sha256": "db6d418a1e8bd452096ad40f1a1ebacafa9b9a950d18d11136767dc52afd57c2",
+      "bytes": 457644,
+      "dimensions": [1600, 1000],
+      "duration_ms": 27520,
+      "frames": 688,
+      "illustrative": true
+    },
+    {
+      "file": "Farol-05-connect-this-mac-dark.gif",
+      "sha256": "db9abbefbb1213333f70652c71ab5544d5a4192d9d1381abb6f49ca1dca3dd9f",
+      "bytes": 349300,
+      "dimensions": [1600, 1000],
+      "duration_ms": 10600,
+      "frames": 265,
+      "illustrative": true
+    },
+    {
+      "file": "Farol-06-add-plugin-dark.gif",
+      "sha256": "43172bf1a03381b7b3e3a1ea245fcc80c2035674103a83dfc94fd30624d3f459",
+      "bytes": 569699,
+      "dimensions": [1600, 1000],
+      "duration_ms": 30600,
+      "frames": 765,
+      "illustrative": true
+    },
+    {
+      "file": "Farol-07-test-connection-dark.gif",
+      "sha256": "d9d8d5ada24a8a5cc6284f1c88360cede9f65a5e852c16ddf4672af34fb85c26",
+      "bytes": 295027,
+      "dimensions": [1600, 1000],
+      "duration_ms": 13600,
+      "frames": 340,
+      "illustrative": true
+    },
+    {
+      "file": "Farol-08-change-access-dark.gif",
+      "sha256": "634c3c5722277188d4a54edecd79acda0641ba00107363727de3655ce188fdbd",
+      "bytes": 171990,
+      "dimensions": [1600, 1000],
+      "duration_ms": 12720,
+      "frames": 318,
+      "illustrative": true
+    },
+    {
+      "file": "Farol-09-updates-dark.gif",
+      "sha256": "55b0c77bffb0c9ab3f989b2021340b1640e6e0513bae0f321ff70047d0412132",
+      "bytes": 157693,
+      "dimensions": [1600, 1000],
+      "duration_ms": 13200,
+      "frames": 330,
+      "illustrative": true
+    },
+    {
+      "file": "Farol-04-restricted-key-dark.gif",
+      "sha256": "dfdbcef8517549641c71e98f7e152a9e91ba1a8e45b962f72ab0b0d22a981a5a",
+      "bytes": 375274,
+      "dimensions": [1600, 1000],
+      "duration_ms": 26720,
+      "frames": 668,
       "illustrative": true
     }
   ]

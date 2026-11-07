@@ -402,6 +402,7 @@
     height: 20px;
   }
 </style>
+<link rel="stylesheet" href="guide.css" />
 <body>
   <div id="stage"></div>
   <script>
@@ -793,8 +794,10 @@
     window.scenes = Object.fromEntries(
       Object.entries(scenes).map(([k, v]) => [k, v.seconds]),
     );
-    window.draw = (name, t) => scenes[name].draw(t);
+    window.draw = (name, t) =>
+      scenes[name] ? scenes[name].draw(t) : window.drawGuide(name, t);
     if (params.get("scene"))
       draw(params.get("scene"), Number(params.get("t") || 0));
   </script>
+  <script src="guide.js"></script>
 </body>

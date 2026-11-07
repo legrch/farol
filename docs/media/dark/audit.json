@@ -20,51 +20,63 @@
     },
     {
       "file": "Farol-01-sign-in-dark.gif",
-      "frames": 120,
-      "duration_ms": 24620,
-      "maximum_mean_luminance": 41.24
+      "frames": 420,
+      "duration_ms": 16800,
+      "maximum_mean_luminance": 46.11
     },
     {
       "file": "Farol-02-workspace-dark.gif",
-      "frames": 84,
-      "duration_ms": 18620,
-      "maximum_mean_luminance": 39.4
+      "frames": 355,
+      "duration_ms": 14200,
+      "maximum_mean_luminance": 49.57
     },
     {
       "file": "Farol-02b-edits-and-commands-dark.gif",
-      "frames": 54,
-      "duration_ms": 20180,
-      "maximum_mean_luminance": 33.4
+      "frames": 390,
+      "duration_ms": 15600,
+      "maximum_mean_luminance": 48.2
     },
     {
       "file": "Farol-03-create-tunnel-dark.gif",
-      "frames": 142,
-      "duration_ms": 29040,
-      "maximum_mean_luminance": 42.39
-    },
-    {
-      "file": "Farol-04-restricted-key-dark.gif",
-      "frames": 138,
-      "duration_ms": 33740,
-      "maximum_mean_luminance": 40.76
+      "frames": 688,
+      "duration_ms": 27520,
+      "maximum_mean_luminance": 49.94
     },
     {
       "file": "Farol-05-connect-this-mac-dark.gif",
-      "frames": 50,
-      "duration_ms": 14180,
-      "maximum_mean_luminance": 33.7
+      "frames": 265,
+      "duration_ms": 10600,
+      "maximum_mean_luminance": 47.61
     },
     {
       "file": "Farol-06-add-plugin-dark.gif",
-      "frames": 217,
-      "duration_ms": 51040,
-      "maximum_mean_luminance": 46.99
+      "frames": 765,
+      "duration_ms": 30600,
+      "maximum_mean_luminance": 51.25
     },
     {
       "file": "Farol-07-test-connection-dark.gif",
-      "frames": 65,
-      "duration_ms": 18880,
-      "maximum_mean_luminance": 41.1
+      "frames": 340,
+      "duration_ms": 13600,
+      "maximum_mean_luminance": 47.17
+    },
+    {
+      "file": "Farol-08-change-access-dark.gif",
+      "frames": 318,
+      "duration_ms": 12720,
+      "maximum_mean_luminance": 48.13
+    },
+    {
+      "file": "Farol-09-updates-dark.gif",
+      "frames": 330,
+      "duration_ms": 13200,
+      "maximum_mean_luminance": 44.68
+    },
+    {
+      "file": "Farol-04-restricted-key-dark.gif",
+      "frames": 668,
+      "duration_ms": 26720,
+      "maximum_mean_luminance": 51.23
     },
     {
       "file": "Farol-ask-your-files-light.gif",
@@ -83,6 +95,66 @@
       "frames": 500,
       "duration_ms": 20000,
       "maximum_mean_luminance": 246.55
+    },
+    {
+      "file": "Farol-01-sign-in-light.gif",
+      "frames": 420,
+      "duration_ms": 16800,
+      "maximum_mean_luminance": 250.1
+    },
+    {
+      "file": "Farol-02-workspace-light.gif",
+      "frames": 355,
+      "duration_ms": 14200,
+      "maximum_mean_luminance": 247.68
+    },
+    {
+      "file": "Farol-02b-edits-and-commands-light.gif",
+      "frames": 390,
+      "duration_ms": 15600,
+      "maximum_mean_luminance": 244.93
+    },
+    {
+      "file": "Farol-03-create-tunnel-light.gif",
+      "frames": 688,
+      "duration_ms": 27520,
+      "maximum_mean_luminance": 248.64
+    },
+    {
+      "file": "Farol-05-connect-this-mac-light.gif",
+      "frames": 265,
+      "duration_ms": 10600,
+      "maximum_mean_luminance": 246.67
+    },
+    {
+      "file": "Farol-06-add-plugin-light.gif",
+      "frames": 765,
+      "duration_ms": 30600,
+      "maximum_mean_luminance": 250.7
+    },
+    {
+      "file": "Farol-07-test-connection-light.gif",
+      "frames": 340,
+      "duration_ms": 13600,
+      "maximum_mean_luminance": 248.25
+    },
+    {
+      "file": "Farol-08-change-access-light.gif",
+      "frames": 318,
+      "duration_ms": 12720,
+      "maximum_mean_luminance": 247.49
+    },
+    {
+      "file": "Farol-09-updates-light.gif",
+      "frames": 330,
+      "duration_ms": 13200,
+      "maximum_mean_luminance": 250.48
+    },
+    {
+      "file": "Farol-04-restricted-key-light.gif",
+      "frames": 668,
+      "duration_ms": 26720,
+      "maximum_mean_luminance": 248.15
     }
   ],
   "contrast_pairs": [

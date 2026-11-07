@@ -1,10 +1,10 @@
-"""Decode and verify the dark synthetic assets without invoking any service."""
+"""Decode and verify the synthetic GIFs without invoking any service."""
 from pathlib import Path
 import hashlib,json
 from PIL import Image,ImageStat
 ROOT=Path(__file__).resolve().parent
 reports=[]
-for name,count in [('validation.json',3),('setup-validation.json',8),('light-validation.json',3)]:
+for name,count in [('validation.json',13),('light-validation.json',13)]:
  data=json.loads((ROOT/name).read_text());assert len(data['artifacts'])==count;dark=data['theme']=='dark'
  assert not data.get('layout_issues',[])
  for item in data['artifacts']:
@@ -20,8 +20,6 @@ for name,count in [('validation.json',3),('setup-validation.json',8),('light-val
    maximum=max(maximum,ImageStat.Stat(rgb.convert('L')).mean[0])
   assert (maximum<150 if dark else maximum>200),(p.name,maximum)
   assert elapsed==item['duration_ms'],(p.name,elapsed)
-  for event in item.get('timeline',[]):
-   if event['target']:assert 40<=event['target_center'][0]<=1280 and 145<=event['target_center'][1]<=797
   reports.append({'file':p.name,'frames':im.n_frames,'duration_ms':elapsed,'maximum_mean_luminance':round(maximum,2)})
 def luminance(c):
  v=[int(c[i:i+2],16)/255 for i in (1,3,5)]

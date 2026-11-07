@@ -22,6 +22,16 @@ const NAMES = {
   read: "Farol-ask-your-files",
   edit: "Farol-change-your-code",
   install: "Farol-install",
+  signin: "Farol-01-sign-in",
+  workspace: "Farol-02-workspace",
+  access: "Farol-02b-edits-and-commands",
+  tunnel: "Farol-03-create-tunnel",
+  key: "Farol-04-restricted-key",
+  connect: "Farol-05-connect-this-mac",
+  plugin: "Farol-06-add-plugin",
+  test: "Farol-07-test-connection",
+  manage: "Farol-08-change-access",
+  updates: "Farol-09-updates",
 };
 
 function browserPath() {
@@ -72,7 +82,10 @@ try {
       if (document.fonts.check("13px Geist") !== true)
         throw new Error("Geist did not load");
     });
-    const seconds = await page.evaluate(() => window.scenes);
+    const seconds = await page.evaluate(() => ({
+      ...window.scenes,
+      ...window.prepareGuides(),
+    }));
     for (const [scene, length] of Object.entries(seconds)) {
       if (only && only !== scene) continue;
       const directory = path.join(scratch, `${theme}-${scene}`);
@@ -139,15 +152,20 @@ try {
       );
     }
     await page.close();
-    if (!only) {
-      fs.writeFileSync(
-        path.resolve(
-          here,
-          `../${theme === "dark" ? "validation" : "light-validation"}.json`,
-        ),
-        `${JSON.stringify({ theme, artifacts: entries }, null, 2)}\n`,
-      );
-    }
+    const report = path.resolve(
+      here,
+      `../${theme === "dark" ? "validation" : "light-validation"}.json`,
+    );
+    // A partial rebuild replaces only its own entries.
+    const kept = only
+      ? JSON.parse(fs.readFileSync(report, "utf8")).artifacts.filter(
+          (item) => !entries.some((entry) => entry.file === item.file),
+        )
+      : [];
+    fs.writeFileSync(
+      report,
+      `${JSON.stringify({ theme, artifacts: [...kept, ...entries] }, null, 2)}\n`,
+    );
   }
 } finally {
   await browser.close();

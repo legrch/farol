@@ -1,34 +1,30 @@
 # Farol illustrations
 
-The README stories and the setup series are built from source in this directory. Everything is synthetic: no account, tunnel, real project, local grant or service is used during generation. The illustrations are not screen recordings, live acceptance or fresh-install evidence.
+Every GIF on the home page is drawn from source in `stories/`. Everything is synthetic: no account, tunnel, real project, local grant or service is used during generation. The illustrations are UI recreations, not screen recordings, live acceptance or fresh-install evidence. Service screens are simplified to the fields each step needs.
 
-## Stories
+`stories/scene.html` draws the three stories (ask, change code, install) for a given time `t`. `stories/guide.js` and `guide.css` draw the setup flows in the same style: one stable window with no camera movement, a cursor gliding to the target, an outline on the target, and the instruction under the window. `stories/render.mjs` captures every frame with headless Chromium and encodes GIFs with ffmpeg at 1600 × 1000, 25 fps, in both palettes.
 
-`stories/scene.html` draws three deterministic scenes for a given time `t`, and `stories/render.mjs` captures every frame with headless Chromium and encodes GIFs with ffmpeg at 1600 × 1000, 25 fps, in both palettes.
-
-| Output                                    | Shows                                                                                                                                                                                |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Farol-ask-your-files-{dark,light}.gif`   | A typed question, the request reaching the Mac, files being read in a Read only folder, an answer with its sources.                                                                  |
-| `Farol-change-your-code-{dark,light}.gif` | A typed request, the code being read, new code added to a file, a new test file, a summary to review. It assumes an existing Read & write grant and shows no program being executed. |
-| `Farol-install-{dark,light}.gif`          | The install command in Terminal with its real output lines, the icon bouncing in the Dock, and the app opening on Setup.                                                             |
+| Output                                                       | Shows                                                                                                                                  |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `Farol-ask-your-files-*.gif`                                 | A typed question, the request reaching the Mac, files being read in a Read only folder, an answer with its sources.                    |
+| `Farol-change-your-code-*.gif`                               | A typed request, the code being read, new code in a file, a new test file, a summary. Assumes Read & write; shows no program executed. |
+| `Farol-install-*.gif`                                        | The install command with its real output lines, the icon bouncing in the Dock, and the app opening on Setup.                           |
+| `Farol-01-sign-in-*.gif` to `Farol-07-test-connection-*.gif` | The setup steps, including the optional `02b` edits and commands.                                                                      |
+| `Farol-08-change-access-*.gif`                               | Narrowing a folder to Read only and removing it.                                                                                       |
+| `Farol-09-updates-*.gif`                                     | Checking for, downloading and installing an update.                                                                                    |
 
 The central mark is a flat monochrome reinterpretation of Farol's concentric light, drawn as SVG without a bitmap, blur or opacity. Only the Dock in the install story uses the real app icon. Fonts are Geist and Geist Mono from `design-lab/fonts/geist/` ([SIL OFL](../../../design-lab/fonts/geist/OFL.txt)).
 
-## Setup series
-
-`build-setup.py` copies the [onboarding package](../onboarding/README.md) to a disposable directory, enables `FAROL_MEDIA_THEME=dark` through `palette.py`, and renders its scenes at double resolution. It then writes eight dark GIFs with a guiding camera: the frame follows the cursor and any new result, the target gets an outline, and each step's instruction sits in a large bar below. Steps, values and click targets match the onboarding package, whose light GIFs stay in `../onboarding/output/`.
-
 ## Rebuild
 
-Stories need the repository's Node dependencies, ffmpeg and a Chromium build (`FAROL_CHROMIUM` overrides discovery). The setup series and verifier need Python with `requirements.txt` and Poppler/Pango; on macOS set `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib`.
+You need the repository's Node dependencies, ffmpeg, Chromium (`FAROL_CHROMIUM` overrides discovery) and Python with Pillow for the verifier.
 
 ```sh
 node docs/media/dark/stories/render.mjs
-python docs/media/dark/build-setup.py
 python docs/media/dark/preview.py
 python docs/media/dark/verify.py
 ```
 
-Pass `--theme=dark|light` or `--scene=read|edit|install` to `render.mjs` to rebuild part of a set, and `--sheet=DIR` to save frames for inspection outside the repository. PNG frames are never committed.
+Pass `--theme=dark|light` or `--scene=NAME` to `render.mjs` to rebuild part of a set, and `--sheet=DIR` to save frames for inspection outside the repository. PNG frames are never committed.
 
-`preview.py` generates the light comparison page from the root README; rerun it after editing the README. `verify.py` checks hashes, dimensions, timing, loop metadata, every decoded frame's canvas and luminance, preserved setup click bounds, and selected text/background contrast pairs. It is not a full accessibility audit, so inspect the decoded GIFs too.
+`preview.py` generates the light comparison page from the root README; rerun it after editing the README. `verify.py` checks hashes, dimensions, timing, loop metadata, every decoded frame's canvas and luminance, and selected text/background contrast pairs. It is not a full accessibility audit, so inspect the decoded GIFs too.
