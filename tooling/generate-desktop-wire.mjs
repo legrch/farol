@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import os from "node:os";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -112,7 +113,19 @@ ts += fs.readFileSync(
   path.join(root, "tooling/desktop-validator.ts.txt"),
   "utf8",
 );
-const formattedGo = execFileSync("gofmt", { input: go, encoding: "utf8" });
+const gofmtDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "farol-wire-gofmt-"));
+let formattedGo;
+try {
+  const inputPath = path.join(gofmtDirectory, "wire.go");
+  fs.writeFileSync(inputPath, go, { flag: "wx", mode: 0o600 });
+  formattedGo = execFileSync("gofmt", [inputPath], {
+    encoding: "utf8",
+    timeout: 30_000,
+    maxBuffer: 4 * 1024 * 1024,
+  });
+} finally {
+  fs.rmSync(gofmtDirectory, { recursive: true, force: true });
+}
 const outputs = {
   "gen/desktop/v1/wire.go": formattedGo,
   "apps/desktop/bridge/wire.ts": ts,
