@@ -1,3 +1,5 @@
+> **Dark illustration preview** · [Switch to the matched light preview](docs/media/dark/light-preview.md) · [Published version](https://github.com/legrch/farol/blob/643fe8423af2ee44ba4997ea712bb6de343308a8/README.md). Both asset series are retained.
+
 <div align="center">
 
 <img src="resources/brand/sunrise-dock/farol-sunrise.png" alt="Farol" width="88">
@@ -20,13 +22,13 @@ Find answers in your files, understand a project, and make requested changes fro
 
 Choose a local folder in Farol, then ask ChatGPT to find and read the information you need. Farol connects the conversation to that approved workspace through an OpenAI Tunnel.
 
-![A read-only request travels from ChatGPT through Farol to a selected file, then returns its contents to ChatGPT](docs/media/workflow/output/Farol-how-it-works-light.gif)
+![A read-only request travels from ChatGPT through Farol to a selected file, then returns its contents to ChatGPT](docs/media/dark/output/Farol-how-it-works-dark.gif)
 
 ### Make a requested change
 
 Need an edit? Enable **Read & write** for that workspace, ask for a specific change, and inspect the result in your file.
 
-![ChatGPT requests a specific edit through Farol inside a workspace with an existing Read & write grant](docs/media/workflow/output/Farol-read-and-edit-light.gif)
+![ChatGPT requests a specific edit through Farol inside a workspace with an existing Read & write grant](docs/media/dark/output/Farol-read-and-edit-dark.gif)
 
 _These are illustrated workflows with synthetic data, not screen recordings or live acceptance evidence. Requested file contents and tool results can be returned to ChatGPT. The edit example assumes an existing Read & write grant._
 
@@ -77,7 +79,7 @@ The ZIP should report `OK`. A matching checksum does not establish developer ide
 2. Use your own ChatGPT account, then return to Setup. If confirmation is still needed, choose **Check sign-in**.
 3. Wait for **✓ Sign-in checked**, then choose **Continue**. This does not yet grant local file access.
 
-![Sign in in Farol, return to Setup, check sign-in, and continue; illustrated with synthetic data](docs/media/onboarding/output/Farol-01-sign-in-light.gif)
+![Sign in in Farol, return to Setup, check sign-in, and continue; illustrated with synthetic data](docs/media/dark/output/Farol-01-sign-in-dark.gif)
 
 ### 2. Add a workspace
 
@@ -85,13 +87,13 @@ The ZIP should report `OK`. A matching checksum does not establish developer ide
 2. Review the path and saved **Read only** access. Wait for **✓ Works**; every listed workspace needs a current check.
 3. Choose **Continue** when the checks are current. [Try a sample workspace](#try-your-first-file) for a complete read-only exercise.
 
-![Choose a sample folder, keep Read only, and wait for Works; illustrated with synthetic data](docs/media/onboarding/output/Farol-02-workspace-light.gif)
+![Choose a sample folder, keep Read only, and wait for Works; illustrated with synthetic data](docs/media/dark/output/Farol-02-workspace-dark.gif)
 
 ### Optional: edits and commands
 
 Keep Read only and Commands off for the first reading exercise. If a later task needs changes, choose **Read & write** in the workspace row and wait for the saved access check. Review **Commands** separately: it is shared across approved workspaces, not a per-folder sandbox. The animation demonstrates optional changes; it is not a required setup step. See [Best practices](docs/guides/best-practices.md).
 
-![Review optional Read & write and the shared Commands grant; illustrated with synthetic data](docs/media/onboarding/output/Farol-02b-edits-and-commands-light.gif)
+![Review optional Read & write and the shared Commands grant; illustrated with synthetic data](docs/media/dark/output/Farol-02b-edits-and-commands-dark.gif)
 
 ### 3. Create a tunnel
 
@@ -100,7 +102,7 @@ Keep Read only and Commands off for the first reading exercise. If a later task 
 3. Choose **Create** once and observe the result. Copy the complete tunnel ID from its row.
 4. Paste that ID into Farol before copying the key, so the next Copy action does not replace your only copy of the ID. A Platform-organization-only tunnel may not be available in ChatGPT.
 
-![Create a tunnel for the intended ChatGPT workspace, copy its ID, and paste it into Farol; illustrated with synthetic data](docs/media/onboarding/output/Farol-03-create-tunnel-light.gif)
+![Create a tunnel for the intended ChatGPT workspace, copy its ID, and paste it into Farol; illustrated with synthetic data](docs/media/dark/output/Farol-03-create-tunnel-dark.gif)
 
 ### 4. Create a restricted key
 
@@ -110,7 +112,7 @@ Keep Read only and Commands off for the first reading exercise. If a later task 
 
 Do not substitute a full-access or admin key. Never paste the key into a chat, repository, screenshot or support message.
 
-![Select Restricted and Tunnels Read plus Use, then copy the key privately; illustrated with synthetic data](docs/media/onboarding/output/Farol-04-restricted-key-light.gif)
+![Select Restricted and Tunnels Read plus Use, then copy the key privately; illustrated with synthetic data](docs/media/dark/output/Farol-04-restricted-key-dark.gif)
 
 ### 5. Connect this Mac
 
@@ -118,7 +120,7 @@ Do not substitute a full-access or admin key. Never paste the key into a chat, r
 2. Choose **Connect** once. Wait for the existing result; do not resubmit while it is pending or unknown.
 3. Continue after **✓ Connected**. This confirms the local connection, not the ChatGPT attachment. If Farol says **Key saved**, leaving the field empty retains it; do not create or paste a replacement just because the field cleared.
 
-![Use the tunnel ID and masked key, connect once, and wait for Connected; illustrated with synthetic data](docs/media/onboarding/output/Farol-05-connect-this-mac-light.gif)
+![Use the tunnel ID and masked key, connect once, and wait for Connected; illustrated with synthetic data](docs/media/dark/output/Farol-05-connect-this-mac-dark.gif)
 
 ### 6. Add Farol to ChatGPT
 
@@ -129,7 +131,7 @@ Do not substitute a full-access or admin key. Never paste the key into a chat, r
 
 The other choices are **Always ask**, **Allow read-only tools** (read without asking, but ask before changes), and **Allow all tools (Elevated risk)**. These are the UI descriptions, not guarantees for every call. Allow all tools is optional, requires an informed owner decision and is not necessary to follow this guide. [Compare the permission choices](docs/guides/best-practices.md#choose-chatgpt-permissions-deliberately).
 
-![Create and connect the plugin, find it, and review four permission levels without changing the default; illustrated with synthetic data](docs/media/onboarding/output/Farol-06-add-plugin-light.gif)
+![Create and connect the plugin, find it, and review four permission levels without changing the default; illustrated with synthetic data](docs/media/dark/output/Farol-06-add-plugin-dark.gif)
 
 ### 7. Test the connection
 
@@ -139,7 +141,7 @@ The other choices are **Always ask**, **Allow read-only tools** (read without as
 
 If a check is already current, continue without repeating it. The successful state in the animation is simulated; it is not proof that your own setup passed.
 
-![Run one ChatGPT test, wait for the matching receipt, and return to Setup; illustrated with synthetic data](docs/media/onboarding/output/Farol-07-test-connection-light.gif)
+![Run one ChatGPT test, wait for the matching receipt, and return to Setup; illustrated with synthetic data](docs/media/dark/output/Farol-07-test-connection-dark.gif)
 
 ## Try your first file
 

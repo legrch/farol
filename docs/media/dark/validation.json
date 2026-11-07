@@ -1,0 +1,23 @@
+{
+  "theme": "dark",
+  "artifacts": [
+    {
+      "file": "Farol-how-it-works-dark.gif",
+      "sha256": "4b636f9d60e5315f423cf00bf8e860c987c109e2b4438e06e833f526853edda2",
+      "bytes": 189991,
+      "dimensions": [1320, 820],
+      "duration_ms": 24000,
+      "stages": 6,
+      "illustrative": true
+    },
+    {
+      "file": "Farol-read-and-edit-dark.gif",
+      "sha256": "8617c9e5627378fb70b0a1e851b9f4be5514697f71e159ceb2b77d2f09dd56ab",
+      "bytes": 198716,
+      "dimensions": [1320, 820],
+      "duration_ms": 24000,
+      "stages": 6,
+      "illustrative": true
+    }
+  ]
+}

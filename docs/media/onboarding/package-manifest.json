@@ -134,9 +134,9 @@
     },
     {
       "path": "docs/media/onboarding/source/render.py",
-      "bytes": 7275,
-      "sha256": "bcf732d3b8be8b06f54e5c0a7d9fdd1c81f70df0408798b22d092c451d6f9ad2",
-      "git_blob_sha1": "41a91d0142e86608e84da58ac0651bdc7086749c"
+      "bytes": 7447,
+      "sha256": "ac5ca331afc3d5e761252b4376b77addba4a0bc923b9f2d0971b09f00e8ceab0",
+      "git_blob_sha1": "86f865e4d4a423b250c0d4df5fd88815cfde54c0"
     },
     {
       "path": "docs/media/onboarding/source/setup.css",

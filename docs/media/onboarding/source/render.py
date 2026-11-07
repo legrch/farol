@@ -26,7 +26,13 @@ for name in names:
  for link in soup.find_all('link',rel='stylesheet'):
   c=(R/link['href']).read_text();c=re.sub(r'(?<![-\w])button(?![-\w])','.ui-button',c).replace('.ui-button:disabled','.ui-button[data-disabled]');st=soup.new_tag('style');st.string=c;link.replace_with(st)
  st=soup.new_tag('style');st.string=rendercss;soup.head.append(st)
- doc=HTML(string=str(soup),base_url=str(R)).render();page=doc.pages[0];bbox={}
+ html=str(soup)
+ import os
+ if os.environ.get('FAROL_MEDIA_THEME') == 'dark':
+  sys.path.insert(0,str(R.parents[1]/'dark'))
+  from palette import document
+  html=document(html)
+ doc=HTML(string=html,base_url=str(R)).render();page=doc.pages[0];bbox={}
  for b in page._page_box.descendants():
   if b.element is not None and b.element.get('id') and type(b).__name__ not in ['TextBox','LineBox']:
    ident=b.element.get('id')

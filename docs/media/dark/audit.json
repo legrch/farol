@@ -1,0 +1,104 @@
+{
+  "artifacts": [
+    {
+      "file": "Farol-how-it-works-dark.gif",
+      "frames": 117,
+      "duration_ms": 24000,
+      "maximum_mean_luminance": 27.36
+    },
+    {
+      "file": "Farol-read-and-edit-dark.gif",
+      "frames": 132,
+      "duration_ms": 24000,
+      "maximum_mean_luminance": 26.32
+    },
+    {
+      "file": "Farol-01-sign-in-dark.gif",
+      "frames": 145,
+      "duration_ms": 22340,
+      "maximum_mean_luminance": 24.91
+    },
+    {
+      "file": "Farol-02-workspace-dark.gif",
+      "frames": 100,
+      "duration_ms": 16300,
+      "maximum_mean_luminance": 23.3
+    },
+    {
+      "file": "Farol-02b-edits-and-commands-dark.gif",
+      "frames": 71,
+      "duration_ms": 19660,
+      "maximum_mean_luminance": 20.28
+    },
+    {
+      "file": "Farol-03-create-tunnel-dark.gif",
+      "frames": 184,
+      "duration_ms": 27480,
+      "maximum_mean_luminance": 26.62
+    },
+    {
+      "file": "Farol-04-restricted-key-dark.gif",
+      "frames": 184,
+      "duration_ms": 32580,
+      "maximum_mean_luminance": 26.64
+    },
+    {
+      "file": "Farol-05-connect-this-mac-dark.gif",
+      "frames": 69,
+      "duration_ms": 13960,
+      "maximum_mean_luminance": 19.77
+    },
+    {
+      "file": "Farol-06-add-plugin-dark.gif",
+      "frames": 280,
+      "duration_ms": 49180,
+      "maximum_mean_luminance": 29.02
+    },
+    {
+      "file": "Farol-07-test-connection-dark.gif",
+      "frames": 70,
+      "duration_ms": 16960,
+      "maximum_mean_luminance": 26.29
+    },
+    {
+      "file": "Farol-how-it-works-light.gif",
+      "frames": 117,
+      "duration_ms": 24000,
+      "maximum_mean_luminance": 240.37
+    },
+    {
+      "file": "Farol-read-and-edit-light.gif",
+      "frames": 132,
+      "duration_ms": 24000,
+      "maximum_mean_luminance": 240.84
+    }
+  ],
+  "contrast_pairs": [
+    {
+      "foreground": "#f0f3ff",
+      "background": "#141e32",
+      "ratio": 15.04
+    },
+    {
+      "foreground": "#afbdd7",
+      "background": "#141e32",
+      "ratio": 8.79
+    },
+    {
+      "foreground": "#bba5ff",
+      "background": "#0b1020",
+      "ratio": 8.96
+    },
+    {
+      "foreground": "#85e0b6",
+      "background": "#141e32",
+      "ratio": 10.57
+    },
+    {
+      "foreground": "#ffffff",
+      "background": "#6750b8",
+      "ratio": 6.15
+    }
+  ],
+  "scope": "Synthetic illustrations only; selected palette pairs, not a complete UI accessibility audit or live acceptance test."
+}
