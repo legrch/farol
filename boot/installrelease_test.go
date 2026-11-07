@@ -153,19 +153,23 @@ func TestInstallReleaseRefusesOnlyProductionProcessInventory(t *testing.T) {
 func TestInstallReleaseResolvesShortElectronAtFinalFence(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
+		title      string
 		resolved   string
 		resolveErr bool
 		wantError  string
 	}{
-		{"production primary", "/Applications/Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron", false, "INSTALL_PRODUCTION_STILL_RUNNING"},
-		{"production snapshot", "/Users/runner/Library/Application Support/io.github.legrch.farol/installed-updates/op/launch-Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron", false, "INSTALL_PRODUCTION_STILL_RUNNING"},
-		{"unrelated Electron", "/Applications/Another.app/Contents/MacOS/Electron", false, ""},
-		{"vanished PID", "", false, ""},
-		{"live unreadable PID", "", true, "INSTALL_PROCESS_OBSERVATION_UNKNOWN"},
+		{"production primary", "Electron", "/Applications/Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron", false, "INSTALL_PRODUCTION_STILL_RUNNING"},
+		{"production snapshot", "Electron", "/Users/runner/Library/Application Support/io.github.legrch.farol/installed-updates/op/launch-Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron", false, "INSTALL_PRODUCTION_STILL_RUNNING"},
+		{"production renderer helper", "Electron Helper (Renderer)", "/Applications/Farol.app/Contents/Frameworks/Electron Helper (Renderer).app/Contents/MacOS/Electron Helper (Renderer)", false, "INSTALL_PRODUCTION_STILL_RUNNING"},
+		{"production GPU helper", "Farol Helper (GPU)", "/Applications/Farol.app/Contents/Frameworks/Farol Helper (GPU).app/Contents/MacOS/Farol Helper (GPU)", false, "INSTALL_PRODUCTION_STILL_RUNNING"},
+		{"unrelated Electron", "Electron Helper", "/Applications/Another.app/Contents/MacOS/Electron Helper", false, ""},
+		{"Dev short title", "Farol Dev", "/Applications/Farol Dev.app/Contents/MacOS/Farol Dev", false, ""},
+		{"vanished PID", "Electron Helper (Renderer)", "", false, ""},
+		{"live unreadable PID", "Electron Helper (Renderer)", "", true, "INSTALL_PROCESS_OBSERVATION_UNKNOWN"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
-			err := classifyInstallProcessesWithResolver("42 /private/tmp/staged.app/farol-backend\n43 Electron\n", 42, func(pid int) (string, error) {
+			err := classifyInstallProcessesWithResolver("42 /private/tmp/staged.app/farol-backend\n43 "+tc.title+"\n", 42, func(pid int) (string, error) {
 				calls++
 				if pid != 43 {
 					t.Fatalf("resolved unexpected PID %d", pid)

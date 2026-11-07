@@ -362,7 +362,11 @@ func classifyInstallProcessesWithResolver(output string, selfPID int, resolve fu
 		if pid == selfPID {
 			continue
 		}
-		if name == "Electron" {
+		// ps may report a short Electron primary or helper title instead of
+		// its executable path. Resolve every Farol/Electron short candidate;
+		// the title alone cannot distinguish production from Dev or another app.
+		lowerTitle := strings.ToLower(name)
+		if !strings.HasPrefix(name, "/") && name != "Farol" && name != "farol-backend" && (strings.HasPrefix(lowerTitle, "electron") || strings.HasPrefix(lowerTitle, "farol")) {
 			resolved, e := resolve(pid)
 			if e != nil {
 				return errors.New("INSTALL_PROCESS_OBSERVATION_UNKNOWN")
