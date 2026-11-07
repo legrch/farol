@@ -2,11 +2,16 @@ package boot
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/legrch/farol/modules/release/infra/native/installmove"
 )
 
 func TestInstallReleaseRunRejectsMalformedInvocation(t *testing.T) {
@@ -137,5 +142,64 @@ func TestInstallReleaseRefusesOnlyProductionProcessInventory(t *testing.T) {
 	}
 	if err := classifyInstallProcesses("unparsed process inventory\n", 42); err == nil {
 		t.Fatal("malformed process inventory was admitted")
+	}
+}
+
+func TestInstallReleaseResolvesShortElectronAtFinalFence(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		resolved   string
+		resolveErr bool
+		wantError  string
+	}{
+		{"production primary", "/Applications/Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron", false, "INSTALL_PRODUCTION_STILL_RUNNING"},
+		{"production snapshot", "/Users/runner/Library/Application Support/io.github.legrch.farol/installed-updates/op/launch-Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron", false, "INSTALL_PRODUCTION_STILL_RUNNING"},
+		{"unrelated Electron", "/Applications/Another.app/Contents/MacOS/Electron", false, ""},
+		{"vanished PID", "", false, ""},
+		{"live unreadable PID", "", true, "INSTALL_PROCESS_OBSERVATION_UNKNOWN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			err := classifyInstallProcessesWithResolver("42 /private/tmp/staged.app/farol-backend\n43 Electron\n", 42, func(pid int) (string, error) {
+				calls++
+				if pid != 43 {
+					t.Fatalf("resolved unexpected PID %d", pid)
+				}
+				if tc.resolveErr {
+					return "", os.ErrPermission
+				}
+				return tc.resolved, nil
+			})
+			if calls != 1 || (err == nil) != (tc.wantError == "") || err != nil && err.Error() != tc.wantError {
+				t.Fatalf("calls=%d error=%v, want %q", calls, err, tc.wantError)
+			}
+		})
+	}
+}
+
+func TestInstallReleaseResolverReadsCurrentExecutable(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS libproc only")
+	}
+	path, err := resolveInstallExecutable(context.Background(), os.Getpid())
+	if err != nil || !filepath.IsAbs(path) {
+		t.Fatalf("current executable unresolved: %q, %v", path, err)
+	}
+}
+
+func TestInstallReleaseCustodyDistinguishesKnownRefusalFromUnknown(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{&installmove.Failure{Code: "fence_refused"}, true},
+		{&installmove.Failure{Code: "parent_replaced", Internal: true}, true},
+		{context.DeadlineExceeded, true},
+		{&installmove.Failure{Code: "move_uncertain", Uncertain: true}, false},
+		{errors.New("unclassified outcome"), false},
+	} {
+		if got := installOutcomeKnownNoEffect(tc.err); got != tc.want {
+			t.Fatalf("%v: known no-effect=%t, want %t", tc.err, got, tc.want)
+		}
 	}
 }

@@ -122,14 +122,14 @@ func installReleaseSwap(ctx context.Context, in installReleaseInput, out io.Writ
 	}
 	// A fixed custody location survives the per-invocation temporary directory.
 	// An unresolved intent from a previous process blocks every new attempt.
-	cache := filepath.Join(account.HomeDir, "Library", "Caches", "io.github.legrch.farol-installer")
-	if err = os.Mkdir(cache, 0700); err != nil && !errors.Is(err, os.ErrExist) {
+	custody := filepath.Join(account.HomeDir, "Library", "Application Support", "io.github.legrch.farol-installer")
+	if err = os.Mkdir(custody, 0700); err != nil && !errors.Is(err, os.ErrExist) {
 		return errors.New("INSTALL_CUSTODY_UNAVAILABLE")
 	}
-	if err = privateInstallDirectory(cache); err != nil {
+	if err = privateInstallDirectory(custody); err != nil {
 		return err
 	}
-	lockFD, err := unix.Open(filepath.Join(cache, "lock"), unix.O_CREAT|unix.O_RDWR|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
+	lockFD, err := unix.Open(filepath.Join(custody, "lock"), unix.O_CREAT|unix.O_RDWR|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
 	if err != nil {
 		return errors.New("INSTALL_CUSTODY_UNAVAILABLE")
 	}
@@ -147,7 +147,7 @@ func installReleaseSwap(ctx context.Context, in installReleaseInput, out io.Writ
 		return errors.New("INSTALL_BUSY")
 	}
 	defer unix.Flock(int(lock.Fd()), unix.LOCK_UN)
-	if err = checkedInstallRecord(cache); err != nil {
+	if err = checkedInstallRecord(custody); err != nil {
 		return err
 	}
 	if err = installEmptySlotIdentity(in.installed); err != nil {
@@ -170,17 +170,20 @@ func installReleaseSwap(ctx context.Context, in installReleaseInput, out io.Writ
 	}
 	record := installReleaseRecord{Schema: "farol.bootstrap-install/1", ID: hex.EncodeToString(bytes[:]), Phase: "pending", Version: m.Version, BuildID: m.BuildID, Digest: m.ArtifactSha256}
 	fence := func(ctx context.Context) error {
+		// Every refusal here precedes the namespace operation. The native
+		// adapter may still promote pin-cleanup uncertainty after this return.
+		refuse := func(err error) error { return &installmove.Failure{Code: err.Error()} }
 		if e := installProductionStopped(ctx); e != nil {
-			return e
+			return refuse(e)
 		}
 		if e := installFreshProfileAbsent(profileRoot, in.installed); e != nil {
-			return e
+			return refuse(e)
 		}
 		if e := verifyStage(ctx); e != nil {
-			return errors.New("INSTALL_STAGED_TREE_CHANGED")
+			return refuse(errors.New("INSTALL_STAGED_TREE_CHANGED"))
 		}
 		if e := installEmptySlotIdentity(in.installed); e != nil {
-			return e
+			return refuse(e)
 		}
 		return nil
 	}
@@ -191,16 +194,15 @@ func installReleaseSwap(ctx context.Context, in installReleaseInput, out io.Writ
 	if err != nil {
 		return errors.New("INSTALL_SWAP_UNAVAILABLE")
 	}
-	if err = writeInstallRecord(cache, record); err != nil {
+	if err = writeInstallRecord(custody, record); err != nil {
 		return err
 	}
 	// The intent is durable before the one namespace effect. Any unexpected
 	// failure from this point remains pending and prohibits an automatic retry.
 	if err = operation.Run(ctx); err != nil {
-		var failure *installmove.Failure
-		if errors.As(err, &failure) && !failure.Uncertain && !failure.Internal {
+		if installOutcomeKnownNoEffect(err) {
 			record.Phase = "refused"
-			if e := writeInstallRecord(cache, record); e != nil {
+			if e := writeInstallRecord(custody, record); e != nil {
 				return errors.New("INSTALL_REFUSAL_RECORD_UNKNOWN")
 			}
 		}
@@ -210,11 +212,21 @@ func installReleaseSwap(ctx context.Context, in installReleaseInput, out io.Writ
 		return err
 	}
 	record.Phase = "completed"
-	if err = writeInstallRecord(cache, record); err != nil {
+	if err = writeInstallRecord(custody, record); err != nil {
 		return errors.New("INSTALL_COMPLETION_RECORD_UNKNOWN")
 	}
 	_, _ = fmt.Fprintln(out, "Native installation placement completed")
 	return nil
+}
+
+func installOutcomeKnownNoEffect(err error) bool {
+	var failure *installmove.Failure
+	if errors.As(err, &failure) {
+		return !failure.Uncertain
+	}
+	// installmove returns bare context cancellation only before dispatch;
+	// cancellation after a native attempt is wrapped as an uncertain Failure.
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func installIdentity(f *os.File) (installmove.Identity, error) {
@@ -323,9 +335,16 @@ func installProductionStopped(ctx context.Context) error {
 	if err != nil || len(output) == 0 || len(output) > 4*1024*1024 {
 		return errors.New("INSTALL_PROCESS_OBSERVATION_UNKNOWN")
 	}
-	return classifyInstallProcesses(string(output), os.Getpid())
+	return classifyInstallProcessesWithResolver(string(output), os.Getpid(), func(pid int) (string, error) {
+		return resolveInstallExecutable(ctx, pid)
+	})
 }
 func classifyInstallProcesses(output string, selfPID int) error {
+	return classifyInstallProcessesWithResolver(output, selfPID, func(int) (string, error) {
+		return "", errors.New("process executable resolver unavailable")
+	})
+}
+func classifyInstallProcessesWithResolver(output string, selfPID int, resolve func(int) (string, error)) error {
 	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -343,11 +362,50 @@ func classifyInstallProcesses(output string, selfPID int) error {
 		if pid == selfPID {
 			continue
 		}
+		if name == "Electron" {
+			resolved, e := resolve(pid)
+			if e != nil {
+				return errors.New("INSTALL_PROCESS_OBSERVATION_UNKNOWN")
+			}
+			// A PID may exit after ps; only the resolver can confirm that case.
+			if resolved == "" {
+				continue
+			}
+			name = resolved
+		}
 		if strings.Contains(name, "/Applications/Farol.app/") || strings.Contains(name, "/launch-Farol.app/") || strings.Contains(name, "/installed-execution/") || name == "farol-backend" || name == "Farol" {
 			return errors.New("INSTALL_PRODUCTION_STILL_RUNNING")
 		}
 	}
 	return nil
+}
+func resolveInstallExecutable(ctx context.Context, pid int) (string, error) {
+	const script = `import ctypes, os, sys
+pid = int(sys.argv[1])
+proc = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
+proc.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+proc.proc_pidpath.restype = ctypes.c_int
+buf = ctypes.create_string_buffer(4096)
+if proc.proc_pidpath(pid, buf, len(buf)) > 0:
+    sys.stdout.buffer.write(buf.value)
+    sys.exit(0)
+try:
+    os.kill(pid, 0)
+except ProcessLookupError:
+    sys.exit(3)
+except PermissionError:
+    sys.exit(2)
+sys.exit(2)
+`
+	out, err := exec.CommandContext(ctx, "/usr/bin/python3", "-I", "-c", script, strconv.Itoa(pid)).Output()
+	if err == nil && len(out) > 0 && out[0] == '/' && len(out) < 4096 {
+		return string(out), nil
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 3 {
+		return "", nil
+	}
+	return "", errors.New("INSTALL_PROCESS_OBSERVATION_UNKNOWN")
 }
 func verifyInstalledRelease(ctx context.Context, parent *os.File, path string, m installReleaseManifest) error {
 	app, err := openInstallDirectory(path)
