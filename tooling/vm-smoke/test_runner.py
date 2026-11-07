@@ -207,16 +207,20 @@ class AdmissionTests(unittest.TestCase):
             (profile / 'farol-state/config.json').write_text(json.dumps({'connectors': {'secureMcp': {'tunnelId': 'test-only'}}}))
             stage = root / 'stage'
             stage.mkdir()
+            copied_source = root / 'runner-source.py'
+            copied_source.write_bytes(Path(spec.origin).read_bytes())
             script = '''import importlib.util,json,sys
 from pathlib import Path
+sys.pycache_prefix=None
 s=importlib.util.spec_from_file_location('runner',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
 m.subprocess.check_output=lambda *a,**k:''
 m.export_dev_connection(Path(sys.argv[2]),json.loads(sys.argv[3]),Path(sys.argv[4]))
 '''
-            result = subprocess.run([sys.executable, '-c', script, str(spec.origin), str(stage), json.dumps(vm.IDENTITY), str(root)], capture_output=True, text=True, timeout=3)
+            result = subprocess.run([sys.executable, '-B', '-c', script, str(copied_source), str(stage), json.dumps(vm.IDENTITY), str(root)], capture_output=True, text=True, timeout=3)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('DEV_KEY_UNSAFE', result.stderr)
             self.assertEqual(list(stage.iterdir()), [])
+            self.assertFalse((root / '__pycache__').exists())
 
     def test_source_uncertainty_refuses_before_key_access(self):
         for flag in ('setup', 'runtime', 'verification'):
