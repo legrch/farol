@@ -273,14 +273,19 @@ class Runner:
         time.sleep(0.5)
         if self.a.bootstrap == 'finder':
             self.action('key', 'cmd+shift+g')
-            time.sleep(0.3)
+            time.sleep(0.8)
             self.action('type', '/System/Applications/Utilities/Terminal.app')
             self.action('key', 'return')
-            time.sleep(0.4)
+            # Finder navigation completes asynchronously after the key ACK.
+            # Preserve the selected target before sending Open; a cold Finder
+            # can otherwise receive Open while the Go to Folder sheet closes.
+            time.sleep(1.5)
+            self.screenshot('bootstrap-finder-selection')
             self.action('key', 'cmd+o')
-            time.sleep(0.6)
+            time.sleep(1.5)
         self.action('key', 'cmd+n')
-        time.sleep(0.5)
+        time.sleep(1)
+        self.screenshot('bootstrap-terminal')
         command = '/bin/bash ' + shlex.quote('/Volumes/My Shared Files/artifacts/' +
                                            self.run_id + '/guest.sh') + ' serve'
         self.action('type', command)
