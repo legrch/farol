@@ -27,7 +27,7 @@ case "$phase" in
     while [ "$SECONDS" -lt "$until_time" ]; do
       request="$(cat "$stage/request" 2>/dev/null || true)"
       if [ -n "$request" ] && [ "$request" != "$last" ]; then
-        [[ "$request" =~ ^[0-9]{4}-(prepare|admit|install|launch|activate|inspect|relaunch|cleanup|stop|import-dev|connection-proof|share-probe)$ ]] || exit 76
+        [[ "$request" =~ ^[0-9]{4}-(prepare|admit|install|launch|activate|inspect|relaunch|cleanup|stop|import-dev|connection-proof|share-probe|quit-proof)$ ]] || exit 76
         last="$request"
         next="${request#*-}"
         /bin/bash "$stage/guest.sh" "$next" "$request"
@@ -47,6 +47,11 @@ case "$phase" in
   connection-proof)
     /usr/bin/osascript -l JavaScript "$stage/connection-proof.js" "$stage/identity.json" > "$report/connection.json.tmp"
     mv "$report/connection.json.tmp" "$report/connection.json"
+    finish READY
+    ;;
+  quit-proof)
+    /usr/bin/osascript -l JavaScript "$stage/quit-proof.js" "$stage/identity.json" > "$report/quit-proof.json.tmp"
+    mv "$report/quit-proof.json.tmp" "$report/quit-proof.json"
     finish READY
     ;;
   import-dev)
@@ -106,10 +111,14 @@ case "$phase" in
     fi
     inspect > "$report/before.json"
     /usr/bin/osascript -l JavaScript -e 'ObjC.import("Foundation");function run(a){let x=JSON.parse($.NSString.stringWithContentsOfFileEncodingError(a[0],4,null).js);if(x.pids.length)throw Error("PRODUCT_STILL_RUNNING");}' "$report/before.json"
+    # Complete the fallible copy before moving the existing installation.
+    replacement="$work/replacement.app"
+    /usr/bin/ditto "$app" "$replacement"
+    [ "$(/usr/bin/stat -f %d "$work")" = "$(/usr/bin/stat -f %d /Applications)" ]
     if [ -e "$app_path" ]; then
       mv "$app_path" "$work/previous.app"
     fi
-    /usr/bin/ditto "$app" "$app_path"
+    mv "$replacement" "$app_path"
     finish READY
     ;;
   launch|relaunch)

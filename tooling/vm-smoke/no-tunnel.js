@@ -5,6 +5,12 @@ function run(argv) {
     $.NSString.stringWithContentsOfFileEncodingError(argv[0], 4, null).js,
   );
   const connector = config.connectors && config.connectors.secureMcp;
+  if (
+    config.setup &&
+    config.setup.connect &&
+    config.setup.connect.outcomeUnknown
+  )
+    throw Error("GUEST_EFFECT_UNKNOWN");
   const marker = $.NSHomeDirectory().js + "/.farol-vm-dev-connection.json";
   let approved = null;
   if ($.NSFileManager.defaultManager.fileExistsAtPath(marker)) {

@@ -1,11 +1,16 @@
 import importlib.util
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
 import plistlib
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 import zipfile
 
 spec = importlib.util.spec_from_file_location('vm_runner', Path(__file__).parents[1] / 'vm-smoke.py')
@@ -190,6 +195,131 @@ class AdmissionTests(unittest.TestCase):
         runner.deadline = 0
         with self.assertRaisesRegex(vm.Refused, 'DEADLINE'):
             runner.remaining()
+
+    def test_fifo_dev_key_refuses_within_a_bounded_process(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            profile = root / 'Library/Application Support/TestDev'
+            (profile / 'farol-state').mkdir(parents=True)
+            keys = profile / 'farol-private/secure-mcp-connector'
+            keys.mkdir(parents=True)
+            os.mkfifo(keys / 'control-plane-api-key', 0o600)
+            (profile / 'farol-state/config.json').write_text(json.dumps({'connectors': {'secureMcp': {'tunnelId': 'test-only'}}}))
+            stage = root / 'stage'
+            stage.mkdir()
+            script = '''import importlib.util,json,sys
+from pathlib import Path
+s=importlib.util.spec_from_file_location('runner',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+m.subprocess.check_output=lambda *a,**k:''
+m.export_dev_connection(Path(sys.argv[2]),json.loads(sys.argv[3]),Path(sys.argv[4]))
+'''
+            result = subprocess.run([sys.executable, '-c', script, str(spec.origin), str(stage), json.dumps(vm.IDENTITY), str(root)], capture_output=True, text=True, timeout=3)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('DEV_KEY_UNSAFE', result.stderr)
+            self.assertEqual(list(stage.iterdir()), [])
+
+    def test_source_uncertainty_refuses_before_key_access(self):
+        for flag in ('setup', 'runtime', 'verification'):
+            with self.subTest(flag=flag), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                profile = root / 'Library/Application Support/TestDev'
+                (profile / 'farol-state').mkdir(parents=True)
+                (profile / 'farol-private/secure-mcp-connector').mkdir(parents=True)
+                connector = {'tunnelId': 'test-only'}
+                config = {'connectors': {'secureMcp': connector}}
+                if flag == 'setup': config['setup'] = {'connect': {'outcomeUnknown': True}}
+                if flag == 'runtime': connector['runtime'] = {'state': 'outcome_unknown'}
+                if flag == 'verification': connector['appVerificationPending'] = True
+                (profile / 'farol-state/config.json').write_text(json.dumps(config))
+                with patch.object(vm.os, 'open') as opened:
+                    with self.assertRaisesRegex(vm.Refused, 'DEV_EFFECT_UNKNOWN'):
+                        vm.export_dev_connection(root, vm.IDENTITY, root)
+                    opened.assert_not_called()
+
+    def test_process_guard_matches_legacy_case_spelling(self):
+        home = Path('/fake-home')
+        row = str(home / 'Library/Application Support/TestDev').upper()
+        with patch.object(vm.subprocess, 'check_output', return_value=row):
+            with self.assertRaisesRegex(vm.Refused, 'HOST_DEV_STILL_RUNNING'):
+                vm.require_host_dev_stopped(vm.IDENTITY, home)
+
+    def test_unresolved_effect_fences_later_mutation_and_needs_clean_stop(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            first = object.__new__(vm.Runner)
+            first.machine = root
+            first.effect_file = root / '.farol-smoke-pending.json'
+            first.effect_owned = False
+            first.run_id = 'original'
+            first.out = root / 'evidence'
+            first.log = []
+            first.begin_effect()
+            later = object.__new__(vm.Runner)
+            later.machine = root
+            later.effect_file = first.effect_file
+            later.effect_owned = False
+            later.run_id = 'later'
+            later.out = root / 'later'
+            later.a = SimpleNamespace(connection_proof=False)
+            later.cli = lambda *a: self.fail('A later unresolved run reached the guest')
+            with self.assertRaisesRegex(vm.Refused, 'UNRESOLVED_GUEST_OPERATION'):
+                later.run()
+            with self.assertRaisesRegex(vm.Refused, 'GUEST_SERVER_NOT_STOPPED'):
+                first.finish_effect()
+            self.assertTrue(first.effect_file.exists())
+            first.log = ['stop']
+            first.finish_effect()
+            self.assertFalse(first.effect_file.exists())
+
+    def test_drain_requires_a_fresh_confirmed_receipt_without_running_marker(self):
+        runner = object.__new__(vm.Runner)
+        before = {'observedAt': 100, 'receipt': 'old'}
+        valid = {'observedAt': 300, 'quitAt': 200, 'receipt': 'new', 'running': False, 'drained': True}
+        for change in ({}, {'running': True}, {'drained': False}, {'quitAt': 99}, {'quitAt': 301}, {'receipt': 'old'}):
+            with patch.object(runner, 'quit_proof', return_value=dict(valid, **change)):
+                if not change: runner.require_quit_drain(before)
+                else:
+                    with self.assertRaisesRegex(vm.Refused, 'GUEST_QUIT_DRAIN_UNCONFIRMED'):
+                        runner.require_quit_drain(before)
+
+    def test_dev_transport_probe_precedes_any_export(self):
+        runner = object.__new__(vm.Runner)
+        runner.prepare_stage = lambda: None
+        runner.start_guest = lambda: None
+        runner.phase = lambda name: (_ for _ in ()).throw(vm.Refused('probe-failed'))
+        with patch.object(vm, 'export_dev_connection') as export:
+            with self.assertRaisesRegex(vm.Refused, 'probe-failed'):
+                runner.connect_dev()
+            export.assert_not_called()
+
+    def test_catchable_cancellation_cleans_credentials_through_main(self):
+        for kind in ('keyboard', 'term'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                runner = object.__new__(vm.Runner)
+                runner.stage = root / 'stage'
+                runner.stage.mkdir()
+                runner.out = root / 'evidence'
+                runner.out.mkdir()
+                runner.log = []
+                runner.pending = 'import-dev'
+                runner.effect_owned = False
+                runner.effect_file = root / '.farol-smoke-pending.json'
+                runner.run_id = 'cancelled-test'
+                for name in ('dev-key', 'dev-connection.json'):
+                    (runner.stage / name).write_text('synthetic-only')
+                def cancel():
+                    runner.begin_effect()
+                    if kind == 'term': vm.signal.raise_signal(vm.signal.SIGTERM)
+                    raise KeyboardInterrupt()
+                runner.run = cancel
+                previous = vm.signal.getsignal(vm.signal.SIGTERM)
+                with patch.object(vm, 'arguments', return_value=None), patch.object(vm, 'Runner', return_value=runner), contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(vm.main(), 2)
+                self.assertEqual(list(runner.stage.iterdir()), [])
+                self.assertTrue(runner.effect_file.exists())
+                self.assertEqual(json.loads((runner.out / 'result.json').read_text())['outcome'], 'UNKNOWN')
+                self.assertEqual(vm.signal.getsignal(vm.signal.SIGTERM), previous)
 
 
 if __name__ == '__main__':

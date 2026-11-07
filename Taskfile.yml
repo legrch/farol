@@ -108,7 +108,7 @@ tasks:
     desc: Check VM smoke isolation, archive admission and bounded failure handling without a real VM
     cmds:
       - /usr/bin/python3 -B -m unittest discover -s tooling/vm-smoke -p 'test_*.py'
-      - node --test tooling/vm-smoke/inspect.test.mjs tooling/vm-smoke/import-dev.test.mjs tooling/vm-smoke/entry.test.mjs
+      - node --test tooling/vm-smoke/inspect.test.mjs tooling/vm-smoke/import-dev.test.mjs tooling/vm-smoke/entry.test.mjs tooling/vm-smoke/quit-proof.test.mjs tooling/vm-smoke/no-tunnel.test.mjs
 
   dev:
     # The owner's one development command: pick the declared toolchain, make
