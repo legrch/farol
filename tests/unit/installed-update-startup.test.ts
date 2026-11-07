@@ -1526,6 +1526,7 @@ describe("shared-slot first-launch adoption at startup (pure ports; GitHub doubl
       sourceTreeDigest: build.sourceTreeDigest,
       buildId: build.buildId,
       artifactSha256: accepted.digest,
+      archiveName: `Farol-${build.version}-darwin-arm64.zip`,
     };
     const log: string[] = [];
     const written: string[] = [];
@@ -1641,6 +1642,75 @@ describe("shared-slot first-launch adoption at startup (pure ports; GitHub doubl
     expect(f.records.has(adoptedFile)).toBe(true);
     expect(f.observation.readProcess).toHaveBeenCalled();
     expect(captureMock).toHaveBeenCalled();
+  });
+
+  const installerRecord = (
+    f: ReturnType<typeof completedReplacementFixture>,
+  ) => ({
+    schema: "farol.bootstrap-install/2",
+    id: "b".repeat(32),
+    phase: "completed",
+    version: f.options.build.version,
+    buildId: f.options.build.buildId,
+    digest: f.published.artifactSha256,
+    installed: sharedApp,
+    profile,
+    manifest: structuredClone(f.published),
+  });
+  const installerFile = path.join(
+    home,
+    "Library/Application Support/io.github.legrch.farol-installer/current.json",
+  );
+
+  it("starts an installer-placed replacement offline from its completed verified manifest", async () => {
+    const f = completedReplacementFixture();
+    f.records.set(installerFile, installerRecord(f));
+    adoptionMocks.find.mockRejectedValue(new Error("offline"));
+    await waitForInstalledUpdateRelaunch(f.options);
+    expect(adoptionMocks.find).not.toHaveBeenCalled();
+    expect(adoptionMocks.transport).not.toHaveBeenCalled();
+    expect(captureMock).toHaveBeenCalledOnce();
+    expect(f.records.get(adoptedFile)).toMatchObject({
+      schema: "farol.adopted-baseline/1",
+      manifest: f.published,
+    });
+  });
+
+  it.each([
+    ["pending outcome", { phase: "pending" }],
+    ["refused placement", { phase: "refused" }],
+    ["wrong profile", { profile: "/Users/other/profile" }],
+    ["wrong manifest digest", { digest: "f".repeat(64) }],
+    ["wrong manifest source", { manifest: { sourceCommit: "f".repeat(40) } }],
+  ])("refuses %s installer custody before capture", async (_name, change) => {
+    const f = completedReplacementFixture();
+    const record = installerRecord(f);
+    f.records.set(installerFile, {
+      ...record,
+      ...change,
+      manifest:
+        "manifest" in change
+          ? { ...record.manifest, ...change.manifest }
+          : record.manifest,
+    });
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_INSTALLER_CUSTODY_UNCONFIRMED",
+    );
+    expect(adoptionMocks.find).not.toHaveBeenCalled();
+    expect(captureMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses legacy installer custody with an unresolved attempt", async () => {
+    const f = completedReplacementFixture();
+    f.records.set(installerFile, {
+      Schema: "farol.bootstrap-install/1",
+      Phase: "pending",
+    });
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_INSTALLER_CUSTODY_UNCONFIRMED",
+    );
+    expect(adoptionMocks.find).not.toHaveBeenCalled();
+    expect(captureMock).not.toHaveBeenCalled();
   });
 
   it("adopts a published replacement after a confirmed rolled-back shared OTA without rewriting its evidence", async () => {

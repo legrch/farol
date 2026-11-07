@@ -197,6 +197,58 @@ export function adoptedRecordFor(input: {
   };
 }
 
+// The native installer durably closes placement before the shell launches the
+// app. Its verified manifest can anchor that first startup when GitHub is
+// unavailable; the ordinary captured baseline is still published afterwards.
+const InstallerRecord = z.strictObject({
+  schema: z.literal("farol.bootstrap-install/2"),
+  id: z.string().regex(/^[0-9a-f]{32}$/u),
+  phase: z.enum(["pending", "completed", "refused"]),
+  version: z.string().max(128),
+  buildId: z.string().regex(/^[0-9a-f]{64}$/u),
+  digest: z.string().regex(/^[0-9a-f]{64}$/u),
+  installed: z.literal(SHARED_SLOT),
+  profile: z.string().max(4096),
+  manifest: z.unknown(),
+});
+
+export function installerManifestForAdoption(
+  raw: unknown | null,
+  profile: string,
+  build: BuildIdentity,
+): ReleaseManifest | null {
+  if (raw === null) return null;
+  if (
+    typeof raw === "object" &&
+    raw !== null &&
+    ("schema" in raw || "Schema" in raw) &&
+    ("schema" in raw ? raw.schema : raw.Schema) === "farol.bootstrap-install/1"
+  ) {
+    const phase =
+      "phase" in raw ? raw.phase : "Phase" in raw ? raw.Phase : null;
+    if (phase === "completed" || phase === "refused") return null;
+    throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
+  }
+  const parsed = InstallerRecord.safeParse(raw);
+  if (!parsed.success || parsed.data.profile !== profile)
+    throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
+  const record = parsed.data;
+  if (record.phase !== "completed")
+    throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
+  const manifest = parseGithubReleaseManifest(record.manifest);
+  if (
+    !manifest.ok ||
+    manifest.value.version !== record.version ||
+    manifest.value.buildId !== record.buildId ||
+    manifest.value.artifactSha256 !== record.digest
+  )
+    throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
+  if (record.buildId !== build.buildId) return null;
+  if (!manifestDescribesRunningBuild(manifest.value, build))
+    throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
+  return manifest.value;
+}
+
 /**
  * Publish the record with one atomic rename. When it replaces a superseded
  * record, only that exact unchanged record is replaced: a changed or vanished

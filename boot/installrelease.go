@@ -30,9 +30,18 @@ import (
 type installReleaseInput struct{ staged, manifest, installed, evidence string }
 type installReleaseManifest struct {
 	Schema, Repository, Version, BuildVersion, Platform, Arch, ArtifactSha256, BuildID string
+	Raw                                                                                json.RawMessage
 }
 type installReleaseRecord struct {
-	Schema, ID, Phase, Version, BuildID, Digest string
+	Schema    string          `json:"schema"`
+	ID        string          `json:"id"`
+	Phase     string          `json:"phase"`
+	Version   string          `json:"version"`
+	BuildID   string          `json:"buildId"`
+	Digest    string          `json:"digest"`
+	Installed string          `json:"installed,omitempty"`
+	Profile   string          `json:"profile,omitempty"`
+	Manifest  json.RawMessage `json:"manifest,omitempty"`
 }
 
 func runInstallReleaseSwap(args []string, out io.Writer, diagnostics io.Writer) int {
@@ -172,7 +181,11 @@ func installReleaseSwap(ctx context.Context, in installReleaseInput, out io.Writ
 	if _, err = rand.Read(bytes[:]); err != nil {
 		return errors.New("INSTALL_CUSTODY_UNAVAILABLE")
 	}
-	record := installReleaseRecord{Schema: "farol.bootstrap-install/1", ID: hex.EncodeToString(bytes[:]), Phase: "pending", Version: m.Version, BuildID: m.BuildID, Digest: m.ArtifactSha256}
+	manifestValues, validManifest := installManifestValues(m.Raw, false)
+	if !validManifest || manifestValues["version"] != m.Version || manifestValues["buildVersion"] != m.BuildVersion || manifestValues["buildId"] != m.BuildID || manifestValues["artifactSha256"] != m.ArtifactSha256 || !installManifestMatchesStagedBuild(in.staged, manifestValues) {
+		return errors.New("INSTALL_MANIFEST_INVALID")
+	}
+	record := installReleaseRecord{Schema: "farol.bootstrap-install/2", ID: hex.EncodeToString(bytes[:]), Phase: "pending", Version: m.Version, BuildID: m.BuildID, Digest: m.ArtifactSha256, Installed: in.installed, Profile: profileRoot, Manifest: m.Raw}
 	fence := func(ctx context.Context) error {
 		// Every refusal here precedes the namespace operation. The native
 		// adapter may still promote pin-cleanup uncertainty after this return.
@@ -292,8 +305,31 @@ func readInstallManifest(path string) (installReleaseManifest, error) {
 			return m, errors.New("INSTALL_MANIFEST_INVALID")
 		}
 	}
-	m = installReleaseManifest{raw.Schema, raw.Repository, raw.Version, raw.BuildVersion, raw.Platform, raw.Arch, raw.ArtifactSha256, raw.BuildID}
+	m = installReleaseManifest{raw.Schema, raw.Repository, raw.Version, raw.BuildVersion, raw.Platform, raw.Arch, raw.ArtifactSha256, raw.BuildID, append(json.RawMessage(nil), b...)}
 	return m, nil
+}
+
+func installManifestMatchesStagedBuild(stage string, values map[string]string) bool {
+	file := filepath.Join(stage, "Contents", "Resources", "app", "build-identity.json")
+	before, err := os.Lstat(file)
+	if err != nil || !before.Mode().IsRegular() || before.Size() > 65536 {
+		return false
+	}
+	data, err := os.ReadFile(file)
+	after, afterErr := os.Lstat(file)
+	if err != nil || afterErr != nil || !os.SameFile(before, after) || int64(len(data)) != before.Size() || after.Size() != before.Size() {
+		return false
+	}
+	var build struct {
+		Version          string `json:"version"`
+		BuildVersion     string `json:"buildVersion"`
+		BuildID          string `json:"buildId"`
+		SourceCommit     string `json:"sourceCommit"`
+		SourceTreeDigest string `json:"sourceTreeDigest"`
+		UpdateChannel    string `json:"updateChannel"`
+		SourceDirty      bool   `json:"sourceDirty"`
+	}
+	return json.Unmarshal(data, &build) == nil && build.Version == values["version"] && build.BuildVersion == values["buildVersion"] && build.BuildID == values["buildId"] && build.SourceCommit == values["sourceCommit"] && build.SourceTreeDigest == values["sourceTreeDigest"] && build.UpdateChannel == "github-stable" && !build.SourceDirty
 }
 func installSignatures(ctx context.Context, app string) error {
 	for _, tc := range []struct {
@@ -426,14 +462,26 @@ func checkedInstallRecord(dir string) error {
 		return errors.New("INSTALL_PREVIOUS_OUTCOME_UNKNOWN")
 	}
 	var r installReleaseRecord
-	if json.Unmarshal(b, &r) != nil || r.Schema != "farol.bootstrap-install/1" || r.Phase != "completed" && r.Phase != "refused" {
+	if json.Unmarshal(b, &r) != nil || (r.Schema != "farol.bootstrap-install/1" && r.Schema != "farol.bootstrap-install/2") || r.Phase != "completed" && r.Phase != "refused" {
 		return errors.New("INSTALL_PREVIOUS_OUTCOME_UNKNOWN")
+	}
+	if r.Schema == "farol.bootstrap-install/2" {
+		if _, ok := installObject(b, []string{"schema", "id", "phase", "version", "buildId", "digest", "installed", "profile", "manifest"}, nil); !ok || !installHexString(r.ID, 32) || r.Installed != "/Applications/Farol.app" || r.Profile == "" {
+			return errors.New("INSTALL_PREVIOUS_OUTCOME_UNKNOWN")
+		}
+		values, valid := installManifestValues(r.Manifest, false)
+		if !valid || values["version"] != r.Version || values["buildId"] != r.BuildID || values["artifactSha256"] != r.Digest {
+			return errors.New("INSTALL_PREVIOUS_OUTCOME_UNKNOWN")
+		}
 	}
 	return nil
 }
 func writeInstallRecord(dir string, r installReleaseRecord) error {
 	b, err := json.Marshal(r)
 	if err != nil {
+		return errors.New("INSTALL_CUSTODY_UNAVAILABLE")
+	}
+	if len(b) > 4096 {
 		return errors.New("INSTALL_CUSTODY_UNAVAILABLE")
 	}
 	tmp := filepath.Join(dir, "."+r.ID+".tmp")

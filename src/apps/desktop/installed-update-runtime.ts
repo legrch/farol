@@ -73,6 +73,7 @@ import {
   adoptedRecordFor,
   adoptionBuildEligible,
   adoptionChannel,
+  installerManifestForAdoption,
   publishAdoptedRecord,
   readAdoptedRecord,
   recordAbsent,
@@ -611,6 +612,38 @@ async function observeSharedSlotStartup(
   )
     throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
   const read = options.observation?.readRecord ?? readRecord;
+  const installerManifest = async (): Promise<ReleaseManifest | null> => {
+    const custody = path.join(
+      os.userInfo().homedir,
+      "Library/Application Support/io.github.legrch.farol-installer",
+    );
+    const file = path.join(custody, "current.json");
+    if (!options.observation) {
+      try {
+        await fs.lstat(custody);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
+      }
+      try {
+        await canonicalOwnedDirectory(custody, true);
+      } catch {
+        throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
+      }
+    }
+    let raw: unknown | null;
+    try {
+      raw = await read(file, true, undefined, 4096);
+      if (
+        raw === null &&
+        !(await (options.observation?.recordAbsent ?? recordAbsent)(file))
+      )
+        throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
+    } catch {
+      throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
+    }
+    return installerManifestForAdoption(raw, profile, build);
+  };
   if (!options.observation) {
     await canonicalOwnedDirectory(profile, true);
     await privateDirectory(root);
@@ -833,20 +866,25 @@ async function observeSharedSlotStartup(
         // A recorded baseline never touches the network.
         expected = { ...state.expected };
       } else {
-        // The expectation comes from the published manifest, never from the
-        // slot being measured. Plain Node https works before Electron is ready.
-        const transport = createGithubUpdateTransport({
-          privateStateDirectory: root,
-          verifyPackage: async () => {
-            throw new Error("UPDATE_ADOPTION_PACKAGE_UNUSED");
-          },
-        });
-        const resolved = await resolveAdoptionManifest({
-          build,
-          fetchJson: (url, maximum) => transport.fetchJson(url, maximum),
-        });
-        if (!resolved.ok) throw new Error(resolved.code);
-        const manifest = resolved.value;
+        // A completed native placement carries the manifest verified before
+        // its namespace effect. Other manually placed copies still use the
+        // published release lookup.
+        const local = manualReplacement ? await installerManifest() : null;
+        let manifest = local;
+        if (!manifest) {
+          const transport = createGithubUpdateTransport({
+            privateStateDirectory: root,
+            verifyPackage: async () => {
+              throw new Error("UPDATE_ADOPTION_PACKAGE_UNUSED");
+            },
+          });
+          const resolved = await resolveAdoptionManifest({
+            build,
+            fetchJson: (url, maximum) => transport.fetchJson(url, maximum),
+          });
+          if (!resolved.ok) throw new Error(resolved.code);
+          manifest = resolved.value;
+        }
         let measured: string;
         try {
           measured = options.observation

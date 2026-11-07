@@ -41,6 +41,90 @@ func TestInstallReleasePendingCustodyBlocksRetry(t *testing.T) {
 	}
 }
 
+func TestInstallReleaseCompletedCustodyRetainsVerifiedManifest(t *testing.T) {
+	dir := t.TempDir()
+	manifest, err := json.Marshal(map[string]any{
+		"schema": "farol.github-release/1", "repository": "legrch/farol",
+		"channel": "stable", "product": "Farol", "bundleId": "io.github.legrch.farol",
+		"version": "0.5.20", "buildVersion": "76", "sourceCommit": strings.Repeat("a", 40),
+		"sourceTreeDigest": strings.Repeat("b", 64), "buildId": strings.Repeat("c", 64),
+		"artifactSha256": strings.Repeat("d", 64), "archiveSha256": strings.Repeat("e", 64),
+		"archiveName": "Farol-0.5.20-darwin-arm64.zip", "archiveSize": 1024,
+		"platform": "darwin", "arch": "arm64", "signing": "unsigned",
+		"notarized": false, "sourceDirty": false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := installReleaseRecord{Schema: "farol.bootstrap-install/2", ID: strings.Repeat("f", 32), Phase: "pending", Version: "0.5.20", BuildID: strings.Repeat("c", 64), Digest: strings.Repeat("d", 64), Installed: "/Applications/Farol.app", Profile: "/Users/owner/Library/Application Support/io.github.legrch.farol", Manifest: manifest}
+	if err := writeInstallRecord(dir, record); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkedInstallRecord(dir); err == nil {
+		t.Fatal("pending installer custody admitted")
+	}
+	record.Phase = "completed"
+	if err := writeInstallRecord(dir, record); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkedInstallRecord(dir); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := os.ReadFile(filepath.Join(dir, "current.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded installReleaseRecord
+	if json.Unmarshal(stored, &decoded) != nil || !bytes.Equal(decoded.Manifest, manifest) {
+		t.Fatal("verified manifest changed in durable installer custody")
+	}
+	decoded.Digest = strings.Repeat("0", 64)
+	if err := writeInstallRecord(dir, decoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkedInstallRecord(dir); err == nil {
+		t.Fatal("contradictory completed installer custody admitted")
+	}
+}
+
+func TestInstallReleaseManifestBindsStagedBuildSource(t *testing.T) {
+	stage := t.TempDir()
+	dir := filepath.Join(stage, "Contents", "Resources", "app")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "build-identity.json")
+	values := map[string]string{
+		"version": "0.5.20", "buildVersion": "76", "buildId": strings.Repeat("a", 64),
+		"sourceCommit": strings.Repeat("b", 40), "sourceTreeDigest": strings.Repeat("c", 64),
+	}
+	build := map[string]any{
+		"version": values["version"], "buildVersion": values["buildVersion"],
+		"buildId": values["buildId"], "sourceCommit": values["sourceCommit"],
+		"sourceTreeDigest": values["sourceTreeDigest"], "updateChannel": "github-stable",
+		"sourceDirty": false,
+	}
+	write := func() {
+		t.Helper()
+		data, err := json.Marshal(build)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write()
+	if !installManifestMatchesStagedBuild(stage, values) {
+		t.Fatal("matching staged build refused")
+	}
+	build["sourceCommit"] = strings.Repeat("d", 40)
+	write()
+	if installManifestMatchesStagedBuild(stage, values) {
+		t.Fatal("mismatched source admitted to offline startup")
+	}
+}
+
 func TestInstallReleaseCustodyRefusesSymlinkAndChangedMode(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "elsewhere.json")
