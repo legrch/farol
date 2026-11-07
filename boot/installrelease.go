@@ -107,7 +107,10 @@ func installReleaseSwap(ctx context.Context, in installReleaseInput, out io.Writ
 		return errors.New("INSTALL_FILESYSTEM_MISMATCH")
 	}
 	verifyStage := func(ctx context.Context) error {
-		v, e := apptree.New(stageParent, stage, "staged.app", apptree.Expected{TreeSHA256: m.ArtifactSha256, Version: m.Version, BuildID: m.BuildID}, appidentity.Verify)
+		identity := func(ctx context.Context, plist, build []byte, version, buildID string) error {
+			return appidentity.VerifyRelease(ctx, plist, build, version, buildID, m.BuildVersion)
+		}
+		v, e := apptree.New(stageParent, stage, "staged.app", apptree.Expected{TreeSHA256: m.ArtifactSha256, Version: m.Version, BuildID: m.BuildID}, identity)
 		if e != nil {
 			return e
 		}

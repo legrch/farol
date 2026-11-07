@@ -28,12 +28,24 @@ func installProfileFixture(t *testing.T) (string, string, installReleaseManifest
 		}
 	}
 	start := "Sun Nov  8 00:08:35 2026"
-	saved := installSavedUpdate{Schema: "farol.ready-update/1", Phase: "completed", RunningBuildID: operation.Target.BuildID, Operation: operation}
+	saved := installSavedUpdate{Schema: "farol.ready-update/1", Handle: "retained-update-handle", ObservedAt: "2026-11-08T00:08:35.000Z", Phase: "completed", RunningBuildID: operation.Target.BuildID, Operation: operation}
 	saved.Manifest.Schema = "farol.github-release/1"
+	saved.Manifest.Repository = "legrch/farol"
+	saved.Manifest.Channel = "stable"
+	saved.Manifest.Product = "Farol"
+	saved.Manifest.BundleID = "io.github.legrch.farol"
 	saved.Manifest.Version = operation.Target.Version
 	saved.Manifest.BuildVersion = "75"
+	saved.Manifest.SourceCommit = strings.Repeat("2", 40)
+	saved.Manifest.SourceTreeDigest = strings.Repeat("3", 64)
 	saved.Manifest.BuildID = operation.Target.BuildID
 	saved.Manifest.ArtifactSha256 = operation.Target.Digest
+	saved.Manifest.ArchiveSha256 = strings.Repeat("4", 64)
+	saved.Manifest.ArchiveName = "Farol-0.5.19-darwin-arm64.zip"
+	saved.Manifest.ArchiveSize = 1024
+	saved.Manifest.Platform = "darwin"
+	saved.Manifest.Arch = "arm64"
+	saved.Manifest.Signing = "unsigned"
 	saved.Helper = &struct {
 		PID          int     `json:"pid"`
 		ProcessStart *string `json:"processStart"`
@@ -110,6 +122,49 @@ func TestInstallReleaseRetainedProfileRejectsChangedEvidence(t *testing.T) {
 			}
 			if err := recheckInstallProfileWithHelper(context.Background(), profile, app, candidate, state, exitedInstallHelper); err == nil {
 				t.Fatal("changed retained evidence admitted")
+			}
+		})
+	}
+}
+
+func TestInstallReleaseRejectsStartupIncompatibleRetainedRecords(t *testing.T) {
+	cases := []struct {
+		name, file string
+		mutate     func(map[string]any)
+	}{
+		{"missing handle", "last-update.json", func(value map[string]any) { delete(value, "handle") }},
+		{"missing observedAt", "last-update.json", func(value map[string]any) { delete(value, "observedAt") }},
+		{"manifest provenance", "last-update.json", func(value map[string]any) { delete(value["manifest"].(map[string]any), "sourceCommit") }},
+		{"manifest unknown field", "last-update.json", func(value map[string]any) { value["manifest"].(map[string]any)["unexpected"] = true }},
+		{"helper identity", "last-update.json", func(value map[string]any) { delete(value["helper"].(map[string]any), "processStart") }},
+		{"journal unknown field", "journal.json", func(value map[string]any) { value["unexpected"] = true }},
+		{"operation build unknown field", "journal.json", func(value map[string]any) { value["source"].(map[string]any)["unexpected"] = true }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			profile, app, candidate, operation := installProfileFixture(t)
+			path := filepath.Join(profile, "installed-updates", tc.file)
+			if tc.file == "journal.json" {
+				path = filepath.Join(profile, "installed-updates", operation.ID, tc.file)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var value map[string]any
+			if err := json.Unmarshal(data, &value); err != nil {
+				t.Fatal(err)
+			}
+			tc.mutate(value)
+			data, err = json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := inspectInstallProfileWithHelper(context.Background(), profile, app, candidate, exitedInstallHelper); err == nil {
+				t.Fatal("startup-incompatible profile admitted")
 			}
 		})
 	}

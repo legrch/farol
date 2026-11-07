@@ -12,15 +12,15 @@ Ask in the ChatGPT you already use. Farol, a small native app on your Mac, lets 
 [![Latest release](https://img.shields.io/github/v/release/legrch/farol?style=flat-square&color=6750b8&label=release)](https://github.com/legrch/farol/releases/latest)
 [![Status: beta](https://img.shields.io/badge/status-beta-ffc061?style=flat-square&labelColor=101626)](#before-you-start)
 
-**[Install](#install-in-one-line)** · [What you can do](#what-you-can-do-with-it) · [Connect ChatGPT](#connect-chatgpt-step-by-step) · [First request](#try-your-first-file) · [Permissions](#stay-in-control) · [Help](#if-something-gets-stuck)
+**[Install](#install-farol)** · [What you can do](#what-you-can-do-with-it) · [Connect ChatGPT](#connect-chatgpt-step-by-step) · [First request](#try-your-first-file) · [Permissions](#stay-in-control) · [Help](#if-something-gets-stuck)
 
 </div>
 
 ![You type a question in ChatGPT, the request reaches Farol on your Mac, Farol reads files in the approved folder and the answer returns with its sources](docs/media/guide/output/Farol-ask-your-files-dark.gif)
 
-## Install in one line
+## Install Farol
 
-Open **Terminal**, paste this, press Return:
+Install the latest stable release from Terminal:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/legrch/farol/main/scripts/install.sh | sh -s -- latest

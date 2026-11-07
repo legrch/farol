@@ -10,7 +10,7 @@ The example reads from a selected workspace and returns requested contents to Ch
 
 ![A requested code change within a selected Read & write workspace](../media/guide/output/Farol-change-your-code-dark.gif)
 
-The edit example assumes an existing Read & write grant. Tool confirmations follow ChatGPT's settings. [Continue with the complete guide on the home page →](../../README.md#install-in-one-line)
+The edit example assumes an existing Read & write grant. Tool confirmations follow ChatGPT's settings. [Continue with the complete guide on the home page →](../../README.md#install-farol)
 
 ## A small example
 

@@ -38,16 +38,35 @@ type installOperation struct {
 	Target installBuild `json:"target"`
 }
 type installSavedUpdate struct {
-	Schema         string           `json:"schema"`
-	Phase          string           `json:"phase"`
-	RunningBuildID string           `json:"runningBuildId"`
-	Operation      installOperation `json:"operation"`
-	Manifest       struct {
-		Schema         string `json:"schema"`
-		Version        string `json:"version"`
-		BuildVersion   string `json:"buildVersion"`
-		BuildID        string `json:"buildId"`
-		ArtifactSha256 string `json:"artifactSha256"`
+	Schema          string           `json:"schema"`
+	Handle          string           `json:"handle"`
+	ObservedAt      string           `json:"observedAt"`
+	Notes           string           `json:"notes,omitempty"`
+	DownloadID      string           `json:"downloadId,omitempty"`
+	ArchiveReleased *bool            `json:"archiveReleased,omitempty"`
+	Phase           string           `json:"phase"`
+	RunningBuildID  string           `json:"runningBuildId"`
+	Operation       installOperation `json:"operation"`
+	Manifest        struct {
+		Schema           string `json:"schema"`
+		Repository       string `json:"repository"`
+		Channel          string `json:"channel"`
+		Product          string `json:"product"`
+		BundleID         string `json:"bundleId"`
+		Version          string `json:"version"`
+		BuildVersion     string `json:"buildVersion"`
+		SourceCommit     string `json:"sourceCommit"`
+		SourceTreeDigest string `json:"sourceTreeDigest"`
+		BuildID          string `json:"buildId"`
+		ArtifactSha256   string `json:"artifactSha256"`
+		ArchiveSha256    string `json:"archiveSha256"`
+		ArchiveName      string `json:"archiveName"`
+		ArchiveSize      int64  `json:"archiveSize"`
+		Platform         string `json:"platform"`
+		Arch             string `json:"arch"`
+		Signing          string `json:"signing"`
+		Notarized        bool   `json:"notarized"`
+		SourceDirty      bool   `json:"sourceDirty"`
 	} `json:"manifest"`
 	Helper *struct {
 		PID          int     `json:"pid"`
@@ -198,7 +217,7 @@ func inspectInstallProfileWithHelper(ctx context.Context, profile, installed str
 		return refuse()
 	}
 	var saved installSavedUpdate
-	if json.Unmarshal(savedBytes, &saved) != nil || saved.Schema != "farol.ready-update/1" || saved.Phase != "completed" || saved.Operation.ID == "" || len(saved.Operation.ID) != 32 || !validInstallBuild(saved.Operation.Source) || !validInstallBuild(saved.Operation.Target) || saved.RunningBuildID != saved.Operation.Target.BuildID || saved.Manifest.Schema != "farol.github-release/1" || saved.Manifest.Version != saved.Operation.Target.Version || saved.Manifest.BuildID != saved.Operation.Target.BuildID || saved.Manifest.ArtifactSha256 != saved.Operation.Target.Digest || !installBuildVersion(saved.Manifest.BuildVersion) || saved.Helper == nil || saved.Helper.ProcessStart == nil || *saved.Helper.ProcessStart == "" || !helperExited(ctx, saved.Helper.PID) {
+	if json.Unmarshal(savedBytes, &saved) != nil || !installSavedReceipt(savedBytes, saved) || saved.Schema != "farol.ready-update/1" || saved.Phase != "completed" || saved.Operation.ID == "" || len(saved.Operation.ID) != 32 || !validInstallBuild(saved.Operation.Source) || !validInstallBuild(saved.Operation.Target) || saved.RunningBuildID != saved.Operation.Target.BuildID || saved.Manifest.Schema != "farol.github-release/1" || saved.Manifest.Version != saved.Operation.Target.Version || saved.Manifest.BuildID != saved.Operation.Target.BuildID || saved.Manifest.ArtifactSha256 != saved.Operation.Target.Digest || !installBuildVersion(saved.Manifest.BuildVersion) || saved.Helper == nil || saved.Helper.ProcessStart == nil || *saved.Helper.ProcessStart == "" || !helperExited(ctx, saved.Helper.PID) {
 		return refuse()
 	}
 	for _, c := range saved.Operation.ID {
@@ -231,7 +250,7 @@ func inspectInstallProfileWithHelper(ctx context.Context, profile, installed str
 		return refuse()
 	}
 	var journal installJournal
-	if json.Unmarshal(journalBytes, &journal) != nil || journal.Schema != "farol.installed-update-journal/1" || journal.Phase != "completed" || journal.OperationID != saved.Operation.ID || journal.Source != saved.Operation.Source || journal.Target != saved.Operation.Target {
+	if json.Unmarshal(journalBytes, &journal) != nil || !installSavedJournal(journalBytes, journal) || journal.Schema != "farol.installed-update-journal/1" || journal.Phase != "completed" || journal.OperationID != saved.Operation.ID || journal.Source != saved.Operation.Source || journal.Target != saved.Operation.Target {
 		return refuse()
 	}
 	bindingBytes, err := installPrivateFile(filepath.Join(opDir, "slot-binding.json"), 8192)
