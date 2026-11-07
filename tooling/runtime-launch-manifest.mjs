@@ -292,6 +292,14 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
       "legacy-system-tool",
     ),
     launch(
+      "release.installer-helper-observation",
+      "boot/installprofile.go",
+      "installHelperExited",
+      "go.CommandContext",
+      '"/bin/ps"',
+      "legacy-system-tool",
+    ),
+    launch(
       "release.desktop-lifetime-runtime",
       "modules/release/infra/native/desktop/darwin.go",
       "Run",

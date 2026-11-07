@@ -4,7 +4,7 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin
 export PATH
 umask 077
 
-usage='Usage: scripts/install-release.sh <version|latest>'
+usage='Usage: scripts/install.sh <version|latest>'
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 valid_version() { printf '%s\n' "$1" | /usr/bin/grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; }
 
