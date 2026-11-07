@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -9,6 +15,12 @@ import { test } from "vitest";
 const script = fileURLToPath(
   new URL("../../scripts/install-release.sh", import.meta.url),
 );
+test("installer never removes the active app", () => {
+  const source = readFileSync(script, "utf8");
+  assert.doesNotMatch(source, /\/bin\/rm\s+-rf\s+"\$installed"/);
+  assert.doesNotMatch(source, /\/usr\/bin\/ditto\s+"\$app"\s+"\$installed"/);
+  assert.match(source, /"\$backend"\s+run-install-release-swap/);
+});
 const python = "/usr/bin/python3";
 const fixtureCode = String.raw`
 import hashlib, json, os, pathlib, stat, sys, zipfile
@@ -145,25 +157,6 @@ test("strictly rejects non-numeric versions and extra arguments before operation
     });
     assert.equal(result.status, 2, `${args}: ${result.stderr}`);
     assert.match(result.stderr, /Usage:/);
-  }
-});
-
-test("direct install refuses before release lookup, download or app changes", () => {
-  for (const version of ["latest", "0.5.17"]) {
-    const result = run([version], {
-      env: { PATH: "/nonexistent", TMPDIR: "/nonexistent" },
-    });
-    assert.equal(result.status, 1);
-    assert.match(
-      result.stderr,
-      /Direct installation is temporarily unavailable/,
-    );
-    assert.match(result.stderr, /built-in updater|Check for Updates/);
-    assert.doesNotMatch(
-      result.stdout,
-      /Finding|Downloading|Verifying|Installed/,
-    );
-    assert.doesNotMatch(result.stderr, /Recovery files retained/);
   }
 });
 
@@ -319,7 +312,7 @@ test("does not overwrite a caller-selected extraction directory", () => {
 
 // This copy has every host-effect command and installation path replaced with
 // fixture-owned paths. The shipped script has no environment-based routing.
-test("isolated installation orders checks, quit, backup and launch", () => {
+test("isolated installation orders checks, native placement and launch without GUI scripting", () => {
   isolatedInstall("success", (result, root, log) => {
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Installed and running: Farol 1\.2\.3/);
@@ -331,9 +324,10 @@ test("isolated installation orders checks, quit, backup and launch", () => {
       result.stdout,
       /Farol opened\. Check its connection and updates in the app\./,
     );
-    assert.ok(log.indexOf("codesign") < log.indexOf("osascript"));
-    assert.ok(log.indexOf("osascript") < log.indexOf("ditto-backup"));
-    assert.ok(log.indexOf("ditto-backup") < log.indexOf("open"));
+    assert.ok(log.indexOf("codesign") < log.indexOf("ditto-stage"));
+    assert.ok(!log.includes("osascript"));
+    assert.ok(log.indexOf("ditto-stage") < log.indexOf("native-swap"));
+    assert.ok(log.indexOf("native-swap") < log.indexOf("open"));
     assert.match(
       readFileSync(
         path.join(root, "Applications/Farol.app/Contents/MacOS/Farol"),
@@ -344,108 +338,101 @@ test("isolated installation orders checks, quit, backup and launch", () => {
   });
 });
 
-test("isolated failed signature leaves the existing app untouched", () => {
+test("isolated failed signature leaves the slot empty", () => {
   isolatedInstall("bad-signature", (result, root, log) => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /signature verification failed/);
-    assert.equal(
-      readFileSync(path.join(root, "Applications/Farol.app/old"), "utf8"),
-      "old",
-    );
+    assert.ok(!existsSync(path.join(root, "Applications/Farol.app")));
     assert.ok(!log.includes("osascript"));
   });
 });
 
-test("isolated failed launch retains a recoverable predecessor", () => {
-  isolatedInstall("bad-launch", (result, _root, log) => {
+for (const scenario of ["swap-refused", "swap-unknown"]) {
+  test(`isolated ${scenario} never falls back to destructive placement`, () => {
+    isolatedInstall(scenario, (result, root, log) => {
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /native placement refused or unconfirmed/);
+      assert.ok(!existsSync(path.join(root, "Applications/Farol.app")));
+      assert.equal(log.split("native-swap").length - 1, 1);
+      assert.doesNotMatch(log, /open/);
+    });
+  });
+}
+
+test("isolated failed launch retains recovery evidence", () => {
+  isolatedInstall("bad-launch", (result, root, log) => {
     assert.notEqual(result.status, 0);
     const retained = result.stderr.match(/Recovery files retained at: (.+)/);
     assert.ok(retained, result.stderr);
-    assert.equal(
-      readFileSync(path.join(retained[1], "previous.app/old"), "utf8"),
-      "old",
-    );
-    assert.ok(log.includes("ditto-backup"));
+    assert.ok(existsSync(path.join(root, "Applications/Farol.app")));
+    assert.ok(!existsSync(path.join(retained[1], "previous.app")));
+    assert.ok(log.includes("native-swap"));
   });
 });
 
 test("isolated immediate startup exit is reported instead of installed and running", () => {
-  isolatedInstall("early-exit", (result, _root, log) => {
+  isolatedInstall("early-exit", (result, root, log) => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /exited before startup confirmation/);
     assert.doesNotMatch(result.stdout, /Installed and running/);
     const retained = result.stderr.match(/Recovery files retained at: (.+)/);
     assert.ok(retained, result.stderr);
-    assert.equal(
-      readFileSync(path.join(retained[1], "previous.app/old"), "utf8"),
-      "old",
-    );
+    assert.ok(existsSync(path.join(root, "Applications/Farol.app")));
+    assert.ok(!existsSync(path.join(retained[1], "previous.app")));
     assert.ok(log.includes("open"));
   });
 });
 
 test("isolated surviving sidecar cannot confirm an exited primary", () => {
-  isolatedInstall("primary-exits-sidecar", (result, _root, log) => {
+  isolatedInstall("primary-exits-sidecar", (result, root, log) => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /primary exited after startup confirmation/);
     assert.doesNotMatch(result.stdout, /Installed and running/);
     const retained = result.stderr.match(/Recovery files retained at: (.+)/);
     assert.ok(retained, result.stderr);
-    assert.equal(
-      readFileSync(path.join(retained[1], "previous.app/old"), "utf8"),
-      "old",
-    );
+    assert.ok(existsSync(path.join(root, "Applications/Farol.app")));
+    assert.ok(!existsSync(path.join(retained[1], "previous.app")));
     assert.ok(log.includes("open"));
   });
 });
 
 test("isolated recycled PID cannot reuse an older startup proof", () => {
-  isolatedInstall("reused-primary", (result, _root, _log) => {
+  isolatedInstall("reused-primary", (result, root, _log) => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /startup confirmation invalid/);
     const retained = result.stderr.match(/Recovery files retained at: (.+)/);
     assert.ok(retained, result.stderr);
-    assert.equal(
-      readFileSync(path.join(retained[1], "previous.app/old"), "utf8"),
-      "old",
-    );
+    assert.ok(existsSync(path.join(root, "Applications/Farol.app")));
+    assert.ok(!existsSync(path.join(retained[1], "previous.app")));
   });
 });
 
-test("isolated modal startup failure retains the working predecessor", () => {
-  isolatedInstall("modal-no-proof", (result, _root, log) => {
+test("isolated modal startup failure retains recovery evidence", () => {
+  isolatedInstall("modal-no-proof", (result, root, log) => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /startup unconfirmed/);
     assert.doesNotMatch(result.stdout, /Installed and running/);
     const retained = result.stderr.match(/Recovery files retained at: (.+)/);
     assert.ok(retained, result.stderr);
-    assert.equal(
-      readFileSync(path.join(retained[1], "previous.app/old"), "utf8"),
-      "old",
-    );
+    assert.ok(existsSync(path.join(root, "Applications/Farol.app")));
+    assert.ok(!existsSync(path.join(retained[1], "previous.app")));
     assert.ok(log.includes("open"));
   });
 });
 
-test("isolated mismatched startup proof retains the working predecessor", () => {
-  isolatedInstall("wrong-proof", (result, _root, log) => {
+test("isolated mismatched startup proof retains recovery evidence", () => {
+  isolatedInstall("wrong-proof", (result, root, log) => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /startup confirmation invalid/);
     const retained = result.stderr.match(/Recovery files retained at: (.+)/);
     assert.ok(retained, result.stderr);
-    assert.equal(
-      readFileSync(path.join(retained[1], "previous.app/old"), "utf8"),
-      "old",
-    );
+    assert.ok(existsSync(path.join(root, "Applications/Farol.app")));
+    assert.ok(!existsSync(path.join(retained[1], "previous.app")));
     assert.ok(log.includes("open"));
   });
 });
 
 for (const scenario of [
-  "private-only",
-  "snapshot",
-  "public-with-private-sidecars",
-  "helper",
   "dev",
   "process-title",
   "short-launcher",
@@ -457,8 +444,25 @@ for (const scenario of [
     isolatedInstall(scenario, (result, _root, log) => {
       assert.equal(result.status, 0, result.stderr);
       assert.doesNotMatch(result.stderr, /Traceback|Process inspection failed/);
-      assert.match(log, /osascript/);
-      assert.match(log, /ditto-backup/);
+      assert.doesNotMatch(log, /osascript/);
+      assert.match(log, /native-swap/);
+    });
+  });
+}
+
+for (const scenario of [
+  "private-only",
+  "snapshot",
+  "public-with-private-sidecars",
+  "helper",
+]) {
+  test(`isolated ${scenario} process refuses placement before launch`, () => {
+    isolatedInstall(scenario, (result, root, log) => {
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /Quit Farol with Command\+Q/);
+      assert.ok(!existsSync(path.join(root, "Applications/Farol.app")));
+      assert.match(log, new RegExp(`preinstall-process-${scenario}`));
+      assert.doesNotMatch(log, /native-swap|open|signal-/);
     });
   });
 }
@@ -470,6 +474,7 @@ for (const scenario of [
   "other-private-launch",
   "private-and-public",
   "stubborn",
+  "escalate",
   "quit-failure",
   "backend-remains",
   "bad-tree",
@@ -479,14 +484,11 @@ for (const scenario of [
   "permission-denied",
   "wrong-main-title",
 ]) {
-  test(`isolated ${scenario} preserves the existing app and recovery files`, () => {
+  test(`isolated ${scenario} preserves the empty slot and recovery files`, () => {
     isolatedInstall(scenario, (result, root, log) => {
       assert.notEqual(result.status, 0);
-      assert.equal(
-        readFileSync(path.join(root, "Applications/Farol.app/old"), "utf8"),
-        "old",
-      );
-      assert.doesNotMatch(log, /ditto-backup|ditto-install|open/);
+      assert.ok(!existsSync(path.join(root, "Applications/Farol.app")));
+      assert.doesNotMatch(log, /native-swap|open/);
       const retained = result.stderr.match(/Recovery files retained at: (.+)/);
       assert.ok(retained, result.stderr);
       assert.ok(
@@ -496,11 +498,23 @@ for (const scenario of [
   });
 }
 
-test("isolated stuck application escalates TERM to KILL before replacement", () => {
+test("isolated stuck application is refused without termination or replacement", () => {
   isolatedInstall("escalate", (result, _root, log) => {
-    assert.equal(result.status, 0, result.stderr);
-    assert.ok(log.indexOf("signal-15") < log.indexOf("signal-9"));
-    assert.ok(log.indexOf("signal-9") < log.indexOf("ditto-backup"));
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Quit Farol with Command\+Q/);
+    assert.doesNotMatch(log, /signal-|native-swap|open/);
+  });
+});
+
+test("isolated occupied slot is refused before download or replacement", () => {
+  isolatedInstall("occupied", (result, root, log) => {
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Farol is already installed/);
+    assert.equal(
+      readFileSync(path.join(root, "Applications/Farol.app/old"), "utf8"),
+      "old",
+    );
+    assert.equal(log, "");
   });
 });
 
@@ -510,12 +524,31 @@ function isolatedInstall(scenario, callback) {
     prepare(root, scenario === "bad-tree" ? "extra-file" : "valid");
     const prep = spawnSync("/bin/mkdir", [
       "-p",
-      path.join(root, "Applications/Farol.app"),
+      path.join(
+        root,
+        scenario === "occupied" ? "Applications/Farol.app" : "Applications",
+      ),
       path.join(root, "bin"),
     ]);
     assert.equal(prep.status, 0);
-    writeFileSync(path.join(root, "Applications/Farol.app/old"), "old");
-    writeFileSync(path.join(root, "running"), "yes");
+    if (scenario === "occupied")
+      writeFileSync(path.join(root, "Applications/Farol.app/old"), "old");
+    if (
+      [
+        "stubborn",
+        "quit-failure",
+        "backend-remains",
+        "unexpected-descendant",
+        "escalate",
+        "private-and-public",
+        "wrong-main-title",
+        "private-only",
+        "snapshot",
+        "public-with-private-sidecars",
+        "helper",
+      ].includes(scenario)
+    )
+      writeFileSync(path.join(root, "running"), "yes");
     const fake = String.raw`#!/usr/bin/env node
 const fs = require('fs'), path = require('path');
 const root = process.env.FIXTURE_ROOT, cmd = path.basename(process.argv[1]), args = process.argv.slice(2);
@@ -527,13 +560,14 @@ else if (cmd === 'codesign') { log('codesign'); if (args[0] === '-d') { console.
 else if (cmd === 'uuidgen') console.log('11111111-1111-4111-8111-111111111111');
 else if (cmd === 'ps') {
   if (process.env.SCENARIO === 'ps-failure') process.exit(1);
+  if (['private-only', 'snapshot', 'public-with-private-sidecars', 'helper'].includes(process.env.SCENARIO) && !fs.existsSync(path.join(root, 'launched'))) log('preinstall-process-' + process.env.SCENARIO);
   console.log('1 0 /sbin/launchd');
   if (fs.existsSync(path.join(root, 'running'))) {
     const app = path.join(root, 'Applications/Farol.app');
     const profile = path.join(root, 'Library/Application Support/io.github.legrch.farol/installed-updates');
     let base = ['private-and-public', 'private-only', 'helper', 'stubborn'].includes(process.env.SCENARIO) && !fs.existsSync(path.join(root, 'launched')) ? path.join(profile, 'a'.repeat(32), 'launch-Farol.app') : app;
-    console.log('41 1 ' + (process.env.SCENARIO === 'short-launcher' ? 'farol-backend' : base + '/Contents/Resources/app/farol-backend'));
     if (process.env.SCENARIO === 'snapshot' && !fs.existsSync(path.join(root, 'launched'))) base = path.join(profile, 'installed-execution/snapshot/Farol.app');
+    console.log('41 1 ' + (process.env.SCENARIO === 'short-launcher' ? 'farol-backend' : base + '/Contents/Resources/app/farol-backend'));
     const suffix = process.env.SCENARIO === 'backend-remains' && !fs.existsSync(path.join(root, 'launched')) ? '/Contents/Resources/app/farol-backend' : '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron';
     if (!fs.existsSync(path.join(root, 'primary-exited'))) console.log('42 41 ' + (['process-title', 'wrong-main-title'].includes(process.env.SCENARIO) ? 'Farol' : base + suffix));
     if (process.env.SCENARIO === 'private-and-public' && !fs.existsSync(path.join(root, 'launched'))) console.log('45 1 ' + app + '/Contents/Resources/app/farol-backend');
@@ -556,8 +590,16 @@ else if (cmd === 'ps') {
   if (process.env.SCENARIO === 'cursor-farol') console.log('44 1 Cursor Helper (Plugin): extension-host (user) farol [6-217]');
   if (process.env.SCENARIO === 'other-checkout') console.log('44 1 /Users/ac/code/other/farol/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron');
 }
-else if (cmd === 'osascript') { log('osascript'); const source = fs.readFileSync(0, 'utf8'); if (!source.includes('menu bar item "Farol"') || !source.includes('repeat with candidate in every application process') || !source.includes('if (unix id of targetProcess) is not targetPid') || process.env.SCENARIO === 'quit-failure') process.exit(1); if (!['stubborn', 'backend-remains', 'escalate', 'unexpected-descendant'].includes(process.env.SCENARIO)) fs.rmSync(path.join(root, 'running'), {force:true}); }
-else if (cmd === 'ditto') { log(args[1].endsWith('previous.app') ? 'ditto-backup' : 'ditto-install'); fs.cpSync(args[0], args[1], {recursive:true, verbatimSymlinks:true}); }
+else if (cmd === 'ditto') { log('ditto-stage'); fs.cpSync(args[0], args[1], {recursive:true, verbatimSymlinks:true}); }
+else if (cmd === 'swap') {
+  log('native-swap');
+  const staged = args[args.indexOf('--staged-app') + 1];
+  const installed = args[args.indexOf('--installed') + 1];
+  const evidence = args[args.indexOf('--evidence') + 1];
+  if (process.env.SCENARIO === 'swap-refused' || process.env.SCENARIO === 'swap-unknown') process.exit(1);
+  if (fs.existsSync(installed)) fs.renameSync(installed, path.join(evidence, 'previous.app'));
+  fs.renameSync(staged, installed);
+}
 else if (cmd === 'sleep') { if (process.env.SCENARIO === 'early-exit' && fs.existsSync(path.join(root, 'launched'))) fs.rmSync(path.join(root, 'running'), {force:true}); }
 else if (cmd === 'open') {
   log('open');
@@ -588,8 +630,8 @@ else process.exit(2);
       "PlistBuddy",
       "codesign",
       "ps",
-      "osascript",
       "ditto",
+      "swap",
       "open",
       "sleep",
       "uuidgen",
@@ -602,17 +644,10 @@ else process.exit(2);
       assert.equal(link.status, 0);
     }
     let copy = readFileSync(script, "utf8");
-    // Preserve coverage of the deferred implementation in a disposable fixture.
-    // The shipped entrypoint always stops at this guard, as tested above.
-    const hold =
-      'fail "Direct installation is temporarily unavailable. For a qualified existing installation, use Settings > General > Check for Updates. Otherwise, see the installation status guide."';
-    assert.ok(copy.includes(hold));
-    copy = copy.replace(hold, ":");
     for (const command of [
       "uname",
       "curl",
       "codesign",
-      "osascript",
       "ditto",
       "open",
       "uuidgen",
@@ -632,6 +667,12 @@ else process.exit(2);
       .replace(
         "/tmp/farol-release.XXXXXXXX",
         path.join(root, "release.XXXXXXXX"),
+      )
+      // The isolated script exercises ordering and startup proof; the real
+      // boot.Run adapter has its own native tests and is never mocked there.
+      .replace(
+        '"$backend" run-install-release-swap',
+        path.join(root, "bin/swap") + " run-install-release-swap",
       );
     if (
       [
@@ -692,43 +733,6 @@ try:`,
     return '/tmp/other/farol-backend'
 found = False
 try:`,
-      );
-    }
-    if (["escalate", "unexpected-descendant"].includes(scenario)) {
-      const nativeProc = [
-        "lib = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)",
-        "lib.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]",
-        "lib.proc_pidpath.restype = ctypes.c_int",
-      ].join("\n");
-      assert.ok(copy.includes(nativeProc));
-      copy = copy.replace(nativeProc, "lib = None");
-      copy = copy.replace(
-        "try:\n    rows = table()",
-        `def table():
-    if not os.path.exists(os.path.join(os.environ['FIXTURE_ROOT'], 'running')):
-        return {1: (0, 'S')}
-    return {101: (1, 'S'), 102: (101, 'S')}
-def identity(pid):
-    if pid == 101:
-        path = installed + '/Contents/Resources/app/farol-backend'
-    else:
-        path = '/tmp/unrelated' if os.environ['SCENARIO'] == 'unexpected-descendant' else installed + '/Contents/MacOS/Farol'
-    return {'pid': pid, 'path': path, 'start': 'fixed'}
-class TestProc:
-    def proc_pidpath(self, pid, buf, size):
-        value = os.fsencode(identity(pid)['path'])
-        buf.value = value
-        return len(value)
-lib = TestProc()
-def fake_kill(pid, sig):
-    with open(os.path.join(os.environ['FIXTURE_ROOT'], 'log'), 'a') as f:
-        f.write('signal-%s\\n' % int(sig))
-    if sig == signal.SIGKILL and pid == 101:
-        os.unlink(os.path.join(os.environ['FIXTURE_ROOT'], 'running'))
-os.kill = fake_kill
-time.sleep = lambda _: None
-try:
-    rows = table()`,
       );
     }
     if (scenario === "primary-exits-sidecar") {
