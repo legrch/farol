@@ -20,7 +20,7 @@ After connecting the plugin, find it in **Plugins**, open its **⋯** menu, choo
 
 - **Always ask:** the UI describes asking before reading or making changes.
 - **Allow read-only tools:** the UI describes reading without asking, but asking before making changes. Consider this when you want routine reads without prompts and confirmation for changes.
-- **Allow low-risk tools (Default):** the UI describes automatically approving low-risk tools; sensitive tools may be denied. The demonstration leaves this default selected.
+- **Allow low-risk tools (Default) — recommended for this guide:** keep this default to let ChatGPT automatically approve low-risk tools; sensitive tools may be denied. The demonstration leaves this setting unchanged.
 - **Allow all tools (Elevated risk):** the UI describes using tools without asking. This is optional and carries elevated risk. Choose it only if you understand and accept that broader behavior; it is not required by this guide.
 
 These are the setting descriptions, not a promise that every call is accepted or that every change produces a prompt. Account rules, tool classification and Farol's own controls still apply. Review your actual screen before making a choice. The tutorial displays the options without switching them.

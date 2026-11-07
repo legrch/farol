@@ -224,9 +224,9 @@
     },
     {
       "path": "docs/start/setup.md",
-      "bytes": 8027,
-      "sha256": "4f809c82d294ec3ebd744f93be5058d49f13ef68083b51e6ad5e2869c3042598",
-      "git_blob_sha1": "494c75caa7d04791aa39ab4a0a267afefc00fe2d"
+      "bytes": 8074,
+      "sha256": "6f937b5d1f0125e1c0c0161f6f3c4e054bf356df15fdfb5cb45b66a92e803f0c",
+      "git_blob_sha1": "7331896c1d3a4727bd39cbeaa1f7579288f7b66d"
     }
   ]
 }
