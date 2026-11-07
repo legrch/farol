@@ -284,14 +284,6 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
       "legacy-system-tool",
     ),
     launch(
-      "release.installer-bundle-identity",
-      "boot/installrelease.go",
-      "installBundleID",
-      "go.CommandContext",
-      '"/usr/libexec/PlistBuddy"',
-      "legacy-system-tool",
-    ),
-    launch(
       "release.installer-process-observation",
       "boot/installrelease.go",
       "installProductionStopped",
