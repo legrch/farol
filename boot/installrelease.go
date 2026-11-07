@@ -379,34 +379,6 @@ func classifyInstallProcessesWithResolver(output string, selfPID int, resolve fu
 	}
 	return nil
 }
-func resolveInstallExecutable(ctx context.Context, pid int) (string, error) {
-	const script = `import ctypes, os, sys
-pid = int(sys.argv[1])
-proc = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
-proc.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
-proc.proc_pidpath.restype = ctypes.c_int
-buf = ctypes.create_string_buffer(4096)
-if proc.proc_pidpath(pid, buf, len(buf)) > 0:
-    sys.stdout.buffer.write(buf.value)
-    sys.exit(0)
-try:
-    os.kill(pid, 0)
-except ProcessLookupError:
-    sys.exit(3)
-except PermissionError:
-    sys.exit(2)
-sys.exit(2)
-`
-	out, err := exec.CommandContext(ctx, "/usr/bin/python3", "-I", "-c", script, strconv.Itoa(pid)).Output()
-	if err == nil && len(out) > 0 && out[0] == '/' && len(out) < 4096 {
-		return string(out), nil
-	}
-	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == 3 {
-		return "", nil
-	}
-	return "", errors.New("INSTALL_PROCESS_OBSERVATION_UNKNOWN")
-}
 func verifyInstalledRelease(ctx context.Context, parent *os.File, path string, m installReleaseManifest) error {
 	app, err := openInstallDirectory(path)
 	if err != nil {
