@@ -4,31 +4,13 @@ Farol connects selected folders on your Mac to ChatGPT through a Secure MCP Tunn
 
 ## Watch the workflow
 
-![A read-only request travels from ChatGPT through an OpenAI Tunnel to Farol and a selected folder](../media/workflow/output/Farol-how-it-works-light.png)
-
-<details>
-<summary>Watch the 15-second read-only workflow</summary>
-
 ![Read a selected file and return its contents to ChatGPT](../media/workflow/output/Farol-how-it-works-light.gif)
 
-Close this section to hide the animation.
-
-</details>
-
-[Static read-only illustration](../media/workflow/output/Farol-how-it-works-light.png) · [Animation source and rebuild](../media/workflow/README.md)
-
-The example reads only from a selected workspace. Requested file contents and results return to ChatGPT. It illustrates the workflow with synthetic data, not a live session.
-
-<details>
-<summary>Watch a requested edit with Read & write access</summary>
+The example reads from a selected workspace and returns requested contents to ChatGPT. It illustrates the workflow with synthetic data, not a live session.
 
 ![A requested typo fix within a selected Read & write workspace](../media/workflow/output/Farol-read-and-edit-light.gif)
 
-[Static edit illustration](../media/workflow/output/Farol-read-and-edit-light.png)
-
-This separate example assumes the owner has already granted Read & write. Tool confirmations still follow ChatGPT's settings.
-
-</details>
+The edit example assumes an existing Read & write grant. Tool confirmations follow ChatGPT's settings. [Continue with the complete guide on the home page →](../../README.md#install-and-connect)
 
 ## A small example
 

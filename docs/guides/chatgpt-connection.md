@@ -12,7 +12,7 @@ ChatGPT may call this an **app**, **connector** or **plugin**. In these guides, 
 
 These external screens were checked against current references from 6 November 2026. Farol's button still says **Open ChatGPT Apps**, while ChatGPT uses Plugins; account-specific labels and availability may differ. Farol may describe No authentication as None or No additional sign-in. If the creation control, Developer mode or Tunnel is unavailable, stop and check workspace availability; a URL alone does not establish eligibility. Do not improvise a public server URL or substitute another environment's tunnel.
 
-[Watch the illustrated plugin flow](../media/onboarding/walkthrough.md#6-add-farol-to-chatgpt). It shows the permission choices without changing the default or creating any real credential.
+[Watch the illustrated plugin flow](../start/setup.md#6-add-farol-to-chatgpt). It shows the permission choices without changing the default or creating any real credential.
 
 ## Verify the attachment
 

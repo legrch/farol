@@ -28,7 +28,7 @@ Pipeline:
 
 ## Reader placement
 
-The repository README presents a static light-theme workflow preview with an optional collapsed animation. The product overview also starts with a static read-only preview, followed by optional collapsed read-only and edit animations. The Start index routes new readers to installation status and the connection guide. `walkthrough.md` contains the eight expanded written procedures, static alternatives and optional animations; the user guides explain everyday permissions and best practices. Keep the reproduction scripts and license notices beside these media assets. Do not autoplay eight GIFs on the main page or use the setup series as evidence of installation acceptance.
+The repository README is the complete reader journey: both workflow GIFs are visible, followed by requirements, current installation limits, all eight setup GIFs with written steps, a first-file exercise and best practices. The owner-selected presentation keeps animations inline rather than behind disclosure controls. [Focused connection reference](../../start/setup.md) repeats the setup steps with visible GIFs for readers arriving from a support link. The optional access step remains explicitly optional even though its animation is visible. Static PNGs remain source-package alternatives; they are not the default illustrations on these reader pages. Keep the reproduction scripts and license notices beside these media assets. The setup series is not installation acceptance evidence.
 
 ## Tutorials
 

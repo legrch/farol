@@ -14,9 +14,9 @@
     },
     {
       "path": "docs/media/onboarding/README.md",
-      "bytes": 9819,
-      "sha256": "dbe3b7747ff77ce59e67f766d2f7dcc2139e40159a33587872f4a2823d5b8487",
-      "git_blob_sha1": "02af6cc981fcf3e52dff14dc50821b0400522268"
+      "bytes": 9933,
+      "sha256": "bc544fbf122135a86ebba036c411040f1c0fc890cec1d09dada9164acc058b59",
+      "git_blob_sha1": "d6d4efc6a3b4eb9cc9b5d44d8bfa6d112e17bb00"
     },
     {
       "path": "docs/media/onboarding/THIRD_PARTY_NOTICES.md",
@@ -223,10 +223,10 @@
       "git_blob_sha1": "7ebbe7859329cc26481e4f5cc68e3239931656ae"
     },
     {
-      "path": "docs/media/onboarding/walkthrough.md",
-      "bytes": 9043,
-      "sha256": "cd7751447a0909e5345d68c636d643bba500689396e7c59884344cb506df7272",
-      "git_blob_sha1": "61fc0d875ac8b5d96394c0f33b49bdc234ce45c3"
+      "path": "docs/start/setup.md",
+      "bytes": 8074,
+      "sha256": "6f937b5d1f0125e1c0c0161f6f3c4e054bf356df15fdfb5cb45b66a92e803f0c",
+      "git_blob_sha1": "7331896c1d3a4727bd39cbeaa1f7579288f7b66d"
     }
   ]
 }
