@@ -14,7 +14,10 @@ var exitedInstallHelper = func(context.Context, int) bool { return true }
 
 func installProfileFixture(t *testing.T) (string, string, installReleaseManifest, installOperation) {
 	t.Helper()
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	profile := filepath.Join(root, "profile")
 	app := filepath.Join(root, "Farol.app")
 	operation := installOperation{
@@ -220,6 +223,36 @@ func TestInstallReleaseRetainedAdoptionRecord(t *testing.T) {
 	}
 }
 
+func TestInstallReleaseRejectsLinkedRetainedEvidence(t *testing.T) {
+	for _, name := range []string{"last-update.json", "journal.json", "slot-binding.json"} {
+		t.Run(name, func(t *testing.T) {
+			profile, app, candidate, operation := installProfileFixture(t)
+			file := filepath.Join(profile, "installed-updates", name)
+			if name != "last-update.json" {
+				file = filepath.Join(profile, "installed-updates", operation.ID, name)
+			}
+			if err := os.Link(file, filepath.Join(t.TempDir(), "second-link")); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := inspectInstallProfileWithHelper(context.Background(), profile, app, candidate, exitedInstallHelper); err == nil {
+				t.Fatal("hard-linked retained record admitted")
+			}
+		})
+	}
+}
+
+func TestInstallReleaseRejectsRedirectedProfileAncestor(t *testing.T) {
+	profile, app, candidate, _ := installProfileFixture(t)
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(filepath.Dir(profile), alias); err != nil {
+		t.Fatal(err)
+	}
+	redirected := filepath.Join(alias, filepath.Base(profile))
+	if _, err := inspectInstallProfileWithHelper(context.Background(), redirected, app, candidate, exitedInstallHelper); err == nil {
+		t.Fatal("redirected profile ancestor admitted")
+	}
+}
+
 func TestInstallReleaseRetainedProfileRejectsLiveHelper(t *testing.T) {
 	profile, app, candidate, _ := installProfileFixture(t)
 	file := filepath.Join(profile, "installed-updates", "last-update.json")
@@ -269,6 +302,8 @@ func TestInstallReleaseManifestRequiresStableBuildVersion(t *testing.T) {
 	}
 	check(true)
 	delete(valid, "buildVersion")
+	check(false)
+	valid["buildVersion"] = "1000000000"
 	check(false)
 	valid["buildVersion"] = "76"
 	valid["channel"] = "owner-beta"

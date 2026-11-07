@@ -101,6 +101,9 @@ func parseInstallVersion(version string) ([3]uint64, bool) {
 	return parts, true
 }
 func installBuildVersion(value string) bool {
+	if len(value) == 0 || len(value) > 9 {
+		return false
+	}
 	n, err := strconv.ParseUint(value, 10, 64)
 	return err == nil && n > 0 && strconv.FormatUint(n, 10) == value
 }
@@ -138,6 +141,10 @@ func installPrivateIdentity(path string) (string, error) {
 	if privateInstallDirectory(path) != nil {
 		return "", errors.New("INSTALL_FRESH_STATE_UNCONFIRMED")
 	}
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil || canonical != path {
+		return "", errors.New("INSTALL_FRESH_STATE_UNCONFIRMED")
+	}
 	info, err := os.Lstat(path)
 	if err != nil {
 		return "", errors.New("INSTALL_FRESH_STATE_UNCONFIRMED")
@@ -154,7 +161,7 @@ func installPrivateFile(path string, maximum int64) ([]byte, error) {
 		return nil, errors.New("INSTALL_FRESH_STATE_UNCONFIRMED")
 	}
 	st, ok := before.Sys().(*syscall.Stat_t)
-	if !ok || st.Uid != uint32(os.Geteuid()) {
+	if !ok || st.Uid != uint32(os.Geteuid()) || st.Nlink != 1 {
 		return nil, errors.New("INSTALL_FRESH_STATE_UNCONFIRMED")
 	}
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
@@ -167,8 +174,22 @@ func installPrivateFile(path string, maximum int64) ([]byte, error) {
 	if err != nil || !os.SameFile(before, opened) {
 		return nil, errors.New("INSTALL_FRESH_STATE_UNCONFIRMED")
 	}
+	openedStat, openedOK := opened.Sys().(*syscall.Stat_t)
+	if !openedOK || openedStat.Nlink != 1 {
+		return nil, errors.New("INSTALL_FRESH_STATE_UNCONFIRMED")
+	}
 	data, err := io.ReadAll(io.LimitReader(f, maximum+1))
 	if err != nil || int64(len(data)) > maximum {
+		return nil, errors.New("INSTALL_FRESH_STATE_UNCONFIRMED")
+	}
+	after, afterErr := f.Stat()
+	named, namedErr := os.Lstat(path)
+	if afterErr != nil || namedErr != nil || !os.SameFile(before, after) || !os.SameFile(before, named) || after.Size() != before.Size() || named.Size() != before.Size() {
+		return nil, errors.New("INSTALL_FRESH_STATE_UNCONFIRMED")
+	}
+	afterStat, afterOK := after.Sys().(*syscall.Stat_t)
+	namedStat, namedOK := named.Sys().(*syscall.Stat_t)
+	if !afterOK || !namedOK || afterStat.Nlink != 1 || namedStat.Nlink != 1 || afterStat.Uid != st.Uid || namedStat.Uid != st.Uid || after.Mode() != before.Mode() || named.Mode() != before.Mode() {
 		return nil, errors.New("INSTALL_FRESH_STATE_UNCONFIRMED")
 	}
 	return data, nil
