@@ -13,8 +13,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "vitest";
 
 const script = fileURLToPath(
-  new URL("../../scripts/install-release.sh", import.meta.url),
+  new URL("../../scripts/install.sh", import.meta.url),
 );
+test("the old install-release URL and short install URL serve identical installers", () => {
+  const oldScript = fileURLToPath(
+    new URL("../../scripts/install-release.sh", import.meta.url),
+  );
+  assert.equal(readFileSync(script, "utf8"), readFileSync(oldScript, "utf8"));
+});
 test("installer never removes the active app", () => {
   const source = readFileSync(script, "utf8");
   assert.doesNotMatch(source, /\/bin\/rm\s+-rf\s+"\$installed"/);

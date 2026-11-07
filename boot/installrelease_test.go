@@ -68,18 +68,20 @@ func TestInstallReleaseCustodyRefusesSymlinkAndChangedMode(t *testing.T) {
 	}
 }
 
-func TestInstallReleaseEmptySlotRequiresAbsentProfileAndReceipts(t *testing.T) {
+func TestInstallReleaseEmptySlotRequiresConfirmedProfileAndNoSidecars(t *testing.T) {
 	root := t.TempDir()
 	profile := filepath.Join(root, "profile")
 	app := filepath.Join(root, "Farol.app")
-	if err := installFreshProfileAbsent(profile, app); err != nil {
+	candidate := installReleaseManifest{Version: "0.5.20", BuildVersion: "76"}
+	state, err := inspectInstallProfile(context.Background(), profile, app, candidate)
+	if err != nil || !state.fresh {
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(profile, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := installFreshProfileAbsent(profile, app); err == nil {
-		t.Fatal("empty slot with existing profile admitted")
+	if _, err := inspectInstallProfile(context.Background(), profile, app, candidate); err == nil {
+		t.Fatal("unconfirmed existing profile admitted")
 	}
 	if err := os.Remove(profile); err != nil {
 		t.Fatal(err)
@@ -87,7 +89,7 @@ func TestInstallReleaseEmptySlotRequiresAbsentProfileAndReceipts(t *testing.T) {
 	if err := os.WriteFile(app+".receipt.json", []byte("{}"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := installFreshProfileAbsent(profile, app); err == nil {
+	if _, err := inspectInstallProfile(context.Background(), profile, app, candidate); err == nil {
 		t.Fatal("empty slot with existing receipt admitted")
 	}
 }

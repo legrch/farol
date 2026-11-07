@@ -4,7 +4,7 @@
 
 Follow this guide from an accepted, running Farol installation. You will sign in, choose a folder, connect this Mac through a tunnel, and add Farol in ChatGPT. Finish by testing the connection, then try your first file request.
 
-> **New to Farol?** Start with [Installation and requirements](installation.md). Public downloads do not yet have a qualified first-install procedure. These steps begin inside a running app; they do not install Farol.
+> **New to Farol?** Start with [Installation and requirements](installation.md). The installer handles a bounded empty-slot path; these steps begin inside a running app and do not install Farol.
 
 The eight animations below recreate the UI with synthetic data. They are not screen recordings or live setup evidence. Screens and account-specific choices may differ. Every action is also explained in text.
 

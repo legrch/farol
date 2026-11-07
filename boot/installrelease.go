@@ -29,7 +29,7 @@ import (
 // bootstrap namespace attempt; it never starts a GUI or repairs update records.
 type installReleaseInput struct{ staged, manifest, installed, evidence string }
 type installReleaseManifest struct {
-	Schema, Repository, Version, Platform, Arch, ArtifactSha256, BuildID string
+	Schema, Repository, Version, BuildVersion, Platform, Arch, ArtifactSha256, BuildID string
 }
 type installReleaseRecord struct {
 	Schema, ID, Phase, Version, BuildID, Digest string
@@ -154,7 +154,8 @@ func installReleaseSwap(ctx context.Context, in installReleaseInput, out io.Writ
 		return err
 	}
 	profileRoot := filepath.Join(account.HomeDir, "Library", "Application Support", "io.github.legrch.farol")
-	if err = installFreshProfileAbsent(profileRoot, in.installed); err != nil {
+	profileState, err := inspectInstallProfile(ctx, profileRoot, in.installed, m)
+	if err != nil {
 		return err
 	}
 	if err := installProductionStopped(ctx); err != nil {
@@ -176,7 +177,7 @@ func installReleaseSwap(ctx context.Context, in installReleaseInput, out io.Writ
 		if e := installProductionStopped(ctx); e != nil {
 			return refuse(e)
 		}
-		if e := installFreshProfileAbsent(profileRoot, in.installed); e != nil {
+		if e := recheckInstallProfile(ctx, profileRoot, in.installed, m, profileState); e != nil {
 			return refuse(e)
 		}
 		if e := verifyStage(ctx); e != nil {
@@ -273,12 +274,14 @@ func readInstallManifest(path string) (installReleaseManifest, error) {
 		Schema         string `json:"schema"`
 		Repository     string `json:"repository"`
 		Version        string `json:"version"`
+		BuildVersion   string `json:"buildVersion"`
+		Channel        string `json:"channel"`
 		Platform       string `json:"platform"`
 		Arch           string `json:"arch"`
 		ArtifactSha256 string `json:"artifactSha256"`
 		BuildID        string `json:"buildId"`
 	}
-	if json.Unmarshal(b, &raw) != nil || raw.Schema != "farol.github-release/1" || raw.Repository != "legrch/farol" || raw.Platform != "darwin" || raw.Arch != "arm64" || len(raw.ArtifactSha256) != 64 || len(raw.BuildID) != 64 || raw.Version == "" {
+	if json.Unmarshal(b, &raw) != nil || raw.Schema != "farol.github-release/1" || raw.Repository != "legrch/farol" || raw.Platform != "darwin" || raw.Arch != "arm64" || raw.Channel != "stable" || len(raw.ArtifactSha256) != 64 || len(raw.BuildID) != 64 || !installStableVersion(raw.Version) || !installBuildVersion(raw.BuildVersion) {
 		return m, errors.New("INSTALL_MANIFEST_INVALID")
 	}
 	for _, h := range []string{raw.ArtifactSha256, raw.BuildID} {
@@ -286,7 +289,7 @@ func readInstallManifest(path string) (installReleaseManifest, error) {
 			return m, errors.New("INSTALL_MANIFEST_INVALID")
 		}
 	}
-	m = installReleaseManifest{raw.Schema, raw.Repository, raw.Version, raw.Platform, raw.Arch, raw.ArtifactSha256, raw.BuildID}
+	m = installReleaseManifest{raw.Schema, raw.Repository, raw.Version, raw.BuildVersion, raw.Platform, raw.Arch, raw.ArtifactSha256, raw.BuildID}
 	return m, nil
 }
 func installSignatures(ctx context.Context, app string) error {
@@ -317,15 +320,6 @@ func installEmptySlotIdentity(path string) error {
 		return errors.New("INSTALL_SLOT_UNAVAILABLE")
 	}
 	return errors.New("INSTALL_OCCUPIED_SLOT_UNSUPPORTED")
-}
-func installFreshProfileAbsent(profile, installed string) error {
-	for _, path := range []string{profile, installed + ".receipt.json", installed + ".repair.json", filepath.Join(filepath.Dir(installed), ".farol-closed-repair.json")} {
-		_, err := os.Lstat(path)
-		if !errors.Is(err, os.ErrNotExist) {
-			return errors.New("INSTALL_FRESH_STATE_UNCONFIRMED")
-		}
-	}
-	return nil
 }
 
 // A current primary is refused here. This inventory is conservative: an
