@@ -33,6 +33,7 @@
     --mark: #ffffff;
     --dock: #2b2f3c;
     --desk: #20232d;
+    --shade: rgba(12, 14, 20, 0.62);
   }
   [data-theme="light"] {
     --bg: #f4f3f9;
@@ -55,6 +56,7 @@
     --mark: #15131f;
     --dock: #e4e2ee;
     --desk: #ebe9f3;
+    --shade: rgba(60, 56, 78, 0.38);
   }
   * {
     box-sizing: border-box;
@@ -408,6 +410,7 @@
   <script>
     const params = new URLSearchParams(location.search);
     document.documentElement.dataset.theme = params.get("theme") || "dark";
+    if (params.get("wide")) document.documentElement.classList.add("wide");
     const stage = document.getElementById("stage");
     const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
     const seg = (t, a, b) => clamp((t - a) / (b - a));
@@ -799,5 +802,6 @@
     if (params.get("scene"))
       draw(params.get("scene"), Number(params.get("t") || 0));
   </script>
+  <script src="flows.js"></script>
   <script src="guide.js"></script>
 </body>

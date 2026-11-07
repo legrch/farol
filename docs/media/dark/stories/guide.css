@@ -522,3 +522,397 @@
 .foot > :only-child {
   margin-left: auto;
 }
+/* Guides use a slightly taller stage so whole service pages fit at reading size. */
+html.wide,
+html.wide body {
+  width: 880px;
+  height: 605px;
+}
+.window.g {
+  width: 844px;
+  height: 536px;
+  font-size: 13.5px;
+}
+.g .side {
+  width: 136px;
+  padding: 10px 8px;
+}
+.content {
+  left: 136px;
+  padding: 12px 26px;
+  overflow: hidden;
+}
+.tools {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 12px;
+}
+.tools kbd {
+  font: 11px Geist;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 4px;
+  margin-left: 4px;
+}
+.side .bottom {
+  white-space: nowrap;
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 10px;
+  font-size: 12px;
+}
+.side .bottom div {
+  padding: 3px 8px;
+}
+.dotok {
+  color: var(--good);
+}
+/* Service pages keep their real structure: side navigation, page header, modal over the page. */
+.site {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 34px;
+  bottom: 0;
+}
+.sn {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 150px;
+  padding: 10px 8px;
+  border-right: 1px solid var(--line);
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.sn h4 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 2px 8px 10px;
+}
+.sn > div {
+  padding: 3px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.sn > div.on {
+  background: var(--raised);
+  color: var(--text);
+  font-weight: 600;
+}
+.sn .label {
+  margin-top: 14px;
+  font-size: 11.5px;
+}
+.sn .org {
+  position: absolute;
+  left: 8px;
+  bottom: 10px;
+}
+.sm {
+  position: absolute;
+  left: 150px;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  padding: 14px 24px;
+  overflow: hidden;
+}
+.tabs {
+  display: flex;
+  gap: 16px;
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+}
+.tabs b {
+  color: var(--text);
+  font-weight: 600;
+}
+.searchbox {
+  width: 210px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px 11px;
+  color: var(--muted);
+  background: var(--raised);
+}
+.headtools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  position: relative;
+}
+.shade {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: var(--shade);
+}
+.modal {
+  z-index: 3;
+  top: 10px;
+  bottom: 10px;
+  width: 560px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.modal .in,
+.modal .sel {
+  background: var(--raised);
+}
+.modal.short {
+  top: 60px;
+  bottom: auto;
+  height: 380px;
+}
+.fd {
+  margin-bottom: 8px;
+}
+.in {
+  min-height: 30px;
+  padding: 4px 10px;
+}
+.fd small {
+  font-size: 11.5px;
+}
+.iconline {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.iconline b {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+}
+.conn {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.adv {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 11px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.warnline {
+  border: 1px solid var(--signal);
+  color: var(--signal);
+  border-radius: 8px;
+  padding: 4px 11px;
+  margin-bottom: 6px;
+  font-size: 12.5px;
+}
+.riskbox {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.riskbox strong {
+  display: block;
+  color: var(--text);
+  font-weight: 500;
+  font-size: 12.5px;
+}
+.riskbox i {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin-top: 2px;
+  border: 1px solid var(--muted);
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  font-style: normal;
+  font-size: 11px;
+  color: var(--accent-ink);
+}
+.riskbox i.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.perm {
+  padding: 5px 2px;
+}
+.count {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 6px;
+}
+.toast {
+  position: absolute;
+  z-index: 3;
+  right: 24px;
+  top: 58px;
+  padding: 6px 14px;
+  border: 1px solid var(--good);
+  border-radius: 9px;
+  background: var(--raised);
+  font-weight: 500;
+}
+.appico {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+}
+.pluginrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+}
+.pluginrow .grow {
+  flex: 1;
+  color: var(--muted);
+}
+.pluginrow strong {
+  display: block;
+  color: var(--text);
+  font-weight: 600;
+}
+.crumbs {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+.permrow2 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+}
+.permrow2 span {
+  color: var(--muted);
+  display: block;
+  font-size: 12px;
+}
+.permrow2 strong {
+  font-weight: 600;
+}
+.about div {
+  display: flex;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+}
+.about span {
+  width: 180px;
+  color: var(--muted);
+}
+.opan {
+  position: absolute;
+  z-index: 3;
+  left: 130px;
+  top: 50px;
+  width: 560px;
+  height: 330px;
+  background: var(--panel);
+  border: 1px solid var(--muted);
+  border-radius: 11px;
+}
+.opan .oh {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+}
+.opan .oh span {
+  color: var(--muted);
+  font-weight: 400;
+}
+.opan .ol {
+  position: absolute;
+  left: 0;
+  top: 38px;
+  bottom: 50px;
+  width: 140px;
+  padding: 8px;
+  border-right: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.opan .ol div {
+  padding: 3px 7px;
+}
+.opan .or {
+  position: absolute;
+  left: 140px;
+  right: 0;
+  top: 38px;
+  padding: 8px;
+}
+.opan .or div {
+  padding: 4px 9px;
+  border-radius: 5px;
+}
+.opan .or div.on {
+  background: var(--scan);
+}
+.opan .foot {
+  left: 14px;
+  right: 14px;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.small {
+  font-size: 12px;
+  color: var(--muted);
+}
+.walk {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
+.walk div {
+  flex: 1;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.walk div.on {
+  border-color: var(--text);
+  color: var(--text);
+}
+.walk strong {
+  display: block;
+  font-weight: 600;
+  color: var(--text);
+}
+.detail {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 12px;
+  margin-bottom: 10px;
+}
+.detail strong {
+  font-weight: 600;
+}
+.detail p {
+  margin: 3px 0 8px;
+}
