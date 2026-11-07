@@ -41,7 +41,6 @@ for kind, basename in [('read','Farol-how-it-works-light'), ('edit','Farol-read-
         frames.append(image.quantize(palette=palette,dither=Image.Dither.NONE))
     path=ROOT/'output'/f'{basename}.gif'
     frames[0].save(path,save_all=True,append_images=frames[1:],duration=50,loop=0,optimize=True,disposal=1)
-    scenes[3].save(path.with_suffix('.png'))
     gif=Image.open(path);duration=0
     for i in range(gif.n_frames):
         gif.seek(i);duration+=gif.info['duration']
@@ -49,6 +48,15 @@ for kind, basename in [('read','Farol-how-it-works-light'), ('edit','Farol-read-
     for i,scene in enumerate(scenes):
         sheet.paste(scene.resize((660,370)),((i%2)*660,(i//2)*370))
     sheet.save(ROOT/'output'/f'{basename}-contact-sheet.png')
+    decoded=Image.new('RGB',(1320,740),(246,245,249))
+    for stage,at in enumerate((0,4200,7700,11200)):
+        gif.seek(0);elapsed=0
+        for frame in range(gif.n_frames):
+            gif.seek(frame)
+            if elapsed+gif.info['duration']>at: break
+            elapsed+=gif.info['duration']
+        decoded.paste(gif.convert('RGB').resize((660,370)),((stage%2)*660,(stage//2)*370))
+    decoded.save(ROOT/'output'/f'{basename}-decoded-contact-sheet.png')
     manifest.append({'file':path.name,'sha256':hashlib.sha256(path.read_bytes()).hexdigest(),'bytes':path.stat().st_size,'dimensions':[W,H],'frames':gif.n_frames,'duration_ms':duration,'loop':0,'stages':4,'fps_before_frame_coalescing':FPS})
 (ROOT/'validation.json').write_text(json.dumps({'artifacts':manifest,'illustrative':True,'live_acceptance':False},indent=2)+'\n')
 print(json.dumps(manifest,indent=2))

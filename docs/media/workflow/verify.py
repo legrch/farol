@@ -24,7 +24,6 @@ for entry in manifest['artifacts']:
         duration+=image.info['duration']
     assert not ImageChops.difference(first,rgb).getbbox(), 'Loop endpoints differ'
     assert duration==entry['duration_ms']==15000
-    assert Image.open(path.with_suffix('.png')).size==(1320,740)
     checks.append({'file':path.name,'all_frames_decoded':image.n_frames,'duration_ms':duration,'minimum_mean_luminance':round(min_luma,2),'identical_loop_endpoints':True})
 assert (ROOT/'licenses/Liberation-Sans-OFL.txt').is_file()
 fonts=[]

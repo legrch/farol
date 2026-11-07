@@ -28,21 +28,6 @@ body {
     Arial,
     sans-serif;
 }
-.brand {
-  position: absolute;
-  left: 44px;
-  top: 30px;
-  font-size: 28px;
-  font-weight: 700;
-  height: 48px;
-  line-height: 48px;
-}
-.brand img {
-  width: 44px;
-  height: 44px;
-  vertical-align: middle;
-  margin-right: 12px;
-}
 .tag {
   position: absolute;
   right: 44px;
@@ -139,8 +124,10 @@ h1 {
   text-align: center;
 }
 .bridge img {
-  width: 112px;
-  height: 112px;
+  width: 80px;
+  height: 80px;
+  margin: 16px;
+  opacity: 0.65;
 }
 .bridge strong {
   display: block;

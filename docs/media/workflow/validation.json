@@ -2,8 +2,8 @@
   "artifacts": [
     {
       "file": "Farol-how-it-works-light.gif",
-      "sha256": "50c00213ad175e65d91817b2bec3a92ecd9efbe987d8f81985d2d27471c2a7d3",
-      "bytes": 311952,
+      "sha256": "03c9d0d339b7afbb3b490d8f21120ed999934df95743e8895d3b361680aaf1a1",
+      "bytes": 309876,
       "dimensions": [1320, 740],
       "frames": 113,
       "duration_ms": 15000,
@@ -13,8 +13,8 @@
     },
     {
       "file": "Farol-read-and-edit-light.gif",
-      "sha256": "0d2431ffc37d18dfc2a08e3c076e940e833468caca07d4b3f45cf5cda2770e01",
-      "bytes": 369805,
+      "sha256": "6f6f809728d18bc708ebefded6929002bb3a55b3ee56fe54678acebb9e2ddd38",
+      "bytes": 367459,
       "dimensions": [1320, 740],
       "frames": 113,
       "duration_ms": 15000,

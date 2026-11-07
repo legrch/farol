@@ -14,7 +14,7 @@ for kind in ('read', 'edit'):
         chat = ('<div class="response">✓ File updated<small>greeting.ts · Your requested change is saved.</small></div>' if edit else '<div class="response">✓ Project summary<small>Based on your selected files.</small></div>') if stage == 3 else ('<div class="bubble">Fix the typo in greeting.ts.</div>' if edit else '<div class="bubble">Explain this project.</div>') + '<div class="ghost"></div><div class="ghost second"></div>'
         file = '<div class="file">greeting.ts<div class="code' + (' done' if stage >= 2 else '') + '">return &quot;' + ('Hello' if stage >= 2 else 'Helo') + '&quot;;</div></div>' if edit else '<div class="file">README.md<small>src/ &nbsp; · &nbsp; docs/</small></div>'
         html = f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="workflow.css"></head><body>
-<div class="brand"><img src="farol-sunrise.png" alt="">Farol</div><div class="tag">{'READ + EDIT' if edit else 'HOW IT WORKS'}</div>
+<div class="tag">{'READ + EDIT' if edit else 'HOW IT WORKS'}</div>
 <h1>{title}</h1><div class="subtitle">{subtitle}</div>
 <div class="mac"></div><div class="mac-label">ON YOUR MAC</div>
 <div class="link a"></div><div class="link b"></div><div class="link-label a">OpenAI Tunnel</div><div class="link-label b">Access check</div>

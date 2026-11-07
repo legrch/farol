@@ -2,8 +2,8 @@
   "artifacts": [
     {
       "file": "Farol-01-sign-in-light.gif",
-      "bytes": 611523,
-      "sha256": "2a2fb28dfb13796027a4b7eb3b24777c8b24d5cfec3bc47ec25541bcc09b8486",
+      "bytes": 609355,
+      "sha256": "70b297dabe0be8f650e9909029533bb67315928ab8be51baf0ad9459d934712d",
       "width": 1320,
       "height": 900,
       "frames": 145,
@@ -64,7 +64,7 @@
           "at_ms": 15620,
           "target": "continue",
           "click": true,
-          "target_center": [1114.9794921875, 509.105859375]
+          "target_center": [1114.9794921875, 509.1]
         },
         {
           "scene": "s08",
@@ -77,8 +77,8 @@
     },
     {
       "file": "Farol-02-workspace-light.gif",
-      "bytes": 458509,
-      "sha256": "9531b248e967c70edf13a33c67594db130faea9ea79e9151e0b8f4f13f9f99d8",
+      "bytes": 458357,
+      "sha256": "39b3f7d9003611e92573175f7ba46e1c31101225ac73702876a848c7ecb1536d",
       "width": 1320,
       "height": 900,
       "frames": 100,
@@ -118,7 +118,7 @@
           "at_ms": 8360,
           "target": "access",
           "click": false,
-          "target_center": [837.513671875, 431.2279296875]
+          "target_center": [837.513671875, 431.56484375]
         },
         {
           "scene": "w05",
@@ -131,8 +131,8 @@
     },
     {
       "file": "Farol-02b-edits-and-commands-light.gif",
-      "bytes": 225902,
-      "sha256": "5e105bc3995a8d3e33b62537b67894c9e822669126996040405fa3d094dda2b9",
+      "bytes": 222680,
+      "sha256": "eb1b915070f4353a463d9be52b9c1723724e71384129efbe8f949cb3cea52517",
       "width": 1320,
       "height": 900,
       "frames": 71,
@@ -144,14 +144,14 @@
           "at_ms": 0,
           "target": "access",
           "click": true,
-          "target_center": [837.513671875, 431.2279296875]
+          "target_center": [837.513671875, 431.56484375]
         },
         {
           "scene": "a01",
           "at_ms": 2620,
           "target": "read-write-option",
           "click": true,
-          "target_center": [841.5, 504.08085937500005]
+          "target_center": [841.5, 504.07500000000005]
         },
         {
           "scene": "a02",
@@ -172,7 +172,7 @@
           "at_ms": 9340,
           "target": "commands",
           "click": true,
-          "target_center": [972.5, 430.2977559375]
+          "target_center": [972.5, 430.36126093750005]
         },
         {
           "scene": "a05",
@@ -192,8 +192,8 @@
     },
     {
       "file": "Farol-03-create-tunnel-light.gif",
-      "bytes": 609816,
-      "sha256": "0e179e670938e4bccfea030309aa2473e5409c57a7a9c2085ed692b23e8b059b",
+      "bytes": 605941,
+      "sha256": "1680a35512413865aeee82c44e59739cdcc79e985fc2baa8b4c066133f4cd4b6",
       "width": 1320,
       "height": 900,
       "frames": 184,
@@ -247,7 +247,7 @@
           "at_ms": 11100,
           "target": "selectworkspace",
           "click": true,
-          "target_center": [661.0, 659.4568359375]
+          "target_center": [661.0, 660.2341796875]
         },
         {
           "scene": "t07",
@@ -288,8 +288,8 @@
     },
     {
       "file": "Farol-04-restricted-key-light.gif",
-      "bytes": 654623,
-      "sha256": "76637f89e0a0abea24cc5b5ed9d2364302fb2157e05c80c2e4fc02a9a7a1520f",
+      "bytes": 653564,
+      "sha256": "956684a6f51518162e2ce5337dd89cdec93b6bbb2320a9fd6f674632240a6b2b",
       "width": 1320,
       "height": 900,
       "frames": 184,
@@ -329,7 +329,7 @@
           "at_ms": 11360,
           "target": "tunnelpermissions",
           "click": true,
-          "target_center": [855.62890625, 541.7029296875]
+          "target_center": [857.36328125, 542.0134765625]
         },
         {
           "scene": "k04",
@@ -343,7 +343,7 @@
           "at_ms": 15800,
           "target": "useperm",
           "click": true,
-          "target_center": [778.0, 604.1058593749999]
+          "target_center": [778.0, 604.0999999999999]
         },
         {
           "scene": "k06",
@@ -384,8 +384,8 @@
     },
     {
       "file": "Farol-05-connect-this-mac-light.gif",
-      "bytes": 260390,
-      "sha256": "c28ab6b989e2705199b1257145583e48282ebbb5cf48f90f8a38897e2a25a511",
+      "bytes": 259330,
+      "sha256": "3db29a011e4d63680b4a6bfb6cf740ad4e524e149f3d25fedcba3fb24e7eee79",
       "width": 1320,
       "height": 900,
       "frames": 69,
@@ -431,8 +431,8 @@
     },
     {
       "file": "Farol-06-add-plugin-light.gif",
-      "bytes": 804554,
-      "sha256": "2f736bf78f6c61b09986a2d798de78e0733989a40ab4f2c822b506a09d3ebfae",
+      "bytes": 803958,
+      "sha256": "8718542cd3bbeceadb5c060f99bd7c8f4a7349a591074cd0d214c734164bb86d",
       "width": 1320,
       "height": 900,
       "frames": 280,
@@ -444,14 +444,14 @@
           "at_ms": 0,
           "target": "pluginadd",
           "click": true,
-          "target_center": [1210.48779296875, 222.4279296875]
+          "target_center": [1212.36669921875, 222.76484375]
         },
         {
           "scene": "p01",
           "at_ms": 2020,
           "target": "custommcp",
           "click": true,
-          "target_center": [1138.5, 353.28613281250006]
+          "target_center": [1138.5, 352.55859375000006]
         },
         {
           "scene": "p02",
@@ -521,7 +521,7 @@
           "at_ms": 28200,
           "target": "pluginsearch",
           "click": true,
-          "target_center": [1011.0, 223.42792968749998]
+          "target_center": [1011.0, 223.76484375]
         },
         {
           "scene": "p11",
@@ -535,7 +535,7 @@
           "at_ms": 32440,
           "target": "manageplugin",
           "click": true,
-          "target_center": [682.5, 439.31259765625]
+          "target_center": [682.5, 439.398779296875]
         },
         {
           "scene": "p13",
@@ -569,8 +569,8 @@
     },
     {
       "file": "Farol-07-test-connection-light.gif",
-      "bytes": 551624,
-      "sha256": "0a856caa17eac0167f2323096b27239d5b85834b85cd483a9a1d99deba92755a",
+      "bytes": 549164,
+      "sha256": "e3b2afaa7b56e854d0b8d052685967fdbb343be2d1cd047009b46f33506788b4",
       "width": 1320,
       "height": 900,
       "frames": 70,
@@ -610,7 +610,7 @@
           "at_ms": 9540,
           "target": "finish",
           "click": true,
-          "target_center": [1091.64501953125, 709.8068359375]
+          "target_center": [1091.64501953125, 709.8]
         },
         {
           "scene": "v05",

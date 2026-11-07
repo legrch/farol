@@ -44,8 +44,6 @@ def make(name,events,theme=''):
  for i in range(1,9):put(Image.blend(lastim,firstim,i/8),50)
  put(firstim,500,(1130,810))
  path=O/(name+'.gif');frames[0].save(path,save_all=True,append_images=frames[1:],duration=dur,loop=0,optimize=True,disposal=1)
- # Static accessible alternative uses the final ready screen.
- poster=annotate(imgs[events[-1][0]],None);poster.save(O/(name+'.png'))
  g=Image.open(path);length=0
  for i in range(g.n_frames):g.seek(i);length+=g.info['duration']
  data=path.read_bytes();entry={'file':path.name,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest(),'width':W,'height':H,'frames':g.n_frames,'duration_ms':length,'loop':g.info.get('loop'),'timeline':timeline}
@@ -61,12 +59,4 @@ test=[('v00','test',1800,True),('v01',None,900,False),('v02',None,1600,False),('
 manifest=[]
 for name,events in [('01-sign-in',signin),('02-workspace',workspace),('02b-edits-and-commands',access),('03-create-tunnel',tunnel),('04-restricted-key',key),('05-connect-this-mac',connect),('06-add-plugin',plugin),('07-test-connection',test)]:
  manifest.append(make('Farol-'+name+'-light',events))
-# One identical light asset placed on two GitHub-style page surrounds.
-png=openim('w04');canvas=Image.new('RGB',(1640,690),'white');d=ImageDraw.Draw(canvas);d.rectangle((820,0,1640,690),fill='#0d1117')
-d.text((40,27),'Light GitHub theme',font=font,fill='#24292f');d.text((860,27),'Dark GitHub theme',font=font,fill='#e6edf3')
-mini=png.resize((740,505),Image.Resampling.LANCZOS);canvas.paste(mini,(40,88));canvas.paste(mini,(860,88))
-f2=ImageFont.truetype(str(R/'source/LiberationSans-Regular.ttf'),17);d.text((40,622),'The same light GIF. No theme-specific version required.',font=f2,fill='#57606a');d.text((860,622),'The same light GIF. Its colors and content are unchanged.',font=f2,fill='#9198a1');canvas.save(O/'Farol-light-on-both-GitHub-themes.png')
 (R/'validation.json').write_text(json.dumps({'artifacts':manifest,'layout_issues':json.loads((R/'source/layout-checks.json').read_text())['issues'],'provenance':'Code-rendered UI recreation based on Farol source and inspected service forms. All accounts, IDs, keys, files and outcomes are synthetic. Provider, macOS picker, restricted-key permission summary and connection progress are illustrative; tunnel/key result layouts also use supplied reference captures. No live setup test or credential generation.','source_settings_blob':'0d31a9630e23edb1e62eb22f318aa3e35a45de75','source_shell_blob':'4e0acf3ef93b6f6dbb9351105568274f9d19a761','source_setup_gate_blob':'bbe12899ec6c87cd314a02732d81180e3bf6f986'},indent=2))
-
-# A static permissions reference lets readers inspect the choices without motion.
-openim("p14").save(O / "Farol-plugin-permissions-light.png")
