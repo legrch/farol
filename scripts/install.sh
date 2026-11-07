@@ -231,7 +231,7 @@ if [ -e "$installed" ] || [ -L "$installed" ]; then
   fail 'Farol is already installed. Use Check for Updates in the app; the installer accepts only an empty slot.'
 fi
 tmp=$(/usr/bin/mktemp -d "/tmp/farol-release.XXXXXXXX") || fail 'cannot create private temporary directory'
-retain=yes
+retain=no
 cleanup() {
   if [ "$retain" = yes ]; then
     printf 'Recovery files retained at: %s\n' "$tmp" >&2
@@ -435,6 +435,9 @@ check_stopped || fail 'Quit Farol with Command+Q, then run this installer again.
 # The extracted bundle is never launched as a GUI application.
 /usr/bin/ditto "$app" "$tmp/staged.app" || fail 'could not prepare staged application; installed app preserved'
 check_stopped || fail 'production process appeared; installed app preserved'
+# The next call may perform the one native namespace effect. Preserve this
+# private attempt directory on any refusal or unconfirmed result from it.
+retain=yes
 "$backend" run-install-release-swap \
   --staged-app "$tmp/staged.app" \
   --manifest "$tmp/farol-release.json" \

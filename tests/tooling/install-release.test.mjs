@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -350,6 +351,8 @@ test("isolated failed signature leaves the slot empty", () => {
     assert.match(result.stderr, /signature verification failed/);
     assert.ok(!existsSync(path.join(root, "Applications/Farol.app")));
     assert.ok(!log.includes("osascript"));
+    assert.doesNotMatch(result.stderr, /Recovery files retained at:/);
+    assert.ok(!readdirSync(root).some((name) => name.startsWith("release.")));
   });
 });
 
@@ -361,6 +364,7 @@ for (const scenario of ["swap-refused", "swap-unknown"]) {
       assert.ok(!existsSync(path.join(root, "Applications/Farol.app")));
       assert.equal(log.split("native-swap").length - 1, 1);
       assert.doesNotMatch(log, /open/);
+      assert.match(result.stderr, /Recovery files retained at:/);
     });
   });
 }
@@ -490,16 +494,13 @@ for (const scenario of [
   "permission-denied",
   "wrong-main-title",
 ]) {
-  test(`isolated ${scenario} preserves the empty slot and recovery files`, () => {
+  test(`isolated ${scenario} preserves the empty slot and cleans pre-effect files`, () => {
     isolatedInstall(scenario, (result, root, log) => {
       assert.notEqual(result.status, 0);
       assert.ok(!existsSync(path.join(root, "Applications/Farol.app")));
       assert.doesNotMatch(log, /native-swap|open/);
-      const retained = result.stderr.match(/Recovery files retained at: (.+)/);
-      assert.ok(retained, result.stderr);
-      assert.ok(
-        readFileSync(path.join(retained[1], "farol-release.json")).length > 0,
-      );
+      assert.doesNotMatch(result.stderr, /Recovery files retained at:/);
+      assert.ok(!readdirSync(root).some((name) => name.startsWith("release.")));
     });
   });
 }

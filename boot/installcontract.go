@@ -90,11 +90,11 @@ func installSavedOperation(raw []byte, operation installOperation) bool {
 	return valid && id == operation.ID
 }
 
-func installRetainedManifest(raw []byte, saved installSavedUpdate) bool {
+func installManifestValues(raw []byte, allowRetainedRepository bool) (map[string]string, bool) {
 	required := []string{"schema", "repository", "channel", "product", "bundleId", "version", "buildVersion", "sourceCommit", "sourceTreeDigest", "buildId", "artifactSha256", "archiveSha256", "archiveName", "archiveSize", "platform", "arch", "signing", "notarized", "sourceDirty"}
 	object, ok := installObject(raw, required, nil)
 	if !ok {
-		return false
+		return nil, false
 	}
 	values := make(map[string]string, len(required))
 	for _, key := range required {
@@ -103,25 +103,25 @@ func installRetainedManifest(raw []byte, saved installSavedUpdate) bool {
 		}
 		value, valid := installString(object, key)
 		if !valid {
-			return false
+			return nil, false
 		}
 		values[key] = value
 	}
 	var archiveSize int64
 	if json.Unmarshal(object["archiveSize"], &archiveSize) != nil || archiveSize < 1 || archiveSize > 2147483648 {
-		return false
+		return nil, false
 	}
 	notarized, valid := installBool(object, "notarized")
 	if !valid || notarized {
-		return false
+		return nil, false
 	}
 	sourceDirty, valid := installBool(object, "sourceDirty")
 	if !valid || sourceDirty {
-		return false
+		return nil, false
 	}
 	repository := values["repository"]
-	return values["schema"] == "farol.github-release/1" &&
-		(repository == "legrch/farol" || repository == "legrch/farol-releases") &&
+	valid = values["schema"] == "farol.github-release/1" &&
+		(repository == "legrch/farol" || (allowRetainedRepository && repository == "legrch/farol-releases")) &&
 		values["channel"] == "stable" && values["product"] == "Farol" &&
 		values["bundleId"] == "io.github.legrch.farol" &&
 		installStableVersion(values["version"]) &&
@@ -134,11 +134,42 @@ func installRetainedManifest(raw []byte, saved installSavedUpdate) bool {
 		values["archiveName"] == "Farol-"+values["version"]+"-darwin-arm64.zip" &&
 		!strings.Contains(values["archiveName"], "..") &&
 		values["platform"] == "darwin" && values["arch"] == "arm64" &&
-		values["signing"] == "unsigned" &&
+		values["signing"] == "unsigned"
+	return values, valid
+}
+
+func installRetainedManifest(raw []byte, saved installSavedUpdate) bool {
+	values, valid := installManifestValues(raw, true)
+	return valid &&
 		values["version"] == saved.Manifest.Version &&
 		values["buildVersion"] == saved.Manifest.BuildVersion &&
 		values["buildId"] == saved.Manifest.BuildID &&
 		values["artifactSha256"] == saved.Manifest.ArtifactSha256
+}
+
+func installAdoptedBaseline(raw []byte, profile string, candidate installReleaseManifest) bool {
+	object, ok := installObject(raw, []string{"schema", "slot", "userData", "manifest", "adoptedAt"}, nil)
+	if !ok {
+		return false
+	}
+	for key, expected := range map[string]string{"schema": "farol.adopted-baseline/1", "slot": "/Applications/Farol.app", "userData": profile} {
+		value, valid := installString(object, key)
+		if !valid || value != expected {
+			return false
+		}
+	}
+	adoptedAt, valid := installString(object, "adoptedAt")
+	if !valid || len(adoptedAt) > 64 {
+		return false
+	}
+	values, valid := installManifestValues(object["manifest"], false)
+	if !valid {
+		return false
+	}
+	if values["buildId"] == candidate.BuildID {
+		return values["version"] == candidate.Version && values["buildVersion"] == candidate.BuildVersion && values["artifactSha256"] == candidate.ArtifactSha256
+	}
+	return true
 }
 
 func installSavedReceipt(raw []byte, saved installSavedUpdate) bool {

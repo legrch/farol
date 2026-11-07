@@ -170,6 +170,56 @@ func TestInstallReleaseRejectsStartupIncompatibleRetainedRecords(t *testing.T) {
 	}
 }
 
+func TestInstallReleaseRetainedAdoptionRecord(t *testing.T) {
+	profile, app, candidate, _ := installProfileFixture(t)
+	root := filepath.Join(profile, "installed-updates")
+	savedBytes, err := os.ReadFile(filepath.Join(root, "last-update.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved map[string]any
+	if err := json.Unmarshal(savedBytes, &saved); err != nil {
+		t.Fatal(err)
+	}
+	adopted := map[string]any{
+		"schema": "farol.adopted-baseline/1", "slot": "/Applications/Farol.app",
+		"userData": profile, "adoptedAt": "2026-11-08T00:08:35.000Z",
+		"manifest": saved["manifest"],
+	}
+	file := filepath.Join(root, "adopted-baseline.json")
+	write := func() {
+		t.Helper()
+		data, err := json.Marshal(adopted)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write()
+	state, err := inspectInstallProfileWithHelper(context.Background(), profile, app, candidate, exitedInstallHelper)
+	if err != nil {
+		t.Fatalf("valid superseded adoption record refused: %v", err)
+	}
+	adopted["adoptedAt"] = "changed"
+	write()
+	if err := recheckInstallProfileWithHelper(context.Background(), profile, app, candidate, state, exitedInstallHelper); err == nil {
+		t.Fatal("changed adoption record admitted at final fence")
+	}
+	adopted["slot"] = "/tmp/foreign.app"
+	write()
+	if _, err := inspectInstallProfileWithHelper(context.Background(), profile, app, candidate, exitedInstallHelper); err == nil {
+		t.Fatal("foreign adoption record admitted")
+	}
+	adopted["slot"] = "/Applications/Farol.app"
+	delete(adopted["manifest"].(map[string]any), "sourceCommit")
+	write()
+	if _, err := inspectInstallProfileWithHelper(context.Background(), profile, app, candidate, exitedInstallHelper); err == nil {
+		t.Fatal("malformed adoption manifest admitted")
+	}
+}
+
 func TestInstallReleaseRetainedProfileRejectsLiveHelper(t *testing.T) {
 	profile, app, candidate, _ := installProfileFixture(t)
 	file := filepath.Join(profile, "installed-updates", "last-update.json")

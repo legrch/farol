@@ -274,6 +274,14 @@ func inspectInstallProfileWithHelper(ctx context.Context, profile, installed str
 	if !bytes.Equal(bindingBytes, append(expected, '\n')) {
 		return refuse()
 	}
+	adoptedBytes := []byte("absent")
+	adoptedPath := filepath.Join(root, "adopted-baseline.json")
+	if !installPathAbsent(adoptedPath) {
+		adoptedBytes, err = installPrivateFile(adoptedPath, 65536)
+		if err != nil || !installAdoptedBaseline(adoptedBytes, profile, candidate) {
+			return refuse()
+		}
+	}
 	for _, item := range []struct{ path, identity string }{{profile, profileID}, {root, rootID}, {opDir, opID}} {
 		again, err := installPrivateIdentity(item.path)
 		if err != nil || again != item.identity {
@@ -283,7 +291,7 @@ func inspectInstallProfileWithHelper(ctx context.Context, profile, installed str
 	// A second observation at the native fence must see the same selected
 	// directories and exact relevant records, not merely another valid profile.
 	fingerprint := sha256.New()
-	for _, item := range [][]byte{[]byte(profileID), []byte(rootID), []byte(opID), savedBytes, journalBytes, bindingBytes} {
+	for _, item := range [][]byte{[]byte(profileID), []byte(rootID), []byte(opID), savedBytes, journalBytes, bindingBytes, adoptedBytes} {
 		fingerprint.Write([]byte{0})
 		fingerprint.Write(item)
 	}
