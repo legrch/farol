@@ -4,7 +4,7 @@ import hashlib,json
 from PIL import Image,ImageStat
 ROOT=Path(__file__).resolve().parent
 reports=[]
-for name,count in [('validation.json',2),('setup-validation.json',8),('light-validation.json',2)]:
+for name,count in [('validation.json',3),('setup-validation.json',8),('light-validation.json',3)]:
  data=json.loads((ROOT/name).read_text());assert len(data['artifacts'])==count;dark=data['theme']=='dark'
  assert not data.get('layout_issues',[])
  for item in data['artifacts']:
@@ -26,7 +26,7 @@ def luminance(c):
  v=[int(c[i:i+2],16)/255 for i in (1,3,5)]
  return sum((x/12.92 if x<=.04045 else ((x+.055)/1.055)**2.4)*w for x,w in zip(v,(.2126,.7152,.0722)))
 pairs=[]
-for fg,bg in [('#f0f3ff','#141e32'),('#afbdd7','#141e32'),('#bba5ff','#0b1020'),('#85e0b6','#141e32'),('#ffffff','#6750b8')]:
+for fg,bg in [('#f2f4fb','#121829'),('#9aa6c2','#121829'),('#bba5ff','#0a0e1c'),('#6ee7b0','#121829'),('#ffc061','#121829'),('#14102a','#bba5ff'),('#1d1b29','#ffffff'),('#625d75','#ffffff'),('#5b43b5','#f4f3f9'),('#16764d','#ffffff'),('#ffffff','#5b43b5')]:
  low,high=sorted([luminance(fg),luminance(bg)]);ratio=(high+.05)/(low+.05);assert ratio>=4.5
  pairs.append({'foreground':fg,'background':bg,'ratio':round(ratio,2)})
 (ROOT/'audit.json').write_text(json.dumps({'artifacts':reports,'contrast_pairs':pairs,'scope':'Synthetic illustrations only; selected palette pairs, not a complete UI accessibility audit or live acceptance test.'},indent=2)+'\n')

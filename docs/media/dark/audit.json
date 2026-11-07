@@ -1,16 +1,22 @@
 {
   "artifacts": [
     {
-      "file": "Farol-how-it-works-dark.gif",
-      "frames": 117,
-      "duration_ms": 24000,
-      "maximum_mean_luminance": 27.36
+      "file": "Farol-ask-your-files-dark.gif",
+      "frames": 500,
+      "duration_ms": 20000,
+      "maximum_mean_luminance": 26.58
     },
     {
-      "file": "Farol-read-and-edit-dark.gif",
-      "frames": 132,
+      "file": "Farol-change-your-code-dark.gif",
+      "frames": 600,
       "duration_ms": 24000,
-      "maximum_mean_luminance": 26.32
+      "maximum_mean_luminance": 27.32
+    },
+    {
+      "file": "Farol-install-dark.gif",
+      "frames": 500,
+      "duration_ms": 20000,
+      "maximum_mean_luminance": 26.88
     },
     {
       "file": "Farol-01-sign-in-dark.gif",
@@ -61,43 +67,79 @@
       "maximum_mean_luminance": 26.29
     },
     {
-      "file": "Farol-how-it-works-light.gif",
-      "frames": 117,
-      "duration_ms": 24000,
-      "maximum_mean_luminance": 240.37
+      "file": "Farol-ask-your-files-light.gif",
+      "frames": 500,
+      "duration_ms": 20000,
+      "maximum_mean_luminance": 248.58
     },
     {
-      "file": "Farol-read-and-edit-light.gif",
-      "frames": 132,
+      "file": "Farol-change-your-code-light.gif",
+      "frames": 600,
       "duration_ms": 24000,
-      "maximum_mean_luminance": 240.84
+      "maximum_mean_luminance": 248.89
+    },
+    {
+      "file": "Farol-install-light.gif",
+      "frames": 500,
+      "duration_ms": 20000,
+      "maximum_mean_luminance": 246.55
     }
   ],
   "contrast_pairs": [
     {
-      "foreground": "#f0f3ff",
-      "background": "#141e32",
-      "ratio": 15.04
+      "foreground": "#f2f4fb",
+      "background": "#121829",
+      "ratio": 16.08
     },
     {
-      "foreground": "#afbdd7",
-      "background": "#141e32",
-      "ratio": 8.79
+      "foreground": "#9aa6c2",
+      "background": "#121829",
+      "ratio": 7.24
     },
     {
       "foreground": "#bba5ff",
-      "background": "#0b1020",
-      "ratio": 8.96
+      "background": "#0a0e1c",
+      "ratio": 9.1
     },
     {
-      "foreground": "#85e0b6",
-      "background": "#141e32",
-      "ratio": 10.57
+      "foreground": "#6ee7b0",
+      "background": "#121829",
+      "ratio": 11.55
+    },
+    {
+      "foreground": "#ffc061",
+      "background": "#121829",
+      "ratio": 10.91
+    },
+    {
+      "foreground": "#14102a",
+      "background": "#bba5ff",
+      "ratio": 8.74
+    },
+    {
+      "foreground": "#1d1b29",
+      "background": "#ffffff",
+      "ratio": 16.92
+    },
+    {
+      "foreground": "#625d75",
+      "background": "#ffffff",
+      "ratio": 6.28
+    },
+    {
+      "foreground": "#5b43b5",
+      "background": "#f4f3f9",
+      "ratio": 6.53
+    },
+    {
+      "foreground": "#16764d",
+      "background": "#ffffff",
+      "ratio": 5.63
     },
     {
       "foreground": "#ffffff",
-      "background": "#6750b8",
-      "ratio": 6.15
+      "background": "#5b43b5",
+      "ratio": 7.2
     }
   ],
   "scope": "Synthetic illustrations only; selected palette pairs, not a complete UI accessibility audit or live acceptance test."

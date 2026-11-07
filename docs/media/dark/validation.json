@@ -2,21 +2,30 @@
   "theme": "dark",
   "artifacts": [
     {
-      "file": "Farol-how-it-works-dark.gif",
-      "sha256": "4b636f9d60e5315f423cf00bf8e860c987c109e2b4438e06e833f526853edda2",
-      "bytes": 189991,
-      "dimensions": [1320, 820],
-      "duration_ms": 24000,
-      "stages": 6,
+      "file": "Farol-ask-your-files-dark.gif",
+      "sha256": "aea9a1d2a8e6a7d1efe61d9e499d29383597c178b2ee2c6c418f534f17d41603",
+      "bytes": 480828,
+      "dimensions": [1600, 1000],
+      "duration_ms": 20000,
+      "frames": 500,
       "illustrative": true
     },
     {
-      "file": "Farol-read-and-edit-dark.gif",
-      "sha256": "8617c9e5627378fb70b0a1e851b9f4be5514697f71e159ceb2b77d2f09dd56ab",
-      "bytes": 198716,
-      "dimensions": [1320, 820],
+      "file": "Farol-change-your-code-dark.gif",
+      "sha256": "34554afa5d1bea44cc9da65266106d646403c597109e02f461e1541c67e06195",
+      "bytes": 570626,
+      "dimensions": [1600, 1000],
       "duration_ms": 24000,
-      "stages": 6,
+      "frames": 600,
+      "illustrative": true
+    },
+    {
+      "file": "Farol-install-dark.gif",
+      "sha256": "1ac1b64e9eb3a4e56f77782a45c4dde4af7a2848c810841c7f8d6de1d93ca957",
+      "bytes": 759256,
+      "dimensions": [1600, 1000],
+      "duration_ms": 20000,
+      "frames": 500,
       "illustrative": true
     }
   ]

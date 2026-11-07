@@ -2,21 +2,30 @@
   "theme": "light",
   "artifacts": [
     {
-      "file": "Farol-how-it-works-light.gif",
-      "sha256": "3f728e6042e45460a268c29676bd68741e8423306c61d0e9e002f8f7dd1778df",
-      "bytes": 189953,
-      "dimensions": [1320, 820],
-      "duration_ms": 24000,
-      "stages": 6,
+      "file": "Farol-ask-your-files-light.gif",
+      "sha256": "46599d1e2931c043bc7a428b29aee722429f90b8bf3d3c32ddd18cb6e7e3a9e7",
+      "bytes": 488128,
+      "dimensions": [1600, 1000],
+      "duration_ms": 20000,
+      "frames": 500,
       "illustrative": true
     },
     {
-      "file": "Farol-read-and-edit-light.gif",
-      "sha256": "c0a73a09f0d80f4e7a3f119076574abfe7dcbad967dbab0e18c7976d78db9d57",
-      "bytes": 198662,
-      "dimensions": [1320, 820],
+      "file": "Farol-change-your-code-light.gif",
+      "sha256": "12ee797cdc1f70375be048ee336154a64bcae95b51683c62efe13b08125a4d01",
+      "bytes": 579566,
+      "dimensions": [1600, 1000],
       "duration_ms": 24000,
-      "stages": 6,
+      "frames": 600,
+      "illustrative": true
+    },
+    {
+      "file": "Farol-install-light.gif",
+      "sha256": "1d0af79218c43533062a86eba7098ff93bc7ca6f6033ea085f7ce68e1743c707",
+      "bytes": 821011,
+      "dimensions": [1600, 1000],
+      "duration_ms": 20000,
+      "frames": 500,
       "illustrative": true
     }
   ]

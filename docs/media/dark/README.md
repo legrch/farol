@@ -1,21 +1,34 @@
-# Dark illustration preview
+# Farol illustrations
 
-This optional series keeps the published light assets intact. The two workflow stories are new synthetic demonstrations: a typed question, a request traveling to the Mac, a selected file being read or edited, and a result returned to the conversation. The code example adds a small function through supported file editing with an existing Read & write grant. It is not an Agent-mode, autonomous-programming or live-provider acceptance claim.
+The README stories and the setup series are built from source in this directory. Everything is synthetic: no account, tunnel, real project, local grant or service is used during generation. The illustrations are not screen recordings, live acceptance or fresh-install evidence.
 
-The central mark is a flat monochrome reinterpretation of Farol's concentric light, drawn as vector-like geometry without a bitmap icon, blur or fading. Connector motion stays between the edges of the panels and the central node. The setup series preserves the existing steps, synthetic values and target coordinates, using a declaration-aware dark palette during HTML rendering. It is not a screenshot of every service's actual theme.
+## Stories
+
+`stories/scene.html` draws three deterministic scenes for a given time `t`, and `stories/render.mjs` captures every frame with headless Chromium and encodes GIFs with ffmpeg at 1600 × 1000, 25 fps, in both palettes.
+
+| Output                                    | Shows                                                                                                                                                                                |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Farol-ask-your-files-{dark,light}.gif`   | A typed question, the request reaching the Mac, files being read in a Read only folder, an answer with its sources.                                                                  |
+| `Farol-change-your-code-{dark,light}.gif` | A typed request, the code being read, new code added to a file, a new test file, a summary to review. It assumes an existing Read & write grant and shows no program being executed. |
+| `Farol-install-{dark,light}.gif`          | The install command in Terminal with its real output lines, the icon bouncing in the Dock, and the app opening on Setup.                                                             |
+
+The central mark is a flat monochrome reinterpretation of Farol's concentric light, drawn as SVG without a bitmap, blur or opacity. Only the Dock in the install story uses the real app icon. Fonts are Geist and Geist Mono from `design-lab/fonts/geist/` ([SIL OFL](../../../design-lab/fonts/geist/OFL.txt)).
+
+## Setup series
+
+`build-setup.py` copies the [onboarding package](../onboarding/README.md) to a disposable directory, enables `FAROL_MEDIA_THEME=dark` through `palette.py`, and writes eight dark GIFs with the same steps, values and click targets. The light GIFs stay in `../onboarding/output/`.
 
 ## Rebuild
 
-Use the same dependencies as the [light workflow pipeline](../workflow/README.md). The current stack is Python 3.14.7, Poppler 26.04.0 and the existing pinned Python requirements. On macOS Pango/Fontconfig must be discoverable; the current build uses `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib`.
+Stories need the repository's Node dependencies, ffmpeg and a Chromium build (`FAROL_CHROMIUM` overrides discovery). The setup series and verifier need Python with `requirements.txt` and Poppler/Pango; on macOS set `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib`.
 
 ```sh
-python docs/media/dark/build.py
-python docs/media/dark/build.py --light
+node docs/media/dark/stories/render.mjs
 python docs/media/dark/build-setup.py
 python docs/media/dark/preview.py
 python docs/media/dark/verify.py
 ```
 
-`build.py` renders matched light/dark versions of the two 24-second stories from retained drawing code and the existing licensed Liberation Sans fonts. `build-setup.py` creates disposable source copies, enables `FAROL_MEDIA_THEME=dark` only for their render, then writes eight separately named dark GIFs. It does not replace light GIFs or their validation files. The normal onboarding pipeline retains its light default. `preview.py` generates the focused light comparison page from the dark README, rebasing local links; regenerate it after editing the preview README.
+Pass `--theme=dark|light` or `--scene=read|edit|install` to `render.mjs` to rebuild part of a set, and `--sheet=DIR` to save frames for inspection outside the repository. PNG frames are never committed.
 
-The verifier checks hashes, dimensions, timing, loop metadata, every decoded frame's canvas/luminance and preserved setup click bounds, plus selected text/background contrast pairs. Full visual inspection is still required: these checks are not a full accessibility audit. Contact sheets are QA evidence, not standalone page illustrations. Source fonts retain their [SIL OFL notice](../workflow/licenses/Liberation-Sans-OFL.txt). No service, account, real project or local grant is used during generation.
+`preview.py` generates the light comparison page from the root README; rerun it after editing the README. `verify.py` checks hashes, dimensions, timing, loop metadata, every decoded frame's canvas and luminance, preserved setup click bounds, and selected text/background contrast pairs. It is not a full accessibility audit, so inspect the decoded GIFs too.

@@ -69,6 +69,6 @@ Earlier preview packages are not the publication source. Use this package, which
 
 ## Repository integration
 
-This package lives in `docs/media/onboarding/` alongside the separate workflow illustrations in `docs/media/workflow/`. Keep `source/`, `licenses/`, build/verification scripts, requirements, notices, output GIF/PNG files, and validation files. The generated `captures/` and HTML/CSS intermediates do not need to be committed. The `.gitignore` lists them.
+This package lives in `docs/media/onboarding/` alongside the separate story illustrations in `docs/media/dark/`. Keep `source/`, `licenses/`, build/verification scripts, requirements, notices, output GIF/PNG files, and validation files. The generated `captures/` and HTML/CSS intermediates do not need to be committed. The `.gitignore` lists them.
 
 Keep the README and guide language aligned with the current Read only default. Do not replace unrelated README content, change runtime behavior, create releases, or imply that live acceptance tests passed. No publication or push is performed by the build scripts.
