@@ -433,10 +433,6 @@ test("isolated mismatched startup proof retains recovery evidence", () => {
 });
 
 for (const scenario of [
-  "private-only",
-  "snapshot",
-  "public-with-private-sidecars",
-  "helper",
   "dev",
   "process-title",
   "short-launcher",
@@ -450,6 +446,23 @@ for (const scenario of [
       assert.doesNotMatch(result.stderr, /Traceback|Process inspection failed/);
       assert.doesNotMatch(log, /osascript/);
       assert.match(log, /native-swap/);
+    });
+  });
+}
+
+for (const scenario of [
+  "private-only",
+  "snapshot",
+  "public-with-private-sidecars",
+  "helper",
+]) {
+  test(`isolated ${scenario} process refuses placement before launch`, () => {
+    isolatedInstall(scenario, (result, root, log) => {
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /Quit Farol with Command\+Q/);
+      assert.ok(!existsSync(path.join(root, "Applications/Farol.app")));
+      assert.match(log, new RegExp(`preinstall-process-${scenario}`));
+      assert.doesNotMatch(log, /native-swap|open|signal-/);
     });
   });
 }
@@ -529,6 +542,10 @@ function isolatedInstall(scenario, callback) {
         "escalate",
         "private-and-public",
         "wrong-main-title",
+        "private-only",
+        "snapshot",
+        "public-with-private-sidecars",
+        "helper",
       ].includes(scenario)
     )
       writeFileSync(path.join(root, "running"), "yes");
@@ -543,13 +560,14 @@ else if (cmd === 'codesign') { log('codesign'); if (args[0] === '-d') { console.
 else if (cmd === 'uuidgen') console.log('11111111-1111-4111-8111-111111111111');
 else if (cmd === 'ps') {
   if (process.env.SCENARIO === 'ps-failure') process.exit(1);
+  if (['private-only', 'snapshot', 'public-with-private-sidecars', 'helper'].includes(process.env.SCENARIO) && !fs.existsSync(path.join(root, 'launched'))) log('preinstall-process-' + process.env.SCENARIO);
   console.log('1 0 /sbin/launchd');
   if (fs.existsSync(path.join(root, 'running'))) {
     const app = path.join(root, 'Applications/Farol.app');
     const profile = path.join(root, 'Library/Application Support/io.github.legrch.farol/installed-updates');
     let base = ['private-and-public', 'private-only', 'helper', 'stubborn'].includes(process.env.SCENARIO) && !fs.existsSync(path.join(root, 'launched')) ? path.join(profile, 'a'.repeat(32), 'launch-Farol.app') : app;
-    console.log('41 1 ' + (process.env.SCENARIO === 'short-launcher' ? 'farol-backend' : base + '/Contents/Resources/app/farol-backend'));
     if (process.env.SCENARIO === 'snapshot' && !fs.existsSync(path.join(root, 'launched'))) base = path.join(profile, 'installed-execution/snapshot/Farol.app');
+    console.log('41 1 ' + (process.env.SCENARIO === 'short-launcher' ? 'farol-backend' : base + '/Contents/Resources/app/farol-backend'));
     const suffix = process.env.SCENARIO === 'backend-remains' && !fs.existsSync(path.join(root, 'launched')) ? '/Contents/Resources/app/farol-backend' : '/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron';
     if (!fs.existsSync(path.join(root, 'primary-exited'))) console.log('42 41 ' + (['process-title', 'wrong-main-title'].includes(process.env.SCENARIO) ? 'Farol' : base + suffix));
     if (process.env.SCENARIO === 'private-and-public' && !fs.existsSync(path.join(root, 'launched'))) console.log('45 1 ' + app + '/Contents/Resources/app/farol-backend');

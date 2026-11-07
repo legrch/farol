@@ -120,6 +120,9 @@ func TestInstallReleaseRefusesOnlyProductionProcessInventory(t *testing.T) {
 		"/Applications/Farol.app/Contents/MacOS/Farol",
 		"/Applications/Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron",
 		"/Users/runner/Library/Application Support/io.github.legrch.farol/installed-updates/op/launch-Farol.app/Contents/MacOS/Farol",
+		"/Users/runner/Downloads/Farol.app/Contents/Resources/app/farol-backend",
+		"/Users/runner/Downloads/Farol.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron",
+		"/Users/runner/build/farol-backend",
 		"farol-backend",
 	} {
 		if err := classifyInstallProcesses("101 /usr/bin/login\n102 "+name+"\n", 42); err == nil {
@@ -128,6 +131,8 @@ func TestInstallReleaseRefusesOnlyProductionProcessInventory(t *testing.T) {
 	}
 	for _, name := range []string{
 		"/Applications/Farol Dev.app/Contents/MacOS/Farol Dev",
+		"/Applications/Farol Dev.app/Contents/Resources/app/farol-backend",
+		"/Applications/Farol Owner Preview.app/Contents/Resources/app/farol-backend",
 		"/Applications/Another.app/Contents/Frameworks/Electron.app/Contents/MacOS/Electron",
 	} {
 		if err := classifyInstallProcesses("101 /usr/bin/login\n102 "+name+"\n", 42); err != nil {

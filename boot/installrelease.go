@@ -373,7 +373,11 @@ func classifyInstallProcessesWithResolver(output string, selfPID int, resolve fu
 			}
 			name = resolved
 		}
-		if strings.Contains(name, "/Applications/Farol.app/") || strings.Contains(name, "/launch-Farol.app/") || strings.Contains(name, "/installed-execution/") || name == "farol-backend" || name == "Farol" {
+		if strings.Contains(name, "/Farol Dev.app/") || strings.Contains(name, "/Farol Owner Preview.app/") {
+			continue
+		}
+		lower := strings.ToLower(name)
+		if strings.Contains(lower, "/farol.app/") || strings.Contains(lower, "/launch-farol.app/") || strings.Contains(name, "/installed-execution/") || filepath.Base(name) == "farol-backend" || filepath.Base(name) == "Farol" {
 			return errors.New("INSTALL_PRODUCTION_STILL_RUNNING")
 		}
 	}
