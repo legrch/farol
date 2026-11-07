@@ -311,6 +311,10 @@ describe("desktop startup failure boundary", () => {
   describe("first-launch adoption failures reach the user", () => {
     const notices = [
       [
+        "UPDATE_INSTALLER_CUSTODY_UNCONFIRMED",
+        "Farol cannot confirm the previous installation result. Keep the installed app and saved installation files. Do not run the installer again until this result is reviewed.",
+      ],
+      [
         "UPDATE_ADOPTION_NETWORK_FAILURE",
         "Connect to the internet to verify Farol on first launch, then open Farol again.",
       ],

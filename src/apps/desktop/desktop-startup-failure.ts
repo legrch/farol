@@ -94,6 +94,14 @@ const USER_NOTICES: ReadonlyMap<
   Readonly<{ title: string; message: string }>
 > = new Map([
   [
+    "UPDATE_INSTALLER_CUSTODY_UNCONFIRMED",
+    {
+      title: "Farol installation needs review",
+      message:
+        "Farol cannot confirm the previous installation result. Keep the installed app and saved installation files. Do not run the installer again until this result is reviewed.",
+    },
+  ],
+  [
     "UPDATE_ADOPTION_NETWORK_FAILURE",
     {
       title: "Farol can't verify this copy yet",
