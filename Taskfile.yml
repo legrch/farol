@@ -74,6 +74,17 @@ tasks:
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/test-scopes.mjs --scope=fast {{.CLI_ARGS}}
 
+  vm:smoke:
+    desc: Bounded exact-release smoke in a dedicated macOS guest (hidden by default; --visible to observe)
+    cmds:
+      - node tooling/vm-smoke.mjs {{.CLI_ARGS}}
+
+  vm:test:
+    desc: Check VM smoke isolation, archive admission and bounded failure handling without a real VM
+    cmds:
+      - /usr/bin/python3 -B -m unittest discover -s tooling/vm-smoke -p 'test_*.py'
+      - node --test tooling/vm-smoke/inspect.test.mjs
+
   dev:
     # The owner's one development command: pick the declared toolchain, make
     # sure dependencies match the lock, build the clean committed React/Go
