@@ -33,6 +33,13 @@ function run(argv) {
       w.kCGWindowBounds.Width > 200 &&
       w.kCGWindowBounds.Height > 150,
   );
+  const menus = windows.filter(
+    (w) =>
+      owners.includes(w.kCGWindowOwnerPID) &&
+      w.kCGWindowLayer > 0 &&
+      w.kCGWindowBounds.Width > 100 &&
+      w.kCGWindowBounds.Height > 60,
+  );
   const front = $.NSWorkspace.sharedWorkspace.frontmostApplication;
   const root = "/Applications/" + identity.name + ".app";
   const foreground = Boolean(
@@ -40,5 +47,10 @@ function run(argv) {
     (front.bundleURL.path.js === root ||
       front.bundleURL.path.js.startsWith(root + "/Contents/")),
   );
-  return JSON.stringify({ pids: owners, windows: normal.length, foreground });
+  return JSON.stringify({
+    pids: owners,
+    windows: normal.length,
+    menus: menus.length,
+    foreground,
+  });
 }

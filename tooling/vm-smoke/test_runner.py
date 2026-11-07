@@ -12,7 +12,7 @@ spec = importlib.util.spec_from_file_location('vm_runner', Path(__file__).parent
 vm = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(vm)
 # Synthetic identity only: these checks never open a real desktop or profile.
-vm.IDENTITY = dict(name='TestProduct', bundleId='test.product', dataLeaf='test.product')
+vm.IDENTITY = dict(name='TestProduct', bundleId='test.product', dataLeaf='test.product', devDataLeaf='TestDev')
 
 
 class AdmissionTests(unittest.TestCase):
@@ -91,7 +91,7 @@ class AdmissionTests(unittest.TestCase):
     def test_cli_environment_and_deadline(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
-            (root / 'machines/pilot').mkdir(parents=True)
+            (root / 'machines/pilot/artifacts').mkdir(parents=True)
             executable = root / 'app/Contents/MacOS/terminal-mac'
             executable.parent.mkdir(parents=True)
             executable.write_text('test')
@@ -125,6 +125,65 @@ class AdmissionTests(unittest.TestCase):
             alias.symlink_to(archive)
             with self.assertRaisesRegex(vm.Refused, 'ASSET_FILE_INVALID'):
                 vm.verify(alias.absolute())
+
+    def test_dev_export_copies_only_tunnel_and_key(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            profile = root / 'Library/Application Support/TestDev'
+            (profile / 'farol-state').mkdir(parents=True)
+            key_dir = profile / 'farol-private/secure-mcp-connector'
+            key_dir.mkdir(parents=True)
+            key = key_dir / 'control-plane-api-key'
+            key.write_text('synthetic-test-key-no-real-secret')
+            key.chmod(0o600)
+            config = {'connectors': {'secureMcp': {'tunnelId': 'test-only'}},
+                      'computer': {'workspaces': ['/never-copy-this-host-folder']}, 'runtime': 'never-copy'}
+            (profile / 'farol-state/config.json').write_text(json.dumps(config))
+            stage = root / 'stage'
+            stage.mkdir()
+            with patch.object(vm.subprocess, 'check_output', return_value=''):
+                vm.export_dev_connection(stage, vm.IDENTITY, root)
+            self.assertEqual(json.loads((stage / 'dev-connection.json').read_text()),
+                             {'schema': 1, 'tunnelId': 'test-only'})
+            self.assertEqual((stage / 'dev-key').read_bytes(), key.read_bytes())
+            self.assertEqual((stage / 'dev-key').stat().st_mode & 0o777, 0o600)
+            self.assertEqual(set(x.name for x in stage.iterdir()), {'dev-key', 'dev-connection.json'})
+            with patch.object(vm.subprocess, 'check_output', return_value=str(profile)):
+                with self.assertRaisesRegex(vm.Refused, 'HOST_DEV_STILL_RUNNING'):
+                    vm.export_dev_connection(stage, vm.IDENTITY, root)
+
+    def test_transient_dev_payload_is_not_preserved_as_failed_evidence(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            for name in ('dev-key', 'dev-connection.json', 'receipt.json'):
+                (root / name).write_text('synthetic')
+            runner = object.__new__(vm.Runner)
+            runner.stage = root
+            runner.clear_dev_payload()
+            runner.clear_dev_payload()
+            self.assertEqual([p.name for p in root.iterdir()], ['receipt.json'])
+
+    def test_runtime_and_evidence_paths_cannot_target_host_product_profiles(self):
+        home = Path('/fake-home')
+        for leaf in (vm.IDENTITY['dataLeaf'], vm.IDENTITY['devDataLeaf']):
+            protected = home / 'Library/Application Support' / leaf
+            for target in (protected, protected / 'evidence/run', Path(str(protected).upper())):
+                with self.assertRaisesRegex(vm.Refused, 'HOST_PRODUCT_PROFILE_FORBIDDEN'):
+                    vm.refuse_host_profile_path(target, vm.IDENTITY, home)
+        vm.refuse_host_profile_path(home / 'Library/Application Support/test-machines', vm.IDENTITY, home)
+
+    def test_cold_helper_readiness_recovers_but_permission_denial_stops(self):
+        runner = object.__new__(vm.Runner)
+        runner.deadline = vm.time.monotonic() + 30
+        ready = {'accessibility': 'true', 'screenRecording': 'true'}
+        with patch.object(runner, 'action', side_effect=[vm.Refused('GUEST_ACTION_FAILED:action'), ready]) as action:
+            with patch.object(vm.time, 'sleep'):
+                self.assertEqual(runner.wait_guest_ready(), ready)
+            self.assertEqual(action.call_count, 2)
+        with patch.object(runner, 'action', return_value={'accessibility': 'false', 'screenRecording': 'true'}) as action:
+            with self.assertRaisesRegex(vm.Refused, 'GUEST_PERMISSIONS_MISSING'):
+                runner.wait_guest_ready()
+            self.assertEqual(action.call_count, 1)
 
     def test_expired_deadline_refuses_further_actions(self):
         runner = object.__new__(vm.Runner)
