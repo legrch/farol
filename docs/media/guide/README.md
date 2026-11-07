@@ -2,7 +2,7 @@
 
 Every GIF on the home page is drawn from source in `stories/`. Everything is synthetic: no account, tunnel, real project, local grant or service is used during generation. The illustrations are UI recreations, not screen recordings, live acceptance or fresh-install evidence. Service screens are recreations and can differ from the current services.
 
-`stories/scene.html` draws the three stories (ask, change code, install) for a given time `t`. `stories/flows.js` holds the setup flows, whose page structure follows the storyboard made from the real screens: Farol's rail, OpenAI's settings navigation, ChatGPT's Customize and Settings pages and modals over the page, in our palette (`guide.css`). `stories/guide.js` plays them: one stable window with no camera movement, a cursor gliding to the target, an outline on the target, and the instruction under the window. `stories/render.mjs` captures every frame with headless Chromium and encodes GIFs with ffmpeg, 1600 pixels wide at 25 fps, in both palettes.
+`stories/scene.html` draws the three stories (ask, change code, install) for a given time `t`. `stories/flows.js` holds the setup flows, whose page structure follows the storyboard made from the real screens: Farol's rail, OpenAI's settings navigation, ChatGPT's Customize and Settings pages and modals over the page, in our palette (`guide.css`). `stories/guide.js` plays them: one stable window with no camera movement, a cursor gliding to the target, an outline on the target, and the instruction under the window. `stories/render.mjs` captures every frame with headless Chromium and encodes GIFs with ffmpeg, 1600 pixels wide at 25 fps.
 
 | Output                                                       | Shows                                                                                                                                  |
 | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
@@ -20,11 +20,10 @@ The central mark is a flat monochrome reinterpretation of Farol's concentric lig
 You need the repository's Node dependencies, ffmpeg, Chromium (`FAROL_CHROMIUM` overrides discovery) and Python with Pillow for the verifier.
 
 ```sh
-node docs/media/dark/stories/render.mjs
-python docs/media/dark/preview.py
-python docs/media/dark/verify.py
+node docs/media/guide/stories/render.mjs
+python docs/media/guide/verify.py
 ```
 
-Pass `--theme=dark|light` or `--scene=NAME` to `render.mjs` to rebuild part of a set, and `--sheet=DIR` to save frames for inspection outside the repository. PNG frames are never committed.
+The home page uses the dark set. Pass `--theme=light` to `render.mjs` to rebuild the matched light palette (it writes `-light.gif` files and `light-validation.json`), `--scene=NAME` to rebuild one animation, and `--sheet=DIR` to save frames for inspection outside the repository. PNG frames are never committed.
 
-`preview.py` generates the light comparison page from the root README; rerun it after editing the README. `verify.py` checks hashes, dimensions, timing, loop metadata, every decoded frame's canvas and luminance, and selected text/background contrast pairs. It is not a full accessibility audit, so inspect the decoded GIFs too.
+`verify.py` checks hashes, dimensions, timing, loop metadata, every decoded frame's canvas and luminance, and selected text/background contrast pairs. It is not a full accessibility audit, so inspect the decoded GIFs too.

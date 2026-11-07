@@ -4,7 +4,7 @@ import hashlib,json
 from PIL import Image,ImageStat
 ROOT=Path(__file__).resolve().parent
 reports=[]
-for name,count in [('validation.json',13),('light-validation.json',13)]:
+for name,count in [(name,13) for name in ('validation.json','light-validation.json') if (ROOT/name).exists()]:
  data=json.loads((ROOT/name).read_text());assert len(data['artifacts'])==count;dark=data['theme']=='dark'
  assert not data.get('layout_issues',[])
  for item in data['artifacts']:

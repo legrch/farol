@@ -648,31 +648,24 @@ const mcpForm = ({
           empty: true,
         }) +
         `<div class="conn"><span>Connection</span><div class="seg"><span class="${tunnel ? "" : "on"}">Server URL</span><span id="ptype" class="${tunnel ? "on" : ""}">Tunnel</span></div></div>` +
-        `<div class="fd"><div class="in ${id ? "mono" : "empty"}" id="pid">${id ? TUNNEL : tunnel ? "tunnel_…" : "https://example.com/mcp"}</div></div>` +
+        `<div class="fd"><div class="in ${id ? "mono" : "empty"}" id="pid">${id ? TUNNEL : tunnel ? "tunnel_…" : "https://example.com/mcp"}</div>${tunnel ? `<div class="chips"><span id="pchip">Farol Demo</span><span>Other tunnel</span></div>` : ""}</div>` +
         `<div class="relative">${field("Authentication", `${auth ? "No authentication" : "OAuth"} ⌄`, { id: "pauth" })}${menu ? `<div class="menu" style="top:54px;left:0;right:0"><div>OAuth</div><div id="noauth">No authentication</div><div>OAuth or no authentication</div></div>` : ""}</div>` +
         (auth
           ? `<div class="warnline">△ Custom MCP servers introduce risk. Learn more</div><div class="riskbox"><i id="risk" class="${checked ? "on" : ""}">${checked ? "✓" : ""}</i><span><strong>I understand and want to continue</strong>Only connect to MCP servers you trust. An untrusted server may access or steal information shared through app use, or trick ChatGPT into using tools in unintended ways.</span></div>`
           : `<div class="adv"><strong>Advanced OAuth settings ›</strong><br>Review discovered OAuth settings, or enter them manually.</div>`),
-      auth
-        ? btn("Cancel") +
-            (checked
-              ? pri("Create as a plugin", "createp")
-              : off("Create as a plugin"))
-        : "",
+      `<span class="link">Read the guide</span>${auth ? `<span class="acts">${btn("Cancel")}${checked ? pri("Create as a plugin", "createp") : off("Create as a plugin")}</span>` : ""}`,
     ),
   );
 const connectDialog = (pending) =>
-  pluginHome(
-    false,
-    modal(
-      "Connect Farol",
-      `<p>ChatGPT may share relevant memories (if enabled) and chats with this app to support interactions with it. Farol’s use of this data is subject to their terms and privacy policy.</p>
-     <p>If you have <strong>Suggested prompts</strong> enabled, data from this app may be used to proactively provide helpful information or suggestions.</p>
-     <p>Information from this app may be used to improve our models if it is used to inform your conversations with ChatGPT and you have <strong>Improve the model for everyone</strong> enabled. You can disconnect Farol in settings to stop the access.</p>`,
-      btn("Cancel") +
-        (pending ? off("Connecting…") : pri("Connect Farol", "connectp")),
-      "short",
-    ),
+  pluginWin(
+    "chatgpt.com/plugins",
+    customize(false),
+    `${pluginHead(false)}${INTRO}<div class="tabs"><b>Public</b><span>Personal</span></div><h3>Popular</h3>`,
+    `<div class="modal connectm"><span class="x">×</span><div class="pair"><b>ChatGPT</b><i>•••</i><b>∞</b></div><h3>Connect Farol</h3>
+      <p>ChatGPT may share relevant memories (if enabled) and chats with this app to support interactions with it. Farol’s use of this data is subject to their terms and privacy policy.</p>
+      <p>If you have <strong>Suggested prompts</strong> enabled, data from this app may be used to proactively provide helpful information or suggestions.</p>
+      <p>Information from this app may be used to improve our models if it is used to inform your conversations with ChatGPT and you have <strong>Improve the model for everyone</strong> enabled. You can disconnect Farol in settings to stop new access, or delete your conversations that include data from Farol. <strong>Learn more</strong></p>
+      ${pending ? btn("Connecting…", "", "off wide") : pri("Connect Farol", "connectp").replace('class="b p"', 'class="b p wide"')}${btn("Cancel", "", "wide")}</div>`,
   );
 const catalog = ({ search = "", menu = false, toast = false } = {}) => {
   const box = `<div class="searchbox" id="psearch">⌕ ${search || "Search plugins"}</div>`;
@@ -775,8 +768,8 @@ const plugin = [
   },
   {
     n: 5,
-    cap: "Paste the same tunnel ID you entered in Farol",
-    target: "pid",
+    cap: "Click the tunnel you created, or paste the same tunnel ID",
+    target: "pchip",
     s: () => mcpForm({ name: "Farol", tunnel: true }),
   },
   { n: 6, cap: "Open Authentication", target: "pauth", s: () => mcpForm(FORM) },

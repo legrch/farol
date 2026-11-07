@@ -4,11 +4,11 @@ Farol connects selected folders on your Mac to ChatGPT through a Secure MCP Tunn
 
 ## Watch the workflow
 
-![Read a selected file and return its contents to ChatGPT](../media/dark/output/Farol-ask-your-files-dark.gif)
+![Read a selected file and return its contents to ChatGPT](../media/guide/output/Farol-ask-your-files-dark.gif)
 
 The example reads from a selected workspace and returns requested contents to ChatGPT. It illustrates the workflow with synthetic data, not a live session.
 
-![A requested code change within a selected Read & write workspace](../media/dark/output/Farol-change-your-code-dark.gif)
+![A requested code change within a selected Read & write workspace](../media/guide/output/Farol-change-your-code-dark.gif)
 
 The edit example assumes an existing Read & write grant. Tool confirmations follow ChatGPT's settings. [Continue with the complete guide on the home page →](../../README.md#install-in-one-line)
 

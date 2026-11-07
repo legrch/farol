@@ -22,139 +22,61 @@
       "file": "Farol-01-sign-in-dark.gif",
       "frames": 475,
       "duration_ms": 19000,
-      "maximum_mean_luminance": 45.6
+      "maximum_mean_luminance": 45.39
     },
     {
       "file": "Farol-02-workspace-dark.gif",
       "frames": 355,
       "duration_ms": 14200,
-      "maximum_mean_luminance": 47.68
+      "maximum_mean_luminance": 47.34
     },
     {
       "file": "Farol-02b-edits-and-commands-dark.gif",
       "frames": 390,
       "duration_ms": 15600,
-      "maximum_mean_luminance": 47.32
+      "maximum_mean_luminance": 47.02
     },
     {
       "file": "Farol-03-create-tunnel-dark.gif",
       "frames": 688,
       "duration_ms": 27520,
-      "maximum_mean_luminance": 46.58
+      "maximum_mean_luminance": 46.31
     },
     {
       "file": "Farol-04-restricted-key-dark.gif",
       "frames": 690,
       "duration_ms": 27600,
-      "maximum_mean_luminance": 45.26
+      "maximum_mean_luminance": 45.07
     },
     {
       "file": "Farol-05-connect-this-mac-dark.gif",
       "frames": 295,
       "duration_ms": 11800,
-      "maximum_mean_luminance": 46.44
+      "maximum_mean_luminance": 46.18
     },
     {
       "file": "Farol-06-add-plugin-dark.gif",
       "frames": 1108,
       "duration_ms": 44320,
-      "maximum_mean_luminance": 46.22
+      "maximum_mean_luminance": 45.98
     },
     {
       "file": "Farol-07-test-connection-dark.gif",
       "frames": 360,
       "duration_ms": 14400,
-      "maximum_mean_luminance": 47.1
+      "maximum_mean_luminance": 46.8
     },
     {
       "file": "Farol-08-change-access-dark.gif",
       "frames": 318,
       "duration_ms": 12720,
-      "maximum_mean_luminance": 47.29
+      "maximum_mean_luminance": 46.98
     },
     {
       "file": "Farol-09-updates-dark.gif",
       "frames": 330,
       "duration_ms": 13200,
-      "maximum_mean_luminance": 44.05
-    },
-    {
-      "file": "Farol-ask-your-files-light.gif",
-      "frames": 500,
-      "duration_ms": 20000,
-      "maximum_mean_luminance": 248.58
-    },
-    {
-      "file": "Farol-change-your-code-light.gif",
-      "frames": 600,
-      "duration_ms": 24000,
-      "maximum_mean_luminance": 248.89
-    },
-    {
-      "file": "Farol-install-light.gif",
-      "frames": 500,
-      "duration_ms": 20000,
-      "maximum_mean_luminance": 246.55
-    },
-    {
-      "file": "Farol-01-sign-in-light.gif",
-      "frames": 475,
-      "duration_ms": 19000,
-      "maximum_mean_luminance": 250.67
-    },
-    {
-      "file": "Farol-02-workspace-light.gif",
-      "frames": 355,
-      "duration_ms": 14200,
-      "maximum_mean_luminance": 248.35
-    },
-    {
-      "file": "Farol-02b-edits-and-commands-light.gif",
-      "frames": 390,
-      "duration_ms": 15600,
-      "maximum_mean_luminance": 246.53
-    },
-    {
-      "file": "Farol-03-create-tunnel-light.gif",
-      "frames": 688,
-      "duration_ms": 27520,
-      "maximum_mean_luminance": 248.93
-    },
-    {
-      "file": "Farol-04-restricted-key-light.gif",
-      "frames": 690,
-      "duration_ms": 27600,
-      "maximum_mean_luminance": 248.17
-    },
-    {
-      "file": "Farol-05-connect-this-mac-light.gif",
-      "frames": 295,
-      "duration_ms": 11800,
-      "maximum_mean_luminance": 247.99
-    },
-    {
-      "file": "Farol-06-add-plugin-light.gif",
-      "frames": 1108,
-      "duration_ms": 44320,
-      "maximum_mean_luminance": 249.98
-    },
-    {
-      "file": "Farol-07-test-connection-light.gif",
-      "frames": 360,
-      "duration_ms": 14400,
-      "maximum_mean_luminance": 249.49
-    },
-    {
-      "file": "Farol-08-change-access-light.gif",
-      "frames": 318,
-      "duration_ms": 12720,
-      "maximum_mean_luminance": 248.21
-    },
-    {
-      "file": "Farol-09-updates-light.gif",
-      "frames": 330,
-      "duration_ms": 13200,
-      "maximum_mean_luminance": 251.12
+      "maximum_mean_luminance": 43.93
     }
   ],
   "contrast_pairs": [

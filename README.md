@@ -1,5 +1,3 @@
-> **Dark illustration preview** · [Switch to the matched light preview](docs/media/dark/light-preview.md). Remove this banner when a style is chosen.
-
 <div align="center">
 
 <img src="resources/brand/sunrise-dock/farol-sunrise.png" alt="Farol" width="104">
@@ -18,7 +16,7 @@ Ask in the ChatGPT you already use. Farol, a small native app on your Mac, lets 
 
 </div>
 
-![You type a question in ChatGPT, the request reaches Farol on your Mac, Farol reads files in the approved folder and the answer returns with its sources](docs/media/dark/output/Farol-ask-your-files-dark.gif)
+![You type a question in ChatGPT, the request reaches Farol on your Mac, Farol reads files in the approved folder and the answer returns with its sources](docs/media/guide/output/Farol-ask-your-files-dark.gif)
 
 ## Install in one line
 
@@ -30,7 +28,7 @@ curl -fsSL https://raw.githubusercontent.com/legrch/farol/main/scripts/install-r
 
 It finds the newest release, downloads it, verifies the checksums and the release tree, installs Farol and opens it. Then [connect it to ChatGPT](#connect-chatgpt-step-by-step).
 
-![Paste the install command in Terminal, watch the release download and verify, see the Farol icon bounce in the Dock, and continue in the Setup screen](docs/media/dark/output/Farol-install-dark.gif)
+![Paste the install command in Terminal, watch the release download and verify, see the Farol icon bounce in the Dock, and continue in the Setup screen](docs/media/guide/output/Farol-install-dark.gif)
 
 > [!IMPORTANT]
 > **Farol is in beta and is not signed or notarized by Apple yet.** You need an Apple Silicon Mac and a ChatGPT account or workspace that offers **Developer mode and Tunnel connections**. [What the installer checks](docs/start/installation.md).
@@ -59,7 +57,7 @@ The last two need **Read & write** on that folder. Everything else works with th
 
 Grant **Read & write** to one folder and ChatGPT can do more than talk about your code: it reads the file first, writes the change, creates new files, and tells you what to review.
 
-![You ask ChatGPT for a new function and a test; Farol reads greeting.py, adds the code to the file, creates test_greeting.py, and ChatGPT reports what to review](docs/media/dark/output/Farol-change-your-code-dark.gif)
+![You ask ChatGPT for a new function and a test; Farol reads greeting.py, adds the code to the file, creates test_greeting.py, and ChatGPT reports what to review](docs/media/guide/output/Farol-change-your-code-dark.gif)
 
 _All animations are illustrations with synthetic data, not screen recordings or proof of a live setup. File contents and tool results that ChatGPT requests are returned to ChatGPT._
 
@@ -102,7 +100,7 @@ Seven steps, about one screen each. Setup in the app walks you through them; the
 2. Use your own ChatGPT account, then return to Setup. If confirmation is still needed, choose **Check sign-in**.
 3. Wait for **✓ Sign-in checked**, then choose **Continue**. This does not yet grant local file access.
 
-![Sign in in Farol, return to Setup, check sign-in, and continue; illustrated with synthetic data](docs/media/dark/output/Farol-01-sign-in-dark.gif)
+![Sign in in Farol, return to Setup, check sign-in, and continue; illustrated with synthetic data](docs/media/guide/output/Farol-01-sign-in-dark.gif)
 
 ### 2. Add a workspace
 
@@ -112,13 +110,13 @@ A **Farol workspace** is a folder you approve on your Mac. It is not the same th
 2. Review the path and saved **Read only** access. Wait for **✓ Works**; every listed workspace needs a current check.
 3. Choose **Continue** when the checks are current.
 
-![Choose a sample folder, keep Read only, and wait for Works; illustrated with synthetic data](docs/media/dark/output/Farol-02-workspace-dark.gif)
+![Choose a sample folder, keep Read only, and wait for Works; illustrated with synthetic data](docs/media/guide/output/Farol-02-workspace-dark.gif)
 
 #### Optional: edits and commands
 
 Keep Read only and Commands off for the first exercise. When a task needs changes, choose **Read & write** in that workspace's row and wait for the saved access check. Review **Commands** separately: it is shared across approved workspaces, not a per-folder sandbox.
 
-![Review optional Read & write and the shared Commands grant; illustrated with synthetic data](docs/media/dark/output/Farol-02b-edits-and-commands-dark.gif)
+![Review optional Read & write and the shared Commands grant; illustrated with synthetic data](docs/media/guide/output/Farol-02b-edits-and-commands-dark.gif)
 
 ### 3. Create a tunnel
 
@@ -127,7 +125,7 @@ Keep Read only and Commands off for the first exercise. When a task needs change
 3. Choose **Create** once. Copy the complete tunnel ID from its row.
 4. Paste that ID into Farol **before** copying the key, so the next copy does not replace your only copy of the ID.
 
-![Create a tunnel for the intended ChatGPT workspace, copy its ID, and paste it into Farol; illustrated with synthetic data](docs/media/dark/output/Farol-03-create-tunnel-dark.gif)
+![Create a tunnel for the intended ChatGPT workspace, copy its ID, and paste it into Farol; illustrated with synthetic data](docs/media/guide/output/Farol-03-create-tunnel-dark.gif)
 
 ### 4. Create a restricted key
 
@@ -138,7 +136,7 @@ Keep Read only and Commands off for the first exercise. When a task needs change
 > [!WARNING]
 > Do not substitute a full-access or admin key, and never paste a key into a chat, repository, screenshot or support message.
 
-![Select Restricted and Tunnels Read plus Use, then copy the key privately; illustrated with synthetic data](docs/media/dark/output/Farol-04-restricted-key-dark.gif)
+![Select Restricted and Tunnels Read plus Use, then copy the key privately; illustrated with synthetic data](docs/media/guide/output/Farol-04-restricted-key-dark.gif)
 
 ### 5. Connect this Mac
 
@@ -146,7 +144,7 @@ Keep Read only and Commands off for the first exercise. When a task needs change
 2. Choose **Connect** once. Wait for the result; do not resubmit while it is pending or unknown.
 3. Continue after **✓ Connected**. If Farol says **Key saved**, the empty field keeps the saved key, so do not paste a replacement.
 
-![Use the tunnel ID and masked key, connect once, and wait for Connected; illustrated with synthetic data](docs/media/dark/output/Farol-05-connect-this-mac-dark.gif)
+![Use the tunnel ID and masked key, connect once, and wait for Connected; illustrated with synthetic data](docs/media/guide/output/Farol-05-connect-this-mac-dark.gif)
 
 ### 6. Add Farol to ChatGPT
 
@@ -155,7 +153,7 @@ Keep Read only and Commands off for the first exercise. When a task needs change
 3. Review the **Connect** dialog and data-sharing notice. Choose **Connect** once and find Farol in the plugin list.
 4. Open **⋯ → Manage → Permission**. **Recommended: keep Allow low-risk tools (Default).**
 
-![Create and connect the plugin, find it, and review four permission levels without changing the default; illustrated with synthetic data](docs/media/dark/output/Farol-06-add-plugin-dark.gif)
+![Create and connect the plugin, find it, and review four permission levels without changing the default; illustrated with synthetic data](docs/media/guide/output/Farol-06-add-plugin-dark.gif)
 
 ### 7. Test the connection
 
@@ -163,7 +161,7 @@ Keep Read only and Commands off for the first exercise. When a task needs change
 2. Wait for the original test. **Back to setup** returns without sending again.
 3. Choose **Start using Farol** after **✓ Everything works**. A model reply or plugin chip alone does not establish this result.
 
-![Run one ChatGPT test, wait for the matching receipt, and return to Setup; illustrated with synthetic data](docs/media/dark/output/Farol-07-test-connection-dark.gif)
+![Run one ChatGPT test, wait for the matching receipt, and return to Setup; illustrated with synthetic data](docs/media/guide/output/Farol-07-test-connection-dark.gif)
 
 ## Try your first file
 
@@ -191,7 +189,7 @@ Three separate switches decide what can happen. Changing one does not change the
 | **Commands** (in Farol)              | Running commands. Shared across all approved workspaces.     | **Off**, until you have reviewed Git hooks and configuration |
 | **ChatGPT Permissions** (in ChatGPT) | When ChatGPT asks you before calling a tool.                 | **Allow low-risk tools (Default)**                           |
 
-![Set a folder back to Read only, wait for the check, then remove it; the files stay on disk](docs/media/dark/output/Farol-08-change-access-dark.gif)
+![Set a folder back to Read only, wait for the check, then remove it; the files stay on disk](docs/media/guide/output/Farol-08-change-access-dark.gif)
 
 The other ChatGPT choices are **Always ask**, **Allow read-only tools** and **Allow all tools (Elevated risk)**. Allow all tools is optional and not needed for this guide. [Compare the choices](docs/guides/best-practices.md#choose-chatgpt-permissions-deliberately).
 
@@ -230,7 +228,7 @@ Closing the window leaves Farol running; **Command+Q** quits it. To update an in
 3. Finish active work, then choose **Install and Relaunch** once.
 4. After relaunch, check the version and connection status.
 
-![Check for updates, download and verify, install and relaunch, then check the version](docs/media/dark/output/Farol-09-updates-dark.gif)
+![Check for updates, download and verify, install and relaunch, then check the version](docs/media/guide/output/Farol-09-updates-dark.gif)
 
 For an interrupted update, open **Settings → General → Update recovery…** and use only the action offered. [Update Farol](docs/guides/updates.md) · [Uninstall safely](docs/guides/uninstall.md)
 
@@ -249,6 +247,6 @@ This page is the guide. These pages hold the exceptional detail:
 
 After `task package` builds a verified packaged candidate, `task run` opens its isolated launch snapshot; `task dev` is the separate development lane.
 
-[Development and contributing](docs/development/README.md) · [Technical references](docs/reference/README.md) · [Go module indexes](docs/reference/modules/README.md) · [First-install readiness](docs/reference/install-readiness.md) · [Animation sources](docs/media/dark/README.md)
+[Development and contributing](docs/development/README.md) · [Technical references](docs/reference/README.md) · [Go module indexes](docs/reference/modules/README.md) · [First-install readiness](docs/reference/install-readiness.md) · [Animation sources](docs/media/guide/README.md)
 
 The [dated capability reference](docs/reference/status.md) separates source, package and installed evidence. Tasks, Agent workflows, Git SSH and PDF transfer still require separate acceptance.

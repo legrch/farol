@@ -1,5 +1,5 @@
 // Renders the synthetic story scenes to GIFs. No account, service or real file is used.
-// Usage: node docs/media/dark/stories/render.mjs [--theme=dark|light] [--scene=read|edit|install] [--sheet=DIR]
+// Usage: node docs/media/guide/stories/render.mjs [--theme=light] [--scene=read|edit|install] [--sheet=DIR]
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -12,7 +12,7 @@ const here = import.meta.dirname;
 const output = path.resolve(here, "../output");
 const arg = (name) =>
   process.argv.find((v) => v.startsWith(`--${name}=`))?.split("=")[1];
-const themes = arg("theme") ? [arg("theme")] : ["dark", "light"];
+const themes = arg("theme") ? [arg("theme")] : ["dark"];
 const only = arg("scene");
 const sheetDir = arg("sheet");
 const FPS = 25;
@@ -62,7 +62,7 @@ try {
     const entries = [];
     for (const wide of [false, true]) {
       const layout = wide
-        ? { width: 880, height: 605 }
+        ? { width: 880, height: 640 }
         : { width: 800, height: 500 };
       const page = await browser.newPage({
         viewport: layout,
