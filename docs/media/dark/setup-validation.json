@@ -4,12 +4,12 @@
   "artifacts": [
     {
       "file": "Farol-01-sign-in-dark.gif",
-      "bytes": 618564,
-      "sha256": "13520e5d4a61d3e7ef324ae8830a003743e5baa52079bc73779287f939cd57e7",
+      "bytes": 1781248,
+      "sha256": "1045ad592ca8357d88a049ccbc9570274987e5a78e26dfb0f995c6b77eeffdce",
       "width": 1320,
-      "height": 900,
-      "frames": 145,
-      "duration_ms": 22340,
+      "height": 860,
+      "frames": 120,
+      "duration_ms": 24620,
       "loop": 0,
       "timeline": [
         {
@@ -21,56 +21,56 @@
         },
         {
           "scene": "s01",
-          "at_ms": 2020,
+          "at_ms": 3060,
           "target": "signin",
           "click": true,
           "target_center": [390.4033203125, 440.2]
         },
         {
           "scene": "s02",
-          "at_ms": 4140,
+          "at_ms": 5520,
           "target": "google",
           "click": true,
           "target_center": [756.0, 398.1]
         },
         {
           "scene": "s03",
-          "at_ms": 6560,
+          "at_ms": 7880,
           "target": "account",
           "click": true,
           "target_center": [756.0, 506.4000000000001]
         },
         {
           "scene": "s04",
-          "at_ms": 9180,
+          "at_ms": 10440,
           "target": "return",
           "click": true,
           "target_center": [1209.6572265625, 171.0]
         },
         {
           "scene": "s05",
-          "at_ms": 11600,
+          "at_ms": 13200,
           "target": "checksignin",
           "click": true,
           "target_center": [411.40673828125, 440.2]
         },
         {
           "scene": "s06",
-          "at_ms": 14020,
+          "at_ms": 15960,
           "target": null,
           "click": false,
           "target_center": null
         },
         {
           "scene": "s07",
-          "at_ms": 15620,
+          "at_ms": 17360,
           "target": "continue",
           "click": true,
           "target_center": [1114.9794921875, 509.1]
         },
         {
           "scene": "s08",
-          "at_ms": 18040,
+          "at_ms": 20120,
           "target": null,
           "click": false,
           "target_center": null
@@ -79,12 +79,12 @@
     },
     {
       "file": "Farol-02-workspace-dark.gif",
-      "bytes": 446847,
-      "sha256": "bb61036d711a647e9686adb08f1503c396936976a8a3995586d18cf27aa1cb7e",
+      "bytes": 1887546,
+      "sha256": "9442bf02be2600d72bc8ec430fc2a1a03bcb0d4a1f09b0fa81853f9f1b876c96",
       "width": 1320,
-      "height": 900,
-      "frames": 100,
-      "duration_ms": 16300,
+      "height": 860,
+      "frames": 84,
+      "duration_ms": 18620,
       "loop": 0,
       "timeline": [
         {
@@ -96,35 +96,35 @@
         },
         {
           "scene": "w01",
-          "at_ms": 2220,
+          "at_ms": 3260,
           "target": "sample-folder",
           "click": true,
           "target_center": [740.0, 380.37500000000006]
         },
         {
           "scene": "w02",
-          "at_ms": 4340,
+          "at_ms": 5320,
           "target": "openfolder",
           "click": true,
           "target_center": [967.5, 651.0]
         },
         {
           "scene": "w03",
-          "at_ms": 6460,
+          "at_ms": 7780,
           "target": null,
           "click": false,
           "target_center": null
         },
         {
           "scene": "w04",
-          "at_ms": 8360,
+          "at_ms": 9880,
           "target": "access",
           "click": false,
           "target_center": [837.513671875, 431.56484375]
         },
         {
           "scene": "w05",
-          "at_ms": 11380,
+          "at_ms": 13360,
           "target": "continue",
           "click": true,
           "target_center": [1114.9794921875, 758.5]
@@ -133,12 +133,12 @@
     },
     {
       "file": "Farol-02b-edits-and-commands-dark.gif",
-      "bytes": 218801,
-      "sha256": "c5417c57dcc5cbc01b5ae1416fb6fbaa9829fbcb810dc32fba34de7b8d70d799",
+      "bytes": 1081230,
+      "sha256": "5d5100af58ce13a60745eecd87f02601a9f21bf57888173e4b2f0b875d41fc2d",
       "width": 1320,
-      "height": 900,
-      "frames": 71,
-      "duration_ms": 19660,
+      "height": 860,
+      "frames": 54,
+      "duration_ms": 20180,
       "loop": 0,
       "timeline": [
         {
@@ -150,42 +150,42 @@
         },
         {
           "scene": "a01",
-          "at_ms": 2620,
+          "at_ms": 3660,
           "target": "read-write-option",
           "click": true,
           "target_center": [841.5, 504.07500000000005]
         },
         {
           "scene": "a02",
-          "at_ms": 5240,
+          "at_ms": 6220,
           "target": null,
           "click": false,
           "target_center": null
         },
         {
           "scene": "a03",
-          "at_ms": 7140,
+          "at_ms": 8320,
           "target": null,
           "click": false,
           "target_center": null
         },
         {
           "scene": "a04",
-          "at_ms": 9340,
+          "at_ms": 10320,
           "target": "commands",
           "click": true,
           "target_center": [972.5, 430.36126093750005]
         },
         {
           "scene": "a05",
-          "at_ms": 12060,
+          "at_ms": 12980,
           "target": null,
           "click": false,
           "target_center": null
         },
         {
           "scene": "a06",
-          "at_ms": 14460,
+          "at_ms": 15180,
           "target": null,
           "click": false,
           "target_center": null
@@ -194,12 +194,12 @@
     },
     {
       "file": "Farol-03-create-tunnel-dark.gif",
-      "bytes": 599268,
-      "sha256": "485ac766efe41bf8dcbdc554a1913a831ed59e12ff41efaa76029da2c74ce87c",
+      "bytes": 1522620,
+      "sha256": "c77cfdaecb591f1187aa94c60440ffc5c6d80e8924efd86dad4240354ad4d2b5",
       "width": 1320,
-      "height": 900,
-      "frames": 184,
-      "duration_ms": 27480,
+      "height": 860,
+      "frames": 142,
+      "duration_ms": 29040,
       "loop": 0,
       "timeline": [
         {
@@ -211,77 +211,77 @@
         },
         {
           "scene": "t01",
-          "at_ms": 2120,
+          "at_ms": 3160,
           "target": "opencreate",
           "click": true,
           "target_center": [1208.9765625, 210.0]
         },
         {
           "scene": "t02",
-          "at_ms": 4340,
+          "at_ms": 5720,
           "target": "tunnelname",
           "click": true,
           "target_center": [661.0, 293.0]
         },
         {
           "scene": "t03",
-          "at_ms": 6360,
+          "at_ms": 8080,
           "target": null,
           "click": false,
           "target_center": null
         },
         {
           "scene": "t04",
-          "at_ms": 7160,
+          "at_ms": 8680,
           "target": "description",
           "click": true,
           "target_center": [661.0, 374.0]
         },
         {
           "scene": "t05",
-          "at_ms": 8980,
+          "at_ms": 10440,
           "target": "workspace",
           "click": true,
           "target_center": [661.0, 571.0]
         },
         {
           "scene": "t06",
-          "at_ms": 11100,
+          "at_ms": 12900,
           "target": "selectworkspace",
           "click": true,
           "target_center": [661.0, 660.2341796875]
         },
         {
           "scene": "t07",
-          "at_ms": 13220,
+          "at_ms": 14960,
           "target": "create",
           "click": true,
           "target_center": [927.9912109375, 725.0]
         },
         {
           "scene": "t08",
-          "at_ms": 15840,
+          "at_ms": 17520,
           "target": "copy",
           "click": true,
           "target_center": [664.0068359375, 401.4]
         },
         {
           "scene": "t09",
-          "at_ms": 18460,
+          "at_ms": 20080,
           "target": null,
           "click": false,
           "target_center": null
         },
         {
           "scene": "t10",
-          "at_ms": 20260,
+          "at_ms": 21680,
           "target": "tunnelid",
           "click": true,
           "target_center": [836.0, 443.15000000000003]
         },
         {
           "scene": "t11",
-          "at_ms": 22980,
+          "at_ms": 24740,
           "target": null,
           "click": false,
           "target_center": null
@@ -290,12 +290,12 @@
     },
     {
       "file": "Farol-04-restricted-key-dark.gif",
-      "bytes": 637391,
-      "sha256": "e43985f3366a7dc44350f29014867c62ffe2d95e50c1b5bcae578e2fdfb17799",
+      "bytes": 1081812,
+      "sha256": "ceab56f5e9f7c7ec8ce8bfc093c85e3b289715a0ebbcefaceed58e1a9a36a933",
       "width": 1320,
-      "height": 900,
-      "frames": 184,
-      "duration_ms": 32580,
+      "height": 860,
+      "frames": 138,
+      "duration_ms": 33740,
       "loop": 0,
       "timeline": [
         {
@@ -307,77 +307,77 @@
         },
         {
           "scene": "k01",
-          "at_ms": 2120,
+          "at_ms": 3160,
           "target": "keyname",
           "click": true,
           "target_center": [661.0, 399.0]
         },
         {
           "scene": "k02",
-          "at_ms": 4140,
+          "at_ms": 5520,
           "target": null,
           "click": false,
           "target_center": null
         },
         {
           "scene": "k02b",
-          "at_ms": 8040,
+          "at_ms": 9220,
           "target": "restricted",
           "click": true,
           "target_center": [497.3447265625, 619.7]
         },
         {
           "scene": "k03",
-          "at_ms": 11360,
+          "at_ms": 12880,
           "target": "tunnelpermissions",
           "click": true,
           "target_center": [857.36328125, 542.0134765625]
         },
         {
           "scene": "k04",
-          "at_ms": 13680,
+          "at_ms": 15140,
           "target": "readperm",
           "click": true,
           "target_center": [778.0, 570.7]
         },
         {
           "scene": "k05",
-          "at_ms": 15800,
+          "at_ms": 17200,
           "target": "useperm",
           "click": true,
           "target_center": [778.0, 604.0999999999999]
         },
         {
           "scene": "k06",
-          "at_ms": 17920,
+          "at_ms": 19260,
           "target": null,
           "click": false,
           "target_center": null
         },
         {
           "scene": "k07",
-          "at_ms": 20120,
+          "at_ms": 21260,
           "target": "createkey",
           "click": true,
           "target_center": [838.9814453125, 725.0]
         },
         {
           "scene": "k08",
-          "at_ms": 22840,
+          "at_ms": 23920,
           "target": "copy",
           "click": true,
           "target_center": [859.9931640625, 501.0]
         },
         {
           "scene": "k09",
-          "at_ms": 25460,
+          "at_ms": 26480,
           "target": "keydone",
           "click": true,
           "target_center": [871.65625, 661.0]
         },
         {
           "scene": "k10",
-          "at_ms": 28380,
+          "at_ms": 29340,
           "target": null,
           "click": false,
           "target_center": null
@@ -386,12 +386,12 @@
     },
     {
       "file": "Farol-05-connect-this-mac-dark.gif",
-      "bytes": 259197,
-      "sha256": "fac2523eb3a4e37a3197a8a4186865ab9fbe674cbf291f1f0a411beb319ebb7e",
+      "bytes": 638207,
+      "sha256": "ba7d6ad48f036024334095703c910d20a0e4511ba6cd07138ec89ee9d605453a",
       "width": 1320,
-      "height": 900,
-      "frames": 69,
-      "duration_ms": 13960,
+      "height": 860,
+      "frames": 50,
+      "duration_ms": 14180,
       "loop": 0,
       "timeline": [
         {
@@ -403,28 +403,28 @@
         },
         {
           "scene": "c01",
-          "at_ms": 2000,
+          "at_ms": 1800,
           "target": "runtimekey",
           "click": true,
           "target_center": [836.0, 500.1500000000001]
         },
         {
           "scene": "c02",
-          "at_ms": 4420,
+          "at_ms": 4560,
           "target": "connect",
           "click": true,
           "target_center": [395.072265625, 592.05]
         },
         {
           "scene": "c03",
-          "at_ms": 7040,
+          "at_ms": 7520,
           "target": null,
           "click": false,
           "target_center": null
         },
         {
           "scene": "c04",
-          "at_ms": 9040,
+          "at_ms": 9320,
           "target": "continue",
           "click": true,
           "target_center": [1114.9794921875, 754.3499999999999]
@@ -433,12 +433,12 @@
     },
     {
       "file": "Farol-06-add-plugin-dark.gif",
-      "bytes": 769457,
-      "sha256": "d9b624fed50f91b62a89babea1ca189c44f07ab129dd520f56c611aa9b0840cb",
+      "bytes": 2037743,
+      "sha256": "c659592d1d21c4395cabc98bad3e407fdd2e2f7a3b984b99f0621b5af68883ae",
       "width": 1320,
-      "height": 900,
-      "frames": 280,
-      "duration_ms": 49180,
+      "height": 860,
+      "frames": 217,
+      "duration_ms": 51040,
       "loop": 0,
       "timeline": [
         {
@@ -450,119 +450,119 @@
         },
         {
           "scene": "p01",
-          "at_ms": 2020,
+          "at_ms": 3060,
           "target": "custommcp",
           "click": true,
           "target_center": [1138.5, 352.55859375000006]
         },
         {
           "scene": "p02",
-          "at_ms": 4040,
+          "at_ms": 5020,
           "target": "pluginname",
           "click": true,
           "target_center": [662.0, 346.0]
         },
         {
           "scene": "p03",
-          "at_ms": 6060,
+          "at_ms": 7380,
           "target": "tunneltype",
           "click": true,
           "target_center": [919.3857421875, 455.975]
         },
         {
           "scene": "p04",
-          "at_ms": 8080,
+          "at_ms": 9340,
           "target": "plugintunnel",
           "click": true,
           "target_center": [662.0, 492.0]
         },
         {
           "scene": "p05",
-          "at_ms": 10100,
+          "at_ms": 11700,
           "target": "pluginauth",
           "click": true,
           "target_center": [662.0, 562.0]
         },
         {
           "scene": "p06",
-          "at_ms": 12220,
+          "at_ms": 14160,
           "target": "noauth",
           "click": true,
           "target_center": [662.0, 634.0999999999999]
         },
         {
           "scene": "p07",
-          "at_ms": 14340,
+          "at_ms": 16220,
           "target": "riskcheck",
           "click": true,
           "target_center": [381.0, 664.0]
         },
         {
           "scene": "p08",
-          "at_ms": 18060,
+          "at_ms": 19880,
           "target": "createplugin",
           "click": true,
           "target_center": [887.302734375, 738.0]
         },
         {
           "scene": "p09",
-          "at_ms": 20980,
+          "at_ms": 22740,
           "target": "connectplugin",
           "click": true,
           "target_center": [662.0, 662.55]
         },
         {
           "scene": "p09a",
-          "at_ms": 26600,
+          "at_ms": 28300,
           "target": null,
           "click": false,
           "target_center": null
         },
         {
           "scene": "p10",
-          "at_ms": 28200,
+          "at_ms": 29700,
           "target": "pluginsearch",
           "click": true,
           "target_center": [1011.0, 223.76484375]
         },
         {
           "scene": "p11",
-          "at_ms": 30320,
+          "at_ms": 32160,
           "target": "pluginmore",
           "click": true,
           "target_center": [718.0087890625, 352.04999999999995]
         },
         {
           "scene": "p12",
-          "at_ms": 32440,
+          "at_ms": 34220,
           "target": "manageplugin",
           "click": true,
           "target_center": [682.5, 439.398779296875]
         },
         {
           "scene": "p13",
-          "at_ms": 34560,
+          "at_ms": 36280,
           "target": "permissionrow",
           "click": true,
           "target_center": [751.0, 378.9]
         },
         {
           "scene": "p14",
-          "at_ms": 36980,
+          "at_ms": 38640,
           "target": null,
           "click": false,
           "target_center": null
         },
         {
           "scene": "p15",
-          "at_ms": 40680,
+          "at_ms": 42540,
           "target": null,
           "click": false,
           "target_center": null
         },
         {
           "scene": "p16",
-          "at_ms": 44980,
+          "at_ms": 46640,
           "target": null,
           "click": false,
           "target_center": null
@@ -571,12 +571,12 @@
     },
     {
       "file": "Farol-07-test-connection-dark.gif",
-      "bytes": 551339,
-      "sha256": "496a4c1d5922c79ca04d507522b44a0e1af4dbcafa121890525dc8bb2db0d587",
+      "bytes": 1534007,
+      "sha256": "8349af3d432616b05fdc047a0c95d5024560be974336fb63e5e2afcd1fa69957",
       "width": 1320,
-      "height": 900,
-      "frames": 70,
-      "duration_ms": 16960,
+      "height": 860,
+      "frames": 65,
+      "duration_ms": 18880,
       "loop": 0,
       "timeline": [
         {
@@ -588,35 +588,35 @@
         },
         {
           "scene": "v01",
-          "at_ms": 2920,
+          "at_ms": 3960,
           "target": null,
           "click": false,
           "target_center": null
         },
         {
           "scene": "v02",
-          "at_ms": 4520,
+          "at_ms": 5360,
           "target": null,
           "click": false,
           "target_center": null
         },
         {
           "scene": "v03",
-          "at_ms": 6820,
+          "at_ms": 7860,
           "target": "return",
           "click": true,
           "target_center": [1209.6572265625, 171.0]
         },
         {
           "scene": "v04",
-          "at_ms": 9540,
+          "at_ms": 10920,
           "target": "finish",
           "click": true,
           "target_center": [1091.64501953125, 709.8]
         },
         {
           "scene": "v05",
-          "at_ms": 12260,
+          "at_ms": 13980,
           "target": null,
           "click": false,
           "target_center": null

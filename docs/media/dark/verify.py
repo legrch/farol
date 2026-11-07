@@ -15,9 +15,10 @@ for name,count in [('validation.json',3),('setup-validation.json',8),('light-val
   elapsed=0;maximum=0
   for i in range(im.n_frames):
    im.seek(i);rgb=im.convert('RGB');rgb.load();elapsed+=im.info['duration']
-   assert (max(rgb.getpixel((10,10)))<50 if dark else min(rgb.getpixel((10,10)))>230),(p.name,i,'outer canvas')
+   corner=rgb.getpixel((10,rgb.height-10))  # The instruction bar: the camera moves everything above it.
+   assert (max(corner)<70 if dark else min(corner)>230),(p.name,i,'outer canvas')
    maximum=max(maximum,ImageStat.Stat(rgb.convert('L')).mean[0])
-  assert (maximum<135 if dark else maximum>200),(p.name,maximum)
+  assert (maximum<150 if dark else maximum>200),(p.name,maximum)
   assert elapsed==item['duration_ms'],(p.name,elapsed)
   for event in item.get('timeline',[]):
    if event['target']:assert 40<=event['target_center'][0]<=1280 and 145<=event['target_center'][1]<=797
@@ -26,7 +27,7 @@ def luminance(c):
  v=[int(c[i:i+2],16)/255 for i in (1,3,5)]
  return sum((x/12.92 if x<=.04045 else ((x+.055)/1.055)**2.4)*w for x,w in zip(v,(.2126,.7152,.0722)))
 pairs=[]
-for fg,bg in [('#f2f4fb','#121829'),('#9aa6c2','#121829'),('#bba5ff','#0a0e1c'),('#6ee7b0','#121829'),('#ffc061','#121829'),('#14102a','#bba5ff'),('#1d1b29','#ffffff'),('#625d75','#ffffff'),('#5b43b5','#f4f3f9'),('#16764d','#ffffff'),('#ffffff','#5b43b5')]:
+for fg,bg in [('#f5f6fa','#262a36'),('#bcc3d2','#262a36'),('#c9b8ff','#1b1e27'),('#6ee7b0','#262a36'),('#ffc061','#262a36'),('#14102a','#c9b8ff'),('#1d1b29','#ffffff'),('#625d75','#ffffff'),('#5b43b5','#f4f3f9'),('#16764d','#ffffff'),('#ffffff','#5b43b5')]:
  low,high=sorted([luminance(fg),luminance(bg)]);ratio=(high+.05)/(low+.05);assert ratio>=4.5
  pairs.append({'foreground':fg,'background':bg,'ratio':round(ratio,2)})
 (ROOT/'audit.json').write_text(json.dumps({'artifacts':reports,'contrast_pairs':pairs,'scope':'Synthetic illustrations only; selected palette pairs, not a complete UI accessibility audit or live acceptance test.'},indent=2)+'\n')

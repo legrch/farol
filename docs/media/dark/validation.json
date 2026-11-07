@@ -3,8 +3,8 @@
   "artifacts": [
     {
       "file": "Farol-ask-your-files-dark.gif",
-      "sha256": "aea9a1d2a8e6a7d1efe61d9e499d29383597c178b2ee2c6c418f534f17d41603",
-      "bytes": 480828,
+      "sha256": "4e5a0fcde2644ab3623e0fc6427c62b7ad66365f230f1f28eb075f2fd336b9a1",
+      "bytes": 347212,
       "dimensions": [1600, 1000],
       "duration_ms": 20000,
       "frames": 500,
@@ -12,8 +12,8 @@
     },
     {
       "file": "Farol-change-your-code-dark.gif",
-      "sha256": "34554afa5d1bea44cc9da65266106d646403c597109e02f461e1541c67e06195",
-      "bytes": 570626,
+      "sha256": "18e1b6c485e68160708aa849764a3f93c76ea5304f5d801b77161381a8bc25fa",
+      "bytes": 488950,
       "dimensions": [1600, 1000],
       "duration_ms": 24000,
       "frames": 600,
@@ -21,8 +21,8 @@
     },
     {
       "file": "Farol-install-dark.gif",
-      "sha256": "1ac1b64e9eb3a4e56f77782a45c4dde4af7a2848c810841c7f8d6de1d93ca957",
-      "bytes": 759256,
+      "sha256": "bdda68102f21000b8b028bcb53c1cee47213a8a68d556ff12cb461c6c9313408",
+      "bytes": 744076,
       "dimensions": [1600, 1000],
       "duration_ms": 20000,
       "frames": 500,

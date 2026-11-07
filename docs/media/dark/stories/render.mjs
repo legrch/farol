@@ -54,7 +54,15 @@ try {
     await page.goto(
       `${pathToFileURL(path.join(here, "scene.html")).href}?theme=${theme}`,
     );
-    await page.evaluate(() => document.fonts.ready);
+    await page.evaluate(async () => {
+      await Promise.all(
+        ["400 13px Geist", "600 13px Geist", "700 13px Geist", "400 11px GeistMono", "600 11px GeistMono"].map((font) =>
+          document.fonts.load(font),
+        ),
+      );
+      await document.fonts.ready;
+      if (document.fonts.check("13px Geist") !== true) throw new Error("Geist did not load");
+    });
     const seconds = await page.evaluate(() => window.scenes);
     for (const [scene, length] of Object.entries(seconds)) {
       if (only && only !== scene) continue;

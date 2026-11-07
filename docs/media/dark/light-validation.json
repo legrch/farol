@@ -3,8 +3,8 @@
   "artifacts": [
     {
       "file": "Farol-ask-your-files-light.gif",
-      "sha256": "46599d1e2931c043bc7a428b29aee722429f90b8bf3d3c32ddd18cb6e7e3a9e7",
-      "bytes": 488128,
+      "sha256": "ac0405226aa9fe09ed1f2005a5b20b681b37646929fd5727b40df677feda8320",
+      "bytes": 348712,
       "dimensions": [1600, 1000],
       "duration_ms": 20000,
       "frames": 500,
@@ -12,8 +12,8 @@
     },
     {
       "file": "Farol-change-your-code-light.gif",
-      "sha256": "12ee797cdc1f70375be048ee336154a64bcae95b51683c62efe13b08125a4d01",
-      "bytes": 579566,
+      "sha256": "2e0c4541cedf390ea027caa5983c9a0621e7caf1437350fe296e58bc91765ff5",
+      "bytes": 523571,
       "dimensions": [1600, 1000],
       "duration_ms": 24000,
       "frames": 600,

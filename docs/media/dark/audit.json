@@ -4,67 +4,67 @@
       "file": "Farol-ask-your-files-dark.gif",
       "frames": 500,
       "duration_ms": 20000,
-      "maximum_mean_luminance": 26.58
+      "maximum_mean_luminance": 44.07
     },
     {
       "file": "Farol-change-your-code-dark.gif",
       "frames": 600,
       "duration_ms": 24000,
-      "maximum_mean_luminance": 27.32
+      "maximum_mean_luminance": 44.73
     },
     {
       "file": "Farol-install-dark.gif",
       "frames": 500,
       "duration_ms": 20000,
-      "maximum_mean_luminance": 26.88
+      "maximum_mean_luminance": 43.88
     },
     {
       "file": "Farol-01-sign-in-dark.gif",
-      "frames": 145,
-      "duration_ms": 22340,
-      "maximum_mean_luminance": 24.91
+      "frames": 120,
+      "duration_ms": 24620,
+      "maximum_mean_luminance": 41.24
     },
     {
       "file": "Farol-02-workspace-dark.gif",
-      "frames": 100,
-      "duration_ms": 16300,
-      "maximum_mean_luminance": 23.3
+      "frames": 84,
+      "duration_ms": 18620,
+      "maximum_mean_luminance": 39.4
     },
     {
       "file": "Farol-02b-edits-and-commands-dark.gif",
-      "frames": 71,
-      "duration_ms": 19660,
-      "maximum_mean_luminance": 20.28
+      "frames": 54,
+      "duration_ms": 20180,
+      "maximum_mean_luminance": 33.4
     },
     {
       "file": "Farol-03-create-tunnel-dark.gif",
-      "frames": 184,
-      "duration_ms": 27480,
-      "maximum_mean_luminance": 26.62
+      "frames": 142,
+      "duration_ms": 29040,
+      "maximum_mean_luminance": 42.39
     },
     {
       "file": "Farol-04-restricted-key-dark.gif",
-      "frames": 184,
-      "duration_ms": 32580,
-      "maximum_mean_luminance": 26.64
+      "frames": 138,
+      "duration_ms": 33740,
+      "maximum_mean_luminance": 40.76
     },
     {
       "file": "Farol-05-connect-this-mac-dark.gif",
-      "frames": 69,
-      "duration_ms": 13960,
-      "maximum_mean_luminance": 19.77
+      "frames": 50,
+      "duration_ms": 14180,
+      "maximum_mean_luminance": 33.7
     },
     {
       "file": "Farol-06-add-plugin-dark.gif",
-      "frames": 280,
-      "duration_ms": 49180,
-      "maximum_mean_luminance": 29.02
+      "frames": 217,
+      "duration_ms": 51040,
+      "maximum_mean_luminance": 46.99
     },
     {
       "file": "Farol-07-test-connection-dark.gif",
-      "frames": 70,
-      "duration_ms": 16960,
-      "maximum_mean_luminance": 26.29
+      "frames": 65,
+      "duration_ms": 18880,
+      "maximum_mean_luminance": 41.1
     },
     {
       "file": "Farol-ask-your-files-light.gif",
@@ -87,34 +87,34 @@
   ],
   "contrast_pairs": [
     {
-      "foreground": "#f2f4fb",
-      "background": "#121829",
-      "ratio": 16.08
+      "foreground": "#f5f6fa",
+      "background": "#262a36",
+      "ratio": 13.26
     },
     {
-      "foreground": "#9aa6c2",
-      "background": "#121829",
-      "ratio": 7.24
+      "foreground": "#bcc3d2",
+      "background": "#262a36",
+      "ratio": 8.1
     },
     {
-      "foreground": "#bba5ff",
-      "background": "#0a0e1c",
-      "ratio": 9.1
+      "foreground": "#c9b8ff",
+      "background": "#1b1e27",
+      "ratio": 9.34
     },
     {
       "foreground": "#6ee7b0",
-      "background": "#121829",
-      "ratio": 11.55
+      "background": "#262a36",
+      "ratio": 9.35
     },
     {
       "foreground": "#ffc061",
-      "background": "#121829",
-      "ratio": 10.91
+      "background": "#262a36",
+      "ratio": 8.84
     },
     {
       "foreground": "#14102a",
-      "background": "#bba5ff",
-      "ratio": 8.74
+      "background": "#c9b8ff",
+      "ratio": 10.36
     },
     {
       "foreground": "#1d1b29",

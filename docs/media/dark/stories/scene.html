@@ -13,26 +13,26 @@
     font-weight: 100 900;
   }
   :root {
-    --bg: #0a0e1c;
-    --panel: #121829;
-    --raised: #1a2238;
-    --line: #2b3550;
-    --text: #f2f4fb;
-    --muted: #9aa6c2;
-    --accent: #bba5ff;
+    --bg: #1b1e27;
+    --panel: #262a36;
+    --raised: #313644;
+    --line: #4a5165;
+    --text: #f5f6fa;
+    --muted: #bcc3d2;
+    --accent: #c9b8ff;
     --accent-ink: #14102a;
     --signal: #ffc061;
     --good: #6ee7b0;
-    --good-bg: #123026;
-    --scan: #2a2750;
-    --bubble: #2a2548;
+    --good-bg: #1d4436;
+    --scan: #3d3768;
+    --bubble: #3b3560;
     --key: #c9a7ff;
     --fn: #8fc2ff;
     --str: #ffc98a;
-    --comment: #7a86a3;
+    --comment: #98a1b6;
     --mark: #ffffff;
-    --dock: #1a2036;
-    --desk: #0e1426;
+    --dock: #2b2f3c;
+    --desk: #20232d;
   }
   [data-theme="light"] {
     --bg: #f4f3f9;
@@ -509,6 +509,8 @@
         out += ch;
         seen++;
       }
+      // A cut inside <code> must be closed, or the parser reopens it around everything after.
+      if (out.split("<code>").length > out.split("</code>").length) out += "</code>";
       return `<div class="answer">${out}</div>`;
     };
     function mac(grant, files, active, tabName, stat, lines) {

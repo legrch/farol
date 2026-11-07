@@ -16,7 +16,7 @@ The central mark is a flat monochrome reinterpretation of Farol's concentric lig
 
 ## Setup series
 
-`build-setup.py` copies the [onboarding package](../onboarding/README.md) to a disposable directory, enables `FAROL_MEDIA_THEME=dark` through `palette.py`, and writes eight dark GIFs with the same steps, values and click targets. The light GIFs stay in `../onboarding/output/`.
+`build-setup.py` copies the [onboarding package](../onboarding/README.md) to a disposable directory, enables `FAROL_MEDIA_THEME=dark` through `palette.py`, and renders its scenes at double resolution. It then writes eight dark GIFs with a guiding camera: the frame follows the cursor and any new result, the target gets an outline, and each step's instruction sits in a large bar below. Steps, values and click targets match the onboarding package, whose light GIFs stay in `../onboarding/output/`.
 
 ## Rebuild
 
