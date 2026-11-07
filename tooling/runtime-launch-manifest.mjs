@@ -268,11 +268,27 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
       "legacy-system-tool",
     ),
     launch(
+      "release.installer-signatures",
+      "boot/installrelease.go",
+      "installSignatures",
+      "go.CommandContext",
+      '"/usr/bin/codesign"',
+      "legacy-system-tool",
+    ),
+    launch(
       "release.installed-executable-signatures",
       "modules/release/infra/native/process/signatures.go",
       "VerifyExecutableSignatures",
       "go.CommandContext",
       '"/usr/bin/codesign"',
+      "legacy-system-tool",
+    ),
+    launch(
+      "release.installer-process-observation",
+      "boot/installrelease.go",
+      "installProductionStopped",
+      "go.CommandContext",
+      '"/bin/ps"',
       "legacy-system-tool",
     ),
     launch(

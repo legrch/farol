@@ -1,7 +1,0 @@
-.build-deps/
-.venv/
-__pycache__/
-build.log
-captures/
-source/*.html
-source/scenes.json

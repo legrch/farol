@@ -1,0 +1,140 @@
+{
+  "artifacts": [
+    {
+      "file": "Farol-ask-your-files-dark.gif",
+      "frames": 500,
+      "duration_ms": 20000,
+      "maximum_mean_luminance": 44.07
+    },
+    {
+      "file": "Farol-change-your-code-dark.gif",
+      "frames": 600,
+      "duration_ms": 24000,
+      "maximum_mean_luminance": 44.73
+    },
+    {
+      "file": "Farol-install-dark.gif",
+      "frames": 500,
+      "duration_ms": 20000,
+      "maximum_mean_luminance": 43.88
+    },
+    {
+      "file": "Farol-01-sign-in-dark.gif",
+      "frames": 475,
+      "duration_ms": 19000,
+      "maximum_mean_luminance": 45.39
+    },
+    {
+      "file": "Farol-02-workspace-dark.gif",
+      "frames": 355,
+      "duration_ms": 14200,
+      "maximum_mean_luminance": 47.34
+    },
+    {
+      "file": "Farol-02b-edits-and-commands-dark.gif",
+      "frames": 390,
+      "duration_ms": 15600,
+      "maximum_mean_luminance": 47.02
+    },
+    {
+      "file": "Farol-03-create-tunnel-dark.gif",
+      "frames": 688,
+      "duration_ms": 27520,
+      "maximum_mean_luminance": 46.31
+    },
+    {
+      "file": "Farol-04-restricted-key-dark.gif",
+      "frames": 690,
+      "duration_ms": 27600,
+      "maximum_mean_luminance": 45.07
+    },
+    {
+      "file": "Farol-05-connect-this-mac-dark.gif",
+      "frames": 295,
+      "duration_ms": 11800,
+      "maximum_mean_luminance": 46.18
+    },
+    {
+      "file": "Farol-06-add-plugin-dark.gif",
+      "frames": 1108,
+      "duration_ms": 44320,
+      "maximum_mean_luminance": 45.98
+    },
+    {
+      "file": "Farol-07-test-connection-dark.gif",
+      "frames": 360,
+      "duration_ms": 14400,
+      "maximum_mean_luminance": 46.8
+    },
+    {
+      "file": "Farol-08-change-access-dark.gif",
+      "frames": 318,
+      "duration_ms": 12720,
+      "maximum_mean_luminance": 46.98
+    },
+    {
+      "file": "Farol-09-updates-dark.gif",
+      "frames": 330,
+      "duration_ms": 13200,
+      "maximum_mean_luminance": 43.93
+    }
+  ],
+  "contrast_pairs": [
+    {
+      "foreground": "#f5f6fa",
+      "background": "#262a36",
+      "ratio": 13.26
+    },
+    {
+      "foreground": "#bcc3d2",
+      "background": "#262a36",
+      "ratio": 8.1
+    },
+    {
+      "foreground": "#c9b8ff",
+      "background": "#1b1e27",
+      "ratio": 9.34
+    },
+    {
+      "foreground": "#6ee7b0",
+      "background": "#262a36",
+      "ratio": 9.35
+    },
+    {
+      "foreground": "#ffc061",
+      "background": "#262a36",
+      "ratio": 8.84
+    },
+    {
+      "foreground": "#14102a",
+      "background": "#c9b8ff",
+      "ratio": 10.36
+    },
+    {
+      "foreground": "#1d1b29",
+      "background": "#ffffff",
+      "ratio": 16.92
+    },
+    {
+      "foreground": "#625d75",
+      "background": "#ffffff",
+      "ratio": 6.28
+    },
+    {
+      "foreground": "#5b43b5",
+      "background": "#f4f3f9",
+      "ratio": 6.53
+    },
+    {
+      "foreground": "#16764d",
+      "background": "#ffffff",
+      "ratio": 5.63
+    },
+    {
+      "foreground": "#ffffff",
+      "background": "#5b43b5",
+      "ratio": 7.2
+    }
+  ],
+  "scope": "Synthetic illustrations only; selected palette pairs, not a complete UI accessibility audit or live acceptance test."
+}
