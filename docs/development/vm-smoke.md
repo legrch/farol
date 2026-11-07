@@ -87,11 +87,16 @@ producer. `--latest` resolves public GitHub Latest and its exact official asset
 URLs on that run. Signed/notarized formats require a dedicated future verifier.
 No OS quarantine or signing warning is bypassed.
 
+The verifier conservatively rejects parent-relative symlink targets, including
+some producer-valid layouts. Unsupported layouts refuse before installation;
+the qualified v0.5.18 archive uses the supported layout.
+
 For a new dedicated test guest, add `--prepare-test-guest` once. It records a
 guest-only marker after connection admission; it never resets a profile. Unknown
 or foreign configured connections refuse. A connection imported by the fixed
 Dev-only path below is admitted only while its tunnel matches the guest marker
 and no unresolved runtime/verification effect is present.
+The scalar Connect uncertainty flag refuses both empty and Dev admission.
 
 The bounded scenario proves capture, read-only staging, exact guest install,
 initial UI, optional menu, normal Quit with no owned app process remaining, and
@@ -163,3 +168,40 @@ inspector/importer and provisioning plans without real accounts or a VM.
 Dev deployment, clean first-install state, updater and embedded provider sign-in
 are separate qualification. A configured prepared profile tests returning use,
 not a clean installation.
+
+## Interrupted work, credential publication and endpoint handoff
+
+Before a product mutation, the runner publishes and fsyncs the private per-VM
+`.farol-smoke-pending.json` fence. It is removed only after the successful run
+and guest server Stop acknowledgement. A failed, interrupted or timed-out run
+leaves the fence in place, blocking a later smoke/import/release while an old
+guest phase might still be executing. `task vm:status` remains an observation
+route; it never clears the fence. Reconcile the original run's guest ACKs,
+current state and server lifetime before removing that exact fence manually.
+Removing it merely to retry UNKNOWN is not reconciliation.
+
+Quit must produce a changed, canonical `last-quit.json` with `drained: true`,
+no unconfirmed children, a fresh timestamp from the guest clock, and no
+`running.json`. GUI disappearance alone does not qualify installation or Dev
+endpoint release. `vm:release-dev` requires observing its own normal Quit;
+an already-absent GUI is not a confirmed handoff. Installation completes its
+fallible replacement copy before moving the old app, then uses same-volume
+renames. An interrupted rename retains the predecessor and guest-work path for
+explicit recovery instead of silently replaying installation.
+
+Dev import refuses source uncertainty, checks legacy case spelling when looking
+for a live host Dev, and proves read-only staging before exporting the key.
+The guest publishes a durable Connect uncertainty flag before changing secret
+bytes; it clears that flag only after publishing the new metadata and binding
+marker. Partial publication refuses later admission/re-import until reconciled.
+Normal exceptions, Ctrl+C and SIGTERM remove the host staging key while keeping
+operation metadata. SIGKILL or host power loss cannot run cleanup: inspect the
+original private inbox and reconcile/remove residual credential payloads before
+reusing that VM. Never archive raw key files as diagnostic evidence.
+
+A returning approved Dev profile may automatically resume its endpoint during
+launch. The smoke checks that host Dev is stopped and reports remote tunnel
+qualification as `NOT_QUALIFIED`; it does not claim there was no tunnel effect.
+The endpoint is still a cooperative single-client resource, not a global lock
+on manual host launches. Compare the explicit Dev connector's profile/build
+binding with guest proof before calling that route qualified.

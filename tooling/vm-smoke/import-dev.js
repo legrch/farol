@@ -23,6 +23,19 @@ function run(argv) {
     throw Error("GUEST_EFFECT_UNKNOWN");
   if (connector.tunnelId !== null && connector.tunnelId !== input.tunnelId)
     throw Error("FOREIGN_GUEST_CONNECTION");
+  const write = (path, value) => {
+    if (
+      !$(
+        JSON.stringify(value, null, 2) + "\n",
+      ).writeToFileAtomicallyEncodingError(path, true, 4, null) ||
+      !fm.setAttributesOfItemAtPathError(
+        { NSFilePosixPermissions: 384 },
+        path,
+        null,
+      )
+    )
+      throw Error("GUEST_CONFIG_WRITE_FAILED");
+  };
   const keyRoot = root + "/farol-private/secure-mcp-connector";
   if (
     !fm.createDirectoryAtPathWithIntermediateDirectoriesAttributesError(
@@ -37,6 +50,11 @@ function run(argv) {
   if (!key || key.length < 20 || key.length > 512)
     throw Error("DEV_KEY_INVALID");
   const keyFile = keyRoot + "/control-plane-api-key";
+  // Publish uncertainty before replacing secret bytes. A partial import must
+  // remain fenced even if the next write committed but its acknowledgement failed.
+  config.setup.connect.outcomeUnknown = true;
+  config.revision += 1;
+  write(file, config);
   if (
     !key.writeToFileAtomically(keyFile, true) ||
     !fm.setAttributesOfItemAtPathError(
@@ -55,24 +73,14 @@ function run(argv) {
   connector.lastVerifiedAttachment = null;
   connector.chatgptApp = null;
   config.revision += 1;
-  const write = (path, value) => {
-    if (
-      !$(
-        JSON.stringify(value, null, 2) + "\n",
-      ).writeToFileAtomicallyEncodingError(path, true, 4, null) ||
-      !fm.setAttributesOfItemAtPathError(
-        { NSFilePosixPermissions: 384 },
-        path,
-        null,
-      )
-    )
-      throw Error("GUEST_CONFIG_WRITE_FAILED");
-  };
   write(file, config);
   write(home + "/.farol-vm-dev-connection.json", {
     schema: 1,
     source: "dev-only",
     tunnelId: input.tunnelId,
   });
+  config.setup.connect.outcomeUnknown = false;
+  config.revision += 1;
+  write(file, config);
   return "IMPORTED_DEV_CONNECTION";
 }

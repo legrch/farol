@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -157,6 +158,15 @@ def download_latest(directory, deadline):
     return directory / names[0]
 
 
+def require_host_dev_stopped(identity, home=None):
+    home = Path.home() if home is None else home
+    root = home / 'Library/Application Support' / identity['devDataLeaf']
+    rows = subprocess.check_output(['/bin/ps', '-ax', '-o', 'command='], text=True)
+    # APFS may retain the supported legacy DEV spelling of the same directory.
+    require(not any(str(root).casefold() in row.casefold() for row in rows.splitlines()),
+            'HOST_DEV_STILL_RUNNING')
+
+
 def export_dev_connection(stage, identity, home=None):
     """The fixed Dev profile is the only source. Never return or log the key."""
     home = Path.home() if home is None else home
@@ -169,11 +179,18 @@ def export_dev_connection(stage, identity, home=None):
         require(ancestor.is_dir() and not ancestor.is_symlink(), 'DEV_PROFILE_UNSAFE')
     config_before = regular(config_file, 4 * 1024 * 1024)
     config = json.loads(config_file.read_text())
-    tunnel = config['connectors']['secureMcp']['tunnelId']
+    connector = config['connectors']['secureMcp']
+    setup = config.get('setup', {})
+    require(isinstance(setup, dict) and isinstance(setup.get('connect', {}), dict), 'DEV_CONFIG_INVALID')
+    runtime = connector.get('runtime')
+    require(not setup.get('connect', {}).get('outcomeUnknown') and
+            not connector.get('appVerificationPending') and
+            not (isinstance(runtime, dict) and runtime.get('state') == 'outcome_unknown'),
+            'DEV_EFFECT_UNKNOWN')
+    tunnel = connector['tunnelId']
     require(isinstance(tunnel, str) and re.fullmatch('[0-9A-Za-z._:-]{1,160}', tunnel), 'DEV_TUNNEL_MISSING')
-    rows = subprocess.check_output(['/bin/ps', '-ax', '-o', 'command='], text=True)
-    require(not any(str(root) in row for row in rows.splitlines()), 'HOST_DEV_STILL_RUNNING')
-    fd = os.open(key_file, os.O_RDONLY | os.O_NOFOLLOW)
+    require_host_dev_stopped(identity, home)
+    fd = os.open(key_file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         info = os.fstat(fd)
         require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and
@@ -234,6 +251,8 @@ class Runner:
         self.report = self.machine / 'exchange' / 'farol-smoke' / self.run_id
         self.log = []
         self.pending = None
+        self.effect_owned = False
+        self.effect_file = self.machine / '.farol-smoke-pending.json'
         # Never forward product configuration, proxy, Electron or loader environment.
         self.env = {k: os.environ[k] for k in ('HOME', 'USER', 'TMPDIR') if k in os.environ}
         self.env.update(PATH='/usr/bin:/bin:/usr/sbin:/sbin', TERMINAL_MAC_HOME=str(self.home))
@@ -295,6 +314,8 @@ class Runner:
         self.pending = None
 
     def phase(self, name):
+        if name in ('install', 'launch', 'relaunch', 'import-dev', 'cleanup'):
+            self.begin_effect()
         self.pending = name
         self.sequence += 1
         token = f'{self.sequence:04d}-{name}'
@@ -305,6 +326,42 @@ class Runner:
         self.wait_result(target)
         self.log.append(name)
         self.pending = None
+
+    def begin_effect(self):
+        if self.effect_owned:
+            return
+        try:
+            with self.effect_file.open('x') as stream:
+                self.effect_file.chmod(0o600)
+                json.dump({'runId': self.run_id, 'evidence': str(self.out)}, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+        except FileExistsError as error:
+            raise Refused('UNRESOLVED_GUEST_OPERATION') from error
+        self.effect_owned = True
+
+    def finish_effect(self):
+        if self.effect_owned:
+            regular(self.effect_file, 4096)
+            require(json.loads(self.effect_file.read_text()).get('runId') == self.run_id,
+                    'GUEST_OPERATION_FENCE_CHANGED')
+            require(self.log and self.log[-1] == 'stop', 'GUEST_SERVER_NOT_STOPPED')
+            self.effect_file.unlink()
+            self.effect_owned = False
+
+    def quit_proof(self):
+        self.phase('quit-proof')
+        file = self.report / 'quit-proof.json'
+        regular(file, 32768)
+        return json.loads(file.read_text())
+
+    def require_quit_drain(self, before):
+        after = self.quit_proof()
+        require(after.get('running') is False and after.get('drained') is True and
+                after.get('receipt') != before.get('receipt') and
+                type(after.get('quitAt')) is int and type(before.get('observedAt')) is int and
+                before['observedAt'] <= after['quitAt'] <= after['observedAt'],
+                'GUEST_QUIT_DRAIN_UNCONFIRMED')
 
     def state(self):
         self.phase('inspect')
@@ -335,7 +392,7 @@ class Runner:
     def prepare_stage(self):
         self.stage.mkdir(parents=True, exist_ok=False, mode=0o700)
         self.report.mkdir(parents=True, exist_ok=False, mode=0o700)
-        for name in ('guest.sh', 'inspect.js', 'no-tunnel.js', 'activate.js', 'import-dev.js', 'connection-proof.js'):
+        for name in ('guest.sh', 'inspect.js', 'no-tunnel.js', 'activate.js', 'import-dev.js', 'connection-proof.js', 'quit-proof.js'):
             shutil.copyfile(Path(__file__).parent / 'vm-smoke' / name, self.stage / name)
         (self.stage / 'identity.json').write_text(json.dumps(IDENTITY))
         budget = int(self.deadline - time.monotonic())
@@ -365,14 +422,24 @@ class Runner:
         if before['pids']:
             self.phase('activate')
             self.wait_state(True, foreground=True)
+            proof = self.quit_proof()
+            self.begin_effect()
             self.action('key', 'cmd+q')
             self.wait_state(False)
+            self.require_quit_drain(proof)
+        else:
+            proof = self.quit_proof()
+            require(proof.get('running') is False and
+                    (proof.get('receipt') is None or proof.get('drained') is True),
+                    'GUEST_QUIT_DRAIN_UNCONFIRMED')
+        return bool(before['pids'])
 
     def release_dev(self):
         self.prepare_stage()
         self.start_guest()
+        self.phase('share-probe')
         self.phase('admit')
-        self.quit_guest_app()
+        require(self.quit_guest_app(), 'GUEST_CLOSE_NOT_OBSERVED')
         self.phase('connection-proof')
         shutil.copyfile(self.report / 'connection.json', self.out / 'connection.json')
         self.phase('stop')
@@ -383,10 +450,13 @@ class Runner:
 
     def connect_dev(self):
         self.prepare_stage()
-        export_dev_connection(self.stage, IDENTITY)
         self.start_guest()
+        self.phase('share-probe')
         self.phase('admit')
         self.quit_guest_app()
+        # Prove transport before exposing a credential to this inbox.
+        export_dev_connection(self.stage, IDENTITY)
+        require_host_dev_stopped(IDENTITY)
         self.phase('import-dev')
         # Key material is removed from host staging immediately after guest ACK.
         self.clear_dev_payload()
@@ -425,6 +495,7 @@ class Runner:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as e:
                 raise Refused('VM_BUSY') from e
+            require(self.a.connection_proof or not self.effect_file.exists(), 'UNRESOLVED_GUEST_OPERATION')
             status = self.cli('status', self.a.vm)
             if status.get('state') == 'stopped':
                 self.pending = 'vm-start'
@@ -445,6 +516,8 @@ class Runner:
                 return self.connection_proof()
             if self.a.release_dev:
                 return self.release_dev()
+            # Returning packaged profiles can resume the approved Dev endpoint.
+            require_host_dev_stopped(IDENTITY)
             archive = Path(self.a.artifact).expanduser().absolute() if self.a.artifact else download_latest(self.out, self.deadline)
             manifest = verify(archive)
             self.prepare_stage()
@@ -474,9 +547,12 @@ class Runner:
                 self.action('key', 'escape')
             self.phase('activate')
             self.wait_state(True, foreground=True)
+            proof = self.quit_proof()
+            self.begin_effect()
             self.action('key', 'cmd+q')
             self.log.append('quit-requested')
             stopped = self.wait_state(False)
+            self.require_quit_drain(proof)
             self.screenshot('quit')
             self.phase('relaunch')
             relaunched = self.wait_state(True)
@@ -493,7 +569,8 @@ class Runner:
             self.phase('stop')
             # Structural assertions are automatic; pixel semantics require the agent.
             result = dict(status='NEEDS_REVIEW', lifecycle='PASS', ui='NEEDS_REVIEW',
-                          tunnel='NOT_RUN', profile='guest-package-only',
+                          tunnel='NOT_QUALIFIED' if connection.get('approvedDev') else 'NOT_RUN',
+                          profile='guest-package-only',
                           version=manifest['version'], archiveSha256=manifest['archiveSha256'],
                           initial=initial, stopped=stopped, relaunched=relaunched,
                           menu='CAPTURED' if self.a.menu_point else 'NOT_RUN', phases=self.log)
@@ -551,15 +628,19 @@ def arguments(argv=None):
 
 def main():
     runner = None
+    def interrupted(_signal, _frame):
+        raise InterruptedError('RUN_INTERRUPTED')
+    previous_term = signal.signal(signal.SIGTERM, interrupted)
     try:
         require(set(IDENTITY) == {'name', 'bundleId', 'dataLeaf', 'devDataLeaf'}, 'USE_TASK_VM_SMOKE_ENTRYPOINT')
         runner = Runner(arguments())
         result = runner.run()
+        runner.finish_effect()
         print(json.dumps(dict(result, evidence=str(runner.out))))
         return 0  # NEEDS_REVIEW is deliberately explicit; no UI PASS is fabricated.
-    except (Refused, OSError, ValueError, TypeError, KeyError, subprocess.TimeoutExpired, zipfile.BadZipFile) as error:
+    except (Refused, OSError, ValueError, TypeError, KeyError, KeyboardInterrupt, subprocess.TimeoutExpired, zipfile.BadZipFile) as error:
         result = dict(status='NEEDS_OWNER' if str(error) == 'NEEDS_OWNER' else 'BLOCKED',
-                      reason=str(error), phases=runner.log if runner else [],
+                      reason='RUN_INTERRUPTED' if isinstance(error, KeyboardInterrupt) else str(error), phases=runner.log if runner else [],
                       pending=runner.pending if runner else None,
                       outcome='UNKNOWN' if runner and (runner.pending or runner.log) else 'NOT_STARTED')
         if runner:
@@ -567,6 +648,12 @@ def main():
             (runner.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
         print(json.dumps(result))
         return 2
+    finally:
+        try:
+            if runner:
+                runner.clear_dev_payload()
+        finally:
+            signal.signal(signal.SIGTERM, previous_term)
 
 
 if __name__ == '__main__':
