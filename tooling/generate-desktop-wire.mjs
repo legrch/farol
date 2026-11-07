@@ -113,7 +113,9 @@ ts += fs.readFileSync(
   path.join(root, "tooling/desktop-validator.ts.txt"),
   "utf8",
 );
-const gofmtDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "farol-wire-gofmt-"));
+const gofmtDirectory = fs.mkdtempSync(
+  path.join(os.tmpdir(), "farol-wire-gofmt-"),
+);
 let formattedGo;
 try {
   const inputPath = path.join(gofmtDirectory, "wire.go");
