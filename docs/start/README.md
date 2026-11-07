@@ -1,6 +1,6 @@
 # Start using Farol
 
-Farol connects folders you choose on your Mac to ChatGPT. Follow the path below from understanding the product to your first file request.
+Farol connects folders you choose on your Mac to ChatGPT. For the complete illustrated guide on one page, [start on the Farol home page](../../README.md#install-and-connect). The links below are focused references.
 
 | Step                 | Guide                                        | What you will learn                                                              |
 | -------------------- | -------------------------------------------- | -------------------------------------------------------------------------------- |
@@ -11,7 +11,7 @@ Farol connects folders you choose on your Mac to ChatGPT. Follow the path below 
 
 **First installation?** Start with [installation and requirements](installation.md). Public ZIP downloads exist, but a supported first-install and updater-adoption procedure is still being qualified.
 
-**Already have an accepted running installation?** Go directly to [setup](setup.md). It has written steps, static illustrations and eight optional animations. The [compact text connection reference](first-connection.md) explains the same flow without images.
+**Already have an accepted running installation?** Go directly to [setup](setup.md). It has written steps and eight visible animations. The [compact text connection reference](first-connection.md) explains the same flow without images.
 
 A **Farol workspace** is a local folder you approve. A **ChatGPT workspace** is your account/team context in ChatGPT. The tunnel connects the intended ChatGPT workspace; Farol's local folder grants determine file access.
 

@@ -1,6 +1,6 @@
 # Farol documentation
 
-Farol gives a connected ChatGPT app access to selected folders on a Mac. Start with the user guides; architecture and test evidence are available separately.
+Farol gives a connected ChatGPT app access to selected folders on a Mac. The [Farol home page](../README.md) is the complete illustrated guide: purpose, download status, setup, first request and best practices. The pages below are focused references and troubleshooting material.
 
 ## Start
 
@@ -9,7 +9,7 @@ Farol gives a connected ChatGPT app access to selected folders on a Mac. Start w
 3. [Connect Farol to ChatGPT](start/setup.md) — the visual setup guide, from sign-in to a tested connection.
 4. [Your first workspace](start/first-workspace.md) — a small read-only file exercise.
 
-[Visual setup guide](start/setup.md) provides eight optional animations with written steps and static illustrations. Prefer a shorter reference? Use [First connection](start/first-connection.md). [Animation source](media/onboarding/README.md) documents how to reproduce them.
+[Focused setup reference](start/setup.md) provides the same eight visible animations and written steps. Prefer a shorter reference? Use [First connection](start/first-connection.md). [Animation source](media/onboarding/README.md) documents how to reproduce them.
 
 ## Use Farol
 

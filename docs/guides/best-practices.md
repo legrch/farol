@@ -25,7 +25,7 @@ After connecting the plugin, find it in **Plugins**, open its **⋯** menu, choo
 
 These are the setting descriptions, not a promise that every call is accepted or that every change produces a prompt. Account rules, tool classification and Farol's own controls still apply. Review your actual screen before making a choice. The tutorial displays the options without switching them.
 
-[View the static permissions screen](../media/onboarding/output/Farol-plugin-permissions-light.png), [watch the connection and permission review](../start/setup.md#6-add-farol-to-chatgpt) or follow the [text connection guide](chatgpt-connection.md).
+[Watch the connection and permission review](../start/setup.md#6-add-farol-to-chatgpt) or follow the [text connection guide](chatgpt-connection.md).
 
 ## Make changes in small steps
 

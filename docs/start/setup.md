@@ -6,9 +6,9 @@ Follow this guide from an accepted, running Farol installation. You will sign in
 
 > **New to Farol?** Start with [Installation and requirements](installation.md). Public downloads do not yet have a qualified first-install procedure. These steps begin inside a running app; they do not install Farol.
 
-The images and eight optional animations recreate the UI with synthetic data. They are not screen recordings or live setup evidence. Screens and account-specific choices may differ.
+The eight animations below recreate the UI with synthetic data. They are not screen recordings or live setup evidence. Screens and account-specific choices may differ. Every action is also explained in text.
 
-**Motion is optional.** Follow the written steps and static illustrations, or expand a step to watch its GIF. Collapse it to hide the looping animation; the GIF has no in-image pause control. [About these illustrations](../media/onboarding/README.md).
+[Prefer the complete guide on one page? Read the Farol home page →](../../README.md#install-and-connect)
 
 ## Steps
 
@@ -27,14 +27,7 @@ The images and eight optional animations recreate the UI with synthetic data. Th
 2. Use your own ChatGPT account, then return to Setup. If confirmation is still needed, choose **Check sign-in**.
 3. Wait for **✓ Sign-in checked**, then choose **Continue**. This does not yet grant local file access.
 
-![Setup illustration: 1. sign in to chatgpt](../media/onboarding/output/Farol-01-sign-in-light.png)
-
-<details>
-<summary>Show animation: 1. Sign in to ChatGPT</summary>
-
 ![Sign in in Farol, return to Setup, check sign-in, and continue; illustrated with synthetic data](../media/onboarding/output/Farol-01-sign-in-light.gif)
-
-</details>
 
 ## 2. Add a workspace
 
@@ -42,32 +35,13 @@ The images and eight optional animations recreate the UI with synthetic data. Th
 2. Review the path and saved **Read only** access. Wait for **✓ Works**; every listed workspace needs a current check.
 3. Choose **Continue** when the checks are current. [Try a sample workspace](first-workspace.md) for a complete read-only exercise.
 
-![Setup illustration: 2. add a workspace](../media/onboarding/output/Farol-02-workspace-light.png)
-
-<details>
-<summary>Show animation: 2. Add a workspace</summary>
-
 ![Choose a sample folder, keep Read only, and wait for Works; illustrated with synthetic data](../media/onboarding/output/Farol-02-workspace-light.gif)
 
-</details>
-
-<a id="optional-edits-and-commands"></a>
-
-<details>
-<summary><strong>Optional: edits and commands — review before granting more access</strong></summary>
+## Optional: edits and commands
 
 Keep Read only and Commands off for the first reading exercise. If a later task needs changes, choose **Read & write** in the workspace row and wait for the saved access check. Review **Commands** separately: it is shared across approved workspaces, not a per-folder sandbox. The animation demonstrates optional changes; it is not a required setup step. See [Best practices](../guides/best-practices.md).
 
-[Static image: optional edits and commands](../media/onboarding/output/Farol-02b-edits-and-commands-light.png)
-
-<details>
-<summary>Show animation: Optional: edits and commands</summary>
-
 ![Review optional Read & write and the shared Commands grant; illustrated with synthetic data](../media/onboarding/output/Farol-02b-edits-and-commands-light.gif)
-
-</details>
-
-</details>
 
 ## 3. Create a tunnel
 
@@ -76,14 +50,7 @@ Keep Read only and Commands off for the first reading exercise. If a later task 
 3. Choose **Create** once and observe the result. Copy the complete tunnel ID from its row.
 4. Paste that ID into Farol before copying the key, so the next Copy action does not replace your only copy of the ID. A Platform-organization-only tunnel may not be available in ChatGPT.
 
-![Setup illustration: 3. create a tunnel](../media/onboarding/output/Farol-03-create-tunnel-light.png)
-
-<details>
-<summary>Show animation: 3. Create a tunnel</summary>
-
 ![Create a tunnel for the intended ChatGPT workspace, copy its ID, and paste it into Farol; illustrated with synthetic data](../media/onboarding/output/Farol-03-create-tunnel-light.gif)
-
-</details>
 
 ## 4. Create a restricted key
 
@@ -93,14 +60,7 @@ Keep Read only and Commands off for the first reading exercise. If a later task 
 
 Do not substitute a full-access or admin key. Never paste the key into a chat, repository, screenshot or support message.
 
-![Setup illustration: 4. create a restricted key](../media/onboarding/output/Farol-04-restricted-key-light.png)
-
-<details>
-<summary>Show animation: 4. Create a restricted key</summary>
-
 ![Select Restricted and Tunnels Read plus Use, then copy the key privately; illustrated with synthetic data](../media/onboarding/output/Farol-04-restricted-key-light.gif)
-
-</details>
 
 ## 5. Connect this Mac
 
@@ -108,14 +68,7 @@ Do not substitute a full-access or admin key. Never paste the key into a chat, r
 2. Choose **Connect** once. Wait for the existing result; do not resubmit while it is pending or unknown.
 3. Continue after **✓ Connected**. This confirms the local connection, not the ChatGPT attachment. If Farol says **Key saved**, leaving the field empty retains it; do not create or paste a replacement just because the field cleared.
 
-![Setup illustration: 5. connect this mac](../media/onboarding/output/Farol-05-connect-this-mac-light.png)
-
-<details>
-<summary>Show animation: 5. Connect this Mac</summary>
-
 ![Use the tunnel ID and masked key, connect once, and wait for Connected; illustrated with synthetic data](../media/onboarding/output/Farol-05-connect-this-mac-light.gif)
-
-</details>
 
 ## 6. Add Farol to ChatGPT
 
@@ -126,14 +79,7 @@ Do not substitute a full-access or admin key. Never paste the key into a chat, r
 
 The other choices are **Always ask**, **Allow read-only tools** (read without asking, but ask before changes), and **Allow all tools (Elevated risk)**. These are the UI descriptions, not guarantees for every call. Allow all tools is optional, requires an informed owner decision and is not necessary to follow this guide. [Compare the permission choices](../guides/best-practices.md#choose-chatgpt-permissions-deliberately).
 
-![Setup illustration: 6. add farol to chatgpt](../media/onboarding/output/Farol-06-add-plugin-light.png) · [Static permissions screen](../media/onboarding/output/Farol-plugin-permissions-light.png)
-
-<details>
-<summary>Show animation: 6. Add Farol to ChatGPT</summary>
-
 ![Create and connect the plugin, find it, and review four permission levels without changing the default; illustrated with synthetic data](../media/onboarding/output/Farol-06-add-plugin-light.gif)
-
-</details>
 
 ## 7. Test the connection
 
@@ -143,14 +89,7 @@ The other choices are **Always ask**, **Allow read-only tools** (read without as
 
 If a check is already current, continue without repeating it. The successful state in the animation is simulated; it is not proof that your own setup passed.
 
-![Setup illustration: 7. test the connection](../media/onboarding/output/Farol-07-test-connection-light.png)
-
-<details>
-<summary>Show animation: 7. Test the connection</summary>
-
 ![Run one ChatGPT test, wait for the matching receipt, and return to Setup; illustrated with synthetic data](../media/onboarding/output/Farol-07-test-connection-light.gif)
-
-</details>
 
 ## If a step is interrupted
 

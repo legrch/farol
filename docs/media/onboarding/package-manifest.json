@@ -14,9 +14,9 @@
     },
     {
       "path": "docs/media/onboarding/README.md",
-      "bytes": 9865,
-      "sha256": "1f2083b6b2742a0abab8fd409d307d2073e190cef97632ca3ca8543277446d33",
-      "git_blob_sha1": "dd4cc894094ee7ca56244102c013e135265809a9"
+      "bytes": 9933,
+      "sha256": "bc544fbf122135a86ebba036c411040f1c0fc890cec1d09dada9164acc058b59",
+      "git_blob_sha1": "d6d4efc6a3b4eb9cc9b5d44d8bfa6d112e17bb00"
     },
     {
       "path": "docs/media/onboarding/THIRD_PARTY_NOTICES.md",
@@ -224,9 +224,9 @@
     },
     {
       "path": "docs/start/setup.md",
-      "bytes": 9877,
-      "sha256": "1db5eec95cbf2cd8dcb8f534203dc80bb764d1d327195af7d53c4ed11a43f41a",
-      "git_blob_sha1": "0ce3d9581beacdb6883fdba7b095575ee9e045d5"
+      "bytes": 8027,
+      "sha256": "4f809c82d294ec3ebd744f93be5058d49f13ef68083b51e6ad5e2869c3042598",
+      "git_blob_sha1": "494c75caa7d04791aa39ab4a0a267afefc00fe2d"
     }
   ]
 }
