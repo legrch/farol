@@ -24,6 +24,7 @@ tasks:
       - task: test:core
       - task: test:e2e:chatgpt-startup-readiness
       - task: test:tooling
+      - task: vm:test
       - task: test:witness-inputs
       - task: output:check
       - task: scan:secrets
@@ -34,6 +35,7 @@ tasks:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run ci:cloud
       - task: test:core
       - task: test:tooling
+      - task: vm:test
       - task: scan:secrets
 
   test:cloud:
