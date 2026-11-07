@@ -21,6 +21,7 @@ const result = spawnSync(
         name: identity.applicationName,
         bundleId: identity.applicationId,
         dataLeaf: identity.userData.slice(1),
+        devDataLeaf: desktopIdentity("dev", "/").userData.slice(1),
       }),
     },
   },

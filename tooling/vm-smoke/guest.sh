@@ -27,7 +27,7 @@ case "$phase" in
     while [ "$SECONDS" -lt "$until_time" ]; do
       request="$(cat "$stage/request" 2>/dev/null || true)"
       if [ -n "$request" ] && [ "$request" != "$last" ]; then
-        [[ "$request" =~ ^[0-9]{4}-(prepare|admit|install|launch|activate|inspect|relaunch|cleanup|stop)$ ]] || exit 76
+        [[ "$request" =~ ^[0-9]{4}-(prepare|admit|install|launch|activate|inspect|relaunch|cleanup|stop|import-dev|connection-proof|share-probe)$ ]] || exit 76
         last="$request"
         next="${request#*-}"
         /bin/bash "$stage/guest.sh" "$next" "$request"
@@ -35,6 +35,23 @@ case "$phase" in
       fi
       sleep 0.1
     done
+    ;;
+  share-probe)
+    if /usr/bin/touch "$stage/guest-write-probe" 2>/dev/null; then
+      /bin/rm -f "$stage/guest-write-probe"
+      finish BLOCKED
+      exit 0
+    fi
+    finish READY
+    ;;
+  connection-proof)
+    /usr/bin/osascript -l JavaScript "$stage/connection-proof.js" "$stage/identity.json" > "$report/connection.json.tmp"
+    mv "$report/connection.json.tmp" "$report/connection.json"
+    finish READY
+    ;;
+  import-dev)
+    /usr/bin/osascript -l JavaScript "$stage/import-dev.js" "$stage/identity.json" "$stage"
+    finish READY
     ;;
   stop)
     finish READY

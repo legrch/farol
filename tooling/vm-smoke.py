@@ -157,12 +157,62 @@ def download_latest(directory, deadline):
     return directory / names[0]
 
 
+def export_dev_connection(stage, identity, home=None):
+    """The fixed Dev profile is the only source. Never return or log the key."""
+    home = Path.home() if home is None else home
+    require(identity['devDataLeaf'] != identity['dataLeaf'] and Path(identity['devDataLeaf']).name == identity['devDataLeaf'], 'DEV_SOURCE_IDENTITY_INVALID')
+    root = home / 'Library/Application Support' / identity['devDataLeaf']
+    require(root.is_dir() and not root.is_symlink(), 'DEV_PROFILE_UNSAFE')
+    config_file = root / 'farol-state/config.json'
+    key_file = root / 'farol-private/secure-mcp-connector/control-plane-api-key'
+    for ancestor in (config_file.parent, key_file.parent, key_file.parent.parent):
+        require(ancestor.is_dir() and not ancestor.is_symlink(), 'DEV_PROFILE_UNSAFE')
+    config_before = regular(config_file, 4 * 1024 * 1024)
+    config = json.loads(config_file.read_text())
+    tunnel = config['connectors']['secureMcp']['tunnelId']
+    require(isinstance(tunnel, str) and re.fullmatch('[0-9A-Za-z._:-]{1,160}', tunnel), 'DEV_TUNNEL_MISSING')
+    rows = subprocess.check_output(['/bin/ps', '-ax', '-o', 'command='], text=True)
+    require(not any(str(root) in row for row in rows.splitlines()), 'HOST_DEV_STILL_RUNNING')
+    fd = os.open(key_file, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(fd)
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and
+                info.st_nlink == 1 and info.st_mode & 0o077 == 0 and 20 <= info.st_size <= 512,
+                'DEV_KEY_UNSAFE')
+        key = os.read(fd, 513)
+        after = os.fstat(fd)
+        named = key_file.lstat()
+        require((info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) == (named.st_dev, named.st_ino, named.st_size, named.st_mtime_ns), 'DEV_KEY_CHANGED')
+        require(len(key) == info.st_size and all(33 <= x <= 126 for x in key), 'DEV_KEY_INVALID')
+    finally:
+        os.close(fd)
+    after_config = config_file.lstat()
+    require((config_before.st_dev, config_before.st_ino, config_before.st_mtime_ns, config_before.st_size) == (after_config.st_dev, after_config.st_ino, after_config.st_mtime_ns, after_config.st_size), 'DEV_CONNECTION_CHANGED')
+    private = stage / 'dev-key'
+    with private.open('xb') as out:
+        private.chmod(0o600)
+        out.write(key)
+    del key
+    (stage / 'dev-connection.json').write_text(json.dumps({'schema': 1, 'tunnelId': tunnel}))
+    (stage / 'dev-connection.json').chmod(0o600)
+
+
+def refuse_host_profile_path(path, identity, home=None):
+    home = Path.home() if home is None else home
+    actual = str(path).casefold().rstrip('/')
+    for leaf in (identity['dataLeaf'], identity['devDataLeaf']):
+        protected = str(home / 'Library/Application Support' / leaf).casefold().rstrip('/')
+        require(actual != protected and not actual.startswith(protected + '/'),
+                'HOST_PRODUCT_PROFILE_FORBIDDEN')
+
+
 class Runner:
     def __init__(self, args):
         self.a = args
         self.deadline = time.monotonic() + args.timeout
         self.run_id = 'run-' + uuid.uuid4().hex
         self.home = Path(args.vm_home).expanduser().resolve(strict=True)
+        refuse_host_profile_path(self.home, IDENTITY)
         self.binary = Path(args.terminal_mac).expanduser().resolve(strict=True)
         require(self.binary.is_file() and self.binary.name == 'terminal-mac' and
                 self.binary.parent.name == 'MacOS' and self.binary.parent.parent.name == 'Contents',
@@ -176,8 +226,11 @@ class Runner:
         self.tools = self.binary.parent.parent / 'Resources' / 'guest-tools'
         require(self.tools.is_dir(), 'GUEST_TOOLS_MISSING')
         self.out = Path(args.evidence).expanduser().resolve() / self.run_id
+        refuse_host_profile_path(self.out, IDENTITY)
         self.out.mkdir(parents=True, exist_ok=False, mode=0o700)
-        self.stage = self.tools / 'farol-smoke' / self.run_id
+        self.inbox = self.machine / 'artifacts'
+        require(self.inbox.is_dir() and not self.inbox.is_symlink(), 'ARTIFACT_SHARE_REQUIRED')
+        self.stage = self.inbox / self.run_id
         self.report = self.machine / 'exchange' / 'farol-smoke' / self.run_id
         self.log = []
         self.pending = None
@@ -218,9 +271,17 @@ class Runner:
         self.pending = 'bootstrap'
         self.action('click', *self.a.terminal_point)
         time.sleep(0.5)
+        if self.a.bootstrap == 'finder':
+            self.action('key', 'cmd+shift+g')
+            time.sleep(0.3)
+            self.action('type', '/System/Applications/Utilities/Terminal.app')
+            self.action('key', 'return')
+            time.sleep(0.4)
+            self.action('key', 'cmd+o')
+            time.sleep(0.6)
         self.action('key', 'cmd+n')
         time.sleep(0.5)
-        command = '/bin/bash ' + shlex.quote('/Volumes/My Shared Files/tools/farol-smoke/' +
+        command = '/bin/bash ' + shlex.quote('/Volumes/My Shared Files/artifacts/' +
                                            self.run_id + '/guest.sh') + ' serve'
         self.action('type', command)
         self.action('key', 'return')
@@ -260,6 +321,99 @@ class Runner:
             self.remaining()
             time.sleep(0.4)
 
+    def clear_dev_payload(self):
+        # Credentials are never diagnostic evidence, even when the guest outcome
+        # is unknown. Keep metadata/receipts, not a duplicate raw host key.
+        for name in ('dev-key', 'dev-connection.json'):
+            (self.stage / name).unlink(missing_ok=True)
+
+    def prepare_stage(self):
+        self.stage.mkdir(parents=True, exist_ok=False, mode=0o700)
+        self.report.mkdir(parents=True, exist_ok=False, mode=0o700)
+        for name in ('guest.sh', 'inspect.js', 'no-tunnel.js', 'activate.js', 'import-dev.js', 'connection-proof.js'):
+            shutil.copyfile(Path(__file__).parent / 'vm-smoke' / name, self.stage / name)
+        (self.stage / 'identity.json').write_text(json.dumps(IDENTITY))
+        budget = int(self.deadline - time.monotonic())
+        require(budget >= 30, 'GUEST_BUDGET_TOO_SHORT')
+        (self.stage / 'timeout').write_text(str(budget))
+
+    def connection_proof(self):
+        self.prepare_stage()
+        self.start_guest()
+        self.phase('share-probe')
+        require(bool(self.state()['pids']), 'GUEST_APP_NOT_RUNNING')
+        self.phase('connection-proof')
+        file = self.report / 'connection.json'
+        regular(file, 4096)
+        proof = json.loads(file.read_text())
+        (self.out / 'connection.json').write_text(json.dumps(proof, indent=2) + '\n')
+        self.phase('activate')
+        self.phase('stop')
+        shutil.rmtree(self.stage)
+        result = dict(status='LOCAL_PROOF_CAPTURED', remoteTest='NOT_RUN', phases=self.log)
+        (self.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
+        return result
+
+    def quit_guest_app(self):
+        before = self.state()
+        require(before['windows'] <= 1, 'MULTIPLE_GUEST_WINDOWS')
+        if before['pids']:
+            self.phase('activate')
+            self.wait_state(True, foreground=True)
+            self.action('key', 'cmd+q')
+            self.wait_state(False)
+
+    def release_dev(self):
+        self.prepare_stage()
+        self.start_guest()
+        self.phase('admit')
+        self.quit_guest_app()
+        self.phase('connection-proof')
+        shutil.copyfile(self.report / 'connection.json', self.out / 'connection.json')
+        self.phase('stop')
+        shutil.rmtree(self.stage)
+        result = dict(status='GUEST_APP_QUIT', profiles='PRESERVED', hostDev='NOT_STARTED', phases=self.log)
+        (self.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
+        return result
+
+    def connect_dev(self):
+        self.prepare_stage()
+        export_dev_connection(self.stage, IDENTITY)
+        self.start_guest()
+        self.phase('admit')
+        self.quit_guest_app()
+        self.phase('import-dev')
+        # Key material is removed from host staging immediately after guest ACK.
+        self.clear_dev_payload()
+        self.phase('launch')
+        self.wait_state(True)
+        self.phase('activate')
+        self.wait_state(True, foreground=True)
+        self.screenshot('dev-imported')
+        self.phase('stop')
+        shutil.rmtree(self.stage)
+        result = dict(status='NEEDS_REVIEW', devConnection='IMPORTED_OFFLINE', tunnel='NOT_STARTED',
+                      profile='guest-package-only', phases=self.log)
+        (self.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
+        return result
+
+    def wait_guest_ready(self):
+        # Status is read-only. A cold login/helper may not answer immediately;
+        # permission denial is a distinct owner prerequisite, never retried.
+        while True:
+            self.remaining()
+            try:
+                grants = self.action('status', '--timeout', '2')
+            except Refused as error:
+                if str(error) != 'GUEST_ACTION_FAILED:action':
+                    raise
+                self.remaining()
+                time.sleep(0.3)
+                continue
+            require(all(grants.get(k) == 'true' for k in ('accessibility', 'screenRecording')),
+                    'GUEST_PERMISSIONS_MISSING')
+            return grants
+
     def run(self):
         with (self.machine / '.farol-smoke.lock').open('a') as lock:
             try:
@@ -268,37 +422,36 @@ class Runner:
                 raise Refused('VM_BUSY') from e
             status = self.cli('status', self.a.vm)
             if status.get('state') == 'stopped':
+                self.pending = 'vm-start'
                 status = self.cli('start', self.a.vm)
+                self.pending = None
+                self.log.append('vm-started')
+                if status.get('state') == 'already-running':
+                    status = self.cli('status', self.a.vm)
             require(status.get('state') == 'running', 'VM_NOT_RUNNING')
             self.cli('show' if self.a.visible else 'hide', self.a.vm)
-            grants = self.action('status')
-            require(all(grants.get(k) == 'true' for k in ('accessibility', 'screenRecording')),
-                    'GUEST_PERMISSIONS_MISSING')
+            grants = self.wait_guest_ready()
             (self.out / 'guest-status.json').write_text(json.dumps(grants, indent=2))
             require(self.a.terminal_point[0] < int(grants['width']) and self.a.terminal_point[1] < int(grants['height']), 'TERMINAL_POINT_OUTSIDE_DISPLAY')
             self.screenshot('preflight')
+            if self.a.connect_dev:
+                return self.connect_dev()
+            if self.a.connection_proof:
+                return self.connection_proof()
+            if self.a.release_dev:
+                return self.release_dev()
             archive = Path(self.a.artifact).expanduser().absolute() if self.a.artifact else download_latest(self.out, self.deadline)
             manifest = verify(archive)
-            self.stage.mkdir(parents=True, exist_ok=False, mode=0o700)
-            self.report.mkdir(parents=True, exist_ok=False, mode=0o700)
+            self.prepare_stage()
             shutil.copyfile(archive, self.stage / 'app.zip')
-            for name in ('guest.sh', 'inspect.js', 'no-tunnel.js', 'activate.js'):
-                shutil.copyfile(Path(__file__).parent / 'vm-smoke' / name, self.stage / name)
             (self.stage / 'archive.sha256').write_text(manifest['archiveSha256'])
             (self.stage / 'version').write_text(manifest['version'])
-            (self.stage / 'identity.json').write_text(json.dumps(IDENTITY))
-            (self.stage / 'timeout').write_text(str(self.a.timeout))
             self.start_guest()
+            self.phase('share-probe')
             if self.a.prepare_test_guest:
                 self.phase('prepare')
             self.phase('admit')
-            before = self.state()
-            require(before['windows'] <= 1, 'MULTIPLE_GUEST_WINDOWS')
-            if before['pids']:
-                self.phase('activate')
-                self.wait_state(True, foreground=True)
-                self.action('key', 'cmd+q')
-                self.wait_state(False)
+            self.quit_guest_app()
             self.phase('install')
             self.phase('launch')
             initial = self.wait_state(True)
@@ -309,6 +462,9 @@ class Runner:
             if self.a.menu_point:
                 require(self.a.menu_point[0] < int(grants['width']) and self.a.menu_point[1] < int(grants['height']), 'MENU_POINT_OUTSIDE_DISPLAY')
                 self.action('click', *self.a.menu_point)
+                menu_deadline = min(self.deadline, time.monotonic() + 5)
+                while self.state().get('menus', 0) < 1:
+                    require(time.monotonic() < menu_deadline, 'MENU_NOT_OBSERVED')
                 self.screenshot('menubar')
                 self.action('key', 'escape')
             self.phase('activate')
@@ -323,6 +479,11 @@ class Runner:
             self.phase('activate')
             self.wait_state(True, foreground=True)
             self.screenshot('relaunch')
+            self.phase('connection-proof')
+            connection_file = self.report / 'connection.json'
+            regular(connection_file, 4096)
+            connection = json.loads(connection_file.read_text())
+            (self.out / 'connection.json').write_text(json.dumps(connection, indent=2) + '\n')
             self.phase('cleanup')
             self.phase('stop')
             # Structural assertions are automatic; pixel semantics require the agent.
@@ -341,7 +502,8 @@ class Runner:
 
 def arguments(argv=None):
     config_parser = argparse.ArgumentParser(add_help=False)
-    config_parser.add_argument('--config', default=os.environ.get('FAROL_VM_CONFIG'))
+    default_config = Path.home() / 'Library/Application Support' / (IDENTITY['name'] + ' Testing') / 'vm-smoke.json'
+    config_parser.add_argument('--config', default=os.environ.get('FAROL_VM_CONFIG') or (str(default_config) if default_config.exists() else None))
     early, _ = config_parser.parse_known_args(argv)
     config = {}
     if early.config:
@@ -349,26 +511,31 @@ def arguments(argv=None):
         regular(file, 16384)
         config = json.loads(file.read_text())
         require(isinstance(config, dict) and not (set(config) - {
-            'terminal_mac', 'vm_home', 'vm', 'terminal_point', 'menu_point', 'timeout'}),
+            'terminal_mac', 'vm_home', 'vm', 'terminal_point', 'menu_point', 'timeout', 'bootstrap'}),
             'CONFIG_FIELDS_INVALID')
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--config', default=early.config, help='Private infrastructure-only JSON; no profiles or credentials')
     source = p.add_mutually_exclusive_group(required=True)
     source.add_argument('--artifact', help='Release ZIP with adjacent farol-release.json and SHA256SUMS')
+    source.add_argument('--release-dev', action='store_true', help='Normal Quit of only the approved guest app before using host Dev; preserve guest profile and VM')
+    source.add_argument('--connection-proof', action='store_true', help='Capture guest-local connection identity only; no profile import or tunnel restart')
+    source.add_argument('--connect-dev', action='store_true', help='Import only the fixed host Dev tunnel ID/key into the guest package profile, with host Dev stopped; does not start tunnel')
     source.add_argument('--latest', action='store_true', help='Resolve public GitHub Latest now')
     p.add_argument('--terminal-mac', default=config.get('terminal_mac'), help='Signed packaged terminal-mac executable, not launcher')
     p.add_argument('--vm-home', default=config.get('vm_home'), help='Dedicated TERMINAL_MAC_HOME; never host product state')
     p.add_argument('--vm', default=config.get('vm', 'pilot'))
     p.add_argument('--prepare-test-guest', action='store_true', help='Mark this dedicated guest as test-only; never imports any profile or credential')
     p.add_argument('--visible', action='store_true', help='Show guest window (default: hidden)')
-    p.add_argument('--evidence', default='_output/vm-smoke')
+    p.add_argument('--evidence', default=str(Path.home() / 'Library/Application Support' / (IDENTITY['name'] + ' Testing') / 'evidence'))
     p.add_argument('--timeout', type=int, default=config.get('timeout', 180))
-    p.add_argument('--terminal-point', nargs=2, type=int, default=config.get('terminal_point'), metavar=('X', 'Y'), help='Guest Terminal window or Dock icon coordinates confirmed from current screenshot')
+    p.add_argument('--bootstrap', choices=['finder', 'terminal'], default=config.get('bootstrap', 'terminal'))
+    p.add_argument('--terminal-point', '--bootstrap-point', nargs=2, type=int, default=config.get('terminal_point'), metavar=('X', 'Y'), help='Guest Terminal window or Dock icon coordinates confirmed from current screenshot')
     p.add_argument('--menu-point', nargs=2, type=int, default=config.get('menu_point'), metavar=('X', 'Y'), help='Guest menu icon coordinates confirmed from current screenshot')
     a = p.parse_args(argv)
     require(all(isinstance(x, str) and x for x in (a.terminal_mac, a.vm_home, a.vm)), 'INFRASTRUCTURE_CONFIG_REQUIRED')
     require(isinstance(a.terminal_point, list) and len(a.terminal_point) == 2 and all(type(x) is int for x in a.terminal_point), 'TERMINAL_POINT_REQUIRED')
     require(a.menu_point is None or (isinstance(a.menu_point, list) and len(a.menu_point) == 2 and all(type(x) is int for x in a.menu_point)), 'MENU_POINT_INVALID')
+    require(a.bootstrap in ('finder', 'terminal'), 'BOOTSTRAP_MODE_INVALID')
     require(type(a.timeout) is int, 'TIMEOUT_INVALID')
     require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', a.vm), 'VM_NAME_INVALID')
     require(30 <= a.timeout <= 600, 'TIMEOUT_INVALID')
@@ -380,7 +547,7 @@ def arguments(argv=None):
 def main():
     runner = None
     try:
-        require(set(IDENTITY) == {'name', 'bundleId', 'dataLeaf'}, 'USE_TASK_VM_SMOKE_ENTRYPOINT')
+        require(set(IDENTITY) == {'name', 'bundleId', 'dataLeaf', 'devDataLeaf'}, 'USE_TASK_VM_SMOKE_ENTRYPOINT')
         runner = Runner(arguments())
         result = runner.run()
         print(json.dumps(dict(result, evidence=str(runner.out))))
@@ -389,8 +556,9 @@ def main():
         result = dict(status='NEEDS_OWNER' if str(error) == 'NEEDS_OWNER' else 'BLOCKED',
                       reason=str(error), phases=runner.log if runner else [],
                       pending=runner.pending if runner else None,
-                      outcome='UNKNOWN' if runner and runner.pending else 'NOT_STARTED')
+                      outcome='UNKNOWN' if runner and (runner.pending or runner.log) else 'NOT_STARTED')
         if runner:
+            runner.clear_dev_payload()
             (runner.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
         print(json.dumps(result))
         return 2

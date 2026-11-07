@@ -51,6 +51,7 @@ test("counts nested runtime after the outer launcher exits", () => {
   assert.deepEqual(inspect([runtime], runtime, [window(100)]), {
     pids: [100],
     windows: 1,
+    menus: 0,
     foreground: true,
   });
 });
@@ -60,6 +61,7 @@ test("does not count a prefix collision or unrelated application", () => {
   assert.deepEqual(inspect([foreign], foreign, [window(100)]), {
     pids: [],
     windows: 0,
+    menus: 0,
     foreground: false,
   });
 });
@@ -71,6 +73,7 @@ test("distinguishes a background process and duplicate normal windows", () => {
     {
       pids: [100],
       windows: 2,
+      menus: 0,
       foreground: false,
     },
   );
@@ -82,6 +85,23 @@ test("one app window can belong to a nested runtime beside its outer launcher", 
   assert.deepEqual(inspect([root, runtime], runtime, [window(101)]), {
     pids: [100, 101],
     windows: 1,
+    menus: 0,
+    foreground: true,
+  });
+});
+
+test("distinguishes an owned popup menu from normal windows and tooltip", () => {
+  const root = "/Applications/TestProduct.app";
+  const menu = {
+    kCGWindowOwnerPID: 100,
+    kCGWindowLayer: 101,
+    kCGWindowBounds: { Width: 280, Height: 124 },
+  };
+  const tooltip = { ...menu, kCGWindowBounds: { Width: 180, Height: 22 } };
+  assert.deepEqual(inspect([root], root, [window(100), menu, tooltip]), {
+    pids: [100],
+    windows: 1,
+    menus: 1,
     foreground: true,
   });
 });
