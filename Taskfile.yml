@@ -24,6 +24,7 @@ tasks:
       - task: test:core
       - task: test:e2e:chatgpt-startup-readiness
       - task: test:tooling
+      - task: vm:test
       - task: test:witness-inputs
       - task: output:check
       - task: scan:secrets
@@ -34,6 +35,7 @@ tasks:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run ci:cloud
       - task: test:core
       - task: test:tooling
+      - task: vm:test
       - task: scan:secrets
 
   test:cloud:
@@ -73,6 +75,42 @@ tasks:
     desc: Unit/component plus four explicit browser-free integration files
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/test-scopes.mjs --scope=fast {{.CLI_ARGS}}
+
+  vm:plan:
+    desc: Print the versioned VM spec and terminal-mac provisioning commands without execution
+    cmds:
+      - node tooling/vm-entry.mjs machine --plan {{.CLI_ARGS}}
+
+  vm:setup:
+    desc: Create from the versioned VM spec with an explicit Apple IPSW, or start the matching existing guest
+    cmds:
+      - node tooling/vm-entry.mjs machine {{.CLI_ARGS}}
+
+  vm:smoke:
+    desc: Bounded exact-release smoke in a dedicated macOS guest (hidden by default; --visible to observe)
+    cmds:
+      - node tooling/vm-entry.mjs smoke {{.CLI_ARGS}}
+
+  vm:release-dev:
+    desc: Quit only the approved guest app before using host Dev; preserve VM/profile and never launch host production
+    cmds:
+      - node tooling/vm-entry.mjs smoke --release-dev {{.CLI_ARGS}}
+
+  vm:status:
+    desc: Capture only the running guest connection identity and approved Dev binding (no tunnel restart)
+    cmds:
+      - node tooling/vm-entry.mjs smoke --connection-proof {{.CLI_ARGS}}
+
+  vm:connect-dev:
+    desc: Import only the approved Dev tunnel ID/key into the guest package profile (host Dev must be stopped)
+    cmds:
+      - node tooling/vm-entry.mjs smoke --connect-dev {{.CLI_ARGS}}
+
+  vm:test:
+    desc: Check VM smoke isolation, archive admission and bounded failure handling without a real VM
+    cmds:
+      - /usr/bin/python3 -B -m unittest discover -s tooling/vm-smoke -p 'test_*.py'
+      - node --test tooling/vm-smoke/inspect.test.mjs tooling/vm-smoke/import-dev.test.mjs tooling/vm-smoke/entry.test.mjs tooling/vm-smoke/quit-proof.test.mjs tooling/vm-smoke/no-tunnel.test.mjs
 
   dev:
     # The owner's one development command: pick the declared toolchain, make

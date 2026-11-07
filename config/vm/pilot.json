@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "name": "pilot",
+  "cpu": 4,
+  "memoryGiB": 4,
+  "diskGiB": 64,
+  "width": 1280,
+  "height": 800,
+  "network": "nat",
+  "guestBootstrap": "interactive-account-and-helper-permissions"
+}
