@@ -144,6 +144,11 @@ import {
 } from "./lib/chat-history-witness.mjs";
 import { browserFailureCollector } from "./lib/browser-failure-witness.mjs";
 import { readOwnedChildProcesses } from "./runtime-process.mjs";
+import {
+  parseNativeExecutableWitness,
+  nativeExecutableWitness,
+  qualifyDesktopMain,
+} from "./lib/desktop-main-identity.mjs";
 import { reportRetiredJourney } from "../../tooling/setup-journey-retirement.mjs";
 
 const root = path.resolve(
@@ -153,130 +158,6 @@ const root = path.resolve(
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const hex40 = /^[a-f0-9]{40}$/u;
 const hex64 = /^[a-f0-9]{64}$/u;
-
-// Process titles on macOS may replace argv. Ask the kernel for the executable
-// instead of treating the display title as an executable path.
-const executableWitnessScript = `function run(argv) {
-  ObjC.import("Foundation");
-  ObjC.bindFunction("proc_pidpath", ["int", ["int", "void *", "uint32_t"]]);
-  ObjC.bindFunction("proc_pidinfo", ["int", ["int", "int", "uint64_t", "void *", "int"]]);
-  const pid = Number(argv[0]);
-  if (!Number.isSafeInteger(pid) || pid < 2) throw Error("invalid pid");
-  function info() {
-    const data = $.NSMutableData.dataWithLength(136);
-    if ($.proc_pidinfo(pid, 3, 0, data.mutableBytes, 136) !== 136)
-      throw Error("proc_pidinfo failed");
-    return ObjC.unwrap(data.base64EncodedStringWithOptions(0));
-  }
-  const before = info();
-  const buffer = $.NSMutableData.dataWithLength(4096);
-  const length = $.proc_pidpath(pid, buffer.mutableBytes, 4096);
-  if (length <= 0 || length >= 4096) throw Error("proc_pidpath failed");
-  const executable = ObjC.unwrap($.NSString.alloc.initWithDataEncoding(
-    buffer.subdataWithRange($.NSMakeRange(0, length)), $.NSUTF8StringEncoding));
-  return JSON.stringify({ before, executable, after: info() });
-}`;
-
-function parseNativeExecutableWitness(witness, pid) {
-  const decode = (raw) => {
-    const value = Buffer.from(raw, "base64");
-    assert.equal(value.length, 136, "DESKTOP_NATIVE_INFO_INVALID");
-    return {
-      pid: value.readUInt32LE(12),
-      parentPid: value.readUInt32LE(16),
-      startSeconds: value.readBigUInt64LE(120),
-      startMicroseconds: value.readBigUInt64LE(128),
-    };
-  };
-  const before = decode(witness.before);
-  const after = decode(witness.after);
-  assert.deepEqual(after, before, "DESKTOP_NATIVE_LIFETIME_CHANGED");
-  assert.equal(before.pid, pid, "DESKTOP_NATIVE_PID_MISMATCH");
-  return {
-    executable: witness.executable,
-    parentPid: before.parentPid,
-    startSeconds: before.startSeconds.toString(),
-    startMicroseconds: before.startMicroseconds.toString(),
-  };
-}
-
-function nativeExecutableWitness(pid) {
-  assert.ok(Number.isSafeInteger(pid) && pid > 1, "DESKTOP_PID_INVALID");
-  const output = execFileSync(
-    "/usr/bin/osascript",
-    ["-l", "JavaScript", "-e", executableWitnessScript, "--", String(pid)],
-    { encoding: "utf8", timeout: 3000, maxBuffer: 8192 },
-  );
-  return parseNativeExecutableWitness(JSON.parse(output), pid);
-}
-
-// The packaged launcher is a retained Go guardian; Electron is its child.
-// The Dev launcher still directly owns Electron under the same PID contract.
-// This qualifies identity only, never terminal or descendant-cleanup evidence.
-function qualifyDesktopMain({
-  packaged,
-  guardianPid,
-  marker,
-  desktop,
-  children,
-  expectedExecutable,
-  nativeExecutable,
-  nativeExecutableBefore,
-}) {
-  assert.ok(
-    Number.isSafeInteger(guardianPid) && guardianPid > 1,
-    "GUARDIAN_PID_INVALID",
-  );
-  assert.ok(
-    Number.isSafeInteger(desktop.pid) && desktop.pid > 1,
-    "DESKTOP_PID_INVALID",
-  );
-  assert.equal(marker.pid, desktop.pid, "RUN_MARKER_DESKTOP_MISMATCH");
-  if (!packaged) {
-    assert.equal(desktop.pid, guardianPid, "DEV_MAIN_PID_MISMATCH");
-    return { guardianPid, desktopPid: desktop.pid };
-  }
-  assert.notEqual(desktop.pid, guardianPid, "PACKAGED_GUARDIAN_IS_DESKTOP");
-  assert.equal(desktop.ppid, guardianPid, "DESKTOP_PARENT_MISMATCH");
-  assert.equal(
-    desktop.executable,
-    expectedExecutable,
-    "DESKTOP_EXECUTABLE_MISMATCH",
-  );
-  const matches = children.filter((entry) => entry.pid === desktop.pid);
-  assert.equal(matches.length, 1, "DESKTOP_CHILD_UNCONFIRMED");
-  const observed = matches[0];
-  assert.equal(
-    observed.parentPid,
-    guardianPid,
-    "DESKTOP_CHILD_PARENT_MISMATCH",
-  );
-  assert.equal(
-    observed.processStart,
-    marker.processStart,
-    "DESKTOP_START_MISMATCH",
-  );
-  assert.equal(
-    nativeExecutable?.executable,
-    expectedExecutable,
-    "DESKTOP_NATIVE_EXECUTABLE_MISMATCH",
-  );
-  assert.equal(
-    nativeExecutable?.parentPid,
-    guardianPid,
-    "DESKTOP_NATIVE_PARENT_MISMATCH",
-  );
-  assert.deepEqual(
-    nativeExecutable,
-    nativeExecutableBefore,
-    "DESKTOP_NATIVE_LIFETIME_CHANGED",
-  );
-  return {
-    guardianPid,
-    desktopPid: desktop.pid,
-    desktopStart: observed.processStart,
-  };
-}
 
 const contract = Object.freeze({
   schema: "farol-go-core-startup-harness/1",
