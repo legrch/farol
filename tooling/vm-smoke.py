@@ -23,6 +23,9 @@ import zipfile
 MAX_ZIP = 2 * 1024**3
 REPO = "legrch/farol"
 IDENTITY = json.loads(os.environ.get("FAROL_VM_PRODUCT_IDENTITY", "{}"))
+# Same discriminator tooling/vm-e2e/bundle-driver.mjs writes into manifest.json.
+DRIVER_MANIFEST_SCHEMA = 'farol.vm-e2e.driver-manifest/1'
+DRIVER_STAGE_NAMES = ('driver.bundle.mjs', 'node', 'driver.manifest.json')
 
 
 class Refused(Exception):
@@ -362,6 +365,7 @@ class Runner:
         self.log = []
         self.pending = None
         self.cleanup_note = None
+        self.network_policy = None
         self.effect_owned = False
         self.effect_file = self.machine / '.farol-smoke-pending.json'
         # Never forward product configuration, proxy, Electron or loader environment.
@@ -653,6 +657,98 @@ class Runner:
         require(budget >= 30, 'GUEST_BUDGET_TOO_SHORT')
         (self.stage / 'timeout').write_text(str(budget))
 
+    def driver_payload_info(self, file, prefix):
+        """A driver payload must be a real regular file, never a symlink."""
+        try:
+            info = file.lstat()
+        except OSError:
+            raise Refused(prefix + '_MISSING') from None
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1, prefix + '_UNSAFE')
+        return info
+
+    def copy_driver_payload(self, source, target, mode, expected_sha, expected_size, prefix):
+        """Exclusive durable copy whose staged bytes are re-verified against the
+        manifest, so a source swap between validation and staging is caught."""
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+        try:
+            os.fchmod(fd, mode)
+            with os.fdopen(fd, 'wb') as out:
+                with source.open('rb') as stream:
+                    shutil.copyfileobj(stream, out)
+                out.flush()
+                os.fsync(out.fileno())
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+        require(target.stat().st_size == expected_size and digest(target) == expected_sha,
+                prefix + '_DIGEST_INVALID')
+
+    def stage_driver(self, driver_dir):
+        """Stage the vm-e2e in-guest driver payload into this run's stage.
+
+        Host-side only, after prepare_stage: validates the manifest written by
+        tooling/vm-e2e/bundle-driver.mjs, verifies the bundle and the pinned
+        Node payload against it, copies them in as driver.bundle.mjs and node,
+        and publishes driver.manifest.json recording the staged digests. No
+        guest action happens here and no secret material is handled.
+        """
+        source = Path(driver_dir)
+        refuse_host_profile_path(source, IDENTITY)
+        require(source.is_dir() and not source.is_symlink(), 'DRIVER_MANIFEST_INVALID')
+        manifest_file = source / 'manifest.json'
+        try:
+            info = manifest_file.lstat()
+            if not (stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and 0 < info.st_size <= 65536):
+                raise ValueError('driver-manifest-not-regular')
+            manifest = json.loads(manifest_file.read_text())
+        except (OSError, ValueError):
+            raise Refused('DRIVER_MANIFEST_INVALID') from None
+        require(isinstance(manifest, dict) and manifest.get('schema') == DRIVER_MANIFEST_SCHEMA,
+                'DRIVER_MANIFEST_INVALID')
+        require(isinstance(manifest.get('tool'), str) and manifest['tool'] and
+                isinstance(manifest.get('entry'), str) and manifest['entry'] and
+                manifest.get('bundler') in ('esbuild', 'inline'), 'DRIVER_MANIFEST_INVALID')
+        bundle = manifest.get('bundle')
+        node = manifest.get('node')
+        require(isinstance(bundle, dict) and isinstance(node, dict), 'DRIVER_MANIFEST_INVALID')
+        bundle_name = bundle.get('file')
+        require(isinstance(bundle_name, str) and
+                re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', bundle_name), 'DRIVER_MANIFEST_INVALID')
+        require(type(bundle.get('bytes')) is int and 0 < bundle['bytes'] and
+                re.fullmatch('[a-f0-9]{64}', bundle.get('sha256') or ''), 'DRIVER_MANIFEST_INVALID')
+        node_path = node.get('path')
+        require(isinstance(node_path, str) and node_path and Path(node_path).is_absolute(),
+                'DRIVER_MANIFEST_INVALID')
+        refuse_host_profile_path(node_path, IDENTITY)
+        require(type(node.get('size')) is int and 0 < node['size'] and
+                re.fullmatch('[a-f0-9]{64}', node.get('sha256') or ''), 'DRIVER_MANIFEST_INVALID')
+        # Size and digest must match at every point: source first, then the
+        # staged copy inside copy_driver_payload.
+        node_source = Path(node_path)
+        require(self.driver_payload_info(source / bundle_name, 'DRIVER_BUNDLE').st_size == bundle['bytes'] and
+                digest(source / bundle_name) == bundle['sha256'], 'DRIVER_BUNDLE_DIGEST_INVALID')
+        require(self.driver_payload_info(node_source, 'DRIVER_NODE').st_size == node['size'] and
+                digest(node_source) == node['sha256'], 'DRIVER_NODE_DIGEST_INVALID')
+        staged = {'schema': DRIVER_MANIFEST_SCHEMA, 'tool': manifest['tool'], 'entry': manifest['entry'],
+                  'bundler': manifest['bundler'],
+                  'bundle': {'file': 'driver.bundle.mjs', 'sha256': bundle['sha256'], 'bytes': bundle['bytes']},
+                  'node': {'path': 'node', 'size': node['size'], 'sha256': node['sha256']},
+                  'staged': True}
+        try:
+            self.copy_driver_payload(source / bundle_name, self.stage / 'driver.bundle.mjs', 0o600,
+                                     bundle['sha256'], bundle['bytes'], 'DRIVER_BUNDLE')
+            self.copy_driver_payload(node_source, self.stage / 'node', 0o700,
+                                     node['sha256'], node['size'], 'DRIVER_NODE')
+            # The staged manifest keeps the producer schema and provenance
+            # fields but records the staged names and the verified staged
+            # digests; it never carries a host absolute path into the share.
+            self.write_durable_json(self.stage / 'driver.manifest.json', staged)
+        except BaseException:
+            for name in DRIVER_STAGE_NAMES:
+                (self.stage / name).unlink(missing_ok=True)
+            raise
+        return staged
+
     def connection_proof(self):
         self.prepare_stage()
         self.start_guest()
@@ -749,6 +845,29 @@ class Runner:
                     'GUEST_PERMISSIONS_MISSING')
             return grants
 
+    def admit_closed(self):
+        """Closed-contour admission, refusing before any guest action.
+
+        machine.json is the VM configuration source of truth: terminal-mac
+        builds the VZ virtual-machine configuration from machine.network
+        (source-verified fact), so a recorded network == false proves the VM
+        CONFIG is offline. This is config provenance only — no runtime egress
+        probe exists here and none is claimed; the in-guest negative probe
+        stays a separate receipt.
+        """
+        file = self.machine / 'machine.json'
+        try:
+            info = file.lstat()
+            if not (stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and 0 < info.st_size <= 65536):
+                raise ValueError('machine-file-not-regular')
+            machine = json.loads(file.read_text())
+        except (OSError, ValueError):
+            raise Refused('VM_MACHINE_FILE_INVALID') from None
+        require(isinstance(machine, dict), 'VM_MACHINE_FILE_INVALID')
+        require(machine.get('network') is False, 'CLOSED_REQUIRES_OFFLINE_MACHINE')
+        return {'mode': 'guest-offline-local-fixtures', 'machineNetwork': False,
+                'receipt': 'machine.json-offline-verified'}
+
     def run(self):
         with (self.machine / '.farol-smoke.lock').open('a') as lock:
             try:
@@ -761,6 +880,9 @@ class Runner:
             residue = staging_residue(self.inbox)
             require(not residue, 'UNRECONCILED_STAGING_RESIDUE:' +
                     ','.join(item['directory'] for item in residue))
+            # Closed-contour admission precedes the input lease and every VM
+            # or guest effect; args namespaces without the flag are ordinary.
+            self.network_policy = self.admit_closed() if getattr(self.a, 'closed', False) else None
             self.acquire_input_lease()
             try:
                 status = self.cli('status', self.a.vm)
@@ -847,6 +969,8 @@ class Runner:
                               menu='CAPTURED' if self.a.menu_point else 'NOT_RUN',
                               cleanup=self.finish_staging(), phases=self.log,
                               lease=self.lease_evidence())
+                if self.network_policy is not None:
+                    result['networkPolicy'] = self.network_policy
                 (self.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
                 if self.a.latest and result['cleanup'] == 'CLEARED':
                     archive.unlink()
@@ -878,6 +1002,8 @@ def arguments(argv=None):
     source.add_argument('--latest', action='store_true', help='Resolve public GitHub Latest now')
     source.add_argument('--reconcile-staging', action='store_true',
                         help='Read-only report of staging residue and effect fences; clears nothing and never touches the VM')
+    p.add_argument('--closed', action='store_true',
+                   help='Closed-contour package run on an offline guest with guest-local fixtures; requires --artifact and never downloads')
     p.add_argument('--terminal-mac', default=config.get('terminal_mac'), help='Signed packaged terminal-mac executable, not launcher')
     p.add_argument('--vm-home', default=config.get('vm_home'), help='Dedicated TERMINAL_MAC_HOME; never host product state')
     p.add_argument('--vm', default=config.get('vm', 'pilot'))
@@ -895,6 +1021,12 @@ def arguments(argv=None):
         require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', a.vm), 'VM_NAME_INVALID')
         require(isinstance(a.vm_home, str) and a.vm_home, 'INFRASTRUCTURE_CONFIG_REQUIRED')
         return a
+    if a.closed:
+        # A closed run never resolves or downloads a release (--artifact is
+        # mandatory); the dev/proof sources are separate run kinds.
+        require(not a.latest, 'CLOSED_DOWNLOAD_FORBIDDEN')
+        require(not (a.release_dev or a.connection_proof or a.connect_dev), 'CLOSED_MODE_INVALID')
+        require(bool(a.artifact), 'CLOSED_DOWNLOAD_FORBIDDEN')
     require(all(isinstance(x, str) and x for x in (a.terminal_mac, a.vm_home, a.vm)), 'INFRASTRUCTURE_CONFIG_REQUIRED')
     require(isinstance(a.terminal_point, list) and len(a.terminal_point) == 2 and all(type(x) is int for x in a.terminal_point), 'TERMINAL_POINT_REQUIRED')
     require(a.menu_point is None or (isinstance(a.menu_point, list) and len(a.menu_point) == 2 and all(type(x) is int for x in a.menu_point)), 'MENU_POINT_INVALID')
