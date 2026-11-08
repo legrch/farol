@@ -27,7 +27,7 @@ case "$phase" in
     while [ "$SECONDS" -lt "$until_time" ]; do
       request="$(cat "$stage/request" 2>/dev/null || true)"
       if [ -n "$request" ] && [ "$request" != "$last" ]; then
-        [[ "$request" =~ ^[0-9]{4}-(prepare|admit|install|launch|activate|inspect|relaunch|cleanup|stop|import-dev|connection-proof|share-probe|quit-proof)$ ]] || exit 76
+        [[ "$request" =~ ^[0-9]{4}-(prepare|admit|install|launch|activate|inspect|relaunch|cleanup|stop|import-dev|connection-proof|share-probe|quit-proof|e2e)$ ]] || exit 76
         last="$request"
         next="${request#*-}"
         /bin/bash "$stage/guest.sh" "$next" "$request"
@@ -132,6 +132,27 @@ case "$phase" in
   inspect)
     inspect > "$report/state.json.tmp"
     mv "$report/state.json.tmp" "$report/state.json"
+    finish READY
+    ;;
+  e2e)
+    # Closed-contour driver execution: run the staged bundle with the staged
+    # declared Node, binding the result to the control share. The staged bytes
+    # are re-verified here so the guest never executes anything but the exact
+    # digests the host manifest recorded; the driver's own result file is the
+    # receipt (durable-write protocol from driver-runtime).
+    node_bin="$stage/node"
+    bundle="$stage/driver.bundle.mjs"
+    manifest="$stage/driver.manifest.json"
+    [ -f "$node_bin" ] && [ -f "$bundle" ] && [ -f "$manifest" ]
+    [ ! -L "$node_bin" ] && [ ! -L "$bundle" ] && [ ! -L "$manifest" ]
+    read_field() { /usr/bin/osascript -l JavaScript -e 'ObjC.import("Foundation");function run(a){return JSON.parse($.NSString.stringWithContentsOfFileEncodingError(a[0],4,null).js)[a[1]];}' "$1" "$2"; }
+    [ "$(/usr/bin/shasum -a 256 "$bundle" | /usr/bin/cut -d ' ' -f 1)" = "$(read_field "$manifest" bundle_sha256)" ] || exit 78
+    [ "$(/usr/bin/shasum -a 256 "$node_bin" | /usr/bin/cut -d ' ' -f 1)" = "$(read_field "$manifest" node_sha256)" ] || exit 78
+    result_dir="$report/e2e"
+    mkdir -p "$result_dir"
+    export VM_E2E_RESULT_DIR="$result_dir"
+    "$node_bin" "$bundle"
+    [ -f "$result_dir/result.json" ]
     finish READY
     ;;
   *) exit 73 ;;
