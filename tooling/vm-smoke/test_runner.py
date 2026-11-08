@@ -21,20 +21,40 @@ spec.loader.exec_module(vm)
 vm.IDENTITY = dict(name='TestProduct', bundleId='test.product', dataLeaf='test.product', devDataLeaf='TestDev')
 
 
+def canonical_tree_digest(app):
+    """The canonical farol.tree-digest/v2 digest via the repository's Node
+    implementation — the same invocation the physical digest regression uses."""
+    program = ('const {treeDigest}=await import(process.argv[1]); '
+               'console.log(await treeDigest(process.argv[2]));')
+    result = subprocess.run(['node', '--experimental-strip-types', '--input-type=module', '-e', program,
+                             (Path(__file__).parents[1] / 'artifact-digest.mjs').as_uri(), str(app)],
+                            capture_output=True, text=True, timeout=10,
+                            env={'PATH': os.environ.get('PATH', ''), 'NODE_NO_WARNINGS': '1'})
+    if result.returncode:
+        raise AssertionError('canonical digest tool failed: ' + result.stderr)
+    return result.stdout.strip()
+
+
 class AdmissionTests(unittest.TestCase):
     def asset(self, root, extra=None):
+        # A valid producer-shaped package: the archive carries the physical app
+        # tree with explicit entries and modes, and artifactSha256 is the
+        # canonical digest of that tree, so verify() admits it.
+        app = root / 'TestProduct.app'
+        (app / 'Contents').mkdir(parents=True)
+        (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(dict(
+            CFBundleIdentifier='test.product', CFBundleShortVersionString='1.2.3')))
         archive = root / 'TestProduct-1.2.3-darwin-arm64.zip'
-        with zipfile.ZipFile(archive, 'w') as z:
-            z.writestr('TestProduct.app/Contents/Info.plist', plistlib.dumps(dict(
-                CFBundleIdentifier='test.product', CFBundleShortVersionString='1.2.3')))
         m = dict(schema='farol.github-release/1', repository='legrch/farol',
                  product='TestProduct', bundleId='test.product', channel='stable',
                  sourceDirty=False, platform='darwin', arch='arm64', signing='unsigned',
                  notarized=False, version='1.2.3', sourceCommit='a'*40,
-                 sourceTreeDigest='b'*64, buildId='c'*64, artifactSha256='d'*64,
-                 archiveName=archive.name,
-                 archiveSize=archive.stat().st_size, archiveSha256=vm.digest(archive))
-        with zipfile.ZipFile(archive, 'a') as z:
+                 sourceTreeDigest='b'*64, buildId='c'*64,
+                 artifactSha256=canonical_tree_digest(app), archiveName=archive.name)
+        with zipfile.ZipFile(archive, 'w') as z:
+            z.write(app, app.name)
+            for item in sorted(app.rglob('*')):
+                z.write(item, str(item.relative_to(root)))
             z.writestr('artifact.json', json.dumps(dict(m, signing={'kind': 'unsigned'})))
             if extra:
                 z.writestr(*extra)

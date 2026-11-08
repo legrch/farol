@@ -14,6 +14,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 import uuid
@@ -118,6 +119,55 @@ def verify(archive):
                      'sourceTreeDigest', 'buildId', 'artifactSha256', 'notarized')) and
                 isinstance(artifact.get('signing'), dict) and artifact['signing'].get('kind') == m['signing'],
                 'ARTIFACT_IDENTITY_MISMATCH')
+        # Every structural check passed. A tampered tree repacked with a fresh
+        # outer ZIP hash is still refused: restore the physical app tree the
+        # archive would actually produce and recompute the canonical digest
+        # (farol.tree-digest/v2) with the repository's own Node implementation.
+        node = shutil.which('node')
+        require(node is not None, 'DIGEST_TOOL_UNAVAILABLE')
+        app_name = IDENTITY['name'] + '.app'
+        with tempfile.TemporaryDirectory() as extract:
+            modes = {}
+            links = []
+            for entry in z.infolist():
+                name = entry.filename.rstrip('/')
+                p = PurePosixPath(name)
+                if p.parts[0] != app_name:
+                    continue  # artifact.json is release metadata, not tree content.
+                mode = entry.external_attr >> 16
+                dest = Path(extract).joinpath(*p.parts)
+                if stat.S_ISLNK(mode):
+                    # Same classification order as the validation pass above.
+                    links.append((dest, z.read(entry).decode('utf8')))
+                elif entry.is_dir() or stat.S_IFMT(mode) == stat.S_IFDIR:
+                    modes[p.parts] = mode & 0o7777
+                    dest.mkdir(parents=True, exist_ok=True)
+                else:
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    with z.open(entry) as source, dest.open('xb') as out:
+                        shutil.copyfileobj(source, out)
+                    if mode & 0o7777:
+                        dest.chmod(mode & 0o7777)
+            for dest, target in links:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                os.symlink(target, dest)
+            # Directory modes last, deepest first, so restrictive trees restore.
+            for parts in sorted(modes, key=len, reverse=True):
+                if modes[parts]:
+                    Path(extract).joinpath(*parts).chmod(modes[parts])
+            program = ('const {treeDigest}=await import(process.argv[1]); '
+                       'console.log(await treeDigest(process.argv[2]));')
+            try:
+                computed = subprocess.run(
+                    [node, '--experimental-strip-types', '--input-type=module', '-e', program,
+                     (Path(__file__).resolve().parent / 'artifact-digest.mjs').as_uri(),
+                     str(Path(extract, app_name))],
+                    capture_output=True, text=True, timeout=60,
+                    env={'PATH': os.environ.get('PATH', ''), 'NODE_NO_WARNINGS': '1'})
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise Refused('DIGEST_TOOL_FAILED') from error
+            require(computed.returncode == 0, 'DIGEST_TOOL_FAILED')
+            require(computed.stdout.strip() == artifact['artifactSha256'], 'ARTIFACT_DIGEST_MISMATCH')
     return m
 
 
