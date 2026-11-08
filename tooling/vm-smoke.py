@@ -379,8 +379,13 @@ class Runner:
         require(p.returncode == 0, 'GUEST_ACTION_FAILED:' + str(args[0]))
         return json.loads(p.stdout)
 
+    @property
+    def exchange(self):
+        return self.machine / 'exchange'
+
     def action(self, *args):
-        return self.cli('action', self.a.vm, *args)
+        # Guest-input admission passes only for the lease holder's own token.
+        return self.cli('action', self.a.vm, *args, '--owner', self.lease_owner)
 
     def screenshot(self, label):
         file = self.out / (label + '.png')
@@ -430,6 +435,8 @@ class Runner:
         self.pending = None
 
     def phase(self, name):
+        if getattr(self, 'lease_owner', None):
+            self.publish_lease_flag()
         if name in ('install', 'launch', 'relaunch', 'import-dev', 'cleanup'):
             self.begin_effect()
         self.pending = name
@@ -458,12 +465,103 @@ class Runner:
             raise Refused('UNRESOLVED_GUEST_OPERATION') from error
         self.effect_owned = True
 
-    def sync_effect_directory(self):
-        fd = os.open(self.effect_file.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    def sync_directory(self, path):
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             os.fsync(fd)
         finally:
             os.close(fd)
+
+    def sync_effect_directory(self):
+        self.sync_directory(self.effect_file.parent)
+
+    def write_durable_json(self, path, payload):
+        """Atomic temp+replace publish, fsyncing the file before rename and the
+        directory entry after, so an acquired lease survives a crash."""
+        temp = path.parent / ('.' + uuid.uuid4().hex + '.tmp')
+        try:
+            fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, 'w') as stream:
+                json.dump(payload, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temp, path)
+        except BaseException:
+            temp.unlink(missing_ok=True)
+            raise
+        self.sync_directory(path.parent)
+
+    def input_lease_holder(self):
+        """Names only, from the published metadata contract; unreadable or
+        invalid metadata is 'unknown'."""
+        file = self.machine / 'input-lease.json'
+        try:
+            info = file.lstat()
+            if not (stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and 0 < info.st_size <= 4096):
+                return 'unknown'
+            value = json.loads(file.read_text())
+        except (OSError, ValueError):
+            return 'unknown'
+        if (isinstance(value, dict) and value.get('schema') == 'terminal-mac.input-lease/1'
+                and isinstance(value.get('owner'), str) and value['owner']):
+            return value['owner']
+        return 'unknown'
+
+    def acquire_input_lease(self):
+        """Own the guest-input lease before any VM or guest effect.
+
+        The flock is the authority (a crashed holder self-heals); the JSON is
+        crash-durable evidence. A held lease is refused by name before any VM
+        start, and the helper-update deferral flag goes live immediately."""
+        self.exchange.mkdir(mode=0o700, exist_ok=True)
+        require(self.exchange.is_dir() and not self.exchange.is_symlink(), 'EXCHANGE_SHARE_REQUIRED')
+        fd = os.open(self.machine / 'input-lease.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        os.fchmod(fd, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            os.close(fd)
+            raise Refused('GUEST_INPUT_LEASE_HELD:' + self.input_lease_holder()) from error
+        self.lease_fd = fd
+        self.lease_owner = 'farol-smoke:' + self.run_id
+        try:
+            self.write_durable_json(self.machine / 'input-lease.json',
+                                    {'schema': 'terminal-mac.input-lease/1', 'owner': self.lease_owner,
+                                     'generation': 1, 'acquiredAt': int(time.time())})
+            self.publish_lease_flag()
+        except BaseException:
+            self.release_input_lease()
+            raise
+
+    def publish_lease_flag(self):
+        """Defer guest helper self-replacement while this run owns input.
+
+        The dot-name is ignored by request pickup and residue sweep; an
+        expired flag fences nothing."""
+        self.write_durable_json(self.exchange / '.input-lease.json',
+                                {'schema': 'terminal-mac.input-lease-flag/1', 'owner': self.lease_owner,
+                                 'deadline': time.time() + 120.0})
+
+    def release_input_lease(self):
+        """Idempotent: clear the helper flag, remove evidence metadata, then
+        free the flock; runs before the smoke lock closes."""
+        if getattr(self, 'lease_fd', None) is None:
+            return
+        try:
+            (self.exchange / '.input-lease.json').unlink(missing_ok=True)
+            self.sync_directory(self.exchange)
+            (self.machine / 'input-lease.json').unlink(missing_ok=True)
+            self.sync_directory(self.machine)
+        finally:
+            fcntl.flock(self.lease_fd, fcntl.LOCK_UN)
+            os.close(self.lease_fd)
+            self.lease_fd = None
+            self.lease_owner = None
+
+    def lease_evidence(self):
+        """Guest-input lease facts recorded with every result; names only."""
+        return {'owner': getattr(self, 'lease_owner', None), 'generation': 1}
 
     def finish_effect(self):
         if self.effect_owned:
@@ -568,7 +666,8 @@ class Runner:
         self.phase('activate')
         self.phase('stop')
         result = dict(status='LOCAL_PROOF_CAPTURED', remoteTest='NOT_RUN',
-                      cleanup=self.finish_staging(), phases=self.log)
+                      cleanup=self.finish_staging(), phases=self.log,
+                      lease=self.lease_evidence())
         (self.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
         return result
 
@@ -600,7 +699,8 @@ class Runner:
         shutil.copyfile(self.report / 'connection.json', self.out / 'connection.json')
         self.phase('stop')
         result = dict(status='GUEST_APP_QUIT', profiles='PRESERVED', hostDev='NOT_STARTED',
-                      cleanup=self.finish_staging(), phases=self.log)
+                      cleanup=self.finish_staging(), phases=self.log,
+                      lease=self.lease_evidence())
         (self.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
         return result
 
@@ -627,7 +727,8 @@ class Runner:
         self.screenshot('dev-imported')
         self.phase('stop')
         result = dict(status='NEEDS_REVIEW', devConnection='IMPORTED_OFFLINE', tunnel='NOT_STARTED',
-                      profile='guest-package-only', cleanup=self.finish_staging(), phases=self.log)
+                      profile='guest-package-only', cleanup=self.finish_staging(), phases=self.log,
+                      lease=self.lease_evidence())
         (self.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
         return result
 
@@ -660,89 +761,98 @@ class Runner:
             residue = staging_residue(self.inbox)
             require(not residue, 'UNRECONCILED_STAGING_RESIDUE:' +
                     ','.join(item['directory'] for item in residue))
-            status = self.cli('status', self.a.vm)
-            if status.get('state') == 'stopped':
-                self.pending = 'vm-start'
-                status = self.cli('start', self.a.vm)
-                self.pending = None
-                self.log.append('vm-started')
-                if status.get('state') == 'already-running':
-                    status = self.cli('status', self.a.vm)
-            require(status.get('state') == 'running', 'VM_NOT_RUNNING')
-            self.cli('show' if self.a.visible else 'hide', self.a.vm)
-            grants = self.wait_guest_ready()
-            (self.out / 'guest-status.json').write_text(json.dumps(grants, indent=2))
-            require(self.a.terminal_point[0] < int(grants['width']) and self.a.terminal_point[1] < int(grants['height']), 'TERMINAL_POINT_OUTSIDE_DISPLAY')
-            self.screenshot('preflight')
-            if self.a.connect_dev:
-                return self.connect_dev()
-            if self.a.connection_proof:
-                return self.connection_proof()
-            if self.a.release_dev:
-                return self.release_dev()
-            # Returning packaged profiles can resume the approved Dev endpoint.
-            require_host_dev_stopped(IDENTITY)
-            archive = Path(self.a.artifact).expanduser().absolute() if self.a.artifact else download_latest(self.out, self.deadline)
-            manifest = verify(archive)
-            self.prepare_stage()
-            shutil.copyfile(archive, self.stage / 'app.zip')
-            (self.stage / 'archive.sha256').write_text(manifest['archiveSha256'])
-            (self.stage / 'version').write_text(manifest['version'])
-            self.start_guest()
-            self.phase('share-probe')
-            if self.a.prepare_test_guest:
-                self.phase('prepare')
-            self.phase('admit')
-            self.quit_guest_app()
-            self.phase('install')
-            self.phase('launch')
-            initial = self.wait_state(True)
-            # App activation is verified before UI capture or Quit input.
-            self.phase('activate')
-            self.wait_state(True, foreground=True)
-            self.screenshot('setup-or-returning')
-            if self.a.menu_point:
-                require(self.a.menu_point[0] < int(grants['width']) and self.a.menu_point[1] < int(grants['height']), 'MENU_POINT_OUTSIDE_DISPLAY')
-                self.action('click', *self.a.menu_point)
-                menu_deadline = min(self.deadline, time.monotonic() + 5)
-                while self.state().get('menus', 0) < 1:
-                    require(time.monotonic() < menu_deadline, 'MENU_NOT_OBSERVED')
-                self.screenshot('menubar')
-                self.action('key', 'escape')
-            self.phase('activate')
-            self.wait_state(True, foreground=True)
-            proof = self.quit_proof()
-            self.begin_effect()
-            self.action('key', 'cmd+q')
-            self.log.append('quit-requested')
-            stopped = self.wait_state(False)
-            self.require_quit_drain(proof)
-            self.screenshot('quit')
-            self.phase('relaunch')
-            relaunched = self.wait_state(True)
-            require(initial['pids'] != relaunched['pids'], 'RELAUNCH_PID_UNCHANGED')
-            self.phase('activate')
-            self.wait_state(True, foreground=True)
-            self.screenshot('relaunch')
-            self.phase('connection-proof')
-            connection_file = self.report / 'connection.json'
-            regular(connection_file, 4096)
-            connection = json.loads(connection_file.read_text())
-            (self.out / 'connection.json').write_text(json.dumps(connection, indent=2) + '\n')
-            self.phase('cleanup')
-            self.phase('stop')
-            # Structural assertions are automatic; pixel semantics require the agent.
-            result = dict(status='NEEDS_REVIEW', lifecycle='PASS', ui='NEEDS_REVIEW',
-                          tunnel='NOT_QUALIFIED' if connection.get('approvedDev') else 'NOT_RUN',
-                          profile='guest-package-only',
-                          version=manifest['version'], archiveSha256=manifest['archiveSha256'],
-                          initial=initial, stopped=stopped, relaunched=relaunched,
-                          menu='CAPTURED' if self.a.menu_point else 'NOT_RUN',
-                          cleanup=self.finish_staging(), phases=self.log)
-            (self.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
-            if self.a.latest and result['cleanup'] == 'CLEARED':
-                archive.unlink()
-            return result
+            self.acquire_input_lease()
+            try:
+                status = self.cli('status', self.a.vm)
+                if status.get('state') == 'stopped':
+                    self.pending = 'vm-start'
+                    status = self.cli('start', self.a.vm)
+                    self.pending = None
+                    self.log.append('vm-started')
+                    if status.get('state') == 'already-running':
+                        status = self.cli('status', self.a.vm)
+                require(status.get('state') == 'running', 'VM_NOT_RUNNING')
+                if self.a.visible:
+                    # The deliberately shown window stays interactive for its holder.
+                    self.cli('show', self.a.vm, '--owner', self.lease_owner)
+                else:
+                    self.cli('hide', self.a.vm)
+                grants = self.wait_guest_ready()
+                (self.out / 'guest-status.json').write_text(json.dumps(grants, indent=2))
+                require(self.a.terminal_point[0] < int(grants['width']) and self.a.terminal_point[1] < int(grants['height']), 'TERMINAL_POINT_OUTSIDE_DISPLAY')
+                self.screenshot('preflight')
+                if self.a.connect_dev:
+                    return self.connect_dev()
+                if self.a.connection_proof:
+                    return self.connection_proof()
+                if self.a.release_dev:
+                    return self.release_dev()
+                # Returning packaged profiles can resume the approved Dev endpoint.
+                require_host_dev_stopped(IDENTITY)
+                archive = Path(self.a.artifact).expanduser().absolute() if self.a.artifact else download_latest(self.out, self.deadline)
+                manifest = verify(archive)
+                self.prepare_stage()
+                shutil.copyfile(archive, self.stage / 'app.zip')
+                (self.stage / 'archive.sha256').write_text(manifest['archiveSha256'])
+                (self.stage / 'version').write_text(manifest['version'])
+                self.start_guest()
+                self.phase('share-probe')
+                if self.a.prepare_test_guest:
+                    self.phase('prepare')
+                self.phase('admit')
+                self.quit_guest_app()
+                self.phase('install')
+                self.phase('launch')
+                initial = self.wait_state(True)
+                # App activation is verified before UI capture or Quit input.
+                self.phase('activate')
+                self.wait_state(True, foreground=True)
+                self.screenshot('setup-or-returning')
+                if self.a.menu_point:
+                    require(self.a.menu_point[0] < int(grants['width']) and self.a.menu_point[1] < int(grants['height']), 'MENU_POINT_OUTSIDE_DISPLAY')
+                    self.action('click', *self.a.menu_point)
+                    menu_deadline = min(self.deadline, time.monotonic() + 5)
+                    while self.state().get('menus', 0) < 1:
+                        require(time.monotonic() < menu_deadline, 'MENU_NOT_OBSERVED')
+                    self.screenshot('menubar')
+                    self.action('key', 'escape')
+                self.phase('activate')
+                self.wait_state(True, foreground=True)
+                proof = self.quit_proof()
+                self.begin_effect()
+                self.action('key', 'cmd+q')
+                self.log.append('quit-requested')
+                stopped = self.wait_state(False)
+                self.require_quit_drain(proof)
+                self.screenshot('quit')
+                self.phase('relaunch')
+                relaunched = self.wait_state(True)
+                require(initial['pids'] != relaunched['pids'], 'RELAUNCH_PID_UNCHANGED')
+                self.phase('activate')
+                self.wait_state(True, foreground=True)
+                self.screenshot('relaunch')
+                self.phase('connection-proof')
+                connection_file = self.report / 'connection.json'
+                regular(connection_file, 4096)
+                connection = json.loads(connection_file.read_text())
+                (self.out / 'connection.json').write_text(json.dumps(connection, indent=2) + '\n')
+                self.phase('cleanup')
+                self.phase('stop')
+                # Structural assertions are automatic; pixel semantics require the agent.
+                result = dict(status='NEEDS_REVIEW', lifecycle='PASS', ui='NEEDS_REVIEW',
+                              tunnel='NOT_QUALIFIED' if connection.get('approvedDev') else 'NOT_RUN',
+                              profile='guest-package-only',
+                              version=manifest['version'], archiveSha256=manifest['archiveSha256'],
+                              initial=initial, stopped=stopped, relaunched=relaunched,
+                              menu='CAPTURED' if self.a.menu_point else 'NOT_RUN',
+                              cleanup=self.finish_staging(), phases=self.log,
+                              lease=self.lease_evidence())
+                (self.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
+                if self.a.latest and result['cleanup'] == 'CLEARED':
+                    archive.unlink()
+                return result
+            finally:
+                self.release_input_lease()
 
 
 def arguments(argv=None):
