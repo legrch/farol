@@ -274,6 +274,65 @@ def refuse_host_profile_path(path, identity, home=None):
                 'HOST_PRODUCT_PROFILE_FORBIDDEN')
 
 
+def staging_residue(inbox):
+    """Raw staging left by pre-fence failures in run-* directories.
+
+    Detected strictly by owned name and path existence; file contents are
+    never read and nothing is deleted or rewritten here.
+    """
+    found = []
+    if not inbox.is_dir() or inbox.is_symlink():
+        return found
+    for entry in sorted(inbox.iterdir()):
+        if not entry.name.startswith('run-') or entry.is_symlink() or not entry.is_dir():
+            continue
+        owned = [name for name in ('dev-key', 'dev-connection.json') if (entry / name).exists()]
+        if owned:
+            found.append({'directory': entry.name, 'entries': owned})
+    return found
+
+
+def fence_metadata(machine):
+    """Presence plus the metadata the fence itself legitimately carries."""
+    fence_file = machine / '.farol-smoke-pending.json'
+    if not fence_file.exists():
+        return None
+    meta = {'present': True, 'runId': None, 'evidence': None}
+    try:
+        value = json.loads(fence_file.read_text())
+    except (OSError, ValueError):
+        return meta
+    if isinstance(value, dict):
+        for key in ('runId', 'evidence'):
+            if isinstance(value.get(key), str):
+                meta[key] = value[key]
+    return meta
+
+
+def reconcile_staging(args, home=None):
+    """Read-only staging reconciliation report; touches nothing on disk.
+
+    No Runner is constructed, no VM is started or contacted, no lock is taken
+    and no file is written or deleted. Clearing a fence or removing residue
+    stays a manual owner action outside this tool.
+    """
+    machine = Path(args.vm_home).expanduser().resolve(strict=True) / 'machines' / args.vm
+    refuse_host_profile_path(machine, IDENTITY, home)
+    require(machine.is_dir() and not machine.is_symlink(), 'VM_MISSING')
+    residue = staging_residue(machine / 'artifacts')
+    fence = fence_metadata(machine)
+    for item in residue:
+        item['fence'] = fence is not None
+    found = bool(residue) or fence is not None
+    return {'status': 'STAGING_RESIDUE_FOUND' if found else 'CLEAN',
+            'fence': fence,
+            'residue': residue,
+            'requiredAction': ('Confirm the unresolved guest outcome manually, then delete the listed '
+                               'staging directories and clear the effect fence by hand; vm-smoke never '
+                               'deletes residue or clears a fence.'
+                               if found else 'None; the staging inbox is residue-free.')}
+
+
 class Runner:
     def __init__(self, args):
         self.a = args
@@ -302,6 +361,7 @@ class Runner:
         self.report = self.machine / 'exchange' / 'farol-smoke' / self.run_id
         self.log = []
         self.pending = None
+        self.cleanup_note = None
         self.effect_owned = False
         self.effect_file = self.machine / '.farol-smoke-pending.json'
         # Never forward product configuration, proxy, Electron or loader environment.
@@ -455,6 +515,36 @@ class Runner:
         for name in ('dev-key', 'dev-connection.json'):
             (self.stage / name).unlink(missing_ok=True)
 
+    def cleanup_disposition(self):
+        """Best-effort raw-payload removal that never masks a primary result.
+
+        The first attempt's disposition is recorded and authoritative: a
+        repeated call (except path, then finally) never re-runs the removal,
+        so a FAILED attempt can never be upgraded into a residue-free claim.
+        """
+        if getattr(self, 'cleanup_note', None) is None:
+            try:
+                self.clear_dev_payload()
+            except Exception as error:
+                self.cleanup_note = 'FAILED:' + str(error)
+            else:
+                self.cleanup_note = 'CLEARED'
+        return self.cleanup_note
+
+    def finish_staging(self):
+        """Remove exact task-owned host staging, recording failure instead of
+        letting it mask the published result."""
+        if self.cleanup_disposition() == 'CLEARED':
+            try:
+                shutil.rmtree(self.stage)
+            except FileNotFoundError:
+                self.cleanup_note = 'CLEARED'
+            except Exception as error:
+                self.cleanup_note = 'FAILED:' + str(error)
+            else:
+                self.cleanup_note = 'CLEARED'
+        return self.cleanup_note
+
     def prepare_stage(self):
         self.stage.mkdir(parents=True, exist_ok=False, mode=0o700)
         self.report.mkdir(parents=True, exist_ok=False, mode=0o700)
@@ -477,8 +567,8 @@ class Runner:
         (self.out / 'connection.json').write_text(json.dumps(proof, indent=2) + '\n')
         self.phase('activate')
         self.phase('stop')
-        shutil.rmtree(self.stage)
-        result = dict(status='LOCAL_PROOF_CAPTURED', remoteTest='NOT_RUN', phases=self.log)
+        result = dict(status='LOCAL_PROOF_CAPTURED', remoteTest='NOT_RUN',
+                      cleanup=self.finish_staging(), phases=self.log)
         (self.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
         return result
 
@@ -509,8 +599,8 @@ class Runner:
         self.phase('connection-proof')
         shutil.copyfile(self.report / 'connection.json', self.out / 'connection.json')
         self.phase('stop')
-        shutil.rmtree(self.stage)
-        result = dict(status='GUEST_APP_QUIT', profiles='PRESERVED', hostDev='NOT_STARTED', phases=self.log)
+        result = dict(status='GUEST_APP_QUIT', profiles='PRESERVED', hostDev='NOT_STARTED',
+                      cleanup=self.finish_staging(), phases=self.log)
         (self.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
         return result
 
@@ -529,16 +619,15 @@ class Runner:
         require_host_dev_stopped(IDENTITY)
         self.phase('import-dev')
         # Key material is removed from host staging immediately after guest ACK.
-        self.clear_dev_payload()
+        self.cleanup_disposition()
         self.phase('launch')
         self.wait_state(True)
         self.phase('activate')
         self.wait_state(True, foreground=True)
         self.screenshot('dev-imported')
         self.phase('stop')
-        shutil.rmtree(self.stage)
         result = dict(status='NEEDS_REVIEW', devConnection='IMPORTED_OFFLINE', tunnel='NOT_STARTED',
-                      profile='guest-package-only', phases=self.log)
+                      profile='guest-package-only', cleanup=self.finish_staging(), phases=self.log)
         (self.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
         return result
 
@@ -568,6 +657,9 @@ class Runner:
             # connection_proof still starts/bootstrap-controls the guest and
             # activates the app. It is not a read-only reconciliation route.
             require(not self.effect_file.exists(), 'UNRESOLVED_GUEST_OPERATION')
+            residue = staging_residue(self.inbox)
+            require(not residue, 'UNRECONCILED_STAGING_RESIDUE:' +
+                    ','.join(item['directory'] for item in residue))
             status = self.cli('status', self.a.vm)
             if status.get('state') == 'stopped':
                 self.pending = 'vm-start'
@@ -645,11 +737,10 @@ class Runner:
                           profile='guest-package-only',
                           version=manifest['version'], archiveSha256=manifest['archiveSha256'],
                           initial=initial, stopped=stopped, relaunched=relaunched,
-                          menu='CAPTURED' if self.a.menu_point else 'NOT_RUN', phases=self.log)
+                          menu='CAPTURED' if self.a.menu_point else 'NOT_RUN',
+                          cleanup=self.finish_staging(), phases=self.log)
             (self.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
-            # Remove only exact task-owned host staging after guest completion.
-            shutil.rmtree(self.stage)
-            if self.a.latest:
+            if self.a.latest and result['cleanup'] == 'CLEARED':
                 archive.unlink()
             return result
 
@@ -675,6 +766,8 @@ def arguments(argv=None):
     source.add_argument('--connection-proof', action='store_true', help='Capture guest-local connection identity only; no profile import or tunnel restart')
     source.add_argument('--connect-dev', action='store_true', help='Import only the fixed host Dev tunnel ID/key into the guest package profile, with host Dev stopped; does not start tunnel')
     source.add_argument('--latest', action='store_true', help='Resolve public GitHub Latest now')
+    source.add_argument('--reconcile-staging', action='store_true',
+                        help='Read-only report of staging residue and effect fences; clears nothing and never touches the VM')
     p.add_argument('--terminal-mac', default=config.get('terminal_mac'), help='Signed packaged terminal-mac executable, not launcher')
     p.add_argument('--vm-home', default=config.get('vm_home'), help='Dedicated TERMINAL_MAC_HOME; never host product state')
     p.add_argument('--vm', default=config.get('vm', 'pilot'))
@@ -686,6 +779,12 @@ def arguments(argv=None):
     p.add_argument('--terminal-point', '--bootstrap-point', nargs=2, type=int, default=config.get('terminal_point'), metavar=('X', 'Y'), help='Guest Terminal window or Dock icon coordinates confirmed from current screenshot')
     p.add_argument('--menu-point', nargs=2, type=int, default=config.get('menu_point'), metavar=('X', 'Y'), help='Guest menu icon coordinates confirmed from current screenshot')
     a = p.parse_args(argv)
+    if a.reconcile_staging:
+        # Read-only report: only the VM home and name are resolved; binary,
+        # evidence, display and guest-input requirements do not apply.
+        require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', a.vm), 'VM_NAME_INVALID')
+        require(isinstance(a.vm_home, str) and a.vm_home, 'INFRASTRUCTURE_CONFIG_REQUIRED')
+        return a
     require(all(isinstance(x, str) and x for x in (a.terminal_mac, a.vm_home, a.vm)), 'INFRASTRUCTURE_CONFIG_REQUIRED')
     require(isinstance(a.terminal_point, list) and len(a.terminal_point) == 2 and all(type(x) is int for x in a.terminal_point), 'TERMINAL_POINT_REQUIRED')
     require(a.menu_point is None or (isinstance(a.menu_point, list) and len(a.menu_point) == 2 and all(type(x) is int for x in a.menu_point)), 'MENU_POINT_INVALID')
@@ -705,9 +804,17 @@ def main():
     previous_term = signal.signal(signal.SIGTERM, interrupted)
     try:
         require(set(IDENTITY) == {'name', 'bundleId', 'dataLeaf', 'devDataLeaf'}, 'USE_TASK_VM_SMOKE_ENTRYPOINT')
-        runner = Runner(arguments())
+        args = arguments()
+        if getattr(args, 'reconcile_staging', False):
+            # Read-only reconciliation: no Runner, no lock, no VM or guest
+            # contact; the report only names residue and fence metadata.
+            print(json.dumps(reconcile_staging(args)))
+            return 0
+        runner = Runner(args)
         result = runner.run()
-        runner.finish_effect()
+        if getattr(runner, 'cleanup_note', None) == 'CLEARED':
+            # A failed staging cleanup keeps the effect fence for reconciliation.
+            runner.finish_effect()
         print(json.dumps(dict(result, evidence=str(runner.out))))
         return 0  # NEEDS_REVIEW is deliberately explicit; no UI PASS is fabricated.
     except (Refused, OSError, ValueError, TypeError, KeyError, KeyboardInterrupt, subprocess.TimeoutExpired, zipfile.BadZipFile) as error:
@@ -716,14 +823,20 @@ def main():
                       pending=runner.pending if runner else None,
                       outcome='UNKNOWN' if runner and (runner.pending or runner.log) else 'NOT_STARTED')
         if runner:
-            runner.clear_dev_payload()
-            (runner.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
+            try:
+                result['cleanup'] = runner.cleanup_disposition()
+            except Exception as cleanup_error:
+                result['cleanup'] = 'FAILED:' + str(cleanup_error)
+            try:
+                (runner.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
+            except OSError:
+                pass  # Evidence fallout must never mask the primary result.
         print(json.dumps(result))
         return 2
     finally:
         try:
             if runner:
-                runner.clear_dev_payload()
+                runner.cleanup_disposition()
         finally:
             signal.signal(signal.SIGTERM, previous_term)
 
