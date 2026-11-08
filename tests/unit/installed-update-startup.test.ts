@@ -1283,6 +1283,22 @@ describe("installed updater startup correlation (pure ports only)", () => {
   });
 
   it.each([
+    "/Applications/Farol.app/Contents/Resources/app",
+    path.join(opRoot, "launch-Farol.app/Contents/Resources/app"),
+  ])("bounds a stalled installer custody read for %s", async (appDirectory) => {
+    const f = fixture();
+    f.observation.readRecord.mockImplementation(() => new Promise(() => {}));
+    await expect(
+      waitForInstalledUpdateRelaunch({
+        ...f.options,
+        directory: appDirectory,
+        timeoutMs: 5,
+      }),
+    ).rejects.toThrow("UPDATE_RELAUNCH_TIMEOUT");
+    expect(f.observation.readProcess).not.toHaveBeenCalled();
+  });
+
+  it.each([
     { code: "EPERM", stdout: "", stderr: "" },
     { code: 1, stdout: "", stderr: "denied" },
     { code: "ETIMEDOUT", stdout: "", stderr: "" },

@@ -1336,8 +1336,6 @@ export async function waitForInstalledUpdateRelaunch(
   let pinned: z.infer<typeof Operation> | undefined;
 
   const observe = async (wait: boolean): Promise<void> => {
-    if (slot === "/Applications/Farol.app")
-      await readInstallerManifestForStartup(options, profile, build);
     const deadline = now() + timeoutMs;
     const remaining = () => {
       const ms = Math.ceil(deadline - now());
@@ -1363,6 +1361,10 @@ export async function waitForInstalledUpdateRelaunch(
         if (timer !== undefined) clearTimeout(timer);
       }
     };
+    if (slot === "/Applications/Farol.app")
+      await bounded(() =>
+        readInstallerManifestForStartup(options, profile, build),
+      );
     const routes = async () => {
       for (const [route, privateMode] of [
         [path.dirname(slot), false],
