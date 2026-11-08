@@ -5,6 +5,15 @@ function run(argv) {
   const fm = $.NSFileManager.defaultManager;
   const read = (path) =>
     $.NSString.stringWithContentsOfFileEncodingError(path, 4, null).js;
+  // A missing file bridges as a truthy nil object whose .js is undefined.
+  const readOptional = (path) => {
+    const text = $.NSString.stringWithContentsOfFileEncodingError(
+      path,
+      4,
+      null,
+    );
+    return text && typeof text.js === "string" ? text.js : null;
+  };
   const identity = JSON.parse(read(argv[0]));
   const stage = argv[1];
   const input = JSON.parse(read(stage + "/dev-connection.json"));
@@ -23,6 +32,36 @@ function run(argv) {
     throw Error("GUEST_EFFECT_UNKNOWN");
   if (connector.tunnelId !== null && connector.tunnelId !== input.tunnelId)
     throw Error("FOREIGN_GUEST_CONNECTION");
+  // Operation-bound commit receipt: its existence proves this exact generation
+  // and tunnel landed, so a lost acknowledgement of the final publication
+  // re-admits idempotently instead of re-importing another generation. Any
+  // other receipt shape is an unclassifiable guest effect, never a retry.
+  const receiptFile = root + "/farol-state/secure-mcp-import-receipt.json";
+  const receiptText = readOptional(receiptFile);
+  if (receiptText !== null) {
+    let receipt = null;
+    try {
+      receipt = JSON.parse(receiptText);
+    } catch (error) {
+      receipt = null;
+    }
+    if (
+      !receipt ||
+      receipt.schema !== 1 ||
+      receipt.generation !== connector.generation ||
+      receipt.tunnelId !== connector.tunnelId ||
+      connector.tunnelId !== input.tunnelId ||
+      connector.credential !== "stored"
+    )
+      throw Error("GUEST_EFFECT_UNKNOWN");
+    return "IMPORTED_DEV_CONNECTION";
+  }
+  // Durability honesty: writeToFileAtomically reproduces only the ordering of
+  // the native connector-key-store contract (temporary file, atomic rename).
+  // The JXA surface cannot express its fsync file -> rename -> fsync directory
+  // steps: there is no explicit fsync and no directory sync, so an acknowledged
+  // write is crash-ordered, not proven power-loss durable. The native
+  // durability gate remains a separate NOT RUN experiment.
   const write = (path, value) => {
     if (
       !$(
@@ -77,6 +116,13 @@ function run(argv) {
   write(home + "/.farol-vm-dev-connection.json", {
     schema: 1,
     source: "dev-only",
+    tunnelId: input.tunnelId,
+  });
+  // The uncertainty guard clears only after the receipt proving this import
+  // landed is itself published, so a reported failure here keeps the fence up.
+  write(receiptFile, {
+    schema: 1,
+    generation: connector.generation,
     tunnelId: input.tunnelId,
   });
   config.setup.connect.outcomeUnknown = false;
