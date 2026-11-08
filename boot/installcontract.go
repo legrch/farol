@@ -2,6 +2,7 @@ package boot
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 )
 
@@ -166,10 +167,16 @@ func installAdoptedBaseline(raw []byte, profile string, candidate installRelease
 	if !valid {
 		return false
 	}
-	if values["buildId"] == candidate.BuildID {
-		return values["version"] == candidate.Version && values["buildVersion"] == candidate.BuildVersion && values["artifactSha256"] == candidate.ArtifactSha256
+	comparison, valid := compareInstallVersion(candidate.Version, values["version"])
+	if !valid || comparison < 0 {
+		return false
 	}
-	return true
+	if comparison == 0 {
+		return values["buildVersion"] == candidate.BuildVersion && values["buildId"] == candidate.BuildID && values["artifactSha256"] == candidate.ArtifactSha256
+	}
+	adoptedBuild, adoptedErr := strconv.ParseUint(values["buildVersion"], 10, 64)
+	candidateBuild, candidateErr := strconv.ParseUint(candidate.BuildVersion, 10, 64)
+	return adoptedErr == nil && candidateErr == nil && candidateBuild > adoptedBuild
 }
 
 func installSavedReceipt(raw []byte, saved installSavedUpdate) bool {

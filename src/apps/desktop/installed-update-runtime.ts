@@ -648,6 +648,10 @@ async function observeSharedSlotStartup(
     await canonicalOwnedDirectory(profile, true);
     await privateDirectory(root);
   }
+  // Every startup observes installer custody, including a fresh profile or an
+  // unchanged OTA build. Pending placement must not be bypassed by another
+  // baseline path, and a completed matching placement works offline.
+  const installedManifest = await installerManifest();
   const operationImage = async (record: z.infer<typeof Retained>) => {
     const op = record.operation ?? record.preparation;
     const parsed = parseRetainedGithubReleaseManifest(record);
@@ -869,8 +873,7 @@ async function observeSharedSlotStartup(
         // A completed native placement carries the manifest verified before
         // its namespace effect. Other manually placed copies still use the
         // published release lookup.
-        const local = manualReplacement ? await installerManifest() : null;
-        let manifest = local;
+        let manifest = installedManifest;
         if (!manifest) {
           const transport = createGithubUpdateTransport({
             privateStateDirectory: root,

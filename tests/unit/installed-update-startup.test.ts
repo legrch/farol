@@ -1644,9 +1644,7 @@ describe("shared-slot first-launch adoption at startup (pure ports; GitHub doubl
     expect(captureMock).toHaveBeenCalled();
   });
 
-  const installerRecord = (
-    f: ReturnType<typeof completedReplacementFixture>,
-  ) => ({
+  const installerRecord = (f: ReturnType<typeof adoptionFixture>) => ({
     schema: "farol.bootstrap-install/2",
     id: "b".repeat(32),
     phase: "completed",
@@ -1674,6 +1672,49 @@ describe("shared-slot first-launch adoption at startup (pure ports; GitHub doubl
       schema: "farol.adopted-baseline/1",
       manifest: f.published,
     });
+  });
+
+  it("starts a fresh installer placement offline from its completed verified manifest", async () => {
+    const f = adoptionFixture();
+    f.records.set(installerFile, installerRecord(f));
+    adoptionMocks.find.mockRejectedValue(new Error("offline"));
+    await waitForInstalledUpdateRelaunch(f.options);
+    expect(adoptionMocks.find).not.toHaveBeenCalled();
+    expect(adoptionMocks.transport).not.toHaveBeenCalled();
+    expect(captureMock).toHaveBeenCalledOnce();
+    expect(f.records.get(adoptedFile)).toMatchObject({
+      schema: "farol.adopted-baseline/1",
+      manifest: f.published,
+    });
+  });
+
+  it("refuses pending installer custody on a fresh profile", async () => {
+    const f = adoptionFixture();
+    f.records.set(installerFile, { ...installerRecord(f), phase: "pending" });
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_INSTALLER_CUSTODY_UNCONFIRMED",
+    );
+    expect(adoptionMocks.find).not.toHaveBeenCalled();
+    noEffects(f);
+  });
+
+  it("refuses pending installer custody before using a completed OTA receipt", async () => {
+    const f = unboundSharedFixture("completed");
+    f.records.set(installerFile, {
+      schema: "farol.bootstrap-install/2",
+      id: "b".repeat(32),
+      phase: "pending",
+      version: f.options.build.version,
+      buildId: f.options.build.buildId,
+      digest: f.manifest.artifactSha256,
+      installed: sharedApp,
+      profile,
+      manifest: structuredClone(f.manifest),
+    });
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_INSTALLER_CUSTODY_UNCONFIRMED",
+    );
+    expect(captureMock).not.toHaveBeenCalled();
   });
 
   it.each([

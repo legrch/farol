@@ -205,6 +205,27 @@ func TestInstallReleaseRetainedAdoptionRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("valid superseded adoption record refused: %v", err)
 	}
+	originalManifest := adopted["manifest"]
+	newerManifest := make(map[string]any)
+	for key, value := range originalManifest.(map[string]any) {
+		newerManifest[key] = value
+	}
+	newerManifest["version"] = "0.5.21"
+	newerManifest["buildVersion"] = "77"
+	newerManifest["archiveName"] = "Farol-0.5.21-darwin-arm64.zip"
+	adopted["manifest"] = newerManifest
+	write()
+	if _, err := inspectInstallProfileWithHelper(context.Background(), profile, app, candidate, exitedInstallHelper); err == nil {
+		t.Fatal("candidate older than adopted baseline admitted")
+	}
+	newerManifest["version"] = candidate.Version
+	newerManifest["buildVersion"] = candidate.BuildVersion
+	newerManifest["archiveName"] = "Farol-" + candidate.Version + "-darwin-arm64.zip"
+	write()
+	if _, err := inspectInstallProfileWithHelper(context.Background(), profile, app, candidate, exitedInstallHelper); err == nil {
+		t.Fatal("different build at adopted baseline version admitted")
+	}
+	adopted["manifest"] = originalManifest
 	adopted["adoptedAt"] = "changed"
 	write()
 	if err := recheckInstallProfileWithHelper(context.Background(), profile, app, candidate, state, exitedInstallHelper); err == nil {
