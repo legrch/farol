@@ -59,18 +59,51 @@ task qa:smoke -- --reconcile-staging
 
 The flag runs a strictly read-only report: no runner is constructed, no VM is started or contacted, no lock is taken and nothing is written or deleted. It reports the residue directories, the fence metadata and the required action. Clearing stays manual: confirm the unresolved guest outcome, remove the listed directories and clear the fence by hand. The runner never deletes residue or clears a fence on its own, and the report is the honest `UNKNOWN` record of an interrupted run, not a cleanup tool.
 
-## Renaming the pilot machine to farol (runbook, not yet performed)
+## Renaming the pilot machine to farol (PERFORMED 2026-11-08)
 
-Status: this procedure is prepared, but the actual rename execution belongs to a separate VM-action packet. It has NOT been performed, and no evidence of a completed rename exists anywhere; do not cite this runbook as performed work.
+The rename was executed and verified on 2026-11-08: the guest shut down through the normal
+macOS Shut Down dialog (the ACPI `vm.requestStop()` path stalled; see the terminal-mac
+VALIDATION receipt), `terminal-mac rename pilot farol` moved the machine directory with
+identical identity digests, the `rename.json` receipt records the mapping, and the source
+spec, example config, provisioner default and private infrastructure config now target
+`farol`. Historical evidence directories keep their original references.
 
-The rename preserves machine identity across a name change and only works on a stopped machine:
+## Clean run instances from the prepared base (PERFORMED 2026-11-09)
 
-1. Stop the pilot machine through terminal-mac (normal guest shutdown) and confirm its state reports stopped.
-2. Run `terminal-mac rename pilot farol`. The stopped-machine rename preserves the machine's identity and writes a `rename.json` receipt inside the machine directory.
-3. Update the private infrastructure config that both the provisioner (`vm:plan`, `vm:setup`) and the smoke runner read (discovered automatically; `--config` or `FAROL_VM_CONFIG` overrides it): change the machine name field from `pilot` to `farol`.
-4. Verify readiness: the machine directory under the terminal-mac data root is named `farol`, `terminal-mac lease farol status` reports no held lease, and `task vm:plan` prints the renamed machine without error. The first later start must show the same guest identity as before the rename.
+The base machine `farol-base-1` was installed from the cached local IPSW (no download), its
+Setup Assistant, helper installation and both privacy grants were completed by the owner, and
+its base receipt (`~/Library/Application Support/Farol Testing/base-receipts/farol-base-1.json`)
+records `helper: READY` with the granted permissions. Two run instances were provisioned by
+real clones with distinct VM identities and provenance receipts:
 
-Until that packet runs, the machine keeps the name `pilot`, and every existing receipt, fence and evidence directory keeps referring to it.
+```bash
+node tooling/vm-machine.mjs --provision-instance farol-qa-1 --base farol-base-1
+node tooling/vm-machine.mjs --provision-instance farol-qa-2 --base farol-base-1
+```
+
+Provisioning refuses to run until the base receipt records the owner setup
+(`OWNER_BASE_NOT_READY`), never starts the instance, and never copies service credentials —
+the base contains none. A private provision config
+(`~/Library/Application Support/Farol Testing/vm-provision.json`) selects the tool binary so
+the clone can run from a development build before the next installed release.
+
+KNOWN PREREQUISITE (NEEDS_OWNER, once per base): the base does not have automatic login
+enabled, so a fresh clone boots to the login screen where the guest helper cannot run.
+Log in once in the BASE, enable System Settings → Users & Groups → Automatic login for
+`tester` (FileVault is off), shut the base down, and every later clone boots straight to a
+logged-in desktop with the helper answering. Clones made before this step inherit the same
+one-time login requirement.
+
+## The closed-contour run shape (machinery in place, first full run pending)
+
+The executor machinery is committed: `--closed` requires an offline machine and a local
+artifact (never a download), stages the vm-e2e driver payload with double digest
+verification, runs the `e2e` phase in the guest (the serve loop re-verifies the staged
+digests before executing), and records the driver's durable `result.json` as the run's e2e
+receipt plus the instance provenance. Driver entries committed so far: the egress probe
+(documentation-reserved endpoints only) and the guest-local fixture probe (loopback fixture,
+fail-closed missing route). The first real closed run still needs a built release artifact
+and the autologin prerequisite above; nothing has claimed a closed-contour PASS.
 
 ## Honest status vocabulary
 
