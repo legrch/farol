@@ -174,9 +174,11 @@ not a clean installation.
 Before a product mutation, the runner publishes and fsyncs the private per-VM
 `.farol-smoke-pending.json` fence. It is removed only after the successful run
 and guest server Stop acknowledgement. A failed, interrupted or timed-out run
-leaves the fence in place, blocking a later smoke/import/release while an old
-guest phase might still be executing. `task vm:status` remains an observation
-route; it never clears the fence. Reconcile the original run's guest ACKs,
+leaves the fence in place, blocking every runner mode while an old guest phase
+might still be executing. This includes `task vm:status`: its current connection
+proof path can bootstrap the guest and activate the app, so it is not a read-only
+reconciliation route. It never clears the fence. A genuinely read-only recovery
+operation remains unimplemented. Reconcile the original run's guest ACKs,
 current state and server lifetime before removing that exact fence manually.
 Removing it merely to retry UNKNOWN is not reconciliation.
 
@@ -190,10 +192,13 @@ renames. An interrupted rename retains the predecessor and guest-work path for
 explicit recovery instead of silently replaying installation.
 
 Dev import refuses source uncertainty, checks legacy case spelling when looking
-for a live host Dev, and proves read-only staging before exporting the key.
-The guest publishes a durable Connect uncertainty flag before changing secret
-bytes; it clears that flag only after publishing the new metadata and binding
-marker. Partial publication refuses later admission/re-import until reconciled.
+for a live host Dev, and proves read-only staging before exporting the key. The
+host acquires its effect fence before raw key staging, including when no running
+guest app needed Quit. The guest publishes an atomic Connect uncertainty flag
+before changing secret bytes and clears it after metadata and binding-marker
+publication. Guest crash durability and the final guard-clear failure window
+remain unqualified; an ACK is not power-loss evidence. Partial publication must
+be reconciled before later admission/re-import, including retained host fences.
 Normal exceptions, Ctrl+C and SIGTERM remove the host staging key while keeping
 operation metadata. SIGKILL or host power loss cannot run cleanup: inspect the
 original private inbox and reconcile/remove residual credential payloads before

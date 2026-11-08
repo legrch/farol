@@ -104,7 +104,7 @@ tasks:
       - node tooling/vm-entry.mjs smoke --release-dev {{.CLI_ARGS}}
 
   vm:status:
-    desc: Capture only the running guest connection identity and approved Dev binding (no tunnel restart)
+    desc: Capture guest connection identity and approved Dev binding; refuses unresolved operations
     cmds:
       - node tooling/vm-entry.mjs smoke --connection-proof {{.CLI_ARGS}}
 

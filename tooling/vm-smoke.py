@@ -515,7 +515,9 @@ class Runner:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as e:
                 raise Refused('VM_BUSY') from e
-            require(self.a.connection_proof or not self.effect_file.exists(), 'UNRESOLVED_GUEST_OPERATION')
+            # connection_proof still starts/bootstrap-controls the guest and
+            # activates the app. It is not a read-only reconciliation route.
+            require(not self.effect_file.exists(), 'UNRESOLVED_GUEST_OPERATION')
             status = self.cli('status', self.a.vm)
             if status.get('state') == 'stopped':
                 self.pending = 'vm-start'
