@@ -189,6 +189,7 @@ def export_dev_connection(stage, identity, home=None):
             'DEV_EFFECT_UNKNOWN')
     tunnel = connector['tunnelId']
     require(isinstance(tunnel, str) and re.fullmatch('[0-9A-Za-z._:-]{1,160}', tunnel), 'DEV_TUNNEL_MISSING')
+    require(connector.get('credential') == 'stored', 'DEV_CREDENTIAL_NOT_STORED')
     require_host_dev_stopped(identity, home)
     fd = os.open(key_file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
@@ -341,9 +342,18 @@ class Runner:
                 json.dump({'runId': self.run_id, 'evidence': str(self.out)}, stream)
                 stream.flush()
                 os.fsync(stream.fileno())
+            # Persist the directory entry before publishing any guest effect.
+            self.sync_effect_directory()
         except FileExistsError as error:
             raise Refused('UNRESOLVED_GUEST_OPERATION') from error
         self.effect_owned = True
+
+    def sync_effect_directory(self):
+        fd = os.open(self.effect_file.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
     def finish_effect(self):
         if self.effect_owned:
@@ -352,6 +362,7 @@ class Runner:
                     'GUEST_OPERATION_FENCE_CHANGED')
             require(self.log and self.log[-1] == 'stop', 'GUEST_SERVER_NOT_STOPPED')
             self.effect_file.unlink()
+            self.sync_effect_directory()
             self.effect_owned = False
 
     def quit_proof(self):

@@ -3,6 +3,7 @@ import contextlib
 import io
 import json
 import os
+import stat
 from pathlib import Path
 import plistlib
 import subprocess
@@ -141,7 +142,7 @@ class AdmissionTests(unittest.TestCase):
             key = key_dir / 'control-plane-api-key'
             key.write_text('synthetic-test-key-no-real-secret')
             key.chmod(0o600)
-            config = {'connectors': {'secureMcp': {'tunnelId': 'test-only'}},
+            config = {'connectors': {'secureMcp': {'tunnelId': 'test-only', 'credential': 'stored'}},
                       'computer': {'workspaces': ['/never-copy-this-host-folder']}, 'runtime': 'never-copy'}
             (profile / 'farol-state/config.json').write_text(json.dumps(config))
             stage = root / 'stage'
@@ -204,7 +205,7 @@ class AdmissionTests(unittest.TestCase):
             keys = profile / 'farol-private/secure-mcp-connector'
             keys.mkdir(parents=True)
             os.mkfifo(keys / 'control-plane-api-key', 0o600)
-            (profile / 'farol-state/config.json').write_text(json.dumps({'connectors': {'secureMcp': {'tunnelId': 'test-only'}}}))
+            (profile / 'farol-state/config.json').write_text(json.dumps({'connectors': {'secureMcp': {'tunnelId': 'test-only', 'credential': 'stored'}}}))
             stage = root / 'stage'
             stage.mkdir()
             copied_source = root / 'runner-source.py'
@@ -222,6 +223,69 @@ m.export_dev_connection(Path(sys.argv[2]),json.loads(sys.argv[3]),Path(sys.argv[
             self.assertEqual(list(stage.iterdir()), [])
             self.assertFalse((root / '__pycache__').exists())
 
+    def test_dev_missing_credential_refuses_before_key_access(self):
+        for value in ('missing', None):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                profile = root / 'Library/Application Support/TestDev'
+                (profile / 'farol-state').mkdir(parents=True)
+                (profile / 'farol-private/secure-mcp-connector').mkdir(parents=True)
+                connector = {'tunnelId': 'test-only', 'credential': value}
+                (profile / 'farol-state/config.json').write_text(json.dumps({'connectors': {'secureMcp': connector}}))
+                with patch.object(vm.os, 'open') as opened:
+                    with self.assertRaisesRegex(vm.Refused, 'DEV_CREDENTIAL_NOT_STORED'):
+                        vm.export_dev_connection(root, vm.IDENTITY, root)
+                    opened.assert_not_called()
+
+    def test_fence_syncs_file_then_directory_before_effect_and_keeps_failure_fenced(self):
+        for fail_directory in (False, True):
+            with self.subTest(fail_directory=fail_directory), tempfile.TemporaryDirectory() as d:
+                runner = object.__new__(vm.Runner)
+                runner.effect_file = Path(d) / '.farol-smoke-pending.json'
+                runner.effect_owned = False
+                runner.run_id = 'durability-test'
+                runner.out = Path(d) / 'evidence'
+                synced = []
+                fsync = os.fsync
+                def sync(fd):
+                    directory = stat.S_ISDIR(os.fstat(fd).st_mode)
+                    synced.append('directory' if directory else 'file')
+                    if directory and fail_directory:
+                        raise OSError('directory-sync-failed')
+                    fsync(fd)
+                with patch.object(vm.os, 'fsync', side_effect=sync):
+                    if fail_directory:
+                        # No phase request may be constructed when durability fails.
+                        with self.assertRaisesRegex(OSError, 'directory-sync-failed'):
+                            runner.phase('install')
+                        self.assertFalse(runner.effect_owned)
+                        self.assertTrue(runner.effect_file.exists())
+                        with self.assertRaisesRegex(vm.Refused, 'UNRESOLVED_GUEST_OPERATION'):
+                            runner.begin_effect()
+                    else:
+                        runner.begin_effect()
+                        self.assertTrue(runner.effect_owned)
+                        runner.log = ['stop']
+                        runner.finish_effect()
+                        self.assertFalse(runner.effect_file.exists())
+                self.assertEqual(synced, ['file', 'directory'] if fail_directory else ['file', 'directory', 'directory'])
+
+    def test_preflight_failure_without_stage_preserves_original_result(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            runner = object.__new__(vm.Runner)
+            runner.stage = root / 'stage-never-created'
+            runner.out = root
+            runner.pending = None
+            runner.log = []
+            runner.run = lambda: (_ for _ in ()).throw(vm.Refused('GUEST_PERMISSIONS_MISSING'))
+            with patch.object(vm, 'arguments', return_value=None), patch.object(vm, 'Runner', return_value=runner), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(vm.main(), 2)
+            result = json.loads((root / 'result.json').read_text())
+            self.assertEqual(result['reason'], 'GUEST_PERMISSIONS_MISSING')
+            self.assertEqual(result['outcome'], 'NOT_STARTED')
+            self.assertFalse(runner.stage.exists())
+
     def test_source_uncertainty_refuses_before_key_access(self):
         for flag in ('setup', 'runtime', 'verification'):
             with self.subTest(flag=flag), tempfile.TemporaryDirectory() as d:
@@ -229,7 +293,7 @@ m.export_dev_connection(Path(sys.argv[2]),json.loads(sys.argv[3]),Path(sys.argv[
                 profile = root / 'Library/Application Support/TestDev'
                 (profile / 'farol-state').mkdir(parents=True)
                 (profile / 'farol-private/secure-mcp-connector').mkdir(parents=True)
-                connector = {'tunnelId': 'test-only'}
+                connector = {'tunnelId': 'test-only', 'credential': 'stored'}
                 config = {'connectors': {'secureMcp': connector}}
                 if flag == 'setup': config['setup'] = {'connect': {'outcomeUnknown': True}}
                 if flag == 'runtime': connector['runtime'] = {'state': 'outcome_unknown'}
