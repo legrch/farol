@@ -3500,7 +3500,7 @@ async function createRuntime(
           if (
             reusePreviousFailure &&
             previous?.code === view.code &&
-            previous.version === version
+            (version === null || previous.version === version)
           )
             return {
               key: previous.key,
@@ -3522,6 +3522,21 @@ async function createRuntime(
           blockedBy: "UPDATE_NOTICE_OUTCOME_UNKNOWN",
         },
       ),
+    noticeFailureResolved: () =>
+      serializeNotice(async () => {
+        let preferences: z.infer<typeof NoticePreferences>;
+        try {
+          preferences = await readNoticePreferences();
+        } catch {
+          return known("UPDATE_PREFERENCES_UNREADABLE");
+        }
+        if (preferences.failureNotice)
+          await writeRecord(noticesFile, {
+            ...preferences,
+            failureNotice: null,
+          });
+        return { ok: true as const };
+      }, known("UPDATE_NOTICE_OUTCOME_UNKNOWN")),
     noticeSeen: (key) =>
       serializeNotice(async () => {
         let preferences: z.infer<typeof NoticePreferences>;

@@ -74,13 +74,14 @@ export type InstalledUpdaterPorts = Readonly<{
   ): Promise<InstallOnQuitPreferenceResult>;
 
   // Optional only for transitional callers without a notice projection. The
-  // installed runtime supplies both ports through its existing preferences owner.
+  // installed runtime supplies these ports through its existing preferences owner.
   notice?(
     view: UpdateView,
     version: string | null,
     reusePreviousFailure: boolean,
   ): Promise<UpdateNotice>;
   noticeSeen?(key: string): Promise<Readonly<{ ok: true }> | KnownFailure>;
+  noticeFailureResolved?(): Promise<Readonly<{ ok: true }> | KnownFailure>;
   // Stop only this updater lifetime's network requests; filesystem cleanup still drains.
   cancelPending(): void;
   // Recovery must reverify the retained archive/package and reconcile any helper receipt.
@@ -143,7 +144,7 @@ export type InstalledUpdaterPorts = Readonly<{
 export class InstalledUpdater {
   private view: UpdateView = { phase: "idle", checkedAt: null };
   private noticeVersion: string | null = null;
-  private failureNoticeReusable = false;
+  private failureNoticeReusable = true;
   private noticeBlocked: string | null = null;
   private noticeWriting = false;
   private noticeDrained: Promise<void> = Promise.resolve();
@@ -580,13 +581,23 @@ export class InstalledUpdater {
 
   private async publish(view: UpdateView): Promise<void> {
     if ("version" in view) this.noticeVersion = view.version;
+    this.view = view;
+    if (this.isClosing()) return;
     if (
       (view.phase === "idle" && view.checkedAt !== null) ||
       view.phase === "available" ||
       view.phase === "ready"
-    )
+    ) {
       this.failureNoticeReusable = false;
-    this.view = view;
+      if (!this.noticeBlocked && this.ports.noticeFailureResolved) {
+        try {
+          const result = await this.ports.noticeFailureResolved();
+          if (!result.ok) this.noticeBlocked = result.code;
+        } catch {
+          this.noticeBlocked = "UPDATE_NOTICE_OUTCOME_UNKNOWN";
+        }
+      }
+    }
     if (this.isClosing()) return;
     if (
       this.ports.notice &&

@@ -552,6 +552,14 @@ const personalizedLabels = [
   "Персонализированный",
 ] as const;
 const unpersonalizedLabels = ["Unpersonalized", "Без персонализации"] as const;
+const sendControlSelectors = [
+  '[data-testid="send-button"]',
+  'button[aria-label="Send prompt"]',
+  'button[aria-label="Send message"]',
+  'button[aria-label="Send"]',
+  'button[aria-label="Отправить"]',
+  'button[aria-label="Отправить сообщение"]',
+] as const;
 const selectedModelControlPredicate = `((button) => {
   const label = (button.innerText || "").trim();
   const aria = button.getAttribute("aria-label");
@@ -1111,7 +1119,7 @@ export function installManualAppGateScript(appName: string): string {
       if (!(target instanceof Element)) return;
       const button = target.closest("button");
       const form = button?.closest("form");
-      const knownSend = target.closest('[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label="Send message"],button[aria-label="Send"],button[aria-label="Отправить"],button[aria-label="Отправить сообщение"]');
+      const knownSend = target.closest(${JSON.stringify(sendControlSelectors.join(","))});
       const knownCancel = target.closest('[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]');
       const formComposer = form instanceof HTMLFormElement
         ? submissionComposerIn(form)
@@ -1206,8 +1214,9 @@ function manualDeepTestDraftGuard(
       .filter((element) => manualForm.contains(element) || element.form === manualForm) : [];
     const manualComposers = [...new Set(document.querySelectorAll('#prompt-textarea,[data-testid="prompt-textarea"],[contenteditable="true"][data-virtualkeyboard="true"]'))].filter(manualVisible);
     const manualAttachments = manualForm ? [...manualForm.querySelectorAll(
-      '[data-testid="attachment-preview"],[data-testid="composer-attachment"],[data-testid*="file-chip"],[data-testid*="attachment-chip"],[aria-label*="remove file" i],[aria-label*="remove attachment" i],[aria-label*="удалить файл" i],[aria-label*="удалить вложение" i]'
-    )].some(manualVisible) : true;
+      '[data-testid="attachment-preview"],[data-testid="composer-attachment"],[data-testid*="file-chip"],[data-testid*="attachment-chip"]'
+    )].some(manualVisible) || [...manualForm.querySelectorAll('[aria-label]')].some((element) =>
+      manualVisible(element) && /remove file|remove attachment|удалить файл|удалить вложение/iu.test(element.getAttribute('aria-label') || '')) : true;
     const manualAllowedLabels = new Set(['Add files', 'Add files and more', 'Select ChatGPT model', 'Dictate', 'Start Voice', 'Start voice mode', 'Start Voice Mode', 'Expand', 'Send prompt', 'Send message', 'Send', 'Добавить файлы', 'Добавить файлы и другое', 'Выбрать модель ChatGPT', 'Диктовка', 'Диктовать', 'Начать голосовой режим', 'Развернуть', 'Отправить', 'Отправить сообщение']);
     const manualControlSelector = 'button,[role="button"],input[type="button"],input[type="submit"]';
     const manualUnknownControls = manualForm ? [...new Set([
@@ -1398,14 +1407,8 @@ export function activateTaskScript(
       const box = element.getBoundingClientRect();
       return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
     };
-    const send = [
-      document.querySelector('[data-testid="send-button"]'),
-      document.querySelector('button[aria-label="Send prompt"]'),
-      document.querySelector('button[aria-label="Send message"]'),
-      document.querySelector('button[aria-label="Send"]'),
-      document.querySelector('button[aria-label="Отправить"]'),
-      document.querySelector('button[aria-label="Отправить сообщение"]')
-    ].find((element) => visible(element) && element instanceof HTMLButtonElement && !element.disabled);
+    const send = ${JSON.stringify(sendControlSelectors)}.map((selector) => document.querySelector(selector))
+      .find((element) => visible(element) && element instanceof HTMLButtonElement && !element.disabled);
     if (!(send instanceof HTMLButtonElement)) return { activated: false };
     ${manualDeepTestPrompt !== undefined && requiredAppName ? "if (send.form !== manualForm) return { draftPresent: true };" : ""}
     send.click();
@@ -1491,12 +1494,7 @@ export function taskProbeScript(
       document.querySelector('button[aria-label="Stop generating"]'),
       document.querySelector('button[aria-label="Stop"]')
     ].some(visible);
-    const sendVisible = [
-      document.querySelector('[data-testid="send-button"]'),
-      document.querySelector('button[aria-label="Send prompt"]'),
-      document.querySelector('button[aria-label="Send message"]'),
-      document.querySelector('button[aria-label="Send"]')
-    ].some(visible);
+    const sendVisible = ${JSON.stringify(sendControlSelectors)}.map((selector) => document.querySelector(selector)).some(visible);
     const errors = [
       document.querySelector('[data-testid="conversation-turn-error"]'),
       document.querySelector('[data-testid="network-error"]'),

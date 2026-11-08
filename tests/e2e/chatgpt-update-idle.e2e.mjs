@@ -18,7 +18,7 @@ try {
 import assert from 'node:assert/strict';
 import { app, BrowserWindow, WebContentsView } from 'electron';
 import { chatGptUpdateIdleProbe } from './src/apps/desktop/chatgpt-update-idle.ts';
-import { ChatGptRoute } from './src/apps/desktop/chatgpt-route.ts';
+import { ChatGptRoute, activateTaskScript, bindChatGptAppScript, prepareTaskScript, taskProbeScript } from './src/apps/desktop/chatgpt-route.ts';
 import { NativeViewVisibility } from './apps/desktop/bridge/native-view-visibility.ts';
 import { deriveSurfaceLayout } from './src/apps/desktop/surface-layout.ts';
 app.setPath('userData', ${JSON.stringify(path.join(scratch, "profile"))});
@@ -67,6 +67,42 @@ try {
   await view.webContents.executeJavaScript('(() => { const b=document.createElement("button"); b.type="button"; b.setAttribute("aria-label","Other action"); document.querySelector("form").append(b); })()');
   assert.deepEqual(await probe(), { state: 'unknown' });
   observations.push('draft-running-unknown-action-refused');
+  // Exercise Chromium's actual attribute-selector semantics: CSS's i flag
+  // does not fold Cyrillic case, unlike the renderer test DOM implementation.
+  const russianComposer = '<form><span data-testid="composer-app-chip" aria-label="Farol">Farol</span>' +
+    '<textarea id="prompt-textarea"></textarea><input type="file">' +
+    '<button type="button" aria-label="Добавить файлы и другое"></button>' +
+    '<button type="button" aria-label="Выбрать модель ChatGPT"></button>' +
+    '<button type="button" aria-label="Диктовать"></button>' +
+    '<button type="button" aria-label="Отправить" onclick="window.fixtureSends++"></button></form>';
+  await view.webContents.executeJavaScript('window.fixtureSends = 0; document.body.innerHTML = ' + JSON.stringify(russianComposer));
+  const fixtureHref = view.webContents.getURL();
+  for (const label of ['Удалить файл plan.pdf', 'Удалить вложение plan.pdf', 'УДАЛИТЬ ВЛОЖЕНИЕ plan.pdf']) {
+    await view.webContents.executeJavaScript('document.querySelector("textarea").value = ""; document.querySelector("form").insertAdjacentHTML("beforeend", ' +
+      JSON.stringify('<div id="document-preview" aria-label="' + label + '">plan.pdf</div>') + ')');
+    assert.deepEqual(await view.webContents.executeJavaScript(prepareTaskScript('check', fixtureHref, 'Farol', undefined, true)), {draftPresent: true});
+    assert.deepEqual(await view.webContents.executeJavaScript(bindChatGptAppScript('Farol', fixtureHref, true)), {state: 'blocked', reason: 'draft_present'});
+    await view.webContents.executeJavaScript('document.querySelector("textarea").value = "check"');
+    assert.deepEqual(await view.webContents.executeJavaScript(activateTaskScript(fixtureHref, 'Farol', false, false, 'check')), {draftPresent: true});
+    assert.equal(await view.webContents.executeJavaScript('window.fixtureSends'), 0);
+    await view.webContents.executeJavaScript('document.querySelector("#document-preview").remove()');
+  }
+  observations.push('russian-uploaded-document-fenced-before-bind-prepare-and-send');
+  await view.webContents.executeJavaScript('document.body.insertAdjacentHTML("afterbegin", ' + JSON.stringify(
+    '<div data-message-id="user-1" data-message-author-role="user">check</div>' +
+    '<article><div data-message-id="assistant-1" data-message-author-role="assistant" data-message-channel="final"><div class="markdown"><p>ok</p></div></div><button data-testid="copy-turn-action-button">Copy</button></article>') + ')');
+  for (const label of ['Отправить', 'Отправить сообщение']) {
+    await view.webContents.executeJavaScript('document.querySelector("button[onclick]").setAttribute("aria-label", ' + JSON.stringify(label) + ')');
+    assert.equal((await view.webContents.executeJavaScript(taskProbeScript('check', []))).sendVisible, true);
+    const completed = await view.webContents.executeJavaScript(taskProbeScript('check', [], {semantic: true, userId: 'user-1', assistantId: 'assistant-1'}));
+    assert.equal(completed.publicFrame.terminal, true);
+    assert.equal(completed.publicFrame.messages[0].text, 'ok');
+    assert.deepEqual(await view.webContents.executeJavaScript(activateTaskScript(fixtureHref, 'Farol', false, false, 'check')), {activated: true});
+  }
+  assert.equal(await view.webContents.executeJavaScript('window.fixtureSends'), 2);
+  await view.webContents.executeJavaScript('document.querySelector("form").insertAdjacentHTML("beforeend", ' + JSON.stringify('<button data-testid="stop-button">Stop</button>') + ')');
+  assert.equal((await view.webContents.executeJavaScript(taskProbeScript('check', [], {semantic: true, userId: 'user-1', assistantId: 'assistant-1'}))).publicFrame.terminal, false);
+  observations.push('russian-send-observed-without-test-id');
   const route = new ChatGptRoute({homeUrl:'https://chatgpt.com/',initialUrl:'https://chatgpt.com/',e2eOrigin:null,parent:()=>null});
   const contents=view.webContents;
   Reflect.set(route,'routeWindow',{kind:'embedded',webContents:contents,isDestroyed:()=>contents.isDestroyed(),destroy:()=>contents.close({waitForBeforeUnload:false})});
