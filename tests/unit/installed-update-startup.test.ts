@@ -1717,9 +1717,34 @@ describe("shared-slot first-launch adoption at startup (pure ports; GitHub doubl
     expect(captureMock).not.toHaveBeenCalled();
   });
 
+  it("keeps a proven no-effect installer refusal separate from an accepted OTA", async () => {
+    const f = unboundSharedFixture("completed");
+    f.records.set(installerFile, {
+      schema: "farol.bootstrap-install/2",
+      id: "b".repeat(32),
+      phase: "refused",
+      version: f.options.build.version,
+      buildId: f.options.build.buildId,
+      digest: f.manifest.artifactSha256,
+      installed: sharedApp,
+      profile,
+      manifest: structuredClone(f.manifest),
+    });
+    await waitForInstalledUpdateRelaunch(f.options);
+    expect(captureMock).toHaveBeenCalledOnce();
+  });
+
+  it("never uses a refused installer record as an offline adoption baseline", async () => {
+    const f = adoptionFixture();
+    f.records.set(installerFile, { ...installerRecord(f), phase: "refused" });
+    adoptionMocks.find.mockRejectedValue(new Error("offline"));
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow();
+    expect(adoptionMocks.find).toHaveBeenCalledOnce();
+    noEffects(f);
+  });
+
   it.each([
     ["pending outcome", { phase: "pending" }],
-    ["refused placement", { phase: "refused" }],
     ["wrong profile", { profile: "/Users/other/profile" }],
     ["wrong manifest digest", { digest: "f".repeat(64) }],
     ["wrong manifest source", { manifest: { sourceCommit: "f".repeat(40) } }],

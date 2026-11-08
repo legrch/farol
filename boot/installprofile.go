@@ -27,6 +27,75 @@ type installProfileState struct {
 	fingerprint [32]byte
 }
 
+type installProfileLease struct {
+	file     *os.File
+	path     string
+	identity os.FileInfo
+}
+
+// The replacement owner holds this fixed promotion lease before publishing
+// installed-replacement.pending. Hold the same inode through placement so a
+// marker cannot appear between the last profile check and the namespace move.
+func acquireInstallProfileLease(profile string) (*installProfileLease, error) {
+	refuse := func() (*installProfileLease, error) {
+		return nil, errors.New("INSTALL_FRESH_STATE_UNCONFIRMED")
+	}
+	if installPathAbsent(profile) {
+		return nil, nil
+	}
+	if _, err := installPrivateIdentity(profile); err != nil {
+		return refuse()
+	}
+	state := filepath.Join(profile, "farol-state")
+	if _, err := installPrivateIdentity(state); err != nil {
+		return refuse()
+	}
+	path := filepath.Join(state, "promotion.lease")
+	before, err := os.Lstat(path)
+	if err != nil || !installPromotionLeaseInfo(before) {
+		return refuse()
+	}
+	fd, err := unix.Open(path, unix.O_RDWR|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return refuse()
+	}
+	file := os.NewFile(uintptr(fd), path)
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(before, opened) || !installPromotionLeaseInfo(opened) {
+		file.Close()
+		return refuse()
+	}
+	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		file.Close()
+		return refuse()
+	}
+	lease := &installProfileLease{file: file, path: path, identity: before}
+	if lease.recheck() != nil {
+		file.Close()
+		return refuse()
+	}
+	return lease, nil
+}
+
+func installPromotionLeaseInfo(info os.FileInfo) bool {
+	if info == nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+		return false
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && st.Uid == uint32(os.Geteuid()) && st.Nlink == 1
+}
+
+func (lease *installProfileLease) recheck() error {
+	if lease == nil {
+		return nil
+	}
+	current, err := os.Lstat(lease.path)
+	if err != nil || !os.SameFile(lease.identity, current) || !installPromotionLeaseInfo(current) {
+		return errors.New("INSTALL_FRESH_STATE_UNCONFIRMED")
+	}
+	return nil
+}
+
 type installBuild struct {
 	Digest  string `json:"digest"`
 	Version string `json:"version"`
@@ -215,6 +284,9 @@ func inspectInstallProfileWithHelper(ctx context.Context, profile, installed str
 		if !installPathAbsent(path) {
 			return refuse()
 		}
+	}
+	if !installPathAbsent(filepath.Join(profile, "farol-state", "installed-replacement.pending")) {
+		return refuse()
 	}
 	if installPathAbsent(profile) {
 		return installProfileState{fresh: true}, nil

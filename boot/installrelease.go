@@ -166,6 +166,13 @@ func installReleaseSwap(ctx context.Context, in installReleaseInput, out io.Writ
 		return err
 	}
 	profileRoot := filepath.Join(account.HomeDir, "Library", "Application Support", "io.github.legrch.farol")
+	profileLease, err := acquireInstallProfileLease(profileRoot)
+	if err != nil {
+		return err
+	}
+	if profileLease != nil {
+		defer profileLease.file.Close()
+	}
 	profileState, err := inspectInstallProfile(ctx, profileRoot, in.installed, m)
 	if err != nil {
 		return err
@@ -190,6 +197,9 @@ func installReleaseSwap(ctx context.Context, in installReleaseInput, out io.Writ
 		// Every refusal here precedes the namespace operation. The native
 		// adapter may still promote pin-cleanup uncertainty after this return.
 		refuse := func(err error) error { return &installmove.Failure{Code: err.Error()} }
+		if e := profileLease.recheck(); e != nil {
+			return refuse(e)
+		}
 		if e := installProductionStopped(ctx); e != nil {
 			return refuse(e)
 		}

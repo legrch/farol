@@ -233,7 +233,7 @@ export function installerManifestForAdoption(
   if (!parsed.success || parsed.data.profile !== profile)
     throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
   const record = parsed.data;
-  if (record.phase !== "completed")
+  if (record.phase === "pending")
     throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
   const manifest = parseGithubReleaseManifest(record.manifest);
   if (
@@ -243,6 +243,9 @@ export function installerManifestForAdoption(
     manifest.value.artifactSha256 !== record.digest
   )
     throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
+  // Native writes refused only after proving the namespace effect did not
+  // occur. It cannot anchor adoption, but it cannot veto another accepted app.
+  if (record.phase === "refused") return null;
   if (record.buildId !== build.buildId) return null;
   if (!manifestDescribesRunningBuild(manifest.value, build))
     throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");

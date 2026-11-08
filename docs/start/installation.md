@@ -48,7 +48,7 @@ The archive should report `OK`. This checks agreement with the published checksu
 curl -fsSL https://raw.githubusercontent.com/legrch/farol/main/scripts/install.sh | sh -s -- latest
 ```
 
-The installer downloads and verifies the selected release, then asks the verified package's native backend to place it into `/Applications/Farol.app` without overwriting another app. It checks for active Farol processes and unresolved installation or update evidence. A retained profile is accepted only when its last update has a matching completed journal, binding and exited helper, and the selected release is the same verified build or a newer stable build. It does not erase the profile or repair unknown operations. If placement reports an unconfirmed result, keep the printed recovery directory and do not repeat the command.
+The installer downloads and verifies the selected release, then asks the verified package's native backend to place it into `/Applications/Farol.app` without overwriting another app. It checks for active Farol processes and unresolved installation or update evidence. Starting with the 0.5.20 backend, a retained profile is accepted only when its last update has a matching completed journal, binding and exited helper, and the selected release is the same verified build or a newer stable build. Explicitly selecting 0.5.19 runs its older backend, which refuses an existing profile. The installer does not erase the profile or repair unknown operations. If placement reports an unconfirmed result, keep the printed recovery directory and do not repeat the command.
 
 An occupied installation should use **Settings → General → Check for updates**. Downloading, unpacking or manually copying the app does not create the same installation evidence.
 

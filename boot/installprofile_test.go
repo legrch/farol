@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 var exitedInstallHelper = func(context.Context, int) bool { return true }
@@ -29,6 +31,13 @@ func installProfileFixture(t *testing.T) (string, string, installReleaseManifest
 		if err := os.Mkdir(directory, 0700); err != nil {
 			t.Fatal(err)
 		}
+	}
+	state := filepath.Join(profile, "farol-state")
+	if err := os.Mkdir(state, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "promotion.lease"), nil, 0600); err != nil {
+		t.Fatal(err)
 	}
 	start := "Sun Nov  8 00:08:35 2026"
 	saved := installSavedUpdate{Schema: "farol.ready-update/1", Handle: "retained-update-handle", ObservedAt: "2026-11-08T00:08:35.000Z", Phase: "completed", RunningBuildID: operation.Target.BuildID, Operation: operation}
@@ -170,6 +179,46 @@ func TestInstallReleaseRejectsStartupIncompatibleRetainedRecords(t *testing.T) {
 				t.Fatal("startup-incompatible profile admitted")
 			}
 		})
+	}
+}
+
+func TestInstallReleaseReplacementMarkerAndLease(t *testing.T) {
+	profile, app, candidate, _ := installProfileFixture(t)
+	lease, err := acquireInstallProfileLease(profile)
+	if err != nil || lease == nil {
+		t.Fatalf("completed profile lease unavailable: %v", err)
+	}
+	defer lease.file.Close()
+	other, err := os.OpenFile(lease.path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if err := unix.Flock(int(other.Fd()), unix.LOCK_EX|unix.LOCK_NB); err == nil {
+		t.Fatal("second holder acquired the installer-held promotion lease")
+	}
+	state, err := inspectInstallProfileWithHelper(context.Background(), profile, app, candidate, exitedInstallHelper)
+	if err != nil {
+		t.Fatalf("completed profile refused without replacement marker: %v", err)
+	}
+	marker := filepath.Join(profile, "farol-state", "installed-replacement.pending")
+	if err := os.WriteFile(marker, []byte("pending"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inspectInstallProfileWithHelper(context.Background(), profile, app, candidate, exitedInstallHelper); err == nil {
+		t.Fatal("unfinished replacement admitted")
+	}
+	if err := recheckInstallProfileWithHelper(context.Background(), profile, app, candidate, state, exitedInstallHelper); err == nil {
+		t.Fatal("unfinished replacement admitted at placement fence")
+	}
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Flock(int(other.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		t.Fatalf("promotion lease remained held after close: %v", err)
 	}
 }
 
