@@ -272,7 +272,7 @@ it.each([
     expect(f.api.installedUpdate).toHaveBeenCalledTimes(1);
   },
 );
-it("describes a network check failure without implying an install attempt", async () => {
+it("describes a network request failure without implying which update step failed", async () => {
   const { host } = await mount({
     phase: "failed",
     code: "UPDATE_NETWORK_FAILURE",
@@ -280,8 +280,8 @@ it("describes a network check failure without implying an install attempt", asyn
     notice: { key: "failure:network", seen: false, blockedBy: null },
   });
   const notice = host.querySelector('[aria-label="Update notice"]');
-  expect(notice?.textContent).toContain("Couldn't check for updates");
-  expect(notice?.textContent).toContain("couldn't reach the update feed");
+  expect(notice?.textContent).toContain("Update network request failed");
+  expect(notice?.textContent).toContain("couldn't get update data from GitHub");
 });
 it("viewing the sheet acknowledges the exact notice once under StrictMode without an update operation", async () => {
   const { host, c, f } = await mount();

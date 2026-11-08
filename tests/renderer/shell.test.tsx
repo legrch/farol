@@ -891,8 +891,8 @@ it.each([
       code: "UPDATE_NETWORK_FAILURE",
       recoveryRequired: false,
     },
-    "Couldn't check for updates",
-    "Farol couldn't reach the update feed. Check your connection before checking for updates again.",
+    "Update network request failed",
+    "Farol couldn't get update data from GitHub. Check your connection before trying again.",
     ["Dismiss"],
   ],
   [

@@ -673,7 +673,7 @@ function Update({
                     ? "You’re up to date"
                     : update.phase === "failed" &&
                         update.code === "UPDATE_NETWORK_FAILURE"
-                      ? "Couldn't check for updates"
+                      ? "Update network request failed"
                       : updateSheetTitles[update.phase]
       }
       onClose={() => facade.overlay("none")}

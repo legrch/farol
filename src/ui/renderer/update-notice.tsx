@@ -67,14 +67,14 @@ export function UpdateNotice({
         <strong>
           {update.phase === "failed"
             ? update.code === "UPDATE_NETWORK_FAILURE"
-              ? "Couldn't check for updates"
+              ? "Update network request failed"
               : "The update did not finish"
             : `Farol ${updateVersionLabel(update.version)} is ${update.phase === "ready" ? "downloaded" : "available"}`}
         </strong>
         <p>
           {update.phase === "failed"
             ? update.code === "UPDATE_NETWORK_FAILURE"
-              ? "Farol couldn't reach the update feed. Your installed version is shown in Updates."
+              ? "Farol couldn't get update data from GitHub. Your installed version is shown in Updates."
               : "Review the update status when you choose."
             : update.phase === "ready"
               ? update.blockedBy && !isConfirmedBrowserBlock(update.blockedBy)
