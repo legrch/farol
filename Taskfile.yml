@@ -1,6 +1,11 @@
 version: "3"
 
 tasks:
+  release:preflight:
+    desc: Check checked-in version, channel and resource identity before expensive release work
+    cmds:
+      - node tooling/release-preflight.mjs
+
   test:affected:
     desc: Explain deterministic affected selection; PLAN_ONLY, never executes tests
     cmds:
@@ -19,6 +24,7 @@ tasks:
   ci:
     desc: Complete local source/build gate; ci:fast remains a compatibility alias, native/package/live qualification stays separate
     cmds:
+      - task: release:preflight
       - task: output:guard
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run ci
       - task: test:core
@@ -31,6 +37,7 @@ tasks:
   ci:cloud:
     desc: Portable source integration gate; native/resource/mixed and package acceptance remain separate
     cmds:
+      - task: release:preflight
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run ci:cloud
       - task: test:core
       - task: test:tooling

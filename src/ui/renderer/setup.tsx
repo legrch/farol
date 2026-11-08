@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { connectorVerificationInFlight, setupStepCheck } from "./setup-gate";
+import { setupStepCheck } from "./setup-gate";
 import type { RendererFacade, WindowSnapshot } from "./contract";
 import { Settings, retainedSetupIntents, useSetupIntents } from "./settings";
 import { setupChecklist } from "./setup-navigation";
@@ -63,16 +63,16 @@ export function SetupNavigation({
       </li>
       {setupChecklist(snapshot, inputsChanged, local).entries.map(
         (entry, index) => (
-          <li key={entry.step} data-check-state={entry.liveState}>
+          <li key={entry.step} data-check-state={entry.state}>
             <button
               type="button"
               className="setup-progress-step"
-              aria-label={`${index + 1}. ${entry.label}${entry.liveState === "verified" ? ", completed" : ""}`}
+              aria-label={`${index + 1}. ${entry.label}${entry.state === "verified" ? ", completed" : ""}`}
               aria-current={entry.step === selected ? "step" : undefined}
               onClick={() => onNavigate(entry.step)}
             >
               <span aria-hidden="true">
-                {entry.liveState === "verified" && entry.step !== selected
+                {entry.state === "verified" && entry.step !== selected
                   ? "✓"
                   : index + 1}
               </span>{" "}
@@ -98,9 +98,8 @@ export function Setup({ snapshot, facade, onInputsChanged }: Props) {
   const finishPending =
     snapshot.intents["settings:setup.progress:"]?.state === "pending";
   const completedCount = checklist.entries.filter(
-    (entry) => entry.liveState === "verified",
+    (entry) => entry.state === "verified",
   ).length;
-  const setupChecking = connectorVerificationInFlight(snapshot, local);
   const returnDestination = snapshot.setupReturn ?? { area: "home" as const };
   const returnLabel = `Back to ${{ home: "Home", chatgpt: "ChatGPT", activity: "Activity", settings: "Settings", setup: "Setup" }[returnDestination.area]}`;
   const previous = adjacentSetupSection(step, -1);
@@ -156,9 +155,7 @@ export function Setup({ snapshot, facade, onInputsChanged }: Props) {
             </strong>
             <p className="description">
               {checklist.completed
-                ? setupChecking
-                  ? `Checking your setup. ${completedCount} of 4 current checks are ready.`
-                  : `Setup was completed. ${completedCount} of 4 current checks are ready.`
+                ? "Your setup is saved. View Home for the current connection status."
                 : checklist.ready
                   ? "Everything is ready. You can review any step."
                   : checklist.entries
@@ -170,7 +167,7 @@ export function Setup({ snapshot, facade, onInputsChanged }: Props) {
           </div>
           <ol>
             {checklist.entries.map((entry, index) => (
-              <li key={entry.step} data-check-state={entry.liveState}>
+              <li key={entry.step} data-check-state={entry.state}>
                 <button
                   type="button"
                   className="setup-overview-step"
@@ -179,7 +176,7 @@ export function Setup({ snapshot, facade, onInputsChanged }: Props) {
                   onClick={() => navigateToStep(entry.step)}
                 >
                   <span className="setup-overview-marker" aria-hidden="true">
-                    {entry.liveState === "verified" ? "✓" : index + 1}
+                    {entry.state === "verified" ? "✓" : index + 1}
                   </span>
                   <span className="setup-overview-copy">
                     <strong>{entry.label}</strong>
@@ -187,26 +184,24 @@ export function Setup({ snapshot, facade, onInputsChanged }: Props) {
                       className="description"
                       id={`setup-overview-${entry.step}-status`}
                     >
-                      {entry.liveState === "verified"
+                      {checklist.completed
                         ? {
-                            signin: "Signed in to ChatGPT",
-                            folders: "Workspace access checked",
-                            connection: "Tunnel connected",
-                            attachment: "App confirmed in ChatGPT",
+                            signin: "Sign-in completed during setup",
+                            folders: "Workspaces selected during setup",
+                            connection: "Mac connected during setup",
+                            attachment: "App added and tested in ChatGPT",
                           }[entry.step]
-                        : entry.liveState === "pending"
-                          ? "Checking…"
-                          : entry.liveState === "unknown"
-                            ? "Waiting for confirmation"
-                            : checklist.completed
-                              ? {
-                                  signin: "Check sign-in in ChatGPT",
-                                  folders: "Check workspace access",
-                                  connection:
-                                    "Check the connection to this Mac",
-                                  attachment:
-                                    "Check the app connection in ChatGPT",
-                                }[entry.step]
+                        : entry.liveState === "verified"
+                          ? {
+                              signin: "Signed in to ChatGPT",
+                              folders: "Workspace access checked",
+                              connection: "Tunnel connected",
+                              attachment: "App confirmed in ChatGPT",
+                            }[entry.step]
+                          : entry.liveState === "pending"
+                            ? "Checking…"
+                            : entry.liveState === "unknown"
+                              ? "Waiting for confirmation"
                               : {
                                   signin: "Sign in with your ChatGPT account",
                                   folders: "Choose folders for ChatGPT",
@@ -218,13 +213,15 @@ export function Setup({ snapshot, facade, onInputsChanged }: Props) {
                     </span>
                   </span>
                   <span className="setup-overview-state">
-                    {entry.liveState === "verified"
-                      ? "Ready"
-                      : entry.liveState === "pending"
-                        ? "Checking"
-                        : entry.liveState === "needed"
-                          ? "Set up"
-                          : "Review"}
+                    {checklist.completed
+                      ? "Completed"
+                      : entry.liveState === "verified"
+                        ? "Ready"
+                        : entry.liveState === "pending"
+                          ? "Checking"
+                          : entry.liveState === "needed"
+                            ? "Set up"
+                            : "Review"}
                   </span>
                 </button>
               </li>
@@ -293,7 +290,7 @@ export function Setup({ snapshot, facade, onInputsChanged }: Props) {
           {step === "attachment" &&
           !checklist.ready &&
           !finishPending &&
-          (!checklist.completed || returnDestination.area === "home") ? (
+          !checklist.completed ? (
             <div ref={setTestActionHost} className="setup-test-action-slot" />
           ) : (
             <button

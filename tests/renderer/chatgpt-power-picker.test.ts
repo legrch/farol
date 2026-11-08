@@ -9,6 +9,8 @@ import {
   temporaryInstantProfileProbe,
   lowerInstantPowerSliderScript,
   dismissInstantPowerPickerScript,
+  openTemporaryPersonalizationScript,
+  selectTemporaryPersonalizationScript,
 } from "../../src/apps/desktop/chatgpt-route";
 
 // DOM event contract only; real provider handling is a separate Dev witness.
@@ -74,6 +76,35 @@ it("does not mark a disabled or ambiguous model control ready", () => {
   duplicate.getBoundingClientRect = button.getBoundingClientRect;
   document.body.append(duplicate);
   expect(window.eval(temporaryInstantProfileProbe).modelReady).toBe(false);
+});
+it("selects Russian personalization controls only when each target is unique", () => {
+  const button = document.createElement("button");
+  button.textContent = "Без персонализации";
+  button.getClientRects = () =>
+    [new DOMRect(0, 0, 100, 20)] as unknown as DOMRectList;
+  const opened = vi.fn();
+  button.addEventListener("click", opened);
+  const option = document.createElement("div");
+  option.setAttribute("role", "menuitemradio");
+  option.textContent =
+    "Персонализированный Этот чат может использовать память, плагины и пользовательские инструкции";
+  option.getClientRects = button.getClientRects;
+  const selected = vi.fn();
+  option.addEventListener("click", selected);
+  document.body.append(button, option);
+  expect(window.eval(openTemporaryPersonalizationScript)).toBe(true);
+  expect(window.eval(selectTemporaryPersonalizationScript)).toBe(true);
+  expect(opened).toHaveBeenCalledTimes(1);
+  expect(selected).toHaveBeenCalledTimes(1);
+  const duplicateButton = button.cloneNode(true) as HTMLButtonElement;
+  const duplicateOption = option.cloneNode(true) as HTMLElement;
+  duplicateButton.getClientRects = button.getClientRects;
+  duplicateOption.getClientRects = option.getClientRects;
+  document.body.append(duplicateButton, duplicateOption);
+  expect(window.eval(openTemporaryPersonalizationScript)).toBe(false);
+  expect(window.eval(selectTemporaryPersonalizationScript)).toBe(false);
+  expect(opened).toHaveBeenCalledTimes(1);
+  expect(selected).toHaveBeenCalledTimes(1);
 });
 it("addresses the visible page control without native window keyboard input", () => {
   const control = slider();

@@ -1553,13 +1553,13 @@ describe("installed updater composition (disposable filesystem and mocked native
     await next!.close();
   });
 
-  it("surfaces a new failure including a repeated code for the same version independently of the version mark", async () => {
+  it("deduplicates consecutive failures but starts a new notice after a successful check", async () => {
     const controller = await createInstalledUpdateRuntime(options());
     await controller!.initialize();
     await controller!.check(true);
     await controller!.acknowledgeNotice(noticeKey(controller!));
-    mocks.download.mockResolvedValue({ ok: false, code: "network" });
-    await controller!.download();
+    mocks.discover.mockResolvedValue({ ok: false, code: "network_failure" });
+    await controller!.check(true);
     expect(controller!.snapshot()).toMatchObject({
       phase: "failed",
       notice: { seen: false },
@@ -1573,16 +1573,32 @@ describe("installed updater composition (disposable filesystem and mocked native
       notice: { seen: true },
     });
     await controller!.check(true);
-    await controller!.download();
     const secondFailure = noticeKey(controller!);
-    expect(secondFailure).not.toBe(firstFailure);
+    expect(secondFailure).toBe(firstFailure);
     expect(controller!.snapshot()).toMatchObject({
       phase: "failed",
-      notice: { seen: false },
+      notice: { seen: true },
     });
+    mocks.discover.mockResolvedValue({ ok: true, value: null });
+    await controller!.check(true);
+    expect(controller!.snapshot()).toMatchObject({ phase: "idle" });
+    mocks.discover.mockResolvedValue({ ok: false, code: "network_failure" });
+    await controller!.check(true);
+    const thirdFailure = noticeKey(controller!);
+    expect(thirdFailure).not.toBe(firstFailure);
+    expect(controller!.snapshot()).toMatchObject({ notice: { seen: false } });
     await controller!.acknowledgeNotice(firstFailure);
     expect(controller!.snapshot()).toMatchObject({ notice: { seen: false } });
-    await controller!.acknowledgeNotice(secondFailure);
+    mocks.discover.mockResolvedValue({
+      ok: false,
+      code: "invalid_release_metadata",
+    });
+    await controller!.check(true);
+    const fourthFailure = noticeKey(controller!);
+    expect(fourthFailure).not.toBe(thirdFailure);
+    await controller!.acknowledgeNotice(thirdFailure);
+    expect(controller!.snapshot()).toMatchObject({ notice: { seen: false } });
+    await controller!.acknowledgeNotice(fourthFailure);
     const preference = JSON.parse(
       await fs.readFile(
         path.join(userData, "installed-updates/notice-preferences.json"),
@@ -1593,11 +1609,84 @@ describe("installed updater composition (disposable filesystem and mocked native
       seenVersion: manifest.version,
       failureNotice: {
         version: manifest.version,
-        key: secondFailure,
+        key: fourthFailure,
         seen: true,
       },
     });
     expect(mocks.helper).not.toHaveBeenCalled();
+    await controller!.close();
+  });
+
+  it("retains a dismissed failure across restart until a successful check ends the streak", async () => {
+    const first = await createInstalledUpdateRuntime(options());
+    await first!.initialize();
+    await first!.check(true);
+    mocks.discover.mockResolvedValue({ ok: false, code: "network_failure" });
+    await first!.check(true);
+    const dismissed = noticeKey(first!);
+    await first!.acknowledgeNotice(dismissed);
+    await first!.close();
+
+    const second = await createInstalledUpdateRuntime(options());
+    await second!.initialize();
+    await second!.check(true);
+    expect(second!.snapshot()).toMatchObject({
+      phase: "failed",
+      notice: { key: dismissed, seen: true },
+    });
+    mocks.discover.mockResolvedValue({ ok: true, value: null });
+    await second!.check(true);
+    const preferences = JSON.parse(
+      await fs.readFile(
+        path.join(userData, "installed-updates/notice-preferences.json"),
+        "utf8",
+      ),
+    );
+    expect(preferences.failureNotice).toBeNull();
+    await second!.close();
+
+    mocks.discover.mockResolvedValue({ ok: false, code: "network_failure" });
+    const third = await createInstalledUpdateRuntime(options());
+    await third!.initialize();
+    await third!.check(true);
+    expect(third!.snapshot()).toMatchObject({
+      phase: "failed",
+      notice: { seen: false },
+    });
+    expect(noticeKey(third!)).not.toBe(dismissed);
+    await third!.close();
+  });
+
+  it("fences a lost failure-resolution write without retrying or losing successful check truth", async () => {
+    const controller = await createInstalledUpdateRuntime(options());
+    await controller!.initialize();
+    mocks.discover.mockResolvedValue({ ok: false, code: "network_failure" });
+    await controller!.check(true);
+    const preference = path.join(
+      userData,
+      "installed-updates/notice-preferences.json",
+    );
+    const rename = fs.rename.bind(fs);
+    let writes = 0;
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      await rename(from, to);
+      if (to === preference) {
+        writes++;
+        throw new Error("lost failure-resolution acknowledgment");
+      }
+    });
+    mocks.discover.mockResolvedValue({ ok: true, value: null });
+    await controller!.check(true);
+    expect(controller!.snapshot()).toMatchObject({ phase: "idle" });
+    await controller!.check(true);
+    expect(writes).toBe(1);
+    mocks.discover.mockResolvedValue({ ok: false, code: "network_failure" });
+    await controller!.check(true);
+    expect(controller!.snapshot()).toMatchObject({
+      phase: "failed",
+      notice: { blockedBy: "UPDATE_NOTICE_OUTCOME_UNKNOWN" },
+    });
+    expect(writes).toBe(1);
     await controller!.close();
   });
 

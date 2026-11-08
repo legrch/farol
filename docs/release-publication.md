@@ -7,6 +7,21 @@ repository is published separately under the owner-approved source policy.
 A successful preparation is evidence for Lead's publication decision; it does not authorize publication or establish installed
 OTA acceptance.
 
+## Fast candidate loop
+
+Run `task release:preflight` after changing a version. It checks the package,
+lockfile, resource version and release channel before a long build or test run;
+`task ci` and `task ci:cloud` run it first as well. This is a metadata check, not
+a package or release receipt.
+
+For each source fix, run the relevant focused tests and `task test:fast` when
+appropriate. `task test:affected` only explains a test selection; it runs no
+tests. Once the source range is committed and stable, run the applicable full
+`task ci` gate (`task ci:fast` is an alias), aggregate checks and risk-based
+review. Build the exact clean commit with `task package`, then qualify the
+package, installation, rollback and live connection separately before public
+release. Keep failed and unknown receipts alongside later successful runs.
+
 The historical `tests/e2e/owner-beta-update-pair.e2e.mjs` entrypoint also accepts
 two exact stable candidates, including `0.4.0` and `0.4.1`. Both candidates must
 use the same release channel. Its native scenario measures direct helper apply,

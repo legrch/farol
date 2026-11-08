@@ -3471,7 +3471,7 @@ async function createRuntime(
         enabled,
       });
     },
-    notice: (view, version, restored) =>
+    notice: (view, version, reusePreviousFailure) =>
       serializeNotice(
         async () => {
           if (view.phase === "failed" && view.code.includes("UNKNOWN"))
@@ -3494,13 +3494,13 @@ async function createRuntime(
             };
           if (view.phase !== "failed")
             throw new Error("UPDATE_NOTICE_NOT_AVAILABLE");
-          // A restored failure reuses its mark. Every new failure occurrence gets
-          // a durable identity, including a repeated code for the same version.
+          // Reuse only within one unresolved failure streak or on restoration.
+          // A successful check starts a new streak, even for the same code.
           const previous = preferences.failureNotice;
           if (
-            restored &&
+            reusePreviousFailure &&
             previous?.code === view.code &&
-            previous.version === version
+            (version === null || previous.version === version)
           )
             return {
               key: previous.key,
@@ -3522,6 +3522,21 @@ async function createRuntime(
           blockedBy: "UPDATE_NOTICE_OUTCOME_UNKNOWN",
         },
       ),
+    noticeFailureResolved: () =>
+      serializeNotice(async () => {
+        let preferences: z.infer<typeof NoticePreferences>;
+        try {
+          preferences = await readNoticePreferences();
+        } catch {
+          return known("UPDATE_PREFERENCES_UNREADABLE");
+        }
+        if (preferences.failureNotice)
+          await writeRecord(noticesFile, {
+            ...preferences,
+            failureNotice: null,
+          });
+        return { ok: true as const };
+      }, known("UPDATE_NOTICE_OUTCOME_UNKNOWN")),
     noticeSeen: (key) =>
       serializeNotice(async () => {
         let preferences: z.infer<typeof NoticePreferences>;

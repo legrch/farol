@@ -37,7 +37,7 @@ describe("linear Setup", () => {
       ),
     ).toBe(false);
   });
-  it("keeps the sidebar count aligned with an unsaved tunnel draft on Overview", async () => {
+  it("keeps saved Setup complete while an unsaved tunnel draft blocks current checks", async () => {
     const value = readySettings(true);
     value.setup.journey.dismissed = true;
     const h = await mount({
@@ -54,11 +54,13 @@ describe("linear Setup", () => {
     expect(input).toBeTruthy();
     await change(input!, "synthetic-tunnel-draft");
     await h.navigate("overview");
-    const sidebar = h.host.querySelector(".setup-count")?.textContent;
-    expect(sidebar).toMatch(/^[0-3] of 4$/);
+    expect(h.host.querySelector(".setup-count")).toBeNull();
     expect(
       h.host.querySelector('[aria-label="Setup overview"]')?.textContent,
-    ).toContain(`${sidebar} current checks are ready`);
+    ).toContain("Your setup is saved");
+    expect(setupStepCheck(h.c.getSnapshot(), "connection", true).allowed).toBe(
+      false,
+    );
   });
 
   it.each([false, true])(
@@ -1224,7 +1226,7 @@ it("shows local readiness separately from an unconfirmed app on Overview", async
   ).toHaveLength(sends);
 });
 
-it("shows saved completion without claiming a stale app check is current", async () => {
+it("retains completed ChatGPT setup without granting stale attachment authority", async () => {
   const value = readySettings(true);
   value.setup.journey.dismissed = true;
   value.connectors.secureMcp.attachment = null;
@@ -1232,19 +1234,30 @@ it("shows saved completion without claiming a stale app check is current", async
   await h.confirmSignIn();
   await h.navigate("overview");
   expect(h.host.textContent).toContain("Setup complete");
-  expect(h.host.textContent).toContain("3 of 4 current checks are ready");
+  expect(h.host.textContent).not.toContain("3 of 4");
   const row = h.host.querySelector<HTMLButtonElement>(
     '.setup-overview-step[aria-label="Add to ChatGPT"]',
   );
-  expect(row?.textContent).toContain("Check the app connection in ChatGPT");
+  expect(row?.textContent).toContain("App added and tested in ChatGPT");
   expect(row?.textContent).not.toContain("App confirmed in ChatGPT");
-  expect(row?.closest("li")?.getAttribute("data-check-state")).not.toBe(
-    "verified",
-  );
+  expect(row?.closest("li")?.getAttribute("data-check-state")).toBe("verified");
   expect(
     h.host.querySelector('[aria-label="4. Add to ChatGPT, completed"]'),
-  ).toBeNull();
+  ).not.toBeNull();
+  expect(setupStepCheck(h.c.getSnapshot(), "attachment").allowed).toBe(false);
+  expect(
+    setupChecklist(h.c.getSnapshot()).entries.find(
+      (entry) => entry.step === "attachment",
+    )?.liveState,
+  ).not.toBe("verified");
   expect(h.configuration().settings.setup.journey.dismissed).toBe(true);
+  await h.navigate("attachment");
+  expect(h.host.textContent).toContain("App added and tested");
+  const exit = h.host.querySelector<HTMLButtonElement>(
+    ".setup-wizard-footer .primary",
+  );
+  expect(exit?.disabled).toBe(false);
+  expect(exit?.textContent).toMatch(/^Back to /);
 });
 
 it("completed Setup keeps Next and returns to Activity rather than forcing Home", async () => {

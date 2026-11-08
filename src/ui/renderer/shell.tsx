@@ -671,7 +671,10 @@ function Update({
                   ? "Update status unconfirmed"
                   : update.phase === "idle" && update.checkedAt !== null
                     ? "You’re up to date"
-                    : updateSheetTitles[update.phase]
+                    : update.phase === "failed" &&
+                        update.code === "UPDATE_NETWORK_FAILURE"
+                      ? "Update network request failed"
+                      : updateSheetTitles[update.phase]
       }
       onClose={() => facade.overlay("none")}
       dismissible={update.phase !== "applying"}
@@ -1012,16 +1015,14 @@ export function Shell() {
   const [versionDetailsPinned, setVersionDetailsPinned] = useState(false);
   const [versionDetailsDismissed, setVersionDetailsDismissed] = useState(false);
   const retained = useSetupIntents(facade, state);
-  const setupEntries = setupChecklist(
-    state,
-    setupInputsChanged,
-    retained,
-  ).entries;
+  const setupProgress = setupChecklist(state, setupInputsChanged, retained);
+  const setupEntries = setupProgress.entries;
   const setupReadyCount = setupEntries.filter(
     (entry) => entry.liveState === "verified",
   ).length;
   const connectionState = connectionPresentation(state, retained);
   const showSetupCount =
+    !setupProgress.completed &&
     state.status === "current" &&
     state.runtime === "ready" &&
     state.configuration?.status === "ready" &&

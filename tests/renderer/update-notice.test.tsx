@@ -272,6 +272,17 @@ it.each([
     expect(f.api.installedUpdate).toHaveBeenCalledTimes(1);
   },
 );
+it("describes a network request failure without implying which update step failed", async () => {
+  const { host } = await mount({
+    phase: "failed",
+    code: "UPDATE_NETWORK_FAILURE",
+    recoveryRequired: false,
+    notice: { key: "failure:network", seen: false, blockedBy: null },
+  });
+  const notice = host.querySelector('[aria-label="Update notice"]');
+  expect(notice?.textContent).toContain("Update network request failed");
+  expect(notice?.textContent).toContain("couldn't get update data from GitHub");
+});
 it("viewing the sheet acknowledges the exact notice once under StrictMode without an update operation", async () => {
   const { host, c, f } = await mount();
   vi.mocked(f.api.installedUpdate).mockResolvedValue(withSeen(available));

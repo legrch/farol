@@ -59,6 +59,8 @@ export function updateResultMessage(
 ): string {
   if (phase === "unavailable")
     return "Farol cannot confirm update availability in this session. Review Diagnostics before another check.";
+  if (code === "UPDATE_NETWORK_FAILURE")
+    return "Farol couldn't get update data from GitHub. Check your connection before trying again.";
   if (code === "UPDATE_VERIFICATION_RECOVERY_REQUIRED") return messages[code]!;
   if (code !== undefined && adoptionResultCodes.has(code))
     return messages[code]!;
