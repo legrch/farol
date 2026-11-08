@@ -3471,7 +3471,7 @@ async function createRuntime(
         enabled,
       });
     },
-    notice: (view, version) =>
+    notice: (view, version, reusePreviousFailure) =>
       serializeNotice(
         async () => {
           if (view.phase === "failed" && view.code.includes("UNKNOWN"))
@@ -3494,10 +3494,14 @@ async function createRuntime(
             };
           if (view.phase !== "failed")
             throw new Error("UPDATE_NOTICE_NOT_AVAILABLE");
-          // Reuse the mark for a repeated known failure. The failed update state
-          // remains visible, while a new code or version gets a fresh notice.
+          // Reuse only within one unresolved failure streak or on restoration.
+          // A successful check starts a new streak, even for the same code.
           const previous = preferences.failureNotice;
-          if (previous?.code === view.code && previous.version === version)
+          if (
+            reusePreviousFailure &&
+            previous?.code === view.code &&
+            previous.version === version
+          )
             return {
               key: previous.key,
               seen: previous.seen,

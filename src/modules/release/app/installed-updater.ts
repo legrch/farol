@@ -78,7 +78,7 @@ export type InstalledUpdaterPorts = Readonly<{
   notice?(
     view: UpdateView,
     version: string | null,
-    restored: boolean,
+    reusePreviousFailure: boolean,
   ): Promise<UpdateNotice>;
   noticeSeen?(key: string): Promise<Readonly<{ ok: true }> | KnownFailure>;
   // Stop only this updater lifetime's network requests; filesystem cleanup still drains.
@@ -143,6 +143,7 @@ export type InstalledUpdaterPorts = Readonly<{
 export class InstalledUpdater {
   private view: UpdateView = { phase: "idle", checkedAt: null };
   private noticeVersion: string | null = null;
+  private failureNoticeReusable = false;
   private noticeBlocked: string | null = null;
   private noticeWriting = false;
   private noticeDrained: Promise<void> = Promise.resolve();
@@ -579,6 +580,12 @@ export class InstalledUpdater {
 
   private async publish(view: UpdateView): Promise<void> {
     if ("version" in view) this.noticeVersion = view.version;
+    if (
+      (view.phase === "idle" && view.checkedAt !== null) ||
+      view.phase === "available" ||
+      view.phase === "ready"
+    )
+      this.failureNoticeReusable = false;
     this.view = view;
     if (this.isClosing()) return;
     if (
@@ -599,7 +606,7 @@ export class InstalledUpdater {
           notice = await this.ports.notice(
             view,
             this.noticeVersion,
-            !this.initialized,
+            !this.initialized || this.failureNoticeReusable,
           );
           if (notice.blockedBy) this.noticeBlocked = notice.blockedBy;
         } catch {
@@ -614,6 +621,7 @@ export class InstalledUpdater {
         }
       }
       this.view = { ...view, notice };
+      if (view.phase === "failed") this.failureNoticeReusable = true;
     }
     if (!this.isClosing()) this.ports.publish(this.snapshot());
   }
