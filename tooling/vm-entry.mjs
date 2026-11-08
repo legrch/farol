@@ -26,7 +26,10 @@ export function chooseRuntime(
   );
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Guard the CLI entry so importing this module (for example to reuse
+// chooseRuntime) works in host contexts without argv[1].
+const entryHref = process.argv[1] ? pathToFileURL(process.argv[1]).href : null;
+if (entryHref !== null && import.meta.url === entryHref) {
   const mode = process.argv[2];
   if (!["smoke", "machine"].includes(mode))
     throw Error("VM_ENTRY_MODE_INVALID");

@@ -16,6 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { chooseRuntime } from "../vm-entry.mjs";
 
 export const TOOL_VERSION = "farol.vm-e2e/1";
 export const BUNDLE_FILE = "driver.bundle.mjs";
@@ -60,36 +61,13 @@ function readDeclaredVersions(root) {
   return versions;
 }
 
-// Reuses the vm-entry.mjs runtime-selection pattern without editing or
-// importing that file: its import-time CLI guard requires process.argv[1] to
-// be defined, so a direct import is awkward from host contexts without one
-// (for example node -e). The selection below mirrors tooling/vm-entry.mjs
-// chooseRuntime verbatim: prefer the running Node when it matches the declared
-// engines, otherwise probe the known install locations, and never install a
-// toolchain automatically.
-function chooseDeclaredRuntime(
-  currentVersion,
-  currentExecutable,
-  versions,
-  home,
-  probe,
-) {
-  if (versions.includes(currentVersion)) return currentExecutable;
-  const candidates = versions.flatMap((version) => [
-    path.join(home, ".nvm/versions/node/v" + version, "bin/node"),
-    "/opt/homebrew/Cellar/node/" + version + "/bin/node",
-  ]);
-  for (const candidate of candidates) {
-    if (versions.includes(probe(candidate))) return candidate;
-  }
-  throw Error(
-    "DECLARED_NODE_RUNTIME_MISSING: install a Node version from package.json engines; no toolchain is installed automatically",
-  );
-}
-
+// The declared-runtime selection is the vm-entry.mjs chooseRuntime contract:
+// prefer the running Node when it matches the declared engines, otherwise probe
+// the known install locations, and never install a toolchain automatically.
+// vm-entry.mjs guards its CLI entry, so the helper imports cleanly here.
 export function selectDeclaredRuntime(root) {
   const versions = readDeclaredVersions(root);
-  return chooseDeclaredRuntime(
+  return chooseRuntime(
     process.versions.node,
     process.execPath,
     versions,
