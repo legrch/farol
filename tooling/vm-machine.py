@@ -144,8 +144,11 @@ def main():
             print(json.dumps({'status': 'PLAN', 'instance': a.provision_instance, 'base': a.base,
                               'clone': command, 'receipt': str(instance_receipt)}))
             return
-        if not binary.is_file() or plistlib.loads((binary.parent.parent / 'Info.plist').read_bytes()).get('CFBundleIdentifier') != 'dev.terminal-mac.host':
+        if not binary.is_file():
             raise ValueError('INSTALL_TERMINAL_MAC_PACKAGE_FIRST')
+        # clone is a pure store operation that starts no VM, so a packaged app
+        # is preferred but a bare development build is acceptable here; the
+        # clone command validates the machine state itself.
         env = {k: os.environ[k] for k in ('HOME', 'USER', 'TMPDIR') if k in os.environ}
         env.update(PATH='/usr/bin:/bin:/usr/sbin:/sbin', TERMINAL_MAC_HOME=str(root))
         subprocess.run(command, env=env, check=True, timeout=1800)

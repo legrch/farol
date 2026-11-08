@@ -15,6 +15,11 @@ const result = spawnSync(
           .filter((key) => process.env[key] !== undefined)
           .map((key) => [key, process.env[key]]),
       ),
+      // Same config override as vm-entry: a private infrastructure config
+      // selects the tool and data root for a given provisioning step.
+      ...(process.env.FAROL_VM_CONFIG
+        ? { FAROL_VM_CONFIG: process.env.FAROL_VM_CONFIG }
+        : {}),
       FAROL_VM_TESTING_DIRECTORY: productName + " Testing",
     },
   },
