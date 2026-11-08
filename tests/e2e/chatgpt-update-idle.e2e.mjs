@@ -5,12 +5,14 @@ import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { buildSync } from "esbuild";
+import { desktopIdentity } from "../../tooling/harness-identity.ts";
 
 // Real Electron layout and public-DOM classification in a disposable hidden
 // profile. No provider, installed profile, installed update or focus acceptance.
 const root = path.resolve(import.meta.dirname, "../..");
 const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "farol-idle-native-"));
 const entry = path.join(scratch, "fixture.cjs");
+const fixtureAppName = desktopIdentity("dev", scratch).applicationName;
 try {
   buildSync({
     stdin: {
@@ -23,6 +25,7 @@ import { NativeViewVisibility } from './apps/desktop/bridge/native-view-visibili
 import { deriveSurfaceLayout } from './src/apps/desktop/surface-layout.ts';
 app.setPath('userData', ${JSON.stringify(path.join(scratch, "profile"))});
 app.dock?.hide();
+const fixtureAppName = ${JSON.stringify(fixtureAppName)};
 let host, view;
 const observations = [];
 app.whenReady().then(async () => {
@@ -45,6 +48,11 @@ try {
   assert.deepEqual(await probe(), { state: 'unknown' });
   observations.push('zero-viewport-refused');
   view.setBounds(layout.pageBounds);
+  await view.webContents.executeJavaScript('new Promise((resolve, reject) => {' +
+    'const expected = ' + JSON.stringify([layout.pageBounds.width, layout.pageBounds.height]) + ';' +
+    'let timer; const check = () => { if (innerWidth !== expected[0] || innerHeight !== expected[1]) return;' +
+    'clearTimeout(timer); removeEventListener("resize", check); resolve(); };' +
+    'addEventListener("resize", check); timer = setTimeout(() => { removeEventListener("resize", check); reject(new Error("fixture viewport not committed")); }, 5000); check(); })');
   assert.deepEqual(await view.webContents.executeJavaScript('[innerWidth, innerHeight]'),
     [layout.pageBounds.width, layout.pageBounds.height]);
   assert.deepEqual(await probe(), { state: 'idle' });
@@ -69,7 +77,7 @@ try {
   observations.push('draft-running-unknown-action-refused');
   // Exercise Chromium's actual attribute-selector semantics: CSS's i flag
   // does not fold Cyrillic case, unlike the renderer test DOM implementation.
-  const russianComposer = '<form><span data-testid="composer-app-chip" aria-label="Farol">Farol</span>' +
+  const russianComposer = '<form><span data-testid="composer-app-chip" aria-label="' + fixtureAppName + '">' + fixtureAppName + '</span>' +
     '<textarea id="prompt-textarea"></textarea><input type="file">' +
     '<button type="button" aria-label="Добавить файлы и другое"></button>' +
     '<button type="button" aria-label="Выбрать модель ChatGPT"></button>' +
@@ -80,10 +88,10 @@ try {
   for (const label of ['Удалить файл plan.pdf', 'Удалить вложение plan.pdf', 'УДАЛИТЬ ВЛОЖЕНИЕ plan.pdf']) {
     await view.webContents.executeJavaScript('document.querySelector("textarea").value = ""; document.querySelector("form").insertAdjacentHTML("beforeend", ' +
       JSON.stringify('<div id="document-preview" aria-label="' + label + '">plan.pdf</div>') + ')');
-    assert.deepEqual(await view.webContents.executeJavaScript(prepareTaskScript('check', fixtureHref, 'Farol', undefined, true)), {draftPresent: true});
-    assert.deepEqual(await view.webContents.executeJavaScript(bindChatGptAppScript('Farol', fixtureHref, true)), {state: 'blocked', reason: 'draft_present'});
+    assert.deepEqual(await view.webContents.executeJavaScript(prepareTaskScript('check', fixtureHref, fixtureAppName, undefined, true)), {draftPresent: true});
+    assert.deepEqual(await view.webContents.executeJavaScript(bindChatGptAppScript(fixtureAppName, fixtureHref, true)), {state: 'blocked', reason: 'draft_present'});
     await view.webContents.executeJavaScript('document.querySelector("textarea").value = "check"');
-    assert.deepEqual(await view.webContents.executeJavaScript(activateTaskScript(fixtureHref, 'Farol', false, false, 'check')), {draftPresent: true});
+    assert.deepEqual(await view.webContents.executeJavaScript(activateTaskScript(fixtureHref, fixtureAppName, false, false, 'check')), {draftPresent: true});
     assert.equal(await view.webContents.executeJavaScript('window.fixtureSends'), 0);
     await view.webContents.executeJavaScript('document.querySelector("#document-preview").remove()');
   }
@@ -97,7 +105,7 @@ try {
     const completed = await view.webContents.executeJavaScript(taskProbeScript('check', [], {semantic: true, userId: 'user-1', assistantId: 'assistant-1'}));
     assert.equal(completed.publicFrame.terminal, true);
     assert.equal(completed.publicFrame.messages[0].text, 'ok');
-    assert.deepEqual(await view.webContents.executeJavaScript(activateTaskScript(fixtureHref, 'Farol', false, false, 'check')), {activated: true});
+    assert.deepEqual(await view.webContents.executeJavaScript(activateTaskScript(fixtureHref, fixtureAppName, false, false, 'check')), {activated: true});
   }
   assert.equal(await view.webContents.executeJavaScript('window.fixtureSends'), 2);
   await view.webContents.executeJavaScript('document.querySelector("form").insertAdjacentHTML("beforeend", ' + JSON.stringify('<button data-testid="stop-button">Stop</button>') + ')');
