@@ -1660,6 +1660,7 @@ function AddToChatGPT({
     previousName.current = selectedName;
   }, [appName, selectedName]);
   const nameChanged = appName !== selectedName;
+  const savedSetup = settings.setup.journey.dismissed && !nameChanged;
   useEffect(() => {
     onSetupInputsChange?.(nameChanged);
   }, [nameChanged, onSetupInputsChange]);
@@ -1906,16 +1907,20 @@ function AddToChatGPT({
             setup.canVerifySeparateEmbeddedApp
           : actions.allowed("connector.verify-app") &&
             setup.canVerifyEmbeddedApp);
+  const showSavedSetup =
+    savedSetup && !checking && !freshTest.busy && !unconfirmedTest;
   const testAction = (
     <button
       type="button"
       className="primary"
       disabled={testDisabled}
       aria-describedby={
-        waitingForConfirmation ? "setup-test-blocked" : undefined
+        waitingForConfirmation && !showSavedSetup
+          ? "setup-test-blocked"
+          : undefined
       }
       title={
-        waitingForConfirmation
+        waitingForConfirmation && !showSavedSetup
           ? "Check the saved result first. The earlier test has no confirmed outcome."
           : undefined
       }
@@ -1932,10 +1937,14 @@ function AddToChatGPT({
         ? createPortal(testAction, setupTestActionHost)
         : null}
       <section aria-label="Create the ChatGPT app">
-        <h3>1. Add your app in ChatGPT</h3>
+        <h3>
+          {savedSetup ? "Your ChatGPT app" : "1. Add your app in ChatGPT"}
+        </h3>
 
         <p className="description">
-          Create a new app, or use the one already connected to this tunnel.
+          {savedSetup
+            ? "Your app was added and tested during setup."
+            : "Create a new app, or use the one already connected to this tunnel."}
         </p>
         <SetupWalkthrough
           kind="chatgpt"
@@ -2015,54 +2024,64 @@ function AddToChatGPT({
         </dl>
       </section>
       <section className="setup-test" aria-label="Test in ChatGPT">
-        <h3>2. Check the connection</h3>
+        <h3>{savedSetup ? "Connection test" : "2. Check the connection"}</h3>
         {settings.setup.journey.dismissed && freshTest.message && (
           <p role="status">{freshTest.message}</p>
         )}
         <p className="description" id="setup-test-blocked">
-          {waitingForConfirmation
-            ? separateAvailable
-              ? "Test in ChatGPT sends one new test message after confirmation. The earlier result stays in Activity and will not be repeated."
-              : unconfirmedTest
-                ? "An earlier test has no confirmed result. It will not be repeated. Refresh status to check its saved result."
-                : "An earlier action has no confirmed result. Check its saved status before starting a test."
-            : "Farol opens a separate chat, selects Instant and sends one test message to your app. The reply confirms that ChatGPT can reach this Mac — without reading file contents."}
+          {showSavedSetup
+            ? "A new connection test is optional. Current connection status is shown on Home."
+            : waitingForConfirmation
+              ? separateAvailable
+                ? "Test in ChatGPT sends one new test message after confirmation. The earlier result stays in Activity and will not be repeated."
+                : unconfirmedTest
+                  ? "An earlier test has no confirmed result. It will not be repeated. Refresh status to check its saved result."
+                  : "An earlier action has no confirmed result. Check its saved status before starting a test."
+              : "Farol opens a separate chat, selects Instant and sends one test message to your app. The reply confirms that ChatGPT can reach this Mac — without reading file contents."}
         </p>
         <div
           className="setup-result setup-gate-status"
           role={
-            gate.state === "refused" && !waitingForConfirmation
+            !showSavedSetup &&
+            gate.state === "refused" &&
+            !waitingForConfirmation
               ? "alert"
               : "status"
           }
-          data-result-state={gate.state}
-          data-confirmation-pending={waitingForConfirmation || undefined}
+          data-result-state={showSavedSetup ? "success" : gate.state}
+          data-confirmation-pending={
+            (!showSavedSetup && waitingForConfirmation) || undefined
+          }
         >
           <strong>
-            {gate.allowed
-              ? "ChatGPT is connected"
-              : waitingForConfirmation
-                ? refreshingConfirmation
-                  ? "Checking confirmation…"
-                  : "Waiting for confirmation"
-                : gate.state === "pending"
-                  ? "Checking the connection…"
-                  : gate.state === "unknown"
-                    ? "Waiting for ChatGPT confirmation"
-                    : gate.state === "refused"
-                      ? "The check stopped"
-                      : "Ready when your app is added"}
+            {showSavedSetup
+              ? "App added and tested"
+              : gate.allowed
+                ? "ChatGPT is connected"
+                : waitingForConfirmation
+                  ? refreshingConfirmation
+                    ? "Checking confirmation…"
+                    : "Waiting for confirmation"
+                  : gate.state === "pending"
+                    ? "Checking the connection…"
+                    : gate.state === "unknown"
+                      ? "Waiting for ChatGPT confirmation"
+                      : gate.state === "refused"
+                        ? "The check stopped"
+                        : "Ready when your app is added"}
           </strong>
           <p>
-            {gate.state === "missing"
-              ? "Add the app above, then run the check once."
-              : waitingForConfirmation
-                ? unconfirmedTest
-                  ? "This Mac has not received confirmation. Check the saved result, or compare the app’s tunnel ID with the connection shown above."
-                  : "An earlier action is not confirmed. Checking status will not repeat it or start a ChatGPT test."
-                : gate.cause}
+            {showSavedSetup
+              ? "Setup is saved. View Home for the current connection status, or run a new test below when you need one."
+              : gate.state === "missing"
+                ? "Add the app above, then run the check once."
+                : waitingForConfirmation
+                  ? unconfirmedTest
+                    ? "This Mac has not received confirmation. Check the saved result, or compare the app’s tunnel ID with the connection shown above."
+                    : "An earlier action is not confirmed. Checking status will not repeat it or start a ChatGPT test."
+                  : gate.cause}
           </p>
-          {gate.action && gate.state !== "missing" && (
+          {gate.action && gate.state !== "missing" && !showSavedSetup && (
             <button
               type="button"
               className="text-button"

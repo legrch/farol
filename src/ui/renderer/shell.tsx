@@ -1015,16 +1015,14 @@ export function Shell() {
   const [versionDetailsPinned, setVersionDetailsPinned] = useState(false);
   const [versionDetailsDismissed, setVersionDetailsDismissed] = useState(false);
   const retained = useSetupIntents(facade, state);
-  const setupEntries = setupChecklist(
-    state,
-    setupInputsChanged,
-    retained,
-  ).entries;
+  const setupProgress = setupChecklist(state, setupInputsChanged, retained);
+  const setupEntries = setupProgress.entries;
   const setupReadyCount = setupEntries.filter(
     (entry) => entry.liveState === "verified",
   ).length;
   const connectionState = connectionPresentation(state, retained);
   const showSetupCount =
+    !setupProgress.completed &&
     state.status === "current" &&
     state.runtime === "ready" &&
     state.configuration?.status === "ready" &&

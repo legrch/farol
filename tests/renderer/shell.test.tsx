@@ -3281,15 +3281,14 @@ it("Setup keeps navigation stable and shows incomplete current checks", async ()
       ?.getAttribute("aria-describedby"),
   ).toBe("setup-check-count");
 });
-it("does not show a complete Setup checkmark when the saved connection is offline", async () => {
+it("does not reopen completed Setup when the saved connection is offline", async () => {
   const data = completedBootstrap();
   data.configuration.settings = readySettings();
   data.configuration.settings.setup.journey.dismissed = true;
   data.configuration.settings.connectors.secureMcp.runtime = null;
   const { host } = await mount(data);
   const setup = host.querySelector('.rail [aria-label="Setup"]')!;
-  expect(setup.querySelector(".setup-count")?.textContent).not.toBe("✓");
-  expect(setup.querySelector(".setup-count")?.textContent).toBe("1 of 4");
+  expect(setup.querySelector(".setup-count")).toBeNull();
   expect(setup.getAttribute("title")).toBe("Setup · Open page");
 });
 it("labels a challenge-scoped connection test as checking while it is in flight", async () => {
