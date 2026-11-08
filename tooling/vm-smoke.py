@@ -618,6 +618,27 @@ class Runner:
         for name in ('dev-key', 'dev-connection.json'):
             (self.stage / name).unlink(missing_ok=True)
 
+    def instance_clone_receipt(self):
+        """Provenance of a cloned run instance, or None for a full machine.
+        Reads only the clone receipt the terminal-mac clone command wrote:
+        names, digests and timestamps, never credential material."""
+        file = self.machine / 'clone.json'
+        try:
+            info = file.lstat()
+        except OSError:
+            return None
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and 0 < info.st_size <= 4096,
+                'INSTANCE_RECEIPT_UNSAFE')
+        try:
+            value = json.loads(file.read_text())
+        except ValueError:
+            raise Refused('INSTANCE_RECEIPT_INVALID') from None
+        require(isinstance(value, dict) and value.get('schema') == 'terminal-mac.clone/1'
+                and isinstance(value.get('from'), str) and isinstance(value.get('to'), str),
+                'INSTANCE_RECEIPT_INVALID')
+        return {'clonedFrom': value['from'], 'instance': value['to'],
+                'identitySha256': value.get('identitySha256'), 'at': value.get('at')}
+
     def cleanup_disposition(self):
         """Best-effort raw-payload removal that never masks a primary result.
 
@@ -981,6 +1002,11 @@ class Runner:
                               lease=self.lease_evidence())
                 if self.network_policy is not None:
                     result['networkPolicy'] = self.network_policy
+                clone_receipt = self.instance_clone_receipt()
+                if clone_receipt is not None:
+                    # A provisioned instance records exactly which base and
+                    # identity it came from; ordinary machines add no key.
+                    result['instance'] = clone_receipt
                 if getattr(self, 'driver_result', None):
                     # Only a driver that actually ran adds a receipt; ordinary
                     # runs keep their exact result shape.

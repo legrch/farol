@@ -347,6 +347,29 @@ class ClosedAdmissionTests(unittest.TestCase):
             runner.finish_effect()
             self.assertFalse(runner.effect_file.exists())
 
+    def test_cloned_instance_records_provenance_and_corrupt_receipt_refuses(self):
+        with tempfile.TemporaryDirectory() as d:
+            top = Path(d)
+            for sub in ('a', 'b', 'c'):
+                (top / sub).mkdir()
+            runner, result, caught, calls, machine_before = drive_closed_package(
+                top / 'a', {'name': 'pilot', 'network': False})
+            (runner.machine / 'clone.json').write_text(json.dumps(
+                {'schema': 'terminal-mac.clone/1', 'from': 'farol-base-1', 'to': 'pilot',
+                 'identitySha256': 'e' * 64, 'at': 1700000000}))
+            runner2, result2, caught2, _, _ = drive_closed_package(
+                top / 'b', {'name': 'pilot', 'network': False})
+            self.assertIsNone(caught2)
+            self.assertEqual(result2['instance']['clonedFrom'], 'farol-base-1')
+            self.assertEqual(result2['instance']['instance'], 'pilot')
+            self.assertEqual(set(result2), PACKAGE_RESULT_KEYS | {'networkPolicy', 'instance'})
+            self.assertEqual(json.loads((runner2.out / 'result.json').read_text()), result2)
+            (runner.machine / 'clone.json').write_text('{not-json')
+            runner3, _, caught3, _, _ = drive_closed_package(
+                top / 'c', {'name': 'pilot', 'network': False})
+            self.assertIsNotNone(caught3)
+            self.assertIn('INSTANCE_RECEIPT_INVALID', str(caught3))
+
     def test_closed_run_with_driver_records_the_e2e_receipt(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
