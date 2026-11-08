@@ -17,7 +17,7 @@ function pending() {
 }
 
 describe("step four primary action", () => {
-  it("offers the ChatGPT test in the footer when setup is complete but attachment needs checking", async () => {
+  it("lets completed Setup exit without requiring another ChatGPT test", async () => {
     const value = readySettings();
     value.setup.journey.dismissed = true;
     value.connectors.secureMcp.attachment = null;
@@ -32,8 +32,9 @@ describe("step four primary action", () => {
       h.c.navigate({ area: "setup", setupStep: "attachment" });
     });
     const footer = h.host.querySelector(".setup-wizard-footer")!;
-    expect(footer.contains(h.button("Test in ChatGPT")!)).toBe(true);
-    expect(footer.textContent).not.toContain("Back to Home");
+    expect(footer.contains(h.button("Test in ChatGPT")!)).toBe(false);
+    expect(h.button("Back to Home")?.disabled).toBe(false);
+    expect(h.host.textContent).toContain("App added and tested");
   });
   it("keeps one admitted request per mounted binding even on pre-submit refusal", async () => {
     const h = await mount({
