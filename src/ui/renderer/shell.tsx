@@ -671,7 +671,10 @@ function Update({
                   ? "Update status unconfirmed"
                   : update.phase === "idle" && update.checkedAt !== null
                     ? "You’re up to date"
-                    : updateSheetTitles[update.phase]
+                    : update.phase === "failed" &&
+                        update.code === "UPDATE_NETWORK_FAILURE"
+                      ? "Couldn't check for updates"
+                      : updateSheetTitles[update.phase]
       }
       onClose={() => facade.overlay("none")}
       dismissible={update.phase !== "applying"}

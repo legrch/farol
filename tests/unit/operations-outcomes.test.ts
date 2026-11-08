@@ -33,6 +33,39 @@ const closedContractCoverage: [
 
 const metadata = { source: "You", kind: "general.update", target: {} } as const;
 
+it("classifies GitHub release discovery failures without guessing new codes", () => {
+  for (const code of [
+    "UPDATE_INTERRUPTED",
+    "UPDATE_INVALID_INSTALLED_VERSION",
+    "UPDATE_INVALID_MANIFEST",
+    "UPDATE_INVALID_RELEASE_METADATA",
+    "UPDATE_MISSING_ASSET",
+    "UPDATE_OVERSIZE",
+    "UPDATE_PACKAGE_MISMATCH",
+    "UPDATE_RELEASE_CATALOGUE_INCOMPLETE",
+    "UPDATE_RELEASE_FORMAT_NEWER",
+    "UPDATE_RELEASE_MISMATCH",
+    "UPDATE_WRONG_PROVENANCE",
+  ]) {
+    expect(operationResult({ ok: false, error: code })).toEqual({
+      outcome: "refused",
+      code,
+    });
+    expect(operationResult({ status: "outcome_unknown", code }).outcome).toBe(
+      "unknown",
+    );
+  }
+  expect(
+    operationResult({ ok: false, error: "UPDATE_NETWORK_FAILURE" }),
+  ).toEqual({
+    outcome: "failed",
+    code: "UPDATE_NETWORK_FAILURE",
+  });
+  expect(
+    operationResult({ ok: false, error: "UPDATE_FUTURE_ERROR" }).outcome,
+  ).toBe("unknown");
+});
+
 it("records the connection prompt separately and only acknowledges its send", () => {
   const operationId = "44444444-4444-4444-8444-444444444444";
   const command = {

@@ -886,6 +886,16 @@ it.each([
     ["Dismiss"],
   ],
   [
+    {
+      phase: "failed",
+      code: "UPDATE_NETWORK_FAILURE",
+      recoveryRequired: false,
+    },
+    "Couldn't check for updates",
+    "Farol couldn't reach the update feed. Check your connection before checking for updates again.",
+    ["Dismiss"],
+  ],
+  [
     { phase: "failed", code: "UPDATE_ROLLED_BACK", recoveryRequired: false },
     "The update did not finish",
     `The update didn't finish. Farol ${bootstrap().build.version} is still installed and works.`,

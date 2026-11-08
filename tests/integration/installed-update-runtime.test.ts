@@ -1553,7 +1553,7 @@ describe("installed updater composition (disposable filesystem and mocked native
     await next!.close();
   });
 
-  it("surfaces a new failure including a repeated code for the same version independently of the version mark", async () => {
+  it("keeps a repeated known failure dismissed and surfaces a different failure", async () => {
     const controller = await createInstalledUpdateRuntime(options());
     await controller!.initialize();
     await controller!.check(true);
@@ -1575,14 +1575,20 @@ describe("installed updater composition (disposable filesystem and mocked native
     await controller!.check(true);
     await controller!.download();
     const secondFailure = noticeKey(controller!);
-    expect(secondFailure).not.toBe(firstFailure);
+    expect(secondFailure).toBe(firstFailure);
     expect(controller!.snapshot()).toMatchObject({
       phase: "failed",
-      notice: { seen: false },
+      notice: { seen: true },
     });
+    mocks.download.mockResolvedValue({ ok: false, code: "checksum_mismatch" });
+    await controller!.check(true);
+    await controller!.download();
+    const thirdFailure = noticeKey(controller!);
+    expect(thirdFailure).not.toBe(firstFailure);
+    expect(controller!.snapshot()).toMatchObject({ notice: { seen: false } });
     await controller!.acknowledgeNotice(firstFailure);
     expect(controller!.snapshot()).toMatchObject({ notice: { seen: false } });
-    await controller!.acknowledgeNotice(secondFailure);
+    await controller!.acknowledgeNotice(thirdFailure);
     const preference = JSON.parse(
       await fs.readFile(
         path.join(userData, "installed-updates/notice-preferences.json"),
@@ -1593,7 +1599,7 @@ describe("installed updater composition (disposable filesystem and mocked native
       seenVersion: manifest.version,
       failureNotice: {
         version: manifest.version,
-        key: secondFailure,
+        key: thirdFailure,
         seen: true,
       },
     });
