@@ -366,6 +366,7 @@ class Runner:
         self.pending = None
         self.cleanup_note = None
         self.network_policy = None
+        self.driver_result = None
         self.effect_owned = False
         self.effect_file = self.machine / '.farol-smoke-pending.json'
         # Never forward product configuration, proxy, Electron or loader environment.
@@ -441,7 +442,7 @@ class Runner:
     def phase(self, name):
         if getattr(self, 'lease_owner', None):
             self.publish_lease_flag()
-        if name in ('install', 'launch', 'relaunch', 'import-dev', 'cleanup'):
+        if name in ('install', 'launch', 'relaunch', 'import-dev', 'cleanup', 'e2e'):
             self.begin_effect()
         self.pending = name
         self.sequence += 1
@@ -940,6 +941,15 @@ class Runner:
                     self.action('key', 'escape')
                 self.phase('activate')
                 self.wait_state(True, foreground=True)
+                if getattr(self.a, 'closed', False) and getattr(self.a, 'e2e_driver', None):
+                    # Closed-contour execution: the staged driver runs the
+                    # ordinary scenario inside the offline guest; its durable
+                    # result file is the receipt recorded with this run.
+                    self.stage_driver(self.a.e2e_driver)
+                    self.phase('e2e')
+                    result_file = self.report / 'e2e' / 'result.json'
+                    regular(result_file, 262144)
+                    self.driver_result = json.loads(result_file.read_text())
                 proof = self.quit_proof()
                 self.begin_effect()
                 self.action('key', 'cmd+q')
@@ -971,6 +981,10 @@ class Runner:
                               lease=self.lease_evidence())
                 if self.network_policy is not None:
                     result['networkPolicy'] = self.network_policy
+                if getattr(self, 'driver_result', None):
+                    # Only a driver that actually ran adds a receipt; ordinary
+                    # runs keep their exact result shape.
+                    result['e2e'] = self.driver_result
                 (self.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
                 if self.a.latest and result['cleanup'] == 'CLEARED':
                     archive.unlink()
@@ -1004,6 +1018,7 @@ def arguments(argv=None):
                         help='Read-only report of staging residue and effect fences; clears nothing and never touches the VM')
     p.add_argument('--closed', action='store_true',
                    help='Closed-contour package run on an offline guest with guest-local fixtures; requires --artifact and never downloads')
+    p.add_argument('--e2e-driver', help='Directory prepared by tooling/vm-e2e/bundle-driver.mjs: the closed run stages its bundle+Node and executes the e2e phase in the offline guest')
     p.add_argument('--terminal-mac', default=config.get('terminal_mac'), help='Signed packaged terminal-mac executable, not launcher')
     p.add_argument('--vm-home', default=config.get('vm_home'), help='Dedicated TERMINAL_MAC_HOME; never host product state')
     p.add_argument('--vm', default=config.get('vm', 'pilot'))

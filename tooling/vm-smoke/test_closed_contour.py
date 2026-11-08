@@ -100,13 +100,19 @@ def write_machine_json(machine, machine_json):
         file.write_text(json.dumps(machine_json))
 
 
-def drive_closed_package(root, machine_json, closed=True):
+def drive_closed_package(root, machine_json, closed=True, driver=False):
     """One synthetic package run: --artifact admission, a recording fake CLI
-    and a synthetic guest that ACKs every phase with result files."""
+    and a synthetic guest that ACKs every phase with result files. With
+    driver=True the run carries a --e2e-driver payload and the synthetic
+    guest writes the driver's own durable result before ACKing the phase."""
     payload = root / 'package'
     payload.mkdir()
     archive = build_release_archive(payload)
-    runner = build_runner(root, closed=closed, artifact=str(archive))
+    driver_dir = None
+    if driver:
+        driver_dir, _manifest = build_driver_dir(root)
+    runner = build_runner(root, closed=closed, artifact=str(archive),
+                          e2e_driver=str(driver_dir) if driver else None)
     machine = runner.machine
     if machine_json is not None:
         write_machine_json(machine, machine_json)
@@ -156,6 +162,14 @@ def drive_closed_package(root, machine_json, closed=True):
                  'receipt': f'proof-{proof_count[0]}', 'quitAt': 1000, 'observedAt': 1000}))
         if name == 'connection-proof':
             (target.parent / 'connection.json').write_text(json.dumps({'approvedDev': False}))
+        if name == 'e2e':
+            # The in-guest driver publishes its own durable receipt; the
+            # synthetic guest reproduces exactly that contract.
+            result_dir = target.parent / 'e2e'
+            result_dir.mkdir(exist_ok=True)
+            (result_dir / 'result.json').write_text(json.dumps(
+                {'scenario': 'vm-e2e-egress-probe', 'status': 'REPORTED',
+                 'externalConnectable': False, 'probes': []}))
         target.write_text('READY')
 
     runner.cli = fake_cli
@@ -332,6 +346,29 @@ class ClosedAdmissionTests(unittest.TestCase):
             self.assertFalse((runner.machine / 'input-lease.json').exists())
             runner.finish_effect()
             self.assertFalse(runner.effect_file.exists())
+
+    def test_closed_run_with_driver_records_the_e2e_receipt(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            runner, result, caught, calls, machine_before = drive_closed_package(
+                root, {'name': 'pilot', 'network': False}, driver=True)
+            self.assertIsNone(caught)
+            self.assertEqual(result['status'], 'NEEDS_REVIEW')
+            # The e2e phase ran behind the ordinary lifecycle, its receipt is
+            # the driver's own durable result, and the staged payload reached
+            # the guest through the exact digests.
+            self.assertIn('e2e', result['phases'])
+            self.assertIn('install', result['phases'])
+            self.assertLess(result['phases'].index('install'), result['phases'].index('e2e'),
+                            'the driver runs after the app under test is installed and launched')
+            self.assertEqual(result['e2e']['scenario'], 'vm-e2e-egress-probe')
+            self.assertEqual(result['e2e']['status'], 'REPORTED')
+            self.assertEqual(set(result), PACKAGE_RESULT_KEYS | {'networkPolicy', 'e2e'})
+            self.assertEqual(json.loads((runner.out / 'result.json').read_text()), result)
+            # The staged payload carried the manifest digests into the guest
+            # share and is gone with the cleaned stage afterwards.
+            self.assertEqual(result['cleanup'], 'CLEARED')
+            self.assertFalse(runner.stage.exists())
 
     def test_ordinary_artifact_run_records_no_network_policy(self):
         with tempfile.TemporaryDirectory() as d:
