@@ -29,10 +29,19 @@ import (
 // bootstrap namespace attempt; it never starts a GUI or repairs update records.
 type installReleaseInput struct{ staged, manifest, installed, evidence string }
 type installReleaseManifest struct {
-	Schema, Repository, Version, Platform, Arch, ArtifactSha256, BuildID string
+	Schema, Repository, Version, BuildVersion, Platform, Arch, ArtifactSha256, BuildID string
+	Raw                                                                                json.RawMessage
 }
 type installReleaseRecord struct {
-	Schema, ID, Phase, Version, BuildID, Digest string
+	Schema    string          `json:"schema"`
+	ID        string          `json:"id"`
+	Phase     string          `json:"phase"`
+	Version   string          `json:"version"`
+	BuildID   string          `json:"buildId"`
+	Digest    string          `json:"digest"`
+	Installed string          `json:"installed,omitempty"`
+	Profile   string          `json:"profile,omitempty"`
+	Manifest  json.RawMessage `json:"manifest,omitempty"`
 }
 
 func runInstallReleaseSwap(args []string, out io.Writer, diagnostics io.Writer) int {
@@ -107,7 +116,10 @@ func installReleaseSwap(ctx context.Context, in installReleaseInput, out io.Writ
 		return errors.New("INSTALL_FILESYSTEM_MISMATCH")
 	}
 	verifyStage := func(ctx context.Context) error {
-		v, e := apptree.New(stageParent, stage, "staged.app", apptree.Expected{TreeSHA256: m.ArtifactSha256, Version: m.Version, BuildID: m.BuildID}, appidentity.Verify)
+		identity := func(ctx context.Context, plist, build []byte, version, buildID string) error {
+			return appidentity.VerifyRelease(ctx, plist, build, version, buildID, m.BuildVersion)
+		}
+		v, e := apptree.New(stageParent, stage, "staged.app", apptree.Expected{TreeSHA256: m.ArtifactSha256, Version: m.Version, BuildID: m.BuildID}, identity)
 		if e != nil {
 			return e
 		}
@@ -154,7 +166,15 @@ func installReleaseSwap(ctx context.Context, in installReleaseInput, out io.Writ
 		return err
 	}
 	profileRoot := filepath.Join(account.HomeDir, "Library", "Application Support", "io.github.legrch.farol")
-	if err = installFreshProfileAbsent(profileRoot, in.installed); err != nil {
+	profileLease, err := acquireInstallProfileLease(profileRoot)
+	if err != nil {
+		return err
+	}
+	if profileLease != nil {
+		defer profileLease.file.Close()
+	}
+	profileState, err := inspectInstallProfile(ctx, profileRoot, in.installed, m)
+	if err != nil {
 		return err
 	}
 	if err := installProductionStopped(ctx); err != nil {
@@ -168,15 +188,22 @@ func installReleaseSwap(ctx context.Context, in installReleaseInput, out io.Writ
 	if _, err = rand.Read(bytes[:]); err != nil {
 		return errors.New("INSTALL_CUSTODY_UNAVAILABLE")
 	}
-	record := installReleaseRecord{Schema: "farol.bootstrap-install/1", ID: hex.EncodeToString(bytes[:]), Phase: "pending", Version: m.Version, BuildID: m.BuildID, Digest: m.ArtifactSha256}
+	manifestValues, validManifest := installManifestValues(m.Raw, false)
+	if !validManifest || manifestValues["version"] != m.Version || manifestValues["buildVersion"] != m.BuildVersion || manifestValues["buildId"] != m.BuildID || manifestValues["artifactSha256"] != m.ArtifactSha256 || !installManifestMatchesStagedBuild(in.staged, manifestValues) {
+		return errors.New("INSTALL_MANIFEST_INVALID")
+	}
+	record := installReleaseRecord{Schema: "farol.bootstrap-install/2", ID: hex.EncodeToString(bytes[:]), Phase: "pending", Version: m.Version, BuildID: m.BuildID, Digest: m.ArtifactSha256, Installed: in.installed, Profile: profileRoot, Manifest: m.Raw}
 	fence := func(ctx context.Context) error {
 		// Every refusal here precedes the namespace operation. The native
 		// adapter may still promote pin-cleanup uncertainty after this return.
 		refuse := func(err error) error { return &installmove.Failure{Code: err.Error()} }
+		if e := profileLease.recheck(); e != nil {
+			return refuse(e)
+		}
 		if e := installProductionStopped(ctx); e != nil {
 			return refuse(e)
 		}
-		if e := installFreshProfileAbsent(profileRoot, in.installed); e != nil {
+		if e := recheckInstallProfile(ctx, profileRoot, in.installed, m, profileState); e != nil {
 			return refuse(e)
 		}
 		if e := verifyStage(ctx); e != nil {
@@ -273,12 +300,14 @@ func readInstallManifest(path string) (installReleaseManifest, error) {
 		Schema         string `json:"schema"`
 		Repository     string `json:"repository"`
 		Version        string `json:"version"`
+		BuildVersion   string `json:"buildVersion"`
+		Channel        string `json:"channel"`
 		Platform       string `json:"platform"`
 		Arch           string `json:"arch"`
 		ArtifactSha256 string `json:"artifactSha256"`
 		BuildID        string `json:"buildId"`
 	}
-	if json.Unmarshal(b, &raw) != nil || raw.Schema != "farol.github-release/1" || raw.Repository != "legrch/farol" || raw.Platform != "darwin" || raw.Arch != "arm64" || len(raw.ArtifactSha256) != 64 || len(raw.BuildID) != 64 || raw.Version == "" {
+	if json.Unmarshal(b, &raw) != nil || raw.Schema != "farol.github-release/1" || raw.Repository != "legrch/farol" || raw.Platform != "darwin" || raw.Arch != "arm64" || raw.Channel != "stable" || len(raw.ArtifactSha256) != 64 || len(raw.BuildID) != 64 || !installStableVersion(raw.Version) || !installBuildVersion(raw.BuildVersion) {
 		return m, errors.New("INSTALL_MANIFEST_INVALID")
 	}
 	for _, h := range []string{raw.ArtifactSha256, raw.BuildID} {
@@ -286,8 +315,31 @@ func readInstallManifest(path string) (installReleaseManifest, error) {
 			return m, errors.New("INSTALL_MANIFEST_INVALID")
 		}
 	}
-	m = installReleaseManifest{raw.Schema, raw.Repository, raw.Version, raw.Platform, raw.Arch, raw.ArtifactSha256, raw.BuildID}
+	m = installReleaseManifest{raw.Schema, raw.Repository, raw.Version, raw.BuildVersion, raw.Platform, raw.Arch, raw.ArtifactSha256, raw.BuildID, append(json.RawMessage(nil), b...)}
 	return m, nil
+}
+
+func installManifestMatchesStagedBuild(stage string, values map[string]string) bool {
+	file := filepath.Join(stage, "Contents", "Resources", "app", "build-identity.json")
+	before, err := os.Lstat(file)
+	if err != nil || !before.Mode().IsRegular() || before.Size() > 65536 {
+		return false
+	}
+	data, err := os.ReadFile(file)
+	after, afterErr := os.Lstat(file)
+	if err != nil || afterErr != nil || !os.SameFile(before, after) || int64(len(data)) != before.Size() || after.Size() != before.Size() {
+		return false
+	}
+	var build struct {
+		Version          string `json:"version"`
+		BuildVersion     string `json:"buildVersion"`
+		BuildID          string `json:"buildId"`
+		SourceCommit     string `json:"sourceCommit"`
+		SourceTreeDigest string `json:"sourceTreeDigest"`
+		UpdateChannel    string `json:"updateChannel"`
+		SourceDirty      bool   `json:"sourceDirty"`
+	}
+	return json.Unmarshal(data, &build) == nil && build.Version == values["version"] && build.BuildVersion == values["buildVersion"] && build.BuildID == values["buildId"] && build.SourceCommit == values["sourceCommit"] && build.SourceTreeDigest == values["sourceTreeDigest"] && build.UpdateChannel == "github-stable" && !build.SourceDirty
 }
 func installSignatures(ctx context.Context, app string) error {
 	for _, tc := range []struct {
@@ -317,15 +369,6 @@ func installEmptySlotIdentity(path string) error {
 		return errors.New("INSTALL_SLOT_UNAVAILABLE")
 	}
 	return errors.New("INSTALL_OCCUPIED_SLOT_UNSUPPORTED")
-}
-func installFreshProfileAbsent(profile, installed string) error {
-	for _, path := range []string{profile, installed + ".receipt.json", installed + ".repair.json", filepath.Join(filepath.Dir(installed), ".farol-closed-repair.json")} {
-		_, err := os.Lstat(path)
-		if !errors.Is(err, os.ErrNotExist) {
-			return errors.New("INSTALL_FRESH_STATE_UNCONFIRMED")
-		}
-	}
-	return nil
 }
 
 // A current primary is refused here. This inventory is conservative: an
@@ -429,14 +472,26 @@ func checkedInstallRecord(dir string) error {
 		return errors.New("INSTALL_PREVIOUS_OUTCOME_UNKNOWN")
 	}
 	var r installReleaseRecord
-	if json.Unmarshal(b, &r) != nil || r.Schema != "farol.bootstrap-install/1" || r.Phase != "completed" && r.Phase != "refused" {
+	if json.Unmarshal(b, &r) != nil || (r.Schema != "farol.bootstrap-install/1" && r.Schema != "farol.bootstrap-install/2") || r.Phase != "completed" && r.Phase != "refused" {
 		return errors.New("INSTALL_PREVIOUS_OUTCOME_UNKNOWN")
+	}
+	if r.Schema == "farol.bootstrap-install/2" {
+		if _, ok := installObject(b, []string{"schema", "id", "phase", "version", "buildId", "digest", "installed", "profile", "manifest"}, nil); !ok || !installHexString(r.ID, 32) || r.Installed != "/Applications/Farol.app" || r.Profile == "" {
+			return errors.New("INSTALL_PREVIOUS_OUTCOME_UNKNOWN")
+		}
+		values, valid := installManifestValues(r.Manifest, false)
+		if !valid || values["version"] != r.Version || values["buildId"] != r.BuildID || values["artifactSha256"] != r.Digest {
+			return errors.New("INSTALL_PREVIOUS_OUTCOME_UNKNOWN")
+		}
 	}
 	return nil
 }
 func writeInstallRecord(dir string, r installReleaseRecord) error {
 	b, err := json.Marshal(r)
 	if err != nil {
+		return errors.New("INSTALL_CUSTODY_UNAVAILABLE")
+	}
+	if len(b) > 4096 {
 		return errors.New("INSTALL_CUSTODY_UNAVAILABLE")
 	}
 	tmp := filepath.Join(dir, "."+r.ID+".tmp")

@@ -692,12 +692,26 @@ describe("installed updater startup correlation (pure ports only)", () => {
       digest: target.digest,
       recheck,
     });
-    const guard = await waitForInstalledUpdateRelaunch({
+    const privateOptions = {
       ...f.options,
       directory: privateDirectory,
       physicalFiles: fs,
       copyApp: vi.fn().mockResolvedValue(undefined),
+    };
+    const custodyFile = path.join(
+      home,
+      "Library/Application Support/io.github.legrch.farol-installer/current.json",
+    );
+    f.records.set(custodyFile, {
+      schema: "farol.bootstrap-install/1",
+      phase: "pending",
     });
+    await expect(
+      waitForInstalledUpdateRelaunch(privateOptions),
+    ).rejects.toThrow("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
+    expect(captureMock).not.toHaveBeenCalled();
+    f.records.delete(custodyFile);
+    const guard = await waitForInstalledUpdateRelaunch(privateOptions);
     expect(guard!.resourcesOrigin).toMatchObject({
       slot: "/Applications/Farol.app",
       app: privateApp,
@@ -790,6 +804,19 @@ describe("installed updater startup correlation (pure ports only)", () => {
         expect(f.records.get(journal)).toBeNull();
         return;
       }
+      const custodyFile = path.join(
+        home,
+        "Library/Application Support/io.github.legrch.farol-installer/current.json",
+      );
+      f.records.set(custodyFile, {
+        schema: "farol.bootstrap-install/1",
+        phase: "pending",
+      });
+      await expect(
+        waitForInstalledUpdateRelaunch(reopenOptions),
+      ).rejects.toThrow("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
+      expect(captureMock).not.toHaveBeenCalled();
+      f.records.delete(custodyFile);
       const guard = await waitForInstalledUpdateRelaunch(reopenOptions);
       expect(guard!.resourcesOrigin!.app).toBe(privateApp);
       await guard!.recheck();
@@ -1256,6 +1283,22 @@ describe("installed updater startup correlation (pure ports only)", () => {
   });
 
   it.each([
+    "/Applications/Farol.app/Contents/Resources/app",
+    path.join(opRoot, "launch-Farol.app/Contents/Resources/app"),
+  ])("bounds a stalled installer custody read for %s", async (appDirectory) => {
+    const f = fixture();
+    f.observation.readRecord.mockImplementation(() => new Promise(() => {}));
+    await expect(
+      waitForInstalledUpdateRelaunch({
+        ...f.options,
+        directory: appDirectory,
+        timeoutMs: 5,
+      }),
+    ).rejects.toThrow("UPDATE_RELAUNCH_TIMEOUT");
+    expect(f.observation.readProcess).not.toHaveBeenCalled();
+  });
+
+  it.each([
     { code: "EPERM", stdout: "", stderr: "" },
     { code: 1, stdout: "", stderr: "denied" },
     { code: "ETIMEDOUT", stdout: "", stderr: "" },
@@ -1526,6 +1569,7 @@ describe("shared-slot first-launch adoption at startup (pure ports; GitHub doubl
       sourceTreeDigest: build.sourceTreeDigest,
       buildId: build.buildId,
       artifactSha256: accepted.digest,
+      archiveName: `Farol-${build.version}-darwin-arm64.zip`,
     };
     const log: string[] = [];
     const written: string[] = [];
@@ -1641,6 +1685,141 @@ describe("shared-slot first-launch adoption at startup (pure ports; GitHub doubl
     expect(f.records.has(adoptedFile)).toBe(true);
     expect(f.observation.readProcess).toHaveBeenCalled();
     expect(captureMock).toHaveBeenCalled();
+  });
+
+  const installerRecord = (f: ReturnType<typeof adoptionFixture>) => ({
+    schema: "farol.bootstrap-install/2",
+    id: "b".repeat(32),
+    phase: "completed",
+    version: f.options.build.version,
+    buildId: f.options.build.buildId,
+    digest: f.published.artifactSha256,
+    installed: sharedApp,
+    profile,
+    manifest: structuredClone(f.published),
+  });
+  const installerFile = path.join(
+    home,
+    "Library/Application Support/io.github.legrch.farol-installer/current.json",
+  );
+
+  it("starts an installer-placed replacement offline from its completed verified manifest", async () => {
+    const f = completedReplacementFixture();
+    f.records.set(installerFile, installerRecord(f));
+    adoptionMocks.find.mockRejectedValue(new Error("offline"));
+    await waitForInstalledUpdateRelaunch(f.options);
+    expect(adoptionMocks.find).not.toHaveBeenCalled();
+    expect(adoptionMocks.transport).not.toHaveBeenCalled();
+    expect(captureMock).toHaveBeenCalledOnce();
+    expect(f.records.get(adoptedFile)).toMatchObject({
+      schema: "farol.adopted-baseline/1",
+      manifest: f.published,
+    });
+  });
+
+  it("starts a fresh installer placement offline from its completed verified manifest", async () => {
+    const f = adoptionFixture();
+    f.records.set(installerFile, installerRecord(f));
+    adoptionMocks.find.mockRejectedValue(new Error("offline"));
+    await waitForInstalledUpdateRelaunch(f.options);
+    expect(adoptionMocks.find).not.toHaveBeenCalled();
+    expect(adoptionMocks.transport).not.toHaveBeenCalled();
+    expect(captureMock).toHaveBeenCalledOnce();
+    expect(f.records.get(adoptedFile)).toMatchObject({
+      schema: "farol.adopted-baseline/1",
+      manifest: f.published,
+    });
+  });
+
+  it("refuses pending installer custody on a fresh profile", async () => {
+    const f = adoptionFixture();
+    f.records.set(installerFile, { ...installerRecord(f), phase: "pending" });
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_INSTALLER_CUSTODY_UNCONFIRMED",
+    );
+    expect(adoptionMocks.find).not.toHaveBeenCalled();
+    noEffects(f);
+  });
+
+  it("refuses pending installer custody before using a completed OTA receipt", async () => {
+    const f = unboundSharedFixture("completed");
+    f.records.set(installerFile, {
+      schema: "farol.bootstrap-install/2",
+      id: "b".repeat(32),
+      phase: "pending",
+      version: f.options.build.version,
+      buildId: f.options.build.buildId,
+      digest: f.manifest.artifactSha256,
+      installed: sharedApp,
+      profile,
+      manifest: structuredClone(f.manifest),
+    });
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_INSTALLER_CUSTODY_UNCONFIRMED",
+    );
+    expect(captureMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a proven no-effect installer refusal separate from an accepted OTA", async () => {
+    const f = unboundSharedFixture("completed");
+    f.records.set(installerFile, {
+      schema: "farol.bootstrap-install/2",
+      id: "b".repeat(32),
+      phase: "refused",
+      version: f.options.build.version,
+      buildId: f.options.build.buildId,
+      digest: f.manifest.artifactSha256,
+      installed: sharedApp,
+      profile,
+      manifest: structuredClone(f.manifest),
+    });
+    await waitForInstalledUpdateRelaunch(f.options);
+    expect(captureMock).toHaveBeenCalledOnce();
+  });
+
+  it("never uses a refused installer record as an offline adoption baseline", async () => {
+    const f = adoptionFixture();
+    f.records.set(installerFile, { ...installerRecord(f), phase: "refused" });
+    adoptionMocks.find.mockRejectedValue(new Error("offline"));
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow();
+    expect(adoptionMocks.find).toHaveBeenCalledOnce();
+    noEffects(f);
+  });
+
+  it.each([
+    ["pending outcome", { phase: "pending" }],
+    ["wrong profile", { profile: "/Users/other/profile" }],
+    ["wrong manifest digest", { digest: "f".repeat(64) }],
+    ["wrong manifest source", { manifest: { sourceCommit: "f".repeat(40) } }],
+  ])("refuses %s installer custody before capture", async (_name, change) => {
+    const f = completedReplacementFixture();
+    const record = installerRecord(f);
+    f.records.set(installerFile, {
+      ...record,
+      ...change,
+      manifest:
+        "manifest" in change
+          ? { ...record.manifest, ...change.manifest }
+          : record.manifest,
+    });
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_INSTALLER_CUSTODY_UNCONFIRMED",
+    );
+    expect(adoptionMocks.find).not.toHaveBeenCalled();
+    expect(captureMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses legacy installer custody with an unresolved attempt", async () => {
+    const f = completedReplacementFixture();
+    f.records.set(installerFile, {
+      Schema: "farol.bootstrap-install/1",
+      Phase: "pending",
+    });
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_INSTALLER_CUSTODY_UNCONFIRMED",
+    );
+    expect(adoptionMocks.find).not.toHaveBeenCalled();
+    expect(captureMock).not.toHaveBeenCalled();
   });
 
   it("adopts a published replacement after a confirmed rolled-back shared OTA without rewriting its evidence", async () => {

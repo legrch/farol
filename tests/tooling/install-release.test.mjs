@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -13,8 +14,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "vitest";
 
 const script = fileURLToPath(
-  new URL("../../scripts/install-release.sh", import.meta.url),
+  new URL("../../scripts/install.sh", import.meta.url),
 );
+test("the old install-release URL and short install URL serve identical installers", () => {
+  const oldScript = fileURLToPath(
+    new URL("../../scripts/install-release.sh", import.meta.url),
+  );
+  assert.equal(readFileSync(script, "utf8"), readFileSync(oldScript, "utf8"));
+});
 test("installer never removes the active app", () => {
   const source = readFileSync(script, "utf8");
   assert.doesNotMatch(source, /\/bin\/rm\s+-rf\s+"\$installed"/);
@@ -23,7 +30,7 @@ test("installer never removes the active app", () => {
 });
 const python = "/usr/bin/python3";
 const fixtureCode = String.raw`
-import hashlib, json, os, pathlib, stat, sys, zipfile
+import hashlib, json, os, pathlib, stat, struct, sys, zipfile
 root, scenario = sys.argv[1:]
 app = pathlib.Path(root) / 'reference/Farol.app'
 launcher = """#!/bin/sh
@@ -76,7 +83,12 @@ with zipfile.ZipFile(archive, 'w') as z:
     if scenario == 'under-link': file('Farol.app/Contents/Frameworks/Versions/Current/evil', 'bad')
     if scenario == 'duplicate': file('Farol.app/Contents/MacOS/Farol', 'duplicate')
     if scenario == 'extra-file': file('Farol.app/extra', 'tampered')
-data = open(archive, 'rb').read()
+data = bytearray(open(archive, 'rb').read())
+if scenario == 'expanded-limit':
+    central = data.find(b'PK\x01\x02')
+    assert central >= 0
+    struct.pack_into('<I', data, central + 24, 1_073_741_825)
+    open(archive, 'wb').write(data)
 hash = hashlib.sha256(data).hexdigest()
 manifest = dict(schema='farol.github-release/1', repository='legrch/farol', version=version,
                 platform='darwin', arch='arm64', archiveName=name, archiveSha256=hash, archiveSize=len(data),
@@ -85,6 +97,7 @@ if scenario == 'wrong-version': manifest['version'] = '1.2.4'
 if scenario == 'wrong-repository': manifest['repository'] = 'other/farol'
 if scenario == 'wrong-name': manifest['archiveName'] = 'other.zip'
 if scenario == 'wrong-size': manifest['archiveSize'] += 1
+if scenario == 'oversized-archive': manifest['archiveSize'] = 2_147_483_649
 if scenario == 'wrong-hash': manifest['archiveSha256'] = '0' * 64
 open(os.path.join(root, 'farol-release.json'), 'w').write(json.dumps(manifest))
 open(os.path.join(root, 'SHA256SUMS'), 'w').write(('0' * 64 if scenario == 'wrong-sums' else hash) + '  ' + name + '\n')
@@ -294,6 +307,18 @@ for (const scenario of [
     }));
 }
 
+for (const [scenario, message] of [
+  ["expanded-limit", /ZIP resource limit exceeded/],
+  ["oversized-archive", /invalid archive size or digest/],
+]) {
+  test(`rejects ${scenario} before extraction`, () =>
+    fixture(scenario, (result, output) => {
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, message);
+      assert.ok(!existsSync(output));
+    }));
+}
+
 test("does not overwrite a caller-selected extraction directory", () => {
   fixture("valid", (_result, output, root) => {
     writeFileSync(path.join(output, "sentinel"), "keep");
@@ -344,6 +369,8 @@ test("isolated failed signature leaves the slot empty", () => {
     assert.match(result.stderr, /signature verification failed/);
     assert.ok(!existsSync(path.join(root, "Applications/Farol.app")));
     assert.ok(!log.includes("osascript"));
+    assert.doesNotMatch(result.stderr, /Recovery files retained at:/);
+    assert.ok(!readdirSync(root).some((name) => name.startsWith("release.")));
   });
 });
 
@@ -355,6 +382,7 @@ for (const scenario of ["swap-refused", "swap-unknown"]) {
       assert.ok(!existsSync(path.join(root, "Applications/Farol.app")));
       assert.equal(log.split("native-swap").length - 1, 1);
       assert.doesNotMatch(log, /open/);
+      assert.match(result.stderr, /Recovery files retained at:/);
     });
   });
 }
@@ -484,16 +512,13 @@ for (const scenario of [
   "permission-denied",
   "wrong-main-title",
 ]) {
-  test(`isolated ${scenario} preserves the empty slot and recovery files`, () => {
+  test(`isolated ${scenario} preserves the empty slot and cleans pre-effect files`, () => {
     isolatedInstall(scenario, (result, root, log) => {
       assert.notEqual(result.status, 0);
       assert.ok(!existsSync(path.join(root, "Applications/Farol.app")));
       assert.doesNotMatch(log, /native-swap|open/);
-      const retained = result.stderr.match(/Recovery files retained at: (.+)/);
-      assert.ok(retained, result.stderr);
-      assert.ok(
-        readFileSync(path.join(retained[1], "farol-release.json")).length > 0,
-      );
+      assert.doesNotMatch(result.stderr, /Recovery files retained at:/);
+      assert.ok(!readdirSync(root).some((name) => name.startsWith("release.")));
     });
   });
 }

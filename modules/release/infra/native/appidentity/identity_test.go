@@ -76,6 +76,18 @@ func TestIdentityProjection(t *testing.T) {
 		wantCode(t, Verify(context.Background(), xmlDoc(""), j, testVersion, testID), BuildMismatch)
 	}
 }
+
+func TestReleaseBuildVersionMatchesBothDocuments(t *testing.T) {
+	plist := xmlDoc(`<key>CFBundleVersion</key><string>76</string>`)
+	build := jsonDoc(`,"buildVersion":"76"`)
+	if err := VerifyRelease(context.Background(), plist, build, testVersion, testID, "76"); err != nil {
+		t.Fatal(err)
+	}
+	wantCode(t, VerifyRelease(context.Background(), plist, build, testVersion, testID, "75"), BundleMismatch)
+	wantCode(t, VerifyRelease(context.Background(), xmlDoc(""), build, testVersion, testID, "76"), BundleMismatch)
+	wantCode(t, VerifyRelease(context.Background(), plist, jsonDoc(""), testVersion, testID, "76"), BuildMismatch)
+	wantCode(t, VerifyRelease(context.Background(), plist, build, testVersion, testID, ""), InvalidInput)
+}
 func TestStrictJSON(t *testing.T) {
 	bad := []string{
 		`,"version":"1.2.3-preview.4"`, `,"\u0076ersion":"1.2.3-preview.4"`, `,"unknown":{"x":1,"\u0078":2}`,

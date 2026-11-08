@@ -4,7 +4,7 @@ PATH=/usr/bin:/bin:/usr/sbin:/sbin
 export PATH
 umask 077
 
-usage='Usage: scripts/install-release.sh <version|latest>'
+usage='Usage: scripts/install.sh <version|latest>'
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 valid_version() { printf '%s\n' "$1" | /usr/bin/grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; }
 
@@ -68,9 +68,12 @@ PY
 # caller-specified directory. It does not invoke any production operations.
 validate_archive() {
   /usr/bin/python3 -I - "$@" <<'PY'
-import hashlib, json, os, pathlib, re, shutil, stat, struct, sys, zipfile
+import hashlib, json, os, pathlib, re, stat, struct, sys, zipfile
 version, archive, manifest_path, sums_path, output = sys.argv[1:]
 name = f'Farol-{version}-darwin-arm64.zip'
+MAX_ARCHIVE = 2_147_483_648
+MAX_EXPANDED = 1_073_741_824
+MAX_ENTRIES = 100_000
 def reject(message):
     raise ValueError(message)
 try:
@@ -87,7 +90,7 @@ try:
     artifact_digest = manifest.get('artifactSha256')
     if not isinstance(artifact_digest, str) or not re.fullmatch('[0-9a-f]{64}', artifact_digest):
         reject('invalid artifact digest')
-    if type(size) is not int or size <= 0 or not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest):
+    if type(size) is not int or size <= 0 or size > MAX_ARCHIVE or not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest):
         reject('invalid archive size or digest')
     if os.path.basename(archive) != name or os.path.getsize(archive) != size:
         reject('archive name or size mismatch')
@@ -105,8 +108,11 @@ try:
     # Require a single app root and forbid duplicate names, special files, and
     # entries beneath symlinks. Extract files first, then create links.
     with zipfile.ZipFile(archive) as z:
+        members = z.infolist()
+        if len(members) > MAX_ENTRIES or sum(item.file_size for item in members) > MAX_EXPANDED:
+            reject('ZIP resource limit exceeded')
         entries, links = {}, {}
-        for item in z.infolist():
+        for item in members:
             raw = item.filename
             parts = raw.rstrip('/').split('/')
             if not raw or '\\' in raw or raw.startswith('/') or any(p in ('', '.', '..') for p in parts) or (parts[0] != 'Farol.app' and raw != 'artifact.json'):
@@ -124,6 +130,8 @@ try:
                 reject('unsupported ZIP entry type')
             entries[key] = (item, mode, kind)
             if kind == stat.S_IFLNK:
+                if item.file_size > 4096:
+                    reject('oversized ZIP symlink')
                 target = z.read(item).decode('utf-8')
                 if not target or '\x00' in target or target.startswith('/') or '\\' in target:
                     reject('unsafe symlink target')
@@ -136,6 +144,7 @@ try:
                 reject('ZIP entry below symlink')
         os.mkdir(output, 0o700)
         root = pathlib.Path(output)
+        copied_total = 0
         for key, (item, mode, kind) in entries.items():
             dest = root.joinpath(*key.split('/'))
             if kind == stat.S_IFLNK:
@@ -145,7 +154,15 @@ try:
             else:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 with z.open(item) as src, open(dest, 'xb') as dst:
-                    shutil.copyfileobj(src, dst)
+                    copied = 0
+                    for chunk in iter(lambda: src.read(1024 * 1024), b''):
+                        copied += len(chunk)
+                        copied_total += len(chunk)
+                        if copied > item.file_size or copied_total > MAX_EXPANDED:
+                            reject('ZIP resource limit exceeded')
+                        dst.write(chunk)
+                    if copied != item.file_size:
+                        reject('ZIP entry size mismatch')
                 os.chmod(dest, (mode & 0o7777) or 0o644)
         for key, target in links.items():
             dest = root.joinpath(*key.split('/'))
@@ -231,7 +248,7 @@ if [ -e "$installed" ] || [ -L "$installed" ]; then
   fail 'Farol is already installed. Use Check for Updates in the app; the installer accepts only an empty slot.'
 fi
 tmp=$(/usr/bin/mktemp -d "/tmp/farol-release.XXXXXXXX") || fail 'cannot create private temporary directory'
-retain=yes
+retain=no
 cleanup() {
   if [ "$retain" = yes ]; then
     printf 'Recovery files retained at: %s\n' "$tmp" >&2
@@ -251,10 +268,14 @@ name="Farol-${version}-darwin-arm64.zip"
 url="https://github.com/legrch/farol/releases/download/v${version}"
 for asset in "$name" farol-release.json SHA256SUMS; do
   printf 'Downloading %s...\n' "$asset"
+  case "$asset" in
+    "$name") max_size=2147483648 ;;
+    *) max_size=2097152 ;;
+  esac
   if [ -t 2 ] && [ "$asset" = "$name" ]; then
-    /usr/bin/curl --fail --show-error --progress-bar --location --proto '=https' --proto-redir '=https' --output "$tmp/$asset" "$url/$asset" || fail "download failed: $asset"
+    /usr/bin/curl --fail --show-error --progress-bar --location --proto '=https' --proto-redir '=https' --max-filesize "$max_size" --output "$tmp/$asset" "$url/$asset" || fail "download failed: $asset"
   else
-    /usr/bin/curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --output "$tmp/$asset" "$url/$asset" || fail "download failed: $asset"
+    /usr/bin/curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --max-filesize "$max_size" --output "$tmp/$asset" "$url/$asset" || fail "download failed: $asset"
   fi
 done
 printf '%s\n' 'Verifying the release...'
@@ -435,6 +456,9 @@ check_stopped || fail 'Quit Farol with Command+Q, then run this installer again.
 # The extracted bundle is never launched as a GUI application.
 /usr/bin/ditto "$app" "$tmp/staged.app" || fail 'could not prepare staged application; installed app preserved'
 check_stopped || fail 'production process appeared; installed app preserved'
+# The next call may perform the one native namespace effect. Preserve this
+# private attempt directory on any refusal or unconfirmed result from it.
+retain=yes
 "$backend" run-install-release-swap \
   --staged-app "$tmp/staged.app" \
   --manifest "$tmp/farol-release.json" \

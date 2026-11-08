@@ -76,6 +76,19 @@ func (b *budget) node(depth int) error {
 // Bounded gaps/padding are inert; every offset-table object is validated.
 // These limits and strict duplicate/Unicode validation tighten plistlib/json.
 func Verify(ctx context.Context, infoPlist, buildIdentity []byte, version, buildID string) error {
+	return verify(ctx, infoPlist, buildIdentity, version, buildID, "")
+}
+
+// VerifyRelease additionally binds a release manifest's build number to both
+// identity documents in the already verified application tree.
+func VerifyRelease(ctx context.Context, infoPlist, buildIdentity []byte, version, buildID, buildVersion string) error {
+	if buildVersion == "" {
+		return refusal(InvalidInput)
+	}
+	return verify(ctx, infoPlist, buildIdentity, version, buildID, buildVersion)
+}
+
+func verify(ctx context.Context, infoPlist, buildIdentity []byte, version, buildID, buildVersion string) error {
 	if ctx == nil {
 		return refusal(InvalidInput)
 	}
@@ -105,6 +118,9 @@ func Verify(ctx context.Context, infoPlist, buildIdentity []byte, version, build
 	if m["CFBundleIdentifier"] != bundle || m["CFBundleShortVersionString"] != short {
 		return refusal(BundleMismatch)
 	}
+	if buildVersion != "" && m["CFBundleVersion"] != buildVersion {
+		return refusal(BundleMismatch)
+	}
 	j, err := parseJSON(buildIdentity, &budget{ctx: ctx})
 	if err != nil {
 		return err
@@ -114,6 +130,9 @@ func Verify(ctx context.Context, infoPlist, buildIdentity []byte, version, build
 		return refusal(InvalidJSON)
 	}
 	if v["bundleId"] != bundle || v["version"] != version || v["buildId"] != buildID {
+		return refusal(BuildMismatch)
+	}
+	if buildVersion != "" && v["buildVersion"] != buildVersion {
 		return refusal(BuildMismatch)
 	}
 	if ctx.Err() != nil {
