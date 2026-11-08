@@ -1,4 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
+vi.mock("electron", () => ({
+  BrowserWindow: class {},
+  session: {},
+  systemPreferences: {},
+}));
 import {
   activateTaskScript,
   bindChatGptAppScript,

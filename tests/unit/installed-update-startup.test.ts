@@ -692,12 +692,26 @@ describe("installed updater startup correlation (pure ports only)", () => {
       digest: target.digest,
       recheck,
     });
-    const guard = await waitForInstalledUpdateRelaunch({
+    const privateOptions = {
       ...f.options,
       directory: privateDirectory,
       physicalFiles: fs,
       copyApp: vi.fn().mockResolvedValue(undefined),
+    };
+    const custodyFile = path.join(
+      home,
+      "Library/Application Support/io.github.legrch.farol-installer/current.json",
+    );
+    f.records.set(custodyFile, {
+      schema: "farol.bootstrap-install/1",
+      phase: "pending",
     });
+    await expect(
+      waitForInstalledUpdateRelaunch(privateOptions),
+    ).rejects.toThrow("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
+    expect(captureMock).not.toHaveBeenCalled();
+    f.records.delete(custodyFile);
+    const guard = await waitForInstalledUpdateRelaunch(privateOptions);
     expect(guard!.resourcesOrigin).toMatchObject({
       slot: "/Applications/Farol.app",
       app: privateApp,
@@ -790,6 +804,19 @@ describe("installed updater startup correlation (pure ports only)", () => {
         expect(f.records.get(journal)).toBeNull();
         return;
       }
+      const custodyFile = path.join(
+        home,
+        "Library/Application Support/io.github.legrch.farol-installer/current.json",
+      );
+      f.records.set(custodyFile, {
+        schema: "farol.bootstrap-install/1",
+        phase: "pending",
+      });
+      await expect(
+        waitForInstalledUpdateRelaunch(reopenOptions),
+      ).rejects.toThrow("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
+      expect(captureMock).not.toHaveBeenCalled();
+      f.records.delete(custodyFile);
       const guard = await waitForInstalledUpdateRelaunch(reopenOptions);
       expect(guard!.resourcesOrigin!.app).toBe(privateApp);
       await guard!.recheck();

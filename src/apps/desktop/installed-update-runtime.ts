@@ -584,6 +584,48 @@ async function recheckSharedUpdateSource(
   await canonical(slot, false);
 }
 
+async function readInstallerManifestForStartup(
+  options: InstalledUpdateRelaunchOptions,
+  profile: string,
+  build: z.infer<typeof BuildIdentitySchema>,
+): Promise<ReleaseManifest | null> {
+  const custody = path.join(
+    os.userInfo().homedir,
+    "Library/Application Support/io.github.legrch.farol-installer",
+  );
+  const file = path.join(custody, "current.json");
+  if (!options.observation) {
+    try {
+      await fs.lstat(custody);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
+    }
+    try {
+      await canonicalOwnedDirectory(custody, true);
+    } catch {
+      throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
+    }
+  }
+  let raw: unknown | null;
+  try {
+    raw = await (options.observation?.readRecord ?? readRecord)(
+      file,
+      true,
+      undefined,
+      4096,
+    );
+    if (
+      raw === null &&
+      !(await (options.observation?.recordAbsent ?? recordAbsent)(file))
+    )
+      throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
+  } catch {
+    throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
+  }
+  return installerManifestForAdoption(raw, profile, build);
+}
+
 // Ordinary public-slot startup must satisfy AttestedCore's immutable-tree
 // contract before any backend binary is spawned. Baselines authenticate code;
 // runtime lifetime and updater recovery still keep their independent gates.
@@ -612,38 +654,6 @@ async function observeSharedSlotStartup(
   )
     throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
   const read = options.observation?.readRecord ?? readRecord;
-  const installerManifest = async (): Promise<ReleaseManifest | null> => {
-    const custody = path.join(
-      os.userInfo().homedir,
-      "Library/Application Support/io.github.legrch.farol-installer",
-    );
-    const file = path.join(custody, "current.json");
-    if (!options.observation) {
-      try {
-        await fs.lstat(custody);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-        throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
-      }
-      try {
-        await canonicalOwnedDirectory(custody, true);
-      } catch {
-        throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
-      }
-    }
-    let raw: unknown | null;
-    try {
-      raw = await read(file, true, undefined, 4096);
-      if (
-        raw === null &&
-        !(await (options.observation?.recordAbsent ?? recordAbsent)(file))
-      )
-        throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
-    } catch {
-      throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
-    }
-    return installerManifestForAdoption(raw, profile, build);
-  };
   if (!options.observation) {
     await canonicalOwnedDirectory(profile, true);
     await privateDirectory(root);
@@ -651,7 +661,11 @@ async function observeSharedSlotStartup(
   // Every startup observes installer custody, including a fresh profile or an
   // unchanged OTA build. Pending placement must not be bypassed by another
   // baseline path, and a completed matching placement works offline.
-  const installedManifest = await installerManifest();
+  const installedManifest = await readInstallerManifestForStartup(
+    options,
+    profile,
+    build,
+  );
   const operationImage = async (record: z.infer<typeof Retained>) => {
     const op = record.operation ?? record.preparation;
     const parsed = parseRetainedGithubReleaseManifest(record);
@@ -1047,6 +1061,7 @@ async function observeCompletedPrivateLaunch(
     throw new Error("UPDATE_RELAUNCH_IDENTITY_MISMATCH");
   await readOperationBinding(root, operation, "shared", read);
   const settled = async () => {
+    await readInstallerManifestForStartup(options, profile, build);
     for (const [directory, privateMode] of [
       [profile, true],
       [root, true],
@@ -1321,6 +1336,8 @@ export async function waitForInstalledUpdateRelaunch(
   let pinned: z.infer<typeof Operation> | undefined;
 
   const observe = async (wait: boolean): Promise<void> => {
+    if (slot === "/Applications/Farol.app")
+      await readInstallerManifestForStartup(options, profile, build);
     const deadline = now() + timeoutMs;
     const remaining = () => {
       const ms = Math.ceil(deadline - now());
