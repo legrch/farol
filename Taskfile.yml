@@ -6,6 +6,26 @@ tasks:
     cmds:
       - node tooling/release-preflight.mjs
 
+  test:
+    desc: >-
+      Complete automatic closed-contour aggregate: every automatic test leaf exactly once.
+      Parameterized witnesses (--generation/--predecessor), dev-byte journeys, package-candidate
+      e2e variants, static coverage/lint gates and qa:* stay separate; test:fast/test:cloud are
+      subsets and never run here.
+    cmds:
+      - task: test:core
+      - task: test:tooling
+      - task: test:unit
+      - task: test:integration
+      - task: vm:test
+      - task: test:witness-inputs
+      - task: test:e2e
+      - task: test:e2e:guided-setup
+      - task: test:e2e:setup-config-error
+      - task: test:e2e:chatgpt-startup-readiness
+      - task: test:persistence-fault
+      - task: test:soak
+
   test:affected:
     desc: Explain deterministic affected selection; PLAN_ONLY, never executes tests
     cmds:
@@ -117,6 +137,7 @@ tasks:
     desc: Check VM smoke isolation, archive admission and bounded failure handling without a real VM
     cmds:
       - /usr/bin/python3 -B -m unittest discover -s tooling/vm-smoke -p 'test_*.py'
+      - /usr/bin/python3 -B -m unittest discover -s tooling -p 'test_vm_machine.py'
       - node --test tooling/vm-smoke/inspect.test.mjs tooling/vm-smoke/import-dev.test.mjs tooling/vm-smoke/import-dev-final-publish.regression.mjs tooling/vm-smoke/entry.test.mjs tooling/vm-smoke/quit-proof.test.mjs tooling/vm-smoke/no-tunnel.test.mjs
 
   dev:
