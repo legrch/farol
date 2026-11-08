@@ -1,8 +1,12 @@
 # Packaged app testing in a macOS guest
 
-`task vm:smoke` tests an exact release archive in a dedicated macOS guest. Hidden
-is the default; `--visible` shows the same guest desktop. It never launches the
-production app on the host or reads the production host profile/tunnel.
+`task qa:smoke` runs a bounded exact-release UI smoke of a release archive in a
+dedicated macOS guest. Hidden is the default; `--visible` shows the same guest
+desktop. It never launches the production app on the host or reads the
+production host profile/tunnel. The guest journeys are QA — real Dev services,
+accounts and visual judgment — and are never part of `task test`; the testing
+contract, aggregate boundaries and the VM executor option plan live in
+[VM testing contract](vm-testing.md).
 
 ## Code, configuration and persistent state
 
@@ -74,9 +78,9 @@ loop. Later Dock/focus changes do not redirect shell typing. The legacy
 ## Test an exact packaged release
 
 ```sh
-task vm:smoke -- --artifact /path/to/Farol-VERSION-darwin-arm64.zip
-task vm:smoke -- --artifact /path/to/Farol-VERSION-darwin-arm64.zip --visible
-task vm:smoke -- --latest
+task qa:smoke -- --artifact /path/to/Farol-VERSION-darwin-arm64.zip
+task qa:smoke -- --artifact /path/to/Farol-VERSION-darwin-arm64.zip --visible
+task qa:smoke -- --latest
 ```
 
 A local ZIP needs adjacent `farol-release.json` and `SHA256SUMS`. The runner checks
@@ -107,8 +111,8 @@ existing guest app is normally quit before installation; no force-stop is used.
 ## Reuse only the approved Dev connection
 
 ```sh
-task vm:connect-dev -- --visible     # one-time offline ID/key import
-task vm:status                      # local guest identity/proof only
+task qa:connect-dev -- --visible    # one-time offline ID/key import
+task qa:status                      # local guest identity/proof only
 ```
 
 The import source is the fixed host Dev identity from the product identity
@@ -135,7 +139,7 @@ these tasks. Owner-only authentication/payment stops the scenario.
 One Dev endpoint is used sequentially. Before returning to host Dev, use:
 
 ```sh
-task vm:release-dev                 # normal Quit of only the guest app
+task qa:release-dev                 # normal Quit of only the guest app
 # Then use the ordinary host task dev workflow when its own preflight is ready.
 ```
 
@@ -150,18 +154,24 @@ and any future guest Dev profile remain distinct and retain their own proofs.
 `result.json` separates `lifecycle: PASS`, `ui: NEEDS_REVIEW` and remote tunnel
 qualification. An agent inspects Setup/returning UI, menu and sensible relaunch
 screenshots separately. Menu coordinates only capture an observation. Without a
-menu point the menu row stays `NOT_RUN`. Local `vm:status` and `connection.json`
+menu point the menu row stays `NOT_RUN`. Local `qa:status` and `connection.json`
 identify the guest profile/build and Dev binding, not an end-to-end provider
 receipt. To qualify the route, separately call the explicitly selected Dev
 connector and compare its profile/build binding with the guest proof. A catalogue
 check does not qualify file reads, writes, shell or all registered tools.
 
-The runner holds a VM-operation lease and bounds host/guest work. It restores no
-unknown operation automatically. Failures retain private evidence and mark an
-outstanding phase UNKNOWN when needed. Successful cleanup removes exact owned
-host staging and guest extraction/predecessor; it never deletes input archives,
-VMs or profiles. Hidden stays hidden and visible stays visible. Screenshots and
-runtime metadata are private and excluded from the public source branch.
+The runner holds a VM-operation lease and bounds host/guest work. It also
+consumes terminal-mac's exclusive input lease as `farol-smoke:<run>`, so guest
+input cannot be driven by two writers at once; competing guest actions are
+refused with `GUEST_INPUT_LEASE_HELD`. It restores no unknown operation
+automatically. Failures retain private evidence and mark an outstanding phase
+UNKNOWN when needed. Cleanup records a disposition in the result: the first
+attempt's disposition is authoritative, and a `FAILED` cleanup is never upgraded
+into a `CLEARED` claim. Successful cleanup removes exact owned host staging and
+guest extraction/predecessor; it never deletes input archives, VMs or profiles.
+Hidden stays hidden and visible stays visible. Screenshots and runtime metadata
+are private and excluded from the public source branch. The settled input-lease
+contract is in [VM testing contract](vm-testing.md).
 
 `task vm:test` checks archive/profile/configuration boundaries, the guest
 inspector/importer and provisioning plans without real accounts or a VM.
@@ -175,17 +185,25 @@ Before a product mutation, the runner publishes and fsyncs the private per-VM
 `.farol-smoke-pending.json` fence. It is removed only after the successful run
 and guest server Stop acknowledgement. A failed, interrupted or timed-out run
 leaves the fence in place, blocking every runner mode while an old guest phase
-might still be executing. This includes `task vm:status`: its current connection
+might still be executing. This includes `task qa:status`: its current connection
 proof path can bootstrap the guest and activate the app, so it is not a read-only
 reconciliation route. It never clears the fence. A genuinely read-only recovery
 operation remains unimplemented. Reconcile the original run's guest ACKs,
 current state and server lifetime before removing that exact fence manually.
 Removing it merely to retry UNKNOWN is not reconciliation.
 
+Admission also refuses a machine whose artifact inbox holds staging residue from
+a pre-fence failure: `UNRECONCILED_STAGING_RESIDUE` names directory names only,
+reads no contents and deletes nothing. `task qa:smoke -- --reconcile-staging` is
+the strictly read-only report — no runner, no VM contact, no lock and no write;
+it lists the residue directories and fence metadata and describes the required
+manual action. Clearing stays manual: the runner never deletes residue or clears
+a fence.
+
 Quit must produce a changed, canonical `last-quit.json` with `drained: true`,
 no unconfirmed children, a fresh timestamp from the guest clock, and no
 `running.json`. GUI disappearance alone does not qualify installation or Dev
-endpoint release. `vm:release-dev` requires observing its own normal Quit;
+endpoint release. `qa:release-dev` requires observing its own normal Quit;
 an already-absent GUI is not a confirmed handoff. Installation completes its
 fallible replacement copy before moving the old app, then uses same-volume
 renames. An interrupted rename retains the predecessor and guest-work path for

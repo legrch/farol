@@ -113,22 +113,25 @@ tasks:
     cmds:
       - node tooling/vm-entry.mjs machine {{.CLI_ARGS}}
 
-  vm:smoke:
-    desc: Bounded exact-release smoke in a dedicated macOS guest (hidden by default; --visible to observe)
+  # qa:* journeys use the real Dev services, accounts, tunnel and human visual
+  # judgment. They are QA observations, not tests, and never join `task test`
+  # or any CI gate; `vm:test` (offline, closed) remains the VM test lane.
+  qa:smoke:
+    desc: Bounded exact-release UI smoke in the dedicated guest; visual review stays NEEDS_REVIEW by design (hidden by default; --visible to observe)
     cmds:
       - node tooling/vm-entry.mjs smoke {{.CLI_ARGS}}
 
-  vm:release-dev:
+  qa:release-dev:
     desc: Quit only the approved guest app before using host Dev; preserve VM/profile and never launch host production
     cmds:
       - node tooling/vm-entry.mjs smoke --release-dev {{.CLI_ARGS}}
 
-  vm:status:
+  qa:status:
     desc: Capture guest connection identity and approved Dev binding; refuses unresolved operations
     cmds:
       - node tooling/vm-entry.mjs smoke --connection-proof {{.CLI_ARGS}}
 
-  vm:connect-dev:
+  qa:connect-dev:
     desc: Import only the approved Dev tunnel ID/key into the guest package profile (host Dev must be stopped)
     cmds:
       - node tooling/vm-entry.mjs smoke --connect-dev {{.CLI_ARGS}}
