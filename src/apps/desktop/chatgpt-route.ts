@@ -544,8 +544,13 @@ const temporaryToggleLabels = [
   "Turn off temporary chat",
   "Отключить временный чат",
   "Выключить временный чат",
+  "Выйти из режима временного чата",
 ] as const;
-const personalizedLabels = ["Personalized", "С персонализацией"] as const;
+const personalizedLabels = [
+  "Personalized",
+  "С персонализацией",
+  "Персонализированный",
+] as const;
 const unpersonalizedLabels = ["Unpersonalized", "Без персонализации"] as const;
 const selectedModelControlPredicate = `((button) => {
   const label = (button.innerText || "").trim();
@@ -1203,7 +1208,7 @@ function manualDeepTestDraftGuard(
     const manualAttachments = manualForm ? [...manualForm.querySelectorAll(
       '[data-testid="attachment-preview"],[data-testid="composer-attachment"],[data-testid*="file-chip"],[data-testid*="attachment-chip"],[aria-label*="remove file" i],[aria-label*="remove attachment" i],[aria-label*="удалить файл" i],[aria-label*="удалить вложение" i]'
     )].some(manualVisible) : true;
-    const manualAllowedLabels = new Set(['Add files', 'Add files and more', 'Select ChatGPT model', 'Dictate', 'Start Voice', 'Start voice mode', 'Start Voice Mode', 'Expand', 'Send prompt', 'Send message', 'Send', 'Добавить файлы', 'Добавить файлы и другое', 'Выбрать модель ChatGPT', 'Диктовка', 'Начать голосовой режим', 'Развернуть', 'Отправить', 'Отправить сообщение']);
+    const manualAllowedLabels = new Set(['Add files', 'Add files and more', 'Select ChatGPT model', 'Dictate', 'Start Voice', 'Start voice mode', 'Start Voice Mode', 'Expand', 'Send prompt', 'Send message', 'Send', 'Добавить файлы', 'Добавить файлы и другое', 'Выбрать модель ChatGPT', 'Диктовка', 'Диктовать', 'Начать голосовой режим', 'Развернуть', 'Отправить', 'Отправить сообщение']);
     const manualControlSelector = 'button,[role="button"],input[type="button"],input[type="submit"]';
     const manualUnknownControls = manualForm ? [...new Set([
       ...manualForm.querySelectorAll(manualControlSelector),

@@ -897,9 +897,9 @@ describe("temporary Instant connector profile", () => {
     const composer = new HTMLTextAreaElement();
     const send = new HTMLButtonElement();
     const temporaryToggle = new HTMLButtonElement("", "", {
-      "aria-label": "Отключить временный чат",
+      "aria-label": "Выйти из режима временного чата",
     });
-    const personalized = new HTMLButtonElement("С персонализацией");
+    const personalized = new HTMLButtonElement("Персонализированный");
     const model = new HTMLButtonElement("6 Instant", "6 Instant", {
       "aria-haspopup": "menu",
     });

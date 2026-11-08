@@ -103,14 +103,14 @@ it("sends only the unchanged manual prompt with a recognized empty composer", ()
 });
 
 it("accepts a Russian composer scaffold while keeping the draft and attachment fences", () => {
-  document.body.innerHTML = `<form><span data-testid="composer-app-chip" aria-label="Farol"></span><textarea id="prompt-textarea"></textarea><input type="file"><button type="button" aria-label="Добавить файлы"></button><button type="button" aria-label="Выбрать модель ChatGPT"></button><button type="button" aria-label="Отправить сообщение"></button></form>`;
+  document.body.innerHTML = `<form><span data-testid="composer-app-chip" aria-label="Farol"></span><textarea id="prompt-textarea"></textarea><input type="file"><button type="button" aria-label="Добавить файлы и другое"></button><button type="button" aria-label="Выбрать модель ChatGPT"></button><button type="button" aria-label="Диктовать"></button><button type="button" aria-label="Отправить"></button></form>`;
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
     width: 100,
     height: 20,
   } as DOMRect);
   const text = document.querySelector<HTMLTextAreaElement>("textarea")!;
   const send = document.querySelector<HTMLButtonElement>(
-    '[aria-label="Отправить сообщение"]',
+    '[aria-label="Отправить"]',
   )!;
   const click = vi.spyOn(send, "click");
   text.value = "check";

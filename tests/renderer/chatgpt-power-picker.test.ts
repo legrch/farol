@@ -86,7 +86,8 @@ it("selects Russian personalization controls only when each target is unique", (
   button.addEventListener("click", opened);
   const option = document.createElement("div");
   option.setAttribute("role", "menuitemradio");
-  option.textContent = "С персонализацией — разрешить приложения";
+  option.textContent =
+    "Персонализированный Этот чат может использовать память, плагины и пользовательские инструкции";
   option.getClientRects = button.getClientRects;
   const selected = vi.fn();
   option.addEventListener("click", selected);
