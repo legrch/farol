@@ -100,7 +100,7 @@ def write_machine_json(machine, machine_json):
         file.write_text(json.dumps(machine_json))
 
 
-def drive_closed_package(root, machine_json, closed=True, driver=False):
+def drive_closed_package(root, machine_json, closed=True, driver=False, clone_receipt=None):
     """One synthetic package run: --artifact admission, a recording fake CLI
     and a synthetic guest that ACKs every phase with result files. With
     driver=True the run carries a --e2e-driver payload and the synthetic
@@ -172,6 +172,9 @@ def drive_closed_package(root, machine_json, closed=True, driver=False):
                  'externalConnectable': False, 'probes': []}))
         target.write_text('READY')
 
+    if clone_receipt is not None:
+        # Simulate a machine that terminal-mac clone provisioned from a base.
+        (runner.machine / 'clone.json').write_text(clone_receipt)
     runner.cli = fake_cli
     runner.wait_result = synthetic_guest
     result = caught = None
@@ -352,21 +355,21 @@ class ClosedAdmissionTests(unittest.TestCase):
             top = Path(d)
             for sub in ('a', 'b', 'c'):
                 (top / sub).mkdir()
-            runner, result, caught, calls, machine_before = drive_closed_package(
-                top / 'a', {'name': 'pilot', 'network': False})
-            (runner.machine / 'clone.json').write_text(json.dumps(
-                {'schema': 'terminal-mac.clone/1', 'from': 'farol-base-1', 'to': 'pilot',
-                 'identitySha256': 'e' * 64, 'at': 1700000000}))
+            good = json.dumps({'schema': 'terminal-mac.clone/1', 'from': 'farol-base-1',
+                               'to': 'pilot', 'identitySha256': 'e' * 64, 'at': 1700000000})
+            # An ordinary (non-cloned) machine adds no instance key.
+            runner, result, caught, _, _ = drive_closed_package(top / 'a', {'name': 'pilot', 'network': False})
+            self.assertIsNone(caught)
+            self.assertNotIn('instance', result)
             runner2, result2, caught2, _, _ = drive_closed_package(
-                top / 'b', {'name': 'pilot', 'network': False})
+                top / 'b', {'name': 'pilot', 'network': False}, clone_receipt=good)
             self.assertIsNone(caught2)
             self.assertEqual(result2['instance']['clonedFrom'], 'farol-base-1')
             self.assertEqual(result2['instance']['instance'], 'pilot')
             self.assertEqual(set(result2), PACKAGE_RESULT_KEYS | {'networkPolicy', 'instance'})
             self.assertEqual(json.loads((runner2.out / 'result.json').read_text()), result2)
-            (runner.machine / 'clone.json').write_text('{not-json')
             runner3, _, caught3, _, _ = drive_closed_package(
-                top / 'c', {'name': 'pilot', 'network': False})
+                top / 'c', {'name': 'pilot', 'network': False}, clone_receipt='{not-json')
             self.assertIsNotNone(caught3)
             self.assertIn('INSTANCE_RECEIPT_INVALID', str(caught3))
 
