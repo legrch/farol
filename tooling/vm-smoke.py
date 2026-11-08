@@ -470,7 +470,11 @@ class Runner:
         self.phase('share-probe')
         self.phase('admit')
         self.quit_guest_app()
-        # Prove transport before exposing a credential to this inbox.
+        # Prove transport before exposing a credential to this inbox. The guest
+        # may already be stopped, so quit_guest_app() need not own an effect.
+        # Fence durably BEFORE export: a hard exit during staging must block
+        # later runs even when no import request was ever published.
+        self.begin_effect()
         export_dev_connection(self.stage, IDENTITY)
         require_host_dev_stopped(IDENTITY)
         self.phase('import-dev')
