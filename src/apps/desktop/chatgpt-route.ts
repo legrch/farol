@@ -535,7 +535,26 @@ export const toggleChatGptSidebarScript = `(() => {
 // only the whole Instant label, never a menu option or a Pro/Thinking label.
 // The selected control can prefix that label with its "Thinking effort" heading.
 export const instantModelLabelPattern =
-  /^(?:Thinking\s+effort\s+)?(?:(?:GPT[- ]?)?\d+(?:\.\d+)?\s+)?Instant$/iu;
+  /^(?:(?:Thinking\s+effort|Уровень\s+рассуждения)\s+)?(?:(?:GPT[- ]?)?\d+(?:\.\d+)?\s+)?Instant$/iu;
+
+// ChatGPT localizes accessibility labels and personalization controls. Keep
+// every fallback bound to a unique visible control; unknown layouts still
+// refuse the connection check before Send.
+const temporaryToggleLabels = [
+  "Turn off temporary chat",
+  "Отключить временный чат",
+  "Выключить временный чат",
+] as const;
+const personalizedLabels = ["Personalized", "С персонализацией"] as const;
+const unpersonalizedLabels = ["Unpersonalized", "Без персонализации"] as const;
+const selectedModelControlPredicate = `((button) => {
+  const label = (button.innerText || "").trim();
+  const aria = button.getAttribute("aria-label");
+  return aria === "Select ChatGPT model" || aria === "Выбрать модель ChatGPT" ||
+    button.getAttribute("data-testid") === "model-switcher-dropdown-button" ||
+    (button.getAttribute("aria-haspopup") === "menu" &&
+      /^(?:(?:Thinking\\s+effort|Уровень\\s+рассуждения)\\s+)?(?:(?:GPT[- ]?)?\\d+(?:\\.\\d+)?\\s+)?(?:Instant|Thinking|Medium|High|Extra High|Pro(?: Standard| Extended)?)$/iu.test(label));
+})`;
 
 export const temporaryInstantProfileProbe = `(() => {
   const visible = (element) => {
@@ -554,12 +573,13 @@ export const temporaryInstantProfileProbe = `(() => {
     : composer?.textContent || "";
   const controls = [...document.querySelectorAll("button")].filter(visible);
   const temporary = new URL(location.href).searchParams.get("temporary-chat") === "true" &&
-    controls.some((button) => button.getAttribute("aria-label") === "Turn off temporary chat");
-  const personalized = controls.some((button) => /^Personalized$/u.test((button.textContent || "").trim()));
+    controls.some((button) => ${JSON.stringify(temporaryToggleLabels)}.includes(button.getAttribute("aria-label")));
+  const personalized = controls.some((button) =>
+    ${JSON.stringify(personalizedLabels)}.includes((button.textContent || "").trim()));
   const personalizationReady = controls.some((button) =>
-    /^(Personalized|Unpersonalized)$/u.test((button.textContent || "").trim()));
+    ${JSON.stringify([...personalizedLabels, ...unpersonalizedLabels])}.includes((button.textContent || "").trim()));
   const modelButtons = controls.filter((button) =>
-    button.getAttribute("aria-label") === "Select ChatGPT model");
+    ${selectedModelControlPredicate}(button));
   const modelButton = modelButtons[0];
   const modelReady = modelButtons.length === 1 && !modelButton.disabled && modelButton.getAttribute("aria-disabled") !== "true";
   const instant = modelReady && new RegExp(${JSON.stringify(instantModelLabelPattern.source)}, "iu").test((modelButton.innerText || "").trim());
@@ -569,7 +589,7 @@ export const temporaryInstantProfileProbe = `(() => {
   const label = (modelButton?.innerText || "").trim();
   const visibleModelLabel = label.length <= 80 &&
     /(?:Instant|Thinking|Pro|Auto)/u.test(label) &&
-    /^(?:(?:ChatGPT|GPT|Instant|Thinking|effort|Pro|Auto|Fast)|[0-9.\\s\\p{Cf} -])+$/u.test(label) ? label : null;
+    /^(?:(?:ChatGPT|GPT|Instant|Thinking|effort|Уровень|рассуждения|Pro|Auto|Fast)|[0-9.\\s\\p{Cf} -])+$/u.test(label) ? label : null;
   return { composerReady: !!composer, draftPresent: draft.trim().length > 0,
     temporary, personalized, personalizationReady, instant: !!instant, modelReady: !!modelReady, visibleModelLabel,
     modelControlCount: Math.min(modelButtons.length, 100),
@@ -586,27 +606,28 @@ export const openInstantPowerPickerScript = `(() => {
     return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
   };
   const buttons = [...document.querySelectorAll("button")].filter((button) =>
-    button.getAttribute("aria-label") === "Select ChatGPT model" && visible(button));
+    ${selectedModelControlPredicate}(button) && visible(button));
   if (buttons.length !== 1 || buttons[0].disabled || buttons[0].getAttribute("aria-disabled") === "true") return false;
   buttons[0].click();
   return true;
 })()`;
 
 export const openTemporaryPersonalizationScript = `(() => {
-  const button = [...document.querySelectorAll("button")].find((candidate) =>
-    (candidate.textContent || "").trim() === "Unpersonalized" &&
+  const buttons = [...document.querySelectorAll("button")].filter((candidate) =>
+    ${JSON.stringify(unpersonalizedLabels)}.includes((candidate.textContent || "").trim()) &&
     candidate.getClientRects().length > 0 && !candidate.disabled);
-  if (!button) return false;
-  button.click();
+  if (buttons.length !== 1) return false;
+  buttons[0].click();
   return true;
 })()`;
 
 export const selectTemporaryPersonalizationScript = `(() => {
-  const option = [...document.querySelectorAll('[role="menuitemradio"],[role="menuitem"],[role="option"]')]
-    .find((candidate) => /^Personalized\\b/u.test((candidate.textContent || "").trim()) &&
+  const options = [...document.querySelectorAll('[role="menuitemradio"],[role="menuitem"],[role="option"]')]
+    .filter((candidate) => ${JSON.stringify(personalizedLabels)}.some((label) =>
+      (candidate.textContent || "").trim().startsWith(label)) &&
       candidate.getClientRects().length > 0);
-  if (!option) return false;
-  option.click();
+  if (options.length !== 1) return false;
+  options[0].click();
   return true;
 })()`;
 
@@ -1085,7 +1106,7 @@ export function installManualAppGateScript(appName: string): string {
       if (!(target instanceof Element)) return;
       const button = target.closest("button");
       const form = button?.closest("form");
-      const knownSend = target.closest('[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label="Send message"],button[aria-label="Send"]');
+      const knownSend = target.closest('[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label="Send message"],button[aria-label="Send"],button[aria-label="Отправить"],button[aria-label="Отправить сообщение"]');
       const knownCancel = target.closest('[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]');
       const formComposer = form instanceof HTMLFormElement
         ? submissionComposerIn(form)
@@ -1180,9 +1201,9 @@ function manualDeepTestDraftGuard(
       .filter((element) => manualForm.contains(element) || element.form === manualForm) : [];
     const manualComposers = [...new Set(document.querySelectorAll('#prompt-textarea,[data-testid="prompt-textarea"],[contenteditable="true"][data-virtualkeyboard="true"]'))].filter(manualVisible);
     const manualAttachments = manualForm ? [...manualForm.querySelectorAll(
-      '[data-testid="attachment-preview"],[data-testid="composer-attachment"],[data-testid*="file-chip"],[data-testid*="attachment-chip"],[aria-label*="remove file" i],[aria-label*="remove attachment" i]'
+      '[data-testid="attachment-preview"],[data-testid="composer-attachment"],[data-testid*="file-chip"],[data-testid*="attachment-chip"],[aria-label*="remove file" i],[aria-label*="remove attachment" i],[aria-label*="удалить файл" i],[aria-label*="удалить вложение" i]'
     )].some(manualVisible) : true;
-    const manualAllowedLabels = new Set(['Add files', 'Add files and more', 'Select ChatGPT model', 'Dictate', 'Start Voice', 'Start voice mode', 'Start Voice Mode', 'Expand', 'Send prompt', 'Send message', 'Send']);
+    const manualAllowedLabels = new Set(['Add files', 'Add files and more', 'Select ChatGPT model', 'Dictate', 'Start Voice', 'Start voice mode', 'Start Voice Mode', 'Expand', 'Send prompt', 'Send message', 'Send', 'Добавить файлы', 'Добавить файлы и другое', 'Выбрать модель ChatGPT', 'Диктовка', 'Начать голосовой режим', 'Развернуть', 'Отправить', 'Отправить сообщение']);
     const manualControlSelector = 'button,[role="button"],input[type="button"],input[type="submit"]';
     const manualUnknownControls = manualForm ? [...new Set([
       ...manualForm.querySelectorAll(manualControlSelector),
@@ -1341,12 +1362,13 @@ export function activateTaskScript(
       requireTemporaryInstant
         ? `if (new URL(location.href).searchParams.get("temporary-chat") !== "true" ||
       ![...document.querySelectorAll("button")].some((button) =>
-        button.getAttribute("aria-label") === "Turn off temporary chat" && button.getClientRects().length > 0) ||
+        ${JSON.stringify(temporaryToggleLabels)}.includes(button.getAttribute("aria-label")) && button.getClientRects().length > 0) ||
       ![...document.querySelectorAll("button")].some((button) =>
-        (button.textContent || "").trim() === "Personalized" && button.getClientRects().length > 0) ||
-      ![...document.querySelectorAll("button")].some((button) =>
-        button.getAttribute("aria-label") === "Select ChatGPT model" &&
-        new RegExp(${JSON.stringify(instantModelLabelPattern.source)}, "iu").test((button.innerText || "").trim()) && button.getClientRects().length > 0))
+        ${JSON.stringify(personalizedLabels)}.includes((button.textContent || "").trim()) && button.getClientRects().length > 0) ||
+      ((models) => models.length !== 1 ||
+        !new RegExp(${JSON.stringify(instantModelLabelPattern.source)}, "iu").test((models[0].innerText || "").trim()))(
+        [...document.querySelectorAll("button")].filter((button) =>
+          ${selectedModelControlPredicate}(button) && button.getClientRects().length > 0)))
       return { profileLost: true };`
         : ""
     }
@@ -1354,10 +1376,11 @@ export function activateTaskScript(
       requireOrdinaryInstant
         ? `if (new URL(location.href).searchParams.has("temporary-chat") ||
       [...document.querySelectorAll("button")].some((button) =>
-        button.getAttribute("aria-label") === "Turn off temporary chat" && button.getClientRects().length > 0) ||
-      ![...document.querySelectorAll("button")].some((button) =>
-        button.getAttribute("aria-label") === "Select ChatGPT model" &&
-        new RegExp(${JSON.stringify(instantModelLabelPattern.source)}, "iu").test((button.innerText || "").trim()) && button.getClientRects().length > 0))
+        ${JSON.stringify(temporaryToggleLabels)}.includes(button.getAttribute("aria-label")) && button.getClientRects().length > 0) ||
+      ((models) => models.length !== 1 ||
+        !new RegExp(${JSON.stringify(instantModelLabelPattern.source)}, "iu").test((models[0].innerText || "").trim()))(
+        [...document.querySelectorAll("button")].filter((button) =>
+          ${selectedModelControlPredicate}(button) && button.getClientRects().length > 0)))
       return { profileLost: true };`
         : ""
     }
@@ -1374,7 +1397,9 @@ export function activateTaskScript(
       document.querySelector('[data-testid="send-button"]'),
       document.querySelector('button[aria-label="Send prompt"]'),
       document.querySelector('button[aria-label="Send message"]'),
-      document.querySelector('button[aria-label="Send"]')
+      document.querySelector('button[aria-label="Send"]'),
+      document.querySelector('button[aria-label="Отправить"]'),
+      document.querySelector('button[aria-label="Отправить сообщение"]')
     ].find((element) => visible(element) && element instanceof HTMLButtonElement && !element.disabled);
     if (!(send instanceof HTMLButtonElement)) return { activated: false };
     ${manualDeepTestPrompt !== undefined && requiredAppName ? "if (send.form !== manualForm) return { draftPresent: true };" : ""}

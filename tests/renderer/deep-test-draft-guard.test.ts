@@ -102,6 +102,35 @@ it("sends only the unchanged manual prompt with a recognized empty composer", ()
   expect(click).toHaveBeenCalledOnce();
 });
 
+it("accepts a Russian composer scaffold while keeping the draft and attachment fences", () => {
+  document.body.innerHTML = `<form><span data-testid="composer-app-chip" aria-label="Farol"></span><textarea id="prompt-textarea"></textarea><input type="file"><button type="button" aria-label="Добавить файлы"></button><button type="button" aria-label="Выбрать модель ChatGPT"></button><button type="button" aria-label="Отправить сообщение"></button></form>`;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+    width: 100,
+    height: 20,
+  } as DOMRect);
+  const text = document.querySelector<HTMLTextAreaElement>("textarea")!;
+  const send = document.querySelector<HTMLButtonElement>(
+    '[aria-label="Отправить сообщение"]',
+  )!;
+  const click = vi.spyOn(send, "click");
+  text.value = "check";
+  expect(
+    window.eval(
+      activateTaskScript(location.href, "Farol", false, false, "check"),
+    ),
+  ).toEqual({ activated: true });
+  expect(click).toHaveBeenCalledOnce();
+  const preview = document.createElement("div");
+  preview.setAttribute("aria-label", "Удалить вложение");
+  document.querySelector("form")!.append(preview);
+  expect(
+    window.eval(
+      activateTaskScript(location.href, "Farol", false, false, "check"),
+    ),
+  ).toEqual({ draftPresent: true });
+  expect(click).toHaveBeenCalledOnce();
+});
+
 it("refuses an unrecognized composer or an unknown visible control", () => {
   const { text, file, click } = composer();
   text.value = "check";

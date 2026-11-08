@@ -868,6 +868,103 @@ describe("temporary Instant connector profile", () => {
     }
   });
 
+  it("recognizes Russian temporary controls and rechecks them before one Send", () => {
+    let sends = 0;
+    class HTMLElement {
+      disabled = false;
+      constructor(
+        readonly textContent = "",
+        readonly innerText = textContent,
+        readonly attributes: Record<string, string> = {},
+      ) {}
+      getAttribute(name: string) {
+        return this.attributes[name] ?? null;
+      }
+      getBoundingClientRect() {
+        return { width: 100, height: 32 };
+      }
+      getClientRects() {
+        return [1];
+      }
+      click() {
+        sends++;
+      }
+    }
+    class HTMLTextAreaElement extends HTMLElement {
+      value = "";
+    }
+    class HTMLButtonElement extends HTMLElement {}
+    const composer = new HTMLTextAreaElement();
+    const send = new HTMLButtonElement();
+    const temporaryToggle = new HTMLButtonElement("", "", {
+      "aria-label": "Отключить временный чат",
+    });
+    const personalized = new HTMLButtonElement("С персонализацией");
+    const model = new HTMLButtonElement("6 Instant", "6 Instant", {
+      "aria-haspopup": "menu",
+    });
+    const controls = [temporaryToggle, personalized, model];
+    const context = {
+      document: {
+        querySelector: (selector: string) =>
+          selector === "#prompt-textarea" ? composer : send,
+        querySelectorAll: () => controls,
+      },
+      getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+      location: { href: "https://chatgpt.com/?temporary-chat=true" },
+      HTMLElement,
+      HTMLTextAreaElement,
+      HTMLButtonElement,
+      URL,
+    };
+    expect(
+      vm.runInNewContext(temporaryInstantProfileProbe, context),
+    ).toMatchObject({
+      temporary: true,
+      personalized: true,
+      personalizationReady: true,
+      instant: true,
+      modelReady: true,
+    });
+    expect(
+      vm.runInNewContext(
+        activateTaskScript(context.location.href, undefined, true, false),
+        context,
+      ),
+    ).toEqual({ activated: true });
+    expect(sends).toBe(1);
+    controls[1] = new HTMLButtonElement("Без персонализации");
+    expect(
+      vm.runInNewContext(temporaryInstantProfileProbe, context),
+    ).toMatchObject({
+      personalized: false,
+      personalizationReady: true,
+    });
+    expect(
+      vm.runInNewContext(
+        activateTaskScript(context.location.href, undefined, true, false),
+        context,
+      ),
+    ).toEqual({ profileLost: true });
+    expect(sends).toBe(1);
+    controls[1] = personalized;
+    controls.push(
+      new HTMLButtonElement("Pro", "Pro", { "aria-haspopup": "menu" }),
+    );
+    expect(
+      vm.runInNewContext(temporaryInstantProfileProbe, context),
+    ).toMatchObject({
+      modelReady: false,
+    });
+    expect(
+      vm.runInNewContext(
+        activateTaskScript(context.location.href, undefined, true, false),
+        context,
+      ),
+    ).toEqual({ profileLost: true });
+    expect(sends).toBe(1);
+  });
+
   it.each(["https://chatgpt.com/?temporary-chat=true", "https://chatgpt.com/"])(
     "ordinary Instant refuses a temporary or unconfirmed model before Send (%s)",
     (href) => {
