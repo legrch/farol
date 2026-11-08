@@ -1,9 +1,15 @@
 {
   "terminal_mac": "~/Applications/TerminalMac.app/Contents/MacOS/terminal-mac",
   "vm_home": "~/Library/Application Support/terminal-mac",
-  "vm": "pilot",
+  "vm": "farol",
   "bootstrap": "finder",
-  "terminal_point": [62, 765],
-  "menu_point": [1058, 12],
+  "terminal_point": [
+    62,
+    765
+  ],
+  "menu_point": [
+    1058,
+    12
+  ],
   "timeout": 180
 }

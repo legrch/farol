@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "name": "pilot",
+  "name": "farol",
   "cpu": 4,
   "memoryGiB": 4,
   "diskGiB": 64,

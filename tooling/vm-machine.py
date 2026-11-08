@@ -72,7 +72,7 @@ def infrastructure(home=None):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--plan', action='store_true')
-    p.add_argument('--spec', default=str(Path(__file__).parents[1] / 'config/vm/pilot.json'))
+    p.add_argument('--spec', default=str(Path(__file__).parents[1] / 'config/vm/farol.json'))
     p.add_argument('--ipsw')
     a = p.parse_args()
     spec = json.loads(Path(a.spec).read_text())
