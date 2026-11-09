@@ -164,10 +164,7 @@ function fixture() {
   const verify = vm.runInContext(
     stripTypeScriptTypes(`${functions}\nverifySecureMcpApp;`),
     context,
-  ) as (
-    scope?: typeof expected,
-    automatic?: typeof expected,
-  ) => Promise<{ ok: false; error: string }>;
+  ) as (scope?: typeof expected) => Promise<{ ok: false; error: string }>;
   return {
     expected,
     settings,
@@ -226,14 +223,14 @@ describe("actual separate-check desktop admission", () => {
     expect(check).toHaveBeenCalledTimes(1);
   });
 
-  it("runs an automatic fresh check by navigating the retained browser", async () => {
+  it("runs an explicit fresh check by navigating the retained browser", async () => {
     const f = fixture();
     f.context.connectorConnection.sample.mockImplementation(async () => {
       expect(f.context.connectorTaskAdmission).toBe(false);
     });
     f.settings.setup.connect.outcomeUnknown = false;
     f.settings.connectors.secureMcp.appVerificationPending = false;
-    expect(await f.verify(undefined, f.expected)).toMatchObject({
+    expect(await f.verify()).toMatchObject({
       error: "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN",
     });
     expect(f.createRoute).not.toHaveBeenCalled();
@@ -255,7 +252,7 @@ describe("actual separate-check desktop admission", () => {
       .mockResolvedValue(undefined);
     f.settings.setup.connect.outcomeUnknown = false;
     f.settings.connectors.secureMcp.appVerificationPending = false;
-    await f.verify(undefined, f.expected);
+    await f.verify();
     expect(f.context.connectorConnection.sample).toHaveBeenCalledTimes(1);
     expect(f.context.connectorTaskAdmission).toBe(false);
     finishPrevious();
@@ -264,12 +261,12 @@ describe("actual separate-check desktop admission", () => {
     expect(f.context.connectorConnection.sample).toHaveBeenCalledTimes(2);
   });
 
-  it("does not dispatch an automatic check after its captured lifetime changes", async () => {
+  it("does not dispatch an explicit check after its challenge lifetime changes", async () => {
     const f = fixture();
     f.settings.setup.connect.outcomeUnknown = false;
     f.settings.connectors.secureMcp.runtime!.runtimeGeneration = "f".repeat(64);
-    expect(await f.verify(undefined, f.expected)).toMatchObject({
-      error: "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
+    expect(await f.verify()).toMatchObject({
+      error: "CONNECTOR_APP_VERIFICATION_NOT_READY",
     });
     expect(f.createRoute).not.toHaveBeenCalled();
     expect(f.send).not.toHaveBeenCalled();

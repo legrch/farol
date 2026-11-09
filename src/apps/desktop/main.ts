@@ -547,8 +547,6 @@ import {
 import {
   createUpdateAbortConnectorRecovery,
   resumeComputerConnector,
-  resumedConnectorCheck,
-  type ResumedConnectorCheck,
 } from "./connector-resume-policy";
 import { identityBoundWorkspaces } from "./identity-bound-workspaces";
 import { AuthorityTransitionReservation } from "./authority-transition";
@@ -5807,11 +5805,10 @@ async function checkSecureMcpAttachment(
   }
 }
 
-// A manual check or one admitted restart check owns one retained browser document.
+// An explicit owner check owns one retained browser document.
 // Only its exact Computer MCP receipt can complete the attachment.
 async function verifySecureMcpApp(
   separate?: SeparateAppVerificationScope,
-  automatic?: ResumedConnectorCheck,
 ): Promise<ProductConfigurationResult> {
   if (!embeddedBrowserEnabled()) {
     return configurationFailure("CONNECTOR_APP_VERIFICATION_UNAVAILABLE");
@@ -5839,11 +5836,6 @@ async function verifySecureMcpApp(
     if (snapshot.status !== "ready")
       return configurationFailure("SETTINGS_UNAVAILABLE");
     const settings = snapshot.settings;
-    if (
-      automatic &&
-      (separate || !connectorAppBindingCurrent(settings, automatic))
-    )
-      return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
     const connector = settings.connectors.secureMcp;
     const runtime = connector.runtime;
     const challenge = connector.challenge;
@@ -5861,7 +5853,7 @@ async function verifySecureMcpApp(
         : null;
     const proofScope = existing ?? challenge;
     if (
-      (!automatic && !chatGptTaskAdmissionReady()) ||
+      !chatGptTaskAdmissionReady() ||
       quitInProgress ||
       installedUpdateAdmission ||
       !secureMcpConnectorRuntime.isRunning() ||
@@ -6044,28 +6036,6 @@ async function verifySecureMcpApp(
       );
       return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
     }
-    if (automatic) {
-      const latest = configuration.snapshot();
-      if (
-        quitInProgress ||
-        installedUpdateAdmission ||
-        desktopGoCore !== verificationCore ||
-        latest.status !== "ready" ||
-        !connectorAppBindingCurrent(latest.settings, automatic)
-      )
-        return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
-      const signedIn = await configuration.recordChatGptObservation(
-        {
-          state: "authenticated",
-          profile: "chatgpt.app-partition/1",
-          runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
-          buildId: buildIdentity.buildId,
-          protocol: "chatgpt-page-readiness/1",
-        },
-        true,
-      );
-      if (!signedIn.ok) return ProductConfigurationResultSchema.parse(signedIn);
-    }
     const prompt =
       statusCheckId !== null
         ? `Use the selected ${appName} app to call computer_connection_status once. Do not read files or run commands. Reply briefly with the result.`
@@ -6126,7 +6096,6 @@ async function verifySecureMcpApp(
             desktopGoCore !== verificationCore ||
             admitted.status !== "ready" ||
             expectedBinding === null ||
-            (automatic && admitted.settings.setup.chatgpt.outcomeUnknown) ||
             (separateAttempt &&
               !separateAppVerificationScopeCurrent(
                 admitted.settings,
@@ -13830,37 +13799,8 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         if (!quitInProgress && window && !window.isDestroyed())
           window.webContents.send(channels.configurationChanged);
         startConnectorTransportWatch();
-        const check =
-          status === "started" && !quitInProgress && !installedUpdateAdmission
-            ? resumedConnectorCheck(
-                beforeConnectorResume,
-                configuration!.snapshot(),
-                buildIdentity.buildId,
-              )
-            : null;
-        if (check) {
-          // Startup has one continuation only. Durable challenge claims and the
-          // ordinary admissions still forbid a second Send after UNKNOWN.
-          return observeOperation(
-            operationsStore(),
-            {
-              source: "Setup",
-              kind: "connector.verify-app",
-              target: { workspace: check.workspaceId ?? undefined },
-            },
-            () => verifySecureMcpApp(undefined, check),
-          ).then(
-            () => {
-              if (!quitInProgress && window && !window.isDestroyed())
-                window.webContents.send(channels.configurationChanged);
-            },
-            () => {
-              console.warn(
-                "Automatic connection check did not finish; its original result is retained in Activity.",
-              );
-            },
-          );
-        }
+        // Restore only the local connection. ChatGPT verification sends are
+        // explicit owner actions; a routine restart never repeats onboarding.
         return undefined;
       },
       () => {
