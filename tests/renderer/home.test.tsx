@@ -556,6 +556,30 @@ function restoredSetup() {
   return { value, settings, connector };
 }
 
+it.each(["fresh", "expired"])(
+  "shows attention for an unretained unknown action with %s transport",
+  async (transport) => {
+    const restored = restoredSetup();
+    const value = {
+      ...restored.value,
+      connectionStatus: {
+        ...restored.value.connectionStatus!,
+        validUntilMillis: Date.now() + (transport === "fresh" ? 30_000 : -1),
+      },
+    };
+    const h = await mount(value);
+    const snapshot = { ...h.c.getSnapshot(), ...value };
+    const local = [
+      { id: "setup:unretained", state: "unknown" as const, code: null },
+    ];
+    expect(connectionPresentation(snapshot, local)).toMatchObject({
+      connected: false,
+      savedSetupReady: false,
+      attention: true,
+    });
+  },
+);
+
 it.each(["runtime restart", "new build"])(
   "keeps saved ChatGPT setup calm after %s without granting current attachment",
   async (scenario) => {

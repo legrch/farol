@@ -2,6 +2,7 @@ import type { Intent, WindowSnapshot } from "../../../src/ui/renderer/contract";
 import { computerSetup } from "../../../src/ui/renderer/computer-setup";
 import { connectorVerificationInFlight } from "../../../src/ui/renderer/setup-gate";
 import { selectedConnectorApp } from "../../../src/pkg/product-settings/connector-app-selection";
+import { dependencyFences } from "../../../src/ui/renderer/command-eligibility";
 
 /** Presentation only. Current work and the last confirmed result stay distinct. */
 export function connectionPresentation(
@@ -48,6 +49,7 @@ export function connectionPresentation(
     !checking &&
     !transportNeedsAttention &&
     computer.localConnectionCurrent &&
+    !dependencyFences(snapshot, "computer", local).unknown &&
     setupRemembered;
   const recentTransport =
     snapshot.connectionStatus?.state === "recent_transport" &&
