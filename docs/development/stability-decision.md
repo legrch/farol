@@ -116,3 +116,56 @@ full CI, native/package qualification, installed connection and update witnesses
 and the repository's integration/publication decisions remain separate gates.
 The first useful implementation checkpoint is the explicit-check regression and
 smallest custody-preserving routing slice, not a general orchestration rewrite.
+
+## Decision feasibility references and bounded native evidence
+
+The desired reboot behavior above is an acceptance objective, not an executed
+reboot claim. This decision selects a design for implementation; production
+activation still depends on the separate qualification gates.
+
+Primary platform references:
+
+- [Apple getattrlist manual](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/getattrlist.2.html): persistent object-ID semantics across unmount/mount, creation time, returned attributes and capability validity. Its older object-ID examples do not replace modern 64-bit attributes.
+- [Apple XNU attribute definitions](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/attr.h): `VOL_CAP_FMT_64BIT_OBJECT_IDS` requires `ATTR_CMN_FILEID`/`ATTR_CMN_PARENTID`; `ATTR_VOL_UUID` and returned-attribute bits supply the other measurement inputs.
+- [Apple stat manual](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/stat.2.html): current device/inode and native birth-time fields. A device ID is not a machine identity or persistent consent record.
+
+Source-bound experimental measurement already exists as an unapplied proposal,
+not production authority. Its archive SHA256 is
+`7cdc71abc39e6c633562203c1881cb8890c7078bc906f65ae32db0bcb33d247a`.
+The current task retains it at
+`_output/evidence/workspace-root-pro-a91048f3/` with per-file hashes and
+`HOST-VERIFICATION.json`. The native adapter requests descriptor-bound attributes,
+checks supported/valid capabilities and lossless decimal IDs, and leaves its
+comparison result non-authorizing.
+
+A new independent Go 1.26.2 darwin/arm64 probe ran those exact primitives:
+
+- Read-only measurement through the Data-volume `/Users/...` firmlink succeeded.
+- A disposable APFS image was genuinely detached and remounted after another
+  owned image occupied the released device slot. The current device ID changed;
+  volume UUID, directory file ID and birth time remained equal, as did the inode.
+- All exact owned images were confirmed detached, then removed with the compiled
+  probe and its cache. Initial command-argument and fixture-permission failures
+  remain recorded separately; they are not counted as successful remount tests.
+
+The bounded receipt is
+`_output/evidence/stability-handover-a91048f3/native-continuity/remount-receipt.json`,
+SHA256 `571a00af129e575e9981b8dd4a03278d467387b63c55385aefc6d69c0d6b1864`.
+The same directory retains the probe/script, firmlink observation, original failed
+setup receipts and `SUMMARY.json`. These are private current-task evidence, not
+required public runtime resources. They prove native readability and this actual
+remount case, not a real reboot, migration/publication, automatic rebinding or
+clone/restore protection. Those remain explicit later acceptance gates.
+
+The actual-button characterization mentioned above is named
+`STABILITY toolbar routes explicit verification without requiring an existing attachment`.
+It renders `ConnectionTestButton` with `toolbar=true`, saved setup, ChatGPT
+destination and `attachment=null`, verifies that the button is enabled, clicks
+it, and observes the unwanted `chatgpt.run-deep-test` command. The failing
+assertion requires this explicit check not to use that attachment-dependent route.
+Its exact case and RED output are retained in
+`_output/evidence/stability-handover-a91048f3/toolbar-routing-regression.txt` and
+`toolbar-routing-red.log`; the original renderer suite has 16 passing cases.
+The separate extracted-backend refusal is a characterization of the guard that
+must remain, not a request to remove it. These scripted-host tests establish
+routing/preconditions only; no provider request or installed operation occurred.
