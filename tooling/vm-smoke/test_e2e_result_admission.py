@@ -235,12 +235,13 @@ class E2EResultAdmissionTests(unittest.TestCase):
         # The existing vm:test Python discovery reaches these new Node leaves.
         # The entrypoint suite replaces HTTP, TCP and DNS with in-memory doubles.
         root = Path(__file__).parents[2]
-        child = subprocess.run([NODE, '--experimental-vm-modules', '--test',
+        child = subprocess.run([NODE, '--experimental-vm-modules', '--test', '--test-reporter=tap',
                                 'tooling/vm-e2e/result-contract.test.mjs',
                                 'tooling/vm-e2e/driver-entries.synthetic.test.mjs'],
                                cwd=root, capture_output=True, text=True, timeout=20,
                                env={'PATH': os.environ.get('PATH', ''), 'NODE_NO_WARNINGS': '1'})
         self.assertEqual(child.returncode, 0, child.stdout + child.stderr)
+        self.assertRegex(child.stdout, r'(?m)^# tests [1-9]\d*$')
         self.assertIn('# fail 0', child.stdout)
 
     def test_reported_is_diagnostic_even_when_it_observes_connectivity(self):
