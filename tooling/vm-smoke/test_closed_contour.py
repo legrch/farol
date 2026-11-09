@@ -101,7 +101,8 @@ def write_machine_json(machine, machine_json):
 
 
 def drive_closed_package(root, machine_json, closed=True, driver=False, clone_receipt=None,
-                         guest_hook=None, execute=None):
+                         guest_hook=None, execute=None, initial_vm_state='stopped', start_state='running',
+                         boot_config=None):
     """One synthetic package run: --artifact admission, a recording fake CLI
     and a synthetic guest that ACKs every phase with result files. With
     driver=True the run carries a --e2e-driver payload and the synthetic
@@ -131,9 +132,11 @@ def drive_closed_package(root, machine_json, closed=True, driver=False, clone_re
         argv = [str(a) for a in args]
         calls.append(argv)
         if argv[0] == 'status':
-            return {'name': 'pilot', 'state': 'stopped'}
+            return {'name': 'pilot', 'state': initial_vm_state}
         if argv[0] == 'start':
-            return {'name': 'pilot', 'state': 'running'}
+            if boot_config is not None:
+                write_machine_json(machine, boot_config)
+            return {'name': 'pilot', 'state': start_state}
         if argv[0] in ('show', 'hide'):
             return {}
         if argv[0] == 'action':
@@ -289,7 +292,8 @@ class ClosedAdmissionTests(unittest.TestCase):
                     runner.admit_closed()
 
     def test_admit_closed_refuses_an_invalid_machine_file(self):
-        for case in ('absent', 'not-json', 'array', 'symlink', 'oversized', 'directory'):
+        for case in ('absent', 'not-json', 'array', 'symlink', 'hardlink', 'fifo',
+                     'oversized', 'directory', 'duplicate-network', 'wrong-name'):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as d:
                 runner = self.admit_runner(Path(d))
                 file = runner.machine / 'machine.json'
@@ -301,10 +305,20 @@ class ClosedAdmissionTests(unittest.TestCase):
                     real = Path(d) / 'real-machine.json'
                     real.write_text('{"network": false}')
                     file.symlink_to(real)
+                elif case == 'hardlink':
+                    real = Path(d) / 'real-machine.json'
+                    real.write_text('{"name":"pilot","network":false}')
+                    os.link(real, file)
+                elif case == 'fifo':
+                    os.mkfifo(file)
                 elif case == 'oversized':
                     file.write_text('{"network": false, "pad": "' + 'x' * 70000 + '"}')
                 elif case == 'directory':
                     file.mkdir()
+                elif case == 'duplicate-network':
+                    file.write_text('{"name":"pilot","network":true,"network":false}')
+                elif case == 'wrong-name':
+                    file.write_text('{"name":"other","network":false}')
                 with self.assertRaisesRegex(vm.Refused, 'VM_MACHINE_FILE_INVALID'):
                     runner.admit_closed()
 
@@ -325,6 +339,33 @@ class ClosedAdmissionTests(unittest.TestCase):
                 self.assertFalse((runner.machine / 'input-lease.json').exists(),
                                  'a refused closed run must not acquire the input lease')
                 self.assertFalse((runner.machine / 'exchange' / '.input-lease.json').exists())
+
+    def test_closed_run_refuses_an_existing_or_racing_vm_before_guest_actions(self):
+        # The disk config may differ from the already-running VZ configuration.
+        # An already-running response to start is also a race, not our fresh boot.
+        for initial, start, expected in [('running', 'running', ['status']),
+                                         ('stopped', 'already-running', ['status', 'start'])]:
+            with self.subTest(initial=initial, start=start), tempfile.TemporaryDirectory() as d:
+                runner, result, caught, calls, _ = drive_closed_package(
+                    Path(d), {'name': 'pilot', 'network': False},
+                    initial_vm_state=initial, start_state=start)
+                self.assertIsNone(result)
+                self.assertRegex(str(caught), 'CLOSED_REQUIRES_FRESH_VM_BOOT')
+                self.assertEqual([call[0] for call in calls], expected)
+                self.assertIsNone(runner.pending)
+                self.assertFalse(runner.effect_file.exists())
+                self.assertFalse((runner.machine / 'input-lease.json').exists())
+
+    def test_closed_run_rechecks_config_after_start_before_guest_actions(self):
+        with tempfile.TemporaryDirectory() as d:
+            runner, result, caught, calls, _ = drive_closed_package(
+                Path(d), {'name': 'pilot', 'network': False},
+                boot_config={'name': 'pilot', 'network': True})
+            self.assertIsNone(result)
+            self.assertRegex(str(caught), 'CLOSED_REQUIRES_OFFLINE_MACHINE')
+            self.assertEqual([call[0] for call in calls], ['status', 'start'])
+            self.assertIsNone(runner.pending)
+            self.assertFalse(runner.effect_file.exists())
 
     def test_closed_package_run_records_network_policy_and_keeps_existing_keys(self):
         with tempfile.TemporaryDirectory() as d:

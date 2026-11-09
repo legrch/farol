@@ -91,23 +91,24 @@ the base contains none. A private provision config
 (`~/Library/Application Support/Farol Testing/vm-provision.json`) selects the tool binary so
 the clone can run from a development build before the next installed release.
 
-KNOWN PREREQUISITE (NEEDS_OWNER, once per base): the base does not have automatic login
-enabled, so a fresh clone boots to the login screen where the guest helper cannot run.
-Log in once in the BASE, enable System Settings → Users & Groups → Automatic login for
-`tester` (FileVault is off), shut the base down, and every later clone boots straight to a
-logged-in desktop with the helper answering. Clones made before this step inherit the same
-one-time login requirement.
+The base needs automatic login and a helper that starts in the `tester` session. Configure
+those once in the base, shut it down, then qualify a new clone's boot and helper permissions.
+Existing clones retain the state of the base when they were made. A helper timeout alone does
+not establish whether the guest is at login, whether automatic login is configured, or whether
+helper permissions are intact; inspect the guest before assigning a cause.
 
 ## The closed-contour run shape (machinery in place, first full run pending)
 
-The executor machinery is committed: `--closed` requires an offline machine and a local
-artifact (never a download), stages the vm-e2e driver payload with double digest
+The executor machinery is committed: `--closed` requires a stopped machine with offline
+configuration and a local artifact (never a download), stages the vm-e2e driver payload with double digest
 verification, runs the `e2e` phase in the guest (the serve loop re-verifies the staged
 digests before executing), and records the driver's durable `result.json` as the run's e2e
 receipt plus the instance provenance. Driver entries committed so far: the egress probe
 (documentation-reserved endpoints only) and the guest-local fixture probe (loopback fixture,
 fail-closed missing route). The first real closed run still needs a built release artifact
-and the autologin prerequisite above; nothing has claimed a closed-contour PASS.
+and the autologin prerequisite above; nothing has claimed a closed-contour PASS. A closed run
+refuses to adopt an already-running VM and rechecks its configuration after startup. These
+checks do not attest the live VZ network attachment; runtime isolation needs separate evidence.
 
 ## Honest status vocabulary
 

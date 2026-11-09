@@ -1198,13 +1198,27 @@ class Runner:
         """
         file = self.machine / 'machine.json'
         try:
-            info = file.lstat()
-            if not (stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and 0 < info.st_size <= 65536):
-                raise ValueError('machine-file-not-regular')
-            machine = json.loads(file.read_text())
+            fd = os.open(file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+            with os.fdopen(fd, 'rb') as source:
+                info = os.fstat(source.fileno())
+                if not (stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and 0 < info.st_size <= 65536):
+                    raise ValueError('machine-file-not-regular')
+                data = source.read(65537)
+                if len(data) != info.st_size:
+                    raise ValueError('machine-file-changed-while-reading')
+
+            def unique_object(pairs):
+                value = {}
+                for key, item in pairs:
+                    if key in value:
+                        raise ValueError('duplicate-machine-key')
+                    value[key] = item
+                return value
+
+            machine = json.loads(data, object_pairs_hook=unique_object)
         except (OSError, ValueError):
             raise Refused('VM_MACHINE_FILE_INVALID') from None
-        require(isinstance(machine, dict), 'VM_MACHINE_FILE_INVALID')
+        require(isinstance(machine, dict) and machine.get('name') == self.machine.name, 'VM_MACHINE_FILE_INVALID')
         require(machine.get('network') is False, 'CLOSED_REQUIRES_OFFLINE_MACHINE')
         return {'mode': 'guest-offline-local-fixtures', 'machineNetwork': False,
                 'receipt': 'machine.json-offline-verified'}
@@ -1227,14 +1241,24 @@ class Runner:
             self.acquire_input_lease()
             try:
                 status = self.cli('status', self.a.vm)
+                # A machine.json edited after a VM boot does not describe the
+                # running VZ configuration. Closed runs must start from stopped.
+                if getattr(self.a, 'closed', False):
+                    require(status.get('state') == 'stopped', 'CLOSED_REQUIRES_FRESH_VM_BOOT')
                 if status.get('state') == 'stopped':
                     self.pending = 'vm-start'
                     status = self.cli('start', self.a.vm)
                     self.pending = None
-                    self.log.append('vm-started')
                     if status.get('state') == 'already-running':
+                        require(not getattr(self.a, 'closed', False), 'CLOSED_REQUIRES_FRESH_VM_BOOT')
                         status = self.cli('status', self.a.vm)
+                    else:
+                        self.log.append('vm-started')
                 require(status.get('state') == 'running', 'VM_NOT_RUNNING')
+                if getattr(self.a, 'closed', False):
+                    # Catch configuration drift across boot before guest input;
+                    # this still does not attest the live VZ network attachment.
+                    require(self.admit_closed() == self.network_policy, 'CLOSED_NETWORK_CONFIG_CHANGED')
                 if self.a.visible:
                     # The deliberately shown window stays interactive for its holder.
                     self.cli('show', self.a.vm, '--owner', self.lease_owner)
