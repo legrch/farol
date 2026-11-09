@@ -114,7 +114,10 @@ it("does not acknowledge an ambiguous manual send", async () => {
   }
 });
 it.each([
-  ["refused", "Check sign-in and connection in Setup."],
+  [
+    "refused",
+    "This test was refused before Send because Farol could not confirm all current app, tunnel, runtime and Computer prerequisites. Setup can be complete while a current attachment is missing. Review the connection and original result in Activity; do not repeat an unresolved attempt.",
+  ],
   [
     "unknown",
     "The test has no confirmed result. Its original record stays in Activity.",
@@ -375,3 +378,118 @@ it("scoped unknown cannot release another writer fence", async () => {
     h.cleanup();
   }
 });
+
+it.each([
+  {
+    title:
+      "NOT_READY identifies missing current prerequisites, not a specific completed Setup step",
+    intentState: "refused" as const,
+    code: "CONNECTOR_APP_VERIFICATION_NOT_READY",
+    expected: "all current app, tunnel, runtime and Computer prerequisites",
+    forbidden: "Check sign-in and connection in Setup",
+  },
+  {
+    title: "signed-out current page reports a known pre-dispatch refusal",
+    intentState: "applied" as const,
+    code: "CHATGPT_SIGN_IN_REQUIRED",
+    expected: "current ChatGPT page needs sign-in",
+    forbidden: "Send requested",
+  },
+  {
+    title: "unrecognized page does not guess a model or app",
+    intentState: "applied" as const,
+    code: "CHATGPT_UI_UNRECOGNIZED",
+    expected: "without guessing an app or model",
+    forbidden: "Send requested",
+  },
+  {
+    title: "navigation before submit is not mistaken for Send",
+    intentState: "applied" as const,
+    code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+    expected: "navigated away before Send",
+    forbidden: "Send requested",
+  },
+  {
+    title: "known draft failure preserves the typed pre-submit remedy",
+    intentState: "applied" as const,
+    code: "CHATGPT_COMPOSER_DRAFT_PRESENT",
+    expected: "Your draft was preserved",
+    forbidden: "Send requested",
+  },
+  {
+    title:
+      "known app-selection conflict is not misreported as a successful Send",
+    intentState: "applied" as const,
+    code: "CHATGPT_APP_SELECTION_CONFLICT",
+    expected: "Message blocked before send",
+    forbidden: "Send requested",
+  },
+  {
+    title:
+      "unknown outcome with a pre-submit-looking code keeps original uncertainty",
+    intentState: "unknown" as const,
+    code: "CHATGPT_APP_SELECTION_CONFLICT",
+    expected: "Could not confirm whether the request was sent",
+    forbidden: "Message blocked before send",
+  },
+  {
+    title: "an applied but unclassified error is not presented as Send",
+    intentState: "applied" as const,
+    code: "CHATGPT_TASK_ERROR",
+    expected: "Send was not confirmed",
+    forbidden: "Send requested",
+  },
+  {
+    title: "unclassified refusal does not prove not-sent",
+    intentState: "refused" as const,
+    code: "CHATGPT_CONVERSATION_UNCONFIRMED",
+    expected: "does not prove whether Send occurred",
+    forbidden: "was not sent",
+  },
+])(
+  "manual diagnostic: $title",
+  async ({ intentState, code, expected, forbidden }) => {
+    const h = await setup();
+    h.set({
+      ...h.snapshot,
+      destination: { ...h.snapshot.destination, area: "chatgpt", taskId: "" },
+    });
+    h.configure.mockResolvedValue({ id: "check", state: intentState, code });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => {
+        root.render(
+          createElement(ConnectionTestButton, {
+            facade: h.facade,
+            toolbar: true,
+          }),
+        );
+      });
+      await act(async () => {
+        await runManualConnectionPrompt(h.facade);
+      });
+      const message = host.querySelector('[role="status"]')?.textContent ?? "";
+      expect(message).toContain(expected);
+      expect(message).not.toContain(forbidden);
+      expect(h.configure.mock.calls[0]![0].kind).toBe("chatgpt.run-deep-test");
+      expect(
+        h.configure.mock.calls.filter(
+          ([command]) =>
+            command.kind === "chatgpt.run-deep-test" ||
+            command.kind === "connector.repair" ||
+            command.kind === "connector.verify-app",
+        ),
+      ).toHaveLength(1);
+      // Applied host results may acknowledge delivery, but never retry Send.
+      expect(h.configure).toHaveBeenCalledTimes(
+        intentState === "applied" ? 2 : 1,
+      );
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      h.cleanup();
+    }
+  },
+);

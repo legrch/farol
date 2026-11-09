@@ -956,3 +956,114 @@ it.each(["", "a".repeat(64)])(
     expect(setupStepCheck(snapshot, "attachment").allowed).toBe(false);
   },
 );
+
+describe("workspace identity refusal takes precedence over stale green UI", () => {
+  it.each(["computer.verify-workspace", "computer.check-folder"])(
+    "%s blocks stale success and explains the bounded owner action",
+    async (command) => {
+      const h = await mount({ step: "folders" });
+      const snapshot = syntheticSnapshot(
+        h.c.getSnapshot(),
+        "folders",
+        "success-current",
+      );
+      const id = `settings:${command}:${workspaceId}`;
+      const result = setupStepCheck(
+        {
+          ...snapshot,
+          intents: {
+            [id]: { id, state: "refused", code: "WORKSPACE_ROOT_CHANGED" },
+          },
+        },
+        "folders",
+      );
+      expect(result.state).toBe("refused");
+      expect(result.allowed).toBe(false);
+      expect(result.cause).toContain("cannot confirm");
+      expect(result.cause).toContain("device number");
+      expect(result.action).toEqual({
+        kind: "guide",
+        label: "Review workspace approval",
+        destination: "setup-guide",
+      });
+    },
+  );
+
+  it("an unrelated, newer successful folder verification cannot clear the refusal", async () => {
+    const h = await mount({ step: "folders" });
+    const snapshot = syntheticSnapshot(
+      h.c.getSnapshot(),
+      "folders",
+      "success-current",
+    );
+    const id = `settings:computer.check-folder:${workspaceId}`;
+    const other = "settings:computer.verify-workspace:other-workspace";
+    const result = setupStepCheck(
+      {
+        ...snapshot,
+        intents: {
+          [id]: { id, state: "refused", code: "WORKSPACE_ROOT_CHANGED" },
+          [other]: { id: other, state: "applied", code: null },
+        },
+        setupCheckOrder: { [id]: 1, [other]: 2 },
+      },
+      "folders",
+    );
+    expect(result.state).toBe("refused");
+    expect(result.allowed).toBe(false);
+    expect(result.cause).toContain("Access remains blocked");
+  });
+
+  it("missing event order cannot clear root refusal on the same workspace", async () => {
+    const h = await mount({ step: "folders" });
+    const snapshot = syntheticSnapshot(
+      h.c.getSnapshot(),
+      "folders",
+      "success-current",
+    );
+    const id = `settings:computer.check-folder:${workspaceId}`;
+    const success = `settings:computer.verify-workspace:${workspaceId}`;
+    const result = setupStepCheck(
+      {
+        ...snapshot,
+        intents: {
+          [id]: { id, state: "refused", code: "WORKSPACE_ROOT_CHANGED" },
+          [success]: { id: success, state: "applied", code: null },
+        },
+      },
+      "folders",
+    );
+    expect(result.state).toBe("refused");
+    expect(result.allowed).toBe(false);
+  });
+
+  it.each(["unknown", "pending"] as const)(
+    "%s remains stronger than root-change recovery advice",
+    async (state) => {
+      const h = await mount({ step: "folders" });
+      const snapshot = syntheticSnapshot(
+        h.c.getSnapshot(),
+        "folders",
+        "success-current",
+      );
+      const id = `settings:computer.check-folder:${workspaceId}`;
+      const unrelatedId = "settings:computer.verify-workspace:unsettled";
+      const result = setupStepCheck(
+        {
+          ...snapshot,
+          intents: {
+            [id]: { id, state: "refused", code: "WORKSPACE_ROOT_CHANGED" },
+            [unrelatedId]: { id: unrelatedId, state, code: null },
+          },
+        },
+        "folders",
+      );
+      expect(result.state).toBe(state);
+      expect(result.allowed).toBe(false);
+      expect(result.action).toEqual({
+        kind: "refresh",
+        label: "Refresh status",
+      });
+    },
+  );
+});

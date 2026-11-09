@@ -172,10 +172,20 @@ and read back separately.
 - The app will not start and reports `SETTINGS_CORRUPT`: settings written by a newer
   build were kept byte for byte rather than silently rewritten by an older one. Go
   back to the newer build. Do not delete the settings file to make an older one start.
-- A workspace reports `WORKSPACE_ROOT_CHANGED` after an external volume was
-  reconnected: macOS gave it a new device number, so the folder no longer matches the
-  identity recorded when it was verified. Remove it in Computer and add it again;
-  `Verify` alone does not resolve this.
+- A workspace reports `WORKSPACE_ROOT_CHANGED`: Farol cannot establish that the
+  current folder is the one previously approved. A different folder or volume, or
+  a changed macOS device number, can cause this; the error alone does not identify
+  the cause. Access stays blocked. Changing login or connection keys and repeatedly
+  selecting `Verify` do not rebind this saved approval. Preserve unknown-outcome evidence and follow its original owner
+  recovery; preservation alone does not settle an operation or permit reapproval.
+  Stop tasks using that workspace and wait for its normal admission to allow
+  changes. For an explicitly approved replacement, note this workspace's permissions and exclusions, remove
+  **only its workspace record** in Computer, then choose the intended folder with
+  the native picker. Review Read & write, Commands, Git history and exclusions
+  before saving and verifying. This removes the approval record, not the folder.
+  Never delete the profile, settings, keys or all workspaces as a workaround.
+  Automatic same-volume remount recovery and legacy identity migration are **not**
+  implemented by this UI guidance.
 - A guarded edit reports that its outcome is unknown: the change may already be in the
   file. Farol neither repeats it nor deletes anything, and the version it could not
   confirm stays in a hidden `.farol-stage-*` folder beside the file to compare and

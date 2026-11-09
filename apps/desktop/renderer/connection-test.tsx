@@ -4,6 +4,7 @@ import { commandAllowed } from "../../../src/ui/renderer/command-eligibility";
 import { computerSetup } from "../../../src/ui/renderer/computer-setup";
 import { SeparateAppVerificationScopeSchema } from "../../../src/pkg/product-settings/contract";
 import { connectorWorkspaceSelection } from "../../../src/pkg/product-settings/connector-workspace-selection";
+import { chatGptPreSubmitRemedy } from "../../../src/ui/chatgpt-pre-submit-remedy";
 
 type State = Readonly<{
   phase: "idle" | "preparing" | "testing" | "done" | "refused" | "unknown";
@@ -23,32 +24,64 @@ function owner(facade: RendererFacade) {
   }
   return value;
 }
-const text = (state: State) =>
-  state.manual
-    ? state.phase === "preparing" || state.phase === "testing"
-      ? "Preparing connection test…"
-      : state.phase === "done"
-        ? "Send requested. View ChatGPT."
-        : state.phase === "unknown"
-          ? "Could not confirm whether the request was sent. Check this chat before starting a new test."
-          : state.phase === "refused"
-            ? "Connection test was not sent."
-            : ""
-    : state.phase === "preparing"
-      ? "Preparing a new connection test…"
-      : state.phase === "testing"
-        ? "Testing in a new temporary ChatGPT chat…"
-        : state.phase === "done"
-          ? "ChatGPT confirmed this connection."
-          : state.phase === "unknown"
-            ? "The test has no confirmed result. Its original record stays in Activity."
-            : state.code === "CHATGPT_COMPOSER_DRAFT_PRESENT"
-              ? "Finish or clear the current draft before testing. Nothing was sent."
-              : state.code === "CONNECTOR_APP_VERIFICATION_NOT_READY"
-                ? "Check sign-in and connection in Setup."
-                : state.phase === "refused"
-                  ? "The check didn’t finish. Review the connection in Setup."
-                  : "";
+/**
+ * These codes are pre-dispatch only in runManualDeepTest/runReadonlyTask with
+ * manualSubmissionOnly. Do not put them in the shared remedy: a read-only task
+ * observer can report some of the same codes *after* an earlier Send.
+ */
+function manualBeforeSendRemedy(code: string | null): string | null {
+  if (code === "CHATGPT_SIGN_IN_REQUIRED")
+    return "The current ChatGPT page needs sign-in. This manual check stopped before Send; review the original attempt in Activity.";
+  if (code === "CHATGPT_UI_UNRECOGNIZED")
+    return "Farol could not recognize the current ChatGPT controls before Send. Nothing was sent; inspect this page without guessing an app or model.";
+  if (code === "CHATGPT_PAGE_UNREACHABLE")
+    return "Farol could not reach the current ChatGPT page before Send. Nothing was sent; check the page and current connection status.";
+  if (code === "CHATGPT_COMPOSER_UNAVAILABLE")
+    return "Farol could not confirm a usable ChatGPT composer before Send. Nothing was sent; do not overwrite an existing draft.";
+  if (code === "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT")
+    return "ChatGPT navigated away before Send. Nothing was sent; inspect the current conversation before a new check.";
+  if (code === "CHATGPT_SUBMIT_UNAVAILABLE")
+    return "ChatGPT did not confirm an available Send action. This manual check stopped before Send; review Activity before another test.";
+  return chatGptPreSubmitRemedy(code);
+}
+
+/** Presentation only: an applied host result can still contain a typed
+ * failed-before-submit result. An unclassified code cannot prove Send or no Send.
+ */
+const text = (state: State) => {
+  const knownBeforeSend =
+    state.phase === "done" || state.phase === "refused"
+      ? state.manual
+        ? manualBeforeSendRemedy(state.code)
+        : chatGptPreSubmitRemedy(state.code)
+      : null;
+  if (state.manual) {
+    if (state.phase === "preparing" || state.phase === "testing")
+      return "Preparing connection test…";
+    if (state.phase === "unknown")
+      return "Could not confirm whether the request was sent. Review the original attempt in Activity and ChatGPT before another test.";
+    if (knownBeforeSend) return knownBeforeSend;
+    if (state.phase === "done")
+      return state.code === null
+        ? "Send requested. View ChatGPT; this is not yet connection verification."
+        : "The result was recorded, but Send was not confirmed. Review the original attempt in Activity before another test.";
+    if (state.phase === "refused")
+      return state.code === "CONNECTION_TEST_PREREQUISITES_REQUIRED"
+        ? "This view cannot start a connection test. No request was made. Review the current connection status."
+        : "The test was refused, but this status alone does not prove whether Send occurred. Review the original attempt in Activity before another test.";
+    return "";
+  }
+  if (state.phase === "preparing") return "Preparing a new connection test…";
+  if (state.phase === "testing")
+    return "Testing in a new temporary ChatGPT chat…";
+  if (state.phase === "done") return "ChatGPT confirmed this connection.";
+  if (state.phase === "unknown")
+    return "The test has no confirmed result. Its original record stays in Activity.";
+  if (knownBeforeSend) return knownBeforeSend;
+  if (state.phase === "refused")
+    return "The check was refused. Review its original result in Activity and the current connection status.";
+  return "";
+};
 
 export async function runManualConnectionPrompt(
   facade: RendererFacade,
