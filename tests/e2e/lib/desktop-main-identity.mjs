@@ -124,6 +124,51 @@ export function qualifyDesktopMain({
   };
 }
 
+// A shell may exec the packaged Go launcher without changing its lifetime.
+// Keep the original kernel birth and parent; admit only the established backend.
+export function qualifyGuardianAfterExec({
+  before,
+  after,
+  expectedExecutable,
+}) {
+  for (const observation of [before, after]) {
+    assert.ok(
+      Number.isSafeInteger(observation?.parentPid) &&
+        observation.parentPid >= 0 &&
+        typeof observation.startSeconds === "string" &&
+        /^\d+$/.test(observation.startSeconds) &&
+        typeof observation.startMicroseconds === "string" &&
+        /^\d+$/.test(observation.startMicroseconds),
+      "GUARDIAN_NATIVE_IDENTITY_INVALID",
+    );
+  }
+  assert.equal(
+    after.parentPid,
+    before.parentPid,
+    "GUARDIAN_NATIVE_LIFETIME_CHANGED",
+  );
+  assert.equal(
+    after.startSeconds,
+    before.startSeconds,
+    "GUARDIAN_NATIVE_LIFETIME_CHANGED",
+  );
+  assert.equal(
+    after.startMicroseconds,
+    before.startMicroseconds,
+    "GUARDIAN_NATIVE_LIFETIME_CHANGED",
+  );
+  assert.ok(
+    typeof expectedExecutable === "string" && expectedExecutable.length > 0,
+    "GUARDIAN_EXECUTABLE_INVALID",
+  );
+  assert.equal(
+    after.executable,
+    expectedExecutable,
+    "GUARDIAN_NATIVE_EXECUTABLE_MISMATCH",
+  );
+  return { ...after };
+}
+
 // Only the retained guardian stderr is admitted. This is its original native
 // Wait receipt for Electron, separate from the tester's guardian Wait.
 export function collectDesktopExit(stream) {

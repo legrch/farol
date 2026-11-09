@@ -57,6 +57,7 @@ import { readOwnedChildProcesses } from "../runtime-process.mjs";
 import {
   nativeExecutableWitness,
   qualifyDesktopMain,
+  qualifyGuardianAfterExec,
   collectDesktopExit,
   requireDesktopExit,
 } from "./desktop-main-identity.mjs";
@@ -1044,6 +1045,14 @@ async function startApp(candidate, home, fixture, report, owners, launch) {
         nativeExecutable: nativeExecutableWitness(desktop.pid),
       });
       owner.desktopNative = before;
+      owner.guardianNative = qualifyGuardianAfterExec({
+        before: owner.guardianNative,
+        after: nativeExecutableWitness(owner.child.pid),
+        expectedExecutable: path.join(
+          installed,
+          "Contents/Resources/app/farol-backend",
+        ),
+      });
       lifetime.desktopIdentity = owner.desktopIdentity;
       lifetime.startupMarker = startup.marker;
       break;

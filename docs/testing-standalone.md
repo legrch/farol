@@ -286,10 +286,13 @@ The actual source app is copied into the new home's `Applications/Farol.app`;
 the actual target is copied into one fresh operation's `staged.app` only after
 its slot binding has been confirmed. Internal
 symlinks and modes are preserved and complete tree digests are reverified.
-Hidden, unfocused source Electron starts directly with the proven E2E home and
-signed-out loopback fixture. Native home/userData/sessionData/app paths, actual
-PID/process start, boot identity, build and the real `running.json` must agree
-before updating. Empty task state is checked before declaring the test drain
+The packaged source app starts hidden and unfocused with the proven E2E home
+and signed-out loopback fixture. Its retained Go guardian launches Electron as
+its child. The controller qualifies Electron's kernel executable, parent PID
+and birth separately from the guardian, and uses that original desktop identity
+for renderer, Quit, helper predecessor and rollback inputs. Native
+home/userData/sessionData/app paths, actual desktop PID/process start, boot
+identity, build and the real `running.json` must agree before updating. Empty task state is checked before declaring the test drain
 reconciled. No account setup, provider call, profile copying, settings changes,
 user-agent/security workaround or global home-identity patch is part of this
 witness.
@@ -303,9 +306,12 @@ stage or advance to a live helper. The native Go publisher's guard stays strict.
 It then runs
 `run-live-release-helper` with the exact live request on fd3 and one bounded,
 strictly correlated ACK on fd4. Only `waiting_for_exit` permits one actual
-`app.quit()` request. The original child must close with code 0, a fresh parsed
-`last-quit.json` must say drained with no unconfirmed children, the running marker
-must disappear, and hidden-lifetime evidence must settle. Only then can the
+`app.quit()` request. The controller must observe the original guardian close
+with code 0 and its separately correlated, successful native Wait receipt for
+the original Electron process. Neither terminal observation substitutes for
+the other. A fresh parsed `last-quit.json` must say drained with no unconfirmed
+children, the running marker must disappear, and hidden-lifetime evidence must
+settle. Only then can the
 helper's original terminal plus the installed full-tree digest authorize the
 next lifetime.
 

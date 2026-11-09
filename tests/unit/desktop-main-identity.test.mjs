@@ -6,6 +6,7 @@ import {
   collectDesktopExit,
   requireDesktopExit,
   qualifyDesktopMain,
+  qualifyGuardianAfterExec,
 } from "../e2e/lib/desktop-main-identity.mjs";
 import {
   predecessorIdentity,
@@ -59,6 +60,43 @@ function original(guardianPid = 100, desktopPid = 101) {
           : null,
   };
 }
+
+describe("guardian executable establishment", () => {
+  const before = {
+    parentPid: 90,
+    startSeconds: "1",
+    startMicroseconds: "2",
+    executable: "/bin/sh",
+  };
+  const backend = { ...before, executable: "/candidate/farol-backend" };
+  const qualify = (after, early = before) =>
+    qualifyGuardianAfterExec({
+      before: early,
+      after,
+      expectedExecutable: backend.executable,
+    });
+  it("allows shell-to-Go exec under the original kernel lifetime", () => {
+    const stable = qualify(backend);
+    expect(stable).toEqual(backend);
+    expect(stable).not.toBe(backend);
+    expect(qualify(backend, backend)).toEqual(backend);
+  });
+  it.each([
+    { ...backend, parentPid: 91 },
+    { ...backend, startSeconds: "3" },
+    { ...backend, startMicroseconds: "4" },
+    before,
+    { ...backend, executable: "/foreign/farol-backend" },
+    { ...backend, startSeconds: undefined },
+    { ...backend, startMicroseconds: "" },
+    { ...backend, parentPid: null },
+  ])("refuses a different lifetime or an unestablished executable", (after) => {
+    expect(() => qualify(after)).toThrow();
+  });
+  it("refuses an incomplete original kernel identity", () => {
+    expect(() => qualify(backend, { executable: "/bin/sh" })).toThrow();
+  });
+});
 
 describe("packaged desktop lifetime admission", () => {
   it("retains actual guardian Wait separately from its original Electron Wait diagnostic", async () => {
