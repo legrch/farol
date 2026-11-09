@@ -672,7 +672,7 @@ class Runner:
     def prepare_stage(self):
         self.stage.mkdir(parents=True, exist_ok=False, mode=0o700)
         self.report.mkdir(parents=True, exist_ok=False, mode=0o700)
-        for name in ('guest.sh', 'inspect.js', 'no-tunnel.js', 'activate.js', 'import-dev.js', 'connection-proof.js', 'quit-proof.js'):
+        for name in ('guest.sh', 'inspect.js', 'no-tunnel.js', 'activate.js', 'import-dev.js', 'connection-proof.js', 'quit-proof.js', 'driver-manifest.js'):
             shutil.copyfile(Path(__file__).parent / 'vm-smoke' / name, self.stage / name)
         (self.stage / 'identity.json').write_text(json.dumps(IDENTITY))
         budget = int(self.deadline - time.monotonic())

@@ -142,12 +142,9 @@ case "$phase" in
     # receipt (durable-write protocol from driver-runtime).
     node_bin="$stage/node"
     bundle="$stage/driver.bundle.mjs"
-    manifest="$stage/driver.manifest.json"
-    [ -f "$node_bin" ] && [ -f "$bundle" ] && [ -f "$manifest" ]
-    [ ! -L "$node_bin" ] && [ ! -L "$bundle" ] && [ ! -L "$manifest" ]
-    read_field() { /usr/bin/osascript -l JavaScript -e 'ObjC.import("Foundation");function run(a){return JSON.parse($.NSString.stringWithContentsOfFileEncodingError(a[0],4,null).js)[a[1]];}' "$1" "$2"; }
-    [ "$(/usr/bin/shasum -a 256 "$bundle" | /usr/bin/cut -d ' ' -f 1)" = "$(read_field "$manifest" bundle_sha256)" ] || exit 78
-    [ "$(/usr/bin/shasum -a 256 "$node_bin" | /usr/bin/cut -d ' ' -f 1)" = "$(read_field "$manifest" node_sha256)" ] || exit 78
+    # Validate the canonical nested schema, fixed paths, file identities, sizes
+    # and SHA-256 with system tools before executing the staged runtime.
+    /usr/bin/osascript -l JavaScript "$stage/driver-manifest.js" "$stage" >/dev/null || { finish BLOCKED; exit 78; }
     result_dir="$report/e2e"
     mkdir -p "$result_dir"
     export VM_E2E_RESULT_DIR="$result_dir"
