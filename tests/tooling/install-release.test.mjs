@@ -778,6 +778,22 @@ try:`,
       "birth = getattr(before, 'st_birthtime', None)",
       "birth = 2000000000  # isolated fixture clock",
     );
+    if (scenario === "modal-no-proof") {
+      // Exercise the deadline boundary without 44 expensive fixture process polls.
+      const proofWaitStart = `count=0
+while [ ! -e "$proof" ]; do
+  check_stopped main && fail 'Farol exited before startup confirmation; inspect retained recovery files'
+  [ "$count" -lt 45 ] || fail 'Farol startup unconfirmed; inspect retained recovery files'`;
+      assert.equal(
+        copy.split(proofWaitStart).length,
+        2,
+        "installer startup proof wait changed",
+      );
+      copy = copy.replace(
+        proofWaitStart,
+        proofWaitStart.replace("count=0", "count=44"),
+      );
+    }
     const copyPath = path.join(root, "isolated-installer.sh");
     writeFileSync(copyPath, copy);
     const result = spawnSync("/bin/sh", [copyPath, "1.2.3"], {
