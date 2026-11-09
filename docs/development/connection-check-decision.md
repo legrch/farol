@@ -89,6 +89,15 @@ Ordinary `{}` callers retain their passive status response, without a diagnostic
 acknowledgement. Do not stamp the currently expected ID onto an uncorrelated read
 or leak an older acknowledgement into a plain socket response.
 
+The status-mode provider instruction must include the exact stored `checkId`
+as the argument to its one selected-app `computer_connection_status` call. Build
+that instruction from the original retained attempt, not a new renderer or
+per-poll UUID. Bind its prepared document and diagnostic ID to the same operation
+before dispatch intent; final browser validation must not substitute or regenerate
+it. Require a prompt-to-tool-argument-to-socket-to-Go regression, including a
+provider-shaped scripted call with the wrong or missing ID. A matching socket
+receipt alone does not prove what a different dispatched prompt requested.
+
 Only the sole Go attempt owner may arm the exact diagnostic expectation after
 its durable dispatch intent/readback and before permitting Send. Generate a fresh
 cryptographically random diagnostic ID, with its purpose distinct from a bootstrap
