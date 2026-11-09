@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { commandAllowed } from "./command-eligibility";
 import { computerSetup } from "./computer-setup";
+import { connectionPresentation } from "../../../apps/desktop/renderer/connection-presentation";
 import { setupChecklist } from "./setup-navigation";
 import { connectorVerificationInFlight } from "./setup-gate";
 import { useSetupIntents, retainedSetupIntents } from "./settings";
@@ -72,6 +73,7 @@ export function Home({ snapshot, facade }: Props) {
   const local = useSetupIntents(facade, snapshot);
   const checklist = setupChecklist(snapshot, false, local);
   const computer = computerSetup(snapshot);
+  const connection = connectionPresentation(snapshot, local);
   const first = checklist.entries.find(
     (entry) =>
       entry.liveState !== "verified" &&
@@ -324,27 +326,41 @@ export function Home({ snapshot, facade }: Props) {
           <section className="home-status-card" aria-label="Connection status">
             <span
               className="home-working-mark"
-              data-attention={!computer.externalAccessVerified || undefined}
+              data-attention={connection.attention || undefined}
               aria-hidden="true"
             >
-              {checking ? "…" : computer.externalAccessVerified ? "✓" : "!"}
+              {checking
+                ? "…"
+                : connection.connected || connection.savedSetupReady
+                  ? "✓"
+                  : "!"}
             </span>
             <div>
               <h2>
                 {checking
                   ? "Checking connection…"
-                  : computer.externalAccessVerified
-                    ? "Farol is working"
-                    : "ChatGPT connection needs a check"}
+                  : connection.transportNeedsAttention
+                    ? "Connection needs attention"
+                    : computer.externalAccessVerified
+                      ? "Farol is working"
+                      : connection.connected
+                        ? "Tunnel connected"
+                        : connection.savedSetupReady
+                          ? "Setup complete"
+                          : "ChatGPT connection needs a check"}
               </h2>
               <p>
                 {checking ? (
                   "Waiting for the current connection check."
+                ) : connection.transportNeedsAttention ? (
+                  snapshot.connectionStatus?.detail
                 ) : (
                   <>
                     {computer.externalAccessVerified
                       ? "ChatGPT can reach this Mac"
-                      : "Tunnel connected · Check the ChatGPT app connection"}{" "}
+                      : connection.savedSetupReady
+                        ? "Your ChatGPT setup is saved"
+                        : "Tunnel connected · Check the ChatGPT app connection"}{" "}
                     · {workspaceCount}{" "}
                     {workspaceCount === 1 ? "workspace" : "workspaces"} ·
                     checked {checkedTime(snapshot)}
@@ -362,7 +378,17 @@ export function Home({ snapshot, facade }: Props) {
                 )}
               </p>
             </div>
-            {computer.externalAccessVerified || checking ? (
+            {connection.transportNeedsAttention ? (
+              <button
+                onClick={() =>
+                  facade.navigate({ area: "setup", setupStep: "connection" })
+                }
+              >
+                Review connection
+              </button>
+            ) : connection.connected ||
+              connection.savedSetupReady ||
+              checking ? (
               <button
                 disabled={
                   checking ||

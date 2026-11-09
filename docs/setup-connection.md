@@ -60,6 +60,8 @@ Return to Farol and choose **Test in ChatGPT** once. Farol selects the exact app
 
 Choose **Start using Farol** when all four steps have current checks. This opens Home. Home shows **Finish setup** until the four checks are current. Once ready, it shows connection status, **Check now**, any items needing attention and the latest activity with **Show all**.
 
+After setup is complete, ordinary restarts and updates restore the local connection without sending another ChatGPT verification message. Home and the sidebar remember the saved ChatGPT setup. Without a current transport observation they show a neutral completed state; a recent transport observation can show **Tunnel connected**. Only a current attachment check says **ChatGPT can reach this Mac**. A real connection failure or an unconfirmed operation still needs attention. **Check now** checks the local connection; **Test connection** in ChatGPT remains an optional, explicit diagnostic. Saved setup never grants current file or command access.
+
 The sidebar stays visible on every page, including Setup. Use **Collapse sidebar** or **Expand sidebar** (⌃⌘S, also in the View menu) to switch between icons and labels. Farol remembers this choice. Narrow windows show the icon rail automatically and restore labels when widened. The renderer matches the native browser placement: 62 px collapsed, 58 px at compact widths (850 px and below), and 214 px expanded. Hover an icon for its name and state. Settings has its own **General**, **Appearance** and **Keyboard shortcuts** section list inside the page. Activity filters stay inside Activity.
 
 ## Chat conversations

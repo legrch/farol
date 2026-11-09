@@ -8850,22 +8850,38 @@ describe("connector receipt completion before provider output", () => {
   );
 
   it("observes a later receipt while one page probe is stalled", async () => {
-    const { execute, candidate } = fixture();
-    execute.mockImplementationOnce(() => new Promise(() => {}));
-    const readConnectorReceipt = vi
-      .fn()
-      .mockResolvedValueOnce(false)
-      .mockResolvedValue(true);
-    const result = await candidate.runReadonlyTask(
-      "connection fixture",
-      [],
-      { readConnectorReceipt },
-      "temporary-instant",
-      { name: "NEW fixture" },
-    );
-    expect(result.state).toBe("receipt_confirmed");
-    expect(readConnectorReceipt).toHaveBeenCalledTimes(2);
-    expect(execute).toHaveBeenCalledTimes(5);
+    vi.useFakeTimers();
+    try {
+      const { execute, candidate } = fixture();
+      execute.mockImplementationOnce(() => new Promise(() => {}));
+      const readConnectorReceipt = vi
+        .fn()
+        .mockResolvedValueOnce(false)
+        .mockResolvedValue(true);
+      const running = candidate.runReadonlyTask(
+        "connection fixture",
+        [],
+        { readConnectorReceipt },
+        "temporary-instant",
+        { name: "NEW fixture" },
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(readConnectorReceipt).toHaveBeenCalledTimes(1);
+      expect(execute).toHaveBeenCalledTimes(5);
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await running;
+      expect(result).toMatchObject({
+        state: "receipt_confirmed",
+        code: null,
+        observedCharacters: 0,
+        outputText: "",
+      });
+      expect(readConnectorReceipt).toHaveBeenCalledTimes(2);
+      expect(execute).toHaveBeenCalledTimes(5);
+      expect(Reflect.get(candidate, "taskInFlight")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not let diagnostic failures change a confirmed check", async () => {
