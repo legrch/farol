@@ -86,10 +86,11 @@ unchanged and the clone's stored configuration is checked before its receipt is 
 does not attest the running guest's isolation; that remains a separate qualification step.
 
 Provisioning refuses to run until the base receipt records the owner setup
-(`OWNER_BASE_NOT_READY`), never starts the instance, and never copies service credentials —
-the base contains none. A private provision config
-(`~/Library/Application Support/Farol Testing/vm-provision.json`) selects the tool binary so
-the clone can run from a development build before the next installed release.
+(`OWNER_BASE_NOT_READY`) and never starts the instance. A clone copies the base disk,
+including any accounts and credentials already present; use a separately verified clean base
+for closed tests. Provisioning does not import credentials from the host. The private
+infrastructure config (`~/Library/Application Support/Farol Testing/vm-smoke.json`, or the
+file selected by `FAROL_VM_CONFIG`) selects the tool binary and VM data root.
 
 The base needs automatic login and a helper that starts in the `tester` session. Configure
 those once in the base, shut it down, then qualify a new clone's boot and helper permissions.
