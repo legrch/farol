@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { writeResult } from "./driver-runtime.mjs";
 
@@ -88,6 +89,26 @@ test("bound producer refuses malformed, missing and aliased context", (t) => {
   fs.linkSync(target, f.file);
   assert.throws(() => writeResult(f.value));
   assert.equal(fs.existsSync(path.join(f.root, "results/result.json")), false);
+});
+
+test("bound producer refuses a FIFO context without hanging or writing a result", { timeout: 12000 }, (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "e2e-context-fifo-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fifo = path.join(root, "context.json");
+  const made = spawnSync("/usr/bin/mkfifo", [fifo], { encoding: "utf8", timeout: 5000 });
+  assert.equal(made.status, 0, made.stderr);
+  const program = `const {writeResult} = await import(process.argv[1]);
+    try { writeResult({}); process.exit(0); }
+    catch (error) { process.stderr.write(error.message); process.exit(17); }`;
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", program,
+    new URL("./driver-runtime.mjs", import.meta.url).href], {
+    encoding: "utf8", timeout: 5000,
+    env: { VM_E2E_CONTEXT_FILE: fifo, VM_E2E_RESULT_DIR: path.join(root, "results") },
+  });
+  assert.equal(result.error, undefined, "context admission must not block on a FIFO");
+  assert.equal(result.status, 17, result.stderr);
+  assert.match(result.stderr, /E2E_CONTEXT_FILE_INVALID/);
+  assert.equal(fs.existsSync(path.join(root, "results/result.json")), false);
 });
 
 test("standalone unbound infrastructure receipts stay unqualified, not silently rebound", (t) => {

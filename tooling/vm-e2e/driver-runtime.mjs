@@ -51,7 +51,9 @@ function exactKeys(value, keys, code) {
 
 function readBoundContext(file) {
   requireResult(typeof file === "string" && file.length > 0, "E2E_CONTEXT_FILE_REQUIRED");
-  const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+  // Reject unexpected FIFOs via fstat instead of blocking forever on open.
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) |
+    (fs.constants.O_NONBLOCK ?? 0));
   let bytes;
   try {
     const s = fs.fstatSync(fd);
