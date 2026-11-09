@@ -70,6 +70,62 @@ readiness check or a retained old receipt does not satisfy a fresh status check.
 No startup provider Send, ordinary deep-test admission change, app substitution,
 implicit repair or separate-app verification fallback is included.
 
+## Origin-bound status correlation to implement
+
+The baseline does not already provide exact status-call correlation. In
+`boot/computerverification.go`, host registration stores an expected ID and a
+later socket observation receives that ID even when it did not originate from
+the diagnostic. The public `computer_connection_status` input currently accepts
+only `{}`. A delayed old or unrelated status call can therefore appear to confirm
+a newer attempt. The existing socket test carrying a check ID cannot establish
+the real empty-input path. This is a required implementation correction, not a
+property demonstrated by the baseline tests.
+
+Add an optional bounded `checkId` to the existing strict public status input and
+propagate the exact supplied value through `connection-status.ts` and
+`ConnectorVerificationBridge.observe` to the socket query. Its existing RPC DTO
+already has that optional field; generated validation must remain consistent.
+Ordinary `{}` callers retain their passive status response, without a diagnostic
+acknowledgement. Do not stamp the currently expected ID onto an uncorrelated read
+or leak an older acknowledgement into a plain socket response.
+
+Only the sole Go attempt owner may arm the exact diagnostic expectation after
+its durable dispatch intent/readback and before permitting Send. Generate a fresh
+cryptographically random diagnostic ID, with its purpose distinct from a bootstrap
+challenge, and bind it to the retained operation UUID, fingerprint, scope, current
+attachment and exact connector/runtime/backend/Computer generations. The socket
+may acknowledge only that supplied ID on its original admitted slot, binding and
+active attempt. A missing, wrong, late, retired or unarmed ID cannot settle it.
+A second UUID cannot overwrite an unresolved expectation for the same scope.
+Host observation may retain the matching receipt only for its original attempt.
+Timeout ends waiting, not uncertain-effect custody; restart does not infer success
+from lost in-memory correlation or authorize another Send.
+
+A client with a cached empty input schema remains compatible for passive reads,
+but cannot satisfy the new explicit diagnostic without carrying its ID. Preserve
+that limitation as a typed, truthful unconfirmed result; do not fall back to an
+uncorrelated read, renew a consumed bootstrap challenge or request reinstallation
+as a hidden repair. This bounded choice does not promise that every cached client
+can immediately complete a fresh diagnostic. A separate compatibility mechanism
+would need its own reviewed decision. Reusing nonce-bearing bootstrap verification
+was rejected here because it changes sealed-challenge admission, receipt semantics
+and potentially native metadata work. This amendment adds no native enumeration,
+workspace grant or bootstrap verification. The nonce demonstrates a correlated
+bound tool invocation, not cryptographic proof of provider account or model.
+
+Require an actual public-MCP-to-socket-to-Go regression: arm attempt A, then attempt
+B only after lawful A retirement, deliver A's delayed empty-input status and wrong
+or old ID, and prove B remains unconfirmed. Deliver B's exact ID and confirm only
+B. Also cover unrelated passive reads, a retained historical attachment plus plain
+status, cached `{}` inputs, unknown keys, a second pending UUID, stale slot and
+post-intent uncertainty. Update the misleading direct-socket test; preserve
+ordinary status and bootstrap behavior. Relevant test seams include
+`boot/computerconnectionstatus_test.go`,
+`tests/unit/go-computer-connection-status-mcp.test.ts`,
+`tests/unit/go-computer-connection-status-projection.test.ts`,
+`tests/unit/desktop-connector-verification.test.ts`, and
+`tests/integration/connector-verification-mcp.test.ts`.
+
 ## Browser boundary
 
 Describe the explicit action as a one-time check in a temporary chat. Before
