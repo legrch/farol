@@ -3,6 +3,8 @@ import importlib.util
 import json
 import os
 import stat
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -72,6 +74,27 @@ class GuestHelperUpdateCustodyTests(unittest.TestCase):
                 if kind == 'public':
                     self.assertEqual(stat.S_IMODE(lock.stat().st_mode), 0o644)
                 self.assertFalse((r.machine / 'input-lease.json').exists())
+
+    def test_fifo_lock_is_refused_without_blocking(self):
+        script = '''import os, sys
+from pathlib import Path
+from test_helper_update_custody import runner, vm
+r = runner(Path(sys.argv[1]))
+os.mkfifo(r.machine / 'input-lease.lock', 0o600)
+try:
+    r.acquire_input_lease()
+except (vm.Refused, OSError):
+    print('refused')
+    raise SystemExit(0)
+raise SystemExit('unsafe FIFO lock was accepted')
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            child = subprocess.run([sys.executable, '-B', '-c', script, tmp],
+                                   capture_output=True, text=True, timeout=3,
+                                   env={'PATH': os.environ.get('PATH', ''),
+                                        'PYTHONPATH': str(Path(__file__).resolve().parent)})
+            self.assertEqual(child.returncode, 0, child.stdout + child.stderr)
+            self.assertIn('refused', child.stdout)
 
     def test_first_use_and_clean_release(self):
         with tempfile.TemporaryDirectory() as tmp:
