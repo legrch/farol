@@ -1,11 +1,14 @@
 """Offline spec/planning tests for the declared-guest provisioner; no VM, no binary."""
 import importlib.util
+import contextlib
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).parents[1]
 spec_source = importlib.util.spec_from_file_location('vm_machine_under_test', ROOT / 'tooling/vm-machine.py')
@@ -154,6 +157,88 @@ class VmInstanceProvisioningTests(unittest.TestCase):
         self.assertEqual(command, ['/bin/terminal-mac', 'clone', 'farol-base-1', 'farol-test-1'])
         self.assertEqual(receipt_file, self.receipt_file)
         self.assertEqual(instance_receipt, self.settings / 'instance-receipts' / 'farol-test-1.json')
+
+    def test_offline_instance_plan_requests_an_offline_clone(self):
+        command, _, _ = vm_machine.plan_instance('farol-test-1', 'farol-base-1',
+                                                 '/bin/terminal-mac', self.root, self.settings,
+                                                 offline=True)
+        self.assertEqual(command, ['/bin/terminal-mac', 'clone', 'farol-base-1',
+                                   'farol-test-1', '--offline'])
+
+    def test_offline_config_requires_one_matching_disabled_network(self):
+        machine = self.root / 'machines/farol-test-1'
+        machine.mkdir()
+        config = machine / 'machine.json'
+        config.write_text('{"name":"farol-test-1","network":false}')
+        vm_machine.require_offline_instance(self.root, 'farol-test-1')
+
+        for value in ('{"name":"farol-test-1","network":true}',
+                      '{"name":"farol-test-1","network":0}',
+                      '{"name":"other","network":false}',
+                      '{"name":"farol-test-1","network":true,"network":false}',
+                      '{"name":"farol-test-1",', '[]', ''):
+            with self.subTest(value=value):
+                config.write_text(value)
+                with self.assertRaisesRegex(ValueError, 'OFFLINE_CLONE_CONFIG_INVALID'):
+                    vm_machine.require_offline_instance(self.root, 'farol-test-1')
+        config.unlink()
+        with self.assertRaisesRegex(ValueError, 'OFFLINE_CLONE_CONFIG_INVALID'):
+            vm_machine.require_offline_instance(self.root, 'farol-test-1')
+
+    def test_offline_config_refuses_aliases_and_fifo_without_changing_target(self):
+        machine = self.root / 'machines/farol-test-1'
+        machine.mkdir()
+        config = machine / 'machine.json'
+        target = machine / 'target.json'
+        contents = '{"name":"farol-test-1","network":false}'
+        target.write_text(contents)
+        for kind in ('symlink', 'hardlink', 'fifo'):
+            with self.subTest(kind=kind):
+                if kind == 'symlink':
+                    config.symlink_to(target)
+                elif kind == 'hardlink':
+                    os.link(target, config)
+                else:
+                    os.mkfifo(config)
+                with self.assertRaisesRegex(ValueError, 'OFFLINE_CLONE_CONFIG_INVALID'):
+                    vm_machine.require_offline_instance(self.root, 'farol-test-1')
+                config.unlink()
+                self.assertEqual(target.read_text(), contents)
+
+    def test_offline_flag_requires_instance_before_infrastructure_access(self):
+        with mock.patch('sys.argv', ['vm-machine.py', '--offline']), \
+             mock.patch.object(vm_machine, 'infrastructure') as infra, \
+             contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as exit_status:
+                vm_machine.main()
+        self.assertEqual(exit_status.exception.code, 2)
+        infra.assert_not_called()
+
+    def test_offline_provision_receipt_requires_valid_cloned_config(self):
+        fake = self.root / 'fake-terminal-mac'
+        fake.write_text('synthetic placeholder')
+        for name, network in [('offline-good', False), ('offline-bad', True)]:
+            def clone(command, **kwargs):
+                self.assertEqual(command, [str(fake), 'clone', 'farol-base-1', name, '--offline'])
+                machine = self.root / 'machines' / name
+                machine.mkdir()
+                (machine / 'machine.json').write_text(json.dumps({'name': name, 'network': network}))
+                (machine / 'clone.json').write_text(json.dumps({'to': name}))
+
+            with self.subTest(name=name), \
+                 mock.patch('sys.argv', ['vm-machine.py', '--provision-instance', name, '--offline']), \
+                 mock.patch.object(vm_machine, 'infrastructure', return_value=(fake, self.root, self.settings)), \
+                 mock.patch.object(vm_machine.subprocess, 'run', side_effect=clone), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                receipt = self.settings / 'instance-receipts' / (name + '.json')
+                if network:
+                    with self.assertRaisesRegex(ValueError, 'OFFLINE_CLONE_CONFIG_INVALID'):
+                        vm_machine.main()
+                    self.assertFalse(receipt.exists())
+                    self.assertTrue((self.root / 'machines' / name / 'machine.json').exists())
+                else:
+                    vm_machine.main()
+                    self.assertEqual(json.loads(receipt.read_text())['name'], name)
 
     def test_refuses_unready_base_and_bad_names(self):
         self.receipt_file.write_text(json.dumps(dict(self.BASE_RECEIPT, helper='NOT_INSTALLED_SETUP_ASSISTANT_PENDING')))

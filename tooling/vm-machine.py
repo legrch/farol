@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 import plistlib
 import re
+import stat
 import subprocess
 
 
@@ -71,7 +72,7 @@ def infrastructure(home=None):
     return binary, root, settings
 
 
-def plan_instance(name, base, binary, root, settings):
+def plan_instance(name, base, binary, root, settings, offline=False):
     """Pure planning for a clean run instance cloned from a prepared base.
 
     The clone gives the instance a fresh VM identity and a copy-on-write disk;
@@ -99,7 +100,37 @@ def plan_instance(name, base, binary, root, settings):
     if (root / 'machines' / name).exists():
         raise ValueError('INSTANCE_COLLISION_REFUSED')
     command = [str(binary), 'clone', base, name]
+    if offline:
+        command.append('--offline')
     return command, receipt_file, settings / 'instance-receipts' / (name + '.json')
+
+
+def require_offline_instance(root, name):
+    """Check the cloned configuration; this is not runtime network attestation."""
+    path = root / 'machines' / name / 'machine.json'
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        with os.fdopen(fd, 'rb') as source:
+            info = os.fstat(source.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or not 0 < info.st_size <= 65536:
+                raise ValueError('unsafe machine configuration')
+            data = source.read(65537)
+            if len(data) != info.st_size:
+                raise ValueError('machine configuration changed while reading')
+
+        def unique_object(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError('duplicate machine configuration key')
+                value[key] = item
+            return value
+
+        machine = json.loads(data, object_pairs_hook=unique_object)
+    except (OSError, ValueError, UnicodeError) as error:
+        raise ValueError('OFFLINE_CLONE_CONFIG_INVALID') from error
+    if not isinstance(machine, dict) or machine.get('name') != name or machine.get('network') is not False:
+        raise ValueError('OFFLINE_CLONE_CONFIG_INVALID')
 
 
 def write_instance_receipt(path, name, base, base_receipt_file, machine_root):
@@ -135,11 +166,14 @@ def main():
     p.add_argument('--provision-instance', metavar='NAME',
                    help='Clone a clean run instance from a prepared base; never starts it')
     p.add_argument('--base', default='farol-base-1')
+    p.add_argument('--offline', action='store_true', help='Disable networking on a new instance clone')
     a = p.parse_args()
+    if a.offline and not a.provision_instance:
+        p.error('--offline requires --provision-instance')
     binary, root, settings = infrastructure()
     if a.provision_instance:
         command, base_receipt_file, instance_receipt = plan_instance(
-            a.provision_instance, a.base, binary, root, settings)
+            a.provision_instance, a.base, binary, root, settings, offline=a.offline)
         if a.plan:
             print(json.dumps({'status': 'PLAN', 'instance': a.provision_instance, 'base': a.base,
                               'clone': command, 'receipt': str(instance_receipt)}))
@@ -152,6 +186,8 @@ def main():
         env = {k: os.environ[k] for k in ('HOME', 'USER', 'TMPDIR') if k in os.environ}
         env.update(PATH='/usr/bin:/bin:/usr/sbin:/sbin', TERMINAL_MAC_HOME=str(root))
         subprocess.run(command, env=env, check=True, timeout=1800)
+        if a.offline:
+            require_offline_instance(root, a.provision_instance)
         write_instance_receipt(instance_receipt, a.provision_instance, a.base, base_receipt_file, root)
         print(json.dumps({'status': 'PROVISIONED', 'instance': a.provision_instance,
                           'base': a.base, 'receipt': str(instance_receipt)}))

@@ -81,6 +81,10 @@ node tooling/vm-machine.mjs --provision-instance farol-qa-1 --base farol-base-1
 node tooling/vm-machine.mjs --provision-instance farol-qa-2 --base farol-base-1
 ```
 
+For a new closed-run instance, add `--offline` to `--provision-instance`. The base remains
+unchanged and the clone's stored configuration is checked before its receipt is written. This
+does not attest the running guest's isolation; that remains a separate qualification step.
+
 Provisioning refuses to run until the base receipt records the owner setup
 (`OWNER_BASE_NOT_READY`), never starts the instance, and never copies service credentials —
 the base contains none. A private provision config
