@@ -412,33 +412,45 @@ class Runner:
     def start_guest(self):
         # Bootstrap once, then use the read-only request share. Application launch
         # can change Dock geometry; repeated clicks must not type commands elsewhere.
-        self.pending = 'bootstrap'
+        self.pending = 'bootstrap:activate'
         self.action('click', *self.a.terminal_point)
         time.sleep(0.5)
         if self.a.bootstrap == 'finder':
             # A first bottom-edge click can reveal the Dock before its icon is
             # ready to activate. Keep shell typing behind a separate activation.
+            self.pending = 'bootstrap:finder-activate'
             self.action('click', *self.a.terminal_point)
             time.sleep(0.8)
+            self.pending = 'bootstrap:finder-activation-capture'
             self.screenshot('bootstrap-activated')
+            self.pending = 'bootstrap:finder-go'
             self.action('key', 'cmd+shift+g')
             time.sleep(0.8)
+            self.pending = 'bootstrap:finder-path'
             self.action('type', '/System/Applications/Utilities/Terminal.app')
+            self.pending = 'bootstrap:finder-select'
             self.action('key', 'return')
             # Finder navigation completes asynchronously after the key ACK.
             # Preserve the selected target before sending Open; a cold Finder
             # can otherwise receive Open while the Go to Folder sheet closes.
             time.sleep(1.5)
+            self.pending = 'bootstrap:finder-selection-capture'
             self.screenshot('bootstrap-finder-selection')
+            self.pending = 'bootstrap:finder-open'
             self.action('key', 'cmd+o')
             time.sleep(1.5)
+        self.pending = 'bootstrap:terminal-new'
         self.action('key', 'cmd+n')
         time.sleep(1)
+        self.pending = 'bootstrap:terminal-capture'
         self.screenshot('bootstrap-terminal')
         command = '/bin/bash ' + shlex.quote('/Volumes/My Shared Files/artifacts/' +
                                            self.run_id + '/guest.sh') + ' serve'
+        self.pending = 'bootstrap:server-command'
         self.action('type', command)
+        self.pending = 'bootstrap:server-start'
         self.action('key', 'return')
+        self.pending = 'bootstrap:server-ready'
         self.wait_result(self.report / 'server.result')
         self.sequence = 0
         self.pending = None
