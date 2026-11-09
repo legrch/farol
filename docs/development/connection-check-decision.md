@@ -17,12 +17,15 @@ refuses. The existing `verifySecureMcpApp` can instead obtain the first receipt
 from the current challenge. The fix must use the correct verification route,
 not remove ordinary deep-test admission.
 
-The source-realistic renderer characterization is retained in current-task private
-evidence at `_output/evidence/stability-handover-a91048f3/toolbar-routing-regression.txt`
-and `toolbar-routing-red.log`. It renders and clicks the actual enabled toolbar
-button with saved setup and no attachment; the wrong deep-test dispatch is
-observed. The original 16 renderer and 12 extracted-dispatch tests passed separately on the same a91048f3 source; the distinct passing-run receipts are listed below.
-Those scripted-host checks do not establish a provider or installed result.
+The current source exposes the wrong route directly: the toolbar click selects
+`runManualConnectionPrompt`, which configures `chatgpt.run-deep-test`; the backend
+requires `currentConnectorAttachment`. The verifier's separate current-challenge
+path supplies the feasible bootstrap alternative. This inspectable call graph is
+the basis for the decision, without treating a fixture result as provider proof.
+
+The historical toolbar RED case remains an illustration, not a source-qualified
+execution claim. Current P1 checks have a new independently inspectable source
+binding described below. They do not claim that the future P2 route is implemented.
 
 ## Selected direction and alternatives
 
@@ -140,10 +143,30 @@ schema/partial-write/close/sync/duplicate/crash cases against actual stored byte
 
 ## Named evidence for this decision
 
-The source-bound original passing runs are separate from the intentionally failing
-characterization. Current-task private receipts, with SHA256 for independent readback:
+A fresh run used the actual Git checkout at
+`f35d6401efa940a117d74ae9926561a0ca481947`, tree
+`f19c81033bd8f847aa14a0b189f3078ac6109ff3`. Before and after execution, the controller
+read every one of 3,748 tracked files and checked its bytes against the selected
+Git blob object. The before/after manifests match. Node was 24.20.0. Each log
+contains that source reference, exact command/cwd and source-manifest digest;
+the receipt records each actual process exit code. The only test-configuration
+instrumentation supplies an explicit root and private cache directory.
 
-- Original renderer suite: 16 passed: `_output/evidence/stability-handover-a91048f3/baseline-renderer.log`, SHA256 `d9565d5f531574674685cd4f01693b186378c53a521412da07d4a7e53ff0d59b`.
-- Original extracted-dispatch suite: 12 passed: `_output/evidence/stability-handover-a91048f3/baseline-dispatch.log`, SHA256 `8e0c94dea83662f82b051a29ef78d142f33cadd0ebf6a033ece057540bc3fbda`.
-- Actual toolbar characterization: 1 failed, 16 skipped: `_output/evidence/stability-handover-a91048f3/toolbar-routing-red.log`, SHA256 `5a241da00d8d343b24634918d3b83659887c43fedc89ed1e06ba1b92118ade2a`.
-- Exact added characterization case: `_output/evidence/stability-handover-a91048f3/toolbar-routing-regression.txt`, SHA256 `361ba42a3236630e436e266d0b385310a4b1cc6e85406c5fdbef84ce86499d6d`.
+These selected tests all exited zero: 110 renderer, 16 helper and 12 extracted
+backend-dispatch cases. Their scripted ports do not establish provider, installed,
+reboot or full CI results. In particular, the current P1 code still uses the wrong
+explicit-check route; these passing suites are not a P2 success claim.
+
+Current-task evidence is under
+`_output/evidence/stability-handover-a91048f3/source-bound-f35d6401/`:
+
+- Controller receipt with source, command and exit records: `source-bound-receipt.json`, SHA256 `2f364e8d8c0d0d50307a2d50d7695e381b2b654a0ce4d9da47d2bccf5eef8d4f`.
+- Raw-file SHA256 inventory and canonical manifest digest encoding: `EVIDENCE-INDEX.json`, SHA256 `cc8cdc93c171e11f5bb64a11918f11754ef84fb5a30cc5504c7112f718dc3cfc`.
+- Exact executed controller, matching receipt runnerSha256: `source-bound-runner.py`, SHA256 `9aea12e72177c681b34d2bcc3fab862c15633136d7fb083a164538011f10b7d9`.
+
+The same directory contains both full manifests, the exact instrumented configs
+and renderer/helper/dispatch logs. These are private review evidence, not public
+runtime resources. The earlier count-only baseline logs lack an independent
+run-to-source record and are not used as source-qualified support for this decision.
+The original historical RED remains preserved separately; source inspection and
+the new, explicitly scoped receipts are the evidence used here.
