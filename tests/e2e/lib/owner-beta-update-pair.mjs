@@ -53,6 +53,15 @@ import {
   sameBoot,
 } from "../../../src/apps/desktop/run-marker.ts";
 
+import { readOwnedChildProcesses } from "../runtime-process.mjs";
+import {
+  nativeExecutableWitness,
+  qualifyDesktopMain,
+  qualifyGuardianAfterExec,
+  collectDesktopExit,
+  requireDesktopExit,
+} from "./desktop-main-identity.mjs";
+
 const SHA40 = /^[a-f0-9]{40}$/u;
 const SHA64 = /^[a-f0-9]{64}$/u;
 const OPERATION = /^[a-f0-9]{32}$/u;
@@ -985,11 +994,16 @@ async function startApp(candidate, home, fixture, report, owners, launch) {
   });
   const owner = retainChild(app.child, lifetime);
   owner.app = app;
-  // Application stdout is diagnostic, not a helper protocol. Drain without
-  // retaining content so backpressure cannot prevent the owned app from quitting.
-  owner.child.stdout?.resume();
-  owner.windowObservation = collectWindowObservation(owner.child.stderr);
+  // Retain the actual original child before any observation can fail.
   owners.push(owner);
+  lifetime.command = "packaged-desktop-guardian";
+  owner.desktopExit = collectDesktopExit(owner.child.stderr);
+  owner.windowObservation = collectWindowObservation(owner.child.stderr);
+  // Drain only; these observations never request Quit or signal a child.
+  owner.child.stdout?.resume();
+  owner.guardianStart = readProcessStart(owner.child.pid);
+  owner.guardianNative = nativeExecutableWitness(owner.child.pid);
+  check(owner.guardianStart !== null, "GUARDIAN_IDENTITY_UNKNOWN");
   await bounded(app.ready(), 15000, "APP_LAUNCH_UNKNOWN");
   const deadline = Date.now() + 30000;
   // A Node inspector context can precede Electron's module initialization.
@@ -999,12 +1013,47 @@ async function startApp(candidate, home, fixture, report, owners, launch) {
     if (startup.status !== "absent") {
       check(
         startup.status === "read" &&
-          startup.marker.pid === owner.child.pid &&
           startup.marker.processStart !== null &&
           sameBoot(startup.marker.bootTime, currentBootTimeMs()) &&
-          readProcessStart(owner.child.pid) === startup.marker.processStart,
+          readProcessStart(startup.marker.pid) === startup.marker.processStart,
         "RUNNING_IDENTITY_UNKNOWN",
       );
+      const desktop = await app.evaluate(() => ({
+        pid: process.pid,
+        ppid: process.ppid,
+        executable: process.execPath,
+      }));
+      check(
+        owner.child.exitCode === null &&
+          owner.child.signalCode === null &&
+          readProcessStart(owner.child.pid) === owner.guardianStart,
+        "GUARDIAN_LIFETIME_CHANGED",
+      );
+      const expectedExecutable = path.join(
+        installed,
+        "Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron",
+      );
+      const before = nativeExecutableWitness(desktop.pid);
+      owner.desktopIdentity = qualifyDesktopMain({
+        packaged: true,
+        guardianPid: owner.child.pid,
+        marker: startup.marker,
+        desktop,
+        children: readOwnedChildProcesses(owner.child.pid),
+        expectedExecutable,
+        nativeExecutableBefore: before,
+        nativeExecutable: nativeExecutableWitness(desktop.pid),
+      });
+      owner.desktopNative = before;
+      owner.guardianNative = qualifyGuardianAfterExec({
+        before: owner.guardianNative,
+        after: nativeExecutableWitness(owner.child.pid),
+        expectedExecutable: path.join(
+          installed,
+          "Contents/Resources/app/farol-backend",
+        ),
+      });
+      lifetime.desktopIdentity = owner.desktopIdentity;
       lifetime.startupMarker = startup.marker;
       break;
     }
@@ -1040,7 +1089,7 @@ async function startApp(candidate, home, fixture, report, owners, launch) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   check(
-    actual.pid === owner.child.pid &&
+    actual.pid === owner.desktopIdentity.desktopPid &&
       actual.home === home.home &&
       actual.userData === home.userData &&
       actual.sessionData === home.userData &&
@@ -1048,7 +1097,10 @@ async function startApp(candidate, home, fixture, report, owners, launch) {
       actual.appPath === path.join(installed, "Contents/Resources/app"),
     "APP_IDENTITY_MISMATCH",
   );
-  assertWindowSnapshot(actual.windowObservation, owner.child.pid);
+  assertWindowSnapshot(
+    actual.windowObservation,
+    owner.desktopIdentity.desktopPid,
+  );
   lifetime.native = actual;
   for (;;) {
     const ready = await bounded(
@@ -1077,10 +1129,11 @@ async function startApp(candidate, home, fixture, report, owners, launch) {
   const marker = await readRunMarker(state);
   check(
     marker.status === "read" &&
-      marker.marker.pid === owner.child.pid &&
+      marker.marker.pid === owner.desktopIdentity.desktopPid &&
       marker.marker.processStart !== null &&
       sameBoot(marker.marker.bootTime, currentBootTimeMs()) &&
-      readProcessStart(owner.child.pid) === marker.marker.processStart,
+      readProcessStart(owner.desktopIdentity.desktopPid) ===
+        marker.marker.processStart,
     "RUNNING_IDENTITY_UNKNOWN",
   );
   lifetime.marker = marker.marker;
@@ -1089,6 +1142,7 @@ async function startApp(candidate, home, fixture, report, owners, launch) {
   return { ...owner, app, lifetime, marker: marker.marker, home, state };
 }
 async function quitApp(owner) {
+  predecessorIdentity(owner);
   check(
     !owner.lifetime.quitAttempted &&
       owner.child.exitCode === null &&
@@ -1105,9 +1159,12 @@ async function quitApp(owner) {
     5000,
     "VISIBILITY_UNKNOWN",
   );
-  assertWindowSnapshot(windowBefore, owner.child.pid);
+  assertWindowSnapshot(windowBefore, owner.desktopIdentity.desktopPid);
   const before = await readQuitObservation(owner.state);
-  const request = beginQuitObservation(before, owner.child.pid);
+  const request = beginQuitObservation(
+    before,
+    owner.desktopIdentity.desktopPid,
+  );
   owner.lifetime.quitBefore = before;
   owner.lifetime.quitRequest = request;
   owner.lifetime.quitAttempted = true;
@@ -1133,7 +1190,14 @@ async function quitApp(owner) {
   }
   await bounded(owner.app.disconnect(), 5000, "DRIVER_DISCONNECT_UNKNOWN");
   const exit = await bounded(owner.terminal, LIMITS.quitMs, "QUIT_UNKNOWN");
-  const terminal = { pid: owner.child.pid, ...exit };
+  const guardianTerminal = { pid: owner.child.pid, ...exit };
+  owner.lifetime.guardianTerminal = guardianTerminal;
+  const terminal = requireDesktopExit(
+    owner.desktopExit.snapshot(),
+    owner.desktopIdentity,
+    guardianTerminal,
+  );
+  owner.lifetime.desktopTerminal = terminal;
   owner.lifetime.windowLifetime = assertWindowLifetime(
     windowBefore,
     owner.windowObservation.snapshot(),
@@ -1171,6 +1235,84 @@ export async function publishAndStage(
     path.join(operation, "staged.app"),
     target.artifactSha256,
   );
+}
+
+// A desktop operation never uses the retained guardian PID as its subject.
+// Both original lifetimes must still be positively bound before an effect.
+export function predecessorIdentity(
+  owner,
+  observeStart = readProcessStart,
+  observeNative = nativeExecutableWitness,
+) {
+  const identity = owner?.desktopIdentity,
+    marker = owner?.marker,
+    child = owner?.child;
+  check(
+    identity &&
+      marker &&
+      child &&
+      Number.isSafeInteger(identity.guardianPid) &&
+      Number.isSafeInteger(identity.desktopPid) &&
+      identity.guardianPid > 1 &&
+      identity.desktopPid > 1 &&
+      identity.guardianPid !== identity.desktopPid &&
+      child.pid === identity.guardianPid &&
+      marker.pid === identity.desktopPid &&
+      typeof marker.processStart === "string" &&
+      marker.processStart.length > 0 &&
+      typeof owner.guardianStart === "string" &&
+      owner.guardianStart.length > 0 &&
+      child.exitCode === null &&
+      child.signalCode === null &&
+      observeStart(identity.guardianPid) === owner.guardianStart &&
+      observeStart(identity.desktopPid) === marker.processStart &&
+      owner.guardianNative &&
+      owner.desktopNative &&
+      isDeepStrictEqual(
+        observeNative(identity.guardianPid),
+        owner.guardianNative,
+      ) &&
+      isDeepStrictEqual(
+        observeNative(identity.desktopPid),
+        owner.desktopNative,
+      ),
+    "PREDECESSOR_CHANGED",
+  );
+  return { pid: identity.desktopPid, processStart: marker.processStart };
+}
+export function createUpdateRequest(
+  { pair, home, operationId, action, predecessor },
+  observeStart = readProcessStart,
+  observeNative = nativeExecutableWitness,
+) {
+  check(action === "apply" || action === "rollback", "ACTION_INVALID");
+  const original = predecessorIdentity(
+    predecessor,
+    observeStart,
+    observeNative,
+  );
+  const build = (candidate) => ({
+    digest: candidate.artifactSha256,
+    version: candidate.build.version,
+    buildId: candidate.buildId,
+  });
+  return {
+    schema: "farol.installed-update/1",
+    action,
+    home: home.home,
+    installLocation: "legacy",
+    operationId,
+    source: build(pair.source),
+    target: build(pair.target),
+    drain: {
+      status: "reconciled",
+      acceptedSource: pair.source.buildId,
+      acceptedTarget: pair.target.buildId,
+    },
+    ...original,
+    waitSeconds: 120,
+    relaunch: false,
+  };
 }
 
 export async function runNativePair(pair) {
@@ -1243,11 +1385,6 @@ export async function runNativePair(pair) {
       "FIXTURE_UNKNOWN",
     );
     fixture.url = `http://127.0.0.1:${server.address().port}/`;
-    const build = (candidate) => ({
-      digest: candidate.artifactSha256,
-      version: candidate.build.version,
-      buildId: candidate.buildId,
-    });
     let source = await startApp(
       pair.source,
       home,
@@ -1256,24 +1393,8 @@ export async function runNativePair(pair) {
       owners,
       spawnNativeElectron,
     );
-    const request = (action, predecessor) => ({
-      schema: "farol.installed-update/1",
-      action,
-      home: home.home,
-      installLocation: "legacy",
-      operationId,
-      source: build(pair.source),
-      target: build(pair.target),
-      drain: {
-        status: "reconciled",
-        acceptedSource: pair.source.buildId,
-        acceptedTarget: pair.target.buildId,
-      },
-      pid: predecessor.child.pid,
-      processStart: predecessor.marker.processStart,
-      waitSeconds: 120,
-      relaunch: false,
-    });
+    const request = (action, predecessor) =>
+      createUpdateRequest({ pair, home, operationId, action, predecessor });
     const apply = request("apply", source);
     const publication = {};
     report.publications.push(publication);
@@ -1281,9 +1402,10 @@ export async function runNativePair(pair) {
     async function updateAndQuit(input, predecessor) {
       await recheckHome(home);
       await remeasure(pair.target);
+      const originalDesktop = predecessorIdentity(predecessor);
       check(
-        readProcessStart(predecessor.child.pid) ===
-          predecessor.marker.processStart,
+        input.pid === originalDesktop.pid &&
+          input.processStart === originalDesktop.processStart,
         "PREDECESSOR_CHANGED",
       );
       const receipt = { action: input.action, operationId };
@@ -1380,6 +1502,7 @@ export async function runNativePair(pair) {
       .map((owner) => ({
         pid: owner.child.pid ?? null,
         command: owner.receipt.command ?? "Electron",
+        desktopPid: owner.desktopIdentity?.desktopPid ?? null,
         status: "terminal-unconfirmed",
       }));
     try {
