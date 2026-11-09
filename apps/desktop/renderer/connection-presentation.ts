@@ -66,22 +66,22 @@ export function connectionPresentation(
       : connected && computer.externalAccessVerified
         ? "Connected — ChatGPT can reach this Mac"
         : connected
-          ? "Tunnel connected — ChatGPT setup is saved"
+          ? "Connected — ChatGPT setup is saved"
           : savedSetupReady
             ? "ChatGPT setup is saved"
             : computer.localConnectionCurrent
-              ? "Tunnel connected — ChatGPT connection needs a check"
+              ? "Connection available — ChatGPT connection needs a check"
               : "Not connected yet";
   const text = checking
     ? "Checking connection…"
     : transportNeedsAttention
       ? "Connection needs attention"
-      : connected && computer.externalAccessVerified
+      : connected
         ? "Connected"
-        : savedSetupReady && !connected
+        : savedSetupReady
           ? "Setup complete"
           : computer.localConnectionCurrent
-            ? "Tunnel connected"
+            ? "Connection available"
             : "Not connected yet";
   return {
     checking,

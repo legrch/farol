@@ -68,7 +68,7 @@ function eventState(phase: string | null) {
   if (phase === "cancelled") return "Interrupted";
   return "Recorded";
 }
-/** A read-only landing page. Only Check now invokes the existing health check. */
+/** A read-only landing page with explicit local diagnostics on demand. */
 export function Home({ snapshot, facade }: Props) {
   const local = useSetupIntents(facade, snapshot);
   const checklist = setupChecklist(snapshot, false, local);
@@ -341,13 +341,11 @@ export function Home({ snapshot, facade }: Props) {
                   ? "Checking connection…"
                   : connection.transportNeedsAttention
                     ? "Connection needs attention"
-                    : computer.externalAccessVerified
-                      ? "Farol is working"
-                      : connection.connected
-                        ? "Tunnel connected"
-                        : connection.savedSetupReady
-                          ? "Setup complete"
-                          : "ChatGPT connection needs a check"}
+                    : connection.connected
+                      ? "Connected"
+                      : connection.savedSetupReady
+                        ? "Setup complete"
+                        : "ChatGPT connection needs a check"}
               </h2>
               <p>
                 {checking ? (
@@ -360,23 +358,41 @@ export function Home({ snapshot, facade }: Props) {
                       ? "ChatGPT can reach this Mac"
                       : connection.savedSetupReady
                         ? "Your ChatGPT setup is saved"
-                        : "Tunnel connected · Check the ChatGPT app connection"}{" "}
+                        : "Connection available · Check the ChatGPT app connection"}{" "}
                     · {workspaceCount}{" "}
-                    {workspaceCount === 1 ? "workspace" : "workspaces"} ·
-                    checked {checkedTime(snapshot)}
-                    {!computer.externalAccessVerified && previousCheck && (
-                      <>
-                        {" "}
-                        ·{" "}
-                        {previousCheck.currentSettings
-                          ? "Last ChatGPT verification"
-                          : "Earlier ChatGPT verification (previous settings)"}
-                        : {previousCheck.when}
-                      </>
-                    )}
+                    {workspaceCount === 1 ? "workspace" : "workspaces"}
                   </>
                 )}
               </p>
+              <details className="home-connection-details">
+                <summary>Connection details</summary>
+                <p>Local connection checked {checkedTime(snapshot)}.</p>
+                {!computer.externalAccessVerified && previousCheck && (
+                  <p>
+                    {previousCheck.currentSettings
+                      ? "Last ChatGPT verification"
+                      : "Earlier ChatGPT verification (previous settings)"}
+                    : {previousCheck.when}
+                  </p>
+                )}
+                {!connection.transportNeedsAttention &&
+                  (connection.connected || connection.savedSetupReady) && (
+                    <button
+                      disabled={
+                        snapshot.update.phase === "applying" ||
+                        !commandAllowed(
+                          snapshot,
+                          "connector.check-health",
+                          undefined,
+                          local,
+                        )
+                      }
+                      onClick={() => void checkNow()}
+                    >
+                      Check local connection
+                    </button>
+                  )}
+              </details>
             </div>
             {connection.transportNeedsAttention ? (
               <button
@@ -388,23 +404,7 @@ export function Home({ snapshot, facade }: Props) {
               </button>
             ) : connection.connected ||
               connection.savedSetupReady ||
-              checking ? (
-              <button
-                disabled={
-                  checking ||
-                  snapshot.update.phase === "applying" ||
-                  !commandAllowed(
-                    snapshot,
-                    "connector.check-health",
-                    undefined,
-                    local,
-                  )
-                }
-                onClick={() => void checkNow()}
-              >
-                {checking ? "Checking…" : "Check now"}
-              </button>
-            ) : (
+              checking ? null : (
               <button
                 onClick={() =>
                   facade.navigate({ area: "setup", setupStep: "attachment" })

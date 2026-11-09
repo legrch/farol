@@ -88,6 +88,20 @@
   background: var(--sheet);
   flex: none;
 }
+.home-connection-details {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.home-connection-details summary {
+  cursor: pointer;
+  width: fit-content;
+}
+.home-connection-details button {
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  background: var(--sheet);
+}
 .home-working-mark {
   width: 28px;
   height: 28px;
