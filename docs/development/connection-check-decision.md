@@ -21,7 +21,7 @@ The source-realistic renderer characterization is retained in current-task priva
 evidence at `_output/evidence/stability-handover-a91048f3/toolbar-routing-regression.txt`
 and `toolbar-routing-red.log`. It renders and clicks the actual enabled toolbar
 button with saved setup and no attachment; the wrong deep-test dispatch is
-observed. The existing 16 renderer and 12 extracted-dispatch tests pass separately.
+observed. The original 16 renderer and 12 extracted-dispatch tests passed separately on the same a91048f3 source; the distinct passing-run receipts are listed below.
 Those scripted-host checks do not establish a provider or installed result.
 
 ## Selected direction and alternatives
@@ -93,3 +93,57 @@ Strict DTO/bridge generation, import/type checks, targeted tests, full CI and
 independent exact-source review precede integration. Packaged/installed/provider
 qualification and owner decisions remain separate. This decision does not claim
 any new implementation, installation or provider witness is already complete.
+
+## Durable identity ownership to implement
+
+The existing challenge-keyed claim does **not** already retain the command UUID,
+request fingerprint or result phases. Its schema 2 is the legacy separate-check
+record, not the format for this new operation. Do not claim otherwise or relabel
+old records. This decision requires extending one Go-owned attempt store, using
+an injected private storage adapter over the existing attempt namespace:
+
+- The operation record is the durable source for the explicit command UUID,
+  canonical validated caller-input fingerprint, captured scope digest, mode,
+  correlation IDs, monotonic dispatch/receipt phases and retained typed result.
+  Lookup the original UUID before resolving a new runtime scope. Same caller input
+  observes that original record; changed caller input refuses. A scope change
+  never silently becomes a new attempt for an existing UUID.
+- The existing challenge-named exclusive claim remains the bootstrap one-shot
+  fuse. New claims bind their operation UUID and scope/record correlation using a
+  new version distinct from existing schemas 1 and 2. Old claims remain immutable
+  consumed fences, with no invented UUID, not-sent phase or recovered result.
+- Operation records and the legacy-compatible fuse belong to that **same** attempt
+  owner and private lease, not two authority stores. No grant or settings copy is
+  introduced. A bounded strict lookup of owned operation records resolves UUIDs;
+  no independent mutable index is authoritative.
+- Persist the operation record before preflight so a known refusal can be retained.
+  Prepare its exact scope/document before dispatch. At the final effect boundary,
+  install/sync the bootstrap fuse when needed, then publish/sync dispatch intent
+  before permitting the browser activation. Status mode uses its stored fresh
+  check correlation and the same operation phase fence rather than pretending an
+  old attachment challenge is an unused bootstrap challenge.
+- A partial/lost operation save, fuse publication, intent write or result update
+  remains fenced by this owner. A fuse without a settled operation transition
+  cannot authorize Send or be deleted to manufacture a new attempt. Crash after
+  intent is unknown unless original correlated evidence proves dispatch certainty.
+  Successful file writes without required directory sync/readback are not proof.
+- Final result persistence and acknowledgement preserve the original monotonic
+  phase and uncertain effects. Capacity bounds never delete unresolved records.
+  Repeated observation is read-only; it neither reclaims a challenge nor advances
+  an unknown operation by dispatching again.
+
+This is required new implementation, not a guarantee supplied by the current
+challenge-only TypeScript helper or in-memory Go verifier. Route the active
+explicit path through this sole owner and retire its duplicate active writer;
+retain legacy readers/fuses and separately governed existing workflows. Verify
+schema/partial-write/close/sync/duplicate/crash cases against actual stored bytes.
+
+## Named evidence for this decision
+
+The source-bound original passing runs are separate from the intentionally failing
+characterization. Current-task private receipts, with SHA256 for independent readback:
+
+- Original renderer suite: 16 passed: `_output/evidence/stability-handover-a91048f3/baseline-renderer.log`, SHA256 `d9565d5f531574674685cd4f01693b186378c53a521412da07d4a7e53ff0d59b`.
+- Original extracted-dispatch suite: 12 passed: `_output/evidence/stability-handover-a91048f3/baseline-dispatch.log`, SHA256 `8e0c94dea83662f82b051a29ef78d142f33cadd0ebf6a033ece057540bc3fbda`.
+- Actual toolbar characterization: 1 failed, 16 skipped: `_output/evidence/stability-handover-a91048f3/toolbar-routing-red.log`, SHA256 `5a241da00d8d343b24634918d3b83659887c43fedc89ed1e06ba1b92118ade2a`.
+- Exact added characterization case: `_output/evidence/stability-handover-a91048f3/toolbar-routing-regression.txt`, SHA256 `361ba42a3236630e436e266d0b385310a4b1cc6e85406c5fdbef84ce86499d6d`.
