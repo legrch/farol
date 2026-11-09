@@ -1320,6 +1320,7 @@ export function Shell() {
           <div
             className="rail-connection"
             data-connected={connected}
+            data-attention={connectionState.attention}
             data-checking={connectionState.checking}
             role="status"
             aria-label={connectionLabel}

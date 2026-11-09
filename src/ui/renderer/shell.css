@@ -394,6 +394,9 @@ kbd {
   border-radius: 8px;
   color: var(--warn);
 }
+.rail-connection[data-attention="false"] {
+  color: var(--muted);
+}
 .rail-connection[data-connected="true"] {
   color: var(--good);
 }
