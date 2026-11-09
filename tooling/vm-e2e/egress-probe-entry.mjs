@@ -1,9 +1,8 @@
 // Closed-contour egress probe for the VM executor: the bundled driver runs
 // INSIDE the guest and reports, per synthetic endpoint, whether an outbound
-// connection would have been possible. The probe never contacts a real
-// provider: its endpoints are documentation-reserved addresses (RFC 5737
-// TEST-NET, RFC 3849 documentation IPv6, RFC 6761 invalid name) that must
-// fail everywhere and can never route to a service.
+// connection was observed. These reserved-address probes are DIAGNOSTIC ONLY:
+// failure also occurs on online machines and does not establish default-deny.
+// They must never be used as a product E2E or containment PASS.
 //
 // The report is the receipt; interpretation is the runner's job. In the
 // offline guest every endpoint must be non-connectable; the same bundle run
@@ -19,6 +18,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const CONNECT_TIMEOUT_MS = 3000;
+const PROBE_CASES = ["tcp-test-net-1", "tcp-test-net-2", "tcp-test-net-3", "tcp-documentation-v6", "dns-invalid"];
 
 function probeTcp(host, port) {
   return new Promise((resolve) => {
@@ -67,6 +67,7 @@ export async function runProbe() {
     scenario: "vm-e2e-egress-probe",
     probedAt: new Date().toISOString(),
     probes,
+    cases: PROBE_CASES.map((id) => ({ id, status: "REPORTED" })),
     externalConnectable: probes.some((probe) => probe.connectable),
   };
 }
@@ -84,7 +85,8 @@ if (entryArgument !== null && entryArgument === modulePath) {
       process.exit(0);
     },
     async (error) => {
-      await writeResult({ scenario: "vm-e2e-egress-probe", status: "PROBE_FAILED", detail: String(error) });
+      await writeResult({ scenario: "vm-e2e-egress-probe", status: "FAIL", reason: String(error).slice(0, 2048),
+        cases: PROBE_CASES.map((id) => ({ id, status: "NOT_RUN" })) });
       process.exit(1);
     },
   );

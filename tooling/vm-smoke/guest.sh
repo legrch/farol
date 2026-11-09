@@ -147,9 +147,17 @@ case "$phase" in
     /usr/bin/osascript -l JavaScript "$stage/driver-manifest.js" "$stage" >/dev/null || { finish BLOCKED; exit 78; }
     result_dir="$report/e2e"
     mkdir -p "$result_dir"
-    export VM_E2E_RESULT_DIR="$result_dir"
-    "$node_bin" "$bundle"
-    [ -f "$result_dir/result.json" ]
+    # This phase acknowledges the observed child terminal, not a test PASS.
+    # A nonzero driver exit still has a process receipt for result admission.
+    context="$stage/driver.context.json"
+    [ -f "$context" ] && [ ! -L "$context" ]
+    [ ! -e "$result_dir/result.json" ] && [ ! -e "$result_dir/process.json" ]
+    context_sha="$(/usr/bin/shasum -a 256 "$context" | /usr/bin/cut -d ' ' -f 1)"
+    export VM_E2E_RESULT_DIR="$result_dir" VM_E2E_CONTEXT_FILE="$context"
+    if "$node_bin" "$bundle"; then driver_exit=0; else driver_exit=$?; fi
+    printf '{"schema":"farol.vm-e2e.process/1","runId":"%s","token":"%s","contextSha256":"%s","exitCode":%d}\n' \
+      "$run_id" "$token" "$context_sha" "$driver_exit" > "$result_dir/process.json.tmp"
+    mv "$result_dir/process.json.tmp" "$result_dir/process.json"
     finish READY
     ;;
   *) exit 73 ;;

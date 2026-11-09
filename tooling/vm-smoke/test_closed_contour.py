@@ -100,7 +100,8 @@ def write_machine_json(machine, machine_json):
         file.write_text(json.dumps(machine_json))
 
 
-def drive_closed_package(root, machine_json, closed=True, driver=False, clone_receipt=None):
+def drive_closed_package(root, machine_json, closed=True, driver=False, clone_receipt=None,
+                         guest_hook=None, execute=None):
     """One synthetic package run: --artifact admission, a recording fake CLI
     and a synthetic guest that ACKs every phase with result files. With
     driver=True the run carries a --e2e-driver payload and the synthetic
@@ -111,6 +112,9 @@ def drive_closed_package(root, machine_json, closed=True, driver=False, clone_re
     driver_dir = None
     if driver:
         driver_dir, _manifest = build_driver_dir(root)
+        if guest_hook is None:
+            _manifest['entry'] = 'egress-probe-entry.mjs'
+            (driver_dir / 'manifest.json').write_text(json.dumps(_manifest))
     runner = build_runner(root, closed=closed, artifact=str(archive),
                           e2e_driver=str(driver_dir) if driver else None)
     machine = runner.machine
@@ -162,14 +166,11 @@ def drive_closed_package(root, machine_json, closed=True, driver=False, clone_re
                  'receipt': f'proof-{proof_count[0]}', 'quitAt': 1000, 'observedAt': 1000}))
         if name == 'connection-proof':
             (target.parent / 'connection.json').write_text(json.dumps({'approvedDev': False}))
-        if name == 'e2e':
-            # The in-guest driver publishes its own durable receipt; the
-            # synthetic guest reproduces exactly that contract.
-            result_dir = target.parent / 'e2e'
-            result_dir.mkdir(exist_ok=True)
-            (result_dir / 'result.json').write_text(json.dumps(
-                {'scenario': 'vm-e2e-egress-probe', 'status': 'REPORTED',
-                 'externalConnectable': False, 'probes': []}))
+        if name == 'e2e' and guest_hook is None:
+            from e2e_result_test_support import publish_result
+            publish_result(runner, target, diagnostic=True)
+        if guest_hook is not None:
+            guest_hook(runner, name, target)
         target.write_text('READY')
 
     if clone_receipt is not None:
@@ -180,7 +181,7 @@ def drive_closed_package(root, machine_json, closed=True, driver=False, clone_re
     result = caught = None
     with patch.object(vm.subprocess, 'check_output', return_value=''), patch.object(vm.time, 'sleep'):
         try:
-            result = runner.run()
+            result = execute(runner) if execute is not None else runner.run()
         except vm.Refused as error:
             caught = error
     return runner, result, caught, calls, machine_before
@@ -389,7 +390,9 @@ class ClosedAdmissionTests(unittest.TestCase):
                             'the driver runs after the app under test is installed and launched')
             self.assertEqual(result['e2e']['scenario'], 'vm-e2e-egress-probe')
             self.assertEqual(result['e2e']['status'], 'REPORTED')
-            self.assertEqual(set(result), PACKAGE_RESULT_KEYS | {'networkPolicy', 'e2e'})
+            self.assertEqual(result['test']['status'], 'REPORTED')
+            self.assertFalse(result['e2e']['qualificationEligible'])
+            self.assertEqual(set(result), PACKAGE_RESULT_KEYS | {'networkPolicy', 'e2e', 'test', 'operation'})
             self.assertEqual(json.loads((runner.out / 'result.json').read_text()), result)
             # The staged payload carried the manifest digests into the guest
             # share and is gone with the cleaned stage afterwards.

@@ -85,6 +85,7 @@ export async function runFixtureProbe() {
       scenario: "vm-e2e-fixture-probe",
       fixtureUrl: base,
       checks,
+      cases: checks.map((check) => ({ id: check.name, status: check.ok ? "PASS" : "FAIL" })),
       ok: failed.length === 0,
       failed: failed.map((check) => check.name),
     };
@@ -108,7 +109,9 @@ if (entryArgument !== null && entryArgument === modulePath) {
       process.exit(result.ok ? 0 : 1);
     },
     async (error) => {
-      await writeResult({ scenario: "vm-e2e-fixture-probe", status: "PROBE_FAILED", detail: String(error) });
+      await writeResult({ scenario: "vm-e2e-fixture-probe", status: "FAIL", reason: String(error).slice(0, 2048),
+        cases: ["setup-page-status", "json-endpoint", "missing-route-fails-closed", "loopback-only-binding"]
+          .map((id) => ({ id, status: "NOT_RUN" })) });
       process.exit(1);
     },
   );

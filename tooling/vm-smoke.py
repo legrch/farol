@@ -367,6 +367,9 @@ class Runner:
         self.cleanup_note = None
         self.network_policy = None
         self.driver_result = None
+        self.e2e_context = None
+        self.driver_process_confirmed = False
+        self.e2e_phase_error = None
         self.effect_owned = False
         self.effect_file = self.machine / '.farol-smoke-pending.json'
         # Never forward product configuration, proxy, Electron or loader environment.
@@ -771,6 +774,199 @@ class Runner:
             raise
         return staged
 
+    def prepare_e2e_context(self, staged, artifact):
+        """Expected selection is source-declared, never taken from a result file.
+
+        All current entries are infrastructure/diagnostic. None is product E2E.
+        The context is staged before app startup and the exact bytes are retained.
+        """
+        contracts = json.loads((Path(__file__).parent / 'vm-e2e/scenario-contracts.json').read_text())
+        require(contracts.get('schema') == 'farol.vm-e2e.scenarios/1', 'E2E_CONTRACT_INVALID')
+        selected = contracts.get('entries', {}).get(staged['entry'])
+        require(isinstance(selected, dict) and set(selected) == {'scenario', 'evidenceClass', 'selection'},
+                'E2E_ENTRY_NOT_DECLARED')
+        require(selected['evidenceClass'] in ('infrastructure', 'diagnostic') and
+                isinstance(selected['scenario'], str) and re.fullmatch('[a-z][a-z0-9-]{0,127}', selected['scenario']),
+                'E2E_CONTRACT_INVALID')
+        cases = selected['selection']
+        require(isinstance(cases, list) and 0 < len(cases) <= 64 and
+                all(isinstance(item, str) and re.fullmatch('[a-z0-9][a-z0-9-]{0,127}', item) for item in cases) and
+                len(set(cases)) == len(cases), 'E2E_CASE_SELECTION_INVALID')
+        context = {'schema': 'farol.vm-e2e.context/1', 'runId': self.run_id,
+                   **selected, 'bundleSha256': staged['bundle']['sha256'],
+                   'artifact': {key: artifact[key] for key in
+                                ('sourceCommit', 'buildId', 'artifactSha256', 'archiveSha256')}}
+        file = self.stage / 'driver.context.json'
+        self.write_durable_json(file, context)
+        self.e2e_context = context
+        self.e2e_context_sha = digest(file)
+        self.preserve_e2e_bytes('e2e-context.json', file.read_bytes())
+
+    def preserve_e2e_bytes(self, name, data):
+        """Exact raw evidence, including empty/malformed JSON; never overwrite."""
+        target = self.out / name
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'wb') as out:
+            out.write(data)
+            out.flush()
+            os.fsync(out.fileno())
+        self.sync_directory(self.out)
+
+    def read_e2e_file(self, name, limit):
+        file = self.report / 'e2e' / (name + '.json')
+        try:
+            require(file.parent.is_dir() and not file.parent.is_symlink(), 'E2E_' + name.upper() + '_MISSING')
+            fd = os.open(file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, 'rb') as source:
+                info = os.fstat(source.fileno())
+                require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and 0 <= info.st_size <= limit,
+                        'E2E_' + name.upper() + '_UNSAFE')
+                data = source.read(limit + 1)
+                require(len(data) == info.st_size, 'E2E_' + name.upper() + '_CHANGED')
+        except FileNotFoundError:
+            return None, 'E2E_' + name.upper() + '_MISSING'
+        except (OSError, Refused) as error:
+            return None, str(error)
+        try:
+            self.preserve_e2e_bytes('e2e-' + name + '.raw.json', data)
+        except OSError:
+            return None, 'E2E_EVIDENCE_WRITE_FAILED'
+        try:
+            def unique_object(pairs):
+                result = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ValueError('duplicate JSON key')
+                    result[key] = value
+                return result
+            def reject_constant(_value):
+                raise ValueError('non-JSON constant')
+            return json.loads(data, object_pairs_hook=unique_object, parse_constant=reject_constant), None
+        except (ValueError, UnicodeError, RecursionError):
+            return None, 'E2E_' + name.upper() + '_JSON_INVALID'
+
+    def validate_e2e_result(self, value):
+        context = self.e2e_context
+        keys = {'schema', 'runId', 'scenario', 'selection', 'evidenceClass', 'bundleSha256',
+                'artifact', 'contextSha256', 'status', 'cases', 'reason', 'details'}
+        require(isinstance(value, dict) and set(value) == keys, 'E2E_RESULT_SHAPE_INVALID')  # gitleaks:allow (error code, not a secret)
+        require(value['schema'] == 'farol.vm-e2e.result/1', 'E2E_RESULT_SCHEMA_UNSUPPORTED')
+        require(all(value[key] == context[key] for key in
+                    ('runId', 'scenario', 'selection', 'evidenceClass', 'bundleSha256', 'artifact')) and
+                value['contextSha256'] == self.e2e_context_sha, 'E2E_RESULT_BINDING_MISMATCH')
+        require(isinstance(value['details'], dict), 'E2E_RESULT_DETAILS_INVALID')
+        cases = value['cases']
+        require(isinstance(cases, list) and len(cases) == len(context['selection']) and
+                all(isinstance(item, dict) and set(item) == {'id', 'status'} for item in cases),
+                'E2E_CASES_INCOMPLETE')
+        require([item['id'] for item in cases] == context['selection'] and
+                all(item['status'] in ('PASS', 'FAIL', 'NOT_RUN', 'REPORTED') for item in cases),
+                'E2E_CASES_INVALID')
+        reason = value['reason']
+        require(reason is None or (isinstance(reason, str) and 0 < len(reason) <= 2048), 'E2E_REASON_INVALID')
+        status = value['status']
+        if status == 'PASS':
+            require(context['evidenceClass'] == 'infrastructure' and reason is None and
+                    all(item['status'] == 'PASS' for item in cases), 'E2E_PASS_INCOMPLETE')
+        elif status == 'REPORTED':
+            require(context['evidenceClass'] == 'diagnostic' and reason is None and
+                    all(item['status'] == 'REPORTED' for item in cases), 'E2E_REPORTED_INVALID')
+        elif status == 'FAIL':
+            require(reason is not None or any(item['status'] == 'FAIL' for item in cases),
+                    'E2E_FAIL_WITHOUT_FAILURE')
+        else:
+            raise Refused('E2E_STATUS_UNSUPPORTED')
+        return status
+
+    def collect_e2e_result(self, token):
+        """A result cannot overrule an unconfirmed/nonzero process terminal."""
+        process, process_error = self.read_e2e_file('process', 8192)
+        receipt, result_error = self.read_e2e_file('result', 262144)
+        process_ok = (process_error is None and isinstance(process, dict) and
+                      set(process) == {'schema', 'runId', 'token', 'contextSha256', 'exitCode'} and
+                      process['schema'] == 'farol.vm-e2e.process/1' and process['runId'] == self.run_id and
+                      process['token'] == token and process['contextSha256'] == self.e2e_context_sha and
+                      type(process['exitCode']) is int and 0 <= process['exitCode'] <= 255)
+        self.driver_process_confirmed = process_ok
+        reported = None
+        if result_error is None:
+            try:
+                reported = self.validate_e2e_result(receipt)
+            except Refused as error:
+                result_error = str(error)
+        if reported == 'FAIL':
+            status, reason = 'FAIL', 'E2E_ASSERTIONS_FAILED'
+        elif not process_ok:
+            status, reason = 'UNKNOWN', 'E2E_PROCESS_UNCONFIRMED'
+        elif process['exitCode'] != 0:
+            status, reason = 'FAIL', 'E2E_PROCESS_FAILED'
+        elif result_error:
+            status, reason = 'INVALID', result_error
+        else:
+            status, reason = reported, None
+        self.driver_result = {
+            'schema': 'farol.vm-e2e.admission/1', 'runId': self.run_id,
+            'scenario': self.e2e_context['scenario'], 'evidenceClass': self.e2e_context['evidenceClass'],
+            'status': status, 'reason': reason, 'receipt': receipt, 'process': process,
+            'processError': process_error, 'resultError': result_error,
+            'rawEvidence': {name: {'file': 'e2e-' + name + '.raw.json',
+                                   'sha256': digest(self.out / ('e2e-' + name + '.raw.json'))}
+                            for name in ('process', 'result')
+                            if (self.out / ('e2e-' + name + '.raw.json')).is_file()},
+            # Current declared drivers are probes, not the ordinary Farol E2E.
+            'qualificationEligible': False}
+
+    def execute_e2e(self):
+        token = f'{self.sequence + 1:04d}-e2e'
+        try:
+            self.phase('e2e')
+        except (Refused, OSError, ValueError, KeyError, KeyboardInterrupt, subprocess.TimeoutExpired) as error:
+            self.e2e_phase_error = str(error) or 'RUN_INTERRUPTED'
+            self.collect_e2e_result(token)
+            raise  # Preserve the original phase error; do not replay or mutate.
+        self.collect_e2e_result(token)
+        if not self.driver_process_confirmed:
+            self.pending = 'e2e'
+            raise Refused('E2E_PROCESS_UNCONFIRMED')
+
+    def attach_e2e_evidence(self, result, error=None):
+        """Assertions, smoke lifecycle, and operation completion are distinct."""
+        if getattr(self, 'driver_result', None) is None:
+            return
+        result['e2e'] = self.driver_result
+        status = self.driver_result['status']
+        result['test'] = {'status': 'FAIL' if status in ('FAIL', 'INVALID') else status,
+                          'scenario': self.driver_result['scenario'],
+                          'evidenceClass': self.driver_result['evidenceClass']}
+        confirmed = (self.driver_process_confirmed and error is None and self.pending is None and
+                     self.log and self.log[-1] == 'stop' and result.get('cleanup') == 'CLEARED')
+        result['operation'] = {'status': 'CONFIRMED' if confirmed else 'UNKNOWN',
+                               'pending': self.pending, 'error': str(error) if error is not None else None}
+        result.setdefault('lifecycle', 'UNKNOWN')
+        result.setdefault('ui', 'NEEDS_REVIEW')
+        if result['test']['status'] == 'FAIL':
+            result['status'] = 'FAIL'
+            result['reason'] = getattr(self, 'e2e_phase_error', None) or self.driver_result['reason']
+        elif not confirmed:
+            result['status'] = 'UNKNOWN'
+            result['reason'] = str(error) if error is not None else 'E2E_TEARDOWN_UNCONFIRMED'
+        else:
+            result['status'] = 'NEEDS_REVIEW'
+
+    def finish_failed_e2e(self, manifest, initial):
+        # The driver has a confirmed terminal, so only bounded normal teardown
+        # follows. Do not continue with another relaunch/scenario after failure.
+        self.quit_guest_app()
+        self.phase('cleanup')
+        self.phase('stop')
+        result = dict(status='FAIL', lifecycle='NOT_RUN', ui='NEEDS_REVIEW',
+                      version=manifest['version'], archiveSha256=manifest['archiveSha256'],
+                      initial=initial, phases=self.log, cleanup=self.finish_staging(),
+                      lease=self.lease_evidence(), networkPolicy=self.network_policy)
+        self.attach_e2e_evidence(result)
+        (self.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
+        return result
+
     def connection_proof(self):
         self.prepare_stage()
         self.start_guest()
@@ -939,6 +1135,9 @@ class Runner:
                 shutil.copyfile(archive, self.stage / 'app.zip')
                 (self.stage / 'archive.sha256').write_text(manifest['archiveSha256'])
                 (self.stage / 'version').write_text(manifest['version'])
+                if getattr(self.a, 'closed', False) and getattr(self.a, 'e2e_driver', None):
+                    staged = self.stage_driver(self.a.e2e_driver)
+                    self.prepare_e2e_context(staged, manifest)
                 self.start_guest()
                 self.phase('share-probe')
                 if self.a.prepare_test_guest:
@@ -962,15 +1161,10 @@ class Runner:
                     self.action('key', 'escape')
                 self.phase('activate')
                 self.wait_state(True, foreground=True)
-                if getattr(self.a, 'closed', False) and getattr(self.a, 'e2e_driver', None):
-                    # Closed-contour execution: the staged driver runs the
-                    # ordinary scenario inside the offline guest; its durable
-                    # result file is the receipt recorded with this run.
-                    self.stage_driver(self.a.e2e_driver)
-                    self.phase('e2e')
-                    result_file = self.report / 'e2e' / 'result.json'
-                    regular(result_file, 262144)
-                    self.driver_result = json.loads(result_file.read_text())
+                if self.e2e_context is not None:
+                    self.execute_e2e()
+                    if self.driver_result['status'] in ('FAIL', 'INVALID'):
+                        return self.finish_failed_e2e(manifest, initial)
                 proof = self.quit_proof()
                 self.begin_effect()
                 self.action('key', 'cmd+q')
@@ -1007,10 +1201,7 @@ class Runner:
                     # A provisioned instance records exactly which base and
                     # identity it came from; ordinary machines add no key.
                     result['instance'] = clone_receipt
-                if getattr(self, 'driver_result', None):
-                    # Only a driver that actually ran adds a receipt; ordinary
-                    # runs keep their exact result shape.
-                    result['e2e'] = self.driver_result
+                self.attach_e2e_evidence(result)
                 (self.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
                 if self.a.latest and result['cleanup'] == 'CLEARED':
                     archive.unlink()
@@ -1062,6 +1253,7 @@ def arguments(argv=None):
         require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', a.vm), 'VM_NAME_INVALID')
         require(isinstance(a.vm_home, str) and a.vm_home, 'INFRASTRUCTURE_CONFIG_REQUIRED')
         return a
+    require(not a.e2e_driver or a.closed, 'E2E_DRIVER_REQUIRES_CLOSED')
     if a.closed:
         # A closed run never resolves or downloads a release (--artifact is
         # mandatory); the dev/proof sources are separate run kinds.
@@ -1078,6 +1270,14 @@ def arguments(argv=None):
     require(all(0 <= x <= 8192 for x in a.terminal_point), 'TERMINAL_POINT_INVALID')
     require(a.menu_point is None or all(0 <= x <= 8192 for x in a.menu_point), 'MENU_POINT_INVALID')
     return a
+
+
+def result_exit_code(result, fallback=0):
+    if result.get('test', {}).get('status') == 'FAIL':
+        return 1
+    if result.get('operation', {}).get('status') == 'UNKNOWN':
+        return 2
+    return fallback
 
 
 def main():
@@ -1099,7 +1299,7 @@ def main():
             # A failed staging cleanup keeps the effect fence for reconciliation.
             runner.finish_effect()
         print(json.dumps(dict(result, evidence=str(runner.out))))
-        return 0  # NEEDS_REVIEW is deliberately explicit; no UI PASS is fabricated.
+        return result_exit_code(result)  # Diagnostic success is not product qualification.
     except (Refused, OSError, ValueError, TypeError, KeyError, KeyboardInterrupt, subprocess.TimeoutExpired, zipfile.BadZipFile) as error:
         result = dict(status='NEEDS_OWNER' if str(error) == 'NEEDS_OWNER' else 'BLOCKED',
                       reason='RUN_INTERRUPTED' if isinstance(error, KeyboardInterrupt) else str(error), phases=runner.log if runner else [],
@@ -1110,12 +1310,13 @@ def main():
                 result['cleanup'] = runner.cleanup_disposition()
             except Exception as cleanup_error:
                 result['cleanup'] = 'FAILED:' + str(cleanup_error)
+            runner.attach_e2e_evidence(result, error=error)
             try:
                 (runner.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
             except OSError:
                 pass  # Evidence fallout must never mask the primary result.
         print(json.dumps(result))
-        return 2
+        return result_exit_code(result, fallback=2)
     finally:
         try:
             if runner:
