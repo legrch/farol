@@ -241,7 +241,7 @@ class InputLeaseConsumerTests(unittest.TestCase):
                 after = (machine / 'input-lease.json').read_text() if (machine / 'input-lease.json').exists() else None
                 self.assertEqual(after, before, 'refusal never rewrites foreign metadata')
 
-    def test_crash_mid_run_still_releases_flag_metadata_and_flock(self):
+    def test_failed_run_releases_host_flock_but_preserves_guest_update_inhibitor(self):
         for where, kwargs in (('cli-action', dict(cli_fail_at=5)),
                               ('guest-phase', dict(phase_fail_at=3))):
             with self.subTest(where=where), tempfile.TemporaryDirectory() as d:
@@ -250,8 +250,18 @@ class InputLeaseConsumerTests(unittest.TestCase):
                 self.assertIsInstance(caught, vm.Refused)
                 self.assertRegex(str(caught), 'GUEST_(ACTION|PHASE)_FAILED')
                 machine = runner.machine
-                self.assertFalse((machine / 'input-lease.json').exists())
-                self.assertFalse((machine / 'exchange' / '.input-lease.json').exists())
+                metadata = machine / 'input-lease.json'
+                self.assertTrue(metadata.exists(), 'UNKNOWN preserves machine owner evidence')
+                self.assertEqual(json.loads(metadata.read_text())['owner'],
+                                 'farol-smoke:' + runner.run_id)
+                marker = machine / 'exchange' / '.input-lease.json'
+                self.assertTrue(marker.exists(), 'UNKNOWN must retain the helper-update inhibitor')
+                self.assertEqual(json.loads(marker.read_text())['owner'],
+                                 'farol-smoke:' + runner.run_id)
+                probe_lock_free(machine)
+                with self.assertRaisesRegex(vm.Refused, 'HELPER_UPDATE_CUSTODY_UNRESOLVED'):
+                    runner.acquire_input_lease()  # not an automatic recovery
+                self.assertTrue(marker.exists(), 'failed admission must not remove the old flag')
                 probe_lock_free(machine)
 
 

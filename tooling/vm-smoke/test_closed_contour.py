@@ -345,11 +345,16 @@ class ClosedAdmissionTests(unittest.TestCase):
             self.assertEqual(set(result), PACKAGE_RESULT_KEYS | {'networkPolicy'})
             self.assertEqual(json.loads((runner.out / 'result.json').read_text()), result)
             self.assertEqual(result['phases'][-1], 'stop')
-            # Admission only reads the machine file; the lease is released.
+            # The flock is released, but evidence remains until the effect fence
+            # is explicitly cleared by the caller, as in main().
             self.assertEqual((runner.machine / 'machine.json').read_text(), machine_before)
-            self.assertFalse((runner.machine / 'input-lease.json').exists())
+            self.assertIsNone(runner.lease_fd)
+            self.assertTrue((runner.machine / 'input-lease.json').exists())
+            self.assertTrue((runner.exchange / '.input-lease.json').exists())
             runner.finish_effect()
             self.assertFalse(runner.effect_file.exists())
+            self.assertFalse((runner.machine / 'input-lease.json').exists())
+            self.assertFalse((runner.exchange / '.input-lease.json').exists())
 
     def test_cloned_instance_records_provenance_and_corrupt_receipt_refuses(self):
         with tempfile.TemporaryDirectory() as d:

@@ -35,6 +35,26 @@ def canonical_tree_digest(app):
     return result.stdout.strip()
 
 
+
+
+def seed_synthetic_owned_lease(runner):
+    """Model exactly the run-owned host record when bypassing actual acquisition.
+
+    Pure Dev/effect tests construct Runner without invoking lease acquisition;
+    they must now supply BOTH files that production acquisition publishes.
+    This is not a shortcut for the dedicated acquire_input_lease regressions.
+    """
+    value = {'schema': 'terminal-mac.input-lease/1',
+             'owner': 'farol-smoke:' + runner.run_id,
+             'generation': 1, 'acquiredAt': 123}
+    file = runner.machine / 'input-lease.json'
+    file.write_text(json.dumps(value))
+    stat = file.stat()
+    runner.lease_metadata_value = value
+    runner.lease_metadata_identity = (stat.st_dev, stat.st_ino)
+    runner.lease_metadata_owned = True
+    runner.helper_update_flag_owned = True
+
 class AdmissionTests(unittest.TestCase):
     def asset(self, root, extra=None):
         # A valid producer-shaped package: the archive carries the physical app
@@ -265,6 +285,15 @@ m.export_dev_connection(Path(sys.argv[2]),json.loads(sys.argv[3]),Path(sys.argv[
                 runner.effect_owned = False
                 runner.run_id = 'durability-test'
                 runner.out = Path(d) / 'evidence'
+                runner.machine = Path(d)
+                runner.cleanup_note = 'CLEARED'
+                # This test bypasses lease acquisition, which normally publishes
+                # the exact helper-update marker before any guest effect.
+                runner.exchange.mkdir()
+                (runner.exchange / '.input-lease.json').write_text(json.dumps({
+                    'schema': 'terminal-mac.input-lease-flag/1',
+                    'owner': 'farol-smoke:durability-test', 'deadline': 9999999999}))
+                seed_synthetic_owned_lease(runner)
                 synced = []
                 fsync = os.fsync
                 def sync(fd):
@@ -288,7 +317,8 @@ m.export_dev_connection(Path(sys.argv[2]),json.loads(sys.argv[3]),Path(sys.argv[
                         runner.log = ['stop']
                         runner.finish_effect()
                         self.assertFalse(runner.effect_file.exists())
-                self.assertEqual(synced, ['file', 'directory'] if fail_directory else ['file', 'directory', 'directory'])
+                self.assertEqual(synced, ['file', 'directory'] if fail_directory else
+                                 ['file', 'directory', 'directory', 'directory', 'directory'])
 
     def test_preflight_failure_without_stage_preserves_original_result(self):
         with tempfile.TemporaryDirectory() as d:
@@ -341,6 +371,12 @@ m.export_dev_connection(Path(sys.argv[2]),json.loads(sys.argv[3]),Path(sys.argv[
             first.run_id = 'original'
             first.out = root / 'evidence'
             first.log = []
+            first.cleanup_note = 'CLEARED'
+            first.exchange.mkdir()
+            (first.exchange / '.input-lease.json').write_text(json.dumps({
+                'schema': 'terminal-mac.input-lease-flag/1',
+                'owner': 'farol-smoke:original', 'deadline': 9999999999}))
+            seed_synthetic_owned_lease(first)
             first.begin_effect()
             later = object.__new__(vm.Runner)
             later.machine = root

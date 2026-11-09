@@ -4,6 +4,7 @@ import argparse
 import fcntl
 import hashlib
 import json
+import math
 import os
 import plistlib
 from pathlib import Path, PurePosixPath
@@ -516,56 +517,164 @@ class Runner:
             return value['owner']
         return 'unknown'
 
-    def acquire_input_lease(self):
-        """Own the guest-input lease before any VM or guest effect.
+    def write_durable_json_exclusive(self, path, payload):
+        """Create a custody record without replacing a predecessor's evidence.
 
-        The flock is the authority (a crashed holder self-heals); the JSON is
-        crash-durable evidence. A held lease is refused by name before any VM
-        start, and the helper-update deferral flag goes live immediately."""
+        Publication before the directory fsync is uncertain on failure. The
+        existing file must be retained for reconciliation, never rolled back.
+        This intentionally differs from write_durable_json's replace contract.
+        """
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'w') as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            json.dump(payload, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        self.sync_directory(path.parent)
+
+    def require_no_lease_predecessor(self):
+        """A free flock is not evidence that an old guest action has finished."""
+        for path in (self.machine / 'input-lease.json', self.exchange / '.input-lease.json'):
+            try:
+                path.lstat()  # includes dangling symlinks and unsafe file types
+            except FileNotFoundError:
+                continue
+            except OSError as error:
+                raise Refused('HELPER_UPDATE_CUSTODY_UNRESOLVED') from error
+            raise Refused('HELPER_UPDATE_CUSTODY_UNRESOLVED')
+
+    def effect_fence_definitely_absent(self):
+        """Only ENOENT proves absence; dangling links or unreadable paths do not."""
+        try:
+            self.effect_file.lstat()
+        except FileNotFoundError:
+            return True
+        except OSError as error:
+            raise Refused('GUEST_OPERATION_FENCE_UNINSPECTABLE') from error
+        return False
+
+    def require_own_lease_metadata(self):
+        path = self.machine / 'input-lease.json'
+        require(getattr(self, 'lease_metadata_owned', False), 'GUEST_INPUT_LEASE_METADATA_UNCONFIRMED')
+        try:
+            info = regular(path, 4096)
+            metadata = json.loads(path.read_text())
+        except (OSError, ValueError, TypeError) as error:
+            raise Refused('GUEST_INPUT_LEASE_METADATA_CHANGED') from error
+        require(metadata == self.lease_metadata_value and
+                (info.st_dev, info.st_ino) == self.lease_metadata_identity,
+                'GUEST_INPUT_LEASE_METADATA_CHANGED')
+
+    def require_own_update_marker(self):
+        require(getattr(self, 'helper_update_flag_owned', False), 'HELPER_UPDATE_CUSTODY_UNCONFIRMED')
+        marker = self.exchange / '.input-lease.json'
+        try:
+            regular(marker, 4096)
+            value = json.loads(marker.read_text())
+        except (OSError, ValueError, TypeError) as error:
+            raise Refused('HELPER_UPDATE_CUSTODY_CHANGED') from error
+        require(isinstance(value, dict) and
+                value.get('schema') == 'terminal-mac.input-lease-flag/1' and
+                value.get('owner') == 'farol-smoke:' + self.run_id and
+                type(value.get('deadline')) in (int, float) and
+                math.isfinite(value['deadline']) and value['deadline'] > 0,
+                'HELPER_UPDATE_CUSTODY_CHANGED')
+
+    def acquire_input_lease(self):
+        """Take the flock before writing a new, exclusively owned metadata pair.
+
+        Failure of either publication or its sync retains possible partial
+        records. Never use the clean-release path while ownership is uncertain.
+        """
         self.exchange.mkdir(mode=0o700, exist_ok=True)
         require(self.exchange.is_dir() and not self.exchange.is_symlink(), 'EXCHANGE_SHARE_REQUIRED')
-        fd = os.open(self.machine / 'input-lease.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-        os.fchmod(fd, 0o600)
+        fd = os.open(self.machine / 'input-lease.lock',
+                     os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            os.close(fd)
-            raise Refused('GUEST_INPUT_LEASE_HELD:' + self.input_lease_holder()) from error
+            info = os.fstat(fd)
+            require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and
+                    info.st_uid == os.geteuid() and not info.st_mode & 0o077,
+                    'GUEST_INPUT_LEASE_LOCK_UNSAFE')
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise Refused('GUEST_INPUT_LEASE_HELD:' + self.input_lease_holder()) from error
+        except BaseException:
+            os.close(fd)  # also on unsafe entries and unexpected flock failures
+            raise
         self.lease_fd = fd
         self.lease_owner = 'farol-smoke:' + self.run_id
+        self.lease_metadata_owned = False
+        self.helper_update_flag_owned = False
+        self.lease_metadata_value = None
+        self.lease_metadata_identity = None
         try:
-            self.write_durable_json(self.machine / 'input-lease.json',
-                                    {'schema': 'terminal-mac.input-lease/1', 'owner': self.lease_owner,
-                                     'generation': 1, 'acquiredAt': int(time.time())})
-            self.publish_lease_flag()
+            self.require_no_lease_predecessor()
+            metadata = {'schema': 'terminal-mac.input-lease/1', 'owner': self.lease_owner,
+                        'generation': 1, 'acquiredAt': int(time.time())}
+            path = self.machine / 'input-lease.json'
+            self.write_durable_json_exclusive(path, metadata)
+            info = regular(path, 4096)
+            self.lease_metadata_value = metadata
+            self.lease_metadata_identity = (info.st_dev, info.st_ino)
+            self.lease_metadata_owned = True
+            self.publish_lease_flag(initial=True)
+            self.helper_update_flag_owned = True
         except BaseException:
-            self.release_input_lease()
+            # Do not invoke release_input_lease: metadata or marker may have
+            # been published even if its last fsync/ACK failed. In particular,
+            # never unlink pre-existing machine metadata on a refused admission.
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+                self.lease_fd = None
+                self.lease_owner = None
             raise
 
-    def publish_lease_flag(self):
-        """Defer guest helper self-replacement while this run owns input.
-
-        The dot-name is ignored by request pickup and residue sweep; an
-        expired flag fences nothing."""
-        self.write_durable_json(self.exchange / '.input-lease.json',
-                                {'schema': 'terminal-mac.input-lease-flag/1', 'owner': self.lease_owner,
-                                 'deadline': time.time() + 120.0})
+    def publish_lease_flag(self, initial=False):
+        """Refresh only our own marker; first publication must not replace one."""
+        marker = self.exchange / '.input-lease.json'
+        value = {'schema': 'terminal-mac.input-lease-flag/1', 'owner': self.lease_owner,
+                 'deadline': time.time() + 120.0}
+        if initial:
+            self.write_durable_json_exclusive(marker, value)
+        else:
+            self.require_own_update_marker()
+            self.write_durable_json(marker, value)
 
     def release_input_lease(self):
-        """Idempotent: clear the helper flag, remove evidence metadata, then
-        free the flock; runs before the smoke lock closes."""
+        """Clean completion removes only confirmed, unchanged records of this run.
+
+        UNKNOWN/effectful exits retain both records until finish_effect or an
+        explicit reconciliation; the host kernel flock itself is released.
+        """
         if getattr(self, 'lease_fd', None) is None:
             return
         try:
-            (self.exchange / '.input-lease.json').unlink(missing_ok=True)
-            self.sync_directory(self.exchange)
-            (self.machine / 'input-lease.json').unlink(missing_ok=True)
-            self.sync_directory(self.machine)
+            finished_without_effect = (not self.effect_owned and self.effect_fence_definitely_absent()
+                                       and self.pending is None
+                                       and (not self.log or self.log[-1] == 'stop')
+                                       and getattr(self, 'cleanup_note', None) in (None, 'CLEARED'))
+            if finished_without_effect and getattr(self, 'helper_update_flag_owned', False):
+                self.require_own_lease_metadata()
+                self.require_own_update_marker()
+                # Remove metadata first. If removal/sync fails, the marker
+                # remains and blocks automatic helper replacement.
+                (self.machine / 'input-lease.json').unlink()
+                self.sync_directory(self.machine)
+                self.lease_metadata_owned = False
+                (self.exchange / '.input-lease.json').unlink()
+                self.sync_directory(self.exchange)
+                self.helper_update_flag_owned = False
         finally:
-            fcntl.flock(self.lease_fd, fcntl.LOCK_UN)
-            os.close(self.lease_fd)
-            self.lease_fd = None
-            self.lease_owner = None
+            fd = self.lease_fd
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+                self.lease_fd = None
+                self.lease_owner = None
 
     def lease_evidence(self):
         """Guest-input lease facts recorded with every result; names only."""
@@ -577,9 +686,23 @@ class Runner:
             require(json.loads(self.effect_file.read_text()).get('runId') == self.run_id,
                     'GUEST_OPERATION_FENCE_CHANGED')
             require(self.log and self.log[-1] == 'stop', 'GUEST_SERVER_NOT_STOPPED')
+            require(self.cleanup_note == 'CLEARED', 'GUEST_CLEANUP_UNCONFIRMED')
+            # This is the delayed clean path for a scenario whose host flock
+            # was released in run()'s finally. Exact metadata from THIS run,
+            # not a predecessor's lookalike, must remain before removal.
+            self.require_own_lease_metadata()
+            self.require_own_update_marker()
+            (self.machine / 'input-lease.json').unlink()
+            self.sync_directory(self.machine)
+            self.lease_metadata_owned = False
+            # Keep the update inhibitor until the effect fence has durably
+            # cleared; a mid-cleanup error leaves it present for recovery.
             self.effect_file.unlink()
             self.sync_effect_directory()
             self.effect_owned = False
+            (self.exchange / '.input-lease.json').unlink()
+            self.sync_directory(self.exchange)
+            self.helper_update_flag_owned = False
 
     def quit_proof(self):
         self.phase('quit-proof')

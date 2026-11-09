@@ -20,6 +20,26 @@ vm.IDENTITY = dict(name='CleanupProduct', bundleId='test.cleanup',
                    dataLeaf='test.cleanup', devDataLeaf='CleanupDev')
 
 
+
+
+def seed_synthetic_owned_lease(runner):
+    """Model exactly the run-owned host record when bypassing actual acquisition.
+
+    Pure Dev/effect tests construct Runner without invoking lease acquisition;
+    they must now supply BOTH files that production acquisition publishes.
+    This is not a shortcut for the dedicated acquire_input_lease regressions.
+    """
+    value = {'schema': 'terminal-mac.input-lease/1',
+             'owner': 'farol-smoke:' + runner.run_id,
+             'generation': 1, 'acquiredAt': 123}
+    file = runner.machine / 'input-lease.json'
+    file.write_text(json.dumps(value))
+    stat = file.stat()
+    runner.lease_metadata_value = value
+    runner.lease_metadata_identity = (stat.st_dev, stat.st_ino)
+    runner.lease_metadata_owned = True
+    runner.helper_update_flag_owned = True
+
 def synthetic_runner(root):
     runner = object.__new__(vm.Runner)
     runner.machine = root
@@ -29,6 +49,12 @@ def synthetic_runner(root):
     runner.out.mkdir()
     runner.effect_file = root / '.farol-smoke-pending.json'
     runner.effect_owned = False
+    # The synthetic runner skips normal lease acquisition, but the real producer
+    # writes this exact marker before importing a Dev key. Model that precondition.
+    runner.exchange.mkdir()
+    (runner.exchange / '.input-lease.json').write_text(json.dumps({
+        'schema': 'terminal-mac.input-lease-flag/1',
+        'owner': 'farol-smoke:run-synthetic', 'deadline': 9999999999}))
     runner.pending = None
     runner.run_id = 'run-synthetic'
     runner.log = []
@@ -46,6 +72,7 @@ def synthetic_runner(root):
     def forbidden_cli(*args):
         raise AssertionError('This synthetic test must never invoke terminal-mac')
     runner.cli = forbidden_cli
+    seed_synthetic_owned_lease(runner)
     return runner
 
 
