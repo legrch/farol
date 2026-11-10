@@ -38,15 +38,51 @@ execution escape. Do not reset credentials, rewrite journals or silently reacqui
 permissions. Same-build and new-build startup must both use current native guards;
 restore local runtime without provider Send.
 
-Initial eligible scope: qualified local writable APFS, trusted kernel and protected
-approval store. Refuse missing/unsupported attributes or validity bits, read-only
-snapshots, ownership-ignoring mounts, ambiguous mounted identities, different
-volume/directory/path, symlink or ancestor substitution and inconsistent readings.
-A privileged clone/replay reproducing all enrolled identity and protected host
-state is outside the guarantee. No detected mounted duplicate does not establish
-that no unmounted clone exists. Known clone/restore or ambiguous identity requires
-explicit reconfirmation. This is a proposed trust assumption to challenge, not a
-claim that filesystem metadata proves an uncloned physical history.
+## Narrow v1 eligibility and clone fence
+
+The initial general-local-APFS recommendation is withdrawn. Its observation
+identity alone cannot distinguish an unmounted clone with copied UUID/file ID/
+birth metadata, even when protected Farol state was not copied. The received
+Security report establishes that blocker; the original controller run closed
+unaccepted with a timeout classification, which remains separate from the actual
+terminal report. No old coverage or verdict is reused on this revised target.
+
+V1 automatic recovery is limited to directories on this Mac's current INTERNAL
+startup Data filesystem. External disks, disk images, network mounts, other APFS
+volumes and unproved startup provenance remain device-pinned/manual-confirmation
+cases. An `Internal` flag, a familiar path, matching UUID or absence of a mounted
+duplicate is never sufficient by itself.
+
+Add a Go-owned trusted native startup-anchor port. It must acquire the current
+system root and its paired Data mount independently of caller input, prove both
+are local internal APFS and the Data mount belongs to the current startup volume
+group, and hold no-follow descriptors through the check. Candidate and trusted
+Data descriptor must have equal CURRENT kernel filesystem identity and device,
+with consistent mount data. These values are ephemeral comparison evidence,
+not persisted cross-boot identity. Requalify the anchor/descriptor chain before
+publication and final activation, keeping the original runtime/boot epoch.
+Missing, unsupported, stale, conflicting or replaced anchors refuse automation.
+
+A bounded allowlisted native adapter may use the trusted system disk utility's
+structured root/Data metadata to establish pairing, combined with descriptor-bound
+kernel observations and strict before/after consistency. Fixed host-owned queries
+only; no caller paths/commands, raw diagnostic disclosure or ambient shell. The
+actual adapter and current platform interface need qualification before wiring;
+missing fields must refuse rather than infer provenance from the path. The
+existing probe does NOT implement this anchor. Its classifiers stay non-authorizing.
+
+This rejects a copied workspace volume mounted at the old workspace path: even
+with forged/copy-matched UUID/file ID/birth, it is not the current trusted startup
+Data filesystem instance. An attacker-controlled ordinary mount cannot nominate
+itself as that anchor. Scope assumes the trusted running OS and protected Farol
+state; privileged replacement/restore of the startup Data filesystem or alteration
+of startup policy is outside this guarantee, WHETHER OR NOT Farol state is copied.
+Known restore/boot-environment changes require explicit reconfirmation. Do not
+claim cryptographic physical-history or protection from privileged startup replay.
+
+Keep the existing attribute validity, writable/ownership, fixed-path and
+symlink/ancestor/race checks. The prior broader proposal remains relevant to
+transition mechanics only; this section controls v1 eligibility/trust scope.
 
 Compatible readers must qualify before a writer persists the optional field.
 Older-reader rejection, downgrade and interrupted publication must be assessed
@@ -111,3 +147,25 @@ restart at every transition boundary. Replay no unknown effect.
 Then qualify actual enrolled-root behavior on remount and reboot, ordinary file
 and command use under current guards, compatible update/recovery and the installed
 slot. The existing read-only witness is not a substitute for these feature tests.
+
+## Current anchor feasibility observation
+
+The current Mac reports equal nonempty APFS volume-group IDs for the fixed system
+root and Data query, both internal APFS. Held descriptors for the Data directory
+and the selected home directory report equal current device/filesystem IDs.
+The selected sanitized properties and probe limits are retained at
+`_output/evidence/stability-handover-a91048f3/startup-data-anchor/observation.json`.
+This is preliminary interface feasibility, not proof of full ancestor safety,
+anti-clone admission, boot-policy attestation or implemented transition behavior.
+
+Require tests where a clone-shaped tuple with a DIFFERENT current filesystem
+instance is rejected, including no concurrently mounted original. Also reject
+external/image/unpaired anchors, missing root/Data group evidence, mismatched
+kernel/device/metadata observations, mount replacement and boot/runtime changes
+between preparation and publication. Qualify the positive current startup-Data
+case, then the full enrolled-root feature across reboot separately. The earlier
+remounted images remain metadata witnesses, not newly eligible v1 workspaces.
+
+[Apple statfs manual](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/statfs.2.html)
+documents descriptor-bound filesystem statistics; it does not make a filesystem
+ID a persistent or cryptographically authentic volume identity.
