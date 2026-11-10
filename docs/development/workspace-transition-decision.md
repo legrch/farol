@@ -92,14 +92,48 @@ restrictions. Treat every policy field as included unless explicitly excluded
 above; finite grant expiration is not silently extended by this fingerprint.
 Separate continuity digest and new generation/publication digest bind live facts.
 
+## Exact recovery contract
+
+Recovery first opens the protected owner in restricted mode and inspects the
+original record without executing its pending effect. It must expose the
+original UUID, phase and classified known/unknown custody; raw filesystem or
+provider diagnostics are not permission evidence.
+
+A read-only reconciliation can return the original completed receipt only when
+the journal already durably contains the exact Settings publication result,
+correlated Go publication acknowledgement and terminal completion for that UUID.
+It does not retry save, withdraw, publish or finalize, does not activate by itself,
+and cannot turn an intent-only record or equal Store bytes into a receipt.
+A later ordinary startup still performs fresh native qualification.
+
+If that proof is absent, the operation remains unknown. The supported user
+recovery is an explicit new Confirm folder action in restricted recovery, not
+an automatic new operation: first prove retirement/drain of the exact old host
+and backend, settle or retain every dependent effect obligation, and quarantine
+the old native-handle owner with confirmed process retirement. Never re-close an
+old numeric fd or reuse its handles. If retirement/cleanup is unknown or any
+dependent operation is unsettled, refuse this recovery and retain the fence.
+
+Then require fresh native selection and explicit confirmation of the complete
+current scope and permissions. This is new consent, linked to the original
+unknown UUID in durable custody; it is not proof that the original succeeded.
+Validate and conditionally replace the exact current Settings revision through
+the same strict writer and Go transition sequence. Do not erase or reinterpret
+the old record. A new-operation limit includes these retained records and refuses
+when full. A recovery failure retains both identities and their actual outcomes.
+
+This recovery must be implemented and fault-tested before enabling enrollment
+or automatic rebinding. Until then, pending state stays restricted and the
+feature remains disabled. Profile reset, journal deletion, silent grant renewal,
+automatic new UUIDs and profile snapshot rollback are never recovery procedures.
+
 ## Compatibility and rollout
 
 The 0.5.23 source baseline at
 `a91048f34013edabe05730b697b11349ffdc3de8` defines
 `ApprovedProductWorkspaceSchema` as a strict object without `continuity`
-(`src/pkg/product-settings/contract.ts`). The retained source-bound synthetic
-probe accepts the legacy record and rejects the added key. This is schema/source
-evidence, not installed downgrade qualification. A reader-only checkpoint
+(`src/pkg/product-settings/contract.ts`). This supports a static inference that the added key is rejected; it is not
+installed downgrade qualification. A reader-only checkpoint
 does not qualify installed recovery. Before any production writer, qualify a
 compatible predecessor/recovery and the full update/promotion/rollback contract,
 including journal readers. Unfinished update/recovery blocks enrollment/rebind.
