@@ -18,9 +18,8 @@ and legitimately already-stopped commands remain usable. This is not new authori
 
 ## Evidence and scope
 
-C6 full `task test:core` passed on the baseline with unchanged source. It is source
-checkpoint evidence only. The read-only `computer.continuity.status` protects an
-existing C4 WAL, not an unrecorded earlier Stop.
+The existing read-only `computer.continuity.status` protects an existing C4 WAL,
+not an unrecorded earlier Stop. This design packet asserts no test outcome.
 
 Relevant existing owners:
 
@@ -93,8 +92,43 @@ before the first await/effect, capture the request and current binding, then:
 6. Confirm original Settings ACK and separately admitted verification-receipt
    cleanup ACK. Cleanup failure prevents a complete certificate.
 7. Confirm a terminal prerequisite certificate bound to the original request.
-   `migration.Begin` verifies its exact receipt instead of `Completed() bool` and
-   binds it atomically to one child operation, preventing reuse under another UUID.
+   `migration.Begin` verifies its exact receipt instead of `Completed() bool`.
+   Use the single-file child-admission protocol below; never assume a mutex makes
+   two filesystem publications atomic.
+
+### Single-file child admission and restart
+
+For a workspace migration, the original prerequisite admission already fixes ONE
+intended child UUID and its request fingerprint before Stop. These values are
+immutable in the terminal certificate. Other Stop purposes cannot later be
+upgraded into a migration certificate. No mutable consumed bit is written to the
+prerequisite file as part of child admission.
+
+Under the existing Store mutex/lifetime lock, `BeginTransition` verifies the
+complete immutable prerequisite and exact intended child, then atomically appends
+ONE C4 admission entry containing parent UUID, certificate digest, child UUID and
+request fingerprint to the existing C4 WAL. This single C4 publication is the
+sole durable consumption authority. It refuses a different child, a changed
+request, or a conflicting retained parent/certificate reference. Same-child
+observation does not dispatch native work or reconstruct lost delivery.
+
+Crash before confirmed C4 admission dispatches no child native effect. If its
+publication is uncertain, retain the original child uncertainty and restrictive
+custody; do not dispatch/repeat Begin or Stop to learn whether the write happened.
+On restart, a matching retained C4 entry identifies only that original child;
+missing, mismatched or uncertain evidence stays restricted. A known unconsumed
+certificate with no child entry may be inspected, but it never authorizes a new
+child UUID. Historical caller delivery remains unknown unless separately recorded.
+
+The certificate is immutable during admission, so there is no interval with a
+consumed-parent write but absent child write, or an admitted child followed by a
+required second consumption write. Never delete/recycle a prerequisite certificate
+or C4 consumption reference while any unfinished/unknown child depends on it.
+Completed record succession needs explicit known-terminal, cross-reference-safe
+retention under the same owner; exhaustion refuses a new effect rather than evicting
+custody. Ordinary subsequent commands receive new original identities and never
+reuse an earlier certificate. Production activation waits for bounded succession
+and all crash-window tests, not merely the initial happy-path append.
 
 No Go mutex may be held across a native desktop or TS Settings callback. Original
 Stop suboperations keep their own existing ownership and cleanup evidence. Protective
@@ -147,6 +181,6 @@ that trade-off explicitly. Delay costs further helper-only work while the actual
 runtime path remains disabled; do not relax admission to accelerate release.
 
 Unknowns requiring implementation proof include exact native closure correlation,
-conditional-save error classification, cross-owner certificate consumption atomicity,
-terminal capacity/recovery, and actual old-reader exclusion. The first implementation
+conditional-save error classification, the specified single-C4-publication crash
+oracle, terminal capacity/recovery, and actual old-reader exclusion. The first implementation
 must expose these limits rather than call a proposed test or helper a working route.
