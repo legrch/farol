@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"unsafe"
 
+	port "github.com/legrch/farol/modules/computer/app/port/observation"
 	identity "github.com/legrch/farol/modules/computer/domain/observation"
 	"golang.org/x/sys/unix"
 )
@@ -26,6 +27,19 @@ func (darwinOperations) openAt(parent int, name string) (int, error) {
 	return unix.Openat(parent, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 }
 func (darwinOperations) close(fd int) error { return unix.Close(fd) }
+func (darwinOperations) mount(fd int) (mountInstance, error) {
+	var s unix.Statfs_t
+	if err := unix.Fstatfs(fd, &s); err != nil {
+		return mountInstance{}, fail("WORKSPACE_IDENTITY_UNAVAILABLE")
+	}
+	return mountInstance{
+		FSID:        s.Fsid.Val,
+		Filesystem:  unix.ByteSliceToString(s.Fstypename[:]),
+		MountedOn:   unix.ByteSliceToString(s.Mntonname[:]),
+		MountedFrom: unix.ByteSliceToString(s.Mntfromname[:]),
+		Flags:       uint64(s.Flags),
+	}, nil
+}
 func (darwinOperations) stat(fd int) (fileIdentity, error) {
 	var s unix.Stat_t
 	if err := unix.Fstat(fd, &s); err != nil {
@@ -38,6 +52,19 @@ func (darwinOperations) stat(fd int) (fileIdentity, error) {
 	}
 	return fileIdentity{Device: uint64(s.Dev), Inode: s.Ino, Mode: uint32(s.Mode), UID: s.Uid, BirthSeconds: s.Btim.Sec, BirthNanoseconds: s.Btim.Nsec}, nil
 }
+
+// Hold retains the original descriptor chain for future read-only requalification.
+// No approval, settings update, native tool, or authorization is performed.
+func (*Holder) Hold(ctx context.Context, path string) (port.HeldObservation, error) {
+	if err := cancelled(ctx); err != nil {
+		return nil, err
+	}
+	if runtime.GOARCH != "arm64" && runtime.GOARCH != "amd64" {
+		return nil, fail("WORKSPACE_IDENTITY_UNSUPPORTED")
+	}
+	return hold(ctx, path, darwinOperations{})
+}
+
 func (*Probe) Observe(ctx context.Context, path string) (identity.Observation, error) {
 	if err := cancelled(ctx); err != nil {
 		return identity.Observation{}, err

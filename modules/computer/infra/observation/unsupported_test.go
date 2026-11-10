@@ -19,3 +19,15 @@ func TestUnsupportedPlatformNeverFallsBackToInode(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestUnsupportedHolderNeverFallsBackToInode(t *testing.T) {
+	got, err := NewHolder().Hold(context.Background(), "/does/not/exist")
+	if code(err) != "WORKSPACE_IDENTITY_UNSUPPORTED" || got != nil {
+		t.Fatalf("%v %v", got, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := NewHolder().Hold(ctx, "/does/not/exist"); code(err) != "WORKSPACE_REQUEST_CANCELLED" {
+		t.Fatal(err)
+	}
+}

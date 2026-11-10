@@ -108,3 +108,63 @@ func TestLinuxActualRenameBetweenObservationAndRecheckIsRefused(t *testing.T) {
 		t.Fatal("descriptor leak after namespace race")
 	}
 }
+
+// Synthetic filesystem evidence and mount identity with real Linux held file
+// descriptors. This cannot qualify Darwin/APFS or mount instance protection.
+func (o *linuxFixtureOperations) mount(fd int) (mountInstance, error) {
+	if !o.held[fd] {
+		return mountInstance{}, syscall.EBADF
+	}
+	return mountInstance{FSID: [2]int32{12, 34}, Filesystem: "synthetic-apfs",
+		MountedOn: "/fixture", MountedFrom: "/dev/synthetic", Flags: 1}, nil
+}
+func TestLinuxHeldCandidateActualRenameAndSymlink(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(base, "workspace")
+	if err := os.Mkdir(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	o := &linuxFixtureOperations{held: map[int]bool{}}
+	h, err := hold(context.Background(), workspace, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(o.held) == 0 {
+		t.Fatal("candidate chain was not retained")
+	}
+	first, err := h.Snapshot()
+	if err != nil || first.Binding.Path != workspace {
+		t.Fatalf("%+v %v", first, err)
+	}
+	if err := h.Requalify(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "content"), []byte("ordinary churn"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Requalify(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(workspace, workspace+"-old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(workspace, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if code(h.Requalify(context.Background())) != "WORKSPACE_RACE_DETECTED" {
+		t.Fatal("replaced name accepted")
+	}
+	if err := h.Close(); err != nil || len(o.held) != 0 {
+		t.Fatalf("close %v: %d open fds", err, len(o.held))
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(workspace, link); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := hold(context.Background(), link, o); got != nil || code(err) != "WORKSPACE_PATH_REFUSED" || len(o.held) != 0 {
+		t.Fatalf("symlink accepted/leaked: %v %v open=%d", got, err, len(o.held))
+	}
+}

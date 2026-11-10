@@ -56,48 +56,52 @@ func closeChain(ops nativeOperations, held chain) error {
 
 // '/' is allowed only for opening a mount root internally, not for enlarging an
 // approved workspace. All descriptors remain held until the observation ends.
-func openChain(ctx context.Context, path string, ops nativeOperations) (chain, error) {
-	if err := cancelled(ctx); err != nil {
+func openChain(ctx context.Context, path string, ops nativeOperations) (held chain, err error) {
+	if err = cancelled(ctx); err != nil {
 		return nil, err
 	}
 	if path != "/" && !identity.CanonicalPath(path) {
 		return nil, fail("WORKSPACE_PATH_REFUSED")
 	}
-	fd, err := ops.openRoot()
-	if err != nil {
+	fd, openErr := ops.openRoot()
+	if openErr != nil {
 		return nil, fail("WORKSPACE_PATH_REFUSED")
 	}
-	held := chain{{fd: fd}}
-	root, err := ops.stat(fd)
-	if err != nil || !root.directory() {
-		closeChain(ops, held)
+	opened := chain{{fd: fd}}
+	defer func() {
+		if err != nil {
+			if closeErr := closeChain(ops, opened); closeErr != nil {
+				err = closeErr
+			}
+			held = nil
+		}
+	}()
+	root, statErr := ops.stat(fd)
+	if statErr != nil || !root.directory() {
 		return nil, fail("WORKSPACE_PATH_REFUSED")
 	}
-	held[0].identity = root
+	opened[0].identity = root
 	parts := []string{}
 	if path != "/" {
 		parts = strings.Split(path[1:], "/")
 	}
 	for _, part := range parts {
-		if err := cancelled(ctx); err != nil {
-			closeChain(ops, held)
+		if err = cancelled(ctx); err != nil {
 			return nil, err
 		}
-		child, err := ops.openAt(fd, part)
-		if err != nil {
-			closeChain(ops, held)
+		child, openErr := ops.openAt(fd, part)
+		if openErr != nil {
 			return nil, fail("WORKSPACE_PATH_REFUSED")
 		}
-		held = append(held, heldDirectory{fd: child, name: part})
-		measured, err := ops.stat(child)
-		if err != nil || !measured.directory() {
-			closeChain(ops, held)
+		opened = append(opened, heldDirectory{fd: child, name: part})
+		measured, statErr := ops.stat(child)
+		if statErr != nil || !measured.directory() {
 			return nil, fail("WORKSPACE_PATH_REFUSED")
 		}
-		held[len(held)-1].identity = measured
+		opened[len(opened)-1].identity = measured
 		fd = child
 	}
-	return held, nil
+	return opened, nil
 }
 
 // Re-open every named link from its held parent; compare descriptor identity,
@@ -123,11 +127,11 @@ func recheckChain(ctx context.Context, held chain, ops nativeOperations) error {
 		}
 		named, statErr := ops.stat(fd)
 		closeErr := ops.close(fd)
-		if statErr != nil || named != item.identity {
-			return fail("WORKSPACE_RACE_DETECTED")
-		}
 		if closeErr != nil {
 			return fail("WORKSPACE_IDENTITY_UNAVAILABLE")
+		}
+		if statErr != nil || named != item.identity {
+			return fail("WORKSPACE_RACE_DETECTED")
 		}
 	}
 	return cancelled(ctx)
@@ -139,23 +143,13 @@ func New() *Probe { return &Probe{} }
 
 var _ identityport.Probe = (*Probe)(nil)
 
-func observe(ctx context.Context, path string, ops nativeOperations) (result identity.Observation, err error) {
-	if err = cancelled(ctx); err != nil {
+// measureHeld uses the same canonical descriptor-bound evidence checks as Observe.
+// Ownership of held descriptors remains with the caller, including on failure.
+func measureHeld(ctx context.Context, path string, held chain, ops nativeOperations) (identity.Observation, error) {
+	var result identity.Observation
+	if err := cancelled(ctx); err != nil {
 		return result, err
 	}
-	if !identity.CanonicalPath(path) {
-		return result, fail("WORKSPACE_PATH_REFUSED")
-	}
-	held, err := openChain(ctx, path, ops)
-	if err != nil {
-		return result, err
-	}
-	defer func() {
-		if closeErr := closeChain(ops, held); closeErr != nil && err == nil {
-			result = identity.Observation{}
-			err = closeErr
-		}
-	}()
 	target := held[len(held)-1]
 	if target.identity.UID != ops.uid() || target.identity.Mode&0022 != 0 {
 		return result, fail("WORKSPACE_PATH_REFUSED")
@@ -190,4 +184,24 @@ func observe(ctx context.Context, path string, ops nativeOperations) (result ide
 		return identity.Observation{}, fail("WORKSPACE_IDENTITY_INVALID")
 	}
 	return result, nil
+}
+
+func observe(ctx context.Context, path string, ops nativeOperations) (result identity.Observation, err error) {
+	if err = cancelled(ctx); err != nil {
+		return result, err
+	}
+	if !identity.CanonicalPath(path) {
+		return result, fail("WORKSPACE_PATH_REFUSED")
+	}
+	held, err := openChain(ctx, path, ops)
+	if err != nil {
+		return result, err
+	}
+	defer func() {
+		if closeErr := closeChain(ops, held); closeErr != nil && err == nil {
+			result = identity.Observation{}
+			err = closeErr
+		}
+	}()
+	return measureHeld(ctx, path, held, ops)
 }
