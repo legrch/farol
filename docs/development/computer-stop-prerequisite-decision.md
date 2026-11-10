@@ -47,9 +47,25 @@ No new writer, database, provider call, or approval owner is authorized here.
 2. Move prerequisite effects inside C4 before its WAL, or fold native Stop and
    Settings writing into a new generic transaction engine. Reject: effects would
    precede custody or ownership would move across the accepted boundary.
-3. Extend the existing Go access owner with one narrow protected prerequisite
+3. Add a typed prerequisite record to the existing C4 WAL. This CAN preserve
+   durable-before-Stop ordering and existing ownership; it is not rejected on the
+   false premise that sharing one file moves native/Settings ownership. It would
+   need a new closed journal document/entry schema and compatible readers: the
+   current schema-1 decoder rejects unknown fields and the current transition
+   state machine treats its entries as migrations. Pending/terminal, capacity,
+   first-publication and current-admission predicates would all need to distinguish
+   prerequisites from children. It eliminates cross-file reference retention, but
+   expands the already-built C4 journal/reader state machine and its compatibility
+   surface before production qualification. A future coherent unified schema is
+   credible; it is not assumed to be a drop-in unchanged WAL entry.
+4. Extend the existing Go access owner with one narrow protected prerequisite
    record family, retaining native Stop and TS Settings ownership. Recommend this.
-   Its separate record preserves the already-accepted C4 prerequisite boundary.
+   It keeps existing C4 entry/phase semantics and the existing lock witness intact.
+   Cost: one additional protected file/witness and explicit immutable certificate
+   reference retention. Single-file C4 child admission below removes any need for
+   an atomic publication across those files. The trade-off favors this bounded
+   separate family for this candidate; it does not claim fewer total code lines
+   or inherently better safety than a fully specified unified schema.
 
 ## Selected construction constraints
 
@@ -99,17 +115,34 @@ before the first await/effect, capture the request and current binding, then:
 ### Single-file child admission and restart
 
 For a workspace migration, the original prerequisite admission already fixes ONE
-intended child UUID and its request fingerprint before Stop. These values are
-immutable in the terminal certificate. Other Stop purposes cannot later be
+intended child UUID and a versioned `childIntentSha256` before Stop. This is a
+canonical projection of the stable command intent: command kind, exact selected
+workspace/profile/computer scope, requested fixed root and unchanged permission
+fingerprint. It EXCLUDES the later Settings revision/generation, native observation,
+boot-derived evidence and any measured resulting binding. It is not the digest of
+the full future C4 journal request. The original prerequisite's own request digest
+also retains its captured pre-Stop expectations without pretending they are the
+future migration snapshot. These values are immutable. Other Stop purposes cannot later be
 upgraded into a migration certificate. No mutable consumed bit is written to the
 prerequisite file as part of child admission.
 
 Under the existing Store mutex/lifetime lock, `BeginTransition` verifies the
-complete immutable prerequisite and exact intended child, then atomically appends
-ONE C4 admission entry containing parent UUID, certificate digest, child UUID and
-request fingerprint to the existing C4 WAL. This single C4 publication is the
+complete immutable prerequisite and exact intended child. AFTER known Stop,
+Settings and cleanup completion, capture the actual resulting revision/generation
+and policy snapshot as required by the accepted transition decision. The terminal
+certificate retains the exact original stopped-Settings ACK/digest and these
+post-prerequisite expectations. Begin checks that the full child's stable intent
+projection equals `childIntentSha256`, its revision/generation and policy match
+that original post-prerequisite evidence, and current trusted bindings are fresh.
+A later unrelated change refuses admission; it cannot substitute a new snapshot.
+
+Then atomically append ONE C4 admission entry containing parent UUID, certificate
+digest, child UUID, stable intent digest and canonical FULL child request digest
+to the existing C4 WAL. This single C4 publication is the
 sole durable consumption authority. It refuses a different child, a changed
-request, or a conflicting retained parent/certificate reference. Same-child
+full request, mismatched stable projection/post-prerequisite expectations, or a
+conflicting retained parent/certificate reference. The original child ID and intent
+never change when the exact post-Stop snapshot is added. Same-child
 observation does not dispatch native work or reconstruct lost delivery.
 
 Crash before confirmed C4 admission dispatches no child native effect. If its
