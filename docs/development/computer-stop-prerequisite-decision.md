@@ -60,7 +60,8 @@ No new writer, database, provider call, or approval owner is authorized here.
    credible; it is not assumed to be a drop-in unchanged WAL entry.
 4. Extend the existing Go access owner with one narrow protected prerequisite
    record family, retaining native Stop and TS Settings ownership. Recommend this.
-   It keeps existing C4 entry/phase semantics and the existing lock witness intact.
+   It keeps existing C4 transition PHASE semantics and the existing lock witness
+   intact, but DOES require the closed C4 certificate-link schema extension below.
    Cost: one additional protected file/witness and explicit immutable certificate
    reference retention. Single-file C4 child admission below removes any need for
    an atomic publication across those files. The trade-off favors this bounded
@@ -93,6 +94,13 @@ no Stop dispatched. Every ambiguous effect, lost reply, malformed receipt or unc
 persistence stays unresolved; do not fabricate later delivery evidence. The original
 operation is observational only after uncertainty, including after restart.
 
+`refused_before_stop` is an explicit known-terminal no-effect phase. It requires
+positive original evidence that Stop dispatch never occurred (including a known
+not-written Stop intent); retain the original admission/refusal evidence and
+release its current reservation without a migration certificate. It is not pending
+custody and permits a later independently identified ordinary command. Ambiguous
+intent publication or dispatch can NEVER enter this phase or clear a pending fence.
+
 Under the existing authority-change reservation, create/retain the original UUID
 before the first await/effect, capture the request and current binding, then:
 
@@ -112,13 +120,37 @@ before the first await/effect, capture the request and current binding, then:
    Use the single-file child-admission protocol below; never assume a mutex makes
    two filesystem publications atomic.
 
+### C4 certificate-link format and reader boundary
+
+The selected option does NOT claim unchanged C4 bytes or schema. Add a closed
+schema-2 C4 document/entry extension for the parent certificate reference, stable
+child intent (including mode), and full child request digest. Preserve existing
+transition phase rules and original schema-1 semantics. A compatible reader first
+strictly reads both historical schema 1 and new schema 2 without interpreting
+absent legacy fields as a new certificate. Linked admissions require all schema-2
+fields; old schema-1 entries cannot acquire invented parent ACKs or mode bindings.
+Schema 2 has its own exact canonical encoder/decoder; reject unknown/duplicate or
+inconsistent fields instead of relaxing the schema-1 decoder.
+
+The first linked child admission upgrades and appends in the SAME single C4 WAL
+publication under its existing lifetime lock/witness, after compatible readers are
+qualified. Unknown format publication remains original restrictive custody. Prior
+schema-1-only readers are incompatible with the new format and must refuse it;
+0.5.23's broader lack of custody support is not qualified rollback. The separate
+prerequisite family still avoids mixing prerequisite phases/entries into the C4
+state machine, but its compatibility cost includes BOTH record families. Real
+startup, recovery and package/update reader exclusion remain activation gates.
+
 ### Single-file child admission and restart
 
 For a workspace migration, the original prerequisite admission already fixes ONE
 intended child UUID and a versioned `childIntentSha256` before Stop. This is a
-canonical projection of the stable command intent: command kind, exact selected
+canonical projection of the stable command intent: command kind, explicit closed
+migration mode (`legacy-confirm` or `enrolled-rebind`), exact selected
 workspace/profile/computer scope, requested fixed root and unchanged permission
-fingerprint. It EXCLUDES the later Settings revision/generation, native observation,
+fingerprint. Mode is independently bound even if command kind happens to imply it;
+Begin and Confirm must match the original mode before any mode-dependent effect.
+It EXCLUDES the later Settings revision/generation, native observation,
 boot-derived evidence and any measured resulting binding. It is not the digest of
 the full future C4 journal request. The original prerequisite's own request digest
 also retains its captured pre-Stop expectations without pretending they are the
