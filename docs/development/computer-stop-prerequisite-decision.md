@@ -1,0 +1,152 @@
+# Computer Stop prerequisite: original-operation custody
+
+Status: proposed, before implementation. Source baseline: `c430010177aed88e266872e0c815b3c5041381c6`.
+This is a narrow amendment to the accepted [transition decision](workspace-transition-decision.md),
+not runtime, package, installed, or release acceptance.
+
+## Question, timing and success
+
+Before implementing the production continuity route, how should the existing
+Computer owners prove the ORIGINAL prerequisite Stop, stopped-Settings publication,
+and cleanup completed before admitting the first migration WAL? Decide before
+building this producer; there is no artificial provider deadline.
+
+Success: original-operation intent precedes every effect; each original ACK is
+retained and independently correlated; restart, lost replies, and a second ordinary
+request cannot turn uncertainty into success or dispatch another Stop. Fresh setup
+and legitimately already-stopped commands remain usable. This is not new authority.
+
+## Evidence and scope
+
+C6 full `task test:core` passed on the baseline with unchanged source. It is source
+checkpoint evidence only. The read-only `computer.continuity.status` protects an
+existing C4 WAL, not an unrecorded earlier Stop.
+
+Relevant existing owners:
+
+- `src/apps/desktop/main.ts`: `stopAndConfirmComputerMcp`,
+  `configureDrainedWorkspaceChange`, owner Stop, repair, recovery, update and quit.
+- `src/apps/desktop/workspace-configuration-drain.ts`: in-memory Stop/record/apply.
+- `src/modules/computer/infra/mcp/private-mcp-lifecycle.ts`: native lifetime
+  exclusion and stop confirmation; its marker and confirmed revision do not prove
+  a historical cross-process ACK.
+- Existing `ProductConfigurationService` and `ProductSettingsStore`: sole Settings
+  writer and conditional publication. Generic commit/read fallback is insufficient.
+- `modules/computer/infra/repos/access/{store,journal,transition}.go`: protected
+  Computer owner, lifetime lock, bounded canonical WAL and classified publication.
+- `modules/computer/app/services/migration/owner.go`: `Prerequisite.Completed`
+  currently accepts a boolean, which does not bind an original operation.
+
+`settingsdelivery` is a workspace FILE-EDIT service, not a ProductSettings journal.
+Operations audit and a legacy run/stopping marker are not effect receipts.
+No new writer, database, provider call, or approval owner is authorized here.
+
+## Options
+
+1. Keep the in-memory prerequisite and infer completion from stopped bytes.
+   Reject: lost original replies/restart permit unsafe admission.
+2. Move prerequisite effects inside C4 before its WAL, or fold native Stop and
+   Settings writing into a new generic transaction engine. Reject: effects would
+   precede custody or ownership would move across the accepted boundary.
+3. Extend the existing Go access owner with one narrow protected prerequisite
+   record family, retaining native Stop and TS Settings ownership. Recommend this.
+   Its separate record preserves the already-accepted C4 prerequisite boundary.
+
+## Selected construction constraints
+
+Use the existing access private directory, lifetime lock and Store mutex. Proposed
+files: `computer-stop-prerequisite.json` plus a permanent first-presence witness
+`computer-stop-prerequisite.present`. Reuse protected descriptor-relative I/O
+principles, not a second owner: no-follow, exact owner/mode/binding validation,
+bounded canonical closed JSON, CAS, fsync, directory sync, and exact readback.
+Do not change the existing lock's single-byte C4 witness format implicitly.
+A presence witness with absent/corrupt/mismatched ledger refuses admission. A ledger
+without its required witness also refuses. Qualify a compatible reader and witness
+before enabling a writer. An uncertain first publication poisons the current
+operation. No lossless history before confirmed first durable admission is claimed.
+
+Retain original parent UUID, canonical request digest, purpose and exact scope,
+expected Settings revision and generations, current runtime/backend binding and
+trusted boot correlation. Distinct one-shot Stop, Settings and cleanup effect IDs
+retain their original intents and exact ACKs. A caller-provided boolean, stopped
+process observation, or equal Settings bytes cannot replace an ACK. Strictly bound
+record capacity never evicts unfinished/UNKNOWN custody or silently recycles IDs.
+
+Closed phases are admission intent, Stop intent/ACK, Settings intent/ACK, cleanup
+intent/ACK and prerequisite complete. Known pre-effect refusal needs positive proof
+no Stop dispatched. Every ambiguous effect, lost reply, malformed receipt or uncertain
+persistence stays unresolved; do not fabricate later delivery evidence. The original
+operation is observational only after uncertainty, including after restart.
+
+Under the existing authority-change reservation, create/retain the original UUID
+before the first await/effect, capture the request and current binding, then:
+
+1. Check pending prerequisite and C4 custody before any new native effect.
+2. Confirm durable admission and Stop intent before native Stop dispatch.
+3. Existing desktop/native owners perform exactly one Stop. Require original
+   lifecycle revision, connector drain/cleanup and Go closure binding receipts.
+4. Go confirms the matching original Stop ACK; a lost ACK is never redispatched.
+5. Confirm stopped-Settings intent, including expected revision and exact next
+   document digest. In the existing writer's exclusive scope, use one narrow
+   conditional-save/readback method; no generic commit fallback or reclassification
+   of equal bytes after an unconfirmed call.
+6. Confirm original Settings ACK and separately admitted verification-receipt
+   cleanup ACK. Cleanup failure prevents a complete certificate.
+7. Confirm a terminal prerequisite certificate bound to the original request.
+   `migration.Begin` verifies its exact receipt instead of `Completed() bool` and
+   binds it atomically to one child operation, preventing reuse under another UUID.
+
+No Go mutex may be held across a native desktop or TS Settings callback. Original
+Stop suboperations keep their own existing ownership and cleanup evidence. Protective
+cleanup on shutdown remains distinct from permission to replay an uncertain effect.
+Current binding/policy freshness still needs revalidation; a historical certificate
+is not current Computer authority. Terminal historical result and caller knowledge
+remain separate. Observation never becomes a new permission to execute.
+
+## Real paths, restart and compatibility
+
+Integrate admission checks into live workspace drain, already-stopped workspace
+changes, explicit owner Stop, authority-changing direct Stop, connector repair and
+Start/recovery, challenge-failure cleanup, update drain, and quit. No caller may
+bypass the pending original operation merely because no C4 WAL exists yet. A fresh
+setup with no pending effect and no required Stop does not create a spurious pending
+record. Define and test bounded lifecycle of completed records so ordinary later
+commands remain possible without losing unknown custody.
+
+On restart, pending or malformed custody stays restricted. Re-observe only the
+original UUID; do not manufacture an ACK from a legacy stopping marker or clean
+host. A complete certificate can be observed/requalified without redispatch.
+The old 0.5.23 binary does not understand the new record family. Production writers
+remain disabled until actual startup/recovery/compatible-reader behavior and any
+update/rollback compatibility boundary are qualified. Do not claim old-version
+rollback preserves new enrolled authority.
+
+## Tests and acceptance conditions
+
+Proposed, NOT RUN: first intent failure means zero Stop; lost Stop ACK and restart
+mean no second dispatch; unknown Settings CAS blocks migration despite equal bytes;
+known pre-rename refusal supplies no fabricated ACK; wrong UUID/runtime receipt is
+refused; concurrent workspace edit/Stop/Start has one owner; cleanup failure cannot
+certify; child B cannot consume child A's certificate; missing witness/ledger fails
+closed; fresh setup and safe already-stopped changes still work; bounded terminal
+record succession preserves ordinary subsequent commands. Exercise actual existing
+caller seams, not only isolated helper state machines.
+
+Implementation proceeds as source checkpoints with L0 checks. Production activation
+still requires real compatible readers/recovery, actual native folder qualification,
+the complete source-risk review, full CI and separate package/installed gates.
+
+## Reversibility and dissent
+
+Before writer activation this is reversible source design; after first durable
+record, old readers cannot safely ignore custody. This compatibility cost is the
+strongest dissent. It would favor a unified existing journal format only if that
+format can retain independently admitted original prerequisite ownership, missing
+record detection, and all existing C4 reader semantics without ambiguity. Review
+that trade-off explicitly. Delay costs further helper-only work while the actual
+runtime path remains disabled; do not relax admission to accelerate release.
+
+Unknowns requiring implementation proof include exact native closure correlation,
+conditional-save error classification, cross-owner certificate consumption atomicity,
+terminal capacity/recovery, and actual old-reader exclusion. The first implementation
+must expose these limits rather than call a proposed test or helper a working route.
