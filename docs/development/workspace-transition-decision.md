@@ -52,7 +52,12 @@ Go RPCs: Prepare -> Withdraw -> strict Settings CAS/readback -> Stage -> Finaliz
 Never call back into TS while holding Go Store/ingress/activation locks.
 Go keeps native handles between calls, not locks across awaited TS work.
 
-1. Refuse unsettled dependent work, quit/update/recovery and concurrent changes.
+1. Under the existing Go admission/mutation serialization, reserve this
+   transition and recheck dependent work before durable prepare or any effect.
+   Every Go/TS admission path must honor that reservation until completion.
+   Preserve existing exact fence-revision correlation and desktop pending
+   exclusion; an old publication pointer is not an admissible old receipt.
+   Refuse unsettled dependent work, quit/update/recovery and concurrent changes.
    For legacy enrollment require an explicit native folder picker; preserve ID,
    rights, Commands, exclusions and Git choices. Cancellation does not mutate.
 2. Acquire and qualify C1 anchor and C3 original candidate chain. Enforce the
@@ -145,29 +150,53 @@ when full. A recovery failure retains both identities and their actual outcomes.
 Retained outcome and admission-fence ownership are separate closed fields.
 Initially every unfinished/UNKNOWN operation owns an unresolved admission fence.
 Only successful explicit new-consent recovery may discharge the EXACT parent
-fence: the same Go journal owner atomically commits the successor terminal receipt
-AND a supersession link naming the parent UUID/request digest, successor UUID/
-request digest, profile/computer/workspace, current Settings revision/generation/
-approval digest, boot-qualified consent and the exact known publication/cleanup
-receipts. The parent outcome remains UNKNOWN; its fence becomes discharged by
-that named successor. No other operation or historical byte equality can do this.
+fence. The same Go journal owner atomically commits the successor terminal receipt
+AND a supersession link naming parent UUID/request digest, successor UUID/request
+digest, their profile/computer/workspace identities, original boot-qualified
+consent and known publication/cleanup receipts. Revisions, generations and
+approval digests in this receipt are HISTORICAL facts at settlement, not expected
+values for all later Settings states. The parent outcome remains UNKNOWN; its
+fence is monotonically discharged by that named successor.
 
 Use one protected bounded journal publication for both records/link, with strict
-CAS, sync and exact readback before admission. A partial or unknown journal write,
-missing/cyclic/mismatched link, foreign binding, failed successor, or an unresolved
-later operation keeps admission restricted. The original parent UUID remains
-non-replayable; late original replies cannot replace the link or activate it.
-On startup, validate all unresolved fences and the exact successor chain against
-the current protected Settings/Store state, then qualify fresh native authority.
-A valid discharged historical UNKNOWN is retained for custody but does not alone
-block that successor. Do not reconstruct a missing link from current approval.
+CAS, sync and exact readback before admission. Partial/unknown publication,
+missing/cyclic/mismatched historical links, foreign profile/computer binding or
+failed successor never discharge a fence. Original UUIDs remain non-replayable.
+A later unresolved operation owns its own fence and is never excused by an older
+supersession. Late original replies cannot replace the link or activate anything.
+
+At startup perform TWO independent checks:
+1. Validate the protected historical journal and discharge graph internally
+   against its original parent/successor records and fixed profile/computer
+   binding. A valid discharge stays discharged; never compare its historical
+   Settings revision, publication digest or generation to today's values.
+2. Admit only the CURRENT protected Settings/Store approval through all normal
+   owner-publication, permission, generation and fresh native checks. The
+   discharge graph supplies NO current approval, grant or permission evidence.
+   Unconfirmed current mutation/publication or an invalid native binding still
+   refuses access under its current owner; do not infer a valid change from an
+   equal permission fingerprint alone.
+
+Thus an ordinary Settings edit is allowed only through the existing sole-writer
+publication protocol; a sidebar/revision-only edit does not reactivate an old
+fence. Later explicitly authorized authority changes, workspace removal, expired
+grants or a newly measured device binding affect CURRENT admission independently,
+not the truth of a historical discharge. Do not add a parallel revision-history
+engine to re-approve every general preference. Preserve the protected-owner
+trust model; a journal/Settings tamper or unavailable owner is not an ordinary edit.
 
 Required recovery state oracle:
-- Parent UNKNOWN, no link: restricted.
-- New consent started or failed, no confirmed terminal link: restricted.
-- Confirmed atomic successor terminal plus exact link, no newer unresolved fence:
-  eligible for fresh startup qualification; original outcome still UNKNOWN.
-- Wrong/unknown/partial link or current-state drift: restricted.
+- Parent UNKNOWN without a confirmed link: restricted.
+- New consent unfinished/failed or link partial/unknown: restricted.
+- Confirmed atomic successor terminal/link and no newer unresolved fence:
+  eligible for fresh CURRENT admission; original outcome still UNKNOWN.
+- Same valid history after sidebar edit or repeated restart: old fence remains
+  discharged; current authority checks still run.
+- Same history after authorized scope change/removal/remount: old fence remains
+  discharged; only the current explicitly approved scope may qualify.
+- Missing/mismatched/cyclic historical link or foreign binding: restricted.
+- New pending/unknown operation, current unconfirmed publication, invalid native
+  identity or expired finite grant: refused by that current gate, never waived.
 - Late parent reply after discharge: retained observation, never activation.
 
 This recovery must be implemented and fault-tested before enabling enrollment
