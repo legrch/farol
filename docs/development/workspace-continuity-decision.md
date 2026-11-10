@@ -1,8 +1,16 @@
 # Workspace continuity: scoped implementation decision
 
-Status: proposed, before production wiring. Decide before implementing the next
-folder-continuity slice. The accepted explicit connection-check decision is a
+Status: decision accepted for implementation at
+`5876dc2c56a65b924a463c11bf4a8a72ac89eb87`; production wiring and feature
+qualification remain open. The accepted explicit connection-check decision is a
 separate target and is not reopened here.
+
+The cumulative R4 decision review completed with General, Security, Architecture,
+Strong and Frontier coverage. The wording finding about the missing-pair case
+was fixed and independently rechecked by both originating reviewers. This records
+a design decision, not source, package, installed or release acceptance.
+The read-only observation foundation was subsequently integrated in
+`56acc40f20b5dbd19cb318eebe7e5d81303b762a`; it changes no workspace authority.
 
 ## Question and outcome
 
@@ -108,8 +116,10 @@ manual recovery; it does not justify silently broadening filesystem authority.
 The task retains an unapplied observation-only source proposal in
 `_output/evidence/workspace-root-pro-a91048f3/farol-workspace-identity-a91048f3-NOT-APPLIED.zip`,
 SHA256 `7cdc71abc39e6c633562203c1881cb8890c7078bc906f65ae32db0bcb33d247a`.
-It is not active production source. Reviewers may inspect its exact Go packages
-and the named native witnesses; no execution or extraction is required.
+Its 17 Go observation files are now integrated in the checkpoint named above,
+without production composition or authority wiring. The archive remains the
+original proposal input. Reviewers may inspect current Go source and the named
+native witnesses; no execution or extraction is required.
 
 - A disposable APFS image was actually detached/remounted after another owned
   image occupied the released device slot: device changed; volume UUID,
