@@ -196,8 +196,11 @@ its old Data descriptor remains held. Fresh observation rejects the shadowed pat
 and records the different reopened filesystem. A same-Data directory replacement
 still passes the filesystem-only filter but fails the separate directory identity
 comparison, showing why both checks are required. An actual prior boot-session ID
-from the earlier reboot witness is rejected against the current epoch. Missing
-pairing is a separate injected-policy case, not a real system-volume replacement.
+from the earlier reboot witness is rejected against the current epoch. The case
+named `missing_pair_record` empties only the retained expected anchor; it proves
+expected-anchor mismatch rejection, not acquisition rejecting missing root/Data
+group fields. That acquisition case remains unqualified and required before
+production wiring. No real system-volume replacement was performed.
 
 The Python/native prototype establishes these interface and observation-boundary
 cases; it is NOT the Go production adapter, a live lease, settings CAS, actual
