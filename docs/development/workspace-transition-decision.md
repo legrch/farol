@@ -1,283 +1,237 @@
-# Workspace continuity: durable transition addendum
+# Workspace continuity: durable transition decision
 
-Status: proposed. Exact source foundation: `3a1bd24610901d3a59c2970f0683d14f57a8782d`.
-This narrows the implementation of the accepted workspace-continuity decision;
-it does not accept implementation, installation or release.
+Status: proposed. Source foundation:
+`3a1bd24610901d3a59c2970f0683d14f57a8782d`.
+This is an implementation decision, not code, installation or release acceptance.
+The accepted [continuity scope](workspace-continuity-decision.md) remains fixed.
 
-## Decision and deadline
+## Decision and success criteria
 
-Before wiring enrollment or startup rebinding, choose how the existing sole
-Computer owner retains original-operation custody across Settings writes,
-publication, lost replies and process restart. No deadline waives a fence.
+Use one narrow Go-owned write-ahead transition journal under the existing
+Computer access owner's protected lifetime lock. Keep the existing TS Settings
+writer as the sole writer of `config.json`. Stage new publication until the
+required receipts, cleanup and final native checks are known.
 
-Recommend a narrow Go-owned durable transition sidecar under the existing
-access-store lifetime lock, plus staged publication and a strict TS sole-writer
-commit. Do not add a second Settings writer or generic transaction framework.
+Success means an explicitly enrolled directory on the current internal startup
+Data filesystem survives ordinary reboot/device renumbering without changing
+workspace ID or rights. Different/ambiguous roots, unfinished effects and missing
+proof stay refused. Do not add a second approval owner or generic Settings engine.
 
-Success means the same explicitly enrolled directory can acquire its current
-device binding after reboot without changing rights; no unfinished or unknown
-operation can create or revive authority, including in recovery startup.
+The safety guarantee starts at a CONFIRMED durable admission intent, before any
+operation-owned native workspace handles, withdrawal, Settings mutation or
+publication. It is not a promise of lossless audit before the first durable
+record, or of caller observations that were never durably recorded.
 
-## Verified foundation and gap
+## Existing facts and trust boundary
 
 C0 observation, C1 held startup-Data anchor, C2 strict optional continuity reader
-and C3 retained candidate descriptors are committed, but not production-wired.
-Their current host/native checks are checkpoint evidence only.
+and C3 held candidate are committed but not production-wired. Their host/native
+checks are checkpoint evidence only.
 
-`modules/computer/infra/repos/access/store.go` restores and confirms current
-protected bytes; its state does not identify a cross-owner transition or its ACK.
-`src/apps/desktop/authority-transition.ts` is an in-memory reservation.
-`run-marker.ts` replaces the old marker at startup.
-`ProductConfigurationService.commit()` has a disk-read fallback on failure.
-`boot/computersettings.go` admits by the acknowledged publication projection,
-not solely by the Chat activation fence. None alone closes this gap.
+The access Store restores protected current bytes; its current state does not
+identify a cross-owner transition or historical RPC delivery.
+`authority-transition.ts` is an in-memory reservation, `run-marker.ts` replaces
+its marker, and the generic Settings commit has a disk-read fallback.
+`boot/computersettings.go` admits by publication correlation, not merely Chat's
+active Boolean. Preserve exact fence-revision and desktop pending exclusion.
 
-## Proposed ownership and ordering
+Assume the trusted running OS, declared filesystem sync/rename guarantees and
+protected Farol state. Privileged startup-volume/state rollback, lying storage,
+and lossless recording of events before durable admission are outside this
+guarantee. Keep all prior APFS eligibility, clone, path, ownership and race guards.
 
-The existing Go access owner owns one bounded strict transition record in its
-private directory, using its existing native lock, protected descriptor-relative
-I/O, fsync/readback and unknown/cleanup classification. Keep Computer access
-schema 1 unchanged. The sidecar is not approval evidence and never creates grants.
+## Owner and durable record
 
-Persist original operation UUID, request fingerprint, profile/computer/workspace
-binding, trusted native boot UUID and runtime/host correlation, expected Settings
-revision and Computer generation, old/new root binding,
-stable permission fingerprint, continuity digest, phase and exact receipts.
-Use closed versioned phases and bounded retained terminal custody; never evict
-unfinished/unknown records. Retention/admission limits must refuse rather than
-erase evidence or silently recycle operation IDs.
+The existing Go access owner owns a bounded strict versioned journal in its
+private directory. Use its protected descriptor-relative I/O, lifetime lock,
+CAS, sync/readback and classified failures. Keep access snapshot schema 1
+unchanged. The journal never creates an approval or renews a grant.
 
-TS holds its authority-change reservation and sole-writer exclusion across short
-Go RPCs: Prepare -> Withdraw -> strict Settings CAS/readback -> Stage -> Finalize.
-Never call back into TS while holding Go Store/ingress/activation locks.
-Go keeps native handles between calls, not locks across awaited TS work.
+Retain original operation UUID/request digest, profile/computer/workspace IDs,
+fixed requested root, complete stable permission fingerprint, expected Settings
+revision/generation, trusted boot UUID, backend/host lifetime correlation,
+phase, old/new binding and continuity digest when measured, per-effect IDs and
+exact known receipts. Native anchor runtime nonce is additional prepared
+evidence; it is not the backend lifetime ID.
 
-1. Under the existing Go admission/mutation serialization, reserve this
-   transition and recheck dependent work before durable prepare or any effect.
-   Every Go/TS admission path must honor that reservation until completion.
-   Preserve existing exact fence-revision correlation and desktop pending
-   exclusion; an old publication pointer is not an admissible old receipt.
-   Refuse unsettled dependent work, quit/update/recovery and concurrent changes.
-   For legacy enrollment require an explicit native folder picker; preserve ID,
-   rights, Commands, exclusions and Git choices. Cancellation does not mutate.
-2. Acquire and qualify C1 anchor and C3 original candidate chain. Enforce the
-   already accepted internal-current-startup-Data scope, persistent identity,
-   live guards and runtime/boot correlation.
-3. Durably prepare before withdrawal. Each side effect has a durable intent
-   before dispatch and an original-operation exact outcome afterward. Ambiguous
-   prepare/withdraw/save/publication/cleanup stays fenced, never becomes a new UUID.
-4. TS alone conditionally writes the exact revision, advances generation and
-   replaces only eligible binding/continuity evidence. Use a narrow strict path,
-   without generic disk-fallback success. Exact committed readback is required.
-5. Stage publication after native requalification and exact revision/policy checks.
-   Stage must withhold every admission path, including Settings, connector and
-   Chat, even if the Store already contains the new approval.
-6. Require exact publication correlation/ACK, final original-chain/anchor checks,
-   and one classified Close per owner. Close failure is not success or permission
-   to retry a numeric fd. Persist exact terminal custody before enabling admission.
-   An activation failure cannot be represented as a usable completed transition.
-   Every subsequent operation still enforces live descriptor guards.
-7. Startup/recovery read the sidecar before any publication or admission. An
-   unresolved pending/unknown fence or an unreadable record admits restricted
-   diagnostics/recovery only. A retained historical UNKNOWN with a valid durable
-   supersession receipt below is not an unresolved fence.
-   Terminal success still requires fresh native qualification; no old handles or
-   finite Task/Codex/Agent grants are restored or renewed.
+Closed phases distinguish admission intent, native preparation, each effect
+intent, each acknowledged result, terminal certificate and unresolved outcome.
+Bound capacity; never evict unfinished/UNKNOWN custody or silently recycle IDs.
+Same UUID/different payload and a competing operation while fenced are refused.
 
-Do not infer historical ACK from matching Settings/Store bytes. A late result is
-an observation of the same UUID/payload/generation only; retirement or drift
-prevents activation. Explicit reconciliation may consume already-recorded proof
-without repeating the effect. No automatic retry after unknown. Known not-written
-abort may settle the original operation but does not revive withdrawn authority.
-Document a useful recovery route for retained uncertainty; never reset the profile
-or delete a journal to make the application green.
+## Write-ahead ordering and first-record limit
 
-Stable permission fingerprint excludes ephemeral device/FSID, revisions,
-generations, timestamps and publication receipts. It includes the complete
-complete canonical approval policy: owner/computer identity, scope, access,
-exclusions, capabilities, network policy, Commands, file/Git policy and owner
-restrictions. Treat every policy field as included unless explicitly excluded
-above; finite grant expiration is not silently extended by this fingerprint.
-Separate continuity digest and new generation/publication digest bind live facts.
+1. Under the existing Go admission/mutation serialization, reserve the operation
+   and verify settled dependent work, quit/update/recovery and all other admission
+   predicates. TS holds its authority reservation and sole-writer exclusion.
+2. Measure the fixed trusted kernel boot UUID without acquiring operation-owned
+   workspace/anchor handles. This is a native metadata scalar, not caller input.
+   Persist the original admission intent with that UUID and exact request.
+3. Only after file/directory sync and exact readback CONFIRM this intent may
+   acquisition or any covered effect start. An unknown first-intent publication
+   fences the current runtime; do not retry it or dispatch the next step.
+   A late I/O result after cancellation/poison cannot cross this admission barrier.
+4. Now acquire the C1 anchor and original C3 candidate chain, check the same boot,
+   persistent tuple, current startup-Data instance, original path and complete
+   policy. Persist prepared evidence before withdrawal.
+5. For legacy enrollment require explicit native picker confirmation preserving
+   ID/rights/exclusions/Commands/Git choices. Cancellation before admission is
+   not an admitted transition; selecting a different root is a scope change.
+   Never enroll from equal inode, Verify or upgrade alone.
 
-## Exact recovery contract
+If the FIRST intent was never confirmed, the trusted service has dispatched no
+covered effect. After qualified normal owner retirement/startup, a strictly
+validated prior journal with no intent cannot prove whether an uncommitted
+metadata attempt occurred; it establishes only that no admitted transition's
+covered effects can be missing, under the stated durability assumptions.
+Do not invent an operation receipt or a historical success/timeout from absence.
+An observed uncertain metadata write remains an uncertain I/O observation in
+its original caller; this rule is not authority to retry that call.
 
-Recovery first opens the protected owner in restricted mode and inspects the
-original record without executing its pending effect. It must expose the
-original UUID, phase and classified known/unknown custody; raw filesystem or
-provider diagnostics are not permission evidence.
+Once an intent was confirmed, every later uncertain acquisition, Close, journal
+update or logical effect has an already durable original UUID/boot/fence. A
+restart must retain that nonterminal fence even if a later record update was
+lost. Missing/corrupt protected state never becomes an empty journal/default
+approval. This distinction applies only to the first metadata-only admission
+barrier, never to a provider, file, command, Settings or publication effect.
 
-Reconciliation reads the original operation and can return its recorded
-logical commit only when a fully qualified terminal certificate contains all
-prior prerequisite receipts for that UUID. It does not retry save, withdraw,
-publish, finalize or native Close, and does not activate by itself. Qualification
-of the existing journal bytes below establishes current durability, not proof
-that a historical write or RPC callback returned. An intent-only record or equal
-Settings/Store bytes cannot supply missing receipts. A later ordinary startup
-still performs fresh native qualification.
+## Cross-owner protocol
 
-If that proof is absent, the operation remains unknown. The supported user
-recovery is an explicit new Confirm folder action in restricted recovery, not
-an automatic new operation. V1 deliberately requires a real reboot for this rare
-UNKNOWN recovery; same-boot PID or run-marker absence is never sufficient.
+TS drives short Go RPCs: Admit/Prepare -> Withdraw -> strict Settings CAS ->
+Stage -> Finalize. Go retains native handles/state between calls, not mutexes
+across awaited TS work. Never call into TS while holding Store, ingress,
+activation or transition locks. Every admission path honors the reservation.
 
-The original durable prepare MUST contain the canonical kernel boot-session UUID
-measured by the trusted native adapter before any effect. A successor must acquire
-the existing protected access-store exclusive lifetime lock and independently
-measure a valid current kernel boot-session UUID through the fixed native query
-(`kern.bootsessionuuid`, as in `modules/computer/infra/lease/darwin.go`).
-It must differ from the original recorded UUID. This trusted-OS boot boundary
-proves that the old host/backend and their descriptor owners cannot still run;
-PID reuse, one-second start-time strings, missing markers, a new runtime nonce,
-or merely acquiring a lock are not this proof. A missing/invalid original UUID,
-failed native query, same boot or unconfirmed lock acquisition refuses recovery.
-Do not add a same-boot alternative during implementation without a new decision.
+Before EACH covered effect persist its intent, then dispatch it once, then
+retain the exact original-operation result. Do not infer a missing result from
+equal current bytes.
 
-Settle every OTHER dependent effect obligation through its own existing owner;
-an unsettled or unknown dependent effect keeps this path blocked. The original
-transition itself remains durably UNKNOWN and is not silently settled. Before
-prepare, no transition effect may run while dependent work remains admitted.
-Never re-close an old numeric fd or reuse its handles. Changed trusted OS boot
-and a qualified newly held owner lock replace process-cleanup speculation, not
-the custody records for effects that may already have happened.
+- Withdraw once, retain exact fence/store revision, and settle old admissions.
+- TS alone uses conditional expected-revision save and exact readback. Advance
+  revision/generation and change only eligible binding/continuity evidence,
+  preserving the complete agreed policy and invalidating stale checks.
+  Use a narrow strict path, never generic fallback-as-success.
+- Requalify both original native chains before staged Go CAS/publication.
+  Keep Settings, Chat and connector admission unavailable even when new approval
+  bytes exist. Require exact operation/fence/revision/generation/digest ACK.
+- Recheck chains and current policy, then Close each native owner once with a
+  classified receipt. Unknown cleanup does not authorize a numeric-fd retry.
+- Construct the terminal certificate only from prerequisites ALREADY
+  acknowledged: consent, Settings commit/readback, Go publication ACK and known
+  cleanup. Confirm its protected publication before current activation.
+  Current activation failure is not a usable-completion result.
 
-Then require fresh native selection and explicit confirmation of the complete
-current scope and permissions. This is new consent, linked to the original
-unknown UUID in durable custody; it is not proof that the original succeeded.
-Validate and conditionally replace the exact current Settings revision through
-the same strict writer and Go transition sequence. Do not erase or reinterpret
-the old record. A new-operation limit includes these retained records and refuses
-when full. A recovery failure retains both identities and their actual outcomes.
+The stable permission fingerprint covers the complete canonical policy:
+owner/computer/workspace and root, access, exclusions, capabilities, network,
+Commands, file/Git policy and owner restrictions. Ephemeral device/FSID,
+revisions, generations, timestamps and publication receipts are separate facts.
+Current approval/admission must still enforce its exact binding, generation,
+expiry and finite-grant restrictions; a stable digest is not renewed authority.
 
-Retained outcome and admission-fence ownership are separate closed fields.
-Initially every unfinished/UNKNOWN operation owns an unresolved admission fence.
-Only successful explicit new-consent recovery may discharge the EXACT parent
-fence. The same Go journal owner atomically commits the successor terminal receipt
-AND a supersession link naming parent UUID/request digest, successor UUID/request
-digest, their profile/computer/workspace identities, original boot-qualified
-consent and known publication/cleanup receipts. Revisions, generations and
-approval digests in this receipt are HISTORICAL facts at settlement, not expected
-values for all later Settings states. The parent outcome remains UNKNOWN; its
-fence is monotonically discharged by that named successor.
+## Terminal certificate and caller knowledge
 
-Use one protected bounded journal publication for both records/link, with strict
-CAS, sync and exact readback before admission. A runtime-unknown journal publication remains fenced until the exact protected
-terminal certificate is qualified as specified below. Missing/cyclic/mismatched
-historical links, foreign binding or an incomplete successor never discharge it. Original UUIDs remain non-replayable.
-A later unresolved operation owns its own fence and is never excused by an older
-supersession. Late original replies cannot replace the link or activate anything.
+The certificate is a commit record, not proof its own write/RPC returned.
+It must not encode its future fsync/readback or activation as already observed.
 
-The terminal certificate is a commit record, not an assertion that its own
-write returned success. Its trusted constructor may encode only prerequisites
-already acknowledged before that publication: original intent/payload, explicit
-consent, exact Settings commit/readback, correlated Go publication acknowledgement
-and confirmed native cleanup. It never encodes its own future fsync/readback
-return, final RPC delivery, or future activation as a historical fact.
+After qualified retirement of the old owner and exclusive protected ownership,
+a successor may establish CURRENT durability of the exact existing certificate:
+guarded descriptor-relative read, strict validation, file sync, directory sync
+and exact reread under unchanged identity/digest, as in access `disk.confirm`.
+A failed qualification stays fenced. A crash during qualification requires
+fresh qualification by the next owner, not replay of a logical effect.
 
-While the original runtime cannot confirm its journal publication, it remains
-fenced and reports the caller observation as UNKNOWN. After qualified retirement
-of that owner and acquisition of the protected exclusive lifetime lock, a
-successor may qualify the EXACT existing terminal certificate using descriptor-
-relative guarded read, strict validation, file sync, directory sync and exact
-reread under unchanged identity/digest (the existing access disk.confirm pattern).
-This establishes CURRENT durability of that original commit record. It does not
-prove the former write/RPC returned success, erase that UNKNOWN observation,
-repeat any logical effect, or require another journal write claiming that this
-last qualification itself returned. A crash during qualification leaves the
-next owner needing the same fresh qualification before admission.
+Only a complete valid certificate with prior prerequisite receipts qualifies.
+Equal Settings/Store bytes, intent/prepared records or missing prior ACKs cannot
+supply a certificate. Reconciliation may report the original UUID's qualified
+logical commit; it does not repeat save, withdraw, publish, finalize or Close
+and does not itself activate a connection.
 
-Only a fully validated terminal certificate with all prerequisite receipts is
-eligible. Equal Settings/Store bytes, an intent/prepared record, a missing prior
-Go/Settings/cleanup acknowledgement, changed bytes or failed sync/readback remain
-fenced. No observer fabricates a missing receipt or starts a new UUID. A qualified
-certificate can expose a separately labelled reconciled commit result for the
-original UUID, while the original caller's uncertain observation stays retained.
-Current activation/readiness is still independently qualified; this record does
-not assert a past or present usable connection.
+Caller delivery is a DIFFERENT fact. This Go journal does not promise durable
+custody for a timeout/success observation made after certificate construction.
+Preserve any caller observation that its owning mechanism actually recorded;
+do not rewrite an existing UNKNOWN as received success. With no durable
+caller-observation record, report `not_recorded`, not an inferred success or an
+invented historically observed timeout. No independent generic caller journal
+is proposed. A qualified logical commit and unrecorded/uncertain RPC delivery
+can coexist; expose that distinction without replay.
 
-At startup perform TWO independent checks:
-1. Validate the protected historical journal and discharge graph internally
-   against its original parent/successor records and fixed profile/computer
-   binding. A valid discharge stays discharged; never compare its historical
-   Settings revision, publication digest or generation to today's values.
-2. Admit only the CURRENT protected Settings/Store approval through all normal
-   owner-publication, permission, generation and fresh native checks. The
-   discharge graph supplies NO current approval, grant or permission evidence.
-   Unconfirmed current mutation/publication or an invalid native binding still
-   refuses access under its current owner; do not infer a valid change from an
-   equal permission fingerprint alone.
+## Restricted new-consent recovery
 
-Thus an ordinary Settings edit is allowed only through the existing sole-writer
-publication protocol; a sidebar/revision-only edit does not reactivate an old
-fence. Later explicitly authorized authority changes, workspace removal, expired
-grants or a newly measured device binding affect CURRENT admission independently,
-not the truth of a historical discharge. Do not add a parallel revision-history
-engine to re-approve every general preference. Preserve the protected-owner
-trust model; a journal/Settings tamper or unavailable owner is not an ordinary edit.
+A nonterminal intent or missing prerequisite receipt remains unresolved.
+For this rare V1 recovery require explicit NEW native folder confirmation after
+a valid DIFFERENT trusted `kern.bootsessionuuid` from the original intent and
+a qualified exclusive access-store lock. Same boot, PID reuse, run-marker
+absence, a new runtime nonce, missing boot proof or lock uncertainty refuse.
+Do not add a same-boot new-consent alternative without a new decision.
 
-Required recovery state oracle:
-- Parent UNKNOWN without a confirmed link: restricted.
-- New consent unfinished/failed or link partial/unknown: restricted.
-- Confirmed atomic successor terminal/link and no newer unresolved fence:
-  eligible for fresh CURRENT admission; original outcome still UNKNOWN.
-- Same valid history after sidebar edit or repeated restart: old fence remains
-  discharged; current authority checks still run.
-- Same history after authorized scope change/removal/remount: old fence remains
-  discharged; only the current explicitly approved scope may qualify.
-- Missing/mismatched/cyclic historical link or foreign binding: restricted.
-- New pending/unknown operation, current unconfirmed publication, invalid native
-  identity or expired finite grant: refused by that current gate, never waived.
-- Sealed terminal bytes visible after a journal rename crash: original runtime
-  remains fenced; a qualified successor may establish current durability as
-  above, preserve the original UNKNOWN observation, then check current admission.
-- Intent-only bytes, missing prerequisite ACK or failed terminal qualification:
-  restricted, with no inferred receipt or repeated logical effect.
-- Lost final RPC reply: reconcile the same qualified certificate/UUID; no replay
-  and no assertion that the old caller received success.
-- Late parent reply after discharge: retained observation, never activation.
+The trusted OS boot boundary proves old processes/descriptor owners cannot
+still act; it is not proof that their effects succeeded. Other owners' unsettled
+effects remain gated by those owners. Preserve the original UNKNOWN record.
 
-This recovery must be implemented and fault-tested before enabling enrollment
-or automatic rebinding. Until then, pending state stays restricted and the
-feature remains disabled. Profile reset, journal deletion, silent grant renewal,
-automatic new UUIDs and profile snapshot rollback are never recovery procedures.
+Successful new consent atomically publishes its terminal certificate AND a
+supersession link naming the exact parent/successor UUIDs/request digests,
+historical receipts and fixed profile/computer/workspace binding. The parent
+outcome remains UNKNOWN; only its admission fence is monotonically discharged.
+Unknown/partial publication is not discharged until the exact valid certificate
+is qualified under the terminal-restore rule. Malformed/cyclic/mismatched links,
+foreign binding and incomplete successors stay restricted.
 
-## Compatibility and rollout
+Startup performs two independent checks: validate the historical journal/
+discharge graph against its own original records; then qualify CURRENT protected
+Settings/Store approval and fresh native admission. Historical revisions/digests
+are not compared to all later Settings versions. Preference edits, authorized
+scope changes/removal, remount and repeated restart do not resurrect a validly
+discharged old fence. A new pending/UNKNOWN effect has its own unresolved fence.
+Late parent replies are observations only, never activation.
 
-The 0.5.23 source baseline at
-`a91048f34013edabe05730b697b11349ffdc3de8` defines
-`ApprovedProductWorkspaceSchema` as a strict object without `continuity`
-(`src/pkg/product-settings/contract.ts`). This supports a static inference that the added key is rejected; it is not
-installed downgrade qualification. A reader-only checkpoint
-does not qualify installed recovery. Before any production writer, qualify a
-compatible predecessor/recovery and the full update/promotion/rollback contract,
-including journal readers. Unfinished update/recovery blocks enrollment/rebind.
-An older binary that ignores the sidecar must never be selected as compatible.
-Do not erase newer outcomes via profile snapshot rollback. Arbitrary 0.5.23
-downgrade after enrollment is unsupported without a separately qualified migration.
-This decision does not require two public releases: compatible recovery may be
-qualified locally before the writer is enabled. Availability of such a predecessor
-is an explicit release gate, not assumed to exist now.
+## Compatibility, alternatives and acceptance
 
-## Alternatives, falsification and cost
+The 0.5.23 source at `a91048f34013edabe05730b697b11349ffdc3de8`
+defines a strict workspace object without continuity in
+`src/pkg/product-settings/contract.ts`. This supports static rejection inference,
+not installed downgrade qualification.
 
-Keeping device-pinned access plus explicit reconfirmation remains the safe
-fallback and easiest rollback before persistence. It leaves the reboot burden.
-Settings-only pending state or a new generic Settings engine creates weaker
-custody or unnecessary ownership. Reading equal bytes after restart loses
-operation history. Automatically retrying under a fresh UUID violates unknown
-custody. Reject the recommendation if it cannot fence all actual admission paths,
-retain original outcomes, or provide compatible usable recovery.
+Qualify compatible Settings/journal readers and usable recovery before enabling
+a writer. Pending update/recovery blocks enrollment/rebinding. Do not select
+0.5.23 as compatible after enrollment, erase outcomes via profile rollback,
+reset the profile, or delete a journal to clear a fence. A local qualified
+recovery can avoid requiring two public releases, but is not assumed ready now.
 
-## Required checks before activation
+Device-pinned access with manual reconfirmation remains the conservative
+fallback before persistence; it leaves the reboot burden. Reject this choice
+if write-ahead ordering, single ownership, native requalification, compatible
+recovery or the state distinctions cannot be implemented. No deadline waives
+these predicates. Final code, package, installed slot and release gates remain
+separate from this decision.
 
-Inspect the actual native picker, `identity-bound-workspaces.ts`, generated wire,
-activation callers and update/recovery owners before coding their seams. Test
-all intent/effect/ACK crash boundaries; original UUID/different payload; competing
-operations; stale revision/generation/policy; native replacement and mount races;
-unsettled Agent/connector/update; known not-written, unknown rename/readback,
-lost publish/finalize reply; late callbacks, close failures, strict malformed
-journal and recovery startup; valid changed boot plus protected-lock admission,
-same boot/PID reuse/missing boot/lock contention refusal; legacy cancellation and successful enrollment.
-Then actual enrolled remount/reboot, local ordinary file/command use, zero startup
-provider Send, compatible package update/recovery and the installed public slot.
-Model advice and checkpoint tests do not satisfy these final gates.
+## Decisive state oracle and verification
+
+Test the complete protocol at every intent/effect/result/certificate boundary:
+
+- Unknown first-intent I/O: ZERO workspace-handle acquisition or covered effects;
+  late completion cannot dispatch them after cancellation/poison.
+- First intent absent after qualified restart: no fabricated history; old
+  protected state and normal current admission still require qualification.
+- Confirmed intent followed by acquisition/Close/record failure: original UUID/
+  boot/fence survives; no automatic fresh operation or replay.
+- Same UUID/different payload, competing operations, stale revision/generation/
+  policy, active Agent/connector/update and invalid native identity: refused.
+- Settings rename/readback or publication ACK unknown: nonterminal, restricted.
+- Complete certificate visible after final rename crash: qualify CURRENT
+  durability; missing prior receipt, changed bytes or failed sync remains fenced.
+- Lost final RPC: qualified logical commit with caller `not_recorded` or an
+  actually retained UNKNOWN, never guessed delivery or repeated effect.
+- New consent unfinished/failed: old fence remains. Atomic qualified successor
+  link: historical UNKNOWN retained, old fence discharged.
+- Sidebar edit, legitimate scope change/removal, device change and repeated
+  restart after discharge: fresh current checks, no historical revision trap.
+- Corrupt/foreign/cyclic graph or newer unresolved effect: restricted.
+- Same boot/missing boot/lock contention during new-consent recovery: refused.
+- Late callbacks, expired finite grants and original FD reuse: no activation.
+
+Inspect actual picker, generated wire, admission/activation and lifecycle callers.
+Use source-bound fault tests plus native directory replacement, mount/ancestor,
+current-Data and cleanup cases. Then qualify enrolled-root restart/reboot,
+ordinary file/command use, zero implicit provider Send, compatible update/
+recovery and the installed public slot. Read-only metadata/prototype witnesses
+do not substitute for production feature acceptance.
