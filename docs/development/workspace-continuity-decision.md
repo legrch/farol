@@ -40,12 +40,14 @@ restore local runtime without provider Send.
 
 ## Narrow v1 eligibility and clone fence
 
-The initial general-local-APFS recommendation is withdrawn. Its observation
-identity alone cannot distinguish an unmounted clone with copied UUID/file ID/
-birth metadata, even when protected Farol state was not copied. The received
-Security report establishes that blocker; the original controller run closed
-unaccepted with a timeout classification, which remains separate from the actual
-terminal report. No old coverage or verdict is reused on this revised target.
+The initial general-local-APFS recommendation is withdrawn. A real native
+experiment byte-copied a detached disposable APFS image, then mounted its clone
+at the original path while the original remained unmounted. UUID, file ID and
+birth time matched; device changed. Only fixture-image bytes were copied, not
+Farol state. Thus this metadata tuple cannot distinguish those physical images.
+The complete reproducible controller and observations are named below; the
+counterexample does not depend on accepting a reviewer's conclusion as evidence.
+Earlier reviews remain unaccepted, without coverage carried to this target.
 
 V1 automatic recovery is limited to directories on this Mac's current INTERNAL
 startup Data filesystem. External disks, disk images, network mounts, other APFS
@@ -169,3 +171,40 @@ remounted images remain metadata witnesses, not newly eligible v1 workspaces.
 [Apple statfs manual](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/statfs.2.html)
 documents descriptor-bound filesystem statistics; it does not make a filesystem
 ID a persistent or cryptographically authentic volume identity.
+
+## Native clone and anchor-boundary experiment
+
+A new standalone experimental native controller now exercises the proposed
+observation mechanism, independently of the unapplied Go comparator and future
+settings transition. Review its exact code and receipt at
+`_output/evidence/stability-handover-a91048f3/native-anchor-clone/`:
+
+- `probe.py`, SHA256 `e3a8391df5aad6790afd52ed1b803947a4670f53d231b43e63048eeb8c561147`;
+- `receipt.json`, SHA256 `4a294f84971bfa79c15927cde3268941a8f44994958196ea26d6578806f20401`;
+- `SUMMARY.json` and `README.md` name the original Go observer/source, runtime,
+  cleanup inventory and reproduction/qualification limits.
+
+The controller checks fixed system/Data group properties before and after held
+no-follow descriptor walks and obtains actual descriptor filesystem/device IDs.
+Its native positive case accepts the existing home directory as on current Data.
+A real byte-copy image retains the original directory tuple with a different
+device and no mounted original; both original and clone are rejected as outside
+startup Data. No original startup Data or protected Farol state was copied.
+
+An owned initially eligible directory is then shadowed by the fixture image while
+its old Data descriptor remains held. Fresh observation rejects the shadowed path
+and records the different reopened filesystem. A same-Data directory replacement
+still passes the filesystem-only filter but fails the separate directory identity
+comparison, showing why both checks are required. An actual prior boot-session ID
+from the earlier reboot witness is rejected against the current epoch. Missing
+pairing is a separate injected-policy case, not a real system-volume replacement.
+
+The Python/native prototype establishes these interface and observation-boundary
+cases; it is NOT the Go production adapter, a live lease, settings CAS, actual
+authority publication or full feature acceptance. In particular it does not prove
+that the future adapter holds its validated descriptors through publication.
+The disk images are real clones but neither is an eligible startup Data volume;
+privileged startup replacement remains outside the stated trust boundary.
+All exact owned images were confirmed detached and removed with their scratch
+copies. Hashes were checked at archival, not as a whole-Git before/after execution
+manifest. Preserve these limits when evaluating feasibility and later Go tests.
