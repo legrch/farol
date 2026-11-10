@@ -2,7 +2,9 @@
 
 Status: proposed. Source foundation:
 `3a1bd24610901d3a59c2970f0683d14f57a8782d`.
-This is an implementation decision, not code, installation or release acceptance.
+This selects construction constraints BEFORE implementation. It claims no
+realized runtime transition or fault-test result; those are explicit later
+acceptance gates, not evidence this artifact purports to supply.
 The accepted [continuity scope](workspace-continuity-decision.md) remains fixed.
 
 ## Decision and success criteria
@@ -58,6 +60,25 @@ Closed phases distinguish admission intent, native preparation, each effect
 intent, each acknowledged result, terminal certificate and unresolved outcome.
 Bound capacity; never evict unfinished/UNKNOWN custody or silently recycle IDs.
 Same UUID/different payload and a competing operation while fenced are refused.
+
+## Separately owned prerequisite drain
+
+The existing Computer MCP drain is an independently admitted prerequisite owned
+by its current lifecycle/operation owners, not an effect hidden inside the new
+transition before its WAL intent. Preserve `stopAndConfirmComputerMcp`,
+`WorkspaceConfigurationDrain` and stopped-Settings publication ownership.
+They must finish their original stop/cleanup and stopped-state publication/
+readback with known confirmations BEFORE the new transition is admitted.
+A thrown, stale, malformed or UNKNOWN result refuses transition admission;
+observe the existing stop only, never repeat it under a new transition UUID.
+
+Capture the new transition's Settings revision/generation/policy snapshot only
+AFTER that known prerequisite completion. An uncertain drain/record cannot be
+treated as a completed preflight or resumed from equal Settings bytes. See
+`main.ts`'s `configureDrainedWorkspaceChange` and
+`workspace-configuration-drain.ts`: their original result gates `apply`.
+The new WAL guarantee covers only the newly admitted continuity operation;
+it does not claim custody of preceding operations owned by another lifecycle.
 
 ## Write-ahead ordering and first-record limit
 
@@ -134,12 +155,22 @@ uses the unchanged protected policy and native guards. Do not infer this
 certificate after restart from absent receipts; a missing cleanup receipt or
 any uncertain/partial authority effect uses the nonterminal recovery rule.
 
-The stable permission fingerprint covers the complete canonical policy:
-owner/computer/workspace and root, access, exclusions, capabilities, network,
-Commands, file/Git policy and owner restrictions. Ephemeral device/FSID,
-revisions, generations, timestamps and publication receipts are separate facts.
-Current approval/admission must still enforce its exact binding, generation,
-expiry and finite-grant restrictions; a stable digest is not renewed authority.
+The stable permission fingerprint is the complete OWNER-CONSENT projection:
+owner/computer/workspace and fixed root, access, exclusions, owner-authorized
+capability limits and network, selected Commands, file/Git choices and owner
+restrictions. Ephemeral device/FSID, revisions, generations, timestamps,
+verification observations and publication receipts are separate facts.
+
+Do not copy `ShellVerified` across a rebind or treat it as enduring consent.
+It is current readiness evidence: `ownerSettingsComputerApproval` derives it
+from current generation/build/root checks, and `connectorshell.go` gates shell
+preparation on it. Preserve and revalidate that exact effective-approval field;
+invalidate stale proof and withhold shell capability until fresh current checks
+qualify it. Likewise recompute effective capabilities/Commands from current
+readiness within unchanged owner-authorized limits. The effective approval/
+publication digest binds those current fields; it is not the stable consent
+digest. Current admission enforces binding, generation, expiry, `ShellVerified`
+and finite-grant restrictions. Neither fingerprint renews authority.
 
 ## Terminal certificate and caller knowledge
 
@@ -230,6 +261,10 @@ Test the complete protocol at every intent/effect/result/certificate boundary:
   confirmed: qualified refused certificate, reservation released, no grant added.
 - Confirmed intent followed by acquisition/Close/record uncertainty: original UUID/
   boot/fence survives; no automatic fresh operation or replay.
+- Prerequisite drain/record UNKNOWN: no new continuity admission or relabelled
+  stop retry. Known completion: snapshot only the resulting current revision.
+- Stale ShellVerified/build/generation/root proof: no restored shell capability;
+  changed owner consent refuses the stable-policy comparison.
 - Same UUID/different payload, competing operations, stale revision/generation/
   policy, active Agent/connector/update and invalid native identity: refused.
 - Settings rename/readback or publication ACK unknown: nonterminal, restricted.
