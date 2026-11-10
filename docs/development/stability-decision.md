@@ -169,3 +169,23 @@ Its exact case and RED output are retained in
 The separate extracted-backend refusal is a characterization of the guard that
 must remain, not a request to remove it. These scripted-host tests establish
 routing/preconditions only; no provider request or installed operation occurred.
+
+## Actual reboot observation, 2026-11-10
+
+After the owner manually restarted the Mac, the same read-only Go 1.26.2
+observer measured the same fixed approved path. The boot-session identity
+changed; the observer binary and all measured source hashes remained equal.
+APFS volume UUID, persistent directory file ID and birth time all matched the
+pre-reboot observation. Both measurements exited zero. The device number and
+inode also remained equal in this particular reboot; it does not reproduce the
+separate device-renumbering remount case above.
+
+The task retains exact before/after observations, source manifest, controller
+and comparison under
+`_output/evidence/stability-handover-a91048f3/reboot-observer/`.
+This closes only the missing read-only real-reboot metadata witness. It does
+not qualify production enrollment, migration/publication, automatic rebinding,
+installed app connection, provider calls or updates. No folder approval or
+Farol profile was changed by this observation. Earlier review outcomes remain
+unchanged; the updated decision still needs independent acceptance before
+production wiring.
