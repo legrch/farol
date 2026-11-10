@@ -107,12 +107,14 @@ original record without executing its pending effect. It must expose the
 original UUID, phase and classified known/unknown custody; raw filesystem or
 provider diagnostics are not permission evidence.
 
-A read-only reconciliation can return the original completed receipt only when
-the journal already durably contains the exact Settings publication result,
-correlated Go publication acknowledgement and terminal completion for that UUID.
-It does not retry save, withdraw, publish or finalize, does not activate by itself,
-and cannot turn an intent-only record or equal Store bytes into a receipt.
-A later ordinary startup still performs fresh native qualification.
+Reconciliation reads the original operation and can return its recorded
+logical commit only when a fully qualified terminal certificate contains all
+prior prerequisite receipts for that UUID. It does not retry save, withdraw,
+publish, finalize or native Close, and does not activate by itself. Qualification
+of the existing journal bytes below establishes current durability, not proof
+that a historical write or RPC callback returned. An intent-only record or equal
+Settings/Store bytes cannot supply missing receipts. A later ordinary startup
+still performs fresh native qualification.
 
 If that proof is absent, the operation remains unknown. The supported user
 recovery is an explicit new Confirm folder action in restricted recovery, not
@@ -159,11 +161,39 @@ values for all later Settings states. The parent outcome remains UNKNOWN; its
 fence is monotonically discharged by that named successor.
 
 Use one protected bounded journal publication for both records/link, with strict
-CAS, sync and exact readback before admission. Partial/unknown publication,
-missing/cyclic/mismatched historical links, foreign profile/computer binding or
-failed successor never discharge a fence. Original UUIDs remain non-replayable.
+CAS, sync and exact readback before admission. A runtime-unknown journal publication remains fenced until the exact protected
+terminal certificate is qualified as specified below. Missing/cyclic/mismatched
+historical links, foreign binding or an incomplete successor never discharge it. Original UUIDs remain non-replayable.
 A later unresolved operation owns its own fence and is never excused by an older
 supersession. Late original replies cannot replace the link or activate anything.
+
+The terminal certificate is a commit record, not an assertion that its own
+write returned success. Its trusted constructor may encode only prerequisites
+already acknowledged before that publication: original intent/payload, explicit
+consent, exact Settings commit/readback, correlated Go publication acknowledgement
+and confirmed native cleanup. It never encodes its own future fsync/readback
+return, final RPC delivery, or future activation as a historical fact.
+
+While the original runtime cannot confirm its journal publication, it remains
+fenced and reports the caller observation as UNKNOWN. After qualified retirement
+of that owner and acquisition of the protected exclusive lifetime lock, a
+successor may qualify the EXACT existing terminal certificate using descriptor-
+relative guarded read, strict validation, file sync, directory sync and exact
+reread under unchanged identity/digest (the existing access disk.confirm pattern).
+This establishes CURRENT durability of that original commit record. It does not
+prove the former write/RPC returned success, erase that UNKNOWN observation,
+repeat any logical effect, or require another journal write claiming that this
+last qualification itself returned. A crash during qualification leaves the
+next owner needing the same fresh qualification before admission.
+
+Only a fully validated terminal certificate with all prerequisite receipts is
+eligible. Equal Settings/Store bytes, an intent/prepared record, a missing prior
+Go/Settings/cleanup acknowledgement, changed bytes or failed sync/readback remain
+fenced. No observer fabricates a missing receipt or starts a new UUID. A qualified
+certificate can expose a separately labelled reconciled commit result for the
+original UUID, while the original caller's uncertain observation stays retained.
+Current activation/readiness is still independently qualified; this record does
+not assert a past or present usable connection.
 
 At startup perform TWO independent checks:
 1. Validate the protected historical journal and discharge graph internally
@@ -197,6 +227,13 @@ Required recovery state oracle:
 - Missing/mismatched/cyclic historical link or foreign binding: restricted.
 - New pending/unknown operation, current unconfirmed publication, invalid native
   identity or expired finite grant: refused by that current gate, never waived.
+- Sealed terminal bytes visible after a journal rename crash: original runtime
+  remains fenced; a qualified successor may establish current durability as
+  above, preserve the original UNKNOWN observation, then check current admission.
+- Intent-only bytes, missing prerequisite ACK or failed terminal qualification:
+  restricted, with no inferred receipt or repeated logical effect.
+- Lost final RPC reply: reconcile the same qualified certificate/UUID; no replay
+  and no assertion that the old caller received success.
 - Late parent reply after discharge: retained observation, never activation.
 
 This recovery must be implemented and fault-tested before enabling enrollment
