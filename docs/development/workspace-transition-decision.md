@@ -40,7 +40,8 @@ I/O, fsync/readback and unknown/cleanup classification. Keep Computer access
 schema 1 unchanged. The sidecar is not approval evidence and never creates grants.
 
 Persist original operation UUID, request fingerprint, profile/computer/workspace
-binding, expected Settings revision and Computer generation, old/new root binding,
+binding, trusted native boot UUID and runtime/host correlation, expected Settings
+revision and Computer generation, old/new root binding,
 stable permission fingerprint, continuity digest, phase and exact receipts.
 Use closed versioned phases and bounded retained terminal custody; never evict
 unfinished/unknown records. Retention/admission limits must refuse rather than
@@ -108,11 +109,28 @@ A later ordinary startup still performs fresh native qualification.
 
 If that proof is absent, the operation remains unknown. The supported user
 recovery is an explicit new Confirm folder action in restricted recovery, not
-an automatic new operation: first prove retirement/drain of the exact old host
-and backend, settle or retain every dependent effect obligation, and quarantine
-the old native-handle owner with confirmed process retirement. Never re-close an
-old numeric fd or reuse its handles. If retirement/cleanup is unknown or any
-dependent operation is unsettled, refuse this recovery and retain the fence.
+an automatic new operation. V1 deliberately requires a real reboot for this rare
+UNKNOWN recovery; same-boot PID or run-marker absence is never sufficient.
+
+The original durable prepare MUST contain the canonical kernel boot-session UUID
+measured by the trusted native adapter before any effect. A successor must acquire
+the existing protected access-store exclusive lifetime lock and independently
+measure a valid current kernel boot-session UUID through the fixed native query
+(`kern.bootsessionuuid`, as in `modules/computer/infra/lease/darwin.go`).
+It must differ from the original recorded UUID. This trusted-OS boot boundary
+proves that the old host/backend and their descriptor owners cannot still run;
+PID reuse, one-second start-time strings, missing markers, a new runtime nonce,
+or merely acquiring a lock are not this proof. A missing/invalid original UUID,
+failed native query, same boot or unconfirmed lock acquisition refuses recovery.
+Do not add a same-boot alternative during implementation without a new decision.
+
+Settle every OTHER dependent effect obligation through its own existing owner;
+an unsettled or unknown dependent effect keeps this path blocked. The original
+transition itself remains durably UNKNOWN and is not silently settled. Before
+prepare, no transition effect may run while dependent work remains admitted.
+Never re-close an old numeric fd or reuse its handles. Changed trusted OS boot
+and a qualified newly held owner lock replace process-cleanup speculation, not
+the custody records for effects that may already have happened.
 
 Then require fresh native selection and explicit confirmation of the complete
 current scope and permissions. This is new consent, linked to the original
@@ -162,7 +180,8 @@ all intent/effect/ACK crash boundaries; original UUID/different payload; competi
 operations; stale revision/generation/policy; native replacement and mount races;
 unsettled Agent/connector/update; known not-written, unknown rename/readback,
 lost publish/finalize reply; late callbacks, close failures, strict malformed
-journal and recovery startup; legacy cancellation and successful enrollment.
+journal and recovery startup; valid changed boot plus protected-lock admission,
+same boot/PID reuse/missing boot/lock contention refusal; legacy cancellation and successful enrollment.
 Then actual enrolled remount/reboot, local ordinary file/command use, zero startup
 provider Send, compatible package update/recovery and the installed public slot.
 Model advice and checkpoint tests do not satisfy these final gates.
