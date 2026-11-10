@@ -1,7 +1,18 @@
 # Workspace continuity: durable transition decision
 
-Status: proposed. Source foundation:
+Status: accepted for implementation at
+`1b04095ca9eca47c6d8f761f76f21254441f9e78`. Source foundation:
 `3a1bd24610901d3a59c2970f0683d14f57a8782d`.
+
+The cumulative R4 decision review completed General, Security, Architecture,
+Strong and Frontier coverage. The host rejected the returned P2 as a defect of
+this decision: it identifies a legacy implementation gap that the explicit
+construction constraints below already forbid. Closing that gap and its fault
+test remain mandatory before feature activation. The additional finding checker
+returned an invalid result format; it supplied no accepted finding disposition.
+Earlier candidate reviews remain unaccepted; no coverage was imported from them.
+This records a chosen design, not code, package, installation or release acceptance.
+
 This selects construction constraints BEFORE implementation. It claims no
 realized runtime transition or fault-test result; those are explicit later
 acceptance gates, not evidence this artifact purports to supply.
