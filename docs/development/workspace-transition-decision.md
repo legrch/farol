@@ -74,9 +74,12 @@ Same UUID/different payload and a competing operation while fenced are refused.
 4. Now acquire the C1 anchor and original C3 candidate chain, check the same boot,
    persistent tuple, current startup-Data instance, original path and complete
    policy. Persist prepared evidence before withdrawal.
-5. For legacy enrollment require explicit native picker confirmation preserving
-   ID/rights/exclusions/Commands/Git choices. Cancellation before admission is
-   not an admitted transition; selecting a different root is a scope change.
+5. For legacy enrollment, keep the original fixed-root candidate held across
+   the explicit native picker confirmation and requalify it afterward. The
+   picker result must name that same root and operation; a different selection
+   is a scope change, not an enrollment of the old workspace. Preserve
+   ID/rights/exclusions/Commands/Git choices. Cancellation after admission uses
+   the known-refusal rule below; do not leave it as an automatic UNKNOWN.
    Never enroll from equal inode, Verify or upgrade alone.
 
 If the FIRST intent was never confirmed, the trusted service has dispatched no
@@ -121,6 +124,16 @@ equal current bytes.
   cleanup. Confirm its protected publication before current activation.
   Current activation failure is not a usable-completion result.
 
+A known refusal/cancellation BEFORE withdrawal has its own closed terminal
+certificate kind. It requires positive original-runtime proof that no withdrawal,
+Settings or publication effect was dispatched, and known cleanup receipts for
+every acquired native owner. Confirm/qualify its journal publication with the
+same rules. It releases ONLY its own transition reservation: no new approval,
+grant, supersession or revival of withdrawn handles. Current admission still
+uses the unchanged protected policy and native guards. Do not infer this
+certificate after restart from absent receipts; a missing cleanup receipt or
+any uncertain/partial authority effect uses the nonterminal recovery rule.
+
 The stable permission fingerprint covers the complete canonical policy:
 owner/computer/workspace and root, access, exclusions, capabilities, network,
 Commands, file/Git policy and owner restrictions. Ephemeral device/FSID,
@@ -140,7 +153,8 @@ and exact reread under unchanged identity/digest, as in access `disk.confirm`.
 A failed qualification stays fenced. A crash during qualification requires
 fresh qualification by the next owner, not replay of a logical effect.
 
-Only a complete valid certificate with prior prerequisite receipts qualifies.
+Only a complete valid certificate with the receipts required for its closed
+committed/refused kind qualifies.
 Equal Settings/Store bytes, intent/prepared records or missing prior ACKs cannot
 supply a certificate. Reconciliation may report the original UUID's qualified
 logical commit; it does not repeat save, withdraw, publish, finalize or Close
@@ -168,7 +182,7 @@ The trusted OS boot boundary proves old processes/descriptor owners cannot
 still act; it is not proof that their effects succeeded. Other owners' unsettled
 effects remain gated by those owners. Preserve the original UNKNOWN record.
 
-Successful new consent atomically publishes its terminal certificate AND a
+Successful new consent atomically publishes its COMMITTED terminal certificate AND a
 supersession link naming the exact parent/successor UUIDs/request digests,
 historical receipts and fixed profile/computer/workspace binding. The parent
 outcome remains UNKNOWN; only its admission fence is monotonically discharged.
@@ -212,7 +226,9 @@ Test the complete protocol at every intent/effect/result/certificate boundary:
   late completion cannot dispatch them after cancellation/poison.
 - First intent absent after qualified restart: no fabricated history; old
   protected state and normal current admission still require qualification.
-- Confirmed intent followed by acquisition/Close/record failure: original UUID/
+- Picker cancellation or known refusal before withdrawal with all native cleanup
+  confirmed: qualified refused certificate, reservation released, no grant added.
+- Confirmed intent followed by acquisition/Close/record uncertainty: original UUID/
   boot/fence survives; no automatic fresh operation or replay.
 - Same UUID/different payload, competing operations, stale revision/generation/
   policy, active Agent/connector/update and invalid native identity: refused.
