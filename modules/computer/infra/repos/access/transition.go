@@ -19,6 +19,11 @@ type TransitionState struct {
 }
 
 func (s *Store) transitionRestricted() bool {
+	// The separately owned ORIGINAL Stop must fence current authority even
+	// before the first C4 transition WAL has ever been published.
+	if s.stopPresent && s.stops.Pending() {
+		return true
+	}
 	if !s.journalPresent {
 		return false
 	}
@@ -82,6 +87,9 @@ func (s *Store) checkStorage(ctx context.Context) error {
 		s.poisoned = true
 		return unavailable()
 	}
+	if err := s.checkStopStorage(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -112,6 +120,13 @@ func (s *Store) BeginTransition(ctx context.Context, request transition.Request)
 		}
 		// No effect admission on replay, including a terminal prior result.
 		return current, false, nil
+	}
+	// A new C4 child after the first C7 prerequisite needs the accepted
+	// schema-2 single-publication parent/certificate link. Until that reader
+	// and exact verifier are implemented, NEVER consume the prerequisite by
+	// creating an unlinked legacy C4 admission. Existing C4 observation is safe.
+	if s.stopPresent {
+		return transition.Entry{}, false, transition.ErrRefused
 	}
 	next, e := s.journal.Begin(request)
 	if e != nil {
