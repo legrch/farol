@@ -1,6 +1,24 @@
 # Computer Stop prerequisite: original-operation custody
 
-Status: proposed, before implementation. Source baseline: `c430010177aed88e266872e0c815b3c5041381c6`.
+Status: accepted for ordinary prerequisite-producer construction at
+`b01f5605caf1e4eff85329dac4db823c359a2a15`. Source baseline:
+`c430010177aed88e266872e0c815b3c5041381c6`.
+
+The complete R4 decision review covered General, Security, Architecture, Strong
+and Frontier. No P0/P1 or material evidence limitation remained. The host accepted
+one real P2 at this bounded construction boundary: the different-boot C4 recovery
+successor needs a defined prerequisite/certificate linkage. That limitation is NOT
+accepted for activation or release. Resolve it during the already-planned usable
+recovery integration before enabling production writers/continuity. Do not reuse
+an ordinary certificate, bypass pending custody, replay an original effect, or
+invent a recovery admission exception from this acceptance. The accepted C4
+new-consent/different-boot protocol remains binding.
+
+The common finding verifier returned an invalid format and supplied no accepted
+finding disposition; the P2 decision above is the host's. Earlier candidates remain
+unaccepted and supplied no imported coverage. This records a construction choice,
+not implementation, compatible-reader/recovery, CI, native, installed or release
+acceptance.
 This is a narrow amendment to the accepted [transition decision](workspace-transition-decision.md),
 not runtime, package, installed, or release acceptance.
 
