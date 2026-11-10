@@ -72,8 +72,10 @@ Go keeps native handles between calls, not locks across awaited TS work.
    to retry a numeric fd. Persist exact terminal custody before enabling admission.
    An activation failure cannot be represented as a usable completed transition.
    Every subsequent operation still enforces live descriptor guards.
-7. Startup/recovery read the sidecar before any publication or admission. Pending,
-   unreadable or unknown state admits restricted diagnostics/recovery only.
+7. Startup/recovery read the sidecar before any publication or admission. An
+   unresolved pending/unknown fence or an unreadable record admits restricted
+   diagnostics/recovery only. A retained historical UNKNOWN with a valid durable
+   supersession receipt below is not an unresolved fence.
    Terminal success still requires fresh native qualification; no old handles or
    finite Task/Codex/Agent grants are restored or renewed.
 
@@ -139,6 +141,34 @@ Validate and conditionally replace the exact current Settings revision through
 the same strict writer and Go transition sequence. Do not erase or reinterpret
 the old record. A new-operation limit includes these retained records and refuses
 when full. A recovery failure retains both identities and their actual outcomes.
+
+Retained outcome and admission-fence ownership are separate closed fields.
+Initially every unfinished/UNKNOWN operation owns an unresolved admission fence.
+Only successful explicit new-consent recovery may discharge the EXACT parent
+fence: the same Go journal owner atomically commits the successor terminal receipt
+AND a supersession link naming the parent UUID/request digest, successor UUID/
+request digest, profile/computer/workspace, current Settings revision/generation/
+approval digest, boot-qualified consent and the exact known publication/cleanup
+receipts. The parent outcome remains UNKNOWN; its fence becomes discharged by
+that named successor. No other operation or historical byte equality can do this.
+
+Use one protected bounded journal publication for both records/link, with strict
+CAS, sync and exact readback before admission. A partial or unknown journal write,
+missing/cyclic/mismatched link, foreign binding, failed successor, or an unresolved
+later operation keeps admission restricted. The original parent UUID remains
+non-replayable; late original replies cannot replace the link or activate it.
+On startup, validate all unresolved fences and the exact successor chain against
+the current protected Settings/Store state, then qualify fresh native authority.
+A valid discharged historical UNKNOWN is retained for custody but does not alone
+block that successor. Do not reconstruct a missing link from current approval.
+
+Required recovery state oracle:
+- Parent UNKNOWN, no link: restricted.
+- New consent started or failed, no confirmed terminal link: restricted.
+- Confirmed atomic successor terminal plus exact link, no newer unresolved fence:
+  eligible for fresh startup qualification; original outcome still UNKNOWN.
+- Wrong/unknown/partial link or current-state drift: restricted.
+- Late parent reply after discharge: retained observation, never activation.
 
 This recovery must be implemented and fault-tested before enabling enrollment
 or automatic rebinding. Until then, pending state stays restricted and the
