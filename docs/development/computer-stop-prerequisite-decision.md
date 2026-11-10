@@ -89,7 +89,8 @@ process observation, or equal Settings bytes cannot replace an ACK. Strictly bou
 record capacity never evicts unfinished/UNKNOWN custody or silently recycles IDs.
 
 Closed phases are admission intent, Stop intent/ACK, Settings intent/ACK, cleanup
-intent/ACK and prerequisite complete. Known pre-effect refusal needs positive proof
+intent/ACK, prerequisite complete, terminal `refused_before_stop`, and restrictive
+`unresolved`. Known pre-effect refusal needs positive proof
 no Stop dispatched. Every ambiguous effect, lost reply, malformed receipt or uncertain
 persistence stays unresolved; do not fabricate later delivery evidence. The original
 operation is observational only after uncertainty, including after restart.
