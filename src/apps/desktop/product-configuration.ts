@@ -27,6 +27,12 @@ import {
 } from "../../pkg/product-settings/contract";
 import { credentialStorePolicy } from "../../modules/computer/infra/native/home-secret-stores";
 import { ownerSettingsComputerApproval } from "../../modules/computer/infra/repo/owner-settings-computer-approval";
+import {
+  ContinuityWriteIntentSchema,
+  nextContinuitySettings,
+  type ContinuityWriteIntent,
+  type ContinuityWriteFence,
+} from "./workspace-continuity-writer";
 import type { TaskSettingsComparator } from "../../../apps/desktop/bridge/task-current-settings";
 import {
   SettingsStoreUnsupported,
@@ -1003,6 +1009,79 @@ export class ProductConfigurationService {
     if (this.withdrawComputerAuthority || typeof withdraw !== "function")
       throw new Error("COMPUTER_AUTHORITY_ALREADY_BOUND");
     this.withdrawComputerAuthority = withdraw;
+  }
+
+  // Trusted composition only; no renderer command, implicit Verify, writer
+  // fallback or automatic Go publication. The original Go-owned WAL must
+  // already have a CONFIRMED withdrawal ACK and continue to hold both native
+  // chains. This service remains the sole Settings writer.
+  async commitContinuityFromTransition(
+    intent: ContinuityWriteIntent,
+    fence: ContinuityWriteFence,
+  ): Promise<ConditionalSettingsWrite> {
+    return this.exclusive(async () => {
+      if (
+        !ContinuityWriteIntentSchema.safeParse(intent).success ||
+        this.current === null ||
+        this.settingsDeliveryFenced ||
+        connectorRuntimeUncertain(this.current) ||
+        typeof fence?.current !== "function" ||
+        typeof fence.withdrawalAcknowledged !== "function" ||
+        typeof fence.requalifyNative !== "function"
+      )
+        return { status: "not_written" };
+      const original = this.current;
+      if (!fence.current() || !fence.withdrawalAcknowledged())
+        return { status: "not_written" };
+      const next = nextContinuitySettings(original, intent);
+      if (!next) return { status: "not_written" };
+      try {
+        if (
+          !(await fence.requalifyNative()) ||
+          !fence.current() ||
+          !fence.withdrawalAcknowledged() ||
+          this.current !== original
+        )
+          return { status: "not_written" };
+        const result = await this.store.saveConditional(original, next, {
+          beforeWrite: async () => {
+            if (
+              !(await fence.requalifyNative()) ||
+              !fence.current() ||
+              !fence.withdrawalAcknowledged() ||
+              this.current !== original ||
+              this.settingsDeliveryFenced
+            )
+              throw new Error("CONTINUITY_NATIVE_OR_SETTINGS_CHANGED");
+          },
+          assertBeforePublication: () => {
+            if (
+              !fence.current() ||
+              !fence.withdrawalAcknowledged() ||
+              this.current !== original ||
+              this.settingsDeliveryFenced
+            )
+              throw new Error("CONTINUITY_PUBLICATION_FENCED");
+          },
+        });
+        if (result.status === "unknown") {
+          this.latchSettingsDeliveryLoss();
+          return { status: "unknown" };
+        }
+        if (result.status === "not_written") return result;
+        // This ACK certifies only Settings CAS/readback. The Go transition
+        // remains staged/closed until its own publication/cleanup certificate.
+        this.current = result.settings;
+        this.currentError = null;
+        return result;
+      } catch {
+        // We cannot prove whether the native requalification, storage or
+        // transport rejected before the rename. Retain a conservative fence;
+        // never infer success by loading the currently visible file.
+        this.latchSettingsDeliveryLoss();
+        return { status: "unknown" };
+      }
+    });
   }
 
   // Exactly one trusted host binding, using the existing document and writer.
