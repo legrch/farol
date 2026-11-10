@@ -86,12 +86,20 @@ or delete a journal to make the application green.
 
 Stable permission fingerprint excludes ephemeral device/FSID, revisions,
 generations, timestamps and publication receipts. It includes the complete
-agreed scope, access, exclusions, Commands, file/Git policy and owner restrictions.
+complete canonical approval policy: owner/computer identity, scope, access,
+exclusions, capabilities, network policy, Commands, file/Git policy and owner
+restrictions. Treat every policy field as included unless explicitly excluded
+above; finite grant expiration is not silently extended by this fingerprint.
 Separate continuity digest and new generation/publication digest bind live facts.
 
 ## Compatibility and rollout
 
-Released 0.5.23 rejects the new optional Settings field. A reader-only checkpoint
+The 0.5.23 source baseline at
+`a91048f34013edabe05730b697b11349ffdc3de8` defines
+`ApprovedProductWorkspaceSchema` as a strict object without `continuity`
+(`src/pkg/product-settings/contract.ts`). The retained source-bound synthetic
+probe accepts the legacy record and rejects the added key. This is schema/source
+evidence, not installed downgrade qualification. A reader-only checkpoint
 does not qualify installed recovery. Before any production writer, qualify a
 compatible predecessor/recovery and the full update/promotion/rollback contract,
 including journal readers. Unfinished update/recovery blocks enrollment/rebind.
