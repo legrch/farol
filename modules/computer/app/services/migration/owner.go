@@ -53,14 +53,17 @@ type BeginResult struct {
 }
 
 type held struct {
-	id             string
-	root           string
-	mode           Mode
-	saved          observation.Saved
-	anchor         leaseport.Anchor
-	candidate      observationport.HeldObservation
-	phase          journal.Phase
-	closeAttempted bool
+	id                string
+	root              string
+	mode              Mode
+	saved             observation.Saved
+	anchor            leaseport.Anchor
+	candidate         observationport.HeldObservation
+	phase             journal.Phase
+	closeAttempted    bool
+	withdrawAttempted bool
+	withdrawIntent    journal.Receipt
+	withdrawAck       *journal.Receipt
 }
 
 type Owner struct {
@@ -203,6 +206,47 @@ func (o *Owner) Confirm(ctx context.Context, operationID, selectedRoot string, o
 	return measured, nil
 }
 
+// WithdrawEffect is one trusted Go-native effect, never a desktop/TS callback.
+// It rechecks the durable original WAL intent immediately before withdrawing
+// current admission; it cannot use ordinary Store.Status (blocked by WAL).
+type WithdrawEffect func(context.Context, string, journal.Receipt) (journal.Receipt, error)
+
+// WithdrawOnce consumes the original in-memory held owner exactly once. An
+// uncertain result leaves WAL at WithdrawIntent, including after restart. A
+// new process cannot recreate these native descriptor capabilities from WAL.
+func (o *Owner) WithdrawOnce(ctx context.Context, id string, effect WithdrawEffect) (journal.Receipt, error) {
+	if ctx == nil || ctx.Err() != nil || effect == nil || o.mu == nil {
+		return journal.Receipt{}, journal.ErrRefused
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	a := o.active
+	if o.poisoned || a == nil || a.id != id || a.phase != journal.WithdrawIntent || a.withdrawAttempted || a.withdrawIntent.EffectID == "" {
+		return journal.Receipt{}, journal.ErrRefused
+	}
+	if err := a.anchor.Requalify(ctx); err != nil {
+		o.poisoned = true
+		return journal.Receipt{}, err
+	}
+	if err := a.candidate.Requalify(ctx); err != nil {
+		o.poisoned = true
+		return journal.Receipt{}, err
+	}
+	// This callback is trusted Go-only and cannot call TS under this lock.
+	// A successful return is not itself an ACK: the caller must durably record
+	// WithdrawAcknowledged with the returned original effect receipt.
+	a.withdrawAttempted = true
+	receipt, err := effect(ctx, id, a.withdrawIntent)
+	if err != nil || receipt.EffectID != a.withdrawIntent.EffectID || receipt.Digest == "" || ctx.Err() != nil {
+		o.poisoned = true
+		return journal.Receipt{}, journal.ErrUnknown
+	}
+	// The durable ACK is a separate record. Only this original Go-native
+	// effect may furnish its exact receipt to the transition owner.
+	a.withdrawAck = &receipt
+	return receipt, nil
+}
+
 // Record persists the NEXT original-operation effect intent or ACK. The caller
 // performs its effect only AFTER a returned intent, and never asks Go to call
 // back into TS while any Go access/activation mutex is held.
@@ -211,6 +255,9 @@ func (o *Owner) Record(ctx context.Context, id string, phase journal.Phase, rece
 	defer o.mu.Unlock()
 	a := o.active
 	if o.poisoned || a == nil || a.id != id || ctx == nil || ctx.Err() != nil || phase == journal.CloseAcknowledged {
+		return journal.ErrRefused
+	}
+	if phase == journal.WithdrawAcknowledged && (!a.withdrawAttempted || a.withdrawAck == nil || *a.withdrawAck != receipt) {
 		return journal.ErrRefused
 	}
 	if err := a.anchor.Requalify(ctx); err != nil {
@@ -224,6 +271,9 @@ func (o *Owner) Record(ctx context.Context, id string, phase journal.Phase, rece
 	if err := o.store.AdvanceTransition(ctx, id, phase, receipt); err != nil {
 		o.poisoned = true
 		return err
+	}
+	if phase == journal.WithdrawIntent {
+		a.withdrawIntent = receipt
 	}
 	a.phase = phase
 	return nil
@@ -241,6 +291,18 @@ func (o *Owner) Finish(ctx context.Context, id string, kind journal.Phase, clean
 	}
 	if kind == journal.Refused && a.phase != journal.Intent && a.phase != journal.Prepared {
 		return journal.ErrRefused
+	}
+	if kind == journal.Committed {
+		// A logical publication ACK cannot substitute for final native
+		// requalification of BOTH original held no-follow chains.
+		if err := a.anchor.Requalify(ctx); err != nil {
+			o.poisoned = true
+			return err
+		}
+		if err := a.candidate.Requalify(ctx); err != nil {
+			o.poisoned = true
+			return err
+		}
 	}
 	// The close-intent phase is already durable for COMMITTED. An early known
 	// refusal has no covered withdrawal effect and must still observe cleanup.

@@ -240,7 +240,21 @@ func TestCompleteUsesOriginalCloseOnceAfterIntent(t *testing.T) {
 		t.Fatal(e)
 	}
 	proof := journal.Receipt{EffectID: "effect-1", Digest: strings.Repeat("c", 64)}
-	for _, phase := range []journal.Phase{journal.WithdrawIntent, journal.WithdrawAcknowledged, journal.SettingsIntent, journal.SettingsAcknowledged, journal.PublishIntent, journal.PublishAcknowledged, journal.CloseIntent} {
+	if err := o.Record(ctx, one, journal.WithdrawIntent, proof); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Record(ctx, one, journal.WithdrawAcknowledged, proof); err == nil {
+		t.Fatal("forged withdrawal acknowledgement accepted")
+	}
+	if _, err := o.WithdrawOnce(ctx, one, func(_ context.Context, id string, intent journal.Receipt) (journal.Receipt, error) {
+		if id != one || intent != proof {
+			t.Fatal("lost original intent")
+		}
+		return proof, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, phase := range []journal.Phase{journal.WithdrawAcknowledged, journal.SettingsIntent, journal.SettingsAcknowledged, journal.PublishIntent, journal.PublishAcknowledged, journal.CloseIntent} {
 		if e := o.Record(ctx, one, phase, proof); e != nil {
 			t.Fatal(phase, e)
 		}
@@ -286,4 +300,112 @@ func (digestSource) Digest(value obs.Observation) (string, error) {
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// The original durable WithdrawIntent is the only source of a Go-only effect.
+// The test is synthetic; no machine process is stopped.
+func TestWithdrawOnceOriginalHeldOwnerAndUnknownNoReplay(t *testing.T) {
+	ctx := context.Background()
+	owner, store, n := makeOwner(true)
+	if _, err := owner.Begin(ctx, intent()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.Confirm(ctx, one, "/Users/test", true); err != nil {
+		t.Fatal(err)
+	}
+	planned := journal.Receipt{EffectID: "withdraw-1", Digest: goodDigest}
+	if err := owner.Record(ctx, one, journal.WithdrawIntent, planned); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	ack, err := owner.WithdrawOnce(ctx, one, func(_ context.Context, id string, got journal.Receipt) (journal.Receipt, error) {
+		calls++
+		if id != one || got != planned || n.closes != 0 {
+			t.Fatal("original intent or retained chain lost")
+		}
+		return journal.Receipt{EffectID: planned.EffectID, Digest: strings.Repeat("b", 64)}, nil
+	})
+	if err != nil || ack.EffectID != planned.EffectID || calls != 1 {
+		t.Fatal("original Go effect ACK", ack, err)
+	}
+	if _, err := owner.WithdrawOnce(ctx, one, func(context.Context, string, journal.Receipt) (journal.Receipt, error) {
+		calls++
+		return ack, nil
+	}); err == nil || calls != 1 {
+		t.Fatal("replayed Go effect")
+	}
+	if store.journal.Entries[0].Phase != journal.WithdrawIntent {
+		t.Fatal("effect return fabricated WAL acknowledgement")
+	}
+	if err := owner.Record(ctx, one, journal.WithdrawAcknowledged, ack); err != nil {
+		t.Fatal("original durable ACK", err)
+	}
+	// A fresh owner may read the record but cannot recreate original held fds.
+	restarted := New(store, bootSource{}, prereq(true), n, n, &sync.Mutex{}, digestSource{})
+	if _, err := restarted.WithdrawOnce(ctx, one, func(context.Context, string, journal.Receipt) (journal.Receipt, error) {
+		calls++
+		return ack, nil
+	}); err == nil || calls != 1 {
+		t.Fatal("restart replayed withdrawn effect")
+	}
+
+	failed, journalStore, native := makeOwner(true)
+	if _, err := failed.Begin(ctx, intent()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := failed.Confirm(ctx, one, "/Users/test", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := failed.Record(ctx, one, journal.WithdrawIntent, planned); err != nil {
+		t.Fatal(err)
+	}
+	called := 0
+	_, err = failed.WithdrawOnce(ctx, one, func(context.Context, string, journal.Receipt) (journal.Receipt, error) {
+		called++
+		return journal.Receipt{}, errors.New("simulated lost ack")
+	})
+	if err == nil || !errors.Is(err, journal.ErrUnknown) || journalStore.journal.Entries[0].Phase != journal.WithdrawIntent || native.closes != 0 {
+		t.Fatal("unknown effect not retained")
+	}
+	if _, err := failed.WithdrawOnce(ctx, one, func(context.Context, string, journal.Receipt) (journal.Receipt, error) {
+		called++
+		return ack, nil
+	}); err == nil || called != 1 {
+		t.Fatal("UNKNOWN effect dispatched twice")
+	}
+}
+
+func TestCloseIntentCannotCertifyStaleOriginalNativeChain(t *testing.T) {
+	ctx := context.Background()
+	owner, store, native := makeOwner(true)
+	if _, err := owner.Begin(ctx, intent()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.Confirm(ctx, one, "/Users/test", true); err != nil {
+		t.Fatal(err)
+	}
+	proof := journal.Receipt{EffectID: "effect-1", Digest: goodDigest}
+	if err := owner.Record(ctx, one, journal.WithdrawIntent, proof); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.WithdrawOnce(ctx, one, func(context.Context, string, journal.Receipt) (journal.Receipt, error) { return proof, nil }); err != nil {
+		t.Fatal(err)
+	}
+	for _, phase := range []journal.Phase{journal.WithdrawAcknowledged, journal.SettingsIntent, journal.SettingsAcknowledged, journal.PublishIntent, journal.PublishAcknowledged, journal.CloseIntent} {
+		if err := owner.Record(ctx, one, phase, proof); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A changed mount/ancestor after staging invalidates the original C1+C3
+	// held descriptors; a historical effect ACK is not a native witness.
+	native.allowed = false
+	if err := owner.Finish(ctx, one, journal.Committed, proof); err == nil {
+		t.Fatal("stale original chain certified")
+	}
+	if store.journal.Entries[0].Phase != journal.CloseIntent || native.closes != 0 {
+		t.Fatal("native failure became terminal or attempted unknown close")
+	}
+	if err := owner.Finish(ctx, one, journal.Committed, proof); err == nil {
+		t.Fatal("poisoned chain retried")
+	}
 }

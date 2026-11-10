@@ -16,16 +16,18 @@ import (
 // activation. Independent TS settings writers are not serialized by this lock.
 // One native lock is held for the backend lifetime; Close belongs to its owner.
 type Store struct {
-	mutex            sync.Mutex
-	binding          Binding
-	disk             *disk
-	clock            port.Clock
-	current          state
-	digest           [32]byte
-	journal          transition.Journal
-	journalPresent   bool
-	journalDigest    [32]byte
-	poisoned, closed bool
+	mutex             sync.Mutex
+	binding           Binding
+	disk              *disk
+	clock             port.Clock
+	current           state
+	digest            [32]byte
+	journal           transition.Journal
+	journalPresent    bool
+	journalDigest     [32]byte
+	currentContinuity *activeContinuity
+	currentActivating bool
+	poisoned, closed  bool
 }
 
 var _ port.AccessRepository = (*Store)(nil)

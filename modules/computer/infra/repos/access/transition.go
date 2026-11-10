@@ -25,15 +25,23 @@ func (s *Store) transitionRestricted() bool {
 	if s.journal.Unresolved() {
 		return true
 	}
-	// A logical terminal certificate records history, not a current native
-	// qualification or activation permit. No production activation/wire exists
-	// in this proposal, so even a fully committed transition stays closed.
-	for _, entry := range s.journal.Entries {
-		if entry.Phase == transition.Committed {
-			return true
+	// Earlier committed certificates are historical; only the most recent
+	// effective committed transition needs CURRENT native qualification. A
+	// later settled transition cannot revive an old admission/descriptor.
+	var latest *transition.Entry
+	for i := range s.journal.Entries {
+		e := &s.journal.Entries[i]
+		if e.Phase == transition.Committed && e.DischargedBy == "" {
+			latest = e
 		}
 	}
-	return false
+	if latest == nil {
+		return false
+	}
+	a := s.currentContinuity
+	return a == nil || a.operationID != latest.Request.OperationID ||
+		a.storeDigest != s.digest || a.journalDigest != s.journalDigest ||
+		a.storeRevision != s.current.Revision || a.generation != s.current.Generation
 }
 
 // checkStorage is the same exact protected-state check for the journal owner.
