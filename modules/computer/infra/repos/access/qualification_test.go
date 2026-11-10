@@ -27,10 +27,10 @@ func (r *qualifiedReader) ReadQualified(context.Context, journal.Entry, authorit
 }
 
 type candidateNative struct {
-	acquired, held, released, requalified int
-	device, inode                         uint64
-	observed                              obs.Observation
-	stale, closeFault, refuseHold         bool
+	acquired, held, released, requalified        int
+	device, inode                                uint64
+	observed                                     obs.Observation
+	stale, closeFault, refuseHold, refuseAcquire bool
 }
 type anchorNative struct {
 	n      *candidateNative
@@ -43,6 +43,9 @@ type heldNative struct {
 
 func (n *candidateNative) Acquire(context.Context) (leaseport.Anchor, error) {
 	n.acquired++
+	if n.refuseAcquire {
+		return nil, errors.New("acquisition outcome unknown")
+	}
 	return &anchorNative{n: n}, nil
 }
 func (n *candidateNative) Hold(context.Context, string) (observationport.HeldObservation, error) {
@@ -190,5 +193,35 @@ func TestNativeCurrentQualifierRejectsCloneMissingProofWrongScopeAndBrokenCleanu
 	n.refuseHold = true
 	if w, err := NewHeldCurrentQualifier(r, n, n).PrepareCurrent(ctx, entry, a); err == nil || w != nil || n.released != 1 {
 		t.Fatal("failed close did not refuse exactly once", err)
+	}
+}
+
+func TestNativeCurrentUnknownBeforeWitnessNeverReacquires(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name   string
+		mutate func(*candidateNative)
+	}{
+		{"acquire returned error after possible effect", func(n *candidateNative) { n.refuseAcquire = true }},
+		{"holder refused after anchor acquisition", func(n *candidateNative) { n.refuseHold = true }},
+		{"holder refused and anchor Close uncertain", func(n *candidateNative) { n.refuseHold = true; n.closeFault = true }},
+		{"held requalification became stale", func(n *candidateNative) { n.stale = true }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			entry, a, r, n := nativeCurrentFixture()
+			tc.mutate(n)
+			q := NewHeldCurrentQualifier(r, n, n)
+			w, err := q.PrepareCurrent(ctx, entry, a)
+			if w != nil || !errors.Is(err, ErrCurrentCustodyUnknown) {
+				t.Fatal("unknown acquisition not classified", err)
+			}
+			acquired, held, closed, reads := n.acquired, n.held, n.released, r.calls
+			if other, err := q.PrepareCurrent(ctx, entry, a); other != nil || err == nil {
+				t.Fatal("same qualifier reacquired uncertain handles", err)
+			}
+			if acquired != n.acquired || held != n.held || closed != n.released || reads != r.calls {
+				t.Fatal("retry effect after unknown")
+			}
+		})
 	}
 }

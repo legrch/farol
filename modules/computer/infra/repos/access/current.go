@@ -2,6 +2,9 @@ package access
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
 	"strconv"
 
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -25,13 +28,42 @@ type CurrentWitness interface {
 	Close() error
 }
 
+// A ticket proves the physical ROOT BINDINGS that were current when native
+// qualification completed. Store revisions and participant journal changes are
+// deliberately excluded: legal Admit/Revoke must not clear this evidence.
+// Ordinary owner policy mutations remain protected by Store's own CAS and the
+// effective approval; changing a root binding still invalidates the ticket.
 type activeContinuity struct {
 	operationID   string
-	storeDigest   [32]byte
+	bindingDigest [32]byte
 	journalDigest [32]byte
-	storeRevision uint64
-	generation    uint64
+	minGeneration uint64
 }
+
+func currentRootBindingDigest(a *authority.Approval) [32]byte {
+	if a == nil {
+		return [32]byte{}
+	}
+	type binding struct{ WorkspaceID, Root, Device, Inode string }
+	parts := make([]binding, 0, len(a.Workspaces))
+	for _, w := range a.Workspaces {
+		parts = append(parts, binding{w.WorkspaceID, w.Root, w.RootIdentity.Device, w.RootIdentity.Inode})
+	}
+	b, err := json.Marshal(struct {
+		OwnerID, ComputerID string
+		Bindings            []binding
+	}{a.OwnerID, a.ComputerID, parts})
+	if err != nil {
+		return [32]byte{}
+	}
+	return sha256.Sum256(b)
+}
+
+// ErrCurrentCustodyUnknown is classified native acquisition or cleanup of the
+// ORIGINAL current witness, not a retryable missing Settings/recovery proof.
+// A Store that receives it must poison this runtime's admission rather than
+// trying another set of numeric descriptors.
+var ErrCurrentCustodyUnknown = errors.New("WORKSPACE_CURRENT_NATIVE_CUSTODY_UNKNOWN")
 
 type CurrentTransitionReceipt struct {
 	OperationID               string
@@ -103,6 +135,9 @@ func (s *Store) ActivateCurrentTransition(ctx context.Context, qualifier Current
 	defer s.mutex.Unlock()
 	defer func() { s.currentActivating = false }()
 	if err != nil || witness == nil {
+		if errors.Is(err, ErrCurrentCustodyUnknown) || (err == nil && witness == nil) {
+			s.poisoned = true
+		}
 		return CurrentTransitionReceipt{}, unavailable()
 	}
 	// Every returned native witness is consumed exactly once, including when
@@ -126,8 +161,8 @@ func (s *Store) ActivateCurrentTransition(ctx context.Context, qualifier Current
 		return CurrentTransitionReceipt{}, unavailable()
 	}
 	s.currentContinuity = &activeContinuity{
-		operationID: entry.Request.OperationID, storeDigest: s.digest,
-		journalDigest: s.journalDigest, storeRevision: rev, generation: generation,
+		operationID: entry.Request.OperationID, bindingDigest: currentRootBindingDigest(s.current.Approval),
+		journalDigest: s.journalDigest, minGeneration: generation,
 	}
 	return CurrentTransitionReceipt{
 		OperationID: entry.Request.OperationID, StoreRevision: rev, Generation: generation,

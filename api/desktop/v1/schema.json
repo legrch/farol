@@ -20,6 +20,7 @@
     "computer.workspace.bootstrap": "read",
     "computer.authority.deactivate": "effect",
     "computer.authority.publish": "effect",
+    "computer.continuity.status": "read",
     "chat.browser.next": "read",
     "chat.browser.reply": "effect",
     "chat.conversation.create": "effect",
@@ -849,6 +850,22 @@
           "type": "text",
           "values": ["never"]
         }
+      }
+    },
+    "ComputerContinuityStatusRequest": {
+      "type": "object",
+      "fields": {}
+    },
+    "ComputerContinuityStatusResponse": {
+      "type": "object",
+      "fields": {
+        "present": {"type": "boolean"},
+        "restricted": {"type": "boolean"},
+        "currentQualified": {"type": "boolean"},
+        "entryCount": {"type": "uint32"},
+        "delivery": {"type": "text", "values": ["not_recorded"]},
+        "pendingOperationId": {"type": "id", "optional": true},
+        "pendingPhase": {"type": "text", "optional": true, "values": ["intent", "prepared", "withdraw_intent", "withdraw_ack", "settings_intent", "settings_ack", "publish_intent", "publish_ack", "close_intent", "close_ack"]}
       }
     },
     "ComputerAuthorityDeactivateRequest": {

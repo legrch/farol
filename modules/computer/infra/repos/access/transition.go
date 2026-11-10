@@ -40,8 +40,9 @@ func (s *Store) transitionRestricted() bool {
 	}
 	a := s.currentContinuity
 	return a == nil || a.operationID != latest.Request.OperationID ||
-		a.storeDigest != s.digest || a.journalDigest != s.journalDigest ||
-		a.storeRevision != s.current.Revision || a.generation != s.current.Generation
+		a.journalDigest != s.journalDigest || s.current.Approval == nil ||
+		a.minGeneration > s.current.Generation ||
+		a.bindingDigest != currentRootBindingDigest(s.current.Approval)
 }
 
 // checkStorage is the same exact protected-state check for the journal owner.

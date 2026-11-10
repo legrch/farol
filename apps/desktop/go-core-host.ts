@@ -59,6 +59,7 @@ import { attestShellRuntime } from "./bridge/shell-runtime.ts";
 import type { QualificationObserver } from "./bridge/qualification-metrics.ts";
 import { encodeShellLaunch } from "./bridge/shell-launch.ts";
 import { GoComputerAuthority } from "./go-computer-authority.ts";
+import { ContinuityStatusBridge } from "./bridge/continuity-status.ts";
 import type { BuildIdentity } from "../../src/pkg/build-info/identity";
 import type { ProductSettings } from "../../src/pkg/product-settings/contract";
 
@@ -109,6 +110,7 @@ export type DesktopCoreSelection = Readonly<{
 export class DesktopGoCore {
   readonly processAudit: ProcessAuditBridge;
   private readonly authority: GoComputerAuthority;
+  private readonly continuity: ContinuityStatusBridge;
   private readonly computer: ComputerBridge;
   private readonly connector: ConnectorHostBridge | undefined;
   private readonly readIntent: ReadIntentBridge;
@@ -142,6 +144,7 @@ export class DesktopGoCore {
   ) {
     this.processAudit = new ProcessAuditBridge(client);
     this.authority = new GoComputerAuthority(client, client.verifiedContext);
+    this.continuity = new ContinuityStatusBridge(client);
     this.computer = new ComputerBridge(client);
     this.connector =
       buildId === undefined
@@ -240,6 +243,12 @@ export class DesktopGoCore {
   }
   withdraw() {
     return this.authority.withdraw();
+  }
+  // Cannot clear a pending original WAL; caller must refuse before stop/Settings.
+  async observeComputerContinuity() {
+    if (this.closeResult)
+      throw new BridgeError("unavailable", "host_core_closing");
+    return this.continuity.observe();
   }
   async publishCurrent(): Promise<void> {
     const publication = await this.withdraw();

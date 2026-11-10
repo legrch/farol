@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"sync"
 
 	leaseport "github.com/legrch/farol/modules/computer/app/port/lease"
 	observationport "github.com/legrch/farol/modules/computer/app/port/observation"
@@ -37,13 +38,34 @@ type CurrentReader interface {
 // only be given to Store.ActivateCurrentTransition by trusted Go composition.
 // It is never a general-purpose workspace/root reader or a new grant owner.
 type HeldCurrentQualifier struct {
-	reader CurrentReader
-	anchor leaseport.Acquirer
-	holder observationport.Holder
+	reader           CurrentReader
+	anchor           leaseport.Acquirer
+	holder           observationport.Holder
+	mutex            sync.Mutex
+	active, poisoned bool
 }
 
 func NewHeldCurrentQualifier(reader CurrentReader, anchor leaseport.Acquirer, holder observationport.Holder) CurrentQualification {
 	return &HeldCurrentQualifier{reader: reader, anchor: anchor, holder: holder}
+}
+
+// The same qualifier never reacquires after a native acquisition or cleanup
+// with an unresolved result. This is runtime-local custody; it is not the
+// historical WAL, and a later call cannot guess an earlier close succeeded.
+func (q *HeldCurrentQualifier) enter() bool {
+	q.mutex.Lock()
+	defer q.mutex.Unlock()
+	if q.active || q.poisoned {
+		return false
+	}
+	q.active = true
+	return true
+}
+func (q *HeldCurrentQualifier) finish(unknown bool) {
+	q.mutex.Lock()
+	defer q.mutex.Unlock()
+	q.active = false
+	q.poisoned = q.poisoned || unknown
 }
 
 var errUnqualifiedCurrent = errors.New("WORKSPACE_CURRENT_QUALIFICATION_UNAVAILABLE")
@@ -54,10 +76,14 @@ func (q *HeldCurrentQualifier) PrepareCurrent(ctx context.Context, entry journal
 		entry.Request.WorkspaceID == "" || entry.Request.Root == "" || entry.Request.ConsentDigest == "" {
 		return nil, errUnqualifiedCurrent
 	}
+	if !q.enter() {
+		return nil, errUnqualifiedCurrent
+	}
 	proof, err := q.reader.ReadQualified(ctx, entry, proposed)
 	if err != nil || ctx.Err() != nil || proof.ConsentDigest != entry.Request.ConsentDigest || proof.SettingsRevision == 0 ||
 		proof.ComputerGeneration != proposed.Generation || proof.Saved.Binding.Path != entry.Request.Root ||
 		observation.Preflight(proof.Saved, observation.Settled) != "" {
+		q.finish(false)
 		return nil, errUnqualifiedCurrent
 	}
 	// Do not accept a mere matched inode when the reader has not proven the
@@ -69,29 +95,34 @@ func (q *HeldCurrentQualifier) PrepareCurrent(ctx context.Context, entry journal
 		}
 		if found || root.Root != entry.Request.Root || root.ShellVerified ||
 			root.RootIdentity.Inode != proof.Saved.Binding.Inode {
+			q.finish(false)
 			return nil, errUnqualifiedCurrent
 		}
 		found = true
 	}
 	if !found {
+		q.finish(false)
 		return nil, errUnqualifiedCurrent
 	}
 	anchor, err := q.anchor.Acquire(ctx)
 	if err != nil || anchor == nil {
-		return nil, errUnqualifiedCurrent
+		q.finish(true)
+		return nil, errors.Join(errUnqualifiedCurrent, ErrCurrentCustodyUnknown, err)
 	}
 	candidate, err := q.holder.Hold(ctx, entry.Request.Root)
 	if err != nil || candidate == nil {
-		if closeErr := anchor.Close(); closeErr != nil {
-			return nil, errors.Join(errUnqualifiedCurrent, closeErr)
-		}
-		return nil, errUnqualifiedCurrent
+		// Holder may have acquired and lost the reply before returning. An
+		// anchor's known close cannot prove that the other acquisition did not.
+		closeErr := anchor.Close()
+		q.finish(true)
+		return nil, errors.Join(errUnqualifiedCurrent, ErrCurrentCustodyUnknown, err, closeErr)
 	}
-	w := &heldCurrentWitness{anchor: anchor, candidate: candidate, saved: proof.Saved, root: entry.Request.Root}
+	w := &heldCurrentWitness{owner: q, anchor: anchor, candidate: candidate, saved: proof.Saved, root: entry.Request.Root}
 	// Requalify before returning to Store (which performs another requalification
 	// under its protected lock and owns the one-shot Close).
 	if err := w.RequalifyCurrent(ctx); err != nil {
-		return nil, errors.Join(errUnqualifiedCurrent, err, w.Close())
+		q.finish(true) // stale original held native witness may not be reacquired
+		return nil, errors.Join(errUnqualifiedCurrent, ErrCurrentCustodyUnknown, err, w.Close())
 	}
 	return w, nil
 }
@@ -99,6 +130,7 @@ func (q *HeldCurrentQualifier) PrepareCurrent(ctx context.Context, entry journal
 // The witness always retains the ORIGINAL native descriptors. No re-open by
 // path is permitted after a stale native check. Failed Close is not retried.
 type heldCurrentWitness struct {
+	owner     *HeldCurrentQualifier
 	anchor    leaseport.Anchor
 	candidate observationport.HeldObservation
 	saved     observation.Saved
@@ -147,6 +179,9 @@ func (w *heldCurrentWitness) Close() error {
 	}
 	if w.anchor != nil {
 		err = errors.Join(err, w.anchor.Close())
+	}
+	if w.owner != nil {
+		w.owner.finish(err != nil)
 	}
 	return err
 }

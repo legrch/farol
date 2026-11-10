@@ -7174,6 +7174,17 @@ async function configureDrainedWorkspaceChange(
     connectorStartInFlight !== null
   )
     return transitionRefusal();
+  // Ask the existing Go WAL owner BEFORE invoking any new connector drain.
+  // A lost stop ACK or pending continuity transition cannot be discharged by
+  // a second ordinary command with equal visible Settings bytes. No fallback
+  // to a missing old core/status method is permitted.
+  try {
+    const custody = await core.observeComputerContinuity();
+    if (custody.restricted || custody.pendingOperationId !== undefined)
+      return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
+  } catch {
+    return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
+  }
   const computerGeneration = original.settings.computer.generation;
   const connectorGeneration = original.settings.connectors.secureMcp.generation;
   let revision = original.settings.revision;

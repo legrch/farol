@@ -206,3 +206,53 @@ func TestCurrentPreparationDoesNotHoldStoreMutexAndStaleJournalRejects(t *testin
 		t.Fatal("new unsettled WAL bypassed")
 	}
 }
+
+func TestCurrentNativeBindingSurvivesOrdinaryParticipantAndPolicyMutation(t *testing.T) {
+	f, original := committedCurrentFixture(t)
+	ctx := context.Background()
+	if _, err := f.store.ActivateCurrentTransition(ctx, &currentQualifierFixture{}); err != nil {
+		t.Fatal(err)
+	}
+	originalTicket, err := f.store.CurrentContinuityStatus(ctx)
+	if err != nil || originalTicket.OperationID != original.OperationID {
+		t.Fatal("initial current admission", err)
+	}
+	// Real durable Store Admit/Revoke change revision/digest but not the
+	// physically qualified root binding or original terminal certificate.
+	admission := f.admission
+	admission.ComputerGeneration = f.store.current.Generation
+	p, err := f.store.Admit(ctx, f.store.current.Revision, admission, f.participant)
+	if err != nil || p == nil {
+		t.Fatal("lawful participant admission", err)
+	}
+	if _, err := f.store.Status(ctx); err != nil {
+		t.Fatal("ordinary admission fenced current", err)
+	}
+	if err := f.store.RevokeParticipant(ctx, f.store.current.Revision, p.ParticipantID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.Status(ctx); err != nil {
+		t.Fatal("ordinary revocation fenced current", err)
+	}
+	newPolicy := f.store.current.Approval.Clone()
+	newPolicy.Generation++
+	newPolicy.Capabilities = []authority.Capability{authority.List}
+	if err := f.store.UpdateApproval(ctx, f.store.current.Revision, newPolicy); err != nil {
+		t.Fatal("normal owner policy change", err)
+	}
+	if _, err := f.store.Status(ctx); err != nil {
+		t.Fatal("same-root authorized policy change fenced", err)
+	}
+	if out, err := f.store.CurrentContinuityStatus(ctx); err != nil || out.Generation != newPolicy.Generation || out.OperationID != original.OperationID {
+		t.Fatal("historical certificate lost", err)
+	}
+	changed := newPolicy.Clone()
+	changed.Generation++
+	changed.Workspaces[0].RootIdentity.Device = "10000"
+	if err := f.store.UpdateApproval(ctx, f.store.current.Revision, changed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.Status(ctx); err == nil {
+		t.Fatal("unqualified later root change reused former native ticket")
+	}
+}

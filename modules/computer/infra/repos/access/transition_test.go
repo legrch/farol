@@ -131,3 +131,51 @@ func TestContinuityCommittedCertificateStillCannotActivateStore(t *testing.T) {
 		t.Fatal("restart blessed historical certificate")
 	}
 }
+
+// This is an ACTUAL durable Go WAL/restart regression, not a synthetic TS
+// boolean or a restarted one-shot sequencer. The first operation remains
+// pending even when the protected Settings/approval snapshot has not changed.
+// It covers the post-WAL crash/lost-ACK boundary; pre-WAL stopped-Settings
+// custody belongs to its separate lifecycle owner and is not proved here.
+func TestContinuityRestartLostAckCannotAdmitSecondWithIdenticalProtectedBytes(t *testing.T) {
+	f := fixtureState(t)
+	ctx := context.Background()
+	approve(t, f)
+	r := transitionIntent
+	r.WorkspaceID = "work"
+	r.Root = f.workspace
+	originalRevision := f.store.current.Revision
+	originalDigest := f.store.digest
+	if _, admitted, err := f.store.BeginTransition(ctx, r); err != nil || !admitted {
+		t.Fatal("original intent", err)
+	}
+	if err := f.store.AdvanceTransition(ctx, r.OperationID, transition.Prepared, transitionProof); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.AdvanceTransition(ctx, r.OperationID, transition.WithdrawIntent, transitionProof); err != nil {
+		t.Fatal(err)
+	}
+	// The withdrawal response was lost. Caller has no matching ACK. A new
+	// process must observe only the old original transition and not attempt a
+	// second normal stop/withdraw or grant renewal despite identical Settings.
+	reopened := restored(t, f)
+	observed, err := reopened.TransitionStatus(ctx)
+	if err != nil || !observed.Restricted || observed.Delivery != "not_recorded" || observed.Journal.Entries[0].Phase != transition.WithdrawIntent {
+		t.Fatal("lost original receipt", err)
+	}
+	if reopened.current.Revision != originalRevision || reopened.digest != originalDigest {
+		t.Fatal("visible approval changed unexpectedly")
+	}
+	second := r
+	second.OperationID = "22222222-2222-4222-8222-222222222222"
+	if _, admitted, err := reopened.BeginTransition(ctx, second); err == nil || admitted {
+		t.Fatal("second UUID admitted after original lost ACK", err)
+	}
+	repeat, admitted, err := reopened.BeginTransition(ctx, r)
+	if err != nil || admitted || repeat.Phase != transition.WithdrawIntent {
+		t.Fatal("repeat of original tried effect again", err)
+	}
+	if _, err := reopened.Status(ctx); err == nil {
+		t.Fatal("restart bypassed unresolved original")
+	}
+}

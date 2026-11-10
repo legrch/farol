@@ -24,7 +24,16 @@ func (s *Store) StageContinuityApproval(ctx context.Context, id string, planned 
 		return Status{}, unavailable()
 	}
 	old := *s.current.Approval
-	if proposed.Generation != old.Generation+1 || !sameStableEffectiveLimits(old, proposed) {
+	selectedRoot := ""
+	for _, w := range old.Workspaces {
+		if w.WorkspaceID == entry.Request.WorkspaceID {
+			selectedRoot = w.Root
+		}
+	}
+	if selectedRoot == "" || entry.Request.Root != selectedRoot {
+		return Status{}, unavailable()
+	}
+	if proposed.Generation != old.Generation+1 || !sameStableEffectiveLimits(old, proposed, entry.Request.WorkspaceID) {
 		return Status{}, unavailable()
 	}
 	n, err := s.nextState(revision)
@@ -56,16 +65,23 @@ func (s *Store) StageContinuityApproval(ctx context.Context, id string, planned 
 	return Status{Revision: s.current.Revision, Generation: s.current.Generation, ApprovalPresent: true}, nil
 }
 
-func sameStableEffectiveLimits(before, after authority.Approval) bool {
+func sameStableEffectiveLimits(before, after authority.Approval, selected string) bool {
 	if before.OwnerID != after.OwnerID || before.ComputerID != after.ComputerID || before.Network != after.Network ||
-		before.FilePolicy != after.FilePolicy || len(before.Workspaces) != len(after.Workspaces) ||
+		before.FilePolicy != after.FilePolicy || after.ExpiresAt.After(before.ExpiresAt) || len(before.Workspaces) != len(after.Workspaces) ||
 		!reflect.DeepEqual(before.ExcludedPaths, after.ExcludedPaths) {
 		return false
 	}
 	// After native rebind, previous ShellVerified is NOT durable consent. Refuse
 	// any shell presence until fresh current Setup/build/generation checks.
+	selectedCount := 0
 	for i, a := range after.Workspaces {
 		b := before.Workspaces[i]
+		if a.WorkspaceID == selected {
+			selectedCount++
+		} else if a.RootIdentity != b.RootIdentity {
+			// A continuity operation may rebind only its original selected root.
+			return false
+		}
 		if a.WorkspaceID != b.WorkspaceID || a.Root != b.Root || a.Access != b.Access ||
 			!reflect.DeepEqual(a.GitMetadata, b.GitMetadata) || a.GitHistoryApproved != b.GitHistoryApproved || a.ShellVerified ||
 			a.RootIdentity.Inode != b.RootIdentity.Inode {
@@ -86,7 +102,7 @@ func sameStableEffectiveLimits(before, after authority.Approval) bool {
 			return 99
 		}
 	}
-	if rank(after.Commands) > rank(before.Commands) {
+	if selectedCount != 1 || rank(after.Commands) > rank(before.Commands) {
 		return false
 	}
 	oldCapabilities := map[authority.Capability]bool{}
