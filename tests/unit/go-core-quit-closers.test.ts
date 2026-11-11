@@ -403,6 +403,7 @@ describe("actual MCP stop retains its admitted saved-chat lifetime", () => {
     const core = {
       close: vi.fn(async () => undefined),
       closeComputerConnector: vi.fn(async () => undefined),
+      observeOriginalStop: vi.fn(async () => ({ restricted: false })),
     };
     const connector = {
       stop: vi.fn(async () => undefined),
