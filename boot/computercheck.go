@@ -7,7 +7,7 @@ import (
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	connectorsvc "github.com/legrch/farol/modules/computer/app/services/connector"
-	check "github.com/legrch/farol/modules/computer/domain/connectioncheck"
+	check "github.com/legrch/farol/modules/computer/domain/connector"
 	"github.com/legrch/farol/pkg/ipc"
 	"github.com/legrch/farol/transport/desktop"
 )

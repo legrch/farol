@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
-	check "github.com/legrch/farol/modules/computer/domain/connectioncheck"
+	check "github.com/legrch/farol/modules/computer/domain/connector"
 )
 
 // Existing Access Store owns durable attempts. This pure app service selects the

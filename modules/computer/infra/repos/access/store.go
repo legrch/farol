@@ -7,7 +7,7 @@ import (
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/authority"
-	check "github.com/legrch/farol/modules/computer/domain/connectioncheck"
+	check "github.com/legrch/farol/modules/computer/domain/connector"
 	transition "github.com/legrch/farol/modules/computer/domain/journal"
 )
 

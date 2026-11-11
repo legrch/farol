@@ -1,7 +1,7 @@
-// Package connectioncheck owns the closed, original explicit connection-test
+// Package connector owns the closed, original explicit connection-test
 // attempt. This is not a connector grant or proof of provider authentication.
 // Host effects are described here only by immutable values.
-package connectioncheck
+package connector
 
 import (
 	"crypto/sha256"

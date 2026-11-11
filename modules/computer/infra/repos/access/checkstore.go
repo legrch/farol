@@ -8,7 +8,7 @@ import (
 	"errors"
 	"os"
 
-	check "github.com/legrch/farol/modules/computer/domain/connectioncheck"
+	check "github.com/legrch/farol/modules/computer/domain/connector"
 )
 
 // The existing Store's lifetime mutex/flock is the only owner of original

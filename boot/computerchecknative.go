@@ -8,7 +8,7 @@ import (
 	"strconv"
 
 	connectorsvc "github.com/legrch/farol/modules/computer/app/services/connector"
-	check "github.com/legrch/farol/modules/computer/domain/connectioncheck"
+	check "github.com/legrch/farol/modules/computer/domain/connector"
 )
 
 // CurrentConnectionCheck is a fresh Go verification-owner observation. It

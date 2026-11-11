@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	check "github.com/legrch/farol/modules/computer/domain/connectioncheck"
+	check "github.com/legrch/farol/modules/computer/domain/connector"
 	"golang.org/x/sys/unix"
 )
 

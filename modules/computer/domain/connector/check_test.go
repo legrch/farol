@@ -1,4 +1,4 @@
-package connectioncheck
+package connector
 
 import (
 	"crypto/sha256"
