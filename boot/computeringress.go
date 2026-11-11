@@ -16,6 +16,7 @@ import (
 	chatlifecycle "github.com/legrch/farol/modules/chat/app/services/lifecycle"
 	conversation "github.com/legrch/farol/modules/chat/contracts/conversation"
 	computerport "github.com/legrch/farol/modules/computer/app/port"
+	connectorsvc "github.com/legrch/farol/modules/computer/app/services/connector"
 	execution "github.com/legrch/farol/modules/computer/app/services/execution"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	"github.com/legrch/farol/modules/computer/infra/filesystem"
@@ -35,6 +36,7 @@ type ComputerIngress struct {
 	mu                  sync.Mutex
 	guard               activationFence
 	store               computerIngressStore
+	stopOwner           *connectorsvc.OriginalStopOwner
 	chat                *chatlifecycle.Service
 	readFacade          *conversation.Facade
 	conversations       *ChatIngress

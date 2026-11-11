@@ -41,6 +41,7 @@ const Reconciliation = z.discriminatedUnion("schema", [
 /** One launch root, shared by Desktop and every Computer MCP it authorizes. */
 export class PrivateMcpLifecycle {
   private readonly directory: string;
+  private readonly originalLifetimeId = randomUUID();
   private activeHandlers = 0;
   private handlerAdmissionClosed = false;
   private stopRevision = 0;
@@ -498,6 +499,28 @@ export class PrivateMcpLifecycle {
     )
       throw new Error("COMPUTER_MCP_LIFECYCLE_STOP_UNVERIFIED");
     this.confirmedStopRevision = originalRevision;
+  }
+
+  // Exact current-lifetime positive native receipt; a legacy marker, restart,
+  // idle process or older stop cannot manufacture it. Observational only:
+  // this getter never dispatches beginStop/confirmStop again.
+  confirmedOriginalStop(): Readonly<{
+    lifecycleId: string;
+    stopRevision: string;
+    preparationRevision: string;
+  }> | null {
+    if (
+      this.stopRevision === 0 ||
+      this.confirmedStopRevision === null ||
+      this.confirmedStopRevision !== this.stopRevision ||
+      this.freshStartRevision === this.stopRevision
+    )
+      return null;
+    return Object.freeze({
+      lifecycleId: this.originalLifetimeId,
+      stopRevision: String(this.stopRevision),
+      preparationRevision: String(this.preparationRevision),
+    });
   }
 
   /** Explicit closed-app maintenance only. The caller must hold the Desktop

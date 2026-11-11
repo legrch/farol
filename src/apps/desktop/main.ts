@@ -55,6 +55,7 @@ import {
 } from "../../../apps/desktop/updates-panel";
 import { updatesChannels } from "../../../apps/desktop/renderer/updates/contract";
 import { connectorRuntimeUncertain } from "../../pkg/product-settings/connector-uncertainty";
+import { ownerComputerConsentDigest } from "../../modules/computer/infra/repo/owner-computer-consent";
 import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
 import { connectorVerificationProof } from "./connector-verification-proof";
 import {
@@ -555,7 +556,10 @@ import {
   SecureMcpConnectorRuntime,
   type ConnectorRuntimeLifecycleObservation,
 } from "./secure-mcp-connector-runtime";
-import { clearConnectorVerificationReceipt } from "../../modules/computer/infra/mcp/connector-verification-receipt";
+import {
+  clearConnectorVerificationReceipt,
+  clearAndConfirmOriginalConnectorVerificationReceipt,
+} from "../../modules/computer/infra/mcp/connector-verification-receipt";
 import { PrivateExecutionFence } from "../../modules/computer/infra/mcp/execution-fence";
 import { PrivateMcpLifecycle } from "../../modules/computer/infra/mcp/private-mcp-lifecycle";
 import {
@@ -3867,13 +3871,22 @@ async function stopAndConfirmComputerMcp(
   core = desktopGoCore,
   savedChat = savedChatBridgeRuntime,
   reason?: "owner_stop",
+  originalStopParent?: string,
 ): Promise<void> {
   if (!connector) throw new Error("CONNECTOR_STOP_UNCONFIRMED");
+  // Ordinary Stop is forbidden while C7 owns an unresolved original. Only
+  // the already-admitted original parent may execute its single native effect.
+  if (core && originalStopParent === undefined) {
+    const custody = await core.observeOriginalStop();
+    if (custody.restricted) throw new Error("CONNECTOR_STOP_UNCONFIRMED");
+  }
   if (
     core?.independentSession &&
     inFlightStart === null &&
     !connector.isRunning()
   ) {
+    if (originalStopParent !== undefined)
+      throw new Error("CONNECTOR_STOP_UNCONFIRMED");
     // This run never owned the retained legacy tunnel. Close only its current
     // native connector/account ports; old lifecycle markers remain history.
     await savedChat?.close();
@@ -3902,7 +3915,7 @@ async function stopAndConfirmComputerMcp(
             } finally {
               // Withdraw the original Go owner even when the old adapter drain fails.
               // A failure remains unconfirmed; it cannot authorize a new launch.
-              await core?.closeComputerConnector(reason);
+              await core?.closeComputerConnector(reason, originalStopParent);
             }
           },
           confirmStop: () => lifecycle.confirmStop(),
@@ -5312,6 +5325,15 @@ async function startAdmittedSecureMcpConnector(
     return transitionRefusal();
   if (quitInProgress || installedUpdateAdmission)
     return configurationFailure("CONNECTOR_START_FAILED");
+  // C7 can be pending before any C4 WAL exists. No new Start, repair,
+  // credential-associated Open or restoration may cross that custody.
+  try {
+    const originalStop = await desktopGoCore?.observeOriginalStop();
+    if (!originalStop || originalStop.restricted)
+      return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
+  } catch {
+    return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
+  }
   if (
     !configuration ||
     !connectorCredentialStore ||
@@ -6825,6 +6847,21 @@ async function configureSaveAndConnect(
         connectorTaskAdmission = true;
         activeAuthorityChangeKind = command.kind;
         try {
+          // The combined Save+Connect writes credentials before Start. Fence
+          // it against a pending original Stop before either effect starts.
+          try {
+            const custody = await desktopGoCore?.observeOriginalStop();
+            if (!custody || custody.restricted)
+              return connectorSetupRefusal(
+                command,
+                "AUTHORITY_CHANGE_IN_PROGRESS",
+              );
+          } catch {
+            return connectorSetupRefusal(
+              command,
+              "AUTHORITY_CHANGE_IN_PROGRESS",
+            );
+          }
           return await observeConnectorStart(() =>
             runAdmittedConnectorSetup(
               { operationId: command.operationId, buildId: command.buildId },
@@ -7076,6 +7113,15 @@ async function configureUnfencedProduct(
         connectorTaskAdmission = true;
         activeAuthorityChangeKind = command.kind;
         try {
+          // Credential replacement is a durable Settings/private-file
+          // operation, not allowed to bypass unfinished original Stop custody.
+          try {
+            const custody = await desktopGoCore?.observeOriginalStop();
+            if (!custody || custody.restricted)
+              return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
+          } catch {
+            return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
+          }
           return await configureAdmittedProduct(command);
         } finally {
           connectorTaskAdmission = false;
@@ -7118,6 +7164,12 @@ async function configureUnfencedProduct(
         }
         let stopStage: "begin-stop" | "confirm-stop" = "begin-stop";
         try {
+          // This direct authority-change path predates C7 and otherwise
+          // calls beginStop without a parent. Admit it only when Go confirms
+          // there is no pending original prerequisite.
+          const custody = await desktopGoCore?.observeOriginalStop();
+          if (!custody || custody.restricted)
+            return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
           const lifecycle = computerMcpLifecycle();
           await lifecycle.beginStop();
           stopStage = "confirm-stop";
@@ -7185,6 +7237,58 @@ async function configureDrainedWorkspaceChange(
   } catch {
     return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
   }
+  // C7 fixes the original command scope BEFORE Stop. An add-workspace or
+  // global commands/file-policy edit has no selected existing workspace; it
+  // binds the entire owner-consent projection instead of borrowing a random
+  // workspace root or claiming the to-be-added directory is already approved.
+  const requestedId =
+    "workspaceId" in command ? command.workspaceId : undefined;
+  const target =
+    requestedId === undefined
+      ? undefined
+      : original.settings.computer.workspaces.find(
+          (item) => item.workspaceId === requestedId,
+        );
+  const connectorBinding = core.currentComputerConnectorBinding();
+  if (
+    (requestedId !== undefined && !target) ||
+    !connectorBinding ||
+    !connector.isRunning()
+  )
+    return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
+  const sha = (value: unknown) =>
+    createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  const originalStopId = randomUUID();
+  const stopEffectId = randomUUID();
+  const settingsEffectId = randomUUID();
+  const cleanupEffectId = randomUUID();
+  // Immutable complete OWNER-CONSENT scope: access, exclusions, selected
+  // commands, file/Git choices and capability ceilings. Excludes binding,
+  // revision, transient verification and other native observations.
+  const originalConsent = ownerComputerConsentDigest(original.settings);
+  const request = {
+    operationId: originalStopId,
+    requestDigest: sha({
+      command,
+      revision: original.settings.revision,
+      computerGeneration: original.settings.computer.generation,
+      connectorGeneration: original.settings.connectors.secureMcp.generation,
+    }),
+    commandKind: command.kind,
+    commandDigest: sha(command),
+    purpose: "workspace-change" as const,
+    ...(target ? { workspaceId: target.workspaceId, root: target.root } : {}),
+    consentDigest: originalConsent,
+    expectedRevision: String(original.settings.revision),
+    computerGeneration: String(original.settings.computer.generation),
+    connectorGeneration: String(
+      original.settings.connectors.secureMcp.generation,
+    ),
+    settingsDigest: sha(original.settings),
+    stopEffectId,
+    settingsEffectId,
+    cleanupEffectId,
+  };
   const computerGeneration = original.settings.computer.generation;
   const connectorGeneration = original.settings.connectors.secureMcp.generation;
   let revision = original.settings.revision;
@@ -7209,40 +7313,147 @@ async function configureDrainedWorkspaceChange(
         snapshot.settings.computer.generation === computerGeneration &&
         snapshot.settings.connectors.secureMcp.generation ===
           connectorGeneration &&
+        ownerComputerConsentDigest(snapshot.settings) === originalConsent &&
         !connectorRuntimeUncertain(snapshot.settings)
       );
     };
     const drain = new WorkspaceConfigurationDrain(command, {
       current,
       stop: async () => {
-        // A prior unresolved stop is observation-only, not a new stop attempt.
+        // The Go owner must durably admit the ORIGINAL stop_intent before
+        // lifecycle.beginStop, connector.stop, or connector-close effects.
         if (await computerMcpLifecycle().hasUnconfirmedStop())
           throw new Error("CONNECTOR_STOP_UNCONFIRMED");
         if (!current()) return false;
-        await stopAndConfirmComputerMcp(connector);
+        const admitted = await core.beginOriginalStop(request);
+        if (
+          admitted.runtimeId !== connectorBinding.runtimeId ||
+          admitted.backendGeneration !== connectorBinding.backendGeneration ||
+          admitted.buildId !== connectorBinding.buildId
+        )
+          throw new Error("CONNECTOR_STOP_UNCONFIRMED");
+        await stopAndConfirmComputerMcp(
+          connector,
+          null,
+          core,
+          savedChatBridgeRuntime,
+          undefined,
+          originalStopId,
+        );
+        const lifecycle = computerMcpLifecycle().confirmedOriginalStop();
+        const closure = core.computerConnectorClosureReceipt();
+        if (
+          !lifecycle ||
+          !closure ||
+          !closure.result.closed ||
+          closure.result.binding.runtimeId !== admitted.runtimeId ||
+          closure.result.binding.backendGeneration !==
+            admitted.backendGeneration
+        )
+          throw new Error("CONNECTOR_STOP_UNCONFIRMED");
+        await core.advanceOriginalStop({
+          parentOperationId: originalStopId,
+          phase: "stop_ack",
+          closure: {
+            effectId: stopEffectId,
+            backendGeneration: admitted.backendGeneration,
+            runtimeId: admitted.runtimeId,
+            lifecycleId: lifecycle.lifecycleId,
+            stopRevision: lifecycle.stopRevision,
+            preparationRevision: lifecycle.preparationRevision,
+            closureOperationId: closure.operationId,
+            closureDigest: sha(closure.result),
+          },
+        });
         return true;
       },
       recordStopped: async () => {
-        const stopped = ProductConfigurationResultSchema.parse(
-          await owner.recordSecureMcpStopped(undefined, "stop", revision),
+        // The retained sole Settings writer confirms the Go settings_intent
+        // before its ONE conditional save/readback. A lost reply is UNKNOWN,
+        // never a new save or an equal-byte inferred ACK.
+        const originalCurrent = () => {
+          const snap = owner.snapshot();
+          return (
+            configuration === owner &&
+            secureMcpConnectorRuntime === connector &&
+            desktopGoCore === core &&
+            authorityTransitions.current() === "authority-change" &&
+            connectorTaskAdmission &&
+            !quitInProgress &&
+            !installedUpdateAdmission &&
+            !codexAgentOperationActive() &&
+            !connector.hasUnresolvedEffect() &&
+            snap.status === "ready" &&
+            snap.settings.computer.generation === computerGeneration &&
+            snap.settings.connectors.secureMcp.generation ===
+              connectorGeneration &&
+            !connectorRuntimeUncertain(snap.settings)
+          );
+        };
+        const stopped = await owner.commitOriginalStoppedSettings(
+          {
+            effectId: settingsEffectId,
+            expectedRevision: revision,
+            expectedDigest: request.settingsDigest,
+            computerGeneration,
+            connectorGeneration,
+            consentDigest: request.consentDigest,
+          },
+          async (plan) => {
+            await core.advanceOriginalStop({
+              parentOperationId: originalStopId,
+              phase: "settings_intent",
+              settingsIntent: plan,
+            });
+          },
+          originalCurrent,
         );
-        if (!stopped.ok) {
-          phaseFailure = stopped;
-          return false;
-        }
-        if (stopped.snapshot.status !== "ready") {
+        if (stopped.status !== "committed") {
           phaseFailure = configurationFailure("SETTINGS_WRITE_FAILED");
           return "unknown";
         }
-        // Only the original acknowledged publication can advance this phase.
-        revision = stopped.snapshot.settings.revision;
+        await core.advanceOriginalStop({
+          parentOperationId: originalStopId,
+          phase: "settings_ack",
+          settingsAck: stopped.receipt,
+        });
+        revision = stopped.settings.revision;
         if (!current()) return "unknown";
-        try {
-          await clearConnectorVerificationReceipt(secureMcpLaunchRoot());
-        } catch {
-          phaseFailure = configurationFailure("CONNECTOR_ATTACHMENT_INVALID");
-          return false;
-        }
+        // Connector verification cleanup is a distinct one-shot effect with
+        // its own durable intent; failure retains the original pending phase.
+        await core.advanceOriginalStop({
+          parentOperationId: originalStopId,
+          phase: "cleanup_intent",
+        });
+        const cleanupProof =
+          await clearAndConfirmOriginalConnectorVerificationReceipt(
+            secureMcpLaunchRoot(),
+            originalStopId,
+            cleanupEffectId,
+          );
+        // A separate held-directory readback proved receipt absence after
+        // the original deletion and sync. Go independently rechecks that
+        // its retained original connector closure still belongs to this parent.
+        if (
+          cleanupProof.parentOperationId !== originalStopId ||
+          cleanupProof.effectId !== cleanupEffectId ||
+          cleanupProof.readback !== "verified-absent"
+        )
+          throw new Error("CONNECTOR_ATTACHMENT_INVALID");
+        await core.advanceOriginalStop({
+          parentOperationId: originalStopId,
+          phase: "cleanup_ack",
+          cleanupAck: {
+            effectId: cleanupEffectId,
+            backendGeneration: connectorBinding.backendGeneration,
+            runtimeId: connectorBinding.runtimeId,
+            digest: cleanupProof.digest,
+          },
+        });
+        await core.advanceOriginalStop({
+          parentOperationId: originalStopId,
+          phase: "prerequisite_complete",
+        });
         return true;
       },
       apply: configureAdmittedProduct,

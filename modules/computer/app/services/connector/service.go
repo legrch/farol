@@ -220,6 +220,34 @@ func (s *Service) ExecutionCeiling(ctx context.Context) (*port.ConnectorExecutio
 // gate. It attempts persistence once even if admission is still pending. A late
 // admission commit cannot reopen this owner; root must reconcile its retained
 // journal separately without replaying Publish or this withdrawal.
+// WithdrawOriginalStop consumes the existing connector participant exactly
+// once under its original C7 parent. Ordinary connector withdrawal is not a
+// fallback after C7 fences the current approval gate.
+func (s *Service) WithdrawOriginalStop(ctx context.Context, parentID string) error {
+	if s == nil || parentID == "" {
+		return failure()
+	}
+	writer, ok := s.journal.(port.OriginalStopWithdrawer)
+	if !ok {
+		return failure()
+	}
+	s.gate.Lock()
+	if s.phase == withdrawn || ctx == nil || ctx.Err() != nil {
+		s.gate.Unlock()
+		return failure()
+	}
+	s.phase = withdrawn
+	id := s.binding.ParticipantID
+	s.gate.Unlock()
+	if err := writer.WithdrawConnectorForStop(ctx, parentID, id); err != nil {
+		return classify(err)
+	}
+	s.gate.Lock()
+	s.withdrawalConfirmed = s.publicationConfirmed && ctx.Err() == nil
+	s.gate.Unlock()
+	return nil
+}
+
 func (s *Service) Withdraw(ctx context.Context) error {
 	if s == nil {
 		return failure()

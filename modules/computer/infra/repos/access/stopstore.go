@@ -90,6 +90,30 @@ func (s *Store) StopStatus(ctx context.Context) (StopState, error) {
 	}, nil
 }
 
+// ObserveOriginalStop returns only the original protected phase. It cannot
+// issue a fresh effect permit or fabricate historical delivery after restart.
+func (s *Store) ObserveOriginalStop(ctx context.Context, id string) (stop.StopEntry, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	if err := s.checkStorage(ctx); err != nil {
+		return stop.StopEntry{}, err
+	}
+	entry, ok := s.stops.Find(id)
+	if !ok {
+		return stop.StopEntry{}, stop.ErrStopRefused
+	}
+	return entry, nil
+}
+
+func (s *Store) ObserveStopLedger(ctx context.Context) (stop.StopLedger, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	if err := s.checkStorage(ctx); err != nil {
+		return stop.StopLedger{}, err
+	}
+	return s.stops.Clone(), nil
+}
+
 // BeginStop admits only the original parent. The FIRST durable witness and
 // admission record both finish readback before returning first=true. Existing
 // identity is strictly observational; competing requests cannot dispatch.
@@ -144,6 +168,7 @@ func (s *Store) BeginStop(ctx context.Context, request stop.StopRequest) (stop.S
 	// ephemeral right to advance the original. Neither restore nor duplicate
 	// BeginStop, a matching visible digest, or a terminal certificate grants it.
 	s.activeStopID = request.OperationID
+	s.stopWithdrawn = false
 	entry, _ := next.Find(request.OperationID)
 	return entry, true, nil
 }

@@ -21,6 +21,10 @@
     "computer.authority.deactivate": "effect",
     "computer.authority.publish": "effect",
     "computer.continuity.status": "read",
+    "computer.stop.status": "read",
+    "computer.stop.admit": "effect",
+    "computer.stop.advance": "effect",
+    "computer.stop.refuse": "effect",
     "chat.browser.next": "read",
     "chat.browser.reply": "effect",
     "chat.conversation.create": "effect",
@@ -850,6 +854,129 @@
           "type": "text",
           "values": ["never"]
         }
+      }
+    },
+    "ComputerStopAdmitRequest": {
+      "type": "object",
+      "fields": {
+        "operationId": { "type": "id" },
+        "requestDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "commandKind": { "type": "text", "values": ["computer.add-workspace", "computer.update-access", "computer.update-commands", "computer.update-file-policy", "computer.remove-workspace", "computer.confirm-workspace", "computer.rebind-workspace"] },
+        "commandDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "purpose": { "type": "text", "values": ["workspace-change"] },
+        "workspaceId": { "type": "id", "optional": true },
+        "root": { "type": "string", "minBytes": 1, "maxBytes": 4096, "optional": true },
+        "consentDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "expectedRevision": { "type": "decimal" },
+        "computerGeneration": { "type": "decimal" },
+        "connectorGeneration": { "type": "decimal" },
+        "settingsDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "stopEffectId": { "type": "id" },
+        "settingsEffectId": { "type": "id" },
+        "cleanupEffectId": { "type": "id" },
+        "childOperationId": { "type": "id", "optional": true },
+        "childMode": { "type": "text", "values": ["legacy-confirm", "enrolled-rebind"], "optional": true },
+        "childIntentDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$", "optional": true }
+      }
+    },
+    "ComputerStopAdmitResponse": {
+      "type": "object",
+      "fields": {
+        "parentOperationId": { "type": "id" },
+        "phase": { "type": "text", "values": ["stop_intent"] },
+        "first": { "type": "boolean" },
+        "stopEffectId": { "type": "id" },
+        "runtimeId": { "type": "id" },
+        "backendGeneration": { "type": "id" },
+        "buildId": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "ComputerStopClosure": {
+      "type": "object",
+      "fields": {
+        "effectId": { "type": "id" },
+        "backendGeneration": { "type": "id" },
+        "runtimeId": { "type": "id" },
+        "lifecycleId": { "type": "id" },
+        "stopRevision": { "type": "decimal" },
+        "preparationRevision": { "type": "decimal" },
+        "closureOperationId": { "type": "id" },
+        "closureDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "ComputerStopSettingsIntent": {
+      "type": "object",
+      "fields": {
+        "effectId": { "type": "id" },
+        "expectedRevision": { "type": "decimal" },
+        "expectedDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "nextRevision": { "type": "decimal" },
+        "nextDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "computerGeneration": { "type": "decimal" },
+        "connectorGeneration": { "type": "decimal" },
+        "consentDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "ComputerStopSettingsAck": {
+      "type": "object",
+      "fields": {
+        "effectId": { "type": "id" },
+        "revision": { "type": "decimal" },
+        "documentDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "computerGeneration": { "type": "decimal" },
+        "connectorGeneration": { "type": "decimal" },
+        "consentDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "ComputerStopCleanupAck": {
+      "type": "object",
+      "fields": {
+        "effectId": { "type": "id" },
+        "backendGeneration": { "type": "id" },
+        "runtimeId": { "type": "id" },
+        "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "ComputerStopAdvanceRequest": {
+      "type": "object",
+      "fields": {
+        "parentOperationId": { "type": "id" },
+        "phase": { "type": "text", "values": ["stop_ack", "settings_intent", "settings_ack", "cleanup_intent", "cleanup_ack", "prerequisite_complete"] },
+        "closure": { "type": "ComputerStopClosure", "optional": true },
+        "settingsIntent": { "type": "ComputerStopSettingsIntent", "optional": true },
+        "settingsAck": { "type": "ComputerStopSettingsAck", "optional": true },
+        "cleanupAck": { "type": "ComputerStopCleanupAck", "optional": true }
+      }
+    },
+    "ComputerStopAdvanceResponse": {
+      "type": "object",
+      "fields": {
+        "parentOperationId": { "type": "id" },
+        "phase": { "type": "text", "values": ["stop_ack", "settings_intent", "settings_ack", "cleanup_intent", "cleanup_ack", "prerequisite_complete"] },
+        "delivery": { "type": "text", "values": ["not_recorded"] }
+      }
+    },
+    "ComputerStopStatusRequest": { "type": "object", "fields": {} },
+    "ComputerStopStatusResponse": {
+      "type": "object",
+      "fields": {
+        "present": { "type": "boolean" },
+        "restricted": { "type": "boolean" },
+        "entryCount": { "type": "uint32" },
+        "delivery": { "type": "text", "values": ["not_recorded"] },
+        "pendingOperationId": { "type": "id", "optional": true },
+        "pendingPhase": { "type": "text", "values": ["admission_intent", "stop_intent", "stop_ack", "settings_intent", "settings_ack", "cleanup_intent", "cleanup_ack", "unresolved"], "optional": true }
+      }
+    },
+    "ComputerStopRefuseRequest": {
+      "type": "object",
+      "fields": { "parentOperationId": { "type": "id" } }
+    },
+    "ComputerStopRefuseResponse": {
+      "type": "object",
+      "fields": {
+        "parentOperationId": { "type": "id" },
+        "phase": { "type": "text", "values": ["refused_before_stop"] }
       }
     },
     "ComputerContinuityStatusRequest": {
@@ -4476,6 +4603,10 @@
         "reason": {
           "type": "text",
           "values": ["owner_stop"],
+          "optional": true
+        },
+        "originalStopParent": {
+          "type": "id",
           "optional": true
         }
       }

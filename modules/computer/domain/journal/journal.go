@@ -74,20 +74,46 @@ type Certificate struct {
 	Cleanup       Receipt `json:"cleanup"`
 }
 
+// AdmissionLink is part of the ONE durable C4 child-admission publication.
+// It is not a consumed flag on the separately owned prerequisite file.
+// Schema-1 entries have no link and can never inherit an original Stop ACK.
+type AdmissionLink struct {
+	ParentOperationID  string `json:"parentOperationId"`
+	CertificateDigest  string `json:"certificateDigest"`
+	Mode               string `json:"mode"`
+	ChildIntentDigest  string `json:"childIntentDigest"`
+	FullRequestDigest  string `json:"fullRequestDigest"`
+	SettingsRevision   string `json:"settingsRevision"`
+	SettingsGeneration string `json:"settingsGeneration"`
+	SettingsDigest     string `json:"settingsDigest"`
+}
+
+func ValidAdmissionLink(r Request, link AdmissionLink) bool {
+	return uuid.MatchString(link.ParentOperationID) && link.ParentOperationID != r.OperationID &&
+		digest.MatchString(link.CertificateDigest) &&
+		(link.Mode == "legacy-confirm" || link.Mode == "enrolled-rebind") &&
+		digest.MatchString(link.ChildIntentDigest) &&
+		link.FullRequestDigest == r.RequestDigest &&
+		link.SettingsRevision == r.ExpectedRevision &&
+		link.SettingsGeneration == r.ExpectedGeneration &&
+		digest.MatchString(link.SettingsDigest) && r.RecoveryParent == ""
+}
+
 type Entry struct {
-	Request        Request      `json:"request"`
-	Phase          Phase        `json:"phase"`
-	Native         Receipt      `json:"native,omitempty"`
-	Withdraw       Receipt      `json:"withdrawIntent,omitempty"`
-	WithdrawAck    Receipt      `json:"withdrawAck,omitempty"`
-	Settings       Receipt      `json:"settingsIntent,omitempty"`
-	SettingsAck    Receipt      `json:"settingsAck,omitempty"`
-	Publication    Receipt      `json:"publishIntent,omitempty"`
-	PublicationAck Receipt      `json:"publishAck,omitempty"`
-	Cleanup        Receipt      `json:"closeIntent,omitempty"`
-	CleanupAck     Receipt      `json:"closeAck,omitempty"`
-	Certificate    *Certificate `json:"certificate,omitempty"`
-	DischargedBy   string       `json:"dischargedBy,omitempty"`
+	Request        Request        `json:"request"`
+	Parent         *AdmissionLink `json:"parent,omitempty"`
+	Phase          Phase          `json:"phase"`
+	Native         Receipt        `json:"native,omitempty"`
+	Withdraw       Receipt        `json:"withdrawIntent,omitempty"`
+	WithdrawAck    Receipt        `json:"withdrawAck,omitempty"`
+	Settings       Receipt        `json:"settingsIntent,omitempty"`
+	SettingsAck    Receipt        `json:"settingsAck,omitempty"`
+	Publication    Receipt        `json:"publishIntent,omitempty"`
+	PublicationAck Receipt        `json:"publishAck,omitempty"`
+	Cleanup        Receipt        `json:"closeIntent,omitempty"`
+	CleanupAck     Receipt        `json:"closeAck,omitempty"`
+	Certificate    *Certificate   `json:"certificate,omitempty"`
+	DischargedBy   string         `json:"dischargedBy,omitempty"`
 }
 
 type Journal struct {
@@ -138,11 +164,18 @@ func (j Journal) Valid() bool {
 		return false
 	}
 	seen := map[string]bool{}
+	linkedParents := map[string]bool{}
 	for _, e := range j.Entries {
 		if !ValidRequest(e.Request) || seen[e.Request.OperationID] || !validEntry(e) {
 			return false
 		}
 		seen[e.Request.OperationID] = true
+		if e.Parent != nil {
+			if !ValidAdmissionLink(e.Request, *e.Parent) || linkedParents[e.Parent.ParentOperationID] {
+				return false
+			}
+			linkedParents[e.Parent.ParentOperationID] = true
+		}
 	}
 	for _, e := range j.Entries {
 		if e.DischargedBy != "" {
@@ -289,14 +322,36 @@ func validEntry(e Entry) bool {
 // Begin returns an existing copy for a replay of the exact request; it never
 // dispatches an effect or permits a new attempt while another is unresolved.
 func (j Journal) Begin(r Request) (Journal, error) {
+	return j.begin(r, nil)
+}
+
+// BeginLinked admits only one original intended child, with immutable
+// certificate reference in the same C4 append. Future children cannot claim
+// the same parent; no separate parent-consumed publication is needed.
+func (j Journal) BeginLinked(r Request, link AdmissionLink) (Journal, error) {
+	if !ValidAdmissionLink(r, link) {
+		return Journal{}, ErrRefused
+	}
+	return j.begin(r, &link)
+}
+
+func (j Journal) begin(r Request, link *AdmissionLink) (Journal, error) {
 	if !j.Valid() || !ValidRequest(r) {
 		return Journal{}, ErrRefused
 	}
 	if old, ok := j.Find(r.OperationID); ok {
-		if old.Request != r {
+		if old.Request != r || (old.Parent == nil) != (link == nil) ||
+			(link != nil && *old.Parent != *link) {
 			return Journal{}, ErrRefused
 		}
 		return j, nil
+	}
+	if link != nil {
+		for _, old := range j.Entries {
+			if old.Parent != nil && old.Parent.ParentOperationID == link.ParentOperationID {
+				return Journal{}, ErrRefused
+			}
+		}
 	}
 	if len(j.Entries) >= MaxEntries {
 		return Journal{}, ErrRefused
@@ -319,7 +374,7 @@ func (j Journal) Begin(r Request) (Journal, error) {
 		}
 	}
 	next := j.Clone()
-	next.Entries = append(next.Entries, Entry{Request: r, Phase: Intent})
+	next.Entries = append(next.Entries, Entry{Request: r, Parent: link, Phase: Intent})
 	if !next.Valid() {
 		return Journal{}, ErrRefused
 	}
@@ -437,6 +492,10 @@ func (j Journal) Clone() Journal {
 	out := Journal{Entries: make([]Entry, len(j.Entries))}
 	for i, e := range j.Entries {
 		out.Entries[i] = e
+		if e.Parent != nil {
+			link := *e.Parent
+			out.Entries[i].Parent = &link
+		}
 		if e.Certificate != nil {
 			c := *e.Certificate
 			out.Entries[i].Certificate = &c

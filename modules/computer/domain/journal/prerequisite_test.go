@@ -304,3 +304,49 @@ func TestStopSettingsPlanAndACKCannotBeReplaced(t *testing.T) {
 		t.Fatal("new equal bytes substituted original Settings intent", err)
 	}
 }
+
+func TestStopCommandScopeBindsGlobalAndSpecificOriginalRoots(t *testing.T) {
+	for _, kind := range []string{"computer.add-workspace", "computer.update-commands", "computer.update-file-policy"} {
+		t.Run(kind, func(t *testing.T) {
+			r := stopTestRequest(5)
+			r.CommandKind = kind
+			r.WorkspaceID, r.Root = "", ""
+			if !ValidStopRequest(r) {
+				t.Fatal("global command incorrectly requires an existing workspace")
+			}
+			foreign := r
+			foreign.WorkspaceID, foreign.Root = "borrowed", "/Users/other"
+			if ValidStopRequest(foreign) {
+				t.Fatal("global command borrowed unrelated native scope")
+			}
+			incomplete := r
+			incomplete.WorkspaceID = "borrowed"
+			if ValidStopRequest(incomplete) {
+				t.Fatal("partial workspace scope accepted")
+			}
+		})
+	}
+	for _, kind := range []string{"computer.update-access", "computer.remove-workspace", "computer.confirm-workspace", "computer.rebind-workspace"} {
+		t.Run(kind, func(t *testing.T) {
+			r := stopTestRequest(6)
+			r.CommandKind = kind
+			switch kind {
+			case "computer.confirm-workspace":
+				r.ChildMode = "legacy-confirm"
+				r.ChildOperationID = "77777777-7777-4777-8777-777777777777"
+				r.ChildIntentDigest = strings.Repeat("f", 64)
+			case "computer.rebind-workspace":
+				r.ChildMode = "enrolled-rebind"
+				r.ChildOperationID = "77777777-7777-4777-8777-777777777777"
+				r.ChildIntentDigest = strings.Repeat("f", 64)
+			}
+			if !ValidStopRequest(r) {
+				t.Fatal("original workspace-specific root refused")
+			}
+			r.WorkspaceID, r.Root = "", ""
+			if ValidStopRequest(r) {
+				t.Fatal("workspace-specific command omitted original root")
+			}
+		})
+	}
+}

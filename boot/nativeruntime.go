@@ -19,6 +19,8 @@ import (
 	chatlifecycle "github.com/legrch/farol/modules/chat/app/services/lifecycle"
 	"github.com/legrch/farol/modules/chat/infra/gate"
 	chatrepo "github.com/legrch/farol/modules/chat/infra/repos/lifecycle"
+	connectorsvc "github.com/legrch/farol/modules/computer/app/services/connector"
+	nativeboot "github.com/legrch/farol/modules/computer/infra/boot"
 	"github.com/legrch/farol/modules/computer/infra/filesystem"
 	accessrepo "github.com/legrch/farol/modules/computer/infra/repos/access"
 	mutationrepo "github.com/legrch/farol/modules/computer/infra/repos/mutation"
@@ -187,6 +189,14 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 	if err != nil {
 		return fail(err)
 	}
+	// Root-selected Go owner and native boot reader. No renderer can construct
+	// a Stop admission; an unqualified empty host lifetime fails closed.
+	runtime.ingress.stopOwner = connectorsvc.NewOriginalStopOwner(
+		runtime.store, nativeboot.New(), runtime.connector,
+		connectorsvc.StopScope{ProfileID: launch.Profile.ProfileID, OwnerID: launch.OwnerID,
+			ComputerID: launch.ComputerID, BackendGeneration: generation,
+			HostLifetimeID: launch.HostLifetimeID},
+	)
 	runtime.chatComputer, err = NewChatComputerIngress(runtime.conversations, runtime.ingress)
 	if err != nil {
 		return fail(err)

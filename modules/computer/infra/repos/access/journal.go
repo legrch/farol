@@ -28,11 +28,23 @@ type journalDocument struct {
 	Entries    []transition.Entry `json:"entries"`
 }
 
+// Schema-1 remains byte-for-byte canonical for historical entries. A linked
+// child upgrades the entire document to schema-2 in its SINGLE C4 WAL append;
+// earlier entries retain their original absent link fields.
+func journalSchema(value transition.Journal) int {
+	for _, entry := range value.Entries {
+		if entry.Parent != nil {
+			return 2
+		}
+	}
+	return 1
+}
+
 func encodeJournal(binding Binding, value transition.Journal) ([]byte, error) {
 	if !value.Valid() {
 		return nil, unavailable()
 	}
-	raw, err := json.Marshal(journalDocument{Schema: 1, ProfileID: binding.ProfileID, OwnerID: binding.OwnerID, ComputerID: binding.ComputerID, Entries: value.Entries})
+	raw, err := json.Marshal(journalDocument{Schema: journalSchema(value), ProfileID: binding.ProfileID, OwnerID: binding.OwnerID, ComputerID: binding.ComputerID, Entries: value.Entries})
 	if err != nil || len(raw)+1 > transitionMaxBytes {
 		return nil, refuse(err)
 	}
@@ -46,12 +58,17 @@ func decodeJournal(binding Binding, raw []byte) (transition.Journal, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	var doc journalDocument
-	if decoder.Decode(&doc) != nil || doc.Schema != 1 || doc.ProfileID != binding.ProfileID || doc.OwnerID != binding.OwnerID || doc.ComputerID != binding.ComputerID {
+	if decoder.Decode(&doc) != nil || (doc.Schema != 1 && doc.Schema != 2) || doc.ProfileID != binding.ProfileID || doc.OwnerID != binding.OwnerID || doc.ComputerID != binding.ComputerID {
 		return out, unavailable()
 	}
 	// Own publication always uses a unique canonical JSON encoding. This also
 	// rejects duplicate fields, alternative numeric spellings and trailing data.
 	out = transition.Journal{Entries: doc.Entries}
+	// A prior schema-1 reader may never invent a parent certificate, while a
+	// schema-2 reader must not accept a silently downgraded/unlinked document.
+	if doc.Schema != journalSchema(out) {
+		return transition.Journal{}, unavailable()
+	}
 	expected, err := encodeJournal(binding, out)
 	if err != nil || !bytes.Equal(expected, raw) {
 		return transition.Journal{}, unavailable()

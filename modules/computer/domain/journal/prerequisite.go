@@ -174,6 +174,18 @@ func ValidStopRequest(r StopRequest) bool {
 	if (r.WorkspaceID == "") != (r.Root == "") {
 		return false
 	}
+	// An add/global-policy change cannot invent a selected existing root;
+	// a workspace-specific command cannot omit its original fixed root.
+	switch r.CommandKind {
+	case "computer.add-workspace", "computer.update-commands", "computer.update-file-policy":
+		if r.WorkspaceID != "" {
+			return false
+		}
+	case "computer.update-access", "computer.remove-workspace", "computer.confirm-workspace", "computer.rebind-workspace":
+		if r.WorkspaceID == "" {
+			return false
+		}
+	}
 	if r.WorkspaceID != "" && (!identity.MatchString(r.WorkspaceID) || !validStopRoot(r.Root)) {
 		return false
 	}

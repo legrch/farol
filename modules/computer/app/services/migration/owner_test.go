@@ -34,13 +34,22 @@ func intent() Selection {
 }
 
 type memoryStore struct {
-	journal journal.Journal
-	begins  int
-	failed  bool
+	journal  journal.Journal
+	begins   int
+	failed   bool
+	parentID string
+	mode     string
 }
 
-func (m *memoryStore) BeginTransition(_ context.Context, r journal.Request) (journal.Entry, bool, error) {
+// Deliberately synthetic Store double: real access.Store verifies the exact
+// protected certificate and writes schema-2 C4 in a single WAL publication.
+func (m *memoryStore) BeginLinkedTransition(_ context.Context, r journal.Request, parentID, mode string) (journal.Entry, bool, error) {
 	m.begins++
+	m.parentID, m.mode = parentID, mode
+	if parentID != "44444444-4444-4444-8444-444444444444" ||
+		(mode != string(Legacy) && mode != string(Rebind)) {
+		return journal.Entry{}, false, journal.ErrRefused
+	}
 	if m.failed {
 		return journal.Entry{}, false, errors.New("write outcome unknown")
 	}
@@ -80,7 +89,12 @@ func (bootSource) Current(context.Context) (string, error) { return boot, nil }
 
 type prereq bool
 
-func (p prereq) Completed(context.Context) bool { return bool(p) }
+func (p prereq) OriginalParent(context.Context, Selection) (string, error) {
+	if !p {
+		return "", journal.ErrRefused
+	}
+	return "44444444-4444-4444-8444-444444444444", nil
+}
 
 type native struct {
 	opens, holds, closes int
@@ -172,8 +186,10 @@ func TestConfirmedWALBeforeNativeHandlesAndNoSecondOwner(t *testing.T) {
 	}
 	o, s, n = makeOwner(true)
 	r, e := o.Begin(ctx, intent())
-	if e != nil || !r.Admitted || n.opens != 1 || n.holds != 1 {
-		t.Fatal("admission", e)
+	if e != nil || !r.Admitted || n.opens != 1 || n.holds != 1 ||
+		s.parentID != "44444444-4444-4444-8444-444444444444" ||
+		s.mode != string(Legacy) {
+		t.Fatal("exact parent/mode admission", e)
 	}
 	if _, e := o.Begin(ctx, intent()); e == nil {
 		t.Fatal("concurrent owner admitted")

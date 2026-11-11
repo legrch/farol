@@ -29,6 +29,7 @@ type Store struct {
 	stopPresent       bool
 	stopLedgerDigest  [32]byte
 	activeStopID      string // only a fresh confirmed first BeginStop can set it; never restored
+	stopWithdrawn     bool   // one original connector withdrawal attempt; never restored
 	currentContinuity *activeContinuity
 	currentActivating bool
 	poisoned, closed  bool

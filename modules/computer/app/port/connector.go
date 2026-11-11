@@ -78,6 +78,14 @@ type ConnectorJournal interface {
 	WithdrawConnector(context.Context, string) error
 }
 
+// OriginalStopWithdrawer is an optional consumer-owned capability selected by
+// trusted Go composition for a single matching C7 parent in the SAME runtime.
+// It cannot replace ordinary ConnectorJournal.WithdrawConnector or allow
+// generic Status while original-stop custody is pending.
+type OriginalStopWithdrawer interface {
+	WithdrawConnectorForStop(context.Context, string, string) error
+}
+
 // CurrentConnectorGuard is mandatory, root-selected and synchronous; its entry
 // performs no IO. It serializes host/settings fences with inspect exactly once.
 // Only MutationRequest.WithPublication may perform bounded final native file

@@ -2,8 +2,12 @@ package access
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
+	"strconv"
 
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	transition "github.com/legrch/farol/modules/computer/domain/journal"
@@ -148,6 +152,168 @@ func (s *Store) BeginTransition(ctx context.Context, request transition.Request)
 	s.journal = next
 	s.journalDigest = digest(raw)
 	s.journalPresent = true
+	current, _ := next.Find(request.OperationID)
+	return current, true, nil
+}
+
+// stableChildIntentDigest is the canonical, immutable BEFORE-Stop projection.
+// Do not include Settings revision/generation, current native observation,
+// backend lifetime, or a post-Stop journal request digest. The retained parent
+// fixes exactly one child, one explicit mode, one root and one consent scope.
+// Any future desktop preparation must use this exact closed projection, not a
+// caller-defined hash of arbitrary bytes or the full future C4 request.
+func stableChildIntentDigest(request transition.Request, mode string) (string, error) {
+	var kind string
+	switch mode {
+	case "legacy-confirm":
+		kind = "computer.confirm-workspace"
+	case "enrolled-rebind":
+		kind = "computer.rebind-workspace"
+	default:
+		return "", transition.ErrRefused
+	}
+	if !transition.ValidRequest(request) || request.RecoveryParent != "" {
+		return "", transition.ErrRefused
+	}
+	projection := struct {
+		Schema           int    `json:"schema"`
+		CommandKind      string `json:"commandKind"`
+		Mode             string `json:"mode"`
+		ChildOperationID string `json:"childOperationId"`
+		ProfileID        string `json:"profileId"`
+		OwnerID          string `json:"ownerId"`
+		ComputerID       string `json:"computerId"`
+		WorkspaceID      string `json:"workspaceId"`
+		Root             string `json:"root"`
+		ConsentDigest    string `json:"consentDigest"`
+	}{
+		Schema: 1, CommandKind: kind, Mode: mode,
+		ChildOperationID: request.OperationID,
+		ProfileID:        request.ProfileID, OwnerID: request.OwnerID,
+		ComputerID: request.ComputerID, WorkspaceID: request.WorkspaceID,
+		Root: request.Root, ConsentDigest: request.ConsentDigest,
+	}
+	raw, err := json.Marshal(projection)
+	if err != nil {
+		return "", transition.ErrRefused
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// BeginLinkedTransition is the only C7 certificate-to-child consumption path.
+// It checks the immutable parent and original positive effect ACKs under the
+// existing Store lifetime lock/mutex, then publishes ONE linked C4 WAL entry.
+// There is no prerequisite consumed flag or second atomic publication.
+// Different-boot recovery-parent admission is deliberately NOT implemented.
+func (s *Store) BeginLinkedTransition(
+	ctx context.Context, request transition.Request, parentID, mode string,
+) (transition.Entry, bool, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	if err := s.checkStorage(ctx); err != nil {
+		return transition.Entry{}, false, err
+	}
+	if !s.stopPresent || s.stops.Pending() || !s.journal.Valid() ||
+		request.ProfileID != s.binding.ProfileID ||
+		request.OwnerID != s.binding.OwnerID ||
+		request.ComputerID != s.binding.ComputerID ||
+		request.RecoveryParent != "" {
+		return transition.Entry{}, false, transition.ErrRefused
+	}
+	parent, found := s.stops.Find(parentID)
+	if !found || parent.Phase != transition.StopComplete ||
+		parent.Request.Purpose != "workspace-change" ||
+		parent.Request.ChildOperationID != request.OperationID ||
+		parent.Request.ChildMode != mode ||
+		parent.Request.WorkspaceID != request.WorkspaceID ||
+		parent.Request.Root != request.Root ||
+		parent.Request.ConsentDigest != request.ConsentDigest ||
+		parent.Request.BootUUID != request.BootUUID ||
+		parent.Request.HostLifetimeID != request.HostLifetimeID ||
+		parent.SettingsAck == nil ||
+		parent.SettingsAck.Revision != request.ExpectedRevision ||
+		parent.SettingsAck.ComputerGeneration != request.ExpectedGeneration ||
+		parent.SettingsAck.ConsentDigest != request.ConsentDigest {
+		return transition.Entry{}, false, transition.ErrRefused
+	}
+	stable, err := stableChildIntentDigest(request, mode)
+	if err != nil || parent.Request.ChildIntentDigest != stable {
+		return transition.Entry{}, false, transition.ErrRefused
+	}
+	// Post-Settings expectations must also agree with the CURRENT protected
+	// Go approval. A historical Settings/certificate digest cannot revive
+	// removed, expired or differently bound workspace authority.
+	approval := s.current.Approval
+	if approval == nil || approval.OwnerID != request.OwnerID ||
+		approval.ComputerID != request.ComputerID ||
+		approval.Generation != s.current.Generation ||
+		strconv.FormatUint(approval.Generation, 10) != request.ExpectedGeneration ||
+		!s.clock.Now().Before(approval.ExpiresAt) {
+		return transition.Entry{}, false, transition.ErrRefused
+	}
+	matchedRoot := false
+	for _, workspace := range approval.Workspaces {
+		if workspace.WorkspaceID == request.WorkspaceID {
+			if matchedRoot || workspace.Root != request.Root {
+				return transition.Entry{}, false, transition.ErrRefused
+			}
+			matchedRoot = true
+		}
+	}
+	if !matchedRoot {
+		return transition.Entry{}, false, transition.ErrRefused
+	}
+	cert, err := parent.Certificate()
+	if err != nil {
+		return transition.Entry{}, false, transition.ErrRefused
+	}
+	rawCert, err := json.Marshal(cert)
+	if err != nil {
+		return transition.Entry{}, false, transition.ErrRefused
+	}
+	certHash := sha256.Sum256(rawCert)
+	link := transition.AdmissionLink{
+		ParentOperationID:  parentID,
+		CertificateDigest:  hex.EncodeToString(certHash[:]),
+		Mode:               mode,
+		ChildIntentDigest:  parent.Request.ChildIntentDigest,
+		FullRequestDigest:  request.RequestDigest,
+		SettingsRevision:   parent.SettingsAck.Revision,
+		SettingsGeneration: parent.SettingsAck.ComputerGeneration,
+		SettingsDigest:     parent.SettingsAck.DocumentDigest,
+	}
+	if !transition.ValidAdmissionLink(request, link) {
+		return transition.Entry{}, false, transition.ErrRefused
+	}
+	if current, ok := s.journal.Find(request.OperationID); ok {
+		if current.Request != request || current.Parent == nil || *current.Parent != link {
+			return transition.Entry{}, false, transition.ErrRefused
+		}
+		return current, false, nil
+	}
+	next, err := s.journal.BeginLinked(request, link)
+	if err != nil {
+		return transition.Entry{}, false, err
+	}
+	raw, err := encodeJournal(s.binding, next)
+	if err != nil {
+		return transition.Entry{}, false, err
+	}
+	if !s.journalPresent {
+		err = s.disk.beginJournal(raw)
+	} else {
+		err = s.disk.updateJournal(raw, s.journalDigest)
+	}
+	if err != nil {
+		s.poisoned = true
+		return transition.Entry{}, false, err
+	}
+	s.journal, s.journalDigest, s.journalPresent = next, digest(raw), true
+	if ctx.Err() != nil {
+		s.poisoned = true
+		return transition.Entry{}, false, transition.ErrUnknown
+	}
 	current, _ := next.Find(request.OperationID)
 	return current, true, nil
 }

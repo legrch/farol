@@ -18,7 +18,7 @@ import (
 // JournalStore is implemented by the existing protected Go access owner. The
 // same Store mutex and lifetime lock serialize its initial intent and receipts.
 type JournalStore interface {
-	BeginTransition(context.Context, journal.Request) (journal.Entry, bool, error)
+	BeginLinkedTransition(context.Context, journal.Request, string, string) (journal.Entry, bool, error)
 	AdvanceTransition(context.Context, string, journal.Phase, journal.Receipt) error
 	CertifyTransition(context.Context, string, journal.Phase, journal.Receipt) error
 }
@@ -29,9 +29,13 @@ type BootUUID interface {
 	Current(context.Context) (string, error)
 }
 
-// The separately owned connector drain AND stopped-state Settings publication
-// must both be known complete before Begin. Unknown never selects a new owner.
-type Prerequisite interface{ Completed(context.Context) bool }
+// The original Go-owned prerequisite must identify its exact terminal parent.
+// A caller-provided boolean or matched Settings bytes cannot authorize a child.
+// The access Store independently verifies certificate, child/mode and snapshot
+// and consumes the parent ONLY in the single C4 WAL publication.
+type Prerequisite interface {
+	OriginalParent(context.Context, Selection) (string, error)
+}
 
 type Mode string
 
@@ -89,11 +93,11 @@ func (o *Owner) Begin(ctx context.Context, selection Selection) (BeginResult, er
 		o.anchor == nil || o.candidate == nil || o.mu == nil || o.digester == nil || (selection.Mode != Legacy && selection.Mode != Rebind) {
 		return BeginResult{}, journal.ErrRefused
 	}
-	// Independent drain/stopped-state owner and native boot scalar are observed
-	// BEFORE taking this Go coordinator mutex. Never call back to TS while a Go
-	// native/access lock is held; the protected WAL admission serializes the
-	// original operation after these prerequisites have been acknowledged.
-	if !o.prerequisite.Completed(ctx) {
+	// Resolve the exact original parent before any Go/native locks. The
+	// protected Store verifies its certificate under its own lock; this read
+	// alone is not an admission or evidence of historical RPC delivery.
+	parentID, err := o.prerequisite.OriginalParent(ctx, selection)
+	if err != nil || parentID == "" || ctx.Err() != nil {
 		return BeginResult{}, journal.ErrRefused
 	}
 	boot, err := o.boot.Current(ctx)
@@ -118,7 +122,10 @@ func (o *Owner) Begin(ctx context.Context, selection Selection) (BeginResult, er
 	} else if selection.Saved.Evidence != nil {
 		return BeginResult{}, journal.ErrRefused
 	}
-	existing, admitted, err := o.store.BeginTransition(ctx, req)
+	// A schema-1 unlinked Begin is never an alternative to the original
+	// C7 parent/certificate link. Go verifies the immutable mode and full
+	// post-Settings request in the SAME protected C4 WAL publication.
+	existing, admitted, err := o.store.BeginLinkedTransition(ctx, req, parentID, string(selection.Mode))
 	if err != nil {
 		return BeginResult{}, err
 	}

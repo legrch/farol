@@ -25,6 +25,7 @@ export type ConnectorClosureReceipt = Readonly<{
   requestId: string;
   operationId: string;
   reason?: "owner_stop";
+  originalStopParent?: string;
   result: Readonly<ComputerConnectorClosed>;
 }>;
 
@@ -458,7 +459,7 @@ export class ConnectorHostBridge {
     });
   }
 
-  close(reason?: "owner_stop"): Promise<void> {
+  close(reason?: "owner_stop", originalStopParent?: string): Promise<void> {
     // Join the original request, including its exact failure, before checking
     // pending: an in-flight open still has no close promise and remains fenced.
     if (this.closeInFlight) return this.closeInFlight;
@@ -467,9 +468,19 @@ export class ConnectorHostBridge {
         new BridgeError("unknown", "connector_close_unconfirmed"),
       );
     const current = this.current;
-    if (!current) return Promise.resolve();
+    if (!current) {
+      if (originalStopParent !== undefined)
+        return Promise.reject(
+          new BridgeError("refused", "connector_original_stop_absent"),
+        );
+      return Promise.resolve();
+    }
     this.pending = true;
-    this.closeInFlight = this.closeCurrent(current, reason).finally(() => {
+    this.closeInFlight = this.closeCurrent(
+      current,
+      reason,
+      originalStopParent,
+    ).finally(() => {
       this.pending = false;
       this.closeInFlight = undefined;
     });
@@ -478,6 +489,7 @@ export class ConnectorHostBridge {
   private async closeCurrent(
     current: ComputerConnectorOpened,
     reason?: "owner_stop",
+    originalStopParent?: string,
   ): Promise<void> {
     const id = randomUUID(),
       operationId = randomUUID();
@@ -487,6 +499,7 @@ export class ConnectorHostBridge {
         {
           binding: current.endpoint.binding,
           ...(reason ? { reason } : {}),
+          ...(originalStopParent ? { originalStopParent } : {}),
         } as unknown as Json,
         { id, operationId, timeoutMs: 6000 },
       );
@@ -515,6 +528,7 @@ export class ConnectorHostBridge {
         requestId: id,
         operationId,
         ...(reason ? { reason } : {}),
+        ...(originalStopParent ? { originalStopParent } : {}),
         result: Object.freeze({
           ...closed,
           binding: Object.freeze({ ...closed.binding }),
