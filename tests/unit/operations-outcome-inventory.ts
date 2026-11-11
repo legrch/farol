@@ -92,6 +92,10 @@ export function declaredOperationOutcomes(): Map<string, Set<string>> {
   for (const file of [
     "boot/connectorprocess.go",
     "boot/connectorprocesswire.go",
+    // New trusted Go ingress owners return lower-case outcome codes that
+    // cannot be discovered from the module-domain error constants alone.
+    "boot/computercheck.go",
+    "boot/computerstop.go",
   ])
     sources.add(file);
   for (const file of sources) {
@@ -107,6 +111,12 @@ export function declaredOperationOutcomes(): Map<string, Set<string>> {
         if (typeof value === "string" && isCode(value)) add(value, file);
       }
       const uncommented = source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/gu, "");
+      // The public Go desktop.Outcome.Code field includes lower-case codes.
+      // Scan that exact result field, not arbitrary strings or comments.
+      if (file === "boot/computercheck.go" || file === "boot/computerstop.go") {
+        for (const match of uncommented.matchAll(/\bCode\s*:\s*"([^"\n]+)"/gu))
+          add(match[1]!, file);
+      }
       for (const match of uncommented.matchAll(
         /\b\w+\s+(?:[A-Za-z]*(?:Phase|Outcome|State|Status|Code|Reason)|Cleanup)\s*=\s*"([^"\n]+)"/gu,
       ))
