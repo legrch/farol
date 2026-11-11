@@ -863,79 +863,135 @@
     "ComputerCheckClaimRequest": {
       "type": "object",
       "fields": {
-        "operationId": {"type":"id"},
-        "fingerprint": {"type":"string","pattern":"^[a-f0-9]{64}$"}
+        "operationId": { "type": "id" },
+        "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
       }
     },
     "ComputerCheckClaimResponse": {
       "type": "object",
       "fields": {
-        "operationId": {"type":"id"},
-        "phase": {"type":"text","values":["claimed","prepared","dispatch_intent","send_acknowledged","verified","refused_before_send","outcome_unknown"]},
-        "first": {"type":"boolean"}
+        "operationId": { "type": "id" },
+        "phase": {
+          "type": "text",
+          "values": [
+            "claimed",
+            "prepared",
+            "dispatch_intent",
+            "send_acknowledged",
+            "verified",
+            "refused_before_send",
+            "outcome_unknown"
+          ]
+        },
+        "first": { "type": "boolean" }
       }
     },
     "ComputerCheckPrepareRequest": {
       "type": "object",
       "fields": {
-        "operationId": {"type":"id"},
-        "mode": {"type":"text","values":["bootstrap","status"]},
-        "appName": {"type":"string","minBytes":1,"maxBytes":120},
-        "model": {"type":"text","values":["temporary-instant"]},
-        "tunnelId": {"type":"id"},
-        "workspaceId": {"type":"id","optional":true},
-        "challenge": {"type":"string","pattern":"^[!-~]{1,160}$","optional":true},
-        "challengeDigest": {"type":"string","pattern":"^[a-f0-9]{64}$"},
-        "attachmentDigest": {"type":"string","pattern":"^[a-f0-9]{64}$","optional":true},
-        "computerGeneration": {"type":"decimal"},
-        "documentDigest": {"type":"string","pattern":"^[a-f0-9]{64}$"}
+        "operationId": { "type": "id" },
+        "mode": { "type": "text", "values": ["bootstrap", "status"] },
+        "appName": { "type": "string", "minBytes": 1, "maxBytes": 120 },
+        "model": { "type": "text", "values": ["temporary-instant"] },
+        "tunnelId": { "type": "id" },
+        "workspaceId": { "type": "id", "optional": true },
+        "challenge": {
+          "type": "string",
+          "pattern": "^[!-~]{1,160}$",
+          "optional": true
+        },
+        "challengeDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "attachmentDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "optional": true
+        },
+        "computerGeneration": { "type": "decimal" },
+        "documentDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
       }
     },
     "ComputerCheckPrepareResponse": {
       "type": "object",
       "fields": {
-        "operationId": {"type":"id"},
-        "phase": {"type":"text","values":["prepared"]},
-        "mode": {"type":"text","values":["bootstrap","status"]},
-        "checkId": {"type":"id","optional":true},
-        "prompt": {"type":"string","minBytes":1,"maxBytes":1600},
-        "promptDigest": {"type":"string","pattern":"^[a-f0-9]{64}$"},
-        "scopeDigest": {"type":"string","pattern":"^[a-f0-9]{64}$"},
-        "documentDigest": {"type":"string","pattern":"^[a-f0-9]{64}$"}
+        "operationId": { "type": "id" },
+        "phase": { "type": "text", "values": ["prepared"] },
+        "mode": { "type": "text", "values": ["bootstrap", "status"] },
+        "checkId": { "type": "id", "optional": true },
+        "prompt": { "type": "string", "minBytes": 1, "maxBytes": 1600 },
+        "promptDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "scopeDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "documentDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
       }
     },
     "ComputerCheckAdvanceRequest": {
       "type": "object",
       "fields": {
-        "operationId": {"type":"id"},
-        "stage": {"type":"text","values":["dispatch","sent","unknown","confirm","refuse"]}
+        "operationId": { "type": "id" },
+        "stage": {
+          "type": "text",
+          "values": ["dispatch", "sent", "unknown", "confirm", "refuse"]
+        }
       }
     },
     "ComputerCheckAdvanceResponse": {
       "type": "object",
       "fields": {
-        "operationId": {"type":"id"},
-        "phase": {"type":"text","values":["claimed","prepared","dispatch_intent","send_acknowledged","verified","refused_before_send","outcome_unknown"]},
-        "sendAuthorized": {"type":"boolean"},
-        "receiptDigest": {"type":"string","pattern":"^[a-f0-9]{64}$","optional":true}
+        "operationId": { "type": "id" },
+        "phase": {
+          "type": "text",
+          "values": [
+            "claimed",
+            "prepared",
+            "dispatch_intent",
+            "send_acknowledged",
+            "verified",
+            "refused_before_send",
+            "outcome_unknown"
+          ]
+        },
+        "sendAuthorized": { "type": "boolean" },
+        "receiptDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "optional": true
+        }
       }
     },
     "ComputerCheckObserveRequest": {
       "type": "object",
       "fields": {
-        "operationId": {"type":"id"}
+        "operationId": { "type": "id" }
       }
     },
     "ComputerCheckObserveResponse": {
       "type": "object",
       "fields": {
-        "operationId": {"type":"id"},
-        "phase": {"type":"text","values":["claimed","prepared","dispatch_intent","send_acknowledged","verified","refused_before_send","outcome_unknown"]},
-        "mode": {"type":"text","values":["bootstrap","status"],"optional":true},
-        "checkId": {"type":"id","optional":true},
-        "receiptDigest": {"type":"string","pattern":"^[a-f0-9]{64}$","optional":true},
-        "delivery": {"type":"text","values":["not_recorded"]},
-        "receiptAvailable": {"type":"boolean"}
+        "operationId": { "type": "id" },
+        "phase": {
+          "type": "text",
+          "values": [
+            "claimed",
+            "prepared",
+            "dispatch_intent",
+            "send_acknowledged",
+            "verified",
+            "refused_before_send",
+            "outcome_unknown"
+          ]
+        },
+        "mode": {
+          "type": "text",
+          "values": ["bootstrap", "status"],
+          "optional": true
+        },
+        "checkId": { "type": "id", "optional": true },
+        "receiptDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "optional": true
+        },
+        "delivery": { "type": "text", "values": ["not_recorded"] },
+        "receiptAvailable": { "type": "boolean" }
       }
     },
     "ComputerStopAdmitRequest": {
@@ -943,11 +999,27 @@
       "fields": {
         "operationId": { "type": "id" },
         "requestDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "commandKind": { "type": "text", "values": ["computer.add-workspace", "computer.update-access", "computer.update-commands", "computer.update-file-policy", "computer.remove-workspace", "computer.confirm-workspace", "computer.rebind-workspace"] },
+        "commandKind": {
+          "type": "text",
+          "values": [
+            "computer.add-workspace",
+            "computer.update-access",
+            "computer.update-commands",
+            "computer.update-file-policy",
+            "computer.remove-workspace",
+            "computer.confirm-workspace",
+            "computer.rebind-workspace"
+          ]
+        },
         "commandDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
         "purpose": { "type": "text", "values": ["workspace-change"] },
         "workspaceId": { "type": "id", "optional": true },
-        "root": { "type": "string", "minBytes": 1, "maxBytes": 4096, "optional": true },
+        "root": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 4096,
+          "optional": true
+        },
         "consentDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
         "expectedRevision": { "type": "decimal" },
         "computerGeneration": { "type": "decimal" },
@@ -957,8 +1029,16 @@
         "settingsEffectId": { "type": "id" },
         "cleanupEffectId": { "type": "id" },
         "childOperationId": { "type": "id", "optional": true },
-        "childMode": { "type": "text", "values": ["legacy-confirm", "enrolled-rebind"], "optional": true },
-        "childIntentDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$", "optional": true }
+        "childMode": {
+          "type": "text",
+          "values": ["legacy-confirm", "enrolled-rebind"],
+          "optional": true
+        },
+        "childIntentDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "optional": true
+        }
       }
     },
     "ComputerStopAdmitResponse": {
@@ -1023,9 +1103,22 @@
       "type": "object",
       "fields": {
         "parentOperationId": { "type": "id" },
-        "phase": { "type": "text", "values": ["stop_ack", "settings_intent", "settings_ack", "cleanup_intent", "cleanup_ack", "prerequisite_complete"] },
+        "phase": {
+          "type": "text",
+          "values": [
+            "stop_ack",
+            "settings_intent",
+            "settings_ack",
+            "cleanup_intent",
+            "cleanup_ack",
+            "prerequisite_complete"
+          ]
+        },
         "closure": { "type": "ComputerStopClosure", "optional": true },
-        "settingsIntent": { "type": "ComputerStopSettingsIntent", "optional": true },
+        "settingsIntent": {
+          "type": "ComputerStopSettingsIntent",
+          "optional": true
+        },
         "settingsAck": { "type": "ComputerStopSettingsAck", "optional": true },
         "cleanupAck": { "type": "ComputerStopCleanupAck", "optional": true }
       }
@@ -1034,7 +1127,17 @@
       "type": "object",
       "fields": {
         "parentOperationId": { "type": "id" },
-        "phase": { "type": "text", "values": ["stop_ack", "settings_intent", "settings_ack", "cleanup_intent", "cleanup_ack", "prerequisite_complete"] },
+        "phase": {
+          "type": "text",
+          "values": [
+            "stop_ack",
+            "settings_intent",
+            "settings_ack",
+            "cleanup_intent",
+            "cleanup_ack",
+            "prerequisite_complete"
+          ]
+        },
         "delivery": { "type": "text", "values": ["not_recorded"] }
       }
     },
@@ -1047,7 +1150,20 @@
         "entryCount": { "type": "uint32" },
         "delivery": { "type": "text", "values": ["not_recorded"] },
         "pendingOperationId": { "type": "id", "optional": true },
-        "pendingPhase": { "type": "text", "values": ["admission_intent", "stop_intent", "stop_ack", "settings_intent", "settings_ack", "cleanup_intent", "cleanup_ack", "unresolved"], "optional": true }
+        "pendingPhase": {
+          "type": "text",
+          "values": [
+            "admission_intent",
+            "stop_intent",
+            "stop_ack",
+            "settings_intent",
+            "settings_ack",
+            "cleanup_intent",
+            "cleanup_ack",
+            "unresolved"
+          ],
+          "optional": true
+        }
       }
     },
     "ComputerStopRefuseRequest": {
@@ -1068,13 +1184,28 @@
     "ComputerContinuityStatusResponse": {
       "type": "object",
       "fields": {
-        "present": {"type": "boolean"},
-        "restricted": {"type": "boolean"},
-        "currentQualified": {"type": "boolean"},
-        "entryCount": {"type": "uint32"},
-        "delivery": {"type": "text", "values": ["not_recorded"]},
-        "pendingOperationId": {"type": "id", "optional": true},
-        "pendingPhase": {"type": "text", "optional": true, "values": ["intent", "prepared", "withdraw_intent", "withdraw_ack", "settings_intent", "settings_ack", "publish_intent", "publish_ack", "close_intent", "close_ack"]}
+        "present": { "type": "boolean" },
+        "restricted": { "type": "boolean" },
+        "currentQualified": { "type": "boolean" },
+        "entryCount": { "type": "uint32" },
+        "delivery": { "type": "text", "values": ["not_recorded"] },
+        "pendingOperationId": { "type": "id", "optional": true },
+        "pendingPhase": {
+          "type": "text",
+          "optional": true,
+          "values": [
+            "intent",
+            "prepared",
+            "withdraw_intent",
+            "withdraw_ack",
+            "settings_intent",
+            "settings_ack",
+            "publish_intent",
+            "publish_ack",
+            "close_intent",
+            "close_ack"
+          ]
+        }
       }
     },
     "ComputerAuthorityDeactivateRequest": {
