@@ -113,9 +113,9 @@ it.each([
       outcome,
       code,
     });
-    expect(
-      operationResult({ status: "outcome_unknown", code }).outcome,
-    ).toBe("unknown");
+    expect(operationResult({ status: "outcome_unknown", code }).outcome).toBe(
+      "unknown",
+    );
   },
 );
 
