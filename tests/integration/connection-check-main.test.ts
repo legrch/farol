@@ -7,6 +7,7 @@ import {
   runExplicitConnectionCheck,
   ConnectionCheckRefusal,
   connectionCheckDigest,
+  connectionCheckRuntimeReady,
   type ExplicitConnectionCheck,
 } from "../../apps/desktop/connection-check-command.ts";
 import { prepareConnectorCheckDocument } from "../../apps/desktop/bridge/connector-check-readiness.ts";
@@ -234,6 +235,7 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap", empty = false) {
     runExplicitConnectionCheck,
     ConnectionCheckRefusal,
     connectionCheckDigest,
+    connectionCheckRuntimeReady,
     prepareConnectorCheckDocument,
     connectorVerificationProof,
     selectedConnectorApp,
@@ -252,7 +254,10 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap", empty = false) {
     quitInProgress: false,
     installedUpdateAdmission: false,
     buildIdentity: { buildId: fixtureBuildId },
-    secureMcpConnectorRuntime: { isRunning: () => true },
+    secureMcpConnectorRuntime: {
+      isRunning: () => true,
+      hasUnresolvedEffect: () => false,
+    },
     secureMcpLaunchRoot: () => "/synthetic-c8-no-filesystem",
     connectorAppVerificationAttemptExists: legacyExists,
     connectorConnection: { sample: async () => {} },
@@ -295,6 +300,19 @@ it("real Main dispatch selects the new explicit handler, not Deep Test or repair
   );
   expect(declaration).not.toContain("verifySecureMcpApp(");
   expect(declaration).not.toContain('kind: "connector.repair"');
+});
+it("Main refuses before Send when connector start remains unresolved", async () => {
+  const f = fixture("bootstrap");
+  f.context.secureMcpConnectorRuntime = {
+    isRunning: () => true,
+    hasUnresolvedEffect: () => true,
+  };
+  expect(await f.run()).toMatchObject({
+    ok: false,
+    error: "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+  });
+  expect(f.sends()).toBe(0);
+  expect(f.publish).not.toHaveBeenCalled();
 });
 it.each([false, true])(
   "Main bootstraps without attachment, empty catalogue=%s, one Send and later Settings",
