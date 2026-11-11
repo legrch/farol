@@ -58,7 +58,8 @@ export function connectionPresentation(
   const connected =
     !checking &&
     !transportNeedsAttention &&
-    (computer.externalAccessVerified || (savedSetupReady && recentTransport));
+    recentTransport &&
+    (computer.externalAccessVerified || savedSetupReady);
   const label = checking
     ? "Checking connection…"
     : transportNeedsAttention

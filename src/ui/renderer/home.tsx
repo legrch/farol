@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { commandAllowed } from "./command-eligibility";
 import { computerSetup } from "./computer-setup";
 import { connectionPresentation } from "../../../apps/desktop/renderer/connection-presentation";
@@ -16,6 +16,55 @@ import { selectedConnectorApp } from "../../pkg/product-settings/connector-app-s
 import type { RendererFacade, WindowSnapshot } from "./contract";
 
 type Props = { snapshot: WindowSnapshot; facade: RendererFacade };
+
+function ConnectionProgress({
+  title,
+  detail,
+  appChecking,
+  checking,
+  facade,
+}: {
+  title: string;
+  detail: string;
+  appChecking: boolean;
+  checking: boolean;
+  facade: RendererFacade;
+}) {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setSlow(true), 30_000);
+    return () => clearTimeout(timer);
+  }, []);
+  const displayedTitle = slow ? "Taking longer than expected" : title;
+  return (
+    <section
+      className="home-status-card home-connection-progress"
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+      aria-label={displayedTitle}
+    >
+      <span className="home-progress-spinner" aria-hidden="true" />
+      <div>
+        <h2>{displayedTitle}</h2>
+        <p>
+          {slow
+            ? "The current check is still in progress. Your setup remains saved."
+            : detail}
+        </p>
+      </div>
+      {appChecking ? (
+        <button
+          onClick={() => facade.navigate({ area: "chatgpt", taskId: "" })}
+        >
+          View check
+        </button>
+      ) : checking ? (
+        <button disabled>Checking…</button>
+      ) : null}
+    </section>
+  );
+}
 const stepLabels = {
   signin: "Sign in to ChatGPT",
   folders: "Choose workspaces",
@@ -220,28 +269,14 @@ export function Home({ snapshot, facade }: Props) {
           </button>
         </section>
       ) : progress ? (
-        <section
-          className="home-status-card home-connection-progress"
-          role="status"
-          aria-live="polite"
-          aria-busy="true"
-          aria-label={progressTitle}
-        >
-          <span className="home-progress-spinner" aria-hidden="true" />
-          <div>
-            <h2>{progressTitle}</h2>
-            <p>{progressDetail}</p>
-          </div>
-          {appChecking ? (
-            <button
-              onClick={() => facade.navigate({ area: "chatgpt", taskId: "" })}
-            >
-              View check
-            </button>
-          ) : checking ? (
-            <button disabled>Checking…</button>
-          ) : null}
-        </section>
+        <ConnectionProgress
+          key={progressTitle}
+          title={progressTitle}
+          detail={progressDetail}
+          appChecking={appChecking}
+          checking={checking}
+          facade={facade}
+        />
       ) : checklist.completed &&
         !working &&
         !checking &&

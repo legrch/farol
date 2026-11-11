@@ -29,6 +29,13 @@ function working(): Partial<WindowSnapshot> {
   settings.setup.journey.dismissed = true;
   return {
     configuration: { status: "ready", settings },
+    connectionStatus: {
+      ...unavailableConnectionStatus,
+      revision: 1,
+      state: "recent_transport",
+      validUntilMillis: Date.now() + 30_000,
+      attention: false,
+    },
     signInObservation: {
       observationId: "fixture",
       buildId,
@@ -508,6 +515,29 @@ it("reveals a real sign-in problem only after host checking settles", async () =
   expect(h.host.querySelector('[aria-busy="true"]')).toBeNull();
 });
 
+it("keeps a long startup check honest without cancelling or repeating it", async () => {
+  vi.useFakeTimers();
+  const value = { ...working(), connectionChecking: true };
+  const h = await mount(value);
+  expect(
+    h.host.querySelector(".home-connection-progress")?.textContent,
+  ).toContain("Checking connection");
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30_000);
+  });
+  expect(
+    h.host.querySelector(".home-connection-progress")?.textContent,
+  ).toContain("Taking longer than expected");
+  expect(
+    h.host.querySelector(".home-connection-progress")?.textContent,
+  ).toContain("still in progress");
+  expect(h.f.api.configure).not.toHaveBeenCalled();
+  await h.set({ ...value, connectionChecking: false });
+  expect(h.host.querySelector(".home-connection-progress")).toBeNull();
+  expect(h.f.api.configure).not.toHaveBeenCalled();
+  vi.useRealTimers();
+});
+
 it("shows automatic ChatGPT check progress and reveals the same browser without another test", async () => {
   const value = working();
   const pending: ActivityEntry = {
@@ -548,6 +578,31 @@ it("shows automatic ChatGPT check progress and reveals the same browser without 
   expect(h.host.querySelector(".home-connection-progress")).toBeNull();
   expect(h.host.querySelector(".home-health-warning")).not.toBeNull();
 });
+
+it.each(["unobserved", "expired", "fresh"] as const)(
+  "does not present retained ChatGPT verification as live without %s transport",
+  async (mode) => {
+    const h = await mount(working());
+    const snapshot = {
+      ...h.c.getSnapshot(),
+      ...working(),
+      connectionStatus: {
+        ...unavailableConnectionStatus,
+        revision: 1,
+        state:
+          mode === "unobserved"
+            ? ("unobserved" as const)
+            : ("recent_transport" as const),
+        validUntilMillis:
+          mode === "unobserved"
+            ? null
+            : Date.now() + (mode === "fresh" ? 30_000 : -1),
+      },
+    };
+    expect(computerSetup(snapshot).externalAccessVerified).toBe(true);
+    expect(connectionPresentation(snapshot).connected).toBe(mode === "fresh");
+  },
+);
 
 // Model the ordinary restart/update boundary: saved onboarding remains, while
 // the old runtime's attachment is deliberately not current authority.

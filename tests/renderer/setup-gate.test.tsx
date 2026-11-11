@@ -359,13 +359,13 @@ describe("rendered Setup gate", () => {
       "settings:connector.stop:",
     );
     expect(h.button("Continue")?.disabled).toBe(false);
-    expect(h.host.textContent).toContain("✓ Connected");
+    expect(h.host.textContent).toContain("Connection saved");
     expect(
       h.host.querySelector(".setup-action-error")?.querySelectorAll("button"),
     ).toHaveLength(1);
     await h.remount(snapshot, facade);
     expect(h.button("Continue")?.disabled).toBe(false);
-    expect(h.host.textContent).toContain("✓ Connected");
+    expect(h.host.textContent).toContain("Connection saved");
     expect(h.host.querySelector(".setup-action-error")?.textContent).toContain(
       "The action could not be completed.",
     );

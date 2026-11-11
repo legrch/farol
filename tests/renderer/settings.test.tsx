@@ -581,7 +581,7 @@ describe("Connection", () => {
       "connector.save-and-connect",
       "connector.check-health",
     ]);
-    expect(h.host.textContent).toContain("✓ Connected");
+    expect(h.host.textContent).toContain("Connection saved");
     expect(h.button("Continue")?.disabled).toBe(false);
     expect(fields[1]!.value).toBe("");
     expect(JSON.stringify(h.c.getSnapshot())).not.toContain(
