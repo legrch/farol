@@ -69,7 +69,7 @@ func processWireFixtureWithPolicy(t *testing.T, policy authority.FilePolicy) (*c
 	access.approval.FilePolicy = policy
 	access.PutApproval(access.approval)
 	s.root.publication.approval = access.approval.Clone()
-	if err := s.closeSlot(context.Background()); err != nil {
+	if err := s.closeSlot(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	n := &processWireNative{connectorProcessNativeDouble: native}
@@ -100,7 +100,7 @@ func processWireCancel(s *computerConnector) wire.ComputerConnectorProcessCancel
 
 func TestConnectorProcessWireNormalStartupDoesNotAdvertiseUnqualifiedShell(t *testing.T) {
 	s, _, _, _, launch := connectorProcessFixture(t)
-	if err := s.closeSlot(context.Background()); err != nil {
+	if err := s.closeSlot(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Open(context.Background(), "normal-open", launch); err != nil {
@@ -164,7 +164,7 @@ func TestConnectorProcessWireOneStartReadAndReconnect(t *testing.T) {
 	if out.Status != "ok" || json.Unmarshal(out.Data, &result) != nil || result.State != "running" || result.StdoutBase64 != "c2F2ZWQ=" || result.StderrBase64 != "ZXJy" || result.StdoutNext != "5" {
 		t.Fatal("read lost exact output", out.Status, out.Code)
 	}
-	if err := s.closeSlot(context.Background()); err != nil {
+	if err := s.closeSlot(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	launch.RuntimeId = "next-runtime"
@@ -320,7 +320,7 @@ func TestConnectorProcessWireRepeatedHostMetadataCannotRestoreControl(t *testing
 	s, _, n, launch := processWireFixture(t)
 	processWireStarted(t, s)
 	original := s.current
-	if err := s.closeSlot(context.Background()); err != nil {
+	if err := s.closeSlot(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Open(context.Background(), "same-metadata-reopen", launch); err != nil {

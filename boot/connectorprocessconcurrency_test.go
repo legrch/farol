@@ -53,7 +53,7 @@ func TestConnectorProcessCancelOwnerChangeCannotRepairLostACK(t *testing.T) {
 					s.root.unknown = true
 					s.root.mu.Unlock()
 				case "reconnect":
-					if err := s.closeSlot(context.Background()); err != nil {
+					if err := s.closeSlot(context.Background(), ""); err != nil {
 						t.Fatal(err)
 					}
 					if _, err := s.Open(context.Background(), "cancel-successor", launch); err != nil {
@@ -79,7 +79,7 @@ func TestConnectorProcessCancelOwnerChangeCannotRepairLostACK(t *testing.T) {
 				t.Fatal("authority repair replayed or repaired lost ACK", out, err)
 			}
 			if change != "reconnect" {
-				if err := s.closeSlot(context.Background()); err != nil {
+				if err := s.closeSlot(context.Background(), ""); err != nil {
 					t.Fatal(err)
 				}
 				if _, err := s.Open(context.Background(), "cancel-successor", launch); err != nil {

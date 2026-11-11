@@ -264,6 +264,11 @@ type chatComputerStore struct {
 	entries    []authority.Admission
 }
 
+// StopStatus models a fresh store with no outstanding original Stop custody.
+func (s *chatComputerStore) StopStatus(context.Context) (accessrepo.StopState, error) {
+	return accessrepo.StopState{}, nil
+}
+
 func (s *chatComputerStore) Status(context.Context) (accessrepo.Status, error) {
 	if s.fault == "status-after" && s.admits > 0 {
 		return accessrepo.Status{}, errors.New("controlled status unavailable")
