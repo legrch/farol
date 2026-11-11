@@ -175,6 +175,7 @@ function fixture({ pause, startResult = originalStart, openError } = {}) {
     start: port("start", startResult),
   };
   const core = {
+    observeOriginalStop: vi.fn(async () => ({ restricted: false })),
     currentComputerConnectorBinding: () => binding,
     computerConnectorClosureReceipt: () => closure,
     openComputerConnector: vi.fn(
