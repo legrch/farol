@@ -4,6 +4,7 @@ import {
   runExplicitConnectionCheck,
   ConnectionCheckRefusal,
   connectionCheckDigest,
+  connectionCheckRuntimeReady,
   type ConnectionCheckBrowser,
 } from "../../apps/desktop/connection-check-command.ts";
 import type {
@@ -13,6 +14,28 @@ import type {
   ComputerCheckAdvanceRequest,
   ComputerCheckAdvanceResponse,
 } from "../../apps/desktop/bridge/wire.ts";
+
+it("does not treat an unresolved connector start as a live connection", () => {
+  expect(connectionCheckRuntimeReady(null)).toBe(false);
+  expect(
+    connectionCheckRuntimeReady({
+      isRunning: () => false,
+      hasUnresolvedEffect: () => false,
+    }),
+  ).toBe(false);
+  expect(
+    connectionCheckRuntimeReady({
+      isRunning: () => true,
+      hasUnresolvedEffect: () => true,
+    }),
+  ).toBe(false);
+  expect(
+    connectionCheckRuntimeReady({
+      isRunning: () => true,
+      hasUnresolvedEffect: () => false,
+    }),
+  ).toBe(true);
+});
 
 // Real Desktop coordinator, scripted Go/browser ports. These tests qualify the
 // caller's ordering and single dispatch, not native storage or provider behavior.

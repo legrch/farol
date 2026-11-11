@@ -66,6 +66,14 @@ type GoOwner = Pick<
 export const connectionCheckDigest = (value: string) =>
   createHash("sha256").update(value).digest("hex");
 
+// isRunning also fences an uncertain spawn; it alone is not live evidence.
+export function connectionCheckRuntimeReady(
+  runtime:
+    { isRunning(): boolean; hasUnresolvedEffect(): boolean } | null | undefined,
+): boolean {
+  return Boolean(runtime?.isRunning() && !runtime.hasUnresolvedEffect());
+}
+
 // Mechanical Desktop adapter only: Go retains identity, mode, nonce, phases and
 // receipts. No TS journal, authority owner, restart, repair or Send retry exists.
 // capture runs ONLY after a confirmed FIRST claim; duplicate IDs observe before

@@ -7,6 +7,7 @@ import {
   runExplicitConnectionCheck,
   ConnectionCheckRefusal,
   connectionCheckDigest,
+  connectionCheckRuntimeReady,
   type ExplicitConnectionCheck,
   type ConnectionCheckCommandResult,
 } from "../../../apps/desktop/connection-check-command";
@@ -5905,7 +5906,7 @@ async function testConnectionCommand(
           runtime.buildId !== buildIdentity.buildId ||
           runtime.computerGeneration !== settings.computer.generation ||
           runtime.connectorGeneration !== connector.generation ||
-          !secureMcpConnectorRuntime?.isRunning()
+          !connectionCheckRuntimeReady(secureMcpConnectorRuntime)
         )
           throw new ConnectionCheckRefusal(
             "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
@@ -5956,7 +5957,7 @@ async function testConnectionCommand(
             (command.taskId
               ? liveTaskRoutes.get(command.taskId)
               : chatGptRoute) === route &&
-            secureMcpConnectorRuntime?.isRunning() === true &&
+            connectionCheckRuntimeReady(secureMcpConnectorRuntime) &&
             latest.status === "ready" &&
             connectorAppBindingCurrent(latest.settings, binding)
           );
