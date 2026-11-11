@@ -22,6 +22,11 @@ import {
   FAROL_BACKED_PRODUCT_AGENT_ENABLED,
 } from "../../src/apps/desktop/foundation-feature-gates.ts";
 import { parsePreviewWindowMode } from "../../src/apps/desktop/window-placement.ts";
+import {
+  packagedNativePaths,
+  firstNativePreviewPair,
+  requalifyNativePreviewPair,
+} from "./lib/native-preview-launch-custody.mjs";
 
 // Test preflight only. Never read, remove or repair the owner's marker. Even a
 // stale or malformed marker refuses a competing native test until reconciled.
@@ -236,12 +241,21 @@ async function singletonLink(file) {
   if (!same(await fs.lstat(file), witness)) throw invalid("SINGLETON_CHANGED");
   return { witness, target };
 }
-async function singleton(admitted, actual, child) {
+async function singleton(
+  admitted,
+  actual,
+  child,
+  processPair,
+  desktopTerminal,
+) {
+  // Playwright owns the original process handle. In packaged builds that is
+  // the Go guardian, not Chromium's process singleton owner (Electron).
+  const desktopPid = processPair?.identity.desktopPid ?? child?.pid;
   if (
     !(child instanceof ChildProcess) ||
     !Number.isSafeInteger(child.pid) ||
     child.pid < 1 ||
-    actual?.pid !== child.pid ||
+    actual?.pid !== desktopPid ||
     (admitted.child && admitted.child !== child)
   )
     throw invalid("SINGLETON_CHILD_UNOWNED");
@@ -251,7 +265,8 @@ async function singleton(admitted, actual, child) {
       !admitted.checked ||
       !admitted.singleton ||
       child.exitCode !== 0 ||
-      child.signalCode !== null
+      child.signalCode !== null ||
+      (processPair && !desktopTerminal)
     )
       throw invalid("SINGLETON_TERMINAL_UNCONFIRMED");
     for (const name of singletonNames) {
@@ -271,7 +286,7 @@ async function singleton(admitted, actual, child) {
   }
   if (
     links.get(path.join(userData, "SingletonLock")).target !==
-    `${os.hostname()}-${child.pid}`
+    `${os.hostname()}-${desktopPid}`
   )
     throw invalid("SINGLETON_CHILD_MISMATCH");
   const cookie = links.get(path.join(userData, "SingletonCookie")).target;
@@ -552,7 +567,9 @@ export async function assertNativePreviewAdmission(ownerStateRoot, isolation) {
       throw invalid("RECEIPT_INVALID");
     if (
       prior?.child &&
-      (prior.child.exitCode !== 0 || prior.child.signalCode !== null)
+      (prior.child.exitCode !== 0 ||
+        prior.child.signalCode !== null ||
+        (prior.processPair && !prior.desktopTerminal))
     )
       throw invalid("SINGLETON_TERMINAL_UNCONFIRMED");
     let relay;
@@ -650,10 +667,32 @@ export async function recheckNativePreviewIsolation(receipt, actual, child) {
     throw invalid("NATIVE_WINDOW_CHANGED");
   // Without a child, only the original metadata-only no-link fixtures qualify.
   // Real Electron callers always supply their retained original ChildProcess.
+  // A packaged launch has TWO owners: the retained Go guardian ChildProcess and
+  // the kernel-qualified Electron child. Neither PID substitutes for the other.
+  const packaged = packagedNativePaths(admitted.launch.executablePath);
+  if (admitted.processPair && !packaged) throw invalid("PROCESS_PAIR_CHANGED");
+  let processPair = admitted.processPair ?? null;
+  let desktopTerminal = null;
+  if (packaged && child !== undefined) {
+    if (!processPair) {
+      const marker = await readOwnedStartupMarker(
+        path.join(admitted.paths.userData, "farol-state"),
+        receipt.profileRoot,
+        actual?.pid,
+      );
+      processPair = await firstNativePreviewPair(
+        admitted.launch,
+        actual,
+        child,
+        marker,
+      );
+    }
+    desktopTerminal = requalifyNativePreviewPair(processPair, actual, child);
+  }
   const resource =
     child === undefined && !admitted.child
       ? undefined
-      : await singleton(admitted, actual, child);
+      : await singleton(admitted, actual, child, processPair, desktopTerminal);
   await tree(receipt.profileRoot, false, resource?.links);
   if (admitted.auxiliary) await tree(admitted.auxiliaryRoot);
   await recheckBindings(admitted);
@@ -673,7 +712,7 @@ export async function recheckNativePreviewIsolation(receipt, actual, child) {
       if (
         !resource ||
         !reported ||
-        reported.pid !== child.pid ||
+        reported.pid !== (processPair?.identity.desktopPid ?? child.pid) ||
         reported.path !== admitted.relayRoot ||
         !same(reported, relay) ||
         reported.birthtimeMs !== info.birthtimeMs ||
@@ -699,17 +738,28 @@ export async function recheckNativePreviewIsolation(receipt, actual, child) {
     throw invalid("RELAY_CHILD_UNCONFIRMED");
   }
   await recheckSingleton(resource, child);
+  if (processPair)
+    desktopTerminal = requalifyNativePreviewPair(processPair, actual, child);
   // Internal witness only; callers cannot rewrite a receipt to waive a recheck.
   const observed = Object.freeze({
     ...receipt,
     kind: "isolated-native-preview-readback",
     relayObserved: relay !== undefined,
+    ...(processPair
+      ? {
+          launcherPid: processPair.identity.guardianPid,
+          desktopPid: processPair.identity.desktopPid,
+          ...(desktopTerminal ? { desktopTerminal } : {}),
+        }
+      : {}),
   });
   admissions.set(observed, {
     ...admitted,
     relay,
     child,
     singleton: resource,
+    processPair,
+    desktopTerminal,
     checked: true,
   });
   return observed;
