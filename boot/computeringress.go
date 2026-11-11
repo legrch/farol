@@ -37,6 +37,7 @@ type ComputerIngress struct {
 	guard               activationFence
 	store               computerIngressStore
 	stopOwner           *connectorsvc.OriginalStopOwner
+	checkOwner          *connectorsvc.ConnectionCheckOwner
 	chat                *chatlifecycle.Service
 	readFacade          *conversation.Facade
 	conversations       *ChatIngress

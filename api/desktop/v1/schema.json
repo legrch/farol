@@ -21,6 +21,10 @@
     "computer.authority.deactivate": "effect",
     "computer.authority.publish": "effect",
     "computer.continuity.status": "read",
+    "computer.check.claim": "effect",
+    "computer.check.prepare": "effect",
+    "computer.check.advance": "effect",
+    "computer.check.observe": "read",
     "computer.stop.status": "read",
     "computer.stop.admit": "effect",
     "computer.stop.advance": "effect",
@@ -854,6 +858,84 @@
           "type": "text",
           "values": ["never"]
         }
+      }
+    },
+    "ComputerCheckClaimRequest": {
+      "type": "object",
+      "fields": {
+        "operationId": {"type":"id"},
+        "fingerprint": {"type":"string","pattern":"^[a-f0-9]{64}$"}
+      }
+    },
+    "ComputerCheckClaimResponse": {
+      "type": "object",
+      "fields": {
+        "operationId": {"type":"id"},
+        "phase": {"type":"text","values":["claimed","prepared","dispatch_intent","send_acknowledged","verified","refused_before_send","outcome_unknown"]},
+        "first": {"type":"boolean"}
+      }
+    },
+    "ComputerCheckPrepareRequest": {
+      "type": "object",
+      "fields": {
+        "operationId": {"type":"id"},
+        "mode": {"type":"text","values":["bootstrap","status"]},
+        "appName": {"type":"string","minBytes":1,"maxBytes":120},
+        "model": {"type":"text","values":["temporary-instant"]},
+        "tunnelId": {"type":"id"},
+        "workspaceId": {"type":"id","optional":true},
+        "challenge": {"type":"string","pattern":"^[!-~]{1,160}$","optional":true},
+        "challengeDigest": {"type":"string","pattern":"^[a-f0-9]{64}$"},
+        "attachmentDigest": {"type":"string","pattern":"^[a-f0-9]{64}$","optional":true},
+        "computerGeneration": {"type":"decimal"},
+        "documentDigest": {"type":"string","pattern":"^[a-f0-9]{64}$"}
+      }
+    },
+    "ComputerCheckPrepareResponse": {
+      "type": "object",
+      "fields": {
+        "operationId": {"type":"id"},
+        "phase": {"type":"text","values":["prepared"]},
+        "mode": {"type":"text","values":["bootstrap","status"]},
+        "checkId": {"type":"id","optional":true},
+        "prompt": {"type":"string","minBytes":1,"maxBytes":1600},
+        "promptDigest": {"type":"string","pattern":"^[a-f0-9]{64}$"},
+        "scopeDigest": {"type":"string","pattern":"^[a-f0-9]{64}$"},
+        "documentDigest": {"type":"string","pattern":"^[a-f0-9]{64}$"}
+      }
+    },
+    "ComputerCheckAdvanceRequest": {
+      "type": "object",
+      "fields": {
+        "operationId": {"type":"id"},
+        "stage": {"type":"text","values":["dispatch","sent","unknown","confirm","refuse"]}
+      }
+    },
+    "ComputerCheckAdvanceResponse": {
+      "type": "object",
+      "fields": {
+        "operationId": {"type":"id"},
+        "phase": {"type":"text","values":["claimed","prepared","dispatch_intent","send_acknowledged","verified","refused_before_send","outcome_unknown"]},
+        "sendAuthorized": {"type":"boolean"},
+        "receiptDigest": {"type":"string","pattern":"^[a-f0-9]{64}$","optional":true}
+      }
+    },
+    "ComputerCheckObserveRequest": {
+      "type": "object",
+      "fields": {
+        "operationId": {"type":"id"}
+      }
+    },
+    "ComputerCheckObserveResponse": {
+      "type": "object",
+      "fields": {
+        "operationId": {"type":"id"},
+        "phase": {"type":"text","values":["claimed","prepared","dispatch_intent","send_acknowledged","verified","refused_before_send","outcome_unknown"]},
+        "mode": {"type":"text","values":["bootstrap","status"],"optional":true},
+        "checkId": {"type":"id","optional":true},
+        "receiptDigest": {"type":"string","pattern":"^[a-f0-9]{64}$","optional":true},
+        "delivery": {"type":"text","values":["not_recorded"]},
+        "receiptAvailable": {"type":"boolean"}
       }
     },
     "ComputerStopAdmitRequest": {

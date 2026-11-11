@@ -49,6 +49,9 @@ import {
   type ComputerConnectorBinding,
   type ComputerStopAdmitRequest,
   type ComputerStopAdvanceRequest,
+  type ComputerCheckClaimRequest,
+  type ComputerCheckPrepareRequest,
+  type ComputerCheckAdvanceRequest,
 } from "./bridge/wire.ts";
 import { qualifyProfileLaunch } from "./bridge/profile.ts";
 import { openNativeProfileStorage } from "./bridge/profile-storage.ts";
@@ -63,6 +66,7 @@ import { encodeShellLaunch } from "./bridge/shell-launch.ts";
 import { GoComputerAuthority } from "./go-computer-authority.ts";
 import { ContinuityStatusBridge } from "./bridge/continuity-status.ts";
 import { OriginalStopBridge } from "./bridge/original-stop.ts";
+import { ConnectionCheckBridge } from "./bridge/connection-check.ts";
 import type { BuildIdentity } from "../../src/pkg/build-info/identity";
 import type { ProductSettings } from "../../src/pkg/product-settings/contract";
 
@@ -115,6 +119,7 @@ export class DesktopGoCore {
   private readonly authority: GoComputerAuthority;
   private readonly continuity: ContinuityStatusBridge;
   private readonly originalStop: OriginalStopBridge;
+  private readonly connectionCheck: ConnectionCheckBridge;
   private readonly computer: ComputerBridge;
   private readonly connector: ConnectorHostBridge | undefined;
   private readonly readIntent: ReadIntentBridge;
@@ -150,6 +155,7 @@ export class DesktopGoCore {
     this.authority = new GoComputerAuthority(client, client.verifiedContext);
     this.continuity = new ContinuityStatusBridge(client);
     this.originalStop = new OriginalStopBridge(client);
+    this.connectionCheck = new ConnectionCheckBridge(client);
     this.computer = new ComputerBridge(client);
     this.connector =
       buildId === undefined
@@ -261,6 +267,28 @@ export class DesktopGoCore {
     if (this.closeResult)
       throw new BridgeError("unavailable", "host_original_stop_unavailable");
     return this.originalStop.status();
+  }
+  // Original explicit Test connection, not ordinary deep-test, an automatic
+  // startup action, or a renderer-selected verification bypass.
+  claimConnectionCheck(input: ComputerCheckClaimRequest) {
+    if (this.closeResult)
+      throw new BridgeError("unavailable", "host_connection_check_unavailable");
+    return this.connectionCheck.claim(input);
+  }
+  prepareConnectionCheck(input: ComputerCheckPrepareRequest) {
+    if (this.closeResult)
+      throw new BridgeError("unavailable", "host_connection_check_unavailable");
+    return this.connectionCheck.prepare(input);
+  }
+  advanceConnectionCheck(input: ComputerCheckAdvanceRequest) {
+    if (this.closeResult)
+      throw new BridgeError("unavailable", "host_connection_check_unavailable");
+    return this.connectionCheck.advance(input);
+  }
+  observeConnectionCheck(operationId: string) {
+    if (this.closeResult)
+      throw new BridgeError("unavailable", "host_connection_check_unavailable");
+    return this.connectionCheck.observe(operationId);
   }
   beginOriginalStop(input: ComputerStopAdmitRequest) {
     if (this.closeResult)

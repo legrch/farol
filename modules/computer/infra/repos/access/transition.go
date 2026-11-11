@@ -94,6 +94,11 @@ func (s *Store) checkStorage(ctx context.Context) error {
 	if err := s.checkStopStorage(); err != nil {
 		return err
 	}
+	// Even if there is no C4 WAL and protected approval bytes did not change,
+	// a missing/corrupt explicit check ledger or witness refuses admission.
+	if err := s.checkConnectionStorage(); err != nil {
+		return err
+	}
 	return nil
 }
 

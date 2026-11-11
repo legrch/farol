@@ -7,6 +7,7 @@ import (
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/authority"
+	check "github.com/legrch/farol/modules/computer/domain/connectioncheck"
 	transition "github.com/legrch/farol/modules/computer/domain/journal"
 )
 
@@ -30,6 +31,10 @@ type Store struct {
 	stopLedgerDigest  [32]byte
 	activeStopID      string // only a fresh confirmed first BeginStop can set it; never restored
 	stopWithdrawn     bool   // one original connector withdrawal attempt; never restored
+	checks            check.Journal
+	checksPresent     bool
+	checksDigest      [32]byte
+	activeCheckID     string // only a successful first original claim; never restored
 	currentContinuity *activeContinuity
 	currentActivating bool
 	poisoned, closed  bool
@@ -126,6 +131,9 @@ func openWithDisk(root string, b Binding, clock port.Clock, create bool, openDis
 	if err = s.restoreStopLedger(); err != nil {
 		return fail(err)
 	}
+	if err = s.restoreConnectionChecks(); err != nil {
+		return fail(err)
+	}
 	return s, nil
 }
 func (s *Store) check(ctx context.Context) error {
@@ -171,8 +179,9 @@ func (s *Store) Close() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	s.closed = true
-	// The original runtime admission never survives lifetime retirement.
+	// Neither original effect admission survives lifetime retirement.
 	s.activeStopID = ""
+	s.activeCheckID = ""
 	return s.disk.close()
 }
 func (s *Store) next(ctx context.Context, revision uint64) (state, error) {

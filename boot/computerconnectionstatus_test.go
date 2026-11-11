@@ -49,59 +49,53 @@ func TestConnectorSocketRegistersBoundReadOnlyVerificationObservation(t *testing
 			t.Fatal("status repeated List or changed retained proof")
 		}
 	}
+	// Model the original Go owner arming a fresh status check on this slot.
 	checkID := "fresh-status-check"
+	s.current.expectedStatusCheckID = checkID
 	checkedQuery := query
 	checkedQuery.CheckId = &checkID
 	out, err = verificationInvoke(t, s.verificationObservationMethod(), checkedQuery)
 	armed := verificationState(t, out, err)
 	if armed.CheckId != nil {
-		t.Fatal("desktop pipe fabricated a socket status acknowledgement")
+		t.Fatal("desktop observation fabricated a socket acknowledgement")
 	}
 	out, err = verificationInvoke(t, method, query)
+	passive := verificationState(t, out, err)
+	if passive.CheckId != nil {
+		t.Fatal("uncorrelated socket read acknowledged the check")
+	}
+	out, err = verificationInvoke(t, method, checkedQuery)
 	checked := verificationState(t, out, err)
 	if checked.CheckId == nil || *checked.CheckId != checkID || *checked.Receipt != *proof.Receipt || native.calls != 1 {
-		t.Fatal("socket status failed to acknowledge the fresh read without changing proof")
+		t.Fatal("matching socket check failed or changed retained proof")
 	}
-	out, err = verificationInvoke(t, s.verificationObservationMethod(), query)
+	out, err = verificationInvoke(t, s.verificationObservationMethod(), checkedQuery)
 	observed := verificationState(t, out, err)
-	if observed.CheckId == nil || *observed.CheckId != checkID || native.calls != 1 {
-		t.Fatal("desktop did not observe the exact socket read acknowledgement")
+	if observed.CheckId == nil || *observed.CheckId != checkID {
+		t.Fatal("desktop failed to observe matching acknowledgement")
 	}
-	// A concurrent unrelated status read cannot consume/replace the host's
-	// acknowledgement. A later host check also fences the previous late reply.
 	otherID := "independent-status-check"
 	otherQuery := query
 	otherQuery.CheckId = &otherID
-	out, err = verificationInvoke(t, method, query)
+	out, err = verificationInvoke(t, method, otherQuery)
 	independent := verificationState(t, out, err)
-	if independent.CheckId == nil || *independent.CheckId != checkID {
-		t.Fatal("independent status did not retain the active host check")
+	if independent.CheckId != nil {
+		t.Fatal("unarmed nonce was acknowledged")
 	}
-	out, err = verificationInvoke(t, s.verificationObservationMethod(), query)
-	observed = verificationState(t, out, err)
-	if observed.CheckId == nil || *observed.CheckId != checkID {
-		t.Fatal("independent status replaced the in-progress check acknowledgement")
-	}
-	out, err = verificationInvoke(t, s.verificationObservationMethod(), otherQuery)
-	armed = verificationState(t, out, err)
-	if armed.CheckId != nil {
-		t.Fatal("new host check inherited the previous acknowledgement")
-	}
+	// Simulate retirement of the old original and a fresh original slot owner.
+	s.current.expectedStatusCheckID = otherID
+	s.current.statusCheckID = ""
 	out, err = verificationInvoke(t, method, checkedQuery)
-	if err == nil && out != nil && out.Status == "ok" {
-		t.Fatal("socket selected a host correlation")
+	late := verificationState(t, out, err)
+	if late.CheckId != nil {
+		t.Fatal("late prior nonce acknowledged the newer check")
 	}
-	out, err = verificationInvoke(t, s.verificationObservationMethod(), query)
-	observed = verificationState(t, out, err)
-	if observed.CheckId != nil {
-		t.Fatal("late previous reply acknowledged the newer host check")
-	}
-	out, err = verificationInvoke(t, method, query)
+	out, err = verificationInvoke(t, method, otherQuery)
 	_ = verificationState(t, out, err)
-	out, err = verificationInvoke(t, s.verificationObservationMethod(), query)
+	out, err = verificationInvoke(t, s.verificationObservationMethod(), otherQuery)
 	observed = verificationState(t, out, err)
 	if observed.CheckId == nil || *observed.CheckId != otherID || native.calls != 1 {
-		t.Fatal("current host check did not retain its own acknowledgement")
+		t.Fatal("current original acknowledgement missing")
 	}
 	// Even a matching public binding cannot transfer an old endpoint's method
 	// to another retained slot. This is a synthetic slot-identity regression.

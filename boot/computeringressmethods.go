@@ -79,6 +79,9 @@ func (s *ComputerIngress) Methods() map[string]desktop.Method {
 	for name, method := range s.stopMethods() {
 		methods[name] = method
 	}
+	for name, method := range s.connectionCheckMethods() {
+		methods[name] = method
+	}
 
 	methods["chat.turn"] = desktop.Method{Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
 		if r.OperationID == "" || ipc.ValidateJSON(r.Body) != nil || wire.Validate("ChatComputerAdmissionRequest", r.Body) != nil {

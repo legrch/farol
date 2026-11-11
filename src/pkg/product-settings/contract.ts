@@ -756,6 +756,13 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("connector.check-attachment") }),
   z.strictObject({ kind: z.literal("connector.check-health") }),
   z.strictObject({ kind: z.literal("connector.verify-app") }),
+  // Explicit owner click only. The command contains one original UUID and
+  // the already selected browser route, never a Send-success boolean.
+  z.strictObject({
+    kind: z.literal("connector.test-connection"),
+    operationId: IdentifierSchema,
+    taskId: z.string().max(120),
+  }),
   z.strictObject({
     kind: z.literal("connector.verify-separate-app"),
     expected: SeparateAppVerificationScopeSchema,
@@ -983,6 +990,13 @@ const DiscoveryCandidateSchema = z.strictObject({
 });
 
 export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("connector.connection-check"),
+    operationId: IdentifierSchema,
+    receiptSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    // A replay observes a historical result; it never claims a new current test.
+    retained: z.boolean(),
+  }),
   z.strictObject({
     kind: z.literal("chatgpt.deep-test-result"),
     operationId: IdentifierSchema,
@@ -1704,6 +1718,13 @@ export const ProductConfigurationResultSchema = z
         "CONNECTOR_APP_VERIFICATION_UNAVAILABLE",
         "CONNECTOR_APP_TARGET_REQUIRED",
         "CONNECTOR_APP_VERIFICATION_NOT_READY",
+        "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+        "CONNECTION_CHECK_PENDING",
+        "CONNECTION_CHECK_BLOCKED",
+        "CONNECTION_CHECK_OUTCOME_UNKNOWN",
+        "CONNECTION_CHECK_UNCONFIRMED",
+        "CONNECTION_CHECK_ALREADY_ATTEMPTED",
+        "CONNECTION_CHECK_OWNER_CHANGED",
         "CONNECTOR_APP_VERIFICATION_OWNER_CONSENT_REQUIRED",
         "CONNECTOR_APP_VERIFICATION_ALREADY_ATTEMPTED",
         "CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE",

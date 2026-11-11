@@ -1,0 +1,311 @@
+// Package connectioncheck owns the closed, original explicit connection-test
+// attempt. This is not a connector grant or proof of provider authentication.
+// Host effects are described here only by immutable values.
+package connectioncheck
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+const MaxEntries = 48
+
+type Phase string
+
+const (
+	Claimed           Phase = "claimed"
+	Prepared          Phase = "prepared"
+	DispatchIntent    Phase = "dispatch_intent"
+	SendAcknowledged  Phase = "send_acknowledged"
+	Verified          Phase = "verified"
+	RefusedBeforeSend Phase = "refused_before_send"
+	OutcomeUnknown    Phase = "outcome_unknown"
+)
+
+type Mode string
+
+const (
+	Bootstrap Mode = "bootstrap"
+	Status    Mode = "status"
+)
+
+var (
+	ErrRefused  = errors.New("COMPUTER_CONNECTION_CHECK_REFUSED")
+	ErrPending  = errors.New("COMPUTER_CONNECTION_CHECK_PENDING")
+	ErrCapacity = errors.New("COMPUTER_CONNECTION_CHECK_CAPACITY")
+	ErrUnknown  = errors.New("COMPUTER_CONNECTION_CHECK_OUTCOME_UNKNOWN")
+)
+var uuid = regexp.MustCompile("^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+var digest = regexp.MustCompile("^[0-9a-f]{64}$")
+var identity = regexp.MustCompile("^[A-Za-z0-9._:/-]{1,120}$")
+
+// Request is captured BEFORE mode/scope resolution. Its fingerprint covers the
+// validated immutable caller command and route identity. Same ID with different
+// fingerprint never becomes a fresh attempt after a lost reply.
+type Request struct {
+	OperationID string `json:"operationId"`
+	Fingerprint string `json:"fingerprint"`
+	ProfileID   string `json:"profileId"`
+	OwnerID     string `json:"ownerId"`
+	ComputerID  string `json:"computerId"`
+}
+
+// Scope is selected exactly once by the Go owner after trusted host preflight.
+// It cannot be inferred from a prior attachment or changed after dispatch.
+type Scope struct {
+	Mode                Mode   `json:"mode"`
+	ScopeDigest         string `json:"scopeDigest"`
+	BuildID             string `json:"buildId"`
+	BackendGeneration   string `json:"backendGeneration"`
+	RuntimeID           string `json:"runtimeId"`
+	ConnectorGeneration string `json:"connectorGeneration"`
+	ComputerGeneration  string `json:"computerGeneration"`
+	TunnelID            string `json:"tunnelId"`
+	AppName             string `json:"appName"`
+	WorkspaceID         string `json:"workspaceId"`
+	ChallengeDigest     string `json:"challengeDigest"`
+	Challenge           string `json:"challenge,omitempty"`
+	AttachmentDigest    string `json:"attachmentDigest"`
+	CheckID             string `json:"checkId"`
+	Model               string `json:"model"`
+	PromptDigest        string `json:"promptDigest"`
+	// Older retained attempts may lack this field. They remain observation-only;
+	// a new preparation and every new Send require the exact document digest.
+	DocumentDigest string `json:"documentDigest,omitempty"`
+}
+
+type Receipt struct {
+	CheckID string `json:"checkId"`
+	Kind    string `json:"kind"`
+	Digest  string `json:"digest"`
+}
+
+// Entry is the durable source of truth. A terminal response is separate from
+// historical delivery to the original UI. Unknown effects remain restricted.
+type Entry struct {
+	Request Request  `json:"request"`
+	Phase   Phase    `json:"phase"`
+	Scope   *Scope   `json:"scope,omitempty"`
+	Receipt *Receipt `json:"receipt,omitempty"`
+}
+
+type Journal struct {
+	Entries []Entry `json:"entries"`
+}
+
+func ValidRequest(r Request) bool {
+	return uuid.MatchString(r.OperationID) && digest.MatchString(r.Fingerprint) &&
+		identity.MatchString(r.ProfileID) && identity.MatchString(r.OwnerID) &&
+		identity.MatchString(r.ComputerID)
+}
+func ValidScope(s Scope) bool {
+	if (s.Mode != Bootstrap && s.Mode != Status) ||
+		!digest.MatchString(s.ScopeDigest) || !digest.MatchString(s.BuildID) ||
+		!identity.MatchString(s.BackendGeneration) || !identity.MatchString(s.RuntimeID) ||
+		!identity.MatchString(s.ConnectorGeneration) || !identity.MatchString(s.ComputerGeneration) ||
+		!identity.MatchString(s.TunnelID) || s.AppName == "" ||
+		len(s.AppName) > 120 || strings.ContainsAny(s.AppName, "\n\r\t") ||
+		s.Model != "temporary-instant" ||
+		!digest.MatchString(s.ChallengeDigest) || !digest.MatchString(s.PromptDigest) {
+		return false
+	}
+	if s.DocumentDigest != "" && !digest.MatchString(s.DocumentDigest) {
+		return false
+	}
+	if s.WorkspaceID != "" && !identity.MatchString(s.WorkspaceID) {
+		return false
+	}
+	if s.Mode == Status {
+		return uuid.MatchString(s.CheckID) && digest.MatchString(s.AttachmentDigest) && s.Challenge == ""
+	}
+	if s.CheckID != "" || s.AttachmentDigest != "" ||
+		len(s.Challenge) == 0 || len(s.Challenge) > 160 {
+		return false
+	}
+	for _, r := range s.Challenge {
+		if r < 33 || r > 126 {
+			return false
+		}
+	}
+	h := sha256.Sum256([]byte(s.Challenge))
+	return hex.EncodeToString(h[:]) == s.ChallengeDigest
+}
+
+// Prompt is a closed, Go-produced document bound to the ORIGINAL operation.
+// It selects exactly one app/tool and carries the exact Go-minted status nonce.
+func Prompt(scope Scope) string {
+	switch scope.Mode {
+	case Status:
+		return "Use the selected " + strconv.Quote(scope.AppName) +
+			" app to call computer_connection_status ONCE with the exact argument checkId " +
+			strconv.Quote(scope.CheckID) +
+			". Do not use {} or call any other tool. Report the observed result briefly."
+	case Bootstrap:
+		if scope.WorkspaceID == "" {
+			return "Use the selected " + strconv.Quote(scope.AppName) +
+				" app to call farol_connector_verify_catalogue ONCE with challenge " +
+				strconv.Quote(scope.Challenge) +
+				". No workspace is configured. Do not read files or run commands. Report the observed result briefly."
+		}
+		return "Use the selected " + strconv.Quote(scope.AppName) +
+			" app to call farol_connector_verify ONCE with challenge " +
+			strconv.Quote(scope.Challenge) + " and workspaceId " +
+			strconv.Quote(scope.WorkspaceID) +
+			". Do not read file contents or run commands. Report the observed result briefly."
+	}
+	return ""
+}
+func (p Phase) Terminal() bool {
+	return p == Verified || p == RefusedBeforeSend
+}
+func (e Entry) Valid() bool {
+	if !ValidRequest(e.Request) {
+		return false
+	}
+	if e.Scope != nil && !ValidScope(*e.Scope) {
+		return false
+	}
+	if e.Receipt != nil {
+		if !digest.MatchString(e.Receipt.Digest) || (e.Receipt.Kind != "bootstrap" && e.Receipt.Kind != "status") ||
+			(e.Scope == nil || e.Scope.CheckID != e.Receipt.CheckID) {
+			return false
+		}
+	}
+	switch e.Phase {
+	case Claimed:
+		return e.Scope == nil && e.Receipt == nil
+	case Prepared, DispatchIntent, SendAcknowledged, OutcomeUnknown:
+		return e.Scope != nil && e.Receipt == nil
+	case RefusedBeforeSend:
+		return e.Receipt == nil
+	case Verified:
+		return e.Scope != nil && e.Receipt != nil && string(e.Scope.Mode) == e.Receipt.Kind
+	}
+	return false
+}
+func (j Journal) Valid() bool {
+	if j.Entries == nil || len(j.Entries) > MaxEntries {
+		return false
+	}
+	seen := make(map[string]bool)
+	unsettled := 0
+	for _, e := range j.Entries {
+		if !e.Valid() || seen[e.Request.OperationID] {
+			return false
+		}
+		seen[e.Request.OperationID] = true
+		if !e.Phase.Terminal() {
+			unsettled++
+		}
+	}
+	return unsettled <= 1
+}
+func (j Journal) Clone() Journal {
+	out := Journal{Entries: make([]Entry, len(j.Entries))}
+	for i, e := range j.Entries {
+		out.Entries[i] = e
+		if e.Scope != nil {
+			s := *e.Scope
+			out.Entries[i].Scope = &s
+		}
+		if e.Receipt != nil {
+			r := *e.Receipt
+			out.Entries[i].Receipt = &r
+		}
+	}
+	return out
+}
+func (j Journal) Find(id string) (Entry, bool) {
+	for _, e := range j.Entries {
+		if e.Request.OperationID == id {
+			x := Entry{Request: e.Request, Phase: e.Phase}
+			if e.Scope != nil {
+				s := *e.Scope
+				x.Scope = &s
+			}
+			if e.Receipt != nil {
+				r := *e.Receipt
+				x.Receipt = &r
+			}
+			return x, true
+		}
+	}
+	return Entry{}, false
+}
+func (j Journal) Pending() bool {
+	for _, e := range j.Entries {
+		if !e.Phase.Terminal() {
+			return true
+		}
+	}
+	return false
+}
+func (j Journal) Begin(req Request) (Journal, bool, error) {
+	if !j.Valid() || !ValidRequest(req) {
+		return Journal{}, false, ErrRefused
+	}
+	if old, ok := j.Find(req.OperationID); ok {
+		if old.Request != req {
+			return Journal{}, false, ErrRefused
+		}
+		return j.Clone(), false, nil
+	}
+	if j.Pending() {
+		return Journal{}, false, ErrPending
+	}
+	if len(j.Entries) >= MaxEntries {
+		return Journal{}, false, ErrCapacity
+	}
+	out := j.Clone()
+	out.Entries = append(out.Entries, Entry{Request: req, Phase: Claimed})
+	if !out.Valid() {
+		return Journal{}, false, ErrRefused
+	}
+	return out, true, nil
+}
+func (j Journal) Advance(id string, next Entry) (Journal, error) {
+	if !j.Valid() || !next.Valid() || next.Request.OperationID != id {
+		return Journal{}, ErrRefused
+	}
+	out := j.Clone()
+	for i, old := range out.Entries {
+		if old.Request.OperationID != id {
+			continue
+		}
+		if old.Request != next.Request || old.Phase.Terminal() || old.Phase == OutcomeUnknown ||
+			(old.Scope != nil && (next.Scope == nil || *old.Scope != *next.Scope)) ||
+			(old.Receipt != nil && (next.Receipt == nil || *old.Receipt != *next.Receipt)) {
+			return Journal{}, ErrRefused
+		}
+		allowed := false
+		switch old.Phase {
+		case Claimed:
+			allowed = next.Phase == Prepared || next.Phase == RefusedBeforeSend
+		case Prepared:
+			allowed = next.Phase == DispatchIntent || next.Phase == RefusedBeforeSend
+		case DispatchIntent:
+			// A matching Go-socket receipt is stronger than a lost browser Send
+			// acknowledgement. It may close the original WITHOUT redispatch.
+			allowed = next.Phase == SendAcknowledged ||
+				next.Phase == Verified || next.Phase == OutcomeUnknown
+		case SendAcknowledged:
+			allowed = next.Phase == Verified || next.Phase == OutcomeUnknown
+		}
+		if !allowed {
+			return Journal{}, ErrRefused
+		}
+		if next.Phase == Verified && next.Receipt == nil {
+			return Journal{}, ErrRefused
+		}
+		out.Entries[i] = next
+		if !out.Valid() {
+			return Journal{}, ErrRefused
+		}
+		return out, nil
+	}
+	return Journal{}, ErrRefused
+}

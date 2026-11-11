@@ -3,6 +3,13 @@ import { guardDiagnosticPipes } from "./diagnostic-pipes";
 import { preventEmbeddedWindowDrag } from "./embedded-web-drag";
 import { separateAppVerificationScopeCurrent } from "../../pkg/product-settings/separate-app-verification";
 import { prepareConnectorCheckDocument } from "../../../apps/desktop/bridge/connector-check-readiness";
+import {
+  runExplicitConnectionCheck,
+  ConnectionCheckRefusal,
+  connectionCheckDigest,
+  type ExplicitConnectionCheck,
+  type ConnectionCheckCommandResult,
+} from "../../../apps/desktop/connection-check-command";
 import type { SeparateAppVerificationScope } from "../../pkg/product-settings/contract";
 import type { SeparateAppVerification } from "./connector-app-verification-attempt";
 import {
@@ -5827,8 +5834,248 @@ async function checkSecureMcpAttachment(
   }
 }
 
-// An explicit owner check owns one retained browser document.
-// Only its exact Computer MCP receipt can complete the attachment.
+// Only this explicit command wires the new Go-owned original check to a Send.
+// Startup, ordinary Deep Test and separate-app recovery never invoke it.
+async function testConnectionCommand(
+  command: ExplicitConnectionCheck,
+): Promise<ProductConfigurationResult> {
+  const core = desktopGoCore;
+  const config = configuration;
+  if (!core || !config)
+    return configurationFailure("CONNECTION_CHECK_PREREQUISITES_REQUIRED");
+  let reserved = false;
+  let expected: ConnectorAppVerificationBinding | null = null;
+  let workspace: string | null | undefined;
+  let outcome: ConnectionCheckCommandResult;
+  try {
+    outcome = await runExplicitConnectionCheck(
+      command,
+      {
+        claim: (input) => core.claimConnectionCheck(input),
+        prepare: (input) => core.prepareConnectionCheck(input),
+        advance: (input) => core.advanceConnectionCheck(input),
+        observe: (id) => core.observeConnectionCheck(id),
+      },
+      async () => {
+        // This callback is reached only after FIRST durable admission. A replay
+        // observes its original Go result without rebinding to today's page.
+        if (
+          !embeddedBrowserEnabled() ||
+          chatGptTaskAdmission ||
+          connectorTaskAdmission ||
+          quitInProgress ||
+          installedUpdateAdmission ||
+          !chatGptTaskAdmissionReady() ||
+          desktopGoCore !== core ||
+          configuration !== config ||
+          (selectedTaskId ?? "") !== command.taskId
+        ) {
+          throw new ConnectionCheckRefusal(
+            "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+          );
+        }
+        const route = command.taskId
+          ? liveTaskRoutes.get(command.taskId)
+          : chatGptRoute;
+        const owner = window;
+        const originalDocument = route?.captureManualTaskTarget();
+        if (!route || !owner || owner.isDestroyed() || !originalDocument)
+          throw new ConnectionCheckRefusal(
+            "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+          );
+        // Reserve existing Desktop owners before the first browser/native await.
+        chatGptTaskAdmission = true;
+        connectorTaskAdmission = true;
+        reserved = true;
+        const snapshot = config.snapshot();
+        if (snapshot.status !== "ready")
+          throw new ConnectionCheckRefusal(
+            "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+          );
+        const settings = snapshot.settings;
+        const connector = settings.connectors.secureMcp;
+        const runtime = connector.runtime;
+        const appName = selectedConnectorApp(connector);
+        workspace = connectorWorkspaceSelection(settings);
+        if (
+          appName === null ||
+          workspace === undefined ||
+          connector.tunnelId === null ||
+          runtime?.state !== "ready" ||
+          runtime.buildId !== buildIdentity.buildId ||
+          runtime.computerGeneration !== settings.computer.generation ||
+          runtime.connectorGeneration !== connector.generation ||
+          !secureMcpConnectorRuntime?.isRunning()
+        )
+          throw new ConnectionCheckRefusal(
+            "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+          );
+        if (
+          settings.setup.connect.outcomeUnknown ||
+          connector.appVerificationPending
+        )
+          throw new ConnectionCheckRefusal("CONNECTION_CHECK_PENDING");
+        const observed = await core.observeComputerConnectorVerification();
+        const proof = connectorVerificationProof(observed);
+        if (proof && proof.workspaceId !== workspace)
+          throw new ConnectionCheckRefusal("CONNECTION_CHECK_OWNER_CHANGED");
+        const challenge = connector.challenge;
+        if (
+          !proof &&
+          (!challenge ||
+            challenge.buildId !== runtime.buildId ||
+            challenge.runtimeGeneration !== runtime.runtimeGeneration ||
+            challenge.computerGeneration !== runtime.computerGeneration)
+        )
+          throw new ConnectionCheckRefusal(
+            "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+          );
+        const challengeSha256 =
+          proof?.receipt.challengeSha256 ?? challenge!.challengeSha256;
+        const binding: ConnectorAppVerificationBinding = {
+          tunnelId: connector.tunnelId,
+          connectorGeneration: connector.generation,
+          computerGeneration: settings.computer.generation,
+          runtimeGeneration: runtime.runtimeGeneration,
+          buildId: runtime.buildId,
+          challengeSha256,
+          workspaceId: workspace,
+          appName,
+        };
+        expected = binding;
+        const current = () => {
+          const latest = config.snapshot();
+          return (
+            !quitInProgress &&
+            !installedUpdateAdmission &&
+            desktopGoCore === core &&
+            configuration === config &&
+            window === owner &&
+            !owner.isDestroyed() &&
+            (selectedTaskId ?? "") === command.taskId &&
+            (command.taskId
+              ? liveTaskRoutes.get(command.taskId)
+              : chatGptRoute) === route &&
+            secureMcpConnectorRuntime?.isRunning() === true &&
+            latest.status === "ready" &&
+            connectorAppBindingCurrent(latest.settings, binding)
+          );
+        };
+        if (!current() || !originalDocument())
+          throw new ConnectionCheckRefusal("CONNECTION_CHECK_OWNER_CHANGED");
+        // Read legacy custody, never delete, renew or claim it in TS. Go performs
+        // the exclusive schema-3 publication immediately before dispatch intent.
+        if (
+          !proof &&
+          (await connectorAppVerificationAttemptExists(
+            secureMcpLaunchRoot(),
+            challengeSha256,
+          ))
+        )
+          throw new ConnectionCheckRefusal(
+            "CONNECTION_CHECK_ALREADY_ATTEMPTED",
+          );
+        return {
+          selection: {
+            mode: proof ? ("status" as const) : ("bootstrap" as const),
+            appName,
+            model: "temporary-instant" as const,
+            tunnelId: connector.tunnelId,
+            computerGeneration: String(settings.computer.generation),
+            ...(workspace === null ? {} : { workspaceId: workspace }),
+            challengeDigest: challengeSha256,
+            ...(proof ? {} : { challenge: challenge!.value }),
+          },
+          current,
+          prepareDocument: async () => {
+            let navigationRequested = false;
+            const prepared = await prepareConnectorCheckDocument(
+              {
+                // Do not let the readiness helper navigate or replace the original.
+                open: async () =>
+                  route.captureManualTaskTarget()
+                    ? { status: "opened" as const }
+                    : { status: "unreachable" as const },
+                hasPendingReadinessDocument: () =>
+                  route.hasPendingReadinessDocument(),
+                observeSignInStatus: () => route.observeSignInStatus(),
+                isCurrentSignInStatus: (status) =>
+                  route.isCurrentSignInStatus(status),
+                openTemporaryChat: async () => {
+                  if (navigationRequested || !current() || !originalDocument())
+                    return { status: "unreachable" as const };
+                  navigationRequested = true;
+                  return route.openConnectionCheckChat(appName, current);
+                },
+              },
+              () => current() && (navigationRequested || originalDocument()),
+            );
+            // A failed document probe can mean draft, attachments, activity or
+            // an unrecognized layout. Do not invent a more specific observation.
+            if (!prepared.ready)
+              throw new ConnectionCheckRefusal(
+                "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+              );
+            const document = route.captureConnectionCheckDocument();
+            if (!document || !current())
+              throw new ConnectionCheckRefusal(
+                "CONNECTION_CHECK_OWNER_CHANGED",
+              );
+            return {
+              documentDigest: connectionCheckDigest(document.identity),
+              current: document.current,
+            };
+          },
+          send: (prompt, observer) =>
+            route.runReadonlyTask(prompt, [], observer, "temporary-instant", {
+              name: appName,
+            }),
+        };
+      },
+    );
+  } finally {
+    if (reserved) {
+      chatGptTaskAdmission = false;
+      connectorTaskAdmission = false;
+      void connectorConnection
+        .sample()
+        .then(currentConnectionStatus)
+        .catch(() => undefined);
+    }
+  }
+  if (outcome.state !== "verified") return configurationFailure(outcome.code);
+  if (!outcome.retained) {
+    if (
+      !expected ||
+      workspace === undefined ||
+      desktopGoCore !== core ||
+      configuration !== config
+    )
+      return configurationFailure("CONNECTION_CHECK_OUTCOME_UNKNOWN");
+    // Only the existing sole Settings writer publishes attachment/setup state.
+    // A historical replay never repeats this possibly unacknowledged write.
+    const published = await checkSecureMcpAttachment(workspace, expected);
+    if (!published.ok)
+      return configurationFailure(
+        published.error === "SETTINGS_WRITE_FAILED"
+          ? "SETTINGS_WRITE_FAILED"
+          : "CONNECTION_CHECK_OUTCOME_UNKNOWN",
+      );
+  }
+  return ProductConfigurationResultSchema.parse({
+    ok: true,
+    snapshot: config.snapshot(),
+    evidence: {
+      kind: "connector.connection-check",
+      operationId: command.operationId,
+      receiptSha256: outcome.receiptDigest,
+      retained: outcome.retained,
+    },
+  });
+}
+
+// Separately governed setup/recovery verifier. The explicit toolbar does not
+// use this legacy workflow or inherit its repair/separate-consent behavior.
 async function verifySecureMcpApp(
   separate?: SeparateAppVerificationScope,
 ): Promise<ProductConfigurationResult> {
@@ -7759,6 +8006,8 @@ async function configureAdmittedProduct(
     )
   )
     return configurationFailure("CODEX_HOST_MODEL_UNAVAILABLE");
+  if (command.kind === "connector.test-connection")
+    return testConnectionCommand(command);
   if (command.kind === "chatgpt.run-deep-test")
     return runManualDeepTest(
       command.operationId,

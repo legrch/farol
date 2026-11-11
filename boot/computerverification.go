@@ -39,10 +39,8 @@ func connectorVerificationState(ctx context.Context, slot *connectorSlot, lease 
 		return nil, err
 	}
 	state := &wire.ComputerConnectorVerificationState{Binding: slot.opened.Endpoint.Binding}
-	if slot.statusCheckID != "" {
-		value := slot.statusCheckID
-		state.CheckId = &value
-	}
+	// Historical host/socket status IDs are not exposed by default. Only an
+	// exact matching query for an ARMED current attempt may carry an ACK.
 	if proof != nil {
 		call := sha256.Sum256([]byte(proof.CallID))
 		var receiptValue any
@@ -209,9 +207,8 @@ func (s *computerConnector) verificationObservationMethodFor(expected *connector
 		if json.Unmarshal(request.Body, &in) != nil {
 			return invalidIngress()
 		}
-		if expected != nil && in.CheckId != nil {
-			return invalidIngress() // Correlation is selected only by the host pipe.
-		}
+		// A public MCP tool may supply the original bounded checkId. The
+		// socket can observe but never choose/replace the Go-owned expectation.
 		if err := s.enter(ctx); err != nil {
 			return connectorVerificationOutcome(nil, err)
 		}
@@ -226,20 +223,19 @@ func (s *computerConnector) verificationObservationMethodFor(expected *connector
 		}
 		state, err := connectorVerificationState(ctx, slot, lease)
 		if err == nil {
-			if expected == nil && in.CheckId != nil {
-				// Register correlation, never evidence. Only the matching socket
-				// observation can acknowledge this check. Replacing the expected
-				// ID also fences late replies from the previous host check.
-				if slot.expectedStatusCheckID != *in.CheckId {
-					slot.expectedStatusCheckID = *in.CheckId
-					slot.statusCheckID = ""
-					state.CheckId = nil
-				}
-			} else if expected != nil && slot.expectedStatusCheckID != "" {
-				// An actual bound socket read after host registration is fresh
-				// reachability evidence. The public status tool keeps its original
-				// empty input schema, including cached ChatGPT tool catalogues.
-				slot.statusCheckID = slot.expectedStatusCheckID
+			// Only the original durable Go connection-check dispatch owner
+			// can arm slot.expectedStatusCheckID. Socket calls are passive.
+			// A cached {} client, wrong/old nonce, or unrelated passive read
+			// NEVER acknowledges the pending diagnostic.
+			if expected != nil && in.CheckId != nil &&
+				slot.expectedStatusCheckID != "" &&
+				*in.CheckId == slot.expectedStatusCheckID {
+				slot.statusCheckID = *in.CheckId
+				value := slot.statusCheckID
+				state.CheckId = &value
+			} else if expected == nil && in.CheckId != nil &&
+				slot.statusCheckID == *in.CheckId &&
+				*in.CheckId == slot.expectedStatusCheckID {
 				value := slot.statusCheckID
 				state.CheckId = &value
 			}

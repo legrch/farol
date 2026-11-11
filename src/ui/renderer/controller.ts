@@ -1633,6 +1633,17 @@ export class WindowController implements RendererFacade {
             state: "unknown",
             code: "CHATGPT_CONVERSATION_UNCONFIRMED",
           };
+        if (
+          command.kind === "connector.test-connection" &&
+          outcome.result.ok &&
+          (outcome.result.evidence?.kind !== "connector.connection-check" ||
+            outcome.result.evidence.operationId !== command.operationId)
+        )
+          return {
+            id: intention,
+            state: "unknown",
+            code: "CONNECTION_CHECK_UNCONFIRMED",
+          };
         if (command.kind === "connector.save-and-connect") {
           const receipt = outcome.result.connectorSetup;
           if (

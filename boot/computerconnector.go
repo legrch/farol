@@ -76,7 +76,9 @@ type connectorSlot struct {
 	renewalDone           chan struct{}
 	renewalScope          *connectorRenewalScope
 	statusCheckID         string // Socket-only read acknowledgement; never attachment authority.
-	expectedStatusCheckID string // Host-selected current check; other socket reads cannot replace it.
+	expectedStatusCheckID string // Only a first durable C8 dispatch can arm it.
+	checkParentID         string // exact original C8 UUID, one shot in this slot
+	challengeDigest       string // original constructor challenge, not caller input
 }
 type connectorHostGuard struct {
 	mu          sync.Mutex
@@ -197,6 +199,9 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	host := port.ConnectorHost{ProfileID: s.root.peer.ProfileId, BackendGeneration: s.root.peer.BackendGeneration, BuildID: BuildID, RuntimeID: in.RuntimeId, ConnectorGeneration: generation, LaunchDigest: in.LaunchDigest}
 	guard := &connectorHostGuard{root: s.root, lifetime: s.lifetime, host: host, publication: in.Publication, fence: fence}
 	slot := &connectorSlot{guard: guard, startupUncertain: true}
+	if in.ChallengeSha256 != nil {
+		slot.challengeDigest = *in.ChallengeSha256
+	}
 	ids := make([]string, 5)
 	for i := range ids {
 		ids[i], err = randomIngressID()

@@ -197,6 +197,15 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 			ComputerID: launch.ComputerID, BackendGeneration: generation,
 			HostLifetimeID: launch.HostLifetimeID},
 	)
+	// One Go owner for the explicitly clicked connection check. It shares
+	// the existing Access Store lifetime lock and native connector instance;
+	// no startup/browser Send is performed by composition.
+	runtime.ingress.checkOwner = connectorsvc.NewConnectionCheckOwner(
+		runtime.store, runtime.connector, connectorsvc.ConnectionCheckScope{
+			ProfileID: launch.Profile.ProfileID, OwnerID: launch.OwnerID,
+			ComputerID: launch.ComputerID,
+		},
+	)
 	runtime.chatComputer, err = NewChatComputerIngress(runtime.conversations, runtime.ingress)
 	if err != nil {
 		return fail(err)

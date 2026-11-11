@@ -83,23 +83,45 @@ it("observes exact Go proof and retains its original call on repeated verificati
   ]);
   expect(Object.isFrozen(result.receipt?.execution)).toBe(true);
 });
-it("requires the exact fresh socket check acknowledgement without changing the receipt", async () => {
+it("carries only the supplied UUID and never turns a passive historical proof into a diagnostic ACK", async () => {
   const f = fixture();
-  await expect(f.bridge.expectStatusCheck("new-read")).resolves.toBeUndefined();
-  // Registering the correlation on the host pipe is not a socket ACK.
-  expect((await f.bridge.observe()).checkId).toBeUndefined();
+  const checkId = "49a0cb44-5c67-4aae-9b56-41db024507d3";
+  // Reading an unarmed ID may expose the ordinary proof, but no ACK.
+  expect((await f.bridge.observe(checkId)).checkId).toBeUndefined();
+  expect(f.request.mock.calls.at(-1)?.[1]).toEqual({ binding, checkId });
   f.request.mockImplementation(async (_method, _body, options) => ({
     status: "ok",
     requestId: options!.id!,
     context,
-    data: { ...f.state, checkId: "new-read" } as unknown as Json,
+    data: { ...f.state, checkId } as unknown as Json,
   }));
-  expect((await f.bridge.observe()).receipt).toEqual(f.receipt);
-  expect((await f.bridge.observe()).checkId).toBe("new-read");
+  expect((await f.bridge.observe(checkId)).receipt).toEqual(f.receipt);
+  expect((await f.bridge.observe(checkId)).checkId).toBe(checkId);
+  await expect(f.bridge.observe()).rejects.toMatchObject({
+    state: "unknown",
+    code: "uncorrelated_connector_status_check",
+  });
+  const otherId = "ab457438-df13-4ef1-916c-e7818134e33b";
+  await expect(f.bridge.observe(otherId)).rejects.toMatchObject({
+    state: "unknown",
+    code: "crossed_connector_status_check",
+  });
   expect(f.request.mock.calls.at(-1)?.[1]).toEqual({
     binding,
+    checkId: otherId,
   });
 });
+it.each(["new-read", "", "A".repeat(36)])(
+  "refuses non-UUID status correlation before IO: %s",
+  async (id) => {
+    const f = fixture();
+    await expect(f.bridge.observe(id)).rejects.toMatchObject({
+      state: "refused",
+      code: "invalid_connector_status_check_id",
+    });
+    expect(f.request).not.toHaveBeenCalled();
+  },
+);
 it("distinguishes known absence from a successful verification", async () => {
   const f = fixture();
   f.request.mockImplementation(async (_m, _b, options) => ({
