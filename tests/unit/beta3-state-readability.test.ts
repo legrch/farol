@@ -167,6 +167,9 @@ describe("originalPredecessorSettingsReadable", () => {
     // stored optional boolean; refuse every presence, including false. All
     // other reachable expansions remain guarded below. Separate verification
     // scope is command-only and is outside this stored-schema prefix.
+    // 2026-11-11: compared the entire change since the pinned closure.
+    // The optional workspace continuity field is incompatible with beta3's
+    // strict workspace object; the predicate refuses it without mutation.
     const contract = readFileSync(
       new URL("../../src/pkg/product-settings/contract.ts", import.meta.url),
       "utf8",
@@ -176,7 +179,17 @@ describe("originalPredecessorSettingsReadable", () => {
     );
     expect(sections).toHaveLength(2);
     expect(createHash("sha256").update(sections[0]!).digest("hex")).toBe(
-      "6ed0f9778d3775877598d940f0419631f68b2232f6086a8dcbe0040381944250",
+      "6abe091dc349af98efce0f95d9994b802a1ffc3dbe5c53e7a8771f80f5f5c986",
+    );
+    const continuity = readFileSync(
+      new URL(
+        "../../src/pkg/product-settings/workspace-continuity.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    expect(createHash("sha256").update(continuity).digest("hex")).toBe(
+      "8a02f0fa91bfd246000ae0936e1e1594795c02e26170e5e43efa256be204ca8b",
     );
     const packageJson = JSON.parse(
       readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
