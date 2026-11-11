@@ -39,7 +39,7 @@ const text = (state: State): string => {
       return "This challenge already has an attempt. Its original outcome was not changed or retried.";
     return (
       chatGptPreSubmitRemedy(state.code) ??
-      "The check stopped before Send. Review the current page, selected app and connector; no repair was attempted."
+      "The check was not confirmed. Review the original attempt and current connection; no repair was attempted."
     );
   }
   return "";

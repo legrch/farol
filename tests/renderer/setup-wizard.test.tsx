@@ -541,7 +541,7 @@ describe("Add to ChatGPT", () => {
       expect(
         h.host.querySelectorAll(".setup-wizard-footer .primary"),
       ).toHaveLength(1);
-      expect(test.disabled).toBe(false);
+      expect(test.disabled).toBe(unknown);
       expect(h.button("Start using Farol")).toBeUndefined();
       expect(h.configuration().settings.setup.journey.dismissed).toBe(true);
       expect(h.f.api.configure).not.toHaveBeenCalledWith(
