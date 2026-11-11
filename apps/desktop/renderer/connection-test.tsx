@@ -100,7 +100,8 @@ export async function runExplicitConnectionTest(
       result.state === "unknown" ||
       result.state === "pending" ||
       result.code === "CONNECTION_CHECK_OUTCOME_UNKNOWN" ||
-      result.code === "SETTINGS_WRITE_FAILED";
+      result.code === "SETTINGS_WRITE_FAILED" ||
+      (result.state === "applied" && result.code !== null);
     publish({
       phase: uncertain
         ? "unknown"

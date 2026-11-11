@@ -493,3 +493,21 @@ it.each([
     }
   },
 );
+
+it("keeps a contradictory applied result with an error unconfirmed and does not resend", async () => {
+  const h = await setup();
+  try {
+    h.configure.mockResolvedValue({
+      id: "check",
+      state: "applied",
+      code: "CHATGPT_TASK_ERROR",
+    });
+    const first = await runFreshConnectionTest(h.facade);
+    const second = await runFreshConnectionTest(h.facade);
+    expect(first.state).toBe("unknown");
+    expect(second.state).toBe("unknown");
+    expect(h.configure).toHaveBeenCalledTimes(1);
+  } finally {
+    h.cleanup();
+  }
+});
