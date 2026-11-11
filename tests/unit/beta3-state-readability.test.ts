@@ -217,6 +217,32 @@ describe("originalPredecessorSettingsReadable", () => {
       expect(value).toStrictEqual(before);
     },
   );
+  it("refuses continuity evidence that the predecessor strict reader cannot parse", () => {
+    const value = fixture();
+    Object.assign(value.computer.workspaces[0]!, {
+      continuity: {
+        schema: "farol.workspace-continuity/1",
+        computerId: value.computer.computerId,
+        workspaceId: value.computer.workspaces[0]!.workspaceId,
+        root: value.computer.workspaces[0]!.root,
+        filesystem: "apfs",
+        volumeUuid: "00000000-0000-4000-8000-000000000003",
+        fileId: "2",
+        birthSeconds: "1",
+        birthNanoseconds: "0",
+        enrollment: {
+          operationId: "00000000-0000-4000-8000-000000000004",
+          selectedAt: "2026-10-08T09:00:00.000Z",
+          policySha256: "a".repeat(64),
+        },
+      },
+    });
+    const before = structuredClone(value);
+    expect(ProductSettingsSchema.safeParse(value).success).toBe(true);
+    expect(originalPredecessorSettingsReadable(source, value)).toBe(false);
+    expect(value).toStrictEqual(before);
+  });
+
   it("retains the absent external-check flag without inserting a default", () => {
     const value = fixture();
     const before = structuredClone(value);
