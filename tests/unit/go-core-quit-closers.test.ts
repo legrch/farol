@@ -467,6 +467,15 @@ describe("actual MCP stop retains its admitted saved-chat lifetime", () => {
     };
   }
 
+  it("refuses ordinary Stop while an original Stop is restricted", async () => {
+    const h = harness(null);
+    h.core.observeOriginalStop.mockResolvedValue({ restricted: true });
+    await expect(h.stopCurrent()).rejects.toThrow("CONNECTOR_STOP_UNCONFIRMED");
+    expect(h.beginStop).not.toHaveBeenCalled();
+    expect(h.connector.stop).not.toHaveBeenCalled();
+    expect(h.confirmStop).not.toHaveBeenCalled();
+  });
+
   it("observes the original connector Stop before publishing durable stop admission", async () => {
     const h = harness(null);
     const stopping = h.stopCurrent();

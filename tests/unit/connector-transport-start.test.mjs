@@ -347,6 +347,17 @@ function assertNoReadiness(f, result) {
 }
 
 describe("actual admitted transport start with controlled IO", () => {
+  it("refuses a new Start while an original Stop remains restricted", async () => {
+    const f = fixture();
+    f.core.observeOriginalStop.mockResolvedValue({ restricted: true });
+    await f.watch.check();
+    assertNoReadiness(f, f.result());
+    expect(f.core.openComputerConnector).not.toHaveBeenCalled();
+    expect(f.runtime.configure).not.toHaveBeenCalled();
+    expect(f.runtime.start).not.toHaveBeenCalled();
+    assertFinishedOwner(f);
+  });
+
   it("reports a failed sequencing dependency instead of waiting for an unreachable barrier", async () => {
     const f = fixture({ pause: "resources" });
     delete f.context.e2eTunnelClientExecutable;
