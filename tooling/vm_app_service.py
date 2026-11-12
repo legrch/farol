@@ -396,10 +396,21 @@ class ServiceAdmission:
                 str(receipt["sequence"]), "--service-manifest", self.manifest,
                 "--service-acceptance", self.acceptance)
 
+    @staticmethod
+    def validate_status(value):
+        # Every retained native status is a closed value, regardless of phase.
+        if (value.get("applicationRunning") not in ("true", "false", "unconfirmed") or
+                value.get("foreground") not in ("true", "false", "unconfirmed")):
+            refuse("APP_SERVICE_REPLY_INVALID")
+        windows = value.get("windows")
+        if not isinstance(windows, str) or not (windows == "unconfirmed" or re.fullmatch(r"[0-9]{1,3}", windows)):
+            refuse("APP_SERVICE_REPLY_INVALID")
+
     def admit_observation(self, receipt, observation, allow_pending_foreground=False):
         """Bind native retained state to the last ACK, never adopt another run."""
         if not isinstance(observation, dict):
             refuse("APP_SERVICE_REPLY_INVALID")
+        self.validate_status(observation)
         checks = {
             "serviceContract": SERVICE_SCHEMA,
             "executor": "compiled-native-helper", "serverCodeSource": "helper-binary",
@@ -455,6 +466,7 @@ class ServiceAdmission:
         i = self.next_sequence
         if not isinstance(reply, dict) or command != self.steps[i]:
             refuse("APP_SERVICE_REPLY_INVALID")
+        self.validate_status(reply)
         checks = {"serviceContract": SERVICE_SCHEMA, "executor": "compiled-native-helper",
                   "serverCodeSource": "helper-binary", "shell": "not-used",
                   "runId": self.run_id, "nonce": self.nonce,
@@ -495,7 +507,8 @@ class ServiceAdmission:
             if command in ("quit", "close") and (
                     reply.get("applicationRunning") != "false" or reply.get("rootExit") != "observed"):
                 refuse("APP_SERVICE_PHASE_UNCONFIRMED")
-            if command in ("open", "install") and reply.get("rootExit") != "no-owned-root":
+            if command in ("open", "install") and (
+                    reply.get("rootExit") != "no-owned-root" or reply.get("applicationRunning") != "false"):
                 refuse("APP_SERVICE_PHASE_UNCONFIRMED")
             if command == "quit":
                 self.last_pid = None

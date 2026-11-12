@@ -258,6 +258,33 @@ class ServiceSessionTests(unittest.TestCase):
         self.assertEqual(session.next_sequence, 6)
         self.assertEqual(session.launch_pids, ["42"])
 
+    def test_status_fields_are_validated_for_open_and_install_before_admission(self):
+        for command in ("open", "install"):
+            for field, bad in [("windows", "PRIVATE_TEXT"), ("windows", {}), ("windows", "1000"),
+                               ("windows", "١"), ("foreground", {}), ("foreground", "PRIVATE_TEXT"),
+                               ("applicationRunning", {}), ("applicationRunning", "true"),
+                               ("applicationRunning", "PRIVATE_TEXT")]:
+                with self.subTest(command=command, field=field, bad=bad):
+                    session = producer.ServiceAdmission(RUN, NONCE, MANIFEST, OWNER, "Fixture.app", acceptance="d"*64)
+                    if command == "install":
+                        op = str(uuid.uuid4())
+                        session.admit_reply("open", op, reply(session, "open", op))
+                    sequence = session.next_sequence
+                    op = str(uuid.uuid4())
+                    with self.assertRaises(producer.ProducerRefusal):
+                        session.admit_reply(command, op, reply(session, command, op, broken={field: bad}))
+                    self.assertEqual(session.next_sequence, sequence)
+
+    def test_observations_reject_malformed_status_outside_activate(self):
+        session = producer.ServiceAdmission(RUN, NONCE, MANIFEST, OWNER, "Fixture.app", acceptance="d"*64)
+        op = str(uuid.uuid4())
+        wire = reply(session, "open", op)
+        receipt = session.admit_reply("open", op, wire)
+        for field in ("windows", "foreground", "applicationRunning"):
+            with self.subTest(field=field), self.assertRaises(producer.ProducerRefusal):
+                session.admit_observation(receipt, dict(wire, **{field: {"private": "text"}}))
+        self.assertEqual(session.next_sequence, 1)
+
     def test_relaunch_requires_a_fresh_valid_sequence_and_keeps_pids(self):
         session = producer.ServiceAdmission(RUN, NONCE, MANIFEST, OWNER, "Fixture.app", acceptance="d" * 64, relaunch=True)
         for command in session.steps:
