@@ -99,12 +99,24 @@ function probeEsbuild(root, nodePath, env) {
       reason: "esbuild wrapper missing at node_modules/esbuild/bin/esbuild",
     };
   }
-  const probe = spawnSync(nodePath, [wrapper, "--version"], {
-    cwd: root,
-    env,
-    encoding: "utf8",
-    timeout: 20000,
-  });
+  // The installed bin may be a native executable. Use the JS API through the
+  // declared Node runtime for both probing and bundling.
+  const api = path.join(root, "node_modules", "esbuild", "lib", "main.js");
+  const probe = spawnSync(
+    nodePath,
+    [
+      "--input-type=module",
+      "-e",
+      'import { createRequire } from "node:module"; const require = createRequire(import.meta.url); console.log(require(process.argv[1]).version);',
+      api,
+    ],
+    {
+      cwd: root,
+      env,
+      encoding: "utf8",
+      timeout: 20000,
+    },
+  );
   const version = String(probe.stdout ?? "").trim();
   if (probe.error || probe.status !== 0 || !/^\d+\.\d+\.\d+/u.test(version)) {
     const detail = probe.error
@@ -121,7 +133,6 @@ function probeEsbuild(root, nodePath, env) {
 function bundleWithEsbuild({
   entryPath,
   tempPath,
-  wrapper,
   nodePath,
   root,
   env,
@@ -130,14 +141,13 @@ function bundleWithEsbuild({
   const result = spawnSync(
     nodePath,
     [
-      wrapper,
+      "--input-type=module",
+      "-e",
+      'import { createRequire } from "node:module"; const require = createRequire(import.meta.url); const esbuild = require(process.argv[1]); esbuild.buildSync({entryPoints:[process.argv[2]],bundle:true,format:"esm",platform:"node",target:process.argv[3],outfile:process.argv[4],logLevel:"warning"});',
+      path.join(root, "node_modules", "esbuild", "lib", "main.js"),
       entryPath,
-      "--bundle",
-      "--format=esm",
-      "--platform=node",
-      "--target=node" + targetMajor,
-      "--outfile=" + tempPath,
-      "--log-level=warning",
+      "node" + targetMajor,
+      tempPath,
     ],
     { cwd: root, env, encoding: "utf8", timeout: 120000 },
   );
@@ -560,7 +570,6 @@ export function bundleDriver({ entry, outputDir, root, bundler = "auto" }) {
       bundleWithEsbuild({
         entryPath,
         tempPath,
-        wrapper: path.join(root, "node_modules", "esbuild", "bin", "esbuild"),
         nodePath,
         root,
         env,

@@ -127,6 +127,19 @@ test("bundles the prototype entry into a self-contained guest driver", (t) => {
   );
 });
 
+test("explicit esbuild uses the installed native distribution under declared Node", (t) => {
+  const output = makeTempDir(t, "vm-esbuild-explicit");
+  const manifest = bundleDriver({
+    entry: ENTRY,
+    outputDir: output,
+    root: REPO_ROOT,
+    bundler: "esbuild",
+  });
+  assert.equal(manifest.bundler, "esbuild");
+  assert.match(manifest.esbuild.version, /^\d+\.\d+\.\d+$/u);
+  assert.ok(fs.existsSync(path.join(output, BUNDLE_FILE)));
+});
+
 test("bundled driver runs from a temp cwd without node_modules or repo access", async (t) => {
   const output = makeTempDir(t, "farol-vm-e2e-bundle2");
   const run = makeTempDir(t, "farol-vm-e2e-run");
@@ -164,7 +177,13 @@ test("bundle refuses an unresolvable bare import", (t) => {
     { mode: 0o600 },
   );
   assert.throws(
-    () => bundleDriver({ entry, outputDir: output, root: REPO_ROOT }),
+    () =>
+      bundleDriver({
+        entry,
+        outputDir: output,
+        root: REPO_ROOT,
+        bundler: "inline",
+      }),
     /^Error: E2E_BUNDLE_UNRESOLVED_IMPORT: left-pad$/u,
   );
   assert.deepEqual(
