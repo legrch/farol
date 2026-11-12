@@ -79,6 +79,31 @@ class VmMachineSpecTests(unittest.TestCase):
             finally:
                 os.environ.pop('FAROL_VM_TESTING_DIRECTORY', None)
 
+    def test_prepared_base_defaults_and_follows_the_private_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            settings = home / 'Library/Application Support/Example Testing'
+            settings.mkdir(parents=True)
+            os.environ.pop('FAROL_VM_CONFIG', None)
+            self.assertEqual(vm_machine.prepared_base(settings), 'farol-base-1')
+            config = settings / 'vm-smoke.json'
+            base = {'terminal_mac': str(home / 'tools/terminal-mac'),
+                    'vm_home': str(settings / 'terminal-mac'), 'vm': 'pilot'}
+            config.write_text(json.dumps(base))
+            self.assertEqual(vm_machine.prepared_base(settings), 'farol-base-1')
+            config.write_text(json.dumps(dict(base, prepared_base='example-base-2')))
+            self.assertEqual(vm_machine.prepared_base(settings), 'example-base-2')
+            os.environ['FAROL_VM_TESTING_DIRECTORY'] = settings.name
+            try:
+                # The infrastructure resolver accepts the same key.
+                self.assertEqual(vm_machine.infrastructure(home=home)[2], settings)
+            finally:
+                os.environ.pop('FAROL_VM_TESTING_DIRECTORY', None)
+            for value in ['', '../base', 'x' * 49, 7, None]:
+                config.write_text(json.dumps(dict(base, prepared_base=value)))
+                with self.assertRaisesRegex(ValueError, 'PREPARED_BASE_INVALID'):
+                    vm_machine.prepared_base(settings)
+
     def test_infrastructure_refuses_roots_outside_the_terminal_mac_data_root(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)

@@ -24,7 +24,6 @@ HERE = Path(__file__).resolve().parent
 HEX64 = re.compile(r"[a-f0-9]{64}\Z")
 RUN = re.compile(r"run-[a-f0-9]{32}\Z")
 CLONE = re.compile(r"farol-qa-[a-f0-9]{16}\Z")
-BASE = "farol-base-1"
 START_LIMIT = 180
 CLONE_LIMIT = 1800
 
@@ -391,6 +390,10 @@ def execute(args, infrastructure=None, plan=None, producer=None,
         # The existing configuration resolver is the sole authority. Never
         # print its raw exception, private config filename or unknown values.
         raise VMDevError("VM_DEV_CONFIG_INVALID") from None
+    try:
+        base = machine.prepared_base(settings)
+    except (ValueError, OSError, TypeError):
+        raise VMDevError("VM_DEV_CONFIG_INVALID") from None
     admission = binary_admission or (lambda p: p.is_file() and os.access(p, os.X_OK))
     demand(admission(binary), "VM_DEV_TERMINAL_MAC_UNAVAILABLE")
     _private_directory(root)
@@ -403,7 +406,7 @@ def execute(args, infrastructure=None, plan=None, producer=None,
     demand(CLONE.fullmatch(clone) and RUN.fullmatch(run), "VM_DEV_IDENTITY_INVALID")
     try:
         command, base_receipt, instance_receipt = plan(
-            clone, BASE, binary, root, settings, offline=False)
+            clone, base, binary, root, settings, offline=False)
     except ValueError as error:
         code = str(error)
         if code in ("INSTANCE_COLLISION_REFUSED", "INSTANCE_IDENTITY_INVALID"):
@@ -414,7 +417,7 @@ def execute(args, infrastructure=None, plan=None, producer=None,
         raise VMDevError("VM_DEV_INSTANCE_PLAN_BLOCKED") from None
     except (OSError, TypeError):
         raise VMDevError("VM_DEV_INSTANCE_PLAN_BLOCKED") from None
-    demand(command == [str(binary), "clone", BASE, clone] and
+    demand(command == [str(binary), "clone", base, clone] and
            not instance_receipt.exists() and not instance_receipt.is_symlink() and
            not (root / "machines" / clone).exists() and
            not (root / "machines" / clone).is_symlink(),
@@ -425,7 +428,7 @@ def execute(args, infrastructure=None, plan=None, producer=None,
     _private_directory(evidence)
     _write_once(evidence, "selection.json", {
         "schema": "farol.vm-dev-selection/1",
-        "runId": run, "instance": clone, "base": BASE,
+        "runId": run, "instance": clone, "base": base,
         "baseReceiptSHA256": hashlib.sha256(_regular(base_receipt, 65536)).hexdigest(),
         "acceptedReceiptSHA256": args.expected_receipt_sha256,
         "acceptedArtifactSHA256": selected["artifactSha256"],
@@ -438,7 +441,7 @@ def execute(args, infrastructure=None, plan=None, producer=None,
     (clone_effect or _one_clone)(command, evidence, binary, env, run)
     # Existing task machine provenance (same contract as vm:setup).
     try:
-        machine.write_instance_receipt(instance_receipt, clone, BASE, base_receipt, root)
+        machine.write_instance_receipt(instance_receipt, clone, base, base_receipt, root)
     except Exception:
         raise VMDevError("VM_DEV_INSTANCE_RECEIPT_UNCONFIRMED") from None
     stage = _stage_path(root / "machines" / clone, run)

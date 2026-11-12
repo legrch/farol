@@ -55,7 +55,8 @@ def infrastructure(home=None):
             raise ValueError('INFRASTRUCTURE_CONFIG_REQUIRED')
         config = json.loads(file.read_text())
         if not isinstance(config, dict) or set(config) - {
-                'terminal_mac', 'vm_home', 'vm', 'terminal_point', 'menu_point', 'timeout', 'bootstrap'}:
+                'terminal_mac', 'vm_home', 'vm', 'terminal_point', 'menu_point', 'timeout', 'bootstrap',
+                'prepared_base'}:
             raise ValueError('CONFIG_FIELDS_INVALID')
         if not isinstance(config.get('terminal_mac'), str) or not config['terminal_mac']:
             raise ValueError('INFRASTRUCTURE_CONFIG_REQUIRED')
@@ -70,6 +71,27 @@ def infrastructure(home=None):
     if 'terminal-mac' not in root.parts:
         raise ValueError('VM_HOME_OUTSIDE_TERMINAL_MAC_ROOT')
     return binary, root, settings
+
+
+DEFAULT_BASE = 'farol-base-1'
+
+
+def prepared_base(settings):
+    """The prepared base new run instances are cloned from. The same private
+    config source as infrastructure() may name it in `prepared_base`; without a
+    config or that key it stays farol-base-1. Readiness is still proved only by
+    that base's own receipt in plan_instance()."""
+    source = os.environ.get('FAROL_VM_CONFIG') or (
+        settings / 'vm-smoke.json' if (settings / 'vm-smoke.json').is_file() else None)
+    if not source:
+        return DEFAULT_BASE
+    file = Path(source).expanduser()
+    if not file.is_file() or file.stat().st_size > 16384:
+        raise ValueError('INFRASTRUCTURE_CONFIG_REQUIRED')
+    value = json.loads(file.read_text()).get('prepared_base', DEFAULT_BASE)
+    if not isinstance(value, str) or not re.fullmatch('[A-Za-z0-9][A-Za-z0-9_-]{0,47}', value):
+        raise ValueError('PREPARED_BASE_INVALID')
+    return value
 
 
 def plan_instance(name, base, binary, root, settings, offline=False):
@@ -165,12 +187,13 @@ def main():
     p.add_argument('--ipsw')
     p.add_argument('--provision-instance', metavar='NAME',
                    help='Clone a clean run instance from a prepared base; never starts it')
-    p.add_argument('--base', default='farol-base-1')
+    p.add_argument('--base', help='Prepared base (default: config prepared_base, else farol-base-1)')
     p.add_argument('--offline', action='store_true', help='Disable networking on a new instance clone')
     a = p.parse_args()
     if a.offline and not a.provision_instance:
         p.error('--offline requires --provision-instance')
     binary, root, settings = infrastructure()
+    a.base = a.base or prepared_base(settings)
     if a.provision_instance:
         command, base_receipt_file, instance_receipt = plan_instance(
             a.provision_instance, a.base, binary, root, settings, offline=a.offline)

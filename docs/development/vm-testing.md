@@ -174,6 +174,10 @@ approved `terminal_mac` binary and `vm_home` as `vm:setup`; the default
 `FAROL_VM_CONFIG` resolver is also respected. Neither selector authorizes a
 host Farol path, profile, credential, tunnel or guest shell command.
 
+The same private config may name the prepared base in `prepared_base`
+(default `farol-base-1`). Each run instance is still cloned only from a base
+whose own receipt under `base-receipts/` says helper READY and tester-ready.
+
 The native `terminal-mac mcp` session keeps **one actual input lease** for its
 whole stdio lifetime, boots the selected accepted app once, and admits GUI
 input only after root/primary identity, foreground and AX window evidence.
