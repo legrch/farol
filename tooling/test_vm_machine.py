@@ -217,6 +217,17 @@ class VmInstanceProvisioningTests(unittest.TestCase):
     def planned(self, name='farol-test-1', base='farol-base-1'):
         return vm_machine.plan_instance(name, base, '/bin/terminal-mac', self.root, self.settings)
 
+    def test_unknown_clone_is_retained_and_subsequent_provision_is_refused(self):
+        import subprocess
+        binary = self.root / 'fake-tool'
+        binary.write_text('not executed')
+        with mock.patch('sys.argv', ['vm-machine.py', '--provision-instance', 'farol-test-1']), mock.patch.object(vm_machine, 'infrastructure', return_value=(binary, self.root, self.settings)), mock.patch.object(vm_machine.subprocess, 'run', side_effect=subprocess.TimeoutExpired(['synthetic'], 1)) as invoked:
+            with self.assertRaises(subprocess.TimeoutExpired):
+                vm_machine.main()
+            with self.assertRaisesRegex(ValueError, 'PROVISION_OPERATION_UNRESOLVED'):
+                vm_machine.main()
+            invoked.assert_called_once()
+
     def test_plan_builds_the_exact_clone_command_and_receipt_paths(self):
         command, receipt_file, instance_receipt = self.planned()
         self.assertEqual(command, ['/bin/terminal-mac', 'clone', 'farol-base-1', 'farol-test-1'])
@@ -386,6 +397,74 @@ class VmInstanceProvisioningTests(unittest.TestCase):
         self.assertEqual(receipt['baseReceiptSha256'], hashlib.sha256(receipt_file).hexdigest())
         self.assertFalse(list(instance_receipt.parent.glob('.*.tmp')))
         self.assertEqual(instance_receipt.stat().st_mode & 0o777, 0o600)
+
+
+class ProvisionIntentTests(unittest.TestCase):
+    def test_each_effect_syncs_file_and_directory_before_dispatch(self):
+        for kind in ('create', 'clone', 'start'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                settings = Path(tmp).resolve() / 'settings'
+                settings.mkdir(mode=0o700)
+                synced = []
+                actual = os.fsync
+                def sync(fd):
+                    info = os.fstat(fd)
+                    synced.append(('directory' if __import__('stat').S_ISDIR(info.st_mode) else 'file', info.st_ino))
+                    actual(fd)
+                def effect(*args, **kwargs):
+                    directory = vm_machine.operation_directory(settings, 'synthetic')
+                    intent = directory / (kind + '-intent.json')
+                    self.assertEqual(json.loads(intent.read_text())['status'], 'unreconciled')
+                    self.assertIn(('file', intent.stat().st_ino), synced)
+                    self.assertEqual(synced[-1], ('directory', directory.stat().st_ino))
+                with mock.patch.object(vm_machine.os, 'fsync', side_effect=sync), mock.patch.object(vm_machine.subprocess, 'run', side_effect=effect) as invoked:
+                    vm_machine.provision_effect(['/synthetic/tool', kind, 'synthetic'], settings, 'synthetic', kind, {}, 1)
+                    invoked.assert_called_once()
+                with self.assertRaisesRegex(ValueError, 'PROVISION_OPERATION_UNRESOLVED'):
+                    vm_machine.require_no_operations(settings, 'synthetic')
+                self.assertEqual(vm_machine.reconcile_operations(settings, 'synthetic')['status'], 'UNRESOLVED')
+                self.assertTrue(intent_exists(settings, kind))
+
+    def test_sync_failure_never_reaches_dispatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Path(tmp).resolve()
+            with mock.patch.object(vm_machine.os, 'fsync', side_effect=OSError('synthetic sync failure')), mock.patch.object(vm_machine.subprocess, 'run') as invoked:
+                with self.assertRaises(OSError):
+                    vm_machine.provision_effect(['/synthetic/tool'], settings, 'synthetic', 'start', {}, 1)
+                invoked.assert_not_called()
+
+    def test_unknown_create_and_start_are_not_replayed_by_setup(self):
+        import plistlib
+        import subprocess
+        for kind in ('create', 'start'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                home = Path(tmp).resolve()
+                settings = home / 'settings'
+                settings.mkdir(mode=0o700)
+                root = home / 'terminal-mac'
+                binary = home / 'Tool.app/Contents/MacOS/terminal-mac'
+                binary.parent.mkdir(parents=True)
+                binary.write_text('never executed')
+                (binary.parent.parent / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'dev.terminal-mac.host'}))
+                spec = home / 'spec.json'
+                spec.write_text(json.dumps(BASE_SPEC))
+                ipsw = home / 'restore.ipsw'
+                ipsw.write_bytes(b'synthetic')
+                if kind == 'start':
+                    machine = root / 'machines/pilot'
+                    machine.mkdir(parents=True)
+                    (machine / 'machine.json').write_text(json.dumps(dict(BASE_SPEC, network=True)))
+                with mock.patch('sys.argv', ['vm-machine.py', '--spec', str(spec), '--ipsw', str(ipsw)]), mock.patch.object(vm_machine, 'infrastructure', return_value=(binary, root, settings)), mock.patch.object(vm_machine.subprocess, 'run', side_effect=subprocess.TimeoutExpired(['synthetic'], 1)) as invoked:
+                    with self.assertRaises(subprocess.TimeoutExpired):
+                        vm_machine.main()
+                    invoked.assert_called_once()
+                    with self.assertRaisesRegex(ValueError, 'PROVISION_OPERATION_UNRESOLVED'):
+                        vm_machine.main()
+                    invoked.assert_called_once()
+
+
+def intent_exists(settings, kind):
+    return (vm_machine.operation_directory(settings, 'synthetic') / (kind + '-intent.json')).is_file()
 
 
 if __name__ == '__main__':

@@ -242,9 +242,83 @@ def write_instance_receipt(path, name, base, accepted_base_receipt, machine_root
         os.close(fd)
 
 
+def sync_directory(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def durable_directory(path):
+    # Every new directory entry must be reachable durably before an intent
+    # inside it can guard an effect. Reentry also repeats the parent sync.
+    if not path.parent.exists():
+        durable_directory(path.parent)
+    try:
+        path.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    info = path.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or path.resolve(strict=True) != path or
+            info.st_uid != os.geteuid() or info.st_mode & 0o077):
+        raise ValueError('PROVISION_EVIDENCE_UNSAFE')
+    sync_directory(path.parent)
+
+
+def operation_directory(settings, name):
+    if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,47}', name):
+        raise ValueError('VM_SPEC_IDENTITY_INVALID')
+    return settings / 'vm-machine-operations' / name
+
+
+def require_no_operations(settings, name):
+    directory = operation_directory(settings, name)
+    # lstat, rather than exists(), retains dangling entries and lookup errors.
+    for path in (directory.parent, directory):
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            return
+        if not stat.S_ISDIR(info.st_mode) or path.resolve(strict=True) != path:
+            raise ValueError('PROVISION_OPERATION_UNRESOLVED')
+    if any(directory.iterdir()):
+        raise ValueError('PROVISION_OPERATION_UNRESOLVED')
+
+
+def provision_effect(command, settings, name, kind, env, timeout):
+    directory = operation_directory(settings, name)
+    durable_directory(directory)
+    # Create-only pre-effect evidence is never removed by this controller,
+    # even after a controller exit of zero: detached VM state needs separate
+    # read-only reconciliation, and a failed/unknown dispatch is never replayed.
+    intent = directory / (kind + '-intent.json')
+    fd = os.open(intent, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    with os.fdopen(fd, 'w') as out:
+        json.dump({'schema': 'farol.vm-machine-operation/1', 'machine': name,
+                   'operation': kind, 'status': 'unreconciled',
+                   'publication': 'intent-before-effect'}, out)
+        out.write('\n')
+        out.flush()
+        os.fsync(out.fileno())
+    sync_directory(directory)
+    subprocess.run(command, env=env, check=True, timeout=timeout)
+
+
+def reconcile_operations(settings, name):
+    """Read-only inventory; it never clears a fence or admits another effect."""
+    directory = operation_directory(settings, name)
+    try:
+        require_no_operations(settings, name)
+    except (ValueError, OSError):
+        return {'status': 'UNRESOLVED', 'machine': name, 'automaticReplay': False}
+    return {'status': 'ABSENT', 'machine': name, 'automaticReplay': False}
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--plan', action='store_true')
+    p.add_argument('--reconcile-operations', metavar='NAME', help='Read-only provisioning fence inventory; never clears evidence')
     p.add_argument('--spec', default=str(Path(__file__).parents[1] / 'config/vm/farol.json'))
     p.add_argument('--ipsw')
     p.add_argument('--provision-instance', metavar='NAME',
@@ -255,6 +329,11 @@ def main():
     if a.offline and not a.provision_instance:
         p.error('--offline requires --provision-instance')
     binary, root, settings = infrastructure()
+    if a.reconcile_operations:
+        if a.provision_instance or a.plan or a.ipsw:
+            p.error('--reconcile-operations cannot provision or plan')
+        print(json.dumps(reconcile_operations(settings, a.reconcile_operations)))
+        return
     a.base = a.base or prepared_base(settings)
     if a.provision_instance:
         command, base_receipt_file, instance_receipt = plan_instance(
@@ -263,6 +342,7 @@ def main():
             print(json.dumps({'status': 'PLAN', 'instance': a.provision_instance, 'base': a.base,
                               'clone': command, 'receipt': str(instance_receipt)}))
             return
+        require_no_operations(settings, a.provision_instance)
         if not binary.is_file():
             raise ValueError('INSTALL_TERMINAL_MAC_PACKAGE_FIRST')
         # clone is a pure store operation that starts no VM, so a packaged app
@@ -270,7 +350,7 @@ def main():
         # clone command validates the machine state itself.
         env = {k: os.environ[k] for k in ('HOME', 'USER', 'TMPDIR') if k in os.environ}
         env.update(PATH='/usr/bin:/bin:/usr/sbin:/sbin', TERMINAL_MAC_HOME=str(root))
-        subprocess.run(command, env=env, check=True, timeout=1800)
+        provision_effect(command, settings, a.provision_instance, 'clone', env, 1800)
         if a.offline:
             require_offline_instance(root, a.provision_instance)
         write_instance_receipt(instance_receipt, a.provision_instance, a.base, base_receipt_file, root)
@@ -283,6 +363,7 @@ def main():
         print(json.dumps({'status': 'PLAN', 'vmHome': str(root), 'create': command,
                           'start': [str(binary), 'start', spec['name']], 'bootstrap': spec['guestBootstrap']}))
         return
+    require_no_operations(settings, spec['name'])
     if not binary.is_file() or plistlib.loads((binary.parent.parent / 'Info.plist').read_bytes()).get('CFBundleIdentifier') != 'dev.terminal-mac.host':
         raise ValueError('INSTALL_TERMINAL_MAC_PACKAGE_FIRST')
     env = {k: os.environ[k] for k in ('HOME', 'USER', 'TMPDIR') if k in os.environ}
@@ -292,7 +373,7 @@ def main():
     if not machine.exists():
         if not a.ipsw or not Path(a.ipsw).is_file():
             raise ValueError('APPLE_RESTORE_IPSW_REQUIRED')
-        subprocess.run(command, env=env, check=True, timeout=1800)
+        provision_effect(command, settings, spec['name'], 'create', env, 1800)
         created = True
     existing = json.loads(machine.read_text())
     for key in ('name', 'cpu', 'memoryGiB', 'diskGiB', 'width', 'height'):
@@ -300,7 +381,7 @@ def main():
             raise ValueError('EXISTING_VM_SPEC_DRIFT_NO_MUTATION')
     if existing['network'] != (spec['network'] == 'nat'):
         raise ValueError('EXISTING_VM_NETWORK_DRIFT_NO_MUTATION')
-    subprocess.run([str(binary), 'start', spec['name']], env=env, check=True, timeout=60)
+    provision_effect([str(binary), 'start', spec['name']], settings, spec['name'], 'start', env, 60)
     settings.mkdir(parents=True, exist_ok=True, mode=0o700)
     private = settings / 'vm-smoke.json'
     if not private.exists():

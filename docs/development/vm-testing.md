@@ -94,6 +94,15 @@ an old receipt. Missing or changed bindings refuse before cloning and require
 read-only requalification of the selected clean base. Provenance retains the digest
 of the exact receipt bytes admitted by the planner, even if its pathname later changes.
 
+`vm:setup` retains create-only provisioning intents under
+`vm-machine-operations/<machine>/` in the testing settings directory. Files and
+all new parent entries are synced before `create`, `clone` or `start`. Any retained
+intent blocks reentry, including after a controller exit of zero: the detached
+runtime still needs explicit read-only reconciliation. Use
+`node tooling/vm-machine.mjs --reconcile-operations <machine>` to inventory the
+fence without contacting the VM. It clears nothing and never authorizes replay;
+keep unknown outcomes until their original operation is explicitly reconciled.
+
 Provisioning refuses to run until the base receipt records the owner setup
 (`OWNER_BASE_NOT_READY`) and never starts the instance. A clone copies the base disk,
 including any accounts and credentials already present; use a separately verified clean base
