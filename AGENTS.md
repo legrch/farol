@@ -83,6 +83,11 @@ identities. See [identity cutover](docs/identity-cutover.md).
   `docs/installed-incident-response.md` before resuming broad acceptance reviews.
 - Build candidates only with `task package` from clean committed bytes. Compiler,
   dependency, source, resource, and package attestation must remain fail closed.
+- For owner-selected VM desktop QA, use `task vm:dev` as the guest MCP stdio
+  entry (hidden by default, `-- --visible` optional), not host `task dev`.
+  Follow [VM testing](docs/development/vm-testing.md) for setup, tools, session
+  limits, accepted artifacts, evidence and update journeys. Guest Dev connection
+  is a separate explicit step; never seed a production profile or replay UNKNOWN.
 - Native tests use disposable state and exact owned process cleanup. **Farol Dev is
   development-owned:** the active Lead may start, quit, restart, rebuild, and when
   required by the test plan recreate Dev-only runtime/profile state without per-run
