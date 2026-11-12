@@ -152,14 +152,15 @@ test("selected existing derivative is source-bound and does not self-accept ZIP"
 test("symlink archive, outer profile path and unsupported receipt cannot pass", async (t) => {
   const f = await fixture(t);
   const alias = path.join(f.output, "alias.zip");
-  await fs.symlink(f.artifact, alias);
+  await fs.rename(f.artifact, alias);
+  await fs.symlink(alias, f.artifact);
   await assert.rejects(
     existingDevInputs(f.root, {
-      artifact: alias,
+      artifact: f.artifact,
       receipt: f.receipt,
       expectedReceiptSHA256: f.receiptSHA256,
     }),
-    /VM_DEV_ARTIFACT_PATH_INVALID/,
+    (error) => ["ELOOP", "EMLINK"].includes(error.code),
   );
   const badOutput = path.join(f.root, "foreign");
   await fs.mkdir(badOutput, { mode: 0o700 });
