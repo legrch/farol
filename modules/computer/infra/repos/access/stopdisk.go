@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 
 	stop "github.com/legrch/farol/modules/computer/domain/journal"
 	"golang.org/x/sys/unix"
@@ -40,6 +41,31 @@ func encodeStopLedger(b Binding, value stop.StopLedger) ([]byte, error) {
 		return nil, refuse(err)
 	}
 	return append(raw, '\n'), nil
+}
+
+// Reserve the serialized union of all possible later fields, including UNKNOWN
+// and refusal metadata. This is sizing only, never a receipt or valid history.
+// Fixed request fields retain their actual JSON escaping; future identifiers,
+// digests and decimal counters have the closed syntax/limits in StopEntry.Valid.
+func stopCompletionCapacity(raw []byte, entry stop.StopEntry) bool {
+	admission, err := json.Marshal(entry)
+	if err != nil {
+		return false
+	}
+	r := entry.Request
+	decimal := strings.Repeat("9", 20)
+	digest := strings.Repeat("a", 64)
+	uuid := "11111111-1111-4111-8111-111111111111"
+	entry.Phase = stop.StopComplete
+	entry.Closure = &stop.StopClosure{EffectID: r.StopEffectID, BackendGeneration: r.BackendGeneration, RuntimeID: r.RuntimeID, LifecycleID: uuid, StopRevision: decimal, PreparationRevision: decimal, ClosureOperationID: uuid, ClosureDigest: digest}
+	entry.SettingsIntent = &stop.StopSettingsPlan{EffectID: r.SettingsEffectID, ExpectedRevision: r.ExpectedRevision, ExpectedDigest: r.SettingsDigest, NextRevision: decimal, NextDigest: digest, ComputerGeneration: r.ComputerGeneration, ConnectorGeneration: r.ConnectorGeneration, ConsentDigest: r.ConsentDigest}
+	entry.SettingsAck = &stop.StopSettingsReceipt{EffectID: r.SettingsEffectID, Revision: decimal, DocumentDigest: digest, ComputerGeneration: r.ComputerGeneration, ConnectorGeneration: r.ConnectorGeneration, ConsentDigest: r.ConsentDigest}
+	entry.CleanupAck = &stop.StopCleanupReceipt{EffectID: r.CleanupEffectID, BackendGeneration: r.BackendGeneration, RuntimeID: r.RuntimeID, Digest: digest}
+	entry.Refusal = "cancelled_before_dispatch"
+	entry.UnresolvedAt = stop.StopAdmissionIntent
+	entry.Uncertainty = "settings_unconfirmed"
+	maximum, err := json.Marshal(entry)
+	return err == nil && len(raw)-len(admission)+len(maximum) <= stopLedgerMaxBytes
 }
 
 func decodeStopLedger(b Binding, raw []byte) (stop.StopLedger, error) {

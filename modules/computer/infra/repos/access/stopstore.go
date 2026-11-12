@@ -143,8 +143,8 @@ func (s *Store) BeginStop(ctx context.Context, request stop.StopRequest) (stop.S
 		return stop.StopEntry{}, false, err
 	}
 	raw, err := encodeStopLedger(s.binding, next)
-	if err != nil {
-		return stop.StopEntry{}, false, err
+	if err != nil || !stopCompletionCapacity(raw, next.Entries[len(next.Entries)-1]) {
+		return stop.StopEntry{}, false, stop.ErrStopCapacity
 	}
 	if !s.stopPresent {
 		if err = s.disk.markStopWitness(); err == nil {
