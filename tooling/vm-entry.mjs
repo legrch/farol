@@ -64,13 +64,7 @@ if (entryHref !== null && import.meta.url === entryHref) {
   );
   const result = spawnSync(
     executable,
-    [
-      path.join(
-        root,
-        "tooling/vm-" + mode + ".mjs",
-      ),
-      ...process.argv.slice(3),
-    ],
+    [path.join(root, "tooling/vm-" + mode + ".mjs"), ...process.argv.slice(3)],
     { env, stdio: "inherit" },
   );
   if (result.error) throw result.error;

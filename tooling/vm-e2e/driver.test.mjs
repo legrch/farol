@@ -23,7 +23,11 @@ import {
   bundleDriver,
   selectDeclaredRuntime,
 } from "./bundle-driver.mjs";
-import { RESULT_FILE, resultDirectory, writeResult } from "./driver-runtime.mjs";
+import {
+  RESULT_FILE,
+  resultDirectory,
+  writeResult,
+} from "./driver-runtime.mjs";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const ENTRY = path.join(REPO_ROOT, "tooling", "vm-e2e", "prototype-entry.mjs");
@@ -76,7 +80,11 @@ function runBundle(nodePath, bundlePath, cwd) {
 
 test("bundles the prototype entry into a self-contained guest driver", (t) => {
   const output = makeTempDir(t, "farol-vm-e2e-bundle");
-  const manifest = bundleDriver({ entry: ENTRY, outputDir: output, root: REPO_ROOT });
+  const manifest = bundleDriver({
+    entry: ENTRY,
+    outputDir: output,
+    root: REPO_ROOT,
+  });
   const written = JSON.parse(
     fs.readFileSync(path.join(output, MANIFEST_FILE), "utf8"),
   );
@@ -122,7 +130,11 @@ test("bundles the prototype entry into a self-contained guest driver", (t) => {
 test("bundled driver runs from a temp cwd without node_modules or repo access", async (t) => {
   const output = makeTempDir(t, "farol-vm-e2e-bundle2");
   const run = makeTempDir(t, "farol-vm-e2e-run");
-  const manifest = bundleDriver({ entry: ENTRY, outputDir: output, root: REPO_ROOT });
+  const manifest = bundleDriver({
+    entry: ENTRY,
+    outputDir: output,
+    root: REPO_ROOT,
+  });
   const bundleCopy = path.join(run, BUNDLE_FILE);
   fs.copyFileSync(path.join(output, BUNDLE_FILE), bundleCopy);
 
@@ -155,7 +167,11 @@ test("bundle refuses an unresolvable bare import", (t) => {
     () => bundleDriver({ entry, outputDir: output, root: REPO_ROOT }),
     /^Error: E2E_BUNDLE_UNRESOLVED_IMPORT: left-pad$/u,
   );
-  assert.deepEqual(fs.readdirSync(output), [], "a refused bundle leaves no residue");
+  assert.deepEqual(
+    fs.readdirSync(output),
+    [],
+    "a refused bundle leaves no residue",
+  );
 });
 
 test("writeResult publishes with the durable fsync ordering", (t) => {
@@ -253,7 +269,10 @@ test("bounded inline bundler produces a runnable self-contained bundle", async (
   assert.equal(manifest.esbuild, undefined);
   const bundleText = fs.readFileSync(path.join(output, BUNDLE_FILE), "utf8");
   assert.ok(bundleText.includes("E2E_BUNDLE_MODULE_MISSING"));
-  assert.equal(sha256Hex(fs.readFileSync(path.join(output, BUNDLE_FILE))), manifest.bundle.sha256);
+  assert.equal(
+    sha256Hex(fs.readFileSync(path.join(output, BUNDLE_FILE))),
+    manifest.bundle.sha256,
+  );
 
   const bundleCopy = path.join(run, BUNDLE_FILE);
   fs.copyFileSync(path.join(output, BUNDLE_FILE), bundleCopy);
@@ -270,12 +289,18 @@ test("bounded inline bundler refuses unsupported inputs", (t) => {
   const cases = [
     {
       name: "bare import",
-      files: { "bad-entry.mjs": 'import shuffle from "left-pad";\nconsole.log(shuffle);\n' },
+      files: {
+        "bad-entry.mjs":
+          'import shuffle from "left-pad";\nconsole.log(shuffle);\n',
+      },
       pattern: /^Error: E2E_BUNDLE_UNRESOLVED_IMPORT: left-pad$/u,
     },
     {
       name: "import outside the entry root",
-      files: { "bad-entry.mjs": 'import secret from "../../outside.mjs";\nconsole.log(secret);\n' },
+      files: {
+        "bad-entry.mjs":
+          'import secret from "../../outside.mjs";\nconsole.log(secret);\n',
+      },
       pattern: /^Error: E2E_BUNDLE_IMPORT_OUTSIDE_ROOT/u,
     },
     {

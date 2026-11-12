@@ -9,12 +9,23 @@
     "fixture-probe-entry.mjs": {
       "scenario": "vm-e2e-fixture-probe",
       "evidenceClass": "infrastructure",
-      "selection": ["setup-page-status", "json-endpoint", "missing-route-fails-closed", "loopback-only-binding"]
+      "selection": [
+        "setup-page-status",
+        "json-endpoint",
+        "missing-route-fails-closed",
+        "loopback-only-binding"
+      ]
     },
     "egress-probe-entry.mjs": {
       "scenario": "vm-e2e-egress-probe",
       "evidenceClass": "diagnostic",
-      "selection": ["tcp-test-net-1", "tcp-test-net-2", "tcp-test-net-3", "tcp-documentation-v6", "dns-invalid"]
+      "selection": [
+        "tcp-test-net-1",
+        "tcp-test-net-2",
+        "tcp-test-net-3",
+        "tcp-documentation-v6",
+        "dns-invalid"
+      ]
     }
   }
 }

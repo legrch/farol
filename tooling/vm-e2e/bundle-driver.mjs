@@ -110,12 +110,23 @@ function probeEsbuild(root, nodePath, env) {
     const detail = probe.error
       ? String(probe.error.message ?? probe.error)
       : "exit " + probe.status + ": " + String(probe.stderr ?? "").trim();
-    return { available: false, reason: "esbuild binary did not run: " + detail };
+    return {
+      available: false,
+      reason: "esbuild binary did not run: " + detail,
+    };
   }
   return { available: true, version, wrapper };
 }
 
-function bundleWithEsbuild({ entryPath, tempPath, wrapper, nodePath, root, env, targetMajor }) {
+function bundleWithEsbuild({
+  entryPath,
+  tempPath,
+  wrapper,
+  nodePath,
+  root,
+  env,
+  targetMajor,
+}) {
   const result = spawnSync(
     nodePath,
     [
@@ -132,7 +143,8 @@ function bundleWithEsbuild({ entryPath, tempPath, wrapper, nodePath, root, env, 
   );
   if (result.error) {
     throw new Error(
-      "E2E_BUNDLE_ESBUILD_FAILED: " + String(result.error.message ?? result.error),
+      "E2E_BUNDLE_ESBUILD_FAILED: " +
+        String(result.error.message ?? result.error),
     );
   }
   if (result.status !== 0) {
@@ -164,7 +176,9 @@ function parseNamedList(text, what) {
     .map((item) => item.trim())
     .filter((item) => item.length > 0)
     .map((item) => {
-      const match = /^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/u.exec(item);
+      const match = /^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/u.exec(
+        item,
+      );
       if (!match) {
         throw new Error(
           "E2E_BUNDLE_UNSUPPORTED_SYNTAX: " + what + " list item: " + item,
@@ -177,7 +191,8 @@ function parseNamedList(text, what) {
 function parseImportLine(line) {
   for (let index = 0; index < IMPORT_FORMS.length; index += 1) {
     const match = IMPORT_FORMS[index].exec(line);
-    if (match) return { form: index, match, specifier: match[match.length - 1] };
+    if (match)
+      return { form: index, match, specifier: match[match.length - 1] };
   }
   return null;
 }
@@ -187,7 +202,10 @@ function importBindingNames(parsed) {
   if (form === 1) return [match[1], match[2]];
   if (form === 2) return [match[1]];
   if (form === 3) {
-    return [match[1], ...parseNamedList(match[2], "import").map((x) => x.local)];
+    return [
+      match[1],
+      ...parseNamedList(match[2], "import").map((x) => x.local),
+    ];
   }
   if (form === 4) return [match[1]];
   if (form === 5) return parseNamedList(match[1], "import").map((x) => x.local);
@@ -203,7 +221,10 @@ function rewriteRelativeImport(parsed, moduleId) {
       ? ["const " + match[1] + " = __mod(" + target + ").default;"]
       : [];
   if (form === 1) {
-    return [...defaultBinding, "const " + match[2] + " = __mod(" + target + ");"];
+    return [
+      ...defaultBinding,
+      "const " + match[2] + " = __mod(" + target + ");",
+    ];
   }
   if (form === 2) return ["const " + match[1] + " = __mod(" + target + ");"];
   if (form === 3 || form === 5) {
@@ -211,7 +232,9 @@ function rewriteRelativeImport(parsed, moduleId) {
     const destructure =
       "const { " +
       list
-        .map((x) => (x.imported === x.local ? x.local : x.imported + ": " + x.local))
+        .map((x) =>
+          x.imported === x.local ? x.local : x.imported + ": " + x.local,
+        )
         .join(", ") +
       " } = __mod(" +
       target +
@@ -261,10 +284,14 @@ function parseInlineModule(source, id, boundary, modulePath) {
       }
       const target = fs.statSync(resolved, { throwIfNoEntry: false });
       if (!target || !target.isFile() || !ENTRY_EXTENSIONS.test(resolved)) {
-        throw new Error("E2E_BUNDLE_IMPORT_MISSING: " + specifier + " in " + id);
+        throw new Error(
+          "E2E_BUNDLE_IMPORT_MISSING: " + specifier + " in " + id,
+        );
       }
       edges.push(resolved);
-      body.push(...rewriteRelativeImport(parsed, inside.split(path.sep).join("/")));
+      body.push(
+        ...rewriteRelativeImport(parsed, inside.split(path.sep).join("/")),
+      );
       continue;
     }
     if (/^export\b/u.test(line)) {
@@ -273,12 +300,20 @@ function parseInlineModule(source, id, boundary, modulePath) {
           "E2E_BUNDLE_UNSUPPORTED_SYNTAX: re-export in " + id + ": " + line,
         );
       }
-      const decl = /^export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)/u.exec(line);
-      const fn = /^export\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/u.exec(line);
+      const decl = /^export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)/u.exec(
+        line,
+      );
+      const fn = /^export\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/u.exec(
+        line,
+      );
       const cls = /^export\s+class\s+([A-Za-z_$][\w$]*)/u.exec(line);
       const list = /^export\s+\{([^}]*)\}\s*;?$/u.exec(line);
-      const defNamedFn = /^export\s+default\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/u.exec(line);
-      const defNamedCls = /^export\s+default\s+class\s+([A-Za-z_$][\w$]*)/u.exec(line);
+      const defNamedFn =
+        /^export\s+default\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/u.exec(
+          line,
+        );
+      const defNamedCls =
+        /^export\s+default\s+class\s+([A-Za-z_$][\w$]*)/u.exec(line);
       const defExpr = /^export\s+default\s+(.+?)\s*;?$/u.exec(line);
       if (decl || fn || cls) {
         const name = (decl ?? fn ?? cls)[1];
@@ -315,7 +350,10 @@ function parseInlineModule(source, id, boundary, modulePath) {
         continue;
       }
       throw new Error(
-        "E2E_BUNDLE_UNSUPPORTED_SYNTAX: export statement in " + id + ": " + line,
+        "E2E_BUNDLE_UNSUPPORTED_SYNTAX: export statement in " +
+          id +
+          ": " +
+          line,
       );
     }
     const bare = TOP_LEVEL_DECLARATION.exec(raw);
@@ -334,7 +372,8 @@ function parseInlineModule(source, id, boundary, modulePath) {
     // template literals survive the transform unchanged.
     body.push(raw);
   }
-  for (const name of exportNames) body.push("__exports." + name + " = " + name + ";");
+  for (const name of exportNames)
+    body.push("__exports." + name + " = " + name + ";");
   if (defaultExport) body.push("__exports.default = " + defaultExport + ";");
   return { id, body, nodeImports, edges, declared };
 }
@@ -387,7 +426,8 @@ function emitInlineBundle(entryId, entryName, modules) {
           bound.set(name, parsed.specifier);
         } else if (existing !== parsed.specifier) {
           throw new Error(
-            "E2E_BUNDLE_UNSUPPORTED_SYNTAX: node import binding collision: " + name,
+            "E2E_BUNDLE_UNSUPPORTED_SYNTAX: node import binding collision: " +
+              name,
           );
         }
       }
@@ -398,7 +438,8 @@ function emitInlineBundle(entryId, entryName, modules) {
     for (const name of mod.declared) {
       if (bound.has(name)) {
         throw new Error(
-          "E2E_BUNDLE_UNSUPPORTED_SYNTAX: node import binding collision: " + name,
+          "E2E_BUNDLE_UNSUPPORTED_SYNTAX: node import binding collision: " +
+            name,
         );
       }
     }
@@ -435,10 +476,16 @@ export function assertNoHostImports(text) {
   for (const raw of text.split("\n")) {
     const line = raw.trim();
     if (/^import\b/u.test(line)) {
-      const specifiers = [...line.matchAll(/["']([^"']+)["']/gu)].map((m) => m[1]);
-      if (specifiers.length === 0 || specifiers.some((s) => !s.startsWith(NODE_PREFIX))) {
+      const specifiers = [...line.matchAll(/["']([^"']+)["']/gu)].map(
+        (m) => m[1],
+      );
+      if (
+        specifiers.length === 0 ||
+        specifiers.some((s) => !s.startsWith(NODE_PREFIX))
+      ) {
         throw new Error(
-          "E2E_BUNDLE_OUTPUT_IMPORT_REMAINS: " + (specifiers[0] ?? line.slice(0, 80)),
+          "E2E_BUNDLE_OUTPUT_IMPORT_REMAINS: " +
+            (specifiers[0] ?? line.slice(0, 80)),
         );
       }
     }
@@ -549,7 +596,11 @@ export function bundleDriver({ entry, outputDir, root, bundler = "auto" }) {
     tool: TOOL_VERSION,
     entry: path.basename(entryPath),
     bundler: usedBundler,
-    bundle: { file: BUNDLE_FILE, sha256: sha256Hex(bytes), bytes: bytes.length },
+    bundle: {
+      file: BUNDLE_FILE,
+      sha256: sha256Hex(bytes),
+      bytes: bytes.length,
+    },
     node: {
       path: nodePath,
       size: nodeStat.size,
@@ -567,7 +618,10 @@ export function bundleDriver({ entry, outputDir, root, bundler = "auto" }) {
   return manifest;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   const entry = process.argv[2];
   const outputDir = process.argv[3];
   if (!entry || !outputDir) {
@@ -578,7 +632,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   } else {
     try {
       const root = fileURLToPath(new URL("../../", import.meta.url));
-      console.log(JSON.stringify(bundleDriver({ entry, outputDir, root }), null, 2));
+      console.log(
+        JSON.stringify(bundleDriver({ entry, outputDir, root }), null, 2),
+      );
     } catch (error) {
       console.error(String(error.message ?? error));
       process.exitCode = 1;

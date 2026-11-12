@@ -18,7 +18,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const CONNECT_TIMEOUT_MS = 3000;
-const PROBE_CASES = ["tcp-test-net-1", "tcp-test-net-2", "tcp-test-net-3", "tcp-documentation-v6", "dns-invalid"];
+const PROBE_CASES = [
+  "tcp-test-net-1",
+  "tcp-test-net-2",
+  "tcp-test-net-3",
+  "tcp-documentation-v6",
+  "dns-invalid",
+];
 
 function probeTcp(host, port) {
   return new Promise((resolve) => {
@@ -27,7 +33,13 @@ function probeTcp(host, port) {
     const finish = (connectable, detail) => {
       socket.removeAllListeners();
       socket.destroy();
-      resolve({ endpoint: `${host}:${port}`, transport: "tcp", connectable, detail, milliseconds: Date.now() - started });
+      resolve({
+        endpoint: `${host}:${port}`,
+        transport: "tcp",
+        connectable,
+        detail,
+        milliseconds: Date.now() - started,
+      });
     };
     socket.setTimeout(CONNECT_TIMEOUT_MS);
     socket.once("connect", () => finish(true, "connected"));
@@ -85,8 +97,12 @@ if (entryArgument !== null && entryArgument === modulePath) {
       process.exit(0);
     },
     async (error) => {
-      await writeResult({ scenario: "vm-e2e-egress-probe", status: "FAIL", reason: String(error).slice(0, 2048),
-        cases: PROBE_CASES.map((id) => ({ id, status: "NOT_RUN" })) });
+      await writeResult({
+        scenario: "vm-e2e-egress-probe",
+        status: "FAIL",
+        reason: String(error).slice(0, 2048),
+        cases: PROBE_CASES.map((id) => ({ id, status: "NOT_RUN" })),
+      });
       process.exit(1);
     },
   );

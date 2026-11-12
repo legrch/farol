@@ -156,7 +156,7 @@ creates a local-only ZIP, then uses `vm-machine.py`'s configured
 stages the accepted payload through the finite compiled native app service and
 replaces its controller with the configured `terminal-mac mcp` process. VM
 viewer windows are hidden by default; pass `-- --visible` to show the guest
-window on the host. The application itself runs visibly *inside* the VM.
+window on the host. The application itself runs visibly _inside_ the VM.
 
 For a separately approved, already-built Dev derivative (no rebuilding),
 provide all three expected inputs; no stable-release ZIP is accepted:
@@ -261,7 +261,6 @@ generation after an updater replaces its accepted bytes. End the bound session
 cleanly before a separately selected generic guest-computer QA journey; record
 real updater journal/successor evidence independently. Never treat two archive
 installs or a VM restart as a product-update pass.
-
 
 ### Helper16 functional qualification (November 12, 2026)
 

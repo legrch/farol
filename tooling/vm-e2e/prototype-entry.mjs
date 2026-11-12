@@ -40,7 +40,10 @@ async function run() {
     await writeResult({
       status: "PASS",
       scenario: "vm-e2e-prototype",
-      cases: [{ id: "http-status", status: "PASS" }, { id: "response-body", status: "PASS" }],
+      cases: [
+        { id: "http-status", status: "PASS" },
+        { id: "response-body", status: "PASS" },
+      ],
       url,
       checks: {
         httpStatus: response.status,
@@ -52,7 +55,10 @@ async function run() {
     await writeResult({
       status: "FAIL",
       scenario: "vm-e2e-prototype",
-      cases: [{ id: "http-status", status: "NOT_RUN" }, { id: "response-body", status: "NOT_RUN" }],
+      cases: [
+        { id: "http-status", status: "NOT_RUN" },
+        { id: "response-body", status: "NOT_RUN" },
+      ],
       reason: String(error && error.message ? error.message : error),
     });
     return 1;
