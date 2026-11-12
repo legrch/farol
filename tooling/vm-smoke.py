@@ -1862,7 +1862,7 @@ class Runner:
                 raise Refused('VM_BUSY') from e
             # connection_proof still starts/bootstrap-controls the guest and
             # activates the app. It is not a read-only reconciliation route.
-            require(not self.effect_file.exists(), 'UNRESOLVED_GUEST_OPERATION')
+            require(self.effect_fence_definitely_absent(), 'UNRESOLVED_GUEST_OPERATION')
             residue = staging_residue(self.inbox)
             require(not residue, 'UNRECONCILED_STAGING_RESIDUE:' +
                     ','.join(item['directory'] for item in residue))

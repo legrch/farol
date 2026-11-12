@@ -30,5 +30,17 @@ class EffectAdmissionTests(unittest.TestCase):
                     runner.run()
                 self.assertEqual(runner.effect_file.read_text(), '{"runId":"synthetic-unknown"}')
 
+    def test_dangling_fence_refuses_before_custody_or_vm_commands(self):
+        with tempfile.TemporaryDirectory() as d:
+            runner = object.__new__(vm.Runner)
+            runner.machine = Path(d)
+            runner.effect_file = runner.machine / '.farol-smoke-pending.json'
+            runner.effect_file.symlink_to(runner.machine / 'missing-evidence')
+            runner.cli = lambda *a: self.fail('VM command reached')
+            runner.acquire_input_lease = lambda: self.fail('custody published')
+            with self.assertRaisesRegex(vm.Refused, 'UNRESOLVED_GUEST_OPERATION'):
+                runner.run()
+            self.assertTrue(runner.effect_file.is_symlink())
+
 if __name__ == '__main__':
     unittest.main()
