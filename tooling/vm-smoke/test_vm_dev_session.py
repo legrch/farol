@@ -109,7 +109,7 @@ class AdmissionTests(Fixture):
         with self.assertRaisesRegex(dev.VMDevError, "VM_DEV_PREDECESSOR_COLLISION"):
             dev.execute(self.options, infrastructure=lambda: (self.binary, self.root, self.settings),
                         identity_factory=lambda: (clone, "run-" + "c"*32),
-                        binary_admission=lambda _: True,
+                        binary_admission=lambda _: True, capacity_probe=lambda *a: 0,
                         clone_effect=lambda *a: calls.append("clone"))
         self.assertEqual(calls, [])
 
@@ -160,7 +160,7 @@ class AdmissionTests(Fixture):
                 infrastructure=lambda: (self.binary, self.root, self.settings),
                 identity_factory=lambda: (clone, run),
                 clone_effect=cloned, start_effect=started, producer=producer,
-                binary_admission=lambda _: True, exec_effect=handed)
+                binary_admission=lambda _: True, capacity_probe=lambda *a: 0, exec_effect=handed)
         self.assertEqual([entry[0] for entry in calls], ["clone", "producer", "start", "mcp"])
         self.assertTrue((self.settings / "instance-receipts" / (clone + ".json")).is_file())
         evidence = self.settings / "vm-dev-sessions" / clone
@@ -186,7 +186,7 @@ class AdmissionTests(Fixture):
                 infrastructure=lambda: (self.binary, self.root, self.settings),
                 identity_factory=lambda: (clone, run),
                 clone_effect=cloned, start_effect=lambda *a: self.fail("start"),
-                producer=broken, binary_admission=lambda _: True,
+                producer=broken, binary_admission=lambda _: True, capacity_probe=lambda *a: 0,
                 exec_effect=lambda *a: self.fail("exec"))
         evidence = self.settings / "vm-dev-sessions" / clone
         self.assertTrue((evidence / "stage-intent.json").is_file())
@@ -275,6 +275,23 @@ class EffectsTests(Fixture):
                         self.assertEqual(receipt["runtimePID"], 6201)
                 started.assert_called_once()
                 observed.assert_called_once()
+
+    def test_capacity_refuses_two_active_or_unknown_without_starting(self):
+        second = self.root / "machines/farol-other"
+        second.mkdir(mode=0o700)
+        for states, error in [(["running", "running"], "VM_DEV_CAPACITY_BUSY"),
+                              (["running", "unconfirmed"], "VM_DEV_CAPACITY_UNKNOWN"),
+                              (["stopped", "running"], None)]:
+            replies = [dict(name=name, state=state) for name, state in zip(
+                ["farol-base-1", "farol-other"], states)]
+            with mock.patch.object(dev, "_host_status", side_effect=replies), \
+                 mock.patch.object(dev.subprocess, "Popen") as effect:
+                if error:
+                    with self.assertRaisesRegex(dev.VMDevError, error):
+                        dev._capacity(self.binary, self.root, {})
+                else:
+                    self.assertEqual(dev._capacity(self.binary, self.root, {}), 1)
+                effect.assert_not_called()
 
     def test_failed_launcher_does_not_replay_start(self):
         evidence = self.settings / "failed-launcher"

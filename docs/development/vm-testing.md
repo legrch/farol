@@ -215,3 +215,5 @@ evidence and original Quit/close outcome. Do not call its whole pipeline PASS
 until those exact native/live receipts exist.
 
 The build defaults to `_output/go-build-inputs.json`, the same approved offline declaration used by the existing build lanes. It never silently emits a backend-less application. `--go-inputs` selects build inputs only and cannot accompany an existing artifact. A successful `start` launcher may exit before its detached VM; readiness is attested by a new read-only status naming the runtime PID, separately from the launcher PID.
+
+The controller checks active runtimes in its managed store before cloning and refuses `VM_DEV_CAPACITY_BUSY` when two are occupied. It never stops another session automatically. Clean MCP EOF closes the accepted app, not the VM runtime: release a finished VM with `terminal-mac stop <instance>` and observe its guest shutdown confirmation when needed. Preserve all disks and UNKNOWN evidence. Concurrent starts or VMs in another store can still exhaust capacity after the preflight; retain that original failed start rather than replay it.

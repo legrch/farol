@@ -240,6 +240,26 @@ def _host_status(binary, clone, env):
     return value if isinstance(value, dict) else None
 
 
+def _capacity(binary, root, env):
+    """Read-only store census before allocating another clone; no auto-stop.
+
+    This host rejected its third active macOS VM. Other stores and concurrent
+    starts remain outside this preflight; the native start is authoritative.
+    """
+    active = 0
+    for entry in sorted((root / "machines").iterdir()):
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", entry.name):
+            continue
+        demand(entry.is_dir() and not entry.is_symlink(), "VM_DEV_CAPACITY_UNKNOWN")
+        value = _host_status(binary, entry.name, env)
+        demand(value is not None and value.get("name") == entry.name and
+               value.get("state") in ("running", "stopped", "stopping", "paused", "starting"),
+               "VM_DEV_CAPACITY_UNKNOWN")
+        active += value["state"] != "stopped"
+    demand(active < 2, "VM_DEV_CAPACITY_BUSY")
+    return active
+
+
 def _one_start(binary, clone, visible, evidence, env):
     command = [str(binary), "start", clone] + (["--window"] if visible else [])
     operation = str(uuid.uuid4())
@@ -348,7 +368,7 @@ def _exec_mcp(binary, root, clone, stage, session, evidence, env):
 
 def execute(args, infrastructure=None, plan=None, producer=None,
             clone_effect=None, start_effect=None, exec_effect=None,
-            identity_factory=None, binary_admission=None):
+            identity_factory=None, binary_admission=None, capacity_probe=None):
     if args.config is not None:
         os.environ["FAROL_VM_CONFIG"] = args.config
     # Production dependencies: ONLY existing task-owned VM contract and
@@ -372,6 +392,9 @@ def execute(args, infrastructure=None, plan=None, producer=None,
     _private_directory(root)
     _private_directory(root / "machines")
     _private_directory(settings)
+    env = {key: os.environ[key] for key in ("HOME", "USER", "TMPDIR") if key in os.environ}
+    env.update(PATH="/usr/bin:/bin:/usr/sbin:/sbin", TERMINAL_MAC_HOME=str(root))
+    (capacity_probe or _capacity)(binary, root, env)
     clone, run = (identity_factory or identities)()
     demand(CLONE.fullmatch(clone) and RUN.fullmatch(run), "VM_DEV_IDENTITY_INVALID")
     try:
