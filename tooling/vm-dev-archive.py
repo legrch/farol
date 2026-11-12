@@ -81,7 +81,7 @@ def archive_dev(output, expected_receipt, inspect_existing=False):
                     helper.unchanged(file, info)
                 else:
                     expected = hashlib.sha256()
-                    for chunk in helper.regular_chunks(file, helper.MAX_EXPANDED, info): expected.update(chunk)
+                    for chunk in helper.public_chunks(file, info): expected.update(chunk)
                     actual = hashlib.sha256()
                     with package.open(entry) as data:
                         for chunk in iter(lambda: data.read(1024 * 1024), b''): actual.update(chunk)

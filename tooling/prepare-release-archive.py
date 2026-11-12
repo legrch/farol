@@ -331,6 +331,21 @@ def members():
     return entries
 
 
+def public_chunks(path, info):
+    """Read-only streaming privacy admission shared by creation and inspection."""
+    tail = b""
+    # The preceding source verifier authenticates this exact vendor runtime.
+    # Public compiler paths there are not local owner evidence.
+    owned = not path.is_relative_to(APP / "Contents/Frameworks/Electron Runtime.app")
+    for chunk in regular_chunks(path, MAX_EXPANDED, info):
+        inspected = tail + chunk
+        require(not owned or (str(ROOT).encode() not in inspected and not re.search(
+            rb"(?:/Users/[^/\s\x00\"']+|/home/[^/\s\x00\"']+|/private/var/folders/|/var/folders/|[A-Za-z]:\\Users\\)",
+            inspected)), "PRIVATE_PATH_IN_APP")
+        tail = inspected[-max(512, len(str(ROOT).encode())):]
+        yield chunk
+
+
 def add_member(archive, path, name, info):
     unchanged(path, info)
     member = zipfile.ZipInfo(name)
@@ -343,20 +358,7 @@ def add_member(archive, path, name, info):
         archive.writestr(member, os.readlink(path).encode())
     else:
         with archive.open(member, "w") as target:
-            tail = b""
-            # The preceding full source package verifier authenticates this
-            # exact vendor tree. Public compiler paths inside unmodified
-            # Electron are not local owner evidence. Scan every Farol-owned
-            # resource/native component; whole-tree entry policy still applies.
-            owned = not path.is_relative_to(APP / "Contents/Frameworks/Electron Runtime.app")
-            for chunk in regular_chunks(path, MAX_EXPANDED, info):
-                inspected = tail + chunk
-                # Scan bytes, including native executables, without buffering
-                # the bundle. Fixed system sandbox literals are not owner data.
-                require(not owned or (str(ROOT).encode() not in inspected and not re.search(
-                    rb"(?:/Users/[^/\s\x00\"']+|/home/[^/\s\x00\"']+|/private/var/folders/|/var/folders/|[A-Za-z]:\\Users\\)",
-                    inspected)), "PRIVATE_PATH_IN_APP")
-                tail = inspected[-max(512, len(str(ROOT).encode())):]
+            for chunk in public_chunks(path, info):
                 target.write(chunk)
     unchanged(path, info)
 
