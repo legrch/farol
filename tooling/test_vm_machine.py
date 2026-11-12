@@ -68,13 +68,13 @@ class VmMachineSpecTests(unittest.TestCase):
             settings.mkdir(parents=True)
             config = settings / 'vm-smoke.json'
             config.write_text(json.dumps({'terminal_mac': str(home / 'tools/terminal-mac'),
-                                          'vm_home': str(settings / 'terminal-mac'),
+                                          'vm_home': str(home / 'Library/Application Support/terminal-mac'),
                                           'vm': 'pilot', 'terminal_point': [1, 2], 'timeout': 180}))
             os.environ['FAROL_VM_TESTING_DIRECTORY'] = settings.name
             try:
                 binary, root, resolved = vm_machine.infrastructure(home=home)
                 self.assertEqual(binary, home / 'tools/terminal-mac')
-                self.assertEqual(root, settings / 'terminal-mac')
+                self.assertEqual(root, home / 'Library/Application Support/terminal-mac')
                 self.assertEqual(resolved, settings)
             finally:
                 os.environ.pop('FAROL_VM_TESTING_DIRECTORY', None)
@@ -88,7 +88,7 @@ class VmMachineSpecTests(unittest.TestCase):
             self.assertEqual(vm_machine.prepared_base(settings), 'farol-base-1')
             config = settings / 'vm-smoke.json'
             base = {'terminal_mac': str(home / 'tools/terminal-mac'),
-                    'vm_home': str(settings / 'terminal-mac'), 'vm': 'pilot'}
+                    'vm_home': str(home / 'Library/Application Support/terminal-mac'), 'vm': 'pilot'}
             config.write_text(json.dumps(base))
             self.assertEqual(vm_machine.prepared_base(settings), 'farol-base-1')
             config.write_text(json.dumps(dict(base, prepared_base='example-base-2')))
@@ -165,6 +165,21 @@ class VmMachineSpecTests(unittest.TestCase):
             finally:
                 os.environ.pop('FAROL_VM_TESTING_DIRECTORY', None)
                 os.environ.pop('FAROL_VM_CONFIG', None)
+
+    def test_root_rejects_traversal_and_ancestor_aliases_before_invocation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp).resolve()
+            canonical = home / 'Library/Application Support/terminal-mac'
+            canonical.mkdir(parents=True)
+            outside = home / 'outside'
+            outside.mkdir()
+            (canonical / 'alias').symlink_to(outside, target_is_directory=True)
+            for root in (canonical / '../product', canonical / 'alias/nested', home / 'terminal-mac/unrelated'):
+                with self.subTest(root=root), mock.patch.object(vm_machine.subprocess, 'run') as invoked:
+                    with self.assertRaises(ValueError):
+                        vm_machine.admit_vm_root(root, home)
+                    invoked.assert_not_called()
+            vm_machine.admit_vm_root(canonical / 'new-store', home)
 
     def test_infrastructure_requires_a_single_level_testing_directory(self):
         original = os.environ.get('FAROL_VM_TESTING_DIRECTORY')

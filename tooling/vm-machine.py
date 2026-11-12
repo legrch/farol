@@ -35,6 +35,24 @@ def plan(spec, binary, root, ipsw):
     return command
 
 
+def admit_vm_root(root, home):
+    """Require a normalized physical path in the explicitly owned VM store."""
+    canonical = home / 'Library/Application Support/terminal-mac'
+    if not root.is_absolute() or '..' in root.parts:
+        raise ValueError('VM_HOME_OUTSIDE_TERMINAL_MAC_ROOT')
+    for directory in [*reversed(root.parents), root]:
+        try:
+            info = directory.lstat()
+        except FileNotFoundError:
+            break
+        if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+            raise ValueError('TESTING_DIRECTORY_ALIAS_FORBIDDEN')
+    if root.resolve(strict=False) != root:
+        raise ValueError('TESTING_DIRECTORY_ALIAS_FORBIDDEN')
+    if not root.is_relative_to(canonical):
+        raise ValueError('VM_HOME_OUTSIDE_TERMINAL_MAC_ROOT')
+
+
 def infrastructure(home=None):
     """One configuration owner: the private smoke infrastructure config when it
     exists, else the installed tool and canonical data root. The runtime root
@@ -67,12 +85,13 @@ def infrastructure(home=None):
             raise ValueError('INFRASTRUCTURE_CONFIG_REQUIRED')
         binary = Path(config['terminal_mac']).expanduser()
         root = Path(config['vm_home']).expanduser()
+        if str(root) != os.path.expanduser(config['vm_home']):
+            raise ValueError('INFRASTRUCTURE_CONFIG_INVALID')
         if not root.is_absolute():
             raise ValueError('INFRASTRUCTURE_CONFIG_INVALID')
         if root.is_symlink():
             raise ValueError('TESTING_DIRECTORY_ALIAS_FORBIDDEN')
-    if 'terminal-mac' not in root.parts:
-        raise ValueError('VM_HOME_OUTSIDE_TERMINAL_MAC_ROOT')
+    admit_vm_root(root, home)
     return binary, root, settings
 
 
