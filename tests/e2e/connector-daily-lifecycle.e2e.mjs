@@ -963,7 +963,9 @@ async function normalQuit(run) {
     run.evidence.observations.some(
       (entry) =>
         entry.kind === "FAROL_DAILY_QUIT" &&
-        entry.event === "will-quit" &&
+        // The quit drain ends with app.exit(0), which never emits will-quit;
+        // before-quit plus the drained last-quit record is the original quit.
+        entry.event === "before-quit" &&
         entry.pid === run.desktopPid &&
         entry.visibilityViolations === 0,
     ),
