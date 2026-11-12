@@ -210,7 +210,9 @@ class VmInstanceProvisioningTests(unittest.TestCase):
         receipt_dir = self.settings / 'base-receipts'
         receipt_dir.mkdir()
         self.receipt_file = receipt_dir / 'farol-base-1.json'
-        self.receipt_file.write_text(json.dumps(self.BASE_RECEIPT))
+        (self.root / 'machines/farol-base-1/hardware.bin').write_bytes(b'synthetic immutable hardware')
+        self.base_receipt = dict(self.BASE_RECEIPT, **vm_machine.base_binding(self.root, 'farol-base-1', 'hardware.bin'))
+        self.receipt_file.write_text(json.dumps(self.base_receipt))
 
     def planned(self, name='farol-test-1', base='farol-base-1'):
         return vm_machine.plan_instance(name, base, '/bin/terminal-mac', self.root, self.settings)
@@ -218,8 +220,31 @@ class VmInstanceProvisioningTests(unittest.TestCase):
     def test_plan_builds_the_exact_clone_command_and_receipt_paths(self):
         command, receipt_file, instance_receipt = self.planned()
         self.assertEqual(command, ['/bin/terminal-mac', 'clone', 'farol-base-1', 'farol-test-1'])
-        self.assertEqual(receipt_file, self.receipt_file)
+        self.assertEqual(receipt_file, self.receipt_file.read_bytes())
         self.assertEqual(instance_receipt, self.settings / 'instance-receipts' / 'farol-test-1.json')
+
+    def test_base_readiness_is_bound_to_store_machine_and_hardware(self):
+        for change in ({'base': 'other-base'}, {'vmHome': str(self.root / 'other')},
+                       {'storeIdentity': [0, 0]}, {'machineIdentity': [0, 0]},
+                       {'machineSha256': '0'*64}, {'hardwareSha256': '0'*64},
+                       {'hardwareFile': '../hardware.bin'}):
+            with self.subTest(change=change):
+                self.receipt_file.write_text(json.dumps(dict(self.base_receipt, **change)))
+                with self.assertRaisesRegex(ValueError, 'BASE_RECEIPT_INVALID'):
+                    self.planned()
+        self.receipt_file.write_text(json.dumps(self.base_receipt))
+        (self.root / 'machines/farol-base-1/hardware.bin').write_bytes(b'replaced hardware')
+        with self.assertRaisesRegex(ValueError, 'BASE_RECEIPT_INVALID'):
+            self.planned()
+
+    def test_provenance_uses_original_accepted_receipt_bytes(self):
+        _, accepted, destination = self.planned()
+        self.receipt_file.write_text('{"changed":"after admission"}')
+        clone = self.root / 'machines/farol-test-1'
+        clone.mkdir()
+        (clone / 'clone.json').write_text('{"to":"farol-test-1"}')
+        vm_machine.write_instance_receipt(destination, 'farol-test-1', 'farol-base-1', accepted, self.root)
+        self.assertEqual(json.loads(destination.read_text())['baseReceiptSha256'], hashlib.sha256(accepted).hexdigest())
 
     def test_offline_instance_plan_requests_an_offline_clone(self):
         command, _, _ = vm_machine.plan_instance('farol-test-1', 'farol-base-1',
@@ -326,6 +351,8 @@ class VmInstanceProvisioningTests(unittest.TestCase):
             self.planned()
         (self.root / 'machines/farol-base-1').mkdir()
         (self.root / 'machines/farol-base-1/machine.json').write_text('{}')
+        (self.root / 'machines/farol-base-1/hardware.bin').write_bytes(b'synthetic immutable hardware')
+        self.receipt_file.write_text(json.dumps(dict(self.BASE_RECEIPT, **vm_machine.base_binding(self.root, 'farol-base-1', 'hardware.bin'))))
         (self.root / 'machines/farol-test-1').mkdir()
         with self.assertRaisesRegex(ValueError, 'INSTANCE_COLLISION_REFUSED'):
             self.planned()
@@ -356,7 +383,7 @@ class VmInstanceProvisioningTests(unittest.TestCase):
         self.assertEqual(receipt['schema'], 'farol.vm-instance/1')
         self.assertEqual(receipt['base'], 'farol-base-1')
         self.assertEqual(receipt['cloneReceipt']['to'], 'farol-test-1')
-        self.assertEqual(receipt['baseReceiptSha256'], hashlib.sha256(receipt_file.read_bytes()).hexdigest())
+        self.assertEqual(receipt['baseReceiptSha256'], hashlib.sha256(receipt_file).hexdigest())
         self.assertFalse(list(instance_receipt.parent.glob('.*.tmp')))
         self.assertEqual(instance_receipt.stat().st_mode & 0o777, 0o600)
 

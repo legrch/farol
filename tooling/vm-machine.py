@@ -116,6 +116,38 @@ def prepared_base(settings):
     return value
 
 
+def read_regular(path, limit):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(fd, 'rb') as stream:
+        before = os.fstat(stream.fileno())
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or not 0 < before.st_size <= limit:
+            raise ValueError('BASE_RECEIPT_INVALID')
+        data = stream.read(limit + 1)
+        after = os.fstat(stream.fileno())
+        fields = lambda st: (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+        if len(data) != before.st_size or fields(before) != fields(after) or fields(after) != fields(path.lstat()):
+            raise ValueError('BASE_RECEIPT_INVALID')
+        return data
+
+
+def base_binding(root, base, hardware_file):
+    """Read-only binding to the physical store, selected machine and hardware."""
+    if (not isinstance(hardware_file, str) or
+            not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', hardware_file) or
+            hardware_file == 'machine.json'):
+        raise ValueError('BASE_RECEIPT_INVALID')
+    machine = root / 'machines' / base
+    for directory in (root, root / 'machines', machine):
+        info = directory.lstat()
+        if not stat.S_ISDIR(info.st_mode) or directory.resolve(strict=True) != directory:
+            raise ValueError('BASE_RECEIPT_INVALID')
+    identity = lambda path: [path.stat().st_dev, path.stat().st_ino]
+    return {'vmHome': str(root), 'storeIdentity': identity(root),
+            'machineIdentity': identity(machine), 'hardwareFile': hardware_file,
+            'machineSha256': hashlib.sha256(read_regular(machine / 'machine.json', 65536)).hexdigest(),
+            'hardwareSha256': hashlib.sha256(read_regular(machine / hardware_file, 1024*1024)).hexdigest()}
+
+
 def plan_instance(name, base, binary, root, settings, offline=False):
     """Pure planning for a clean run instance cloned from a prepared base.
 
@@ -132,7 +164,10 @@ def plan_instance(name, base, binary, root, settings, offline=False):
     receipt_file = settings / 'base-receipts' / (base + '.json')
     if not receipt_file.is_file() or receipt_file.stat().st_size > 65536:
         raise ValueError('BASE_RECEIPT_MISSING')
-    receipt = json.loads(receipt_file.read_text())
+    if receipt_file.resolve(strict=True) != receipt_file:
+        raise ValueError('BASE_RECEIPT_INVALID')
+    accepted_receipt = read_regular(receipt_file, 65536)
+    receipt = json.loads(accepted_receipt)
     if not isinstance(receipt, dict) or receipt.get('schema') != 'farol.vm-base/1':
         raise ValueError('BASE_RECEIPT_INVALID')
     if receipt.get('helper') == 'NOT_INSTALLED_SETUP_ASSISTANT_PENDING' or receipt.get('helper') != 'READY':
@@ -141,12 +176,17 @@ def plan_instance(name, base, binary, root, settings, offline=False):
         raise ValueError('OWNER_BASE_NOT_READY')
     if not (root / 'machines' / base / 'machine.json').is_file():
         raise ValueError('BASE_MACHINE_MISSING')
-    if (root / 'machines' / name).exists():
+    if receipt.get('base') != base:
+        raise ValueError('BASE_RECEIPT_INVALID')
+    binding = base_binding(root, base, receipt.get('hardwareFile'))
+    if any(receipt.get(key) != value for key, value in binding.items()):
+        raise ValueError('BASE_RECEIPT_INVALID')
+    if (root / 'machines' / name).exists() or (root / 'machines' / name).is_symlink():
         raise ValueError('INSTANCE_COLLISION_REFUSED')
     command = [str(binary), 'clone', base, name]
     if offline:
         command.append('--offline')
-    return command, receipt_file, settings / 'instance-receipts' / (name + '.json')
+    return command, accepted_receipt, settings / 'instance-receipts' / (name + '.json')
 
 
 def require_offline_instance(root, name):
@@ -177,13 +217,13 @@ def require_offline_instance(root, name):
         raise ValueError('OFFLINE_CLONE_CONFIG_INVALID')
 
 
-def write_instance_receipt(path, name, base, base_receipt_file, machine_root):
+def write_instance_receipt(path, name, base, accepted_base_receipt, machine_root):
     """Durable provenance for one provisioned instance; names and digests only."""
     receipt = {
         'schema': 'farol.vm-instance/1',
         'name': name,
         'base': base,
-        'baseReceiptSha256': hashlib.sha256(base_receipt_file.read_bytes()).hexdigest(),
+        'baseReceiptSha256': hashlib.sha256(accepted_base_receipt).hexdigest(),
         'cloneReceipt': json.loads((machine_root / 'machines' / name / 'clone.json').read_text()),
         'provisionedAt': int(time.time()),
     }

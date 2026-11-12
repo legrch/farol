@@ -443,7 +443,7 @@ def execute(args, infrastructure=None, plan=None, producer=None,
     _write_once(evidence, "selection.json", {
         "schema": "farol.vm-dev-selection/1",
         "runId": run, "instance": clone, "base": base,
-        "baseReceiptSHA256": hashlib.sha256(_regular(base_receipt, 65536)).hexdigest(),
+        "baseReceiptSHA256": hashlib.sha256(base_receipt).hexdigest(),
         "acceptedReceiptSHA256": args.expected_receipt_sha256,
         "acceptedArtifactSHA256": selected["artifactSha256"],
         "network": "base-network-unmodified",

@@ -85,6 +85,15 @@ For a new closed-run instance, add `--offline` to `--provision-instance`. The ba
 unchanged and the clone's stored configuration is checked before its receipt is written. This
 does not attest the running guest's isolation; that remains a separate qualification step.
 
+Readiness receipts must now bind the exact `base`, physical `vmHome`,
+`storeIdentity` and `machineIdentity` (`[st_dev, st_ino]` for the store and base
+directories), `machineSha256`, and the qualified immutable hardware file's
+single-component `hardwareFile` and `hardwareSha256`. The hardware file is selected
+by the base's independent qualification; the controller never guesses one or upgrades
+an old receipt. Missing or changed bindings refuse before cloning and require
+read-only requalification of the selected clean base. Provenance retains the digest
+of the exact receipt bytes admitted by the planner, even if its pathname later changes.
+
 Provisioning refuses to run until the base receipt records the owner setup
 (`OWNER_BASE_NOT_READY`) and never starts the instance. A clone copies the base disk,
 including any accounts and credentials already present; use a separately verified clean base

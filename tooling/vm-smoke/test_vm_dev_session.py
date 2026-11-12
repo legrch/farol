@@ -47,6 +47,11 @@ class Fixture(unittest.TestCase):
         self.base_receipt.write_text(json.dumps({
             "schema": "farol.vm-base/1", "base": "farol-base-1",
             "helper": "READY", "account": "tester-ready"}))
+        (base / 'hardware.bin').write_bytes(b'synthetic hardware identity')
+        machine = dev.module_from(ROOT / 'vm-machine.py', 'binding_fixture')
+        value = json.loads(self.base_receipt.read_text())
+        value.update(machine.base_binding(self.root, 'farol-base-1', 'hardware.bin'))
+        self.base_receipt.write_text(json.dumps(value))
         self.base_receipt.chmod(0o600)
         self.binary = self.root / "terminal-mac-test-only"
         self.binary.write_text("synthetic placeholder, never executed")
