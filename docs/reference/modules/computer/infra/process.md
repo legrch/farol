@@ -74,6 +74,16 @@ the helper entrypoint skipped by design outside a child invocation). Only the
 same documented legacy credential-alias test was excluded. This is native source
 evidence, not package, installed, live-provider or descendant-cleanup acceptance.
 
+Platform record `macos-26A434-arm64-installed-runtime-v23` requalifies
+`measurement.go` after the review fix that keeps Git/Python runtime resource
+recheck failures classified as `runtime_integrity` instead of
+`executable_integrity`. The Lead ran the same native command outside the sandbox
+on 2026-11-12 against the exact changed bytes later committed as `56597d57`,
+on macOS 27.0.1 build `26A434` arm64 with the module-cache Go 1.26.2 toolchain
+and approved Node 24.20.0. It passed: 251 tests PASS and one SKIP
+(`TestNativeDrainLeafHelper`), with only the documented legacy credential-alias
+test excluded. The same acceptance limits apply.
+
 Source registration is not release qualification. Disposable packaged MCP checks
 cover bounded Bash, synthetic Git and observation of an original result after
 MCP reconnect. Ordinary Git configuration/hooks, external Shell, cancellation and
