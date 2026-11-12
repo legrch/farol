@@ -178,6 +178,14 @@ The same private config may name the prepared base in `prepared_base`
 (default `farol-base-1`). Each run instance is still cloned only from a base
 whose own receipt under `base-receipts/` says helper READY and tester-ready.
 
+Preparing a base after a helper rebuild: the ad-hoc rebuild changes the helper's
+code identity, so in the guest remove TerminalMacGuest with "−" and add it again
+with "+" under **Privacy & Security → Device Control and Data Access** (macOS 27's
+name for the Accessibility list) and **Screen & System Audio Recording**. Turn off
+automatic macOS updates in the base (needs the guest account password). Stopping a
+guest shows macOS's own shutdown confirmation; `terminal-mac stop
+--confirm-guest-dialog` presses it once when the helper has Accessibility.
+
 The native `terminal-mac mcp` session keeps **one actual input lease** for its
 whole stdio lifetime, boots the selected accepted app once, and admits GUI
 input only after root/primary identity, foreground and AX window evidence.
