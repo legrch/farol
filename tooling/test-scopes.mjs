@@ -481,7 +481,7 @@ async function executeScope(args, stopSignal) {
       encoding: "utf8",
       timeout: 5000,
     }).trim();
-    if (!report.go.startsWith("go version go1.26.2 "))
+    if (!report.go.startsWith("go version go1.27.3 "))
       throw Error("TEST_GO_PREREQUISITE:" + report.go);
   } catch (error) {
     report.prerequisiteError = String(error);

@@ -226,7 +226,7 @@ async function moduleFixture(base, options = {}) {
 
 function binaryInfo(overrides = {}) {
   return {
-    GoVersion: "go1.26.2",
+    GoVersion: "go1.27.3",
     Path: `${MODULE}/cmd/farol`,
     Main: { Path: MODULE, Version: "(devel)" },
     Settings: [
@@ -260,7 +260,7 @@ async function fixture(options = {}) {
   await fs.writeFile(path.join(root, ".gitignore"), "_output/\nignored.go\n");
   await fs.writeFile(
     path.join(root, "go.mod"),
-    `module ${MODULE}\n\ngo 1.26.2\n\nrequire (\n${moduleVersions.map(([modulePath, version]) => `\t${modulePath} ${version}\n`).join("")})\n`,
+    `module ${MODULE}\n\ngo 1.27.3\n\nrequire (\n${moduleVersions.map(([modulePath, version]) => `\t${modulePath} ${version}\n`).join("")})\n`,
   );
   await fs.writeFile(
     path.join(root, "cmd/farol/main.go"),
@@ -331,7 +331,7 @@ case "$1" in
   version)
     if [ "$#" = 1 ]; then
       ${options.versionAction ?? ""}
-      printf '%s\\n' ${quote(options.version ?? "go version go1.26.2 darwin/arm64")}
+      printf '%s\\n' ${quote(options.version ?? "go version go1.27.3 darwin/arm64")}
     else
       ${options.identityAction ?? ""}
       printf '%s\\n' ${quote(options.rawInfo ?? JSON.stringify(options.info ?? binaryInfo({ Deps: modules.inputs.map(({ modulePath, version }, index) => ({ Path: modulePath, Version: version, Sum: testH1(modules.filesByModule[index]) })) })))}
@@ -377,7 +377,7 @@ esac
   const toolchain = {
     root: sdk,
     treeSha256: await measureGoToolchain(sdk),
-    version: "go1.26.2",
+    version: "go1.27.3",
     ...platform,
   };
   return {
@@ -429,7 +429,7 @@ describe("candidate-local Go backend build contract", () => {
       sourceTreeDigest: f.identity.sourceTreeDigest,
       inputExact: true,
       entry: "./cmd/farol",
-      goVersion: "go1.26.2",
+      goVersion: "go1.27.3",
       goToolchainSha256: f.toolchain.treeSha256,
       ...platform,
       cgoEnabled: false,
@@ -489,7 +489,7 @@ describe("candidate-local Go backend build contract", () => {
     }
   });
 
-  it.each([undefined, { version: "go1.26.2" }])(
+  it.each([undefined, { version: "go1.27.3" }])(
     "refuses an unauthenticated SDK before compiler execution: %j",
     async (toolchain) => {
       const f = await fixture();
