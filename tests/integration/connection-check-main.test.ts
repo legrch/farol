@@ -2,6 +2,8 @@ import fs from "node:fs";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
 import { parse } from "@babel/parser";
+import { Client } from "@modelcontextprotocol/client";
+import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { expect, it, vi } from "vitest";
 import {
   runExplicitConnectionCheck,
@@ -12,6 +14,9 @@ import {
 } from "../../apps/desktop/connection-check-command.ts";
 import { prepareConnectorCheckDocument } from "../../apps/desktop/bridge/connector-check-readiness.ts";
 import { connectorVerificationProof } from "../../src/apps/desktop/connector-verification-proof.ts";
+import { currentConnectorAttachment } from "../../src/apps/desktop/connector-app-receipt-wait.ts";
+import { ComputerBridge } from "../../apps/desktop/bridge/computer.ts";
+import { createGoComputerMcpServer } from "../../apps/desktop/bridge/computer-mcp.ts";
 import { selectedConnectorApp } from "../../src/pkg/product-settings/connector-app-selection.ts";
 import { connectorWorkspaceSelection } from "../../src/pkg/product-settings/connector-workspace-selection.ts";
 import {
@@ -48,6 +53,12 @@ const declaration = ["connectorAppBindingCurrent", "testConnectionCommand"]
     return source.slice(node.start, node.end);
   })
   .join("\n");
+const setupNode = tree.program.body.find(
+  (node) =>
+    node.type === "FunctionDeclaration" &&
+    node.id?.name === "verifySecureMcpApp",
+)!;
+const setupDeclaration = source.slice(setupNode.start!, setupNode.end!);
 const originalId = "0311add3-b03c-4f89-b916-aea6a0a39242";
 const checkId = "49a0cb44-5c67-4aae-9b56-41db024507d3";
 const digest = "d".repeat(64);
@@ -90,11 +101,14 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap", empty = false) {
   let first = true,
     receiptAvailable = false;
   let sends = 0;
+  let armedCheckId: string | undefined;
   const authenticated = {
     state: "authenticated" as const,
     binding: { sequence: 1, documentGeneration: 1 },
   };
   const route = {
+    open: async () => ({ status: "opened" as const }),
+    openTemporaryChat: async () => ({ status: "opened" as const }),
     captureManualTaskTarget: vi.fn(() => () => true),
     hasPendingReadinessDocument: () => false,
     observeSignInStatus: vi.fn(async () => authenticated),
@@ -176,7 +190,7 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap", empty = false) {
         expect(input.mode).toBe(mode);
         const prompt =
           mode === "status"
-            ? `computer_connection_status ${checkId}`
+            ? `computer_connection_status ONCE with the exact argument checkId "${checkId}"`
             : "bootstrap-original";
         return {
           operationId: originalId,
@@ -203,6 +217,8 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap", empty = false) {
                 : input.stage === "refuse"
                   ? "refused_before_send"
                   : "outcome_unknown";
+        if (input.stage === "dispatch" && mode === "status")
+          armedCheckId = checkId;
         return {
           operationId: originalId,
           phase,
@@ -238,6 +254,8 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap", empty = false) {
     connectionCheckRuntimeReady,
     prepareConnectorCheckDocument,
     connectorVerificationProof,
+    currentConnectorAttachment,
+    randomUUID: () => originalId,
     selectedConnectorApp,
     connectorWorkspaceSelection,
     ProductConfigurationResultSchema,
@@ -254,6 +272,7 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap", empty = false) {
     quitInProgress: false,
     installedUpdateAdmission: false,
     buildIdentity: { buildId: fixtureBuildId },
+    runtimeEnvironment: "test",
     secureMcpConnectorRuntime: {
       isRunning: () => true,
       hasUnresolvedEffect: () => false,
@@ -285,8 +304,129 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap", empty = false) {
     publish,
     legacyExists,
     sends: () => sends,
+    runSetup: () =>
+      vm.runInContext(
+        stripTypeScriptTypes(setupDeclaration + "\nverifySecureMcpApp();", {
+          mode: "strip",
+        }),
+        context,
+      ) as Promise<ProductConfigurationResult>,
+    providerStatus: (id?: string) => {
+      if (id === undefined || id !== armedCheckId) {
+        receiptAvailable = false;
+        return { binding };
+      }
+      receiptAvailable = true;
+      return { binding, checkId: id };
+    },
   };
 }
+
+it.each(["exact", "wrong", "missing"] as const)(
+  "existing-attachment Setup Verify accepts only the armed provider status ID: %s",
+  async (correlation) => {
+    const f = fixture("status");
+    f.settings.connectors.secureMcp.challenge = null;
+    expect(
+      currentConnectorAttachment(f.settings, fixtureBuildId),
+    ).not.toBeNull();
+    // Actual Setup/Main + coordinator + public MCP tool. Go persistence and
+    // arming are scripted ports; boot race tests qualify the Go slot contract.
+    const server = createGoComputerMcpServer(
+      new ComputerBridge({
+        request: async () => {
+          throw Error("unexpected workspace IO");
+        },
+      }),
+      {
+        ownerId: "owner",
+        sessionId: "session",
+        taskId: "task",
+        taskEpoch: "1",
+        participantId: "participant",
+        turnId: "turn",
+        generation: "1",
+      },
+      { profileId: "profile", backendGeneration: "backend" },
+      {
+        fence: {
+          acquireAdmission: async () => ({
+            admitted: true,
+            release: async () => {},
+          }),
+        },
+        connectionStatus: { observe: async (id) => f.providerStatus(id) },
+      },
+    );
+    const client = new Client({
+      name: "setup-status-regression",
+      version: "1.0.0",
+    });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await Promise.all([client.connect(ct), server.connect(st)]);
+    let sends = 0;
+    try {
+      f.route.runReadonlyTask.mockImplementation(
+        async (prompt, _attachments, observer) => {
+          expect(prompt).toContain("computer_connection_status");
+          const requestedId = prompt.match(/checkId "([^"]+)"/u)?.[1];
+          expect(requestedId).toBe(checkId);
+          await observer.onDispatchIntent!();
+          expect(observer.beforeSend!()).toBe(true);
+          sends++;
+          await observer.onSendAcknowledged!();
+          const suppliedId =
+            correlation === "exact"
+              ? requestedId
+              : correlation === "wrong"
+                ? originalId
+                : undefined;
+          await client.callTool({
+            name: "computer_connection_status",
+            arguments: suppliedId === undefined ? {} : { checkId: suppliedId },
+          });
+          expect(await observer.readConnectorReceipt!()).toBe(
+            correlation === "exact",
+          );
+          return { state: "completed", code: null };
+        },
+      );
+      const result = await f.runSetup();
+      expect(result).toMatchObject(
+        correlation === "exact"
+          ? {
+              ok: true,
+              evidence: { kind: "connector.connection-check", retained: false },
+            }
+          : { ok: false, error: "CONNECTION_CHECK_OUTCOME_UNKNOWN" },
+      );
+      expect(sends).toBe(1);
+      expect(f.publish).toHaveBeenCalledTimes(correlation === "exact" ? 1 : 0);
+      expect(f.core.prepareConnectionCheck).toHaveBeenCalledWith(
+        expect.objectContaining({ mode: "status" }),
+      );
+      // Repeated observation of this original operation cannot Send again.
+      expect(await f.run()).toMatchObject(
+        correlation === "exact"
+          ? { ok: true, evidence: { retained: true } }
+          : { ok: false, error: "CONNECTION_CHECK_OUTCOME_UNKNOWN" },
+      );
+      expect(sends).toBe(1);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  },
+);
+it("Setup verification keeps its main browser route while a task is selected", async () => {
+  const f = fixture("status");
+  f.settings.connectors.secureMcp.challenge = null;
+  f.context.selectedTaskId = "selected-task";
+  // No task browser is available: Setup must retain its own route.
+  expect(await f.runSetup()).toMatchObject({ ok: true });
+  expect(f.sends()).toBe(1);
+  expect(f.publish).toHaveBeenCalledTimes(1);
+});
 it("real Main dispatch selects the new explicit handler, not Deep Test or repair", () => {
   const node = tree.program.body.find(
     (x) =>

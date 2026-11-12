@@ -5866,10 +5866,12 @@ async function checkSecureMcpAttachment(
   }
 }
 
-// Only this explicit command wires the new Go-owned original check to a Send.
-// Startup, ordinary Deep Test and separate-app recovery never invoke it.
+// Explicit connection checks and already-attached Setup verification share the
+// Go-owned dispatch/receipt contract. Startup, Deep Test and separate-app
+// recovery never invoke it.
 async function testConnectionCommand(
   command: ExplicitConnectionCheck,
+  origin: "selected-task" | "setup" = "selected-task",
 ): Promise<ProductConfigurationResult> {
   const core = desktopGoCore;
   const config = configuration;
@@ -5906,9 +5908,10 @@ async function testConnectionCommand(
             "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
           );
         }
-        const route = command.taskId
-          ? liveTaskRoutes.get(command.taskId)
-          : chatGptRoute;
+        const route =
+          origin !== "setup" && command.taskId
+            ? liveTaskRoutes.get(command.taskId)
+            : chatGptRoute;
         const owner = window;
         const originalDocument = route?.captureManualTaskTarget();
         if (!route || !owner || owner.isDestroyed() || !originalDocument)
@@ -5985,7 +5988,7 @@ async function testConnectionCommand(
             window === owner &&
             !owner.isDestroyed() &&
             (selectedTaskId ?? "") === command.taskId &&
-            (command.taskId
+            (origin !== "setup" && command.taskId
               ? liveTaskRoutes.get(command.taskId)
               : chatGptRoute) === route &&
             connectionCheckRuntimeReady(secureMcpConnectorRuntime) &&
@@ -6106,8 +6109,8 @@ async function testConnectionCommand(
   });
 }
 
-// Separately governed setup/recovery verifier. The explicit toolbar does not
-// use this legacy workflow or inherit its repair/separate-consent behavior.
+// Bootstrap and separate-app recovery retain their existing challenge workflow.
+// Already-attached Setup checks use the same Go owner as the explicit toolbar.
 async function verifySecureMcpApp(
   separate?: SeparateAppVerificationScope,
 ): Promise<ProductConfigurationResult> {
@@ -6123,6 +6126,26 @@ async function verifySecureMcpApp(
   const verificationCore = desktopGoCore;
   if (!verificationCore)
     return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
+  const initial = configuration.snapshot();
+  if (!separate && initial.status === "ready") {
+    const workspaceId = connectorWorkspaceSelection(initial.settings);
+    if (
+      workspaceId !== undefined &&
+      currentConnectorAttachment(
+        initial.settings,
+        buildIdentity.buildId,
+        workspaceId,
+      )
+    )
+      return testConnectionCommand(
+        {
+          kind: "connector.test-connection",
+          operationId: randomUUID(),
+          taskId: selectedTaskId ?? "",
+        },
+        "setup",
+      );
+  }
   // Reserve both routes before the first await so concurrent IPC calls cannot
   // both pass the check and race to claim or release the same verification.
   chatGptTaskAdmission = true;
@@ -6131,7 +6154,6 @@ async function verifySecureMcpApp(
   let receiptPending = false;
   let expectedBinding: ConnectorAppVerificationBinding | null = null;
   let verificationRoute: ChatGptRoute | null = null;
-  let statusCheckId: string | null = null;
   try {
     const snapshot = configuration.snapshot();
     if (snapshot.status !== "ready")
@@ -6144,15 +6166,7 @@ async function verifySecureMcpApp(
     if (appName === null)
       return configurationFailure("CONNECTOR_APP_TARGET_REQUIRED");
     const workspaceId = connectorWorkspaceSelection(settings);
-    const existing =
-      !separate && workspaceId !== undefined
-        ? currentConnectorAttachment(
-            settings,
-            buildIdentity.buildId,
-            workspaceId,
-          )
-        : null;
-    const proofScope = existing ?? challenge;
+    const proofScope = challenge;
     if (
       !chatGptTaskAdmissionReady() ||
       quitInProgress ||
@@ -6175,7 +6189,6 @@ async function verifySecureMcpApp(
       return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
     }
     requestedWorkspaceId = workspaceId;
-    if (existing) statusCheckId = randomUUID();
     expectedBinding = {
       tunnelId: connector.tunnelId,
       connectorGeneration: connector.generation,
@@ -6299,11 +6312,10 @@ async function verifySecureMcpApp(
     const stateRoot = secureMcpLaunchRoot();
     try {
       if (
-        statusCheckId === null &&
-        (await connectorAppVerificationAttemptExists(
+        await connectorAppVerificationAttemptExists(
           stateRoot,
           proofScope.challengeSha256,
-        ))
+        )
       ) {
         return configurationFailure(
           "CONNECTOR_APP_VERIFICATION_ALREADY_ATTEMPTED",
@@ -6338,11 +6350,9 @@ async function verifySecureMcpApp(
       return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
     }
     const prompt =
-      statusCheckId !== null
-        ? `Use the selected ${appName} app to call computer_connection_status once. Do not read files or run commands. Reply briefly with the result.`
-        : workspaceId === null
-          ? `Use the selected ${appName} app to call farol_connector_verify_catalogue once with challenge "${challenge!.value}". No workspace is configured. Do not read files or run commands. Reply briefly with the result.`
-          : `Use the selected ${appName} app to call farol_connector_verify once with challenge "${challenge!.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`;
+      workspaceId === null
+        ? `Use the selected ${appName} app to call farol_connector_verify_catalogue once with challenge "${challenge!.value}". No workspace is configured. Do not read files or run commands. Reply briefly with the result.`
+        : `Use the selected ${appName} app to call farol_connector_verify once with challenge "${challenge!.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`;
     let claimed = false;
     const timingId = runtimeEnvironment === "dev" ? randomUUID() : null;
     const result = await verificationRoute.runReadonlyTask(
@@ -6369,8 +6379,6 @@ async function verifySecureMcpApp(
             return false;
           const observed =
             await verificationCore.observeComputerConnectorVerification();
-          if (statusCheckId !== null && observed.checkId !== statusCheckId)
-            return false;
           const proof = connectorVerificationProof(observed);
           if (!proof || desktopGoCore !== verificationCore) return false;
           const { receipt, workspaceId } = proof;
@@ -6406,22 +6414,17 @@ async function verifySecureMcpApp(
             !connectorAppBindingCurrent(admitted.settings, expectedBinding)
           )
             throw new Error("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
-          if (statusCheckId !== null)
-            await verificationCore.expectComputerConnectorStatusCheck(
-              statusCheckId,
-            );
-          else
-            await prepareConnectorAppVerificationAttempt(
-              stateRoot,
-              proofScope.challengeSha256,
-              async () =>
-                (
-                  await configuration!.recordSecureMcpAppPending(
-                    runtime.runtimeGeneration,
-                  )
-                ).ok,
-              separateAttempt,
-            );
+          await prepareConnectorAppVerificationAttempt(
+            stateRoot,
+            proofScope.challengeSha256,
+            async () =>
+              (
+                await configuration!.recordSecureMcpAppPending(
+                  runtime.runtimeGeneration,
+                )
+              ).ok,
+            separateAttempt,
+          );
           claimed = true;
         },
       },
@@ -6531,8 +6534,6 @@ async function verifySecureMcpApp(
         if (desktopGoCore !== verificationCore) return { state: "changed" };
         const state =
           await verificationCore.observeComputerConnectorVerification();
-        if (statusCheckId !== null && state.checkId !== statusCheckId)
-          return null;
         const proof = connectorVerificationProof(state);
         if (!proof) return null;
         return {
