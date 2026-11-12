@@ -91,6 +91,59 @@ const startInput = {
   launchContractSha256: "c".repeat(64),
 };
 
+it.each(["probe", "wait"])(
+  "cooperatively stops readiness after cancellation during %s without replay or claiming exit",
+  async (boundary) => {
+    const selected = await fixture();
+    const child = new FakeChild();
+    const cancellation = new AbortController();
+    let now = 0;
+    const start = vi.fn<ConnectorProcessStarter>(async (command) => {
+      await fs.writeFile(
+        option(command, "--health.url-file"),
+        "http://127.0.0.1:43125\n",
+        { mode: 0o600 },
+      );
+      return child;
+    });
+    const get = vi.fn(async () => {
+      if (boundary === "probe") cancellation.abort();
+      return boundary === "probe";
+    });
+    const runtime = new SecureMcpConnectorRuntime(
+      {
+        root: selected.runtimeRoot,
+        homePath: selected.root,
+        tempPath: selected.root,
+        readinessTimeoutMs: 100,
+      },
+      {
+        start,
+        get,
+        now: () => now,
+        wait: async (ms) => {
+          now += ms;
+          cancellation.abort();
+        },
+      },
+    );
+    await expect(
+      runtime.start({
+        ...startInput,
+        beforeEffect: () => {
+          if (cancellation.signal.aborted) throw Error("WITHDRAWN");
+        },
+      }),
+    ).rejects.toThrow("WITHDRAWN");
+    expect(start).toHaveBeenCalledOnce();
+    expect(get).toHaveBeenCalledOnce();
+    expect(runtime.isRunning()).toBe(true);
+    expect(child.signals).toEqual([]);
+    await runtime.stop();
+    expect(child.signals).toEqual(["SIGTERM"]);
+  },
+);
+
 async function observedRuntime(
   onLifecycleObservation?: (
     observation: ConnectorRuntimeLifecycleObservation,

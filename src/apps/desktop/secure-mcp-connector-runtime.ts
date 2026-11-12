@@ -995,6 +995,9 @@ export class SecureMcpConnectorRuntime {
       // A terminal tunnel does not release the anchor or group ownership.
       const terminal = terminalResult();
       if (terminal) return terminal;
+      // Retain a terminal original's classification before observing withdrawal.
+      // Cancellation ends readiness waiting; the child still requires Stop.
+      input.beforeEffect?.();
       if (child.exitCode !== null) {
         if (this.child === child) this.child = null;
         return {
@@ -1006,11 +1009,13 @@ export class SecureMcpConnectorRuntime {
       const healthBaseUrl = await this.readHealthBaseUrl();
       const afterRead = terminalResult();
       if (afterRead) return afterRead;
+      input.beforeEffect?.();
       if (healthBaseUrl !== null) {
         healthObserved = true;
         const ready = await this.get(`${healthBaseUrl}/readyz`);
         const afterProbe = terminalResult();
         if (afterProbe) return afterProbe;
+        input.beforeEffect?.();
         if (ready && this.child === child && child.exitCode === null) {
           this.healthBaseUrl = healthBaseUrl;
           phase.value = "active";
@@ -1020,6 +1025,9 @@ export class SecureMcpConnectorRuntime {
       const remaining = deadline - this.now();
       if (remaining <= 0) break;
       await this.wait(Math.min(50, remaining));
+      const afterWait = terminalResult();
+      if (afterWait) return afterWait;
+      input.beforeEffect?.();
     }
     const beforeCleanup = supersededResult();
     if (beforeCleanup) return beforeCleanup;

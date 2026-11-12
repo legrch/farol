@@ -959,6 +959,7 @@ function connectionAdmissionInProgress(): boolean {
 // It conveys no authority and is never restored from Activity or saved settings.
 let startupConnectionChecking = true;
 let connectorStartInFlight: Promise<void> | null = null;
+let connectorStartCancellation: AbortController | null = null;
 let startupConnectorResumeCancelled = false;
 let connectorTransportWatch: ConnectorTransportWatch<ConnectorTransportCapture> | null =
   null;
@@ -2182,6 +2183,9 @@ const routeBTaskSurfaces: RouteBTaskSurfaces = {
 const QUIT_DRAIN_DEADLINE_MS = 60_000;
 const QUIT_PREPARATION_MS = 10_000;
 const QUIT_RECORD_RESERVE_MS = 2_000;
+// Leave at least 40 seconds of the normal post-preparation drain for Go core
+// and recording. This bounds the whole dependent close, not a renewed budget.
+const CONNECTOR_START_QUIT_BUDGET_MS = 8_000;
 
 // What the start did with the connector's execution fence, kept privately
 // for diagnostics: whether the store was read and how many summaries it
@@ -3880,6 +3884,7 @@ async function stopAndConfirmComputerMcp(
   savedChat = savedChatBridgeRuntime,
   reason?: "owner_stop",
   originalStopParent?: string,
+  quitStartDeadlineAt?: number,
 ): Promise<void> {
   if (!connector) throw new Error("CONNECTOR_STOP_UNCONFIRMED");
   // Ordinary Stop is forbidden while C7 owns an unresolved original. Only
@@ -3910,6 +3915,7 @@ async function stopAndConfirmComputerMcp(
         drainComputerConnector({
           beginStop: () => lifecycle.beginStop(),
           startInFlight: inFlightStart,
+          startDeadlineAt: quitStartDeadlineAt,
           waitForMcpStop: () => lifecycle.waitForStop(),
           stopConnector: () => connector.stop(),
           closeSavedChat: async () => {
@@ -3923,6 +3929,11 @@ async function stopAndConfirmComputerMcp(
             } finally {
               // Withdraw the original Go owner even when the old adapter drain fails.
               // A failure remains unconfirmed; it cannot authorize a new launch.
+              if (
+                quitStartDeadlineAt !== undefined &&
+                Date.now() >= quitStartDeadlineAt
+              )
+                throw new Error("CONNECTOR_STOP_UNCONFIRMED");
               await core?.closeComputerConnector(reason, originalStopParent);
             }
           },
@@ -5304,6 +5315,8 @@ async function startSecureMcpConnectorObserved(
 async function observeConnectorStart(
   work: () => Promise<ProductConfigurationResult>,
 ): Promise<ProductConfigurationResult> {
+  const cancellation = new AbortController();
+  connectorStartCancellation = cancellation;
   let finish!: () => void;
   connectorStartInFlight = new Promise<void>((resolve) => {
     finish = resolve;
@@ -5313,6 +5326,8 @@ async function observeConnectorStart(
   } finally {
     finish();
     connectorStartInFlight = null;
+    if (connectorStartCancellation === cancellation)
+      connectorStartCancellation = null;
   }
 }
 
@@ -5328,6 +5343,16 @@ async function startAdmittedSecureMcpConnector(
   // and Go authority still decide every launch; a missing guard refuses recovery.
   const recoveryPermitted = () =>
     recoveryFrom === undefined || recoveryCurrent?.() === true;
+  const cancellation = connectorStartCancellation?.signal;
+  const startPermitted = () =>
+    !cancellation?.aborted &&
+    !quitInProgress &&
+    !installedUpdateAdmission &&
+    recoveryPermitted();
+  const startRefusal = () =>
+    recoveryPermitted()
+      ? configurationFailure("CONNECTOR_START_FAILED")
+      : transitionRefusal();
   if (!recoveryPermitted()) return transitionRefusal();
   if (!connectorTaskAdmission || !authorityTransitions.current())
     return transitionRefusal();
@@ -5342,6 +5367,7 @@ async function startAdmittedSecureMcpConnector(
   } catch {
     return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
   }
+  if (!startPermitted()) return startRefusal();
   if (
     !configuration ||
     !connectorCredentialStore ||
@@ -5375,12 +5401,14 @@ async function startAdmittedSecureMcpConnector(
     }
   }
   if (repair || resumeAfterQuit) {
+    if (!startPermitted()) return startRefusal();
     // The previous process has exited. Withdraw its live proof under this
     // start reservation before any new launch can succeed or be refused.
     // Historical completion remains available, but is never live readiness.
     const stopped = await configuration.recordSecureMcpStopped();
     if (!stopped.ok) return ProductConfigurationResultSchema.parse(stopped);
   }
+  if (!startPermitted()) return startRefusal();
   // The ordinary Computer route is the selected Go backend. Its absence
   // cannot fall back to a separate TS authority or native helper.
   const core = desktopGoCore;
@@ -5412,6 +5440,7 @@ async function startAdmittedSecureMcpConnector(
       path.join(directory, TUNNEL_CLIENT.entry),
     );
     if (!selected.ok) return selected;
+    if (!startPermitted()) return startRefusal();
     snapshot = configuration.snapshot();
     if (
       snapshot.status !== "ready" ||
@@ -5439,7 +5468,7 @@ async function startAdmittedSecureMcpConnector(
     return configurationFailure(refusal);
   }
   let credentialReference: string;
-  if (!recoveryPermitted()) return transitionRefusal();
+  if (!startPermitted()) return startRefusal();
   try {
     credentialReference = await connectorCredentialStore.reference();
   } catch (error) {
@@ -5451,7 +5480,7 @@ async function startAdmittedSecureMcpConnector(
     return configurationFailure("CONNECTOR_CREDENTIAL_STORE_FAILED");
   }
 
-  if (!recoveryPermitted()) return transitionRefusal();
+  if (!startPermitted()) return startRefusal();
   const runtimeId = randomUUID();
   const verificationChallenge = randomUUID();
   const verificationChallengeSha256 = createHash("sha256")
@@ -5461,7 +5490,7 @@ async function startAdmittedSecureMcpConnector(
   let launchContractSha256: string;
   try {
     await clearConnectorVerificationReceipt(secureMcpLaunchRoot());
-    if (!recoveryPermitted()) return transitionRefusal();
+    if (!startPermitted()) return startRefusal();
     const intentDigest = createHash("sha256")
       .update(
         JSON.stringify({
@@ -5486,8 +5515,7 @@ async function startAdmittedSecureMcpConnector(
     launchContractSha256 = opened.launchSha256;
     // An earlier Quit/update may have stopped admission while the contract
     // was being written. Do not clear its stop marker with a later prepare.
-    if (quitInProgress || installedUpdateAdmission || !recoveryPermitted())
-      return configurationFailure("CONNECTOR_START_FAILED");
+    if (!startPermitted()) return startRefusal();
     await computerMcpLifecycle().prepare(launchContractSha256);
   } catch (error) {
     if (error instanceof ConnectorHostError) {
@@ -5542,7 +5570,7 @@ async function startAdmittedSecureMcpConnector(
   }
 
   const beforeConnectorEffect = () => {
-    if (quitInProgress || installedUpdateAdmission || !recoveryPermitted()) {
+    if (!startPermitted()) {
       throw new Error("CONNECTOR_ADMISSION_WITHDRAWN");
     }
   };
@@ -5553,12 +5581,11 @@ async function startAdmittedSecureMcpConnector(
       launchContractSha256,
       phase,
     });
-  if (!recoveryPermitted()) return transitionRefusal();
+  if (!startPermitted()) return startRefusal();
   try {
     const resources = desktopExecutionResources();
     await resources.recheck();
-    if (quitInProgress || installedUpdateAdmission || !recoveryPermitted())
-      return configurationFailure("CONNECTOR_START_FAILED");
+    if (!startPermitted()) return startRefusal();
     await secureMcpConnectorRuntime.configure({
       beforeEffect: beforeConnectorEffect,
       executablePath: connector.tunnelClient.executablePath,
@@ -5584,7 +5611,7 @@ async function startAdmittedSecureMcpConnector(
         : "CONNECTOR_CONFIGURE_FAILED",
     );
   }
-  if (!recoveryPermitted()) return transitionRefusal();
+  if (!startPermitted()) return startRefusal();
   try {
     await secureMcpConnectorRuntime.doctor({
       beforeEffect: beforeConnectorEffect,
@@ -5603,8 +5630,7 @@ async function startAdmittedSecureMcpConnector(
   let started;
   // Quit closes new admission first. If it arrived while configure or
   // doctor was pending, do not launch a tunnel after its drain began.
-  if (quitInProgress || installedUpdateAdmission || !recoveryPermitted())
-    return configurationFailure("CONNECTOR_START_FAILED");
+  if (!startPermitted()) return startRefusal();
   try {
     started = await secureMcpConnectorRuntime.start({
       beforeEffect: beforeConnectorEffect,
@@ -5616,6 +5642,9 @@ async function startAdmittedSecureMcpConnector(
       launchContractSha256,
     });
   } catch {
+    // Withdrawal ends waiting, not child ownership. Quit's original Stop and
+    // receipt decide closure; do not publish it as an unreachable/retryable start.
+    if (!startPermitted()) return startRefusal();
     const failed = await recordConnectorRuntime(
       "unreachable",
       attempt("start"),
@@ -5638,7 +5667,7 @@ async function startAdmittedSecureMcpConnector(
   }
   // Retain an already-issued Start's real result even when its observation was
   // invalidated. That completion cannot authorize a new challenge publication.
-  if (!recoveryPermitted()) return transitionRefusal();
+  if (!startPermitted()) return startRefusal();
   const challenged = await configuration.recordSecureMcpChallenge({
     challenge: verificationChallenge,
     runtimeGeneration: started.runtimeGeneration,
@@ -5664,6 +5693,7 @@ async function startAdmittedSecureMcpConnector(
     afterChallenge.status === "ready" &&
     selectedConnectorApp(afterChallenge.settings.connectors.secureMcp) === null
   ) {
+    if (!startPermitted()) return startRefusal();
     const selected =
       await configuration.selectSecureMcpChatGptApp(retainedSelection);
     if (!selected.ok) return ProductConfigurationResultSchema.parse(selected);
@@ -14152,6 +14182,14 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       const connector = secureMcpConnectorRuntime;
       const core = desktopGoCore;
       const savedChat = savedChatBridgeRuntime;
+      const quitStartDeadlineAt =
+        connector && (connectorStartInFlight || startupConnectionChecking)
+          ? Math.min(
+              context.deadlineAt,
+              Date.now() + CONNECTOR_START_QUIT_BUDGET_MS,
+            )
+          : undefined;
+      connectorStartCancellation?.abort();
       let beforeCore: OwnedCloser | null = null;
       if (connector) {
         const inFlightStart = connectorStartInFlight;
@@ -14164,6 +14202,9 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
                 inFlightStart,
                 core,
                 savedChat,
+                undefined,
+                undefined,
+                quitStartDeadlineAt,
               );
             } finally {
               // Even an unconfirmed MCP drain must close account admission.
@@ -14196,6 +14237,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
                 )
             : null,
           () => Date.now() < context.deadlineAt,
+          quitStartDeadlineAt,
         ),
       );
       const model = modelLifecycle;
@@ -14222,6 +14264,10 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   });
   app.on("before-quit", (event) => {
     quitInProgress = true;
+    startupConnectorResumeCancelled = true;
+    // Cancel before optional Quit preparation can wait. Abort is idempotent;
+    // re-entrant Quit cannot create a new start, Stop, drain or cancellation.
+    connectorStartCancellation?.abort();
     processAuditObserver?.stop();
     connectorTransportWatch?.close();
     if (connectorTransportTimer) clearInterval(connectorTransportTimer);

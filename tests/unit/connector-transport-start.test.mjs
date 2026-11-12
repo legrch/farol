@@ -204,6 +204,8 @@ function fixture({ pause, startResult = originalStart, openError } = {}) {
     ),
   };
   const context = {
+    AbortController,
+    connectorStartCancellation: null,
     connectorRuntimeUncertain,
     restartedConnectorAppSelection,
     selectedConnectorApp,

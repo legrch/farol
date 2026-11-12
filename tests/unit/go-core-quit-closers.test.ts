@@ -429,6 +429,9 @@ describe("actual MCP stop retains its admitted saved-chat lifetime", () => {
       persistedProductAgentExpiry: null,
       hostCheckClients: [],
       connectorStartInFlight: null,
+      connectorStartCancellation: null,
+      startupConnectionChecking: false,
+      CONNECTOR_START_QUIT_BUDGET_MS: 8_000,
       modelLifecycle: null,
       routeBRuntime: null,
       callerRelayRuntime: null,
@@ -646,6 +649,9 @@ describe("actual desktop Quit collection", () => {
       persistedProductAgentExpiry: null,
       hostCheckClients: [],
       connectorStartInFlight: inFlightStart,
+      connectorStartCancellation: null,
+      startupConnectionChecking: false,
+      CONNECTOR_START_QUIT_BUDGET_MS: 8_000,
       secureMcpConnectorRuntime: connector,
       savedChatBridgeRuntime: savedChat,
       modelLifecycle: null,
@@ -710,6 +716,9 @@ describe("actual desktop Quit collection", () => {
           h.inFlightStart,
           h.core,
           h.savedChat,
+          undefined,
+          undefined,
+          expect.any(Number),
         );
         h.stopped.resolve();
       }
@@ -747,6 +756,9 @@ describe("actual desktop Quit collection", () => {
       h.inFlightStart,
       h.core,
       h.savedChat,
+      undefined,
+      undefined,
+      expect.any(Number),
     );
     expect(h.core.close).toHaveBeenCalledTimes(1);
     expect(h.savedChat.close).toHaveBeenCalledTimes(1);
