@@ -33,6 +33,121 @@ class Refused(Exception):
     pass
 
 
+# Failure evidence is a closed, content-free projection of untrusted tool output.
+# Raw stderr, argv, exception messages and process output are NEVER persisted.
+SAFE_ACTION_REASONS = frozenset((
+    'TERMINAL_GUARD_INVALID', 'TERMINAL_FOCUS_UNVERIFIED',
+    'TERMINAL_LAUNCH_UNAVAILABLE', 'TERMINAL_LAUNCH_UNCONFIRMED',
+    'TERMINAL_CAPABILITY_UNSUPPORTED', 'MAILBOX_TIMEOUT',
+    'CANCELLED', 'UNCLASSIFIED',
+    # terminal-mac compiled app-service closed OutcomeFailure reasons
+    'APP_SERVICE_INVALID', 'APP_SERVICE_BINDING', 'APP_SERVICE_BUSY', 'APP_SERVICE_UNRESOLVED',
+    'APP_SERVICE_EXPIRED', 'APP_SERVICE_REPLAY', 'APP_SERVICE_CUSTODY', 'APP_SERVICE_PAYLOAD_INVALID',
+    'APP_SERVICE_DIGEST', 'APP_SERVICE_UNSAFE_PATH', 'APP_SERVICE_IO', 'APP_SERVICE_NOT_INSTALLED',
+    'APP_SERVICE_RUNNING', 'APP_SERVICE_NOT_RUNNING', 'APP_SERVICE_APP_IDENTITY', 'APP_SERVICE_INSTALLED_COLLISION',
+    'APP_SERVICE_LAUNCH_UNKNOWN', 'APP_SERVICE_QUIT_UNKNOWN', 'APP_SERVICE_PUBLICATION_UNKNOWN',
+))
+
+# Closed vocabulary: arbitrary error strings (even uppercase) are not codes.
+# Keep this source-owned allowlist synchronized with deliberate failure contracts.
+SAFE_FAILURE_CODES = frozenset((
+    'UNCLASSIFIED',
+    # asset
+    'ASSET_FILE_INVALID', 'MANIFEST_INVALID', 'VERSION_INVALID', 'RELEASE_IDENTITY_INVALID',
+    'ARCHIVE_NAME_INVALID', 'SOURCE_IDENTITY_INVALID', 'DIGEST_INVALID', 'CHECKSUMS_INVALID',
+    'ARCHIVE_DIGEST_INVALID', 'ARCHIVE_PATH_INVALID', 'ARCHIVE_EXPANSION_LIMIT', 'ARCHIVE_ENTRY_INVALID',
+    'ARCHIVE_LINK_INVALID', 'ARCHIVE_LINK_ESCAPE', 'APP_MISSING', 'BUNDLE_IDENTITY_INVALID',
+    'ARTIFACT_MISSING', 'ARTIFACT_IDENTITY_MISMATCH', 'ARTIFACT_DIGEST_MISMATCH', 'DIGEST_TOOL_UNAVAILABLE',
+    'DIGEST_TOOL_FAILED',
+    # infra
+    'DOWNLOAD_DEADLINE_EXCEEDED', 'LATEST_NOT_STABLE', 'LATEST_TAG_INVALID', 'LATEST_ASSET_MISSING',
+    'LATEST_ASSET_URL_INVALID', 'DOWNLOAD_LIMIT', 'DOWNLOAD_SIZE_INVALID', 'HOST_DEV_STILL_RUNNING',
+    'DEV_SOURCE_IDENTITY_INVALID', 'DEV_PROFILE_UNSAFE', 'DEV_CONFIG_INVALID', 'DEV_EFFECT_UNKNOWN',
+    'DEV_TUNNEL_MISSING', 'DEV_CREDENTIAL_NOT_STORED', 'DEV_KEY_UNSAFE', 'DEV_KEY_CHANGED',
+    'DEV_KEY_INVALID', 'DEV_CONNECTION_CHANGED', 'HOST_PRODUCT_PROFILE_FORBIDDEN', 'ARTIFACT_SHARE_REQUIRED',
+    'INSTANCE_RECEIPT_UNSAFE', 'INSTANCE_RECEIPT_INVALID', 'INFRASTRUCTURE_CONFIG_REQUIRED', 'CONFIG_FIELDS_INVALID',
+    'BOOTSTRAP_MODE_INVALID', 'TIMEOUT_INVALID', 'TERMINAL_POINT_REQUIRED', 'TERMINAL_POINT_INVALID',
+    'TERMINAL_POINT_OUTSIDE_DISPLAY', 'MENU_POINT_INVALID', 'MENU_POINT_OUTSIDE_DISPLAY', 'VM_NAME_INVALID',
+    'VM_MISSING', 'VM_BUSY', 'VM_NOT_RUNNING', 'VM_MACHINE_FILE_INVALID',
+    'TERMINAL_MAC_PACKAGE_REQUIRED', 'TERMINAL_MAC_IDENTITY_INVALID', 'GUEST_TOOLS_MISSING', 'EXCHANGE_SHARE_REQUIRED',
+    'CLOSED_DOWNLOAD_FORBIDDEN', 'CLOSED_MODE_INVALID', 'CLOSED_REQUIRES_OFFLINE_MACHINE', 'CLOSED_REQUIRES_FRESH_VM_BOOT',
+    'CLOSED_NETWORK_CONFIG_CHANGED',
+    # guest
+    'DEADLINE_EXCEEDED', 'GUEST_CLI_TIMEOUT', 'GUEST_CLI_LAUNCH_FAILED', 'GUEST_CLI_FAILED',
+    'GUEST_CLI_REPLY_INVALID', 'GUEST_ACTION_FAILED', 'GUEST_PERMISSIONS_MISSING', 'GUEST_PHASE_FAILED',
+    'GUEST_APP_NOT_RUNNING', 'GUEST_APP_QUIT', 'GUEST_BUDGET_TOO_SHORT', 'GUEST_CLEANUP_UNCONFIRMED',
+    'GUEST_CLOSE_NOT_OBSERVED', 'GUEST_QUIT_DRAIN_UNCONFIRMED', 'GUEST_SERVER_NOT_STOPPED', 'GUEST_STATE_INVALID',
+    'GUEST_INPUT_LEASE_LOCK_UNSAFE', 'GUEST_INPUT_LEASE_HELD', 'GUEST_INPUT_LEASE_METADATA_CHANGED', 'GUEST_INPUT_LEASE_METADATA_UNCONFIRMED',
+    'GUEST_LEASE_RELEASE_UNCONFIRMED', 'GUEST_OPERATION_FENCE_CHANGED', 'GUEST_OPERATION_FENCE_UNINSPECTABLE', 'HELPER_UPDATE_CUSTODY_CHANGED',
+    'HELPER_UPDATE_CUSTODY_UNCONFIRMED', 'HELPER_UPDATE_CUSTODY_UNRESOLVED', 'UNRESOLVED_GUEST_OPERATION', 'UNRECONCILED_STAGING_RESIDUE',
+    'STAGING_CLEANUP_UNCONFIRMED', 'CAPTURE_INVALID', 'MENU_NOT_OBSERVED', 'MULTIPLE_GUEST_WINDOWS',
+    'RELAUNCH_PID_UNCHANGED', 'RUN_INTERRUPTED', 'HOST_IO_UNCONFIRMED', 'NEEDS_OWNER',
+    'TERMINAL_CAPABILITY_UNSUPPORTED', 'TERMINAL_FOCUS_UNVERIFIED', 'TERMINAL_GUARD_INVALID', 'TERMINAL_LAUNCH_UNAVAILABLE',
+    'TERMINAL_LAUNCH_UNCONFIRMED', 'TERMINAL_SHELL_READINESS_UNPROVEN',
+    # driver
+    'DRIVER_MANIFEST_INVALID', 'DRIVER_BUNDLE_MISSING', 'DRIVER_BUNDLE_UNSAFE', 'DRIVER_BUNDLE_DIGEST_INVALID',
+    'DRIVER_NODE_MISSING', 'DRIVER_NODE_UNSAFE', 'DRIVER_NODE_DIGEST_INVALID', 'E2E_CONTRACT_INVALID',
+    'E2E_ENTRY_NOT_DECLARED', 'E2E_CASE_SELECTION_INVALID', 'E2E_CASES_INVALID', 'E2E_CASES_INCOMPLETE',
+    'E2E_RESULT_SCHEMA_UNSUPPORTED', 'E2E_RESULT_BINDING_MISMATCH', 'E2E_RESULT_SHAPE_INVALID', 'E2E_RESULT_DETAILS_INVALID',
+    'E2E_PASS_INCOMPLETE', 'E2E_REPORTED_INVALID', 'E2E_FAIL_WITHOUT_FAILURE', 'E2E_REASON_INVALID',
+    'E2E_STATUS_UNSUPPORTED', 'E2E_PROCESS_UNCONFIRMED', 'E2E_PROCESS_FAILED', 'E2E_ASSERTIONS_FAILED',
+    'E2E_TEARDOWN_UNCONFIRMED', 'E2E_EVIDENCE_WRITE_FAILED', 'E2E_PROCESS_MISSING', 'E2E_PROCESS_UNSAFE',
+    'E2E_PROCESS_CHANGED', 'E2E_PROCESS_JSON_INVALID', 'E2E_RESULT_MISSING', 'E2E_RESULT_UNSAFE',
+    'E2E_RESULT_CHANGED', 'E2E_RESULT_JSON_INVALID',
+    # finite native guest app service and data-only payload producer
+    'APP_PAYLOAD_UNQUALIFIED', 'APP_PAYLOAD_UNSAFE', 'APP_PAYLOAD_DIGEST',
+    'APP_PAYLOAD_TOO_LARGE', 'APP_PAYLOAD_INCOMPATIBLE',
+    'APP_SERVICE_UNAVAILABLE', 'APP_SERVICE_UNRESOLVED', 'APP_SERVICE_OPTIONS_INVALID',
+    'APP_SERVICE_REPLY_INVALID', 'APP_SERVICE_BINDING_INVALID',
+    'APP_SERVICE_PHASE_UNCONFIRMED',
+)) | SAFE_ACTION_REASONS
+
+
+def safe_failure_code(error):
+    if isinstance(error, subprocess.TimeoutExpired):
+        return 'GUEST_CLI_TIMEOUT'
+    if isinstance(error, (InterruptedError, KeyboardInterrupt)):
+        return 'RUN_INTERRUPTED'
+    if isinstance(error, Refused) and error.args and isinstance(error.args[0], str):
+        value = error.args[0]
+        if value in SAFE_FAILURE_CODES:
+            return value
+        for prefix in ('GUEST_ACTION_FAILED:', 'GUEST_INPUT_LEASE_HELD:',
+                       'UNRECONCILED_STAGING_RESIDUE:'):
+            if value.startswith(prefix):
+                return prefix[:-1]
+        if value.startswith('FAILED:'):
+            return 'STAGING_CLEANUP_UNCONFIRMED'
+    if isinstance(error, OSError):
+        return 'HOST_IO_UNCONFIRMED'
+    return 'UNCLASSIFIED'
+
+
+def action_failure_envelope(output):
+    if not isinstance(output, str) or not 0 < len(output) <= 4096:
+        return None
+    try:
+        def unique_object(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError('duplicate key')
+                value[key] = item
+            return value
+        value = json.loads(output, object_pairs_hook=unique_object)
+    except (ValueError, TypeError, RecursionError):
+        return None
+    if not isinstance(value, dict) or set(value) != {'schema', 'reason', 'outcome', 'phase'}:
+        return None
+    if value['schema'] != 'terminal-mac.action-error/1' or not isinstance(value['reason'], str) or value['reason'] not in SAFE_ACTION_REASONS:
+        return None
+    if value['outcome'] not in ('noEffect', 'mutationUnknown', 'confirmedNoCopy'):
+        return None
+    if value['phase'] not in ('validation', 'admission', 'dispatch', 'output', 'unknown'):
+        return None
+    return value
+
+
 def require(ok, reason):
     if not ok:
         raise Refused(reason)
@@ -290,51 +405,159 @@ def staging_residue(inbox):
     for entry in sorted(inbox.iterdir()):
         if not entry.name.startswith('run-') or entry.is_symlink() or not entry.is_dir():
             continue
-        owned = [name for name in ('dev-key', 'dev-connection.json') if (entry / name).exists()]
+        owned = [name for name in ('dev-key', 'dev-connection.json', 'app-payload.json')
+                 if (entry / name).exists()]
+        try:
+            if any(item.name.startswith('blob-') for item in entry.iterdir()):
+                owned.append('blob-*')  # content-free evidence of partial native staging
+        except OSError:
+            owned.append('uninspectable')
         if owned:
             found.append({'directory': entry.name, 'entries': owned})
     return found
 
 
-def fence_metadata(machine):
-    """Presence plus the metadata the fence itself legitimately carries."""
-    fence_file = machine / '.farol-smoke-pending.json'
-    if not fence_file.exists():
-        return None
-    meta = {'present': True, 'runId': None, 'evidence': None}
+def bounded_custody_record(path, kind):
+    """Classify a named evidence file without following links or reading secrets.
+
+    Only a successful ENOENT establishes absence. The bounded descriptor is
+    checked against the path before and after the read. Values returned here
+    are allowlisted metadata, never key bytes, arbitrary paths or owner text.
+    """
     try:
-        value = json.loads(fence_file.read_text())
-    except (OSError, ValueError):
-        return meta
-    if isinstance(value, dict):
-        for key in ('runId', 'evidence'):
-            if isinstance(value.get(key), str):
-                meta[key] = value[key]
-    return meta
+        before = path.lstat()
+    except FileNotFoundError:
+        return {'state': 'absent'}
+    except OSError:
+        return {'state': 'unreadable'}
+    if not (stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and
+            before.st_uid == os.geteuid() and before.st_mode & 0o077 == 0 and
+            0 < before.st_size <= 4096):
+        return {'state': 'unsafe'}
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        with os.fdopen(fd, 'rb') as source:
+            opened = os.fstat(source.fileno())
+            ident = lambda x: (x.st_dev, x.st_ino, x.st_mode, x.st_nlink,
+                               x.st_size, x.st_mtime_ns, x.st_ctime_ns)
+            if not stat.S_ISREG(opened.st_mode) or ident(opened) != ident(before):
+                return {'state': 'unsafe'}
+            data = source.read(4097)
+            if len(data) != opened.st_size or ident(os.fstat(source.fileno())) != ident(before):
+                return {'state': 'unsafe'}
+        if ident(path.lstat()) != ident(before):
+            return {'state': 'unsafe'}
+    except FileNotFoundError:
+        return {'state': 'unsafe'}  # vanished between lstat and open
+    except OSError:
+        return {'state': 'unreadable'}
+    try:
+        def unique(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError('duplicate key')
+                value[key] = item
+            return value
+        value = json.loads(data, object_pairs_hook=unique)
+        if not isinstance(value, dict):
+            return {'state': 'malformed'}
+        if kind == 'lease':
+            if (set(value) != {'schema', 'owner', 'generation', 'acquiredAt'} or
+                value['schema'] != 'terminal-mac.input-lease/1' or
+                not isinstance(value['owner'], str) or not 0 < len(value['owner']) <= 128 or
+                type(value['generation']) is not int or value['generation'] < 0 or
+                type(value['acquiredAt']) is not int):
+                return {'state': 'malformed'}
+            return {'state': 'valid', 'ownerPresent': True, 'generation': value['generation']}
+        if kind == 'marker':
+            if (set(value) != {'schema', 'owner', 'deadline'} or
+                value['schema'] != 'terminal-mac.input-lease-flag/1' or
+                not isinstance(value['owner'], str) or not 0 < len(value['owner']) <= 128 or
+                type(value['deadline']) not in (int, float) or
+                not math.isfinite(value['deadline'])):
+                return {'state': 'malformed'}
+            return {'state': 'valid', 'expired': value['deadline'] <= time.time()}
+        if kind == 'fence':
+            run_id = value.get('runId')
+            if not isinstance(run_id, str) or not re.fullmatch(r'run-[A-Za-z0-9_-]{1,64}', run_id):
+                return {'state': 'malformed'}
+            return {'state': 'valid', 'runId': run_id}
+    except (ValueError, TypeError, KeyError, UnicodeError, RecursionError):
+        return {'state': 'malformed'}
+    return {'state': 'malformed'}
+
+
+def evidence_directory(path):
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return 'absent'
+    except OSError:
+        return 'unreadable'
+    return 'ready' if stat.S_ISDIR(info.st_mode) and not path.is_symlink() else 'unsafe'
+
+
+def fence_metadata(machine):
+    record = bounded_custody_record(machine / '.farol-smoke-pending.json', 'fence')
+    return None if record['state'] == 'absent' else {'present': True, **record}
+
+
+def phase_receipt_names(machine):
+    """Only guest phase receipt NAMES, not their text or script/payload bytes."""
+    root = machine / 'exchange' / 'farol-smoke'
+    if evidence_directory(root) != 'ready':
+        return []
+    names = []
+    try:
+        for run in sorted(root.iterdir()):
+            if len(names) >= 32:
+                break
+            if not re.fullmatch(r'run-[a-f0-9]{32}', run.name) or evidence_directory(run) != 'ready':
+                continue
+            receipts = []
+            for entry in sorted(run.iterdir()):
+                if len(receipts) >= 64:
+                    break
+                if re.fullmatch(r'[0-9]{4}-[a-z-]{1,48}\.result', entry.name):
+                    receipts.append(entry.name)
+            if receipts:
+                names.append({'runId': run.name, 'receiptNames': receipts})
+    except OSError:
+        return [{'state': 'unreadable'}]
+    return names
 
 
 def reconcile_staging(args, home=None):
-    """Read-only staging reconciliation report; touches nothing on disk.
-
-    No Runner is constructed, no VM is started or contacted, no lock is taken
-    and no file is written or deleted. Clearing a fence or removing residue
-    stays a manual owner action outside this tool.
-    """
-    machine = Path(args.vm_home).expanduser().resolve(strict=True) / 'machines' / args.vm
+    """Read-only evidence inventory. Never takes a lock or clears custody."""
+    root = Path(args.vm_home).expanduser().resolve(strict=True)
+    machine = root / 'machines' / args.vm
     refuse_host_profile_path(machine, IDENTITY, home)
-    require(machine.is_dir() and not machine.is_symlink(), 'VM_MISSING')
-    residue = staging_residue(machine / 'artifacts')
+    require(evidence_directory(root / 'machines') == 'ready' and
+            evidence_directory(machine) == 'ready', 'VM_MISSING')
+    artifacts = machine / 'artifacts'
+    staging_state = evidence_directory(artifacts)
+    residue = staging_residue(artifacts) if staging_state == 'ready' else []
     fence = fence_metadata(machine)
+    lease = bounded_custody_record(machine / 'input-lease.json', 'lease')
+    exchange = machine / 'exchange'
+    exchange_state = evidence_directory(exchange)
+    marker = (bounded_custody_record(exchange / '.input-lease.json', 'marker')
+              if exchange_state == 'ready' else
+              {'state': 'absent' if exchange_state == 'absent' else exchange_state})
     for item in residue:
         item['fence'] = fence is not None
-    found = bool(residue) or fence is not None
-    return {'status': 'STAGING_RESIDUE_FOUND' if found else 'CLEAN',
-            'fence': fence,
-            'residue': residue,
-            'requiredAction': ('Confirm the unresolved guest outcome manually, then delete the listed '
-                               'staging directories and clear the effect fence by hand; vm-smoke never '
-                               'deletes residue or clears a fence.'
-                               if found else 'None; the staging inbox is residue-free.')}
+    retained = (fence is not None or lease['state'] != 'absent' or marker['state'] != 'absent')
+    found = bool(residue) or retained or staging_state in ('unsafe', 'unreadable')
+    status = ('STAGING_RESIDUE_FOUND' if residue or fence is not None else
+              'CUSTODY_UNRESOLVED' if found else 'CLEAN')
+    return {'status': status, 'fence': fence, 'residue': residue,
+            'stagingState': staging_state,
+            'custody': {'lease': lease, 'helperMarker': marker, 'exchangeState': exchange_state},
+            'phaseReceipts': phase_receipt_names(machine) if exchange_state == 'ready' else [],
+            'requiredAction': ('Manual review of original guest effects and retained evidence is required '
+                               'before clearing anything; no records are automatically cleared.'
+                               if found else 'None; staging and custody evidence are residue-free.')}
 
 
 class Runner:
@@ -372,29 +595,111 @@ class Runner:
         self.driver_process_confirmed = False
         self.e2e_phase_error = None
         self.effect_owned = False
+        self.first_failure = None
+        self.first_failure_persistence = 'NOT_RUN'
+        self.secondary_failures = []
+        self.native_service_evidence = None
         self.effect_file = self.machine / '.farol-smoke-pending.json'
         # Never forward product configuration, proxy, Electron or loader environment.
         self.env = {k: os.environ[k] for k in ('HOME', 'USER', 'TMPDIR') if k in os.environ}
         self.env.update(PATH='/usr/bin:/bin:/usr/sbin:/sbin', TERMINAL_MAC_HOME=str(self.home))
 
-    def remaining(self):
+    def remaining(self, limit=30):
         left = self.deadline - time.monotonic()
         require(left > 0, 'DEADLINE_EXCEEDED')
-        return min(left, 30)
+        return min(left, limit)
+
+    def record_first_failure(self, reason, command='unknown', operation='unknown',
+                             return_code=None, outcome='UNKNOWN'):
+        if getattr(self, 'first_failure', None) is not None:
+            return
+        reason = reason if isinstance(reason, str) and reason in SAFE_FAILURE_CODES else 'UNCLASSIFIED'
+        stage = getattr(self, 'pending', None)
+        if not isinstance(stage, str) or not re.fullmatch(r'[a-z][a-z0-9:-]{0,95}', stage):
+            stage = 'unknown'
+        command = command if command in ('action', 'status', 'start', 'show', 'hide', 'stop', 'unknown') else 'unknown'
+        operation = operation if isinstance(operation, str) and re.fullmatch(r'[a-z][a-z-]{0,63}', operation) else 'unknown'
+        if outcome not in ('noEffect', 'mutationUnknown', 'confirmedNoCopy', 'UNKNOWN'):
+            outcome = 'UNKNOWN'
+        record = {'schema': 'farol.bootstrap-failure/1', 'runId': getattr(self, 'run_id', None),
+                  'stage': stage, 'command': command, 'operation': operation,
+                  'reason': reason, 'returnCode': return_code if type(return_code) is int and 0 <= return_code <= 255 else None,
+                  'outcome': outcome}
+        self.first_failure = record
+        self.first_failure_persistence = 'NOT_RUN'
+        try:
+            directory = getattr(self, 'out', None)
+            if directory is not None and directory.is_dir():
+                with (directory / 'first-failure.json').open('x') as target:
+                    target.flush()
+                    os.fchmod(target.fileno(), 0o600)
+                    json.dump(record, target, sort_keys=True)
+                    target.flush()
+                    os.fsync(target.fileno())
+                self.sync_directory(directory)
+                self.first_failure_persistence = 'DURABLE'
+        except (OSError, ValueError, TypeError):
+            # Never mask the first guest failure with an evidence-write failure.
+            self.first_failure_persistence = 'FAILED'
+
+    def record_secondary_failure(self, error):
+        entries = getattr(self, 'secondary_failures', None)
+        if entries is None:
+            self.secondary_failures = []
+            entries = self.secondary_failures
+        if len(entries) < 8:
+            entries.append(safe_failure_code(error))
 
     def cli(self, *args):
-        p = subprocess.run([str(self.binary), *map(str, args)], env=self.env,
-                           capture_output=True, text=True, timeout=self.remaining())
-        require(p.returncode == 0, 'GUEST_ACTION_FAILED:' + str(args[0]))
-        return json.loads(p.stdout)
+        command = args[0] if args and isinstance(args[0], str) else 'unknown'
+        operation = args[2] if command == 'action' and len(args) > 2 else command
+        # Status polling is explicitly read-only; transient missing-helper
+        # observations are not a completed bootstrap failure.
+        polling_status = command == 'action' and operation == 'status'
+        try:
+            # Only the finite native app-service gets a longer deadline:
+            # 90s guest request, 100s host wait, 120s owned marker lifetime.
+            # Legacy commands retain the original 30s cap.
+            native = (getattr(getattr(self, 'a', None), 'native_app_service', False) and command == 'action'
+                      and len(args) > 2 and args[2] == 'app-service')
+            p = subprocess.run([str(self.binary), *map(str, args)], env=self.env,
+                               capture_output=True, text=True,
+                               timeout=self.remaining(100) if native else self.remaining())
+        except subprocess.TimeoutExpired:
+            if not polling_status:
+                self.record_first_failure('GUEST_CLI_TIMEOUT', command, operation, outcome='UNKNOWN')
+            raise Refused('GUEST_CLI_TIMEOUT') from None
+        except OSError:
+            if not polling_status:
+                self.record_first_failure('GUEST_CLI_LAUNCH_FAILED', command, operation, outcome='noEffect')
+            raise Refused('GUEST_CLI_LAUNCH_FAILED') from None
+        if p.returncode != 0:
+            envelope = action_failure_envelope(p.stdout) if command == 'action' else None
+            if not polling_status:
+                self.record_first_failure(envelope['reason'] if envelope else 'GUEST_CLI_FAILED',
+                                          command, operation, p.returncode,
+                                          envelope['outcome'] if envelope else 'UNKNOWN')
+            raise Refused('GUEST_ACTION_FAILED:' + command)
+        try:
+            value = json.loads(p.stdout)
+            if not isinstance(value, dict):
+                raise ValueError('response not an object')
+        except (ValueError, TypeError, RecursionError):
+            if not polling_status:
+                self.record_first_failure('GUEST_CLI_REPLY_INVALID', command, operation,
+                                          p.returncode, outcome='UNKNOWN')
+            raise Refused('GUEST_CLI_REPLY_INVALID') from None
+        return value
 
     @property
     def exchange(self):
         return self.machine / 'exchange'
 
     def action(self, *args):
-        # Guest-input admission passes only for the lease holder's own token.
-        return self.cli('action', self.a.vm, *args, '--owner', self.lease_owner)
+        # The structured error flag is a command option, not a guest argument.
+        # Keep --owner last for existing cooperative-lease consumers.
+        return self.cli('action', self.a.vm, *args,
+                        '--structured-errors', '--owner', self.lease_owner)
 
     def screenshot(self, label):
         file = self.out / (label + '.png')
@@ -410,50 +715,331 @@ class Runner:
         require(result == 'READY', result if result == 'NEEDS_OWNER' else 'GUEST_PHASE_FAILED')
 
     def start_guest(self):
-        # Bootstrap once, then use the read-only request share. Application launch
-        # can change Dock geometry; repeated clicks must not type commands elsewhere.
-        self.pending = 'bootstrap:activate'
-        self.action('click', *self.a.terminal_point)
-        time.sleep(0.5)
-        if self.a.bootstrap == 'finder':
-            # A first bottom-edge click can reveal the Dock before its icon is
-            # ready to activate. Keep shell typing behind a separate activation.
-            self.pending = 'bootstrap:finder-activate'
-            self.action('click', *self.a.terminal_point)
-            time.sleep(0.8)
-            self.pending = 'bootstrap:finder-activation-capture'
-            self.screenshot('bootstrap-activated')
-            self.pending = 'bootstrap:finder-go'
-            self.action('key', 'cmd+shift+g')
-            time.sleep(0.8)
-            self.pending = 'bootstrap:finder-path'
-            self.action('type', '/System/Applications/Utilities/Terminal.app')
-            self.pending = 'bootstrap:finder-select'
-            self.action('key', 'return')
-            # Finder navigation completes asynchronously after the key ACK.
-            # Preserve the selected target before sending Open; a cold Finder
-            # can otherwise receive Open while the Go to Folder sheet closes.
-            time.sleep(1.5)
-            self.pending = 'bootstrap:finder-selection-capture'
-            self.screenshot('bootstrap-finder-selection')
-            self.pending = 'bootstrap:finder-open'
-            self.action('key', 'cmd+o')
-            time.sleep(1.5)
+        """Launch the fixed guest Terminal via a typed helper capability.
+
+        No Finder navigation, blind text or screenshot-as-focus inference. The
+        helper validates PID and focused input element at every event. Shell
+        prompt readiness is deliberately NOT claimed by the AX focus contract.
+        """
+        self.pending = 'bootstrap:capability'
+        caps = self.action('status')
+        require(caps.get('terminalFocusContract') == 'terminal-input/2' and
+                caps.get('terminalLaunchContract') == 'terminal-launch/1',
+                'TERMINAL_CAPABILITY_UNSUPPORTED')
+        # Current helpers explicitly report shellReadiness=not-proven. The AX
+        # focused text area does NOT establish a live shell prompt. Until a
+        # separately reviewed guest issuer advertises this readiness contract,
+        # refuse before Terminal launch or any keyboard/guest effect.
+        self.pending = 'bootstrap:shell-readiness-capability'
+        require(caps.get('terminalShellReadinessContract') == 'terminal-shell-readiness/1',
+                'TERMINAL_SHELL_READINESS_UNPROVEN')
+        self.begin_effect()  # Terminal launch is itself a guest effect.
+        self.pending = 'bootstrap:terminal-open'
+        launched = self.action('terminal-open')
+        require(launched.get('terminalLaunchContract') == 'terminal-launch/1' and
+                launched.get('terminalFocusContract') == 'terminal-input/2',
+                'TERMINAL_LAUNCH_UNCONFIRMED')
+        pid = launched.get('terminalPID')
+        require(isinstance(pid, str) and re.fullmatch(r'[1-9][0-9]{0,9}', pid) and
+                int(pid) <= 2147483647, 'TERMINAL_LAUNCH_UNCONFIRMED')
+        self.pending = 'bootstrap:foreground-proof'
+        foreground = self.action('status')
+        require(foreground.get('terminalFocusContract') == 'terminal-input/2' and
+                foreground.get('terminalPID') == pid and foreground.get('terminalForeground') == 'true',
+                'TERMINAL_FOCUS_UNVERIFIED')
         self.pending = 'bootstrap:terminal-new'
-        self.action('key', 'cmd+n')
-        time.sleep(1)
+        # Foreground-only proof is valid for cmd+n and nothing else.
+        self.action('key', 'cmd+n', '--terminal-proof', 'terminal-foreground/2',
+                    '--terminal-pid', pid)
+        self.pending = 'bootstrap:input-proof'
+        focused = self.action('status')
+        token = focused.get('terminalWindow')
+        try:
+            parsed_token = uuid.UUID(token) if isinstance(token, str) else None
+        except ValueError:
+            parsed_token = None
+        require(focused.get('terminalFocusContract') == 'terminal-input/2' and
+                focused.get('terminalPID') == pid and focused.get('terminalInput') == 'true' and
+                parsed_token is not None and str(parsed_token).upper() == token.upper(),
+                'TERMINAL_FOCUS_UNVERIFIED')
+        self.shell_readiness = 'NOT_PROVEN'
+        self.pending = 'bootstrap:shell-readiness'
+        # The future readiness issuer must bind its own proof to THIS exact
+        # Terminal PID and focused AX window. No current terminal-mac helper
+        # supplies these fields, so real bootstrap is intentionally BLOCKED.
+        require(focused.get('terminalShellReadinessContract') == 'terminal-shell-readiness/1' and
+                focused.get('shellReadiness') == 'proven' and
+                focused.get('terminalShellReadyPID') == pid and
+                focused.get('terminalShellReadyWindow') == token,
+                'TERMINAL_SHELL_READINESS_UNPROVEN')
+        self.shell_readiness = 'REPORTED_PROVEN_NOT_NATIVE_QUALIFIED'
         self.pending = 'bootstrap:terminal-capture'
         self.screenshot('bootstrap-terminal')
         command = '/bin/bash ' + shlex.quote('/Volumes/My Shared Files/artifacts/' +
                                            self.run_id + '/guest.sh') + ' serve'
+        guarded = ('--terminal-proof', 'terminal-input/2', '--terminal-pid', pid,
+                   '--terminal-window', token)
         self.pending = 'bootstrap:server-command'
-        self.action('type', command)
+        self.action('type', command, *guarded)
+        self.pending = 'bootstrap:pre-return'
+        current = self.action('status')
+        require(current.get('terminalFocusContract') == 'terminal-input/2' and
+                current.get('terminalPID') == pid and current.get('terminalInput') == 'true' and
+                current.get('terminalWindow') == token, 'TERMINAL_FOCUS_UNVERIFIED')
+        require(current.get('terminalShellReadinessContract') == 'terminal-shell-readiness/1' and
+                current.get('shellReadiness') == 'proven' and
+                current.get('terminalShellReadyPID') == pid and
+                current.get('terminalShellReadyWindow') == token,
+                'TERMINAL_SHELL_READINESS_UNPROVEN')
         self.pending = 'bootstrap:server-start'
-        self.action('key', 'return')
+        # Return must use full input proof; foreground-only is prohibited.
+        self.action('key', 'return', *guarded)
         self.pending = 'bootstrap:server-ready'
         self.wait_result(self.report / 'server.result')
         self.sequence = 0
         self.pending = None
+
+    @staticmethod
+    def native_service_module():
+        """Load this repo's finite producer without changing test import paths."""
+        import importlib.util
+        source = Path(__file__).with_name('vm_app_service.py')
+        spec = importlib.util.spec_from_file_location('farol_vm_app_service', source)
+        require(spec is not None and spec.loader is not None, 'APP_PAYLOAD_UNQUALIFIED')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def native_app_action(self, session, command):
+        """Publish exactly one original intent before one guest action.
+
+        A lost/invalid acknowledgement leaves the intent and guest outcome
+        UNKNOWN; no retry, retry-by-new-id, or automatic clean-up.
+        """
+        sequence = session.next_sequence
+        operation = str(uuid.uuid4()).lower()
+        parameters = session.arguments(command, operation)
+        self.pending = 'native:' + command
+        # Maintain only THIS run's existing owned helper marker. A stale or
+        # different marker refuses before any new guest command is dispatched.
+        self.publish_lease_flag()
+        self.write_durable_json_exclusive(
+            self.out / ('native-intent-%02d-%s.json' % (sequence, command)),
+            {'schema': 'farol.vm-app-service.intent/1', 'runId': self.run_id,
+             'nonce': session.nonce, 'manifestSHA256': session.manifest,
+             'acceptanceSHA256': session.acceptance,
+             'owner': session.owner, 'sequence': sequence,
+             'operationId': operation, 'command': command})
+        try:
+            reply = self.action(*parameters, '--timeout', '90')
+        except Refused:
+            failure = getattr(self, 'first_failure', None)
+            # Only the first open, before any service effect, may end with an
+            # explicit typed noEffect ACK. Never apply this to a lost ACK,
+            # malformed reply, later operation, or a previous successful effect.
+            if (command == 'open' and sequence == 0 and not self.log and
+                    isinstance(failure, dict) and failure.get('runId') == self.run_id and
+                    failure.get('stage') == 'native:open' and
+                    failure.get('command') == 'action' and failure.get('operation') == 'app-service' and
+                    failure.get('outcome') == 'noEffect' and failure.get('returnCode') == 1):
+                self.finish_no_effect_open(operation, failure)
+                raise Refused(failure['reason']) from None
+            raise
+        # No assumption that an ACK existed when the mailbox times out.
+        try:
+            receipt = session.admit_reply(command, operation, reply)
+        except self.native_service_producer.ProducerRefusal as error:
+            raise Refused(str(error)) from None
+        self.write_durable_json_exclusive(
+            self.out / ('native-receipt-%02d-%s.json' % (sequence, command)),
+            {'schema': 'farol.vm-app-service.receipt/1', **receipt})
+        self.log.append('native:' + command)
+        self.pending = None
+        return receipt
+
+    def finish_no_effect_open(self, operation, failure):
+        """End THIS unstarted service after its explicit, retained noEffect ACK."""
+        require(self.effect_owned and self.lease_fd is not None,
+                'GUEST_OPERATION_FENCE_CHANGED')
+        self.require_own_lease_metadata()
+        self.require_own_update_marker()
+        regular(self.effect_file, 4096)
+        require(json.loads(self.effect_file.read_text()) ==
+                {'runId': self.run_id, 'evidence': str(self.out)},
+                'GUEST_OPERATION_FENCE_CHANGED')
+        self.write_durable_json_exclusive(self.out / 'native-open-no-effect.json',
+            {'schema': 'farol.native-open-no-effect/1', 'runId': self.run_id,
+             'operationId': operation, 'outcome': 'noEffect',
+             'reason': failure['reason'], 'replayed': False})
+        self.retain_unstarted_native_stage(operation)
+        self.effect_file.unlink()
+        self.sync_effect_directory()
+        self.effect_owned = False
+        self.pending = None
+
+    def retain_unstarted_native_stage(self, operation):
+        """Move only this no-effect run's active staging out of admission.
+
+        Preserve all bytes and a durable custody receipt. No VM directory or
+        predecessor's staging is removed; an incomplete move retains the fence.
+        """
+        require(self.stage == self.machine / 'artifacts' / self.run_id,
+                'GUEST_OPERATION_FENCE_CHANGED')
+        if not self.stage.exists() and not self.stage.is_symlink():
+            self.cleanup_note = 'RETAINED_NO_EFFECT'
+            return
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        descriptors = []
+        try:
+            machine = os.open(self.machine, flags); descriptors.append(machine)
+            source = os.open('artifacts', flags, dir_fd=machine); descriptors.append(source)
+            info = os.stat(self.run_id, dir_fd=source, follow_symlinks=False)
+            require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid(),
+                    'STAGING_CLEANUP_UNCONFIRMED')
+            try:
+                os.mkdir('retained-artifacts', mode=0o700, dir_fd=machine)
+            except FileExistsError:
+                pass
+            retained = os.open('retained-artifacts', flags, dir_fd=machine); descriptors.append(retained)
+            info = os.fstat(retained)
+            require(info.st_uid == os.getuid() and info.st_mode & 0o077 == 0,
+                    'STAGING_CLEANUP_UNCONFIRMED')
+            os.mkdir(self.run_id, mode=0o700, dir_fd=retained)
+            target = os.open(self.run_id, flags, dir_fd=retained); descriptors.append(target)
+            self.write_durable_json_exclusive(self.out / 'native-stage-retention-intent.json',
+                {'schema':'farol.native-stage-retention/1', 'runId':self.run_id,
+                 'operationId':operation, 'outcome':'noEffect', 'deleted':False})
+            os.rename(self.run_id, 'payload', src_dir_fd=source, dst_dir_fd=target)
+            os.fsync(target); os.fsync(source); os.fsync(retained); os.fsync(machine)
+            self.write_durable_json_exclusive(self.out / 'native-stage-retained.json',
+                {'schema':'farol.native-stage-retention/1', 'runId':self.run_id,
+                 'operationId':operation, 'outcome':'noEffect', 'deleted':False,
+                 'retainedAt':str(self.machine / 'retained-artifacts' / self.run_id / 'payload')})
+            self.cleanup_note = 'RETAINED_NO_EFFECT'
+        finally:
+            for descriptor in reversed(descriptors):
+                os.close(descriptor)
+
+    def native_app_observe(self, session, receipt):
+        """Read bound guest state, without resending any mutating operation.
+
+        A successful activate() ACK may precede macOS reporting the app as
+        frontmost. Only a bound foreground=false observation is eligible for a
+        short follow-up read. A failed/uninspectable observation is UNKNOWN and
+        never retried. Every observation uses a fresh read-only UUID.
+        """
+        command = receipt['command']
+        self.pending = 'native:' + command + ':observe'
+        foreground_deadline = min(self.deadline, time.monotonic() + 5)
+        while True:
+            self.remaining()
+            arguments = session.observation_arguments(receipt)
+            reply = self.action(*arguments, '--timeout', '15')
+            try:
+                observed = session.admit_observation(
+                    receipt, reply, allow_pending_foreground=(command == 'activate'))
+            except self.native_service_producer.ProducerRefusal as error:
+                raise Refused(str(error)) from None
+            if observed is not None:
+                self.write_durable_json_exclusive(
+                    self.out / ('native-observation-%02d-%s.json' %
+                                (receipt['sequence'], command)), observed)
+                self.pending = None
+                return observed
+            require(time.monotonic() < foreground_deadline,
+                    'APP_SERVICE_PHASE_UNCONFIRMED')
+            # No GUI or mutating retry: wait only for the original activation
+            # to become observable on the same PID/window-bound guest service.
+            time.sleep(0.2)
+
+    def run_native_app_service(self, archive, manifest, grants):
+        """Guest compiled finite application lifecycle, never staged shell code.
+
+        The release archive is verified BEFORE preparing the guest-visible
+        immutable blobs. Full lifecycle is a separate one-shot service;
+        'closed' means the guest-reported service ended, not product E2E PASS.
+        """
+        require(grants.get('appServiceContract') == 'terminal-mac.app-service/4' and
+                grants.get('appServiceExecutor') == 'compiled-native-helper',
+                'APP_SERVICE_UNAVAILABLE')
+        require(grants.get('appServiceAdmission') == 'available',
+                'APP_SERVICE_UNRESOLVED')
+        # Digest from the release's own manifest is NOT a trust anchor.
+        # The owner/Lead must select the expected accepted app tree digest
+        # independently. Do not infer it from the archive being staged.
+        expected = getattr(self.a, 'expected_app_sha256', None)
+        require(isinstance(expected, str) and re.fullmatch(r'[a-f0-9]{64}', expected) and
+                manifest.get('artifactSha256') == expected,
+                'APP_PAYLOAD_UNQUALIFIED')
+        module = self.native_service_module()
+        self.native_service_producer = module  # one exception/class identity per run
+        self.pending = 'native:stage'
+        self.stage.mkdir(mode=0o700, exist_ok=False)
+        try:
+            stage = module.stage_release_payload(archive, manifest, self.stage, IDENTITY)
+            acceptance = module.stage_acceptance(self.stage, stage, module.farol_release_policy)
+        except module.ProducerRefusal as error:
+            raise Refused(str(error)) from None
+        self.write_durable_json_exclusive(self.out / 'native-stage.json', stage)
+        # Staging may be much longer than a marker epoch. No guest effect yet.
+        self.remaining()
+        nonce = os.urandom(32).hex()
+        session = module.ServiceAdmission(
+            self.run_id, nonce, stage['manifestSHA256'], self.lease_owner,
+            app_name=stage['appName'], acceptance=acceptance, relaunch=getattr(self.a, 'native_relaunch', False))
+        # Retained private receipt is necessary to OBSERVE a lost reply; it
+        # grants no replay. Never put the nonce in public result.json/logs.
+        self.write_durable_json_exclusive(
+            self.out / 'native-session.json',
+            {'schema': 'farol.vm-app-service.session/1', 'runId': self.run_id,
+             'nonce': nonce, 'manifestSHA256': stage['manifestSHA256'],
+             'acceptanceSHA256': acceptance,
+             'owner': self.lease_owner, 'helperContract': 'terminal-mac.app-service/4',
+             'installedApplication': '/Applications/' + stage['appName']})
+        self.begin_effect()
+        receipts = []
+        for command in session.steps:
+            receipt = self.native_app_action(session, command)
+            receipts.append(receipt)
+            # The observation is a fresh read-only mailbox action bound to the
+            # recorded effect identity. A mismatch stops all subsequent effects.
+            self.native_app_observe(session, receipt)
+            if command in ('launch', 'activate'):
+                # Screenshots document pixels but do not prove UX acceptance.
+                self.pending = 'native:%s:screenshot' % command
+                self.screenshot('native-%02d-%s' % (receipt['sequence'], command))
+                self.pending = None
+        require(receipts and receipts[-1]['command'] == 'close' and
+                receipts[-1]['state'] == 'closed' and
+                session.next_sequence == len(session.steps),
+                'APP_SERVICE_PHASE_UNCONFIRMED')
+        self.pending = None
+        cleanup = self.finish_staging()
+        result = {'status': 'NEEDS_REVIEW',
+                  'lifecycle': 'NATIVE_APP_SERVICE_CLOSED_REPORTED',
+                  'ui': 'NEEDS_REVIEW', 'test': {'status': 'NOT_RUN'},
+                  'serverCode': 'guest-compiled-helper', 'shell': 'NOT_USED',
+                  'manifestSHA256': stage['manifestSHA256'],
+                  'artifactSha256': stage['artifactSHA256'],
+                  'archiveSha256': stage['archiveSHA256'],
+                  'version': manifest['version'], 'phases': list(self.log),
+                  'nativeReceipts': receipts, 'cleanup': cleanup,
+                  'lease': self.lease_evidence(),
+                  'tunnel': 'NOT_RUN', 'networkPolicy': self.network_policy,
+                  'guestInstallation': {'location': 'guest-applications/1',
+                                        'application': '/Applications/' + stage['appName'],
+                                        'verification': receipts[-1]['installationEvidence'],
+                                        'rootExit': receipts[-1]['rootExit'],
+                                        'preservedAfterClose': True,
+                                        'existingAppWasReplaced': False},
+                  'relaunch': {'attempted': len(session.launch_pids) == 2,
+                               'distinctPIDsReported': len(session.launch_pids) == 2 and
+                               len(set(session.launch_pids)) == 2}}
+        clone = self.instance_clone_receipt()
+        if clone is not None:
+            result['instance'] = clone
+        self.write_durable_json_exclusive(self.out / 'result.json', result)
+        return result
 
     def phase(self, name):
         if getattr(self, 'lease_owner', None):
@@ -645,10 +1231,21 @@ class Runner:
             raise
 
     def publish_lease_flag(self, initial=False):
-        """Refresh only our own marker; first publication must not replace one."""
+        """Keep a native service marker immutable for the bounded run.
+
+        Atomic replacement of this shared file between native requests can
+        race VirtioFS descriptor/name caches. A native marker covers the whole
+        bounded run plus its final request margin and is never renewed/adopted.
+        Legacy scenarios retain their original refresh contract.
+        """
         marker = self.exchange / '.input-lease.json'
+        native = getattr(getattr(self, 'a', None), 'native_app_service', False)
+        if native and not initial:
+            self.require_own_update_marker()
+            return
+        lifetime = max(120.0, self.deadline - time.monotonic() + 120.0) if native else 120.0
         value = {'schema': 'terminal-mac.input-lease-flag/1', 'owner': self.lease_owner,
-                 'deadline': time.time() + 120.0}
+                 'deadline': time.time() + lifetime}
         if initial:
             self.write_durable_json_exclusive(marker, value)
         else:
@@ -667,7 +1264,7 @@ class Runner:
             finished_without_effect = (not self.effect_owned and self.effect_fence_definitely_absent()
                                        and self.pending is None
                                        and (not self.log or self.log[-1] == 'stop')
-                                       and getattr(self, 'cleanup_note', None) in (None, 'CLEARED'))
+                                       and getattr(self, 'cleanup_note', None) in (None, 'CLEARED', 'RETAINED_NO_EFFECT'))
             if finished_without_effect and getattr(self, 'helper_update_flag_owned', False):
                 self.require_own_lease_metadata()
                 self.require_own_update_marker()
@@ -697,7 +1294,7 @@ class Runner:
             regular(self.effect_file, 4096)
             require(json.loads(self.effect_file.read_text()).get('runId') == self.run_id,
                     'GUEST_OPERATION_FENCE_CHANGED')
-            require(self.log and self.log[-1] == 'stop', 'GUEST_SERVER_NOT_STOPPED')
+            require(self.log and self.log[-1] in ('stop', 'native:close'), 'GUEST_SERVER_NOT_STOPPED')
             require(self.cleanup_note == 'CLEARED', 'GUEST_CLEANUP_UNCONFIRMED')
             # This is the delayed clean path for a scenario whose host flock
             # was released in run()'s finally. Exact metadata from THIS run,
@@ -788,7 +1385,7 @@ class Runner:
             try:
                 self.clear_dev_payload()
             except Exception as error:
-                self.cleanup_note = 'FAILED:' + str(error)
+                self.cleanup_note = 'FAILED:STAGING_CLEANUP_UNCONFIRMED'
             else:
                 self.cleanup_note = 'CLEARED'
         return self.cleanup_note
@@ -802,7 +1399,7 @@ class Runner:
             except FileNotFoundError:
                 self.cleanup_note = 'CLEARED'
             except Exception as error:
-                self.cleanup_note = 'FAILED:' + str(error)
+                self.cleanup_note = 'FAILED:STAGING_CLEANUP_UNCONFIRMED'
             else:
                 self.cleanup_note = 'CLEARED'
         return self.cleanup_note
@@ -960,8 +1557,8 @@ class Runner:
                 require(len(data) == info.st_size, 'E2E_' + name.upper() + '_CHANGED')
         except FileNotFoundError:
             return None, 'E2E_' + name.upper() + '_MISSING'
-        except (OSError, Refused) as error:
-            return None, str(error)
+        except (OSError, Refused):
+            return None, 'E2E_' + name.upper() + '_UNSAFE'
         try:
             self.preserve_e2e_bytes('e2e-' + name + '.raw.json', data)
         except OSError:
@@ -1056,7 +1653,7 @@ class Runner:
         try:
             self.phase('e2e')
         except (Refused, OSError, ValueError, KeyError, KeyboardInterrupt, subprocess.TimeoutExpired) as error:
-            self.e2e_phase_error = str(error) or 'RUN_INTERRUPTED'
+            self.e2e_phase_error = safe_failure_code(error)
             self.collect_e2e_result(token)
             raise  # Preserve the original phase error; do not replay or mutate.
         self.collect_e2e_result(token)
@@ -1076,7 +1673,7 @@ class Runner:
         confirmed = (self.driver_process_confirmed and error is None and self.pending is None and
                      self.log and self.log[-1] == 'stop' and result.get('cleanup') == 'CLEARED')
         result['operation'] = {'status': 'CONFIRMED' if confirmed else 'UNKNOWN',
-                               'pending': self.pending, 'error': str(error) if error is not None else None}
+                               'pending': self.pending, 'error': safe_failure_code(error) if error is not None else None}
         result.setdefault('lifecycle', 'UNKNOWN')
         result.setdefault('ui', 'NEEDS_REVIEW')
         if result['test']['status'] == 'FAIL':
@@ -1084,7 +1681,7 @@ class Runner:
             result['reason'] = getattr(self, 'e2e_phase_error', None) or self.driver_result['reason']
         elif not confirmed:
             result['status'] = 'UNKNOWN'
-            result['reason'] = str(error) if error is not None else 'E2E_TEARDOWN_UNCONFIRMED'
+            result['reason'] = safe_failure_code(error) if error is not None else 'E2E_TEARDOWN_UNCONFIRMED'
         else:
             result['status'] = 'NEEDS_REVIEW'
 
@@ -1267,6 +1864,10 @@ class Runner:
                     else:
                         self.log.append('vm-started')
                 require(status.get('state') == 'running', 'VM_NOT_RUNNING')
+                if getattr(self.a, 'native_app_service', False):
+                    require(status.get('artifactShareReadOnly') == 'true' and
+                            status.get('artifactShareEvidence') == 'live-vz-configuration/1',
+                            'APP_SERVICE_UNSAFE_PATH')
                 if getattr(self.a, 'closed', False):
                     # Catch configuration drift across boot before guest input;
                     # this still does not attest the live VZ network attachment.
@@ -1278,7 +1879,8 @@ class Runner:
                     self.cli('hide', self.a.vm)
                 grants = self.wait_guest_ready()
                 (self.out / 'guest-status.json').write_text(json.dumps(grants, indent=2))
-                require(self.a.terminal_point[0] < int(grants['width']) and self.a.terminal_point[1] < int(grants['height']), 'TERMINAL_POINT_OUTSIDE_DISPLAY')
+                if not getattr(self.a, 'native_app_service', False):
+                    require(self.a.terminal_point[0] < int(grants['width']) and self.a.terminal_point[1] < int(grants['height']), 'TERMINAL_POINT_OUTSIDE_DISPLAY')
                 self.screenshot('preflight')
                 if self.a.connect_dev:
                     return self.connect_dev()
@@ -1286,10 +1888,14 @@ class Runner:
                     return self.connection_proof()
                 if self.a.release_dev:
                     return self.release_dev()
-                # Returning packaged profiles can resume the approved Dev endpoint.
-                require_host_dev_stopped(IDENTITY)
+                # Native app service does not import or read host Dev state.
+                # Legacy shell scenarios retain their existing Dev prerequisite.
+                if not getattr(self.a, 'native_app_service', False):
+                    require_host_dev_stopped(IDENTITY)
                 archive = Path(self.a.artifact).expanduser().absolute() if self.a.artifact else download_latest(self.out, self.deadline)
                 manifest = verify(archive)
+                if getattr(self.a, 'native_app_service', False):
+                    return self.run_native_app_service(archive, manifest, grants)
                 self.prepare_stage()
                 shutil.copyfile(archive, self.stage / 'app.zip')
                 (self.stage / 'archive.sha256').write_text(manifest['archiveSha256'])
@@ -1366,13 +1972,23 @@ class Runner:
                     archive.unlink()
                 return result
             finally:
-                self.release_input_lease()
+                active_error = sys.exc_info()[1]
+                if active_error is not None and getattr(self, 'first_failure', None) is None:
+                    self.record_first_failure(safe_failure_code(active_error), outcome='UNKNOWN')
+                try:
+                    self.release_input_lease()
+                except Exception as release_error:
+                    self.record_secondary_failure(release_error)
+                    if active_error is None:
+                        raise Refused('GUEST_LEASE_RELEASE_UNCONFIRMED') from None
+                    # Do not mask an earlier guest effect failure with cleanup.
 
 
 def arguments(argv=None):
     config_parser = argparse.ArgumentParser(add_help=False)
     default_config = Path.home() / 'Library/Application Support' / (IDENTITY['name'] + ' Testing') / 'vm-smoke.json'
     config_parser.add_argument('--config', default=os.environ.get('FAROL_VM_CONFIG') or (str(default_config) if default_config.exists() else None))
+    config_parser.add_argument('--native-app-service', action='store_true')
     early, _ = config_parser.parse_known_args(argv)
     config = {}
     if early.config:
@@ -1392,6 +2008,12 @@ def arguments(argv=None):
     source.add_argument('--latest', action='store_true', help='Resolve public GitHub Latest now')
     source.add_argument('--reconcile-staging', action='store_true',
                         help='Read-only report of staging residue and effect fences; clears nothing and never touches the VM')
+    p.add_argument('--native-app-service', action='store_true',
+                   help='Use finite native guest app-service, never staged shell execution')
+    p.add_argument('--native-relaunch', action='store_true',
+                   help='For native app service only: second launch/activate/quit before close')
+    p.add_argument('--expected-app-sha256',
+                   help='Independently owner-approved exact application tree digest; never read it from the ZIP')
     p.add_argument('--closed', action='store_true',
                    help='Closed-contour package run on an offline guest with guest-local fixtures; requires --artifact and never downloads')
     p.add_argument('--e2e-driver', help='Directory prepared by tooling/vm-e2e/bundle-driver.mjs: the closed run stages its bundle+Node and executes the e2e phase in the offline guest')
@@ -1404,7 +2026,7 @@ def arguments(argv=None):
     p.add_argument('--timeout', type=int, default=config.get('timeout', 180))
     p.add_argument('--bootstrap', choices=['finder', 'terminal'], default=config.get('bootstrap', 'terminal'))
     p.add_argument('--terminal-point', '--bootstrap-point', nargs=2, type=int, default=config.get('terminal_point'), metavar=('X', 'Y'), help='Guest Terminal window or Dock icon coordinates confirmed from current screenshot')
-    p.add_argument('--menu-point', nargs=2, type=int, default=config.get('menu_point'), metavar=('X', 'Y'), help='Guest menu icon coordinates confirmed from current screenshot')
+    p.add_argument('--menu-point', nargs=2, type=int, default=None if early.native_app_service else config.get('menu_point'), metavar=('X', 'Y'), help='Guest menu icon coordinates confirmed from current screenshot')
     a = p.parse_args(argv)
     if a.reconcile_staging:
         # Read-only report: only the VM home and name are resolved; binary,
@@ -1413,6 +2035,16 @@ def arguments(argv=None):
         require(isinstance(a.vm_home, str) and a.vm_home, 'INFRASTRUCTURE_CONFIG_REQUIRED')
         return a
     require(not a.e2e_driver or a.closed, 'E2E_DRIVER_REQUIRES_CLOSED')
+    if a.native_app_service:
+        require(bool(a.artifact) and not a.latest and not a.e2e_driver and
+                not (a.release_dev or a.connection_proof or a.connect_dev) and
+                not a.prepare_test_guest and a.menu_point is None and
+                isinstance(a.expected_app_sha256, str) and
+                re.fullmatch(r'[a-f0-9]{64}', a.expected_app_sha256),
+                'APP_SERVICE_OPTIONS_INVALID')
+    else:
+        require(not a.native_relaunch and a.expected_app_sha256 is None,
+                'APP_SERVICE_OPTIONS_INVALID')
     if a.closed:
         # A closed run never resolves or downloads a release (--artifact is
         # mandatory); the dev/proof sources are separate run kinds.
@@ -1420,13 +2052,15 @@ def arguments(argv=None):
         require(not (a.release_dev or a.connection_proof or a.connect_dev), 'CLOSED_MODE_INVALID')
         require(bool(a.artifact), 'CLOSED_DOWNLOAD_FORBIDDEN')
     require(all(isinstance(x, str) and x for x in (a.terminal_mac, a.vm_home, a.vm)), 'INFRASTRUCTURE_CONFIG_REQUIRED')
-    require(isinstance(a.terminal_point, list) and len(a.terminal_point) == 2 and all(type(x) is int for x in a.terminal_point), 'TERMINAL_POINT_REQUIRED')
+    if not a.native_app_service:
+        require(isinstance(a.terminal_point, list) and len(a.terminal_point) == 2 and all(type(x) is int for x in a.terminal_point), 'TERMINAL_POINT_REQUIRED')
     require(a.menu_point is None or (isinstance(a.menu_point, list) and len(a.menu_point) == 2 and all(type(x) is int for x in a.menu_point)), 'MENU_POINT_INVALID')
     require(a.bootstrap in ('finder', 'terminal'), 'BOOTSTRAP_MODE_INVALID')
     require(type(a.timeout) is int, 'TIMEOUT_INVALID')
     require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', a.vm), 'VM_NAME_INVALID')
     require(30 <= a.timeout <= 600, 'TIMEOUT_INVALID')
-    require(all(0 <= x <= 8192 for x in a.terminal_point), 'TERMINAL_POINT_INVALID')
+    if not a.native_app_service:
+        require(all(0 <= x <= 8192 for x in a.terminal_point), 'TERMINAL_POINT_INVALID')
     require(a.menu_point is None or all(0 <= x <= 8192 for x in a.menu_point), 'MENU_POINT_INVALID')
     return a
 
@@ -1460,15 +2094,23 @@ def main():
         print(json.dumps(dict(result, evidence=str(runner.out))))
         return result_exit_code(result)  # Diagnostic success is not product qualification.
     except (Refused, OSError, ValueError, TypeError, KeyError, KeyboardInterrupt, subprocess.TimeoutExpired, zipfile.BadZipFile) as error:
-        result = dict(status='NEEDS_OWNER' if str(error) == 'NEEDS_OWNER' else 'BLOCKED',
-                      reason='RUN_INTERRUPTED' if isinstance(error, KeyboardInterrupt) else str(error), phases=runner.log if runner else [],
+        code = safe_failure_code(error)
+        if runner and getattr(runner, 'first_failure', None) is None:
+            runner.record_first_failure(code, outcome='UNKNOWN' if runner.pending else 'noEffect')
+        result = dict(status='NEEDS_OWNER' if code == 'NEEDS_OWNER' else 'BLOCKED',
+                      reason=code, phases=runner.log if runner else [],
                       pending=runner.pending if runner else None,
                       outcome='UNKNOWN' if runner and (runner.pending or runner.log) else 'NOT_STARTED')
+        if runner:
+            result['firstFailure'] = getattr(runner, 'first_failure', None)
+            result['firstFailurePersistence'] = getattr(runner, 'first_failure_persistence', 'NOT_RUN')
         if runner:
             try:
                 result['cleanup'] = runner.cleanup_disposition()
             except Exception as cleanup_error:
-                result['cleanup'] = 'FAILED:' + str(cleanup_error)
+                runner.record_secondary_failure(cleanup_error)
+                result['cleanup'] = 'FAILED:STAGING_CLEANUP_UNCONFIRMED'
+            result['secondaryFailures'] = getattr(runner, 'secondary_failures', [])
             runner.attach_e2e_evidence(result, error=error)
             try:
                 (runner.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')

@@ -181,6 +181,15 @@ def drive_closed_package(root, machine_json, closed=True, driver=False, clone_re
         (runner.machine / 'clone.json').write_text(clone_receipt)
     runner.cli = fake_cli
     runner.wait_result = synthetic_guest
+    # This suite exercises result/egress admission with an inert synthetic guest.
+    # It never qualifies the deliberately blocked live Terminal bootstrap.
+    # Bootstrap refusal is covered by test_bootstrap_diagnostics independently.
+    def synthetic_start():
+        runner.begin_effect()
+        synthetic_guest(runner.report / 'server.result')
+        runner.sequence = 0
+        runner.pending = None
+    runner.start_guest = synthetic_start
     result = caught = None
     with patch.object(vm.subprocess, 'check_output', return_value=''), patch.object(vm.time, 'sleep'):
         try:

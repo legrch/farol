@@ -196,7 +196,8 @@ class E2EResultAdmissionTests(unittest.TestCase):
         self.assertEqual(result['status'], 'FAIL')
         self.assertEqual(result['reason'], 'E2E_ASSERTIONS_FAILED')
         self.assertEqual(result['operation']['status'], 'UNKNOWN')
-        self.assertIn('SYNTHETIC_TEARDOWN_FAILURE', result['operation']['error'])
+        self.assertEqual(result['operation']['error'], 'UNCLASSIFIED')
+        self.assertNotIn('SYNTHETIC_TEARDOWN_FAILURE', json.dumps(result))
         self.assertEqual((runner.out / 'e2e-result.raw.json').read_bytes(), sent['raw'])
         self.assertTrue(runner.effect_file.exists())
 
@@ -222,7 +223,8 @@ class E2EResultAdmissionTests(unittest.TestCase):
     def test_phase_failure_is_preserved_even_when_fail_receipt_also_exists(self):
         runner, code, report, _ = self.drive(status='FAIL', guest_failure=True)
         self.assertEqual(code, 1, report)
-        self.assertEqual(report['reason'], 'SYNTHETIC_PHASE_ACK_UNKNOWN')
+        self.assertEqual(report['reason'], 'UNCLASSIFIED')
+        self.assertNotIn('SYNTHETIC_PHASE_ACK_UNKNOWN', json.dumps(report))
         self.assertEqual(report['e2e']['reason'], 'E2E_ASSERTIONS_FAILED')
         self.assertEqual(report['operation']['status'], 'UNKNOWN')
         self.assertTrue(runner.effect_file.exists())

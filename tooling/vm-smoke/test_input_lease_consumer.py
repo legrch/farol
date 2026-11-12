@@ -105,6 +105,14 @@ def drive(root, visible=False, cli_fail_at=None, phase_fail_at=None):
 
     runner.cli = fake_cli
     runner.wait_result = synthetic_guest
+    # This suite qualifies host flock/marker custody, not a shell prompt or
+    # guest Terminal. Bootstrap readiness is tested by the separate guarded
+    # input/native app-service suites. Never fake a capability issued by no
+    # currently installed helper just to make an obsolete UI path pass.
+    def synthetic_ready_boundary():
+        runner.sequence = 0
+        runner.pending = None
+    runner.start_guest = synthetic_ready_boundary
     result = caught = None
     with patch.object(vm.time, 'time', fake_time), patch.object(vm.time, 'sleep'):
         try:
