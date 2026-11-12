@@ -200,6 +200,7 @@ export async function runExplicitConnectionCheck(
       return refuseBeforeDispatch("CONNECTION_CHECK_OWNER_CHANGED");
     result = await browser.send(prepared.prompt, {
       connectionCheck: true,
+      beforePrepare: current,
       beforeSend: () => authorized && !rpcUncertain && current(),
       onDispatchIntent: async () => {
         // This guard is consumed BEFORE the first RPC await. Neither a browser

@@ -382,3 +382,25 @@ it("an unconfirmed original is observation-only after caller remount/recreation"
   expect(afterRestart).not.toHaveBeenCalled();
   expect(f.sends()).toBe(1);
 });
+
+it.each(["scope", "document"] as const)(
+  "passes a separate original %s preparation fence before dispatch authorization",
+  async (kind) => {
+    const f = fixture("status");
+    vi.mocked(f.browser.send).mockImplementation(async (_prompt, observer) => {
+      expect(observer.beforeSend?.()).toBe(false);
+      expect(observer.beforePrepare?.()).toBe(true);
+      f[kind](false);
+      expect(observer.beforePrepare?.()).toBe(false);
+      return {
+        state: "failed_before_submit",
+        code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+      };
+    });
+    expect((await f.run()).state).toBe("refused");
+    expect(f.sends()).toBe(0);
+    expect(
+      f.go.advance.mock.calls.some(([input]) => input.stage === "dispatch"),
+    ).toBe(false);
+  },
+);

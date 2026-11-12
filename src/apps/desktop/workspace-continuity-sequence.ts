@@ -229,7 +229,8 @@ export class ContinuitySequence {
         !this.validPlannedReceipt(pending) ||
         !this.isCurrent() ||
         (await invoke(() => this.ports.intent(id, step.intent, pending))) !==
-          true
+          true ||
+        !this.isCurrent()
       )
         return fail(step.phase);
       const result = await invoke(step.effect);
@@ -254,7 +255,8 @@ export class ContinuitySequence {
       !this.isCurrent() ||
       (await invoke(() =>
         this.ports.intent(id, "close_intent", closeIntent),
-      )) !== true
+      )) !== true ||
+      !this.isCurrent()
     )
       return fail("close");
     if ((await invoke(() => this.ports.closeAndCertify(id))) !== true)

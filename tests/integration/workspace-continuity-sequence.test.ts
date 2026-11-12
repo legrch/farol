@@ -300,3 +300,40 @@ describe("single-owner C5 continuity sequencing (synthetic ports, no native/prov
     expect(f.calls).not.toContain("withdraw");
   });
 });
+
+it.each([
+  ["withdraw_intent", "withdraw"],
+  ["settings_intent", "settings"],
+  ["publish_intent", "stage"],
+  ["close_intent", "close"],
+] as const)(
+  "keeps acknowledged %s but fences its effect after losing ownership",
+  async (phase, effect) => {
+    let release!: (value: true) => void;
+    let entered!: () => void;
+    const pending = new Promise<true>((resolve) => {
+      release = resolve;
+    });
+    const waiting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const f = fixture({
+      intent: async (_id, next) => {
+        f.calls.push(`intent:${next}`);
+        if (next === phase) {
+          entered();
+          return pending;
+        }
+        return true;
+      },
+    });
+    const run = f.make().run(false);
+    await waiting;
+    f.loseCurrent();
+    release(true);
+    expect(await run).toMatchObject({ state: "unknown" });
+    expect(f.calls).toContain(`intent:${phase}`);
+    expect(f.calls).not.toContain(effect);
+    expect(f.calls).not.toContain("qualify-current");
+  },
+);

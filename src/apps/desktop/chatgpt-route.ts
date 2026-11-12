@@ -1838,6 +1838,8 @@ export type ChatGptTaskObserver = Readonly<{
   // Explicit Go-owned check: one activation attempt, exact prepared text fence.
   // This flag is supplied only by trusted Main, never a page or renderer.
   connectionCheck?: boolean;
+  // Original document/owner fence before any explicit-check preparation.
+  beforePrepare?: () => boolean;
   onSendAcknowledged?: () => void | Promise<void>;
   // Synchronous owner fence after the final awaited page verification.
   beforeSend?: () => boolean;
@@ -3448,6 +3450,7 @@ export class ChatGptRoute {
     temporary = true,
     taskDeadline = Date.now() + 180_000,
     operationGeneration = this.taskObservationGeneration,
+    originalDocumentCurrent?: () => boolean,
   ): Promise<
     | "CHATGPT_COMPOSER_DRAFT_PRESENT"
     | "CHATGPT_TEMPORARY_CHAT_REQUIRED"
@@ -3459,14 +3462,17 @@ export class ChatGptRoute {
       script: string,
       gesture: boolean,
       deadline = taskDeadline,
-    ) =>
-      this.executeTaskDocumentScript(
+    ) => {
+      if (originalDocumentCurrent && !originalDocumentCurrent())
+        throw new Error("ChatGPT preparation document changed");
+      return this.executeTaskDocumentScript(
         contents,
         script,
         gesture,
         deadline,
         operationGeneration,
       );
+    };
     let observed: ChatGptProfilePreparationDiagnostic["probe"] = null;
     const read = async (deadline = taskDeadline) => {
       try {
@@ -3503,6 +3509,7 @@ export class ChatGptRoute {
     const initialPhysicalGeneration = this.chatPhysicalDocumentGeneration;
     const initialFrame = contents.mainFrame;
     const initialIdentityLost = () =>
+      (originalDocumentCurrent !== undefined && !originalDocumentCurrent()) ||
       this.routeWindow !== candidate ||
       candidate.isDestroyed() ||
       this.disposing ||
@@ -3550,6 +3557,8 @@ export class ChatGptRoute {
     }
 
     try {
+      if (originalDocumentCurrent && !originalDocumentCurrent())
+        return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
       if (
         !temporary ||
         contents.getURL() !== temporaryUrl.href ||
@@ -3571,6 +3580,7 @@ export class ChatGptRoute {
       this.chatPhysicalDocumentGeneration;
     const profileObservationGeneration = this.taskObservationGeneration;
     const profileIdentityLost = () =>
+      (originalDocumentCurrent !== undefined && !originalDocumentCurrent()) ||
       this.routeWindow !== candidate ||
       candidate.isDestroyed() ||
       this.routeDocumentGeneration !== profileDocumentGeneration ||
@@ -3936,13 +3946,19 @@ export class ChatGptRoute {
       (observer.manualSubmissionOnly
         ? 15_000
         : (this.options.taskTimeoutMs ?? 180_000));
+    const requireOriginalDocument = () => {
+      if (observer.connectionCheck && observer.beforePrepare?.() !== true)
+        throw new Error("ChatGPT preparation document changed");
+    };
+    let preparing = true;
     const execute = (
       contents: WebContents,
       script: string,
       gesture: boolean,
       allowNavigationAfter: boolean | "response" = false,
-    ) =>
-      this.executeTaskDocumentScript(
+    ) => {
+      if (preparing) requireOriginalDocument();
+      return this.executeTaskDocumentScript(
         contents,
         script,
         gesture,
@@ -3950,6 +3966,7 @@ export class ChatGptRoute {
         observationGeneration,
         allowNavigationAfter,
       );
+    };
     const observeTaskReadiness = async () => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -3991,7 +4008,9 @@ export class ChatGptRoute {
             turnAssistantId: correlatedAssistantId,
           };
     try {
+      requireOriginalDocument();
       const opened = await this.open();
+      requireOriginalDocument();
       if (opened.status !== "opened") {
         return {
           state: "failed_before_submit",
@@ -4002,6 +4021,7 @@ export class ChatGptRoute {
         };
       }
       const readiness = await observeTaskReadiness();
+      requireOriginalDocument();
       if (readiness.state === "signed_out") {
         return {
           state: "not_authenticated",
@@ -4055,7 +4075,9 @@ export class ChatGptRoute {
           profile === "temporary-instant",
           deadline,
           observationGeneration,
+          observer.connectionCheck ? observer.beforePrepare : undefined,
         );
+        requireOriginalDocument();
         if (profileFailure !== null) {
           return {
             state: "failed_before_submit",
@@ -4075,6 +4097,7 @@ export class ChatGptRoute {
         // Profile preparation may navigate. Its composer/model probes are not
         // authentication evidence for the new document's dispatch.
         const currentReadiness = await observeTaskReadiness();
+        requireOriginalDocument();
         if (currentReadiness.state !== "authenticated") {
           return {
             state:
@@ -4358,6 +4381,8 @@ export class ChatGptRoute {
         // this process: nothing awaits between the check and the dispatch.
         // The script then compares the page's own location once more,
         // in-page, before it clicks.
+        requireOriginalDocument();
+        preparing = false;
         await observer.onDispatchIntent?.();
         const beforeAppVerification = dispatchReadinessRefusal();
         if (beforeAppVerification) return beforeAppVerification;
