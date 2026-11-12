@@ -53,13 +53,14 @@ func measureRetainedLaunch(ctx context.Context, command Command, launch *confine
 // re-observes its frozen paths without refreshing its plan or authority. Any
 // failure consumes and closes this measurement.
 type retainedLaunchMeasurement struct {
-	context     context.Context
-	fs          launchFilesystem
-	pins        []io.Closer
-	executables []executableMeasurement
-	directories []directoryCheck
-	hostRuntime *HostRuntimePlan
-	closed      bool
+	context      context.Context
+	fs           launchFilesystem
+	pins         []io.Closer
+	executables  []executableMeasurement
+	runtimeFiles []executableMeasurement
+	directories  []directoryCheck
+	hostRuntime  *HostRuntimePlan
+	closed       bool
 }
 type directoryCheck struct {
 	pin            directoryPin
@@ -116,6 +117,11 @@ func (m *retainedLaunchMeasurement) Recheck(ctx context.Context) error {
 	for _, pin := range m.executables {
 		if bounded.Err() != nil || m.context.Err() != nil || pin.recheck(bounded) != nil {
 			return refuse(processsvc.RefusalExecutableIntegrity)
+		}
+	}
+	for _, pin := range m.runtimeFiles {
+		if bounded.Err() != nil || m.context.Err() != nil || pin.recheck(bounded) != nil {
+			return refuse(processsvc.RefusalRuntimeIntegrity)
 		}
 	}
 	for _, c := range m.directories {
@@ -188,7 +194,7 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 			if err != nil || pin == nil {
 				return nil, refusalAt(nil, processsvc.RefusalRuntimeIntegrity)
 			}
-			measurement.executables = append(measurement.executables, pin)
+			measurement.runtimeFiles = append(measurement.runtimeFiles, pin)
 		}
 		for _, selected := range launch.gitRuntimeResources.resourceFiles() {
 			pin, err := reader.pinGitRuntimeFile(ctx, selected)
@@ -198,7 +204,7 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 			if err != nil || pin == nil {
 				return nil, refusalAt(nil, processsvc.RefusalRuntimeIntegrity)
 			}
-			measurement.executables = append(measurement.executables, pin)
+			measurement.runtimeFiles = append(measurement.runtimeFiles, pin)
 		}
 	}
 	add := func(path string, identity authority.RootIdentity, private bool, parent directoryPin, relative string, reason processsvc.NativeRefusalReason) directoryPin {
