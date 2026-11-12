@@ -165,7 +165,9 @@ def drive_closed_package(root, machine_json, closed=True, driver=False, clone_re
         if name == 'quit-proof':
             proof_count[0] += 1
             (target.parent / 'quit-proof.json').write_text(json.dumps(
-                {'running': not quit_requested, 'drained': bool(quit_requested),
+                {'runningMarker': 'absent' if quit_requested else 'present',
+                 'receiptMarker': 'present' if quit_requested else 'absent',
+                 'running': not quit_requested, 'drained': bool(quit_requested),
                  'receipt': f'proof-{proof_count[0]}', 'quitAt': 1000, 'observedAt': 1000}))
         if name == 'connection-proof':
             (target.parent / 'connection.json').write_text(json.dumps({'approvedDev': False}))
