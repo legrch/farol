@@ -141,7 +141,7 @@ tasks:
     cmds:
       - /usr/bin/python3 -B -m unittest discover -s tooling/vm-smoke -p 'test_*.py'
       - /usr/bin/python3 -B -m unittest discover -s tooling -p 'test_vm_machine.py'
-      - node --test tooling/vm-smoke/inspect.test.mjs tooling/vm-smoke/import-dev.test.mjs tooling/vm-smoke/import-dev-final-publish.regression.mjs tooling/vm-smoke/entry.test.mjs tooling/vm-smoke/quit-proof.test.mjs tooling/vm-smoke/no-tunnel.test.mjs tooling/vm-e2e/driver.test.mjs tooling/vm-e2e/egress-probe.test.mjs tooling/vm-e2e/fixture-probe.test.mjs
+      - node --test tooling/vm-smoke/dev-artifact.test.mjs tooling/vm-smoke/inspect.test.mjs tooling/vm-smoke/import-dev.test.mjs tooling/vm-smoke/import-dev-final-publish.regression.mjs tooling/vm-smoke/entry.test.mjs tooling/vm-smoke/quit-proof.test.mjs tooling/vm-smoke/no-tunnel.test.mjs tooling/vm-e2e/driver.test.mjs tooling/vm-e2e/egress-probe.test.mjs tooling/vm-e2e/fixture-probe.test.mjs
 
   dev:
     # The owner's one development command: pick the declared toolchain, make
