@@ -246,6 +246,7 @@ function binaryInfo(overrides = {}) {
 // environment, snapshots and refusal/cleanup paths without building/executing
 // Farol. No injected production runner or authentication bypass is exported.
 async function fixture(options = {}) {
+  const entry = options.devControl ? "faroldevcontrol" : "farol";
   const base = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "farol-go-builder-")),
   );
@@ -334,7 +335,7 @@ case "$1" in
       printf '%s\\n' ${quote(options.version ?? "go version go1.27.3 darwin/arm64")}
     else
       ${options.identityAction ?? ""}
-      printf '%s\\n' ${quote(options.rawInfo ?? JSON.stringify(options.info ?? binaryInfo({ Deps: modules.inputs.map(({ modulePath, version }, index) => ({ Path: modulePath, Version: version, Sum: testH1(modules.filesByModule[index]) })) })))}
+      printf '%s\\n' ${quote(options.rawInfo ?? JSON.stringify(options.info ?? binaryInfo({ Path: `${MODULE}/cmd/${entry}`, Deps: modules.inputs.map(({ modulePath, version }, index) => ({ Path: modulePath, Version: version, Sum: testH1(modules.filesByModule[index]) })) })))}
     fi ;;
   build)
     [ "$GOTOOLCHAIN" = local ] && [ "$GOENV" = off ] && [ "$GOWORK" = off ]
@@ -353,7 +354,24 @@ case "$1" in
     [ "$(stat ${process.platform === "darwin" ? "-f %Lp" : "-c %a"} "$GOMODCACHE/${modulePath}@${version}/go.mod")" = 400 ]`,
       )
       .join("\n")}
-    [ "$*" = ${quote(`build -p=2 -compiler=gc -buildmode=exe -trimpath -buildvcs=false -mod=${"readonly"} -ldflags=-X=${SYMBOL}=${identity.buildId}`)}" -o $(dirname \"$TMPDIR\")/farol-backend ./cmd/farol" ]
+    [ "$*" = ${quote(`build -p=2 -compiler=gc -buildmode=exe -trimpath -buildvcs=false -mod=readonly${options.devControl ? "" : ` -ldflags=-X=${SYMBOL}=${identity.buildId}`}`)}" -o $(dirname \"$TMPDIR\")/${options.devControl ? "dev-control" : "farol-backend"} ./cmd/${entry}" ]
+    ${
+      options.canonicalizeModuleInfo
+        ? modules.inputs
+            .map(({ modulePath, version }) => {
+              const canonical = JSON.stringify({
+                Version: version,
+                Time: "0001-01-01T00:00:00Z",
+              });
+              return `info="$GOMODCACHE/cache/download/${modulePath}/@v/${version}.info"
+    if [ "$(cat "$info")" != ${quote(canonical)} ]; then
+      printf '%s' ${quote(canonical)} > "$info.tmp"
+      mv "$info.tmp" "$info"
+    fi`;
+            })
+            .join("\n")
+        : ""
+    }
     ${options.buildAction ?? ""}
     while [ "$1" != -o ]; do shift; done
     shift
@@ -416,6 +434,13 @@ afterEach(async () => {
 });
 
 describe("candidate-local Go backend build contract", () => {
+  // Models modfetch.readDiskStat's RevInfo remarshal and atomic replacement.
+  // This is a deterministic cache regression, not live Go qualification.
+  it("seeds canonical module metadata without Go rewriting the snapshot", async () => {
+    const f = await fixture({ canonicalizeModuleInfo: true });
+    expect((await buildGoBackend(f.options)).inputExact).toBe(true);
+  });
+
   it("binds the production command, build ID, measured bytes and whole committed HEAD", async () => {
     const f = await fixture();
     await fs.writeFile(path.join(f.root, "ignored.go"), "package injected\n");
@@ -1150,6 +1175,9 @@ describe("explicit committed-sum-bound offline module inputs", () => {
     "printf moved >> @ZIP@",
     'chmod 600 "$GOMODCACHE/golang.org/x/sys@v0.35.0/lib/source.go"; printf moved >> "$GOMODCACHE/golang.org/x/sys@v0.35.0/lib/source.go"',
     'printf foreign > "$GOMODCACHE/foreign"',
+    'printf moved > "$GOMODCACHE/cache/download/golang.org/x/sys/@v/v0.35.0.info.tmp"; mv "$GOMODCACHE/cache/download/golang.org/x/sys/@v/v0.35.0.info.tmp" "$GOMODCACHE/cache/download/golang.org/x/sys/@v/v0.35.0.info"',
+    'rm "$GOMODCACHE/cache/download/golang.org/x/sys/@v/v0.35.0.info"',
+    'touch "$GOMODCACHE/cache/download/golang.org/x/sys/@v/v0.35.0.lock"',
   ])(
     "refuses original input or owned cache movement after compiler success: %s",
     async (buildAction) => {
@@ -1220,6 +1248,22 @@ describe("explicit committed-sum-bound offline module inputs", () => {
 });
 
 describe("owned temporary build directories", () => {
+  it.runIf(process.platform === "darwin" && process.arch === "arm64")(
+    "keeps canonical module metadata unchanged in the development stop helper",
+    async () => {
+      const f = await fixture({
+        devControl: true,
+        canonicalizeModuleInfo: true,
+      });
+      const binary = await buildDevControl(f.root, {
+        toolchain: f.toolchain,
+        moduleInputs: f.modules.inputs,
+      });
+      expect(path.basename(binary)).toBe("dev-control");
+      await releaseOwnedTemporary(f.root, binary, "go-dev-control-");
+    },
+  );
+
   const scratch = async (root) =>
     (await fs.readdir(path.join(root, "_output/tmp")).catch(() => [])).filter(
       (name) => name.startsWith("go-dev-control-"),

@@ -286,10 +286,14 @@ export async function compileNativeArchive({
       "_output/tmp/go-archive-compiler-cache",
     );
     await privateDirectory(sharedCache);
+    // Go telemetry/configuration must stay inside this build's disposable
+    // state, including on macOS where UserConfigDir is under HOME/Library.
+    await privateDirectory(path.join(temporary, "home"));
     await privateDirectory(path.join(temporary, "tmp"));
     await seedModuleCache(cache);
     const environment = {
-      HOME: os.userInfo().homedir,
+      HOME: path.join(temporary, "home"),
+      TMPDIR: path.join(temporary, "tmp"),
       PATH: "/opt/homebrew/bin:/usr/bin:/bin",
       LANG: "en_US.UTF-8",
       LC_ALL: "en_US.UTF-8",
@@ -298,6 +302,7 @@ export async function compileNativeArchive({
       GOTOOLCHAIN: "local",
       GOFLAGS: "",
       GOPROXY: "off",
+      GOSUMDB: "off",
       GOROOT: selected.sdk,
       GOPATH: path.join(temporary, "path"),
       GOMODCACHE: cache,

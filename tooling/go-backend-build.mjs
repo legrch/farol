@@ -719,10 +719,18 @@ async function installModules(modules, cache) {
     await write(`${download}.mod`, mod.bytes);
     await write(`${download}.ziphash`, Buffer.from(ledger.zipH1));
     // Version is declared and bound by go.mod/go.sum, not proxy .info claims.
-    // Go's cached Stat needs .info; it contains no timestamp or caller metadata.
+    // Go's cached Stat remarshal uses modfetch.RevInfo, whose Time is not
+    // omitted when zero. Seed that canonical encoding so readDiskStat does
+    // not atomically replace .info during an otherwise read-only build.
+    // This synthetic zero time is not a claim about the upstream commit.
     await write(
       `${download}.info`,
-      Buffer.from(JSON.stringify({ Version: input.version })),
+      Buffer.from(
+        JSON.stringify({
+          Version: input.version,
+          Time: "0001-01-01T00:00:00Z",
+        }),
+      ),
     );
     if (!entries.has(`${prefix}go.mod`)) fail("MODULE_GRAPH_UNSUPPORTED");
   }
