@@ -62,6 +62,18 @@ not installed application or live-provider acceptance.
 
 Platform record `macos-26A434-arm64-installed-runtime-v19` adds pinned `/usr/bin/dirname`, `/bin/pwd` and `/usr/bin/readlink` for bounded launcher compatibility. On macOS build `26A434` arm64, `/usr/bin/readlink` and `/usr/bin/stat` are two names for one root-owned image; the fixed readlink pathname alone admits exactly two links under the same content, ownership and identity checks. A disposable native compiler fixture observes the previous seven-image policy refuse a Brain-like launcher, and the ten-image policy run both its direct and symlink entrypoints; the stat alias remains refused. Separate native scope tests cover workspace, write and network denial. These witnesses do not establish public MCP, installed or live Sync acceptance.
 
+Platform record `macos-26A434-arm64-installed-runtime-v22` requalifies the 13
+compiler inputs changed by `8d97cf00` to carry classified native refusal reasons
+out of the native adapter. On 2026-11-12 at approximately 15:08 UTC, the Lead ran
+`go test -count=1 -v -tags farol_native_process -skip 'TestNativeSeatbeltCredentialAliases' ./modules/computer/infra/process/`
+outside the sandbox against clean source `8130facf46a82e6ff0cf6427dac39b1db530cc1e`
+on macOS 27.0.1 build `26A434` arm64, using the module-cache Go 1.26.2 toolchain
+with `GOTOOLCHAIN=local` and `FAROL_TEST_WATCHDOG_NODE` pointing at approved Node
+24.20.0. The suite passed: 250 tests PASS and one SKIP (`TestNativeDrainLeafHelper`,
+the helper entrypoint skipped by design outside a child invocation). Only the
+same documented legacy credential-alias test was excluded. This is native source
+evidence, not package, installed, live-provider or descendant-cleanup acceptance.
+
 Source registration is not release qualification. Disposable packaged MCP checks
 cover bounded Bash, synthetic Git and observation of an original result after
 MCP reconnect. Ordinary Git configuration/hooks, external Shell, cancellation and
