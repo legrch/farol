@@ -406,11 +406,23 @@ class ServiceAdmission:
         if not isinstance(windows, str) or not (windows == "unconfirmed" or re.fullmatch(r"[0-9]{1,3}", windows)):
             refuse("APP_SERVICE_REPLY_INVALID")
 
+    @staticmethod
+    def validate_launch_identity(command, value):
+        identity, exited = value.get("launchIdentityState"), value.get("uiPrimaryExit")
+        if (identity not in ("bound", "unknown", "unconfirmed", "retained-unconfirmed") or
+                exited not in ("observed", "not-observed", "unconfirmed")):
+            refuse("APP_SERVICE_PHASE_UNCONFIRMED")
+        if command in ("launch", "activate") and (identity != "bound" or exited != "not-observed"):
+            refuse("APP_SERVICE_PHASE_UNCONFIRMED")
+        if command in ("quit", "close") and (identity != "bound" or exited != "observed"):
+            refuse("APP_SERVICE_PHASE_UNCONFIRMED")
+
     def admit_observation(self, receipt, observation, allow_pending_foreground=False):
         """Bind native retained state to the last ACK, never adopt another run."""
         if not isinstance(observation, dict):
             refuse("APP_SERVICE_REPLY_INVALID")
         self.validate_status(observation)
+        self.validate_launch_identity(receipt["command"], observation)
         checks = {
             "serviceContract": SERVICE_SCHEMA,
             "executor": "compiled-native-helper", "serverCodeSource": "helper-binary",
@@ -457,6 +469,8 @@ class ServiceAdmission:
             "foreground": observation.get("foreground", "unconfirmed"),
             "windows": observation.get("windows", "unconfirmed"),
             "rootExit": observation.get("rootExit", "unconfirmed"),
+            "launchIdentityState": observation["launchIdentityState"],
+            "uiPrimaryExit": observation["uiPrimaryExit"],
             "installationLocation": observation["installationLocation"],
             "installedApplication": observation["installedApplication"],
             "installationEvidence": observation["installationEvidence"],
@@ -467,6 +481,7 @@ class ServiceAdmission:
         if not isinstance(reply, dict) or command != self.steps[i]:
             refuse("APP_SERVICE_REPLY_INVALID")
         self.validate_status(reply)
+        self.validate_launch_identity(command, reply)
         checks = {"serviceContract": SERVICE_SCHEMA, "executor": "compiled-native-helper",
                   "serverCodeSource": "helper-binary", "shell": "not-used",
                   "runId": self.run_id, "nonce": self.nonce,
@@ -522,6 +537,8 @@ class ServiceAdmission:
             "foreground": reply.get("foreground", "unconfirmed"),
             "windows": reply.get("windows", "unconfirmed"),
             "rootExit": reply.get("rootExit", "unconfirmed"),
+            "launchIdentityState": reply["launchIdentityState"],
+            "uiPrimaryExit": reply["uiPrimaryExit"],
             "installationLocation": reply["installationLocation"],
             "installedApplication": reply["installedApplication"],
             "installationEvidence": reply["installationEvidence"],

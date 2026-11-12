@@ -229,6 +229,8 @@ def reply(session, command, operation, pid=None, broken=None):
               "applicationRunning": "true" if state == "running" else "false",
               "foreground": "true" if command == "activate" else "false",
               "windows": "1" if state == "running" else "0",
+              "launchIdentityState": "unconfirmed" if command in ("open", "install") else "bound",
+              "uiPrimaryExit": ("observed" if command in ("quit", "close") else "not-observed" if state == "running" else "unconfirmed"),
               "rootExit": ("not-observed" if state == "running" else
                            "observed" if command in ("quit", "close") else "no-owned-root"),
               "installationRoot": "/Applications",
@@ -593,6 +595,8 @@ class RunnerNativeTests(unittest.TestCase):
                        "applicationRunning": "true" if command in ("launch", "activate") else "false",
                        "foreground": "true" if command == "activate" else "false",
                        "windows": "1",
+                       "launchIdentityState": "unconfirmed" if command in ("open", "install") else "bound",
+                       "uiPrimaryExit": ("observed" if command in ("quit", "close") else "not-observed" if command in ("launch", "activate") else "unconfirmed"),
                        "rootExit": ("not-observed" if command in ("launch", "activate") else
                                     "observed" if command in ("quit", "close") else "no-owned-root"),
                        "installationRoot": "/Applications",
@@ -669,6 +673,53 @@ class RunnerNativeTests(unittest.TestCase):
             self.assertFalse(any(f.name.endswith(".sh") for f in runner.stage.iterdir()))
             self.assertNotIn(json.loads((runner.out / "native-session.json").read_text())["nonce"],
                              (runner.out / "result.json").read_text())
+
+    def test_incomplete_launch_identity_or_ui_exit_stops_effects_and_retains_custody(self):
+        cases = [("launch", "launchIdentityState", None), ("launch", "launchIdentityState", "unconfirmed"),
+                 ("activate", "launchIdentityState", "retained-unconfirmed"),
+                 ("launch", "uiPrimaryExit", None), ("launch", "uiPrimaryExit", "observed"),
+                 ("quit", "launchIdentityState", "unconfirmed"),
+                 ("close", "launchIdentityState", None),
+                 ("close", "uiPrimaryExit", None), ("close", "uiPrimaryExit", "unconfirmed"),
+                 ("quit", "uiPrimaryExit", None), ("quit", "uiPrimaryExit", "unconfirmed"),
+                 ("quit", "uiPrimaryExit", "not-observed"), ("close", "uiPrimaryExit", "not-observed")]
+        for observe in (False, True):
+            for command, field, value in cases:
+                with self.subTest(observe=observe, command=command, field=field, value=value), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    runner, archive, release, actions, effects, _ = self.fixture(root)
+                    # Synthetic custody artifacts stand in for the outer run's
+                    # real lease and fence; no fixture may remove them on failure.
+                    custody = [root / name for name in ('input-lease.json', '.input-lease.json', '.farol-smoke-pending.json')]
+                    for file in custody:
+                        file.write_text('retained original custody')
+                    original = runner.action
+                    sequence = {'launch': '2', 'activate': '3', 'quit': '4', 'close': '5'}[command]
+                    def incomplete(*args):
+                        result = original(*args)
+                        verb = args[args.index('--service-command')+1]
+                        seq = args[args.index('--service-sequence')+1]
+                        if seq == sequence and verb == ('observe' if observe else command):
+                            if value is None:
+                                result.pop(field, None)
+                            else:
+                                result[field] = value
+                        return result
+                    runner.action = incomplete
+                    grants = {'appServiceContract': 'terminal-mac.app-service/4',
+                              'appServiceExecutor': 'compiled-native-helper',
+                              'appServiceLaunchIdentityContract': 'terminal-mac.launch-identity/1',
+                              'appServiceAdmission': 'available'}
+                    with self.assertRaisesRegex(runner_module.Refused, 'APP_SERVICE_PHASE_UNCONFIRMED'):
+                        runner.run_native_app_service(archive, release, grants)
+                    self.assertEqual(runner.pending, 'native:' + command + (':observe' if observe else ''))
+                    self.assertNotIn('native:close', runner.log)
+                    self.assertFalse((runner.out / 'result.json').exists())
+                    self.assertTrue((runner.out / ('native-intent-' + sequence.zfill(2) + '-' + command + '.json')).exists())
+                    for file in custody:
+                        self.assertEqual(file.read_text(), 'retained original custody')
+                    next_commands = [a[a.index('--service-command')+1] for a in actions]
+                    self.assertEqual(next_commands[-1], 'observe' if observe else command)
 
     def test_activation_awaits_only_bound_readonly_observation(self):
         from unittest.mock import patch

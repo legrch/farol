@@ -874,7 +874,6 @@ class Runner:
         self.write_durable_json_exclusive(
             self.out / ('native-receipt-%02d-%s.json' % (sequence, command)),
             {'schema': 'farol.vm-app-service.receipt/1', **receipt})
-        self.log.append('native:' + command)
         self.pending = None
         return receipt
 
@@ -1026,6 +1025,7 @@ class Runner:
             # The observation is a fresh read-only mailbox action bound to the
             # recorded effect identity. A mismatch stops all subsequent effects.
             self.native_app_observe(session, receipt)
+            self.log.append('native:' + command)
             if command in ('launch', 'activate'):
                 # Screenshots document pixels but do not prove UX acceptance.
                 self.pending = 'native:%s:screenshot' % command
