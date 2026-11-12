@@ -10,6 +10,18 @@ import { connectorWorkspaceSelection } from "../../src/pkg/product-settings/conn
 import { prepareConnectorCheckDocument } from "../../apps/desktop/bridge/connector-check-readiness";
 import { currentConnectorAttachment } from "../../src/apps/desktop/connector-app-receipt-wait";
 import {
+  runExplicitConnectionCheck,
+  ConnectionCheckRefusal,
+  connectionCheckDigest,
+  connectionCheckRuntimeReady,
+} from "../../apps/desktop/connection-check-command";
+import { ProductConfigurationResultSchema } from "../../src/pkg/product-settings/contract";
+import type { ChatGptTaskObserver } from "../../src/apps/desktop/chatgpt-route";
+import type {
+  ComputerCheckAdvanceRequest,
+  ComputerCheckObserveResponse,
+} from "../../apps/desktop/bridge/wire";
+import {
   fixtureBuildId,
   fixtureWorkspaceId,
   guidedSettingsFixture,
@@ -22,7 +34,11 @@ const source = fs.readFileSync(
   "utf8",
 );
 const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
-const functions = ["connectorAppBindingCurrent", "verifySecureMcpApp"]
+const functions = [
+  "connectorAppBindingCurrent",
+  "testConnectionCommand",
+  "verifySecureMcpApp",
+]
   .map((name) => {
     const node = tree.program.body.find(
       (n) => n.type === "FunctionDeclaration" && n.id?.name === name,
@@ -81,12 +97,9 @@ function fixture() {
     async (
       _prompt: string,
       _files: unknown[],
-      hooks: {
-        onDispatchIntent(): Promise<void>;
-        readConnectorReceipt?(): Promise<boolean>;
-      },
+      hooks: ChatGptTaskObserver,
     ): Promise<{ state: string; code?: string }> => {
-      await hooks.onDispatchIntent();
+      await hooks.onDispatchIntent!();
       send();
       return { state: "outcome_unknown" };
     },
@@ -103,6 +116,12 @@ function fixture() {
     hasPendingReadinessDocument: () => false,
     runReadonlyTask: route,
     openTemporaryChat: vi.fn(async () => ({ status: "opened" })),
+    captureManualTaskTarget: () => () => true,
+    openConnectionCheckChat: vi.fn(async () => ({ status: "opened" })),
+    captureConnectionCheckDocument: () => ({
+      identity: "retained-check-document",
+      current: () => true,
+    }),
   };
   const createRoute = vi.fn((_options: unknown) => ({
     runReadonlyTask: route,
@@ -128,6 +147,12 @@ function fixture() {
     runtimeEnvironment: "owner-preview",
     randomUUID: () => "status-check-fixture",
     currentConnectorAttachment,
+    runExplicitConnectionCheck,
+    ConnectionCheckRefusal,
+    connectionCheckDigest,
+    connectionCheckRuntimeReady,
+    ProductConfigurationResultSchema,
+    selectedTaskId: "",
     prepareConnectorCheckDocument,
     chatGptWindowPresentationOption: () => ({
       windowPresentation: { mode: "hidden" },
@@ -138,7 +163,10 @@ function fixture() {
     quitInProgress: false,
     installedUpdateAdmission: false,
     process: { env: {} },
-    secureMcpConnectorRuntime: { isRunning: () => true },
+    secureMcpConnectorRuntime: {
+      isRunning: () => true,
+      hasUnresolvedEffect: () => false,
+    },
     desktopGoCore: {
       observeComputerConnectorVerification: readGo,
       expectComputerConnectorStatusCheck: vi.fn(async () => {}),
@@ -165,6 +193,8 @@ function fixture() {
     stripTypeScriptTypes(`${functions}\nverifySecureMcpApp;`),
     context,
   ) as (scope?: typeof expected) => Promise<{ ok: false; error: string }>;
+  const testConnection = vi.fn(context.testConnectionCommand);
+  context.testConnectionCommand = testConnection;
   return {
     expected,
     settings,
@@ -175,6 +205,7 @@ function fixture() {
     route,
     clearOld,
     verify,
+    testConnection,
     context,
     binding,
     createRoute,
@@ -192,29 +223,90 @@ describe("actual separate-check desktop admission", () => {
     connector.attachment = original.connectors.secureMcp.attachment;
     connector.appVerificationPending = false;
     f.settings.setup.connect = original.setup.connect;
-    f.readGo.mockResolvedValue({
-      binding: f.binding,
-      checkId: "status-check-fixture",
-    } as ReturnType<typeof f.readGo> extends Promise<infer T> ? T : never);
+    const operationId = "0311add3-b03c-4f89-b916-aea6a0a39242";
+    const checkId = "49a0cb44-5c67-4aae-9b56-41db024507d3";
+    const receiptDigest = "d".repeat(64);
+    f.context.randomUUID = () => operationId;
+    let phase: ComputerCheckObserveResponse["phase"] = "claimed";
+    let receiptAvailable = false;
+    const core = f.context.desktopGoCore;
+    core.claimConnectionCheck = vi.fn(async () => ({ first: true }));
+    core.prepareConnectionCheck = vi.fn(async () => {
+      phase = "prepared";
+      return {
+        operationId,
+        mode: "status",
+        checkId,
+        prompt: `Call computer_connection_status once. Use checkId "${checkId}".`,
+      };
+    });
+    core.advanceConnectionCheck = vi.fn(
+      async ({ stage }: ComputerCheckAdvanceRequest) => {
+        phase =
+          stage === "dispatch"
+            ? "dispatch_intent"
+            : stage === "sent"
+              ? "send_acknowledged"
+              : stage === "confirm"
+                ? "verified"
+                : stage === "refuse"
+                  ? "refused_before_send"
+                  : "outcome_unknown";
+        return {
+          phase,
+          sendAuthorized: stage === "dispatch",
+          ...(phase === "verified" ? { receiptDigest } : {}),
+        };
+      },
+    );
+    core.observeConnectionCheck = vi.fn(async () => ({
+      operationId,
+      mode: "status",
+      checkId,
+      phase,
+      receiptAvailable,
+    }));
     f.context.connectorVerificationProof = () => ({
       receipt: { challengeSha256: "c".repeat(64), binding: f.binding },
       workspaceId: fixtureWorkspaceId,
     });
-    f.context.waitForConnectorAppReceipt = async (
-      read: () => Promise<unknown>,
-    ) => read();
     const check = vi.fn(async () => ({ ok: true }));
     f.context.checkSecureMcpAttachment = check;
     f.route.mockImplementation(async (prompt, _files, hooks) => {
       expect(prompt).toContain("computer_connection_status once.");
-      await hooks.onDispatchIntent();
-      expect(
-        f.context.desktopGoCore.expectComputerConnectorStatusCheck,
-      ).toHaveBeenCalledExactlyOnceWith("status-check-fixture");
+      expect(prompt).toContain(`checkId "${checkId}"`);
+      expect(hooks.connectionCheck).toBe(true);
+      await hooks.onDispatchIntent!();
+      expect(core.advanceConnectionCheck).toHaveBeenCalledExactlyOnceWith({
+        operationId,
+        stage: "dispatch",
+      });
+      expect(hooks.beforeSend!()).toBe(true);
+      expect(await hooks.readConnectorReceipt?.()).toBe(false);
+      f.send();
+      await hooks.onSendAcknowledged!();
+      receiptAvailable = true;
       expect(await hooks.readConnectorReceipt?.()).toBe(true);
       return { state: "receipt_confirmed" };
     });
-    expect(await f.verify()).toEqual({ ok: true });
+    expect(await f.verify()).toEqual({
+      ok: true,
+      snapshot: { status: "ready", settings: f.settings },
+      evidence: {
+        kind: "connector.connection-check",
+        operationId,
+        receiptSha256: receiptDigest,
+        retained: false,
+      },
+    });
+    expect(f.testConnection).toHaveBeenCalledExactlyOnceWith(
+      { kind: "connector.test-connection", operationId, taskId: "" },
+      "setup",
+    );
+    expect(core.prepareConnectionCheck).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ operationId, mode: "status" }),
+    );
+    expect(f.send).toHaveBeenCalledTimes(1);
     expect(f.prepare).not.toHaveBeenCalled();
     expect(connector.attachment).toEqual(
       original.connectors.secureMcp.attachment,
