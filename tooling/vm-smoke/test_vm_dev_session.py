@@ -284,6 +284,8 @@ class EffectsTests(Fixture):
         second.mkdir(mode=0o700)
         for states, error in [(["running", "running"], "VM_DEV_CAPACITY_BUSY"),
                               (["running", "unconfirmed"], "VM_DEV_CAPACITY_UNKNOWN"),
+                              # A stop waiting on the guest's own confirmation still holds a slot.
+                              (["running", "stopping-awaiting-guest-confirmation"], "VM_DEV_CAPACITY_BUSY"),
                               (["stopped", "running"], None)]:
             replies = [dict(name=name, state=state) for name, state in zip(
                 ["farol-base-1", "farol-other"], states)]

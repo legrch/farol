@@ -256,7 +256,8 @@ def _capacity(binary, root, env):
         demand(entry.is_dir() and not entry.is_symlink(), "VM_DEV_CAPACITY_UNKNOWN")
         value = _host_status(binary, entry.name, env)
         demand(value is not None and value.get("name") == entry.name and
-               value.get("state") in ("running", "stopped", "stopping", "paused", "starting"),
+               value.get("state") in ("running", "stopped", "stopping", "paused", "starting",
+                                      "stopping-awaiting-guest-confirmation"),
                "VM_DEV_CAPACITY_UNKNOWN")
         active += value["state"] != "stopped"
     demand(active < 2, "VM_DEV_CAPACITY_BUSY")
@@ -297,7 +298,8 @@ def _one_start(binary, clone, visible, evidence, env):
                          runtimePID=int(runtime_pid), instance=clone,
                          hostVZReadOnly=True, descendantCleanup="unverified")
                 return int(runtime_pid)
-            if value.get("state") in ("stopping", "paused", "error"):
+            if value.get("state") in ("stopping", "stopping-awaiting-guest-confirmation",
+                                      "paused", "error"):
                 raise VMDevError("VM_DEV_RUNTIME_NOT_READY")
         time.sleep(1)
     raise VMDevError("VM_DEV_RUNTIME_START_UNKNOWN")
