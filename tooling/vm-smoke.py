@@ -1343,7 +1343,9 @@ class Runner:
 
     def require_quit_drain(self, before):
         after = self.quit_proof()
-        require(after.get('running') is False and after.get('drained') is True and
+        require(after.get('runningMarker') == 'absent' and
+                after.get('receiptMarker') == 'present' and
+                after.get('running') is False and after.get('drained') is True and
                 after.get('receipt') != before.get('receipt') and
                 type(after.get('quitAt')) is int and type(before.get('observedAt')) is int and
                 before['observedAt'] <= after['quitAt'] <= after['observedAt'],
@@ -1752,8 +1754,9 @@ class Runner:
             self.require_quit_drain(proof)
         else:
             proof = self.quit_proof()
-            require(proof.get('running') is False and
-                    (proof.get('receipt') is None or proof.get('drained') is True),
+            require(proof.get('runningMarker') == 'absent' and proof.get('running') is False and
+                    ((proof.get('receiptMarker') == 'absent' and proof.get('receipt') is None) or
+                     (proof.get('receiptMarker') == 'present' and proof.get('drained') is True)),
                     'GUEST_QUIT_DRAIN_UNCONFIRMED')
         return bool(before['pids'])
 

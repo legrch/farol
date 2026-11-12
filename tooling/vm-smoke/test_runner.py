@@ -398,7 +398,7 @@ m.export_dev_connection(Path(sys.argv[2]),json.loads(sys.argv[3]),Path(sys.argv[
     def test_drain_requires_a_fresh_confirmed_receipt_without_running_marker(self):
         runner = object.__new__(vm.Runner)
         before = {'observedAt': 100, 'receipt': 'old'}
-        valid = {'observedAt': 300, 'quitAt': 200, 'receipt': 'new', 'running': False, 'drained': True}
+        valid = {'runningMarker': 'absent', 'receiptMarker': 'present', 'observedAt': 300, 'quitAt': 200, 'receipt': 'new', 'running': False, 'drained': True}
         for change in ({}, {'running': True}, {'drained': False}, {'quitAt': 99}, {'quitAt': 301}, {'receipt': 'old'}):
             with patch.object(runner, 'quit_proof', return_value=dict(valid, **change)):
                 if not change: runner.require_quit_drain(before)

@@ -6,15 +6,45 @@ const source = fs.readFileSync(
   new URL("./quit-proof.js", import.meta.url),
   "utf8",
 );
-function proof(receipt, running = false) {
+function proof(receipt, running = false, unsafe = null) {
   const context = {
     ObjC: { import() {} },
+    Ref: () => [],
     $: {
       NSHomeDirectory: () => ({ js: "/guest" }),
       NSFileManager: {
         defaultManager: {
-          fileExistsAtPath: (path) =>
-            path.endsWith("running.json") ? running : receipt !== null,
+          attributesOfItemAtPathError(path, error) {
+            if (unsafe === "parent-denied" && path === "/guest/Library") {
+              error[0] = { domain: { js: "NSCocoaErrorDomain" }, code: 257 };
+              return null;
+            }
+            const marker = path.endsWith(".json");
+            const exists = path.endsWith("running.json")
+              ? running
+              : receipt !== null;
+            if (
+              marker &&
+              !exists &&
+              unsafe !== "dangling-link" &&
+              unsafe !== "unsafe-type"
+            ) {
+              error[0] = { domain: { js: "NSCocoaErrorDomain" }, code: 260 };
+              return null;
+            }
+            return {
+              js: {},
+              objectForKey: () => ({
+                js: !marker
+                  ? "NSFileTypeDirectory"
+                  : unsafe === "dangling-link"
+                    ? "NSFileTypeSymbolicLink"
+                    : unsafe === "unsafe-type"
+                      ? "NSFileTypeDirectory"
+                      : "NSFileTypeRegular",
+              }),
+            };
+          },
         },
       },
       NSString: {
@@ -54,4 +84,16 @@ test("quit proof recognizes only canonical confirmed drain and retains marker ev
   }
   for (const raw of [null, "bad JSON", "null"])
     assert.equal(proof(raw).drained, false);
+});
+
+for (const state of ["parent-denied", "dangling-link", "unsafe-type"]) {
+  test(`quit proof retains ${state} as unconfirmed`, () => {
+    const result = proof(null, false, state);
+    assert.equal(result.runningMarker, "unconfirmed");
+    assert.equal(result.receiptMarker, "unconfirmed");
+    assert.equal(result.running, null);
+  });
+}
+test("unreadable receipt is unconfirmed rather than absent", () => {
+  assert.equal(proof(undefined).receiptMarker, "unconfirmed");
 });

@@ -9,11 +9,41 @@ function run(argv) {
     "/Library/Application Support/" +
     identity.dataLeaf +
     "/farol-state/";
-  const exists = (path) =>
-    $.NSFileManager.defaultManager.fileExistsAtPath(path);
-  const text = exists(root + "last-quit.json")
-    ? read(root + "last-quit.json")
-    : null;
+  // Foundation's item attributes do not follow the final symlink. Inspect
+  // every parent as well: an alias or an inaccessible ancestor is unresolved.
+  const classify = (path) => {
+    const parts = path.split("/").filter(Boolean);
+    let current = "";
+    for (let i = 0; i < parts.length; i++) {
+      current += "/" + parts[i];
+      const error = Ref();
+      const attrs = $.NSFileManager.defaultManager.attributesOfItemAtPathError(
+        current,
+        error,
+      );
+      if (!attrs || !attrs.js) {
+        const failure = error[0];
+        return failure &&
+          failure.domain.js === "NSCocoaErrorDomain" &&
+          Number(failure.code) === 260
+          ? "absent"
+          : "unconfirmed";
+      }
+      const kind = attrs.objectForKey("NSFileType").js;
+      if (i < parts.length - 1) {
+        if (kind !== "NSFileTypeDirectory") return "unconfirmed";
+      } else return kind === "NSFileTypeRegular" ? "present" : "unconfirmed";
+    }
+    return "unconfirmed";
+  };
+  const runningMarker = classify(root + "running.json");
+  let receiptMarker = classify(root + "last-quit.json");
+  let text = null;
+  if (receiptMarker === "present") {
+    const value = read(root + "last-quit.json");
+    if (typeof value === "string") text = value;
+    else receiptMarker = "unconfirmed";
+  }
   let drained = false;
   let quitAt = null;
   if (text !== null && text.length < 16384) {
@@ -36,7 +66,14 @@ function run(argv) {
   }
   return JSON.stringify({
     observedAt: Date.now(),
-    running: Boolean(exists(root + "running.json")),
+    running:
+      runningMarker === "present"
+        ? true
+        : runningMarker === "absent"
+          ? false
+          : null,
+    runningMarker,
+    receiptMarker,
     receipt: text,
     drained,
     quitAt,

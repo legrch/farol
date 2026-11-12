@@ -42,5 +42,16 @@ class EffectAdmissionTests(unittest.TestCase):
                 runner.run()
             self.assertTrue(runner.effect_file.is_symlink())
 
+    def test_absent_gui_requires_classified_marker_absence(self):
+        for running, receipt in [('unconfirmed', 'absent'), ('absent', 'unconfirmed'), (None, None)]:
+            with self.subTest(running=running, receipt=receipt):
+                runner = object.__new__(vm.Runner)
+                runner.state = lambda: {'pids': [], 'windows': 0}
+                runner.quit_proof = lambda: {'running': False, 'receipt': None,
+                    'runningMarker': running, 'receiptMarker': receipt}
+                runner.phase = lambda *a: self.fail('effect reached')
+                with self.assertRaisesRegex(vm.Refused, 'GUEST_QUIT_DRAIN_UNCONFIRMED'):
+                    runner.quit_guest_app()
+
 if __name__ == '__main__':
     unittest.main()
