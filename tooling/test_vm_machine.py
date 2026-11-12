@@ -203,7 +203,7 @@ class VmInstanceProvisioningTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         home = Path(self.directory.name).resolve()
         self.settings = home / 'Library/Application Support/Example Testing'
-        self.settings.mkdir(parents=True)
+        self.settings.mkdir(parents=True, mode=0o700)
         self.root = home / 'Library/Application Support/terminal-mac'
         (self.root / 'machines/farol-base-1').mkdir(parents=True)
         (self.root / 'machines/farol-base-1/machine.json').write_text('{}')
@@ -438,6 +438,34 @@ class ProvisionIntentTests(unittest.TestCase):
                     vm_machine.require_no_operations(settings, 'synthetic')
                 self.assertEqual(vm_machine.reconcile_operations(settings, 'synthetic')['status'], 'UNRESOLVED')
                 self.assertTrue(intent_exists(settings, kind))
+
+    def test_reentry_resyncs_existing_ancestor_before_dispatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Path(tmp).resolve() / 'settings'
+            settings.mkdir(mode=0o700)
+            actual = vm_machine.sync_directory
+            def fail_settings(path):
+                if path == settings:
+                    raise OSError('synthetic settings sync failure')
+                actual(path)
+            with mock.patch.object(vm_machine, 'sync_directory', side_effect=fail_settings), mock.patch.object(vm_machine.subprocess, 'run') as invoked:
+                with self.assertRaises(OSError):
+                    vm_machine.provision_effect(['/synthetic/tool'], settings, 'synthetic', 'start', {}, 1)
+                invoked.assert_not_called()
+            directory = vm_machine.operation_directory(settings, 'synthetic')
+            self.assertTrue(directory.parent.is_dir())
+            self.assertFalse(directory.exists())
+            vm_machine.require_no_operations(settings, 'synthetic')
+            synced = []
+            def sync(path):
+                actual(path)
+                synced.append(path)
+            def effect(*args, **kwargs):
+                self.assertIn(settings, synced)
+                self.assertLess(synced.index(settings), synced.index(directory.parent))
+            with mock.patch.object(vm_machine, 'sync_directory', side_effect=sync), mock.patch.object(vm_machine.subprocess, 'run', side_effect=effect) as invoked:
+                vm_machine.provision_effect(['/synthetic/tool'], settings, 'synthetic', 'start', {}, 1)
+                invoked.assert_called_once()
 
     def test_sync_failure_never_reaches_dispatch(self):
         with tempfile.TemporaryDirectory() as tmp:

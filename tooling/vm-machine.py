@@ -250,11 +250,14 @@ def sync_directory(path):
         os.close(fd)
 
 
-def durable_directory(path):
-    # Every new directory entry must be reachable durably before an intent
-    # inside it can guard an effect. Reentry also repeats the parent sync.
-    if not path.parent.exists():
-        durable_directory(path.parent)
+def durable_directory(path, settings):
+    # Revalidate and republish the complete owned chain, even when a failed
+    # earlier parent sync left an ancestor visible. Settings has a trusted
+    # existing parent; no recursion or creation extends above that root.
+    if path != settings:
+        if not path.is_relative_to(settings):
+            raise ValueError('PROVISION_EVIDENCE_UNSAFE')
+        durable_directory(path.parent, settings)
     try:
         path.mkdir(mode=0o700)
     except FileExistsError:
@@ -288,7 +291,7 @@ def require_no_operations(settings, name):
 
 def provision_effect(command, settings, name, kind, env, timeout):
     directory = operation_directory(settings, name)
-    durable_directory(directory)
+    durable_directory(directory, settings)
     # Create-only pre-effect evidence is never removed by this controller,
     # even after a controller exit of zero: detached VM state needs separate
     # read-only reconciliation, and a failed/unknown dispatch is never replayed.
