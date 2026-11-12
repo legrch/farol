@@ -261,3 +261,41 @@ generation after an updater replaces its accepted bytes. End the bound session
 cleanly before a separately selected generic guest-computer QA journey; record
 real updater journal/successor evidence independently. Never treat two archive
 installs or a VM restart as a product-update pass.
+
+
+### Helper16 functional qualification (November 12, 2026)
+
+Clean source `54b407a9` completed the exact default `task vm:dev` with installed
+terminal-mac build16: source build, accepted Dev derivative, fresh hidden clone
+`farol-qa-1280f3a0bd8f43ce`, inherited login/helper grants, READY_FOR_AGENT,
+rendered Setup/Home, menu bar and guest keyboard/text input. Clean EOF returned
+zero; immutable session `run-9f01ffc24bcd46bfba10d1119a90c5b5` is CLOSED with
+both original exits observed and installed bytes verified at close. The input
+lease was independently free, and the guest then shut down normally. The first
+frame was render-pending; the later UI screenshots supply the visual evidence.
+
+Fresh `farol-qa-15` independently completed the official 0.5.22 native
+install/launch/Quit/relaunch/Quit/close sequence, with distinct primary PIDs and
+one observed relaunch window. After that accepted session closed, a separate
+generic guest MCP journey used the real updater to download and install
+0.5.23. Home and a subsequent Quit/reopen showed 0.5.23 with one sensible Setup
+window. The guest updater record reports `phase=completed`,
+`archiveReleased=true` and target running build
+`9586e3cf827b269ad35dbb75102bb10583c1ed1a394d7a1d621e2238bb9a0729`.
+This is actual product-update evidence, separate from accepted-app lifecycle.
+
+Earlier helper14/helper15 UNKNOWN records remain unchanged. Helper16 adds only
+bounded full torn-read sampling before termination; post-terminate identity,
+drain and close checks remain strict. No VM/profile deletion, host Farol launch
+or host security-setting changes were used.
+
+This qualifies the local VM operator tool, not a full product release or a
+real-account scenario. Each default clone starts with a fresh guest Dev profile;
+this entry does not silently seed credentials or browser sign-in. Dev-only
+tunnel connection requires its separately selected QA step. A prior guest-only
+Dev binding answered connection status, while a catalogue read crossing a
+workspace-authority transition timed out and remains UNKNOWN. Source
+`f8bf18d2` corrects the independently confirmed catalogue socket budget mismatch
+(18 seconds for its 15-second Go lease); 659 bridge tests, typecheck and lint
+pass. This does not retrospectively qualify that live catalogue or shell/file
+operations. Full CI and exact-head independent acceptance remain separate.
