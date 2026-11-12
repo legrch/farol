@@ -121,12 +121,23 @@ def preflight_inputs(args):
     return receipt
 
 
+def _sync_directory(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def _private_directory(path, create=False):
     if create:
         try:
             path.mkdir(mode=0o700)
         except FileExistsError:
             pass
+        # Also sync on reentry: a prior failed sync must never become an
+        # apparently admitted directory merely because its entry is visible.
+        _sync_directory(path.parent)
     info = path.lstat()
     demand(stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode) and
            info.st_uid == os.geteuid() and not info.st_mode & 0o077,
@@ -427,6 +438,7 @@ def execute(args, infrastructure=None, plan=None, producer=None,
     _private_directory(settings / "vm-dev-sessions", create=True)
     evidence = settings / "vm-dev-sessions" / clone
     evidence.mkdir(mode=0o700)
+    _sync_directory(evidence.parent)
     _private_directory(evidence)
     _write_once(evidence, "selection.json", {
         "schema": "farol.vm-dev-selection/1",

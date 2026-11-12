@@ -116,6 +116,23 @@ class AdmissionTests(Fixture):
                         clone_effect=lambda *a: calls.append("clone"))
         self.assertEqual(calls, [])
 
+    def test_directory_publication_sync_failure_stops_before_clone(self):
+        for failed_parent in (self.settings, self.settings / "vm-dev-sessions"):
+            clone = "farol-qa-" + ("1" if failed_parent == self.settings else "2")*16
+            actual = dev._sync_directory
+            def sync(path):
+                if path == failed_parent:
+                    raise OSError("synthetic directory sync failure")
+                actual(path)
+            with self.subTest(parent=failed_parent.name), mock.patch.object(dev, "_sync_directory", side_effect=sync):
+                with self.assertRaises(OSError):
+                    dev.execute(self.options,
+                        infrastructure=lambda: (self.binary, self.root, self.settings),
+                        identity_factory=lambda: (clone, "run-" + "c"*32),
+                        binary_admission=lambda _: True, capacity_probe=lambda *a: 0,
+                        producer=lambda *a: self.fail("producer invoked"),
+                        clone_effect=lambda *a: self.fail("clone invoked"))
+
     def test_missing_native_dev_producer_is_blocked_before_clone(self):
         actual = dev.module_from
         def loading(path, name):
