@@ -16,6 +16,8 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { parse } from "@babel/parser";
+import { isBuiltin } from "node:module";
 import { chooseRuntime } from "../vm-entry.mjs";
 
 export const TOOL_VERSION = "farol.vm-e2e/1";
@@ -483,34 +485,34 @@ function emitInlineBundle(entryId, entryName, modules) {
 // Final gate for both bundlers: the staged bundle may import node: builtins
 // only, so the guest run needs no node_modules resolution at all.
 export function assertNoHostImports(text) {
-  for (const raw of text.split("\n")) {
-    const line = raw.trim();
-    if (/^import\b/u.test(line)) {
-      const specifiers = [...line.matchAll(/["']([^"']+)["']/gu)].map(
-        (m) => m[1],
-      );
-      if (
-        specifiers.length === 0 ||
-        specifiers.some((s) => !s.startsWith(NODE_PREFIX))
-      ) {
-        throw new Error(
-          "E2E_BUNDLE_OUTPUT_IMPORT_REMAINS: " +
-            (specifiers[0] ?? line.slice(0, 80)),
-        );
-      }
+  const tree = parse(text, {
+    sourceType: "module",
+    createImportExpressions: true,
+  });
+  const admit = (source) => {
+    if (
+      source?.type !== "StringLiteral" ||
+      !source.value.startsWith(NODE_PREFIX) ||
+      !isBuiltin(source.value)
+    )
+      throw new Error("E2E_BUNDLE_OUTPUT_IMPORT_REMAINS");
+  };
+  const visit = (node) => {
+    if (node === null || typeof node !== "object") return;
+    if (
+      node.type === "ImportExpression" ||
+      node.type === "ImportDeclaration" ||
+      ((node.type === "ExportNamedDeclaration" ||
+        node.type === "ExportAllDeclaration") &&
+        node.source)
+    )
+      admit(node.source);
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) value.forEach(visit);
+      else if (value && typeof value === "object") visit(value);
     }
-    for (const match of line.matchAll(/\bimport\s*\(\s*["']([^"']+)["']/gu)) {
-      if (!match[1].startsWith(NODE_PREFIX)) {
-        throw new Error("E2E_BUNDLE_OUTPUT_IMPORT_REMAINS: " + match[1]);
-      }
-    }
-    if (/^export\b/u.test(line)) {
-      const from = /\bfrom\s*["']([^"']+)["']/u.exec(line);
-      if (from && !from[1].startsWith(NODE_PREFIX)) {
-        throw new Error("E2E_BUNDLE_OUTPUT_IMPORT_REMAINS: " + from[1]);
-      }
-    }
-  }
+  };
+  visit(tree);
 }
 
 function sha256Hex(bytes) {
@@ -587,6 +589,7 @@ export function bundleDriver({ entry, outputDir, root, bundler = "auto" }) {
         { mode: 0o600 },
       );
     }
+    assertNoHostImports(fs.readFileSync(tempPath, "utf8"));
   } catch (error) {
     try {
       fs.unlinkSync(tempPath);
@@ -595,8 +598,6 @@ export function bundleDriver({ entry, outputDir, root, bundler = "auto" }) {
     }
     throw error;
   }
-  const text = fs.readFileSync(tempPath, "utf8");
-  assertNoHostImports(text);
   fs.chmodSync(tempPath, 0o600);
   fs.renameSync(tempPath, path.join(output, BUNDLE_FILE));
   const bytes = fs.readFileSync(path.join(output, BUNDLE_FILE));

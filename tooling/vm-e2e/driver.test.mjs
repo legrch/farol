@@ -359,3 +359,47 @@ test("bounded inline bundler refuses unsupported inputs", (t) => {
     assert.deepEqual(fs.readdirSync(output), [], name + ": no residue");
   }
 });
+
+for (const expression of [
+  "import(name)",
+  "import(`./${name}.mjs`)",
+  "import(`node:fs`)",
+  "import( /* comment */ name)",
+  "import('node:made-up')",
+]) {
+  test(`self-contained gate rejects ${expression} without publication`, (t) => {
+    assert.throws(
+      () => assertNoHostImports(`const load = (name) => ${expression};`),
+      /E2E_BUNDLE_OUTPUT_IMPORT_REMAINS/,
+    );
+    const source = makeTempDir(t, "vm-computed-import");
+    const entry = path.join(source, "entry.mjs");
+    fs.writeFileSync(
+      entry,
+      `const load = (name) => ${expression};\nconsole.log(load);\n`,
+    );
+    const output = makeTempDir(t, "vm-computed-import-out");
+    assert.throws(
+      () =>
+        bundleDriver({
+          entry,
+          outputDir: output,
+          root: REPO_ROOT,
+          bundler: "inline",
+        }),
+      /E2E_BUNDLE_OUTPUT_IMPORT_REMAINS/,
+    );
+    assert.deepEqual(fs.readdirSync(output), []);
+  });
+}
+test("syntax gate admits only actual literal node builtins and ignores comment text", () => {
+  assert.doesNotThrow(() =>
+    assertNoHostImports(
+      "const load = () => import('node:fs'); /* import(name) */",
+    ),
+  );
+  assert.throws(
+    () => assertNoHostImports("const x = 1; export * from './guest.mjs';"),
+    /E2E_BUNDLE_OUTPUT_IMPORT_REMAINS/,
+  );
+});
