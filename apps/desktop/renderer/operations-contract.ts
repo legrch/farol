@@ -1,7 +1,7 @@
 import {
   NativeRefusalReasonSchema,
   type NativeRefusalReason,
-} from "./native-refusal";
+} from "./native-refusal.ts";
 import { z } from "zod";
 import {
   operationKinds,

@@ -19,6 +19,7 @@ import type { ReadonlyComputerCallResponse } from "../../src/modules/computer/co
 import type { MutableComputerCallResponse } from "../../src/modules/computer/contract/mutable-computer-contract";
 import type { BackendLifecycleObservation } from "../../apps/desktop/bridge/client";
 import { configurationOperation } from "../../apps/desktop/operations/configuration";
+import { nativeRefusalReasons } from "../../apps/desktop/renderer/native-refusal";
 
 type Mapped<T> = Exclude<T, OperationOutcomeCode> extends never ? true : false;
 // Compiler coverage comes from the actual inferred contracts, including enums
@@ -358,7 +359,12 @@ it("maps every declared TS contract/producer code and Go result kind exactly onc
   ).toEqual([]);
   // A diagnostic's internal lookup state and native reason are not operation
   // outcome codes and must not become user-facing error classifications.
-  for (const detail of ["found", "not_retained", "link_not_supported"]) {
+  for (const detail of [
+    "found",
+    "not_retained",
+    "link_not_supported",
+    ...nativeRefusalReasons,
+  ]) {
     expect(declared.has(detail)).toBe(false);
     expect(mappedOperationOutcome(detail)).toBeUndefined();
   }

@@ -118,9 +118,12 @@ export function declaredOperationOutcomes(): Map<string, Set<string>> {
           add(match[1]!, file);
       }
       for (const match of uncommented.matchAll(
-        /\b\w+\s+(?:[A-Za-z]*(?:Phase|Outcome|State|Status|Code|Reason)|Cleanup)\s*=\s*"([^"\n]+)"/gu,
-      ))
-        add(match[1]!, file);
+        /\b\w+\s+([A-Za-z]*(?:Phase|Outcome|State|Status|Code|Reason)|Cleanup)\s*=\s*"([^"\n]+)"/gu,
+      )) {
+        // Native refusal reasons qualify PROCESS_NATIVE_REFUSED; they are not
+        // independent operation outcomes. Keep scanning all other result types.
+        if (match[1] !== "NativeRefusalReason") add(match[2]!, file);
+      }
       continue;
     }
     const tree = parse(source, {

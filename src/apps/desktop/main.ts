@@ -5570,7 +5570,8 @@ async function startAdmittedSecureMcpConnector(
   }
 
   const beforeConnectorEffect = () => {
-    if (!startPermitted()) {
+    // Quit latches admission closed before aborting the captured start signal.
+    if (quitInProgress || installedUpdateAdmission || !recoveryPermitted()) {
       throw new Error("CONNECTOR_ADMISSION_WITHDRAWN");
     }
   };
