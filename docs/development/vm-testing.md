@@ -217,3 +217,47 @@ until those exact native/live receipts exist.
 The build defaults to `_output/go-build-inputs.json`, the same approved offline declaration used by the existing build lanes. It never silently emits a backend-less application. `--go-inputs` selects build inputs only and cannot accompany an existing artifact. A successful `start` launcher may exit before its detached VM; readiness is attested by a new read-only status naming the runtime PID, separately from the launcher PID.
 
 The controller checks active runtimes in its managed store before cloning and refuses `VM_DEV_CAPACITY_BUSY` when two are occupied. It never stops another session automatically. Clean MCP EOF closes the accepted app, not the VM runtime: release a finished VM with `terminal-mac stop <instance>` and observe its guest shutdown confirmation when needed. Preserve all disks and UNKNOWN evidence. Concurrent starts or VMs in another store can still exhaust capacity after the preflight; retain that original failed start rather than replay it.
+
+### Agent configuration and qualified scope
+
+An agent attaches this entry as an MCP stdio server, rather than expecting a
+shell REPL from its stdout. For example, substitute the actual source checkout:
+
+```json
+{
+  "mcpServers": {
+    "farol-vm": {
+      "command": "task",
+      "args": ["--dir", "/ABSOLUTE/farol", "vm:dev"]
+    }
+  }
+}
+```
+
+The client initializes MCP and uses `status`, `screenshot`, `click`, `type`,
+`key` and `scroll`. Input belongs to this guest, even while its viewer is hidden.
+The same command with `-- --visible` shows the guest; it does not switch the
+application to the host. Cold AX readiness can precede the first rendered page;
+inspect a subsequent screenshot before selecting UI coordinates. Clean stdin
+EOF requests normal application Quit and close. Confirm the immutable native
+terminal receipt says CLOSED and both root/UI-primary exit observations exist;
+a stopped VM alone proves none of those application outcomes.
+
+On November 12, the clean Farol source checkpoint `07e653b0` with installed
+terminal-mac build14 completed this default command without special flags:
+source build, local Dev derivative, fresh prepared-base clone, inherited helper
+grants, MCP READY, Setup/Home/menu rendering, guest keyboard/text input and
+normal Quit/close. The live clone was hidden throughout. Build14 uses a live
+monotonic app-session timebase, so guest wall-clock synchronization cannot
+consume or extend the service lifetime. Persisted sessions remain non-adoptable.
+
+The separate official 0.5.22 native smoke completed two launch/normal-Quit
+lifetimes and close with a distinct primary PID and one observed window on
+relaunch. Its initial screenshot was still black; its relaunch screenshot
+rendered Setup. Visual findings remain separate from lifecycle receipts.
+Neither result qualifies real Dev credentials, ChatGPT sign-in or the tunnel.
+The interactive accepted-app session also does not admit a changed application
+generation after an updater replaces its accepted bytes. End the bound session
+cleanly before a separately selected generic guest-computer QA journey; record
+real updater journal/successor evidence independently. Never treat two archive
+installs or a VM restart as a product-update pass.
