@@ -382,6 +382,8 @@ async function launch(run) {
     harnessDesktopIdentity("preview", run.appData).userData,
   );
   run.nativePaths = actual;
+  // Electron main is a child of the retained Go guardian (run.child).
+  run.desktopPid = actual.pid;
   run.isolated = true;
   run.userData = actual.userData;
   // This exact singleton was validated by the admission readback above.
@@ -691,7 +693,7 @@ async function ownTunnel(run, receipt) {
   const tunnel = await processIdentity(receipt.pid);
   const anchor = await processIdentity(receipt.parentPid);
   assert.equal(tunnel.parentPid, anchor.pid);
-  assert.equal(anchor.parentPid, run.child.pid);
+  assert.equal(anchor.parentPid, run.desktopPid);
   assert.equal(anchor.group, anchor.pid);
   assert.equal(tunnel.group, anchor.pid);
   run.tunnels.push({ receiptId: receipt.id, tunnel, anchor });
@@ -962,7 +964,7 @@ async function normalQuit(run) {
       (entry) =>
         entry.kind === "FAROL_DAILY_QUIT" &&
         entry.event === "will-quit" &&
-        entry.pid === run.child.pid &&
+        entry.pid === run.desktopPid &&
         entry.visibilityViolations === 0,
     ),
     "DAILY_ORIGINAL_QUIT_EVENT_MISSING",
