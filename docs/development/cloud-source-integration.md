@@ -48,8 +48,8 @@ that legacy helper.
 
 `tests/fixtures/shell-qualified-process.go.txt` is an immutable, non-executed
 copy of the process source natively qualified by platform record
-`macos-26A434-arm64-root-volume-git-python-metadata-v11`. Its SHA-256 is
-`2d9688918cd9216cef357ead45b99f7db2412af580d5fa85f9cacaf7e379e786`,
+`macos-26A434-arm64-installed-runtime-v22`. Its SHA-256 is
+`dfd512f45f62697f0cbf5e40a9af48401f9421bf065c1a90509d36f12a544a01`,
 the independent platform pin. It changes only with a reviewed native
 requalification. Producer/consumer contract tests use
 that fixture, so negative tests reach their intended changed/missing/link

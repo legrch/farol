@@ -272,6 +272,20 @@ describe("the executable root Go architecture boundary", () => {
     it(`rejects ${from} -> ${to}`, () =>
       denied(edge(from, to), code, `${from}/policy.go`));
 
+  it("allows only deterministic SHA-256 value hashing in pure code", () => {
+    const file = "modules/computer/domain/connector/policy.go";
+    const valid = check({
+      [file]:
+        'package connector\nimport "crypto/sha256"\nvar _ = sha256.Sum256([]byte("x"))\n',
+    });
+    expect(valid.status, JSON.stringify(valid.report)).toBe(0);
+    const invalid = check({
+      [file]:
+        'package connector\nimport "crypto/sha256"\nvar _ = sha256.New()\n',
+    });
+    denied(invalid, "GO_PURE_AMBIENT", file);
+  });
+
   for (const dependency of [
     "os",
     "io",

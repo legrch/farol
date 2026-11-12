@@ -1,5 +1,9 @@
 import { setupCompletionChecks } from "../setup-completion";
 import { chatGptPreSubmitRemedy } from "../chatgpt-pre-submit-remedy";
+import {
+  unresolvedWorkspaceRootChange,
+  workspaceRootChangeRemedy,
+} from "../workspace-root-remedy";
 import { dependencyFences } from "./command-eligibility";
 import type { Intent, WindowSnapshot } from "./contract";
 import type { SetupCheckpoint } from "./setup-checklist";
@@ -180,13 +184,25 @@ export function setupStepCheck(
   );
   // A known refusal cannot change the inputs of a confirmed check. Only a
   // refused confirming check withdraws that success; uncertain effects stay fenced.
-  const blockingRefusal = refusals.find(
-    (intent) =>
-      !confirmed ||
-      confirmingCommands[step].some((command) =>
-        intent.id.startsWith(`settings:${command}:`),
-      ),
-  );
+  const rootRefusal =
+    step === "folders" && settings
+      ? unresolvedWorkspaceRootChange(
+          intents,
+          snapshot.setupCheckOrder,
+          settings.computer.workspaces.map(
+            (workspace) => workspace.workspaceId,
+          ),
+        )
+      : undefined;
+  const blockingRefusal =
+    rootRefusal ??
+    refusals.find(
+      (intent) =>
+        !confirmed ||
+        confirmingCommands[step].some((command) =>
+          intent.id.startsWith(`settings:${command}:`),
+        ),
+    );
   const refusal = blockingRefusal ?? refusals[0];
   const refused = Boolean(blockingRefusal);
   const state: SetupResultState = unknown
@@ -218,7 +234,10 @@ export function setupStepCheck(
     step === "attachment"
       ? chatGptPreSubmitRemedy(refusal?.code ?? null)
       : null;
+  const rootRemedy =
+    step === "folders" ? workspaceRootChangeRemedy(refusal?.code) : null;
   const refusalCause =
+    rootRemedy ??
     preSubmitRemedy ??
     (helperMissing
       ? "Farol could not verify its bundled connection helper. Reinstall Farol from a trusted release."
@@ -237,11 +256,13 @@ export function setupStepCheck(
                   : `${label} could not be checked. Review this step before continuing.`);
   const refusalAction: SetupAction = {
     kind: "guide",
-    label: keyRejected
-      ? "Create a new key in OpenAI Tunnels"
-      : helperMissing
-        ? "Read the installation guide"
-        : "Read the setup guide",
+    label: rootRemedy
+      ? "Review workspace approval"
+      : keyRejected
+        ? "Create a new key in OpenAI Tunnels"
+        : helperMissing
+          ? "Read the installation guide"
+          : "Read the setup guide",
     destination: keyRejected ? "tunnels" : "setup-guide",
   };
   const successCopy: Record<SetupCheckpoint, string> = {

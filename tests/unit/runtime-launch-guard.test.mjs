@@ -76,6 +76,20 @@ describe("semantic runtime launch ratchet", () => {
       RUNTIME_LAUNCH_MANIFEST.boundaries.map((row) => row.classification),
     ).toContain("build-test-maintenance-only");
   });
+  it("declares the bounded macOS volume identity observer", () => {
+    expect(
+      RUNTIME_LAUNCH_MANIFEST.launches.find(
+        (row) => row.id === "computer.workspace-volume-identity",
+      ),
+    ).toMatchObject({
+      file: "modules/computer/infra/lease/darwin.go",
+      symbol: "darwinOperations.metadata",
+      api: "go.CommandContext",
+      executable: '"/usr/sbin/diskutil"',
+      classification: "legacy-system-tool",
+      count: 1,
+    });
+  });
   it("ignores line movement and comments without weakening function/command identity", () => {
     const source =
       'import { spawn } from "node:child_process"; export function entry(){ spawn("/usr/bin/python3", []); }';

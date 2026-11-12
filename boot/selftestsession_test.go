@@ -73,7 +73,7 @@ func TestSelfTestShellRefusesInvalidOrReplacedAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.closeSlot(context.Background()); err != nil {
+	if err := s.closeSlot(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := check.start(context.Background()); err == nil {

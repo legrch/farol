@@ -3945,3 +3945,83 @@ it("keeps a readable historical UNKNOWN tail even without its final newline", as
     code: "PROCESS_OUTCOME_UNKNOWN",
   });
 });
+
+it.each([
+  "runtime_integrity",
+  "executable_integrity",
+  "future_reason",
+  "/outside token=PRIVATE-CANARY",
+])(
+  "retains native refusal %s from validated wire in the durable V2 journal",
+  async (reason) => {
+    const { store, directory } = setup();
+    const bridge = new ConnectorProcessBridge(
+      {
+        request: async () =>
+          ({
+            status: "refused",
+            requestId: "start-call",
+            context: processContext,
+            operationId: "original",
+            code: "PROCESS_NATIVE_REFUSED",
+            nativeRefusalReason: reason,
+          }) as Outcome,
+      },
+      processOpened,
+      processContext,
+    );
+    const reply = await bridge.start(
+      {
+        workspaceId: "workspace",
+        relativeCwd: ".",
+        command: "git status -- PRIVATE-CANARY",
+        write: false,
+      },
+      "original",
+      { requestId: "start-call", context: processContext },
+    );
+    const ref = {
+      owner: "computer.process" as const,
+      operationId: "original",
+      buildId: "build",
+      runtimeId: "runtime",
+      binding: "requested" as const,
+    };
+    const recorder = createTotalOperationsRecorder(store);
+    const finish = recorder.beginExecution(
+      {
+        source: "ChatGPT",
+        kind: "computer_shell_start",
+        target: { command: "git" },
+      },
+      { operationRef: ref, subjectRef: null },
+    );
+    const result = operationResult(reply);
+    finish(result.outcome, result.code, 1234, reply.nativeRefusalReason);
+    await store.flush(5000);
+    const snapshot = await store.snapshot(5000);
+    expect(snapshot.entries).toEqual([
+      expect.objectContaining({
+        schema: "farol.operation/2",
+        outcome: "refused",
+        code: "PROCESS_NATIVE_REFUSED",
+        nativeRefusalReason: [
+          "runtime_integrity",
+          "executable_integrity",
+        ].includes(reason)
+          ? reason
+          : "unclassified",
+        operationRef: ref,
+        timing: expect.objectContaining({ startedAt: null, endedAt: null }),
+        executionFacts: null,
+      }),
+    ]);
+    const bytes = fs
+      .readdirSync(directory)
+      .filter((name) => name.endsWith(".jsonl"))
+      .map((name) => fs.readFileSync(path.join(directory, name), "utf8"))
+      .join("");
+    expect(bytes).not.toContain("PRIVATE-CANARY");
+    expect(reply).toMatchObject({ status: "refused", retry: "never" });
+  },
+);

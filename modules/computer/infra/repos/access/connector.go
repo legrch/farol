@@ -95,6 +95,15 @@ func (r *ConnectorJournal) PublishConnector(ctx context.Context, input port.Conn
 	return result, nil
 }
 
+// The one-shot original Stop withdrawal is bound by Store to its durable
+// parent intent; no ordinary Status/approval path is opened during pending C7.
+func (r *ConnectorJournal) WithdrawConnectorForStop(ctx context.Context, parentID, id string) error {
+	if r == nil || r.store == nil {
+		return unavailable()
+	}
+	return r.store.WithdrawOriginalStopParticipant(ctx, parentID, id)
+}
+
 func (r *ConnectorJournal) WithdrawConnector(ctx context.Context, id string) error {
 	before, err := r.store.Status(ctx)
 	if err != nil {

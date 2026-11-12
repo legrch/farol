@@ -160,6 +160,10 @@ export type ActivityEntry = Readonly<{
     OperationEntry,
     { schema: "farol.operation/2" }
   >["executionFacts"];
+  nativeRefusalReason?: Extract<
+    OperationEntry,
+    { schema: "farol.operation/2" }
+  >["nativeRefusalReason"];
   auditDetails?: Extract<
     OperationEntry,
     { schema: "farol.operation/2" }

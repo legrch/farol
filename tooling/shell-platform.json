@@ -1,6 +1,6 @@
 {
   "schema": "farol-shell-platform/1",
-  "id": "macos-26A434-arm64-installed-runtime-v21",
+  "id": "macos-26A434-arm64-installed-runtime-v23",
   "osBuild": "26A434",
   "compiler": "approved-roots-seatbelt-v1",
   "filesystemClass": "system-apfs-kernel-mount-boundaries-v1",
@@ -29,7 +29,7 @@
     },
     {
       "path": "modules/computer/infra/process/confinement.go",
-      "sha256": "3545f59f0fbfc819f33e0442791e1b8544c231578147f97a72a9b41c390f5f25"
+      "sha256": "be4c1f6e1209682edd83493823754c3a32fbb4b8b19f23c5630cbfeb3e92bb58"
     },
     {
       "path": "modules/computer/infra/process/darwin.go",
@@ -41,15 +41,15 @@
     },
     {
       "path": "modules/computer/infra/process/gitread.go",
-      "sha256": "53aa23929ef970bfb3de6a6965d873961ea3f2ac95132a4830593b5e2ba4e282"
+      "sha256": "2e77e0378945ca592296fadd366024b315c8de81adfc1edf8ad8aaee35f22f49"
     },
     {
       "path": "modules/computer/infra/process/gitruntime.go",
-      "sha256": "26d6dccb6fdbfd53bd15ed3840c34313052863406590b6736f84300a0399f760"
+      "sha256": "ec0d972f70e2c2c148485df9c34dc07ac8b3ede7a35ece3880d59dec496e5c4e"
     },
     {
       "path": "modules/computer/infra/process/gitruntimedarwin.go",
-      "sha256": "3e20706d7eb1b5fb3abb51980131dc879d77b289e2098f7253b38469b8a95549"
+      "sha256": "134e7d0472f2adef932f7bcaf664e3c2413ac46d4d1349561ba7c762db560ce0"
     },
     {
       "path": "modules/computer/infra/process/heldguest.go",
@@ -81,11 +81,11 @@
     },
     {
       "path": "modules/computer/infra/process/measuredarwin.go",
-      "sha256": "2b636658b69e40c40fc80794eb5d1c6cf6e17dab5c9f1213f267140292414393"
+      "sha256": "4daf5b854aaffa884a47da06de9484052e380461ab31b356dca2b13d9497dd67"
     },
     {
       "path": "modules/computer/infra/process/measurement.go",
-      "sha256": "5b3d4be469e1e36868f2f4e4875ef134265b49721a966ee65c56c37d9f6125ac"
+      "sha256": "4072585d9b3913fd61cad1d8d6bd72758eb09db377364539badec72c447b7bf3"
     },
     {
       "path": "modules/computer/infra/process/measureother.go",
@@ -93,7 +93,7 @@
     },
     {
       "path": "modules/computer/infra/process/mountboundaries.go",
-      "sha256": "f42e19b109572d9dceebfb6941939a05d12b06d20ec05ee2aeecd575a6af2f22"
+      "sha256": "e5c0c3b13a9916cc3e522ff3977bccdab6b274c97e49cc47f9228101e7974821"
     },
     {
       "path": "modules/computer/infra/process/observe.go",
@@ -121,7 +121,7 @@
     },
     {
       "path": "modules/computer/infra/process/platformqualification.go",
-      "sha256": "47011ec25749259a7b16a027ef09b54a6279c3cae35745a9bd69d2a4a1303493"
+      "sha256": "842b3829ec3bff74113397203944d716ea5c2d53fbf405b03a4ae1b03b1127a0"
     },
     {
       "path": "modules/computer/infra/process/platformqualificationdarwin.go",
@@ -149,7 +149,7 @@
     },
     {
       "path": "modules/computer/infra/process/process.go",
-      "sha256": "03eb96026a640dd46f27518c10d80a844479ac3ef340d61c14c22b7300e53dd0"
+      "sha256": "dfd512f45f62697f0cbf5e40a9af48401f9421bf065c1a90509d36f12a544a01"
     },
     {
       "path": "modules/computer/infra/process/pythonruntime.go",
@@ -169,11 +169,11 @@
     },
     {
       "path": "modules/computer/infra/process/rootscoped.go",
-      "sha256": "8e9fdc20a11b6bebbb250063fc8ffd419b09314444eb912b728f76dd835959d3"
+      "sha256": "0287a2b865de2ee625a521d21d07d1a583be0cb0a6232163a21f569f8ecddd00"
     },
     {
       "path": "modules/computer/infra/process/spawn.go",
-      "sha256": "75d20b71f607ae83a119a5f2de65c747d4e6c1e6e82edbda1b2856810855f45f"
+      "sha256": "25b40706d496c9eb1e53153131314f83362dd315950302b42200fa1ae656faa7"
     },
     {
       "path": "modules/computer/infra/process/unsupported.go",
@@ -181,11 +181,11 @@
     },
     {
       "path": "modules/computer/infra/process/watchdog.go",
-      "sha256": "e043f2a07fad7065977915c6e939454aca6581549276a5aa66c431556067d28c"
+      "sha256": "dbd7d77824e2033d74f45ba6669b995183e1a2474913e80130ab212dce12215a"
     },
     {
       "path": "modules/computer/infra/process/watchdogdarwin.go",
-      "sha256": "7b7aca0a49e95d8f750639eed1f8328f048b0feee387b75b539d10965d17a073"
+      "sha256": "d7f5b6c7680afc52bdef528f8a6a36d3a2139508ef48ab7153c6413e3b0a7b3e"
     },
     {
       "path": "modules/computer/infra/process/watchdogipc.go",

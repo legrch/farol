@@ -1262,6 +1262,21 @@ function manualDeepTestDraftGuard(
   `;
 }
 
+// Content-free observation of the ORIGINAL document before temporary navigation.
+// It uses the same closed attachment/composer vocabulary as the final Send fence.
+export function connectionCheckDocumentProbe(
+  appName: string,
+  expectedHref: string,
+): string {
+  return `(() => {
+    if (location.href !== ${JSON.stringify(expectedHref)}) return false;
+    ${appSelectionPrelude(appName)}
+    ${manualDeepTestDraftGuard("", "return false;")}
+    return ![...document.querySelectorAll('[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]')]
+      .some((element) => appElementVisible(element));
+  })()`;
+}
+
 export function prepareTaskScript(
   prompt: string,
   expectedHref: string,
@@ -1368,6 +1383,7 @@ export function activateTaskScript(
   requireTemporaryInstant = false,
   requireOrdinaryInstant = false,
   manualDeepTestPrompt?: string,
+  explicitConnectionCheck = false,
 ): string {
   return `(() => {
     const expectedHref = ${JSON.stringify(expectedHref)};
@@ -1411,6 +1427,7 @@ export function activateTaskScript(
       .find((element) => visible(element) && element instanceof HTMLButtonElement && !element.disabled);
     if (!(send instanceof HTMLButtonElement)) return { activated: false };
     ${manualDeepTestPrompt !== undefined && requiredAppName ? "if (send.form !== manualForm) return { draftPresent: true };" : ""}
+    ${explicitConnectionCheck ? `if ([...document.querySelectorAll('[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]')].some(visible)) return { activated: false };` : ""}
     send.click();
     return { activated: true };
   })()`;
@@ -1818,6 +1835,12 @@ export type ChatGptTaskObserver = Readonly<{
   // one turn, never both. Items describe visible output, not tool execution.
   onVisibleItem?: (item: VisibleOutputItem) => void | Promise<void>;
   onDispatchIntent?: () => void | Promise<void>;
+  // Explicit Go-owned check: one activation attempt, exact prepared text fence.
+  // This flag is supplied only by trusted Main, never a page or renderer.
+  connectionCheck?: boolean;
+  // Original document/owner fence before any explicit-check preparation.
+  beforePrepare?: () => boolean;
+  onSendAcknowledged?: () => void | Promise<void>;
   // Synchronous owner fence after the final awaited page verification.
   beforeSend?: () => boolean;
   manualDeepTest?: boolean;
@@ -3427,6 +3450,7 @@ export class ChatGptRoute {
     temporary = true,
     taskDeadline = Date.now() + 180_000,
     operationGeneration = this.taskObservationGeneration,
+    originalDocumentCurrent?: () => boolean,
   ): Promise<
     | "CHATGPT_COMPOSER_DRAFT_PRESENT"
     | "CHATGPT_TEMPORARY_CHAT_REQUIRED"
@@ -3438,14 +3462,17 @@ export class ChatGptRoute {
       script: string,
       gesture: boolean,
       deadline = taskDeadline,
-    ) =>
-      this.executeTaskDocumentScript(
+    ) => {
+      if (originalDocumentCurrent && !originalDocumentCurrent())
+        throw new Error("ChatGPT preparation document changed");
+      return this.executeTaskDocumentScript(
         contents,
         script,
         gesture,
         deadline,
         operationGeneration,
       );
+    };
     let observed: ChatGptProfilePreparationDiagnostic["probe"] = null;
     const read = async (deadline = taskDeadline) => {
       try {
@@ -3482,6 +3509,7 @@ export class ChatGptRoute {
     const initialPhysicalGeneration = this.chatPhysicalDocumentGeneration;
     const initialFrame = contents.mainFrame;
     const initialIdentityLost = () =>
+      (originalDocumentCurrent !== undefined && !originalDocumentCurrent()) ||
       this.routeWindow !== candidate ||
       candidate.isDestroyed() ||
       this.disposing ||
@@ -3529,6 +3557,8 @@ export class ChatGptRoute {
     }
 
     try {
+      if (originalDocumentCurrent && !originalDocumentCurrent())
+        return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
       if (
         !temporary ||
         contents.getURL() !== temporaryUrl.href ||
@@ -3550,6 +3580,7 @@ export class ChatGptRoute {
       this.chatPhysicalDocumentGeneration;
     const profileObservationGeneration = this.taskObservationGeneration;
     const profileIdentityLost = () =>
+      (originalDocumentCurrent !== undefined && !originalDocumentCurrent()) ||
       this.routeWindow !== candidate ||
       candidate.isDestroyed() ||
       this.routeDocumentGeneration !== profileDocumentGeneration ||
@@ -3830,6 +3861,22 @@ export class ChatGptRoute {
     // mutate the route's default/manual-message binding for a one-shot check.
     const requiredAppName = appTarget?.name ?? this.options.requiredAppName;
     if (
+      observer.connectionCheck &&
+      (profile !== "temporary-instant" ||
+        !appTarget ||
+        attachments.length !== 0 ||
+        !observer.readConnectorReceipt ||
+        observer.manualDeepTest ||
+        observer.manualSubmissionOnly)
+    ) {
+      return {
+        state: "failed_before_submit",
+        code: "CHATGPT_SUBMIT_UNAVAILABLE",
+        deltaCount: 0,
+        observedCharacters: 0,
+      };
+    }
+    if (
       observer.manualSubmissionOnly &&
       (!observer.manualDeepTest ||
         !appTarget ||
@@ -3899,13 +3946,19 @@ export class ChatGptRoute {
       (observer.manualSubmissionOnly
         ? 15_000
         : (this.options.taskTimeoutMs ?? 180_000));
+    const requireOriginalDocument = () => {
+      if (observer.connectionCheck && observer.beforePrepare?.() !== true)
+        throw new Error("ChatGPT preparation document changed");
+    };
+    let preparing = true;
     const execute = (
       contents: WebContents,
       script: string,
       gesture: boolean,
       allowNavigationAfter: boolean | "response" = false,
-    ) =>
-      this.executeTaskDocumentScript(
+    ) => {
+      if (preparing) requireOriginalDocument();
+      return this.executeTaskDocumentScript(
         contents,
         script,
         gesture,
@@ -3913,6 +3966,7 @@ export class ChatGptRoute {
         observationGeneration,
         allowNavigationAfter,
       );
+    };
     const observeTaskReadiness = async () => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -3954,7 +4008,9 @@ export class ChatGptRoute {
             turnAssistantId: correlatedAssistantId,
           };
     try {
+      requireOriginalDocument();
       const opened = await this.open();
+      requireOriginalDocument();
       if (opened.status !== "opened") {
         return {
           state: "failed_before_submit",
@@ -3965,6 +4021,7 @@ export class ChatGptRoute {
         };
       }
       const readiness = await observeTaskReadiness();
+      requireOriginalDocument();
       if (readiness.state === "signed_out") {
         return {
           state: "not_authenticated",
@@ -4018,7 +4075,9 @@ export class ChatGptRoute {
           profile === "temporary-instant",
           deadline,
           observationGeneration,
+          observer.connectionCheck ? observer.beforePrepare : undefined,
         );
+        requireOriginalDocument();
         if (profileFailure !== null) {
           return {
             state: "failed_before_submit",
@@ -4038,6 +4097,7 @@ export class ChatGptRoute {
         // Profile preparation may navigate. Its composer/model probes are not
         // authentication evidence for the new document's dispatch.
         const currentReadiness = await observeTaskReadiness();
+        requireOriginalDocument();
         if (currentReadiness.state !== "authenticated") {
           return {
             state:
@@ -4220,7 +4280,8 @@ export class ChatGptRoute {
             dispatchIdentityUrl,
             requiredAppName,
             deadline,
-            observer.manualDeepTest === true,
+            observer.manualDeepTest === true ||
+              observer.connectionCheck === true,
           ),
           true,
         ),
@@ -4273,7 +4334,7 @@ export class ChatGptRoute {
         };
       }
       if (
-        observer.manualDeepTest &&
+        (observer.manualDeepTest || observer.connectionCheck) &&
         preparedTask.preparedComposerText === undefined
       ) {
         return {
@@ -4310,13 +4371,18 @@ export class ChatGptRoute {
         }
       }
       const submitDeadline = Date.now() + 5_000;
+      let connectionActivationAttempted = false;
       while (Date.now() < submitDeadline) {
+        if (observer.connectionCheck && connectionActivationAttempted) break;
+        connectionActivationAttempted = true;
         // The dispatch-intent record is written first (it is a disk write,
         // and anything may happen to the page while it lands), so that the
         // identity check is the last thing before the click script leaves
         // this process: nothing awaits between the check and the dispatch.
         // The script then compares the page's own location once more,
         // in-page, before it clicks.
+        requireOriginalDocument();
+        preparing = false;
         await observer.onDispatchIntent?.();
         const beforeAppVerification = dispatchReadinessRefusal();
         if (beforeAppVerification) return beforeAppVerification;
@@ -4404,9 +4470,10 @@ export class ChatGptRoute {
                 requiredAppName,
                 profile === "temporary-instant",
                 profile === "connector-instant",
-                observer.manualDeepTest
+                observer.manualDeepTest || observer.connectionCheck
                   ? preparedTask.preparedComposerText
                   : undefined,
+                observer.connectionCheck === true,
               ),
               true,
               true,
@@ -4476,6 +4543,7 @@ export class ChatGptRoute {
         if (activated.data.activated) {
           submissionPhase = "submitted";
           timing("send_acknowledged");
+          await observer.onSendAcknowledged?.();
           break;
         }
         submissionPhase = "not_attempted";
@@ -5228,6 +5296,77 @@ export class ChatGptRoute {
     this.load = "failed";
     this.disposing = false;
     this.options.onConversationChanged?.(null);
+  }
+
+  /** No draft copying, fallback chat or guessed layout. Observe the original
+   * twice and recheck its physical owner immediately before one navigation. */
+  async openConnectionCheckChat(
+    appName: string,
+    current: () => boolean,
+  ): Promise<ChatGptOpenResult> {
+    if (!current() || this.taskInFlight || this.updateAdmission)
+      return { status: "unreachable" };
+    const original = this.captureManualTaskTarget();
+    const surface = this.routeWindow;
+    if (!original || !surface) return { status: "unreachable" };
+    const script = connectionCheckDocumentProbe(
+      appName,
+      surface.webContents.getURL(),
+    );
+    this.taskInFlight = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const observe = async () => {
+      try {
+        const safe: unknown = await Promise.race([
+          surface.webContents.executeJavaScript(script, false),
+          new Promise<false>((resolve) => {
+            timer = setTimeout(() => resolve(false), 5_000);
+          }),
+        ]);
+        return safe === true && current() && original();
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    };
+    try {
+      if (!(await observe()) || !(await observe()))
+        return { status: "unreachable" };
+      if (!current() || !original()) return { status: "unreachable" };
+      const url = new URL(this.options.homeUrl);
+      url.searchParams.set("temporary-chat", "true");
+      await this.navigateRouteDocument(
+        surface,
+        url.href,
+        Date.now() + ROUTE_OPEN_DEADLINE_MS,
+      );
+      if (!current() || this.routeWindow !== surface || surface.isDestroyed())
+        return { status: "unreachable" };
+      this.options.onNavigationHistoryChanged?.(this.navigationHistory());
+      return { status: "opened" };
+    } catch {
+      return { status: "unreachable" };
+    } finally {
+      this.taskInFlight = false;
+    }
+  }
+
+  // The host hashes this content-free physical reference; no draft or URL is
+  // persisted in the Go attempt. The original closure remains the final fence.
+  captureConnectionCheckDocument(): Readonly<{
+    identity: string;
+    current: () => boolean;
+  }> | null {
+    const current = this.captureManualTaskTarget();
+    const surface = this.routeWindow;
+    if (!current || !surface) return null;
+    return Object.freeze({
+      identity: JSON.stringify([
+        surface.webContents.id,
+        this.routeDocumentGeneration,
+        surface.webContents.getURL(),
+      ]),
+      current,
+    });
   }
 
   // Pin the exact existing manual document before an asynchronous UI transition.

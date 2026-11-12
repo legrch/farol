@@ -403,6 +403,7 @@ describe("actual MCP stop retains its admitted saved-chat lifetime", () => {
     const core = {
       close: vi.fn(async () => undefined),
       closeComputerConnector: vi.fn(async () => undefined),
+      observeOriginalStop: vi.fn(async () => ({ restricted: false })),
     };
     const connector = {
       stop: vi.fn(async () => undefined),
@@ -428,6 +429,9 @@ describe("actual MCP stop retains its admitted saved-chat lifetime", () => {
       persistedProductAgentExpiry: null,
       hostCheckClients: [],
       connectorStartInFlight: null,
+      connectorStartCancellation: null,
+      startupConnectionChecking: false,
+      CONNECTOR_START_QUIT_BUDGET_MS: 8_000,
       modelLifecycle: null,
       routeBRuntime: null,
       callerRelayRuntime: null,
@@ -465,6 +469,15 @@ describe("actual MCP stop retains its admitted saved-chat lifetime", () => {
       beginStop,
     };
   }
+
+  it("refuses ordinary Stop while an original Stop is restricted", async () => {
+    const h = harness(null);
+    h.core.observeOriginalStop.mockResolvedValue({ restricted: true });
+    await expect(h.stopCurrent()).rejects.toThrow("CONNECTOR_STOP_UNCONFIRMED");
+    expect(h.beginStop).not.toHaveBeenCalled();
+    expect(h.connector.stop).not.toHaveBeenCalled();
+    expect(h.confirmStop).not.toHaveBeenCalled();
+  });
 
   it("observes the original connector Stop before publishing durable stop admission", async () => {
     const h = harness(null);
@@ -636,6 +649,9 @@ describe("actual desktop Quit collection", () => {
       persistedProductAgentExpiry: null,
       hostCheckClients: [],
       connectorStartInFlight: inFlightStart,
+      connectorStartCancellation: null,
+      startupConnectionChecking: false,
+      CONNECTOR_START_QUIT_BUDGET_MS: 8_000,
       secureMcpConnectorRuntime: connector,
       savedChatBridgeRuntime: savedChat,
       modelLifecycle: null,
@@ -700,6 +716,9 @@ describe("actual desktop Quit collection", () => {
           h.inFlightStart,
           h.core,
           h.savedChat,
+          undefined,
+          undefined,
+          expect.any(Number),
         );
         h.stopped.resolve();
       }
@@ -737,6 +756,9 @@ describe("actual desktop Quit collection", () => {
       h.inFlightStart,
       h.core,
       h.savedChat,
+      undefined,
+      undefined,
+      expect.any(Number),
     );
     expect(h.core.close).toHaveBeenCalledTimes(1);
     expect(h.savedChat.close).toHaveBeenCalledTimes(1);

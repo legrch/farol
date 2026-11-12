@@ -1,6 +1,9 @@
+import { withinQuitDeadline } from "./quit-drain";
+
 export type ComputerConnectorDrainPorts = Readonly<{
   beginStop(): Promise<void>;
   startInFlight: Promise<void> | null;
+  startDeadlineAt?: number | undefined;
   waitForMcpStop(): Promise<void>;
   stopConnector(): Promise<void>;
   closeSavedChat(): Promise<void>;
@@ -48,7 +51,18 @@ export async function drainComputerConnector(
 async function drain(ports: ComputerConnectorDrainPorts): Promise<void> {
   try {
     await ports.beginStop();
-    await ports.startInFlight;
+    await withinQuitDeadline(
+      ports.startInFlight ?? Promise.resolve(),
+      ports.startDeadlineAt,
+      "CONNECTOR_STOP_UNCONFIRMED",
+    );
+    // A late admission/start reply cannot resume MCP cleanup after Quit has
+    // handed its remaining budget to Go-core retirement.
+    if (
+      ports.startDeadlineAt !== undefined &&
+      Date.now() >= ports.startDeadlineAt
+    )
+      throw new Error("CONNECTOR_STOP_UNCONFIRMED");
     try {
       await ports.waitForMcpStop();
     } finally {

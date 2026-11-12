@@ -219,7 +219,7 @@ func connectorProcessFixture(t *testing.T) (*computerConnector, *connectorJourna
 func selectConnectorProcessSlot(t *testing.T, s *computerConnector, access *connectorJournalFixture, input wire.ComputerConnectorOpen, suffix string) {
 	t.Helper()
 	if s.current != nil {
-		if err := s.closeSlot(context.Background()); err != nil {
+		if err := s.closeSlot(context.Background(), ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -393,7 +393,7 @@ func TestConnectorProcessRootOriginalReservationAndPendingFreeze(t *testing.T) {
 
 func TestConnectorProcessRootNormalOpenStillRefusesShell(t *testing.T) {
 	s, _, journal, native, input := connectorProcessFixture(t)
-	if err := s.closeSlot(context.Background()); err != nil {
+	if err := s.closeSlot(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Open(context.Background(), "normal-open", input); err != nil {

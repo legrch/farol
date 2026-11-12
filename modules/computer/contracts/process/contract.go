@@ -18,7 +18,10 @@ func New(service *processsvc.Service) (*Contract, error) {
 	return &Contract{service: service}, nil
 }
 
-type Failure struct{ Code, Outcome, Retry string }
+type Failure struct {
+	Code, Outcome, Retry string
+	NativeRefusalReason  string
+}
 
 func (e *Failure) Error() string { return e.Code }
 func failure(err error) error {
@@ -29,7 +32,7 @@ func failure(err error) error {
 		if local.Unknown {
 			outcome = "outcome_unknown"
 		}
-		return &Failure{Code: local.Code, Outcome: outcome, Retry: "never"}
+		return &Failure{Code: local.Code, Outcome: outcome, Retry: "never", NativeRefusalReason: NativeRefusalReason(local.Code, string(local.NativeRefusalReason))}
 	}
 	if errors.As(err, &native) && validCode(native.Code) {
 		return &Failure{Code: native.Code, Outcome: "refused", Retry: "never"}
@@ -88,4 +91,18 @@ func validCode(value string) bool {
 		}
 	}
 	return true
+}
+
+// NativeRefusalReason maps only the native-refused public code. Unknown input
+// is diagnostic unclassified, never a retry or outcome assertion.
+func NativeRefusalReason(code, reason string) string {
+	if code != "PROCESS_NATIVE_REFUSED" {
+		return ""
+	}
+	switch reason {
+	case "admission_policy", "confinement_policy", "executable_integrity", "workspace_root_identity", "cwd_fence", "directory_policy", "filesystem_policy", "runtime_integrity", "helper_preflight", "unclassified":
+		return reason
+	default:
+		return "unclassified"
+	}
 }

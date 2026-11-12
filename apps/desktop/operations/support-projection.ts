@@ -75,6 +75,9 @@ export function supportOperationMetadata(
         : entry.exit.kind === "code"
           ? { kind: "code", value: entry.exit.value }
           : { kind: "signal", value: entry.exit.value },
+    ...(entry.nativeRefusalReason === undefined
+      ? {}
+      : { nativeRefusalReason: entry.nativeRefusalReason }),
     executionFacts:
       entry.executionFacts === null
         ? null

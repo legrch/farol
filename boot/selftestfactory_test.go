@@ -31,7 +31,7 @@ func TestSelfTestFactorySelectsExactConnectorWithoutAdmission(t *testing.T) {
 	if _, err := s.newConnectorSelfTest(context.Background(), s.current, "work", "invalid", in.Publication); err == nil {
 		t.Fatal("invalid identity accepted")
 	}
-	if err := s.closeSlot(context.Background()); err != nil {
+	if err := s.closeSlot(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	if execution.preflight(context.Background()) == nil || store.durablePlanStore.admits != 0 || journal.admits != 0 || native.calls != 0 {

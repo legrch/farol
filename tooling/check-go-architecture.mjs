@@ -17,6 +17,7 @@ const pureStandard = new Set([
   "golang.org/x/text/unicode/norm",
   "bytes",
   "cmp",
+  "crypto/sha256",
   "encoding/base32",
   "encoding/base64",
   "encoding/binary",
@@ -46,6 +47,8 @@ const pureStandard = new Set([
   "unicode/utf16",
 ]);
 const pureSelectors = new Map([
+  // Fixed-input SHA-256 has no ambient entropy, IO or clock access.
+  ["crypto/sha256", new Set(["Sum256"])],
   [
     "fmt",
     new Set([

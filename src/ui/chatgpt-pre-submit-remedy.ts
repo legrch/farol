@@ -1,4 +1,7 @@
 export function chatGptPreSubmitRemedy(code: string | null): string | null {
+  if (code === "CONNECTOR_APP_VERIFICATION_NOT_READY") {
+    return "This test was refused before Send because Farol could not confirm all current app, tunnel, runtime and Computer prerequisites. Setup can be complete while a current attachment is missing. Review the connection and original result in Activity; do not repeat an unresolved attempt.";
+  }
   if (code === "CHATGPT_APP_SELECTION_MISSING") {
     return "Farol could not select the app chosen in Setup. Nothing was sent. Check its exact name and availability in ChatGPT before running the check again.";
   }

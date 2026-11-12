@@ -7,6 +7,7 @@ import {
 } from "./chat-conversation.ts";
 import { TaskModelCatalogueViewSchema } from "../owner-config/contract.ts";
 import { readConnectorSetupReceipt } from "./connector-setup-receipt.ts";
+import { workspaceContinuitySchema } from "./workspace-continuity.ts";
 import {
   CHATGPT_MODEL_ID,
   FAROL_PROVIDER_ID,
@@ -364,6 +365,16 @@ export const WorkspaceRootIdentitySchema = z.strictObject({
 
 export type WorkspaceRootIdentity = z.infer<typeof WorkspaceRootIdentitySchema>;
 
+// Reader-only continuity evidence. Persisted values do not grant access or
+// bypass the existing live device/inode and descriptor checks.
+export const WorkspaceContinuitySchema = workspaceContinuitySchema(
+  IdentifierSchema,
+  CanonicalAbsolutePathSchema,
+  CanonicalTimestampSchema,
+  Sha256Schema,
+);
+export type WorkspaceContinuity = z.infer<typeof WorkspaceContinuitySchema>;
+
 // Exact metadata measured during owner workspace verification. Linked
 // worktrees require this external grant; a primary checkout records its internal
 // .git only with full-Git approval so persistent tasks can bind the same layout.
@@ -437,6 +448,7 @@ export const ApprovedProductWorkspaceSchema = z
     access: z.enum(["read", "write"]),
     excludedPaths: z.array(CanonicalAbsolutePathSchema).max(32),
     rootIdentity: WorkspaceRootIdentitySchema.optional(),
+    continuity: WorkspaceContinuitySchema.optional(),
     gitMetadata: WorkspaceGitMetadataSchema.optional(),
     gitHistoryApproved: z.boolean().optional(),
     // Content-free evidence for the setup folder list, not another grant.
@@ -453,6 +465,30 @@ export const ApprovedProductWorkspaceSchema = z
       .optional(),
   })
   .superRefine((workspace, context) => {
+    const continuity = workspace.continuity;
+    if (continuity !== undefined) {
+      if (continuity.workspaceId !== workspace.workspaceId)
+        context.addIssue({
+          code: "custom",
+          path: ["continuity", "workspaceId"],
+          message: "continuity workspace does not match approval",
+        });
+      if (continuity.root !== workspace.root)
+        context.addIssue({
+          code: "custom",
+          path: ["continuity", "root"],
+          message: "continuity root does not match approval",
+        });
+      if (
+        workspace.rootIdentity === undefined ||
+        continuity.fileId !== workspace.rootIdentity.inode
+      )
+        context.addIssue({
+          code: "custom",
+          path: ["continuity", "fileId"],
+          message: "continuity requires the exact bound root inode",
+        });
+    }
     const prefix = workspace.root === "/" ? "/" : `${workspace.root}/`;
     const unique = new Set(workspace.excludedPaths);
     if (unique.size !== workspace.excludedPaths.length) {
@@ -538,16 +574,30 @@ export const ProductSettingsSchema = z.strictObject({
   // Human-editable model policy lives in this existing document. Validate the
   // subsection at resolution so a malformed task policy cannot disable Computer.
   tasks: z.unknown().optional(),
-  computer: z.strictObject({
-    computerId: IdentifierSchema,
-    generation: z.number().int().positive(),
-    name: z.string().trim().min(1).max(80),
-    commands: z.enum(["none", "verification", "workspace"]).default("none"),
-    // Missing is the historical protected-files policy, never implicit consent.
-    filePolicy: z.enum(["", "approved-roots-v1"]).optional(),
-    workspaces: z.array(ApprovedProductWorkspaceSchema).max(64),
-    pendingEdit: PendingWorkspaceEditDeliverySchema.nullable().default(null),
-  }),
+  computer: z
+    .strictObject({
+      computerId: IdentifierSchema,
+      generation: z.number().int().positive(),
+      name: z.string().trim().min(1).max(80),
+      commands: z.enum(["none", "verification", "workspace"]).default("none"),
+      // Missing is the historical protected-files policy, never implicit consent.
+      filePolicy: z.enum(["", "approved-roots-v1"]).optional(),
+      workspaces: z.array(ApprovedProductWorkspaceSchema).max(64),
+      pendingEdit: PendingWorkspaceEditDeliverySchema.nullable().default(null),
+    })
+    .superRefine((computer, context) => {
+      for (const [index, workspace] of computer.workspaces.entries()) {
+        if (
+          workspace.continuity !== undefined &&
+          workspace.continuity.computerId !== computer.computerId
+        )
+          context.addIssue({
+            code: "custom",
+            path: ["workspaces", index, "continuity", "computerId"],
+            message: "continuity computer does not match owner Settings",
+          });
+      }
+    }),
   nativeHosts: z
     .strictObject({
       generation: z.number().int().positive(),
@@ -706,6 +756,13 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("connector.check-attachment") }),
   z.strictObject({ kind: z.literal("connector.check-health") }),
   z.strictObject({ kind: z.literal("connector.verify-app") }),
+  // Explicit owner click only. The command contains one original UUID and
+  // the already selected browser route, never a Send-success boolean.
+  z.strictObject({
+    kind: z.literal("connector.test-connection"),
+    operationId: IdentifierSchema,
+    taskId: z.string().max(120),
+  }),
   z.strictObject({
     kind: z.literal("connector.verify-separate-app"),
     expected: SeparateAppVerificationScopeSchema,
@@ -933,6 +990,13 @@ const DiscoveryCandidateSchema = z.strictObject({
 });
 
 export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("connector.connection-check"),
+    operationId: IdentifierSchema,
+    receiptSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    // A replay observes a historical result; it never claims a new current test.
+    retained: z.boolean(),
+  }),
   z.strictObject({
     kind: z.literal("chatgpt.deep-test-result"),
     operationId: IdentifierSchema,
@@ -1654,6 +1718,13 @@ export const ProductConfigurationResultSchema = z
         "CONNECTOR_APP_VERIFICATION_UNAVAILABLE",
         "CONNECTOR_APP_TARGET_REQUIRED",
         "CONNECTOR_APP_VERIFICATION_NOT_READY",
+        "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+        "CONNECTION_CHECK_PENDING",
+        "CONNECTION_CHECK_BLOCKED",
+        "CONNECTION_CHECK_OUTCOME_UNKNOWN",
+        "CONNECTION_CHECK_UNCONFIRMED",
+        "CONNECTION_CHECK_ALREADY_ATTEMPTED",
+        "CONNECTION_CHECK_OWNER_CHANGED",
         "CONNECTOR_APP_VERIFICATION_OWNER_CONSENT_REQUIRED",
         "CONNECTOR_APP_VERIFICATION_ALREADY_ATTEMPTED",
         "CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE",

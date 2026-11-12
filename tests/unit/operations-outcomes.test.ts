@@ -19,6 +19,7 @@ import type { ReadonlyComputerCallResponse } from "../../src/modules/computer/co
 import type { MutableComputerCallResponse } from "../../src/modules/computer/contract/mutable-computer-contract";
 import type { BackendLifecycleObservation } from "../../apps/desktop/bridge/client";
 import { configurationOperation } from "../../apps/desktop/operations/configuration";
+import { nativeRefusalReasons } from "../../apps/desktop/renderer/native-refusal";
 
 type Mapped<T> = Exclude<T, OperationOutcomeCode> extends never ? true : false;
 // Compiler coverage comes from the actual inferred contracts, including enums
@@ -32,6 +33,92 @@ const closedContractCoverage: [
 ] = [true, true, true, true, true];
 
 const metadata = { source: "You", kind: "general.update", target: {} } as const;
+
+it("preserves original Computer Stop and C4 transition phase certainty", () => {
+  // Dispatch/effect intents may have crossed their effect boundary already.
+  // ACKs establish only the named sub-effect, not the whole operation.
+  const phases = [
+    ["claimed", "pending"],
+    ["dispatch_intent", "unknown"],
+    ["send_acknowledged", "pending"],
+    ["refused_before_send", "refused"],
+    ["intent", "pending"],
+    ["withdraw_intent", "unknown"],
+    ["withdraw_ack", "pending"],
+    ["settings_intent", "unknown"],
+    ["settings_ack", "pending"],
+    ["publish_intent", "unknown"],
+    ["publish_ack", "pending"],
+    ["close_intent", "unknown"],
+    ["close_ack", "pending"],
+    ["admission_intent", "pending"],
+    ["stop_intent", "unknown"],
+    ["stop_ack", "pending"],
+    ["cleanup_intent", "unknown"],
+    ["cleanup_ack", "pending"],
+    ["prerequisite_complete", "done"],
+    ["refused_before_stop", "refused"],
+    ["unresolved", "unknown"],
+    ["committed-not-active", "unknown"],
+    ["current-qualified", "done"],
+  ] as const;
+  for (const [code, outcome] of phases) {
+    expect(mappedOperationOutcome(code), code).toBe(outcome);
+    expect(operationResult({ status: "ok", code }), code).toEqual({
+      outcome,
+      code,
+    });
+    // A lost original acknowledgement always outweighs a historical phase.
+    expect(
+      operationResult({ status: "outcome_unknown", code }).outcome,
+      code,
+    ).toBe("unknown");
+  }
+});
+
+it.each([
+  ["WORKSPACE_TRANSITION_REFUSED", "refused"],
+  ["WORKSPACE_TRANSITION_PENDING", "refused"],
+  ["WORKSPACE_TRANSITION_OUTCOME_UNKNOWN", "unknown"],
+  ["COMPUTER_STOP_PREREQUISITE_REFUSED", "refused"],
+  ["COMPUTER_STOP_PREREQUISITE_PENDING", "refused"],
+  ["COMPUTER_STOP_PREREQUISITE_CAPACITY", "refused"],
+  ["COMPUTER_STOP_PREREQUISITE_UNKNOWN", "unknown"],
+  ["computer_stop_refused", "refused"],
+  ["computer_stop_pending", "refused"],
+  ["computer_stop_capacity", "refused"],
+  ["WORKSPACE_BOOT_IDENTITY_UNAVAILABLE", "unknown"],
+  ["WORKSPACE_IDENTITY_INVALID", "refused"],
+  ["WORKSPACE_IDENTITY_UNSUPPORTED", "refused"],
+  ["WORKSPACE_IDENTITY_UNAVAILABLE", "unknown"],
+  ["WORKSPACE_IDENTITY_CLOSED", "unknown"],
+  ["WORKSPACE_ANCHOR_DIFFERENT_MOUNT", "refused"],
+  ["WORKSPACE_ANCHOR_CLOSE_UNCONFIRMED", "unknown"],
+  ["WORKSPACE_ANCHOR_UNAVAILABLE", "unknown"],
+  ["WORKSPACE_CURRENT_NATIVE_CUSTODY_UNKNOWN", "unknown"],
+  ["WORKSPACE_CURRENT_QUALIFICATION_UNAVAILABLE", "unknown"],
+  ["CONTINUITY_NATIVE_OR_SETTINGS_CHANGED", "refused"],
+  ["CONTINUITY_PUBLICATION_FENCED", "unknown"],
+  ["ORIGINAL_STOP_SETTINGS_CHANGED", "refused"],
+  ["ORIGINAL_STOP_SETTINGS_FENCED", "unknown"],
+  ["computer_original_stop_input_invalid", "refused"],
+  ["computer_original_stop_admission_crossed", "unknown"],
+  ["computer_original_stop_unavailable", "unknown"],
+  ["computer_continuity_status_crossed", "unknown"],
+  ["host_original_stop_connector_unavailable", "unknown"],
+] as const)(
+  "classifies protected Computer ownership code %s as %s",
+  (code, outcome) => {
+    expect(mappedOperationOutcome(code)).toBe(outcome);
+    expect(operationResult({ status: "ok", code })).toEqual({
+      outcome,
+      code,
+    });
+    expect(operationResult({ status: "outcome_unknown", code }).outcome).toBe(
+      "unknown",
+    );
+  },
+);
 
 it("classifies GitHub release discovery failures without guessing new codes", () => {
   for (const code of [
@@ -272,7 +359,12 @@ it("maps every declared TS contract/producer code and Go result kind exactly onc
   ).toEqual([]);
   // A diagnostic's internal lookup state and native reason are not operation
   // outcome codes and must not become user-facing error classifications.
-  for (const detail of ["found", "not_retained", "link_not_supported"]) {
+  for (const detail of [
+    "found",
+    "not_retained",
+    "link_not_supported",
+    ...nativeRefusalReasons,
+  ]) {
     expect(declared.has(detail)).toBe(false);
     expect(mappedOperationOutcome(detail)).toBeUndefined();
   }
@@ -283,6 +375,12 @@ it("maps every declared TS contract/producer code and Go result kind exactly onc
   );
   expect(declared.get("PROCESS_CONTROL_LIFETIME_MISMATCH")).toContain(
     "boot/connectorprocesswire.go",
+  );
+  expect(declared.get("computer_connection_check_unknown")).toContain(
+    "boot/computercheck.go",
+  );
+  expect(declared.get("computer_stop_pending")).toContain(
+    "boot/computerstop.go",
   );
   expect(declared.get("CHATGPT_CONVERSATION_UNCONFIRMED")).toContain(
     "src/pkg/product-settings/contract.ts",

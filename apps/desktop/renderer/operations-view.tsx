@@ -123,6 +123,9 @@ export function OperationsActivity({
                 ],
               ]
             : []),
+          ...(row.nativeRefusalReason
+            ? [["Native refusal", row.nativeRefusalReason]]
+            : []),
           ...(row.executionFacts
             ? [
                 ["Root waited", row.executionFacts.rootWaited ? "Yes" : "No"],

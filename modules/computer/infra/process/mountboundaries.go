@@ -27,17 +27,17 @@ func mountDenialAliases(path string) []string {
 // scratch, an executable or a protected runtime dependency.
 func validateMountDenials(s SeatbeltSelection, c Command, roots []rootScopeBinding) error {
 	if s.RootVolumeOnly && s.FilePolicy != authority.RootScopedFiles {
-		return &processsvc.NativeFailure{}
+		return &processsvc.NativeFailure{Reason: processsvc.RefusalFilesystemPolicy}
 	}
 	if len(s.MountDenials) == 0 {
 		return nil
 	}
 	if !s.RootVolumeOnly || s.FilePolicy != authority.RootScopedFiles || len(s.MountDenials) > 1024 || !slices.IsSorted(s.MountDenials) {
-		return &processsvc.NativeFailure{}
+		return &processsvc.NativeFailure{Reason: processsvc.RefusalFilesystemPolicy}
 	}
 	for i, path := range s.MountDenials {
 		if !absolutePolicyPath(path) || (i > 0 && path == s.MountDenials[i-1]) {
-			return &processsvc.NativeFailure{}
+			return &processsvc.NativeFailure{Reason: processsvc.RefusalFilesystemPolicy}
 		}
 		contained := false
 		for _, root := range roots {
@@ -46,7 +46,7 @@ func validateMountDenials(s SeatbeltSelection, c Command, roots []rootScopeBindi
 			}
 		}
 		if !contained {
-			return &processsvc.NativeFailure{}
+			return &processsvc.NativeFailure{Reason: processsvc.RefusalFilesystemPolicy}
 		}
 		protected := []string{c.Cwd, s.Scratch}
 		if s.ProtectedBundle != nil {
@@ -58,7 +58,7 @@ func validateMountDenials(s SeatbeltSelection, c Command, roots []rootScopeBindi
 		for _, target := range protected {
 			for _, alias := range mountDenialAliases(path) {
 				if authority.ComparableWithin(alias, target) {
-					return &processsvc.NativeFailure{}
+					return &processsvc.NativeFailure{Reason: processsvc.RefusalFilesystemPolicy}
 				}
 			}
 		}
@@ -105,7 +105,7 @@ func (s *RootScopedPlatformStrategy) mountBoundaryPaths(ctx context.Context, pol
 // instead of rewriting policy or renewing its selected deadline.
 func (s *RootScopedPlatformStrategy) selectMountBoundaries(ctx context.Context, policy SeatbeltSelection, command Command) (SeatbeltSelection, error) {
 	if policy.RootVolumeOnly || len(policy.MountDenials) > 0 || s == nil || s.frozen == nil {
-		return SeatbeltSelection{}, &processsvc.NativeFailure{}
+		return SeatbeltSelection{}, &processsvc.NativeFailure{Reason: processsvc.RefusalFilesystemPolicy}
 	}
 	if s.frozen.descriptor.FilesystemClass != rootScopedMountBoundaryClass {
 		return policy, nil

@@ -28,6 +28,27 @@ A green source or disposable lifecycle test does not qualify packaged startup,
 Dock/Quit, installed apply, target readiness or live connection. Existing release
 tags/assets remain immutable.
 
+### Packaged native-test process custody
+
+A packaged native E2E has two original process identities. The harness changes
+below are in progress: the packaged lifecycle caller and native execution are not
+yet qualified. Playwright's
+`application.process()` is the retained Go launcher, while the Chromium
+`SingletonLock`, Electron `running.json` marker, relay ownership and
+`app.quit()` belong to its Electron child. They must not be compared as
+equal or conflated when interpreting a Wait/exit. The test-only
+`tests/e2e/native-preview-admission.mjs` uses
+`tests/e2e/lib/native-preview-launch-custody.mjs` to bind both identities
+through native executable/parent observations and kernel microsecond start
+facts. A singleton PID must match the independently qualified Electron child.
+Only a known original Go launcher Wait together with its matching, complete
+Electron Wait diagnostic and unchanged disposable filesystem witnesses can
+qualify clean native-test teardown. A timed-out, absent, crossed, malformed or
+unknown observation retains the exact original evidence and roots; PID absence
+or empty open-file lists are never cleanup receipts. This harness does not
+authorize installed/production profile access, force termination, a new native
+test after an unresolved run, or any production lifecycle change.
+
 Current beta qualification covers matching English process-start tokens in the
 caller and native helper contexts. Localized `LC_TIME` and custom `TZ` contexts
 remain unqualified; a mismatch refuses enrollment before the helper request.

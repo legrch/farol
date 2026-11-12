@@ -19,7 +19,7 @@ func TestConnectorSupervisedResultPreservesFactsWithoutSettlingUnknownGroup(t *t
 	publisher := &connectorProcessPublisherDouble{connectorProcessJournalDouble: journal, s: s, digest: strings.Repeat("a", 64)}
 	s.mutations.dependencies.repository = publisher
 	start := startConnectorProcessFixture(t, s, child)
-	if err := s.closeSlot(context.Background()); err != nil {
+	if err := s.closeSlot(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	child.terminal, child.supervisor = true, processsvc.SupervisorExited

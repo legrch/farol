@@ -49,7 +49,7 @@ func TestConnectorProcessLifecycleRetainsAfterOriginalConnectorClosed(t *testing
 	originalSlot := s.current
 	cancel() // The original MCP request is finished, not the owning backend.
 	access.clock.now = access.clock.now.Add(time.Minute)
-	if err := s.closeSlot(context.Background()); err != nil {
+	if err := s.closeSlot(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	child.terminal = true

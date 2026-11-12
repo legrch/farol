@@ -142,6 +142,38 @@ answers and exception messages have no log field. Unknown target/metadata keys a
 rejected. Failing observation never suppresses work, changes promise identity,
 adds an await turn or retries an operation.
 
+## Native process refusal diagnostics
+
+The additive `nativeRefusalReason` field on `farol.operation/2` records a closed
+pre-start class for `PROCESS_NATIVE_REFUSED` / `refused`. Old V2 records without
+the field remain readable. The field passes through the Computer process service,
+independent Go contract, desktop `Outcome`, validated connector bridge and MCP
+error to the execution recorder. Activity details and support metadata retain the
+same safe class. `retry: never`, the public code, null `startedAt` and absent
+execution facts are unchanged; a diagnostic is neither launch evidence nor
+permission to retry. Unknown-effect results keep their original classification.
+
+| Value                     | Native origin                                                                                                                                                                                                |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `admission_policy`        | Selected invocation validation, context/deadline and final owner checks in `process.go` / `watchdog.go`.                                                                                                     |
+| `confinement_policy`      | Seatbelt selection, compilation, exact environment/profile binding and root/Git policy in `confinement.go`, `rootscoped.go`, `gitread.go`, `platformqualification.go`.                                       |
+| `executable_integrity`    | Descriptor/path, ownership/mode/link count, digest or platform/support image mismatch in `spawn.go`, `measuredarwin.go`, `platformqualification.go`.                                                         |
+| `workspace_root_identity` | Approved root descriptor/path/identity measurement in `measurement.go` / `platformqualification.go`.                                                                                                         |
+| `cwd_fence`               | Cwd containment or anchored cwd measurement in `measurement.go` / `platformqualification.go`.                                                                                                                |
+| `directory_policy`        | Scratch privacy, protected bundle/state, metadata or scoped-directory measurement in `measurement.go`.                                                                                                       |
+| `filesystem_policy`       | Frozen mount-denial/topology policy mismatch in `mountboundaries.go` / `platformqualification.go`. A measured unsupported filesystem still uses its separate existing `PROCESS_FILESYSTEM_UNSUPPORTED` code. |
+| `runtime_integrity`       | Installed host-runtime inventory recheck or qualified Git runtime resource/alias measurement in `measurement.go`, `platformqualification.go`, `gitruntime.go`, `gitruntimedarwin.go`.                        |
+| `helper_preflight`        | Watchdog socket-pair / connection setup before the helper start attempt in `watchdogdarwin.go`.                                                                                                              |
+| `unclassified`            | Missing legacy classification or future/malformed native reason.                                                                                                                                             |
+
+The allowlists reject arbitrary native text. Service/contract mappings and incoming
+JSON transports normalize unknown reasons to `unclassified`; the recorder and
+persisted-record parser independently bound them. No OS message, absolute path,
+environment value, argv, errno text or secret is carried. Spawn errors already
+classified as outcome unknown remain unknown, so there is no invented known
+spawn-errno refusal category. See [the native investigation](../development/native-process-refusals.md)
+for the pre-start checks and remaining incident hypothesis.
+
 ## Workspace resolution and target inventory (B14)
 
 `apps/desktop/operations/target.ts` owns the shared target resolver. Adapter

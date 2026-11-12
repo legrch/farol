@@ -25,13 +25,36 @@ export class ConnectorVerificationBridge {
     this.binding = Object.freeze({ ...opened.endpoint.binding });
     this.execution = Object.freeze({ ...opened.execution });
   }
-  async observe(): Promise<ComputerConnectorVerificationState> {
+  async observe(checkId?: string): Promise<ComputerConnectorVerificationState> {
+    if (
+      checkId !== undefined &&
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
+        checkId,
+      )
+    )
+      throw new BridgeError("refused", "invalid_connector_status_check_id");
     const state = await this.request("computer.connector.verification", {
       binding: this.binding,
+      ...(checkId === undefined ? {} : { checkId }),
     });
+    // An unrelated/passive observation cannot acknowledge a diagnostic.
+    if (
+      checkId !== undefined &&
+      state.checkId !== undefined &&
+      state.checkId !== checkId
+    )
+      throw new BridgeError("unknown", "crossed_connector_status_check");
+    if (checkId === undefined && state.checkId !== undefined)
+      throw new BridgeError("unknown", "uncorrelated_connector_status_check");
     return state;
   }
   async expectStatusCheck(checkId: string): Promise<void> {
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
+        checkId,
+      )
+    )
+      throw new BridgeError("refused", "invalid_connector_status_check_id");
     await this.request("computer.connector.verification", {
       binding: this.binding,
       checkId,

@@ -118,12 +118,14 @@ export async function mount({
   value = settings(),
   shell = false,
   signIn = "signed_out",
+  connectionStatus,
 }: {
   step?: SetupStep;
   page?: SettingsPage;
   value?: ProductSettings;
   shell?: boolean;
   signIn?: "authenticated" | "signed_out" | "unknown";
+  connectionStatus?: WindowSnapshot["connectionStatus"];
 } = {}) {
   const f = fixture();
   let saved = value;
@@ -159,6 +161,7 @@ export async function mount({
   };
   vi.mocked(f.api.bootstrap).mockImplementation(async () => ({
     ...bootstrap(),
+    ...(connectionStatus ? { connectionStatus } : {}),
     configuration: configuration(),
   }));
   vi.mocked(f.api.configure).mockImplementation(configure);

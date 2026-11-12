@@ -19,6 +19,8 @@ import (
 	chatlifecycle "github.com/legrch/farol/modules/chat/app/services/lifecycle"
 	"github.com/legrch/farol/modules/chat/infra/gate"
 	chatrepo "github.com/legrch/farol/modules/chat/infra/repos/lifecycle"
+	connectorsvc "github.com/legrch/farol/modules/computer/app/services/connector"
+	nativeboot "github.com/legrch/farol/modules/computer/infra/boot"
 	"github.com/legrch/farol/modules/computer/infra/filesystem"
 	accessrepo "github.com/legrch/farol/modules/computer/infra/repos/access"
 	mutationrepo "github.com/legrch/farol/modules/computer/infra/repos/mutation"
@@ -187,6 +189,23 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 	if err != nil {
 		return fail(err)
 	}
+	// Root-selected Go owner and native boot reader. No renderer can construct
+	// a Stop admission; an unqualified empty host lifetime fails closed.
+	runtime.ingress.stopOwner = connectorsvc.NewOriginalStopOwner(
+		runtime.store, nativeboot.New(), runtime.connector,
+		connectorsvc.StopScope{ProfileID: launch.Profile.ProfileID, OwnerID: launch.OwnerID,
+			ComputerID: launch.ComputerID, BackendGeneration: generation,
+			HostLifetimeID: launch.HostLifetimeID},
+	)
+	// One Go owner for the explicitly clicked connection check. It shares
+	// the existing Access Store lifetime lock and native connector instance;
+	// no startup/browser Send is performed by composition.
+	runtime.ingress.checkOwner = connectorsvc.NewConnectionCheckOwner(
+		runtime.store, runtime.connector, connectorsvc.ConnectionCheckScope{
+			ProfileID: launch.Profile.ProfileID, OwnerID: launch.OwnerID,
+			ComputerID: launch.ComputerID,
+		},
+	)
 	runtime.chatComputer, err = NewChatComputerIngress(runtime.conversations, runtime.ingress)
 	if err != nil {
 		return fail(err)

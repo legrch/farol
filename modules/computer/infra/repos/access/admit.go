@@ -73,7 +73,13 @@ func (s *Store) RevokeApproval(ctx context.Context, revision uint64) error {
 	// approval generation; a cached startup approval cannot resurrect consent.
 	n.Approval = nil
 	n.SeenApproval = true
-	return s.commit(ctx, n)
+	if err := s.commit(ctx, n); err != nil {
+		return err
+	}
+	// An explicit owner revocation invalidates the former current binding even
+	// if the same path is later approved again under a new generation.
+	s.currentContinuity = nil
+	return nil
 }
 func (s *Store) Admit(ctx context.Context, revision uint64, input authority.Admission, identity authority.ParticipantAdmission) (*authority.Participant, error) {
 	s.mutex.Lock()

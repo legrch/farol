@@ -3477,7 +3477,7 @@ it("shows a connected local tunnel separately from an uncertain app check", asyn
   data.configuration.settings = settings;
   const h = await mount(data);
   expect(h.host.querySelector(".rail-connection")?.textContent).toBe(
-    "Tunnel connected",
+    "Connection available",
   );
   expect(
     h.host.querySelector('.rail-connection[data-connected="true"]'),

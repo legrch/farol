@@ -49,6 +49,7 @@ function intentDependency(id: string): Dependency {
 }
 function commandDependency(kind: Kind): Dependency {
   if (
+    kind === "connector.test-connection" ||
     kind === "connector.verify-app" ||
     kind === "connector.verify-separate-app" ||
     kind === "connector.check-attachment" ||
@@ -104,9 +105,10 @@ export function dependencyFences(
     // refused receipt is not proof that its publication never happened.
     if (intent.code === "SETTINGS_WRITE_FAILED") unknown = true;
     if (intent.state !== "pending" && intent.state !== "unknown") return;
-    // These commands use their own attempt journals and never write product
-    // settings. Keep their original unknown intents for deduplication without
-    // treating them as uncertainty in unrelated configuration operations.
+    // These commands retain their own original-attempt custody. Explicit
+    // connection checks publish attachment only after Go verification through
+    // the existing writer; SETTINGS_WRITE_FAILED was fenced above. External
+    // Send uncertainty alone is not an unrelated Settings write uncertainty.
     if (
       key === intent.id &&
       /^(?:deep-test:(?:status|run|ack)|connection-test:run):[0-9a-f-]{36}$/u.test(
