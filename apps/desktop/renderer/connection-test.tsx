@@ -89,10 +89,7 @@ export async function runExplicitConnectionTest(
       {
         kind: "connector.test-connection",
         operationId,
-        taskId:
-          snapshot.destination.area === "chatgpt"
-            ? snapshot.destination.taskId
-            : "",
+        taskId: snapshot.destination.taskId,
       },
       intentId,
     );

@@ -61,6 +61,7 @@ async function setup() {
   } as unknown as RendererFacade;
   return {
     facade,
+    controller,
     configure,
     settings,
     get snapshot() {
@@ -342,6 +343,28 @@ it("keeps a contradictory applied result with an error unconfirmed and does not 
     expect(first.state).toBe("unknown");
     expect(second.state).toBe("unknown");
     expect(h.configure).toHaveBeenCalledTimes(1);
+  } finally {
+    h.cleanup();
+  }
+});
+
+it("retains the selected task when testing from completed Setup", async () => {
+  const h = await setup();
+  try {
+    h.controller.navigate({ area: "chatgpt", taskId: "selected-task" });
+    h.controller.navigate({ area: "setup", setupStep: "attachment" });
+    const destination = h.controller.getSnapshot().destination;
+    expect(destination).toMatchObject({
+      area: "setup",
+      taskId: "selected-task",
+    });
+    h.set({ ...h.snapshot, destination });
+    expect((await runFreshConnectionTest(h.facade)).state).toBe("applied");
+    expect(h.configure).toHaveBeenCalledTimes(1);
+    expect(h.configure.mock.calls[0]![0]).toMatchObject({
+      kind: "connector.test-connection",
+      taskId: "selected-task",
+    });
   } finally {
     h.cleanup();
   }

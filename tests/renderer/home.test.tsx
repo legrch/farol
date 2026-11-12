@@ -777,3 +777,34 @@ it.each(["unobserved", "expired"])(
     expect(h.f.api.configure).not.toHaveBeenCalled();
   },
 );
+
+it.each(["expired", "withdrawn"])(
+  "shows retained attachment verification as historical after transport is %s",
+  async (state) => {
+    const current = working();
+    if (current.configuration?.status !== "ready")
+      throw Error("fixture settings missing");
+    const connector = current.configuration.settings.connectors.secureMcp;
+    connector.lastVerifiedAttachment = connector.attachment;
+    const h = await mount(current);
+    expect(
+      computerSetup({ ...h.c.getSnapshot(), ...current })
+        .externalAccessVerified,
+    ).toBe(true);
+    expect(h.host.textContent).toContain("ChatGPT can reach this Mac");
+    await h.set({
+      ...current,
+      connectionStatus:
+        state === "expired"
+          ? { ...current.connectionStatus!, validUntilMillis: Date.now() - 1 }
+          : unavailableConnectionStatus,
+    });
+    expect(h.host.querySelector(".home-status-card h2")?.textContent).toBe(
+      "Setup complete",
+    );
+    expect(h.host.textContent).toContain("Your ChatGPT setup is saved");
+    expect(h.host.textContent).not.toContain("ChatGPT can reach this Mac");
+    expect(h.host.textContent).toContain("Last ChatGPT verification:");
+    expect(h.f.api.configure).not.toHaveBeenCalled();
+  },
+);

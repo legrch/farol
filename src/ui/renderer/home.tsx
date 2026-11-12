@@ -389,7 +389,7 @@ export function Home({ snapshot, facade }: Props) {
                   snapshot.connectionStatus?.detail
                 ) : (
                   <>
-                    {computer.externalAccessVerified
+                    {connection.connected && computer.externalAccessVerified
                       ? "ChatGPT can reach this Mac"
                       : connection.savedSetupReady
                         ? "Your ChatGPT setup is saved"
@@ -402,14 +402,15 @@ export function Home({ snapshot, facade }: Props) {
               <details className="home-connection-details">
                 <summary>Connection details</summary>
                 <p>Local connection checked {checkedTime(snapshot)}.</p>
-                {!computer.externalAccessVerified && previousCheck && (
-                  <p>
-                    {previousCheck.currentSettings
-                      ? "Last ChatGPT verification"
-                      : "Earlier ChatGPT verification (previous settings)"}
-                    : {previousCheck.when}
-                  </p>
-                )}
+                {!(connection.connected && computer.externalAccessVerified) &&
+                  previousCheck && (
+                    <p>
+                      {previousCheck.currentSettings
+                        ? "Last ChatGPT verification"
+                        : "Earlier ChatGPT verification (previous settings)"}
+                      : {previousCheck.when}
+                    </p>
+                  )}
                 {!connection.transportNeedsAttention &&
                   (connection.connected || connection.savedSetupReady) && (
                     <button
