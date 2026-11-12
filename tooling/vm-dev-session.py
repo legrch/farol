@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""One-shot Farol Dev VM controller; stdout belongs exclusively to native MCP.
+"""One-shot Dev-app VM controller; stdout belongs exclusively to native MCP.
 
 It reuses vm-machine's approved infrastructure and prepared-base contracts,
 and vm_app_service.prepare_dev_session for accepted native payload publication.
-It never opens a host Farol profile, reads keys, sends guest input or runs a
+It never opens a host product profile, reads keys, sends guest input or runs a
 generic guest command. Every effect has a create-only private intent. On an
 unknown effect, it leaves the VM, runtime, staging and evidence untouched.
 """
@@ -95,12 +95,16 @@ def preflight_inputs(args):
         receipt = json.loads(raw)
     except (ValueError, UnicodeError):
         raise VMDevError("VM_DEV_RECEIPT_INVALID") from None
+    try:
+        identity = module_from(HERE / "vm_dev_identity.py", "farol_vm_dev_identity").dev_identity()
+    except ValueError:
+        raise VMDevError("VM_DEV_IDENTITY_INVALID") from None
     demand(isinstance(receipt, dict) and
            receipt.get("schema") == "farol.vm-dev-artifact/1" and
            receipt.get("kind") == "local-dev-derivative" and
            receipt.get("environment") == "dev" and
-           receipt.get("appName") == "Farol Dev.app" and
-           receipt.get("bundleId") == "local.farol.dev" and
+           receipt.get("appName") == identity["appName"] and
+           receipt.get("bundleId") == identity["bundleId"] and
            receipt.get("officialRelease") is False and
            receipt.get("hostLaunch") is False and
            receipt.get("profileImport") is False and
@@ -108,7 +112,7 @@ def preflight_inputs(args):
            bool(HEX64.fullmatch(receipt["artifactSha256"])),
            "VM_DEV_RECEIPT_INVALID")
     archive = Path(args.artifact)
-    demand(archive.name == "Farol-Dev.zip", "VM_DEV_ARCHIVE_INVALID")
+    demand(archive.name == identity["archiveName"], "VM_DEV_ARCHIVE_INVALID")
     info = archive.lstat()
     demand(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() and
            info.st_nlink == 1 and not info.st_mode & 0o077 and

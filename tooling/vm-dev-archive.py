@@ -41,11 +41,18 @@ def archive_dev(output, expected_receipt, inspect_existing=False):
     raw = b''.join(helper.regular_chunks(receipt_file, 16384))
     require(hashlib.sha256(raw).hexdigest() == expected_receipt)
     receipt = json.loads(raw)
-    app = output / 'Farol Dev.app'
+    spec = importlib.util.spec_from_file_location('vm_dev_identity', ROOT / 'tooling/vm_dev_identity.py')
+    identities = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(identities)
+    try:
+        identity = identities.dev_identity()
+    except ValueError:
+        require(False)
+    app = output / identity['appName']
     require(receipt.get('schema') == 'farol.vm-dev-artifact/1'
             and receipt.get('kind') == 'local-dev-derivative'
             and receipt.get('appName') == app.name
-            and receipt.get('bundleId') == 'local.farol.dev'
+            and receipt.get('bundleId') == identity['bundleId']
             and receipt.get('environment') == 'dev'
             and receipt.get('artifactPath') == str(app)
             and receipt.get('officialRelease') is False
@@ -56,7 +63,7 @@ def archive_dev(output, expected_receipt, inspect_existing=False):
     helper.APP = app
     helper.PACKAGE = output
     members = helper.members()
-    target = output / 'Farol-Dev.zip'
+    target = output / identity['archiveName']
     if inspect_existing:
         # Reconcile only the already-created ZIP, never recreate or overwrite it.
         original = helper.regular_file(target, helper.MAX_ARCHIVE)
@@ -93,7 +100,7 @@ def archive_dev(output, expected_receipt, inspect_existing=False):
     result = {'schema':'farol.vm-dev-archive/1', 'kind':'local-dev-derivative',
               'archiveName':target.name, 'archiveSha256':digest,
               'archiveSize':target.stat().st_size, 'receiptSHA256':expected_receipt,
-              'product':'Farol Dev', 'bundleId':'local.farol.dev',
+              'product':identity['product'], 'bundleId':identity['bundleId'],
               'version':receipt['version'], 'sourceCommit':receipt['sourceCommit'],
               'sourceTreeDigest':receipt['sourceTreeDigest'],
               'buildId':receipt['parentBuildId'], 'artifactSha256':receipt['artifactSha256'],

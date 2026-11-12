@@ -1,4 +1,4 @@
-"""Farol's closed, data-only producer for terminal-mac.app-service/4.
+"""The product's closed, data-only producer for terminal-mac.app-service/4.
 
 Only call after vm-smoke.verify() has qualified the exact local release archive.
 These files select *application data*, never an interpreter, guest script, path
@@ -22,6 +22,15 @@ PAYLOAD_SCHEMA = "terminal-mac.app-payload/1"
 SERVICE_SCHEMA = "terminal-mac.app-service/4"
 INSTALL_ROOT = "/Applications"
 INSTALL_LOCATION = "guest-applications/1"
+def _identity_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "vm_dev_identity", Path(__file__).resolve().with_name("vm_dev_identity.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 REASONS = frozenset({
     "APP_PAYLOAD_UNQUALIFIED", "APP_PAYLOAD_UNSAFE", "APP_PAYLOAD_DIGEST",
     "APP_PAYLOAD_TOO_LARGE", "APP_PAYLOAD_INCOMPATIBLE",
@@ -414,7 +423,7 @@ class ServiceAdmission:
         if receipt["command"] == "activate":
             # NSWorkspace.activate() may return before a usable window exists.
             # An AX-observed positive window count and foreground PID are
-            # required for Farol's windowed UI scenario. A menu-only application
+            # required for the product's windowed UI scenario. A menu-only application
             # can use the generic service but must not claim this GUI gate.
             front = observation.get("foreground")
             windows = observation.get("windows")
@@ -522,14 +531,18 @@ exec "$contents_dir/Resources/app/farol-backend" run-desktop-launcher "$@"
 '''
 
 
-def farol_release_policy(payload):
-    """Finite release checks owned by Farol; no policy comes from the archive."""
-    if payload.get("appName") != "Farol.app" or payload.get("bundleID") != "io.github.legrch.farol":
+def farol_release_policy(payload, identity=None):
+    """Finite release checks owned by the product; no policy comes from the archive."""
+    try:
+        identity = identity or _identity_module().release_identity()
+    except ValueError:
+        refuse("APP_PAYLOAD_INCOMPATIBLE")
+    if payload.get("appName") != identity["appName"] or payload.get("bundleID") != identity["bundleId"]:
         refuse("APP_PAYLOAD_INCOMPATIBLE")
     return {
         "schema": "terminal-mac.signature-policy/1", "outer": "explicitly-unsigned",
         "checks": [
-            {"path": "Contents/MacOS/Farol", "kind": "exact-executable-file",
+            {"path": "Contents/MacOS/" + identity["executable"], "kind": "exact-executable-file",
              "sha256": hashlib.sha256(_RELEASE_LAUNCHER).hexdigest()},
             {"path": "Contents/Resources/app/farol-backend",
              "kind": "static-strict-all-architectures", "sha256": ""},
@@ -633,6 +646,10 @@ def prepare_dev_session(archive, receipt, expected_receipt_sha256, stage):
     remain mandatory before publishing /Applications; no host profile is read.
     """
     archive, receipt, stage = Path(archive), Path(receipt), Path(stage)
+    try:
+        dev = _identity_module().dev_identity()
+    except ValueError:
+        refuse("APP_PAYLOAD_UNQUALIFIED")
     if not hexdigest(expected_receipt_sha256) or not re.fullmatch(r"run-[a-f0-9]{32}", stage.name):
         refuse("APP_PAYLOAD_UNQUALIFIED")
     raw = _private_regular_bytes(receipt, 16384)
@@ -640,8 +657,8 @@ def prepare_dev_session(archive, receipt, expected_receipt_sha256, stage):
         refuse("APP_PAYLOAD_DIGEST")
     selected = json.loads(raw)
     if (selected.get("schema") != "farol.vm-dev-artifact/1" or
-        selected.get("kind") != "local-dev-derivative" or selected.get("appName") != "Farol Dev.app" or
-        selected.get("bundleId") != "local.farol.dev" or selected.get("environment") != "dev" or
+        selected.get("kind") != "local-dev-derivative" or selected.get("appName") != dev["appName"] or
+        selected.get("bundleId") != dev["bundleId"] or selected.get("environment") != "dev" or
         selected.get("hostLaunch") is not False or selected.get("profileImport") is not False or
         selected.get("officialRelease") is not False or
         not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?", selected.get("version", "")) or
@@ -661,10 +678,10 @@ def prepare_dev_session(archive, receipt, expected_receipt_sha256, stage):
             before.st_mode & 0o022 or not 0 < before.st_size <= 2*1024**3): refuse("APP_PAYLOAD_UNSAFE")
         digest = hashlib.sha256()
         for chunk in iter(lambda: source.read(1024*1024), b""): digest.update(chunk)
-        release = dict(product="Farol Dev", bundleId="local.farol.dev", version=selected["version"],
+        release = dict(product=dev["product"], bundleId=dev["bundleId"], version=selected["version"],
                        archiveSha256=digest.hexdigest(), artifactSha256=selected["artifactSha256"])
         source.seek(0)
-        identity = dict(name="Farol Dev", bundleId="local.farol.dev")
+        identity = dict(name=dev["product"], bundleId=dev["bundleId"])
         payload, _ = _tree(source, release, identity)
         if _inventory_tree_digest(payload["entries"]) != selected["artifactSha256"]:
             refuse("APP_PAYLOAD_DIGEST")
@@ -673,9 +690,9 @@ def prepare_dev_session(archive, receipt, expected_receipt_sha256, stage):
     # captured archive digest before AND after publishing its accepted inventory.
     result = stage_release_payload(archive, release, stage, identity)
     def dev_policy(payload):
-        if payload["appName"] != "Farol Dev.app" or payload["bundleID"] != "local.farol.dev":
+        if payload["appName"] != dev["appName"] or payload["bundleID"] != dev["bundleId"]:
             refuse("APP_PAYLOAD_INCOMPATIBLE")
-        policy = farol_release_policy(dict(appName="Farol.app", bundleID="io.github.legrch.farol"))
+        policy = farol_release_policy(payload, dev)
         policy["checks"][0]["sha256"] = hashlib.sha256(launcher).hexdigest()
         return policy
     acceptance = stage_acceptance(stage, result, dev_policy)

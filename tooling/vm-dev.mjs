@@ -1,4 +1,4 @@
-// Guest-only Farol Dev entry. Never launches or reads host Farol profiles,
+// Guest-only Dev-app entry. Never launches or reads host product profiles,
 // uses an arbitrary shell, imports credentials, or writes MCP stdout.
 // Build-only source and native VM custody stay with their existing owners.
 import fs from "node:fs/promises";
@@ -7,7 +7,14 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { productName } from "./harness-identity.ts";
-import { assembleVMDev, archiveVMDev } from "./vm-dev-artifact.mjs";
+import {
+  assembleVMDev,
+  archiveVMDev,
+  VM_DEV_APP,
+  VM_DEV_ARCHIVE,
+  VM_DEV_IDENTITY,
+  VM_DEV_IDENTITY_ENV,
+} from "./vm-dev-artifact.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url)).replace(/\/$/, "");
 const SHA = /^[a-f0-9]{64}$/u;
@@ -141,7 +148,7 @@ export async function existingDevInputs(root, opts) {
   requireVM(
     path.dirname(output) === expectedParent &&
       /^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$/u.test(path.basename(output)) &&
-      artifact === path.join(output, "Farol-Dev.zip") &&
+      artifact === path.join(output, VM_DEV_ARCHIVE) &&
       receipt === path.join(output, "vm-dev-artifact.json") &&
       opts.artifact === artifact &&
       opts.receipt === receipt,
@@ -177,14 +184,14 @@ export async function existingDevInputs(root, opts) {
     selected &&
       selected.schema === DERIVATIVE &&
       selected.kind === "local-dev-derivative" &&
-      selected.appName === "Farol Dev.app" &&
-      selected.bundleId === "local.farol.dev" &&
+      selected.appName === VM_DEV_APP &&
+      selected.bundleId === VM_DEV_IDENTITY.bundleId &&
       selected.environment === "dev" &&
       selected.officialRelease === false &&
       selected.hostLaunch === false &&
       selected.profileImport === false &&
       SHA.test(selected.artifactSha256) &&
-      selected.artifactPath === path.join(output, "Farol Dev.app"),
+      selected.artifactPath === path.join(output, VM_DEV_APP),
     "VM_DEV_RECEIPT_INVALID",
   );
   // The conductor's prepare_dev_session independently revalidates ZIP members,
@@ -299,13 +306,13 @@ export async function buildDevInputs(root, injected = {}) {
   requireVM(
     archived &&
       archived.schema === "farol.vm-dev-archive/1" &&
-      archived.archiveName === "Farol-Dev.zip" &&
+      archived.archiveName === VM_DEV_ARCHIVE &&
       archived.receiptSHA256 === expectedReceiptSHA256 &&
       archived.officialRelease === false,
     "VM_DEV_ARCHIVE_UNQUALIFIED",
   );
   return existingDevInputs(root, {
-    artifact: path.join(output, "Farol-Dev.zip"),
+    artifact: path.join(output, VM_DEV_ARCHIVE),
     receipt: receiptPath,
     expectedReceiptSHA256,
   });
@@ -341,6 +348,7 @@ export async function runVMDev(argv, injected = {}) {
         .map((k) => [k, process.env[k]]),
     ),
     FAROL_VM_TESTING_DIRECTORY: productName + " Testing",
+    ...VM_DEV_IDENTITY_ENV,
     ...(options.config
       ? { FAROL_VM_CONFIG: options.config }
       : process.env.FAROL_VM_CONFIG

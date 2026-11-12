@@ -22,7 +22,7 @@ import {
 } from "./runtime-contract.mjs";
 import { treeDigest } from "./artifact-digest.mjs";
 import { normalizePackagedFileModes } from "./package-file-modes.mjs";
-import { desktopIdentity } from "./harness-identity.ts";
+import { desktopIdentity, productName } from "./harness-identity.ts";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 function requireValue(ok, code) {
@@ -30,6 +30,21 @@ function requireValue(ok, code) {
 }
 export const VM_DEV_SCHEMA = "farol.vm-dev-artifact/1";
 const dev = desktopIdentity("dev", "/");
+// Every VM Dev name derives from the product-owned identity; Python
+// validators receive this exact object in FAROL_VM_DEV_IDENTITY.
+export const VM_DEV_APP = dev.applicationName + ".app";
+export const VM_DEV_ARCHIVE = dev.applicationName.replaceAll(" ", "-") + ".zip";
+const LAUNCHER = "Contents/MacOS/" + productName;
+export const VM_DEV_IDENTITY = Object.freeze({
+  product: dev.applicationName,
+  appName: VM_DEV_APP,
+  bundleId: dev.applicationId,
+  archiveName: VM_DEV_ARCHIVE,
+  executable: productName,
+});
+export const VM_DEV_IDENTITY_ENV = {
+  FAROL_VM_DEV_IDENTITY: JSON.stringify(VM_DEV_IDENTITY),
+};
 
 async function regular(file, maximum = 32 * 1024 * 1024) {
   const fd = await fs.open(
@@ -103,7 +118,7 @@ export function vmDevInfoPlist(version, minimum) {
     CFBundleDisplayName: dev.applicationName,
     CFBundleName: dev.applicationName,
     CFBundleIdentifier: dev.applicationId,
-    CFBundleExecutable: "Farol",
+    CFBundleExecutable: productName,
     CFBundlePackageType: "APPL",
     CFBundleIconFile: "farol.icns",
     CFBundleShortVersionString: version,
@@ -160,7 +175,7 @@ export async function assembleVMDev(root, output) {
   // All authentication above precedes the first output byte. Recheck an empty
   // physical destination immediately before publishing this new derivative.
   await requireVMDevOutput(root, output);
-  const app = path.join(output, dev.applicationName + ".app");
+  const app = path.join(output, VM_DEV_APP);
   await fs.mkdir(app, { mode: 0o700 });
   const resources = path.join(app, "Contents/Resources/app");
   await fs.mkdir(resources, { recursive: true, mode: 0o700 });
@@ -185,7 +200,7 @@ export async function assembleVMDev(root, output) {
   }
   await normalizePackagedFileModes(resources, { hasGoCore: true });
   await fs.chmod(path.join(resources, "update-archive.py"), 0o700);
-  await fs.writeFile(path.join(app, "Contents/MacOS/Farol"), launcher, {
+  await fs.writeFile(path.join(app, LAUNCHER), launcher, {
     flag: "wx",
     mode: 0o755,
   });
@@ -224,15 +239,14 @@ export async function assembleVMDev(root, output) {
     "VM_DEV_BUILD_CHANGED",
   );
   requireValue(
-    hash(await regular(path.join(app, "Contents/MacOS/Farol"))) ===
-      hash(launcher),
+    hash(await regular(path.join(app, LAUNCHER))) === hash(launcher),
     "VM_DEV_LAUNCHER_CHANGED",
   );
   assertExactSourceIdentity(sourceIdentity(root), build);
   const receipt = {
     schema: VM_DEV_SCHEMA,
     kind: "local-dev-derivative",
-    appName: dev.applicationName + ".app",
+    appName: VM_DEV_APP,
     bundleId: dev.applicationId,
     environment: "dev",
     version: build.version,
@@ -276,11 +290,11 @@ export async function archiveVMDev(
   const raw = await regular(receiptPath, 16384);
   requireValue(hash(raw) === expectedReceiptSHA256, "VM_DEV_RECEIPT_CHANGED");
   const receipt = JSON.parse(raw);
-  const app = path.join(output, dev.applicationName + ".app");
+  const app = path.join(output, VM_DEV_APP);
   requireValue(
     receipt.schema === VM_DEV_SCHEMA &&
       receipt.kind === "local-dev-derivative" &&
-      receipt.appName === dev.applicationName + ".app" &&
+      receipt.appName === VM_DEV_APP &&
       receipt.bundleId === dev.applicationId &&
       receipt.environment === "dev" &&
       receipt.artifactPath === app &&
@@ -303,7 +317,7 @@ export async function archiveVMDev(
     "VM_DEV_ARTIFACT_CHANGED",
   );
   requireValue(
-    hash(await regular(path.join(app, "Contents/MacOS/Farol"), 65536)) ===
+    hash(await regular(path.join(app, LAUNCHER), 65536)) ===
       receipt.launcherSHA256 &&
       receipt.launcherSHA256 ===
         hash(
@@ -327,11 +341,14 @@ export async function archiveVMDev(
       cwd: root,
       timeout: 120000,
       maxBuffer: 32768,
-      env: Object.fromEntries(
-        ["HOME", "USER", "TMPDIR"]
-          .filter((k) => process.env[k] !== undefined)
-          .map((k) => [k, process.env[k]]),
-      ),
+      env: {
+        ...Object.fromEntries(
+          ["HOME", "USER", "TMPDIR"]
+            .filter((k) => process.env[k] !== undefined)
+            .map((k) => [k, process.env[k]]),
+        ),
+        ...VM_DEV_IDENTITY_ENV,
+      },
     },
   );
   const archived = JSON.parse(stdout);
@@ -343,7 +360,7 @@ export async function archiveVMDev(
       archived.artifactSha256 === receipt.artifactSha256 &&
       archived.bundleId === dev.applicationId &&
       archived.officialRelease === false &&
-      archived.archiveName === "Farol-Dev.zip" &&
+      archived.archiveName === VM_DEV_ARCHIVE &&
       /^[a-f0-9]{64}$/.test(archived.archiveSha256),
     "VM_DEV_ARTIFACT_CHANGED",
   );
