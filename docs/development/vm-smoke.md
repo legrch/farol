@@ -1,230 +1,146 @@
 # Packaged app testing in a macOS guest
 
-`task qa:smoke` runs a bounded exact-release UI smoke of a release archive in a
-dedicated macOS guest. Hidden is the default; `--visible` shows the same guest
-desktop. It never launches the production app on the host or reads the
-production host profile/tunnel. The guest journeys are QA — real Dev services,
-accounts and visual judgment — and are never part of `task test`; the testing
-contract, aggregate boundaries and the VM executor option plan live in
-[VM testing contract](vm-testing.md).
+The supported finite installed lifecycle uses the explicitly selected native
+AppService route below. Hidden is the default; `--visible` shows the same guest.
+It requires a compatible independently installed terminal-mac helper and live VZ
+evidence that the per-machine artifact share is read-only. It never launches a
+host production app or reads its profile. These journeys are separate from
+`task test`; see the [VM testing contract](vm-testing.md) for acceptance boundaries.
+
+**Legacy Terminal workflows are BLOCKED.** The current helper does not advertise
+`terminal-shell-readiness/1`. The runner refuses before shell typing without that
+proof. Frontmost Terminal, Dock coordinates and screenshots do not prove shell
+readiness. Finder bootstrap instructions are obsolete and are not a supported
+execution route.
 
 ## Code, configuration and persistent state
 
-| Owner                    | Location                                                    | Contents                                                                  |
-| ------------------------ | ----------------------------------------------------------- | ------------------------------------------------------------------------- |
-| Repository               | `config/vm/pilot.json`                                      | Versioned machine resources and interactive bootstrap contract            |
-| Repository               | `tooling/vm-machine.py`, `tooling/vm-smoke*`, Taskfile      | Provisioning adapter, smoke, Dev import and tests                         |
-| terminal-mac             | `~/Library/Application Support/terminal-mac`                | VM disks, machine identity, Apple restore cache and per-machine artifacts |
-| Installed tool           | `~/Applications/TerminalMac.app`                            | Standalone host tool and unchanged guest helper; no checkout dependency   |
-| Local test configuration | `~/Library/Application Support/Farol Testing/vm-smoke.json` | Host paths, VM name, bootstrap/menu points; no credentials                |
-| Private evidence         | `~/Library/Application Support/Farol Testing/evidence`      | Per-run results, screenshots and separate visual reviews                  |
-| Guest profile            | Guest appData product directory                             | Guest computer/workspace identity and separately imported Dev connection  |
+| Owner                 | Location                                                    | Contents                                                                  |
+| --------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Repository            | `config/vm/farol.json`                                      | Machine resources and interactive setup contract                          |
+| Repository            | `tooling/vm-machine.py`, `tooling/vm-smoke*`, Taskfile      | Provisioning, native lifecycle, blocked legacy adapters and offline tests |
+| terminal-mac          | `~/Library/Application Support/terminal-mac`                | VM disks, machine identity, restore cache and artifact inboxes            |
+| Installed tool        | `~/Applications/TerminalMac.app`                            | Independently installed host tool and guest helper                        |
+| Private configuration | `~/Library/Application Support/Farol Testing/vm-smoke.json` | Infrastructure only; no credentials                                       |
+| Private evidence      | `~/Library/Application Support/Farol Testing/evidence`      | Results, screenshots, operation and custody records                       |
+| Guest profile         | Guest appData product directory                             | Guest-owned identity and configuration                                    |
 
-Removing a source checkout must not remove the VM, installed tool, private
-configuration, evidence or guest profile. Runtime state belongs in Application
-Support, not a Git worktree or source-controlled VM image. The generic VM and
-read-only artifact share belong to terminal-mac; product checks belong here.
+Runtime state belongs outside source checkouts. The guest receives only the
+control share, helper tools and a narrow read-only artifact inbox. Host home and
+project folders are not mounted. NAT is not network isolation.
 
-The installed terminal-mac needs the per-machine read-only `artifacts` share.
-Its signed app resources are never a staging directory. The guest sees only the
-existing control share, helper tools and that narrow artifact inbox; the host
-home and project folders are not mounted. NAT can reach host/LAN services and
-is not network isolation.
-
-## Create or resume from the versioned spec
+## Provisioning and configuration
 
 ```sh
-task vm:plan                         # print commands, no execution
+task vm:plan
 task vm:setup -- --ipsw /path/to/AppleRestore.ipsw
 ```
 
-Setup creates a missing machine from explicit Apple restore media or starts an
-existing matching machine. It refuses resource/network drift instead of resizing,
-replacing or deleting an existing VM. Install terminal-mac separately first; this
-adapter does not download arbitrary tools or change host security settings.
+Setup creates a missing machine from explicit restore media or starts an existing
+matching machine. It refuses resource/network drift. Install terminal-mac
+separately; provisioning does not download tools, supply guest passwords or change
+security settings. Account setup, helper installation and privacy grants require
+independent guest qualification.
 
-A new guest still needs the normal macOS account and helper permission setup.
-The spec contains no password, TCC approval, autologin credential or security
-bypass. Existing guest bootstrap state survives a normal restart. Automatic login
-and idle lock choices remain guest-owner settings, not source secrets.
-
-## Private machine configuration
-
-The VM entrypoint selects an already installed Node version declared in
-`package.json`, even when the shell starts an older Node. It installs nothing.
-The standard private configuration is discovered
-automatically. `--config` or `FAROL_VM_CONFIG` selects another file.
-
-```json
-{
-  "terminal_mac": "~/Applications/TerminalMac.app/Contents/MacOS/terminal-mac",
-  "vm_home": "~/Library/Application Support/terminal-mac",
-  "vm": "pilot",
-  "bootstrap": "finder",
-  "terminal_point": [62, 765],
-  "menu_point": [1058, 12],
-  "timeout": 180
-}
-```
-
-Coordinates above are examples, not universal defaults. Confirm them against the
-current guest screenshot. In `finder` bootstrap, the point is the Finder Dock
-icon. The runner opens the fixed system Terminal path through Go to Folder,
-opens one dedicated Terminal window, then uses a finite closed-phase request
-loop. Later Dock/focus changes do not redirect shell typing. The legacy
-`terminal` bootstrap selects a confirmed existing Terminal window or Dock icon.
-`--bootstrap-point` and `--terminal-point` are equivalent CLI spellings.
-
-## Test an exact packaged release
+Provisioning publishes durable create-only intents before create, clone and start.
+Retained intents block reentry until explicitly reconciled; a timeout never
+permits another dispatch. The read-only inventory contacts no VM and clears nothing:
 
 ```sh
-task qa:smoke -- --artifact /path/to/Farol-VERSION-darwin-arm64.zip
-task qa:smoke -- --artifact /path/to/Farol-VERSION-darwin-arm64.zip --visible
-task qa:smoke -- --latest
+node tooling/vm-machine.mjs --reconcile-operations <machine>
 ```
 
-A local ZIP needs adjacent `farol-release.json` and `SHA256SUMS`. The runner checks
-release identity, unsigned/not-notarized declaration, name, size/digest, safe ZIP
-entries and plist/artifact binding. Local consistency does not authenticate an
-arbitrary caller-supplied manifest; local artifact provenance belongs to its
-producer. `--latest` resolves public GitHub Latest and its exact official asset
-URLs on that run. Signed/notarized formats require a dedicated future verifier.
-No OS quarantine or signing warning is bypassed.
+The entry reads `~/Library/Application Support/Farol Testing/vm-smoke.json`, or
+`--config` / `FAROL_VM_CONFIG`. Its `vm_home` must be a normalized physical path
+inside the canonical terminal-mac store, without ancestor aliases or traversal.
+The shared `prepared_base` field selects a qualified base for Dev provisioning;
+see [base identity and receipt requirements](vm-testing.md). Legacy bootstrap/menu
+coordinates remain configuration data only and cannot satisfy shell readiness.
 
-The verifier conservatively rejects parent-relative symlink targets, including
-some producer-valid layouts. Unsupported layouts refuse before installation;
-the qualified v0.5.18 archive uses the supported layout.
+## Native exact-release lifecycle
 
-For a new dedicated test guest, add `--prepare-test-guest` once. It records a
-guest-only marker after connection admission; it never resets a profile. Unknown
-or foreign configured connections refuse. A connection imported by the fixed
-Dev-only path below is admitted only while its tunnel matches the guest marker
-and no unresolved runtime/verification effect is present.
-The scalar Connect uncertainty flag refuses both empty and Dev admission.
-
-The bounded scenario proves capture, read-only staging, exact guest install,
-initial UI, optional menu, normal Quit with no owned app process remaining, and
-one relaunch with new process identity and one normal window. The outer launcher
-and nested runtime may coexist, so PID count is not app-instance count. An
-existing guest app is normally quit before installation; no force-stop is used.
-
-## Reuse only the approved Dev connection
+Select an archive and application-tree digest from independently accepted release
+evidence. Never take the expected digest from the ZIP being admitted.
 
 ```sh
-task qa:connect-dev -- --visible    # one-time offline ID/key import
-task qa:status                      # local guest identity/proof only
+task qa:smoke -- --native-app-service --native-relaunch \
+  --artifact /path/to/Farol-VERSION-darwin-arm64.zip \
+  --expected-app-sha256 <independently-accepted-tree-sha256>
 ```
 
-The import source is the fixed host Dev identity from the product identity
-contract. It copies only the configured tunnel ID and the private API-key file,
-never host computer ID, folders/grants, runtime receipts, browser cookies or
-sessions. No arbitrary profile argument or production source exists. A live
-process referring to that exact host Dev profile refuses import. The source is
-read-only; replacement/race checks refuse changed files.
+Add `--visible` only when visible guest QA is intended. Native mode requires an
+explicit local artifact and expected tree digest; it does not support `--latest`,
+legacy menu actions, credential import or arbitrary driver execution.
 
-The destination is the genuine packaged identity inside the guest. An unknown
-operation or a different existing guest tunnel refuses before key/config writes.
-A successful import increments the guest connector generation and discards old
-local attachment/selection receipts; it does not invent a successful check. The
-private key is never printed or placed in command arguments, is mode 0600, and
-its host staging copy is removed after guest acknowledgement. Persistent keys
-remain only in the existing host Dev store and the guest private store, not the
-machine configuration or repository.
+The ZIP needs adjacent `farol-release.json` and `SHA256SUMS`. Admission checks
+release identity, archive digest and limits, safe members, plist/artifact binding,
+and the independently accepted application tree. Local manifest consistency alone
+does not authenticate a caller-supplied artifact. Unsupported layouts refuse before
+installation. Signature and quarantine checks remain fail closed.
 
-Import does not itself start a network tunnel. Use the guest's Connect action
-once with saved credentials, save the exact existing ChatGPT app name, then
-observe the result. No new ChatGPT app, login, message or account is created by
-these tasks. Owner-only authentication/payment stops the scenario.
+The helper verifies the complete payload and finite signature policy before
+publishing a new guest `/Applications` app. It never overwrites an existing app.
+The lifecycle is open, install, launch, activate, normal Quit, optional second
+launch/activate/Quit, then close. Every phase needs a bound ACK and a fresh read-only
+observation. Running phases require bound launch identity; Quit and close require
+both root-exit and UI-primary-exit evidence. Missing, malformed or unconfirmed
+evidence stops subsequent effects and preserves pending state and custody records.
+A phase enters the completed log only after its observation is admitted.
 
-One Dev endpoint is used sequentially. Before returning to host Dev, use:
+Successful native closure is reported as `NATIVE_APP_SERVICE_CLOSED_REPORTED`.
+Visual review remains `NEEDS_REVIEW`; provider, tunnel, update and live installation
+acceptance are separate. Screenshots document pixels without proving those gates.
+
+## Blocked legacy workflows and Dev connection handoff
+
+The following legacy selections are **BLOCKED pending qualified shell readiness**:
+
+- `qa:smoke` without `--native-app-service`, including `--latest` and shell E2E drivers.
+- `qa:connect-dev`, the guest Dev credential import route.
+- `qa:status`, whose connection proof can bootstrap the guest and activate the app.
+- `qa:release-dev`, the legacy Quit and endpoint handoff route.
+
+Dev import and endpoint handoff remain blocked until their execution route is
+qualified. The JXA credential importer also refuses with
+`GUEST_IMPORT_PERSISTENCE_UNQUALIFIED` before filesystem or credential access:
+it has no qualified descriptor-rooted destination admission and no file-plus-parent
+fsync primitive. Atomic writes do not establish durable ordering of the guest
+uncertainty fence, credential replacement, commit receipt and final clear.
+A matching, absent, unreadable or invalid-encoding receipt cannot enable this route.
+No credential should be exported merely to exercise this blocked importer.
+
+A returning guest profile may already contain connection state. Native closure does
+not qualify its endpoint or authorize host Dev to take over. Never replay a refused
+or outcome-unknown connection action. `task vm:dev` is a separate native Dev-app
+session with no automatic credential import; see [VM testing](vm-testing.md).
+
+## Evidence, custody and interrupted work
+
+Before product effects, the runner durably publishes the per-VM
+`.farol-smoke-pending.json` fence. Initial admission uses no-follow metadata:
+dangling symlinks and uninspectable entries do not establish absence. Interrupted,
+failed and timed-out effects retain their fence and operation metadata.
+
+The runner also refuses unreconciled staging residue. This strictly read-only
+report starts no VM, takes no custody lock and changes nothing:
 
 ```sh
-task qa:release-dev                 # normal Quit of only the guest app
-# Then use the ordinary host task dev workflow when its own preflight is ready.
+task qa:smoke -- --reconcile-staging
 ```
 
-This preserves the guest profile and VM, does not launch a host app, and does not
-silently fall back to production. It is not a global lock on manual launches of
-host Dev; do not run two clients on the same Dev endpoint concurrently. A shared
-endpoint does not mean a shared computer/profile identity. The package profile
-and any future guest Dev profile remain distinct and retain their own proofs.
+Reconcile the original operation, ACKs and lifetime before any explicit cleanup.
+Removing a fence merely to permit a retry is not reconciliation. The narrowly
+accepted initial native `open` refusal with typed `noEffect` can retain its stage
+and end its own unstarted fence; that exception never clears unknown effects.
 
-## Results and limits
+Legacy Quit proof requires classified marker metadata. Only confirmed absence of
+`running.json` can establish that no marker remains. Unsafe types, symlinks,
+unreadable receipts and inaccessible parents are unresolved. A changed canonical
+`last-quit.json` must confirm fresh drain after an observed Quit; GUI disappearance
+alone never qualifies installation or endpoint release. These checks do not unblock
+the legacy execution route.
 
-`result.json` separates `lifecycle: PASS`, `ui: NEEDS_REVIEW` and remote tunnel
-qualification. An agent inspects Setup/returning UI, menu and sensible relaunch
-screenshots separately. Menu coordinates only capture an observation. Without a
-menu point the menu row stays `NOT_RUN`. Local `qa:status` and `connection.json`
-identify the guest profile/build and Dev binding, not an end-to-end provider
-receipt. To qualify the route, separately call the explicitly selected Dev
-connector and compare its profile/build binding with the guest proof. A catalogue
-check does not qualify file reads, writes, shell or all registered tools.
-
-The runner holds a VM-operation lease and bounds host/guest work. It also
-consumes terminal-mac's exclusive input lease as `farol-smoke:<run>`, so guest
-input cannot be driven by two writers at once; competing guest actions are
-refused with `GUEST_INPUT_LEASE_HELD`. It restores no unknown operation
-automatically. Failures retain private evidence and mark an outstanding phase
-UNKNOWN when needed. Cleanup records a disposition in the result: the first
-attempt's disposition is authoritative, and a `FAILED` cleanup is never upgraded
-into a `CLEARED` claim. Successful cleanup removes exact owned host staging and
-guest extraction/predecessor; it never deletes input archives, VMs or profiles.
-Hidden stays hidden and visible stays visible. Screenshots and runtime metadata
-are private and excluded from the public source branch. The settled input-lease
-contract is in [VM testing contract](vm-testing.md).
-
-`task vm:test` checks archive/profile/configuration boundaries, the guest
-inspector/importer and provisioning plans without real accounts or a VM.
-Dev deployment, clean first-install state, updater and embedded provider sign-in
-are separate qualification. A configured prepared profile tests returning use,
-not a clean installation.
-
-## Interrupted work, credential publication and endpoint handoff
-
-Before a product mutation, the runner publishes and fsyncs the private per-VM
-`.farol-smoke-pending.json` fence. It is removed only after the successful run
-and guest server Stop acknowledgement. A failed, interrupted or timed-out run
-leaves the fence in place, blocking every runner mode while an old guest phase
-might still be executing. This includes `task qa:status`: its current connection
-proof path can bootstrap the guest and activate the app, so it is not a read-only
-reconciliation route. It never clears the fence. A genuinely read-only recovery
-operation remains unimplemented. Reconcile the original run's guest ACKs,
-current state and server lifetime before removing that exact fence manually.
-Removing it merely to retry UNKNOWN is not reconciliation.
-
-Admission also refuses a machine whose artifact inbox holds staging residue from
-a pre-fence failure: `UNRECONCILED_STAGING_RESIDUE` names directory names only,
-reads no contents and deletes nothing. `task qa:smoke -- --reconcile-staging` is
-the strictly read-only report — no runner, no VM contact, no lock and no write;
-it lists the residue directories and fence metadata and describes the required
-manual action. Clearing stays manual: the runner never deletes residue or clears
-a fence.
-
-Quit must produce a changed, canonical `last-quit.json` with `drained: true`,
-no unconfirmed children, a fresh timestamp from the guest clock, and no
-`running.json`. GUI disappearance alone does not qualify installation or Dev
-endpoint release. `qa:release-dev` requires observing its own normal Quit;
-an already-absent GUI is not a confirmed handoff. Installation completes its
-fallible replacement copy before moving the old app, then uses same-volume
-renames. An interrupted rename retains the predecessor and guest-work path for
-explicit recovery instead of silently replaying installation.
-
-Dev import refuses source uncertainty, checks legacy case spelling when looking
-for a live host Dev, and proves read-only staging before exporting the key. The
-host acquires its effect fence before raw key staging, including when no running
-guest app needed Quit. The guest publishes an atomic Connect uncertainty flag
-before changing secret bytes and clears it after metadata and binding-marker
-publication. Guest crash durability and the final guard-clear failure window
-remain unqualified; an ACK is not power-loss evidence. Partial publication must
-be reconciled before later admission/re-import, including retained host fences.
-Normal exceptions, Ctrl+C and SIGTERM remove the host staging key while keeping
-operation metadata. SIGKILL or host power loss cannot run cleanup: inspect the
-original private inbox and reconcile/remove residual credential payloads before
-reusing that VM. Never archive raw key files as diagnostic evidence.
-
-A returning approved Dev profile may automatically resume its endpoint during
-launch. The smoke checks that host Dev is stopped and reports remote tunnel
-qualification as `NOT_QUALIFIED`; it does not claim there was no tunnel effect.
-The endpoint is still a cooperative single-client resource, not a global lock
-on manual host launches. Compare the explicit Dev connector's profile/build
-binding with guest proof before calling that route qualified.
+Evidence and screenshots remain private. Never retain raw keys in diagnostics or
+archive credential staging. Successful cleanup removes only exact owned staging;
+it never deletes input archives, VMs or guest profiles. `task vm:test` covers these
+admission contracts with disposable synthetic fixtures, not a live VM or provider.
