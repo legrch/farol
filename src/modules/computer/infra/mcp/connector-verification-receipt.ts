@@ -420,3 +420,104 @@ export async function clearConnectorVerificationReceipt(
     throw error;
   }
 }
+
+// Narrow C7 effect owner: successful unlink/sync is followed by a SEPARATE
+// read-only native observation using the original held directory. A TS
+// returned boolean, equal visible Settings, legacy marker, or an ENOENT from
+// a failed write cannot supply this original positive cleanup witness.
+export type OriginalConnectorCleanupProof = Readonly<{
+  parentOperationId: string;
+  effectId: string;
+  rootDevice: string;
+  rootInode: string;
+  priorReceiptDigest: string | null;
+  readback: "verified-absent";
+  digest: string;
+}>;
+
+export async function clearAndConfirmOriginalConnectorVerificationReceipt(
+  root: string,
+  parentOperationId: string,
+  effectId: string,
+): Promise<OriginalConnectorCleanupProof> {
+  const originalUUID =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+  if (!originalUUID.test(parentOperationId) || !originalUUID.test(effectId))
+    receiptError("CONNECTOR_VERIFICATION_CLEANUP_INVALID");
+  assertRoot(root);
+  await ensureRoot(root);
+  const handle = await fs.open(
+    root,
+    fsConstants.O_RDONLY |
+      (fsConstants.O_DIRECTORY ?? 0) |
+      NO_FOLLOW |
+      CLOSE_ON_EXEC,
+  );
+  try {
+    const original = await handle.stat({ bigint: true });
+    const sameDirectory = async () => {
+      const named = await fs.lstat(root, { bigint: true });
+      const held = await handle.stat({ bigint: true });
+      const uid = process.geteuid?.();
+      return (
+        named.isDirectory() &&
+        !named.isSymbolicLink() &&
+        named.dev === original.dev &&
+        named.ino === original.ino &&
+        held.dev === original.dev &&
+        held.ino === original.ino &&
+        (original.mode & 0o777n) === 0o700n &&
+        (named.mode & 0o777n) === 0o700n &&
+        (uid === undefined ||
+          (original.uid === BigInt(uid) && named.uid === BigInt(uid)))
+      );
+    };
+    if (!(await sameDirectory()))
+      receiptError("CONNECTOR_VERIFICATION_CLEANUP_UNCONFIRMED");
+    const prior = await readConnectorVerificationReceipt(root, {
+      readOnly: true,
+    });
+    // Existing owner performs exactly one original deletion attempt. A failed
+    // call exits without a readback-as-success or a second cleanup effect.
+    await clearConnectorVerificationReceipt(root);
+    if (
+      !(await sameDirectory()) ||
+      (await readConnectorVerificationReceipt(root, { readOnly: true })) !==
+        null
+    )
+      receiptError("CONNECTOR_VERIFICATION_CLEANUP_UNCONFIRMED");
+    await handle.sync();
+    if (
+      !(await sameDirectory()) ||
+      (await readConnectorVerificationReceipt(root, { readOnly: true })) !==
+        null
+    )
+      receiptError("CONNECTOR_VERIFICATION_CLEANUP_UNCONFIRMED");
+    const evidence = {
+      schema: 1 as const,
+      parentOperationId,
+      effectId,
+      rootDevice: String(original.dev),
+      rootInode: String(original.ino),
+      priorReceiptDigest:
+        prior === null
+          ? null
+          : createHash("sha256").update(JSON.stringify(prior)).digest("hex"),
+      readback: "verified-absent" as const,
+    };
+    return Object.freeze({
+      parentOperationId,
+      effectId,
+      rootDevice: evidence.rootDevice,
+      rootInode: evidence.rootInode,
+      priorReceiptDigest: evidence.priorReceiptDigest,
+      readback: evidence.readback,
+      digest: createHash("sha256")
+        .update(JSON.stringify(evidence))
+        .digest("hex"),
+    });
+  } finally {
+    // Unknown native close cannot be promoted into a confirmed cleanup.
+    await handle.close();
+  }
+}

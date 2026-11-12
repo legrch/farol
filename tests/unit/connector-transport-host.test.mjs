@@ -75,6 +75,8 @@ function fixture() {
   const connector = { hasUnresolvedEffect: vi.fn(() => false) };
   const reservation = new AuthorityTransitionReservation();
   const context = {
+    AbortController,
+    connectorStartCancellation: null,
     connectorRuntimeUncertain,
     configuration: owner,
     secureMcpConnectorRuntime: connector,

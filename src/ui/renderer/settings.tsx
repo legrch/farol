@@ -1368,6 +1368,12 @@ function ConnectMac({
     draftChanged,
     retainedSetupIntents(facade, snapshot),
   ).allowed;
+  // Setup is historical; only a current server observation describes a
+  // connected transport. Never turn a saved runtime into live evidence.
+  const transportConnected =
+    snapshot.connectionStatus?.state === "recent_transport" &&
+    snapshot.connectionStatus.validUntilMillis != null &&
+    snapshot.connectionStatus.validUntilMillis > Date.now();
   const valid =
     key.length > 0
       ? ProductConfigurationCommandSchema.safeParse({
@@ -1547,15 +1553,20 @@ function ConnectMac({
               {busy
                 ? "Connecting…"
                 : connected
-                  ? "Connected"
+                  ? transportConnected
+                    ? "Connected"
+                    : "Connection saved"
                   : draftChanged && connector.runtime !== null
                     ? "Save and connect"
                     : "Connect"}
             </button>
           )}
           {connected && (
-            <span className="setup-success" role="status">
-              ✓ Connected to this Mac
+            <span
+              className={transportConnected ? "setup-success" : undefined}
+              role="status"
+            >
+              {transportConnected ? "✓ Connected" : "Connection saved"}
             </span>
           )}
           {connector.runtime !== null && (

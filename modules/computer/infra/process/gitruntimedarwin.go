@@ -22,7 +22,7 @@ func (nativePlatformFacts) gitRuntimeFile(ctx context.Context, path string) (pla
 }
 func (nativePlatformFacts) gitRuntimeDirectory(ctx context.Context, path string) (gitRuntimeDirectoryFacts, error) {
 	refuse := func() (gitRuntimeDirectoryFacts, error) {
-		return gitRuntimeDirectoryFacts{}, &processsvc.NativeFailure{}
+		return gitRuntimeDirectoryFacts{}, &processsvc.NativeFailure{Reason: processsvc.RefusalRuntimeIntegrity}
 	}
 	if ctx == nil || ctx.Err() != nil {
 		return refuse()
@@ -77,7 +77,7 @@ func (nativePlatformFacts) gitRuntimeDirectory(ctx context.Context, path string)
 // No read-data pin grants execution, and root ownership is mandatory.
 func (darwinLaunchFilesystem) pinGitRuntimeFile(ctx context.Context, pin ExecutablePin) (executableMeasurement, error) {
 	if ctx == nil || ctx.Err() != nil {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalRuntimeIntegrity}
 	}
 	parent, err := platformProtectedParent(pin.Path)
 	if err != nil {
@@ -86,7 +86,7 @@ func (darwinLaunchFilesystem) pinGitRuntimeFile(ctx context.Context, pin Executa
 	defer parent.Close()
 	fd, err := unix.Openat(int(parent.Fd()), filepath.Base(pin.Path), unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalRuntimeIntegrity}
 	}
 	file := os.NewFile(uintptr(fd), pin.Path)
 	before, err := file.Stat()
@@ -94,16 +94,16 @@ func (darwinLaunchFilesystem) pinGitRuntimeFile(ctx context.Context, pin Executa
 		named: func(path string) (os.FileInfo, error) {
 			physical, err := platformDescriptorPath(file.Fd())
 			if err != nil || physical != path {
-				return nil, &processsvc.NativeFailure{}
+				return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalRuntimeIntegrity}
 			}
 			resolved, err := filepath.EvalSymlinks(path)
 			if err != nil || resolved != path {
-				return nil, &processsvc.NativeFailure{}
+				return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalRuntimeIntegrity}
 			}
 			return os.Lstat(path)
 		}}
 	if err != nil {
-		return held, &processsvc.NativeFailure{}
+		return held, &processsvc.NativeFailure{Reason: processsvc.RefusalRuntimeIntegrity}
 	}
 	return held, held.recheck(ctx)
 }
@@ -111,7 +111,9 @@ func (darwinLaunchFilesystem) pinGitRuntimeFile(ctx context.Context, pin Executa
 // The one protected CLT alias is measured, not accepted as a caller symlink.
 // Kernel execution remains limited to the separately pinned physical images.
 func (nativePlatformFacts) pythonAlias(ctx context.Context) (pythonAliasFacts, error) {
-	refuse := func() (pythonAliasFacts, error) { return pythonAliasFacts{}, &processsvc.NativeFailure{} }
+	refuse := func() (pythonAliasFacts, error) {
+		return pythonAliasFacts{}, &processsvc.NativeFailure{Reason: processsvc.RefusalRuntimeIntegrity}
+	}
 	if ctx == nil || ctx.Err() != nil {
 		return refuse()
 	}
@@ -162,11 +164,11 @@ func (darwinLaunchFilesystem) pinPythonAlias(ctx context.Context) (executableMea
 }
 func recheckPythonAlias(ctx context.Context, m *pythonAliasMeasurement) error {
 	if m == nil || m.closed {
-		return &processsvc.NativeFailure{}
+		return &processsvc.NativeFailure{Reason: processsvc.RefusalRuntimeIntegrity}
 	}
 	next, err := (nativePlatformFacts{}).pythonAlias(ctx)
 	if err != nil || next != m.original {
-		return &processsvc.NativeFailure{}
+		return &processsvc.NativeFailure{Reason: processsvc.RefusalRuntimeIntegrity}
 	}
 	return nil
 }

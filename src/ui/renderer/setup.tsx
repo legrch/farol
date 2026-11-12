@@ -195,7 +195,7 @@ export function Setup({ snapshot, facade, onInputsChanged }: Props) {
                           ? {
                               signin: "Signed in to ChatGPT",
                               folders: "Workspace access checked",
-                              connection: "Tunnel connected",
+                              connection: "Connected",
                               attachment: "App confirmed in ChatGPT",
                             }[entry.step]
                           : entry.liveState === "pending"

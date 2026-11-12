@@ -67,6 +67,7 @@ func connectorProcessUnknown() error {
 // remain uncertain, and no classification grants permission to retry.
 func connectorPreparationFailure(err error) error {
 	code, unknown := "PROCESS_PREPARATION_UNAVAILABLE", false
+	reason := ""
 	var contract *processct.Failure
 	var service *processsvc.Failure
 	var denied *authority.Failure
@@ -74,8 +75,10 @@ func connectorPreparationFailure(err error) error {
 	switch {
 	case errors.As(err, &contract) && contract != nil:
 		code, unknown = contract.Code, contract.Outcome == "outcome_unknown"
+		reason = contract.NativeRefusalReason
 	case errors.As(err, &service) && service != nil:
 		code, unknown = service.Code, service.Unknown
+		reason = string(service.NativeRefusalReason)
 	case errors.As(err, &denied) && denied != nil:
 		code = denied.Code
 	case errors.As(err, &native) && native != nil:
@@ -111,7 +114,7 @@ func connectorPreparationFailure(err error) error {
 	if unknown {
 		outcome = "outcome_unknown"
 	}
-	return &processct.Failure{Code: code, Outcome: outcome, Retry: "never"}
+	return &processct.Failure{Code: code, Outcome: outcome, Retry: "never", NativeRefusalReason: processct.NativeRefusalReason(code, reason)}
 }
 
 func (s *computerConnector) processSlot(slot *connectorSlot) bool {

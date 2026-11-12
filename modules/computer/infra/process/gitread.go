@@ -33,7 +33,7 @@ const (
 // pager suppression bounds output transport and optional index locks stay off.
 func GitReadArguments(s GitReadSelection, view GitReadView) ([]string, error) {
 	if !validGitReadSelection(s) {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy}
 	}
 	args := []string{"--no-pager", "--git-dir=" + s.GitDirectory, "--work-tree=" + s.Worktree}
 	switch view {
@@ -44,7 +44,7 @@ func GitReadArguments(s GitReadSelection, view GitReadView) ([]string, error) {
 	case GitReadStagedDiff:
 		return append(args, "diff", "--cached", "--no-color", "--"), nil
 	default:
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy}
 	}
 }
 
@@ -71,7 +71,9 @@ type gitReadDirectory struct {
 }
 
 func gitReadBindings(s SeatbeltSelection, command Command, roots []rootScopeBinding) ([]gitReadDirectory, error) {
-	refuse := func() ([]gitReadDirectory, error) { return nil, &processsvc.NativeFailure{} }
+	refuse := func() ([]gitReadDirectory, error) {
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy}
+	}
 	g := s.GitRead
 	if g == nil || !validGitReadSelection(*g) || command.Write || len(command.Input) != 0 ||
 		command.Executable != g.Executable || command.Cwd != g.Worktree {

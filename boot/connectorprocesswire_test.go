@@ -69,7 +69,7 @@ func processWireFixtureWithPolicy(t *testing.T, policy authority.FilePolicy) (*c
 	access.approval.FilePolicy = policy
 	access.PutApproval(access.approval)
 	s.root.publication.approval = access.approval.Clone()
-	if err := s.closeSlot(context.Background()); err != nil {
+	if err := s.closeSlot(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	n := &processWireNative{connectorProcessNativeDouble: native}
@@ -100,7 +100,7 @@ func processWireCancel(s *computerConnector) wire.ComputerConnectorProcessCancel
 
 func TestConnectorProcessWireNormalStartupDoesNotAdvertiseUnqualifiedShell(t *testing.T) {
 	s, _, _, _, launch := connectorProcessFixture(t)
-	if err := s.closeSlot(context.Background()); err != nil {
+	if err := s.closeSlot(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Open(context.Background(), "normal-open", launch); err != nil {
@@ -164,7 +164,7 @@ func TestConnectorProcessWireOneStartReadAndReconnect(t *testing.T) {
 	if out.Status != "ok" || json.Unmarshal(out.Data, &result) != nil || result.State != "running" || result.StdoutBase64 != "c2F2ZWQ=" || result.StderrBase64 != "ZXJy" || result.StdoutNext != "5" {
 		t.Fatal("read lost exact output", out.Status, out.Code)
 	}
-	if err := s.closeSlot(context.Background()); err != nil {
+	if err := s.closeSlot(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	launch.RuntimeId = "next-runtime"
@@ -320,7 +320,7 @@ func TestConnectorProcessWireRepeatedHostMetadataCannotRestoreControl(t *testing
 	s, _, n, launch := processWireFixture(t)
 	processWireStarted(t, s)
 	original := s.current
-	if err := s.closeSlot(context.Background()); err != nil {
+	if err := s.closeSlot(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Open(context.Background(), "same-metadata-reopen", launch); err != nil {
@@ -475,5 +475,27 @@ func TestConnectorNoOpCancelBeforeExitPublicationDrainsWithoutRewritingResult(t 
 	}
 	if out := connectorMutationInvoke(t, s, "computer.process.cancel", "cancel-after-publication", processWireCancel(s)); out.Status != "refused" || child.cancels != 1 || publisher.publishes != 1 {
 		t.Fatal("late Cancel overwrote or repeated the published result", out)
+	}
+}
+
+func TestConnectorNativeRefusalWirePreservesOnlyClosedReason(t *testing.T) {
+	for _, reason := range []string{"admission_policy", "confinement_policy", "executable_integrity", "workspace_root_identity", "cwd_fence", "directory_policy", "filesystem_policy", "runtime_integrity", "helper_preflight", "unclassified", "future", "/outside token=fixture"} {
+		want := reason
+		if reason == "future" || reason == "/outside token=fixture" {
+			want = "unclassified"
+		}
+		for _, err := range []error{
+			&processct.Failure{Code: "PROCESS_NATIVE_REFUSED", Outcome: "refused", Retry: "never", NativeRefusalReason: reason},
+			&processsvc.Failure{Code: "PROCESS_NATIVE_REFUSED", NativeRefusalReason: processsvc.NativeRefusalReason(reason)},
+		} {
+			out, e := connectorProcessOutcome(nil, err)
+			if e != nil || out.Status != "refused" || out.Code != "PROCESS_NATIVE_REFUSED" || out.NativeRefusalReason != want {
+				t.Fatal(out, e)
+			}
+			encoded, _ := json.Marshal(wire.Outcome{Status: out.Status, RequestId: "call", Context: wire.Context{ProfileId: "profile", BackendGeneration: "generation"}, Code: &out.Code, NativeRefusalReason: &out.NativeRefusalReason})
+			if wire.Validate("Outcome", encoded) != nil || strings.Contains(string(encoded), "token=") {
+				t.Fatalf("invalid/unsafe wire: %s", encoded)
+			}
+		}
 	}
 }

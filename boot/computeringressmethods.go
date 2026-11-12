@@ -39,6 +39,13 @@ func (s *ComputerIngress) ownerMethods() map[string]desktop.Method {
 		"computer.settings.inspect":  s.settingsInspectMethod(),
 		"computer.settings.search":   s.settingsSearchMethod(),
 		"computer.settings.snapshot": s.settingsSnapshotMethod(),
+		"computer.continuity.status": {Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
+			if r.OperationID != "" || ipc.ValidateJSON(r.Body) != nil || wire.Validate("ComputerContinuityStatusRequest", r.Body) != nil {
+				return invalidIngress()
+			}
+			value, err := s.continuityStatus(ctx)
+			return ingressOutcome(value, err)
+		}},
 		"computer.authority.deactivate": {Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
 			if r.OperationID == "" || ipc.ValidateJSON(r.Body) != nil || wire.Validate("ComputerAuthorityDeactivateRequest", r.Body) != nil {
 				return invalidIngress()
@@ -69,6 +76,12 @@ func (s *ComputerIngress) ownerMethods() map[string]desktop.Method {
 // body IDs and the presence of a registered read capability create no authority.
 func (s *ComputerIngress) Methods() map[string]desktop.Method {
 	methods := s.ownerMethods()
+	for name, method := range s.stopMethods() {
+		methods[name] = method
+	}
+	for name, method := range s.connectionCheckMethods() {
+		methods[name] = method
+	}
 
 	methods["chat.turn"] = desktop.Method{Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
 		if r.OperationID == "" || ipc.ValidateJSON(r.Body) != nil || wire.Validate("ChatComputerAdmissionRequest", r.Body) != nil {

@@ -127,21 +127,72 @@ it("registers a read-only status and observes without verification", async () =>
   expect(verify).not.toHaveBeenCalled();
   expect(f.request).not.toHaveBeenCalled();
 });
-it("retains the existing empty input schema for cached ChatGPT tool catalogues", async () => {
-  const observe = vi.fn(async () => ({ binding }));
+it("keeps cached empty inputs passive while advertising an optional diagnostic UUID", async () => {
+  const observe = vi.fn(async (_checkId?: string) => ({ binding }));
   const f = await connect({ connectionStatus: { observe } });
   const tools = await f.client.listTools();
+  const schema = tools.tools.find(
+    (t) => t.name === "computer_connection_status",
+  )!.inputSchema;
+  expect(Object.keys(schema.properties ?? {})).toEqual(["checkId"]);
+  expect(schema.required ?? []).not.toContain("checkId");
+  expect(schema.additionalProperties).toBe(false);
+  const result = await f.client.callTool({
+    name: "computer_connection_status",
+    arguments: {},
+  });
+  expect(result.isError).not.toBe(true);
+  expect(observe.mock.calls).toEqual([[undefined]]);
+  expect(result.structuredContent).toMatchObject({
+    data: { verification: { binding } },
+  });
   expect(
-    tools.tools.find((t) => t.name === "computer_connection_status")
-      ?.inputSchema.properties,
-  ).toEqual({});
+    (result.structuredContent as { data: { verification: object } }).data
+      .verification,
+  ).not.toHaveProperty("checkId");
+  expect(f.request).not.toHaveBeenCalled();
+});
+it("forwards the supplied diagnostic ID exactly, never inventing one for passive reads", async () => {
+  const checkId = "49a0cb44-5c67-4aae-9b56-41db024507d3";
+  // Controlled observation port only; Go/socket original-attempt tests are separate.
+  const observe = vi.fn(async (id?: string) => ({
+    binding,
+    ...(id === checkId ? { checkId: id } : {}),
+  }));
+  const f = await connect({ connectionStatus: { observe } });
+  const checked = await f.client.callTool({
+    name: "computer_connection_status",
+    arguments: { checkId },
+  });
+  expect(checked.structuredContent).toMatchObject({
+    data: { verification: { checkId } },
+  });
   await f.client.callTool({
     name: "computer_connection_status",
     arguments: {},
   });
-  expect(observe).toHaveBeenCalledWith();
+  expect(observe.mock.calls).toEqual([[checkId], [undefined]]);
   expect(f.request).not.toHaveBeenCalled();
 });
+it.each([
+  { checkId: "new-read" },
+  { checkId: "" },
+  { checkId: null },
+  { checkId: "49a0cb44-5c67-4aae-9b56-41db024507d3", unexpected: true },
+])(
+  "rejects malformed diagnostic input before observation: %j",
+  async (arguments_) => {
+    const observe = vi.fn(async () => ({ binding }));
+    const f = await connect({ connectionStatus: { observe } });
+    const result = await f.client.callTool({
+      name: "computer_connection_status",
+      arguments: arguments_,
+    });
+    expect(result.isError).toBe(true);
+    expect(observe).not.toHaveBeenCalled();
+    expect(f.request).not.toHaveBeenCalled();
+  },
+);
 it("does not enter Go observation when the existing fence refuses", async () => {
   const observe = vi.fn(async () => ({ binding }));
   const f = await connect({

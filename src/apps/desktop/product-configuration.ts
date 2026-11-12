@@ -1,5 +1,6 @@
 import { connectorRuntimeUncertain } from "../../pkg/product-settings/connector-uncertainty";
 import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
+import { ownerComputerConsentDigest } from "../../modules/computer/infra/repo/owner-computer-consent";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, type Stats } from "node:fs";
@@ -27,6 +28,12 @@ import {
 } from "../../pkg/product-settings/contract";
 import { credentialStorePolicy } from "../../modules/computer/infra/native/home-secret-stores";
 import { ownerSettingsComputerApproval } from "../../modules/computer/infra/repo/owner-settings-computer-approval";
+import {
+  ContinuityWriteIntentSchema,
+  nextContinuitySettings,
+  type ContinuityWriteIntent,
+  type ContinuityWriteFence,
+} from "./workspace-continuity-writer";
 import type { TaskSettingsComparator } from "../../../apps/desktop/bridge/task-current-settings";
 import {
   SettingsStoreUnsupported,
@@ -89,6 +96,35 @@ export type ConditionalSettingsWrite =
   | Readonly<{ status: "committed"; settings: ProductSettings }>
   | Readonly<{ status: "not_written" }>
   | Readonly<{ status: "unknown" }>;
+
+// Only trusted desktop composition can bind one original Go Stop parent to
+// the retained sole ProductSettings writer. These are phase receipts, never a
+// renderer command, a generic Settings mutation or current Computer authority.
+export type OriginalStopSettingsPlan = Readonly<{
+  effectId: string;
+  expectedRevision: string;
+  expectedDigest: string;
+  nextRevision: string;
+  nextDigest: string;
+  computerGeneration: string;
+  connectorGeneration: string;
+  consentDigest: string;
+}>;
+export type OriginalStopSettingsAck = Readonly<{
+  effectId: string;
+  revision: string;
+  documentDigest: string;
+  computerGeneration: string;
+  connectorGeneration: string;
+  consentDigest: string;
+}>;
+export type OriginalStopSettingsResult =
+  | Readonly<{
+      status: "committed";
+      receipt: OriginalStopSettingsAck;
+      settings: ProductSettings;
+    }>
+  | Readonly<{ status: "not_written" | "unknown" }>;
 
 // Trusted host storage port; Go owns all delivery transitions. The retained
 // service queue serializes these calls with ordinary Settings commands.
@@ -1005,6 +1041,79 @@ export class ProductConfigurationService {
     this.withdrawComputerAuthority = withdraw;
   }
 
+  // Trusted composition only; no renderer command, implicit Verify, writer
+  // fallback or automatic Go publication. The original Go-owned WAL must
+  // already have a CONFIRMED withdrawal ACK and continue to hold both native
+  // chains. This service remains the sole Settings writer.
+  async commitContinuityFromTransition(
+    intent: ContinuityWriteIntent,
+    fence: ContinuityWriteFence,
+  ): Promise<ConditionalSettingsWrite> {
+    return this.exclusive(async () => {
+      if (
+        !ContinuityWriteIntentSchema.safeParse(intent).success ||
+        this.current === null ||
+        this.settingsDeliveryFenced ||
+        connectorRuntimeUncertain(this.current) ||
+        typeof fence?.current !== "function" ||
+        typeof fence.withdrawalAcknowledged !== "function" ||
+        typeof fence.requalifyNative !== "function"
+      )
+        return { status: "not_written" };
+      const original = this.current;
+      if (!fence.current() || !fence.withdrawalAcknowledged())
+        return { status: "not_written" };
+      const next = nextContinuitySettings(original, intent);
+      if (!next) return { status: "not_written" };
+      try {
+        if (
+          !(await fence.requalifyNative()) ||
+          !fence.current() ||
+          !fence.withdrawalAcknowledged() ||
+          this.current !== original
+        )
+          return { status: "not_written" };
+        const result = await this.store.saveConditional(original, next, {
+          beforeWrite: async () => {
+            if (
+              !(await fence.requalifyNative()) ||
+              !fence.current() ||
+              !fence.withdrawalAcknowledged() ||
+              this.current !== original ||
+              this.settingsDeliveryFenced
+            )
+              throw new Error("CONTINUITY_NATIVE_OR_SETTINGS_CHANGED");
+          },
+          assertBeforePublication: () => {
+            if (
+              !fence.current() ||
+              !fence.withdrawalAcknowledged() ||
+              this.current !== original ||
+              this.settingsDeliveryFenced
+            )
+              throw new Error("CONTINUITY_PUBLICATION_FENCED");
+          },
+        });
+        if (result.status === "unknown") {
+          this.latchSettingsDeliveryLoss();
+          return { status: "unknown" };
+        }
+        if (result.status === "not_written") return result;
+        // This ACK certifies only Settings CAS/readback. The Go transition
+        // remains staged/closed until its own publication/cleanup certificate.
+        this.current = result.settings;
+        this.currentError = null;
+        return result;
+      } catch {
+        // We cannot prove whether the native requalification, storage or
+        // transport rejected before the rename. Retain a conservative fence;
+        // never infer success by loading the currently visible file.
+        this.latchSettingsDeliveryLoss();
+        return { status: "unknown" };
+      }
+    });
+  }
+
   // Exactly one trusted host binding, using the existing document and writer.
   // This is not a renderer API and does not activate the Go delivery service.
   attachSettingsDeliveryStore(
@@ -1771,6 +1880,163 @@ export class ProductConfigurationService {
       {},
       true,
     );
+  }
+
+  // Sole-writer, one-shot stopped publication for the ORIGINAL durable C7
+  // operation. The callback must confirm Go settings_intent before ANY save.
+  // A lost intent reply or post-rename readback is never recovered by matching
+  // bytes, the generic commit fallback, or another Settings save.
+  async commitOriginalStoppedSettings(
+    selection: Readonly<{
+      effectId: string;
+      expectedRevision: number;
+      expectedDigest: string;
+      computerGeneration: number;
+      connectorGeneration: number;
+      consentDigest: string;
+    }>,
+    admitIntent: (plan: OriginalStopSettingsPlan) => Promise<void>,
+    current: () => boolean,
+  ): Promise<OriginalStopSettingsResult> {
+    return this.exclusive(async () => {
+      const original = this.current;
+      if (
+        original === null ||
+        this.settingsDeliveryFenced ||
+        connectorRuntimeUncertain(original) ||
+        typeof admitIntent !== "function" ||
+        typeof current !== "function" ||
+        !current() ||
+        !Number.isSafeInteger(selection.expectedRevision) ||
+        original.revision !== selection.expectedRevision ||
+        original.computer.generation !== selection.computerGeneration ||
+        original.connectors.secureMcp.generation !==
+          selection.connectorGeneration ||
+        !/^[a-f0-9]{64}$/u.test(selection.expectedDigest) ||
+        !/^[a-f0-9]{64}$/u.test(selection.consentDigest) ||
+        JSON.stringify(original) === ""
+      )
+        return { status: "not_written" };
+      const documentDigest = (settings: ProductSettings) =>
+        createHash("sha256").update(JSON.stringify(settings)).digest("hex");
+      if (
+        documentDigest(original) !== selection.expectedDigest ||
+        ownerComputerConsentDigest(original) !== selection.consentDigest
+      )
+        return { status: "not_written" };
+      const before = structuredClone(original);
+      const connector = before.connectors.secureMcp;
+      if (
+        connector.runtime === null &&
+        connector.challenge === null &&
+        connector.attachment === null
+      )
+        return { status: "not_written" };
+      const stopped = {
+        ...connector,
+        runtime: null,
+        challenge: null,
+        attachment: null,
+      };
+      let candidate: ProductSettings;
+      try {
+        candidate = ProductSettingsSchema.parse({
+          ...before,
+          revision: before.revision + 1,
+          connectors: { ...before.connectors, secureMcp: stopped },
+          setup: {
+            ...before.setup,
+            connect: {
+              ...pendingConnectorReadiness(
+                before.setup.connect,
+                stopped,
+                undefined,
+              ),
+              unavailable: null,
+            },
+          },
+        });
+      } catch {
+        return { status: "not_written" };
+      }
+      // Stopping the runtime may invalidate verification evidence but must
+      // never widen, narrow, or relabel the original owner-authorized limits.
+      if (ownerComputerConsentDigest(candidate) !== selection.consentDigest)
+        return { status: "not_written" };
+      const plan: OriginalStopSettingsPlan = {
+        effectId: selection.effectId,
+        expectedRevision: String(original.revision),
+        expectedDigest: selection.expectedDigest,
+        nextRevision: String(candidate.revision),
+        nextDigest: documentDigest(candidate),
+        computerGeneration: String(selection.computerGeneration),
+        connectorGeneration: String(selection.connectorGeneration),
+        consentDigest: selection.consentDigest,
+      };
+      // Admission is a protected Go RPC. If its original response is lost, no
+      // Settings write is dispatched. There is no new operation or retry.
+      try {
+        if (!current() || this.current !== original)
+          return { status: "not_written" };
+        await admitIntent(plan);
+      } catch {
+        return { status: "unknown" };
+      }
+      let result: ConditionalSettingsWrite;
+      try {
+        result = await this.store.saveConditional(original, candidate, {
+          beforeWrite: async () => {
+            if (
+              !current() ||
+              this.current !== original ||
+              this.settingsDeliveryFenced
+            )
+              throw new Error("ORIGINAL_STOP_SETTINGS_CHANGED");
+          },
+          assertBeforePublication: () => {
+            if (
+              !current() ||
+              this.current !== original ||
+              this.settingsDeliveryFenced
+            )
+              throw new Error("ORIGINAL_STOP_SETTINGS_FENCED");
+          },
+        });
+      } catch {
+        this.latchSettingsDeliveryLoss();
+        return { status: "unknown" };
+      }
+      if (result.status === "unknown") {
+        this.latchSettingsDeliveryLoss();
+        return { status: "unknown" };
+      }
+      if (result.status === "not_written") return result;
+      if (
+        !current() ||
+        this.current !== original ||
+        documentDigest(result.settings) !== plan.nextDigest ||
+        ownerComputerConsentDigest(result.settings) !==
+          selection.consentDigest ||
+        result.settings.revision !== candidate.revision
+      ) {
+        this.latchSettingsDeliveryLoss();
+        return { status: "unknown" };
+      }
+      this.current = result.settings;
+      this.currentError = null;
+      return {
+        status: "committed",
+        settings: result.settings,
+        receipt: {
+          effectId: plan.effectId,
+          revision: plan.nextRevision,
+          documentDigest: plan.nextDigest,
+          computerGeneration: plan.computerGeneration,
+          connectorGeneration: plan.connectorGeneration,
+          consentDigest: plan.consentDigest,
+        },
+      };
+    });
   }
 
   async recordSecureMcpDrainedForUpdate(): Promise<MutationResult> {

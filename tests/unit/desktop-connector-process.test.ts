@@ -1191,3 +1191,55 @@ it("accepts only the complete process capability slice, with no discovery", () =
   ).toThrow(BridgeError);
   expect(Object.isFrozen(connectorProcessMethods)).toBe(true);
 });
+
+it.each([
+  "admission_policy",
+  "confinement_policy",
+  "executable_integrity",
+  "workspace_root_identity",
+  "cwd_fence",
+  "directory_policy",
+  "filesystem_policy",
+  "runtime_integrity",
+  "helper_preflight",
+  "unclassified",
+  "future_reason",
+  "/outside/private token=PRIVATE-CANARY",
+  undefined,
+  { secret: "PRIVATE-CANARY" },
+])(
+  "preserves a closed native refusal reason without changing refusal/retry: %s",
+  async (reason) => {
+    const { bridge, request } = setup("start", {
+      status: "refused",
+      code: "PROCESS_NATIVE_REFUSED",
+      ...(reason === undefined ? {} : { nativeRefusalReason: reason }),
+      requestId: call.requestId,
+      context,
+      operationId: "original",
+    });
+    const result = await invoke(bridge, "start");
+    const known =
+      typeof reason === "string" &&
+      [
+        "admission_policy",
+        "confinement_policy",
+        "executable_integrity",
+        "workspace_root_identity",
+        "cwd_fence",
+        "directory_policy",
+        "filesystem_policy",
+        "runtime_integrity",
+        "helper_preflight",
+        "unclassified",
+      ].includes(reason);
+    expect(result).toMatchObject({
+      status: "refused",
+      code: "PROCESS_NATIVE_REFUSED",
+      retry: "never",
+      nativeRefusalReason: known ? reason : "unclassified",
+    });
+    expect(JSON.stringify(result)).not.toContain("PRIVATE-CANARY");
+    expect(request).toHaveBeenCalledOnce();
+  },
+);

@@ -60,7 +60,7 @@ func TestConnectorRecoverySettledExactReopenRetainsOriginal(t *testing.T) {
 		s.mutations.operations["original"] != record || journal.admits != 1 || native.calls != 1 {
 		t.Fatal("recovery replaced or replayed original result", observed, err)
 	}
-	if err := s.closeSlot(context.Background()); err != nil {
+	if err := s.closeSlot(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Open(context.Background(), "recovery-replay", in); err == nil || access.publications != 2 {

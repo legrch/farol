@@ -7,6 +7,8 @@ import (
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/authority"
+	check "github.com/legrch/farol/modules/computer/domain/connector"
+	transition "github.com/legrch/farol/modules/computer/domain/journal"
 )
 
 // Store is the profile's sole current Computer authority owner. The trusted
@@ -15,13 +17,27 @@ import (
 // activation. Independent TS settings writers are not serialized by this lock.
 // One native lock is held for the backend lifetime; Close belongs to its owner.
 type Store struct {
-	mutex            sync.Mutex
-	binding          Binding
-	disk             *disk
-	clock            port.Clock
-	current          state
-	digest           [32]byte
-	poisoned, closed bool
+	mutex             sync.Mutex
+	binding           Binding
+	disk              *disk
+	clock             port.Clock
+	current           state
+	digest            [32]byte
+	journal           transition.Journal
+	journalPresent    bool
+	journalDigest     [32]byte
+	stops             transition.StopLedger
+	stopPresent       bool
+	stopLedgerDigest  [32]byte
+	activeStopID      string // only a fresh confirmed first BeginStop can set it; never restored
+	stopWithdrawn     bool   // one original connector withdrawal attempt; never restored
+	checks            check.Journal
+	checksPresent     bool
+	checksDigest      [32]byte
+	activeCheckID     string // only a successful first original claim; never restored
+	currentContinuity *activeContinuity
+	currentActivating bool
+	poisoned, closed  bool
 }
 
 var _ port.AccessRepository = (*Store)(nil)
@@ -109,22 +125,26 @@ func openWithDisk(root string, b Binding, clock port.Clock, create bool, openDis
 		return fail(err)
 	}
 	s.digest = digest(raw)
+	if err = s.restoreJournal(); err != nil {
+		return fail(err)
+	}
+	if err = s.restoreStopLedger(); err != nil {
+		return fail(err)
+	}
+	if err = s.restoreConnectionChecks(); err != nil {
+		return fail(err)
+	}
 	return s, nil
 }
 func (s *Store) check(ctx context.Context) error {
-	if ctx.Err() != nil {
-		return authority.Fail("WORKSPACE_REQUEST_CANCELLED", "native-workspace")
+	if err := s.checkStorage(ctx); err != nil {
+		return err
 	}
-	if s.closed || s.poisoned {
+	// A pending or unknown continuity transition fences every current grant,
+	// including a previously published Store snapshot, not only the Chat route.
+	if s.transitionRestricted() {
 		return unavailable()
 	}
-	raw, err := s.disk.read()
-	if err != nil || digest(raw) != s.digest {
-		s.poisoned = true
-		return refuse(err)
-	}
-	// Decode on restore and each trusted publication; byte identity keeps a valid
-	// external replacement from bypassing the owner's mutation serialization.
 	return nil
 }
 func (s *Store) Status(ctx context.Context) (Status, error) {
@@ -159,12 +179,18 @@ func (s *Store) Close() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	s.closed = true
+	// Neither original effect admission survives lifetime retirement.
+	s.activeStopID = ""
+	s.activeCheckID = ""
 	return s.disk.close()
 }
 func (s *Store) next(ctx context.Context, revision uint64) (state, error) {
 	if err := s.check(ctx); err != nil {
 		return state{}, err
 	}
+	return s.nextState(revision)
+}
+func (s *Store) nextState(revision uint64) (state, error) {
 	if revision != s.current.Revision || revision == ^uint64(0) {
 		return state{}, unavailable()
 	}

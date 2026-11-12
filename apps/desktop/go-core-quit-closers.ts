@@ -1,4 +1,7 @@
-import type { OwnedCloser } from "../../src/apps/desktop/quit-drain";
+import {
+  withinQuitDeadline,
+  type OwnedCloser,
+} from "../../src/apps/desktop/quit-drain";
 
 // MCP/account work uses the Go endpoint while draining. Generic Quit runs
 // closers concurrently, so encode this dependency in their original promises.
@@ -6,11 +9,16 @@ export function goCoreQuitClosers(
   dependent: OwnedCloser | null,
   closeCore: (() => Promise<void>) | null,
   canCloseCore: () => boolean = () => true,
+  dependentDeadlineAt?: number,
 ): readonly OwnedCloser[] {
   let dependentClose: Promise<void> | undefined;
   let coreClose: Promise<void> | undefined;
   const closeDependent = () =>
-    (dependentClose ??= Promise.resolve().then(() => dependent!.close()));
+    (dependentClose ??= withinQuitDeadline(
+      Promise.resolve().then(() => dependent!.close()),
+      dependentDeadlineAt,
+      "CONNECTOR_STOP_UNCONFIRMED",
+    ));
   return [
     ...(dependent ? [{ name: dependent.name, close: closeDependent }] : []),
     ...(closeCore

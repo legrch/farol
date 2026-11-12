@@ -2,6 +2,7 @@ package boot
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	processinfra "github.com/legrch/farol/modules/computer/infra/process"
+	accessrepo "github.com/legrch/farol/modules/computer/infra/repos/access"
 	"github.com/legrch/farol/pkg/ipc"
 	"github.com/legrch/farol/transport/desktop"
 )
@@ -50,13 +52,16 @@ type computerConnector struct {
 	mutations *SettingsMutationIngress
 	processes connectorShellSelection
 	// Selected by trusted composition only; nil makes audit text unavailable.
-	auditFilter processsvc.AuditScalarFilter
-	auditSlots  chan struct{}
-	codexRead   *connectorCodexRead
-	selfTests   selfTestRegistry
-	current     *connectorSlot
-	attempts    uint64
-	closed      *connectorRecoveryOrigin // effects-owned, exact successful Close only
+	auditFilter       processsvc.AuditScalarFilter
+	auditSlots        chan struct{}
+	codexRead         *connectorCodexRead
+	selfTests         selfTestRegistry
+	current           *connectorSlot
+	attempts          uint64
+	closed            *connectorRecoveryOrigin // effects-owned, exact successful Close only
+	closedParentID    string                   // exact C7 original, never inferred from stopped state
+	closedOperationID string
+	closedDigest      string
 }
 type connectorSlot struct {
 	guard                 *connectorHostGuard
@@ -71,7 +76,9 @@ type connectorSlot struct {
 	renewalDone           chan struct{}
 	renewalScope          *connectorRenewalScope
 	statusCheckID         string // Socket-only read acknowledgement; never attachment authority.
-	expectedStatusCheckID string // Host-selected current check; other socket reads cannot replace it.
+	expectedStatusCheckID string // Only a first durable C8 dispatch can arm it.
+	checkParentID         string // exact original C8 UUID, one shot in this slot
+	challengeDigest       string // original constructor challenge, not caller input
 }
 type connectorHostGuard struct {
 	mu          sync.Mutex
@@ -192,6 +199,9 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	host := port.ConnectorHost{ProfileID: s.root.peer.ProfileId, BackendGeneration: s.root.peer.BackendGeneration, BuildID: BuildID, RuntimeID: in.RuntimeId, ConnectorGeneration: generation, LaunchDigest: in.LaunchDigest}
 	guard := &connectorHostGuard{root: s.root, lifetime: s.lifetime, host: host, publication: in.Publication, fence: fence}
 	slot := &connectorSlot{guard: guard, startupUncertain: true}
+	if in.ChallengeSha256 != nil {
+		slot.challengeDigest = *in.ChallengeSha256
+	}
 	ids := make([]string, 5)
 	for i := range ids {
 		ids[i], err = randomIngressID()
@@ -362,7 +372,7 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	return &result, nil
 }
 
-func (s *computerConnector) closeSlot(ctx context.Context) error {
+func (s *computerConnector) closeSlot(ctx context.Context, originalStopParent string) error {
 	slot := s.current
 	if slot == nil {
 		return nil
@@ -393,7 +403,11 @@ func (s *computerConnector) closeSlot(ctx context.Context) error {
 		failures = append(failures, slot.endpoint.Close(ctx))
 	}
 	if slot.owner != nil {
-		failures = append(failures, slot.owner.Withdraw(ctx))
+		if originalStopParent == "" {
+			failures = append(failures, slot.owner.Withdraw(ctx))
+		} else {
+			failures = append(failures, slot.owner.WithdrawOriginalStop(ctx, originalStopParent))
+		}
 	}
 	slot.closeErr = errors.Join(failures...)
 	if slot.closeErr == nil {
@@ -409,11 +423,33 @@ func (s *computerConnector) Close(ctx context.Context, operation string, in wire
 	if ctx == nil || ctx.Err() != nil || validateIngress("ComputerConnectorClose", in) != nil || s.current == nil || s.current.opened.Endpoint.Binding != in.Binding {
 		return nil, computerUnavailable()
 	}
+	parent := ""
+	if in.OriginalStopParent != nil {
+		parent = *in.OriginalStopParent
+		validator, ok := s.root.store.(interface {
+			ValidateOriginalStopConnector(context.Context, string, string, string, string, string) error
+		})
+		if !ok || validator.ValidateOriginalStopConnector(ctx, parent, in.Binding.BuildId,
+			in.Binding.BackendGeneration, in.Binding.RuntimeId, in.Binding.ConnectorGeneration) != nil {
+			return nil, computerUnavailable()
+		}
+	} else {
+		reader, ok := s.root.store.(interface {
+			StopStatus(context.Context) (accessrepo.StopState, error)
+		})
+		if !ok {
+			return nil, computerUnavailable()
+		}
+		state, err := reader.StopStatus(ctx)
+		if err != nil || state.Restricted {
+			return nil, computerUnavailable()
+		}
+	}
 	if err := s.root.claim(operation); err != nil {
 		return nil, err
 	}
 	slot := s.current
-	if err := s.closeSlot(ctx); err != nil {
+	if err := s.closeSlot(ctx, parent); err != nil {
 		return nil, err
 	}
 	s.closed = &connectorRecoveryOrigin{binding: in.Binding, publication: slot.guard.publication,
@@ -425,8 +461,49 @@ func (s *computerConnector) Close(ctx context.Context, operation string, in wire
 		s.closed.retiredOwner = slot.owner
 	}
 	disposition := s.recoveryDisposition(ctx, s.closed, false)
-	return &wire.ComputerConnectorClosed{Binding: in.Binding, Closed: true, Recovery: &disposition}, nil
+	result := &wire.ComputerConnectorClosed{Binding: in.Binding, Closed: true, Recovery: &disposition}
+	bytes, err := json.Marshal(result)
+	if err != nil {
+		return nil, computerUnavailable()
+	}
+	d := sha256.Sum256(bytes)
+	s.closedParentID, s.closedOperationID, s.closedDigest = parent, operation, hex.EncodeToString(d[:])
+	return result, nil
 }
+
+// CurrentStopBinding captures the active original Go connector before C7
+// durable Stop admission. It exposes no endpoint token or new host authority.
+func (s *computerConnector) CurrentStopBinding(ctx context.Context) (connectorsvc.StopConnectorBinding, error) {
+	if err := s.enter(ctx); err != nil {
+		return connectorsvc.StopConnectorBinding{}, err
+	}
+	defer func() { <-s.effects }()
+	if s.current == nil || s.current.closing || s.current.startupUncertain ||
+		s.current.opened.Endpoint.Binding.RuntimeId == "" {
+		return connectorsvc.StopConnectorBinding{}, computerUnavailable()
+	}
+	b := s.current.opened.Endpoint.Binding
+	return connectorsvc.StopConnectorBinding{BuildID: b.BuildId, BackendGeneration: b.BackendGeneration,
+		RuntimeID: b.RuntimeId, ConnectorGeneration: b.ConnectorGeneration}, nil
+}
+
+// VerifyOriginalClose proves the ORIGINAL Go close acknowledgement retained
+// by this endpoint owner. It does not replay Close or infer success from idle.
+func (s *computerConnector) VerifyOriginalClose(ctx context.Context, parentID, operationID, receiptDigest, backendGeneration, runtimeID string) error {
+	if err := s.enter(ctx); err != nil {
+		return err
+	}
+	defer func() { <-s.effects }()
+	if parentID == "" || operationID == "" || receiptDigest == "" ||
+		s.closed == nil || s.current != nil || s.closedParentID != parentID ||
+		s.closedOperationID != operationID || s.closedDigest != receiptDigest ||
+		s.closed.binding.BackendGeneration != backendGeneration ||
+		s.closed.binding.RuntimeId != runtimeID {
+		return computerUnavailable()
+	}
+	return nil
+}
+
 func (s *computerConnector) Shutdown() error {
 	if s == nil {
 		return nil
@@ -441,7 +518,7 @@ func (s *computerConnector) shutdown(ctx context.Context) error {
 		return err
 	}
 	defer func() { <-s.effects }()
-	return s.closeSlot(ctx)
+	return s.closeSlot(ctx, "")
 }
 func (s *computerConnector) Methods() map[string]desktop.Method {
 	if s == nil {

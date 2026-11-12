@@ -98,7 +98,7 @@ func NewRootScopedPlatformStrategy(ctx context.Context, support RootScopedPlatfo
 
 func newRootScopedPlatformStrategy(ctx context.Context, support RootScopedPlatformSupport, clock port.Clock, facts platformFactPort) (*RootScopedPlatformStrategy, error) {
 	if !validPlatformSupport(support) || facts == nil || clock == nil {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy}
 	}
 	support.Imports = slices.Clone(support.Imports)
 	support.Executables = slices.Clone(support.Executables)
@@ -106,7 +106,7 @@ func newRootScopedPlatformStrategy(ctx context.Context, support RootScopedPlatfo
 	support.GitRuntimeResources = cloneGitRuntime(support.GitRuntimeResources)
 	digest, err := platformDigest(support)
 	if err != nil {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy}
 	}
 	s := &RootScopedPlatformStrategy{&platformSupport{descriptor: support, digest: digest, facts: facts, clock: clock, ownerUID: facts.effectiveUID()}}
 	bundle, err := s.observeBundle(ctx)
@@ -125,7 +125,7 @@ func newRootScopedPlatformStrategy(ctx context.Context, support RootScopedPlatfo
 	}
 	s.frozen.gitRuntime = resources
 	if support.ProtectedBundle != nil && s.inspect(ctx) != nil {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy}
 	}
 	return s, nil
 }
@@ -204,7 +204,9 @@ func (s *RootScopedPlatformStrategy) Binding() PlatformStrategyBinding {
 }
 
 func (s *RootScopedPlatformStrategy) observe(ctx context.Context) ([]platformFileFacts, error) {
-	refuse := func() ([]platformFileFacts, error) { return nil, &processsvc.NativeFailure{} }
+	refuse := func() ([]platformFileFacts, error) {
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalExecutableIntegrity}
+	}
 	if s == nil || s.frozen == nil || ctx == nil || ctx.Err() != nil {
 		return refuse()
 	}
@@ -250,7 +252,7 @@ func (s *RootScopedPlatformStrategy) observe(ctx context.Context) ([]platformFil
 // Observe only the directory binding; no dependency tree walk or byte attestation.
 func (s *RootScopedPlatformStrategy) observeBundle(ctx context.Context) (*platformDirectoryFacts, error) {
 	if s == nil || s.frozen == nil || ctx == nil || ctx.Err() != nil {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalDirectoryPolicy}
 	}
 	bundle := s.frozen.descriptor.ProtectedBundle
 	if bundle == nil {
@@ -260,14 +262,14 @@ func (s *RootScopedPlatformStrategy) observeBundle(ctx context.Context) (*platfo
 	if err != nil || f.path != bundle.Path || f.identity != bundle.Identity ||
 		f.filesystem != "apfs" || !f.local || f.nested ||
 		(f.mount != "/" && !absolutePolicyPath(f.mount)) || ctx.Err() != nil {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalDirectoryPolicy}
 	}
 	return &f, nil
 }
 
 func (s *RootScopedPlatformStrategy) inspect(ctx context.Context) error {
 	if s == nil || s.frozen == nil || len(s.frozen.files) == 0 {
-		return &processsvc.NativeFailure{}
+		return &processsvc.NativeFailure{Reason: processsvc.RefusalExecutableIntegrity}
 	}
 	observed, err := s.observe(ctx)
 	bundle, bundleErr := s.observeBundle(ctx)
@@ -276,8 +278,14 @@ func (s *RootScopedPlatformStrategy) inspect(ctx context.Context) error {
 		bundleSame = *bundle == *s.frozen.bundle
 	}
 	resources, resourceErr := s.observeGitRuntime(ctx)
-	if err != nil || !slices.Equal(observed, s.frozen.files) || bundleErr != nil || !bundleSame || resourceErr != nil || !sameGitRuntimeObservation(resources, s.frozen.gitRuntime) {
-		return &processsvc.NativeFailure{}
+	if err != nil || !slices.Equal(observed, s.frozen.files) {
+		return refusalAt(err, processsvc.RefusalExecutableIntegrity)
+	}
+	if bundleErr != nil || !bundleSame {
+		return refusalAt(bundleErr, processsvc.RefusalDirectoryPolicy)
+	}
+	if resourceErr != nil || !sameGitRuntimeObservation(resources, s.frozen.gitRuntime) {
+		return refusalAt(resourceErr, processsvc.RefusalRuntimeIntegrity)
 	}
 	return nil
 }
@@ -303,7 +311,9 @@ type platformOriginalDeadline struct {
 // It never edits argv/env/input or chooses another image. Trusted composition owns
 // the SAME authority snapshot, measurement, reservation and one-start lifecycle.
 func (s *RootScopedPlatformStrategy) Select(ctx context.Context, policy SeatbeltSelection, original Command, watchdog WatchdogSelection) (*RootScopedPlatformSelection, error) {
-	refuse := func() (*RootScopedPlatformSelection, error) { return nil, &processsvc.NativeFailure{} }
+	refuse := func() (*RootScopedPlatformSelection, error) {
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy}
+	}
 	if s == nil || s.frozen == nil || original.Binding == nil || original.Confinement == nil ||
 		policy.FilePolicy != authority.RootScopedFiles || policy.Git != RootScopedGit || policy.Network != authority.NoNetwork ||
 		!validSelection(policy) || !platformCommandText(original) {
@@ -338,7 +348,7 @@ func (s *RootScopedPlatformStrategy) Select(ctx context.Context, policy Seatbelt
 	policy.GitRuntimeResources = cloneGitRuntime(policy.GitRuntimeResources)
 	policy.HostRuntime = cloneHostRuntime(policy.HostRuntime)
 	if !s.mountBoundariesCurrent(ctx, policy, original) {
-		return refuse()
+		return nil, refusalAt(nil, processsvc.RefusalFilesystemPolicy)
 	}
 	original = copyCommand(original)
 	wrapped, err := platformWrappedCommand(policy, original)
@@ -353,8 +363,11 @@ func (s *RootScopedPlatformStrategy) Select(ctx context.Context, policy Seatbelt
 		Original, Wrapped Command
 		Selection         SeatbeltSelection
 	}{s.frozen.digest, watchdogMode, original, wrapped, policy})
-	if err != nil || s.inspect(ctx) != nil {
+	if err != nil {
 		return refuse()
+	}
+	if err := s.inspect(ctx); err != nil {
+		return nil, err
 	}
 	binding := s.Binding()
 	if policy.HostRuntime != nil {
@@ -383,7 +396,7 @@ func platformWrappedCommand(policy SeatbeltSelection, original Command) (Command
 	selected := &Seatbelt{selection: policy}
 	bound, err := selected.bind(original)
 	if err != nil || original.Confinement == nil || *original.Confinement != *bound.Confinement {
-		return Command{}, &processsvc.NativeFailure{}
+		return Command{}, &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy}
 	}
 	plan, err := compileSeatbelt(policy, original)
 	if err != nil {
@@ -393,7 +406,7 @@ func platformWrappedCommand(policy SeatbeltSelection, original Command) (Command
 	wrapped.Executable, wrapped.ExecutableSHA256 = seatbeltExecutable, policy.MechanismSHA256
 	wrapped.Args = append(append(slices.Clone(plan.arguments), original.Executable), original.Args...)
 	if !platformCommandText(wrapped) {
-		return Command{}, &processsvc.NativeFailure{}
+		return Command{}, &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy}
 	}
 	return wrapped, nil
 }
@@ -415,7 +428,9 @@ func (s *RootScopedPlatformSelection) WrappedCommand() Command {
 // support/class inspection, not a child certificate or a release. Rebinding with
 // a different deadline refuses, including after copying or a failed inspection.
 func (s *RootScopedPlatformSelection) BindInvocation(ctx context.Context, original, wrapped Command, deadline time.Time) (*RootScopedPlatformQualification, error) {
-	refuse := func() (*RootScopedPlatformQualification, error) { return nil, &processsvc.NativeFailure{} }
+	refuse := func() (*RootScopedPlatformQualification, error) {
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy}
+	}
 	if s == nil || s.frozen == nil {
 		return refuse()
 	}
@@ -426,13 +441,18 @@ func (s *RootScopedPlatformSelection) BindInvocation(ctx context.Context, origin
 	}
 	sameTime := f.deadline.value.Equal(deadline)
 	f.deadline.mutex.Unlock()
-	if !sameTime || !f.current(ctx, deadline) || !samePlatformCommand(original, f.original) || !samePlatformCommand(wrapped, f.wrapped) ||
-		f.strategy.inspect(ctx) != nil {
-		return refuse()
+	if !sameTime || !f.current(ctx, deadline) || !samePlatformCommand(original, f.original) || !samePlatformCommand(wrapped, f.wrapped) {
+		return nil, refusalAt(nil, processsvc.RefusalAdmissionPolicy)
+	}
+	if err := f.strategy.inspect(ctx); err != nil {
+		return nil, err
 	}
 	directories, err := f.inspectDirectories(ctx)
-	if err != nil || !f.current(ctx, deadline) {
-		return refuse()
+	if err != nil {
+		return nil, refusalAt(err, processsvc.RefusalConfinementPolicy)
+	}
+	if !f.current(ctx, deadline) {
+		return nil, refusalAt(nil, processsvc.RefusalAdmissionPolicy)
 	}
 	digest, err := platformDigest(struct {
 		Binding     PlatformStrategyBinding
@@ -460,18 +480,23 @@ type platformDirectoryBinding struct {
 }
 
 func (s *platformSelection) inspectDirectories(ctx context.Context) ([]platformDirectoryBinding, error) {
-	refuse := func() ([]platformDirectoryBinding, error) { return nil, &processsvc.NativeFailure{} }
+	refuse := func() ([]platformDirectoryBinding, error) {
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy}
+	}
 	if s.policy.HostRuntime != nil {
 		reader, ok := s.strategy.frozen.facts.(interface {
 			hostRuntime(context.Context, *HostRuntimePlan) error
 		})
 		if !ok || reader.hostRuntime(ctx, s.policy.HostRuntime) != nil {
-			return refuse()
+			return nil, refusalAt(nil, processsvc.RefusalRuntimeIntegrity)
 		}
 	}
 	plan, err := compileSeatbelt(s.policy, s.original)
-	if err != nil || !s.strategy.mountBoundariesCurrent(ctx, s.policy, s.original) {
-		return refuse()
+	if err != nil {
+		return nil, err
+	}
+	if !s.strategy.mountBoundariesCurrent(ctx, s.policy, s.original) {
+		return nil, refusalAt(nil, processsvc.RefusalFilesystemPolicy)
 	}
 	type directory struct {
 		path     string
@@ -505,7 +530,13 @@ func (s *platformSelection) inspectDirectories(ctx context.Context) ([]platformD
 		if err != nil || f.path != d.path ||
 			(f.mount != "/" && !absolutePolicyPath(f.mount)) ||
 			f.identity.Device != d.device || f.identity.Inode == "" || (d.identity != (authority.RootIdentity{}) && f.identity != d.identity) {
-			return refuse()
+			reason := processsvc.RefusalDirectoryPolicy
+			if d.path == s.original.Root {
+				reason = processsvc.RefusalWorkspaceRootIdentity
+			} else if d.path == s.original.Cwd {
+				reason = processsvc.RefusalCwdFence
+			}
+			return nil, refusalAt(nil, reason)
 		}
 		out = append(out, platformDirectoryBinding{d.path, f.mount, f.mounts, f.identity})
 	}
@@ -533,7 +564,7 @@ func (q *RootScopedPlatformQualification) InvocationSHA256() string {
 // retained launch measurements and current authority before its one release.
 func (q *RootScopedPlatformQualification) Qualify(ctx context.Context, wrapped Command) error {
 	if q == nil || q.frozen == nil {
-		return &processsvc.NativeFailure{}
+		return &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy}
 	}
 	f := q.frozen
 	return q.ValidateBound(ctx, f.selected.original, wrapped, f.deadline)
@@ -542,7 +573,7 @@ func (q *RootScopedPlatformQualification) Qualify(ctx context.Context, wrapped C
 // ValidateBound checks the caller's SAME original, exact wrapper and original
 // deadline. It never silently reinterprets a wrapped command as the original.
 func (q *RootScopedPlatformQualification) ValidateBound(ctx context.Context, original, wrapped Command, deadline time.Time) error {
-	refuse := func() error { return &processsvc.NativeFailure{} }
+	refuse := func() error { return &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy} }
 	if q == nil || q.frozen == nil {
 		return refuse()
 	}
@@ -552,12 +583,24 @@ func (q *RootScopedPlatformQualification) ValidateBound(ctx context.Context, ori
 		return refuse()
 	}
 	generated, err := platformWrappedCommand(s.policy, s.original)
-	if err != nil || !samePlatformCommand(generated, wrapped) || s.strategy.inspect(ctx) != nil {
+	if err != nil {
+		return err
+	}
+	if !samePlatformCommand(generated, wrapped) {
 		return refuse()
 	}
+	if err := s.strategy.inspect(ctx); err != nil {
+		return err
+	}
 	directories, err := s.inspectDirectories(ctx)
-	if err != nil || !slices.Equal(directories, f.directories) || !s.current(ctx, f.deadline) {
-		return refuse()
+	if err != nil {
+		return refusalAt(err, processsvc.RefusalConfinementPolicy)
+	}
+	if !slices.Equal(directories, f.directories) {
+		return refusalAt(nil, processsvc.RefusalDirectoryPolicy)
+	}
+	if !s.current(ctx, f.deadline) {
+		return refusalAt(nil, processsvc.RefusalAdmissionPolicy)
 	}
 	return nil
 }

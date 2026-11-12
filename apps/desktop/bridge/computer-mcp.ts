@@ -1,3 +1,4 @@
+import { nativeRefusalReason } from "../renderer/native-refusal";
 import type {
   OperationMetadata,
   OperationsRecorder,
@@ -521,7 +522,20 @@ export function createGoComputerMcpServer(
         }
       }
     }
-    finish(recorded.outcome, recorded.code, performance.now() - started);
+    const content = result.structuredContent;
+    finish(
+      recorded.outcome,
+      recorded.code,
+      performance.now() - started,
+      nativeRefusalReason(
+        recorded.code,
+        content &&
+          typeof content === "object" &&
+          "nativeRefusalReason" in content
+          ? content.nativeRefusalReason
+          : undefined,
+      ),
+    );
     return result;
   };
   const identity = (call: ComputerCall) => ({
@@ -543,10 +557,14 @@ export function createGoComputerMcpServer(
         title: "Check the current Farol connection",
         description:
           "Use for a general Farol test or connection check. No challenge is needed. Observes current Go authorization and its retained attachment proof, without another verification List, workspace file read, command or credential change. Registered tools are not proof that their operations were tested. A refusal must not be treated as a healthy connection.",
-        inputSchema: z.strictObject({}),
+        inputSchema: z.strictObject({
+          // UUID is minted by the protected Go attempt owner, not the model.
+          // Cached clients with {} still get a passive, non-ACK observation.
+          checkId: z.string().uuid().optional(),
+        }),
         annotations,
       },
-      async (_input, ctx) =>
+      async ({ checkId }, ctx) =>
         run(
           {
             source: "ChatGPT",
@@ -558,7 +576,7 @@ export function createGoComputerMcpServer(
             status: "ok",
             requestId: call.requestId,
             context: call.context,
-            data: await observeConnectionStatus(observation, exposure),
+            data: await observeConnectionStatus(observation, exposure, checkId),
           }),
         ),
     );

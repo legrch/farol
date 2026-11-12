@@ -9,6 +9,34 @@ export {
 
 export type OwnedCloser = Readonly<{ name: string; close(): Promise<void> }>;
 
+// A phase shares Quit's original absolute deadline. Expiration ends waiting,
+// never the original operation or custody of an unknown effect.
+export async function withinQuitDeadline<T>(
+  original: Promise<T>,
+  deadlineAt: number | undefined,
+  code: string,
+): Promise<T> {
+  if (deadlineAt === undefined) return original;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const result = await Promise.race([
+      original,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(code)),
+          Math.max(0, deadlineAt - Date.now()),
+        );
+      }),
+    ]);
+    // Timers can be delayed by synchronous work. A late resolution cannot
+    // renew the phase or turn an expired wait into confirmation.
+    if (Date.now() >= deadlineAt) throw new Error(code);
+    return result;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export type QuitDrainReceipt = Readonly<{
   drained: boolean;
   // Owned children whose exit was not confirmed before the deadline, or

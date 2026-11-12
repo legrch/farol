@@ -52,7 +52,7 @@ function isStoredJson(value: unknown, ancestors = new Set<object>()): boolean {
  * general.openAtLaunch="home", nativeHosts.taskRoute.observeTurnId, workspace
  * accessCheck.checkId and nullable retained Secure MCP attachment workspaceId
  * (both attachment and lastVerifiedAttachment), and connector
- * appVerificationPending.
+ * appVerificationPending, and workspace continuity evidence.
  * Refuse their presence rather than removing them for the old strict reader.
  * Commands/results changes are not stored Settings; their checkId fields are
  * outside this closure. tasks was already unknown. Stored defaults and all
@@ -102,8 +102,9 @@ export function originalPredecessorSettingsReadable(
     if (route !== null && Object.hasOwn(route, "observeTurnId")) return false;
     return parsed.data.computer.workspaces.every(
       (workspace) =>
-        workspace.accessCheck == null ||
-        !Object.hasOwn(workspace.accessCheck, "checkId"),
+        !Object.hasOwn(workspace, "continuity") &&
+        (workspace.accessCheck == null ||
+          !Object.hasOwn(workspace.accessCheck, "checkId")),
     );
   } catch {
     return false;

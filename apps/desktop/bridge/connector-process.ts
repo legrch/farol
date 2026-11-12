@@ -1,3 +1,7 @@
+import {
+  nativeRefusalReason,
+  type NativeRefusalReason,
+} from "../renderer/native-refusal";
 import { BridgeError, type Client } from "./client.ts";
 import type { ComputerCall } from "./computer.ts";
 import { frame } from "./frame.ts";
@@ -67,6 +71,7 @@ export type ConnectorProcessResult<
   data?: T;
   code?: string;
   retry?: "never";
+  nativeRefusalReason?: NativeRefusalReason;
 }>;
 type Kind = "start" | "read" | "cancel";
 type Body =
@@ -410,6 +415,7 @@ export class ConnectorProcessBridge {
     const failure = (
       status: Outcome["status"],
       code: string,
+      reason?: NativeRefusalReason,
     ): ConnectorProcessResult<T> =>
       Object.freeze({
         status,
@@ -419,15 +425,21 @@ export class ConnectorProcessBridge {
         ...(kind === "cancel" ? { cancelOperationId: effectOperationId! } : {}),
         code,
         retry: "never",
+        ...(reason === undefined ? {} : { nativeRefusalReason: reason }),
       });
     try {
-      const out = snapshot(
+      const raw = snapshot(
         await this.client.request(method, body as unknown as Json, {
           id: current.requestId,
           timeoutMs: current.timeoutMs ?? 10000,
           ...(kind === "read" ? {} : { operationId: effectOperationId! }),
         }),
       ) as unknown as Outcome;
+      // Parse the independent native diagnostic before strict wire validation.
+      // Future/hostile reasons become unclassified without changing outcome.
+      const reason = nativeRefusalReason(raw.code, raw.nativeRefusalReason);
+      const out =
+        reason === undefined ? raw : { ...raw, nativeRefusalReason: reason };
       if (
         !validate("Outcome", out) ||
         out.requestId !== current.requestId ||
@@ -439,7 +451,7 @@ export class ConnectorProcessBridge {
         throw Error();
       if (out.status !== "ok") {
         if (out.data !== undefined || !safeCode(out.code)) throw Error();
-        return failure(out.status, out.code);
+        return failure(out.status, out.code, reason);
       }
       const definition =
         kind === "start"

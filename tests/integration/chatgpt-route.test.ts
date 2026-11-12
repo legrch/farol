@@ -9899,3 +9899,52 @@ it("permits only observation of an ordinary pending document, never failed or pr
   Reflect.set(candidate, "updateAdmission", {});
   expect(candidate.hasPendingReadinessDocument()).toBe(false);
 });
+
+it("fences the captured check document before successor preparation during initial readiness", async () => {
+  const execute = vi.fn(async (script: string) =>
+    script.includes("const running = [")
+      ? { running: false }
+      : { state: "bound" },
+  );
+  const candidate = devTaskRoute(execute);
+  const prepareProfile = vi.fn(
+    async () => "CHATGPT_TEMPORARY_CHAT_REQUIRED" as const,
+  );
+  Reflect.set(candidate, "prepareTemporaryInstantProfile", prepareProfile);
+  let current = true;
+  let release!: () => void;
+  let entered!: () => void;
+  const readiness = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const waiting = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  vi.spyOn(candidate, "observe").mockImplementationOnce(async () => {
+    entered();
+    await readiness;
+    return { state: "authenticated", code: null };
+  });
+  const running = candidate.runReadonlyTask(
+    "diagnostic draft",
+    [],
+    {
+      connectionCheck: true,
+      beforePrepare: () => current,
+      readConnectorReceipt: async () => false,
+    },
+    "temporary-instant",
+    { name: "Farol DEV" },
+  );
+  await waiting;
+  current = false;
+  // The same browser surface now holds successor document B.
+  const surface = Reflect.get(candidate, "routeWindow");
+  surface.webContents.getURL = () => "https://chatgpt.com/?temporary-chat=true";
+  surface.webContents.executeJavaScript = execute;
+  Reflect.set(candidate, "routeDocumentGeneration", 1);
+  release();
+  expect(await running).toMatchObject({ state: "failed_before_submit" });
+  expect(prepareProfile).not.toHaveBeenCalled();
+  expect(execute).not.toHaveBeenCalled();
+});

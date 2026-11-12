@@ -259,6 +259,15 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
       '"/bin/ps"',
       "legacy-system-tool",
     ),
+    // Volume identity observation for the native workspace anchor.
+    launch(
+      "computer.workspace-volume-identity",
+      "modules/computer/infra/lease/darwin.go",
+      "darwinOperations.metadata",
+      "go.CommandContext",
+      '"/usr/sbin/diskutil"',
+      "legacy-system-tool",
+    ),
     launch(
       "release.helper-relaunch",
       "modules/release/infra/native/process/launch.go",

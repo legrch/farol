@@ -1,3 +1,4 @@
+import { normalizeNativeRefusalResponse } from "../renderer/native-refusal";
 import { randomUUID } from "node:crypto";
 import type { EventEmitter } from "node:events";
 import { createConnection } from "node:net";
@@ -467,6 +468,7 @@ export class SocketConnectorClient {
       });
       return;
     }
+    normalizeNativeRefusalResponse(value);
     if (!validate("Response", value)) {
       this.fail("invalid_connector_response");
       return;

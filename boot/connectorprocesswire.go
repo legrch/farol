@@ -56,7 +56,7 @@ func connectorProcessOutcome(value any, err error) (*desktop.Outcome, error) {
 		if failure.Outcome == "outcome_unknown" {
 			status = "unknown"
 		}
-		return &desktop.Outcome{Status: status, Code: failure.Code}, nil
+		return &desktop.Outcome{Status: status, Code: failure.Code, NativeRefusalReason: processct.NativeRefusalReason(failure.Code, failure.NativeRefusalReason)}, nil
 	}
 	var local *processsvc.Failure
 	if errors.As(err, &local) {
@@ -64,7 +64,7 @@ func connectorProcessOutcome(value any, err error) (*desktop.Outcome, error) {
 		if local.Unknown {
 			status = "unknown"
 		}
-		return &desktop.Outcome{Status: status, Code: local.Code}, nil
+		return &desktop.Outcome{Status: status, Code: local.Code, NativeRefusalReason: processct.NativeRefusalReason(local.Code, string(local.NativeRefusalReason))}, nil
 	}
 	var denied *authority.Failure
 	if errors.As(err, &denied) {

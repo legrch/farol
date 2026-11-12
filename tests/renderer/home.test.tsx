@@ -29,6 +29,13 @@ function working(): Partial<WindowSnapshot> {
   settings.setup.journey.dismissed = true;
   return {
     configuration: { status: "ready", settings },
+    connectionStatus: {
+      ...unavailableConnectionStatus,
+      revision: 1,
+      state: "recent_transport",
+      validUntilMillis: Date.now() + 30_000,
+      attention: false,
+    },
     signInObservation: {
       observationId: "fixture",
       buildId,
@@ -192,7 +199,9 @@ it("keeps Finish setup when all four checks pass without persisted completion", 
   });
   expect(h.host.querySelectorAll('[data-state="done"]')).toHaveLength(4);
   expect(h.host.textContent).toContain("Finish setup");
-  expect(h.host.textContent).not.toContain("Farol is working");
+  expect(h.host.querySelector(".home-status-card h2")?.textContent).not.toBe(
+    "Connected",
+  );
   expect(h.f.api.configure).not.toHaveBeenCalled();
   await h.click("Continue setup");
   expect(h.c.getSnapshot().destination.setupStep).toBe("attachment");
@@ -208,9 +217,11 @@ it("working Home has one status card, newest three events, and no empty attentio
       event("last", 10),
     ],
   });
-  expect(h.host.textContent).toContain("Farol is working");
+  expect(h.host.querySelector(".home-status-card h2")?.textContent).toBe(
+    "Connected",
+  );
   expect(h.host.textContent).toContain(
-    "ChatGPT can reach this Mac · 1 workspace · checked",
+    "ChatGPT can reach this Mac · 1 workspace",
   );
   expect(h.host.querySelector(".home-attention")).toBeNull();
   expect(h.host.querySelector(".home-setup-card")).toBeNull();
@@ -263,7 +274,9 @@ it.each(["stale", "unavailable"] as const)(
     expect(h.host.textContent).toContain(
       "Setup complete · connection needs attention",
     );
-    expect(h.host.textContent).not.toContain("Farol is working");
+    expect(h.host.querySelector(".home-status-card h2")?.textContent).not.toBe(
+      "Connected",
+    );
   },
 );
 it("never claims working from saved connection evidence without the required sign-in check", async () => {
@@ -273,7 +286,7 @@ it("never claims working from saved connection evidence without the required sig
     "Setup complete · connection needs attention",
   );
 });
-it("Check now uses the existing health command once and does not submit another while pending", async () => {
+it("on-demand local diagnostics use the existing command once and stay fenced while pending", async () => {
   const h = await mount(working());
   const value = working();
   vi.mocked(h.f.api.bootstrap).mockResolvedValue({
@@ -285,7 +298,15 @@ it("Check now uses the existing health command once and does not submit another 
   await act(async () => h.c.refresh());
   const result = deferred<unknown>();
   vi.mocked(h.f.api.configure).mockReturnValue(result.promise);
-  await h.click("Check now");
+  const details = h.host.querySelector<HTMLDetailsElement>(
+    ".home-connection-details",
+  )!;
+  expect(details.open).toBe(false);
+  expect(h.host.querySelector(".home-status-card > button")).toBeNull();
+  await act(async () => {
+    details.open = true;
+  });
+  await h.click("Check local connection");
   expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
     kind: "connector.check-health",
   });
@@ -353,9 +374,11 @@ it("shows that ChatGPT needs checking when the tunnel is connected but attachmen
   value.configuration.settings.connectors.secureMcp.attachment = null;
   const h = await mount(value);
   expect(h.host.textContent).toContain("ChatGPT connection needs a check");
-  expect(h.host.textContent).not.toContain("Farol is working");
+  expect(h.host.querySelector(".home-status-card h2")?.textContent).not.toBe(
+    "Connected",
+  );
   expect(h.host.textContent).toContain(
-    "Tunnel connected · Check the ChatGPT app connection",
+    "Connection available · Check the ChatGPT app connection",
   );
   expect(h.host.textContent).not.toContain("ChatGPT can reach this Mac");
   expect(h.host.textContent).not.toContain("Review connection");
@@ -416,7 +439,9 @@ it("shows a saved fresh session with limited tools without claiming all tools wo
   const h = await mount({ ...working(), independentSession: true });
   expect(h.host.textContent).toContain("New session · tools limited");
   expect(h.host.textContent).toContain("File changes and commands are paused");
-  expect(h.host.textContent).not.toContain("Farol is working");
+  expect(h.host.querySelector(".home-status-card h2")?.textContent).not.toBe(
+    "Connected",
+  );
   expect(h.host.querySelector(".home-setup-card")).toBeNull();
 });
 
@@ -426,7 +451,9 @@ it("shows calm startup progress instead of a premature connection warning", asyn
     h.host.querySelector('[role="status"][aria-busy="true"]')?.textContent,
   ).toContain("Starting Farol");
   expect(h.host.querySelector(".home-health-warning")).toBeNull();
-  expect(h.host.textContent).not.toContain("Farol is working");
+  expect(h.host.querySelector(".home-status-card h2")?.textContent).not.toBe(
+    "Connected",
+  );
   await h.set({ ...working(), runtime: "failed", status: "stale" });
   expect(h.host.querySelector(".home-health-warning")).not.toBeNull();
 });
@@ -462,7 +489,9 @@ it("keeps host startup work calm through unavailable journal reads and transient
   });
   expect(h.host.querySelector('[aria-busy="true"]')).toBeTruthy();
   await h.set({ ...saved, connectionChecking: false, activity: [unknown] });
-  expect(h.host.textContent).toContain("Farol is working");
+  expect(h.host.querySelector(".home-status-card h2")?.textContent).toBe(
+    "Connected",
+  );
   expect(h.host.querySelector('[aria-busy="true"]')).toBeNull();
   expect(unknown.outcome).toBe("unknown");
   expect(h.f.api.configure).not.toHaveBeenCalled();
@@ -484,6 +513,29 @@ it("reveals a real sign-in problem only after host checking settles", async () =
   await h.set({ ...value, connectionChecking: false });
   expect(h.host.textContent).toContain("needs attention");
   expect(h.host.querySelector('[aria-busy="true"]')).toBeNull();
+});
+
+it("keeps a long startup check honest without cancelling or repeating it", async () => {
+  vi.useFakeTimers();
+  const value = { ...working(), connectionChecking: true };
+  const h = await mount(value);
+  expect(
+    h.host.querySelector(".home-connection-progress")?.textContent,
+  ).toContain("Checking connection");
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30_000);
+  });
+  expect(
+    h.host.querySelector(".home-connection-progress")?.textContent,
+  ).toContain("Taking longer than expected");
+  expect(
+    h.host.querySelector(".home-connection-progress")?.textContent,
+  ).toContain("still in progress");
+  expect(h.f.api.configure).not.toHaveBeenCalled();
+  await h.set({ ...value, connectionChecking: false });
+  expect(h.host.querySelector(".home-connection-progress")).toBeNull();
+  expect(h.f.api.configure).not.toHaveBeenCalled();
+  vi.useRealTimers();
 });
 
 it("shows automatic ChatGPT check progress and reveals the same browser without another test", async () => {
@@ -526,6 +578,31 @@ it("shows automatic ChatGPT check progress and reveals the same browser without 
   expect(h.host.querySelector(".home-connection-progress")).toBeNull();
   expect(h.host.querySelector(".home-health-warning")).not.toBeNull();
 });
+
+it.each(["unobserved", "expired", "fresh"] as const)(
+  "does not present retained ChatGPT verification as live without %s transport",
+  async (mode) => {
+    const h = await mount(working());
+    const snapshot = {
+      ...h.c.getSnapshot(),
+      ...working(),
+      connectionStatus: {
+        ...unavailableConnectionStatus,
+        revision: 1,
+        state:
+          mode === "unobserved"
+            ? ("unobserved" as const)
+            : ("recent_transport" as const),
+        validUntilMillis:
+          mode === "unobserved"
+            ? null
+            : Date.now() + (mode === "fresh" ? 30_000 : -1),
+      },
+    };
+    expect(computerSetup(snapshot).externalAccessVerified).toBe(true);
+    expect(connectionPresentation(snapshot).connected).toBe(mode === "fresh");
+  },
+);
 
 // Model the ordinary restart/update boundary: saved onboarding remains, while
 // the old runtime's attachment is deliberately not current authority.
@@ -594,7 +671,18 @@ it.each(["runtime restart", "new build"])(
     );
     expect(h.host.textContent).not.toContain("Review ChatGPT connection");
     expect(h.host.textContent).not.toContain("ChatGPT can reach this Mac");
-    expect(h.host.textContent).toContain("Check now");
+    expect(h.host.querySelector(".home-status-card > button")).toBeNull();
+    const details = h.host.querySelector<HTMLDetailsElement>(
+      ".home-connection-details",
+    )!;
+    expect(details.open).toBe(false);
+    expect(details.textContent).toContain("Earlier ChatGPT verification");
+    expect(
+      h.host.querySelector(".home-status-card > div > p")?.textContent,
+    ).not.toContain("verification");
+    expect(
+      h.host.querySelector(".home-status-card > div > p")?.textContent,
+    ).not.toContain("checked");
     expect(
       h.host
         .querySelector(".home-working-mark")
@@ -602,8 +690,8 @@ it.each(["runtime restart", "new build"])(
     ).toBe(false);
     expect(connectionPresentation(snapshot)).toMatchObject({
       connected: true,
-      text: "Tunnel connected",
-      label: "Tunnel connected — ChatGPT setup is saved",
+      text: "Connected",
+      label: "Connected — ChatGPT setup is saved",
     });
     expect(computerSetup(snapshot).externalAccessVerified).toBe(false);
     expect(setupChecklist(snapshot).ready).toBe(false);
@@ -649,7 +737,9 @@ it("keeps a current transport failure visible instead of claiming the app works"
   expect(h.host.textContent).toContain(
     "The current connection is unavailable.",
   );
-  expect(h.host.textContent).not.toContain("Farol is working");
+  expect(h.host.querySelector(".home-status-card h2")?.textContent).not.toBe(
+    "Connected",
+  );
   expect(h.host.textContent).not.toContain("ChatGPT can reach this Mac");
   await h.click("Review connection");
   expect(h.c.getSnapshot().destination).toMatchObject({
@@ -684,6 +774,37 @@ it.each(["unobserved", "expired"])(
     expect(h.host.textContent).toContain("Your ChatGPT setup is saved");
     expect(h.host.textContent).not.toContain("Review ChatGPT connection");
     expect(h.host.textContent).not.toContain("ChatGPT can reach this Mac");
+    expect(h.f.api.configure).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["expired", "withdrawn"])(
+  "shows retained attachment verification as historical after transport is %s",
+  async (state) => {
+    const current = working();
+    if (current.configuration?.status !== "ready")
+      throw Error("fixture settings missing");
+    const connector = current.configuration.settings.connectors.secureMcp;
+    connector.lastVerifiedAttachment = connector.attachment;
+    const h = await mount(current);
+    expect(
+      computerSetup({ ...h.c.getSnapshot(), ...current })
+        .externalAccessVerified,
+    ).toBe(true);
+    expect(h.host.textContent).toContain("ChatGPT can reach this Mac");
+    await h.set({
+      ...current,
+      connectionStatus:
+        state === "expired"
+          ? { ...current.connectionStatus!, validUntilMillis: Date.now() - 1 }
+          : unavailableConnectionStatus,
+    });
+    expect(h.host.querySelector(".home-status-card h2")?.textContent).toBe(
+      "Setup complete",
+    );
+    expect(h.host.textContent).toContain("Your ChatGPT setup is saved");
+    expect(h.host.textContent).not.toContain("ChatGPT can reach this Mac");
+    expect(h.host.textContent).toContain("Last ChatGPT verification:");
     expect(h.f.api.configure).not.toHaveBeenCalled();
   },
 );

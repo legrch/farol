@@ -1,3 +1,8 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { OperationsStore } from "../../apps/desktop/operations/store";
+import { ConnectorProcessBridge } from "../../apps/desktop/bridge/connector-process";
 import { createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/client";
 import {
@@ -2403,5 +2408,95 @@ it.each(["computer_shell_read", "computer_shell_cancel"] as const)(
           ? { state: "running" }
           : { status: "requested" },
     });
+  },
+);
+
+it.each([
+  "runtime_integrity",
+  "future_reason",
+  "/outside token=PRIVATE-CANARY",
+])(
+  "carries a native refusal through MCP to the durable journal: %s",
+  async (reason) => {
+    const directory = fs.mkdtempSync(
+      path.join(os.tmpdir(), "farol-native-refusal-"),
+    );
+    const store = new OperationsStore(directory);
+    try {
+      const processRequest = vi.fn(
+        async (
+          _method: string,
+          _body: Json,
+          call?: { id?: string; operationId?: string },
+        ) =>
+          ({
+            status: "refused",
+            requestId: call!.id!,
+            context,
+            operationId: call!.operationId!,
+            code: "PROCESS_NATIVE_REFUSED",
+            nativeRefusalReason: reason,
+          }) as Outcome,
+      );
+      const processes = new ConnectorProcessBridge(
+        { request: processRequest },
+        {
+          endpoint: {
+            binding: {
+              ...context,
+              buildId: "build",
+              runtimeId: "runtime",
+              connectorGeneration: "1",
+            },
+            socketPath: "/fixture/socket",
+            token: "a".repeat(64),
+          },
+          execution: binding,
+          admissionOperationId: "admission",
+        },
+        context,
+      );
+      const { client } = await setup({
+        operations: store,
+        processes,
+        executionOrigin: { buildId: "build", runtimeId: "runtime" },
+      });
+      const result = await client.callTool({
+        name: "computer_shell_start",
+        arguments: {
+          operationId: "native-refusal-operation",
+          workspaceId: "workspace",
+          relativeCwd: ".",
+          command: "git status -- PRIVATE-CANARY",
+          write: false,
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        status: "refused",
+        code: "PROCESS_NATIVE_REFUSED",
+        retry: "never",
+        nativeRefusalReason:
+          reason === "runtime_integrity" ? reason : "unclassified",
+      });
+      expect(processRequest).toHaveBeenCalledOnce();
+      await store.flush(5000);
+      const snapshot = await store.snapshot(5000);
+      expect(snapshot.entries).toEqual([
+        expect.objectContaining({
+          schema: "farol.operation/2",
+          outcome: "refused",
+          code: "PROCESS_NATIVE_REFUSED",
+          nativeRefusalReason:
+            reason === "runtime_integrity" ? reason : "unclassified",
+          executionFacts: null,
+        }),
+      ]);
+      expect(JSON.stringify(snapshot)).not.toContain("PRIVATE-CANARY");
+      expect(snapshot.writeFailures).toBe(0);
+    } finally {
+      await store.shutdown(5000);
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   },
 );

@@ -3,6 +3,7 @@ import { chatViewLabel, navigationTitle } from "./navigation-presentation";
 import { InstalledUpdateViewSchema } from "../modules/release/contract/installed-update";
 import { z } from "zod";
 import { chatGptPreSubmitRemedy } from "./chatgpt-pre-submit-remedy";
+import { workspaceRootChangeRemedy } from "./workspace-root-remedy";
 import {
   ClientEventSchema,
   type ClientEventDto,
@@ -2968,8 +2969,6 @@ function connectorAppVerificationFailureMessage(code: string): string {
   const preSubmit = chatGptPreSubmitRemedy(code);
   if (preSubmit) return preSubmit;
   switch (code) {
-    case "CONNECTOR_APP_VERIFICATION_NOT_READY":
-      return "Sign in, verify a folder, and activate this DEV tunnel before verifying the app.";
     case "CONNECTOR_APP_VERIFICATION_ALREADY_ATTEMPTED":
     case "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN":
       return "This check may have been sent. Inspect the existing ChatGPT conversation and Advanced receipt before deliberately starting a fresh challenge; Farol did not resend it.";
@@ -3285,7 +3284,9 @@ async function configureProduct(
                                                                       ? "A native Agent task is still running. Stop it from its task, or let it finish, then change Computer access or the Codex host."
                                                                       : parsed.error ===
                                                                           "WORKSPACE_ROOT_CHANGED"
-                                                                        ? "A different folder now has this workspace's path. Nothing was read or changed. Remove the workspace and add the folder again to approve it."
+                                                                        ? workspaceRootChangeRemedy(
+                                                                            parsed.error,
+                                                                          )!
                                                                         : parsed.error ===
                                                                             "MODEL_ENDPOINT_UNAVAILABLE"
                                                                           ? "Farol Model is not running. Nothing was read or changed."

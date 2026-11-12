@@ -56,11 +56,11 @@ func NewSupervisedPreparer(runtimeID string, template Command, policy *Seatbelt,
 	if policy == nil || policy.qualification == nil || execution == nil || execution.Err() != nil ||
 		!absolutePolicyPath(selection.Executable.Path) || !digestValue(selection.Executable.SHA256) ||
 		len(selection.Source) == 0 || len(selection.Source) > 64*1024 || !utf8.Valid(selection.Source) || !digestValue(selection.SourceSHA256) {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalAdmissionPolicy}
 	}
 	hash := sha256.Sum256(selection.Source)
 	if hex.EncodeToString(hash[:]) != selection.SourceSHA256 {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalAdmissionPolicy}
 	}
 	base, err := NewPreparer(runtimeID, template, policy, clock)
 	if err != nil {
@@ -84,7 +84,7 @@ func (p *SupervisedPreparer) Prepare(ctx context.Context, invocation processsvc.
 	native := prepared.(*Prepared)
 	for _, value := range append(append([]string(nil), native.command.Args...), native.command.Environment...) {
 		if !utf8.ValidString(value) {
-			return nil, &processsvc.NativeFailure{}
+			return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalAdmissionPolicy}
 		}
 	}
 	var platform *RootScopedPlatformSelection
@@ -103,7 +103,7 @@ func (p *SupervisedPreparer) Prepare(ctx context.Context, invocation processsvc.
 		Platform                          *PlatformStrategyBinding `json:",omitempty"`
 	}{native.Seal().Digest, watchdogMode, p.boundary.selection.SourceSHA256, p.boundary.selection.Executable, platformBinding})
 	if err != nil {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalAdmissionPolicy}
 	}
 	digest := sha256.Sum256(encoded)
 	seal := native.Seal()
@@ -161,7 +161,7 @@ type watchdogHost interface {
 // original selected owner guard must pass immediately before the one Start.
 func startWatchdogHelper(ctx context.Context, check func() error, start func() (watchdogProcess, watchdogChannel, error)) (watchdogProcess, watchdogChannel, error) {
 	if ctx == nil || ctx.Err() != nil || check == nil || check() != nil || ctx.Err() != nil {
-		return nil, nil, &processsvc.NativeFailure{}
+		return nil, nil, &processsvc.NativeFailure{Reason: processsvc.RefusalAdmissionPolicy}
 	}
 	return start()
 }
@@ -178,7 +178,7 @@ type watchdogBoundary struct {
 }
 
 func (*watchdogBoundary) Start(context.Context, Command, func(context.Context) error, io.Writer, io.Writer) (owned, error) {
-	return nil, &processsvc.NativeFailure{} // Only the original lease can select time.
+	return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalAdmissionPolicy} // Only the original lease can select time.
 }
 func (b *watchdogBoundary) StartLease(ctx context.Context, command Command, request processsvc.SpawnRequest, stdout, stderr io.Writer) (owned, error) {
 	budget := authority.OrdinaryExecutionLifetime
@@ -187,7 +187,7 @@ func (b *watchdogBoundary) StartLease(ctx context.Context, command Command, requ
 	}
 	if ctx == nil || ctx.Err() != nil || request.Check == nil || stdout == nil || stderr == nil || b.execution.Err() != nil ||
 		!b.clock.Now().Before(request.Deadline) || request.Deadline.After(b.clock.Now().Add(budget)) {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalAdmissionPolicy}
 	}
 	launch, err := selectedLaunch(b.policy, command)
 	if err != nil {
@@ -195,7 +195,7 @@ func (b *watchdogBoundary) StartLease(ctx context.Context, command Command, requ
 	}
 	id, err := nativeCommandDigest(command) // Immutable invocation on its exact private channel.
 	if err != nil {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalAdmissionPolicy}
 	}
 	bounded, cancel := context.WithDeadline(b.execution, request.Deadline)
 	if b.strategy != nil {
@@ -208,10 +208,10 @@ func (b *watchdogBoundary) StartLease(ctx context.Context, command Command, requ
 	}
 	check := func() error {
 		if ctx.Err() != nil || bounded.Err() != nil || !b.clock.Now().Before(request.Deadline) || request.Check(bounded) != nil {
-			return &processsvc.NativeFailure{}
+			return &processsvc.NativeFailure{Reason: processsvc.RefusalAdmissionPolicy}
 		}
 		if ctx.Err() != nil || bounded.Err() != nil || !b.clock.Now().Before(request.Deadline) {
-			return &processsvc.NativeFailure{}
+			return &processsvc.NativeFailure{Reason: processsvc.RefusalAdmissionPolicy}
 		}
 		return nil
 	}
@@ -219,9 +219,17 @@ func (b *watchdogBoundary) StartLease(ctx context.Context, command Command, requ
 	if measurement != nil {
 		defer measurement.Close()
 	}
-	if err != nil || measurement == nil || launch.qualification.Qualify(bounded, copyCommand(launch.command)) != nil || check() != nil {
+	if err != nil || measurement == nil {
 		cancel()
-		return nil, &processsvc.NativeFailure{}
+		return nil, refusalAt(err, processsvc.RefusalDirectoryPolicy)
+	}
+	if err := launch.qualification.Qualify(bounded, copyCommand(launch.command)); err != nil {
+		cancel()
+		return nil, refusalAt(err, processsvc.RefusalConfinementPolicy)
+	}
+	if err := check(); err != nil {
+		cancel()
+		return nil, err
 	}
 	process, channel, startErr := b.host.Start(bounded, b.selection, command.Cwd, check)
 	if process == nil {

@@ -541,7 +541,7 @@ describe("Add to ChatGPT", () => {
       expect(
         h.host.querySelectorAll(".setup-wizard-footer .primary"),
       ).toHaveLength(1);
-      expect(test.disabled).toBe(false);
+      expect(test.disabled).toBe(unknown);
       expect(h.button("Start using Farol")).toBeUndefined();
       expect(h.configuration().settings.setup.journey.dismissed).toBe(true);
       expect(h.f.api.configure).not.toHaveBeenCalledWith(
@@ -1066,6 +1066,33 @@ describe("always-open Setup instructions", () => {
         ?.value,
     ).toBe("Farol Dev");
   });
+  it.each([
+    ["recent_transport", 60_000, true],
+    ["recent_transport", -60_000, false],
+    ["unavailable", 60_000, false],
+  ] as const)(
+    "shows a live connection only for current server evidence: %s",
+    async (state, offset, live) => {
+      const h = await mount({
+        step: "connection",
+        value: readySettings(),
+        connectionStatus: {
+          revision: 1,
+          state,
+          marker: state === "recent_transport" ? "✓" : "!",
+          label: "fixture",
+          detail: "fixture",
+          delivery: "fixture",
+          attention: !live,
+          validUntilMillis: Date.now() + offset,
+        },
+      });
+      expect(h.host.textContent).toContain(
+        live ? "✓ Connected" : "Connection saved",
+      );
+      if (!live) expect(h.host.textContent).not.toContain("✓ Connected");
+    },
+  );
   it("shows a masked saved key and cannot reconnect unchanged confirmed inputs", async () => {
     const h = await mount({ step: "connection", value: readySettings() });
     const key = h.host.querySelector<HTMLInputElement>(
@@ -1074,7 +1101,8 @@ describe("always-open Setup instructions", () => {
     expect(key.value).toBe("");
     expect(key.placeholder).toBe("••••••••");
     expect(h.button("Connect")).toBeUndefined();
-    expect(h.host.textContent).toContain("✓ Connected to this Mac");
+    expect(h.host.textContent).toContain("Connection saved");
+    expect(h.host.textContent).not.toContain("✓ Connected");
     await h.remount();
     expect(h.button("Connect")).toBeUndefined();
     expect(h.f.api.configure).not.toHaveBeenCalled();

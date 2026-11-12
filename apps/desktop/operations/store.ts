@@ -1,3 +1,7 @@
+import {
+  nativeRefusalReason,
+  type NativeRefusalReason,
+} from "../renderer/native-refusal";
 import fs from "node:fs";
 import path from "node:path";
 import { validate, type ComputerProcessTerminalAudit } from "../bridge/wire";
@@ -257,6 +261,7 @@ export class OperationsStore implements OperationsRecorder {
       outcome: OperationEntry["outcome"],
       code: string | null,
       durationMs: number,
+      reason?: NativeRefusalReason,
     ) => {
       if (observed) return;
       observed = true;
@@ -280,6 +285,7 @@ export class OperationsStore implements OperationsRecorder {
             }
           : references,
         requestedAt,
+        reason,
       );
     };
   }
@@ -298,6 +304,7 @@ export class OperationsStore implements OperationsRecorder {
     lifecycle?: NonNullable<OperationEntry["lifecycle"]>,
     references?: ExecutionReferences,
     requestedAt?: number,
+    reason?: NativeRefusalReason,
   ): void {
     const entry = OperationEntrySchema.parse({
       ...metadata,
@@ -314,6 +321,9 @@ export class OperationsStore implements OperationsRecorder {
             timing: { requestedAt, startedAt: null, endedAt: null },
             exit: null,
             executionFacts: null,
+            ...(code === "PROCESS_NATIVE_REFUSED" && outcome === "refused"
+              ? { nativeRefusalReason: nativeRefusalReason(code, reason) }
+              : {}),
           }
         : {}),
     });

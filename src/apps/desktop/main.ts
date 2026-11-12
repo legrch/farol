@@ -3,6 +3,14 @@ import { guardDiagnosticPipes } from "./diagnostic-pipes";
 import { preventEmbeddedWindowDrag } from "./embedded-web-drag";
 import { separateAppVerificationScopeCurrent } from "../../pkg/product-settings/separate-app-verification";
 import { prepareConnectorCheckDocument } from "../../../apps/desktop/bridge/connector-check-readiness";
+import {
+  runExplicitConnectionCheck,
+  ConnectionCheckRefusal,
+  connectionCheckDigest,
+  connectionCheckRuntimeReady,
+  type ExplicitConnectionCheck,
+  type ConnectionCheckCommandResult,
+} from "../../../apps/desktop/connection-check-command";
 import type { SeparateAppVerificationScope } from "../../pkg/product-settings/contract";
 import type { SeparateAppVerification } from "./connector-app-verification-attempt";
 import {
@@ -55,6 +63,7 @@ import {
 } from "../../../apps/desktop/updates-panel";
 import { updatesChannels } from "../../../apps/desktop/renderer/updates/contract";
 import { connectorRuntimeUncertain } from "../../pkg/product-settings/connector-uncertainty";
+import { ownerComputerConsentDigest } from "../../modules/computer/infra/repo/owner-computer-consent";
 import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
 import { connectorVerificationProof } from "./connector-verification-proof";
 import {
@@ -555,7 +564,10 @@ import {
   SecureMcpConnectorRuntime,
   type ConnectorRuntimeLifecycleObservation,
 } from "./secure-mcp-connector-runtime";
-import { clearConnectorVerificationReceipt } from "../../modules/computer/infra/mcp/connector-verification-receipt";
+import {
+  clearConnectorVerificationReceipt,
+  clearAndConfirmOriginalConnectorVerificationReceipt,
+} from "../../modules/computer/infra/mcp/connector-verification-receipt";
 import { PrivateExecutionFence } from "../../modules/computer/infra/mcp/execution-fence";
 import { PrivateMcpLifecycle } from "../../modules/computer/infra/mcp/private-mcp-lifecycle";
 import {
@@ -947,6 +959,7 @@ function connectionAdmissionInProgress(): boolean {
 // It conveys no authority and is never restored from Activity or saved settings.
 let startupConnectionChecking = true;
 let connectorStartInFlight: Promise<void> | null = null;
+let connectorStartCancellation: AbortController | null = null;
 let startupConnectorResumeCancelled = false;
 let connectorTransportWatch: ConnectorTransportWatch<ConnectorTransportCapture> | null =
   null;
@@ -2170,6 +2183,9 @@ const routeBTaskSurfaces: RouteBTaskSurfaces = {
 const QUIT_DRAIN_DEADLINE_MS = 60_000;
 const QUIT_PREPARATION_MS = 10_000;
 const QUIT_RECORD_RESERVE_MS = 2_000;
+// Leave at least 40 seconds of the normal post-preparation drain for Go core
+// and recording. This bounds the whole dependent close, not a renewed budget.
+const CONNECTOR_START_QUIT_BUDGET_MS = 8_000;
 
 // What the start did with the connector's execution fence, kept privately
 // for diagnostics: whether the store was read and how many summaries it
@@ -3867,13 +3883,23 @@ async function stopAndConfirmComputerMcp(
   core = desktopGoCore,
   savedChat = savedChatBridgeRuntime,
   reason?: "owner_stop",
+  originalStopParent?: string,
+  quitStartDeadlineAt?: number,
 ): Promise<void> {
   if (!connector) throw new Error("CONNECTOR_STOP_UNCONFIRMED");
+  // Ordinary Stop is forbidden while C7 owns an unresolved original. Only
+  // the already-admitted original parent may execute its single native effect.
+  if (core && originalStopParent === undefined) {
+    const custody = await core.observeOriginalStop();
+    if (custody.restricted) throw new Error("CONNECTOR_STOP_UNCONFIRMED");
+  }
   if (
     core?.independentSession &&
     inFlightStart === null &&
     !connector.isRunning()
   ) {
+    if (originalStopParent !== undefined)
+      throw new Error("CONNECTOR_STOP_UNCONFIRMED");
     // This run never owned the retained legacy tunnel. Close only its current
     // native connector/account ports; old lifecycle markers remain history.
     await savedChat?.close();
@@ -3889,6 +3915,7 @@ async function stopAndConfirmComputerMcp(
         drainComputerConnector({
           beginStop: () => lifecycle.beginStop(),
           startInFlight: inFlightStart,
+          startDeadlineAt: quitStartDeadlineAt,
           waitForMcpStop: () => lifecycle.waitForStop(),
           stopConnector: () => connector.stop(),
           closeSavedChat: async () => {
@@ -3902,7 +3929,12 @@ async function stopAndConfirmComputerMcp(
             } finally {
               // Withdraw the original Go owner even when the old adapter drain fails.
               // A failure remains unconfirmed; it cannot authorize a new launch.
-              await core?.closeComputerConnector(reason);
+              if (
+                quitStartDeadlineAt !== undefined &&
+                Date.now() >= quitStartDeadlineAt
+              )
+                throw new Error("CONNECTOR_STOP_UNCONFIRMED");
+              await core?.closeComputerConnector(reason, originalStopParent);
             }
           },
           confirmStop: () => lifecycle.confirmStop(),
@@ -5283,6 +5315,8 @@ async function startSecureMcpConnectorObserved(
 async function observeConnectorStart(
   work: () => Promise<ProductConfigurationResult>,
 ): Promise<ProductConfigurationResult> {
+  const cancellation = new AbortController();
+  connectorStartCancellation = cancellation;
   let finish!: () => void;
   connectorStartInFlight = new Promise<void>((resolve) => {
     finish = resolve;
@@ -5292,6 +5326,8 @@ async function observeConnectorStart(
   } finally {
     finish();
     connectorStartInFlight = null;
+    if (connectorStartCancellation === cancellation)
+      connectorStartCancellation = null;
   }
 }
 
@@ -5307,11 +5343,31 @@ async function startAdmittedSecureMcpConnector(
   // and Go authority still decide every launch; a missing guard refuses recovery.
   const recoveryPermitted = () =>
     recoveryFrom === undefined || recoveryCurrent?.() === true;
+  const cancellation = connectorStartCancellation?.signal;
+  const startPermitted = () =>
+    !cancellation?.aborted &&
+    !quitInProgress &&
+    !installedUpdateAdmission &&
+    recoveryPermitted();
+  const startRefusal = () =>
+    recoveryPermitted()
+      ? configurationFailure("CONNECTOR_START_FAILED")
+      : transitionRefusal();
   if (!recoveryPermitted()) return transitionRefusal();
   if (!connectorTaskAdmission || !authorityTransitions.current())
     return transitionRefusal();
   if (quitInProgress || installedUpdateAdmission)
     return configurationFailure("CONNECTOR_START_FAILED");
+  // C7 can be pending before any C4 WAL exists. No new Start, repair,
+  // credential-associated Open or restoration may cross that custody.
+  try {
+    const originalStop = await desktopGoCore?.observeOriginalStop();
+    if (!originalStop || originalStop.restricted)
+      return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
+  } catch {
+    return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
+  }
+  if (!startPermitted()) return startRefusal();
   if (
     !configuration ||
     !connectorCredentialStore ||
@@ -5345,12 +5401,14 @@ async function startAdmittedSecureMcpConnector(
     }
   }
   if (repair || resumeAfterQuit) {
+    if (!startPermitted()) return startRefusal();
     // The previous process has exited. Withdraw its live proof under this
     // start reservation before any new launch can succeed or be refused.
     // Historical completion remains available, but is never live readiness.
     const stopped = await configuration.recordSecureMcpStopped();
     if (!stopped.ok) return ProductConfigurationResultSchema.parse(stopped);
   }
+  if (!startPermitted()) return startRefusal();
   // The ordinary Computer route is the selected Go backend. Its absence
   // cannot fall back to a separate TS authority or native helper.
   const core = desktopGoCore;
@@ -5382,6 +5440,7 @@ async function startAdmittedSecureMcpConnector(
       path.join(directory, TUNNEL_CLIENT.entry),
     );
     if (!selected.ok) return selected;
+    if (!startPermitted()) return startRefusal();
     snapshot = configuration.snapshot();
     if (
       snapshot.status !== "ready" ||
@@ -5409,7 +5468,7 @@ async function startAdmittedSecureMcpConnector(
     return configurationFailure(refusal);
   }
   let credentialReference: string;
-  if (!recoveryPermitted()) return transitionRefusal();
+  if (!startPermitted()) return startRefusal();
   try {
     credentialReference = await connectorCredentialStore.reference();
   } catch (error) {
@@ -5421,7 +5480,7 @@ async function startAdmittedSecureMcpConnector(
     return configurationFailure("CONNECTOR_CREDENTIAL_STORE_FAILED");
   }
 
-  if (!recoveryPermitted()) return transitionRefusal();
+  if (!startPermitted()) return startRefusal();
   const runtimeId = randomUUID();
   const verificationChallenge = randomUUID();
   const verificationChallengeSha256 = createHash("sha256")
@@ -5431,7 +5490,7 @@ async function startAdmittedSecureMcpConnector(
   let launchContractSha256: string;
   try {
     await clearConnectorVerificationReceipt(secureMcpLaunchRoot());
-    if (!recoveryPermitted()) return transitionRefusal();
+    if (!startPermitted()) return startRefusal();
     const intentDigest = createHash("sha256")
       .update(
         JSON.stringify({
@@ -5456,8 +5515,7 @@ async function startAdmittedSecureMcpConnector(
     launchContractSha256 = opened.launchSha256;
     // An earlier Quit/update may have stopped admission while the contract
     // was being written. Do not clear its stop marker with a later prepare.
-    if (quitInProgress || installedUpdateAdmission || !recoveryPermitted())
-      return configurationFailure("CONNECTOR_START_FAILED");
+    if (!startPermitted()) return startRefusal();
     await computerMcpLifecycle().prepare(launchContractSha256);
   } catch (error) {
     if (error instanceof ConnectorHostError) {
@@ -5512,6 +5570,7 @@ async function startAdmittedSecureMcpConnector(
   }
 
   const beforeConnectorEffect = () => {
+    // Quit latches admission closed before aborting the captured start signal.
     if (quitInProgress || installedUpdateAdmission || !recoveryPermitted()) {
       throw new Error("CONNECTOR_ADMISSION_WITHDRAWN");
     }
@@ -5523,12 +5582,11 @@ async function startAdmittedSecureMcpConnector(
       launchContractSha256,
       phase,
     });
-  if (!recoveryPermitted()) return transitionRefusal();
+  if (!startPermitted()) return startRefusal();
   try {
     const resources = desktopExecutionResources();
     await resources.recheck();
-    if (quitInProgress || installedUpdateAdmission || !recoveryPermitted())
-      return configurationFailure("CONNECTOR_START_FAILED");
+    if (!startPermitted()) return startRefusal();
     await secureMcpConnectorRuntime.configure({
       beforeEffect: beforeConnectorEffect,
       executablePath: connector.tunnelClient.executablePath,
@@ -5554,7 +5612,7 @@ async function startAdmittedSecureMcpConnector(
         : "CONNECTOR_CONFIGURE_FAILED",
     );
   }
-  if (!recoveryPermitted()) return transitionRefusal();
+  if (!startPermitted()) return startRefusal();
   try {
     await secureMcpConnectorRuntime.doctor({
       beforeEffect: beforeConnectorEffect,
@@ -5573,8 +5631,7 @@ async function startAdmittedSecureMcpConnector(
   let started;
   // Quit closes new admission first. If it arrived while configure or
   // doctor was pending, do not launch a tunnel after its drain began.
-  if (quitInProgress || installedUpdateAdmission || !recoveryPermitted())
-    return configurationFailure("CONNECTOR_START_FAILED");
+  if (!startPermitted()) return startRefusal();
   try {
     started = await secureMcpConnectorRuntime.start({
       beforeEffect: beforeConnectorEffect,
@@ -5586,6 +5643,9 @@ async function startAdmittedSecureMcpConnector(
       launchContractSha256,
     });
   } catch {
+    // Withdrawal ends waiting, not child ownership. Quit's original Stop and
+    // receipt decide closure; do not publish it as an unreachable/retryable start.
+    if (!startPermitted()) return startRefusal();
     const failed = await recordConnectorRuntime(
       "unreachable",
       attempt("start"),
@@ -5608,7 +5668,7 @@ async function startAdmittedSecureMcpConnector(
   }
   // Retain an already-issued Start's real result even when its observation was
   // invalidated. That completion cannot authorize a new challenge publication.
-  if (!recoveryPermitted()) return transitionRefusal();
+  if (!startPermitted()) return startRefusal();
   const challenged = await configuration.recordSecureMcpChallenge({
     challenge: verificationChallenge,
     runtimeGeneration: started.runtimeGeneration,
@@ -5634,6 +5694,7 @@ async function startAdmittedSecureMcpConnector(
     afterChallenge.status === "ready" &&
     selectedConnectorApp(afterChallenge.settings.connectors.secureMcp) === null
   ) {
+    if (!startPermitted()) return startRefusal();
     const selected =
       await configuration.selectSecureMcpChatGptApp(retainedSelection);
     if (!selected.ok) return ProductConfigurationResultSchema.parse(selected);
@@ -5805,8 +5866,251 @@ async function checkSecureMcpAttachment(
   }
 }
 
-// An explicit owner check owns one retained browser document.
-// Only its exact Computer MCP receipt can complete the attachment.
+// Explicit connection checks and already-attached Setup verification share the
+// Go-owned dispatch/receipt contract. Startup, Deep Test and separate-app
+// recovery never invoke it.
+async function testConnectionCommand(
+  command: ExplicitConnectionCheck,
+  origin: "selected-task" | "setup" = "selected-task",
+): Promise<ProductConfigurationResult> {
+  const core = desktopGoCore;
+  const config = configuration;
+  if (!core || !config)
+    return configurationFailure("CONNECTION_CHECK_PREREQUISITES_REQUIRED");
+  let reserved = false;
+  let expected: ConnectorAppVerificationBinding | null = null;
+  let workspace: string | null | undefined;
+  let outcome: ConnectionCheckCommandResult;
+  try {
+    outcome = await runExplicitConnectionCheck(
+      command,
+      {
+        claim: (input) => core.claimConnectionCheck(input),
+        prepare: (input) => core.prepareConnectionCheck(input),
+        advance: (input) => core.advanceConnectionCheck(input),
+        observe: (id) => core.observeConnectionCheck(id),
+      },
+      async () => {
+        // This callback is reached only after FIRST durable admission. A replay
+        // observes its original Go result without rebinding to today's page.
+        if (
+          !embeddedBrowserEnabled() ||
+          chatGptTaskAdmission ||
+          connectorTaskAdmission ||
+          quitInProgress ||
+          installedUpdateAdmission ||
+          !chatGptTaskAdmissionReady() ||
+          desktopGoCore !== core ||
+          configuration !== config ||
+          (selectedTaskId ?? "") !== command.taskId
+        ) {
+          throw new ConnectionCheckRefusal(
+            "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+          );
+        }
+        const route =
+          origin !== "setup" && command.taskId
+            ? liveTaskRoutes.get(command.taskId)
+            : chatGptRoute;
+        const owner = window;
+        const originalDocument = route?.captureManualTaskTarget();
+        if (!route || !owner || owner.isDestroyed() || !originalDocument)
+          throw new ConnectionCheckRefusal(
+            "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+          );
+        // Reserve existing Desktop owners before the first browser/native await.
+        chatGptTaskAdmission = true;
+        connectorTaskAdmission = true;
+        reserved = true;
+        const snapshot = config.snapshot();
+        if (snapshot.status !== "ready")
+          throw new ConnectionCheckRefusal(
+            "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+          );
+        const settings = snapshot.settings;
+        const connector = settings.connectors.secureMcp;
+        const runtime = connector.runtime;
+        const appName = selectedConnectorApp(connector);
+        workspace = connectorWorkspaceSelection(settings);
+        if (
+          appName === null ||
+          workspace === undefined ||
+          connector.tunnelId === null ||
+          runtime?.state !== "ready" ||
+          runtime.buildId !== buildIdentity.buildId ||
+          runtime.computerGeneration !== settings.computer.generation ||
+          runtime.connectorGeneration !== connector.generation ||
+          !connectionCheckRuntimeReady(secureMcpConnectorRuntime)
+        )
+          throw new ConnectionCheckRefusal(
+            "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+          );
+        if (
+          settings.setup.connect.outcomeUnknown ||
+          connector.appVerificationPending
+        )
+          throw new ConnectionCheckRefusal("CONNECTION_CHECK_PENDING");
+        const observed = await core.observeComputerConnectorVerification();
+        const proof = connectorVerificationProof(observed);
+        if (proof && proof.workspaceId !== workspace)
+          throw new ConnectionCheckRefusal("CONNECTION_CHECK_OWNER_CHANGED");
+        const challenge = connector.challenge;
+        if (
+          !proof &&
+          (!challenge ||
+            challenge.buildId !== runtime.buildId ||
+            challenge.runtimeGeneration !== runtime.runtimeGeneration ||
+            challenge.computerGeneration !== runtime.computerGeneration)
+        )
+          throw new ConnectionCheckRefusal(
+            "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+          );
+        const challengeSha256 =
+          proof?.receipt.challengeSha256 ?? challenge!.challengeSha256;
+        const binding: ConnectorAppVerificationBinding = {
+          tunnelId: connector.tunnelId,
+          connectorGeneration: connector.generation,
+          computerGeneration: settings.computer.generation,
+          runtimeGeneration: runtime.runtimeGeneration,
+          buildId: runtime.buildId,
+          challengeSha256,
+          workspaceId: workspace,
+          appName,
+        };
+        expected = binding;
+        const current = () => {
+          const latest = config.snapshot();
+          return (
+            !quitInProgress &&
+            !installedUpdateAdmission &&
+            desktopGoCore === core &&
+            configuration === config &&
+            window === owner &&
+            !owner.isDestroyed() &&
+            (selectedTaskId ?? "") === command.taskId &&
+            (origin !== "setup" && command.taskId
+              ? liveTaskRoutes.get(command.taskId)
+              : chatGptRoute) === route &&
+            connectionCheckRuntimeReady(secureMcpConnectorRuntime) &&
+            latest.status === "ready" &&
+            connectorAppBindingCurrent(latest.settings, binding)
+          );
+        };
+        if (!current() || !originalDocument())
+          throw new ConnectionCheckRefusal("CONNECTION_CHECK_OWNER_CHANGED");
+        // Read legacy custody, never delete, renew or claim it in TS. Go performs
+        // the exclusive schema-3 publication immediately before dispatch intent.
+        if (
+          !proof &&
+          (await connectorAppVerificationAttemptExists(
+            secureMcpLaunchRoot(),
+            challengeSha256,
+          ))
+        )
+          throw new ConnectionCheckRefusal(
+            "CONNECTION_CHECK_ALREADY_ATTEMPTED",
+          );
+        return {
+          selection: {
+            mode: proof ? ("status" as const) : ("bootstrap" as const),
+            appName,
+            model: "temporary-instant" as const,
+            tunnelId: connector.tunnelId,
+            computerGeneration: String(settings.computer.generation),
+            ...(workspace === null ? {} : { workspaceId: workspace }),
+            challengeDigest: challengeSha256,
+            ...(proof ? {} : { challenge: challenge!.value }),
+          },
+          current,
+          prepareDocument: async () => {
+            let navigationRequested = false;
+            const prepared = await prepareConnectorCheckDocument(
+              {
+                // Do not let the readiness helper navigate or replace the original.
+                open: async () =>
+                  route.captureManualTaskTarget()
+                    ? { status: "opened" as const }
+                    : { status: "unreachable" as const },
+                hasPendingReadinessDocument: () =>
+                  route.hasPendingReadinessDocument(),
+                observeSignInStatus: () => route.observeSignInStatus(),
+                isCurrentSignInStatus: (status) =>
+                  route.isCurrentSignInStatus(status),
+                openTemporaryChat: async () => {
+                  if (navigationRequested || !current() || !originalDocument())
+                    return { status: "unreachable" as const };
+                  navigationRequested = true;
+                  return route.openConnectionCheckChat(appName, current);
+                },
+              },
+              () => current() && (navigationRequested || originalDocument()),
+            );
+            // A failed document probe can mean draft, attachments, activity or
+            // an unrecognized layout. Do not invent a more specific observation.
+            if (!prepared.ready)
+              throw new ConnectionCheckRefusal(
+                "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+              );
+            const document = route.captureConnectionCheckDocument();
+            if (!document || !current())
+              throw new ConnectionCheckRefusal(
+                "CONNECTION_CHECK_OWNER_CHANGED",
+              );
+            return {
+              documentDigest: connectionCheckDigest(document.identity),
+              current: document.current,
+            };
+          },
+          send: (prompt, observer) =>
+            route.runReadonlyTask(prompt, [], observer, "temporary-instant", {
+              name: appName,
+            }),
+        };
+      },
+    );
+  } finally {
+    if (reserved) {
+      chatGptTaskAdmission = false;
+      connectorTaskAdmission = false;
+      void connectorConnection
+        .sample()
+        .then(currentConnectionStatus)
+        .catch(() => undefined);
+    }
+  }
+  if (outcome.state !== "verified") return configurationFailure(outcome.code);
+  if (!outcome.retained) {
+    if (
+      !expected ||
+      workspace === undefined ||
+      desktopGoCore !== core ||
+      configuration !== config
+    )
+      return configurationFailure("CONNECTION_CHECK_OUTCOME_UNKNOWN");
+    // Only the existing sole Settings writer publishes attachment/setup state.
+    // A historical replay never repeats this possibly unacknowledged write.
+    const published = await checkSecureMcpAttachment(workspace, expected);
+    if (!published.ok)
+      return configurationFailure(
+        published.error === "SETTINGS_WRITE_FAILED"
+          ? "SETTINGS_WRITE_FAILED"
+          : "CONNECTION_CHECK_OUTCOME_UNKNOWN",
+      );
+  }
+  return ProductConfigurationResultSchema.parse({
+    ok: true,
+    snapshot: config.snapshot(),
+    evidence: {
+      kind: "connector.connection-check",
+      operationId: command.operationId,
+      receiptSha256: outcome.receiptDigest,
+      retained: outcome.retained,
+    },
+  });
+}
+
+// Bootstrap and separate-app recovery retain their existing challenge workflow.
+// Already-attached Setup checks use the same Go owner as the explicit toolbar.
 async function verifySecureMcpApp(
   separate?: SeparateAppVerificationScope,
 ): Promise<ProductConfigurationResult> {
@@ -5822,6 +6126,26 @@ async function verifySecureMcpApp(
   const verificationCore = desktopGoCore;
   if (!verificationCore)
     return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
+  const initial = configuration.snapshot();
+  if (!separate && initial.status === "ready") {
+    const workspaceId = connectorWorkspaceSelection(initial.settings);
+    if (
+      workspaceId !== undefined &&
+      currentConnectorAttachment(
+        initial.settings,
+        buildIdentity.buildId,
+        workspaceId,
+      )
+    )
+      return testConnectionCommand(
+        {
+          kind: "connector.test-connection",
+          operationId: randomUUID(),
+          taskId: selectedTaskId ?? "",
+        },
+        "setup",
+      );
+  }
   // Reserve both routes before the first await so concurrent IPC calls cannot
   // both pass the check and race to claim or release the same verification.
   chatGptTaskAdmission = true;
@@ -5830,7 +6154,6 @@ async function verifySecureMcpApp(
   let receiptPending = false;
   let expectedBinding: ConnectorAppVerificationBinding | null = null;
   let verificationRoute: ChatGptRoute | null = null;
-  let statusCheckId: string | null = null;
   try {
     const snapshot = configuration.snapshot();
     if (snapshot.status !== "ready")
@@ -5843,15 +6166,7 @@ async function verifySecureMcpApp(
     if (appName === null)
       return configurationFailure("CONNECTOR_APP_TARGET_REQUIRED");
     const workspaceId = connectorWorkspaceSelection(settings);
-    const existing =
-      !separate && workspaceId !== undefined
-        ? currentConnectorAttachment(
-            settings,
-            buildIdentity.buildId,
-            workspaceId,
-          )
-        : null;
-    const proofScope = existing ?? challenge;
+    const proofScope = challenge;
     if (
       !chatGptTaskAdmissionReady() ||
       quitInProgress ||
@@ -5874,7 +6189,6 @@ async function verifySecureMcpApp(
       return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
     }
     requestedWorkspaceId = workspaceId;
-    if (existing) statusCheckId = randomUUID();
     expectedBinding = {
       tunnelId: connector.tunnelId,
       connectorGeneration: connector.generation,
@@ -5998,11 +6312,10 @@ async function verifySecureMcpApp(
     const stateRoot = secureMcpLaunchRoot();
     try {
       if (
-        statusCheckId === null &&
-        (await connectorAppVerificationAttemptExists(
+        await connectorAppVerificationAttemptExists(
           stateRoot,
           proofScope.challengeSha256,
-        ))
+        )
       ) {
         return configurationFailure(
           "CONNECTOR_APP_VERIFICATION_ALREADY_ATTEMPTED",
@@ -6037,11 +6350,9 @@ async function verifySecureMcpApp(
       return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
     }
     const prompt =
-      statusCheckId !== null
-        ? `Use the selected ${appName} app to call computer_connection_status once. Do not read files or run commands. Reply briefly with the result.`
-        : workspaceId === null
-          ? `Use the selected ${appName} app to call farol_connector_verify_catalogue once with challenge "${challenge!.value}". No workspace is configured. Do not read files or run commands. Reply briefly with the result.`
-          : `Use the selected ${appName} app to call farol_connector_verify once with challenge "${challenge!.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`;
+      workspaceId === null
+        ? `Use the selected ${appName} app to call farol_connector_verify_catalogue once with challenge "${challenge!.value}". No workspace is configured. Do not read files or run commands. Reply briefly with the result.`
+        : `Use the selected ${appName} app to call farol_connector_verify once with challenge "${challenge!.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`;
     let claimed = false;
     const timingId = runtimeEnvironment === "dev" ? randomUUID() : null;
     const result = await verificationRoute.runReadonlyTask(
@@ -6068,8 +6379,6 @@ async function verifySecureMcpApp(
             return false;
           const observed =
             await verificationCore.observeComputerConnectorVerification();
-          if (statusCheckId !== null && observed.checkId !== statusCheckId)
-            return false;
           const proof = connectorVerificationProof(observed);
           if (!proof || desktopGoCore !== verificationCore) return false;
           const { receipt, workspaceId } = proof;
@@ -6105,22 +6414,17 @@ async function verifySecureMcpApp(
             !connectorAppBindingCurrent(admitted.settings, expectedBinding)
           )
             throw new Error("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
-          if (statusCheckId !== null)
-            await verificationCore.expectComputerConnectorStatusCheck(
-              statusCheckId,
-            );
-          else
-            await prepareConnectorAppVerificationAttempt(
-              stateRoot,
-              proofScope.challengeSha256,
-              async () =>
-                (
-                  await configuration!.recordSecureMcpAppPending(
-                    runtime.runtimeGeneration,
-                  )
-                ).ok,
-              separateAttempt,
-            );
+          await prepareConnectorAppVerificationAttempt(
+            stateRoot,
+            proofScope.challengeSha256,
+            async () =>
+              (
+                await configuration!.recordSecureMcpAppPending(
+                  runtime.runtimeGeneration,
+                )
+              ).ok,
+            separateAttempt,
+          );
           claimed = true;
         },
       },
@@ -6230,8 +6534,6 @@ async function verifySecureMcpApp(
         if (desktopGoCore !== verificationCore) return { state: "changed" };
         const state =
           await verificationCore.observeComputerConnectorVerification();
-        if (statusCheckId !== null && state.checkId !== statusCheckId)
-          return null;
         const proof = connectorVerificationProof(state);
         if (!proof) return null;
         return {
@@ -6825,6 +7127,21 @@ async function configureSaveAndConnect(
         connectorTaskAdmission = true;
         activeAuthorityChangeKind = command.kind;
         try {
+          // The combined Save+Connect writes credentials before Start. Fence
+          // it against a pending original Stop before either effect starts.
+          try {
+            const custody = await desktopGoCore?.observeOriginalStop();
+            if (!custody || custody.restricted)
+              return connectorSetupRefusal(
+                command,
+                "AUTHORITY_CHANGE_IN_PROGRESS",
+              );
+          } catch {
+            return connectorSetupRefusal(
+              command,
+              "AUTHORITY_CHANGE_IN_PROGRESS",
+            );
+          }
           return await observeConnectorStart(() =>
             runAdmittedConnectorSetup(
               { operationId: command.operationId, buildId: command.buildId },
@@ -7076,6 +7393,15 @@ async function configureUnfencedProduct(
         connectorTaskAdmission = true;
         activeAuthorityChangeKind = command.kind;
         try {
+          // Credential replacement is a durable Settings/private-file
+          // operation, not allowed to bypass unfinished original Stop custody.
+          try {
+            const custody = await desktopGoCore?.observeOriginalStop();
+            if (!custody || custody.restricted)
+              return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
+          } catch {
+            return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
+          }
           return await configureAdmittedProduct(command);
         } finally {
           connectorTaskAdmission = false;
@@ -7118,6 +7444,12 @@ async function configureUnfencedProduct(
         }
         let stopStage: "begin-stop" | "confirm-stop" = "begin-stop";
         try {
+          // This direct authority-change path predates C7 and otherwise
+          // calls beginStop without a parent. Admit it only when Go confirms
+          // there is no pending original prerequisite.
+          const custody = await desktopGoCore?.observeOriginalStop();
+          if (!custody || custody.restricted)
+            return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
           const lifecycle = computerMcpLifecycle();
           await lifecycle.beginStop();
           stopStage = "confirm-stop";
@@ -7174,6 +7506,69 @@ async function configureDrainedWorkspaceChange(
     connectorStartInFlight !== null
   )
     return transitionRefusal();
+  // Ask the existing Go WAL owner BEFORE invoking any new connector drain.
+  // A lost stop ACK or pending continuity transition cannot be discharged by
+  // a second ordinary command with equal visible Settings bytes. No fallback
+  // to a missing old core/status method is permitted.
+  try {
+    const custody = await core.observeComputerContinuity();
+    if (custody.restricted || custody.pendingOperationId !== undefined)
+      return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
+  } catch {
+    return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
+  }
+  // C7 fixes the original command scope BEFORE Stop. An add-workspace or
+  // global commands/file-policy edit has no selected existing workspace; it
+  // binds the entire owner-consent projection instead of borrowing a random
+  // workspace root or claiming the to-be-added directory is already approved.
+  const requestedId =
+    "workspaceId" in command ? command.workspaceId : undefined;
+  const target =
+    requestedId === undefined
+      ? undefined
+      : original.settings.computer.workspaces.find(
+          (item) => item.workspaceId === requestedId,
+        );
+  const connectorBinding = core.currentComputerConnectorBinding();
+  if (
+    (requestedId !== undefined && !target) ||
+    !connectorBinding ||
+    !connector.isRunning()
+  )
+    return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
+  const sha = (value: unknown) =>
+    createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  const originalStopId = randomUUID();
+  const stopEffectId = randomUUID();
+  const settingsEffectId = randomUUID();
+  const cleanupEffectId = randomUUID();
+  // Immutable complete OWNER-CONSENT scope: access, exclusions, selected
+  // commands, file/Git choices and capability ceilings. Excludes binding,
+  // revision, transient verification and other native observations.
+  const originalConsent = ownerComputerConsentDigest(original.settings);
+  const request = {
+    operationId: originalStopId,
+    requestDigest: sha({
+      command,
+      revision: original.settings.revision,
+      computerGeneration: original.settings.computer.generation,
+      connectorGeneration: original.settings.connectors.secureMcp.generation,
+    }),
+    commandKind: command.kind,
+    commandDigest: sha(command),
+    purpose: "workspace-change" as const,
+    ...(target ? { workspaceId: target.workspaceId, root: target.root } : {}),
+    consentDigest: originalConsent,
+    expectedRevision: String(original.settings.revision),
+    computerGeneration: String(original.settings.computer.generation),
+    connectorGeneration: String(
+      original.settings.connectors.secureMcp.generation,
+    ),
+    settingsDigest: sha(original.settings),
+    stopEffectId,
+    settingsEffectId,
+    cleanupEffectId,
+  };
   const computerGeneration = original.settings.computer.generation;
   const connectorGeneration = original.settings.connectors.secureMcp.generation;
   let revision = original.settings.revision;
@@ -7198,40 +7593,147 @@ async function configureDrainedWorkspaceChange(
         snapshot.settings.computer.generation === computerGeneration &&
         snapshot.settings.connectors.secureMcp.generation ===
           connectorGeneration &&
+        ownerComputerConsentDigest(snapshot.settings) === originalConsent &&
         !connectorRuntimeUncertain(snapshot.settings)
       );
     };
     const drain = new WorkspaceConfigurationDrain(command, {
       current,
       stop: async () => {
-        // A prior unresolved stop is observation-only, not a new stop attempt.
+        // The Go owner must durably admit the ORIGINAL stop_intent before
+        // lifecycle.beginStop, connector.stop, or connector-close effects.
         if (await computerMcpLifecycle().hasUnconfirmedStop())
           throw new Error("CONNECTOR_STOP_UNCONFIRMED");
         if (!current()) return false;
-        await stopAndConfirmComputerMcp(connector);
+        const admitted = await core.beginOriginalStop(request);
+        if (
+          admitted.runtimeId !== connectorBinding.runtimeId ||
+          admitted.backendGeneration !== connectorBinding.backendGeneration ||
+          admitted.buildId !== connectorBinding.buildId
+        )
+          throw new Error("CONNECTOR_STOP_UNCONFIRMED");
+        await stopAndConfirmComputerMcp(
+          connector,
+          null,
+          core,
+          savedChatBridgeRuntime,
+          undefined,
+          originalStopId,
+        );
+        const lifecycle = computerMcpLifecycle().confirmedOriginalStop();
+        const closure = core.computerConnectorClosureReceipt();
+        if (
+          !lifecycle ||
+          !closure ||
+          !closure.result.closed ||
+          closure.result.binding.runtimeId !== admitted.runtimeId ||
+          closure.result.binding.backendGeneration !==
+            admitted.backendGeneration
+        )
+          throw new Error("CONNECTOR_STOP_UNCONFIRMED");
+        await core.advanceOriginalStop({
+          parentOperationId: originalStopId,
+          phase: "stop_ack",
+          closure: {
+            effectId: stopEffectId,
+            backendGeneration: admitted.backendGeneration,
+            runtimeId: admitted.runtimeId,
+            lifecycleId: lifecycle.lifecycleId,
+            stopRevision: lifecycle.stopRevision,
+            preparationRevision: lifecycle.preparationRevision,
+            closureOperationId: closure.operationId,
+            closureDigest: sha(closure.result),
+          },
+        });
         return true;
       },
       recordStopped: async () => {
-        const stopped = ProductConfigurationResultSchema.parse(
-          await owner.recordSecureMcpStopped(undefined, "stop", revision),
+        // The retained sole Settings writer confirms the Go settings_intent
+        // before its ONE conditional save/readback. A lost reply is UNKNOWN,
+        // never a new save or an equal-byte inferred ACK.
+        const originalCurrent = () => {
+          const snap = owner.snapshot();
+          return (
+            configuration === owner &&
+            secureMcpConnectorRuntime === connector &&
+            desktopGoCore === core &&
+            authorityTransitions.current() === "authority-change" &&
+            connectorTaskAdmission &&
+            !quitInProgress &&
+            !installedUpdateAdmission &&
+            !codexAgentOperationActive() &&
+            !connector.hasUnresolvedEffect() &&
+            snap.status === "ready" &&
+            snap.settings.computer.generation === computerGeneration &&
+            snap.settings.connectors.secureMcp.generation ===
+              connectorGeneration &&
+            !connectorRuntimeUncertain(snap.settings)
+          );
+        };
+        const stopped = await owner.commitOriginalStoppedSettings(
+          {
+            effectId: settingsEffectId,
+            expectedRevision: revision,
+            expectedDigest: request.settingsDigest,
+            computerGeneration,
+            connectorGeneration,
+            consentDigest: request.consentDigest,
+          },
+          async (plan) => {
+            await core.advanceOriginalStop({
+              parentOperationId: originalStopId,
+              phase: "settings_intent",
+              settingsIntent: plan,
+            });
+          },
+          originalCurrent,
         );
-        if (!stopped.ok) {
-          phaseFailure = stopped;
-          return false;
-        }
-        if (stopped.snapshot.status !== "ready") {
+        if (stopped.status !== "committed") {
           phaseFailure = configurationFailure("SETTINGS_WRITE_FAILED");
           return "unknown";
         }
-        // Only the original acknowledged publication can advance this phase.
-        revision = stopped.snapshot.settings.revision;
+        await core.advanceOriginalStop({
+          parentOperationId: originalStopId,
+          phase: "settings_ack",
+          settingsAck: stopped.receipt,
+        });
+        revision = stopped.settings.revision;
         if (!current()) return "unknown";
-        try {
-          await clearConnectorVerificationReceipt(secureMcpLaunchRoot());
-        } catch {
-          phaseFailure = configurationFailure("CONNECTOR_ATTACHMENT_INVALID");
-          return false;
-        }
+        // Connector verification cleanup is a distinct one-shot effect with
+        // its own durable intent; failure retains the original pending phase.
+        await core.advanceOriginalStop({
+          parentOperationId: originalStopId,
+          phase: "cleanup_intent",
+        });
+        const cleanupProof =
+          await clearAndConfirmOriginalConnectorVerificationReceipt(
+            secureMcpLaunchRoot(),
+            originalStopId,
+            cleanupEffectId,
+          );
+        // A separate held-directory readback proved receipt absence after
+        // the original deletion and sync. Go independently rechecks that
+        // its retained original connector closure still belongs to this parent.
+        if (
+          cleanupProof.parentOperationId !== originalStopId ||
+          cleanupProof.effectId !== cleanupEffectId ||
+          cleanupProof.readback !== "verified-absent"
+        )
+          throw new Error("CONNECTOR_ATTACHMENT_INVALID");
+        await core.advanceOriginalStop({
+          parentOperationId: originalStopId,
+          phase: "cleanup_ack",
+          cleanupAck: {
+            effectId: cleanupEffectId,
+            backendGeneration: connectorBinding.backendGeneration,
+            runtimeId: connectorBinding.runtimeId,
+            digest: cleanupProof.digest,
+          },
+        });
+        await core.advanceOriginalStop({
+          parentOperationId: originalStopId,
+          phase: "prerequisite_complete",
+        });
         return true;
       },
       apply: configureAdmittedProduct,
@@ -7537,6 +8039,8 @@ async function configureAdmittedProduct(
     )
   )
     return configurationFailure("CODEX_HOST_MODEL_UNAVAILABLE");
+  if (command.kind === "connector.test-connection")
+    return testConnectionCommand(command);
   if (command.kind === "chatgpt.run-deep-test")
     return runManualDeepTest(
       command.operationId,
@@ -13680,6 +14184,14 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       const connector = secureMcpConnectorRuntime;
       const core = desktopGoCore;
       const savedChat = savedChatBridgeRuntime;
+      const quitStartDeadlineAt =
+        connector && (connectorStartInFlight || startupConnectionChecking)
+          ? Math.min(
+              context.deadlineAt,
+              Date.now() + CONNECTOR_START_QUIT_BUDGET_MS,
+            )
+          : undefined;
+      connectorStartCancellation?.abort();
       let beforeCore: OwnedCloser | null = null;
       if (connector) {
         const inFlightStart = connectorStartInFlight;
@@ -13692,6 +14204,9 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
                 inFlightStart,
                 core,
                 savedChat,
+                undefined,
+                undefined,
+                quitStartDeadlineAt,
               );
             } finally {
               // Even an unconfirmed MCP drain must close account admission.
@@ -13724,6 +14239,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
                 )
             : null,
           () => Date.now() < context.deadlineAt,
+          quitStartDeadlineAt,
         ),
       );
       const model = modelLifecycle;
@@ -13750,6 +14266,10 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   });
   app.on("before-quit", (event) => {
     quitInProgress = true;
+    startupConnectorResumeCancelled = true;
+    // Cancel before optional Quit preparation can wait. Abort is idempotent;
+    // re-entrant Quit cannot create a new start, Stop, drain or cancellation.
+    connectorStartCancellation?.abort();
     processAuditObserver?.stop();
     connectorTransportWatch?.close();
     if (connectorTransportTimer) clearInterval(connectorTransportTimer);
