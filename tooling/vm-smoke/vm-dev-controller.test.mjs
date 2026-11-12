@@ -15,6 +15,12 @@ import {
   runVMDev,
   VMDevRefusal,
 } from "../vm-dev.mjs";
+import {
+  VM_DEV_APP,
+  VM_DEV_ARCHIVE,
+  VM_DEV_IDENTITY,
+} from "../vm-dev-artifact.mjs";
+import { productName } from "../harness-identity.ts";
 
 const digest = (data) => createHash("sha256").update(data).digest("hex");
 
@@ -26,14 +32,14 @@ async function fixture(t) {
   const output = path.join(root, "_output/vm-dev/run-dev1");
   await fs.mkdir(output, { recursive: true, mode: 0o700 });
   const receipt = path.join(output, "vm-dev-artifact.json");
-  const artifact = path.join(output, "Farol-Dev.zip");
+  const artifact = path.join(output, VM_DEV_ARCHIVE);
   const selected = {
     schema: "farol.vm-dev-artifact/1",
     kind: "local-dev-derivative",
-    appName: "Farol Dev.app",
-    bundleId: "local.farol.dev",
+    appName: VM_DEV_APP,
+    bundleId: VM_DEV_IDENTITY.bundleId,
     environment: "dev",
-    artifactPath: path.join(output, "Farol Dev.app"),
+    artifactPath: path.join(output, VM_DEV_APP),
     artifactSha256: "e".repeat(64),
     officialRelease: false,
     hostLaunch: false,
@@ -69,7 +75,7 @@ test("parse: only explicit all-or-none approved options; no arbitrary CLI or app
     "--config",
     "/private/test/vm-smoke.json",
     "--artifact",
-    "/private/output/Farol-Dev.zip",
+    "/private/output/" + VM_DEV_ARCHIVE,
     "--receipt",
     "/private/output/vm-dev-artifact.json",
     "--expected-receipt-sha256",
@@ -78,7 +84,7 @@ test("parse: only explicit all-or-none approved options; no arbitrary CLI or app
   assert.equal(good.visible, true);
   assert.equal(good.config, "/private/test/vm-smoke.json");
   for (const invalid of [
-    ["--artifact", "/tmp/Farol-Dev.zip"],
+    ["--artifact", "/tmp/" + VM_DEV_ARCHIVE],
     ["--receipt", "/tmp/receipt"],
     ["--artifact", "/tmp/a", "--receipt", "/tmp/b"],
     ["--expected-receipt-sha256", "a".repeat(64)],
@@ -120,7 +126,7 @@ test("selected existing derivative is source-bound and does not self-accept ZIP"
   );
   await assert.rejects(
     existingDevInputs(f.root, {
-      artifact: f.artifact + "/../Farol-Dev.zip",
+      artifact: f.artifact + "/../" + VM_DEV_ARCHIVE,
       receipt: f.receipt,
       expectedReceiptSHA256: f.receiptSHA256,
     }),
@@ -144,7 +150,7 @@ test("symlink archive, outer profile path and unsupported receipt cannot pass", 
   await fs.mkdir(badOutput, { mode: 0o700 });
   await assert.rejects(
     existingDevInputs(f.root, {
-      artifact: path.join(badOutput, "Farol-Dev.zip"),
+      artifact: path.join(badOutput, VM_DEV_ARCHIVE),
       receipt: path.join(badOutput, "vm-dev-artifact.json"),
       expectedReceiptSHA256: f.receiptSHA256,
     }),
@@ -289,7 +295,7 @@ test("explicit artifact route skips build and transfers raw MCP stdio unchanged"
   assert.equal(calls[0].options.stdio, "inherit");
   assert.equal(
     calls[0].options.env.FAROL_VM_TESTING_DIRECTORY,
-    "Farol Testing",
+    productName + " Testing",
   );
   assert.ok(calls[0].argv.includes("--visible"));
   assert.equal(calls[0].argv.includes("--terminal-point"), false);

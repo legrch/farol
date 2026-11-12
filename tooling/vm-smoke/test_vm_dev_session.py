@@ -18,6 +18,9 @@ import unittest
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
+SYNTHETIC_IDENTITY = {"product": "Example Dev", "appName": "Example Dev.app", "bundleId": "local.example.dev",
+                      "archiveName": "Example-Dev.zip", "executable": "Example"}
+os.environ["FAROL_VM_DEV_IDENTITY"] = json.dumps(SYNTHETIC_IDENTITY)
 spec = importlib.util.spec_from_file_location("vm_dev_session_test", ROOT / "vm-dev-session.py")
 dev = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(dev)
@@ -28,7 +31,7 @@ class Fixture(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix="farol-vm-dev-controller-")
         self.addCleanup(self.tmp.cleanup)
         self.home = Path(self.tmp.name)
-        self.settings = self.home / "Library/Application Support/Farol Testing"
+        self.settings = self.home / "Library/Application Support/Example Testing"
         self.settings.mkdir(parents=True, mode=0o700)
         self.root = self.home / "Library/Application Support/terminal-mac"
         base = self.root / "machines/farol-base-1"
@@ -50,13 +53,13 @@ class Fixture(unittest.TestCase):
         self.binary.chmod(0o700)
         self.output = self.home / "selected-output"
         self.output.mkdir(mode=0o700)
-        self.archive = self.output / "Farol-Dev.zip"
+        self.archive = self.output / "Example-Dev.zip"
         self.archive.write_bytes(b"PK\x03\x04synthetic fixture bytes")
         self.archive.chmod(0o600)
         self.receipt = self.output / "vm-dev-artifact.json"
         self.selected = dict(
             schema="farol.vm-dev-artifact/1", kind="local-dev-derivative",
-            environment="dev", appName="Farol Dev.app", bundleId="local.farol.dev",
+            environment="dev", appName="Example Dev.app", bundleId="local.example.dev",
             officialRelease=False, hostLaunch=False, profileImport=False,
             artifactSha256="e"*64)
         self.receipt.write_text(json.dumps(self.selected))

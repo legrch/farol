@@ -12,6 +12,9 @@ import {
   requireVMDevOutput,
   assembleVMDev,
   vmDevInfoPlist,
+  VM_DEV_APP,
+  VM_DEV_ARCHIVE,
+  VM_DEV_IDENTITY,
 } from "../vm-dev-artifact.mjs";
 
 async function fixture(t) {
@@ -52,7 +55,7 @@ test("physical containment excludes caller aliases and unrelated paths", async (
 test("guest presentation is Dev and rejects XML/version injection", () => {
   const plist = vmDevInfoPlist("0.5.23", "14.0");
   assert.match(plist, /<string>local\.farol\.dev<\/string>/);
-  assert.match(plist, /<string>Farol Dev<\/string>/);
+  assert.ok(plist.includes(`<string>${VM_DEV_IDENTITY.product}</string>`));
   assert.doesNotMatch(plist, /io\.github\.legrch\.farol/);
   assert.throws(
     () => vmDevInfoPlist("0.5.23</string>", "14.0"),
@@ -96,15 +99,15 @@ test("archive requires an independently selected receipt before output writes", 
 
 test("app tamper after receipt refuses before archiver or ZIP publication", async (t) => {
   const { root, output } = await fixture(t);
-  const app = path.join(output, "Farol Dev.app");
+  const app = path.join(output, VM_DEV_APP);
   await fs.mkdir(app);
   const item = path.join(app, "synthetic");
   await fs.writeFile(item, "accepted");
   const receipt = {
     schema: "farol.vm-dev-artifact/1",
     kind: "local-dev-derivative",
-    appName: "Farol Dev.app",
-    bundleId: "local.farol.dev",
+    appName: VM_DEV_APP,
+    bundleId: VM_DEV_IDENTITY.bundleId,
     environment: "dev",
     artifactPath: app,
     artifactSha256: await treeDigest(app),
@@ -121,7 +124,7 @@ test("app tamper after receipt refuses before archiver or ZIP publication", asyn
     archiveVMDev(root, output, accepted),
     /VM_DEV_ARTIFACT_CHANGED/,
   );
-  await assert.rejects(fs.lstat(path.join(output, "Farol-Dev.zip")), {
+  await assert.rejects(fs.lstat(path.join(output, VM_DEV_ARCHIVE)), {
     code: "ENOENT",
   });
 });

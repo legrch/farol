@@ -64,7 +64,7 @@ class VmMachineSpecTests(unittest.TestCase):
     def test_infrastructure_reads_the_private_config_and_bounds_the_root(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
-            settings = home / 'Library/Application Support/Farol Testing'
+            settings = home / 'Library/Application Support/Example Testing'
             settings.mkdir(parents=True)
             config = settings / 'vm-smoke.json'
             config.write_text(json.dumps({'terminal_mac': str(home / 'tools/terminal-mac'),
@@ -82,7 +82,7 @@ class VmMachineSpecTests(unittest.TestCase):
     def test_infrastructure_refuses_roots_outside_the_terminal_mac_data_root(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
-            settings = home / 'Library/Application Support/Farol Testing'
+            settings = home / 'Library/Application Support/Example Testing'
             settings.mkdir(parents=True)
             config = settings / 'vm-smoke.json'
             config.write_text(json.dumps({'terminal_mac': str(home / 't/terminal-mac'),
@@ -100,7 +100,7 @@ class VmMachineSpecTests(unittest.TestCase):
     def test_infrastructure_refuses_alias_config_roots(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
-            settings = home / 'Library/Application Support/Farol Testing'
+            settings = home / 'Library/Application Support/Example Testing'
             settings.mkdir(parents=True)
             alias = home / 'elsewhere-terminal-mac'
             alias.mkdir()
@@ -139,7 +139,7 @@ class VmInstanceProvisioningTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         home = Path(self.directory.name)
-        self.settings = home / 'Library/Application Support/Farol Testing'
+        self.settings = home / 'Library/Application Support/Example Testing'
         self.settings.mkdir(parents=True)
         self.root = home / 'Library/Application Support/terminal-mac'
         (self.root / 'machines/farol-base-1').mkdir(parents=True)
@@ -283,7 +283,7 @@ class VmInstanceProvisioningTests(unittest.TestCase):
         fake.chmod(0o755)
         command, _, _ = self.planned()
         command[0] = str(fake)
-        env = dict(os.environ, FAROL_VM_TESTING_DIRECTORY='Farol Testing', FAROL_VM_CONFIG=str(self.settings / 'vm-smoke.json'))
+        env = dict(os.environ, FAROL_VM_TESTING_DIRECTORY='Example Testing', FAROL_VM_CONFIG=str(self.settings / 'vm-smoke.json'))
         (self.settings / 'vm-smoke.json').write_text(json.dumps({
             'terminal_mac': str(fake), 'vm_home': str(self.root), 'vm': 'farol-test-1'}))
         import subprocess
