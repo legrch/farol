@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Plan or provision one declared guest; never import a profile or credential."""
 import argparse
+from contextlib import contextmanager
+import fcntl
 import hashlib
 import json
 import os
 import time
+import uuid
 from pathlib import Path
 import plistlib
 import re
@@ -275,53 +278,215 @@ def operation_directory(settings, name):
     return settings / 'vm-machine-operations' / name
 
 
-def require_no_operations(settings, name):
+@contextmanager
+def operation_lock(settings, name):
     directory = operation_directory(settings, name)
-    # lstat, rather than exists(), retains dangling entries and lookup errors.
+    durable_directory(directory, settings)
+    fd = os.open(directory / 'dispatch.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or
+                info.st_uid != os.geteuid() or info.st_mode & 0o077):
+            raise ValueError('PROVISION_EVIDENCE_UNSAFE')
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError('PROVISION_OPERATION_BUSY') from None
+        yield
+    finally:
+        os.close(fd)
+
+
+def machine_binding(root, name):
+    machine = root / 'machines' / name
+    for path in (root, root / 'machines', machine):
+        info = path.lstat()
+        if not stat.S_ISDIR(info.st_mode) or path.resolve(strict=True) != path:
+            raise ValueError('PROVISION_OPERATION_UNRESOLVED')
+    return {'vmHome': str(root), 'storeIdentity': [root.stat().st_dev, root.stat().st_ino],
+            'machineIdentity': [machine.stat().st_dev, machine.stat().st_ino],
+            'machineSha256': hashlib.sha256(read_regular(machine / 'machine.json', 65536)).hexdigest()}
+
+
+def write_operation(path, document):
+    data = (json.dumps(document, sort_keys=True) + '\n').encode()
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    with os.fdopen(fd, 'wb') as out:
+        out.write(data)
+        out.flush()
+        os.fsync(out.fileno())
+    sync_directory(path.parent)
+    return hashlib.sha256(data).hexdigest()
+
+
+def operation_records(settings, name, root):
+    """Validate complete history; legacy, malformed and partial records block."""
+    directory = operation_directory(settings, name)
     for path in (directory.parent, directory):
         try:
             info = path.lstat()
         except FileNotFoundError:
-            return
-        if not stat.S_ISDIR(info.st_mode) or path.resolve(strict=True) != path:
+            return []
+        if (not stat.S_ISDIR(info.st_mode) or path.resolve(strict=True) != path or
+                info.st_uid != os.geteuid() or info.st_mode & 0o077):
             raise ValueError('PROVISION_OPERATION_UNRESOLVED')
-    if any(directory.iterdir()):
+    entries = {path.name for path in directory.iterdir()}
+    if 'dispatch.lock' in entries:
+        info = (directory / 'dispatch.lock').lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or
+                info.st_uid != os.geteuid() or info.st_mode & 0o077):
+            raise ValueError('PROVISION_OPERATION_UNRESOLVED')
+        entries.remove('dispatch.lock')
+    intents = sorted(leaf for leaf in entries if re.fullmatch(r'(create|clone|start)-[a-f0-9]{32}-intent.json', leaf))
+    records = []
+    for leaf in intents:
+        prefix = leaf[:-len('-intent.json')]
+        raw = read_regular(directory / leaf, 16384)
+        intent = json.loads(raw)
+        if (not isinstance(intent, dict) or intent.get('schema') != 'farol.vm-machine-operation/2' or
+                intent.get('machine') != name or intent.get('vmHome') != str(root) or
+                prefix != intent.get('operation', '') + '-' + intent.get('operationId', '') or
+                intent.get('status') != 'unreconciled' or
+                intent.get('publication') != 'intent-before-effect'):
+            raise ValueError('PROVISION_OPERATION_UNRESOLVED')
+        expected = {'operationId': intent['operationId'], 'machine': name,
+                    'intentSha256': hashlib.sha256(raw).hexdigest()}
+        terminal_path = directory / (prefix + '-terminal.json')
+        terminal = None
+        if terminal_path.name in entries:
+            raw = read_regular(terminal_path, 16384)
+            terminal = json.loads(raw)
+            if (not isinstance(terminal, dict) or terminal.get('schema') != 'farol.vm-machine-terminal/1' or
+                    terminal.get('status') != 'exited-zero' or type(terminal.get('exitCode')) is not int or
+                    terminal['exitCode'] != 0 or any(terminal.get(k) != v for k, v in expected.items())):
+                raise ValueError('PROVISION_OPERATION_UNRESOLVED')
+            expected['terminalSha256'] = hashlib.sha256(raw).hexdigest()
+            entries.remove(terminal_path.name)
+        resolution_path = directory / (prefix + '-resolution.json')
+        resolved = resolution_path.name in entries
+        if resolved:
+            resolution = json.loads(read_regular(resolution_path, 16384))
+            if (not isinstance(resolution, dict) or terminal is None or resolution.get('schema') != 'farol.vm-machine-resolution/1' or
+                    resolution.get('status') != 'resolved' or
+                    resolution.get('proof') != 'terminal-mac-status/1' or
+                    resolution.get('state') not in ('running', 'stopped') or
+                    any(resolution.get(k) != v for k, v in expected.items()) or
+                    resolution.get('binding') != machine_binding(root, name) or
+                    terminal.get('binding') != resolution.get('binding')):
+                raise ValueError('PROVISION_OPERATION_UNRESOLVED')
+            entries.remove(resolution_path.name)
+        entries.remove(leaf)
+        records.append((intent, terminal, resolution_path, expected, resolved))
+    if entries:
+        raise ValueError('PROVISION_OPERATION_UNRESOLVED')
+    return records
+
+
+def require_no_operations(settings, name, root=None):
+    if any(not record[-1] for record in operation_records(settings, name, root)):
         raise ValueError('PROVISION_OPERATION_UNRESOLVED')
 
 
+def host_state(binary, root, name, env):
+    before = machine_binding(root, name)
+    result = subprocess.run([str(binary), 'status', name], env=env,
+                            stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=8)
+    if result.returncode != 0 or len(result.stdout) > 8192:
+        raise ValueError('PROVISION_STATE_UNCONFIRMED')
+    value = json.loads(result.stdout)
+    if (not isinstance(value, dict) or value.get('name') != name or
+            value.get('state') not in ('running', 'stopped') or before != machine_binding(root, name)):
+        raise ValueError('PROVISION_STATE_UNCONFIRMED')
+    return value['state'], before
+
+
+def resolve_operation(record, binary, root, name, env):
+    intent, terminal, path, expected, resolved = record
+    if resolved:
+        return
+    # A fresh status alone can never explain a timed-out/refused dispatch.
+    if terminal is None:
+        raise ValueError('PROVISION_OPERATION_UNRESOLVED')
+    state, binding = host_state(binary, root, name, env)
+    if intent['operation'] != 'start' and state != 'stopped':
+        raise ValueError('PROVISION_STATE_UNCONFIRMED')
+    if (terminal.get('binding') != binding or
+            (intent['storeIdentity'] is not None and intent['storeIdentity'] != binding['storeIdentity']) or
+            (intent['operation'] == 'start' and intent['machineBinding'] != binding)):
+        raise ValueError('PROVISION_OPERATION_UNRESOLVED')
+    write_operation(path, dict(expected, schema='farol.vm-machine-resolution/1',
+                              status='resolved', proof='terminal-mac-status/1', state=state, binding=binding))
+
+
 def provision_effect(command, settings, name, kind, env, timeout):
-    directory = operation_directory(settings, name)
-    durable_directory(directory, settings)
-    # Create-only pre-effect evidence is never removed by this controller,
-    # even after a controller exit of zero: detached VM state needs separate
-    # read-only reconciliation, and a failed/unknown dispatch is never replayed.
-    intent = directory / (kind + '-intent.json')
-    fd = os.open(intent, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
-    with os.fdopen(fd, 'w') as out:
-        json.dump({'schema': 'farol.vm-machine-operation/1', 'machine': name,
-                   'operation': kind, 'status': 'unreconciled',
-                   'publication': 'intent-before-effect'}, out)
-        out.write('\n')
-        out.flush()
-        os.fsync(out.fileno())
-    sync_directory(directory)
-    subprocess.run(command, env=env, check=True, timeout=timeout)
+    # Unique history names must not weaken the old create-only exclusion.
+    with operation_lock(settings, name):
+        _provision_effect(command, settings, name, kind, env, timeout)
 
 
-def reconcile_operations(settings, name):
-    """Read-only inventory; it never clears a fence or admits another effect."""
+def _provision_effect(command, settings, name, kind, env, timeout):
+    root = Path(env['TERMINAL_MAC_HOME'])
     directory = operation_directory(settings, name)
+    require_no_operations(settings, name, root)
+    if kind not in ('create', 'clone', 'start'):
+        raise ValueError('PROVISION_OPERATION_INVALID')
+    operation = uuid.uuid4().hex
+    prefix = kind + '-' + operation
+    if not root.is_absolute() or root.resolve(strict=False) != root:
+        raise ValueError('PROVISION_EVIDENCE_UNSAFE')
+    store_identity = [root.stat().st_dev, root.stat().st_ino] if root.exists() else None
+    target = None
+    if kind == 'start':
+        state, target = host_state(command[0], root, name, env)
+        if state != 'stopped':
+            raise ValueError('PROVISION_MACHINE_NOT_STOPPED')
+    intent = {'schema': 'farol.vm-machine-operation/2', 'machine': name,
+              'operation': kind, 'operationId': operation, 'vmHome': str(root),
+              'storeIdentity': store_identity, 'machineBinding': target,
+              'status': 'unreconciled', 'publication': 'intent-before-effect'}
+    digest = write_operation(directory / (prefix + '-intent.json'), intent)
+    result = subprocess.run(command, env=env, check=True, timeout=timeout)
+    if result.returncode != 0:
+        raise ValueError('PROVISION_OUTCOME_UNCONFIRMED')
+    # Retain dispatch completion BEFORE any independent read-only probe. A
+    # timeout/failure has no terminal receipt and can never be cleared by status.
+    write_operation(directory / (prefix + '-terminal.json'),
+                    dict(schema='farol.vm-machine-terminal/1', operationId=operation,
+                         machine=name, intentSha256=digest, status='exited-zero', exitCode=0,
+                         binding=machine_binding(root, name)))
+    records = operation_records(settings, name, root)
+    resolve_operation(next(record for record in records if record[0]['operationId'] == operation),
+                      command[0], root, name, env)
+
+
+def reconcile_operations(settings, name, root=None, binary=None, env=None, resolve=False):
+    """Inventory by default; explicit resolution needs original terminal proof."""
     try:
-        require_no_operations(settings, name)
-    except (ValueError, OSError):
+        if resolve:
+            with operation_lock(settings, name):
+                return _reconcile_operations(settings, name, root, binary, env, resolve=True)
+        return _reconcile_operations(settings, name, root, binary, env)
+    except (ValueError, OSError, TypeError, KeyError, subprocess.SubprocessError):
         return {'status': 'UNRESOLVED', 'machine': name, 'automaticReplay': False}
-    return {'status': 'ABSENT', 'machine': name, 'automaticReplay': False}
+
+
+def _reconcile_operations(settings, name, root, binary, env, resolve=False):
+    records = operation_records(settings, name, root)
+    if resolve:
+        # Refuse the entire request before probing if any terminal is absent.
+        if any(record[1] is None for record in records):
+            raise ValueError('PROVISION_OPERATION_UNRESOLVED')
+        for record in records:
+            resolve_operation(record, binary, root, name, env)
+    require_no_operations(settings, name, root)
+    return {'status': 'RESOLVED' if records else 'ABSENT', 'machine': name, 'automaticReplay': False}
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--plan', action='store_true')
-    p.add_argument('--reconcile-operations', metavar='NAME', help='Read-only provisioning fence inventory; never clears evidence')
+    p.add_argument('--reconcile-operations', metavar='NAME', help='Read-only provisioning fence inventory')
+    p.add_argument('--resolve-operations', metavar='NAME', help='Resolve completed dispatches using retained terminal proof and fresh read-only status')
     p.add_argument('--spec', default=str(Path(__file__).parents[1] / 'config/vm/farol.json'))
     p.add_argument('--ipsw')
     p.add_argument('--provision-instance', metavar='NAME',
@@ -332,10 +497,13 @@ def main():
     if a.offline and not a.provision_instance:
         p.error('--offline requires --provision-instance')
     binary, root, settings = infrastructure()
-    if a.reconcile_operations:
-        if a.provision_instance or a.plan or a.ipsw:
-            p.error('--reconcile-operations cannot provision or plan')
-        print(json.dumps(reconcile_operations(settings, a.reconcile_operations)))
+    if a.reconcile_operations or a.resolve_operations:
+        if a.provision_instance or a.plan or a.ipsw or (a.reconcile_operations and a.resolve_operations):
+            p.error('operation reconciliation cannot provision, plan or combine modes')
+        env = {k: os.environ[k] for k in ('HOME', 'USER', 'TMPDIR') if k in os.environ}
+        env.update(PATH='/usr/bin:/bin:/usr/sbin:/sbin', TERMINAL_MAC_HOME=str(root))
+        print(json.dumps(reconcile_operations(settings, a.reconcile_operations or a.resolve_operations,
+                                             root, binary, env, resolve=bool(a.resolve_operations))))
         return
     a.base = a.base or prepared_base(settings)
     if a.provision_instance:
@@ -345,7 +513,7 @@ def main():
             print(json.dumps({'status': 'PLAN', 'instance': a.provision_instance, 'base': a.base,
                               'clone': command, 'receipt': str(instance_receipt)}))
             return
-        require_no_operations(settings, a.provision_instance)
+        require_no_operations(settings, a.provision_instance, root)
         if not binary.is_file():
             raise ValueError('INSTALL_TERMINAL_MAC_PACKAGE_FIRST')
         # clone is a pure store operation that starts no VM, so a packaged app
@@ -366,7 +534,7 @@ def main():
         print(json.dumps({'status': 'PLAN', 'vmHome': str(root), 'create': command,
                           'start': [str(binary), 'start', spec['name']], 'bootstrap': spec['guestBootstrap']}))
         return
-    require_no_operations(settings, spec['name'])
+    require_no_operations(settings, spec['name'], root)
     if not binary.is_file() or plistlib.loads((binary.parent.parent / 'Info.plist').read_bytes()).get('CFBundleIdentifier') != 'dev.terminal-mac.host':
         raise ValueError('INSTALL_TERMINAL_MAC_PACKAGE_FIRST')
     env = {k: os.environ[k] for k in ('HOME', 'USER', 'TMPDIR') if k in os.environ}

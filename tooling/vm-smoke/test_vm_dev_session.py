@@ -208,6 +208,36 @@ class AdmissionTests(Fixture):
         self.assertFalse((evidence / "handoff.json").exists(),
                          "mocked exec does not invent a native MCP terminal receipt")
 
+    def test_repeated_sessions_allocate_new_clones_and_keep_original_evidence(self):
+        sessions = []
+        def cloned(command, evidence, binary, env, run):
+            clone = command[3]
+            machine = self.root / "machines" / clone
+            machine.mkdir(mode=0o700)
+            (machine / "machine.json").write_text(json.dumps({"name": clone, "network": True}))
+            (machine / "clone.json").write_text(json.dumps({"to": clone}))
+            sessions.append(clone)
+            return 1234
+        def producer(archive, receipt, digest, stage):
+            return {"runId": stage.name, "manifestSHA256": "a"*64,
+                    "acceptanceSHA256": "b"*64, "artifactSHA256": "e"*64}
+        retained = {}
+        for digit in ("1", "2"):
+            clone, run = "farol-qa-" + digit*16, "run-" + digit*32
+            with mock.patch.object(dev, "_guest_grants", return_value=None):
+                dev.execute(self.options,
+                    infrastructure=lambda: (self.binary, self.root, self.settings),
+                    identity_factory=lambda: (clone, run), clone_effect=cloned,
+                    start_effect=lambda *a: None, producer=producer,
+                    binary_admission=lambda _: True, capacity_probe=lambda *a: 0,
+                    exec_effect=lambda *a: None)
+            for path, original in retained.items():
+                self.assertEqual(path.read_bytes(), original)
+            evidence = self.settings / "vm-dev-sessions" / clone
+            retained.update({path: path.read_bytes() for path in evidence.glob("*.json")})
+            self.assertTrue((evidence / "stage-receipt.json").is_file())
+        self.assertEqual(sessions, ["farol-qa-" + "1"*16, "farol-qa-" + "2"*16])
+
     def test_failed_stage_keeps_original_intent_and_partial_clone(self):
         clone = "farol-qa-" + "f"*16
         run = "run-" + "c"*32

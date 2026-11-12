@@ -95,13 +95,40 @@ read-only requalification of the selected clean base. Provenance retains the dig
 of the exact receipt bytes admitted by the planner, even if its pathname later changes.
 
 `vm:setup` retains create-only provisioning intents under
-`vm-machine-operations/<machine>/` in the testing settings directory. Files and
-all new parent entries are synced before `create`, `clone` or `start`. Any retained
-intent blocks reentry, including after a controller exit of zero: the detached
-runtime still needs explicit read-only reconciliation. Use
-`node tooling/vm-machine.mjs --reconcile-operations <machine>` to inventory the
-fence without contacting the VM. It clears nothing and never authorizes replay;
-keep unknown outcomes until their original operation is explicitly reconciled.
+`vm-machine-operations/<machine>/` in the testing settings directory. Every
+dispatch gets a unique operation ID; the complete owned directory chain is
+revalidated and synced on every entry, including existing ancestors. Intent
+files and parent entries are synced before `create`, `clone` or `start`. A
+per-machine cooperative lock serializes dispatch and explicit reconciliation.
+
+Successful dispatches retain their original intent plus a durable zero-exit
+terminal receipt. A separate read-only `terminal-mac status <machine>` must
+confirm the selected name and state (`stopped` for create/clone, `running` or
+`stopped` for a completed start). The durable resolution binds both receipt
+digests, the operation ID, physical store and machine directory identities,
+and machine configuration bytes. Admission validates this historical chain;
+only unresolved or changed records block. A later setup checks fresh `stopped`
+status before admitting a new start, so confirmed normal shutdown permits
+another session without deleting history. `vm:dev` independently allocates a
+new clone and evidence directory each run.
+
+For an interrupted confirmation after a recorded zero exit:
+
+1. Run `node tooling/vm-machine.mjs --reconcile-operations <machine>` to inventory
+   retained evidence without contacting the VM. `RESOLVED`, `UNRESOLVED` and
+   `ABSENT` describe provisioning history, not current VM readiness.
+2. Run `node tooling/vm-machine.mjs --resolve-operations <machine>` explicitly.
+   It requires the original zero-exit terminal receipt and a fresh read-only
+   status bound to the original operation and machine. It writes a create-only,
+   synced resolution; it never repeats create, clone or start.
+3. Inventory again. Keep every original intent, terminal receipt and resolution.
+   Continue setup only after `RESOLVED` and independently confirmed shutdown.
+
+Timeouts, nonzero exits and missing terminal receipts stay `UNRESOLVED`; current
+runtime state alone cannot establish their original outcome. Legacy intents
+also stay blocking. This controller cannot reconstruct missing terminal proof:
+preserve that evidence for separate explicit reconciliation, and never delete
+fences or invent a receipt to make admission pass.
 
 Provisioning refuses to run until the base receipt records the owner setup
 (`OWNER_BASE_NOT_READY`) and never starts the instance. A clone copies the base disk,

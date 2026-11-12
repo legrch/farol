@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
@@ -332,11 +333,14 @@ class VmInstanceProvisioningTests(unittest.TestCase):
         fake.write_text('synthetic placeholder')
         for name, network in [('offline-good', False), ('offline-bad', True)]:
             def clone(command, **kwargs):
+                if command[1] == 'status':
+                    return subprocess.CompletedProcess(command, 0, json.dumps({'name': name, 'state': 'stopped'}).encode())
                 self.assertEqual(command, [str(fake), 'clone', 'farol-base-1', name, '--offline'])
                 machine = self.root / 'machines' / name
                 machine.mkdir()
                 (machine / 'machine.json').write_text(json.dumps({'name': name, 'network': network}))
                 (machine / 'clone.json').write_text(json.dumps({'to': name}))
+                return subprocess.CompletedProcess(command, 0)
 
             with self.subTest(name=name), \
                  mock.patch('sys.argv', ['vm-machine.py', '--provision-instance', name, '--offline']), \
@@ -414,70 +418,287 @@ class VmInstanceProvisioningTests(unittest.TestCase):
 
 
 class ProvisionIntentTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = Path(self.tmp.name).resolve()
+        self.settings = self.home / 'settings'
+        self.settings.mkdir(mode=0o700)
+        self.root = self.home / 'terminal-mac'
+        self.machine = self.root / 'machines/synthetic'
+        self.machine.mkdir(parents=True)
+        (self.machine / 'machine.json').write_text('{"name":"synthetic"}')
+        self.env = {'TERMINAL_MAC_HOME': str(self.root)}
+        self.state = 'stopped'
+        self.effects = []
+
+    def run_synthetic(self, command, **kwargs):
+        if command[1] == 'status':
+            return subprocess.CompletedProcess(command, 0,
+                json.dumps({'name': command[2], 'state': self.state}).encode())
+        self.effects.append(command[1])
+        if command[1] == 'start':
+            self.state = 'running'
+        return subprocess.CompletedProcess(command, 0)
+
+    def dispatch(self, kind='start'):
+        vm_machine.provision_effect(['/synthetic/tool', kind, 'synthetic'],
+            self.settings, 'synthetic', kind, self.env, 1)
+
+    def records(self, suffix):
+        return sorted(vm_machine.operation_directory(self.settings, 'synthetic').glob('*-' + suffix + '.json'))
+
     def test_each_effect_syncs_file_and_directory_before_dispatch(self):
         for kind in ('create', 'clone', 'start'):
-            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
-                settings = Path(tmp).resolve() / 'settings'
-                settings.mkdir(mode=0o700)
-                synced = []
-                actual = os.fsync
-                def sync(fd):
-                    info = os.fstat(fd)
-                    synced.append(('directory' if __import__('stat').S_ISDIR(info.st_mode) else 'file', info.st_ino))
-                    actual(fd)
-                def effect(*args, **kwargs):
-                    directory = vm_machine.operation_directory(settings, 'synthetic')
-                    intent = directory / (kind + '-intent.json')
+            synced = []
+            actual = os.fsync
+            def sync(fd):
+                info = os.fstat(fd)
+                synced.append(('directory' if __import__('stat').S_ISDIR(info.st_mode) else 'file', info.st_ino))
+                actual(fd)
+            def effect(command, **kwargs):
+                if command[1] != 'status':
+                    directory = vm_machine.operation_directory(self.settings, 'synthetic')
+                    intent = next(directory.glob(kind + '-*-intent.json'))
                     self.assertEqual(json.loads(intent.read_text())['status'], 'unreconciled')
                     self.assertIn(('file', intent.stat().st_ino), synced)
                     self.assertEqual(synced[-1], ('directory', directory.stat().st_ino))
-                with mock.patch.object(vm_machine.os, 'fsync', side_effect=sync), mock.patch.object(vm_machine.subprocess, 'run', side_effect=effect) as invoked:
-                    vm_machine.provision_effect(['/synthetic/tool', kind, 'synthetic'], settings, 'synthetic', kind, {}, 1)
-                    invoked.assert_called_once()
-                with self.assertRaisesRegex(ValueError, 'PROVISION_OPERATION_UNRESOLVED'):
-                    vm_machine.require_no_operations(settings, 'synthetic')
-                self.assertEqual(vm_machine.reconcile_operations(settings, 'synthetic')['status'], 'UNRESOLVED')
-                self.assertTrue(intent_exists(settings, kind))
+                return self.run_synthetic(command, **kwargs)
+            with self.subTest(kind=kind), mock.patch.object(vm_machine.os, 'fsync', side_effect=sync), mock.patch.object(vm_machine.subprocess, 'run', side_effect=effect):
+                self.dispatch(kind)
+                for suffix in ('terminal', 'resolution'):
+                    receipt = next(path for path in self.records(suffix) if path.name.startswith(kind + '-'))
+                    index = synced.index(('file', receipt.stat().st_ino))
+                    self.assertIn(('directory', receipt.parent.stat().st_ino), synced[index + 1:])
+                vm_machine.require_no_operations(self.settings, 'synthetic', self.root)
+                self.assertEqual(vm_machine.reconcile_operations(self.settings, 'synthetic', self.root)['status'], 'RESOLVED')
+        self.assertEqual(len(self.records('intent')), 3)
+        self.assertEqual(len(self.records('terminal')), 3)
+        self.assertEqual(len(self.records('resolution')), 3)
 
     def test_reentry_resyncs_existing_ancestor_before_dispatch(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            settings = Path(tmp).resolve() / 'settings'
-            settings.mkdir(mode=0o700)
-            actual = vm_machine.sync_directory
-            def fail_settings(path):
-                if path == settings:
-                    raise OSError('synthetic settings sync failure')
-                actual(path)
-            with mock.patch.object(vm_machine, 'sync_directory', side_effect=fail_settings), mock.patch.object(vm_machine.subprocess, 'run') as invoked:
-                with self.assertRaises(OSError):
-                    vm_machine.provision_effect(['/synthetic/tool'], settings, 'synthetic', 'start', {}, 1)
-                invoked.assert_not_called()
-            directory = vm_machine.operation_directory(settings, 'synthetic')
-            self.assertTrue(directory.parent.is_dir())
-            self.assertFalse(directory.exists())
-            vm_machine.require_no_operations(settings, 'synthetic')
-            synced = []
-            def sync(path):
-                actual(path)
-                synced.append(path)
-            def effect(*args, **kwargs):
-                self.assertIn(settings, synced)
-                self.assertLess(synced.index(settings), synced.index(directory.parent))
-            with mock.patch.object(vm_machine, 'sync_directory', side_effect=sync), mock.patch.object(vm_machine.subprocess, 'run', side_effect=effect) as invoked:
-                vm_machine.provision_effect(['/synthetic/tool'], settings, 'synthetic', 'start', {}, 1)
-                invoked.assert_called_once()
+        actual = vm_machine.sync_directory
+        def fail_settings(path):
+            if path == self.settings:
+                raise OSError('synthetic settings sync failure')
+            actual(path)
+        with mock.patch.object(vm_machine, 'sync_directory', side_effect=fail_settings), mock.patch.object(vm_machine.subprocess, 'run') as invoked:
+            with self.assertRaises(OSError):
+                self.dispatch()
+            invoked.assert_not_called()
+        directory = vm_machine.operation_directory(self.settings, 'synthetic')
+        self.assertTrue(directory.parent.is_dir())
+        self.assertFalse(directory.exists())
+        vm_machine.require_no_operations(self.settings, 'synthetic', self.root)
+        synced = []
+        def sync(path):
+            actual(path)
+            synced.append(path)
+        def effect(command, **kwargs):
+            self.assertIn(self.settings, synced)
+            self.assertLess(synced.index(self.settings), synced.index(directory.parent))
+            return self.run_synthetic(command, **kwargs)
+        with mock.patch.object(vm_machine, 'sync_directory', side_effect=sync), mock.patch.object(vm_machine.subprocess, 'run', side_effect=effect):
+            self.dispatch()
+        self.assertEqual(self.effects, ['start'])
 
     def test_sync_failure_never_reaches_dispatch(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            settings = Path(tmp).resolve()
-            with mock.patch.object(vm_machine.os, 'fsync', side_effect=OSError('synthetic sync failure')), mock.patch.object(vm_machine.subprocess, 'run') as invoked:
-                with self.assertRaises(OSError):
-                    vm_machine.provision_effect(['/synthetic/tool'], settings, 'synthetic', 'start', {}, 1)
-                invoked.assert_not_called()
+        with mock.patch.object(vm_machine.os, 'fsync', side_effect=OSError('synthetic sync failure')), mock.patch.object(vm_machine.subprocess, 'run') as invoked:
+            with self.assertRaises(OSError):
+                self.dispatch()
+            invoked.assert_not_called()
+
+    def test_successful_setup_shutdown_and_later_start_retain_all_history(self):
+        import plistlib
+        binary = self.home / 'Tool.app/Contents/MacOS/terminal-mac'
+        binary.parent.mkdir(parents=True)
+        binary.write_text('never executed')
+        (binary.parent.parent / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'dev.terminal-mac.host'}))
+        spec = self.home / 'spec.json'
+        spec.write_text(json.dumps(dict(BASE_SPEC, name='synthetic')))
+        ipsw = self.home / 'restore.ipsw'
+        ipsw.write_bytes(b'synthetic')
+        (self.machine / 'machine.json').unlink()
+        self.machine.rmdir()
+        def effect(command, **kwargs):
+            if command[1] == 'create':
+                self.machine.mkdir()
+                (self.machine / 'machine.json').write_text(json.dumps(dict(BASE_SPEC, name='synthetic', network=True)))
+            return self.run_synthetic(command, **kwargs)
+        with mock.patch('sys.argv', ['vm-machine.py', '--spec', str(spec), '--ipsw', str(ipsw)]), mock.patch.object(vm_machine, 'infrastructure', return_value=(binary, self.root, self.settings)), mock.patch.object(vm_machine.subprocess, 'run', side_effect=effect), contextlib.redirect_stdout(io.StringIO()):
+            vm_machine.main()
+            originals = {p.name: p.read_bytes() for p in self.records('intent')}
+            self.assertEqual(self.effects, ['create', 'start'])
+            self.state = 'stopped'  # Independently confirmed normal shutdown.
+            vm_machine.main()
+            self.assertEqual(self.effects, ['create', 'start', 'start'])
+            for p in self.records('intent'):
+                if p.name in originals:
+                    self.assertEqual(p.read_bytes(), originals[p.name])
+            self.assertEqual(len(self.records('intent')), 3)
+            self.assertEqual(len(self.records('resolution')), 3)
+            # Repeated setup while still running performs no second start.
+            with self.assertRaisesRegex(ValueError, 'PROVISION_MACHINE_NOT_STOPPED'):
+                vm_machine.main()
+            self.assertEqual(self.effects, ['create', 'start', 'start'])
+
+    def test_explicit_resolution_requires_terminal_and_fresh_matching_state(self):
+        def effect(command, **kwargs):
+            if command[1] == 'status' and self.effects:
+                raise subprocess.TimeoutExpired(command, 1)
+            return self.run_synthetic(command, **kwargs)
+        with mock.patch.object(vm_machine.subprocess, 'run', side_effect=effect):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                self.dispatch()
+        intent = self.records('intent')[0].read_bytes()
+        self.assertEqual(len(self.records('terminal')), 1)
+        self.assertEqual(vm_machine.reconcile_operations(self.settings, 'synthetic', self.root)['status'], 'UNRESOLVED')
+        with mock.patch.object(vm_machine.subprocess, 'run', side_effect=self.run_synthetic):
+            result = vm_machine.reconcile_operations(self.settings, 'synthetic', self.root,
+                '/synthetic/tool', self.env, resolve=True)
+        self.assertEqual(result['status'], 'RESOLVED')
+        self.assertEqual(self.records('intent')[0].read_bytes(), intent)
+        self.assertEqual(self.effects, ['start'])
+
+    def assert_unknown_dispatch_stays_unresolved(self, error):
+        def effect(command, **kwargs):
+            if command[1] == 'status':
+                return self.run_synthetic(command, **kwargs)
+            raise error
+        with mock.patch.object(vm_machine.subprocess, 'run', side_effect=effect):
+            with self.assertRaises(subprocess.SubprocessError):
+                self.dispatch()
+        self.assertFalse(self.records('terminal'))
+        with mock.patch.object(vm_machine.subprocess, 'run') as invoked:
+            result = vm_machine.reconcile_operations(self.settings, 'synthetic', self.root,
+                '/synthetic/tool', self.env, resolve=True)
+            self.assertEqual(result['status'], 'UNRESOLVED')
+            with self.assertRaisesRegex(ValueError, 'PROVISION_OPERATION_UNRESOLVED'):
+                self.dispatch()
+            invoked.assert_not_called()
+
+    def test_unknown_dispatch_cannot_be_resolved_from_current_state(self):
+        self.assert_unknown_dispatch_stays_unresolved(subprocess.TimeoutExpired(['synthetic'], 1))
+
+    def test_failed_dispatch_cannot_be_resolved_from_current_state(self):
+        self.assert_unknown_dispatch_stays_unresolved(subprocess.CalledProcessError(1, ['synthetic']))
+
+    def test_resolution_binds_original_intent_terminal_and_machine(self):
+        with mock.patch.object(vm_machine.subprocess, 'run', side_effect=self.run_synthetic):
+            self.dispatch()
+        for path in (self.records('intent')[0], self.records('terminal')[0], self.records('resolution')[0], self.machine / 'machine.json'):
+            original = path.read_bytes()
+            value = json.loads(original)
+            key = 'machine' if path.parent != self.machine else 'name'
+            value[key] = 'different'
+            path.write_text(json.dumps(value))
+            with self.subTest(file=path.name), self.assertRaisesRegex(ValueError, 'PROVISION_OPERATION_UNRESOLVED'):
+                vm_machine.require_no_operations(self.settings, 'synthetic', self.root)
+            path.write_bytes(original)
+        other_root = self.home / 'other-store'
+        with self.assertRaisesRegex(ValueError, 'PROVISION_OPERATION_UNRESOLVED'):
+            vm_machine.require_no_operations(self.settings, 'synthetic', other_root)
+
+    def test_receipt_sync_failure_leaves_dispatch_unresolved_without_replay(self):
+        actual = vm_machine.sync_directory
+        def sync(path):
+            if self.effects:
+                raise OSError('synthetic post-effect sync failure')
+            actual(path)
+        with mock.patch.object(vm_machine, 'sync_directory', side_effect=sync), mock.patch.object(vm_machine.subprocess, 'run', side_effect=self.run_synthetic):
+            with self.assertRaises(OSError):
+                self.dispatch()
+        with mock.patch.object(vm_machine.subprocess, 'run') as invoked:
+            with self.assertRaisesRegex(ValueError, 'PROVISION_OPERATION_UNRESOLVED'):
+                self.dispatch()
+            invoked.assert_not_called()
+        self.assertEqual(self.effects, ['start'])
+        self.assertTrue(self.records('intent'))
+        self.assertFalse(self.records('resolution'))
+
+    def test_busy_machine_lock_never_dispatches(self):
+        with vm_machine.operation_lock(self.settings, 'synthetic'), mock.patch.object(vm_machine.subprocess, 'run') as invoked:
+            with self.assertRaisesRegex(ValueError, 'PROVISION_OPERATION_BUSY'):
+                self.dispatch()
+            invoked.assert_not_called()
+
+    def test_legacy_intent_stays_unresolved_without_dispatch(self):
+        directory = vm_machine.operation_directory(self.settings, 'synthetic')
+        vm_machine.durable_directory(directory, self.settings)
+        (directory / 'start-intent.json').write_text('{"status":"unreconciled"}')
+        with mock.patch.object(vm_machine.subprocess, 'run') as invoked:
+            self.assertEqual(vm_machine.reconcile_operations(self.settings, 'synthetic', self.root,
+                '/synthetic/tool', self.env, resolve=True)['status'], 'UNRESOLVED')
+            with self.assertRaisesRegex(ValueError, 'PROVISION_OPERATION_UNRESOLVED'):
+                self.dispatch()
+            invoked.assert_not_called()
+
+    def test_explicit_resolution_refuses_mismatched_unknown_or_replaced_state(self):
+        def effect(command, **kwargs):
+            if command[1] == 'status' and self.effects:
+                raise subprocess.TimeoutExpired(command, 1)
+            return self.run_synthetic(command, **kwargs)
+        with mock.patch.object(vm_machine.subprocess, 'run', side_effect=effect):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                self.dispatch()
+        for value in ({'name': 'different', 'state': 'stopped'},
+                      {'name': 'synthetic', 'state': 'starting'}, []):
+            result = subprocess.CompletedProcess(['status'], 0, json.dumps(value).encode())
+            with self.subTest(value=value), mock.patch.object(vm_machine.subprocess, 'run', return_value=result):
+                self.assertEqual(vm_machine.reconcile_operations(self.settings, 'synthetic', self.root,
+                    '/synthetic/tool', self.env, resolve=True)['status'], 'UNRESOLVED')
+                self.assertFalse(self.records('resolution'))
+        original = self.machine.with_name('original-machine')
+        self.machine.rename(original)
+        self.machine.mkdir()
+        (self.machine / 'machine.json').write_bytes((original / 'machine.json').read_bytes())
+        with mock.patch.object(vm_machine.subprocess, 'run', side_effect=self.run_synthetic):
+            self.assertEqual(vm_machine.reconcile_operations(self.settings, 'synthetic', self.root,
+                '/synthetic/tool', self.env, resolve=True)['status'], 'UNRESOLVED')
+        self.assertFalse(self.records('resolution'))
+
+    def test_terminal_proof_binds_created_and_cloned_machine_before_confirmation(self):
+        settings = self.settings
+        for kind in ('create', 'clone'):
+            self.settings = settings / kind
+            self.settings.mkdir(mode=0o700)
+            self.state = 'stopped'
+            def effect(command, **kwargs):
+                if command[1] == 'status':
+                    raise subprocess.TimeoutExpired(command, 1)
+                return self.run_synthetic(command, **kwargs)
+            with self.subTest(kind=kind), mock.patch.object(vm_machine.subprocess, 'run', side_effect=effect):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    self.dispatch(kind)
+            original = self.machine.with_name('original-' + kind)
+            self.machine.rename(original)
+            self.machine.mkdir()
+            (self.machine / 'machine.json').write_bytes((original / 'machine.json').read_bytes())
+            with mock.patch.object(vm_machine.subprocess, 'run', side_effect=self.run_synthetic):
+                self.assertEqual(vm_machine.reconcile_operations(self.settings, 'synthetic', self.root,
+                    '/synthetic/tool', self.env, resolve=True)['status'], 'UNRESOLVED')
+            self.assertFalse(self.records('resolution'))
+
+    def test_resolution_cli_only_probes_and_never_replays_the_dispatch(self):
+        def effect(command, **kwargs):
+            if command[1] == 'status' and self.effects:
+                raise subprocess.TimeoutExpired(command, 1)
+            return self.run_synthetic(command, **kwargs)
+        with mock.patch.object(vm_machine.subprocess, 'run', side_effect=effect):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                self.dispatch()
+        for mode, expected in (('--reconcile-operations', 'UNRESOLVED'),
+                               ('--resolve-operations', 'RESOLVED'),
+                               ('--reconcile-operations', 'RESOLVED')):
+            output = io.StringIO()
+            with mock.patch('sys.argv', ['vm-machine.py', mode, 'synthetic']), mock.patch.object(vm_machine, 'infrastructure', return_value=(Path('/synthetic/tool'), self.root, self.settings)), mock.patch.object(vm_machine.subprocess, 'run', side_effect=self.run_synthetic) as invoked, contextlib.redirect_stdout(output):
+                vm_machine.main()
+            self.assertEqual(json.loads(output.getvalue())['status'], expected)
+            self.assertEqual(invoked.call_count, int(mode == '--resolve-operations'))
+        self.assertEqual(self.effects, ['start'])
 
     def test_unknown_create_and_start_are_not_replayed_by_setup(self):
         import plistlib
-        import subprocess
         for kind in ('create', 'start'):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
                 home = Path(tmp).resolve()
@@ -496,17 +717,17 @@ class ProvisionIntentTests(unittest.TestCase):
                     machine = root / 'machines/pilot'
                     machine.mkdir(parents=True)
                     (machine / 'machine.json').write_text(json.dumps(dict(BASE_SPEC, network=True)))
-                with mock.patch('sys.argv', ['vm-machine.py', '--spec', str(spec), '--ipsw', str(ipsw)]), mock.patch.object(vm_machine, 'infrastructure', return_value=(binary, root, settings)), mock.patch.object(vm_machine.subprocess, 'run', side_effect=subprocess.TimeoutExpired(['synthetic'], 1)) as invoked:
+                def effect(command, **kwargs):
+                    if command[1] == 'status':
+                        return subprocess.CompletedProcess(command, 0, b'{"name":"pilot","state":"stopped"}')
+                    raise subprocess.TimeoutExpired(command, 1)
+                with mock.patch('sys.argv', ['vm-machine.py', '--spec', str(spec), '--ipsw', str(ipsw)]), mock.patch.object(vm_machine, 'infrastructure', return_value=(binary, root, settings)), mock.patch.object(vm_machine.subprocess, 'run', side_effect=effect) as invoked:
                     with self.assertRaises(subprocess.TimeoutExpired):
                         vm_machine.main()
-                    invoked.assert_called_once()
+                    calls = invoked.call_count
                     with self.assertRaisesRegex(ValueError, 'PROVISION_OPERATION_UNRESOLVED'):
                         vm_machine.main()
-                    invoked.assert_called_once()
-
-
-def intent_exists(settings, kind):
-    return (vm_machine.operation_directory(settings, 'synthetic') / (kind + '-intent.json')).is_file()
+                    self.assertEqual(invoked.call_count, calls)
 
 
 if __name__ == '__main__':
