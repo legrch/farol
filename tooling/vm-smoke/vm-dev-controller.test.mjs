@@ -107,6 +107,21 @@ test("parse: only explicit all-or-none approved options; no arbitrary CLI or app
     assert.throws(() => parseVMDevOptions(invalid), VMDevRefusal);
 });
 
+test("documented equals-form compiler inputs retain path and duplicate validation", () => {
+  assert.equal(
+    parseVMDevOptions(["--go-inputs=/absolute/path/go-inputs.json"]).goInputs,
+    "/absolute/path/go-inputs.json",
+  );
+  for (const args of [
+    ["--go-inputs="],
+    ["--go-inputs=relative.json"],
+    ["--go-inputs=/safe/../unsafe"],
+    ["--go-inputs=/safe", "--go-inputs", "/other"],
+    ["--go-inputs", "/safe", "--go-inputs=/other"],
+  ])
+    assert.throws(() => parseVMDevOptions(args), VMDevRefusal);
+});
+
 test("selected existing derivative is source-bound and does not self-accept ZIP", async (t) => {
   const f = await fixture(t);
   const input = await existingDevInputs(f.root, {

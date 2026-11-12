@@ -51,12 +51,15 @@ export function parseVMDevOptions(argv) {
       requireVM(!result.visible, "VM_DEV_OPTIONS_INVALID");
       result.visible = true;
     } else {
-      const key = keys[token];
+      const equalsGoInputs = token.startsWith("--go-inputs=");
+      const key = keys[equalsGoInputs ? "--go-inputs" : token];
       requireVM(
         key !== undefined && result[key] === null,
         "VM_DEV_OPTIONS_INVALID",
       );
-      const value = argv[++i];
+      const value = equalsGoInputs
+        ? token.slice("--go-inputs=".length)
+        : argv[++i];
       requireVM(
         typeof value === "string" &&
           value.length > 0 &&
