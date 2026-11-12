@@ -413,10 +413,12 @@ async function launch(run) {
     (value) => value.trim() === "connector-resume-skipped",
     "DAILY_WATCH_STARTUP_TIMEOUT",
   );
+  // The startup marker belongs to the kernel-qualified Electron child; the
+  // retained Go guardian (run.child) is a different process.
   run.marker = await readOwnedStartupMarker(
     run.state,
     run.home.path,
-    run.child.pid,
+    actual.pid,
   );
   run.evidence.admission = {
     ...run.admission,
