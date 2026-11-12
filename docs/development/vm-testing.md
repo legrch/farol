@@ -57,7 +57,7 @@ A failed or interrupted run can leave staging residue (a `run-*` directory in th
 task qa:smoke -- --reconcile-staging
 ```
 
-The flag runs a strictly read-only report: no runner is constructed, no VM is started or contacted, no lock is taken and nothing is written or deleted. It reports the residue directories, the fence metadata and the required action. Clearing stays manual: confirm the unresolved guest outcome, remove the listed directories and clear the fence by hand. The runner never deletes residue or clears a fence on its own, and the report is the honest `UNKNOWN` record of an interrupted run, not a cleanup tool.
+The flag runs a strictly read-only report: no runner is constructed, no VM is started or contacted, no lock is taken and nothing is written or deleted. It reports the residue directories, the fence metadata and the required action. An unresolved effect needs explicit reconciliation of its original operation. Never remove its staging or fence merely to permit another attempt. The sole automatic refusal cleanup is an exact first native `open` acknowledgement carrying typed `noEffect`, before any prior effect: under the same owned lease, the runner retains its payload outside the active artifact inbox and writes a durable retention receipt before clearing its own unstarted fence. This does not recover an interrupted or outcome-unknown operation. The report itself stays read-only and never performs cleanup.
 
 ## Renaming the pilot machine to farol (PERFORMED 2026-11-08)
 
@@ -106,10 +106,19 @@ verification, runs the `e2e` phase in the guest (the serve loop re-verifies the 
 digests before executing), and records the driver's durable `result.json` as the run's e2e
 receipt plus the instance provenance. Driver entries committed so far: the egress probe
 (documentation-reserved endpoints only) and the guest-local fixture probe (loopback fixture,
-fail-closed missing route). The first real closed run still needs a built release artifact
-and the autologin prerequisite above; nothing has claimed a closed-contour PASS. A closed run
+fail-closed missing route). The first real closed run also requires a qualified guest executor. The legacy Terminal route now refuses before typing unless the helper issues the versioned shell-readiness capability; frontmost Terminal or a screenshot is insufficient. Current native AppService supports a finite installed lifecycle, not arbitrary driver or shell execution. Nothing has claimed a closed-contour PASS. A closed run
 refuses to adopt an already-running VM and rechecks its configuration after startup. These
 checks do not attest the live VZ network attachment; runtime isolation needs separate evidence.
+
+## Native installed lifecycle and Dev artifacts
+
+`qa:smoke -- --native-app-service --native-relaunch --artifact <archive> --expected-app-sha256 <accepted-tree>` selects the compiled guest AppService. The expected application tree must come from independently accepted release evidence, never from the archive currently being admitted. It requires a compatible helper and live VZ evidence that artifacts are shared read-only. Host scripts are not run in the guest.
+
+The producer binds archive, complete payload tree and finite signature policy through a separate accepted-application commitment. The helper verifies bytes before atomically publishing a new guest `/Applications` app; it never overwrites a pre-existing application. The official unsigned outer bundle is handled explicitly, while the fixed launcher and signed executable checks retain the documented installer policy. Launch, activation, normal Quit and relaunch each need bound receipts and observations. A closed native lifecycle is not provider, tunnel, visual or update acceptance.
+
+The build-only `tooling/vm-dev-artifact.mjs` creates a **local Dev derivative** from a clean exact source build with authenticated resources and vendor runtime. Its new physical, empty output directory must be directly under `_output/vm-dev/`. It creates `Farol Dev.app` with `local.farol.dev`; the fixed launcher selects Dev before any storage opens and accepts no arbitrary arguments. It does not launch a host app, read any host profile, configure a tunnel, or update the host Dev cache. Its derivative receipt retains the original build identity separately from the guest Dev presentation. It is not an official release or a completed interactive VM session.
+
+A usable agent session additionally requires qualified installed process identity, a single input owner, guest screenshots/input, and explicit clean-stop versus UNKNOWN handling. Until live qualification closes those predicates, source builds and offline tests must not be described as `READY_FOR_AGENT`.
 
 ## Honest status vocabulary
 
