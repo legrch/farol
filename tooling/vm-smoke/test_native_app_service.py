@@ -361,7 +361,7 @@ class ServiceSessionTests(unittest.TestCase):
                 receipt, pending_reply, allow_pending_foreground=True))
             with self.assertRaises(producer.ProducerRefusal):
                 session.admit_observation(receipt, pending_reply)
-        for invalid in ("synthetic-secret", "-1", "1.5", "65", "999", ""):
+        for invalid in ("synthetic-secret", "-1", "1.5", "2", "64", "65", "999", ""):
             with self.subTest(invalid=invalid), self.assertRaises(producer.ProducerRefusal):
                 session.admit_observation(receipt, {**ack, "windows": invalid,
                                                     "foreground": "true"},
@@ -613,7 +613,7 @@ class RunnerNativeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             runner, archive, release, actions, effects, images = self.fixture(Path(tmp))
             grants = {"appServiceContract": "terminal-mac.app-service/4",
-                      "appServiceExecutor": "compiled-native-helper",
+                      "appServiceExecutor": "compiled-native-helper", "appServiceLaunchIdentityContract": "terminal-mac.launch-identity/1",
                       "appServiceAdmission": "available"}
             result = runner.run_native_app_service(archive, release, grants)
             self.assertEqual(result["status"], "NEEDS_REVIEW")
@@ -666,9 +666,13 @@ class RunnerNativeTests(unittest.TestCase):
                 return original(*args)
             runner.action = delayed_foreground
             grants = {"appServiceContract": "terminal-mac.app-service/4",
-                      "appServiceExecutor": "compiled-native-helper",
+                      "appServiceExecutor": "compiled-native-helper", "appServiceLaunchIdentityContract": "terminal-mac.launch-identity/1",
                       "appServiceAdmission": "available"}
-            with patch.object(runner_module.time, "sleep", return_value=None):
+            clock = [runner_module.time.monotonic()]
+            def cold_window_wait(_):
+                clock[0] += 20  # A real cold GUI may exceed the former five seconds.
+            with patch.object(runner_module.time, "sleep", side_effect=cold_window_wait), \
+                 patch.object(runner_module.time, "monotonic", side_effect=lambda: clock[0]):
                 result = runner.run_native_app_service(archive, release, grants)
             self.assertEqual(result["lifecycle"], "NATIVE_APP_SERVICE_CLOSED_REPORTED")
             self.assertEqual(len(frontmost_probes), 2)
@@ -688,7 +692,7 @@ class RunnerNativeTests(unittest.TestCase):
                 return original(*args)
             runner.action = wrong_observation
             grants = {"appServiceContract": "terminal-mac.app-service/4",
-                      "appServiceExecutor": "compiled-native-helper",
+                      "appServiceExecutor": "compiled-native-helper", "appServiceLaunchIdentityContract": "terminal-mac.launch-identity/1",
                       "appServiceAdmission": "available"}
             with self.assertRaisesRegex(runner_module.Refused, "APP_SERVICE_REPLY_INVALID"):
                 runner.run_native_app_service(archive, release, grants)
@@ -707,7 +711,7 @@ class RunnerNativeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             runner, archive, release, actions, effects, _ = self.fixture(Path(tmp))
             grants = {"appServiceContract": "terminal-mac.app-service/4",
-                      "appServiceExecutor": "compiled-native-helper",
+                      "appServiceExecutor": "compiled-native-helper", "appServiceLaunchIdentityContract": "terminal-mac.launch-identity/1",
                       "appServiceAdmission": "available"}
             for invalid in (None, "f" * 64, "not-hex"):
                 with self.subTest(invalid=invalid):
@@ -737,20 +741,24 @@ class RunnerNativeTests(unittest.TestCase):
                                                     "--e2e-driver", "synthetic"])
 
     def test_old_helper_refused_before_stage_or_effect(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            runner, archive, release, actions, effects, _ = self.fixture(Path(tmp))
-            with self.assertRaisesRegex(runner_module.Refused, "APP_SERVICE_UNAVAILABLE"):
-                runner.run_native_app_service(archive, release, {"version": "0.2.0"})
-            self.assertEqual(actions, [])
-            self.assertEqual(effects, [])
-            self.assertFalse(runner.stage.exists())
+        for grants in [{"version":"0.2.0"},
+                       {"appServiceContract":"terminal-mac.app-service/4",
+                        "appServiceExecutor":"compiled-native-helper",
+                        "appServiceAdmission":"available"}]:
+            with self.subTest(grants=grants), tempfile.TemporaryDirectory() as tmp:
+                runner, archive, release, actions, effects, _ = self.fixture(Path(tmp))
+                with self.assertRaisesRegex(runner_module.Refused, "APP_SERVICE_UNAVAILABLE"):
+                    runner.run_native_app_service(archive, release, grants)
+                self.assertEqual(actions, [])
+                self.assertEqual(effects, [])
+                self.assertFalse(runner.stage.exists())
 
     def test_unconfirmed_ack_retains_exact_original_intent(self):
         with tempfile.TemporaryDirectory() as tmp:
             runner, archive, release, actions, effects, _ = self.fixture(Path(tmp))
             runner.action = lambda *args: {"schema": "legacy"}
             grants = {"appServiceContract": "terminal-mac.app-service/4",
-                      "appServiceExecutor": "compiled-native-helper",
+                      "appServiceExecutor": "compiled-native-helper", "appServiceLaunchIdentityContract": "terminal-mac.launch-identity/1",
                       "appServiceAdmission": "available"}
             with self.assertRaisesRegex(runner_module.Refused, "APP_SERVICE_REPLY_INVALID"):
                 runner.run_native_app_service(archive, release, grants)

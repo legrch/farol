@@ -31,7 +31,7 @@ export function chooseRuntime(
 const entryHref = process.argv[1] ? pathToFileURL(process.argv[1]).href : null;
 if (entryHref !== null && import.meta.url === entryHref) {
   const mode = process.argv[2];
-  if (!["smoke", "machine"].includes(mode))
+  if (!["smoke", "machine", "dev"].includes(mode))
     throw Error("VM_ENTRY_MODE_INVALID");
   const root = fileURLToPath(new URL("../", import.meta.url));
   const versions = JSON.parse(
@@ -67,7 +67,7 @@ if (entryHref !== null && import.meta.url === entryHref) {
     [
       path.join(
         root,
-        "tooling/vm-" + (mode === "smoke" ? "smoke" : "machine") + ".mjs",
+        "tooling/vm-" + mode + ".mjs",
       ),
       ...process.argv.slice(3),
     ],

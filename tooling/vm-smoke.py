@@ -845,6 +845,27 @@ class Runner:
                 self.finish_no_effect_open(operation, failure)
                 raise Refused(failure['reason']) from None
             raise
+        # Retain a content-free projection BEFORE admission, including for a
+        # malformed ACK. Never persist arbitrary guest text, paths or exceptions.
+        projection = {'schema': 'farol.native-ack-diagnostic/1',
+                      'command': command, 'sequence': sequence}
+        domains = {
+            'serviceReady': {'true', 'false'},
+            'state': {'ready', 'installed', 'running', 'closed', 'unknown'},
+            'launchIdentityState': {'bound', 'unknown', 'unconfirmed', 'retained-unconfirmed'},
+            'launchIdentityReason': {'NONE', 'PROCESS_CENSUS_CHANGED', 'PROCESS_CENSUS_UNAVAILABLE',
+                                     'PROCESS_IDENTITY_CHANGED', 'GUI_PRIMARY_NOT_FOUND'},
+            'rootExit': {'observed', 'not-observed', 'unconfirmed', 'no-owned-root'},
+            'uiPrimaryExit': {'observed', 'not-observed', 'unconfirmed'},
+            'foreground': {'true', 'false', 'unconfirmed'},
+        }
+        for key, allowed in domains.items():
+            value = reply.get(key) if isinstance(reply, dict) else None
+            projection[key] = value if isinstance(value, str) and value in allowed else 'unclassified'
+        windows = reply.get('windows') if isinstance(reply, dict) else None
+        projection['windows'] = windows if isinstance(windows, str) and re.fullmatch(r'[0-9]{1,2}', windows) else 'unconfirmed'
+        self.write_durable_json_exclusive(
+            self.out / ('native-ack-diagnostic-%02d-%s.json' % (sequence, command)), projection)
         # No assumption that an ACK existed when the mailbox times out.
         try:
             receipt = session.admit_reply(command, operation, reply)
@@ -925,12 +946,12 @@ class Runner:
 
         A successful activate() ACK may precede macOS reporting the app as
         frontmost. Only a bound foreground=false observation is eligible for a
-        short follow-up read. A failed/uninspectable observation is UNKNOWN and
+        bounded cold-start follow-up read. A failed/uninspectable observation is UNKNOWN and
         never retried. Every observation uses a fresh read-only UUID.
         """
         command = receipt['command']
         self.pending = 'native:' + command + ':observe'
-        foreground_deadline = min(self.deadline, time.monotonic() + 5)
+        foreground_deadline = min(self.deadline, time.monotonic() + 60)
         while True:
             self.remaining()
             arguments = session.observation_arguments(receipt)
@@ -960,7 +981,8 @@ class Runner:
         'closed' means the guest-reported service ended, not product E2E PASS.
         """
         require(grants.get('appServiceContract') == 'terminal-mac.app-service/4' and
-                grants.get('appServiceExecutor') == 'compiled-native-helper',
+                grants.get('appServiceExecutor') == 'compiled-native-helper' and
+                grants.get('appServiceLaunchIdentityContract') == 'terminal-mac.launch-identity/1',
                 'APP_SERVICE_UNAVAILABLE')
         require(grants.get('appServiceAdmission') == 'available',
                 'APP_SERVICE_UNRESOLVED')

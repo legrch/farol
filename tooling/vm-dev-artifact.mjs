@@ -4,6 +4,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import {
   BUILD_ENTRIES,
   verifyBuildEntries,
@@ -55,7 +57,7 @@ async function regular(file, maximum = 32 * 1024 * 1024) {
   }
 }
 
-export async function requireVMDevOutput(root, output) {
+async function requireVMDevLocation(root, output) {
   requireValue(
     path.isAbsolute(root) &&
       path.isAbsolute(output) &&
@@ -80,6 +82,10 @@ export async function requireVMDevOutput(root, output) {
       "VM_DEV_OUTPUT_UNSAFE",
     );
   }
+}
+
+export async function requireVMDevOutput(root, output) {
+  await requireVMDevLocation(root, output);
   requireValue(
     (await fs.readdir(output)).length === 0,
     "VM_DEV_OUTPUT_NOT_EMPTY",
@@ -247,6 +253,101 @@ export async function assembleVMDev(root, output) {
     { flag: "wx", mode: 0o600 },
   );
   return receipt;
+}
+
+// This explicit caller-selected commitment predates the ZIP payload. It is
+// not read from the ZIP or freshly learned from a candidate being admitted.
+export async function archiveVMDev(
+  root,
+  output,
+  expectedReceiptSHA256,
+  inspectExisting = false,
+) {
+  requireValue(
+    typeof inspectExisting === "boolean",
+    "VM_DEV_ARCHIVE_OPTIONS_INVALID",
+  );
+  await requireVMDevLocation(root, output);
+  requireValue(
+    /^[a-f0-9]{64}$/.test(expectedReceiptSHA256),
+    "VM_DEV_RECEIPT_UNQUALIFIED",
+  );
+  const receiptPath = path.join(output, "vm-dev-artifact.json");
+  const raw = await regular(receiptPath, 16384);
+  requireValue(hash(raw) === expectedReceiptSHA256, "VM_DEV_RECEIPT_CHANGED");
+  const receipt = JSON.parse(raw);
+  const app = path.join(output, dev.applicationName + ".app");
+  requireValue(
+    receipt.schema === VM_DEV_SCHEMA &&
+      receipt.kind === "local-dev-derivative" &&
+      receipt.appName === dev.applicationName + ".app" &&
+      receipt.bundleId === dev.applicationId &&
+      receipt.environment === "dev" &&
+      receipt.artifactPath === app &&
+      receipt.officialRelease === false &&
+      receipt.hostLaunch === false &&
+      receipt.profileImport === false &&
+      /^[a-f0-9]{64}$/.test(receipt.artifactSha256) &&
+      /^[a-f0-9]{64}$/.test(receipt.launcherSHA256),
+    "VM_DEV_RECEIPT_UNQUALIFIED",
+  );
+  const appInfo = await fs.lstat(app);
+  requireValue(
+    appInfo.isDirectory() &&
+      !appInfo.isSymbolicLink() &&
+      (await fs.realpath(app)) === app,
+    "VM_DEV_OUTPUT_UNSAFE",
+  );
+  requireValue(
+    (await treeDigest(app)) === receipt.artifactSha256,
+    "VM_DEV_ARTIFACT_CHANGED",
+  );
+  requireValue(
+    hash(await regular(path.join(app, "Contents/MacOS/Farol"), 65536)) ===
+      receipt.launcherSHA256 &&
+      receipt.launcherSHA256 ===
+        hash(
+          await regular(path.join(root, "tooling/vm-dev-launcher.sh"), 65536),
+        ),
+    "VM_DEV_LAUNCHER_CHANGED",
+  );
+  const { stdout } = await promisify(execFile)(
+    "/usr/bin/python3",
+    [
+      "-I",
+      "-B",
+      path.join(root, "tooling/vm-dev-archive.py"),
+      "--output",
+      output,
+      "--expected-receipt-sha256",
+      expectedReceiptSHA256,
+      ...(inspectExisting ? ["--inspect-existing"] : []),
+    ],
+    {
+      cwd: root,
+      timeout: 120000,
+      maxBuffer: 32768,
+      env: Object.fromEntries(
+        ["HOME", "USER", "TMPDIR"]
+          .filter((k) => process.env[k] !== undefined)
+          .map((k) => [k, process.env[k]]),
+      ),
+    },
+  );
+  const archived = JSON.parse(stdout);
+  requireValue(
+    hash(await regular(receiptPath, 16384)) === expectedReceiptSHA256 &&
+      (await treeDigest(app)) === receipt.artifactSha256 &&
+      archived.schema === "farol.vm-dev-archive/1" &&
+      archived.receiptSHA256 === expectedReceiptSHA256 &&
+      archived.artifactSha256 === receipt.artifactSha256 &&
+      archived.bundleId === dev.applicationId &&
+      archived.officialRelease === false &&
+      archived.archiveName === "Farol-Dev.zip" &&
+      /^[a-f0-9]{64}$/.test(archived.archiveSha256),
+    "VM_DEV_ARTIFACT_CHANGED",
+  );
+  return archived;
 }
 
 if (

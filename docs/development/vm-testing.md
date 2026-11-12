@@ -135,3 +135,83 @@ Reports use a closed vocabulary; a status is claimed only when its evidence exis
 No receipt is fabricated: a missing report leaves the count or outcome explicitly unavailable, failed cleanup keeps its `FAILED` disposition, and a result is never upgraded from a failed or unknown state into a pass.
 
 [Guest VM smoke](vm-smoke.md) · [Testing policy](../testing.md) · [Development](README.md)
+
+## Interactive Farol Dev VM entry
+
+### `task vm:dev` (live, manual QA; not part of `task test`)
+
+From the Farol source checkout, after the source and dependencies have been
+committed and verified, run:
+
+```sh
+task vm:dev
+# Or select the independently approved offline compiler inputs:
+task vm:dev -- --go-inputs=/absolute/path/go-inputs.json
+```
+
+The entry runs the exact-source build-only `tooling/build.mjs`, assembles the
+self-contained local **Farol Dev.app** derivative, selects its receipt digest,
+creates a local-only ZIP, then uses `vm-machine.py`'s configured
+`farol-base-1` prepared-base admission to create a **new** guest clone. It
+stages the accepted payload through the finite compiled native app service and
+replaces its controller with the configured `terminal-mac mcp` process. VM
+viewer windows are hidden by default; pass `-- --visible` to show the guest
+window on the host. The application itself runs visibly *inside* the VM.
+
+For a separately approved, already-built Dev derivative (no rebuilding),
+provide all three expected inputs; no stable-release ZIP is accepted:
+
+```sh
+task vm:dev -- \
+  --artifact /ABSOLUTE/Farol-Dev.zip \
+  --receipt /ABSOLUTE/vm-dev-artifact.json \
+  --expected-receipt-sha256 <64-lowercase-hex>
+```
+
+Both files must be inside one private `_output/vm-dev/<run>/` directory from
+this checkout. `--config /absolute/private/vm-smoke.json` selects the same
+approved `terminal_mac` binary and `vm_home` as `vm:setup`; the default
+`FAROL_VM_CONFIG` resolver is also respected. Neither selector authorizes a
+host Farol path, profile, credential, tunnel or guest shell command.
+
+The native `terminal-mac mcp` session keeps **one actual input lease** for its
+whole stdio lifetime, boots the selected accepted app once, and admits GUI
+input only after root/primary identity, foreground and AX window evidence.
+Its public stdout is **JSON-RPC only**; build and provisioning diagnostics go
+to stderr. It reserves 120 seconds of its 600-second native app session for
+graceful Quit/close on clean EOF. A missing helper, permissions, retained lease
+or unknown effect must block; never replay a clone/start/native effect simply
+because a controller lost the ACK.
+
+The VM runtime is preserved after controller failure or UNKNOWN, as are
+staging and original operation evidence. The source/intent/clone receipts are
+under the private `Farol Testing/vm-dev-sessions/<clone>/` infrastructure
+directory. Only a **new, fully qualified run** should be attempted after the
+original custody has been independently reconciled. Existing qa-3/qa-7
+unknown outcomes and old input fences are never touched.
+
+`task vm:dev` is a **live operator action**, not a closed-contour test and not
+proof of installed product readiness merely because startup succeeded. The
+finite native MCP itself must publish READY_FOR_AGENT after independent
+observation. No host production app/profile, automatic dependency install or
+Dev tunnel import is part of this entry. Live Dev connectivity is separate.
+
+### Offline source qualification
+
+The closed-contour `vm:test` inventory includes two new independent leaves:
+
+```sh
+node --test tooling/vm-smoke/vm-dev-controller.test.mjs
+/usr/bin/python3 -B -m unittest discover -s tooling/vm-smoke -p 'test_vm_dev_session.py'
+```
+
+These use synthetic receipts and injected process/module stubs, not VM boot or
+installed helper execution. The existing `vm:test` aggregate additionally
+includes unrelated VM and network-probe tests and should not be invoked as a
+live QA substitute. For a real session, separately record the approved
+toolchain, source/build/receipt hashes, clone/base receipt, helper version,
+runtime-read-only grant, guest permissions, bound native readiness, visual
+evidence and original Quit/close outcome. Do not call its whole pipeline PASS
+until those exact native/live receipts exist.
+
+The build defaults to `_output/go-build-inputs.json`, the same approved offline declaration used by the existing build lanes. It never silently emits a backend-less application. `--go-inputs` selects build inputs only and cannot accompany an existing artifact. A successful `start` launcher may exit before its detached VM; readiness is attested by a new read-only status naming the runtime PID, separately from the launcher PID.

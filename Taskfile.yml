@@ -113,6 +113,13 @@ tasks:
     cmds:
       - node tooling/vm-entry.mjs machine {{.CLI_ARGS}}
 
+  vm:dev:
+    desc: Assemble accepted local Dev bytes, create a fresh prepared-base clone, then inherit the native MCP stdio session (hidden by default)
+    # Task's own command echo must not contaminate the inherited JSON-RPC stdout.
+    silent: true
+    cmds:
+      - node tooling/vm-entry.mjs dev {{.CLI_ARGS}}
+
   # qa:* journeys use the real Dev services, accounts, tunnel and human visual
   # judgment. They are QA observations, not tests, and never join `task test`
   # or any CI gate; `vm:test` (offline, closed) remains the VM test lane.
@@ -141,7 +148,7 @@ tasks:
     cmds:
       - /usr/bin/python3 -B -m unittest discover -s tooling/vm-smoke -p 'test_*.py'
       - /usr/bin/python3 -B -m unittest discover -s tooling -p 'test_vm_machine.py'
-      - node --test tooling/vm-smoke/dev-artifact.test.mjs tooling/vm-smoke/inspect.test.mjs tooling/vm-smoke/import-dev.test.mjs tooling/vm-smoke/import-dev-final-publish.regression.mjs tooling/vm-smoke/entry.test.mjs tooling/vm-smoke/quit-proof.test.mjs tooling/vm-smoke/no-tunnel.test.mjs tooling/vm-e2e/driver.test.mjs tooling/vm-e2e/egress-probe.test.mjs tooling/vm-e2e/fixture-probe.test.mjs
+      - node --test tooling/vm-smoke/vm-dev-controller.test.mjs tooling/vm-smoke/dev-artifact.test.mjs tooling/vm-smoke/inspect.test.mjs tooling/vm-smoke/import-dev.test.mjs tooling/vm-smoke/import-dev-final-publish.regression.mjs tooling/vm-smoke/entry.test.mjs tooling/vm-smoke/quit-proof.test.mjs tooling/vm-smoke/no-tunnel.test.mjs tooling/vm-e2e/driver.test.mjs tooling/vm-e2e/egress-probe.test.mjs tooling/vm-e2e/fixture-probe.test.mjs
 
   dev:
     # The owner's one development command: pick the declared toolchain, make

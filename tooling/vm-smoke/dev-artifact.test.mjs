@@ -1,11 +1,14 @@
 // Synthetic output-admission fixtures. These tests never build or launch apps.
 import test from "node:test";
+import { createHash } from "node:crypto";
+import { treeDigest } from "../artifact-digest.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  archiveVMDev,
   requireVMDevOutput,
   assembleVMDev,
   vmDevInfoPlist,
@@ -79,4 +82,46 @@ test("fixed launcher selects Dev before storage and forwards no input", async ()
     /exec "\$contents_dir\/Resources\/app\/farol-backend" run-desktop-launcher\n$/,
   );
   assert.doesNotMatch(launcher, /\$@|\$\*|source |eval |\/Users\//);
+});
+
+test("archive requires an independently selected receipt before output writes", async (t) => {
+  const { root, output } = await fixture(t);
+  await fs.writeFile(path.join(output, "vm-dev-artifact.json"), "{}");
+  await assert.rejects(
+    archiveVMDev(root, output, "a".repeat(64)),
+    /VM_DEV_RECEIPT_CHANGED/,
+  );
+  assert.deepEqual(await fs.readdir(output), ["vm-dev-artifact.json"]);
+});
+
+test("app tamper after receipt refuses before archiver or ZIP publication", async (t) => {
+  const { root, output } = await fixture(t);
+  const app = path.join(output, "Farol Dev.app");
+  await fs.mkdir(app);
+  const item = path.join(app, "synthetic");
+  await fs.writeFile(item, "accepted");
+  const receipt = {
+    schema: "farol.vm-dev-artifact/1",
+    kind: "local-dev-derivative",
+    appName: "Farol Dev.app",
+    bundleId: "local.farol.dev",
+    environment: "dev",
+    artifactPath: app,
+    artifactSha256: await treeDigest(app),
+    launcherSHA256: "b".repeat(64),
+    officialRelease: false,
+    hostLaunch: false,
+    profileImport: false,
+  };
+  const raw = JSON.stringify(receipt);
+  const accepted = createHash("sha256").update(raw).digest("hex");
+  await fs.writeFile(path.join(output, "vm-dev-artifact.json"), raw);
+  await fs.writeFile(item, "tampered");
+  await assert.rejects(
+    archiveVMDev(root, output, accepted),
+    /VM_DEV_ARTIFACT_CHANGED/,
+  );
+  await assert.rejects(fs.lstat(path.join(output, "Farol-Dev.zip")), {
+    code: "ENOENT",
+  });
 });

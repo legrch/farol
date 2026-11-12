@@ -423,7 +423,7 @@ class ServiceAdmission:
             count = int(windows) if windows.isdecimal() and len(windows) <= 3 else None
             if count is None and windows != "unconfirmed":
                 refuse("APP_SERVICE_PHASE_UNCONFIRMED")
-            if front != "true" or count is None or not 1 <= count <= 64:
+            if front != "true" or count != 1:
                 if allow_pending_foreground and (front == "false" or windows in ("0", "unconfirmed")):
                     return None
                 refuse("APP_SERVICE_PHASE_UNCONFIRMED")
@@ -574,3 +574,110 @@ def stage_acceptance(stage, receipt, policy):
     finally:
         os.close(fd)
     return hashlib.sha256(accepted_bytes).hexdigest()
+
+
+def _inventory_tree_digest(entries):
+    """farol.tree-digest/v2 over an already validated physical inventory.
+
+    Identical length-delimited encoding to artifact-tree-digest/digest.ts;
+    directory preorder matters (a global lexicographic path sort is wrong).
+    """
+    import struct
+    children = {}
+    for entry in entries:
+        parent, _, leaf = entry["path"].rpartition("/")
+        children.setdefault(parent, []).append((leaf, entry))
+    digest = hashlib.sha256(b"farol.tree-digest/v2\0")
+    def text(value):
+        raw = value.encode("utf-8")
+        digest.update(struct.pack(">I", len(raw))); digest.update(raw)
+    def walk(parent):
+        for _, entry in sorted(children.get(parent, [])):
+            text(entry["path"])
+            digest.update({"directory": b"d", "file": b"f", "symlink": b"l"}[entry["kind"]])
+            digest.update(struct.pack(">I", entry["mode"]))
+            if entry["kind"] == "directory": walk(entry["path"])
+            elif entry["kind"] == "file": digest.update(bytes.fromhex(entry["sha256"]))
+            else: text(entry["target"])
+    walk("")
+    return digest.hexdigest()
+
+
+def _dev_file_identity(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_nlink,
+            info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _private_regular_bytes(path, limit):
+    path = Path(path)
+    if not path.is_absolute(): refuse("APP_PAYLOAD_UNSAFE")
+    # Every original component is physical. Never resolve an alias into trust.
+    for parent in reversed(path.parents):
+        if not stat.S_ISDIR(parent.lstat().st_mode): refuse("APP_PAYLOAD_UNSAFE")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(fd, "rb") as stream:
+        before = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid() or
+            before.st_nlink != 1 or before.st_mode & 0o077 or not 0 < before.st_size <= limit):
+            refuse("APP_PAYLOAD_UNSAFE")
+        raw = stream.read(limit + 1)
+        if len(raw) != before.st_size or _dev_file_identity(os.fstat(stream.fileno())) != _dev_file_identity(before) or _dev_file_identity(path.lstat()) != _dev_file_identity(before):
+            refuse("APP_PAYLOAD_DIGEST")
+    return raw
+
+
+def prepare_dev_session(archive, receipt, expected_receipt_sha256, stage):
+    """Stage a separately accepted local Dev derivative, never a stable ZIP.
+
+    Exact receipt selection precedes staging. Guest native signature checks
+    remain mandatory before publishing /Applications; no host profile is read.
+    """
+    archive, receipt, stage = Path(archive), Path(receipt), Path(stage)
+    if not hexdigest(expected_receipt_sha256) or not re.fullmatch(r"run-[a-f0-9]{32}", stage.name):
+        refuse("APP_PAYLOAD_UNQUALIFIED")
+    raw = _private_regular_bytes(receipt, 16384)
+    if hashlib.sha256(raw).hexdigest() != expected_receipt_sha256:
+        refuse("APP_PAYLOAD_DIGEST")
+    selected = json.loads(raw)
+    if (selected.get("schema") != "farol.vm-dev-artifact/1" or
+        selected.get("kind") != "local-dev-derivative" or selected.get("appName") != "Farol Dev.app" or
+        selected.get("bundleId") != "local.farol.dev" or selected.get("environment") != "dev" or
+        selected.get("hostLaunch") is not False or selected.get("profileImport") is not False or
+        selected.get("officialRelease") is not False or
+        not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?", selected.get("version", "")) or
+        not re.fullmatch(r"[a-f0-9]{40}", selected.get("sourceCommit", "")) or
+        not all(hexdigest(selected.get(k)) for k in ("artifactSha256", "launcherSHA256", "parentBuildId", "sourceTreeDigest", "buildManifestSHA256"))):
+        refuse("APP_PAYLOAD_UNQUALIFIED")
+    launcher = (Path(__file__).parent / "vm-dev-launcher.sh").read_bytes()
+    if hashlib.sha256(launcher).hexdigest() != selected["launcherSHA256"]:
+        refuse("APP_PAYLOAD_INCOMPATIBLE")
+    # Archive pathname components are checked independently of receipt metadata.
+    for parent in reversed(archive.parents):
+        if not stat.S_ISDIR(parent.lstat().st_mode): refuse("APP_PAYLOAD_UNSAFE")
+    fd = os.open(archive, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(fd, "rb") as source:
+        before = os.fstat(source.fileno())
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid() or before.st_nlink != 1 or
+            before.st_mode & 0o022 or not 0 < before.st_size <= 2*1024**3): refuse("APP_PAYLOAD_UNSAFE")
+        digest = hashlib.sha256()
+        for chunk in iter(lambda: source.read(1024*1024), b""): digest.update(chunk)
+        release = dict(product="Farol Dev", bundleId="local.farol.dev", version=selected["version"],
+                       archiveSha256=digest.hexdigest(), artifactSha256=selected["artifactSha256"])
+        source.seek(0)
+        identity = dict(name="Farol Dev", bundleId="local.farol.dev")
+        payload, _ = _tree(source, release, identity)
+        if _inventory_tree_digest(payload["entries"]) != selected["artifactSha256"]:
+            refuse("APP_PAYLOAD_DIGEST")
+        if _dev_file_identity(os.fstat(source.fileno())) != _dev_file_identity(before) or _dev_file_identity(archive.lstat()) != _dev_file_identity(before): refuse("APP_PAYLOAD_DIGEST")
+    # stage_release_payload reopens no-follow and checks the independently
+    # captured archive digest before AND after publishing its accepted inventory.
+    result = stage_release_payload(archive, release, stage, identity)
+    def dev_policy(payload):
+        if payload["appName"] != "Farol Dev.app" or payload["bundleID"] != "local.farol.dev":
+            refuse("APP_PAYLOAD_INCOMPATIBLE")
+        policy = farol_release_policy(dict(appName="Farol.app", bundleID="io.github.legrch.farol"))
+        policy["checks"][0]["sha256"] = hashlib.sha256(launcher).hexdigest()
+        return policy
+    acceptance = stage_acceptance(stage, result, dev_policy)
+    return dict(runId=stage.name, manifestSHA256=result["manifestSHA256"],
+                acceptanceSHA256=acceptance, artifactSHA256=result["artifactSHA256"])
