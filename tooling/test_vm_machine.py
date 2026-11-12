@@ -104,6 +104,29 @@ class VmMachineSpecTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'PREPARED_BASE_INVALID'):
                     vm_machine.prepared_base(settings)
 
+    def test_prepared_base_config_is_compatible_with_qa_parser(self):
+        spec = importlib.util.spec_from_file_location('qa_config_test', ROOT / 'tooling/vm-smoke.py')
+        qa = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(qa)
+        qa.IDENTITY = {'name': 'Example'}
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp).resolve()
+            settings = home / 'Library/Application Support/Example Testing'
+            settings.mkdir(parents=True)
+            config = settings / 'vm-smoke.json'
+            value = {'terminal_mac': '/synthetic/tool', 'vm_home': str(home / 'Library/Application Support/terminal-mac'),
+                     'vm': 'test-vm', 'prepared_base': 'example-base-2'}
+            config.write_text(json.dumps(value))
+            with mock.patch.dict(os.environ, FAROL_VM_TESTING_DIRECTORY=settings.name, FAROL_VM_CONFIG=str(config)):
+                self.assertEqual(vm_machine.infrastructure(home)[2], settings)
+                self.assertEqual(qa.arguments(['--config', str(config), '--reconcile-staging']).vm, 'test-vm')
+                for bad in (None, 7, '', '../base'):
+                    config.write_text(json.dumps(dict(value, prepared_base=bad)))
+                    with self.assertRaisesRegex(ValueError, 'PREPARED_BASE_INVALID'):
+                        vm_machine.infrastructure(home)
+                    with self.assertRaisesRegex(qa.Refused, 'PREPARED_BASE_INVALID'):
+                        qa.arguments(['--config', str(config), '--reconcile-staging'])
+
     def test_infrastructure_refuses_roots_outside_the_terminal_mac_data_root(self):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)

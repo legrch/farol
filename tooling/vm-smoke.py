@@ -2021,8 +2021,12 @@ def arguments(argv=None):
         regular(file, 16384)
         config = json.loads(file.read_text())
         require(isinstance(config, dict) and not (set(config) - {
-            'terminal_mac', 'vm_home', 'vm', 'terminal_point', 'menu_point', 'timeout', 'bootstrap'}),
+            'terminal_mac', 'vm_home', 'vm', 'terminal_point', 'menu_point', 'timeout', 'bootstrap', 'prepared_base'}),
             'CONFIG_FIELDS_INVALID')
+        require('prepared_base' not in config or
+                (isinstance(config['prepared_base'], str) and
+                 re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,47}', config['prepared_base'])),
+                'PREPARED_BASE_INVALID')
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--config', default=early.config, help='Private infrastructure-only JSON; no profiles or credentials')
     source = p.add_mutually_exclusive_group(required=True)

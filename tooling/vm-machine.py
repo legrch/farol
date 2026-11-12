@@ -58,6 +58,9 @@ def infrastructure(home=None):
                 'terminal_mac', 'vm_home', 'vm', 'terminal_point', 'menu_point', 'timeout', 'bootstrap',
                 'prepared_base'}:
             raise ValueError('CONFIG_FIELDS_INVALID')
+        if 'prepared_base' in config and (not isinstance(config['prepared_base'], str) or
+                not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,47}', config['prepared_base'])):
+            raise ValueError('PREPARED_BASE_INVALID')
         if not isinstance(config.get('terminal_mac'), str) or not config['terminal_mac']:
             raise ValueError('INFRASTRUCTURE_CONFIG_REQUIRED')
         if not isinstance(config.get('vm_home'), str) or not config['vm_home']:
