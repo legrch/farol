@@ -844,6 +844,110 @@ it("bounds submitted operation history within the 4096-request stream budget", a
   expect(f.socket.writes).toHaveLength(4097);
 });
 
+it("accepts one slow catalogue after 2s using its bounded explicit socket deadline", async () => {
+  // Real ComputerBridge → SocketConnectorClient timer with a fake socket.
+  // No native Go, filesystem, app, network or production authority.
+  const f = await ready();
+  const selected = {
+    ownerId: "owner",
+    sessionId: "session",
+    taskId: "task",
+    taskEpoch: "9007199254740993",
+    participantId: "participant",
+    turnId: "turn",
+    generation: "18446744073709551615",
+    callId: "slow-catalogue",
+  };
+  const pending = new ComputerBridge(f.client).catalogue(selected, {
+    requestId: "slow-catalogue",
+    context,
+    timeoutMs: 18_000,
+  });
+  const sent = requestAt(f.socket);
+  expect(sent.method).toBe("computer.workspace.catalogue");
+  await vi.advanceTimersByTimeAsync(2_500);
+  expect(f.socket.destroyed).toBe(false);
+  expect(f.client.verifiedContext).toEqual(context);
+  f.socket.receive(
+    response(sent.id, {
+      ...selected,
+      workspaces: [
+        {
+          workspaceId: "workspace",
+          root: "/approved",
+          approvedRoot: { path: "/approved", device: "1", inode: "2" },
+        },
+      ],
+      consistency: "twice-checked current authority and physical roots",
+      next: "Use the approved workspaceId.",
+    }),
+  );
+  await expect(pending).resolves.toMatchObject({
+    status: "ok",
+    data: { workspaces: [{ workspaceId: "workspace" }] },
+  });
+  expect(
+    f.socket.writes.filter(
+      (bytes) =>
+        (decode(bytes) as Request).method === "computer.workspace.catalogue",
+    ),
+  ).toHaveLength(1);
+
+  // Other socket methods retain the original 2s deadline and terminal fence.
+  const ordinary = f.client.request(
+    "computer.workspace.list",
+    {},
+    { id: "ordinary" },
+  );
+  const rejected = expect(ordinary).rejects.toMatchObject(
+    error("unknown", "response_timeout"),
+  );
+  await vi.advanceTimersByTimeAsync(2_000);
+  await rejected;
+  expect(f.socket.destroyed).toBe(true);
+  expect(f.factory).toHaveBeenCalledTimes(1);
+});
+
+it("terminates an unanswered catalogue at its finite 18s deadline without replay", async () => {
+  const f = await ready();
+  const selected = {
+    ownerId: "owner",
+    sessionId: "session",
+    taskId: "task",
+    taskEpoch: "9007199254740993",
+    participantId: "participant",
+    turnId: "turn",
+    generation: "18446744073709551615",
+    callId: "bounded-catalogue",
+  };
+  const pending = new ComputerBridge(f.client).catalogue(selected, {
+    requestId: "bounded-catalogue",
+    context,
+    timeoutMs: 18_000,
+  });
+  expect(requestAt(f.socket).method).toBe("computer.workspace.catalogue");
+  const unknown = expect(pending).resolves.toMatchObject({
+    status: "unknown",
+    code: "response_timeout",
+    retry: "never",
+  });
+  await vi.advanceTimersByTimeAsync(17_999);
+  expect(f.socket.destroyed).toBe(false);
+  await vi.advanceTimersByTimeAsync(1);
+  await unknown;
+  expect(f.socket.destroyed).toBe(true);
+  expect(
+    f.socket.writes.filter(
+      (bytes) =>
+        (decode(bytes) as Request).method === "computer.workspace.catalogue",
+    ),
+  ).toHaveLength(1);
+  await expect(
+    f.client.request("computer.workspace.catalogue", {}),
+  ).rejects.toMatchObject(error("unavailable", "connector_unavailable"));
+  expect(f.factory).toHaveBeenCalledTimes(1);
+});
+
 it("rejects operation IDs, invalid IDs/deadlines/body and oversized frames before writing", async () => {
   const f = await ready();
   const count = f.socket.writes.length;
