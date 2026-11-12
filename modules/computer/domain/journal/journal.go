@@ -302,6 +302,12 @@ func validEntry(e Entry) bool {
 	if e.Phase == Refused && (!emptyReceipt(e.Withdraw) || !emptyReceipt(e.WithdrawAck) || !emptyReceipt(e.Settings) || !emptyReceipt(e.SettingsAck) || !emptyReceipt(e.Publication) || !emptyReceipt(e.PublicationAck) || !emptyReceipt(e.Cleanup) || emptyReceipt(e.CleanupAck)) {
 		return false
 	}
+	for _, pair := range [][2]Receipt{{e.Withdraw, e.WithdrawAck}, {e.Settings, e.SettingsAck}, {e.Publication, e.PublicationAck}, {e.Cleanup, e.CleanupAck}} {
+		// Early refusal closes acquired handles without a close intent.
+		if !emptyReceipt(pair[1]) && !(e.Phase == Refused && emptyReceipt(pair[0])) && pair[0].EffectID != pair[1].EffectID {
+			return false
+		}
+	}
 	if e.Phase == Committed || e.Phase == Refused {
 		c := e.Certificate
 		if c == nil || c.Kind != e.Phase || c.RequestDigest != e.Request.RequestDigest || c.ConsentDigest != e.Request.ConsentDigest || c.Cleanup != e.CleanupAck {

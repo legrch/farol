@@ -425,3 +425,43 @@ func TestCloseIntentCannotCertifyStaleOriginalNativeChain(t *testing.T) {
 		t.Fatal("poisoned chain retried")
 	}
 }
+
+func TestRecordCannotReplaceConfirm(t *testing.T) {
+	for _, mode := range []Mode{Legacy, Rebind} {
+		t.Run(string(mode), func(t *testing.T) {
+			ctx := context.Background()
+			o, store, n := makeOwner(true)
+			choice := intent()
+			choice.Mode = mode
+			if mode == Rebind {
+				evidence := measuredFixture.Evidence
+				evidence.VolumeUUID = "55555555-5555-4555-8555-555555555555"
+				choice.Saved.Evidence = &evidence
+			}
+			if _, err := o.Begin(ctx, choice); err != nil {
+				t.Fatal(err)
+			}
+			original := journal.Receipt{EffectID: "effect", Digest: goodDigest}
+			if err := o.Record(ctx, one, journal.Prepared, original); err != journal.ErrRefused {
+				t.Errorf("Record prepared: %v", err)
+			}
+			if store.journal.Entries[0].Phase != journal.Intent {
+				t.Error("Record bypassed Confirm")
+			}
+			if err := o.Record(ctx, one, journal.WithdrawIntent, original); err == nil {
+				t.Error("withdrawal admitted without Confirm")
+			}
+			effects := 0
+			_, err := o.WithdrawOnce(ctx, one, func(context.Context, string, journal.Receipt) (journal.Receipt, error) {
+				effects++
+				return original, nil
+			})
+			if err == nil || effects != 0 {
+				t.Error("withdrawal dispatched without Confirm")
+			}
+			if n.closes != 0 {
+				t.Error("unexpected native cleanup")
+			}
+		})
+	}
+}

@@ -258,10 +258,15 @@ func (o *Owner) WithdrawOnce(ctx context.Context, id string, effect WithdrawEffe
 // performs its effect only AFTER a returned intent, and never asks Go to call
 // back into TS while any Go access/activation mutex is held.
 func (o *Owner) Record(ctx context.Context, id string, phase journal.Phase, receipt journal.Receipt) error {
+	switch phase {
+	case journal.WithdrawIntent, journal.WithdrawAcknowledged, journal.SettingsIntent, journal.SettingsAcknowledged, journal.PublishIntent, journal.PublishAcknowledged, journal.CloseIntent:
+	default:
+		return journal.ErrRefused
+	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	a := o.active
-	if o.poisoned || a == nil || a.id != id || ctx == nil || ctx.Err() != nil || phase == journal.CloseAcknowledged {
+	if o.poisoned || a == nil || a.id != id || ctx == nil || ctx.Err() != nil {
 		return journal.ErrRefused
 	}
 	if phase == journal.WithdrawAcknowledged && (!a.withdrawAttempted || a.withdrawAck == nil || *a.withdrawAck != receipt) {

@@ -225,3 +225,29 @@ func TestNativeCurrentUnknownBeforeWitnessNeverReacquires(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeCurrentQualifierBindsProposedDevice(t *testing.T) {
+	entry, approval, reader, native := nativeCurrentFixture()
+	approval.Workspaces[0].RootIdentity.Device = "19"
+	w, err := NewHeldCurrentQualifier(reader, native, native).PrepareCurrent(context.Background(), entry, approval)
+	if w != nil {
+		_ = w.Close()
+	}
+	if err == nil || w != nil {
+		t.Fatal("qualified a device absent from the proposed approval")
+	}
+}
+
+func TestNativeCurrentWitnessRejectsBothChainsMovingToAnotherDevice(t *testing.T) {
+	entry, approval, reader, native := nativeCurrentFixture()
+	w, err := NewHeldCurrentQualifier(reader, native, native).PrepareCurrent(context.Background(), entry, approval)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	native.device = 19
+	native.observed.Binding.Device = "19"
+	if err := w.RequalifyCurrent(context.Background()); err == nil {
+		t.Fatal("both chains moved away from retained proposed identity")
+	}
+}

@@ -89,6 +89,7 @@ func (q *HeldCurrentQualifier) PrepareCurrent(ctx context.Context, entry journal
 	// Do not accept a mere matched inode when the reader has not proven the
 	// exact persisted continuity/Settings/recovery combination.
 	found := false
+	var proposedIdentity authority.RootIdentity
 	for _, root := range proposed.Workspaces {
 		if root.WorkspaceID != entry.Request.WorkspaceID {
 			continue
@@ -99,6 +100,7 @@ func (q *HeldCurrentQualifier) PrepareCurrent(ctx context.Context, entry journal
 			return nil, errUnqualifiedCurrent
 		}
 		found = true
+		proposedIdentity = root.RootIdentity
 	}
 	if !found {
 		q.finish(false)
@@ -117,7 +119,7 @@ func (q *HeldCurrentQualifier) PrepareCurrent(ctx context.Context, entry journal
 		q.finish(true)
 		return nil, errors.Join(errUnqualifiedCurrent, ErrCurrentCustodyUnknown, err, closeErr)
 	}
-	w := &heldCurrentWitness{owner: q, anchor: anchor, candidate: candidate, saved: proof.Saved, root: entry.Request.Root}
+	w := &heldCurrentWitness{owner: q, anchor: anchor, candidate: candidate, saved: proof.Saved, root: entry.Request.Root, proposedIdentity: proposedIdentity}
 	// Requalify before returning to Store (which performs another requalification
 	// under its protected lock and owns the one-shot Close).
 	if err := w.RequalifyCurrent(ctx); err != nil {
@@ -130,12 +132,13 @@ func (q *HeldCurrentQualifier) PrepareCurrent(ctx context.Context, entry journal
 // The witness always retains the ORIGINAL native descriptors. No re-open by
 // path is permitted after a stale native check. Failed Close is not retried.
 type heldCurrentWitness struct {
-	owner     *HeldCurrentQualifier
-	anchor    leaseport.Anchor
-	candidate observationport.HeldObservation
-	saved     observation.Saved
-	root      string
-	closed    bool
+	owner            *HeldCurrentQualifier
+	anchor           leaseport.Anchor
+	candidate        observationport.HeldObservation
+	saved            observation.Saved
+	root             string
+	proposedIdentity authority.RootIdentity
+	closed           bool
 }
 
 func (w *heldCurrentWitness) RequalifyCurrent(ctx context.Context) error {
@@ -149,7 +152,8 @@ func (w *heldCurrentWitness) RequalifyCurrent(ctx context.Context) error {
 		return errUnqualifiedCurrent
 	}
 	current, err := w.candidate.Snapshot()
-	if err != nil || !current.Valid() || current.Binding.Path != w.root {
+	if err != nil || !current.Valid() || current.Binding.Path != w.root ||
+		current.Binding.Device != w.proposedIdentity.Device || current.Binding.Inode != w.proposedIdentity.Inode {
 		return errUnqualifiedCurrent
 	}
 	classification := observation.Compare(w.saved, current, observation.Settled)

@@ -2,6 +2,7 @@ package access
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -178,4 +179,57 @@ func TestContinuityRestartLostAckCannotAdmitSecondWithIdenticalProtectedBytes(t 
 	if _, err := reopened.Status(ctx); err == nil {
 		t.Fatal("restart bypassed unresolved original")
 	}
+}
+
+func TestDecodeJournalRejectsForeignAckIdentities(t *testing.T) {
+	value, err := (transition.Journal{Entries: []transition.Entry{}}).Begin(transitionIntent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	phases := []transition.Phase{transition.Prepared, transition.WithdrawIntent, transition.WithdrawAcknowledged, transition.SettingsIntent, transition.SettingsAcknowledged, transition.PublishIntent, transition.PublishAcknowledged, transition.CloseIntent, transition.CloseAcknowledged}
+	check := func(value transition.Journal) {
+		t.Helper()
+		for _, field := range []string{"withdraw", "settings", "publication", "cleanup"} {
+			bad := value.Clone()
+			e := &bad.Entries[0]
+			switch field {
+			case "withdraw":
+				e.WithdrawAck.EffectID = "foreign"
+			case "settings":
+				e.SettingsAck.EffectID = "foreign"
+				if e.Certificate != nil {
+					e.Certificate.Settings = e.SettingsAck
+				}
+			case "publication":
+				e.PublicationAck.EffectID = "foreign"
+				if e.Certificate != nil {
+					e.Certificate.Publication = e.PublicationAck
+				}
+			case "cleanup":
+				e.CleanupAck.EffectID = "foreign"
+				if e.Certificate != nil {
+					e.Certificate.Cleanup = e.CleanupAck
+				}
+			}
+			raw, err := json.Marshal(journalDocument{Schema: 1, ProfileID: testBinding.ProfileID, OwnerID: testBinding.OwnerID, ComputerID: testBinding.ComputerID, Entries: bad.Entries})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := decodeJournal(testBinding, append(raw, '\n')); err == nil {
+				t.Errorf("accepted canonical foreign %s ACK at %s", field, e.Phase)
+			}
+		}
+	}
+	for _, phase := range phases {
+		value, err = value.Advance(transitionIntent.OperationID, phase, transitionProof)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	check(value)
+	value, err = value.Certify(transitionIntent.OperationID, transition.Committed, transitionProof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(value)
 }

@@ -185,3 +185,35 @@ func TestTransitionRootMustBeCanonicalAndNoControlCharacters(t *testing.T) {
 		}
 	}
 }
+
+func TestStrictReaderRejectsMismatchedAckIdentities(t *testing.T) {
+	j, _ := (Journal{Entries: []Entry{}}).Begin(good)
+	for _, phase := range []Phase{Prepared, WithdrawIntent, WithdrawAcknowledged, SettingsIntent, SettingsAcknowledged, PublishIntent, PublishAcknowledged, CloseIntent, CloseAcknowledged} {
+		var err error
+		j, err = j.Advance(id1, phase, receipt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if phase == WithdrawAcknowledged || phase == SettingsAcknowledged || phase == PublishAcknowledged || phase == CloseAcknowledged {
+			bad := j.Clone()
+			switch phase {
+			case WithdrawAcknowledged:
+				bad.Entries[0].WithdrawAck.EffectID = "foreign"
+			case SettingsAcknowledged:
+				bad.Entries[0].SettingsAck.EffectID = "foreign"
+			case PublishAcknowledged:
+				bad.Entries[0].PublicationAck.EffectID = "foreign"
+			case CloseAcknowledged:
+				bad.Entries[0].CleanupAck.EffectID = "foreign"
+			}
+			if bad.Valid() {
+				t.Errorf("accepted mismatched %s", phase)
+			}
+		}
+	}
+	j, _ = j.Certify(id1, Committed, receipt)
+	j.Entries[0].WithdrawAck.EffectID = "foreign"
+	if j.Valid() {
+		t.Error("accepted mismatched committed withdrawal ACK")
+	}
+}
