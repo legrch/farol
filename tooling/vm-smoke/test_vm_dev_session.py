@@ -30,7 +30,7 @@ class Fixture(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="farol-vm-dev-controller-")
         self.addCleanup(self.tmp.cleanup)
-        self.home = Path(self.tmp.name)
+        self.home = Path(self.tmp.name).resolve()
         self.settings = self.home / "Library/Application Support/Example Testing"
         self.settings.mkdir(parents=True, mode=0o700)
         self.root = self.home / "Library/Application Support/terminal-mac"
@@ -76,6 +76,20 @@ class Fixture(unittest.TestCase):
 
 
 class AdmissionTests(Fixture):
+    def test_fixture_admits_paths_beneath_a_symlinked_temp_prefix(self):
+        alias = self.home / "temp-alias"
+        alias.symlink_to(self.home, target_is_directory=True)
+        temporary_directory = tempfile.TemporaryDirectory
+        with mock.patch.object(tempfile, "TemporaryDirectory",
+                               side_effect=lambda **kw: temporary_directory(dir=alias, **kw)):
+            fixture = Fixture()
+            try:
+                fixture.setUp()
+                self.assertEqual(fixture.home, fixture.home.resolve(strict=True))
+                self.assertEqual(dev.preflight_inputs(fixture.options), fixture.selected)
+            finally:
+                fixture.doCleanups()
+
     def test_explicit_artifact_receipt_and_digest_are_required(self):
         with self.assertRaises(SystemExit), mock.patch("sys.stderr", new_callable=io.StringIO):
             dev.parse_options([])

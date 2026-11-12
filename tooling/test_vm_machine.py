@@ -63,7 +63,7 @@ class VmMachineSpecTests(unittest.TestCase):
 
     def test_infrastructure_reads_the_private_config_and_bounds_the_root(self):
         with tempfile.TemporaryDirectory() as directory:
-            home = Path(directory)
+            home = Path(directory).resolve()
             settings = home / 'Library/Application Support/Example Testing'
             settings.mkdir(parents=True)
             config = settings / 'vm-smoke.json'
@@ -81,7 +81,7 @@ class VmMachineSpecTests(unittest.TestCase):
 
     def test_prepared_base_defaults_and_follows_the_private_config(self):
         with tempfile.TemporaryDirectory() as directory:
-            home = Path(directory)
+            home = Path(directory).resolve()
             settings = home / 'Library/Application Support/Example Testing'
             settings.mkdir(parents=True)
             os.environ.pop('FAROL_VM_CONFIG', None)
@@ -129,7 +129,7 @@ class VmMachineSpecTests(unittest.TestCase):
 
     def test_infrastructure_refuses_roots_outside_the_terminal_mac_data_root(self):
         with tempfile.TemporaryDirectory() as directory:
-            home = Path(directory)
+            home = Path(directory).resolve()
             settings = home / 'Library/Application Support/Example Testing'
             settings.mkdir(parents=True)
             config = settings / 'vm-smoke.json'
@@ -147,7 +147,7 @@ class VmMachineSpecTests(unittest.TestCase):
 
     def test_infrastructure_refuses_alias_config_roots(self):
         with tempfile.TemporaryDirectory() as directory:
-            home = Path(directory)
+            home = Path(directory).resolve()
             settings = home / 'Library/Application Support/Example Testing'
             settings.mkdir(parents=True)
             alias = home / 'elsewhere-terminal-mac'
@@ -201,7 +201,7 @@ class VmInstanceProvisioningTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
-        home = Path(self.directory.name)
+        home = Path(self.directory.name).resolve()
         self.settings = home / 'Library/Application Support/Example Testing'
         self.settings.mkdir(parents=True)
         self.root = home / 'Library/Application Support/terminal-mac'
@@ -213,6 +213,20 @@ class VmInstanceProvisioningTests(unittest.TestCase):
         (self.root / 'machines/farol-base-1/hardware.bin').write_bytes(b'synthetic immutable hardware')
         self.base_receipt = dict(self.BASE_RECEIPT, **vm_machine.base_binding(self.root, 'farol-base-1', 'hardware.bin'))
         self.receipt_file.write_text(json.dumps(self.base_receipt))
+
+    def test_fixture_admits_paths_beneath_a_symlinked_temp_prefix(self):
+        alias = self.settings.parents[2] / 'temp-alias'
+        alias.symlink_to(self.settings.parents[2], target_is_directory=True)
+        temporary_directory = tempfile.TemporaryDirectory
+        with mock.patch.object(tempfile, 'TemporaryDirectory',
+                               side_effect=lambda: temporary_directory(dir=alias)):
+            fixture = VmInstanceProvisioningTests()
+            try:
+                fixture.setUp()
+                self.assertEqual(fixture.root, fixture.root.resolve(strict=True))
+                fixture.planned()
+            finally:
+                fixture.doCleanups()
 
     def planned(self, name='farol-test-1', base='farol-base-1'):
         return vm_machine.plan_instance(name, base, '/bin/terminal-mac', self.root, self.settings)
