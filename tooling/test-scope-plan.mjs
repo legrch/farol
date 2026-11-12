@@ -269,7 +269,7 @@ export function planTests(scope, files) {
     scope,
     prerequisites: {
       node: ["24.20.0", "26.7.0"],
-      go: "1.26.2",
+      go: "1.27.3",
       dependencies: "Already installed locally; no automatic acquisition",
       integrationHost: "Current native suites require macOS and system Git",
     },

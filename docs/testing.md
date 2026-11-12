@@ -52,7 +52,7 @@ contract; the new integration command does not claim to cover them implicitly.
 The [standalone entrypoint inventory](testing-standalone.md) records all 23
 scripts, their distinct scenario selectors, required artifacts and known limits.
 
-The runner requires Node 24.20.0 or 26.7.0, Go 1.26.2 and already-installed local
+The runner requires Node 24.20.0 or 26.7.0, Go 1.27.3 and already-installed local
 dependencies. `FAROL_TEST_GO` may name the local Go executable. Go toolchain/module
 downloads are disabled. Integration Vitest files run in serial groups of at most
 16 files, each with a five-minute deadline. This prevents the combined runtime of

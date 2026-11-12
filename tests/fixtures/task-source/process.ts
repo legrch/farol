@@ -32,7 +32,7 @@ export async function startTaskSourceFixture() {
       env,
       encoding: "utf8",
       timeout: 5000,
-    }).startsWith("go version go1.26.2 ")
+    }).startsWith("go version go1.27.3 ")
   )
     throw new Error("fixture_go_toolchain_mismatch");
   const directory = await mkdtemp(

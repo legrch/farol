@@ -1,4 +1,4 @@
-Go 1.26.2 standard library and runtime
+Go 1.27.3 standard library and runtime
 Source: installed public Go SDK LICENSE
 
 Copyright 2009 The Go Authors.

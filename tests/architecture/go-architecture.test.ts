@@ -11,7 +11,7 @@ const root = path.resolve(
 );
 const checker = path.join(root, "tooling/check-go-architecture.mjs");
 const prefix = "github.com/legrch/farol/";
-const moduleFile = "module github.com/legrch/farol\n\ngo 1.26.2\n";
+const moduleFile = "module github.com/legrch/farol\n\ngo 1.27.3\n";
 
 type Finding = { code: string; file: string; detail: string };
 
@@ -629,7 +629,7 @@ var timestamp = time.Parse
     denied(check({ "boot/main.go": source() }, false), "GO_MODULE_MISSING"));
   it("rejects an unexpected root module identity", () =>
     denied(
-      check({ "go.mod": "module githubXcom/legrch/farol\ngo 1.26.2\n" }),
+      check({ "go.mod": "module githubXcom/legrch/farol\ngo 1.27.3\n" }),
       "GO_MODULE_IDENTITY",
     ));
   it("rejects toolchain drift", () =>

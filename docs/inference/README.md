@@ -130,7 +130,7 @@ option added to that client here.
 
 ## Portable verification
 
-From a checkout with the declared Go 1.26.2 and Node/npm toolchain:
+From a checkout with the declared Go 1.27.3 and Node/npm toolchain:
 
 ```sh
 GOTOOLCHAIN=local GOPROXY=off go test -race -count=1 -timeout 60s ./modules/chat/app/services/inference ./modules/chat/infra/clients/planresponses

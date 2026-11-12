@@ -57,7 +57,7 @@ declared Go backend inputs and a Go-enabled build manifest (schema 4). The unsig
 artifact uses package schema 7 at `_output/package/Farol.app`, including the real
 `farol-backend` and its `core-artifact.json`. Creating it does not install or
 activate anything. See the [approved Go input declaration](../README.md) for the
-Go 1.26.2 SDK, independently approved SDK digest and authenticated offline module
+Go 1.27.3 SDK, independently approved SDK digest and authenticated offline module
 inputs. The separately authenticated native archive helper is also required;
 backend inputs do not replace its toolchain checks. Historical schema 6 packages
 had no required Go backend, and schema 5 used `Farol.app`.

@@ -8,7 +8,7 @@ import { sourceSnapshot } from "./source-identity.mjs";
 import { OWNER_FILE, writeOwner } from "./owned-scratch.mjs";
 
 const MODULE = "github.com/legrch/farol";
-const VERSION = "go1.26.2";
+const VERSION = "go1.27.3";
 const ENTRY = "./cmd/farol";
 const SYMBOL = `${MODULE}/boot.BuildID`;
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -237,7 +237,7 @@ function assertSource(snapshot, identity) {
   const text = snapshot.entries.get("go.mod")?.bytes?.toString("utf8") ?? "";
   if (
     !/^module github\.com\/legrch\/farol\s*$/mu.test(text) ||
-    !/^go 1\.26\.2\s*$/mu.test(text) ||
+    !/^go 1\.27\.3\s*$/mu.test(text) ||
     !snapshot.entries.has("cmd/farol/main.go")
   )
     fail("PRODUCTION_SOURCE_INVALID");
@@ -258,7 +258,7 @@ const CONTENT_LIMIT = 256 * 1024 * 1024;
 const FILE_LIMIT = 64 * 1024 * 1024;
 const utf8Order = (a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b));
 
-// Go 1.26.2 cmd/vendor/golang.org/x/mod/sumdb/dirhash.Hash1 and
+// Go 1.27.3 cmd/vendor/golang.org/x/mod/sumdb/dirhash.Hash1 and
 // cmd/go/internal/modfetch.goModSum: hash sorted UTF-8 names and file hashes,
 // including the module@version/ prefix for ZIPs; .mod uses only "go.mod".
 function goH1(files) {
@@ -277,7 +277,7 @@ function dependencySums(snapshot) {
     .replace(/\/\/[^\n]*/gu, "")
     .trim()
     .split(/\s+/u);
-  const wanted = ["module", MODULE, "go", "1.26.2", "require", "("];
+  const wanted = ["module", MODULE, "go", "1.27.3", "require", "("];
   for (const [modulePath, { version }] of REQUIRED_MODULES)
     wanted.push(modulePath, version);
   wanted.push(")");
@@ -719,10 +719,18 @@ async function installModules(modules, cache) {
     await write(`${download}.mod`, mod.bytes);
     await write(`${download}.ziphash`, Buffer.from(ledger.zipH1));
     // Version is declared and bound by go.mod/go.sum, not proxy .info claims.
-    // Go's cached Stat needs .info; it contains no timestamp or caller metadata.
+    // Go's cached Stat remarshal uses modfetch.RevInfo, whose Time is not
+    // omitted when zero. Seed that canonical encoding so readDiskStat does
+    // not atomically replace .info during an otherwise read-only build.
+    // This synthetic zero time is not a claim about the upstream commit.
     await write(
       `${download}.info`,
-      Buffer.from(JSON.stringify({ Version: input.version })),
+      Buffer.from(
+        JSON.stringify({
+          Version: input.version,
+          Time: "0001-01-01T00:00:00Z",
+        }),
+      ),
     );
     if (!entries.has(`${prefix}go.mod`)) fail("MODULE_GRAPH_UNSUPPORTED");
   }
@@ -974,7 +982,7 @@ function assertEmbeddedBuildId(bytes, symbols, platform, expected) {
  * Callable from the existing authenticated Node build after it creates its
  * clean whole-HEAD buildIdentity. No CLI, manifest, packaging or runtime hook.
  * toolchain = { root: canonical SDK, treeSha256: APPROVED full-SDK digest,
- *   version: 'go1.26.2', goos: 'darwin', goarch: 'arm64' | 'amd64' }.
+ *   version: 'go1.27.3', goos: 'darwin', goarch: 'arm64' | 'amd64' }.
  * platform must match that declaration. This is a CGO-free production build.
  * moduleInputs must explicitly name every pinned module (see REQUIRED_MODULES):
  * [{ modulePath, version, zipPath, modPath, contentRoot, zipHashPath? }]. Paths

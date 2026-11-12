@@ -24,7 +24,9 @@ workspaces, modfile flags and lazy Git fetching are disabled.
 
 ## Reproduce
 
-Use the declared Go 1.26.2 and pre-existing dependency cache. All three checkouts
+Use Go 1.26.2, the toolchain this witness was recorded with (the repository itself now
+declares Go 1.27.3; the witness and its receipts stay frozen to their original pins),
+and the pre-existing dependency cache. All three checkouts
 must contain the exact public objects; this script does not fetch or run a daemon.
 Use the exact inference source from `CURRENT-WITNESS-RECEIPT.json` and a fresh
 output directory outside the inputs:

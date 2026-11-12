@@ -26,7 +26,7 @@ const modules = [
 ];
 const approval = {
   schema: "farol-ci-go-sdk/1",
-  version: "go1.26.2",
+  version: "go1.27.3",
   goos: "darwin",
   goarch: "arm64",
   treeSha256: "a".repeat(64),
@@ -41,7 +41,7 @@ beforeEach(() => {
   mocks.realpathSync.mockImplementation((file) => file);
   mocks.measureGoToolchain.mockResolvedValue(approval.treeSha256);
   mocks.execFileSync.mockImplementation((_command, args) => {
-    if (args[0] === "version") return "go version go1.26.2 darwin/arm64\n";
+    if (args[0] === "version") return "go version go1.27.3 darwin/arm64\n";
     if (args[0] === "env") return "/fixture/sdk\n";
     const [modulePath, version] = args[3].split("@");
     return JSON.stringify({
