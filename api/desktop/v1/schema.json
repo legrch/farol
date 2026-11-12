@@ -232,6 +232,22 @@
         "code": {
           "type": "text",
           "optional": true
+        },
+        "nativeRefusalReason": {
+          "type": "text",
+          "optional": true,
+          "values": [
+            "admission_policy",
+            "confinement_policy",
+            "executable_integrity",
+            "workspace_root_identity",
+            "cwd_fence",
+            "directory_policy",
+            "filesystem_policy",
+            "runtime_integrity",
+            "helper_preflight",
+            "unclassified"
+          ]
         }
       }
     },

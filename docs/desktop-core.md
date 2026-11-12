@@ -487,6 +487,13 @@ K0 events admit only `changed` and `gap`, binding context, stream and decimal se
 
 ## Composition and next read slice
 
+The optional desktop `Outcome.nativeRefusalReason` carries only a closed native
+process refusal class from the Computer contract. It leaves `status`, `code` and
+operation identity unchanged. JSON clients normalize unknown native-refused
+reasons before validating the complete correlated response. The
+[operations log schema](reference/operations-log.md#native-process-refusal-diagnostics)
+defines its journal projection; no native error text crosses this field.
+
 `cmd/farol` is thin; `boot/container` wires concrete adapters. `transport/desktop.New` accepts only explicitly named methods from the canonical schema. A module-owned adapter maps `desktop.Request` to independent module contracts and supplies `desktop.Outcome`. Module ownership follows the approved package dependencies and explicitly wired owning contracts. The method registry carries read/effect admission only and makes no runtime owner claim. The canonical schema classifies each method as read or effect; generated immutable lookup functions enforce operation identity, and registrations supply only a handler. Effect methods require an operation ID and read methods reject one, but Core supplies no generic durable operation journal: module owners must bind intent durably before effects and reconcile uncertainty. K0 registers no effects.
 
 Computer owns `computer.workspace.read` and all filesystem authority. K1 adds its typed read body/result only after the Computer contract is agreed, then injects disposable trusted repositories through composition. Core supplies the common boundary and never recreates filesystem policy. The existing desktop host chooses the integrated executable; this file does not claim that production uses Go.

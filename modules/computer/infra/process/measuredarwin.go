@@ -43,27 +43,27 @@ func (darwinLaunchFilesystem) resolve(path string) (string, error) {
 func (darwinLaunchFilesystem) effectiveUID() int { return os.Geteuid() }
 func (darwinLaunchFilesystem) pinExecutable(ctx context.Context, pin ExecutablePin) (executableMeasurement, error) {
 	if ctx == nil || ctx.Err() != nil || !absolutePolicyPath(pin.Path) {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalExecutableIntegrity}
 	}
 	file, err := os.OpenFile(pin.Path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalExecutableIntegrity}
 	}
 	before, err := file.Stat()
 	held := &darwinExecutableMeasurement{file: file, selected: pin, original: before, ownerUID: os.Geteuid(), named: func(path string) (os.FileInfo, error) {
 		physical, err := platformDescriptorPath(file.Fd())
 		if err != nil || physical != path {
-			return nil, &processsvc.NativeFailure{}
+			return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalExecutableIntegrity}
 		}
 		resolved, err := filepath.EvalSymlinks(path)
 		if err != nil || resolved != path {
-			return nil, &processsvc.NativeFailure{}
+			return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalExecutableIntegrity}
 		}
 		return os.Lstat(path)
 	}}
 	// Return partial ownership even on error; retainLaunchFiles closes it.
 	if err != nil {
-		return held, &processsvc.NativeFailure{}
+		return held, &processsvc.NativeFailure{Reason: processsvc.RefusalExecutableIntegrity}
 	}
 	return held, held.recheck(ctx)
 }
@@ -100,7 +100,7 @@ func (p *darwinExecutableMeasurement) unchanged(info os.FileInfo) bool {
 		(!p.dataOnly || stat.Gid == original.Gid && stat.Ctimespec == original.Ctimespec)
 }
 func (p *darwinExecutableMeasurement) recheck(ctx context.Context) error {
-	refuse := func() error { return &processsvc.NativeFailure{} }
+	refuse := func() error { return &processsvc.NativeFailure{Reason: processsvc.RefusalExecutableIntegrity} }
 	if ctx == nil || ctx.Err() != nil {
 		return refuse()
 	}
@@ -141,11 +141,11 @@ func (r *measurementContextReader) Read(b []byte) (int, error) {
 
 func (darwinLaunchFilesystem) openDirectory(path string) (directoryPin, error) {
 	if !absolutePolicyPath(path) {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalDirectoryPolicy}
 	}
 	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalDirectoryPolicy}
 	}
 	root := &darwinDirectoryPin{os.NewFile(uintptr(fd), "/")}
 	defer root.Close()
@@ -158,11 +158,11 @@ func (d *darwinDirectoryPin) inspect(path string) (directoryFacts, error) {
 	info, err := d.Stat()
 	named, namedErr := os.Lstat(path)
 	if err != nil || namedErr != nil || !info.IsDir() || !named.IsDir() || named.Mode()&os.ModeSymlink != 0 || !os.SameFile(info, named) {
-		return directoryFacts{}, &processsvc.NativeFailure{}
+		return directoryFacts{}, &processsvc.NativeFailure{Reason: processsvc.RefusalDirectoryPolicy}
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
-		return directoryFacts{}, &processsvc.NativeFailure{}
+		return directoryFacts{}, &processsvc.NativeFailure{Reason: processsvc.RefusalDirectoryPolicy}
 	}
 	return directoryFacts{authority.RootIdentity{Device: strconv.FormatUint(uint64(stat.Dev), 10), Inode: strconv.FormatUint(uint64(stat.Ino), 10)}, info.Mode(), int(stat.Uid)}, nil
 }
@@ -171,12 +171,12 @@ func (d *darwinDirectoryPin) inspect(path string) (directoryFacts, error) {
 // symlinks. An effective scope never reopens its approved ancestor by name.
 func (d *darwinDirectoryPin) openDirectory(relative string) (directoryPin, error) {
 	if relative == "" || filepath.IsAbs(relative) || filepath.Clean(relative) != relative {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalDirectoryPolicy}
 	}
 	parts := strings.Split(relative, "/")
 	for _, part := range parts {
 		if part == ".." || (part == "." && relative != ".") {
-			return nil, &processsvc.NativeFailure{}
+			return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalDirectoryPolicy}
 		}
 	}
 	// '.' produces an independent close-on-exec handle when scope equals root.
@@ -188,7 +188,7 @@ func (d *darwinDirectoryPin) openDirectory(relative string) (directoryPin, error
 			_ = held.Close()
 		}
 		if err != nil {
-			return nil, &processsvc.NativeFailure{}
+			return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalDirectoryPolicy}
 		}
 		held = os.NewFile(uintptr(fd), part)
 		parent = fd

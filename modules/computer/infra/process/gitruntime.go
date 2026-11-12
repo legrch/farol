@@ -146,7 +146,9 @@ func sameGitRuntimeObservation(a, b *gitRuntimeObservation) bool {
 	return slices.Equal(a.files, b.files) && slices.Equal(a.directories, b.directories) && samePythonAlias(a.alias, b.alias)
 }
 func (s *RootScopedPlatformStrategy) observeGitRuntime(ctx context.Context) (*gitRuntimeObservation, error) {
-	refuse := func() (*gitRuntimeObservation, error) { return nil, &processsvc.NativeFailure{} }
+	refuse := func() (*gitRuntimeObservation, error) {
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalRuntimeIntegrity}
+	}
 	if s == nil || s.frozen == nil || ctx == nil || ctx.Err() != nil {
 		return refuse()
 	}

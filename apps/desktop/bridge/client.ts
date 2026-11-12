@@ -1,3 +1,4 @@
+import { normalizeNativeRefusalResponse } from "../renderer/native-refusal";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { isAbsolute } from "node:path";
@@ -745,6 +746,7 @@ export class Client {
       }
       return;
     }
+    normalizeNativeRefusalResponse(value);
     if (!validate("Response", value)) {
       this.fail("invalid_response");
       return;

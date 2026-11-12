@@ -477,3 +477,25 @@ func TestConnectorNoOpCancelBeforeExitPublicationDrainsWithoutRewritingResult(t 
 		t.Fatal("late Cancel overwrote or repeated the published result", out)
 	}
 }
+
+func TestConnectorNativeRefusalWirePreservesOnlyClosedReason(t *testing.T) {
+	for _, reason := range []string{"admission_policy", "confinement_policy", "executable_integrity", "workspace_root_identity", "cwd_fence", "directory_policy", "filesystem_policy", "runtime_integrity", "helper_preflight", "unclassified", "future", "/outside token=fixture"} {
+		want := reason
+		if reason == "future" || reason == "/outside token=fixture" {
+			want = "unclassified"
+		}
+		for _, err := range []error{
+			&processct.Failure{Code: "PROCESS_NATIVE_REFUSED", Outcome: "refused", Retry: "never", NativeRefusalReason: reason},
+			&processsvc.Failure{Code: "PROCESS_NATIVE_REFUSED", NativeRefusalReason: processsvc.NativeRefusalReason(reason)},
+		} {
+			out, e := connectorProcessOutcome(nil, err)
+			if e != nil || out.Status != "refused" || out.Code != "PROCESS_NATIVE_REFUSED" || out.NativeRefusalReason != want {
+				t.Fatal(out, e)
+			}
+			encoded, _ := json.Marshal(wire.Outcome{Status: out.Status, RequestId: "call", Context: wire.Context{ProfileId: "profile", BackendGeneration: "generation"}, Code: &out.Code, NativeRefusalReason: &out.NativeRefusalReason})
+			if wire.Validate("Outcome", encoded) != nil || strings.Contains(string(encoded), "token=") {
+				t.Fatalf("invalid/unsafe wire: %s", encoded)
+			}
+		}
+	}
+}

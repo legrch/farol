@@ -1,3 +1,4 @@
+import { nativeRefusalReason } from "../renderer/native-refusal";
 import type {
   OperationMetadata,
   OperationsRecorder,
@@ -521,7 +522,20 @@ export function createGoComputerMcpServer(
         }
       }
     }
-    finish(recorded.outcome, recorded.code, performance.now() - started);
+    const content = result.structuredContent;
+    finish(
+      recorded.outcome,
+      recorded.code,
+      performance.now() - started,
+      nativeRefusalReason(
+        recorded.code,
+        content &&
+          typeof content === "object" &&
+          "nativeRefusalReason" in content
+          ? content.nativeRefusalReason
+          : undefined,
+      ),
+    );
     return result;
   };
   const identity = (call: ComputerCall) => ({

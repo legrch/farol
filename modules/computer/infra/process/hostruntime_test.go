@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -459,5 +460,38 @@ func TestHostRuntimeSupportRequiresExplicitExclusiveSelection(t *testing.T) {
 	f.descriptor.GitRuntimeResources = gitRuntimeFixture()
 	if validPlatformSupport(f.descriptor) {
 		t.Fatal("fixed and installed policies mixed")
+	}
+}
+
+// Demonstrates a possible intermittent preflight refusal mechanism using only
+// CPU facts. It does not identify the installed incident's historical cause.
+func TestHostRuntimeRecheckRefusesDirectoryMetadataDriftWithSameGitBytes(t *testing.T) {
+	for _, field := range []string{"mtime", "ctime", "size", "links"} {
+		t.Run(field, func(t *testing.T) {
+			fs := runtimeFixture()
+			plan, err := buildRuntimeFixture(fs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			originalGit := fs.nodes["/install/bin/git-real"]
+			dir := fs.nodes["/install"]
+			switch field {
+			case "mtime":
+				dir.Modified = "2"
+			case "ctime":
+				dir.Changed = "2"
+			case "size":
+				dir.Size++
+			case "links":
+				dir.Links++
+			}
+			fs.nodes[dir.Path] = dir
+			if !reflect.DeepEqual(fs.nodes[originalGit.Path], originalGit) {
+				t.Fatal("fixture changed Git")
+			}
+			if plan.recheck(context.Background(), fs) == nil {
+				t.Fatal("changed inventory admitted")
+			}
+		})
 	}
 }

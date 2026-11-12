@@ -83,11 +83,11 @@ var _ processsvc.Prepared = (*Prepared)(nil)
 // its required native qualification remains fail closed when unavailable.
 func New(command Command, qualification Qualification, clock port.Clock) (*Prepared, error) {
 	if qualification == nil {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalAdmissionPolicy}
 	}
 	if selected, ok := qualification.(*Seatbelt); ok {
 		if selected == nil {
-			return nil, &processsvc.NativeFailure{}
+			return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalAdmissionPolicy}
 		}
 		var err error
 		command, err = selected.bind(command)
@@ -113,12 +113,12 @@ func copyCommand(c Command) Command {
 }
 func newPrepared(command Command, native boundary, clock port.Clock, scheduler schedule) (*Prepared, error) {
 	if native == nil || clock == nil || scheduler == nil || !validCommand(command) {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalAdmissionPolicy}
 	}
 	command = copyCommand(command)
 	encoded, err := json.Marshal(command)
 	if err != nil {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalAdmissionPolicy}
 	}
 	digest := sha256.Sum256(encoded)
 	seal := processsvc.Seal{Digest: hex.EncodeToString(digest[:]), WorkspaceID: command.WorkspaceID, Root: command.Root, Cwd: command.Cwd, RootIdentity: command.RootIdentity, Write: command.Write}
@@ -171,11 +171,11 @@ func (p *Prepared) Spawn(ctx context.Context, request processsvc.SpawnRequest) (
 	p.attempted = true
 	p.mutex.Unlock()
 	if ctx == nil || ctx.Err() != nil || request.Check == nil || !p.clock.Now().Before(request.Deadline) {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalAdmissionPolicy}
 	}
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalAdmissionPolicy}
 	}
 	child := &Child{handle: "process-" + hex.EncodeToString(raw[:]), root: processsvc.RootRunning, group: processsvc.CleanupPending, descendants: processsvc.CleanupPending, done: make(chan struct{})}
 	execution := ctx
@@ -271,4 +271,24 @@ func (c *Child) watchCurrent(ctx context.Context, check func(context.Context) er
 	if done && watch != nil {
 		watch.Stop()
 	}
+}
+
+// refusalAt classifies a check that previously returned a generic native refusal.
+// Preserve that public code even for a nested filesystem mismatch; direct
+// FilesystemUnsupported results still retain their separate code at boundary().
+// Unknown effects dominate. A future nonempty reason is never guessed.
+func refusalAt(err error, stage processsvc.NativeRefusalReason) error {
+	var native *processsvc.NativeFailure
+	if errors.As(err, &native) && native != nil {
+		if native.Unknown {
+			return native
+		}
+		if native.FilesystemUnsupported {
+			return &processsvc.NativeFailure{Reason: processsvc.RefusalFilesystemPolicy}
+		}
+		if native.Reason != "" {
+			return &processsvc.NativeFailure{Reason: processsvc.ParseNativeRefusalReason(string(native.Reason))}
+		}
+	}
+	return &processsvc.NativeFailure{Reason: processsvc.ParseNativeRefusalReason(string(stage))}
 }

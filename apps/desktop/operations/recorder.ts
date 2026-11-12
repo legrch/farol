@@ -1,3 +1,7 @@
+import {
+  nativeRefusalReason,
+  type NativeRefusalReason,
+} from "../renderer/native-refusal";
 import type {
   OperationEntry,
   OperationMetadata,
@@ -43,6 +47,7 @@ type Finish = (
   outcome: Outcome,
   code: string | null,
   durationMs: number,
+  nativeRefusalReason?: NativeRefusalReason,
 ) => void;
 type Labels = readonly { workspaceId: string; label: string }[];
 
@@ -151,7 +156,7 @@ export function createTotalOperationsRecorder(
           failed("pending");
           return inert;
         }
-        return (outcome, code, durationMs) => {
+        return (outcome, code, durationMs, reason) => {
           let recordedOutcome = outcome;
           observe(
             () => {
@@ -163,6 +168,7 @@ export function createTotalOperationsRecorder(
                 OperationDurationSchema.parse(
                   Math.max(0, Math.round(durationMs)),
                 ),
+                nativeRefusalReason(classified.code, reason),
               );
             },
             () => recordedOutcome,

@@ -141,6 +141,7 @@ type ChildCompletion interface {
 // NativeFailure classifies a one-attempt boundary result without disclosing OS
 // errors/paths. Unknown is irreversible here; it never authorizes another effect.
 type NativeFailure struct {
+	Reason  NativeRefusalReason
 	Unknown bool
 	// FilesystemUnsupported is a measured pre-start class mismatch, not an OS message.
 	FilesystemUnsupported bool

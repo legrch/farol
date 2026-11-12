@@ -27,7 +27,7 @@ func (nativeWatchdogHost) Start(ctx context.Context, selection WatchdogSelection
 	defer image.Close() // Retain measured bytes through the single helper start.
 	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
 	if err != nil {
-		return nil, nil, &processsvc.NativeFailure{}
+		return nil, nil, &processsvc.NativeFailure{Reason: processsvc.RefusalHelperPreflight}
 	}
 	unix.CloseOnExec(pair[0])
 	unix.CloseOnExec(pair[1])
@@ -37,7 +37,7 @@ func (nativeWatchdogHost) Start(ctx context.Context, selection WatchdogSelection
 	connection, err := net.FileConn(parent)
 	parent.Close()
 	if err != nil {
-		return nil, nil, &processsvc.NativeFailure{}
+		return nil, nil, &processsvc.NativeFailure{Reason: processsvc.RefusalHelperPreflight}
 	}
 	command := exec.Command(selection.Executable.Path, "-e", string(selection.Source), "--", "--farol-go-prepared-v1")
 	command.Dir = cwd

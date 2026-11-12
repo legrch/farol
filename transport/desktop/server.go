@@ -25,9 +25,10 @@ type Request struct {
 	Body        json.RawMessage
 }
 type Outcome struct {
-	Status string
-	Code   string
-	Data   json.RawMessage
+	NativeRefusalReason string
+	Status              string
+	Code                string
+	Data                json.RawMessage
 }
 type Method struct {
 	// Trusted boot opts in only for handlers that await a reciprocal desktop
@@ -346,7 +347,7 @@ func (s *Server) context() wire.Context {
 	return wire.Context{ProfileId: s.config.ProfileID, BackendGeneration: s.config.Generation}
 }
 func (s *Server) result(req wire.Request, outcome *Outcome) wire.Response {
-	return wire.Response{Jsonrpc: "2.0", Id: &req.Id, Result: &wire.Outcome{Status: outcome.Status, RequestId: req.Id, Context: s.context(), OperationId: req.Params.OperationId, Data: outcome.Data, Code: optional(outcome.Code)}}
+	return wire.Response{Jsonrpc: "2.0", Id: &req.Id, Result: &wire.Outcome{Status: outcome.Status, RequestId: req.Id, Context: s.context(), OperationId: req.Params.OperationId, Data: outcome.Data, Code: optional(outcome.Code), NativeRefusalReason: optional(outcome.NativeRefusalReason)}}
 }
 func fault(id string, code int32, message string) wire.Response {
 	return wire.Response{Jsonrpc: "2.0", Id: optional(id), Error: &wire.Fault{Code: code, Message: message}}

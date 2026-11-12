@@ -68,6 +68,7 @@ type directoryCheck struct {
 	private        bool
 	protected      bool
 	protectedFacts directoryFacts
+	reason         processsvc.NativeRefusalReason
 }
 
 func (m *retainedLaunchMeasurement) Close() {
@@ -95,9 +96,9 @@ func (m *retainedLaunchMeasurement) checkDirectory(ctx context.Context, c direct
 		(!c.protected || (facts == c.protectedFacts && facts.mode.Perm()&0022 == 0 && (facts.uid == 0 || facts.uid == m.fs.effectiveUID())))
 }
 func (m *retainedLaunchMeasurement) Recheck(ctx context.Context) error {
-	refuse := func() error { m.Close(); return &processsvc.NativeFailure{} }
+	refuse := func(reason processsvc.NativeRefusalReason) error { m.Close(); return refusalAt(nil, reason) }
 	if m == nil || m.closed || ctx == nil || ctx.Err() != nil || m.context == nil || m.context.Err() != nil {
-		return refuse()
+		return refuse(processsvc.RefusalAdmissionPolicy)
 	}
 	// A new caller context cannot renew the original measurement lifetime.
 	bounded, cancel := context.WithCancel(ctx)
@@ -109,21 +110,21 @@ func (m *retainedLaunchMeasurement) Recheck(ctx context.Context) error {
 			checkHostRuntime(context.Context, *HostRuntimePlan) error
 		})
 		if !ok || reader.checkHostRuntime(bounded, m.hostRuntime) != nil {
-			return refuse()
+			return refuse(processsvc.RefusalRuntimeIntegrity)
 		}
 	}
 	for _, pin := range m.executables {
 		if bounded.Err() != nil || m.context.Err() != nil || pin.recheck(bounded) != nil {
-			return refuse()
+			return refuse(processsvc.RefusalExecutableIntegrity)
 		}
 	}
 	for _, c := range m.directories {
 		if !m.checkDirectory(bounded, c) {
-			return refuse()
+			return refuse(c.reason)
 		}
 	}
 	if bounded.Err() != nil || m.context.Err() != nil {
-		return refuse()
+		return refuse(processsvc.RefusalAdmissionPolicy)
 	}
 	return nil
 }
@@ -139,7 +140,9 @@ func measureLaunchFiles(ctx context.Context, command Command, launch *confinedLa
 }
 
 func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLaunch, fs launchFilesystem) (*retainedLaunchMeasurement, error) {
-	refuse := func() (*retainedLaunchMeasurement, error) { return nil, &processsvc.NativeFailure{} }
+	refuse := func() (*retainedLaunchMeasurement, error) {
+		return nil, refusalAt(nil, processsvc.RefusalDirectoryPolicy)
+	}
 	if ctx == nil || ctx.Err() != nil || launch == nil || fs == nil {
 		return refuse()
 	}
@@ -160,7 +163,7 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 			measurement.pins = append(measurement.pins, pin)
 		}
 		if err != nil || pin == nil {
-			return refuse()
+			return nil, refusalAt(err, processsvc.RefusalExecutableIntegrity)
 		}
 		measurement.executables = append(measurement.executables, pin)
 	}
@@ -169,21 +172,21 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 			pinGitRuntimeFile(context.Context, ExecutablePin) (executableMeasurement, error)
 		})
 		if !ok {
-			return refuse()
+			return nil, refusalAt(nil, processsvc.RefusalRuntimeIntegrity)
 		}
 		if launch.gitRuntimeResources.Python != nil {
 			reader, ok := fs.(interface {
 				pinPythonAlias(context.Context) (executableMeasurement, error)
 			})
 			if !ok {
-				return refuse()
+				return nil, refusalAt(nil, processsvc.RefusalRuntimeIntegrity)
 			}
 			pin, err := reader.pinPythonAlias(ctx)
 			if pin != nil {
 				measurement.pins = append(measurement.pins, pin)
 			}
 			if err != nil || pin == nil {
-				return refuse()
+				return nil, refusalAt(nil, processsvc.RefusalRuntimeIntegrity)
 			}
 			measurement.executables = append(measurement.executables, pin)
 		}
@@ -193,12 +196,12 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 				measurement.pins = append(measurement.pins, pin)
 			}
 			if err != nil || pin == nil {
-				return refuse()
+				return nil, refusalAt(nil, processsvc.RefusalRuntimeIntegrity)
 			}
 			measurement.executables = append(measurement.executables, pin)
 		}
 	}
-	add := func(path string, identity authority.RootIdentity, private bool, parent directoryPin, relative string) directoryPin {
+	add := func(path string, identity authority.RootIdentity, private bool, parent directoryPin, relative string, reason processsvc.NativeRefusalReason) directoryPin {
 		if ctx.Err() != nil || !absolutePolicyPath(path) {
 			return nil
 		}
@@ -224,7 +227,7 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 			}
 			identity = facts.identity
 		}
-		c := directoryCheck{pin: pin, path: path, identity: identity, private: private,
+		c := directoryCheck{pin: pin, path: path, identity: identity, private: private, reason: reason,
 			protected: (launch.protectedBundle != nil && path == launch.protectedBundle.Path) || (launch.protectedState != nil && path == launch.protectedState.Path)}
 		if c.protected {
 			facts, err := pin.inspect(path)
@@ -242,32 +245,37 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 	if command.RootIdentity.Device == "" || command.RootIdentity.Inode == "" || launch.scratchIdentity.Device == "" || launch.scratchIdentity.Inode == "" {
 		return refuse()
 	}
-	root := add(command.Root, command.RootIdentity, false, nil, "")
-	if root == nil || !insidePolicy(command.Root, command.Cwd) {
-		return refuse()
+	root := add(command.Root, command.RootIdentity, false, nil, "", processsvc.RefusalWorkspaceRootIdentity)
+	if root == nil {
+		return nil, refusalAt(nil, processsvc.RefusalWorkspaceRootIdentity)
+	}
+	if !insidePolicy(command.Root, command.Cwd) {
+		return nil, refusalAt(nil, processsvc.RefusalCwdFence)
 	}
 	relative, err := filepath.Rel(command.Root, command.Cwd)
-	if err != nil || add(command.Cwd, authority.RootIdentity{}, false, root, relative) == nil ||
-		add(launch.scratch, launch.scratchIdentity, true, nil, "") == nil {
+	if err != nil || add(command.Cwd, authority.RootIdentity{}, false, root, relative, processsvc.RefusalCwdFence) == nil {
+		return nil, refusalAt(nil, processsvc.RefusalCwdFence)
+	}
+	if add(launch.scratch, launch.scratchIdentity, true, nil, "", processsvc.RefusalDirectoryPolicy) == nil {
 		return refuse()
 	}
 	if launch.protectedBundle != nil {
 		bundle := *launch.protectedBundle
 		if !validProtectedBundle(&bundle) || comparableOverlap(bundle.Path, launch.scratch) ||
-			add(bundle.Path, bundle.Identity, false, nil, "") == nil {
+			add(bundle.Path, bundle.Identity, false, nil, "", processsvc.RefusalDirectoryPolicy) == nil {
 			return refuse()
 		}
 	}
 	if launch.protectedState != nil {
 		state := *launch.protectedState
 		if !validProtectedBundle(&state) || comparableOverlap(state.Path, launch.scratch) ||
-			add(state.Path, state.Identity, true, nil, "") == nil {
+			add(state.Path, state.Identity, true, nil, "", processsvc.RefusalDirectoryPolicy) == nil {
 			return refuse()
 		}
 	}
 	if launch.gitRuntimeResources != nil {
 		for _, selected := range launch.gitRuntimeResources.resourceDirectories() {
-			pin := add(selected.Path, authority.RootIdentity{}, false, nil, "")
+			pin := add(selected.Path, authority.RootIdentity{}, false, nil, "", processsvc.RefusalRuntimeIntegrity)
 			if pin == nil {
 				return refuse()
 			}
@@ -288,13 +296,13 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 			!insidePolicy(binding.ApprovedRoot, binding.ScopeRoot) || binding.RootIdentity.Device == "" || binding.RootIdentity.Inode == "" {
 			return refuse()
 		}
-		approved := add(binding.ApprovedRoot, binding.RootIdentity, false, nil, "")
+		approved := add(binding.ApprovedRoot, binding.RootIdentity, false, nil, "", processsvc.RefusalWorkspaceRootIdentity)
 		if approved == nil {
-			return refuse()
+			return nil, refusalAt(nil, processsvc.RefusalWorkspaceRootIdentity)
 		}
 		approvedPins[binding.ApprovedRoot] = approved
 		relative, err := filepath.Rel(binding.ApprovedRoot, binding.ScopeRoot)
-		if err != nil || add(binding.ScopeRoot, authority.RootIdentity{}, false, approved, relative) == nil {
+		if err != nil || add(binding.ScopeRoot, authority.RootIdentity{}, false, approved, relative, processsvc.RefusalCwdFence) == nil {
 			return refuse()
 		}
 	}
@@ -303,13 +311,13 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 		relative, err := filepath.Rel(binding.ApprovedRoot, binding.Path)
 		if parent == nil || !insidePolicy(binding.ApprovedRoot, binding.Path) || err != nil ||
 			binding.Identity.Device == "" || binding.Identity.Inode == "" ||
-			add(binding.Path, binding.Identity, false, parent, relative) == nil {
+			add(binding.Path, binding.Identity, false, parent, relative, processsvc.RefusalDirectoryPolicy) == nil {
 			return refuse()
 		}
 	}
 	// Later measurements cannot hide an earlier path or image replacement.
-	if measurement.Recheck(ctx) != nil {
-		return refuse()
+	if err := measurement.Recheck(ctx); err != nil {
+		return nil, err
 	}
 	retained = true
 	return measurement, nil

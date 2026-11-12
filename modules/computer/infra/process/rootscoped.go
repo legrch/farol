@@ -19,7 +19,9 @@ type rootScopeBinding struct {
 // both sides. A cwd, argv, symlink target, Git common dir or approval *request*
 // cannot manufacture a grant here. No filesystem IO or approval occurs here.
 func rootScopedScopes(s SeatbeltSelection, command Command) ([]rootScopeBinding, error) {
-	refuse := func() ([]rootScopeBinding, error) { return nil, &processsvc.NativeFailure{} }
+	refuse := func() ([]rootScopeBinding, error) {
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy}
+	}
 	p, a := s.Snapshot.Participant, s.Snapshot.Approval
 	if p == nil || a == nil || len(p.Grant.Workspaces) == 0 || len(p.Grant.Workspaces) > 64 {
 		return refuse()

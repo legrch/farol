@@ -14,8 +14,9 @@ const MaximumOutput = 4 * 1024 * 1024
 const WindowBytes = 64 * 1024
 
 type Failure struct {
-	Code    string
-	Unknown bool
+	NativeRefusalReason NativeRefusalReason
+	Code                string
+	Unknown             bool
 }
 
 func (e *Failure) Error() string           { return e.Code }
@@ -183,7 +184,7 @@ func boundary(err error) error {
 		if native.FilesystemUnsupported {
 			return fail("PROCESS_FILESYSTEM_UNSUPPORTED", false)
 		}
-		return fail("PROCESS_NATIVE_REFUSED", false)
+		return &Failure{Code: "PROCESS_NATIVE_REFUSED", NativeRefusalReason: ParseNativeRefusalReason(string(native.Reason))}
 	}
 	return fail("PROCESS_OUTCOME_UNKNOWN", true)
 }

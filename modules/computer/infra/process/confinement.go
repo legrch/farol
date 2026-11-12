@@ -126,10 +126,10 @@ type confinedLaunch struct {
 
 func NewSeatbelt(selection SeatbeltSelection, qualification Qualification) (*Seatbelt, error) {
 	if qualification == nil || !validSelection(selection) {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy}
 	}
 	if _, nested := qualification.(*Seatbelt); nested {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy}
 	}
 	p := *selection.Snapshot.Participant
 	p.Grant = p.Grant.Clone()
@@ -167,11 +167,11 @@ func (s *Seatbelt) bind(command Command) (Command, error) {
 	wrapped.Executable, wrapped.ExecutableSHA256 = seatbeltExecutable, s.selection.MechanismSHA256
 	wrapped.Args = append(append(append([]string(nil), plan.arguments...), command.Executable), command.Args...)
 	if !validCommand(wrapped) {
-		return Command{}, &processsvc.NativeFailure{}
+		return Command{}, &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy}
 	}
 	binding := ConfinementBinding{ProfileSHA256: plan.digest, MechanismSHA256: s.selection.MechanismSHA256}
 	if command.Confinement != nil && *command.Confinement != binding {
-		return Command{}, &processsvc.NativeFailure{}
+		return Command{}, &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy}
 	}
 	command = copyCommand(command)
 	command.Confinement = &binding
@@ -182,11 +182,11 @@ func selectedLaunch(qualification Qualification, command Command) (*confinedLaun
 	selected, ok := qualification.(*Seatbelt)
 	if !ok || selected == nil || selected.qualification == nil {
 		// A nil-returning Qualify callback alone cannot reach plain os/exec.
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy}
 	}
 	bound, err := selected.bind(command)
 	if err != nil || command.Binding == nil || command.Confinement == nil || *command.Confinement != *bound.Confinement {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy}
 	}
 	plan, err := compileSeatbelt(selected.selection, command)
 	if err != nil {
@@ -198,7 +198,7 @@ func selectedLaunch(qualification Qualification, command Command) (*confinedLaun
 	wrapped.Args = append(append([]string(nil), plan.arguments...), command.Executable)
 	wrapped.Args = append(wrapped.Args, command.Args...)
 	if !validCommand(wrapped) {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy}
 	}
 	return &confinedLaunch{command: wrapped, pins: slices.Concat([]ExecutablePin{{seatbeltExecutable, selected.selection.MechanismSHA256}}, selected.selection.Executables, selected.selection.ProtectedImages),
 		gitRuntimeResources: cloneGitRuntime(selected.selection.GitRuntimeResources), hostRuntime: cloneHostRuntime(selected.selection.HostRuntime), protectedBundle: cloneProtectedBundle(selected.selection.ProtectedBundle), protectedState: cloneProtectedBundle(selected.selection.ProtectedState), roots: append([]rootScopeBinding(nil), plan.roots...), gitDirectories: append([]gitReadDirectory(nil), plan.gitDirectories...), scratch: selected.selection.Scratch, scratchIdentity: selected.selection.ScratchIdentity, qualification: selected.qualification}, nil
@@ -209,7 +209,7 @@ func selectedLaunch(qualification Qualification, command Command) (*confinedLaun
 func (s *Seatbelt) Qualify(ctx context.Context, command Command) error {
 	launch, err := selectedLaunch(s, command)
 	if err != nil || ctx == nil || ctx.Err() != nil {
-		return &processsvc.NativeFailure{}
+		return &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy}
 	}
 	return launch.qualification.Qualify(ctx, copyCommand(launch.command))
 }
@@ -326,7 +326,9 @@ type seatbeltPlan struct {
 }
 
 func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error) {
-	refuse := func() (*seatbeltPlan, error) { return nil, &processsvc.NativeFailure{} }
+	refuse := func() (*seatbeltPlan, error) {
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalConfinementPolicy}
+	}
 	if !validSelection(s) || !validCommand(command) || command.WorkspaceID != s.WorkspaceID || (command.Binding != nil && (command.Binding.RuntimeID != s.RuntimeID || command.Binding.AdmissionID != s.Snapshot.Participant.Grant.AuthorityID)) {
 		return refuse()
 	}
@@ -429,7 +431,7 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		}
 	}
 	if err := validateMountDenials(s, command, selectedScopes); err != nil {
-		return refuse()
+		return nil, err
 	}
 	for _, path := range s.MountDenials {
 		for _, alias := range mountDenialAliases(path) {

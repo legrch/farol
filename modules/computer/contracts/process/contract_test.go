@@ -41,3 +41,20 @@ func TestUnknownRefusedAndNativeDetailsRemainDistinct(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeRefusalDiagnosticContractMapping(t *testing.T) {
+	for _, reason := range []string{"admission_policy", "confinement_policy", "executable_integrity", "workspace_root_identity", "cwd_fence", "directory_policy", "filesystem_policy", "runtime_integrity", "helper_preflight", "unclassified", "future", "/private/fixture token=secret", ""} {
+		want := reason
+		if reason == "future" || reason == "" || reason == "/private/fixture token=secret" {
+			want = "unclassified"
+		}
+		var got *Failure
+		errors.As(failure(&processsvc.Failure{Code: "PROCESS_NATIVE_REFUSED", NativeRefusalReason: processsvc.NativeRefusalReason(reason)}), &got)
+		if got.Code != "PROCESS_NATIVE_REFUSED" || got.Outcome != "refused" || got.Retry != "never" || got.NativeRefusalReason != want {
+			t.Fatalf("mapping lost: %#v", got)
+		}
+		if NativeRefusalReason("PROCESS_OUTCOME_UNKNOWN", reason) != "" {
+			t.Fatal("unknown effect acquired refusal reason")
+		}
+	}
+}

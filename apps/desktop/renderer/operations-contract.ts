@@ -1,3 +1,7 @@
+import {
+  NativeRefusalReasonSchema,
+  type NativeRefusalReason,
+} from "./native-refusal";
 import { z } from "zod";
 import {
   operationKinds,
@@ -224,8 +228,22 @@ const OperationEntryV2Schema = OperationEntryV1Schema.extend({
       authorityLost: z.boolean(),
     })
     .nullable(),
+  nativeRefusalReason: z
+    .preprocess(
+      (value) =>
+        NativeRefusalReasonSchema.safeParse(value).success
+          ? value
+          : "unclassified",
+      NativeRefusalReasonSchema,
+    )
+    .optional(),
   auditDetails: AuditDetailsSchema.optional(),
-});
+}).refine(
+  (entry) =>
+    entry.nativeRefusalReason === undefined ||
+    (entry.code === "PROCESS_NATIVE_REFUSED" && entry.outcome === "refused"),
+  "Native diagnostics require a native refusal",
+);
 // strict V1 prevents unknown future schema versions from being read as V1.
 export const OperationEntrySchema = z
   .union([OperationEntryV1Schema, OperationEntryV2Schema])
@@ -297,6 +315,7 @@ export interface OperationsRecorder {
     outcome: OperationEntry["outcome"],
     code: string | null,
     durationMs: number,
+    nativeRefusalReason?: NativeRefusalReason,
   ) => void;
   begin?(
     metadata: OperationMetadata,

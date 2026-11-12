@@ -21,19 +21,22 @@ type nativeChild struct{ command *exec.Cmd }
 
 func (n nativeBoundary) Start(ctx context.Context, command Command, check func(context.Context) error, stdout, stderr io.Writer) (owned, error) {
 	if ctx == nil || ctx.Err() != nil || check == nil {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalAdmissionPolicy}
 	}
 	launch, err := selectedLaunch(n.qualification, command)
 	if err != nil {
-		return nil, &processsvc.NativeFailure{}
+		return nil, refusalAt(err, processsvc.RefusalConfinementPolicy)
 	}
 	closeMeasurements, err := measureLaunch(ctx, command, launch)
 	if err != nil {
 		return nil, err
 	}
 	defer closeMeasurements()
-	if ctx.Err() != nil || launch.qualification.Qualify(ctx, copyCommand(launch.command)) != nil {
-		return nil, &processsvc.NativeFailure{}
+	if ctx.Err() != nil {
+		return nil, refusalAt(nil, processsvc.RefusalAdmissionPolicy)
+	}
+	if err := launch.qualification.Qualify(ctx, copyCommand(launch.command)); err != nil {
+		return nil, refusalAt(err, processsvc.RefusalConfinementPolicy)
 	}
 	cmd := exec.Command(launch.command.Executable, launch.command.Args...)
 	cmd.Env = append([]string{}, command.Environment...)
@@ -47,7 +50,7 @@ func (n nativeBoundary) Start(ctx context.Context, command Command, check func(c
 		return nil, err
 	}
 	if ctx.Err() != nil || check(ctx) != nil {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalAdmissionPolicy}
 	}
 	// Exactly one native attempt. CommandContext/default cancellation is avoided
 	// because all signalling belongs to the retained owning handle below.
@@ -71,9 +74,12 @@ func (n *nativeChild) Kill() error { return n.command.Process.Kill() }
 func pinnedExecutable(pin ExecutablePin) (*os.File, error) {
 	file, err := os.OpenFile(pin.Path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return nil, &processsvc.NativeFailure{}
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalExecutableIntegrity}
 	}
-	refuse := func() (*os.File, error) { file.Close(); return nil, &processsvc.NativeFailure{} }
+	refuse := func() (*os.File, error) {
+		file.Close()
+		return nil, &processsvc.NativeFailure{Reason: processsvc.RefusalExecutableIntegrity}
+	}
 	physical, err := platformDescriptorPath(file.Fd())
 	if err != nil || physical != pin.Path {
 		return refuse()
