@@ -4,7 +4,7 @@
 // driver-runtime's writeResult, and exits 0 on pass or 1 on failure.
 //
 // Scope: this proves the bundling and staging SHAPE only. It is a synthetic
-// scenario, not a real Farol journey; it is NOT guest evidence, NOT network
+// scenario, not a real product journey; it is NOT guest evidence, NOT network
 // containment evidence, and claims no VM qualification. It must keep importing
 // only node: builtins plus ./driver-runtime.mjs so both bundler paths stay
 // valid, and it must never import from tests/ or vm-smoke/.

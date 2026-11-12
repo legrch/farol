@@ -1667,7 +1667,7 @@ class Runner:
                                    'sha256': digest(self.out / ('e2e-' + name + '.raw.json'))}
                             for name in ('process', 'result')
                             if (self.out / ('e2e-' + name + '.raw.json')).is_file()},
-            # Current declared drivers are probes, not the ordinary Farol E2E.
+            # Current declared drivers are probes, not the product's ordinary E2E.
             'qualificationEligible': False}
 
     def execute_e2e(self):

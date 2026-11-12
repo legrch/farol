@@ -4,7 +4,7 @@
 // run as plain host node processes: nothing here starts or inspects a VM or
 // guest, so this is NOT guest evidence, NOT network containment evidence, and
 // claims no VM qualification. The synthetic prototype entry is a shape
-// prototype, not a real Farol scenario.
+// prototype, not a real product scenario.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";

@@ -1,8 +1,8 @@
-"""Data-only Farol app-service producer and native runner: disposable fixtures.
+"""Data-only product app-service producer and native runner: disposable fixtures.
 
 This suite neither imports host profiles/credentials nor boots/contacts a VM.
 It is a NEW leaf, not the old outcome-unknown or denied Python test execution.
-Synthetic ZIPs are NOT qualified Farol releases: production must call verify().
+Synthetic ZIPs are NOT qualified product releases: production must call verify().
 """
 import hashlib
 import importlib.util
@@ -514,7 +514,7 @@ class RunnerNativeTests(unittest.TestCase):
         runner.out = root / "evidence"
         runner.out.mkdir(mode=0o700)
         # This fixture does not attest publisher signatures. Its finite synthetic
-        # bundle policy is injected only here; production always selects Farol's.
+        # bundle policy is injected only here; production always selects the product's.
         native_module = runner.native_service_module()
         native_module.farol_release_policy = lambda payload: {
             "schema": "terminal-mac.signature-policy/1", "outer": "signed-bundle", "checks": []}

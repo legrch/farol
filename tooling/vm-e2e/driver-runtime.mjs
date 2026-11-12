@@ -1,4 +1,4 @@
-// In-guest result protocol for bundled Farol vm-e2e drivers (farol.vm-e2e/1).
+// In-guest result protocol for bundled product vm-e2e drivers (farol.vm-e2e/1).
 // Keep this module free of anything but node: builtins so it can be inlined
 // into a self-contained driver bundle that runs inside a guest with no
 // node_modules. Durability ordering mirrors tooling/vm-smoke.py

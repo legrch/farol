@@ -1,6 +1,6 @@
 """Regression/fault tests for Dev staging. Synthetic files only; no Mac or account.
 
-Run from Farol: python3 -B -m unittest discover -s tooling/vm-smoke \
+Run from the repository root: python3 -B -m unittest discover -s tooling/vm-smoke \
     -p 'test_staging_fence.py' -v
 """
 import contextlib
