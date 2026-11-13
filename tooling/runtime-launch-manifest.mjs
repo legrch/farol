@@ -388,7 +388,7 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
     ),
     launch(
       "task.go-proxy",
-      "modules/task/infra/clients/codex/nativedarwin.go",
+      "modules/task/infra/clients/codex/process_darwin.go",
       "nativeBoundary.Launch",
       "go.Command",
       "s.ExecutablePath",

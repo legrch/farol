@@ -170,9 +170,9 @@ fence, even when a provider ignores its callback error.
 
 ## Provider adapter ownership
 
-`app/port.CodexClient` fixes the selected existing server seam for Create,
-Continue, Message, Cancel and Observe. `app/port.ClaudeHost` fixes Create,
-exact-session Resume, supported Cancel and Observe through the accepted owning
+The Codex App Server client and the Claude native-process host both implement
+`app/port.Provider`; the Claude host also implements `ObservedProvider` and
+fixes exact-session Resume and supported Cancel through the accepted owning
 native-process seam. Both receive the retained provider/project/writer/model/
 effort/config binding and stable operation ID in the existing Task dispatch DTO.
 Partial lineage and exact known/refused/unknown receipts use existing types.
@@ -239,11 +239,8 @@ and [CLI reference](https://code.claude.com/docs/en/cli-reference).
 
 ## Verification and integration
 
-The pre-K0 disposable module scaffold is retired. The existing
-`sh modules/task/verify.sh` entrypoint now verifies Task packages against the
-accepted root module without copying source or creating another module. Keeping
-the tracked entrypoint also lets the current precommit source-identity gate
-inspect the still-uncommitted retirement. Root checks are:
+The pre-K0 disposable module scaffold is retired; Task packages are verified by
+the accepted root module without another module. Root checks are:
 
 ```sh
 go test -race ./modules/task/...
