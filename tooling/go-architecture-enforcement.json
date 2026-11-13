@@ -1144,19 +1144,19 @@
       "code": "GO_BOOT_LOGIC",
       "file": "boot/computerconnector.go",
       "detail": "conditions other than err != nil",
-      "amount": 66
+      "amount": 78
     },
     {
       "code": "GO_BOOT_LOGIC",
       "file": "boot/computerconnector.go",
       "detail": "for statements",
-      "amount": 6
+      "amount": 7
     },
     {
       "code": "GO_BOOT_LOGIC",
       "file": "boot/computerconnector.go",
       "detail": "lines beyond the 400-line budget",
-      "amount": 164
+      "amount": 298
     },
     {
       "code": "GO_BOOT_LOGIC",
@@ -1167,8 +1167,14 @@
     {
       "code": "GO_BOOT_LOGIC",
       "file": "boot/computerconnector.go",
+      "detail": "switch statements",
+      "amount": 1
+    },
+    {
+      "code": "GO_BOOT_LOGIC",
+      "file": "boot/computerconnector.go",
       "detail": "top-level types beyond one namespace type",
-      "amount": 6
+      "amount": 7
     },
     {
       "code": "GO_BOOT_LOGIC",
@@ -1198,13 +1204,19 @@
       "code": "GO_BOOT_LOGIC",
       "file": "boot/computeringress.go",
       "detail": "conditions other than err != nil",
-      "amount": 50
+      "amount": 51
     },
     {
       "code": "GO_BOOT_LOGIC",
       "file": "boot/computeringress.go",
       "detail": "for statements",
       "amount": 4
+    },
+    {
+      "code": "GO_BOOT_LOGIC",
+      "file": "boot/computeringress.go",
+      "detail": "lines beyond the 400-line budget",
+      "amount": 17
     },
     {
       "code": "GO_BOOT_LOGIC",
@@ -3038,6 +3050,11 @@
     {
       "code": "GO_BOOT_TEST",
       "file": "boot/computerconnector_test.go",
+      "detail": "Boot has no tests; whole-graph tests live under tests/"
+    },
+    {
+      "code": "GO_BOOT_TEST",
+      "file": "boot/computerconnectorparticipant_test.go",
       "detail": "Boot has no tests; whole-graph tests live under tests/"
     },
     {
@@ -7428,6 +7445,16 @@
     {
       "code": "GO_OPERATION_SHAPE",
       "file": "modules/computer/app/services/connector/service.go",
+      "detail": "Service.Release must take (context.Context, ReleaseCommand or ReleaseQuery) and return (*ReleaseResult, error)"
+    },
+    {
+      "code": "GO_OPERATION_SHAPE",
+      "file": "modules/computer/app/services/connector/service.go",
+      "detail": "Service.Resume must take (context.Context, ResumeCommand or ResumeQuery) and return (*ResumeResult, error)"
+    },
+    {
+      "code": "GO_OPERATION_SHAPE",
+      "file": "modules/computer/app/services/connector/service.go",
       "detail": "Service.WithCurrent must take (context.Context, WithCurrentCommand or WithCurrentQuery) and return (*WithCurrentResult, error)"
     },
     {
@@ -10799,6 +10826,11 @@
       "code": "GO_TEST_ORPHAN",
       "file": "transport/desktop/idle_test.go",
       "detail": "No idle.go beside this test"
+    },
+    {
+      "code": "GO_TEST_ORPHAN",
+      "file": "transport/desktop/sequence_test.go",
+      "detail": "No sequence.go beside this test"
     }
   ]
 }
