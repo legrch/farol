@@ -50,7 +50,7 @@ verification and after the consumer guard returns. A freeze observed there
 retains `SEND_NOT_SENT` through the original result/settlement path, without a
 physical Send or retry. Already-issued effects can still settle. The pure
 `TestFreezeBeforePhysicalSendRetainsKnownNotSent` regression in
-`app/services/lifecycle/freezesend_test.go` covers both verification paths and
+`app/services/lifecycle/retirement_test.go` covers both verification paths and
 both sides of the final guard; the existing retirement test covers an issued
 Send settling after freeze. This is source evidence. The unlocked adapter handoff
 does not make native dispatch atomic with a later freeze.
