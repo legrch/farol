@@ -6,5 +6,5 @@
     "src/ui/**/*.tsx",
     "apps/desktop/renderer/**/*.tsx"
   ],
-  "exclude": ["src/ui/shell.ts", "node_modules"]
+  "exclude": ["node_modules"]
 }

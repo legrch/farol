@@ -18,7 +18,6 @@ import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 // host: the Go-aware gates are extracted from the source and run in a context
 // whose Python-backed collaborators are spies.
 const main = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
-const shell = fs.readFileSync("src/ui/shell.ts", "utf8");
 
 function select(predicate: (node: Record<string, unknown>) => boolean) {
   const matches: Record<string, unknown>[] = [];
@@ -428,11 +427,7 @@ describe("main process and renderer wiring", () => {
     );
   });
 
-  it("publishes whether the Git checks exist and the shell disables both buttons from it", () => {
+  it("publishes whether the Git checks exist", () => {
     expect(flat).toContain("gitVerificationAvailable: compiledGoCore === null");
-    expect(shell).toContain("gitVerificationAvailable: z.boolean()");
-    expect(shell).toContain("available: bootstrap.gitVerificationAvailable");
-    expect(shell).toContain("gitStatus.disabled = gitChecksBlocked");
-    expect(shell).toContain("gitHead.disabled = gitChecksBlocked");
   });
 });

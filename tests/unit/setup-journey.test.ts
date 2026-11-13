@@ -2,53 +2,11 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import vm from "node:vm";
 import {
-  advanceSetup,
-  createSetupJourney,
-  reopenSetup,
-  retreatSetup,
-  setupSteps,
-} from "../../src/ui/setup-journey";
-import {
   guidedSetupSelected,
   initialSetupPresentation,
 } from "../../src/pkg/product-settings/setup-entry";
 
-describe("setup journey", () => {
-  it("keeps the five product-level stages in the required order", () => {
-    expect(setupSteps.map((step) => step.id)).toEqual([
-      "chatgpt",
-      "computer",
-      "connect",
-      "hosts",
-      "verify",
-    ]);
-    expect(setupSteps.every((step) => step.details.length > 0)).toBe(true);
-  });
-
-  it("opens on first run, advances once per action, and closes only after verify", () => {
-    let journey = createSetupJourney();
-    expect(journey).toEqual({ open: true, mode: "first-run", step: 0 });
-
-    for (let index = 0; index < setupSteps.length - 1; index += 1) {
-      journey = advanceSetup(journey);
-      expect(journey).toMatchObject({ open: true, step: index + 1 });
-    }
-
-    expect(advanceSetup(journey)).toEqual({
-      open: false,
-      mode: "first-run",
-      step: setupSteps.length - 1,
-    });
-  });
-
-  it("bounds Back and reopens the same journey from Settings", () => {
-    const first = createSetupJourney();
-    expect(retreatSetup(first)).toEqual(first);
-
-    const reviewed = reopenSetup(advanceSetup(first));
-    expect(reviewed).toEqual({ open: true, mode: "review", step: 1 });
-  });
-
+describe("initial setup presentation", () => {
   it("opens unfinished DEV onboarding in the Connections sidebar", () => {
     expect(
       initialSetupPresentation({
@@ -92,8 +50,6 @@ describe("setup journey", () => {
   });
 });
 
-// Exercise the actual main/shell call expressions without starting Electron.
-// Guarded inputs reject new partial signals while retaining attachment fixtures.
 describe("persisted startup entry", () => {
   const guarded = (value: Record<string, unknown>): unknown =>
     new Proxy(value, {
@@ -113,7 +69,7 @@ describe("persisted startup entry", () => {
     [true, false, "activity"],
     [null, false, "computer"],
   ] as const)(
-    "main and shell: dismissed=%s, attachment=%s opens %s",
+    "main: dismissed=%s, attachment=%s opens %s",
     (dismissed, attachment, section) => {
       const initialSettings =
         dismissed === null
@@ -129,10 +85,7 @@ describe("persisted startup entry", () => {
                 },
               },
             };
-      for (const source of [
-        "../../src/apps/desktop/main.ts",
-        "../../src/ui/shell.ts",
-      ]) {
+      for (const source of ["../../src/apps/desktop/main.ts"]) {
         const text = fs.readFileSync(new URL(source, import.meta.url), "utf8");
         const calls = [
           ...text.matchAll(/initialSetupPresentation\((\{[^;]+?\})\)/gu),
