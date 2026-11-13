@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	"github.com/legrch/farol/pkg/descriptor"
 	"golang.org/x/sys/unix"
 )
 
@@ -37,7 +38,7 @@ func openClosedInspectionDisk(ctx context.Context, roots Roots) (*disk, error) {
 	if err != nil {
 		return failure(Refused)
 	}
-	d.parentMeta, err = stat(d.parent)
+	d.parentMeta, err = descriptor.Stat(d.parent)
 	if err != nil || !qualified(d.parentMeta, roots.Parent.Identity) {
 		return failure(Refused)
 	}
@@ -45,7 +46,7 @@ func openClosedInspectionDisk(ctx context.Context, roots Roots) (*disk, error) {
 	if err != nil {
 		return failure(Refused)
 	}
-	d.dirMeta, err = stat(d.dir)
+	d.dirMeta, err = descriptor.Stat(d.dir)
 	if err != nil || !qualified(d.dirMeta, roots.Chat.Identity) {
 		return failure(Refused)
 	}
@@ -56,8 +57,8 @@ func openClosedInspectionDisk(ctx context.Context, roots Roots) (*disk, error) {
 	if err != nil {
 		return failure(Refused)
 	}
-	d.claimMeta, err = stat(d.claim)
-	if err != nil || !physical(d.claimMeta, unix.S_IFREG, 0600, uid) || unix.Flock(d.claim, unix.LOCK_EX|unix.LOCK_NB) != nil {
+	d.claimMeta, err = descriptor.Stat(d.claim)
+	if err != nil || !descriptor.Private(d.claimMeta, unix.S_IFREG, 0600, uid) || unix.Flock(d.claim, unix.LOCK_EX|unix.LOCK_NB) != nil {
 		return failure(Refused)
 	}
 	if err := d.check(); err != nil {
@@ -87,11 +88,11 @@ func closedInspectionNoStaging(d *disk) error {
 		return fail(Unavailable, false)
 	}
 	f := os.NewFile(uintptr(fd), "chat-handoff-inspection")
-	before, se := stat(fd)
+	before, se := descriptor.Stat(fd)
 	entries, readErr := f.ReadDir(2*maxSteps + 128)
-	after, ae := stat(fd)
+	after, ae := descriptor.Stat(fd)
 	closed := f.Close()
-	if se != nil || ae != nil || !same(before, d.dirMeta) || !stable(before, after) || readErr != nil && readErr != io.EOF || closed != nil || len(entries) >= 2*maxSteps+128 || d.check() != nil {
+	if se != nil || ae != nil || !descriptor.Same(before, d.dirMeta) || !descriptor.Stable(before, after) || readErr != nil && readErr != io.EOF || closed != nil || len(entries) >= 2*maxSteps+128 || d.check() != nil {
 		return fail(Unavailable, false)
 	}
 	for _, entry := range entries {
@@ -196,12 +197,12 @@ func acquireInspectionChain(ctx context.Context, roots Roots, scan func(context.
 		if err != nil || !present {
 			return raw, present, err
 		}
-		if attemptErr != nil || commitErr != nil || unix.Fstatat(d.dir, stepName(index, "attempt"), &after.attempt, unix.AT_SYMLINK_NOFOLLOW) != nil || unix.Fstatat(d.dir, stepName(index, "commit"), &after.commit, unix.AT_SYMLINK_NOFOLLOW) != nil || !stable(before.attempt, after.attempt) || !stable(before.commit, after.commit) {
+		if attemptErr != nil || commitErr != nil || unix.Fstatat(d.dir, stepName(index, "attempt"), &after.attempt, unix.AT_SYMLINK_NOFOLLOW) != nil || unix.Fstatat(d.dir, stepName(index, "commit"), &after.commit, unix.AT_SYMLINK_NOFOLLOW) != nil || !descriptor.Stable(before.attempt, after.attempt) || !descriptor.Stable(before.commit, after.commit) {
 			return nil, false, fail(Unavailable, false)
 		}
 		digest := sha256.Sum256(raw)
 		if checking {
-			if index > len(identities) || !stable(identities[index-1].attempt, after.attempt) || !stable(identities[index-1].commit, after.commit) || digest != digests[index-1] {
+			if index > len(identities) || !descriptor.Stable(identities[index-1].attempt, after.attempt) || !descriptor.Stable(identities[index-1].commit, after.commit) || digest != digests[index-1] {
 				return nil, false, fail(Unavailable, false)
 			}
 		} else {
@@ -232,10 +233,10 @@ func acquireInspectionChain(ctx context.Context, roots Roots, scan func(context.
 		if err := qualify(current); err != nil {
 			return err
 		}
-		parent, pe := stat(d.parent)
-		child, ce := stat(d.dir)
-		claim, le := stat(d.claim)
-		if current.head.Digest != value.head.Digest || len(current.stages) != len(value.stages) || pe != nil || ce != nil || le != nil || !stable(d.parentMeta, parent) || !stable(d.dirMeta, child) || !stable(d.claimMeta, claim) || d.check() != nil {
+		parent, pe := descriptor.Stat(d.parent)
+		child, ce := descriptor.Stat(d.dir)
+		claim, le := descriptor.Stat(d.claim)
+		if current.head.Digest != value.head.Digest || len(current.stages) != len(value.stages) || pe != nil || ce != nil || le != nil || !descriptor.Stable(d.parentMeta, parent) || !descriptor.Stable(d.dirMeta, child) || !descriptor.Stable(d.claimMeta, claim) || d.check() != nil {
 			return fail(Unavailable, false)
 		}
 		return nil

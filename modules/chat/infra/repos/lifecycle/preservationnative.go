@@ -6,6 +6,7 @@ import (
 	"context"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	"github.com/legrch/farol/pkg/descriptor"
 	"golang.org/x/sys/unix"
 )
 
@@ -44,8 +45,8 @@ func acquirePreservationInspection(ctx context.Context, root Root, scope port.Jo
 			return err
 		}
 		var after unix.Stat_t
-		claim, claimErr := stat(d.claim)
-		if claimErr != nil || !stable(d.claimIdentity, claim) || unix.Fstatat(d.dir, snapshotName, &after, unix.AT_SYMLINK_NOFOLLOW) != nil || !stable(before, after) || current.SnapshotDigest != value.SnapshotDigest || current.Scope != scope || d.check() != nil {
+		claim, claimErr := descriptor.Stat(d.claim)
+		if claimErr != nil || !descriptor.Stable(d.claimIdentity, claim) || unix.Fstatat(d.dir, snapshotName, &after, unix.AT_SYMLINK_NOFOLLOW) != nil || !descriptor.Stable(before, after) || current.SnapshotDigest != value.SnapshotDigest || current.Scope != scope || d.check() != nil {
 			return failure(Unavailable, false)
 		}
 		if ctx.Err() != nil {

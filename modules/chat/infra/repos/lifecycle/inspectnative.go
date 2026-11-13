@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/legrch/farol/pkg/descriptor"
 	"golang.org/x/sys/unix"
 )
 
@@ -53,8 +54,8 @@ func openInspectionDisk(ctx context.Context, root Root) (*disk, error) {
 		}
 		return nil, original
 	}
-	d.dirIdentity, err = stat(fd)
-	if err != nil || !physical(d.dirIdentity, unix.S_IFDIR, 0700, root.OwnerUID) {
+	d.dirIdentity, err = descriptor.Stat(fd)
+	if err != nil || !descriptor.Private(d.dirIdentity, unix.S_IFDIR, 0700, root.OwnerUID) {
 		return fail(inspectionFailure(&Failure{Code: Refused}, InspectionRootMetadata, err))
 	}
 	if uint64(d.dirIdentity.Dev) != root.Device || uint64(d.dirIdentity.Ino) != root.Inode {
@@ -67,8 +68,8 @@ func openInspectionDisk(ctx context.Context, root Root) (*disk, error) {
 	if err != nil {
 		return fail(inspectionFailure(&Failure{Code: Refused}, InspectionClaimOpen, err))
 	}
-	d.claimIdentity, err = stat(d.claim)
-	if err != nil || !physical(d.claimIdentity, unix.S_IFREG, 0600, root.OwnerUID) {
+	d.claimIdentity, err = descriptor.Stat(d.claim)
+	if err != nil || !descriptor.Private(d.claimIdentity, unix.S_IFREG, 0600, root.OwnerUID) {
 		return fail(inspectionFailure(&Failure{Code: Refused}, InspectionClaimMetadata, err))
 	}
 	if err := unix.Flock(d.claim, unix.LOCK_EX|unix.LOCK_NB); err != nil {
@@ -108,19 +109,19 @@ func inspectLockedSnapshot(ctx context.Context, d *disk, limits Limits) (*Inspec
 	// identity/timestamps as well as bytes, including same-byte replacement or
 	// mutation-and-restoration. Each read also qualifies the named entry and root.
 	current, err := d.read(limits.Bytes)
-	claim, statErr := stat(d.claim)
+	claim, statErr := descriptor.Stat(d.claim)
 	// The original claim stat is unconditional even when the read fails. All
 	// remaining predicates retain their original short-circuit order.
 	if err != nil {
 		return nil, inspectionFailure(&Failure{Code: Unavailable}, InspectionSnapshotRead, err, statErr)
 	}
-	if statErr != nil || !stable(d.claimIdentity, claim) || !bytes.Equal(raw, current) {
+	if statErr != nil || !descriptor.Stable(d.claimIdentity, claim) || !bytes.Equal(raw, current) {
 		return nil, inspectionFailure(&Failure{Code: Unavailable}, InspectionSnapshotChanged, statErr)
 	}
 	if err := unix.Fstatat(d.dir, snapshotName, &after, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 		return nil, inspectionFailure(&Failure{Code: Unavailable}, InspectionSnapshotChanged, err)
 	}
-	if !stable(before, after) {
+	if !descriptor.Stable(before, after) {
 		return nil, inspectionFailure(&Failure{Code: Unavailable}, InspectionSnapshotChanged)
 	}
 	if err := d.check(); err != nil {
