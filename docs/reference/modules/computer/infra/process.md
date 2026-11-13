@@ -755,24 +755,13 @@ independent risk review, full CI and any source commit are still Lead-lane gates
 
 ### Root held-control adapter checkpoint
 
-`boot/processheld.go` implements the existing `HeldGate` with the common framed
-JSON-RPC transport and canonical `api/desktop/v1` types. The trusted constructor
-captures compiled build, profile, backend, operation, sealed command, anchor and
-held-child identity plus the original deadline. Two distinct live barriers follow
-the held role's explicit Prepared callback. Release consumes one attempt and
-requires both barriers. The server writes the complete OK frame before signalling
-release, so closing control FDs before exec cannot truncate that ACK itself.
-Local write completion is not peer receipt, execution or terminal evidence.
-
-The held server selects terminal rejection: an invalid envelope, crossed context
-or rejected call closes that channel. Ordinary desktop/connector servers retain
-their existing behavior. The client also permanently closes on refused/unknown
-exchange, timeout or ordering failure. There is no replay, reopened server or new
-execution lease. Pure memory-pipe tests cover the actual generated envelopes,
-lost ACK, raw-peer attempts to correct a rejected release, and both serialized
-and concurrent local delivery callbacks. This adapter is not registered on the
-ordinary backend or external MCP. Root CLI/FD provenance, bootstrap selection,
-native qualification/Prepared wiring and an actual held exec remain required.
+Removed. The root adapter that implemented `HeldGate` over the framed desktop
+wire, its `computer.process.held.ready`/`computer.process.held.release`
+operations and the `ComputerHeldIdentity`/`ComputerHeldBarrier` schema types
+were deleted because nothing in production constructed the adapter or reached
+the native `NewAnchor`/`NewAnchoredPreparer` consumers; the held role was never
+wired. The native held-role entry points in this package remain until their own
+removal. Reintroducing the role needs a new wire design, not a revert.
 
 ### Independent output EOF checkpoint
 
