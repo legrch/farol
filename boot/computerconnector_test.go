@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -294,5 +295,49 @@ func TestComputerConnectorRuntimeWithdrawsIngressBeforeDrain(t *testing.T) {
 	close(endpoint.release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Open attempts are bounded by a recent window, not by the backend lifetime:
+// sequential Open/Close cycles keep working, while a burst inside one window is
+// still refused before any operation claim or publication IO.
+func TestComputerConnectorOpenBoundsRecentAttemptsNotLifetime(t *testing.T) {
+	s, j, _, endpoint, in := newConnectorFixture(t)
+	clock := s.clock.(*computerClockFixture)
+	cycle := func(i int) error {
+		out, err := s.Open(context.Background(), fmt.Sprintf("open-%d", i), in)
+		if err != nil {
+			return err
+		}
+		if _, err = s.Close(context.Background(), fmt.Sprintf("close-%d", i), wire.ComputerConnectorClose{Binding: out.Endpoint.Binding}); err != nil {
+			t.Fatalf("close %d: %v", i, err)
+		}
+		return nil
+	}
+	const cycles = 3 * connectorOpenBurst
+	for i := range cycles {
+		clock.now = clock.now.Add(connectorOpenWindow / connectorOpenBurst)
+		if err := cycle(i); err != nil {
+			t.Fatalf("open %d after %d earlier cycles: %v", i, i, err)
+		}
+	}
+	if j.publications != cycles || endpoint.closes != cycles || j.withdrawals != cycles {
+		t.Fatalf("publications=%d closes=%d withdrawals=%d", j.publications, endpoint.closes, j.withdrawals)
+	}
+	// A burst: the window's full allowance succeeds, the next attempt is refused
+	// before it claims its operation ID or publishes anything.
+	clock.now = clock.now.Add(connectorOpenWindow)
+	for i := range connectorOpenBurst {
+		if err := cycle(cycles + i); err != nil {
+			t.Fatalf("burst open %d: %v", i, err)
+		}
+	}
+	publications := j.publications
+	if _, err := s.Open(context.Background(), "storm", in); err == nil || j.publications != publications || s.root.used["storm"] || s.current != nil {
+		t.Fatal("burst beyond the window allowance admitted an Open", err)
+	}
+	clock.now = clock.now.Add(connectorOpenWindow)
+	if err := cycle(cycles + connectorOpenBurst); err != nil {
+		t.Fatal("Open refused after the window passed", err)
 	}
 }

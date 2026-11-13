@@ -991,17 +991,19 @@ describe("sequential one-shot Settings storage pump", () => {
     expect(f.polls).toHaveLength(1);
   });
 
-  it("retains all 4096 consumed IDs and refuses command 4097 without eviction", async () => {
+  it("serves more than 4096 commands and retains only live or recent IDs", async () => {
     const f = fixture();
-    const fenced = deferred<void>();
-    f.fenceIO.mockImplementation(async () => {
-      fenced.resolve();
-    });
+    const total = 4200;
     let nextCount = 0;
     let replyCount = 0;
+    const held = deferred<Outcome>();
     f.client.request.mockImplementation(async (method, _body, options = {}) => {
       if (method === "computer.settings.store.next") {
         nextCount++;
+        if (nextCount > total) return held.promise.then(() => outcome(options));
+        // 100 ms per command: each settled ID leaves after its deadline
+        // window, so the retained set stays far below the old 4096 quota.
+        vi.setSystemTime(Date.now() + 100);
         return outcome(options, {
           command: command("replace", `command-${nextCount}`),
         });
@@ -1010,12 +1012,44 @@ describe("sequential one-shot Settings storage pump", () => {
       return outcome(options);
     });
     f.pump.start();
-    await fenced.promise;
-    await f.pump.stop();
-    expect(nextCount).toBe(4097);
-    expect(replyCount).toBe(4096);
-    expect(f.replaceCalls).toBe(4096);
-    expect(f.pump.state).toBe("unknown");
+    await vi.waitFor(() => expect(nextCount).toBe(total + 1));
+    expect(replyCount).toBe(total);
+    expect(f.replaceCalls).toBe(total);
+    expect(f.pump.state).toBe("running");
+    const consumed = (f.pump as unknown as { consumed: Map<string, unknown> })
+      .consumed;
+    expect(consumed.size).toBeLessThan(400);
+    expect(consumed.has(`command-${total}`)).toBe(true);
+    expect(consumed.has("command-1")).toBe(false);
+    const stop = f.pump.stop();
+    held.resolve(outcome({}));
+    await stop;
+    expect(f.pump.state).toBe("stopped");
     expect(f.fenceIO).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses an exact replay after its window by its own expired deadline", async () => {
+    const f = fixture();
+    f.pump.start();
+    const original = command();
+    f.deliver(original);
+    await flush();
+    expect(f.replies).toHaveLength(1);
+    vi.setSystemTime(Date.now() + 12000);
+    f.quiesce();
+    await flush();
+    vi.setSystemTime(Date.now() + 12000);
+    f.deliver(command("replace", "later"));
+    await flush();
+    expect(f.replies).toHaveLength(2);
+    const consumed = (f.pump as unknown as { consumed: Map<string, unknown> })
+      .consumed;
+    expect(consumed.has(original.commandId)).toBe(false);
+    f.deliver(original);
+    await flush();
+    expect(f.pump.state).toBe("unknown");
+    expect(f.replaceCalls).toBe(2);
+    expect(f.replies).toHaveLength(2);
+    await f.pump.stop();
   });
 });

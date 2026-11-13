@@ -23,16 +23,18 @@ import (
 
 // Native stores and canonical consumed history; process closure, terminal and
 // Settings remain explicit fixture facts. This never opens a real Dev profile.
-func preservedEmptyProfileFixture(t *testing.T) preservedProfileInspectionInput {
+// Only a built-core host lane retains its fixture as evidence; in-process tests
+// remove it when they pass.
+func preservedEmptyProfileFixture(t *testing.T, retain bool) preservedProfileInspectionInput {
 	t.Helper()
-	return preservedEmptyHistoryProfileFixture(t, 3, false)
+	return preservedEmptyHistoryProfileFixture(t, 3, false, retain)
 }
 
 // Keep consumed-but-unretired history distinct from the daily profile's empty,
 // already retired current incarnation with an acknowledged normal terminal.
-func preservedEmptyHistoryProfileFixture(t *testing.T, incarnations int, retired bool) preservedProfileInspectionInput {
+func preservedEmptyHistoryProfileFixture(t *testing.T, incarnations int, retired, retain bool) preservedProfileInspectionInput {
 	t.Helper()
-	launch, runtime := retirementStorageFixtureOwnerAt(t, true, true, "owner-desktop", true, "Farol Dev")
+	launch, runtime := retirementStorageFixtureOwnerAt(t, true, true, "owner-desktop", retain, "Farol Dev")
 	generation := "generation-1"
 	for cycle := 1; cycle <= incarnations; cycle++ {
 		if cycle == incarnations && !retired {
@@ -99,7 +101,7 @@ func preservedEmptyHistoryProfileFixture(t *testing.T, incarnations int, retired
 // existing retirement and normal terminal select metadata only; the enclosing
 // host must still qualify its new maintenance and retain historical UNKNOWN.
 func TestPreservedProfileDiscoveryNativeRetiredEmptyDailyHistory(t *testing.T) {
-	in := preservedEmptyHistoryProfileFixture(t, 33, true)
+	in := preservedEmptyHistoryProfileFixture(t, 33, true, false)
 	before := snapshotPreservedObservationTree(t, in.Profile.Root)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -178,7 +180,7 @@ func TestPreservedProfileDiscoveryNativeRetiredEmptyDailyHistory(t *testing.T) {
 }
 
 func TestPreservedProfileDiscoveryNativeConsumedEmptyHistory(t *testing.T) {
-	in := preservedEmptyProfileFixture(t)
+	in := preservedEmptyProfileFixture(t, false)
 	before := snapshotPreservedObservationTree(t, in.Profile.Root)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -197,7 +199,7 @@ func TestPreservedProfileDiscoveryNativeConsumedEmptyHistory(t *testing.T) {
 }
 
 func TestPreservedProfileNativeEmptySelectionKeepsExistingRefusals(t *testing.T) {
-	in := preservedEmptyProfileFixture(t)
+	in := preservedEmptyProfileFixture(t, false)
 	before := snapshotPreservedObservationTree(t, in.Profile.Root)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -271,9 +273,9 @@ func testPreservedEmptyPreparation(t *testing.T, retired bool) {
 		t.Run(map[bool]string{false: "acknowledged", true: "lost-ack"}[lostACK], func(t *testing.T) {
 			var in preservedProfileInspectionInput
 			if retired {
-				in = preservedEmptyHistoryProfileFixture(t, 33, true)
+				in = preservedEmptyHistoryProfileFixture(t, 33, true, false)
 			} else {
-				in = preservedEmptyProfileFixture(t)
+				in = preservedEmptyProfileFixture(t, false)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()

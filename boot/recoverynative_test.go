@@ -375,7 +375,7 @@ func TestNativeRecoveryCLIHasNoEffectOrTaskRoutes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		request := wire.Request{Jsonrpc: "2.0", Id: fmt.Sprint("recovery-", sequence), Method: method, Params: wire.Call{Context: peer, Body: raw}}
+		request := wire.Request{Jsonrpc: "2.0", Id: wireTestID(sequence), Method: method, Params: wire.Call{Context: peer, Body: raw}}
 		if operation != "" {
 			request.Params.OperationId = &operation
 		}

@@ -757,3 +757,99 @@ func TestInjectedGateProtectsInspectionAndReleasesBeforeJournalCalls(t *testing.
 		t.Fatal("injected gate left held")
 	}
 }
+
+// resumingJournal adds the optional read-only resume capability to the fixture.
+type resumingJournal struct {
+	*journal
+	resumes atomic.Int64
+}
+
+func (j *resumingJournal) ResumeConnector(_ context.Context, v port.ConnectorLaunch) (port.ConnectorPublication, error) {
+	j.resumes.Add(1)
+	j.gate.Lock()
+	defer j.gate.Unlock()
+	if j.p == nil || j.revoked || j.p.ParticipantID != v.Participant.ParticipantID {
+		return port.ConnectorPublication{}, errors.New("fixture participant not live")
+	}
+	result := port.ConnectorPublication{Revision: j.revision, Participant: j.p.Clone(), Approval: j.approval.Clone()}
+	if j.changeResult != nil {
+		j.changeResult(&result)
+	}
+	return result, nil
+}
+
+// Release ends liveness without a journal write, only after a known publication.
+// A later owner with the same launch Resumes the same live participant read-only;
+// time alone may differ. A revoked participant or a fresh publication readback
+// presented as a resume leaves the new owner unavailable.
+func TestConnectorReleaseThenResumeKeepsOneParticipant(t *testing.T) {
+	f := newFixture(t)
+	r := &resumingJournal{journal: f.journal}
+	if err := f.owner.Release(ctx); err == nil {
+		t.Fatal("released before a known publication")
+	}
+	first, err := connector.New(&sync.Mutex{}, r, f.guard, f.clock, f.launch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = first.Publish(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = first.Release(ctx); err != nil || f.journal.withdrawals.Load() != 0 || f.journal.revoked {
+		t.Fatal("release wrote or revoked", err)
+	}
+	if _, err = first.Reconnect(ctx); err == nil {
+		t.Fatal("released owner stayed live")
+	}
+	if err = first.Release(ctx); err == nil {
+		t.Fatal("released twice")
+	}
+	f.clock.advance(time.Minute) // renewal changes time, not the seal
+	launch := f.launch
+	launch.TurnCorrelation = "next-correlation"
+	launch.Admission.Policy.ExpiresAt = f.clock.Now().Add(time.Second)
+	second, err := connector.New(&sync.Mutex{}, r, f.guard, f.clock, launch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = second.Resume(ctx); err != nil || f.journal.publishes.Load() != 1 || r.resumes.Load() != 1 {
+		t.Fatal("resume", err, f.journal.publishes.Load(), r.resumes.Load())
+	}
+	binding, err := second.Reconnect(ctx)
+	if err != nil || binding.ParticipantID != f.launch.Participant.ParticipantID || binding.TurnID != "next-correlation" {
+		t.Fatal("resumed binding", binding, err)
+	}
+	if err = second.Withdraw(ctx); err != nil || !f.journal.revoked {
+		t.Fatal("withdraw of a resumed owner did not revoke", err)
+	}
+	third, err := connector.New(&sync.Mutex{}, r, f.guard, f.clock, launch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = third.Resume(ctx); err == nil {
+		t.Fatal("revoked participant resumed")
+	}
+	if _, err = third.Reconnect(ctx); err == nil {
+		t.Fatal("failed resume exposed liveness")
+	}
+
+	g := newFixture(t)
+	if err = g.owner.Publish(ctx); err != nil {
+		t.Fatal(err)
+	}
+	g.journal.changeResult = func(v *port.ConnectorPublication) { v.OriginalPublished = true }
+	crossed, err := connector.New(&sync.Mutex{}, &resumingJournal{journal: g.journal}, g.guard, g.clock, g.launch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = crossed.Resume(ctx); err == nil {
+		t.Fatal("original publication readback accepted as a resume")
+	}
+	plain, err := connector.New(&sync.Mutex{}, g.journal, g.guard, g.clock, g.launch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = plain.Resume(ctx); err == nil {
+		t.Fatal("resume without the journal capability")
+	}
+}

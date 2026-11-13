@@ -95,6 +95,57 @@ func (r *ConnectorJournal) PublishConnector(ctx context.Context, input port.Conn
 	return result, nil
 }
 
+var _ port.ConnectorResumer = (*ConnectorJournal)(nil)
+
+// ResumeConnector writes nothing. It reads back the exact live participant an
+// earlier owner of this connector generation published, under the unchanged
+// current approval policy. Expiry is time only: execution reissues it from the
+// current approval for every operation. Revoked or missing participants are
+// absent from the snapshot and refuse; nothing is re-admitted or restored.
+func (r *ConnectorJournal) ResumeConnector(ctx context.Context, input port.ConnectorLaunch) (port.ConnectorPublication, error) {
+	var result port.ConnectorPublication
+	if input.Host.ProfileID != r.store.binding.ProfileID {
+		return result, unavailable()
+	}
+	var before Status
+	var expected authority.Participant
+	err := r.store.WithOwnerApproval(ctx, func(status Status, a *authority.Approval) error {
+		if a == nil || !authority.SameApprovalPolicy(*a, input.Approval) {
+			return unavailable()
+		}
+		g, err := authority.Derive(*a, input.Admission, r.store.clock.Now())
+		if err != nil {
+			return err
+		}
+		p, err := authority.Create(*g, input.Participant)
+		if err != nil {
+			return err
+		}
+		expected, before = p.Clone(), status
+		return nil
+	})
+	if err != nil {
+		return result, err
+	}
+	err = r.store.WithSnapshot(ctx, expected.ParticipantID, func(v port.AccessSnapshot) error {
+		if v.Participant == nil || v.Approval == nil || !authority.SameParticipantCeiling(*v.Participant, expected) || !authority.SameApprovalPolicy(*v.Approval, input.Approval) {
+			return unavailable()
+		}
+		result.Participant, result.Approval = v.Participant.Clone(), v.Approval.Clone()
+		return nil
+	})
+	if err != nil {
+		return port.ConnectorPublication{}, err
+	}
+	// Bind the readback to one unchanged revision; a concurrent write refuses.
+	after, err := r.store.Status(ctx)
+	if err != nil || after.Revision != before.Revision {
+		return port.ConnectorPublication{}, unavailable()
+	}
+	result.Revision = after.Revision
+	return result, nil
+}
+
 // The one-shot original Stop withdrawal is bound by Store to its durable
 // parent intent; no ordinary Status/approval path is opened during pending C7.
 func (r *ConnectorJournal) WithdrawConnectorForStop(ctx context.Context, parentID, id string) error {

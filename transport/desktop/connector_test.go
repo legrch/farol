@@ -90,7 +90,7 @@ func testConnectionVerificationReadOnly(t *testing.T, method string) {
 	writeConnectorJSON(t, client, wire.ComputerConnectorHello{Binding: config.Endpoint.Binding, Token: config.Endpoint.Token})
 	var authenticated wire.ComputerConnectorBinding
 	readConnectorJSON(t, client, &authenticated)
-	writeConnectorJSON(t, client, map[string]any{"jsonrpc": "2.0", "id": "hello", "method": "core.handshake", "params": map[string]any{"body": wire.Handshake{ProtocolMajor: wire.ProtocolMajor, ProtocolMinor: wire.ProtocolMinor, BuildId: "build", ProfileId: "profile"}}})
+	writeConnectorJSON(t, client, map[string]any{"jsonrpc": "2.0", "id": seq(1), "method": "core.handshake", "params": map[string]any{"body": wire.Handshake{ProtocolMajor: wire.ProtocolMajor, ProtocolMinor: wire.ProtocolMinor, BuildId: "build", ProfileId: "profile"}}})
 	var reply wire.Response
 	readConnectorJSON(t, client, &reply)
 	if reply.Result == nil || reply.Result.Status != "ok" {
@@ -106,7 +106,7 @@ func testConnectionVerificationReadOnly(t *testing.T, method string) {
 		if operation != "" {
 			params["operationId"] = operation
 		}
-		writeConnectorJSON(t, client, map[string]any{"jsonrpc": "2.0", "id": []string{"observe", "forbidden-effect"}[i], "method": method, "params": params})
+		writeConnectorJSON(t, client, map[string]any{"jsonrpc": "2.0", "id": seq(uint64(i) + 2), "method": method, "params": params})
 		readConnectorJSON(t, client, &reply)
 		if i == 0 && (reply.Result == nil || reply.Result.Status != "ok") {
 			t.Fatalf("read-only observation failed: %+v", reply)
@@ -151,7 +151,7 @@ func TestConnectionAuthThenCanonicalHandshakeAndClosedRoutes(t *testing.T) {
 	if authenticated != config.Endpoint.Binding {
 		t.Fatal("crossed auth acknowledgement")
 	}
-	writeConnectorJSON(t, client, map[string]any{"jsonrpc": "2.0", "id": "hello", "method": "core.handshake", "params": map[string]any{"body": wire.Handshake{ProtocolMajor: wire.ProtocolMajor, ProtocolMinor: wire.ProtocolMinor, BuildId: "build", ProfileId: "profile"}}})
+	writeConnectorJSON(t, client, map[string]any{"jsonrpc": "2.0", "id": seq(1), "method": "core.handshake", "params": map[string]any{"body": wire.Handshake{ProtocolMajor: wire.ProtocolMajor, ProtocolMinor: wire.ProtocolMinor, BuildId: "build", ProfileId: "profile"}}})
 	var reply wire.Response
 	readConnectorJSON(t, client, &reply)
 	if reply.Result == nil || reply.Result.Status != "ok" || reply.Result.Context != (wire.Context{ProfileId: "profile", BackendGeneration: "backend"}) {
@@ -162,7 +162,7 @@ func TestConnectionAuthThenCanonicalHandshakeAndClosedRoutes(t *testing.T) {
 		t.Fatal("unexpected exposed capabilities")
 	}
 	for i, method := range []string{"computer.workspace.list", "computer.authority.publish"} {
-		id := []string{"list", "forbidden"}[i]
+		id := seq(uint64(i) + 2)
 		params := map[string]any{"context": reply.Result.Context, "body": map[string]any{}}
 		if i == 1 {
 			params["operationId"] = "not-owned"
@@ -279,7 +279,7 @@ func TestConnectorProcessSliceHandshake(t *testing.T) {
 	writeConnectorJSON(t, client, wire.ComputerConnectorHello{Binding: config.Endpoint.Binding, Token: config.Endpoint.Token})
 	var binding wire.ComputerConnectorBinding
 	readConnectorJSON(t, client, &binding)
-	writeConnectorJSON(t, client, map[string]any{"jsonrpc": "2.0", "id": "handshake", "method": "core.handshake", "params": map[string]any{"body": wire.Handshake{ProtocolMajor: wire.ProtocolMajor, ProtocolMinor: wire.ProtocolMinor, BuildId: "build", ProfileId: "profile"}}})
+	writeConnectorJSON(t, client, map[string]any{"jsonrpc": "2.0", "id": seq(1), "method": "core.handshake", "params": map[string]any{"body": wire.Handshake{ProtocolMajor: wire.ProtocolMajor, ProtocolMinor: wire.ProtocolMinor, BuildId: "build", ProfileId: "profile"}}})
 	var reply wire.Response
 	readConnectorJSON(t, client, &reply)
 	if reply.Result == nil || reply.Result.Status != "ok" {

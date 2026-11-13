@@ -107,7 +107,7 @@ func freshProcessJourney(t *testing.T, launch NativeLaunch, n int) string {
 		if err != nil {
 			t.Fatal(err)
 		}
-		request := wire.Request{Jsonrpc: "2.0", Id: fmt.Sprint(requestID), Method: method, Params: wire.Call{Context: peer, Body: raw}}
+		request := wire.Request{Jsonrpc: "2.0", Id: wireTestID(requestID), Method: method, Params: wire.Call{Context: peer, Body: raw}}
 		if operation != "" {
 			request.Params.OperationId = &operation
 		}

@@ -283,3 +283,58 @@ func TestBrowserExchangeAccountSnapshotRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+// The owner requires work to be bounded by live calls, not by lifetime history.
+// Drive more settled calls than the former 4096-command lifetime budget while
+// one delivered Send stays in flight, then prove that call still settles from
+// its own reply and that an old reply is still refused (never re-delivered).
+func TestBrowserExchangeOutlivesFormerLifetimeCommandBudget(t *testing.T) {
+	b, _, held := exchangeFixture(t)
+	held.DeadlineMillis = uint64(time.Now().Add(14 * time.Second).UnixMilli())
+	heldDone := beginBrowserCall(b, context.Background(), held)
+	heldCall := nextBrowserCall(t, b)
+	var first wire.BrowserReply
+	for i := 0; i < 4100; i++ {
+		dispose := browser.DisposeCommand{Lease: held.Binding.Lease, DeadlineMillis: uint64(time.Now().Add(10 * time.Second).UnixMilli())}
+		done := beginBrowserCall(b, context.Background(), dispose)
+		call := nextBrowserCall(t, b)
+		var body wire.BrowserDispose
+		if call.Kind != "dispose" || json.Unmarshal(call.Body, &body) != nil {
+			t.Fatal("wrong canonical command")
+		}
+		raw, _ := json.Marshal(wire.BrowserDisposed{Lease: body.Lease, Confirmed: true, Code: ""})
+		reply := wire.BrowserReply{CommandId: call.CommandId, Kind: "dispose", Body: raw}
+		if i == 0 {
+			first = reply
+		}
+		if err := b.complete(reply); err != nil {
+			t.Fatalf("settled call %d refused: %v", i, err)
+		}
+		if result := awaitBrowserCall(t, done); result.err != nil {
+			t.Fatalf("settled call %d failed: %v", i, result.err)
+		}
+	}
+	b.mu.Lock()
+	live := len(b.pending)
+	b.mu.Unlock()
+	if live != 1 {
+		t.Fatalf("retained %d calls; only the in-flight call is live", live)
+	}
+	if b.complete(first) == nil {
+		t.Fatal("settled reply was accepted again")
+	}
+	var send wire.BrowserSend
+	if json.Unmarshal(heldCall.Body, &send) != nil {
+		t.Fatal("invalid send body")
+	}
+	raw, _ := json.Marshal(wire.BrowserSent{Binding: send.Binding, VerificationId: send.Verification.EvidenceId, Status: "submitted", Code: ""})
+	if err := b.complete(wire.BrowserReply{CommandId: heldCall.CommandId, Kind: "send", Body: raw}); err != nil {
+		t.Fatal("in-flight call lost its reply slot:", err)
+	}
+	if result := awaitBrowserCall(t, heldDone); result.err != nil {
+		t.Fatal(result.err)
+	}
+	if len(b.ready) != 0 {
+		t.Fatal("command redispatched")
+	}
+}

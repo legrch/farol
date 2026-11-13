@@ -242,10 +242,6 @@ func TestSettingsStoreExchangeBoundsAndOriginalDeadline(t *testing.T) {
 	if out := awaitSettingsSave(t, done); out.err != nil {
 		t.Fatal(out.err)
 	}
-	s.issued = 4096
-	if _, err := s.Load(context.Background()); err == nil || len(s.ready) != 0 {
-		t.Fatal("unbounded retention")
-	}
 	for _, deadline := range []uint64{0, ^uint64(0), uint64(time.Now().Add(time.Minute).UnixMilli())} {
 		if _, err := s.next(context.Background(), deadline); err == nil {
 			t.Fatal("unbounded poll deadline")
@@ -411,5 +407,71 @@ func TestSettingsStoreExchangeConcurrentPollsDeliverOnce(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("poll retained after quiescence")
 		}
+	}
+}
+
+// More settled calls than the former 4096-call lifetime budget stay admissible:
+// memory is the one live call. An old reply is still refused, the one-call
+// bound still holds while a call is in flight, and an unknown answer still
+// fences the exchange permanently.
+func TestSettingsStoreExchangeOutlivesFormerLifetimeCallBudget(t *testing.T) {
+	s, _, before, _ := settingsStoreExchangeFixture(t)
+	snapshot := settingsSnapshotToWire(before)
+	type read struct {
+		value delivery.Snapshot
+		err   error
+	}
+	load := func() <-chan read {
+		done := make(chan read, 1)
+		go func() { value, err := s.Load(context.Background()); done <- read{value, err} }()
+		return done
+	}
+	await := func(done <-chan read) read {
+		select {
+		case got := <-done:
+			return got
+		case <-time.After(3 * time.Second):
+			t.Fatal("read did not finish")
+			return read{}
+		}
+	}
+	var first *wire.SettingsStoreCommand
+	for i := 0; i < 4100; i++ {
+		done := load()
+		call := nextSettingsStoreCall(t, s)
+		if i == 0 {
+			first = call
+		}
+		if err := finishSettingsStoreCall(t, s, call, wire.SettingsStoreReadResult{Status: "ok", Snapshot: &snapshot}); err != nil {
+			t.Fatalf("settled call %d refused: %v", i, err)
+		}
+		if got := await(done); got.err != nil || !reflect.DeepEqual(got.value, before) {
+			t.Fatalf("settled call %d lost its answer: %+v", i, got)
+		}
+	}
+	if finishSettingsStoreCall(t, s, first, wire.SettingsStoreReadResult{Status: "ok", Snapshot: &snapshot}) == nil {
+		t.Fatal("settled reply was accepted again")
+	}
+	held := load()
+	call := nextSettingsStoreCall(t, s)
+	if _, err := s.Load(context.Background()); err == nil {
+		t.Fatal("admitted a second live call")
+	}
+	if err := finishSettingsStoreCall(t, s, call, wire.SettingsStoreReadResult{Status: "ok", Snapshot: &snapshot}); err != nil {
+		t.Fatal("in-flight call lost its reply slot:", err)
+	}
+	if got := await(held); got.err != nil {
+		t.Fatal(got.err)
+	}
+	unknown := load()
+	call = nextSettingsStoreCall(t, s)
+	if finishSettingsStoreCall(t, s, call, wire.SettingsStoreReplaceResult{Status: "committed"}) == nil {
+		t.Fatal("crossed answer accepted")
+	}
+	if got := await(unknown); got.err == nil {
+		t.Fatal("unknown answer became known")
+	}
+	if _, err := s.Load(context.Background()); err == nil || len(s.ready) != 0 {
+		t.Fatal("unknown answer stopped fencing the exchange")
 	}
 }

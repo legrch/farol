@@ -220,9 +220,9 @@ func TestEscapedReadOutputIsTypedRefusalBeforeFrameWrite(t *testing.T) {
 	}
 	var input, output bytes.Buffer
 	for _, req := range []wire.Request{
-		{Jsonrpc: "2.0", Id: "h", Method: "core.handshake", Params: wire.Call{Body: json.RawMessage(`{"protocolMajor":1,"protocolMinor":0,"buildId":"build","profileId":"test"}`)}},
-		{Jsonrpc: "2.0", Id: "r", Method: "computer.workspace.read", Params: wire.Call{Context: &wire.Context{ProfileId: "test", BackendGeneration: "generation"}, Body: data}},
-		{Jsonrpc: "2.0", Id: "s", Method: "core.status", Params: wire.Call{Context: &wire.Context{ProfileId: "test", BackendGeneration: "generation"}, Body: json.RawMessage(`{}`)}},
+		{Jsonrpc: "2.0", Id: seq(1), Method: "core.handshake", Params: wire.Call{Body: json.RawMessage(`{"protocolMajor":2,"protocolMinor":0,"buildId":"build","profileId":"test"}`)}},
+		{Jsonrpc: "2.0", Id: seq(2), Method: "computer.workspace.read", Params: wire.Call{Context: &wire.Context{ProfileId: "test", BackendGeneration: "generation"}, Body: data}},
+		{Jsonrpc: "2.0", Id: seq(3), Method: "core.status", Params: wire.Call{Context: &wire.Context{ProfileId: "test", BackendGeneration: "generation"}, Body: json.RawMessage(`{}`)}},
 	} {
 		encoded, _ := json.Marshal(req)
 		if err := ipc.WriteFrame(&input, encoded); err != nil {

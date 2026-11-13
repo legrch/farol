@@ -82,7 +82,18 @@ replaced by this adapter. The current-view format is a versioned canonical JSON
 document. Counters are decimal strings; expiry preserves the existing positive
 safe Unix-millisecond representation. Domain and public wire DTOs are unchanged.
 
-State is bounded to 1 MiB and 256 retained participant identities. Workspace,
+Writes are bounded to 1 MiB and 256 retained participant identities, the
+bounds of the 0.5.24 reader, so the retained predecessor opens every snapshot
+this build writes from one within them. After a rollback from a later release,
+a snapshot already above 256 may still be rewritten without growing, so
+revocation and approval renewal are never blocked; admission is refused while
+it is above. Reads have no participant count limit, only a 16 MiB
+corruption guard, so a later release's larger snapshot opens here. The write
+bound is lifted in the release after next, once the rollback predecessor reads
+larger snapshots. Revoked participants are kept. Connector reconnects within
+one backend lifetime and connector generation resume one participant, so the
+bound counts generations, backend lifetimes and other admissions, not
+reconnects. Workspace,
 exclusion and exact-path bounds retain the existing admission limits. Saturation
 fails closed before publication; identities or exclusions are never dropped.
 The internal encoding has exactly one form: unknown, duplicate, missing,

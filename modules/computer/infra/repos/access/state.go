@@ -15,8 +15,19 @@ import (
 // retains the existing authority values, including revoked identities, as one
 // bounded current view. Counters are lossless decimal strings; expiry is the
 // existing positive, safe Unix millisecond value.
+//
+// Writes keep the 0.5.24 reader's bounds (1 MiB, 256 participants), so the
+// retained predecessor opens every snapshot this build writes from one within
+// them. A snapshot already above 256 participants (a later release's, after a
+// rollback) may still be rewritten without growing, so revocation and renewal
+// are never blocked; Admit and Delegate refuse while it is above. Reads accept a
+// later release's larger snapshot: no participant count limit, only a 16 MiB
+// corruption guard. A one-workspace participant encodes to about 700 bytes, so
+// the guard holds over 20,000 of them; every Store call rereads and hashes the
+// whole snapshot, which bounds that cost too.
 const maxStateBytes = 1024 * 1024
 const maxParticipants = 256
+const maxReadStateBytes = 16 * 1024 * 1024
 
 type Binding struct{ ProfileID, OwnerID, ComputerID string }
 type state struct {
@@ -201,28 +212,51 @@ func stateDocument(b Binding, s state) document {
 	}
 	return d
 }
-func encodeDocument(d document) ([]byte, error) {
+func marshalDocument(d document) ([]byte, error) {
 	raw, err := json.Marshal(d)
-	if err != nil || len(raw)+1 > maxStateBytes {
+	if err != nil || len(raw)+1 > maxReadStateBytes {
 		return nil, refuse(err)
 	}
 	return append(raw, '\n'), nil
 }
+
+// encodeDocument is the only writer encoding; it never exceeds the 0.5.24
+// bounds, even when the current state came from a later release's snapshot.
+func encodeDocument(d document) ([]byte, error) {
+	if len(d.Participants) > maxParticipants {
+		return nil, refuse()
+	}
+	raw, err := marshalDocument(d)
+	if err != nil || len(raw) > maxStateBytes {
+		return nil, refuse(err)
+	}
+	return raw, nil
+}
 func encodeState(b Binding, s state) ([]byte, error) {
 	return encodeDocument(stateDocument(b, s))
+}
+
+// encodeNextState encodes a write of next over previous. Only a write that
+// keeps a count already above the 0.5.24 bound, without growing it, skips the
+// write bounds; it stays within the read guard and canonical.
+func encodeNextState(b Binding, previous, next state) ([]byte, error) {
+	if len(next.Participants) > maxParticipants && len(next.Participants) <= len(previous.Participants) {
+		return marshalDocument(stateDocument(b, next))
+	}
+	return encodeState(b, next)
 }
 func decodeState(b Binding, raw []byte) (state, error) {
 	s := state{Participants: map[string]retainedParticipant{}}
 	var d document
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	if len(raw) > maxStateBytes {
+	if len(raw) > maxReadStateBytes {
 		return s, unavailable()
 	}
 	if err := dec.Decode(&d); err != nil {
 		return s, refuse(err)
 	}
-	if d.Schema != 1 || d.ProfileID != b.ProfileID || d.OwnerID != b.OwnerID || d.ComputerID != b.ComputerID || d.Participants == nil || len(d.Participants) > maxParticipants {
+	if d.Schema != 1 || d.ProfileID != b.ProfileID || d.OwnerID != b.OwnerID || d.ComputerID != b.ComputerID || d.Participants == nil {
 		return s, unavailable()
 	}
 	var err error
@@ -269,7 +303,7 @@ func decodeState(b Binding, raw []byte) (state, error) {
 		p.Policy.FilePolicy = v.Policy.FilePolicy
 		current.Participants[id] = p
 	}
-	canonical, err := encodeDocument(current)
+	canonical, err := marshalDocument(current)
 	if err != nil || !bytes.Equal(canonical, raw) {
 		return s, refuse(err)
 	}

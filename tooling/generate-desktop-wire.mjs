@@ -21,12 +21,16 @@ if (
   )
 )
   throw Error("invalid method classification");
-// Protocol 1.0 has fixed mechanism limits in both peers. Refuse metadata drift
+// Protocol 2.0 has fixed mechanism limits in both peers. Refuse metadata drift
 // until a coordinated implementation/version change supports different limits.
+// Requests are sequenced per connection without a lifetime count; only
+// consecutive invalid requests are bounded. The 1.0 lifetime field is refused.
 if (
+  schema.protocolMajor !== 2 ||
   schema.maxFrameBytes !== 1048576 ||
   schema.maxDepth !== 32 ||
-  schema.maxRequests !== 4096
+  schema.maxConsecutiveInvalidRequests !== 64 ||
+  Object.hasOwn(schema, "maxRequests")
 )
   throw Error("unsupported wire limits");
 const digest = crypto.createHash("sha256").update(bytes).digest("hex");
@@ -60,7 +64,7 @@ const tsTypes = {
   "method[]": "readonly string[]",
 };
 let go = `// ${title}\npackage desktop\nimport ("encoding/json"; "errors"; "math"; "regexp"; "strconv"; "strings"; "time"; "unicode/utf8")\n`;
-go += `const ProtocolMajor uint32 = ${schema.protocolMajor}\nconst ProtocolMinor uint32 = ${schema.protocolMinor}\nconst SchemaSHA256 = "${digest}"\nconst Schema = ${JSON.stringify(bytes.toString("utf8"))}\n`;
+go += `const ProtocolMajor uint32 = ${schema.protocolMajor}\nconst ProtocolMinor uint32 = ${schema.protocolMinor}\nconst MaxConsecutiveInvalidRequests = ${schema.maxConsecutiveInvalidRequests}\nconst SchemaSHA256 = "${digest}"\nconst Schema = ${JSON.stringify(bytes.toString("utf8"))}\n`;
 const methodNames = Object.keys(schema.methods).sort();
 const effectNames = methodNames.filter(
   (name) => schema.methods[name] === "effect",

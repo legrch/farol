@@ -139,12 +139,13 @@ it.each(["timer-first", "stdout-first", "clock-rollback"])(
       { id: "explicit-next-status", timeoutMs: 1000 },
     );
     expect(status.data).toEqual({ alive: true });
+    // The expired observation's sequenced wire ID can never be resent.
     await expect(
       f.client.request("computer.connector.polling", f.body, {
         id: original.id,
         timeoutMs: 5000,
       }),
-    ).rejects.toMatchObject({ code: "duplicate_request_id" });
+    ).rejects.toMatchObject({ code: "reserved_request_id" });
   },
 );
 it("publishes an on-time original observation", async () => {

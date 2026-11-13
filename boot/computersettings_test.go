@@ -190,7 +190,10 @@ func TestSettingsListWireWithdrawalWhileNativeWaits(t *testing.T) {
 	}()
 	native.after = func() { close(entered); <-release }
 	p := taskWireTestConnectMethods(t, root.Methods(), root.peer)
-	requestFrame := func(id, method, operation string, body any) []byte {
+	// Labels name the frames; each takes the connection's next sequence.
+	requestFrame := func(_, method, operation string, body any) []byte {
+		p.sequence++
+		id := wireTestID(p.sequence)
 		raw, err := json.Marshal(body)
 		if err != nil {
 			t.Fatal(err)
@@ -226,7 +229,7 @@ func TestSettingsListWireWithdrawalWhileNativeWaits(t *testing.T) {
 	select {
 	case got := <-ack:
 		var response wire.Response
-		if got.err != nil || json.Unmarshal(got.raw, &response) != nil || response.Id == nil || *response.Id != "withdraw-owner" || response.Result == nil || response.Result.Status != "ok" {
+		if got.err != nil || json.Unmarshal(got.raw, &response) != nil || response.Id == nil || *response.Id != wireTestID(3) || response.Result == nil || response.Result.Status != "ok" {
 			t.Fatalf("withdrawal did not ACK while native waited: %s %v", got.raw, got.err)
 		}
 	case <-time.After(time.Second):

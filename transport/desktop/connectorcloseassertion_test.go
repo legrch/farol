@@ -89,7 +89,7 @@ func (r connectorProofReader) Read(buffer []byte) (int, error) {
 }
 
 func connectorProofRequest() wire.Request {
-	return wire.Request{Jsonrpc: "2.0", Id: "active", Method: "computer.workspace.list", Params: wire.Call{
+	return wire.Request{Jsonrpc: "2.0", Id: seq(2), Method: "computer.workspace.list", Params: wire.Call{
 		Context: &wire.Context{ProfileId: "test", BackendGeneration: "generation"}, Body: json.RawMessage(`{}`),
 	}}
 }
@@ -237,7 +237,7 @@ func TestConnectorCloseProofRejectsCrossedOrNonterminalFrames(t *testing.T) {
 	for _, malformed := range [][]byte{
 		[]byte(`{`),
 		[]byte(strings.Replace(string(valid), `"jsonrpc":"2.0"`, `"jsonrpc":"2.0","extra":true`, 1)),
-		[]byte(strings.Replace(string(valid), `"requestId":"active"`, `"requestId":"other","requestId":"active"`, 1)),
+		[]byte(strings.Replace(string(valid), `"requestId":"`+seq(2)+`"`, `"requestId":"other","requestId":"`+seq(2)+`"`, 1)),
 		append(append([]byte{}, valid...), []byte(` {}`)...),
 	} {
 		if connectorCloseProof(bytes.NewReader(connectorProofFrames(t, malformed)), &request) == nil {

@@ -18,6 +18,7 @@ import { Client } from "../../../apps/desktop/bridge/client.ts";
 import { parseJSON } from "../../../apps/desktop/bridge/frame.ts";
 import { TaskBridge } from "../../../apps/desktop/bridge/task.ts";
 import {
+  protocolMajor,
   validate,
   type TaskHandle,
 } from "../../../apps/desktop/bridge/wire.ts";
@@ -614,7 +615,7 @@ export async function startGoTaskSurfaceFixture(
     );
     await client.handshake(
       {
-        protocolMajor: 1,
+        protocolMajor,
         protocolMinor: 0,
         buildId: hello.buildId,
         profileId: hello.profileId,

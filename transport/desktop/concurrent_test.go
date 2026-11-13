@@ -3,7 +3,6 @@ package desktop
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"sync/atomic"
 	"testing"
@@ -20,7 +19,11 @@ type concurrentFixture struct {
 	output   *io.PipeReader
 	terminal chan error
 	cancel   context.CancelFunc
+	sequence uint64
 }
+
+// id names the next ordinary request on this fixture's connection.
+func (f *concurrentFixture) id() string { f.sequence++; return seq(f.sequence) }
 
 func concurrentServer(t *testing.T, handler func(context.Context, Request) (*Outcome, error)) *concurrentFixture {
 	t.Helper()
@@ -45,7 +48,7 @@ func concurrentServer(t *testing.T, handler func(context.Context, Request) (*Out
 			t.Error("server retained an owned handler after cancellation")
 		}
 	})
-	f.send(t, request("hello", "core.handshake", `{"protocolMajor":1,"protocolMinor":0,"buildId":"build","profileId":"test"}`, nil))
+	f.send(t, request(f.id(), "core.handshake", helloBody, nil))
 	if f.read(t).Result == nil {
 		t.Fatal("handshake refused")
 	}
@@ -99,12 +102,14 @@ func TestConcurrentHandlerAllowsReciprocalTrafficAndDeduplicatesBeforeDispatch(t
 		}
 	})
 	ctx := wire.Context{ProfileId: "test", BackendGeneration: "generation"}
-	raw := request("held", "computer.workspace.read", `{}`, &ctx)
+	heldID := f.id()
+	raw := request(heldID, "computer.workspace.read", `{}`, &ctx)
 	f.send(t, raw)
 	<-started
-	f.send(t, request("status", "core.status", `{}`, &ctx))
+	status := f.id()
+	f.send(t, request(status, "core.status", `{}`, &ctx))
 	response := f.read(t)
-	if response.Result == nil || response.Result.RequestId != "status" {
+	if response.Result == nil || response.Result.RequestId != status {
 		t.Fatalf("status blocked or crossed: %+v", response)
 	}
 	f.send(t, raw)
@@ -116,7 +121,7 @@ func TestConcurrentHandlerAllowsReciprocalTrafficAndDeduplicatesBeforeDispatch(t
 	}
 	close(held)
 	response = f.read(t)
-	if response.Result == nil || response.Result.RequestId != "held" || response.Result.Status != "ok" {
+	if response.Result == nil || response.Result.RequestId != heldID || response.Result.Status != "ok" {
 		t.Fatalf("lost original response: %+v", response)
 	}
 }
@@ -136,16 +141,17 @@ func TestConcurrentSaturationRefusesWithoutBlockingCompletionTraffic(t *testing.
 	})
 	ctx := wire.Context{ProfileId: "test", BackendGeneration: "generation"}
 	for i := 0; i < 32; i++ {
-		f.send(t, request(fmt.Sprintf("held-%d", i), "computer.workspace.read", `{}`, &ctx))
+		f.send(t, request(f.id(), "computer.workspace.read", `{}`, &ctx))
 		<-started
 	}
-	f.send(t, request("overflow", "computer.workspace.read", `{}`, &ctx))
+	f.send(t, request(f.id(), "computer.workspace.read", `{}`, &ctx))
 	response := f.read(t)
 	if response.Result == nil || response.Result.Status != "unavailable" || response.Result.Code == nil || *response.Result.Code != "handler_backpressure" {
 		t.Fatalf("missing saturation refusal: %+v", response)
 	}
-	f.send(t, request("still-readable", "core.status", `{}`, &ctx))
-	if f.read(t).Result.RequestId != "still-readable" {
+	readable := f.id()
+	f.send(t, request(readable, "core.status", `{}`, &ctx))
+	if f.read(t).Result.RequestId != readable {
 		t.Fatal("completion reader blocked by saturation")
 	}
 	if calls.Load() != 32 {
@@ -165,7 +171,7 @@ func TestConcurrentBoundaryValidationPrecedesOwnerDispatch(t *testing.T) {
 	var calls atomic.Int32
 	f := concurrentServer(t, func(context.Context, Request) (*Outcome, error) { calls.Add(1); return &Outcome{Status: "ok"}, nil })
 	stale := wire.Context{ProfileId: "test", BackendGeneration: "other"}
-	f.send(t, request("stale", "computer.workspace.read", `{}`, &stale))
+	f.send(t, request(f.id(), "computer.workspace.read", `{}`, &stale))
 	if f.read(t).Error == nil || calls.Load() != 0 {
 		t.Fatal("stale request reached owner")
 	}
@@ -180,7 +186,7 @@ func TestConcurrentCancellationWaitsForExactHandlerTerminal(t *testing.T) {
 		return nil, ctx.Err()
 	})
 	ctx := wire.Context{ProfileId: "test", BackendGeneration: "generation"}
-	f.send(t, request("held", "computer.workspace.read", `{}`, &ctx))
+	f.send(t, request(f.id(), "computer.workspace.read", `{}`, &ctx))
 	<-started
 	f.cancel()
 	select {

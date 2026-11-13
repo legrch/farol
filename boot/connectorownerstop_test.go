@@ -24,7 +24,7 @@ func stopOwnerFixture(t *testing.T) (*computerConnector, *connectorJournalFixtur
 func TestOwnerStoppedHealthUsesOriginalRetiredOwnerWithoutEffects(t *testing.T) {
 	s, j, _, query := stopOwnerFixture(t)
 	origin := s.closed
-	attempts, revision, withdrawals := s.attempts, j.revision, j.withdrawals
+	attempts, revision, withdrawals := len(s.recentOpens), j.revision, j.withdrawals
 	expiry := j.approval.ExpiresAt
 	got := healthRead(t, s, query)
 	if got.State != "stopped" || got.Reason != "owner_stopped" || got.LocalReady || got.ObservedAtMillis == nil || got.ValidUntilMillis == nil || got.LastPollSuccessMillis != nil || got.LastResponseAcceptedMillis != nil || got.NextRetryMillis != nil {
@@ -32,7 +32,7 @@ func TestOwnerStoppedHealthUsesOriginalRetiredOwnerWithoutEffects(t *testing.T) 
 	}
 	j.clock.now = j.clock.now.Add(time.Second)
 	next := healthRead(t, s, query)
-	if *next.ObservedAtMillis == *got.ObservedAtMillis || s.current != nil || s.closed != origin || origin.consumed || s.attempts != attempts || j.revision != revision || j.withdrawals != withdrawals || !j.approval.ExpiresAt.Equal(expiry) || s.mutations.recoveryReserved {
+	if *next.ObservedAtMillis == *got.ObservedAtMillis || s.current != nil || s.closed != origin || origin.consumed || len(s.recentOpens) != attempts || j.revision != revision || j.withdrawals != withdrawals || !j.approval.ExpiresAt.Equal(expiry) || s.mutations.recoveryReserved {
 		t.Fatal("negative read altered lifecycle or authority")
 	}
 	if _, err := origin.retiredOwner.Reconnect(context.Background()); err == nil {

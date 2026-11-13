@@ -44,6 +44,10 @@ class MemorySocket extends EventEmitter implements ConnectorSocket {
   acceptWrites = true;
   writeFailure = false;
   onWrite: ((bytes: Buffer) => void) | undefined;
+  // Caller IDs never reach the wire: each request carries the next sequenced
+  // wire ID. Fixture replies name requests by caller ID; receive() swaps in
+  // the wire ID that request was sent under. Unknown IDs pass unchanged.
+  readonly wireIds = new Map<string, string>();
   write(bytes: Uint8Array): boolean {
     const copy = Buffer.from(bytes);
     this.writes.push(copy);
@@ -58,7 +62,21 @@ class MemorySocket extends EventEmitter implements ConnectorSocket {
     this.emit("close");
   }
   receive(value: unknown): void {
-    this.emit("data", frame(value));
+    this.emit("data", frame(this.toWire(value)));
+  }
+  toWire(value: unknown): unknown {
+    if (value === null || typeof value !== "object" || !("id" in value))
+      return value;
+    const wire = this.wireIds.get(value.id as string);
+    if (wire === undefined) return value;
+    const result = (value as { result?: Record<string, unknown> }).result;
+    return {
+      ...value,
+      id: wire,
+      ...(result && result.requestId === value.id
+        ? { result: { ...result, requestId: wire } }
+        : {}),
+    };
   }
 }
 function endpoint(): ComputerConnectorEndpoint {
@@ -131,6 +149,14 @@ function fixture(selected = endpoint()) {
   const socket = new MemorySocket();
   const factory = vi.fn(() => socket);
   const client = new SocketConnectorClient(selected, factory);
+  const request = client.request.bind(client);
+  client.request = (method, body, options = {}) => {
+    const before = socket.writes.length;
+    const result = request(method, body, options);
+    if (options.id !== undefined && socket.writes.length > before)
+      socket.wireIds.set(options.id, requestAt(socket).id);
+    return result;
+  };
   clients.push(client);
   return { socket, factory, client };
 }
@@ -308,7 +334,9 @@ it.each([
   ["buildId", "other"],
   ["profileId", "other"],
   ["backendGeneration", "other"],
-  ["protocolMajor", 2],
+  // A protocol 1.0 backend (unsequenced requests) is a different major.
+  ["protocolMajor", 1],
+  ["protocolMajor", 3],
   ["protocolMinor", 1],
   ["maxFrameBytes", 8192],
 ])("requires exact handshake identity %s", async (field, value) => {
@@ -372,7 +400,8 @@ it("implements the real Client.request signature and ComputerBridge list composi
   const result = bridge.list(body, { requestId: "list", context });
   expect(requestAt(f.socket)).toEqual({
     jsonrpc: "2.0",
-    id: "list",
+    // The second request on this stream, after the handshake.
+    id: expect.stringMatching(/^desktop-call:[0-9a-f-]{36}:2$/u),
     method: "computer.workspace.list",
     params: { context, body },
   });
@@ -480,20 +509,22 @@ it.each(effectMethods)(
       const pending = f.client.request(method, body, { id, operationId });
       expect(requestAt(f.socket)).toEqual({
         jsonrpc: "2.0",
-        id,
+        id: f.socket.wireIds.get(id),
         method,
         params: { context, body, operationId },
       });
-      const ack = effectResponse(id, operationId, status);
-      f.socket.receive(ack);
-      await expect(pending).resolves.toEqual(ack.result);
-      unknownSeen ||= status === "unknown";
-      expect(f.client.hasUnresolvedEffect).toBe(unknownSeen);
+      // A live operation ID cannot be submitted twice; after settlement the
+      // module-owned operation store is its fence, not a client history.
       const count = f.socket.writes.length;
       await expect(
         f.client.request(method, body, { id: `new-${id}`, operationId }),
       ).rejects.toMatchObject(error("refused", "duplicate_operation_id"));
       expect(f.socket.writes).toHaveLength(count);
+      const ack = effectResponse(id, operationId, status);
+      f.socket.receive(ack);
+      await expect(pending).resolves.toEqual(ack.result);
+      unknownSeen ||= status === "unknown";
+      expect(f.client.hasUnresolvedEffect).toBe(unknownSeen);
     }
   },
 );
@@ -619,8 +650,8 @@ it("correlates concurrent effects received out of order", async () => {
   f.socket.emit(
     "data",
     Buffer.concat([
-      frame(effectResponse("b", "op-b")),
-      frame(effectResponse("a", "op-a")),
+      frame(f.socket.toWire(effectResponse("b", "op-b"))),
+      frame(f.socket.toWire(effectResponse("a", "op-a"))),
     ]),
   );
   await expect(a).resolves.toMatchObject({
@@ -815,33 +846,23 @@ it("stops on a late duplicate effect ACK and leaves another submitted effect unk
   expect(f.socket.writes).toHaveLength(4);
 });
 
-it("bounds submitted operation history within the 4096-request stream budget", async () => {
+it("submits more effects than the former 4096-request stream budget with constant state", async () => {
   const f = await ready();
   f.socket.onWrite = (bytes) => {
     const request = decode(bytes) as Request;
     f.socket.receive(effectResponse(request.id, request.params.operationId!));
   };
-  for (let i = 0; i < 4095; i++)
+  for (let i = 0; i < 10000; i++)
     await f.client.request(
       effectMethods[i % 2]!,
       {},
       { id: `r${i}`, operationId: `op${i}` },
     );
-  await expect(
-    f.client.request(
-      effectMethods[0]!,
-      {},
-      { id: "overflow", operationId: "op0" },
-    ),
-  ).rejects.toMatchObject(error("refused", "duplicate_operation_id"));
-  await expect(
-    f.client.request(
-      effectMethods[0]!,
-      {},
-      { id: "overflow", operationId: "op-overflow" },
-    ),
-  ).rejects.toBeInstanceOf(RequestNotSentError);
-  expect(f.socket.writes).toHaveLength(4097);
+  expect(f.socket.writes).toHaveLength(10002);
+  const retained = f.client as unknown as { pending: Map<string, unknown> };
+  expect(retained.pending.size).toBe(0);
+  expect(requestAt(f.socket).id).toMatch(/^desktop-call:[0-9a-f-]{36}:10001$/u);
+  expect(f.client.hasUnresolvedEffect).toBe(false);
 });
 
 it("rejects operation IDs, invalid IDs/deadlines/body and oversized frames before writing", async () => {
@@ -867,7 +888,7 @@ it("rejects operation IDs, invalid IDs/deadlines/body and oversized frames befor
   expect(f.socket.writes).toHaveLength(count);
 });
 
-it("correlates out-of-order and coalesced responses and never reuses completed IDs", async () => {
+it("correlates out-of-order and coalesced responses and never reuses a wire ID", async () => {
   const f = await ready();
   const a = f.client.request(methods[0]!, {}, { id: "a" });
   const b = f.client.request(methods[0]!, {}, { id: "b" });
@@ -876,15 +897,20 @@ it("correlates out-of-order and coalesced responses and never reuses completed I
   ).rejects.toMatchObject(error("refused", "duplicate_request_id"));
   f.socket.emit(
     "data",
-    Buffer.concat([frame(response("b")), frame(response("a"))]),
+    Buffer.concat([
+      frame(f.socket.toWire(response("b"))),
+      frame(f.socket.toWire(response("a"))),
+    ]),
   );
   await expect(a).resolves.toMatchObject({ requestId: "a" });
   await expect(b).resolves.toMatchObject({ requestId: "b" });
-  const count = f.socket.writes.length;
-  await expect(
-    f.client.request(methods[0]!, {}, { id: "a" }),
-  ).rejects.toMatchObject(error("refused", "duplicate_request_id"));
-  expect(f.socket.writes).toHaveLength(count);
+  // A settled caller ID may be reused; its call takes the next wire sequence.
+  const first = f.socket.wireIds.get("a");
+  const again = f.client.request(methods[0]!, {}, { id: "a" });
+  expect(requestAt(f.socket).id).toMatch(/:4$/u);
+  expect(requestAt(f.socket).id).not.toBe(first);
+  f.socket.receive(response("a"));
+  await expect(again).resolves.toMatchObject({ requestId: "a" });
 });
 
 it.each([
@@ -1047,19 +1073,30 @@ it("bounds pending calls at 32 and rejects only the unsubmitted overflow", async
   }
 });
 
-it("bounds request history at 4096 including the handshake", async () => {
+it("has no request cap beyond the former 4096 including the handshake", async () => {
   const f = await ready();
   f.socket.onWrite = (bytes) => {
     const request = decode(bytes) as Request;
     f.socket.receive(response(request.id));
   };
-  for (let i = 0; i < 4095; i++)
+  for (let i = 0; i < 10000; i++)
     await f.client.request(methods[0]!, {}, { id: `r${i}` });
-  expect(f.socket.writes).toHaveLength(4097); // Authentication hello is not a core request.
-  await expect(
-    f.client.request(methods[0]!, {}, { id: "overflow" }),
-  ).rejects.toBeInstanceOf(RequestNotSentError);
-  expect(f.socket.writes).toHaveLength(4097);
+  expect(f.socket.writes).toHaveLength(10002); // Authentication hello is not a core request.
+  const ids = f.socket.writes
+    .slice(1)
+    .map((bytes) => (decode(bytes) as Request).id);
+  const nonce = /^desktop-call:([0-9a-f-]{36}):1$/u.exec(ids[0]!)![1];
+  expect(ids).toEqual(ids.map((_, i) => `desktop-call:${nonce}:${i + 1}`));
+});
+
+it("starts a reconnect at sequence 1 under a fresh nonce", async () => {
+  const first = await ready();
+  const second = await ready();
+  const one = requestAt(first.socket, 1).id;
+  const two = requestAt(second.socket, 1).id;
+  expect(one).toMatch(/^desktop-call:[0-9a-f-]{36}:1$/u);
+  expect(two).toMatch(/^desktop-call:[0-9a-f-]{36}:1$/u);
+  expect(one).not.toBe(two);
 });
 
 it.each(["opening", "binding", "handshake"])(
@@ -1412,15 +1449,16 @@ it.each(["computer.process.start", "computer.process.cancel"])(
       { id: "process-call", operationId: "original" },
     );
     expect(requestAt(f.socket).params.operationId).toBe("original");
+    // While live, the operation cannot be submitted again under another ID.
+    await expect(
+      f.client.request(method, {}, { id: "another", operationId: "original" }),
+    ).rejects.toMatchObject(error("refused", "duplicate_operation_id"));
+    expect(f.socket.writes).toHaveLength(3);
     f.socket.receive(effectResponse("process-call", "original"));
     await expect(pending).resolves.toMatchObject({
       status: "ok",
       operationId: "original",
     });
-    await expect(
-      f.client.request(method, {}, { id: "another", operationId: "original" }),
-    ).rejects.toMatchObject(error("refused", "duplicate_operation_id"));
-    expect(f.socket.writes).toHaveLength(3);
   },
 );
 
@@ -2192,6 +2230,14 @@ it("caps unanswered diagnostics without blocking original close or weakening one
       { id: "original-close", operationId: "close-operation" },
     );
     const request = f.calls.at(-1)!;
+    // The live close cannot be submitted twice under its caller ID.
+    await expect(
+      f.client.request(
+        "computer.connector.close",
+        { binding: endpoint().binding } as unknown as Json,
+        { id: "original-close", operationId: "close-operation" },
+      ),
+    ).rejects.toMatchObject({ code: "duplicate_request_id" });
     f.receive({
       jsonrpc: "2.0",
       id: request.id,
@@ -2206,14 +2252,8 @@ it("caps unanswered diagnostics without blocking original close or weakening one
     await expect(close).resolves.toMatchObject({
       status: "ok",
       operationId: "close-operation",
+      requestId: "original-close",
     });
-    await expect(
-      f.client.request(
-        "computer.connector.close",
-        { binding: endpoint().binding } as unknown as Json,
-        { id: "original-close", operationId: "close-operation" },
-      ),
-    ).rejects.toMatchObject({ code: "duplicate_request_id" });
     // A reply releases only its own diagnostic slot. No original work is retried.
     f.receive(diagnosticReply(held[0]!));
     const resumed = f.client.request(

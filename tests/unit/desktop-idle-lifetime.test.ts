@@ -164,7 +164,7 @@ it.each(["computer.settings.store.next", "chat.browser.next", "core.status"])(
 );
 
 it.each([true, false])(
-  "retires the running Settings pump at history saturation only after the original withdrawal ACK (valid=%s)",
+  "retires the running Settings pump beyond the former request cap only after the original withdrawal ACK (valid=%s)",
   async (valid) => {
     const { client, calls, reply } = await peer([
       "computer.settings.store.next",
@@ -186,11 +186,9 @@ it.each([true, false])(
     });
     pump.start();
     try {
-      for (let i = 0; i < 4087; i++)
+      // The former 4088-request ordinary cap no longer exists.
+      for (let i = 0; i < 5000; i++)
         await client.request("core.status", {}, { id: `status-${i}` });
-      await expect(
-        client.request("core.status", {}, { id: "overflow" }),
-      ).rejects.toBeInstanceOf(RequestNotSentError);
       await client.request(
         "core.retirement.prepare",
         { handoffId: "handoff" },
@@ -240,21 +238,16 @@ it.each([true, false])(
   30000,
 );
 
-it("refuses ordinary authority withdrawals before consuming retirement capacity", async () => {
+it("keeps ordinary withdrawals and the retirement exchange admissible beyond the former request cap", async () => {
   const { client, calls } = await peer();
   try {
-    for (let i = 0; i < 4087; i++)
+    for (let i = 0; i < 5000; i++)
       await client.request("core.status", {}, { id: `status-${i}` });
     const before = calls.length;
-    // Independent callers cannot spend the reserve through a repeatable
-    // Settings withdrawal. The caller refuses before any later save/publish.
-    for (let i = 0; i < 8; i++) {
-      const authority = new GoComputerAuthority(client, client.verifiedContext);
-      await expect(authority.withdraw()).rejects.toBeInstanceOf(
-        RequestNotSentError,
-      );
-    }
-    expect(calls).toHaveLength(before);
+    // Without a lifetime history there is no retirement reserve to protect:
+    // repeatable Settings withdrawals and the retirement exchange all run.
+    for (let i = 0; i < 8; i++)
+      await new GoComputerAuthority(client, client.verifiedContext).withdraw();
     await client.request(
       "computer.connector.close",
       {},
@@ -268,11 +261,17 @@ it("refuses ordinary authority withdrawals before consuming retirement capacity"
     await new GoComputerAuthority(client, client.verifiedContext).withdraw();
     await client.request("core.retirement.ack", {}, { operationId: "ack" });
     expect(calls.slice(before).map((call) => call.method)).toEqual([
+      ...Array.from({ length: 8 }, () => "computer.authority.deactivate"),
       "computer.connector.close",
       "core.retirement.prepare",
       "computer.authority.deactivate",
       "core.retirement.ack",
     ]);
+    // Every ordinary request took the next sequence of one connection lane.
+    const nonce = /^desktop-call:([0-9a-f-]{36}):1$/u.exec(calls[0]!.id)![1];
+    expect(calls.map((call) => call.id)).toEqual(
+      calls.map((_, index) => `desktop-call:${nonce}:${index + 1}`),
+    );
   } finally {
     await client.close();
   }
@@ -283,11 +282,11 @@ it.each([
   ["crossed", { handoffId: "other", receiptDigest: "a".repeat(64) }],
   ["malformed", { handoffId: "handoff", receiptDigest: "short" }],
 ] as const)(
-  "keeps the withdrawal reserve closed after a %s prepare response",
+  "does not gate withdrawal on a %s prepare response",
   async (_name, data) => {
     const { client, calls, reply } = await peer(["core.retirement.prepare"]);
     try {
-      for (let i = 0; i < 4087; i++)
+      for (let i = 0; i < 5000; i++)
         await client.request("core.status", {}, { id: `status-${i}` });
       const preparation = client.request(
         "core.retirement.prepare",
@@ -297,10 +296,10 @@ it.each([
       reply(calls.at(-1)!, data);
       await preparation;
       const before = calls.length;
-      await expect(
-        new GoComputerAuthority(client, client.verifiedContext).withdraw(),
-      ).rejects.toBeInstanceOf(RequestNotSentError);
-      expect(calls).toHaveLength(before);
+      await new GoComputerAuthority(client, client.verifiedContext).withdraw();
+      expect(calls.slice(before).map((call) => call.method)).toEqual([
+        "computer.authority.deactivate",
+      ]);
     } finally {
       await client.close();
     }
@@ -308,7 +307,7 @@ it.each([
   30000,
 );
 
-it("keeps all three ordered reads alive beyond the old stream budget and retains retirement capacity", async () => {
+it("keeps all three ordered reads and ordinary calls alive beyond the old stream budget with constant state", async () => {
   const { client, calls } = await peer();
   try {
     for (let i = 0; i < 6001; i++) {
@@ -336,21 +335,19 @@ it("keeps all three ordered reads alive beyond the old stream budget and retains
     expect(calls[2]!.id).toMatch(/^desktop-poll-settings:.*:1$/u);
     expect(calls[3]!.id).toMatch(/^desktop-poll-health:.*:1$/u);
     const retained = client as unknown as {
-      used: Set<string>;
+      requestSequence: bigint;
       polls: Map<string, bigint>;
       pending: Map<string, unknown>;
     };
-    expect(retained.used.size).toBe(1); // Only the original handshake.
+    expect(retained.requestSequence).toBe(1n); // Only the original handshake.
     expect(retained.polls.size).toBe(3);
     expect(retained.pending.size).toBe(0);
-    // Ordinary calls retain a finite replay history; no command is retried.
-    for (let i = 0; i < 4087; i++)
+    // Ordinary calls keep one sequence, not a history: no cap, no retry.
+    for (let i = 0; i < 6001; i++)
       await client.request("core.status", {}, { id: `status-${i}` });
-    const before = calls.length;
-    await expect(
-      client.request("core.status", {}, { id: "overflow" }),
-    ).rejects.toBeInstanceOf(RequestNotSentError);
-    expect(calls).toHaveLength(before);
+    expect(retained.requestSequence).toBe(6002n);
+    expect(retained.pending.size).toBe(0);
+    expect(calls.at(-1)!.id).toMatch(/^desktop-call:[0-9a-f-]{36}:6002$/u);
     for (const method of [
       "computer.connector.close",
       "core.retirement.prepare",
@@ -367,31 +364,13 @@ it("keeps all three ordered reads alive beyond the old stream budget and retains
           )
         ).status,
       ).toBe("ok");
-      const count = calls.length;
-      await expect(
-        client.request(
-          method,
-          method === "core.retirement.prepare" ? { handoffId: "handoff" } : {},
-          { id: `quit-${method}`, operationId: `op-${method}` },
-        ),
-      ).rejects.toMatchObject({ code: "duplicate_request_id" });
-      expect(calls).toHaveLength(count);
     }
-    for (let i = 0; i < 5; i++)
-      await client.request(
-        "core.retirement.ack",
-        {},
-        {
-          id: `reserved-${i}`,
-          operationId: `reserved-op-${i}`,
-        },
-      );
-    const saturated = calls.length;
-    await expect(
-      client.request("core.retirement.ack", {}, { operationId: "overflow" }),
-    ).rejects.toBeInstanceOf(RequestNotSentError);
-    expect(calls).toHaveLength(saturated);
-    // Idle observation remains separate from effect/control history saturation.
+    // A settled caller ID is not a lifetime fence; its call takes a fresh
+    // wire sequence. Effect fences are the module-owned operation IDs.
+    const reused = await client.request("core.status", {}, { id: "status-0" });
+    expect(reused.requestId).toBe("status-0");
+    expect(new Set(calls.map((call) => call.id)).size).toBe(calls.length);
+    // Idle observation remains independent of ordinary traffic.
     expect(
       (await client.request("chat.browser.next", { deadlineMillis: "1" }))
         .status,
@@ -404,6 +383,26 @@ it("keeps all three ordered reads alive beyond the old stream budget and retains
   }
 }, 30000);
 
+it("refuses a live duplicate caller ID before submission and admits it once settled", async () => {
+  const { client, calls, reply } = await peer(["core.status"]);
+  try {
+    const held = client.request("core.status", {}, { id: "live" });
+    const count = calls.length;
+    await expect(
+      client.request("core.status", {}, { id: "live" }),
+    ).rejects.toMatchObject({ state: "refused", code: "duplicate_request_id" });
+    expect(calls).toHaveLength(count);
+    reply(calls.at(-1)!);
+    await expect(held).resolves.toMatchObject({ requestId: "live" });
+    const again = client.request("core.status", {}, { id: "live" });
+    expect(calls.at(-1)!.id).toMatch(/:3$/u);
+    reply(calls.at(-1)!);
+    await expect(again).resolves.toMatchObject({ requestId: "live" });
+  } finally {
+    await client.close();
+  }
+});
+
 it("rejects forged namespaces and invalid polls before submission without spending a poll sequence", async () => {
   const { client, calls } = await peer();
   try {
@@ -412,6 +411,7 @@ it("rejects forged namespaces and invalid polls before submission without spendi
       [{ deadlineMillis: "1" }, { id: "poll", operationId: "effect" }],
       [{ invalid: true }, { id: "poll" }],
       [{ deadlineMillis: "1" }, { id: "desktop-poll-browser:forged:1" }],
+      [{ deadlineMillis: "1" }, { id: "desktop-call:forged:1" }],
     ] as const) {
       await expect(
         client.request("chat.browser.next", body, options),
@@ -425,11 +425,11 @@ it("rejects forged namespaces and invalid polls before submission without spendi
     );
     expect(calls[1]!.id).toMatch(/:1$/u);
     await client.request("core.status", {}, { id: "original" });
-    const count = calls.length;
+    expect(calls.at(-1)!.id).toMatch(/:2$/u); // Ordinary lane, after the handshake.
     await expect(
-      client.request("core.status", {}, { id: "original" }),
-    ).rejects.toMatchObject({ code: "duplicate_request_id" });
-    expect(calls).toHaveLength(count);
+      client.request("core.status", {}, { id: "desktop-call:forged:3" }),
+    ).rejects.toMatchObject({ code: "reserved_request_id" });
+    expect(calls.at(-1)!.id).toMatch(/:2$/u);
   } finally {
     await client.close();
   }
