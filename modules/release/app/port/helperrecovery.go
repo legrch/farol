@@ -1,6 +1,10 @@
 package port
 
-import "context"
+import (
+	"context"
+
+	"github.com/legrch/farol/pkg/kernel/domain/failure"
+)
 
 // HelperRecoveryEntry names only existing fixed entries, never caller paths.
 type HelperRecoveryEntry uint8
@@ -39,6 +43,21 @@ func (f *HelperRecoveryFailure) Unwrap() error {
 		return nil
 	}
 	return f.Cause
+}
+
+// Kind classifies the failure for the kernel walk with the existing flags:
+// nil or Uncertain is Unknown, Internal is Failed (a certain native or internal
+// outcome that is no clean refusal) and anything else is an original refusal.
+// Phase records where the failure happened; it does not change the kind.
+func (f *HelperRecoveryFailure) Kind() failure.Kind {
+	switch {
+	case f == nil || f.Uncertain:
+		return failure.Unknown
+	case f.Internal:
+		return failure.Failed
+	default:
+		return failure.Refused
+	}
 }
 
 // HelperRecoveryRuntime borrows real serialized route/lease/slot/admission

@@ -12,6 +12,7 @@ import (
 	"github.com/legrch/farol/modules/release/app/port"
 	release "github.com/legrch/farol/modules/release/domain"
 	"github.com/legrch/farol/modules/release/infra/repos/records"
+	kernel "github.com/legrch/farol/pkg/kernel/domain/failure"
 	"golang.org/x/sys/unix"
 )
 
@@ -103,33 +104,6 @@ func dependencyCode(code string) bool {
 	}
 	return true
 }
-func uncertain(err error) bool {
-	pending := []error{err}
-	for remaining := 128; len(pending) > 0; remaining-- {
-		if remaining == 0 {
-			return true
-		}
-		e := pending[len(pending)-1]
-		pending = pending[:len(pending)-1]
-		if e == nil {
-			continue
-		}
-		if f, ok := e.(*port.HelperRecoveryFailure); ok && (f == nil || f.Uncertain) {
-			return true
-		}
-		switch w := e.(type) {
-		case interface{ Unwrap() []error }:
-			causes := w.Unwrap()
-			if len(causes) > remaining {
-				return true
-			}
-			pending = append(pending, causes...)
-		case interface{ Unwrap() error }:
-			pending = append(pending, w.Unwrap())
-		}
-	}
-	return false
-}
 
 // Only an original closed classification or exact cancellation sentinel is a
 // refusal. Opaque wrappers/joins remain internal even if errors.Is matches one.
@@ -143,7 +117,7 @@ func classify(err error, possible bool) error {
 	if err == context.Canceled || err == context.DeadlineExceeded {
 		return failure("canceled", false, possible, err)
 	}
-	return failure("native", true, possible || uncertain(err), err)
+	return failure("native", true, possible || kernel.Marked(err), err)
 }
 func combine(primary, secondary error) error {
 	if primary == nil {
@@ -241,7 +215,7 @@ func New(ctx context.Context, directory *os.File, binding port.JournalDirectory,
 		result = combine(result, effective.check())
 		if result != nil {
 			repo = nil
-			if uncertain(result) {
+			if kernel.Marked(result) {
 				s.retain(result)
 			}
 		}
