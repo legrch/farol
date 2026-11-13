@@ -275,7 +275,7 @@ because a controller lost the ACK.
 **The controller removes what it creates.** The MCP child inherits the agent's
 stdin/stdout; the controller waits for it and then tears down:
 
-- **Clean close** — MCP exit 0 *and* terminal-mac's own immutable
+- **Clean close** — MCP exit 0 _and_ terminal-mac's own immutable
   `mcp-app-sessions/<run>/terminal.json` says `CLOSED` for this run with both
   original exits observed and a verified tree. The controller copies that
   session directory into its evidence, stops the guest it started once

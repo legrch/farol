@@ -438,7 +438,12 @@ for (const source of [
     const output = makeTempDir(t, "vm-loader-policy-out");
     assert.throws(
       () =>
-        bundleDriver({ entry, outputDir: output, root: REPO_ROOT, bundler: "inline" }),
+        bundleDriver({
+          entry,
+          outputDir: output,
+          root: REPO_ROOT,
+          bundler: "inline",
+        }),
       /E2E_BUNDLE_OUTPUT_(LOADER_FORBIDDEN|IMPORT_REMAINS)|E2E_BUNDLE_UNSUPPORTED/,
     );
     assert.deepEqual(fs.readdirSync(output), [], "no bundle is published");
@@ -449,20 +454,34 @@ test("the runner's check mode applies the same policy to staged bytes", (t) => {
   const directory = makeTempDir(t, "vm-check-imports");
   const good = path.join(directory, "good.mjs");
   const bad = path.join(directory, "bad.mjs");
-  fs.writeFileSync(good, "import fs from 'node:fs';\nconsole.log(typeof fs);\n");
+  fs.writeFileSync(
+    good,
+    "import fs from 'node:fs';\nconsole.log(typeof fs);\n",
+  );
   fs.writeFileSync(bad, "const m = await import('node:vm');\n");
   const tool = fileURLToPath(new URL("./bundle-driver.mjs", import.meta.url));
-  const ok = spawnSync(process.execPath, [tool, "--check-imports", good], { encoding: "utf8" });
+  const ok = spawnSync(process.execPath, [tool, "--check-imports", good], {
+    encoding: "utf8",
+  });
   assert.equal(ok.status, 0, ok.stderr);
-  const refused = spawnSync(process.execPath, [tool, "--check-imports", bad], { encoding: "utf8" });
+  const refused = spawnSync(process.execPath, [tool, "--check-imports", bad], {
+    encoding: "utf8",
+  });
   assert.equal(refused.status, 1);
   assert.match(refused.stderr, /^E2E_BUNDLE_OUTPUT_IMPORT_REMAINS/);
 });
 
 test("the manifest binds the entry source by digest", (t) => {
   const output = makeTempDir(t, "vm-entry-digest");
-  const entry = fileURLToPath(new URL("./prototype-entry.mjs", import.meta.url));
-  const manifest = bundleDriver({ entry, outputDir: output, root: REPO_ROOT, bundler: "inline" });
+  const entry = fileURLToPath(
+    new URL("./prototype-entry.mjs", import.meta.url),
+  );
+  const manifest = bundleDriver({
+    entry,
+    outputDir: output,
+    root: REPO_ROOT,
+    bundler: "inline",
+  });
   assert.equal(
     manifest.entrySha256,
     createHash("sha256").update(fs.readFileSync(entry)).digest("hex"),

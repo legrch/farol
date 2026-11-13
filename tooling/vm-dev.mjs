@@ -284,7 +284,10 @@ const OWNED_OUTPUT = /^run-[a-f0-9]{32}$/u;
 // anything else is left in place and reported. fs.rm never follows links.
 export async function removeOwnedOutput(root, output) {
   const parent = path.join(root, "_output/vm-dev");
-  if (path.dirname(output) !== parent || !OWNED_OUTPUT.test(path.basename(output)))
+  if (
+    path.dirname(output) !== parent ||
+    !OWNED_OUTPUT.test(path.basename(output))
+  )
     return false;
   try {
     const info = await fs.lstat(output);

@@ -503,7 +503,12 @@ const FORBIDDEN_PROPERTIES = new Set([
   "createRequire",
   "resolve",
 ]);
-const FORBIDDEN_CALLEES = new Set(["eval", "Function", "require", "createRequire"]);
+const FORBIDDEN_CALLEES = new Set([
+  "eval",
+  "Function",
+  "require",
+  "createRequire",
+]);
 
 function propertyName(node) {
   if (!node.computed && node.property?.type === "Identifier")
