@@ -140,24 +140,32 @@ No new test may slice production source. `tooling/check-source-slicing.mjs`
 (part of `npm run architecture`, covered by `tests/architecture/source-slicing.test.ts`)
 parses every code file under `tests/` and every co-located `*.test.*` or `*.spec.*`
 file elsewhere in the repository, and refuses one that executes code derived, by data
-flow inside the file, from an fs read of a production `.ts`/`.tsx`/`.mts`/`.js`/`.mjs`/`.cjs`/`.go`
-file under `src/`, `apps/`, `boot/`, `modules/`, `pkg/`, `transport/`, `cmd/` or
-`tooling/`. The production path must be spelled by the read call's own path argument
-(followed through bindings, assignments and same-file reader helpers); import specifiers
-and test titles never count. Execution means `node:vm`, `new Function`, `eval`, a
-TypeScript/Babel/esbuild transpile followed by a dynamic load, or an esbuild
+flow inside the file, from an fs read (or a bundler `?raw` import) of a production
+`.ts`/`.tsx`/`.mts`/`.js`/`.mjs`/`.cjs`/`.go` file under `src/`, `apps/`, `boot/`,
+`modules/`, `pkg/`, `transport/`, `cmd/` or `tooling/`. The path must be spelled by the
+read call's own path argument, relative to the repository root (a path that first
+enters `fixtures/` or `node_modules/` does not count), and is followed through
+bindings, assignments, member assignments, callbacks and same-file reader helpers,
+including helpers that add the root themselves; import specifiers and test titles never
+count. Execution means `node:vm`, `new Function`, `eval`, a dynamic `import()`,
+`require()` or `module._compile` of derived text (a `data:` URL or a temp file written
+from it), a TypeScript/Babel/esbuild transpile followed by a dynamic load, or an esbuild
 `stdin.contents` build. Today's offenders are listed by exact path and mechanism in
 `tests/architecture/source-slicing-allowlist.json`, which only shrinks: a listed file
 that no longer offends fails as stale until removed (`--write-allowlist` removes
-entries and mechanisms and refuses any growth; `--init-allowlist` refuses a non-empty
-list), and a new offender fails. A test file that cannot be parsed also fails the gate,
-naming the file. Import the code under test instead. Tests that only assert on source
-text are reported, not blocked. Known limits, not detected: reading a directory
-(`readdir`) and then slicing, computed forms such as `globalThis["eval"]`, `Function`
-reached through a prototype or `constructor`, a read helper imported from another file,
-code written to disk and executed in a child process, and esbuild plugin `onLoad`
-contents. Taint is by variable name within one file, so it is deliberately a little
-generous.
+entries and mechanisms and refuses any growth; `--init-allowlist` refuses when the file
+exists unless `--force-init` is given), and a new offender fails. A test file that
+cannot be parsed also fails the gate, naming the file. Import the code under test
+instead. Tests that only assert on source text are reported, not blocked. Taint is
+keyed by variable name file-wide, so a literal executed under a name that is tainted
+elsewhere in the file is reported: the error is loud and renaming the variable clears
+it. Known limits, not detected: reading a directory (`readdir`) and then slicing;
+computed forms such as `globalThis["eval"]` or `Function` reached through a prototype
+or `constructor`; a read helper or a vm wrapper imported from another file; `vm`
+reached through `createRequire`; code written to disk and run in a child process
+(`spawn`, `fork`, `execFile`); a dynamic `import("...?raw")`; `eval`-like timers with
+a string argument; esbuild plugin `onLoad` contents; and flows through object
+properties beyond the root binding or through return values of unresolved calls.
 
 The accepted Go layout uses `modules/<module>/contracts/<feature>` as a thin
 published in-process facade. It may import its own application/domain to delegate

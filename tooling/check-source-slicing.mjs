@@ -3,16 +3,21 @@
 // derived from it. Existing offenders live in one shrink-only allowlist.
 //
 // A file offends when code that it executes derives, by data flow inside the
-// file, from an fs read of a production path (a .ts/.tsx/.mts/.js/.go file
-// under src/, apps/, boot/, modules/, pkg/, transport/, cmd/ or tooling/). The
-// production path must be spelled by the read call's own path argument,
-// followed through const/let/var bindings, assignments and same-file reader
-// helpers. Import specifiers and test titles never count. Mechanisms:
+// file, from an fs read (or a bundler `?raw` import) of a production file: a
+// .ts/.tsx/.mts/.js/.mjs/.cjs/.go file under src/, apps/, boot/, modules/,
+// pkg/, transport/, cmd/ or tooling/, spelled relative to the repository root
+// (a path that first enters fixtures/ or node_modules/ does not count). The
+// path must be spelled by the read call's own path argument, followed through
+// bindings, assignments, member assignments, callbacks and same-file reader
+// helpers (including helpers that add the root themselves). Import specifiers
+// and test titles never count. Mechanisms:
 //   vm         vm.runIn*Context, vm.Script, vm.compileFunction
 //   function   new Function(...) / Function(...)
 //   eval       eval(...), (0, eval)(...), globalThis.eval(...)
-//   transpile  a TypeScript/Babel/esbuild transpile call on derived text,
-//              in a file that also loads code dynamically
+//   load       dynamic import() / require() / module._compile of derived text
+//              (a data: URL, or a temp file written from it)
+//   transpile  a TypeScript/Babel/esbuild transpile call on derived text, in a
+//              file that also loads code dynamically
 //   esbuild    an esbuild build with `stdin.contents` derived from the read
 // Tests that only assert on source text are reported, never blocked.
 import fs from "node:fs";
@@ -32,8 +37,31 @@ const skippedDirectories = new Set([
   "dist",
   ".claude",
 ]);
-const productionPath =
-  /(?:^|\/)(?:src|apps|boot|modules|pkg|transport|cmd|tooling)\/[^\s"'`]*\.(?:ts|tsx|mts|js|mjs|cjs|go)(?![\w])/;
+const productionRoots = "src|apps|boot|modules|pkg|transport|cmd|tooling";
+const productionFile = new RegExp(
+  `(?:^|/)(?:${productionRoots})/[^\\s"'\`]*\\.(?:ts|tsx|mts|js|mjs|cjs|go)(?![\\w])`,
+  "g",
+);
+const productionRootSegment = new RegExp(
+  `(?:^|/)(?:${productionRoots})(?:/|$)`,
+  "g",
+);
+const codeFileEnding = /\.(?:ts|tsx|mts|js|mjs|cjs|go)$/;
+
+// A match counts only when it is repository-root relative: whatever literal
+// text precedes it may contain nothing but "." and ".." segments, so a path
+// that enters fixtures/, node_modules/ or a temp directory first is not
+// production source.
+function rootRelative(text, pattern) {
+  for (const match of text.matchAll(pattern)) {
+    const prefix = text.slice(0, match.index);
+    if (prefix.split("/").every((segment) => ["", ".", ".."].includes(segment)))
+      return true;
+  }
+  return false;
+}
+const productionText = (text) => rootRelative(text, productionFile);
+const prefixesProduction = (text) => rootRelative(text, productionRootSegment);
 const readCalls = new Set(["readFileSync", "readFile", "createReadStream"]);
 const vmApi = new Set([
   "runInContext",
@@ -59,7 +87,20 @@ const collectors = new Set([
   "splice",
   "append",
 ]);
-const mechanismOrder = ["vm", "function", "eval", "transpile", "esbuild"];
+const mechanismOrder = [
+  "vm",
+  "function",
+  "eval",
+  "load",
+  "transpile",
+  "esbuild",
+];
+const writeCalls = new Set([
+  "writeFile",
+  "writeFileSync",
+  "appendFile",
+  "appendFileSync",
+]);
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(name);
@@ -111,6 +152,7 @@ function isDerived(node) {
 function referencedNames(node) {
   const names = new Set();
   walk(node, (inner, parent) => {
+    if (inner.type === "ThisExpression") names.add("this");
     if (inner.type !== "Identifier") return;
     if (
       parent?.type === "MemberExpression" &&
@@ -158,6 +200,14 @@ function patternNames(pattern, out = []) {
   return out;
 }
 
+function rootName(node) {
+  let current = node;
+  while (current?.type === "MemberExpression") current = current.object;
+  if (current?.type === "Identifier") return current.name;
+  if (current?.type === "ThisExpression") return "this";
+  return null;
+}
+
 const moduleName = (spec) =>
   spec.replace(/^node:/, "").replace(/\/promises$/, "");
 
@@ -200,6 +250,9 @@ function gather(ast) {
   const bindings = new Map(); // name -> expressions it can hold
   const funcs = new Map(); // name -> { params: (string|null)[], node }
   const calls = [];
+  const callbacks = []; // { call, fn }
+  const loads = []; // expressions executed by a dynamic load
+  const seeded = new Set(); // names bound to production text directly
   let dynamicLoad = false;
   const bind = (name, node) => {
     if (!bindings.has(name)) bindings.set(name, []);
@@ -216,6 +269,10 @@ function gather(ast) {
   walk(ast.program, (node) => {
     switch (node.type) {
       case "ImportDeclaration":
+        if (/\?raw$/.test(node.source.value))
+          for (const spec of node.specifiers)
+            if (productionText(node.source.value.replace(/\?raw$/, "")))
+              seeded.add(spec.local.name);
         for (const spec of node.specifiers)
           aliases.set(spec.local.name, {
             module: moduleName(node.source.value),
@@ -253,9 +310,13 @@ function gather(ast) {
           addFunction(node.id.name, node.init);
         break;
       }
-      case "AssignmentExpression":
+      case "AssignmentExpression": {
         for (const name of patternNames(node.left)) bind(name, node.right);
+        const owner = rootName(node.left);
+        if (node.left.type === "MemberExpression" && owner)
+          bind(owner, node.right);
         break;
+      }
       case "ForOfStatement":
       case "ForInStatement":
         if (node.left.type === "VariableDeclaration")
@@ -281,28 +342,66 @@ function gather(ast) {
         )
           for (const argument of node.arguments)
             bind(node.callee.object.name, argument);
-        if (node.type === "CallExpression" && node.callee.type === "Import") {
-          if (node.arguments[0]?.type !== "StringLiteral") dynamicLoad = true;
-        }
+        for (const argument of node.arguments)
+          if (
+            argument.type === "ArrowFunctionExpression" ||
+            argument.type === "FunctionExpression"
+          )
+            callbacks.push({ call: node, fn: argument });
         const name = calleeName(node.callee);
-        if (name === "_compile") dynamicLoad = true;
+        if (writeCalls.has(name) && node.arguments.length >= 2) {
+          // writeFile(target, derived): the target now holds derived text.
+          const target = rootName(node.arguments[0]);
+          if (target) bind(target, node.arguments[1]);
+        }
+        const first = node.arguments[0];
+        if (node.type === "CallExpression" && node.callee.type === "Import") {
+          if (first?.type !== "StringLiteral") {
+            dynamicLoad = true;
+            if (first) loads.push(first);
+          }
+        }
+        if (name === "_compile") {
+          dynamicLoad = true;
+          if (first) loads.push(first);
+        }
         if (
           node.callee.type === "Identifier" &&
           node.callee.name === "require" &&
-          node.arguments[0]?.type !== "StringLiteral"
-        )
+          first?.type !== "StringLiteral"
+        ) {
           dynamicLoad = true;
+          if (first) loads.push(first);
+        }
         break;
       }
       default:
         break;
     }
   });
-  return { aliases, bindings, funcs, calls, dynamicLoad };
+  return {
+    aliases,
+    bindings,
+    funcs,
+    calls,
+    callbacks,
+    loads,
+    seeded,
+    dynamicLoad,
+  };
 }
 
 function analyzeFacts(facts) {
-  const { aliases, bindings, funcs, calls, dynamicLoad } = facts;
+  const {
+    aliases,
+    bindings,
+    funcs,
+    calls,
+    callbacks,
+    loads,
+    seeded,
+    dynamicLoad,
+  } = facts;
   const aliasFrom = (name, modules) => {
     const alias = aliases.get(name);
     return alias && modules.includes(alias.module) ? alias : null;
@@ -322,7 +421,7 @@ function analyzeFacts(facts) {
     });
     return parts.join("/");
   }
-  const production = (node) => productionPath.test(pathText(node));
+  const production = (node) => productionText(pathText(node));
 
   function isReadCall(node) {
     if (node.type !== "CallExpression") return false;
@@ -344,7 +443,11 @@ function analyzeFacts(facts) {
   const readers = new Map();
   for (let pass = 0; pass < 3; pass += 1) {
     for (const [name, fn] of funcs) {
-      const entry = readers.get(name) ?? { bodyProd: false, params: new Set() };
+      const entry = readers.get(name) ?? {
+        bodyProd: false,
+        prefixRoot: false,
+        params: new Set(),
+      };
       walk(fn.node.body, (inner) => {
         if (inner.type !== "CallExpression") return;
         const target =
@@ -357,9 +460,12 @@ function analyzeFacts(facts) {
             ? [...target.params].map((index) => [index, inner.arguments[index]])
             : [];
         if (target?.bodyProd) entry.bodyProd = true;
+        if (target?.prefixRoot) entry.prefixRoot = true;
         for (const [, argument] of pathArgs) {
           if (!argument) continue;
           if (production(argument)) entry.bodyProd = true;
+          // The helper adds the production root itself: read(rel) -> src/rel.
+          if (prefixesProduction(pathText(argument))) entry.prefixRoot = true;
           const used = referencedNames(argument);
           fn.params.forEach((param, index) => {
             if (param && used.has(param)) entry.params.add(index);
@@ -381,7 +487,11 @@ function analyzeFacts(facts) {
     return (
       reader.bodyProd ||
       [...reader.params].some(
-        (index) => node.arguments[index] && production(node.arguments[index]),
+        (index) =>
+          node.arguments[index] &&
+          (production(node.arguments[index]) ||
+            (reader.prefixRoot &&
+              codeFileEnding.test(pathText(node.arguments[index])))),
       )
     );
   }
@@ -395,7 +505,7 @@ function analyzeFacts(facts) {
   }
 
   // Names that hold text read from production source, or text derived from it.
-  const tainted = new Set();
+  const tainted = new Set(seeded);
   const derived = (node) =>
     containsProductionRead(node) ||
     [...referencedNames(node)].some((name) => tainted.has(name));
@@ -406,6 +516,21 @@ function analyzeFacts(facts) {
         tainted.add(name);
         changed = true;
       }
+    }
+    // A callback receives the call's result: fs.readFile(p, (e, text) => ...),
+    // read(p).then((text) => ...).
+    for (const { call, fn } of callbacks) {
+      const source =
+        derived(call.callee) ||
+        isProductionRead(call) ||
+        call.arguments.some((argument) => argument !== fn && derived(argument));
+      if (!source) continue;
+      for (const param of fn.params)
+        for (const name of patternNames(param))
+          if (!tainted.has(name)) {
+            tainted.add(name);
+            changed = true;
+          }
     }
     for (const call of calls) {
       if (call.callee.type !== "Identifier") continue;
@@ -422,6 +547,7 @@ function analyzeFacts(facts) {
   }
 
   const mechanisms = new Set();
+  if (loads.some(derived)) mechanisms.add("load");
   const hasEsbuild = [...aliases.values()].some((a) => a.module === "esbuild");
   for (const call of calls) {
     const callee = call.callee;
@@ -435,8 +561,7 @@ function analyzeFacts(facts) {
       (callee.type === "MemberExpression" &&
         !callee.computed &&
         vmApi.has(callee.property.name) &&
-        callee.object.type === "Identifier" &&
-        aliasFrom(callee.object.name, ["vm"]));
+        moduleOrigin(callee.object, aliases)?.module === "vm");
     if (vmCallee && first && derived(first)) mechanisms.add("vm");
     if (
       name === "Function" &&
@@ -452,8 +577,9 @@ function analyzeFacts(facts) {
         callee.type === "Identifier"
           ? aliasFrom(callee.name, modules.map(moduleName))
           : callee.type === "MemberExpression" &&
-            callee.object.type === "Identifier" &&
-            aliasFrom(callee.object.name, modules.map(moduleName));
+            modules
+              .map(moduleName)
+              .includes(moduleOrigin(callee.object, aliases)?.module);
       if (fromModule) mechanisms.add("transpile");
     }
   }
@@ -620,9 +746,10 @@ function main() {
     process.exit(0);
   }
   if (flag("--init-allowlist")) {
-    if (Object.keys(current).length > 0) {
+    const target = path.join(root, allowlistRelative);
+    if (fs.existsSync(target) && !flag("--force-init")) {
       console.error(
-        `refused: ${allowlistRelative} already lists ${Object.keys(current).length} files; use --write-allowlist to shrink it`,
+        `refused: ${allowlistRelative} already exists (${Object.keys(current).length} files); use --write-allowlist to shrink it`,
       );
       process.exit(1);
     }

@@ -33,7 +33,7 @@ afterAll(() => {
 
 function temporaryRoot(
   testSource: string,
-  allowlist: Record<string, string[]>,
+  allowlist: Record<string, string[]> | null,
 ): string {
   const parent = path.join(nextRoot, "_output", "tmp");
   fs.mkdirSync(parent, { recursive: true });
@@ -42,10 +42,11 @@ function temporaryRoot(
   fs.mkdirSync(path.join(dir, "tests/unit"), { recursive: true });
   fs.mkdirSync(path.join(dir, "tests/architecture"), { recursive: true });
   fs.writeFileSync(path.join(dir, "tests/unit/case.mjs"), testSource);
-  fs.writeFileSync(
-    path.join(dir, "tests/architecture/source-slicing-allowlist.json"),
-    JSON.stringify({ schema: 1, files: allowlist }),
-  );
+  if (allowlist)
+    fs.writeFileSync(
+      path.join(dir, "tests/architecture/source-slicing-allowlist.json"),
+      JSON.stringify({ schema: 1, files: allowlist }),
+    );
   return dir;
 }
 
@@ -120,9 +121,11 @@ describe("the source-slicing ban", () => {
     expect(result.summary?.findings.map((f) => f.code)).toEqual([
       "SLICING_NEW_OFFENDER",
     ]);
-    expect(result.summary?.byMechanism).toEqual({
-      [mechanism.replace("-template", "")]: 1,
-    });
+    const expected = mechanism.replace("-template", "");
+    // A transpile always ends in a dynamic load, which is its own signal.
+    expect(result.summary?.byMechanism).toEqual(
+      expected === "transpile" ? { load: 1, transpile: 1 } : { [expected]: 1 },
+    );
   });
 
   it("refuses an offender missing from a non-empty allowlist", () => {
@@ -148,6 +151,7 @@ describe("the source-slicing ban", () => {
     "fp-title",
     "fp-import-specifier",
     "fp-literal-code",
+    "fp-anchor",
   ])("does not accuse %s", (name) => {
     const result = check(path.join(fixtures, name));
     expect(result.status, result.stderr).toBe(0);
@@ -168,10 +172,24 @@ describe("the source-slicing ban", () => {
     ["helper-executor", "vm"],
     ["for-of", "vm"],
     ["push-collect", "vm"],
+    ["member-assign", "vm"],
+    ["callback-readfile", "vm"],
+    ["callback-then", "vm"],
+    ["vm-require-call", "vm"],
+    ["vm-await-import", "vm"],
+    ["load-data-url", "load"],
+    ["load-tempfile", "load"],
+    ["load-compile", "load"],
+    ["helper-prefix", "vm"],
+    ["raw-import", "vm"],
   ])("catches %s as %s", (name, mechanism) => {
     const result = check(path.join(fixtures, name));
     expect(result.status).toBe(1);
-    expect(result.summary?.byMechanism).toEqual({ [mechanism]: 1 });
+    expect(result.summary?.byMechanism).toEqual(
+      mechanism === "transpile"
+        ? { load: 1, transpile: 1 }
+        : { [mechanism]: 1 },
+    );
   });
 
   describe("allowlist writers", () => {
@@ -217,8 +235,22 @@ describe("the source-slicing ban", () => {
       expect(listed(dir)).toEqual({ "tests/unit/other.mjs": ["vm"] });
     });
 
-    it("--init-allowlist initializes an empty allowlist", () => {
+    it("--init-allowlist refuses even a committed empty allowlist", () => {
       const dir = temporaryRoot(vmOnly, {});
+      const result = run(dir, ["--init-allowlist"]);
+      expect(result.status).toBe(1);
+      expect(listed(dir)).toEqual({});
+    });
+
+    it("--init-allowlist --force-init rewrites an existing allowlist", () => {
+      const dir = temporaryRoot(vmOnly, {});
+      const result = run(dir, ["--init-allowlist", "--force-init"]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(listed(dir)).toEqual({ [entry]: ["vm"] });
+    });
+
+    it("--init-allowlist creates a missing allowlist", () => {
+      const dir = temporaryRoot(vmOnly, null);
       const result = run(dir, ["--init-allowlist"]);
       expect(result.status, result.stderr).toBe(0);
       expect(listed(dir)).toEqual({ [entry]: ["vm"] });
