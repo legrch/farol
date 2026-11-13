@@ -6585,11 +6585,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/clients/claude/hostobservation.go",
-      "detail": "File name outside the admitted vocabulary: hostobservation"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/task/infra/clients/claude/invocation.go",
       "detail": "File name outside the admitted vocabulary: invocation"
     },
@@ -6605,11 +6600,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/clients/codex/gitmetadata.go",
-      "detail": "File name outside the admitted vocabulary: gitmetadata"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/task/infra/clients/codex/json.go",
       "detail": "File name outside the admitted vocabulary: json"
     },
@@ -6620,23 +6610,8 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/clients/codex/nativedarwin.go",
-      "detail": "File name outside the admitted vocabulary: nativedarwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/clients/codex/nativeunsupported.go",
-      "detail": "File name outside the admitted vocabulary: nativeunsupported"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/task/infra/clients/codex/proxy.go",
       "detail": "File name outside the admitted vocabulary: proxy"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/clients/codex/selectedthread.go",
-      "detail": "File name outside the admitted vocabulary: selectedthread"
     },
     {
       "code": "GO_FILE_WORD",
@@ -6675,48 +6650,8 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/repos/task/filesystemdarwin.go",
-      "detail": "File name outside the admitted vocabulary: filesystemdarwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/repos/task/filesystemlinux.go",
-      "detail": "File name outside the admitted vocabulary: filesystemlinux"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/repos/task/filesystemmutation.go",
-      "detail": "File name outside the admitted vocabulary: filesystemmutation"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/repos/task/filesystemnative.go",
-      "detail": "File name outside the admitted vocabulary: filesystemnative"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/repos/task/filesystemstate.go",
-      "detail": "File name outside the admitted vocabulary: filesystemstate"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/repos/task/filesystemunsupported.go",
-      "detail": "File name outside the admitted vocabulary: filesystemunsupported"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/task/infra/repos/task/owner.go",
       "detail": "File name outside the admitted vocabulary: owner"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/repos/task/workflowcapacity.go",
-      "detail": "File name outside the admitted vocabulary: workflowcapacity"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/repos/task/workflowplan.go",
-      "detail": "File name outside the admitted vocabulary: workflowplan"
     },
     {
       "code": "GO_FILE_WORD",
@@ -9280,16 +9215,6 @@
     },
     {
       "code": "GO_TEST_MISSING",
-      "file": "modules/task/domain/workflow/plan.go",
-      "detail": "Behavior without plan_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/task/infra/clients/claude/hostobservation.go",
-      "detail": "Behavior without hostobservation_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
       "file": "modules/task/infra/clients/codex/catalogue.go",
       "detail": "Behavior without catalogue_test.go"
     },
@@ -9300,16 +9225,6 @@
     },
     {
       "code": "GO_TEST_MISSING",
-      "file": "modules/task/infra/clients/codex/nativedarwin.go",
-      "detail": "Behavior without nativedarwin_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/task/infra/clients/codex/nativeunsupported.go",
-      "detail": "Behavior without nativeunsupported_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
       "file": "modules/task/infra/clients/codex/proxy.go",
       "detail": "Behavior without proxy_test.go"
     },
@@ -9317,6 +9232,11 @@
       "code": "GO_TEST_MISSING",
       "file": "modules/task/infra/clients/codex/types.go",
       "detail": "Behavior without types_test.go"
+    },
+    {
+      "code": "GO_TEST_MISSING",
+      "file": "modules/task/infra/clients/codex/unsupported.go",
+      "detail": "Behavior without unsupported_test.go"
     },
     {
       "code": "GO_TEST_MISSING",
@@ -9345,33 +9265,28 @@
     },
     {
       "code": "GO_TEST_MISSING",
-      "file": "modules/task/infra/repos/task/filesystemdarwin.go",
-      "detail": "Behavior without filesystemdarwin_test.go"
+      "file": "modules/task/infra/repos/task/filesystem_darwin.go",
+      "detail": "Behavior without filesystem_darwin_test.go"
     },
     {
       "code": "GO_TEST_MISSING",
-      "file": "modules/task/infra/repos/task/filesystemlinux.go",
-      "detail": "Behavior without filesystemlinux_test.go"
+      "file": "modules/task/infra/repos/task/filesystem_linux.go",
+      "detail": "Behavior without filesystem_linux_test.go"
     },
     {
       "code": "GO_TEST_MISSING",
-      "file": "modules/task/infra/repos/task/filesystemmutation.go",
-      "detail": "Behavior without filesystemmutation_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/task/infra/repos/task/filesystemstate.go",
-      "detail": "Behavior without filesystemstate_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/task/infra/repos/task/filesystemunsupported.go",
-      "detail": "Behavior without filesystemunsupported_test.go"
+      "file": "modules/task/infra/repos/task/mutation.go",
+      "detail": "Behavior without mutation_test.go"
     },
     {
       "code": "GO_TEST_MISSING",
       "file": "modules/task/infra/repos/task/owner.go",
       "detail": "Behavior without owner_test.go"
+    },
+    {
+      "code": "GO_TEST_MISSING",
+      "file": "modules/task/infra/repos/task/unsupported.go",
+      "detail": "Behavior without unsupported_test.go"
     },
     {
       "code": "GO_TEST_MISSING",
@@ -10410,23 +10325,8 @@
     },
     {
       "code": "GO_TEST_ORPHAN",
-      "file": "modules/task/domain/workflow/capture_test.go",
-      "detail": "No capture.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/task/infra/clients/claude/fixture_test.go",
-      "detail": "No fixture.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/task/infra/clients/claude/hoststartup_test.go",
-      "detail": "No hoststartup.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/task/infra/clients/codex/clientclose_test.go",
-      "detail": "No clientclose.go beside this test"
+      "file": "modules/task/infra/clients/codex/close_test.go",
+      "detail": "No close.go beside this test"
     },
     {
       "code": "GO_TEST_ORPHAN",
@@ -10440,16 +10340,6 @@
     },
     {
       "code": "GO_TEST_ORPHAN",
-      "file": "modules/task/infra/clients/codex/fixture_test.go",
-      "detail": "No fixture.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/task/infra/clients/codex/nativeclose_test.go",
-      "detail": "No nativeclose.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
       "file": "modules/task/infra/clients/codex/protocol_test.go",
       "detail": "No protocol.go beside this test"
     },
@@ -10457,11 +10347,6 @@
       "code": "GO_TEST_ORPHAN",
       "file": "modules/task/infra/peer/process/supervision_test.go",
       "detail": "No supervision.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/task/infra/repos/task/exactguard_test.go",
-      "detail": "No exactguard.go beside this test"
     },
     {
       "code": "GO_TEST_ORPHAN",

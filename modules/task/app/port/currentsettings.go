@@ -8,10 +8,6 @@ type TaskSettingsNumber string
 // bytes. encoding/json validates the returned numeric token before using it.
 func (n TaskSettingsNumber) MarshalJSON() ([]byte, error) { return []byte(n), nil }
 
-// TaskSettingsValue is recursively nil, bool, string, TaskSettingsNumber,
-// []any or map[string]any. These are saved values, never source authority.
-type TaskSettingsValue = any
-
 type TaskSettingsPolicyKind uint8
 
 const (
@@ -54,13 +50,13 @@ type TaskCurrentComputer struct {
 
 type TaskCurrentWorkspace struct {
 	WorkspaceID, Root, Access string
-	RootIdentity, GitMetadata TaskSettingsValue
+	RootIdentity, GitMetadata any
 	ExcludedPaths             []string
 	GitHistoryApproved        *bool
 }
 
 type TaskCurrentSetup struct {
-	Verified       TaskSettingsValue
+	Verified       any
 	Reachable      string
 	OutcomeUnknown bool
 }
