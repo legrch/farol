@@ -1685,7 +1685,7 @@
       "code": "GO_BOOT_LOGIC",
       "file": "boot/installprofile.go",
       "detail": "conditions other than err != nil",
-      "amount": 41
+      "amount": 40
     },
     {
       "code": "GO_BOOT_LOGIC",

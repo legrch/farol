@@ -1,10 +1,10 @@
 package boot
 
 import (
-	"io"
 	"os"
 	"time"
 
+	"github.com/legrch/farol/pkg/limit"
 	"golang.org/x/sys/unix"
 )
 
@@ -39,8 +39,8 @@ func consumeShellLaunchPipe(fd int) (raw []byte, result error) {
 	if owned == nil || owned.SetReadDeadline(time.Now().Add(2*time.Second)) != nil {
 		return nil, shellLaunchRefusal()
 	}
-	raw, err := io.ReadAll(io.LimitReader(owned, shellLaunchMaximumBytes+1))
-	if err != nil || len(raw) == 0 || len(raw) > shellLaunchMaximumBytes {
+	raw, err := limit.Read(owned, shellLaunchMaximumBytes)
+	if err != nil || len(raw) == 0 {
 		return nil, shellLaunchRefusal()
 	}
 	return raw, nil

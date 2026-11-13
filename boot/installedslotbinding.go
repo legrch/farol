@@ -10,6 +10,7 @@ import (
 	releaseport "github.com/legrch/farol/modules/release/app/port"
 	slotapp "github.com/legrch/farol/modules/release/app/services/slotbinding"
 	slotnative "github.com/legrch/farol/modules/release/infra/native/slotbinding"
+	"github.com/legrch/farol/pkg/limit"
 	"golang.org/x/sys/unix"
 )
 
@@ -83,8 +84,8 @@ func consumeSlotBindingInput(fd int, deadline time.Time) (data []byte, result er
 	if file == nil || file.SetReadDeadline(deadline) != nil {
 		return nil, io.ErrUnexpectedEOF
 	}
-	data, err := io.ReadAll(io.LimitReader(file, 8193))
-	if err != nil || len(data) < 1 || len(data) > 8192 {
+	data, err := limit.Read(file, 8192)
+	if err != nil || len(data) < 1 {
 		return nil, io.ErrUnexpectedEOF
 	}
 	return data, nil

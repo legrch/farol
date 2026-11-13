@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // Inspection describes only an existing canonical snapshot observed under the
@@ -53,7 +54,7 @@ func Inspect(ctx context.Context, root Root, limits Limits) (*Inspection, error)
 	if err := ctx.Err(); err != nil {
 		return nil, inspectionFailure(&Failure{Code: Cancelled}, InspectionCancelled, err)
 	}
-	if !validID(root.ProfileID) || !validLimits(limits) {
+	if !opaque.Valid(root.ProfileID) || !validLimits(limits) {
 		return nil, inspectionFailure(&Failure{Code: Invalid}, InspectionInputInvalid)
 	}
 	return inspectClosedSnapshot(ctx, root, limits)

@@ -10,6 +10,7 @@ import (
 
 	app "github.com/legrch/farol/modules/computer/app/services/mutation"
 	"github.com/legrch/farol/modules/computer/domain/authority"
+	"github.com/legrch/farol/pkg/fake"
 )
 
 type ownerApproval struct {
@@ -31,7 +32,7 @@ func TestOwnerContractDelegatesExactEditAndObservesWithoutWriteLease(t *testing.
 	a.Commands = authority.NoCommands
 	source := &ownerApproval{a: a}
 	selection := app.OwnerSelection{OperationID: "owner-operation", OwnerID: a.OwnerID, ProfileID: "profile", ComputerID: a.ComputerID, ComputerGeneration: a.Generation}
-	svc, err := app.NewForOwnerExecution(context.Background(), selection, source, store, native, contractDigest{}, &sync.Mutex{}, contractClock{time.Unix(1700000000, 0)})
+	svc, err := app.NewForOwnerExecution(context.Background(), selection, source, store, native, contractDigest{}, &sync.Mutex{}, fake.Clock{At: time.Unix(1700000000, 0)})
 	if err != nil {
 		t.Fatal(err)
 	}

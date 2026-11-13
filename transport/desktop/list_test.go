@@ -15,6 +15,7 @@ import (
 	workspacect "github.com/legrch/farol/modules/computer/contracts/workspace"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	accessrepo "github.com/legrch/farol/modules/computer/infra/repos/access"
+	"github.com/legrch/farol/pkg/fake"
 )
 
 // CPU-only real policy and contract, with an injected filesystem boundary.
@@ -50,7 +51,7 @@ func listFixture(t *testing.T) (Method, *listNativeFixture, *accessrepo.Reposito
 	access.PutApproval(approval)
 	access.PutParticipant(*participant)
 	native := &listNativeFixture{result: port.ListResponse{Entries: []string{"AGENTS.md", "one space.md", "日本語.md", "folder/"}, Truncated: true}}
-	contract := workspacect.New(workspacesvc.New(access, native, readClock{at: now}))
+	contract := workspacect.New(workspacesvc.New(access, native, fake.Clock{At: now}))
 	calls := new(int)
 	method := ListMethod(func(_ context.Context, in workspacect.ListRequest) (*workspacect.Contract, error) {
 		*calls++

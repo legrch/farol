@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/legrch/farol/modules/release/app/port"
+	"github.com/legrch/farol/pkg/limit"
 	"golang.org/x/sys/unix"
 )
 
@@ -147,8 +148,8 @@ func (p *Publisher) read() ([]byte, error) {
 	if err != nil || held != before {
 		return nil, code("slot_binding_changed")
 	}
-	data, err := io.ReadAll(io.LimitReader(file, maxRecord+1))
-	if err != nil || int64(len(data)) != before.size || len(data) > maxRecord {
+	data, err := limit.Read(file, maxRecord)
+	if err != nil || int64(len(data)) != before.size {
 		return nil, code("slot_binding_changed")
 	}
 	if p.checkpoint("read-bytes") != nil {

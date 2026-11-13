@@ -7,6 +7,7 @@ import (
 
 	"github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/domain/turn"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 func (r Root) identity() port.JournalRoot {
@@ -23,7 +24,7 @@ func NewAfterRetirement(ctx context.Context, root Root, next port.JournalScope, 
 	if ctx == nil || ctx.Err() != nil {
 		return nil, failure(Cancelled, false)
 	}
-	if origin == nil || !validLimits(limits) || !validID(root.ProfileID) || !validID(next.BackendGeneration) || next.ProfileID != root.ProfileID {
+	if origin == nil || !validLimits(limits) || !opaque.Valid(root.ProfileID) || !opaque.Valid(next.BackendGeneration) || next.ProfileID != root.ProfileID {
 		return nil, failure(Invalid, false)
 	}
 	proof, err := captureProof(ctx, origin)
@@ -72,7 +73,7 @@ func qualifySuccessor(ctx context.Context, r *Repository, next port.JournalScope
 		return s.storageFailure(err)
 	}
 	previous, err := decode(raw, s.limits)
-	if err != nil || sha256.Sum256(raw) != proof.PublicationDigest || previous.Root != s.root || previous.Scope.ProfileID != s.profile || previous.Retirement == nil || !port.SameRetirement(*previous.Retirement, proof.Write) || next.ProfileID != s.profile || !validID(next.BackendGeneration) || len(previous.Incarnations) >= s.limits.Records {
+	if err != nil || sha256.Sum256(raw) != proof.PublicationDigest || previous.Root != s.root || previous.Scope.ProfileID != s.profile || previous.Retirement == nil || !port.SameRetirement(*previous.Retirement, proof.Write) || next.ProfileID != s.profile || !opaque.Valid(next.BackendGeneration) || len(previous.Incarnations) >= s.limits.Records {
 		return s.reject(Refused, false)
 	}
 	for _, used := range previous.Incarnations {
@@ -141,7 +142,7 @@ func validIncarnations(used []string, scope port.JournalScope, limits Limits) bo
 	}
 	seen := make(map[string]bool, len(used))
 	for _, id := range used {
-		if !validID(id) || seen[id] {
+		if !opaque.Valid(id) || seen[id] {
 			return false
 		}
 		seen[id] = true

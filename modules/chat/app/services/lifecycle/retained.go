@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // A retained continuation keeps provenance and its original read witness apart
@@ -67,7 +68,7 @@ func (s *Service) ContinueConversation(ctx context.Context, witness port.History
 		return nil, err
 	}
 	b, old := input.Binding, v.Binding
-	if !validBinding(old) || v.CurrentScope != (port.HistoryReadScope{ProfileID: b.ProfileID, BackendGeneration: b.BackendGeneration, OwnerID: b.OwnerID}) || old.ProfileID != b.ProfileID || old.OwnerID != b.OwnerID || old.BackendGeneration == b.BackendGeneration || old.OperationID == b.OperationID || old.TurnID == b.TurnID || !validID(v.ResultID) || input.Selection != v.Requested || v.Evidence.Requested != v.Requested || v.Evidence.Observed != v.Observed {
+	if !validBinding(old) || v.CurrentScope != (port.HistoryReadScope{ProfileID: b.ProfileID, BackendGeneration: b.BackendGeneration, OwnerID: b.OwnerID}) || old.ProfileID != b.ProfileID || old.OwnerID != b.OwnerID || old.BackendGeneration == b.BackendGeneration || old.OperationID == b.OperationID || old.TurnID == b.TurnID || !opaque.Valid(v.ResultID) || input.Selection != v.Requested || v.Evidence.Requested != v.Requested || v.Evidence.Observed != v.Observed {
 		return nil, Mismatch
 	}
 	// Recovery preserves the original configured mapping just like Follow.

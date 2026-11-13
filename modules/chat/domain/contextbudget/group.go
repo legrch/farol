@@ -1,6 +1,10 @@
 package contextbudget
 
-import "unicode/utf8"
+import (
+	"unicode/utf8"
+
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
+)
 
 type exchange struct {
 	start, end int
@@ -25,7 +29,7 @@ func group(s Source) ([]exchange, []UnknownReference, error) {
 	bytes := 0
 	var last uint64
 	for i, v := range s.Events {
-		if !ID(v.ID) || seen[v.ID] || v.Sequence == 0 || (i > 0 && v.Sequence <= last) || !utf8.ValidString(v.Text) || len(v.Text) > MaxEventBytes {
+		if !opaque.Valid(v.ID) || seen[v.ID] || v.Sequence == 0 || (i > 0 && v.Sequence <= last) || !utf8.ValidString(v.Text) || len(v.Text) > MaxEventBytes {
 			return nil, nil, Invalid
 		}
 		seen[v.ID] = true
@@ -63,7 +67,7 @@ func group(s Source) ([]exchange, []UnknownReference, error) {
 				return nil, nil, Invalid
 			}
 		case Call:
-			if !ID(v.CallID) || !ID(v.ToolOperationID) || !ID(v.Name) || v.Outcome != "" || toolops[v.ToolOperationID] {
+			if !opaque.Valid(v.CallID) || !opaque.Valid(v.ToolOperationID) || !opaque.Valid(v.Name) || v.Outcome != "" || toolops[v.ToolOperationID] {
 				return nil, nil, Pairing
 			}
 			// Provider call IDs must be unique across the whole request, not just

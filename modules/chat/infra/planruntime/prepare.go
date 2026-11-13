@@ -14,6 +14,7 @@ import (
 	cb "github.com/legrch/farol/modules/chat/domain/contextbudget"
 	ms "github.com/legrch/farol/modules/chat/domain/modelselection"
 	"github.com/legrch/farol/modules/chat/infra/clients/planresponses"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // Capture contains actual producer values. The estimate must have been captured
@@ -77,7 +78,7 @@ func Prepare(ctx context.Context, c Capture, digester inference.Digester) (*Prep
 		return nil, inference.Withdrawn
 	}
 	r, pin := view.Receipt, c.Resolved.Pin()
-	if !r.Source.Valid() || r.Source != view.Window.Source || !r.Policy.Fits(r.Usage) || !r.Policy.Fits(r.InputUsage) || !cb.Digest(r.IdentityHash) || !cb.ID(r.CheckpointID) || !cb.ID(r.OperationID) {
+	if !r.Source.Valid() || r.Source != view.Window.Source || !r.Policy.Fits(r.Usage) || !r.Policy.Fits(r.InputUsage) || !cb.Digest(r.IdentityHash) || !opaque.Valid(r.CheckpointID) || !opaque.Valid(r.OperationID) {
 		return nil, inference.Invalid
 	}
 	if pin.Route != (ms.Route{Provider: "openai", Backend: ms.PlanInference, Billing: ms.Plan}) || pin.Epoch == 0 || pin.AccountID != r.Source.Binding.AccountID || pin.Model != r.Source.Binding.ModelID || pin.Effort != r.Source.Binding.Effort || pin.CapabilityRevision != r.Source.Binding.CapabilityEpoch || r.Source.Binding.Provider != pin.Route.Provider {
@@ -85,7 +86,7 @@ func Prepare(ctx context.Context, c Capture, digester inference.Digester) (*Prep
 	}
 	b := c.Binding
 	for _, id := range []string{b.OperationID, b.ProfileID, b.BackendGeneration, b.OwnerID, b.SessionID} {
-		if !cb.ID(id) {
+		if !opaque.Valid(id) {
 			return nil, inference.Invalid
 		}
 	}

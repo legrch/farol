@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // ClosedLease retains existing read-only claims, not a writer or origin proof.
@@ -24,7 +25,7 @@ func AcquireClosedInspection(ctx context.Context, root Root, scope port.JournalS
 	if ctx == nil || ctx.Err() != nil {
 		return nil, failure(Cancelled, false)
 	}
-	if !validID(root.ProfileID) || !validID(scope.BackendGeneration) || scope.ProfileID != root.ProfileID || !validLimits(limits) || limits.Bytes > 1024*1024 || limits.Records > 4096 {
+	if !opaque.Valid(root.ProfileID) || !opaque.Valid(scope.BackendGeneration) || scope.ProfileID != root.ProfileID || !validLimits(limits) || limits.Bytes > 1024*1024 || limits.Records > 4096 {
 		return nil, failure(Invalid, false)
 	}
 	return acquireClosedInspection(ctx, root, scope, limits)
@@ -37,7 +38,7 @@ func AcquireInterruptedRetirementInspection(ctx context.Context, root Root, scop
 	if ctx == nil || ctx.Err() != nil {
 		return nil, failure(Cancelled, false)
 	}
-	if !validID(root.ProfileID) || !validID(scope.BackendGeneration) || scope.ProfileID != root.ProfileID || !validLimits(limits) || limits.Bytes > 1024*1024 || limits.Records > 4096 {
+	if !opaque.Valid(root.ProfileID) || !opaque.Valid(scope.BackendGeneration) || scope.ProfileID != root.ProfileID || !validLimits(limits) || limits.Bytes > 1024*1024 || limits.Records > 4096 {
 		return nil, failure(Invalid, false)
 	}
 	return acquireInterruptedRetirementInspection(ctx, root, scope, limits)

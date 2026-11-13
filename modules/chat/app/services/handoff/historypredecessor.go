@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // historyPredecessor retains only immutable provenance and its original read
@@ -18,7 +19,7 @@ type historyPredecessor struct {
 // owner/CID pair. Selection and durable verification share one original lease;
 // public Latest/Read calls would independently admit and cannot build this proof.
 func (r *HistoryReader) Predecessor(ctx context.Context, conversationID string) (port.HistoryPredecessor, error) {
-	if !validID(conversationID) {
+	if !opaque.Valid(conversationID) {
 		return nil, Invalid
 	}
 	lease, scope, err := r.admit(ctx)

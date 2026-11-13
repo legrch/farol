@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 type Code string
@@ -37,7 +37,7 @@ func Resolve(digests port.IntentDigester, policy port.ModelPolicy, requested por
 	if !validPolicy(policy) {
 		return nil, ConfigInvalid
 	}
-	if !optional(requested.Harness, taskName) || !optional(requested.Model, taskName) || !optional(requested.Effort, effortName) || !optional(requested.RequestedMode, requestedMode) || !opaqueID(accountID) {
+	if !optional(requested.Harness, taskName) || !optional(requested.Model, taskName) || !optional(requested.Effort, effortName) || !optional(requested.RequestedMode, requestedMode) || !opaque.Valid(accountID) {
 		return nil, RequestInvalid
 	}
 	executor := fallback(requested.Harness, policy.DefaultHarness)
@@ -148,7 +148,7 @@ func validPolicy(p port.ModelPolicy) bool {
 }
 
 func validProfile(p port.BrowserModelProfile) bool {
-	if !opaqueID(p.ID) || !taskName(p.Executor) || !runtimeModel(p.RuntimeModel) || !opaqueID(p.ModelID) || !profileMode(p.Mode) || !p.Required.Model || p.Required.Mode != (p.Mode != "") || len(p.Efforts) == 0 {
+	if !opaque.Valid(p.ID) || !taskName(p.Executor) || !runtimeModel(p.RuntimeModel) || !opaque.Valid(p.ModelID) || !profileMode(p.Mode) || !p.Required.Model || p.Required.Mode != (p.Mode != "") || len(p.Efforts) == 0 {
 		return false
 	}
 	names := make(map[string]bool, len(p.Efforts))
@@ -231,17 +231,6 @@ func runtimeModel(s string) bool {
 	for n := range len(s) {
 		c := s[n]
 		if !lowerDigit(c) && !(c >= 'A' && c <= 'Z') && c != '_' && c != '-' && c != '.' && c != '/' {
-			return false
-		}
-	}
-	return true
-}
-func opaqueID(s string) bool {
-	if len(s) < 1 || len(s) > 120 || !utf8.ValidString(s) {
-		return false
-	}
-	for _, c := range s {
-		if c <= 32 || c == 127 {
 			return false
 		}
 	}

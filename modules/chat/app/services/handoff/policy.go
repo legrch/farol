@@ -8,11 +8,10 @@ import (
 	"context"
 	"encoding/json"
 	"math"
-	"strings"
-	"unicode/utf8"
 
 	"github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/domain/turn"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 type Code string
@@ -27,12 +26,8 @@ const (
 	Cancelled Code = "CHAT_HANDOFF_CANCELLED"
 )
 
-func validID(s string) bool {
-	return len(s) > 0 && len(s) <= 120 && utf8.ValidString(s) && strings.IndexFunc(s, func(r rune) bool { return r <= 32 || r == 127 }) < 0
-}
-func validRoot(r port.JournalRoot) bool { return r.Device != 0 && r.Inode != 0 }
 func validBinding(b port.HandoffBinding) bool {
-	return validID(b.ProfileID) && validID(b.BackendGeneration) && validID(b.BuildID) && validID(b.HostLifetimeID) && validID(b.ChildLaunchID) && validRoot(b.ParentRoot) && validRoot(b.ChatRoot) && b.ParentRoot.OwnerUID == b.ChatRoot.OwnerUID && b.ParentRoot.Device == b.ChatRoot.Device && b.ParentRoot != b.ChatRoot
+	return opaque.Valid(b.ProfileID) && opaque.Valid(b.BackendGeneration) && opaque.Valid(b.BuildID) && opaque.Valid(b.HostLifetimeID) && opaque.Valid(b.ChildLaunchID) && b.ParentRoot.Valid() && b.ChatRoot.Valid() && b.ParentRoot.OwnerUID == b.ChatRoot.OwnerUID && b.ParentRoot.Device == b.ChatRoot.Device && b.ParentRoot != b.ChatRoot
 }
 
 // Copy owns every mutable value before IO or callbacks.
@@ -58,7 +53,7 @@ func Copy(r port.HandoffRecord) port.HandoffRecord {
 }
 func validReceipt(p port.HandoffPublication, r port.RetirementReceipt) error {
 	w := r.Write
-	if !validBinding(p.Binding) || !validID(p.HandoffID) || p.ReceiptDigest == ([32]byte{}) || p.ReceiptDigest != r.PublicationDigest || w.Scope != (port.JournalScope{ProfileID: p.Binding.ProfileID, BackendGeneration: p.Binding.BackendGeneration}) || w.Root != p.Binding.ChatRoot || w.Turns == nil || w.PreviousRevision >= math.MaxUint64-1 || w.Revision != w.PreviousRevision+1 {
+	if !validBinding(p.Binding) || !opaque.Valid(p.HandoffID) || p.ReceiptDigest == ([32]byte{}) || p.ReceiptDigest != r.PublicationDigest || w.Scope != (port.JournalScope{ProfileID: p.Binding.ProfileID, BackendGeneration: p.Binding.BackendGeneration}) || w.Root != p.Binding.ChatRoot || w.Turns == nil || w.PreviousRevision >= math.MaxUint64-1 || w.Revision != w.PreviousRevision+1 {
 		return Invalid
 	}
 	if len(w.Turns) == 0 {
@@ -118,7 +113,7 @@ func neverDispatched(actual port.RetirementTurn, scope port.JournalScope) bool {
 		return false
 	}
 	for _, id := range []string{b.OwnerID, b.SessionID, b.TaskID, b.ParticipantID, b.TurnID, b.OperationID, actual.Snapshot.Result.ID} {
-		if !validID(id) {
+		if !opaque.Valid(id) {
 			return false
 		}
 	}
@@ -174,7 +169,7 @@ func ValidateRecord(r port.HandoffRecord) error {
 		}
 		return nil
 	}
-	if r.Consumption == nil || !r.Consumption.PreviousHostDrainConfirmed || r.Consumption.Next.ProfileID != r.Publication.Binding.ProfileID || !validID(r.Consumption.Next.BackendGeneration) || r.Consumption.Next.BackendGeneration == r.Publication.Binding.BackendGeneration || !validID(r.Consumption.AttemptID) {
+	if r.Consumption == nil || !r.Consumption.PreviousHostDrainConfirmed || r.Consumption.Next.ProfileID != r.Publication.Binding.ProfileID || !opaque.Valid(r.Consumption.Next.BackendGeneration) || r.Consumption.Next.BackendGeneration == r.Publication.Binding.BackendGeneration || !opaque.Valid(r.Consumption.AttemptID) {
 		return Refused
 	}
 	c, b := r.Consumption, r.Publication.Binding
@@ -332,7 +327,7 @@ func (s *Service) Capture(ctx context.Context, b port.HandoffBinding, id string,
 	if err := s.check(ctx); err != nil {
 		return nil, err
 	}
-	if origin == nil || !validBinding(b) || !validID(id) {
+	if origin == nil || !validBinding(b) || !opaque.Valid(id) {
 		return nil, Invalid
 	}
 	var receipt port.RetirementReceipt

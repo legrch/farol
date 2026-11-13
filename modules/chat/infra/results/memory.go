@@ -6,10 +6,10 @@ import (
 	"context"
 	"reflect"
 	"sync"
-	"unicode/utf8"
 
 	"github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/domain/turn"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 type Code string
@@ -56,7 +56,7 @@ type Memory struct {
 var _ port.ResultRetention = (*Memory)(nil)
 
 func NewMemory(lifetime context.Context, scope port.JournalScope, limits Limits) (*Memory, error) {
-	if nilContext(lifetime) || lifetime.Err() != nil || !validID(scope.ProfileID) || !validID(scope.BackendGeneration) ||
+	if nilContext(lifetime) || lifetime.Err() != nil || !opaque.Valid(scope.ProfileID) || !opaque.Valid(scope.BackendGeneration) ||
 		limits.Results < 1 || limits.Results > MaxResults || limits.ResultBytes < 1 || limits.ResultBytes > MaxResultBytes ||
 		limits.TotalBytes < limits.ResultBytes || limits.TotalBytes > MaxTotalBytes {
 		return nil, Invalid
@@ -125,25 +125,14 @@ func (m *Memory) Close() error {
 
 func validBinding(b port.TurnBinding) bool {
 	for _, s := range []string{b.ProfileID, b.BackendGeneration, b.OwnerID, b.SessionID, b.TaskID, b.ParticipantID, b.TurnID, b.OperationID} {
-		if !validID(s) {
+		if !opaque.Valid(s) {
 			return false
 		}
 	}
 	return b.TaskEpoch > 0 && b.TurnGeneration > 0
 }
-func validID(s string) bool {
-	if len(s) < 1 || len(s) > 120 || !utf8.ValidString(s) {
-		return false
-	}
-	for _, ch := range s {
-		if ch <= 32 || ch == 127 {
-			return false
-		}
-	}
-	return true
-}
 func validResult(r turn.Result) bool {
-	if !validID(r.ID) || len(r.Code) < 1 || len(r.Code) > 120 {
+	if !opaque.Valid(r.ID) || len(r.Code) < 1 || len(r.Code) > 120 {
 		return false
 	}
 	for n, ch := range r.Code {

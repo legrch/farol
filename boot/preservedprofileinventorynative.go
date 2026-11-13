@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/legrch/farol/modules/chat/app/services/handoff"
+	"github.com/legrch/farol/pkg/limit"
 	"golang.org/x/sys/unix"
 )
 
@@ -76,7 +77,7 @@ func preservedProfileMetadataAt(ctx context.Context, path string) (value preserv
 	if unix.Fstat(fd, &before) != nil || uint32(before.Mode)&unix.S_IFMT != unix.S_IFREG || uint32(before.Mode)&07777 != 0600 || before.Uid != uint32(os.Geteuid()) || before.Nlink != 1 || before.Size < 1 || before.Size > 65536 || ctx.Err() != nil {
 		return value, handoff.Refused
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, 65537))
+	raw, err := limit.Read(f, 65536)
 	if err != nil || len(raw) != int(before.Size) || unix.Fstat(fd, &after) != nil || unix.Lstat(path, &named) != nil || !sameEmptyRecoveryStat(before, after) || !sameEmptyRecoveryStat(after, named) || ctx.Err() != nil {
 		return value, handoff.Refused
 	}

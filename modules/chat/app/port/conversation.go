@@ -3,7 +3,8 @@ package port
 import (
 	"context"
 	"strings"
-	"unicode/utf8"
+
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // Selection is pinned by authorized composition/caller before admission. IDs
@@ -17,7 +18,7 @@ type Selection struct {
 }
 
 func (s Selection) Valid() bool {
-	if s.Provider != "farol" || s.Alias != "chatgpt" || !conversationID(s.AccountID) || !conversationID(s.ModelID) {
+	if s.Provider != "farol" || s.Alias != "chatgpt" || !opaque.Valid(s.AccountID) || !opaque.Valid(s.ModelID) {
 		return false
 	}
 	// Effort is an already-resolved route value. Chat does not impose a new
@@ -31,7 +32,7 @@ func (s Selection) Valid() bool {
 		return false
 	}
 	if s.ToolsEnabled {
-		return conversationID(s.ConnectorID) && conversationID(s.ConnectorGrantID)
+		return opaque.Valid(s.ConnectorID) && opaque.Valid(s.ConnectorGrantID)
 	}
 	return s.ConnectorID == "" && s.ConnectorGrantID == ""
 }
@@ -62,7 +63,7 @@ func (t ConversationTarget) Valid() bool {
 	case NewSaved:
 		return t.ConversationID == "" && t.PreviousUserTurnID == "" && t.PreviousReplyID == ""
 	case OwnedSaved:
-		return conversationID(t.ConversationID) && conversationID(t.PreviousUserTurnID) && conversationID(t.PreviousReplyID)
+		return opaque.Valid(t.ConversationID) && opaque.Valid(t.PreviousUserTurnID) && opaque.Valid(t.PreviousReplyID)
 	}
 	return false
 }
@@ -100,7 +101,7 @@ type VerifiedBrowser interface {
 }
 
 func ValidVerification(request VerifySendRequest, proof *SendVerification) bool {
-	return proof != nil && request.Requested.Valid() && proof.Binding == request.Binding && proof.Pinned == request.Requested && proof.Required == request.Required && proof.Observed.Matches(request.Requested, request.Required) && proof.PreviousUserTurnID == request.PreviousUserTurnID && proof.PreviousReplyID == request.PreviousReplyID && proof.IntentDigest == request.IntentDigest && conversationID(proof.EvidenceID)
+	return proof != nil && request.Requested.Valid() && proof.Binding == request.Binding && proof.Pinned == request.Requested && proof.Required == request.Required && proof.Observed.Matches(request.Requested, request.Required) && proof.PreviousUserTurnID == request.PreviousUserTurnID && proof.PreviousReplyID == request.PreviousReplyID && proof.IntentDigest == request.IntentDigest && opaque.Valid(proof.EvidenceID)
 }
 
 // IntentDigester returns lowercase SHA-256 of the complete canonical input.
@@ -149,18 +150,6 @@ type ConversationOwner interface {
 	WithConversation(context.Context, func(ConversationState) error) error
 }
 
-func conversationID(s string) bool {
-	if len(s) < 1 || len(s) > 120 || !utf8.ValidString(s) {
-		return false
-	}
-	for _, c := range s {
-		if c <= 32 || c == 127 {
-			return false
-		}
-	}
-	return true
-}
-
 // ModelResolution is an explicit mapping of the existing owner configuration,
 // supplied by trusted composition. Zero means no resolution proof was supplied;
 // requested selection alone never becomes configured/provider-verified evidence.
@@ -174,10 +163,10 @@ func (r ModelResolution) Valid(selection Selection) bool {
 	if r == (ModelResolution{}) {
 		return true
 	}
-	if !conversationID(r.RequestedAlias) || !conversationID(r.RequestedExecutor) || r.Resolved != selection || !conversationID(r.TranslationID) || len(r.ConfigSHA256) != 64 {
+	if !opaque.Valid(r.RequestedAlias) || !opaque.Valid(r.RequestedExecutor) || r.Resolved != selection || !opaque.Valid(r.TranslationID) || len(r.ConfigSHA256) != 64 {
 		return false
 	}
-	if r.RequestedEffort != "" && !conversationID(r.RequestedEffort) {
+	if r.RequestedEffort != "" && !opaque.Valid(r.RequestedEffort) {
 		return false
 	}
 	if r.RequestedMode != "" && r.RequestedMode != selection.Mode {

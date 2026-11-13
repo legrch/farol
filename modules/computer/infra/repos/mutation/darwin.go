@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/legrch/farol/pkg/descriptor"
+	"github.com/legrch/farol/pkg/limit"
 	"golang.org/x/sys/unix"
 )
 
@@ -186,7 +187,7 @@ func (d *disk) read(key string) ([]byte, error) {
 		_ = f.Close()
 		return nil, unavailable()
 	}
-	raw, readErr := io.ReadAll(io.LimitReader(f, maxRecordBytes+1))
+	raw, readErr := limit.Read(f, maxRecordBytes)
 	after, statErr := descriptor.Stat(fd)
 	var named unix.Stat_t
 	nameErr := unix.Fstatat(d.dir, key, &named, unix.AT_SYMLINK_NOFOLLOW)

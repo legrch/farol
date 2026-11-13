@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	"github.com/legrch/farol/pkg/limit"
 	"golang.org/x/sys/unix"
 )
 
@@ -179,7 +180,7 @@ func scanPreservation(ctx context.Context, a *archiveDisk, scope port.JournalSco
 // A preservation read additionally permits an empty/partial UNKNOWN marker.
 // Every named descriptor is regular, private, singly linked and stable before
 // and after the bounded read. No result text escapes this private scan.
-func readPreservationFile(ctx context.Context, d *resultDisk, name string, limit int) ([]byte, preservationFile, error) {
+func readPreservationFile(ctx context.Context, d *resultDisk, name string, maximum int) ([]byte, preservationFile, error) {
 	if ctx.Err() != nil || d.checkPhysical() != nil {
 		return nil, preservationFile{}, Unavailable
 	}
@@ -190,11 +191,11 @@ func readPreservationFile(ctx context.Context, d *resultDisk, name string, limit
 	f := os.NewFile(uintptr(fd), "chat-result-preservation-record")
 	before, statErr := resultStat(fd)
 	var named unix.Stat_t
-	if statErr != nil || !resultPhysical(before, unix.S_IFREG, 0600, d.root.Identity.OwnerUID) || before.Size < 0 || before.Size > int64(limit) || before.Size == 0 && name != resultUnknown || unix.Fstatat(d.dir, name, &named, unix.AT_SYMLINK_NOFOLLOW) != nil || !resultStable(before, named) {
+	if statErr != nil || !resultPhysical(before, unix.S_IFREG, 0600, d.root.Identity.OwnerUID) || before.Size < 0 || before.Size > int64(maximum) || before.Size == 0 && name != resultUnknown || unix.Fstatat(d.dir, name, &named, unix.AT_SYMLINK_NOFOLLOW) != nil || !resultStable(before, named) {
 		_ = f.Close()
 		return nil, preservationFile{}, Refused
 	}
-	raw, readErr := io.ReadAll(io.LimitReader(f, int64(limit)+1))
+	raw, readErr := limit.Read(f, int64(maximum))
 	after, statErr := resultStat(fd)
 	ok := readErr == nil && statErr == nil && len(raw) == int(before.Size) && resultStable(before, after) && unix.Fstatat(d.dir, name, &named, unix.AT_SYMLINK_NOFOLLOW) == nil && resultStable(after, named)
 	closed := f.Close()

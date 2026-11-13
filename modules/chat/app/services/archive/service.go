@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 type Code string
@@ -34,22 +35,10 @@ type Service struct {
 // New performs no archive IO. A busy/corrupt/large old result namespace cannot
 // prevent the independent Settings/read composition from starting.
 func New(scope port.JournalScope, deps Dependencies) (*Service, error) {
-	if !id(scope.ProfileID) || !id(scope.BackendGeneration) || deps.Authority == nil || deps.Store == nil {
+	if !opaque.Valid(scope.ProfileID) || !opaque.Valid(scope.BackendGeneration) || deps.Authority == nil || deps.Store == nil {
 		return nil, Invalid
 	}
 	return &Service{scope: scope, deps: deps}, nil
-}
-
-func id(s string) bool {
-	if len(s) == 0 || len(s) > 120 || !utf8.ValidString(s) {
-		return false
-	}
-	for _, r := range s {
-		if r <= 32 || r == 127 {
-			return false
-		}
-	}
-	return true
 }
 
 func key(s string) bool {
@@ -72,7 +61,7 @@ func current(ctx context.Context, lease port.HistoryReadLease) (port.HistoryRead
 	calls := 0
 	err := lease.WithCurrent(ctx, func(value port.HistoryReadScope) error {
 		calls++
-		if calls != 1 || !id(value.ProfileID) || !id(value.BackendGeneration) || !id(value.OwnerID) {
+		if calls != 1 || !opaque.Valid(value.ProfileID) || !opaque.Valid(value.BackendGeneration) || !opaque.Valid(value.OwnerID) {
 			return Refused
 		}
 		scope = value
@@ -108,7 +97,7 @@ func recheck(ctx context.Context, lease port.HistoryReadLease, scope port.Histor
 }
 
 func validSummary(v port.ArchiveSummary) bool {
-	if !key(v.Key) || v.Digest == ([32]byte{}) || !id(v.ProfileID) || !id(v.OwnerID) || !id(v.BackendGeneration) || !id(v.OperationID) || !id(v.ResultID) || v.Bytes < 0 || v.Bytes > port.ArchiveTextBytes || len(v.ConversationID) > 256 || !utf8.ValidString(v.ConversationID) {
+	if !key(v.Key) || v.Digest == ([32]byte{}) || !opaque.Valid(v.ProfileID) || !opaque.Valid(v.OwnerID) || !opaque.Valid(v.BackendGeneration) || !opaque.Valid(v.OperationID) || !opaque.Valid(v.ResultID) || v.Bytes < 0 || v.Bytes > port.ArchiveTextBytes || len(v.ConversationID) > 256 || !utf8.ValidString(v.ConversationID) {
 		return false
 	}
 	for _, r := range v.ConversationID {

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // ClosedInspection is metadata for a canonical, currently empty journal. The
@@ -63,7 +64,7 @@ func WithClosedInspection(ctx context.Context, root Root, scope port.JournalScop
 	if ctx == nil || ctx.Err() != nil {
 		return failure(Cancelled, false)
 	}
-	if inspect == nil || !validID(root.ProfileID) || !validID(scope.BackendGeneration) || scope.ProfileID != root.ProfileID || !validLimits(limits) || limits.Bytes > 1024*1024 || limits.Records > 4096 {
+	if inspect == nil || !opaque.Valid(root.ProfileID) || !opaque.Valid(scope.BackendGeneration) || scope.ProfileID != root.ProfileID || !validLimits(limits) || limits.Bytes > 1024*1024 || limits.Records > 4096 {
 		return failure(Invalid, false)
 	}
 	return withClosedInspection(ctx, root, scope, limits, inspect)

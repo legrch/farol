@@ -9,6 +9,7 @@ import (
 
 	"github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/domain/turn"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // These storage records are private to the adapter, never root wire DTOs or
@@ -250,15 +251,9 @@ func validBinding(b port.TurnBinding, s port.JournalScope) bool {
 		return false
 	}
 	for _, v := range []string{b.OwnerID, b.SessionID, b.TaskID, b.ParticipantID, b.TurnID, b.OperationID} {
-		if !validID(v) {
+		if !opaque.Valid(v) {
 			return false
 		}
 	}
 	return true
-}
-func validID(value string) bool {
-	if len(value) < 1 || len(value) > 120 || !utf8.ValidString(value) {
-		return false
-	}
-	return strings.IndexFunc(value, func(ch rune) bool { return ch <= 32 || ch == 127 }) < 0
 }

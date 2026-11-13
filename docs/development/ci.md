@@ -30,6 +30,21 @@ native-selection runner in `tooling/ci-native.mjs`, then runs that selection,
 portable overlap avoids brittle inverse test-name filters. This preserves native coverage for the files excluded or partially
 selected by the Cloud profile.
 
+After those commands the `native` job runs three hermetic hidden-Electron e2e
+lanes, reusing the Electron runtime that the setup action installed (no build
+and no package step): `task test:e2e:chatgpt-startup-readiness` (the readiness
+run plus its `--cleanup-failure-fixture` run), `tests/e2e/chatgpt-update-idle.e2e.mjs`
+and `tests/e2e/deep-test-ipc-order.e2e.mjs`. Each creates only `show:false`
+windows over loopback or `data:` pages and disposable state, and needs no
+network, account or built app. Measured locally these take about 12, 2 and 3
+seconds; on the macOS runner expect roughly one to two extra minutes including
+Electron start-up. They run whenever `native` runs, so the docs-only skip covers
+them. All other `tests/e2e` entries stay outside pull request checks: they need
+`_output/build` or a packaged app, a visible or secondary display, a Codex
+binary, the system clipboard, or are not green on `main` today
+(`chatgpt-public-source` and `shell-rail`). The unstable build runs only
+the readiness lane of these, through `task ci`.
+
 The core gate runs every Go package with race detection and at most two test
 binaries at once (`go test -p=2 -race ./...`), for both root and transitional
 nested modules. This bounds filesystem and process contention independently of
@@ -198,7 +213,9 @@ tag, release, draft or publication, and no installed app can see its output.
   scheduled run build again; that costs one build and is never a wrong skip.
 - `build` (`macos-26`, `contents: read`) checks out that exact commit, requires
   it to be an ancestor of `origin/main`, runs the release preflight, provisions
-  the approved Go inputs, runs the unchanged full `task ci`, then the clean
+  the approved Go inputs, runs the unchanged full `task ci` (which includes
+  `task test:e2e:chatgpt-startup-readiness`, now also run by pull request
+  checks), then the clean
   `task package` and the offline three-asset preparation and
   `verify-release-assets.mjs`, the same commands as the tag build.
 - It then writes a job summary with the source commit, version, build version,

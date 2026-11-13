@@ -6,6 +6,7 @@ import (
 
 	"github.com/legrch/farol/modules/chat/app/port"
 	policy "github.com/legrch/farol/modules/chat/app/services/handoff"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // ClosedInspection describes the entire canonical empty retirement chain ending
@@ -47,7 +48,7 @@ func WithClosedInspection(ctx context.Context, roots Roots, scope port.JournalSc
 	if ctx == nil || ctx.Err() != nil {
 		return fail(Cancelled, false)
 	}
-	if inspect == nil || !historyID(roots.ProfileID) || !historyID(scope.BackendGeneration) || scope.ProfileID != roots.ProfileID {
+	if inspect == nil || !opaque.Valid(roots.ProfileID) || !opaque.Valid(scope.BackendGeneration) || scope.ProfileID != roots.ProfileID {
 		return fail(Invalid, false)
 	}
 	return withClosedInspection(ctx, roots, scope, inspect)
