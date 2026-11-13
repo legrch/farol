@@ -151,7 +151,11 @@ async function setup(
   } = {},
 ) {
   const request = vi.fn(
-    async (method: string, params: Json, call?: { id?: string }) =>
+    async (
+      method: string,
+      params: Json,
+      call?: { id?: string; timeoutMs?: number },
+    ) =>
       // Fixtures intentionally include malformed boundary replies; the real
       // ComputerBridge must validate them even though Client has a DTO type.
       (await (options.respond ?? wireReply)(
@@ -215,6 +219,63 @@ function handlerContext(signal: AbortSignal): ServerContext {
     mcpReq: { id: "caller-chosen-id", signal },
   } as unknown as ServerContext;
 }
+
+it("uses the bounded catalogue-only Go socket deadline without changing other tools", async () => {
+  // 15s Go ordinary execution + 3s transport margin. This tests the actual
+  // McpServer → ComputerBridge → Client.request option propagation, not Go IO.
+  const { tools, request } = await setup();
+  const ctx = handlerContext(new AbortController().signal);
+  const catalogue = await tools
+    .get("computer_workspace_catalogue")!
+    .executor({}, ctx);
+  const listed = await tools
+    .get("computer_workspace_list")!
+    .executor({ workspaceId: "workspace", relativePath: "." }, ctx);
+  expect(catalogue.structuredContent).toMatchObject({ status: "ok" });
+  expect(listed.structuredContent).toMatchObject({ status: "ok" });
+  expect(request.mock.calls).toHaveLength(2);
+  expect(request.mock.calls[0]?.[0]).toBe("computer.workspace.catalogue");
+  expect(request.mock.calls[0]?.[2]).toEqual({
+    id: expect.any(String),
+    timeoutMs: 18_000,
+  });
+  expect(request.mock.calls[1]?.[0]).toBe("computer.workspace.list");
+  expect(request.mock.calls[1]?.[2]).toEqual({ id: expect.any(String) });
+});
+
+it("withholds a previously dispatched catalogue across a controlled stop without replay", async () => {
+  const entered = deferred<void>();
+  const releaseReply = deferred<void>();
+  const handlerReleased = vi.fn();
+  let stopping = false;
+  const { tools, request } = await setup({
+    lifecycle: {
+      enterHandler: () => handlerReleased,
+      isStopping: async () => stopping,
+    },
+    respond: (method, params, id) => {
+      entered.resolve();
+      return releaseReply.promise.then(() => wireReply(method, params, id));
+    },
+  });
+  const pending = tools
+    .get("computer_workspace_catalogue")!
+    .executor({}, handlerContext(new AbortController().signal));
+  await entered.promise;
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(request.mock.calls[0]?.[2]?.timeoutMs).toBe(18_000);
+  stopping = true; // authority transition has withdrawn the old MCP owner
+  releaseReply.resolve();
+  const result = await pending;
+  expect(result.structuredContent).toMatchObject({
+    status: "unknown",
+    code: "COMPUTER_MCP_STOPPING",
+    retry: "never",
+  });
+  expect(result.structuredContent).not.toHaveProperty("data");
+  expect(handlerReleased).toHaveBeenCalledTimes(1);
+  expect(request).toHaveBeenCalledTimes(1);
+});
 
 it("offers a bounded diagnostic lookup without dispatching a file read", async () => {
   const diagnosticLookup = vi.fn(async (requestId: string) => ({

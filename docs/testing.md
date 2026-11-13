@@ -87,10 +87,12 @@ reports as hermetic assembled E2E or live-provider compatibility.
 
 Existing `task ci`, `task ci:fast`, `task test:core`, coverage and package/native
 wrappers keep their prior checks. `task test:e2e` still means the existing packaged
-Electron lane below. The broader `task test` and `task qualify:live` contracts are
-not implemented aggregates yet; assembling their declared prerequisites, complete
-case mappings and containment evidence remains open. No alias silently builds a
-candidate, omits a native prerequisite or consumes provider quota.
+Electron lane below. The `task test` aggregate now exists (see
+[VM testing](development/vm-testing.md)): it runs each automatic closed-contour leaf
+exactly once and deliberately excludes `qa:*` journeys, package-candidate variants,
+parameterized witnesses and dev-byte journeys; a `task qualify:live` contract does not
+exist, and no alias silently builds a candidate, omits a native prerequisite or
+consumes provider quota.
 
 ## Evidence hierarchy
 
