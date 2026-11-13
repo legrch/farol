@@ -28,7 +28,6 @@
     "tests/unit/daily-driver-second-instance-update.test.ts": ["vm"],
     "tests/unit/daily-driver-window-reopen.test.ts": ["vm"],
     "tests/unit/daily-driver-window-startup-lifetime.test.ts": ["vm"],
-    "tests/unit/desktop-about.test.ts": ["vm"],
     "tests/unit/desktop-build-defines.test.mjs": ["vm"],
     "tests/unit/desktop-environment.test.ts": ["vm"],
     "tests/unit/desktop-update-presentation.test.ts": ["vm"],
