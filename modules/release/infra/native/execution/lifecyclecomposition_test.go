@@ -27,7 +27,7 @@ import (
 // These witnesses join application policy to tree/identity checks,
 // rename/exchange and journal/rejection persistence in fresh disposable trees.
 // The staged target is written directly; production staging is the desktop's
-// copy. installScope uses WithInstallation's private route seam: route, lease, slot,
+// copy. installScope uses WithAdmittedInstallation's private route seam: route, lease, slot,
 // predecessor process and admission remain symbolic. Neither parsing nor these
 // filesystem witnesses qualify a selected helper, process/handshake, Seatbelt,
 // package, installed app, relaunch or crash recovery under real custody.
@@ -223,7 +223,7 @@ func TestLifecycleCompositionApplyRecoverRollback(t *testing.T) {
 			f := newLifecycleFixture(t)
 			before := compositionSnapshot(t, f.root)
 			entered := false
-			err := WithInstallation(context.Background(), f.config, func(port.HelperInstallationRuntime) error { entered = true; return nil })
+			err := WithAdmittedInstallation(context.Background(), f.config, func(AdmittedInstallation) error { entered = true; return nil })
 			if err == nil || entered {
 				t.Fatal("raw test descriptors supplied real route custody")
 			}

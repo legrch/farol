@@ -28,7 +28,7 @@ type Config struct {
 	Request  port.HelperRequest
 	Files    helperroutes.Files
 	Journal  port.HelperJournalRepository
-	// Rejection is required only by WithInstallation. It borrows the same
+	// Rejection is required only by WithAdmittedInstallation. It borrows the same
 	// operation descriptor and original JournalAdmission/gate as Journal.
 	Rejection port.HelperTargetRejectionRepository
 	Until     time.Time
