@@ -1,9 +1,11 @@
 # Pull request checks and tagged releases
 
-This page describes the proposed GitHub Actions checks and release flow. It is
-an operating guide; it does not configure branch protection, rulesets, or other
-repository settings. Required-check enforcement is an operating policy. The owner explicitly chose
-no branch protection or rulesets; activation does not require either setting. There is no workflow triggered by pushes to `main`.
+This page describes the active GitHub Actions checks and release flow in
+`.github/workflows/`. It is an operating guide; it does not configure branch
+protection, rulesets, or other repository settings. Required-check enforcement
+is an operating policy. The owner explicitly chose no branch protection or
+rulesets; the checks run without either setting. There is no workflow triggered
+by pushes to `main`.
 
 ## Pull request checks
 
@@ -12,8 +14,9 @@ request use concurrency cancellation, so a newer commit cancels superseded
 work.
 
 The `changes` job quickly classifies changed paths on Ubuntu. A separate
-Ubuntu `checks` job always runs format and documentation checks,
-delivery-parity checks, and `scan:secrets`, in parallel with the heavy jobs.
+Ubuntu `checks` job always runs type, lint, format, architecture, runtime and
+documentation checks, delivery-parity checks, and `scan:secrets`, in parallel
+with the heavy jobs.
 The `portable` job also runs on Ubuntu and executes `task ci:cloud`, covering
 toolchain and type checks, lint and formatting, architecture and runtime checks,
 documentation, Cloud-selected unit and renderer checks, core Go checks, tooling,
@@ -22,8 +25,8 @@ strict docs-only allowlist.
 
 The `native` job runs on `macos-26`. It selects the complement of
 the `cloudDeferredFiles` and `cloudMixedFiles` inventories with the
-native-selection runner in `tooling/ci-native.mjs`, then runs that selection and
-`task test:core` on one runner. Mixed files run in full on macOS, so a small
+native-selection runner in `tooling/ci-native.mjs`, then runs that selection,
+`task test:core` and `task test:witness-inputs` on one runner. Mixed files run in full on macOS, so a small
 portable overlap avoids brittle inverse test-name filters. This preserves native coverage for the files excluded or partially
 selected by the Cloud profile.
 
@@ -44,7 +47,9 @@ acceptance, installation, or live behavior.
 
 `.github/workflows/release.yml` accepts `v*` tag pushes and explicit
 `workflow_dispatch` actions `prepare` and `publish`. Tag and prepare runs are
-build-only: on `macos-26` they verify the strict owner-beta version/channel,
+build-only: on `macos-26` they verify the exact version and channel from
+`package.json` (an ordinary semantic version selects `github-stable`, a
+`-owner.beta.N` version selects `github-owner-beta`),
 exact source on accepted `origin/main` ancestry, provision approved Go inputs,
 run the unchanged full `task ci`, then clean `task package` and offline
 three-asset preparation/verification. A tag push additionally verifies the
@@ -130,7 +135,8 @@ owner, or move publication behind a protected environment that requires
 approval.
 
 The existing producer requires a separately approved Go SDK declaration. The
-release preflight refuses with `CI_GO_SDK_APPROVAL_REQUIRED` when
+Go input provisioning step (`tooling/ci-go-inputs.mjs`) refuses with
+`CI_GO_SDK_APPROVAL_REQUIRED` when
 `config/ci-go-sdk.json` is missing and with `CI_GO_SDK_APPROVAL_INVALID` when it
 does not name `farol-ci-go-sdk/1`, `go1.27.3`, `darwin`, `arm64` and a 64-hex
 `treeSha256`.
@@ -174,25 +180,28 @@ separate release publication job receives `contents: write`. The publisher retai
 The workflow explicitly exports `GH_TOKEN` only for the publication step; the job-scoped
 automatic GitHub token remains governed by GitHub Actions permissions.
 
-## Lead activation and provisional timing
+## Activation and observed timing
 
-To activate the checks, the Lead pushes the feature branch, opens a pull
-request, and observes actual check timings and native attestation. After the
-reviewed candidate is merged, the Lead can exercise build-only preparation. Only after the actual native and owner
+The pull request checks and the release workflow are active. After a reviewed
+candidate is merged, the Lead can exercise build-only preparation. Only after the actual native and owner
 gates may Root create the immutable annotated version tag and stage the exact
 qualified local files as a private draft, then deliberately dispatch publication
 after its tag build succeeds. This page records the
 process; it does not perform a push or publish a release.
 
-These durations are planning estimates, not measurements or qualified service
-targets:
+These durations were observed on hosted runners: four successful pull request
+runs on 2026-11-13 (43407174547, 43414121461, 43420233027, 43426987599) and one
+tag build on 2026-11-12 (43312057880). They are observations, not qualified
+service targets:
 
-| Work             | Provisional duration |
-| ---------------- | -------------------- |
-| Docs-only checks | 2–4 minutes          |
-| Portable checks  | 8–14 minutes         |
-| Native checks    | 8–14 minutes         |
-| Tagged release   | 25–45 minutes        |
+| Work                   | Observed duration                                             |
+| ---------------------- | ------------------------------------------------------------- |
+| `checks` (every PR)    | 2.5–4 minutes                                                 |
+| `portable`             | 13.5–17 minutes                                               |
+| `native`               | 15–16 minutes                                                 |
+| Pull request, all jobs | 16–17 minutes                                                 |
+| Tag build job          | 21 minutes: full `task ci` 18.5, `task package` 1, assets 0.2 |
+| Tag build runner queue | 5 minutes before the job started                              |
 
 Cache misses, npm/Go downloads, runner queueing and native compiler work can
 increase these times. One macOS job runs per source PR and one per release;
@@ -202,6 +211,6 @@ release; GitHub may replace older pending runs in the same concurrency group,
 so observe each intended tag run rather than treating a pushed tag as success.
 Do not move a published tag or use a rerun to overwrite release assets.
 
-The typical pull request goal is at most 15 minutes, and remains unqualified
-until observed. Native or resource prerequisites can block a run; do not bypass
-them to meet the estimate.
+The pull request goal is at most 15 minutes. The observed runs above take
+16–17 minutes, so the goal is not met yet. Native or resource prerequisites can
+block a run; do not bypass them to meet the goal.
