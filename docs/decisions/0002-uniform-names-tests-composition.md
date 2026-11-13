@@ -97,6 +97,9 @@ errors.New("missing")`, `var pattern = regexp.MustCompile(…)`) is not
   `<Method>Query`); the result is `*<Method>Result`.
 - `Request`/`Response` are used at published contracts and the desktop wire,
   never as application types; contracts never declare `Command`/`Query` types.
+  The checker enforces the suffixes for types declared in `app/services` and
+  in `contracts`; other application packages (such as `app/port`) are held by
+  review.
 - This is a recorded deviation from the owner's sc-platform project, which uses
   `Request`/`Response` in every layer. ADR-0001 rejected application
   `Request`/`Response` because intent stays invisible and invited aliasing.
