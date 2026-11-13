@@ -3,6 +3,7 @@ package id
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestValid(t *testing.T) {
@@ -39,5 +40,42 @@ func TestValid(t *testing.T) {
 				t.Fatalf("Valid(%q) = %v, want %v", c.in, got, c.want)
 			}
 		})
+	}
+}
+
+// retired is the predicate that eighteen chat packages carried as private
+// copies before Valid replaced them (rune loop form).
+func retired(s string) bool {
+	if len(s) < 1 || len(s) > 120 || !utf8.ValidString(s) {
+		return false
+	}
+	for _, r := range s {
+		if r <= 32 || r == 127 {
+			return false
+		}
+	}
+	return true
+}
+
+// retiredIndexFunc is the same predicate as written with strings.IndexFunc.
+func retiredIndexFunc(s string) bool {
+	return len(s) > 0 && len(s) <= 120 && utf8.ValidString(s) && strings.IndexFunc(s, func(r rune) bool { return r <= 32 || r == 127 }) < 0
+}
+
+func TestValidMatchesRetiredCopies(t *testing.T) {
+	corpus := []string{"", "a", strings.Repeat("a", 119), strings.Repeat("a", 120), strings.Repeat("a", 121), strings.Repeat("é", 60), strings.Repeat("é", 61), "\xff", "a\xffb"}
+	for r := rune(0); r < 0x300; r++ {
+		corpus = append(corpus, "x"+string(r)+"y", string(r))
+	}
+	for _, r := range []rune{0x2028, 0x2029, 0xfeff, 0xffff, 0x10000, 0x10ffff} {
+		corpus = append(corpus, "x"+string(r)+"y")
+	}
+	for _, s := range corpus {
+		if got, want := Valid(s), retired(s); got != want {
+			t.Fatalf("Valid(%q) = %v, retired loop = %v", s, got, want)
+		}
+		if got, want := Valid(s), retiredIndexFunc(s); got != want {
+			t.Fatalf("Valid(%q) = %v, retired IndexFunc = %v", s, got, want)
+		}
 	}
 }

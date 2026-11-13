@@ -49,3 +49,29 @@ func TestSame(t *testing.T) {
 		})
 	}
 }
+
+// TestMatchesRetiredCopies pins the predicates that four chat packages carried
+// as private copies: Device and Inode nonzero, and the Device plus Inode
+// comparison that ignored the owner.
+func TestMatchesRetiredCopies(t *testing.T) {
+	values := []uint64{0, 1, 7, ^uint64(0)}
+	owners := []uint32{0, 501}
+	for _, d := range values {
+		for _, i := range values {
+			for _, o := range owners {
+				a := Identity{Device: d, Inode: i, OwnerUID: o}
+				if got, want := a.Valid(), a.Device != 0 && a.Inode != 0; got != want {
+					t.Fatalf("Valid(%+v) = %v, retired = %v", a, got, want)
+				}
+				for _, d2 := range values {
+					for _, i2 := range values {
+						b := Identity{Device: d2, Inode: i2, OwnerUID: 9}
+						if got, want := Same(a, b), a.Device == b.Device && a.Inode == b.Inode; got != want {
+							t.Fatalf("Same(%+v, %+v) = %v, retired = %v", a, b, got, want)
+						}
+					}
+				}
+			}
+		}
+	}
+}
