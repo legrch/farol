@@ -32,8 +32,19 @@ const text = (state: State): string => {
   if (state.phase === "unknown")
     return "Could not confirm that ChatGPT reached this Mac. You can ping again.";
   if (state.phase === "refused") {
-    if (state.code === "CONNECTION_CHECK_PENDING")
-      return "Another check is still finishing. Try again in a moment.";
+    // Transient: the refusal clears by itself once the other work ends.
+    if (
+      state.code === "CHATGPT_TASK_IN_PROGRESS" ||
+      state.code === "CONNECTION_CHECK_PENDING"
+    )
+      return "ChatGPT is busy with another check or task. Nothing was sent. Try again when it finishes.";
+    // Persistent: pinging again hits the same refusal, so name the remedy.
+    if (state.code === "CONNECTION_CHECK_SETUP_UNRESOLVED")
+      return "A Setup connection step has an unconfirmed outcome. Nothing was sent. Resolve it in Setup first; pinging again will not clear it.";
+    if (state.code === "CONNECTION_CHECK_ALREADY_ATTEMPTED")
+      return "This one-time setup challenge was already used by an earlier check. Nothing was sent. Reconnect to prepare a new challenge, then ping again.";
+    if (state.code === "CONNECTION_CHECK_BLOCKED")
+      return "Farol's check record refused this ping. Nothing was sent. If this keeps happening, quit and reopen Farol.";
     return (
       chatGptPreSubmitRemedy(state.code) ??
       "The ping was not sent. You can try again."

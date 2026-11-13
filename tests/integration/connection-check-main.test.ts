@@ -519,7 +519,15 @@ it.each([
       return result;
     });
   }
-  expect(await f.run()).toMatchObject({ ok: false });
+  expect(await f.run()).toMatchObject({
+    ok: false,
+    // An unconfirmed Setup step is persistent: name it, never "still finishing".
+    ...(kind === "pending-original"
+      ? { error: "CONNECTION_CHECK_SETUP_UNRESOLVED" }
+      : kind === "legacy-claim"
+        ? { error: "CONNECTION_CHECK_ALREADY_ATTEMPTED" }
+        : {}),
+  });
   expect(f.sends()).toBe(0);
   expect(f.publish).not.toHaveBeenCalled();
   expect(f.context.chatGptTaskAdmission).toBe(false);

@@ -285,6 +285,17 @@ it.each([
   ["refused", "CHATGPT_APP_SELECTION_CONFLICT", "Message blocked before send"],
   ["refused", "CHATGPT_CONVERSATION_UNCONFIRMED", "The ping was not sent"],
   ["unknown", "CHATGPT_APP_SELECTION_CONFLICT", "You can ping again"],
+  // A transient refusal clears by itself: the owner may simply try again.
+  ["refused", "CHATGPT_TASK_IN_PROGRESS", "Try again when it finishes"],
+  ["refused", "CONNECTION_CHECK_PENDING", "Try again when it finishes"],
+  // Persistent refusals never clear by pinging again; name the real remedy.
+  ["refused", "CONNECTION_CHECK_SETUP_UNRESOLVED", "Resolve it in Setup"],
+  [
+    "refused",
+    "CONNECTION_CHECK_ALREADY_ATTEMPTED",
+    "Reconnect to prepare a new challenge",
+  ],
+  ["refused", "CONNECTION_CHECK_BLOCKED", "quit and reopen Farol"],
 ] as const)(
   "shows %s / %s without another send",
   async (intentState, code, expected) => {

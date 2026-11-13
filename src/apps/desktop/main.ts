@@ -5952,11 +5952,13 @@ async function testConnectionCommand(
           throw new ConnectionCheckRefusal(
             "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
           );
+        // A persistent Setup uncertainty, not a check that is still running:
+        // it never clears by pinging again, so it has its own code.
         if (
           settings.setup.connect.outcomeUnknown ||
           connector.appVerificationPending
         )
-          throw new ConnectionCheckRefusal("CONNECTION_CHECK_PENDING");
+          throw new ConnectionCheckRefusal("CONNECTION_CHECK_SETUP_UNRESOLVED");
         const observed = await core.observeComputerConnectorVerification();
         const proof = connectorVerificationProof(observed);
         if (proof && proof.workspaceId !== workspace)
