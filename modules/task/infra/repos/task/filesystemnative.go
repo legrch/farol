@@ -11,7 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/legrch/farol/modules/task/domain"
+	"github.com/legrch/farol/pkg/limit"
+
+	task "github.com/legrch/farol/modules/task/domain"
 	"golang.org/x/sys/unix"
 )
 
@@ -108,7 +110,7 @@ func openFilesystemStorage(root FilesystemRoot) (filesystemStorage, error) {
 			return fail(task.ErrUnknown)
 		}
 	} else {
-		data, readErr := io.ReadAll(io.LimitReader(n.lock, 513))
+		data, readErr := limit.Read(n.lock, 512)
 		var after unix.Stat_t
 		if readErr != nil || unix.Fstat(fd, &after) != nil || !filesystemStable(n.lockStat, after) || !bytes.Equal(data, header) {
 			return fail(task.ErrUnknown)
@@ -182,7 +184,7 @@ func (n *filesystemNative) Read() ([]byte, bool, error) {
 		_ = file.Close()
 		return nil, true, task.ErrUnavailable
 	}
-	data, readErr := io.ReadAll(io.LimitReader(file, filesystemMaxBytes+1))
+	data, readErr := limit.Read(file, filesystemMaxBytes)
 	statErr := unix.Fstat(fd, &after)
 	nameErr := unix.Fstatat(int(n.directory.Fd()), filesystemImageName, &named, unix.AT_SYMLINK_NOFOLLOW)
 	closeErr := file.Close()
