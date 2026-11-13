@@ -20,7 +20,9 @@ inspect() { /usr/bin/osascript -l JavaScript "$stage/inspect.js" "$stage/identit
 case "$phase" in
   serve)
     limit="$(cat "$stage/timeout")"
-    [[ "$limit" =~ ^[0-9]+$ ]] && [ "$limit" -ge 30 ] && [ "$limit" -le 600 ]
+    # Explicit if-blocks: under set -e a failing non-final test in an && list
+    # is NOT enforced, so every guard here refuses explicitly.
+    if ! [[ "$limit" =~ ^[0-9]+$ ]] || [ "$limit" -lt 30 ] || [ "$limit" -gt 600 ]; then exit 79; fi
     last=""
     until_time=$((SECONDS + limit))
     # Publish atomically: the host polls for the name and refuses an empty file.
@@ -71,7 +73,7 @@ case "$phase" in
     work="$(cat "$report/guest-work.txt")"
     # Exactly the mktemp suffix: a case glob '?' would also match '/'.
     [[ "$work" =~ ^"$HOME"/Library/Caches/farol-vm-smoke\.[A-Za-z0-9]{6}$ ]] || exit 74
-    [ -d "$work" ] && [ ! -L "$work" ]
+    if [ -L "$work" ] || [ ! -d "$work" ]; then finish BLOCKED; exit 74; fi
     /bin/rm -rf "$work"
     finish READY
     ;;
@@ -149,8 +151,8 @@ case "$phase" in
     # This phase acknowledges the observed child terminal, not a test PASS.
     # A nonzero driver exit still has a process receipt for result admission.
     context="$stage/driver.context.json"
-    [ -f "$context" ] && [ ! -L "$context" ]
-    [ ! -e "$result_dir/result.json" ] && [ ! -e "$result_dir/process.json" ]
+    if [ -L "$context" ] || [ ! -f "$context" ]; then finish BLOCKED; exit 78; fi
+    if [ -e "$result_dir/result.json" ] || [ -L "$result_dir/result.json" ] || [ -e "$result_dir/process.json" ] || [ -L "$result_dir/process.json" ]; then finish BLOCKED; exit 78; fi
     context_sha="$(/usr/bin/shasum -a 256 "$context" | /usr/bin/cut -d ' ' -f 1)"
     # A pinned, minimal environment: NODE_OPTIONS, NODE_PATH or similar from
     # the guest login session must not load code beside the verified bundle.
