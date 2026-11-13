@@ -26,7 +26,10 @@
 // `// source-slicing: allowed - <reason>` (reason of 10+ characters) in the
 // first 30 lines; a waiver on a file that is not flagged is an error.
 // Tests that only assert on source text are reported, never blocked.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "@babel/parser";
@@ -918,6 +921,9 @@ export function diff(result, allowlist) {
   return findings;
 }
 
+// The allowlist is checked by `prettier --check` with the rest of the tree, so
+// a written file goes through the repository's Prettier. Without Prettier the
+// plain JSON stays and the caller is told to format it.
 function writeAllowlistFile(scanRoot, files) {
   const target = path.join(scanRoot, allowlistRelative);
   fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -925,6 +931,28 @@ function writeAllowlistFile(scanRoot, files) {
     target,
     `${JSON.stringify({ schema: 1, files }, null, 2)}\n`,
   );
+  let binary;
+  try {
+    binary = createRequire(import.meta.url).resolve(
+      "prettier/bin/prettier.cjs",
+    );
+  } catch {
+    binary = null;
+  }
+  const formatted =
+    binary !== null &&
+    spawnSync(
+      process.execPath,
+      // The target is named explicitly, so an ignore file must not skip it.
+      [binary, "--ignore-path", os.devNull, "--write", target],
+      {
+        stdio: "ignore",
+      },
+    ).status === 0;
+  if (!formatted)
+    process.stderr.write(
+      `allowlist written unformatted; run prettier --write ${allowlistRelative}\n`,
+    );
 }
 
 // --write-allowlist: shrink only. Removes entries and mechanisms that no
