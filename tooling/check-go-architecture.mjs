@@ -355,6 +355,8 @@ function enforce(root, findings, add) {
           enforcementFile,
           `${item.code} ${item.file}: ${item.detail}`,
         );
+    // Ceilings are exact: growth fails, and so does unused slack, so a fix
+    // in one place cannot pay for a new finding elsewhere in the scope.
     for (const [code, byScope] of Object.entries(counts))
       for (const [scope, count] of Object.entries(byScope)) {
         if (enforcement.migrated.get(code).has(scope)) continue;
@@ -363,7 +365,21 @@ function enforce(root, findings, add) {
           add(
             "GO_REPORT_CEILING",
             enforcementFile,
-            `${code} ${scope}: ${count} findings exceed the ceiling ${ceiling}`,
+            `${code} ${scope}: ${count} findings exceed the ceiling ${ceiling}; fix the new findings`,
+          );
+      }
+    for (const [code, byScope] of enforcement.ceilings)
+      for (const [scope, ceiling] of byScope) {
+        const count = enforcement.migrated.get(code).has(scope)
+          ? 0
+          : (counts[code]?.[scope] ?? 0);
+        if (count < ceiling)
+          add(
+            "GO_CEILING_STALE",
+            enforcementFile,
+            count
+              ? `${code} ${scope}: ${count} findings are below the ceiling ${ceiling}; lower the ceiling to ${count} in this change`
+              : `${code} ${scope}: no report findings remain under the ceiling ${ceiling}; delete the ceiling in this change`,
           );
       }
   }

@@ -245,6 +245,7 @@ implements every mechanical rule. Blocking rules fail the executable (and
 | `GO_LAYER_DIRECTION`, `GO_CONTRACT_LEAK`, `GO_TRANSPORT_DEPENDENCY` (extended) | Kits for module infra and transport; no kit in pure layers; no import of a module adapter. |
 | `GO_EXCEPTION_STALE` (new)                                                     | An exception row that matches no finding or sits in an unmigrated scope.                   |
 | `GO_REPORT_CEILING` (new)                                                      | A report count above its declared ceiling.                                                 |
+| `GO_CEILING_STALE` (new)                                                       | A report count below its ceiling, or a ceiling with no findings or on a migrated scope.    |
 
 These new blocking rules have no finding on `main`; several replace the former
 blanket refusal of any unknown `pkg` path, which was also blocking. Migration
@@ -275,8 +276,10 @@ enforcement file holds:
   a floor (`migratedFloor` in
   [`tests/architecture/go-architecture.test.ts`](../../tests/architecture/go-architecture.test.ts)),
   so removing a migrated scope fails the test.
-- `ceilings`: per rule and unmigrated scope, the highest allowed report count.
-  Growth fails `GO_REPORT_CEILING`; lower a ceiling whenever a count falls.
+- `ceilings`: per rule and unmigrated scope, the exact report count. Growth
+  fails `GO_REPORT_CEILING`; a lower count fails `GO_CEILING_STALE` until the
+  same change lowers the ceiling to the new count (or deletes it at zero), so a
+  fix never leaves slack that a later finding could reuse.
 - `exceptions`: exact `code`/`file`/`detail` rows with `reason` and `removal`,
   effective only in a migrated scope. Blocking rules cannot be excepted.
 
@@ -290,7 +293,9 @@ change.
    module's report lines and the per-rule, per-scope count table (`--json` for
    the machine form).
 2. Fix the findings in behaviour-preserving pull requests. Renames never change
-   wire symbols, persisted keys, journal schemas or error code strings.
+   wire symbols, persisted keys, journal schemas or error code strings. Every
+   such pull request lowers each affected ceiling to the new count printed by
+   `GO_CEILING_STALE`; a count that would grow is fixed instead.
 3. In the pull request that brings a rule to zero for the module, add the
    module to that rule's `migrated` list, delete its ceiling and add the scope
    to `migratedFloor`. A remaining two-word name needs an exception row the

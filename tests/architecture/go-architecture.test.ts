@@ -898,9 +898,14 @@ describe("ADR-0002 enforcement switch", () => {
     for (const [code, byScope] of Object.entries(report.report.counts))
       for (const [scope, count] of Object.entries(byScope))
         if (!stored.migrated[code]?.includes(scope))
-          expect(count).toBeLessThanOrEqual(
-            stored.ceilings[code]?.[scope] ?? 0,
+          expect(count, `${code} ${scope}`).toBe(
+            stored.ceilings[code]?.[scope],
           );
+    for (const [code, byScope] of Object.entries(stored.ceilings))
+      for (const [scope, ceiling] of Object.entries(byScope))
+        expect(report.report.counts[code]?.[scope], `${code} ${scope}`).toBe(
+          ceiling,
+        );
   });
 
   it("reports every scope without an enforcement file", () => {
@@ -1027,16 +1032,54 @@ describe("ADR-0002 enforcement switch", () => {
     expect(
       grown.report.violations.find(({ code }) => code === "GO_REPORT_CEILING")
         ?.detail,
-    ).toBe("GO_FILE_WORD chat: 1 findings exceed the ceiling 0");
+    ).toBe(
+      "GO_FILE_WORD chat: 1 findings exceed the ceiling 0; fix the new findings",
+    );
+  });
+
+  it("refuses slack under a ceiling and ceilings on migrated scopes", () => {
+    const stale = (
+      ceilings: Record<string, Record<string, number>>,
+      migrated = migrate("GO_FILE_WORD"),
+    ) =>
+      check({
+        ...files,
+        [enforcementFile]: enforcement({ migrated, ceilings }),
+      }).report.violations.filter(({ code }) => code === "GO_CEILING_STALE");
+    expect(stale({ GO_FILE_WORD: { chat: 1, task: 1 } })).toEqual([]);
+    expect(stale({ GO_FILE_WORD: { chat: 2, task: 1 } })).toEqual([
+      {
+        code: "GO_CEILING_STALE",
+        file: enforcementFile,
+        detail:
+          "GO_FILE_WORD chat: 1 findings are below the ceiling 2; lower the ceiling to 1 in this change",
+      },
+    ]);
+    expect(
+      stale({ GO_FILE_WORD: { chat: 1, task: 1 }, GO_DTO_ALIAS: { chat: 1 } }),
+    ).toEqual([
+      {
+        code: "GO_CEILING_STALE",
+        file: enforcementFile,
+        detail:
+          "GO_DTO_ALIAS chat: no report findings remain under the ceiling 1; delete the ceiling in this change",
+      },
+    ]);
+    expect(
+      stale(
+        { GO_FILE_WORD: { chat: 1, task: 1 } },
+        migrate("GO_FILE_WORD", "chat"),
+      ).map(({ detail }) => detail),
+    ).toEqual([
+      "GO_FILE_WORD chat: no report findings remain under the ceiling 1; delete the ceiling in this change",
+    ]);
   });
 
   it("cannot migrate away an existing blocking rule", () => {
     const file = "modules/chat/app/services/turn/read.go";
     const result = check({
       [file]: 'package turn\nimport _ "os"\n',
-      [enforcementFile]: enforcement({
-        ceilings: { GO_PACKAGE_DIR: { chat: 1 } },
-      }),
+      [enforcementFile]: enforcement(),
     });
     denied(result, "GO_PURE_IMPORT", file);
   });
