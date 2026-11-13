@@ -64,6 +64,9 @@ type owned interface {
 type boundary interface {
 	Start(context.Context, Command, func(context.Context) error, io.Writer, io.Writer) (owned, error)
 }
+type leaseBoundary interface {
+	StartLease(context.Context, Command, processsvc.SpawnRequest, io.Writer, io.Writer) (owned, error)
+}
 
 type Prepared struct {
 	mutex     sync.Mutex
@@ -110,6 +113,14 @@ func copyCommand(c Command) Command {
 		c.Confinement = &binding
 	}
 	return c
+}
+func nativeCommandDigest(command Command) (string, error) {
+	encoded, err := json.Marshal(command)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:]), nil
 }
 func newPrepared(command Command, native boundary, clock port.Clock, scheduler schedule) (*Prepared, error) {
 	if native == nil || clock == nil || scheduler == nil || !validCommand(command) {

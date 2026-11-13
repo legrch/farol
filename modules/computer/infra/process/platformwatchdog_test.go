@@ -219,7 +219,7 @@ func TestRootScopedPlatformRejectsUnsupportedScopeBeforeReservation(t *testing.T
 				value.filesystem = "nfs"
 			}
 			pf.facts.directories[pf.original.Root] = value
-			_, err := f.preparer.Prepare(context.Background(), processsvc.Invocation(parentInvocation()))
+			_, err := f.preparer.Prepare(context.Background(), processsvc.Invocation(sampleInvocation()))
 			var native *processsvc.NativeFailure
 			if !errors.As(err, &native) || !native.FilesystemUnsupported || native.Unknown || f.reservation.calls != 0 || f.host.calls.Load() != 0 {
 				t.Fatal("unsupported filesystem reached reservation or lost its classification", err)

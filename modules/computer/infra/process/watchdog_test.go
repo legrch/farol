@@ -52,8 +52,8 @@ type watchdogTestHost struct {
 	beforeStop     func()
 	holdWait       bool
 	reply          string
-	reservation    *parentReservation
-	lease          *parentLease
+	reservation    *watchdogReservation
+	lease          *watchdogLease
 }
 
 func (h *watchdogTestHost) Start(ctx context.Context, selection WatchdogSelection, cwd string, check func() error) (watchdogProcess, watchdogChannel, error) {
@@ -147,9 +147,9 @@ func (h *watchdogTestHost) start(selection WatchdogSelection, cwd string) (watch
 type watchdogFixture struct {
 	preparer     *SupervisedPreparer
 	route        *processcontract.Contract
-	lease        *parentLease
-	reservation  *parentReservation
-	clock        *parentClock
+	lease        *watchdogLease
+	reservation  *watchdogReservation
+	clock        *watchdogClock
 	host         *watchdogTestHost
 	evidence     *confinementEvidenceDouble
 	timers       *timers
@@ -159,7 +159,7 @@ type watchdogFixture struct {
 func newWatchdogFixture(t *testing.T) *watchdogFixture {
 	t.Helper()
 	_, selection, command, evidence := confinementFixture(t)
-	clock := &parentClock{now: time.Now()}
+	clock := &watchdogClock{now: time.Now()}
 	binding := port.TaskBinding{Identity: authority.Identity{OwnerID: "owner", SessionID: "session", TaskID: "task", TaskEpoch: 7}, ParticipantID: "participant", TurnID: "turn"}
 	selection.Snapshot.Participant.Grant.Identity = binding.Identity
 	selection.Snapshot.Participant.Grant.ExpiresAt = clock.Now().Add(time.Hour)
@@ -171,8 +171,8 @@ func newWatchdogFixture(t *testing.T) *watchdogFixture {
 	command.Args = nil
 	command.Input = nil
 	command.Binding = nil
-	lease := &parentLease{binding: binding, deadline: clock.Now().Add(15 * time.Second), snapshot: selection.Snapshot}
-	reservation := &parentReservation{lease: lease}
+	lease := &watchdogLease{binding: binding, deadline: clock.Now().Add(15 * time.Second), snapshot: selection.Snapshot}
+	reservation := &watchdogReservation{lease: lease}
 	source := []byte("synthetic trusted watchdog source, NOT executed")
 	digest := sha256.Sum256(source)
 	wd := WatchdogSelection{Executable: ExecutablePin{"/selected/node", strings.Repeat("c", 64)}, Source: source, SourceSHA256: hex.EncodeToString(digest[:])}
@@ -212,7 +212,7 @@ func newWatchdogFixture(t *testing.T) *watchdogFixture {
 }
 func (f *watchdogFixture) prepare(t *testing.T) {
 	t.Helper()
-	out, err := f.route.Prepare(context.Background(), processcontract.PrepareRequest{OperationID: "operation", Invocation: parentInvocation()})
+	out, err := f.route.Prepare(context.Background(), processcontract.PrepareRequest{OperationID: "operation", Invocation: sampleInvocation()})
 	if err != nil || out == nil {
 		t.Fatal(out, err)
 	}
@@ -671,7 +671,7 @@ func TestWatchdogCancelConsumesSingleRetainedControl(t *testing.T) {
 }
 func eventFixture() (*watchdogChild, *bytes.Buffer) {
 	out := &bytes.Buffer{}
-	c := newWatchdogChild(&watchdogTestProcess{ended: make(chan error, 1)}, nil, time.Now().Add(time.Minute), &parentClock{now: time.Now()}, out, io.Discard)
+	c := newWatchdogChild(&watchdogTestProcess{ended: make(chan error, 1)}, nil, time.Now().Add(time.Minute), &watchdogClock{now: time.Now()}, out, io.Discard)
 	c.id = strings.Repeat("a", 64)
 	c.preparedSeen = true
 	c.startSent = true
@@ -733,3 +733,66 @@ func (m *watchdogMeasurementDouble) Recheck(ctx context.Context) error {
 	return ctx.Err()
 }
 func (m *watchdogMeasurementDouble) Close() { m.closes++ }
+
+// CPU doubles shared by the supervised route tests. No exec.Cmd, measurement,
+// shell, signal or provider is invoked by these values.
+type watchdogClock struct {
+	mutex sync.Mutex
+	now   time.Time
+}
+
+func (c *watchdogClock) Now() time.Time { c.mutex.Lock(); defer c.mutex.Unlock(); return c.now }
+func (c *watchdogClock) advance(d time.Duration) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	c.now = c.now.Add(d)
+}
+
+type watchdogLease struct {
+	mutex      sync.Mutex
+	binding    port.TaskBinding
+	deadline   time.Time
+	snapshot   port.AccessSnapshot
+	inspecting atomic.Bool
+	revoked    bool
+}
+
+func (e *watchdogLease) Binding() port.TaskBinding { return e.binding }
+func (e *watchdogLease) Deadline() time.Time       { return e.deadline }
+func (e *watchdogLease) WithSnapshot(_ context.Context, id string, inspect func(port.AccessSnapshot) error) error {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+	if id != e.binding.ParticipantID {
+		return errors.New("wrong participant")
+	}
+	e.inspecting.Store(true)
+	defer e.inspecting.Store(false)
+	if e.revoked {
+		return inspect(port.AccessSnapshot{})
+	}
+	p, a := e.snapshot.Participant.Clone(), e.snapshot.Approval.Clone()
+	return inspect(port.AccessSnapshot{Participant: &p, Approval: &a})
+}
+func (e *watchdogLease) change(f func(*port.AccessSnapshot)) {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+	f(&e.snapshot)
+}
+
+type watchdogReservation struct {
+	lease  *watchdogLease
+	calls  int
+	intent processsvc.Intent
+}
+
+func (r *watchdogReservation) Reserve(_ context.Context, i processsvc.Intent) (*processsvc.ReservationReceipt, error) {
+	if r.lease.inspecting.Load() {
+		panic("reservation under owner gate")
+	}
+	r.calls++
+	r.intent = i
+	return &processsvc.ReservationReceipt{Status: processsvc.Reserved, Intent: i}, nil
+}
+func sampleInvocation() processcontract.Invocation {
+	return processcontract.Invocation{RuntimeID: "cli", SessionID: "session", ModelID: "model", AdmissionID: "authority", Arguments: []string{"arg"}, Input: []byte("input")}
+}

@@ -275,15 +275,15 @@ func TestGitReadMeasurementsRetainExactMetadataAndRefuseReplacement(t *testing.T
 					}
 				}
 			}
-			boot := &measurementBootstrapDouble{before: func() { fs.assertCloses(t, 0) }}
-			err := measureWithParentDouble(t, selected, c, fs, func(context.Context) error { return nil }, boot)
+			dispatch := &measurementDispatchDouble{before: func() { fs.assertCloses(t, 0) }}
+			err := measureThenDispatch(t, selected, c, fs, func(context.Context) error { return nil }, dispatch)
 			var failure *processsvc.NativeFailure
 			if !errors.As(err, &failure) {
 				t.Fatal("missing classified failure", err)
 			}
 			if mode == "valid" {
-				if boot.calls != 1 || !failure.Unknown {
-					t.Fatal("one synthetic bootstrap not reached", err)
+				if dispatch.calls != 1 || !failure.Unknown {
+					t.Fatal("one synthetic dispatch not reached", err)
 				}
 				for _, directory := range launch.gitDirectories {
 					found := false
@@ -295,8 +295,8 @@ func TestGitReadMeasurementsRetainExactMetadataAndRefuseReplacement(t *testing.T
 						t.Fatal("metadata not anchored", directory)
 					}
 				}
-			} else if boot.calls != 0 || failure.Unknown {
-				t.Fatal("changed metadata reached bootstrap", mode, err)
+			} else if dispatch.calls != 0 || failure.Unknown {
+				t.Fatal("changed metadata reached dispatch", mode, err)
 			}
 			fs.assertCloses(t, 1)
 		})
@@ -364,7 +364,7 @@ func newGitReadWatchdogFixture(t *testing.T) *watchdogFixture {
 	f.preparer.boundary.policy = policy
 	f.lease.snapshot = s.Snapshot
 	args, _ := GitReadArguments(*s.GitRead, GitReadStatus)
-	invocation := parentInvocation()
+	invocation := sampleInvocation()
 	invocation.Arguments, invocation.Input = args, nil
 	out, err := f.route.Prepare(context.Background(), processcontract.PrepareRequest{OperationID: "operation", Invocation: invocation})
 	if err != nil || out == nil {

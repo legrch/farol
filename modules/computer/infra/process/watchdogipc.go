@@ -371,6 +371,13 @@ func (c *watchdogChild) Wait() (exit, error) {
 	// supplies cohort=true nor proves escaped descendants or lost IPC/output.
 	return result, nil
 }
+func copyCode(code *int) *int {
+	if code == nil {
+		return nil
+	}
+	copy := *code
+	return &copy
+}
 
 func sameWatchdogExit(root exit, event watchdogEvent) bool {
 	if root.Code != nil {

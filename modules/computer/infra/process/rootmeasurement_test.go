@@ -3,13 +3,10 @@ package process
 import (
 	"context"
 	"errors"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"testing"
-	"time"
 
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -161,42 +158,50 @@ func rootMeasurementFixture(t *testing.T) (*Seatbelt, Command, *confinedLaunch, 
 	return selected, c, launch, fs
 }
 
-type measurementBootstrapDouble struct {
+type measurementDispatchDouble struct {
 	calls  int
 	before func()
 }
 
-func (b *measurementBootstrapDouble) StartAnchor(context.Context, AnchorLaunch, func(context.Context) error, io.Writer, io.Writer) (*exec.Cmd, AnchorLink, error) {
-	b.calls++
-	if b.before != nil {
-		b.before()
-	}
-	// No exec method is invoked. A missing synthetic child stops this test route.
-	return nil, nil, errors.New("synthetic bootstrap only")
-}
-func measureWithParentDouble(t *testing.T, selected *Seatbelt, command Command, fs *measurementFilesystemDouble, check func(context.Context) error, boot *measurementBootstrapDouble) error {
+// measureThenDispatch is a CPU sequencing double for one launch attempt: the
+// owner check runs before and after the measurement, the measured handles stay
+// open through the single synthetic dispatch, and every exit closes them once.
+// No exec method is invoked; the synthetic dispatch never starts a child.
+func measureThenDispatch(t *testing.T, selected *Seatbelt, command Command, fs *measurementFilesystemDouble, check func(context.Context) error, dispatch *measurementDispatchDouble) error {
 	t.Helper()
-	clock := &testClock{time.UnixMilli(1900000000000)}
-	parent := &parentBoundary{operationID: "operation", policy: selected, bootstrap: boot, execution: context.Background(), clock: clock,
-		measure: func(ctx context.Context, c Command, l *confinedLaunch) (func(), error) {
-			return measureLaunchFiles(ctx, c, l, fs)
-		},
+	ctx := context.Background()
+	launch, err := selectedLaunch(selected, command)
+	if err != nil || check(ctx) != nil {
+		return &processsvc.NativeFailure{}
 	}
-	_, err := parent.StartLease(context.Background(), command, processsvc.SpawnRequest{Deadline: clock.Now().Add(15 * time.Second), Check: check}, io.Discard, io.Discard)
-	return err
+	closeMeasurements, err := measureLaunchFiles(ctx, command, launch, fs)
+	if closeMeasurements != nil {
+		defer closeMeasurements()
+	}
+	if err != nil {
+		return err
+	}
+	if closeMeasurements == nil || check(ctx) != nil {
+		return &processsvc.NativeFailure{}
+	}
+	dispatch.calls++
+	if dispatch.before != nil {
+		dispatch.before()
+	}
+	return &processsvc.NativeFailure{Unknown: true}
 }
 
 func TestRootMeasurementsAllBindingsHeldThroughOneDispatch(t *testing.T) {
 	selected, c, launch, fs := rootMeasurementFixture(t)
-	boot := &measurementBootstrapDouble{before: func() {
+	dispatch := &measurementDispatchDouble{before: func() {
 		fs.assertCloses(t, 0)
 		if len(fs.handles) != len(launch.pins)+3+2*len(launch.roots) {
 			t.Fatalf("lost measurement handles: %d", len(fs.handles))
 		}
 	}}
-	err := measureWithParentDouble(t, selected, c, fs, func(context.Context) error { return nil }, boot)
+	err := measureThenDispatch(t, selected, c, fs, func(context.Context) error { return nil }, dispatch)
 	var failure *processsvc.NativeFailure
-	if !errors.As(err, &failure) || !failure.Unknown || boot.calls != 1 {
+	if !errors.As(err, &failure) || !failure.Unknown || dispatch.calls != 1 {
 		t.Fatal("synthetic dispatch not reached once", err)
 	}
 	fs.assertCloses(t, 1)
@@ -254,10 +259,10 @@ func TestRootMeasurementsMismatchClosesAllPinsAndNeverDispatches(t *testing.T) {
 			case "executable-partial-error":
 				fs.executableError = launch.pins[1].Path
 			}
-			boot := &measurementBootstrapDouble{}
-			err := measureWithParentDouble(t, selected, c, fs, func(context.Context) error { return nil }, boot)
+			dispatch := &measurementDispatchDouble{}
+			err := measureThenDispatch(t, selected, c, fs, func(context.Context) error { return nil }, dispatch)
 			var failure *processsvc.NativeFailure
-			if !errors.As(err, &failure) || failure.Unknown || boot.calls != 0 {
+			if !errors.As(err, &failure) || failure.Unknown || dispatch.calls != 0 {
 				t.Fatal("bad measurement reached dispatch or changed refusal", err)
 			}
 			fs.assertCloses(t, 1)
@@ -274,21 +279,21 @@ func TestRootMeasurementsLateSecondaryPolicyChangeNeverDispatches(t *testing.T) 
 	current := selected.selection.Snapshot
 	current.Participant, current.Approval = &p, &a
 	checks := 0
-	boot := &measurementBootstrapDouble{}
+	dispatch := &measurementDispatchDouble{}
 	fs.afterOpen = func(path string) {
 		if path == "/approved/tools/bin" {
 			a.Workspaces[2].RootIdentity.Inode = "late-policy"
 		}
 	}
-	err := measureWithParentDouble(t, selected, c, fs, func(context.Context) error {
+	err := measureThenDispatch(t, selected, c, fs, func(context.Context) error {
 		checks++
 		if !selected.matchesPolicy(c, current) {
 			return errors.New("current secondary approval changed")
 		}
 		return nil
-	}, boot)
+	}, dispatch)
 	var failure *processsvc.NativeFailure
-	if !errors.As(err, &failure) || failure.Unknown || boot.calls != 0 || checks != 2 {
+	if !errors.As(err, &failure) || failure.Unknown || dispatch.calls != 0 || checks != 2 {
 		t.Fatal("late policy change dispatched", err, checks)
 	}
 	fs.assertCloses(t, 1)
