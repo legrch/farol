@@ -67,7 +67,11 @@ func TestNativePreservedProfileDiscoveryWithBuiltCore(t *testing.T) {
 			var in preservedProfileInspectionInput
 			var workspace string
 			if scenario.emptyHistory {
-				in = preservedEmptyProfileFixture(t)
+				// The fixture supplies its own retained root; drop the unused one.
+				if err := os.Remove(base); err != nil {
+					t.Fatal(err)
+				}
+				in = preservedEmptyProfileFixture(t, true)
 				base = filepath.Dir(filepath.Dir(filepath.Dir(in.Profile.Root)))
 				workspace = filepath.Join(in.Profile.Root, "task")
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
