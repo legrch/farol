@@ -131,6 +131,18 @@ source trees receive the same strict TypeScript, lint and architecture checks.
 Shared CSS-pixel layout values live under `src/pkg/shell-layout` so native views,
 IPC validation and the renderer use the same geometry without a host dependency.
 
+No new test may slice production source. `tooling/check-source-slicing.mjs`
+(part of `npm run architecture`, covered by `tests/architecture/source-slicing.test.ts`)
+parses every file under `tests/` and co-located `*.test.*` files and refuses one that
+both reads a production `.ts`/`.tsx`/`.mts`/`.js`/`.go` file under `src/`, `apps/`,
+`boot/`, `modules/`, `pkg/`, `transport/` or `cmd/` and executes code derived from it
+(`node:vm`, `new Function`, `eval`, a transpile followed by a dynamic load, or an
+esbuild `stdin.contents` build). Today's offenders are listed by exact path and
+mechanism in `tests/architecture/source-slicing-allowlist.json`, which only shrinks:
+a listed file that no longer offends fails as stale until removed, and a new offender
+fails. Import the code under test instead. Tests that only assert on source text are
+reported, not blocked.
+
 The accepted Go layout uses `modules/<module>/contracts/<feature>` as a thin
 published in-process facade. It may import its own application/domain to delegate
 to the owner, and deliberately shared pure kernel vocabulary. Its request/response
