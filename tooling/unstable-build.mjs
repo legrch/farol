@@ -65,12 +65,7 @@ export function renderDecision(decision, head) {
 }
 
 // Public release metadata only: the three asset files and step timings.
-export function renderBuildSummary({
-  manifest,
-  checksums,
-  durations,
-  artifact,
-}) {
+export function renderBuildSummary({ manifest, checksums, durations }) {
   const lines = ["## Unstable dry build", ""];
   if (manifest) {
     lines.push(
@@ -88,13 +83,9 @@ export function renderBuildSummary({
       `| Signing | ${manifest.signing}, notarized: ${manifest.notarized} |`,
     );
     if (checksums) lines.push(`| SHA256SUMS | \`${checksums.trim()}\` |`);
-    if (artifact?.id)
-      lines.push(
-        `| Workflow artifact | \`${artifact.name}\` (ID ${artifact.id}), digest \`${artifact.digest}\` |`,
-      );
     lines.push(
       "",
-      "Dry mode: these bytes are unqualified and are not published. The version and build version are the committed ones, so they can collide with an already published release of the same version; never publish or install these bytes as that release.",
+      "Dry mode: these bytes are unqualified, published nowhere and not uploaded; they stay on the runner. The version and build version are the committed ones, so they can collide with an already published release of the same version; never publish or install these bytes as that release.",
     );
   } else lines.push("No release assets were produced.");
   if (durations.length) {
@@ -211,11 +202,6 @@ function summary(env, [assetDirectory, durationsFile]) {
     manifest: manifestText === null ? null : JSON.parse(manifestText),
     checksums: readOptional(path.join(assetDirectory, "SHA256SUMS")),
     durations: parseDurations(readOptional(durationsFile) ?? ""),
-    artifact: {
-      id: env.UNSTABLE_ARTIFACT_ID,
-      name: env.UNSTABLE_ARTIFACT_NAME,
-      digest: env.UNSTABLE_ARTIFACT_DIGEST,
-    },
   });
   appendFile(env.GITHUB_STEP_SUMMARY, markdown, "SUMMARY_REQUIRED");
 }

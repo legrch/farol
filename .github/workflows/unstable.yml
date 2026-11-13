@@ -1,9 +1,10 @@
 name: Unstable build (dry)
 
 # Builds main at most once a day, and only when main changed since the last
-# successful run. Dry mode: no tag, release, draft or publication. The three
-# public release files are kept as a short-lived workflow artifact so later
-# jobs (rehearsal, unstable pre-release, promotion) can consume the same bytes.
+# successful run. Dry mode: it builds, packages, verifies and summarises, then
+# stops. No tag, release, draft, publication or Actions artifact: hosted
+# rebuilds never leave the runner, and these bytes carry the committed release
+# identity.
 on:
   schedule:
     - cron: "17 3 * * *"
@@ -61,8 +62,6 @@ jobs:
     outputs:
       source_sha: ${{ steps.source.outputs.source_sha }}
       version: ${{ steps.source.outputs.version }}
-      artifact_name: ${{ steps.source.outputs.artifact_name }}
-      artifact_id: ${{ steps.upload.outputs.artifact-id }}
       manifest_sha256: ${{ steps.assets.outputs.manifest_sha256 }}
     env:
       SOURCE_SHA: ${{ needs.decide.outputs.source_sha }}
@@ -94,7 +93,6 @@ jobs:
           {
             echo "source_sha=$SOURCE_SHA"
             echo "version=$version"
-            echo "artifact_name=farol-unstable-dry-${SOURCE_SHA:0:12}-run${GITHUB_RUN_NUMBER}"
           } >> "$GITHUB_OUTPUT"
       - name: Provision approved backend build inputs
         run: node tooling/ci-go-inputs.mjs
@@ -122,26 +120,8 @@ jobs:
         run: |
           git diff --check
           test -z "$(git status --porcelain=v1)"
-      # Only the three public release files, never the private/ evidence
-      # directory. Unqualified dry bytes: short retention, no release.
-      - id: upload
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ${{ steps.source.outputs.artifact_name }}
-          path: |
-            _output/release/unstable/Farol-${{ steps.source.outputs.version }}-darwin-arm64.zip
-            _output/release/unstable/farol-release.json
-            _output/release/unstable/SHA256SUMS
-          if-no-files-found: error
-          retention-days: 7
-          compression-level: 0
-          overwrite: false
       - name: Write the job summary
         if: always()
-        env:
-          UNSTABLE_ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
-          UNSTABLE_ARTIFACT_NAME: ${{ steps.source.outputs.artifact_name }}
-          UNSTABLE_ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
         run: node tooling/unstable-build.mjs summary "$ASSET_DIRECTORY" "$DURATIONS"
       - name: Show the failed source gate cases
         if: failure()

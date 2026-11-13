@@ -402,7 +402,6 @@ describe("dry unstable build change check", () => {
       durations: parseDurations(
         "task package\t66\nsource gate (task ci)\t1104\n",
       ),
-      artifact: { id: "7", name: "farol-unstable-dry", digest: "e".repeat(64) },
     });
     expect(markdown).toContain(manifest.archiveSha256);
     expect(markdown).toContain("| task package | 66 |");

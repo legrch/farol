@@ -198,19 +198,19 @@ describe("dry unstable build workflow", () => {
       },
     ],
     [
-      "private evidence upload",
+      "public Actions binary upload",
       (u) => {
-        u.jobs.build.steps.find((step) =>
-          step.uses?.startsWith("actions/upload-artifact@"),
-        ).with.path = "_output/release/unstable";
+        u.jobs.build.steps.push({
+          uses: "actions/upload-artifact@" + "a".repeat(40),
+          with: { path: "_output/release/unstable/SHA256SUMS" },
+        });
       },
     ],
     [
-      "long artifact retention",
+      "artifact output",
       (u) => {
-        u.jobs.build.steps.find((step) =>
-          step.uses?.startsWith("actions/upload-artifact@"),
-        ).with["retention-days"] = 90;
+        u.jobs.build.outputs.artifact_id =
+          "${{ steps.upload.outputs.artifact-id }}";
       },
     ],
     [

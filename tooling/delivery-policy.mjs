@@ -195,8 +195,8 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
   assert.deepEqual(publish.steps[2].env, { GH_TOKEN: "${{ github.token }}" });
 }
 
-// The dry unstable build: read-only, unpublished, and limited to the three
-// public release files in a short-lived workflow artifact.
+// The dry unstable build: read-only and unpublished. Like release preparation,
+// it never transfers unqualified bytes through Actions artifacts or caches.
 export function assertUnstablePolicy(unstable) {
   assert.deepEqual(Object.keys(unstable.on), ["schedule", "workflow_dispatch"]);
   assert.equal(unstable.on.schedule.length, 1);
@@ -263,17 +263,13 @@ export function assertUnstablePolicy(unstable) {
     commands.indexOf("task ci\n") < commands.indexOf("task package"),
     "source gate before package",
   );
-  const uploads = build.steps.filter((step) =>
-    step.uses?.startsWith("actions/upload-artifact@"),
+  assert.doesNotMatch(
+    text,
+    /actions\/(?:upload|download)-artifact|actions\/cache/u,
   );
-  assert.equal(uploads.length, 1);
-  const upload = uploads[0].with;
-  assert.deepEqual(upload.path.trim().split("\n"), [
-    "_output/release/unstable/Farol-${{ steps.source.outputs.version }}-darwin-arm64.zip",
-    "_output/release/unstable/farol-release.json",
-    "_output/release/unstable/SHA256SUMS",
+  assert.deepEqual(Object.keys(build.outputs).sort(), [
+    "manifest_sha256",
+    "source_sha",
+    "version",
   ]);
-  assert.equal(upload["if-no-files-found"], "error");
-  assert.ok(upload["retention-days"] > 0 && upload["retention-days"] <= 7);
-  assert.equal(upload.overwrite, false);
 }
