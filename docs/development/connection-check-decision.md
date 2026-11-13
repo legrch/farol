@@ -103,12 +103,14 @@ a connector added before the optional `checkId` existed rejects that argument
 and the instruction above always ended UNKNOWN in 0.5.24. The status-mode
 instruction now asks for an argument-free call. Go counts an argument-free call
 for the armed check only after that check's own Send has been durably recorded;
-an exact `checkId` still acknowledges, a wrong one never does, and the trusted
-host observation never arms or acknowledges. Accepted limitation: between this
-check's recorded Send and its first argument-free call, any argument-free call
-that reaches the same connector slot acknowledges it, including a delayed call
-from a superseded prompt. Closing that needs a nonce in the call, which a cached
-schema cannot carry.
+if the connector slot cannot record that Send, the check ends UNKNOWN at once
+with `computer_connection_check_send_unrecorded`. An exact `checkId` still
+acknowledges, a wrong one never does, and the trusted host observation never
+arms or acknowledges. Accepted limitation: between this check's recorded Send
+and its first argument-free call, any argument-free call that reaches the same
+connector slot acknowledges it, including a delayed call from a superseded
+prompt. Closing that needs a nonce in the call, which a cached schema cannot
+carry.
 
 Only the sole Go attempt owner may arm the exact diagnostic expectation after
 its durable dispatch intent/readback and before permitting Send. Generate a fresh
@@ -211,6 +213,16 @@ an injected private storage adapter over the existing attempt namespace:
   phase and uncertain effects. Capacity bounds never delete unresolved records.
   Repeated observation is read-only; it neither reclaims a challenge nor advances
   an unknown operation by dispatching again.
+
+**Amendment, 2026-11-13 (PR 141), storage.** Operation history is kept in full:
+no attempt is dropped or refused because of history size, and an unknown
+outcome is never forgotten. The complete record is a schema-2 history file with
+its own presence witness. The schema-1 journal stays exactly as 0.5.24 last
+wrote it, because 0.5.24 refuses to open the whole Computer Store when that
+file holds more than 48 entries or more than one entry that is not verified or
+refused before send. A rollback therefore opens with the record it last wrote;
+a later roll-forward imports the attempts it added and refuses to open if an
+operation ID names a different attempt in the two files.
 
 This is required new implementation, not a guarantee supplied by the current
 challenge-only TypeScript helper or in-memory Go verifier. Route the active
