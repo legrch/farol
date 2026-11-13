@@ -519,7 +519,15 @@ it.each([
       return result;
     });
   }
-  expect(await f.run()).toMatchObject({ ok: false });
+  expect(await f.run()).toMatchObject({
+    ok: false,
+    // An unconfirmed Setup step is persistent: name it, never "still finishing".
+    ...(kind === "pending-original"
+      ? { error: "CONNECTION_CHECK_SETUP_UNRESOLVED" }
+      : kind === "legacy-claim"
+        ? { error: "CONNECTION_CHECK_ALREADY_ATTEMPTED" }
+        : {}),
+  });
   expect(f.sends()).toBe(0);
   expect(f.publish).not.toHaveBeenCalled();
   expect(f.context.chatGptTaskAdmission).toBe(false);
@@ -537,4 +545,54 @@ it("lost Main reply observes original result without resolving a new page or pub
   expect(f.sends()).toBe(1);
   expect(f.publish).toHaveBeenCalledTimes(1);
   expect(f.route.openConnectionCheckChat).toHaveBeenCalledTimes(1);
+});
+// Go's claim supersedes every unsettled earlier attempt, so Main must refuse a
+// second check BEFORE it claims while the first is still live (for example
+// after a renderer reload). Otherwise the newcomer settles the live check as
+// unknown and is then refused itself.
+it("a second check while one is live is refused before any Go claim", async () => {
+  const f = fixture("status");
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const original = f.route.runReadonlyTask.getMockImplementation()!;
+  f.route.runReadonlyTask.mockImplementationOnce(async (...args) => {
+    await gate;
+    return original(...args);
+  });
+  const live = f.run();
+  await vi.waitFor(() =>
+    expect(f.route.runReadonlyTask).toHaveBeenCalledTimes(1),
+  );
+  expect(await f.run()).toMatchObject({
+    ok: false,
+    error: "CHATGPT_TASK_IN_PROGRESS",
+  });
+  expect(f.core.claimConnectionCheck).toHaveBeenCalledTimes(1);
+  release();
+  expect(await live).toMatchObject({ ok: true });
+  expect(f.sends()).toBe(1);
+  expect(f.context.chatGptTaskAdmission).toBe(false);
+  expect(f.context.connectorTaskAdmission).toBe(false);
+});
+it("two checks started together claim in Go only once", async () => {
+  const f = fixture("status");
+  const [first, second] = await Promise.all([f.run(), f.run()]);
+  expect(first).toMatchObject({ ok: true });
+  expect(second).toMatchObject({
+    ok: false,
+    error: "CHATGPT_TASK_IN_PROGRESS",
+  });
+  expect(f.core.claimConnectionCheck).toHaveBeenCalledTimes(1);
+  expect(f.sends()).toBe(1);
+});
+it("a check refuses before claiming while another ChatGPT task holds admission", async () => {
+  const f = fixture("status");
+  f.context.chatGptTaskAdmission = true;
+  expect(await f.run()).toMatchObject({
+    ok: false,
+    error: "CHATGPT_TASK_IN_PROGRESS",
+  });
+  expect(f.core.claimConnectionCheck).not.toHaveBeenCalled();
+  // The other task still owns its admission; the refused check never released it.
+  expect(f.context.chatGptTaskAdmission).toBe(true);
 });

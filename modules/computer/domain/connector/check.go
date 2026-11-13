@@ -12,8 +12,6 @@ import (
 	"strings"
 )
 
-const MaxEntries = 48
-
 type Phase string
 
 const (
@@ -34,10 +32,12 @@ const (
 )
 
 var (
-	ErrRefused  = errors.New("COMPUTER_CONNECTION_CHECK_REFUSED")
-	ErrPending  = errors.New("COMPUTER_CONNECTION_CHECK_PENDING")
-	ErrCapacity = errors.New("COMPUTER_CONNECTION_CHECK_CAPACITY")
-	ErrUnknown  = errors.New("COMPUTER_CONNECTION_CHECK_OUTCOME_UNKNOWN")
+	ErrRefused = errors.New("COMPUTER_CONNECTION_CHECK_REFUSED")
+	ErrUnknown = errors.New("COMPUTER_CONNECTION_CHECK_OUTCOME_UNKNOWN")
+	// ErrSendUnrecorded classifies an unknown outcome: the Send is durably
+	// recorded, but the connector slot could not open the window in which an
+	// argument-free status call acknowledges it. It is returned with ErrUnknown.
+	ErrSendUnrecorded = errors.New("COMPUTER_CONNECTION_CHECK_SEND_UNRECORDED")
 )
 var uuid = regexp.MustCompile("^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 var digest = regexp.MustCompile("^[0-9a-f]{64}$")
@@ -93,6 +93,9 @@ type Entry struct {
 	Receipt *Receipt `json:"receipt,omitempty"`
 }
 
+// Journal is the complete operation history. It is never trimmed: an attempt,
+// above all an unknown one, is never forgotten, so a replayed operation ID is
+// always recognised and never runs again. Its size is not a reason to refuse.
 type Journal struct {
 	Entries []Entry `json:"entries"`
 }
@@ -136,14 +139,15 @@ func ValidScope(s Scope) bool {
 }
 
 // Prompt is a closed, Go-produced document bound to the ORIGINAL operation.
-// It selects exactly one app/tool and carries the exact Go-minted status nonce.
+// It selects exactly one app/tool. A status prompt carries no argument: a
+// cached ChatGPT tool schema may lack checkId, so the Go-minted status nonce
+// stays in Go and is never sent to the model.
 func Prompt(scope Scope) string {
 	switch scope.Mode {
 	case Status:
 		return "Use the selected " + strconv.Quote(scope.AppName) +
-			" app to call computer_connection_status ONCE with the exact argument checkId " +
-			strconv.Quote(scope.CheckID) +
-			". Do not use {} or call any other tool. Report the observed result briefly."
+			" app to call computer_connection_status ONCE with no arguments ({})." +
+			" Do not call any other tool. Report the observed result briefly."
 	case Bootstrap:
 		if scope.WorkspaceID == "" {
 			return "Use the selected " + strconv.Quote(scope.AppName) +
@@ -161,6 +165,12 @@ func Prompt(scope Scope) string {
 }
 func (p Phase) Terminal() bool {
 	return p == Verified || p == RefusedBeforeSend
+}
+
+// Settled phases can no longer advance. An unknown outcome is not terminal
+// (it never becomes verified), but it no longer blocks a new owner check.
+func (p Phase) Settled() bool {
+	return p.Terminal() || p == OutcomeUnknown
 }
 func (e Entry) Valid() bool {
 	if !ValidRequest(e.Request) {
@@ -188,7 +198,7 @@ func (e Entry) Valid() bool {
 	return false
 }
 func (j Journal) Valid() bool {
-	if j.Entries == nil || len(j.Entries) > MaxEntries {
+	if j.Entries == nil {
 		return false
 	}
 	seen := make(map[string]bool)
@@ -198,7 +208,7 @@ func (j Journal) Valid() bool {
 			return false
 		}
 		seen[e.Request.OperationID] = true
-		if !e.Phase.Terminal() {
+		if !e.Phase.Settled() {
 			unsettled++
 		}
 	}
@@ -238,7 +248,7 @@ func (j Journal) Find(id string) (Entry, bool) {
 }
 func (j Journal) Pending() bool {
 	for _, e := range j.Entries {
-		if !e.Phase.Terminal() {
+		if !e.Phase.Settled() {
 			return true
 		}
 	}
@@ -254,18 +264,64 @@ func (j Journal) Begin(req Request) (Journal, bool, error) {
 		}
 		return j.Clone(), false, nil
 	}
-	if j.Pending() {
-		return Journal{}, false, ErrPending
-	}
-	if len(j.Entries) >= MaxEntries {
-		return Journal{}, false, ErrCapacity
-	}
+	// Owner-clicked checks are unlimited. A new click supersedes an earlier
+	// attempt that never settled (lost reply, quit mid-test): it is retained as
+	// refused-before-send when nothing was prepared, otherwise as unknown. The
+	// earlier record is never rewritten to verified and never re-sent.
 	out := j.Clone()
+	for i, e := range out.Entries {
+		out.Entries[i] = settle(e)
+	}
 	out.Entries = append(out.Entries, Entry{Request: req, Phase: Claimed})
 	if !out.Valid() {
 		return Journal{}, false, ErrRefused
 	}
 	return out, true, nil
+}
+
+// settle closes an attempt whose process lifetime ended without settling it:
+// nothing was prepared means it was never sent; anything later is unknown.
+func settle(e Entry) Entry {
+	if e.Phase.Settled() {
+		return e
+	}
+	if e.Phase == Claimed {
+		e.Phase = RefusedBeforeSend
+	} else {
+		e.Phase = OutcomeUnknown
+	}
+	return e
+}
+
+// Import absorbs a predecessor journal into this one. The predecessor image
+// (0.5.24) reads and writes only its own journal, which this build leaves
+// untouched; after a rollback and a roll-forward that journal can hold
+// attempts this one has never seen. Each one is appended and settled, because
+// the lifetime that could advance it has ended. An attempt both journals know
+// must be the same attempt, at most less advanced in the predecessor's copy;
+// anything else refuses, it is never merged or guessed.
+func (j Journal) Import(legacy Journal) (Journal, error) {
+	if !j.Valid() || !legacy.Valid() {
+		return Journal{}, ErrRefused
+	}
+	out := j.Clone()
+	for _, e := range legacy.Clone().Entries {
+		known, ok := out.Find(e.Request.OperationID)
+		if !ok {
+			out.Entries = append(out.Entries, settle(e))
+			continue
+		}
+		if known.Request != e.Request ||
+			(e.Scope != nil && (known.Scope == nil || *known.Scope != *e.Scope)) ||
+			(e.Receipt != nil && (known.Receipt == nil || *known.Receipt != *e.Receipt)) ||
+			(e.Phase.Settled() && known.Phase != e.Phase) {
+			return Journal{}, ErrRefused
+		}
+	}
+	if !out.Valid() {
+		return Journal{}, ErrRefused
+	}
+	return out, nil
 }
 func (j Journal) Advance(id string, next Entry) (Journal, error) {
 	if !j.Valid() || !next.Valid() || next.Request.OperationID != id {

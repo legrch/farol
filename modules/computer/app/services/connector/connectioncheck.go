@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 
 	check "github.com/legrch/farol/modules/computer/domain/connector"
 )
@@ -28,6 +29,7 @@ type ConnectionCheckBinding struct {
 type ConnectionCheckNative interface {
 	CurrentConnectionCheck(context.Context) (ConnectionCheckBinding, error)
 	ArmOriginalStatusCheck(context.Context, string, string, check.Scope) error
+	RecordOriginalStatusSend(context.Context, string, check.Scope) error
 	ConfirmOriginalConnectionCheck(context.Context, string, check.Scope) (string, error)
 	RetireOriginalConnectionCheck(context.Context, string, check.Scope) error
 }
@@ -187,7 +189,20 @@ func (o *ConnectionCheckOwner) RetainSend(ctx context.Context, id string, knownS
 		phase = check.SendAcknowledged
 	}
 	e, _, err := o.store.AdvanceConnectionCheck(ctx, id, phase, nil)
-	return e, err
+	if err != nil || !knownSend || e.Scope == nil {
+		return e, err
+	}
+	// Only a durably recorded Send lets an argument-free status call count for
+	// this check. If the slot cannot record it (closing, restarted, re-armed or
+	// a cancelled call), no call can acknowledge this check any more: end it
+	// unknown now, with a classified reason, rather than leave it to time out.
+	// It is never re-sent and never verified. A failed settle leaves the
+	// recorded Send, which the next owner check settles as unknown.
+	if err = o.native.RecordOriginalStatusSend(ctx, id, *e.Scope); err != nil {
+		_, _, _ = o.store.AdvanceConnectionCheck(ctx, id, check.OutcomeUnknown, nil)
+		return check.Entry{}, errors.Join(check.ErrUnknown, check.ErrSendUnrecorded)
+	}
+	return e, nil
 }
 func (o *ConnectionCheckOwner) RefuseBeforeDispatch(ctx context.Context, id string) (check.Entry, error) {
 	if !o.valid() || ctx == nil || ctx.Err() != nil {

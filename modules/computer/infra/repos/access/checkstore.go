@@ -14,36 +14,90 @@ import (
 // The existing Store's lifetime mutex/flock is the only owner of original
 // explicit connection-check records. It does not create another approval or
 // persist browser/app credentials. A distinct first-presence witness is durable.
+//
+// Two files hold the records. The predecessor journal (0.5.24, schema 1) is
+// only read, so a rollback finds exactly what the predecessor last wrote. The
+// full history (schema 2) is the source of truth; its first write absorbs the
+// predecessor journal, and a later change to that journal (a rollback that ran
+// checks, then a roll-forward) is imported, never ignored.
 func (s *Store) restoreConnectionChecks() error {
-	marked, err := s.disk.connectionCheckWitness()
+	legacy, legacyDigest, err := s.readLegacyConnectionChecks(true)
 	if err != nil {
 		return err
 	}
-	raw, err := s.disk.readConnectionChecks()
+	marked, err := s.disk.connectionCheckWitness(historyCheckFile)
+	if err != nil {
+		return err
+	}
+	raw, err := s.disk.readConnectionChecks(historyCheckFile)
 	if !marked && errors.Is(err, os.ErrNotExist) {
-		s.checks = check.Journal{Entries: []check.Entry{}}
+		s.checks, s.checksLegacy = legacy, legacyDigest
 		return nil
 	}
 	if !marked || err != nil {
 		return unavailable()
 	}
-	parsed, err := decodeConnectionChecks(s.binding, raw)
+	parsed, recorded, err := decodeConnectionCheckHistory(s.binding, raw)
 	if err != nil {
 		return err
 	}
-	if err = s.disk.qualifyConnectionChecks(raw); err != nil {
+	if err = s.disk.qualifyConnectionChecks(historyCheckFile, raw); err != nil {
 		return err
 	}
-	s.checks, s.checksPresent, s.checksDigest = parsed, true, digest(raw)
+	if recorded != legacyDigest {
+		// A predecessor journal cannot disappear once absorbed: its own
+		// witness forbids that. Different bytes are the predecessor's own
+		// later attempts; they persist with this history's next write.
+		if recorded != "" && legacyDigest == "" {
+			return unavailable()
+		}
+		if parsed, err = parsed.Import(legacy); err != nil {
+			return unavailable()
+		}
+	}
+	s.checks, s.checksPresent, s.checksDigest, s.checksLegacy = parsed, true, digest(raw), legacyDigest
 	return nil
 }
+
+// readLegacyConnectionChecks reads the predecessor journal exactly as the
+// predecessor does, without ever writing it. qualify re-syncs its unchanged
+// bytes at restore, as the predecessor itself does.
+func (s *Store) readLegacyConnectionChecks(qualify bool) (check.Journal, string, error) {
+	empty := check.Journal{Entries: []check.Entry{}}
+	marked, err := s.disk.connectionCheckWitness(legacyCheckFile)
+	if err != nil {
+		return check.Journal{}, "", err
+	}
+	raw, err := s.disk.readConnectionChecks(legacyCheckFile)
+	if !marked && errors.Is(err, os.ErrNotExist) {
+		return empty, "", nil
+	}
+	if !marked || err != nil {
+		return check.Journal{}, "", unavailable()
+	}
+	parsed, err := decodeConnectionChecks(s.binding, raw)
+	if err != nil {
+		return check.Journal{}, "", err
+	}
+	if qualify {
+		if err = s.disk.qualifyConnectionChecks(legacyCheckFile, raw); err != nil {
+			return check.Journal{}, "", err
+		}
+	}
+	sum := digest(raw)
+	return parsed, hex.EncodeToString(sum[:]), nil
+}
 func (s *Store) checkConnectionStorage() error {
-	marked, err := s.disk.connectionCheckWitness()
+	if _, legacy, err := s.readLegacyConnectionChecks(false); err != nil || legacy != s.checksLegacy {
+		s.poisoned = true
+		return refuse(err)
+	}
+	marked, err := s.disk.connectionCheckWitness(historyCheckFile)
 	if err != nil {
 		s.poisoned = true
 		return err
 	}
-	raw, err := s.disk.readConnectionChecks()
+	raw, err := s.disk.readConnectionChecks(historyCheckFile)
 	if !s.checksPresent {
 		if marked || !errors.Is(err, os.ErrNotExist) {
 			s.poisoned = true
@@ -74,17 +128,20 @@ func (s *Store) CheckPending(ctx context.Context) (bool, error) {
 	}
 	return s.checks.Pending(), nil
 }
+
+// writeConnectionCheck writes only the full history, recording the predecessor
+// journal it has absorbed. The predecessor journal itself is never written.
 func (s *Store) writeConnectionCheck(next check.Journal, first bool) error {
-	raw, err := encodeConnectionChecks(s.binding, next)
+	raw, err := encodeConnectionCheckHistory(s.binding, next, s.checksLegacy)
 	if err != nil {
 		return err
 	}
 	if first {
-		if err = s.disk.markConnectionCheckWitness(); err == nil {
-			err = s.disk.beginConnectionChecks(raw)
+		if err = s.disk.markConnectionCheckWitness(historyCheckFile); err == nil {
+			err = s.disk.beginConnectionChecks(historyCheckFile, raw)
 		}
 	} else {
-		err = s.disk.updateConnectionChecks(raw, s.checksDigest)
+		err = s.disk.updateConnectionChecks(historyCheckFile, raw, s.checksDigest)
 	}
 	if err != nil {
 		s.poisoned = true

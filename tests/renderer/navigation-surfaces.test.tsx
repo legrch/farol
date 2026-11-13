@@ -117,19 +117,17 @@ describe("closed renderer destinations", () => {
     const selfTest = vi.spyOn(h.c, "selfTest");
     vi.mocked(h.f.api.configure).mockClear();
     const arrow = h.host.querySelector<HTMLButtonElement>(
-      '[aria-label="More connection tests"]',
+      '[aria-label="More checks"]',
     )!;
     await act(async () => arrow.click());
     expect(h.c.getSnapshot().overlay).toBe("connection-tests");
-    expect(
-      h.host.querySelector('dialog[aria-label="Connection tests"]'),
-    ).toBeTruthy();
+    expect(h.host.querySelector('dialog[aria-label="Checks"]')).toBeTruthy();
     expect(vi.mocked(h.f.api.layout).mock.calls.at(-1)?.[5]).toBe("task-menu");
     expect(selfTest).not.toHaveBeenCalled();
-    await h.click("Previous test results");
+    await h.click("Previous check results");
     expect(h.c.getSnapshot().overlay).toBe("deep-test");
     const dialog = h.host.querySelector(
-      'dialog[aria-label="Previous test results"]',
+      'dialog[aria-label="Previous check results"]',
     )!;
     expect(dialog).toBeTruthy();
     expect(vi.mocked(h.f.api.layout).mock.calls.at(-1)?.[5]).toBe("task-menu");
@@ -155,12 +153,10 @@ describe("closed renderer destinations", () => {
     await act(async () => h.c.navigate({ area: "chatgpt" }));
     await act(async () =>
       h.host
-        .querySelector<HTMLButtonElement>(
-          '[aria-label="More connection tests"]',
-        )!
+        .querySelector<HTMLButtonElement>('[aria-label="More checks"]')!
         .click(),
     );
-    await h.click("Previous test results");
+    await h.click("Previous check results");
     vi.mocked(h.f.api.configure).mockClear();
     h.reply(async () => {
       throw new Error("scripted lost status reply");
@@ -186,13 +182,11 @@ describe("closed renderer destinations", () => {
     vi.mocked(h.f.api.configure).mockClear();
     await act(async () =>
       h.host
-        .querySelector<HTMLButtonElement>(
-          '[aria-label="More connection tests"]',
-        )!
+        .querySelector<HTMLButtonElement>('[aria-label="More checks"]')!
         .click(),
     );
     expect(h.f.api.configure).not.toHaveBeenCalled();
-    const button = h.button("Deep test")!;
+    const button = h.button("Full check")!;
     await act(async () => {
       button.click();
       button.click();
@@ -227,12 +221,10 @@ describe("closed renderer destinations", () => {
     });
     await act(async () =>
       h.host
-        .querySelector<HTMLButtonElement>(
-          '[aria-label="More connection tests"]',
-        )!
+        .querySelector<HTMLButtonElement>('[aria-label="More checks"]')!
         .click(),
     );
-    await h.click("Previous test results");
+    await h.click("Previous check results");
     expect(read).not.toHaveBeenCalled();
     expect(h.host.querySelector("dialog select")).toBeNull();
     await h.click("Previous local results");
@@ -252,14 +244,14 @@ describe("closed renderer destinations", () => {
     [
       "failed_before_submit",
       "CHATGPT_COMPOSER_DRAFT_PRESENT",
-      "Deep test was not sent",
+      "Full check was not sent",
     ],
     [
       "outcome_unknown",
       "CHATGPT_TASK_ERROR",
-      "Could not confirm whether the request was sent",
+      "Could not confirm whether the Full check was sent",
     ],
-    ["send_requested", null, "Send requested. View ChatGPT."],
+    ["send_requested", null, "Full check sent. View ChatGPT."],
   ] as const)(
     "keeps %s feedback visible after the overlay closes",
     async (state, code, text) => {
@@ -285,12 +277,10 @@ describe("closed renderer destinations", () => {
       }));
       await act(async () =>
         h.host
-          .querySelector<HTMLButtonElement>(
-            '[aria-label="More connection tests"]',
-          )!
+          .querySelector<HTMLButtonElement>('[aria-label="More checks"]')!
           .click(),
       );
-      await h.click("Deep test");
+      await h.click("Full check");
       expect(h.c.getSnapshot().overlay).toBe("none");
       expect(h.host.textContent).toContain(text);
       expect(
@@ -312,17 +302,15 @@ describe("closed renderer destinations", () => {
     await act(async () => h.c.navigate({ area: "chatgpt" }));
     await act(async () =>
       h.host
-        .querySelector<HTMLButtonElement>(
-          '[aria-label="More connection tests"]',
-        )!
+        .querySelector<HTMLButtonElement>('[aria-label="More checks"]')!
         .click(),
     );
     const send = vi
       .spyOn(h.c, "configure")
       .mockRejectedValueOnce(Error("lost"));
-    await h.click("Deep test");
+    await h.click("Full check");
     expect(h.host.textContent).toContain(
-      "Could not confirm whether the request was sent",
+      "Could not confirm whether the Full check was sent",
     );
     expect(send).toHaveBeenCalledTimes(1);
   });
@@ -339,14 +327,12 @@ describe("closed renderer destinations", () => {
     });
     await act(async () =>
       h.host
-        .querySelector<HTMLButtonElement>(
-          '[aria-label="More connection tests"]',
-        )!
+        .querySelector<HTMLButtonElement>('[aria-label="More checks"]')!
         .click(),
     );
-    await h.click("Deep test");
+    await h.click("Full check");
     expect(h.host.textContent).toContain(
-      "Could not confirm whether the request was sent",
+      "Could not confirm whether the Full check was sent",
     );
     expect(
       vi

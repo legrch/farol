@@ -386,8 +386,12 @@ kbd {
 .desktop[data-sidebar="rail"] .rail-version-label {
   display: none;
 }
+/* The collapsed rail keeps the real number visible (62px fits "0.10.13"). */
 .desktop[data-sidebar="rail"] .rail-version-compact {
   display: inline;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .rail-connection {
   font-size: 12px;

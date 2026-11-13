@@ -216,7 +216,7 @@ export function SelfTestPanel({
 
   return (
     <section className="home-self-test" aria-labelledby="self-test-title">
-      <h2 id="self-test-title">Deep test</h2>
+      <h2 id="self-test-title">Full check</h2>
       <p>
         Check file operations and commands. The test uses the selected
         workspace, creates a temporary folder and removes it when safe.
@@ -305,7 +305,7 @@ export function SelfTestPanel({
           (entry) => entry.phase === "completed" || entry.phase === "failed",
         ) && (
           <details>
-            <summary>Previous test results</summary>
+            <summary>Previous check results</summary>
             <ul>
               {records
                 .filter(
