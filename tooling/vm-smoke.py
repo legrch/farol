@@ -1447,13 +1447,13 @@ class Runner:
         received a request, so the copied app.zip, node runtime, driver bundle,
         native blobs and report directory are plain host output of this run.
         """
-        if getattr(self, 'effect_owned', False) or getattr(self, 'effect_file', None) is None:
-            return []
-        if not self.effect_fence_definitely_absent():
-            return []
-        # Published before the first removal so a later failure still reports
-        # what is already gone.
+        # Published before any decision or removal so a later failure still
+        # reports exactly what is already gone (nothing, when retained).
         removed = self.staging_removed = []
+        if getattr(self, 'effect_owned', False) or getattr(self, 'effect_file', None) is None:
+            return removed
+        if not self.effect_fence_definitely_absent():
+            return removed
         for label, path in self.owned_staging():
             try:
                 info = path.lstat()
