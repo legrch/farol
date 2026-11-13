@@ -114,9 +114,11 @@ func randomIngressID() (string, error) {
 // The claim set records every consumed operation ID for this backend lifetime
 // and is never pruned; a durable operation-ID record is deferred. Ordinary
 // claims stop short of capacity so the last slots stay with the calls that
-// only REMOVE authority (connector Close, authority Deactivate): a full set
-// can refuse new authority, never its withdrawal. A reserved claim grants
-// nothing, and once ordinary claims are refused no new authority can follow.
+// only REMOVE authority (connector Close, authority Deactivate, read-intent
+// withdrawal): a full set can refuse new authority, never its withdrawal. A
+// reserved claim grants nothing, and once ordinary claims are refused no new
+// authority can follow. Process cancel and continuity withdrawal stay ordinary:
+// a refused cancel can be repeated, and continuity is a multi-step transition.
 const (
 	claimCapacity          = 4096
 	claimWithdrawalReserve = 64

@@ -118,7 +118,8 @@ minutes, but finite pools remain behind them: each Open and each Close claims
 one ingress operation ID, and that claim set holds 4096 IDs per backend
 lifetime and is never pruned (a durable operation-ID record is deferred). So
 about 2,000 Open/Close cycles end reconnects in one backend lifetime. Its last
-64 slots are reserved for connector Close and authority Deactivate, so a full
+64 slots are reserved for connector Close, authority Deactivate and read-intent
+withdrawal, so a full
 set refuses new authority but never its withdrawal. Durable participants grow
 by one per backend lifetime or connector generation, within the access Store
 bound. Its initial surface is catalogue/bootstrap/list/read/search and connector verification,
