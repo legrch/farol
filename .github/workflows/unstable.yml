@@ -1,0 +1,148 @@
+name: Unstable build (dry)
+
+# Builds main at most once a day, and only when main changed since the last
+# successful run. Dry mode: no tag, release, draft or publication. The three
+# public release files are kept as a short-lived workflow artifact so later
+# jobs (rehearsal, unstable pre-release, promotion) can consume the same bytes.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Build even when main is unchanged since the last successful unstable run
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One unstable build at a time. Never cancel a running build; GitHub keeps at
+# most one pending run in the group, and its change check runs after the
+# earlier run has finished.
+concurrency:
+  group: unstable-main
+  cancel-in-progress: false
+
+jobs:
+  decide:
+    if: github.repository == 'legrch/farol'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+      source_sha: ${{ steps.decide.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.20.0
+      - id: decide
+        name: Compare main with the last successful unstable run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UNSTABLE_FORCE: ${{ inputs.force == true }}
+        # Read-only Actions metadata. A failed or ambiguous read fails this
+        # job instead of guessing that main is unchanged.
+        run: node tooling/unstable-build.mjs decide
+
+  build:
+    needs: decide
+    if: needs.decide.outputs.build == 'true'
+    runs-on: macos-26
+    timeout-minutes: 60
+    outputs:
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      version: ${{ steps.source.outputs.version }}
+      artifact_name: ${{ steps.source.outputs.artifact_name }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      manifest_sha256: ${{ steps.assets.outputs.manifest_sha256 }}
+    env:
+      SOURCE_SHA: ${{ needs.decide.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.decide.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Start the step clock
+        run: |
+          date +%s > "$RUNNER_TEMP/unstable-clock"
+          {
+            echo "ASSET_DIRECTORY=$GITHUB_WORKSPACE/_output/release/unstable"
+            echo "DURATIONS=$RUNNER_TEMP/unstable-durations.tsv"
+          } >> "$GITHUB_ENV"
+      - uses: ./.github/actions/setup-ci
+        with:
+          native: "true"
+      - id: source
+        name: Pin the exact clean main commit and its committed identity
+        run: |
+          printf 'toolchain setup\t%s\n' "$(( $(date +%s) - $(cat "$RUNNER_TEMP/unstable-clock") ))" >> "$DURATIONS"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
+          test -z "$(git status --porcelain=v1)"
+          node tooling/release-preflight.mjs
+          version="$(node -p 'require("./package.json").version')"
+          {
+            echo "source_sha=$SOURCE_SHA"
+            echo "version=$version"
+            echo "artifact_name=farol-unstable-dry-${SOURCE_SHA:0:12}-run${GITHUB_RUN_NUMBER}"
+          } >> "$GITHUB_OUTPUT"
+      - name: Provision approved backend build inputs
+        run: node tooling/ci-go-inputs.mjs
+      - name: Run the full unchanged source gate including secret scans
+        run: |
+          start=$(date +%s)
+          task ci
+          printf 'source gate (task ci)\t%s\n' "$(( $(date +%s) - start ))" >> "$DURATIONS"
+      - name: Build the exact clean candidate
+        run: |
+          start=$(date +%s)
+          test -z "$(git status --porcelain=v1)"
+          task package -- --go-inputs="$GITHUB_WORKSPACE/_output/go-build-inputs.json"
+          printf 'task package\t%s\n' "$(( $(date +%s) - start ))" >> "$DURATIONS"
+      - id: assets
+        name: Prepare and verify the three public assets
+        run: |
+          start=$(date +%s)
+          mkdir -p "$(dirname "$ASSET_DIRECTORY")"
+          /usr/bin/python3 -I tooling/prepare-release-archive.py "$SOURCE_SHA" "$ASSET_DIRECTORY"
+          node tooling/verify-release-assets.mjs "$ASSET_DIRECTORY"
+          echo "manifest_sha256=$(shasum -a 256 "$ASSET_DIRECTORY/farol-release.json" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          printf 'prepare and verify assets\t%s\n' "$(( $(date +%s) - start ))" >> "$DURATIONS"
+      - name: Require unchanged source
+        run: |
+          git diff --check
+          test -z "$(git status --porcelain=v1)"
+      # Only the three public release files, never the private/ evidence
+      # directory. Unqualified dry bytes: short retention, no release.
+      - id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.source.outputs.artifact_name }}
+          path: |
+            _output/release/unstable/Farol-${{ steps.source.outputs.version }}-darwin-arm64.zip
+            _output/release/unstable/farol-release.json
+            _output/release/unstable/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          overwrite: false
+      - name: Write the job summary
+        if: always()
+        env:
+          UNSTABLE_ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          UNSTABLE_ARTIFACT_NAME: ${{ steps.source.outputs.artifact_name }}
+          UNSTABLE_ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+        run: node tooling/unstable-build.mjs summary "$ASSET_DIRECTORY" "$DURATIONS"
+      - name: Show the failed source gate cases
+        if: failure()
+        run: node tooling/print-failed-scope.mjs _output/evidence/test-scopes
