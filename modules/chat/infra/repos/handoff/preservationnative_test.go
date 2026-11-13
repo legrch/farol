@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	"github.com/legrch/farol/pkg/descriptor"
 )
 
 var preservationNative = flag.Bool("chat-preservation-native", false, "run retained disposable handoff preservation-claim checks")
@@ -103,7 +104,7 @@ func TestPreservationNativeRetainsNonemptyAndInitialCanonicalHandoffClaims(t *te
 		}
 		for name, before := range before {
 			after, ok := after[name]
-			if !ok || before.digest != after.digest || !stable(before.meta, after.meta) {
+			if !ok || before.digest != after.digest || !descriptor.Stable(before.meta, after.meta) {
 				t.Fatal("inspection mutated bytes/metadata", name)
 			}
 		}
@@ -225,7 +226,7 @@ func TestPreservationNativeEmptyHeadIsCopiedAndNotSerialized(t *testing.T) {
 	}
 	for name, prior := range before {
 		current, ok := after[name]
-		if !ok || prior.digest != current.digest || !stable(prior.meta, current.meta) {
+		if !ok || prior.digest != current.digest || !descriptor.Stable(prior.meta, current.meta) {
 			t.Fatal("observation changed retained history")
 		}
 	}

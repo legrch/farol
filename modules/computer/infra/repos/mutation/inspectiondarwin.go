@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/legrch/farol/pkg/descriptor"
 	"golang.org/x/sys/unix"
 )
 
@@ -36,9 +37,9 @@ func inspectEmptyExisting(ctx context.Context, root Root) (result *EmptyInspecti
 	if len(names) != 0 {
 		return nil, failure("COMPUTER_MUTATION_STORE_NOT_EMPTY")
 	}
-	after, err := stat(d.dir)
-	afterLock, lockErr := stat(d.lock)
-	if err != nil || lockErr != nil || !stable(initial, after) || !stable(d.lockIdentity, afterLock) || afterLock.Size != 0 || d.check() != nil || ctx.Err() != nil {
+	after, err := descriptor.Stat(d.dir)
+	afterLock, lockErr := descriptor.Stat(d.lock)
+	if err != nil || lockErr != nil || !descriptor.Stable(initial, after) || !descriptor.Stable(d.lockIdentity, afterLock) || afterLock.Size != 0 || d.check() != nil || ctx.Err() != nil {
 		return nil, unavailable()
 	}
 	return &EmptyInspection{Root: root, MutationsDevice: uint64(after.Dev), MutationsInode: after.Ino, LockDevice: uint64(d.lockIdentity.Dev), LockInode: d.lockIdentity.Ino}, nil
@@ -75,16 +76,16 @@ func checkClosedEmptyIdentity(d *disk) error {
 	// Ancestors retain their descriptor/name identity. The selected private
 	// root, mutations directory and writer lock also retain their full versions.
 	for _, p := range d.pins[len(d.pins)-2:] {
-		current, err := stat(p.fd)
+		current, err := descriptor.Stat(p.fd)
 		var named unix.Stat_t
-		if err != nil || !stable(p.initial, current) || unix.Fstatat(p.parent, p.name, &named, unix.AT_SYMLINK_NOFOLLOW) != nil || !stable(current, named) {
+		if err != nil || !descriptor.Stable(p.initial, current) || unix.Fstatat(p.parent, p.name, &named, unix.AT_SYMLINK_NOFOLLOW) != nil || !descriptor.Stable(current, named) {
 			return unavailable()
 		}
 	}
-	current, err := stat(d.lock)
+	current, err := descriptor.Stat(d.lock)
 	var named unix.Stat_t
 	root := d.pins[len(d.pins)-2].fd
-	if err != nil || current.Size != 0 || !stable(d.lockIdentity, current) || unix.Fstatat(root, writerName, &named, unix.AT_SYMLINK_NOFOLLOW) != nil || !stable(current, named) {
+	if err != nil || current.Size != 0 || !descriptor.Stable(d.lockIdentity, current) || unix.Fstatat(root, writerName, &named, unix.AT_SYMLINK_NOFOLLOW) != nil || !descriptor.Stable(current, named) {
 		return unavailable()
 	}
 	return d.check()

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	"github.com/legrch/farol/pkg/descriptor"
 )
 
 // Authored for the Lead only; the existing native flag is opt-in. Fixtures are
@@ -54,7 +55,7 @@ func TestInterruptedRetirementNativeHandoffClaimCopyAndReadOnly(t *testing.T) {
 	}
 	for name, b := range before {
 		a, ok := after[name]
-		if !ok || !stable(b.meta, a.meta) || b.digest != a.digest {
+		if !ok || !descriptor.Stable(b.meta, a.meta) || b.digest != a.digest {
 			t.Fatal("inspection changed inode or bytes", name)
 		}
 	}

@@ -2,13 +2,12 @@ package access
 
 import (
 	"bytes"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
 
+	"github.com/legrch/farol/pkg/descriptor"
 	"github.com/legrch/farol/pkg/limit"
 	"golang.org/x/sys/unix"
 )
@@ -29,14 +28,10 @@ type disk struct {
 	closed        bool
 }
 
+// private binds the descriptor predicate to the effective uid read at each call.
 func private(s unix.Stat_t, kind uint32, mode uint32) bool {
-	return uint32(s.Mode)&unix.S_IFMT == kind && uint32(s.Mode)&07777 == mode && s.Uid == uint32(os.Geteuid()) && (kind == unix.S_IFDIR || s.Nlink == 1)
+	return descriptor.Private(s, kind, mode, uint32(os.Geteuid()))
 }
-func same(a, b unix.Stat_t) bool { return a.Dev == b.Dev && a.Ino == b.Ino }
-func stableState(a, b unix.Stat_t) bool {
-	return same(a, b) && a.Mode == b.Mode && a.Size == b.Size && a.Uid == b.Uid && a.Nlink == b.Nlink && a.Mtim == b.Mtim && a.Ctim == b.Ctim
-}
-func fdstat(fd int) (unix.Stat_t, error) { var s unix.Stat_t; err := unix.Fstat(fd, &s); return s, err }
 func openDisk(root string) (*disk, error) {
 	return openDiskWithCleanup(root, nativeCleanup{})
 }
@@ -61,14 +56,14 @@ func openDiskWithCleanup(root string, cleanup nativeCleanup) (*disk, error) {
 		}
 		return nil, constructorError(errors.Join(primary, closed), status)
 	}
-	if d.identity, err = fdstat(dir); err != nil || !private(d.identity, unix.S_IFDIR, 0700) {
+	if d.identity, err = descriptor.Stat(dir); err != nil || !private(d.identity, unix.S_IFDIR, 0700) {
 		return fail(refuse(err))
 	}
 	d.lock, err = unix.Openat(dir, lockName, unix.O_RDWR|unix.O_CREAT|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0600)
 	if err != nil {
 		return fail(refuse(err))
 	}
-	if d.lockIdentity, err = fdstat(d.lock); err != nil || !private(d.lockIdentity, unix.S_IFREG, 0600) {
+	if d.lockIdentity, err = descriptor.Stat(d.lock); err != nil || !private(d.lockIdentity, unix.S_IFREG, 0600) {
 		return fail(refuse(err))
 	}
 	if err = unix.Flock(d.lock, unix.LOCK_EX|unix.LOCK_NB); err != nil {
@@ -84,18 +79,18 @@ func (d *disk) check() error {
 		return refuse(d.cleanupErr, d.closeErr)
 	}
 	var named, lock unix.Stat_t
-	current, err := fdstat(d.dir)
-	if err != nil || !same(current, d.identity) || !private(current, unix.S_IFDIR, 0700) {
+	current, err := descriptor.Stat(d.dir)
+	if err != nil || !descriptor.Same(current, d.identity) || !private(current, unix.S_IFDIR, 0700) {
 		return refuse(err)
 	}
-	if err = unix.Lstat(d.root, &named); err != nil || !same(named, d.identity) || !private(named, unix.S_IFDIR, 0700) {
+	if err = unix.Lstat(d.root, &named); err != nil || !descriptor.Same(named, d.identity) || !private(named, unix.S_IFDIR, 0700) {
 		return refuse(err)
 	}
-	current, err = fdstat(d.lock)
-	if err != nil || !same(current, d.lockIdentity) || !private(current, unix.S_IFREG, 0600) {
+	current, err = descriptor.Stat(d.lock)
+	if err != nil || !descriptor.Same(current, d.lockIdentity) || !private(current, unix.S_IFREG, 0600) {
 		return refuse(err)
 	}
-	if err = unix.Fstatat(d.dir, lockName, &lock, unix.AT_SYMLINK_NOFOLLOW); err != nil || !same(lock, d.lockIdentity) || !private(lock, unix.S_IFREG, 0600) {
+	if err = unix.Fstatat(d.dir, lockName, &lock, unix.AT_SYMLINK_NOFOLLOW); err != nil || !descriptor.Same(lock, d.lockIdentity) || !private(lock, unix.S_IFREG, 0600) {
 		return refuse(err)
 	}
 	canonical, err := filepath.EvalSymlinks(d.root)
@@ -140,7 +135,7 @@ func (d *disk) read() (raw []byte, err error) {
 			raw, err = nil, refuse(err, closed)
 		}
 	}()
-	before, err := fdstat(fd)
+	before, err := descriptor.Stat(fd)
 	if err != nil || !private(before, unix.S_IFREG, 0600) || before.Size < 1 || before.Size > maxReadStateBytes {
 		return nil, refuse(err)
 	}
@@ -148,13 +143,13 @@ func (d *disk) read() (raw []byte, err error) {
 	if err != nil {
 		return nil, refuse(err)
 	}
-	after, err := fdstat(fd)
+	after, err := descriptor.Stat(fd)
 	var named unix.Stat_t
 	// Reading may change atime; only authority-relevant metadata must remain stable.
-	if err != nil || !stableState(before, after) {
+	if err != nil || !descriptor.Stable(before, after) {
 		return nil, refuse(err)
 	}
-	if err = unix.Fstatat(d.dir, stateName, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil || !stableState(named, after) || !private(named, unix.S_IFREG, 0600) {
+	if err = unix.Fstatat(d.dir, stateName, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil || !descriptor.Stable(named, after) || !private(named, unix.S_IFREG, 0600) {
 		return nil, refuse(err)
 	}
 	if err = d.check(); err != nil {
@@ -204,11 +199,10 @@ func (d *disk) writeWithPublication(raw []byte, expected [32]byte, withPublicati
 	if err = d.check(); err != nil {
 		return err
 	}
-	var token [16]byte
-	if _, err = rand.Read(token[:]); err != nil {
+	name, err := descriptor.Name(".computer-access-", 16, ".tmp")
+	if err != nil {
 		return refuse(err)
 	}
-	name := ".computer-access-" + hex.EncodeToString(token[:]) + ".tmp"
 	fd, err := unix.Openat(d.dir, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
 	if err != nil {
 		return refuse(err)
@@ -307,17 +301,17 @@ func (d *disk) confirm(expected []byte) (err error) {
 			err = refuse(err, closed)
 		}
 	}()
-	before, err := fdstat(fd)
+	before, err := descriptor.Stat(fd)
 	if err != nil || !private(before, unix.S_IFREG, 0600) || before.Size != int64(len(expected)) {
 		return refuse(err)
 	}
 	raw, err := limit.Read(file, maxReadStateBytes)
-	after, statErr := fdstat(fd)
+	after, statErr := descriptor.Stat(fd)
 	var named unix.Stat_t
-	if err != nil || statErr != nil || !bytes.Equal(raw, expected) || !stableState(before, after) {
+	if err != nil || statErr != nil || !bytes.Equal(raw, expected) || !descriptor.Stable(before, after) {
 		return refuse(err, statErr)
 	}
-	if err = unix.Fstatat(d.dir, stateName, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil || !stableState(named, after) {
+	if err = unix.Fstatat(d.dir, stateName, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil || !descriptor.Stable(named, after) {
 		return refuse(err)
 	}
 	if err = d.check(); err != nil {
@@ -329,11 +323,11 @@ func (d *disk) confirm(expected []byte) (err error) {
 	if err = d.syncDirectory(d.dir); err != nil {
 		return &CommitFailure{Unknown: true, cause: err}
 	}
-	after, err = fdstat(fd)
-	if err != nil || !stableState(before, after) {
+	after, err = descriptor.Stat(fd)
+	if err != nil || !descriptor.Stable(before, after) {
 		return &CommitFailure{Unknown: true, cause: err}
 	}
-	if err = unix.Fstatat(d.dir, stateName, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil || !stableState(named, after) {
+	if err = unix.Fstatat(d.dir, stateName, &named, unix.AT_SYMLINK_NOFOLLOW); err != nil || !descriptor.Stable(named, after) {
 		return &CommitFailure{Unknown: true, cause: err}
 	}
 	if err = d.check(); err != nil {

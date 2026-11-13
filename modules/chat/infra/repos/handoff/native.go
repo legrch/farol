@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	"github.com/legrch/farol/pkg/descriptor"
 	"github.com/legrch/farol/pkg/limit"
 	"golang.org/x/sys/unix"
 )
@@ -33,16 +34,8 @@ type disk struct {
 	poisonErr                      error
 }
 
-func stat(fd int) (unix.Stat_t, error) { var s unix.Stat_t; err := unix.Fstat(fd, &s); return s, err }
-func physical(s unix.Stat_t, kind, mode, uid uint32) bool {
-	return uint32(s.Mode)&unix.S_IFMT == kind && uint32(s.Mode)&07777 == mode && s.Uid == uid && (kind == unix.S_IFDIR || s.Nlink == 1)
-}
-func same(a, b unix.Stat_t) bool { return a.Dev == b.Dev && a.Ino == b.Ino }
-func stable(a, b unix.Stat_t) bool {
-	return same(a, b) && a.Mode == b.Mode && a.Uid == b.Uid && a.Nlink == b.Nlink && a.Size == b.Size && a.Mtim == b.Mtim && a.Ctim == b.Ctim
-}
 func qualified(s unix.Stat_t, r port.JournalRoot) bool {
-	return physical(s, unix.S_IFDIR, 0700, r.OwnerUID) && uint64(s.Dev) == r.Device && uint64(s.Ino) == r.Inode && r.Device != 0 && r.Inode != 0
+	return descriptor.Private(s, unix.S_IFDIR, 0700, r.OwnerUID) && uint64(s.Dev) == r.Device && uint64(s.Ino) == r.Inode && r.Device != 0 && r.Inode != 0
 }
 func openDisk(ctx context.Context, roots Roots) (storage, error) {
 	uid := uint32(os.Geteuid())
@@ -67,7 +60,7 @@ func openDisk(ctx context.Context, roots Roots) (storage, error) {
 	if err != nil {
 		return failure(Refused)
 	}
-	d.parentMeta, err = stat(d.parent)
+	d.parentMeta, err = descriptor.Stat(d.parent)
 	if err != nil || !qualified(d.parentMeta, roots.Parent.Identity) {
 		return failure(Refused)
 	}
@@ -75,7 +68,7 @@ func openDisk(ctx context.Context, roots Roots) (storage, error) {
 	if err != nil {
 		return failure(Refused)
 	}
-	d.dirMeta, err = stat(d.dir)
+	d.dirMeta, err = descriptor.Stat(d.dir)
 	if err != nil || !qualified(d.dirMeta, roots.Chat.Identity) {
 		return failure(Refused)
 	}
@@ -100,8 +93,8 @@ func openDisk(ctx context.Context, roots Roots) (storage, error) {
 	if err != nil {
 		return failure(Refused)
 	}
-	d.claimMeta, err = stat(d.claim)
-	if err != nil || !physical(d.claimMeta, unix.S_IFREG, 0600, uid) {
+	d.claimMeta, err = descriptor.Stat(d.claim)
+	if err != nil || !descriptor.Private(d.claimMeta, unix.S_IFREG, 0600, uid) {
 		return failure(Refused)
 	}
 	if unix.Flock(d.claim, unix.LOCK_EX|unix.LOCK_NB) != nil {
@@ -117,16 +110,16 @@ func (d *disk) check() error {
 		return fail(Unavailable, false)
 	}
 	var named, up unix.Stat_t
-	p, e := stat(d.parent)
-	if e != nil || !same(p, d.parentMeta) || !qualified(p, d.roots.Parent.Identity) || unix.Lstat(d.roots.Parent.Path, &named) != nil || !same(named, p) || !qualified(named, d.roots.Parent.Identity) {
+	p, e := descriptor.Stat(d.parent)
+	if e != nil || !descriptor.Same(p, d.parentMeta) || !qualified(p, d.roots.Parent.Identity) || unix.Lstat(d.roots.Parent.Path, &named) != nil || !descriptor.Same(named, p) || !qualified(named, d.roots.Parent.Identity) {
 		return fail(Refused, false)
 	}
-	c, e := stat(d.dir)
-	if e != nil || !same(c, d.dirMeta) || !qualified(c, d.roots.Chat.Identity) || unix.Fstatat(d.parent, "chat", &named, unix.AT_SYMLINK_NOFOLLOW) != nil || !same(named, c) || !qualified(named, d.roots.Chat.Identity) || unix.Fstatat(d.dir, "..", &up, unix.AT_SYMLINK_NOFOLLOW) != nil || !same(up, p) {
+	c, e := descriptor.Stat(d.dir)
+	if e != nil || !descriptor.Same(c, d.dirMeta) || !qualified(c, d.roots.Chat.Identity) || unix.Fstatat(d.parent, "chat", &named, unix.AT_SYMLINK_NOFOLLOW) != nil || !descriptor.Same(named, c) || !qualified(named, d.roots.Chat.Identity) || unix.Fstatat(d.dir, "..", &up, unix.AT_SYMLINK_NOFOLLOW) != nil || !descriptor.Same(up, p) {
 		return fail(Refused, false)
 	}
-	claim, e := stat(d.claim)
-	if e != nil || !same(claim, d.claimMeta) || !physical(claim, unix.S_IFREG, 0600, d.roots.Chat.Identity.OwnerUID) || unix.Fstatat(d.dir, claimName, &named, unix.AT_SYMLINK_NOFOLLOW) != nil || !same(named, claim) || !physical(named, unix.S_IFREG, 0600, d.roots.Chat.Identity.OwnerUID) {
+	claim, e := descriptor.Stat(d.claim)
+	if e != nil || !descriptor.Same(claim, d.claimMeta) || !descriptor.Private(claim, unix.S_IFREG, 0600, d.roots.Chat.Identity.OwnerUID) || unix.Fstatat(d.dir, claimName, &named, unix.AT_SYMLINK_NOFOLLOW) != nil || !descriptor.Same(named, claim) || !descriptor.Private(named, unix.S_IFREG, 0600, d.roots.Chat.Identity.OwnerUID) {
 		return fail(Refused, false)
 	}
 	canonical, e := filepath.EvalSymlinks(d.roots.Parent.Path)
@@ -150,15 +143,15 @@ func (d *disk) readFile(name string, maximum int) ([]byte, bool, error) {
 		return nil, false, fail(Refused, false)
 	}
 	f := os.NewFile(uintptr(fd), name)
-	before, err := stat(fd)
-	if err != nil || !physical(before, unix.S_IFREG, 0600, d.roots.Chat.Identity.OwnerUID) || before.Size < 1 || before.Size > int64(maximum) {
+	before, err := descriptor.Stat(fd)
+	if err != nil || !descriptor.Private(before, unix.S_IFREG, 0600, d.roots.Chat.Identity.OwnerUID) || before.Size < 1 || before.Size > int64(maximum) {
 		f.Close()
 		return nil, false, fail(Unknown, true)
 	}
 	raw, err := limit.Read(f, int64(maximum))
-	after, se := stat(fd)
+	after, se := descriptor.Stat(fd)
 	var named unix.Stat_t
-	ok := err == nil && se == nil && stable(before, after) && unix.Fstatat(d.dir, name, &named, unix.AT_SYMLINK_NOFOLLOW) == nil && stable(named, after)
+	ok := err == nil && se == nil && descriptor.Stable(before, after) && unix.Fstatat(d.dir, name, &named, unix.AT_SYMLINK_NOFOLLOW) == nil && descriptor.Stable(named, after)
 	closed := f.Close()
 	if !ok || closed != nil {
 		return nil, false, fail(Unknown, true)
@@ -204,8 +197,8 @@ func (d *disk) write(ctx context.Context, name string, raw []byte) error {
 		return fail(Unknown, true)
 	}
 	f := os.NewFile(uintptr(fd), name)
-	meta, err := stat(fd)
-	if err != nil || !physical(meta, unix.S_IFREG, 0600, d.roots.Chat.Identity.OwnerUID) {
+	meta, err := descriptor.Stat(fd)
+	if err != nil || !descriptor.Private(meta, unix.S_IFREG, 0600, d.roots.Chat.Identity.OwnerUID) {
 		f.Close()
 		return fail(Unknown, true)
 	}
@@ -229,8 +222,8 @@ func (d *disk) poison() error {
 		return d.poisonErr
 	}
 	d.poisonAttempted = true
-	current, err := stat(d.dir)
-	if err != nil || !same(current, d.dirMeta) || !qualified(current, d.roots.Chat.Identity) {
+	current, err := descriptor.Stat(d.dir)
+	if err != nil || !descriptor.Same(current, d.dirMeta) || !qualified(current, d.roots.Chat.Identity) {
 		d.poisonErr = fail(Unknown, true)
 		return d.poisonErr
 	}
@@ -243,8 +236,8 @@ func (d *disk) poison() error {
 		return d.poisonErr
 	}
 	f := os.NewFile(uintptr(fd), unknownName)
-	meta, e := stat(fd)
-	if e != nil || !physical(meta, unix.S_IFREG, 0600, d.roots.Chat.Identity.OwnerUID) {
+	meta, e := descriptor.Stat(fd)
+	if e != nil || !descriptor.Private(meta, unix.S_IFREG, 0600, d.roots.Chat.Identity.OwnerUID) {
 		f.Close()
 		d.poisonErr = fail(Unknown, true)
 		return d.poisonErr

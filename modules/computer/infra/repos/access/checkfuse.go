@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	check "github.com/legrch/farol/modules/computer/domain/connector"
+	"github.com/legrch/farol/pkg/descriptor"
 	"github.com/legrch/farol/pkg/limit"
 	"golang.org/x/sys/unix"
 )
@@ -53,7 +54,7 @@ func (d *disk) publishConnectionCheckFuse(entry check.Entry) (err error) {
 			return -1, refuse(e)
 		}
 		held = append(held, checkFuseDirectory{fd: fd, parent: parent, name: name})
-		info, e := fdstat(fd)
+		info, e := descriptor.Stat(fd)
 		if e != nil || !private(info, unix.S_IFDIR, 0700) || info.Dev != d.identity.Dev {
 			return -1, refuse(e)
 		}
@@ -81,12 +82,12 @@ func (d *disk) publishConnectionCheckFuse(entry check.Entry) (err error) {
 			return e
 		}
 		for _, v := range held {
-			opened, e := fdstat(v.fd)
+			opened, e := descriptor.Stat(v.fd)
 			var named unix.Stat_t
-			if e != nil || !same(opened, v.identity) || !private(opened, unix.S_IFDIR, 0700) {
+			if e != nil || !descriptor.Same(opened, v.identity) || !private(opened, unix.S_IFDIR, 0700) {
 				return refuse(e)
 			}
-			if e = unix.Fstatat(v.parent, v.name, &named, unix.AT_SYMLINK_NOFOLLOW); e != nil || !same(named, opened) || !private(named, unix.S_IFDIR, 0700) {
+			if e = unix.Fstatat(v.parent, v.name, &named, unix.AT_SYMLINK_NOFOLLOW); e != nil || !descriptor.Same(named, opened) || !private(named, unix.S_IFDIR, 0700) {
 				return refuse(e)
 			}
 		}
@@ -99,7 +100,7 @@ func (d *disk) publishConnectionCheckFuse(entry check.Entry) (err error) {
 			{profile, "computer", d.identity}, {state, "go-core", held[0].identity},
 		} {
 			var named unix.Stat_t
-			if e := unix.Fstatat(v.parent, v.name, &named, unix.AT_SYMLINK_NOFOLLOW); e != nil || !same(named, v.expected) || !private(named, unix.S_IFDIR, 0700) {
+			if e := unix.Fstatat(v.parent, v.name, &named, unix.AT_SYMLINK_NOFOLLOW); e != nil || !descriptor.Same(named, v.expected) || !private(named, unix.S_IFDIR, 0700) {
 				return refuse(e)
 			}
 		}
@@ -152,14 +153,14 @@ func (d *disk) publishConnectionCheckFuse(entry check.Entry) (err error) {
 		return &CommitFailure{Unknown: true, cause: e}
 	}
 	file = os.NewFile(uintptr(fd), name)
-	before, statErr := fdstat(fd)
+	before, statErr := descriptor.Stat(fd)
 	actual, readErr := limit.Read(file, int64(len(raw)))
-	after, afterErr := fdstat(fd)
+	after, afterErr := descriptor.Stat(fd)
 	var named unix.Stat_t
 	namedErr := unix.Fstatat(attempts, name, &named, unix.AT_SYMLINK_NOFOLLOW)
 	closed = d.closeFile(file)
 	if statErr != nil || readErr != nil || afterErr != nil || namedErr != nil || closed != nil ||
-		!private(before, unix.S_IFREG, 0600) || !stableState(before, after) || !stableState(after, named) || !bytes.Equal(actual, raw) {
+		!private(before, unix.S_IFREG, 0600) || !descriptor.Stable(before, after) || !descriptor.Stable(after, named) || !bytes.Equal(actual, raw) {
 		return &CommitFailure{Unknown: true, cause: errors.Join(statErr, readErr, afterErr, namedErr, closed)}
 	}
 	if e = qualify(); e != nil {

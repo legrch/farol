@@ -2,13 +2,12 @@ package access
 
 import (
 	"bytes"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
 
 	transition "github.com/legrch/farol/modules/computer/domain/journal"
+	"github.com/legrch/farol/pkg/descriptor"
 	"github.com/legrch/farol/pkg/limit"
 	"golang.org/x/sys/unix"
 )
@@ -131,7 +130,7 @@ func (d *disk) readJournal() (raw []byte, err error) {
 			raw, err = nil, refuse(err, closed)
 		}
 	}()
-	before, e := fdstat(fd)
+	before, e := descriptor.Stat(fd)
 	if e != nil || !private(before, unix.S_IFREG, 0600) || before.Size < 1 || before.Size > transitionMaxBytes {
 		return nil, refuse(e)
 	}
@@ -139,12 +138,12 @@ func (d *disk) readJournal() (raw []byte, err error) {
 	if e != nil {
 		return nil, refuse(e)
 	}
-	after, e := fdstat(fd)
+	after, e := descriptor.Stat(fd)
 	var named unix.Stat_t
-	if e != nil || !stableState(before, after) {
+	if e != nil || !descriptor.Stable(before, after) {
 		return nil, refuse(e)
 	}
-	if e = unix.Fstatat(d.dir, transitionName, &named, unix.AT_SYMLINK_NOFOLLOW); e != nil || !stableState(named, after) || !private(named, unix.S_IFREG, 0600) {
+	if e = unix.Fstatat(d.dir, transitionName, &named, unix.AT_SYMLINK_NOFOLLOW); e != nil || !descriptor.Stable(named, after) || !private(named, unix.S_IFREG, 0600) {
 		return nil, refuse(e)
 	}
 	if e = d.check(); e != nil {
@@ -169,13 +168,13 @@ func (d *disk) qualifyJournal(raw []byte) (err error) {
 			err = refuse(err, closeErr)
 		}
 	}()
-	before, e := fdstat(fd)
+	before, e := descriptor.Stat(fd)
 	if e != nil || !private(before, unix.S_IFREG, 0600) || before.Size != int64(len(raw)) {
 		return refuse(e)
 	}
 	bytesRead, e := limit.Read(f, transitionMaxBytes)
-	after, statErr := fdstat(fd)
-	if e != nil || statErr != nil || !bytes.Equal(bytesRead, raw) || !stableState(before, after) {
+	after, statErr := descriptor.Stat(fd)
+	if e != nil || statErr != nil || !bytes.Equal(bytesRead, raw) || !descriptor.Stable(before, after) {
 		return refuse(e, statErr)
 	}
 	if err = d.syncSnapshot(fd); err != nil {
@@ -231,11 +230,10 @@ func (d *disk) updateJournal(raw []byte, expected [32]byte) (err error) {
 	if e != nil || digest(current) != expected {
 		return refuse(e)
 	}
-	var token [16]byte
-	if _, e = rand.Read(token[:]); e != nil {
+	name, e := descriptor.Name(".computer-transition-", 16, ".tmp")
+	if e != nil {
 		return refuse(e)
 	}
-	name := ".computer-transition-" + hex.EncodeToString(token[:]) + ".tmp"
 	fd, e := unix.Openat(d.dir, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
 	if e != nil {
 		return refuse(e)

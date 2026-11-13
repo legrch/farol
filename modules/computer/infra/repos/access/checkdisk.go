@@ -2,7 +2,6 @@ package access
 
 import (
 	"bytes"
-	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -10,6 +9,7 @@ import (
 	"os"
 
 	check "github.com/legrch/farol/modules/computer/domain/connector"
+	"github.com/legrch/farol/pkg/descriptor"
 	"github.com/legrch/farol/pkg/limit"
 	"golang.org/x/sys/unix"
 )
@@ -162,18 +162,18 @@ func (d *disk) connectionCheckWitness(f checkJournalFile) (present bool, err err
 			present, err = false, refuse(err, closed)
 		}
 	}()
-	before, e := fdstat(fd)
+	before, e := descriptor.Stat(fd)
 	if e != nil || !private(before, unix.S_IFREG, 0600) || before.Size != int64(len(connectionCheckWitnessPayload)) {
 		return false, refuse(e)
 	}
 	raw, e := limit.Read(file, int64(len(connectionCheckWitnessPayload)))
-	after, statErr := fdstat(fd)
+	after, statErr := descriptor.Stat(fd)
 	var named unix.Stat_t
-	if e != nil || statErr != nil || string(raw) != connectionCheckWitnessPayload || !stableState(before, after) {
+	if e != nil || statErr != nil || string(raw) != connectionCheckWitnessPayload || !descriptor.Stable(before, after) {
 		return false, refuse(e, statErr)
 	}
 	if e = unix.Fstatat(d.dir, f.witness, &named, unix.AT_SYMLINK_NOFOLLOW); e != nil ||
-		!stableState(named, after) || !private(named, unix.S_IFREG, 0600) {
+		!descriptor.Stable(named, after) || !private(named, unix.S_IFREG, 0600) {
 		return false, refuse(e)
 	}
 	if e = d.check(); e != nil {
@@ -234,21 +234,21 @@ func (d *disk) readConnectionChecks(f checkJournalFile) (raw []byte, err error) 
 			raw, err = nil, refuse(err, closed)
 		}
 	}()
-	before, e := fdstat(fd)
+	before, e := descriptor.Stat(fd)
 	if e != nil || !private(before, unix.S_IFREG, 0600) ||
 		before.Size < 1 || (f.maxBytes > 0 && before.Size > f.maxBytes) {
 		return nil, refuse(e)
 	}
 	maximum := before.Size
 	raw, e = limit.Read(file, maximum)
-	after, statErr := fdstat(fd)
+	after, statErr := descriptor.Stat(fd)
 	var named unix.Stat_t
 	if e != nil || statErr != nil || len(raw) == 0 ||
-		!stableState(before, after) {
+		!descriptor.Stable(before, after) {
 		return nil, refuse(e, statErr)
 	}
 	if e = unix.Fstatat(d.dir, f.name, &named, unix.AT_SYMLINK_NOFOLLOW); e != nil ||
-		!stableState(named, after) || !private(named, unix.S_IFREG, 0600) {
+		!descriptor.Stable(named, after) || !private(named, unix.S_IFREG, 0600) {
 		return nil, refuse(e)
 	}
 	if e = d.check(); e != nil {
@@ -273,18 +273,18 @@ func (d *disk) qualifyConnectionChecks(f checkJournalFile, expected []byte) (err
 			err = refuse(err, closed)
 		}
 	}()
-	before, e := fdstat(fd)
+	before, e := descriptor.Stat(fd)
 	if e != nil || !private(before, unix.S_IFREG, 0600) || before.Size != int64(len(expected)) {
 		return refuse(e)
 	}
 	actual, e := limit.Read(file, int64(len(expected)))
-	after, statErr := fdstat(fd)
+	after, statErr := descriptor.Stat(fd)
 	var named unix.Stat_t
-	if e != nil || statErr != nil || !bytes.Equal(actual, expected) || !stableState(before, after) {
+	if e != nil || statErr != nil || !bytes.Equal(actual, expected) || !descriptor.Stable(before, after) {
 		return refuse(e, statErr)
 	}
 	if e = unix.Fstatat(d.dir, f.name, &named, unix.AT_SYMLINK_NOFOLLOW); e != nil ||
-		!stableState(named, after) || !private(named, unix.S_IFREG, 0600) {
+		!descriptor.Stable(named, after) || !private(named, unix.S_IFREG, 0600) {
 		return refuse(e)
 	}
 	if err = d.syncSnapshot(fd); err != nil {
@@ -352,11 +352,10 @@ func (d *disk) updateConnectionChecks(f checkJournalFile, raw []byte, expected [
 	if e != nil || digest(current) != expected {
 		return refuse(e)
 	}
-	var token [16]byte
-	if _, e = rand.Read(token[:]); e != nil {
+	name, e := descriptor.Name(f.temporary, 16, ".tmp")
+	if e != nil {
 		return refuse(e)
 	}
-	name := f.temporary + hex.EncodeToString(token[:]) + ".tmp"
 	fd, e := unix.Openat(d.dir, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
 	if e != nil {
 		return refuse(e)

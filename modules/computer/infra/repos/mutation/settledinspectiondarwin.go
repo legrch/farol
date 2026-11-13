@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 
+	"github.com/legrch/farol/pkg/descriptor"
 	"golang.org/x/sys/unix"
 )
 
@@ -94,13 +95,13 @@ func (o *nativeSettledObservation) check() error {
 	// Ancestor path identities are pinned by d.check; the private state root,
 	// mutations directory and lock must also retain their complete versions.
 	for _, p := range d.pins[len(d.pins)-2:] {
-		now, err := stat(p.fd)
-		if err != nil || !stable(p.initial, now) {
+		now, err := descriptor.Stat(p.fd)
+		if err != nil || !descriptor.Stable(p.initial, now) {
 			return unavailable()
 		}
 	}
-	lock, err := stat(d.lock)
-	if err != nil || lock.Size != 0 || !stable(d.lockIdentity, lock) {
+	lock, err := descriptor.Stat(d.lock)
+	if err != nil || lock.Size != 0 || !descriptor.Stable(d.lockIdentity, lock) {
 		return unavailable()
 	}
 	return nil
@@ -138,16 +139,16 @@ func (o *nativeSettledObservation) names() ([]string, error) {
 }
 
 func (o *nativeSettledObservation) read(f settledFile) ([]byte, error) {
-	before, err := stat(int(f.file.Fd()))
-	if err != nil || !stable(f.initial, before) || !private(before, unix.S_IFREG, 0600, o.d.root.OwnerUID) || before.Size < 1 || before.Size > maxRecordBytes {
+	before, err := descriptor.Stat(int(f.file.Fd()))
+	if err != nil || !descriptor.Stable(f.initial, before) || !descriptor.Private(before, unix.S_IFREG, 0600, o.d.root.OwnerUID) || before.Size < 1 || before.Size > maxRecordBytes {
 		return nil, unavailable()
 	}
 	// SectionReader uses fresh positioned reads without sharing an offset.
 	raw, readErr := io.ReadAll(io.NewSectionReader(f.file, 0, maxRecordBytes+1))
-	after, statErr := stat(int(f.file.Fd()))
+	after, statErr := descriptor.Stat(int(f.file.Fd()))
 	var named unix.Stat_t
 	nameErr := unix.Fstatat(o.d.dir, f.key, &named, unix.AT_SYMLINK_NOFOLLOW)
-	if readErr != nil || statErr != nil || nameErr != nil || len(raw) != int(before.Size) || !stable(before, after) || !stable(after, named) || o.check() != nil {
+	if readErr != nil || statErr != nil || nameErr != nil || len(raw) != int(before.Size) || !descriptor.Stable(before, after) || !descriptor.Stable(after, named) || o.check() != nil {
 		return nil, unavailable()
 	}
 	return raw, nil
@@ -169,7 +170,7 @@ func (o *nativeSettledObservation) inventory() ([]settledBytes, error) {
 		// Retain even an unqualified descriptor so every exit closes exactly
 		// the handles opened by this inspection, after the observation ends.
 		o.files = append(o.files, f)
-		f.initial, err = stat(fd)
+		f.initial, err = descriptor.Stat(fd)
 		if err != nil {
 			return nil, unavailable()
 		}
@@ -209,9 +210,9 @@ func (o *nativeSettledObservation) recheck(entries []settledBytes) error {
 		if o.ctx != nil && o.ctx.Err() != nil {
 			return unavailable()
 		}
-		current, err := stat(int(f.file.Fd()))
+		current, err := descriptor.Stat(int(f.file.Fd()))
 		var named unix.Stat_t
-		if err != nil || !stable(f.initial, current) || unix.Fstatat(o.d.dir, f.key, &named, unix.AT_SYMLINK_NOFOLLOW) != nil || !stable(current, named) {
+		if err != nil || !descriptor.Stable(f.initial, current) || unix.Fstatat(o.d.dir, f.key, &named, unix.AT_SYMLINK_NOFOLLOW) != nil || !descriptor.Stable(current, named) {
 			return unavailable()
 		}
 	}

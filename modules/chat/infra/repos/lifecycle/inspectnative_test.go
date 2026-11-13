@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	"github.com/legrch/farol/pkg/descriptor"
 	"golang.org/x/sys/unix"
 )
 
@@ -43,7 +44,7 @@ func nativeInspectionRoot(t *testing.T) Root {
 	}
 	t.Logf("fixture_root=%s retained=true", path)
 	var s unix.Stat_t
-	if unix.Lstat(path, &s) != nil || !physical(s, unix.S_IFDIR, 0700, uint32(os.Geteuid())) {
+	if unix.Lstat(path, &s) != nil || !descriptor.Private(s, unix.S_IFDIR, 0700, uint32(os.Geteuid())) {
 		t.Fatal("fixture root qualification failed")
 	}
 	return Root{Path: path, ProfileID: scope.ProfileID, Device: uint64(s.Dev), Inode: uint64(s.Ino), OwnerUID: s.Uid}
@@ -107,7 +108,7 @@ func assertNativeInspectionInventory(t *testing.T, before, after map[string]nati
 	}
 	for name, entry := range before {
 		now, ok := after[name]
-		if !ok || !stable(entry.Stat, now.Stat) || entry.Digest != now.Digest {
+		if !ok || !descriptor.Stable(entry.Stat, now.Stat) || entry.Digest != now.Digest {
 			t.Fatal("inspection changed fixture entry", name)
 		}
 	}
