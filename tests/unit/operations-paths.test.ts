@@ -7,7 +7,7 @@ import {
   type McpServer,
 } from "@modelcontextprotocol/server";
 import { expect, it, vi } from "vitest";
-import { desktopStatePaths } from "../../apps/desktop/host/state-paths";
+import { desktopStatePaths } from "../../apps/desktop/host/paths";
 import { OperationsStore } from "../../apps/desktop/operations/store";
 import {
   protocolMajor,

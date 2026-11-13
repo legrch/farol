@@ -1165,11 +1165,6 @@
     },
     {
       "code": "TS_FILE_WORD",
-      "file": "apps/desktop/host/state-paths.ts",
-      "detail": "File name is not one lowercase word: state-paths"
-    },
-    {
-      "code": "TS_FILE_WORD",
       "file": "apps/desktop/installed-slot-binding-helper.ts",
       "detail": "File name is not one lowercase word: installed-slot-binding-helper"
     },
@@ -3502,11 +3497,6 @@
       "code": "TS_TEST_MISSING",
       "file": "apps/desktop/go-workspace-snapshot.ts",
       "detail": "File with behavior has no co-located test: go-workspace-snapshot.test.ts"
-    },
-    {
-      "code": "TS_TEST_MISSING",
-      "file": "apps/desktop/host/state-paths.ts",
-      "detail": "File with behavior has no co-located test: state-paths.test.ts"
     },
     {
       "code": "TS_TEST_MISSING",

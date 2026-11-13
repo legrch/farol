@@ -89,6 +89,7 @@ describe("source test scopes", () => {
     expect(accepted("tests/renderer/discovery-example.test.tsx")).toBe(false);
   });
   describe("co-located tests beside source", () => {
+    const real = "apps/desktop/host/paths.test.ts";
     const node = [
       "src/modules/chat/domain/turn.test.ts",
       "src/ui/agent.test.ts",
@@ -104,6 +105,22 @@ describe("source test scopes", () => {
         path.matchesGlob(file, pattern),
       );
 
+    it("discovers the real co-located test and runs it in unit and fast only", () => {
+      expect(files).toContain(real);
+      expect(files).not.toContain("tests/unit/desktop-state-paths.test.ts");
+      expect(classified.nodeUnit).toContain(real);
+      for (const scope of ["unit", "fast"])
+        expect(
+          planTests(scope, files).suites.find(
+            (suite) => suite.id === "node-" + scope,
+          ).files,
+        ).toContain(real);
+      expect(selectedFiles(planTests("integration", files))).not.toContain(
+        real,
+      );
+      expect(selectedFiles(planTests("cloud", files))).toContain(real);
+    });
+
     it("places renderer folders in the DOM suite and every other source folder in Node", () => {
       const next = classifyTests([...files, ...node, ...dom]);
       for (const file of node) expect(next.nodeUnit).toContain(file);
@@ -114,7 +131,7 @@ describe("source test scopes", () => {
     });
 
     it("keeps both Vitest configs equal to the planner", () => {
-      for (const file of node) {
+      for (const file of [real, ...node]) {
         expect(accepts(mainVitestConfig, file)).toBe(true);
         expect(accepts(rendererVitestConfig, file)).toBe(false);
       }
