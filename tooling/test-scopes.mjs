@@ -6,6 +6,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { spawn, execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { planTests, scopes } from "./test-scope-plan.mjs";
+import { colocatedRoots, isColocatedTestCandidate } from "./test-placement.mjs";
 import { waitForOwnedSecondary } from "../tests/e2e/owned-background-secondary.mjs";
 
 const repository = path.resolve(
@@ -21,6 +22,7 @@ const roots = [
   "transport",
   "pkg",
   "resources/native/go",
+  ...colocatedRoots,
 ];
 
 export function discoverTests(root = repository) {
@@ -38,7 +40,8 @@ export function discoverTests(root = repository) {
       if (entry.isDirectory()) walk(file);
       else if (
         file.endsWith("_test.go") ||
-        /^tests\/.+\.(test\.(ts|tsx|mjs)|selftest\.mjs)$/u.test(file)
+        /^tests\/.+\.(test\.(ts|tsx|mjs)|selftest\.mjs)$/u.test(file) ||
+        isColocatedTestCandidate(file)
       ) {
         if (!entry.isFile()) throw Error("TEST_SOURCE_NOT_REGULAR:" + file);
         files.push(file);
@@ -295,6 +298,7 @@ export function selectionDigest(
       "tooling/test-scopes.mjs",
       "tooling/test-scope-plan.mjs",
       "tooling/cloud-test-prerequisites.mjs",
+      "tooling/test-placement.mjs",
       "tests/e2e/owned-background-secondary.mjs",
       "vitest.config.ts",
       "vitest.renderer.config.ts",

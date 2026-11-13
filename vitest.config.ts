@@ -3,8 +3,19 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["tests/**/*.test.{ts,tsx,mjs}"],
-    exclude: ["tests/renderer/**"],
+    // Suites under tests/ plus co-located `name.test.ts(x)` beside source
+    // (tooling/test-placement.mjs). Renderer folders need a DOM and run with
+    // vitest.renderer.config.ts instead.
+    include: [
+      "tests/**/*.test.{ts,tsx,mjs}",
+      "src/**/*.test.{ts,tsx}",
+      "apps/desktop/**/*.test.{ts,tsx}",
+    ],
+    exclude: [
+      "tests/renderer/**",
+      "src/ui/renderer/**",
+      "apps/desktop/renderer/**",
+    ],
     sequence: { concurrent: false },
     // Bound file-level native helper/compiler fan-out on a shared Mac. Keep
     // product deadlines and coverage gates unchanged; each fixture owns its IO.
@@ -19,6 +30,7 @@ export default defineConfig({
       include: ["src/modules/**/*.ts", "src/pkg/**/*.ts"],
       exclude: [
         "src/**/*.d.ts",
+        "src/**/*.test.{ts,tsx}",
         "src/**/contract/**/*.ts",
         "src/modules/**/app/port/**/*.ts",
         "src/pkg/ipc/**/*.ts",

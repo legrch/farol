@@ -35,6 +35,17 @@ class AffectedAdmission(unittest.TestCase):
         self.assertIn("tests/unit/unrelated.test.mjs", issued[2][1])
         self.assertNotIn("--testNamePattern", issued[2][1])
 
+    def test_colocated_test_beside_source_is_an_ordinary_portable_batch_member(self):
+        colocated = "apps/desktop/host/paths.test.ts"
+        self.plan["selected"] = [{"path": colocated}]
+        self.plan["changes"]["paths"] = [{"path": colocated}]
+        self.suite["files"] = [colocated, *self.suite["files"]]
+        self.assertEqual(self.project()["suites"], [self.suite])
+        for stray in ["apps/desktop/host/paths.test.mjs", "tooling/paths.test.ts", "apps/other/paths.test.ts"]:
+            with self.subTest(stray=stray), self.assertRaisesRegex(ValueError, "PARTIAL_OR_NATIVE"):
+                projection(self.plan, {**self.cloud, "suites": [{**self.suite, "files": [colocated, stray]}]},
+                           self.metadata)
+
     def test_go_keeps_complete_core_plus_all_selected_javascript_contracts(self):
         self.plan["selected"].append({"path": "modules/chat/domain/policy_test.go"})
         self.plan["changes"]["paths"] = [{"path": "modules/chat/domain/policy_test.go"}]

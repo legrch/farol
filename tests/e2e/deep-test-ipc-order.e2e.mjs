@@ -36,7 +36,7 @@ import { PrivateChatGptTaskJournal } from './src/apps/desktop/chatgpt-task-journ
 import { ChatGptTaskJournalOperationIdSchema, MAX_CHATGPT_TASK_JOURNAL_BYTES, MAX_DEEP_TEST_HISTORY_BYTES, MAX_DEEP_TEST_HISTORY_RECORDS, MAX_DEEP_TEST_OUTSTANDING } from './src/apps/desktop/chatgpt-task-journal-record.ts';
 import { readFlatDeepTestRecords } from './src/apps/desktop/legacy-activation-obligations.ts';
 import os from 'node:os';
-import { desktopStatePaths } from './apps/desktop/host/state-paths.ts';
+import { desktopStatePaths } from './apps/desktop/host/paths.ts';
 const root = ${JSON.stringify(scratch)};
 app.setPath('userData', root); app.dock?.hide();
 const statePaths = () => desktopStatePaths({ userData: app.getPath('userData'), tmpdir: os.tmpdir() });

@@ -2,6 +2,7 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import mainVitestConfig from "../../vitest.config.ts";
+import rendererVitestConfig from "../../vitest.renderer.config.ts";
 import { waitForOwnedSecondary } from "../e2e/owned-background-secondary.mjs";
 import {
   classifyTests,
@@ -87,6 +88,83 @@ describe("source test scopes", () => {
     expect(accepted(unit)).toBe(true);
     expect(accepted("tests/renderer/discovery-example.test.tsx")).toBe(false);
   });
+  describe("co-located tests beside source", () => {
+    const real = "apps/desktop/host/paths.test.ts";
+    const node = [
+      "src/modules/chat/domain/turn.test.ts",
+      "src/ui/agent.test.ts",
+      "apps/desktop/bridge/wire.test.tsx",
+    ];
+    const dom = [
+      "src/ui/renderer/view.test.tsx",
+      "apps/desktop/renderer/status.test.ts",
+    ];
+    const accepts = (config, file) =>
+      config.test.include.some((pattern) => path.matchesGlob(file, pattern)) &&
+      !(config.test.exclude ?? []).some((pattern) =>
+        path.matchesGlob(file, pattern),
+      );
+
+    it("discovers the real co-located test and runs it in unit and fast only", () => {
+      expect(files).toContain(real);
+      expect(files).not.toContain("tests/unit/desktop-state-paths.test.ts");
+      expect(classified.nodeUnit).toContain(real);
+      for (const scope of ["unit", "fast"])
+        expect(
+          planTests(scope, files).suites.find(
+            (suite) => suite.id === "node-" + scope,
+          ).files,
+        ).toContain(real);
+      expect(selectedFiles(planTests("integration", files))).not.toContain(
+        real,
+      );
+      expect(selectedFiles(planTests("cloud", files))).toContain(real);
+    });
+
+    it("places renderer folders in the DOM suite and every other source folder in Node", () => {
+      const next = classifyTests([...files, ...node, ...dom]);
+      for (const file of node) expect(next.nodeUnit).toContain(file);
+      for (const file of dom) expect(next.renderer).toContain(file);
+      expect(
+        next.integration.filter((file) => !file.startsWith("tests/")),
+      ).toEqual([]);
+    });
+
+    it("keeps both Vitest configs equal to the planner", () => {
+      for (const file of [real, ...node]) {
+        expect(accepts(mainVitestConfig, file)).toBe(true);
+        expect(accepts(rendererVitestConfig, file)).toBe(false);
+      }
+      for (const file of dom) {
+        expect(accepts(mainVitestConfig, file)).toBe(false);
+        expect(accepts(rendererVitestConfig, file)).toBe(true);
+      }
+      for (const file of ["src/pkg/sse/stream.ts", "src/ui/renderer/view.tsx"])
+        for (const config of [mainVitestConfig, rendererVitestConfig])
+          expect(accepts(config, file)).toBe(false);
+    });
+
+    it.each([
+      ["a co-located .mjs test", "src/pkg/sse/stream.test.mjs"],
+      ["a Go test under a TypeScript root", "src/pkg/sse/stream_test.go"],
+      ["a test outside the source roots", "tooling/stream.test.ts"],
+    ])("refuses %s instead of skipping it", (_name, file) => {
+      expect(() => classifyTests([...files, file])).toThrow(/UNCLASSIFIED/u);
+    });
+
+    it("excludes co-located tests from coverage subjects", () => {
+      for (const [config, file] of [
+        [mainVitestConfig, "src/modules/chat/domain/turn.test.ts"],
+        [rendererVitestConfig, "src/ui/renderer/view.test.tsx"],
+      ])
+        expect(
+          config.test.coverage.exclude.some((pattern) =>
+            path.matchesGlob(file, pattern),
+          ),
+        ).toBe(true);
+    });
+  });
+
   it("binds the cancellation supervisor bytes even though it is not a discovered test file", () => {
     const before = selectionDigest([], () => "original");
     const changed = selectionDigest([], (file) =>
