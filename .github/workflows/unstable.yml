@@ -1,0 +1,128 @@
+name: Unstable build (dry)
+
+# Builds main at most once a day, and only when main changed since the last
+# successful run. Dry mode: it builds, packages, verifies and summarises, then
+# stops. No tag, release, draft, publication or Actions artifact: hosted
+# rebuilds never leave the runner, and these bytes carry the committed release
+# identity.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Build even when main is unchanged since the last successful unstable run
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One unstable build at a time. Never cancel a running build; GitHub keeps at
+# most one pending run in the group, and its change check runs after the
+# earlier run has finished.
+concurrency:
+  group: unstable-main
+  cancel-in-progress: false
+
+jobs:
+  decide:
+    if: github.repository == 'legrch/farol'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+      source_sha: ${{ steps.decide.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.20.0
+      - id: decide
+        name: Compare main with the last successful unstable run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UNSTABLE_FORCE: ${{ inputs.force == true }}
+        # Read-only Actions metadata. A failed or ambiguous read fails this
+        # job instead of guessing that main is unchanged.
+        run: node tooling/unstable-build.mjs decide
+
+  build:
+    needs: decide
+    if: needs.decide.outputs.build == 'true'
+    runs-on: macos-26
+    timeout-minutes: 60
+    outputs:
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      version: ${{ steps.source.outputs.version }}
+      manifest_sha256: ${{ steps.assets.outputs.manifest_sha256 }}
+    env:
+      SOURCE_SHA: ${{ needs.decide.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.decide.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Start the step clock
+        run: |
+          date +%s > "$RUNNER_TEMP/unstable-clock"
+          {
+            echo "ASSET_DIRECTORY=$GITHUB_WORKSPACE/_output/release/unstable"
+            echo "DURATIONS=$RUNNER_TEMP/unstable-durations.tsv"
+          } >> "$GITHUB_ENV"
+      - uses: ./.github/actions/setup-ci
+        with:
+          native: "true"
+      - id: source
+        name: Pin the exact clean main commit and its committed identity
+        run: |
+          printf 'toolchain setup\t%s\n' "$(( $(date +%s) - $(cat "$RUNNER_TEMP/unstable-clock") ))" >> "$DURATIONS"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
+          test -z "$(git status --porcelain=v1)"
+          node tooling/release-preflight.mjs
+          version="$(node -p 'require("./package.json").version')"
+          {
+            echo "source_sha=$SOURCE_SHA"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+      - name: Provision approved backend build inputs
+        run: node tooling/ci-go-inputs.mjs
+      - name: Run the full unchanged source gate including secret scans
+        run: |
+          start=$(date +%s)
+          task ci
+          printf 'source gate (task ci)\t%s\n' "$(( $(date +%s) - start ))" >> "$DURATIONS"
+      - name: Build the exact clean candidate
+        run: |
+          start=$(date +%s)
+          test -z "$(git status --porcelain=v1)"
+          task package -- --go-inputs="$GITHUB_WORKSPACE/_output/go-build-inputs.json"
+          printf 'task package\t%s\n' "$(( $(date +%s) - start ))" >> "$DURATIONS"
+      - id: assets
+        name: Prepare and verify the three public assets
+        run: |
+          start=$(date +%s)
+          mkdir -p "$(dirname "$ASSET_DIRECTORY")"
+          /usr/bin/python3 -I tooling/prepare-release-archive.py "$SOURCE_SHA" "$ASSET_DIRECTORY"
+          node tooling/verify-release-assets.mjs "$ASSET_DIRECTORY"
+          echo "manifest_sha256=$(shasum -a 256 "$ASSET_DIRECTORY/farol-release.json" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          printf 'prepare and verify assets\t%s\n' "$(( $(date +%s) - start ))" >> "$DURATIONS"
+      - name: Require unchanged source
+        run: |
+          git diff --check
+          test -z "$(git status --porcelain=v1)"
+      - name: Write the job summary
+        if: always()
+        run: node tooling/unstable-build.mjs summary "$ASSET_DIRECTORY" "$DURATIONS"
+      - name: Show the failed source gate cases
+        if: failure()
+        run: node tooling/print-failed-scope.mjs _output/evidence/test-scopes

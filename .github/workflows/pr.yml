@@ -100,15 +100,6 @@ jobs:
           /usr/bin/python3 -I scripts/assert-owner-untouched.py -- node tooling/ci-native.mjs
           task test:core
           task test:witness-inputs
-      - name: Observe hidden LaunchServices guardian and helper
-        if: github.event.pull_request.number == 115
-        run: |
-          node_modules/esbuild/bin/esbuild src/modules/release/infra/native/desktop-helper-lifetime.ts --bundle --platform=node --format=cjs --outfile="$RUNNER_TEMP/farol-lifetime-witness.cjs"
-          FAROL_LIVE_HELPER_NATIVE=1 \
-          FAROL_DESKTOP_LAUNCHER_NATIVE=1 \
-          FAROL_TEST_HELPER_ELECTRON="$GITHUB_WORKSPACE/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron" \
-          FAROL_TEST_LIFETIME_MODULE="$RUNNER_TEMP/farol-lifetime-witness.cjs" \
-          go test ./boot -run '^TestDesktopLauncherNativeRelaunchAfterHelper$' -v -count=1
       - name: Show the failed native cases
         if: failure()
         run: node tooling/print-failed-scope.mjs _output/evidence/test-scopes
