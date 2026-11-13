@@ -141,12 +141,12 @@ func (r *deliveryRecorder) snapshot() []deliveryEvent {
 	return append([]deliveryEvent(nil), r.events...)
 }
 
-func newDeliveryFixture(t *testing.T, concurrent bool, mode string, recorder *deliveryRecorder, handle func(context.Context, Request) (*Outcome, error), terminal ...bool) *deliveryFixture {
+func newDeliveryFixture(t *testing.T, concurrent bool, mode string, recorder *deliveryRecorder, handle func(context.Context, Request) (*Outcome, error)) *deliveryFixture {
 	t.Helper()
 	in, input := io.Pipe()
 	output, out := io.Pipe()
 	w := &deliveryWriter{PipeWriter: out, mode: mode, partial: make(chan struct{}), release: make(chan struct{}), closed: make(chan struct{})}
-	s, err := New(Config{BuildID: "build", ProfileID: "test", Generation: "generation", TerminalRejection: len(terminal) == 1 && terminal[0], Methods: map[string]Method{
+	s, err := New(Config{BuildID: "build", ProfileID: "test", Generation: "generation", Methods: map[string]Method{
 		"task.create": {Concurrent: concurrent, Handle: func(ctx context.Context, request Request) (*Outcome, error) {
 			if mode != "" {
 				w.armed.Store(true)
@@ -173,26 +173,6 @@ func newDeliveryFixture(t *testing.T, concurrent bool, mode string, recorder *de
 		t.Fatalf("handshake: %+v", response)
 	}
 	return f
-}
-
-func TestResponseDeliveryTerminalRejectionClosesSerialAndConcurrent(t *testing.T) {
-	for _, concurrent := range []bool{false, true} {
-		t.Run(fmt.Sprintf("concurrent=%t", concurrent), func(t *testing.T) {
-			recorder := newDeliveryRecorder()
-			f := newDeliveryFixture(t, concurrent, "", recorder, func(context.Context, Request) (*Outcome, error) {
-				return &Outcome{Status: "refused", Code: "selected_role_refused"}, nil
-			}, true)
-			f.send(t, deliveryRequest(t, seq(2), optional("exact-op"), deliveryContext()))
-			if response := f.read(t); response.Result == nil || response.Result.Status != "refused" {
-				t.Fatal("terminal policy lost the original refusal response")
-			}
-			assertDeliveryRequest(t, deliveryWait(t, f, recorder.notify), seq(2), false)
-			deliveryWait(t, f, f.done)
-			if f.err == nil || len(recorder.snapshot()) != 1 {
-				t.Fatal("terminal role continued after refusal")
-			}
-		})
-	}
 }
 
 func (f *deliveryFixture) shutdown(t *testing.T) {
