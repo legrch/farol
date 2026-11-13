@@ -449,3 +449,47 @@ func TestComputerConnectorResumedParticipantOutlivesItsFirstExpiry(t *testing.T)
 		})
 	}
 }
+
+// Repeated Settings saves send Deactivate before each Publish. Once ordinary
+// claims are exhausted, only a Deactivate that withdraws live authority (an
+// active guard or the current publication's fence) may spend the reserve, so
+// repeated saves cannot drain it and connector Close and read-intent
+// withdrawal keep their slots.
+func TestComputerConnectorRepeatedDeactivateCannotDrainWithdrawalReserve(t *testing.T) {
+	f := newParticipantConnectorFixture(t)
+	s, _ := f.connector(t, "backend")
+	f.clock.now = f.clock.now.Add(connectorOpenWindow / connectorOpenBurst)
+	out, err := s.Open(context.Background(), "open-live", f.open("4"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; len(s.root.used) < claimCapacity-claimWithdrawalReserve; i++ {
+		if err = s.root.claim(fmt.Sprint("filler-", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The first Deactivate withdraws the live publication the connector uses.
+	if _, err = s.root.Deactivate(context.Background(), "deactivate-live"); err != nil {
+		t.Fatal("withdrawal of live authority refused", err)
+	}
+	spent := len(s.root.used)
+	for i := range 3 * claimWithdrawalReserve {
+		_, _ = s.root.Deactivate(context.Background(), fmt.Sprint("save-", i))
+	}
+	if len(s.root.used) != spent {
+		t.Fatalf("repeated Deactivate with nothing to withdraw spent %d reserved claims", len(s.root.used)-spent)
+	}
+	if _, err = s.Close(context.Background(), "close-after-saves", wire.ComputerConnectorClose{Binding: out.Endpoint.Binding}); err != nil {
+		t.Fatal("connector Close starved by repeated Deactivate", err)
+	}
+	if err = s.root.claimWithdrawal("read-intent-withdraw"); err != nil {
+		t.Fatal("read-intent withdrawal starved by repeated Deactivate", err)
+	}
+	// An actually active guard is live authority: its Deactivate still works.
+	s.root.guard.mu.Lock()
+	s.root.guard.active = true
+	s.root.guard.mu.Unlock()
+	if _, err = s.root.Deactivate(context.Background(), "deactivate-active"); err != nil {
+		t.Fatal("withdrawal of an active guard refused", err)
+	}
+}
