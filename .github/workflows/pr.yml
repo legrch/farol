@@ -100,6 +100,15 @@ jobs:
           /usr/bin/python3 -I scripts/assert-owner-untouched.py -- node tooling/ci-native.mjs
           task test:core
           task test:witness-inputs
+      # Hidden disposable Electron lanes that the unstable build (or nobody)
+      # ran before. Each creates only show:false windows, uses loopback or
+      # data: pages and fixture state, and needs no build output, account or
+      # network. They reuse the Electron runtime installed by setup-ci.
+      - name: Run the hermetic hidden Electron e2e lanes
+        run: |
+          task test:e2e:chatgpt-startup-readiness
+          /usr/bin/python3 -I scripts/assert-owner-untouched.py -- node tests/e2e/chatgpt-update-idle.e2e.mjs
+          /usr/bin/python3 -I scripts/assert-owner-untouched.py -- node tests/e2e/deep-test-ipc-order.e2e.mjs
       - name: Show the failed native cases
         if: failure()
         run: node tooling/print-failed-scope.mjs _output/evidence/test-scopes
