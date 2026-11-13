@@ -199,3 +199,37 @@ func TestRepeatedChecksForgetOldestHistoryInsteadOfRefusing(t *testing.T) {
 		t.Fatal("more than the oldest attempt was forgotten")
 	}
 }
+func TestImportKeepsPredecessorAttemptsAndRefusesADifferentAttempt(t *testing.T) {
+	ours, e := preparedJournal(t, Status)
+	e.Phase = DispatchIntent
+	ours, err := ours.Advance(e.Request.OperationID, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	earlier := e
+	earlier.Phase = Prepared
+	merged, err := ours.Import(Journal{Entries: []Entry{earlier}})
+	if err == nil {
+		merged, err = merged.Import(Journal{Entries: []Entry{{Request: testRequest(2), Phase: Claimed}}})
+	}
+	if err != nil || len(merged.Entries) != 2 {
+		t.Fatal("predecessor attempts not imported", err)
+	}
+	if got, _ := merged.Find(e.Request.OperationID); got.Phase != DispatchIntent {
+		t.Fatal("our more advanced record was replaced", got.Phase)
+	}
+	if got, _ := merged.Find(testRequest(2).OperationID); got.Phase != RefusedBeforeSend {
+		t.Fatal("ended predecessor claim was not settled", got.Phase)
+	}
+	for _, change := range []func(*Entry){
+		func(x *Entry) { x.Request.Fingerprint = testDigest("other") },
+		func(x *Entry) { s := *x.Scope; s.ScopeDigest = testDigest("other"); x.Scope = &s },
+		func(x *Entry) { x.Phase = OutcomeUnknown },
+	} {
+		other := e
+		change(&other)
+		if _, err := ours.Import(Journal{Entries: []Entry{other}}); !errors.Is(err, ErrRefused) {
+			t.Fatal("a different attempt under a known ID was merged", other.Phase)
+		}
+	}
+}

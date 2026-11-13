@@ -68,7 +68,7 @@ func prepareCheck(t *testing.T, f stateFixture, mode check.Mode) check.Entry {
 	if err != nil || !first {
 		t.Fatal("claim", err)
 	}
-	marked, err := f.store.disk.connectionCheckWitness()
+	marked, err := f.store.disk.connectionCheckWitness(historyCheckFile)
 	if err != nil || !marked {
 		t.Fatal("claim returned before witness", err)
 	}
@@ -113,11 +113,11 @@ func TestConnectionCheckBootstrapFuseAndIntentAreDurableBeforeOnePermit(t *testi
 	if json.Unmarshal(raw, &fuse) != nil || fuse.Schema != 3 || fuse.OperationID != e.Request.OperationID || fuse.Request != e.Request || fuse.ScopeDigest != e.Scope.ScopeDigest || fuse.DocumentDigest != e.Scope.DocumentDigest || fuse.PromptDigest != e.Scope.PromptDigest {
 		t.Fatal("unbound original fuse", string(raw))
 	}
-	journalRaw, err := f.store.disk.readConnectionChecks()
+	journalRaw, err := f.store.disk.readConnectionChecks(historyCheckFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	decoded, err := decodeConnectionChecks(testBinding, journalRaw)
+	decoded, _, err := decodeConnectionCheckHistory(testBinding, journalRaw)
 	if err != nil || decoded.Entries[0].Phase != check.DispatchIntent {
 		t.Fatal("permit without intent bytes", err)
 	}
@@ -250,22 +250,24 @@ func TestConnectionCheckIntentSyncFailureRetainsOriginalAcrossReopen(t *testing.
 	}
 }
 func TestConnectionCheckFirstPresenceOrphanAndNoncanonicalBytesFailClosed(t *testing.T) {
-	t.Run("witness-without-ledger", func(t *testing.T) {
-		f := checkFixture(t)
-		if err := f.store.disk.markConnectionCheckWitness(); err != nil {
-			t.Fatal(err)
-		}
-		if err := f.store.Close(); err != nil {
-			t.Fatal(err)
-		}
-		s, err := Open(f.root, testBinding, f.clock)
-		if s != nil {
-			s.Close()
-		}
-		if err == nil {
-			t.Fatal("missing first ledger became empty")
-		}
-	})
+	for _, file := range []checkJournalFile{legacyCheckFile, historyCheckFile} {
+		t.Run("witness-without-ledger-"+file.name, func(t *testing.T) {
+			f := checkFixture(t)
+			if err := f.store.disk.markConnectionCheckWitness(file); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			s, err := Open(f.root, testBinding, f.clock)
+			if s != nil {
+				s.Close()
+			}
+			if err == nil {
+				t.Fatal("missing first ledger became empty")
+			}
+		})
+	}
 	j := check.Journal{Entries: []check.Entry{{Request: checkRequest(1), Phase: check.Claimed}}}
 	raw, err := encodeConnectionChecks(testBinding, j)
 	if err != nil {
@@ -274,6 +276,15 @@ func TestConnectionCheckFirstPresenceOrphanAndNoncanonicalBytesFailClosed(t *tes
 	for _, bad := range [][]byte{append(append([]byte{}, raw...), '\n'), bytes.Replace(raw, []byte(`"schema":1`), []byte(`"schema":1,"schema":1`), 1), bytes.Replace(raw, []byte(`"schema":1`), []byte(`"schema":1,"extra":true`), 1)} {
 		if _, err := decodeConnectionChecks(testBinding, bad); err == nil {
 			t.Fatal("noncanonical bytes accepted")
+		}
+	}
+	raw, err = encodeConnectionCheckHistory(testBinding, j, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range [][]byte{append(append([]byte{}, raw...), '\n'), bytes.Replace(raw, []byte(`"schema":2`), []byte(`"schema":2,"schema":2`), 1), bytes.Replace(raw, []byte(`"schema":2`), []byte(`"schema":2,"extra":true`), 1), bytes.Replace(raw, []byte(`"schema":2`), []byte(`"schema":1`), 1), bytes.Replace(raw, []byte(`"legacyDigest":""`), []byte(`"legacyDigest":"ABC"`), 1)} {
+		if _, _, err := decodeConnectionCheckHistory(testBinding, bad); err == nil {
+			t.Fatal("noncanonical history bytes accepted", string(bad))
 		}
 	}
 }

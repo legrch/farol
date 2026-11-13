@@ -265,14 +265,7 @@ func (j Journal) Begin(req Request) (Journal, bool, error) {
 	// earlier record is never rewritten to verified and never re-sent.
 	out := j.Clone()
 	for i, e := range out.Entries {
-		if e.Phase.Settled() {
-			continue
-		}
-		if e.Phase == Claimed {
-			out.Entries[i].Phase = RefusedBeforeSend
-		} else {
-			out.Entries[i].Phase = OutcomeUnknown
-		}
+		out.Entries[i] = settle(e)
 	}
 	// The journal is bounded history, not a quota: forget the oldest settled
 	// attempts so repeated owner checks never hit a capacity refusal.
@@ -284,6 +277,51 @@ func (j Journal) Begin(req Request) (Journal, bool, error) {
 		return Journal{}, false, ErrRefused
 	}
 	return out, true, nil
+}
+
+// settle closes an attempt whose process lifetime ended without settling it:
+// nothing was prepared means it was never sent; anything later is unknown.
+func settle(e Entry) Entry {
+	if e.Phase.Settled() {
+		return e
+	}
+	if e.Phase == Claimed {
+		e.Phase = RefusedBeforeSend
+	} else {
+		e.Phase = OutcomeUnknown
+	}
+	return e
+}
+
+// Import absorbs a predecessor journal into this one. The predecessor image
+// (0.5.24) reads and writes only its own journal, which this build leaves
+// untouched; after a rollback and a roll-forward that journal can hold
+// attempts this one has never seen. Each one is appended and settled, because
+// the lifetime that could advance it has ended. An attempt both journals know
+// must be the same attempt, at most less advanced in the predecessor's copy;
+// anything else refuses, it is never merged or guessed.
+func (j Journal) Import(legacy Journal) (Journal, error) {
+	if !j.Valid() || !legacy.Valid() {
+		return Journal{}, ErrRefused
+	}
+	out := j.Clone()
+	for _, e := range legacy.Clone().Entries {
+		known, ok := out.Find(e.Request.OperationID)
+		if !ok {
+			out.Entries = append(out.Entries, settle(e))
+			continue
+		}
+		if known.Request != e.Request ||
+			(e.Scope != nil && (known.Scope == nil || *known.Scope != *e.Scope)) ||
+			(e.Receipt != nil && (known.Receipt == nil || *known.Receipt != *e.Receipt)) ||
+			(e.Phase.Settled() && known.Phase != e.Phase) {
+			return Journal{}, ErrRefused
+		}
+	}
+	if !out.Valid() {
+		return Journal{}, ErrRefused
+	}
+	return out, nil
 }
 func (j Journal) Advance(id string, next Entry) (Journal, error) {
 	if !j.Valid() || !next.Valid() || next.Request.OperationID != id {

@@ -32,9 +32,10 @@ type Store struct {
 	activeStopID      string // only a fresh confirmed first BeginStop can set it; never restored
 	stopWithdrawn     bool   // one original connector withdrawal attempt; never restored
 	checks            check.Journal
-	checksPresent     bool
-	checksDigest      [32]byte
-	activeCheckID     string // only a successful first original claim; never restored
+	checksPresent     bool     // the full history file exists
+	checksDigest      [32]byte // of the full history file
+	checksLegacy      string   // hex digest of the predecessor journal bytes, "" if absent
+	activeCheckID     string   // only a successful first original claim; never restored
 	currentContinuity *activeContinuity
 	currentActivating bool
 	poisoned, closed  bool
