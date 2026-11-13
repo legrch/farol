@@ -52,7 +52,7 @@ export function declarationFromBuiltCore(built, identity) {
     !built ||
     built.inputExact !== true ||
     built.entry !== "./cmd/farol" ||
-    built.goVersion !== "go1.26.2" ||
+    built.goVersion !== "go1.27.3" ||
     built.cgoEnabled !== false ||
     built.trimpath !== true ||
     built.buildvcs !== false ||

@@ -132,7 +132,7 @@ approval.
 The existing producer requires a separately approved Go SDK declaration. The
 release preflight refuses with `CI_GO_SDK_APPROVAL_REQUIRED` when
 `config/ci-go-sdk.json` is missing and with `CI_GO_SDK_APPROVAL_INVALID` when it
-does not name `farol-ci-go-sdk/1`, `go1.26.2`, `darwin`, `arm64` and a 64-hex
+does not name `farol-ci-go-sdk/1`, `go1.27.3`, `darwin`, `arm64` and a 64-hex
 `treeSha256`.
 
 CI does not use `actions/setup-go`: its toolcache SDK is repackaged and
@@ -144,14 +144,26 @@ official extraction. Both compile the byte-identical archive pinned in
 `NATIVE_ARCHIVE_SHA256`.
 
 The committed approval pins the tree digest of the official
-`go1.26.2.darwin-arm64.tar.gz`. Its archive digest matches the one go.dev
+`go1.27.3.darwin-arm64.tar.gz`. Its archive digest matches the one go.dev
 publishes, and the tree digest was measured over the verified extraction of that
 archive, the same SDK pin the local release chain uses. The `approval` block
 records that provenance. Change the version only together with a new approval
 taken the same way.
 
+The 12 November 2026 reapproval used the Lead-verified official archive and its
+unchanged extraction. `measureGoToolchain` in `tooling/go-backend-build.mjs`
+hashes sorted relative file paths, executable bits and content digests with the
+`farol-go-sdk-v1` prefix. The archive builder separately measures the resolved
+`bin/go` bytes and its complete SDK with `snapshotTree`, including file modes.
+These two tree digest formats are distinct and must not be substituted for one
+another. Both approved Go 1.27.3 compilers passed the builder's source tests and
+produced byte-identical 3,489,170-byte archives before the build and runtime pins
+were updated. This is compiler/archive evidence, not package or installed
+acceptance. Frozen witness scripts, receipts and historical source-transfer
+records retain the toolchain versions under which their evidence was produced.
+
 `tooling/ci-go-inputs.mjs` compares the installed SDK with that approved digest
-and resolves the two pinned module inputs; the unchanged producer authenticates
+and resolves the five pinned module inputs; the unchanged producer authenticates
 module bytes against `go.sum`. A freshly measured SDK digest does not constitute
 approval, and a hosted SDK that differs fails with `CI_GO_SDK_DIGEST_MISMATCH`.
 The declared Go inputs are ignored build outputs, never public release assets.

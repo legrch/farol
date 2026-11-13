@@ -14,7 +14,7 @@ export async function provisionGoInputs() {
   const approval = JSON.parse(fs.readFileSync(approvalPath, "utf8"));
   if (
     approval.schema !== "farol-ci-go-sdk/1" ||
-    approval.version !== "go1.26.2" ||
+    approval.version !== "go1.27.3" ||
     approval.goos !== "darwin" ||
     approval.goarch !== "arm64" ||
     !/^[a-f0-9]{64}$/u.test(approval.treeSha256 ?? "")
@@ -25,7 +25,7 @@ export async function provisionGoInputs() {
   if (
     process.platform !== "darwin" ||
     process.arch !== "arm64" ||
-    go("version").trim() !== "go version go1.26.2 darwin/arm64"
+    go("version").trim() !== "go version go1.27.3 darwin/arm64"
   )
     throw Error("CI_GO_SDK_PLATFORM_INVALID");
   const root = fs.realpathSync(go("env", "GOROOT").trim());

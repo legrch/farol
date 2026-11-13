@@ -109,6 +109,8 @@ function host({
     TextDecoder,
     encodeURIComponent,
     presentationAction: () => "show-and-focus",
+    // The startup splash is a separate native window outside this host.
+    closeStartupSplash: () => undefined,
     liveTaskRegistry: { get: () => ({ lifecycle: "idle" }) },
   };
   const record = (kind: string, detail?: string | number) => {

@@ -6520,6 +6520,88 @@ describe("ChatGPT shared partition lifecycle", () => {
     },
   );
 
+  const chatGptOrigin = "https://chatgpt.com";
+  it.each([
+    ["an owner click in the focused ChatGPT page", {}, true],
+    [
+      "an owner click whose initiating frame is already gone",
+      { frame: null },
+      true,
+    ],
+    ["an unfocused page", { focused: false }, false],
+    ["a download without a user gesture", { gesture: false }, false],
+    [
+      "a download initiated by a foreign origin",
+      { initiator: "https://files.example" },
+      false,
+    ],
+    ["a download with an opaque initiator", { initiator: "null" }, false],
+    ["a download with no initiator", { initiator: "" }, false],
+    [
+      "a download from a foreign-origin subframe",
+      { frame: { origin: "https://ads.example" } },
+      false,
+    ],
+  ] as const)(
+    "offers a Save dialog only for an owner download from the managed ChatGPT page: %s",
+    (
+      _name,
+      variant: Readonly<{
+        focused?: boolean;
+        gesture?: boolean;
+        initiator?: string;
+        frame?: { origin: string } | null;
+      }>,
+      allowed,
+    ) => {
+      const sharedSession = Object.assign(new EventEmitter(), {
+        setPermissionRequestHandler: vi.fn(),
+        setPermissionCheckHandler: vi.fn(),
+      });
+      const candidate = route();
+      const surface = embeddedSurface();
+      vi.spyOn(surface.webContents, "getURL").mockReturnValue(
+        `${chatGptOrigin}/c/test`,
+      );
+      Object.assign(surface.webContents, {
+        isFocused: () => variant.focused ?? true,
+      });
+      Reflect.set(candidate, "routeWindow", surface);
+      const hardenContents = Reflect.get(candidate, "hardenContents") as (
+        contents: typeof surface.webContents,
+        tracks: boolean,
+      ) => void;
+      hardenContents.call(candidate, surface.webContents, true);
+      harden(candidate, sharedSession);
+      const event = { preventDefault: vi.fn() };
+      // A ChatGPT file is served from its own file host; the gate binds the
+      // initiating page and frame, not the download URL.
+      const item = {
+        getFilename: () => "report.pdf",
+        getURL: () => "https://files.oaiusercontent.com/file-1",
+        hasUserGesture: () => variant.gesture ?? true,
+        getInitiatorOrigin: () => variant.initiator ?? chatGptOrigin,
+        setSaveDialogOptions: vi.fn(),
+      };
+      const frame =
+        "frame" in variant ? variant.frame : { origin: chatGptOrigin };
+      sharedSession.emit(
+        "will-download",
+        event,
+        item,
+        surface.webContents,
+        frame,
+      );
+      expect(event.preventDefault).toHaveBeenCalledTimes(allowed ? 0 : 1);
+      expect(item.setSaveDialogOptions).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      if (allowed)
+        expect(item.setSaveDialogOptions.mock.calls[0]![0]).toMatchObject({
+          defaultPath: "report.pdf",
+        });
+      candidate.dispose();
+    },
+  );
+
   it("allows Copy response on the current ChatGPT page across route replacement without a focus gate", () => {
     const sharedSession = Object.assign(new EventEmitter(), {
       setPermissionRequestHandler: vi.fn(),
@@ -6643,9 +6725,17 @@ describe("ChatGPT shared partition lifecycle", () => {
     }
 
     expect(sharedSession.listenerCount("will-download")).toBe(1);
+    // Contents that are not a managed, focused route never download.
     const event = { preventDefault: vi.fn() };
-    sharedSession.emit("will-download", event);
+    sharedSession.emit("will-download", event, {}, undefined);
     expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    const unmanaged = {
+      isDestroyed: () => false,
+      isFocused: () => true,
+    };
+    const refused = { preventDefault: vi.fn() };
+    sharedSession.emit("will-download", refused, {}, unmanaged);
+    expect(refused.preventDefault).toHaveBeenCalledTimes(1);
     expect(sharedSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
     expect(sharedSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
   });

@@ -5,7 +5,7 @@ This is the developer path. Downloading an app and establishing its trusted upda
 ## Toolchain and ordinary Dev
 
 The checkout contains the source, resources, tests and build tooling. Use macOS
-ARM64, Node **24.20.0 or 26.7.0**, npm **11.19.0**, Go **1.26.2**, the `task` CLI
+ARM64, Node **24.20.0 or 26.7.0**, npm **11.19.0**, Go **1.27.3**, the `task` CLI
 and Apple Command Line Tools. The complete source gate also requires `gitleaks`.
 Build tooling verifies pinned compiler, SDK, dependency and native-helper bytes;
 installing a similarly named toolchain does not satisfy those checks.
@@ -199,7 +199,7 @@ It requires clean committed source and a separately prepared declaration. The
 JSON file must have schema `farol-go-build-inputs/1` and these fields:
 
 - `toolchain`: canonical absolute SDK `root`, independently approved full-SDK
-  `treeSha256`, `version: "go1.26.2"`, `goos: "darwin"`, and `goarch: "arm64"`
+  `treeSha256`, `version: "go1.27.3"`, `goos: "darwin"`, and `goarch: "arm64"`
   for the current desktop target. A freshly measured digest is not approval.
 - `moduleInputs`: explicit entries for `github.com/google/go-cmp` `v0.6.0`,
   `github.com/m-mizutani/gt` `v0.1.0`, `github.com/m-mizutani/masq` `v0.2.3`,

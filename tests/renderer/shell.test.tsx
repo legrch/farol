@@ -134,7 +134,7 @@ it.each(["applied", "unknown"] as const)(
       code: null,
     });
     await act(async () => c.overlay("connection-tests"));
-    await act(async () => button(host, "Deep test").click());
+    await act(async () => button(host, "Full check").click());
     const requests = configure.mock.calls.filter(
       ([command]) => command.kind === "chatgpt.run-deep-test",
     );
@@ -3190,7 +3190,9 @@ it("one sidebar expands to labels and collapses to a permanent rail on every are
     expect(
       host.querySelector('.rail-version[aria-label$="build details"]'),
     ).toBeTruthy();
-    expect(host.querySelector(".rail-version-compact")?.textContent).toBe("v");
+    expect(host.querySelector(".rail-version-compact")?.textContent).toMatch(
+      /^\d+\.\d+\.\d+/u,
+    );
     expect(
       host
         .querySelector('.rail [aria-current="page"]')

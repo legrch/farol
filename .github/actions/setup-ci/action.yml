@@ -24,11 +24,11 @@ runs:
       run: |
         case "$(uname -s)-$(uname -m)" in
           Darwin-arm64)
-            archive=go1.26.2.darwin-arm64.tar.gz
-            sha256=32af1522bf3e3ff3975864780a429cc0b41d190ec7bf90faa661d6d64566e7af ;;
+            archive=go1.27.3.darwin-arm64.tar.gz
+            sha256=dd3908cf20959d798c1e06ebe5b72213f0505ce01373b40ce3110975a6cd99c2 ;;
           Linux-x86_64)
-            archive=go1.26.2.linux-amd64.tar.gz
-            sha256=990e6b4bbba816dc3ee129eaeaf4b42f17c2800b88a2166c265ac1a200262282 ;;
+            archive=go1.27.3.linux-amd64.tar.gz
+            sha256=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40 ;;
           *) echo "GO_SDK_PLATFORM_UNSUPPORTED" >&2; exit 1 ;;
         esac
         curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive" "https://go.dev/dl/$archive"

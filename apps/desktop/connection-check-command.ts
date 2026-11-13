@@ -11,7 +11,7 @@ export type ExplicitConnectionCheck = Readonly<{
 }>;
 export type ConnectionCheckCode =
   | "CONNECTION_CHECK_PREREQUISITES_REQUIRED"
-  | "CONNECTION_CHECK_PENDING"
+  | "CONNECTION_CHECK_SETUP_UNRESOLVED"
   | "CONNECTION_CHECK_BLOCKED"
   | "CONNECTION_CHECK_OUTCOME_UNKNOWN"
   | "CONNECTION_CHECK_ALREADY_ATTEMPTED"
@@ -105,11 +105,7 @@ export async function runExplicitConnectionCheck(
     first = (await go.claim({ operationId, fingerprint })).first;
   } catch (error) {
     if (error instanceof BridgeError && error.state === "refused")
-      return refused(
-        error.code === "computer_connection_check_pending"
-          ? "CONNECTION_CHECK_PENDING"
-          : "CONNECTION_CHECK_BLOCKED",
-      );
+      return refused("CONNECTION_CHECK_BLOCKED");
     return unknown();
   }
   if (!first) {

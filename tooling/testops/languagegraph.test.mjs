@@ -281,7 +281,7 @@ test("runtime package discovery uses source-owned directories and respects neste
 
 function runtimeFixture(action) {
   const files = {
-    "go.mod": "module github.com/legrch/farol\n\ngo 1.26.2\n",
+    "go.mod": "module github.com/legrch/farol\n\ngo 1.27.3\n",
     "modules/chat/domain/contextbudget/policy.go": "package contextbudget\n",
     "modules/chat/domain/contextbudget/policy_test.go":
       "package contextbudget\n",

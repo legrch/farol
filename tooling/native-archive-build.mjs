@@ -10,31 +10,31 @@ const run = promisify(execFile);
 const MODULE = "golang.org/x/text";
 const MODULE_VERSION = "v0.28.0";
 const MODULE_SUM = "h1:rhazDwis8INMIwQ4tpjLDzUhx6RlXqZNPEM0huQojng=";
-const GO_VERSION = "go1.26.2";
+const GO_VERSION = "go1.27.3";
 // Each trusted compiler is an exact go binary and SDK tree pair. The Homebrew
 // build is the owner's Mac; the official go.dev archive is what hosted CI
 // installs. Both compile the byte-identical archive pinned below.
 const TRUSTED_COMPILERS = Object.freeze([
   Object.freeze({
-    origin: "homebrew go 1.26.2",
+    origin: "homebrew go 1.27.3",
     binarySha256:
-      "912f19a1a95ffe44a9e349d8283c74eb1d2eace37aad3ca6ef7b9ae321eb709f",
+      "60fa7fbaac037e24462915e8c19a1c73b02f548df0098b323823d6fbcdd0c764",
     sdkSha256:
-      "6683400b4531ac46ed6ae2da36a98c082d864f6a5ed9208260536241f7499a8c",
+      "219efa9ad0076fae9f06f69802bc23dbccba8c80a8aa943fd5522d976de09877",
   }),
   Object.freeze({
-    origin: "go.dev go1.26.2.darwin-arm64.tar.gz",
+    origin: "go.dev go1.27.3.darwin-arm64.tar.gz",
     binarySha256:
-      "005640c7ff93028cb704283b0f737f2db3faf8b51b2561170c769b83905da646",
+      "aa355b078a81158d418079a3f8c776719eb99cc6f527e39ffa3250c66566aafb",
     sdkSha256:
-      "fc13e8f5ab542d3cdc4642b91af8a1428d4d6b198cbc1cb62c14b46a7e346f35",
+      "d81a7c34f0cf69b133b063643dc4c02732db7b9e16bfad877365c8da1a1d59d7",
   }),
 ]);
 
 // Measured from the pinned compiler and source after native parity tests.
 // The candidate still requires its separate source review and package gates.
 export const NATIVE_ARCHIVE_SHA256 =
-  "0f60969f4acbaf57d2c628c69412f4f81f227a94e1d27c60d36356fe8ed9d4c7";
+  "1e8dcf65b154252491c2329e4bf293a562426ffbc25ecee97b2c0f6444eb1beb";
 export const NATIVE_ARCHIVE_MAX_BYTES = 8 * 1024 * 1024;
 export const NATIVE_ARCHIVE_OUTPUT = "update-archive.py";
 const MAX_SDK_BYTES = 512 * 1024 * 1024;
@@ -286,10 +286,14 @@ export async function compileNativeArchive({
       "_output/tmp/go-archive-compiler-cache",
     );
     await privateDirectory(sharedCache);
+    // Go telemetry/configuration must stay inside this build's disposable
+    // state, including on macOS where UserConfigDir is under HOME/Library.
+    await privateDirectory(path.join(temporary, "home"));
     await privateDirectory(path.join(temporary, "tmp"));
     await seedModuleCache(cache);
     const environment = {
-      HOME: os.userInfo().homedir,
+      HOME: path.join(temporary, "home"),
+      TMPDIR: path.join(temporary, "tmp"),
       PATH: "/opt/homebrew/bin:/usr/bin:/bin",
       LANG: "en_US.UTF-8",
       LC_ALL: "en_US.UTF-8",
@@ -298,6 +302,7 @@ export async function compileNativeArchive({
       GOTOOLCHAIN: "local",
       GOFLAGS: "",
       GOPROXY: "off",
+      GOSUMDB: "off",
       GOROOT: selected.sdk,
       GOPATH: path.join(temporary, "path"),
       GOMODCACHE: cache,

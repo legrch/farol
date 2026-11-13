@@ -647,8 +647,8 @@ export function checkGoArchitecture(root) {
     const source = fs.readFileSync(mod, "utf8").replace(/\/\/[^\n]*/gu, "");
     if (/^module[ \t]+"?([^"\s]+)"?[ \t]*$/mu.exec(source)?.[1] !== modulePath)
       add("GO_MODULE_IDENTITY", "go.mod", `Expected ${modulePath}`);
-    if (!/^go[ \t]+1\.26\.2[ \t]*$/mu.test(source))
-      add("GO_TOOLCHAIN", "go.mod", "Expected Go 1.26.2");
+    if (!/^go[ \t]+1\.27\.3[ \t]*$/mu.test(source))
+      add("GO_TOOLCHAIN", "go.mod", "Expected Go 1.27.3");
   } else if (production.length)
     add(
       "GO_MODULE_MISSING",
@@ -820,7 +820,7 @@ export function checkGoArchitecture(root) {
   for (const node of graph.keys()) visit(node);
   return {
     module: modulePath,
-    go: "1.26.2",
+    go: "1.27.3",
     productionFiles: production.length,
     testFiles: files.length - production.length,
     excludedModules,

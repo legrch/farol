@@ -382,6 +382,8 @@ async function launch(run) {
     harnessDesktopIdentity("preview", run.appData).userData,
   );
   run.nativePaths = actual;
+  // Electron main is a child of the retained Go guardian (run.child).
+  run.desktopPid = actual.pid;
   run.isolated = true;
   run.userData = actual.userData;
   // This exact singleton was validated by the admission readback above.
@@ -413,10 +415,12 @@ async function launch(run) {
     (value) => value.trim() === "connector-resume-skipped",
     "DAILY_WATCH_STARTUP_TIMEOUT",
   );
+  // The startup marker belongs to the kernel-qualified Electron child; the
+  // retained Go guardian (run.child) is a different process.
   run.marker = await readOwnedStartupMarker(
     run.state,
     run.home.path,
-    run.child.pid,
+    actual.pid,
   );
   run.evidence.admission = {
     ...run.admission,
@@ -689,7 +693,7 @@ async function ownTunnel(run, receipt) {
   const tunnel = await processIdentity(receipt.pid);
   const anchor = await processIdentity(receipt.parentPid);
   assert.equal(tunnel.parentPid, anchor.pid);
-  assert.equal(anchor.parentPid, run.child.pid);
+  assert.equal(anchor.parentPid, run.desktopPid);
   assert.equal(anchor.group, anchor.pid);
   assert.equal(tunnel.group, anchor.pid);
   run.tunnels.push({ receiptId: receipt.id, tunnel, anchor });
@@ -959,8 +963,10 @@ async function normalQuit(run) {
     run.evidence.observations.some(
       (entry) =>
         entry.kind === "FAROL_DAILY_QUIT" &&
-        entry.event === "will-quit" &&
-        entry.pid === run.child.pid &&
+        // The quit drain ends with app.exit(0), which never emits will-quit;
+        // before-quit plus the drained last-quit record is the original quit.
+        entry.event === "before-quit" &&
+        entry.pid === run.desktopPid &&
         entry.visibilityViolations === 0,
     ),
     "DAILY_ORIGINAL_QUIT_EVENT_MISSING",

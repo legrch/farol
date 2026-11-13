@@ -37,15 +37,16 @@ export class ConnectorVerificationBridge {
       binding: this.binding,
       ...(checkId === undefined ? {} : { checkId }),
     });
-    // An unrelated/passive observation cannot acknowledge a diagnostic.
+    // A supplied ID can only be acknowledged as itself. A call without one
+    // (ChatGPT's cached schema has no checkId) may acknowledge the check Go
+    // armed for this slot once that check's Send was durably recorded; Go
+    // alone decides that and returns its ID.
     if (
       checkId !== undefined &&
       state.checkId !== undefined &&
       state.checkId !== checkId
     )
       throw new BridgeError("unknown", "crossed_connector_status_check");
-    if (checkId === undefined && state.checkId !== undefined)
-      throw new BridgeError("unknown", "uncorrelated_connector_status_check");
     return state;
   }
   async expectStatusCheck(checkId: string): Promise<void> {

@@ -56,10 +56,11 @@ func (s *computerConnector) CurrentConnectionCheck(ctx context.Context) (connect
 	return out, nil
 }
 
-// ArmOriginalStatusCheck is invoked only once after the *existing protected*
-// Access Store confirmed original dispatch intent. The socket cannot arm this
-// ID by making a status read. Bootstrap arms the parent without a status nonce
-// and preserves the old one-shot challenge verification owner.
+// ArmOriginalStatusCheck is invoked once per owner check, after the *existing
+// protected* Access Store confirmed that check's original dispatch intent; a
+// newer check re-arms the slot. The socket cannot arm this ID by making a
+// status read. Bootstrap arms the parent without a status nonce and preserves
+// the old one-shot challenge verification owner.
 func (s *computerConnector) ArmOriginalStatusCheck(ctx context.Context, parentID, checkID string, scope check.Scope) error {
 	if !check.ValidScope(scope) || scope.DocumentDigest == "" || parentID == "" {
 		return computerUnavailable()
@@ -73,9 +74,10 @@ func (s *computerConnector) ArmOriginalStatusCheck(ctx context.Context, parentID
 		return computerUnavailable()
 	}
 	slot := s.current
+	// A newer owner check replaces an earlier one that never confirmed in this
+	// slot; the Store has already settled that earlier record as unknown.
 	if slot == nil || slot.closing || slot.startupUncertain || slot.owner == nil ||
-		slot.checkParentID != "" || slot.expectedStatusCheckID != "" ||
-		slot.statusCheckID != "" || scope.CheckID != checkID ||
+		slot.checkParentID == parentID || scope.CheckID != checkID ||
 		scope.ChallengeDigest != slot.challengeDigest {
 		return computerUnavailable()
 	}
@@ -103,6 +105,8 @@ func (s *computerConnector) ArmOriginalStatusCheck(ctx context.Context, parentID
 			return computerUnavailable()
 		}
 		slot.expectedStatusCheckID = checkID
+		slot.statusCheckID = ""
+		slot.statusSendRecorded = false
 	} else if scope.Mode == check.Bootstrap {
 		if proof != nil || checkID != "" || scope.Challenge == "" {
 			return computerUnavailable()
@@ -110,15 +114,46 @@ func (s *computerConnector) ArmOriginalStatusCheck(ctx context.Context, parentID
 	} else {
 		return computerUnavailable()
 	}
+	if scope.Mode == check.Bootstrap {
+		slot.expectedStatusCheckID = ""
+		slot.statusCheckID = ""
+		slot.statusSendRecorded = false
+	}
 	// This is a transient original-runtime dispatch right. Restart cannot
 	// reconstruct it from the durable record or repeat the source Send.
 	slot.checkParentID = parentID
 	return nil
 }
 
+// RecordOriginalStatusSend is invoked only after the Access Store durably
+// recorded that the browser clicked Send for this exact armed status check.
+// Before it, an argument-free status call cannot be this check's prompt: it
+// opens the only window in which such a call may acknowledge the check.
+// Bootstrap has no status acknowledgement and records nothing.
+func (s *computerConnector) RecordOriginalStatusSend(ctx context.Context, parentID string, scope check.Scope) error {
+	if scope.Mode != check.Status {
+		return nil
+	}
+	if !check.ValidScope(scope) || scope.CheckID == "" || parentID == "" {
+		return computerUnavailable()
+	}
+	if err := s.enter(ctx); err != nil {
+		return err
+	}
+	defer func() { <-s.effects }()
+	slot := s.current
+	if slot == nil || slot.closing || slot.startupUncertain ||
+		slot.checkParentID != parentID || slot.expectedStatusCheckID != scope.CheckID {
+		return computerUnavailable()
+	}
+	slot.statusSendRecorded = true
+	return nil
+}
+
 // ConfirmOriginalConnectionCheck supplies the sole positive Go-side receipt.
-// For status, a matching nonce must have travelled from the prepared browser
-// prompt through public MCP input to this exact socket and current Go slot.
+// For status, a public MCP computer_connection_status call must have reached
+// this exact socket and current Go slot: either with this check's exact ID,
+// or argument-free after this check's own Send was durably recorded.
 // Bootstrap retains the original sealed challenge/List or empty Catalogue.
 func (s *computerConnector) ConfirmOriginalConnectionCheck(ctx context.Context, parentID string, scope check.Scope) (string, error) {
 	if !check.ValidScope(scope) || scope.DocumentDigest == "" {
@@ -202,5 +237,6 @@ func (s *computerConnector) RetireOriginalConnectionCheck(ctx context.Context, p
 	slot.checkParentID = ""
 	slot.expectedStatusCheckID = ""
 	slot.statusCheckID = ""
+	slot.statusSendRecorded = false
 	return nil
 }

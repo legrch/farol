@@ -1,5 +1,6 @@
 import "../../../apps/desktop/bridge/e2e-window-bootstrap.ts";
 import { guardDiagnosticPipes } from "./diagnostic-pipes";
+import { openStartupSplash, type StartupSplash } from "./startup-splash";
 import { preventEmbeddedWindowDrag } from "./embedded-web-drag";
 import { separateAppVerificationScopeCurrent } from "../../pkg/product-settings/separate-app-verification";
 import { prepareConnectorCheckDocument } from "../../../apps/desktop/bridge/connector-check-readiness";
@@ -946,7 +947,8 @@ let connectorCredentialStore: PrivateConnectorKeyStore | null = null;
 let secureMcpConnectorRuntime: SecureMcpConnectorRuntime | null = null;
 let modelLifecycle: FarolModelLifecycle | null = null;
 let connectorTaskAdmission = false;
-// Manual chat diagnostics reserve dispatch, but do not alter the connector.
+// Manual owner checks (Ping ChatGPT, Full check) reserve dispatch, but do not
+// alter the connector or the sidebar connection status.
 let connectorTaskAdmissionPurpose: "manual-diagnostic" | null = null;
 
 function connectionAdmissionInProgress(): boolean {
@@ -5877,7 +5879,17 @@ async function testConnectionCommand(
   const config = configuration;
   if (!core || !config)
     return configurationFailure("CONNECTION_CHECK_PREREQUISITES_REQUIRED");
-  let reserved = false;
+  // Go's first claim supersedes every unsettled earlier attempt as unknown.
+  // Admission is therefore checked and reserved synchronously BEFORE that
+  // claim: a second check while one is live (for example after a renderer
+  // reload) is refused here and never reaches Go to settle the live one.
+  if (chatGptTaskAdmission || connectorTaskAdmission)
+    return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+  chatGptTaskAdmission = true;
+  connectorTaskAdmission = true;
+  // An owner's own toolbar check is a manual diagnostic: it must not
+  // flip the sidebar to "Checking connection…". Setup keeps its state.
+  if (origin !== "setup") connectorTaskAdmissionPurpose = "manual-diagnostic";
   let expected: ConnectorAppVerificationBinding | null = null;
   let workspace: string | null | undefined;
   let outcome: ConnectionCheckCommandResult;
@@ -5893,10 +5905,9 @@ async function testConnectionCommand(
       async () => {
         // This callback is reached only after FIRST durable admission. A replay
         // observes its original Go result without rebinding to today's page.
+        // Desktop admission is already reserved for this command above.
         if (
           !embeddedBrowserEnabled() ||
-          chatGptTaskAdmission ||
-          connectorTaskAdmission ||
           quitInProgress ||
           installedUpdateAdmission ||
           !chatGptTaskAdmissionReady() ||
@@ -5918,10 +5929,6 @@ async function testConnectionCommand(
           throw new ConnectionCheckRefusal(
             "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
           );
-        // Reserve existing Desktop owners before the first browser/native await.
-        chatGptTaskAdmission = true;
-        connectorTaskAdmission = true;
-        reserved = true;
         const snapshot = config.snapshot();
         if (snapshot.status !== "ready")
           throw new ConnectionCheckRefusal(
@@ -5945,11 +5952,13 @@ async function testConnectionCommand(
           throw new ConnectionCheckRefusal(
             "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
           );
+        // A persistent Setup uncertainty, not a check that is still running:
+        // it never clears by pinging again, so it has its own code.
         if (
           settings.setup.connect.outcomeUnknown ||
           connector.appVerificationPending
         )
-          throw new ConnectionCheckRefusal("CONNECTION_CHECK_PENDING");
+          throw new ConnectionCheckRefusal("CONNECTION_CHECK_SETUP_UNRESOLVED");
         const observed = await core.observeComputerConnectorVerification();
         const proof = connectorVerificationProof(observed);
         if (proof && proof.workspaceId !== workspace)
@@ -6069,14 +6078,13 @@ async function testConnectionCommand(
       },
     );
   } finally {
-    if (reserved) {
-      chatGptTaskAdmission = false;
-      connectorTaskAdmission = false;
-      void connectorConnection
-        .sample()
-        .then(currentConnectionStatus)
-        .catch(() => undefined);
-    }
+    chatGptTaskAdmission = false;
+    connectorTaskAdmission = false;
+    connectorTaskAdmissionPurpose = null;
+    void connectorConnection
+      .sample()
+      .then(currentConnectionStatus)
+      .catch(() => undefined);
   }
   if (outcome.state !== "verified") return configurationFailure(outcome.code);
   if (!outcome.retained) {
@@ -13077,6 +13085,13 @@ function chatGptWindowPresentationOption(): Readonly<{
   return presentation === undefined ? {} : { windowPresentation: presentation };
 }
 
+let startupSplash: StartupSplash | null = null;
+function closeStartupSplash(): void {
+  const splash = startupSplash;
+  startupSplash = null;
+  splash?.close();
+}
+
 function revealWindow(): void {
   if (!window || window.isDestroyed()) return;
   if (window.isMinimized()) window.restore();
@@ -13085,6 +13100,7 @@ function revealWindow(): void {
     window.setBounds(selectedVisibleTestPlacement(initialWindowSize).bounds);
     window.showInactive();
   } else if (action === "show-and-focus") window.show();
+  closeStartupSplash();
 }
 
 function reconcileVisibleTestDisplay(): void {
@@ -13530,6 +13546,32 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   }
   if (process.platform === "darwin") {
     app.dock?.setIcon(desktopBrandImage());
+  }
+  // Ordinary owner launch only: show a window at once while Go core,
+  // settings, journals and task state start. Tests and background
+  // launches keep their existing window policy.
+  if (
+    windowMode !== "hidden" &&
+    !ownerBackgroundOnly &&
+    process.env.FAROL_E2E !== "1"
+  ) {
+    try {
+      startupSplash = openStartupSplash({
+        title: displayWindowTitle,
+        width: initialWindowSize.width,
+        height: initialWindowSize.height,
+        iconDataUrl: desktopBrandImage().toDataURL(),
+        ...(windowMode === "secondary-visible"
+          ? {
+              bounds: selectedVisibleTestPlacement(initialWindowSize).bounds,
+              inactive: true,
+            }
+          : {}),
+      });
+      app.once("before-quit", closeStartupSplash);
+    } catch {
+      startupSplash = null;
+    }
   }
   // N03/D2: the run marker is this generation's first durable runtime obligation and the
   // last thing it removes — only after a quit whose drain was confirmed (see
@@ -14409,12 +14451,14 @@ if (
           process.stderr.write("INSTALL_STARTUP_PROOF_UNCONFIRMED\n");
         }
       }
+      closeStartupSplash();
       startupStage("startup-complete");
       process.stderr.write(
         `${secondInstanceResultPrefix}${isPrimaryReady() ? "primary-started" : "reopen-failed"}\n`,
       );
     })
     .catch(async (error: unknown) => {
+      closeStartupSplash();
       try {
         await desktopGoCore?.abortStartup();
       } catch {

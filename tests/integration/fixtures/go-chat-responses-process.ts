@@ -103,7 +103,7 @@ export async function startGoChatResponsesFixture(
     encoding: "utf8",
     timeout: 5000,
   });
-  if (!version.startsWith("go version go1.26.2 "))
+  if (!version.startsWith("go version go1.27.3 "))
     throw new Error("fixture_go_toolchain_mismatch");
   const directory = await mkdtemp(
     path.join(tmpdir(), "farol-go-responses-cpu-"),

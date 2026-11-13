@@ -1,6 +1,6 @@
 module github.com/legrch/farol
 
-go 1.26.2
+go 1.27.3
 
 require (
 	github.com/google/go-cmp v0.6.0

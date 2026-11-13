@@ -55,8 +55,17 @@ func TestOriginalIdentityAndChangedInputNeverBecomeFresh(t *testing.T) {
 	if _, _, err := j.Begin(changed); !errors.Is(err, ErrRefused) {
 		t.Fatal("changed input accepted", err)
 	}
-	if _, _, err := j.Begin(testRequest(2)); !errors.Is(err, ErrPending) {
-		t.Fatal("second UUID overwrote pending", err)
+	// A new owner click supersedes the unsettled earlier attempt: it is kept
+	// as unknown (it was prepared), never re-sent and never verified.
+	next, first, err := j.Begin(testRequest(2))
+	if err != nil || !first {
+		t.Fatal("repeated owner check was blocked", err)
+	}
+	if prior, _ := next.Find(e.Request.OperationID); prior.Phase != OutcomeUnknown || prior.Scope == nil {
+		t.Fatal("superseded attempt was not retained as unknown", prior.Phase)
+	}
+	if _, err := next.Advance(e.Request.OperationID, e); err == nil {
+		t.Fatal("superseded attempt advanced again")
 	}
 	copy, _ := j.Find(e.Request.OperationID)
 	copy.Scope.AppName = "different"
@@ -101,8 +110,8 @@ func TestOriginalDispatchPhasesAreMonotonicAndUnknownCannotReplay(t *testing.T) 
 					t.Fatalf("UNKNOWN replayed as %s", phase)
 				}
 			}
-			if _, _, err = reopened.Begin(testRequest(2)); !errors.Is(err, ErrPending) {
-				t.Fatal("reopen lost unresolved custody", err)
+			if _, first, err := reopened.Begin(testRequest(2)); err != nil || !first {
+				t.Fatal("unknown outcome blocked a new owner check", err)
 			}
 		})
 	}
@@ -140,7 +149,9 @@ func TestCorrelatedReceiptCanConfirmLostSendAckButCannotChangeScope(t *testing.T
 func TestPromptIsModeExactAndNeverUsesPassiveStatusForFreshCheck(t *testing.T) {
 	status := testScope(Status)
 	p := Prompt(status)
-	if !strings.Contains(p, status.CheckID) || !strings.Contains(p, "computer_connection_status ONCE") || !strings.Contains(p, "Do not use {}") || strings.Contains(p, "farol_connector_verify") {
+	// A ChatGPT connector caches its tool schema; an older cached schema has
+	// no checkId. The prompt therefore never asks the model for an argument.
+	if strings.Contains(p, status.CheckID) || strings.Contains(p, "checkId") || !strings.Contains(p, "computer_connection_status ONCE with no arguments") || strings.Contains(p, "farol_connector_verify") {
 		t.Fatal(p)
 	}
 	boot := testScope(Bootstrap)
@@ -159,25 +170,81 @@ func TestPromptIsModeExactAndNeverUsesPassiveStatusForFreshCheck(t *testing.T) {
 		}
 	}
 }
-func TestBoundedCapacityNeverEvictsKnownOrUnknownIdentity(t *testing.T) {
+
+// History is never forgotten: owner clicks are low-rate, so every attempt is
+// retained and no attempt is refused or dropped because of history size.
+func TestRepeatedChecksKeepEveryAttemptAndNeverRefuse(t *testing.T) {
 	j := Journal{Entries: []Entry{}}
-	for n := 1; n <= MaxEntries; n++ {
+	const total = 200
+	for n := 1; n <= total; n++ {
 		var err error
 		j, _, err = j.Begin(testRequest(n))
 		if err != nil {
-			t.Fatal(err)
+			t.Fatal("history size refused an owner check", n, err)
 		}
-		e, _ := j.Find(testRequest(n).OperationID)
-		e.Phase = RefusedBeforeSend
-		j, err = j.Advance(e.Request.OperationID, e)
-		if err != nil {
-			t.Fatal(err)
+		if n%2 == 0 {
+			// Even attempts reach dispatch intent; the next click settles
+			// them as unknown. Odd ones stay claimed and settle as refused.
+			e, _ := j.Find(testRequest(n).OperationID)
+			s := testScope(Status)
+			e.Scope, e.Phase = &s, Prepared
+			if j, err = j.Advance(e.Request.OperationID, e); err != nil {
+				t.Fatal(err)
+			}
+			e.Phase = DispatchIntent
+			if j, err = j.Advance(e.Request.OperationID, e); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
-	if _, _, err := j.Begin(testRequest(MaxEntries + 1)); !errors.Is(err, ErrCapacity) {
-		t.Fatal("capacity evicted history", err)
+	if len(j.Entries) != total || !j.Valid() {
+		t.Fatal("attempts were dropped", len(j.Entries))
 	}
 	if _, first, err := j.Begin(testRequest(1)); err != nil || first {
-		t.Fatal("old UUID was recycled", err)
+		t.Fatal("replayed first operation ID became fresh", err)
+	}
+	for n := 1; n < total; n++ {
+		e, ok := j.Find(testRequest(n).OperationID)
+		want := RefusedBeforeSend
+		if n%2 == 0 {
+			want = OutcomeUnknown
+		}
+		if !ok || e.Phase != want {
+			t.Fatal("attempt forgotten or rewritten", n, e.Phase)
+		}
+	}
+}
+func TestImportKeepsPredecessorAttemptsAndRefusesADifferentAttempt(t *testing.T) {
+	ours, e := preparedJournal(t, Status)
+	e.Phase = DispatchIntent
+	ours, err := ours.Advance(e.Request.OperationID, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	earlier := e
+	earlier.Phase = Prepared
+	merged, err := ours.Import(Journal{Entries: []Entry{earlier}})
+	if err == nil {
+		merged, err = merged.Import(Journal{Entries: []Entry{{Request: testRequest(2), Phase: Claimed}}})
+	}
+	if err != nil || len(merged.Entries) != 2 {
+		t.Fatal("predecessor attempts not imported", err)
+	}
+	if got, _ := merged.Find(e.Request.OperationID); got.Phase != DispatchIntent {
+		t.Fatal("our more advanced record was replaced", got.Phase)
+	}
+	if got, _ := merged.Find(testRequest(2).OperationID); got.Phase != RefusedBeforeSend {
+		t.Fatal("ended predecessor claim was not settled", got.Phase)
+	}
+	for _, change := range []func(*Entry){
+		func(x *Entry) { x.Request.Fingerprint = testDigest("other") },
+		func(x *Entry) { s := *x.Scope; s.ScopeDigest = testDigest("other"); x.Scope = &s },
+		func(x *Entry) { x.Phase = OutcomeUnknown },
+	} {
+		other := e
+		change(&other)
+		if _, err := ours.Import(Journal{Entries: []Entry{other}}); !errors.Is(err, ErrRefused) {
+			t.Fatal("a different attempt under a known ID was merged", other.Phase)
+		}
 	}
 }

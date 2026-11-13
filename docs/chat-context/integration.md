@@ -87,7 +87,7 @@ different representations and must not be substituted for one another.
 
 ## Reproduction and evidence limits
 
-Use the repository's declared Go 1.26.2, Node 24.20.0 and npm 11.19.0, with
+Use the repository's declared Go 1.27.3, Node 24.20.0 and npm 11.19.0, with
 task-owned caches or the verified Linux dependency cache. No network is required
 for the new Go fixtures:
 

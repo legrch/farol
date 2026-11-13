@@ -46,7 +46,7 @@ async function fixture() {
     sourceTreeDigest: identity.sourceTreeDigest,
     inputExact: true,
     entry: "./cmd/farol",
-    goVersion: "go1.26.2",
+    goVersion: "go1.27.3",
     goos: "darwin",
     goarch: "arm64",
     cgoEnabled: false,
