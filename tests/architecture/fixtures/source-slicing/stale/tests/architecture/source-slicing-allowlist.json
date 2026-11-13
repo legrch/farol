@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "files": {
+    "tests/unit/case.mjs": ["vm"]
+  }
+}
