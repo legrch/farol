@@ -5,20 +5,26 @@
 // A file offends when code that it executes derives, by data flow inside the
 // file, from an fs read (or a bundler `?raw` import) of a production file: a
 // .ts/.tsx/.mts/.js/.mjs/.cjs/.go file under src/, apps/, boot/, modules/,
-// pkg/, transport/, cmd/ or tooling/, spelled relative to the repository root
-// (a path that first enters fixtures/ or node_modules/ does not count). The
-// path must be spelled by the read call's own path argument, followed through
-// bindings, assignments, member assignments, callbacks and same-file reader
-// helpers (including helpers that add the root themselves). Import specifiers
-// and test titles never count. Mechanisms:
+// pkg/, transport/, cmd/ or tooling/. The path is evaluated as a bounded set
+// of candidate strings (one per binding alternative, callee names skipped);
+// any candidate counts unless it reaches the production match through a
+// fixtures/ or node_modules/ segment. It is followed through bindings,
+// assignments, member assignments, callbacks and same-file reader helpers
+// (including helpers that add the root themselves). Import specifiers and test
+// titles never count. Mechanisms:
 //   vm         vm.runIn*Context, vm.Script, vm.compileFunction
 //   function   new Function(...) / Function(...)
 //   eval       eval(...), (0, eval)(...), globalThis.eval(...)
-//   load       dynamic import() / require() / module._compile of derived text
-//              (a data: URL, or a temp file written from it)
+//   load       the LOADED CONTENT is derived text: a data:/blob: URL built from
+//              it, a file written from it and then imported, or the first
+//              argument of module._compile. A specifier merely computed from
+//              text names real modules and does not count.
 //   transpile  a TypeScript/Babel/esbuild transpile call on derived text, in a
 //              file that also loads code dynamically
 //   esbuild    an esbuild build with `stdin.contents` derived from the read
+// A reviewed false positive can be waived with a comment line
+// `// source-slicing: allowed - <reason>` (reason of 10+ characters) in the
+// first 30 lines; a waiver on a file that is not flagged is an error.
 // Tests that only assert on source text are reported, never blocked.
 import fs from "node:fs";
 import path from "node:path";
@@ -48,20 +54,35 @@ const productionRootSegment = new RegExp(
 );
 const codeFileEnding = /\.(?:ts|tsx|mts|js|mjs|cjs|go)$/;
 
-// A match counts only when it is repository-root relative: whatever literal
-// text precedes it may contain nothing but "." and ".." segments, so a path
-// that enters fixtures/, node_modules/ or a temp directory first is not
-// production source.
+// A candidate path counts when a production match is not reached through a
+// fixtures/ or node_modules/ directory: whatever literal text precedes the
+// match may not contain such a segment. Other prefixes (a temp directory, a
+// computed root) are fine, because the root is usually computed.
 function rootRelative(text, pattern) {
   for (const match of text.matchAll(pattern)) {
     const prefix = text.slice(0, match.index);
-    if (prefix.split("/").every((segment) => ["", ".", ".."].includes(segment)))
+    if (
+      !prefix
+        .split("/")
+        .some((segment) => segment === "fixtures" || segment === "node_modules")
+    )
       return true;
   }
   return false;
 }
 const productionText = (text) => rootRelative(text, productionFile);
 const prefixesProduction = (text) => rootRelative(text, productionRootSegment);
+const minimumReason = 10;
+// `// source-slicing: allowed - <reason>` within the first 30 lines.
+function waiverOf(source) {
+  for (const line of source.split("\n").slice(0, 30)) {
+    const match = waiverLine.exec(line);
+    if (match) return { reason: (match[1] ?? "").trim() };
+  }
+  return null;
+}
+const waiverLine =
+  /^\s*\/\/\s*source-slicing:\s*allowed(?:\s*[\u2014\u2013-]+\s*(.*))?$/;
 const readCalls = new Set(["readFileSync", "readFile", "createReadStream"]);
 const vmApi = new Set([
   "runInContext",
@@ -203,8 +224,11 @@ function patternNames(pattern, out = []) {
 function rootName(node) {
   let current = node;
   while (current?.type === "MemberExpression") current = current.object;
-  if (current?.type === "Identifier") return current.name;
-  if (current?.type === "ThisExpression") return "this";
+  if (
+    current?.type === "Identifier" &&
+    !["process", "globalThis"].includes(current.name)
+  )
+    return current.name;
   return null;
 }
 
@@ -251,7 +275,8 @@ function gather(ast) {
   const funcs = new Map(); // name -> { params: (string|null)[], node }
   const calls = [];
   const callbacks = []; // { call, fn }
-  const loads = []; // expressions executed by a dynamic load
+  const loads = []; // { kind: "specifier" | "compile", node }
+  const written = []; // { target, content } from writeFile calls
   const seeded = new Set(); // names bound to production text directly
   let dynamicLoad = false;
   const bind = (name, node) => {
@@ -350,20 +375,20 @@ function gather(ast) {
             callbacks.push({ call: node, fn: argument });
         const name = calleeName(node.callee);
         if (writeCalls.has(name) && node.arguments.length >= 2) {
-          // writeFile(target, derived): the target now holds derived text.
+          // writeFile(target, derived): the target file holds derived text.
           const target = rootName(node.arguments[0]);
-          if (target) bind(target, node.arguments[1]);
+          if (target) written.push({ target, content: node.arguments[1] });
         }
         const first = node.arguments[0];
         if (node.type === "CallExpression" && node.callee.type === "Import") {
           if (first?.type !== "StringLiteral") {
             dynamicLoad = true;
-            if (first) loads.push(first);
+            if (first) loads.push({ kind: "specifier", node: first });
           }
         }
         if (name === "_compile") {
           dynamicLoad = true;
-          if (first) loads.push(first);
+          if (first) loads.push({ kind: "compile", node: first });
         }
         if (
           node.callee.type === "Identifier" &&
@@ -371,7 +396,7 @@ function gather(ast) {
           first?.type !== "StringLiteral"
         ) {
           dynamicLoad = true;
-          if (first) loads.push(first);
+          if (first) loads.push({ kind: "specifier", node: first });
         }
         break;
       }
@@ -386,6 +411,7 @@ function gather(ast) {
     calls,
     callbacks,
     loads,
+    written,
     seeded,
     dynamicLoad,
   };
@@ -399,6 +425,7 @@ function analyzeFacts(facts) {
     calls,
     callbacks,
     loads,
+    written,
     seeded,
     dynamicLoad,
   } = facts;
@@ -407,21 +434,108 @@ function analyzeFacts(facts) {
     return alias && modules.includes(alias.module) ? alias : null;
   };
 
-  // Text a node spells out, following bindings to bounded depth so that
-  // `const dir = path.join(root, "src"); read(path.join(dir, "x.ts"))` works.
-  function pathText(node, depth = 0) {
-    const parts = [];
-    walk(node, (inner) => {
-      const text = literalText(inner);
-      if (text !== null) parts.push(text.replaceAll("\u0000", "/"));
-      if (inner.type === "Identifier" && depth < 3 && bindings.has(inner.name))
-        for (const bound of bindings.get(inner.name))
-          if (bound.type !== "FunctionDeclaration")
-            parts.push(pathText(bound, depth + 1));
-    });
-    return parts.join("/");
+  // Candidate path strings a node can spell (bounded). Bindings contribute one
+  // alternative each; callee identifiers and function bodies are skipped, so a
+  // shadowing `const resolve = vi.fn(...)` cannot pollute a path.
+  const maxCandidates = 96;
+  const candidateCache = [new Map(), new Map(), new Map(), new Map()];
+  const cross = (lists, glue) => {
+    let out = [];
+    let first = true;
+    for (const list of lists) {
+      const options = list.length > 0 ? list : [""];
+      if (first) {
+        out = options.slice(0, maxCandidates);
+        first = false;
+        continue;
+      }
+      const next = [];
+      for (const left of out)
+        for (const right of options) {
+          if (next.length < maxCandidates) next.push(left + glue + right);
+        }
+      out = next;
+    }
+    return out;
+  };
+  function candidates(node, depth = 0) {
+    if (!node || depth > 3) return [];
+    const cache = candidateCache[depth];
+    if (cache.has(node)) return cache.get(node);
+    cache.set(node, []);
+    let result = [];
+    switch (node.type) {
+      case "StringLiteral":
+        result = [node.value];
+        break;
+      case "TemplateLiteral": {
+        const parts = [];
+        node.quasis.forEach((quasi, index) => {
+          parts.push([quasi.value.cooked ?? quasi.value.raw]);
+          if (node.expressions[index])
+            parts.push(candidates(node.expressions[index], depth));
+        });
+        result = cross(parts, "");
+        break;
+      }
+      case "CallExpression":
+      case "NewExpression":
+        result = cross(
+          node.arguments.map((argument) => candidates(argument, depth)),
+          "/",
+        );
+        break;
+      case "Identifier":
+        for (const bound of bindings.get(node.name) ?? [])
+          if (
+            bound.type !== "FunctionDeclaration" &&
+            bound.type !== "ArrowFunctionExpression" &&
+            bound.type !== "FunctionExpression"
+          )
+            result.push(...candidates(bound, depth + 1));
+        break;
+      case "BinaryExpression":
+        result = cross(
+          [candidates(node.left, depth), candidates(node.right, depth)],
+          "",
+        );
+        break;
+      case "ConditionalExpression":
+        result = [
+          ...candidates(node.consequent, depth),
+          ...candidates(node.alternate, depth),
+        ];
+        break;
+      case "LogicalExpression":
+        result = [
+          ...candidates(node.left, depth),
+          ...candidates(node.right, depth),
+        ];
+        break;
+      case "ArrayExpression":
+        for (const element of node.elements)
+          result.push(...candidates(element, depth));
+        break;
+      case "AwaitExpression":
+      case "ParenthesizedExpression":
+        result = candidates(node.argument ?? node.expression, depth);
+        break;
+      case "TSAsExpression":
+      case "TSNonNullExpression":
+      case "TSSatisfiesExpression":
+        result = candidates(node.expression, depth);
+        break;
+      case "MemberExpression":
+        result = candidates(node.object, depth);
+        break;
+      default:
+        break;
+    }
+    result = result.slice(0, maxCandidates);
+    cache.set(node, result);
+    return result;
   }
-  const production = (node) => productionText(pathText(node));
+  const production = (node) => candidates(node).some(productionText);
 
   function isReadCall(node) {
     if (node.type !== "CallExpression") return false;
@@ -465,7 +579,8 @@ function analyzeFacts(facts) {
           if (!argument) continue;
           if (production(argument)) entry.bodyProd = true;
           // The helper adds the production root itself: read(rel) -> src/rel.
-          if (prefixesProduction(pathText(argument))) entry.prefixRoot = true;
+          if (candidates(argument).some(prefixesProduction))
+            entry.prefixRoot = true;
           const used = referencedNames(argument);
           fn.params.forEach((param, index) => {
             if (param && used.has(param)) entry.params.add(index);
@@ -491,24 +606,34 @@ function analyzeFacts(facts) {
           node.arguments[index] &&
           (production(node.arguments[index]) ||
             (reader.prefixRoot &&
-              codeFileEnding.test(pathText(node.arguments[index])))),
+              candidates(node.arguments[index]).some((text) =>
+                codeFileEnding.test(text),
+              ))),
       )
     );
   }
 
+  const containsCache = new Map();
   function containsProductionRead(node) {
+    if (containsCache.has(node)) return containsCache.get(node);
     let found = false;
     walk(node, (inner) => {
-      if (isProductionRead(inner)) found = true;
+      if (!found && isProductionRead(inner)) found = true;
     });
+    containsCache.set(node, found);
     return found;
   }
+  const namesCache = new Map();
+  const namesOf = (node) => {
+    if (!namesCache.has(node)) namesCache.set(node, referencedNames(node));
+    return namesCache.get(node);
+  };
 
   // Names that hold text read from production source, or text derived from it.
   const tainted = new Set(seeded);
   const derived = (node) =>
     containsProductionRead(node) ||
-    [...referencedNames(node)].some((name) => tainted.has(name));
+    [...namesOf(node)].some((name) => tainted.has(name));
   for (let changed = true; changed;) {
     changed = false;
     for (const [name, nodes] of bindings) {
@@ -547,7 +672,26 @@ function analyzeFacts(facts) {
   }
 
   const mechanisms = new Set();
-  if (loads.some(derived)) mechanisms.add("load");
+  // load: the LOADED CONTENT is derived text. A specifier merely computed
+  // from text is not: it names real modules.
+  const writtenTargets = new Set(
+    written
+      .filter(({ content }) => derived(content))
+      .map(({ target }) => target),
+  );
+  const contentUrl = (node) =>
+    candidates(node).some((text) => /^(?:data|blob):/.test(text)) ||
+    (node.type === "TemplateLiteral" &&
+      /^(?:data|blob):/.test(node.quasis[0]?.value.raw ?? ""));
+  for (const { kind, node } of loads) {
+    if (kind === "compile" && derived(node)) mechanisms.add("load");
+    if (
+      kind === "specifier" &&
+      ((contentUrl(node) && derived(node)) ||
+        [...namesOf(node)].some((name) => writtenTargets.has(name)))
+    )
+      mechanisms.add("load");
+  }
   const hasEsbuild = [...aliases.values()].some((a) => a.module === "esbuild");
   for (const call of calls) {
     const callee = call.callee;
@@ -648,17 +792,44 @@ export function scan(scanRoot) {
   const offenders = {};
   const textOnly = [];
   const unparsable = [];
+  const waived = [];
+  const waiverErrors = [];
   for (const file of files.sort()) {
     const relative = path.relative(scanRoot, file).split(path.sep).join("/");
     try {
-      const result = analyze(fs.readFileSync(file, "utf8"), file);
-      if (result.mechanisms.length > 0) offenders[relative] = result.mechanisms;
+      const source = fs.readFileSync(file, "utf8");
+      const result = analyze(source, file);
+      const waiver = waiverOf(source);
+      if (waiver && waiver.reason.length < minimumReason) {
+        waiverErrors.push({
+          code: "SLICING_WAIVER_INVALID",
+          detail: `${relative}: a source-slicing waiver needs a reason of at least ${minimumReason} characters`,
+        });
+        continue;
+      }
+      if (waiver && result.mechanisms.length === 0) {
+        waiverErrors.push({
+          code: "SLICING_WAIVER_STALE",
+          detail: `${relative}: the waiver is not needed because the file is not flagged; remove it`,
+        });
+        continue;
+      }
+      if (waiver) waived.push({ file: relative, reason: waiver.reason });
+      else if (result.mechanisms.length > 0)
+        offenders[relative] = result.mechanisms;
       else if (result.textOnly) textOnly.push(relative);
     } catch (error) {
       unparsable.push(`${relative}: ${error.message}`);
     }
   }
-  return { scanned: files.length, offenders, textOnly, unparsable };
+  return {
+    scanned: files.length,
+    offenders,
+    textOnly,
+    unparsable,
+    waived,
+    waiverErrors,
+  };
 }
 
 function loadAllowlist(scanRoot) {
@@ -669,7 +840,7 @@ function loadAllowlist(scanRoot) {
 }
 
 export function diff(result, allowlist) {
-  const findings = [];
+  const findings = [...(result.waiverErrors ?? [])];
   for (const entry of result.unparsable)
     findings.push({
       code: "SLICING_UNPARSABLE",
@@ -769,14 +940,17 @@ function main() {
     offenders: Object.keys(result.offenders).length,
     byMechanism,
     textOnly: result.textOnly.length,
+    waived: result.waived.length,
     findings,
   };
   if (json) console.log(JSON.stringify(summary));
   else {
+    for (const entry of result.waived)
+      console.log(`waived: ${entry.file} (${entry.reason})`);
     for (const finding of findings)
       console.error(`${finding.code}: ${finding.detail}`);
     console.log(
-      `source-slicing: ${summary.scanned} test files, ${summary.offenders} allowlisted offenders, ${summary.textOnly} text-only, ${findings.length} findings`,
+      `source-slicing: ${summary.scanned} test files, ${summary.offenders} allowlisted offenders, ${summary.textOnly} text-only, ${summary.waived} waived, ${findings.length} findings`,
     );
   }
   process.exit(findings.length > 0 ? 1 : 0);

@@ -142,30 +142,42 @@ parses every code file under `tests/` and every co-located `*.test.*` or `*.spec
 file elsewhere in the repository, and refuses one that executes code derived, by data
 flow inside the file, from an fs read (or a bundler `?raw` import) of a production
 `.ts`/`.tsx`/`.mts`/`.js`/`.mjs`/`.cjs`/`.go` file under `src/`, `apps/`, `boot/`,
-`modules/`, `pkg/`, `transport/`, `cmd/` or `tooling/`. The path must be spelled by the
-read call's own path argument, relative to the repository root (a path that first
-enters `fixtures/` or `node_modules/` does not count), and is followed through
-bindings, assignments, member assignments, callbacks and same-file reader helpers,
-including helpers that add the root themselves; import specifiers and test titles never
-count. Execution means `node:vm`, `new Function`, `eval`, a dynamic `import()`,
-`require()` or `module._compile` of derived text (a `data:` URL or a temp file written
-from it), a TypeScript/Babel/esbuild transpile followed by a dynamic load, or an esbuild
-`stdin.contents` build. Today's offenders are listed by exact path and mechanism in
-`tests/architecture/source-slicing-allowlist.json`, which only shrinks: a listed file
-that no longer offends fails as stale until removed (`--write-allowlist` removes
-entries and mechanisms and refuses any growth; `--init-allowlist` refuses when the file
-exists unless `--force-init` is given), and a new offender fails. A test file that
-cannot be parsed also fails the gate, naming the file. Import the code under test
-instead. Tests that only assert on source text are reported, not blocked. Taint is
-keyed by variable name file-wide, so a literal executed under a name that is tainted
-elsewhere in the file is reported: the error is loud and renaming the variable clears
-it. Known limits, not detected: reading a directory (`readdir`) and then slicing;
-computed forms such as `globalThis["eval"]` or `Function` reached through a prototype
-or `constructor`; a read helper or a vm wrapper imported from another file; `vm`
-reached through `createRequire`; code written to disk and run in a child process
-(`spawn`, `fork`, `execFile`); a dynamic `import("...?raw")`; `eval`-like timers with
-a string argument; esbuild plugin `onLoad` contents; and flows through object
-properties beyond the root binding or through return values of unresolved calls.
+`modules/`, `pkg/`, `transport/`, `cmd/` or `tooling/`. The path is evaluated as a
+bounded set of candidate strings, one per binding alternative with callee names
+skipped; any candidate counts, unless it reaches the production match through a
+`fixtures/` or `node_modules/` segment. It is followed through bindings, assignments,
+member assignments, callbacks and same-file reader helpers, including helpers that add
+the root themselves; import specifiers and test titles never count. Execution means
+`node:vm`, `new Function`, `eval`, a `load` of derived content (a `data:` or `blob:` URL
+built from derived text, a file written from it and then imported, or `module._compile`
+of it; a specifier merely computed from text names real modules and is not a load), a
+TypeScript/Babel/esbuild transpile followed by a dynamic load, or an esbuild
+`stdin.contents` build. Today's 46 legacy slicers are listed by exact path and
+mechanism in `tests/architecture/source-slicing-allowlist.json`, which only shrinks: a
+listed file that no longer offends fails as stale until removed (`--write-allowlist`
+removes entries and mechanisms and refuses any growth; `--init-allowlist` refuses when
+the file exists unless `--force-init` is given), and a new offender fails. A reviewed
+false positive is waived in the test file itself with a comment line
+`// source-slicing: allowed - <reason>` (a reason of at least 10 characters, within the
+first 30 lines); the checker prints each waived file with its reason, counts waivers in
+its summary, and fails a waiver without a reason or on a file that is not flagged. The
+allowlist is for the legacy slicers; a waiver must say why the flagged flow is not
+slicing. A test file that cannot be parsed also fails the gate, naming the file. Import
+the code under test instead. Tests that only assert on source text are reported, not
+blocked. Taint is keyed by variable name file-wide, so a literal executed under a name
+that is tainted elsewhere in the file is reported: the error is loud and renaming the
+variable clears it. Known limits, not detected: reading a directory (`readdir`) and
+then slicing; a co-located test reading a sibling by a relative URL
+(`new URL("./main.ts", import.meta.url)`); only `readFileSync`, `readFile` and
+`createReadStream` count as reads; binding and helper chains deeper than three;
+computed forms such as `globalThis["eval"]`, `Function` reached through a prototype,
+`constructor`, an alias or `.call`/`.apply`, and `vm` reached through an alias of a
+method, `.call`/`.apply` or `createRequire`; a read helper or vm wrapper imported from
+another file; code written to disk and run in a child process (`spawn`, `fork`,
+`execFile`); a dynamic `import("...?raw")`; `eval`-like timers with a string argument;
+esbuild plugin `onLoad` contents; and flows through object properties beyond the root
+binding (assignments to `process`, `globalThis` and `this` are not followed) or through
+return values of unresolved calls.
 
 The accepted Go layout uses `modules/<module>/contracts/<feature>` as a thin
 published in-process facade. It may import its own application/domain to delegate

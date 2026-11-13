@@ -14,6 +14,7 @@ interface Summary {
   offenders: number;
   byMechanism: Record<string, number>;
   textOnly: number;
+  waived: number;
   findings: { code: string; detail: string }[];
 }
 
@@ -152,6 +153,8 @@ describe("the source-slicing ban", () => {
     "fp-import-specifier",
     "fp-literal-code",
     "fp-anchor",
+    "fp-import-real",
+    "fp-shared-ctx",
   ])("does not accuse %s", (name) => {
     const result = check(path.join(fixtures, name));
     expect(result.status, result.stderr).toBe(0);
@@ -181,6 +184,8 @@ describe("the source-slicing ban", () => {
     ["load-tempfile", "load"],
     ["load-compile", "load"],
     ["helper-prefix", "vm"],
+    ["rebound-root", "vm"],
+    ["shadowed-callee", "vm"],
     ["raw-import", "vm"],
   ])("catches %s as %s", (name, mechanism) => {
     const result = check(path.join(fixtures, name));
@@ -190,6 +195,29 @@ describe("the source-slicing ban", () => {
         ? { load: 1, transpile: 1 }
         : { [mechanism]: 1 },
     );
+  });
+
+  it("lets a reviewed waiver exempt a false positive and counts it", () => {
+    const result = check(path.join(fixtures, "waived"));
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.summary?.offenders).toBe(0);
+    expect(result.summary?.waived).toBe(1);
+  });
+
+  it("refuses a waiver without a reason", () => {
+    const result = check(path.join(fixtures, "waiver-no-reason"));
+    expect(result.status).toBe(1);
+    expect(result.summary?.findings.map((f) => f.code)).toEqual([
+      "SLICING_WAIVER_INVALID",
+    ]);
+  });
+
+  it("refuses a stale waiver on a file that is not flagged", () => {
+    const result = check(path.join(fixtures, "waiver-stale"));
+    expect(result.status).toBe(1);
+    expect(result.summary?.findings.map((f) => f.code)).toEqual([
+      "SLICING_WAIVER_STALE",
+    ]);
   });
 
   describe("allowlist writers", () => {
