@@ -241,7 +241,7 @@ This conservative behavior also blocks other work under that lifecycle owner;
 automatic cancellation or recovery after overflow is not implemented.
 
 The M10 capacity subset is executable in
-`app/services/lifecycle/bytebounds_test.go`:
+`app/services/lifecycle/conversation_test.go`:
 
 - `TestConversationPromptByteBoundaries` checks 8191/8192/8193-byte ASCII,
   Cyrillic, emoji and escaped-control inputs before actual fixture Send.
