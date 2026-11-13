@@ -566,6 +566,7 @@ function classify(directory) {
     parts[0] === "pkg" &&
     parts.length === 2 &&
     !["ipc", "kernel"].includes(parts[1]) &&
+    !modules.has(parts[1]) &&
     words.has(parts[1]) &&
     !catchAllNames.has(parts[1])
   )

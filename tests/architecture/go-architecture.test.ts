@@ -600,6 +600,7 @@ var timestamp = time.Parse
     "modules/chat/app/service/turn/create.go",
     "pkg/misc/policy.go",
     "pkg/turnkit/policy.go",
+    "pkg/chat/policy.go",
     "pkg/limit/extra/policy.go",
   ])
     it(`fails closed for ${location}`, () =>
