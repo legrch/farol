@@ -89,7 +89,7 @@ func TestSettingsStoreExchangeExactConditionalRoundTrip(t *testing.T) {
 	if result.err != nil || result.value.Publication != delivery.Committed || !reflect.DeepEqual(result.value.Readback, &after) {
 		t.Fatalf("bad exact readback: %+v", result)
 	}
-	if finishSettingsStoreCall(t, s, call, wire.SettingsStoreReplaceResult{Status: "committed", Snapshot: &snapshot}) == nil || len(s.ready) != 0 {
+	if finishSettingsStoreCall(t, s, call, wire.SettingsStoreReplaceResult{Status: "committed", Snapshot: &snapshot}) == nil || len(s.queue.State().Waiting) != 0 {
 		t.Fatal("completion replayed")
 	}
 	if err := s.QuiescePolling(); err != nil {
@@ -160,7 +160,7 @@ func TestSettingsStoreExchangeNeverCorrectsMalformedCompletion(t *testing.T) {
 			if finishSettingsStoreCall(t, s, call, wire.SettingsStoreReplaceResult{Status: "not_written"}) == nil {
 				t.Fatal("corrected same completion")
 			}
-			if _, err := s.Load(context.Background()); err == nil || s.QuiescePolling() == nil || len(s.ready) != 0 {
+			if _, err := s.Load(context.Background()); err == nil || s.QuiescePolling() == nil || len(s.queue.State().Waiting) != 0 {
 				t.Fatal("unknown lifetime reused")
 			}
 		})
@@ -214,7 +214,7 @@ func TestSettingsStoreExchangeLostReplyFencesLateReadback(t *testing.T) {
 			if finishSettingsStoreCall(t, s, call, wire.SettingsStoreReplaceResult{Status: "committed", Snapshot: &snapshot}) == nil {
 				t.Fatal("late visible bytes upgraded unknown")
 			}
-			if _, err := s.Load(context.Background()); err == nil || len(s.ready) != 0 {
+			if _, err := s.Load(context.Background()); err == nil || len(s.queue.State().Waiting) != 0 {
 				t.Fatal("retry after lost reply")
 			}
 		})
@@ -276,16 +276,18 @@ func TestSettingsStoreExchangeQuiescenceWakesPoll(t *testing.T) {
 	}
 }
 
-// Observing Done synchronizes with context.WithDeadline before next waits for
-// the exchange lock. It changes no cancellation/deadline semantics.
+// Observing Done synchronizes with context.WithDeadline before next takes the
+// exchange lock; holding the first Done until release orders the poll's expiry
+// before that locked check. It changes no cancellation/deadline semantics.
 type settingsPollContext struct {
 	context.Context
 	once    sync.Once
 	waiting chan struct{}
+	release chan struct{}
 }
 
 func (c *settingsPollContext) Done() <-chan struct{} {
-	c.once.Do(func() { close(c.waiting) })
+	c.once.Do(func() { close(c.waiting); <-c.release })
 	return c.Context.Done()
 }
 
@@ -303,17 +305,16 @@ func TestSettingsStoreExchangeExpiredPollKeepsOriginalCommand(t *testing.T) {
 				callCtx, cancelCall := context.WithTimeout(context.Background(), 3*time.Second)
 				t.Cleanup(cancelCall)
 				done := startSettingsSave(s, callCtx, delivery.Change{Expected: before, Next: &pending})
-				for len(s.ready) == 0 {
+				for len(s.queue.State().Waiting) == 0 {
 					select {
 					case <-callCtx.Done():
 						t.Fatal("original command was not queued")
 					case <-time.After(time.Millisecond):
 					}
 				}
-				s.mu.Lock()
-				original := s.pending
+				original := s.queue.State().Waiting[0]
 				pollCtx, cancelPoll := context.WithCancel(context.Background())
-				observed := &settingsPollContext{Context: pollCtx, waiting: make(chan struct{})}
+				observed := &settingsPollContext{Context: pollCtx, waiting: make(chan struct{}), release: make(chan struct{})}
 				until := time.Now().Add(time.Second)
 				if variant == "deadline" {
 					until = time.Now().Add(100 * time.Millisecond)
@@ -330,11 +331,10 @@ func TestSettingsStoreExchangeExpiredPollKeepsOriginalCommand(t *testing.T) {
 				select {
 				case <-observed.waiting:
 				case result := <-polled:
-					s.mu.Unlock()
 					cancelPoll()
 					t.Fatalf("poll did not reach exchange lock: %+v", result)
 				case <-time.After(time.Second):
-					s.mu.Unlock()
+					close(observed.release)
 					cancelPoll()
 					t.Fatal("poll did not start")
 				}
@@ -343,7 +343,7 @@ func TestSettingsStoreExchangeExpiredPollKeepsOriginalCommand(t *testing.T) {
 				} else {
 					cancelPoll()
 				}
-				s.mu.Unlock()
+				close(observed.release)
 				result := <-polled
 				cancelPoll()
 				if result.command != nil || (variant == "deadline" && result.err != nil) || (variant == "cancelled" && result.err == nil) {
@@ -353,7 +353,7 @@ func TestSettingsStoreExchangeExpiredPollKeepsOriginalCommand(t *testing.T) {
 				// Only the subsequent valid poll may deliver this same original
 				// command, with the original command ID, bytes and deadline.
 				command := nextSettingsStoreCall(t, s)
-				if command.CommandId != original.command.CommandId || string(command.Body) != string(original.command.Body) || s.issued != 1 {
+				if command.CommandId != original.ID || string(command.Body) != string(original.Body) || s.queue.State().Issued != 1 {
 					t.Fatal("expired poll replaced or renewed original command")
 				}
 				if err := finishSettingsStoreCall(t, s, command, wire.SettingsStoreReplaceResult{Status: "not_written"}); err != nil {
@@ -471,7 +471,7 @@ func TestSettingsStoreExchangeOutlivesFormerLifetimeCallBudget(t *testing.T) {
 	if got := await(unknown); got.err == nil {
 		t.Fatal("unknown answer became known")
 	}
-	if _, err := s.Load(context.Background()); err == nil || len(s.ready) != 0 {
+	if _, err := s.Load(context.Background()); err == nil || len(s.queue.State().Waiting) != 0 {
 		t.Fatal("unknown answer stopped fencing the exchange")
 	}
 }
