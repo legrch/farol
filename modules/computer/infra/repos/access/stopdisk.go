@@ -2,8 +2,6 @@ package access
 
 import (
 	"bytes"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,6 +9,7 @@ import (
 	"strings"
 
 	stop "github.com/legrch/farol/modules/computer/domain/journal"
+	"github.com/legrch/farol/pkg/descriptor"
 	"golang.org/x/sys/unix"
 )
 
@@ -110,18 +109,18 @@ func (d *disk) stopWitness() (present bool, err error) {
 			present, err = false, refuse(err, closed)
 		}
 	}()
-	before, e := fdstat(fd)
+	before, e := descriptor.Stat(fd)
 	if e != nil || !private(before, unix.S_IFREG, 0600) || before.Size != int64(len(stopWitnessPayload)) {
 		return false, refuse(e)
 	}
 	raw, e := io.ReadAll(io.LimitReader(file, int64(len(stopWitnessPayload)+1)))
-	after, statErr := fdstat(fd)
+	after, statErr := descriptor.Stat(fd)
 	var named unix.Stat_t
-	if e != nil || statErr != nil || string(raw) != stopWitnessPayload || !stableState(before, after) {
+	if e != nil || statErr != nil || string(raw) != stopWitnessPayload || !descriptor.Stable(before, after) {
 		return false, refuse(e, statErr)
 	}
 	if e = unix.Fstatat(d.dir, stopWitnessName, &named, unix.AT_SYMLINK_NOFOLLOW); e != nil ||
-		!stableState(named, after) || !private(named, unix.S_IFREG, 0600) {
+		!descriptor.Stable(named, after) || !private(named, unix.S_IFREG, 0600) {
 		return false, refuse(e)
 	}
 	if e = d.check(); e != nil {
@@ -182,20 +181,20 @@ func (d *disk) readStopLedger() (raw []byte, err error) {
 			raw, err = nil, refuse(err, closed)
 		}
 	}()
-	before, e := fdstat(fd)
+	before, e := descriptor.Stat(fd)
 	if e != nil || !private(before, unix.S_IFREG, 0600) ||
 		before.Size < 1 || before.Size > stopLedgerMaxBytes {
 		return nil, refuse(e)
 	}
 	raw, e = io.ReadAll(io.LimitReader(file, stopLedgerMaxBytes+1))
-	after, statErr := fdstat(fd)
+	after, statErr := descriptor.Stat(fd)
 	var named unix.Stat_t
 	if e != nil || statErr != nil || len(raw) == 0 ||
-		len(raw) > stopLedgerMaxBytes || !stableState(before, after) {
+		len(raw) > stopLedgerMaxBytes || !descriptor.Stable(before, after) {
 		return nil, refuse(e, statErr)
 	}
 	if e = unix.Fstatat(d.dir, stopLedgerName, &named, unix.AT_SYMLINK_NOFOLLOW); e != nil ||
-		!stableState(named, after) || !private(named, unix.S_IFREG, 0600) {
+		!descriptor.Stable(named, after) || !private(named, unix.S_IFREG, 0600) {
 		return nil, refuse(e)
 	}
 	if e = d.check(); e != nil {
@@ -220,18 +219,18 @@ func (d *disk) qualifyStopLedger(expected []byte) (err error) {
 			err = refuse(err, closed)
 		}
 	}()
-	before, e := fdstat(fd)
+	before, e := descriptor.Stat(fd)
 	if e != nil || !private(before, unix.S_IFREG, 0600) || before.Size != int64(len(expected)) {
 		return refuse(e)
 	}
 	actual, e := io.ReadAll(io.LimitReader(file, stopLedgerMaxBytes+1))
-	after, statErr := fdstat(fd)
+	after, statErr := descriptor.Stat(fd)
 	var named unix.Stat_t
-	if e != nil || statErr != nil || !bytes.Equal(actual, expected) || !stableState(before, after) {
+	if e != nil || statErr != nil || !bytes.Equal(actual, expected) || !descriptor.Stable(before, after) {
 		return refuse(e, statErr)
 	}
 	if e = unix.Fstatat(d.dir, stopLedgerName, &named, unix.AT_SYMLINK_NOFOLLOW); e != nil ||
-		!stableState(named, after) || !private(named, unix.S_IFREG, 0600) {
+		!descriptor.Stable(named, after) || !private(named, unix.S_IFREG, 0600) {
 		return refuse(e)
 	}
 	if err = d.syncSnapshot(fd); err != nil {
@@ -299,11 +298,10 @@ func (d *disk) updateStopLedger(raw []byte, expected [32]byte) (err error) {
 	if e != nil || digest(current) != expected {
 		return refuse(e)
 	}
-	var token [16]byte
-	if _, e = rand.Read(token[:]); e != nil {
+	name, e := descriptor.Name(".computer-stop-prerequisite-", 16, ".tmp")
+	if e != nil {
 		return refuse(e)
 	}
-	name := ".computer-stop-prerequisite-" + hex.EncodeToString(token[:]) + ".tmp"
 	fd, e := unix.Openat(d.dir, name, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0600)
 	if e != nil {
 		return refuse(e)

@@ -16,6 +16,7 @@ import (
 	policy "github.com/legrch/farol/modules/chat/app/services/handoff"
 	lifecycleapp "github.com/legrch/farol/modules/chat/app/services/lifecycle"
 	lifecyclerepo "github.com/legrch/farol/modules/chat/infra/repos/lifecycle"
+	"github.com/legrch/farol/pkg/descriptor"
 	"golang.org/x/sys/unix"
 )
 
@@ -147,7 +148,7 @@ func terminatedInspectionNativeUnchanged(t *testing.T, path string, before map[s
 	}
 	for name, b := range before {
 		a, ok := after[name]
-		if !ok || !stable(b.meta, a.meta) || b.digest != a.digest {
+		if !ok || !descriptor.Stable(b.meta, a.meta) || b.digest != a.digest {
 			t.Fatal("inspection changed entry", name)
 		}
 	}
