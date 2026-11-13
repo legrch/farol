@@ -4975,11 +4975,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/clients/planresponses/followon.go",
-      "detail": "File name outside the admitted vocabulary: followon"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/chat/infra/clients/planresponses/json.go",
       "detail": "File name outside the admitted vocabulary: json"
     },
@@ -6791,11 +6786,6 @@
     {
       "code": "GO_INFRA_SERVICE",
       "file": "modules/chat/infra/clients/planresponses/deadline.go",
-      "detail": "github.com/legrch/farol/modules/chat/app/services/inference"
-    },
-    {
-      "code": "GO_INFRA_SERVICE",
-      "file": "modules/chat/infra/clients/planresponses/followon.go",
       "detail": "github.com/legrch/farol/modules/chat/app/services/inference"
     },
     {
