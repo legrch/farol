@@ -10,7 +10,7 @@ import {
   connectionCheckDocumentProbe,
   prepareTaskScript,
   activateTaskScript,
-} from "../../src/apps/desktop/chatgpt-route.ts";
+} from "../../src/apps/desktop/chatgpt/scripts.ts";
 
 // Execute the REAL injected scripts against a closed DOM fixture. This is not
 // a witness of current ChatGPT markup, Electron navigation or a provider Send.

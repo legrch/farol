@@ -36,6 +36,16 @@ vi.mock("../../src/apps/desktop/chatgpt-attachment-upload", () => ({
 import {
   ChatGptRoute,
   ChatGptSignInBlockLedger,
+  classifyChatGptProviderError,
+  resolveChatGptWindowPresentation,
+  type ChatGptRouteSurfaceFactory,
+  type ChatGptSignInOutcomeDiagnostic,
+  type ChatGptSignInBlockedDiagnostic,
+  type ChatGptRouteOptions,
+  type ChatGptUpdateAdmissionDiagnostic,
+  type ChatGptUpdateIdleEffectGuard,
+} from "../../src/apps/desktop/chatgpt-route";
+import {
   activateTaskScript,
   bindChatGptAppScript,
   collapseChatGptSidebarScript,
@@ -51,17 +61,9 @@ import {
   toggleChatGptSidebarScript,
   readinessProbe,
   installManualAppGateScript,
-  classifyChatGptProviderError,
   prepareTaskScript,
-  resolveChatGptWindowPresentation,
   verifyChatGptAppScript,
-  type ChatGptRouteSurfaceFactory,
-  type ChatGptSignInOutcomeDiagnostic,
-  type ChatGptSignInBlockedDiagnostic,
-  type ChatGptRouteOptions,
-  type ChatGptUpdateAdmissionDiagnostic,
-  type ChatGptUpdateIdleEffectGuard,
-} from "../../src/apps/desktop/chatgpt-route";
+} from "../../src/apps/desktop/chatgpt/scripts";
 
 describe("main auth presentation composes automatic primary fitting", () => {
   const source = fs.readFileSync(
