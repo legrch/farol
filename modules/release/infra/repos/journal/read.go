@@ -3,8 +3,9 @@ package journal
 import (
 	"context"
 	"errors"
-	"io"
 	"os"
+
+	"github.com/legrch/farol/pkg/limit"
 
 	"github.com/legrch/farol/modules/release/app/port"
 	release "github.com/legrch/farol/modules/release/domain"
@@ -130,8 +131,8 @@ func (r *Repo) readWithOptions(options readOptions) (observed *observation, resu
 	if err := options.check(); err != nil {
 		return nil, err
 	}
-	data, err := io.ReadAll(io.LimitReader(fd, int64(options.maxBytes)+1))
-	if err != nil || int64(len(data)) != before.Size || len(data) > options.maxBytes {
+	data, err := limit.Read(fd, int64(options.maxBytes))
+	if err != nil || int64(len(data)) != before.Size {
 		return nil, port.JournalChanged
 	}
 	if err := options.check(); err != nil {
