@@ -41,7 +41,8 @@ above, without a module-level redirect or exception:
 | Release  | `README.md`, `adoption.md`, `journal.md`, `migration.md`, `native.md`, `relocation.md`, `infra/archive/provenance.md`                                               | Same filenames and nested structure (7).                                                                                              |
 
 Release `migration.md` was later removed with its unwired alpha relocation
-source (2026-11-13).
+source, and `infra/archive/provenance.md` with the unwired root archive copy
+(2026-11-13).
 
 The extra Computer README is a destination index. Original prose, requirements,
 source identities and safety qualifications remain; links are rebased and module

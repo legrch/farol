@@ -6344,26 +6344,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/archive/darwin.go",
-      "detail": "File name outside the admitted vocabulary: darwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/archive/directory.go",
-      "detail": "File name outside the admitted vocabulary: directory"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/archive/linux.go",
-      "detail": "File name outside the admitted vocabulary: linux"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/archive/stage.go",
-      "detail": "File name outside the admitted vocabulary: stage"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/release/infra/native/appidentity/binary.go",
       "detail": "File name outside the admitted vocabulary: binary"
     },
@@ -9219,26 +9199,6 @@
     },
     {
       "code": "GO_TEST_MISSING",
-      "file": "modules/release/infra/archive/darwin.go",
-      "detail": "Behavior without darwin_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/release/infra/archive/linux.go",
-      "detail": "Behavior without linux_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/release/infra/archive/plan.go",
-      "detail": "Behavior without plan_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/release/infra/archive/stage.go",
-      "detail": "Behavior without stage_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
       "file": "modules/release/infra/native/appidentity/json.go",
       "detail": "Behavior without json_test.go"
     },
@@ -10441,11 +10401,6 @@
       "code": "GO_TEST_ORPHAN",
       "file": "modules/release/app/services/update/admissionblock_test.go",
       "detail": "No admissionblock.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/release/infra/archive/parity_test.go",
-      "detail": "No parity.go beside this test"
     },
     {
       "code": "GO_TEST_ORPHAN",

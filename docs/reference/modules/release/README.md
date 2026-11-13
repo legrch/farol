@@ -22,7 +22,8 @@ release acceptance of the helper switch are still open.
 The module began as additive preparation from accepted base
 `1eb30bd23df22c9581d277280f8e0699612786b5`, without changes to the installed
 application, package identity or resource path. The source-only archive transfer
-is explicitly leased from frozen `a47c9ccea1a00eb210f675f71a0690fc3be6c857`. The
+was leased from frozen `a47c9ccea1a00eb210f675f71a0690fc3be6c857` (that root copy
+was removed on 2026-11-13, see below). The
 next stage is based on accepted K1 `acb131d9e7d483296d4edac262cf881cddfb91bb`,
 including the root module and unchanged archive dependency. Cutting over the
 policy needs its own runtime wiring, build closure and fresh source acceptance.
@@ -38,8 +39,7 @@ policy needs its own runtime wiring, build closure and fresh source acceptance.
 - [Predecessor process observation preparation](process-observation.md)
 - [Installed application namespace preparation](install-namespace.md)
 - [Go installed-helper recovery policy](helper-recovery.md)
-- [Source relocation record](relocation.md)
-- [Archive provenance](infra/archive/provenance.md)
+- [Source relocation record](relocation.md) (historical; the move was not completed)
 
 `domain/update.go` owns the pure updater policy. `app/services/update` serializes
 one lifetime through consumer-owned ports. Domain, application and port DTOs are
@@ -94,10 +94,14 @@ and current-alpha physical state migration remain native parity work after hando
 
 ## Leased source additions
 
-`infra/archive` retains the frozen bounded Go extractor and all its regression
-vectors after declared mechanical edits. Its [provenance](infra/archive/provenance.md)
-records source hashes and the unchanged dependency baseline. The old active
-resource/consumer route stays with Core/Lead until integrated parity and retirement.
+The root-module copy of the bounded Go release extractor (`infra/archive`) was
+removed on 2026-11-13. It never gained an importer and differed from the shipped
+copy only in its package name. The single extractor is the nested module's
+`resources/native/go/internal/releasearchive`, built by
+`tooling/native-archive-build.mjs`, pinned by digest and packaged as
+`update-archive.py`. Moving it into the root module would be a separate packaging
+migration with fresh attestation. The transfer and its provenance record remain
+in Git history.
 
 `infra/repos/records` decodes existing current-alpha update journal, retained,
 receipt, restore, download and rejected-target records; only the existing helper
