@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	kitclock "github.com/legrch/farol/pkg/clock"
+
 	releaseport "github.com/legrch/farol/modules/release/app/port"
 	executionapp "github.com/legrch/farol/modules/release/app/services/execution"
 	inputapp "github.com/legrch/farol/modules/release/app/services/helperinput"
@@ -403,9 +405,8 @@ func withLiveReleaseHelperDependencies(ctx context.Context, files liveHelperFile
 
 // liveHelperClock is the production ProcessWaitClock: wall time and a
 // cancelable sleep.
-type liveHelperClock struct{}
+type liveHelperClock struct{ kitclock.System }
 
-func (liveHelperClock) Now() time.Time { return time.Now() }
 func (liveHelperClock) Sleep(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(d)
 	defer timer.Stop()
