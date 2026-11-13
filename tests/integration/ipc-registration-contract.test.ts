@@ -14,8 +14,8 @@ import { describe, expect, it } from "vitest";
 // the sender is part of registering one.
 //
 // So it reads the source. That is a real technique in this repository, not an
-// improvisation: `watch-rail-product-contract.test.mjs` already asserts on
-// `main.ts` as text for the same reason. It is a weaker kind of evidence than
+// improvisation: other tests already assert on `main.ts` as text for the
+// same reason. It is a weaker kind of evidence than
 // executing the code, and the limits are worth stating plainly: it would not
 // notice a handler that calls the predicate and ignores the answer, and it
 // matches text rather than understanding it. It catches the one mistake that
