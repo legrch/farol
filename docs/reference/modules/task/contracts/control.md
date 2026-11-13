@@ -55,7 +55,7 @@ Tests compose this facade around the shipping `Service.NewOwned`, shipping
 admission controller. Only the backing journal, selected authority and provider
 boundary are scripted. Strict provider scripts check exact binding, operation,
 parent, message, expected same-session reference and active admission. They do
-not qualify actual Codex App Server or ClaudeHost capabilities, native CLI,
+not qualify actual Codex App Server or Claude host capabilities, native CLI,
 filesystem durability, process cleanup or installed production.
 
 Existing observation source is already composed by Lead from the frozen O3/O5
