@@ -144,15 +144,25 @@ const pureSelectors = new Map([
   ],
 ]);
 
-// ADR-0001 W0 rules are reports, separate from the existing blocking rules.
-// A closed vocabulary makes package admission reviewable without word splitting.
-const packageWords = new Set(
+// ADR-0002: one closed vocabulary admits package AND file names. It is an
+// admission list, not a dictionary or word splitter; add a word only in review.
+// The first block is ADR-0001's list; later blocks name the ADR-0002 request.
+const words = new Set(
   `access account admission approval archive authority boot browse browser
   catalogue checkpoint claude client clock codex connector container control
   conversation desktop domain egress execution farol filesystem gate git guard handoff id inference
   intent ipc journal lease lifecycle main migration mutation observation output
   parent policy port process provider rejection release repo reservation resolver response
-  result state stream task turn update workflow workspace`.split(/\s+/u),
+  result state stream task turn update workflow workspace
+  budget credential history model openai peer plan progress recovery settings sse thread
+  audit channel check clone connection dev document identity input inspect lock
+  machine move probe protocol route scratch slot stop tree wait
+  activation chat cli computer delegation install ledger publication read relay
+  retirement session
+  descriptor digest exchange failure fake fence limit profile root
+  contract doc server service unsupported`
+    .trim()
+    .split(/\s+/u),
 );
 const catchAllNames = new Set([
   "util",
@@ -164,69 +174,234 @@ const catchAllNames = new Set([
   "values",
   "misc",
   "manager",
+  "info",
+  "record",
+  "base",
+  "impl",
 ]);
-const reportCodes = new Set([
+// Go applies these file-name constraints itself (go/build goodOSArchFile with
+// internal/syslist at Go 1.27.3). "unix" is a build tag, never a file suffix.
+const toolchainOS = new Set(
+  `aix android darwin dragonfly freebsd hurd illumos ios js linux nacl netbsd
+  openbsd plan9 solaris wasip1 windows zos`
+    .trim()
+    .split(/\s+/u),
+);
+const toolchainArch = new Set(
+  `386 amd64 amd64p32 arm armbe arm64 arm64be loong64 mips mipsle mips64
+  mips64le mips64p32 mips64p32le ppc ppc64 ppc64le riscv riscv64 s390 s390x
+  sparc sparc64 wasm`
+    .trim()
+    .split(/\s+/u),
+);
+// Migration rules report everywhere and block only in migrated scopes listed
+// in the enforcement file. Every other rule in this checker always blocks.
+const migrationCodes = [
   "GO_PACKAGE_NAME",
+  "GO_PACKAGE_DIR",
+  "GO_FILE_WORD",
   "GO_CATCH_ALL_NAME",
+  "GO_TEST_ORPHAN",
+  "GO_TEST_MISSING",
+  "GO_BOOT_TEST",
+  "GO_BOOT_FILE",
+  "GO_BOOT_LOGIC",
+  "GO_OPERATION_SHAPE",
   "GO_CAPABILITY_DIRECTION",
   "GO_INFRA_SERVICE",
   "GO_DTO_ALIAS",
-]);
+];
+const scopes = [
+  "boot",
+  "chat",
+  "cmd",
+  "computer",
+  "gen",
+  "pkg",
+  "release",
+  "task",
+  "transport",
+];
+const enforcementFile = "tooling/go-architecture-enforcement.json";
+const bootFiles = new Set(["boot", ...modules]);
+const bootLineBudget = 400;
+// ADR-0001 session protocols keep role-style methods. Exempt exact service
+// package paths only by owner decision; none is listed yet.
+const sessionPackages = new Set([]);
 const dtoPattern = /^(.*?)(Command|Query|Request|Response|Result|View)$/u;
 const findingKey = (finding) =>
   JSON.stringify([finding.code, finding.file, finding.detail]);
 const compareFinding = (a, b) =>
   findingKey(a) < findingKey(b) ? -1 : findingKey(a) > findingKey(b) ? 1 : 0;
+const scopeOf = (file) => {
+  const parts = file.split("/");
+  return parts[0] === "modules" && parts[1] ? parts[1] : parts[0];
+};
+const safePath = (file) =>
+  typeof file === "string" &&
+  file !== "" &&
+  !path.posix.isAbsolute(file) &&
+  !/[\\*?]/u.test(file) &&
+  !file.split("/").some((part) => ["", ".", ".."].includes(part));
 
-function reportBaseline(root, findings) {
-  const file = path.join(root, "tooling/go-architecture-baseline.json");
-  const exists = fs.existsSync(file);
-  const baseline = exists ? JSON.parse(fs.readFileSync(file, "utf8")) : null;
+function readEnforcement(root) {
+  const file = path.join(root, enforcementFile);
+  if (!fs.existsSync(file)) return null;
+  const data = JSON.parse(fs.readFileSync(file, "utf8"));
+  const invalid = (reason) => {
+    throw new Error(`Invalid Go architecture enforcement: ${reason}`);
+  };
   if (
-    exists &&
-    (!baseline ||
-      baseline.version !== 1 ||
-      baseline.mode !== "report" ||
-      !/^[a-f0-9]{40}$/u.test(baseline.source) ||
-      !Array.isArray(baseline.findings))
+    !data ||
+    typeof data !== "object" ||
+    Array.isArray(data) ||
+    Object.keys(data).sort().join(",") !==
+      "ceilings,exceptions,migrated,source,version" ||
+    data.version !== 2 ||
+    !/^[a-f0-9]{40}$/u.test(data.source)
   )
-    throw new Error("Invalid Go architecture report baseline");
-  const entries = new Map();
-  for (const item of baseline?.findings ?? []) {
+    invalid("envelope");
+  const migrated = new Map();
+  for (const code of migrationCodes) {
+    const list = data.migrated?.[code];
+    if (
+      !Array.isArray(list) ||
+      list.some((scope) => !scopes.includes(scope)) ||
+      list.join() !== [...new Set(list)].sort().join()
+    )
+      invalid(`migrated ${code}`);
+    migrated.set(code, new Set(list));
+  }
+  if (Object.keys(data.migrated).length !== migrationCodes.length)
+    invalid("unknown migrated rule");
+  const ceilings = new Map();
+  if (
+    !data.ceilings ||
+    typeof data.ceilings !== "object" ||
+    Object.keys(data.ceilings).some((code) => !migrationCodes.includes(code))
+  )
+    invalid("ceilings");
+  for (const [code, counts] of Object.entries(data.ceilings)) {
+    if (!counts || typeof counts !== "object" || Array.isArray(counts))
+      invalid(`ceilings ${code}`);
+    for (const [scope, count] of Object.entries(counts))
+      if (
+        !/^[a-z][a-z0-9]*$/u.test(scope) ||
+        !Number.isSafeInteger(count) ||
+        count < 1
+      )
+        invalid(`ceiling ${code} ${scope}`);
+    ceilings.set(code, new Map(Object.entries(counts)));
+  }
+  const exceptions = new Map();
+  if (!Array.isArray(data.exceptions)) invalid("exceptions");
+  for (const item of data.exceptions) {
     if (
       !item ||
-      !reportCodes.has(item.code) ||
-      typeof item.file !== "string" ||
-      !item.file ||
-      path.posix.isAbsolute(item.file) ||
-      /[\\*?]/u.test(item.file) ||
-      item.file.split("/").some((part) => ["", ".", ".."].includes(part)) ||
+      Object.keys(item).sort().join(",") !==
+        "code,detail,file,reason,removal" ||
+      !migrationCodes.includes(item.code) ||
+      !safePath(item.file) ||
       typeof item.detail !== "string" ||
       !item.detail ||
-      Object.keys(item).sort().join(",") !== "code,detail,file" ||
-      entries.has(findingKey(item))
+      typeof item.reason !== "string" ||
+      !item.reason.trim() ||
+      typeof item.removal !== "string" ||
+      !item.removal.trim() ||
+      exceptions.has(findingKey(item))
     )
-      throw new Error("Invalid or duplicate Go architecture baseline finding");
-    entries.set(findingKey(item), item);
+      invalid("exception row");
+    exceptions.set(findingKey(item), item);
   }
-  const current = new Map(findings.map((item) => [findingKey(item), item]));
-  const sorted = [...current.values()].sort(compareFinding);
+  return { source: data.source, migrated, ceilings, exceptions };
+}
+
+// Split migration findings by the enforcement switch. A migrated scope blocks
+// a rule except for exact, reasoned exception rows; report scopes may not grow
+// past their declared ceiling. Without the file every finding is a report.
+function enforce(root, findings, add) {
+  const enforcement = readEnforcement(root);
+  const unique = [
+    ...new Map(findings.map((item) => [findingKey(item), item])).values(),
+  ]
+    .sort(compareFinding)
+    .map((item) => ({ ...item, scope: scopeOf(item.file) }));
+  const reported = [];
+  const excepted = [];
+  const counts = {};
+  const used = new Set();
+  for (const item of unique) {
+    const migrated = enforcement?.migrated.get(item.code)?.has(item.scope);
+    const exception = migrated && enforcement.exceptions.get(findingKey(item));
+    if (exception) {
+      used.add(findingKey(item));
+      excepted.push({
+        ...item,
+        reason: exception.reason,
+        removal: exception.removal,
+      });
+      continue;
+    }
+    counts[item.code] ??= {};
+    counts[item.code][item.scope] = (counts[item.code][item.scope] ?? 0) + 1;
+    if (migrated) add(item.code, item.file, item.detail);
+    else reported.push(item);
+  }
+  if (enforcement) {
+    for (const [key, item] of enforcement.exceptions)
+      if (!used.has(key))
+        add(
+          "GO_EXCEPTION_STALE",
+          enforcementFile,
+          `${item.code} ${item.file}: ${item.detail}`,
+        );
+    for (const [code, byScope] of Object.entries(counts))
+      for (const [scope, count] of Object.entries(byScope)) {
+        if (enforcement.migrated.get(code).has(scope)) continue;
+        const ceiling = enforcement.ceilings.get(code)?.get(scope) ?? 0;
+        if (count > ceiling)
+          add(
+            "GO_REPORT_CEILING",
+            enforcementFile,
+            `${code} ${scope}: ${count} findings exceed the ceiling ${ceiling}`,
+          );
+      }
+  }
   return {
-    findings: sorted.map((item) => ({
-      ...item,
-      baseline: entries.has(findingKey(item)) ? "existing" : "new",
-    })),
-    baseline: {
-      source: baseline?.source ?? null,
-      unbaselined: sorted.filter((item) => !entries.has(findingKey(item))),
-      stale: [...entries.values()]
-        .filter((item) => !current.has(findingKey(item)))
-        .sort(compareFinding),
-    },
+    mode: "report",
+    source: enforcement?.source ?? null,
+    migrated: Object.fromEntries(
+      migrationCodes.map((code) => [
+        code,
+        [...(enforcement?.migrated.get(code) ?? [])],
+      ]),
+    ),
+    findings: reported,
+    excepted,
+    counts,
   };
 }
 
-function nameReports(file, tokens, report) {
+// Parse stem(_goos)?(_goarch)?(_test)?.go exactly as the Go toolchain reads
+// suffixes. Any other underscore makes the name invalid (null).
+function goFileName(base) {
+  if (!base.endsWith(".go")) return null;
+  const parts = base.slice(0, -3).split("_");
+  const test = parts.length > 1 && parts.at(-1) === "test";
+  if (test) parts.pop();
+  const stem = parts.shift();
+  if (!/^[a-z][a-z0-9]*$/u.test(stem)) return null;
+  const [first, second] = parts;
+  const valid =
+    parts.length === 0 ||
+    (parts.length === 1 &&
+      (toolchainOS.has(first) || toolchainArch.has(first))) ||
+    (parts.length === 2 && toolchainOS.has(first) && toolchainArch.has(second));
+  if (!valid) return null;
+  return { stem, platform: parts.join("_"), test };
+}
+
+function nameReports(file, zone, tokens, report) {
   const directory = path.posix.dirname(file);
   const leaf = path.posix.basename(directory);
   const clause = tokens.findIndex(
@@ -236,19 +411,33 @@ function nameReports(file, tokens, report) {
   for (const name of new Set([leaf, declared].filter(Boolean))) {
     if (catchAllNames.has(name))
       report("GO_CATCH_ALL_NAME", directory, `Catch-all package name: ${name}`);
-    else if (!packageWords.has(name))
+    else if (!words.has(name))
       report(
         "GO_PACKAGE_NAME",
         directory,
-        `Package token outside the explicit ADR-0001 vocabulary: ${name}`,
+        `Package name outside the admitted vocabulary: ${name}`,
       );
   }
-  const stem = path.posix.basename(file, ".go");
+  const expected = ["cmd", "devtool"].includes(zone.kind) ? "main" : leaf;
+  if (declared && declared !== expected)
+    report(
+      "GO_PACKAGE_DIR",
+      directory,
+      `Package clause ${declared} must equal ${expected}`,
+    );
+  const stem = goFileName(path.posix.basename(file))?.stem;
+  if (!stem) return;
   if (catchAllNames.has(stem))
     report(
       "GO_CATCH_ALL_NAME",
       file,
       `Catch-all production file name: ${stem}`,
+    );
+  else if (!words.has(stem))
+    report(
+      "GO_FILE_WORD",
+      file,
+      `File name outside the admitted vocabulary: ${stem}`,
     );
 }
 
@@ -342,12 +531,33 @@ function classify(directory) {
     parts[1] === "kernel" &&
     ["domain", "app", "infra"].includes(parts[2])
   ) {
-    return { kind: "kernel", layer: parts[2], peer: parts[3] === "peer" };
+    // ADR-0002 admits pkg/kernel/domain/<word>, pkg/kernel/app/port/<topic>
+    // and pkg/kernel/infra/peer only; other kernel paths keep their layer
+    // for import checks and fail GO_KERNEL_LAYOUT.
+    const layout =
+      (parts[2] === "domain" && parts.length === 4) ||
+      (parts[2] === "app" && parts[3] === "port" && parts.length === 5) ||
+      (parts[2] === "infra" && parts[3] === "peer" && parts.length === 4);
+    return {
+      kind: "kernel",
+      layer: parts[2],
+      peer: parts[3] === "peer",
+      layout,
+    };
   }
+  // A flat infrastructure kit is one admitted, non-catch-all word.
+  if (
+    parts[0] === "pkg" &&
+    parts.length === 2 &&
+    !["ipc", "kernel"].includes(parts[1]) &&
+    words.has(parts[1]) &&
+    !catchAllNames.has(parts[1])
+  )
+    return { kind: "kit", name: parts[1] };
   if (
     parts[0] === "modules" &&
     modules.has(parts[1]) &&
-    ["domain", "app", "contracts", "infra"].includes(parts[2])
+    ["domain", "app", "contracts", "infra", "desktop"].includes(parts[2])
   ) {
     if (
       parts[2] === "app" &&
@@ -376,47 +586,344 @@ function pure(zone) {
 // Lex Go comments and literals before inspecting imports. This scans every build
 // variant without executing package initializers or downloading a Go toolchain.
 // Go compilation remains responsible for syntax/types and platform selection.
+// Each token records its starting line for Go's semicolon-insertion rule.
 function lex(source) {
   const tokens = [];
   const comments = [];
   let i = 0;
+  let line = 1;
+  const move = (end) => {
+    for (let k = i; k < end; k++) if (source.charCodeAt(k) === 10) line++;
+    i = end;
+  };
   while (i < source.length) {
     const start = i;
     const char = source[i];
     if (/\s/u.test(char)) {
-      i++;
+      move(i + 1);
       continue;
     }
     if (source.startsWith("//", i) || source.startsWith("/*", i)) {
-      const line = source.startsWith("//", i);
-      const end = line
+      const single = source.startsWith("//", i);
+      const end = single
         ? source.indexOf("\n", i + 2)
         : source.indexOf("*/", i + 2);
-      if (end === -1 && !line) throw new Error("Unterminated Go comment");
-      i = end === -1 ? source.length : end + (line ? 0 : 2);
-      comments.push(source.slice(start, i));
+      if (end === -1 && !single) throw new Error("Unterminated Go comment");
+      const stop = end === -1 ? source.length : end + (single ? 0 : 2);
+      comments.push(source.slice(start, stop));
+      move(stop);
     } else if (['"', "`", "'"].includes(char)) {
-      i++;
-      while (i < source.length && source[i] !== char) {
-        if (char !== "`" && source[i] === "\\") i++;
-        i++;
+      let j = i + 1;
+      while (j < source.length && source[j] !== char) {
+        if (char !== "`" && source[j] === "\\") j++;
+        j++;
       }
-      if (i >= source.length) throw new Error("Unterminated Go literal");
-      i++;
+      if (j >= source.length) throw new Error("Unterminated Go literal");
+      j++;
       tokens.push({
         kind: char === "'" ? "rune" : "string",
-        value: source.slice(start, i),
+        value: source.slice(start, j),
+        line,
       });
+      move(j);
     } else if (/[\p{L}_]/u.test(char)) {
       i++;
       while (i < source.length && /[\p{L}\p{N}_]/u.test(source[i])) i++;
-      tokens.push({ kind: "identifier", value: source.slice(start, i) });
+      tokens.push({ kind: "identifier", value: source.slice(start, i), line });
     } else {
-      tokens.push({ kind: "punctuation", value: char });
+      tokens.push({ kind: "punctuation", value: char, line });
       i++;
     }
   }
   return { tokens, comments };
+}
+
+// Lexical statement structure for ADR-0002 shape rules. This is not a Go
+// parser: it implements the spec's semicolon insertion over the token stream
+// (digits lex as one-character punctuation) and assumes gofmt-able source.
+const goKeywords = new Set(
+  `break case chan const continue default defer else fallthrough for func go
+  goto if import interface map package range return select struct switch type
+  var`
+    .trim()
+    .split(/\s+/u),
+);
+const openers = new Set(["(", "[", "{"]);
+const closers = new Set([")", "]", "}"]);
+
+function endsStatement(tokens, k) {
+  const token = tokens[k];
+  if (!token) return false;
+  if (token.kind === "string" || token.kind === "rune") return true;
+  if (token.kind === "identifier")
+    return (
+      !goKeywords.has(token.value) ||
+      ["break", "continue", "fallthrough", "return"].includes(token.value)
+    );
+  if (closers.has(token.value) || /^[0-9]$/u.test(token.value)) return true;
+  return (
+    ["+", "-"].includes(token.value) && tokens[k - 1]?.value === token.value
+  );
+}
+
+// A statement boundary lies between tokens k-1 and k.
+function boundary(tokens, k) {
+  return (
+    k === 0 ||
+    (tokens[k - 1].kind === "punctuation" && tokens[k - 1].value === ";") ||
+    (tokens[k].line > tokens[k - 1].line && endsStatement(tokens, k - 1))
+  );
+}
+
+function closing(tokens, k) {
+  let depth = 0;
+  for (let j = k; j < tokens.length; j++) {
+    if (tokens[j].kind !== "punctuation") continue;
+    if (openers.has(tokens[j].value)) depth++;
+    else if (closers.has(tokens[j].value) && !--depth) return j;
+  }
+  return tokens.length;
+}
+
+// After a parameter list: skip the result type; return the body brace index
+// (-1 when the signature ends without a body) and the next token index.
+function signature(tokens, k) {
+  for (let j = k; j < tokens.length; j++) {
+    const token = tokens[j];
+    if (boundary(tokens, j)) return { body: -1, next: j };
+    if (token.kind !== "punctuation") continue;
+    if (token.value === "{") {
+      if (["struct", "interface"].includes(tokens[j - 1]?.value)) {
+        j = closing(tokens, j);
+        continue;
+      }
+      return { body: j, next: closing(tokens, j) + 1 };
+    }
+    if (token.value === "(" || token.value === "[") j = closing(tokens, j);
+    else if ([")", "]", "}", ",", "="].includes(token.value))
+      return { body: -1, next: j };
+  }
+  return { body: -1, next: tokens.length };
+}
+
+// Top-level function and method declarations, plus whether any function
+// literal with a body appears outside them. A function type followed by a
+// composite literal on the same line reads as a literal (conservative).
+function declarations(tokens) {
+  const functions = [];
+  let literal = false;
+  let depth = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.kind === "punctuation") {
+      if (openers.has(token.value)) depth++;
+      else if (closers.has(token.value)) depth--;
+      continue;
+    }
+    if (token.kind !== "identifier" || token.value !== "func") continue;
+    if (!depth && boundary(tokens, i)) {
+      let j = i + 1;
+      let receiver = null;
+      if (tokens[j]?.value === "(") {
+        const end = closing(tokens, j);
+        receiver = [j + 1, end];
+        j = end + 1;
+      }
+      const name = tokens[j]?.kind === "identifier" ? tokens[j].value : "";
+      j++;
+      if (tokens[j]?.value === "[") j = closing(tokens, j) + 1;
+      if (tokens[j]?.value !== "(") continue;
+      const close = closing(tokens, j);
+      const sig = signature(tokens, close + 1);
+      functions.push({
+        name,
+        receiver,
+        params: [j + 1, close],
+        results: [close + 1, sig.body === -1 ? sig.next : sig.body],
+        body: sig.body === -1 ? null : [sig.body + 1, sig.next - 1],
+      });
+      i = sig.next - 1;
+      continue;
+    }
+    if (tokens[i + 1]?.value !== "(") continue;
+    if (signature(tokens, closing(tokens, i + 1) + 1).body !== -1)
+      literal = true;
+  }
+  return { functions, literal };
+}
+
+// ADR-0002 declaration-only predicate: a function counts as behavior unless
+// it has no body, or it is a constructor (New, New<Upper>...) or a String,
+// Error, GoString or Unwrap method whose body is exactly one return statement
+// with no function literal.
+function trivial(tokens, fn) {
+  if (!fn.body) return true;
+  const named = fn.receiver
+    ? ["String", "Error", "GoString", "Unwrap"].includes(fn.name)
+    : /^New(?:\p{Lu}|$)/u.test(fn.name);
+  const [start, end] = fn.body;
+  if (!named || tokens[start]?.value !== "return") return false;
+  let depth = 0;
+  for (let k = start; k < end; k++) {
+    const token = tokens[k];
+    if (k > start && !depth && boundary(tokens, k)) return false;
+    if (token.kind === "identifier" && token.value === "func") return false;
+    if (token.kind !== "punctuation") continue;
+    if (openers.has(token.value)) depth++;
+    else if (closers.has(token.value)) depth--;
+  }
+  return true;
+}
+
+function hasBehavior(tokens, parsed) {
+  return parsed.literal || parsed.functions.some((fn) => !trivial(tokens, fn));
+}
+
+// Names of top-level type specs, including every spec of a grouped type.
+function typeSpecs(tokens) {
+  const names = [];
+  let depth = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.kind === "punctuation") {
+      if (openers.has(token.value)) depth++;
+      else if (closers.has(token.value)) depth--;
+      continue;
+    }
+    if (depth || token.kind !== "identifier" || token.value !== "type")
+      continue;
+    if (tokens[i + 1]?.value !== "(") {
+      if (tokens[i + 1]?.kind === "identifier") names.push(tokens[i + 1].value);
+      continue;
+    }
+    const end = closing(tokens, i + 1);
+    let inner = 0;
+    for (let j = i + 2; j < end; j++) {
+      const part = tokens[j];
+      if (part.kind === "punctuation") {
+        if (openers.has(part.value)) inner++;
+        else if (closers.has(part.value)) inner--;
+        continue;
+      }
+      if (
+        !inner &&
+        part.kind === "identifier" &&
+        (j === i + 2 || boundary(tokens, j))
+      )
+        names.push(part.value);
+    }
+    i = end;
+  }
+  return names;
+}
+
+// Boot composes; it decides nothing. Report each kind of logic per file.
+function bootReports(file, source, tokens, report) {
+  const counts = new Map();
+  const count = (key) => counts.set(key, (counts.get(key) ?? 0) + 1);
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.kind !== "identifier") continue;
+    if (["switch", "for", "select", "go"].includes(token.value))
+      count(`${token.value} statements`);
+    if (token.value !== "if") continue;
+    let j = i + 1;
+    for (let depth = 0; j < tokens.length; j++) {
+      const value = tokens[j].kind === "punctuation" ? tokens[j].value : "";
+      if (value === "(" || value === "[") depth++;
+      else if (value === ")" || value === "]") depth--;
+      else if (value === "{" && !depth) break;
+    }
+    const tail = tokens
+      .slice(Math.max(i + 1, j - 4), j)
+      .map(({ value }) => value)
+      .join(" ");
+    if (tail !== "err ! = nil") count("conditions other than err != nil");
+  }
+  for (const [kind, total] of [...counts].sort())
+    report("GO_BOOT_LOGIC", file, `${kind}: ${total}`);
+  const types = typeSpecs(tokens).length;
+  if (types > 1)
+    report(
+      "GO_BOOT_LOGIC",
+      file,
+      `top-level types: ${types}; at most one namespace type`,
+    );
+  const lines = source.split("\n").length - (source.endsWith("\n") ? 1 : 0);
+  if (lines > bootLineBudget)
+    report("GO_BOOT_LOGIC", file, `lines: ${lines}; budget ${bootLineBudget}`);
+}
+
+function receiverType(tokens, [start, end]) {
+  const ids = [];
+  for (let k = start; k < end; k++) {
+    if (tokens[k].value === "[") k = closing(tokens, k);
+    else if (tokens[k].kind === "identifier") ids.push(tokens[k].value);
+  }
+  return ids.at(-1);
+}
+
+function splitList(tokens, [start, end]) {
+  const groups = [[]];
+  let depth = 0;
+  for (let k = start; k < end; k++) {
+    const value = tokens[k].value;
+    if (tokens[k].kind === "punctuation") {
+      if (openers.has(value)) depth++;
+      else if (closers.has(value)) depth--;
+      else if (value === "," && !depth) {
+        groups.push([]);
+        continue;
+      }
+    }
+    groups.at(-1).push(value);
+  }
+  return groups.filter((group) => group.length);
+}
+
+// ADR-0002 operation shape: application services take Command or Query and
+// return Result; contracts and the wire keep Request and Response.
+function operationReports(file, zone, tokens, parsed, report) {
+  const directory = path.posix.dirname(file);
+  if (zone.service && !sessionPackages.has(directory))
+    for (const fn of parsed.functions) {
+      if (!fn.receiver || !/^\p{Lu}/u.test(fn.name)) continue;
+      if (receiverType(tokens, fn.receiver) !== "Service") continue;
+      const params = splitList(tokens, fn.params);
+      const input = params[1] ?? [];
+      const results = tokens
+        .slice(...fn.results)
+        .map(({ value }) => value)
+        .join(" ");
+      const valid =
+        params.length === 2 &&
+        params[0].length <= 4 &&
+        params[0].slice(-3).join("") === "context.Context" &&
+        input.length <= 2 &&
+        [`${fn.name}Command`, `${fn.name}Query`].includes(input.at(-1)) &&
+        results === `( * ${fn.name}Result , error )`;
+      if (!valid)
+        report(
+          "GO_OPERATION_SHAPE",
+          file,
+          `Service.${fn.name} must take (context.Context, ${fn.name}Command or ${fn.name}Query) and return (*${fn.name}Result, error)`,
+        );
+    }
+  for (const name of typeSpecs(tokens)) {
+    if (!/^\p{Lu}/u.test(name)) continue;
+    if (zone.service && /(?:Request|Response)$/u.test(name))
+      report(
+        "GO_OPERATION_SHAPE",
+        file,
+        `Application type ${name} uses a wire suffix; use Command, Query or Result`,
+      );
+    if (zone.layer === "contracts" && /(?:Command|Query)$/u.test(name))
+      report(
+        "GO_OPERATION_SHAPE",
+        file,
+        `Contract type ${name} uses an application suffix; use Request or Response`,
+      );
+  }
 }
 
 function unquote(literal) {
@@ -499,10 +1006,24 @@ function localRule(from, to, target, source) {
         ? null
         : "GO_LAYER_DIRECTION";
     }
-    return ["module", "kernel", "ipc", "generated"].includes(to.kind)
+    if (from.layer === "desktop")
+      return (to.kind === "module" &&
+        ["contracts", "app", "domain", "desktop"].includes(to.layer)) ||
+        (to.kind === "kernel" && ["domain", "app"].includes(to.layer)) ||
+        ["kit", "ipc", "generated", "transport"].includes(to.kind)
+        ? null
+        : "GO_DESKTOP_DEPENDENCY";
+    // Infrastructure may use stateless kits but never the inbound adapter.
+    return ["module", "kernel", "ipc", "generated", "kit"].includes(to.kind) &&
+      !(to.kind === "module" && to.layer === "desktop")
       ? null
       : "GO_LAYER_DIRECTION";
   }
+  if (from.kind === "kit")
+    return (to.kind === "kernel" && ["domain", "app"].includes(to.layer)) ||
+      ["kit", "ipc"].includes(to.kind)
+      ? null
+      : "GO_KIT_DEPENDENCY";
   if (from.kind === "kernel") {
     if (to.kind === "module")
       return from.layer === "infra" &&
@@ -526,7 +1047,7 @@ function localRule(from, to, target, source) {
   if (from.kind === "cmd") return to.kind === "boot" ? null : "GO_CMD_NOT_THIN";
   if (from.kind === "devtool") return "GO_DEV_TOOL_DEPENDENCY";
   if (from.kind === "transport")
-    return ["module", "kernel", "ipc", "generated"].includes(to.kind) &&
+    return ["module", "kernel", "ipc", "generated", "kit"].includes(to.kind) &&
       !(to.kind === "module" && to.layer !== "contracts") &&
       !(to.kind === "kernel" && to.layer === "infra")
       ? null
@@ -534,6 +1055,60 @@ function localRule(from, to, target, source) {
   if (from.kind === "ipc")
     return ["ipc", "generated"].includes(to.kind) ? null : "GO_IPC_DEPENDENCY";
   return null;
+}
+
+// ADR-0002 file structure: x.go pairs with at most x_test.go (platform
+// suffixes included), <package>_test.go is the only unpaired test, files with
+// behavior outside boot, cmd and gen have their test, and boot holds boot.go
+// plus one file per module with no tests or test data.
+function structureReports(files, bootTestdata, behavior, clauses, report) {
+  const directories = new Map();
+  for (const file of files) {
+    const name = goFileName(path.posix.basename(file));
+    if (!name) continue;
+    const directory = path.posix.dirname(file);
+    if (!directories.has(directory))
+      directories.set(directory, { sources: new Map(), tests: [] });
+    const entry = directories.get(directory);
+    const key = name.platform ? `${name.stem}_${name.platform}` : name.stem;
+    if (name.test) entry.tests.push({ file, key, name });
+    else entry.sources.set(key, file);
+  }
+  const bootSet = [...bootFiles].sort().map((stem) => `${stem}.go`);
+  for (const [directory, entry] of directories) {
+    const zone = classify(directory);
+    if (zone.kind === "boot") {
+      for (const { file } of entry.tests)
+        report(
+          "GO_BOOT_TEST",
+          file,
+          "Boot has no tests; whole-graph tests live under tests/",
+        );
+      for (const [key, file] of entry.sources)
+        if (directory !== "boot")
+          report("GO_BOOT_FILE", file, "Boot has no subpackages");
+        else if (!bootFiles.has(key))
+          report("GO_BOOT_FILE", file, `Boot holds only ${bootSet.join(", ")}`);
+      continue;
+    }
+    const packageNames = new Set([
+      path.posix.basename(directory),
+      ...(clauses.get(directory) ?? []),
+    ]);
+    for (const { file, key, name } of entry.tests)
+      if (
+        !entry.sources.has(key) &&
+        !(name.platform === "" && packageNames.has(name.stem))
+      )
+        report("GO_TEST_ORPHAN", file, `No ${key}.go beside this test`);
+    if (["cmd", "gen"].includes(scopeOf(directory))) continue;
+    const tested = new Set(entry.tests.map(({ key }) => key));
+    for (const [key, file] of entry.sources)
+      if (behavior.get(file) && !tested.has(key))
+        report("GO_TEST_MISSING", file, `Behavior without ${key}_test.go`);
+  }
+  for (const directory of bootTestdata)
+    report("GO_BOOT_TEST", directory, "Boot has no test data");
 }
 
 // A registered, ignored child checkout is another source owner, not this Go
@@ -587,6 +1162,7 @@ export function checkGoArchitecture(root) {
   const reports = [];
   const report = (code, file, detail) => reports.push({ code, file, detail });
   const files = [];
+  const bootTestdata = [];
   const excludedModules = [];
   const add = (code, file, detail) => violations.push({ code, file, detail });
   // Go packages under tests are test-only fixtures/harnesses, even when their
@@ -630,6 +1206,12 @@ export function checkGoArchitecture(root) {
         continue;
       }
       if (entry.isDirectory() && childWorktrees.has(name)) continue;
+      if (
+        entry.isDirectory() &&
+        entry.name === "testdata" &&
+        name.startsWith("boot/")
+      )
+        bootTestdata.push(name);
       if (entry.isDirectory()) walk(absolute, name);
       else if (entry.name === "go.mod" && relative)
         add(
@@ -659,6 +1241,8 @@ export function checkGoArchitecture(root) {
   const graph = new Map(
     [...packages].map((directory) => [directory, new Set()]),
   );
+  const behavior = new Map();
+  const clauses = new Map();
   for (const file of files) {
     const directory = path.posix.dirname(file);
     const zone = classify(directory);
@@ -667,23 +1251,26 @@ export function checkGoArchitecture(root) {
     const generated =
       zone.kind === "generated" &&
       /^\/\/ Code generated .* DO NOT EDIT\.$/mu.test(source);
+    const name = goFileName(path.posix.basename(file));
     if (
       !(
         generated && /^[a-z][a-z0-9]*\.pb\.go$/u.test(path.posix.basename(file))
       ) &&
-      !/^[a-z][a-z0-9]*(?:_test)?\.go$/u.test(path.posix.basename(file))
+      !name
     )
       add(
         "GO_SHORT_NAME",
         file,
-        "Use short joined lowercase names and only the _test suffix",
+        "Use one lowercase stem with only the _test suffix and Go toolchain _GOOS/_GOARCH suffixes",
       );
-    if (
-      /^(?:utils|helpers|manager|info|record)(?:_test)?\.go$/u.test(
-        path.posix.basename(file),
-      )
-    )
+    if (["utils", "helpers", "manager", "info", "record"].includes(name?.stem))
       add("GO_GENERIC_NAME", file, "Name the concrete responsibility");
+    if (zone.kind === "kernel" && !zone.layout)
+      add(
+        "GO_KERNEL_LAYOUT",
+        file,
+        "Kernel admits only pkg/kernel/domain/<word>, pkg/kernel/app/port/<topic> and pkg/kernel/infra/peer",
+      );
     // Tests may use filesystem doubles; they never grant production exceptions.
     if (file.endsWith("_test.go")) continue;
     if (zone.kind === "unclassified")
@@ -701,9 +1288,25 @@ export function checkGoArchitecture(root) {
       add("GO_PARSE", file, error.message);
       continue;
     }
+    const clause = parsed.tokens.findIndex(
+      (token) => token.kind === "identifier" && token.value === "package",
+    );
+    if (clause >= 0 && parsed.tokens[clause + 1])
+      clauses.set(
+        directory,
+        new Set([
+          ...(clauses.get(directory) ?? []),
+          parsed.tokens[clause + 1].value,
+        ]),
+      );
     if (zone.kind !== "generated") {
-      nameReports(file, parsed.tokens, report);
+      nameReports(file, zone, parsed.tokens, report);
       aliasReports(file, parsed.tokens, dependencies, report);
+      const shape = declarations(parsed.tokens);
+      behavior.set(file, hasBehavior(parsed.tokens, shape));
+      operationReports(file, zone, parsed.tokens, shape, report);
+      if (zone.kind === "boot")
+        bootReports(file, source, parsed.tokens, report);
     }
     if (
       parsed.comments.some((comment) =>
@@ -818,6 +1421,8 @@ export function checkGoArchitecture(root) {
     done.add(node);
   }
   for (const node of graph.keys()) visit(node);
+  structureReports(files, bootTestdata, behavior, clauses, report);
+  const result = enforce(root, reports, add);
   return {
     module: modulePath,
     go: "1.27.3",
@@ -825,7 +1430,7 @@ export function checkGoArchitecture(root) {
     testFiles: files.length - production.length,
     excludedModules,
     violations,
-    report: { mode: "report", ...reportBaseline(root, reports) },
+    report: result,
   };
 }
 
@@ -836,12 +1441,15 @@ if (
   try {
     const args = process.argv.slice(2);
     let root = process.cwd();
+    let only = null;
     for (let i = 0; i < args.length; i++) {
       if (args[i] === "--root" && args[i + 1]) root = args[++i];
+      else if (args[i] === "--scope" && args[i + 1]) only = args[++i];
       else if (args[i] !== "--json")
         throw new Error(`Unknown or incomplete option: ${args[i]}`);
     }
     const result = checkGoArchitecture(root);
+    const { report } = result;
     if (args.includes("--json"))
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     else {
@@ -849,16 +1457,45 @@ if (
         process.stdout.write(
           `${violation.code} ${violation.file}: ${violation.detail}\n`,
         );
-      for (const finding of result.report.findings)
-        process.stdout.write(
-          `REPORT ${finding.baseline} ${finding.code} ${finding.file}: ${finding.detail}\n`,
-        );
-      for (const finding of result.report.baseline.stale)
-        process.stdout.write(
-          `REPORT stale ${finding.code} ${finding.file}: ${finding.detail}\n`,
-        );
+      for (const finding of report.findings)
+        if (!only || finding.scope === only)
+          process.stdout.write(
+            `REPORT ${finding.code} ${finding.file}: ${finding.detail}\n`,
+          );
+      for (const finding of report.excepted)
+        if (!only || finding.scope === only)
+          process.stdout.write(
+            `EXCEPTED ${finding.code} ${finding.file}: ${finding.detail} (${finding.reason}; removal: ${finding.removal})\n`,
+          );
+      // Counts per rule and scope; * marks a migrated (blocking) scope.
+      const columns = [
+        ...new Set([
+          ...scopes,
+          ...Object.values(report.counts).flatMap((byScope) =>
+            Object.keys(byScope),
+          ),
+        ]),
+      ].sort();
+      const width = Math.max(...migrationCodes.map((code) => code.length));
       process.stdout.write(
-        `ADR-0001 report mode: ${result.report.findings.length} findings; ${result.report.baseline.unbaselined.length} new; ${result.report.baseline.stale.length} stale exceptions.\n`,
+        `\n${"rule".padEnd(width)} ${columns.map((scope) => scope.padStart(10)).join("")}     total\n`,
+      );
+      for (const code of migrationCodes) {
+        const cells = columns.map((scope) => {
+          const count = report.counts[code]?.[scope] ?? 0;
+          const mark = report.migrated[code].includes(scope) ? "*" : " ";
+          return `${count}${mark}`.padStart(10);
+        });
+        const total = Object.values(report.counts[code] ?? {}).reduce(
+          (sum, count) => sum + count,
+          0,
+        );
+        process.stdout.write(
+          `${code.padEnd(width)} ${cells.join("")}${String(total).padStart(10)}\n`,
+        );
+      }
+      process.stdout.write(
+        `\nADR-0002 report mode: ${report.findings.length} report findings; ${report.excepted.length} excepted; * = migrated scope (blocking).\n`,
       );
       process.stdout.write(
         `Go architecture: ${result.productionFiles} production files checked; ${result.testFiles} test files named; excluded nested modules: ${result.excludedModules.join(", ") || "none"}.\n`,

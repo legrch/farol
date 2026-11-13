@@ -14,6 +14,7 @@ const prefix = "github.com/legrch/farol/";
 const moduleFile = "module github.com/legrch/farol\n\ngo 1.27.3\n";
 
 type Finding = { code: string; file: string; detail: string };
+type Scoped = Finding & { scope: string };
 
 type Report = {
   productionFiles: number;
@@ -22,12 +23,11 @@ type Report = {
   violations: Finding[];
   report: {
     mode: "report";
-    findings: (Finding & { baseline: "existing" | "new" })[];
-    baseline: {
-      source: string | null;
-      unbaselined: Finding[];
-      stale: Finding[];
-    };
+    source: string | null;
+    migrated: Record<string, string[]>;
+    findings: Scoped[];
+    excepted: (Scoped & { reason: string; removal: string })[];
+    counts: Record<string, Record<string, number>>;
   };
 };
 
@@ -143,8 +143,10 @@ describe("the executable root Go architecture boundary", () => {
         prefix + "pkg/kernel/domain/id",
       ),
       "pkg/kernel/domain/id/id.go": source(),
-      "pkg/kernel/app/port/clock.go": source(prefix + "pkg/kernel/domain/id"),
-      "pkg/kernel/infra/clock/clock.go": source("time"),
+      "pkg/kernel/app/port/clock/clock.go": source(
+        prefix + "pkg/kernel/domain/id",
+      ),
+      "pkg/clock/clock.go": source("time"),
       "modules/chat/infra/client/client.go": source("example.org/provider/sdk"),
       "modules/release/infra/repos/release/repo.go": source("os"),
       "pkg/ipc/frame.go": source("io"),
@@ -169,13 +171,34 @@ describe("the executable root Go architecture boundary", () => {
     ["modules/chat/domain/turn", "pkg/kernel/domain/id"],
     ["modules/chat/app/services/turn", "modules/chat/app/port"],
     ["modules/chat/app/services/turn", "modules/chat/app/capabilities/guard"],
-    ["modules/chat/app/capabilities/guard", "pkg/kernel/app/port"],
+    ["modules/chat/app/capabilities/guard", "pkg/kernel/app/port/clock"],
     ["modules/chat/infra/peer/task", "modules/task/contracts/task"],
     ["modules/chat/contracts/turn", "pkg/kernel/domain/id"],
     ["modules/chat/contracts/turn", "modules/chat/domain/turn"],
     ["modules/chat/contracts/turn", "modules/chat/app/services/turn"],
-    ["pkg/kernel/app/port", "pkg/kernel/domain/id"],
-    ["pkg/kernel/infra/clock", "pkg/kernel/app/port"],
+    ["pkg/kernel/app/port/clock", "pkg/kernel/domain/id"],
+    ["pkg/kernel/infra/peer", "pkg/kernel/app/port/clock"],
+    // ADR-0002 shared code: flat kits serve infrastructure, adapters and kits.
+    ["modules/chat/infra/client", "pkg/limit"],
+    ["modules/chat/infra/peer", "pkg/limit"],
+    ["transport/desktop", "pkg/limit"],
+    ["pkg/limit", "pkg/kernel/domain/digest"],
+    ["pkg/limit", "pkg/kernel/app/port/clock"],
+    ["pkg/limit", "pkg/clock"],
+    ["pkg/limit", "pkg/ipc"],
+    ["modules/chat/domain/turn", "pkg/kernel/domain/digest"],
+    ["modules/chat/contracts/turn", "pkg/kernel/domain/digest"],
+    // ADR-0002 module-owned desktop adapter.
+    ["modules/chat/desktop/turn", "modules/chat/contracts/turn"],
+    ["modules/chat/desktop/turn", "modules/chat/app/services/turn"],
+    ["modules/chat/desktop/turn", "modules/chat/domain/turn"],
+    ["modules/chat/desktop/turn", "pkg/kernel/domain/digest"],
+    ["modules/chat/desktop/turn", "pkg/limit"],
+    ["modules/chat/desktop/turn", "pkg/ipc"],
+    ["modules/chat/desktop/turn", "gen/desktop/v1"],
+    ["modules/chat/desktop/turn", "transport/desktop"],
+    ["boot", "modules/chat/desktop/turn"],
+    ["boot", "pkg/kernel/infra/peer"],
   ] as const;
   for (const [from, to] of allowed)
     it(`accepts ${from} -> ${to}`, () => {
@@ -189,7 +212,11 @@ describe("the executable root Go architecture boundary", () => {
       "modules/chat/infra/client",
       "GO_LAYER_DIRECTION",
     ],
-    ["modules/chat/domain/turn", "pkg/kernel/app/port", "GO_LAYER_DIRECTION"],
+    [
+      "modules/chat/domain/turn",
+      "pkg/kernel/app/port/clock",
+      "GO_LAYER_DIRECTION",
+    ],
     [
       "modules/chat/app/services/turn",
       "modules/chat/infra/client",
@@ -211,7 +238,7 @@ describe("the executable root Go architecture boundary", () => {
     ["modules/chat/infra/client", "boot", "GO_MODULE_TO_BOOT"],
     [
       "modules/chat/infra/client",
-      "pkg/kernel/infra/clock",
+      "pkg/kernel/infra/peer",
       "GO_MODULE_TO_KERNEL_INFRA",
     ],
     [
@@ -240,7 +267,11 @@ describe("the executable root Go architecture boundary", () => {
       "GO_CROSS_MODULE",
     ],
     ["pkg/kernel/domain/id", "modules/task/domain/task", "GO_KERNEL_TO_MODULE"],
-    ["pkg/kernel/app/port", "pkg/kernel/infra/clock", "GO_LAYER_DIRECTION"],
+    [
+      "pkg/kernel/app/port/clock",
+      "pkg/kernel/infra/peer",
+      "GO_LAYER_DIRECTION",
+    ],
     [
       "pkg/kernel/infra/clock",
       "modules/task/contracts/task",
@@ -266,6 +297,59 @@ describe("the executable root Go architecture boundary", () => {
       "gen/desktop/v1",
       "modules/task/contracts/task",
       "GO_GENERATED_DEPENDENCY",
+    ],
+    // ADR-0002 shared code: kits stay out of pure layers and import no owner.
+    ["modules/chat/domain/turn", "pkg/limit", "GO_LAYER_DIRECTION"],
+    ["modules/chat/app/services/turn", "pkg/limit", "GO_LAYER_DIRECTION"],
+    ["modules/chat/app/port", "pkg/limit", "GO_LAYER_DIRECTION"],
+    ["modules/chat/contracts/turn", "pkg/limit", "GO_CONTRACT_LEAK"],
+    ["pkg/kernel/domain/digest", "pkg/limit", "GO_LAYER_DIRECTION"],
+    ["pkg/kernel/app/port/clock", "pkg/limit", "GO_LAYER_DIRECTION"],
+    ["pkg/kernel/infra/peer", "pkg/limit", "GO_LAYER_DIRECTION"],
+    ["pkg/limit", "modules/chat/contracts/turn", "GO_KIT_DEPENDENCY"],
+    ["pkg/limit", "boot", "GO_KIT_DEPENDENCY"],
+    ["pkg/limit", "transport/desktop", "GO_KIT_DEPENDENCY"],
+    ["pkg/limit", "gen/desktop/v1", "GO_KIT_DEPENDENCY"],
+    ["pkg/limit", "pkg/kernel/infra/peer", "GO_KIT_DEPENDENCY"],
+    ["pkg/ipc", "pkg/limit", "GO_IPC_DEPENDENCY"],
+    ["cmd/farol", "pkg/limit", "GO_CMD_NOT_THIN"],
+    ["transport/desktop", "pkg/kernel/infra/peer", "GO_TRANSPORT_DEPENDENCY"],
+    // ADR-0002 module-owned desktop adapter: own contracts/app/domain only.
+    [
+      "modules/chat/desktop/turn",
+      "modules/chat/infra/client",
+      "GO_DESKTOP_DEPENDENCY",
+    ],
+    ["modules/chat/desktop/turn", "boot", "GO_MODULE_TO_BOOT"],
+    [
+      "modules/chat/desktop/turn",
+      "modules/task/contracts/task",
+      "GO_CROSS_MODULE",
+    ],
+    [
+      "modules/chat/desktop/turn",
+      "pkg/kernel/infra/peer",
+      "GO_MODULE_TO_KERNEL_INFRA",
+    ],
+    [
+      "modules/chat/infra/client",
+      "modules/chat/desktop/turn",
+      "GO_LAYER_DIRECTION",
+    ],
+    [
+      "modules/chat/app/services/turn",
+      "modules/chat/desktop/turn",
+      "GO_LAYER_DIRECTION",
+    ],
+    [
+      "modules/chat/contracts/turn",
+      "modules/chat/desktop/turn",
+      "GO_CONTRACT_LEAK",
+    ],
+    [
+      "transport/desktop",
+      "modules/chat/desktop/turn",
+      "GO_TRANSPORT_DEPENDENCY",
     ],
   ] as const;
   for (const [from, to, code] of forbidden)
@@ -515,6 +599,8 @@ var timestamp = time.Parse
     "modules/chat/service/service.go",
     "modules/chat/app/service/turn/create.go",
     "pkg/misc/policy.go",
+    "pkg/turnkit/policy.go",
+    "pkg/limit/extra/policy.go",
   ])
     it(`fails closed for ${location}`, () =>
       denied(check({ [location]: source() }), "GO_UNCLASSIFIED", location));
@@ -524,14 +610,42 @@ var timestamp = time.Parse
     "Read.go",
     "_read.go",
     ".read.go",
-    "read_darwin.go",
     "20261002.go",
+    "read_unix.go",
+    "read_darwin_helpers.go",
+    "read_amd64_darwin.go",
+    "read_test_darwin.go",
+    "read_test_test.go",
   ])
     it(`rejects the filename ${filename}`, () =>
       denied(
         check({ [`modules/task/domain/task/${filename}`]: source() }),
         "GO_SHORT_NAME",
       ));
+  for (const filename of [
+    "read_darwin.go",
+    "read_linux_arm64.go",
+    "read_arm64.go",
+    "read_darwin_test.go",
+    "read_windows_amd64_test.go",
+  ])
+    it(`accepts the Go toolchain suffix in ${filename}`, () => {
+      const result = check({
+        "modules/task/domain/task/read.go": source(),
+        [`modules/task/domain/task/${filename}`]: source(),
+      });
+      expect(result.status, JSON.stringify(result.report)).toBe(0);
+    });
+  for (const location of [
+    "pkg/kernel/domain/policy.go",
+    "pkg/kernel/domain/digest/extra/policy.go",
+    "pkg/kernel/app/port/policy.go",
+    "pkg/kernel/app/clock/policy.go",
+    "pkg/kernel/infra/clock/policy.go",
+    "pkg/kernel/infra/peer/chat/policy.go",
+  ])
+    it(`rejects the kernel layout ${location}`, () =>
+      denied(check({ [location]: source() }), "GO_KERNEL_LAYOUT", location));
   it("rejects generic helper names", () =>
     denied(
       check({ "modules/task/domain/task/utils.go": source() }),
@@ -679,17 +793,15 @@ const reportFixtures = JSON.parse(
   reports: Finding[];
   blocking: string[];
 }[];
-const baselineFile = "tooling/go-architecture-baseline.json";
-const baselineSource = "df8efa37eef45ead673db071c9579a9111b67ac7";
-const baseline = (findings: Finding[]) =>
-  JSON.stringify({
-    version: 1,
-    mode: "report",
-    source: baselineSource,
-    findings,
-  });
-const withoutStatus = (report: Report) =>
-  report.report.findings.map(({ baseline: _status, ...finding }) => finding);
+const adr0001Codes = new Set([
+  "GO_PACKAGE_NAME",
+  "GO_CATCH_ALL_NAME",
+  "GO_CAPABILITY_DIRECTION",
+  "GO_INFRA_SERVICE",
+  "GO_DTO_ALIAS",
+]);
+const plain = (findings: Scoped[]) =>
+  findings.map(({ scope: _scope, ...finding }) => finding);
 
 describe("ADR-0001 report-mode architecture guards", () => {
   it.each(reportFixtures)("reports $name", ({ files, reports, blocking }) => {
@@ -698,19 +810,73 @@ describe("ADR-0001 report-mode architecture guards", () => {
       blocking.length ? 1 : 0,
     );
     expect(result.report.report.mode).toBe("report");
-    expect(withoutStatus(result.report)).toEqual(
-      expect.arrayContaining(reports),
+    // ADR-0002 rules also report on these snippets; this suite pins ADR-0001.
+    const findings = plain(result.report.report.findings).filter(({ code }) =>
+      adr0001Codes.has(code),
     );
-    expect(withoutStatus(result.report)).toHaveLength(reports.length);
+    expect(findings).toEqual(expect.arrayContaining(reports));
+    expect(findings).toHaveLength(reports.length);
     expect(result.report.violations.map(({ code }) => code).sort()).toEqual(
       [...blocking].sort(),
     );
-    expect(result.report.report.baseline.unbaselined).toEqual(
-      withoutStatus(result.report),
-    );
   });
+});
 
-  it("enumerates the real baseline exactly without new or stale exceptions", () => {
+const enforcementFile = "tooling/go-architecture-enforcement.json";
+const enforcementSource = "9de07bcfed6d67b74dc90ea0b7d3ba69ad0fa181";
+const migrationCodes = [
+  "GO_PACKAGE_NAME",
+  "GO_PACKAGE_DIR",
+  "GO_FILE_WORD",
+  "GO_CATCH_ALL_NAME",
+  "GO_TEST_ORPHAN",
+  "GO_TEST_MISSING",
+  "GO_BOOT_TEST",
+  "GO_BOOT_FILE",
+  "GO_BOOT_LOGIC",
+  "GO_OPERATION_SHAPE",
+  "GO_CAPABILITY_DIRECTION",
+  "GO_INFRA_SERVICE",
+  "GO_DTO_ALIAS",
+];
+// The migration switch only grows. When a module migrates a rule, add the
+// scope to the enforcement file AND here in the same pull request; removing a
+// migrated scope from the file fails this floor.
+const migratedFloor: Record<string, string[]> = {};
+type Enforcement = {
+  version: number;
+  source: string;
+  migrated: Record<string, string[]>;
+  exceptions: (Finding & { reason: string; removal: string })[];
+  ceilings: Record<string, Record<string, number>>;
+};
+const enforcement = (overrides: Partial<Enforcement> = {}) =>
+  JSON.stringify({
+    version: 2,
+    source: enforcementSource,
+    migrated: Object.fromEntries(migrationCodes.map((code) => [code, []])),
+    exceptions: [],
+    ceilings: {},
+    ...overrides,
+  });
+const migrate = (code: string, ...scopes: string[]) => ({
+  ...Object.fromEntries(migrationCodes.map((item) => [item, [] as string[]])),
+  [code]: scopes,
+});
+
+describe("ADR-0002 enforcement switch", () => {
+  const wordFile = "modules/chat/domain/turn/turnpolicy.go";
+  const wordFinding = {
+    code: "GO_FILE_WORD",
+    file: wordFile,
+    detail: "File name outside the admitted vocabulary: turnpolicy",
+  };
+  const files = {
+    [wordFile]: "package turn\n",
+    "modules/task/domain/task/taskpolicy.go": "package task\n",
+  };
+
+  it("keeps the real checkout green with a growing switch and ceilings", () => {
     const result = spawnSync(
       process.execPath,
       [checker, "--root", root, "--json"],
@@ -720,101 +886,238 @@ describe("ADR-0001 report-mode architecture guards", () => {
     expect(result.status, result.stdout + result.stderr).toBe(0);
     const report = JSON.parse(result.stdout) as Report;
     const stored = JSON.parse(
-      fs.readFileSync(path.join(root, baselineFile), "utf8"),
-    ) as { source: string; findings: Finding[] };
-    expect(stored.source).toBe(baselineSource);
-    expect(stored.findings.length).toBeGreaterThan(0);
-    expect(withoutStatus(report)).toEqual(stored.findings);
-    expect(report.report.baseline).toEqual({
-      source: baselineSource,
-      unbaselined: [],
-      stale: [],
+      fs.readFileSync(path.join(root, enforcementFile), "utf8"),
+    ) as Enforcement;
+    expect(stored.version).toBe(2);
+    expect(Object.keys(stored.migrated)).toEqual(migrationCodes);
+    for (const [code, scopes] of Object.entries(migratedFloor))
+      expect(stored.migrated[code]).toEqual(expect.arrayContaining(scopes));
+    expect(report.report.migrated).toEqual(stored.migrated);
+    expect(report.report.source).toBe(stored.source);
+    expect(report.violations).toEqual([]);
+    for (const [code, byScope] of Object.entries(report.report.counts))
+      for (const [scope, count] of Object.entries(byScope))
+        if (!stored.migrated[code]?.includes(scope))
+          expect(count).toBeLessThanOrEqual(
+            stored.ceilings[code]?.[scope] ?? 0,
+          );
+  });
+
+  it("reports every scope without an enforcement file", () => {
+    const result = check(files);
+    expect(result.status, JSON.stringify(result.report)).toBe(0);
+    expect(result.report.report.source).toBeNull();
+    expect(plain(result.report.report.findings)).toContainEqual(wordFinding);
+    expect(result.report.report.counts.GO_FILE_WORD).toEqual({
+      chat: 1,
+      task: 1,
     });
-    expect(
-      report.report.findings.every(({ baseline }) => baseline === "existing"),
-    ).toBe(true);
   });
 
-  it("keeps additions visible and reports stale exact exceptions deterministically", () => {
-    const file = "modules/chat/app/services/turn/read.go";
-    const files = { [file]: "package turn\ntype ReadRequest = CheckRequest\n" };
-    const original = withoutStatus(check(files).report);
-    const existing = check({ ...files, [baselineFile]: baseline(original) });
-    expect(existing.status).toBe(0);
-    expect(existing.report.report.findings[0]?.baseline).toBe("existing");
-    const changed = check({
-      ...files,
-      [file]: files[file] + "type ReadResponse = CheckResponse\n",
-      [baselineFile]: baseline(original),
-    });
-    expect(changed.status).toBe(0); // New ADR findings remain reports.
-    expect(changed.report.report.baseline.unbaselined).toEqual([
-      {
-        code: "GO_DTO_ALIAS",
-        file,
-        detail: "DTO alias ReadResponse = CheckResponse",
-      },
-    ]);
-    const removed = check({ [baselineFile]: baseline(original) });
-    expect(removed.report.report.baseline.stale).toEqual(original);
-    expect(
-      check({ ...files, [baselineFile]: baseline(original) }).report,
-    ).toEqual(existing.report);
-  });
-
-  it("cannot baseline away an existing blocking import violation", () => {
-    const file = "modules/chat/app/services/turn/read.go";
-    const files = {
-      [file]: 'package turn\nimport _ "os"\ntype ReadRequest = CheckRequest\n',
-    };
-    const reports = withoutStatus(check(files).report);
-    const result = check({ ...files, [baselineFile]: baseline(reports) });
-    denied(result, "GO_PURE_IMPORT", file);
-    expect(result.report.report.baseline.unbaselined).toEqual([]);
-  });
-
-  it.each([
-    [{ code: "GO_PURE_IMPORT", file: "policy.go", detail: "os" }],
-    [{ code: "GO_DTO_ALIAS", file: "modules/**", detail: "wildcard" }],
-    [{ code: "GO_DTO_ALIAS", file: "../escape.go", detail: "escape" }],
-    [
-      { code: "GO_DTO_ALIAS", file: "policy.go", detail: "duplicate" },
-      { code: "GO_DTO_ALIAS", file: "policy.go", detail: "duplicate" },
-    ],
-  ])("rejects malformed or blocking baseline entries %#", (...entries) => {
-    // Baseline errors go to stderr, unlike ordinary architecture findings.
+  it("prints report lines for one scope and the count table", () => {
     const directory = fs.mkdtempSync(
-      path.join(os.tmpdir(), "farol-go-baseline-"),
+      path.join(os.tmpdir(), "farol-go-architecture-"),
     );
     try {
-      fs.mkdirSync(path.join(directory, "tooling"));
-      fs.writeFileSync(path.join(directory, baselineFile), baseline(entries));
+      fs.writeFileSync(path.join(directory, "go.mod"), moduleFile);
+      for (const [name, text] of Object.entries(files)) {
+        fs.mkdirSync(path.dirname(path.join(directory, name)), {
+          recursive: true,
+        });
+        fs.writeFileSync(path.join(directory, name), text);
+      }
       const result = spawnSync(
         process.execPath,
-        [checker, "--root", directory, "--json"],
+        [checker, "--root", directory, "--scope", "chat"],
         { encoding: "utf8" },
       );
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        "Invalid or duplicate Go architecture baseline finding",
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain(
+        `REPORT GO_FILE_WORD ${wordFile}: ${wordFinding.detail}`,
       );
+      expect(result.stdout).not.toContain("taskpolicy");
+      expect(result.stdout).toMatch(/^GO_FILE_WORD +0 +1 +0 .* 2$/mu);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  it("blocks a rule only in its migrated scope", () => {
+    const result = check({
+      ...files,
+      [enforcementFile]: enforcement({
+        migrated: migrate("GO_FILE_WORD", "chat"),
+        ceilings: { GO_FILE_WORD: { task: 1 } },
+      }),
+    });
+    denied(result, "GO_FILE_WORD", wordFile);
+    expect(
+      result.report.violations.filter(({ code }) => code === "GO_FILE_WORD"),
+    ).toEqual([wordFinding]);
+    expect(
+      result.report.report.findings.filter(
+        ({ code }) => code === "GO_FILE_WORD",
+      ),
+    ).toEqual([
+      {
+        code: "GO_FILE_WORD",
+        file: "modules/task/domain/task/taskpolicy.go",
+        detail: "File name outside the admitted vocabulary: taskpolicy",
+        scope: "task",
+      },
+    ]);
+  });
+
+  it("excepts an exact reasoned row in a migrated scope", () => {
+    const result = check({
+      ...files,
+      [enforcementFile]: enforcement({
+        migrated: migrate("GO_FILE_WORD", "chat"),
+        exceptions: [
+          { ...wordFinding, reason: "Fixture", removal: "Rename the file" },
+        ],
+        ceilings: { GO_FILE_WORD: { task: 1 } },
+      }),
+    });
+    expect(result.status, JSON.stringify(result.report)).toBe(0);
+    expect(result.report.report.excepted).toEqual([
+      {
+        ...wordFinding,
+        scope: "chat",
+        reason: "Fixture",
+        removal: "Rename the file",
+      },
+    ]);
+  });
+
+  it("rejects stale and unused exception rows", () => {
+    const row = { reason: "Fixture", removal: "Rename the file" };
+    const stale = check({
+      [enforcementFile]: enforcement({
+        migrated: migrate("GO_FILE_WORD", "chat"),
+        exceptions: [{ ...wordFinding, ...row }],
+      }),
+    });
+    denied(stale, "GO_EXCEPTION_STALE", enforcementFile);
+    const unused = check({
+      ...files,
+      [enforcementFile]: enforcement({
+        exceptions: [{ ...wordFinding, ...row }],
+        ceilings: { GO_FILE_WORD: { chat: 1, task: 1 } },
+      }),
+    });
+    denied(unused, "GO_EXCEPTION_STALE", enforcementFile);
+  });
+
+  it("refuses report growth past a ceiling", () => {
+    const within = check({
+      ...files,
+      [enforcementFile]: enforcement({
+        ceilings: { GO_FILE_WORD: { chat: 1, task: 1 } },
+      }),
+    });
+    expect(within.status, JSON.stringify(within.report)).toBe(0);
+    const grown = check({
+      ...files,
+      [enforcementFile]: enforcement({
+        ceilings: { GO_FILE_WORD: { task: 1 } },
+      }),
+    });
+    denied(grown, "GO_REPORT_CEILING", enforcementFile);
+    expect(
+      grown.report.violations.find(({ code }) => code === "GO_REPORT_CEILING")
+        ?.detail,
+    ).toBe("GO_FILE_WORD chat: 1 findings exceed the ceiling 0");
+  });
+
+  it("cannot migrate away an existing blocking rule", () => {
+    const file = "modules/chat/app/services/turn/read.go";
+    const result = check({
+      [file]: 'package turn\nimport _ "os"\n',
+      [enforcementFile]: enforcement({
+        ceilings: { GO_PACKAGE_DIR: { chat: 1 } },
+      }),
+    });
+    denied(result, "GO_PURE_IMPORT", file);
+  });
+
+  const row = { code: "GO_FILE_WORD", file: "a.go", detail: "x" };
   it.each([
-    null,
-    false,
-    0,
-    { version: 2, mode: "report", source: baselineSource, findings: [] },
-  ])("rejects invalid baseline envelopes %#", (envelope) => {
+    ["envelope", null],
+    ["version", JSON.parse(enforcement({ version: 1 }))],
+    ["source", JSON.parse(enforcement({ source: "main" }))],
+    ["extra key", { ...JSON.parse(enforcement()), baseline: [] }],
+    [
+      "unknown scope",
+      JSON.parse(enforcement({ migrated: migrate("GO_FILE_WORD", "apps") })),
+    ],
+    [
+      "unsorted scopes",
+      JSON.parse(
+        enforcement({ migrated: migrate("GO_FILE_WORD", "task", "chat") }),
+      ),
+    ],
+    [
+      "missing rule",
+      JSON.parse(enforcement({ migrated: { GO_FILE_WORD: [] } })),
+    ],
+    [
+      "blocking rule",
+      JSON.parse(enforcement({ migrated: migrate("GO_PURE_IMPORT", "chat") })),
+    ],
+    [
+      "zero ceiling",
+      JSON.parse(enforcement({ ceilings: { GO_FILE_WORD: { chat: 0 } } })),
+    ],
+    [
+      "blocking ceiling",
+      JSON.parse(enforcement({ ceilings: { GO_PURE_IMPORT: { chat: 1 } } })),
+    ],
+    [
+      "blocking exception",
+      JSON.parse(
+        enforcement({
+          exceptions: [
+            { ...row, code: "GO_PURE_IMPORT", reason: "r", removal: "r" },
+          ],
+        }),
+      ),
+    ],
+    [
+      "reasonless exception",
+      JSON.parse(
+        enforcement({ exceptions: [{ ...row, reason: " ", removal: "r" }] }),
+      ),
+    ],
+    [
+      "wildcard exception",
+      JSON.parse(
+        enforcement({
+          exceptions: [
+            { ...row, file: "modules/**", reason: "r", removal: "r" },
+          ],
+        }),
+      ),
+    ],
+    [
+      "duplicate exception",
+      JSON.parse(
+        enforcement({
+          exceptions: [
+            { ...row, reason: "r", removal: "r" },
+            { ...row, reason: "r", removal: "r" },
+          ],
+        }),
+      ),
+    ],
+  ])("rejects an invalid enforcement file: %s", (_name, envelope) => {
     const directory = fs.mkdtempSync(
-      path.join(os.tmpdir(), "farol-go-baseline-"),
+      path.join(os.tmpdir(), "farol-go-enforcement-"),
     );
     try {
       fs.mkdirSync(path.join(directory, "tooling"));
       fs.writeFileSync(
-        path.join(directory, baselineFile),
+        path.join(directory, enforcementFile),
         JSON.stringify(envelope),
       );
       const result = spawnSync(
@@ -823,12 +1126,384 @@ describe("ADR-0001 report-mode architecture guards", () => {
         { encoding: "utf8" },
       );
       expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        "Invalid Go architecture report baseline",
-      );
+      expect(result.stderr).toContain("Invalid Go architecture enforcement");
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
     }
+  });
+});
+
+// Each ADR-0002 migration rule: a violation fixture reports exactly the
+// expected finding and a conforming fixture reports none of that code. These
+// are lexical source fixtures, not compilation or runtime evidence.
+function reportsOf(files: Record<string, string>, code: string) {
+  const result = check(files);
+  expect(result.status, JSON.stringify(result.report)).toBe(0);
+  return plain(result.report.report.findings).filter(
+    (finding) => finding.code === code,
+  );
+}
+const turn = "modules/chat/domain/turn";
+const service = "modules/chat/app/services/turn";
+const behavior = 'package turn\nfunc Valid(s string) bool { return s != "" }\n';
+
+describe("ADR-0002 migration rules", () => {
+  it("GO_PACKAGE_NAME admits the ADR-0002 words", () => {
+    for (const word of ["budget", "peer", "settings", "failure", "selftest"])
+      expect(
+        reportsOf(
+          { [`modules/chat/domain/${word}/policy.go`]: `package ${word}\n` },
+          "GO_PACKAGE_NAME",
+        ),
+      ).toEqual(
+        word === "selftest"
+          ? [
+              {
+                code: "GO_PACKAGE_NAME",
+                file: "modules/chat/domain/selftest",
+                detail:
+                  "Package name outside the admitted vocabulary: selftest",
+              },
+            ]
+          : [],
+      );
+  });
+
+  it("GO_PACKAGE_DIR requires the clause to equal the directory", () => {
+    expect(
+      reportsOf({ [`${turn}/policy.go`]: "package turn\n" }, "GO_PACKAGE_DIR"),
+    ).toEqual([]);
+    expect(
+      reportsOf({ "cmd/farol/main.go": "package main\n" }, "GO_PACKAGE_DIR"),
+    ).toEqual([]);
+    expect(
+      reportsOf({ [`${turn}/policy.go`]: "package state\n" }, "GO_PACKAGE_DIR"),
+    ).toEqual([
+      {
+        code: "GO_PACKAGE_DIR",
+        file: turn,
+        detail: "Package clause state must equal turn",
+      },
+    ]);
+    expect(
+      reportsOf({ "cmd/farol/main.go": "package farol\n" }, "GO_PACKAGE_DIR"),
+    ).toEqual([
+      {
+        code: "GO_PACKAGE_DIR",
+        file: "cmd/farol",
+        detail: "Package clause farol must equal main",
+      },
+    ]);
+  });
+
+  it("GO_FILE_WORD checks the stem against the shared vocabulary", () => {
+    expect(
+      reportsOf(
+        {
+          [`${turn}/policy.go`]: "package turn\n",
+          [`${turn}/policy_darwin.go`]: "package turn\n",
+          [`${turn}/turn_linux_arm64.go`]: "package turn\n",
+          [`${turn}/common.go`]: "package turn\n",
+        },
+        "GO_FILE_WORD",
+      ),
+    ).toEqual([]);
+    expect(
+      reportsOf(
+        {
+          [`${turn}/turnpolicy.go`]: "package turn\n",
+          [`${turn}/policydarwin_darwin.go`]: "package turn\n",
+        },
+        "GO_FILE_WORD",
+      ),
+    ).toEqual([
+      {
+        code: "GO_FILE_WORD",
+        file: `${turn}/policydarwin_darwin.go`,
+        detail: "File name outside the admitted vocabulary: policydarwin",
+      },
+      {
+        code: "GO_FILE_WORD",
+        file: `${turn}/turnpolicy.go`,
+        detail: "File name outside the admitted vocabulary: turnpolicy",
+      },
+    ]);
+  });
+
+  it("GO_TEST_ORPHAN pairs tests with sources, platform suffix included", () => {
+    expect(
+      reportsOf(
+        {
+          [`${turn}/policy.go`]: "package turn\n",
+          [`${turn}/policy_test.go`]: "package turn\n",
+          [`${turn}/turn_test.go`]: "package turn\n",
+          [`${turn}/state_darwin.go`]: "package turn\n",
+          [`${turn}/state_darwin_test.go`]: "package turn\n",
+        },
+        "GO_TEST_ORPHAN",
+      ),
+    ).toEqual([]);
+    expect(
+      reportsOf(
+        {
+          [`${turn}/policy.go`]: "package turn\n",
+          [`${turn}/policy_darwin_test.go`]: "package turn\n",
+          [`${turn}/native_test.go`]: "package turn\n",
+          [`${turn}/turn_darwin_test.go`]: "package turn\n",
+        },
+        "GO_TEST_ORPHAN",
+      ),
+    ).toEqual([
+      {
+        code: "GO_TEST_ORPHAN",
+        file: `${turn}/native_test.go`,
+        detail: "No native.go beside this test",
+      },
+      {
+        code: "GO_TEST_ORPHAN",
+        file: `${turn}/policy_darwin_test.go`,
+        detail: "No policy_darwin.go beside this test",
+      },
+      {
+        code: "GO_TEST_ORPHAN",
+        file: `${turn}/turn_darwin_test.go`,
+        detail: "No turn_darwin.go beside this test",
+      },
+    ]);
+  });
+
+  it("GO_TEST_MISSING requires a test only for files with behavior", () => {
+    const declarations = {
+      [`${service}/doc.go`]: "// Package turn is a fixture.\npackage turn\n",
+      [`${service}/port.go`]:
+        'package turn\nimport "context"\ntype Store interface {\n\tLoad(ctx context.Context, id string) (string, error)\n}\ntype Handler func(context.Context) error\n',
+      [`${service}/errors.go`]:
+        'package turn\nimport "errors"\nvar ErrMissing = errors.New("missing")\n',
+      [`${service}/state.go`]:
+        "package turn\ntype State struct {\n\tName string\n\tNext func() error\n}\n",
+      [`${service}/service.go`]:
+        "package turn\ntype Service struct{ store Store }\nfunc NewService(store Store) *Service {\n\treturn &Service{\n\t\tstore: store,\n\t}\n}\n",
+      [`${service}/code.go`]:
+        'package turn\ntype Code string\nfunc (c Code) Error() string { return string(c) }\nfunc (c Code) String() string {\n\treturn "code:" + string(c)\n}\n',
+      [`${service}/cause.go`]:
+        "package turn\ntype Cause struct{ err error }\nfunc (c *Cause) Unwrap() error { return c.err }\n",
+      [`${service}/policy.go`]: behavior,
+      [`${service}/policy_test.go`]: "package turn\n",
+      "cmd/farol/main.go": "package main\nfunc main() { run() }\n",
+    };
+    expect(reportsOf(declarations, "GO_TEST_MISSING")).toEqual([]);
+    const behaviors = {
+      [`${turn}/valid.go`]: behavior,
+      [`${turn}/build.go`]:
+        "package turn\nfunc NewService() *Service {\n\ts := &Service{}\n\treturn s\n}\n",
+      [`${turn}/name.go`]:
+        'package turn\nfunc (c Code) String() string {\n\tswitch c {\n\tcase "":\n\t\treturn "empty"\n\t}\n\treturn string(c)\n}\n',
+      [`${turn}/accessor.go`]:
+        'package turn\nfunc (c Code) Retry() string { return "never" }\n',
+      [`${turn}/hook.go`]:
+        "package turn\nvar hook = func() error { return nil }\n",
+      [`${turn}/start.go`]: "package turn\nfunc init() {}\n",
+      [`${turn}/wrap.go`]:
+        "package turn\nfunc NewHandler() Handler { return func() error { return nil } }\n",
+      [`${turn}/probe_darwin.go`]: behavior,
+      [`${turn}/probe_test.go`]: "package turn\n",
+    };
+    expect(
+      reportsOf(behaviors, "GO_TEST_MISSING")
+        .map(({ file }) => path.posix.basename(file))
+        .sort(),
+    ).toEqual([
+      "accessor.go",
+      "build.go",
+      "hook.go",
+      "name.go",
+      "probe_darwin.go",
+      "start.go",
+      "valid.go",
+      "wrap.go",
+    ]);
+    expect(
+      reportsOf({ [`${turn}/probe_darwin.go`]: behavior }, "GO_TEST_MISSING"),
+    ).toEqual([
+      {
+        code: "GO_TEST_MISSING",
+        file: `${turn}/probe_darwin.go`,
+        detail: "Behavior without probe_darwin_test.go",
+      },
+    ]);
+  });
+
+  it("GO_BOOT_TEST rejects boot tests and test data", () => {
+    expect(
+      reportsOf({ "boot/boot.go": "package boot\n" }, "GO_BOOT_TEST"),
+    ).toEqual([]);
+    expect(
+      reportsOf(
+        {
+          "boot/boot.go": "package boot\n",
+          "boot/boot_test.go": "package boot\n",
+          "boot/testdata/source.json": "{}\n",
+        },
+        "GO_BOOT_TEST",
+      ),
+    ).toEqual([
+      {
+        code: "GO_BOOT_TEST",
+        file: "boot/boot_test.go",
+        detail: "Boot has no tests; whole-graph tests live under tests/",
+      },
+      {
+        code: "GO_BOOT_TEST",
+        file: "boot/testdata",
+        detail: "Boot has no test data",
+      },
+    ]);
+  });
+
+  it("GO_BOOT_FILE admits boot.go plus one file per module", () => {
+    const valid = Object.fromEntries(
+      ["boot", "computer", "task", "chat", "release"].map((stem) => [
+        `boot/${stem}.go`,
+        "package boot\n",
+      ]),
+    );
+    expect(reportsOf(valid, "GO_BOOT_FILE")).toEqual([]);
+    const set = "boot.go, chat.go, computer.go, release.go, task.go";
+    expect(
+      reportsOf(
+        {
+          "boot/wiring.go": "package boot\n",
+          "boot/chat_darwin.go": "package boot\n",
+          "boot/container/container.go": "package container\n",
+        },
+        "GO_BOOT_FILE",
+      ),
+    ).toEqual([
+      {
+        code: "GO_BOOT_FILE",
+        file: "boot/chat_darwin.go",
+        detail: `Boot holds only ${set}`,
+      },
+      {
+        code: "GO_BOOT_FILE",
+        file: "boot/container/container.go",
+        detail: "Boot has no subpackages",
+      },
+      {
+        code: "GO_BOOT_FILE",
+        file: "boot/wiring.go",
+        detail: `Boot holds only ${set}`,
+      },
+    ]);
+  });
+
+  it("GO_BOOT_LOGIC allows composition and error returns only", () => {
+    const composition = `package boot
+import "errors"
+type chatModule struct{ root string }
+func (m *chatModule) service() (*Service, error) {
+\tstore, err := open(m.root)
+\tif err != nil {
+\t\treturn nil, err
+\t}
+\tif err := store.Check(); err != nil {
+\t\treturn nil, errors.Join(err)
+\t}
+\treturn NewService(store), nil
+}
+`;
+    expect(reportsOf({ "boot/chat.go": composition }, "GO_BOOT_LOGIC")).toEqual(
+      [],
+    );
+    const logic = `package boot
+type chatModule struct{}
+type helper struct{}
+func run(modes []string, ch chan int) {
+\tfor _, mode := range modes {
+\t\tswitch mode {
+\t\tcase "serve":
+\t\t\tgo serve()
+\t\t}
+\t}
+\tselect {
+\tcase <-ch:
+\t}
+\tif len(modes) == 0 {
+\t\treturn
+\t}
+}
+`;
+    expect(
+      reportsOf({ "boot/chat.go": logic }, "GO_BOOT_LOGIC").map(
+        ({ detail }) => detail,
+      ),
+    ).toEqual([
+      "conditions other than err != nil: 1",
+      "for statements: 1",
+      "go statements: 1",
+      "select statements: 1",
+      "switch statements: 1",
+      "top-level types: 2; at most one namespace type",
+    ]);
+    expect(
+      reportsOf(
+        { "boot/task.go": "package boot\n" + "// line\n".repeat(400) },
+        "GO_BOOT_LOGIC",
+      ).map(({ detail }) => detail),
+    ).toEqual(["lines: 401; budget 400"]);
+  });
+
+  it("GO_OPERATION_SHAPE: Command or Query in, Result out", () => {
+    const valid = `package turn
+import "context"
+type CreateCommand struct{ Name string }
+type CreateResult struct{ ID string }
+func (s *Service) Create(ctx context.Context, cmd CreateCommand) (*CreateResult, error) {
+\treturn nil, nil
+}
+type ListQuery struct{}
+type ListResult struct{}
+func (s *Service) List(_ context.Context, q ListQuery) (*ListResult, error) { return nil, nil }
+func (s *Service) close(id string) error { return nil }
+func (r *Runner) Run(id string) error { return nil }
+`;
+    expect(
+      reportsOf(
+        {
+          [`${service}/create.go`]: valid,
+          "modules/chat/app/capabilities/guard/guard.go":
+            "package guard\nfunc (g *Service) Admit(id string) error { return nil }\n",
+          "modules/chat/contracts/turn/create.go":
+            "package turn\ntype CreateRequest struct{}\ntype CreateResponse struct{}\n",
+        },
+        "GO_OPERATION_SHAPE",
+      ),
+    ).toEqual([]);
+    const invalid = `package turn
+import "context"
+type ApproveRequest struct{}
+func (s *Service) Approve(ctx context.Context, id string, revision uint64) error {
+\treturn nil
+}
+func (s Service) Read(ctx context.Context, q ReadQuery) (ReadResult, error) { return ReadResult{}, nil }
+func (s *Service) Write(ctx context.Context, cmd SaveCommand) (*SaveResult, error) { return nil, nil }
+`;
+    expect(
+      reportsOf(
+        {
+          [`${service}/approve.go`]: invalid,
+          "modules/chat/contracts/turn/create.go":
+            "package turn\ntype (\n\tCreateCommand struct{}\n\tcreateQuery struct{}\n)\n",
+        },
+        "GO_OPERATION_SHAPE",
+      ).map(({ detail }) => detail),
+    ).toEqual([
+      "Application type ApproveRequest uses a wire suffix; use Command, Query or Result",
+      "Service.Approve must take (context.Context, ApproveCommand or ApproveQuery) and return (*ApproveResult, error)",
+      "Service.Read must take (context.Context, ReadCommand or ReadQuery) and return (*ReadResult, error)",
+      "Service.Write must take (context.Context, WriteCommand or WriteQuery) and return (*WriteResult, error)",
+      "Contract type CreateCommand uses an application suffix; use Request or Response",
+    ]);
   });
 });
 

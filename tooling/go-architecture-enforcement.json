@@ -1,0 +1,86 @@
+{
+  "version": 2,
+  "source": "9de07bcfed6d67b74dc90ea0b7d3ba69ad0fa181",
+  "migrated": {
+    "GO_PACKAGE_NAME": [],
+    "GO_PACKAGE_DIR": [],
+    "GO_FILE_WORD": [],
+    "GO_CATCH_ALL_NAME": [],
+    "GO_TEST_ORPHAN": [],
+    "GO_TEST_MISSING": [],
+    "GO_BOOT_TEST": [],
+    "GO_BOOT_FILE": [],
+    "GO_BOOT_LOGIC": [],
+    "GO_OPERATION_SHAPE": [],
+    "GO_CAPABILITY_DIRECTION": [],
+    "GO_INFRA_SERVICE": [],
+    "GO_DTO_ALIAS": []
+  },
+  "exceptions": [],
+  "ceilings": {
+    "GO_PACKAGE_NAME": {
+      "chat": 14,
+      "cmd": 1,
+      "computer": 1,
+      "release": 17,
+      "task": 10
+    },
+    "GO_PACKAGE_DIR": {
+      "release": 1,
+      "task": 1
+    },
+    "GO_FILE_WORD": {
+      "boot": 158,
+      "chat": 101,
+      "cmd": 2,
+      "computer": 194,
+      "pkg": 2,
+      "release": 86,
+      "task": 43,
+      "transport": 5
+    },
+    "GO_CATCH_ALL_NAME": {
+      "chat": 2,
+      "task": 4
+    },
+    "GO_TEST_ORPHAN": {
+      "chat": 35,
+      "computer": 120,
+      "gen": 4,
+      "release": 38,
+      "task": 31,
+      "transport": 7
+    },
+    "GO_TEST_MISSING": {
+      "chat": 48,
+      "computer": 100,
+      "pkg": 1,
+      "release": 54,
+      "task": 33,
+      "transport": 2
+    },
+    "GO_BOOT_TEST": {
+      "boot": 196
+    },
+    "GO_BOOT_FILE": {
+      "boot": 162
+    },
+    "GO_BOOT_LOGIC": {
+      "boot": 347
+    },
+    "GO_OPERATION_SHAPE": {
+      "chat": 36,
+      "computer": 78,
+      "release": 39,
+      "task": 45
+    },
+    "GO_INFRA_SERVICE": {
+      "chat": 18,
+      "computer": 42,
+      "task": 2
+    },
+    "GO_DTO_ALIAS": {
+      "computer": 6
+    }
+  }
+}
