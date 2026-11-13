@@ -83,8 +83,9 @@ errors.New("missing")`, `var pattern = regexp.MustCompile(…)`) is not
   `_test.go` files and no `testdata/`. Whole-graph tests live under `tests/`.
 - No logic: no `switch`, `for`, `select` or `go` statement; `if` only as
   `if err != nil` (including `if v, err := pkg.Open(a, b); err != nil`: one
-  call of a plain selector chain assigned to a list ending in `err`, with no
-  nested call, function literal, `&&` or `||` in its arguments); at most one
+  call of a plain selector chain declared with `:=` into a list ending in
+  `err`, with no nested call, conversion, function literal, `&&` or `||` in
+  its arguments); at most one
   top-level type per file (the module namespace type); at most 400 lines per
   file.
 - Reusable mechanisms live in `pkg`; decisions live in modules.
@@ -115,8 +116,9 @@ module's contracts or application services and back. It may import its own
 module's `contracts`, `app` and `domain`, kernel domain/app, kits, `pkg/ipc`,
 `gen/desktop/v1` and the shared `transport/desktop` server. It never imports
 its own infrastructure, another module (`GO_CROSS_MODULE`), kernel
-infrastructure, `boot` or another desktop feature package
-(`GO_DESKTOP_DEPENDENCY`); shared wire helpers live in `transport/desktop` or a
+infrastructure, `boot` or any other desktop package, including a subpackage
+of its own feature (`GO_DESKTOP_DEPENDENCY`); shared wire helpers live in
+`transport/desktop` or a
 kit. Only `boot` imports it; `transport/desktop` remains the shared server and
 imports no module adapter.
 
