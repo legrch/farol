@@ -461,6 +461,11 @@ function analyzeFacts(facts) {
     }
     return out;
   };
+  // `import("...")` and `require("...")`: their specifier is never a read path.
+  const moduleLoad = (node) =>
+    node.type === "CallExpression" &&
+    (node.callee.type === "Import" ||
+      (node.callee.type === "Identifier" && node.callee.name === "require"));
   function candidates(node, depth = 0) {
     if (!node || depth > 3) return [];
     const cache = candidateCache[depth];
@@ -483,6 +488,8 @@ function analyzeFacts(facts) {
       }
       case "CallExpression":
       case "NewExpression":
+        // A module specifier names code to load, not a file to read.
+        if (moduleLoad(node)) break;
         // A method call contributes its receiver as well as its arguments.
         result = [
           ...(node.callee.type === "MemberExpression"
@@ -550,11 +557,17 @@ function analyzeFacts(facts) {
       default:
         // Unknown shapes (callbacks, object values, ...) still contribute each
         // string literal they spell, as separate candidates.
-        walk(node, (inner) => {
-          const text = literalText(inner);
-          if (text !== null && result.length < maxCandidates)
-            result.push(text.replaceAll("\u0000", "/"));
-        });
+        {
+          const specifiers = new Set();
+          walk(node, (inner) => {
+            if (moduleLoad(inner))
+              for (const argument of inner.arguments) specifiers.add(argument);
+            if (specifiers.has(inner)) return;
+            const text = literalText(inner);
+            if (text !== null && result.length < maxCandidates)
+              result.push(text.replaceAll("\u0000", "/"));
+          });
+        }
         break;
     }
     result = result.slice(0, maxCandidates);

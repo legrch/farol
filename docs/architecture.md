@@ -179,7 +179,9 @@ esbuild plugin `onLoad` contents; and flows through object properties beyond the
 binding (assignments to `process`, `globalThis` and `this` are not followed) or through
 return values of unresolved calls; a write target that is not a named variable
 (`writeFileSync(path.join(dir, "e.mjs"), s)` followed by `import(path.join(dir, "e.mjs"))`);
-and a path that goes through `fixtures` and climbs out again with `..`. A waiver is matched
+a path that goes through `fixtures` and climbs out again with `..`, and path
+segments passed as a spread array (`path.join(root, ...parts)`). The specifier of
+`import()` or `require()` is never treated as a read path. A waiver is matched
 only as a parsed `//` line comment starting within the first 30 lines, and a legacy
 allowlisted file cannot be waived.
 

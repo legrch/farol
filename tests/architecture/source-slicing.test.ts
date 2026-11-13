@@ -156,6 +156,7 @@ describe("the source-slicing ban", () => {
     "fp-anchor",
     "fp-import-real",
     "fp-shared-ctx",
+    "fp-import-method",
   ])("does not accuse %s", (name) => {
     const result = check(path.join(fixtures, name));
     expect(result.status, result.stderr).toBe(0);
