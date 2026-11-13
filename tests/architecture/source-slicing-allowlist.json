@@ -1,51 +1,140 @@
 {
   "schema": 1,
   "files": {
-    "tests/e2e/deep-test-ipc-order.e2e.mjs": ["esbuild"],
-    "tests/integration/chatgpt-route.test.ts": ["vm"],
-    "tests/integration/connection-check-main.test.ts": ["vm"],
-    "tests/integration/connector-quit-start.test.ts": ["vm"],
-    "tests/integration/deep-test-dispatch.test.ts": ["vm"],
-    "tests/integration/dev-review-profile.test.mjs": ["vm"],
-    "tests/integration/fresh-chatgpt-journal-startup.test.ts": ["vm"],
-    "tests/integration/go-build-without-safe-open.test.ts": ["vm"],
-    "tests/integration/original-stop-main.test.ts": ["vm"],
-    "tests/integration/secure-mcp-connector-runtime.test.ts": ["vm"],
-    "tests/unit/bundled-tunnel-selection.test.ts": ["vm"],
-    "tests/unit/chatgpt-presentation-host.test.mjs": ["vm"],
-    "tests/unit/chatgpt-sign-in-status-host.test.mjs": ["vm"],
-    "tests/unit/codex-read-selection-host.test.mjs": ["vm"],
-    "tests/unit/connector-health-terminal.test.mjs": ["vm"],
-    "tests/unit/connector-separate-main.test.ts": ["vm"],
-    "tests/unit/connector-startup-no-send.test.ts": ["vm"],
-    "tests/unit/connector-transport-events.test.mjs": ["vm"],
-    "tests/unit/connector-transport-host.test.mjs": ["vm"],
-    "tests/unit/connector-transport-start.test.mjs": ["vm"],
-    "tests/unit/daily-driver-backend-lifecycle-report.test.ts": ["vm"],
-    "tests/unit/daily-driver-go-settings-loss.test.ts": ["vm"],
-    "tests/unit/daily-driver-live-surface-lifecycle.test.ts": ["vm"],
-    "tests/unit/daily-driver-runtime-stream-lifetime.test.ts": ["vm"],
-    "tests/unit/daily-driver-second-instance-update.test.ts": ["vm"],
-    "tests/unit/daily-driver-window-reopen.test.ts": ["vm"],
-    "tests/unit/daily-driver-window-startup-lifetime.test.ts": ["vm"],
-    "tests/unit/desktop-about.test.ts": ["vm"],
-    "tests/unit/desktop-build-defines.test.mjs": ["vm"],
-    "tests/unit/desktop-environment.test.ts": ["vm"],
-    "tests/unit/desktop-update-presentation.test.ts": ["vm"],
-    "tests/unit/go-core-quit-closers.test.ts": ["vm"],
-    "tests/unit/installed-update-public.test.ts": ["vm"],
-    "tests/unit/known-empty-completion-cli.test.mjs": ["vm"],
-    "tests/unit/main-startup-lease.test.ts": ["function"],
-    "tests/unit/manual-diagnostic-status.test.mjs": ["vm"],
-    "tests/unit/native-view-visibility.test.ts": ["vm"],
-    "tests/unit/onboarding-guide-routing.test.mjs": ["vm"],
-    "tests/unit/owner-preview-runtime.test.ts": ["vm"],
-    "tests/unit/owner-stop-presentation.test.ts": ["vm"],
-    "tests/unit/private-resource-child-launches.test.ts": ["vm"],
-    "tests/unit/retired-codex-model-admission.test.ts": ["vm"],
-    "tests/unit/settings-search-go-cutover.test.ts": ["vm"],
-    "tests/unit/setup-journey.test.ts": ["vm"],
-    "tests/unit/shell-action-provenance.test.ts": ["vm"],
-    "tests/unit/updates-preload.test.ts": ["vm"]
+    "tests/e2e/deep-test-ipc-order.e2e.mjs": [
+      "esbuild"
+    ],
+    "tests/integration/chatgpt-route.test.ts": [
+      "vm"
+    ],
+    "tests/integration/connection-check-main.test.ts": [
+      "vm"
+    ],
+    "tests/integration/connector-quit-start.test.ts": [
+      "vm"
+    ],
+    "tests/integration/deep-test-dispatch.test.ts": [
+      "vm"
+    ],
+    "tests/integration/dev-review-profile.test.mjs": [
+      "vm"
+    ],
+    "tests/integration/fresh-chatgpt-journal-startup.test.ts": [
+      "vm"
+    ],
+    "tests/integration/go-build-without-safe-open.test.ts": [
+      "vm"
+    ],
+    "tests/integration/original-stop-main.test.ts": [
+      "vm"
+    ],
+    "tests/integration/secure-mcp-connector-runtime.test.ts": [
+      "vm"
+    ],
+    "tests/unit/bundled-tunnel-selection.test.ts": [
+      "vm"
+    ],
+    "tests/unit/chatgpt-presentation-host.test.mjs": [
+      "vm"
+    ],
+    "tests/unit/chatgpt-sign-in-status-host.test.mjs": [
+      "vm"
+    ],
+    "tests/unit/codex-read-selection-host.test.mjs": [
+      "vm"
+    ],
+    "tests/unit/connector-health-terminal.test.mjs": [
+      "vm"
+    ],
+    "tests/unit/connector-separate-main.test.ts": [
+      "vm"
+    ],
+    "tests/unit/connector-startup-no-send.test.ts": [
+      "vm"
+    ],
+    "tests/unit/connector-transport-events.test.mjs": [
+      "vm"
+    ],
+    "tests/unit/connector-transport-host.test.mjs": [
+      "vm"
+    ],
+    "tests/unit/connector-transport-start.test.mjs": [
+      "vm"
+    ],
+    "tests/unit/daily-driver-backend-lifecycle-report.test.ts": [
+      "vm"
+    ],
+    "tests/unit/daily-driver-go-settings-loss.test.ts": [
+      "vm"
+    ],
+    "tests/unit/daily-driver-live-surface-lifecycle.test.ts": [
+      "vm"
+    ],
+    "tests/unit/daily-driver-runtime-stream-lifetime.test.ts": [
+      "vm"
+    ],
+    "tests/unit/daily-driver-second-instance-update.test.ts": [
+      "vm"
+    ],
+    "tests/unit/daily-driver-window-reopen.test.ts": [
+      "vm"
+    ],
+    "tests/unit/daily-driver-window-startup-lifetime.test.ts": [
+      "vm"
+    ],
+    "tests/unit/desktop-build-defines.test.mjs": [
+      "vm"
+    ],
+    "tests/unit/desktop-environment.test.ts": [
+      "vm"
+    ],
+    "tests/unit/desktop-update-presentation.test.ts": [
+      "vm"
+    ],
+    "tests/unit/go-core-quit-closers.test.ts": [
+      "vm"
+    ],
+    "tests/unit/installed-update-public.test.ts": [
+      "vm"
+    ],
+    "tests/unit/known-empty-completion-cli.test.mjs": [
+      "vm"
+    ],
+    "tests/unit/main-startup-lease.test.ts": [
+      "function"
+    ],
+    "tests/unit/manual-diagnostic-status.test.mjs": [
+      "vm"
+    ],
+    "tests/unit/native-view-visibility.test.ts": [
+      "vm"
+    ],
+    "tests/unit/onboarding-guide-routing.test.mjs": [
+      "vm"
+    ],
+    "tests/unit/owner-preview-runtime.test.ts": [
+      "vm"
+    ],
+    "tests/unit/owner-stop-presentation.test.ts": [
+      "vm"
+    ],
+    "tests/unit/private-resource-child-launches.test.ts": [
+      "vm"
+    ],
+    "tests/unit/retired-codex-model-admission.test.ts": [
+      "vm"
+    ],
+    "tests/unit/settings-search-go-cutover.test.ts": [
+      "vm"
+    ],
+    "tests/unit/setup-journey.test.ts": [
+      "vm"
+    ],
+    "tests/unit/shell-action-provenance.test.ts": [
+      "vm"
+    ],
+    "tests/unit/updates-preload.test.ts": [
+      "vm"
+    ]
   }
 }
