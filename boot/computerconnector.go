@@ -39,10 +39,13 @@ type connectorOpenBeforePublication struct{ cause error }
 func (e *connectorOpenBeforePublication) Error() string { return e.cause.Error() }
 func (e *connectorOpenBeforePublication) Unwrap() error { return e.cause }
 
-// Open attempts are bounded per recent window, not per backend lifetime. Each
-// attempt claims an operation ID and may admit one durable authority
-// participant, so a launch storm must not drain them; reconnects after Close,
-// sleep or a settings change keep working however long the backend runs.
+// Open attempts are bounded per recent window so a launch storm cannot drain
+// the finite pools behind them. Those pools remain: each Open and each Close
+// claims one ingress operation ID (claimCapacity per backend lifetime, never
+// pruned; a durable record is deferred), so reconnects end after about 2,000
+// Open/Close cycles in one backend lifetime. Reconnects of one connector
+// generation reuse one durable participant; a new generation or backend
+// lifetime admits one more, bounded by the access Store.
 const (
 	connectorOpenBurst  = 32
 	connectorOpenWindow = 10 * time.Minute
@@ -566,7 +569,7 @@ func (s *computerConnector) Close(ctx context.Context, operation string, in wire
 			return nil, computerUnavailable()
 		}
 	}
-	if err := s.root.claim(operation); err != nil {
+	if err := s.root.claimWithdrawal(operation); err != nil {
 		return nil, err
 	}
 	slot := s.current

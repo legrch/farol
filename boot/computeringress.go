@@ -110,10 +110,28 @@ func randomIngressID() (string, error) {
 	}
 	return hex.EncodeToString(b[:]), nil
 }
+
+// The claim set records every consumed operation ID for this backend lifetime
+// and is never pruned; a durable operation-ID record is deferred. Ordinary
+// claims stop short of capacity so the last slots stay with the calls that
+// only REMOVE authority (connector Close, authority Deactivate): a full set
+// can refuse new authority, never its withdrawal. A reserved claim grants
+// nothing, and once ordinary claims are refused no new authority can follow.
+const (
+	claimCapacity          = 4096
+	claimWithdrawalReserve = 64
+)
+
 func (s *ComputerIngress) claim(operation string) error {
+	return s.claimWithin(operation, claimCapacity-claimWithdrawalReserve)
+}
+func (s *ComputerIngress) claimWithdrawal(operation string) error {
+	return s.claimWithin(operation, claimCapacity)
+}
+func (s *ComputerIngress) claimWithin(operation string, limit int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.unknown || !validIngressID(operation) || s.used[operation] || len(s.used) >= 4096 {
+	if s.unknown || !validIngressID(operation) || s.used[operation] || len(s.used) >= limit {
 		return computerUnavailable()
 	}
 	s.used[operation] = true
@@ -131,7 +149,7 @@ func (s *ComputerIngress) Deactivate(ctx context.Context, operation string) (*wi
 	if ctx == nil || ctx.Err() != nil {
 		return nil, computerUnavailable()
 	}
-	if e := s.claim(operation); e != nil {
+	if e := s.claimWithdrawal(operation); e != nil {
 		return nil, e
 	}
 	fence, e := s.guard.deactivate()

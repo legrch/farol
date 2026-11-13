@@ -316,3 +316,58 @@ func TestComputerConnectorUnknownRetainedRevocationNeverRetries(t *testing.T) {
 		t.Fatal("shutdown replayed an unknown revocation", err)
 	}
 }
+
+// The ingress claim set is a per-backend-lifetime record of consumed operation
+// IDs and is never pruned; a durable operation-ID record is deferred. This pins
+// the remaining bound so the deferred fix is visible: one reused-participant
+// Open/Close cycle costs exactly two claims, ordinary claims stop at
+// claimCapacity-claimWithdrawalReserve, and the reserve keeps the calls that
+// REMOVE authority (connector Close, authority Deactivate) working after that.
+func TestComputerConnectorClaimSetBoundKeepsWithdrawalWorking(t *testing.T) {
+	if claimCapacity != 4096 || claimWithdrawalReserve != 64 {
+		t.Fatal("claim bound moved; update this pin with the deferred durable record")
+	}
+	f := newParticipantConnectorFixture(t)
+	s, _ := f.connector(t, "backend")
+	in := f.open("4")
+	participantCycle(t, s, f.clock, in, "warm")
+	for i := range 3 {
+		before := len(s.root.used)
+		participantCycle(t, s, f.clock, in, fmt.Sprint("cycle-", i))
+		if spent := len(s.root.used) - before; spent != 2 {
+			t.Fatalf("one Open/Close cycle spent %d claims", spent)
+		}
+	}
+	f.clock.now = f.clock.now.Add(connectorOpenWindow / connectorOpenBurst)
+	out, err := s.Open(context.Background(), "open-before-full", in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Exhaust the ordinary claims as a long backend lifetime would.
+	for i := 0; len(s.root.used) < claimCapacity-claimWithdrawalReserve; i++ {
+		if err = s.root.claim(fmt.Sprint("filler-", i)); err != nil {
+			t.Fatal("ordinary claim refused below the bound", len(s.root.used), err)
+		}
+	}
+	if err = s.root.claim("ordinary-over-bound"); err == nil {
+		t.Fatal("ordinary claim entered the withdrawal reserve")
+	}
+	if _, err = s.Close(context.Background(), "close-when-full", wire.ComputerConnectorClose{Binding: out.Endpoint.Binding}); err != nil {
+		t.Fatal("connector Close starved by the claim set", err)
+	}
+	if _, err = s.root.Deactivate(context.Background(), "deactivate-when-full"); err != nil {
+		t.Fatal("authority Deactivate starved by the claim set", err)
+	}
+	f.clock.now = f.clock.now.Add(connectorOpenWindow)
+	if _, err = s.Open(context.Background(), "open-when-full", in); err == nil {
+		t.Fatal("Open used the withdrawal reserve")
+	}
+	for i := 0; len(s.root.used) < claimCapacity; i++ {
+		if err = s.root.claimWithdrawal(fmt.Sprint("withdraw-", i)); err != nil {
+			t.Fatal("withdrawal claim refused below capacity", len(s.root.used), err)
+		}
+	}
+	if err = s.root.claimWithdrawal("withdraw-over-capacity"); err == nil {
+		t.Fatal("claim set exceeded its lifetime capacity")
+	}
+}
