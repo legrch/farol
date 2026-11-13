@@ -9385,31 +9385,6 @@
     },
     {
       "code": "GO_TEST_ORPHAN",
-      "file": "modules/chat/app/services/lifecycle/bytebounds_test.go",
-      "detail": "No bytebounds.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/chat/app/services/lifecycle/followstate_test.go",
-      "detail": "No followstate.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/chat/app/services/lifecycle/freezesend_test.go",
-      "detail": "No freezesend.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/chat/app/services/lifecycle/publication_test.go",
-      "detail": "No publication.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/chat/contracts/conversation/followstate_test.go",
-      "detail": "No followstate.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
       "file": "modules/chat/domain/contextbudget/policy_test.go",
       "detail": "No policy.go beside this test"
     },
@@ -9432,16 +9407,6 @@
       "code": "GO_TEST_ORPHAN",
       "file": "modules/chat/domain/modelselection/usageboundaries_test.go",
       "detail": "No usageboundaries.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/chat/domain/stream/clone_test.go",
-      "detail": "No clone.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/chat/domain/turn/provider_test.go",
-      "detail": "No provider.go beside this test"
     },
     {
       "code": "GO_TEST_ORPHAN",
