@@ -1,5 +1,10 @@
 # Native identity relocation boundary
 
+> Status: historical. The relocation source described here (`modules/release/domain/migration`,
+> `app/services/migration`, `app/port/migration.go` and `infra/native/migration`) never had
+> a runtime caller and was removed on 2026-11-13. The [identity cutover](identity-cutover.md)
+> replaced migration with reinstalling earlier betas. The record below is kept as history.
+
 This source slice continues the reviewed pure policy without changing it. It is
 not installed migration or startup integration. The Darwin filesystem primitive
 has no runtime caller and is tested only with disposable synthetic state. Release owns the consumer port, durable journal and admission semantics;

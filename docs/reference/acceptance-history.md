@@ -210,7 +210,7 @@ crash/reopen recovery, installed and live-provider qualification remain open.
 - Release: [module overview](modules/release/README.md),
   [native boundary](modules/release/native.md),
   [journal](modules/release/journal.md),
-  [migration admission](modules/release/migration.md), and
+  migration admission (source and page removed on 2026-11-13), and
   [relocation](modules/release/relocation.md).
 
 Module pages describe source contracts and remaining cutover work. They do not

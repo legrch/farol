@@ -1,9 +1,15 @@
 # Archive relocation plan
 
+> Status: historical, not completed. The staged root-module copy
+> `modules/release/infra/archive` never gained a consumer and was removed on
+> 2026-11-13 together with its provenance record. The nested
+> `resources/native/go/internal/releasearchive` remains the single shipped
+> extractor. The plan below is kept as history.
+
 This map was inspected against active archive-owner commit
 `a47c9ccea1a00eb210f675f71a0690fc3be6c857`. The integration owner subsequently leased only the nine archive Go files into
 `modules/release/infra/archive/**`, preserving the old whole-range acceptance
-limits. The source-only transfer is now staged; [provenance](infra/archive/provenance.md)
+limits. The source-only transfer is now staged; its provenance record (removed with the copy)
 records its declared mechanical edits and original byte hashes. This does not
 accept the old whole release range or transfer root/resource/tooling ownership.
 Core K0 must still supply the root module/entry contract before active routing.

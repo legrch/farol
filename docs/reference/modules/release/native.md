@@ -1,7 +1,8 @@
 # Native release boundary
 
 This checkpoint began as an additive, source-only move of the leased archive
-package, the existing record codecs and the consuming migration port. The
+package, the existing record codecs and the consuming migration port (the
+migration port and its adapter were later removed, see below). The
 desktop now runs the Go update helper entries for apply, recovery and rollback
 (see [helper recovery](helper-recovery.md)). The TypeScript updater policy, root
 dispatcher, package pins and installed identity stay under the integration
@@ -11,36 +12,15 @@ owner's existing lifecycle.
 
 Release alone owns durable operation binding, record serialization, intent,
 dispatch, retention and recovery. Core supplies composition; a shared primitive
-appears only with real consumers. Identity's leased native filesystem subtree is
-`infra/native/migration/{filesystem.go,darwin.go,filesystem_test.go,darwin_test.go}`.
-It implements the consumer-owned `app/port/migration.go`, with no journal or
-second lock engine. None of those leased Identity files is written by this slice.
-
-`MigrationBinding` binds operation, accepted alpha build and physical source
-object. `MigrationRecord` is a read-only projected version-1 policy view, not a
-Desktop wire message or independently persisted schema. It cannot be guessed
-from a directory name, lock or digest supplied by a caller. Release's authoritative
-admission capability must prove accepted byte/profile provenance, the existing
-exclusion domain and all stopped profile-owning writers/helpers. The native
-adapter rechecks that capability and exact directory identities before mutation.
-
-Only a handle acquired against exact `prepared` can arm a move, after consuming
-one atomic Release-owned claim for that full operation across every consumer.
-See the [admission lifetime](migration.md). A descriptor Close or Unknown never
-releases that claim; Dispatched/Relocated acquisition observes without claiming.
-Release confirms its durable `dispatched` record before invoking `MoveOnce`. Acquisition against
-`dispatched` or `relocated` permits observation only. One handle makes at most one
-same-volume no-replace rename attempt; there is no overwrite, copy or retry path.
-Moved requires source absence, exact destination object and confirmed durability
-of both parents. A post-syscall/readback/fsync uncertainty remains unknown, even
-when a later directory observation appears correct. Release then observes the
-same operation; it never interprets source presence as permission to redispatch.
-
-The filesystem handle owns its descriptors only. Closing it does not release
-Release's retained guard, clear an intent, manufacture a completed record or
-permit profile startup. `VerifyLayout` remains a stop at Core/Desktop's explicit
-partition/state/generation reconciliation. The local-runtime and remote ChatGPT
-sessions retain distinct network policies; a whole-root move does not merge them.
+appears only with real consumers.
+The leased alpha profile relocation adapter
+(`infra/native/migration`), its consuming `app/port/migration.go`, the
+`app/services/migration` claim owner and `domain/migration` plan were removed on
+2026-11-13 without ever gaining a production caller. The
+[identity cutover](../../../identity-cutover.md) replaced profile migration with
+reinstalling earlier betas. Their single-claim, no-replace rename and
+outcome-unknown design remains in Git history; a future relocation would need a
+new decision and fresh review rather than restoring that source.
 
 ## Current-alpha record slice
 

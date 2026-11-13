@@ -124,11 +124,11 @@ func TestPrepareFinalFenceCannotClearConfirmedPersistence(t *testing.T) {
 func TestInstallationScopeRequiresRepositoryAndActualRouteBorrow(t *testing.T) {
 	f := newCompositionFixture(t)
 	called := false
-	err := WithInstallation(context.Background(), f.config, func(port.HelperInstallationRuntime) error { called = true; return nil })
+	err := WithAdmittedInstallation(context.Background(), f.config, func(AdmittedInstallation) error { called = true; return nil })
 	classified(t, err, "internal", false)
 	rejection := &rejectionFixture{}
 	f.config.Rejection = rejection
-	err = WithInstallation(context.Background(), f.config, func(port.HelperInstallationRuntime) error { called = true; return nil })
+	err = WithAdmittedInstallation(context.Background(), f.config, func(AdmittedInstallation) error { called = true; return nil })
 	if err == nil || called || rejection.calls != 0 {
 		t.Fatal("raw descriptors or missing repository supplied installation authority")
 	}

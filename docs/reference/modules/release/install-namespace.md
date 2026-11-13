@@ -69,43 +69,14 @@ Python fallback. The Python file leaves the package under the
 [bridge rule](../../../installed-update-helper.md#retiring-the-python-helper-bridge-rule);
 native and installed qualification remain explicit gates.
 
-## Private launch tree copying
+## Private launch tree copying (removed)
 
-`infra/native/installcopy` retains the descriptor-relative historical copy
-contract for older private-launch records; new shared-slot updates do not create
-or launch a private GUI image. The caller lends
-two exact directory handles: an accepted source and a newly created, empty,
-private destination. `Prepare` captures their complete metadata and original
-deadline. `Run` consumes one shared attempt, including cancellation or refusal;
-copies of the operation cannot dispatch another copy.
-
-Traversal never follows a link. Regular files require a single link, effective
-user ownership, safe modes and stable full metadata; destination creation is
-exclusive. Partial writes are completed, source modes are preserved, owned
-files and directories are fsynced, and complete bounded inventories are checked
-again around the owner's final fence. Symbolic links retain their literal
-relative text. The final app-tree verifier separately decides whether those
-links stay within the accepted image. Production bounds are 100,000 entries,
-1 GiB of copied file bytes, depth 128 and 4096 bytes per link.
-
-Copying is not an atomic source snapshot or a same-user exclusion boundary.
-Creating a directory or link does not atomically return a newly created handle.
-The existing owner must retain route, lease, slot, journal and admission custody,
-verify the complete independently expected target digest and app identity, and
-publish or launch only through its existing effect fences. This primitive never
-publishes, removes, rolls back, adopts or executes an image.
-
-Native call attempts retain possible private effects, including a failed call
-after partial mutation. Exclusive `EEXIST` proves no creation by that call;
-earlier possible effects stay retained. Native I/O and cleanup errors remain
-internal, with closed outer codes and exact private causes. Concurrent
-cancellation cannot hide them or authorize replay. Borrowed descriptors keep
-their offsets, flags and locks, and remain physically held until synchronous
-I/O actually returns; a deadline cannot prove a blocked kernel call stopped.
-
-Portable tests use disposable Linux files and bounded fault seams, including
-collisions, no-follow races, partial mutations, post-fsync metadata changes and
-cancellation during cleanup. Three actual UID/GID mutation cases require
-privileges and remain skipped in this Cloud environment. Darwin builds were
-cross-compiled only. Native, packaged, installed and clean-Mac qualification,
-and removal of the retained Python helper, remain open.
+`infra/native/installcopy`, the descriptor-relative private launch image copy,
+and the `installmove.PrepareCapturePublication` rename role that published its
+`.launch-capture-*` tree as `launch-Farol.app` were removed on 2026-11-13. Neither
+had a production caller: the selected Go helper relaunches only the permanent
+`Farol.app` slot, and the desktop no longer dispatches the Python helper, the
+only code that ever created a private launch image. The read-only legacy readers
+of an existing `launch-Farol.app` (desktop relaunch observation, install process
+classification) are unchanged. Ordinary rename and exchange still refuse both
+private-launch names. The copy contract remains in Git history.

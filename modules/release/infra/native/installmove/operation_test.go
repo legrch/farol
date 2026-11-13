@@ -167,7 +167,7 @@ func TestInputValidationAndCapture(t *testing.T) {
 	if !validIdentity(Identity{"0", "0"}) || !validIdentity(Identity{"18446744073709551615", "18446744073709551615"}) {
 		t.Fatal("unsigned canonical boundary rejected")
 	}
-	for _, name := range []string{"", ".", "..", "a", "../Farol.app", "/Farol.app", "Farol.app/", "Farol.app\x00"} {
+	for _, name := range []string{"", ".", "..", "a", "../Farol.app", "/Farol.app", "Farol.app/", "Farol.app\x00", "launch-Farol.app", ".launch-capture-aaaaaaaaaaaaaaaaaaaaaaaa"} {
 		left := f.left
 		left.Name = name
 		_, err := prepare(left, f.right, f.le, f.re, time.Now().Add(time.Minute), func(context.Context) error { return nil }, true, testNative())
@@ -1117,7 +1117,7 @@ func TestOwnedPinCloseReceiptIsRetained(t *testing.T) {
 	if os.Getenv("FAROL_HELPER_NATIVE") != "1" {
 		t.Skip("Root-scheduled pin cleanup receipt")
 	}
-	for _, kind := range []string{"rename", "exchange", "publication", "pre-effect", "cancel"} {
+	for _, kind := range []string{"rename", "exchange", "pre-effect", "cancel"} {
 		t.Run(kind, func(t *testing.T) {
 			root, err := os.MkdirTemp("", "farol-pin-close-receipt-")
 			if err != nil {
@@ -1135,10 +1135,6 @@ func TestOwnedPinCloseReceiptIsRetained(t *testing.T) {
 			})
 			d := Directory{File: file, Identity: fileIdentity(t, file)}
 			f := &fixture{t: t, root: root, left: Location{d, "staged.app"}, right: Location{d, "previous.app"}}
-			if kind == "publication" {
-				f.left.Name = ".launch-capture-0123456789abcdef01234567"
-				f.right.Name = "launch-Farol.app"
-			}
 			f.le = f.makeEntry(f.left)
 			if kind == "exchange" {
 				f.re = f.makeEntry(f.right)
@@ -1162,15 +1158,7 @@ func TestOwnedPinCloseReceiptIsRetained(t *testing.T) {
 				}
 				return nil
 			}
-			var o *Operation
-			if kind == "publication" {
-				o, err = prepareCapturePublication(d, f.left.Name, f.le, time.Now().Add(time.Minute), fence, b)
-				if err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				o = f.operation(kind == "exchange", b, fence)
-			}
+			o := f.operation(kind == "exchange", b, fence)
 			err = o.Run(ctx)
 			code := "move_uncertain"
 			if kind == "exchange" {
