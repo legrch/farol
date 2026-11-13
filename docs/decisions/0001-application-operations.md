@@ -1,6 +1,8 @@
 # ADR-0001: Application operations, names and layer roles
 
 Status: Accepted for new code; existing code migrates in bounded waves.
+Partly superseded by [ADR-0002](0002-uniform-names-tests-composition.md)
+(names, tests, the report baseline and TypeScript).
 Date: 2026-10-15
 
 ## Context
