@@ -10,8 +10,8 @@ Partly supersedes: [ADR-0001](0001-application-operations.md) (see
 
 ADR-0001 fixed application operation shapes and one-word package names, but
 left file names, tests and the composition root to review. On `main` at
-`9de07bcfed6d67b74dc90ea0b7d3ba69ad0fa181` the checker in this record measures
-591 production files outside the word vocabulary, 235 tests without a
+`bb8381d7682318524963506a3ae091a17d6560e0` the checker in this record measures
+591 production files outside the word vocabulary, 236 tests without a
 same-named source, 238 files with behavior but no test, 195 test files plus
 `testdata/` and 162 files outside the target file set in `boot/`, and 347
 logic findings (per kind and file) inside `boot/`. The
@@ -318,7 +318,7 @@ change.
   record. Later waves rename and move per module and flip the switch.
 - `tooling/go-architecture-baseline.json` is replaced by
   `tooling/go-architecture-enforcement.json` (source
-  `9de07bcfed6d67b74dc90ea0b7d3ba69ad0fa181`).
+  `bb8381d7682318524963506a3ae091a17d6560e0`).
 - Run `node tooling/check-go-architecture.mjs` for blocking violations, report
   lines and the count table; `npm run test:architecture` and `task test:core`
   run the same checker and its fixtures.

@@ -823,7 +823,7 @@ describe("ADR-0001 report-mode architecture guards", () => {
 });
 
 const enforcementFile = "tooling/go-architecture-enforcement.json";
-const enforcementSource = "9de07bcfed6d67b74dc90ea0b7d3ba69ad0fa181";
+const enforcementSource = "bb8381d7682318524963506a3ae091a17d6560e0";
 const migrationCodes = [
   "GO_PACKAGE_NAME",
   "GO_PACKAGE_DIR",
