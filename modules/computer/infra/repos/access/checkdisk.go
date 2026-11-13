@@ -10,6 +10,7 @@ import (
 
 	check "github.com/legrch/farol/modules/computer/domain/connector"
 	"github.com/legrch/farol/pkg/descriptor"
+	"github.com/legrch/farol/pkg/limit"
 	"golang.org/x/sys/unix"
 )
 
@@ -165,7 +166,7 @@ func (d *disk) connectionCheckWitness(f checkJournalFile) (present bool, err err
 	if e != nil || !private(before, unix.S_IFREG, 0600) || before.Size != int64(len(connectionCheckWitnessPayload)) {
 		return false, refuse(e)
 	}
-	raw, e := io.ReadAll(io.LimitReader(file, int64(len(connectionCheckWitnessPayload)+1)))
+	raw, e := limit.Read(file, int64(len(connectionCheckWitnessPayload)))
 	after, statErr := descriptor.Stat(fd)
 	var named unix.Stat_t
 	if e != nil || statErr != nil || string(raw) != connectionCheckWitnessPayload || !descriptor.Stable(before, after) {
@@ -238,12 +239,12 @@ func (d *disk) readConnectionChecks(f checkJournalFile) (raw []byte, err error) 
 		before.Size < 1 || (f.maxBytes > 0 && before.Size > f.maxBytes) {
 		return nil, refuse(e)
 	}
-	limit := before.Size
-	raw, e = io.ReadAll(io.LimitReader(file, limit+1))
+	maximum := before.Size
+	raw, e = limit.Read(file, maximum)
 	after, statErr := descriptor.Stat(fd)
 	var named unix.Stat_t
 	if e != nil || statErr != nil || len(raw) == 0 ||
-		int64(len(raw)) > limit || !descriptor.Stable(before, after) {
+		!descriptor.Stable(before, after) {
 		return nil, refuse(e, statErr)
 	}
 	if e = unix.Fstatat(d.dir, f.name, &named, unix.AT_SYMLINK_NOFOLLOW); e != nil ||
@@ -276,7 +277,7 @@ func (d *disk) qualifyConnectionChecks(f checkJournalFile, expected []byte) (err
 	if e != nil || !private(before, unix.S_IFREG, 0600) || before.Size != int64(len(expected)) {
 		return refuse(e)
 	}
-	actual, e := io.ReadAll(io.LimitReader(file, int64(len(expected))+1))
+	actual, e := limit.Read(file, int64(len(expected)))
 	after, statErr := descriptor.Stat(fd)
 	var named unix.Stat_t
 	if e != nil || statErr != nil || !bytes.Equal(actual, expected) || !descriptor.Stable(before, after) {

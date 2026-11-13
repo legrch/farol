@@ -4,19 +4,9 @@ import (
 	"encoding/json"
 	"strings"
 	"unicode/utf8"
-)
 
-func identifier(s string) bool {
-	if len(s) == 0 || len(s) > 120 || !utf8.ValidString(s) {
-		return false
-	}
-	for _, c := range s {
-		if c <= 32 || c == 127 {
-			return false
-		}
-	}
-	return true
-}
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
+)
 
 func digestValue(s string) bool {
 	if len(s) != 64 {
@@ -31,7 +21,7 @@ func digestValue(s string) bool {
 }
 
 func ValidAccountIdentity(a AccountIdentity) bool {
-	if a.Issuer != "https://auth.openai.com" || !identifier(a.Subject) || !identifier(a.ClientID) || a.ClientID == "dynamic_agent_client" || !identifier(a.HostID) || a.Epoch == 0 {
+	if a.Issuer != "https://auth.openai.com" || !opaque.Valid(a.Subject) || !opaque.Valid(a.ClientID) || a.ClientID == "dynamic_agent_client" || !opaque.Valid(a.HostID) || a.Epoch == 0 {
 		return false
 	}
 	for _, prefix := range []string{"urn:uuid:", "urn:ietf:params:oauth:jwk-thumbprint:", "did:key:"} {
@@ -43,7 +33,7 @@ func ValidAccountIdentity(a AccountIdentity) bool {
 }
 
 func ValidSelection(s Selection) bool {
-	if s.Backend != PlanBackend || !ValidAccountIdentity(s.Account) || !identifier(s.ConsentID) || s.ConsentRevision == 0 || !identifier(s.Model.Slug) || !identifier(s.Model.CapabilityEvidence) || s.Model.CatalogueEpoch == 0 {
+	if s.Backend != PlanBackend || !ValidAccountIdentity(s.Account) || !opaque.Valid(s.ConsentID) || s.ConsentRevision == 0 || !opaque.Valid(s.Model.Slug) || !opaque.Valid(s.Model.CapabilityEvidence) || s.Model.CatalogueEpoch == 0 {
 		return false
 	}
 	switch s.Model.Effort {
@@ -56,7 +46,7 @@ func ValidSelection(s Selection) bool {
 // ValidateRequest refuses unresolved prior function rounds, rather than silently
 // deleting them from a no-tools request. Input order is retained byte-for-byte.
 func ValidateRequest(r Request) error {
-	if !identifier(r.Model.Slug) || !identifier(r.Model.CapabilityEvidence) || r.Model.CatalogueEpoch == 0 || len(r.Input) == 0 || len(r.Input) > MaxInputItems {
+	if !opaque.Valid(r.Model.Slug) || !opaque.Valid(r.Model.CapabilityEvidence) || r.Model.CatalogueEpoch == 0 || len(r.Input) == 0 || len(r.Input) > MaxInputItems {
 		return Invalid
 	}
 	switch r.Model.Effort {
@@ -77,7 +67,7 @@ func ValidateRequest(r Request) error {
 				return Invalid
 			}
 		case "function_call":
-			if i.Role != "" || i.Content != "" || !identifier(i.CallID) || !identifier(i.Name) || !json.Valid([]byte(i.Arguments)) {
+			if i.Role != "" || i.Content != "" || !opaque.Valid(i.CallID) || !opaque.Valid(i.Name) || !json.Valid([]byte(i.Arguments)) {
 				return Invalid
 			}
 			if _, exists := calls[i.CallID]; exists {

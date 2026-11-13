@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 
 	transition "github.com/legrch/farol/modules/computer/domain/journal"
 	"github.com/legrch/farol/pkg/descriptor"
+	"github.com/legrch/farol/pkg/limit"
 	"golang.org/x/sys/unix"
 )
 
@@ -134,8 +134,8 @@ func (d *disk) readJournal() (raw []byte, err error) {
 	if e != nil || !private(before, unix.S_IFREG, 0600) || before.Size < 1 || before.Size > transitionMaxBytes {
 		return nil, refuse(e)
 	}
-	raw, e = io.ReadAll(io.LimitReader(f, transitionMaxBytes+1))
-	if e != nil || len(raw) > transitionMaxBytes {
+	raw, e = limit.Read(f, transitionMaxBytes)
+	if e != nil {
 		return nil, refuse(e)
 	}
 	after, e := descriptor.Stat(fd)
@@ -172,7 +172,7 @@ func (d *disk) qualifyJournal(raw []byte) (err error) {
 	if e != nil || !private(before, unix.S_IFREG, 0600) || before.Size != int64(len(raw)) {
 		return refuse(e)
 	}
-	bytesRead, e := io.ReadAll(io.LimitReader(f, transitionMaxBytes+1))
+	bytesRead, e := limit.Read(f, transitionMaxBytes)
 	after, statErr := descriptor.Stat(fd)
 	if e != nil || statErr != nil || !bytes.Equal(bytesRead, raw) || !descriptor.Stable(before, after) {
 		return refuse(e, statErr)

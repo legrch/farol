@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/legrch/farol/pkg/ipc"
+	"github.com/legrch/farol/pkg/limit"
 )
 
 // Private read-only diagnostic. Original publication identity is selected;
@@ -21,8 +22,8 @@ func runPreparedEmptyInspection(args []string, in io.Reader, out, diagnostics io
 	if !ok || !emptyRecoveryDevRoot(binding.Root) {
 		return 2
 	}
-	raw, err := io.ReadAll(io.LimitReader(in, 65537))
-	if err != nil || len(raw) > 65536 || ipc.ValidateJSON(raw) != nil || !emptyRecoveryCanonicalFields(raw, reflect.TypeFor[preparedEmptyInspectionInput]()) {
+	raw, err := limit.Read(in, 65536)
+	if err != nil || ipc.ValidateJSON(raw) != nil || !emptyRecoveryCanonicalFields(raw, reflect.TypeFor[preparedEmptyInspectionInput]()) {
 		return 2
 	}
 	var selected preparedEmptyInspectionInput

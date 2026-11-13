@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 	"golang.org/x/sys/unix"
 )
 
@@ -32,7 +33,7 @@ type archiveDisk struct {
 }
 
 func openArchiveDisk(ctx context.Context, root Root) (_ *archiveDisk, err error) {
-	if !validID(root.ProfileID) || root.Identity.Device == 0 || root.Identity.Inode == 0 || root.Identity.OwnerUID != uint32(os.Geteuid()) || !filepath.IsAbs(root.Path) || filepath.Clean(root.Path) != root.Path {
+	if !opaque.Valid(root.ProfileID) || root.Identity.Device == 0 || root.Identity.Inode == 0 || root.Identity.OwnerUID != uint32(os.Geteuid()) || !filepath.IsAbs(root.Path) || filepath.Clean(root.Path) != root.Path {
 		return nil, Invalid
 	}
 	canonical, err := filepath.EvalSymlinks(root.Path)

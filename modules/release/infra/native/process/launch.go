@@ -12,11 +12,11 @@ import (
 	"time"
 
 	"github.com/legrch/farol/modules/release/app/port"
+	kitclock "github.com/legrch/farol/pkg/clock"
 )
 
-type Clock struct{}
+type Clock struct{ kitclock.System }
 
-func (Clock) Now() time.Time { return time.Now() }
 func (Clock) Sleep(ctx context.Context, duration time.Duration) error {
 	timer := time.NewTimer(duration)
 	defer timer.Stop()

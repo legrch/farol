@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 const (
@@ -58,7 +59,7 @@ type Native struct {
 var _ port.DurableResults = (*Native)(nil)
 
 func validResultComposition(ctx, lifetime context.Context, root Root, scope port.JournalScope, limits Limits, mode string) bool {
-	return !nilContext(ctx) && !nilContext(lifetime) && ctx.Err() == nil && lifetime.Err() == nil && validID(root.ProfileID) && root.ProfileID == scope.ProfileID && validID(scope.BackendGeneration) && root.Identity.Device != 0 && root.Identity.Inode != 0 && (mode == "create" || mode == "open") && limits.Results > 0 && limits.Results <= MaxResults && limits.ResultBytes > 0 && limits.ResultBytes <= MaxResultBytes && limits.TotalBytes >= limits.ResultBytes && limits.TotalBytes <= MaxTotalBytes
+	return !nilContext(ctx) && !nilContext(lifetime) && ctx.Err() == nil && lifetime.Err() == nil && opaque.Valid(root.ProfileID) && root.ProfileID == scope.ProfileID && opaque.Valid(scope.BackendGeneration) && root.Identity.Device != 0 && root.Identity.Inode != 0 && (mode == "create" || mode == "open") && limits.Results > 0 && limits.Results <= MaxResults && limits.ResultBytes > 0 && limits.ResultBytes <= MaxResultBytes && limits.TotalBytes >= limits.ResultBytes && limits.TotalBytes <= MaxTotalBytes
 }
 func newResultOwner(ctx, lifetime context.Context, root Root, scope port.JournalScope, limits Limits, disk resultStorage) (*Native, error) {
 	n := &Native{lifetime: lifetime, root: root, scope: scope, limits: limits, disk: disk, known: make(map[string]port.ResultPublication)}

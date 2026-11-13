@@ -4,6 +4,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/legrch/farol/modules/chat/domain/turn"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // RetainedConversation is immutable terminal delivery metadata. Binding,
@@ -31,7 +32,7 @@ func (r RetainedConversation) Valid(result turn.Result, payload []byte) bool {
 		return false
 	}
 	for _, id := range []string{r.ProviderConversationID, r.ProviderUserTurnID, r.ProviderReplyID} {
-		if id != "" && !conversationID(id) {
+		if id != "" && !opaque.Valid(id) {
 			return false
 		}
 	}
@@ -52,6 +53,6 @@ func (r RetainedConversation) Valid(result turn.Result, payload []byte) bool {
 		return r.Evidence.Admitted == (Selection{}) && r.Evidence.EvidenceID == "" && r.Evidence.ObservationSource == "unknown" && r.Observed == (SelectionFacts{}).Projection()
 	}
 	return r.Evidence.AdmissionSource == "chat-policy" && r.Evidence.Admitted == r.Requested &&
-		r.Evidence.ObservationSource == "field-facts" && conversationID(r.Evidence.EvidenceID) &&
+		r.Evidence.ObservationSource == "field-facts" && opaque.Valid(r.Evidence.EvidenceID) &&
 		r.Observed.Matches(r.Requested, RequiredControls{Model: true, Mode: r.Requested.Mode != "", Connector: r.Requested.ToolsEnabled})
 }

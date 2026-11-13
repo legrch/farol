@@ -1,6 +1,10 @@
 package turn
 
-import "math"
+import (
+	"math"
+
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
+)
 
 const Slots = 5
 const MaxPending = 256
@@ -18,7 +22,7 @@ type Queue struct {
 }
 
 func NewQueue(profile, backend string) (*Queue, error) {
-	if !id(profile) || !id(backend) {
+	if !opaque.Valid(profile) || !opaque.Valid(backend) {
 		return nil, Invalid
 	}
 	return &Queue{profile: profile, backend: backend, entries: make(map[string]Turn)}, nil

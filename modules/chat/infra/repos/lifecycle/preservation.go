@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // PreservationLease retains the existing read-only claim over one complete
@@ -28,7 +29,7 @@ func AcquirePreservationInspection(ctx context.Context, root Root, scope port.Jo
 		return nil, failure(Cancelled, false)
 	}
 	until, bounded := ctx.Deadline()
-	if !bounded || until.IsZero() || !validID(root.ProfileID) || !validID(scope.BackendGeneration) || scope.ProfileID != root.ProfileID || !validLimits(limits) || limits.Bytes > 1024*1024 || limits.Records > 4096 {
+	if !bounded || until.IsZero() || !opaque.Valid(root.ProfileID) || !opaque.Valid(scope.BackendGeneration) || scope.ProfileID != root.ProfileID || !validLimits(limits) || limits.Bytes > 1024*1024 || limits.Records > 4096 {
 		return nil, failure(Invalid, false)
 	}
 	bound := preservationContext{Context: ctx, until: until}

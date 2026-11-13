@@ -6,6 +6,7 @@ import (
 
 	"github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/domain/turn"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // PrepareNext reserves only the queue's next eligible route. Ordinal is never
@@ -95,7 +96,7 @@ func (s *Service) PrepareNext(ctx context.Context, deadlineMillis uint64) (*port
 // remains a separately correlated observation. Errors, lost/mismatched replies
 // and unknown outcomes commit sticky Unknown when possible, never another Send.
 func (s *Service) Send(ctx context.Context, h *Handle, prompt string, deadlineMillis uint64, failureResultID string) (*turn.Snapshot, error) {
-	if s == nil || prompt == "" || !utf8.ValidString(prompt) || deadlineMillis == 0 || !validID(failureResultID) {
+	if s == nil || prompt == "" || !utf8.ValidString(prompt) || deadlineMillis == 0 || !opaque.Valid(failureResultID) {
 		return nil, Invalid
 	}
 	if s.deps.Browser == nil {

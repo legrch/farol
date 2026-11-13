@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // AcknowledgedLease retains an existing claim over exactly the canonical empty
@@ -27,7 +28,7 @@ func AcquireAcknowledgedInspection(ctx context.Context, roots Roots, expected po
 	if ctx == nil || ctx.Err() != nil {
 		return nil, fail(Cancelled, false)
 	}
-	if !historyID(roots.ProfileID) || !historyID(expected.ProfileID) || !historyID(expected.BackendGeneration) || !historyID(expected.BuildID) || !historyID(expected.HostLifetimeID) || !historyID(expected.ChildLaunchID) || !historyID(handoffID) || expected.ProfileID != roots.ProfileID || expected.ParentRoot != roots.Parent.Identity || expected.ChatRoot != roots.Chat.Identity || expected.ParentRoot.Device == 0 || expected.ParentRoot.Inode == 0 || expected.ChatRoot.Device == 0 || expected.ChatRoot.Inode == 0 || expected.ParentRoot.Device != expected.ChatRoot.Device || expected.ParentRoot.OwnerUID != expected.ChatRoot.OwnerUID || expected.ParentRoot == expected.ChatRoot {
+	if !opaque.Valid(roots.ProfileID) || !opaque.Valid(expected.ProfileID) || !opaque.Valid(expected.BackendGeneration) || !opaque.Valid(expected.BuildID) || !opaque.Valid(expected.HostLifetimeID) || !opaque.Valid(expected.ChildLaunchID) || !opaque.Valid(handoffID) || expected.ProfileID != roots.ProfileID || expected.ParentRoot != roots.Parent.Identity || expected.ChatRoot != roots.Chat.Identity || expected.ParentRoot.Device == 0 || expected.ParentRoot.Inode == 0 || expected.ChatRoot.Device == 0 || expected.ChatRoot.Inode == 0 || expected.ParentRoot.Device != expected.ChatRoot.Device || expected.ParentRoot.OwnerUID != expected.ChatRoot.OwnerUID || expected.ParentRoot == expected.ChatRoot {
 		return nil, fail(Invalid, false)
 	}
 	return acquireAcknowledgedInspection(ctx, roots, expected, handoffID)

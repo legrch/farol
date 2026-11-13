@@ -9,6 +9,7 @@ import (
 
 	"github.com/legrch/farol/modules/chat/app/port"
 	kerneldigest "github.com/legrch/farol/pkg/kernel/domain/digest"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 type Code string
@@ -36,7 +37,7 @@ type Adapter struct {
 var _ port.VerifiedBrowser = (*Adapter)(nil)
 
 func New(ctx context.Context, scope Scope, exchange Exchange, clock Clock) (*Adapter, error) {
-	if nilCapability(ctx) || ctx.Err() != nil || nilCapability(exchange) || nilCapability(clock) || !validID(scope.ProfileID) || !validID(scope.BackendGeneration) {
+	if nilCapability(ctx) || ctx.Err() != nil || nilCapability(exchange) || nilCapability(clock) || !opaque.Valid(scope.ProfileID) || !opaque.Valid(scope.BackendGeneration) {
 		return nil, Invalid
 	}
 	return &Adapter{lifetime: ctx, scope: scope, exchange: exchange, clock: clock}, nil
@@ -74,25 +75,14 @@ func (a *Adapter) validLease(lease port.BrowserLease) bool {
 	}
 	i := lease.Identity
 	for _, id := range []string{i.ProfileID, i.OwnerID, i.SessionID, i.TaskID, i.TurnID, i.OperationID, lease.BackendGeneration} {
-		if !validID(id) {
+		if !opaque.Valid(id) {
 			return false
 		}
 	}
 	return i.ProfileID == a.scope.ProfileID && lease.BackendGeneration == a.scope.BackendGeneration && i.TurnGeneration > 0 && lease.SlotOrdinal >= 1 && lease.SlotOrdinal <= 5 && lease.SlotGeneration > 0
 }
 func (a *Adapter) validBinding(b port.BrowserBinding) bool {
-	return a.validLease(b.Lease) && validID(b.ViewID) && b.ViewGeneration > 0 && b.DocumentGeneration > 0 && ((b.ProviderState == port.ProviderHome && b.ConversationID == "") || (b.ProviderState == port.ProviderBound && validID(b.ConversationID)))
-}
-func validID(s string) bool {
-	if len(s) < 1 || len(s) > 120 || !utf8.ValidString(s) {
-		return false
-	}
-	for _, c := range s {
-		if c <= 32 || c == 127 {
-			return false
-		}
-	}
-	return true
+	return a.validLease(b.Lease) && opaque.Valid(b.ViewID) && b.ViewGeneration > 0 && b.DocumentGeneration > 0 && ((b.ProviderState == port.ProviderHome && b.ConversationID == "") || (b.ProviderState == port.ProviderBound && opaque.Valid(b.ConversationID)))
 }
 func validCode(s string) bool {
 	if len(s) > 120 {
@@ -110,7 +100,7 @@ func validCode(s string) bool {
 	return true
 }
 func validPrevious(user, reply string) bool {
-	return (user == "" && reply == "") || (validID(user) && validID(reply))
+	return (user == "" && reply == "") || (opaque.Valid(user) && opaque.Valid(reply))
 }
 
 func (a *Adapter) Prepare(r port.PrepareRequest) (*port.PrepareResponse, error) {
@@ -203,7 +193,7 @@ func (a *Adapter) Observe(r port.ObserveRequest) (*port.ObserveResponse, error) 
 	// Validate semantic byte/ID bounds BEFORE allocating the port event slice.
 	bytes := 0
 	for _, e := range reply.Events {
-		if len(e.Text) > port.MaxObserveTextBytes || !utf8.ValidString(e.Text) || !validCode(e.Code) || (e.ProviderConversationID != "" && !validID(e.ProviderConversationID)) || (e.UserTurnID != "" && !validID(e.UserTurnID)) || (e.ReplyID != "" && !validID(e.ReplyID)) || (e.SegmentID != "" && !validID(e.SegmentID)) {
+		if len(e.Text) > port.MaxObserveTextBytes || !utf8.ValidString(e.Text) || !validCode(e.Code) || (e.ProviderConversationID != "" && !opaque.Valid(e.ProviderConversationID)) || (e.UserTurnID != "" && !opaque.Valid(e.UserTurnID)) || (e.ReplyID != "" && !opaque.Valid(e.ReplyID)) || (e.SegmentID != "" && !opaque.Valid(e.SegmentID)) {
 			return nil, Unsettled
 		}
 		bytes += len(e.ProviderConversationID) + len(e.Text) + len(e.Code) + len(e.UserTurnID) + len(e.ReplyID) + len(e.SegmentID)

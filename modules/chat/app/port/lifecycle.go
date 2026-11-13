@@ -5,6 +5,7 @@ import (
 	"context"
 
 	"github.com/legrch/farol/modules/chat/domain/turn"
+	"github.com/legrch/farol/pkg/kernel/domain/root"
 )
 
 // Gate serializes the entire current callback and all live state changes. Boot
@@ -23,10 +24,7 @@ type JournalScope struct {
 
 // JournalRoot identifies the qualified physical profile root; it carries no path.
 // Trusted boot pins this association before the live owner is constructed.
-type JournalRoot struct {
-	Device, Inode uint64
-	OwnerUID      uint32
-}
+type JournalRoot = root.Identity
 
 type JournalHead struct {
 	Root     JournalRoot

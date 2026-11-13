@@ -5,7 +5,8 @@ package stream
 
 import (
 	"math"
-	"unicode/utf8"
+
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 type Code string
@@ -35,7 +36,7 @@ type Scope struct {
 }
 
 func (s Scope) valid() bool {
-	return identifier(s.ProfileID) && identifier(s.BackendGeneration) && identifier(s.OwnerID) && identifier(s.SessionID) && identifier(s.TaskID) && identifier(s.TurnID) && s.TurnGeneration > 0
+	return opaque.Valid(s.ProfileID) && opaque.Valid(s.BackendGeneration) && opaque.Valid(s.OwnerID) && opaque.Valid(s.SessionID) && opaque.Valid(s.TaskID) && opaque.Valid(s.TurnID) && s.TurnGeneration > 0
 }
 
 type Kind string
@@ -224,18 +225,6 @@ func (b *Buffer) After(scope Scope, sequence uint64) ([]Frame, error) {
 		return nil, Gap
 	}
 	return frames, nil
-}
-
-func identifier(value string) bool {
-	if len(value) < 1 || len(value) > 120 || !utf8.ValidString(value) {
-		return false
-	}
-	for _, ch := range value {
-		if ch <= 32 || ch == 127 {
-			return false
-		}
-	}
-	return true
 }
 
 // Clone supports an application-owned candidate: journal settlement and a

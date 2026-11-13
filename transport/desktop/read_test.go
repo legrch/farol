@@ -20,12 +20,9 @@ import (
 	workspacect "github.com/legrch/farol/modules/computer/contracts/workspace"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	accessrepo "github.com/legrch/farol/modules/computer/infra/repos/access"
+	"github.com/legrch/farol/pkg/fake"
 	"github.com/legrch/farol/pkg/ipc"
 )
-
-type readClock struct{ at time.Time }
-
-func (c readClock) Now() time.Time { return c.at }
 
 type readWorkspace struct {
 	result  port.ReadResponse
@@ -72,7 +69,7 @@ func readContractFixture(t *testing.T) (*workspacect.Contract, *readWorkspace, *
 	access.PutApproval(approval)
 	access.PutParticipant(*participant)
 	native := &readWorkspace{result: port.ReadResponse{Text: "🌊", Bytes: 4, SHA256: strings.Repeat("a", 64)}}
-	contract := workspacect.New(workspacesvc.New(access, native, readClock{at: now}))
+	contract := workspacect.New(workspacesvc.New(access, native, fake.Clock{At: now}))
 	body := wire.ComputerReadRequest{OwnerId: "owner", SessionId: "session", TaskId: "task", TaskEpoch: "9007199254740993", ParticipantId: "participant", TurnId: "turn", Generation: "18446744073709551615", CallId: "call", WorkspaceId: "workspace", RelativePath: "note.md"}
 	return contract, native, access, body
 }

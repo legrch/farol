@@ -3,7 +3,11 @@
 // copied before publication and retains only bounded explicit delivery content.
 package output
 
-import "unicode/utf8"
+import (
+	"unicode/utf8"
+
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
+)
 
 type Code string
 
@@ -32,7 +36,7 @@ func New(limit int, previousUser, previousReply string) State {
 }
 func (s State) Text() string { return s.text }
 func (s State) Accept(user string) (State, bool, error) {
-	if !id(user) || user == s.previousUser {
+	if !opaque.Valid(user) || user == s.previousUser {
 		return s, false, Correlation
 	}
 	if s.Accepted {
@@ -48,10 +52,10 @@ func (s State) Accept(user string) (State, bool, error) {
 	return s, false, nil
 }
 func (s State) Block(user, reply, segment, text string) (State, bool, error) {
-	if !s.Accepted || user != s.UserID || !id(reply) || reply == s.previousReply || (s.ReplyID != "" && s.ReplyID != reply) {
+	if !s.Accepted || user != s.UserID || !opaque.Valid(reply) || reply == s.previousReply || (s.ReplyID != "" && s.ReplyID != reply) {
 		return s, false, Correlation
 	}
-	if !id(segment) || text == "" || !utf8.ValidString(text) {
+	if !opaque.Valid(segment) || text == "" || !utf8.ValidString(text) {
 		return s, false, Invalid
 	}
 	for _, old := range s.segments {
@@ -78,15 +82,4 @@ func (s State) Finish(user, reply string) (State, error) {
 	}
 	s.Complete = true
 	return s, nil
-}
-func id(s string) bool {
-	if len(s) == 0 || len(s) > 120 || !utf8.ValidString(s) {
-		return false
-	}
-	for _, c := range s {
-		if c <= 32 || c == 127 {
-			return false
-		}
-	}
-	return true
 }

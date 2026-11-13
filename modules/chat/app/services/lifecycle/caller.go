@@ -12,6 +12,7 @@ import (
 	"github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/domain/stream"
 	"github.com/legrch/farol/modules/chat/domain/turn"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // One bounded external round, on the existing owner. Private bodies live only
@@ -58,7 +59,7 @@ func callerScopeValid(s port.CallerScope) bool {
 			return false
 		}
 	}
-	return validID(s.Model)
+	return opaque.Valid(s.Model)
 }
 func callerFunctionEqual(a, b port.CallerFunctionCall) bool {
 	if a.ItemID != b.ItemID || a.CallID != b.CallID || a.Name != b.Name || a.Arguments != b.Arguments {
@@ -81,7 +82,7 @@ func (c *Conversation) BeginCallerTool(ctx context.Context, input port.BeginCall
 		return nil, Invalid
 	}
 	input.Call = cloneCallerFunction(input.Call)
-	if !callerScopeValid(input.Scope) || !validID(input.ProducerOperationID) || !validID(input.Call.ItemID) || !validID(input.Call.Name) || (input.Call.Namespace != nil && !validID(*input.Call.Namespace)) || len(input.Call.Arguments) > CallerArgumentBytesLimit || !utf8.ValidString(input.Call.Arguments) {
+	if !callerScopeValid(input.Scope) || !opaque.Valid(input.ProducerOperationID) || !opaque.Valid(input.Call.ItemID) || !opaque.Valid(input.Call.Name) || (input.Call.Namespace != nil && !opaque.Valid(*input.Call.Namespace)) || len(input.Call.Arguments) > CallerArgumentBytesLimit || !utf8.ValidString(input.Call.Arguments) {
 		return nil, Invalid
 	}
 	var arguments map[string]json.RawMessage

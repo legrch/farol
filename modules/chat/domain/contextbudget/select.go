@@ -3,6 +3,8 @@ package contextbudget
 import (
 	"encoding/json"
 	"unicode/utf8"
+
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // Select measures each canonical event, including IDs/tool metadata and JSON
@@ -66,7 +68,7 @@ func Select(s Source, ref SourceRef, p Policy, e Estimator) (Window, error) {
 // WithSummary only adds labelled data. It never removes selected originals or
 // edits mandatory instructions, unknown references, account binding or grants.
 func WithSummary(w Window, s Summary, p Policy, e Estimator) (Window, error) {
-	if e == nil || !p.Valid() || !w.Source.Valid() || !p.Fits(w.Usage) || w.Summary != nil || s.Source != w.Source || s.Trust != Untrusted || !ID(s.PromptVersion) || len(s.Text) == 0 || len(s.Text) > MaxEventBytes || !utf8.ValidString(s.Text) {
+	if e == nil || !p.Valid() || !w.Source.Valid() || !p.Fits(w.Usage) || w.Summary != nil || s.Source != w.Source || s.Trust != Untrusted || !opaque.Valid(s.PromptVersion) || len(s.Text) == 0 || len(s.Text) > MaxEventBytes || !utf8.ValidString(s.Text) {
 		return Window{}, Invalid
 	}
 	raw, err := json.Marshal(s)
@@ -90,7 +92,7 @@ func WithSummary(w Window, s Summary, p Policy, e Estimator) (Window, error) {
 // Recover reselects from the original source rather than trusting imported
 // checkpoint events, summary, usage numbers or any purported permission fields.
 func Recover(c Checkpoint, s Source, ref SourceRef, p Policy, e Estimator) (Window, error) {
-	if c.Version != 1 || !ID(c.ID) || !ID(c.OperationID) || c.Window.Source != ref {
+	if c.Version != 1 || !opaque.Valid(c.ID) || !opaque.Valid(c.OperationID) || c.Window.Source != ref {
 		return Window{}, Stale
 	}
 	w, err := Select(s, ref, p, e)

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/legrch/farol/pkg/ipc"
+	"github.com/legrch/farol/pkg/limit"
 )
 
 // This separate diagnostic mode has no NativeRuntime/serve/provider/admission
@@ -21,8 +22,8 @@ func runEmptyRecoveryInspection(args []string, in io.Reader, out io.Writer, diag
 		fmt.Fprintln(diagnostics, "EMPTY_RECOVERY_INSPECTION_INPUT_INVALID")
 		return 2
 	}
-	raw, err := io.ReadAll(io.LimitReader(in, 65537))
-	if err != nil || len(raw) > 65536 || ipc.ValidateJSON(raw) != nil || !emptyRecoveryCanonicalFields(raw, reflect.TypeFor[emptyRecoveryInspectionInput]()) {
+	raw, err := limit.Read(in, 65536)
+	if err != nil || ipc.ValidateJSON(raw) != nil || !emptyRecoveryCanonicalFields(raw, reflect.TypeFor[emptyRecoveryInspectionInput]()) {
 		return 2
 	}
 	var selected emptyRecoveryInspectionInput

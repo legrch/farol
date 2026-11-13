@@ -10,6 +10,7 @@ import (
 
 	check "github.com/legrch/farol/modules/computer/domain/connector"
 	"github.com/legrch/farol/pkg/descriptor"
+	"github.com/legrch/farol/pkg/limit"
 	"golang.org/x/sys/unix"
 )
 
@@ -153,7 +154,7 @@ func (d *disk) publishConnectionCheckFuse(entry check.Entry) (err error) {
 	}
 	file = os.NewFile(uintptr(fd), name)
 	before, statErr := descriptor.Stat(fd)
-	actual, readErr := io.ReadAll(io.LimitReader(file, int64(len(raw)+1)))
+	actual, readErr := limit.Read(file, int64(len(raw)))
 	after, afterErr := descriptor.Stat(fd)
 	var named unix.Stat_t
 	namedErr := unix.Fstatat(attempts, name, &named, unix.AT_SYMLINK_NOFOLLOW)

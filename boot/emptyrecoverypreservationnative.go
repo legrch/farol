@@ -14,6 +14,7 @@ import (
 	"reflect"
 
 	"github.com/legrch/farol/modules/chat/app/services/handoff"
+	"github.com/legrch/farol/pkg/limit"
 	"golang.org/x/sys/unix"
 )
 
@@ -156,7 +157,7 @@ func emptyRecoveryPendingFile(root string) (value emptyRecoveryFile, resultErr e
 	if unix.Fstat(fd, &a) != nil || uint32(a.Mode)&unix.S_IFMT != unix.S_IFREG || uint32(a.Mode)&07777 != 0600 || a.Uid != uint32(os.Geteuid()) || a.Nlink != 1 || a.Size < 2 || a.Size > 65536 {
 		return value, handoff.Refused
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, 65537))
+	raw, err := limit.Read(f, 65536)
 	if err != nil || len(raw) != int(a.Size) || unix.Fstat(fd, &b) != nil || unix.Lstat(file, &n) != nil || !sameEmptyRecoveryStat(a, b) || !sameEmptyRecoveryStat(b, n) {
 		return value, handoff.Refused
 	}
@@ -220,7 +221,7 @@ func emptyRecoveryArchiveFiles(ctx context.Context, root NativeRoot) (result map
 			cf := os.NewFile(uintptr(child), "empty-chat-record")
 			var a, b, n unix.Stat_t
 			firstErr := unix.Fstat(child, &a)
-			raw, readErr := io.ReadAll(io.LimitReader(cf, 1048577))
+			raw, readErr := limit.Read(cf, 1048576)
 			lastErr := unix.Fstat(child, &b)
 			nameErr := unix.Fstatat(fd, name, &n, unix.AT_SYMLINK_NOFOLLOW)
 			closeErr := cf.Close()

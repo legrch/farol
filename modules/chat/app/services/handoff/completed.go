@@ -3,6 +3,7 @@ package handoff
 import (
 	"github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/domain/turn"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // This closed branch accepts only ordinary completed provider turns. Refused,
@@ -15,7 +16,7 @@ func completedRetained(actual port.RetirementTurn, scope port.JournalScope, root
 		return false
 	}
 	for _, id := range []string{b.OwnerID, b.SessionID, b.TaskID, b.ParticipantID, b.TurnID, b.OperationID, view.Binding.Document.ViewID, view.Binding.Document.ConversationID} {
-		if !validID(id) {
+		if !opaque.Valid(id) {
 			return false
 		}
 	}

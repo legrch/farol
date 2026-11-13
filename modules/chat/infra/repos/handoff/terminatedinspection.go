@@ -5,6 +5,7 @@ import (
 
 	"github.com/legrch/farol/modules/chat/app/port"
 	policy "github.com/legrch/farol/modules/chat/app/services/handoff"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // AcquireTerminatedRetirementInspection retains the existing read-only claim
@@ -18,7 +19,7 @@ func AcquireTerminatedRetirementInspection(ctx context.Context, roots Roots, sco
 	if ctx == nil || ctx.Err() != nil {
 		return nil, fail(Cancelled, false)
 	}
-	if !historyID(roots.ProfileID) || !historyID(scope.BackendGeneration) || scope.ProfileID != roots.ProfileID {
+	if !opaque.Valid(roots.ProfileID) || !opaque.Valid(scope.BackendGeneration) || scope.ProfileID != roots.ProfileID {
 		return nil, fail(Invalid, false)
 	}
 	return acquireTerminatedRetirementInspection(ctx, roots, scope)

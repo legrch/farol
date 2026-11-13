@@ -13,6 +13,7 @@ import (
 	app "github.com/legrch/farol/modules/computer/app/services/mutation"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	domain "github.com/legrch/farol/modules/computer/domain/mutation"
+	"github.com/legrch/farol/pkg/fake"
 )
 
 // All ports below are in-process values. They prove contract delegation and
@@ -62,7 +63,7 @@ func connectorContractFixture(t *testing.T) (*app.ConnectorService, *contractLea
 		},
 	}
 	store := &connectorContractStore{contractStore: records}
-	service, err := app.NewForConnectorExecution(selected, lease, store, native, contractDigest{}, &sync.Mutex{}, contractClock{now: time.Unix(1700000000, 0)})
+	service, err := app.NewForConnectorExecution(selected, lease, store, native, contractDigest{}, &sync.Mutex{}, fake.Clock{At: time.Unix(1700000000, 0)})
 	if err != nil {
 		t.Fatal(err)
 	}

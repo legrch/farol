@@ -7,6 +7,7 @@ import (
 
 	"github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/domain/contextbudget"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 type Code string
@@ -83,7 +84,7 @@ func reference(source contextbudget.Source, d Digester) (contextbudget.SourceRef
 // Prepare performs no summary, provider dispatch or storage effect. Source
 // reads and current checks run outside the service gate. IDs come from the owner.
 func (s *Service) Prepare(ctx context.Context, b contextbudget.Binding, id, operation string, p contextbudget.Policy) (*Prepared, error) {
-	if s == nil || ctx == nil || ctx.Err() != nil || !b.Valid() || !contextbudget.ID(id) || !contextbudget.ID(operation) || !p.Valid() {
+	if s == nil || ctx == nil || ctx.Err() != nil || !b.Valid() || !opaque.Valid(id) || !opaque.Valid(operation) || !p.Valid() {
 		return nil, Invalid
 	}
 	// Reserve bounded operation identity before external IO. A failed preparation
@@ -175,7 +176,7 @@ func (s *Service) Window(ctx context.Context, p *Prepared) (contextbudget.Window
 // AddSummary is optional and one-shot per original operation, including errors.
 // Safe original context remains available after invalid/interrupted summaries.
 func (s *Service) AddSummary(ctx context.Context, p *Prepared, version string) error {
-	if s == nil || ctx == nil || ctx.Err() != nil || !contextbudget.ID(version) || s.deps.Summary == nil {
+	if s == nil || ctx == nil || ctx.Err() != nil || !opaque.Valid(version) || s.deps.Summary == nil {
 		return Invalid
 	}
 	s.deps.Gate.Lock()
@@ -308,14 +309,14 @@ func (s *Service) uncertain(p *Prepared) error {
 // Recover observes only. It verifies the stored digest, reloads original source,
 // and recomputes the selected window. It cannot republish or restore authority.
 func (s *Service) Recover(ctx context.Context, b contextbudget.Binding, id, operation string, p contextbudget.Policy) (contextbudget.Window, error) {
-	if s == nil || ctx == nil || ctx.Err() != nil || s.deps.Store == nil || !b.Valid() || !contextbudget.ID(id) || !contextbudget.ID(operation) || !p.Valid() {
+	if s == nil || ctx == nil || ctx.Err() != nil || s.deps.Store == nil || !b.Valid() || !opaque.Valid(id) || !opaque.Valid(operation) || !p.Valid() {
 		return contextbudget.Window{}, Invalid
 	}
 	saved, err := s.deps.Store.Observe(ctx, id, operation)
 	if err != nil || saved == nil {
 		return contextbudget.Window{}, Unavailable
 	}
-	if !contextbudget.ID(saved.Checkpoint.ID) || !contextbudget.ID(saved.Checkpoint.OperationID) || !contextbudget.Digest(saved.SHA256) || !saved.Expected.Valid() || !boundedWindow(saved.Checkpoint.Window) {
+	if !opaque.Valid(saved.Checkpoint.ID) || !opaque.Valid(saved.Checkpoint.OperationID) || !contextbudget.Digest(saved.SHA256) || !saved.Expected.Valid() || !boundedWindow(saved.Checkpoint.Window) {
 		return contextbudget.Window{}, Invalid
 	}
 	// Take independent bytes before further external calls.

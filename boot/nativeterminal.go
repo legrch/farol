@@ -14,6 +14,7 @@ import (
 	chatport "github.com/legrch/farol/modules/chat/app/port"
 	handoff "github.com/legrch/farol/modules/chat/app/services/handoff"
 	"github.com/legrch/farol/pkg/ipc"
+	"github.com/legrch/farol/pkg/limit"
 )
 
 // This command records trusted host facts after the original exact child ended.
@@ -95,8 +96,8 @@ func runNativeTerminal(args []string, in io.ReadCloser, out io.WriteCloser, diag
 	if err != nil || ino == 0 || strconv.FormatUint(ino, 10) != *inode {
 		return 2
 	}
-	raw, err := io.ReadAll(io.LimitReader(in, 8193))
-	if err != nil || len(raw) > 8192 || ipc.ValidateJSON(raw) != nil || wire.Validate("CoreTerminalObservation", raw) != nil {
+	raw, err := limit.Read(in, 8192)
+	if err != nil || ipc.ValidateJSON(raw) != nil || wire.Validate("CoreTerminalObservation", raw) != nil {
 		return 2
 	}
 	var observation wire.CoreTerminalObservation
