@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/legrch/farol/pkg/fake"
+
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	"github.com/legrch/farol/modules/computer/app/port"
 	workspacesvc "github.com/legrch/farol/modules/computer/app/services/workspace"
@@ -50,7 +52,7 @@ func listFixture(t *testing.T) (Method, *listNativeFixture, *accessrepo.Reposito
 	access.PutApproval(approval)
 	access.PutParticipant(*participant)
 	native := &listNativeFixture{result: port.ListResponse{Entries: []string{"AGENTS.md", "one space.md", "日本語.md", "folder/"}, Truncated: true}}
-	contract := workspacect.New(workspacesvc.New(access, native, readClock{at: now}))
+	contract := workspacect.New(workspacesvc.New(access, native, fake.Clock{At: now}))
 	calls := new(int)
 	method := ListMethod(func(_ context.Context, in workspacect.ListRequest) (*workspacect.Contract, error) {
 		*calls++

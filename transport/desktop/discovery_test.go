@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/legrch/farol/pkg/fake"
+
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	"github.com/legrch/farol/modules/computer/app/port"
 	workspacesvc "github.com/legrch/farol/modules/computer/app/services/workspace"
@@ -136,10 +138,6 @@ type discoveryAccess struct {
 
 func (a discoveryAccess) Binding() port.TaskBinding { return a.binding }
 
-type discoveryClock struct{ at time.Time }
-
-func (c discoveryClock) Now() time.Time { return c.at }
-
 type discoveryWorkspace struct{ reads, lists int }
 
 func (n *discoveryWorkspace) Inspect(ctx context.Context, r port.ListRequest) (*port.DirectoryBinding, error) {
@@ -184,7 +182,7 @@ func discoveryContract(t *testing.T) (*workspacect.Contract, *discoveryWorkspace
 	access.PutParticipant(*participant)
 	native := &discoveryWorkspace{}
 	selected := discoveryAccess{Repository: access, binding: port.TaskBinding{Identity: grant.Identity, ParticipantID: "participant", TurnID: "turn"}}
-	service, err := workspacesvc.NewForExecution(selected, native, discoveryClock{at: now})
+	service, err := workspacesvc.NewForExecution(selected, native, fake.Clock{At: now})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/legrch/farol/pkg/fake"
+
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	"github.com/legrch/farol/modules/computer/app/port"
 	executionsvc "github.com/legrch/farol/modules/computer/app/services/execution"
@@ -60,7 +62,7 @@ func searchFixture(t *testing.T) (Method, *searchNativeFixture, *accessrepo.Repo
 	access.PutApproval(approval)
 	access.PutParticipant(*participant)
 	native := &searchNativeFixture{result: port.SearchResponse{Matches: []port.SearchMatch{{Path: "日本語 with spaces.md", Line: 9007199254740991, Text: "🌊\tmatch", Truncated: true}}, ResultLimited: true, ScanLimited: true}}
-	issuer, err := executionsvc.New(access, searchCurrentFixture{port.TaskBinding{Identity: participant.Grant.Identity, ParticipantID: participant.ParticipantID, TurnID: "turn"}}, readClock{at: now}, executionsvc.Ceiling{Participant: *participant, Approval: approval})
+	issuer, err := executionsvc.New(access, searchCurrentFixture{port.TaskBinding{Identity: participant.Grant.Identity, ParticipantID: participant.ParticipantID, TurnID: "turn"}}, fake.Clock{At: now}, executionsvc.Ceiling{Participant: *participant, Approval: approval})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +80,7 @@ func searchFixture(t *testing.T) (Method, *searchNativeFixture, *accessrepo.Repo
 			}
 			return nil, err
 		}
-		service, err := workspacesvc.NewForExecution(lease, native, readClock{at: now})
+		service, err := workspacesvc.NewForExecution(lease, native, fake.Clock{At: now})
 		if err != nil {
 			return nil, err
 		}
