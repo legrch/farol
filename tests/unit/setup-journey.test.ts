@@ -6,6 +6,50 @@ import {
   initialSetupPresentation,
 } from "../../src/pkg/product-settings/setup-entry";
 
+describe("initial setup presentation", () => {
+  it("opens unfinished DEV onboarding in the Connections sidebar", () => {
+    expect(
+      initialSetupPresentation({
+        environment: "dev",
+        dismissed: false,
+        currentStep: "connect",
+        openAtLaunch: "browser",
+      }),
+    ).toEqual({
+      setupOpen: false,
+      setupStep: 2,
+      section: "computer",
+    });
+  });
+
+  it("opens packaged Preview setup inside the app and preserves completed DEV preference", () => {
+    expect(
+      initialSetupPresentation({
+        environment: "preview",
+        dismissed: false,
+        currentStep: "computer",
+        openAtLaunch: "activity",
+      }),
+    ).toEqual({
+      setupOpen: false,
+      setupStep: 1,
+      section: "computer",
+    });
+    expect(
+      initialSetupPresentation({
+        environment: "dev",
+        dismissed: true,
+        currentStep: "verify",
+        openAtLaunch: "settings",
+      }),
+    ).toEqual({
+      setupOpen: false,
+      setupStep: 4,
+      section: "settings",
+    });
+  });
+});
+
 describe("persisted startup entry", () => {
   const guarded = (value: Record<string, unknown>): unknown =>
     new Proxy(value, {
