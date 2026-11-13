@@ -66,7 +66,7 @@ func TestCancelReapedSignalCannotRepairUnknownWaitOrPriorControl(t *testing.T) {
 				child.mutex.Lock()
 				child.signalUnknown = true
 				child.mutex.Unlock()
-				result = waited{result: exit{Code: &code, Waited: true, Drained: true, supervisorExited: true, groupGone: true, cohort: true}}
+				result = waited{result: exit{Code: &code, Waited: true, Drained: true, supervisorExited: true, groupGone: true}}
 			}
 			root.waitResult <- result
 			got := settlementReceive(t, pending)

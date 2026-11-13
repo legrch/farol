@@ -247,9 +247,9 @@ exit 7
 		f.fail(t, "original drained binary/text output differs", nil)
 	}
 	f.child.mutex.Lock()
-	closed, uncertain, cohort := f.child.rootClosed, f.child.uncertain, f.child.root.cohort
+	closed, uncertain := f.child.rootClosed, f.child.uncertain
 	f.child.mutex.Unlock()
-	if !closed || uncertain || cohort {
+	if !closed || uncertain {
 		f.fail(t, "original root close unknown or promoted to cohort evidence", nil)
 	}
 	f.helperExit(t, true) // Exact helper self-SIGKILL; command root independently exited 7.

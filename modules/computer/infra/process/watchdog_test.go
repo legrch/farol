@@ -712,7 +712,7 @@ func TestWatchdogPreservesKnownRootWhenHelperWaitIsUnknown(t *testing.T) {
 	}
 	c.process.(*watchdogTestProcess).ended <- errors.New("unknown helper Wait")
 	out, err := c.Wait()
-	if err != nil || !out.Waited || out.Code == nil || *out.Code != 0 || !out.Drained || out.cohort {
+	if err != nil || !out.Waited || out.Code == nil || *out.Code != 0 || !out.Drained {
 		t.Fatal("root erased or cleanup forged", out, err)
 	}
 	if _, err = c.Wait(); err == nil {

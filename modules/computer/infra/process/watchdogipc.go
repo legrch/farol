@@ -367,8 +367,8 @@ func (c *watchdogChild) Wait() (exit, error) {
 	result.Drained = result.Drained && !c.uncertain
 	result.supervisorExited = helperErr == nil && c.rootClosed && result.Drained && !c.uncertain
 	result.groupGone = groupGone && result.supervisorExited
-	// A read-only ESRCH observation confirms only the original group. It neither
-	// supplies cohort=true nor proves escaped descendants or lost IPC/output.
+	// A read-only ESRCH observation confirms only the original group. It never
+	// proves escaped descendants or lost IPC/output.
 	return result, nil
 }
 func copyCode(code *int) *int {

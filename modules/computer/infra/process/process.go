@@ -53,7 +53,6 @@ type exit struct {
 	Code             *int
 	Signal           int
 	Waited, Drained  bool
-	cohort           bool
 	supervisorExited bool
 	groupGone        bool
 }

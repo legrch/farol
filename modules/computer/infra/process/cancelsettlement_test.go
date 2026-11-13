@@ -79,7 +79,7 @@ func settlementReceive[T any](t *testing.T, ch <-chan T) T {
 func settlementRootWait(t *testing.T, c *Child, root *settlementOwner) {
 	t.Helper()
 	code := 7
-	root.waitResult <- waited{result: exit{Code: &code, Waited: true, Drained: true, supervisorExited: true, cohort: true}}
+	root.waitResult <- waited{result: exit{Code: &code, Waited: true, Drained: true, supervisorExited: true}}
 	deadline := time.After(time.Second)
 	for {
 		out, err := c.Read(context.Background(), processsvc.Window{})
@@ -300,7 +300,7 @@ func TestChildCancellationSettlementLegacyCleanupRemainsUnverified(t *testing.T)
 	if result.err != nil || result.receipt == nil || result.receipt.Status != processsvc.CancelRequested {
 		t.Fatal(result)
 	}
-	settlementRootWait(t, c, root) // Includes cohort=true; signal still prevents promotion.
+	settlementRootWait(t, c, root)
 	requireSettlement(t, c, root, "")
 }
 
@@ -309,7 +309,7 @@ func TestChildCancellationSettlementAcknowledgementCannotRepairIncompleteWait(t 
 		t.Run(name, func(t *testing.T) {
 			c, root := settlementFixture(t)
 			code := 7
-			result := waited{result: exit{Code: &code, Waited: true, Drained: true, supervisorExited: true, cohort: true}}
+			result := waited{result: exit{Code: &code, Waited: true, Drained: true, supervisorExited: true}}
 			switch name {
 			case "prior-unknown":
 				c.mutex.Lock()
