@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const nextRoot = path.resolve(here, "../..");
@@ -14,6 +15,50 @@ interface Summary {
   byMechanism: Record<string, number>;
   textOnly: number;
   findings: { code: string; detail: string }[];
+}
+
+function run(root: string, extra: string[]) {
+  return spawnSync(process.execPath, [checker, "--root", root, ...extra], {
+    cwd: nextRoot,
+    encoding: "utf8",
+  });
+}
+
+const temporaryRoots: string[] = [];
+
+afterAll(() => {
+  for (const dir of temporaryRoots)
+    fs.rmSync(dir, { recursive: true, force: true });
+});
+
+function temporaryRoot(
+  testSource: string,
+  allowlist: Record<string, string[]>,
+): string {
+  const parent = path.join(nextRoot, "_output", "tmp");
+  fs.mkdirSync(parent, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(parent, "slicing-"));
+  temporaryRoots.push(dir);
+  fs.mkdirSync(path.join(dir, "tests/unit"), { recursive: true });
+  fs.mkdirSync(path.join(dir, "tests/architecture"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "tests/unit/case.mjs"), testSource);
+  fs.writeFileSync(
+    path.join(dir, "tests/architecture/source-slicing-allowlist.json"),
+    JSON.stringify({ schema: 1, files: allowlist }),
+  );
+  return dir;
+}
+
+function listed(dir: string): Record<string, string[]> {
+  const file = path.join(
+    dir,
+    "tests/architecture/source-slicing-allowlist.json",
+  );
+  return (
+    JSON.parse(fs.readFileSync(file, "utf8")) as {
+      files: Record<string, string[]>;
+    }
+  ).files;
 }
 
 function check(root: string) {
@@ -95,5 +140,88 @@ describe("the source-slicing ban", () => {
     expect(result.summary?.findings.map((f) => f.code)).toEqual([
       "SLICING_ALLOWLIST_STALE",
     ]);
+  });
+
+  // False-positive shapes that must never block a PR.
+  it.each([
+    "fp-fixture-vm",
+    "fp-title",
+    "fp-import-specifier",
+    "fp-literal-code",
+  ])("does not accuse %s", (name) => {
+    const result = check(path.join(fixtures, name));
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.summary?.offenders).toBe(0);
+  });
+
+  // Shapes the data-flow analysis must keep catching.
+  it.each([
+    ["join-binding", "vm"],
+    ["alias-named", "vm"],
+    ["alias-namespace", "vm"],
+    ["alias-require", "vm"],
+    ["alias-promises", "vm"],
+    ["transform-sync", "transpile"],
+    ["transform-async", "transpile"],
+    ["let-assign", "vm"],
+    ["helper-reader", "vm"],
+    ["helper-executor", "vm"],
+    ["for-of", "vm"],
+    ["push-collect", "vm"],
+  ])("catches %s as %s", (name, mechanism) => {
+    const result = check(path.join(fixtures, name));
+    expect(result.status).toBe(1);
+    expect(result.summary?.byMechanism).toEqual({ [mechanism]: 1 });
+  });
+
+  describe("allowlist writers", () => {
+    const vmOnly =
+      'import fs from "node:fs";\nimport vm from "node:vm";\nvm.runInNewContext(fs.readFileSync("src/a/b.ts", "utf8"), {});\n';
+    const vmAndFunction =
+      vmOnly + 'new Function(fs.readFileSync("src/a/b.ts", "utf8"));\n';
+    const entry = "tests/unit/case.mjs";
+
+    it("--write-allowlist drops entries that no longer offend", () => {
+      const dir = temporaryRoot("export {};\n", { [entry]: ["vm"] });
+      const result = run(dir, ["--write-allowlist"]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(listed(dir)).toEqual({});
+    });
+
+    it("--write-allowlist drops a mechanism that no longer offends", () => {
+      const dir = temporaryRoot(vmOnly, { [entry]: ["vm", "function"] });
+      const result = run(dir, ["--write-allowlist"]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(listed(dir)).toEqual({ [entry]: ["vm"] });
+    });
+
+    it("--write-allowlist refuses a new mechanism on a listed file", () => {
+      const dir = temporaryRoot(vmAndFunction, { [entry]: ["vm"] });
+      const result = run(dir, ["--write-allowlist"]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("new mechanism (function)");
+      expect(listed(dir)).toEqual({ [entry]: ["vm"] });
+    });
+
+    it("--write-allowlist refuses a new offender", () => {
+      const dir = temporaryRoot(vmOnly, {});
+      const result = run(dir, ["--write-allowlist"]);
+      expect(result.status).toBe(1);
+      expect(listed(dir)).toEqual({});
+    });
+
+    it("--init-allowlist refuses when the allowlist is not empty", () => {
+      const dir = temporaryRoot(vmOnly, { "tests/unit/other.mjs": ["vm"] });
+      const result = run(dir, ["--init-allowlist"]);
+      expect(result.status).toBe(1);
+      expect(listed(dir)).toEqual({ "tests/unit/other.mjs": ["vm"] });
+    });
+
+    it("--init-allowlist initializes an empty allowlist", () => {
+      const dir = temporaryRoot(vmOnly, {});
+      const result = run(dir, ["--init-allowlist"]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(listed(dir)).toEqual({ [entry]: ["vm"] });
+    });
   });
 });

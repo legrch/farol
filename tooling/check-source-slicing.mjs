@@ -2,16 +2,18 @@
 // Refuses a NEW test that reads production source text and executes code
 // derived from it. Existing offenders live in one shrink-only allowlist.
 //
-// A file offends when it BOTH reads production source text (an fs read call
-// plus a string literal or path.join/resolve of literals naming a
-// .ts/.tsx/.mts/.js/.go file under src/, apps/, boot/, modules/, pkg/,
-// transport/ or cmd/) AND executes derived code by one of these mechanisms:
-//   vm         imports node:vm
+// A file offends when code that it executes derives, by data flow inside the
+// file, from an fs read of a production path (a .ts/.tsx/.mts/.js/.go file
+// under src/, apps/, boot/, modules/, pkg/, transport/, cmd/ or tooling/). The
+// production path must be spelled by the read call's own path argument,
+// followed through const/let/var bindings, assignments and same-file reader
+// helpers. Import specifiers and test titles never count. Mechanisms:
+//   vm         vm.runIn*Context, vm.Script, vm.compileFunction
 //   function   new Function(...) / Function(...)
-//   eval       eval(...) or globalThis.eval(...)
-//   transpile  a TypeScript/Babel/esbuild transpile call followed by a
-//              dynamic import, require or module compile of the output
-//   esbuild    an esbuild build with a non-literal `stdin.contents`
+//   eval       eval(...), (0, eval)(...), globalThis.eval(...)
+//   transpile  a TypeScript/Babel/esbuild transpile call on derived text,
+//              in a file that also loads code dynamically
+//   esbuild    an esbuild build with `stdin.contents` derived from the read
 // Tests that only assert on source text are reported, never blocked.
 import fs from "node:fs";
 import path from "node:path";
@@ -22,16 +24,40 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const defaultRoot = path.resolve(here, "..");
 const allowlistRelative = "tests/architecture/source-slicing-allowlist.json";
 const codeExtension = /\.(?:ts|tsx|mts|cts|js|mjs|cjs)$/;
+const testFile = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
+const skippedDirectories = new Set([
+  "node_modules",
+  ".git",
+  "_output",
+  "dist",
+  ".claude",
+]);
 const productionPath =
-  /(?:^|\/)(?:src|apps|boot|modules|pkg|transport|cmd)\/[^\s"'`]*\.(?:ts|tsx|mts|js|go)(?![\w])/;
+  /(?:^|\/)(?:src|apps|boot|modules|pkg|transport|cmd|tooling)\/[^\s"'`]*\.(?:ts|tsx|mts|js|mjs|cjs|go)(?![\w])/;
 const readCalls = new Set(["readFileSync", "readFile", "createReadStream"]);
-const transpileCalls = new Set([
-  "transpileModule",
-  "transpile",
-  "stripTypeScriptTypes",
-  "transformSync",
-  "transformAsync",
-  "transformFileSync",
+const vmApi = new Set([
+  "runInContext",
+  "runInNewContext",
+  "runInThisContext",
+  "compileFunction",
+  "Script",
+  "SourceTextModule",
+]);
+const transpileApi = new Map([
+  ["transpileModule", ["typescript"]],
+  ["transpile", ["typescript"]],
+  ["stripTypeScriptTypes", ["module"]],
+  ["transform", ["esbuild", "@babel/core"]],
+  ["transformSync", ["esbuild", "@babel/core"]],
+  ["transformAsync", ["@babel/core"]],
+]);
+const collectors = new Set([
+  "push",
+  "unshift",
+  "add",
+  "set",
+  "splice",
+  "append",
 ]);
 const mechanismOrder = ["vm", "function", "eval", "transpile", "esbuild"];
 
@@ -80,74 +106,383 @@ function isDerived(node) {
   return true;
 }
 
-function referencedNames(node, names) {
-  walk(node, (inner) => {
-    if (inner.type === "Identifier") names.add(inner.name);
+// Names a node reads. Member property names and plain object keys are not
+// variable references.
+function referencedNames(node) {
+  const names = new Set();
+  walk(node, (inner, parent) => {
+    if (inner.type !== "Identifier") return;
+    if (
+      parent?.type === "MemberExpression" &&
+      !parent.computed &&
+      parent.property === inner
+    )
+      return;
+    if (
+      parent?.type === "ObjectProperty" &&
+      !parent.computed &&
+      !parent.shorthand &&
+      parent.key === inner
+    )
+      return;
+    names.add(inner.name);
   });
   return names;
 }
 
-// Text a node spells out: string literals, template quasis and path.join /
-// path.resolve / URL arguments, with identifiers followed to their const
-// initializers (bounded depth) so `const file = path.join(root, "src/x.ts")`
-// still reads as a production path.
-function pathText(node, bindings, depth = 0) {
-  const parts = [];
-  walk(node, (inner) => {
-    const text = literalText(inner);
-    if (text !== null) parts.push(text.replaceAll("\u0000", "/"));
-    if (inner.type === "Identifier" && depth < 4 && bindings.has(inner.name))
-      parts.push(pathText(bindings.get(inner.name), bindings, depth + 1));
-  });
-  return parts.join("/");
+function patternNames(pattern, out = []) {
+  if (!pattern) return out;
+  switch (pattern.type) {
+    case "Identifier":
+      out.push(pattern.name);
+      break;
+    case "ObjectPattern":
+      for (const property of pattern.properties)
+        patternNames(
+          property.type === "RestElement" ? property.argument : property.value,
+          out,
+        );
+      break;
+    case "ArrayPattern":
+      for (const element of pattern.elements) patternNames(element, out);
+      break;
+    case "AssignmentPattern":
+      patternNames(pattern.left, out);
+      break;
+    case "RestElement":
+      patternNames(pattern.argument, out);
+      break;
+    default:
+      break;
+  }
+  return out;
 }
 
-function productionRead(node, bindings) {
-  return (
-    node.type === "CallExpression" &&
-    readCalls.has(calleeName(node.callee)) &&
-    node.arguments[0] !== undefined &&
-    productionPath.test(pathText(node.arguments[0], bindings))
-  );
-}
+const moduleName = (spec) =>
+  spec.replace(/^node:/, "").replace(/\/promises$/, "");
 
-function containsProductionRead(node, bindings) {
-  let found = false;
-  walk(node, (inner) => {
-    if (productionRead(inner, bindings)) found = true;
-  });
-  return found;
-}
-
-// Names bound (transitively, within one file) to the result of an fs read of
-// a production path.
-function readBoundNames(ast) {
-  const declarators = [];
-  walk(ast.program, (node) => {
+// Resolve `require("x")`, `await import("x")`, an alias, or a member chain
+// over one of them to { module, path }.
+function moduleOrigin(node, aliases) {
+  if (!node) return null;
+  if (
+    node.type === "AwaitExpression" ||
+    node.type === "ParenthesizedExpression"
+  )
+    return moduleOrigin(node.argument ?? node.expression, aliases);
+  if (node.type === "CallExpression") {
+    const callee = node.callee;
+    const literal = node.arguments[0];
     if (
-      node.type === "VariableDeclarator" &&
-      node.id.type === "Identifier" &&
-      node.init
+      literal?.type === "StringLiteral" &&
+      ((callee.type === "Identifier" && callee.name === "require") ||
+        callee.type === "Import")
     )
-      declarators.push(node);
+      return { module: moduleName(literal.value), path: [] };
+    return null;
+  }
+  if (node.type === "Identifier") {
+    const alias = aliases.get(node.name);
+    return alias ? { module: alias.module, path: [...alias.path] } : null;
+  }
+  if (node.type === "MemberExpression" && !node.computed) {
+    const base = moduleOrigin(node.object, aliases);
+    return base
+      ? { module: base.module, path: [...base.path, node.property.name] }
+      : null;
+  }
+  return null;
+}
+
+// Facts about one parsed file.
+function gather(ast) {
+  const aliases = new Map(); // local name -> { module, path }
+  const bindings = new Map(); // name -> expressions it can hold
+  const funcs = new Map(); // name -> { params: (string|null)[], node }
+  const calls = [];
+  let dynamicLoad = false;
+  const bind = (name, node) => {
+    if (!bindings.has(name)) bindings.set(name, []);
+    bindings.get(name).push(node);
+  };
+  const addFunction = (name, node) => {
+    funcs.set(name, {
+      node,
+      params: node.params.map((param) =>
+        param.type === "Identifier" ? param.name : null,
+      ),
+    });
+  };
+  walk(ast.program, (node) => {
+    switch (node.type) {
+      case "ImportDeclaration":
+        for (const spec of node.specifiers)
+          aliases.set(spec.local.name, {
+            module: moduleName(node.source.value),
+            path:
+              spec.type === "ImportSpecifier"
+                ? [spec.imported.name ?? spec.imported.value]
+                : [],
+          });
+        break;
+      case "VariableDeclarator": {
+        if (!node.init) break;
+        const origin = moduleOrigin(node.init, aliases);
+        if (origin) {
+          if (node.id.type === "Identifier") aliases.set(node.id.name, origin);
+          else if (node.id.type === "ObjectPattern")
+            for (const property of node.id.properties)
+              if (
+                property.type === "ObjectProperty" &&
+                property.value.type === "Identifier"
+              )
+                aliases.set(property.value.name, {
+                  module: origin.module,
+                  path: [
+                    ...origin.path,
+                    property.key.name ?? property.key.value,
+                  ],
+                });
+        }
+        for (const name of patternNames(node.id)) bind(name, node.init);
+        if (
+          node.id.type === "Identifier" &&
+          (node.init.type === "ArrowFunctionExpression" ||
+            node.init.type === "FunctionExpression")
+        )
+          addFunction(node.id.name, node.init);
+        break;
+      }
+      case "AssignmentExpression":
+        for (const name of patternNames(node.left)) bind(name, node.right);
+        break;
+      case "ForOfStatement":
+      case "ForInStatement":
+        if (node.left.type === "VariableDeclaration")
+          for (const declarator of node.left.declarations)
+            for (const name of patternNames(declarator.id))
+              bind(name, node.right);
+        break;
+      case "FunctionDeclaration":
+        if (node.id) {
+          bind(node.id.name, node);
+          addFunction(node.id.name, node);
+        }
+        break;
+      case "CallExpression":
+      case "NewExpression": {
+        calls.push(node);
+        // `list.push(derived)` makes the receiver hold derived text.
+        if (
+          node.callee.type === "MemberExpression" &&
+          !node.callee.computed &&
+          node.callee.object.type === "Identifier" &&
+          collectors.has(node.callee.property.name)
+        )
+          for (const argument of node.arguments)
+            bind(node.callee.object.name, argument);
+        if (node.type === "CallExpression" && node.callee.type === "Import") {
+          if (node.arguments[0]?.type !== "StringLiteral") dynamicLoad = true;
+        }
+        const name = calleeName(node.callee);
+        if (name === "_compile") dynamicLoad = true;
+        if (
+          node.callee.type === "Identifier" &&
+          node.callee.name === "require" &&
+          node.arguments[0]?.type !== "StringLiteral"
+        )
+          dynamicLoad = true;
+        break;
+      }
+      default:
+        break;
+    }
   });
-  const bindings = new Map(declarators.map((d) => [d.id.name, d.init]));
+  return { aliases, bindings, funcs, calls, dynamicLoad };
+}
+
+function analyzeFacts(facts) {
+  const { aliases, bindings, funcs, calls, dynamicLoad } = facts;
+  const aliasFrom = (name, modules) => {
+    const alias = aliases.get(name);
+    return alias && modules.includes(alias.module) ? alias : null;
+  };
+
+  // Text a node spells out, following bindings to bounded depth so that
+  // `const dir = path.join(root, "src"); read(path.join(dir, "x.ts"))` works.
+  function pathText(node, depth = 0) {
+    const parts = [];
+    walk(node, (inner) => {
+      const text = literalText(inner);
+      if (text !== null) parts.push(text.replaceAll("\u0000", "/"));
+      if (inner.type === "Identifier" && depth < 3 && bindings.has(inner.name))
+        for (const bound of bindings.get(inner.name))
+          if (bound.type !== "FunctionDeclaration")
+            parts.push(pathText(bound, depth + 1));
+    });
+    return parts.join("/");
+  }
+  const production = (node) => productionPath.test(pathText(node));
+
+  function isReadCall(node) {
+    if (node.type !== "CallExpression") return false;
+    const callee = node.callee;
+    if (callee.type === "Identifier") {
+      const alias = aliases.get(callee.name);
+      if (alias)
+        return alias.module === "fs" && readCalls.has(alias.path.at(-1) ?? "");
+      return readCalls.has(callee.name);
+    }
+    return (
+      callee.type === "MemberExpression" &&
+      !callee.computed &&
+      readCalls.has(callee.property.name)
+    );
+  }
+
+  // Same-file helpers that read a path: { bodyProd, params }.
+  const readers = new Map();
+  for (let pass = 0; pass < 3; pass += 1) {
+    for (const [name, fn] of funcs) {
+      const entry = readers.get(name) ?? { bodyProd: false, params: new Set() };
+      walk(fn.node.body, (inner) => {
+        if (inner.type !== "CallExpression") return;
+        const target =
+          inner.callee.type === "Identifier"
+            ? readers.get(inner.callee.name)
+            : null;
+        const pathArgs = isReadCall(inner)
+          ? [[0, inner.arguments[0]]]
+          : target
+            ? [...target.params].map((index) => [index, inner.arguments[index]])
+            : [];
+        if (target?.bodyProd) entry.bodyProd = true;
+        for (const [, argument] of pathArgs) {
+          if (!argument) continue;
+          if (production(argument)) entry.bodyProd = true;
+          const used = referencedNames(argument);
+          fn.params.forEach((param, index) => {
+            if (param && used.has(param)) entry.params.add(index);
+          });
+        }
+      });
+      readers.set(name, entry);
+    }
+  }
+
+  function isProductionRead(node) {
+    if (node.type !== "CallExpression") return false;
+    if (isReadCall(node)) {
+      return node.arguments[0] !== undefined && production(node.arguments[0]);
+    }
+    if (node.callee.type !== "Identifier") return false;
+    const reader = readers.get(node.callee.name);
+    if (!reader) return false;
+    return (
+      reader.bodyProd ||
+      [...reader.params].some(
+        (index) => node.arguments[index] && production(node.arguments[index]),
+      )
+    );
+  }
+
+  function containsProductionRead(node) {
+    let found = false;
+    walk(node, (inner) => {
+      if (isProductionRead(inner)) found = true;
+    });
+    return found;
+  }
+
+  // Names that hold text read from production source, or text derived from it.
   const tainted = new Set();
+  const derived = (node) =>
+    containsProductionRead(node) ||
+    [...referencedNames(node)].some((name) => tainted.has(name));
   for (let changed = true; changed;) {
     changed = false;
-    for (const declarator of declarators) {
-      if (tainted.has(declarator.id.name)) continue;
-      const used = referencedNames(declarator.init, new Set());
-      if (
-        containsProductionRead(declarator.init, bindings) ||
-        [...used].some((n) => tainted.has(n))
-      ) {
-        tainted.add(declarator.id.name);
+    for (const [name, nodes] of bindings) {
+      if (!tainted.has(name) && nodes.some(derived)) {
+        tainted.add(name);
         changed = true;
       }
     }
+    for (const call of calls) {
+      if (call.callee.type !== "Identifier") continue;
+      const fn = funcs.get(call.callee.name);
+      if (!fn) continue;
+      fn.params.forEach((param, index) => {
+        const argument = call.arguments[index];
+        if (param && !tainted.has(param) && argument && derived(argument)) {
+          tainted.add(param);
+          changed = true;
+        }
+      });
+    }
   }
-  return { tainted, bindings };
+
+  const mechanisms = new Set();
+  const hasEsbuild = [...aliases.values()].some((a) => a.module === "esbuild");
+  for (const call of calls) {
+    const callee = call.callee;
+    const name = calleeName(callee);
+    const first = call.arguments[0];
+    // vm: named import/alias, or a method on a vm namespace/default import.
+    const vmCallee =
+      (callee.type === "Identifier" &&
+        aliasFrom(callee.name, ["vm"]) &&
+        vmApi.has(aliasFrom(callee.name, ["vm"]).path.at(-1) ?? "")) ||
+      (callee.type === "MemberExpression" &&
+        !callee.computed &&
+        vmApi.has(callee.property.name) &&
+        callee.object.type === "Identifier" &&
+        aliasFrom(callee.object.name, ["vm"]));
+    if (vmCallee && first && derived(first)) mechanisms.add("vm");
+    if (
+      name === "Function" &&
+      (callee.type === "Identifier" || callee.object?.name === "globalThis") &&
+      call.arguments.some(derived)
+    )
+      mechanisms.add("function");
+    if (name === "eval" && first && derived(first)) mechanisms.add("eval");
+    // transpile of derived text, in a file that also loads code dynamically.
+    const modules = transpileApi.get(name);
+    if (modules && first && derived(first) && dynamicLoad) {
+      const fromModule =
+        callee.type === "Identifier"
+          ? aliasFrom(callee.name, modules.map(moduleName))
+          : callee.type === "MemberExpression" &&
+            callee.object.type === "Identifier" &&
+            aliasFrom(callee.object.name, modules.map(moduleName));
+      if (fromModule) mechanisms.add("transpile");
+    }
+  }
+  // esbuild: any `stdin: { contents }` object whose contents are derived.
+  const stdinObjects = [];
+  for (const call of calls)
+    walk(call, (inner) => {
+      if (
+        inner.type === "ObjectProperty" &&
+        (inner.key.name ?? inner.key.value) === "stdin" &&
+        inner.value.type === "ObjectExpression"
+      )
+        stdinObjects.push(inner.value);
+    });
+  if (hasEsbuild)
+    for (const object of stdinObjects)
+      for (const property of object.properties)
+        if (
+          property.type === "ObjectProperty" &&
+          (property.key.name ?? property.key.value) === "contents" &&
+          isDerived(property.value) &&
+          derived(property.value)
+        )
+          mechanisms.add("esbuild");
+
+  return {
+    readsProduction: calls.some(isProductionRead),
+    mechanisms: mechanismOrder.filter((name) => mechanisms.has(name)),
+  };
 }
 
 // Analyze one file's source. Pure: no filesystem access.
@@ -157,119 +492,33 @@ export function analyze(source, file) {
     plugins: file.endsWith("x") ? ["typescript", "jsx"] : ["typescript"],
     errorRecovery: false,
   });
-  const imports = new Set();
-  const { tainted, bindings } = readBoundNames(ast);
-  let reads = false;
-  let production = false;
-  let newFunction = false;
-  let evalCall = false;
-  let transpile = false;
-  let dynamicLoad = false;
-  let esbuildInline = false;
-  const importedFrom = (spec) =>
-    [...imports].some((name) => name === spec || name === `node:${spec}`);
-  walk(ast.program, (node) => {
-    switch (node.type) {
-      case "ImportDeclaration":
-      case "ExportNamedDeclaration":
-      case "ExportAllDeclaration":
-        if (node.source) imports.add(node.source.value);
-        break;
-      case "CallExpression":
-      case "NewExpression": {
-        const name = calleeName(node.callee);
-        if (
-          node.type === "CallExpression" &&
-          node.callee.type === "Identifier" &&
-          node.callee.name === "require" &&
-          node.arguments[0]?.type === "StringLiteral"
-        )
-          imports.add(node.arguments[0].value);
-        if (node.type === "CallExpression" && node.callee.type === "Import") {
-          if (node.arguments[0]?.type === "StringLiteral")
-            imports.add(node.arguments[0].value);
-          else dynamicLoad = true;
-        }
-        if (readCalls.has(name)) reads = true;
-        if (name === "Function") newFunction = true;
-        if (name === "eval") evalCall = true;
-        if (transpileCalls.has(name)) transpile = true;
-        if (name === "_compile") dynamicLoad = true;
-        if (name === "require" && node.arguments[0]?.type !== "StringLiteral")
-          dynamicLoad = true;
-        if (name === "join" || name === "resolve" || name === "URL") {
-          const joined = node.arguments
-            .map(literalText)
-            .filter((text) => text !== null)
-            .join("/");
-          if (productionPath.test(joined)) production = true;
-        }
-        break;
-      }
-      case "ObjectProperty": {
-        const key = node.key.name ?? node.key.value;
-        if (key === "stdin" && node.value.type === "ObjectExpression")
-          for (const inner of node.value.properties)
-            if (
-              inner.type === "ObjectProperty" &&
-              (inner.key.name ?? inner.key.value) === "contents" &&
-              isDerived(inner.value) &&
-              (containsProductionRead(inner.value, bindings) ||
-                [...referencedNames(inner.value, new Set())].some((n) =>
-                  tainted.has(n),
-                ))
-            )
-              esbuildInline = true;
-        break;
-      }
-      default:
-        break;
-    }
-    if (node.type === "StringLiteral" || node.type === "TemplateLiteral") {
-      const text = literalText(node);
-      if (text !== null && productionPath.test(text.replaceAll("\u0000", "/")))
-        production = true;
-    }
-  });
-  const mechanisms = [];
-  if (importedFrom("vm")) mechanisms.push("vm");
-  if (newFunction) mechanisms.push("function");
-  if (evalCall) mechanisms.push("eval");
-  if (transpile && dynamicLoad) mechanisms.push("transpile");
-  if (importedFrom("esbuild") && esbuildInline) mechanisms.push("esbuild");
-  const readsProduction = reads && production;
+  const result = analyzeFacts(gather(ast));
   return {
-    readsProduction,
-    mechanisms: readsProduction
-      ? mechanismOrder.filter((name) => mechanisms.includes(name))
-      : [],
-    textOnly: readsProduction && mechanisms.length === 0,
+    ...result,
+    textOnly: result.readsProduction && result.mechanisms.length === 0,
   };
 }
 
-function collect(dir, out) {
+function collect(dir, scanRoot, out) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
-    if (
-      entry.name === "node_modules" ||
-      full.endsWith(path.join("tests", "architecture", "fixtures"))
+    const relative = path.relative(scanRoot, full).split(path.sep).join("/");
+    if (skippedDirectories.has(entry.name)) continue;
+    if (relative === "tests/architecture/fixtures") continue;
+    if (entry.isDirectory()) collect(full, scanRoot, out);
+    else if (
+      codeExtension.test(entry.name) &&
+      (relative.startsWith("tests/") || testFile.test(entry.name))
     )
-      continue;
-    if (entry.isDirectory()) collect(full, out);
-    else if (codeExtension.test(entry.name)) out.push(full);
+      out.push(full);
   }
 }
 
+// Every code file under tests/, plus co-located *.test.* / *.spec.* files
+// anywhere else in the repository.
 export function scan(scanRoot) {
   const files = [];
-  const testsDir = path.join(scanRoot, "tests");
-  if (fs.existsSync(testsDir)) collect(testsDir, files);
-  const srcDir = path.join(scanRoot, "src");
-  if (fs.existsSync(srcDir)) {
-    const colocated = [];
-    collect(srcDir, colocated);
-    files.push(...colocated.filter((f) => /\.(?:test|spec)\.[a-z]+$/.test(f)));
-  }
+  collect(scanRoot, scanRoot, files);
   const offenders = {};
   const textOnly = [];
   const unparsable = [];
@@ -296,7 +545,10 @@ function loadAllowlist(scanRoot) {
 export function diff(result, allowlist) {
   const findings = [];
   for (const entry of result.unparsable)
-    findings.push({ code: "SLICING_UNPARSABLE", detail: entry });
+    findings.push({
+      code: "SLICING_UNPARSABLE",
+      detail: `${entry} (an unparsable test file fails the gate)`,
+    });
   for (const [file, mechanisms] of Object.entries(result.offenders)) {
     const listed = allowlist[file];
     if (!listed)
@@ -319,40 +571,66 @@ export function diff(result, allowlist) {
   return findings;
 }
 
-function writeAllowlist(scanRoot, result, current, admitNew) {
-  const next = {};
-  for (const [file, mechanisms] of Object.entries(result.offenders)) {
-    if (!current[file] && !admitNew) continue;
-    next[file] = mechanisms;
-  }
-  const dropped = Object.keys(current).filter((file) => !next[file]);
-  const refused = Object.keys(result.offenders).filter(
-    (file) => !current[file] && !admitNew,
-  );
+function writeAllowlistFile(scanRoot, files) {
   const target = path.join(scanRoot, allowlistRelative);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(
     target,
-    `${JSON.stringify({ schema: 1, files: next }, null, 2)}\n`,
+    `${JSON.stringify({ schema: 1, files }, null, 2)}\n`,
   );
-  return { dropped, refused };
+}
+
+// --write-allowlist: shrink only. Removes entries and mechanisms that no
+// longer offend; any growth (new file, added mechanism) fails and writes
+// nothing.
+export function shrinkAllowlist(result, current) {
+  const next = {};
+  const growth = [];
+  for (const [file, mechanisms] of Object.entries(result.offenders)) {
+    const listed = current[file];
+    if (!listed) {
+      growth.push(`${file}: new offender (${mechanisms.join(", ")})`);
+      continue;
+    }
+    const added = mechanisms.filter((name) => !listed.includes(name));
+    if (added.length > 0)
+      growth.push(`${file}: new mechanism (${added.join(", ")})`);
+    const kept = mechanismOrder.filter(
+      (name) => listed.includes(name) && mechanisms.includes(name),
+    );
+    if (kept.length > 0) next[file] = kept;
+  }
+  return { next, growth };
 }
 
 function main() {
   const result = scan(root);
   const current = loadAllowlist(root);
-  if (flag("--write-allowlist") || flag("--init-allowlist")) {
-    const { dropped, refused } = writeAllowlist(
-      root,
-      result,
-      current,
-      flag("--init-allowlist"),
-    );
+  if (flag("--write-allowlist")) {
+    const { next, growth } = shrinkAllowlist(result, current);
+    if (growth.length > 0) {
+      for (const entry of growth)
+        console.error(`refused, allowlist may only shrink: ${entry}`);
+      process.exit(1);
+    }
+    writeAllowlistFile(root, next);
     console.log(
-      `allowlist written: ${Object.keys(result.offenders).length - refused.length} listed, ${dropped.length} dropped, ${refused.length} refused`,
+      `allowlist written: ${Object.keys(next).length} listed, ${Object.keys(current).length - Object.keys(next).length} dropped`,
     );
-    for (const file of refused) console.error(`refused new offender: ${file}`);
-    process.exit(refused.length > 0 ? 1 : 0);
+    process.exit(0);
+  }
+  if (flag("--init-allowlist")) {
+    if (Object.keys(current).length > 0) {
+      console.error(
+        `refused: ${allowlistRelative} already lists ${Object.keys(current).length} files; use --write-allowlist to shrink it`,
+      );
+      process.exit(1);
+    }
+    writeAllowlistFile(root, result.offenders);
+    console.log(
+      `allowlist initialized: ${Object.keys(result.offenders).length} listed`,
+    );
+    process.exit(0);
   }
   const findings = diff(result, current);
   const byMechanism = {};

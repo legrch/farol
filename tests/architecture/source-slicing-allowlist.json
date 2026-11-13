@@ -34,6 +34,7 @@
     "tests/unit/desktop-update-presentation.test.ts": ["vm"],
     "tests/unit/go-core-quit-closers.test.ts": ["vm"],
     "tests/unit/installed-update-public.test.ts": ["vm"],
+    "tests/unit/known-empty-completion-cli.test.mjs": ["vm"],
     "tests/unit/main-startup-lease.test.ts": ["function"],
     "tests/unit/manual-diagnostic-status.test.mjs": ["vm"],
     "tests/unit/native-view-visibility.test.ts": ["vm"],
