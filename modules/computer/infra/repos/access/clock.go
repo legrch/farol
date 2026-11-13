@@ -1,12 +1,14 @@
 package access
 
-import "time"
+import (
+	"time"
+
+	kitclock "github.com/legrch/farol/pkg/clock"
+)
 
 // Clock is the native wall clock for trusted Computer composition. Fixed clocks
 // are supplied only by disposable tests; the app depends on its consumer port.
-type Clock struct{}
-
-func (Clock) Now() time.Time { return time.Now() }
+type Clock = kitclock.System
 
 func (s *Store) now() (time.Time, error) {
 	now := s.clock.Now()
