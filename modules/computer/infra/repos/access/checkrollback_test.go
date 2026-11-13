@@ -129,6 +129,35 @@ func TestConnectionCheckUnknownHistoryKeepsPredecessorStoreOpenable(t *testing.T
 	}
 }
 
+// Finding 2: history is never forgotten. More than the predecessor's 48
+// attempts are retained across restart, a replay of the very first operation
+// ID is an observation (never a fresh run), and unknown outcomes survive.
+func TestConnectionCheckHistoryRetainsEveryAttemptAcrossRestart(t *testing.T) {
+	f := checkFixture(t)
+	ctx := context.Background()
+	const total = 60
+	for n := 1; n <= total; n++ {
+		supersedeAfterIntent(t, f.store, n)
+	}
+	s := restored(t, f)
+	for n := 1; n < total; n++ {
+		e, ok, err := s.CheckStatus(ctx, checkRequest(n).OperationID)
+		if err != nil || !ok || e.Phase != check.OutcomeUnknown {
+			t.Fatal("attempt forgotten or rewritten", n, ok, e.Phase, err)
+		}
+	}
+	replayed, first, err := s.ClaimConnectionCheck(ctx, checkRequest(1))
+	if err != nil || first || replayed.Phase != check.OutcomeUnknown {
+		t.Fatal("replayed first operation ID was admitted as fresh", first, replayed.Phase, err)
+	}
+	if _, _, err := s.AdvanceConnectionCheck(ctx, checkRequest(1).OperationID, check.DispatchIntent, nil); err == nil {
+		t.Fatal("replayed unknown attempt obtained a dispatch right")
+	}
+	if err := predecessorAccepts(f.root, testBinding); err != nil {
+		t.Fatal("0.5.24 would refuse to open the Store:", err)
+	}
+}
+
 // writePredecessorJournal publishes a schema-1 journal through the same disk
 // path the predecessor uses, as 0.5.24 would leave it.
 func writePredecessorJournal(t *testing.T, s *Store, entries ...check.Entry) []byte {

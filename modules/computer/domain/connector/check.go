@@ -12,8 +12,6 @@ import (
 	"strings"
 )
 
-const MaxEntries = 48
-
 type Phase string
 
 const (
@@ -93,6 +91,9 @@ type Entry struct {
 	Receipt *Receipt `json:"receipt,omitempty"`
 }
 
+// Journal is the complete operation history. It is never trimmed: an attempt,
+// above all an unknown one, is never forgotten, so a replayed operation ID is
+// always recognised and never runs again. Its size is not a reason to refuse.
 type Journal struct {
 	Entries []Entry `json:"entries"`
 }
@@ -193,7 +194,7 @@ func (e Entry) Valid() bool {
 	return false
 }
 func (j Journal) Valid() bool {
-	if j.Entries == nil || len(j.Entries) > MaxEntries {
+	if j.Entries == nil {
 		return false
 	}
 	seen := make(map[string]bool)
@@ -266,11 +267,6 @@ func (j Journal) Begin(req Request) (Journal, bool, error) {
 	out := j.Clone()
 	for i, e := range out.Entries {
 		out.Entries[i] = settle(e)
-	}
-	// The journal is bounded history, not a quota: forget the oldest settled
-	// attempts so repeated owner checks never hit a capacity refusal.
-	for len(out.Entries) >= MaxEntries {
-		out.Entries = out.Entries[1:]
 	}
 	out.Entries = append(out.Entries, Entry{Request: req, Phase: Claimed})
 	if !out.Valid() {

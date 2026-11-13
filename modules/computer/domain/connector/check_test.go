@@ -170,33 +170,48 @@ func TestPromptIsModeExactAndNeverUsesPassiveStatusForFreshCheck(t *testing.T) {
 		}
 	}
 }
-func TestRepeatedChecksForgetOldestHistoryInsteadOfRefusing(t *testing.T) {
+
+// History is never forgotten: owner clicks are low-rate, so every attempt is
+// retained and no attempt is refused or dropped because of history size.
+func TestRepeatedChecksKeepEveryAttemptAndNeverRefuse(t *testing.T) {
 	j := Journal{Entries: []Entry{}}
-	for n := 1; n <= MaxEntries; n++ {
+	const total = 200
+	for n := 1; n <= total; n++ {
 		var err error
 		j, _, err = j.Begin(testRequest(n))
 		if err != nil {
-			t.Fatal(err)
+			t.Fatal("history size refused an owner check", n, err)
 		}
-		e, _ := j.Find(testRequest(n).OperationID)
-		e.Phase = RefusedBeforeSend
-		j, err = j.Advance(e.Request.OperationID, e)
-		if err != nil {
-			t.Fatal(err)
+		if n%2 == 0 {
+			// Even attempts reach dispatch intent; the next click settles
+			// them as unknown. Odd ones stay claimed and settle as refused.
+			e, _ := j.Find(testRequest(n).OperationID)
+			s := testScope(Status)
+			e.Scope, e.Phase = &s, Prepared
+			if j, err = j.Advance(e.Request.OperationID, e); err != nil {
+				t.Fatal(err)
+			}
+			e.Phase = DispatchIntent
+			if j, err = j.Advance(e.Request.OperationID, e); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
-	if _, first, err := j.Begin(testRequest(2)); err != nil || first {
-		t.Fatal("retained UUID became fresh", err)
+	if len(j.Entries) != total || !j.Valid() {
+		t.Fatal("attempts were dropped", len(j.Entries))
 	}
-	more, first, err := j.Begin(testRequest(MaxEntries + 1))
-	if err != nil || !first || len(more.Entries) != MaxEntries || !more.Valid() {
-		t.Fatal("capacity refused a repeated owner check", err)
+	if _, first, err := j.Begin(testRequest(1)); err != nil || first {
+		t.Fatal("replayed first operation ID became fresh", err)
 	}
-	if _, ok := more.Find(testRequest(1).OperationID); ok {
-		t.Fatal("oldest settled attempt was not forgotten")
-	}
-	if _, ok := more.Find(testRequest(2).OperationID); !ok {
-		t.Fatal("more than the oldest attempt was forgotten")
+	for n := 1; n < total; n++ {
+		e, ok := j.Find(testRequest(n).OperationID)
+		want := RefusedBeforeSend
+		if n%2 == 0 {
+			want = OutcomeUnknown
+		}
+		if !ok || e.Phase != want {
+			t.Fatal("attempt forgotten or rewritten", n, e.Phase)
+		}
 	}
 }
 func TestImportKeepsPredecessorAttemptsAndRefusesADifferentAttempt(t *testing.T) {
