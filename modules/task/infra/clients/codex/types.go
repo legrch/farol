@@ -11,6 +11,7 @@ import (
 
 	"github.com/legrch/farol/modules/task/app/port"
 	"github.com/legrch/farol/modules/task/domain"
+	"github.com/legrch/farol/pkg/kernel/domain/digest"
 )
 
 // Selection is supplied by the trusted composition from the current selected
@@ -59,7 +60,7 @@ type FollowupQualification struct {
 func (q FollowupQualification) valid(s Selection) bool {
 	w := q.Witness
 	return q.Selection == s && w.Kind == FollowupSchemaKind && w.Protocol == s.Protocol &&
-		w.BaseSchemaSHA256 == s.SchemaSHA256 && digest(w.SchemaSHA256) && w.SchemaSHA256 != s.SchemaSHA256
+		w.BaseSchemaSHA256 == s.SchemaSHA256 && digest.Valid(w.SchemaSHA256) && w.SchemaSHA256 != s.SchemaSHA256
 }
 
 type Options struct {
@@ -90,23 +91,12 @@ const callBudget = 20 * time.Second
 func canonical(s string) bool {
 	return task.Text(s, 4096) && filepath.IsAbs(s) && s != string(filepath.Separator) && filepath.Clean(s) == s
 }
-func digest(s string) bool {
-	if len(s) != 64 {
-		return false
-	}
-	for _, c := range s {
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
-			return false
-		}
-	}
-	return true
-}
 func (s Selection) valid() bool {
 	return s.Binding.Valid() && s.Binding.Provider == task.Codex && providerID(s.Binding.ProjectID) &&
-		canonical(s.ExecutablePath) && digest(s.ExecutableSHA256) && canonical(s.SocketPath) &&
+		canonical(s.ExecutablePath) && digest.Valid(s.ExecutableSHA256) && canonical(s.SocketPath) &&
 		canonical(s.ExpectedCodexHome) && canonical(s.ScratchRoot) &&
 		canonical(s.Binding.Project.Path) && canonical(s.Binding.Writer.Path) && canonical(s.Binding.Project.GitCommonDirectory) &&
-		s.Protocol == "codex-app-server/v2" && digest(s.SchemaSHA256) &&
+		s.Protocol == "codex-app-server/v2" && digest.Valid(s.SchemaSHA256) &&
 		(s.Sandbox == "read-only" || s.Sandbox == "workspace-write") &&
 		(s.ApprovalPolicy == "never" || s.ApprovalPolicy == "on-request" || s.ApprovalPolicy == "on-failure" || s.ApprovalPolicy == "untrusted") &&
 		!s.GrantedAt.IsZero() && s.ExpiresAt.After(s.GrantedAt) && s.ExpiresAt.Sub(s.GrantedAt) <= 12*time.Hour &&

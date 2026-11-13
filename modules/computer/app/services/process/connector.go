@@ -6,6 +6,7 @@ import (
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/authority"
+	"github.com/legrch/farol/pkg/kernel/domain/digest"
 )
 
 // ConnectorReservationScope is immutable correlation selected by trusted root.
@@ -46,7 +47,7 @@ func validConnectorReadScope(s ConnectorReadScope) bool {
 	return identifier(s.OwnerID) && identifier(s.ComputerID) && identifier(h.ProfileID) &&
 		identifier(h.BackendGeneration) && len(h.BackendGeneration) <= 120 &&
 		identifier(h.BuildID) && len(h.BuildID) <= 120 && identifier(h.RuntimeID) && len(h.RuntimeID) <= 120 &&
-		digest(h.LaunchDigest) && h.ConnectorGeneration > 0 && s.ComputerGeneration <= 9007199254740991
+		digest.Valid(h.LaunchDigest) && h.ConnectorGeneration > 0 && s.ComputerGeneration <= 9007199254740991
 }
 
 func connectorLease(selected ConnectorReservationScope, lease Execution) (*connectorExecution, error) {

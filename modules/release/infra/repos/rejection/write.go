@@ -11,6 +11,7 @@ import (
 
 	"github.com/legrch/farol/modules/release/app/port"
 	"github.com/legrch/farol/modules/release/infra/repos/records"
+	kernel "github.com/legrch/farol/pkg/kernel/domain/failure"
 	"golang.org/x/sys/unix"
 )
 
@@ -44,7 +45,7 @@ func (r *Repository) Record(ctx context.Context, expected port.HelperIdentity) (
 			result = combine(result, failure("unknown", true, true, nil))
 		}
 		result = classify(combine(result, effective.check()), possible)
-		if uncertain(result) {
+		if kernel.Marked(result) {
 			s.retain(result)
 		}
 	}()

@@ -6,6 +6,26 @@ tasks:
     cmds:
       - node tooling/release-preflight.mjs
 
+  test:
+    desc: >-
+      Complete automatic closed-contour aggregate: every automatic test leaf exactly once.
+      Parameterized witnesses (--generation/--predecessor), dev-byte journeys, package-candidate
+      e2e variants, static coverage/lint gates and qa:* stay separate; test:fast/test:cloud are
+      subsets and never run here.
+    cmds:
+      - task: test:core
+      - task: test:tooling
+      - task: test:unit
+      - task: test:integration
+      - task: vm:test
+      - task: test:witness-inputs
+      - task: test:e2e
+      - task: test:e2e:guided-setup
+      - task: test:e2e:setup-config-error
+      - task: test:e2e:chatgpt-startup-readiness
+      - task: test:persistence-fault
+      - task: test:soak
+
   test:affected:
     desc: Explain deterministic affected selection; PLAN_ONLY, never executes tests
     cmds:
@@ -30,6 +50,7 @@ tasks:
       - task: test:core
       - task: test:e2e:chatgpt-startup-readiness
       - task: test:tooling
+      - task: vm:test
       - task: test:witness-inputs
       - task: output:check
       - task: scan:secrets
@@ -41,6 +62,7 @@ tasks:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run ci:cloud
       - task: test:core
       - task: test:tooling
+      - task: vm:test
       - task: scan:secrets
 
   test:cloud:
@@ -80,6 +102,54 @@ tasks:
     desc: Unit/component plus four explicit browser-free integration files
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/test-scopes.mjs --scope=fast {{.CLI_ARGS}}
+
+  vm:plan:
+    desc: Print the versioned VM spec and terminal-mac provisioning commands without execution
+    cmds:
+      - node tooling/vm-entry.mjs machine --plan {{.CLI_ARGS}}
+
+  vm:setup:
+    desc: Create from the versioned VM spec with an explicit Apple IPSW, or start the matching existing guest
+    cmds:
+      - node tooling/vm-entry.mjs machine {{.CLI_ARGS}}
+
+  vm:dev:
+    desc: Assemble accepted local Dev bytes, clone a prepared base, run the native MCP stdio session (hidden by default), then stop and remove the clone and build output unless an outcome is unknown
+    # Task's own command echo must not contaminate the inherited JSON-RPC stdout.
+    silent: true
+    cmds:
+      - node tooling/vm-entry.mjs dev {{.CLI_ARGS}}
+
+  # qa:* journeys use the real Dev services, accounts, tunnel and human visual
+  # judgment. They are QA observations, not tests, and never join `task test`
+  # or any CI gate; `vm:test` (offline, closed) remains the VM test lane.
+  qa:smoke:
+    desc: Bounded exact-release UI smoke in the dedicated guest; visual review stays NEEDS_REVIEW by design (hidden by default; --visible to observe)
+    cmds:
+      - node tooling/vm-entry.mjs smoke {{.CLI_ARGS}}
+
+  qa:release-dev:
+    desc: BLOCKED (legacy Terminal bootstrap refuses TERMINAL_SHELL_READINESS_UNPROVEN) - Quit only the approved guest app before using host Dev; preserve VM/profile and never launch host production
+    cmds:
+      - node tooling/vm-entry.mjs smoke --release-dev {{.CLI_ARGS}}
+
+  qa:status:
+    desc: BLOCKED (legacy Terminal bootstrap refuses TERMINAL_SHELL_READINESS_UNPROVEN) - Capture guest connection identity and approved Dev binding; refuses unresolved operations
+    cmds:
+      - node tooling/vm-entry.mjs smoke --connection-proof {{.CLI_ARGS}}
+
+  qa:connect-dev:
+    desc: BLOCKED - refuses with DEV_IMPORT_UNQUALIFIED before any VM, staging or key access; no guest Dev credential import is qualified
+    cmds:
+      - node tooling/vm-entry.mjs smoke --connect-dev {{.CLI_ARGS}}
+
+  vm:test:
+    desc: Check VM smoke isolation, archive admission and bounded failure handling without a real VM
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- /usr/bin/python3 -B -m unittest discover -s tooling/vm-smoke -p 'test_*.py'
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- /usr/bin/python3 -B -m unittest discover -s tooling -p 'test_vm_machine.py'
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node --test tooling/vm-smoke/vm-dev-controller.test.mjs tooling/vm-smoke/dev-artifact.test.mjs tooling/vm-smoke/inspect.test.mjs tooling/vm-smoke/import-dev.test.mjs tooling/vm-smoke/import-dev-final-publish.regression.mjs tooling/vm-smoke/entry.test.mjs tooling/vm-smoke/quit-proof.test.mjs tooling/vm-smoke/no-tunnel.test.mjs tooling/vm-e2e/driver.test.mjs tooling/vm-e2e/egress-probe.test.mjs tooling/vm-e2e/fixture-probe.test.mjs
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node --experimental-vm-modules --test tooling/vm-e2e/driver-entries.synthetic.test.mjs tooling/vm-e2e/result-contract.test.mjs
 
   dev:
     # The owner's one development command: pick the declared toolchain, make

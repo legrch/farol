@@ -9074,11 +9074,6 @@
     },
     {
       "code": "GO_TEST_MISSING",
-      "file": "modules/release/app/port/helperrecovery.go",
-      "detail": "Behavior without helperrecovery_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
       "file": "modules/release/app/services/execution/apply.go",
       "detail": "Behavior without apply_test.go"
     },

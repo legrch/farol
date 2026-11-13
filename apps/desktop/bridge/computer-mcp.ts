@@ -952,7 +952,17 @@ export function createGoComputerMcpServer(
           target: operationTarget({}), // Discovery spans the catalogue rather than one workspace target.
         },
         ctx.mcpReq.signal,
-        (call) => bridge.catalogue(identity(call), call),
+        // Go's ordinary catalogue execution lease is 15s, including repeated
+        // current-authority and native-root checks. The socket's 2s default
+        // would terminate the entire connector before that admitted lease can
+        // finish. Reserve 3s for transport/response delivery, still below the
+        // socket's 30s cap. An earlier outer MCP abort still wins. Other tools
+        // keep their original limits; no Go lease or request is renewed/replayed.
+        (call) =>
+          bridge.catalogue(identity(call), {
+            ...call,
+            timeoutMs: 18_000,
+          }),
       ),
   );
   server.registerTool(

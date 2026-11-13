@@ -1,6 +1,10 @@
 package modelpolicy
 
-import "strings"
+import (
+	"strings"
+
+	kerneldigest "github.com/legrch/farol/pkg/kernel/domain/digest"
+)
 
 // PolicyIdentity describes the complete configured policy, including harnesses
 // unsupported by this build. A valid identity grants no execution authority.
@@ -36,7 +40,7 @@ func (s *Service) Identity(configJSON []byte) PolicyIdentity {
 		return PolicyIdentity{Status: Unavailable}
 	}
 	digest, err := s.digester.Digest(canonical)
-	if err != nil || !validDigest(digest) {
+	if err != nil || !kerneldigest.Valid(digest) {
 		return PolicyIdentity{Status: Unavailable}
 	}
 	return PolicyIdentity{Status: Ready, ConfigSHA256: strings.Clone(digest)}

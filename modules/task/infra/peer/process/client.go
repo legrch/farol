@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"sync"
@@ -15,6 +14,7 @@ import (
 	computer "github.com/legrch/farol/modules/computer/contracts/process"
 	"github.com/legrch/farol/modules/task/app/port"
 	"github.com/legrch/farol/modules/task/domain"
+	"github.com/legrch/farol/pkg/kernel/domain/digest"
 )
 
 type Selection struct{ OperationID, RuntimeID, SessionID, ModelID, AdmissionID string }
@@ -76,21 +76,6 @@ func code(s string) bool {
 	}
 	return true
 }
-func digest(s string) bool {
-	if len(s) != 64 {
-		return false
-	}
-	_, err := hex.DecodeString(s)
-	if err != nil {
-		return false
-	}
-	for _, r := range s {
-		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
-			return false
-		}
-	}
-	return true
-}
 func (c *Client) Prepare(ctx context.Context, q port.ClaudeInvocation) (port.ClaudePreparation, error) {
 	if c == nil {
 		return port.ClaudePreparation{}, task.ErrUnavailable
@@ -136,7 +121,7 @@ func (c *Client) Prepare(ctx context.Context, q port.ClaudeInvocation) (port.Cla
 	})
 	if err != nil {
 		c.prepareError = failure(err)
-	} else if r == nil || r.OperationID != s.OperationID || r.RuntimeID != s.RuntimeID || r.SessionID != s.SessionID || r.ModelID != s.ModelID || r.AdmissionID != s.AdmissionID || !digest(r.Digest) {
+	} else if r == nil || r.OperationID != s.OperationID || r.RuntimeID != s.RuntimeID || r.SessionID != s.SessionID || r.ModelID != s.ModelID || r.AdmissionID != s.AdmissionID || !digest.Valid(r.Digest) {
 		c.prepareError = unknown()
 	} else {
 		c.prepared = port.ClaudePreparation{OperationID: r.OperationID, RuntimeID: r.RuntimeID, SessionID: r.SessionID, ModelID: r.ModelID, AdmissionID: r.AdmissionID, Digest: r.Digest}

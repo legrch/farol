@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/legrch/farol/pkg/kernel/domain/digest"
 )
 
 type Phase string
@@ -40,7 +42,6 @@ var (
 	ErrSendUnrecorded = errors.New("COMPUTER_CONNECTION_CHECK_SEND_UNRECORDED")
 )
 var uuid = regexp.MustCompile("^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
-var digest = regexp.MustCompile("^[0-9a-f]{64}$")
 var identity = regexp.MustCompile("^[A-Za-z0-9._:/-]{1,120}$")
 
 // Request is captured BEFORE mode/scope resolution. Its fingerprint covers the
@@ -101,29 +102,29 @@ type Journal struct {
 }
 
 func ValidRequest(r Request) bool {
-	return uuid.MatchString(r.OperationID) && digest.MatchString(r.Fingerprint) &&
+	return uuid.MatchString(r.OperationID) && digest.Valid(r.Fingerprint) &&
 		identity.MatchString(r.ProfileID) && identity.MatchString(r.OwnerID) &&
 		identity.MatchString(r.ComputerID)
 }
 func ValidScope(s Scope) bool {
 	if (s.Mode != Bootstrap && s.Mode != Status) ||
-		!digest.MatchString(s.ScopeDigest) || !digest.MatchString(s.BuildID) ||
+		!digest.Valid(s.ScopeDigest) || !digest.Valid(s.BuildID) ||
 		!identity.MatchString(s.BackendGeneration) || !identity.MatchString(s.RuntimeID) ||
 		!identity.MatchString(s.ConnectorGeneration) || !identity.MatchString(s.ComputerGeneration) ||
 		!identity.MatchString(s.TunnelID) || s.AppName == "" ||
 		len(s.AppName) > 120 || strings.ContainsAny(s.AppName, "\n\r\t") ||
 		s.Model != "temporary-instant" ||
-		!digest.MatchString(s.ChallengeDigest) || !digest.MatchString(s.PromptDigest) {
+		!digest.Valid(s.ChallengeDigest) || !digest.Valid(s.PromptDigest) {
 		return false
 	}
-	if s.DocumentDigest != "" && !digest.MatchString(s.DocumentDigest) {
+	if s.DocumentDigest != "" && !digest.Valid(s.DocumentDigest) {
 		return false
 	}
 	if s.WorkspaceID != "" && !identity.MatchString(s.WorkspaceID) {
 		return false
 	}
 	if s.Mode == Status {
-		return uuid.MatchString(s.CheckID) && digest.MatchString(s.AttachmentDigest) && s.Challenge == ""
+		return uuid.MatchString(s.CheckID) && digest.Valid(s.AttachmentDigest) && s.Challenge == ""
 	}
 	if s.CheckID != "" || s.AttachmentDigest != "" ||
 		len(s.Challenge) == 0 || len(s.Challenge) > 160 {
@@ -180,7 +181,7 @@ func (e Entry) Valid() bool {
 		return false
 	}
 	if e.Receipt != nil {
-		if !digest.MatchString(e.Receipt.Digest) || (e.Receipt.Kind != "bootstrap" && e.Receipt.Kind != "status") ||
+		if !digest.Valid(e.Receipt.Digest) || (e.Receipt.Kind != "bootstrap" && e.Receipt.Kind != "status") ||
 			(e.Scope == nil || e.Scope.CheckID != e.Receipt.CheckID) {
 			return false
 		}

@@ -4,11 +4,11 @@ import (
 	"context"
 	"math"
 	"reflect"
-	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	kerneldigest "github.com/legrch/farol/pkg/kernel/domain/digest"
 )
 
 type Code string
@@ -94,9 +94,6 @@ func validID(s string) bool {
 	}
 	return true
 }
-func validDigest(s string) bool {
-	return len(s) == 64 && strings.IndexFunc(s, func(c rune) bool { return !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) }) == -1
-}
 func validCode(s string) bool {
 	if len(s) > 120 {
 		return false
@@ -149,7 +146,7 @@ func (a *Adapter) Prepare(r port.PrepareRequest) (*port.PrepareResponse, error) 
 	return &port.PrepareResponse{Saved: reply.Saved, Readiness: port.Readiness(reply.Readiness), Binding: b, Code: reply.Code}, nil
 }
 func (a *Adapter) VerifySend(r port.VerifySendRequest) (*port.SendVerification, error) {
-	if !a.validBinding(r.Binding) || !r.Requested.Valid() || !r.Required.Valid(r.Requested) || !validDigest(r.IntentDigest) || !validPrevious(r.PreviousUserTurnID, r.PreviousReplyID) {
+	if !a.validBinding(r.Binding) || !r.Requested.Valid() || !r.Required.Valid(r.Requested) || !kerneldigest.Valid(r.IntentDigest) || !validPrevious(r.PreviousUserTurnID, r.PreviousReplyID) {
 		return nil, Invalid
 	}
 	raw, err := a.call(VerifySendCommand{Required: requiredFromPort(r.Required), Binding: bindingFromPort(r.Binding), Requested: selectionFromPort(r.Requested), PreviousUserTurnID: r.PreviousUserTurnID, PreviousReplyID: r.PreviousReplyID, IntentDigest: r.IntentDigest, DeadlineMillis: r.DeadlineMillis}, r.DeadlineMillis)
@@ -169,7 +166,7 @@ func (a *Adapter) VerifySend(r port.VerifySendRequest) (*port.SendVerification, 
 func (a *Adapter) Send(r port.SendRequest) (*port.SendResponse, error) {
 	v := r.Verification
 	expected := port.VerifySendRequest{Binding: r.Binding, Requested: v.Pinned, Required: v.Required, PreviousUserTurnID: v.PreviousUserTurnID, PreviousReplyID: v.PreviousReplyID, IntentDigest: r.IntentDigest}
-	if !a.validBinding(r.Binding) || !validDigest(r.IntentDigest) || len(r.Prompt) < 1 || len(r.Prompt) > MaxPromptBytes || !utf8.ValidString(r.Prompt) || !validPrevious(v.PreviousUserTurnID, v.PreviousReplyID) || !port.ValidVerification(expected, &v) || v.Observed.ObservedAtMillis > a.clock.NowMillis() {
+	if !a.validBinding(r.Binding) || !kerneldigest.Valid(r.IntentDigest) || len(r.Prompt) < 1 || len(r.Prompt) > MaxPromptBytes || !utf8.ValidString(r.Prompt) || !validPrevious(v.PreviousUserTurnID, v.PreviousReplyID) || !port.ValidVerification(expected, &v) || v.Observed.ObservedAtMillis > a.clock.NowMillis() {
 		return nil, Invalid
 	}
 	raw, err := a.call(SendCommand{Binding: bindingFromPort(r.Binding), Verification: verificationFromPort(v), IntentDigest: r.IntentDigest, Prompt: r.Prompt, DeadlineMillis: r.DeadlineMillis}, r.DeadlineMillis)
