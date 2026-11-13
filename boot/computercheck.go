@@ -32,6 +32,8 @@ func connectionCheckOutcome(value any, err error) (*desktop.Outcome, error) {
 	switch {
 	case errors.Is(err, check.ErrRefused):
 		return &desktop.Outcome{Status: "refused", Code: "computer_connection_check_refused"}, nil
+	case errors.Is(err, check.ErrSendUnrecorded):
+		return &desktop.Outcome{Status: "unknown", Code: "computer_connection_check_send_unrecorded"}, nil
 	case errors.Is(err, check.ErrUnknown):
 		return &desktop.Outcome{Status: "unknown", Code: "computer_connection_check_unknown"}, nil
 	default:

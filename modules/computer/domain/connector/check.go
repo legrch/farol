@@ -34,6 +34,10 @@ const (
 var (
 	ErrRefused = errors.New("COMPUTER_CONNECTION_CHECK_REFUSED")
 	ErrUnknown = errors.New("COMPUTER_CONNECTION_CHECK_OUTCOME_UNKNOWN")
+	// ErrSendUnrecorded classifies an unknown outcome: the Send is durably
+	// recorded, but the connector slot could not open the window in which an
+	// argument-free status call acknowledges it. It is returned with ErrUnknown.
+	ErrSendUnrecorded = errors.New("COMPUTER_CONNECTION_CHECK_SEND_UNRECORDED")
 )
 var uuid = regexp.MustCompile("^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 var digest = regexp.MustCompile("^[0-9a-f]{64}$")

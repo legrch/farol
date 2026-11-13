@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -395,5 +396,81 @@ func TestArgumentFreeStatusCallCountsOnlyAfterThisChecksSend(t *testing.T) {
 	}
 	if prior, _, _ := store.CheckStatus(ctx, earlier); prior.Phase != check.OutcomeUnknown {
 		t.Fatal("superseded attempt changed", prior.Phase)
+	}
+}
+
+// A durably recorded Send whose acknowledgement window cannot be opened in
+// the connector slot (here: the slot is closing) ends the check unknown at
+// once, with a classified reason, instead of silently timing out later.
+func TestUnrecordedStatusSendEndsTheCheckUnknownWithAReason(t *testing.T) {
+	previousBuildID := BuildID
+	BuildID = strings.Repeat("b", 64)
+	defer func() { BuildID = previousBuildID }()
+	s, journal, _, opened := verificationOpen(t)
+	t.Cleanup(func() {
+		if err := s.Shutdown(); err != nil {
+			t.Error(err)
+		}
+	})
+	ctx := context.Background()
+	out, err := verificationInvoke(t, s.verificationMethod(s.current), wire.ComputerConnectorVerify{
+		Challenge: "visible-challenge", WorkspaceId: "work", CallId: "existing-attachment",
+	})
+	_ = verificationState(t, out, err)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(base, "farol-state", "go-core", "computer")
+	if err = os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := accessrepo.Create(root, accessrepo.Binding{ProfileID: "profile", OwnerID: "owner", ComputerID: "computer"}, journal.clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	owner := connectorsvc.NewConnectionCheckOwner(store, s, connectorsvc.ConnectionCheckScope{ProfileID: "profile", OwnerID: "owner", ComputerID: "computer"})
+	current, err := s.CurrentConnectionCheck(ctx)
+	if err != nil || !current.ProofCurrent {
+		t.Fatal("existing proof", err)
+	}
+	id := "0311add3-b03c-4f89-b916-aea6a0a39242"
+	if _, first, err := owner.Claim(ctx, id, strings.Repeat("a", 64)); err != nil || !first {
+		t.Fatal("claim", first, err)
+	}
+	if _, _, err = owner.Prepare(ctx, id, connectorsvc.ConnectionCheckSelection{
+		Mode: check.Status, AppName: "Farol", Model: "temporary-instant", TunnelID: "tunnel",
+		WorkspaceID: "work", ChallengeDigest: current.ChallengeDigest,
+		ComputerGeneration: current.ComputerGeneration, DocumentDigest: strings.Repeat("d", 64),
+	}); err != nil {
+		t.Fatal("prepare", err)
+	}
+	if _, err = owner.Arm(ctx, id); err != nil {
+		t.Fatal("arm", err)
+	}
+	s.current.closing = true
+	_, err = owner.RetainSend(ctx, id, true)
+	s.current.closing = false
+	if !errors.Is(err, check.ErrUnknown) || !errors.Is(err, check.ErrSendUnrecorded) {
+		t.Fatal("an unrecorded Send was swallowed or not classified", err)
+	}
+	if outcome, _ := connectionCheckOutcome(nil, err); outcome == nil || outcome.Status != "unknown" ||
+		outcome.Code != "computer_connection_check_send_unrecorded" {
+		t.Fatal("the reason is not visible in the check outcome", outcome)
+	}
+	if e, ok, err := store.CheckStatus(ctx, id); err != nil || !ok || e.Phase != check.OutcomeUnknown {
+		t.Fatal("the journal does not show the check ended unknown", e.Phase, err)
+	}
+	out, err = verificationInvoke(t, s.verificationObservationMethodFor(s.current), wire.ComputerConnectorVerificationQuery{Binding: opened.Endpoint.Binding})
+	if state := verificationState(t, out, err); state.CheckId != nil {
+		t.Fatal("an argument-free call acknowledged a check whose Send was not recorded")
+	}
+	if _, err = owner.Confirm(ctx, id); err == nil {
+		t.Fatal("an unknown check was confirmed")
 	}
 }
