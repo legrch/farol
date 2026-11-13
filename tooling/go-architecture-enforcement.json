@@ -5650,21 +5650,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/process/anchor.go",
-      "detail": "File name outside the admitted vocabulary: anchor"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/process/anchordarwin.go",
-      "detail": "File name outside the admitted vocabulary: anchordarwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/process/anchorother.go",
-      "detail": "File name outside the admitted vocabulary: anchorother"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/computer/infra/process/auditscalar.go",
       "detail": "File name outside the admitted vocabulary: auditscalar"
     },
@@ -5702,21 +5687,6 @@
       "code": "GO_FILE_WORD",
       "file": "modules/computer/infra/process/gitruntimedarwin.go",
       "detail": "File name outside the admitted vocabulary: gitruntimedarwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/process/heldguest.go",
-      "detail": "File name outside the admitted vocabulary: heldguest"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/process/heldguestdarwin.go",
-      "detail": "File name outside the admitted vocabulary: heldguestdarwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/process/heldguestother.go",
-      "detail": "File name outside the admitted vocabulary: heldguestother"
     },
     {
       "code": "GO_FILE_WORD",
@@ -5765,16 +5735,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/process/parentdarwin.go",
-      "detail": "File name outside the admitted vocabulary: parentdarwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/process/parentother.go",
-      "detail": "File name outside the admitted vocabulary: parentother"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/computer/infra/process/platformnamespaces.go",
       "detail": "File name outside the admitted vocabulary: platformnamespaces"
     },
@@ -5810,16 +5770,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/process/probedarwin.go",
-      "detail": "File name outside the admitted vocabulary: probedarwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/process/probeother.go",
-      "detail": "File name outside the admitted vocabulary: probeother"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/computer/infra/process/pythonruntime.go",
       "detail": "File name outside the admitted vocabulary: pythonruntime"
     },
@@ -5827,11 +5777,6 @@
       "code": "GO_FILE_WORD",
       "file": "modules/computer/infra/process/pythonruntimeother.go",
       "detail": "File name outside the admitted vocabulary: pythonruntimeother"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/process/qualification.go",
-      "detail": "File name outside the admitted vocabulary: qualification"
     },
     {
       "code": "GO_FILE_WORD",
@@ -6860,21 +6805,6 @@
     },
     {
       "code": "GO_INFRA_SERVICE",
-      "file": "modules/computer/infra/process/anchor.go",
-      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
-    },
-    {
-      "code": "GO_INFRA_SERVICE",
-      "file": "modules/computer/infra/process/anchordarwin.go",
-      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
-    },
-    {
-      "code": "GO_INFRA_SERVICE",
-      "file": "modules/computer/infra/process/anchorother.go",
-      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
-    },
-    {
-      "code": "GO_INFRA_SERVICE",
       "file": "modules/computer/infra/process/cancel.go",
       "detail": "github.com/legrch/farol/modules/computer/app/services/process"
     },
@@ -6900,21 +6830,6 @@
     },
     {
       "code": "GO_INFRA_SERVICE",
-      "file": "modules/computer/infra/process/heldguest.go",
-      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
-    },
-    {
-      "code": "GO_INFRA_SERVICE",
-      "file": "modules/computer/infra/process/heldguestdarwin.go",
-      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
-    },
-    {
-      "code": "GO_INFRA_SERVICE",
-      "file": "modules/computer/infra/process/heldguestother.go",
-      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
-    },
-    {
-      "code": "GO_INFRA_SERVICE",
       "file": "modules/computer/infra/process/measuredarwin.go",
       "detail": "github.com/legrch/farol/modules/computer/app/services/process"
     },
@@ -6936,21 +6851,6 @@
     {
       "code": "GO_INFRA_SERVICE",
       "file": "modules/computer/infra/process/observe.go",
-      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
-    },
-    {
-      "code": "GO_INFRA_SERVICE",
-      "file": "modules/computer/infra/process/parent.go",
-      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
-    },
-    {
-      "code": "GO_INFRA_SERVICE",
-      "file": "modules/computer/infra/process/parentdarwin.go",
-      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
-    },
-    {
-      "code": "GO_INFRA_SERVICE",
-      "file": "modules/computer/infra/process/parentother.go",
       "detail": "github.com/legrch/farol/modules/computer/app/services/process"
     },
     {
@@ -6985,22 +6885,12 @@
     },
     {
       "code": "GO_INFRA_SERVICE",
-      "file": "modules/computer/infra/process/probeother.go",
-      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
-    },
-    {
-      "code": "GO_INFRA_SERVICE",
       "file": "modules/computer/infra/process/process.go",
       "detail": "github.com/legrch/farol/modules/computer/app/services/process"
     },
     {
       "code": "GO_INFRA_SERVICE",
       "file": "modules/computer/infra/process/pythonruntimeother.go",
-      "detail": "github.com/legrch/farol/modules/computer/app/services/process"
-    },
-    {
-      "code": "GO_INFRA_SERVICE",
-      "file": "modules/computer/infra/process/qualification.go",
       "detail": "github.com/legrch/farol/modules/computer/app/services/process"
     },
     {
@@ -8770,16 +8660,6 @@
     },
     {
       "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/process/anchordarwin.go",
-      "detail": "Behavior without anchordarwin_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/process/anchorother.go",
-      "detail": "Behavior without anchorother_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
       "file": "modules/computer/infra/process/cancel.go",
       "detail": "Behavior without cancel_test.go"
     },
@@ -8792,16 +8672,6 @@
       "code": "GO_TEST_MISSING",
       "file": "modules/computer/infra/process/gitruntimedarwin.go",
       "detail": "Behavior without gitruntimedarwin_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/process/heldguestdarwin.go",
-      "detail": "Behavior without heldguestdarwin_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/process/heldguestother.go",
-      "detail": "Behavior without heldguestother_test.go"
     },
     {
       "code": "GO_TEST_MISSING",
@@ -8830,16 +8700,6 @@
     },
     {
       "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/process/parentdarwin.go",
-      "detail": "Behavior without parentdarwin_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/process/parentother.go",
-      "detail": "Behavior without parentother_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
       "file": "modules/computer/infra/process/platformpathdarwin.go",
       "detail": "Behavior without platformpathdarwin_test.go"
     },
@@ -8852,11 +8712,6 @@
       "code": "GO_TEST_MISSING",
       "file": "modules/computer/infra/process/platformqualificationother.go",
       "detail": "Behavior without platformqualificationother_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/process/probeother.go",
-      "detail": "Behavior without probeother_test.go"
     },
     {
       "code": "GO_TEST_MISSING",
@@ -9872,11 +9727,6 @@
       "code": "GO_TEST_ORPHAN",
       "file": "modules/computer/infra/process/observenative_test.go",
       "detail": "No observenative.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/computer/infra/process/parentmeasurement_test.go",
-      "detail": "No parentmeasurement.go beside this test"
     },
     {
       "code": "GO_TEST_ORPHAN",
