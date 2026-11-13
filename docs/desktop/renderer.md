@@ -51,7 +51,7 @@ remain Lead-owned.
 
 The production build entry is `src/ui/renderer/entry.tsx`, with one React root,
 one controller and exclusive ownership of its descendants. The old `shell.ts`
-entry and old HTML/CSS are not loaded by this build. The shared geometry in
+entry and its HTML/CSS were removed from the source tree. The shared geometry in
 `src/pkg/shell-layout/geometry.ts` supplies a 58px toolbar, a 62px desktop icon
 rail and a 232px default contextual sidebar (resizable from 152px to 288px).
 At widths of 850px or less, the rail is 58px and the contextual sidebar uses
@@ -175,10 +175,9 @@ That legacy harness still requires build schema 3; it was not used to qualify
 the current Go schema-4 build. The current Setup harness above owns the new
 normal/compact geometry witness.
 
-Do not count inactive legacy presentation source assertions as React coverage.
-`tests/renderer` is the replacement coverage scope. Old presentation source/tests
-remain pending their explicit consumer inventory and native replacement gates;
-policy helpers remain applicable. Existing `preview.e2e.mjs` and
+`tests/renderer` is the renderer coverage scope; the removed legacy shell and its
+source assertions never counted as React coverage. Pure policy helpers remain
+applicable. Existing `preview.e2e.mjs` and
 `guided-setup-selection.e2e.mjs` target retired selectors and are not qualified
 for the new shell. `dev-onboarding-startup.e2e.mjs` has been ported to the
 current React Setup with the bounded evidence described above.
@@ -187,17 +186,19 @@ witnesses. Source acceptance does not mark this migration product done.
 
 ## Legacy consumer inventory and pending exits
 
-| Inactive presentation consumer                                                                     | Replacement                                                                                            | Remaining deletion witness                                                                                 |
-| -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
-| `src/ui/shell.ts`, `shell.html`, `shell.css`                                                       | One `renderer/entry.tsx` build and renderer-only assets                                                | No old entry in input ledger; full CI and packaged new-profile/configured-profile setup flow               |
-| `guided-onboarding-view.ts` modal/required IDs                                                     | Separate React Setup sharing mounted Settings forms and readiness evidence                             | Native real folder selection and external first-run/recheck failure paths                                  |
-| `installed-update-view.ts` DOM writers                                                             | Passive React update sheet with distinct backend commands                                              | Exact package check/apply/recover/rollback eligibility and retained unknown outcome                        |
-| `agent-draft-contract`, `task-menu-note-contract`, `watch-rail-product-contract` source assertions | `tests/renderer/{controller,shell,settings}.test.*` and existing pure policy tests                     | Task note/result UI inventory and native acknowledgement correlation before deleting historical assertions |
-| `preview.e2e.mjs`, `guided-setup-selection.e2e.mjs`, `setup-config-error.e2e.mjs` old selectors    | `react-shell.e2e.mjs` and current-React `dev-onboarding-startup.e2e.mjs` cover distinct native subsets | Port remaining operational cases; hidden fixture coverage is not external or installed acceptance          |
+The legacy shell (`src/ui/shell.ts`, `shell.html`, `shell.css`) and the
+presentation helpers only it imported (guided onboarding view and actions,
+installed-update view, task menu, activity log, model/computer presentation,
+setup journey and media, host layout, window chrome geometry, input draft,
+diagnostic throttle, context-task presentation) were never part of the
+production build and have been deleted together with the tests that exercised
+only them. Pure draft, setup, permission, reverification and exact edit-delivery
+policies that the React renderer shares remain.
 
-These inactive files are not imported by the production renderer. Their tests
-remain tracked and do not substantiate the new UI. Pure draft, setup, permission,
-reverification and exact edit-delivery policies remain shared and applicable.
+| Retired consumer                                                                                | Replacement                                                                                            | Remaining witness                                                                                 |
+| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `preview.e2e.mjs`, `guided-setup-selection.e2e.mjs`, `setup-config-error.e2e.mjs` old selectors | `react-shell.e2e.mjs` and current-React `dev-onboarding-startup.e2e.mjs` cover distinct native subsets | Port remaining operational cases; hidden fixture coverage is not external or installed acceptance |
+
 D5 is pending, not complete. The original K0 foundation alone did not qualify a
 feature operation adapter. Later Settings delivery and controlled Chat milestones
 are recorded in [Desktop Core](../desktop-core.md); they do not close every R09,

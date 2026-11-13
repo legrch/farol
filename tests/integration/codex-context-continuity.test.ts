@@ -24,7 +24,6 @@ import {
 } from "../../src/modules/chat/infra/client/host-compaction-codec";
 import { PrivateContextStore } from "../../src/modules/chat/infra/repo/private-context-store";
 import { toProductTaskContext } from "../../src/apps/desktop/context-task-state";
-import { contextTaskPresentation } from "../../src/ui/context-task-presentation";
 
 const checkpointContent: CheckpointContent = {
   goal: "Finish the exact Farol task.",
@@ -991,11 +990,9 @@ describe("Codex host context continuity composition", () => {
       expect(blocked.operation?.checkpointId).toBe(
         replayed.value.checkpoint.checkpointId,
       );
-      expect(contextTaskPresentation(toProductTaskContext(blocked))).toEqual({
-        tone: "waiting",
-        label: "Return to the previous conversation",
-        attention: true,
-        locked: true,
+      expect(toProductTaskContext(blocked)).toMatchObject({
+        phase: "blocked",
+        code: "SOURCE_RETIREMENT_SUPERSEDED",
       });
     }
     await expect(

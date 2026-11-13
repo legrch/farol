@@ -108,8 +108,7 @@ describe("shell action provenance", () => {
 
   // main.ts exports nothing and no test loads it, so which source each
   // publisher stamps is checked at the source, the technique
-  // watch-rail-product-contract.test.mjs and ipc-registration-contract
-  // already use for this file.
+  // ipc-registration-contract already uses for this file.
   it("S35-TA-16 every publisher stamps its true source", async () => {
     const source = await readFile(mainSource, "utf8");
     const calls = [...source.matchAll(/publishShellAction\(\s*([^;]*?)\)/gsu)]

@@ -181,7 +181,7 @@ export function setupStepStale(
 // What the owner reads for a route, in the same order `routeReadiness`
 // decides it.
 //
-// These two used to live in shell.ts and answered a different question from
+// These two used to live in the retired shell and answered a different question from
 // the state beside them. Both began `if (readiness.verified) return
 // "Verified"`, so a route carrying an earlier proof read "Verified" while
 // its own state was `outcome-unknown` — the one thing this product must
