@@ -107,11 +107,30 @@ func (s *Service) guarded(ctx context.Context, inspect func() error) error {
 // A late commit, lost reply, error or failed readback leaves liveness unavailable;
 // there is no activation-from-status, replay or persisted positive restore API.
 func (s *Service) Publish(ctx context.Context) error {
+	return s.publish(ctx, false)
+}
+
+// Resume replaces Publish for an owner whose launch reuses the participant an
+// earlier owner of the same backend lifetime and connector generation published
+// and released. It is attempted ONCE with the same gates as Publish, but writes
+// nothing: the journal must read back that exact live participant. A revoked,
+// missing or differently sealed participant leaves this owner unavailable.
+func (s *Service) Resume(ctx context.Context) error {
+	return s.publish(ctx, true)
+}
+
+func (s *Service) publish(ctx context.Context, resume bool) error {
 	if s == nil {
 		return failure()
 	}
+	resumer, resumable := s.journal.(port.ConnectorResumer)
 	s.gate.Lock()
 	if s.phase != pending {
+		s.gate.Unlock()
+		return failure()
+	}
+	if resume && !resumable {
+		s.phase = unavailable
 		s.gate.Unlock()
 		return failure()
 	}
@@ -127,13 +146,22 @@ func (s *Service) Publish(ctx context.Context) error {
 	s.phase = publishing
 	input := cloneLaunch(s.launch)
 	s.gate.Unlock()
-	result, err := s.journal.PublishConnector(ctx, input)
+	var result port.ConnectorPublication
+	var err error
+	if resume {
+		result, err = resumer.ResumeConnector(ctx, input)
+	} else {
+		result, err = s.journal.PublishConnector(ctx, input)
+	}
 	s.gate.Lock()
 	defer s.gate.Unlock()
 	if s.phase != publishing {
 		return failure()
 	}
-	if err != nil || ctx.Err() != nil || !result.OriginalPublished || result.Revision == 0 || !authority.SameParticipantCeiling(result.Participant, s.ceiling.Participant) || !result.Participant.Grant.ExpiresAt.Equal(s.ceiling.Participant.Grant.ExpiresAt) || !authority.SameApprovalPolicy(result.Approval, s.ceiling.Approval) {
+	// A resumed participant keeps its original admission expiry; time is not
+	// part of the seal and execution reissues it from current approval.
+	known := resume && !result.OriginalPublished || !resume && result.OriginalPublished && result.Participant.Grant.ExpiresAt.Equal(s.ceiling.Participant.Grant.ExpiresAt)
+	if err != nil || ctx.Err() != nil || !known || result.Revision == 0 || !authority.SameParticipantCeiling(result.Participant, s.ceiling.Participant) || !authority.SameApprovalPolicy(result.Approval, s.ceiling.Approval) {
 		s.phase = unavailable
 		if err != nil {
 			return classify(err)
@@ -143,8 +171,9 @@ func (s *Service) Publish(ctx context.Context) error {
 	if err = s.guarded(ctx, func() error { s.phase = active; return nil }); err != nil {
 		return err
 	}
-	// Retain only the known original publication acknowledgement. A later
-	// negative currentness check cannot erase it or reactivate this owner.
+	// Retain only the known original publication (or resume readback)
+	// acknowledgement. A later negative currentness check cannot erase it or
+	// reactivate this owner.
 	s.publicationConfirmed = true
 	return nil
 }
@@ -245,6 +274,23 @@ func (s *Service) WithdrawOriginalStop(ctx context.Context, parentID string) err
 	s.gate.Lock()
 	s.withdrawalConfirmed = s.publicationConfirmed && ctx.Err() == nil
 	s.gate.Unlock()
+	return nil
+}
+
+// Release ends this owner's liveness FIRST and keeps its known participant
+// live in the journal for a later owner of the same connector generation, which
+// must Resume it through its own host guard. It writes nothing. Without a known
+// publication or resume readback it refuses, and the caller must Withdraw.
+func (s *Service) Release(ctx context.Context) error {
+	if s == nil || ctx == nil {
+		return failure()
+	}
+	s.gate.Lock()
+	defer s.gate.Unlock()
+	if s.phase == withdrawn || !s.publicationConfirmed || ctx.Err() != nil {
+		return failure()
+	}
+	s.phase = withdrawn
 	return nil
 }
 

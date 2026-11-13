@@ -61,9 +61,17 @@ export type BrowserPumpFailure = Readonly<{
 // One-shot physical dispatch for one already handshaken child. Go owns leases,
 // queueing and durable intent. Failure latches this pump; it never reconnects,
 // reissues a command or manufactures a browser result after an unknown effect.
+//
+// Go mints each command ID at random and never reissues it, so a second
+// delivery is a replay. A live command's ID is retained until it settles; a
+// settled one until its own deadline plus one budget. After that an exact replay
+// is refused by its expired deadline before any physical call, so memory is
+// bounded by live and recent commands rather than by the pump's lifetime.
+const replayWindowMillis = 15000n;
 export class BrowserPump {
   private stateValue: "idle" | "running" | "stopped" | "unknown" = "idle";
-  private readonly consumed = new Set<string>();
+  // Insertion order is settlement order for settled IDs (undefined while live).
+  private readonly consumed = new Map<string, bigint | undefined>();
   private readonly active = new Set<Promise<void>>();
   private loop: Promise<void> | undefined;
   private stopRequested = false;
@@ -148,9 +156,10 @@ export class BrowserPump {
             "unknown",
             "browser_command_delivery_interrupted",
           );
-        if (this.consumed.has(command.commandId) || this.consumed.size >= 4096)
+        this.forgetSettled();
+        if (this.consumed.has(command.commandId))
           throw new BridgeError("unknown", "browser_command_replayed");
-        this.consumed.add(command.commandId);
+        this.consumed.set(command.commandId, undefined);
         const work = this.execute(command).catch((error: unknown) =>
           this.failed("execute", command.kind, error),
         );
@@ -159,6 +168,15 @@ export class BrowserPump {
       }
     } catch (error) {
       this.failed("poll", null, error);
+    }
+  }
+  // Drop settled IDs whose window has passed, oldest settlement first. A live
+  // ID, or one still inside its window, stops the sweep; it never drops early.
+  private forgetSettled(): void {
+    const now = BigInt(Date.now());
+    for (const [id, until] of this.consumed) {
+      if (until === undefined || until > now) return;
+      this.consumed.delete(id);
     }
   }
   private async execute(command: BrowserCommand): Promise<void> {
@@ -219,6 +237,11 @@ export class BrowserPump {
         !validate("Empty", result.data)
       )
         throw new BridgeError("unknown", "browser_reply_ack_unknown");
+      this.consumed.delete(command.commandId);
+      this.consumed.set(
+        command.commandId,
+        BigInt(body.deadlineMillis) + replayWindowMillis,
+      );
     } finally {
       clearTimeout(timer);
     }

@@ -296,15 +296,20 @@ func nativeConnectorAuth(t *testing.T, client net.Conn, endpoint wire.ComputerCo
 	}
 }
 
-func nativeConnectorHandshake(t *testing.T, client net.Conn, endpoint wire.ComputerConnectorEndpoint) wire.Context {
+// The handshake is the first ordinary request unless id names a later one.
+func nativeConnectorHandshake(t *testing.T, client net.Conn, endpoint wire.ComputerConnectorEndpoint, id ...string) wire.Context {
 	t.Helper()
 	b := endpoint.Binding
+	hello := seq(1)
+	if len(id) == 1 {
+		hello = id[0]
+	}
 	nativeConnectorDeadline(t, client)
-	writeConnectorJSON(t, client, wire.Request{Jsonrpc: "2.0", Id: "hello", Method: "core.handshake", Params: wire.Call{Body: nativeConnectorHandshakeBody(t, b)}})
+	writeConnectorJSON(t, client, wire.Request{Jsonrpc: "2.0", Id: hello, Method: "core.handshake", Params: wire.Call{Body: nativeConnectorHandshakeBody(t, b)}})
 	var reply wire.Response
 	readConnectorJSON(t, client, &reply)
 	bound := wire.Context{ProfileId: b.ProfileId, BackendGeneration: b.BackendGeneration}
-	if reply.Jsonrpc != "2.0" || reply.Id == nil || *reply.Id != "hello" || reply.Error != nil || reply.Result == nil || reply.Result.Status != "ok" || reply.Result.RequestId != "hello" || reply.Result.Context != bound || reply.Result.OperationId != nil {
+	if reply.Jsonrpc != "2.0" || reply.Id == nil || *reply.Id != hello || reply.Error != nil || reply.Result == nil || reply.Result.Status != "ok" || reply.Result.RequestId != hello || reply.Result.Context != bound || reply.Result.OperationId != nil {
 		t.Fatal("native canonical handshake response mismatch")
 	}
 	var identity wire.Identity
@@ -418,34 +423,34 @@ func TestNativeConnectorSocketSameUserAuthCanonicalHandshakeAndRoutes(t *testing
 	}
 	nativeConnectorAuth(t, client, endpoint)
 	bound := wire.Context{ProfileId: endpoint.Binding.ProfileId, BackendGeneration: endpoint.Binding.BackendGeneration}
-	before := nativeConnectorRequest(t, client, "before", "computer.workspace.list", bound, nil)
+	before := nativeConnectorRequest(t, client, seq(1), "computer.workspace.list", bound, nil)
 	if before.Error == nil || before.Error.Code != -32001 || f.calls.Load() != 0 {
 		t.Fatal("native auth bypassed canonical handshake")
 	}
-	bound = nativeConnectorHandshake(t, client, endpoint)
-	reply := nativeConnectorRequest(t, client, "list", "computer.workspace.list", bound, nil)
-	if reply.Error != nil || reply.Result == nil || reply.Result.Status != "ok" || reply.Result.RequestId != "list" || reply.Result.Context != bound || reply.Result.OperationId != nil || string(reply.Result.Data) != `{"native":true}` {
+	bound = nativeConnectorHandshake(t, client, endpoint, seq(2))
+	reply := nativeConnectorRequest(t, client, seq(3), "computer.workspace.list", bound, nil)
+	if reply.Error != nil || reply.Result == nil || reply.Result.Status != "ok" || reply.Result.RequestId != seq(3) || reply.Result.Context != bound || reply.Result.OperationId != nil || string(reply.Result.Data) != `{"native":true}` {
 		t.Fatal("allowed native route did not return the owner response")
 	}
 	select {
 	case req := <-requests:
-		if req.RequestID != "list" || req.OperationID != "" || string(req.Body) != `{}` {
+		if req.RequestID != seq(3) || req.OperationID != "" || string(req.Body) != `{}` {
 			t.Fatal("native route changed owner request identity")
 		}
 	case <-time.After(nativeConnectorWait):
 		t.Fatal("native owner request was not observed")
 	}
-	reply = nativeConnectorRequest(t, client, "forbidden", "computer.authority.publish", bound, optional("not-owned"))
+	reply = nativeConnectorRequest(t, client, seq(4), "computer.authority.publish", bound, optional("not-owned"))
 	if reply.Error != nil || reply.Result == nil || reply.Result.Status != "unavailable" || reply.Result.Code == nil || *reply.Result.Code != "capability_unavailable" {
 		t.Fatal("connector exposed an authority issuer")
 	}
 	stale := bound
 	stale.BackendGeneration = "old-backend"
-	reply = nativeConnectorRequest(t, client, "stale", "computer.workspace.list", stale, nil)
+	reply = nativeConnectorRequest(t, client, seq(5), "computer.workspace.list", stale, nil)
 	if reply.Error == nil || reply.Error.Code != -32002 {
 		t.Fatal("stale native context was accepted")
 	}
-	reply = nativeConnectorRequest(t, client, "list", "computer.workspace.list", bound, nil)
+	reply = nativeConnectorRequest(t, client, seq(3), "computer.workspace.list", bound, nil)
 	if reply.Error == nil || reply.Error.Code != -32600 || f.calls.Load() != 1 {
 		t.Fatal("duplicate/stale/forbidden request dispatched")
 	}
@@ -459,9 +464,9 @@ func nativeConnectorRejectedPipeline(t *testing.T, client net.Conn, hello wire.C
 	t.Helper()
 	var packet bytes.Buffer
 	writeConnectorJSON(t, &packet, hello)
-	writeConnectorJSON(t, &packet, wire.Request{Jsonrpc: "2.0", Id: "hello", Method: "core.handshake", Params: wire.Call{Body: nativeConnectorHandshakeBody(t, binding)}})
+	writeConnectorJSON(t, &packet, wire.Request{Jsonrpc: "2.0", Id: seq(1), Method: "core.handshake", Params: wire.Call{Body: nativeConnectorHandshakeBody(t, binding)}})
 	bound := wire.Context{ProfileId: binding.ProfileId, BackendGeneration: binding.BackendGeneration}
-	writeConnectorJSON(t, &packet, wire.Request{Jsonrpc: "2.0", Id: "queued", Method: "computer.workspace.list", Params: wire.Call{Context: &bound, Body: json.RawMessage(`{}`)}})
+	writeConnectorJSON(t, &packet, wire.Request{Jsonrpc: "2.0", Id: seq(2), Method: "computer.workspace.list", Params: wire.Call{Context: &bound, Body: json.RawMessage(`{}`)}})
 	nativeConnectorDeadline(t, client)
 	// A refused Darwin peer may disconnect before this write (ENOTCONN).
 	// Readback must prove closure; callers independently assert zero dispatch.
@@ -550,7 +555,7 @@ func TestNativeConnectorSocketCloseOrCancelTerminatesExactStreams(t *testing.T) 
 						bound := nativeConnectorHandshake(t, client, endpoint)
 						if phase == "owner-active" {
 							ownerActive = client
-							originalRequest = wire.Request{Jsonrpc: "2.0", Id: "active", Method: "computer.workspace.list", Params: wire.Call{Context: &bound, Body: json.RawMessage(`{}`)}}
+							originalRequest = wire.Request{Jsonrpc: "2.0", Id: seq(2), Method: "computer.workspace.list", Params: wire.Call{Context: &bound, Body: json.RawMessage(`{}`)}}
 							writeConnectorJSON(t, client, originalRequest)
 						}
 					}
@@ -597,7 +602,7 @@ func TestNativeConnectorSocketCloseOrCancelTerminatesExactStreams(t *testing.T) 
 			otherClient := nativeConnectorDial(t, otherEndpoint.SocketPath)
 			nativeConnectorAuth(t, otherClient, otherEndpoint)
 			bound := nativeConnectorHandshake(t, otherClient, otherEndpoint)
-			reply := nativeConnectorRequest(t, otherClient, "still-live", "computer.workspace.list", bound, nil)
+			reply := nativeConnectorRequest(t, otherClient, seq(2), "computer.workspace.list", bound, nil)
 			if reply.Result == nil || reply.Result.Status != "ok" || other.calls.Load() != 1 {
 				t.Fatal("shutdown affected an independent native connector")
 			}
@@ -627,7 +632,7 @@ func TestNativeConnectorSocketCloseDeadlineRetainsUnsettledOwner(t *testing.T) {
 	client := nativeConnectorDial(t, endpoint.SocketPath)
 	nativeConnectorAuth(t, client, endpoint)
 	bound := nativeConnectorHandshake(t, client, endpoint)
-	writeConnectorJSON(t, client, wire.Request{Jsonrpc: "2.0", Id: "blocked", Method: "computer.workspace.list", Params: wire.Call{Context: &bound, Body: json.RawMessage(`{}`)}})
+	writeConnectorJSON(t, client, wire.Request{Jsonrpc: "2.0", Id: seq(2), Method: "computer.workspace.list", Params: wire.Call{Context: &bound, Body: json.RawMessage(`{}`)}})
 	select {
 	case <-entered:
 	case <-time.After(nativeConnectorWait):

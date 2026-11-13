@@ -12,7 +12,11 @@ import (
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	"github.com/legrch/farol/pkg/ipc"
+	"github.com/legrch/farol/transport/desktop"
 )
+
+// Every ordinary request on the fixture connection carries the next sequence.
+const fixtureNonce = "d0000000-0000-4000-8000-000000000001"
 
 func TestControlledFixtureUsesRealGoWireAndClassifiesLostSend(t *testing.T) {
 	for _, scenario := range []string{"text", "lost-send-reply"} {
@@ -41,7 +45,7 @@ func TestControlledFixtureUsesRealGoWireAndClassifiesLostSend(t *testing.T) {
 			call := func(method string, body any, effect bool) wire.Response {
 				t.Helper()
 				sequence++
-				id := "request-" + strconv.Itoa(sequence)
+				id := desktop.SequencedRequestID(fixtureNonce, uint64(sequence))
 				raw, err := json.Marshal(body)
 				if err != nil {
 					t.Fatal(err)
@@ -78,7 +82,7 @@ func TestControlledFixtureUsesRealGoWireAndClassifiesLostSend(t *testing.T) {
 				}
 				return r.Result.Data
 			}
-			ok(call("core.handshake", wire.Handshake{ProtocolMajor: 1, ProtocolMinor: 0, BuildId: fixtureBuild, ProfileId: "profile"}, false))
+			ok(call("core.handshake", wire.Handshake{ProtocolMajor: wire.ProtocolMajor, ProtocolMinor: 0, BuildId: fixtureBuild, ProfileId: "profile"}, false))
 			selection := wire.BrowserSelection{Provider: "farol", Alias: "chatgpt", AccountId: "controlled-account", ModelId: "controlled-model", Effort: "low", Mode: "standard"}
 			request := wire.ChatCreate{SessionId: "session", Prompt: "Controlled fixture question", Selection: selection, Resolution: wire.BrowserResolution{RequestedAlias: "chatgpt", RequestedExecutor: "browser", RequestedEffort: "low", RequestedMode: "standard", ConfigSHA256: strings.Repeat("a", 64), TranslationId: "configured", Resolved: selection}, Required: wire.BrowserRequiredControls{Model: true, Effort: true, Mode: true}}
 			var handle wire.ChatHandle
@@ -184,7 +188,7 @@ func TestControlledReadinessDoesNotGrantProtocolAdmission(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		request := wire.Request{Jsonrpc: "2.0", Id: "request-" + strconv.Itoa(sequence), Method: method, Params: wire.Call{Body: raw}}
+		request := wire.Request{Jsonrpc: "2.0", Id: desktop.SequencedRequestID(fixtureNonce, uint64(sequence)), Method: method, Params: wire.Call{Body: raw}}
 		if method != "core.handshake" {
 			request.Params.Context = &wire.Context{ProfileId: "profile", BackendGeneration: "backend"}
 		}
@@ -209,7 +213,7 @@ func TestControlledReadinessDoesNotGrantProtocolAdmission(t *testing.T) {
 	if before.Error == nil || before.Error.Code != -32001 || before.Result != nil {
 		t.Fatal("readiness admitted an unauthenticated request", before)
 	}
-	handshake := call("core.handshake", wire.Handshake{ProtocolMajor: 1, ProtocolMinor: 0, BuildId: fixtureBuild, ProfileId: "profile"})
+	handshake := call("core.handshake", wire.Handshake{ProtocolMajor: wire.ProtocolMajor, ProtocolMinor: 0, BuildId: fixtureBuild, ProfileId: "profile"})
 	if handshake.Result == nil || handshake.Result.Status != "ok" {
 		t.Fatal("real handshake failed", handshake)
 	}

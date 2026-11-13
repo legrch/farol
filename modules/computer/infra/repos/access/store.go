@@ -215,7 +215,7 @@ func (s *Store) commitWithPublication(ctx context.Context, n state, withPublicat
 	if ctx.Err() != nil {
 		return authority.Fail("WORKSPACE_REQUEST_CANCELLED", "native-workspace")
 	}
-	raw, err := encodeState(s.binding, n)
+	raw, err := encodeNextState(s.binding, s.current, n)
 	if err != nil {
 		return err
 	}

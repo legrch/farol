@@ -118,7 +118,7 @@ func TestTaskPublicationTransportWithdrawalFencesQueuedEffect(t *testing.T) {
 		}
 	}}
 	peer := taskWireTestConnectMethods(t, methods, p.f.profile.peer)
-	holder := wire.Request{Jsonrpc: "2.0", Id: "publication-queue-holder", Method: "task.resolve", Params: wire.Call{Context: &peer.scope, Body: json.RawMessage(taskSurfaceBody(t, h, nil))}}
+	holder := wire.Request{Jsonrpc: "2.0", Id: peer.nextID(), Method: "task.resolve", Params: wire.Call{Context: &peer.scope, Body: json.RawMessage(taskSurfaceBody(t, h, nil))}}
 	raw, err := json.Marshal(holder)
 	if err != nil || ipc.WriteFrame(peer.in, raw) != nil {
 		t.Fatal("queue holder frame", err)
@@ -129,7 +129,7 @@ func TestTaskPublicationTransportWithdrawalFencesQueuedEffect(t *testing.T) {
 		t.Fatal("serialized owner did not hold the queue")
 	}
 	operation := "published-queued-create"
-	queued := wire.Request{Jsonrpc: "2.0", Id: "publication-queued-request", Method: "task.create", Params: wire.Call{Context: &peer.scope, OperationId: &operation, Body: json.RawMessage(taskSurfaceBody(t, h, wire.TaskCreate{Message: "withdraw before queued execution"}))}}
+	queued := wire.Request{Jsonrpc: "2.0", Id: peer.nextID(), Method: "task.create", Params: wire.Call{Context: &peer.scope, OperationId: &operation, Body: json.RawMessage(taskSurfaceBody(t, h, wire.TaskCreate{Message: "withdraw before queued execution"}))}}
 	raw, err = json.Marshal(queued)
 	if err != nil {
 		t.Fatal(err)
@@ -197,7 +197,7 @@ func TestTaskPublicationTransportLostReplyReadsOriginalOperationWithoutReplay(t 
 			}, AfterReply: func(_ desktop.Request, ok bool) { delivered <- ok }}
 			peer := taskWireTestConnectMethods(t, methods, p.f.profile.peer)
 			operation := "published-lost-reply"
-			request := wire.Request{Jsonrpc: "2.0", Id: "published-lost-request", Method: "task.create", Params: wire.Call{Context: &peer.scope, OperationId: &operation, Body: json.RawMessage(taskSurfaceBody(t, h, wire.TaskCreate{Message: "one original published effect"}))}}
+			request := wire.Request{Jsonrpc: "2.0", Id: peer.nextID(), Method: "task.create", Params: wire.Call{Context: &peer.scope, OperationId: &operation, Body: json.RawMessage(taskSurfaceBody(t, h, wire.TaskCreate{Message: "one original published effect"}))}}
 			raw, err := json.Marshal(request)
 			if err != nil || ipc.WriteFrame(peer.in, raw) != nil {
 				t.Fatal("lost-reply request frame", err)

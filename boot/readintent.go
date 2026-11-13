@@ -189,7 +189,9 @@ func (s *ComputerIngress) withdrawRead(ctx context.Context, operation string, in
 	if c.withdrawn {
 		return &wire.ChatReadIntentWithdrawn{Admission: *c.admission}, nil
 	}
-	if err = s.claim(operation); err != nil {
+	// Withdrawal only removes authority and runs at most once per captured
+	// intent (a failure poisons this ingress), so it may use the reserve.
+	if err = s.claimWithdrawal(operation); err != nil {
 		return nil, err
 	}
 	if err = s.readFacade.WithdrawReadIntent(ctx, c.owner); err != nil || ctx.Err() != nil {

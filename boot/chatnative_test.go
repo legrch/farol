@@ -34,7 +34,7 @@ type chatNativePeer struct {
 func (p *chatNativePeer) start(method string, body any, effect bool) string {
 	p.t.Helper()
 	p.count++
-	id := fmt.Sprintf("request-%d", p.count)
+	id := wireTestID(p.count)
 	raw, e := json.Marshal(body)
 	if e != nil {
 		p.t.Fatal(e)
@@ -178,7 +178,7 @@ func chatNativeFixture(t *testing.T) *chatNativePeer {
 		}
 	})
 	p := &chatNativePeer{t: t, sender: sender, receive: responses, pending: make(map[string]wire.Response)}
-	hello := p.ok("core.handshake", wire.Handshake{ProtocolMajor: 1, ProtocolMinor: 0, BuildId: BuildID, ProfileId: "fixture"}, false)
+	hello := p.ok("core.handshake", wire.Handshake{ProtocolMajor: wire.ProtocolMajor, ProtocolMinor: 0, BuildId: BuildID, ProfileId: "fixture"}, false)
 	p.peer = &hello.Context
 	return p
 }

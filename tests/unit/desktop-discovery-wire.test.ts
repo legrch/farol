@@ -34,7 +34,7 @@ describe("canonical desktop discovery wire", () => {
     expect(methodKinds["computer.workspace.catalogue"]).toBe("read");
     expect(methodKinds["computer.workspace.bootstrap"]).toBe("read");
     expect([protocolMajor, protocolMinor, maxFrameBytes]).toEqual([
-      1, 0, 1048576,
+      2, 0, 1048576,
     ]);
   });
 

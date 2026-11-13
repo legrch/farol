@@ -39,6 +39,18 @@ type connectorOpenBeforePublication struct{ cause error }
 func (e *connectorOpenBeforePublication) Error() string { return e.cause.Error() }
 func (e *connectorOpenBeforePublication) Unwrap() error { return e.cause }
 
+// Open attempts are bounded per recent window so a launch storm cannot drain
+// the finite pools behind them. Those pools remain: each Open and each Close
+// claims one ingress operation ID (claimCapacity per backend lifetime, never
+// pruned; a durable record is deferred), so reconnects end after about 2,000
+// Open/Close cycles in one backend lifetime. Reconnects of one connector
+// generation reuse one durable participant; a new generation or backend
+// lifetime admits one more, bounded by the access Store.
+const (
+	connectorOpenBurst  = 32
+	connectorOpenWindow = 10 * time.Minute
+)
+
 // One slot belongs to this backend lifetime. It is not endpoint discovery or a
 // second authority journal. MCP attachments never construct or replace it.
 type computerConnector struct {
@@ -57,11 +69,14 @@ type computerConnector struct {
 	codexRead         *connectorCodexRead
 	selfTests         selfTestRegistry
 	current           *connectorSlot
-	attempts          uint64
+	recentOpens       []time.Time              // claimed Open attempts inside connectorOpenWindow
 	closed            *connectorRecoveryOrigin // effects-owned, exact successful Close only
 	closedParentID    string                   // exact C7 original, never inferred from stopped state
 	closedOperationID string
 	closedDigest      string
+
+	// Released by the last clean ordinary Close; effects-owned.
+	retained *connectorRetainedParticipant
 }
 type connectorSlot struct {
 	guard                 *connectorHostGuard
@@ -80,6 +95,26 @@ type connectorSlot struct {
 	statusSendRecorded    bool   // Durable Send acknowledgement for the armed status check.
 	checkParentID         string // exact original C8 UUID of the check armed in this slot
 	challengeDigest       string // original constructor challenge, not caller input
+
+	// Known only after a successful Open; a clean ordinary Close retains it.
+	participant *connectorRetainedParticipant
+}
+
+// A clean ordinary Close keeps the slot's known live durable participant for
+// the next Open of the SAME connector generation in this backend lifetime, so
+// reconnects do not admit one participant each. The generation is the exact
+// Settings connector generation and consent receipt plus a participant seal
+// derived from current approval that equals the retained one; time is not part
+// of it. Anything else, owner stop, a failed slot and shutdown revoke instead.
+// Volatile liveness is never retained: a later owner must Resume through its
+// own host guard. A restart starts a new backend lifetime and a new participant.
+type connectorRetainedParticipant struct {
+	generation  string
+	publication wire.ComputerAuthorityPublication
+	admission   authority.Admission
+	identity    authority.ParticipantAdmission
+	seal        authority.Participant
+	revokeErr   error // one revocation attempt was not acknowledged; never retried
 }
 type connectorHostGuard struct {
 	mu          sync.Mutex
@@ -147,7 +182,7 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	if recoveryErr != nil {
 		return nil, recoveryErr
 	}
-	if ctx == nil || ctx.Err() != nil || s.lifetime.Err() != nil || validateIngress("ComputerConnectorOpen", in) != nil || s.current != nil || s.attempts >= 32 {
+	if ctx == nil || ctx.Err() != nil || s.lifetime.Err() != nil || validateIngress("ComputerConnectorOpen", in) != nil || s.current != nil || s.retained != nil && s.retained.revokeErr != nil || !s.openAttemptAvailable() {
 		return nil, computerUnavailable()
 	}
 	if s.mutations != nil && s.mutations.computer != s.root {
@@ -159,7 +194,7 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	if err := s.root.claim(operation); err != nil {
 		return nil, err
 	}
-	s.attempts++
+	s.recentOpens = append(s.recentOpens, s.clock.Now())
 	// A genuinely new Open may follow long idle or a confirmed Close. Join the
 	// same standing Settings consent before acquiring the publication IO gate;
 	// renewal owns that gate itself. Exact publication is checked again below.
@@ -236,6 +271,11 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 		// Existing Computer write-ownership policy, not Task/Chat membership.
 		launch.Participant.MutationOwnership = authority.TaskOwnership
 	}
+	resume, err := s.selectRetained(ctx, in, &launch)
+	if err != nil {
+		guard.close()
+		return nil, err
+	}
 	if in.ChallengeSha256 != nil {
 		value, decodeErr := hex.DecodeString(*in.ChallengeSha256)
 		if decodeErr != nil || len(value) != len(launch.VerificationChallenge) {
@@ -261,7 +301,14 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 		s.closed = nil
 	}
 	s.current = slot // Retain the slot before the first possible publication.
-	if err = slot.owner.Publish(ctx); err != nil {
+	if resume {
+		// The identity now belongs to this slot: its own Close settles it.
+		s.retained = nil
+		err = slot.owner.Resume(ctx)
+	} else {
+		err = slot.owner.Publish(ctx)
+	}
+	if err != nil {
 		guard.close()
 		return nil, err
 	}
@@ -313,7 +360,7 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 		return nil, computerUnavailable()
 	}
 	slot.opened = wire.ComputerConnectorOpened{Endpoint: endpoint, AdmissionOperationId: operation,
-		Execution: wire.ComputerConnectorExecution{OwnerId: approval.OwnerID, SessionId: ids[0], TaskId: ids[1], TaskEpoch: "1", ParticipantId: ids[3], TurnId: ids[4], Generation: "1"}}
+		Execution: wire.ComputerConnectorExecution{OwnerId: approval.OwnerID, SessionId: launch.Admission.SessionID, TaskId: launch.Admission.TaskID, TaskEpoch: "1", ParticipantId: launch.Participant.ParticipantID, TurnId: ids[4], Generation: "1"}}
 	if readSeal != nil {
 		value := readSeal.selection
 		slot.opened.CodexRead = &value
@@ -364,6 +411,8 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 		}
 	}
 	slot.startupUncertain = false
+	slot.participant = &connectorRetainedParticipant{generation: in.ConnectorGeneration, publication: in.Publication,
+		admission: launch.Admission, identity: launch.Participant, seal: ceiling.Participant.Clone()}
 	s.root.mu.Lock()
 	s.root.renewal = renewal
 	slot.renewalScope = renewal
@@ -373,7 +422,69 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	return &result, nil
 }
 
+// selectRetained decides, before the owner is constructed, whether this Open
+// resumes the retained participant. On a match it rewrites launch to the
+// retained identity; the turn correlation stays fresh. A retained participant
+// that is no longer live needs nothing. A live one of another generation is
+// revoked ONCE before a new admission; an unacknowledged revocation refuses
+// this and every later Open, as an unknown Close does.
+func (s *computerConnector) selectRetained(ctx context.Context, in wire.ComputerConnectorOpen, launch *port.ConnectorLaunch) (bool, error) {
+	r := s.retained
+	if r == nil {
+		return false, nil
+	}
+	live := false
+	if err := s.journal.WithSnapshot(ctx, r.seal.ParticipantID, func(v port.AccessSnapshot) error {
+		live = v.Participant != nil && authority.SameParticipantCeiling(*v.Participant, r.seal)
+		return nil
+	}); err != nil {
+		return false, err
+	}
+	if !live {
+		s.retained = nil
+		return false, nil
+	}
+	candidate := *launch
+	candidate.Admission.Identity, candidate.Admission.AuthorityID = r.admission.Identity, r.admission.AuthorityID
+	candidate.Participant.ParticipantID = r.identity.ParticipantID
+	if in.ConnectorGeneration == r.generation && in.Publication == r.publication {
+		if g, err := authority.Derive(candidate.Approval, candidate.Admission, s.clock.Now()); err == nil {
+			if p, err := authority.Create(*g, candidate.Participant); err == nil && authority.SameParticipantCeiling(*p, r.seal) {
+				*launch = candidate
+				return true, nil
+			}
+		}
+	}
+	if err := s.journal.WithdrawConnector(ctx, r.seal.ParticipantID); err != nil {
+		r.revokeErr = err
+		return false, err
+	}
+	s.retained = nil
+	return false, nil
+}
+
+// openAttemptAvailable forgets claimed attempts older than the window and
+// reports whether another fits. A clock that moved backwards keeps an attempt
+// (a negative age is inside the window), so it can only delay, never widen.
+func (s *computerConnector) openAttemptAvailable() bool {
+	now := s.clock.Now()
+	kept := s.recentOpens[:0]
+	for _, at := range s.recentOpens {
+		if now.Sub(at) < connectorOpenWindow {
+			kept = append(kept, at)
+		}
+	}
+	s.recentOpens = kept
+	return len(kept) < connectorOpenBurst
+}
+
 func (s *computerConnector) closeSlot(ctx context.Context, originalStopParent string) error {
+	return s.closeSlotRetaining(ctx, originalStopParent, false)
+}
+
+// retain releases a clean slot's participant for the next Open of the same
+// connector generation instead of revoking it; see connectorRetainedParticipant.
+func (s *computerConnector) closeSlotRetaining(ctx context.Context, originalStopParent string, retain bool) error {
 	slot := s.current
 	if slot == nil {
 		return nil
@@ -403,16 +514,28 @@ func (s *computerConnector) closeSlot(ctx context.Context, originalStopParent st
 	if slot.endpoint != nil {
 		failures = append(failures, slot.endpoint.Close(ctx))
 	}
+	released := false
+	if _, resumable := s.journal.(port.ConnectorResumer); !resumable {
+		retain = false
+	}
 	if slot.owner != nil {
-		if originalStopParent == "" {
-			failures = append(failures, slot.owner.Withdraw(ctx))
-		} else {
+		switch {
+		case originalStopParent != "":
 			failures = append(failures, slot.owner.WithdrawOriginalStop(ctx, originalStopParent))
+		// Release only when every earlier close step acknowledged; otherwise
+		// the one durable revocation attempt below is kept, as before.
+		case retain && slot.participant != nil && errors.Join(failures...) == nil && slot.owner.Release(ctx) == nil:
+			released = true
+		default:
+			failures = append(failures, slot.owner.Withdraw(ctx))
 		}
 	}
 	slot.closeErr = errors.Join(failures...)
 	if slot.closeErr == nil {
 		s.current = nil
+		if released {
+			s.retained = slot.participant
+		}
 	}
 	return slot.closeErr
 }
@@ -446,11 +569,11 @@ func (s *computerConnector) Close(ctx context.Context, operation string, in wire
 			return nil, computerUnavailable()
 		}
 	}
-	if err := s.root.claim(operation); err != nil {
+	if err := s.root.claimWithdrawal(operation); err != nil {
 		return nil, err
 	}
 	slot := s.current
-	if err := s.closeSlot(ctx, parent); err != nil {
+	if err := s.closeSlotRetaining(ctx, parent, parent == "" && in.Reason == nil); err != nil {
 		return nil, err
 	}
 	s.closed = &connectorRecoveryOrigin{binding: in.Binding, publication: slot.guard.publication,
@@ -519,7 +642,18 @@ func (s *computerConnector) shutdown(ctx context.Context) error {
 		return err
 	}
 	defer func() { <-s.effects }()
-	return s.closeSlot(ctx, "")
+	err := s.closeSlot(ctx, "")
+	// A backend lifetime never hands its participant to the next one. An
+	// earlier unacknowledged revocation is reported, never retried.
+	if r := s.retained; r != nil {
+		if r.revokeErr == nil {
+			if r.revokeErr = s.journal.WithdrawConnector(ctx, r.seal.ParticipantID); r.revokeErr == nil {
+				s.retained = nil
+			}
+		}
+		err = errors.Join(err, r.revokeErr)
+	}
+	return err
 }
 func (s *computerConnector) Methods() map[string]desktop.Method {
 	if s == nil {

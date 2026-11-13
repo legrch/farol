@@ -77,7 +77,10 @@ const verification: BrowserVerification = {
   intentDigest: "a".repeat(64),
   evidenceId: "evidence",
 };
-function command(kind: BrowserCommand["kind"], id = kind): BrowserCommand {
+function command(
+  kind: BrowserCommand["kind"],
+  id: string = kind,
+): BrowserCommand {
   const deadlineMillis = String(Date.now() + 10000);
   const bodies = {
     prepare: {
@@ -127,7 +130,13 @@ const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const close of cleanups.splice(0)) await close();
 });
-async function fixture(onFailure?: (failure: BrowserPumpFailure) => void) {
+async function fixture(
+  onFailure?: (failure: BrowserPumpFailure) => void,
+  onPoll?: (
+    poll: Request,
+    answer: (r: Request, data: unknown) => void,
+  ) => boolean,
+) {
   const child = Object.assign(new EventEmitter(), {
     stdin: new PassThrough(),
     stdout: new PassThrough(),
@@ -174,8 +183,9 @@ async function fixture(onFailure?: (failure: BrowserPumpFailure) => void) {
           capabilities: [],
           maxFrameBytes: 1048576,
         });
-      else if (r.method === "chat.browser.next") polls.push(r);
-      else if (r.method === "chat.browser.reply") {
+      else if (r.method === "chat.browser.next") {
+        if (!onPoll?.(r, answer)) polls.push(r);
+      } else if (r.method === "chat.browser.reply") {
         replies.push(r);
         if (acknowledge) answer(r, {});
       } else throw new Error("unexpected method");
@@ -234,9 +244,19 @@ async function fixture(onFailure?: (failure: BrowserPumpFailure) => void) {
     noAck: () => {
       acknowledge = false;
     },
+    consumed: () =>
+      (
+        pump as unknown as {
+          consumed: { size: number; has(id: string): boolean };
+        }
+      ).consumed,
     deliver: async (c: BrowserCommand) => {
       await vi.waitFor(() => expect(polls.length).toBeGreaterThan(0));
       answer(polls.shift()!, { command: c });
+    },
+    idle: async () => {
+      await vi.waitFor(() => expect(polls.length).toBeGreaterThan(0));
+      answer(polls.shift()!, {});
     },
   };
 }
@@ -461,5 +481,82 @@ describe("one-shot typed browser pump", () => {
     });
     await vi.waitFor(() => expect(f.replies).toHaveLength(2));
     expect(f.pump.state).toBe("running");
+  });
+  it("serves more than 4096 commands and retains only live or recent IDs", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const total = 4200;
+      let issued = 0;
+      const f = await fixture(undefined, (poll, answer) => {
+        if (issued >= total) return false;
+        issued++;
+        // 100 ms per command: each settled ID leaves after its deadline
+        // window, so the retained set stays far below the old 4096 quota.
+        vi.setSystemTime(Date.now() + 100);
+        answer(poll, { command: command("observe", `command-${issued}`) });
+        return true;
+      });
+      await vi.waitFor(() => expect(f.replies).toHaveLength(total), {
+        timeout: 60000,
+        interval: 5,
+      });
+      expect(f.pump.state).toBe("running");
+      expect(f.driver.observe).toHaveBeenCalledTimes(total);
+      expect(f.consumed().size).toBeLessThan(400);
+      expect(f.consumed().has(`command-${total}`)).toBe(true);
+      expect(f.consumed().has("command-1")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 90000);
+  it("refuses an exact replay after its window by its own expired deadline", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const f = await fixture();
+      const c = command("send");
+      await f.deliver(c);
+      await vi.waitFor(() => expect(f.replies).toHaveLength(1));
+      // Move past deadline + window in steps an outstanding poll survives.
+      for (let i = 0; i < 2; i++) {
+        vi.setSystemTime(Date.now() + 13000);
+        await f.idle();
+      }
+      await f.deliver(command("observe", "later"));
+      await vi.waitFor(() => expect(f.replies).toHaveLength(2));
+      expect(f.consumed().has(c.commandId)).toBe(false);
+      await f.deliver(c);
+      await vi.waitFor(() => expect(f.pump.state).toBe("unknown"));
+      expect(f.driver.send).toHaveBeenCalledTimes(1);
+      expect(f.replies).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("keeps a held command's ID while later commands settle and refuses its replay", async () => {
+    const f = await fixture();
+    let release!: (value: Awaited<ReturnType<typeof f.driver.send>>) => void;
+    f.driver.send.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const held = command("send", "held");
+    await f.deliver(held);
+    await vi.waitFor(() => expect(f.driver.send).toHaveBeenCalledTimes(1));
+    for (let i = 0; i < 4; i++) {
+      await f.deliver(command("observe", `observe-${i}`));
+      await vi.waitFor(() => expect(f.replies).toHaveLength(i + 1));
+    }
+    expect(f.consumed().has("held")).toBe(true);
+    await f.deliver(held);
+    await vi.waitFor(() => expect(f.pump.state).toBe("unknown"));
+    expect(f.driver.send).toHaveBeenCalledTimes(1);
+    release({
+      binding,
+      verificationId: "evidence",
+      status: "submitted",
+      code: "",
+    });
   });
 });

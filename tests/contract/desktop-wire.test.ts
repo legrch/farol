@@ -327,12 +327,11 @@ describe("K0 real inherited-pipe process", () => {
       expect((await client.request("core.operation.status", {})).status).toBe(
         "unsupported",
       );
-      await expect(
-        client.request("core.status", {}, { id: "status-1" }),
-      ).rejects.toMatchObject({
-        state: "refused",
-        code: "duplicate_request_id",
-      });
+      // A settled caller ID is not a lifetime fence: the call gets the next
+      // wire sequence, and the reply maps back to the caller's ID.
+      expect(
+        await client.request("core.status", {}, { id: "status-1" }),
+      ).toMatchObject({ status: "ok", requestId: "status-1" });
       expect(client.diagnosticByteCount).toBe(0);
     } catch (error) {
       // Content-free phase evidence; preserve the original error and budgets.
@@ -373,14 +372,18 @@ describe("K0 real inherited-pipe process", () => {
       await expect(
         client.handshake(
           {
-            protocolMajor: 2,
+            // Protocol 1.0 (unsequenced requests) is a different major.
+            protocolMajor: 1,
             protocolMinor: 0,
             buildId: "k0-test",
             profileId: "test",
           },
           1000,
         ),
-      ).rejects.toMatchObject({ state: "refused" });
+      ).rejects.toMatchObject({
+        state: "refused",
+        code: "incompatible backend identity",
+      });
     } finally {
       await client.close();
     }
@@ -392,14 +395,16 @@ describe("K0 real inherited-pipe process", () => {
     child.stdout.on("data", (chunk: Buffer) =>
       decoder.push(chunk, (v) => responses.push(v)),
     );
+    const wireId = (sequence: number) =>
+      `desktop-call:e0000000-0000-4000-8000-000000000001:${sequence}`;
     child.stdin.write(
       frame({
         jsonrpc: "2.0",
-        id: "h",
+        id: wireId(1),
         method: "core.handshake",
         params: {
           body: {
-            protocolMajor: 1,
+            protocolMajor: 2,
             protocolMinor: 0,
             buildId: "k0-test",
             profileId: "test",
@@ -410,7 +415,7 @@ describe("K0 real inherited-pipe process", () => {
     child.stdin.write(
       frame({
         jsonrpc: "2.0",
-        id: "s",
+        id: wireId(2),
         method: "core.status",
         params: {
           context: { profileId: "test", backendGeneration: "old" },
@@ -420,7 +425,10 @@ describe("K0 real inherited-pipe process", () => {
     );
     child.stdin.end();
     await new Promise<void>((resolve) => child.once("close", () => resolve()));
-    expect(responses[1]).toMatchObject({ id: "s", error: { code: -32002 } });
+    expect(responses[1]).toMatchObject({
+      id: wireId(2),
+      error: { code: -32002 },
+    });
   });
 });
 
@@ -1050,8 +1058,12 @@ it("refuses independently varied fixed wire limits before generating either peer
     ["maxDepth", 16],
     ["maxDepth", 64],
     ["maxDepth", undefined],
-    ["maxRequests", 1024],
-    ["maxRequests", undefined],
+    ["maxConsecutiveInvalidRequests", 4096],
+    ["maxConsecutiveInvalidRequests", "64"],
+    ["maxConsecutiveInvalidRequests", undefined],
+    // The protocol 1.0 lifetime request cap cannot return as metadata.
+    ["maxRequests", 4096],
+    ["protocolMajor", 1],
   ] as const) {
     writeFileSync(
       join(root, "api/desktop/v1/schema.json"),

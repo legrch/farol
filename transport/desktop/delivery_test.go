@@ -168,7 +168,7 @@ func newDeliveryFixture(t *testing.T, concurrent bool, mode string, recorder *de
 		close(f.done)
 	}()
 	t.Cleanup(func() { f.shutdown(t) })
-	f.send(t, request("hello", "core.handshake", `{"protocolMajor":1,"protocolMinor":0,"buildId":"build","profileId":"test"}`, nil))
+	f.send(t, request(seq(1), "core.handshake", helloBody, nil))
 	if response := f.read(t); response.Result == nil || response.Result.Status != "ok" {
 		t.Fatalf("handshake: %+v", response)
 	}
@@ -182,11 +182,11 @@ func TestResponseDeliveryTerminalRejectionClosesSerialAndConcurrent(t *testing.T
 			f := newDeliveryFixture(t, concurrent, "", recorder, func(context.Context, Request) (*Outcome, error) {
 				return &Outcome{Status: "refused", Code: "selected_role_refused"}, nil
 			}, true)
-			f.send(t, deliveryRequest(t, "effect", optional("exact-op"), deliveryContext()))
+			f.send(t, deliveryRequest(t, seq(2), optional("exact-op"), deliveryContext()))
 			if response := f.read(t); response.Result == nil || response.Result.Status != "refused" {
 				t.Fatal("terminal policy lost the original refusal response")
 			}
-			assertDeliveryRequest(t, deliveryWait(t, f, recorder.notify), "effect", false)
+			assertDeliveryRequest(t, deliveryWait(t, f, recorder.notify), seq(2), false)
 			deliveryWait(t, f, f.done)
 			if f.err == nil || len(recorder.snapshot()) != 1 {
 				t.Fatal("terminal role continued after refusal")
@@ -304,7 +304,7 @@ func TestResponseDeliveryAfterCompleteOKFrame(t *testing.T) {
 				calls.Add(1)
 				return &Outcome{Status: "ok", Data: json.RawMessage(`{"accepted":true}`)}, nil
 			})
-			f.send(t, deliveryRequest(t, "effect", optional("exact-op"), deliveryContext()))
+			f.send(t, deliveryRequest(t, seq(2), optional("exact-op"), deliveryContext()))
 			type frameResult struct {
 				raw []byte
 				err error
@@ -325,9 +325,9 @@ func TestResponseDeliveryAfterCompleteOKFrame(t *testing.T) {
 				t.Fatal(got.err)
 			}
 			event := deliveryWait(t, f, recorder.notify)
-			assertDeliveryRequest(t, event, "effect", true)
+			assertDeliveryRequest(t, event, seq(2), true)
 			frames := bytes.NewReader(event.written)
-			for _, id := range []string{"hello", "effect"} {
+			for _, id := range []string{seq(1), seq(2)} {
 				raw, err := ipc.ReadFrame(frames)
 				if err != nil {
 					t.Fatalf("callback preceded complete %s frame: %v", id, err)
@@ -365,8 +365,8 @@ func TestResponseDeliveryWriteFailure(t *testing.T) {
 					_, err := io.Copy(io.Discard, f.output)
 					drained <- err
 				}()
-				f.send(t, deliveryRequest(t, "effect", optional("exact-op"), deliveryContext()))
-				assertDeliveryRequest(t, deliveryWait(t, f, recorder.notify), "effect", false)
+				f.send(t, deliveryRequest(t, seq(2), optional("exact-op"), deliveryContext()))
+				assertDeliveryRequest(t, deliveryWait(t, f, recorder.notify), seq(2), false)
 				deliveryWait(t, f, f.done)
 				deliveryWait(t, f, drained)
 				want := deliveryWriteFailure
@@ -411,14 +411,14 @@ func TestResponseDeliveryOwnerOutcome(t *testing.T) {
 					calls.Add(1)
 					return test.outcome, test.err
 				})
-				f.send(t, deliveryRequest(t, "effect", optional("exact-op"), deliveryContext()))
+				f.send(t, deliveryRequest(t, seq(2), optional("exact-op"), deliveryContext()))
 				response := f.read(t)
-				if response.Id == nil || *response.Id != "effect" || response.Result == nil || response.Result.Status != test.status || response.Result.Code == nil || *response.Result.Code != test.code || response.Result.RequestId != "effect" || response.Result.OperationId == nil || *response.Result.OperationId != "exact-op" || response.Result.Context != deliveryContext() || len(response.Result.Data) != 0 {
+				if response.Id == nil || *response.Id != seq(2) || response.Result == nil || response.Result.Status != test.status || response.Result.Code == nil || *response.Result.Code != test.code || response.Result.RequestId != seq(2) || response.Result.OperationId == nil || *response.Result.OperationId != "exact-op" || response.Result.Context != deliveryContext() || len(response.Result.Data) != 0 {
 					t.Fatalf("normalized owner output: %+v", response)
 				}
-				assertDeliveryRequest(t, deliveryWait(t, f, recorder.notify), "effect", false)
-				f.send(t, request("after", "core.status", `{}`, &wire.Context{ProfileId: "test", BackendGeneration: "generation"}))
-				if after := f.read(t); after.Result == nil || after.Result.Status != "ok" || after.Result.RequestId != "after" {
+				assertDeliveryRequest(t, deliveryWait(t, f, recorder.notify), seq(2), false)
+				f.send(t, request(seq(3), "core.status", `{}`, &wire.Context{ProfileId: "test", BackendGeneration: "generation"}))
+				if after := f.read(t); after.Result == nil || after.Result.Status != "ok" || after.Result.RequestId != seq(3) {
 					t.Fatalf("owner output closed unrelated traffic: %+v", after)
 				}
 				f.shutdown(t)
@@ -445,8 +445,8 @@ func TestResponseDeliveryUninvokedHandler(t *testing.T) {
 				raw  []byte
 				code int32
 			}{
-				{deliveryRequest(t, "missing-operation", nil, deliveryContext()), -32602},
-				{deliveryRequest(t, "stale", optional("exact-op"), stale), -32002},
+				{deliveryRequest(t, seq(2), nil, deliveryContext()), -32602},
+				{deliveryRequest(t, seq(3), optional("exact-op"), stale), -32002},
 				{deliveryRequest(t, "bad identity", optional("exact-op"), deliveryContext()), -32600},
 			} {
 				f.send(t, test.raw)
@@ -457,12 +457,13 @@ func TestResponseDeliveryUninvokedHandler(t *testing.T) {
 			if calls.Load() != 0 || len(recorder.snapshot()) != 0 {
 				t.Fatal("rejected identity invoked owner or callback")
 			}
-			raw := deliveryRequest(t, "effect", optional("exact-op"), deliveryContext())
+			// The two refused identities consumed sequences 2 and 3.
+			raw := deliveryRequest(t, seq(4), optional("exact-op"), deliveryContext())
 			f.send(t, raw)
 			if response := f.read(t); response.Result == nil || response.Result.Status != "ok" {
 				t.Fatalf("valid request refused: %+v", response)
 			}
-			assertDeliveryRequest(t, deliveryWait(t, f, recorder.notify), "effect", true)
+			assertDeliveryRequest(t, deliveryWait(t, f, recorder.notify), seq(4), true)
 			f.send(t, raw)
 			if response := f.read(t); response.Error == nil || response.Error.Code != -32600 {
 				t.Fatalf("duplicate admitted: %+v", response)
@@ -488,15 +489,15 @@ func TestResponseDeliveryConcurrentBackpressureAndCancellation(t *testing.T) {
 		return nil, ctx.Err()
 	})
 	for i := 0; i < 32; i++ {
-		f.send(t, deliveryRequest(t, fmt.Sprintf("held-%d", i), optional("exact-op"), deliveryContext()))
+		f.send(t, deliveryRequest(t, seq(uint64(i)+2), optional("exact-op"), deliveryContext()))
 		deliveryWait(t, f, started)
 	}
-	f.send(t, deliveryRequest(t, "overflow", optional("exact-op"), deliveryContext()))
+	f.send(t, deliveryRequest(t, seq(34), optional("exact-op"), deliveryContext()))
 	response := f.read(t)
-	if response.Result == nil || response.Result.RequestId != "overflow" || response.Result.Status != "unavailable" || response.Result.Code == nil || *response.Result.Code != "handler_backpressure" {
+	if response.Result == nil || response.Result.RequestId != seq(34) || response.Result.Status != "unavailable" || response.Result.Code == nil || *response.Result.Code != "handler_backpressure" {
 		t.Fatalf("backpressure: %+v", response)
 	}
-	f.send(t, deliveryRequest(t, "held-0", optional("exact-op"), deliveryContext()))
+	f.send(t, deliveryRequest(t, seq(2), optional("exact-op"), deliveryContext()))
 	if response := f.read(t); response.Error == nil || response.Error.Code != -32600 {
 		t.Fatalf("pending duplicate admitted: %+v", response)
 	}
@@ -514,7 +515,7 @@ func TestResponseDeliveryConcurrentBackpressureAndCancellation(t *testing.T) {
 	seen := make(map[string]bool)
 	for _, event := range events {
 		assertDeliveryRequest(t, event, event.request.RequestID, false)
-		if !strings.HasPrefix(event.request.RequestID, "held-") || seen[event.request.RequestID] {
+		if !strings.HasPrefix(event.request.RequestID, "desktop-call:"+testNonce+":") || event.request.RequestID == seq(34) || seen[event.request.RequestID] {
 			t.Fatalf("uninvoked or duplicate callback: %+v", event)
 		}
 		seen[event.request.RequestID] = true
