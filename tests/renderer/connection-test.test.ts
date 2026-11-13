@@ -112,11 +112,11 @@ it("does not acknowledge an ambiguous manual send", async () => {
 it.each([
   [
     "refused",
-    "This test was refused before Send because Farol could not confirm all current app, tunnel, runtime and Computer prerequisites. Setup can be complete while a current attachment is missing. Review the connection and original result in Activity; do not repeat an unresolved attempt.",
+    "This test was refused before Send because Farol could not confirm all current app, tunnel, runtime and Computer prerequisites. Setup can be complete while a current attachment is missing. Nothing was sent. Check the connection, then try again.",
   ],
   [
     "unknown",
-    "This original test has an unconfirmed outcome. It will not be sent again; review the original attempt.",
+    "Could not confirm that ChatGPT reached this Mac. You can ping again.",
   ],
 ] as const)(
   "keeps %s visible in the toolbar without repeating the check",
@@ -151,7 +151,7 @@ it.each([
       expect(
         toolbar?.querySelector('[role="status"]')?.nextElementSibling
           ?.textContent,
-      ).toBe("Test connection");
+      ).toBe("Ping ChatGPT");
       expect(h.configure).toHaveBeenCalledTimes(1);
     } finally {
       await act(async () => root.unmount());
@@ -176,7 +176,7 @@ it("publishes the toolbar menu through the host presentation owner without start
     await act(async () =>
       host
         .querySelector<HTMLButtonElement>(
-          '[aria-label="More connection tests"]',
+          '[aria-label="More checks"]',
         )!
         .click(),
     );
@@ -288,9 +288,9 @@ it.each([
   [
     "refused",
     "CHATGPT_CONVERSATION_UNCONFIRMED",
-    "The check was not confirmed",
+    "The ping was not sent",
   ],
-  ["unknown", "CHATGPT_APP_SELECTION_CONFLICT", "unconfirmed outcome"],
+  ["unknown", "CHATGPT_APP_SELECTION_CONFLICT", "You can ping again"],
 ] as const)(
   "shows %s / %s without another send",
   async (intentState, code, expected) => {
@@ -330,7 +330,7 @@ it.each([
   },
 );
 
-it("keeps a contradictory applied result with an error unconfirmed and does not resend", async () => {
+it("keeps a contradictory applied result with an error unconfirmed and lets the owner ping again", async () => {
   const h = await setup();
   try {
     h.configure.mockResolvedValue({
@@ -342,7 +342,13 @@ it("keeps a contradictory applied result with an error unconfirmed and does not 
     const second = await runFreshConnectionTest(h.facade);
     expect(first.state).toBe("unknown");
     expect(second.state).toBe("unknown");
-    expect(h.configure).toHaveBeenCalledTimes(1);
+    // Each click is a fresh operation; the first one is never re-sent.
+    expect(h.configure).toHaveBeenCalledTimes(2);
+    const ids = h.configure.mock.calls.map(
+      ([command]) => (command as { operationId?: string }).operationId,
+    );
+    expect(ids[0]).toBeTruthy();
+    expect(ids[0]).not.toBe(ids[1]);
   } finally {
     h.cleanup();
   }

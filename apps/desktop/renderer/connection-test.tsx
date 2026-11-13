@@ -27,19 +27,16 @@ function owner(facade: RendererFacade) {
 }
 const text = (state: State): string => {
   if (state.phase === "preparing" || state.phase === "testing")
-    return "Testing once in a temporary ChatGPT chat…";
-  if (state.phase === "done")
-    return "The original connection test was confirmed. Current status is shown separately.";
+    return "Pinging ChatGPT in a temporary chat…";
+  if (state.phase === "done") return "ChatGPT reached this Mac.";
   if (state.phase === "unknown")
-    return "This original test has an unconfirmed outcome. It will not be sent again; review the original attempt.";
+    return "Could not confirm that ChatGPT reached this Mac. You can ping again.";
   if (state.phase === "refused") {
     if (state.code === "CONNECTION_CHECK_PENDING")
-      return "An earlier connection check is unresolved. It was not repeated.";
-    if (state.code === "CONNECTION_CHECK_ALREADY_ATTEMPTED")
-      return "This challenge already has an attempt. Its original outcome was not changed or retried.";
+      return "Another check is still finishing. Try again in a moment.";
     return (
       chatGptPreSubmitRemedy(state.code) ??
-      "The check was not confirmed. Review the original attempt and current connection; no repair was attempted."
+      "The ping was not sent. You can try again."
     );
   }
   return "";
@@ -55,14 +52,8 @@ export async function runExplicitConnectionTest(
   const id = "connection-test";
   if (active.running)
     return { id, state: "refused", code: "CONNECTION_TEST_IN_PROGRESS" };
-  if (active.state.phase === "unknown")
-    return {
-      id: active.state.operationId
-        ? `connection-test:run:${active.state.operationId}`
-        : id,
-      state: "unknown",
-      code: "CONNECTION_CHECK_OUTCOME_UNKNOWN",
-    };
+  // Owner checks are unlimited: an earlier unconfirmed ping never blocks a new
+  // one. Each ping is a fresh operation; the earlier one is never re-sent.
   const publish = (state: State) => {
     active.state = state;
     for (const listener of active.listeners) listener();
@@ -193,19 +184,20 @@ export function ConnectionTestButton({
       )}
       <button
         className={primary ? "primary" : undefined}
-        title="Send one connection test in a temporary ChatGPT chat"
+        title="Check that ChatGPT can reach this Mac, in a temporary chat"
         disabled={
           disabled ||
           test.busy ||
-          test.state.phase === "unknown" ||
           !commandAllowed(snapshot, "connector.test-connection")
         }
         onClick={() => void runExplicitConnectionTest(facade)}
       >
         {test.busy
-          ? "Testing…"
+          ? toolbar
+            ? "Pinging…"
+            : "Testing…"
           : toolbar
-            ? "Test connection"
+            ? "Ping ChatGPT"
             : "Test in ChatGPT"}
       </button>
       {toolbar && (
@@ -213,7 +205,7 @@ export function ConnectionTestButton({
           ref={arrow}
           type="button"
           className="connection-test-menu-trigger"
-          aria-label="More connection tests"
+          aria-label="More checks"
           aria-haspopup="dialog"
           aria-expanded={menuOpen}
           disabled={disabled}

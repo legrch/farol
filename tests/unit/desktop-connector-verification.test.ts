@@ -83,7 +83,7 @@ it("observes exact Go proof and retains its original call on repeated verificati
   ]);
   expect(Object.isFrozen(result.receipt?.execution)).toBe(true);
 });
-it("carries only the supplied UUID and never turns a passive historical proof into a diagnostic ACK", async () => {
+it("carries only the supplied UUID and lets Go acknowledge an argument-free status call", async () => {
   const f = fixture();
   const checkId = "49a0cb44-5c67-4aae-9b56-41db024507d3";
   // Reading an unarmed ID may expose the ordinary proof, but no ACK.
@@ -97,10 +97,9 @@ it("carries only the supplied UUID and never turns a passive historical proof in
   }));
   expect((await f.bridge.observe(checkId)).receipt).toEqual(f.receipt);
   expect((await f.bridge.observe(checkId)).checkId).toBe(checkId);
-  await expect(f.bridge.observe()).rejects.toMatchObject({
-    state: "unknown",
-    code: "uncorrelated_connector_status_check",
-  });
+  // ChatGPT's cached tool schema sends {}; Go may acknowledge its armed check.
+  expect((await f.bridge.observe()).checkId).toBe(checkId);
+  expect(f.request.mock.calls.at(-1)?.[1]).toEqual({ binding });
   const otherId = "ab457438-df13-4ef1-916c-e7818134e33b";
   await expect(f.bridge.observe(otherId)).rejects.toMatchObject({
     state: "unknown",

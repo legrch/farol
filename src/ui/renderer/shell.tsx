@@ -1,4 +1,5 @@
 import { ConnectionTestButton } from "../../../apps/desktop/renderer/connection-test";
+import { chatGptPreSubmitRemedy } from "../chatgpt-pre-submit-remedy";
 import { OperationsActivity } from "../../../apps/desktop/renderer/operations-view";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode, RefObject } from "react";
@@ -954,6 +955,17 @@ function ChatBrowser({
     </div>
   );
 }
+// A refused Full check sent nothing, so the owner can simply run it again.
+function fullCheckNotSent(code: string | null | undefined): string {
+  if (code === "CHATGPT_TASK_IN_PROGRESS")
+    return "Full check was not sent: another ChatGPT task or check is still running. Try again when it finishes.";
+  if (code === "CONNECTOR_APP_VERIFICATION_NOT_READY")
+    return "Full check was not sent: finish connecting ChatGPT first.";
+  const remedy = chatGptPreSubmitRemedy(code ?? null);
+  return remedy
+    ? `Full check was not sent. ${remedy}`
+    : "Full check was not sent. You can try again.";
+}
 export function Shell() {
   const { snapshot, facade } = useRenderer();
   const state = snapshot;
@@ -1192,12 +1204,12 @@ export function Shell() {
               !deepTestIntent
                 ? ""
                 : deepTestIntent.state === "pending"
-                  ? "Preparing Deep test…"
+                  ? "Preparing Full check…"
                   : deepTestIntent.state === "unknown"
-                    ? "Could not confirm whether the request was sent. Check this chat before starting a new test."
+                    ? "Could not confirm whether the Full check was sent. Check this chat; you can run it again."
                     : deepTestIntent.state === "refused"
-                      ? "Deep test was not sent."
-                      : "Send requested. View ChatGPT."
+                      ? fullCheckNotSent(deepTestIntent.code)
+                      : "Full check sent. View ChatGPT."
             }
           />
         )}
@@ -1450,7 +1462,7 @@ export function Shell() {
       <UpdateNotice snapshot={state} facade={facade} />
       {state.overlay === "connection-tests" && (
         <Overlay
-          title="Connection tests"
+          title="Checks"
           className="connection-tests-menu"
           initialFocus={deepTestMenuItem}
           onClose={() => facade.overlay("none")}
@@ -1486,16 +1498,16 @@ export function Shell() {
                 });
             }}
           >
-            Deep test
+            Full check
           </button>
           <button onClick={() => facade.overlay("deep-test")}>
-            Previous test results
+            Previous check results
           </button>
         </Overlay>
       )}
       {state.overlay === "deep-test" && (
         <Overlay
-          title="Previous test results"
+          title="Previous check results"
           className="deep-test-sheet"
           onClose={() => facade.overlay("none")}
         >

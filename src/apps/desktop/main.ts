@@ -946,7 +946,8 @@ let connectorCredentialStore: PrivateConnectorKeyStore | null = null;
 let secureMcpConnectorRuntime: SecureMcpConnectorRuntime | null = null;
 let modelLifecycle: FarolModelLifecycle | null = null;
 let connectorTaskAdmission = false;
-// Manual chat diagnostics reserve dispatch, but do not alter the connector.
+// Manual owner checks (Ping ChatGPT, Full check) reserve dispatch, but do not
+// alter the connector or the sidebar connection status.
 let connectorTaskAdmissionPurpose: "manual-diagnostic" | null = null;
 
 function connectionAdmissionInProgress(): boolean {
@@ -5921,6 +5922,10 @@ async function testConnectionCommand(
         // Reserve existing Desktop owners before the first browser/native await.
         chatGptTaskAdmission = true;
         connectorTaskAdmission = true;
+        // An owner's own toolbar check is a manual diagnostic: it must not
+        // flip the sidebar to "Checking connection…". Setup keeps its state.
+        if (origin !== "setup")
+          connectorTaskAdmissionPurpose = "manual-diagnostic";
         reserved = true;
         const snapshot = config.snapshot();
         if (snapshot.status !== "ready")
@@ -6072,6 +6077,7 @@ async function testConnectionCommand(
     if (reserved) {
       chatGptTaskAdmission = false;
       connectorTaskAdmission = false;
+      connectorTaskAdmissionPurpose = null;
       void connectorConnection
         .sample()
         .then(currentConnectionStatus)
