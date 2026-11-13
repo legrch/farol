@@ -6,9 +6,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/legrch/farol/pkg/limit"
 
 	"golang.org/x/sys/unix"
 )
@@ -144,8 +145,8 @@ func (d *disk) read() (raw []byte, err error) {
 	if err != nil || !private(before, unix.S_IFREG, 0600) || before.Size < 1 || before.Size > maxReadStateBytes {
 		return nil, refuse(err)
 	}
-	raw, err = io.ReadAll(io.LimitReader(f, maxReadStateBytes+1))
-	if err != nil || len(raw) > maxReadStateBytes {
+	raw, err = limit.Read(f, maxReadStateBytes)
+	if err != nil {
 		return nil, refuse(err)
 	}
 	after, err := fdstat(fd)
@@ -311,7 +312,7 @@ func (d *disk) confirm(expected []byte) (err error) {
 	if err != nil || !private(before, unix.S_IFREG, 0600) || before.Size != int64(len(expected)) {
 		return refuse(err)
 	}
-	raw, err := io.ReadAll(io.LimitReader(file, maxReadStateBytes+1))
+	raw, err := limit.Read(file, maxReadStateBytes)
 	after, statErr := fdstat(fd)
 	var named unix.Stat_t
 	if err != nil || statErr != nil || !bytes.Equal(raw, expected) || !stableState(before, after) {

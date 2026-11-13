@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/legrch/farol/pkg/limit"
+
 	stop "github.com/legrch/farol/modules/computer/domain/journal"
 	"golang.org/x/sys/unix"
 )
@@ -114,7 +116,7 @@ func (d *disk) stopWitness() (present bool, err error) {
 	if e != nil || !private(before, unix.S_IFREG, 0600) || before.Size != int64(len(stopWitnessPayload)) {
 		return false, refuse(e)
 	}
-	raw, e := io.ReadAll(io.LimitReader(file, int64(len(stopWitnessPayload)+1)))
+	raw, e := limit.Read(file, int64(len(stopWitnessPayload)))
 	after, statErr := fdstat(fd)
 	var named unix.Stat_t
 	if e != nil || statErr != nil || string(raw) != stopWitnessPayload || !stableState(before, after) {
@@ -187,11 +189,11 @@ func (d *disk) readStopLedger() (raw []byte, err error) {
 		before.Size < 1 || before.Size > stopLedgerMaxBytes {
 		return nil, refuse(e)
 	}
-	raw, e = io.ReadAll(io.LimitReader(file, stopLedgerMaxBytes+1))
+	raw, e = limit.Read(file, stopLedgerMaxBytes)
 	after, statErr := fdstat(fd)
 	var named unix.Stat_t
 	if e != nil || statErr != nil || len(raw) == 0 ||
-		len(raw) > stopLedgerMaxBytes || !stableState(before, after) {
+		!stableState(before, after) {
 		return nil, refuse(e, statErr)
 	}
 	if e = unix.Fstatat(d.dir, stopLedgerName, &named, unix.AT_SYMLINK_NOFOLLOW); e != nil ||
@@ -224,7 +226,7 @@ func (d *disk) qualifyStopLedger(expected []byte) (err error) {
 	if e != nil || !private(before, unix.S_IFREG, 0600) || before.Size != int64(len(expected)) {
 		return refuse(e)
 	}
-	actual, e := io.ReadAll(io.LimitReader(file, stopLedgerMaxBytes+1))
+	actual, e := limit.Read(file, stopLedgerMaxBytes)
 	after, statErr := fdstat(fd)
 	var named unix.Stat_t
 	if e != nil || statErr != nil || !bytes.Equal(actual, expected) || !stableState(before, after) {
