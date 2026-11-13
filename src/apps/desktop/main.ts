@@ -1,5 +1,6 @@
 import "../../../apps/desktop/bridge/e2e-window-bootstrap.ts";
 import { guardDiagnosticPipes } from "./diagnostic-pipes";
+import { openStartupSplash, type StartupSplash } from "./startup-splash";
 import { preventEmbeddedWindowDrag } from "./embedded-web-drag";
 import { separateAppVerificationScopeCurrent } from "../../pkg/product-settings/separate-app-verification";
 import { prepareConnectorCheckDocument } from "../../../apps/desktop/bridge/connector-check-readiness";
@@ -13083,6 +13084,13 @@ function chatGptWindowPresentationOption(): Readonly<{
   return presentation === undefined ? {} : { windowPresentation: presentation };
 }
 
+let startupSplash: StartupSplash | null = null;
+function closeStartupSplash(): void {
+  const splash = startupSplash;
+  startupSplash = null;
+  splash?.close();
+}
+
 function revealWindow(): void {
   if (!window || window.isDestroyed()) return;
   if (window.isMinimized()) window.restore();
@@ -13091,6 +13099,7 @@ function revealWindow(): void {
     window.setBounds(selectedVisibleTestPlacement(initialWindowSize).bounds);
     window.showInactive();
   } else if (action === "show-and-focus") window.show();
+  closeStartupSplash();
 }
 
 function reconcileVisibleTestDisplay(): void {
@@ -13536,6 +13545,32 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   }
   if (process.platform === "darwin") {
     app.dock?.setIcon(desktopBrandImage());
+  }
+  // Ordinary owner launch only: show a window at once while Go core,
+  // settings, journals and task state start. Tests and background
+  // launches keep their existing window policy.
+  if (
+    windowMode !== "hidden" &&
+    !ownerBackgroundOnly &&
+    process.env.FAROL_E2E !== "1"
+  ) {
+    try {
+      startupSplash = openStartupSplash({
+        title: displayWindowTitle,
+        width: initialWindowSize.width,
+        height: initialWindowSize.height,
+        iconDataUrl: desktopBrandImage().toDataURL(),
+        ...(windowMode === "secondary-visible"
+          ? {
+              bounds: selectedVisibleTestPlacement(initialWindowSize).bounds,
+              inactive: true,
+            }
+          : {}),
+      });
+      app.once("before-quit", closeStartupSplash);
+    } catch {
+      startupSplash = null;
+    }
   }
   // N03/D2: the run marker is this generation's first durable runtime obligation and the
   // last thing it removes — only after a quit whose drain was confirmed (see
@@ -14415,12 +14450,14 @@ if (
           process.stderr.write("INSTALL_STARTUP_PROOF_UNCONFIRMED\n");
         }
       }
+      closeStartupSplash();
       startupStage("startup-complete");
       process.stderr.write(
         `${secondInstanceResultPrefix}${isPrimaryReady() ? "primary-started" : "reopen-failed"}\n`,
       );
     })
     .catch(async (error: unknown) => {
+      closeStartupSplash();
       try {
         await desktopGoCore?.abortStartup();
       } catch {
