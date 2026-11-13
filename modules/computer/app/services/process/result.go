@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/legrch/farol/modules/computer/domain/authority"
+	"github.com/legrch/farol/pkg/kernel/domain/digest"
 )
 
 // TerminalResult is the owning service's complete bounded execution result.
@@ -64,10 +65,10 @@ func ValidTerminalResult(v TerminalResult) bool {
 	nanos := i.Deadline.UnixNano()
 	if !identifier(s.OwnerID) || !identifier(s.ComputerID) || !boundedID(s.CallID, 120) ||
 		!identifier(h.ProfileID) || !boundedID(h.BackendGeneration, 120) || !boundedID(h.BuildID, 120) ||
-		!boundedID(h.RuntimeID, 120) || !digest(h.LaunchDigest) || h.ConnectorGeneration == 0 ||
+		!boundedID(h.RuntimeID, 120) || !digest.Valid(h.LaunchDigest) || h.ConnectorGeneration == 0 ||
 		!identifier(i.OperationID) || b.OwnerID != s.OwnerID || !identifier(b.OwnerID) ||
 		!boundedID(b.SessionID, 120) || !boundedID(b.TaskID, 120) || !boundedID(b.ParticipantID, 120) || !boundedID(b.TurnID, 120) ||
-		!digest(seal.Digest) || !boundedID(seal.WorkspaceID, 120) || !path(seal.Root) || !path(seal.Cwd) || !authority.Within(seal.Root, seal.Cwd) ||
+		!digest.Valid(seal.Digest) || !boundedID(seal.WorkspaceID, 120) || !path(seal.Root) || !path(seal.Cwd) || !authority.Within(seal.Root, seal.Cwd) ||
 		!counter(seal.RootIdentity.Device) || !counter(seal.RootIdentity.Inode) || nanos <= 0 || !time.Unix(0, nanos).Equal(i.Deadline) {
 		return false
 	}

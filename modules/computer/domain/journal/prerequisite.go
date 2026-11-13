@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/legrch/farol/modules/computer/domain/observation"
+	"github.com/legrch/farol/pkg/kernel/domain/digest"
 )
 
 // StopLedger is original prerequisite custody, not Computer authority. Native
@@ -146,8 +147,8 @@ func stopDecimal(s string, zero bool) bool {
 }
 
 func ValidStopRequest(r StopRequest) bool {
-	if !uuid.MatchString(r.OperationID) || !digest.MatchString(r.RequestDigest) || !digest.MatchString(r.CommandDigest) ||
-		!digest.MatchString(r.ConsentDigest) || !digest.MatchString(r.SettingsDigest) || !digest.MatchString(r.BuildID) ||
+	if !uuid.MatchString(r.OperationID) || !digest.Valid(r.RequestDigest) || !digest.Valid(r.CommandDigest) ||
+		!digest.Valid(r.ConsentDigest) || !digest.Valid(r.SettingsDigest) || !digest.Valid(r.BuildID) ||
 		!identity.MatchString(r.ProfileID) || !identity.MatchString(r.OwnerID) || !identity.MatchString(r.ComputerID) ||
 		!identity.MatchString(r.HostLifetimeID) || !identity.MatchString(r.BackendGeneration) || !identity.MatchString(r.RuntimeID) ||
 		!uuid.MatchString(r.BootUUID) || !stopDecimal(r.ExpectedRevision, false) || !stopDecimal(r.ComputerGeneration, false) || !stopDecimal(r.ConnectorGeneration, false) {
@@ -207,7 +208,7 @@ func ValidStopRequest(r StopRequest) bool {
 		return childMode == "" && r.ChildMode == "" && r.ChildIntentDigest == ""
 	}
 	return r.Purpose == "workspace-change" && r.WorkspaceID != "" && uuid.MatchString(r.ChildOperationID) && !ids[r.ChildOperationID] &&
-		childMode != "" && r.ChildMode == childMode && digest.MatchString(r.ChildIntentDigest)
+		childMode != "" && r.ChildMode == childMode && digest.Valid(r.ChildIntentDigest)
 }
 
 func validStopRoot(root string) bool {
@@ -272,14 +273,14 @@ func (e StopEntry) Valid() bool {
 	if a := e.Closure; a != nil {
 		if a.EffectID != r.StopEffectID || a.BackendGeneration != r.BackendGeneration || a.RuntimeID != r.RuntimeID ||
 			!uuid.MatchString(a.LifecycleID) || !stopDecimal(a.StopRevision, false) || !stopDecimal(a.PreparationRevision, true) ||
-			!uuid.MatchString(a.ClosureOperationID) || !digest.MatchString(a.ClosureDigest) {
+			!uuid.MatchString(a.ClosureOperationID) || !digest.Valid(a.ClosureDigest) {
 			return false
 		}
 	}
 	if p := e.SettingsIntent; p != nil {
 		rev, _ := strconv.ParseUint(r.ExpectedRevision, 10, 64)
 		if rev == ^uint64(0) || p.EffectID != r.SettingsEffectID || p.ExpectedRevision != r.ExpectedRevision || p.ExpectedDigest != r.SettingsDigest ||
-			p.NextRevision != strconv.FormatUint(rev+1, 10) || !digest.MatchString(p.NextDigest) || p.NextDigest == p.ExpectedDigest ||
+			p.NextRevision != strconv.FormatUint(rev+1, 10) || !digest.Valid(p.NextDigest) || p.NextDigest == p.ExpectedDigest ||
 			p.ComputerGeneration != r.ComputerGeneration || p.ConnectorGeneration != r.ConnectorGeneration || p.ConsentDigest != r.ConsentDigest {
 			return false
 		}
@@ -292,7 +293,7 @@ func (e StopEntry) Valid() bool {
 		}
 	}
 	if a := e.CleanupAck; a != nil {
-		if a.EffectID != r.CleanupEffectID || a.BackendGeneration != r.BackendGeneration || a.RuntimeID != r.RuntimeID || !digest.MatchString(a.Digest) {
+		if a.EffectID != r.CleanupEffectID || a.BackendGeneration != r.BackendGeneration || a.RuntimeID != r.RuntimeID || !digest.Valid(a.Digest) {
 			return false
 		}
 	}

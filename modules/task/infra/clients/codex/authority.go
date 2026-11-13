@@ -7,6 +7,7 @@ import (
 
 	"github.com/legrch/farol/modules/task/app/port"
 	"github.com/legrch/farol/modules/task/domain"
+	"github.com/legrch/farol/pkg/kernel/domain/digest"
 )
 
 type AuthorityState string
@@ -103,7 +104,7 @@ func (s AuthoritySnapshot) check() error {
 	}
 	x := s.Selection
 	h := s.Handoff
-	if !x.valid() || !digest(x.Binding.ConfigDigest) || !s.Approved ||
+	if !x.valid() || !digest.Valid(x.Binding.ConfigDigest) || !s.Approved ||
 		s.HostGeneration == 0 || s.ComputerGeneration == 0 ||
 		s.GrantHostGeneration != s.HostGeneration || s.GrantComputerGeneration != s.ComputerGeneration ||
 		s.VerifiedWorkspaceID != x.Binding.WorkspaceID || s.VerifiedComputerGeneration != s.ComputerGeneration ||

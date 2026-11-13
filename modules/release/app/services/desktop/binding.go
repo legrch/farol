@@ -6,14 +6,14 @@ import (
 	"regexp"
 
 	"github.com/legrch/farol/modules/release/app/port"
+	"github.com/legrch/farol/pkg/kernel/domain/digest"
 )
 
-var digest = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var operation = regexp.MustCompile(`^[a-f0-9]{32}$`)
 var version = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
 
 func validBuild(b port.DesktopLifetimeBuild) bool {
-	return digest.MatchString(b.BuildID) && digest.MatchString(b.Digest) && len(b.Version) <= 128 && version.MatchString(b.Version)
+	return digest.Valid(b.BuildID) && digest.Valid(b.Digest) && len(b.Version) <= 128 && version.MatchString(b.Version)
 }
 
 // Valid uses values supplied by the native boundary, not an ambient clock.

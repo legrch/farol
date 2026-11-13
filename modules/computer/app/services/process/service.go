@@ -8,6 +8,7 @@ import (
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/authority"
+	"github.com/legrch/farol/pkg/kernel/domain/digest"
 )
 
 const MaximumOutput = 4 * 1024 * 1024
@@ -81,22 +82,11 @@ func identifier(v string) bool {
 	}
 	return true
 }
-func digest(v string) bool {
-	if len(v) != 64 {
-		return false
-	}
-	for _, c := range v {
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
-			return false
-		}
-	}
-	return true
-}
 func plainPath(v string) bool {
 	return len(v) > 0 && len(v) <= 4096 && strings.HasPrefix(v, "/") && !strings.ContainsRune(v, 0) && utf8.ValidString(v)
 }
 func validSeal(s Seal) bool {
-	return digest(s.Digest) && identifier(s.WorkspaceID) && plainPath(s.Root) && plainPath(s.Cwd) &&
+	return digest.Valid(s.Digest) && identifier(s.WorkspaceID) && plainPath(s.Root) && plainPath(s.Cwd) &&
 		(s.Cwd == s.Root || strings.HasPrefix(s.Cwd, strings.TrimSuffix(s.Root, "/")+"/")) && s.RootIdentity.Device != "" && s.RootIdentity.Inode != ""
 }
 func sameIntent(a, b Intent) bool {

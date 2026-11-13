@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	kerneldigest "github.com/legrch/farol/pkg/kernel/domain/digest"
 )
 
 // Code is a stable classified refusal. It never includes paths or file content.
@@ -104,7 +106,7 @@ func New(homePath string, home, state, lease *os.File, expected Expected, proces
 		return nil, ErrDependency
 	}
 	if !validHome(homePath) || !validIdentity(expected.StateIdentity) || !validIdentity(expected.LeaseIdentity) || expected.PID <= 1 ||
-		!validText(expected.ProcessStart, 128) || !validDigest(expected.LastQuitSHA256) {
+		!validText(expected.ProcessStart, 128) || !kerneldigest.Valid(expected.LastQuitSHA256) {
 		return nil, ErrInput
 	}
 	if _, ok := timestamp(expected.StartedAt); !ok {
@@ -161,17 +163,6 @@ func decimal(s string) bool {
 	return true
 }
 func validIdentity(i Identity) bool { return decimal(i.Device) && decimal(i.Inode) }
-func validDigest(s string) bool {
-	if len(s) != 64 {
-		return false
-	}
-	for _, c := range s {
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
-			return false
-		}
-	}
-	return true
-}
 func canceled(ctx context.Context) error {
 	if ctx == nil {
 		return ErrDependency

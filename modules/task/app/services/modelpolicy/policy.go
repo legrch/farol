@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/legrch/farol/modules/task/app/port"
+	kerneldigest "github.com/legrch/farol/pkg/kernel/domain/digest"
 )
 
 const MaxPolicyBytes = 1 << 20
@@ -108,7 +109,7 @@ func (s *Service) Resolve(configJSON, requestJSON []byte) Resolution {
 		return Resolution{Status: Unavailable}
 	}
 	digest, err := s.digester.Digest(identity)
-	if err != nil || !validDigest(digest) {
+	if err != nil || !kerneldigest.Valid(digest) {
 		return Resolution{Status: Unavailable}
 	}
 	effort := r.Effort
@@ -213,17 +214,6 @@ func runtimeModel(s string) bool {
 	for i := range len(s) {
 		c := s[i]
 		if !lowerDigit(c) && !(c >= 'A' && c <= 'Z') && c != '_' && c != '-' && c != '.' && c != '/' {
-			return false
-		}
-	}
-	return true
-}
-func validDigest(s string) bool {
-	if len(s) != 64 {
-		return false
-	}
-	for i := range len(s) {
-		if !(s[i] >= 'a' && s[i] <= 'f') && !(s[i] >= '0' && s[i] <= '9') {
 			return false
 		}
 	}
