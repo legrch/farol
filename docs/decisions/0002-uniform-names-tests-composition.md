@@ -13,14 +13,16 @@ left file names, tests and the composition root to review. On `main` at
 `bb8381d7682318524963506a3ae091a17d6560e0` the checker in this record measures
 591 production files outside the word vocabulary, 236 tests without a
 same-named source, 238 files with behavior but no test, 195 test files plus
-`testdata/` and 162 files outside the target file set in `boot/`, and 347
-logic findings (per kind and file) inside `boot/`. The
+`testdata/` and 162 files outside the target file set in `boot/`, and 4,012
+units of logic inside `boot/` (2,858 conditions and statements, 147 extra
+top-level types and 1,007 lines beyond the budget, in 347 per-file rows). The
 underscore ban made Go's own platform suffixes impossible, so platform words
 were glued into stems (`anchordarwin.go`). Any module import of a new
 `pkg/<word>` was refused, so stateless helpers (bounded reads, digest and
-descriptor predicates) were copied into 24 packages. ADR-0001's exact-row report
-baseline (117 rows) cannot carry the roughly 2,000 findings the rules below
-produce.
+descriptor predicates) were copied into 24 packages. ADR-0001's hand-reviewed
+exact-row baseline (117 rows) cannot be maintained by hand for the roughly
+2,100 findings the rules below produce, so this record keeps exact rows but
+generates and shrinks them with the checker.
 
 The owner decided the rules below on 2026-11-13. The design inputs are the
 private refactoring audit of that date (conventions N/L/O/B/T and K1-K6, the
@@ -243,17 +245,17 @@ them.
 implements every mechanical rule. Blocking rules fail the executable (and
 `task test:core`) everywhere:
 
-| Code                                                                           | Rule                                                                                       |
-| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
-| `GO_SHORT_NAME` (changed)                                                      | One lowercase stem plus only `_test` and toolchain `_GOOS`/`_GOARCH` suffixes.             |
-| `GO_GENERIC_NAME` (changed)                                                    | The generic stems are refused with any suffix.                                             |
-| `GO_KERNEL_LAYOUT` (new)                                                       | Kernel admits only `domain/<word>`, `app/port/<topic>` and `infra/peer`.                   |
-| `GO_KIT_DEPENDENCY` (new)                                                      | Kit import directions (decision 6).                                                        |
-| `GO_DESKTOP_DEPENDENCY` (new)                                                  | Module desktop adapter import directions (decision 5).                                     |
-| `GO_LAYER_DIRECTION`, `GO_CONTRACT_LEAK`, `GO_TRANSPORT_DEPENDENCY` (extended) | Kits for module infra and transport; no kit in pure layers; no import of a module adapter. |
-| `GO_EXCEPTION_STALE` (new)                                                     | An exception row that matches no finding or sits in an unmigrated scope.                   |
-| `GO_REPORT_CEILING` (new)                                                      | A report count above its declared ceiling.                                                 |
-| `GO_CEILING_STALE` (new)                                                       | A report count below its ceiling, or a ceiling with no findings or on a migrated scope.    |
+| Code                                                                           | Rule                                                                                          |
+| ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `GO_SHORT_NAME` (changed)                                                      | One lowercase stem plus only `_test` and toolchain `_GOOS`/`_GOARCH` suffixes.                |
+| `GO_GENERIC_NAME` (changed)                                                    | The generic stems are refused with any suffix.                                                |
+| `GO_KERNEL_LAYOUT` (new)                                                       | Kernel admits only `domain/<word>`, `app/port/<topic>` and `infra/peer`.                      |
+| `GO_KIT_DEPENDENCY` (new)                                                      | Kit import directions (decision 6).                                                           |
+| `GO_DESKTOP_DEPENDENCY` (new)                                                  | Module desktop adapter import directions (decision 5).                                        |
+| `GO_LAYER_DIRECTION`, `GO_CONTRACT_LEAK`, `GO_TRANSPORT_DEPENDENCY` (extended) | Kits for module infra and transport; no kit in pure layers; no import of a module adapter.    |
+| `GO_EXCEPTION_STALE` (new)                                                     | An exception row that matches no finding or sits in an unmigrated scope.                      |
+| `GO_REPORT_NEW` (new)                                                          | A report finding with no exact baseline row, or a boot-logic amount above its row.            |
+| `GO_BASELINE_STALE` (new)                                                      | A baseline row with no finding, in a migrated scope, or with an amount above the current one. |
 
 These new blocking rules have no finding on `main`; several replace the former
 blanket refusal of any unknown `pkg` path, which was also blocking. Migration
@@ -269,7 +271,7 @@ rules report everywhere and block only where a scope is migrated:
 | `GO_TEST_MISSING`         | File with behavior without its test (outside `boot`, `cmd`, `gen`).         |
 | `GO_BOOT_TEST`            | Test file or `testdata/` under `boot/`.                                     |
 | `GO_BOOT_FILE`            | `boot/` file other than `boot.go` and one per module, or a boot subpackage. |
-| `GO_BOOT_LOGIC`           | Logic in `boot/` (decision 3), counted per kind and file.                   |
+| `GO_BOOT_LOGIC`           | Logic in `boot/` (decision 3): one row per kind and file with an amount.    |
 | `GO_OPERATION_SHAPE`      | Service method, application type or contract type shape (decision 4).       |
 | `GO_CAPABILITY_DIRECTION` | Capability imports a service (ADR-0001).                                    |
 | `GO_INFRA_SERVICE`        | Infrastructure imports a service (ADR-0001).                                |
@@ -284,16 +286,30 @@ enforcement file holds:
   a floor (`migratedFloor` in
   [`tests/architecture/go-architecture.test.ts`](../../tests/architecture/go-architecture.test.ts)),
   so removing a migrated scope fails the test.
-- `ceilings`: per rule and unmigrated scope, the exact report count. Growth
-  fails `GO_REPORT_CEILING`; a lower count fails `GO_CEILING_STALE` until the
-  same change lowers the ceiling to the new count (or deletes it at zero), so a
-  fix never leaves slack that a later finding could reuse.
+- `baseline`: one exact row per report finding in an unmigrated scope, for
+  every migration rule (`code`, `file`, `detail`, as ADR-0001's baseline had).
+  A finding without its row fails `GO_REPORT_NEW`, even when the same change
+  fixed another finding of that rule and scope; a row without its finding, or
+  in a migrated scope, fails `GO_BASELINE_STALE`. `GO_BOOT_LOGIC` rows also
+  carry an `amount`: the occurrences of that kind of logic in the file (`if`
+  conditions, `for`, `switch`, `select`, `go`), the top-level types beyond one,
+  or the lines beyond the budget. A higher amount fails as new, a lower one as
+  stale until the row is lowered. Nothing is counted per scope, so no fix can
+  pay for a new finding.
 - `exceptions`: exact `code`/`file`/`detail` rows with `reason` and `removal`,
   effective only in a migrated scope. Blocking rules cannot be excepted.
 
 At Wave 0 every scope is in report mode for every migration rule and the
-ceilings equal the counts on `main`, so the gate stays green with no production
-change.
+baseline holds exactly the findings on `main`, so the gate stays green with no
+production change.
+
+`node tooling/check-go-architecture.mjs --write-baseline` is the only writer.
+It never runs implicitly, and it only shrinks: it drops stale rows and lowers
+amounts to the measured value, while new findings stay failing.
+`--write-baseline --admit-new` also adds rows for the current new findings and
+raises amounts; use it only for a reviewed reason (for example a move that
+carries an existing finding to a new path), where the added rows are visible
+in the diff.
 
 ### Migrating a module
 
@@ -302,19 +318,25 @@ change.
    the machine form).
 2. Fix the findings in behaviour-preserving pull requests. Renames never change
    wire symbols, persisted keys, journal schemas or error code strings. Every
-   such pull request lowers each affected ceiling to the new count printed by
-   `GO_CEILING_STALE`; a count that would grow is fixed instead.
+   such pull request runs `--write-baseline` to drop the fixed rows; each
+   `GO_BASELINE_STALE` message names the row and the value to set.
 3. In the pull request that brings a rule to zero for the module, add the
-   module to that rule's `migrated` list, delete its ceiling and add the scope
-   to `migratedFloor`. A remaining two-word name needs an exception row the
-   owner has reviewed.
+   module to that rule's `migrated` list and add the scope to
+   `migratedFloor`. A remaining two-word name needs an exception row the owner
+   has reviewed.
 4. Run `npm run test:architecture` and `task test:core`.
+5. After merging `main` into the branch, or before integrating parallel
+   migration pull requests, rerun the checker on the merged tree and run
+   `--write-baseline` there before pushing: two branches that each removed
+   rows or lowered the same amount can merge cleanly and still leave rows
+   that the merged tree no longer matches.
 
 ## Alternatives considered
 
-- **Keep the exact-row baseline.** About 2,000 rows would churn with every
-  rename and drown real additions; per-scope switches plus count ceilings keep
-  growth visible at a reviewable size.
+- **Per-scope count ceilings instead of rows.** Rejected: one change could fix
+  one finding and add another of the same rule and scope without any count
+  moving. Generated exact rows cost a larger data file but keep every new
+  finding visible.
 - **Make every new rule blocking at once.** Impossible without one
   unreviewable rewrite of every module.
 - **A dictionary or word splitter for names.** Rejected as in ADR-0001: an
