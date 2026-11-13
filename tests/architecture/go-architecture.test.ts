@@ -303,6 +303,11 @@ describe("the executable root Go architecture boundary", () => {
     ["modules/chat/app/services/turn", "pkg/limit", "GO_LAYER_DIRECTION"],
     ["modules/chat/app/port", "pkg/limit", "GO_LAYER_DIRECTION"],
     ["modules/chat/contracts/turn", "pkg/limit", "GO_CONTRACT_LEAK"],
+    [
+      "modules/chat/contracts/turn",
+      "pkg/kernel/app/port/clock",
+      "GO_CONTRACT_LEAK",
+    ],
     ["pkg/kernel/domain/digest", "pkg/limit", "GO_LAYER_DIRECTION"],
     ["pkg/kernel/app/port/clock", "pkg/limit", "GO_LAYER_DIRECTION"],
     ["pkg/kernel/infra/peer", "pkg/limit", "GO_LAYER_DIRECTION"],

@@ -65,7 +65,11 @@ inventories).
   `Error`, `GoString` or `Unwrap` method, whose body is exactly one `return`
   statement containing no function literal. Interfaces, error values,
   constants, plain value types and `doc.go` are therefore declaration-only;
-  any other method body (`Valid`, `Retry`, `init`) is behavior.
+  any other method body (`Valid`, `Retry`, `init`) is behavior. A
+  package-level variable initialized by a call (`var ErrMissing =
+errors.New("missing")`, `var pattern = regexp.MustCompile(…)`) is not
+  behavior: error values are explicitly declaration-only, and an initializer is
+  exercised by the tests of the functions that use it.
 - The rule applies outside `boot/` (which has no tests), `cmd/` (thin entry
   points) and generated `gen/` code. Do not add empty test files for
   declaration-only files.
@@ -115,13 +119,17 @@ pkg/
                              layer; imports only the pure stdlib allowlist and
                              kernel domain
   kernel/app/port/<topic>/   shared peer ports; importable by module app,
-                             infra, contracts, adapters and boot
+                             infra, desktop adapters, transport, kits and
+                             boot; not by contracts
   kernel/infra/peer/         package peer: one shared peer implementation,
                              built by boot only
   <kit>/                     flat one-word infrastructure kit
 ```
 
 - Kernel admits only those three shapes (`GO_KERNEL_LAYOUT`).
+- Published contracts import kernel domain only (`GO_CONTRACT_LEAK`). A shared
+  peer port belongs to its consumers' `app` and the shared adapter, never to the
+  owner's contract surface.
 - A kit (`pkg/<word>`, an admitted non-catch-all word, flat) is importable by
   module `infra`, desktop adapters, `transport/desktop`, other kits and `boot`;
   never by module `domain`, `app` or `contracts`, kernel or `pkg/ipc`. A kit

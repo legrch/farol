@@ -142,8 +142,9 @@ Go neighbors still cross module boundaries only through `infra/peer` to the
 owning module's published contracts. Contracts cannot import infrastructure,
 boot, executable hosts, or neighbor internals. The Go import gate enforces these
 edges; source review verifies delegation, independent DTO signatures, absence
-of implementation aliases and explicit mappings. The common Desktop transport may depend only on published module
-contracts, never app/domain/infra. Under
+of implementation aliases and explicit mappings. The common Desktop transport depends on published module
+contracts, never module app/domain/infra; it may also use kernel domain/app, `pkg/ipc`,
+the generated wire and flat `pkg` kits. Under
 [ADR-0002](decisions/0002-uniform-names-tests-composition.md) each module's
 desktop handlers move into its own `modules/<module>/desktop/<feature>`
 adapter, which may also use its own application services; the common transport
