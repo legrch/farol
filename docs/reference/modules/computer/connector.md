@@ -113,7 +113,15 @@ RuntimeId, launch digest and challenge may change. Any other Open revokes the
 retained participant once before admitting a new one, and an unacknowledged
 revocation refuses every later Open. `owner_stop`, an original Stop, a failed
 or uncertain slot and shutdown revoke as before. A restart is a new backend
-lifetime and admits one new participant. Its initial surface is catalogue/bootstrap/list/read/search and connector verification,
+lifetime and admits one new participant. Open attempts are limited to 32 per rolling ten
+minutes, but finite pools remain behind them: each Open and each Close claims
+one ingress operation ID, and that claim set holds 4096 IDs per backend
+lifetime and is never pruned (a durable operation-ID record is deferred). So
+about 2,000 Open/Close cycles end reconnects in one backend lifetime. Its last
+64 slots are reserved for connector Close and authority Deactivate, so a full
+set refuses new authority but never its withdrawal. Durable participants grow
+by one per backend lifetime or connector generation, within the access Store
+bound. Its initial surface is catalogue/bootstrap/list/read/search and connector verification,
 with read-only scope. The external attachment cannot issue authority or open another
 connector. A failed or uncertain start retains its slot and cannot be upgraded
 to clean by a later shutdown. Root withdraws ingress before shutdown IO; shutdown

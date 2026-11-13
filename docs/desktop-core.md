@@ -283,6 +283,11 @@ routes and complete cutover review remain open.
 
 ### Go-owned Settings delivery
 
+The TypeScript bridge bounds only live work. The Go delivery ingress and
+service still admit at most 4096 Apply operation IDs per backend lifetime
+(`settingsdelivery.MaxAttempts`); beyond that they refuse a new Apply and never
+execute one twice. Removing that lifetime cap is separate work.
+
 Packaged source `bef6d56dba4dab91743a9a00a450b91bca451094` passed the normal
 React edit, unacknowledged Quit, same-profile reopen, retained Observe and
 **Go-owned ACK** journey on 5 October 2026:
