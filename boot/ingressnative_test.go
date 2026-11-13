@@ -101,7 +101,7 @@ func TestNativeCLIComputerPublicationAdmissionAndRead(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		call := wire.Request{Jsonrpc: "2.0", Id: fmt.Sprintf("request-%d", count), Method: method, Params: wire.Call{Context: peer, Body: raw}}
+		call := wire.Request{Jsonrpc: "2.0", Id: wireTestID(count), Method: method, Params: wire.Call{Context: peer, Body: raw}}
 		if operation != "" {
 			call.Params.OperationId = &operation
 		}

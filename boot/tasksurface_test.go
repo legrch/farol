@@ -441,7 +441,7 @@ func TestTaskSurfaceQueuedEffectCannotRenewItsOriginalDeadline(t *testing.T) {
 				}
 				return ipc.WriteFrame(peer.in, raw)
 			}
-			first := wire.Request{Jsonrpc: "2.0", Id: "queue-holder", Method: "task.resolve", Params: wire.Call{Context: &peer.scope, Body: json.RawMessage(taskSurfaceBody(t, h, nil))}}
+			first := wire.Request{Jsonrpc: "2.0", Id: peer.nextID(), Method: "task.resolve", Params: wire.Call{Context: &peer.scope, Body: json.RawMessage(taskSurfaceBody(t, h, nil))}}
 			if err := write(first); err != nil {
 				t.Fatal(err)
 			}
@@ -457,7 +457,7 @@ func TestTaskSurfaceQueuedEffectCannotRenewItsOriginalDeadline(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			queued := wire.Request{Jsonrpc: "2.0", Id: "original-queued-request", Method: method, Params: wire.Call{Context: &peer.scope, OperationId: &op, Body: body}}
+			queued := wire.Request{Jsonrpc: "2.0", Id: peer.nextID(), Method: method, Params: wire.Call{Context: &peer.scope, OperationId: &op, Body: body}}
 			writeDone := make(chan error, 1)
 			go func() { writeDone <- write(queued) }()
 			timer := time.NewTimer(time.Until(deadline.Add(-2*time.Second)) + 10*time.Millisecond)

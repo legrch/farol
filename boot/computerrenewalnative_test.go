@@ -229,13 +229,13 @@ func TestNativeComputerRenewalSameSocketStoreSettingsAndRetainedMutation(t *test
 		t.Fatal("same socket auth failed", err)
 	}
 	hello, _ := json.Marshal(wire.Handshake{ProtocolMajor: wire.ProtocolMajor, ProtocolMinor: wire.ProtocolMinor, BuildId: opened.Endpoint.Binding.BuildId, ProfileId: opened.Endpoint.Binding.ProfileId})
-	writeNativeMutationJSON(t, stream, wire.Request{Jsonrpc: "2.0", Id: id("hello"), Method: "core.handshake", Params: wire.Call{Body: hello}})
+	writeNativeMutationJSON(t, stream, wire.Request{Jsonrpc: "2.0", Id: wireTestID(1), Method: "core.handshake", Params: wire.Call{Body: hello}})
 	data, err = ipc.ReadFrame(stream)
 	var response wire.Response
 	if err != nil || json.Unmarshal(data, &response) != nil || response.Result == nil || response.Result.Status != "ok" {
 		t.Fatal("same socket handshake failed", err)
 	}
-	p := &nativeMutationPeer{stream: stream, opened: *opened}
+	p := &nativeMutationPeer{stream: stream, opened: *opened, next: 1}
 	e := opened.Execution
 	verify := wire.ComputerConnectorVerify{Challenge: challenge, CallId: id("original-verify"), WorkspaceId: workspaceID}
 	proof := p.call(t, "computer.connector.verify", "", verify)

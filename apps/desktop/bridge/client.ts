@@ -73,7 +73,6 @@ type Pending = {
   >;
   operationId?: string;
   handshake?: Handshake;
-  retirementHandoffId?: string;
 };
 
 type DiagnosticObservation =
@@ -222,12 +221,14 @@ export class Client {
   private pending = new Map<string, Pending>();
   // Never evict unresolved diagnostic IDs: a late original reply must retain
   // its correlation. At capacity only new diagnostics backpressure; ordinary
-  // requests and the existing retirement reserve stay independent.
+  // requests stay independent.
   private expiredDiagnostics = new Map<string, DiagnosticObservation>();
-  private used = new Set<string>();
-  // Only registered read-only host polls use constant-space
-  // ordered wire IDs. Effect/command IDs keep their lifetime replay fence.
+  // Every wire request carries the next sequence of its lane under this
+  // connection nonce: ordinary calls share one lane, each registered read-only
+  // poll has its own. Constant state replaces a lifetime request history, so
+  // the pipe has no request cap; the backend refuses replays and gaps.
   private readonly pollNonce = randomUUID();
+  private requestSequence = 0n;
   private readonly polls = new Map<string, bigint>();
   private stopped = false;
   private context: Context | undefined;
@@ -250,7 +251,6 @@ export class Client {
   private resourceReleased = false;
   private resourceError: BridgeError | undefined;
   private cleanup: "none" | "pending" | "confirmed" | "unknown" = "none";
-  private retirementPrepared = false;
   private closeRequested = false;
   private readonly lifecycle = new Map<
     BackendLifecycleObservation["event"],
@@ -530,16 +530,6 @@ export class Client {
               ? "audit"
               : undefined;
     const pollingObservation = method === "computer.connector.polling";
-    const retiring =
-      method === "computer.connector.close" ||
-      (this.retirementPrepared && method === "computer.authority.deactivate") ||
-      method === "core.retirement.prepare" ||
-      method === "core.retirement.ack";
-    // Reserve eight one-shot control calls so reaching the ordinary history
-    // bound cannot prevent authority withdrawal, connector closure, and the
-    // original retirement ACK. Withdrawal joins this reserve only after an
-    // exact prepare ACK, so ordinary Settings changes cannot spend it.
-    // All keep their lifetime one-shot ID fence.
     const pendingDiagnostics = [...this.pending.values()].filter(
       (item) => item.healthObservation || item.observation,
     ).length;
@@ -550,13 +540,14 @@ export class Client {
       this.writerBusy ||
       (readLane === "health" || pollingObservation
         ? this.expiredDiagnostics.size + pendingDiagnostics >= 32
-        : this.pending.size - pendingDiagnostics >= 32) ||
-      (readLane === undefined && this.used.size >= (retiring ? 4096 : 4088))
+        : this.pending.size - pendingDiagnostics >= 32)
     )
       return Promise.reject(new RequestNotSentError());
-    if (id.startsWith("desktop-poll-"))
+    if (id.startsWith("desktop-poll-") || id.startsWith("desktop-call:"))
       return Promise.reject(new BridgeError("refused", "reserved_request_id"));
-    if (this.used.has(id))
+    // A caller ID correlates one live call; wire replay protection is the
+    // sequence and effect fences are module operation IDs.
+    if ([...this.pending.values()].some((item) => item.callerId === id))
       return Promise.reject(new BridgeError("refused", "duplicate_request_id"));
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 30000)
       return Promise.reject(new BridgeError("refused", "invalid_deadline"));
@@ -591,13 +582,13 @@ export class Client {
     };
     const sequence =
       readLane === undefined
-        ? undefined
+        ? this.requestSequence + 1n
         : (this.polls.get(readLane) ?? 0n) + 1n;
-    if (sequence !== undefined && sequence > 18446744073709551615n)
+    if (sequence > 18446744073709551615n)
       return Promise.reject(new RequestNotSentError());
     const wireId =
-      sequence === undefined
-        ? id
+      readLane === undefined
+        ? `desktop-call:${this.pollNonce}:${sequence}`
         : `desktop-poll-${readLane}:${this.pollNonce}:${sequence}`;
     const request: Request = { jsonrpc: "2.0", id: wireId, method, params };
     if (!validate("Request", request))
@@ -618,8 +609,10 @@ export class Client {
       return Promise.reject(
         new RequestNotSentError("request_deadline_expired"),
       );
-    if (readLane === undefined) this.used.add(id);
-    else this.polls.set(readLane, sequence!);
+    // Consumed only when the frame is submitted; local refusals above keep
+    // the lane contiguous. A failed write stops this Client.
+    if (readLane === undefined) this.requestSequence = sequence;
+    else this.polls.set(readLane, sequence);
     const responseDeadline = Date.now() + remainingMs;
     const healthRequest =
       readLane === "health"
@@ -695,11 +688,6 @@ export class Client {
           : {}),
         ...(operationId !== undefined ? { operationId } : {}),
         ...(handshake ? { handshake } : {}),
-        ...(method === "core.retirement.prepare" &&
-        operationId !== undefined &&
-        validate("CoreRetirementPrepare", body)
-          ? { retirementHandoffId: (body as { handoffId: string }).handoffId }
-          : {}),
       });
       try {
         if (!this.child.stdin.write(bytes)) {
@@ -865,19 +853,8 @@ export class Client {
       clearTimeout(pending.timer);
       clearImmediate(pending.timeoutCheck);
       this.pending.delete(response.id);
-      if (
-        pending.retirementHandoffId !== undefined &&
-        result.status === "ok" &&
-        validate("CoreRetirementPrepared", result.data) &&
-        (result.data as { handoffId: string }).handoffId ===
-          pending.retirementHandoffId &&
-        /^[a-f0-9]{64}$/u.test(
-          (result.data as { receiptDigest: string }).receiptDigest,
-        )
-      )
-        this.retirementPrepared = true;
       // Validate the exact original wire reply above before translating the
-      // private poll correlation back to its host caller. Never map effects.
+      // private sequenced correlation back to its host caller.
       pending.resolve(
         result.requestId === pending.callerId
           ? result

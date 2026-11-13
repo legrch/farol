@@ -61,7 +61,7 @@ func chatComputerWireConnectRelay(t *testing.T, f *chatComputerFixture, computer
 		}
 	})
 	p := &taskWireTestPeer{t: t, in: send, out: receive, scope: f.ingress.peer}
-	r := p.call("core.handshake", "", `{"protocolMajor":1,"protocolMinor":0,"buildId":"chat-computer","profileId":"profile"}`)
+	r := p.call("core.handshake", "", `{"protocolMajor":2,"protocolMinor":0,"buildId":"chat-computer","profileId":"profile"}`)
 	if r.Result == nil || r.Result.Status != "ok" {
 		t.Fatal(r)
 	}

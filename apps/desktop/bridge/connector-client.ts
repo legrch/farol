@@ -34,6 +34,7 @@ export interface ConnectorSocket {
 export type ConnectorSocketFactory = (socketPath: string) => ConnectorSocket;
 
 type Pending = {
+  callerId: string;
   resolve: (outcome: Outcome) => void;
   reject: (error: BridgeError) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -118,9 +119,12 @@ export class SocketConnectorClient {
   private phase: Phase = "new";
   #socket: ConnectorSocket | undefined;
   private decoder = new Decoder();
+  // Keyed by wire ID. Every request carries the next sequence under this
+  // stream's nonce, so the stream keeps constant state and has no request
+  // cap; the backend refuses replays and gaps. Reconnecting uses a new client.
   private pending = new Map<string, Pending>();
-  private used = new Set<string>();
-  private usedOperations = new Set<string>();
+  readonly #nonce = randomUUID();
+  #sequence = 0n;
   private connection: Connection | undefined;
   private context: Readonly<Context> | undefined;
   private identity: Readonly<Identity> | undefined;
@@ -369,24 +373,35 @@ export class SocketConnectorClient {
       return Promise.reject(
         new BridgeError("unavailable", "connector_unavailable"),
       );
-    if (operationId !== undefined && this.usedOperations.has(operationId))
+    // Caller and operation IDs are checked against live calls only: the wire
+    // sequence is the replay fence and module operation stores own effects.
+    const live = [...this.pending.values()];
+    if (
+      operationId !== undefined &&
+      live.some((item) => item.operationId === operationId)
+    )
       return Promise.reject(
         new BridgeError("refused", "duplicate_operation_id"),
       );
+    const sequence = this.#sequence + 1n;
     if (
       this.pending.size >= 32 ||
-      this.used.size >= 4096 ||
-      this.usedOperations.size >= 4096 ||
+      sequence > 18446744073709551615n ||
       this.writerBusy
     )
       return Promise.reject(new RequestNotSentError());
-    if (this.used.has(id))
+    if (id.startsWith("desktop-poll-") || id.startsWith("desktop-call:"))
+      return Promise.reject(new BridgeError("refused", "reserved_request_id"));
+    if (live.some((item) => item.callerId === id))
       return Promise.reject(new BridgeError("refused", "duplicate_request_id"));
     if (!validTimeout(timeoutMs))
       return Promise.reject(new BridgeError("refused", "invalid_deadline"));
+    if (!validate("id", id))
+      return Promise.reject(new BridgeError("refused", "invalid_request"));
+    const wireId = `desktop-call:${this.#nonce}:${sequence}`;
     const request: Request = {
       jsonrpc: "2.0",
-      id,
+      id: wireId,
       method,
       params: {
         body,
@@ -412,10 +427,10 @@ export class SocketConnectorClient {
     }
     if (!this.canWrite(bytes.length))
       return Promise.reject(new RequestNotSentError());
-    this.used.add(id);
-    if (operationId !== undefined) this.usedOperations.add(operationId);
+    this.#sequence = sequence;
     return new Promise((resolve, reject) => {
       const pending: Pending = {
+        callerId: id,
         resolve,
         reject,
         handshake,
@@ -423,7 +438,7 @@ export class SocketConnectorClient {
         submitted: false,
         timer: setTimeout(() => this.fail("response_timeout"), timeoutMs),
       };
-      this.pending.set(id, pending);
+      this.pending.set(wireId, pending);
       pending.submitted = true;
       if (handshake && this.connection) this.connection.submitted = true;
       this.write(bytes);
@@ -548,7 +563,8 @@ export class SocketConnectorClient {
       this.#hasUnresolvedEffect = true;
     clearTimeout(pending.timer);
     this.pending.delete(response.id!);
-    pending.resolve(result);
+    // The exact wire reply was checked above; return the caller's own ID.
+    pending.resolve({ ...result, requestId: pending.callerId });
   }
 
   private fail(code: string, connectionState?: "refused"): void {
@@ -585,8 +601,6 @@ export class SocketConnectorClient {
       );
     }
     this.pending.clear();
-    this.used.clear();
-    this.usedOperations.clear();
     this.context = undefined;
     this.identity = undefined;
     this.decoder = new Decoder();

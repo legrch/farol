@@ -3,6 +3,7 @@ package desktop
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,13 +52,34 @@ type Config struct {
 	TerminalRejection bool
 }
 type Server struct {
-	config       Config
-	started      time.Time
-	connected    bool
-	seen         map[string]bool
-	pollNonce    string
-	polls        map[string]uint64
-	pollAdmitted bool
+	config    Config
+	started   time.Time
+	connected bool
+	// One connection nonce and constant-size sequence state replace a request
+	// history: the ordinary lane retains its last admitted sequence and each
+	// fixed read lane its own. Memory is bounded by in-flight work only.
+	nonce string
+	next  uint64
+	polls map[string]uint64
+}
+
+var orderedRequest = regexp.MustCompile(`^desktop-call:([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}):([1-9][0-9]{0,19})$`)
+
+// NewRequestNonce returns a fresh connection nonce for SequencedRequestID.
+func NewRequestNonce() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
+}
+
+// SequencedRequestID names the ordinary request with the given one-based
+// sequence on a connection. Every non-poll request must use this namespace.
+func SequencedRequestID(nonce string, sequence uint64) string {
+	return "desktop-call:" + nonce + ":" + strconv.FormatUint(sequence, 10)
 }
 
 func New(config Config) (*Server, error) {
@@ -73,7 +95,7 @@ func New(config Config) (*Server, error) {
 		methods[name] = method
 	}
 	config.Methods = methods
-	return &Server{config: config, started: time.Now(), seen: make(map[string]bool), polls: make(map[string]uint64)}, nil
+	return &Server{config: config, started: time.Now(), polls: make(map[string]uint64)}, nil
 }
 
 // Serve owns the supplied pipe endpoints for its lifetime. Cancellation closes
@@ -146,7 +168,8 @@ func (s *Server) Serve(parent context.Context, in io.ReadCloser, out io.WriteClo
 		}
 		return err
 	}
-	for attempt := 0; attempt < 4096; {
+	invalid := 0
+	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -161,11 +184,15 @@ func (s *Server) Serve(parent context.Context, in io.ReadCloser, out io.WriteClo
 			return fmt.Errorf("protocol frame: %w", err)
 		}
 		response, call := s.prepareDispatch(data)
-		// Valid, strictly ordered reads retain bounded counters rather
-		// than spending the bounded effect/control request history while idle.
-		// Invalid frames, forged polls and all other calls still spend the cap.
-		if !s.pollAdmitted {
-			attempt++
+		// A peer that keeps sending requests refused before any owner runs
+		// (malformed frames, refused sequences, stale contexts, unknown
+		// methods) is cut off after wire.MaxConsecutiveInvalidRequests. A
+		// conforming peer sends none. Any admitted request, including a
+		// capacity refusal, resets the count: a valid stream has no limit.
+		if call == nil && response.Error != nil {
+			invalid++
+		} else {
+			invalid = 0
 		}
 		if call != nil && call.method.Concurrent {
 			select {
@@ -192,8 +219,10 @@ func (s *Server) Serve(parent context.Context, in io.ReadCloser, out io.WriteClo
 		if s.config.TerminalRejection && (response.Error != nil || response.Result == nil || response.Result.Status != "ok") {
 			return errors.New("role request rejected")
 		}
+		if invalid >= wire.MaxConsecutiveInvalidRequests {
+			return errors.New("consecutive invalid request bound exhausted")
+		}
 	}
-	return errors.New("request attempt budget exhausted")
 }
 
 type invocation struct {
@@ -209,10 +238,9 @@ func (s *Server) dispatch(ctx context.Context, data []byte) wire.Response {
 	return response
 }
 
-// Called only by the pipe reader. Handshake, request deduplication and all
+// Called only by the pipe reader. Handshake, request sequencing and all
 // boundary validation finish before a handler may run concurrently.
 func (s *Server) prepareDispatch(data []byte) (wire.Response, *invocation) {
-	s.pollAdmitted = false
 	if err := ipc.ValidateJSON(data); err != nil {
 		return fault("", -32700, "invalid JSON"), nil
 	}
@@ -227,15 +255,10 @@ func (s *Server) prepareDispatch(data []byte) (wire.Response, *invocation) {
 		if !s.admitPoll(req) {
 			return fault(req.Id, -32600, "invalid ordered poll"), nil
 		}
-		s.pollAdmitted = true
-	} else {
-		if s.seen[req.Id] {
-			return fault(req.Id, -32600, "duplicate request ID"), nil
-		}
-		if len(s.seen) >= 4096 {
-			return fault(req.Id, -32000, "request budget exhausted"), nil
-		}
-		s.seen[req.Id] = true
+	} else if !orderedRequest.MatchString(req.Id) {
+		return fault(req.Id, -32600, "unsequenced request ID"), nil
+	} else if !s.admitSequence(req.Id) {
+		return fault(req.Id, -32600, "invalid request sequence"), nil
 	}
 	if req.Method == "core.handshake" {
 		return s.handshake(req), nil
@@ -270,11 +293,29 @@ func (s *Server) prepareDispatch(data []byte) (wire.Response, *invocation) {
 	return wire.Response{}, &invocation{request: req, method: method}
 }
 
+// The exact next ordinary sequence under the connection nonce consumes its ID
+// before any later validation, as one request ID did in a request history:
+// a refused request cannot be resent, and the next one stays admissible.
+// Replays, gaps, a foreign nonce and an exhausted uint64 are refused.
+func (s *Server) admitSequence(id string) bool {
+	parts := orderedRequest.FindStringSubmatch(id)
+	if len(parts) != 3 || (s.nonce != "" && s.nonce != parts[1]) {
+		return false
+	}
+	sequence, err := strconv.ParseUint(parts[2], 10, 64)
+	if err != nil || s.next == ^uint64(0) || sequence != s.next+1 {
+		return false
+	}
+	s.nonce, s.next = parts[1], sequence
+	return true
+}
+
 var orderedPoll = regexp.MustCompile(`^desktop-poll-(browser|settings|health|audit):([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}):([1-9][0-9]{0,19})$`)
 
-// This private inherited-pipe namespace admits only registered ordered
-// reads. It cannot admit an effect, renew authority or reset a request fence.
-// The pipe reader alone owns these constant-space sequence counters.
+// This private namespace admits only registered ordered reads under the
+// connection nonce adopted by the ordinary lane. It cannot admit an effect,
+// renew authority or reset a request fence. A refused poll does not advance
+// its lane. The pipe reader alone owns these constant-space counters.
 func (s *Server) admitPoll(req wire.Request) bool {
 	parts := orderedPoll.FindStringSubmatch(req.Id)
 	if len(parts) != 4 || !s.connected || req.Params.Context == nil || *req.Params.Context != s.context() || req.Params.OperationId != nil {
@@ -289,7 +330,7 @@ func (s *Server) admitPoll(req wire.Request) bool {
 	case "audit":
 		method, shape = "computer.process.audit", "ComputerProcessAuditRequest"
 	}
-	if req.Method != method || s.config.Methods[method].Handle == nil || wire.Validate(shape, req.Params.Body) != nil || (s.pollNonce != "" && s.pollNonce != parts[2]) {
+	if req.Method != method || s.config.Methods[method].Handle == nil || wire.Validate(shape, req.Params.Body) != nil || s.nonce != parts[2] {
 		return false
 	}
 	sequence, err := strconv.ParseUint(parts[3], 10, 64)
@@ -297,7 +338,6 @@ func (s *Server) admitPoll(req wire.Request) bool {
 	if err != nil || previous == ^uint64(0) || sequence != previous+1 {
 		return false
 	}
-	s.pollNonce = parts[2]
 	s.polls[parts[1]] = sequence
 	return true
 }
