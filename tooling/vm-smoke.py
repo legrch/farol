@@ -169,25 +169,52 @@ def regular(file, limit):
     return info
 
 
-def read_guest_json(file, limit):
-    """Read one guest-written JSON object from a guest-writable share.
+def read_beneath(root, path, limit, empty_ok=False):
+    """Read one file below a trusted host directory without following links.
 
-    The leaf is opened without following links; the descriptor must be a
-    single-link regular file of 1..limit bytes and the bytes read must match
-    its size. Only a JSON object with unique keys is admitted, so a planted
-    symlink, FIFO, hard link, oversized or non-object file is refused instead
-    of being copied into host evidence.
+    Every component below `root` lives in a guest-writable share, so each is
+    opened relative to its parent's descriptor with O_NOFOLLOW (openat): a
+    guest that replaces any directory with a symlink, before or during the
+    walk, makes the open fail instead of redirecting it to a host path. The
+    leaf must be a single-link regular file within `limit` bytes, opened
+    non-blocking (a FIFO cannot hang the host), and is read exactly once.
+    Raises OSError (FileNotFoundError when absent) or Refused.
     """
+    parts = Path(path).relative_to(root).parts
+    require(bool(parts) and all(part not in ('', '.', '..') for part in parts), 'ASSET_FILE_INVALID')
+    directory = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    fd = os.open(root, directory)
     try:
-        fd = os.open(file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
-    except OSError:
-        raise Refused('ASSET_FILE_INVALID') from None
-    with os.fdopen(fd, 'rb') as source:
+        for part in parts[:-1]:
+            child = os.open(part, directory, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        leaf = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=fd)
+    finally:
+        os.close(fd)
+    with os.fdopen(leaf, 'rb') as source:
         info = os.fstat(source.fileno())
-        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and 0 < info.st_size <= limit,
-                'ASSET_FILE_INVALID')
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and
+                (0 if empty_ok else 1) <= info.st_size <= limit, 'ASSET_FILE_INVALID')
         data = source.read(limit + 1)
     require(len(data) == info.st_size, 'ASSET_FILE_INVALID')
+    return data
+
+
+def read_guest_json(file, limit, root):
+    """Read one guest-written JSON object from a guest-writable share.
+
+    `file` is read through read_beneath(root, ...), so no component under the
+    trusted `root` is followed as a link; the leaf must be a single-link
+    regular file of 1..limit bytes. Only a JSON object with unique keys is
+    admitted, so a planted symlink (leaf or parent), FIFO, hard link,
+    oversized or non-object file is refused instead of being copied into host
+    evidence.
+    """
+    try:
+        data = read_beneath(root, file, limit)
+    except (OSError, ValueError):
+        raise Refused('ASSET_FILE_INVALID') from None
 
     def unique_object(pairs):
         value = {}
@@ -704,8 +731,10 @@ class Runner:
         while not target.exists():
             self.remaining()
             time.sleep(0.2)
-        regular(target, 64)
-        result = target.read_text().strip()
+        try:
+            result = read_beneath(self.machine, target, 64).decode('ascii').strip()
+        except (OSError, ValueError):
+            raise Refused('ASSET_FILE_INVALID') from None
         require(result == 'READY', result if result == 'NEEDS_OWNER' else 'GUEST_PHASE_FAILED')
 
     def start_guest(self):
@@ -1189,9 +1218,9 @@ class Runner:
         require(getattr(self, 'helper_update_flag_owned', False), 'HELPER_UPDATE_CUSTODY_UNCONFIRMED')
         marker = self.exchange / '.input-lease.json'
         try:
-            regular(marker, 4096)
-            value = json.loads(marker.read_text())
-        except (OSError, ValueError, TypeError) as error:
+            # Guest-writable share: bounded, no-follow, never a blocking FIFO.
+            value = json.loads(read_beneath(self.machine, marker, 4096))
+        except (OSError, ValueError, TypeError, Refused) as error:
             raise Refused('HELPER_UPDATE_CUSTODY_CHANGED') from error
         require(isinstance(value, dict) and
                 value.get('schema') == 'terminal-mac.input-lease-flag/1' and
@@ -1358,7 +1387,7 @@ class Runner:
 
     def quit_proof(self):
         self.phase('quit-proof')
-        return read_guest_json(self.report / 'quit-proof.json', 32768)
+        return read_guest_json(self.report / 'quit-proof.json', 32768, self.machine)
 
     def require_quit_drain(self, before):
         after = self.quit_proof()
@@ -1372,7 +1401,7 @@ class Runner:
 
     def state(self):
         self.phase('inspect')
-        value = read_guest_json(self.report / 'state.json', 4096)
+        value = read_guest_json(self.report / 'state.json', 4096, self.machine)
         require(isinstance(value.get('pids'), list) and type(value.get('windows')) is int,
                 'GUEST_STATE_INVALID')
         return value
@@ -1661,17 +1690,12 @@ class Runner:
     def read_e2e_file(self, name, limit):
         file = self.report / 'e2e' / (name + '.json')
         try:
-            require(file.parent.is_dir() and not file.parent.is_symlink(), 'E2E_' + name.upper() + '_MISSING')
-            fd = os.open(file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-            with os.fdopen(fd, 'rb') as source:
-                info = os.fstat(source.fileno())
-                require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and 0 <= info.st_size <= limit,
-                        'E2E_' + name.upper() + '_UNSAFE')
-                data = source.read(limit + 1)
-                require(len(data) == info.st_size, 'E2E_' + name.upper() + '_CHANGED')
+            # Every component under the machine directory (farol-smoke, the
+            # run directory, e2e) is guest-writable: walk it by descriptor.
+            data = read_beneath(self.machine, file, limit, empty_ok=True)
         except FileNotFoundError:
             return None, 'E2E_' + name.upper() + '_MISSING'
-        except (OSError, Refused):
+        except (OSError, ValueError, Refused):
             return None, 'E2E_' + name.upper() + '_UNSAFE'
         try:
             self.preserve_e2e_bytes('e2e-' + name + '.raw.json', data)
@@ -1840,7 +1864,7 @@ class Runner:
         self.phase('share-probe')
         require(bool(self.state()['pids']), 'GUEST_APP_NOT_RUNNING')
         self.phase('connection-proof')
-        proof = read_guest_json(self.report / 'connection.json', 4096)
+        proof = read_guest_json(self.report / 'connection.json', 4096, self.machine)
         (self.out / 'connection.json').write_text(json.dumps(proof, indent=2) + '\n')
         self.phase('activate')
         self.phase('stop')
@@ -1878,7 +1902,7 @@ class Runner:
         self.phase('connection-proof')
         # Guest-writable: never copy by path (a planted symlink would copy a
         # host file into evidence). Re-serialize an admitted bounded object.
-        proof = read_guest_json(self.report / 'connection.json', 4096)
+        proof = read_guest_json(self.report / 'connection.json', 4096, self.machine)
         (self.out / 'connection.json').write_text(json.dumps(proof, indent=2) + '\n')
         self.phase('stop')
         result = dict(status='GUEST_APP_QUIT', profiles='PRESERVED', hostDev='NOT_STARTED',
@@ -2052,7 +2076,7 @@ class Runner:
                 self.wait_state(True, foreground=True)
                 self.screenshot('relaunch')
                 self.phase('connection-proof')
-                connection = read_guest_json(self.report / 'connection.json', 4096)
+                connection = read_guest_json(self.report / 'connection.json', 4096, self.machine)
                 (self.out / 'connection.json').write_text(json.dumps(connection, indent=2) + '\n')
                 self.phase('cleanup')
                 self.phase('stop')

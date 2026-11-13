@@ -12,6 +12,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+import unittest.mock
 
 spec = importlib.util.spec_from_file_location('guest_report_reads_vm', Path(__file__).parents[1] / 'vm-smoke.py')
 vm = importlib.util.module_from_spec(spec)
@@ -101,6 +102,90 @@ class GuestReportReadTests(unittest.TestCase):
             with self.assertRaisesRegex(vm.Refused, 'GUEST_STATE_INVALID'):
                 runner.quit_proof()
 
+
+    def test_symlinked_parent_directory_is_never_followed(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            host = root / 'host-directory'
+            host.mkdir()
+            (host / 'connection.json').write_text('{"hostOnly": "must-not-be-copied"}')
+            def swap_parent(file):
+                # The guest replaces the whole run report directory.
+                report = file.parent
+                for item in report.iterdir():
+                    item.unlink()
+                report.rmdir()
+                report.symlink_to(host, target_is_directory=True)
+            runner = release_dev_runner(root, swap_parent)
+            with self.assertRaisesRegex(vm.Refused, 'ASSET_FILE_INVALID'):
+                runner.release_dev()
+            self.assertFalse((runner.out / 'connection.json').exists())
+
+    def test_e2e_directory_swapped_between_check_and_open_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            runner = release_dev_runner(root, lambda file: None)
+            e2e = runner.report / 'e2e'
+            e2e.mkdir(parents=True)
+            (e2e / 'result.json').write_text('{"guest": true}')
+            host = root / 'host'
+            host.mkdir()
+            (host / 'result.json').write_text('{"hostOnly": "must-not-be-copied"}')
+            real_open = os.open
+            def swapping_open(path, flags, *args, **kwargs):
+                if path == 'e2e' and e2e.is_dir() and not e2e.is_symlink():
+                    # Simulate the race: swap right after any check, right before open.
+                    (e2e / 'result.json').unlink()
+                    e2e.rmdir()
+                    e2e.symlink_to(host, target_is_directory=True)
+                return real_open(path, flags, *args, **kwargs)
+            with unittest.mock.patch.object(vm.os, 'open', side_effect=swapping_open):
+                data, error = runner.read_e2e_file('result', 262144)
+            self.assertIsNone(data)
+            self.assertEqual(error, 'E2E_RESULT_UNSAFE')
+            self.assertFalse(any(runner.out.iterdir()), 'no host bytes reach evidence')
+
+    def test_phase_result_and_marker_are_bounded_and_never_block(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            runner = release_dev_runner(root, lambda file: None)
+            runner.report.mkdir(parents=True)
+            runner.deadline = vm.time.monotonic() + 30
+            big = root / 'big-host-file'
+            big.write_bytes(b'READY' + b' ' * 100000)
+            target = runner.report / '0001-install.result'
+            target.symlink_to(big)
+            with self.assertRaisesRegex(vm.Refused, 'ASSET_FILE_INVALID'):
+                vm.Runner.wait_result(runner, target)
+            fifo = runner.report / '0002-install.result'
+            os.mkfifo(fifo)
+            started = vm.time.monotonic()
+            with self.assertRaisesRegex(vm.Refused, 'ASSET_FILE_INVALID'):
+                vm.Runner.wait_result(runner, fifo)
+            self.assertLess(vm.time.monotonic() - started, 5, 'a FIFO must not block the host')
+            runner.helper_update_flag_owned = True
+            exchange = root / 'exchange'
+            exchange.mkdir()
+            marker = exchange / '.input-lease.json'
+            marker.write_text(json.dumps({'schema': 'terminal-mac.input-lease-flag/1',
+                                          'owner': 'farol-smoke:run-synthetic',
+                                          'deadline': vm.time.time() + 600, 'pad': 'x' * 5000}))
+            with self.assertRaisesRegex(vm.Refused, 'HELPER_UPDATE_CUSTODY_CHANGED'):
+                runner.require_own_update_marker()
+            marker.unlink()
+            os.mkfifo(marker)
+            with self.assertRaisesRegex(vm.Refused, 'HELPER_UPDATE_CUSTODY_CHANGED'):
+                runner.require_own_update_marker()
+            marker.unlink()
+            exchange.rmdir()
+            elsewhere = root / 'elsewhere'
+            elsewhere.mkdir()
+            (elsewhere / '.input-lease.json').write_text(json.dumps({
+                'schema': 'terminal-mac.input-lease-flag/1', 'owner': 'farol-smoke:run-synthetic',
+                'deadline': vm.time.time() + 600}))
+            exchange.symlink_to(elsewhere, target_is_directory=True)
+            with self.assertRaisesRegex(vm.Refused, 'HELPER_UPDATE_CUSTODY_CHANGED'):
+                runner.require_own_update_marker()
 
 if __name__ == '__main__':
     unittest.main()
