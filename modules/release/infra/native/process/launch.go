@@ -11,9 +11,8 @@ import (
 	"sync"
 	"time"
 
-	kitclock "github.com/legrch/farol/pkg/clock"
-
 	"github.com/legrch/farol/modules/release/app/port"
+	kitclock "github.com/legrch/farol/pkg/clock"
 )
 
 type Clock struct{ kitclock.System }

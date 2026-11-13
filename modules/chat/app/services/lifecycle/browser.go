@@ -4,10 +4,9 @@ import (
 	"context"
 	"unicode/utf8"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	"github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/domain/turn"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // PrepareNext reserves only the queue's next eligible route. Ordinal is never

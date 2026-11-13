@@ -6,11 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/legrch/farol/pkg/fake"
-
 	"github.com/legrch/farol/modules/computer/app/port"
 	workspacesvc "github.com/legrch/farol/modules/computer/app/services/workspace"
 	"github.com/legrch/farol/modules/computer/domain/authority"
+	"github.com/legrch/farol/pkg/fake"
 )
 
 // Contract/application collaboration with external policy/native doubles only.

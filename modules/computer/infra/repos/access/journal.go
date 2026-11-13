@@ -8,9 +8,8 @@ import (
 	"errors"
 	"os"
 
-	"github.com/legrch/farol/pkg/limit"
-
 	transition "github.com/legrch/farol/modules/computer/domain/journal"
+	"github.com/legrch/farol/pkg/limit"
 	"golang.org/x/sys/unix"
 )
 

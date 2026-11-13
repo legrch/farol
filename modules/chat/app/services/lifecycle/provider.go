@@ -2,7 +2,6 @@ package lifecycle
 
 import (
 	"context"
-
 	"github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/domain/turn"
 	opaque "github.com/legrch/farol/pkg/kernel/domain/id"

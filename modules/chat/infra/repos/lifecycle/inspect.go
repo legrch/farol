@@ -4,9 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	"github.com/legrch/farol/modules/chat/app/port"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // Inspection describes only an existing canonical snapshot observed under the

@@ -3,9 +3,8 @@ package results
 import (
 	"context"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	"github.com/legrch/farol/modules/chat/app/port"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // Archive is an existing-only observation adapter, selected before any owner

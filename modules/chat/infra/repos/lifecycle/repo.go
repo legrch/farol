@@ -7,9 +7,8 @@ import (
 	"math"
 	"sync"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	"github.com/legrch/farol/modules/chat/app/port"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 type Code string

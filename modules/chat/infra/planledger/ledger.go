@@ -9,10 +9,9 @@ import (
 	"encoding/json"
 	"sync"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	"github.com/legrch/farol/modules/chat/app/services/inference"
 	"github.com/legrch/farol/modules/chat/infra/repos/lifecycle"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // Capture pins the root's detached original request/source/selection witness.

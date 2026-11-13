@@ -3,9 +3,8 @@ package port
 import (
 	"unicode/utf8"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	"github.com/legrch/farol/modules/chat/domain/turn"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // RetainedConversation is immutable terminal delivery metadata. Binding,

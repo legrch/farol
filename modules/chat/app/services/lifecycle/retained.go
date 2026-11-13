@@ -4,9 +4,8 @@ import (
 	"context"
 	"encoding/json"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	"github.com/legrch/farol/modules/chat/app/port"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // A retained continuation keeps provenance and its original read witness apart

@@ -4,10 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	"github.com/legrch/farol/modules/chat/app/port"
 	policy "github.com/legrch/farol/modules/chat/app/services/handoff"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // ClosedInspection describes the entire canonical empty retirement chain ending

@@ -4,9 +4,8 @@ package port
 import (
 	"context"
 
-	"github.com/legrch/farol/pkg/kernel/domain/root"
-
 	"github.com/legrch/farol/modules/chat/domain/turn"
+	"github.com/legrch/farol/pkg/kernel/domain/root"
 )
 
 // Gate serializes the entire current callback and all live state changes. Boot

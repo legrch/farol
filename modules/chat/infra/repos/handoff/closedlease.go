@@ -4,9 +4,8 @@ import (
 	"context"
 	"sync"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	"github.com/legrch/farol/modules/chat/app/port"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // ClosedLease retains the existing read-only handoff claim. Its observation is

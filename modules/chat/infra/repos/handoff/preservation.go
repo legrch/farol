@@ -5,9 +5,8 @@ import (
 	"crypto/sha256"
 	"time"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	"github.com/legrch/farol/modules/chat/app/port"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // PreservationInspection contains copied scalar/stage metadata for the complete

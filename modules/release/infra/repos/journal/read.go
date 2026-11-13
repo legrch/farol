@@ -5,11 +5,10 @@ import (
 	"errors"
 	"os"
 
-	"github.com/legrch/farol/pkg/limit"
-
 	"github.com/legrch/farol/modules/release/app/port"
 	release "github.com/legrch/farol/modules/release/domain"
 	"github.com/legrch/farol/modules/release/infra/repos/records"
+	"github.com/legrch/farol/pkg/limit"
 )
 
 type observation struct {

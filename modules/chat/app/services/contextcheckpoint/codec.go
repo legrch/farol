@@ -3,10 +3,9 @@ package contextcheckpoint
 import (
 	"bytes"
 	"encoding/json"
-	"unicode/utf8"
-
 	"github.com/legrch/farol/modules/chat/domain/contextbudget"
 	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
+	"unicode/utf8"
 )
 
 const MaxCheckpointBytes = 8 * 1024 * 1024

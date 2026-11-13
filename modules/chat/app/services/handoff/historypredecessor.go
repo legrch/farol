@@ -3,9 +3,8 @@ package handoff
 import (
 	"context"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	"github.com/legrch/farol/modules/chat/app/port"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // historyPredecessor retains only immutable provenance and its original read

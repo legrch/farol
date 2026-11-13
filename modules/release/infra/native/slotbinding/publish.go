@@ -10,9 +10,8 @@ import (
 	"os"
 	"sync"
 
-	"github.com/legrch/farol/pkg/limit"
-
 	"github.com/legrch/farol/modules/release/app/port"
+	"github.com/legrch/farol/pkg/limit"
 	"golang.org/x/sys/unix"
 )
 

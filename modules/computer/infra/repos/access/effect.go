@@ -2,7 +2,6 @@ package access
 
 import (
 	"context"
-
 	journal "github.com/legrch/farol/modules/computer/domain/journal"
 )
 

@@ -10,9 +10,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/legrch/farol/pkg/limit"
-
 	stop "github.com/legrch/farol/modules/computer/domain/journal"
+	"github.com/legrch/farol/pkg/limit"
 	"golang.org/x/sys/unix"
 )
 

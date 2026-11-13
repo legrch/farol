@@ -8,12 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/legrch/farol/pkg/fake"
-
 	"github.com/legrch/farol/modules/computer/app/port"
 	app "github.com/legrch/farol/modules/computer/app/services/mutation"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	domain "github.com/legrch/farol/modules/computer/domain/mutation"
+	"github.com/legrch/farol/pkg/fake"
 )
 
 // Contract fixtures are injected and in-process, not wire/native/live evidence.

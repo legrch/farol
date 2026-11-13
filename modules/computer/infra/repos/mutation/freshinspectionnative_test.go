@@ -9,10 +9,9 @@ import (
 
 	"context"
 	"fmt"
-	"testing"
-
 	"github.com/legrch/farol/modules/computer/app/port"
 	domain "github.com/legrch/farol/modules/computer/domain/mutation"
+	"testing"
 )
 
 // Real private storage/locks with synthetic canonical process facts. No OS

@@ -7,10 +7,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	"github.com/legrch/farol/modules/chat/app/port"
 	kerneldigest "github.com/legrch/farol/pkg/kernel/domain/digest"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 type Code string

@@ -9,13 +9,12 @@ import (
 	"math"
 	"unicode/utf8"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	cp "github.com/legrch/farol/modules/chat/app/services/contextcheckpoint"
 	"github.com/legrch/farol/modules/chat/app/services/inference"
 	cb "github.com/legrch/farol/modules/chat/domain/contextbudget"
 	ms "github.com/legrch/farol/modules/chat/domain/modelselection"
 	"github.com/legrch/farol/modules/chat/infra/clients/planresponses"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // Capture contains actual producer values. The estimate must have been captured

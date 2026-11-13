@@ -9,11 +9,10 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	"github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/domain/stream"
 	"github.com/legrch/farol/modules/chat/domain/turn"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // One bounded external round, on the existing owner. Private bodies live only

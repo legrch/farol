@@ -3,10 +3,9 @@ package mutation
 import (
 	"bytes"
 	"context"
+	domain "github.com/legrch/farol/modules/computer/domain/mutation"
 	"strings"
 	"testing"
-
-	domain "github.com/legrch/farol/modules/computer/domain/mutation"
 )
 
 const scratchTestRun = "00000000-0000-4000-8000-000000000099"

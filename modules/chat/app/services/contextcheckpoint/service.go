@@ -5,10 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	"github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/domain/contextbudget"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 type Code string

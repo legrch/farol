@@ -5,10 +5,9 @@ import (
 	"math"
 	"unicode/utf8"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	"github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/domain/turn"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 const SourceIncomplete Code = "CHAT_LIFECYCLE_SOURCE_INCOMPLETE"

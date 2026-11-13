@@ -4,9 +4,8 @@ import (
 	"context"
 	"sync"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	"github.com/legrch/farol/modules/chat/app/port"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // ClosedLease retains existing read-only claims, not a writer or origin proof.

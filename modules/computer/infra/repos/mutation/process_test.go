@@ -9,12 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/legrch/farol/pkg/fake"
-
 	"github.com/legrch/farol/modules/computer/app/port"
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	domain "github.com/legrch/farol/modules/computer/domain/mutation"
+	"github.com/legrch/farol/pkg/fake"
 )
 
 // All storage, clocks and child producers here are private memory doubles.

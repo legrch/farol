@@ -3,10 +3,9 @@ package lifecycle
 import (
 	"context"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	"github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/domain/turn"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // AdmissionOwner captures the same successful lifecycle handle. The projection

@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 
 	"github.com/legrch/farol/pkg/limit"
-
 	"golang.org/x/sys/unix"
 )
 

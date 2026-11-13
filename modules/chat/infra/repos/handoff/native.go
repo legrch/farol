@@ -15,9 +15,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/legrch/farol/pkg/limit"
-
 	"github.com/legrch/farol/modules/chat/app/port"
+	"github.com/legrch/farol/pkg/limit"
 	"golang.org/x/sys/unix"
 )
 

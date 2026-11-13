@@ -8,10 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/legrch/farol/pkg/fake"
-
 	app "github.com/legrch/farol/modules/computer/app/services/mutation"
 	"github.com/legrch/farol/modules/computer/domain/authority"
+	"github.com/legrch/farol/pkg/fake"
 )
 
 type ownerApproval struct {

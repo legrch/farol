@@ -9,14 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/legrch/farol/pkg/fake"
-
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	"github.com/legrch/farol/modules/computer/app/port"
 	workspacesvc "github.com/legrch/farol/modules/computer/app/services/workspace"
 	workspacect "github.com/legrch/farol/modules/computer/contracts/workspace"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	accessrepo "github.com/legrch/farol/modules/computer/infra/repos/access"
+	"github.com/legrch/farol/pkg/fake"
 )
 
 // CPU-only real policy and contract, with an injected filesystem boundary.

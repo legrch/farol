@@ -3,9 +3,8 @@ package lifecycle
 import (
 	"context"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	"github.com/legrch/farol/modules/chat/app/port"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // ClosedInspection is metadata for a canonical, currently empty journal. The

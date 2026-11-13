@@ -9,9 +9,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/legrch/farol/pkg/limit"
-
 	check "github.com/legrch/farol/modules/computer/domain/connector"
+	"github.com/legrch/farol/pkg/limit"
 	"golang.org/x/sys/unix"
 )
 

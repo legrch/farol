@@ -2,9 +2,8 @@ package access
 
 import (
 	"context"
-	"testing"
-
 	journal "github.com/legrch/farol/modules/computer/domain/journal"
+	"testing"
 )
 
 func TestPendingContinuityOnlyOriginalIntentCanReadCounters(t *testing.T) {

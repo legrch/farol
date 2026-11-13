@@ -4,9 +4,8 @@ import (
 	"context"
 	"time"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	"github.com/legrch/farol/modules/chat/app/port"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // PreservationLease retains the existing read-only claim over one complete

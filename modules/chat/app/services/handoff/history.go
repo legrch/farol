@@ -3,9 +3,8 @@ package handoff
 import (
 	"context"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	"github.com/legrch/farol/modules/chat/app/port"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // HistoryOrigin is minted only by a known successful Consume. It is not a live

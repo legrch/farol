@@ -5,10 +5,9 @@ import (
 	"crypto/sha256"
 	"math"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	"github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/domain/turn"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 func (r Root) identity() port.JournalRoot {

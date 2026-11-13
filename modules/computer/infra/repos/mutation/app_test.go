@@ -8,12 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/legrch/farol/pkg/fake"
-
 	"github.com/legrch/farol/modules/computer/app/port"
 	mutationsvc "github.com/legrch/farol/modules/computer/app/services/mutation"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	"github.com/legrch/farol/modules/computer/infra/filesystem"
+	"github.com/legrch/farol/pkg/fake"
 )
 
 // Actual Computer app + repository, with labelled injected clock/lease/storage

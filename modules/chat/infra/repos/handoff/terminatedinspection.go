@@ -3,10 +3,9 @@ package handoff
 import (
 	"context"
 
-	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
-
 	"github.com/legrch/farol/modules/chat/app/port"
 	policy "github.com/legrch/farol/modules/chat/app/services/handoff"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // AcquireTerminatedRetirementInspection retains the existing read-only claim

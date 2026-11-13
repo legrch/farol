@@ -3,10 +3,9 @@
 package archive
 
 import (
+	"github.com/legrch/farol/modules/chat/app/port"
 	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 	"github.com/legrch/farol/pkg/kernel/domain/root"
-
-	"github.com/legrch/farol/modules/chat/app/port"
 )
 
 type Code string
