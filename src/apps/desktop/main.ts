@@ -131,6 +131,10 @@ declare const __FAROL_GO_SHELL__: {
 } | null;
 import { createMenuBar, menuBarIconState } from "./menu-bar";
 import {
+  aboutCommand,
+  applicationMenu,
+} from "../../../apps/desktop/shell/menu";
+import {
   desktopCoreArtifactRoot,
   desktopDevShellImageMatches,
 } from "../../../apps/desktop/dev-core-layout";
@@ -174,7 +178,6 @@ import {
   shell,
   WebContentsView,
   type Input,
-  type MenuItemConstructorOptions,
   type SaveDialogOptions,
 } from "electron";
 import {
@@ -925,7 +928,6 @@ if (process.platform === "darwin") {
 }
 
 let window: BrowserWindow | null = null;
-let aboutOpen = false;
 let aboutPanel: DesktopAboutPanel | null = null;
 const updatesPanel = new DesktopUpdatesPanel(
   () =>
@@ -11600,40 +11602,19 @@ function desktopBrandImage() {
   return icon;
 }
 
-function requestAbout(): void {
-  if (quitInProgress || installedUpdateAdmission || aboutOpen) return;
-  aboutOpen = true;
-  // A dedicated panel uses the verified Farol artwork without inheriting the
-  // vendor runtime icon or exposing technical release identity in the UI.
-  void containWindowOpenFailure(ensureWindow, recoverWindowOpenFailure)
-    .then(async (outcome) => {
-      if (outcome !== "opened") return;
-      try {
-        if (
-          quitInProgress ||
-          installedUpdateAdmission ||
-          !window ||
-          window.isDestroyed()
-        )
-          return;
-        aboutPanel ??= new DesktopAboutPanel();
-        await aboutPanel.open({
-          owner: window,
-          name: displayProductName,
-          version: buildIdentity.version,
-          builtAt: buildIdentity.builtAt,
-          icon: desktopBrandImage().toDataURL(),
-          mode: windowMode,
-          place: () => selectedVisibleTestPlacement(ABOUT_PANEL_SIZE).bounds,
-        });
-      } catch {
-        console.error("DESKTOP_ABOUT_PRESENTATION_FAILED");
-      }
-    })
-    .finally(() => {
-      aboutOpen = false;
-    });
-}
+const requestAbout = aboutCommand({
+  closed: () => quitInProgress || installedUpdateAdmission,
+  openWindow: () =>
+    containWindowOpenFailure(ensureWindow, recoverWindowOpenFailure),
+  window: () => window,
+  panel: () => (aboutPanel ??= new DesktopAboutPanel()),
+  name: displayProductName,
+  version: buildIdentity.version,
+  builtAt: buildIdentity.builtAt,
+  mode: windowMode,
+  icon: () => desktopBrandImage().toDataURL(),
+  place: () => selectedVisibleTestPlacement(ABOUT_PANEL_SIZE).bounds,
+});
 
 function requestUpdates(): void {
   if (quitInProgress || installedUpdateAdmission) return;
@@ -11668,95 +11649,22 @@ function closeShellOverlay(): void {
 }
 
 function installApplicationMenu(): void {
-  const template: MenuItemConstructorOptions[] = [
-    ...(process.platform === "darwin"
-      ? ([
-          {
-            label: displayProductName,
-            submenu: [
-              {
-                id: "app.about",
-                label: `About ${displayProductName}`,
-                click: requestAbout,
-              },
-              {
-                id: "app.updates",
-                label: "Check for Updates…",
-                click: () => {
-                  requestUpdates();
-                },
-              },
-              { type: "separator" },
-              {
-                id: "app.settings",
-                label: "Settings…",
-                accelerator: "CommandOrControl+,",
-                click: requestSettings,
-              },
-              { type: "separator" },
-              { role: "services" },
-              { type: "separator" },
-              { role: "hide" },
-              { role: "hideOthers" },
-              { role: "unhide" },
-              { type: "separator" },
-              { role: "quit" },
-            ],
-          },
-        ] satisfies MenuItemConstructorOptions[])
-      : ([
-          {
-            label: "File",
-            submenu: [
-              {
-                id: "app.settings",
-                label: "Settings",
-                accelerator: "CommandOrControl+,",
-                click: requestSettings,
-              },
-              { type: "separator" },
-              { role: "quit" },
-            ],
-          },
-        ] satisfies MenuItemConstructorOptions[])),
-    {
-      label: "Edit",
-      submenu: [
-        { role: "undo" },
-        { role: "redo" },
-        { type: "separator" },
-        { role: "cut" },
-        { role: "copy" },
-        { role: "paste" },
-        { role: "selectAll" },
-      ],
-    },
-    {
-      label: "View",
-      submenu: [
-        {
-          id: "view.toggle-sidebar",
-          label: "Show/Hide Sidebar",
-          ...(navigationShortcuts.sidebar === "off"
-            ? {}
-            : {
-                accelerator: `Control+Command+${navigationShortcuts.sidebar.toUpperCase()}`,
-              }),
-          click: requestSidebarToggle,
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate(
+      applicationMenu({
+        platform: process.platform,
+        productName: displayProductName,
+        sidebarShortcut: navigationShortcuts.sidebar,
+        actions: {
+          about: requestAbout,
+          updates: requestUpdates,
+          settings: requestSettings,
+          toggleSidebar: requestSidebarToggle,
+          quickSwitcher: requestQuickSwitcher,
         },
-        {
-          id: "view.quick-switcher",
-          label: "Quick Switcher",
-          accelerator: "CommandOrControl+K",
-          click: requestQuickSwitcher,
-        },
-        { type: "separator" },
-        { role: "togglefullscreen" },
-      ],
-    },
-    { role: "windowMenu" },
-  ];
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+      }),
+    ),
+  );
 }
 
 function attachTaskView(
