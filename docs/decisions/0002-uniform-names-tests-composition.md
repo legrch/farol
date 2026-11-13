@@ -161,7 +161,9 @@ new `pkg/<word>`.
 
 TypeScript mirrors the same tree and module names (`agent` becomes `task`),
 uses one-word file names and co-located tests. New tests that slice code out of
-source text are banned.
+source text are banned. The rules that can be checked statically are
+reported by the TypeScript gate described under
+[TypeScript enforcement](#typescript-enforcement).
 
 ### 8. Backend policy
 
@@ -377,6 +379,41 @@ in the diff.
    rows or lowered the same amount can merge cleanly and still leave rows
    that the merged tree no longer matches.
 
+### TypeScript enforcement
+
+[`tooling/check-architecture.mjs`](../../tooling/check-architecture.mjs) keeps
+its blocking `ARCH_*` import rules and adds decision 7 in report mode, through
+the same enforcement switch as the Go checker
+([`tooling/architecture-enforcement.mjs`](../../tooling/architecture-enforcement.mjs))
+and its own file,
+[`tooling/ts-architecture-enforcement.json`](../../tooling/ts-architecture-enforcement.json)
+(`migrated`, exact `baseline` rows, `exceptions`; `--write-baseline` only
+shrinks, `--admit-new` adds reviewed rows; `TS_REPORT_NEW`,
+`TS_BASELINE_STALE` and `TS_EXCEPTION_STALE` block). It scans `src/` and
+`apps/desktop/`. A scope is the module under `src/modules`, otherwise the
+second path segment (`apps`, `boot`, `pkg`, `ui` under `src/`; `desktop` for
+`apps/desktop`).
+
+| Code                     | Rule                                                                                                                                                                                                                                                        |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TS_LAYER_FOLDER`        | `src/modules/<m>` uses a Go module name and only `domain/<concept>`, `app/port`, `app/services/<feature>`, `app/capabilities/<role>`, `contracts/<feature>`, `infra/{peer,repos/<aggregate>,clients/<system>,<mechanism>}`; grouping folders hold no files. |
+| `TS_FOLDER_WORD`         | Every source folder name is one lowercase word.                                                                                                                                                                                                             |
+| `TS_FILE_WORD`           | A file stem, without `.test` and `.d`, is one lowercase word.                                                                                                                                                                                               |
+| `TS_TEST_MISSING`        | A file with behavior (a function body or a module-level statement that is not a declaration) has `x.test.ts(x)` beside it; not in `boot`, declaration files or generated files.                                                                             |
+| `TS_TEST_ORPHAN`         | `x.test.ts` has a same-named source beside it.                                                                                                                                                                                                              |
+| `TS_BOOT_TEST`           | No test under `src/boot` or `apps/<host>/boot`.                                                                                                                                                                                                             |
+| `TS_BOOT_LOGIC`          | Composition holds no `if`, `?:`, `switch`, loop, `try` or class, and stays within 400 lines; one row per kind and file with an amount.                                                                                                                      |
+| `TS_APP_MODULE_INTERNAL` | Application code under `apps/desktop` and `src/apps` imports a module only through its `contract`/`contracts` layer.                                                                                                                                        |
+
+The import rules classify `contracts` as the contract layer, keep co-located
+tests out of the production import graph and refuse a production import of a
+test file. Not mechanised: a word vocabulary for TypeScript names (a glued
+compound passes `TS_FILE_WORD`), singular versus plural folder names outside
+the module tree, the `apps/desktop/<area>` layout, placement of the existing
+`tests/unit` suites (their subject mapping needs review), the boot file set
+and the ban on new source-slicing tests. Behavior inside string literals
+(page scripts) is invisible to `TS_TEST_MISSING`.
+
 ## Alternatives considered
 
 - **Per-scope count ceilings instead of rows.** Rejected: one change could fix
@@ -426,7 +463,8 @@ in the diff.
   `kernelPeerContracts` is mechanical. The checker does not scan test imports,
   so test-only use of `pkg/fake` is not enforced, and boot-only kits are not
   modelled until the owner admits one.
-- TypeScript (decision 7) and backend policy in Electron (decision 8) are not
-  mechanised by this record; the TypeScript gate is unchanged.
+- TypeScript (decision 7) is reported by the TypeScript gate within the limits
+  listed under [TypeScript enforcement](#typescript-enforcement); backend
+  policy in Electron (decision 8) is not mechanised.
 - `cmd/` is outside the test-pairing rule; its development tool keeps untested
   logic until it moves into a kit.

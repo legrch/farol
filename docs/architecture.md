@@ -128,6 +128,11 @@ invalid fixtures. It also rejects host/vendor imports from composition-only `boo
 all inner-layer imports of executable `apps`, and module imports of UI.
 Independent executable applications cannot import one another. Both desktop
 source trees receive the same strict TypeScript, lint and architecture checks.
+The same gate reports the ADR-0002 TypeScript mirror (plural `contracts`,
+`app/services` and `infra/{repos,clients}` folders, one-word names, co-located
+tests, test- and logic-free `boot`, application imports of module internals)
+against exact baseline rows; see
+[TypeScript enforcement](decisions/0002-uniform-names-tests-composition.md#typescript-enforcement).
 Shared CSS-pixel layout values live under `src/pkg/shell-layout` so native views,
 IPC validation and the renderer use the same geometry without a host dependency.
 
