@@ -127,6 +127,13 @@ session with no automatic credential import; see [VM testing](vm-testing.md).
 
 ## Evidence, custody and interrupted work
 
+The guest helper-update marker (`exchange/.input-lease.json`) is published with
+the input lease and covers the whole run deadline plus a 120-second release
+margin, for native and legacy runs alike; legacy phases still refresh it. An own
+marker found expired is never renewed: the run refuses with
+`HELPER_UPDATE_CUSTODY_EXPIRED` and keeps it. Whether the installed helper treats
+an expired marker as still blocking updates is not verified from this repository.
+
 Before product effects, the runner durably publishes the per-VM
 `.farol-smoke-pending.json` fence. Initial admission uses no-follow metadata:
 dangling symlinks and uninspectable entries do not establish absence. Interrupted,

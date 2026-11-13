@@ -79,7 +79,7 @@ SAFE_FAILURE_CODES = frozenset((
     'GUEST_CLOSE_NOT_OBSERVED', 'GUEST_QUIT_DRAIN_UNCONFIRMED', 'GUEST_SERVER_NOT_STOPPED', 'GUEST_STATE_INVALID',
     'GUEST_INPUT_LEASE_LOCK_UNSAFE', 'GUEST_INPUT_LEASE_HELD', 'GUEST_INPUT_LEASE_METADATA_CHANGED', 'GUEST_INPUT_LEASE_METADATA_UNCONFIRMED',
     'GUEST_LEASE_RELEASE_UNCONFIRMED', 'GUEST_OPERATION_FENCE_CHANGED', 'GUEST_OPERATION_FENCE_UNINSPECTABLE', 'HELPER_UPDATE_CUSTODY_CHANGED',
-    'HELPER_UPDATE_CUSTODY_UNCONFIRMED', 'HELPER_UPDATE_CUSTODY_UNRESOLVED', 'UNRESOLVED_GUEST_OPERATION', 'UNRECONCILED_STAGING_RESIDUE',
+    'HELPER_UPDATE_CUSTODY_UNCONFIRMED', 'HELPER_UPDATE_CUSTODY_UNRESOLVED', 'HELPER_UPDATE_CUSTODY_EXPIRED', 'UNRESOLVED_GUEST_OPERATION', 'UNRECONCILED_STAGING_RESIDUE',
     'STAGING_CLEANUP_UNCONFIRMED', 'CAPTURE_INVALID', 'MENU_NOT_OBSERVED', 'MULTIPLE_GUEST_WINDOWS',
     'RELAUNCH_PID_UNCHANGED', 'RUN_INTERRUPTED', 'HOST_IO_UNCONFIRMED', 'NEEDS_OWNER',
     'TERMINAL_CAPABILITY_UNSUPPORTED', 'TERMINAL_FOCUS_UNVERIFIED', 'TERMINAL_GUARD_INVALID', 'TERMINAL_LAUNCH_UNAVAILABLE',
@@ -1198,6 +1198,11 @@ class Runner:
                 type(value.get('deadline')) in (int, float) and
                 math.isfinite(value['deadline']) and value['deadline'] > 0,
                 'HELPER_UPDATE_CUSTODY_CHANGED')
+        # An expired own marker is never silently renewed: the guest may have
+        # treated the window as unprotected. (The terminal-mac source this was
+        # written against keeps an expired marker blocking helper updates, but
+        # the installed helper build is not verified here, so stay classified.)
+        require(value['deadline'] > time.time(), 'HELPER_UPDATE_CUSTODY_EXPIRED')
 
     def acquire_input_lease(self):
         """Take the flock before writing a new, exclusively owned metadata pair.
@@ -1257,14 +1262,17 @@ class Runner:
         Atomic replacement of this shared file between native requests can
         race VirtioFS descriptor/name caches. A native marker covers the whole
         bounded run plus its final request margin and is never renewed/adopted.
-        Legacy scenarios retain their original refresh contract.
+        A legacy marker now gets the same whole-run lifetime at acquisition
+        (cold boot, archive checks and long phase waits can exceed a fixed
+        120 s epoch between refreshes) and is still refreshed per phase; an
+        own marker that has expired anyway refuses instead of being renewed.
         """
         marker = self.exchange / '.input-lease.json'
         native = getattr(getattr(self, 'a', None), 'native_app_service', False)
         if native and not initial:
             self.require_own_update_marker()
             return
-        lifetime = max(120.0, self.deadline - time.monotonic() + 120.0) if native else 120.0
+        lifetime = max(120.0, self.deadline - time.monotonic() + 120.0)
         value = {'schema': 'terminal-mac.input-lease-flag/1', 'owner': self.lease_owner,
                  'deadline': time.time() + lifetime}
         if initial:

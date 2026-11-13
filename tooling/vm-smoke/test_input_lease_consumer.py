@@ -289,5 +289,38 @@ class InputLeaseConsumerTests(unittest.TestCase):
                 probe_lock_free(machine)
 
 
+    def test_legacy_marker_covers_the_whole_run_not_a_fixed_epoch(self):
+        with tempfile.TemporaryDirectory() as d:
+            runner = build_runner(Path(d))
+            runner.deadline = vm.time.monotonic() + 600
+            runner.acquire_input_lease()
+            try:
+                value = json.loads((runner.exchange / '.input-lease.json').read_text())
+                # 600 s of run budget plus the 120 s release margin, not 120 s.
+                self.assertGreater(value['deadline'], vm.time.time() + 700)
+            finally:
+                runner.release_input_lease()
+
+    def test_expired_own_marker_is_classified_never_silently_renewed(self):
+        with tempfile.TemporaryDirectory() as d:
+            runner = build_runner(Path(d))
+            runner.acquire_input_lease()
+            marker = runner.exchange / '.input-lease.json'
+            value = json.loads(marker.read_text())
+            value['deadline'] = vm.time.time() - 1
+            marker.write_text(json.dumps(value))
+            with self.assertRaisesRegex(vm.Refused, 'HELPER_UPDATE_CUSTODY_EXPIRED'):
+                runner.publish_lease_flag()
+            self.assertEqual(json.loads(marker.read_text())['deadline'], value['deadline'],
+                             'the expired marker is kept, not rewritten')
+            self.assertEqual(vm.safe_failure_code(vm.Refused('HELPER_UPDATE_CUSTODY_EXPIRED')),
+                             'HELPER_UPDATE_CUSTODY_EXPIRED')
+            # The clean release refuses too, keeps both records, frees the flock.
+            with self.assertRaisesRegex(vm.Refused, 'HELPER_UPDATE_CUSTODY_EXPIRED'):
+                runner.release_input_lease()
+            self.assertTrue(marker.exists())
+            self.assertTrue((runner.machine / 'input-lease.json').exists())
+            probe_lock_free(runner.machine)
+
 if __name__ == '__main__':
     unittest.main()

@@ -34,6 +34,7 @@ def synthetic_runner(root):
     runner.pending = None
     runner.run_id = 'run-current'
     runner.log = []
+    runner.deadline = vm.time.monotonic() + 60  # every real Runner has a run deadline
     runner.a = SimpleNamespace(vm='pilot', visible=False, connect_dev=False,
                                connection_proof=False, release_dev=False)
     def forbidden_cli(*args):
