@@ -165,6 +165,24 @@ source text are banned. The rules that can be checked statically are
 reported by the TypeScript gate described under
 [TypeScript enforcement](#typescript-enforcement).
 
+A co-located test is `name.test.ts` (or `name.test.tsx`) in the folder of
+`name.ts` under `src/` or `apps/desktop/`, importing its subject as `./name`.
+[`tooling/test-placement.mjs`](../../tooling/test-placement.mjs) is the one
+placement rule. Scope discovery finds the test and the planner runs it in the
+unit scope, and therefore in `fast` and `cloud`: in Node under
+`vitest.config.ts`, or under `vitest.renderer.config.ts` (jsdom) when it sits
+in `src/ui/renderer/` or `apps/desktop/renderer/`. A test that needs real
+processes or native collaborators is reviewed into `integrationUnitFiles` in
+`tooling/test-scope-plan.mjs`, as a legacy unit file would be. `tsc` and
+`npm run lint` check it with its source. It never enters a bundle:
+`tooling/build.mjs` refuses a test-named build input
+(`BUILD_INPUT_TEST_SOURCE`) and the import rules refuse a production import of
+a test (`ARCH_PRODUCTION_TESTKIT`). Only `.test.ts(x)` is admitted beside
+source; a `.test.mjs` or `_test.go` there fails discovery instead of being
+skipped. Moving a `tests/unit` file beside its subject keeps its scope; then
+run `node tooling/check-architecture.mjs --write-baseline` to drop the rows the
+move clears.
+
 ### 8. Backend policy
 
 Backend policy lives in Go modules: not in `boot`, not in Electron.

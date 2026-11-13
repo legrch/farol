@@ -18,7 +18,7 @@ import {
   recordedModelTurn,
   recordedCompaction,
 } from "../../../apps/desktop/operations/model-turn";
-import { desktopStatePaths } from "../../../apps/desktop/host/state-paths";
+import { desktopStatePaths } from "../../../apps/desktop/host/paths";
 import { OperationsStore } from "../../../apps/desktop/operations/store";
 import {
   ProcessAuditCollector,

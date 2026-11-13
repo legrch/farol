@@ -70,7 +70,9 @@ def projection(plan, cloud, metadata):
                 or suite.get("config") or suite.get("testNamePattern")
                 or not re.fullmatch(r"node-cloud-\d{2}", suite.get("id", ""))
                 or not files or len(files) != len(set(files))
-                or any(not safe_path(f).startswith("tests/") or not re.search(r"\.test\.(ts|tsx|mjs)$", f) for f in files)
+                # tests/ suites, or co-located tests beside source (tooling/test-placement.mjs).
+                or any(not re.fullmatch(r"(?:tests/.+\.test\.(?:ts|tsx|mjs)|(?:src|apps/desktop)/.+\.test\.tsx?)", safe_path(f))
+                       for f in files)
                 or type(suite.get("timeoutMs")) is not int or suite["timeoutMs"] != 300000
                 or suite.get("workers") != 2):
             raise ValueError("AFFECTED_PARTIAL_OR_NATIVE_SUITE_REFUSED")
