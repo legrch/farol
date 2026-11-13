@@ -158,5 +158,12 @@ a driver bundle or partial native blobs, and its exchange report directory. The
 failure result lists `removedStaging` and, for anything kept, `retainedStaging`.
 Once a fence exists the staging is evidence of a possible guest effect and is
 retained for reconciliation. Successful cleanup removes only exact owned staging;
-it never deletes input archives, VMs or guest profiles. `task vm:test` covers these
+it never deletes input archives, VMs or guest profiles.
+
+Exit status: 0 is a completed diagnostic run, 1 is reserved for a known test
+FAIL, 2 is BLOCKED or outcome UNKNOWN. An UNKNOWN operation dominates a
+guest-authored FAIL receipt. Every exception type, `SIGTERM`, `SIGINT` and `SIGHUP`
+end in a classified `result.json` (unexpected types as `UNCLASSIFIED`) with any
+owned fence kept. The Node wrappers report a signal-killed child as
+`VM_<MODE>_OUTCOME_UNKNOWN` with exit 2, never as a plain refusal. `task vm:test` covers these
 admission contracts with disposable synthetic fixtures, not a live VM or provider.

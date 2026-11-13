@@ -71,7 +71,7 @@ SAFE_FAILURE_CODES = frozenset((
     'VM_MISSING', 'VM_BUSY', 'VM_NOT_RUNNING', 'VM_MACHINE_FILE_INVALID',
     'TERMINAL_MAC_PACKAGE_REQUIRED', 'TERMINAL_MAC_IDENTITY_INVALID', 'GUEST_TOOLS_MISSING', 'EXCHANGE_SHARE_REQUIRED',
     'CLOSED_DOWNLOAD_FORBIDDEN', 'CLOSED_MODE_INVALID', 'CLOSED_REQUIRES_OFFLINE_MACHINE', 'CLOSED_REQUIRES_FRESH_VM_BOOT',
-    'CLOSED_NETWORK_CONFIG_CHANGED', 'DEV_IMPORT_UNQUALIFIED',
+    'CLOSED_NETWORK_CONFIG_CHANGED', 'DEV_IMPORT_UNQUALIFIED', 'HOST_PROCESS_PROBE_FAILED',
     # guest
     'DEADLINE_EXCEEDED', 'GUEST_CLI_TIMEOUT', 'GUEST_CLI_LAUNCH_FAILED', 'GUEST_CLI_FAILED',
     'GUEST_CLI_REPLY_INVALID', 'GUEST_ACTION_FAILED', 'GUEST_PERMISSIONS_MISSING', 'GUEST_PHASE_FAILED',
@@ -263,11 +263,13 @@ def verify(archive):
         info_path = IDENTITY['name'] + '.app/Contents/Info.plist'
         require(info_path in seen and z.getinfo(info_path).file_size <= 65536, 'APP_MISSING')
         info = plistlib.loads(z.read(info_path))
+        require(isinstance(info, dict), 'BUNDLE_IDENTITY_INVALID')
         require(info.get('CFBundleIdentifier') == IDENTITY['bundleId'] and
                 info.get('CFBundleShortVersionString') == version, 'BUNDLE_IDENTITY_INVALID')
         require('artifact.json' in seen and z.getinfo('artifact.json').file_size <= 65536,
                 'ARTIFACT_MISSING')
         artifact = json.loads(z.read('artifact.json'))
+        require(isinstance(artifact, dict), 'ARTIFACT_IDENTITY_MISMATCH')
         require(all(artifact.get(k) == m.get(k) for k in
                     ('product', 'bundleId', 'version', 'sourceCommit', 'sourceDirty',
                      'sourceTreeDigest', 'buildId', 'artifactSha256', 'notarized')) and
@@ -365,7 +367,11 @@ def download_latest(directory, deadline):
 def require_host_dev_stopped(identity, home=None):
     home = Path.home() if home is None else home
     root = home / 'Library/Application Support' / identity['devDataLeaf']
-    rows = subprocess.check_output(['/bin/ps', '-ax', '-o', 'command='], text=True)
+    try:
+        rows = subprocess.check_output(['/bin/ps', '-ax', '-o', 'command='], text=True, timeout=10)
+    except (subprocess.SubprocessError, OSError, UnicodeError):
+        # A failed process census never proves host Dev is stopped.
+        raise Refused('HOST_PROCESS_PROBE_FAILED') from None
     # APFS may retain the supported legacy DEV spelling of the same directory.
     require(not any(str(root).casefold() in row.casefold() for row in rows.splitlines()),
             'HOST_DEV_STILL_RUNNING')
@@ -2118,10 +2124,13 @@ def arguments(argv=None):
 
 
 def result_exit_code(result, fallback=0):
-    if result.get('test', {}).get('status') == 'FAIL':
-        return 1
+    # 1 is reserved for a test FAIL whose operation is known. An UNKNOWN
+    # operation dominates: a guest-authored FAIL receipt never turns an
+    # outcome-unknown run into an ordinary failed assertion.
     if result.get('operation', {}).get('status') == 'UNKNOWN':
         return 2
+    if result.get('test', {}).get('status') == 'FAIL':
+        return 1
     return fallback
 
 
@@ -2130,6 +2139,8 @@ def main():
     def interrupted(_signal, _frame):
         raise InterruptedError('RUN_INTERRUPTED')
     previous_term = signal.signal(signal.SIGTERM, interrupted)
+    # Closing the terminal tab is a cancellation, not a silent hard exit.
+    previous_hup = signal.signal(signal.SIGHUP, interrupted)
     try:
         require(set(IDENTITY) == {'name', 'bundleId', 'dataLeaf', 'devDataLeaf'}, 'USE_TASK_VM_SMOKE_ENTRYPOINT')
         args = arguments()
@@ -2145,7 +2156,10 @@ def main():
             runner.finish_effect()
         print(json.dumps(dict(result, evidence=str(runner.out))))
         return result_exit_code(result)  # Diagnostic success is not product qualification.
-    except (Refused, OSError, ValueError, TypeError, KeyError, KeyboardInterrupt, subprocess.TimeoutExpired, zipfile.BadZipFile) as error:
+    except (Exception, KeyboardInterrupt) as error:
+        # Every failure, including an unexpected AttributeError, RecursionError,
+        # CalledProcessError or NotImplementedError, is classified here and
+        # writes result.json. Exit 1 stays reserved for a known test FAIL.
         code = safe_failure_code(error)
         if runner and getattr(runner, 'first_failure', None) is None:
             runner.record_first_failure(code, outcome='UNKNOWN' if runner.pending else 'noEffect')
@@ -2181,6 +2195,7 @@ def main():
                 runner.cleanup_disposition()
         finally:
             signal.signal(signal.SIGTERM, previous_term)
+            signal.signal(signal.SIGHUP, previous_hup)
 
 
 if __name__ == '__main__':

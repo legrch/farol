@@ -1,6 +1,7 @@
 import { desktopIdentity } from "./harness-identity.ts";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { childExitStatus } from "./vm-child-exit.mjs";
 
 const identity = desktopIdentity("preview", "/");
 const result = spawnSync(
@@ -26,5 +27,4 @@ const result = spawnSync(
     },
   },
 );
-if (result.error) throw result.error;
-process.exitCode = result.status ?? 1;
+process.exitCode = childExitStatus(result, "SMOKE");

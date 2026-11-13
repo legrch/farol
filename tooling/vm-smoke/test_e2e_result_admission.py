@@ -192,7 +192,8 @@ class E2EResultAdmissionTests(unittest.TestCase):
 
     def test_primary_assertion_failure_survives_teardown_failure(self):
         runner, code, result, sent = self.drive(status='FAIL', cleanup_failure=True)
-        self.assertEqual(code, 1, result)
+        # The assertion FAIL is kept as data, but the UNKNOWN teardown owns the exit code.
+        self.assertEqual(code, 2, result)
         self.assertEqual(result['status'], 'FAIL')
         self.assertEqual(result['reason'], 'E2E_ASSERTIONS_FAILED')
         self.assertEqual(result['operation']['status'], 'UNKNOWN')
@@ -222,7 +223,8 @@ class E2EResultAdmissionTests(unittest.TestCase):
 
     def test_phase_failure_is_preserved_even_when_fail_receipt_also_exists(self):
         runner, code, report, _ = self.drive(status='FAIL', guest_failure=True)
-        self.assertEqual(code, 1, report)
+        # The operation is UNKNOWN, so the exit is 2 even though a FAIL receipt exists.
+        self.assertEqual(code, 2, report)
         self.assertEqual(report['reason'], 'UNCLASSIFIED')
         self.assertNotIn('SYNTHETIC_PHASE_ACK_UNKNOWN', json.dumps(report))
         self.assertEqual(report['e2e']['reason'], 'E2E_ASSERTIONS_FAILED')

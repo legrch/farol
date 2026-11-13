@@ -389,6 +389,16 @@ export async function runVMDev(argv, injected = {}) {
   return result.status;
 }
 
+// 1 is a classified refusal; an outcome-unknown build or session (including a
+// signal-killed child) or an unclassified error exits 2, never 1.
+export function vmDevRefusalExit(code) {
+  return /^VM_DEV_[A-Z_]+$/.test(code) &&
+    code !== "VM_DEV_UNCLASSIFIED" &&
+    !code.endsWith("_OUTCOME_UNKNOWN")
+    ? 1
+    : 2;
+}
+
 const entry = process.argv[1] && pathToFileURL(process.argv[1]).href;
 if (entry && import.meta.url === entry) {
   try {
@@ -398,6 +408,6 @@ if (entry && import.meta.url === entry) {
     const code =
       error instanceof VMDevRefusal ? error.message : "VM_DEV_UNCLASSIFIED";
     process.stderr.write(code + "\n");
-    process.exitCode = 1;
+    process.exitCode = vmDevRefusalExit(code);
   }
 }

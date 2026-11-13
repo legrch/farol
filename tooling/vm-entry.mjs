@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { childExitStatus } from "./vm-child-exit.mjs";
 
 export function chooseRuntime(
   currentVersion,
@@ -67,6 +68,5 @@ if (entryHref !== null && import.meta.url === entryHref) {
     [path.join(root, "tooling/vm-" + mode + ".mjs"), ...process.argv.slice(3)],
     { env, stdio: "inherit" },
   );
-  if (result.error) throw result.error;
-  process.exitCode = result.status ?? 1;
+  process.exitCode = childExitStatus(result, mode.toUpperCase());
 }
