@@ -1,7 +1,7 @@
 import vm from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 vi.mock("electron", () => ({ BrowserWindow: class {}, session: {} }));
-import { taskProbeScript } from "../../src/apps/desktop/chatgpt-route";
+import { taskProbeScript } from "../../src/apps/desktop/chatgpt/scripts";
 import { ChatGptPublicTurn } from "../../src/apps/desktop/chatgpt-public-turn";
 import { publicMarkdownBlock } from "../../src/apps/desktop/chatgpt-public-markdown";
 import { readPublicAssistantMessages } from "../../src/apps/desktop/chatgpt-public-turn";

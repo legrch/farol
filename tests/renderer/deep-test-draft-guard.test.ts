@@ -8,7 +8,7 @@ import {
   activateTaskScript,
   bindChatGptAppScript,
   prepareTaskScript,
-} from "../../src/apps/desktop/chatgpt-route";
+} from "../../src/apps/desktop/chatgpt/scripts";
 
 afterEach(() => {
   document.body.replaceChildren();

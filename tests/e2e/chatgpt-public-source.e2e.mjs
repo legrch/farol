@@ -919,7 +919,7 @@ try {
       import fs from 'node:fs';
       import path from 'node:path';
       import { createHash } from 'node:crypto';
-      import { taskProbeScript } from './src/apps/desktop/chatgpt-route.ts';
+      import { taskProbeScript } from './src/apps/desktop/chatgpt/scripts.ts';
       import { publicMarkdownBlock } from './src/apps/desktop/chatgpt-public-markdown.ts';
       import { publicContentVisible, ChatGptPublicTurn } from './src/apps/desktop/chatgpt-public-turn.ts';
       import { physicalComposerDraft } from './src/apps/desktop/chatgpt-physical-page-scripts.ts';
