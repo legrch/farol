@@ -17,7 +17,10 @@ import (
 // existing positive, safe Unix millisecond value.
 //
 // Writes keep the 0.5.24 reader's bounds (1 MiB, 256 participants), so the
-// retained predecessor opens every snapshot this build writes. Reads accept a
+// retained predecessor opens every snapshot this build writes from one within
+// them. A snapshot already above 256 participants (a later release's, after a
+// rollback) may still be rewritten without growing, so revocation and renewal
+// are never blocked; Admit and Delegate refuse while it is above. Reads accept a
 // later release's larger snapshot: no participant count limit, only a 16 MiB
 // corruption guard. A one-workspace participant encodes to about 700 bytes, so
 // the guard holds over 20,000 of them; every Store call rereads and hashes the
@@ -231,6 +234,16 @@ func encodeDocument(d document) ([]byte, error) {
 }
 func encodeState(b Binding, s state) ([]byte, error) {
 	return encodeDocument(stateDocument(b, s))
+}
+
+// encodeNextState encodes a write of next over previous. Only a write that
+// keeps a count already above the 0.5.24 bound, without growing it, skips the
+// write bounds; it stays within the read guard and canonical.
+func encodeNextState(b Binding, previous, next state) ([]byte, error) {
+	if len(next.Participants) > maxParticipants && len(next.Participants) <= len(previous.Participants) {
+		return marshalDocument(stateDocument(b, next))
+	}
+	return encodeState(b, next)
 }
 func decodeState(b Binding, raw []byte) (state, error) {
 	s := state{Participants: map[string]retainedParticipant{}}

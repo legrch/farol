@@ -233,10 +233,11 @@ func laterReleaseSnapshot(t *testing.T, f stateFixture, participants int) []byte
 }
 
 // Step one of the two-step bound release: this build READS a snapshot with
-// more than 256 participants, as the release after it may write, but never
-// WRITES one: the 257th admission and any rewrite of a larger snapshot refuse
-// with the existing classified refusal and leave the bytes untouched.
-func TestNativeStoreReadsLargerSnapshotButNeverWritesOne(t *testing.T) {
+// more than 256 participants, as the release after it may write. After such a
+// rollback, revocation and other writes that do not grow the count keep
+// working and stay canonical; an admission that would grow it is refused with
+// the existing classified refusal and leaves the bytes untouched.
+func TestNativeStoreAboveTheWriteBoundRevokesButNeverGrows(t *testing.T) {
 	f := fixtureState(t)
 	approve(t, f)
 	if err := f.store.Close(); err != nil {
@@ -249,16 +250,38 @@ func TestNativeStoreReadsLargerSnapshotButNeverWritesOne(t *testing.T) {
 	if err != nil {
 		t.Fatal("larger snapshot refused", err)
 	}
-	t.Cleanup(func() { store.Close() })
 	if len(store.current.Participants) != participants || snapshot(t, store, "participant-299").Participant == nil || snapshot(t, store, "participant-298").Participant != nil {
 		t.Fatal("larger snapshot misread")
 	}
 	_, err = store.Admit(context.Background(), status(t, store).Revision, f.admission, f.participant)
 	failCode(t, err, "COMPUTER_AUTHORITY_STORE_UNAVAILABLE")
-	err = store.UpdateApproval(context.Background(), status(t, store).Revision, f.approval)
-	failCode(t, err, "COMPUTER_AUTHORITY_STORE_UNAVAILABLE")
 	if after, err := os.ReadFile(filepath.Join(f.root, stateName)); err != nil || !bytes.Equal(after, raw) || status(t, store).Revision != 9 {
-		t.Fatal("this build rewrote a larger snapshot", err)
+		t.Fatal("refused admission changed the snapshot", err)
+	}
+	if err = store.RevokeParticipant(context.Background(), status(t, store).Revision, "participant-299"); err != nil {
+		t.Fatal("revocation blocked above the write bound", err)
+	}
+	if err = store.UpdateApproval(context.Background(), status(t, store).Revision, f.approval); err != nil {
+		t.Fatal("approval renewal blocked above the write bound", err)
+	}
+	if err = store.RevokeApproval(context.Background(), status(t, store).Revision); err != nil {
+		t.Fatal("approval revocation blocked above the write bound", err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = Open(f.root, testBinding, f.clock)
+	if err != nil {
+		t.Fatal("rewritten snapshot refused", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	written, err := os.ReadFile(filepath.Join(f.root, stateName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := marshalDocument(stateDocument(testBinding, store.current))
+	if err != nil || !bytes.Equal(canonical, written) || len(store.current.Participants) != participants || !store.current.Participants["participant-299"].Revoked || store.current.Approval != nil || status(t, store).Revision != 12 {
+		t.Fatal("non-growing rewrite not durable or not canonical", err)
 	}
 }
 
