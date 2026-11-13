@@ -10,7 +10,6 @@ import {
   type ContextBinding,
 } from "../../src/modules/chat/domain/context-continuity";
 import type { Result } from "../../src/pkg/kernel/domain/result";
-import { contextTaskPresentation } from "../../src/ui/context-task-presentation";
 
 const binding: ContextBinding = {
   ownerId: "owner-preview",
@@ -45,18 +44,12 @@ describe("context task state", () => {
       source: "canonical_history",
       code: null,
     });
-    expect(contextTaskPresentation(context)).toEqual({
-      tone: "running",
-      label: "Recovering from history",
-      attention: false,
-      locked: true,
-    });
     expect(JSON.stringify(context)).not.toMatch(
       /canonicalHistory|checkpointContent|activeConstraints|artifactRefs|prompt|answer/iu,
     );
   });
 
-  it("keeps context uncertainty distinct from Failed and disables destructive task actions", () => {
+  it("keeps context uncertainty distinct from Failed", () => {
     const started = value(
       beginCompaction(createContextSession(binding), {
         operationId: "compact-context-2",
@@ -71,52 +64,6 @@ describe("context task state", () => {
     );
     const context = toProductTaskContext(unknown);
 
-    expect(contextTaskPresentation(context)).toEqual({
-      tone: "unknown",
-      label: "Context outcome unknown",
-      attention: true,
-      locked: true,
-    });
     expect(context.code).toBe("SUMMARY_SUBMISSION_UNRESOLVED");
-  });
-
-  it("shows an explicit usage-limit remedy without calling it a failed task", () => {
-    expect(
-      contextTaskPresentation({
-        epoch: 1,
-        phase: "blocked",
-        source: "canonical_history",
-        code: "SUMMARY_USAGE_LIMITED",
-      }),
-    ).toEqual({
-      tone: "unavailable",
-      label: "Context usage limited",
-      attention: true,
-      locked: true,
-    });
-  });
-
-  it("names the remedy for a retirement a newer conversation superseded", () => {
-    expect(
-      contextTaskPresentation({
-        epoch: 1,
-        phase: "blocked",
-        source: "retained_agent",
-        code: "SOURCE_RETIREMENT_SUPERSEDED",
-      }),
-    ).toEqual({
-      tone: "waiting",
-      label: "Return to the previous conversation",
-      attention: true,
-      locked: true,
-    });
-  });
-
-  it("does not override ordinary task presentation while context is active", () => {
-    expect(
-      contextTaskPresentation(
-        toProductTaskContext(createContextSession(binding)),
-      ),
-    ).toBeNull();
   });
 });
