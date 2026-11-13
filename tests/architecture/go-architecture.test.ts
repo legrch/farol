@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import * as prettier from "prettier";
 import { describe, expect, it } from "vitest";
 
 const root = path.resolve(
@@ -891,13 +892,15 @@ function run(files: Record<string, string>, args: string[]) {
       { encoding: "utf8" },
     );
     const written = path.join(directory, enforcementFile);
+    const text = fs.existsSync(written)
+      ? fs.readFileSync(written, "utf8")
+      : null;
     return {
       status: result.status,
       stdout: result.stdout,
       stderr: result.stderr,
-      stored: fs.existsSync(written)
-        ? (JSON.parse(fs.readFileSync(written, "utf8")) as Enforcement)
-        : null,
+      text,
+      stored: text ? (JSON.parse(text) as Enforcement) : null,
     };
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
@@ -1138,6 +1141,32 @@ describe("ADR-0002 enforcement switch", () => {
     expect(run(files, ["--write-baseline"]).stderr).toContain(
       `--write-baseline requires ${enforcementFile}`,
     );
+  });
+
+  it("writes the enforcement file in the repository's Prettier form", async () => {
+    const result = run(
+      {
+        ...files,
+        [enforcementFile]: enforcement({
+          migrated: migrate("GO_FILE_WORD", "chat", "task"),
+          exceptions: [
+            { ...wordFinding, reason: "Fixture", removal: "Rename the file" },
+            { ...taskFinding, reason: "Fixture", removal: "Rename the file" },
+          ],
+          baseline: [{ ...wordFinding, file: "modules/chat/gone.go" }],
+        }),
+      },
+      ["--write-baseline"],
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stored?.migrated.GO_FILE_WORD).toEqual(["chat", "task"]);
+    expect(result.stored?.baseline).toEqual([]);
+    const text = result.text ?? "";
+    const options =
+      (await prettier.resolveConfig(path.join(root, enforcementFile))) ?? {};
+    expect(
+      await prettier.format(text, { ...options, filepath: enforcementFile }),
+    ).toBe(text);
   });
 
   it("cannot migrate away an existing blocking rule", () => {

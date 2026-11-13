@@ -1601,6 +1601,27 @@ if (
         `Go architecture: ${result.productionFiles} production files checked; ${result.testFiles} test files named; excluded nested modules: ${result.excludedModules.join(", ") || "none"}.\n`,
       );
     }
+    // The writer must leave the file exactly as the repository's Prettier
+    // formats it (short arrays collapse); format through Prettier's own API.
+    if (writing) {
+      const file = path.join(root, enforcementFile);
+      let prettier;
+      try {
+        prettier = await import("prettier");
+      } catch {
+        throw new Error(
+          "--write-baseline needs the repository's Prettier (run npm ci)",
+        );
+      }
+      const options = (await prettier.resolveConfig(file)) ?? {};
+      fs.writeFileSync(
+        file,
+        await prettier.format(fs.readFileSync(file, "utf8"), {
+          ...options,
+          filepath: file,
+        }),
+      );
+    }
     process.exitCode = result.violations.length ? 1 : 0;
   } catch (error) {
     process.stderr.write(`Go architecture check failed: ${error.message}\n`);
