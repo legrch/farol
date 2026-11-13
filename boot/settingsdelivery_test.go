@@ -113,6 +113,21 @@ func TestSettingsDeliveryRootApplyThenExactACK(t *testing.T) {
 	if store.value.Pending != nil || store.saves != 2 || n.calls != 1 {
 		t.Fatal("ACK replay saved or executed")
 	}
+	// The desktop bridge forgets an operation once its ACK is confirmed; this
+	// ingress stays the fence for a replayed Apply, observation or ACK.
+	if _, err = s.apply(context.Background(), deliveryOperation, in); !errors.Is(err, delivery.ErrConsumed) {
+		t.Fatalf("Apply after ACK: %v", err)
+	}
+	replayed, err := s.observe(context.Background(), wire.SettingsDeliveryObserve{Pending: out.Pending})
+	if err != nil || replayed.ReceiptId == nil || *replayed.ReceiptId != *out.ReceiptId {
+		t.Fatalf("observation after ACK %+v %v", replayed, err)
+	}
+	if result, err := s.acknowledge(context.Background(), ack); err != nil || !result.Acknowledged {
+		t.Fatalf("ack replay after observation %+v %v", result, err)
+	}
+	if store.value.Pending != nil || store.saves != 2 || n.calls != 1 || j.admits != 1 {
+		t.Fatal("replay after ACK saved or executed")
+	}
 	if err = s.freezeForRetirement(context.Background()); err != nil {
 		t.Fatal(err)
 	}

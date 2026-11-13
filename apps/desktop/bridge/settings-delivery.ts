@@ -12,6 +12,7 @@ import {
   type SettingsStorePending,
 } from "./wire.ts";
 
+// Bounds live work only: retained unsettled correlations and in-flight calls.
 const limit = 4096;
 const timeoutMs = 15_000;
 type Binding = Omit<SettingsStorePending, "submittedAt">;
@@ -34,10 +35,15 @@ function invalid(code: string): never {
 // One verified peer, bounded transport evidence only. Go owns all pending,
 // Offer, ACK, mutation and storage policy. No delivery receipt exists locally
 // until an exact offer has passed validation; no receipt ID is synthesized.
+//
+// A correlation is retained until its operation's ACK is confirmed; pending,
+// offered, refused and unknown operations are never dropped. After a confirmed
+// ACK the Go delivery service is the fence: it refuses the consumed operation
+// ID for its lifetime and replays a known ACK without another save.
 export class SettingsDeliveryBridge {
   private readonly peer: Readonly<Context>;
   private readonly correlations = new Map<string, Correlation>();
-  private calls = 0;
+  private live = 0;
 
   constructor(
     private readonly client: Pick<Client, "request" | "verifiedContext">,
@@ -113,7 +119,14 @@ export class SettingsDeliveryBridge {
   async acknowledge(operationId: string): Promise<SettingsDeliveryACKResult> {
     if (!validate("id", operationId))
       throw new BridgeError("refused", "invalid_settings_delivery_request");
-    const entry = this.reserve(operationId);
+    const known = this.correlations.get(operationId);
+    if (!known) {
+      // Nothing was applied or observed here, so there is no offer to ACK and
+      // nothing to retain: refuse without reserving or sending anything.
+      this.samePeer();
+      throw new BridgeError("refused", "settings_delivery_offer_missing");
+    }
+    const entry = known;
     if (!entry.ack) {
       const offer = entry.offer;
       // Consume the invocation before any request or reentrant client code.
@@ -141,6 +154,9 @@ export class SettingsDeliveryBridge {
           !isDeepStrictEqual(out.pending, offer.pending)
         )
           invalid("crossed_settings_delivery_ack");
+        // Confirmed ACK settles this operation; Go now fences its replay.
+        if (this.correlations.get(operationId) === entry)
+          this.correlations.delete(operationId);
         return structuredClone(out);
       });
     }
@@ -191,16 +207,16 @@ export class SettingsDeliveryBridge {
     operationId: string,
   ): Promise<Json | undefined> {
     this.samePeer();
-    if (this.calls >= limit)
+    if (this.live >= limit)
       throw new BridgeError("refused", "settings_delivery_call_budget");
-    this.calls++;
-    const id = randomUUID();
-    const until = Number(body.deadlineMillis) + 1000;
-    const remaining = until - Date.now();
-    if (remaining <= 0 || remaining > timeoutMs)
-      invalid("settings_delivery_deadline_invalid");
+    this.live++;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
+      const id = randomUUID();
+      const until = Number(body.deadlineMillis) + 1000;
+      const remaining = until - Date.now();
+      if (remaining <= 0 || remaining > timeoutMs)
+        invalid("settings_delivery_deadline_invalid");
       const lost = new Promise<never>((_, reject) => {
         timer = setTimeout(
           () => reject(new BridgeError("unknown", "settings_delivery_timeout")),
@@ -233,6 +249,7 @@ export class SettingsDeliveryBridge {
         invalid("invalid_settings_delivery_outcome");
       return structuredClone(outcome.data);
     } finally {
+      this.live--;
       clearTimeout(timer);
     }
   }

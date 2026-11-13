@@ -823,18 +823,20 @@ describe("SettingsDeliveryBridge transport correlation", () => {
     const a = (await first) as Mutable<SettingsDeliveryACKResult>;
     a.pending.submittedAt = "2026-10-05T08:00:00Z";
     expect(await second).toEqual({ receiptId, pending, acknowledged: true });
+    // A confirmed ACK settles the operation locally. A later observation and
+    // ACK reach the Go service, which replays its known ACK without a save.
     await f.bridge.observe(pending);
     expect(await f.bridge.acknowledge(operationId)).toEqual({
       receiptId,
       pending,
       acknowledged: true,
     });
-    expect(f.request).toHaveBeenCalledTimes(3);
+    expect(f.request).toHaveBeenCalledTimes(4);
     f.client.verifiedContext.backendGeneration = "new-peer";
     await expect(f.bridge.acknowledge(operationId)).rejects.toMatchObject({
       code: "settings_delivery_peer_changed",
     });
-    expect(f.request).toHaveBeenCalledTimes(3);
+    expect(f.request).toHaveBeenCalledTimes(4);
   });
   it("never reconstructs a lost ACK in a new bridge from an original operation ID", async () => {
     const f = fixture();
@@ -854,6 +856,7 @@ describe("SettingsDeliveryBridge transport correlation", () => {
     for (let i = 0; i < 4096; i++)
       await f.bridge.apply(`op-${i}`, input).catch(() => undefined);
     expect(f.request).toHaveBeenCalledTimes(4096);
+    // Unknown outcomes are never dropped: 4096 of them still fill retention.
     await expect(f.bridge.apply("overflow", input)).rejects.toMatchObject({
       code: "settings_delivery_retention_full",
     });
@@ -861,31 +864,100 @@ describe("SettingsDeliveryBridge transport correlation", () => {
       code: "settings_delivery_attempt_consumed",
     });
     await expect(f.bridge.acknowledge("overflow")).rejects.toMatchObject({
-      code: "settings_delivery_retention_full",
+      code: "settings_delivery_offer_missing",
     });
     expect(f.request).toHaveBeenCalledTimes(4096);
   });
-  it("bounds observe calls independently of the correlation map", async () => {
+  it("completes more than 4096 apply and ACK cycles and retains none of them", async () => {
     const f = fixture();
-    for (let i = 0; i < 4096; i++) await f.bridge.observe(pending);
-    expect(f.request).toHaveBeenCalledTimes(4096);
+    f.request.mockImplementation(async (method, body, options = {}) => {
+      const b = body as unknown as {
+        pending?: SettingsStorePending;
+        receiptId?: string;
+      };
+      if (method === "computer.settings.delivery.ack")
+        return envelope(
+          { receiptId: b.receiptId, pending: b.pending, acknowledged: true },
+          options,
+        );
+      const out = offer({ ...pending, operationId: options.operationId! });
+      out.receiptId = `receipt-${options.operationId!}`;
+      return envelope(out, options);
+    });
+    const correlations = (
+      f.bridge as unknown as { correlations: Map<string, unknown> }
+    ).correlations;
+    for (let i = 0; i < 4200; i++) {
+      const id = `op-${i}`;
+      expect((await f.bridge.apply(id, input)).state).toBe("offered");
+      expect(correlations.has(id)).toBe(true);
+      expect((await f.bridge.acknowledge(id)).acknowledged).toBe(true);
+      expect(correlations.has(id)).toBe(false);
+    }
+    expect(f.request).toHaveBeenCalledTimes(8400);
+    expect(correlations.size).toBe(0);
+  });
+  it("relies on the Go operation store to refuse an apply replayed after ACK", async () => {
+    const f = fixture();
+    await f.bridge.apply(operationId, input);
+    await f.bridge.acknowledge(operationId);
+    f.request.mockImplementationOnce(async (_method, _body, options = {}) => ({
+      status: "refused",
+      requestId: options.id!,
+      operationId: options.operationId!,
+      context: { ...peer },
+      code: "settings_delivery_attempt_consumed",
+    }));
+    await expect(f.bridge.apply(operationId, input)).rejects.toMatchObject({
+      state: "refused",
+      code: "settings_delivery_attempt_consumed",
+    });
+    expect(f.request).toHaveBeenCalledTimes(3);
+  });
+  it("serves more than 4096 sequential observe calls", async () => {
+    const f = fixture();
+    f.request.mockImplementation(async (_method, _body, options = {}) =>
+      envelope({ state: "pending", pending }, options),
+    );
+    for (let i = 0; i < 4200; i++)
+      expect((await f.bridge.observe(pending)).state).toBe("pending");
+    expect(f.request).toHaveBeenCalledTimes(4200);
+  });
+  it("bounds concurrently live calls, not lifetime calls", async () => {
+    const f = fixture();
+    const held: ((out: Outcome) => void)[] = [];
+    f.request.mockImplementation(
+      (_method, _body, options = {}) =>
+        new Promise<Outcome>((resolve) =>
+          held.push(() =>
+            resolve(envelope({ state: "pending", pending }, options)),
+          ),
+        ),
+    );
+    const live = Array.from({ length: 4096 }, () => f.bridge.observe(pending));
+    await vi.waitFor(() => expect(held).toHaveLength(4096));
     await expect(f.bridge.observe(pending)).rejects.toMatchObject({
       code: "settings_delivery_call_budget",
     });
-    const error = await f.bridge
-      .acknowledge(operationId)
-      .catch((e: unknown) => e);
-    expect(error).toMatchObject({ code: "settings_delivery_call_budget" });
-    await expect(f.bridge.acknowledge(operationId)).rejects.toBe(error);
-    expect(f.request).toHaveBeenCalledTimes(4096);
+    held.shift()!(undefined as unknown as Outcome);
+    await live[0];
+    const next = f.bridge.observe(pending);
+    await vi.waitFor(() => expect(held).toHaveLength(4096));
+    for (const release of held.splice(0))
+      release(undefined as unknown as Outcome);
+    await Promise.all([...live, next]);
+    expect(f.request).toHaveBeenCalledTimes(4097);
   });
-  it("bounds ACK-only invocations without any transport", async () => {
+  it("refuses ACK-only invocations without retaining or sending anything", async () => {
     const f = fixture();
-    for (let i = 0; i < 4096; i++)
-      await f.bridge.acknowledge(`op-${i}`).catch(() => undefined);
-    await expect(f.bridge.acknowledge("overflow")).rejects.toMatchObject({
-      code: "settings_delivery_retention_full",
-    });
+    for (let i = 0; i < 4200; i++)
+      await expect(f.bridge.acknowledge(`op-${i}`)).rejects.toMatchObject({
+        code: "settings_delivery_offer_missing",
+      });
+    expect(
+      (f.bridge as unknown as { correlations: Map<string, unknown> })
+        .correlations.size,
+    ).toBe(0);
     expect(f.request).not.toHaveBeenCalled();
   });
 
