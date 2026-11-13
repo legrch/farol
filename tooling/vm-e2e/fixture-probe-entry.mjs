@@ -3,8 +3,10 @@
 // ordinary suites bind through FAROL_E2E_CHATGPT_URL (setup page, chat page,
 // JSON endpoints), exercises it over fetch, and records per-check results.
 // This proves the guest-local fixture topology the closed executor depends
-// on: guest loopback serves guest requests, nothing binds a host-reachable
-// address, and a missing route fails the check instead of falling anywhere.
+// on: guest loopback serves guest requests, the fixture listener itself is
+// bound to 127.0.0.1 only (the loopback-only-binding case checks this one
+// listener, not the app or any other guest process), and a missing route
+// fails the check instead of falling anywhere.
 //
 // The fixture is SYNTHETIC: it proves the transport and the driver contract,
 // not compatibility with the live provider — that stays explicit QA. It never

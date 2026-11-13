@@ -1642,7 +1642,11 @@ class Runner:
         self.write_durable_json(file, context)
         self.e2e_context = context
         self.e2e_context_sha = digest(file)
+        self.e2e_driver_node_sha256 = staged['node']['sha256']
         self.preserve_e2e_bytes('e2e-context.json', file.read_bytes())
+        # The staged manifest records the exact bundle AND Node runtime digests
+        # that executed; keep it with the run evidence (the stage is removed).
+        self.preserve_e2e_bytes('e2e-driver-manifest.json', (self.stage / 'driver.manifest.json').read_bytes())
 
     def preserve_e2e_bytes(self, name, data):
         """Exact raw evidence, including empty/malformed JSON; never overwrite."""
@@ -1761,6 +1765,10 @@ class Runner:
                                    'sha256': digest(self.out / ('e2e-' + name + '.raw.json'))}
                             for name in ('process', 'result')
                             if (self.out / ('e2e-' + name + '.raw.json')).is_file()},
+            'driver': {'manifest': 'e2e-driver-manifest.json',
+                       'manifestSha256': digest(self.out / 'e2e-driver-manifest.json'),
+                       'nodeSha256': self.e2e_driver_node_sha256}
+            if (self.out / 'e2e-driver-manifest.json').is_file() else None,
             # Current declared drivers are probes, not the product's ordinary E2E.
             'qualificationEligible': False}
 

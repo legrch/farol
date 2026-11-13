@@ -446,6 +446,12 @@ class ClosedAdmissionTests(unittest.TestCase):
                 root, {'name': 'pilot', 'network': False}, driver=True)
             self.assertIsNone(caught)
             self.assertEqual(result['status'], 'NEEDS_REVIEW')
+            # The Node runtime that executed the bundle is kept in run evidence.
+            kept = json.loads((runner.out / 'e2e-driver-manifest.json').read_text())
+            self.assertEqual(kept['node']['sha256'], sha256_bytes(NODE_TEXT.encode()))
+            self.assertEqual(result['e2e']['driver']['nodeSha256'], kept['node']['sha256'])
+            self.assertEqual(result['e2e']['driver']['manifestSha256'],
+                             sha256_bytes((runner.out / 'e2e-driver-manifest.json').read_bytes()))
             # The e2e phase ran behind the ordinary lifecycle, its receipt is
             # the driver's own durable result, and the staged payload reached
             # the guest through the exact digests.
