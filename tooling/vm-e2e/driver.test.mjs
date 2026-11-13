@@ -392,14 +392,79 @@ for (const expression of [
     assert.deepEqual(fs.readdirSync(output), []);
   });
 }
-test("syntax gate admits only actual literal node builtins and ignores comment text", () => {
+test("syntax gate admits only static node builtins and ignores comment text", () => {
   assert.doesNotThrow(() =>
     assertNoHostImports(
-      "const load = () => import('node:fs'); /* import(name) */",
+      "import fs from 'node:fs'; import path from 'node:path'; /* import(name) createRequire */\n" +
+        "const p = path.resolve('a'); const url = import.meta.url; new Promise((resolve) => resolve(p));",
     ),
+  );
+  // Even a literal builtin is refused as a dynamic import form.
+  assert.throws(
+    () => assertNoHostImports("const load = () => import('node:fs');"),
+    /E2E_BUNDLE_OUTPUT_IMPORT_REMAINS/,
   );
   assert.throws(
     () => assertNoHostImports("const x = 1; export * from './guest.mjs';"),
     /E2E_BUNDLE_OUTPUT_IMPORT_REMAINS/,
+  );
+});
+
+for (const source of [
+  "import { createRequire } from 'node:module'; createRequire(import.meta.url)('x');",
+  "import module from 'node:module'; module.createRequire(import.meta.url);",
+  "import * as vm from 'node:vm'; new vm.Script('1');",
+  "import { Worker } from 'node:worker_threads'; new Worker('x');",
+  "import cp from 'node:child_process'; cp.spawnSync('x');",
+  "export * from 'node:vm';",
+  "process.dlopen({}, '/tmp/addon.node');",
+  "process['dlopen']({}, '/tmp/addon.node');",
+  "process.binding('fs');",
+  "process?._linkedBinding('x');",
+  "console.log(import.meta.resolve('./x.mjs'));",
+  "eval('1');",
+  "new Function('return 1')();",
+  "Function('return 1')();",
+  "require('fs');",
+]) {
+  test(`loader policy refuses: ${source}`, (t) => {
+    assert.throws(
+      () => assertNoHostImports(source),
+      /E2E_BUNDLE_OUTPUT_(LOADER_FORBIDDEN|IMPORT_REMAINS)/,
+    );
+    const directory = makeTempDir(t, "vm-loader-policy");
+    const entry = path.join(directory, "entry.mjs");
+    fs.writeFileSync(entry, source + "\n");
+    const output = makeTempDir(t, "vm-loader-policy-out");
+    assert.throws(
+      () =>
+        bundleDriver({ entry, outputDir: output, root: REPO_ROOT, bundler: "inline" }),
+      /E2E_BUNDLE_OUTPUT_(LOADER_FORBIDDEN|IMPORT_REMAINS)|E2E_BUNDLE_UNSUPPORTED/,
+    );
+    assert.deepEqual(fs.readdirSync(output), [], "no bundle is published");
+  });
+}
+
+test("the runner's check mode applies the same policy to staged bytes", (t) => {
+  const directory = makeTempDir(t, "vm-check-imports");
+  const good = path.join(directory, "good.mjs");
+  const bad = path.join(directory, "bad.mjs");
+  fs.writeFileSync(good, "import fs from 'node:fs';\nconsole.log(typeof fs);\n");
+  fs.writeFileSync(bad, "const m = await import('node:vm');\n");
+  const tool = fileURLToPath(new URL("./bundle-driver.mjs", import.meta.url));
+  const ok = spawnSync(process.execPath, [tool, "--check-imports", good], { encoding: "utf8" });
+  assert.equal(ok.status, 0, ok.stderr);
+  const refused = spawnSync(process.execPath, [tool, "--check-imports", bad], { encoding: "utf8" });
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /^E2E_BUNDLE_OUTPUT_IMPORT_REMAINS/);
+});
+
+test("the manifest binds the entry source by digest", (t) => {
+  const output = makeTempDir(t, "vm-entry-digest");
+  const entry = fileURLToPath(new URL("./prototype-entry.mjs", import.meta.url));
+  const manifest = bundleDriver({ entry, outputDir: output, root: REPO_ROOT, bundler: "inline" });
+  assert.equal(
+    manifest.entrySha256,
+    createHash("sha256").update(fs.readFileSync(entry)).digest("hex"),
   );
 });

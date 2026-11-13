@@ -482,8 +482,45 @@ function emitInlineBundle(entryId, entryName, modules) {
   return parts.join("\n") + "\n";
 }
 
-// Final gate for both bundlers: the staged bundle may import node: builtins
-// only, so the guest run needs no node_modules resolution at all.
+// Builtins that load or evaluate code outside the digest-bound bundle.
+const FORBIDDEN_BUILTINS = new Set([
+  "node:module",
+  "node:vm",
+  "node:worker_threads",
+  "node:child_process",
+  "node:cluster",
+  "node:wasi",
+  "node:inspector",
+  "node:repl",
+  "node:v8",
+]);
+// Loader entry points reached as a property (process.dlopen, process.binding,
+// module.createRequire, import.meta.resolve) or called by name.
+const FORBIDDEN_PROPERTIES = new Set([
+  "dlopen",
+  "binding",
+  "_linkedBinding",
+  "createRequire",
+  "resolve",
+]);
+const FORBIDDEN_CALLEES = new Set(["eval", "Function", "require", "createRequire"]);
+
+function propertyName(node) {
+  if (!node.computed && node.property?.type === "Identifier")
+    return node.property.name;
+  if (node.computed && node.property?.type === "StringLiteral")
+    return node.property.value;
+  return null;
+}
+
+// Final gate for both bundlers: the staged bundle may only STATICALLY import
+// node: builtins that cannot load other code, so the guest run needs no
+// node_modules resolution and cannot pull code past its digest. Any dynamic
+// import() is refused (even of a literal builtin), as are createRequire,
+// node:vm/module/worker_threads/child_process, process.dlopen/binding,
+// import.meta.resolve, eval and the Function constructor.
+// This is a syntactic import/loader policy, NOT a sandbox: computed property
+// access through a variable (process[name]) cannot be decided statically.
 export function assertNoHostImports(text) {
   const tree = parse(text, {
     sourceType: "module",
@@ -496,17 +533,45 @@ export function assertNoHostImports(text) {
       !isBuiltin(source.value)
     )
       throw new Error("E2E_BUNDLE_OUTPUT_IMPORT_REMAINS");
+    if (FORBIDDEN_BUILTINS.has(source.value))
+      throw new Error("E2E_BUNDLE_OUTPUT_LOADER_FORBIDDEN: " + source.value);
+  };
+  const forbid = (what) => {
+    throw new Error("E2E_BUNDLE_OUTPUT_LOADER_FORBIDDEN: " + what);
   };
   const visit = (node) => {
     if (node === null || typeof node !== "object") return;
+    if (node.type === "ImportExpression")
+      throw new Error("E2E_BUNDLE_OUTPUT_IMPORT_REMAINS");
     if (
-      node.type === "ImportExpression" ||
       node.type === "ImportDeclaration" ||
       ((node.type === "ExportNamedDeclaration" ||
         node.type === "ExportAllDeclaration") &&
         node.source)
     )
       admit(node.source);
+    if (
+      node.type === "MemberExpression" ||
+      node.type === "OptionalMemberExpression"
+    ) {
+      const name = propertyName(node);
+      const meta = node.object?.type === "MetaProperty";
+      if (name === "resolve" ? meta : FORBIDDEN_PROPERTIES.has(name))
+        forbid(meta ? "import.meta." + name : "." + name);
+    }
+    if (
+      (node.type === "CallExpression" ||
+        node.type === "OptionalCallExpression" ||
+        node.type === "NewExpression") &&
+      node.callee?.type === "Identifier" &&
+      FORBIDDEN_CALLEES.has(node.callee.name)
+    )
+      forbid(node.callee.name + "()");
+    if (
+      (node.type === "ImportSpecifier" || node.type === "ExportSpecifier") &&
+      (node.imported?.name ?? node.local?.name) === "createRequire"
+    )
+      forbid("createRequire");
     for (const value of Object.values(node)) {
       if (Array.isArray(value)) value.forEach(visit);
       else if (value && typeof value === "object") visit(value);
@@ -605,6 +670,9 @@ export function bundleDriver({ entry, outputDir, root, bundler = "auto" }) {
     schema: MANIFEST_SCHEMA,
     tool: TOOL_VERSION,
     entry: path.basename(entryPath),
+    // The runner binds the entry by this digest to the committed
+    // tooling/vm-e2e/<entry> in its own tree, not by file name alone.
+    entrySha256: sha256Hex(fs.readFileSync(entryPath)),
     bundler: usedBundler,
     bundle: {
       file: BUNDLE_FILE,
@@ -634,7 +702,20 @@ if (
 ) {
   const entry = process.argv[2];
   const outputDir = process.argv[3];
-  if (!entry || !outputDir) {
+  if (entry === "--check-imports" && outputDir && process.argv.length === 4) {
+    // Used by the runner (tooling/vm-smoke.py stage_driver) to re-apply the
+    // same import/loader policy to the exact bytes it is about to stage.
+    try {
+      assertNoHostImports(fs.readFileSync(outputDir, "utf8"));
+    } catch (error) {
+      console.error(
+        String(error.message ?? error).startsWith("E2E_BUNDLE_OUTPUT_")
+          ? String(error.message)
+          : "E2E_BUNDLE_OUTPUT_UNPARSEABLE",
+      );
+      process.exitCode = 1;
+    }
+  } else if (!entry || !outputDir) {
     console.error(
       "usage: node tooling/vm-e2e/bundle-driver.mjs <entry.mjs> <output-dir>",
     );

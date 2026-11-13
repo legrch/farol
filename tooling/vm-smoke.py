@@ -87,6 +87,7 @@ SAFE_FAILURE_CODES = frozenset((
     # driver
     'DRIVER_MANIFEST_INVALID', 'DRIVER_BUNDLE_MISSING', 'DRIVER_BUNDLE_UNSAFE', 'DRIVER_BUNDLE_DIGEST_INVALID',
     'DRIVER_NODE_MISSING', 'DRIVER_NODE_UNSAFE', 'DRIVER_NODE_DIGEST_INVALID', 'E2E_CONTRACT_INVALID',
+    'DRIVER_ENTRY_UNBOUND', 'DRIVER_IMPORT_POLICY_REFUSED',
     'E2E_ENTRY_NOT_DECLARED', 'E2E_CASE_SELECTION_INVALID', 'E2E_CASES_INVALID', 'E2E_CASES_INCOMPLETE',
     'E2E_RESULT_SCHEMA_UNSUPPORTED', 'E2E_RESULT_BINDING_MISMATCH', 'E2E_RESULT_SHAPE_INVALID', 'E2E_RESULT_DETAILS_INVALID',
     'E2E_PASS_INCOMPLETE', 'E2E_REPORTED_INVALID', 'E2E_FAIL_WITHOUT_FAILURE', 'E2E_REASON_INVALID',
@@ -1570,6 +1571,18 @@ class Runner:
                 digest(source / bundle_name) == bundle['sha256'], 'DRIVER_BUNDLE_DIGEST_INVALID')
         require(self.driver_payload_info(node_source, 'DRIVER_NODE').st_size == node['size'] and
                 digest(node_source) == node['sha256'], 'DRIVER_NODE_DIGEST_INVALID')
+        # Bind the entry by digest to the committed entry in THIS runner's
+        # tree, not by name. (The bundle bytes are not yet re-derived from
+        # that source: a reproducible rebuild comparison is a recorded gap.)
+        entry = manifest['entry']
+        committed = Path(__file__).resolve().parent / 'vm-e2e' / entry
+        require(re.fullmatch(r'[a-z][a-z0-9-]{0,63}-entry\.mjs', entry) is not None and
+                re.fullmatch('[a-f0-9]{64}', manifest.get('entrySha256') or '') is not None and
+                committed.is_file() and not committed.is_symlink() and
+                digest(committed) == manifest['entrySha256'], 'DRIVER_ENTRY_UNBOUND')
+        # Re-apply the bundler's import/loader policy to the exact bytes about
+        # to be staged; the guest only re-verifies digests.
+        self.check_driver_imports(source / bundle_name)
         staged = {'schema': DRIVER_MANIFEST_SCHEMA, 'tool': manifest['tool'], 'entry': manifest['entry'],
                   'bundler': manifest['bundler'],
                   'bundle': {'file': 'driver.bundle.mjs', 'sha256': bundle['sha256'], 'bytes': bundle['bytes']},
@@ -1589,6 +1602,19 @@ class Runner:
                 (self.stage / name).unlink(missing_ok=True)
             raise
         return staged
+
+    @staticmethod
+    def check_driver_imports(bundle):
+        node = shutil.which('node')
+        require(node is not None, 'DIGEST_TOOL_UNAVAILABLE')
+        checker = Path(__file__).resolve().parent / 'vm-e2e' / 'bundle-driver.mjs'
+        try:
+            checked = subprocess.run([node, str(checker), '--check-imports', str(bundle)],
+                                     capture_output=True, text=True, timeout=60,
+                                     env={'PATH': os.environ.get('PATH', ''), 'NODE_NO_WARNINGS': '1'})
+        except (OSError, subprocess.TimeoutExpired):
+            raise Refused('DRIVER_IMPORT_POLICY_REFUSED') from None
+        require(checked.returncode == 0, 'DRIVER_IMPORT_POLICY_REFUSED')
 
     def prepare_e2e_context(self, staged, artifact):
         """Expected selection is source-declared, never taken from a result file.

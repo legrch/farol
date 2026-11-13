@@ -38,6 +38,7 @@ class E2EResultAdmissionTests(unittest.TestCase):
         def driver_builder(*args, **kwargs):
             source, manifest = original_builder(*args, **kwargs)
             manifest['entry'] = 'egress-probe-entry.mjs' if diagnostic else 'fixture-probe-entry.mjs'
+            manifest['entrySha256'] = fixture.committed_entry_sha256(manifest['entry'])
             (source / 'manifest.json').write_text(json.dumps(manifest))
             return source, manifest
 

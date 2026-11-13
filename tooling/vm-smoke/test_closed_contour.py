@@ -115,6 +115,7 @@ def drive_closed_package(root, machine_json, closed=True, driver=False, clone_re
         driver_dir, _manifest = build_driver_dir(root)
         if guest_hook is None:
             _manifest['entry'] = 'egress-probe-entry.mjs'
+            _manifest['entrySha256'] = committed_entry_sha256('egress-probe-entry.mjs')
             (driver_dir / 'manifest.json').write_text(json.dumps(_manifest))
     runner = build_runner(root, closed=closed, artifact=str(archive),
                           e2e_driver=str(driver_dir) if driver else None)
@@ -205,6 +206,11 @@ def sha256_bytes(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def committed_entry_sha256(entry):
+    """Digest of the committed tooling/vm-e2e entry the synthetic manifest names."""
+    return sha256_bytes((Path(__file__).resolve().parents[1] / 'vm-e2e' / entry).read_bytes())
+
+
 def build_driver_dir(root, *, manifest_changes=None, raw_manifest=None, manifest_link=False,
                      bundle_present=True, bundle_link=False, bundle_tamper=b'', bundle_bytes=None,
                      bundle_sha=None, node_present=True, node_link=False, node_tamper=b'',
@@ -237,7 +243,9 @@ def build_driver_dir(root, *, manifest_changes=None, raw_manifest=None, manifest
     manifest = {
         'schema': 'farol.vm-e2e.driver-manifest/1',
         'tool': 'farol.vm-e2e/1',
-        'entry': 'synthetic-entry.mjs',
+        # A committed entry: the runner binds it by digest to its own tree.
+        'entry': 'fixture-probe-entry.mjs',
+        'entrySha256': committed_entry_sha256('fixture-probe-entry.mjs'),
         'bundler': 'inline',
         'bundle': {'file': 'driver.bundle.mjs', 'sha256': bundle_sha or sha256_bytes(BUNDLE_TEXT.encode()),
                    'bytes': bundle_bytes if bundle_bytes is not None else len(BUNDLE_TEXT)},
@@ -486,6 +494,45 @@ class DriverStagingTests(unittest.TestCase):
             caught = error
         return runner, caught, manifest
 
+    def test_entry_is_bound_by_digest_to_the_committed_file_not_its_name(self):
+        fixture_sha = committed_entry_sha256('fixture-probe-entry.mjs')
+        cases = {
+            'name-matches-bytes-do-not': {'entrySha256': '0' * 64},
+            'unbound-legacy-manifest': {'entrySha256': None},
+            'uncommitted-entry': {'entry': 'not-committed-entry.mjs', 'entrySha256': fixture_sha},
+            'path-traversal': {'entry': '../vm-e2e/fixture-probe-entry.mjs', 'entrySha256': fixture_sha},
+        }
+        for name, changes in cases.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                source, manifest = build_driver_dir(root)
+                for key, value in changes.items():
+                    if value is None:
+                        del manifest[key]
+                    else:
+                        manifest[key] = value
+                (source / 'manifest.json').write_text(json.dumps(manifest))
+                runner = self.staged_runner(root)
+                with self.assertRaisesRegex(vm.Refused, 'DRIVER_ENTRY_UNBOUND'):
+                    runner.stage_driver(source)
+                self.assertEqual([p.name for p in runner.stage.iterdir()], [])
+
+    def test_runner_reapplies_the_import_policy_to_the_staged_bytes(self):
+        for text in ("import { createRequire } from 'node:module';\n",
+                     "const vm = await import('node:vm');\n",
+                     "process.dlopen({}, '/tmp/x.node');\n",
+                     "console.log(import.meta.resolve('x'));\n",
+                     "new Function('return 1')();\n"):
+            with self.subTest(text=text), tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                data = text.encode()
+                source, _ = build_driver_dir(root, bundle_bytes=len(data), bundle_sha=sha256_bytes(data))
+                (source / 'driver.bundle.mjs').write_bytes(data)
+                runner = self.staged_runner(root)
+                with self.assertRaisesRegex(vm.Refused, 'DRIVER_IMPORT_POLICY_REFUSED'):
+                    runner.stage_driver(source)
+                self.assertEqual([p.name for p in runner.stage.iterdir()], [])
+
     def test_stage_driver_stages_the_verified_payload(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
@@ -493,7 +540,7 @@ class DriverStagingTests(unittest.TestCase):
             runner = self.staged_runner(root)
             staged = runner.stage_driver(source)
             expected = {'schema': 'farol.vm-e2e.driver-manifest/1', 'tool': 'farol.vm-e2e/1',
-                        'entry': 'synthetic-entry.mjs', 'bundler': 'inline',
+                        'entry': 'fixture-probe-entry.mjs', 'bundler': 'inline',
                         'bundle': {'file': 'driver.bundle.mjs', 'sha256': manifest['bundle']['sha256'],
                                    'bytes': manifest['bundle']['bytes']},
                         'node': {'path': 'node', 'size': manifest['node']['size'],

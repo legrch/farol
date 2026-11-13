@@ -176,6 +176,17 @@ positive control (a target reachable only when the guest is networked, such as a
 listener on the NAT gateway recorded by terminal-mac) is not implemented. `vm:test` never
 runs the probe against the network; it uses in-memory DNS/TCP doubles and loopback only.
 
+The driver bundle (`tooling/vm-e2e/bundle-driver.mjs`) may only statically import `node:`
+builtins that cannot load other code: dynamic `import()` in any form, `createRequire`,
+`node:module`/`vm`/`worker_threads`/`child_process`, `process.dlopen`/`binding`,
+`import.meta.resolve`, `eval` and the `Function` constructor are refused. The runner
+re-applies that policy to the exact bundle bytes before staging and binds the manifest's
+entry by `entrySha256` to the committed `tooling/vm-e2e/<entry>` in its own tree rather
+than by name. Remaining gap: the bundle bytes are not re-derived from committed source
+(no reproducible rebuild comparison, no source commit or clean-tree record), and the
+policy is syntactic, not a sandbox (computed access such as `process[name]` is not
+decidable).
+
 ## Native installed lifecycle and Dev artifacts
 
 `qa:smoke -- --native-app-service --native-relaunch --artifact <archive> --expected-app-sha256 <accepted-tree>` selects the compiled guest AppService. The expected application tree must come from independently accepted release evidence, never from the archive currently being admitted. It requires a compatible helper and live VZ evidence that artifacts are shared read-only. Host scripts are not run in the guest.
