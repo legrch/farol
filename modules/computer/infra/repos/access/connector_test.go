@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -116,13 +117,13 @@ func TestNativeConnectorJournalWrongProfileRefusesBeforePublication(t *testing.T
 
 // predecessorAcceptsState encodes how the retained predecessor image (0.5.24,
 // main 9de07bcf) opens computer-access.json while it opens the Computer Store.
-// state.go, disk.go and domain/authority are unchanged since that commit, so
-// decodeState here is its exact reader; the literal 256 pins the predecessor's
-// participant bound even if this build's constant ever moves. A refusal fails
+// Since that commit the reader in state.go/disk.go changed only its bounds,
+// and domain/authority is unchanged; so decodeState plus that commit's literal
+// bounds (1 MiB file, 256 participants) is its exact reader. A refusal fails
 // the predecessor's whole Store constructor.
 func predecessorAcceptsState(root string, b Binding) error {
 	info, err := os.Lstat(filepath.Join(root, stateName))
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || info.Size() < 1 || info.Size() > 1024*1024 {
 		return errors.New("state file refused")
 	}
 	raw, err := os.ReadFile(filepath.Join(root, stateName))
@@ -195,6 +196,100 @@ func TestNativeConnectorJournalResumeReadsBackOneLiveParticipant(t *testing.T) {
 	revoked := status(t, f.store).Revision
 	if out, err := r.ResumeConnector(context.Background(), connectorInput(f)); err == nil || out.Participant.ParticipantID != "" || status(t, f.store).Revision != revoked {
 		t.Fatal("revoked participant resumed", out, err)
+	}
+	if err = predecessorAcceptsState(f.root, testBinding); err != nil {
+		t.Fatal("predecessor refused", err)
+	}
+}
+
+// laterReleaseSnapshot writes the canonical schema-1 snapshot a later release
+// may produce once its write bound is lifted: the same encoding, more
+// participants than this build writes. It replaces the closed Store's bytes.
+func laterReleaseSnapshot(t *testing.T, f stateFixture, participants int) []byte {
+	t.Helper()
+	s := state{Revision: 9, Generation: f.approval.Generation, SeenApproval: true, Approval: &f.approval, Participants: map[string]retainedParticipant{}}
+	for i := range participants {
+		admission := f.admission
+		admission.AuthorityID = fmt.Sprintf("authority-%d", i)
+		g, err := authority.Derive(f.approval, admission, f.clock.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := authority.Create(*g, authority.ParticipantAdmission{ParticipantID: fmt.Sprintf("participant-%d", i), Role: authority.Main, MutationOwnership: authority.NoOwnership})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.Participants[p.ParticipantID] = retainedParticipant{Value: *p, Revoked: i%2 == 0}
+	}
+	raw, err := json.Marshal(stateDocument(testBinding, s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = append(raw, '\n')
+	if err = os.WriteFile(filepath.Join(f.root, stateName), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// Step one of the two-step bound release: this build READS a snapshot with
+// more than 256 participants, as the release after it may write, but never
+// WRITES one: the 257th admission and any rewrite of a larger snapshot refuse
+// with the existing classified refusal and leave the bytes untouched.
+func TestNativeStoreReadsLargerSnapshotButNeverWritesOne(t *testing.T) {
+	f := fixtureState(t)
+	approve(t, f)
+	if err := f.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	const participants = 300
+	raw := laterReleaseSnapshot(t, f, participants)
+	t.Logf("%d participants: %d bytes, %d bytes each", participants, len(raw), len(raw)/participants)
+	store, err := Open(f.root, testBinding, f.clock)
+	if err != nil {
+		t.Fatal("larger snapshot refused", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if len(store.current.Participants) != participants || snapshot(t, store, "participant-299").Participant == nil || snapshot(t, store, "participant-298").Participant != nil {
+		t.Fatal("larger snapshot misread")
+	}
+	_, err = store.Admit(context.Background(), status(t, store).Revision, f.admission, f.participant)
+	failCode(t, err, "COMPUTER_AUTHORITY_STORE_UNAVAILABLE")
+	err = store.UpdateApproval(context.Background(), status(t, store).Revision, f.approval)
+	failCode(t, err, "COMPUTER_AUTHORITY_STORE_UNAVAILABLE")
+	if after, err := os.ReadFile(filepath.Join(f.root, stateName)); err != nil || !bytes.Equal(after, raw) || status(t, store).Revision != 9 {
+		t.Fatal("this build rewrote a larger snapshot", err)
+	}
+}
+
+// At the write bound, this build's own writes stay readable by 0.5.24 and the
+// 257th participant is refused before publication.
+func TestNativeStoreRefusesThe257thParticipant(t *testing.T) {
+	f := fixtureState(t)
+	approve(t, f)
+	if err := f.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	laterReleaseSnapshot(t, f, maxParticipants)
+	store, err := Open(f.root, testBinding, f.clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if err = store.RevokeParticipant(context.Background(), status(t, store).Revision, "participant-1"); err != nil {
+		t.Fatal("write at the bound", err)
+	}
+	if err = predecessorAcceptsState(f.root, testBinding); err != nil {
+		t.Fatal("predecessor refused this build's write", err)
+	}
+	written, err := os.ReadFile(filepath.Join(f.root, stateName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Admit(context.Background(), status(t, store).Revision, f.admission, f.participant)
+	failCode(t, err, "COMPUTER_AUTHORITY_STORE_UNAVAILABLE")
+	if after, err := os.ReadFile(filepath.Join(f.root, stateName)); err != nil || !bytes.Equal(after, written) {
+		t.Fatal("257th participant written", err)
 	}
 	if err = predecessorAcceptsState(f.root, testBinding); err != nil {
 		t.Fatal("predecessor refused", err)
