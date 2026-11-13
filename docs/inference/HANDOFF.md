@@ -201,10 +201,11 @@ billing change was made to obtain it.
    historical IDs; strict argument validation uses the actual adapter preflight.
    Receipt/hash/estimate data cannot qualify the real account/store/journal owner.
 6. **Task/process owner, future only:** map verified registration identity and
-   account/model capability to `AppServerConfig`; own process creation,
+   account/model capability to an App Server configuration (the earlier inert
+   `AppServerConfig` was removed unused); own process creation,
    `ACCESS_TOKEN` injection, ambient tool/config isolation, original stop/join,
-   initialize and retained-thread resume. Supply exact one-shot evidence to the
-   immutable `AppServerLifecycle` under owner serialization. Existing proxy/Task
+   initialize and retained-thread resume. Supply exact one-shot evidence to an
+   immutable lifecycle value under owner serialization. Existing proxy/Task
    client, Computer grants and provider effects are unchanged.
 
 ## Remaining gates
