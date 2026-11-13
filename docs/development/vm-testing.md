@@ -27,7 +27,7 @@ There is no `test:all` and no `test:vm`, and neither may be added. A VM lane is 
 Real Dev services, real accounts, the real tunnel and visual judgment are QA, not tests. The guest journeys therefore live under `qa:*`:
 
 - `qa:smoke` is a bounded exact-release UI smoke in the dedicated guest. Its lifecycle rows close, but its UI rows are `NEEDS_REVIEW` by design: an agent or human inspects the screenshots afterwards, and no automated assertion upgrades that review into a pass.
-- `qa:release-dev` and `qa:status` are endpoint handoff and the local guest identity proof. Each touches the real endpoint, so neither is a closed test. `qa:connect-dev` is BLOCKED: it refuses with `DEV_IMPORT_UNQUALIFIED` before any VM, staging or key access because no guest Dev credential importer is qualified, and nothing exports a credential.
+- `qa:release-dev` and `qa:status` (endpoint handoff and the local guest identity proof) are BLOCKED today: both use the legacy Terminal bootstrap, which refuses with `TERMINAL_SHELL_READINESS_UNPROVEN` because no helper advertises `terminal-shell-readiness/1`. Each would touch the real endpoint, so neither is a closed test. `qa:connect-dev` is BLOCKED: it refuses with `DEV_IMPORT_UNQUALIFIED` before any VM, staging or key access because no guest Dev credential importer is qualified, and nothing exports a credential.
 
 `qa:*` never appears inside `task test`, `task ci` or any aggregate. "Smoke" means a short, bounded scenario — not a reduced test suite. Automated clicks driving the same guest do not turn live QA into a closed test: the accounts, tunnel and judgment calls remain live, so the honest classification stays QA. Conversely, `vm:test` stays fully offline and closed and never touches a real account, tunnel or VM.
 
@@ -415,8 +415,9 @@ or host security-setting changes were used.
 
 This qualifies the local VM operator tool, not a full product release or a
 real-account scenario. Each default clone starts with a fresh guest Dev profile;
-this entry does not silently seed credentials or browser sign-in. Dev-only
-tunnel connection requires its separately selected QA step. A prior guest-only
+this entry does not silently seed credentials or browser sign-in. No automated
+Dev-only tunnel connection exists: `qa:connect-dev` refuses, so a guest Dev
+connection can only be entered by hand in the guest UI. A prior guest-only
 Dev binding answered connection status, while a catalogue read crossing a
 workspace-authority transition timed out and remains UNKNOWN. Source
 `f8bf18d2` corrects the independently confirmed catalogue socket budget mismatch

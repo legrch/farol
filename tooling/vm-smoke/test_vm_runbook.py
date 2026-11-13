@@ -24,3 +24,17 @@ class RunbookTests(unittest.TestCase):
         testing = (root / 'docs/development/vm-testing.md').read_text()
         self.assertNotIn('one-time offline Dev import', testing)
         self.assertIn('`qa:connect-dev` is BLOCKED', testing)
+
+
+class BlockedRouteDocsTests(unittest.TestCase):
+    def test_legacy_handoff_and_status_routes_are_marked_blocked(self):
+        root = Path(__file__).resolve().parents[2]
+        taskfile = (root / 'Taskfile.yml').read_text()
+        for task in ('qa:release-dev', 'qa:status'):
+            block = taskfile[taskfile.index('  ' + task + ':'):]
+            block = block[:block.index('\n\n')]
+            self.assertIn('BLOCKED', block, task)
+        testing = (root / 'docs/development/vm-testing.md').read_text()
+        self.assertIn('`qa:release-dev` and `qa:status` (endpoint handoff and the local guest identity proof) are BLOCKED today', testing)
+        self.assertNotIn('requires its separately selected QA step', testing)
+        self.assertNotIn('committed `tooling/vm-e2e/<entry>`', testing)

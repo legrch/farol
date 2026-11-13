@@ -716,8 +716,8 @@ export function bundleDriver({ entry, outputDir, root, bundler = "auto" }) {
     schema: MANIFEST_SCHEMA,
     tool: TOOL_VERSION,
     entry: path.basename(entryPath),
-    // The runner binds the entry by this digest to the committed
-    // tooling/vm-e2e/<entry> in its own tree, not by file name alone.
+    // The runner binds the entry by this digest to tooling/vm-e2e/<entry>
+    // in its own working tree (not the committed blob), not by name alone.
     entrySha256: sha256Hex(fs.readFileSync(entryPath)),
     bundler: usedBundler,
     bundle: {

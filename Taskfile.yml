@@ -129,12 +129,12 @@ tasks:
       - node tooling/vm-entry.mjs smoke {{.CLI_ARGS}}
 
   qa:release-dev:
-    desc: Quit only the approved guest app before using host Dev; preserve VM/profile and never launch host production
+    desc: BLOCKED (legacy Terminal bootstrap refuses TERMINAL_SHELL_READINESS_UNPROVEN) - Quit only the approved guest app before using host Dev; preserve VM/profile and never launch host production
     cmds:
       - node tooling/vm-entry.mjs smoke --release-dev {{.CLI_ARGS}}
 
   qa:status:
-    desc: Capture guest connection identity and approved Dev binding; refuses unresolved operations
+    desc: BLOCKED (legacy Terminal bootstrap refuses TERMINAL_SHELL_READINESS_UNPROVEN) - Capture guest connection identity and approved Dev binding; refuses unresolved operations
     cmds:
       - node tooling/vm-entry.mjs smoke --connection-proof {{.CLI_ARGS}}
 
