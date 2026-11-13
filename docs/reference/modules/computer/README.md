@@ -10,5 +10,9 @@
 - [Workspace mutation](mutation.md)
 - [Search](search.md)
 - [Process infrastructure](infra/process.md)
-- [Source-bound managed Git transport (unselected)](infra/git.md)
 - [Mutation repository](infra/repos/mutation.md)
+
+The unselected source-bound managed Git push transport (`infra/git`,
+`domain/egress` and `app/port/egress`) never had a production composition and
+was removed on 2026-11-13. Farol uses the Git installed on the Mac through the
+ordinary scoped Shell; the transport source remains in Git history (PR #45).

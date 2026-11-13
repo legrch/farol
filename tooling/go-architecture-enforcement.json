@@ -5674,46 +5674,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/git/advertisement.go",
-      "detail": "File name outside the admitted vocabulary: advertisement"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/git/canonical.go",
-      "detail": "File name outside the admitted vocabulary: canonical"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/git/delta.go",
-      "detail": "File name outside the admitted vocabulary: delta"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/git/graph.go",
-      "detail": "File name outside the admitted vocabulary: graph"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/git/pack.go",
-      "detail": "File name outside the admitted vocabulary: pack"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/git/packet.go",
-      "detail": "File name outside the admitted vocabulary: packet"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/git/publish.go",
-      "detail": "File name outside the admitted vocabulary: publish"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/git/receipt.go",
-      "detail": "File name outside the admitted vocabulary: receipt"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/computer/infra/lease/anchor.go",
       "detail": "File name outside the admitted vocabulary: anchor"
     },
@@ -8869,26 +8829,6 @@
     },
     {
       "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/git/advertisement.go",
-      "detail": "Behavior without advertisement_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/git/failure.go",
-      "detail": "Behavior without failure_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/git/graph.go",
-      "detail": "Behavior without graph_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/git/receipt.go",
-      "detail": "Behavior without receipt_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
       "file": "modules/computer/infra/lease/darwin.go",
       "detail": "Behavior without darwin_test.go"
     },
@@ -9951,46 +9891,6 @@
       "code": "GO_TEST_ORPHAN",
       "file": "modules/computer/infra/filesystem/scratchreaddarwin_test.go",
       "detail": "No scratchreaddarwin.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/computer/infra/git/fixture_test.go",
-      "detail": "No fixture.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/computer/infra/git/interop_test.go",
-      "detail": "No interop.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/computer/infra/git/negativedelta_test.go",
-      "detail": "No negativedelta.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/computer/infra/git/negativegraph_test.go",
-      "detail": "No negativegraph.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/computer/infra/git/negativehelpers_test.go",
-      "detail": "No negativehelpers.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/computer/infra/git/negativepack_test.go",
-      "detail": "No negativepack.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/computer/infra/git/negativepublish_test.go",
-      "detail": "No negativepublish.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/computer/infra/git/negativewire_test.go",
-      "detail": "No negativewire.go beside this test"
     },
     {
       "code": "GO_TEST_ORPHAN",
