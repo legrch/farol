@@ -426,6 +426,18 @@ for (const source of [
   "new Function('return 1')();",
   "Function('return 1')();",
   "require('fs');",
+  "process.getBuiltinModule('node:child_process');",
+  "process['getBuiltinModule']('node:vm');",
+  "process[`dlopen`]({}, '/tmp/addon.node');",
+  "import { run } from 'node:test'; run({ files: ['x.mjs'] });",
+  "process.execve('/bin/sh', ['sh']);",
+  "globalThis.eval('1');",
+  "global['eval']('1');",
+  "(0, eval)('1');",
+  "const e = eval; e('1');",
+  "(function () {}).constructor('return 1')();",
+  "Reflect.construct(Function, ['return 1']);",
+  "const F = Function; new F('return 1');",
 ]) {
   test(`loader policy refuses: ${source}`, (t) => {
     assert.throws(
@@ -486,4 +498,34 @@ test("the manifest binds the entry source by digest", (t) => {
     manifest.entrySha256,
     createHash("sha256").update(fs.readFileSync(entry)).digest("hex"),
   );
+});
+
+test("loader policy has no false positives on ordinary names", () => {
+  assert.doesNotThrow(() =>
+    assertNoHostImports(
+      "const o = { eval: 1, Function: 2, constructor: 3 };\n" +
+        "class A { constructor() { this.eval = o.eval; } }\n" +
+        "const value = o.Function + new A().eval;\n" +
+        "const message = `${value} eval Function constructor`;\n",
+    ),
+  );
+});
+
+test("the repository's own driver entries pass the loader policy", (t) => {
+  for (const name of [
+    "prototype-entry.mjs",
+    "fixture-probe-entry.mjs",
+    "egress-probe-entry.mjs",
+  ]) {
+    const output = makeTempDir(t, "vm-own-driver");
+    assert.doesNotThrow(
+      () =>
+        bundleDriver({
+          entry: fileURLToPath(new URL("./" + name, import.meta.url)),
+          outputDir: output,
+          root: REPO_ROOT,
+        }),
+      name,
+    );
+  }
 });

@@ -177,15 +177,18 @@ listener on the NAT gateway recorded by terminal-mac) is not implemented. `vm:te
 runs the probe against the network; it uses in-memory DNS/TCP doubles and loopback only.
 
 The driver bundle (`tooling/vm-e2e/bundle-driver.mjs`) may only statically import `node:`
-builtins that cannot load other code: dynamic `import()` in any form, `createRequire`,
-`node:module`/`vm`/`worker_threads`/`child_process`, `process.dlopen`/`binding`,
-`import.meta.resolve`, `eval` and the `Function` constructor are refused. The runner
-re-applies that policy to the exact bundle bytes before staging and binds the manifest's
-entry by `entrySha256` to the committed `tooling/vm-e2e/<entry>` in its own tree rather
-than by name. Remaining gap: the bundle bytes are not re-derived from committed source
-(no reproducible rebuild comparison, no source commit or clean-tree record), and the
-policy is syntactic, not a sandbox (computed access such as `process[name]` is not
-decidable).
+builtins outside a denylist of loaders. Refused: dynamic `import()` in any form,
+`createRequire`, `node:module`/`vm`/`worker_threads`/`child_process`/`test`/`sea` and
+similar, `process.dlopen`/`binding`/`getBuiltinModule`/`execve`, `import.meta.resolve`,
+`eval` in any form (direct, `globalThis.eval`, aliased, indirect) and the `Function`
+constructor (by name, through `Reflect.construct` or `.constructor`). The policy is
+syntactic and is not a sandbox: computed access through a variable (`process[name]`)
+cannot be decided statically. The runner re-applies it to the exact bundle bytes before
+staging and binds the manifest's entry by `entrySha256` to the entry file in the runner's
+own working tree (not the committed blob; an uncommitted edit there is accepted) rather
+than by name. Remaining gap: modules the entry imports are not bound, and the bundle
+bytes are not re-derived from committed source (no reproducible rebuild comparison, no
+source commit or clean-tree record).
 
 ## Native installed lifecycle and Dev artifacts
 

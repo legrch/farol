@@ -493,6 +493,8 @@ const FORBIDDEN_BUILTINS = new Set([
   "node:inspector",
   "node:repl",
   "node:v8",
+  "node:test", // run() spawns node processes on arbitrary files
+  "node:sea",
 ]);
 // Loader entry points reached as a property (process.dlopen, process.binding,
 // module.createRequire, import.meta.resolve) or called by name.
@@ -502,6 +504,21 @@ const FORBIDDEN_PROPERTIES = new Set([
   "_linkedBinding",
   "createRequire",
   "resolve",
+  "getBuiltinModule", // process.getBuiltinModule('node:child_process')
+  "execve", // process.execve replaces the process
+  "constructor", // (function () {}).constructor(source) builds code
+]);
+// globalThis.eval, global["Function"] and the like.
+const GLOBAL_OBJECTS = new Set(["globalThis", "global", "self", "window"]);
+// Referenced at all (called, aliased, passed or used indirectly as (0, eval)),
+// except as a non-computed property name or object/class key.
+const FORBIDDEN_REFERENCES = new Set(["eval", "Function"]);
+const KEYED = new Set([
+  "ObjectProperty",
+  "ObjectMethod",
+  "ClassMethod",
+  "ClassProperty",
+  "ClassPrivateProperty",
 ]);
 const FORBIDDEN_CALLEES = new Set([
   "eval",
@@ -515,6 +532,12 @@ function propertyName(node) {
     return node.property.name;
   if (node.computed && node.property?.type === "StringLiteral")
     return node.property.value;
+  if (
+    node.computed &&
+    node.property?.type === "TemplateLiteral" &&
+    node.property.expressions.length === 0
+  )
+    return node.property.quasis.map((quasi) => quasi.value.cooked).join("");
   return null;
 }
 
@@ -523,9 +546,11 @@ function propertyName(node) {
 // node_modules resolution and cannot pull code past its digest. Any dynamic
 // import() is refused (even of a literal builtin), as are createRequire,
 // node:vm/module/worker_threads/child_process, process.dlopen/binding,
-// import.meta.resolve, eval and the Function constructor.
-// This is a syntactic import/loader policy, NOT a sandbox: computed property
-// access through a variable (process[name]) cannot be decided statically.
+// import.meta.resolve, process.getBuiltinModule/execve, node:test, eval in
+// any form (direct, globalThis.eval, aliased, indirect) and the Function
+// constructor (by name or through .constructor).
+// The policy is syntactic and is not a sandbox: computed access through a
+// variable (process[name]) cannot be decided statically.
 export function assertNoHostImports(text) {
   const tree = parse(text, {
     sourceType: "module",
@@ -544,8 +569,18 @@ export function assertNoHostImports(text) {
   const forbid = (what) => {
     throw new Error("E2E_BUNDLE_OUTPUT_LOADER_FORBIDDEN: " + what);
   };
-  const visit = (node) => {
+  const visit = (node, parent = null, field = null) => {
     if (node === null || typeof node !== "object") return;
+    if (node.type === "Identifier" && FORBIDDEN_REFERENCES.has(node.name)) {
+      const propertyKey =
+        (parent?.type === "MemberExpression" ||
+          parent?.type === "OptionalMemberExpression") &&
+        field === "property" &&
+        !parent.computed;
+      const objectKey =
+        KEYED.has(parent?.type) && field === "key" && !parent.computed;
+      if (!propertyKey && !objectKey) forbid(node.name);
+    }
     if (node.type === "ImportExpression")
       throw new Error("E2E_BUNDLE_OUTPUT_IMPORT_REMAINS");
     if (
@@ -563,6 +598,12 @@ export function assertNoHostImports(text) {
       const meta = node.object?.type === "MetaProperty";
       if (name === "resolve" ? meta : FORBIDDEN_PROPERTIES.has(name))
         forbid(meta ? "import.meta." + name : "." + name);
+      if (
+        node.object?.type === "Identifier" &&
+        GLOBAL_OBJECTS.has(node.object.name) &&
+        FORBIDDEN_REFERENCES.has(name)
+      )
+        forbid(node.object.name + "." + name);
     }
     if (
       (node.type === "CallExpression" ||
@@ -577,9 +618,9 @@ export function assertNoHostImports(text) {
       (node.imported?.name ?? node.local?.name) === "createRequire"
     )
       forbid("createRequire");
-    for (const value of Object.values(node)) {
-      if (Array.isArray(value)) value.forEach(visit);
-      else if (value && typeof value === "object") visit(value);
+    for (const [key, value] of Object.entries(node)) {
+      if (Array.isArray(value)) value.forEach((item) => visit(item, node, key));
+      else if (value && typeof value === "object") visit(value, node, key);
     }
   };
   visit(tree);
