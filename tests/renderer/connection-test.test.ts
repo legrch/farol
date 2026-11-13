@@ -151,7 +151,7 @@ it.each([
       expect(
         toolbar?.querySelector('[role="status"]')?.nextElementSibling
           ?.textContent,
-      ).toBe("Ping ChatGPT");
+      ).toBe("Ping");
       expect(h.configure).toHaveBeenCalledTimes(1);
     } finally {
       await act(async () => root.unmount());

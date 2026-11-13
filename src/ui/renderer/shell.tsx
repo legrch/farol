@@ -1387,7 +1387,7 @@ export function Shell() {
                 {state.environment === "dev" ? " · Dev" : ""}
               </span>
               <span className="rail-version-compact" aria-hidden="true">
-                v
+                {version.version}
               </span>
               <span
                 id="version-build-details"

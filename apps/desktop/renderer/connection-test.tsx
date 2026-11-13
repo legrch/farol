@@ -197,7 +197,7 @@ export function ConnectionTestButton({
             ? "Pinging…"
             : "Testing…"
           : toolbar
-            ? "Ping ChatGPT"
+            ? "Ping"
             : "Test in ChatGPT"}
       </button>
       {toolbar && (
