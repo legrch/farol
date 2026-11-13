@@ -24,14 +24,20 @@ export interface SettingsStoreDriver {
 }
 
 const budgetMillis = 15000;
-const commandLimit = 4096;
 type FenceState = "none" | "pending" | "confirmed" | "failed";
 
 // One handshaken peer, one physical call at a time, one attempt per command.
 // Loss is permanent, including a known write whose reply ACK was lost.
+//
+// Go mints each command ID at random and never reissues it, so a second
+// delivery is a replay. A command's ID is retained while it runs and, once it
+// settles, until its own deadline plus one budget. After that an exact replay
+// fails its expired deadline before any storage call, so memory is bounded by
+// live and recent commands rather than by the pump's lifetime.
 export class SettingsStorePump {
   private stateValue: "idle" | "running" | "stopped" | "unknown" = "idle";
-  private readonly consumed = new Set<string>();
+  // Insertion order is settlement order for settled IDs (undefined while live).
+  private readonly consumed = new Map<string, bigint | undefined>();
   private context: Readonly<Context> | undefined;
   private loop: Promise<void> | undefined;
   private stopPromise: Promise<void> | undefined;
@@ -224,17 +230,17 @@ export class SettingsStorePump {
         if (!command) continue;
         this.activeCommand = true;
         try {
+          this.forgetSettled();
           if (
             this.stopRequested ||
             this.stateValue !== "running" ||
-            this.consumed.has(command.commandId) ||
-            this.consumed.size >= commandLimit
+            this.consumed.has(command.commandId)
           )
             throw new BridgeError(
               "unknown",
               "settings_store_command_interrupted",
             );
-          this.consumed.add(command.commandId);
+          this.consumed.set(command.commandId, undefined);
           await this.execute(command);
         } finally {
           this.activeCommand = false;
@@ -242,6 +248,16 @@ export class SettingsStorePump {
       }
     } catch {
       this.lose();
+    }
+  }
+
+  // Drop settled IDs whose window has passed, oldest settlement first. A live
+  // ID, or one still inside its window, stops the sweep; it never drops early.
+  private forgetSettled(): void {
+    const now = BigInt(Date.now());
+    for (const [id, until] of this.consumed) {
+      if (until === undefined || until > now) return;
+      this.consumed.delete(id);
     }
   }
 
@@ -333,5 +349,7 @@ export class SettingsStorePump {
       !validate("Empty", result.data)
     )
       throw new BridgeError("unknown", "settings_store_reply_ack_unknown");
+    this.consumed.delete(command.commandId);
+    this.consumed.set(command.commandId, deadline + BigInt(budgetMillis));
   }
 }
