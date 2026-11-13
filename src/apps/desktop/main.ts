@@ -5879,7 +5879,17 @@ async function testConnectionCommand(
   const config = configuration;
   if (!core || !config)
     return configurationFailure("CONNECTION_CHECK_PREREQUISITES_REQUIRED");
-  let reserved = false;
+  // Go's first claim supersedes every unsettled earlier attempt as unknown.
+  // Admission is therefore checked and reserved synchronously BEFORE that
+  // claim: a second check while one is live (for example after a renderer
+  // reload) is refused here and never reaches Go to settle the live one.
+  if (chatGptTaskAdmission || connectorTaskAdmission)
+    return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+  chatGptTaskAdmission = true;
+  connectorTaskAdmission = true;
+  // An owner's own toolbar check is a manual diagnostic: it must not
+  // flip the sidebar to "Checking connection…". Setup keeps its state.
+  if (origin !== "setup") connectorTaskAdmissionPurpose = "manual-diagnostic";
   let expected: ConnectorAppVerificationBinding | null = null;
   let workspace: string | null | undefined;
   let outcome: ConnectionCheckCommandResult;
@@ -5895,10 +5905,9 @@ async function testConnectionCommand(
       async () => {
         // This callback is reached only after FIRST durable admission. A replay
         // observes its original Go result without rebinding to today's page.
+        // Desktop admission is already reserved for this command above.
         if (
           !embeddedBrowserEnabled() ||
-          chatGptTaskAdmission ||
-          connectorTaskAdmission ||
           quitInProgress ||
           installedUpdateAdmission ||
           !chatGptTaskAdmissionReady() ||
@@ -5920,14 +5929,6 @@ async function testConnectionCommand(
           throw new ConnectionCheckRefusal(
             "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
           );
-        // Reserve existing Desktop owners before the first browser/native await.
-        chatGptTaskAdmission = true;
-        connectorTaskAdmission = true;
-        // An owner's own toolbar check is a manual diagnostic: it must not
-        // flip the sidebar to "Checking connection…". Setup keeps its state.
-        if (origin !== "setup")
-          connectorTaskAdmissionPurpose = "manual-diagnostic";
-        reserved = true;
         const snapshot = config.snapshot();
         if (snapshot.status !== "ready")
           throw new ConnectionCheckRefusal(
@@ -6075,15 +6076,13 @@ async function testConnectionCommand(
       },
     );
   } finally {
-    if (reserved) {
-      chatGptTaskAdmission = false;
-      connectorTaskAdmission = false;
-      connectorTaskAdmissionPurpose = null;
-      void connectorConnection
-        .sample()
-        .then(currentConnectionStatus)
-        .catch(() => undefined);
-    }
+    chatGptTaskAdmission = false;
+    connectorTaskAdmission = false;
+    connectorTaskAdmissionPurpose = null;
+    void connectorConnection
+      .sample()
+      .then(currentConnectionStatus)
+      .catch(() => undefined);
   }
   if (outcome.state !== "verified") return configurationFailure(outcome.code);
   if (!outcome.retained) {
