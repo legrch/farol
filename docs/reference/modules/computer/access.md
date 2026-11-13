@@ -82,7 +82,10 @@ replaced by this adapter. The current-view format is a versioned canonical JSON
 document. Counters are decimal strings; expiry preserves the existing positive
 safe Unix-millisecond representation. Domain and public wire DTOs are unchanged.
 
-State is bounded to 1 MiB and 256 retained participant identities. Workspace,
+State is bounded to 1 MiB and 256 retained participant identities; the bound
+matches the 0.5.24 reader. Connector reconnects within one backend lifetime and
+connector generation resume one participant, so the bound counts generations,
+backend lifetimes and other admissions, not reconnects. Workspace,
 exclusion and exact-path bounds retain the existing admission limits. Saturation
 fails closed before publication; identities or exclusions are never dropped.
 The internal encoding has exactly one form: unknown, duplicate, missing,

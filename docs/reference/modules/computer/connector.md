@@ -36,6 +36,16 @@ are required before positive liveness. The adapter wraps the existing access
 participants cannot restore a new owner's liveness. Duplicate/conflicting
 publication, error, lost reply or incomplete readback never authorize replay.
 
+`Release` and `Resume` keep one durable participant per connector generation
+in one backend lifetime. After a known publication or resume, `Release` makes
+liveness negative and writes nothing, leaving the participant live in the Store.
+A later owner whose launch carries that same identity calls `Resume` instead of
+`Publish`: once, under the same guard, it reads back the exact live, unrevoked
+participant and unchanged approval policy through the optional
+`port.ConnectorResumer`, and writes nothing. Admission expiry is time only and
+is not compared. A revoked, missing or differently sealed participant leaves
+the new owner unavailable; nothing is re-admitted or restored.
+
 `ExecutionCeiling(ctx)` returns an independent deep copy of
 `port.ConnectorExecutionCeiling` only after known original publication while the
 owner is current. Trusted root explicitly maps its Participant/Approval to
@@ -94,7 +104,16 @@ automatic reconnection, native closure proof or installed acceptance.
 Trusted root now exposes `computer.connector.open/close` only on the inherited
 host pipe. Open consumes the current acknowledged Go Settings publication,
 mints the execution correlations above and registers a private socket on that
-same backend. Its initial surface is catalogue/bootstrap/list/read/search and connector verification,
+same backend. A clean ordinary Close releases its participant instead of
+revoking it, so the next Open of the same generation resumes it with a fresh
+TurnCorrelation rather than admitting a new participant. The same generation
+means the exact connector generation and Settings consent receipt, and a
+participant seal derived from current approval that equals the retained one;
+RuntimeId, launch digest and challenge may change. Any other Open revokes the
+retained participant once before admitting a new one, and an unacknowledged
+revocation refuses every later Open. `owner_stop`, an original Stop, a failed
+or uncertain slot and shutdown revoke as before. A restart is a new backend
+lifetime and admits one new participant. Its initial surface is catalogue/bootstrap/list/read/search and connector verification,
 with read-only scope. The external attachment cannot issue authority or open another
 connector. A failed or uncertain start retains its slot and cannot be upgraded
 to clean by a later shutdown. Root withdraws ingress before shutdown IO; shutdown
