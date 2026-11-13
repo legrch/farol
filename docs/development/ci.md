@@ -1,4 +1,4 @@
-# Pull request checks and tagged releases
+# Pull request checks, tagged releases and the unstable build
 
 This page describes the active GitHub Actions checks and release flow in
 `.github/workflows/`. It is an operating guide; it does not configure branch
@@ -179,6 +179,48 @@ use caches. Repository contents permission is read-only by default; only the
 separate release publication job receives `contents: write`. The publisher retains `actions: read` solely for run/job metadata checks.
 The workflow explicitly exports `GH_TOKEN` only for the publication step; the job-scoped
 automatic GitHub token remains governed by GitHub Actions permissions.
+
+## Dry unstable build
+
+`.github/workflows/unstable.yml` builds `main` on a daily schedule (03:17 UTC;
+GitHub may start scheduled runs late) and on `workflow_dispatch`. It is the
+first step towards an unstable channel and is deliberately dry: it creates no
+tag, release, draft or publication, and no installed app can see its output.
+
+- `decide` (Ubuntu, `contents: read` and `actions: read`) runs
+  `tooling/unstable-build.mjs decide`. It reads this workflow's successful
+  runs on `main` and skips, with a log line and a job summary, when the newest
+  one has the same head commit as the current run. Every successful run either
+  built its head or skipped because that head was already built, so that head is
+  the last built commit. Runs of other workflows, branches or repositories never
+  count. A failed or malformed API read fails the job rather than guessing. The
+  `force` input builds anyway. A re-run of an older successful run makes the next
+  scheduled run build again; that costs one build and is never a wrong skip.
+- `build` (`macos-26`, `contents: read`) checks out that exact commit, requires
+  it to be an ancestor of `origin/main`, runs the release preflight, provisions
+  the approved Go inputs, runs the unchanged full `task ci`, then the clean
+  `task package` and the offline three-asset preparation and
+  `verify-release-assets.mjs`, the same commands as the tag build.
+- It uploads exactly the three public files (ZIP, `farol-release.json`,
+  `SHA256SUMS`) as a workflow artifact retained for 7 days, never the
+  `private/` evidence directory, and writes a job summary with the source
+  commit, version, build version, build ID, digests, the artifact digest and
+  per-step durations.
+
+This artifact is the one deliberate exception to the tagged-release rule that
+hosted rebuilds do not travel through Actions artifacts. Signed-in readers of this
+public repository can download it. The bytes are unqualified. They carry the
+committed version, build version and channel, so they can match an already
+published release's identity with different bytes: never publish, stage or
+install them as that release. The release workflow and its private-draft path
+are unchanged.
+
+The workflow runs one build at a time (`unstable-main`, no cancellation) and
+needs no secrets. Later changes add an update rehearsal job that consumes the
+artifact, publication to an unstable pre-release, and a promotion workflow
+behind a GitHub Environment. Build identity still comes only from the committed
+`package.json` (`farolRelease.buildVersion` and `updateChannel`); taking a build
+number from `GITHUB_RUN_NUMBER` needs its own reviewed change.
 
 ## Activation and observed timing
 
