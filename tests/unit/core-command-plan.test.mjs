@@ -10,6 +10,7 @@ describe("preserved public core command chain", () => {
     ).toEqual([
       ["node", ["tooling/generate-desktop-wire.mjs", "--check"], "."],
       ["node", ["tooling/check-go-architecture.mjs"], "."],
+      ["node", ["tooling/check-architecture.mjs"], "."],
       ["go", ["test", "-p=2", "-race", "./..."], "."],
       ["go", ["vet", "./..."], "."],
       ["go", ["test", "-p=2", "-race", "./..."], "resources/native/go"],
@@ -21,6 +22,7 @@ describe("preserved public core command chain", () => {
           "run",
           "tests/contract/desktop-wire.test.ts",
           "tests/architecture/go-architecture.test.ts",
+          "tests/architecture/ts-architecture.test.ts",
         ],
         ".",
       ],

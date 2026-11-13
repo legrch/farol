@@ -3,6 +3,7 @@
 export const coreProtocolFiles = Object.freeze([
   "tests/contract/desktop-wire.test.ts",
   "tests/architecture/go-architecture.test.ts",
+  "tests/architecture/ts-architecture.test.ts",
 ]);
 
 export function coreTestSteps({ nested, node, go }) {
@@ -16,6 +17,12 @@ export function coreTestSteps({ nested, node, go }) {
       id: "go-imports",
       executable: node,
       args: ["tooling/check-go-architecture.mjs"],
+    },
+    // The TypeScript import boundary plus its ADR-0002 report-mode switch.
+    {
+      id: "ts-architecture",
+      executable: node,
+      args: ["tooling/check-architecture.mjs"],
     },
     // Bound test-binary concurrency independently of the runner's CPU count.
     // Native filesystem checks retain their real operation deadlines under race.
