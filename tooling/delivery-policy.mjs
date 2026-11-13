@@ -194,3 +194,82 @@ export function assertDeliveryPolicy(policy, pr, release, setup) {
   assert.ok(publish.steps[1].uses.startsWith("actions/setup-node@"));
   assert.deepEqual(publish.steps[2].env, { GH_TOKEN: "${{ github.token }}" });
 }
+
+// The dry unstable build: read-only and unpublished. Like release preparation,
+// it never transfers unqualified bytes through Actions artifacts or caches.
+export function assertUnstablePolicy(unstable) {
+  assert.deepEqual(Object.keys(unstable.on), ["schedule", "workflow_dispatch"]);
+  assert.equal(unstable.on.schedule.length, 1);
+  assert.match(unstable.on.schedule[0].cron, /^\d+ \d+ \* \* \*$/u);
+  assert.deepEqual(Object.keys(unstable.on.workflow_dispatch.inputs), [
+    "force",
+  ]);
+  assert.equal(unstable.on.workflow_dispatch.inputs.force.type, "boolean");
+  assert.equal(unstable.on.workflow_dispatch.inputs.force.default, false);
+  assert.deepEqual(unstable.permissions, { contents: "read" });
+  assert.equal(unstable.concurrency.group, "unstable-main");
+  assert.equal(unstable.concurrency["cancel-in-progress"], false);
+  assert.deepEqual(Object.keys(unstable.jobs), ["decide", "build"]);
+  const { decide, build } = unstable.jobs;
+  assert.equal(decide.if, "github.repository == 'legrch/farol'");
+  assert.deepEqual(decide.permissions, { contents: "read", actions: "read" });
+  assert.equal(build.permissions, undefined);
+  assert.equal(build.needs, "decide");
+  assert.equal(build.if, "needs.decide.outputs.build == 'true'");
+  assert.equal(decide["runs-on"], "ubuntu-24.04");
+  assert.equal(build["runs-on"], "macos-26");
+  for (const job of [decide, build]) {
+    assert.ok(
+      Number.isInteger(job["timeout-minutes"]) && job["timeout-minutes"] > 0,
+    );
+    for (const step of job.steps) {
+      if (step.uses === "./.github/actions/setup-ci") continue;
+      if (step.uses)
+        assert.match(step.uses, /^actions\/[a-z-]+@[a-f0-9]{40}$/u);
+      if (step.uses?.startsWith("actions/checkout@")) {
+        assert.equal(step.with["fetch-depth"], 0);
+        assert.equal(step.with["persist-credentials"], false);
+      }
+    }
+  }
+  assert.equal(decide.steps[0].with.ref, "${{ github.sha }}");
+  assert.equal(
+    build.steps[0].with.ref,
+    "${{ needs.decide.outputs.source_sha }}",
+  );
+  const text = JSON.stringify(unstable);
+  assert.doesNotMatch(
+    text,
+    /secrets\.|pull_request_target|workflow_run|"write"|id-token|attestations|gh release|releases|git push|git tag|actions\/cache|download-artifact|curl|wget|base64/u,
+  );
+  const decideStep = decide.steps.find((step) => step.id === "decide");
+  assert.equal(decideStep.run, "node tooling/unstable-build.mjs decide");
+  assert.deepEqual(decideStep.env, {
+    GH_TOKEN: "${{ github.token }}",
+    UNSTABLE_FORCE: "${{ inputs.force == true }}",
+  });
+  const commands = build.steps.map((step) => step.run ?? "").join("\n");
+  for (const gate of [
+    'merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main',
+    "node tooling/release-preflight.mjs",
+    "node tooling/ci-go-inputs.mjs",
+    "task ci\n",
+    "task package -- --go-inputs=",
+    "tooling/prepare-release-archive.py",
+    "tooling/verify-release-assets.mjs",
+  ])
+    assert.ok(commands.includes(gate), gate);
+  assert.ok(
+    commands.indexOf("task ci\n") < commands.indexOf("task package"),
+    "source gate before package",
+  );
+  assert.doesNotMatch(
+    text,
+    /actions\/(?:upload|download)-artifact|actions\/cache/u,
+  );
+  assert.deepEqual(Object.keys(build.outputs).sort(), [
+    "manifest_sha256",
+    "source_sha",
+    "version",
+  ]);
+}

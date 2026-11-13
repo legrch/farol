@@ -17,6 +17,12 @@ import {
 } from "../../tooling/cloud-test-prerequisites.mjs";
 import { discoverTests } from "../../tooling/test-scopes.mjs";
 import { planTests } from "../../tooling/test-scope-plan.mjs";
+import {
+  decideUnstableBuild,
+  parseDurations,
+  renderBuildSummary,
+  renderDecision,
+} from "../../tooling/unstable-build.mjs";
 
 const owned = [];
 afterEach(() => {
@@ -326,6 +332,85 @@ describe("two-phase release workflow", () => {
     );
     expect(JSON.stringify(job)).not.toMatch(
       /download-artifact|task package|release create/u,
+    );
+  });
+});
+
+describe("dry unstable build change check", () => {
+  const built = "c".repeat(40);
+  const next = "d".repeat(40);
+  const run = (overrides = {}) => ({
+    id: 10,
+    repository: { full_name: "legrch/farol" },
+    path: ".github/workflows/unstable.yml",
+    head_branch: "main",
+    event: "schedule",
+    status: "completed",
+    conclusion: "success",
+    head_sha: built,
+    ...overrides,
+  });
+  const decide = (runs, head = next, force = false) =>
+    decideUnstableBuild({ head, currentRunId: 99, runs, force });
+
+  it("skips only when main equals the newest successful run's head", () => {
+    expect(decide([run()], built)).toEqual({
+      build: false,
+      reason: "unchanged",
+      previousSha: built,
+      previousRunId: 10,
+    });
+    expect(decide([run()]).reason).toBe("changed");
+    expect(decide([run({ id: 11, head_sha: next }), run()], built).build).toBe(
+      true,
+    );
+  });
+  it("builds when no prior success exists or when forced", () => {
+    expect(decide([]).reason).toBe("no-previous-success");
+    expect(decide([run()], built, true)).toMatchObject({
+      build: true,
+      reason: "forced",
+    });
+  });
+  it.each([
+    ["the current run", { id: 99 }],
+    ["another branch", { head_branch: "feature" }],
+    ["another workflow", { path: ".github/workflows/release.yml" }],
+    ["another repository", { repository: { full_name: "fork/farol" } }],
+    ["a failed run", { conclusion: "failure" }],
+    ["a running run", { status: "in_progress", conclusion: null }],
+    ["a pull request event", { event: "pull_request" }],
+    ["a malformed head", { head_sha: "main" }],
+  ])("never treats %s as the last build", (_name, overrides) => {
+    expect(decide([run(overrides)], built).reason).toBe("no-previous-success");
+  });
+  it.each([
+    [{ head: "main", currentRunId: 1, runs: [] }, "UNSTABLE_HEAD_INVALID"],
+    [{ head: built, currentRunId: 0, runs: [] }, "UNSTABLE_RUN_INVALID"],
+    [{ head: built, currentRunId: 1, runs: null }, "UNSTABLE_RUNS_INVALID"],
+  ])("refuses malformed input %#", (input, code) => {
+    expect(() => decideUnstableBuild(input)).toThrow(code);
+  });
+  it("renders the skip reason and public build metadata only", () => {
+    expect(renderDecision(decide([run()], built), built)).toContain(
+      "nothing to do",
+    );
+    const { manifest } = assets();
+    const markdown = renderBuildSummary({
+      manifest,
+      checksums: `${manifest.archiveSha256}  ${manifest.archiveName}\n`,
+      durations: parseDurations(
+        "task package\t66\nsource gate (task ci)\t1104\n",
+      ),
+    });
+    expect(markdown).toContain(manifest.archiveSha256);
+    expect(markdown).toContain("| task package | 66 |");
+    expect(markdown).toContain("never publish");
+    expect(renderBuildSummary({ manifest: null, durations: [] })).toContain(
+      "No release assets were produced.",
+    );
+    expect(() => parseDurations("task package\tsoon\n")).toThrow(
+      "UNSTABLE_DURATIONS_INVALID",
     );
   });
 });

@@ -5,7 +5,7 @@ This is the engineering entrypoint. Ordinary users should start with [installati
 - [Source setup](setup.md) — pinned toolchains, declared Go inputs and ordinary Farol Dev.
 - [Output retention](output-retention.md) — who removes which disk output, budgets and `task disk:status`.
 - [Contributing](contributing.md) — scope, checkpoints and review.
-- [Pull request checks and tagged releases](ci.md) — CI status checks, native coverage, and the tagged release flow.
+- [Pull request checks, tagged releases and the unstable build](ci.md) — CI status checks, native coverage, the tagged release flow, and the dry unstable build.
 - [Standalone build](../standalone-build.md) — compiler and dependency verification.
 - [Guest VM smoke](vm-smoke.md) — exact packaged builds, hidden/visible runs and private evidence.
 - [VM testing](vm-testing.md) — the `task test` aggregate, qa:* separation, lease and reconcile contracts, rename runbook.
