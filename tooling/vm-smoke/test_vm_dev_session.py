@@ -37,6 +37,7 @@ def closed_session_mcp(root, calls=None, status=0, terminal=True):
             run = vm_root / "machines" / name / "mcp-app-sessions" / session["runId"]
             run.mkdir(parents=True, mode=0o700)
             (run / "session.json").write_text(json.dumps({"status": "pending"}))
+            (run / "service.lock").write_bytes(b"")  # an empty lock is copied, not refused
             (run / "terminal.json").write_text(json.dumps({
                 "schema": dev.MCP_SESSION_CONTRACT, "state": "CLOSED", "runID": session["runId"],
                 "helperInstance": "synthetic", "rootExit": "observed", "uiPrimaryExit": "observed",
@@ -576,6 +577,7 @@ class TeardownTests(Fixture):
         # terminal-mac's own session records survive the clone deletion.
         copied = evidence / "terminal-mac-session" / "terminal.json"
         self.assertEqual(json.loads(copied.read_text())["state"], "CLOSED")
+        self.assertEqual((evidence / "terminal-mac-session" / "service.lock").read_bytes(), b"")
         self.assertTrue((evidence / "delete-intent.json").is_file())
         self.assertTrue((evidence / "delete-receipt.json").is_file())
         self.assertEqual(json.loads((evidence / "result.json").read_text())["removed"], [str(machine)])
@@ -678,6 +680,23 @@ class TeardownTests(Fixture):
                     self.assertTrue((self.root / "elsewhere" / "disk.img").exists())
                     (self.root / "machines" / self.clone).unlink()
                     shutil.rmtree(self.root / "elsewhere")
+
+    def test_linked_session_record_is_never_followed_and_retains_the_clone(self):
+        outside = self.home / "host-only.json"
+        outside.write_text("host bytes")
+        closed = closed_session_mcp(self.root)
+        def mcp(binary, vm_root, name, stage, session, evidence, env, gate=None):
+            status = closed(binary, vm_root, name, stage, session, evidence, env, gate)
+            run = vm_root / "machines" / name / "mcp-app-sessions" / session["runId"]
+            (run / "planted.json").symlink_to(outside)
+            return status
+        self.clone = "farol-qa-" + "7"*16
+        error, result, _, evidence, machine = self.session(mcp=mcp)
+        self.assertEqual(result["status"], "RETAINED")
+        self.assertIn("VM_DEV_SESSION_EVIDENCE_UNSAFE", error.code)
+        self.assertTrue(machine.exists())
+        copied = evidence / "terminal-mac-session"
+        self.assertFalse((copied / "planted.json").exists())
 
     def test_base_and_foreign_names_are_never_deleted(self):
         evidence = self.settings / "guard"

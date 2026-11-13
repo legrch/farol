@@ -45,7 +45,8 @@ STOPPED_LIMIT = 60
 # whose normal Quit and close were observed (both original exits, verified tree).
 MCP_SESSION_CONTRACT = "terminal-mac.mcp-app-session/1"
 SESSION_EVIDENCE_LIMIT = 256 * 1024
-SESSION_EVIDENCE_FILES = 256
+SESSION_EVIDENCE_FILES = 4096
+SESSION_EVIDENCE_TOTAL = 16 * 1024 * 1024
 
 # Codes after which an effect of THIS run may still be in flight or unobserved.
 # Everything they touched is retained; nothing is stopped, deleted or replayed.
@@ -585,10 +586,13 @@ def _preserve_session_evidence(root, clone, run, evidence):
     _sync_directory(evidence)
     names = sorted(entry.name for entry in os.scandir(source))
     demand(len(names) <= SESSION_EVIDENCE_FILES, "VM_DEV_SESSION_EVIDENCE_UNSAFE")
+    total = 0
     for name in names:
         demand(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", name) is not None,
                "VM_DEV_SESSION_EVIDENCE_UNSAFE")
-        data = _regular(source / name, SESSION_EVIDENCE_LIMIT)
+        data = _session_file(source / name)
+        total += len(data)
+        demand(total <= SESSION_EVIDENCE_TOTAL, "VM_DEV_SESSION_EVIDENCE_UNSAFE")
         fd = os.open(target / name, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
         with os.fdopen(fd, "wb") as output:
             output.write(data)
@@ -596,6 +600,23 @@ def _preserve_session_evidence(root, clone, run, evidence):
             os.fsync(output.fileno())
     _sync_directory(target)
     return len(names)
+
+
+def _session_file(path):
+    """A terminal-mac session record: owned single-link regular file, possibly
+    empty (a lock), never followed through a link, read exactly once."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        raise VMDevError("VM_DEV_SESSION_EVIDENCE_UNSAFE") from None
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        demand(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and
+               info.st_uid == os.geteuid() and info.st_size <= SESSION_EVIDENCE_LIMIT,
+               "VM_DEV_SESSION_EVIDENCE_UNSAFE")
+        data = stream.read(SESSION_EVIDENCE_LIMIT + 1)
+    demand(len(data) == info.st_size, "VM_DEV_SESSION_EVIDENCE_UNSAFE")
+    return data
 
 
 def _one_stop(binary, clone, evidence, env):
