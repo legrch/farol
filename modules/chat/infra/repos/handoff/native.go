@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/legrch/farol/pkg/limit"
+
 	"github.com/legrch/farol/modules/chat/app/port"
 	"golang.org/x/sys/unix"
 )
@@ -140,7 +142,7 @@ func (d *disk) check() error {
 	return nil
 }
 func stepName(index int, kind string) string { return fmt.Sprintf("chat-handoff-%04d.%s", index, kind) }
-func (d *disk) readFile(name string, limit int) ([]byte, bool, error) {
+func (d *disk) readFile(name string, maximum int) ([]byte, bool, error) {
 	fd, err := unix.Openat(d.dir, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if errors.Is(err, unix.ENOENT) {
 		return nil, false, nil
@@ -150,14 +152,14 @@ func (d *disk) readFile(name string, limit int) ([]byte, bool, error) {
 	}
 	f := os.NewFile(uintptr(fd), name)
 	before, err := stat(fd)
-	if err != nil || !physical(before, unix.S_IFREG, 0600, d.roots.Chat.Identity.OwnerUID) || before.Size < 1 || before.Size > int64(limit) {
+	if err != nil || !physical(before, unix.S_IFREG, 0600, d.roots.Chat.Identity.OwnerUID) || before.Size < 1 || before.Size > int64(maximum) {
 		f.Close()
 		return nil, false, fail(Unknown, true)
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, int64(limit)+1))
+	raw, err := limit.Read(f, int64(maximum))
 	after, se := stat(fd)
 	var named unix.Stat_t
-	ok := err == nil && se == nil && len(raw) <= limit && stable(before, after) && unix.Fstatat(d.dir, name, &named, unix.AT_SYMLINK_NOFOLLOW) == nil && stable(named, after)
+	ok := err == nil && se == nil && stable(before, after) && unix.Fstatat(d.dir, name, &named, unix.AT_SYMLINK_NOFOLLOW) == nil && stable(named, after)
 	closed := f.Close()
 	if !ok || closed != nil {
 		return nil, false, fail(Unknown, true)

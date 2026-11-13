@@ -8,9 +8,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/legrch/farol/pkg/limit"
 
 	"golang.org/x/sys/unix"
 )
@@ -126,8 +127,8 @@ func (d *disk) check() error {
 	}
 	return nil
 }
-func (d *disk) read(limit int) ([]byte, error) {
-	if limit < 1 || d.check() != nil {
+func (d *disk) read(maximum int) ([]byte, error) {
+	if maximum < 1 || d.check() != nil {
 		return nil, failure(Unavailable, false)
 	}
 	fd, err := unix.Openat(d.dir, snapshotName, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
@@ -136,14 +137,14 @@ func (d *disk) read(limit int) ([]byte, error) {
 	}
 	f := os.NewFile(uintptr(fd), snapshotName)
 	before, err := stat(fd)
-	if err != nil || !physical(before, unix.S_IFREG, 0600, d.root.OwnerUID) || before.Size < 1 || before.Size > int64(limit) {
+	if err != nil || !physical(before, unix.S_IFREG, 0600, d.root.OwnerUID) || before.Size < 1 || before.Size > int64(maximum) {
 		closed := f.Close()
 		return nil, failure(Unavailable, closed != nil)
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, int64(limit)+1))
+	raw, err := limit.Read(f, int64(maximum))
 	after, statErr := stat(fd)
 	var named unix.Stat_t
-	qualified := err == nil && statErr == nil && len(raw) <= limit && stable(before, after) && unix.Fstatat(d.dir, snapshotName, &named, unix.AT_SYMLINK_NOFOLLOW) == nil && stable(named, after) && physical(named, unix.S_IFREG, 0600, d.root.OwnerUID) && d.check() == nil
+	qualified := err == nil && statErr == nil && stable(before, after) && unix.Fstatat(d.dir, snapshotName, &named, unix.AT_SYMLINK_NOFOLLOW) == nil && stable(named, after) && physical(named, unix.S_IFREG, 0600, d.root.OwnerUID) && d.check() == nil
 	closed := f.Close()
 	if !qualified || closed != nil {
 		return nil, failure(Unavailable, closed != nil)

@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/legrch/farol/pkg/limit"
+
 	"github.com/legrch/farol/modules/chat/app/port"
 	"golang.org/x/sys/unix"
 )
@@ -269,7 +271,7 @@ func (d *resultDisk) inventory(ctx context.Context) ([]string, error) {
 	}
 	return keys, nil
 }
-func (d *resultDisk) readFile(ctx context.Context, name string, limit int) ([]byte, error) {
+func (d *resultDisk) readFile(ctx context.Context, name string, maximum int) ([]byte, error) {
 	if ctx.Err() != nil || d.check() != nil {
 		return nil, resultFailure(Unknown, true)
 	}
@@ -280,11 +282,11 @@ func (d *resultDisk) readFile(ctx context.Context, name string, limit int) ([]by
 	f := os.NewFile(uintptr(fd), "chat-result-record")
 	before, err := resultStat(fd)
 	var named unix.Stat_t
-	if err != nil || !resultPhysical(before, unix.S_IFREG, 0600, d.root.Identity.OwnerUID) || before.Size < 1 || before.Size > int64(limit) || unix.Fstatat(d.dir, name, &named, unix.AT_SYMLINK_NOFOLLOW) != nil || !resultStable(named, before) {
+	if err != nil || !resultPhysical(before, unix.S_IFREG, 0600, d.root.Identity.OwnerUID) || before.Size < 1 || before.Size > int64(maximum) || unix.Fstatat(d.dir, name, &named, unix.AT_SYMLINK_NOFOLLOW) != nil || !resultStable(named, before) {
 		_ = f.Close()
 		return nil, resultFailure(Unknown, true)
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, int64(limit)+1))
+	raw, err := limit.Read(f, int64(maximum))
 	after, se := resultStat(fd)
 	ok := err == nil && se == nil && len(raw) == int(before.Size) && resultStable(before, after) && unix.Fstatat(d.dir, name, &named, unix.AT_SYMLINK_NOFOLLOW) == nil && resultStable(named, after)
 	closed := f.Close()
