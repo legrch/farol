@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/legrch/farol/pkg/fake"
+
 	"github.com/legrch/farol/modules/computer/app/port"
 	app "github.com/legrch/farol/modules/computer/app/services/mutation"
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -15,10 +17,6 @@ import (
 )
 
 // Contract fixtures are injected and in-process, not wire/native/live evidence.
-type contractClock struct{ now time.Time }
-
-func (c contractClock) Now() time.Time { return c.now }
-
 type contractLease struct {
 	b        port.TaskBinding
 	p        authority.Participant
@@ -95,7 +93,7 @@ func contractFixture(t *testing.T) (*Contract, *contractLease, *contractStore, *
 	journal := &contractStore{}
 	hash := strings.Repeat("b", 64)
 	native := &contractNative{receipt: &port.MutationReceipt{Operation: "edit", RelativePath: "note.md", Bytes: 3, Replacements: 1, BeforeSHA256: &hash, AfterSHA256: strings.Repeat("c", 64)}}
-	service, err := app.NewForExecution("op", lease, journal, native, contractDigest{}, &sync.Mutex{}, contractClock{now: now})
+	service, err := app.NewForExecution("op", lease, journal, native, contractDigest{}, &sync.Mutex{}, fake.Clock{At: now})
 	if err != nil {
 		t.Fatal(err)
 	}

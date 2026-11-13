@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/legrch/farol/pkg/fake"
+
 	"github.com/legrch/farol/modules/computer/app/port"
 	mutationsvc "github.com/legrch/farol/modules/computer/app/services/mutation"
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -16,10 +18,6 @@ import (
 
 // Actual Computer app + repository, with labelled injected clock/lease/storage
 // and native receipt. This proves no native filesystem or current-owner admission.
-type cpuClock struct{ now time.Time }
-
-func (c cpuClock) Now() time.Time { return c.now }
-
 type cpuLease struct {
 	binding     port.TaskBinding
 	deadline    time.Time
@@ -55,12 +53,12 @@ func (n *cpuNative) Mutate(ctx context.Context, r port.MutationRequest) (*port.M
 	}
 	return &port.MutationReceipt{Operation: "write", RelativePath: r.Operation.Path(), Bytes: 3, AfterSHA256: strings.Repeat("c", 64)}, nil
 }
-func appFixture(t *testing.T) (*mutationsvc.Service, *Repository, *memory, *cpuNative, *cpuLease, cpuClock, mutationsvc.ExecuteRequest) {
+func appFixture(t *testing.T) (*mutationsvc.Service, *Repository, *memory, *cpuNative, *cpuLease, fake.Clock, mutationsvc.ExecuteRequest) {
 	t.Helper()
 	r, m, s := fixture()
 	id := s.Binding().Identity
 	now := time.Unix(1700000000, 0)
-	clock := cpuClock{now: now}
+	clock := fake.Clock{At: now}
 	binding := port.TaskBinding{Identity: authority.Identity{OwnerID: id.OwnerID, SessionID: id.SessionID, TaskID: id.TaskID, TaskEpoch: id.TaskEpoch}, ParticipantID: id.ParticipantID, TurnID: "turn"}
 	policy := authority.Policy{ExpiresAt: now.Add(15 * time.Second), Workspaces: []authority.Scope{{WorkspaceID: "work", Root: "/work", Mode: authority.Subtree, Access: authority.WriteAccess}}, Capabilities: []authority.Capability{authority.Write}, Network: authority.NoNetwork, Commands: authority.NoCommands}
 	lease := &cpuLease{binding: binding, deadline: policy.ExpiresAt, participant: authority.Participant{ParticipantID: id.ParticipantID, Role: authority.Main, MutationOwnership: authority.TaskOwnership, Grant: authority.Grant{Identity: binding.Identity, AuthorityID: "grant", ComputerID: "computer", ComputerGeneration: 7, Policy: policy}}, approval: authority.Approval{OwnerID: id.OwnerID, ComputerID: "computer", Generation: 7, ExpiresAt: now.Add(time.Hour), Workspaces: []authority.ApprovedWorkspace{{WorkspaceID: "work", Root: "/work", Access: authority.WriteAccess, RootIdentity: authority.RootIdentity{Device: "7", Inode: "2"}}}, Capabilities: []authority.Capability{authority.Write}}}

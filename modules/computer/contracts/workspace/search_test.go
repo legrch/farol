@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/legrch/farol/pkg/fake"
+
 	"github.com/legrch/farol/modules/computer/app/port"
 	workspacesvc "github.com/legrch/farol/modules/computer/app/services/workspace"
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -13,10 +15,6 @@ import (
 
 // Contract/application collaboration with external policy/native doubles only.
 // This is not production transport, native filesystem or current-task evidence.
-type searchContractClock struct{ now time.Time }
-
-func (c searchContractClock) Now() time.Time { return c.now }
-
 type searchContractAccess struct {
 	p       *authority.Participant
 	a       *authority.Approval
@@ -65,7 +63,7 @@ func searchContractFixture(t *testing.T) (*Contract, *searchContractNative, *sea
 	}
 	access := &searchContractAccess{p: p, a: a, binding: port.TaskBinding{Identity: identity, ParticipantID: "main", TurnID: "turn"}}
 	n := &searchContractNative{result: &port.SearchResponse{Binding: &port.DirectoryBinding{Root: "/work", RelativePath: ".", ApprovedRoot: port.Root{Path: "/work", Device: "1", Inode: "2"}}, Matches: []port.SearchMatch{{Path: "Note with spaces 🌊.md", Line: 2, Text: "# Known Markdown", Truncated: true}}, ResultLimited: true, ScanLimited: true}}
-	service, err := workspacesvc.NewForExecution(access, n, searchContractClock{now})
+	service, err := workspacesvc.NewForExecution(access, n, fake.Clock{At: now})
 	if err != nil {
 		t.Fatal(err)
 	}

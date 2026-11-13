@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/legrch/farol/pkg/fake"
+
 	"github.com/legrch/farol/modules/computer/app/port"
 	app "github.com/legrch/farol/modules/computer/app/services/mutation"
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -62,7 +64,7 @@ func connectorContractFixture(t *testing.T) (*app.ConnectorService, *contractLea
 		},
 	}
 	store := &connectorContractStore{contractStore: records}
-	service, err := app.NewForConnectorExecution(selected, lease, store, native, contractDigest{}, &sync.Mutex{}, contractClock{now: time.Unix(1700000000, 0)})
+	service, err := app.NewForConnectorExecution(selected, lease, store, native, contractDigest{}, &sync.Mutex{}, fake.Clock{At: time.Unix(1700000000, 0)})
 	if err != nil {
 		t.Fatal(err)
 	}

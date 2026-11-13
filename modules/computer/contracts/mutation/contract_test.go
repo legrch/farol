@@ -3,9 +3,10 @@ package mutation
 import (
 	"context"
 	"errors"
-	mutationsvc "github.com/legrch/farol/modules/computer/app/services/mutation"
 	"strings"
 	"testing"
+
+	mutationsvc "github.com/legrch/farol/modules/computer/app/services/mutation"
 )
 
 func fixture() CheckRequest {

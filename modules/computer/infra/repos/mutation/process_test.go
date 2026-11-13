@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/legrch/farol/pkg/fake"
+
 	"github.com/legrch/farol/modules/computer/app/port"
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -377,10 +379,6 @@ func (e *processTestLease) WithSnapshot(_ context.Context, _ string, inspect fun
 	return inspect(port.AccessSnapshot{Participant: &p, Approval: &a})
 }
 
-type processTestClock struct{ now time.Time }
-
-func (c processTestClock) Now() time.Time { return c.now }
-
 type processTestSelected struct {
 	seal     processsvc.Seal
 	calls    int
@@ -419,11 +417,11 @@ func (c *processTestChild) Read(context.Context, processsvc.Window) (*processsvc
 func (c *processTestChild) Cancel(context.Context) (*processsvc.CancelReceipt, error) {
 	return &processsvc.CancelReceipt{Handle: c.Handle(), Status: processsvc.CancelRequested}, nil
 }
-func processServiceFixture(i processsvc.Intent, s processsvc.ConnectorReservationScope) (*processTestLease, *processTestSelected, processTestClock) {
+func processServiceFixture(i processsvc.Intent, s processsvc.ConnectorReservationScope) (*processTestLease, *processTestSelected, fake.Clock) {
 	policy := authority.Policy{Workspaces: []authority.Scope{{WorkspaceID: i.Seal.WorkspaceID, Root: i.Seal.Root, Mode: authority.Subtree, Access: authority.ReadAccess}}, Capabilities: []authority.Capability{authority.Shell}, Commands: authority.WorkspaceCommands, Network: authority.NoNetwork, ExpiresAt: i.Deadline.Add(time.Hour)}
 	e := &processTestLease{intent: i, p: authority.Participant{ParticipantID: i.Binding.ParticipantID, Role: authority.Main, MutationOwnership: authority.NoOwnership, Grant: authority.Grant{Identity: i.Binding.Identity, AuthorityID: "authority", ComputerID: s.ComputerID, ComputerGeneration: s.ComputerGeneration, Policy: policy}},
 		a: authority.Approval{OwnerID: s.OwnerID, ComputerID: s.ComputerID, Generation: s.ComputerGeneration, Workspaces: []authority.ApprovedWorkspace{{WorkspaceID: i.Seal.WorkspaceID, Root: i.Seal.Root, Access: authority.ReadAccess, RootIdentity: i.Seal.RootIdentity, ShellVerified: true}}, Capabilities: []authority.Capability{authority.Shell}, Commands: authority.WorkspaceCommands, Network: authority.NoNetwork, ExpiresAt: policy.ExpiresAt}}
-	return e, &processTestSelected{seal: i.Seal, child: &processTestChild{}}, processTestClock{i.Deadline.Add(-time.Second)}
+	return e, &processTestSelected{seal: i.Seal, child: &processTestChild{}}, fake.Clock{At: i.Deadline.Add(-time.Second)}
 }
 func TestConnectorProcessServiceRetainedReservationCannotSpawnAgain(t *testing.T) {
 	for _, mode := range []string{"started", "lost-spawn-ack", "lost-reserve-ack", "incomplete-cohort"} {
