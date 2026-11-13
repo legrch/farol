@@ -1,15 +1,18 @@
 // Closed-contour egress probe for the VM executor: the bundled driver runs
 // INSIDE the guest and reports, per synthetic endpoint, whether an outbound
 // connection was observed. These reserved-address probes are DIAGNOSTIC ONLY:
-// failure also occurs on online machines and does not establish default-deny.
-// They must never be used as a product E2E or containment PASS.
+// every target (RFC 5737/3849 addresses, an .invalid name) is unreachable or
+// unresolvable from a fully networked machine as well, so a non-connectable
+// report proves nothing about isolation and never establishes default-deny.
+// It must never be used as a product E2E or containment PASS.
 //
-// The report is the receipt; interpretation is the runner's job. In the
-// offline guest every endpoint must be non-connectable; the same bundle run
-// on a networked host legitimately reports connectable endpoints, which is
-// why the result records the environment instead of asserting closure.
-// NOT guest evidence by itself: it becomes evidence only when the staged
-// bundle's manifest digests are recorded by an offline-machine run.
+// The probe can only CONTRADICT the offline configuration: the runner
+// (tooling/vm-smoke.py) fails the run with CLOSED_CONTOUR_EGRESS_OBSERVED and
+// records networkPolicy.runtimeEgress = "observed" when any endpoint is
+// connectable. Otherwise the policy stays "machine.json-offline-configured"
+// with runtimeEgress "not-verified". The host tests never run this probe
+// against the real network; tooling/vm-e2e/driver-entries.synthetic.test.mjs
+// exercises it with in-memory DNS/TCP doubles.
 import { writeResult } from "./driver-runtime.mjs";
 import net from "node:net";
 import dns from "node:dns";

@@ -1,18 +1,31 @@
-// Host-side tests for the egress probe bundle: the probe must bundle cleanly,
-// run under plain node from an empty cwd, and produce a structured per-endpoint
-// report. Whether endpoints are connectable depends on the environment (a
-// networked host legitimately differs from the offline guest), so these tests
-// assert the report SHAPE and the reservation of the synthetic endpoints —
-// never a closure claim.
+// Host-side tests for the egress probe bundle. vm:test is closed and offline:
+// these tests never run the probe, so no DNS query or TCP SYN leaves the host.
+// The probe's behaviour is exercised with in-memory DNS/TCP doubles in
+// driver-entries.synthetic.test.mjs; here only bundling is checked, under a
+// guard that fails if anything reaches node:net or node:dns.
 import assert from "node:assert/strict";
+import dns from "node:dns";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { bundleDriver, BUNDLE_FILE } from "./bundle-driver.mjs";
-import { runProbe } from "./egress-probe-entry.mjs";
+
+const egress = [];
+for (const [module, names] of [
+  [net, ["connect", "createConnection"]],
+  [dns, ["resolve", "resolve4", "resolve6", "lookup"]],
+]) {
+  for (const name of names) {
+    module[name] = (...args) => {
+      egress.push([name, String(args[0])]);
+      throw Error("vm:test must not perform network I/O");
+    };
+  }
+}
+await import("./egress-probe-entry.mjs"); // importing alone never probes
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..", "..");
@@ -47,64 +60,6 @@ test("probe bundles into a self-contained driver with a complete manifest", () =
   }
 });
 
-test("probe report shape records every synthetic endpoint without provider contact", async () => {
-  const report = await runProbe();
-  assert.equal(report.scenario, "vm-e2e-egress-probe");
-  assert.equal(report.probes.length, 5);
-  const endpoints = new Set(report.probes.map((probe) => probe.endpoint));
-  for (const reserved of [
-    "192.0.2.1:443",
-    "198.51.100.1:443",
-    "203.0.113.1:443",
-    "2001:db8::1:443",
-    "invalid.test.invalid",
-  ]) {
-    assert.ok(endpoints.has(reserved), `missing reserved endpoint ${reserved}`);
-  }
-  assert.equal(typeof report.externalConnectable, "boolean");
-  for (const probe of report.probes) {
-    assert.equal(typeof probe.connectable, "boolean");
-    assert.equal(typeof probe.detail, "string");
-    assert.ok(Number.isFinite(probe.milliseconds));
-  }
-});
-
-test("bundled probe runs under plain node from an empty cwd and writes its result", () => {
-  const out = fs.mkdtempSync(path.join(os.tmpdir(), "egress-probe-bundle-"));
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "egress-probe-run-"));
-  try {
-    const manifest = bundleProbe(out);
-    const bundlePath = path.join(out, BUNDLE_FILE);
-    // The bundler records the declared runtime but never copies it; staging
-    // the binary is the VM step's job. Host tests run the recorded binary.
-    const runtime = manifest.node?.path;
-    assert.ok(
-      runtime && fs.existsSync(runtime),
-      "manifest records a real runtime",
-    );
-    const resultDir = path.join(cwd, "results");
-    const run = spawnSync(runtime, [bundlePath], {
-      cwd,
-      encoding: "utf8",
-      timeout: 60000,
-      env: { ...process.env, VM_E2E_RESULT_DIR: resultDir },
-    });
-    assert.equal(run.status, 0, `probe exited cleanly: ${run.stderr}`);
-    const result = JSON.parse(
-      fs.readFileSync(path.join(resultDir, "result.json"), "utf8"),
-    );
-    assert.equal(result.scenario, "vm-e2e-egress-probe");
-    assert.equal(result.status, "REPORTED");
-    assert.equal(result.probes.length, 5);
-    // The honest receipt: the run records the environment it observed, whether
-    // networked host or offline guest. This host-side run makes no claim.
-    assert.equal(typeof result.externalConnectable, "boolean");
-    const residue = fs
-      .readdirSync(resultDir)
-      .filter((name) => name.endsWith(".tmp"));
-    assert.deepEqual(residue, [], "result write left no temp residue");
-  } finally {
-    fs.rmSync(out, { recursive: true, force: true });
-    fs.rmSync(cwd, { recursive: true, force: true });
-  }
+test("vm:test never performs DNS or TCP egress for the probe", () => {
+  assert.deepEqual(egress, []);
 });

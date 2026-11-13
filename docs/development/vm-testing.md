@@ -167,6 +167,14 @@ receipt plus the instance provenance. Driver entries committed so far: the egres
 fail-closed missing route). The first real closed run also requires a qualified guest executor. The legacy Terminal route now refuses before typing unless the helper issues the versioned shell-readiness capability; frontmost Terminal or a screenshot is insufficient. Current native AppService supports a finite installed lifecycle, not arbitrary driver or shell execution. Nothing has claimed a closed-contour PASS. A closed run
 refuses to adopt an already-running VM and rechecks its configuration after startup. These
 checks do not attest the live VZ network attachment; runtime isolation needs separate evidence.
+The run's `networkPolicy` therefore says `machine.json-offline-configured` with
+`runtimeEgress: not-verified`, never "verified". The egress probe cannot prove isolation:
+its reserved targets are unreachable from an online guest too. It can only contradict the
+configuration: any connectable endpoint (`externalConnectable: true`) fails the run with
+`CLOSED_CONTOUR_EGRESS_OBSERVED` and records `runtimeEgress: observed`. A meaningful
+positive control (a target reachable only when the guest is networked, such as a host
+listener on the NAT gateway recorded by terminal-mac) is not implemented. `vm:test` never
+runs the probe against the network; it uses in-memory DNS/TCP doubles and loopback only.
 
 ## Native installed lifecycle and Dev artifacts
 
@@ -310,7 +318,7 @@ node --test tooling/vm-smoke/vm-dev-controller.test.mjs
 
 These use synthetic receipts and injected process/module stubs, not VM boot or
 installed helper execution. The existing `vm:test` aggregate additionally
-includes unrelated VM and network-probe tests and should not be invoked as a
+includes unrelated VM and offline network-probe tests and should not be invoked as a
 live QA substitute. For a real session, separately record the approved
 toolchain, source/build/receipt hashes, clone/base receipt, helper version,
 runtime-read-only grant, guest permissions, bound native readiness, visual

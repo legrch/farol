@@ -93,7 +93,7 @@ SAFE_FAILURE_CODES = frozenset((
     'E2E_STATUS_UNSUPPORTED', 'E2E_PROCESS_UNCONFIRMED', 'E2E_PROCESS_FAILED', 'E2E_ASSERTIONS_FAILED',
     'E2E_TEARDOWN_UNCONFIRMED', 'E2E_EVIDENCE_WRITE_FAILED', 'E2E_PROCESS_MISSING', 'E2E_PROCESS_UNSAFE',
     'E2E_PROCESS_CHANGED', 'E2E_PROCESS_JSON_INVALID', 'E2E_RESULT_MISSING', 'E2E_RESULT_UNSAFE',
-    'E2E_RESULT_CHANGED', 'E2E_RESULT_JSON_INVALID',
+    'E2E_RESULT_CHANGED', 'E2E_RESULT_JSON_INVALID', 'CLOSED_CONTOUR_EGRESS_OBSERVED',
     # finite native guest app service and data-only payload producer
     'APP_PAYLOAD_UNQUALIFIED', 'APP_PAYLOAD_UNSAFE', 'APP_PAYLOAD_DIGEST',
     'APP_PAYLOAD_TOO_LARGE', 'APP_PAYLOAD_INCOMPATIBLE',
@@ -1712,6 +1712,12 @@ class Runner:
                 result_error = str(error)
         if reported == 'FAIL':
             status, reason = 'FAIL', 'E2E_ASSERTIONS_FAILED'
+        elif self.egress_observed(receipt if result_error is None else None):
+            # A diagnostic probe cannot prove default-deny, but an observed
+            # outbound connection disproves the offline configuration.
+            status, reason = 'FAIL', 'CLOSED_CONTOUR_EGRESS_OBSERVED'
+            if self.network_policy is not None:
+                self.network_policy = dict(self.network_policy, runtimeEgress='observed')
         elif not process_ok:
             status, reason = 'UNKNOWN', 'E2E_PROCESS_UNCONFIRMED'
         elif process['exitCode'] != 0:
@@ -1731,6 +1737,17 @@ class Runner:
                             if (self.out / ('e2e-' + name + '.raw.json')).is_file()},
             # Current declared drivers are probes, not the product's ordinary E2E.
             'qualificationEligible': False}
+
+    @staticmethod
+    def egress_observed(receipt):
+        """True when an admitted receipt reports any connectable endpoint."""
+        if not isinstance(receipt, dict) or not isinstance(receipt.get('details'), dict):
+            return False
+        details = receipt['details']
+        probes = details.get('probes')
+        return (details.get('externalConnectable') is True or
+                (isinstance(probes, list) and
+                 any(isinstance(item, dict) and item.get('connectable') is True for item in probes)))
 
     def execute_e2e(self):
         token = f'{self.sequence + 1:04d}-e2e'
@@ -1859,9 +1876,10 @@ class Runner:
         machine.json is the VM configuration source of truth: terminal-mac
         builds the VZ virtual-machine configuration from machine.network
         (source-verified fact), so a recorded network == false proves the VM
-        CONFIG is offline. This is config provenance only — no runtime egress
-        probe exists here and none is claimed; the in-guest negative probe
-        stays a separate receipt.
+        CONFIG is offline. This is config provenance only, so the receipt says
+        "configured", not "verified": the in-guest egress probe cannot prove
+        isolation (its reserved targets are unreachable from an online guest
+        too). It can only contradict it, and a contradiction fails the run.
         """
         file = self.machine / 'machine.json'
         try:
@@ -1888,7 +1906,7 @@ class Runner:
         require(isinstance(machine, dict) and machine.get('name') == self.machine.name, 'VM_MACHINE_FILE_INVALID')
         require(machine.get('network') is False, 'CLOSED_REQUIRES_OFFLINE_MACHINE')
         return {'mode': 'guest-offline-local-fixtures', 'machineNetwork': False,
-                'receipt': 'machine.json-offline-verified'}
+                'receipt': 'machine.json-offline-configured', 'runtimeEgress': 'not-verified'}
 
     def run(self):
         with (self.machine / '.farol-smoke.lock').open('a') as lock:

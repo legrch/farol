@@ -248,18 +248,32 @@ class E2EResultAdmissionTests(unittest.TestCase):
         self.assertRegex(child.stdout, r'(?m)^# tests [1-9]\d*$')
         self.assertIn('# fail 0', child.stdout)
 
-    def test_reported_is_diagnostic_even_when_it_observes_connectivity(self):
-        def mutate(file):
-            value = json.loads(file.read_text())
-            value.setdefault('details', {})['externalConnectable'] = True
-            file.write_text(json.dumps(value))
-        runner, code, result, _ = self.drive(status='REPORTED', mutate=mutate)
+    def test_observed_egress_fails_the_run_and_downgrades_network_policy(self):
+        for name, details in (('flag', {'externalConnectable': True}),
+                              ('probe', {'externalConnectable': False,
+                                         'probes': [{'endpoint': '192.0.2.1:443', 'connectable': True}]})):
+            with self.subTest(case=name):
+                def mutate(file, details=details):
+                    value = json.loads(file.read_text())
+                    value.setdefault('details', {}).update(details)
+                    file.write_text(json.dumps(value))
+                runner, code, result, _ = self.drive(status='REPORTED', mutate=mutate)
+                self.assertEqual(code, 1, result)
+                self.assertEqual(result['test']['status'], 'FAIL')
+                self.assertEqual(result['e2e']['reason'], 'CLOSED_CONTOUR_EGRESS_OBSERVED')
+                self.assertEqual(result['status'], 'FAIL')
+                self.assertEqual(result['networkPolicy']['runtimeEgress'], 'observed')
+                self.assertNotIn('verified', result['networkPolicy']['receipt'])
+
+    def test_reported_probe_without_connectivity_stays_diagnostic_and_unverified(self):
+        runner, code, result, _ = self.drive(status='REPORTED')
         self.assertEqual(code, 0, result)
-        self.assertEqual(result.get('test', {}).get('status'), 'REPORTED', result)
-        self.assertEqual(result['e2e']['status'], 'REPORTED')
-        self.assertEqual(result['e2e']['evidenceClass'], 'diagnostic')
-        self.assertFalse(result['e2e']['qualificationEligible'])
+        self.assertEqual(result['test']['status'], 'REPORTED')
         self.assertEqual(result['status'], 'NEEDS_REVIEW')
+        self.assertFalse(result['e2e']['qualificationEligible'])
+        self.assertEqual(result['networkPolicy'], {
+            'mode': 'guest-offline-local-fixtures', 'machineNetwork': False,
+            'receipt': 'machine.json-offline-configured', 'runtimeEgress': 'not-verified'})
 
 
 if __name__ == '__main__':

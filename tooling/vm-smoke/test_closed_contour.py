@@ -29,7 +29,7 @@ PNG = b'\x89PNG\r\n\x1a\n' + b'synthetic-capture'
 BUNDLE_TEXT = '// synthetic vm-e2e driver bundle; no scenario, no network\n'
 NODE_TEXT = '#!/bin/sh\n# synthetic pinned node stand-in, never executed\n'
 NETWORK_POLICY = {'mode': 'guest-offline-local-fixtures', 'machineNetwork': False,
-                  'receipt': 'machine.json-offline-verified'}
+                  'receipt': 'machine.json-offline-configured', 'runtimeEgress': 'not-verified'}
 PACKAGE_RESULT_KEYS = {'status', 'lifecycle', 'ui', 'tunnel', 'profile', 'version',
                        'archiveSha256', 'initial', 'stopped', 'relaunched', 'menu',
                        'cleanup', 'phases', 'lease'}
