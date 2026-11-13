@@ -5500,23 +5500,8 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/boot/darwin.go",
-      "detail": "File name outside the admitted vocabulary: darwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/darwin.go",
-      "detail": "File name outside the admitted vocabulary: darwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/computer/infra/filesystem/edit.go",
       "detail": "File name outside the admitted vocabulary: edit"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/linux.go",
-      "detail": "File name outside the admitted vocabulary: linux"
     },
     {
       "code": "GO_FILE_WORD",
@@ -5530,73 +5515,13 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/mutationdarwin.go",
-      "detail": "File name outside the admitted vocabulary: mutationdarwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/mutationunsupported.go",
-      "detail": "File name outside the admitted vocabulary: mutationunsupported"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/computer/infra/filesystem/observe.go",
       "detail": "File name outside the admitted vocabulary: observe"
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/publicationguard.go",
-      "detail": "File name outside the admitted vocabulary: publicationguard"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/computer/infra/filesystem/publish.go",
       "detail": "File name outside the admitted vocabulary: publish"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/remove.go",
-      "detail": "File name outside the admitted vocabulary: remove"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/scratchcleanupdarwin.go",
-      "detail": "File name outside the admitted vocabulary: scratchcleanupdarwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/scratchcleanupunsupported.go",
-      "detail": "File name outside the admitted vocabulary: scratchcleanupunsupported"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/scratchdirectorydarwin.go",
-      "detail": "File name outside the admitted vocabulary: scratchdirectorydarwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/scratchfilecleanupdarwin.go",
-      "detail": "File name outside the admitted vocabulary: scratchfilecleanupdarwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/scratchfiledarwin.go",
-      "detail": "File name outside the admitted vocabulary: scratchfiledarwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/scratchreadbinding.go",
-      "detail": "File name outside the admitted vocabulary: scratchreadbinding"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/scratchstagedarwin.go",
-      "detail": "File name outside the admitted vocabulary: scratchstagedarwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/scratchstageunsupported.go",
-      "detail": "File name outside the admitted vocabulary: scratchstageunsupported"
     },
     {
       "code": "GO_FILE_WORD",
@@ -5885,11 +5810,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/repos/access/cleanup.go",
-      "detail": "File name outside the admitted vocabulary: cleanup"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/computer/infra/repos/access/closedinspection.go",
       "detail": "File name outside the admitted vocabulary: closedinspection"
     },
@@ -5917,11 +5837,6 @@
       "code": "GO_FILE_WORD",
       "file": "modules/computer/infra/repos/access/qualification.go",
       "detail": "File name outside the admitted vocabulary: qualification"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/repos/access/stage.go",
-      "detail": "File name outside the admitted vocabulary: stage"
     },
     {
       "code": "GO_FILE_WORD",
@@ -6247,11 +6162,6 @@
       "code": "GO_FILE_WORD",
       "file": "modules/release/infra/native/appidentity/xml.go",
       "detail": "File name outside the admitted vocabulary: xml"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/apptree/cleanup.go",
-      "detail": "File name outside the admitted vocabulary: cleanup"
     },
     {
       "code": "GO_FILE_WORD",
@@ -6677,16 +6587,6 @@
       "code": "GO_FILE_WORD",
       "file": "pkg/ipc/json.go",
       "detail": "File name outside the admitted vocabulary: json"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "transport/desktop/connectordarwin.go",
-      "detail": "File name outside the admitted vocabulary: connectordarwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "transport/desktop/connectorunsupported.go",
-      "detail": "File name outside the admitted vocabulary: connectorunsupported"
     },
     {
       "code": "GO_FILE_WORD",
@@ -8605,8 +8505,8 @@
     },
     {
       "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/boot/darwin.go",
-      "detail": "Behavior without darwin_test.go"
+      "file": "modules/computer/infra/boot/boot_darwin.go",
+      "detail": "Behavior without boot_darwin_test.go"
     },
     {
       "code": "GO_TEST_MISSING",
@@ -8615,53 +8515,13 @@
     },
     {
       "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/filesystem/darwin.go",
-      "detail": "Behavior without darwin_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/filesystem/linux.go",
-      "detail": "Behavior without linux_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
       "file": "modules/computer/infra/filesystem/mutate.go",
       "detail": "Behavior without mutate_test.go"
     },
     {
       "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/filesystem/mutationdarwin.go",
-      "detail": "Behavior without mutationdarwin_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
       "file": "modules/computer/infra/filesystem/remove.go",
       "detail": "Behavior without remove_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/filesystem/scratchcleanupunsupported.go",
-      "detail": "Behavior without scratchcleanupunsupported_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/filesystem/scratchdirectorydarwin.go",
-      "detail": "Behavior without scratchdirectorydarwin_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/filesystem/scratchfiledarwin.go",
-      "detail": "Behavior without scratchfiledarwin_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/filesystem/scratchreadbinding.go",
-      "detail": "Behavior without scratchreadbinding_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/filesystem/scratchstageunsupported.go",
-      "detail": "Behavior without scratchstageunsupported_test.go"
     },
     {
       "code": "GO_TEST_MISSING",
@@ -9305,13 +9165,8 @@
     },
     {
       "code": "GO_TEST_MISSING",
-      "file": "transport/desktop/connectordarwin.go",
-      "detail": "Behavior without connectordarwin_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "transport/desktop/connectorunsupported.go",
-      "detail": "Behavior without connectorunsupported_test.go"
+      "file": "transport/desktop/unsupported.go",
+      "detail": "Behavior without unsupported_test.go"
     },
     {
       "code": "GO_TEST_ORPHAN",
@@ -9660,11 +9515,6 @@
     },
     {
       "code": "GO_TEST_ORPHAN",
-      "file": "modules/computer/infra/filesystem/scratchmutationdarwin_test.go",
-      "detail": "No scratchmutationdarwin.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
       "file": "modules/computer/infra/filesystem/scratchpublicationnative_test.go",
       "detail": "No scratchpublicationnative.go beside this test"
     },
@@ -9672,11 +9522,6 @@
       "code": "GO_TEST_ORPHAN",
       "file": "modules/computer/infra/filesystem/scratchread_test.go",
       "detail": "No scratchread.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/computer/infra/filesystem/scratchreaddarwin_test.go",
-      "detail": "No scratchreaddarwin.go beside this test"
     },
     {
       "code": "GO_TEST_ORPHAN",
@@ -10357,11 +10202,6 @@
       "code": "GO_TEST_ORPHAN",
       "file": "transport/desktop/connectorcloseassertion_test.go",
       "detail": "No connectorcloseassertion.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "transport/desktop/connectornative_test.go",
-      "detail": "No connectornative.go beside this test"
     },
     {
       "code": "GO_TEST_ORPHAN",
