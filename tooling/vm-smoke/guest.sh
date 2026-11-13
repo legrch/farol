@@ -23,7 +23,9 @@ case "$phase" in
     [[ "$limit" =~ ^[0-9]+$ ]] && [ "$limit" -ge 30 ] && [ "$limit" -le 600 ]
     last=""
     until_time=$((SECONDS + limit))
-    printf '%s\n' READY > "$report/server.result"
+    # Publish atomically: the host polls for the name and refuses an empty file.
+    printf '%s\n' READY > "$report/server.result.tmp"
+    mv "$report/server.result.tmp" "$report/server.result"
     while [ "$SECONDS" -lt "$until_time" ]; do
       request="$(cat "$stage/request" 2>/dev/null || true)"
       if [ -n "$request" ] && [ "$request" != "$last" ]; then
@@ -67,7 +69,8 @@ case "$phase" in
     ;;
   cleanup)
     work="$(cat "$report/guest-work.txt")"
-    case "$work" in "$HOME"/Library/Caches/farol-vm-smoke.??????) ;; *) exit 74 ;; esac
+    # Exactly the mktemp suffix: a case glob '?' would also match '/'.
+    [[ "$work" =~ ^"$HOME"/Library/Caches/farol-vm-smoke\.[A-Za-z0-9]{6}$ ]] || exit 74
     [ -d "$work" ] && [ ! -L "$work" ]
     /bin/rm -rf "$work"
     finish READY
@@ -149,8 +152,11 @@ case "$phase" in
     [ -f "$context" ] && [ ! -L "$context" ]
     [ ! -e "$result_dir/result.json" ] && [ ! -e "$result_dir/process.json" ]
     context_sha="$(/usr/bin/shasum -a 256 "$context" | /usr/bin/cut -d ' ' -f 1)"
-    export VM_E2E_RESULT_DIR="$result_dir" VM_E2E_CONTEXT_FILE="$context"
-    if "$node_bin" "$bundle"; then driver_exit=0; else driver_exit=$?; fi
+    # A pinned, minimal environment: NODE_OPTIONS, NODE_PATH or similar from
+    # the guest login session must not load code beside the verified bundle.
+    if /usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin \
+      VM_E2E_RESULT_DIR="$result_dir" VM_E2E_CONTEXT_FILE="$context" \
+      "$node_bin" "$bundle"; then driver_exit=0; else driver_exit=$?; fi
     printf '{"schema":"farol.vm-e2e.process/1","runId":"%s","token":"%s","contextSha256":"%s","exitCode":%d}\n' \
       "$run_id" "$token" "$context_sha" "$driver_exit" > "$result_dir/process.json.tmp"
     mv "$result_dir/process.json.tmp" "$result_dir/process.json"
