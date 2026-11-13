@@ -146,10 +146,10 @@ tasks:
   vm:test:
     desc: Check VM smoke isolation, archive admission and bounded failure handling without a real VM
     cmds:
-      - /usr/bin/python3 -B -m unittest discover -s tooling/vm-smoke -p 'test_*.py'
-      - /usr/bin/python3 -B -m unittest discover -s tooling -p 'test_vm_machine.py'
-      - node --test tooling/vm-smoke/vm-dev-controller.test.mjs tooling/vm-smoke/dev-artifact.test.mjs tooling/vm-smoke/inspect.test.mjs tooling/vm-smoke/import-dev.test.mjs tooling/vm-smoke/import-dev-final-publish.regression.mjs tooling/vm-smoke/entry.test.mjs tooling/vm-smoke/quit-proof.test.mjs tooling/vm-smoke/no-tunnel.test.mjs tooling/vm-e2e/driver.test.mjs tooling/vm-e2e/egress-probe.test.mjs tooling/vm-e2e/fixture-probe.test.mjs
-      - node --experimental-vm-modules --test tooling/vm-e2e/driver-entries.synthetic.test.mjs tooling/vm-e2e/result-contract.test.mjs
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- /usr/bin/python3 -B -m unittest discover -s tooling/vm-smoke -p 'test_*.py'
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- /usr/bin/python3 -B -m unittest discover -s tooling -p 'test_vm_machine.py'
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node --test tooling/vm-smoke/vm-dev-controller.test.mjs tooling/vm-smoke/dev-artifact.test.mjs tooling/vm-smoke/inspect.test.mjs tooling/vm-smoke/import-dev.test.mjs tooling/vm-smoke/import-dev-final-publish.regression.mjs tooling/vm-smoke/entry.test.mjs tooling/vm-smoke/quit-proof.test.mjs tooling/vm-smoke/no-tunnel.test.mjs tooling/vm-e2e/driver.test.mjs tooling/vm-e2e/egress-probe.test.mjs tooling/vm-e2e/fixture-probe.test.mjs
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node --experimental-vm-modules --test tooling/vm-e2e/driver-entries.synthetic.test.mjs tooling/vm-e2e/result-contract.test.mjs
 
   dev:
     # The owner's one development command: pick the declared toolchain, make
