@@ -175,9 +175,7 @@ it("publishes the toolbar menu through the host presentation owner without start
     );
     await act(async () =>
       host
-        .querySelector<HTMLButtonElement>(
-          '[aria-label="More checks"]',
-        )!
+        .querySelector<HTMLButtonElement>('[aria-label="More checks"]')!
         .click(),
     );
     expect(overlay).toHaveBeenCalledExactlyOnceWith("connection-tests");
@@ -285,11 +283,7 @@ it.each([
   ],
   ["refused", "CHATGPT_COMPOSER_DRAFT_PRESENT", "Your draft was preserved"],
   ["refused", "CHATGPT_APP_SELECTION_CONFLICT", "Message blocked before send"],
-  [
-    "refused",
-    "CHATGPT_CONVERSATION_UNCONFIRMED",
-    "The ping was not sent",
-  ],
+  ["refused", "CHATGPT_CONVERSATION_UNCONFIRMED", "The ping was not sent"],
   ["unknown", "CHATGPT_APP_SELECTION_CONFLICT", "You can ping again"],
 ] as const)(
   "shows %s / %s without another send",
