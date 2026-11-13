@@ -249,7 +249,7 @@ func TestNativeRetainedTwoTurnResultsSurviveCleanSuccessorsWithoutSend(t *testin
 				t.Fatal("historical storage read lost exact result", err)
 			}
 		}
-		if next.browser.issued != 0 || p.sends != 2 {
+		if next.browser.queue.State().Issued != 0 || p.sends != 2 {
 			t.Fatal("storage read launched provider work")
 		}
 		// A further empty retirement must not erase the original stored bytes.

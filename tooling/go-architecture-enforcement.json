@@ -856,19 +856,7 @@
       "code": "GO_BOOT_LOGIC",
       "file": "boot/browserexchange.go",
       "detail": "conditions other than err != nil",
-      "amount": 18
-    },
-    {
-      "code": "GO_BOOT_LOGIC",
-      "file": "boot/browserexchange.go",
-      "detail": "for statements",
-      "amount": 1
-    },
-    {
-      "code": "GO_BOOT_LOGIC",
-      "file": "boot/browserexchange.go",
-      "detail": "select statements",
-      "amount": 3
+      "amount": 13
     },
     {
       "code": "GO_BOOT_LOGIC",
@@ -880,7 +868,7 @@
       "code": "GO_BOOT_LOGIC",
       "file": "boot/browserexchange.go",
       "detail": "top-level types beyond one namespace type",
-      "amount": 2
+      "amount": 1
     },
     {
       "code": "GO_BOOT_LOGIC",
@@ -2542,31 +2530,13 @@
       "code": "GO_BOOT_LOGIC",
       "file": "boot/settingsstore.go",
       "detail": "conditions other than err != nil",
-      "amount": 36
-    },
-    {
-      "code": "GO_BOOT_LOGIC",
-      "file": "boot/settingsstore.go",
-      "detail": "for statements",
-      "amount": 1
-    },
-    {
-      "code": "GO_BOOT_LOGIC",
-      "file": "boot/settingsstore.go",
-      "detail": "select statements",
-      "amount": 4
+      "amount": 29
     },
     {
       "code": "GO_BOOT_LOGIC",
       "file": "boot/settingsstore.go",
       "detail": "switch statements",
       "amount": 3
-    },
-    {
-      "code": "GO_BOOT_LOGIC",
-      "file": "boot/settingsstore.go",
-      "detail": "top-level types beyond one namespace type",
-      "amount": 2
     },
     {
       "code": "GO_BOOT_LOGIC",

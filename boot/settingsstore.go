@@ -5,27 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
-	"sync"
 	"time"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	delivery "github.com/legrch/farol/modules/computer/app/services/settingsdelivery"
+	"github.com/legrch/farol/pkg/exchange"
 	"github.com/legrch/farol/pkg/ipc"
 	"github.com/legrch/farol/transport/desktop"
 )
 
 var errSettingsStoreExchange = errors.New("settings_store_exchange_unavailable")
-
-type settingsStoreAnswer struct {
-	body json.RawMessage
-	err  error
-}
-type settingsStoreCall struct {
-	command              wire.SettingsStoreCommand
-	ctx                  context.Context
-	delivered, completed bool
-	answer               chan settingsStoreAnswer
-}
 
 // SettingsStoreExchange is one inherited-pipe reciprocal storage port. The
 // existing host owns config.json mechanics; the Go service owns transitions.
@@ -34,14 +23,9 @@ type settingsStoreCall struct {
 // No reconnect, replacement store, disk reload or redelivery can settle an
 // unknown call: the first one fences this exchange for its whole lifetime.
 type SettingsStoreExchange struct {
-	ctx              context.Context
-	peer             wire.Context
-	mu               sync.Mutex
-	pending          *settingsStoreCall
-	ready            chan struct{}
-	stopped          chan struct{}
-	issued           uint64 // observation only: calls issued this lifetime, never a quota
-	fenced, quiesced bool
+	ctx   context.Context
+	peer  wire.Context
+	queue *exchange.Queue[json.RawMessage]
 }
 
 var _ delivery.Store = (*SettingsStoreExchange)(nil)
@@ -50,7 +34,11 @@ func NewSettingsStoreExchange(ctx context.Context, peer wire.Context) (*Settings
 	if ctx == nil || ctx.Err() != nil || !validIngressID(peer.ProfileId) || !validIngressID(peer.BackendGeneration) {
 		return nil, errSettingsStoreExchange
 	}
-	return &SettingsStoreExchange{ctx: ctx, peer: peer, ready: make(chan struct{}, 1), stopped: make(chan struct{})}, nil
+	queue, err := exchange.New[json.RawMessage](ctx, 1)
+	if err != nil {
+		return nil, errSettingsStoreExchange
+	}
+	return &SettingsStoreExchange{ctx: ctx, peer: peer, queue: queue}, nil
 }
 
 func (s *SettingsStoreExchange) Load(ctx context.Context) (delivery.Snapshot, error) {
@@ -90,7 +78,7 @@ func (s *SettingsStoreExchange) CompareAndSet(ctx context.Context, change delive
 	return delivery.SaveResult{Publication: delivery.PublicationUnknown}, nil
 }
 
-func (s *SettingsStoreExchange) fence() { s.mu.Lock(); s.fenced = true; s.mu.Unlock() }
+func (s *SettingsStoreExchange) fence() { s.queue.Fence() }
 
 func (s *SettingsStoreExchange) exchange(ctx context.Context, kind string, change *delivery.Change) (answer json.RawMessage, err error) {
 	if ctx == nil || ctx.Err() != nil || s.ctx.Err() != nil {
@@ -100,8 +88,6 @@ func (s *SettingsStoreExchange) exchange(ctx context.Context, kind string, chang
 	if d, ok := ctx.Deadline(); ok && d.Before(until) {
 		until = d
 	}
-	callCtx, cancel := context.WithDeadline(ctx, until)
-	defer cancel()
 	deadline := strconv.FormatInt(until.UnixMilli(), 10)
 	var body any
 	shape := ""
@@ -124,130 +110,63 @@ func (s *SettingsStoreExchange) exchange(ctx context.Context, kind string, chang
 	if err != nil {
 		return nil, err
 	}
-	call := &settingsStoreCall{command: wire.SettingsStoreCommand{CommandId: id, Kind: kind, Body: raw}, ctx: callCtx, answer: make(chan settingsStoreAnswer, 1)}
-	s.mu.Lock()
-	if s.fenced || s.quiesced || s.pending != nil {
-		s.mu.Unlock()
+	call, err := s.queue.Submit(ctx, until, exchange.Command{ID: id, Kind: kind, Body: raw})
+	if err != nil {
 		return nil, errSettingsStoreExchange
 	}
-	s.issued++
-	s.pending = call
-	// This is a wake-up, not custody of the command. Only next's locked
-	// deadline check may deliver the original pending call. A stale wake-up
-	// cannot strand or replace it when an earlier poll expires.
-	select {
-	case s.ready <- struct{}{}:
-	default:
-	}
-	s.mu.Unlock()
+	// Removing the call and fencing are one step, so no other call can take
+	// the slot of an unknown one.
 	defer func() {
-		s.mu.Lock()
-		s.pending = nil
 		if err != nil {
-			s.fenced = true
+			call.Fence()
+		} else {
+			call.Release()
 		}
-		s.mu.Unlock()
 	}()
-	select {
-	case reply := <-call.answer:
-		if callCtx.Err() != nil || s.ctx.Err() != nil {
-			return nil, errSettingsStoreExchange
-		}
-		return reply.body, reply.err
-	case <-callCtx.Done():
-		return nil, callCtx.Err()
-	case <-s.ctx.Done():
-		return nil, s.ctx.Err()
+	answer, err = call.Wait()
+	if err == nil && (call.Err() != nil || s.ctx.Err() != nil) {
+		return nil, errSettingsStoreExchange
 	}
+	return answer, err
 }
 
 func (s *SettingsStoreExchange) next(ctx context.Context, deadline uint64) (*wire.SettingsStoreCommand, error) {
 	if ctx == nil || ctx.Err() != nil {
 		return nil, errSettingsStoreExchange
 	}
-	if deadline > 9007199254740991 {
+	until, err := exchange.Deadline(deadline)
+	if err != nil {
 		return nil, errSettingsStoreExchange
 	}
-	until := time.UnixMilli(int64(deadline))
-	if remaining := time.Until(until); remaining <= 0 || remaining > 15*time.Second {
-		return nil, errSettingsStoreExchange
+	command, err := s.queue.Next(ctx, until)
+	if err != nil || command == nil {
+		return nil, err
 	}
-	wait, cancel := context.WithDeadline(ctx, until)
-	defer cancel()
-	for {
-		s.mu.Lock()
-		if ctx.Err() != nil || s.ctx.Err() != nil || s.fenced {
-			s.mu.Unlock()
-			return nil, errSettingsStoreExchange
-		}
-		// select does not prioritize cancellation over a ready command. Check
-		// both original deadlines under the same lock as delivery, including
-		// wall time when the deadline timer has not run yet. An expired empty
-		// poll leaves the pending command's ID, bytes and deadline untouched.
-		now := time.Now()
-		if s.quiesced || wait.Err() != nil || !now.Before(until) {
-			s.mu.Unlock()
-			return nil, nil
-		}
-		call := s.pending
-		if call != nil && !call.delivered && !call.completed && call.ctx.Err() == nil {
-			deadline, bounded := call.ctx.Deadline()
-			if bounded && now.Before(deadline) {
-				call.delivered = true
-				select {
-				case <-s.ready:
-				default:
-				}
-				copy := call.command
-				copy.Body = append(json.RawMessage(nil), copy.Body...)
-				s.mu.Unlock()
-				return &copy, nil
-			}
-		}
-		s.mu.Unlock()
-		select {
-		case <-s.stopped:
-			return nil, nil
-		case <-s.ctx.Done():
-			return nil, s.ctx.Err()
-		case <-wait.Done():
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			return nil, nil
-		case <-s.ready:
-		}
-	}
+	return &wire.SettingsStoreCommand{CommandId: command.ID, Kind: command.Kind, Body: command.Body}, nil
 }
 
 func (s *SettingsStoreExchange) complete(reply wire.SettingsStoreReply) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	call := s.pending
-	if call == nil || call.command.CommandId != reply.CommandId || !call.delivered || call.completed || call.ctx.Err() != nil || s.ctx.Err() != nil || s.fenced {
-		return errSettingsStoreExchange
+	// The queue consumes the call before any reply/body validation.
+	err := s.queue.Complete(reply.CommandId, func(sent exchange.Command) (json.RawMessage, error) {
+		if sent.Kind != reply.Kind || !validSettingsStoreReply(reply.Kind, reply.Body, s.peer.ProfileId) {
+			return nil, errSettingsStoreExchange
+		}
+		return append(json.RawMessage(nil), reply.Body...), nil
+	})
+	if err == nil {
+		return nil
 	}
-	call.completed = true // Consume before any reply/body validation.
-	if call.command.Kind != reply.Kind || !validSettingsStoreReply(reply.Kind, reply.Body, s.peer.ProfileId) {
-		s.fenced = true
-		call.answer <- settingsStoreAnswer{err: errSettingsStoreExchange}
-		return errSettingsStoreExchange
+	if !errors.Is(err, exchange.ErrNotCurrent) {
+		s.fence()
 	}
-	call.answer <- settingsStoreAnswer{body: append(json.RawMessage(nil), reply.Body...)}
-	return nil
+	return errSettingsStoreExchange
 }
 
 // Called only after delivery and effect owners freeze successfully. This proves
 // transport quiescence only and never settles an unknown storage publication.
 func (s *SettingsStoreExchange) QuiescePolling() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.ctx.Err() != nil || s.pending != nil || s.fenced {
+	if s.queue.Quiesce() != nil {
 		return errSettingsStoreExchange
-	}
-	if !s.quiesced {
-		s.quiesced = true
-		close(s.stopped)
 	}
 	return nil
 }

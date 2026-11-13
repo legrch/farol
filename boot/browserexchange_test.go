@@ -74,7 +74,7 @@ func TestBrowserExchangeRoundTripBindsExactCallWithoutSecondDispatch(t *testing.
 	if b.complete(reply) == nil {
 		t.Fatal("duplicate completion accepted")
 	}
-	if len(b.ready) != 0 {
+	if len(b.queue.State().Waiting) != 0 {
 		t.Fatal("command redispatched")
 	}
 }
@@ -94,7 +94,7 @@ func TestBrowserExchangeConsumesMalformedReplyWithoutCorrection(t *testing.T) {
 			if awaitBrowserCall(t, done).err == nil {
 				t.Fatal("invalid reply became known success")
 			}
-			if b.complete(reply) == nil || len(b.ready) != 0 {
+			if b.complete(reply) == nil || len(b.queue.State().Waiting) != 0 {
 				t.Fatal("invalid completion retried")
 			}
 		})
@@ -113,7 +113,7 @@ func TestBrowserExchangeCancellationAfterDeliveryDoesNotRequeue(t *testing.T) {
 	if b.complete(wire.BrowserReply{CommandId: call.CommandId, Kind: "send", Body: json.RawMessage(`{}`)}) == nil {
 		t.Fatal("late reply admitted")
 	}
-	if len(b.ready) != 0 {
+	if len(b.queue.State().Waiting) != 0 {
 		t.Fatal("unknown send requeued")
 	}
 }
@@ -128,7 +128,7 @@ func TestBrowserExchangeRefusesStaleScopeAndDeadlineBeforeEnqueue(t *testing.T) 
 	if _, err := b.Exchange(context.Background(), command); err == nil {
 		t.Fatal("expired command")
 	}
-	if b.issued != 0 || len(b.ready) != 0 {
+	if b.queue.State().Issued != 0 || len(b.queue.State().Waiting) != 0 {
 		t.Fatal("refused input became pending work")
 	}
 }
@@ -173,7 +173,7 @@ func TestBrowserExchangeQuiescenceWakesIdlePollWithoutClosingTransport(t *testin
 	if _, err := b.Exchange(context.Background(), command); err == nil {
 		t.Fatal("quiesced exchange admitted new effect")
 	}
-	if b.issued != 0 || len(b.ready) != 0 {
+	if b.queue.State().Issued != 0 || len(b.queue.State().Waiting) != 0 {
 		t.Fatal("shutdown command escaped")
 	}
 }
@@ -187,10 +187,8 @@ func TestBrowserExchangeQuiescenceRefusesOutstandingEffect(t *testing.T) {
 	if b.QuiescePolling() == nil {
 		t.Fatal("pending effect reported quiescent")
 	}
-	select {
-	case <-b.pollStopped:
+	if b.queue.State().Quiesced {
 		t.Fatal("refused quiescence stopped cleanup delivery")
-	default:
 	}
 	cancel()
 	if awaitBrowserCall(t, done).err == nil {
@@ -314,9 +312,7 @@ func TestBrowserExchangeOutlivesFormerLifetimeCommandBudget(t *testing.T) {
 			t.Fatalf("settled call %d failed: %v", i, result.err)
 		}
 	}
-	b.mu.Lock()
-	live := len(b.pending)
-	b.mu.Unlock()
+	live := b.queue.State().Live
 	if live != 1 {
 		t.Fatalf("retained %d calls; only the in-flight call is live", live)
 	}
@@ -334,7 +330,7 @@ func TestBrowserExchangeOutlivesFormerLifetimeCommandBudget(t *testing.T) {
 	if result := awaitBrowserCall(t, heldDone); result.err != nil {
 		t.Fatal(result.err)
 	}
-	if len(b.ready) != 0 {
+	if len(b.queue.State().Waiting) != 0 {
 		t.Fatal("command redispatched")
 	}
 }
