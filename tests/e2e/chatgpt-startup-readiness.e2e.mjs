@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -221,22 +221,75 @@ app.whenReady().then(async () => {
     throw error;
   injectedFailure = true;
 } finally {
-  const observation = observeProcesses();
-  const referenced =
+  // Record what the one observation actually saw, so a retained fixture
+  // names its reason instead of leaving three causes behind one sentence.
+  const tables = [];
+  const observation = observeProcesses((command, args, options) => {
+    const result = spawnSync(command, args, options);
+    tables.push({ command, result });
+    return result;
+  });
+  const inScratch = (file) =>
+    file === scratch || file.startsWith(scratch + path.sep);
+  const holders =
+    observation?.processes.filter((p) => p.command.includes(scratch)) ?? [];
+  const openFiles = observation?.open.filter(inScratch) ?? [];
+  if (
+    (!issued || terminalObserved) &&
     observation &&
-    (observation.processes.some((p) => p.command.includes(scratch)) ||
-      observation.open.some(
-        (file) => file === scratch || file.startsWith(scratch + path.sep),
-      ));
-  if ((!issued || terminalObserved) && observation && !referenced) {
+    holders.length === 0 &&
+    openFiles.length === 0
+  ) {
     await fs.rm(scratch, { recursive: true, force: true });
     scratchRemoved = true;
   } else {
     process.stderr.write(
-      `Retained owned fixture with unconfirmed cleanup: ${scratch}\n`,
+      `Retained owned fixture with unconfirmed cleanup: ${scratch}\n` +
+        JSON.stringify({
+          childTerminal: !issued || terminalObserved,
+          tables: tables.map(({ command, result }) => ({
+            command,
+            status: result.status,
+            signal: result.signal,
+            error: result.error?.code ?? null,
+            stderr: String(result.stderr ?? "").slice(0, 500),
+          })),
+          processes: holders.map(({ pid, pgid, start, command }) => ({
+            pid,
+            pgid,
+            start,
+            command: command.trim().slice(0, 300),
+          })),
+          openFiles: openFileHolders(
+            tables.find(({ command }) => command.endsWith("lsof"))?.result,
+            inScratch,
+            observation?.processes ?? [],
+          ),
+        }) +
+        "\n",
     );
     process.exitCode = 1;
   }
+}
+
+// lsof -F n still emits a `p<pid>` record before each process's files.
+function openFileHolders(lsof, inScratch, processes) {
+  const found = [];
+  let pid = null;
+  for (const line of String(lsof?.stdout ?? "").split("\n")) {
+    if (line.startsWith("p")) pid = Number(line.slice(1));
+    else if (line.startsWith("n/") && inScratch(line.slice(1)))
+      found.push({
+        pid,
+        command:
+          processes
+            .find((p) => p.pid === pid)
+            ?.command.trim()
+            .slice(0, 300) ?? null,
+        file: line.slice(1),
+      });
+  }
+  return found.slice(0, 50);
 }
 if (cleanupFailureFixture) {
   assert.ok(
