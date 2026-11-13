@@ -262,7 +262,7 @@ class ClosedAdmissionTests(unittest.TestCase):
                 (['--closed', '--latest'], 'CLOSED_DOWNLOAD_FORBIDDEN'),
                 (['--closed', '--release-dev'], 'CLOSED_MODE_INVALID'),
                 (['--closed', '--connection-proof'], 'CLOSED_MODE_INVALID'),
-                (['--closed', '--connect-dev'], 'CLOSED_MODE_INVALID'),
+                (['--closed', '--connect-dev'], 'DEV_IMPORT_UNQUALIFIED'),
                 (['--closed', '--artifact', ''], 'CLOSED_DOWNLOAD_FORBIDDEN')]:
             with self.subTest(args=' '.join(args)):
                 with self.assertRaisesRegex(vm.Refused, reason):

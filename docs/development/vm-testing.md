@@ -27,7 +27,7 @@ There is no `test:all` and no `test:vm`, and neither may be added. A VM lane is 
 Real Dev services, real accounts, the real tunnel and visual judgment are QA, not tests. The guest journeys therefore live under `qa:*`:
 
 - `qa:smoke` is a bounded exact-release UI smoke in the dedicated guest. Its lifecycle rows close, but its UI rows are `NEEDS_REVIEW` by design: an agent or human inspects the screenshots afterwards, and no automated assertion upgrades that review into a pass.
-- `qa:release-dev`, `qa:status` and `qa:connect-dev` are endpoint handoff, the local guest identity proof, and the one-time offline Dev import. Each touches real credentials or the real endpoint, so none is a closed test.
+- `qa:release-dev` and `qa:status` are endpoint handoff and the local guest identity proof. Each touches the real endpoint, so neither is a closed test. `qa:connect-dev` is BLOCKED: it refuses with `DEV_IMPORT_UNQUALIFIED` before any VM, staging or key access because no guest Dev credential importer is qualified, and nothing exports a credential.
 
 `qa:*` never appears inside `task test`, `task ci` or any aggregate. "Smoke" means a short, bounded scenario — not a reduced test suite. Automated clicks driving the same guest do not turn live QA into a closed test: the accounts, tunnel and judgment calls remain live, so the honest classification stays QA. Conversely, `vm:test` stays fully offline and closed and never touches a real account, tunnel or VM.
 
@@ -51,7 +51,7 @@ Beyond these settled points, the lease wire format and terminal-mac's mailbox re
 
 ## Read-only staging reconciliation
 
-A failed or interrupted run can leave staging residue (a `run-*` directory in the machine's artifact inbox) or the effect fence in place. Admission refuses such a machine with `UNRECONCILED_STAGING_RESIDUE` before any guest action: refusal names directory names only, reads no contents and deletes nothing.
+A run that fails before any guest effect removes its own `run-*` staging and reports it as `removedStaging`. A failed or interrupted run after an effect keeps its staging (a `run-*` directory in the machine's artifact inbox) and the effect fence as evidence, listed as `retainedStaging`. Admission refuses a machine whose inbox holds recognized staging residue (`blob-*`, `app-payload.json` or legacy credential names) with `UNRECONCILED_STAGING_RESIDUE` before any guest action: refusal names directory names only, reads no contents and deletes nothing. An effect fence refuses the machine regardless.
 
 ```sh
 task qa:smoke -- --reconcile-staging

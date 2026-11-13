@@ -71,7 +71,7 @@ SAFE_FAILURE_CODES = frozenset((
     'VM_MISSING', 'VM_BUSY', 'VM_NOT_RUNNING', 'VM_MACHINE_FILE_INVALID',
     'TERMINAL_MAC_PACKAGE_REQUIRED', 'TERMINAL_MAC_IDENTITY_INVALID', 'GUEST_TOOLS_MISSING', 'EXCHANGE_SHARE_REQUIRED',
     'CLOSED_DOWNLOAD_FORBIDDEN', 'CLOSED_MODE_INVALID', 'CLOSED_REQUIRES_OFFLINE_MACHINE', 'CLOSED_REQUIRES_FRESH_VM_BOOT',
-    'CLOSED_NETWORK_CONFIG_CHANGED',
+    'CLOSED_NETWORK_CONFIG_CHANGED', 'DEV_IMPORT_UNQUALIFIED',
     # guest
     'DEADLINE_EXCEEDED', 'GUEST_CLI_TIMEOUT', 'GUEST_CLI_LAUNCH_FAILED', 'GUEST_CLI_FAILED',
     'GUEST_CLI_REPLY_INVALID', 'GUEST_ACTION_FAILED', 'GUEST_PERMISSIONS_MISSING', 'GUEST_PHASE_FAILED',
@@ -334,54 +334,6 @@ def require_host_dev_stopped(identity, home=None):
     # APFS may retain the supported legacy DEV spelling of the same directory.
     require(not any(str(root).casefold() in row.casefold() for row in rows.splitlines()),
             'HOST_DEV_STILL_RUNNING')
-
-
-def export_dev_connection(stage, identity, home=None):
-    """The fixed Dev profile is the only source. Never return or log the key."""
-    home = Path.home() if home is None else home
-    require(identity['devDataLeaf'] != identity['dataLeaf'] and Path(identity['devDataLeaf']).name == identity['devDataLeaf'], 'DEV_SOURCE_IDENTITY_INVALID')
-    root = home / 'Library/Application Support' / identity['devDataLeaf']
-    require(root.is_dir() and not root.is_symlink(), 'DEV_PROFILE_UNSAFE')
-    config_file = root / 'farol-state/config.json'
-    key_file = root / 'farol-private/secure-mcp-connector/control-plane-api-key'
-    for ancestor in (config_file.parent, key_file.parent, key_file.parent.parent):
-        require(ancestor.is_dir() and not ancestor.is_symlink(), 'DEV_PROFILE_UNSAFE')
-    config_before = regular(config_file, 4 * 1024 * 1024)
-    config = json.loads(config_file.read_text())
-    connector = config['connectors']['secureMcp']
-    setup = config.get('setup', {})
-    require(isinstance(setup, dict) and isinstance(setup.get('connect', {}), dict), 'DEV_CONFIG_INVALID')
-    runtime = connector.get('runtime')
-    require(not setup.get('connect', {}).get('outcomeUnknown') and
-            not connector.get('appVerificationPending') and
-            not (isinstance(runtime, dict) and runtime.get('state') == 'outcome_unknown'),
-            'DEV_EFFECT_UNKNOWN')
-    tunnel = connector['tunnelId']
-    require(isinstance(tunnel, str) and re.fullmatch('[0-9A-Za-z._:-]{1,160}', tunnel), 'DEV_TUNNEL_MISSING')
-    require(connector.get('credential') == 'stored', 'DEV_CREDENTIAL_NOT_STORED')
-    require_host_dev_stopped(identity, home)
-    fd = os.open(key_file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    try:
-        info = os.fstat(fd)
-        require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and
-                info.st_nlink == 1 and info.st_mode & 0o077 == 0 and 20 <= info.st_size <= 512,
-                'DEV_KEY_UNSAFE')
-        key = os.read(fd, 513)
-        after = os.fstat(fd)
-        named = key_file.lstat()
-        require((info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns) == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) == (named.st_dev, named.st_ino, named.st_size, named.st_mtime_ns), 'DEV_KEY_CHANGED')
-        require(len(key) == info.st_size and all(33 <= x <= 126 for x in key), 'DEV_KEY_INVALID')
-    finally:
-        os.close(fd)
-    after_config = config_file.lstat()
-    require((config_before.st_dev, config_before.st_ino, config_before.st_mtime_ns, config_before.st_size) == (after_config.st_dev, after_config.st_ino, after_config.st_mtime_ns, after_config.st_size), 'DEV_CONNECTION_CHANGED')
-    private = stage / 'dev-key'
-    with private.open('xb') as out:
-        private.chmod(0o600)
-        out.write(key)
-    del key
-    (stage / 'dev-connection.json').write_text(json.dumps({'schema': 1, 'tunnelId': tunnel}))
-    (stage / 'dev-connection.json').chmod(0o600)
 
 
 def refuse_host_profile_path(path, identity, home=None):
@@ -1000,7 +952,13 @@ class Runner:
             stage = module.stage_release_payload(archive, manifest, self.stage, IDENTITY)
             acceptance = module.stage_acceptance(self.stage, stage, module.farol_release_policy)
         except module.ProducerRefusal as error:
+            # Host-only staging: no guest request exists, so this is a known
+            # no-effect refusal and the partial staging is removed on exit.
+            self.pending = None
             raise Refused(str(error)) from None
+        except BaseException:
+            self.pending = None
+            raise
         self.write_durable_json_exclusive(self.out / 'native-stage.json', stage)
         # Staging may be much longer than a marker epoch. No guest effect yet.
         self.remaining()
@@ -1066,7 +1024,7 @@ class Runner:
     def phase(self, name):
         if getattr(self, 'lease_owner', None):
             self.publish_lease_flag()
-        if name in ('install', 'launch', 'relaunch', 'import-dev', 'cleanup', 'e2e'):
+        if name in ('install', 'launch', 'relaunch', 'cleanup', 'e2e'):
             self.begin_effect()
         self.pending = name
         self.sequence += 1
@@ -1283,9 +1241,12 @@ class Runner:
         if getattr(self, 'lease_fd', None) is None:
             return
         try:
+            # Starting the VM is not a guest input effect: a run that refuses
+            # after `vm-started` but before any guest request releases cleanly.
+            guest_log = [entry for entry in self.log if entry != 'vm-started']
             finished_without_effect = (not self.effect_owned and self.effect_fence_definitely_absent()
                                        and self.pending is None
-                                       and (not self.log or self.log[-1] == 'stop')
+                                       and (not guest_log or guest_log[-1] == 'stop')
                                        and getattr(self, 'cleanup_note', None) in (None, 'CLEARED', 'RETAINED_NO_EFFECT'))
             if finished_without_effect and getattr(self, 'helper_update_flag_owned', False):
                 self.require_own_lease_metadata()
@@ -1306,6 +1267,16 @@ class Runner:
                 os.close(fd)
                 self.lease_fd = None
                 self.lease_owner = None
+
+    def effect_possible(self):
+        """Could a guest or VM effect of this run be outstanding or unreconciled?
+
+        A pending step, an owned fence or any logged guest phase makes the
+        outcome UNKNOWN. A confirmed VM start alone does not: it is recorded
+        as `vm-started` and no guest request followed it.
+        """
+        return bool(getattr(self, 'pending', None) or getattr(self, 'effect_owned', False) or
+                    [entry for entry in (getattr(self, 'log', None) or []) if entry != 'vm-started'])
 
     def lease_evidence(self):
         """Guest-input lease facts recorded with every result; names only."""
@@ -1371,11 +1342,51 @@ class Runner:
             self.remaining()
             time.sleep(0.4)
 
-    def clear_dev_payload(self):
-        # Credentials are never diagnostic evidence, even when the guest outcome
-        # is unknown. Keep metadata/receipts, not a duplicate raw host key.
-        for name in ('dev-key', 'dev-connection.json'):
-            (self.stage / name).unlink(missing_ok=True)
+    def owned_staging(self):
+        """This run's own staging directories: the artifact inbox entry and the
+        exchange report directory. Labels only; never contents."""
+        return [(label, path) for label, path in
+                (('artifacts', getattr(self, 'stage', None)), ('exchange', getattr(self, 'report', None)))
+                if path is not None]
+
+    def retained_staging(self):
+        """Residue report: which of this run's own staging still exists."""
+        names = []
+        for label, path in self.owned_staging():
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                pass  # uninspectable is reported as retained, never as removed
+            names.append(label + '/' + path.name)
+        return names
+
+    def clear_unstarted_staging(self):
+        """Remove this run's own pre-fence staging when no guest effect was possible.
+
+        Only an owned effect or a fence that is not provably absent keeps the
+        staging: from that point it is evidence of a possible guest effect and
+        reconciliation owns it. Before that (VM start, archive verification,
+        native payload staging, a refused readiness capability) the guest never
+        received a request, so the copied app.zip, node runtime, driver bundle,
+        native blobs and report directory are plain host output of this run.
+        """
+        if getattr(self, 'effect_owned', False) or getattr(self, 'effect_file', None) is None:
+            return []
+        if not self.effect_fence_definitely_absent():
+            return []
+        removed = []
+        for label, path in self.owned_staging():
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                continue
+            require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid(),
+                    'STAGING_CLEANUP_UNCONFIRMED')
+            shutil.rmtree(path)  # never follows links inside the tree
+            removed.append(label + '/' + path.name)
+        return removed
 
     def instance_clone_receipt(self):
         """Provenance of a cloned run instance, or None for a full machine.
@@ -1399,16 +1410,20 @@ class Runner:
                 'identitySha256': value.get('identitySha256'), 'at': value.get('at')}
 
     def cleanup_disposition(self):
-        """Best-effort raw-payload removal that never masks a primary result.
+        """Best-effort removal of unstarted staging that never masks a primary result.
 
+        No route stages a credential (the Dev import is refused before any
+        effect), so nothing secret can remain. Staging of a run that never
+        reached a guest effect is removed; staging behind an effect fence is
+        retained evidence and reported through retained_staging().
         The first attempt's disposition is recorded and authoritative: a
         repeated call (except path, then finally) never re-runs the removal,
         so a FAILED attempt can never be upgraded into a residue-free claim.
         """
         if getattr(self, 'cleanup_note', None) is None:
             try:
-                self.clear_dev_payload()
-            except Exception as error:
+                self.staging_removed = self.clear_unstarted_staging()
+            except Exception:
                 self.cleanup_note = 'FAILED:STAGING_CLEANUP_UNCONFIRMED'
             else:
                 self.cleanup_note = 'CLEARED'
@@ -1431,7 +1446,7 @@ class Runner:
     def prepare_stage(self):
         self.stage.mkdir(parents=True, exist_ok=False, mode=0o700)
         self.report.mkdir(parents=True, exist_ok=False, mode=0o700)
-        for name in ('guest.sh', 'inspect.js', 'no-tunnel.js', 'activate.js', 'import-dev.js', 'connection-proof.js', 'quit-proof.js', 'driver-manifest.js'):
+        for name in ('guest.sh', 'inspect.js', 'no-tunnel.js', 'activate.js', 'connection-proof.js', 'quit-proof.js', 'driver-manifest.js'):
             shutil.copyfile(Path(__file__).parent / 'vm-smoke' / name, self.stage / name)
         (self.stage / 'identity.json').write_text(json.dumps(IDENTITY))
         budget = int(self.deadline - time.monotonic())
@@ -1775,34 +1790,6 @@ class Runner:
         (self.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
         return result
 
-    def connect_dev(self):
-        self.prepare_stage()
-        self.start_guest()
-        self.phase('share-probe')
-        self.phase('admit')
-        self.quit_guest_app()
-        # Prove transport before exposing a credential to this inbox. The guest
-        # may already be stopped, so quit_guest_app() need not own an effect.
-        # Fence durably BEFORE export: a hard exit during staging must block
-        # later runs even when no import request was ever published.
-        self.begin_effect()
-        export_dev_connection(self.stage, IDENTITY)
-        require_host_dev_stopped(IDENTITY)
-        self.phase('import-dev')
-        # Key material is removed from host staging immediately after guest ACK.
-        self.cleanup_disposition()
-        self.phase('launch')
-        self.wait_state(True)
-        self.phase('activate')
-        self.wait_state(True, foreground=True)
-        self.screenshot('dev-imported')
-        self.phase('stop')
-        result = dict(status='NEEDS_REVIEW', devConnection='IMPORTED_OFFLINE', tunnel='NOT_STARTED',
-                      profile='guest-package-only', cleanup=self.finish_staging(), phases=self.log,
-                      lease=self.lease_evidence())
-        (self.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
-        return result
-
     def wait_guest_ready(self):
         # Status is read-only. A cold login/helper may not answer immediately;
         # permission denial is a distinct owner prerequisite, never retried.
@@ -1907,8 +1894,6 @@ class Runner:
                 if not getattr(self.a, 'native_app_service', False):
                     require(self.a.terminal_point[0] < int(grants['width']) and self.a.terminal_point[1] < int(grants['height']), 'TERMINAL_POINT_OUTSIDE_DISPLAY')
                 self.screenshot('preflight')
-                if self.a.connect_dev:
-                    return self.connect_dev()
                 if self.a.connection_proof:
                     return self.connection_proof()
                 if self.a.release_dev:
@@ -2014,7 +1999,13 @@ def arguments(argv=None):
     default_config = Path.home() / 'Library/Application Support' / (IDENTITY['name'] + ' Testing') / 'vm-smoke.json'
     config_parser.add_argument('--config', default=os.environ.get('FAROL_VM_CONFIG') or (str(default_config) if default_config.exists() else None))
     config_parser.add_argument('--native-app-service', action='store_true')
+    config_parser.add_argument('--connect-dev', action='store_true')
     early, _ = config_parser.parse_known_args(argv)
+    # No guest importer is qualified (tooling/vm-smoke/import-dev.js always
+    # refuses), so no host Dev credential may ever be read or exported for it.
+    # Refuse before reading configuration and before any lease, staging, VM
+    # start, guest action or key read.
+    require(not early.connect_dev, 'DEV_IMPORT_UNQUALIFIED')
     config = {}
     if early.config:
         file = Path(early.config).expanduser()
@@ -2033,7 +2024,9 @@ def arguments(argv=None):
     source.add_argument('--artifact', help='Release ZIP with adjacent farol-release.json and SHA256SUMS')
     source.add_argument('--release-dev', action='store_true', help='Normal Quit of only the approved guest app before using host Dev; preserve guest profile and VM')
     source.add_argument('--connection-proof', action='store_true', help='Capture guest-local connection identity only; no profile import or tunnel restart')
-    source.add_argument('--connect-dev', action='store_true', help='Import only the fixed host Dev tunnel ID/key into the guest package profile, with host Dev stopped; does not start tunnel')
+    source.add_argument('--connect-dev', action='store_true',
+                        help='BLOCKED: refuses with DEV_IMPORT_UNQUALIFIED before any VM, staging or key '
+                             'access; no guest Dev credential importer is qualified and nothing is exported')
     source.add_argument('--latest', action='store_true', help='Resolve public GitHub Latest now')
     source.add_argument('--reconcile-staging', action='store_true',
                         help='Read-only report of staging residue and effect fences; clears nothing and never touches the VM')
@@ -2129,7 +2122,7 @@ def main():
         result = dict(status='NEEDS_OWNER' if code == 'NEEDS_OWNER' else 'BLOCKED',
                       reason=code, phases=runner.log if runner else [],
                       pending=runner.pending if runner else None,
-                      outcome='UNKNOWN' if runner and (runner.pending or runner.log) else 'NOT_STARTED')
+                      outcome='UNKNOWN' if runner and runner.effect_possible() else 'NOT_STARTED')
         if runner:
             result['firstFailure'] = getattr(runner, 'first_failure', None)
             result['firstFailurePersistence'] = getattr(runner, 'first_failure_persistence', 'NOT_RUN')
@@ -2140,6 +2133,11 @@ def main():
                 runner.record_secondary_failure(cleanup_error)
                 result['cleanup'] = 'FAILED:STAGING_CLEANUP_UNCONFIRMED'
             result['secondaryFailures'] = getattr(runner, 'secondary_failures', [])
+            result['removedStaging'] = list(getattr(runner, 'staging_removed', None) or [])
+            try:
+                result['retainedStaging'] = runner.retained_staging()
+            except Exception:
+                result['retainedStaging'] = ['uninspectable']
             runner.attach_e2e_evidence(result, error=error)
             try:
                 (runner.out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')

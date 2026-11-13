@@ -96,18 +96,26 @@ acceptance are separate. Screenshots document pixels without proving those gates
 The following legacy selections are **BLOCKED pending qualified shell readiness**:
 
 - `qa:smoke` without `--native-app-service`, including `--latest` and shell E2E drivers.
-- `qa:connect-dev`, the guest Dev credential import route.
+- `qa:connect-dev`, the guest Dev credential import route. Unlike the others it is
+  refused outright (see below).
 - `qa:status`, whose connection proof can bootstrap the guest and activate the app.
 - `qa:release-dev`, the legacy Quit and endpoint handoff route.
 
-Dev import and endpoint handoff remain blocked until their execution route is
-qualified. The JXA credential importer also refuses with
-`GUEST_IMPORT_PERSISTENCE_UNQUALIFIED` before filesystem or credential access:
+`--connect-dev` (`task qa:connect-dev`) refuses with `DEV_IMPORT_UNQUALIFIED`
+before the configuration is read and before any lease, staging directory, effect
+fence, VM start, guest action or host key read. The runner contains no code that
+reads the host Dev key or writes a key into a guest-visible share, and the guest
+server no longer has an `import-dev` phase. The JXA importer itself still refuses
+with `GUEST_IMPORT_PERSISTENCE_UNQUALIFIED` before filesystem or credential access:
 it has no qualified descriptor-rooted destination admission and no file-plus-parent
 fsync primitive. Atomic writes do not establish durable ordering of the guest
 uncertainty fence, credential replacement, commit receipt and final clear.
-A matching, absent, unreadable or invalid-encoding receipt cannot enable this route.
-No credential should be exported merely to exercise this blocked importer.
+A future import needs a qualified importer and a reviewed export together; no
+credential is exported to exercise a blocked importer.
+
+`qa:release-dev` keeps its purpose: a guest whose profile already holds a Dev
+connection (entered by hand in the guest UI) must be quit normally before host Dev
+takes over the same tunnel.
 
 A returning guest profile may already contain connection state. Native closure does
 not qualify its endpoint or authorize host Dev to take over. Never replay a refused
@@ -140,7 +148,12 @@ unreadable receipts and inaccessible parents are unresolved. A changed canonical
 alone never qualifies installation or endpoint release. These checks do not unblock
 the legacy execution route.
 
-Evidence and screenshots remain private. Never retain raw keys in diagnostics or
-archive credential staging. Successful cleanup removes only exact owned staging;
+Evidence and screenshots remain private; no route stages a credential. A run
+that ends before any guest effect (no owned or uninspectable fence) removes its
+own staging: the artifact-inbox `run-*` directory with `app.zip`, the Node runtime,
+a driver bundle or partial native blobs, and its exchange report directory. The
+failure result lists `removedStaging` and, for anything kept, `retainedStaging`.
+Once a fence exists the staging is evidence of a possible guest effect and is
+retained for reconciliation. Successful cleanup removes only exact owned staging;
 it never deletes input archives, VMs or guest profiles. `task vm:test` covers these
 admission contracts with disposable synthetic fixtures, not a live VM or provider.

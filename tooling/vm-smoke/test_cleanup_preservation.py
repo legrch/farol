@@ -1,7 +1,8 @@
-"""Staging cleanup failures must never mask the primary result. Synthetic only.
+"""Staging cleanup must never mask the primary result. Synthetic only.
 
-No guest, VM or account is involved. Raw payload bytes are synthetic and never
-real credentials; results must not embed them.
+No guest, VM or account is involved. Staged bytes are synthetic placeholders.
+A run that never reached a guest effect removes its own staging; staging behind
+an effect fence is retained evidence and reported as residue.
 """
 import contextlib
 import importlib.util
@@ -49,8 +50,8 @@ def synthetic_runner(root):
     runner.out.mkdir()
     runner.effect_file = root / '.farol-smoke-pending.json'
     runner.effect_owned = False
-    # The synthetic runner skips normal lease acquisition, but the real producer
-    # writes this exact marker before importing a Dev key. Model that precondition.
+    # The synthetic runner skips normal lease acquisition, but the real run
+    # writes this exact marker before any guest effect. Model that precondition.
     runner.exchange.mkdir()
     (runner.exchange / '.input-lease.json').write_text(json.dumps({
         'schema': 'terminal-mac.input-lease-flag/1',
@@ -76,168 +77,174 @@ def synthetic_runner(root):
     return runner
 
 
-def write_synthetic_payload(stage, _identity):
-    (stage / 'dev-key').write_text('synthetic-test-key-not-a-real-secret')
-    (stage / 'dev-key').chmod(0o600)
-    (stage / 'dev-connection.json').write_text('{"schema":1,"tunnelId":"synthetic"}')
+def stage_synthetic_payload(runner):
+    runner.prepare_stage()
+    (runner.stage / 'app.zip').write_text('synthetic-archive-placeholder')
+    (runner.report / 'server.result').write_text('READY')
 
 
-def deny_unlink(names):
-    """Patch Path.unlink so the named payload entries cannot be removed."""
-    original = Path.unlink
+def deny_rmtree(names):
+    """Patch shutil.rmtree so the named directories cannot be removed."""
+    original = vm.shutil.rmtree
     attempts = []
-    def unlink(path, *args, **kwargs):
-        if path.name in names:
-            attempts.append(path.name)
+    def rmtree(path, *args, **kwargs):
+        if Path(path).name in names:
+            attempts.append(Path(path).name)
             raise PermissionError('synthetic-cleanup-denied')
         return original(path, *args, **kwargs)
-    return unlink, attempts
+    return rmtree, attempts
+
+
+def fenced_success(runner):
+    """A synthetic successful scenario: effect fenced, guest stopped, staged."""
+    stage_synthetic_payload(runner)
+    runner.phase('launch')
+    runner.phase('stop')
+    return dict(status='NEEDS_REVIEW', cleanup=runner.finish_staging(), phases=runner.log)
+
+
+def run_main(runner, scenario):
+    runner.run = lambda: scenario(runner)
+    with patch.object(vm, 'arguments', return_value=None), \
+         patch.object(vm, 'Runner', return_value=runner), \
+         contextlib.redirect_stdout(io.StringIO()):
+        code = vm.main()
+    result_file = runner.out / 'result.json'
+    return code, (json.loads(result_file.read_text()) if result_file.exists() else None)
 
 
 class CleanupPreservationTests(unittest.TestCase):
-    def test_failed_midflow_cleanup_preserves_primary_result_and_fence(self):
+    def test_refusal_before_any_effect_removes_this_runs_staging(self):
         with tempfile.TemporaryDirectory() as d:
             runner = synthetic_runner(Path(d))
-            unlink, attempts = deny_unlink({'dev-key'})
-            with patch.object(vm, 'export_dev_connection', side_effect=write_synthetic_payload), \
-                 patch.object(vm, 'require_host_dev_stopped'), \
-                 patch.object(Path, 'unlink', new=unlink):
-                result = runner.connect_dev()
-            self.assertEqual(result['status'], 'NEEDS_REVIEW')
-            self.assertTrue(result['cleanup'].startswith('FAILED:'))
-            self.assertEqual(attempts, ['dev-key'])
-            self.assertTrue((runner.stage / 'dev-key').exists())
-            self.assertTrue((runner.stage / 'dev-connection.json').exists())
-            self.assertTrue(runner.effect_file.exists(), 'a cleanup failure keeps the effect fence')
-            self.assertNotIn('synthetic-test-key', json.dumps(result))
+            def refuse(runner):
+                stage_synthetic_payload(runner)
+                raise vm.Refused('TERMINAL_SHELL_READINESS_UNPROVEN')
+            code, result = run_main(runner, refuse)
+            self.assertEqual(code, 2)
+            self.assertEqual(result['reason'], 'TERMINAL_SHELL_READINESS_UNPROVEN')
+            self.assertEqual(result['outcome'], 'NOT_STARTED')
+            self.assertEqual(result['cleanup'], 'CLEARED')
+            self.assertEqual(result['removedStaging'], ['artifacts/run-synthetic', 'exchange/report'])
+            self.assertEqual(result['retainedStaging'], [])
+            self.assertFalse(runner.stage.exists())
+            self.assertFalse(runner.report.exists())
+            self.assertFalse(runner.effect_file.exists())
 
-    def test_failed_stage_removal_is_recorded_not_raised(self):
+    def test_failed_unstarted_removal_is_reported_and_keeps_primary_reason(self):
         with tempfile.TemporaryDirectory() as d:
             runner = synthetic_runner(Path(d))
-            with patch.object(vm, 'export_dev_connection', side_effect=write_synthetic_payload), \
-                 patch.object(vm, 'require_host_dev_stopped'), \
-                 patch.object(vm.shutil, 'rmtree', side_effect=PermissionError('synthetic-stage-denied')):
-                result = runner.connect_dev()
+            rmtree, attempts = deny_rmtree({'run-synthetic'})
+            def refuse(runner):
+                stage_synthetic_payload(runner)
+                raise vm.Refused('GUEST_PERMISSIONS_MISSING')
+            with patch.object(vm.shutil, 'rmtree', new=rmtree):
+                code, result = run_main(runner, refuse)
+            self.assertEqual(code, 2)
+            self.assertEqual(result['reason'], 'GUEST_PERMISSIONS_MISSING')
+            self.assertEqual(result['cleanup'], 'FAILED:STAGING_CLEANUP_UNCONFIRMED')
+            self.assertNotIn('synthetic-cleanup-denied', json.dumps(result))
+            self.assertEqual(result['retainedStaging'], ['artifacts/run-synthetic', 'exchange/report'])
+            self.assertEqual(attempts, ['run-synthetic'], 'finally must not retry a recorded disposition')
+            self.assertTrue((runner.stage / 'app.zip').exists())
+
+    def test_failure_after_an_effect_retains_staging_and_fence(self):
+        with tempfile.TemporaryDirectory() as d:
+            runner = synthetic_runner(Path(d))
+            def fenced_then_refuse(runner):
+                stage_synthetic_payload(runner)
+                runner.begin_effect()
+                raise vm.Refused('GUEST_PHASE_FAILED')
+            code, result = run_main(runner, fenced_then_refuse)
+            self.assertEqual(code, 2)
+            self.assertEqual(result['outcome'], 'UNKNOWN')
+            self.assertEqual(result['cleanup'], 'CLEARED')
+            self.assertEqual(result['removedStaging'], [])
+            self.assertEqual(result['retainedStaging'], ['artifacts/run-synthetic', 'exchange/report'])
+            self.assertTrue((runner.stage / 'app.zip').exists())
+            self.assertTrue(runner.effect_file.exists())
+
+    def test_failed_stage_removal_after_success_is_recorded_not_raised(self):
+        with tempfile.TemporaryDirectory() as d:
+            runner = synthetic_runner(Path(d))
+            with patch.object(vm.shutil, 'rmtree', side_effect=PermissionError('synthetic-stage-denied')):
+                result = fenced_success(runner)
             self.assertEqual(result['status'], 'NEEDS_REVIEW')
             self.assertEqual(result['cleanup'], 'FAILED:STAGING_CLEANUP_UNCONFIRMED')
             self.assertNotIn('synthetic-stage-denied', str(result))
             self.assertTrue(runner.stage.exists())
-            self.assertFalse((runner.stage / 'dev-key').exists(), 'raw payload itself is still cleared')
-            self.assertFalse((runner.stage / 'dev-connection.json').exists())
             self.assertTrue(runner.effect_file.exists())
 
     def test_main_keeps_effect_fence_when_cleanup_failed(self):
         with tempfile.TemporaryDirectory() as d:
             runner = synthetic_runner(Path(d))
-            unlink, attempts = deny_unlink({'dev-key'})
-            runner.run = runner.connect_dev
-            with patch.object(vm, 'export_dev_connection', side_effect=write_synthetic_payload), \
-                 patch.object(vm, 'require_host_dev_stopped'), \
-                 patch.object(Path, 'unlink', new=unlink), \
-                 patch.object(vm, 'arguments', return_value=None), \
-                 patch.object(vm, 'Runner', return_value=runner), \
-                 contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(vm.main(), 0)
-            result = json.loads((runner.out / 'result.json').read_text())
-            self.assertEqual(result['status'], 'NEEDS_REVIEW')
-            self.assertTrue(result['cleanup'].startswith('FAILED:'))
+            rmtree, attempts = deny_rmtree({'run-synthetic'})
+            with patch.object(vm.shutil, 'rmtree', new=rmtree):
+                code, result = run_main(runner, fenced_success)
+            self.assertEqual(code, 0)
+            self.assertEqual(result, None, 'the scenario itself owns result.json on success')
             self.assertTrue(runner.effect_file.exists(), 'main must not unfence a FAILED cleanup')
-            self.assertEqual(attempts, ['dev-key'], 'finally must not retry a recorded disposition')
+            self.assertEqual(runner.cleanup_note, 'FAILED:STAGING_CLEANUP_UNCONFIRMED')
+            self.assertEqual(attempts, ['run-synthetic'], 'finally must not retry a recorded disposition')
 
     def test_main_finishes_effect_after_cleanup_cleared(self):
         with tempfile.TemporaryDirectory() as d:
             runner = synthetic_runner(Path(d))
-            runner.run = runner.connect_dev
-            with patch.object(vm, 'export_dev_connection', side_effect=write_synthetic_payload), \
-                 patch.object(vm, 'require_host_dev_stopped'), \
-                 patch.object(vm, 'arguments', return_value=None), \
-                 patch.object(vm, 'Runner', return_value=runner), \
-                 contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(vm.main(), 0)
-            result = json.loads((runner.out / 'result.json').read_text())
-            self.assertEqual(result['status'], 'NEEDS_REVIEW')
-            self.assertEqual(result['cleanup'], 'CLEARED')
+            code, _ = run_main(runner, fenced_success)
+            self.assertEqual(code, 0)
+            self.assertEqual(runner.cleanup_note, 'CLEARED')
             self.assertFalse(runner.stage.exists())
             self.assertFalse(runner.effect_file.exists())
 
-    def test_finally_cleanup_failure_preserves_primary_reason(self):
-        with tempfile.TemporaryDirectory() as d:
-            runner = synthetic_runner(Path(d))
-            unlink, attempts = deny_unlink({'dev-key'})
-            def fenced_then_refuse():
-                runner.prepare_stage()
-                write_synthetic_payload(runner.stage, vm.IDENTITY)
-                runner.begin_effect()
-                raise vm.Refused('PRIMARY_REASON')
-            runner.run = fenced_then_refuse
-            with patch.object(Path, 'unlink', new=unlink), \
-                 patch.object(vm, 'arguments', return_value=None), \
-                 patch.object(vm, 'Runner', return_value=runner), \
-                 contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(vm.main(), 2)
-            result = json.loads((runner.out / 'result.json').read_text())
-            self.assertEqual(result['status'], 'BLOCKED')
-            self.assertEqual(result['reason'], 'UNCLASSIFIED')
-            self.assertNotIn('PRIMARY_REASON', str(result))
-            self.assertTrue(result['cleanup'].startswith('FAILED:'))
-            self.assertEqual(attempts, ['dev-key'], 'the except path records; finally never retries')
-            self.assertTrue((runner.stage / 'dev-key').exists())
-            self.assertTrue(runner.effect_file.exists())
-
     def test_recorded_failed_disposition_is_never_upgraded_by_repeats(self):
         with tempfile.TemporaryDirectory() as d:
-            runner = object.__new__(vm.Runner)
-            runner.stage = Path(d) / 'stage'
-            runner.stage.mkdir()
-            (runner.stage / 'dev-key').write_text('synthetic')
-            (runner.stage / 'dev-connection.json').write_text('{}')
-            unlink, attempts = deny_unlink({'dev-key'})
-            with patch.object(Path, 'unlink', new=unlink):
+            runner = synthetic_runner(Path(d))
+            stage_synthetic_payload(runner)
+            rmtree, attempts = deny_rmtree({'run-synthetic'})
+            with patch.object(vm.shutil, 'rmtree', new=rmtree):
                 first = runner.cleanup_disposition()
-            self.assertTrue(first.startswith('FAILED:'))
-            self.assertEqual(runner.cleanup_disposition(), first)
-            self.assertEqual(runner.cleanup_disposition(), first)
-            self.assertEqual(attempts, ['dev-key'], 'a recorded disposition never re-runs removal')
-            self.assertNotEqual(runner.cleanup_note, 'CLEARED')
-            self.assertTrue((runner.stage / 'dev-key').exists())
+                self.assertTrue(first.startswith('FAILED:'))
+                self.assertEqual(runner.cleanup_disposition(), first)
+                self.assertEqual(runner.finish_staging(), first)
+            self.assertEqual(attempts, ['run-synthetic'], 'a recorded disposition never re-runs removal')
+            self.assertTrue((runner.stage / 'app.zip').exists())
 
     def test_recorded_cleared_disposition_runs_removal_once(self):
         with tempfile.TemporaryDirectory() as d:
-            runner = object.__new__(vm.Runner)
-            runner.stage = Path(d) / 'stage'
-            runner.stage.mkdir()
-            (runner.stage / 'dev-key').write_text('synthetic')
+            runner = synthetic_runner(Path(d))
+            stage_synthetic_payload(runner)
             attempts = []
-            original = vm.Runner.clear_dev_payload
+            original = vm.Runner.clear_unstarted_staging
             def counted(self_inner):
                 attempts.append(1)
-                original(self_inner)
-            with patch.object(vm.Runner, 'clear_dev_payload', counted):
+                return original(self_inner)
+            with patch.object(vm.Runner, 'clear_unstarted_staging', counted):
                 self.assertEqual(runner.cleanup_disposition(), 'CLEARED')
                 self.assertEqual(runner.cleanup_disposition(), 'CLEARED')
                 self.assertEqual(runner.finish_staging(), 'CLEARED')
             self.assertEqual(attempts, [1], 'repeats must be deduped, not re-executed')
             self.assertFalse(runner.stage.exists())
 
-    def test_failed_payload_cleanup_skips_stage_removal(self):
+    def test_uninspectable_fence_keeps_unstarted_staging(self):
         with tempfile.TemporaryDirectory() as d:
-            runner = object.__new__(vm.Runner)
-            runner.stage = Path(d) / 'stage'
-            runner.stage.mkdir()
-            (runner.stage / 'dev-key').write_text('synthetic')
-            (runner.stage / 'dev-connection.json').write_text('{}')
-            removals = []
-            original_rmtree = vm.shutil.rmtree
-            def counted_rmtree(path, *args, **kwargs):
-                removals.append(path)
-                return original_rmtree(path, *args, **kwargs)
-            unlink, _ = deny_unlink({'dev-key'})
-            with patch.object(Path, 'unlink', new=unlink), \
-                 patch.object(vm.shutil, 'rmtree', counted_rmtree):
-                self.assertTrue(runner.finish_staging().startswith('FAILED:'))
-            self.assertEqual(removals, [], 'raw-payload failure must keep staging untouched')
-            self.assertTrue((runner.stage / 'dev-key').exists())
-            self.assertTrue((runner.stage / 'dev-connection.json').exists())
+            runner = synthetic_runner(Path(d))
+            stage_synthetic_payload(runner)
+            runner.effect_file.symlink_to(Path(d) / 'missing-target')  # not provable absence
+            self.assertEqual(runner.cleanup_disposition(), 'CLEARED')
+            self.assertEqual(runner.staging_removed, [])
+            self.assertTrue((runner.stage / 'app.zip').exists())
+
+    def test_symlinked_stage_is_never_followed(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            runner = synthetic_runner(root)
+            outside = root / 'outside'
+            outside.mkdir()
+            (outside / 'keep').write_text('host bytes')
+            runner.stage.parent.mkdir(parents=True)
+            runner.stage.symlink_to(outside, target_is_directory=True)
+            self.assertTrue(runner.cleanup_disposition().startswith('FAILED:'))
+            self.assertTrue((outside / 'keep').exists())
 
 
 if __name__ == '__main__':

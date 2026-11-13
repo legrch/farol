@@ -172,43 +172,6 @@ class AdmissionTests(unittest.TestCase):
             with self.assertRaisesRegex(vm.Refused, 'ASSET_FILE_INVALID'):
                 vm.verify(alias.absolute())
 
-    def test_dev_export_copies_only_tunnel_and_key(self):
-        with tempfile.TemporaryDirectory() as d:
-            root = Path(d)
-            profile = root / 'Library/Application Support/TestDev'
-            (profile / 'farol-state').mkdir(parents=True)
-            key_dir = profile / 'farol-private/secure-mcp-connector'
-            key_dir.mkdir(parents=True)
-            key = key_dir / 'control-plane-api-key'
-            key.write_text('synthetic-test-key-no-real-secret')
-            key.chmod(0o600)
-            config = {'connectors': {'secureMcp': {'tunnelId': 'test-only', 'credential': 'stored'}},
-                      'computer': {'workspaces': ['/never-copy-this-host-folder']}, 'runtime': 'never-copy'}
-            (profile / 'farol-state/config.json').write_text(json.dumps(config))
-            stage = root / 'stage'
-            stage.mkdir()
-            with patch.object(vm.subprocess, 'check_output', return_value=''):
-                vm.export_dev_connection(stage, vm.IDENTITY, root)
-            self.assertEqual(json.loads((stage / 'dev-connection.json').read_text()),
-                             {'schema': 1, 'tunnelId': 'test-only'})
-            self.assertEqual((stage / 'dev-key').read_bytes(), key.read_bytes())
-            self.assertEqual((stage / 'dev-key').stat().st_mode & 0o777, 0o600)
-            self.assertEqual(set(x.name for x in stage.iterdir()), {'dev-key', 'dev-connection.json'})
-            with patch.object(vm.subprocess, 'check_output', return_value=str(profile)):
-                with self.assertRaisesRegex(vm.Refused, 'HOST_DEV_STILL_RUNNING'):
-                    vm.export_dev_connection(stage, vm.IDENTITY, root)
-
-    def test_transient_dev_payload_is_not_preserved_as_failed_evidence(self):
-        with tempfile.TemporaryDirectory() as d:
-            root = Path(d)
-            for name in ('dev-key', 'dev-connection.json', 'receipt.json'):
-                (root / name).write_text('synthetic')
-            runner = object.__new__(vm.Runner)
-            runner.stage = root
-            runner.clear_dev_payload()
-            runner.clear_dev_payload()
-            self.assertEqual([p.name for p in root.iterdir()], ['receipt.json'])
-
     def test_runtime_and_evidence_paths_cannot_target_host_product_profiles(self):
         home = Path('/fake-home')
         for leaf in (vm.IDENTITY['dataLeaf'], vm.IDENTITY['devDataLeaf']):
@@ -236,46 +199,6 @@ class AdmissionTests(unittest.TestCase):
         runner.deadline = 0
         with self.assertRaisesRegex(vm.Refused, 'DEADLINE'):
             runner.remaining()
-
-    def test_fifo_dev_key_refuses_within_a_bounded_process(self):
-        with tempfile.TemporaryDirectory() as d:
-            root = Path(d)
-            profile = root / 'Library/Application Support/TestDev'
-            (profile / 'farol-state').mkdir(parents=True)
-            keys = profile / 'farol-private/secure-mcp-connector'
-            keys.mkdir(parents=True)
-            os.mkfifo(keys / 'control-plane-api-key', 0o600)
-            (profile / 'farol-state/config.json').write_text(json.dumps({'connectors': {'secureMcp': {'tunnelId': 'test-only', 'credential': 'stored'}}}))
-            stage = root / 'stage'
-            stage.mkdir()
-            copied_source = root / 'runner-source.py'
-            copied_source.write_bytes(Path(spec.origin).read_bytes())
-            script = '''import importlib.util,json,sys
-from pathlib import Path
-sys.pycache_prefix=None
-s=importlib.util.spec_from_file_location('runner',sys.argv[1]);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
-m.subprocess.check_output=lambda *a,**k:''
-m.export_dev_connection(Path(sys.argv[2]),json.loads(sys.argv[3]),Path(sys.argv[4]))
-'''
-            result = subprocess.run([sys.executable, '-B', '-c', script, str(copied_source), str(stage), json.dumps(vm.IDENTITY), str(root)], capture_output=True, text=True, timeout=3)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn('DEV_KEY_UNSAFE', result.stderr)
-            self.assertEqual(list(stage.iterdir()), [])
-            self.assertFalse((root / '__pycache__').exists())
-
-    def test_dev_missing_credential_refuses_before_key_access(self):
-        for value in ('missing', None):
-            with self.subTest(value=value), tempfile.TemporaryDirectory() as d:
-                root = Path(d)
-                profile = root / 'Library/Application Support/TestDev'
-                (profile / 'farol-state').mkdir(parents=True)
-                (profile / 'farol-private/secure-mcp-connector').mkdir(parents=True)
-                connector = {'tunnelId': 'test-only', 'credential': value}
-                (profile / 'farol-state/config.json').write_text(json.dumps({'connectors': {'secureMcp': connector}}))
-                with patch.object(vm.os, 'open') as opened:
-                    with self.assertRaisesRegex(vm.Refused, 'DEV_CREDENTIAL_NOT_STORED'):
-                        vm.export_dev_connection(root, vm.IDENTITY, root)
-                    opened.assert_not_called()
 
     def test_fence_syncs_file_then_directory_before_effect_and_keeps_failure_fenced(self):
         for fail_directory in (False, True):
@@ -336,24 +259,6 @@ m.export_dev_connection(Path(sys.argv[2]),json.loads(sys.argv[3]),Path(sys.argv[
             self.assertEqual(result['outcome'], 'NOT_STARTED')
             self.assertFalse(runner.stage.exists())
 
-    def test_source_uncertainty_refuses_before_key_access(self):
-        for flag in ('setup', 'runtime', 'verification'):
-            with self.subTest(flag=flag), tempfile.TemporaryDirectory() as d:
-                root = Path(d)
-                profile = root / 'Library/Application Support/TestDev'
-                (profile / 'farol-state').mkdir(parents=True)
-                (profile / 'farol-private/secure-mcp-connector').mkdir(parents=True)
-                connector = {'tunnelId': 'test-only', 'credential': 'stored'}
-                config = {'connectors': {'secureMcp': connector}}
-                if flag == 'setup': config['setup'] = {'connect': {'outcomeUnknown': True}}
-                if flag == 'runtime': connector['runtime'] = {'state': 'outcome_unknown'}
-                if flag == 'verification': connector['appVerificationPending'] = True
-                (profile / 'farol-state/config.json').write_text(json.dumps(config))
-                with patch.object(vm.os, 'open') as opened:
-                    with self.assertRaisesRegex(vm.Refused, 'DEV_EFFECT_UNKNOWN'):
-                        vm.export_dev_connection(root, vm.IDENTITY, root)
-                    opened.assert_not_called()
-
     def test_process_guard_matches_legacy_case_spelling(self):
         home = Path('/fake-home')
         row = str(home / 'Library/Application Support/TestDev').upper()
@@ -406,17 +311,7 @@ m.export_dev_connection(Path(sys.argv[2]),json.loads(sys.argv[3]),Path(sys.argv[
                     with self.assertRaisesRegex(vm.Refused, 'GUEST_QUIT_DRAIN_UNCONFIRMED'):
                         runner.require_quit_drain(before)
 
-    def test_dev_transport_probe_precedes_any_export(self):
-        runner = object.__new__(vm.Runner)
-        runner.prepare_stage = lambda: None
-        runner.start_guest = lambda: None
-        runner.phase = lambda name: (_ for _ in ()).throw(vm.Refused('probe-failed'))
-        with patch.object(vm, 'export_dev_connection') as export:
-            with self.assertRaisesRegex(vm.Refused, 'probe-failed'):
-                runner.connect_dev()
-            export.assert_not_called()
-
-    def test_catchable_cancellation_cleans_credentials_through_main(self):
+    def test_catchable_cancellation_after_a_fence_retains_staging_and_fence(self):
         for kind in ('keyboard', 'term'):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as d:
                 root = Path(d)
@@ -426,12 +321,11 @@ m.export_dev_connection(Path(sys.argv[2]),json.loads(sys.argv[3]),Path(sys.argv[
                 runner.out = root / 'evidence'
                 runner.out.mkdir()
                 runner.log = []
-                runner.pending = 'import-dev'
+                runner.pending = 'install'
                 runner.effect_owned = False
                 runner.effect_file = root / '.farol-smoke-pending.json'
                 runner.run_id = 'cancelled-test'
-                for name in ('dev-key', 'dev-connection.json'):
-                    (runner.stage / name).write_text('synthetic-only')
+                (runner.stage / 'app.zip').write_text('synthetic-only')
                 def cancel():
                     runner.begin_effect()
                     if kind == 'term': vm.signal.raise_signal(vm.signal.SIGTERM)
@@ -440,10 +334,42 @@ m.export_dev_connection(Path(sys.argv[2]),json.loads(sys.argv[3]),Path(sys.argv[
                 previous = vm.signal.getsignal(vm.signal.SIGTERM)
                 with patch.object(vm, 'arguments', return_value=None), patch.object(vm, 'Runner', return_value=runner), contextlib.redirect_stdout(io.StringIO()):
                     self.assertEqual(vm.main(), 2)
-                self.assertEqual(list(runner.stage.iterdir()), [])
+                # A possible guest effect keeps its staging as evidence.
+                self.assertTrue((runner.stage / 'app.zip').exists())
                 self.assertTrue(runner.effect_file.exists())
-                self.assertEqual(json.loads((runner.out / 'result.json').read_text())['outcome'], 'UNKNOWN')
+                result = json.loads((runner.out / 'result.json').read_text())
+                self.assertEqual(result['outcome'], 'UNKNOWN')
+                self.assertEqual(result['retainedStaging'], ['artifacts/stage'])
+                self.assertEqual(result['removedStaging'], [])
                 self.assertEqual(vm.signal.getsignal(vm.signal.SIGTERM), previous)
+
+    def test_catchable_cancellation_before_any_fence_removes_own_staging(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            runner = object.__new__(vm.Runner)
+            runner.stage = root / 'artifacts' / 'run-cancelled'
+            runner.report = root / 'exchange' / 'run-cancelled'
+            runner.stage.mkdir(parents=True)
+            runner.report.mkdir(parents=True)
+            runner.out = root / 'evidence'
+            runner.out.mkdir()
+            runner.log = []
+            runner.pending = None
+            runner.effect_owned = False
+            runner.effect_file = root / '.farol-smoke-pending.json'
+            runner.run_id = 'run-cancelled'
+            (runner.stage / 'app.zip').write_text('synthetic-only')
+            runner.run = lambda: (_ for _ in ()).throw(KeyboardInterrupt())
+            with patch.object(vm, 'arguments', return_value=None), patch.object(vm, 'Runner', return_value=runner), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(vm.main(), 2)
+            self.assertFalse(runner.stage.exists())
+            self.assertFalse(runner.report.exists())
+            self.assertFalse(runner.effect_file.exists())
+            result = json.loads((runner.out / 'result.json').read_text())
+            self.assertEqual(result['outcome'], 'NOT_STARTED')
+            self.assertEqual(result['cleanup'], 'CLEARED')
+            self.assertEqual(result['removedStaging'], ['artifacts/run-cancelled', 'exchange/run-cancelled'])
+            self.assertEqual(result['retainedStaging'], [])
 
 
 if __name__ == '__main__':

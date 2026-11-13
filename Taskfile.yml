@@ -139,7 +139,7 @@ tasks:
       - node tooling/vm-entry.mjs smoke --connection-proof {{.CLI_ARGS}}
 
   qa:connect-dev:
-    desc: Import only the approved Dev tunnel ID/key into the guest package profile (host Dev must be stopped)
+    desc: BLOCKED - refuses with DEV_IMPORT_UNQUALIFIED before any VM, staging or key access; no guest Dev credential import is qualified
     cmds:
       - node tooling/vm-entry.mjs smoke --connect-dev {{.CLI_ARGS}}
 

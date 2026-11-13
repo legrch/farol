@@ -249,9 +249,25 @@ class InputLeaseConsumerTests(unittest.TestCase):
                 after = (machine / 'input-lease.json').read_text() if (machine / 'input-lease.json').exists() else None
                 self.assertEqual(after, before, 'refusal never rewrites foreign metadata')
 
+    def test_refusal_after_vm_start_but_before_guest_effect_releases_cleanly(self):
+        # The fifth CLI call is the preflight screenshot: the VM was started by
+        # this run (`vm-started`), but no guest request was ever published.
+        with tempfile.TemporaryDirectory() as d:
+            runner, result, caught, calls, _, phase_timeline = drive(Path(d), cli_fail_at=5)
+            self.assertIsNone(result)
+            self.assertRegex(str(caught), 'GUEST_ACTION_FAILED')
+            self.assertEqual(runner.log, ['vm-started'])
+            self.assertEqual(phase_timeline, [])
+            self.assertFalse(runner.effect_possible())
+            machine = runner.machine
+            self.assertFalse((machine / 'input-lease.json').exists())
+            self.assertFalse((machine / 'exchange' / '.input-lease.json').exists())
+            probe_lock_free(machine)
+            runner.acquire_input_lease()  # the next run is not wedged
+            runner.release_input_lease()
+
     def test_failed_run_releases_host_flock_but_preserves_guest_update_inhibitor(self):
-        for where, kwargs in (('cli-action', dict(cli_fail_at=5)),
-                              ('guest-phase', dict(phase_fail_at=3))):
+        for where, kwargs in (('guest-phase', dict(phase_fail_at=3)),):
             with self.subTest(where=where), tempfile.TemporaryDirectory() as d:
                 runner, result, caught, calls, cli_timeline, phase_timeline = drive(Path(d), **kwargs)
                 self.assertIsNone(result)
