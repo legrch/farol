@@ -473,13 +473,13 @@ retirement, persisted result bodies and cross-build recovery remain open.
 
 ## Wire and generation
 
-`api/desktop/v1/schema.json` is the single schema authority. `farol-wire/2` is a deliberately small local generator, not a general schema framework. Run `node tooling/generate-desktop-wire.mjs`; `--check` fails on drift. It uses the locked repository Prettier and Go formatter. Generated Go and TS contain the schema SHA-256; changing the schema requires regenerating both files. Validator templates are generator implementation, not independently authored DTOs. The source format is version 2: method metadata contains read/effect strings, and version-1 metadata is refused by the generator. Wire request/result/event envelopes retain protocol 1.0; the source-format version is not an on-wire protocol revision. Accepted host/backend build provenance and generated schema digests bind the corresponding artifacts.
+`api/desktop/v1/schema.json` is the single schema authority. `farol-wire/2` is a deliberately small local generator, not a general schema framework. Run `node tooling/generate-desktop-wire.mjs`; `--check` fails on drift. It uses the locked repository Prettier and Go formatter. Generated Go and TS contain the schema SHA-256; changing the schema requires regenerating both files. Validator templates are generator implementation, not independently authored DTOs. The source format is version 2: method metadata contains read/effect strings, and version-1 metadata is refused by the generator. Wire request/result/event envelopes use protocol 2.0, which differs from 1.0 only in sequenced request IDs; the source-format version is not an on-wire protocol revision. Accepted host/backend build provenance and generated schema digests bind the corresponding artifacts.
 
 Frames have a four-byte unsigned big-endian length and 1..1,048,576 UTF-8 JSON bytes. Admit size before allocation. Duplicate keys, invalid UTF-8, depth above 32, unknown envelope fields, numeric request IDs, batches and trailing JSON are refused. A truncated or invalid frame ends the connection; stdout is protocol only, stderr is diagnostics. The TS client counts at most 64 KiB diagnostic bytes and retains no diagnostic contents.
 
-JSON-RPC 2.0 request IDs are opaque ASCII strings, 1..128 characters with letters, digits, `.`, `_`, `:`, `/` and `-`. They are never coerced to numbers. Faults without a recoverable request ID use JSON-RPC `id: null`. Requests use `params: { context?, operationId?, body }`. The handshake body carries major/minor, exact expected build and profile. Major must match and the requested minor must be supported. Adopt context only from that verified handshake result. All subsequent requests bind the exact profile and backend generation. The host remains responsible for accepted executable provenance and IPC sender checks; a handshake alone is not product workspace authority.
+JSON-RPC 2.0 request IDs are opaque ASCII strings, 1..128 characters with letters, digits, `.`, `_`, `:`, `/` and `-`. They are never coerced to numbers. On the wire every request ID is sequenced (see the connection bounds below); a host caller's own ID never reaches the wire and is restored on the reply. Faults without a recoverable request ID use JSON-RPC `id: null`. Requests use `params: { context?, operationId?, body }`. The handshake body carries major/minor, exact expected build and profile. Major must match and the requested minor must be supported. Adopt context only from that verified handshake result. All subsequent requests bind the exact profile and backend generation. The host remains responsible for accepted executable provenance and IPC sender checks; a handshake alone is not product workspace authority.
 
-Every response echoes request and operation IDs. Outcomes are `ok`, `unavailable`, `unsupported`, `refused` or `unknown`. Unknown methods produce a JSON-RPC fault. Known but unregistered module capabilities return unavailable. Owner data and its worst-case JSON escape expansion are bounded before response serialization; oversized owner output returns `unknown`/`owner_output_bound` without content or replay, preserving request/operation identity. This does not prove a module-owned effect was cancelled. Operation status is explicitly unsupported until its authoritative module owner supplies retained state. It must never dispatch a mutation to answer an observation. Request IDs cannot repeat on one connection. The server bounds ordinary and invalid requests at4,096 attempts, including malformed/duplicate requests; the ordered read-only poll exception below uses two fixed counters; the client limits in-flight requests to 32 and stops admitting while its writer is backpressured. A timeout or loss after dispatch is unknown, closes admission and never resends, restarts or switches executors. Fatal failure ends an owned child's input, waits one second, then stops that exact child; cleanup is confirmed only by a terminal child observation, with a two-second observation budget. Unconfirmed cleanup stays unknown and `close()` reports it. Borrowed children are never stopped. Backend cleanup does not prove cancellation of an OS child/provider operation; module journals still own those unknown outcomes.
+Every response echoes request and operation IDs. Outcomes are `ok`, `unavailable`, `unsupported`, `refused` or `unknown`. Unknown methods produce a JSON-RPC fault. Known but unregistered module capabilities return unavailable. Owner data and its worst-case JSON escape expansion are bounded before response serialization; oversized owner output returns `unknown`/`owner_output_bound` without content or replay, preserving request/operation identity. This does not prove a module-owned effect was cancelled. Operation status is explicitly unsupported until its authoritative module owner supplies retained state. It must never dispatch a mutation to answer an observation. Request IDs cannot repeat on one connection: each carries the next sequence of its lane, so a connection has no lifetime request count. The server ends a connection after 64 consecutive requests refused before any owner runs; the client limits in-flight requests to 32 and stops admitting while its writer is backpressured. A timeout or loss after dispatch is unknown, closes admission and never resends, restarts or switches executors. Fatal failure ends an owned child's input, waits one second, then stops that exact child; cleanup is confirmed only by a terminal child observation, with a two-second observation budget. Unconfirmed cleanup stays unknown and `close()` reports it. Borrowed children are never stopped. Backend cleanup does not prove cancellation of an OS child/provider operation; module journals still own those unknown outcomes.
 
 PID, uint64 counters and sequences use canonical decimal strings (0..18446744073709551615). JSON numbers use IEEE-754 binary64 value semantics in both peers. Bounded integer fields validate the decoded integer value and its range; `1`, `1.0` and `1e0` decode identically. JSON number token precision is not retained: a sub-ULP fraction such as `1.00000000000000001` also decodes to `1`. Decoded non-integers and out-of-range values are refused. Exact uint64 values use decimal strings, independent of JSON number rounding. Timestamps are UTC RFC3339 with up to nine fractional digits. File ranges are UTF-8 byte offsets, never JS UTF-16 indexes. Transport does not add raw filesystem byte-name support. Module adapters own their independent app/contract DTO conversion.
 
@@ -510,30 +510,53 @@ The accepted Go in-process contract is a thin owning facade with independent DTO
 
 Malformed owner output is contained as `unknown`/`owner_output_invalid` with exact request/operation/context correlation and no data or replay. Normal bounded replies encode once; invalid output uses one small correlated fallback, preserving the shared pipe for subsequent requests. Canonical operation identity is checked before unavailable/unsupported returns, so missing effect IDs and extra read IDs are refused even when the capability is absent.
 
-`farol-wire/2` retains the protocol 1.0 bounds: 1 MiB frames, depth 32 and
-4096 ordinary/invalid request attempts. The generator refuses missing, coerced
-or different limit metadata before producing either peer. Regenerating types
-alone cannot change framing or admission.
+`farol-wire/2` carries the protocol 2.0 bounds: 1 MiB frames, depth 32 and 64
+consecutive invalid requests (`maxConsecutiveInvalidRequests`). The generator
+refuses missing, coerced or different limit metadata, the protocol 1.0
+`maxRequests` field and any other major before producing either peer.
+Regenerating types alone cannot change framing or admission.
 
-The exact-build inherited desktop pipe has one coordinated exception for the
-two read-only reciprocal polls: `chat.browser.next` and
-`computer.settings.store.next`. The host translates their correlation IDs to a
-reserved `desktop-poll-<lane>:<connection nonce>:<uint64 sequence>` namespace;
-the Go reader validates the current context, registered method, closed body,
-absent effect identity, unchanged nonce and exact next sequence before admission.
-Only two counters are retained. Replays, gaps, forged methods, stale contexts and
-malformed polls consume the ordinary attempt budget and cannot invoke an owner.
-No effect or command reply uses this exception. Wire responses are checked before
-the host maps a poll ID back to its local caller. Unknown outcomes still close
-admission without retries. Old UUID-based callers retain the bounded behavior.
+Every request on a connection (the inherited desktop pipe or one connector
+socket stream) is sequenced under one random per-connection nonce. Ordinary
+requests use `desktop-call:<nonce>:<uint64 sequence>`, starting at 1 with the
+handshake. The four registered read-only reciprocal polls (`chat.browser.next`,
+`computer.settings.store.next`, `computer.connector.health`,
+`computer.process.audit`) use their own lanes,
+`desktop-poll-<lane>:<nonce>:<uint64 sequence>`. The Go reader keeps only the
+nonce, the last ordinary sequence and one counter per poll lane, so state is
+constant and memory is bounded by in-flight work. Any other ID is refused as
+`unsequenced request ID`; a replayed, out-of-order or skipped sequence, a
+foreign nonce or an exhausted uint64 as `invalid request sequence` (`-32600`).
+An ordinary sequence is consumed as soon as it is admitted, before handshake,
+context, method and identity checks, so a refused request cannot be resent and
+the next one stays admissible. A poll is admitted only after its current
+context, registered method, closed body and absent effect identity are checked;
+a refused poll does not advance its lane and cannot invoke an owner. Operation
+IDs remain the module-owned effect fences. Wire responses are checked before
+the host maps a sequenced ID back to its caller's ID. Unknown outcomes still
+close admission without retries.
 
-The host reserves the last eight ordinary IDs for connector closure and the
-original retirement prepare/ACK exchange. Other requests refuse locally before
-submission at4088; this is a capacity refusal, not a claimed outcome. Idle polls
-cannot exhaust the bounded effect history or prevent confirmed Quit. The
-deterministic framed-client and Go pipe regressions each exercise12000 polls,
-then retirement, plus sequence/authority/replay and finite-history guards. These
-are protocol evidence, not an overnight native or installed-app witness.
+Caller IDs are checked only against live calls (`duplicate_request_id`); the
+`desktop-call:` and `desktop-poll-` prefixes are reserved. The connector client
+likewise refuses a live duplicate operation ID and otherwise relies on the
+module operation stores. A request refused locally consumes no sequence. A
+reconnect is a new client and a new server with a fresh nonce from sequence 1.
+
+Malformed frames, refused sequences, stale contexts, unknown methods and
+invalid operation identities are answered with a fault and counted; any
+admitted request, including a capacity refusal, resets the count. At 64
+consecutive invalid requests the server ends that connection (on the host pipe
+the backend exits), so a broken peer cannot spin the reader indefinitely while
+a valid stream is unbounded.
+
+Desktop, backend and the connector adapter ship in one bundle. A protocol 1.0
+peer is refused before any owner runs: its unsequenced handshake gets
+`unsequenced request ID`, and a 1.0 backend refuses a 2.0 handshake as
+`incompatible backend identity`. Deterministic regressions serve 12000
+ordinary requests and 12000 polls on one Go pipe, more than 6000 ordinary
+requests through the framed host client and 10000 on one connector stream, and
+cover sequence refusals, the invalid-request bound and reconnects. These are
+protocol evidence, not an overnight native or installed-app witness.
 
 Closing or fatally failing a borrowed Client detaches only that wrapper's stream, child and drain handlers, clears its observers and rejects its pending requests. It leaves the owner's child, streams and foreign listeners intact. Owned-child terminal observation and cleanup remain separate.
 
