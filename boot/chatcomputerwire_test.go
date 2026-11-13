@@ -8,14 +8,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	wire "github.com/legrch/farol/gen/desktop/v1"
-	conversation "github.com/legrch/farol/modules/chat/contracts/conversation"
-	"github.com/legrch/farol/modules/computer/domain/authority"
-	"github.com/legrch/farol/transport/desktop"
 	"io"
 	"strings"
 	"testing"
 	"time"
+
+	wire "github.com/legrch/farol/gen/desktop/v1"
+	conversation "github.com/legrch/farol/modules/chat/contracts/conversation"
+	"github.com/legrch/farol/modules/computer/domain/authority"
+	"github.com/legrch/farol/transport/desktop"
 )
 
 func chatComputerWireConnect(t *testing.T, f *chatComputerFixture, computer *ComputerIngress) *taskWireTestPeer {

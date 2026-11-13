@@ -12,7 +12,7 @@ import (
 	admissionct "github.com/legrch/farol/modules/task/contracts/admission"
 	controlct "github.com/legrch/farol/modules/task/contracts/control"
 	observationct "github.com/legrch/farol/modules/task/contracts/observation"
-	"github.com/legrch/farol/modules/task/domain"
+	task "github.com/legrch/farol/modules/task/domain"
 	claudeclient "github.com/legrch/farol/modules/task/infra/clients/claude"
 	codexclient "github.com/legrch/farol/modules/task/infra/clients/codex"
 	progress "github.com/legrch/farol/modules/task/infra/clients/provider"

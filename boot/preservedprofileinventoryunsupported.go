@@ -4,6 +4,7 @@ package boot
 
 import (
 	"context"
+
 	"github.com/legrch/farol/modules/chat/app/services/handoff"
 )
 

@@ -10,6 +10,8 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/legrch/farol/pkg/limit"
+
 	"github.com/legrch/farol/pkg/ipc"
 )
 
@@ -46,8 +48,8 @@ func runTerminatedProfileInspection(args []string, in io.Reader, out io.Writer, 
 		fmt.Fprintln(diagnostics, "TERMINATED_PROFILE_INSPECTION_INPUT_INVALID")
 		return 2
 	}
-	raw, err := io.ReadAll(io.LimitReader(in, 65537))
-	if err != nil || len(raw) > 65536 || ipc.ValidateJSON(raw) != nil || !emptyRecoveryCanonicalFields(raw, reflect.TypeFor[terminatedProfileInspectionInput]()) {
+	raw, err := limit.Read(in, 65536)
+	if err != nil || ipc.ValidateJSON(raw) != nil || !emptyRecoveryCanonicalFields(raw, reflect.TypeFor[terminatedProfileInspectionInput]()) {
 		fmt.Fprintln(diagnostics, "TERMINATED_PROFILE_INSPECTION_INPUT_INVALID")
 		return 2
 	}

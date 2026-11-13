@@ -3,10 +3,11 @@ package boot
 import (
 	"encoding/json"
 	"errors"
-	releaseport "github.com/legrch/farol/modules/release/app/port"
-	executionapp "github.com/legrch/farol/modules/release/app/services/execution"
 	"os"
 	"time"
+
+	releaseport "github.com/legrch/farol/modules/release/app/port"
+	executionapp "github.com/legrch/farol/modules/release/app/services/execution"
 
 	"golang.org/x/sys/unix"
 )

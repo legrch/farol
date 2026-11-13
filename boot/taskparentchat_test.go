@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/legrch/farol/modules/task/domain"
+	task "github.com/legrch/farol/modules/task/domain"
 	parentpeer "github.com/legrch/farol/modules/task/infra/peer/parent"
 )
 

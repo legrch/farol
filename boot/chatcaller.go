@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
+
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	conversation "github.com/legrch/farol/modules/chat/contracts/conversation"
 	"github.com/legrch/farol/pkg/ipc"
 	"github.com/legrch/farol/transport/desktop"
-	"sync"
 )
 
 type chatCallerRecord struct {

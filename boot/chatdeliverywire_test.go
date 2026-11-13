@@ -7,10 +7,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	wire "github.com/legrch/farol/gen/desktop/v1"
-	"github.com/legrch/farol/modules/chat/infra/responses"
 	"strings"
 	"testing"
+
+	wire "github.com/legrch/farol/gen/desktop/v1"
+	"github.com/legrch/farol/modules/chat/infra/responses"
 )
 
 func TestChatDeliveryWireIssuesExactOriginalGroupOnceWithoutReceipt(t *testing.T) {

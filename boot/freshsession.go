@@ -3,6 +3,7 @@ package boot
 import (
 	"context"
 	"encoding/json"
+
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	"github.com/legrch/farol/transport/desktop"
 )

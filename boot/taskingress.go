@@ -7,7 +7,7 @@ import (
 	admissionct "github.com/legrch/farol/modules/task/contracts/admission"
 	controlct "github.com/legrch/farol/modules/task/contracts/control"
 	observationct "github.com/legrch/farol/modules/task/contracts/observation"
-	"github.com/legrch/farol/modules/task/domain"
+	task "github.com/legrch/farol/modules/task/domain"
 )
 
 // These narrow bodies carry no task, provider, model, epoch or grant selection.

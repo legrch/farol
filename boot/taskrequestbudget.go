@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/legrch/farol/modules/task/app/port"
-	"github.com/legrch/farol/modules/task/domain"
+	task "github.com/legrch/farol/modules/task/domain"
 )
 
 // Budget metadata only, set by the closed routed effect ingress. It carries no

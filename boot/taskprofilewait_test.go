@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/legrch/farol/modules/task/app/port"
-	"github.com/legrch/farol/modules/task/domain"
+	task "github.com/legrch/farol/modules/task/domain"
 	codexclient "github.com/legrch/farol/modules/task/infra/clients/codex"
 	taskrepo "github.com/legrch/farol/modules/task/infra/repos/task"
 )

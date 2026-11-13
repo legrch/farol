@@ -16,6 +16,8 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/legrch/farol/pkg/limit"
+
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	chatport "github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/app/services/handoff"
@@ -99,7 +101,7 @@ func inspectPreparedEmptyPending(in preparedEmptyInspectionInput) (value emptyRe
 	if unix.Fstat(fd, &a) != nil || uint32(a.Mode)&unix.S_IFMT != unix.S_IFREG || uint32(a.Mode) != before.Mode || uint64(a.Dev) != before.Device || a.Ino != before.Inode || a.Uid != before.OwnerUID || a.Nlink != 1 || a.Size < 2 || a.Size > 65536 {
 		return value, handoff.Refused
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, 65537))
+	raw, err := limit.Read(f, 65536)
 	if err != nil || int64(len(raw)) != a.Size || unix.Fstat(fd, &b) != nil || unix.Lstat(path, &named) != nil || !sameEmptyRecoveryStat(a, b) || !sameEmptyRecoveryStat(b, named) || !preparedEmptyPendingMatches(raw, in) {
 		return value, handoff.Refused
 	}
@@ -173,7 +175,7 @@ func readPreparedEmptyArchiveRecord(path string, expected emptyRecoveryFile) (ra
 	if unix.Fstat(fd, &a) != nil || uint32(a.Mode)&unix.S_IFMT != unix.S_IFREG || uint32(a.Mode) != expected.Mode || uint64(a.Dev) != expected.Device || a.Ino != expected.Inode || a.Uid != expected.OwnerUID || a.Nlink != 1 || a.Size < 1 || a.Size > 16384 {
 		return nil, handoff.Refused
 	}
-	raw, err = io.ReadAll(io.LimitReader(f, 16385))
+	raw, err = limit.Read(f, 16384)
 	if err != nil || int64(len(raw)) != a.Size || sha256.Sum256(raw) != expected.SHA256 || unix.Fstat(fd, &b) != nil || unix.Lstat(path, &n) != nil || !sameEmptyRecoveryStat(a, b) || !sameEmptyRecoveryStat(b, n) {
 		return nil, handoff.Refused
 	}

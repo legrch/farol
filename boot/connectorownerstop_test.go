@@ -2,9 +2,10 @@ package boot
 
 import (
 	"context"
-	wire "github.com/legrch/farol/gen/desktop/v1"
 	"testing"
 	"time"
+
+	wire "github.com/legrch/farol/gen/desktop/v1"
 )
 
 // Real owner/boot composition with injected endpoint, clock and journals only.

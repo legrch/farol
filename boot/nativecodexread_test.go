@@ -24,7 +24,7 @@ import (
 	"github.com/legrch/farol/modules/chat/infra/intent"
 	"github.com/legrch/farol/modules/chat/infra/results"
 	"github.com/legrch/farol/modules/task/contracts/selectedthread"
-	"github.com/legrch/farol/modules/task/domain"
+	task "github.com/legrch/farol/modules/task/domain"
 	codexclient "github.com/legrch/farol/modules/task/infra/clients/codex"
 )
 

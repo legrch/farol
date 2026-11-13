@@ -19,6 +19,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/legrch/farol/pkg/limit"
+
 	"github.com/legrch/farol/modules/release/infra/native/appidentity"
 	"github.com/legrch/farol/modules/release/infra/native/apptree"
 	"github.com/legrch/farol/modules/release/infra/native/installmove"
@@ -467,8 +469,8 @@ func checkedInstallRecord(dir string) error {
 	if !ok || st.Uid != uint32(os.Geteuid()) {
 		return errors.New("INSTALL_PREVIOUS_OUTCOME_UNKNOWN")
 	}
-	b, err := io.ReadAll(io.LimitReader(f, 4097))
-	if err != nil || len(b) > 4096 {
+	b, err := limit.Read(f, 4096)
+	if err != nil {
 		return errors.New("INSTALL_PREVIOUS_OUTCOME_UNKNOWN")
 	}
 	var r installReleaseRecord

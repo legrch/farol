@@ -5,21 +5,22 @@ package boot
 import (
 	"context"
 	"errors"
-	computerprocess "github.com/legrch/farol/modules/computer/contracts/process"
-	observationct "github.com/legrch/farol/modules/task/contracts/observation"
-	claudeclient "github.com/legrch/farol/modules/task/infra/clients/claude"
-	codexclient "github.com/legrch/farol/modules/task/infra/clients/codex"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	computerprocess "github.com/legrch/farol/modules/computer/contracts/process"
+	observationct "github.com/legrch/farol/modules/task/contracts/observation"
+	claudeclient "github.com/legrch/farol/modules/task/infra/clients/claude"
+	codexclient "github.com/legrch/farol/modules/task/infra/clients/codex"
+
 	"github.com/legrch/farol/modules/task/app/port"
 	tasksvc "github.com/legrch/farol/modules/task/app/services/task"
 	"github.com/legrch/farol/modules/task/contracts/admission"
 	"github.com/legrch/farol/modules/task/contracts/control"
-	"github.com/legrch/farol/modules/task/domain"
+	task "github.com/legrch/farol/modules/task/domain"
 
 	taskrepo "github.com/legrch/farol/modules/task/infra/repos/task"
 )

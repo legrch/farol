@@ -6,7 +6,7 @@ import (
 	"github.com/legrch/farol/modules/task/app/port"
 	workflow "github.com/legrch/farol/modules/task/app/services/workflow"
 	controlct "github.com/legrch/farol/modules/task/contracts/control"
-	"github.com/legrch/farol/modules/task/domain"
+	task "github.com/legrch/farol/modules/task/domain"
 	wf "github.com/legrch/farol/modules/task/domain/workflow"
 	parentpeer "github.com/legrch/farol/modules/task/infra/peer/parent"
 	taskrepo "github.com/legrch/farol/modules/task/infra/repos/task"

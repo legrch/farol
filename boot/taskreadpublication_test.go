@@ -12,7 +12,7 @@ import (
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	controlct "github.com/legrch/farol/modules/task/contracts/control"
-	"github.com/legrch/farol/modules/task/domain"
+	task "github.com/legrch/farol/modules/task/domain"
 	codexclient "github.com/legrch/farol/modules/task/infra/clients/codex"
 )
 

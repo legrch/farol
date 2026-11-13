@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
-	"github.com/legrch/farol/modules/task/domain"
+	task "github.com/legrch/farol/modules/task/domain"
 )
 
 func (j *taskRuntimeTestMemory) RecordEvent(_ context.Context, event task.ExecutionEvent) error {

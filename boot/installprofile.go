@@ -8,13 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/legrch/farol/pkg/limit"
 
 	"golang.org/x/sys/unix"
 )
@@ -247,8 +248,8 @@ func installPrivateFile(path string, maximum int64) ([]byte, error) {
 	if !openedOK || openedStat.Nlink != 1 {
 		return nil, errors.New("INSTALL_FRESH_STATE_UNCONFIRMED")
 	}
-	data, err := io.ReadAll(io.LimitReader(f, maximum+1))
-	if err != nil || int64(len(data)) > maximum {
+	data, err := limit.Read(f, maximum)
+	if err != nil {
 		return nil, errors.New("INSTALL_FRESH_STATE_UNCONFIRMED")
 	}
 	after, afterErr := f.Stat()

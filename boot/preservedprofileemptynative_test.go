@@ -8,13 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	wire "github.com/legrch/farol/gen/desktop/v1"
-	delivery "github.com/legrch/farol/modules/computer/app/services/settingsdelivery"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
+
+	wire "github.com/legrch/farol/gen/desktop/v1"
+	delivery "github.com/legrch/farol/modules/computer/app/services/settingsdelivery"
 
 	archivepolicy "github.com/legrch/farol/modules/chat/app/capabilities/archive"
 	chatport "github.com/legrch/farol/modules/chat/app/port"

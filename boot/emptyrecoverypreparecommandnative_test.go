@@ -6,13 +6,14 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"golang.org/x/sys/unix"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	chatport "github.com/legrch/farol/modules/chat/app/port"
 )

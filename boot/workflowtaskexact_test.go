@@ -9,7 +9,7 @@ import (
 	"github.com/legrch/farol/modules/task/app/port"
 	workflowapp "github.com/legrch/farol/modules/task/app/services/workflow"
 	"github.com/legrch/farol/modules/task/contracts/control"
-	"github.com/legrch/farol/modules/task/domain"
+	task "github.com/legrch/farol/modules/task/domain"
 	wf "github.com/legrch/farol/modules/task/domain/workflow"
 	taskrepo "github.com/legrch/farol/modules/task/infra/repos/task"
 )

@@ -17,7 +17,7 @@ import (
 	accessrepo "github.com/legrch/farol/modules/computer/infra/repos/access"
 	controlct "github.com/legrch/farol/modules/task/contracts/control"
 	sourcect "github.com/legrch/farol/modules/task/contracts/currentsource"
-	"github.com/legrch/farol/modules/task/domain"
+	task "github.com/legrch/farol/modules/task/domain"
 	codexclient "github.com/legrch/farol/modules/task/infra/clients/codex"
 )
 

@@ -17,7 +17,7 @@ import (
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	accessrepo "github.com/legrch/farol/modules/computer/infra/repos/access"
 	"github.com/legrch/farol/modules/task/contracts/selectedthread"
-	"github.com/legrch/farol/modules/task/domain"
+	task "github.com/legrch/farol/modules/task/domain"
 	"github.com/legrch/farol/pkg/ipc"
 	"github.com/legrch/farol/transport/desktop"
 )

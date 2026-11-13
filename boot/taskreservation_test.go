@@ -15,7 +15,7 @@ import (
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	"github.com/legrch/farol/modules/task/app/port"
 	controlct "github.com/legrch/farol/modules/task/contracts/control"
-	"github.com/legrch/farol/modules/task/domain"
+	task "github.com/legrch/farol/modules/task/domain"
 	taskrepo "github.com/legrch/farol/modules/task/infra/repos/task"
 )
 
