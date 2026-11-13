@@ -62,17 +62,23 @@ describe("the source-slicing ban", () => {
   });
 
   // Every execution mechanism the detector knows, each as a new offender.
-  it.each(["vm", "function", "eval", "transpile", "esbuild"])(
-    "refuses a new %s offender",
-    (mechanism) => {
-      const result = check(path.join(fixtures, mechanism));
-      expect(result.status).toBe(1);
-      expect(result.summary?.findings.map((f) => f.code)).toEqual([
-        "SLICING_NEW_OFFENDER",
-      ]);
-      expect(result.summary?.byMechanism).toEqual({ [mechanism]: 1 });
-    },
-  );
+  it.each([
+    "vm",
+    "function",
+    "eval",
+    "transpile",
+    "esbuild",
+    "esbuild-template",
+  ])("refuses a new %s offender", (mechanism) => {
+    const result = check(path.join(fixtures, mechanism));
+    expect(result.status).toBe(1);
+    expect(result.summary?.findings.map((f) => f.code)).toEqual([
+      "SLICING_NEW_OFFENDER",
+    ]);
+    expect(result.summary?.byMechanism).toEqual({
+      [mechanism.replace("-template", "")]: 1,
+    });
+  });
 
   it("refuses an offender missing from a non-empty allowlist", () => {
     const result = check(path.join(fixtures, "new-offender"));

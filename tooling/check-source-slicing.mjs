@@ -72,6 +72,84 @@ function literalText(node) {
   return null;
 }
 
+// A value is derived when it is not a plain string: a template literal that
+// interpolates anything (for example a slice of the source) is derived.
+function isDerived(node) {
+  if (node.type === "StringLiteral") return false;
+  if (node.type === "TemplateLiteral") return node.expressions.length > 0;
+  return true;
+}
+
+function referencedNames(node, names) {
+  walk(node, (inner) => {
+    if (inner.type === "Identifier") names.add(inner.name);
+  });
+  return names;
+}
+
+// Text a node spells out: string literals, template quasis and path.join /
+// path.resolve / URL arguments, with identifiers followed to their const
+// initializers (bounded depth) so `const file = path.join(root, "src/x.ts")`
+// still reads as a production path.
+function pathText(node, bindings, depth = 0) {
+  const parts = [];
+  walk(node, (inner) => {
+    const text = literalText(inner);
+    if (text !== null) parts.push(text.replaceAll("\u0000", "/"));
+    if (inner.type === "Identifier" && depth < 4 && bindings.has(inner.name))
+      parts.push(pathText(bindings.get(inner.name), bindings, depth + 1));
+  });
+  return parts.join("/");
+}
+
+function productionRead(node, bindings) {
+  return (
+    node.type === "CallExpression" &&
+    readCalls.has(calleeName(node.callee)) &&
+    node.arguments[0] !== undefined &&
+    productionPath.test(pathText(node.arguments[0], bindings))
+  );
+}
+
+function containsProductionRead(node, bindings) {
+  let found = false;
+  walk(node, (inner) => {
+    if (productionRead(inner, bindings)) found = true;
+  });
+  return found;
+}
+
+// Names bound (transitively, within one file) to the result of an fs read of
+// a production path.
+function readBoundNames(ast) {
+  const declarators = [];
+  walk(ast.program, (node) => {
+    if (
+      node.type === "VariableDeclarator" &&
+      node.id.type === "Identifier" &&
+      node.init
+    )
+      declarators.push(node);
+  });
+  const bindings = new Map(declarators.map((d) => [d.id.name, d.init]));
+  const tainted = new Set();
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const declarator of declarators) {
+      if (tainted.has(declarator.id.name)) continue;
+      const used = referencedNames(declarator.init, new Set());
+      if (
+        containsProductionRead(declarator.init, bindings) ||
+        [...used].some((n) => tainted.has(n))
+      ) {
+        tainted.add(declarator.id.name);
+        changed = true;
+      }
+    }
+  }
+  return { tainted, bindings };
+}
+
 // Analyze one file's source. Pure: no filesystem access.
 export function analyze(source, file) {
   const ast = parse(source, {
@@ -80,6 +158,7 @@ export function analyze(source, file) {
     errorRecovery: false,
   });
   const imports = new Set();
+  const { tainted, bindings } = readBoundNames(ast);
   let reads = false;
   let production = false;
   let newFunction = false;
@@ -134,7 +213,11 @@ export function analyze(source, file) {
             if (
               inner.type === "ObjectProperty" &&
               (inner.key.name ?? inner.key.value) === "contents" &&
-              literalText(inner.value) === null
+              isDerived(inner.value) &&
+              (containsProductionRead(inner.value, bindings) ||
+                [...referencedNames(inner.value, new Set())].some((n) =>
+                  tainted.has(n),
+                ))
             )
               esbuildInline = true;
         break;

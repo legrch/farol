@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "files": {
+    "tests/e2e/deep-test-ipc-order.e2e.mjs": ["esbuild"],
     "tests/integration/chatgpt-route.test.ts": ["vm"],
-    "tests/integration/closed-computer-recovery.test.ts": ["vm"],
     "tests/integration/connection-check-main.test.ts": ["vm"],
     "tests/integration/connector-quit-start.test.ts": ["vm"],
     "tests/integration/deep-test-dispatch.test.ts": ["vm"],
@@ -38,7 +38,6 @@
     "tests/unit/manual-diagnostic-status.test.mjs": ["vm"],
     "tests/unit/native-view-visibility.test.ts": ["vm"],
     "tests/unit/onboarding-guide-routing.test.mjs": ["vm"],
-    "tests/unit/operations-paths.test.ts": ["vm"],
     "tests/unit/owner-preview-runtime.test.ts": ["vm"],
     "tests/unit/owner-stop-presentation.test.ts": ["vm"],
     "tests/unit/private-resource-child-launches.test.ts": ["vm"],
