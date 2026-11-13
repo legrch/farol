@@ -168,6 +168,41 @@ def regular(file, limit):
     return info
 
 
+def read_guest_json(file, limit):
+    """Read one guest-written JSON object from a guest-writable share.
+
+    The leaf is opened without following links; the descriptor must be a
+    single-link regular file of 1..limit bytes and the bytes read must match
+    its size. Only a JSON object with unique keys is admitted, so a planted
+    symlink, FIFO, hard link, oversized or non-object file is refused instead
+    of being copied into host evidence.
+    """
+    try:
+        fd = os.open(file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        raise Refused('ASSET_FILE_INVALID') from None
+    with os.fdopen(fd, 'rb') as source:
+        info = os.fstat(source.fileno())
+        require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and 0 < info.st_size <= limit,
+                'ASSET_FILE_INVALID')
+        data = source.read(limit + 1)
+    require(len(data) == info.st_size, 'ASSET_FILE_INVALID')
+
+    def unique_object(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError('duplicate key')
+            value[key] = item
+        return value
+    try:
+        value = json.loads(data, object_pairs_hook=unique_object)
+    except (ValueError, UnicodeError, RecursionError):
+        raise Refused('GUEST_STATE_INVALID') from None
+    require(isinstance(value, dict), 'GUEST_STATE_INVALID')
+    return value
+
+
 def verify(archive):
     regular(archive, MAX_ZIP)
     root = archive.parent
@@ -1308,9 +1343,7 @@ class Runner:
 
     def quit_proof(self):
         self.phase('quit-proof')
-        file = self.report / 'quit-proof.json'
-        regular(file, 32768)
-        return json.loads(file.read_text())
+        return read_guest_json(self.report / 'quit-proof.json', 32768)
 
     def require_quit_drain(self, before):
         after = self.quit_proof()
@@ -1324,9 +1357,7 @@ class Runner:
 
     def state(self):
         self.phase('inspect')
-        file = self.report / 'state.json'
-        regular(file, 4096)
-        value = json.loads(file.read_text())
+        value = read_guest_json(self.report / 'state.json', 4096)
         require(isinstance(value.get('pids'), list) and type(value.get('windows')) is int,
                 'GUEST_STATE_INVALID')
         return value
@@ -1744,9 +1775,7 @@ class Runner:
         self.phase('share-probe')
         require(bool(self.state()['pids']), 'GUEST_APP_NOT_RUNNING')
         self.phase('connection-proof')
-        file = self.report / 'connection.json'
-        regular(file, 4096)
-        proof = json.loads(file.read_text())
+        proof = read_guest_json(self.report / 'connection.json', 4096)
         (self.out / 'connection.json').write_text(json.dumps(proof, indent=2) + '\n')
         self.phase('activate')
         self.phase('stop')
@@ -1782,7 +1811,10 @@ class Runner:
         self.phase('admit')
         require(self.quit_guest_app(), 'GUEST_CLOSE_NOT_OBSERVED')
         self.phase('connection-proof')
-        shutil.copyfile(self.report / 'connection.json', self.out / 'connection.json')
+        # Guest-writable: never copy by path (a planted symlink would copy a
+        # host file into evidence). Re-serialize an admitted bounded object.
+        proof = read_guest_json(self.report / 'connection.json', 4096)
+        (self.out / 'connection.json').write_text(json.dumps(proof, indent=2) + '\n')
         self.phase('stop')
         result = dict(status='GUEST_APP_QUIT', profiles='PRESERVED', hostDev='NOT_STARTED',
                       cleanup=self.finish_staging(), phases=self.log,
@@ -1954,9 +1986,7 @@ class Runner:
                 self.wait_state(True, foreground=True)
                 self.screenshot('relaunch')
                 self.phase('connection-proof')
-                connection_file = self.report / 'connection.json'
-                regular(connection_file, 4096)
-                connection = json.loads(connection_file.read_text())
+                connection = read_guest_json(self.report / 'connection.json', 4096)
                 (self.out / 'connection.json').write_text(json.dumps(connection, indent=2) + '\n')
                 self.phase('cleanup')
                 self.phase('stop')

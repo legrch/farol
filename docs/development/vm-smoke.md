@@ -115,7 +115,10 @@ credential is exported to exercise a blocked importer.
 
 `qa:release-dev` keeps its purpose: a guest whose profile already holds a Dev
 connection (entered by hand in the guest UI) must be quit normally before host Dev
-takes over the same tunnel.
+takes over the same tunnel. Guest-written reports (`connection.json`, `state.json`,
+`quit-proof.json`) are read only as no-follow, single-link regular files within a
+size bound and must be one JSON object with unique keys; evidence stores the
+re-serialized object, never a file copied by path.
 
 A returning guest profile may already contain connection state. Native closure does
 not qualify its endpoint or authorize host Dev to take over. Never replay a refused
