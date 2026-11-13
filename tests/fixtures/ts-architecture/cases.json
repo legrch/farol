@@ -1,0 +1,373 @@
+[
+  {
+    "name": "the TS1 module tree",
+    "files": {
+      "src/modules/task/domain/assignment/assignment.ts": "export type Assignment = { id: string };\n",
+      "src/modules/task/app/port/store.ts": "export interface Store { load(id: string): string }\n",
+      "src/modules/task/app/services/assignment/service.ts": "export type Service = { id: string };\n",
+      "src/modules/task/app/capabilities/guard/guard.ts": "export type Guard = { id: string };\n",
+      "src/modules/task/contracts/assignment/contract.ts": "export type Contract = { id: string };\n",
+      "src/modules/task/infra/peer/computer.ts": "export type ComputerPeer = { id: string };\n",
+      "src/modules/task/infra/repos/assignment/repo.ts": "export type Repo = { id: string };\n",
+      "src/modules/task/infra/clients/codex/client.ts": "export type Client = { id: string };\n",
+      "src/modules/task/infra/process/process.ts": "export type Process = { id: string };\n"
+    },
+    "reports": [],
+    "blocking": []
+  },
+  {
+    "name": "today's singular layer folders",
+    "files": {
+      "src/modules/chat/app/service/turn.ts": "export type Turn = string;\n",
+      "src/modules/chat/contract/turn.ts": "export type Turn = string;\n",
+      "src/modules/chat/infra/repo/turn.ts": "export type Turn = string;\n",
+      "src/modules/chat/infra/client/turn.ts": "export type Turn = string;\n"
+    },
+    "reports": [
+      {
+        "code": "TS_LAYER_FOLDER",
+        "file": "src/modules/chat/app/service",
+        "detail": "Folder outside the TS1 module tree: app/service (target app/services/<feature>)"
+      },
+      {
+        "code": "TS_LAYER_FOLDER",
+        "file": "src/modules/chat/contract",
+        "detail": "Folder outside the TS1 module tree: contract (target contracts/<feature>)"
+      },
+      {
+        "code": "TS_LAYER_FOLDER",
+        "file": "src/modules/chat/infra/client",
+        "detail": "Folder outside the TS1 module tree: infra/client (target infra/clients/<system>)"
+      },
+      {
+        "code": "TS_LAYER_FOLDER",
+        "file": "src/modules/chat/infra/repo",
+        "detail": "Folder outside the TS1 module tree: infra/repo (target infra/repos/<aggregate>)"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "a module folder that is not a Go module",
+    "files": {
+      "src/modules/agent/domain/assignment/assignment.ts": "export type Assignment = string;\n"
+    },
+    "reports": [
+      {
+        "code": "TS_LAYER_FOLDER",
+        "file": "src/modules/agent",
+        "detail": "Module folder is not a Go module name: agent (Go modules: chat, computer, release, task)"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "files directly in grouping folders",
+    "files": {
+      "src/modules/chat/domain/turn.ts": "export type Turn = string;\n",
+      "src/modules/chat/app/services/turn.ts": "export type Turn = string;\n",
+      "src/modules/chat/infra/repos/turn.ts": "export type Turn = string;\n"
+    },
+    "reports": [
+      {
+        "code": "TS_LAYER_FOLDER",
+        "file": "src/modules/chat/app/services",
+        "detail": "Files directly in grouping folder: app/services (target app/services/<feature>/)"
+      },
+      {
+        "code": "TS_LAYER_FOLDER",
+        "file": "src/modules/chat/domain",
+        "detail": "Files directly in grouping folder: domain (target domain/<concept>/)"
+      },
+      {
+        "code": "TS_LAYER_FOLDER",
+        "file": "src/modules/chat/infra/repos",
+        "detail": "Files directly in grouping folder: infra/repos (target infra/repos/<aggregate>/)"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "a folder below a leaf and a reserved infra word, topmost only",
+    "files": {
+      "src/modules/chat/domain/turn/state/state.ts": "export type State = string;\n",
+      "src/modules/chat/domain/turn/state/deep/deep.ts": "export type Deep = string;\n",
+      "src/modules/chat/infra/service/turn.ts": "export type Turn = string;\n"
+    },
+    "reports": [
+      {
+        "code": "TS_LAYER_FOLDER",
+        "file": "src/modules/chat/domain/turn/state",
+        "detail": "Folder outside the TS1 module tree: domain/turn/state (target domain/<concept>, app/port, app/services/<feature>, app/capabilities/<role>, contracts/<feature>, infra/{peer,repos/<aggregate>,clients/<system>,<mechanism>})"
+      },
+      {
+        "code": "TS_LAYER_FOLDER",
+        "file": "src/modules/chat/infra/service",
+        "detail": "Folder outside the TS1 module tree: infra/service (target domain/<concept>, app/port, app/services/<feature>, app/capabilities/<role>, contracts/<feature>, infra/{peer,repos/<aggregate>,clients/<system>,<mechanism>})"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "folder names",
+    "files": {
+      "src/pkg/layout/layout.ts": "export type Layout = string;\n",
+      "src/pkg/shell-layout/layout.ts": "export type Layout = string;\n",
+      "apps/desktop/computer-mcp/entry.ts": "export type Entry = string;\n",
+      "apps/desktop/Bridge/client.ts": "export type Client = string;\n"
+    },
+    "reports": [
+      {
+        "code": "TS_FOLDER_WORD",
+        "file": "apps/desktop/Bridge",
+        "detail": "Folder name is not one lowercase word: Bridge"
+      },
+      {
+        "code": "TS_FOLDER_WORD",
+        "file": "apps/desktop/computer-mcp",
+        "detail": "Folder name is not one lowercase word: computer-mcp"
+      },
+      {
+        "code": "TS_FOLDER_WORD",
+        "file": "src/pkg/shell-layout",
+        "detail": "Folder name is not one lowercase word: shell-layout"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "file names",
+    "files": {
+      "src/ui/page.ts": "export function page() { return 1; }\n",
+      "src/ui/page.test.ts": "export {};\n",
+      "src/ui/view.tsx": "export type View = string;\n",
+      "src/ui/env.d.ts": "declare const build: string;\n",
+      "src/ui/task-page.ts": "export type TaskPage = string;\n",
+      "src/ui/taskPage.ts": "export type TaskPage = string;\n",
+      "src/ui/task_page.ts": "export type TaskPage = string;\n",
+      "src/ui/task.page.ts": "export type TaskPage = string;\n",
+      "src/ui/page.spec.ts": "export type Spec = string;\n",
+      "src/ui/task-page.test.ts": "export {};\n"
+    },
+    "reports": [
+      {
+        "code": "TS_FILE_WORD",
+        "file": "src/ui/page.spec.ts",
+        "detail": "File name is not one lowercase word: page.spec"
+      },
+      {
+        "code": "TS_FILE_WORD",
+        "file": "src/ui/task-page.test.ts",
+        "detail": "File name is not one lowercase word: task-page"
+      },
+      {
+        "code": "TS_FILE_WORD",
+        "file": "src/ui/task-page.ts",
+        "detail": "File name is not one lowercase word: task-page"
+      },
+      {
+        "code": "TS_FILE_WORD",
+        "file": "src/ui/task.page.ts",
+        "detail": "File name is not one lowercase word: task.page"
+      },
+      {
+        "code": "TS_FILE_WORD",
+        "file": "src/ui/taskPage.ts",
+        "detail": "File name is not one lowercase word: taskPage"
+      },
+      {
+        "code": "TS_FILE_WORD",
+        "file": "src/ui/task_page.ts",
+        "detail": "File name is not one lowercase word: task_page"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "files with behavior need a co-located test",
+    "files": {
+      "src/ui/clock.ts": "export function now() {\n  return 1;\n}\n",
+      "src/ui/timer.ts": "export function tick() {\n  return 1;\n}\n",
+      "src/ui/timer.test.ts": "export {};\n",
+      "src/ui/view.tsx": "export function View() {\n  return null;\n}\n",
+      "src/ui/view.test.ts": "export {};\n",
+      "src/ui/arrow.ts": "export const double = (value: number) => value * 2;\n",
+      "src/ui/effect.ts": "console.log(\"loaded\");\n",
+      "src/ui/method.ts": "export const store = {\n  load() {\n    return 1;\n  },\n};\n",
+      "src/ui/port.ts": "export interface Port {\n  load(id: string): Promise<string>;\n}\nexport type Id = string;\nexport enum Kind {\n  One,\n}\n",
+      "src/ui/box.ts": "export class Box {\n  constructor(readonly value: string) {}\n}\n",
+      "src/ui/schema.ts": "import { z } from \"zod\";\nexport const schema = z.object({});\nexport { schema as other };\nexport default schema;\n",
+      "src/ui/refine.ts": "import { z } from \"zod\";\nexport const id = z.string().refine((value) => value !== \"\");\n",
+      "src/ui/globals.d.ts": "declare function build(): string;\n",
+      "apps/desktop/bridge/wire.ts": "// Generated by farol-wire/2; schema SHA-256 0. DO NOT EDIT.\nexport function decode() {\n  return 1;\n}\n",
+      "src/boot/boot.ts": "export function run() {\n  return 1;\n}\n"
+    },
+    "reports": [
+      {
+        "code": "TS_TEST_MISSING",
+        "file": "src/ui/arrow.ts",
+        "detail": "File with behavior has no co-located test: arrow.test.ts"
+      },
+      {
+        "code": "TS_TEST_MISSING",
+        "file": "src/ui/clock.ts",
+        "detail": "File with behavior has no co-located test: clock.test.ts"
+      },
+      {
+        "code": "TS_TEST_MISSING",
+        "file": "src/ui/effect.ts",
+        "detail": "File with behavior has no co-located test: effect.test.ts"
+      },
+      {
+        "code": "TS_TEST_MISSING",
+        "file": "src/ui/method.ts",
+        "detail": "File with behavior has no co-located test: method.test.ts"
+      },
+      {
+        "code": "TS_TEST_MISSING",
+        "file": "src/ui/refine.ts",
+        "detail": "File with behavior has no co-located test: refine.test.ts"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "orphan tests",
+    "files": {
+      "src/ui/journey.test.ts": "export {};\n",
+      "src/ui/types.d.ts": "declare const value: string;\n",
+      "src/ui/types.test.ts": "export {};\n",
+      "src/ui/page.ts": "export type Page = string;\n",
+      "src/ui/page.test.tsx": "export {};\n"
+    },
+    "reports": [
+      {
+        "code": "TS_TEST_ORPHAN",
+        "file": "src/ui/journey.test.ts",
+        "detail": "No same-named source beside this test: journey"
+      },
+      {
+        "code": "TS_TEST_ORPHAN",
+        "file": "src/ui/types.test.ts",
+        "detail": "No same-named source beside this test: types"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "tests in composition folders",
+    "files": {
+      "src/boot/boot.ts": "export type Boot = string;\n",
+      "src/boot/boot.test.ts": "export {};\n",
+      "apps/desktop/boot/chat.ts": "export type Chat = string;\n",
+      "apps/desktop/boot/chat.test.ts": "export {};\n",
+      "src/boot/journey.test.ts": "export {};\n"
+    },
+    "reports": [
+      {
+        "code": "TS_BOOT_TEST",
+        "file": "apps/desktop/boot/chat.test.ts",
+        "detail": "Boot holds no tests"
+      },
+      {
+        "code": "TS_BOOT_TEST",
+        "file": "src/boot/boot.test.ts",
+        "detail": "Boot holds no tests"
+      },
+      {
+        "code": "TS_BOOT_TEST",
+        "file": "src/boot/journey.test.ts",
+        "detail": "Boot holds no tests"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "logic in composition folders",
+    "files": {
+      "src/boot/boot.ts": "export function run(flag: boolean, items: string[]) {\n  const value = flag ? 1 : 2;\n  if (flag) {\n    return value;\n  }\n  for (const item of items) {\n    switch (item) {\n      case \"a\":\n        break;\n    }\n  }\n  while (flag) {\n    flag = false;\n  }\n  try {\n    return 1;\n  } catch {\n    return 2;\n  }\n}\nexport class Adapter {}\n",
+      "apps/desktop/boot/chat.ts": "export function chat(a: boolean, b: boolean) {\n  if (a) return 1;\n  if (b) return 2;\n  return 3;\n}\n",
+      "src/boot/task.ts": "export const task = (create: () => number) => ({ start: () => create() });\n"
+    },
+    "reports": [
+      {
+        "code": "TS_BOOT_LOGIC",
+        "file": "apps/desktop/boot/chat.ts",
+        "detail": "if statements",
+        "amount": 2
+      },
+      {
+        "code": "TS_BOOT_LOGIC",
+        "file": "src/boot/boot.ts",
+        "detail": "classes",
+        "amount": 1
+      },
+      {
+        "code": "TS_BOOT_LOGIC",
+        "file": "src/boot/boot.ts",
+        "detail": "conditional expressions",
+        "amount": 1
+      },
+      {
+        "code": "TS_BOOT_LOGIC",
+        "file": "src/boot/boot.ts",
+        "detail": "if statements",
+        "amount": 1
+      },
+      {
+        "code": "TS_BOOT_LOGIC",
+        "file": "src/boot/boot.ts",
+        "detail": "loop statements",
+        "amount": 2
+      },
+      {
+        "code": "TS_BOOT_LOGIC",
+        "file": "src/boot/boot.ts",
+        "detail": "switch statements",
+        "amount": 1
+      },
+      {
+        "code": "TS_BOOT_LOGIC",
+        "file": "src/boot/boot.ts",
+        "detail": "try statements",
+        "amount": 1
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "application code reaches modules only through contracts",
+    "files": {
+      "src/modules/chat/contract/turn.ts": "export type TurnRequest = string;\n",
+      "src/modules/chat/contracts/history/contract.ts": "export type HistoryRequest = string;\n",
+      "src/modules/chat/domain/turn/turn.ts": "export type Turn = string;\n",
+      "src/modules/chat/infra/repo/store.ts": "export type Store = string;\n",
+      "apps/desktop/host.ts": "import type { TurnRequest } from \"../../src/modules/chat/contract/turn\";\nimport type { HistoryRequest } from \"../../src/modules/chat/contracts/history/contract\";\nimport type { Store } from \"../../src/modules/chat/infra/repo/store\";\nexport type Host = [TurnRequest, HistoryRequest, Store];\n",
+      "src/apps/desktop/main.ts": "import type { Turn } from \"../../modules/chat/domain/turn/turn\";\nexport type Main = Turn;\n",
+      "src/boot/boot.ts": "import type { Store } from \"../modules/chat/infra/repo/store\";\nexport type Boot = Store;\n"
+    },
+    "reports": [
+      {
+        "code": "TS_APP_MODULE_INTERNAL",
+        "file": "apps/desktop/host.ts",
+        "detail": "Imports module internals: src/modules/chat/infra/repo/store.ts"
+      },
+      {
+        "code": "TS_LAYER_FOLDER",
+        "file": "src/modules/chat/contract",
+        "detail": "Folder outside the TS1 module tree: contract (target contracts/<feature>)"
+      },
+      {
+        "code": "TS_LAYER_FOLDER",
+        "file": "src/modules/chat/infra/repo",
+        "detail": "Folder outside the TS1 module tree: infra/repo (target infra/repos/<aggregate>)"
+      },
+      {
+        "code": "TS_APP_MODULE_INTERNAL",
+        "file": "src/apps/desktop/main.ts",
+        "detail": "Imports module internals: src/modules/chat/domain/turn/turn.ts"
+      }
+    ],
+    "blocking": []
+  }
+]
