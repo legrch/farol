@@ -31,7 +31,6 @@ policy needs its own runtime wiring, build closure and fresh source acceptance.
 
 - [First install and adoption boundary](adoption.md)
 - [Current-alpha journal persistence](journal.md)
-- [Migration admission lifetime](migration.md)
 - [Native boundary](native.md)
 - [Go installed slot-binding publication](slot-binding.md)
 - [Inherited handoff custody preparation](handoff-custody.md)
@@ -111,14 +110,12 @@ remain explicit. The codec itself has no physical file access; the journal
 writer that publishes its bytes is described in [journal persistence](journal.md).
 Promotion and closed-repair receipt records are still later parity work.
 
-The consuming [migration port](../../../../modules/release/app/port/migration.go) supplies a read-only durable
-projection and an externally held authoritative admission guard to the leased
-Identity adapter. Release owns its serializer/intent/dispatch/recovery. See the
-[native boundary](native.md) and [first-install/adoption contract](adoption.md).
-The corrected [migration admission lifetime](migration.md) owns one atomic claim
-across all consumers of a bound operation. The older per-handle-only port is not
-accepted for physical composition. These additions have no production caller or
-new Desktop wire schema.
+The alpha profile relocation (the consuming migration port, the
+`app/services/migration` claim owner, `domain/migration` and the leased
+`infra/native/migration` adapter) never had a production caller. It was removed
+on 2026-11-13: the [identity cutover](../../../identity-cutover.md) replaced
+migration with reinstalling earlier betas. Its source remains in Git history.
+See the [native boundary](native.md) and [first-install/adoption contract](adoption.md).
 
 ## Current parity seams
 
@@ -161,7 +158,6 @@ Core/Lead own root module, boot, command routing, generated wire/client, common
 build/config/resources and test discovery. Release proposes the exact patches
 in `relocation.md`; it does not concurrently edit them. Desktop's native browser
 and work admission remain effect-owning ports; an idle UI is never permission.
-Identity's dedicated `domain/migration` subtree is excluded from this writer.
 
 Distribution's first-install executable binding is pending. Its future narrow
 contract must bind operation ID, fixed destination/profile from accepted identity,

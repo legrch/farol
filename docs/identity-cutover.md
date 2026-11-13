@@ -62,8 +62,8 @@ be refreshed from the actual changed bytes; no attestation check is weakened.
 
 ## Legacy readers and verification limits
 
-Schema-5 package/archive readers retain an explicit old app-name constant. Alpha
-migration retains its old source selectors. Closed repair, preview retirement and
+Schema-5 package/archive readers retain an explicit old app-name constant. The
+unwired Go alpha migration source and its selectors were removed on 2026-11-13. Closed repair, preview retirement and
 closed installed-pair preservation retain explicit legacy profile selectors and
 fixtures. Shared lease and drain readers select the original state directory
 only for that explicit legacy profile name, preserving its lock domain. They are bounded readers of previous install identities, never current

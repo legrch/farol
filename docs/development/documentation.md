@@ -40,6 +40,9 @@ above, without a module-level redirect or exception:
 | Task     | `infra/clients/claude/README.md`, `infra/clients/codex/README.md`, `infra/peer/parent/README.md`, `infra/peer/process/README.md`, `infra/workflowruntime/README.md` | `infra/clients/claude.md`, `infra/clients/codex.md`, `infra/peer/parent.md`, `infra/peer/process.md`, `infra/workflowruntime.md` (5). |
 | Release  | `README.md`, `adoption.md`, `journal.md`, `migration.md`, `native.md`, `relocation.md`, `infra/archive/provenance.md`                                               | Same filenames and nested structure (7).                                                                                              |
 
+Release `migration.md` was later removed with its unwired alpha relocation
+source (2026-11-13).
+
 The extra Computer README is a destination index. Original prose, requirements,
 source identities and safety qualifications remain; links are rebased and module
 indexes add navigation. Go packages stay in their original source directories.

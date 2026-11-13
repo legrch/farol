@@ -6559,11 +6559,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/migration/darwin.go",
-      "detail": "File name outside the admitted vocabulary: darwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/release/infra/native/process/launch.go",
       "detail": "File name outside the admitted vocabulary: launch"
     },
@@ -7861,21 +7856,6 @@
       "code": "GO_OPERATION_SHAPE",
       "file": "modules/release/app/services/helperrecovery/service.go",
       "detail": "Service.Request must take (context.Context, RequestCommand or RequestQuery) and return (*RequestResult, error)"
-    },
-    {
-      "code": "GO_OPERATION_SHAPE",
-      "file": "modules/release/app/services/migration/admission.go",
-      "detail": "Service.ClaimMigration must take (context.Context, ClaimMigrationCommand or ClaimMigrationQuery) and return (*ClaimMigrationResult, error)"
-    },
-    {
-      "code": "GO_OPERATION_SHAPE",
-      "file": "modules/release/app/services/migration/admission.go",
-      "detail": "Service.Close must take (context.Context, CloseCommand or CloseQuery) and return (*CloseResult, error)"
-    },
-    {
-      "code": "GO_OPERATION_SHAPE",
-      "file": "modules/release/app/services/migration/admission.go",
-      "detail": "Service.ReverifyMigration must take (context.Context, ReverifyMigrationCommand or ReverifyMigrationQuery) and return (*ReverifyMigrationResult, error)"
     },
     {
       "code": "GO_OPERATION_SHAPE",
@@ -9231,11 +9211,6 @@
       "code": "GO_TEST_MISSING",
       "file": "modules/release/app/services/update/close.go",
       "detail": "Behavior without close_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/release/domain/migration/identity.go",
-      "detail": "Behavior without identity_test.go"
     },
     {
       "code": "GO_TEST_MISSING",
