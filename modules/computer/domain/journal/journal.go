@@ -8,6 +8,7 @@ import (
 	"regexp"
 
 	"github.com/legrch/farol/modules/computer/domain/observation"
+	"github.com/legrch/farol/pkg/kernel/domain/digest"
 )
 
 const MaxEntries = 32
@@ -34,7 +35,6 @@ var ErrPending = errors.New("WORKSPACE_TRANSITION_PENDING")
 var ErrUnknown = errors.New("WORKSPACE_TRANSITION_OUTCOME_UNKNOWN")
 
 var identity = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,119}$`)
-var digest = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var uuid = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // Request is the original immutable scope. ConsentDigest excludes ephemeral
@@ -90,13 +90,13 @@ type AdmissionLink struct {
 
 func ValidAdmissionLink(r Request, link AdmissionLink) bool {
 	return uuid.MatchString(link.ParentOperationID) && link.ParentOperationID != r.OperationID &&
-		digest.MatchString(link.CertificateDigest) &&
+		digest.Valid(link.CertificateDigest) &&
 		(link.Mode == "legacy-confirm" || link.Mode == "enrolled-rebind") &&
-		digest.MatchString(link.ChildIntentDigest) &&
+		digest.Valid(link.ChildIntentDigest) &&
 		link.FullRequestDigest == r.RequestDigest &&
 		link.SettingsRevision == r.ExpectedRevision &&
 		link.SettingsGeneration == r.ExpectedGeneration &&
-		digest.MatchString(link.SettingsDigest) && r.RecoveryParent == ""
+		digest.Valid(link.SettingsDigest) && r.RecoveryParent == ""
 }
 
 type Entry struct {
@@ -121,7 +121,7 @@ type Journal struct {
 }
 
 func ValidRequest(v Request) bool {
-	return uuid.MatchString(v.OperationID) && digest.MatchString(v.RequestDigest) && digest.MatchString(v.ConsentDigest) &&
+	return uuid.MatchString(v.OperationID) && digest.Valid(v.RequestDigest) && digest.Valid(v.ConsentDigest) &&
 		identity.MatchString(v.ProfileID) && identity.MatchString(v.OwnerID) && identity.MatchString(v.ComputerID) && identity.MatchString(v.WorkspaceID) &&
 		observation.CanonicalPath(v.Root) &&
 		decimal(v.ExpectedRevision) && decimal(v.ExpectedGeneration) && uuid.MatchString(v.BootUUID) &&
@@ -139,7 +139,7 @@ func decimal(s string) bool {
 	return true
 }
 func validReceipt(r Receipt) bool {
-	return identity.MatchString(r.EffectID) && digest.MatchString(r.Digest)
+	return identity.MatchString(r.EffectID) && digest.Valid(r.Digest)
 }
 func emptyReceipt(r Receipt) bool { return r.EffectID == "" && r.Digest == "" }
 func terminal(p Phase) bool       { return p == Committed || p == Refused }

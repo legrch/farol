@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"github.com/legrch/farol/modules/task/app/port"
+	"github.com/legrch/farol/pkg/kernel/domain/digest"
 )
 
 const MaxSnapshotBytes = 1 << 20
@@ -103,7 +104,7 @@ func (s *Service) project(f port.TaskCurrentSettingsFacts) (projection, error) {
 	}
 	switch identity.Kind {
 	case port.TaskSettingsPolicyValid:
-		if !validDigest(identity.SHA256) {
+		if !digest.Valid(identity.SHA256) {
 			return projection{}, &Failure{Code: Unavailable}
 		}
 	case port.TaskSettingsPolicyMissing, port.TaskSettingsPolicyInvalid:
@@ -158,16 +159,4 @@ func (s *Service) project(f port.TaskCurrentSettingsFacts) (projection, error) {
 		out.Workspaces[i] = items[i].value
 	}
 	return out, nil
-}
-
-func validDigest(s string) bool {
-	if len(s) != 64 {
-		return false
-	}
-	for _, c := range s {
-		if !(c >= 'a' && c <= 'f') && !(c >= '0' && c <= '9') {
-			return false
-		}
-	}
-	return true
 }

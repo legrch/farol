@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/authority"
+	"github.com/legrch/farol/pkg/kernel/domain/digest"
 )
 
 // Request types belong to this service, independently of native and wire DTOs.
@@ -80,7 +80,7 @@ func (s *Service) readDiagnosticBinding(c caller, a admission) (string, error) {
 		return "", authority.Fail("WORKSPACE_HELPER_FAILED", "native-workspace")
 	}
 	binding, err := policy.BindReadDiagnostic(port.ReadRequest{Workspace: cloneDescriptor(a.descriptor), RelativePath: c.relativePath}, raw)
-	if err != nil || len(binding) != 64 || strings.Trim(binding, "0123456789abcdef") != "" {
+	if err != nil || !digest.Valid(binding) {
 		return "", authority.Fail("WORKSPACE_HELPER_FAILED", "native-workspace")
 	}
 	return binding, nil
