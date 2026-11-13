@@ -91,8 +91,21 @@ directories), `machineSha256`, and the qualified immutable hardware file's
 single-component `hardwareFile` and `hardwareSha256`. The hardware file is selected
 by the base's independent qualification; the controller never guesses one or upgrades
 an old receipt. Missing or changed bindings refuse before cloning and require
-read-only requalification of the selected clean base. Provenance retains the digest
+requalification of the selected clean base. Provenance retains the digest
 of the exact receipt bytes admitted by the planner, even if its pathname later changes.
+
+**Base receipts are written by the operator procedure, not by this repository.**
+No in-repo tool writes or requalifies `base-receipts/<base>.json`; the operator
+who prepares or requalifies a base records it by hand after observing the guest.
+The planner reads `schema`, `base`, `helper` (`READY`), `account` (`tester-ready`)
+and the binding fields above. When the receipt also records `helperVersion` and
+`helperBuild` (receipts written since build 17 do), `vm:dev` requires the live guest
+helper of the fresh clone to report exactly that version and build before the MCP
+session, refusing `VM_DEV_HELPER_BUILD_MISMATCH` otherwise (a rebuilt helper voids
+its privacy grants). Older receipts without them are recorded as
+`unbound-base-receipt`. No receipt records a guest disk identity today (`diskSha256`
+is `null`), so the guest disk is not bound: a macOS update or other change applied
+inside a booted base is not detected by the receipt and needs requalification.
 
 `vm:setup` retains create-only provisioning intents under
 `vm-machine-operations/<machine>/` in the testing settings directory. Every

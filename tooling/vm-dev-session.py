@@ -372,8 +372,38 @@ def _one_start(binary, clone, visible, evidence, env):
     raise VMDevError("VM_DEV_RUNTIME_START_UNKNOWN")
 
 
-def _guest_grants(binary, clone, evidence, env):
-    """Bounded READ-only helper startup check, never guest input or replay."""
+HELPER_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,95}\Z")
+
+
+def base_helper_identity(base_receipt):
+    """The helper version/build the operator recorded for the prepared base.
+
+    Base receipts are written by the operator procedure, not by this
+    repository. Older receipts lack these fields: they stay unbound (recorded
+    as such), never guessed. A present but malformed value is refused.
+    """
+    try:
+        receipt = json.loads(base_receipt)
+    except (ValueError, UnicodeError):
+        raise VMDevError("VM_DEV_BASE_NOT_READY") from None
+    expected = {}
+    for key in ("helperVersion", "helperBuild"):
+        if key in receipt:
+            value = receipt[key]
+            demand(isinstance(value, str) and bool(HELPER_TOKEN.fullmatch(value)),
+                   "VM_DEV_BASE_NOT_READY")
+            expected[key] = value
+    return expected
+
+
+def _guest_grants(binary, clone, evidence, env, expected=None):
+    """Bounded READ-only helper startup check, never guest input or replay.
+
+    When the base receipt records the helper version/build, the live helper of
+    this clone must report exactly that identity: a rebuilt or reinstalled
+    helper in the base (which voids its privacy grants) is a known refusal.
+    """
+    expected = expected or {}
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         try:
@@ -400,12 +430,22 @@ def _guest_grants(binary, clone, evidence, env):
                 demand(values.get("accessibility") == "true" and
                        values.get("screenRecording") == "true",
                        "VM_DEV_NEEDS_OWNER_PERMISSIONS")
+                observed = {key: values.get(field) for key, field in
+                            (("helperVersion", "version"), ("helperBuild", "build"))}
+                demand(all(observed[key] == value for key, value in expected.items()),
+                       "VM_DEV_HELPER_BUILD_MISMATCH")
                 _write_once(evidence, "helper-preflight.json", {
                     "schema": "farol.vm-dev-helper-preflight/1",
                     "state": "AVAILABLE_NOT_APP_READY",
                     "appServiceContract": "terminal-mac.app-service/4",
                     "launchIdentityContract": "terminal-mac.launch-identity/1",
-                    "permissions": "guest-true"
+                    "permissions": "guest-true",
+                    "helperIdentity": {key: value if isinstance(value, str) and
+                                       HELPER_TOKEN.fullmatch(value) else None
+                                       for key, value in observed.items()},
+                    "baseHelperBinding": ("bound:" + ",".join(sorted(expected))
+                                          if expected else "unbound-base-receipt"),
+                    "guestDiskBinding": "unbound-no-disk-identity-in-receipt"
                 })
                 return
         time.sleep(1)
@@ -783,6 +823,8 @@ def _session(args, custody, infrastructure, plan, producer, clone_effect, start_
            not (root / "machines" / clone).exists() and
            not (root / "machines" / clone).is_symlink(),
            "VM_DEV_PREDECESSOR_COLLISION")
+    # Refuse a malformed recorded helper identity before any effect.
+    helper_identity = base_helper_identity(base_receipt)
     _private_directory(settings / "vm-dev-sessions", create=True)
     evidence = settings / "vm-dev-sessions" / clone
     evidence.mkdir(mode=0o700)
@@ -826,7 +868,7 @@ def _session(args, custody, infrastructure, plan, producer, clone_effect, start_
     custody.running = True
     # Do not start the application session against a legacy/absent helper.
     # The native MCP repeats all prerequisites under its actual InputLease.
-    _guest_grants(binary, clone, evidence, env)
+    _guest_grants(binary, clone, evidence, env, helper_identity)
     status = (mcp_effect or _run_mcp)(binary, root, clone, stage, payload, evidence, env, gate)
     if status != 0:
         raise VMDevError("VM_DEV_MCP_OUTCOME_UNKNOWN")

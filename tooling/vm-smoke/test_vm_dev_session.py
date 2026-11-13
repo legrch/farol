@@ -737,6 +737,57 @@ class TeardownTests(Fixture):
         self.assertEqual(run_main(lambda *a, **k: (_ for _ in ()).throw(KeyError("x")))[0], 2)
 
 
+
+class HelperBindingTests(Fixture):
+    values = dict(appServiceContract="terminal-mac.app-service/4",
+                  appServiceExecutor="compiled-native-helper",
+                  appServiceLaunchIdentityContract="terminal-mac.launch-identity/1",
+                  appServiceAdmission="available", accessibility="true",
+                  screenRecording="true", version="0.2.0", build="19")
+
+    def probe(self, expected, **changes):
+        evidence = self.settings / ("helper-" + hashlib.sha256(repr((expected, changes)).encode()).hexdigest()[:8])
+        evidence.mkdir(mode=0o700)
+        reply = SimpleNamespace(returncode=0, stdout=json.dumps(dict(self.values, **changes)).encode(), stderr=b"")
+        with mock.patch.object(dev.subprocess, "run", return_value=reply):
+            dev._guest_grants(self.binary, "farol-qa-" + "a"*16, evidence, {}, expected)
+        return json.loads((evidence / "helper-preflight.json").read_text())
+
+    def test_live_helper_must_match_the_base_receipt_build(self):
+        expected = {"helperVersion": "0.2.0", "helperBuild": "19"}
+        record = self.probe(expected)
+        self.assertEqual(record["helperIdentity"], {"helperVersion": "0.2.0", "helperBuild": "19"})
+        self.assertEqual(record["baseHelperBinding"], "bound:helperBuild,helperVersion")
+        self.assertEqual(record["guestDiskBinding"], "unbound-no-disk-identity-in-receipt")
+        for changes in ({"build": "20"}, {"version": "0.3.0"}, {"build": None}):
+            with self.subTest(changes=changes), self.assertRaisesRegex(dev.VMDevError, "VM_DEV_HELPER_BUILD_MISMATCH"):
+                self.probe(expected, **changes)
+        self.assertNotIn("VM_DEV_HELPER_BUILD_MISMATCH", dev.UNKNOWN_CODES)
+
+    def test_receipt_without_helper_fields_is_recorded_unbound(self):
+        record = self.probe({})
+        self.assertEqual(record["baseHelperBinding"], "unbound-base-receipt")
+
+    def test_base_helper_identity_reads_only_existing_receipt_fields(self):
+        self.assertEqual(dev.base_helper_identity(self.base_receipt.read_bytes()), {})
+        value = json.loads(self.base_receipt.read_text())
+        value.update(helperVersion="0.2.0", helperBuild="19", diskSha256=None)
+        self.assertEqual(dev.base_helper_identity(json.dumps(value).encode()),
+                         {"helperVersion": "0.2.0", "helperBuild": "19"})
+        for bad in ({"helperBuild": 19}, {"helperBuild": "../19"}, {"helperVersion": ""}):
+            with self.subTest(bad=bad), self.assertRaisesRegex(dev.VMDevError, "VM_DEV_BASE_NOT_READY"):
+                dev.base_helper_identity(json.dumps(dict(value, **bad)).encode())
+
+    def test_malformed_recorded_helper_identity_refuses_before_any_clone(self):
+        value = json.loads(self.base_receipt.read_text())
+        value["helperBuild"] = 19
+        self.base_receipt.write_text(json.dumps(value))
+        with self.assertRaisesRegex(dev.VMDevError, "VM_DEV_BASE_NOT_READY"):
+            dev.execute(self.options, infrastructure=lambda: (self.binary, self.root, self.settings),
+                        identity_factory=lambda: ("farol-qa-" + "b"*16, "run-" + "b"*32),
+                        binary_admission=lambda _: True, capacity_probe=lambda *a: 0,
+                        clone_effect=lambda *a: self.fail("clone invoked"))
+
 class CapacityGuidanceTests(Fixture):
     def test_unknown_machine_is_named_with_manual_resolution_and_not_deleted(self):
         leftover = self.root / "machines/farol-qa-0123456789abcdef"
