@@ -6464,26 +6464,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/installcopy/capture.go",
-      "detail": "File name outside the admitted vocabulary: capture"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/installcopy/copy.go",
-      "detail": "File name outside the admitted vocabulary: copy"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/installcopy/darwin.go",
-      "detail": "File name outside the admitted vocabulary: darwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/installcopy/linux.go",
-      "detail": "File name outside the admitted vocabulary: linux"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/release/infra/native/installmove/darwin.go",
       "detail": "File name outside the admitted vocabulary: darwin"
     },
@@ -8304,11 +8284,6 @@
     },
     {
       "code": "GO_PACKAGE_NAME",
-      "file": "modules/release/infra/native/installcopy",
-      "detail": "Package name outside the admitted vocabulary: installcopy"
-    },
-    {
-      "code": "GO_PACKAGE_NAME",
       "file": "modules/release/infra/native/installmove",
       "detail": "Package name outside the admitted vocabulary: installmove"
     },
@@ -9216,31 +9191,6 @@
       "code": "GO_TEST_MISSING",
       "file": "modules/release/infra/native/helperroutes/linux.go",
       "detail": "Behavior without linux_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/release/infra/native/installcopy/capture.go",
-      "detail": "Behavior without capture_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/release/infra/native/installcopy/darwin.go",
-      "detail": "Behavior without darwin_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/release/infra/native/installcopy/filesystem.go",
-      "detail": "Behavior without filesystem_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/release/infra/native/installcopy/linux.go",
-      "detail": "Behavior without linux_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/release/infra/native/installcopy/unsupported.go",
-      "detail": "Behavior without unsupported_test.go"
     },
     {
       "code": "GO_TEST_MISSING",
@@ -10411,36 +10361,6 @@
       "code": "GO_TEST_ORPHAN",
       "file": "modules/release/infra/native/helperroutes/faults_test.go",
       "detail": "No faults.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/release/infra/native/installcopy/composition_test.go",
-      "detail": "No composition.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/release/infra/native/installcopy/custody_test.go",
-      "detail": "No custody.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/release/infra/native/installcopy/deadline_test.go",
-      "detail": "No deadline.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/release/infra/native/installcopy/descriptors_test.go",
-      "detail": "No descriptors.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/release/infra/native/installcopy/failure_test.go",
-      "detail": "No failure.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/release/infra/native/installmove/capture_test.go",
-      "detail": "No capture.go beside this test"
     },
     {
       "code": "GO_TEST_ORPHAN",

@@ -19,15 +19,15 @@ import (
 	"github.com/legrch/farol/modules/release/infra/native/appidentity"
 	"github.com/legrch/farol/modules/release/infra/native/apptree"
 	inputnative "github.com/legrch/farol/modules/release/infra/native/helperinput"
-	"github.com/legrch/farol/modules/release/infra/native/installcopy"
 	"github.com/legrch/farol/modules/release/infra/repos/journal"
 	"github.com/legrch/farol/modules/release/infra/repos/records"
 	"github.com/legrch/farol/modules/release/infra/repos/rejection"
 )
 
-// These witnesses join application policy to real copy, tree/identity checks,
+// These witnesses join application policy to tree/identity checks,
 // rename/exchange and journal/rejection persistence in fresh disposable trees.
-// installScope uses WithInstallation's private route seam: route, lease, slot,
+// The staged target is written directly; production staging is the desktop's
+// copy. installScope uses WithInstallation's private route seam: route, lease, slot,
 // predecessor process and admission remain symbolic. Neither parsing nor these
 // filesystem witnesses qualify a selected helper, process/handshake, Seatbelt,
 // package, installed app, relaunch or crash recovery under real custody.
@@ -143,37 +143,16 @@ func newLifecycleFixtureWithExecutable(t *testing.T, base *compositionFixture, e
 	f.config.Rejection = f.rejection
 
 	app := filepath.Join(f.config.Files.Applications.Name(), "Farol.app")
-	image, stage := filepath.Join(f.root, "target.app"), filepath.Join(f.path, "staged.app")
+	stage := filepath.Join(f.path, "staged.app")
 	writeLifecycleVector(t, app, "oracle.xml", "")
-	writeLifecycleVector(t, image, "oracle.bplist", exe)
 	must(t, os.Mkdir(stage, 0700))
-	imageFile, stageFile := lifecycleOpen(t, image), lifecycleOpen(t, stage)
-	imageID, stageID := compositionIdentity(t, imageFile), compositionIdentity(t, stageFile)
-	verifier := func(parent, tree *os.File, leaf string, b port.HelperBuild) *apptree.Verifier {
-		v, err := apptree.New(parent, tree, leaf, apptree.Expected{TreeSHA256: b.Digest, Version: b.Version, BuildID: b.BuildID}, appidentity.Verify)
-		must(t, err)
-		return v
-	}
-	imageVerifier := verifier(lifecycleOpen(t, f.root), imageFile, "target.app", request.Target)
-	_, err = imageVerifier.Verify(context.Background())
+	writeLifecycleVector(t, stage, "oracle.bplist", exe)
+	stageFile := lifecycleOpen(t, stage)
+	stageID := compositionIdentity(t, stageFile)
+	stageVerifier, err := apptree.New(f.config.Files.Operation, stageFile, "staged.app", apptree.Expected{TreeSHA256: request.Target.Digest, Version: request.Target.Version, BuildID: request.Target.BuildID}, appidentity.Verify)
 	must(t, err)
-	copyOperation, err := installcopy.Prepare(
-		installcopy.Directory{File: imageFile, Identity: installcopy.Identity{Device: imageID.Device, Inode: imageID.Inode}},
-		installcopy.Directory{File: stageFile, Identity: installcopy.Identity{Device: stageID.Device, Inode: stageID.Inode}},
-		f.config.Until, func(ctx context.Context) error {
-			if err := f.owner.reverify(ctx, request); err != nil {
-				return err
-			}
-			_, err := imageVerifier.Verify(ctx)
-			return err
-		})
+	_, err = stageVerifier.Verify(context.Background())
 	must(t, err)
-	must(t, copyOperation.Run(context.Background()))
-	_, err = verifier(f.config.Files.Operation, stageFile, "staged.app", request.Target).Verify(context.Background())
-	must(t, err)
-	if imageID == stageID {
-		t.Fatal("native copy reused source directory identity")
-	}
 	f.source, f.target = lifecycleTree(t, app), lifecycleTree(t, stage)
 	f.sourceID = snapshot(entryState{present: true, stat: f.source["."].stat}).Identity
 	f.targetID = port.HelperIdentity{Device: stageID.Device, Inode: stageID.Inode}
