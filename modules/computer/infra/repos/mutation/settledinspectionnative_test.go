@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	domain "github.com/legrch/farol/modules/computer/domain/mutation"
+	"github.com/legrch/farol/pkg/descriptor"
 	"golang.org/x/sys/unix"
 )
 
@@ -101,7 +102,7 @@ func settledNativePreserved(t *testing.T, root string, before map[string]settled
 	}
 	for path, original := range before {
 		current, ok := after[path]
-		if !ok || !stable(original.stat, current.stat) || !bytes.Equal(original.raw, current.raw) || original.link != current.link {
+		if !ok || !descriptor.Stable(original.stat, current.stat) || !bytes.Equal(original.raw, current.raw) || original.link != current.link {
 			t.Fatal("inspection changed or replaced an original", filepath.Base(path))
 		}
 	}
@@ -323,7 +324,7 @@ func TestSettledInspectionNativeFreshRecheckAndLateVisitor(t *testing.T) {
 					t.Fatal("inspection changed retained roots")
 				}
 				for path, original := range before {
-					if now, ok := current[path]; !ok || !stable(original.stat, now.stat) || !bytes.Equal(original.raw, now.raw) {
+					if now, ok := current[path]; !ok || !descriptor.Stable(original.stat, now.stat) || !bytes.Equal(original.raw, now.raw) {
 						t.Fatal("inspection changed retained root evidence")
 					}
 				}

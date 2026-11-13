@@ -7,6 +7,7 @@ import (
 	"errors"
 	"path/filepath"
 
+	"github.com/legrch/farol/pkg/descriptor"
 	"golang.org/x/sys/unix"
 )
 
@@ -47,7 +48,7 @@ func withClosedInspection(ctx context.Context, root string, binding Binding, exp
 	if e != nil {
 		return refuse(e)
 	}
-	d.identity, e = fdstat(d.dir)
+	d.identity, e = descriptor.Stat(d.dir)
 	if e != nil || !private(d.identity, unix.S_IFDIR, 0700) {
 		return refuse(e)
 	}
@@ -55,7 +56,7 @@ func withClosedInspection(ctx context.Context, root string, binding Binding, exp
 	if e != nil {
 		return refuse(e)
 	}
-	d.lockIdentity, e = fdstat(d.lock)
+	d.lockIdentity, e = descriptor.Stat(d.lock)
 	if e != nil || !private(d.lockIdentity, unix.S_IFREG, 0600) || d.lockIdentity.Size != 0 {
 		return refuse(e)
 	}
@@ -85,13 +86,13 @@ func withClosedInspection(ctx context.Context, root string, binding Binding, exp
 			return e
 		}
 		current, e := d.read()
-		rootNow, re := fdstat(d.dir)
-		lockNow, le := fdstat(d.lock)
+		rootNow, re := descriptor.Stat(d.dir)
+		lockNow, le := descriptor.Stat(d.lock)
 		var currentNamed unix.Stat_t
-		if e != nil || re != nil || le != nil || !bytes.Equal(raw, current) || !stableState(d.identity, rootNow) || !stableState(d.lockIdentity, lockNow) {
+		if e != nil || re != nil || le != nil || !bytes.Equal(raw, current) || !descriptor.Stable(d.identity, rootNow) || !descriptor.Stable(d.lockIdentity, lockNow) {
 			return refuse(e, re, le)
 		}
-		if e = unix.Fstatat(d.dir, stateName, &currentNamed, unix.AT_SYMLINK_NOFOLLOW); e != nil || !stableState(named, currentNamed) {
+		if e = unix.Fstatat(d.dir, stateName, &currentNamed, unix.AT_SYMLINK_NOFOLLOW); e != nil || !descriptor.Stable(named, currentNamed) {
 			return refuse(e)
 		}
 		return nil

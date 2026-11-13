@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/legrch/farol/modules/chat/app/port"
+	"github.com/legrch/farol/pkg/descriptor"
 	"golang.org/x/sys/unix"
 )
 
@@ -113,7 +114,7 @@ func TestClosedInspectionNativeHandoffClaimHeadAndReadOnly(t *testing.T) {
 	}
 	for name, b := range before {
 		a, exists := after[name]
-		if !exists || !stable(b.meta, a.meta) || b.digest != a.digest {
+		if !exists || !descriptor.Stable(b.meta, a.meta) || b.digest != a.digest {
 			t.Fatal("changed entry", name)
 		}
 	}

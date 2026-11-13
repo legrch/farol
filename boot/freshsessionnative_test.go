@@ -162,9 +162,7 @@ func TestFreshSessionQuiescesSettingsPollingBeforeDrainReply(t *testing.T) {
 			if closed.Status != "ok" {
 				t.Fatal("current fresh drain failed", closed)
 			}
-			r.settingsStore.mu.Lock()
-			quiesced := r.settingsStore.quiesced
-			r.settingsStore.mu.Unlock()
+			quiesced := r.settingsStore.queue.State().Quiesced
 			if !quiesced {
 				t.Fatal("drained reply left the reciprocal Settings poll active")
 			}

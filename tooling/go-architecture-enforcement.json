@@ -470,11 +470,6 @@
     },
     {
       "code": "GO_BOOT_FILE",
-      "file": "boot/processheld.go",
-      "detail": "Boot holds only boot.go, chat.go, computer.go, release.go, task.go"
-    },
-    {
-      "code": "GO_BOOT_FILE",
       "file": "boot/profile.go",
       "detail": "Boot holds only boot.go, chat.go, computer.go, release.go, task.go"
     },
@@ -856,19 +851,7 @@
       "code": "GO_BOOT_LOGIC",
       "file": "boot/browserexchange.go",
       "detail": "conditions other than err != nil",
-      "amount": 18
-    },
-    {
-      "code": "GO_BOOT_LOGIC",
-      "file": "boot/browserexchange.go",
-      "detail": "for statements",
-      "amount": 1
-    },
-    {
-      "code": "GO_BOOT_LOGIC",
-      "file": "boot/browserexchange.go",
-      "detail": "select statements",
-      "amount": 3
+      "amount": 13
     },
     {
       "code": "GO_BOOT_LOGIC",
@@ -880,7 +863,7 @@
       "code": "GO_BOOT_LOGIC",
       "file": "boot/browserexchange.go",
       "detail": "top-level types beyond one namespace type",
-      "amount": 2
+      "amount": 1
     },
     {
       "code": "GO_BOOT_LOGIC",
@@ -1952,30 +1935,6 @@
     },
     {
       "code": "GO_BOOT_LOGIC",
-      "file": "boot/processheld.go",
-      "detail": "conditions other than err != nil",
-      "amount": 23
-    },
-    {
-      "code": "GO_BOOT_LOGIC",
-      "file": "boot/processheld.go",
-      "detail": "go statements",
-      "amount": 1
-    },
-    {
-      "code": "GO_BOOT_LOGIC",
-      "file": "boot/processheld.go",
-      "detail": "select statements",
-      "amount": 3
-    },
-    {
-      "code": "GO_BOOT_LOGIC",
-      "file": "boot/processheld.go",
-      "detail": "top-level types beyond one namespace type",
-      "amount": 1
-    },
-    {
-      "code": "GO_BOOT_LOGIC",
       "file": "boot/profile.go",
       "detail": "conditions other than err != nil",
       "amount": 36
@@ -2542,31 +2501,13 @@
       "code": "GO_BOOT_LOGIC",
       "file": "boot/settingsstore.go",
       "detail": "conditions other than err != nil",
-      "amount": 36
-    },
-    {
-      "code": "GO_BOOT_LOGIC",
-      "file": "boot/settingsstore.go",
-      "detail": "for statements",
-      "amount": 1
-    },
-    {
-      "code": "GO_BOOT_LOGIC",
-      "file": "boot/settingsstore.go",
-      "detail": "select statements",
-      "amount": 4
+      "amount": 29
     },
     {
       "code": "GO_BOOT_LOGIC",
       "file": "boot/settingsstore.go",
       "detail": "switch statements",
       "amount": 3
-    },
-    {
-      "code": "GO_BOOT_LOGIC",
-      "file": "boot/settingsstore.go",
-      "detail": "top-level types beyond one namespace type",
-      "amount": 2
     },
     {
       "code": "GO_BOOT_LOGIC",
@@ -3425,11 +3366,6 @@
     {
       "code": "GO_BOOT_TEST",
       "file": "boot/preservedprofileobservationnative_test.go",
-      "detail": "Boot has no tests; whole-graph tests live under tests/"
-    },
-    {
-      "code": "GO_BOOT_TEST",
-      "file": "boot/processheld_test.go",
       "detail": "Boot has no tests; whole-graph tests live under tests/"
     },
     {
@@ -4406,11 +4342,6 @@
       "code": "GO_FILE_WORD",
       "file": "boot/preservedprofileselection.go",
       "detail": "File name outside the admitted vocabulary: preservedprofileselection"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "boot/processheld.go",
-      "detail": "File name outside the admitted vocabulary: processheld"
     },
     {
       "code": "GO_FILE_WORD",
@@ -9476,11 +9407,6 @@
       "code": "GO_TEST_ORPHAN",
       "file": "gen/desktop/v1/chatstart_test.go",
       "detail": "No chatstart.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "gen/desktop/v1/held_test.go",
-      "detail": "No held.go beside this test"
     },
     {
       "code": "GO_TEST_ORPHAN",

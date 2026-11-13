@@ -233,7 +233,7 @@ function harness() {
         };
       },
     ),
-    secureMcpLaunchRoot: () => "/Users/example/launch",
+    statePaths: () => ({ secureMcpLaunch: "/Users/example/launch" }),
     configureAdmittedProduct: vi.fn(async () => {
       events.push("apply");
       return { ok: true, original: true };

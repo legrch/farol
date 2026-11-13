@@ -235,7 +235,7 @@ function fixture({ pause, startResult = originalStart, openError } = {}) {
     e2eTunnelClientExecutable: () => undefined,
     TUNNEL_CLIENT,
     clearConnectorVerificationReceipt: port("receipt-clear"),
-    secureMcpLaunchRoot: () => "/controlled/launch",
+    statePaths: () => ({ secureMcpLaunch: "/controlled/launch" }),
     computerMcpLifecycle: () => lifecycle,
     stopAndConfirmComputerMcp: vi.fn(async (connector, start, go) => {
       events.push("close");

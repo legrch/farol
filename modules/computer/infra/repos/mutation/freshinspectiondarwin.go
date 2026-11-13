@@ -8,6 +8,7 @@ import (
 	"os"
 	"slices"
 
+	"github.com/legrch/farol/pkg/descriptor"
 	"golang.org/x/sys/unix"
 )
 
@@ -100,7 +101,7 @@ func (r *Repository) inspectProcessHistory(ctx context.Context, selection Settle
 	copy := *d
 	copy.pins = slices.Clone(d.pins)
 	for n := len(copy.pins) - 2; n < len(copy.pins); n++ {
-		copy.pins[n].initial, err = stat(copy.pins[n].fd)
+		copy.pins[n].initial, err = descriptor.Stat(copy.pins[n].fd)
 		if err != nil {
 			return false, unavailable()
 		}
