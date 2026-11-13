@@ -10,7 +10,7 @@ import type { ChatGptTaskJournalRecord } from "../../src/apps/desktop/chatgpt-ta
 // Execute the actual main startup composition with the real private journal.
 // Disposable files only: no Electron, Go runtime, provider or live recovery.
 const main = await fs.readFile("src/apps/desktop/main.ts", "utf8");
-const rootCall = main.indexOf("root: chatGptTaskJournalRoot()");
+const rootCall = main.indexOf("root: statePaths().chatGptTaskJournal");
 const start = main.lastIndexOf("  try {", rootCall);
 const end = main.indexOf("  let chatGptInitialUrl", rootCall);
 if (rootCall < 0 || start < 0 || end < 0)
@@ -55,7 +55,7 @@ async function startup(directory: string, freshStartup = true) {
     {
       PrivateChatGptTaskJournal,
       freshStartup,
-      chatGptTaskJournalRoot: () => directory,
+      statePaths: () => ({ chatGptTaskJournal: directory }),
       configuration: { recordChatGptObservation: recordObservation },
       configurationFailure: (code: string) => ({ ok: false, code }),
       chatGptJournalObservation: (result: unknown) => result,

@@ -20,6 +20,7 @@ import {
   journalUnderPromotionLease,
   PromotionPendingRefusal,
 } from "../../src/apps/desktop/chatgpt-journal-lease";
+import { desktopStatePaths } from "../../apps/desktop/host/state-paths";
 import { PrivateChatGptTaskJournal } from "../../src/apps/desktop/chatgpt-task-journal";
 import type {
   ProductTask,
@@ -65,11 +66,12 @@ async function userData(): Promise<string> {
 /**
  * The real journal `main.ts` builds, on a real private directory under the
  * same user-data root the lease lives in — the same layout
- * `chatGptTaskJournalRoot()` uses.
+ * `desktopStatePaths().chatGptTaskJournal` names.
  */
 function journalFor(root: string): PrivateChatGptTaskJournal {
   return new PrivateChatGptTaskJournal({
-    root: path.join(root, "farol-state", "chatgpt-task-journal"),
+    root: desktopStatePaths({ userData: root, tmpdir: os.tmpdir() })
+      .chatGptTaskJournal,
   });
 }
 

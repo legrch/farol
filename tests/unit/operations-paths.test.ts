@@ -1,14 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import vm from "node:vm";
 import { Client } from "@modelcontextprotocol/client";
 import {
   InMemoryTransport,
   type McpServer,
 } from "@modelcontextprotocol/server";
 import { expect, it, vi } from "vitest";
-import { operationsDirectory } from "../../apps/desktop/operations/paths";
+import { desktopStatePaths } from "../../apps/desktop/host/state-paths";
 import { OperationsStore } from "../../apps/desktop/operations/store";
 import {
   protocolMajor,
@@ -145,32 +144,11 @@ it("wires the admitted MCP lifecycle layout to Desktop's store and owner label i
   const userData = fs.mkdtempSync(
     path.join(os.tmpdir(), "farol-operation-paths-"),
   );
-  // Pin the actual Desktop constructor argument rather than a second path literal.
-  const source = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
-  const argument = source.match(
-    /function operationsStore\(\): OperationsStore \{\s*return \(operationsLog \?\?= new OperationsStore\(\s*([\s\S]*?),\s*\)\);\s*\}/u,
-  )?.[1];
-  expect(argument).toBeDefined();
-  expect(source).toContain(
-    'import { operationsDirectory } from "../../../apps/desktop/operations/paths";',
-  );
-  const directory = vm.runInNewContext(argument!, {
-    path,
-    operationsDirectory,
-    app: {
-      getPath: (name: string) => {
-        expect(name).toBe("userData");
-        return userData;
-      },
-    },
-  }) as string;
+  // Desktop builds its store and its connector launch root from this module.
+  const paths = desktopStatePaths({ userData, tmpdir: os.tmpdir() });
+  const directory = paths.operations;
   const desktop = new OperationsStore(directory);
-  ports.lifecycleRoot = path.join(
-    userData,
-    "farol-private",
-    "secure-mcp-connector",
-    "computer-authority",
-  );
+  ports.lifecycleRoot = paths.secureMcpLaunch;
   const once = vi.spyOn(process, "once").mockReturnValue(process);
   vi.spyOn(process.stdin, "once").mockReturnValue(process.stdin);
   const exit = vi

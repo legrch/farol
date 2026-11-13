@@ -277,7 +277,7 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap", empty = false) {
       isRunning: () => true,
       hasUnresolvedEffect: () => false,
     },
-    secureMcpLaunchRoot: () => "/synthetic-c8-no-filesystem",
+    statePaths: () => ({ secureMcpLaunch: "/synthetic-c8-no-filesystem" }),
     connectorAppVerificationAttemptExists: legacyExists,
     connectorConnection: { sample: async () => {} },
     currentConnectionStatus: () => {},

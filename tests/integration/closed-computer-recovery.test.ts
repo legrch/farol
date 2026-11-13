@@ -3,10 +3,9 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { runInNewContext } from "node:vm";
-import { parse } from "@babel/parser";
 import { build } from "esbuild";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { desktopStatePaths } from "../../apps/desktop/host/state-paths";
 import { recoverClosedComputer } from "../../src/apps/desktop/closed-computer-recovery";
 import { PrivateMcpLifecycle } from "../../src/modules/computer/infra/mcp/private-mcp-lifecycle";
 import { PrivateExecutionFence } from "../../src/modules/computer/infra/mcp/execution-fence";
@@ -18,45 +17,15 @@ async function desktopRoots(userData: string) {
     path.resolve(import.meta.dirname, "../../src/apps/desktop/main.ts"),
     "utf8",
   );
-  const ast = parse(source, { sourceType: "module", plugins: ["typescript"] });
-  // Run only these pure path builders from the actual boot source, never main.
-  // A separately hard-coded fixture root would miss a production root change.
-  const builders = [
-    "secureMcpConnectorRoot",
-    "secureMcpCredentialRoot",
-    "secureMcpLaunchRoot",
-  ].map((name) => {
-    const node = ast.program.body.find(
-      (entry) =>
-        entry.type === "FunctionDeclaration" && entry.id?.name === name,
-    );
-    if (node?.type !== "FunctionDeclaration" || node.params.length !== 0)
-      throw new Error(`Desktop root builder unavailable: ${name}`);
-    return `function ${name}() ${source.slice(node.body.start!, node.body.end!)}`;
-  });
-  const lifecycle = ast.program.body.find(
-    (entry) =>
-      entry.type === "FunctionDeclaration" &&
-      entry.id?.name === "computerMcpLifecycle",
+  // Desktop must build its lifecycle from the launch root this module names.
+  expect(source).toMatch(
+    /new PrivateMcpLifecycle\(\s*statePaths\(\)\.secureMcpLaunch/u,
   );
-  if (lifecycle?.type !== "FunctionDeclaration")
-    throw new Error("Desktop lifecycle construction unavailable");
-  expect(source.slice(lifecycle.start!, lifecycle.end!)).toMatch(
-    /new PrivateMcpLifecycle\(\s*secureMcpLaunchRoot\(\)/u,
-  );
-  return runInNewContext(
-    `${builders.join("\n")}\n({root: secureMcpLaunchRoot(), credentials: secureMcpCredentialRoot()})`,
-    {
-      path,
-      app: {
-        getPath(name: string) {
-          expect(name).toBe("userData");
-          return userData;
-        },
-      },
-    },
-    { timeout: 1_000 },
-  ) as { root: string; credentials: string };
+  const paths = desktopStatePaths({ userData, tmpdir: os.tmpdir() });
+  return {
+    root: paths.secureMcpLaunch,
+    credentials: paths.secureMcpCredential,
+  };
 }
 async function fixture() {
   const userData = await fs.realpath(

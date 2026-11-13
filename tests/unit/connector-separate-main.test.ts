@@ -184,7 +184,7 @@ function fixture() {
     connectorWorkspaceSelection,
     separateAppVerificationScopeCurrent,
     confirmSeparateAppVerificationAttempt,
-    secureMcpLaunchRoot: () => "/synthetic-scope",
+    statePaths: () => ({ secureMcpLaunch: "/synthetic-scope" }),
     connectorAppVerificationAttemptExists: async () => false,
     prepareConnectorAppVerificationAttempt: prepare,
     waitForConnectorAppReceipt: async () => null,
