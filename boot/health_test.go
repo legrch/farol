@@ -102,7 +102,7 @@ func TestHealthIsInheritedCurrentReadWithoutJournalOrLifetimeEffects(t *testing.
 	if _, ok := endpoint.methods["computer.connector.health"]; ok {
 		t.Fatal("external endpoint exposes health input")
 	}
-	slot, attempts, revision, expiry := s.current, s.attempts, j.revision, j.approval.ExpiresAt
+	slot, attempts, revision, expiry := s.current, len(s.recentOpens), j.revision, j.approval.ExpiresAt
 	now := uint64(s.clock.Now().UnixMilli())
 	query := healthWireQuery(now, opened.Endpoint.Binding)
 	got := healthRead(t, s, query)
@@ -120,7 +120,7 @@ func TestHealthIsInheritedCurrentReadWithoutJournalOrLifetimeEffects(t *testing.
 	if got.State != "unobserved" || got.Reason != "missing_snapshot" || got.LocalReady || got.ObservedAtMillis != nil || got.ValidUntilMillis != nil || got.LastPollSuccessMillis != nil || got.LastResponseAcceptedMillis != nil || got.NextRetryMillis != nil {
 		t.Fatalf("missing sample retained positive facts: %+v", got)
 	}
-	if j.publications != 1 || j.withdrawals != 0 || j.revision != revision || !j.approval.ExpiresAt.Equal(expiry) || native.calls != 0 || endpoint.closes != 0 || len(endpoint.published) != 0 || len(s.effects) != 0 || s.current != slot || s.attempts != attempts || s.closed != nil || s.root.unknown {
+	if j.publications != 1 || j.withdrawals != 0 || j.revision != revision || !j.approval.ExpiresAt.Equal(expiry) || native.calls != 0 || endpoint.closes != 0 || len(endpoint.published) != 0 || len(s.effects) != 0 || s.current != slot || len(s.recentOpens) != attempts || s.closed != nil || s.root.unknown {
 		t.Fatal("health query changed journal, proof, native effects or lifetime")
 	}
 	if _, err := slot.owner.Reconnect(context.Background()); err != nil {

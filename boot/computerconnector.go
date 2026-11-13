@@ -39,6 +39,15 @@ type connectorOpenBeforePublication struct{ cause error }
 func (e *connectorOpenBeforePublication) Error() string { return e.cause.Error() }
 func (e *connectorOpenBeforePublication) Unwrap() error { return e.cause }
 
+// Open attempts are bounded per recent window, not per backend lifetime. Each
+// attempt claims an operation ID and may admit one durable authority
+// participant, so a launch storm must not drain them; reconnects after Close,
+// sleep or a settings change keep working however long the backend runs.
+const (
+	connectorOpenBurst  = 32
+	connectorOpenWindow = 10 * time.Minute
+)
+
 // One slot belongs to this backend lifetime. It is not endpoint discovery or a
 // second authority journal. MCP attachments never construct or replace it.
 type computerConnector struct {
@@ -57,7 +66,7 @@ type computerConnector struct {
 	codexRead         *connectorCodexRead
 	selfTests         selfTestRegistry
 	current           *connectorSlot
-	attempts          uint64
+	recentOpens       []time.Time              // claimed Open attempts inside connectorOpenWindow
 	closed            *connectorRecoveryOrigin // effects-owned, exact successful Close only
 	closedParentID    string                   // exact C7 original, never inferred from stopped state
 	closedOperationID string
@@ -147,7 +156,7 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	if recoveryErr != nil {
 		return nil, recoveryErr
 	}
-	if ctx == nil || ctx.Err() != nil || s.lifetime.Err() != nil || validateIngress("ComputerConnectorOpen", in) != nil || s.current != nil || s.attempts >= 32 {
+	if ctx == nil || ctx.Err() != nil || s.lifetime.Err() != nil || validateIngress("ComputerConnectorOpen", in) != nil || s.current != nil || !s.openAttemptAvailable() {
 		return nil, computerUnavailable()
 	}
 	if s.mutations != nil && s.mutations.computer != s.root {
@@ -159,7 +168,7 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	if err := s.root.claim(operation); err != nil {
 		return nil, err
 	}
-	s.attempts++
+	s.recentOpens = append(s.recentOpens, s.clock.Now())
 	// A genuinely new Open may follow long idle or a confirmed Close. Join the
 	// same standing Settings consent before acquiring the publication IO gate;
 	// renewal owns that gate itself. Exact publication is checked again below.
@@ -371,6 +380,21 @@ func (s *computerConnector) Open(ctx context.Context, operation string, in wire.
 	s.startRenewal(slot, renewal)
 	result := slot.opened
 	return &result, nil
+}
+
+// openAttemptAvailable forgets claimed attempts older than the window and
+// reports whether another fits. A clock that moved backwards keeps an attempt
+// (a negative age is inside the window), so it can only delay, never widen.
+func (s *computerConnector) openAttemptAvailable() bool {
+	now := s.clock.Now()
+	kept := s.recentOpens[:0]
+	for _, at := range s.recentOpens {
+		if now.Sub(at) < connectorOpenWindow {
+			kept = append(kept, at)
+		}
+	}
+	s.recentOpens = kept
+	return len(kept) < connectorOpenBurst
 }
 
 func (s *computerConnector) closeSlot(ctx context.Context, originalStopParent string) error {
