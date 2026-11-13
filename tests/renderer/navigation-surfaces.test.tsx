@@ -121,9 +121,7 @@ describe("closed renderer destinations", () => {
     )!;
     await act(async () => arrow.click());
     expect(h.c.getSnapshot().overlay).toBe("connection-tests");
-    expect(
-      h.host.querySelector('dialog[aria-label="Checks"]'),
-    ).toBeTruthy();
+    expect(h.host.querySelector('dialog[aria-label="Checks"]')).toBeTruthy();
     expect(vi.mocked(h.f.api.layout).mock.calls.at(-1)?.[5]).toBe("task-menu");
     expect(selfTest).not.toHaveBeenCalled();
     await h.click("Previous check results");
@@ -155,9 +153,7 @@ describe("closed renderer destinations", () => {
     await act(async () => h.c.navigate({ area: "chatgpt" }));
     await act(async () =>
       h.host
-        .querySelector<HTMLButtonElement>(
-          '[aria-label="More checks"]',
-        )!
+        .querySelector<HTMLButtonElement>('[aria-label="More checks"]')!
         .click(),
     );
     await h.click("Previous check results");
@@ -186,9 +182,7 @@ describe("closed renderer destinations", () => {
     vi.mocked(h.f.api.configure).mockClear();
     await act(async () =>
       h.host
-        .querySelector<HTMLButtonElement>(
-          '[aria-label="More checks"]',
-        )!
+        .querySelector<HTMLButtonElement>('[aria-label="More checks"]')!
         .click(),
     );
     expect(h.f.api.configure).not.toHaveBeenCalled();
@@ -227,9 +221,7 @@ describe("closed renderer destinations", () => {
     });
     await act(async () =>
       h.host
-        .querySelector<HTMLButtonElement>(
-          '[aria-label="More checks"]',
-        )!
+        .querySelector<HTMLButtonElement>('[aria-label="More checks"]')!
         .click(),
     );
     await h.click("Previous check results");
@@ -285,9 +277,7 @@ describe("closed renderer destinations", () => {
       }));
       await act(async () =>
         h.host
-          .querySelector<HTMLButtonElement>(
-            '[aria-label="More checks"]',
-          )!
+          .querySelector<HTMLButtonElement>('[aria-label="More checks"]')!
           .click(),
       );
       await h.click("Full check");
@@ -312,9 +302,7 @@ describe("closed renderer destinations", () => {
     await act(async () => h.c.navigate({ area: "chatgpt" }));
     await act(async () =>
       h.host
-        .querySelector<HTMLButtonElement>(
-          '[aria-label="More checks"]',
-        )!
+        .querySelector<HTMLButtonElement>('[aria-label="More checks"]')!
         .click(),
     );
     const send = vi
@@ -339,9 +327,7 @@ describe("closed renderer destinations", () => {
     });
     await act(async () =>
       h.host
-        .querySelector<HTMLButtonElement>(
-          '[aria-label="More checks"]',
-        )!
+        .querySelector<HTMLButtonElement>('[aria-label="More checks"]')!
         .click(),
     );
     await h.click("Full check");
