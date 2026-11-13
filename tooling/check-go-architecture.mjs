@@ -244,6 +244,13 @@ const safePath = (file) =>
   !/[\\*?]/u.test(file) &&
   !file.split("/").some((part) => ["", ".", ".."].includes(part));
 
+const baselineRow = (item) => ({
+  code: item.code,
+  file: item.file,
+  detail: item.detail,
+  ...(item.amount === undefined ? {} : { amount: item.amount }),
+});
+
 function readEnforcement(root) {
   const file = path.join(root, enforcementFile);
   if (!fs.existsSync(file)) return null;
@@ -256,8 +263,8 @@ function readEnforcement(root) {
     typeof data !== "object" ||
     Array.isArray(data) ||
     Object.keys(data).sort().join(",") !==
-      "ceilings,exceptions,migrated,source,version" ||
-    data.version !== 2 ||
+      "baseline,exceptions,migrated,source,version" ||
+    data.version !== 3 ||
     !/^[a-f0-9]{40}$/u.test(data.source)
   )
     invalid("envelope");
@@ -274,36 +281,31 @@ function readEnforcement(root) {
   }
   if (Object.keys(data.migrated).length !== migrationCodes.length)
     invalid("unknown migrated rule");
-  const ceilings = new Map();
-  if (
-    !data.ceilings ||
-    typeof data.ceilings !== "object" ||
-    Object.keys(data.ceilings).some((code) => !migrationCodes.includes(code))
-  )
-    invalid("ceilings");
-  for (const [code, counts] of Object.entries(data.ceilings)) {
-    if (!counts || typeof counts !== "object" || Array.isArray(counts))
-      invalid(`ceilings ${code}`);
-    for (const [scope, count] of Object.entries(counts))
-      if (
-        !/^[a-z][a-z0-9]*$/u.test(scope) ||
-        !Number.isSafeInteger(count) ||
-        count < 1
-      )
-        invalid(`ceiling ${code} ${scope}`);
-    ceilings.set(code, new Map(Object.entries(counts)));
+  const row = (item, keys) =>
+    item &&
+    typeof item === "object" &&
+    migrationCodes.includes(item.code) &&
+    safePath(item.file) &&
+    typeof item.detail === "string" &&
+    item.detail !== "" &&
+    keys.includes(Object.keys(item).sort().join(","));
+  const baseline = new Map();
+  if (!Array.isArray(data.baseline)) invalid("baseline");
+  for (const item of data.baseline) {
+    if (
+      !row(item, ["code,detail,file", "amount,code,detail,file"]) ||
+      (item.amount !== undefined &&
+        (!Number.isSafeInteger(item.amount) || item.amount < 1)) ||
+      baseline.has(findingKey(item))
+    )
+      invalid("baseline row");
+    baseline.set(findingKey(item), item);
   }
   const exceptions = new Map();
   if (!Array.isArray(data.exceptions)) invalid("exceptions");
   for (const item of data.exceptions) {
     if (
-      !item ||
-      Object.keys(item).sort().join(",") !==
-        "code,detail,file,reason,removal" ||
-      !migrationCodes.includes(item.code) ||
-      !safePath(item.file) ||
-      typeof item.detail !== "string" ||
-      !item.detail ||
+      !row(item, ["code,detail,file,reason,removal"]) ||
       typeof item.reason !== "string" ||
       !item.reason.trim() ||
       typeof item.removal !== "string" ||
@@ -313,13 +315,19 @@ function readEnforcement(root) {
       invalid("exception row");
     exceptions.set(findingKey(item), item);
   }
-  return { source: data.source, migrated, ceilings, exceptions };
+  return { data, source: data.source, migrated, baseline, exceptions };
 }
 
-// Split migration findings by the enforcement switch. A migrated scope blocks
-// a rule except for exact, reasoned exception rows; report scopes may not grow
-// past their declared ceiling. Without the file every finding is a report.
-function enforce(root, findings, add) {
+// Split migration findings by the enforcement switch. Row-exact for every
+// migration rule: in a migrated scope a finding blocks unless an exact,
+// reasoned exception row covers it; in a report scope a finding must match an
+// exact baseline row (code, file, detail), so a new finding fails even when
+// another one was fixed in the same change. GO_BOOT_LOGIC rows also carry an
+// amount (occurrences or excess), which may fall but never rise. Baseline rows
+// without their finding are stale. Without the file every finding is a report.
+// `write` rewrites the baseline: stale rows are dropped and amounts lowered;
+// `admit` also adds the current new findings (reviewed additions only).
+function enforce(root, findings, add, write = null) {
   const enforcement = readEnforcement(root);
   const unique = [
     ...new Map(findings.map((item) => [findingKey(item), item])).values(),
@@ -330,6 +338,8 @@ function enforce(root, findings, add) {
   const excepted = [];
   const counts = {};
   const used = new Set();
+  const matched = new Map();
+  const fresh = [];
   for (const item of unique) {
     const migrated = enforcement?.migrated.get(item.code)?.has(item.scope);
     const exception = migrated && enforcement.exceptions.get(findingKey(item));
@@ -343,9 +353,48 @@ function enforce(root, findings, add) {
       continue;
     }
     counts[item.code] ??= {};
-    counts[item.code][item.scope] = (counts[item.code][item.scope] ?? 0) + 1;
-    if (migrated) add(item.code, item.file, item.detail);
-    else reported.push(item);
+    counts[item.code][item.scope] =
+      (counts[item.code][item.scope] ?? 0) + (item.amount ?? 1);
+    if (migrated) {
+      if (!write) add(item.code, item.file, item.detail);
+      continue;
+    }
+    reported.push(item);
+    if (!enforcement) continue;
+    const row = enforcement.baseline.get(findingKey(item));
+    if (!row) {
+      fresh.push(item);
+      continue;
+    }
+    matched.set(findingKey(item), item);
+    if ((item.amount ?? 1) > (row.amount ?? 1)) fresh.push(item);
+  }
+  if (enforcement && write) {
+    const rows = [];
+    for (const [key, row] of enforcement.baseline) {
+      const item = matched.get(key);
+      if (!item) continue;
+      const amount =
+        row.amount === undefined
+          ? undefined
+          : Math.min(row.amount, item.amount ?? 1);
+      rows.push(baselineRow({ ...row, amount }));
+    }
+    if (write.admit)
+      for (const item of fresh) {
+        const index = rows.findIndex(
+          (row) => findingKey(row) === findingKey(item),
+        );
+        if (index !== -1) rows.splice(index, 1);
+        rows.push(baselineRow(item));
+      }
+    rows.sort(compareFinding);
+    const data = { ...enforcement.data, baseline: rows };
+    fs.writeFileSync(
+      path.join(root, enforcementFile),
+      `${JSON.stringify(data, null, 2)}\n`,
+    );
+    return enforce(root, findings, add);
   }
   if (enforcement) {
     for (const [key, item] of enforcement.exceptions)
@@ -355,33 +404,31 @@ function enforce(root, findings, add) {
           enforcementFile,
           `${item.code} ${item.file}: ${item.detail}`,
         );
-    // Ceilings are exact: growth fails, and so does unused slack, so a fix
-    // in one place cannot pay for a new finding elsewhere in the scope.
-    for (const [code, byScope] of Object.entries(counts))
-      for (const [scope, count] of Object.entries(byScope)) {
-        if (enforcement.migrated.get(code).has(scope)) continue;
-        const ceiling = enforcement.ceilings.get(code)?.get(scope) ?? 0;
-        if (count > ceiling)
-          add(
-            "GO_REPORT_CEILING",
-            enforcementFile,
-            `${code} ${scope}: ${count} findings exceed the ceiling ${ceiling}; fix the new findings`,
-          );
-      }
-    for (const [code, byScope] of enforcement.ceilings)
-      for (const [scope, ceiling] of byScope) {
-        const count = enforcement.migrated.get(code).has(scope)
-          ? 0
-          : (counts[code]?.[scope] ?? 0);
-        if (count < ceiling)
-          add(
-            "GO_CEILING_STALE",
-            enforcementFile,
-            count
-              ? `${code} ${scope}: ${count} findings are below the ceiling ${ceiling}; lower the ceiling to ${count} in this change`
-              : `${code} ${scope}: no report findings remain under the ceiling ${ceiling}; delete the ceiling in this change`,
-          );
-      }
+    for (const item of fresh) {
+      const row = enforcement.baseline.get(findingKey(item));
+      add(
+        "GO_REPORT_NEW",
+        item.file,
+        row
+          ? `${item.code} ${item.detail}: amount ${item.amount} exceeds the baseline ${row.amount}; remove the new occurrences`
+          : `${item.code} ${item.detail}: not in the baseline; fix it (adding a row needs reviewed --write-baseline --admit-new)`,
+      );
+    }
+    for (const [key, row] of enforcement.baseline) {
+      const item = matched.get(key);
+      if (!item)
+        add(
+          "GO_BASELINE_STALE",
+          row.file,
+          `${row.code} ${row.detail}: no matching report finding; delete the row (node tooling/check-go-architecture.mjs --write-baseline)`,
+        );
+      else if (row.amount !== undefined && (item.amount ?? 1) < row.amount)
+        add(
+          "GO_BASELINE_STALE",
+          row.file,
+          `${row.code} ${row.detail}: amount ${item.amount} is below the baseline ${row.amount}; set it to ${item.amount} (node tooling/check-go-architecture.mjs --write-baseline)`,
+        );
+    }
   }
   return {
     mode: "report",
@@ -877,18 +924,19 @@ function bootReports(file, source, tokens, report) {
     if (!errorCheck(tokens.slice(i + 1, j)))
       count("conditions other than err != nil");
   }
-  for (const [kind, total] of [...counts].sort())
-    report("GO_BOOT_LOGIC", file, `${kind}: ${total}`);
   const types = typeSpecs(tokens).length;
   if (types > 1)
-    report(
-      "GO_BOOT_LOGIC",
-      file,
-      `top-level types: ${types}; at most one namespace type`,
-    );
+    counts.set("top-level types beyond one namespace type", types - 1);
   const lines = source.split("\n").length - (source.endsWith("\n") ? 1 : 0);
   if (lines > bootLineBudget)
-    report("GO_BOOT_LOGIC", file, `lines: ${lines}; budget ${bootLineBudget}`);
+    counts.set(
+      `lines beyond the ${bootLineBudget}-line budget`,
+      lines - bootLineBudget,
+    );
+  // One finding per kind and file; its amount is the occurrence count or the
+  // excess, so any growth in an already reported file is visible.
+  for (const [kind, total] of [...counts].sort())
+    report("GO_BOOT_LOGIC", file, kind, total);
 }
 
 function receiverType(tokens, [start, end]) {
@@ -1193,11 +1241,17 @@ function registeredChildWorktrees(root) {
   return children;
 }
 
-export function checkGoArchitecture(root) {
+export function checkGoArchitecture(root, options = {}) {
   root = path.resolve(root);
   const violations = [];
   const reports = [];
-  const report = (code, file, detail) => reports.push({ code, file, detail });
+  const report = (code, file, detail, amount) =>
+    reports.push({
+      code,
+      file,
+      detail,
+      ...(amount === undefined ? {} : { amount }),
+    });
   const files = [];
   const bootTestdata = [];
   const excludedModules = [];
@@ -1459,7 +1513,7 @@ export function checkGoArchitecture(root) {
   }
   for (const node of graph.keys()) visit(node);
   structureReports(files, bootTestdata, behavior, clauses, report);
-  const result = enforce(root, reports, add);
+  const result = enforce(root, reports, add, options.write ?? null);
   return {
     module: modulePath,
     go: "1.27.3",
@@ -1482,10 +1536,19 @@ if (
     for (let i = 0; i < args.length; i++) {
       if (args[i] === "--root" && args[i + 1]) root = args[++i];
       else if (args[i] === "--scope" && args[i + 1]) only = args[++i];
-      else if (args[i] !== "--json")
+      else if (!["--json", "--write-baseline", "--admit-new"].includes(args[i]))
         throw new Error(`Unknown or incomplete option: ${args[i]}`);
     }
-    const result = checkGoArchitecture(root);
+    // Only an explicit option writes, and only the baseline rows: stale rows
+    // are dropped and amounts lowered; --admit-new also adds new findings.
+    const writing = args.includes("--write-baseline");
+    if (args.includes("--admit-new") && !writing)
+      throw new Error("--admit-new requires --write-baseline");
+    if (writing && !fs.existsSync(path.join(root, enforcementFile)))
+      throw new Error(`--write-baseline requires ${enforcementFile}`);
+    const result = checkGoArchitecture(root, {
+      write: writing ? { admit: args.includes("--admit-new") } : null,
+    });
     const { report } = result;
     if (args.includes("--json"))
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
@@ -1497,7 +1560,7 @@ if (
       for (const finding of report.findings)
         if (!only || finding.scope === only)
           process.stdout.write(
-            `REPORT ${finding.code} ${finding.file}: ${finding.detail}\n`,
+            `REPORT ${finding.code} ${finding.file}: ${finding.detail}${finding.amount === undefined ? "" : ` (${finding.amount})`}\n`,
           );
       for (const finding of report.excepted)
         if (!only || finding.scope === only)
@@ -1532,7 +1595,7 @@ if (
         );
       }
       process.stdout.write(
-        `\nADR-0002 report mode: ${report.findings.length} report findings; ${report.excepted.length} excepted; * = migrated scope (blocking).\n`,
+        `\nADR-0002 report mode: ${report.findings.length} report findings; ${report.excepted.length} excepted; * = migrated scope (blocking); GO_BOOT_LOGIC counts occurrences and excess lines.\n`,
       );
       process.stdout.write(
         `Go architecture: ${result.productionFiles} production files checked; ${result.testFiles} test files named; excluded nested modules: ${result.excludedModules.join(", ") || "none"}.\n`,

@@ -14,7 +14,7 @@ const prefix = "github.com/legrch/farol/";
 const moduleFile = "module github.com/legrch/farol\n\ngo 1.27.3\n";
 
 type Finding = { code: string; file: string; detail: string };
-type Scoped = Finding & { scope: string };
+type Scoped = Finding & { scope: string; amount?: number };
 
 type Report = {
   productionFiles: number;
@@ -849,26 +849,60 @@ const migrationCodes = [
 // scope to the enforcement file AND here in the same pull request; removing a
 // migrated scope from the file fails this floor.
 const migratedFloor: Record<string, string[]> = {};
+type Row = Finding & { amount?: number };
 type Enforcement = {
   version: number;
   source: string;
   migrated: Record<string, string[]>;
   exceptions: (Finding & { reason: string; removal: string })[];
-  ceilings: Record<string, Record<string, number>>;
+  baseline: Row[];
 };
 const enforcement = (overrides: Partial<Enforcement> = {}) =>
   JSON.stringify({
-    version: 2,
+    version: 3,
     source: enforcementSource,
     migrated: Object.fromEntries(migrationCodes.map((code) => [code, []])),
     exceptions: [],
-    ceilings: {},
+    baseline: [],
     ...overrides,
   });
 const migrate = (code: string, ...scopes: string[]) => ({
   ...Object.fromEntries(migrationCodes.map((item) => [item, [] as string[]])),
   [code]: scopes,
 });
+
+// Run the executable with extra arguments in a fresh root and return the
+// enforcement file it leaves behind (the write option rewrites it).
+function run(files: Record<string, string>, args: string[]) {
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), "farol-go-architecture-"),
+  );
+  try {
+    fs.writeFileSync(path.join(directory, "go.mod"), moduleFile);
+    for (const [name, text] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(directory, name)), {
+        recursive: true,
+      });
+      fs.writeFileSync(path.join(directory, name), text);
+    }
+    const result = spawnSync(
+      process.execPath,
+      [checker, "--root", directory, ...args],
+      { encoding: "utf8" },
+    );
+    const written = path.join(directory, enforcementFile);
+    return {
+      status: result.status,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      stored: fs.existsSync(written)
+        ? (JSON.parse(fs.readFileSync(written, "utf8")) as Enforcement)
+        : null,
+    };
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
 
 describe("ADR-0002 enforcement switch", () => {
   const wordFile = "modules/chat/domain/turn/turnpolicy.go";
@@ -877,12 +911,17 @@ describe("ADR-0002 enforcement switch", () => {
     file: wordFile,
     detail: "File name outside the admitted vocabulary: turnpolicy",
   };
+  const taskFinding = {
+    code: "GO_FILE_WORD",
+    file: "modules/task/domain/task/taskpolicy.go",
+    detail: "File name outside the admitted vocabulary: taskpolicy",
+  };
   const files = {
     [wordFile]: "package turn\n",
-    "modules/task/domain/task/taskpolicy.go": "package task\n",
+    [taskFinding.file]: "package task\n",
   };
 
-  it("keeps the real checkout green with a growing switch and ceilings", () => {
+  it("keeps the real checkout green with a growing switch and exact rows", () => {
     const result = spawnSync(
       process.execPath,
       [checker, "--root", root, "--json"],
@@ -894,24 +933,17 @@ describe("ADR-0002 enforcement switch", () => {
     const stored = JSON.parse(
       fs.readFileSync(path.join(root, enforcementFile), "utf8"),
     ) as Enforcement;
-    expect(stored.version).toBe(2);
+    expect(stored.version).toBe(3);
     expect(Object.keys(stored.migrated)).toEqual(migrationCodes);
     for (const [code, scopes] of Object.entries(migratedFloor))
       expect(stored.migrated[code]).toEqual(expect.arrayContaining(scopes));
     expect(report.report.migrated).toEqual(stored.migrated);
     expect(report.report.source).toBe(stored.source);
     expect(report.violations).toEqual([]);
-    for (const [code, byScope] of Object.entries(report.report.counts))
-      for (const [scope, count] of Object.entries(byScope))
-        if (!stored.migrated[code]?.includes(scope))
-          expect(count, `${code} ${scope}`).toBe(
-            stored.ceilings[code]?.[scope],
-          );
-    for (const [code, byScope] of Object.entries(stored.ceilings))
-      for (const [scope, ceiling] of Object.entries(byScope))
-        expect(report.report.counts[code]?.[scope], `${code} ${scope}`).toBe(
-          ceiling,
-        );
+    // Every report finding is exactly one baseline row and vice versa.
+    expect(
+      report.report.findings.map(({ scope: _scope, ...row }) => row),
+    ).toEqual(stored.baseline);
   });
 
   it("reports every scope without an enforcement file", () => {
@@ -926,31 +958,13 @@ describe("ADR-0002 enforcement switch", () => {
   });
 
   it("prints report lines for one scope and the count table", () => {
-    const directory = fs.mkdtempSync(
-      path.join(os.tmpdir(), "farol-go-architecture-"),
+    const result = run(files, ["--scope", "chat"]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain(
+      `REPORT GO_FILE_WORD ${wordFile}: ${wordFinding.detail}`,
     );
-    try {
-      fs.writeFileSync(path.join(directory, "go.mod"), moduleFile);
-      for (const [name, text] of Object.entries(files)) {
-        fs.mkdirSync(path.dirname(path.join(directory, name)), {
-          recursive: true,
-        });
-        fs.writeFileSync(path.join(directory, name), text);
-      }
-      const result = spawnSync(
-        process.execPath,
-        [checker, "--root", directory, "--scope", "chat"],
-        { encoding: "utf8" },
-      );
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain(
-        `REPORT GO_FILE_WORD ${wordFile}: ${wordFinding.detail}`,
-      );
-      expect(result.stdout).not.toContain("taskpolicy");
-      expect(result.stdout).toMatch(/^GO_FILE_WORD +0 +1 +0 .* 2$/mu);
-    } finally {
-      fs.rmSync(directory, { recursive: true, force: true });
-    }
+    expect(result.stdout).not.toContain("taskpolicy");
+    expect(result.stdout).toMatch(/^GO_FILE_WORD +0 +1 +0 .* 2$/mu);
   });
 
   it("blocks a rule only in its migrated scope", () => {
@@ -958,7 +972,7 @@ describe("ADR-0002 enforcement switch", () => {
       ...files,
       [enforcementFile]: enforcement({
         migrated: migrate("GO_FILE_WORD", "chat"),
-        ceilings: { GO_FILE_WORD: { task: 1 } },
+        baseline: [taskFinding],
       }),
     });
     denied(result, "GO_FILE_WORD", wordFile);
@@ -969,14 +983,7 @@ describe("ADR-0002 enforcement switch", () => {
       result.report.report.findings.filter(
         ({ code }) => code === "GO_FILE_WORD",
       ),
-    ).toEqual([
-      {
-        code: "GO_FILE_WORD",
-        file: "modules/task/domain/task/taskpolicy.go",
-        detail: "File name outside the admitted vocabulary: taskpolicy",
-        scope: "task",
-      },
-    ]);
+    ).toEqual([{ ...taskFinding, scope: "task" }]);
   });
 
   it("excepts an exact reasoned row in a migrated scope", () => {
@@ -987,7 +994,7 @@ describe("ADR-0002 enforcement switch", () => {
         exceptions: [
           { ...wordFinding, reason: "Fixture", removal: "Rename the file" },
         ],
-        ceilings: { GO_FILE_WORD: { task: 1 } },
+        baseline: [taskFinding],
       }),
     });
     expect(result.status, JSON.stringify(result.report)).toBe(0);
@@ -1014,71 +1021,123 @@ describe("ADR-0002 enforcement switch", () => {
       ...files,
       [enforcementFile]: enforcement({
         exceptions: [{ ...wordFinding, ...row }],
-        ceilings: { GO_FILE_WORD: { chat: 1, task: 1 } },
+        baseline: [wordFinding, taskFinding],
       }),
     });
     denied(unused, "GO_EXCEPTION_STALE", enforcementFile);
   });
 
-  it("refuses report growth past a ceiling", () => {
-    const within = check({
-      ...files,
+  it("fails a new finding even when a fix keeps the count equal", () => {
+    // The ADR-0001 import guards keep exact rows: swapping one
+    // infrastructure-to-service edge for another fails as new and stale.
+    const service = "modules/chat/app/services/turn/service.go";
+    const other = "modules/chat/app/services/slot/service.go";
+    const client = "modules/chat/infra/client/client.go";
+    const edge = (target: string) => ({
+      code: "GO_INFRA_SERVICE",
+      file: client,
+      detail: prefix + target,
+    });
+    const result = check({
+      [service]: "package turn\n",
+      [other]: "package slot\n",
+      [client]: `package client\nimport _ "${prefix}modules/chat/app/services/slot"\n`,
       [enforcementFile]: enforcement({
-        ceilings: { GO_FILE_WORD: { chat: 1, task: 1 } },
+        baseline: [edge("modules/chat/app/services/turn")],
       }),
     });
-    expect(within.status, JSON.stringify(within.report)).toBe(0);
-    const grown = check({
-      ...files,
-      [enforcementFile]: enforcement({
-        ceilings: { GO_FILE_WORD: { task: 1 } },
-      }),
-    });
-    denied(grown, "GO_REPORT_CEILING", enforcementFile);
+    expect(result.report.report.counts.GO_INFRA_SERVICE).toEqual({ chat: 1 });
     expect(
-      grown.report.violations.find(({ code }) => code === "GO_REPORT_CEILING")
-        ?.detail,
-    ).toBe(
-      "GO_FILE_WORD chat: 1 findings exceed the ceiling 0; fix the new findings",
-    );
+      result.report.violations.filter(({ code }) =>
+        ["GO_REPORT_NEW", "GO_BASELINE_STALE"].includes(code),
+      ),
+    ).toEqual([
+      {
+        code: "GO_REPORT_NEW",
+        file: client,
+        detail: `GO_INFRA_SERVICE ${prefix}modules/chat/app/services/slot: not in the baseline; fix it (adding a row needs reviewed --write-baseline --admit-new)`,
+      },
+      {
+        code: "GO_BASELINE_STALE",
+        file: client,
+        detail: `GO_INFRA_SERVICE ${prefix}modules/chat/app/services/turn: no matching report finding; delete the row (node tooling/check-go-architecture.mjs --write-baseline)`,
+      },
+    ]);
   });
 
-  it("refuses slack under a ceiling and ceilings on migrated scopes", () => {
-    const stale = (
-      ceilings: Record<string, Record<string, number>>,
-      migrated = migrate("GO_FILE_WORD"),
-    ) =>
+  it("fails a baseline row in a migrated scope as stale", () => {
+    const result = check({
+      ...files,
+      [enforcementFile]: enforcement({
+        migrated: migrate("GO_FILE_WORD", "chat"),
+        baseline: [wordFinding, taskFinding],
+      }),
+    });
+    denied(result, "GO_BASELINE_STALE", wordFile);
+  });
+
+  const boot = (conditions: number) => ({
+    "boot/chat.go": `package boot\nfunc open(a bool) {\n${"\tif a {\n\t}\n".repeat(conditions)}}\n`,
+  });
+  const conditionRow = (amount: number) => ({
+    code: "GO_BOOT_LOGIC",
+    file: "boot/chat.go",
+    detail: "conditions other than err != nil",
+    amount,
+  });
+
+  it("fails boot logic growth and a stale higher amount", () => {
+    const at = (amount: number, conditions: number) =>
       check({
-        ...files,
-        [enforcementFile]: enforcement({ migrated, ceilings }),
-      }).report.violations.filter(({ code }) => code === "GO_CEILING_STALE");
-    expect(stale({ GO_FILE_WORD: { chat: 1, task: 1 } })).toEqual([]);
-    expect(stale({ GO_FILE_WORD: { chat: 2, task: 1 } })).toEqual([
+        ...boot(conditions),
+        [enforcementFile]: enforcement({ baseline: [conditionRow(amount)] }),
+      }).report.violations;
+    expect(at(2, 2)).toEqual([]);
+    expect(at(2, 3)).toEqual([
       {
-        code: "GO_CEILING_STALE",
-        file: enforcementFile,
+        code: "GO_REPORT_NEW",
+        file: "boot/chat.go",
         detail:
-          "GO_FILE_WORD chat: 1 findings are below the ceiling 2; lower the ceiling to 1 in this change",
+          "GO_BOOT_LOGIC conditions other than err != nil: amount 3 exceeds the baseline 2; remove the new occurrences",
       },
     ]);
-    expect(
-      stale({ GO_FILE_WORD: { chat: 1, task: 1 }, GO_DTO_ALIAS: { chat: 1 } }),
-    ).toEqual([
+    expect(at(2, 1)).toEqual([
       {
-        code: "GO_CEILING_STALE",
-        file: enforcementFile,
+        code: "GO_BASELINE_STALE",
+        file: "boot/chat.go",
         detail:
-          "GO_DTO_ALIAS chat: no report findings remain under the ceiling 1; delete the ceiling in this change",
+          "GO_BOOT_LOGIC conditions other than err != nil: amount 1 is below the baseline 2; set it to 1 (node tooling/check-go-architecture.mjs --write-baseline)",
       },
     ]);
-    expect(
-      stale(
-        { GO_FILE_WORD: { chat: 1, task: 1 } },
-        migrate("GO_FILE_WORD", "chat"),
-      ).map(({ detail }) => detail),
-    ).toEqual([
-      "GO_FILE_WORD chat: no report findings remain under the ceiling 1; delete the ceiling in this change",
-    ]);
+  });
+
+  it("writes the baseline only downward unless new rows are admitted", () => {
+    const tree = {
+      ...boot(1),
+      [wordFile]: "package turn\n",
+      [enforcementFile]: enforcement({
+        baseline: [
+          conditionRow(4),
+          taskFinding,
+          { ...wordFinding, file: "modules/chat/domain/turn/gone.go" },
+        ],
+      }),
+    };
+    const shrink = run(tree, ["--write-baseline"]);
+    // The new chat finding is still refused; stale rows and amounts are gone.
+    expect(shrink.status).toBe(1);
+    expect(shrink.stdout).toContain(`GO_REPORT_NEW ${wordFile}`);
+    expect(shrink.stdout).not.toContain("GO_BASELINE_STALE");
+    expect(shrink.stored?.baseline).toEqual([conditionRow(1)]);
+    const admit = run(tree, ["--write-baseline", "--admit-new"]);
+    expect(admit.status, admit.stdout).toBe(0);
+    expect(admit.stored?.baseline).toEqual([conditionRow(1), wordFinding]);
+    expect(run(tree, ["--admit-new"]).stderr).toContain(
+      "--admit-new requires --write-baseline",
+    );
+    expect(run(files, ["--write-baseline"]).stderr).toContain(
+      `--write-baseline requires ${enforcementFile}`,
+    );
   });
 
   it("cannot migrate away an existing blocking rule", () => {
@@ -1093,9 +1152,9 @@ describe("ADR-0002 enforcement switch", () => {
   const row = { code: "GO_FILE_WORD", file: "a.go", detail: "x" };
   it.each([
     ["envelope", null],
-    ["version", JSON.parse(enforcement({ version: 1 }))],
+    ["version", JSON.parse(enforcement({ version: 2 }))],
     ["source", JSON.parse(enforcement({ source: "main" }))],
-    ["extra key", { ...JSON.parse(enforcement()), baseline: [] }],
+    ["extra key", { ...JSON.parse(enforcement()), ceilings: {} }],
     [
       "unknown scope",
       JSON.parse(enforcement({ migrated: migrate("GO_FILE_WORD", "apps") })),
@@ -1115,12 +1174,22 @@ describe("ADR-0002 enforcement switch", () => {
       JSON.parse(enforcement({ migrated: migrate("GO_PURE_IMPORT", "chat") })),
     ],
     [
-      "zero ceiling",
-      JSON.parse(enforcement({ ceilings: { GO_FILE_WORD: { chat: 0 } } })),
+      "blocking baseline row",
+      JSON.parse(
+        enforcement({ baseline: [{ ...row, code: "GO_PURE_IMPORT" }] }),
+      ),
     ],
     [
-      "blocking ceiling",
-      JSON.parse(enforcement({ ceilings: { GO_PURE_IMPORT: { chat: 1 } } })),
+      "wildcard baseline row",
+      JSON.parse(enforcement({ baseline: [{ ...row, file: "modules/**" }] })),
+    ],
+    [
+      "zero amount",
+      JSON.parse(enforcement({ baseline: [{ ...row, amount: 0 }] })),
+    ],
+    [
+      "duplicate baseline row",
+      JSON.parse(enforcement({ baseline: [row, row] })),
     ],
     [
       "blocking exception",
@@ -1139,16 +1208,6 @@ describe("ADR-0002 enforcement switch", () => {
       ),
     ],
     [
-      "wildcard exception",
-      JSON.parse(
-        enforcement({
-          exceptions: [
-            { ...row, file: "modules/**", reason: "r", removal: "r" },
-          ],
-        }),
-      ),
-    ],
-    [
       "duplicate exception",
       JSON.parse(
         enforcement({
@@ -1160,25 +1219,11 @@ describe("ADR-0002 enforcement switch", () => {
       ),
     ],
   ])("rejects an invalid enforcement file: %s", (_name, envelope) => {
-    const directory = fs.mkdtempSync(
-      path.join(os.tmpdir(), "farol-go-enforcement-"),
-    );
-    try {
-      fs.mkdirSync(path.join(directory, "tooling"));
-      fs.writeFileSync(
-        path.join(directory, enforcementFile),
-        JSON.stringify(envelope),
-      );
-      const result = spawnSync(
-        process.execPath,
-        [checker, "--root", directory, "--json"],
-        { encoding: "utf8" },
-      );
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("Invalid Go architecture enforcement");
-    } finally {
-      fs.rmSync(directory, { recursive: true, force: true });
-    }
+    const result = run({ [enforcementFile]: JSON.stringify(envelope) }, [
+      "--json",
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Invalid Go architecture enforcement");
   });
 });
 
@@ -1484,7 +1529,7 @@ func run(modes []string, ch chan int) {
 `;
     expect(
       reportsOf({ "boot/chat.go": logic }, "GO_BOOT_LOGIC").map(
-        ({ detail }) => detail,
+        ({ detail, amount }) => `${detail}: ${amount}`,
       ),
     ).toEqual([
       "conditions other than err != nil: 1",
@@ -1492,14 +1537,14 @@ func run(modes []string, ch chan int) {
       "go statements: 1",
       "select statements: 1",
       "switch statements: 1",
-      "top-level types: 2; at most one namespace type",
+      "top-level types beyond one namespace type: 1",
     ]);
     expect(
       reportsOf(
         { "boot/task.go": "package boot\n" + "// line\n".repeat(400) },
         "GO_BOOT_LOGIC",
-      ).map(({ detail }) => detail),
-    ).toEqual(["lines: 401; budget 400"]);
+      ).map(({ detail, amount }) => `${detail}: ${amount}`),
+    ).toEqual(["lines beyond the 400-line budget: 1"]);
     const compound = `package boot
 type taskModule struct{}
 func (m *taskModule) open(ok bool) error {
@@ -1523,7 +1568,7 @@ func (m *taskModule) open(ok bool) error {
 `;
     expect(
       reportsOf({ "boot/task.go": compound }, "GO_BOOT_LOGIC").map(
-        ({ detail }) => detail,
+        ({ detail, amount }) => `${detail}: ${amount}`,
       ),
     ).toEqual(["conditions other than err != nil: 4"]);
   });
