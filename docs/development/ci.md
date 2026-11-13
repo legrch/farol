@@ -201,26 +201,23 @@ tag, release, draft or publication, and no installed app can see its output.
   the approved Go inputs, runs the unchanged full `task ci`, then the clean
   `task package` and the offline three-asset preparation and
   `verify-release-assets.mjs`, the same commands as the tag build.
-- It uploads exactly the three public files (ZIP, `farol-release.json`,
-  `SHA256SUMS`) as a workflow artifact retained for 7 days, never the
-  `private/` evidence directory, and writes a job summary with the source
-  commit, version, build version, build ID, digests, the artifact digest and
-  per-step durations.
+- It then writes a job summary with the source commit, version, build version,
+  build ID, digests and per-step durations, and stops.
 
-This artifact is the one deliberate exception to the tagged-release rule that
-hosted rebuilds do not travel through Actions artifacts. Signed-in readers of this
-public repository can download it. The bytes are unqualified. They carry the
-committed version, build version and channel, so they can match an already
-published release's identity with different bytes: never publish, stage or
-install them as that release. The release workflow and its private-draft path
-are unchanged.
+The dry build publishes nothing and uploads nothing. The tagged-release rule
+above applies unchanged: hosted rebuilds never travel through Actions
+artifacts, caches, workflow logs or a public release upload, and the three
+assets stay on the disposable runner. The bytes are unqualified, and they carry
+the committed version, build version and channel, so they can match an already
+published release's identity with different bytes.
 
 The workflow runs one build at a time (`unstable-main`, no cancellation) and
-needs no secrets. Later changes add an update rehearsal job that consumes the
-artifact, publication to an unstable pre-release, and a promotion workflow
-behind a GitHub Environment. Build identity still comes only from the committed
-`package.json` (`farolRelease.buildVersion` and `updateChannel`); taking a build
-number from `GITHUB_RUN_NUMBER` needs its own reviewed change.
+needs no secrets. Later changes add an update rehearsal, publication to an
+unstable pre-release, and a promotion workflow behind a GitHub Environment. How
+a rehearsal receives the bytes is an open owner decision. Build identity still
+comes only from the committed `package.json` (`farolRelease.buildVersion` and
+`updateChannel`); taking a build number from `GITHUB_RUN_NUMBER` needs its own
+reviewed change.
 
 ## Activation and observed timing
 

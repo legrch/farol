@@ -162,10 +162,7 @@ candidate. The source must be an ancestor of accepted `origin/main`.
 Tag runs also verify the exact annotated remote version tag. Neither route
 publishes automatically or uploads binary artifacts. Do not transfer the hosted
 rebuild through Actions artifacts, caches or workflow logs, or fall back to a
-public release upload. The separate dry unstable workflow is the one
-documented exception: it keeps its unqualified three public files as a
-short-lived artifact and publishes nothing (see
-[CI](development/ci.md#dry-unstable-build)). The existing dependency-download caches remain unchanged.
+public release upload. The existing dependency-download caches remain unchanged.
 
 Actions artifacts in this public repository are downloadable by signed-in
 readers, so they cannot hold an unqualified candidate privately. Draft releases
