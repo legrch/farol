@@ -3,13 +3,21 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     maxWorkers: 2,
-    include: ["tests/renderer/**/*.test.{ts,tsx}"],
+    include: [
+      "tests/renderer/**/*.test.{ts,tsx}",
+      "src/ui/renderer/**/*.test.{ts,tsx}",
+      "apps/desktop/renderer/**/*.test.{ts,tsx}",
+    ],
     sequence: { concurrent: false },
     coverage: {
       provider: "v8",
       reportsDirectory: "_output/coverage/renderer",
       include: ["src/ui/renderer/**/*.{ts,tsx}"],
-      exclude: ["src/ui/renderer/contract.ts", "src/ui/renderer/entry.tsx"],
+      exclude: [
+        "src/ui/renderer/contract.ts",
+        "src/ui/renderer/entry.tsx",
+        "src/ui/renderer/**/*.test.{ts,tsx}",
+      ],
       thresholds: { lines: 75, statements: 75, functions: 75, branches: 65 },
     },
   },

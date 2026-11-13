@@ -38,6 +38,10 @@ exceptions correct legacy folder placement; unknown locations, missing declared
 files and empty suites fail closed. New or changed tests need a scope review.
 Remaining mixed integration files are classified conservatively; their folder
 does not upgrade a fixture into native or product evidence.
+Co-located `name.test.ts(x)` files beside source under `src/` and
+`apps/desktop/` are discovered too; ADR-0002
+[decision 7](decisions/0002-uniform-names-tests-composition.md#7-typescript)
+states where they run and how they stay out of the build.
 TSX tests outside the renderer directory use the same source classification and
 main Vitest configuration as TS tests. Renderer TSX remains in its separate
 configuration. C09's discovery subset is checked by

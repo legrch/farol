@@ -78,7 +78,10 @@ if (
     files.some(
       (file) =>
         typeof file !== "string" ||
-        !/^tests\/[A-Za-z0-9_./-]+\.test\.(ts|tsx|mjs)$/u.test(file) ||
+        // tests/ suites, or co-located tests beside source (test-placement.mjs).
+        !/^(?:tests\/[A-Za-z0-9_./-]+\.test\.(?:ts|tsx|mjs)|(?:src|apps\/desktop)\/[A-Za-z0-9_./-]+\.test\.tsx?)$/u.test(
+          file,
+        ) ||
         file.split("/").includes(".."),
     )
   )
