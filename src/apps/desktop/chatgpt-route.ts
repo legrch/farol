@@ -215,15 +215,37 @@ function routePermissionGeneration(
   }
 }
 
+// A download is the owner's only when they clicked it in the focused managed
+// ChatGPT page. The download URL is deliberately not checked: ChatGPT serves
+// files from its own file hosts. What is bound is who started it: Chromium's
+// user gesture, the initiating document's origin, and (while it still
+// exists) the initiating frame, all equal to the managed page's own origin.
 export function routeDownloadAllowed(
   contents: WebContents | null | undefined,
+  item:
+    | Readonly<{
+        hasUserGesture(): boolean;
+        getInitiatorOrigin(): string;
+      }>
+    | null
+    | undefined,
+  frame?: Readonly<{ origin: string }> | null,
 ): boolean {
   try {
+    if (
+      contents == null ||
+      item == null ||
+      contents.isDestroyed() ||
+      routePermissionGeneration(contents) == null ||
+      !contents.isFocused() ||
+      !item.hasUserGesture()
+    )
+      return false;
+    const origin = new URL(contents.getURL()).origin;
     return (
-      contents != null &&
-      !contents.isDestroyed() &&
-      routePermissionGeneration(contents) != null &&
-      contents.isFocused()
+      origin !== "null" &&
+      item.getInitiatorOrigin() === origin &&
+      (frame == null || frame.origin === origin)
     );
   } catch {
     return false;
@@ -5972,9 +5994,10 @@ export class ChatGptRoute {
     );
     // A download the owner clicks in a visible, focused ChatGPT page gets the
     // normal macOS Save dialog (Electron shows it when no save path is set).
-    // Hidden, unfocused or unmanaged contents never download.
-    routeSession.on("will-download", (event, item, contents) => {
-      if (!routeDownloadAllowed(contents)) {
+    // Hidden, unfocused, unmanaged, gesture-less or foreign-initiated
+    // downloads (including a foreign-origin subframe) never download.
+    routeSession.on("will-download", (event, item, contents, frame) => {
+      if (!routeDownloadAllowed(contents, item, frame)) {
         event.preventDefault();
         return;
       }

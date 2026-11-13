@@ -6520,9 +6520,40 @@ describe("ChatGPT shared partition lifecycle", () => {
     },
   );
 
-  it.each([true, false])(
-    "offers a Save dialog only for a focused managed ChatGPT page (focused: %s)",
-    (focused) => {
+  const chatGptOrigin = "https://chatgpt.com";
+  it.each([
+    ["an owner click in the focused ChatGPT page", {}, true],
+    [
+      "an owner click whose initiating frame is already gone",
+      { frame: null },
+      true,
+    ],
+    ["an unfocused page", { focused: false }, false],
+    ["a download without a user gesture", { gesture: false }, false],
+    [
+      "a download initiated by a foreign origin",
+      { initiator: "https://files.example" },
+      false,
+    ],
+    ["a download with an opaque initiator", { initiator: "null" }, false],
+    ["a download with no initiator", { initiator: "" }, false],
+    [
+      "a download from a foreign-origin subframe",
+      { frame: { origin: "https://ads.example" } },
+      false,
+    ],
+  ] as const)(
+    "offers a Save dialog only for an owner download from the managed ChatGPT page: %s",
+    (
+      _name,
+      variant: Readonly<{
+        focused?: boolean;
+        gesture?: boolean;
+        initiator?: string;
+        frame?: { origin: string } | null;
+      }>,
+      allowed,
+    ) => {
       const sharedSession = Object.assign(new EventEmitter(), {
         setPermissionRequestHandler: vi.fn(),
         setPermissionCheckHandler: vi.fn(),
@@ -6530,9 +6561,11 @@ describe("ChatGPT shared partition lifecycle", () => {
       const candidate = route();
       const surface = embeddedSurface();
       vi.spyOn(surface.webContents, "getURL").mockReturnValue(
-        "https://chatgpt.com/c/test",
+        `${chatGptOrigin}/c/test`,
       );
-      Object.assign(surface.webContents, { isFocused: () => focused });
+      Object.assign(surface.webContents, {
+        isFocused: () => variant.focused ?? true,
+      });
       Reflect.set(candidate, "routeWindow", surface);
       const hardenContents = Reflect.get(candidate, "hardenContents") as (
         contents: typeof surface.webContents,
@@ -6541,14 +6574,27 @@ describe("ChatGPT shared partition lifecycle", () => {
       hardenContents.call(candidate, surface.webContents, true);
       harden(candidate, sharedSession);
       const event = { preventDefault: vi.fn() };
+      // A ChatGPT file is served from its own file host; the gate binds the
+      // initiating page and frame, not the download URL.
       const item = {
         getFilename: () => "report.pdf",
+        getURL: () => "https://files.oaiusercontent.com/file-1",
+        hasUserGesture: () => variant.gesture ?? true,
+        getInitiatorOrigin: () => variant.initiator ?? chatGptOrigin,
         setSaveDialogOptions: vi.fn(),
       };
-      sharedSession.emit("will-download", event, item, surface.webContents);
-      expect(event.preventDefault).toHaveBeenCalledTimes(focused ? 0 : 1);
-      expect(item.setSaveDialogOptions).toHaveBeenCalledTimes(focused ? 1 : 0);
-      if (focused)
+      const frame =
+        "frame" in variant ? variant.frame : { origin: chatGptOrigin };
+      sharedSession.emit(
+        "will-download",
+        event,
+        item,
+        surface.webContents,
+        frame,
+      );
+      expect(event.preventDefault).toHaveBeenCalledTimes(allowed ? 0 : 1);
+      expect(item.setSaveDialogOptions).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      if (allowed)
         expect(item.setSaveDialogOptions.mock.calls[0]![0]).toMatchObject({
           defaultPath: "report.pdf",
         });
