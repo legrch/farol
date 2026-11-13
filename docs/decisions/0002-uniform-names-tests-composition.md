@@ -13,8 +13,8 @@ left file names, tests and the composition root to review. On `main` at
 `bb8381d7682318524963506a3ae091a17d6560e0` the checker in this record measures
 591 production files outside the word vocabulary, 236 tests without a
 same-named source, 238 files with behavior but no test, 195 test files plus
-`testdata/` and 162 files outside the target file set in `boot/`, and 4,012
-units of logic inside `boot/` (2,858 conditions and statements, 147 extra
+`testdata/` and 162 files outside the target file set in `boot/`, and 4,030
+units of logic inside `boot/` (2,876 conditions and statements, 147 extra
 top-level types and 1,007 lines beyond the budget, in 347 per-file rows). The
 underscore ban made Go's own platform suffixes impossible, so platform words
 were glued into stems (`anchordarwin.go`). Any module import of a new
@@ -82,7 +82,9 @@ errors.New("missing")`, `var pattern = regexp.MustCompile(…)`) is not
   (`computer.go`, `task.go`, `chat.go`, `release.go`), no subpackages, no
   `_test.go` files and no `testdata/`. Whole-graph tests live under `tests/`.
 - No logic: no `switch`, `for`, `select` or `go` statement; `if` only as
-  `if err != nil` (including `if err := f(); err != nil`); at most one
+  `if err != nil` (including `if v, err := pkg.Open(a, b); err != nil`: one
+  call of a plain selector chain assigned to a list ending in `err`, with no
+  nested call, function literal, `&&` or `||` in its arguments); at most one
   top-level type per file (the module namespace type); at most 400 lines per
   file.
 - Reusable mechanisms live in `pkg`; decisions live in modules.
@@ -371,8 +373,8 @@ in the diff.
   it covers.
 - Boot logic: closures, methods implementing ports and logic hidden in calls
   are review concerns; the check counts statements, conditions (the whole `if`
-  header must be `err != nil`, optionally after one assignment without `&&` or
-  `||`), types and lines.
+  header must be `err != nil`, optionally after that single call assignment),
+  types and lines.
 - Operation shape: only exported methods on `Service` in `app/services` are
   checked. Whether an operation is a `Command` or a `Query` by effect, a
   non-nil result on success and DTO placement stay review concerns. The

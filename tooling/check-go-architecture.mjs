@@ -882,7 +882,9 @@ function typeSpecs(tokens) {
 }
 
 // The whole if header must be `err != nil`, optionally after one init
-// statement that only assigns (`v, err := f(x)`) and holds no && or ||.
+// statement that assigns a single call to a list ending in err
+// (`v, err := pkg.Open(a, b)`): the callee is a plain selector chain and its
+// arguments hold no nested call, function literal, && or ||.
 function errorCheck(header) {
   const values = header.map(({ value }) => value);
   let split = -1;
@@ -897,10 +899,27 @@ function errorCheck(header) {
   }
   if (values.slice(split + 1).join(" ") !== "err ! = nil") return false;
   if (split === -1) return true;
-  const init = values.slice(0, split).join(" ");
+  const init = header.slice(0, split);
+  const name = (token) =>
+    token?.kind === "identifier" && !goKeywords.has(token.value);
+  let k = 0;
+  while (name(init[k]) && init[k + 1]?.value === ",") k += 2;
+  if (
+    init[k]?.value !== "err" ||
+    init[k + 1]?.value !== ":" ||
+    init[k + 2]?.value !== "="
+  )
+    return false;
+  k += 3;
+  if (!name(init[k])) return false;
+  while (init[k + 1]?.value === "." && name(init[k + 2])) k += 2;
+  if (init[k + 1]?.value !== "(" || closing(init, k + 1) !== init.length - 1)
+    return false;
+  const args = init.slice(k + 2, -1).map(({ value }) => value);
   return (
-    /^[\p{L}_][\p{L}\p{N}_]*(?: , [\p{L}_][\p{L}\p{N}_]*)* : = /u.test(init) &&
-    !/& &|\| \|/u.test(init)
+    !args.includes("(") &&
+    !args.includes("func") &&
+    !/& &|\| \|/u.test(args.join(" "))
   );
 }
 

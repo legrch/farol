@@ -1597,6 +1597,21 @@ func (m *taskModule) open(ok bool) error {
 \tif v.ok; err != nil {
 \t\treturn err
 \t}
+\tif v, err := store.Open(m.root, clock.System{}); err != nil {
+\t\treturn err
+\t}
+\tif err := run(func() error { return nil }); err != nil {
+\t\treturn err
+\t}
+\tif v, err := open(load()); err != nil {
+\t\treturn err
+\t}
+\tif err := open().Close(); err != nil {
+\t\treturn err
+\t}
+\tif v, ok := open(); err != nil {
+\t\treturn err
+\t}
 \treturn nil
 }
 `;
@@ -1604,7 +1619,7 @@ func (m *taskModule) open(ok bool) error {
       reportsOf({ "boot/task.go": compound }, "GO_BOOT_LOGIC").map(
         ({ detail, amount }) => `${detail}: ${amount}`,
       ),
-    ).toEqual(["conditions other than err != nil: 4"]);
+    ).toEqual(["conditions other than err != nil: 8"]);
   });
 
   it("GO_OPERATION_SHAPE: Command or Query in, Result out", () => {
