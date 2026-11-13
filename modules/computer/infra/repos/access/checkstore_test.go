@@ -79,8 +79,10 @@ func prepareCheck(t *testing.T, f stateFixture, mode check.Mode) check.Entry {
 	if e.Scope.PromptDigest != checkHash(prompt) || prompt != check.Prompt(*e.Scope) {
 		t.Fatal("prompt not original Go document")
 	}
-	if mode == check.Status && (e.Scope.CheckID == "" || !strings.Contains(prompt, e.Scope.CheckID)) {
-		t.Fatal("Go nonce absent from prompt")
+	// The nonce stays in Go; the prompt asks for an argument-free call that a
+	// cached ChatGPT tool schema can still accept.
+	if mode == check.Status && (e.Scope.CheckID == "" || strings.Contains(prompt, e.Scope.CheckID)) {
+		t.Fatal("Go nonce absent or leaked into prompt")
 	}
 	return e
 }
@@ -134,8 +136,16 @@ func TestConnectionCheckBootstrapFuseAndIntentAreDurableBeforeOnePermit(t *testi
 	if _, again, err := reopened.AdvanceConnectionCheck(ctx, e.Request.OperationID, check.DispatchIntent, nil); err == nil || again {
 		t.Fatal("restart dispatched")
 	}
-	if _, _, err := reopened.ClaimConnectionCheck(ctx, checkRequest(2)); !errors.Is(err, check.ErrPending) {
-		t.Fatal("new ID bypassed restart custody", err)
+	// A new owner click is allowed; the original is retained as unknown and
+	// can never be dispatched again.
+	if _, first, err := reopened.ClaimConnectionCheck(ctx, checkRequest(2)); err != nil || !first {
+		t.Fatal("new owner check was blocked after restart", err)
+	}
+	if prior, ok, err := reopened.CheckStatus(ctx, e.Request.OperationID); err != nil || !ok || prior.Phase != check.OutcomeUnknown {
+		t.Fatal("superseded original was not retained as unknown", prior.Phase, err)
+	}
+	if _, again, err := reopened.AdvanceConnectionCheck(ctx, e.Request.OperationID, check.DispatchIntent, nil); err == nil || again {
+		t.Fatal("superseded original dispatched")
 	}
 }
 func TestConnectionCheckLegacyAndPartialFusesAreImmutableConsumedFences(t *testing.T) {

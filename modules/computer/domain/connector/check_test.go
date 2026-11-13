@@ -55,8 +55,17 @@ func TestOriginalIdentityAndChangedInputNeverBecomeFresh(t *testing.T) {
 	if _, _, err := j.Begin(changed); !errors.Is(err, ErrRefused) {
 		t.Fatal("changed input accepted", err)
 	}
-	if _, _, err := j.Begin(testRequest(2)); !errors.Is(err, ErrPending) {
-		t.Fatal("second UUID overwrote pending", err)
+	// A new owner click supersedes the unsettled earlier attempt: it is kept
+	// as unknown (it was prepared), never re-sent and never verified.
+	next, first, err := j.Begin(testRequest(2))
+	if err != nil || !first {
+		t.Fatal("repeated owner check was blocked", err)
+	}
+	if prior, _ := next.Find(e.Request.OperationID); prior.Phase != OutcomeUnknown || prior.Scope == nil {
+		t.Fatal("superseded attempt was not retained as unknown", prior.Phase)
+	}
+	if _, err := next.Advance(e.Request.OperationID, e); err == nil {
+		t.Fatal("superseded attempt advanced again")
 	}
 	copy, _ := j.Find(e.Request.OperationID)
 	copy.Scope.AppName = "different"
@@ -101,8 +110,8 @@ func TestOriginalDispatchPhasesAreMonotonicAndUnknownCannotReplay(t *testing.T) 
 					t.Fatalf("UNKNOWN replayed as %s", phase)
 				}
 			}
-			if _, _, err = reopened.Begin(testRequest(2)); !errors.Is(err, ErrPending) {
-				t.Fatal("reopen lost unresolved custody", err)
+			if _, first, err := reopened.Begin(testRequest(2)); err != nil || !first {
+				t.Fatal("unknown outcome blocked a new owner check", err)
 			}
 		})
 	}
@@ -140,7 +149,9 @@ func TestCorrelatedReceiptCanConfirmLostSendAckButCannotChangeScope(t *testing.T
 func TestPromptIsModeExactAndNeverUsesPassiveStatusForFreshCheck(t *testing.T) {
 	status := testScope(Status)
 	p := Prompt(status)
-	if !strings.Contains(p, status.CheckID) || !strings.Contains(p, "computer_connection_status ONCE") || !strings.Contains(p, "Do not use {}") || strings.Contains(p, "farol_connector_verify") {
+	// A ChatGPT connector caches its tool schema; an older cached schema has
+	// no checkId. The prompt therefore never asks the model for an argument.
+	if strings.Contains(p, status.CheckID) || strings.Contains(p, "checkId") || !strings.Contains(p, "computer_connection_status ONCE with no arguments") || strings.Contains(p, "farol_connector_verify") {
 		t.Fatal(p)
 	}
 	boot := testScope(Bootstrap)
@@ -159,7 +170,7 @@ func TestPromptIsModeExactAndNeverUsesPassiveStatusForFreshCheck(t *testing.T) {
 		}
 	}
 }
-func TestBoundedCapacityNeverEvictsKnownOrUnknownIdentity(t *testing.T) {
+func TestRepeatedChecksForgetOldestHistoryInsteadOfRefusing(t *testing.T) {
 	j := Journal{Entries: []Entry{}}
 	for n := 1; n <= MaxEntries; n++ {
 		var err error
@@ -174,10 +185,17 @@ func TestBoundedCapacityNeverEvictsKnownOrUnknownIdentity(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, _, err := j.Begin(testRequest(MaxEntries + 1)); !errors.Is(err, ErrCapacity) {
-		t.Fatal("capacity evicted history", err)
+	if _, first, err := j.Begin(testRequest(2)); err != nil || first {
+		t.Fatal("retained UUID became fresh", err)
 	}
-	if _, first, err := j.Begin(testRequest(1)); err != nil || first {
-		t.Fatal("old UUID was recycled", err)
+	more, first, err := j.Begin(testRequest(MaxEntries + 1))
+	if err != nil || !first || len(more.Entries) != MaxEntries || !more.Valid() {
+		t.Fatal("capacity refused a repeated owner check", err)
+	}
+	if _, ok := more.Find(testRequest(1).OperationID); ok {
+		t.Fatal("oldest settled attempt was not forgotten")
+	}
+	if _, ok := more.Find(testRequest(2).OperationID); !ok {
+		t.Fatal("more than the oldest attempt was forgotten")
 	}
 }

@@ -73,9 +73,10 @@ func (s *computerConnector) ArmOriginalStatusCheck(ctx context.Context, parentID
 		return computerUnavailable()
 	}
 	slot := s.current
+	// A newer owner check replaces an earlier one that never confirmed in this
+	// slot; the Store has already settled that earlier record as unknown.
 	if slot == nil || slot.closing || slot.startupUncertain || slot.owner == nil ||
-		slot.checkParentID != "" || slot.expectedStatusCheckID != "" ||
-		slot.statusCheckID != "" || scope.CheckID != checkID ||
+		slot.checkParentID == parentID || scope.CheckID != checkID ||
 		scope.ChallengeDigest != slot.challengeDigest {
 		return computerUnavailable()
 	}
@@ -103,12 +104,17 @@ func (s *computerConnector) ArmOriginalStatusCheck(ctx context.Context, parentID
 			return computerUnavailable()
 		}
 		slot.expectedStatusCheckID = checkID
+		slot.statusCheckID = ""
 	} else if scope.Mode == check.Bootstrap {
 		if proof != nil || checkID != "" || scope.Challenge == "" {
 			return computerUnavailable()
 		}
 	} else {
 		return computerUnavailable()
+	}
+	if scope.Mode == check.Bootstrap {
+		slot.expectedStatusCheckID = ""
+		slot.statusCheckID = ""
 	}
 	// This is a transient original-runtime dispatch right. Restart cannot
 	// reconstruct it from the durable record or repeat the source Send.
@@ -117,8 +123,8 @@ func (s *computerConnector) ArmOriginalStatusCheck(ctx context.Context, parentID
 }
 
 // ConfirmOriginalConnectionCheck supplies the sole positive Go-side receipt.
-// For status, a matching nonce must have travelled from the prepared browser
-// prompt through public MCP input to this exact socket and current Go slot.
+// For status, a public MCP computer_connection_status call must have reached
+// this exact socket and current Go slot while this check was armed.
 // Bootstrap retains the original sealed challenge/List or empty Catalogue.
 func (s *computerConnector) ConfirmOriginalConnectionCheck(ctx context.Context, parentID string, scope check.Scope) (string, error) {
 	if !check.ValidScope(scope) || scope.DocumentDigest == "" {

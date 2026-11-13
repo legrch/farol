@@ -68,7 +68,8 @@ func TestExistingAttachmentCheckUsesDurableOwnerAndExactStatusID(t *testing.T) {
 		ComputerGeneration: current.ComputerGeneration, DocumentDigest: strings.Repeat("d", 64),
 	})
 	if err != nil || prepared.Scope == nil || prepared.Scope.CheckID == "" ||
-		!strings.Contains(prompt, `checkId "`+prepared.Scope.CheckID+`"`) {
+		strings.Contains(prompt, prepared.Scope.CheckID) ||
+		!strings.Contains(prompt, "with no arguments") {
 		t.Fatal("original Go prompt/nonce", err)
 	}
 	if owner.ReceiptAvailable(ctx, id) || s.current.expectedStatusCheckID != "" {
@@ -83,20 +84,21 @@ func TestExistingAttachmentCheckUsesDurableOwnerAndExactStatusID(t *testing.T) {
 		t.Fatal("host observation acknowledged a provider call")
 	}
 	wrong := "49a0cb44-5c67-4aae-9b56-41db024507d3"
-	for _, supplied := range []*string{nil, &wrong} {
-		passive := query
-		passive.CheckId = supplied
-		out, err = verificationInvoke(t, s.verificationObservationMethodFor(s.current), passive)
-		if state := verificationState(t, out, err); state.CheckId != nil || owner.ReceiptAvailable(ctx, id) {
-			t.Fatal("missing/wrong provider ID accepted")
-		}
-		if _, err = owner.Confirm(ctx, id); err == nil {
-			t.Fatal("uncorrelated receipt confirmed")
-		}
+	wrongQuery := query
+	wrongQuery.CheckId = &wrong
+	out, err = verificationInvoke(t, s.verificationObservationMethodFor(s.current), wrongQuery)
+	if state := verificationState(t, out, err); state.CheckId != nil || owner.ReceiptAvailable(ctx, id) {
+		t.Fatal("wrong provider ID accepted")
 	}
-	out, err = verificationInvoke(t, s.verificationObservationMethodFor(s.current), query)
+	if _, err = owner.Confirm(ctx, id); err == nil {
+		t.Fatal("uncorrelated receipt confirmed")
+	}
+	// ChatGPT's cached schema sends {}: a public call while armed acknowledges.
+	passive := query
+	passive.CheckId = nil
+	out, err = verificationInvoke(t, s.verificationObservationMethodFor(s.current), passive)
 	if state := verificationState(t, out, err); state.CheckId == nil || *state.CheckId != prepared.Scope.CheckID || !owner.ReceiptAvailable(ctx, id) {
-		t.Fatal("exact provider ID was not observed")
+		t.Fatal("argument-free provider call was not observed")
 	}
 	confirmed, err := owner.Confirm(ctx, id)
 	if err != nil || confirmed.Phase != check.Verified || confirmed.Receipt == nil || confirmed.Receipt.CheckID != prepared.Scope.CheckID {
@@ -107,6 +109,29 @@ func TestExistingAttachmentCheckUsesDurableOwnerAndExactStatusID(t *testing.T) {
 	}
 	if _, err = owner.Arm(ctx, id); err == nil {
 		t.Fatal("verified operation authorized another Send")
+	}
+	// The owner may repeat the check as often as they like.
+	again := "7f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b"
+	selection := connectorsvc.ConnectionCheckSelection{
+		Mode: check.Status, AppName: "Farol", Model: "temporary-instant", TunnelID: "tunnel",
+		WorkspaceID: "work", ChallengeDigest: current.ChallengeDigest,
+		ComputerGeneration: current.ComputerGeneration, DocumentDigest: strings.Repeat("d", 64),
+	}
+	for i, next := range []string{again, "8a2e3b4c-5d6e-4f70-9a1b-2c3d4e5f6a7b"} {
+		if _, first, err := owner.Claim(ctx, next, strings.Repeat(string(rune('b'+i)), 64)); err != nil || !first {
+			t.Fatal("repeated check was blocked", i, first, err)
+		}
+		if _, _, err = owner.Prepare(ctx, next, selection); err != nil {
+			t.Fatal("repeated check prepare", i, err)
+		}
+		// The previous attempt ended unknown without confirming; the slot is
+		// re-armed for the new check instead of staying locked.
+		if _, err = owner.Arm(ctx, next); err != nil {
+			t.Fatal("repeated check arm", i, err)
+		}
+		if _, err = owner.RetainSend(ctx, next, false); err != nil {
+			t.Fatal("unknown outcome", i, err)
+		}
 	}
 }
 
@@ -157,10 +182,9 @@ func TestConnectorSocketRegistersBoundReadOnlyVerificationObservation(t *testing
 	if armed.CheckId != nil {
 		t.Fatal("desktop observation fabricated a socket acknowledgement")
 	}
-	out, err = verificationInvoke(t, method, query)
-	passive := verificationState(t, out, err)
-	if passive.CheckId != nil {
-		t.Fatal("uncorrelated socket read acknowledged the check")
+	out, err = verificationInvoke(t, method, otherWrongQuery(query))
+	if wrongState := verificationState(t, out, err); wrongState.CheckId != nil {
+		t.Fatal("wrong socket nonce acknowledged the check")
 	}
 	out, err = verificationInvoke(t, method, checkedQuery)
 	checked := verificationState(t, out, err)
@@ -249,4 +273,10 @@ func TestConnectorSocketObservationRechecksCurrentAuthority(t *testing.T) {
 			}
 		})
 	}
+}
+
+func otherWrongQuery(q wire.ComputerConnectorVerificationQuery) wire.ComputerConnectorVerificationQuery {
+	wrong := "not-the-armed-check"
+	q.CheckId = &wrong
+	return q
 }

@@ -141,9 +141,8 @@ func Prompt(scope Scope) string {
 	switch scope.Mode {
 	case Status:
 		return "Use the selected " + strconv.Quote(scope.AppName) +
-			" app to call computer_connection_status ONCE with the exact argument checkId " +
-			strconv.Quote(scope.CheckID) +
-			". Do not use {} or call any other tool. Report the observed result briefly."
+			" app to call computer_connection_status ONCE with no arguments ({})." +
+			" Do not call any other tool. Report the observed result briefly."
 	case Bootstrap:
 		if scope.WorkspaceID == "" {
 			return "Use the selected " + strconv.Quote(scope.AppName) +
@@ -161,6 +160,12 @@ func Prompt(scope Scope) string {
 }
 func (p Phase) Terminal() bool {
 	return p == Verified || p == RefusedBeforeSend
+}
+
+// Settled phases can no longer advance. An unknown outcome is not terminal
+// (it never becomes verified), but it no longer blocks a new owner check.
+func (p Phase) Settled() bool {
+	return p.Terminal() || p == OutcomeUnknown
 }
 func (e Entry) Valid() bool {
 	if !ValidRequest(e.Request) {
@@ -198,7 +203,7 @@ func (j Journal) Valid() bool {
 			return false
 		}
 		seen[e.Request.OperationID] = true
-		if !e.Phase.Terminal() {
+		if !e.Phase.Settled() {
 			unsettled++
 		}
 	}
@@ -238,7 +243,7 @@ func (j Journal) Find(id string) (Entry, bool) {
 }
 func (j Journal) Pending() bool {
 	for _, e := range j.Entries {
-		if !e.Phase.Terminal() {
+		if !e.Phase.Settled() {
 			return true
 		}
 	}
@@ -254,13 +259,26 @@ func (j Journal) Begin(req Request) (Journal, bool, error) {
 		}
 		return j.Clone(), false, nil
 	}
-	if j.Pending() {
-		return Journal{}, false, ErrPending
-	}
-	if len(j.Entries) >= MaxEntries {
-		return Journal{}, false, ErrCapacity
-	}
+	// Owner-clicked checks are unlimited. A new click supersedes an earlier
+	// attempt that never settled (lost reply, quit mid-test): it is retained as
+	// refused-before-send when nothing was prepared, otherwise as unknown. The
+	// earlier record is never rewritten to verified and never re-sent.
 	out := j.Clone()
+	for i, e := range out.Entries {
+		if e.Phase.Settled() {
+			continue
+		}
+		if e.Phase == Claimed {
+			out.Entries[i].Phase = RefusedBeforeSend
+		} else {
+			out.Entries[i].Phase = OutcomeUnknown
+		}
+	}
+	// The journal is bounded history, not a quota: forget the oldest settled
+	// attempts so repeated owner checks never hit a capacity refusal.
+	for len(out.Entries) >= MaxEntries {
+		out.Entries = out.Entries[1:]
+	}
 	out.Entries = append(out.Entries, Entry{Request: req, Phase: Claimed})
 	if !out.Valid() {
 		return Journal{}, false, ErrRefused

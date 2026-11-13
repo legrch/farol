@@ -26,8 +26,8 @@ export async function observeConnectionStatus(
   });
   // The real bridge validates exact context, binding, receipt digest and origin.
   // Let its original refusal/UNKNOWN propagate through the existing MCP run().
-  // Only the original explicit provider call carries its diagnostic nonce.
-  // Ordinary passive requests have no checkId and cannot acknowledge it.
+  // Go decides whether this call acknowledges an armed owner check. A call
+  // without checkId (ChatGPT's cached schema) can acknowledge it too.
   const state = await verification.observe(checkId);
   return Object.freeze({
     connection: "responding" as const,
