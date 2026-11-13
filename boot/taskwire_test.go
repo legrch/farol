@@ -22,6 +22,14 @@ type taskWireTestFrame struct {
 	Response json.RawMessage `json:"response"`
 }
 
+// Every ordinary request on a framed test connection carries the next
+// sequence under one connection nonce; a new connection starts again at 1.
+const wireTestNonce = "c0000000-0000-4000-8000-000000000001"
+
+func wireTestID(sequence int) string {
+	return desktop.SequencedRequestID(wireTestNonce, uint64(sequence))
+}
+
 type taskWireTestPeer struct {
 	frames   []taskWireTestFrame
 	t        *testing.T
@@ -58,12 +66,19 @@ func taskWireTestConnectMethods(t *testing.T, methods map[string]desktop.Method,
 		}
 	})
 	p := &taskWireTestPeer{t: t, in: send, out: receive, scope: peer}
-	response := p.call("core.handshake", "", fmt.Sprintf(`{"protocolMajor":1,"protocolMinor":0,"buildId":"task-fixture","profileId":%q}`, peer.ProfileId))
+	response := p.call("core.handshake", "", fmt.Sprintf(`{"protocolMajor":2,"protocolMinor":0,"buildId":"task-fixture","profileId":%q}`, peer.ProfileId))
 	if response.Result == nil || response.Result.Status != "ok" {
 		t.Fatal("handshake", response)
 	}
 	return p
 }
+
+// nextID consumes the connection's next sequence for a hand-written frame.
+func (p *taskWireTestPeer) nextID() string {
+	p.sequence++
+	return wireTestID(p.sequence)
+}
+
 func (p *taskWireTestPeer) call(method, operation, body string) wire.Response {
 	p.t.Helper()
 	p.sequence++
@@ -72,7 +87,7 @@ func (p *taskWireTestPeer) call(method, operation, body string) wire.Response {
 		copy := p.scope
 		scope = &copy
 	}
-	request := wire.Request{Jsonrpc: "2.0", Id: fmt.Sprintf("request-%d", p.sequence), Method: method, Params: wire.Call{Context: scope, OperationId: taskWireOptional(operation), Body: json.RawMessage(body)}}
+	request := wire.Request{Jsonrpc: "2.0", Id: wireTestID(p.sequence), Method: method, Params: wire.Call{Context: scope, OperationId: taskWireOptional(operation), Body: json.RawMessage(body)}}
 	raw, err := json.Marshal(request)
 	if err != nil {
 		p.t.Fatal(err)
@@ -90,6 +105,10 @@ func (p *taskWireTestPeer) call(method, operation, body string) wire.Response {
 	var response wire.Response
 	if err = json.Unmarshal(raw, &response); err != nil {
 		p.t.Fatal(err)
+	}
+	if response.Id == nil {
+		// An unparseable frame names no request, so it consumed no sequence.
+		p.sequence--
 	}
 	p.frames = append(p.frames, taskWireTestFrame{Method: method, Response: append(json.RawMessage(nil), raw...)})
 	return response

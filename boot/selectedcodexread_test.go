@@ -99,7 +99,7 @@ func selectedReadTransport(t *testing.T, endpoint *connectorEndpointFixture) fun
 	sequence := 0
 	call := func(method string, body json.RawMessage) wire.Outcome {
 		sequence++
-		in := wire.Request{Jsonrpc: "2.0", Id: "request-" + decimal(uint64(sequence)), Method: method}
+		in := wire.Request{Jsonrpc: "2.0", Id: wireTestID(sequence), Method: method}
 		in.Params.Body = body
 		if method != "core.handshake" {
 			in.Params.Context = &wire.Context{ProfileId: endpoint.value.Binding.ProfileId, BackendGeneration: endpoint.value.Binding.BackendGeneration}

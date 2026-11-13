@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"slices"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -166,6 +165,7 @@ type processHeldGate struct {
 	closeErr error
 	hello    bool
 	barrier  uint32
+	nonce    string
 	attempt  uint32
 	released bool
 }
@@ -177,7 +177,11 @@ func newProcessHeldGate(identity wire.ComputerHeldIdentity, clock computerport.C
 	if err != nil || in == nil || out == nil {
 		return nil, heldFailure()
 	}
-	return &processHeldGate{identity: identity, deadline: deadline, clock: clock, in: in, out: out, gate: make(chan struct{}, 1)}, nil
+	nonce, err := desktop.NewRequestNonce()
+	if err != nil {
+		return nil, heldFailure()
+	}
+	return &processHeldGate{identity: identity, deadline: deadline, clock: clock, in: in, out: out, gate: make(chan struct{}, 1), nonce: nonce}, nil
 }
 
 func (g *processHeldGate) Close() error {
@@ -253,7 +257,7 @@ func (g *processHeldGate) control(ctx context.Context, release bool) (result err
 
 func (g *processHeldGate) call(method string, body any, effect bool) (json.RawMessage, error) {
 	g.attempt++ // At most handshake, two barriers and one release; never reused.
-	id := "held-" + strconv.FormatUint(uint64(g.attempt), 10)
+	id := desktop.SequencedRequestID(g.nonce, uint64(g.attempt))
 	encoded, err := json.Marshal(body)
 	if err != nil {
 		return nil, heldFailure()

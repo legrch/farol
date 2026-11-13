@@ -13,10 +13,11 @@ import { z } from "zod";
 import { Client } from "../../../apps/desktop/bridge/client.ts";
 import { ChatBridge } from "../../../apps/desktop/bridge/chat.ts";
 import { ChatCallerBridge } from "../../../apps/desktop/bridge/chat-caller.ts";
-import type {
-  BrowserSelection,
-  BrowserResolution,
-  BrowserRequiredControls,
+import {
+  protocolMajor,
+  type BrowserSelection,
+  type BrowserResolution,
+  type BrowserRequiredControls,
 } from "../../../apps/desktop/bridge/wire.ts";
 
 const scenarios = ["tool", "text", "lost-send-reply", "reciprocal"] as const;
@@ -167,7 +168,7 @@ export async function startGoChatResponsesFixture(
     await waitForControlledPeerReady(child);
     await client.handshake(
       {
-        protocolMajor: 1,
+        protocolMajor,
         protocolMinor: 0,
         buildId: "chat-responses-cpu",
         profileId: "profile",

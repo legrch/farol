@@ -526,16 +526,16 @@ describe("Task deadline mismatch with real desktop Client (controlled transport)
       ]);
       expect(f.client.verifiedContext).toEqual(scope);
       expect(vi.getTimerCount()).toBe(0);
-      // Reusing the unsent caller ID for an explicit read proves that Client
-      // did not consume it. No Task effect or new effect budget is retried.
+      // The next explicit read carries the unsent frame's wire sequence,
+      // proving that Client did not consume it. No Task effect is retried.
       const read = f.client.request(
         "task.operation.status",
         { handleId: handle.handleId, request: { operationId: dispatchId } },
-        { id: original!.id },
+        { id: "after-unsent" },
       );
       expect(f.sent.at(-1)!.id).toBe(original!.id);
       f.reply(f.sent.at(-1)!);
-      await expect(read).resolves.toMatchObject({ requestId: original!.id });
+      await expect(read).resolves.toMatchObject({ requestId: "after-unsent" });
       await expect(
         f.bridge.create({ message: "again" }, dispatchId),
       ).rejects.toMatchObject({ code: "task_operation_already_attempted" });
@@ -557,7 +557,7 @@ describe("Task deadline mismatch with real desktop Client (controlled transport)
       const delayed = vi
         .spyOn(JSON, "stringify")
         .mockImplementation((value) => {
-          if (value?.id === "unsent-original") vi.advanceTimersByTime(5000);
+          if (value?.method === "task.create") vi.advanceTimersByTime(5000);
           return stringify(value);
         });
       const failure = await f.client

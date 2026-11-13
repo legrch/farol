@@ -60,8 +60,10 @@ type ConnectorVerification struct {
 }
 
 // ConnectorPublication contains known readback of a NEW original participant
-// publication. Existing/duplicate participants cannot restore positive liveness.
-// An error or incomplete result is unavailable even if bytes may have committed.
+// publication, or of a live participant resumed by ConnectorResumer. Neither
+// restores positive liveness by itself: a fresh owner still has to pass its own
+// host guard. An error or incomplete result is unavailable even if bytes may
+// have committed.
 type ConnectorPublication struct {
 	Revision          uint64
 	OriginalPublished bool
@@ -76,6 +78,15 @@ type ConnectorJournal interface {
 	AccessRepository
 	PublishConnector(context.Context, ConnectorLaunch) (ConnectorPublication, error)
 	WithdrawConnector(context.Context, string) error
+}
+
+// ConnectorResumer is an optional consumer-owned capability selected by trusted
+// root for a later owner in the SAME backend lifetime and connector generation.
+// It writes nothing: it reads back the exact live, unrevoked participant that an
+// earlier owner published, under unchanged approval policy. A revoked, missing
+// or differently sealed participant is refused, never re-admitted or restored.
+type ConnectorResumer interface {
+	ResumeConnector(context.Context, ConnectorLaunch) (ConnectorPublication, error)
 }
 
 // OriginalStopWithdrawer is an optional consumer-owned capability selected by

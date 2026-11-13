@@ -375,13 +375,13 @@ func TestDiscoveryExplicitRegistrationAndUnknownCorrelation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		hello := wire.Request{Jsonrpc: "2.0", Id: "h", Method: "core.handshake", Params: wire.Call{Body: json.RawMessage(`{"protocolMajor":1,"protocolMinor":0,"buildId":"build","profileId":"test"}`)}}
+		hello := wire.Request{Jsonrpc: "2.0", Id: seq(1), Method: "core.handshake", Params: wire.Call{Body: json.RawMessage(`{"protocolMajor":2,"protocolMinor":0,"buildId":"build","profileId":"test"}`)}}
 		response := server.dispatch(context.Background(), discoveryJSON(t, hello))
 		if bytes.Contains(response.Result.Data, []byte(name)) {
 			t.Fatal("schema metadata made method live")
 		}
 		body := []any{catalogue, bootstrap}[i]
-		request := wire.Request{Jsonrpc: "2.0", Id: "r", Method: name, Params: wire.Call{Context: &discoveryPeer, Body: discoveryJSON(t, body)}}
+		request := wire.Request{Jsonrpc: "2.0", Id: seq(2), Method: name, Params: wire.Call{Context: &discoveryPeer, Body: discoveryJSON(t, body)}}
 		response = server.dispatch(context.Background(), discoveryJSON(t, request))
 		if response.Result.Status != "unavailable" {
 			t.Fatal("unregistered method was dispatched")
@@ -397,15 +397,15 @@ func TestDiscoveryExplicitRegistrationAndUnknownCorrelation(t *testing.T) {
 		}
 		server.dispatch(context.Background(), discoveryJSON(t, hello))
 		response = server.dispatch(context.Background(), discoveryJSON(t, request))
-		if response.Result.Status != "unknown" || response.Result.RequestId != "r" || *response.Id != "r" || response.Result.Context != discoveryPeer || response.Result.OperationId != nil || len(response.Result.Data) != 0 || calls != 1 {
+		if response.Result.Status != "unknown" || response.Result.RequestId != seq(2) || *response.Id != seq(2) || response.Result.Context != discoveryPeer || response.Result.OperationId != nil || len(response.Result.Data) != 0 || calls != 1 {
 			t.Fatal("unknown outcome/correlation lost or replayed")
 		}
-		request.Id = "effect"
+		request.Id = seq(3)
 		request.Params.OperationId = optional("operation")
 		if server.dispatch(context.Background(), discoveryJSON(t, request)).Error == nil || calls != 1 {
 			t.Fatal("read admitted an operation ID")
 		}
-		request.Id = "stale"
+		request.Id = seq(4)
 		request.Params.OperationId = nil
 		stale := discoveryPeer
 		stale.BackendGeneration = "other"

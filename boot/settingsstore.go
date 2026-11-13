@@ -29,8 +29,10 @@ type settingsStoreCall struct {
 
 // SettingsStoreExchange is one inherited-pipe reciprocal storage port. The
 // existing host owns config.json mechanics; the Go service owns transitions.
-// One outstanding call and 4096 issued calls bound this lifetime. No reconnect,
-// replacement store, disk reload or redelivery can settle an unknown call.
+// One outstanding call bounds its memory; settled calls retain nothing and
+// their random command IDs are never reissued, so a repeated reply is refused.
+// No reconnect, replacement store, disk reload or redelivery can settle an
+// unknown call: the first one fences this exchange for its whole lifetime.
 type SettingsStoreExchange struct {
 	ctx              context.Context
 	peer             wire.Context
@@ -38,7 +40,7 @@ type SettingsStoreExchange struct {
 	pending          *settingsStoreCall
 	ready            chan struct{}
 	stopped          chan struct{}
-	issued           uint32
+	issued           uint64 // observation only: calls issued this lifetime, never a quota
 	fenced, quiesced bool
 }
 
@@ -124,7 +126,7 @@ func (s *SettingsStoreExchange) exchange(ctx context.Context, kind string, chang
 	}
 	call := &settingsStoreCall{command: wire.SettingsStoreCommand{CommandId: id, Kind: kind, Body: raw}, ctx: callCtx, answer: make(chan settingsStoreAnswer, 1)}
 	s.mu.Lock()
-	if s.fenced || s.quiesced || s.pending != nil || s.issued >= 4096 {
+	if s.fenced || s.quiesced || s.pending != nil {
 		s.mu.Unlock()
 		return nil, errSettingsStoreExchange
 	}

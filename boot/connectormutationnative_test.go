@@ -87,7 +87,7 @@ func openNativeMutationPeer(t *testing.T, runtime *NativeRuntime, publication wi
 		t.Fatal("native socket auth failed")
 	}
 	hello, _ := json.Marshal(wire.Handshake{ProtocolMajor: wire.ProtocolMajor, ProtocolMinor: wire.ProtocolMinor, BuildId: opened.Endpoint.Binding.BuildId, ProfileId: opened.Endpoint.Binding.ProfileId})
-	writeNativeMutationJSON(t, stream, wire.Request{Jsonrpc: "2.0", Id: "hello", Method: "core.handshake", Params: wire.Call{Body: hello}})
+	writeNativeMutationJSON(t, stream, wire.Request{Jsonrpc: "2.0", Id: wireTestID(1), Method: "core.handshake", Params: wire.Call{Body: hello}})
 	raw, err = ipc.ReadFrame(stream)
 	var response wire.Response
 	var identity wire.Identity
@@ -99,7 +99,7 @@ func openNativeMutationPeer(t *testing.T, runtime *NativeRuntime, publication wi
 			t.Fatal("normal Go runtime omitted mutation route", name)
 		}
 	}
-	return &nativeMutationPeer{stream: stream, opened: opened}
+	return &nativeMutationPeer{stream: stream, opened: opened, next: 1}
 }
 
 func writeNativeMutationJSON(t *testing.T, stream net.Conn, value any) {
@@ -116,7 +116,7 @@ func writeNativeMutationJSON(t *testing.T, stream net.Conn, value any) {
 func (p *nativeMutationPeer) call(t *testing.T, method, operation string, body any) *wire.Outcome {
 	t.Helper()
 	p.next++
-	id := decimal(uint64(p.next))
+	id := wireTestID(p.next)
 	raw, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)

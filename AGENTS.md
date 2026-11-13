@@ -38,9 +38,17 @@ identities. See [identity cutover](docs/identity-cutover.md).
   `contract`, adapted by the consumer's `infra/peer`. Never import neighbor
   domain/app/infra. Go contracts delegate to their own app with independent DTOs
   and explicit mapping; TypeScript contracts retain their documented DTO surface.
-- Kernel infrastructure requires at least two real consumers with identical
-  semantics. No Go module imports kernel infrastructure; boot injects its ports.
-  Shared implementations own no mutable cross-consumer singleton state.
+- Shared Go code lives in `pkg/`: `pkg/kernel/domain` values and
+  `pkg/kernel/app/port` shared peer ports that modules include, flat
+  `pkg/<word>` kits for module `infra`, adapters and boot, and
+  `pkg/kernel/infra/peer`, which no module imports and boot builds over the
+  owner's contract. Every shared package needs at least two real consumers with
+  identical semantics and no business type. Shared implementations own no
+  mutable cross-consumer singleton state.
+- Go names, test pairing, the `boot/` shape, module desktop adapters and
+  operation shapes follow
+  [ADR-0002](docs/decisions/0002-uniform-names-tests-composition.md); its
+  checker rules block per migrated module.
 - Run `task test:core` for generated bindings, Go import enforcement, root Go
   race/vet, transitional nested Go race/vet, protocol tests, and strict desktop
   bridge compilation. `task ci` includes this gate. Reviewed source foundation

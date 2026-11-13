@@ -1,10 +1,10 @@
 {
   "generator": "farol-wire/2",
-  "protocolMajor": 1,
+  "protocolMajor": 2,
   "protocolMinor": 0,
   "maxFrameBytes": 1048576,
   "maxDepth": 32,
-  "maxRequests": 4096,
+  "maxConsecutiveInvalidRequests": 64,
   "methods": {
     "core.handshake": "read",
     "core.status": "read",

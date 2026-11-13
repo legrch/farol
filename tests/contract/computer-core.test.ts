@@ -33,8 +33,11 @@ const request: ComputerReadRequest = {
   workspaceId: "workspace",
   relativePath: "note.md",
 };
+// Raw frames name ordinary requests by connection nonce and sequence.
+const wireId = (sequence: number) =>
+  `desktop-call:e0000000-0000-4000-8000-000000000001:${sequence}`;
 const hello = {
-  protocolMajor: 1,
+  protocolMajor: 2,
   protocolMinor: 0,
   buildId: "k1-test",
   profileId: "k1-disposable",
@@ -311,13 +314,13 @@ darwin("K1 real TS Client -> Go transport -> Computer native read", () => {
       Buffer.concat([
         frame({
           jsonrpc: "2.0",
-          id: "h",
+          id: wireId(1),
           method: "core.handshake",
           params: { body: hello },
         }),
         frame({
           jsonrpc: "2.0",
-          id: "r",
+          id: wireId(2),
           method: "computer.workspace.read",
           params: {
             context: { profileId: "k1-disposable", backendGeneration: "old" },
@@ -328,7 +331,10 @@ darwin("K1 real TS Client -> Go transport -> Computer native read", () => {
     );
     await new Promise<void>((resolve) => child.once("close", () => resolve()));
     decoder.finish();
-    expect(responses[1]).toMatchObject({ id: "r", error: { code: -32002 } });
+    expect(responses[1]).toMatchObject({
+      id: wireId(2),
+      error: { code: -32002 },
+    });
     expect(diagnostics).not.toContain("native-read");
   });
 
@@ -449,13 +455,13 @@ darwin("K1 Unicode and native refusal route regressions", () => {
       Buffer.concat([
         frame({
           jsonrpc: "2.0",
-          id: "h",
+          id: wireId(1),
           method: "core.handshake",
           params: { body: hello },
         }),
         frame({
           jsonrpc: "2.0",
-          id: "r",
+          id: wireId(2),
           method: "computer.workspace.read",
           params: {
             context: {

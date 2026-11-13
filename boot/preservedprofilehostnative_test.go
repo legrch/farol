@@ -81,10 +81,14 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 			var in preservedProfileInspectionInput
 			var workspace string
 			if scenario.startupEmptyHistory {
+				// The fixture supplies its own retained root; drop the unused one.
+				if err := os.Remove(base); err != nil {
+					t.Fatal(err)
+				}
 				if scenario.startupRetiredHistory {
-					in = preservedEmptyHistoryProfileFixture(t, 33, true)
+					in = preservedEmptyHistoryProfileFixture(t, 33, true, true)
 				} else {
-					in = preservedEmptyProfileFixture(t)
+					in = preservedEmptyProfileFixture(t, true)
 				}
 				base = filepath.Dir(filepath.Dir(filepath.Dir(in.Profile.Root)))
 				workspace = filepath.Join(base, "workspace")

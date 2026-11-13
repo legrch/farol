@@ -223,7 +223,10 @@ func TestSettingsMutationWireWithdrawsWhileNativeGuardWaits(t *testing.T) {
 		methods[name] = method
 	}
 	p := taskWireTestConnectMethods(t, methods, s.computer.peer)
-	frame := func(id, method, operation string, body any) []byte {
+	// Labels name the frames; each takes the connection's next sequence.
+	frame := func(_, method, operation string, body any) []byte {
+		p.sequence++
+		id := wireTestID(p.sequence)
 		raw, _ := json.Marshal(body)
 		v, err := json.Marshal(wire.Request{Jsonrpc: "2.0", Id: id, Method: method, Params: wire.Call{Context: &p.scope, OperationId: taskWireOptional(operation), Body: raw}})
 		if err != nil {
@@ -255,7 +258,7 @@ func TestSettingsMutationWireWithdrawsWhileNativeGuardWaits(t *testing.T) {
 	select {
 	case got := <-ack:
 		var response wire.Response
-		if got.err != nil || json.Unmarshal(got.raw, &response) != nil || response.Id == nil || *response.Id != "withdraw" || response.Result == nil || response.Result.Status != "ok" {
+		if got.err != nil || json.Unmarshal(got.raw, &response) != nil || response.Id == nil || *response.Id != wireTestID(3) || response.Result == nil || response.Result.Status != "ok" {
 			t.Fatalf("withdrawal blocked %#v %v", response, got.err)
 		}
 	case <-time.After(time.Second):

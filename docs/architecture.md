@@ -142,10 +142,23 @@ Go neighbors still cross module boundaries only through `infra/peer` to the
 owning module's published contracts. Contracts cannot import infrastructure,
 boot, executable hosts, or neighbor internals. The Go import gate enforces these
 edges; source review verifies delegation, independent DTO signatures, absence
-of implementation aliases and explicit mappings. The common Desktop transport may depend only on published module
-contracts, never app/domain/infra. `boot` owns concrete composition and lifetimes.
+of implementation aliases and explicit mappings. The common Desktop transport depends on published module
+contracts, never module app/domain/infra; it may also use kernel domain/app, `pkg/ipc`,
+the generated wire and flat `pkg` kits. Under
+[ADR-0002](decisions/0002-uniform-names-tests-composition.md) each module's
+desktop handlers move into its own `modules/<module>/desktop/<feature>`
+adapter, which may also use its own application services; the common transport
+remains the shared server. `boot` owns concrete composition and lifetimes and
+holds no logic.
 
 ## Shared infrastructure decision
+
+Go shared code follows
+[ADR-0002](decisions/0002-uniform-names-tests-composition.md): kernel domain
+values and shared peer ports under `pkg/kernel`, flat `pkg/<word>` kits for
+module infrastructure, adapters and boot, and a boot-built shared peer under
+`pkg/kernel/infra/peer`. The TypeScript paths below describe the current
+TypeScript tree.
 
 `pkg/kernel/infra/system-clock.ts` is shared because the Chat turn service and
 Computer authorization service both consume the same `Clock` semantics. Each receives a

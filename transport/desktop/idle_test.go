@@ -12,7 +12,8 @@ import (
 	"github.com/legrch/farol/pkg/ipc"
 )
 
-const idleNonce = "a0000000-0000-4000-8000-000000000001"
+// Poll lanes share the connection nonce adopted by the sequenced handshake.
+const idleNonce = testNonce
 const idleHealthBody = `{"binding":{"buildId":"build","profileId":"test","backendGeneration":"generation","runtimeId":"runtime","connectorGeneration":"1"},"expectedInstanceId":"instance"}`
 
 // In-memory framed server fixture only; no native process, socket or provider.
@@ -63,29 +64,29 @@ func TestAuditPollRetainsBoundedHistoryAndRejectsForgedReads(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	appendFrame(request("hello", "core.handshake", `{"protocolMajor":1,"protocolMinor":0,"buildId":"build","profileId":"test"}`, nil))
+	appendFrame(request(seq(1), "core.handshake", helloBody, nil))
 	body := `{"operationId":"operation","buildId":"build","runtimeId":"runtime"}`
 	for i := 1; i <= 5000; i++ {
 		appendFrame(request(fmt.Sprintf("desktop-poll-audit:%s:%d", idleNonce, i), "computer.process.audit", body, &ctx))
 	}
-	appendFrame(request("status", "core.status", `{}`, &ctx))
+	appendFrame(request(seq(2), "core.status", `{}`, &ctx))
 	out := &bufferWriter{}
 	if err := s.Serve(context.Background(), io.NopCloser(&frames), out); err != nil {
 		t.Fatal(err)
 	}
-	if len(s.seen) != 2 || len(s.polls) != 1 || s.polls["audit"] != 5000 {
-		t.Fatalf("audit poll history not bounded: seen=%d polls=%v", len(s.seen), s.polls)
+	if s.next != 2 || len(s.polls) != 1 || s.polls["audit"] != 5000 {
+		t.Fatalf("audit poll state not constant: next=%d polls=%v", s.next, s.polls)
 	}
 	for _, item := range []struct{ id, method, body string }{
 		{fmt.Sprintf("desktop-poll-audit:%s:5000", idleNonce), "computer.process.audit", body},
 		{fmt.Sprintf("desktop-poll-audit:%s:5001", idleNonce), "core.retirement.prepare", body},
 		{fmt.Sprintf("desktop-poll-audit:%s:5001", idleNonce), "computer.process.audit", `{}`},
 	} {
-		if response := s.dispatch(context.Background(), request(item.id, item.method, item.body, &ctx)); response.Error == nil || s.pollAdmitted {
+		if response := s.dispatch(context.Background(), request(item.id, item.method, item.body, &ctx)); response.Error == nil {
 			t.Fatalf("forged audit poll admitted: %+v", item)
 		}
 	}
-	if response := s.dispatch(context.Background(), request(fmt.Sprintf("desktop-poll-audit:%s:5001", idleNonce), "computer.process.audit", body, &ctx)); response.Result == nil || !s.pollAdmitted {
+	if response := s.dispatch(context.Background(), request(fmt.Sprintf("desktop-poll-audit:%s:5001", idleNonce), "computer.process.audit", body, &ctx)); response.Result == nil {
 		t.Fatal("invalid requests consumed the next audit sequence")
 	}
 }
@@ -100,15 +101,15 @@ func TestIdlePollLifetimeRetainsBoundedHistoryAndRetirement(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	appendFrame(request("hello", "core.handshake", `{"protocolMajor":1,"protocolMinor":0,"buildId":"build","profileId":"test"}`, nil))
+	appendFrame(request(seq(1), "core.handshake", helloBody, nil))
 	for i := 1; i <= 6000; i++ {
 		for _, poll := range []struct{ lane, method string }{{"browser", "chat.browser.next"}, {"settings", "computer.settings.store.next"}} {
 			appendFrame(request(fmt.Sprintf("desktop-poll-%s:%s:%d", poll.lane, idleNonce, i), poll.method, `{"deadlineMillis":"1"}`, &ctx))
 		}
 	}
-	// An effect still gets its unchanged operation ID and its replay fence.
+	// An effect still gets its unchanged operation ID; its replayed sequence is refused.
 	var retire wire.Request
-	if err := json.Unmarshal(request("retire", "core.retirement.prepare", `{}`, &ctx), &retire); err != nil {
+	if err := json.Unmarshal(request(seq(2), "core.retirement.prepare", `{}`, &ctx), &retire); err != nil {
 		t.Fatal(err)
 	}
 	retire.Params.OperationId = optional("original-retirement")
@@ -134,15 +135,15 @@ func TestIdlePollLifetimeRetainsBoundedHistoryAndRetirement(t *testing.T) {
 		}
 		count++
 		if count == 12003 {
-			if response.Error == nil || response.Error.Message != "duplicate request ID" {
+			if response.Error == nil || response.Error.Message != "invalid request sequence" {
 				t.Fatal("retirement replay admitted")
 			}
 		} else if response.Result == nil || response.Result.Status != "ok" {
 			t.Fatalf("response %d: %+v", count, response)
 		}
 	}
-	if count != 12003 || len(s.seen) != 2 || len(s.polls) != 2 {
-		t.Fatalf("unbounded/lost history: responses=%d ordinary=%d polls=%d", count, len(s.seen), len(s.polls))
+	if count != 12003 || s.next != 2 || len(s.polls) != 2 {
+		t.Fatalf("unbounded/lost state: responses=%d ordinary=%d polls=%d", count, s.next, len(s.polls))
 	}
 }
 
@@ -151,7 +152,7 @@ func TestOrderedPollCannotReplayCrossContextOrCarryAnEffect(t *testing.T) {
 	handshake(s)
 	ctx := s.context()
 	id := "desktop-poll-browser:" + idleNonce + ":1"
-	if response := s.dispatch(context.Background(), request(id, "chat.browser.next", `{"deadlineMillis":"1"}`, &ctx)); response.Result == nil || !s.pollAdmitted {
+	if response := s.dispatch(context.Background(), request(id, "chat.browser.next", `{"deadlineMillis":"1"}`, &ctx)); response.Result == nil {
 		t.Fatal("first poll refused")
 	}
 	for _, item := range []struct {
@@ -165,7 +166,7 @@ func TestOrderedPollCannotReplayCrossContextOrCarryAnEffect(t *testing.T) {
 		{"desktop-poll-browser:" + idleNonce + ":2", "chat.browser.next", `{}`, ctx},
 		{"desktop-poll-browser:a0000000-0000-4000-8000-000000000002:2", "chat.browser.next", `{"deadlineMillis":"1"}`, ctx},
 	} {
-		if response := s.dispatch(context.Background(), request(item.id, item.method, item.body, &item.context)); response.Error == nil || s.pollAdmitted {
+		if response := s.dispatch(context.Background(), request(item.id, item.method, item.body, &item.context)); response.Error == nil {
 			t.Fatalf("invalid poll admitted: %+v", item)
 		}
 	}
@@ -173,7 +174,7 @@ func TestOrderedPollCannotReplayCrossContextOrCarryAnEffect(t *testing.T) {
 	json.Unmarshal(request("desktop-poll-browser:"+idleNonce+":2", "chat.browser.next", `{"deadlineMillis":"1"}`, &ctx), &forged)
 	forged.Params.OperationId = optional("not-read-only")
 	raw, _ := json.Marshal(forged)
-	if response := s.dispatch(context.Background(), raw); response.Error == nil || s.pollAdmitted {
+	if response := s.dispatch(context.Background(), raw); response.Error == nil {
 		t.Fatal("effect correlation admitted as a poll")
 	}
 	if response := s.dispatch(context.Background(), request("desktop-poll-browser:"+idleNonce+":2", "chat.browser.next", `{"deadlineMillis":"1"}`, &ctx)); response.Result == nil {
@@ -191,7 +192,7 @@ func TestHealthReadLifetimeRetainsBoundedHistoryAndRetirement(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	appendFrame(request("hello", "core.handshake", `{"protocolMajor":1,"protocolMinor":0,"buildId":"build","profileId":"test"}`, nil))
+	appendFrame(request(seq(1), "core.handshake", helloBody, nil))
 	const reads = 6001
 	for i := 1; i <= reads; i++ {
 		body := idleHealthBody
@@ -200,9 +201,9 @@ func TestHealthReadLifetimeRetainsBoundedHistoryAndRetirement(t *testing.T) {
 		}
 		appendFrame(request(fmt.Sprintf("desktop-poll-health:%s:%d", idleNonce, i), "computer.connector.health", body, &ctx))
 	}
-	for _, method := range []string{"core.retirement.prepare", "core.retirement.ack"} {
+	for index, method := range []string{"core.retirement.prepare", "core.retirement.ack"} {
 		var original wire.Request
-		if err := json.Unmarshal(request(method, method, `{}`, &ctx), &original); err != nil {
+		if err := json.Unmarshal(request(seq(uint64(index)+2), method, `{}`, &ctx), &original); err != nil {
 			t.Fatal(err)
 		}
 		original.Params.OperationId = optional("original-" + method)
@@ -213,7 +214,7 @@ func TestHealthReadLifetimeRetainsBoundedHistoryAndRetirement(t *testing.T) {
 		appendFrame(raw)
 		appendFrame(raw)
 	}
-	appendFrame(request("status", "core.status", `{}`, &ctx))
+	appendFrame(request(seq(4), "core.status", `{}`, &ctx))
 	out := &bufferWriter{}
 	if err := s.Serve(context.Background(), io.NopCloser(&frames), out); err != nil {
 		t.Fatal(err)
@@ -231,7 +232,7 @@ func TestHealthReadLifetimeRetainsBoundedHistoryAndRetirement(t *testing.T) {
 		count++
 		switch count {
 		case reads + 3, reads + 5:
-			if response.Error == nil || response.Error.Message != "duplicate request ID" {
+			if response.Error == nil || response.Error.Message != "invalid request sequence" {
 				t.Fatalf("effect/control replay admitted: %+v", response)
 			}
 		default:
@@ -256,8 +257,8 @@ func TestHealthReadLifetimeRetainsBoundedHistoryAndRetirement(t *testing.T) {
 			}
 		}
 	}
-	if count != reads+6 || len(s.seen) != 4 || len(s.polls) != 1 || s.polls["health"] != reads {
-		t.Fatalf("unbounded/lost health history: responses=%d ordinary=%d polls=%v", count, len(s.seen), s.polls)
+	if count != reads+6 || s.next != 4 || len(s.polls) != 1 || s.polls["health"] != reads {
+		t.Fatalf("unbounded/lost health state: responses=%d ordinary=%d polls=%v", count, s.next, s.polls)
 	}
 }
 
@@ -272,7 +273,7 @@ func TestOrderedHealthReadRequiresExactLaneAndOriginalContext(t *testing.T) {
 			handshake(s)
 			ctx := s.context()
 			id := "desktop-poll-health:" + idleNonce + ":"
-			if response := s.dispatch(context.Background(), request(id+"1", "computer.connector.health", idleHealthBody, &ctx)); response.Result == nil || !s.pollAdmitted {
+			if response := s.dispatch(context.Background(), request(id+"1", "computer.connector.health", idleHealthBody, &ctx)); response.Result == nil {
 				t.Fatal("first health read refused")
 			}
 			var invalid wire.Request
@@ -336,10 +337,10 @@ func TestOrderedHealthReadRequiresExactLaneAndOriginalContext(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if response := s.dispatch(context.Background(), raw); response.Error == nil || s.pollAdmitted {
+			if response := s.dispatch(context.Background(), raw); response.Error == nil {
 				t.Fatalf("invalid health read admitted: %+v", response)
 			}
-			if response := s.dispatch(context.Background(), request(id+"2", "computer.connector.health", idleHealthBody, &ctx)); response.Result == nil || !s.pollAdmitted {
+			if response := s.dispatch(context.Background(), request(id+"2", "computer.connector.health", idleHealthBody, &ctx)); response.Result == nil {
 				t.Fatal("invalid attempt consumed the original sequence")
 			}
 		})
@@ -355,7 +356,7 @@ func TestOrderedHealthReadRequiresHandshakeAndRegisteredHandler(t *testing.T) {
 		}
 		ctx := s.context()
 		raw := request("desktop-poll-health:"+idleNonce+":1", "computer.connector.health", idleHealthBody, &ctx)
-		if response := s.dispatch(context.Background(), raw); response.Error == nil || s.pollAdmitted || len(s.polls) != 0 || s.pollNonce != "" {
+		if response := s.dispatch(context.Background(), raw); response.Error == nil || len(s.polls) != 0 {
 			t.Fatal("health lane admitted without handshake or handler")
 		}
 	}
@@ -365,14 +366,13 @@ func TestOrderedHealthReadSequenceCannotWrap(t *testing.T) {
 	s := idleServer(t)
 	handshake(s)
 	ctx := s.context()
-	s.pollNonce = idleNonce
 	s.polls["health"] = ^uint64(0) - 1
 	id := "desktop-poll-health:" + idleNonce + ":"
-	if response := s.dispatch(context.Background(), request(id+"18446744073709551615", "computer.connector.health", idleHealthBody, &ctx)); response.Result == nil || !s.pollAdmitted {
+	if response := s.dispatch(context.Background(), request(id+"18446744073709551615", "computer.connector.health", idleHealthBody, &ctx)); response.Result == nil {
 		t.Fatal("last uint64 sequence refused")
 	}
 	for _, sequence := range []string{"18446744073709551615", "18446744073709551616", "0", "1"} {
-		if response := s.dispatch(context.Background(), request(id+sequence, "computer.connector.health", idleHealthBody, &ctx)); response.Error == nil || s.pollAdmitted {
+		if response := s.dispatch(context.Background(), request(id+sequence, "computer.connector.health", idleHealthBody, &ctx)); response.Error == nil {
 			t.Fatalf("wrapped/replayed sequence admitted: %s", sequence)
 		}
 	}

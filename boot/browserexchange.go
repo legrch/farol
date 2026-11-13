@@ -27,14 +27,17 @@ type browserExchangeCall struct {
 
 // BrowserExchange is transport correlation for one inherited host pipe, not a
 // scheduler or turn owner. It retains at most eight one-shot reciprocal calls.
-// Chat owns all admission, intent, queue, result and retry policy.
+// Memory is bounded by those live calls only: a settled call leaves pending and
+// its random command ID is never reissued, so a late or repeated reply is
+// refused without a lifetime history. Chat owns all admission, intent, queue,
+// result and retry policy.
 type BrowserExchange struct {
 	ctx         context.Context
 	peer        wire.Context
 	mu          sync.Mutex
 	pending     map[string]*browserExchangeCall
 	ready       chan *browserExchangeCall
-	issued      uint32
+	issued      uint64 // observation only: commands issued this lifetime, never a quota
 	pollStopped chan struct{}
 	quiesced    bool
 }
@@ -118,7 +121,7 @@ func (b *BrowserExchange) Exchange(ctx context.Context, command browser.Command)
 		b.mu.Unlock()
 		return nil, errors.New("browser_exchange_quiesced")
 	}
-	if len(b.pending) >= 8 || b.issued >= 4096 {
+	if len(b.pending) >= 8 {
 		b.mu.Unlock()
 		return nil, errors.New("browser_exchange_saturated")
 	}

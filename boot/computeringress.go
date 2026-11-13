@@ -110,10 +110,31 @@ func randomIngressID() (string, error) {
 	}
 	return hex.EncodeToString(b[:]), nil
 }
+
+// The claim set records every consumed operation ID for this backend lifetime
+// and is never pruned; a durable operation-ID record is deferred. Ordinary
+// claims stop short of capacity so the last slots stay with the calls that
+// only REMOVE authority (connector Close, read-intent withdrawal, and an
+// authority Deactivate that withdraws a live fence): a full set can refuse
+// new authority, never its withdrawal. A reserved claim grants nothing, and
+// once ordinary claims are refused no new authority can follow, so Deactivate
+// spends the reserve at most once. Process cancel and continuity withdrawal stay ordinary:
+// a refused cancel can be repeated, and continuity is a multi-step transition.
+const (
+	claimCapacity          = 4096
+	claimWithdrawalReserve = 64
+)
+
 func (s *ComputerIngress) claim(operation string) error {
+	return s.claimWithin(operation, claimCapacity-claimWithdrawalReserve)
+}
+func (s *ComputerIngress) claimWithdrawal(operation string) error {
+	return s.claimWithin(operation, claimCapacity)
+}
+func (s *ComputerIngress) claimWithin(operation string, limit int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.unknown || !validIngressID(operation) || s.used[operation] || len(s.used) >= 4096 {
+	if s.unknown || !validIngressID(operation) || s.used[operation] || len(s.used) >= limit {
 		return computerUnavailable()
 	}
 	s.used[operation] = true
@@ -127,11 +148,27 @@ func (s *ComputerIngress) poison() {
 	s.unknown = true
 	s.mu.Unlock()
 }
+func (s *ComputerIngress) liveFence() bool {
+	s.guard.mu.Lock()
+	defer s.guard.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.guard.active || s.publication != nil && s.publication.receipt.Fence == strconv.FormatUint(s.guard.revision, 10)
+}
 func (s *ComputerIngress) Deactivate(ctx context.Context, operation string) (*wire.ComputerAuthorityDeactivateResponse, error) {
 	if ctx == nil || ctx.Err() != nil {
 		return nil, computerUnavailable()
 	}
-	if e := s.claim(operation); e != nil {
+	// Only a Deactivate that withdraws live authority (an active guard, or the
+	// current publication's fence that connectors and Settings are bound to)
+	// may spend the withdrawal reserve. Repeated Settings saves after that
+	// find nothing to withdraw and use an ordinary claim, so they cannot
+	// drain the reserve that connector Close and read-intent withdrawal need.
+	claim := s.claim
+	if s.liveFence() {
+		claim = s.claimWithdrawal
+	}
+	if e := claim(operation); e != nil {
 		return nil, e
 	}
 	fence, e := s.guard.deactivate()
