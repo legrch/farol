@@ -215,6 +215,21 @@ function routePermissionGeneration(
   }
 }
 
+export function routeDownloadAllowed(
+  contents: WebContents | null | undefined,
+): boolean {
+  try {
+    return (
+      contents != null &&
+      !contents.isDestroyed() &&
+      routePermissionGeneration(contents) != null &&
+      contents.isFocused()
+    );
+  } catch {
+    return false;
+  }
+}
+
 function routeClipboardWriteAllowed(
   contents: WebContents | null,
   permission: string,
@@ -5955,7 +5970,23 @@ export class ChatGptRoute {
         }
       },
     );
-    routeSession.on("will-download", (event) => event.preventDefault());
+    // A download the owner clicks in a visible, focused ChatGPT page gets the
+    // normal macOS Save dialog (Electron shows it when no save path is set).
+    // Hidden, unfocused or unmanaged contents never download.
+    routeSession.on("will-download", (event, item, contents) => {
+      if (!routeDownloadAllowed(contents)) {
+        event.preventDefault();
+        return;
+      }
+      try {
+        item.setSaveDialogOptions({
+          title: "Save download",
+          defaultPath: item.getFilename(),
+        });
+      } catch {
+        event.preventDefault();
+      }
+    });
     hardenedRouteSessions.add(routeSession);
   }
 

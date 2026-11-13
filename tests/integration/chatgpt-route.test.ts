@@ -6520,6 +6520,42 @@ describe("ChatGPT shared partition lifecycle", () => {
     },
   );
 
+  it.each([true, false])(
+    "offers a Save dialog only for a focused managed ChatGPT page (focused: %s)",
+    (focused) => {
+      const sharedSession = Object.assign(new EventEmitter(), {
+        setPermissionRequestHandler: vi.fn(),
+        setPermissionCheckHandler: vi.fn(),
+      });
+      const candidate = route();
+      const surface = embeddedSurface();
+      vi.spyOn(surface.webContents, "getURL").mockReturnValue(
+        "https://chatgpt.com/c/test",
+      );
+      Object.assign(surface.webContents, { isFocused: () => focused });
+      Reflect.set(candidate, "routeWindow", surface);
+      const hardenContents = Reflect.get(candidate, "hardenContents") as (
+        contents: typeof surface.webContents,
+        tracks: boolean,
+      ) => void;
+      hardenContents.call(candidate, surface.webContents, true);
+      harden(candidate, sharedSession);
+      const event = { preventDefault: vi.fn() };
+      const item = {
+        getFilename: () => "report.pdf",
+        setSaveDialogOptions: vi.fn(),
+      };
+      sharedSession.emit("will-download", event, item, surface.webContents);
+      expect(event.preventDefault).toHaveBeenCalledTimes(focused ? 0 : 1);
+      expect(item.setSaveDialogOptions).toHaveBeenCalledTimes(focused ? 1 : 0);
+      if (focused)
+        expect(item.setSaveDialogOptions.mock.calls[0]![0]).toMatchObject({
+          defaultPath: "report.pdf",
+        });
+      candidate.dispose();
+    },
+  );
+
   it("allows Copy response on the current ChatGPT page across route replacement without a focus gate", () => {
     const sharedSession = Object.assign(new EventEmitter(), {
       setPermissionRequestHandler: vi.fn(),
@@ -6643,9 +6679,17 @@ describe("ChatGPT shared partition lifecycle", () => {
     }
 
     expect(sharedSession.listenerCount("will-download")).toBe(1);
+    // Contents that are not a managed, focused route never download.
     const event = { preventDefault: vi.fn() };
-    sharedSession.emit("will-download", event);
+    sharedSession.emit("will-download", event, {}, undefined);
     expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    const unmanaged = {
+      isDestroyed: () => false,
+      isFocused: () => true,
+    };
+    const refused = { preventDefault: vi.fn() };
+    sharedSession.emit("will-download", refused, {}, unmanaged);
+    expect(refused.preventDefault).toHaveBeenCalledTimes(1);
     expect(sharedSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
     expect(sharedSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
   });
