@@ -410,14 +410,6 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
       "selection.Executable.Path",
       "app-bundled-electron",
     ),
-    launch(
-      "computer.go-held-guest",
-      "modules/computer/infra/process/heldguestdarwin.go",
-      "nativeHeldBoundary.Exec",
-      "go.syscall.Exec",
-      "command.Executable",
-      "confined-user-command",
-    ),
   ],
   embedded: [
     {
