@@ -7,7 +7,7 @@ import (
 
 	controlct "github.com/legrch/farol/modules/task/contracts/control"
 	"github.com/legrch/farol/modules/task/contracts/selectedthread"
-	task "github.com/legrch/farol/modules/task/domain"
+	"github.com/legrch/farol/modules/task/domain"
 	codexclient "github.com/legrch/farol/modules/task/infra/clients/codex"
 )
 

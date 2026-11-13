@@ -10,9 +10,8 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/legrch/farol/pkg/limit"
-
 	"github.com/legrch/farol/pkg/ipc"
+	"github.com/legrch/farol/pkg/limit"
 )
 
 // This separate diagnostic mode has no NativeRuntime/serve/provider/admission

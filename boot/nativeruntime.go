@@ -3,15 +3,14 @@ package boot
 import (
 	"context"
 	"errors"
-	"sync"
-	"sync/atomic"
-	"time"
-
 	conversation "github.com/legrch/farol/modules/chat/contracts/conversation"
 	browser "github.com/legrch/farol/modules/chat/infra/browser"
 	"github.com/legrch/farol/modules/chat/infra/intent"
 	"github.com/legrch/farol/modules/chat/infra/results"
 	"github.com/legrch/farol/transport/desktop"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	chatport "github.com/legrch/farol/modules/chat/app/port"

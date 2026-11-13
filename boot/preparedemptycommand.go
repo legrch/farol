@@ -11,9 +11,8 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/legrch/farol/pkg/limit"
-
 	"github.com/legrch/farol/pkg/ipc"
+	"github.com/legrch/farol/pkg/limit"
 )
 
 // Private read-only diagnostic. Original publication identity is selected;

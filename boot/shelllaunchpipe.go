@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/legrch/farol/pkg/limit"
-
 	"golang.org/x/sys/unix"
 )
 

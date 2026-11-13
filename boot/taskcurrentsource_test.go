@@ -15,7 +15,7 @@ import (
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	sourcect "github.com/legrch/farol/modules/task/contracts/currentsource"
-	task "github.com/legrch/farol/modules/task/domain"
+	"github.com/legrch/farol/modules/task/domain"
 )
 
 const sourceFixtureNow = int64(1791108000000)

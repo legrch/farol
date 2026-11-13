@@ -6,11 +6,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"golang.org/x/sys/unix"
 	"os"
 	"path/filepath"
 	"testing"
-
-	"golang.org/x/sys/unix"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	chatport "github.com/legrch/farol/modules/chat/app/port"

@@ -10,7 +10,7 @@ import (
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	control "github.com/legrch/farol/modules/task/contracts/control"
 	"github.com/legrch/farol/modules/task/contracts/selectedthread"
-	task "github.com/legrch/farol/modules/task/domain"
+	"github.com/legrch/farol/modules/task/domain"
 	codexclient "github.com/legrch/farol/modules/task/infra/clients/codex"
 	"github.com/legrch/farol/pkg/ipc"
 	"github.com/legrch/farol/transport/desktop"

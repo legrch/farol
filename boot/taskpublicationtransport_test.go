@@ -13,7 +13,7 @@ import (
 	"time"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
-	task "github.com/legrch/farol/modules/task/domain"
+	"github.com/legrch/farol/modules/task/domain"
 	"github.com/legrch/farol/pkg/ipc"
 	"github.com/legrch/farol/transport/desktop"
 )

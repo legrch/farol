@@ -3,13 +3,12 @@ package boot
 import (
 	"context"
 	"encoding/json"
-	"testing"
-	"time"
-
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	"github.com/legrch/farol/transport/desktop"
+	"testing"
+	"time"
 )
 
 func (w *computerWorkspaceFixture) Search(_ context.Context, in port.SearchRequest) (*port.SearchResponse, error) {

@@ -4,7 +4,6 @@ package boot
 
 import (
 	"context"
-
 	archivepolicy "github.com/legrch/farol/modules/chat/app/capabilities/archive"
 )
 

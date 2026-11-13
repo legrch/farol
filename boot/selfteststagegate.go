@@ -3,10 +3,9 @@ package boot
 import (
 	"context"
 	"errors"
-	"sync"
-
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
 	"github.com/legrch/farol/modules/computer/domain/mutation"
+	"sync"
 )
 
 // stagingPriorEligible is evaluated under the ledger lock. Group settlement is

@@ -21,7 +21,7 @@ import (
 	admissionpeer "github.com/legrch/farol/modules/computer/infra/peer/admission"
 	accessrepo "github.com/legrch/farol/modules/computer/infra/repos/access"
 	controlct "github.com/legrch/farol/modules/task/contracts/control"
-	task "github.com/legrch/farol/modules/task/domain"
+	"github.com/legrch/farol/modules/task/domain"
 	claude "github.com/legrch/farol/modules/task/infra/clients/claude"
 )
 

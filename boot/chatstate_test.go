@@ -3,10 +3,9 @@ package boot
 import (
 	"context"
 	"encoding/json"
-	"testing"
-
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	"github.com/legrch/farol/transport/desktop"
+	"testing"
 )
 
 func readChatStateFixture(t *testing.T, s *ChatIngress, h wire.ChatHandle) wire.ChatState {

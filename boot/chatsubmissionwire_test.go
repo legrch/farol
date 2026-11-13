@@ -4,9 +4,8 @@ package boot
 import (
 	"context"
 	"encoding/json"
-	"testing"
-
 	wire "github.com/legrch/farol/gen/desktop/v1"
+	"testing"
 )
 
 func TestChatSubmissionWireObservationDoesNotWithdrawOrAuthorizeRetry(t *testing.T) {

@@ -2,7 +2,6 @@ package boot
 
 import (
 	"errors"
-
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	chatport "github.com/legrch/farol/modules/chat/app/port"
 )

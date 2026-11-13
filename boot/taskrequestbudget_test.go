@@ -10,7 +10,7 @@ import (
 
 	"github.com/legrch/farol/modules/task/app/port"
 	controlct "github.com/legrch/farol/modules/task/contracts/control"
-	task "github.com/legrch/farol/modules/task/domain"
+	"github.com/legrch/farol/modules/task/domain"
 	taskrepo "github.com/legrch/farol/modules/task/infra/repos/task"
 )
 

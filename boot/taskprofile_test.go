@@ -6,15 +6,14 @@ package boot
 import (
 	"context"
 	"errors"
+	codexclient "github.com/legrch/farol/modules/task/infra/clients/codex"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	codexclient "github.com/legrch/farol/modules/task/infra/clients/codex"
-
 	"github.com/legrch/farol/modules/task/app/port"
 	controlct "github.com/legrch/farol/modules/task/contracts/control"
-	task "github.com/legrch/farol/modules/task/domain"
+	"github.com/legrch/farol/modules/task/domain"
 )
 
 type taskProfileTestFixture struct {

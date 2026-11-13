@@ -10,7 +10,7 @@ import (
 	processct "github.com/legrch/farol/modules/computer/contracts/process"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	"github.com/legrch/farol/modules/task/app/port"
-	task "github.com/legrch/farol/modules/task/domain"
+	"github.com/legrch/farol/modules/task/domain"
 	claude "github.com/legrch/farol/modules/task/infra/clients/claude"
 	processpeer "github.com/legrch/farol/modules/task/infra/peer/process"
 )

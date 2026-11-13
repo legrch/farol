@@ -10,12 +10,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/legrch/farol/pkg/limit"
-
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	chatport "github.com/legrch/farol/modules/chat/app/port"
 	handoff "github.com/legrch/farol/modules/chat/app/services/handoff"
 	"github.com/legrch/farol/pkg/ipc"
+	"github.com/legrch/farol/pkg/limit"
 )
 
 // This command records trusted host facts after the original exact child ended.

@@ -9,7 +9,7 @@ import (
 	sourceapp "github.com/legrch/farol/modules/task/app/services/currentsource"
 	modelapp "github.com/legrch/farol/modules/task/app/services/modelpolicy"
 	sourcect "github.com/legrch/farol/modules/task/contracts/currentsource"
-	task "github.com/legrch/farol/modules/task/domain"
+	"github.com/legrch/farol/modules/task/domain"
 	settingsnative "github.com/legrch/farol/modules/task/infra/currentsettings"
 	modelnative "github.com/legrch/farol/modules/task/infra/modelpolicy"
 )

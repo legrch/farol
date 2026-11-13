@@ -13,9 +13,8 @@ import (
 	"path/filepath"
 	"reflect"
 
-	"github.com/legrch/farol/pkg/limit"
-
 	"github.com/legrch/farol/modules/chat/app/services/handoff"
+	"github.com/legrch/farol/pkg/limit"
 	"golang.org/x/sys/unix"
 )
 

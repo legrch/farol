@@ -8,10 +8,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	wire "github.com/legrch/farol/gen/desktop/v1"
 	"strings"
 	"testing"
-
-	wire "github.com/legrch/farol/gen/desktop/v1"
 )
 
 func chatCallerInput(h chatHandle) wire.ChatCallerBegin {

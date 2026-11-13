@@ -7,8 +7,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	kitclock "github.com/legrch/farol/pkg/clock"
-
 	releaseport "github.com/legrch/farol/modules/release/app/port"
 	executionapp "github.com/legrch/farol/modules/release/app/services/execution"
 	inputapp "github.com/legrch/farol/modules/release/app/services/helperinput"
@@ -22,6 +20,7 @@ import (
 	"github.com/legrch/farol/modules/release/infra/native/helperroutes"
 	"github.com/legrch/farol/modules/release/infra/native/processprobe"
 	"github.com/legrch/farol/modules/release/infra/native/slotbinding"
+	kitclock "github.com/legrch/farol/pkg/clock"
 	"golang.org/x/sys/unix"
 )
 

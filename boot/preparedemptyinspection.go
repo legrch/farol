@@ -16,8 +16,6 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/legrch/farol/pkg/limit"
-
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	chatport "github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/app/services/handoff"
@@ -27,6 +25,7 @@ import (
 	accessrepo "github.com/legrch/farol/modules/computer/infra/repos/access"
 	mutationrepo "github.com/legrch/farol/modules/computer/infra/repos/mutation"
 	"github.com/legrch/farol/pkg/ipc"
+	"github.com/legrch/farol/pkg/limit"
 	"golang.org/x/sys/unix"
 )
 

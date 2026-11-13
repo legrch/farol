@@ -16,7 +16,7 @@ import (
 
 	"github.com/legrch/farol/modules/task/app/port"
 	workflow "github.com/legrch/farol/modules/task/app/services/workflow"
-	task "github.com/legrch/farol/modules/task/domain"
+	"github.com/legrch/farol/modules/task/domain"
 	wf "github.com/legrch/farol/modules/task/domain/workflow"
 	taskrepo "github.com/legrch/farol/modules/task/infra/repos/task"
 	"golang.org/x/sys/unix"

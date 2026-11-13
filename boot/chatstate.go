@@ -2,7 +2,6 @@ package boot
 
 import (
 	"context"
-
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	"github.com/legrch/farol/modules/chat/contracts/conversation"
 	"github.com/legrch/farol/transport/desktop"

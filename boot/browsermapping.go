@@ -3,11 +3,10 @@ package boot
 import (
 	"encoding/json"
 	"errors"
-	"strconv"
-
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	browser "github.com/legrch/farol/modules/chat/infra/browser"
 	"github.com/legrch/farol/pkg/ipc"
+	"strconv"
 )
 
 // Explicit consumer-owned value mapping. Private Chat structs never become wire

@@ -7,7 +7,7 @@ import (
 	conversation "github.com/legrch/farol/modules/chat/contracts/conversation"
 	"github.com/legrch/farol/modules/task/app/port"
 	controlct "github.com/legrch/farol/modules/task/contracts/control"
-	task "github.com/legrch/farol/modules/task/domain"
+	"github.com/legrch/farol/modules/task/domain"
 	codexclient "github.com/legrch/farol/modules/task/infra/clients/codex"
 	parentpeer "github.com/legrch/farol/modules/task/infra/peer/parent"
 )
