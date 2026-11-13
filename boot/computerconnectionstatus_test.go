@@ -93,7 +93,11 @@ func TestExistingAttachmentCheckUsesDurableOwnerAndExactStatusID(t *testing.T) {
 	if _, err = owner.Confirm(ctx, id); err == nil {
 		t.Fatal("uncorrelated receipt confirmed")
 	}
-	// ChatGPT's cached schema sends {}: a public call while armed acknowledges.
+	// ChatGPT's cached schema sends {}: a public call acknowledges once this
+	// check's own Send was durably recorded.
+	if _, err = owner.RetainSend(ctx, id, true); err != nil {
+		t.Fatal("send acknowledgement", err)
+	}
 	passive := query
 	passive.CheckId = nil
 	out, err = verificationInvoke(t, s.verificationObservationMethodFor(s.current), passive)
@@ -279,4 +283,117 @@ func otherWrongQuery(q wire.ComputerConnectorVerificationQuery) wire.ComputerCon
 	wrong := "not-the-armed-check"
 	q.CheckId = &wrong
 	return q
+}
+
+// A cached ChatGPT connector schema sends {}, so an argument-free call carries
+// no nonce. It may count for the armed check only after that check's own Send
+// was durably acknowledged: a call that arrives between Arm and Send, such as
+// a delayed call from a superseded attempt, cannot be this check's prompt.
+func TestArgumentFreeStatusCallCountsOnlyAfterThisChecksSend(t *testing.T) {
+	previousBuildID := BuildID
+	BuildID = strings.Repeat("b", 64)
+	defer func() { BuildID = previousBuildID }()
+	s, journal, _, opened := verificationOpen(t)
+	t.Cleanup(func() {
+		if err := s.Shutdown(); err != nil {
+			t.Error(err)
+		}
+	})
+	ctx := context.Background()
+	out, err := verificationInvoke(t, s.verificationMethod(s.current), wire.ComputerConnectorVerify{
+		Challenge: "visible-challenge", WorkspaceId: "work", CallId: "existing-attachment",
+	})
+	_ = verificationState(t, out, err)
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(base, "farol-state", "go-core", "computer")
+	if err = os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := accessrepo.Create(root, accessrepo.Binding{ProfileID: "profile", OwnerID: "owner", ComputerID: "computer"}, journal.clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	owner := connectorsvc.NewConnectionCheckOwner(store, s, connectorsvc.ConnectionCheckScope{ProfileID: "profile", OwnerID: "owner", ComputerID: "computer"})
+	current, err := s.CurrentConnectionCheck(ctx)
+	if err != nil || !current.ProofCurrent {
+		t.Fatal("existing proof", err)
+	}
+	selection := connectorsvc.ConnectionCheckSelection{
+		Mode: check.Status, AppName: "Farol", Model: "temporary-instant", TunnelID: "tunnel",
+		WorkspaceID: "work", ChallengeDigest: current.ChallengeDigest,
+		ComputerGeneration: current.ComputerGeneration, DocumentDigest: strings.Repeat("d", 64),
+	}
+	socket := s.verificationObservationMethodFor(s.current)
+	argumentFree := wire.ComputerConnectorVerificationQuery{Binding: opened.Endpoint.Binding}
+	armed := func(id, fingerprint string) check.Entry {
+		t.Helper()
+		if _, first, err := owner.Claim(ctx, id, fingerprint); err != nil || !first {
+			t.Fatal("claim", id, first, err)
+		}
+		prepared, _, err := owner.Prepare(ctx, id, selection)
+		if err != nil || prepared.Scope == nil || prepared.Scope.CheckID == "" {
+			t.Fatal("prepare", id, err)
+		}
+		if _, err = owner.Arm(ctx, id); err != nil {
+			t.Fatal("arm", id, err)
+		}
+		return prepared
+	}
+	earlier := "0311add3-b03c-4f89-b916-aea6a0a39242"
+	armed(earlier, strings.Repeat("a", 64))
+	if _, err = owner.RetainSend(ctx, earlier, true); err != nil {
+		t.Fatal("earlier send", err)
+	}
+	// The owner clicks again before the earlier call arrived. The earlier
+	// attempt is superseded as unknown and the slot is armed for the new one.
+	later := "7f1d2a3b-4c5d-4e6f-8a9b-0c1d2e3f4a5b"
+	prepared := armed(later, strings.Repeat("c", 64))
+	if prior, ok, err := store.CheckStatus(ctx, earlier); err != nil || !ok || prior.Phase != check.OutcomeUnknown {
+		t.Fatal("earlier attempt was not superseded as unknown", prior.Phase, err)
+	}
+	// A delayed argument-free call from the earlier prompt now arrives. The
+	// newer check's Send has not been acknowledged, so it cannot be its call.
+	out, err = verificationInvoke(t, socket, argumentFree)
+	if state := verificationState(t, out, err); state.CheckId != nil || owner.ReceiptAvailable(ctx, later) {
+		t.Fatal("an argument-free call before this check's Send acknowledged it")
+	}
+	if _, err = owner.Confirm(ctx, later); err == nil {
+		t.Fatal("a call before Send confirmed the newer check")
+	}
+	if _, err = owner.RetainSend(ctx, later, true); err != nil {
+		t.Fatal("later send", err)
+	}
+	// A wrong explicit ID still never acknowledges, even after Send.
+	out, err = verificationInvoke(t, socket, otherWrongQuery(argumentFree))
+	if state := verificationState(t, out, err); state.CheckId != nil || owner.ReceiptAvailable(ctx, later) {
+		t.Fatal("wrong provider ID accepted after Send")
+	}
+	// The trusted host observation can never acknowledge, with or without ID.
+	hostQuery := argumentFree
+	hostQuery.CheckId = &prepared.Scope.CheckID
+	for _, q := range []wire.ComputerConnectorVerificationQuery{argumentFree, hostQuery} {
+		out, err = verificationInvoke(t, s.verificationObservationMethod(), q)
+		if state := verificationState(t, out, err); state.CheckId != nil || owner.ReceiptAvailable(ctx, later) {
+			t.Fatal("host observation acknowledged the check")
+		}
+	}
+	out, err = verificationInvoke(t, socket, argumentFree)
+	if state := verificationState(t, out, err); state.CheckId == nil || *state.CheckId != prepared.Scope.CheckID || !owner.ReceiptAvailable(ctx, later) {
+		t.Fatal("argument-free call after this check's Send was not observed")
+	}
+	confirmed, err := owner.Confirm(ctx, later)
+	if err != nil || confirmed.Phase != check.Verified || confirmed.Receipt == nil || confirmed.Receipt.CheckID != prepared.Scope.CheckID {
+		t.Fatal("newer check was not confirmed", err)
+	}
+	if prior, _, _ := store.CheckStatus(ctx, earlier); prior.Phase != check.OutcomeUnknown {
+		t.Fatal("superseded attempt changed", prior.Phase)
+	}
 }

@@ -77,6 +77,7 @@ type connectorSlot struct {
 	renewalScope          *connectorRenewalScope
 	statusCheckID         string // Socket-only read acknowledgement; never attachment authority.
 	expectedStatusCheckID string // Only a first durable C8 dispatch can arm it.
+	statusSendRecorded    bool   // Durable Send acknowledgement for the armed status check.
 	checkParentID         string // exact original C8 UUID, one shot in this slot
 	challengeDigest       string // original constructor challenge, not caller input
 }

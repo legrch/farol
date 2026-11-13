@@ -225,13 +225,15 @@ func (s *computerConnector) verificationObservationMethodFor(expected *connector
 		if err == nil {
 			// Only the original durable Go connection-check dispatch owner
 			// can arm slot.expectedStatusCheckID. ChatGPT caches connector tool
-			// schemas, so an older cached schema can only send {}: any public
-			// MCP status call that reaches this slot while a check is armed
-			// proves the ChatGPT -> tunnel -> Farol path and acknowledges it.
-			// A wrong/old nonce still never acknowledges, and the trusted host
-			// observation (expected == nil) can never arm or acknowledge.
+			// schemas, so the prompt asks for {} and the call carries no nonce.
+			// An argument-free public call counts once, and only after this
+			// check's own Send was durably recorded: a call that arrives
+			// between Arm and Send (for example a delayed call from a
+			// superseded attempt) cannot be this check's prompt. An exact ID
+			// still acknowledges; a wrong/old ID never does, and the trusted
+			// host observation (expected == nil) can never arm or acknowledge.
 			if expected != nil && slot.expectedStatusCheckID != "" &&
-				(in.CheckId == nil && slot.statusCheckID == "" ||
+				(in.CheckId == nil && slot.statusSendRecorded && slot.statusCheckID == "" ||
 					in.CheckId != nil && *in.CheckId == slot.expectedStatusCheckID) {
 				slot.statusCheckID = slot.expectedStatusCheckID
 				value := slot.statusCheckID

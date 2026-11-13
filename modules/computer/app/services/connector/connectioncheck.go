@@ -28,6 +28,7 @@ type ConnectionCheckBinding struct {
 type ConnectionCheckNative interface {
 	CurrentConnectionCheck(context.Context) (ConnectionCheckBinding, error)
 	ArmOriginalStatusCheck(context.Context, string, string, check.Scope) error
+	RecordOriginalStatusSend(context.Context, string, check.Scope) error
 	ConfirmOriginalConnectionCheck(context.Context, string, check.Scope) (string, error)
 	RetireOriginalConnectionCheck(context.Context, string, check.Scope) error
 }
@@ -187,6 +188,12 @@ func (o *ConnectionCheckOwner) RetainSend(ctx context.Context, id string, knownS
 		phase = check.SendAcknowledged
 	}
 	e, _, err := o.store.AdvanceConnectionCheck(ctx, id, phase, nil)
+	if err == nil && knownSend && e.Scope != nil {
+		// Only a durably recorded Send lets an argument-free status call count
+		// for this check. A failure here withholds that acknowledgement (the
+		// check can then end unknown); it never verifies anything.
+		_ = o.native.RecordOriginalStatusSend(ctx, id, *e.Scope)
+	}
 	return e, err
 }
 func (o *ConnectionCheckOwner) RefuseBeforeDispatch(ctx context.Context, id string) (check.Entry, error) {

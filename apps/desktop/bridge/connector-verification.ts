@@ -39,7 +39,8 @@ export class ConnectorVerificationBridge {
     });
     // A supplied ID can only be acknowledged as itself. A call without one
     // (ChatGPT's cached schema has no checkId) may acknowledge the check Go
-    // armed for this slot; Go alone decides that and returns its ID.
+    // armed for this slot once that check's Send was durably recorded; Go
+    // alone decides that and returns its ID.
     if (
       checkId !== undefined &&
       state.checkId !== undefined &&

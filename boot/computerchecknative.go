@@ -105,6 +105,7 @@ func (s *computerConnector) ArmOriginalStatusCheck(ctx context.Context, parentID
 		}
 		slot.expectedStatusCheckID = checkID
 		slot.statusCheckID = ""
+		slot.statusSendRecorded = false
 	} else if scope.Mode == check.Bootstrap {
 		if proof != nil || checkID != "" || scope.Challenge == "" {
 			return computerUnavailable()
@@ -115,6 +116,7 @@ func (s *computerConnector) ArmOriginalStatusCheck(ctx context.Context, parentID
 	if scope.Mode == check.Bootstrap {
 		slot.expectedStatusCheckID = ""
 		slot.statusCheckID = ""
+		slot.statusSendRecorded = false
 	}
 	// This is a transient original-runtime dispatch right. Restart cannot
 	// reconstruct it from the durable record or repeat the source Send.
@@ -122,9 +124,35 @@ func (s *computerConnector) ArmOriginalStatusCheck(ctx context.Context, parentID
 	return nil
 }
 
+// RecordOriginalStatusSend is invoked only after the Access Store durably
+// recorded that the browser clicked Send for this exact armed status check.
+// Before it, an argument-free status call cannot be this check's prompt: it
+// opens the only window in which such a call may acknowledge the check.
+// Bootstrap has no status acknowledgement and records nothing.
+func (s *computerConnector) RecordOriginalStatusSend(ctx context.Context, parentID string, scope check.Scope) error {
+	if scope.Mode != check.Status {
+		return nil
+	}
+	if !check.ValidScope(scope) || scope.CheckID == "" || parentID == "" {
+		return computerUnavailable()
+	}
+	if err := s.enter(ctx); err != nil {
+		return err
+	}
+	defer func() { <-s.effects }()
+	slot := s.current
+	if slot == nil || slot.closing || slot.startupUncertain ||
+		slot.checkParentID != parentID || slot.expectedStatusCheckID != scope.CheckID {
+		return computerUnavailable()
+	}
+	slot.statusSendRecorded = true
+	return nil
+}
+
 // ConfirmOriginalConnectionCheck supplies the sole positive Go-side receipt.
 // For status, a public MCP computer_connection_status call must have reached
-// this exact socket and current Go slot while this check was armed.
+// this exact socket and current Go slot: either with this check's exact ID,
+// or argument-free after this check's own Send was durably recorded.
 // Bootstrap retains the original sealed challenge/List or empty Catalogue.
 func (s *computerConnector) ConfirmOriginalConnectionCheck(ctx context.Context, parentID string, scope check.Scope) (string, error) {
 	if !check.ValidScope(scope) || scope.DocumentDigest == "" {
@@ -208,5 +236,6 @@ func (s *computerConnector) RetireOriginalConnectionCheck(ctx context.Context, p
 	slot.checkParentID = ""
 	slot.expectedStatusCheckID = ""
 	slot.statusCheckID = ""
+	slot.statusSendRecorded = false
 	return nil
 }
