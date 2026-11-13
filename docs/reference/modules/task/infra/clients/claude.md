@@ -109,7 +109,7 @@ capabilities, confinement and cohort ownership. Missing real qualification stays
 unavailable. A selected boolean/Prepare echo or Task authority alone cannot fill
 this gate; CPU test closures are not a production native grant.
 
-Host implements existing ClaudeHost, Provider and ObservedProvider. It uses the
+Host implements existing Provider and ObservedProvider. It uses the
 same selected immutable builder, prepares/starts once and publishes actual matching
 provider init lineage before metadata/useful output. Startup observes the SAME
 known-start handle for at most two seconds, shortened by caller deadline/cancel,
