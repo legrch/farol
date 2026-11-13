@@ -98,6 +98,18 @@ it. Require a prompt-to-tool-argument-to-socket-to-Go regression, including a
 provider-shaped scripted call with the wrong or missing ID. A matching socket
 receipt alone does not prove what a different dispatched prompt requested.
 
+**Amendment, 2026-11-13 (PR 141).** ChatGPT caches a connector's tool schema, so
+a connector added before the optional `checkId` existed rejects that argument
+and the instruction above always ended UNKNOWN in 0.5.24. The status-mode
+instruction now asks for an argument-free call. Go counts an argument-free call
+for the armed check only after that check's own Send has been durably recorded;
+an exact `checkId` still acknowledges, a wrong one never does, and the trusted
+host observation never arms or acknowledges. Accepted limitation: between this
+check's recorded Send and its first argument-free call, any argument-free call
+that reaches the same connector slot acknowledges it, including a delayed call
+from a superseded prompt. Closing that needs a nonce in the call, which a cached
+schema cannot carry.
+
 Only the sole Go attempt owner may arm the exact diagnostic expectation after
 its durable dispatch intent/readback and before permitting Send. Generate a fresh
 cryptographically random diagnostic ID, with its purpose distinct from a bootstrap
