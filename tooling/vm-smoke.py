@@ -1451,7 +1451,9 @@ class Runner:
             return []
         if not self.effect_fence_definitely_absent():
             return []
-        removed = []
+        # Published before the first removal so a later failure still reports
+        # what is already gone.
+        removed = self.staging_removed = []
         for label, path in self.owned_staging():
             try:
                 info = path.lstat()
@@ -1497,7 +1499,7 @@ class Runner:
         """
         if getattr(self, 'cleanup_note', None) is None:
             try:
-                self.staging_removed = self.clear_unstarted_staging()
+                self.clear_unstarted_staging()
             except Exception:
                 self.cleanup_note = 'FAILED:STAGING_CLEANUP_UNCONFIRMED'
             else:

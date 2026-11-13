@@ -148,6 +148,19 @@ class CleanupPreservationTests(unittest.TestCase):
             self.assertEqual(attempts, ['run-synthetic'], 'finally must not retry a recorded disposition')
             self.assertTrue((runner.stage / 'app.zip').exists())
 
+    def test_partial_removal_reports_what_is_already_gone(self):
+        with tempfile.TemporaryDirectory() as d:
+            runner = synthetic_runner(Path(d))
+            rmtree, _ = deny_rmtree({'report'})
+            def refuse(runner):
+                stage_synthetic_payload(runner)
+                raise vm.Refused('GUEST_PERMISSIONS_MISSING')
+            with patch.object(vm.shutil, 'rmtree', new=rmtree):
+                code, result = run_main(runner, refuse)
+            self.assertEqual(result['cleanup'], 'FAILED:STAGING_CLEANUP_UNCONFIRMED')
+            self.assertEqual(result['removedStaging'], ['artifacts/run-synthetic'])
+            self.assertEqual(result['retainedStaging'], ['exchange/report'])
+
     def test_failure_after_an_effect_retains_staging_and_fence(self):
         with tempfile.TemporaryDirectory() as d:
             runner = synthetic_runner(Path(d))
