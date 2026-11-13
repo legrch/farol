@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
+
 	"github.com/legrch/farol/modules/chat/app/port"
 	"golang.org/x/sys/unix"
 )
@@ -18,7 +20,7 @@ import (
 // existing descriptors/lock; all physical checks, reads and close reuse disk.
 func openClosedInspectionDisk(ctx context.Context, roots Roots) (*disk, error) {
 	uid := uint32(os.Geteuid())
-	if !historyID(roots.ProfileID) || roots.Parent.Identity.OwnerUID != uid || roots.Chat.Identity.OwnerUID != uid || roots.Parent.Identity == roots.Chat.Identity || roots.Parent.Identity.Device != roots.Chat.Identity.Device || !filepath.IsAbs(roots.Parent.Path) || filepath.Clean(roots.Parent.Path) != roots.Parent.Path || roots.Chat.Path != filepath.Join(roots.Parent.Path, "chat") {
+	if !opaque.Valid(roots.ProfileID) || roots.Parent.Identity.OwnerUID != uid || roots.Chat.Identity.OwnerUID != uid || roots.Parent.Identity == roots.Chat.Identity || roots.Parent.Identity.Device != roots.Chat.Identity.Device || !filepath.IsAbs(roots.Parent.Path) || filepath.Clean(roots.Parent.Path) != roots.Parent.Path || roots.Chat.Path != filepath.Join(roots.Parent.Path, "chat") {
 		return nil, fail(Invalid, false)
 	}
 	canonical, err := filepath.EvalSymlinks(roots.Parent.Path)

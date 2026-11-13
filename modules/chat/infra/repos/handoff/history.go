@@ -2,17 +2,12 @@ package handoff
 
 import (
 	"context"
-	"strings"
-	"unicode/utf8"
+
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 
 	"github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/domain/turn"
 )
-
-func historyID(id string) bool {
-	return len(id) > 0 && len(id) <= 120 && utf8.ValidString(id) &&
-		strings.IndexFunc(id, func(r rune) bool { return r <= 32 || r == 127 }) < 0
-}
 
 // Validate the request before storage IO. The exact anchor is still compared
 // with the fully qualified current head; well-formed values supply no authority.
@@ -21,7 +16,7 @@ func validHistoryAnchor(a port.HistoryAnchor) bool {
 	b := c.NextBinding
 	for _, id := range []string{c.AttemptID, c.Next.ProfileID, c.Next.BackendGeneration,
 		b.ProfileID, b.BackendGeneration, b.BuildID, b.HostLifetimeID, b.ChildLaunchID} {
-		if !historyID(id) {
+		if !opaque.Valid(id) {
 			return false
 		}
 	}
@@ -33,7 +28,7 @@ func validHistoryAnchor(a port.HistoryAnchor) bool {
 }
 
 func (r *Repository) historyInput(ctx context.Context, a port.HistoryAnchor, ownerID string) error {
-	if r == nil || r.owner == nil || ctx == nil || !validHistoryAnchor(a) || !historyID(ownerID) {
+	if r == nil || r.owner == nil || ctx == nil || !validHistoryAnchor(a) || !opaque.Valid(ownerID) {
 		return fail(Invalid, false)
 	}
 	b, roots := a.Consumption.NextBinding, r.owner.roots
@@ -121,7 +116,7 @@ func (r *Repository) HistoryFind(ctx context.Context, a port.HistoryAnchor, owne
 	if err := r.historyInput(ctx, a, ownerID); err != nil {
 		return nil, err
 	}
-	if !historyID(key.BackendGeneration) || !historyID(key.OperationID) {
+	if !opaque.Valid(key.BackendGeneration) || !opaque.Valid(key.OperationID) {
 		return nil, fail(Invalid, false)
 	}
 	s := r.owner
@@ -147,7 +142,7 @@ func (r *Repository) HistoryTail(ctx context.Context, a port.HistoryAnchor, owne
 	if err := r.historyInput(ctx, a, ownerID); err != nil {
 		return nil, err
 	}
-	if !historyID(conversationID) {
+	if !opaque.Valid(conversationID) {
 		return nil, fail(Invalid, false)
 	}
 	s := r.owner

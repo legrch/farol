@@ -2,7 +2,11 @@
 // These are application values, not independently authored Desktop wire schemas.
 package port
 
-import "unicode/utf8"
+import (
+	"unicode/utf8"
+
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
+)
 
 // RequestIdentity is explicitly mapped to domain identity by the Chat service.
 // No alias to a transport DTO, UI type or domain entity is used.
@@ -220,7 +224,7 @@ func ValidateObserveResponse(request ObserveRequest, response *ObserveResponse) 
 			return ObserveInvalid
 		}
 		if event.Kind == Accepted {
-			if request.Binding.ProviderState == ProviderHome && (!conversationID(event.ProviderConversationID) || !conversationID(event.UserTurnID)) {
+			if request.Binding.ProviderState == ProviderHome && (!opaque.Valid(event.ProviderConversationID) || !opaque.Valid(event.UserTurnID)) {
 				return ObserveCorrelation
 			}
 			if request.Binding.ProviderState == ProviderBound && event.ProviderConversationID != "" && event.ProviderConversationID != request.Binding.ConversationID {
@@ -258,4 +262,4 @@ func classifiedObserveCode(value string) bool {
 	return true
 }
 
-func optionalObservationID(value string) bool { return value == "" || conversationID(value) }
+func optionalObservationID(value string) bool { return value == "" || opaque.Valid(value) }

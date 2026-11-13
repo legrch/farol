@@ -4,7 +4,8 @@ package admission
 
 import (
 	"context"
-	"unicode/utf8"
+
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 
 	"github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/domain/turn"
@@ -143,13 +144,8 @@ func validBinding(binding port.TurnBinding) bool {
 	for _, value := range []string{binding.ProfileID, binding.BackendGeneration,
 		binding.OwnerID, binding.SessionID, binding.TaskID, binding.ParticipantID,
 		binding.TurnID, binding.OperationID} {
-		if len(value) == 0 || len(value) > 120 || !utf8.ValidString(value) {
+		if !opaque.Valid(value) {
 			return false
-		}
-		for _, ch := range value {
-			if ch <= 32 || ch == 127 {
-				return false
-			}
 		}
 	}
 	return binding.TurnGeneration > 0

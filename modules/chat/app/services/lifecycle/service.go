@@ -5,7 +5,8 @@ package lifecycle
 import (
 	"context"
 	"math"
-	"unicode/utf8"
+
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 
 	"github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/domain/output"
@@ -564,21 +565,9 @@ func identity(b port.TurnBinding) turn.Identity {
 
 func validBinding(b port.TurnBinding) bool {
 	for _, value := range []string{b.ProfileID, b.BackendGeneration, b.OwnerID, b.SessionID, b.TaskID, b.ParticipantID, b.TurnID, b.OperationID} {
-		if !validID(value) {
+		if !opaque.Valid(value) {
 			return false
 		}
 	}
 	return b.TurnGeneration > 0
-}
-
-func validID(value string) bool {
-	if len(value) == 0 || len(value) > 120 || !utf8.ValidString(value) {
-		return false
-	}
-	for _, ch := range value {
-		if ch <= 32 || ch == 127 {
-			return false
-		}
-	}
-	return true
 }

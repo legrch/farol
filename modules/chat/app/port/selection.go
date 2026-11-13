@@ -3,6 +3,8 @@ package port
 import (
 	"strings"
 	"unicode/utf8"
+
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 type FactSource string
@@ -32,7 +34,7 @@ func (f ControlFact) Valid() bool {
 	if f.Source == "" || f.Source == FactUnknown {
 		return f.Value == "" && f.Literal == ""
 	}
-	if f.Source != FactPublicControl || !conversationID(f.Value) || len(f.Literal) < 1 || len(f.Literal) > 256 || !utf8.ValidString(f.Literal) || strings.TrimSpace(f.Literal) == "" {
+	if f.Source != FactPublicControl || !opaque.Valid(f.Value) || len(f.Literal) < 1 || len(f.Literal) > 256 || !utf8.ValidString(f.Literal) || strings.TrimSpace(f.Literal) == "" {
 		return false
 	}
 	for _, c := range f.Literal {

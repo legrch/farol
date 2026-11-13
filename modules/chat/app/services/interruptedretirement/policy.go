@@ -4,8 +4,7 @@
 package interruptedretirement
 
 import (
-	"strings"
-	"unicode/utf8"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 
 	"github.com/legrch/farol/modules/chat/app/port"
 )
@@ -15,10 +14,6 @@ type Code string
 func (c Code) Error() string { return string(c) }
 
 const Refused Code = "CHAT_INTERRUPTED_RETIREMENT_REFUSED"
-
-func id(s string) bool {
-	return len(s) > 0 && len(s) <= 120 && utf8.ValidString(s) && strings.IndexFunc(s, func(r rune) bool { return r <= 32 || r == 127 }) < 0
-}
 
 func operation(s string) bool {
 	if len(s) != 36 {
@@ -38,14 +33,12 @@ func operation(s string) bool {
 	return true
 }
 
-func root(r port.JournalRoot) bool { return r.Device != 0 && r.Inode != 0 }
-
 func selection(s port.InterruptedRetirementSelection) bool {
 	b := s.Current
 	if s.OperationID == s.OriginalHandoffID {
 		return false
 	}
-	return operation(s.OperationID) && id(b.ProfileID) && id(b.BackendGeneration) && id(b.BuildID) && id(b.HostLifetimeID) && id(b.ChildLaunchID) && root(b.ParentRoot) && root(b.ChatRoot) && b.ParentRoot != b.ChatRoot && b.ParentRoot.Device == b.ChatRoot.Device && b.ParentRoot.OwnerUID == b.ChatRoot.OwnerUID && s.HeadDigest != ([32]byte{}) && s.LifecycleDigest != ([32]byte{}) && id(s.OriginalHandoffID) && s.ExpectedACKDigest == s.HeadDigest && id(s.BuildID) && id(s.HostLifetimeID) && id(s.ChildLaunchID) && s.HostLifetimeID != b.HostLifetimeID && s.ChildLaunchID != b.ChildLaunchID && s.Next.ProfileID == b.ProfileID && id(s.Next.BackendGeneration) && s.Next.BackendGeneration != b.BackendGeneration
+	return operation(s.OperationID) && opaque.Valid(b.ProfileID) && opaque.Valid(b.BackendGeneration) && opaque.Valid(b.BuildID) && opaque.Valid(b.HostLifetimeID) && opaque.Valid(b.ChildLaunchID) && b.ParentRoot.Valid() && b.ChatRoot.Valid() && b.ParentRoot != b.ChatRoot && b.ParentRoot.Device == b.ChatRoot.Device && b.ParentRoot.OwnerUID == b.ChatRoot.OwnerUID && s.HeadDigest != ([32]byte{}) && s.LifecycleDigest != ([32]byte{}) && opaque.Valid(s.OriginalHandoffID) && s.ExpectedACKDigest == s.HeadDigest && opaque.Valid(s.BuildID) && opaque.Valid(s.HostLifetimeID) && opaque.Valid(s.ChildLaunchID) && s.HostLifetimeID != b.HostLifetimeID && s.ChildLaunchID != b.ChildLaunchID && s.Next.ProfileID == b.ProfileID && opaque.Valid(s.Next.BackendGeneration) && s.Next.BackendGeneration != b.BackendGeneration
 }
 
 func incarnations(used []string, current, next string) bool {
@@ -54,7 +47,7 @@ func incarnations(used []string, current, next string) bool {
 	}
 	seen := make(map[string]bool, len(used))
 	for _, generation := range used {
-		if !id(generation) || seen[generation] || generation == next {
+		if !opaque.Valid(generation) || seen[generation] || generation == next {
 			return false
 		}
 		seen[generation] = true
@@ -80,7 +73,7 @@ func Select(s port.InterruptedRetirementSelection, o port.InterruptedRetirementO
 	if validator.Validate(copyRecord(*r)) != nil || r.Stage != port.HandoffAcknowledged || r.Origin != port.HandoffLiveOwner || r.Publication.Binding != b || r.Publication.HandoffID != s.OriginalHandoffID || r.ACK == nil || r.ACK.Publication != r.Publication || r.Terminal != nil || r.Consumption != nil {
 		return nil, Refused
 	}
-	if o.Scope != scope || o.Root != b.ChatRoot || o.LifecycleDigest != s.LifecycleDigest || o.WriteCount != 0 || o.TurnCount != 0 || !o.RetirementPresent || o.Retirement == nil || o.ResultCount != 0 || o.ResultsRoot != b.ChatRoot || !root(o.ResultsStorageRoot) || o.ResultsStorageRoot == b.ChatRoot || o.ResultsStorageRoot.Device != b.ChatRoot.Device || o.ResultsStorageRoot.OwnerUID != b.ChatRoot.OwnerUID {
+	if o.Scope != scope || o.Root != b.ChatRoot || o.LifecycleDigest != s.LifecycleDigest || o.WriteCount != 0 || o.TurnCount != 0 || !o.RetirementPresent || o.Retirement == nil || o.ResultCount != 0 || o.ResultsRoot != b.ChatRoot || !o.ResultsStorageRoot.Valid() || o.ResultsStorageRoot == b.ChatRoot || o.ResultsStorageRoot.Device != b.ChatRoot.Device || o.ResultsStorageRoot.OwnerUID != b.ChatRoot.OwnerUID {
 		return nil, Refused
 	}
 	w := o.Retirement

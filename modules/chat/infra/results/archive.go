@@ -3,6 +3,8 @@ package results
 import (
 	"context"
 
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
+
 	"github.com/legrch/farol/modules/chat/app/port"
 )
 
@@ -14,14 +16,14 @@ type Archive struct{ root Root }
 func NewArchive(root Root) *Archive { return &Archive{root: root} }
 
 func (a *Archive) ListStoredReplies(ctx context.Context, selection port.ArchiveListSelection) (*port.ArchivePage, error) {
-	if a == nil || nilContext(ctx) || ctx.Err() != nil || selection.ProfileID != a.root.ProfileID || !validID(selection.ProfileID) || !validID(selection.OwnerID) || selection.After != "" && !validResultKey(selection.After) {
+	if a == nil || nilContext(ctx) || ctx.Err() != nil || selection.ProfileID != a.root.ProfileID || !opaque.Valid(selection.ProfileID) || !opaque.Valid(selection.OwnerID) || selection.After != "" && !validResultKey(selection.After) {
 		return nil, Invalid
 	}
 	return a.listArchive(ctx, selection)
 }
 
 func (a *Archive) ReadStoredReply(ctx context.Context, selection port.ArchiveReadSelection) (*port.ArchivedReply, error) {
-	if a == nil || nilContext(ctx) || ctx.Err() != nil || selection.ProfileID != a.root.ProfileID || !validID(selection.ProfileID) || !validID(selection.OwnerID) || !validResultKey(selection.Key) || selection.Digest == ([32]byte{}) {
+	if a == nil || nilContext(ctx) || ctx.Err() != nil || selection.ProfileID != a.root.ProfileID || !opaque.Valid(selection.ProfileID) || !opaque.Valid(selection.OwnerID) || !validResultKey(selection.Key) || selection.Digest == ([32]byte{}) {
 		return nil, Invalid
 	}
 	return a.readArchive(ctx, selection)

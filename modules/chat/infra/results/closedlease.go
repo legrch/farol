@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
+
 	"github.com/legrch/farol/modules/chat/app/port"
 )
 
@@ -20,7 +22,7 @@ type ClosedLease struct {
 }
 
 func AcquireClosedInspection(ctx context.Context, root Root, scope port.JournalScope) (*ClosedLease, error) {
-	if nilContext(ctx) || ctx.Err() != nil || !validID(root.ProfileID) || !validID(scope.BackendGeneration) || scope.ProfileID != root.ProfileID || root.Identity.Device == 0 || root.Identity.Inode == 0 {
+	if nilContext(ctx) || ctx.Err() != nil || !opaque.Valid(root.ProfileID) || !opaque.Valid(scope.BackendGeneration) || scope.ProfileID != root.ProfileID || root.Identity.Device == 0 || root.Identity.Inode == 0 {
 		return nil, Invalid
 	}
 	return acquireClosedInspection(ctx, root, scope)

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"strings"
 	"unicode/utf8"
+
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 type Code string
@@ -43,12 +45,9 @@ type Binding struct {
 	AccountID, Provider, ModelID, Effort, CapabilityEpoch string
 }
 
-func ID(s string) bool {
-	return len(s) > 0 && len(s) <= 120 && utf8.ValidString(s) && strings.IndexFunc(s, func(r rune) bool { return r <= 32 || r == 127 }) == -1
-}
 func (b Binding) Valid() bool {
 	for _, s := range []string{b.ProfileID, b.BackendGeneration, b.OwnerID, b.AccountID, b.Provider, b.ModelID, b.Effort, b.CapabilityEpoch} {
-		if !ID(s) {
+		if !opaque.Valid(s) {
 			return false
 		}
 	}
@@ -61,7 +60,7 @@ type Turn struct {
 }
 
 func (t Turn) Valid() bool {
-	return ID(t.SessionID) && ID(t.TaskID) && ID(t.ParticipantID) && ID(t.TurnID) && ID(t.OperationID) && t.TaskEpoch > 0 && t.TurnGeneration > 0
+	return opaque.Valid(t.SessionID) && opaque.Valid(t.TaskID) && opaque.Valid(t.ParticipantID) && opaque.Valid(t.TurnID) && opaque.Valid(t.OperationID) && t.TaskEpoch > 0 && t.TurnGeneration > 0
 }
 
 type Kind string
@@ -116,7 +115,7 @@ func Digest(s string) bool {
 	return len(s) == 64 && strings.IndexFunc(s, func(r rune) bool { return !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') }) == -1
 }
 func (r SourceRef) Valid() bool {
-	return r.Binding.Valid() && r.Revision > 0 && r.FirstSequence > 0 && r.LastSequence >= r.FirstSequence && ID(r.FirstEventID) && ID(r.LastEventID) && Digest(r.SHA256)
+	return r.Binding.Valid() && r.Revision > 0 && r.FirstSequence > 0 && r.LastSequence >= r.FirstSequence && opaque.Valid(r.FirstEventID) && opaque.Valid(r.LastEventID) && Digest(r.SHA256)
 }
 
 type Metrics struct{ Bytes, CodePoints, EstimatedTokens int }

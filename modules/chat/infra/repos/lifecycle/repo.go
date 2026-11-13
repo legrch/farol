@@ -7,6 +7,8 @@ import (
 	"math"
 	"sync"
 
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
+
 	"github.com/legrch/farol/modules/chat/app/port"
 )
 
@@ -81,7 +83,7 @@ func New(ctx context.Context, root Root, limits Limits) (*Repository, error) {
 	if ctx == nil || ctx.Err() != nil {
 		return nil, failure(Cancelled, false)
 	}
-	if !validID(root.ProfileID) || !validLimits(limits) {
+	if !opaque.Valid(root.ProfileID) || !validLimits(limits) {
 		return nil, failure(Invalid, false)
 	}
 	d, err := openDisk(ctx, root)
@@ -105,7 +107,7 @@ func (r *Repository) OpenFresh(ctx context.Context, scope port.JournalScope) (*p
 	if err := s.checkContext(ctx); err != nil {
 		return nil, err
 	}
-	if s.opened || !validID(scope.ProfileID) || !validID(scope.BackendGeneration) || scope.ProfileID != s.profile {
+	if s.opened || !opaque.Valid(scope.ProfileID) || !opaque.Valid(scope.BackendGeneration) || scope.ProfileID != s.profile {
 		return nil, s.reject(Refused, false)
 	}
 	incarnations := []string{scope.BackendGeneration}

@@ -3,6 +3,8 @@ package lifecycle
 import (
 	"context"
 
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
+
 	"github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/domain/turn"
 )
@@ -64,14 +66,14 @@ func (c *Conversation) computerContext(view turn.Snapshot) (port.ComputerContext
 		return port.ComputerContext{}, Unavailable
 	}
 	binding := browserBinding(view.Binding)
-	if binding.ProviderState != port.ProviderBound || binding.ConversationID == "" || c.providerID != binding.ConversationID || s.providerOwners[binding.ConversationID] != h.fixed || !validID(h.output.UserID) || !validID(h.output.ReplyID) || h.sourceSequence == 0 {
+	if binding.ProviderState != port.ProviderBound || binding.ConversationID == "" || c.providerID != binding.ConversationID || s.providerOwners[binding.ConversationID] != h.fixed || !opaque.Valid(h.output.UserID) || !opaque.Valid(h.output.ReplyID) || h.sourceSequence == 0 {
 		return port.ComputerContext{}, Unsettled
 	}
 	return port.ComputerContext{Binding: h.fixed, Browser: binding, UserTurnID: h.output.UserID, ReplyID: h.output.ReplyID, SourceSequence: h.sourceSequence}, nil
 }
 
 func (c *Conversation) BeginComputer(ctx context.Context, correlation port.ComputerContext, callID string) (*ComputerCall, error) {
-	if c == nil || c.owner == nil || c.handle == nil || ctx == nil || !validID(callID) {
+	if c == nil || c.owner == nil || c.handle == nil || ctx == nil || !opaque.Valid(callID) {
 		return nil, Invalid
 	}
 	s, h := c.owner, c.handle

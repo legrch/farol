@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // RetiredArchive observes only fixed retired Chat children of the independently
@@ -39,5 +41,5 @@ func retiredName(name string) bool {
 }
 
 func (a *RetiredArchive) valid(ctx context.Context, profile, owner string) bool {
-	return a != nil && !nilContext(ctx) && ctx.Err() == nil && profile == a.profile.ProfileID && validID(profile) && validID(owner)
+	return a != nil && !nilContext(ctx) && ctx.Err() == nil && profile == a.profile.ProfileID && opaque.Valid(profile) && opaque.Valid(owner)
 }

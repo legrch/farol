@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"time"
 
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
+
 	"github.com/legrch/farol/modules/chat/app/port"
 )
 
@@ -35,7 +37,7 @@ func AcquirePreservationInspection(ctx context.Context, roots Roots, scope port.
 		return nil, fail(Cancelled, false)
 	}
 	until, bounded := ctx.Deadline()
-	if !bounded || until.IsZero() || !historyID(roots.ProfileID) || !historyID(scope.BackendGeneration) || scope.ProfileID != roots.ProfileID {
+	if !bounded || until.IsZero() || !opaque.Valid(roots.ProfileID) || !opaque.Valid(scope.BackendGeneration) || scope.ProfileID != roots.ProfileID {
 		return nil, fail(Invalid, false)
 	}
 	bound := preservationContext{Context: ctx, until: until}

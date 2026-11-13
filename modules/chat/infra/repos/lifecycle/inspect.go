@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
+
 	"github.com/legrch/farol/modules/chat/app/port"
 )
 
@@ -53,7 +55,7 @@ func Inspect(ctx context.Context, root Root, limits Limits) (*Inspection, error)
 	if err := ctx.Err(); err != nil {
 		return nil, inspectionFailure(&Failure{Code: Cancelled}, InspectionCancelled, err)
 	}
-	if !validID(root.ProfileID) || !validLimits(limits) {
+	if !opaque.Valid(root.ProfileID) || !validLimits(limits) {
 		return nil, inspectionFailure(&Failure{Code: Invalid}, InspectionInputInvalid)
 	}
 	return inspectClosedSnapshot(ctx, root, limits)

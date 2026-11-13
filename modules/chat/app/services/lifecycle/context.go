@@ -5,6 +5,8 @@ import (
 	"math"
 	"unicode/utf8"
 
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
+
 	"github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/domain/turn"
 )
@@ -142,7 +144,7 @@ func (c *Conversation) contextSnapshot(ctx context.Context) (ContextSnapshot, er
 		}
 		item := ContextTurn{Binding: h.fixed, Prompt: prompt}
 		if view.HasResult {
-			if view.Result.Outcome != turn.Completed || !h.output.Complete || !validID(h.output.UserID) || !validID(h.output.ReplyID) || h.retained == nil || h.retained.Result != view.Result || h.retained.Binding != h.fixed || !h.retained.Conversation.Complete {
+			if view.Result.Outcome != turn.Completed || !h.output.Complete || !opaque.Valid(h.output.UserID) || !opaque.Valid(h.output.ReplyID) || h.retained == nil || h.retained.Result != view.Result || h.retained.Binding != h.fixed || !h.retained.Conversation.Complete {
 				return ContextSnapshot{}, SourceIncomplete
 			}
 			item.Text, item.ProviderUserTurnID, item.ProviderReplyID, item.ResultID, item.Complete = h.output.Text(), h.output.UserID, h.output.ReplyID, view.Result.ID, true

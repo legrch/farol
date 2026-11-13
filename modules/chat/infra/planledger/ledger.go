@@ -8,7 +8,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"sync"
-	"unicode/utf8"
+
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 
 	"github.com/legrch/farol/modules/chat/app/services/inference"
 	"github.com/legrch/farol/modules/chat/infra/repos/lifecycle"
@@ -51,20 +52,9 @@ func New(repository *lifecycle.Repository, capture Capture) (*Ledger, error) {
 func hash(raw []byte) string                   { v := sha256.Sum256(raw); return hex.EncodeToString(v[:]) }
 func bindingDigest(b inference.Binding) string { raw, _ := json.Marshal(b); return hash(raw) }
 
-func boundedID(value string) bool {
-	if len(value) == 0 || len(value) > 120 || !utf8.ValidString(value) {
-		return false
-	}
-	for _, r := range value {
-		if r <= 32 || r == 127 {
-			return false
-		}
-	}
-	return true
-}
 func boundedBinding(b inference.Binding) bool {
 	for _, value := range []string{b.OperationID, b.ProfileID, b.BackendGeneration, b.OwnerID, b.SessionID, b.Context.CheckpointID} {
-		if !boundedID(value) {
+		if !opaque.Valid(value) {
 			return false
 		}
 	}
@@ -120,7 +110,7 @@ func (l *Ledger) Settle(ctx context.Context, b inference.Binding, o inference.Ou
 	// metadata only. Settlement also requires this adapter's original known-fresh
 	// receipt; historical bytes or a lost ACK cannot fabricate remote facts.
 	// Local suppression/publication never rewrites remote facts.
-	if o.Text != "" || o.RemoteState != "" || (o.ResponseID != "" && !boundedID(o.ResponseID)) {
+	if o.Text != "" || o.RemoteState != "" || (o.ResponseID != "" && !opaque.Valid(o.ResponseID)) {
 		return inference.Invalid
 	}
 	remote := lifecycle.PlanOutcome{State: string(o.State), Code: string(o.Code), HTTPStatus: o.HTTPStatus}

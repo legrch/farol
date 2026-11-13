@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
+
 	"github.com/legrch/farol/modules/chat/app/port"
 )
 
@@ -24,7 +26,7 @@ func AcquireClosedInspection(ctx context.Context, roots Roots, scope port.Journa
 	if ctx == nil || ctx.Err() != nil {
 		return nil, fail(Cancelled, false)
 	}
-	if !historyID(roots.ProfileID) || !historyID(scope.BackendGeneration) || scope.ProfileID != roots.ProfileID {
+	if !opaque.Valid(roots.ProfileID) || !opaque.Valid(scope.BackendGeneration) || scope.ProfileID != roots.ProfileID {
 		return nil, fail(Invalid, false)
 	}
 	return acquireClosedInspection(ctx, roots, scope)
@@ -37,7 +39,7 @@ func AcquireInterruptedRetirementInspection(ctx context.Context, roots Roots, sc
 	if ctx == nil || ctx.Err() != nil {
 		return nil, fail(Cancelled, false)
 	}
-	if !historyID(roots.ProfileID) || !historyID(scope.BackendGeneration) || scope.ProfileID != roots.ProfileID {
+	if !opaque.Valid(roots.ProfileID) || !opaque.Valid(scope.BackendGeneration) || scope.ProfileID != roots.ProfileID {
 		return nil, fail(Invalid, false)
 	}
 	return acquireInterruptedRetirementInspection(ctx, roots, scope)

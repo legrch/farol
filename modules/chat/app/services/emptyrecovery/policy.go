@@ -3,8 +3,7 @@
 package emptyrecovery
 
 import (
-	"strings"
-	"unicode/utf8"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 
 	"github.com/legrch/farol/modules/chat/app/port"
 )
@@ -15,9 +14,6 @@ func (c Code) Error() string { return string(c) }
 
 const Refused Code = "CHAT_EMPTY_RECOVERY_REFUSED"
 
-func id(s string) bool {
-	return len(s) > 0 && len(s) <= 120 && utf8.ValidString(s) && strings.IndexFunc(s, func(r rune) bool { return r <= 32 || r == 127 }) < 0
-}
 func operation(s string) bool {
 	if len(s) != 36 {
 		return false
@@ -35,7 +31,6 @@ func operation(s string) bool {
 	}
 	return true
 }
-func root(r port.JournalRoot) bool { return r.Device != 0 && r.Inode != 0 }
 
 // Select compares a previously selected exact failed incarnation with current
 // canonical observations. Its success is only one prerequisite: native locks,
@@ -44,11 +39,11 @@ func root(r port.JournalRoot) bool { return r.Device != 0 && r.Inode != 0 }
 // fields do not establish the closure of the consumed successor.
 func Select(s port.EmptyRecoverySelection, o port.EmptyRecoveryObservation, validator port.EmptyRecoveryRecordValidator) (*port.EmptyRecoveryPlan, error) {
 	b := s.Current
-	if !operation(s.OperationID) || !id(b.ProfileID) || !id(b.BackendGeneration) || !id(b.BuildID) || !id(b.HostLifetimeID) || !id(b.ChildLaunchID) || !root(b.ParentRoot) || !root(b.ChatRoot) || b.ParentRoot == b.ChatRoot || b.ParentRoot.Device != b.ChatRoot.Device || b.ParentRoot.OwnerUID != b.ChatRoot.OwnerUID || s.HeadDigest == ([32]byte{}) || s.LifecycleDigest == ([32]byte{}) || !id(s.BuildID) || !id(s.HostLifetimeID) || !id(s.ChildLaunchID) || s.HostLifetimeID == b.HostLifetimeID || s.ChildLaunchID == b.ChildLaunchID || s.Next.ProfileID != b.ProfileID || !id(s.Next.BackendGeneration) || s.Next.BackendGeneration == b.BackendGeneration {
+	if !operation(s.OperationID) || !opaque.Valid(b.ProfileID) || !opaque.Valid(b.BackendGeneration) || !opaque.Valid(b.BuildID) || !opaque.Valid(b.HostLifetimeID) || !opaque.Valid(b.ChildLaunchID) || !b.ParentRoot.Valid() || !b.ChatRoot.Valid() || b.ParentRoot == b.ChatRoot || b.ParentRoot.Device != b.ChatRoot.Device || b.ParentRoot.OwnerUID != b.ChatRoot.OwnerUID || s.HeadDigest == ([32]byte{}) || s.LifecycleDigest == ([32]byte{}) || !opaque.Valid(s.BuildID) || !opaque.Valid(s.HostLifetimeID) || !opaque.Valid(s.ChildLaunchID) || s.HostLifetimeID == b.HostLifetimeID || s.ChildLaunchID == b.ChildLaunchID || s.Next.ProfileID != b.ProfileID || !opaque.Valid(s.Next.BackendGeneration) || s.Next.BackendGeneration == b.BackendGeneration {
 		return nil, Refused
 	}
 	h := o.Head
-	if h.Record == nil || validator == nil || h.Digest != s.HeadDigest || !h.EmptyRetirementChain || validator.Validate(copyRecord(*h.Record)) != nil || h.Record.Stage != port.HandoffConsumed || h.Record.Consumption == nil || h.Record.Consumption.NextBinding != b || h.Record.Consumption.Next != o.Scope || o.Scope != (port.JournalScope{ProfileID: b.ProfileID, BackendGeneration: b.BackendGeneration}) || o.Root != b.ChatRoot || o.LifecycleDigest != s.LifecycleDigest || o.WriteCount != 0 || o.TurnCount != 0 || o.RetirementPresent || o.ResultCount != 0 || o.ResultsRoot != b.ChatRoot || !root(o.ResultsStorageRoot) || o.ResultsStorageRoot == b.ChatRoot || o.ResultsStorageRoot.Device != b.ChatRoot.Device || o.ResultsStorageRoot.OwnerUID != b.ChatRoot.OwnerUID {
+	if h.Record == nil || validator == nil || h.Digest != s.HeadDigest || !h.EmptyRetirementChain || validator.Validate(copyRecord(*h.Record)) != nil || h.Record.Stage != port.HandoffConsumed || h.Record.Consumption == nil || h.Record.Consumption.NextBinding != b || h.Record.Consumption.Next != o.Scope || o.Scope != (port.JournalScope{ProfileID: b.ProfileID, BackendGeneration: b.BackendGeneration}) || o.Root != b.ChatRoot || o.LifecycleDigest != s.LifecycleDigest || o.WriteCount != 0 || o.TurnCount != 0 || o.RetirementPresent || o.ResultCount != 0 || o.ResultsRoot != b.ChatRoot || !o.ResultsStorageRoot.Valid() || o.ResultsStorageRoot == b.ChatRoot || o.ResultsStorageRoot.Device != b.ChatRoot.Device || o.ResultsStorageRoot.OwnerUID != b.ChatRoot.OwnerUID {
 		return nil, Refused
 	}
 	// Preserve incarnation tombstones and refuse reuse even from an earlier
@@ -58,7 +53,7 @@ func Select(s port.EmptyRecoverySelection, o port.EmptyRecoveryObservation, vali
 	}
 	seen := make(map[string]bool, len(o.Incarnations))
 	for _, generation := range o.Incarnations {
-		if !id(generation) || seen[generation] || generation == s.Next.BackendGeneration {
+		if !opaque.Valid(generation) || seen[generation] || generation == s.Next.BackendGeneration {
 			return nil, Refused
 		}
 		seen[generation] = true

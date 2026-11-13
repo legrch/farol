@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"unicode/utf8"
+
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 type Options struct {
@@ -49,7 +51,7 @@ func (s *Service) usable(ctx context.Context, b Binding, last *uint64) error {
 }
 
 func validBinding(b Binding) bool {
-	return identifier(b.OperationID) && identifier(b.ProfileID) && identifier(b.BackendGeneration) && identifier(b.OwnerID) && identifier(b.SessionID) && ValidSelection(b.Selection) && identifier(b.Context.CheckpointID) && digestValue(b.Context.InputHash) && b.Context.TokenLimit > 0 && b.Context.EstimatedTokens <= b.Context.TokenLimit && b.DeadlineMillis > 0
+	return opaque.Valid(b.OperationID) && opaque.Valid(b.ProfileID) && opaque.Valid(b.BackendGeneration) && opaque.Valid(b.OwnerID) && opaque.Valid(b.SessionID) && ValidSelection(b.Selection) && opaque.Valid(b.Context.CheckpointID) && digestValue(b.Context.InputHash) && b.Context.TokenLimit > 0 && b.Context.EstimatedTokens <= b.Context.TokenLimit && b.DeadlineMillis > 0
 }
 
 func HasInferenceScopes(c Credential) bool {
@@ -59,13 +61,13 @@ func HasInferenceScopes(c Credential) bool {
 	granted := make(map[string]bool)
 	requested := make(map[string]bool)
 	for _, scope := range c.GrantedScopes {
-		if !identifier(scope) {
+		if !opaque.Valid(scope) {
 			return false
 		}
 		granted[scope] = true
 	}
 	for _, scope := range c.RequestedScopes {
-		if !identifier(scope) {
+		if !opaque.Valid(scope) {
 			return false
 		}
 		requested[scope] = true
@@ -222,9 +224,9 @@ func validOutcome(o Outcome) bool {
 	}
 	switch o.State {
 	case NotSent, Unknown, Failed:
-		return len(o.Text) == 0 && safeOutcomeCode(o.Code) && (o.ResponseID == "" || identifier(o.ResponseID))
+		return len(o.Text) == 0 && safeOutcomeCode(o.Code) && (o.ResponseID == "" || opaque.Valid(o.ResponseID))
 	case Completed:
-		return identifier(o.ResponseID) && o.Code == "" && len(o.Text) <= MaxOutputBytes && utf8.ValidString(o.Text)
+		return opaque.Valid(o.ResponseID) && o.Code == "" && len(o.Text) <= MaxOutputBytes && utf8.ValidString(o.Text)
 	default:
 		return false
 	}

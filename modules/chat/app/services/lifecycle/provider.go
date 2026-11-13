@@ -2,14 +2,16 @@ package lifecycle
 
 import (
 	"context"
+
 	"github.com/legrch/farol/modules/chat/app/port"
 	"github.com/legrch/farol/modules/chat/domain/turn"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 // Only Observe's correlated Accepted branch can adopt a provider identity.
 // The exact old physical binding is retained in Before; After binds CID once.
 func (s *Service) acceptProvider(ctx context.Context, h *Handle, b turn.Binding, cid string) (*turn.Snapshot, error) {
-	if h.target.Mode != port.NewSaved || !validID(cid) {
+	if h.target.Mode != port.NewSaved || !opaque.Valid(cid) {
 		return nil, Mismatch
 	}
 	m, err := s.stage(ctx, h, false, func(q *turn.Queue, before turn.Snapshot) (port.JournalEntry, error) {

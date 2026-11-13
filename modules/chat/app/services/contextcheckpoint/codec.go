@@ -3,8 +3,10 @@ package contextcheckpoint
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/legrch/farol/modules/chat/domain/contextbudget"
 	"unicode/utf8"
+
+	"github.com/legrch/farol/modules/chat/domain/contextbudget"
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 const MaxCheckpointBytes = 8 * 1024 * 1024
@@ -20,7 +22,7 @@ func boundedWindow(w contextbudget.Window) bool {
 		return len(t.SessionID) + len(t.TaskID) + len(t.ParticipantID) + len(t.TurnID) + len(t.OperationID)
 	}
 	for _, e := range w.Events {
-		if !contextbudget.ID(e.ID) || len(e.Text) > contextbudget.MaxEventBytes || len(e.Kind) > 120 || len(e.Outcome) > 120 || len(e.CallID) > 120 || len(e.ToolOperationID) > 120 || len(e.Name) > 120 || (e.Kind != contextbudget.Instruction && !e.Turn.Valid()) {
+		if !opaque.Valid(e.ID) || len(e.Text) > contextbudget.MaxEventBytes || len(e.Kind) > 120 || len(e.Outcome) > 120 || len(e.CallID) > 120 || len(e.ToolOperationID) > 120 || len(e.Name) > 120 || (e.Kind != contextbudget.Instruction && !e.Turn.Valid()) {
 			return false
 		}
 		if e.Kind == contextbudget.Instruction && e.Turn != (contextbudget.Turn{}) {
@@ -34,7 +36,7 @@ func boundedWindow(w contextbudget.Window) bool {
 		}
 	}
 	for _, u := range w.Unresolved {
-		if !u.Turn.Valid() || !contextbudget.ID(u.CallID) || !contextbudget.ID(u.ToolOperationID) || !contextbudget.ID(u.CallEventID) || !contextbudget.ID(u.ResultEventID) || u.Outcome != contextbudget.Unknown {
+		if !u.Turn.Valid() || !opaque.Valid(u.CallID) || !opaque.Valid(u.ToolOperationID) || !opaque.Valid(u.CallEventID) || !opaque.Valid(u.ResultEventID) || u.Outcome != contextbudget.Unknown {
 			return false
 		}
 		total += len(u.CallID) + len(u.ToolOperationID) + len(u.CallEventID) + len(u.ResultEventID) + len(u.Outcome) + turnBytes(u.Turn)
@@ -44,7 +46,7 @@ func boundedWindow(w contextbudget.Window) bool {
 	}
 	if w.Summary != nil {
 		v := w.Summary
-		if v.Source != w.Source || len(v.Text) > contextbudget.MaxEventBytes || !contextbudget.ID(v.PromptVersion) || v.Trust != contextbudget.Untrusted {
+		if v.Source != w.Source || len(v.Text) > contextbudget.MaxEventBytes || !opaque.Valid(v.PromptVersion) || v.Trust != contextbudget.Untrusted {
 			return false
 		}
 		total += len(v.Text)
@@ -65,7 +67,7 @@ func DecodeCheckpoint(raw []byte) (contextbudget.Checkpoint, error) {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	var checkpoint contextbudget.Checkpoint
-	if decoder.Decode(&checkpoint) != nil || checkpoint.Version != 1 || !contextbudget.ID(checkpoint.ID) || !contextbudget.ID(checkpoint.OperationID) || !boundedWindow(checkpoint.Window) {
+	if decoder.Decode(&checkpoint) != nil || checkpoint.Version != 1 || !opaque.Valid(checkpoint.ID) || !opaque.Valid(checkpoint.OperationID) || !boundedWindow(checkpoint.Window) {
 		return contextbudget.Checkpoint{}, Invalid
 	}
 	return checkpoint, nil

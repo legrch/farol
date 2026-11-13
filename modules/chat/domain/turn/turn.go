@@ -5,7 +5,8 @@ package turn
 import (
 	"math"
 	"strings"
-	"unicode/utf8"
+
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
 )
 
 type Code string
@@ -59,8 +60,8 @@ type Identity struct {
 }
 
 func (i Identity) valid() bool {
-	return id(i.ProfileID) && id(i.OwnerID) && id(i.SessionID) && id(i.TaskID) &&
-		id(i.TurnID) && id(i.OperationID) && i.Generation > 0
+	return opaque.Valid(i.ProfileID) && opaque.Valid(i.OwnerID) && opaque.Valid(i.SessionID) && opaque.Valid(i.TaskID) &&
+		opaque.Valid(i.TurnID) && opaque.Valid(i.OperationID) && i.Generation > 0
 }
 
 // Reservation is a scheduler lease, not a durable task or native view identity.
@@ -90,20 +91,20 @@ type Document struct {
 
 // EffectiveProviderState preserves only legacy already-bound values. Home is never inferred.
 func (d Document) EffectiveProviderState() ProviderState {
-	if d.ProviderState == "" && id(d.ConversationID) {
+	if d.ProviderState == "" && opaque.Valid(d.ConversationID) {
 		return ProviderBound
 	}
 	return d.ProviderState
 }
 func (d Document) valid() bool {
-	if !id(d.ViewID) || d.ViewGeneration == 0 || d.DocumentGeneration == 0 {
+	if !opaque.Valid(d.ViewID) || d.ViewGeneration == 0 || d.DocumentGeneration == 0 {
 		return false
 	}
 	switch d.EffectiveProviderState() {
 	case ProviderHome:
 		return d.ConversationID == ""
 	case ProviderBound:
-		return id(d.ConversationID)
+		return opaque.Valid(d.ConversationID)
 	}
 	return false
 }
@@ -140,7 +141,7 @@ type Result struct {
 }
 
 func (r Result) valid() bool {
-	if !id(r.ID) || !code(r.Code) {
+	if !opaque.Valid(r.ID) || !code(r.Code) {
 		return false
 	}
 	switch r.Outcome {
@@ -222,7 +223,7 @@ func (t Turn) reserve(r Reservation) (Turn, error) {
 	if t.phase != Pending || t.reserved {
 		return t, Transition
 	}
-	if r.Identity != t.identity || r.Ordinal < 1 || r.Ordinal > Slots || r.Generation == 0 || !id(r.BackendGeneration) {
+	if r.Identity != t.identity || r.Ordinal < 1 || r.Ordinal > Slots || r.Generation == 0 || !opaque.Valid(r.BackendGeneration) {
 		return t, Correlation
 	}
 	t.reserved, t.reservation = true, r
@@ -259,7 +260,7 @@ func (t Turn) Dispatch(b Binding) (Turn, error) {
 
 // AcceptConversation adopts the first real provider ID only on exact accepted Home evidence.
 func (t Turn) AcceptConversation(b Binding, cid string) (Turn, error) {
-	if !t.matches(b) || t.binding.Document.EffectiveProviderState() != ProviderHome || !id(cid) {
+	if !t.matches(b) || t.binding.Document.EffectiveProviderState() != ProviderHome || !opaque.Valid(cid) {
 		return t, Correlation
 	}
 	if t.phase != Running || !t.sendIntent || t.accepted {
@@ -329,7 +330,7 @@ func (t Turn) RequestComputer(b Binding, callID string) (Turn, error) {
 	if t.phase != Running || !t.accepted || t.callID != "" {
 		return t, Transition
 	}
-	if !id(callID) {
+	if !opaque.Valid(callID) {
 		return t, Invalid
 	}
 	for _, used := range t.usedCallIDs[:t.callCount] {
@@ -409,7 +410,7 @@ func (t Turn) Cancel(resultID string) (Turn, error) {
 	if t.hasResult {
 		return t, Transition
 	}
-	if !id(resultID) {
+	if !opaque.Valid(resultID) {
 		return t, Invalid
 	}
 	if t.sendIntent {
@@ -479,18 +480,6 @@ func (t Turn) SettlePrepared(evidence DisposalEvidence) (Turn, error) {
 
 func (t Turn) Reusable() bool {
 	return t.hasResult && t.result.Outcome != UnknownOutcome && t.acknowledged && t.settled
-}
-
-func id(value string) bool {
-	if len(value) < 1 || len(value) > 120 || !utf8.ValidString(value) {
-		return false
-	}
-	for _, ch := range value {
-		if ch <= 32 || ch == 127 {
-			return false
-		}
-	}
-	return true
 }
 
 func code(value string) bool {

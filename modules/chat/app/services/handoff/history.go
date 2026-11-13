@@ -3,6 +3,8 @@ package handoff
 import (
 	"context"
 
+	opaque "github.com/legrch/farol/pkg/kernel/domain/id"
+
 	"github.com/legrch/farol/modules/chat/app/port"
 )
 
@@ -56,7 +58,7 @@ func NewHistoryReader(origin *HistoryOrigin, deps HistoryDependencies) (*History
 // never fall back to this constructor. Current-lifetime answers remain live
 // conversation results; this catalogue contains consumed ancestors only.
 func NewEmptyHistoryReader(scope port.JournalScope, authority port.HistoryReadAuthority) (*HistoryReader, error) {
-	if !validID(scope.ProfileID) || !validID(scope.BackendGeneration) || authority == nil {
+	if !opaque.Valid(scope.ProfileID) || !opaque.Valid(scope.BackendGeneration) || authority == nil {
 		return nil, Invalid
 	}
 	return &HistoryReader{scope: scope, deps: HistoryDependencies{Authority: authority}}, nil
@@ -70,7 +72,7 @@ func historyScope(ctx context.Context, lease port.HistoryReadLease) (port.Histor
 	calls := 0
 	err := lease.WithCurrent(ctx, func(current port.HistoryReadScope) error {
 		calls++
-		if calls != 1 || !validID(current.ProfileID) || !validID(current.BackendGeneration) || !validID(current.OwnerID) {
+		if calls != 1 || !opaque.Valid(current.ProfileID) || !opaque.Valid(current.BackendGeneration) || !opaque.Valid(current.OwnerID) {
 			return Refused
 		}
 		scope = current
@@ -136,7 +138,7 @@ func (r *HistoryReader) currentLocked(ctx context.Context, lease port.HistoryRea
 func (r *HistoryReader) match(v port.HistoryMatch, scope port.HistoryReadScope) bool {
 	b := v.Origin.Binding
 	current := r.origin.anchor.Consumption.NextBinding
-	return v.Anchor == r.origin.anchor && validBinding(b) && validID(v.Origin.HandoffID) && v.Origin.ReceiptDigest != ([32]byte{}) &&
+	return v.Anchor == r.origin.anchor && validBinding(b) && opaque.Valid(v.Origin.HandoffID) && v.Origin.ReceiptDigest != ([32]byte{}) &&
 		b.ProfileID == scope.ProfileID && b.BackendGeneration != scope.BackendGeneration && b.BuildID == current.BuildID && b.ParentRoot == current.ParentRoot && b.ChatRoot == current.ChatRoot &&
 		v.Turn.Binding.OwnerID == scope.OwnerID && completedRetained(v.Turn, port.JournalScope{ProfileID: b.ProfileID, BackendGeneration: b.BackendGeneration}, b.ChatRoot, v.PreviousRevision)
 }
@@ -192,7 +194,7 @@ func (r *HistoryReader) List(ctx context.Context, offset uint32) (*HistoryListin
 }
 
 func (r *HistoryReader) Read(ctx context.Context, key port.HistoryKey) (*port.ConversationResult, error) {
-	if !validID(key.BackendGeneration) || !validID(key.OperationID) {
+	if !opaque.Valid(key.BackendGeneration) || !opaque.Valid(key.OperationID) {
 		return nil, Invalid
 	}
 	lease, scope, err := r.admit(ctx)
@@ -240,7 +242,7 @@ func (r *HistoryReader) Read(ctx context.Context, key port.HistoryKey) (*port.Co
 // durable payload/anchors still require Read, and fresh Send admission must
 // independently verify current controls and the live provider tail.
 func (r *HistoryReader) Latest(ctx context.Context, conversationID string) (*HistorySummary, error) {
-	if !validID(conversationID) {
+	if !opaque.Valid(conversationID) {
 		return nil, Invalid
 	}
 	lease, scope, err := r.admit(ctx)

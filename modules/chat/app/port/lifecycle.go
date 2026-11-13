@@ -4,6 +4,8 @@ package port
 import (
 	"context"
 
+	"github.com/legrch/farol/pkg/kernel/domain/root"
+
 	"github.com/legrch/farol/modules/chat/domain/turn"
 )
 
@@ -23,10 +25,7 @@ type JournalScope struct {
 
 // JournalRoot identifies the qualified physical profile root; it carries no path.
 // Trusted boot pins this association before the live owner is constructed.
-type JournalRoot struct {
-	Device, Inode uint64
-	OwnerUID      uint32
-}
+type JournalRoot = root.Identity
 
 type JournalHead struct {
 	Root     JournalRoot
