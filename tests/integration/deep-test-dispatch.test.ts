@@ -98,6 +98,7 @@ async function fixture(stale = false) {
     readFlatDeepTestRecords,
     path,
     app: { getPath: () => root },
+    statePaths: () => ({ state: path.join(root, "farol-state") }),
     configuration: owner,
     desktopGoCore: core,
     secureMcpConnectorRuntime: connector,
