@@ -32,10 +32,8 @@ const (
 )
 
 var (
-	ErrRefused  = errors.New("COMPUTER_CONNECTION_CHECK_REFUSED")
-	ErrPending  = errors.New("COMPUTER_CONNECTION_CHECK_PENDING")
-	ErrCapacity = errors.New("COMPUTER_CONNECTION_CHECK_CAPACITY")
-	ErrUnknown  = errors.New("COMPUTER_CONNECTION_CHECK_OUTCOME_UNKNOWN")
+	ErrRefused = errors.New("COMPUTER_CONNECTION_CHECK_REFUSED")
+	ErrUnknown = errors.New("COMPUTER_CONNECTION_CHECK_OUTCOME_UNKNOWN")
 )
 var uuid = regexp.MustCompile("^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 var digest = regexp.MustCompile("^[0-9a-f]{64}$")
@@ -137,7 +135,9 @@ func ValidScope(s Scope) bool {
 }
 
 // Prompt is a closed, Go-produced document bound to the ORIGINAL operation.
-// It selects exactly one app/tool and carries the exact Go-minted status nonce.
+// It selects exactly one app/tool. A status prompt carries no argument: a
+// cached ChatGPT tool schema may lack checkId, so the Go-minted status nonce
+// stays in Go and is never sent to the model.
 func Prompt(scope Scope) string {
 	switch scope.Mode {
 	case Status:

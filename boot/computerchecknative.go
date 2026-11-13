@@ -56,10 +56,11 @@ func (s *computerConnector) CurrentConnectionCheck(ctx context.Context) (connect
 	return out, nil
 }
 
-// ArmOriginalStatusCheck is invoked only once after the *existing protected*
-// Access Store confirmed original dispatch intent. The socket cannot arm this
-// ID by making a status read. Bootstrap arms the parent without a status nonce
-// and preserves the old one-shot challenge verification owner.
+// ArmOriginalStatusCheck is invoked once per owner check, after the *existing
+// protected* Access Store confirmed that check's original dispatch intent; a
+// newer check re-arms the slot. The socket cannot arm this ID by making a
+// status read. Bootstrap arms the parent without a status nonce and preserves
+// the old one-shot challenge verification owner.
 func (s *computerConnector) ArmOriginalStatusCheck(ctx context.Context, parentID, checkID string, scope check.Scope) error {
 	if !check.ValidScope(scope) || scope.DocumentDigest == "" || parentID == "" {
 		return computerUnavailable()
