@@ -1494,6 +1494,32 @@ func run(modes []string, ch chan int) {
         "GO_BOOT_LOGIC",
       ).map(({ detail }) => detail),
     ).toEqual(["lines: 401; budget 400"]);
+    const compound = `package boot
+type taskModule struct{}
+func (m *taskModule) open(ok bool) error {
+\tif v, err := load(); err != nil {
+\t\treturn err
+\t}
+\tif ok || err != nil {
+\t\treturn nil
+\t}
+\tif err != nil && ok {
+\t\treturn nil
+\t}
+\tif err := load(a || b); err != nil {
+\t\treturn err
+\t}
+\tif v.ok; err != nil {
+\t\treturn err
+\t}
+\treturn nil
+}
+`;
+    expect(
+      reportsOf({ "boot/task.go": compound }, "GO_BOOT_LOGIC").map(
+        ({ detail }) => detail,
+      ),
+    ).toEqual(["conditions other than err != nil: 4"]);
   });
 
   it("GO_OPERATION_SHAPE: Command or Query in, Result out", () => {

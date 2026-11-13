@@ -338,8 +338,9 @@ change.
   errs towards requiring a test. A test file's existence is checked, not what
   it covers.
 - Boot logic: closures, methods implementing ports and logic hidden in calls
-  are review concerns; the check counts statements, conditions, types and
-  lines.
+  are review concerns; the check counts statements, conditions (the whole `if`
+  header must be `err != nil`, optionally after one assignment without `&&` or
+  `||`), types and lines.
 - Operation shape: only exported methods on `Service` in `app/services` are
   checked. Whether an operation is a `Command` or a `Query` by effect, a
   non-nil result on success and DTO placement stay review concerns. The

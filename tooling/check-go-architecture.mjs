@@ -833,6 +833,29 @@ function typeSpecs(tokens) {
   return names;
 }
 
+// The whole if header must be `err != nil`, optionally after one init
+// statement that only assigns (`v, err := f(x)`) and holds no && or ||.
+function errorCheck(header) {
+  const values = header.map(({ value }) => value);
+  let split = -1;
+  for (let k = 0, depth = 0; k < header.length; k++) {
+    if (header[k].kind !== "punctuation") continue;
+    if (openers.has(values[k])) depth++;
+    else if (closers.has(values[k])) depth--;
+    else if (values[k] === ";" && !depth) {
+      if (split !== -1) return false;
+      split = k;
+    }
+  }
+  if (values.slice(split + 1).join(" ") !== "err ! = nil") return false;
+  if (split === -1) return true;
+  const init = values.slice(0, split).join(" ");
+  return (
+    /^[\p{L}_][\p{L}\p{N}_]*(?: , [\p{L}_][\p{L}\p{N}_]*)* : = /u.test(init) &&
+    !/& &|\| \|/u.test(init)
+  );
+}
+
 // Boot composes; it decides nothing. Report each kind of logic per file.
 function bootReports(file, source, tokens, report) {
   const counts = new Map();
@@ -850,11 +873,8 @@ function bootReports(file, source, tokens, report) {
       else if (value === ")" || value === "]") depth--;
       else if (value === "{" && !depth) break;
     }
-    const tail = tokens
-      .slice(Math.max(i + 1, j - 4), j)
-      .map(({ value }) => value)
-      .join(" ");
-    if (tail !== "err ! = nil") count("conditions other than err != nil");
+    if (!errorCheck(tokens.slice(i + 1, j)))
+      count("conditions other than err != nil");
   }
   for (const [kind, total] of [...counts].sort())
     report("GO_BOOT_LOGIC", file, `${kind}: ${total}`);
