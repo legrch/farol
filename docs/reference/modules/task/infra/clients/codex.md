@@ -1,6 +1,6 @@
 # Selected Codex App Server client
 
-This package implements the Task-owned Go `port.CodexClient` producer. It attaches
+This package implements the Task-owned Go `port.Provider` producer. It attaches
 to the explicitly selected existing Codex App Server through the selected CLI's
 `app-server proxy --sock` pipes. It never launches a server, discovers a socket,
 reads authentication, or reconnects a lost client.

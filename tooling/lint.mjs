@@ -26,8 +26,9 @@ function files(directory) {
 }
 
 const violations = [];
-const productionFiles = roots.flatMap(files).sort();
-for (const file of productionFiles) {
+// Production source and the co-located tests beside it share these rules.
+const sourceFiles = roots.flatMap(files).sort();
+for (const file of sourceFiles) {
   const source = fs.readFileSync(file, "utf8");
   for (const [code, pattern] of rules) {
     if (pattern.test(source)) {
@@ -41,6 +42,6 @@ if (violations.length > 0) {
   process.exitCode = 1;
 } else {
   process.stdout.write(
-    `${productName} lint: ${productionFiles.length} production files checked.\n`,
+    `${productName} lint: ${sourceFiles.length} source files checked (${sourceFiles.filter((file) => /\.test\.tsx?$/u.test(file)).length} co-located tests).\n`,
   );
 }

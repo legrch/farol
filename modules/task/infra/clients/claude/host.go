@@ -55,7 +55,6 @@ type Host struct {
 	startupPause             func(context.Context) error
 }
 
-var _ port.ClaudeHost = (*Host)(nil)
 var _ port.Provider = (*Host)(nil)
 var _ port.ObservedProvider = (*Host)(nil)
 

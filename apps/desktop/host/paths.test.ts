@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { desktopStatePaths } from "../../apps/desktop/host/state-paths";
+import { desktopStatePaths } from "./paths";
 
 // Golden table: the exact strings the former `*Root()` builders in main.ts
 // produced for a given `app.getPath("userData")`. Production, Dev and Owner

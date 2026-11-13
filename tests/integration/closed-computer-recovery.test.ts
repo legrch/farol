@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { build } from "esbuild";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { desktopStatePaths } from "../../apps/desktop/host/state-paths";
+import { desktopStatePaths } from "../../apps/desktop/host/paths";
 import { recoverClosedComputer } from "../../src/apps/desktop/closed-computer-recovery";
 import { PrivateMcpLifecycle } from "../../src/modules/computer/infra/mcp/private-mcp-lifecycle";
 import { PrivateExecutionFence } from "../../src/modules/computer/infra/mcp/execution-fence";
