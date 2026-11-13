@@ -18,7 +18,7 @@ import {
   recordedModelTurn,
   recordedCompaction,
 } from "../../../apps/desktop/operations/model-turn";
-import { operationsDirectory } from "../../../apps/desktop/operations/paths";
+import { desktopStatePaths } from "../../../apps/desktop/host/state-paths";
 import { OperationsStore } from "../../../apps/desktop/operations/store";
 import {
   ProcessAuditCollector,
@@ -702,6 +702,14 @@ const selectedDesktopUserData = (() => {
 // profile read, instance lock or browser session; E2E keeps its proven root.
 app.setPath("userData", selectedDesktopUserData);
 app.setPath("sessionData", selectedDesktopUserData);
+// The profile's state layout, read at call time because the identity setup
+// above redirects `userData` before any state path is used.
+function statePaths() {
+  return desktopStatePaths({
+    userData: app.getPath("userData"),
+    tmpdir: os.tmpdir(),
+  });
+}
 const activeDesktopIdentity = {
   ...declaredDesktopIdentity,
   // Storage selection does not change development build admission or edition.
@@ -1240,7 +1248,7 @@ async function initializeInstalledUpdater(): Promise<void> {
           await liveTaskPersistence;
           if (!admissionCurrent()) return abort("UPDATE_WORK_PENDING");
           const drained = await drainInstalledComputer({
-            root: secureMcpLaunchRoot(),
+            root: statePaths().secureMcpLaunch,
             settings: snapshot.settings,
             ...(quit ? { deadlineAt: quit.deadlineAt } : {}),
             desktopWorkSettled,
@@ -2195,11 +2203,7 @@ const CONNECTOR_START_QUIT_BUDGET_MS = 8_000;
 async function recordSummaryFenceRecovery(
   recovery: SummaryFenceRecovery,
 ): Promise<void> {
-  const file = path.join(
-    app.getPath("userData"),
-    "farol-state",
-    "summary-fence-recovery.json",
-  );
+  const file = statePaths().summaryFenceRecovery;
   await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   await writeFile(
     file,
@@ -2221,28 +2225,15 @@ async function recordSummaryFenceRecovery(
 // `quit-receipt.ts` contract, so writer and reader cannot disagree about a
 // field the way they once did about `at`.
 async function recordQuitReceipt(receipt: QuitDrainReceipt): Promise<void> {
-  await writeQuitReceipt(
-    path.join(app.getPath("userData"), "farol-state"),
-    receipt,
-    new Date().toISOString(),
-  );
+  await writeQuitReceipt(statePaths().state, receipt, new Date().toISOString());
 }
 
-// The relay socket path must stay under the 104-byte Unix socket limit, so it
-// lives in a short private temporary directory keyed by this profile. The
-// single-instance lock is held here, so a socket left there belongs to a
-// previous run of this same profile.
-function callerRelayRoot(): string {
-  const profile = createHash("sha256")
-    .update(app.getPath("userData"))
-    .digest("hex")
-    .slice(0, 16);
-  return path.join(os.tmpdir(), `farol-relay-${profile}`);
-}
-
+// The single-instance lock is held here, so a relay socket left in the
+// profile's short temporary directory belongs to a previous run of this same
+// profile.
 async function initializeCallerRelay(): Promise<void> {
   if (callerRelayRuntime) return;
-  const root = callerRelayRoot();
+  const root = statePaths().callerRelay;
   try {
     const stale = await lstat(path.join(root, "caller-relay.sock"));
     if (stale.isSocket() && stale.uid === process.getuid?.()) {
@@ -2287,11 +2278,7 @@ async function initializeSavedChatBridge(): Promise<void> {
     });
   };
   if (!qualified()) return;
-  const root = path.join(
-    app.getPath("userData"),
-    "farol-state",
-    "saved-chat-handoff",
-  );
+  const root = statePaths().savedChatHandoff;
   try {
     await mkdir(root, { recursive: true, mode: 0o700 });
     const info = await lstat(root);
@@ -2353,7 +2340,7 @@ async function initializeRouteBRuntime(): Promise<void> {
   if (!controller || routeBRuntime) return;
   try {
     routeBRuntime = await startRouteBRuntime({
-      stateRoot: path.join(app.getPath("userData"), "farol-state"),
+      stateRoot: statePaths().state,
       surfaces: routeBTaskSurfaces,
       compaction: controller.continuity,
       ...(callerRelayRuntime ? { relay: callerRelayRuntime } : {}),
@@ -2371,12 +2358,14 @@ async function initializeCodexContextController(): Promise<void> {
   // process raised is never cleared here: reconcileContextAfterRestart
   // brings it in line with the private context store before any work is
   // admitted.
-  const fence = new PrivateExecutionFence({ root: secureMcpLaunchRoot() });
+  const fence = new PrivateExecutionFence({
+    root: statePaths().secureMcpLaunch,
+  });
   summaryExecutionFence = fence;
   codexContextController = createCodexContextController({
     ownerId: contextOwnerId,
     providerProfileId: contextProviderProfileId,
-    stateRoot: contextContinuityRoot(),
+    stateRoot: statePaths().contextContinuity,
     liveTask: (taskId) => liveTaskRegistry.get(taskId) !== null,
     summaryFence: {
       raise: (input) =>
@@ -2463,7 +2452,7 @@ async function initializeLiveTaskState(): Promise<void> {
       ? process.env.FAROL_E2E_LIVE_TASK_SAVE_SUCCESSES
       : undefined;
   const store = new PrivateLiveTaskStore(
-    { root: liveTaskStoreRoot() },
+    { root: statePaths().liveTasks },
     e2eSuccessfulSaves === undefined
       ? {}
       : {
@@ -2712,7 +2701,7 @@ async function openAdmittedProductAgentSession(
     }
     const probe = await probeCodexHost({
       executablePath: context.host.executablePath,
-      scratchRoot: codexHostProbeRoot(),
+      scratchRoot: statePaths().codexHostProbe,
     });
     if (
       probe.executableSha256 !== input.executableSha256 ||
@@ -2757,7 +2746,7 @@ async function openAdmittedProductAgentSession(
         key,
         input,
         assignments: new PrivateAssignmentStore({
-          root: codexAgentAssignmentRoot(),
+          root: statePaths().codexAgentAssignments,
         }),
         client,
         host,
@@ -3140,7 +3129,7 @@ async function cancelProductAgentTask(
   }
 
   const assignments = new PrivateAssignmentStore({
-    root: codexAgentAssignmentRoot(),
+    root: statePaths().codexAgentAssignments,
   });
   const hostContextSnapshot = configuration?.snapshot();
   const context = productAgentHostContext(
@@ -3672,54 +3661,6 @@ async function selectedSupportExportTarget(): Promise<string | null> {
   return selected.canceled || !selected.filePath ? null : selected.filePath;
 }
 
-function chatGptAttachmentStagingRoot(): string {
-  return path.join(
-    app.getPath("userData"),
-    "farol-state",
-    "attachment-staging",
-  );
-}
-
-function chatGptTaskJournalRoot(): string {
-  return path.join(
-    app.getPath("userData"),
-    "farol-state",
-    "chatgpt-task-journal",
-  );
-}
-
-function chatGptConversationStoreRoot(): string {
-  return path.join(
-    app.getPath("userData"),
-    "farol-state",
-    "chatgpt-conversation",
-  );
-}
-
-function liveTaskStoreRoot(): string {
-  return path.join(app.getPath("userData"), "farol-state", "live-tasks");
-}
-
-function contextContinuityRoot(): string {
-  return path.join(
-    app.getPath("userData"),
-    "farol-state",
-    "context-continuity",
-  );
-}
-
-function secureMcpConnectorRoot(): string {
-  return path.join(
-    app.getPath("userData"),
-    "farol-state",
-    "secure-mcp-connector",
-  );
-}
-
-function modelEndpointStateRoot(): string {
-  return path.join(app.getPath("userData"), "farol-private", "model-endpoint");
-}
-
 // DEV manages only the config inside its app-owned Codex home. It never
 // reads, writes or falls back to the owner's ~/.codex. Packaged Preview keeps
 // its existing explicitly owner-operated configuration behavior.
@@ -3858,23 +3799,11 @@ async function farolModelCodexHostPresence(): Promise<
   return (await detectCodexHostPresence({ executablePath })).state;
 }
 
-function secureMcpCredentialRoot(): string {
-  return path.join(
-    app.getPath("userData"),
-    "farol-private",
-    "secure-mcp-connector",
-  );
-}
-
-function secureMcpLaunchRoot(): string {
-  return path.join(secureMcpConnectorRoot(), "computer-authority");
-}
-
 let desktopComputerMcpLifecycle: PrivateMcpLifecycle | null = null;
 function computerMcpLifecycle(): PrivateMcpLifecycle {
   // Boot owns one lifecycle so concurrent Start/Stop share stop admission.
   desktopComputerMcpLifecycle ??= new PrivateMcpLifecycle(
-    secureMcpLaunchRoot(),
+    statePaths().secureMcpLaunch,
   );
   return desktopComputerMcpLifecycle;
 }
@@ -3945,40 +3874,8 @@ async function stopAndConfirmComputerMcp(
   );
 }
 
-function devMcpProofRoot(): string {
-  return path.join(
-    activeDesktopIdentity.userData,
-    "farol-private",
-    "dev-mcp-proof",
-  );
-}
-
-function codexHostProbeRoot(): string {
-  return path.join(app.getPath("userData"), "farol-state", "codex-host-probe");
-}
-
-function codexAgentAssignmentRoot(): string {
-  return path.join(
-    app.getPath("userData"),
-    "farol-state",
-    "native-agent-assignments",
-  );
-}
-
-function productAgentInputRoot(): string {
-  return path.join(
-    app.getPath("userData"),
-    "farol-state",
-    "product-agent-inputs",
-  );
-}
-
 async function codexHostRuntimeRoot(): Promise<string> {
-  const root = path.join(
-    app.getPath("userData"),
-    "farol-state",
-    "codex-host-runtime",
-  );
+  const root = statePaths().codexHostRuntime;
   await mkdir(root, { recursive: true, mode: 0o700 });
   const info = await lstat(root);
   const effectiveUser = process.geteuid?.();
@@ -4411,7 +4308,7 @@ async function verifyCodexExecutable(
   try {
     const probe = await probeCodexHost({
       executablePath,
-      scratchRoot: codexHostProbeRoot(),
+      scratchRoot: statePaths().codexHostProbe,
       ...(expectedDiscovery ? { expectedDiscovery } : {}),
     });
     const recorded = await configuration.recordCodexHost({
@@ -5491,7 +5388,7 @@ async function startAdmittedSecureMcpConnector(
   let launchFile: string;
   let launchContractSha256: string;
   try {
-    await clearConnectorVerificationReceipt(secureMcpLaunchRoot());
+    await clearConnectorVerificationReceipt(statePaths().secureMcpLaunch);
     if (!startPermitted()) return startRefusal();
     const intentDigest = createHash("sha256")
       .update(
@@ -5508,7 +5405,7 @@ async function startAdmittedSecureMcpConnector(
       runtimeId,
       intentDigest,
       verificationChallengeSha256,
-      secureMcpLaunchRoot(),
+      statePaths().secureMcpLaunch,
       recoveryFrom,
     );
     if (!opened.launchFile || !opened.launchSha256)
@@ -6012,7 +5909,7 @@ async function testConnectionCommand(
         if (
           !proof &&
           (await connectorAppVerificationAttemptExists(
-            secureMcpLaunchRoot(),
+            statePaths().secureMcpLaunch,
             challengeSha256,
           ))
         )
@@ -6317,7 +6214,7 @@ async function verifySecureMcpApp(
     } else if (settings.setup.connect.outcomeUnknown) {
       return configurationFailure("CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN");
     }
-    const stateRoot = secureMcpLaunchRoot();
+    const stateRoot = statePaths().secureMcpLaunch;
     try {
       if (
         await connectorAppVerificationAttemptExists(
@@ -6591,9 +6488,9 @@ async function prepareDevMcpProof(): Promise<ProductConfigurationResult> {
     );
   }
   try {
-    const previous = await readDevMcpProofPreparation(devMcpProofRoot()).catch(
-      () => null,
-    );
+    const previous = await readDevMcpProofPreparation(
+      statePaths().devMcpProof,
+    ).catch(() => null);
     let snapshot = configuration.snapshot();
     if (snapshot.status !== "ready") {
       return configurationFailure("SETTINGS_UNAVAILABLE");
@@ -6612,7 +6509,7 @@ async function prepareDevMcpProof(): Promise<ProductConfigurationResult> {
       }
     }
 
-    const fixture = await createDevMcpProofFixture(devMcpProofRoot());
+    const fixture = await createDevMcpProofFixture(statePaths().devMcpProof);
     const rootIdentity = await measuredRootIdentity(fixture.workspaceRoot);
     if (rootIdentity === null) {
       return configurationFailure("DEV_MCP_PROOF_PREPARE_FAILED");
@@ -6668,7 +6565,7 @@ async function prepareDevMcpProof(): Promise<ProductConfigurationResult> {
       deniedPath: DEV_MCP_PROOF_DENIED_PATH,
       preparedAt: new Date().toISOString(),
     } satisfies DevMcpProofPreparation;
-    await writeDevMcpProofPreparation(devMcpProofRoot(), preparation);
+    await writeDevMcpProofPreparation(statePaths().devMcpProof, preparation);
     return ProductConfigurationResultSchema.parse({
       ok: true,
       snapshot: verifiedSnapshot,
@@ -6711,9 +6608,9 @@ async function runDevMcpProof(): Promise<ProductConfigurationResult> {
   ) {
     return configurationFailure("DEV_MCP_PROOF_CONNECTOR_NOT_READY");
   }
-  const preparation = await readDevMcpProofPreparation(devMcpProofRoot()).catch(
-    () => null,
-  );
+  const preparation = await readDevMcpProofPreparation(
+    statePaths().devMcpProof,
+  ).catch(() => null);
   if (preparation === null) {
     return configurationFailure("DEV_MCP_PROOF_NOT_PREPARED");
   }
@@ -6733,7 +6630,9 @@ async function runDevMcpProof(): Promise<ProductConfigurationResult> {
     return configurationFailure("DEV_MCP_PROOF_STALE");
   }
   if (
-    (await readDevMcpProofReceipt(devMcpProofRoot()).catch(() => null)) !== null
+    (await readDevMcpProofReceipt(statePaths().devMcpProof).catch(
+      () => null,
+    )) !== null
   ) {
     // A prior live attempt exists. Its outcome must never be overwritten or
     // retried as though nothing happened; prepare a fresh fixture instead.
@@ -6742,7 +6641,7 @@ async function runDevMcpProof(): Promise<ProductConfigurationResult> {
   let attemptedAt: string;
   try {
     attemptedAt = await claimDevMcpProofAttempt(
-      devMcpProofRoot(),
+      statePaths().devMcpProof,
       preparation.proofId,
     );
   } catch {
@@ -6768,9 +6667,9 @@ async function runDevMcpProof(): Promise<ProductConfigurationResult> {
     if (answerSha256 !== preparation.sentinelSha256) {
       return configurationFailure("DEV_MCP_PROOF_ANSWER_MISMATCH");
     }
-    const receipt = await readDevMcpProofReceipt(devMcpProofRoot()).catch(
-      () => null,
-    );
+    const receipt = await readDevMcpProofReceipt(
+      statePaths().devMcpProof,
+    ).catch(() => null);
     if (
       receipt === null ||
       receipt.allowed === null ||
@@ -6995,14 +6894,6 @@ async function listOwnerWorkspace(
   }
 }
 
-function workspaceMutationStateRoot(): string {
-  return path.join(
-    app.getPath("userData"),
-    "farol-state",
-    "workspace-mutations",
-  );
-}
-
 function workspaceCommandFailure(code: string): ProductConfigurationResult {
   switch (code) {
     case "AUTHORITY_CAPABILITY_DENIED":
@@ -7216,9 +7107,7 @@ let operationsLog: OperationsStore | undefined;
 let processAuditCollector: ProcessAuditCollector | undefined;
 let processAuditObserver: ProcessAuditObserver | undefined;
 function operationsStore(): OperationsStore {
-  return (operationsLog ??= new OperationsStore(
-    operationsDirectory(app.getPath("userData")),
-  ));
+  return (operationsLog ??= new OperationsStore(statePaths().operations));
 }
 function configureProduct(value: unknown): Promise<ProductConfigurationResult> {
   const parsed = ProductConfigurationCommandSchema.safeParse(value);
@@ -7715,7 +7604,7 @@ async function configureDrainedWorkspaceChange(
         });
         const cleanupProof =
           await clearAndConfirmOriginalConnectorVerificationReceipt(
-            secureMcpLaunchRoot(),
+            statePaths().secureMcpLaunch,
             originalStopId,
             cleanupEffectId,
           );
@@ -7928,14 +7817,12 @@ async function runManualDeepTest(
   let intent = false;
   try {
     const journal = new PrivateChatGptTaskJournal({
-      root: path.join(app.getPath("userData"), "farol-state"),
+      root: statePaths().state,
       deepTestOperationId: operationId,
     });
     await journalUnderPromotionLease(liveTaskRegistry, async () => {
       if (!isCurrent()) throw new Error("DEEP_TEST_CHANGED");
-      const scan = await readFlatDeepTestRecords(
-        path.join(app.getPath("userData"), "farol-state"),
-      );
+      const scan = await readFlatDeepTestRecords(statePaths().state);
       if (
         scan.status === "unreadable" ||
         (scan.status === "read" &&
@@ -8071,7 +7958,7 @@ async function configureAdmittedProduct(
     );
     if (!record) return configurationFailure("CHATGPT_TASK_RESULT_NOT_FOUND");
     const journal = new PrivateChatGptTaskJournal({
-      root: path.join(app.getPath("userData"), "farol-state"),
+      root: statePaths().state,
       deepTestOperationId: record.operationId,
     });
     try {
@@ -8599,7 +8486,7 @@ async function configureAdmittedProduct(
         const stopped = await configuration.recordSecureMcpStopped();
         if (!stopped.ok) return ProductConfigurationResultSchema.parse(stopped);
         try {
-          await clearConnectorVerificationReceipt(secureMcpLaunchRoot());
+          await clearConnectorVerificationReceipt(statePaths().secureMcpLaunch);
         } catch {
           return configurationFailure("CONNECTOR_ATTACHMENT_INVALID");
         }
@@ -9005,7 +8892,7 @@ async function configureAdmittedProduct(
       try {
         const probe = await probeCodexHost({
           executablePath: selected.executablePath,
-          scratchRoot: codexHostProbeRoot(),
+          scratchRoot: statePaths().codexHostProbe,
         }).catch(() => null);
         if (
           probe === null ||
@@ -9091,7 +8978,7 @@ async function configureAdmittedProduct(
       try {
         const probe = await probeCodexHost({
           executablePath: selected.executablePath,
-          scratchRoot: codexHostProbeRoot(),
+          scratchRoot: statePaths().codexHostProbe,
         });
         const sameContract =
           probe.executableSha256 === selected.executableSha256 &&
@@ -9278,7 +9165,7 @@ async function configureAdmittedProduct(
         >(agentAdmission, session, async () => {
           const probe = await probeCodexHost({
             executablePath: selected.executablePath,
-            scratchRoot: codexHostProbeRoot(),
+            scratchRoot: statePaths().codexHostProbe,
           });
           const sameContract =
             probe.executableSha256 === selected.executableSha256 &&
@@ -9355,7 +9242,7 @@ async function configureAdmittedProduct(
         const check = await runCodexNativeAgentCheck({
           host: session.host,
           assignments: new PrivateAssignmentStore({
-            root: codexAgentAssignmentRoot(),
+            root: statePaths().codexAgentAssignments,
           }),
           settings,
           workspaceId: workspace.workspaceId,
@@ -9821,7 +9708,7 @@ async function configureAdmittedProduct(
         pendingChatGptAttachmentTask = null;
         try {
           await discardChatGptAttachments(
-            chatGptAttachmentStagingRoot(),
+            statePaths().attachmentStaging,
             existing.operationId,
           );
         } catch {
@@ -9843,7 +9730,7 @@ async function configureAdmittedProduct(
       let attachments: StagedChatGptAttachments;
       try {
         attachments = await stageChatGptAttachments({
-          root: chatGptAttachmentStagingRoot(),
+          root: statePaths().attachmentStaging,
           operationId,
           paths: selected,
         });
@@ -9855,7 +9742,7 @@ async function configureAdmittedProduct(
       });
       if (!chatGptTaskJournal) {
         await discardChatGptAttachments(
-          chatGptAttachmentStagingRoot(),
+          statePaths().attachmentStaging,
           operationId,
         ).catch(() => {
           attachmentStagingReady = false;
@@ -9872,7 +9759,7 @@ async function configureAdmittedProduct(
         );
       } catch (error) {
         await discardChatGptAttachments(
-          chatGptAttachmentStagingRoot(),
+          statePaths().attachmentStaging,
           operationId,
         ).catch(() => {
           attachmentStagingReady = false;
@@ -9910,7 +9797,7 @@ async function configureAdmittedProduct(
       if (Date.now() >= pending.expiresAt) {
         pendingChatGptAttachmentTask = null;
         await discardChatGptAttachments(
-          chatGptAttachmentStagingRoot(),
+          statePaths().attachmentStaging,
           pending.operationId,
         ).catch(() => {
           attachmentStagingReady = false;
@@ -9935,7 +9822,7 @@ async function configureAdmittedProduct(
       ) {
         pendingChatGptAttachmentTask = null;
         await discardChatGptAttachments(
-          chatGptAttachmentStagingRoot(),
+          statePaths().attachmentStaging,
           pending.operationId,
         ).catch(() => {
           attachmentStagingReady = false;
@@ -9950,7 +9837,7 @@ async function configureAdmittedProduct(
       } catch (error) {
         pendingChatGptAttachmentTask = null;
         await discardChatGptAttachments(
-          chatGptAttachmentStagingRoot(),
+          statePaths().attachmentStaging,
           pending.operationId,
         ).catch(() => {
           attachmentStagingReady = false;
@@ -9996,7 +9883,7 @@ async function configureAdmittedProduct(
       } finally {
         try {
           await discardChatGptAttachments(
-            chatGptAttachmentStagingRoot(),
+            statePaths().attachmentStaging,
             pending.operationId,
           );
         } catch {
@@ -10107,7 +9994,7 @@ async function configureAdmittedProduct(
       pendingChatGptAttachmentTask = null;
       try {
         await discardChatGptAttachments(
-          chatGptAttachmentStagingRoot(),
+          statePaths().attachmentStaging,
           pending.operationId,
         );
       } catch {
@@ -11281,7 +11168,7 @@ async function configureAdmittedProduct(
       // Observation reads the durable operation record only: it executes
       // nothing and needs no write authority.
       const observed = await observeWorkspaceEdit(
-        { mutationStateRoot: workspaceMutationStateRoot() },
+        { mutationStateRoot: statePaths().workspaceMutations },
         pendingEdit,
       );
       switch (observed.status) {
@@ -13297,7 +13184,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
           preserveTimestamps: true,
         }),
     });
-  const stateRoot = path.join(app.getPath("userData"), "farol-state");
+  const stateRoot = statePaths().state;
   let freshStartup = false;
   const previousHostAdmissionReady = await withInstalledStartupFence(
     process.argv,
@@ -13585,13 +13472,13 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   // The startup lease has been released before configuration and ordinary
   // admission take the same lease. No nested owner or second lock is used.
   try {
-    await cleanupChatGptAttachmentStaging(chatGptAttachmentStagingRoot());
+    await cleanupChatGptAttachmentStaging(statePaths().attachmentStaging);
   } catch {
     attachmentStagingReady = false;
   }
   configuration = new ProductConfigurationService(
     new ProductSettingsStore({
-      root: path.join(app.getPath("userData"), "farol-state"),
+      root: statePaths().state,
     }),
     {
       taskModelPolicy: async (revision, tasks, selection) => {
@@ -13841,14 +13728,14 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     });
   }
   productAgentStore = new PrivateProductAgentStore({
-    root: productAgentInputRoot(),
+    root: statePaths().productAgentInputs,
   });
   connectorCredentialStore = new PrivateConnectorKeyStore({
-    root: secureMcpCredentialRoot(),
+    root: statePaths().secureMcpCredential,
   });
   secureMcpConnectorRuntime = new SecureMcpConnectorRuntime(
     {
-      root: secureMcpConnectorRoot(),
+      root: statePaths().secureMcpConnector,
       homePath: await codexHostProcessHomePath(),
       tempPath: app.getPath("temp"),
       electronPath: desktopExecutionResources().executable,
@@ -13874,7 +13761,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       : undefined;
   if (FAROL_MODEL_ENABLED) {
     modelLifecycle = new FarolModelLifecycle({
-      stateRoot: modelEndpointStateRoot(),
+      stateRoot: statePaths().modelEndpoint,
       model: ROUTE_B_MODEL,
       handler: recordedModelTurn(
         operationsStore(),
@@ -13907,7 +13794,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   }
   try {
     const journal = new PrivateChatGptTaskJournal({
-      root: chatGptTaskJournalRoot(),
+      root: statePaths().chatGptTaskJournal,
     });
     const retained = freshStartup
       ? await journal.load()
@@ -13930,7 +13817,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   let chatGptInitialUrl = chatGptUrl;
   try {
     recoverableDeepTests = await recoverDeepTestAttempts(
-      path.join(app.getPath("userData"), "farol-state"),
+      statePaths().state,
       (work) => journalUnderPromotionLease(liveTaskRegistry, work),
     );
     deepTestRecoveryReady = true;
@@ -13939,7 +13826,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   }
   try {
     chatGptConversationStore = new PrivateChatGptConversationStore({
-      root: chatGptConversationStoreRoot(),
+      root: statePaths().chatGptConversation,
     });
     chatGptConversation = await chatGptConversationStore.load();
     if (chatGptConversation?.state === "retained") {
@@ -14159,10 +14046,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       }
       await recordQuitReceipt(receipt);
       if (receipt.drained) {
-        await removeRunMarker(
-          path.join(app.getPath("userData"), "farol-state"),
-          process.pid,
-        );
+        await removeRunMarker(statePaths().state, process.pid);
       }
     },
     // QuitDrain has already waited for owned children and recorded the result.
@@ -14193,7 +14077,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       pendingChatGptAttachmentTask = null;
       if (attachmentTask) {
         void discardChatGptAttachments(
-          chatGptAttachmentStagingRoot(),
+          statePaths().attachmentStaging,
           attachmentTask.operationId,
         );
       }

@@ -537,8 +537,18 @@ context, method and identity checks, so a refused request cannot be resent and
 the next one stays admissible. A poll is admitted only after its current
 context, registered method, closed body and absent effect identity are checked;
 a refused poll does not advance its lane and cannot invoke an owner. Operation
-IDs remain the module-owned effect fences. Wire responses are checked before
-the host maps a sequenced ID back to its caller's ID. Unknown outcomes still
+IDs remain the module-owned effect fences.
+
+The browser (`chat.browser.next`) and settings store
+(`computer.settings.store.next`) reciprocal polls share one reverse-poll queue,
+[`pkg/exchange`](../pkg/exchange/exchange.go): eight live browser calls and one
+live settings call, each delivered at most once and answered at most once, with
+the poll and command deadlines checked again under the delivery lock. The
+settings store additionally fences the queue for its lifetime on its first
+unknown answer; the browser exchange leaves that decision to Chat.
+
+Wire responses are checked before the host maps a sequenced ID back to its
+caller's ID. Unknown outcomes still
 close admission without retries.
 
 Caller IDs are checked only against live calls (`duplicate_request_id`); the

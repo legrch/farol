@@ -4,12 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"math"
-	"sync"
 	"time"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	browser "github.com/legrch/farol/modules/chat/infra/browser"
+	"github.com/legrch/farol/pkg/exchange"
 	"github.com/legrch/farol/pkg/ipc"
 	"github.com/legrch/farol/transport/desktop"
 )
@@ -18,35 +17,31 @@ type browserReplyResult struct {
 	reply browser.Reply
 	err   error
 }
-type browserExchangeCall struct {
-	command              wire.BrowserCommand
-	ctx                  context.Context
-	delivered, completed bool
-	reply                chan browserReplyResult
-}
+
+// browserLiveCalls bounds the reciprocal calls one exchange retains.
+const browserLiveCalls = 8
 
 // BrowserExchange is transport correlation for one inherited host pipe, not a
 // scheduler or turn owner. It retains at most eight one-shot reciprocal calls.
-// Memory is bounded by those live calls only: a settled call leaves pending and
-// its random command ID is never reissued, so a late or repeated reply is
+// Memory is bounded by those live calls only: a settled call leaves the queue
+// and its random command ID is never reissued, so a late or repeated reply is
 // refused without a lifetime history. Chat owns all admission, intent, queue,
 // result and retry policy.
 type BrowserExchange struct {
-	ctx         context.Context
-	peer        wire.Context
-	mu          sync.Mutex
-	pending     map[string]*browserExchangeCall
-	ready       chan *browserExchangeCall
-	issued      uint64 // observation only: commands issued this lifetime, never a quota
-	pollStopped chan struct{}
-	quiesced    bool
+	ctx   context.Context
+	peer  wire.Context
+	queue *exchange.Queue[browser.Reply]
 }
 
 func NewBrowserExchange(ctx context.Context, peer wire.Context) (*BrowserExchange, error) {
 	if ctx == nil || ctx.Err() != nil || !validIngressID(peer.ProfileId) || !validIngressID(peer.BackendGeneration) {
 		return nil, errors.New("browser_exchange_invalid")
 	}
-	return &BrowserExchange{ctx: ctx, peer: peer, pending: make(map[string]*browserExchangeCall), ready: make(chan *browserExchangeCall, 8), pollStopped: make(chan struct{})}, nil
+	queue, err := exchange.New[browser.Reply](ctx, browserLiveCalls)
+	if err != nil {
+		return nil, errors.New("browser_exchange_invalid")
+	}
+	return &BrowserExchange{ctx: ctx, peer: peer, queue: queue}, nil
 }
 
 // QuiescePolling is transport shutdown after the actual Chat owner retires.
@@ -54,14 +49,8 @@ func NewBrowserExchange(ctx context.Context, peer wire.Context) (*BrowserExchang
 // retirement ACK. Outstanding effects must settle first; this supplies no
 // provider cleanup or retirement proof and cannot be reversed.
 func (b *BrowserExchange) QuiescePolling() error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.ctx.Err() != nil || len(b.pending) != 0 {
+	if b.queue.Quiesce() != nil {
 		return errors.New("browser_exchange_not_quiescent")
-	}
-	if !b.quiesced {
-		b.quiesced = true
-		close(b.pollStopped)
 	}
 	return nil
 }
@@ -83,12 +72,8 @@ func browserLease(command browser.Command) (browser.Lease, bool) {
 	return browser.Lease{}, false
 }
 func boundedBrowserDeadline(deadline uint64) (time.Time, error) {
-	if deadline > math.MaxInt64 {
-		return time.Time{}, errors.New("browser_deadline_invalid")
-	}
-	value := time.UnixMilli(int64(deadline))
-	remaining := time.Until(value)
-	if remaining <= 0 || remaining > 15*time.Second {
+	value, err := exchange.Deadline(deadline)
+	if err != nil {
 		return time.Time{}, errors.New("browser_deadline_invalid")
 	}
 	return value, nil
@@ -109,94 +94,50 @@ func (b *BrowserExchange) Exchange(ctx context.Context, command browser.Command)
 	if err != nil {
 		return nil, err
 	}
-	callCtx, cancel := context.WithDeadline(ctx, until)
-	defer cancel()
 	id, err := randomIngressID()
 	if err != nil {
 		return nil, err
 	}
-	call := &browserExchangeCall{command: wire.BrowserCommand{CommandId: id, Kind: kind, Body: body}, ctx: callCtx, reply: make(chan browserReplyResult, 1)}
-	b.mu.Lock()
-	if b.quiesced {
-		b.mu.Unlock()
-		return nil, errors.New("browser_exchange_quiesced")
+	call, err := b.queue.Submit(ctx, until, exchange.Command{ID: id, Kind: kind, Body: body})
+	if err != nil {
+		return nil, browserSubmitError(err)
 	}
-	if len(b.pending) >= 8 {
-		b.mu.Unlock()
-		return nil, errors.New("browser_exchange_saturated")
+	defer call.Release()
+	return call.Wait()
+}
+func browserSubmitError(err error) error {
+	if errors.Is(err, exchange.ErrQuiesced) {
+		return errors.New("browser_exchange_quiesced")
 	}
-	b.issued++
-	b.pending[id] = call
-	b.mu.Unlock()
-	defer func() { b.mu.Lock(); delete(b.pending, id); b.mu.Unlock() }()
-	select {
-	case b.ready <- call:
-	case <-callCtx.Done():
-		return nil, callCtx.Err()
-	case <-b.ctx.Done():
-		return nil, b.ctx.Err()
-	default:
-		return nil, errors.New("browser_exchange_saturated")
+	if errors.Is(err, exchange.ErrSaturated) {
+		return errors.New("browser_exchange_saturated")
 	}
-	select {
-	case result := <-call.reply:
-		return result.reply, result.err
-	case <-callCtx.Done():
-		return nil, callCtx.Err()
-	case <-b.ctx.Done():
-		return nil, b.ctx.Err()
-	}
+	return errors.New("browser_exchange_unavailable")
 }
 func (b *BrowserExchange) next(ctx context.Context, deadline uint64) (*wire.BrowserCommand, error) {
 	until, err := boundedBrowserDeadline(deadline)
 	if err != nil {
 		return nil, err
 	}
-	wait, cancel := context.WithDeadline(ctx, until)
-	defer cancel()
-	for {
-		select {
-		case <-b.pollStopped:
-			return nil, nil
-		case <-b.ctx.Done():
-			return nil, b.ctx.Err()
-		case <-wait.Done():
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			return nil, nil
-		case call := <-b.ready:
-			b.mu.Lock()
-			live := b.pending[call.command.CommandId] == call && !call.delivered && !call.completed && call.ctx.Err() == nil
-			if live {
-				call.delivered = true
-			}
-			b.mu.Unlock()
-			if live {
-				copy := call.command
-				copy.Body = append(json.RawMessage(nil), copy.Body...)
-				return &copy, nil
-			}
-		}
+	command, err := b.queue.Next(ctx, until)
+	if err != nil || command == nil {
+		return nil, err
 	}
+	return &wire.BrowserCommand{CommandId: command.ID, Kind: command.Kind, Body: command.Body}, nil
 }
 func (b *BrowserExchange) complete(reply wire.BrowserReply) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	call := b.pending[reply.CommandId]
-	if call == nil || !call.delivered || call.completed || call.ctx.Err() != nil || b.ctx.Err() != nil {
+	// The queue consumes the call before this parses. A malformed or crossed
+	// reply cannot be corrected by another Send, another completion or a later
+	// request with the same call ID.
+	err := b.queue.Complete(reply.CommandId, func(sent exchange.Command) (browser.Reply, error) {
+		if reply.Kind != sent.Kind {
+			return nil, errors.New("browser_reply_kind_mismatch")
+		}
+		return decodeBrowserReply(reply.Kind, reply.Body)
+	})
+	if errors.Is(err, exchange.ErrNotCurrent) {
 		return errors.New("browser_reply_not_current")
 	}
-	// Consume before parsing. A malformed or crossed reply cannot be corrected by
-	// another Send, another completion or a later request with the same call ID.
-	call.completed = true
-	if reply.Kind != call.command.Kind {
-		err := errors.New("browser_reply_kind_mismatch")
-		call.reply <- browserReplyResult{err: err}
-		return err
-	}
-	result, err := decodeBrowserReply(reply.Kind, reply.Body)
-	call.reply <- browserReplyResult{reply: result, err: err}
 	return err
 }
 func (b *BrowserExchange) Methods() map[string]desktop.Method {
