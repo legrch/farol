@@ -266,6 +266,17 @@ class E2EResultAdmissionTests(unittest.TestCase):
                 self.assertEqual(result['networkPolicy']['runtimeEgress'], 'observed')
                 self.assertNotIn('verified', result['networkPolicy']['receipt'])
 
+    def test_observed_egress_is_recorded_even_when_the_receipt_is_already_fail(self):
+        def mutate(file):
+            value = json.loads(file.read_text())
+            value.setdefault('details', {})['externalConnectable'] = True
+            file.write_text(json.dumps(value))
+        runner, code, result, _ = self.drive(status='FAIL', mutate=mutate)
+        self.assertEqual(result['test']['status'], 'FAIL')
+        self.assertEqual(result['e2e']['reason'], 'E2E_ASSERTIONS_FAILED')
+        self.assertTrue(result['e2e']['egressObserved'])
+        self.assertEqual(result['networkPolicy']['runtimeEgress'], 'observed')
+
     def test_reported_probe_without_connectivity_stays_diagnostic_and_unverified(self):
         runner, code, result, _ = self.drive(status='REPORTED')
         self.assertEqual(code, 0, result)

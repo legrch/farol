@@ -1600,9 +1600,9 @@ class Runner:
                 digest(source / bundle_name) == bundle['sha256'], 'DRIVER_BUNDLE_DIGEST_INVALID')
         require(self.driver_payload_info(node_source, 'DRIVER_NODE').st_size == node['size'] and
                 digest(node_source) == node['sha256'], 'DRIVER_NODE_DIGEST_INVALID')
-        # Bind the entry by digest to the committed entry in THIS runner's
-        # tree, not by name. (The bundle bytes are not yet re-derived from
-        # that source: a reproducible rebuild comparison is a recorded gap.)
+        # Bind the entry by digest to the entry file in THIS runner's working
+        # tree (not the committed blob), not by name. Imported modules are not
+        # bound and the bundle is not re-derived from source: recorded gaps.
         entry = manifest['entry']
         committed = Path(__file__).resolve().parent / 'vm-e2e' / entry
         require(re.fullmatch(r'[a-z][a-z0-9-]{0,63}-entry\.mjs', entry) is not None and
@@ -1764,14 +1764,16 @@ class Runner:
                 reported = self.validate_e2e_result(receipt)
             except Refused as error:
                 result_error = str(error)
+        # A diagnostic probe cannot prove default-deny, but an observed
+        # outbound connection disproves the offline configuration. Record it
+        # from any admitted receipt, including one that already reports FAIL.
+        egress = self.egress_observed(receipt if result_error is None else None)
+        if egress and self.network_policy is not None:
+            self.network_policy = dict(self.network_policy, runtimeEgress='observed')
         if reported == 'FAIL':
             status, reason = 'FAIL', 'E2E_ASSERTIONS_FAILED'
-        elif self.egress_observed(receipt if result_error is None else None):
-            # A diagnostic probe cannot prove default-deny, but an observed
-            # outbound connection disproves the offline configuration.
+        elif egress:
             status, reason = 'FAIL', 'CLOSED_CONTOUR_EGRESS_OBSERVED'
-            if self.network_policy is not None:
-                self.network_policy = dict(self.network_policy, runtimeEgress='observed')
         elif not process_ok:
             status, reason = 'UNKNOWN', 'E2E_PROCESS_UNCONFIRMED'
         elif process['exitCode'] != 0:
@@ -1783,7 +1785,8 @@ class Runner:
         self.driver_result = {
             'schema': 'farol.vm-e2e.admission/1', 'runId': self.run_id,
             'scenario': self.e2e_context['scenario'], 'evidenceClass': self.e2e_context['evidenceClass'],
-            'status': status, 'reason': reason, 'receipt': receipt, 'process': process,
+            'status': status, 'reason': reason, 'egressObserved': egress,
+            'receipt': receipt, 'process': process,
             'processError': process_error, 'resultError': result_error,
             'rawEvidence': {name: {'file': 'e2e-' + name + '.raw.json',
                                    'sha256': digest(self.out / ('e2e-' + name + '.raw.json'))}
