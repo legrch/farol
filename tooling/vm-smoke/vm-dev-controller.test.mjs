@@ -457,3 +457,20 @@ test("an explicitly selected artifact directory is never removed", async (t) => 
   assert.equal(status, 0);
   assert.ok(await fs.stat(f.artifact));
 });
+
+test("a retained run keeps its output even when stderr is closed", async (t) => {
+  const f = await fixture(t);
+  const calls = [];
+  const status = await runVMDev([], {
+    root: f.root,
+    ...builtRoute(calls),
+    python: () => ({ status: 2, error: null, signal: null }),
+    stderr: {
+      write: () => {
+        throw Object.assign(Error("EPIPE"), { code: "EPIPE" });
+      },
+    },
+  });
+  assert.equal(status, 2);
+  assert.deepEqual(await builtRuns(f.root), [path.basename(calls[0])]);
+});

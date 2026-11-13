@@ -80,3 +80,28 @@ test("vm:dev outcome-unknown and unclassified codes exit 2, refusals 1", async (
   assert.equal(vmDevRefusalExit("VM_DEV_UNCLASSIFIED"), 2);
   assert.equal(vmDevRefusalExit("not a code"), 2);
 });
+
+test("a closed stderr never changes a wrapper's or vm:dev's exit status", async () => {
+  const { childExitStatus } = await import("../vm-child-exit.mjs");
+  const broken = {
+    write: () => {
+      throw Object.assign(Error("EPIPE"), { code: "EPIPE" });
+    },
+  };
+  assert.equal(
+    childExitStatus({ status: null, signal: "SIGPIPE" }, "DEV", broken),
+    2,
+  );
+  const fs = await import("node:fs");
+  for (const name of ["vm-entry.mjs", "vm-machine.mjs", "vm-smoke.mjs"]) {
+    const source = fs.readFileSync(
+      new URL("../" + name, import.meta.url),
+      "utf8",
+    );
+    assert.match(
+      source,
+      /tolerateClosedStderr\(\);\n\s*process\.exitCode = childExitStatus/,
+      name,
+    );
+  }
+});

@@ -8,6 +8,12 @@
 // (exit 2 with a closed code on stderr), never as a plain exit 1 refusal.
 export const OUTCOME_UNKNOWN_EXIT = 2;
 
+// The agent host may close stderr; an asynchronous EPIPE must not crash the
+// wrapper and replace the child's exit status with 1.
+export function tolerateClosedStderr() {
+  process.stderr.on("error", () => {});
+}
+
 export function childExitStatus(result, label, stderr = process.stderr) {
   if (result && result.error) throw result.error;
   if (
@@ -16,11 +22,15 @@ export function childExitStatus(result, label, stderr = process.stderr) {
     !Number.isInteger(result.status) ||
     result.status < 0
   ) {
-    stderr.write(
-      `VM_${label}_OUTCOME_UNKNOWN: child ended without an exit status` +
-        (result && result.signal ? ` (${result.signal})` : "") +
-        "\n",
-    );
+    try {
+      stderr.write(
+        `VM_${label}_OUTCOME_UNKNOWN: child ended without an exit status` +
+          (result && result.signal ? ` (${result.signal})` : "") +
+          "\n",
+      );
+    } catch {
+      // A closed stderr never changes the exit status.
+    }
     return OUTCOME_UNKNOWN_EXIT;
   }
   return result.status;

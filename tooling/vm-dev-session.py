@@ -56,6 +56,7 @@ UNKNOWN_CODES = frozenset((
     "VM_DEV_RUNTIME_START_UNKNOWN", "VM_DEV_RUNTIME_NOT_READY",
     "VM_DEV_RUNTIME_IDENTITY_INVALID", "VM_DEV_MCP_OUTCOME_UNKNOWN",
     "VM_DEV_SESSION_CLOSE_UNPROVEN", "VM_DEV_CANCELLED", "VM_DEV_UNCLASSIFIED",
+    "VM_DEV_RESULT_UNCONFIRMED",
 ))
 
 
@@ -262,8 +263,9 @@ def _stage(stage, args, evidence, selected, producer):
         result = producer(Path(args.artifact), Path(args.receipt),
                           args.expected_receipt_sha256, stage)
     except Exception:
-        # Staging is not a guest effect, but publication can be partial/unknown:
-        # preserve every blob and its original intent for a separate inspection.
+        # Staging is host-only and the guest has not started: this is a known
+        # refusal. Teardown removes the never-started clone together with its
+        # partial staging; the stage intent stays in the evidence directory.
         raise VMDevError("VM_DEV_STAGING_UNCONFIRMED") from None
     demand(isinstance(result, dict) and
            set(result) == {"runId", "manifestSHA256", "acceptanceSHA256", "artifactSHA256"} and
@@ -517,6 +519,13 @@ def _run_mcp(binary, root, clone, stage, session, evidence, env, gate=None):
             "--app-manifest", session["manifestSHA256"],
             "--app-acceptance", session["acceptanceSHA256"]]
     child_env = dict(env, TERMINAL_MAC_HOME=str(root))
+    if gate is not None:
+        # From here a signal is recorded (and forwarded once a child exists),
+        # never raised: an exception between spawn and registration would
+        # orphan the child that owns the agent's stdio and input lease.
+        gate.mode = "mcp"
+        if gate.requested:
+            raise Cancelled()  # arrived before the spawn: start nothing
     try:
         # stdin/stdout/stderr None: inherit the controller's descriptors.
         child = subprocess.Popen(argv, executable=executable, env=child_env)
@@ -525,7 +534,11 @@ def _run_mcp(binary, root, clone, stage, session, evidence, env, gate=None):
         raise VMDevError("VM_DEV_MCP_SPAWN_REFUSED") from None
     if gate is not None:
         gate.child = child
-        gate.mode = "mcp"
+        if gate.requested and gate.requested != signal.SIGINT:
+            try:
+                child.send_signal(gate.requested)  # arrived during the spawn
+            except OSError:
+                pass
     # This process never writes stdout; release its copy so only the MCP
     # child holds the agent's stdout descriptor.
     try:
@@ -755,9 +768,15 @@ def execute(args, infrastructure=None, plan=None, producer=None,
     custody = _Custody()
     error = None
     try:
-        _session(args, custody, infrastructure, plan, producer, clone_effect,
-                                     start_effect, mcp_effect, identity_factory,
-                                     binary_admission, capacity_probe, gate)
+        try:
+            _session(args, custody, infrastructure, plan, producer, clone_effect,
+                     start_effect, mcp_effect, identity_factory,
+                     binary_admission, capacity_probe, gate)
+        finally:
+            # From here on a signal is only recorded: it can no longer escape
+            # before teardown and the result record.
+            if gate is not None:
+                gate.mode = "teardown"
     except VMDevError as failure:
         error = failure
     except Cancelled:
@@ -765,11 +784,7 @@ def execute(args, infrastructure=None, plan=None, producer=None,
     except Exception:
         error = VMDevError("VM_DEV_UNCLASSIFIED")
     if custody.evidence is None:
-        if error is not None:
-            raise error
-        raise VMDevError("VM_DEV_UNCLASSIFIED")
-    if gate is not None:
-        gate.mode = "teardown"
+        raise error if error is not None else VMDevError("VM_DEV_UNCLASSIFIED")
     status, removed, retained, reason = _teardown(custody, error, custody.binary, custody.root,
                                                   custody.env, gate)
     retained.append(str(custody.evidence))
@@ -781,13 +796,17 @@ def execute(args, infrastructure=None, plan=None, producer=None,
     try:
         _write_once(custody.evidence, "result.json", result)
     except Exception:
-        result["status"] = "RETAINED"
+        # The documented record is missing: never report a clean exit.
+        result["status"] = "RESULT_UNCONFIRMED"
         result["resultRecord"] = "unconfirmed"
-    if error is None and status == "CLOSED_AND_REMOVED":
+    if error is None and result["status"] == "CLOSED_AND_REMOVED":
         return result
-    final = error if error is not None else VMDevError(reason or "VM_DEV_UNCLASSIFIED")
-    if status == "RETAINED" and final.code not in UNKNOWN_CODES:
-        final = VMDevError(reason or final.code, final.detail)
+    if result["status"] == "RESULT_UNCONFIRMED":
+        final = VMDevError("VM_DEV_RESULT_UNCONFIRMED")
+    else:
+        final = error if error is not None else VMDevError(reason or "VM_DEV_UNCLASSIFIED")
+        if status == "RETAINED" and final.code not in UNKNOWN_CODES:
+            final = VMDevError(reason or final.code, final.detail)
     final.result = result
     raise final
 
@@ -897,28 +916,61 @@ def _session(args, custody, infrastructure, plan, producer, clone_effect, start_
         raise VMDevError("VM_DEV_SESSION_CLOSE_UNPROVEN")
 
 
+def _diagnose(line):
+    """Best-effort stderr line. The agent host may already have closed the
+    pipe: a write failure must never change the exit status (a BrokenPipeError
+    escaping here used to turn a retained run's 2 into 1)."""
+    try:
+        os.write(2, (line + "\n").encode("utf-8", "replace"))
+    except OSError:
+        pass
+
+
+def exit_status(error):
+    """0 closed and removed; 1 refused with nothing retained; 2 otherwise."""
+    if error is None:
+        return 0
+    result = getattr(error, "result", None)
+    if result is None:
+        return 2 if error.code in UNKNOWN_CODES else 1
+    return 1 if result.get("status") == "REFUSED_AND_REMOVED" else 2
+
+
 def main(argv=None):
     args = parse_options(sys.argv[1:] if argv is None else argv)
     gate = _SignalGate().install()
     try:
         execute(args, gate=gate)
     except VMDevError as error:
-        # stdout belongs only to the MCP. Diagnostics carry closed codes, a
-        # validated detail and, when something is kept, the retained paths.
-        print(error.code + (" " + error.detail if error.detail else ""), file=sys.stderr, flush=True)
-        result = getattr(error, "result", None)
-        if result is None:
-            return 2 if error.code in UNKNOWN_CODES else 1
-        for path in result.get("retained", []):
-            print("VM_DEV_RETAINED " + path, file=sys.stderr, flush=True)
-        return 2 if result.get("status") == "RETAINED" else 1
+        # The status is decided BEFORE any diagnostic write. stdout belongs
+        # only to the MCP; stderr carries closed codes, a validated detail
+        # and, when something is kept, the retained paths.
+        status = exit_status(error)
+        _diagnose(error.code + (" " + error.detail if error.detail else ""))
+        for path in (getattr(error, "result", None) or {}).get("retained", []):
+            _diagnose("VM_DEV_RETAINED " + path)
+        return status
     except (Exception, Cancelled):
-        print("VM_DEV_UNCLASSIFIED", file=sys.stderr, flush=True)
+        _diagnose("VM_DEV_UNCLASSIFIED")
         return 2
     finally:
         gate.restore()
     return 0
 
 
+def run_cli(argv=None):
+    """Exit with main()'s status even when stdout/stderr are closed pipes."""
+    try:
+        status = main(argv)
+    except (Exception, Cancelled):
+        status = 2
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except (OSError, ValueError):
+            pass
+    os._exit(status)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    run_cli()

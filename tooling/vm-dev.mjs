@@ -429,12 +429,23 @@ export async function runVMDev(argv, injected = {}) {
   if (inputs.output) {
     const removable = known && (result.status === 0 || result.status === 1);
     if (!(removable && (await removeOwnedOutput(root, inputs.output))))
-      (injected.stderr ?? process.stderr).write(
-        "VM_DEV_OUTPUT_RETAINED " + inputs.output + "\n",
+      diagnose(
+        injected.stderr ?? process.stderr,
+        "VM_DEV_OUTPUT_RETAINED " + inputs.output,
       );
   }
   requireVM(known, "VM_DEV_SESSION_OUTCOME_UNKNOWN");
   return result.status;
+}
+
+// Best-effort diagnostic: the agent host may have closed stderr. A failed
+// write never changes the exit status or the retention decision.
+function diagnose(stream, line) {
+  try {
+    stream.write(line + "\n");
+  } catch {
+    // ignored by design
+  }
 }
 
 // 1 is a classified refusal; an outcome-unknown build or session (including a
@@ -449,13 +460,16 @@ export function vmDevRefusalExit(code) {
 
 const entry = process.argv[1] && pathToFileURL(process.argv[1]).href;
 if (entry && import.meta.url === entry) {
+  // An EPIPE on a closed stderr is reported asynchronously; never let it
+  // crash the process and replace the session's exit status.
+  process.stderr.on("error", () => {});
   try {
     process.exitCode = await runVMDev(process.argv.slice(2));
   } catch (error) {
     // MCP stdout MUST be protocol-only, including on preflight failures.
     const code =
       error instanceof VMDevRefusal ? error.message : "VM_DEV_UNCLASSIFIED";
-    process.stderr.write(code + "\n");
     process.exitCode = vmDevRefusalExit(code);
+    diagnose(process.stderr, code);
   }
 }

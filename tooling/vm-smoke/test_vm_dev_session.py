@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -732,13 +733,14 @@ class TeardownTests(Fixture):
     def test_main_exit_codes_and_retained_paths(self):
         self.clone = "farol-qa-" + "8"*16
         def run_main(execute):
-            stderr = io.StringIO()
+            lines = []
             with mock.patch.object(dev, "parse_options", return_value=self.options), \
                  mock.patch.object(dev, "execute", side_effect=execute), \
-                 mock.patch("sys.stderr", stderr), redirect_stdout(io.StringIO()) as stdout:
+                 mock.patch.object(dev, "_diagnose", side_effect=lines.append), \
+                 redirect_stdout(io.StringIO()) as stdout:
                 code = dev.main([])
             self.assertEqual(stdout.getvalue(), "", "stdout belongs to the MCP only")
-            return code, stderr.getvalue()
+            return code, "\n".join(lines)
         self.assertEqual(run_main(lambda *a, **k: {"status": "CLOSED_AND_REMOVED"})[0], 0)
         def refused(*a, **k):
             error = dev.VMDevError("VM_DEV_HELPER_INCOMPATIBLE")
@@ -806,6 +808,130 @@ class HelperBindingTests(Fixture):
                         identity_factory=lambda: ("farol-qa-" + "b"*16, "run-" + "b"*32),
                         binary_admission=lambda _: True, capacity_probe=lambda *a: 0,
                         clone_effect=lambda *a: self.fail("clone invoked"))
+
+
+class ExitStatusRobustnessTests(Fixture):
+    """Exit status and records survive a dead agent host and badly timed signals."""
+    PROGRAM = """import importlib.util, json, os, sys
+os.environ["FAROL_VM_DEV_IDENTITY"] = sys.argv[2]
+spec = importlib.util.spec_from_file_location("closed_pipe_dev", sys.argv[1])
+dev = importlib.util.module_from_spec(spec); spec.loader.exec_module(dev)
+def execute(*args, **kwargs):
+    error = dev.VMDevError(sys.argv[3])
+    error.result = {"status": sys.argv[4], "retained": ["/machines/x", "/evidence"]}
+    raise error
+dev.execute = execute
+dev.parse_options = lambda argv: None
+dev.run_cli([])
+"""
+
+    def run_with_closed_stderr(self, code, status):
+        read, write = os.pipe()
+        os.close(read)  # the agent host is gone: every stderr write gets EPIPE
+        try:
+            child = subprocess.run(
+                [sys.executable, "-B", "-c", self.PROGRAM, str(ROOT / "vm-dev-session.py"),
+                 json.dumps(SYNTHETIC_IDENTITY), code, status],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=write, timeout=30)
+        finally:
+            os.close(write)
+        return child.returncode
+
+    def test_retained_run_exits_2_even_when_stderr_is_a_closed_pipe(self):
+        self.assertEqual(self.run_with_closed_stderr("VM_DEV_MCP_OUTCOME_UNKNOWN", "RETAINED"), 2)
+        self.assertEqual(self.run_with_closed_stderr("VM_DEV_STOP_OUTCOME_UNKNOWN", "RETAINED"), 2)
+        self.assertEqual(self.run_with_closed_stderr("VM_DEV_HELPER_INCOMPATIBLE", "REFUSED_AND_REMOVED"), 1)
+
+    def test_failed_result_record_on_a_clean_close_never_exits_0(self):
+        teardown = TeardownTests(methodName="test_clean_close_stops_the_guest_and_deletes_only_its_own_clone")
+        teardown.setUp()
+        self.addCleanup(teardown.doCleanups)
+        teardown.clone = "farol-qa-" + "6"*16
+        actual = dev._write_once
+        def write_once(directory, leaf, document):
+            if leaf == "result.json":
+                raise OSError("synthetic result write failure")
+            return actual(directory, leaf, document)
+        with mock.patch.object(dev, "_write_once", side_effect=write_once):
+            error, result, _, _, machine = teardown.session()
+        self.assertEqual(error.code, "VM_DEV_RESULT_UNCONFIRMED")
+        self.assertEqual(result["status"], "RESULT_UNCONFIRMED")
+        self.assertEqual(dev.exit_status(error), 2)
+
+    def test_signal_during_spawn_is_forwarded_and_before_spawn_starts_nothing(self):
+        evidence = self.settings / "spawn-signal"
+        evidence.mkdir(mode=0o700)
+        session = dict(runId="run-" + "a"*32, manifestSHA256="b"*64, acceptanceSHA256="c"*64)
+        gate = dev._SignalGate()
+        sent = []
+        class Child:
+            def send_signal(self, number):
+                sent.append(number)
+            def wait(self):
+                return -15
+        def spawn(*args, **kwargs):
+            # The signal arrives while Popen runs: it must be recorded, not raised.
+            gate.handle(dev.signal.SIGTERM, None)
+            return Child()
+        with mock.patch.object(dev.subprocess, "Popen", side_effect=spawn), mock.patch.object(dev.os, "dup2"):
+            status = dev._run_mcp(self.binary, self.root, "farol-qa-" + "f"*16, self.output,
+                                  session, evidence, {}, gate)
+        self.assertEqual(status, -15)
+        self.assertEqual(sent, [dev.signal.SIGTERM], "the child is signalled, not orphaned")
+        early = dev._SignalGate()
+        early.mode = "before-mcp"
+        early.requested = dev.signal.SIGTERM
+        evidence2 = self.settings / "spawn-signal-early"
+        evidence2.mkdir(mode=0o700)
+        with mock.patch.object(dev.subprocess, "Popen") as popen:
+            with self.assertRaises(dev.Cancelled):
+                dev._run_mcp(self.binary, self.root, "farol-qa-" + "f"*16, self.output,
+                             session, evidence2, {}, early)
+        popen.assert_not_called()
+
+    def test_signal_after_the_session_returns_cannot_skip_the_result_record(self):
+        teardown = TeardownTests(methodName="test_clean_close_stops_the_guest_and_deletes_only_its_own_clone")
+        teardown.setUp()
+        self.addCleanup(teardown.doCleanups)
+        teardown.clone = "farol-qa-" + "5"*16
+        gate = dev._SignalGate()
+        closed = closed_session_mcp(teardown.root)
+        def mcp(*args):
+            status = closed(*args)
+            gate.mode = "before-mcp"  # the window: session returning, teardown not yet entered
+            return status
+        original = dev._closed_session
+        def closed_then_signal(*args):
+            value = original(*args)
+            gate.handle(dev.signal.SIGTERM, None)  # raises Cancelled in before-mcp mode
+            return value
+        with mock.patch.object(dev, "_closed_session", side_effect=closed_then_signal):
+            error, result, effects, evidence, machine = teardown.session(mcp=mcp, gate=gate)
+        self.assertEqual(error.code, "VM_DEV_CANCELLED")
+        self.assertEqual(result["status"], "RETAINED")
+        self.assertTrue((evidence / "result.json").is_file())
+        self.assertNotIn("stop", effects)
+        self.assertTrue(machine.exists(), "nothing is deleted on this path")
+        self.assertEqual(gate.mode, "teardown")
+
+    def test_stop_is_one_exact_invocation_without_force(self):
+        evidence = self.settings / "stop-argv"
+        evidence.mkdir(mode=0o700)
+        calls = []
+        class Child:
+            def wait(self, timeout):
+                return 0
+        def spawn(argv, **kwargs):
+            calls.append((argv, kwargs))
+            return Child()
+        with mock.patch.object(dev.subprocess, "Popen", side_effect=spawn), \
+             mock.patch.object(dev, "_host_status", side_effect=stopped_status):
+            dev._one_stop(self.binary, "farol-qa-" + "f"*16, evidence, {})
+        self.assertEqual([argv for argv, _ in calls],
+                         [[str(self.binary), "stop", "farol-qa-" + "f"*16, "--confirm-guest-dialog"]])
+        self.assertEqual(calls[0][1]["stdin"], subprocess.DEVNULL)
+        self.assertTrue((evidence / "stop-intent.json").is_file())
+        self.assertEqual(json.loads((evidence / "stop-receipt.json").read_text())["status"], "stopped-attested")
 
 class CapacityGuidanceTests(Fixture):
     def test_unknown_machine_is_named_with_manual_resolution_and_not_deleted(self):
