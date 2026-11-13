@@ -122,7 +122,6 @@ func modelName(s string) bool {
 	}) < 0
 }
 
-var _ port.CodexClient = (*Client)(nil)
 var _ port.Provider = (*Client)(nil)
 
 // Existing handoff identifiers use the selected vendor ASCII shape.
