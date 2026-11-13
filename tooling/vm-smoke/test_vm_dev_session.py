@@ -1,7 +1,8 @@
 """Pure, synthetic VM Dev controller checks.
 
 No VM process, installed app, host profile, network, TerminalMac binary, shell
-or real producer is started. Effects and os.execve are injected/mocked.
+or real producer is started. Effects, the MCP child, stop and status are
+injected/mocked; clone deletion runs against synthetic temporary directories.
 """
 import argparse
 from contextlib import redirect_stdout
@@ -11,6 +12,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 from types import SimpleNamespace
@@ -24,6 +26,29 @@ os.environ["FAROL_VM_DEV_IDENTITY"] = json.dumps(SYNTHETIC_IDENTITY)
 spec = importlib.util.spec_from_file_location("vm_dev_session_test", ROOT / "vm-dev-session.py")
 dev = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(dev)
+
+
+def closed_session_mcp(root, calls=None, status=0, terminal=True):
+    """A synthetic MCP child: optionally publishes terminal-mac's CLOSED record."""
+    def mcp(binary, vm_root, name, stage, session, evidence, env, gate=None):
+        if calls is not None:
+            calls.append(("mcp", name, session))
+        if terminal:
+            run = vm_root / "machines" / name / "mcp-app-sessions" / session["runId"]
+            run.mkdir(parents=True, mode=0o700)
+            (run / "session.json").write_text(json.dumps({"status": "pending"}))
+            (run / "terminal.json").write_text(json.dumps({
+                "schema": dev.MCP_SESSION_CONTRACT, "state": "CLOSED", "runID": session["runId"],
+                "helperInstance": "synthetic", "rootExit": "observed", "uiPrimaryExit": "observed",
+                "installationEvidence": "verified-at-close"}))
+            for item in run.iterdir():
+                item.chmod(0o600)
+        return status
+    return mcp
+
+
+def stopped_status(binary, name, env):
+    return {"name": name, "state": "stopped"}
 
 
 class Fixture(unittest.TestCase):
@@ -144,7 +169,8 @@ class AdmissionTests(Fixture):
                     raise OSError("synthetic directory sync failure")
                 actual(path)
             with self.subTest(parent=failed_parent.name), mock.patch.object(dev, "_sync_directory", side_effect=sync):
-                with self.assertRaises(OSError):
+                # An unexpected host error is classified, never a raw traceback.
+                with self.assertRaisesRegex(dev.VMDevError, "VM_DEV_UNCLASSIFIED"):
                     dev.execute(self.options,
                         infrastructure=lambda: (self.binary, self.root, self.settings),
                         identity_factory=lambda: (clone, "run-" + "c"*32),
@@ -189,18 +215,23 @@ class AdmissionTests(Fixture):
             self.assertFalse(visible)
             self.assertTrue((evidence / "selection.json").exists())
             self.assertTrue((evidence / "payload.json").exists())
-        def handed(binary, root, name, stage, session, evidence, env):
+        closed = closed_session_mcp(self.root)
+        def handed(binary, root, name, stage, session, evidence, env, gate=None):
             calls.append(("mcp", name, session))
             self.assertEqual(session["manifestSHA256"], "a"*64)
             self.assertEqual(session["acceptanceSHA256"], "b"*64)
             self.assertEqual(env["TERMINAL_MAC_HOME"], str(self.root))
-        with mock.patch.object(dev, "_guest_grants", return_value=None):
-            dev.execute(self.options,
+            return closed(binary, root, name, stage, session, evidence, env, gate)
+        with mock.patch.object(dev, "_guest_grants", return_value=None), \
+             mock.patch.object(dev, "_one_stop", side_effect=lambda *a: calls.append(("stop",))), \
+             mock.patch.object(dev, "_host_status", side_effect=stopped_status):
+            result = dev.execute(self.options,
                 infrastructure=lambda: (self.binary, self.root, self.settings),
                 identity_factory=lambda: (clone, run),
                 clone_effect=cloned, start_effect=started, producer=producer,
-                binary_admission=lambda _: True, capacity_probe=lambda *a: 0, exec_effect=handed)
-        self.assertEqual([entry[0] for entry in calls], ["clone", "producer", "start", "mcp"])
+                binary_admission=lambda _: True, capacity_probe=lambda *a: 0, mcp_effect=handed)
+        self.assertEqual([entry[0] for entry in calls], ["clone", "producer", "start", "mcp", "stop"])
+        self.assertEqual(result["status"], "CLOSED_AND_REMOVED")
         self.assertTrue((self.settings / "instance-receipts" / (clone + ".json")).is_file())
         evidence = self.settings / "vm-dev-sessions" / clone
         self.assertEqual(json.loads((evidence / "selection.json").read_text())["runId"], run)
@@ -224,13 +255,15 @@ class AdmissionTests(Fixture):
         retained = {}
         for digit in ("1", "2"):
             clone, run = "farol-qa-" + digit*16, "run-" + digit*32
-            with mock.patch.object(dev, "_guest_grants", return_value=None):
+            with mock.patch.object(dev, "_guest_grants", return_value=None), \
+                 mock.patch.object(dev, "_one_stop"), \
+                 mock.patch.object(dev, "_host_status", side_effect=stopped_status):
                 dev.execute(self.options,
                     infrastructure=lambda: (self.binary, self.root, self.settings),
                     identity_factory=lambda: (clone, run), clone_effect=cloned,
                     start_effect=lambda *a: None, producer=producer,
                     binary_admission=lambda _: True, capacity_probe=lambda *a: 0,
-                    exec_effect=lambda *a: None)
+                    mcp_effect=closed_session_mcp(self.root))
             for path, original in retained.items():
                 self.assertEqual(path.read_bytes(), original)
             evidence = self.settings / "vm-dev-sessions" / clone
@@ -238,7 +271,7 @@ class AdmissionTests(Fixture):
             self.assertTrue((evidence / "stage-receipt.json").is_file())
         self.assertEqual(sessions, ["farol-qa-" + "1"*16, "farol-qa-" + "2"*16])
 
-    def test_failed_stage_keeps_original_intent_and_partial_clone(self):
+    def test_failed_stage_keeps_evidence_but_removes_the_never_started_clone(self):
         clone = "farol-qa-" + "f"*16
         run = "run-" + "c"*32
         def cloned(command, evidence, binary, env, candidate):
@@ -249,19 +282,27 @@ class AdmissionTests(Fixture):
         def broken(archive, receipt, digest, stage):
             (stage / "blob-synthetic").write_text("partial")
             raise RuntimeError("unclassified synthetic error")
-        with self.assertRaisesRegex(dev.VMDevError, "VM_DEV_STAGING_UNCONFIRMED"), \
-             mock.patch.object(dev, "_guest_grants") as grants:
+        with self.assertRaisesRegex(dev.VMDevError, "VM_DEV_STAGING_UNCONFIRMED") as raised, \
+             mock.patch.object(dev, "_guest_grants") as grants, \
+             mock.patch.object(dev, "_one_stop") as stop, \
+             mock.patch.object(dev, "_host_status", side_effect=stopped_status):
             dev.execute(self.options,
                 infrastructure=lambda: (self.binary, self.root, self.settings),
                 identity_factory=lambda: (clone, run),
                 clone_effect=cloned, start_effect=lambda *a: self.fail("start"),
                 producer=broken, binary_admission=lambda _: True, capacity_probe=lambda *a: 0,
-                exec_effect=lambda *a: self.fail("exec"))
+                mcp_effect=lambda *a: self.fail("mcp"))
         evidence = self.settings / "vm-dev-sessions" / clone
         self.assertTrue((evidence / "stage-intent.json").is_file())
         self.assertFalse((evidence / "stage-receipt.json").exists())
-        self.assertTrue((self.root / "machines" / clone / "artifacts" / run / "blob-synthetic").exists())
+        # Staging is host-only and the guest never started: the clone it
+        # created (including the partial blobs) is removed, the evidence kept.
+        self.assertFalse((self.root / "machines" / clone).exists())
+        self.assertEqual(raised.exception.result["status"], "REFUSED_AND_REMOVED")
+        self.assertEqual(json.loads((evidence / "result.json").read_text())["code"],
+                         "VM_DEV_STAGING_UNCONFIRMED")
         grants.assert_not_called()
+        stop.assert_not_called()
 
 
 class EffectsTests(Fixture):
@@ -429,27 +470,291 @@ class EffectsTests(Fixture):
         self.assertTrue((evidence / "start-intent.json").exists())
         self.assertFalse((evidence / "start-receipt.json").exists())
 
-    def test_handoff_only_execs_native_mcp_with_inherited_stdio(self):
+    def test_mcp_child_inherits_stdio_and_records_its_exit_once(self):
         evidence = self.settings / "handoff-evidence"
         evidence.mkdir(mode=0o700)
         session = dict(runId="run-" + "a"*32,
                        manifestSHA256="b"*64, acceptanceSHA256="c"*64)
-        with mock.patch.object(dev.os, "execve", return_value=None) as invoked:
-            dev._exec_mcp(self.binary, self.root, "farol-qa-" + "f"*16,
-                          self.output, session, evidence, {"HOME": "/synthetic"})
-        invoked.assert_called_once()
-        binary, argv, env = invoked.call_args.args
-        self.assertEqual(binary, str(self.binary))
+        class Child:
+            pid = 7001
+            def wait(self):
+                return 0
+        with mock.patch.object(dev.subprocess, "Popen", return_value=Child()) as spawned, \
+             mock.patch.object(dev.os, "dup2") as dup2:
+            status = dev._run_mcp(self.binary, self.root, "farol-qa-" + "f"*16,
+                                  self.output, session, evidence, {"HOME": "/synthetic"})
+        self.assertEqual(status, 0)
+        spawned.assert_called_once()
+        argv = spawned.call_args.args[0]
+        options = spawned.call_args.kwargs
         self.assertEqual(argv, [str(self.binary), "mcp", "farol-qa-" + "f"*16,
                                 "--app-run", session["runId"],
                                 "--app-manifest", session["manifestSHA256"],
                                 "--app-acceptance", session["acceptanceSHA256"]])
-        self.assertEqual(env["TERMINAL_MAC_HOME"], str(self.root))
+        for stream in ("stdin", "stdout", "stderr"):
+            self.assertNotIn(stream, options, "stdio is inherited, never piped")
+        self.assertEqual(options["env"]["TERMINAL_MAC_HOME"], str(self.root))
+        self.assertEqual(dup2.call_args.args[1], 1, "the controller drops its own stdout copy")
         handoff = json.loads((evidence / "handoff.json").read_text())
-        self.assertEqual(handoff["status"], "exec-pending")
+        self.assertEqual(handoff["status"], "mcp-pending")
         self.assertTrue((evidence / "mcp-intent.json").is_file())
+        receipt = json.loads((evidence / "mcp-receipt.json").read_text())
+        self.assertEqual((receipt["exitCode"], receipt["signal"]), (0, None))
         self.assertNotIn("password", str(handoff).lower())
 
+    def test_mcp_spawn_failure_is_a_known_refusal(self):
+        evidence = self.settings / "spawn-evidence"
+        evidence.mkdir(mode=0o700)
+        session = dict(runId="run-" + "a"*32, manifestSHA256="b"*64, acceptanceSHA256="c"*64)
+        with mock.patch.object(dev.subprocess, "Popen", side_effect=OSError("synthetic")):
+            with self.assertRaisesRegex(dev.VMDevError, "VM_DEV_MCP_SPAWN_REFUSED"):
+                dev._run_mcp(self.binary, self.root, "farol-qa-" + "f"*16,
+                             self.output, session, evidence, {})
+        self.assertNotIn("VM_DEV_MCP_SPAWN_REFUSED", dev.UNKNOWN_CODES)
+
+
+
+class TeardownTests(Fixture):
+    """The controller removes what it creates, except where an outcome is unknown."""
+    clone = "farol-qa-" + "d"*16
+    run_id = "run-" + "d"*32
+
+    def cloned(self, command, evidence, binary, env, run):
+        machine = self.root / "machines" / command[3]
+        machine.mkdir(mode=0o700)
+        (machine / "machine.json").write_text(json.dumps({"name": command[3], "network": True}))
+        (machine / "clone.json").write_text(json.dumps({
+            "schema": "terminal-mac.clone/1", "from": "farol-base-1", "to": command[3]}))
+        (machine / "disk.img").write_bytes(b"synthetic disk")
+        return 1234
+
+    @staticmethod
+    def producer(archive, receipt, digest, stage):
+        (stage / "blob-synthetic").write_text("staged")
+        return {"runId": stage.name, "manifestSHA256": "a"*64,
+                "acceptanceSHA256": "b"*64, "artifactSHA256": "e"*64}
+
+    def session(self, mcp=None, start=None, grants=None, stop=None, status=stopped_status, gate=None):
+        effects = []
+        def started(*a):
+            effects.append("start")
+            if start is not None:
+                start()
+        def stopped(binary, name, evidence, env):
+            effects.append("stop")
+            if stop is not None:
+                stop()
+        def granted(*a):
+            effects.append("grants")
+            if grants is not None:
+                grants()
+        error = None
+        with mock.patch.object(dev, "_guest_grants", side_effect=granted), \
+             mock.patch.object(dev, "_one_stop", side_effect=stopped), \
+             mock.patch.object(dev, "_host_status", side_effect=status):
+            try:
+                result = dev.execute(self.options,
+                    infrastructure=lambda: (self.binary, self.root, self.settings),
+                    identity_factory=lambda: (self.clone, self.run_id),
+                    clone_effect=self.cloned, start_effect=started, producer=self.producer,
+                    binary_admission=lambda _: True, capacity_probe=lambda *a: 0,
+                    mcp_effect=mcp or closed_session_mcp(self.root), gate=gate)
+            except dev.VMDevError as raised:
+                error, result = raised, raised.result
+        evidence = self.settings / "vm-dev-sessions" / self.clone
+        return error, result, effects, evidence, self.root / "machines" / self.clone
+
+    def test_clean_close_stops_the_guest_and_deletes_only_its_own_clone(self):
+        error, result, effects, evidence, machine = self.session()
+        self.assertIsNone(error)
+        self.assertEqual(effects, ["start", "grants", "stop"])
+        self.assertEqual(result["status"], "CLOSED_AND_REMOVED")
+        self.assertEqual(result["outcome"], "clean")
+        self.assertFalse(machine.exists())
+        self.assertTrue((self.root / "machines/farol-base-1/machine.json").is_file(), "the base is untouched")
+        self.assertTrue((self.settings / "instance-receipts" / (self.clone + ".json")).is_file())
+        # terminal-mac's own session records survive the clone deletion.
+        copied = evidence / "terminal-mac-session" / "terminal.json"
+        self.assertEqual(json.loads(copied.read_text())["state"], "CLOSED")
+        self.assertTrue((evidence / "delete-intent.json").is_file())
+        self.assertTrue((evidence / "delete-receipt.json").is_file())
+        self.assertEqual(json.loads((evidence / "result.json").read_text())["removed"], [str(machine)])
+
+    def test_known_refusal_after_a_confirmed_start_stops_and_removes(self):
+        for code in ("VM_DEV_HELPER_INCOMPATIBLE", "VM_DEV_NEEDS_OWNER_PERMISSIONS",
+                     "VM_DEV_HELPER_CUSTODY_UNRESOLVED", "VM_DEV_NEEDS_OWNER_HELPER_UNAVAILABLE"):
+            with self.subTest(code=code):
+                self.clone = "farol-qa-" + hashlib.sha256(code.encode()).hexdigest()[:16]
+                def refuse(code=code):
+                    raise dev.VMDevError(code)
+                error, result, effects, evidence, machine = self.session(
+                    grants=refuse, mcp=lambda *a: self.fail("mcp after refusal"))
+                self.assertEqual(error.code, code)
+                self.assertEqual(effects, ["start", "grants", "stop"])
+                self.assertEqual(result["status"], "REFUSED_AND_REMOVED")
+                self.assertEqual(result["outcome"], "known-refusal")
+                self.assertFalse(machine.exists())
+
+    def test_writable_share_after_attested_start_is_stopped_and_removed(self):
+        def writable():
+            error = dev.VMDevError("VM_DEV_HOST_GRANTS_INVALID")
+            error.running = True
+            raise error
+        error, result, effects, _, machine = self.session(start=writable)
+        self.assertEqual(error.code, "VM_DEV_HOST_GRANTS_INVALID")
+        self.assertEqual(effects, ["start", "stop"])
+        self.assertEqual(result["status"], "REFUSED_AND_REMOVED")
+        self.assertFalse(machine.exists())
+
+    def test_unknown_outcomes_retain_vm_clone_and_evidence(self):
+        cases = {
+            "mcp-nonzero": dict(mcp=closed_session_mcp(self.root, status=201)),
+            "mcp-signal": dict(mcp=closed_session_mcp(self.root, status=-15)),
+            "mcp-close-unproven": dict(mcp=closed_session_mcp(self.root, terminal=False)),
+            "start-unknown": dict(start=lambda: (_ for _ in ()).throw(dev.VMDevError("VM_DEV_RUNTIME_START_UNKNOWN"))),
+            "unclassified": dict(grants=lambda: (_ for _ in ()).throw(RuntimeError("synthetic"))),
+        }
+        for name, options in cases.items():
+            with self.subTest(case=name):
+                self.clone = "farol-qa-" + hashlib.sha256(name.encode()).hexdigest()[:16]
+                error, result, effects, evidence, machine = self.session(**options)
+                self.assertIn(error.code, dev.UNKNOWN_CODES)
+                self.assertNotIn("stop", effects, "an unknown outcome is never stopped")
+                self.assertEqual(result["status"], "RETAINED")
+                self.assertEqual(result["outcome"], "unknown")
+                self.assertTrue((machine / "disk.img").exists())
+                self.assertEqual(result["retained"], [str(machine), str(evidence)])
+                self.assertFalse((evidence / "delete-intent.json").exists())
+
+    def test_unknown_clone_without_a_directory_is_still_retained_as_unknown(self):
+        def lost(command, evidence, binary, env, run):
+            raise dev.VMDevError("VM_DEV_CLONE_OUTCOME_UNKNOWN")
+        self.cloned = lost
+        error, result, effects, evidence, machine = self.session()
+        self.assertEqual(error.code, "VM_DEV_CLONE_OUTCOME_UNKNOWN")
+        self.assertEqual(result["status"], "RETAINED")
+        self.assertEqual(result["retained"], [str(evidence)])
+        self.assertEqual(effects, [])
+
+    def test_unconfirmed_teardown_retains_and_reports(self):
+        cases = {
+            "stop-unknown": dict(stop=lambda: (_ for _ in ()).throw(dev.VMDevError("VM_DEV_STOP_OUTCOME_UNKNOWN"))),
+            "not-stopped": dict(status=lambda binary, name, env: {"name": name, "state": "running"}),
+        }
+        for name, options in cases.items():
+            with self.subTest(case=name):
+                self.clone = "farol-qa-" + hashlib.sha256(name.encode()).hexdigest()[:16]
+                error, result, _, evidence, machine = self.session(**options)
+                self.assertEqual(result["status"], "RETAINED")
+                self.assertTrue(machine.exists())
+                self.assertEqual(result["outcome"], "clean", "the session itself closed cleanly")
+                self.assertIn(error.code, ("VM_DEV_STOP_OUTCOME_UNKNOWN", "VM_DEV_CLONE_DELETE_REFUSED",
+                                           "VM_DEV_STOP_UNCONFIRMED"))
+
+    def test_deletion_requires_positive_identification(self):
+        def tamper_receipt(*a):
+            receipt = self.settings / "instance-receipts" / (self.clone + ".json")
+            value = json.loads(receipt.read_text())
+            value["base"] = "farol-base-2"
+            receipt.write_text(json.dumps(value))
+        def symlinked_machine(*a):
+            machine = self.root / "machines" / self.clone
+            moved = self.root / "elsewhere"
+            machine.rename(moved)
+            machine.symlink_to(moved, target_is_directory=True)
+        for name, mutate in (("receipt-changed", tamper_receipt), ("machine-symlink", symlinked_machine)):
+            with self.subTest(case=name):
+                self.clone = "farol-qa-" + hashlib.sha256(name.encode()).hexdigest()[:16]
+                closed = closed_session_mcp(self.root)
+                def mcp(*args, mutate=mutate, closed=closed):
+                    status = closed(*args)
+                    mutate()
+                    return status
+                error, result, _, evidence, machine = self.session(mcp=mcp)
+                self.assertEqual(result["status"], "RETAINED")
+                self.assertFalse((evidence / "delete-intent.json").exists())
+                self.assertTrue(machine.exists() or machine.is_symlink())
+                if name == "machine-symlink":
+                    self.assertTrue((self.root / "elsewhere" / "disk.img").exists())
+                    (self.root / "machines" / self.clone).unlink()
+                    shutil.rmtree(self.root / "elsewhere")
+
+    def test_base_and_foreign_names_are_never_deleted(self):
+        evidence = self.settings / "guard"
+        evidence.mkdir(mode=0o700)
+        for name in ("farol-base-1", "farol-qa-short", "../farol-base-1"):
+            with self.subTest(name=name), mock.patch.object(dev, "_host_status", side_effect=stopped_status):
+                with self.assertRaisesRegex(dev.VMDevError, "VM_DEV_CLONE_DELETE_REFUSED"):
+                    dev._delete_clone(self.binary, self.root, name, "farol-base-1",
+                                      self.base_receipt, "0"*64, evidence, {})
+        self.assertTrue((self.root / "machines/farol-base-1").is_dir())
+        self.assertFalse((evidence / "delete-intent.json").exists())
+
+    def test_cancellation_before_mcp_retains_and_teardown_cancel_retains(self):
+        def cancel():
+            raise dev.Cancelled()
+        error, result, effects, _, machine = self.session(grants=cancel)
+        self.assertEqual(error.code, "VM_DEV_CANCELLED")
+        self.assertNotIn("stop", effects)
+        self.assertEqual(result["status"], "RETAINED")
+        self.assertTrue(machine.exists())
+        self.clone = "farol-qa-" + "9"*16
+        gate = dev._SignalGate()
+        closed = closed_session_mcp(self.root)
+        def mcp(*args):
+            gate.requested = 15  # a signal arrived while the MCP child owned stdio
+            return closed(*args)
+        error, result, effects, _, machine = self.session(mcp=mcp, gate=gate)
+        self.assertEqual(error.code, "VM_DEV_TEARDOWN_CANCELLED")
+        self.assertNotIn("stop", effects)
+        self.assertEqual(result["status"], "RETAINED")
+        self.assertTrue(machine.exists())
+
+    def test_main_exit_codes_and_retained_paths(self):
+        self.clone = "farol-qa-" + "8"*16
+        def run_main(execute):
+            stderr = io.StringIO()
+            with mock.patch.object(dev, "parse_options", return_value=self.options), \
+                 mock.patch.object(dev, "execute", side_effect=execute), \
+                 mock.patch("sys.stderr", stderr), redirect_stdout(io.StringIO()) as stdout:
+                code = dev.main([])
+            self.assertEqual(stdout.getvalue(), "", "stdout belongs to the MCP only")
+            return code, stderr.getvalue()
+        self.assertEqual(run_main(lambda *a, **k: {"status": "CLOSED_AND_REMOVED"})[0], 0)
+        def refused(*a, **k):
+            error = dev.VMDevError("VM_DEV_HELPER_INCOMPATIBLE")
+            error.result = {"status": "REFUSED_AND_REMOVED", "retained": ["/evidence"]}
+            raise error
+        self.assertEqual(run_main(refused)[0], 1)
+        def retained(*a, **k):
+            error = dev.VMDevError("VM_DEV_MCP_OUTCOME_UNKNOWN")
+            error.result = {"status": "RETAINED", "retained": ["/machines/x", "/evidence"]}
+            raise error
+        code, text = run_main(retained)
+        self.assertEqual(code, 2)
+        self.assertIn("VM_DEV_RETAINED /machines/x", text)
+        self.assertEqual(run_main(lambda *a, **k: (_ for _ in ()).throw(dev.VMDevError("VM_DEV_CAPACITY_BUSY")))[0], 1)
+        self.assertEqual(run_main(lambda *a, **k: (_ for _ in ()).throw(KeyError("x")))[0], 2)
+
+
+class CapacityGuidanceTests(Fixture):
+    def test_unknown_machine_is_named_with_manual_resolution_and_not_deleted(self):
+        leftover = self.root / "machines/farol-qa-0123456789abcdef"
+        leftover.mkdir(mode=0o700)
+        replies = {"farol-base-1": {"name": "farol-base-1", "state": "stopped"},
+                   leftover.name: {"name": leftover.name, "state": "error"}}
+        with mock.patch.object(dev, "_host_status", side_effect=lambda b, name, e: replies[name]):
+            with self.assertRaises(dev.VMDevError) as raised:
+                dev._capacity(self.binary, self.root, {})
+        self.assertEqual(raised.exception.code, "VM_DEV_CAPACITY_UNKNOWN")
+        self.assertIn("machine=farol-qa-0123456789abcdef state=error", raised.exception.detail)
+        self.assertIn("resolve manually", raised.exception.detail)
+        self.assertTrue(leftover.is_dir(), "never auto-deleted")
+        replies[leftover.name] = None
+        with self.assertRaises(dev.VMDevError) as raised:
+            with mock.patch.object(dev, "_host_status", side_effect=lambda b, name, e: replies[name]):
+                dev._capacity(self.binary, self.root, {})
+        self.assertIn("state=unreadable", raised.exception.detail)
 
 if __name__ == "__main__":
     unittest.main()

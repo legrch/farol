@@ -240,12 +240,45 @@ graceful Quit/close on clean EOF. A missing helper, permissions, retained lease
 or unknown effect must block; never replay a clone/start/native effect simply
 because a controller lost the ACK.
 
-The VM runtime is preserved after controller failure or UNKNOWN, as are
-staging and original operation evidence. The source/intent/clone receipts are
-under the private `Farol Testing/vm-dev-sessions/<clone>/` infrastructure
-directory. Only a **new, fully qualified run** should be attempted after the
-original custody has been independently reconciled. Existing qa-3/qa-7
-unknown outcomes and old input fences are never touched.
+**The controller removes what it creates.** The MCP child inherits the agent's
+stdin/stdout; the controller waits for it and then tears down:
+
+- **Clean close** — MCP exit 0 *and* terminal-mac's own immutable
+  `mcp-app-sessions/<run>/terminal.json` says `CLOSED` for this run with both
+  original exits observed and a verified tree. The controller copies that
+  session directory into its evidence, stops the guest it started once
+  (`terminal-mac stop <clone> --confirm-guest-dialog`, never `--force`), confirms
+  `stopped` with a fresh status, and deletes the clone it created.
+- **Known refusal after a confirmed start** (writable artifact share, helper
+  contract, custody or permissions, helper unavailable, MCP spawn refused) and
+  **failure before the guest ran** (staging, stage directory) — the same stop
+  (when started) and delete.
+- **Unknown outcome** (clone, start or runtime readiness unknown, unconfirmed
+  instance receipt, MCP non-zero or signal exit, a clean exit without the CLOSED
+  record, cancellation or an unclassified error) — nothing is stopped or deleted.
+- **Teardown that cannot be confirmed** (stop not confirmed, deletion guard
+  refused, a signal during teardown) — the clone and runtime are kept.
+
+There is no terminal-mac delete command: deletion removes the clone's directory
+under the machines root, and only after positive identification — the
+`farol-qa-<16 hex>` grammar (never a `farol-base-*`), this run's own instance
+receipt with the digest recorded when it was written, terminal-mac's clone record
+naming the selected base, a physical owned directory directly inside the machines
+root, and a fresh `stopped` status. Each stop and delete has a create-only intent
+and receipt.
+
+Retention rule: whenever anything is kept, `vm-dev-sessions/<clone>/result.json`
+records the status (`CLOSED_AND_REMOVED`, `REFUSED_AND_REMOVED` or `RETAINED`),
+the classified reason, what was removed and what was retained, and the controller
+prints `VM_DEV_RETAINED <path>` lines on stderr. The private evidence directory
+itself is always kept. Exit status is 0 (closed and removed), 1 (refused, nothing
+retained beyond evidence) or 2 (retained). `vm-dev.mjs` deletes the
+`_output/vm-dev/run-*` directory it built when the session exits 0 or 1, removes
+it as well when assembly or archiving refuses, and otherwise keeps it and prints
+`VM_DEV_OUTPUT_RETAINED <path>`. An explicit `--artifact` directory is never
+removed. Only a **new, fully qualified run** should be attempted after retained
+custody has been independently reconciled. Existing qa-3/qa-7 unknown outcomes
+and old input fences are never touched.
 
 `task vm:dev` is a **live operator action**, not a closed-contour test and not
 proof of installed product readiness merely because startup succeeded. The
@@ -273,7 +306,7 @@ until those exact native/live receipts exist.
 
 The build defaults to `_output/go-build-inputs.json`, the same approved offline declaration used by the existing build lanes. It never silently emits a backend-less application. `--go-inputs` selects build inputs only and cannot accompany an existing artifact. A successful `start` launcher may exit before its detached VM; readiness is attested by a new read-only status naming the runtime PID, separately from the launcher PID.
 
-The controller checks active runtimes in its managed store before cloning and refuses `VM_DEV_CAPACITY_BUSY` when two are occupied. It never stops another session automatically. Clean MCP EOF closes the accepted app, not the VM runtime: release a finished VM with `terminal-mac stop <instance>` and observe its guest shutdown confirmation when needed. Preserve all disks and UNKNOWN evidence. Concurrent starts or VMs in another store can still exhaust capacity after the preflight; retain that original failed start rather than replay it.
+The controller checks active runtimes in its managed store before cloning and refuses `VM_DEV_CAPACITY_BUSY` when two are occupied. It never stops another session automatically. A machine whose status is unreadable or outside the known states (for example `error`, or a partial clone left by an unknown outcome) refuses with `VM_DEV_CAPACITY_UNKNOWN machine=<name> state=<state>` and the manual resolution; it is never deleted automatically. Clean MCP EOF closes the accepted app; the controller then stops and removes its own clone as described above. Disks are kept only for UNKNOWN outcomes or unconfirmed teardown. Concurrent starts or VMs in another store can still exhaust capacity after the preflight; retain that original failed start rather than replay it.
 
 ### Agent configuration and qualified scope
 

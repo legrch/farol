@@ -342,3 +342,118 @@ test("MCP process publication ambiguity is not retried, nor converted to exit0",
   );
   assert.equal(calls, 1);
 });
+
+// --- The controller removes the _output/vm-dev/run-* directory it built ---
+
+function builtRoute(calls) {
+  return {
+    run: () => ({ status: 0, error: null, signal: null }),
+    assemble: async (_root, output) => {
+      calls.push(output);
+      const selected = {
+        schema: "farol.vm-dev-artifact/1",
+        kind: "local-dev-derivative",
+        appName: VM_DEV_APP,
+        bundleId: VM_DEV_IDENTITY.bundleId,
+        environment: "dev",
+        artifactPath: path.join(output, VM_DEV_APP),
+        artifactSha256: "e".repeat(64),
+        officialRelease: false,
+        hostLaunch: false,
+        profileImport: false,
+      };
+      await fs.writeFile(
+        path.join(output, "vm-dev-artifact.json"),
+        JSON.stringify(selected),
+        { mode: 0o600, flag: "wx" },
+      );
+      return selected;
+    },
+    archive: async (_root, output, receiptSHA256) => {
+      await fs.writeFile(
+        path.join(output, VM_DEV_ARCHIVE),
+        Buffer.from("504b03040000", "hex"),
+        { mode: 0o600, flag: "wx" },
+      );
+      return {
+        schema: "farol.vm-dev-archive/1",
+        archiveName: VM_DEV_ARCHIVE,
+        receiptSHA256,
+        officialRelease: false,
+      };
+    },
+  };
+}
+
+async function builtRuns(root) {
+  return (await fs.readdir(path.join(root, "_output/vm-dev"))).filter(
+    (name) => name !== "run-dev1",
+  );
+}
+
+test("a refused assembly removes the run directory it created", async (t) => {
+  const f = await fixture(t);
+  const calls = [];
+  await assert.rejects(
+    buildDevInputs(f.root, {
+      run: () => ({ status: 0 }),
+      assemble: async (_root, output) => {
+        calls.push(output);
+        await fs.writeFile(path.join(output, "partial"), "partial copy");
+        throw new VMDevRefusal("VM_DEV_BUILD_UNQUALIFIED");
+      },
+    }),
+    /VM_DEV_BUILD_UNQUALIFIED/,
+  );
+  assert.equal(calls.length, 1);
+  assert.deepEqual(await builtRuns(f.root), []);
+  assert.ok(await fs.stat(f.output), "a foreign run directory is untouched");
+});
+
+test("session exit 0 or 1 removes the built output; exit 2 or a signal retains it", async (t) => {
+  for (const [session, kept, unknown] of [
+    [{ status: 0, error: null, signal: null }, false, false],
+    [{ status: 1, error: null, signal: null }, false, false],
+    [{ status: 2, error: null, signal: null }, true, false],
+    [{ status: null, error: null, signal: "SIGTERM" }, true, true],
+  ]) {
+    const f = await fixture(t);
+    const calls = [];
+    const written = [];
+    const run = runVMDev([], {
+      root: f.root,
+      ...builtRoute(calls),
+      python: () => session,
+      stderr: { write: (text) => written.push(text) },
+    });
+    if (unknown) await assert.rejects(run, /VM_DEV_SESSION_OUTCOME_UNKNOWN/);
+    else assert.equal(await run, session.status);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(
+      await builtRuns(f.root),
+      kept ? [path.basename(calls[0])] : [],
+      JSON.stringify(session),
+    );
+    assert.deepEqual(
+      written,
+      kept ? ["VM_DEV_OUTPUT_RETAINED " + calls[0] + "\n"] : [],
+    );
+  }
+});
+
+test("an explicitly selected artifact directory is never removed", async (t) => {
+  const f = await fixture(t);
+  const status = await runVMDev(
+    [
+      "--artifact",
+      f.artifact,
+      "--receipt",
+      f.receipt,
+      "--expected-receipt-sha256",
+      f.receiptSHA256,
+    ],
+    { root: f.root, python: () => ({ status: 0, error: null, signal: null }) },
+  );
+  assert.equal(status, 0);
+  assert.ok(await fs.stat(f.artifact));
+});

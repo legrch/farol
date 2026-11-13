@@ -114,7 +114,7 @@ tasks:
       - node tooling/vm-entry.mjs machine {{.CLI_ARGS}}
 
   vm:dev:
-    desc: Assemble accepted local Dev bytes, create a fresh prepared-base clone, then inherit the native MCP stdio session (hidden by default)
+    desc: Assemble accepted local Dev bytes, clone a prepared base, run the native MCP stdio session (hidden by default), then stop and remove the clone and build output unless an outcome is unknown
     # Task's own command echo must not contaminate the inherited JSON-RPC stdout.
     silent: true
     cmds:

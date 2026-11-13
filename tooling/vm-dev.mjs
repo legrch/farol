@@ -277,6 +277,31 @@ export function requireBuildSuccess(
   requireVM(outcome.status === 0, "VM_DEV_BUILD_UNQUALIFIED");
 }
 
+const OWNED_OUTPUT = /^run-[a-f0-9]{32}$/u;
+
+// Remove exactly the _output/vm-dev/run-* directory THIS process created.
+// It must still be a physical owned directory directly under _output/vm-dev;
+// anything else is left in place and reported. fs.rm never follows links.
+export async function removeOwnedOutput(root, output) {
+  const parent = path.join(root, "_output/vm-dev");
+  if (path.dirname(output) !== parent || !OWNED_OUTPUT.test(path.basename(output)))
+    return false;
+  try {
+    const info = await fs.lstat(output);
+    if (
+      !info.isDirectory() ||
+      info.isSymbolicLink() ||
+      info.uid !== process.getuid() ||
+      (await fs.realpath(output)) !== output
+    )
+      return false;
+    await fs.rm(output, { recursive: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function buildDevInputs(root, injected = {}) {
   const id = "run-" + randomUUID().replaceAll("-", "");
   const output = path.join(root, "_output/vm-dev", id);
@@ -289,6 +314,16 @@ export async function buildDevInputs(root, injected = {}) {
   );
   await fs.mkdir(path.dirname(output), { recursive: true, mode: 0o700 });
   await fs.mkdir(output, { mode: 0o700 });
+  try {
+    return { ...(await assembleDevInputs(root, output, injected)), output };
+  } catch (error) {
+    // Host-only assembly/archive output with no VM effect: remove it.
+    await removeOwnedOutput(root, output);
+    throw error;
+  }
+}
+
+async function assembleDevInputs(root, output, injected) {
   const assemble = injected.assemble ?? assembleVMDev;
   const archive = injected.archive ?? archiveVMDev;
   const receipt = await assemble(root, output);
@@ -379,13 +414,23 @@ export async function runVMDev(argv, injected = {}) {
       stdio: "inherit",
     },
   );
-  requireVM(
+  const known =
     result &&
-      result.error == null &&
-      result.signal == null &&
-      Number.isInteger(result.status),
-    "VM_DEV_SESSION_OUTCOME_UNKNOWN",
-  );
+    result.error == null &&
+    result.signal == null &&
+    Number.isInteger(result.status);
+  // The session exits 0 (closed and removed) or 1 (refused, nothing retained
+  // beyond its private evidence). Only then is this run's built output plain
+  // host output; otherwise it is evidence of what was staged and is kept.
+  // An explicitly selected --artifact directory is never removed.
+  if (inputs.output) {
+    const removable = known && (result.status === 0 || result.status === 1);
+    if (!(removable && (await removeOwnedOutput(root, inputs.output))))
+      (injected.stderr ?? process.stderr).write(
+        "VM_DEV_OUTPUT_RETAINED " + inputs.output + "\n",
+      );
+  }
+  requireVM(known, "VM_DEV_SESSION_OUTCOME_UNKNOWN");
   return result.status;
 }
 
