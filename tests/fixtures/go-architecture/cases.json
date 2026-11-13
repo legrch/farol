@@ -8,7 +8,7 @@
       {
         "code": "GO_PACKAGE_NAME",
         "file": "modules/chat/domain/contextcheckpoint",
-        "detail": "Package token outside the explicit ADR-0001 vocabulary: contextcheckpoint"
+        "detail": "Package name outside the admitted vocabulary: contextcheckpoint"
       }
     ],
     "blocking": []
@@ -22,7 +22,7 @@
       {
         "code": "GO_PACKAGE_NAME",
         "file": "modules/chat/domain/turns",
-        "detail": "Package token outside the explicit ADR-0001 vocabulary: turns"
+        "detail": "Package name outside the admitted vocabulary: turns"
       }
     ],
     "blocking": []
@@ -36,7 +36,7 @@
       {
         "code": "GO_PACKAGE_NAME",
         "file": "modules/chat/domain/turn2",
-        "detail": "Package token outside the explicit ADR-0001 vocabulary: turn2"
+        "detail": "Package name outside the admitted vocabulary: turn2"
       }
     ],
     "blocking": []
@@ -50,7 +50,7 @@
       {
         "code": "GO_PACKAGE_NAME",
         "file": "modules/chat/domain/turn_name",
-        "detail": "Package token outside the explicit ADR-0001 vocabulary: turn_name"
+        "detail": "Package name outside the admitted vocabulary: turn_name"
       }
     ],
     "blocking": []
@@ -64,7 +64,7 @@
       {
         "code": "GO_PACKAGE_NAME",
         "file": "modules/chat/domain/Turn",
-        "detail": "Package token outside the explicit ADR-0001 vocabulary: Turn"
+        "detail": "Package name outside the admitted vocabulary: Turn"
       }
     ],
     "blocking": []
@@ -330,7 +330,7 @@
       {
         "code": "GO_PACKAGE_NAME",
         "file": "modules/chat/domain/turn",
-        "detail": "Package token outside the explicit ADR-0001 vocabulary: contextcheckpoint"
+        "detail": "Package name outside the admitted vocabulary: contextcheckpoint"
       }
     ],
     "blocking": []
