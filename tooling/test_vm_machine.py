@@ -417,6 +417,36 @@ class VmInstanceProvisioningTests(unittest.TestCase):
         self.assertEqual(instance_receipt.stat().st_mode & 0o777, 0o600)
 
 
+    def test_base_receipt_writable_by_others_is_refused(self):
+        for mode in (0o620, 0o602, 0o666):
+            with self.subTest(mode=oct(mode)):
+                self.receipt_file.chmod(mode)
+                with self.assertRaisesRegex(ValueError, 'BASE_RECEIPT_INVALID'):
+                    self.planned()
+        self.receipt_file.chmod(0o600)
+        self.planned()
+
+    def test_instance_receipt_refuses_a_linked_clone_record_and_leaves_no_temp(self):
+        _, receipt_file, instance_receipt = self.planned()
+        machine = self.root / 'machines/farol-test-1'
+        machine.mkdir()
+        outside = self.root / 'outside.json'
+        outside.write_text('{"schema":"terminal-mac.clone/1","to":"farol-test-1"}')
+        (machine / 'clone.json').symlink_to(outside)
+        with self.assertRaises(OSError):
+            vm_machine.write_instance_receipt(instance_receipt, 'farol-test-1', 'farol-base-1',
+                                              receipt_file, self.root)
+        self.assertFalse(instance_receipt.exists())
+        (machine / 'clone.json').unlink()
+        (machine / 'clone.json').write_text('{"schema":"terminal-mac.clone/1","to":"farol-test-1"}')
+        with mock.patch.object(vm_machine.os, 'replace', side_effect=OSError('synthetic')):
+            with self.assertRaises(OSError):
+                vm_machine.write_instance_receipt(instance_receipt, 'farol-test-1', 'farol-base-1',
+                                                  receipt_file, self.root)
+        self.assertEqual(list(instance_receipt.parent.glob('.*.tmp')), [], 'a failed write leaves no temp')
+        vm_machine.write_instance_receipt(instance_receipt, 'farol-test-1', 'farol-base-1', receipt_file, self.root)
+        self.assertEqual(instance_receipt.parent.stat().st_mode & 0o077, 0)
+
 class ProvisionIntentTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

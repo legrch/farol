@@ -169,6 +169,10 @@ def plan_instance(name, base, binary, root, settings, offline=False):
         raise ValueError('BASE_RECEIPT_MISSING')
     if receipt_file.resolve(strict=True) != receipt_file:
         raise ValueError('BASE_RECEIPT_INVALID')
+    # Operator-written receipt: owned by this user and not writable by others.
+    owner = receipt_file.lstat()
+    if owner.st_uid != os.geteuid() or owner.st_mode & 0o022:
+        raise ValueError('BASE_RECEIPT_INVALID')
     accepted_receipt = read_regular(receipt_file, 65536)
     receipt = json.loads(accepted_receipt)
     if not isinstance(receipt, dict) or receipt.get('schema') != 'farol.vm-base/1':
@@ -227,17 +231,25 @@ def write_instance_receipt(path, name, base, accepted_base_receipt, machine_root
         'name': name,
         'base': base,
         'baseReceiptSha256': hashlib.sha256(accepted_base_receipt).hexdigest(),
-        'cloneReceipt': json.loads((machine_root / 'machines' / name / 'clone.json').read_text()),
+        # Bounded, no-follow read of terminal-mac's clone record.
+        'cloneReceipt': json.loads(read_regular(machine_root / 'machines' / name / 'clone.json', 4096)),
         'provisionedAt': int(time.time()),
     }
     temp = path.parent / ('.' + name + '.tmp')
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with temp.open('x') as out:
-        os.chmod(temp, 0o600)
-        out.write(json.dumps(receipt, indent=2) + '\n')
-        out.flush()
-        os.fsync(out.fileno())
-    os.replace(temp, path)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = path.parent.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
+        raise ValueError('PROVISION_EVIDENCE_UNSAFE')
+    try:
+        with temp.open('x') as out:
+            os.chmod(temp, 0o600)
+            out.write(json.dumps(receipt, indent=2) + '\n')
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(temp, path)
+    except BaseException:
+        temp.unlink(missing_ok=True)  # never leave a temp that blocks a retry
+        raise
     fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         os.fsync(fd)
