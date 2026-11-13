@@ -15,6 +15,7 @@ interface Summary {
   byMechanism: Record<string, number>;
   textOnly: number;
   waived: number;
+  waivedFiles: { file: string; reason: string; mechanisms: string[] }[];
   findings: { code: string; detail: string }[];
 }
 
@@ -185,6 +186,9 @@ describe("the source-slicing ban", () => {
     ["load-compile", "load"],
     ["helper-prefix", "vm"],
     ["rebound-root", "vm"],
+    ["object-literal", "vm"],
+    ["join-receiver", "vm"],
+    ["find-callback", "vm"],
     ["shadowed-callee", "vm"],
     ["raw-import", "vm"],
   ])("catches %s as %s", (name, mechanism) => {
@@ -218,6 +222,38 @@ describe("the source-slicing ban", () => {
     expect(result.summary?.findings.map((f) => f.code)).toEqual([
       "SLICING_WAIVER_STALE",
     ]);
+  });
+
+  it.each(["waiver-in-string", "waiver-in-block"])(
+    "does not honour a waiver written in %s",
+    (name) => {
+      const result = check(path.join(fixtures, name));
+      expect(result.status).toBe(1);
+      expect(result.summary?.waived).toBe(0);
+      expect(result.summary?.findings.map((f) => f.code)).toEqual([
+        "SLICING_NEW_OFFENDER",
+      ]);
+    },
+  );
+
+  it("refuses a waiver on an allowlisted legacy slicer", () => {
+    const result = check(path.join(fixtures, "waiver-legacy"));
+    expect(result.status).toBe(1);
+    expect(result.summary?.findings.map((f) => f.code)).toContain(
+      "SLICING_WAIVER_ON_LEGACY",
+    );
+    expect(result.summary?.waivedFiles[0]?.mechanisms).toEqual(["vm"]);
+  });
+
+  it("--write-allowlist refuses to trade an entry for a waiver", () => {
+    const dir = temporaryRoot(
+      '// source-slicing: allowed \u2014 reviewed: trade attempt\nimport fs from "node:fs";\nimport vm from "node:vm";\nvm.runInNewContext(fs.readFileSync("src/a/b.ts", "utf8"), {});\n',
+      { "tests/unit/case.mjs": ["vm"] },
+    );
+    const result = run(dir, ["--write-allowlist"]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("cannot be waived");
+    expect(listed(dir)).toEqual({ "tests/unit/case.mjs": ["vm"] });
   });
 
   describe("allowlist writers", () => {

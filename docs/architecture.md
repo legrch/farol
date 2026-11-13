@@ -148,7 +148,7 @@ skipped; any candidate counts, unless it reaches the production match through a
 `fixtures/` or `node_modules/` segment. It is followed through bindings, assignments,
 member assignments, callbacks and same-file reader helpers, including helpers that add
 the root themselves; import specifiers and test titles never count. Execution means
-`node:vm`, `new Function`, `eval`, a `load` of derived content (a `data:` or `blob:` URL
+`node:vm`, `new Function`, `eval`, a `load` of derived content (a `data:` URL
 built from derived text, a file written from it and then imported, or `module._compile`
 of it; a specifier merely computed from text names real modules and is not a load), a
 TypeScript/Babel/esbuild transpile followed by a dynamic load, or an esbuild
@@ -177,7 +177,11 @@ another file; code written to disk and run in a child process (`spawn`, `fork`,
 `execFile`); a dynamic `import("...?raw")`; `eval`-like timers with a string argument;
 esbuild plugin `onLoad` contents; and flows through object properties beyond the root
 binding (assignments to `process`, `globalThis` and `this` are not followed) or through
-return values of unresolved calls.
+return values of unresolved calls; a write target that is not a named variable
+(`writeFileSync(path.join(dir, "e.mjs"), s)` followed by `import(path.join(dir, "e.mjs"))`);
+and a path that goes through `fixtures` and climbs out again with `..`. A waiver is matched
+only as a parsed `//` line comment starting within the first 30 lines, and a legacy
+allowlisted file cannot be waived.
 
 The accepted Go layout uses `modules/<module>/contracts/<feature>` as a thin
 published in-process facade. It may import its own application/domain to delegate

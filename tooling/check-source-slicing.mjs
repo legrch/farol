@@ -15,7 +15,7 @@
 //   vm         vm.runIn*Context, vm.Script, vm.compileFunction
 //   function   new Function(...) / Function(...)
 //   eval       eval(...), (0, eval)(...), globalThis.eval(...)
-//   load       the LOADED CONTENT is derived text: a data:/blob: URL built from
+//   load       the LOADED CONTENT is derived text: a data: URL built from
 //              it, a file written from it and then imported, or the first
 //              argument of module._compile. A specifier merely computed from
 //              text names real modules and does not count.
@@ -73,16 +73,19 @@ function rootRelative(text, pattern) {
 const productionText = (text) => rootRelative(text, productionFile);
 const prefixesProduction = (text) => rootRelative(text, productionRootSegment);
 const minimumReason = 10;
-// `// source-slicing: allowed - <reason>` within the first 30 lines.
-function waiverOf(source) {
-  for (const line of source.split("\n").slice(0, 30)) {
-    const match = waiverLine.exec(line);
+// `// source-slicing: allowed - <reason>` as a parsed line comment that
+// starts within the first 30 lines; text inside strings or block comments
+// never counts.
+const waiverLine =
+  /^\s*source-slicing:\s*allowed(?:\s*[\u2014\u2013-]+\s*(.*))?$/;
+function waiverOf(comments) {
+  for (const comment of comments ?? []) {
+    if (comment.type !== "CommentLine" || comment.loc.start.line > 30) continue;
+    const match = waiverLine.exec(comment.value);
     if (match) return { reason: (match[1] ?? "").trim() };
   }
   return null;
 }
-const waiverLine =
-  /^\s*\/\/\s*source-slicing:\s*allowed(?:\s*[\u2014\u2013-]+\s*(.*))?$/;
 const readCalls = new Set(["readFileSync", "readFile", "createReadStream"]);
 const vmApi = new Set([
   "runInContext",
@@ -480,10 +483,26 @@ function analyzeFacts(facts) {
       }
       case "CallExpression":
       case "NewExpression":
-        result = cross(
-          node.arguments.map((argument) => candidates(argument, depth)),
-          "/",
-        );
+        // A method call contributes its receiver as well as its arguments.
+        result = [
+          ...(node.callee.type === "MemberExpression"
+            ? candidates(node.callee.object, depth)
+            : []),
+          ...cross(
+            node.arguments.map((argument) => candidates(argument, depth)),
+            "/",
+          ),
+        ];
+        break;
+      case "SpreadElement":
+        result = candidates(node.argument, depth);
+        break;
+      case "ObjectExpression":
+        for (const property of node.properties)
+          if (property.type === "ObjectProperty")
+            result.push(...candidates(property.value, depth));
+          else if (property.type === "SpreadElement")
+            result.push(...candidates(property.argument, depth));
         break;
       case "Identifier":
         for (const bound of bindings.get(node.name) ?? [])
@@ -529,6 +548,13 @@ function analyzeFacts(facts) {
         result = candidates(node.object, depth);
         break;
       default:
+        // Unknown shapes (callbacks, object values, ...) still contribute each
+        // string literal they spell, as separate candidates.
+        walk(node, (inner) => {
+          const text = literalText(inner);
+          if (text !== null && result.length < maxCandidates)
+            result.push(text.replaceAll("\u0000", "/"));
+        });
         break;
     }
     result = result.slice(0, maxCandidates);
@@ -680,9 +706,9 @@ function analyzeFacts(facts) {
       .map(({ target }) => target),
   );
   const contentUrl = (node) =>
-    candidates(node).some((text) => /^(?:data|blob):/.test(text)) ||
+    candidates(node).some((text) => /^data:/.test(text)) ||
     (node.type === "TemplateLiteral" &&
-      /^(?:data|blob):/.test(node.quasis[0]?.value.raw ?? ""));
+      /^data:/.test(node.quasis[0]?.value.raw ?? ""));
   for (const { kind, node } of loads) {
     if (kind === "compile" && derived(node)) mechanisms.add("load");
     if (
@@ -765,6 +791,7 @@ export function analyze(source, file) {
   const result = analyzeFacts(gather(ast));
   return {
     ...result,
+    waiver: waiverOf(ast.comments),
     textOnly: result.readsProduction && result.mechanisms.length === 0,
   };
 }
@@ -797,9 +824,8 @@ export function scan(scanRoot) {
   for (const file of files.sort()) {
     const relative = path.relative(scanRoot, file).split(path.sep).join("/");
     try {
-      const source = fs.readFileSync(file, "utf8");
-      const result = analyze(source, file);
-      const waiver = waiverOf(source);
+      const result = analyze(fs.readFileSync(file, "utf8"), file);
+      const waiver = result.waiver;
       if (waiver && waiver.reason.length < minimumReason) {
         waiverErrors.push({
           code: "SLICING_WAIVER_INVALID",
@@ -814,7 +840,12 @@ export function scan(scanRoot) {
         });
         continue;
       }
-      if (waiver) waived.push({ file: relative, reason: waiver.reason });
+      if (waiver)
+        waived.push({
+          file: relative,
+          reason: waiver.reason,
+          mechanisms: result.mechanisms,
+        });
       else if (result.mechanisms.length > 0)
         offenders[relative] = result.mechanisms;
       else if (result.textOnly) textOnly.push(relative);
@@ -841,6 +872,12 @@ function loadAllowlist(scanRoot) {
 
 export function diff(result, allowlist) {
   const findings = [...(result.waiverErrors ?? [])];
+  for (const entry of result.waived)
+    if (allowlist[entry.file])
+      findings.push({
+        code: "SLICING_WAIVER_ON_LEGACY",
+        detail: `${entry.file} is an allowlisted legacy slicer and cannot be waived; fix the test or remove the waiver`,
+      });
   for (const entry of result.unparsable)
     findings.push({
       code: "SLICING_UNPARSABLE",
@@ -883,6 +920,11 @@ function writeAllowlistFile(scanRoot, files) {
 export function shrinkAllowlist(result, current) {
   const next = {};
   const growth = [];
+  for (const entry of result.waived)
+    if (current[entry.file])
+      growth.push(
+        `${entry.file}: a legacy slicer cannot be waived; fix the test or keep the entry`,
+      );
   for (const [file, mechanisms] of Object.entries(result.offenders)) {
     const listed = current[file];
     if (!listed) {
@@ -941,6 +983,7 @@ function main() {
     byMechanism,
     textOnly: result.textOnly.length,
     waived: result.waived.length,
+    waivedFiles: result.waived,
     findings,
   };
   if (json) console.log(JSON.stringify(summary));
