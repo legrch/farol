@@ -233,7 +233,7 @@ Lead can map only the three closed input views to `GitReadArguments`, build the
 trusted `GitReadSelection` and `Command` from the SAME immutable lease snapshot,
 then compose `NewSeatbelt` with the actual independent `Qualification`. Use its
 `Environment(false)` on the empty-args/empty-stdin/unbound trusted template and
-the existing `NewSupervisedPreparer` or separately qualified anchored producer.
+the existing `NewSupervisedPreparer`.
 Prepare on the SAME selected instance with the existing runtime/session/model/
 admission binding, and return that exact `processsvc.Selected` plus
 `NewObservationWorkspace` for the original root to `connectorShellSelection`.
@@ -300,9 +300,10 @@ its sealed `Seatbelt` producer; a bare nil-returning `Qualification` callback
 cannot reach the old direct executable path. The compiler and its binding execute
 nothing. It requires an independently implemented native `Qualification` for the
 exact wrapped launch. That port is read-only current evidence inspection, never a
-probe, provider call, command dispatch or operation reissue. The later held-role checkpoint below adds a real, one-shot synthetic conformance
-producer, limited to its exact disposable fixture. General product qualification
-and parent-side use remain unavailable.
+probe, provider call, command dispatch or operation reissue. This package has no
+positive native qualification producer: the held-role synthetic conformance
+attempt was removed with that role (see
+[Held-role native primitives](#held-role-native-primitives-removed)).
 
 Native preflight measures the approved root, canonical cwd, an operation-private
 0700 scratch directory with exact owner/device/inode, and every selected
@@ -311,14 +312,12 @@ through the single start attempt. These measurements do not prove continuous
 kernel/pathname identity or effective policy enforcement. The qualified mechanism
 and native witnesses remain activation prerequisites owned by normal composition.
 
-Direct and anchored producers share the same measurement implementation. The
-anchored producer measures after reservation and the current-owner check, keeps
-the original deadline, and rechecks current authority before its one bootstrap.
-It retains the executable descriptors through that synchronous bootstrap attempt;
-measurement failure cannot call the bootstrap. Separate disposable Darwin tests
-cover changed roots, scratch modes/identity, symlink/hardlink and executable-pin
-refusals, plus actual descriptor retention and closure after partial measurement.
-Those tests execute no command and do not qualify the anchor/held role transport.
+Direct and supervised producers share the same measurement implementation. It
+retains the executable descriptors through the single start attempt; measurement
+failure cannot reach the start. Separate disposable Darwin tests cover changed
+roots, scratch modes/identity, symlink/hardlink and executable-pin refusals, plus
+actual descriptor retention and closure after partial measurement. Those tests
+execute no command.
 
 Environment is explicit, including the empty-environment case. Parent environment
 is never copied. Command input and environment remain transient private process
@@ -538,8 +537,7 @@ and case/Unicode/diacritic aliases, runtime/pin/descriptor continuity and hostil
 repository config/hooks. Source regex/parameter tests cannot establish those OS
 properties. Where this mechanism cannot enforce the existing authority semantics,
 its native Qualification must refuse; passing a few happy-path probes cannot fill
-that gap. The later held-role producer supplies only fixture-scoped conformance; this
-compiler checkpoint alone supplies no positive native qualification.
+that gap. This compiler checkpoint supplies no positive native qualification.
 
 The anchored supervisor, parent-death control and complete cohort settlement remain
 separate root-entry prerequisites. Direct root Wait/pipe drain still leaves group
@@ -558,210 +556,24 @@ cwd, from passing a cwd-only check. Comparison performs no IO or native evidence
 lookup under owner/app gates. Permission and expiry stay with the existing domain
 and execution lease. Whole-launch argv limits are checked before sealing/reservation.
 
-## Fresh held-role native primitives checkpoint
+## Held-role native primitives (removed)
 
-This increment implements native primitives under Computer ownership, not a
-second Task engine, authority system, journal, wire decoder or helper executable.
-`NewQualificationAttempt(clock).Run(ctx, original, wrapped, fixture, deadline)`
-performs actual synthetic file opens/content-hash verification and permission
-checks, then controlled IPv4/IPv6 connect attempts with no payload. It belongs
-inside the SAME pinned Farol Go held role, AFTER the selected Seatbelt profile was
-applied and BEFORE release. Every path is synthetic. A failure or missing vector
-consumes the one attempt; there is no retry, alternate runtime or cached PASS.
+The held-role primitives were removed on 2026-11-13. Nothing in production ever
+constructed them: the anchor role (`NewAnchor`, `Anchor.Run`, its kqueue guest
+observer and self-group stop), the anchored parent adapter (`NewAnchoredPreparer`
+with its `AnchorBootstrap`/`AnchorLink` ports and `Preparer.RetainedHandle`), the
+held guest (`RunHeldGuest`, the `HeldBootstrap.StartHeld` and `HeldGate` ports),
+and the one-shot synthetic conformance attempt that only the held guest consumed
+(`NewQualificationAttempt`, `NativeQualification`, `NativeFixture` and its Darwin
+probes). The process exit no longer carries a cohort flag, because that parent
+adapter was its only producer; the direct and supervised producers still report
+descendant cleanup as unverified.
 
-The private in-memory `NativeQualification` binds original and wrapped command,
-profile/mechanism, stdin/environment, invocation correlation, self process and
-exact original deadline. `Qualify` is read-only inspection; it does not rerun the
-probes. `RunHeldGuest` consumes a shared one-shot dispatch claim, measures physical root/cwd and the selected executable, enables root's live
-readiness responses through its `ready` callback, then waits for the existing
-parent's one release and invokes
-`syscall.Exec` once in that SAME process. Even a copied qualification cannot reset
-dispatch. Expiry, parent EOF, wrong command/process, failed control close or exec
-refusal never extends the deadline or dispatches again. No serialized proof can
-restore a qualification on restart. The open executable descriptor is retained,
-but pathname continuity through Darwin exec is still a native activation gate.
-
-**Scope:** this producer currently requires a read-only disposable workspace
-directly under `/private/tmp/farol-*`, all eight baseline/denial vectors and both
-controlled loopback families. It is not a certificate for owner Brain/code roots,
-write-capable shell, arbitrary aliases, Git hooks, networked Task providers or a
-whole process tree. A PASS from injected CPU probes establishes none of those OS
-properties. It cannot be transported to the parent as a public token or used as
-the parent's direct-spawn Qualification. Do not activate ordinary production
-execution by substituting this fixture proof for the full port contract.
-
-### Exact root boot interface
-
-The existing executable and common transport must implement these consumer-owned
-Go interfaces; Computer defines no encoding, frame, command-line role or schema:
-
-| Root responsibility                                                            | Computer interface / function                                  | Required evidence                                                                                                                                                                     |
-| ------------------------------------------------------------------------------ | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Start one fresh anchor role of the pinned existing Go image                    | `NewAnchor(bootstrap, reporter, clock)` then `Anchor.Run(...)` | Anchor is its own CURRENT private group leader; no unrelated children or user execution in this role                                                                                  |
-| Start one held leaf, with the exact selected Seatbelt plan and command binding | `HeldBootstrap.StartHeld(ctx, Command, stdout, stderr)`        | Retained exact `*exec.Cmd`, original cwd/env/input, `WaitDelay` in `(0, 1s]`, bounded nonblocking output collectors, no new leaf group and no `CommandContext` even with `Cancel=nil` |
-| Prove same held leaf before and after listener registration                    | `HeldGate.Ready(ctx)`                                          | Two actual same-child round trips bound to pinned image, profile digest, incarnation and operation; not an input echo or startup-cache receipt                                        |
-| Release once after the current guard and listener                              | `HeldGate.Release(ctx)`                                        | Existing current execution authority, original deadline, child-qualified fixture result, exactly one release; unknown ACK remains unknown                                             |
-| Observe parent loss / owner stop                                               | `AnchorControl{ParentGone, Cancel}`                            | Existing common control EOF and execution-authority revocation/generation/stop signal; no PID polling, latest-task lookup or replacement admission                                    |
-| Publish one typed observation                                                  | `AnchorReporter.Publish(ctx, AnchorReport)`                    | Existing common result/ACK and exact operation correlation; one publication attempt, bounded by the original lease                                                                    |
-| Execute in the held leaf                                                       | `QualificationAttempt.Run` then `RunHeldGuest`                 | Same process/profile/immutable command and deadline, actual controlled baselines, one consumed dispatch; control/baseline FDs closed or close-on-exec                                 |
-
-The owner for the root roles, composition and common schema is Lead. Expected
-root touch points are `boot/computer.go`, `boot/computeringress.go`,
-`boot/nativeruntime.go`, and `cmd/farol/main.go`; none is modified by this delta.
-Root must include the pinned Go image in the selected executable set BEFORE the
-original profile/command seal, select its role through the existing transport,
-validate its actual launch profile and preserve the existing fresh
-root/cwd/scratch/pin preflight. `RunHeldGuest` calls the root-owned `ready(ctx)`
-callback only after its physical root/cwd and executable checks. Both live Ready
-barriers must require that state; an early startup response cannot substitute for
-it. Keep command stdin separate from control.
-The original command and wrapped selected launch stay sealed; root does not
-rebind a wider profile to make bootstrap work. The common transport owns parsing
-unknown values, correlation, result ACK and durable reconnect; these interfaces
-are composition ports, not a private transport protocol.
-
-The explicit parent adapter is `NewAnchoredPreparer(operationID, runtimeID,
-template, policy, bootstrap, executionContext, clock)`. Construction and invocation
-preparation execute nothing. `NewPreparer` keeps its existing conservative direct
-boundary; root must select the anchored constructor explicitly. Root must bind
-its operation ID to the SAME service/reservation intent and its immutable lease.
-The parent maps the existing service's `SpawnRequest.Deadline` and SAME current
-owner `Check` to `AnchorBootstrap.StartAnchor`, over Lead's existing common role
-transport. No app/contract DTO, root boot, command role or common schema changes
-are part of this source delta.
-
-`AnchorLaunch` carries exact operation/seal correlation, independent copies of the
-sealed original and selected wrapped command, and the original deadline. The
-bootstrap returns the exact retained owning `*exec.Cmd` and `AnchorLink`, including
-on a possible start with an uncertain ACK. It must use `exec.Command`, set
-`WaitDelay` in `(0, 1s]` before Start, and retain exclusive Cmd ownership. Root
-validates actual pinned image/profile/backend/incarnation and unknown frames;
-these typed ports do not establish that evidence themselves. The current owner
-check runs before start and adjacent to held release outside owner/app gates.
-
-The parent waits the SAME owning Cmd exactly once, receives one correlated
-qualified no-fork `AnchorReceipt`, and closes retained control IO. Successful
-cleanup requires BOTH exact clean anchor Wait/bounded drain AND the known guest
-exec/kernel-exit/Wait/drain/no-fork receipt, plus the SAME final owner/deadline
-check. A stop, missing/crossed receipt, lost ACK, wait/drain error, unsupported
-platform or owner/expiry change remains unverified. `AnchorLink.Receive` must
-honor its bounded context; `Close` must be safe against concurrent Receive/stop.
-One `RequestStop` on that retained link has a separately bounded cleanup budget;
-it never extends execution/output permission and has no process/signal fallback.
-
-A possible-start resource stays inside the SAME immutable `Prepared` even though
-the existing public Start returns outcome-unknown. `Preparer.RetainedHandle()` is
-read-only trusted root cleanup correlation, never output access, body-driven
-lookup, admission or a restart/reissue. Repeated preparation returns that same
-selection; changed invocation or a second Spawn cannot replace it. Root owns
-retention/reconnect of the same live service/preparer/control objects through its
-existing owner; this adapter adds no durable journal or authority system.
-
-Root composition and native qualification remain **route dependencies**. A CPU
-contract test with injected bootstrap/Wait proves mapping and conservative state
-classification only. It does not prove a production or native process route.
-No process can be reconstructed or resumed from a journal/PID after an unknown
-start, release, publish or stop. An admitted lease keeps its original deadline;
-outer TaskGrant reissue neither renews it nor stops it solely because the outer
-grant expired. The execution context and ParentGone belong to the retained
-backend/anchor and existing execution owner, not an outer ChatGPT turn or MCP
-request/response context. Ordinary connector reconnect alone cannot cancel an
-admitted operation. Actual backend parent death stays conservative; it never
-restores/reissues that operation. Owner revocation/generation changes continue to
-win.
-
-### Anchored observation and its limits
-
-Darwin installs an `EVFILT_PROC` listener for the exact retained, still-held leaf,
-requires its successful registration receipt and a second same-child barrier,
-then releases once. It retains fork/exec/exit observations from that listener.
-The listener is not a post-reap numeric lookup; concurrent close is serialized
-with bounded event waits to prevent FD reuse. A fork immediately makes the cohort
-unverified and requests the one anchor stop. Native event errors, observer loss,
-incomplete drain, no observed exec/exit, owner loss and deadline do the same.
-
-For a qualified no-fork trace only, kernel exit followed by ONE exact child Wait,
-valid exit details and bounded pipe drain can publish `GuestCohortClosed`. The
-anchor is still alive at publication. The direct and held-leaf producers now pass
-independent private stdout/stderr witnesses through their existing writer inputs.
-Each witness must observe pipe EOF and successfully copy through the SAME bounded
-collector. Existing output truncation/overflow facts remain separate.
-`Cmd.Wait` returning nil or `ExitError` alone proves no drain: Go can mask a pipe
-copy error or `WaitDelay` behind nonzero/signal exit. A forced pipe close, collector
-error, missing/replaced witness or optimization that bypasses EOF remains
-unverified. Nonzero/signal exits may supply drain evidence only with BOTH actual
-EOF/copy witnesses; all existing kernel exec/exit, no-fork, owner and deadline
-requirements still apply. This adds no broader containment claim. Root may map
-whole-operation cleanup
-only after a known correlated result/ACK AND independently waiting/draining the
-exact
-anchor with the expected clean exit. A root-only Wait, report alone, killed anchor,
-accepted signal or missing child is insufficient. CPU doubles that emit a closed
-guest are parser/control witnesses, not native cohort qualification.
-
-The kernel interface's `NOTE_TRACK` family is unsupported on current Darwin;
-this implementation does not invent descendant tracking with `ps`, numeric
-probes or a successor. The private anchor's one `SIGKILL` targets its OWN current
-live group, including self. It is never an old/cohort PGID reconstruction,
-post-reap check, fallback or escalation. Acceptance is only a stop request; an
-escaped descendant or refused signal remains unverified. Cancel/timeout/crash
-cannot currently become positive arbitrary-tree settlement. Root must never run
-`NewAnchor` in the ordinary backend's group. General shell/Git/Task trees require
-a separately qualified containment/settlement mechanism or explicit refusal.
-
-### Minimal fresh native recipe — prepared, not executed
-
-Lead's serialized native lane must use NEW synthetic files, listeners, private
-state, exact roles and immutable fixture identity. Never reuse any old failed or
-unknown cohort, operation, PID, profile directory or connector call.
-
-1. Establish unconfined baselines once: same-UID regular readable files with
-   measured synthetic hashes, an existing writable read-only-mode probe target,
-   controlled IPv4 and IPv6 listeners with retained identity, exact private
-   scratch mode/owner/device/inode, approved physical fixture root and all
-   pinned images. The fixture nonce is correlation, not ownership proof.
-2. Make the forbidden outside file readable at baseline. Create a SAME-INODE
-   hardlink under the allowed subtree to that outside file without adding a
-   denial rule merely for the hardlink name. Create a physically verified
-   case/Unicode/diacritic alias of an existing excluded synthetic target. This
-   fixture must exercise authority equivalence, not an unrelated denied name.
-   Baseline each vector before confinement; ENOENT, ELOOP, connection refusal
-   or timeout can never stand in for policy denial.
-3. Launch the SAME pinned Go image's held role under the actual selected SBPL,
-   with independently correlated profile/operation/image evidence. Run every
-   real conformance vector once. An unexpectedly readable alias/hardlink or
-   connect/open success is a failure even if ordinary reads work. The current
-   path-only Seatbelt rules may fail these vectors; reject before release and
-   retain that mechanism gap. Do not drop vectors, widen grants or switch executor.
-4. In a separate freshly owned accepted case, prove held-before-registration,
-   both same-child barriers, conformance-before-release, exact final executable,
-   single release/exec, no-fork command exit, kernel exit, exact child Wait and
-   bounded drain, result ACK and exact clean anchor Wait. Only that correlated
-   native trace can qualify the restricted no-fork classification.
-5. Fresh cases must exercise `fork`, `vfork` and `posix_spawn`, event coalescing and
-   registration races, descendants keeping output open or escaping the group,
-   lost observer/control/result ACK, parent death, cancellation, fixed timeout,
-   owner revoke/generation change and refused stop. Every unsupported or unknown
-   tree must stay unverified. Prove exact owned cleanup independently without
-   post-reap PID/PGID probes. Do not declare broad cohort qualification merely
-   because the selected no-fork case passes.
-
-No native/process fixture, race/full CI, provider, package, installation or
-production connector call was performed for this increment. CPU checks use
-private injected probes/bootstrap/listener/stop/reporter boundaries and cover
-all required vectors, seal/lease/process drift, one dispatch/publication/stop,
-owner loss and conservative guest-vs-anchor evidence. Native qualification,
-independent risk review, full CI and any source commit are still Lead-lane gates.
-
-### Root held-control adapter checkpoint
-
-Removed. The root adapter that implemented `HeldGate` over the framed desktop
-wire, its `computer.process.held.ready`/`computer.process.held.release`
-operations and the `ComputerHeldIdentity`/`ComputerHeldBarrier` schema types
-were deleted because nothing in production constructed the adapter or reached
-the native `NewAnchor`/`NewAnchoredPreparer` consumers; the held role was never
-wired. The native held-role entry points in this package remain until their own
-removal. Reintroducing the role needs a new wire design, not a revert.
+The root adapter that implemented `HeldGate` over the framed desktop wire, its
+`computer.process.held.ready`/`computer.process.held.release` operations and the
+`ComputerHeldIdentity`/`ComputerHeldBarrier` schema types were removed first, and
+with them the transport's held-only request-ID helpers and terminal-rejection
+mode. Reintroducing the role needs a new wire and native design, not a revert.
 
 ### Independent output EOF checkpoint
 
@@ -769,9 +581,8 @@ The focused CPU regression first reproduced the direct producer's incorrect
 `ExitError => drained` classification. Memory-stream tests now cover both EOFs,
 last bytes accompanying EOF, binary retention, missing/reused/shared witnesses,
 forced-close/read/collector errors and short writes. Direct leaf wait/drain still
-leaves group and descendant cleanup unverified. Anchor parser doubles retain the
-existing no-fork requirements for nonzero/signal reports. These are CPU evidence,
-not native process, kqueue, confinement or production qualification.
+leaves group and descendant cleanup unverified. These are CPU evidence, not
+native process, kqueue, confinement or production qualification.
 
 Go 1.26.2's Darwin `os/exec` copier uses `io.Copy` from an `os.File` pipe; that
 file's `WriteTo` delegates to the witness's `ReadFrom`. The witness strips further
@@ -815,8 +626,8 @@ no stop, and the signal case used one original-handle stop. The test image
 SHA-256 was `bbc84089c7846d406b947fc7bc5e301f4bd9be2bef235377fbf99094a8701dd5`.
 Group/descendant cleanup and stdin acceptance remain unverified by this test.
 
-Root-owned activation, effective confinement, real held exec/kernel no-fork trace, exact
-anchor result/ACK/Wait, descendant/unknown cases, independent review, aggregate
+Root-owned activation, effective confinement, a qualified descendant settlement
+mechanism, descendant/unknown cases, independent review, aggregate
 checks, package/installed/live and release gates remain open. `connector.processes`
 remains unset; no shared contract, authority, boot/schema or desktop change is
 included here.
