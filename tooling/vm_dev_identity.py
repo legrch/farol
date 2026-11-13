@@ -37,8 +37,13 @@ def _checked(value):
     return dict(value)
 
 
-def dev_identity(environ=None):
-    """The caller-selected Dev identity; refuses rather than guessing a default."""
+def dev_identity(environ=None, root=ROOT):
+    """The caller-selected Dev identity; refuses rather than guessing a default.
+
+    It must differ from the published release identity: a crafted environment
+    can never make the Dev route admit the production bundle ID or product
+    name (compared case-insensitively, as on a case-insensitive volume).
+    """
     raw = (os.environ if environ is None else environ).get(ENVIRONMENT)
     if not isinstance(raw, str) or len(raw) > 1024:
         _refuse()
@@ -46,7 +51,12 @@ def dev_identity(environ=None):
         value = json.loads(raw)
     except ValueError:
         _refuse()
-    return _checked(value)
+    value = _checked(value)
+    release = release_identity(root)
+    if (value["bundleId"].casefold() == release["bundleId"].casefold() or
+            value["product"].casefold() == release["product"].casefold()):
+        _refuse()
+    return value
 
 
 def release_identity(root=ROOT):
