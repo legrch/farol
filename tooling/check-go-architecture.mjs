@@ -1093,7 +1093,7 @@ function localRule(from, to, target, source) {
     }
     if (from.layer === "desktop")
       return (to.kind === "module" &&
-        ["contracts", "app", "domain", "desktop"].includes(to.layer)) ||
+        ["contracts", "app", "domain"].includes(to.layer)) ||
         (to.kind === "kernel" && ["domain", "app"].includes(to.layer)) ||
         ["kit", "ipc", "generated", "transport"].includes(to.kind)
         ? null

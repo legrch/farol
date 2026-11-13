@@ -110,8 +110,10 @@ module's contracts or application services and back. It may import its own
 module's `contracts`, `app` and `domain`, kernel domain/app, kits, `pkg/ipc`,
 `gen/desktop/v1` and the shared `transport/desktop` server. It never imports
 its own infrastructure, another module (`GO_CROSS_MODULE`), kernel
-infrastructure or `boot`. Only `boot` imports it; `transport/desktop` remains
-the shared server and imports no module adapter.
+infrastructure, `boot` or another desktop feature package
+(`GO_DESKTOP_DEPENDENCY`); shared wire helpers live in `transport/desktop` or a
+kit. Only `boot` imports it; `transport/desktop` remains the shared server and
+imports no module adapter.
 
 ### 6. Shared code
 

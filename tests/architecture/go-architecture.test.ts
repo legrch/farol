@@ -326,6 +326,11 @@ describe("the executable root Go architecture boundary", () => {
       "modules/chat/infra/client",
       "GO_DESKTOP_DEPENDENCY",
     ],
+    [
+      "modules/chat/desktop/turn",
+      "modules/chat/desktop/slot",
+      "GO_DESKTOP_DEPENDENCY",
+    ],
     ["modules/chat/desktop/turn", "boot", "GO_MODULE_TO_BOOT"],
     [
       "modules/chat/desktop/turn",
