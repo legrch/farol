@@ -167,6 +167,43 @@ source text are banned.
 
 Backend policy lives in Go modules: not in `boot`, not in Electron.
 
+### 9. Failure classification
+
+[`pkg/kernel/domain/failure`](../../pkg/kernel/domain/failure/failure.go) is
+the one classification of a failed operation: what the caller may assume
+about its effect.
+
+| Kind                 | The caller may assume                                                        | Desktop outcome |
+| -------------------- | ---------------------------------------------------------------------------- | --------------- |
+| `Unknown` (the zero) | The effect may have happened. Never retry, replay or report it as refused.   | `unknown`       |
+| `Unavailable`        | Refused before any effect: a required capability or dependency is not ready. | `unavailable`   |
+| `Refused`            | Rejected before any effect; an unchanged repeat is refused again.            | `refused`       |
+| `Failed`             | Attempted and failed in a known state: no clean refusal, but not uncertain.  | `unknown`       |
+
+- Invalid input, conflict and not found are codes of `Refused`, not kinds.
+  Cancellation is no kind: before any effect it is `Refused`, after a
+  possible effect `Unknown`.
+- `Failed` exists because Release keeps `Internal` apart from both a refusal
+  and `Uncertain`, and the closed helper boundary reports it as unknown while
+  the release walkers do not count it as uncertain. One kind set without it
+  would change one of those outcomes.
+- A module type classifies itself additively with `Kind() failure.Kind`, which
+  answers `Unknown` on a nil receiver, or returns `*failure.Error`
+  (`New`, `Wrap`, `Code`).
+- `failure.Of` classifies at a boundary: `Unknown` for an unclassified branch,
+  any `Unknown` node, a nil error or a graph over 128 entries (cycles
+  included); otherwise the most severe outermost kind. `failure.Marked`
+  reports only an explicit `Unknown` (or an oversized graph); a module uses it
+  where its own effect state decides certainty.
+
+Migration rule: a module keeps its own code constants, failure types and
+error texts and classifies them through the kernel; it adds no private
+uncertainty walker. Each adapter has one mapper from kind to its wire outcome,
+the desktop one in `transport/desktop`. A migration pull request moves one
+module, proves parity with a table test against the classification it
+replaces, and lists every `Of`/`Marked` site that a newly classified type can
+reach, because classifying a type widens those sites.
+
 ## Relation to ADR-0001
 
 | ADR-0001 statement                                                                                                                                              | ADR-0002                                                                  |
