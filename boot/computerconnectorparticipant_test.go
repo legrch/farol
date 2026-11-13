@@ -371,3 +371,81 @@ func TestComputerConnectorClaimSetBoundKeepsWithdrawalWorking(t *testing.T) {
 		t.Fatal("claim set exceeded its lifetime capacity")
 	}
 }
+
+// A resumed participant keeps the grant expiry of its first admission. Every
+// connector operation, including discovery (catalogue) and process
+// observation, reads its participant through an execution lease that reissues
+// the expiry from the CURRENT approval, so a same-generation reconnect after
+// that original expiry still works while the approval is renewed, and refuses
+// once the approval itself has expired or been revoked.
+func TestComputerConnectorResumedParticipantOutlivesItsFirstExpiry(t *testing.T) {
+	for _, mode := range []string{"renewed", "expired", "revoked"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newParticipantConnectorFixture(t)
+			s, _ := f.connector(t, "backend")
+			in := f.open("4")
+			first := participantCycle(t, s, f.clock, in, "first")
+			original := f.approval.ExpiresAt
+			// Renew the same-generation consent (time only), as the Settings
+			// renewal does, then move past the first participant's expiry.
+			renewed := f.approval.Clone()
+			f.clock.now = original.Add(-time.Minute)
+			renewed.ExpiresAt = f.clock.now.Add(authority.TaskGrantLifetime)
+			f.approve(t, renewed)
+			s.root.mu.Lock()
+			s.root.publication.currentApproval = &renewed
+			s.root.mu.Unlock()
+			f.clock.now = original.Add(time.Hour)
+			out, err := s.Open(context.Background(), "open-after-expiry", in)
+			if err != nil || out.Execution.ParticipantId != first.ParticipantId {
+				t.Fatal("same generation did not resume", err)
+			}
+			if total, _ := f.participants(t); total != 1 {
+				t.Fatal("resume admitted", total)
+			}
+			var stored time.Time
+			if err = f.store.WithSnapshot(context.Background(), first.ParticipantId, func(v port.AccessSnapshot) error {
+				stored = v.Participant.Grant.ExpiresAt
+				return nil
+			}); err != nil || !f.clock.now.After(stored) {
+				t.Fatal("fixture did not pass the stored first expiry", stored, err)
+			}
+			switch mode {
+			case "expired":
+				f.clock.now = renewed.ExpiresAt.Add(time.Minute)
+			case "revoked":
+				status, err := f.store.Status(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = f.store.RevokeApproval(context.Background(), status.Revision); err != nil {
+					t.Fatal(err)
+				}
+			}
+			e := out.Execution
+			catalogue := computerInvoke(t, s.current.route.Methods(s.root.peer)["computer.workspace.catalogue"],
+				wire.ComputerCatalogueRequest{OwnerId: e.OwnerId, SessionId: e.SessionId, TaskId: e.TaskId, TaskEpoch: e.TaskEpoch, ParticipantId: e.ParticipantId, TurnId: e.TurnId, Generation: e.Generation, CallId: "catalogue"})
+			// Process observation reads the same lease snapshot (observe.go).
+			lease, leaseErr := s.current.route.admit(context.Background(), authority.List)
+			var leased time.Time
+			if leaseErr == nil {
+				leaseErr = lease.WithSnapshot(context.Background(), e.ParticipantId, func(v port.AccessSnapshot) error {
+					leased = v.Participant.Grant.ExpiresAt
+					return nil
+				})
+			}
+			if mode == "renewed" {
+				if catalogue.Status != "ok" {
+					t.Fatalf("discovery refused after the first expiry: %+v", catalogue)
+				}
+				if leaseErr != nil || !leased.After(f.clock.now) {
+					t.Fatal("observation snapshot carries the stored expiry", leased, leaseErr)
+				}
+				return
+			}
+			if catalogue.Status == "ok" || leaseErr == nil {
+				t.Fatal("expired or revoked approval still served", catalogue, leaseErr)
+			}
+		})
+	}
+}
