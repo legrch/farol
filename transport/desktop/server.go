@@ -3,7 +3,6 @@ package desktop
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,10 +45,6 @@ type Config struct {
 	ProfileID  string
 	Generation string
 	Methods    map[string]Method
-	// TerminalRejection is selected only for one-shot inherited role channels.
-	// A rejected request closes that channel after its response; ordinary desktop
-	// and connector servers keep their existing false/default behavior.
-	TerminalRejection bool
 }
 type Server struct {
 	config    Config
@@ -64,23 +59,6 @@ type Server struct {
 }
 
 var orderedRequest = regexp.MustCompile(`^desktop-call:([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}):([1-9][0-9]{0,19})$`)
-
-// NewRequestNonce returns a fresh connection nonce for SequencedRequestID.
-func NewRequestNonce() (string, error) {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", err
-	}
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
-}
-
-// SequencedRequestID names the ordinary request with the given one-based
-// sequence on a connection. Every non-poll request must use this namespace.
-func SequencedRequestID(nonce string, sequence uint64) string {
-	return "desktop-call:" + nonce + ":" + strconv.FormatUint(sequence, 10)
-}
 
 func New(config Config) (*Server, error) {
 	identity := wire.Identity{ProtocolMajor: wire.ProtocolMajor, ProtocolMinor: wire.ProtocolMinor, BuildId: config.BuildID, ProfileId: config.ProfileID, BackendGeneration: config.Generation, Capabilities: []string{"core.status"}, MaxFrameBytes: ipc.MaxFrameBytes}
@@ -162,10 +140,6 @@ func (s *Server) Serve(parent context.Context, in io.ReadCloser, out io.WriteClo
 			}
 			call.method.AfterReply(Request{RequestID: call.request.Id, OperationID: operation, Body: call.request.Params.Body}, err == nil && response.Result != nil && response.Result.Status == "ok")
 		}
-		if err == nil && s.config.TerminalRejection && (response.Error != nil || response.Result == nil || response.Result.Status != "ok") {
-			cancel()
-			return errors.New("role request rejected")
-		}
 		return err
 	}
 	invalid := 0
@@ -215,9 +189,6 @@ func (s *Server) Serve(parent context.Context, in io.ReadCloser, out io.WriteClo
 		}
 		if err := write(response); err != nil {
 			return err
-		}
-		if s.config.TerminalRejection && (response.Error != nil || response.Result == nil || response.Result.Status != "ok") {
-			return errors.New("role request rejected")
 		}
 		if invalid >= wire.MaxConsecutiveInvalidRequests {
 			return errors.New("consecutive invalid request bound exhausted")

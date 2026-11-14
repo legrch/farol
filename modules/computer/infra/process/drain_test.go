@@ -141,51 +141,6 @@ func TestDirectLeafDrainDoesNotConfirmDescendants(t *testing.T) {
 	}
 }
 
-func TestAnchorDoubleNonzeroAndSignalKeepExistingNoForkRequirements(t *testing.T) {
-	for _, signal := range []bool{false, true} {
-		f := anchorFixture(t)
-		code := 7
-		f.guest.report.ExitCode = &code
-		if signal {
-			f.guest.report.ExitCode, f.guest.report.ExitSignal = nil, 9
-		}
-		report, err := f.run(context.Background())
-		if err != nil || report == nil || !report.GuestCohortClosed {
-			t.Fatal(report, err)
-		}
-		f = anchorFixture(t)
-		f.guest.report.ExitCode = &code
-		if signal {
-			f.guest.report.ExitCode, f.guest.report.ExitSignal = nil, 9
-		}
-		f.guest.report.ForkObserved = true
-		report, err = f.run(context.Background())
-		f.requireUnknown(t, report, err)
-	}
-}
-
-func TestAnchorDoublePassesIndependentWitnessesThroughExistingWriters(t *testing.T) {
-	f := anchorFixture(t)
-	if report, err := f.run(context.Background()); err != nil || report == nil {
-		t.Fatal(report, err)
-	}
-	cmd := &exec.Cmd{Stdout: f.bootstrap.stdout, Stderr: f.bootstrap.stderr}
-	if commandOutputDrained(cmd, nil) {
-		t.Fatal("bootstrap alone invented EOF")
-	}
-	for _, writer := range []io.Writer{cmd.Stdout, cmd.Stderr} {
-		if _, ok := writer.(*drainWitness); !ok {
-			t.Fatal("bootstrap lost independent witness")
-		}
-		if _, err := io.Copy(writer, drainFinalReader{}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if !commandOutputDrained(cmd, &exec.ExitError{}) {
-		t.Fatal("retained bootstrap writers lost independent EOF")
-	}
-}
-
 func TestDrainWitnessIncompleteMemoryPipeStaysUnverified(t *testing.T) {
 	reader, writer := io.Pipe() // Memory pipe only, no OS descriptor or process.
 	defer reader.Close()

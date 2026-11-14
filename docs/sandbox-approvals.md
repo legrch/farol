@@ -90,8 +90,8 @@ Full Access/TCC approvals are implemented by these constructors.
 ## Trusted platform and retained invocation binding
 
 The root-scoped production direction is qualified macOS enforcement plus fresh
-measurement of each invocation. The legacy exact-guest `NativeQualification`
-continues to protect its original contract. Routine commands must not run
+measurement of each invocation. The exact-guest held-role `NativeQualification`
+was removed with that role. Routine commands must not run
 synthetic writes in user folders to establish eligibility, especially when the
 owner granted read-only access.
 

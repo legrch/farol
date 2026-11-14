@@ -1,6 +1,6 @@
 {
   "schema": "farol-shell-platform/1",
-  "id": "macos-26A434-arm64-installed-runtime-v24",
+  "id": "macos-26A434-arm64-installed-runtime-v25",
   "osBuild": "26A434",
   "compiler": "approved-roots-seatbelt-v1",
   "filesystemClass": "system-apfs-kernel-mount-boundaries-v1",
@@ -8,20 +8,8 @@
   "network": "none",
   "compilerInputs": [
     {
-      "path": "modules/computer/infra/process/anchor.go",
-      "sha256": "e8c14121c70d36e8153f6a8fe4d0c5d3edfa11f7b765788ef869631ab4812efb"
-    },
-    {
-      "path": "modules/computer/infra/process/anchordarwin.go",
-      "sha256": "5018bb2fc5f926042bf68f725b9163554ad72128c7d927b64405c3ed2c766caf"
-    },
-    {
-      "path": "modules/computer/infra/process/anchorother.go",
-      "sha256": "0ecd1dedacd271ec870df94cd75d32e7eed28bfad85c2540358e48c6b3f4bd7e"
-    },
-    {
-      "path": "modules/computer/infra/process/auditscalar.go",
-      "sha256": "0d789ea3e2f884590518b2e044ebf723452aff025eef1f084ac216b999a11734"
+      "path": "modules/computer/infra/process/audit.go",
+      "sha256": "b7e4dd85307b542441edc374948d18cb0c40dddc103e5955c9a80f7b169d00d2"
     },
     {
       "path": "modules/computer/infra/process/cancel.go",
@@ -29,171 +17,103 @@
     },
     {
       "path": "modules/computer/infra/process/confinement.go",
-      "sha256": "be4c1f6e1209682edd83493823754c3a32fbb4b8b19f23c5630cbfeb3e92bb58"
-    },
-    {
-      "path": "modules/computer/infra/process/darwin.go",
-      "sha256": "627bc31756ed411badba7ac6f1610f1ce2aef0a4af35c32d6bb9e95cca2261a2"
+      "sha256": "19200fa013f1891065543ac67690e84436dcafe34b2553bb46e07912216714da"
     },
     {
       "path": "modules/computer/infra/process/drain.go",
       "sha256": "cca6fc8f5c6e22ef3a7c7578faff4de015576decf91d0b696a83d860ccbceb29"
     },
     {
-      "path": "modules/computer/infra/process/gitread.go",
-      "sha256": "2e77e0378945ca592296fadd366024b315c8de81adfc1edf8ad8aaee35f22f49"
+      "path": "modules/computer/infra/process/git.go",
+      "sha256": "b41ebb10edb771d3af375d2a71b227c35b9d10b24795e8156ae7c18839031d4b"
     },
     {
-      "path": "modules/computer/infra/process/gitruntime.go",
-      "sha256": "ec0d972f70e2c2c148485df9c34dc07ac8b3ede7a35ece3880d59dec496e5c4e"
+      "path": "modules/computer/infra/process/git_darwin.go",
+      "sha256": "ce2aad14bce5778c6cb56a574bbb588b8079a95974064be438c89d4168d78288"
     },
     {
-      "path": "modules/computer/infra/process/gitruntimedarwin.go",
-      "sha256": "134e7d0472f2adef932f7bcaf664e3c2413ac46d4d1349561ba7c762db560ce0"
-    },
-    {
-      "path": "modules/computer/infra/process/heldguest.go",
-      "sha256": "50af1e37393b21fe8648c871a18666b1aaa38527d609191cdb0386e8a7c886b6"
-    },
-    {
-      "path": "modules/computer/infra/process/heldguestdarwin.go",
-      "sha256": "ea1da63f493b87e1f1744d52b0c2a99d78a4d82bdf14c46152567e43ec992af6"
-    },
-    {
-      "path": "modules/computer/infra/process/heldguestother.go",
-      "sha256": "61de94cfb1ed7a0fb1d3a77eb97d18369af09ff196f69a42aca65f391455fcff"
-    },
-    {
-      "path": "modules/computer/infra/process/hostruntime.go",
+      "path": "modules/computer/infra/process/host.go",
       "sha256": "f2eb7baa4dc379504f028481a050b05eddc72f21edee271e747467235c06d464"
     },
     {
-      "path": "modules/computer/infra/process/hostruntimedarwin.go",
-      "sha256": "0fa08c1f13951b161fbb62c2ee8ae8377b5b9f6b43effa2b72e749dc158f3709"
+      "path": "modules/computer/infra/process/host_darwin.go",
+      "sha256": "937778f5f756f1ef9c6aa389b209291f32718e96893d5c75d52a8457217844f0"
     },
     {
-      "path": "modules/computer/infra/process/hostruntimemacho.go",
+      "path": "modules/computer/infra/process/ipc.go",
+      "sha256": "528bc9776b8a5e4d676857b6cda95bde411d4c8111ee483cc043db0075e6e39f"
+    },
+    {
+      "path": "modules/computer/infra/process/macho.go",
       "sha256": "e802151ec79ab4eb18c4c4fefb816c1337c62e601c9686db9172dbc131c99683"
     },
     {
-      "path": "modules/computer/infra/process/hostruntimeother.go",
-      "sha256": "4e392458571aa096234bd878b146f6bacafae0aef0a185af70f78631af8b9fde"
+      "path": "modules/computer/infra/process/measure.go",
+      "sha256": "5d4924db7525790759db763a53beb32eb256149049dc9ef905aa64c8d8a1c1e4"
     },
     {
-      "path": "modules/computer/infra/process/measuredarwin.go",
-      "sha256": "4daf5b854aaffa884a47da06de9484052e380461ab31b356dca2b13d9497dd67"
+      "path": "modules/computer/infra/process/measure_darwin.go",
+      "sha256": "99aef8c6cbb7fcc4b81f7c96125ba102960db2a33fff189d55c32ff59e35fd0f"
     },
     {
-      "path": "modules/computer/infra/process/measurement.go",
-      "sha256": "4072585d9b3913fd61cad1d8d6bd72758eb09db377364539badec72c447b7bf3"
+      "path": "modules/computer/infra/process/mount.go",
+      "sha256": "3528088424bba82a45c985976c0e621060ec7e7f8db900b4fdc353f7a5fd33b5"
     },
     {
-      "path": "modules/computer/infra/process/measureother.go",
-      "sha256": "44c4a03a8ad6b1fbc928db04d20766a2abf7c345f7f95a5ef5fa8b99783aaa8a"
-    },
-    {
-      "path": "modules/computer/infra/process/mountboundaries.go",
-      "sha256": "e5c0c3b13a9916cc3e522ff3977bccdab6b274c97e49cc47f9228101e7974821"
+      "path": "modules/computer/infra/process/namespace.go",
+      "sha256": "835e1b8dfbee6c64231cac4f8e62f881dce8dc04330b20252a3d0566676b8952"
     },
     {
       "path": "modules/computer/infra/process/observe.go",
       "sha256": "60b4907986f4ba4125e6f3669174aada4502d578a981bb3a4d2415bd98046a1e"
     },
     {
-      "path": "modules/computer/infra/process/parent.go",
-      "sha256": "06a800828118d1c8532660257d737222315d187f4872ade2dea8d8e275960c83"
+      "path": "modules/computer/infra/process/path_darwin.go",
+      "sha256": "6e094dc4002c58256eefb65832c430d9dcf9b33032e46a3e4b66adb9d13eb0e1"
     },
     {
-      "path": "modules/computer/infra/process/parentdarwin.go",
-      "sha256": "74dee9163ad3c008371d1df25a0dfef0b82f2abe5d6ed88b3378a409269a257b"
+      "path": "modules/computer/infra/process/platform.go",
+      "sha256": "e08e7a6f3ea5fe33fa4e86e1865cf20e1ee5c13eda8e0364da94a9ca4125126a"
     },
     {
-      "path": "modules/computer/infra/process/parentother.go",
-      "sha256": "d87ba4c4d7d57a6bd2e314e82e01b7b388cb39c22b3cc9e7ff61e9c2475c6911"
-    },
-    {
-      "path": "modules/computer/infra/process/platformnamespaces.go",
-      "sha256": "5b11b3ad633119bbbb4d3cd3ea958fb454851543cdccbc08679fddc0611f1e85"
-    },
-    {
-      "path": "modules/computer/infra/process/platformpathdarwin.go",
-      "sha256": "963ce4d42f5991d174bacfbc494b2780f1fa7b922539f452fb5bdf86ac7806fa"
-    },
-    {
-      "path": "modules/computer/infra/process/platformqualification.go",
-      "sha256": "842b3829ec3bff74113397203944d716ea5c2d53fbf405b03a4ae1b03b1127a0"
-    },
-    {
-      "path": "modules/computer/infra/process/platformqualificationdarwin.go",
-      "sha256": "985795e8bd82db90429134bf3ed7f67cbfc3888878c134749ae13daa44b9090a"
-    },
-    {
-      "path": "modules/computer/infra/process/platformqualificationother.go",
-      "sha256": "c65603620182b86b1f97e85e66c310044c2f37bf32ef8609e09d9c0e3aa2cf87"
-    },
-    {
-      "path": "modules/computer/infra/process/platformwatchdog.go",
-      "sha256": "2862e6e03527df1d69464838e1e58d4610af2bd9eab3fff1b352cd2592e1cffe"
+      "path": "modules/computer/infra/process/platform_darwin.go",
+      "sha256": "dd01803b395a5c99b858251464c8e67a4239b1dc201af914f931cd1c22072ba3"
     },
     {
       "path": "modules/computer/infra/process/prepare.go",
-      "sha256": "6cd30e42bc9301b41c3d031ec87a1448d4ff3d2344eb454a50099e110bbbdb23"
-    },
-    {
-      "path": "modules/computer/infra/process/probedarwin.go",
-      "sha256": "d1ce2152ea84180f0f675667e2d90f34ac2bcff3223042538411123f89e46102"
-    },
-    {
-      "path": "modules/computer/infra/process/probeother.go",
-      "sha256": "396f79e3ddfe4bfb51548cab9a56fd9000265e9c38dd7577d1dc54202ba76312"
+      "sha256": "baceaa54d3b702051df01de80bc7648cffe43ef0bdfc4e95b12a25e6a7ccbbbb"
     },
     {
       "path": "modules/computer/infra/process/process.go",
-      "sha256": "dfd512f45f62697f0cbf5e40a9af48401f9421bf065c1a90509d36f12a544a01"
+      "sha256": "37b00c06de8a3c30239299019554eb6e788550161b605e7f6ecaa29ccd56c34d"
     },
     {
-      "path": "modules/computer/infra/process/pythonruntime.go",
-      "sha256": "6114ba1254186ef949e5c23073f62c46070c1323b501f7c7e8df84a0f6d9f480"
-    },
-    {
-      "path": "modules/computer/infra/process/pythonruntimeother.go",
-      "sha256": "a3fe64a5050a4892b5e0a19963b5725d2db5957c1c44765ee426adaf7a755d27"
-    },
-    {
-      "path": "modules/computer/infra/process/qualification.go",
-      "sha256": "db3efdb73121337289b9dbe141a8ff407b77d1f6b49ef7e1d7c2a5322960e163"
+      "path": "modules/computer/infra/process/python.go",
+      "sha256": "ce180c308311fdbc4f5b3e05a5ed4d5152cb525703349f1dd0a3e49af3ca5836"
     },
     {
       "path": "modules/computer/infra/process/read.go",
-      "sha256": "9f8a69d09e1dc5540e258f34aa988aac1c2a12fea45285875f6ebca311978453"
+      "sha256": "5d1ea04060462c9f3188492ab416957b4d941ecc1d28aa974b3dab4e0b1aa76f"
     },
     {
-      "path": "modules/computer/infra/process/rootscoped.go",
-      "sha256": "0287a2b865de2ee625a521d21d07d1a583be0cb0a6232163a21f569f8ecddd00"
+      "path": "modules/computer/infra/process/scope.go",
+      "sha256": "b78382212d7a6d9e7297517650984aacfc0c7fe9b4d258febc3900c1716e5568"
     },
     {
-      "path": "modules/computer/infra/process/spawn.go",
-      "sha256": "25b40706d496c9eb1e53153131314f83362dd315950302b42200fa1ae656faa7"
+      "path": "modules/computer/infra/process/spawn_darwin.go",
+      "sha256": "45d8756873420caa1c58932acc9a349364e10f050742a359e6d4bd358d586cdd"
     },
     {
       "path": "modules/computer/infra/process/unsupported.go",
-      "sha256": "abe993a3243f9adae60a121fc99c0481b58009678e902f607c480da3b547a4cd"
+      "sha256": "f8f6ad9d3aa1e728514de636db3c224c253111adbe8edb52ba105163d9f4f788"
     },
     {
       "path": "modules/computer/infra/process/watchdog.go",
-      "sha256": "dbd7d77824e2033d74f45ba6669b995183e1a2474913e80130ab212dce12215a"
+      "sha256": "5be470592234af4178fb4d3a4486e55132d6cc3dc24bab0cef947a9a82e678e5"
     },
     {
-      "path": "modules/computer/infra/process/watchdogdarwin.go",
-      "sha256": "d7f5b6c7680afc52bdef528f8a6a36d3a2139508ef48ab7153c6413e3b0a7b3e"
-    },
-    {
-      "path": "modules/computer/infra/process/watchdogipc.go",
-      "sha256": "bb2c62015e687632fdc9ed81c1f3be970ab772bdc45c0cda2b1fdc3f33c73b8d"
-    },
-    {
-      "path": "modules/computer/infra/process/watchdogother.go",
-      "sha256": "91b7894ff6df51634c3780bc7097ecb3995cd7b6ee63711fef03818b47531a19"
+      "path": "modules/computer/infra/process/watchdog_darwin.go",
+      "sha256": "97caef04a2a0a65af7de5e66c995088aef83c7c9ee71cd077a31c95b89c7d404"
     }
   ],
   "watchdogSource": {

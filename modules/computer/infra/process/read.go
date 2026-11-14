@@ -90,9 +90,6 @@ func (c *Child) wait() {
 	if c.supervisor == processsvc.SupervisorExited && observed.groupGone && !c.signalUnknown {
 		c.group = processsvc.CleanupConfirmed
 	}
-	if err == nil && observed.Waited && observed.Drained && observed.cohort && (!c.signalAttempted || c.signalTerminal) && !c.signalUnknown {
-		c.group, c.descendants = processsvc.CleanupConfirmed, processsvc.CleanupConfirmed
-	}
 	deadline, watch := c.deadline, c.watch
 	close(c.done)
 	c.mutex.Unlock()

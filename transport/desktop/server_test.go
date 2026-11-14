@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -32,8 +33,14 @@ func request(id, method, body string, contextValue *wire.Context) []byte {
 const testNonce = "a0000000-0000-4000-8000-000000000001"
 const helloBody = `{"protocolMajor":2,"protocolMinor":0,"buildId":"build","profileId":"test"}`
 
+// sequenced spells the wire grammar for an ordinary request independently of
+// the server's parser: desktop-call:<connection nonce>:<one-based sequence>.
+func sequenced(nonce string, n uint64) string {
+	return "desktop-call:" + nonce + ":" + strconv.FormatUint(n, 10)
+}
+
 // seq names the n-th ordinary request on a test connection.
-func seq(n uint64) string { return SequencedRequestID(testNonce, n) }
+func seq(n uint64) string { return sequenced(testNonce, n) }
 
 // nextID names the ordinary request the server admits next.
 func nextID(s *Server) string { return seq(s.next + 1) }

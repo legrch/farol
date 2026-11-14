@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ type taskWireTestFrame struct {
 const wireTestNonce = "c0000000-0000-4000-8000-000000000001"
 
 func wireTestID(sequence int) string {
-	return desktop.SequencedRequestID(wireTestNonce, uint64(sequence))
+	return "desktop-call:" + wireTestNonce + ":" + strconv.Itoa(sequence)
 }
 
 type taskWireTestPeer struct {

@@ -2,7 +2,6 @@ package process
 
 import (
 	"context"
-	"sync"
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
@@ -19,9 +18,6 @@ type Preparer struct {
 	template      Command
 	qualification Qualification
 	clock         port.Clock
-	anchor        *parentBoundary
-	mutex         sync.Mutex
-	selected      *Prepared
 }
 
 func NewPreparer(runtimeID string, template Command, qualification Qualification, clock port.Clock) (*Preparer, error) {
@@ -46,29 +42,6 @@ func (p *Preparer) Prepare(ctx context.Context, invocation processsvc.Invocation
 	if err != nil {
 		return nil, err
 	}
-	if p.anchor != nil {
-		p.mutex.Lock()
-		defer p.mutex.Unlock()
-		if p.selected != nil {
-			b := p.selected.Seal().Digest
-			// Existing selected command was policy-bound before its seal.
-			sealed, bindErr := p.anchor.policy.bind(command)
-			if bindErr != nil {
-				return nil, bindErr
-			}
-			a, digestErr := nativeCommandDigest(sealed)
-			if digestErr != nil {
-				return nil, &processsvc.NativeFailure{}
-			}
-			if a != b {
-				return nil, &processsvc.NativeFailure{Unknown: true}
-			}
-			return p.selected, nil
-		}
-		prepared.boundary = p.anchor
-		prepared.execution = p.anchor.execution
-		p.selected = prepared
-	}
 	return prepared, nil
 }
 func (p *Prepared) Invocation() processsvc.Invocation {
@@ -92,21 +65,4 @@ func bindingID(value string) bool {
 		}
 	}
 	return true
-}
-
-// RetainedHandle is trusted root cleanup correlation only, never output access,
-// admission, a public request lookup or permission to reconstruct/reissue Spawn.
-func (p *Preparer) RetainedHandle() string {
-	p.mutex.Lock()
-	selected := p.selected
-	p.mutex.Unlock()
-	if selected == nil {
-		return ""
-	}
-	selected.mutex.Lock()
-	defer selected.mutex.Unlock()
-	if selected.retained == nil {
-		return ""
-	}
-	return selected.retained.Handle()
 }

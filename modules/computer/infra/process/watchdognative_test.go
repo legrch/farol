@@ -99,9 +99,9 @@ process.stdin.on("end", () => {
 				t.Fatal("real binary stdout/stderr changed")
 			}
 			f.child.mutex.Lock()
-			closed, uncertain, cohort := f.child.rootClosed, f.child.uncertain, f.child.root.cohort
+			closed, uncertain := f.child.rootClosed, f.child.uncertain
 			f.child.mutex.Unlock()
-			if !closed || uncertain || cohort || observation.GroupCleanup != processsvc.CleanupUnverified ||
+			if !closed || uncertain || observation.GroupCleanup != processsvc.CleanupUnverified ||
 				observation.DescendantCleanup != processsvc.CleanupUnverified {
 				t.Fatal("root close promoted to group/descendant qualification")
 			}
@@ -378,9 +378,9 @@ func (f *nativeWatchdogFixture) logDiagnostics(t *testing.T) {
 	}
 	if f.decoder != nil {
 		f.decoder.mutex.Lock()
-		t.Logf("decoder Wait: completed=%t error=%s rootWaited=%t drained=%t code=%s signal=%d cohort=%t groupGone=%t",
+		t.Logf("decoder Wait: completed=%t error=%s rootWaited=%t drained=%t code=%s signal=%d groupGone=%t",
 			f.decoder.completed, f.decoder.failure, f.decoder.result.Waited, f.decoder.result.Drained,
-			watchdogDiagnosticCode(f.decoder.result.Code), f.decoder.result.Signal, f.decoder.result.cohort, f.decoder.result.groupGone)
+			watchdogDiagnosticCode(f.decoder.result.Code), f.decoder.result.Signal, f.decoder.result.groupGone)
 		f.decoder.mutex.Unlock()
 	}
 	if f.witness == nil {

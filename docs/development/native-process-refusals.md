@@ -20,7 +20,7 @@ probes or shell startup files. Its Git candidates, in order, are:
 4. `/usr/local/bin/git`
 
 See `hostRuntimeCandidates`, `discoverHostRuntime` and `hostRuntimeLayoutFor` in
-`modules/computer/infra/process/hostruntime.go`. A qualified physical installation
+`modules/computer/infra/process/host.go`. A qualified physical installation
 contributes its bin directory before the fixed base executable directories in
 `seatbeltEnvironment`. Therefore ordinary `git` resolves to the first qualified
 installation, not automatically Homebrew or the `/usr/bin/git` Apple shim. If no
@@ -53,22 +53,22 @@ their original order and one-attempt lifecycle:
   `confinement.go`). Admission and durable reservation failures may instead use
   their existing distinct public codes.
 - Support compiler/OS build/architecture, owner UID, current backend identity,
-  fixed executable/import pins and protected bundle (`platformqualification.go`).
+  fixed executable/import pins and protected bundle (`platform.go`).
 - Root and scope approval, frozen mount topology, APFS/local/root-volume class,
   no unsupported nested mounts, exact root/cwd/scratch/protected-state identities
-  (`platformqualification.go`, `mountboundaries.go`, `measurement.go`).
+  (`platform.go`, `mount.go`, `measure.go`).
 - Descriptor-relative directory opening, no symlink substitution, cwd containment,
-  scratch mode/owner and unchanged protected directory facts (`measurement.go`,
-  `measuredarwin.go`).
+  scratch mode/owner and unchanged protected directory facts (`measure.go`,
+  `measure_darwin.go`).
 - Image canonical path, regular/executable file, owner, non-writable mode,
   permitted link count, size, SHA-256 and unchanged descriptor/named identity
-  (`spawn.go`, `measuredarwin.go`). Hardlink-policy failures are executable
+  (`spawn_darwin.go`, `measure_darwin.go`). Hardlink-policy failures are executable
   integrity failures; the closed classification contains no file name.
 - Entire selected installed Git/Python inventory, aliases, imports, directory
   listings and metadata; or the separately qualified Git resource closure
-  (`hostruntime.go`, `hostruntimedarwin.go`, `gitruntime.go`).
+  (`host.go`, `host_darwin.go`, `git.go`).
 - Watchdog image pin, socket-pair creation, IPC connection setup and final current
-  owner check (`watchdogdarwin.go`, `watchdog.go`).
+  owner check (`watchdog_darwin.go`, `watchdog.go`).
 
 The direct adapter's OS `cmd.Start` error and any possible-start watchdog/IPC
 failure are already outcome unknown. A post-release sandbox denial, Git exit or

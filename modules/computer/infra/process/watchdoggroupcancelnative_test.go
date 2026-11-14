@@ -103,9 +103,9 @@ child.once("message", (message) => {
 				f.fail(t, "child TERM final markers missing, duplicated or not drained", nil)
 			}
 			f.child.mutex.Lock()
-			closed, uncertain, cohort, ack := f.child.rootClosed, f.child.uncertain, f.child.root.cohort, f.child.stopSeen
+			closed, uncertain, ack := f.child.rootClosed, f.child.uncertain, f.child.stopSeen
 			f.child.mutex.Unlock()
-			if !closed || uncertain || cohort || ack != (mode == "live-root") {
+			if !closed || uncertain || ack != (mode == "live-root") {
 				f.fail(t, "original decoder closure/ACK unknown or promoted to cleanup evidence", nil)
 			}
 			// Observe the real channel metadata; no fabricated frame or new owner.
