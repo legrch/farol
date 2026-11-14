@@ -1,22 +1,38 @@
-import { connectorRuntimeUncertain } from "../../src/pkg/product-settings/connector-uncertainty.ts";
 import fs from "node:fs";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
 import { parse } from "@babel/parser";
 import { expect, it, vi } from "vitest";
+import { connectorTransport } from "../../apps/desktop/connector/supervisor.ts";
 import { AuthorityTransitionReservation } from "../../src/apps/desktop/authority-transition.ts";
-import { ProductConfigurationResultSchema } from "../../src/pkg/product-settings/contract.ts";
 import { ConnectorTransportWatch } from "../../apps/desktop/connector-transport-watch.ts";
+import { connectorHost } from "../support/connector-host.ts";
 
-// Execute the actual host join with controlled IO, not a reimplementation of
-// its policy. No app, process, credentials, live profile or provider is used.
+// Partial Settings fixtures: the supervisor's schema parse is outside this
+// sequencing test, and the summary fence admits. Failures still go through
+// the real contract below.
+const admission = vi.hoisted(() => ({ computerConnectorAdmission: null }));
+vi.mock("../../src/pkg/product-settings/contract.ts", async (original) => ({
+  ...(await original()),
+  ProductConfigurationResultSchema: { parse: (result) => result },
+}));
+vi.mock(
+  "../../src/apps/desktop/summary-fence-recovery.ts",
+  async (original) => ({
+    ...(await original()),
+    computerConnectorAdmission: (...values) =>
+      admission.computerConnectorAdmission(...values),
+  }),
+);
+const { ProductConfigurationResultSchema } = await vi.importActual(
+  "../../src/pkg/product-settings/contract.ts",
+);
+
+// Execute the actual supervisor recovery with controlled IO, not a
+// reimplementation of its policy, joined to the start observer main.ts still
+// owns. No app, process, credentials, live profile or provider is used.
 const source = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
-const wanted = new Set([
-  "captureConnectorTransport",
-  "connectorTransportCurrent",
-  "recoverConnectorTransport",
-  "observeConnectorStart",
-]);
+const wanted = new Set(["observeConnectorStart"]);
 const nodes = parse(source, { sourceType: "module", plugins: ["typescript"] })
   .program.body;
 const functions = nodes.filter(
@@ -77,7 +93,6 @@ function fixture() {
   const context = {
     AbortController,
     connectorStartCancellation: null,
-    connectorRuntimeUncertain,
     configuration: owner,
     secureMcpConnectorRuntime: connector,
     desktopGoCore: core,
@@ -92,7 +107,6 @@ function fixture() {
     codexAgentOperationActive: () => false,
     computerConnectorAdmission: vi.fn(() => ({ admissible: true })),
     computerMcpLifecycle: () => ({ hasUnconfirmedStop: unconfirmed }),
-    ProductConfigurationResultSchema: { parse: (result) => result },
     configurationFailure: (error) =>
       ProductConfigurationResultSchema.parse({
         ok: false,
@@ -131,12 +145,12 @@ function fixture() {
   const code = functions
     .map((node) => source.slice(node.start, node.end))
     .join("\n");
-  const actual = vm.runInNewContext(
-    stripTypeScriptTypes(
-      `${code}; ({ captureConnectorTransport, recoverConnectorTransport });`,
-    ),
+  admission.computerConnectorAdmission = context.computerConnectorAdmission;
+  context.observeConnectorStart = vm.runInNewContext(
+    stripTypeScriptTypes(`${code}; observeConnectorStart`),
     context,
   );
+  const actual = connectorTransport(connectorHost(context));
   const entry = {
     ...actual,
     recoverConnectorTransport: (

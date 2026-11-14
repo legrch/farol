@@ -4,9 +4,11 @@ import { stripTypeScriptTypes } from "node:module";
 import { parse } from "@babel/parser";
 import { expect, it } from "vitest";
 import { ConnectionStatusTracker } from "../../apps/desktop/connection-status.ts";
+import { connectorStatus } from "../../apps/desktop/connector/supervisor.ts";
+import { connectorHost } from "../support/connector-host.ts";
 
-// Exercise the actual host capture/current functions against a controlled Go
-// observation. This does not claim native tray or provider acceptance.
+// Exercise the actual supervisor capture/current functions against a
+// controlled Go observation. This does not claim native tray or provider acceptance.
 function functions(path, names) {
   const source = fs.readFileSync(path, "utf8");
   const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
@@ -30,19 +32,14 @@ it("keeps a healthy observation through manual admission but invalidates real lo
     connectorTaskAdmissionPurpose: null,
     running: true,
     generation: 1,
-    completedOwnerStop: null,
+    completedOwnerStop: { current: null },
     captureConnectorHealth: () =>
       context.running ? { generation: context.generation } : null,
     connectorHealthCurrent: (original) =>
       context.running && original.generation === context.generation,
     ownerStoppedCurrent: () => false,
   };
-  const host = vm.runInNewContext(
-    stripTypeScriptTypes(
-      `${functions("src/apps/desktop/main.ts", ["connectionAdmissionInProgress", "captureConnectionStatus", "connectionStatusCurrent"])}; ({ captureConnectionStatus, connectionStatusCurrent, connectionAdmissionInProgress })`,
-    ),
-    context,
-  );
+  const host = connectorStatus(connectorHost(context), context);
   const icon = vm.runInNewContext(
     stripTypeScriptTypes(
       `${functions("src/apps/desktop/menu-bar.ts", ["menuBarIconState"])}; menuBarIconState`,

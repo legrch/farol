@@ -1,43 +1,21 @@
-import { observeOperation } from "../../apps/desktop/operations/observe";
-import { passiveHealthObserver } from "../../apps/desktop/operations/passive-health";
-import fs from "node:fs";
-import vm from "node:vm";
 import { EventEmitter } from "node:events";
-import { stripTypeScriptTypes } from "node:module";
-import { parse } from "@babel/parser";
-import { expect, it, vi } from "vitest";
-import { ConnectorTransportWatch } from "../../apps/desktop/connector-transport-watch.ts";
+import { afterEach, expect, it, vi } from "vitest";
 import { ConnectionStatusTracker } from "../../apps/desktop/connection-status.ts";
+import {
+  connectorHealth,
+  connectorWatch,
+} from "../../apps/desktop/connector/supervisor.ts";
 import { AuthorityTransitionReservation } from "../../src/apps/desktop/authority-transition.ts";
+import { channels } from "../../src/pkg/ipc/channels.ts";
+import { connectorHost } from "../support/connector-host.ts";
 
 // Run the actual event/timer join and watcher with controlled health/clock ports.
 // This is not OS sleep, network loss, native process closure or provider evidence.
-const source = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
-const declarations = parse(source, {
-  sourceType: "module",
-  plugins: ["typescript"],
-}).program.body.filter(
-  (node) =>
-    node.type === "FunctionDeclaration" &&
-    node.id?.name === "startConnectorTransportWatch",
-);
-if (declarations.length !== 1)
-  throw Error("CONNECTOR_TRANSPORT_EVENT_SOURCE_MISSING");
-const node = declarations[0];
-const healthObserver = parse(source, {
-  sourceType: "module",
-  plugins: ["typescript"],
-}).program.body.find(
-  (node) =>
-    node.type === "FunctionDeclaration" &&
-    node.id?.name === "observedConnectorHealth",
-);
-if (!healthObserver) throw Error("CONNECTOR_HEALTH_OBSERVER_MISSING");
-const healthSource = source.slice(healthObserver.start, healthObserver.end);
-const compiled = stripTypeScriptTypes(
-  `${healthSource}
-${source.slice(node.start, node.end)}; ({ start: startConnectorTransportWatch, watch: () => connectorTransportWatch });`,
-);
+const nativeObservation = "farol-e2e-observe-connection";
+afterEach(() => {
+  vi.restoreAllMocks();
+  process.removeAllListeners(nativeObservation);
+});
 
 async function until(predicate) {
   for (let n = 0; n < 50; n += 1) {
@@ -68,19 +46,13 @@ function fixture({ e2e = false, statusKind = "running" } = {}) {
   const statusCapture = Object.freeze({ kind: statusKind, original });
   let eligible = true;
   const context = {
-    observeOperation,
-    passiveHealthObserver,
     operationsStore: () => ({ record() {} }),
-    process: new EventEmitter(),
+    process,
     isolatedE2EHome: e2e ? "/private/tmp/owned-native-test-home" : undefined,
     captureConnectionStatus: vi.fn(() => (eligible ? statusCapture : null)),
     connectionStatusCurrent: vi.fn(
       (value) => value === statusCapture && eligible,
     ),
-    ConnectorTransportWatch,
-    connectorTransportWatch: null,
-    connectorTransportTimer: null,
-    connectorStatusTimer: null,
     connectorConnection: {
       sample: vi.fn(async () => undefined),
       suspend: vi.fn(),
@@ -111,7 +83,8 @@ function fixture({ e2e = false, statusKind = "running" } = {}) {
       },
       webContents: { send: vi.fn() },
     },
-    channels: { configurationChanged: "fixture.configuration-changed" },
+    // The real channel name: the watch publishes on the product channel.
+    channels,
     powerMonitor: power,
     setInterval: vi.fn((callback, milliseconds) => {
       const timer = { callback, milliseconds, unref: vi.fn() };
@@ -123,7 +96,14 @@ function fixture({ e2e = false, statusKind = "running" } = {}) {
     }),
     console: { warn: vi.fn() },
   };
-  const actual = vm.runInNewContext(compiled, context);
+  vi.spyOn(globalThis, "setInterval").mockImplementation(context.setInterval);
+  vi.spyOn(globalThis, "setTimeout").mockImplementation(context.setTimeout);
+  vi.spyOn(console, "warn").mockImplementation(context.console.warn);
+  const watch = connectorWatch(connectorHost(context), context, context);
+  const actual = {
+    start: watch.startConnectorTransportWatch,
+    watch: () => watch.connectorTransportWatch.current,
+  };
   actual.start();
   return {
     actual,
@@ -397,17 +377,6 @@ it("does not admit another observation or recovery from resume after Quit closes
 // Actual main-process capture/current predicates with a supplied Go DTO.
 // The retained anchor deliberately stays running after the tunnel terminates.
 function passiveHealthFixture() {
-  const functions = parse(source, {
-    sourceType: "module",
-    plugins: ["typescript"],
-  }).program.body.filter(
-    (node) =>
-      node.type === "FunctionDeclaration" &&
-      ["captureConnectorHealth", "connectorHealthCurrent"].includes(
-        node.id?.name,
-      ),
-  );
-  expect(functions).toHaveLength(2);
   const binding = {
     buildId: "build",
     profileId: "profile",
@@ -443,13 +412,11 @@ function passiveHealthFixture() {
     quitInProgress: false,
     installedUpdateAdmission: false,
   };
-  const api = vm.runInNewContext(
-    stripTypeScriptTypes(
-      functions.map((node) => source.slice(node.start, node.end)).join("\n") +
-        "; ({ capture: captureConnectorHealth, current: connectorHealthCurrent });",
-    ),
-    context,
-  );
+  const health = connectorHealth(connectorHost(context));
+  const api = {
+    capture: health.captureConnectorHealth,
+    current: health.connectorHealthCurrent,
+  };
   const value = {
     binding,
     expectedInstanceId: "instance",
