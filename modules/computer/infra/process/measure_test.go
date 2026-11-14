@@ -362,7 +362,7 @@ func TestRootMeasurementsLateSecondaryPolicyChangeNeverDispatches(t *testing.T) 
 }
 
 // No image IO: the retained executable verifier is separately exercised with
-// descriptor/metadata doubles in retainedmeasurement_test.go.
+// descriptor/metadata doubles in measure_darwin_test.go.
 type measurementExecutableDouble struct {
 	*measurementHandleDouble
 	checks int
