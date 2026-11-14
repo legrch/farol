@@ -298,6 +298,8 @@ request, each for the package or file that needs it:
 | `contract`, `service`, `server`, `doc`       | `contract.go`, `service.go`, a desktop adapter's `server.go` and `doc.go` (role files of this record and ADR-0001)                             |
 | `unsupported`                                | `unsupported.go`, the single `//go:build !darwin` fallback per package (Go has no "not darwin" suffix)                                         |
 
+The C6 process migration also admits `host`, `macho`, `measure`, `mount`, `namespace`, `path`, `platform`, `python`, `scope`, `spawn` and `watchdog` for the corresponding files in `modules/computer/infra/process/`. `macho` names the Mach-O format parser; the other stems name the existing mechanism or subject. The migration carries existing infrastructure-to-service imports and unpaired platform-test findings to their renamed paths; it does not qualify those remaining architectural findings or migrate the computer enforcement scope. Custom-tag native test consolidation remains in C8.
+
 Not admitted: `helper` (catch-all stem; pick `agent`, `relay` or `updater` for
 the release update agent), `selftest` (a compound: rename the concept, for
 example `trial` or `probe`, or record an exception row), and `errors` (plural;

@@ -20,7 +20,7 @@ probes or shell startup files. Its Git candidates, in order, are:
 4. `/usr/local/bin/git`
 
 See `hostRuntimeCandidates`, `discoverHostRuntime` and `hostRuntimeLayoutFor` in
-`modules/computer/infra/process/hostruntime.go`. A qualified physical installation
+`modules/computer/infra/process/host.go`. A qualified physical installation
 contributes its bin directory before the fixed base executable directories in
 `seatbeltEnvironment`. Therefore ordinary `git` resolves to the first qualified
 installation, not automatically Homebrew or the `/usr/bin/git` Apple shim. If no

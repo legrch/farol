@@ -396,7 +396,7 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
     ),
     launch(
       "computer.go-command",
-      "modules/computer/infra/process/spawn.go",
+      "modules/computer/infra/process/spawn_darwin.go",
       "nativeBoundary.Start",
       "go.Command",
       "launch.command.Executable",
@@ -404,7 +404,7 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
     ),
     launch(
       "computer.go-watchdog",
-      "modules/computer/infra/process/watchdogdarwin.go",
+      "modules/computer/infra/process/watchdog_darwin.go",
       "nativeWatchdogHost.Start",
       "go.Command",
       "selection.Executable.Path",

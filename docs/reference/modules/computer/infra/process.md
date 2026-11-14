@@ -92,6 +92,8 @@ with Go 1.27.3, `GOTOOLCHAIN=local` and approved Node 24.20.0. It passed: 251
 tests PASS and one SKIP (`TestNativeDrainLeafHelper`), with only the documented
 legacy credential-alias test excluded. The same acceptance limits apply.
 
+Platform record `macos-26A434-arm64-installed-runtime-v25` requalifies X2 held-role removal and C6 in-package file renames, fallback consolidation and plain test folds on 2026-11-14, following v24. On macOS build `26A434` arm64, Go 1.27.3 with `GOTOOLCHAIN=local` and approved Node 24.20.0, the Lead ran `go test -count=1 -v -tags farol_native_process -skip TestNativeSeatbeltCredentialAliases ./modules/computer/infra/process/` outside the sandbox: 223 tests PASS and one SKIP (`TestNativeDrainLeafHelper`). The 250-entry test inventory under all four existing native tags is identical before and after C6. Custom-tag suites remain separate for C8; the process package remains intact. The compiler input list and hashes were generated only after that successful run, with an unchanged-source check. Existing infrastructure-to-service and missing platform-test baseline findings were carried to the renamed paths rather than waived. This record establishes native source qualification, not packaging, installation, update or signed-in ChatGPT acceptance.
+
 Source registration is not release qualification. Disposable packaged MCP checks
 cover bounded Bash, synthetic Git and observation of an original result after
 MCP reconnect. Ordinary Git configuration/hooks, external Shell, cancellation and

@@ -8,18 +8,18 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/legrch/farol/modules/computer/app/port"
+	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
+	processcontract "github.com/legrch/farol/modules/computer/contracts/process"
+	"github.com/legrch/farol/modules/computer/domain/authority"
 	"io"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/legrch/farol/modules/computer/app/port"
-	processsvc "github.com/legrch/farol/modules/computer/app/services/process"
-	processcontract "github.com/legrch/farol/modules/computer/contracts/process"
-	"github.com/legrch/farol/modules/computer/domain/authority"
 )
 
 // CPU only: injected image/physical measurement, evidence, socket and owning
@@ -795,4 +795,659 @@ func (r *watchdogReservation) Reserve(_ context.Context, i processsvc.Intent) (*
 }
 func sampleInvocation() processcontract.Invocation {
 	return processcontract.Invocation{RuntimeID: "cli", SessionID: "session", ModelID: "model", AdmissionID: "authority", Arguments: []string{"arg"}, Input: []byte("input")}
+}
+
+func TestRootScopedSupervisedEnvironmentComesFromFrozenPolicy(t *testing.T) {
+	// CPU-only constructor evidence: no child, filesystem or host qualification.
+	t.Setenv("FAROL_TEST_AMBIENT", "must-not-be-inherited")
+	for _, write := range []bool{false, true} {
+		for _, explicit := range []bool{false, true} {
+			f := platformFixtureCPU(t)
+			template := copyCommand(f.original)
+			template.Binding, template.Confinement = nil, nil
+			template.Args, template.Input = nil, nil
+			template.Write = write
+			expected := seatbeltEnvironment(f.policy, write)
+			template.Environment = nil
+			if explicit {
+				template.Environment = slices.Clone(expected)
+			}
+			preparer, err := NewRootScopedSupervisedPreparer("cli", template, f.policy, f.strategy(t), f.watchdog, context.Background(), f.clock)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if explicit {
+				template.Environment[0] = "HOME=/changed"
+			}
+			f.policy.Executables[0].Path = "/changed/bash"
+			f.policy.Home, f.policy.Scratch = "/changed/home", "/changed/scratch"
+			if !slices.Equal(preparer.base.template.Environment, expected) ||
+				!slices.Equal(preparer.boundary.policy.Environment(write), expected) {
+				t.Fatalf("environment changed after selection (write=%v, explicit=%v)", write, explicit)
+			}
+		}
+	}
+}
+
+func TestRootScopedSupervisedEnvironmentRejectsCallerOverrides(t *testing.T) {
+	for _, name := range []string{"empty", "ambient", "loader", "path", "home", "write-mode"} {
+		t.Run(name, func(t *testing.T) {
+			f := platformFixtureCPU(t)
+			template := copyCommand(f.original)
+			template.Binding, template.Confinement = nil, nil
+			template.Args, template.Input = nil, nil
+			switch name {
+			case "empty":
+				template.Environment = []string{}
+			case "ambient":
+				template.Environment = append(template.Environment, "PRIVATE_TOKEN=synthetic")
+			case "loader":
+				template.Environment = append(template.Environment, "DYLD_INSERT_LIBRARIES=/untrusted.dylib")
+			case "path":
+				template.Environment[3] = "PATH=/untrusted/bin"
+			case "home":
+				template.Environment[0] = "HOME=/untrusted"
+			case "write-mode":
+				template.Environment = seatbeltEnvironment(f.policy, !template.Write)
+			}
+			preparer, err := NewRootScopedSupervisedPreparer("cli", template, f.policy, f.strategy(t), f.watchdog, context.Background(), f.clock)
+			if err == nil || preparer != nil {
+				t.Fatal("caller environment override accepted")
+			}
+		})
+	}
+}
+
+// Full service sequencing with fake platform facts, measurement and helper IPC.
+// This exercises the production join but proves no native platform or release.
+func newPlatformWatchdogFixture(t *testing.T) (*watchdogFixture, platformFixture) {
+	t.Helper()
+	f := newWatchdogFixture(t)
+	pf := platformFixtureCPU(t)
+	pf.clock.value = f.clock.Now()
+	pf.policy.Snapshot.Participant.Grant.Identity = f.lease.binding.Identity
+	pf.policy.Snapshot.Participant.Grant.ExpiresAt = f.lease.snapshot.Participant.Grant.ExpiresAt
+	pf.policy.Snapshot.Approval.ExpiresAt = f.lease.snapshot.Approval.ExpiresAt
+	f.lease.snapshot = pf.policy.Snapshot
+	template := copyCommand(pf.original)
+	template.Binding, template.Confinement = nil, nil
+	template.Args, template.Input = nil, nil
+	preparer, err := NewRootScopedSupervisedPreparer("cli", template, pf.policy, pf.strategy(t), pf.watchdog, context.Background(), f.clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparer.boundary.host = f.host
+	preparer.boundary.measure = f.preparer.boundary.measure
+	f.preparer = preparer
+	service, err := processsvc.NewForInvocation("operation", f.lease, preparer, f.reservation, &sync.Mutex{}, f.clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.route, err = processcontract.New(service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f, pf
+}
+
+func TestRootScopedPlatformWatchdogUsesOriginalReservationAndOneRelease(t *testing.T) {
+	f, _ := newPlatformWatchdogFixture(t)
+	f.prepare(t)
+	if f.reservation.calls != 0 || f.host.calls.Load() != 0 || f.measurements.Load() != 0 {
+		t.Fatal("selection caused execution effects")
+	}
+	selected := f.preparer.boundary.platform
+	if selected == nil || selected.frozen.deadline.set {
+		t.Fatal("deadline bound before original reservation")
+	}
+	start := f.start(t)
+	prepare, release := <-f.host.frames, <-f.host.frames
+	if f.reservation.calls != 1 || f.host.starts.Load() != 1 || f.measurements.Load() != 1 ||
+		prepare["executable"] != seatbeltExecutable || prepare["deadlineAt"] != float64(f.lease.deadline.UnixMilli()) || release["type"] != "start" ||
+		!selected.frozen.deadline.value.Equal(f.lease.deadline) {
+		t.Fatal("reservation/wrapper/deadline/release mismatch")
+	}
+	f.emit(t, map[string]any{"type": "stdout", "id": prepare["id"], "data": "T0s="})
+	f.emit(t, map[string]any{"type": "close", "id": prepare["id"], "code": 0, "signal": nil})
+	f.settle(t)
+	result, err := f.route.Read(context.Background(), processcontract.ReadRequest{Handle: start.Handle})
+	if err != nil || result.State != processcontract.Exited || result.StdoutBase64 != "T0s=" || !result.RootWaited || !result.OutputDrained ||
+		result.DescendantCleanup != processcontract.CleanupUnverified {
+		t.Fatal(result, err)
+	}
+	again, err := f.route.Start(context.Background(), processcontract.StartRequest{OperationID: "operation"})
+	if err != nil || again == nil || again.Handle != start.Handle || f.host.starts.Load() != 1 || f.reservation.calls != 1 {
+		t.Fatal("original result was not retained without another dispatch", again, err)
+	}
+}
+
+func TestRootScopedPlatformWatchdogRejectsDriftBeforeHelperAndRelease(t *testing.T) {
+	for _, stage := range []string{"before-helper", "after-prepared"} {
+		t.Run(stage, func(t *testing.T) {
+			f, pf := newPlatformWatchdogFixture(t)
+			f.prepare(t)
+			drift := func() {
+				value := pf.facts.files[pf.descriptor.Backend.Path]
+				value.sha256 = strings.Repeat("9", 64)
+				pf.facts.files[pf.descriptor.Backend.Path] = value
+			}
+			if stage == "before-helper" {
+				drift()
+			} else {
+				f.host.beforePrepared = drift
+			}
+			_, err := f.route.Start(context.Background(), processcontract.StartRequest{OperationID: "operation"})
+			if err == nil || f.host.starts.Load() != 0 {
+				t.Fatal("unqualified command released")
+			}
+			expectedHelpers := int32(0)
+			if stage == "after-prepared" {
+				expectedHelpers = 1
+				f.settle(t)
+			}
+			if f.host.calls.Load() != expectedHelpers {
+				t.Fatal("unexpected helper lifecycle")
+			}
+			_, err = f.route.Start(context.Background(), processcontract.StartRequest{OperationID: "operation"})
+			if err == nil || f.host.calls.Load() != expectedHelpers || f.reservation.calls != 1 {
+				t.Fatal("refused operation replayed")
+			}
+		})
+	}
+}
+
+func TestRootScopedPlatformWatchdogSealsSupportAndCannotUsePendingMarker(t *testing.T) {
+	f, pf := newPlatformWatchdogFixture(t)
+	f.prepare(t)
+	first := f.preparer.selected.Seal()
+	if f.preparer.boundary.policy.qualification.Qualify(context.Background(), f.preparer.selected.command) == nil {
+		t.Fatal("selection marker accepted a direct execution")
+	}
+	pf.descriptor.QualificationSHA256 = strings.Repeat("7", 64)
+	f.preparer.boundary.strategy = pf.strategy(t)
+	// A changed support selection cannot reuse the already selected reservation.
+	invocation := f.preparer.selected.Invocation()
+	if _, err := f.preparer.Prepare(context.Background(), invocation); err == nil {
+		t.Fatal("changed support reused selected intent")
+	}
+	if f.preparer.selected.Seal() != first || f.host.calls.Load() != 0 || f.reservation.calls != 0 {
+		t.Fatal("selection was replaced")
+	}
+}
+
+func TestRootScopedPlatformWatchdogPreservesUnknownRelease(t *testing.T) {
+	f, _ := newPlatformWatchdogFixture(t)
+	f.host.reply = "lost"
+	f.prepare(t)
+	_, err := f.route.Start(context.Background(), processcontract.StartRequest{OperationID: "operation"})
+	if err == nil || f.host.starts.Load() != 1 || f.preparer.RetainedHandle() == "" {
+		t.Fatal("missing release response lost original attempt")
+	}
+	f.settle(t)
+	_, err = f.route.Start(context.Background(), processcontract.StartRequest{OperationID: "operation"})
+	if err == nil || f.host.starts.Load() != 1 || f.host.calls.Load() != 1 || f.reservation.calls != 1 {
+		t.Fatal("unknown operation was dispatched again")
+	}
+}
+
+func TestRootScopedPlatformRejectsUnsupportedScopeBeforeReservation(t *testing.T) {
+	for _, mode := range []string{"nested", "remote", "filesystem"} {
+		t.Run(mode, func(t *testing.T) {
+			f, pf := newPlatformWatchdogFixture(t)
+			value := pf.facts.directories[pf.original.Root]
+			switch mode {
+			case "nested":
+				value.nested = true
+			case "remote":
+				value.local = false
+			case "filesystem":
+				value.filesystem = "nfs"
+			}
+			pf.facts.directories[pf.original.Root] = value
+			_, err := f.preparer.Prepare(context.Background(), processsvc.Invocation(sampleInvocation()))
+			var native *processsvc.NativeFailure
+			if !errors.As(err, &native) || !native.FilesystemUnsupported || native.Unknown || f.reservation.calls != 0 || f.host.calls.Load() != 0 {
+				t.Fatal("unsupported filesystem reached reservation or lost its classification", err)
+			}
+		})
+	}
+}
+
+// CPU doubles only: the existing in-memory IPC peer and exact helper Wait.
+// These tests do not execute a native process or qualify descendant cleanup.
+func newSupervisorWatchdogFixture(t *testing.T, rootScoped bool) *watchdogFixture {
+	t.Helper()
+	f := newWatchdogFixture(t)
+	if rootScoped {
+		selection := f.preparer.boundary.policy.selection
+		participant, approval := selection.Snapshot.Participant.Clone(), selection.Snapshot.Approval.Clone()
+		selection.Snapshot.Participant, selection.Snapshot.Approval = &participant, &approval
+		selection.FilePolicy, selection.Git = authority.RootScopedFiles, RootScopedGit
+		selection.Snapshot.Participant.Grant.FilePolicy = authority.RootScopedFiles
+		selection.Snapshot.Approval.FilePolicy = authority.RootScopedFiles
+		policy, err := NewSeatbelt(selection, f.evidence)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.preparer.base.template.Environment = policy.Environment(f.preparer.base.template.Write)
+		f.preparer.base.qualification = policy
+		f.preparer.boundary.policy = policy
+		f.lease.snapshot = selection.Snapshot
+	}
+	f.host.holdWait = true
+	f.prepare(t)
+	return f
+}
+
+func supervisorWatchdogEvent(t *testing.T, f *watchdogFixture, kind string) {
+	t.Helper()
+	c := f.child().process.(*watchdogChild)
+	// Feed the real decoder synchronously so intermediate reads need no polling
+	// or timing assumptions. The transport receiver still owns its EOF/fence.
+	event := map[string]any{"type": kind, "id": c.id}
+	switch kind {
+	case "stdout":
+		event["data"] = "AP8=" // Synthetic binary output: NUL, 0xff.
+	case "exit", "close":
+		event["code"], event["signal"] = 7, nil
+	}
+	raw, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.event(raw); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func finishSupervisorWatchdog(t *testing.T, f *watchdogFixture, helperErr error) {
+	t.Helper()
+	if err := f.host.peer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.host.process.ended <- helperErr
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := f.child().WaitForCompletion(ctx); err != nil {
+		t.Fatal("CPU helper did not settle", err)
+	}
+	if f.host.process.waits.Load() != 1 || f.host.calls.Load() != 1 || f.host.starts.Load() != 1 || f.reservation.calls != 1 {
+		t.Fatal("original helper ownership or dispatch count changed")
+	}
+}
+
+func readSupervisorWatchdog(t *testing.T, f *watchdogFixture, handle string) *processcontract.ReadResponse {
+	t.Helper()
+	out, err := f.route.Read(context.Background(), processcontract.ReadRequest{Handle: handle})
+	if err != nil || out == nil {
+		t.Fatal(out, err)
+	}
+	return out
+}
+
+func requireSupervisorRootFacts(t *testing.T, out *processcontract.ReadResponse, drained bool) {
+	t.Helper()
+	if out.RootState != processcontract.RootExited || !out.RootWaited || out.ExitCode == nil || *out.ExitCode != 7 ||
+		out.ExitSignal != 0 || out.OutputDrained != drained || out.StdoutBase64 != "AP8=" ||
+		out.GroupCleanup != processcontract.CleanupUnverified || out.DescendantCleanup != processcontract.CleanupUnverified {
+		t.Fatalf("root/output facts lost or cleanup promoted: %+v", out)
+	}
+}
+
+func TestWatchdogSupervisorKnownExitRequiresRootScopedSelectionAndHelperWait(t *testing.T) {
+	for _, rootScoped := range []bool{true, false} {
+		name := "legacy"
+		if rootScoped {
+			name = "approved-roots-v1"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newSupervisorWatchdogFixture(t, rootScoped)
+			start := f.start(t)
+			pending := processcontract.SupervisorState("")
+			pendingState := processcontract.Unknown
+			if rootScoped {
+				pending = processcontract.SupervisorRunning
+				pendingState = processcontract.Running
+			}
+			initial := readSupervisorWatchdog(t, f, start.Handle)
+			if initial.Supervisor != pending || initial.State != processcontract.Running {
+				t.Fatal("supervisor selected outside approved roots or start changed", initial)
+			}
+			supervisorWatchdogEvent(t, f, "stdout")
+			for _, kind := range []string{"exit", "close"} {
+				supervisorWatchdogEvent(t, f, kind)
+				out := readSupervisorWatchdog(t, f, start.Handle)
+				requireSupervisorRootFacts(t, out, kind == "close")
+				if out.Supervisor != pending || out.State != pendingState {
+					t.Fatal("root facts alone supplied helper completion", out)
+				}
+				select {
+				case <-f.child().done:
+					t.Fatal("root close completed the held helper")
+				default:
+				}
+			}
+			finishSupervisorWatchdog(t, f, nil)
+			for range 2 {
+				out := readSupervisorWatchdog(t, f, start.Handle)
+				requireSupervisorRootFacts(t, out, true)
+				state, supervisor := processcontract.Unknown, processcontract.SupervisorState("")
+				if rootScoped {
+					state, supervisor = processcontract.Exited, processcontract.SupervisorExited
+				}
+				if out.State != state || out.Supervisor != supervisor || out.CancelRequested || f.preparer.RetainedHandle() != start.Handle {
+					t.Fatal("known supervisor result lost or legacy uncertainty cleared", out)
+				}
+			}
+		})
+	}
+}
+
+func TestWatchdogSupervisorHelperFailureAndIPCFenceRemainUnknown(t *testing.T) {
+	for _, fence := range []bool{false, true} {
+		name := "helper-wait-failure"
+		if fence {
+			name = "ipc-fence"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newSupervisorWatchdogFixture(t, true)
+			start := f.start(t)
+			supervisorWatchdogEvent(t, f, "stdout")
+			supervisorWatchdogEvent(t, f, "close")
+			helperErr := errors.New("synthetic unknown helper Wait")
+			if fence {
+				c := f.child().process.(*watchdogChild)
+				f.emit(t, map[string]any{"type": "stdout", "id": "crossed-resource", "data": "QQ=="})
+				select {
+				case <-c.failed:
+				case <-time.After(time.Second):
+					t.Fatal("crossed IPC event did not fence the original receiver")
+				}
+				out := readSupervisorWatchdog(t, f, start.Handle)
+				requireSupervisorRootFacts(t, out, true)
+				if out.Supervisor != processcontract.SupervisorUnknown || out.State != processcontract.Unknown {
+					t.Fatal("IPC uncertainty hidden behind outstanding helper Wait", out)
+				}
+				helperErr = nil // A later successful helper Wait cannot clear this fence.
+			}
+			finishSupervisorWatchdog(t, f, helperErr)
+			for range 2 {
+				out := readSupervisorWatchdog(t, f, start.Handle)
+				requireSupervisorRootFacts(t, out, !fence)
+				if out.Supervisor != processcontract.SupervisorUnknown || out.State != processcontract.Unknown {
+					t.Fatal("uncertain helper/IPC upgraded to Exited", out)
+				}
+			}
+		})
+	}
+}
+
+func TestWatchdogSupervisorCancellationRequiresAcknowledgedStopAndObservedExit(t *testing.T) {
+	for _, reply := range []string{"", "refused-stop"} {
+		name := "acknowledged-stop"
+		if reply != "" {
+			name = reply
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newSupervisorWatchdogFixture(t, true)
+			f.host.reply = reply
+			start := f.start(t)
+			supervisorWatchdogEvent(t, f, "stdout")
+			out := readSupervisorWatchdog(t, f, start.Handle)
+			if out.State != processcontract.Running || out.Supervisor != processcontract.SupervisorRunning {
+				t.Fatal("held helper prematurely settled", out)
+			}
+			// Publish the root only after the original live stop is dispatched,
+			// before its ACK/refusal. Already-reaped cancellation is separate.
+			f.host.beforeStop = func() { supervisorWatchdogEvent(t, f, "close") }
+			cancel, err := f.route.Cancel(context.Background(), processcontract.CancelRequest{Handle: start.Handle})
+			status := processcontract.CancelRequested
+			if reply != "" {
+				status = processcontract.CancelUnknown
+			}
+			if err != nil || cancel == nil || cancel.Status != status || f.host.stops.Load() != 1 {
+				t.Fatal("stop evidence changed or control replayed", cancel, err)
+			}
+			finishSupervisorWatchdog(t, f, nil)
+			out = readSupervisorWatchdog(t, f, start.Handle)
+			requireSupervisorRootFacts(t, out, reply == "")
+			state, supervisor := processcontract.Unknown, processcontract.SupervisorUnknown
+			if reply == "" {
+				state, supervisor = processcontract.Exited, processcontract.SupervisorExited
+			}
+			if out.State != state || out.Supervisor != supervisor || !out.CancelRequested {
+				t.Fatal("stop settlement or observed exit evidence lost", out)
+			}
+		})
+	}
+}
+
+func TestWatchdogSupervisorAcknowledgedCancellationKeepsRunningReadUntilWait(t *testing.T) {
+	f := newSupervisorWatchdogFixture(t, true)
+	start := f.start(t)
+	receipt, err := f.route.Cancel(context.Background(), processcontract.CancelRequest{Handle: start.Handle})
+	if err != nil || receipt == nil || receipt.Status != processcontract.CancelRequested || f.host.stops.Load() != 1 {
+		t.Fatal("original stop was not acknowledged", receipt, err)
+	}
+	out := readSupervisorWatchdog(t, f, start.Handle)
+	if out.State != processcontract.Running || out.Supervisor != processcontract.SupervisorRunning || out.RootState != processcontract.RootRunning ||
+		out.RootWaited || out.OutputDrained || !out.CancelRequested || out.GroupCleanup != processcontract.CleanupPending || out.DescendantCleanup != processcontract.CleanupPending {
+		t.Fatal("acknowledged stop poisoned running progress or supplied completion", out)
+	}
+	select {
+	case <-f.child().done:
+		t.Fatal("acknowledged stop supplied original helper Wait")
+	default:
+	}
+	supervisorWatchdogEvent(t, f, "stdout")
+	supervisorWatchdogEvent(t, f, "close")
+	finishSupervisorWatchdog(t, f, nil)
+	out = readSupervisorWatchdog(t, f, start.Handle)
+	requireSupervisorRootFacts(t, out, true)
+	if out.State != processcontract.Exited || out.Supervisor != processcontract.SupervisorExited || !out.CancelRequested || f.host.stops.Load() != 1 {
+		t.Fatal("acknowledged stop and original Wait did not settle observed exit", out)
+	}
+}
+
+func TestChildSupervisorWaitRequiresCompleteUnfencedEvidence(t *testing.T) {
+	for _, name := range []string{"known", "legacy", "prior-unknown", "helper-unverified", "root-unwaited", "undrained", "wait-error", "stop-attempted", "stop-unknown"} {
+		t.Run(name, func(t *testing.T) {
+			code := 7
+			result := waited{result: exit{Code: &code, Waited: true, Drained: true, supervisorExited: true}}
+			root := &ownedDouble{result: make(chan waited, 1)}
+			c := &Child{handle: "cpu-child", process: root, supervisor: processsvc.SupervisorRunning,
+				root: processsvc.RootRunning, group: processsvc.CleanupPending, descendants: processsvc.CleanupPending, done: make(chan struct{})}
+			switch name {
+			case "legacy":
+				c.supervisor = ""
+			case "prior-unknown":
+				c.supervisor = processsvc.SupervisorUnknown
+			case "helper-unverified":
+				result.result.supervisorExited = false
+			case "root-unwaited":
+				result.result.Waited = false
+			case "undrained":
+				result.result.Drained = false
+			case "wait-error":
+				result.err = errors.New("synthetic unknown root Wait")
+			case "stop-attempted", "stop-unknown":
+				if name == "stop-unknown" {
+					root.killError = errors.New("synthetic unknown stop")
+				}
+				receipt, err := c.Cancel(context.Background())
+				status := processsvc.CancelRequested
+				if name == "stop-unknown" {
+					status = processsvc.CancelUnknown
+				}
+				if err != nil || receipt == nil || receipt.Status != status || root.killCount() != 1 {
+					t.Fatal(receipt, err)
+				}
+			}
+			root.result <- result
+			c.wait()
+			out, err := c.Read(context.Background(), processsvc.Window{})
+			want := processsvc.SupervisorUnknown
+			if name == "known" || name == "stop-attempted" {
+				want = processsvc.SupervisorExited
+			} else if name == "legacy" {
+				want = ""
+			}
+			if err != nil || out == nil || out.Supervisor != want ||
+				out.GroupCleanup != processsvc.CleanupUnverified || out.DescendantCleanup != processsvc.CleanupUnverified {
+				t.Fatal("incomplete evidence upgraded or cleanup forged", out, err)
+			}
+			if name == "known" {
+				ack, err := c.Cancel(context.Background())
+				if err != nil || ack.Status != processsvc.AlreadyTerminal || root.killCount() != 0 {
+					t.Fatal("reaped helper cancellation attempted a signal", ack, err)
+				}
+				after, err := c.Read(context.Background(), processsvc.Window{})
+				if err != nil || after.Supervisor != processsvc.SupervisorExited || after.GroupCleanup != processsvc.CleanupUnverified || after.DescendantCleanup != processsvc.CleanupUnverified {
+					t.Fatal("no-effect cancellation lost helper Wait or invented cohort proof", after, err)
+				}
+			}
+			if result.err == nil && result.result.Waited && (out.Root != processsvc.RootExited || !out.Waited || out.ExitCode == nil || *out.ExitCode != code || out.OutputDrained != result.result.Drained) {
+				t.Fatal("known root evidence lost", out)
+			}
+			if (result.err != nil || !result.result.Waited) && (out.Root != processsvc.RootRunning || out.Waited || out.ExitCode != nil || out.OutputDrained) {
+				t.Fatal("failed root Wait invented exit facts", out)
+			}
+		})
+	}
+}
+
+// CPU-only boundary and manual timers: these cases control callback ordering,
+// not native scheduling, signal delivery, descendant cleanup or runtime timing.
+func TestCurrentWatchPreservesOriginalDeadlineStopReason(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		first         string
+		elapsed       time.Duration
+		timedOut      bool
+		authorityLost bool
+	}{
+		{name: "watch-at-deadline", first: "watch", elapsed: 15 * time.Second, timedOut: true, authorityLost: true},
+		{name: "watch-after-deadline", first: "watch", elapsed: 15*time.Second + time.Millisecond, timedOut: true, authorityLost: true},
+		{name: "deadline-first", first: "deadline", elapsed: 15 * time.Second, timedOut: true},
+		{name: "denial-before-deadline", first: "watch", elapsed: 15*time.Second - time.Millisecond, authorityLost: true},
+		{name: "cancel-before-deadline", first: "cancel", elapsed: 15*time.Second - time.Millisecond},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p, boundary, clock, scheduled := fixture(t)
+			started := clock.Now()
+			originalDeadline := started.Add(15 * time.Second)
+			denied := false
+			child := spawn(t, p, clock, func(context.Context) error {
+				if !clock.Now().Before(originalDeadline) {
+					return authority.Fail("AUTHORITY_EXPIRED", "task-grant")
+				}
+				if denied {
+					return errors.New("current owner denied")
+				}
+				return nil
+			})
+			if scheduled.at(0).duration != originalDeadline.Sub(started) {
+				t.Error("selected deadline changed")
+			}
+			clock.value, denied = started.Add(test.elapsed), true
+			switch test.first {
+			case "watch":
+				scheduled.at(1).fire()
+			case "deadline":
+				scheduled.at(0).fire()
+			case "cancel":
+				if receipt, err := child.Cancel(context.Background()); err != nil || receipt == nil || receipt.Status != processsvc.CancelRequested {
+					t.Error("original cancellation was not acknowledged", receipt, err)
+				}
+			}
+			// Later callbacks and callers join the original stop. They cannot
+			// reclassify a cancellation or denial chosen before the deadline.
+			clock.value = originalDeadline.Add(time.Second)
+			scheduled.at(0).fire()
+			scheduled.at(1).fire()
+			if receipt, err := child.Cancel(context.Background()); err != nil || receipt == nil || receipt.Status != processsvc.CancelRequested {
+				t.Error("joining cancellation changed the original acknowledgement", receipt, err)
+			}
+			select {
+			case <-child.done:
+				t.Error("stop acknowledgement supplied the original Wait")
+			default:
+			}
+			pending, pendingErr := child.Read(context.Background(), processsvc.Window{})
+			finish(t, child, boundary, true)
+			out, err := child.Read(context.Background(), processsvc.Window{})
+			if pendingErr != nil || pending == nil || pending.Root != processsvc.RootRunning || pending.Waited || pending.OutputDrained ||
+				pending.GroupCleanup != processsvc.CleanupPending || pending.DescendantCleanup != processsvc.CleanupPending {
+				t.Fatal("stop request invented root completion or cleanup", pending, pendingErr)
+			}
+			if err != nil || out == nil || !out.CancelRequested || out.TimedOut != test.timedOut || out.AuthorityLost != test.authorityLost {
+				t.Fatal("original stop reason changed", out, err)
+			}
+			if boundary.calls != 1 || boundary.root.killCount() != 1 || out.Root != processsvc.RootExited || !out.Waited || !out.OutputDrained ||
+				out.ExitCode == nil || *out.ExitCode != 0 || out.GroupCleanup != processsvc.CleanupUnverified || out.DescendantCleanup != processsvc.CleanupUnverified {
+				t.Fatal("original start/stop/Wait ownership changed or cleanup was promoted", out)
+			}
+		})
+	}
+}
+
+// Real release sequencing over CPU handles/IPC; no native command is launched.
+func TestWatchdogRechecksRetainedInputsBeforeRelease(t *testing.T) {
+	for _, mode := range []string{"current", "changed", "revoked-during-recheck", "partial-measurement"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newWatchdogFixture(t)
+			f.prepare(t)
+			var prepared atomic.Bool
+			checks := 0
+			measurement := &watchdogMeasurementDouble{recheck: func(ctx context.Context) error {
+				checks++
+				if !prepared.Load() || f.lease.inspecting.Load() || f.host.starts.Load() != 0 {
+					t.Fatal("measurement not rechecked between prepared and release, outside owner locks")
+				}
+				if mode == "changed" {
+					return errors.New("synthetic original descriptor drift")
+				}
+				if mode == "revoked-during-recheck" {
+					f.lease.change(func(s *port.AccessSnapshot) { s.Participant.Grant.Commands = authority.NoCommands })
+				}
+				return ctx.Err()
+			}}
+			original := f.preparer.boundary.measure
+			f.preparer.boundary.measure = func(ctx context.Context, command Command, launch *confinedLaunch) (launchMeasurement, error) {
+				previous, err := original(ctx, command, launch)
+				if previous != nil {
+					previous.Close()
+				}
+				if mode == "partial-measurement" {
+					return measurement, errors.New("synthetic capture failure")
+				}
+				return measurement, err
+			}
+			f.host.beforePrepared = func() { prepared.Store(true) }
+			_, err := f.route.Start(context.Background(), processcontract.StartRequest{OperationID: "operation"})
+			if measurement.closes != 1 {
+				t.Fatal("original measurement not closed exactly once")
+			}
+			if mode == "current" {
+				if err != nil || checks != 1 || f.host.starts.Load() != 1 {
+					t.Fatal("current original measurement refused", err)
+				}
+				return
+			}
+			if err == nil || f.host.starts.Load() != 0 {
+				t.Fatal("command released after refused measurement or authority loss")
+			}
+			if mode == "partial-measurement" {
+				if checks != 0 || f.host.calls.Load() != 0 {
+					t.Fatal("partial measurement reached helper")
+				}
+			} else if checks != 1 || f.host.calls.Load() != 1 {
+				t.Fatal("original measurement/helper count changed")
+			}
+			_, err = f.route.Start(context.Background(), processcontract.StartRequest{OperationID: "operation"})
+			if err == nil || f.host.starts.Load() != 0 || measurement.closes != 1 {
+				t.Fatal("failed attempt reopened or released")
+			}
+		})
+	}
 }
