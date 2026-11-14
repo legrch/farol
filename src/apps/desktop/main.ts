@@ -127,6 +127,7 @@ import {
   aboutCommand,
   applicationMenu,
 } from "../../../apps/desktop/shell/menu";
+import { surfaceNavigation } from "../../../apps/desktop/shell/navigation";
 import {
   desktopCoreArtifactRoot,
   desktopDevShellImageMatches,
@@ -170,7 +171,6 @@ import {
   session,
   shell,
   WebContentsView,
-  type Input,
   type SaveDialogOptions,
 } from "electron";
 import {
@@ -265,11 +265,8 @@ import { channels } from "../../pkg/ipc/channels";
 import {
   defaultNavigationShortcuts,
   parseNavigationShortcuts,
-  sidebarShortcutMatches,
-  sectionForShortcut,
   type NavigationShortcuts,
 } from "../../pkg/ipc/navigation-shortcuts";
-import type { ShellAction, ShellActionSource } from "../../pkg/ipc/shell-state";
 import type { RuntimeStatus } from "../../pkg/ipc/runtime-status";
 import type { TaskSurfaceStatus } from "../../pkg/ipc/task-surface-status";
 import {
@@ -287,7 +284,6 @@ import {
   embeddedBrowserSelected,
 } from "../../pkg/product-settings/browser-presentation";
 import {
-  ShellLayoutSchema,
   type ShellOverlay,
   type SidebarMode,
   type SurfaceSection,
@@ -337,7 +333,7 @@ import {
   ProductConfigurationService,
   ProductSettingsStore,
 } from "./product-configuration";
-import { deriveSurfaceLayout, shellGeometry } from "./surface-layout";
+import { shellGeometry } from "./surface-layout";
 import {
   NativeReadonlyWorkspace,
   SAFE_OPEN_HELPER,
@@ -1394,6 +1390,89 @@ const managedChatGptRoutes = new Set<ChatGptRoute>();
 const SIGN_IN_SURFACE_ID = "farol-sign-in";
 let browserHomeSurfaceOpen = false;
 let checkFeedbackVisible = false;
+// Surface navigation writes the layout state above and reads each owner when
+// a function runs; see apps/desktop/shell/navigation.ts.
+const {
+  publishLayout,
+  publishShellAction,
+  focusForLayoutAfterRendererCommit,
+  requestQuickSwitcher,
+  requestSidebarToggle,
+  handleShortcut,
+  applyRendererLayout,
+  currentSurfaceLayout,
+  applyLayout,
+} = surfaceNavigation({
+  state: {
+    get section() {
+      return section;
+    },
+    set section(value) {
+      section = value;
+    },
+    get selectedTaskId() {
+      return selectedTaskId;
+    },
+    set selectedTaskId(value) {
+      selectedTaskId = value;
+    },
+    get setupOpen() {
+      return setupOpen;
+    },
+    set setupOpen(value) {
+      setupOpen = value;
+    },
+    get checkFeedbackVisible() {
+      return checkFeedbackVisible;
+    },
+    set checkFeedbackVisible(value) {
+      checkFeedbackVisible = value;
+    },
+    get sidebarMode() {
+      return sidebarMode;
+    },
+    set sidebarMode(value) {
+      sidebarMode = value;
+    },
+    get sidebarWidth() {
+      return sidebarWidth;
+    },
+    set sidebarWidth(value) {
+      sidebarWidth = value;
+    },
+    get shellOverlay() {
+      return shellOverlay;
+    },
+    set shellOverlay(value) {
+      shellOverlay = value;
+    },
+    get browserHomeSurfaceOpen() {
+      return browserHomeSurfaceOpen;
+    },
+    get navigationShortcuts() {
+      return navigationShortcuts;
+    },
+  },
+  window: () => window,
+  quitInProgress: () => quitInProgress,
+  installedUpdateAdmission: () => installedUpdateAdmission,
+  runtimeState: () => runtimeState,
+  taskViews: () => taskViews,
+  taskViewKinds: () => taskViewKinds,
+  nativeViewVisibility: () => nativeViewVisibility,
+  liveTaskRoutes,
+  signInSurfaceId: SIGN_IN_SURFACE_ID,
+  compactBrowser: () =>
+    compactBrowserSelected({
+      environment: runtimeEnvironment,
+      demoMode,
+      legacySetupTestMode,
+    }),
+  productTasksState,
+  attachTaskView,
+  openLiveTaskSurface,
+  requestSettings,
+});
 const liveTaskConversationUrls = new Map<string, string | null>();
 let liveTaskStore: PrivateLiveTaskStore | null = null;
 let productAgentStore: PrivateProductAgentStore | null = null;
@@ -10899,93 +10978,6 @@ function publishWindowState(): void {
   window?.webContents.send(channels.windowState, currentWindowState());
 }
 
-function publishLayout(): void {
-  window?.webContents.send(channels.layout, {
-    section,
-    taskId: selectedTaskId,
-    setupOpen,
-    checkFeedbackVisible,
-    sidebar: sidebarMode,
-    sidebarWidth,
-    overlay: shellOverlay,
-  });
-}
-
-let sectionNavigationSequence = 0;
-type SectionNavigationTarget = Pick<
-  Extract<ShellAction, { action: "navigate-section" }>,
-  "section" | "taskId" | "sequence"
->;
-
-function publishShellAction(
-  action: Exclude<ShellAction["action"], "navigate-section">,
-  source: Exclude<ShellActionSource, "section-shortcut-command">,
-  authWindowGeneration?: number | null,
-): void;
-function publishShellAction(
-  action: "navigate-section",
-  source: "section-shortcut-command",
-  authWindowGeneration: null,
-  navigation: SectionNavigationTarget,
-): void;
-function publishShellAction(
-  action: ShellAction["action"],
-  source: ShellActionSource,
-  authWindowGeneration: number | null = null,
-  navigation?: SectionNavigationTarget,
-): void {
-  window?.webContents.send(channels.shellAction, {
-    action,
-    eventId: randomUUID(),
-    source,
-    authWindowGeneration,
-    ...navigation,
-  });
-}
-
-function focusForLayout(): void {
-  if (
-    !window ||
-    window.isDestroyed() ||
-    !window.isFocused() ||
-    window.webContents.isDestroyed()
-  ) {
-    return;
-  }
-  if (setupOpen || shellOverlay !== "none" || section !== "browser") {
-    window.webContents.focus();
-    return;
-  }
-  const layout = currentSurfaceLayout();
-  const selected = layout?.pageVisible
-    ? taskViews.get(
-        layout.showBrowserHome ? SIGN_IN_SURFACE_ID : selectedTaskId,
-      )
-    : undefined;
-  if (!selected || !nativeViewVisibility.focus(window, selected)) {
-    if (!window.webContents.isDestroyed()) window.webContents.focus();
-  }
-}
-
-function focusForLayoutAfterRendererCommit(): void {
-  setImmediate(focusForLayout);
-}
-
-function requestQuickSwitcher(): void {
-  if (quitInProgress || installedUpdateAdmission) return;
-  if (!window || setupOpen) return;
-  shellOverlay = "quick-switcher";
-  applyLayout();
-  publishShellAction("open-quick-switcher", "quick-switcher-command");
-  window.webContents.focus();
-}
-
-function requestSidebarToggle(): void {
-  if (quitInProgress || installedUpdateAdmission) return;
-  if (!window || window.isDestroyed()) return;
-  publishShellAction("toggle-sidebar", "sidebar-command");
-}
-
 function desktopBrandImage() {
   const icon = nativeImage.createFromPath(
     path.join(
@@ -11036,15 +11028,6 @@ function requestSettings(): void {
   if (!window) return;
   publishShellAction("open-settings", "settings-command");
   window.webContents.focus();
-}
-
-function closeShellOverlay(): void {
-  if (quitInProgress || installedUpdateAdmission) return;
-  if (shellOverlay === "none") return;
-  // Keep native input hidden until the renderer acknowledges the complete
-  // dismissal, including an active resize or compact page-list overlay.
-  publishShellAction("close-overlay", "overlay-dismissed");
-  window?.webContents.focus();
 }
 
 function installApplicationMenu(): void {
@@ -11383,183 +11366,6 @@ function installNetworkFence(): Electron.Session | null {
     callback({ cancel: !details.url.startsWith(`${base}/`) });
   });
   return isolated;
-}
-
-function handleShortcut(input: Input): boolean {
-  if (input.isComposing || input.isAutoRepeat) return false;
-  const key = input.key.toLowerCase();
-  if (
-    input.type === "keyDown" &&
-    input.meta &&
-    !input.control &&
-    !input.alt &&
-    !input.shift &&
-    (input.key === "[" || input.key === "]") &&
-    shellOverlay === "none"
-  ) {
-    if (!quitInProgress && !installedUpdateAdmission)
-      publishShellAction(
-        input.key === "[" ? "history-back" : "history-forward",
-        "history-shortcut-command",
-      );
-    return true;
-  }
-  if (input.meta && input.key === ",") {
-    requestSettings();
-    return true;
-  }
-  const shortcut =
-    input.type === "keyDown" &&
-    input.meta &&
-    !input.control &&
-    !input.alt &&
-    !input.shift
-      ? sectionForShortcut(navigationShortcuts, input.key)
-      : null;
-  if (setupOpen && !shortcut) return false;
-  if (
-    input.control &&
-    input.meta &&
-    sidebarShortcutMatches(navigationShortcuts, key)
-  ) {
-    requestSidebarToggle();
-    return true;
-  }
-  if (input.meta && key === "k") {
-    requestQuickSwitcher();
-    return true;
-  }
-  if (input.key === "Escape" && shellOverlay !== "none") {
-    closeShellOverlay();
-    return true;
-  }
-  if (input.control && input.key === "Tab") {
-    if (installedUpdateAdmission) return true;
-    const tasks = productTasksState().tasks;
-    if (tasks.length === 0) return false;
-    const index = tasks.findIndex((task) => task.taskId === selectedTaskId);
-    const direction = input.shift ? -1 : 1;
-    const next = (index + direction + tasks.length) % tasks.length;
-    // Retain the native task cursor for consecutive Tab presses. Presentation
-    // and overlay closure are acknowledged by the single renderer owner.
-    selectedTaskId = tasks[next]?.taskId ?? selectedTaskId;
-    publishShellAction("navigate-section", "section-shortcut-command", null, {
-      section: "browser",
-      taskId: selectedTaskId,
-      sequence: ++sectionNavigationSequence,
-    });
-    if (liveTaskRoutes.has(selectedTaskId)) {
-      void openLiveTaskSurface(selectedTaskId);
-    } else {
-      focusForLayout();
-    }
-    return true;
-  }
-  if (shortcut) {
-    if (installedUpdateAdmission) return true;
-    publishShellAction("navigate-section", "section-shortcut-command", null, {
-      section: shortcut,
-      taskId: selectedTaskId,
-      sequence: ++sectionNavigationSequence,
-    });
-    if (shortcut === "browser" && liveTaskRoutes.has(selectedTaskId)) {
-      void openLiveTaskSurface(selectedTaskId);
-    } else {
-      focusForLayout();
-    }
-    return true;
-  }
-  return false;
-}
-
-function applyRendererLayout(value: unknown): void {
-  const parsed = ShellLayoutSchema.safeParse(value);
-  if (!parsed.success) return;
-  const tasks = productTasksState().tasks;
-  const knownTask =
-    parsed.data.taskId === "" ||
-    tasks.some((task) => task.taskId === parsed.data.taskId);
-  // Shell navigation can conceal a browser even if its retained task selection
-  // is missing or stale. It cannot select a replacement or reveal an unknown
-  // conversation. An explicit blank ID selects only the retained home page,
-  // never an incidental previously selected task.
-  const concealsBrowser =
-    parsed.data.section !== "browser" ||
-    parsed.data.setupOpen ||
-    parsed.data.overlay !== "none";
-  if (!knownTask && !concealsBrowser) return;
-  const focusTargetChanged =
-    section !== parsed.data.section ||
-    (knownTask && selectedTaskId !== parsed.data.taskId) ||
-    setupOpen !== parsed.data.setupOpen ||
-    shellOverlay !== parsed.data.overlay;
-  section = parsed.data.section;
-  if (knownTask) {
-    selectedTaskId = parsed.data.taskId;
-  }
-  setupOpen = parsed.data.setupOpen;
-  checkFeedbackVisible = parsed.data.checkFeedbackVisible;
-  sidebarMode = parsed.data.sidebar;
-  sidebarWidth = parsed.data.sidebarWidth;
-  shellOverlay = parsed.data.overlay;
-  applyLayout();
-  if (focusTargetChanged) focusForLayoutAfterRendererCommit();
-}
-
-function currentSurfaceLayout() {
-  if (!window || window.isDestroyed()) return null;
-  const [width = 1, height = 1] = window.getContentSize();
-  const showBrowserHome = browserHomeSurfaceOpen && selectedTaskId === "";
-  const selectedViewKind = showBrowserHome
-    ? "chatgpt"
-    : taskViewKinds.get(selectedTaskId);
-  const layout = deriveSurfaceLayout({
-    width,
-    height,
-    sidebar: sidebarMode,
-    sidebarWidth,
-    overlay: shellOverlay,
-    section,
-    setupOpen,
-    runtimeReady: runtimeState === "ready",
-    browserDocumentPresent: selectedViewKind === "chatgpt",
-    selectedTaskPresent: showBrowserHome || taskViews.has(selectedTaskId),
-    browserChromeVisible:
-      showBrowserHome || productTasksState().tasks.length > 0,
-    compactBrowser: compactBrowserSelected({
-      environment: runtimeEnvironment,
-      demoMode,
-      legacySetupTestMode,
-    }),
-    checkFeedbackVisible,
-  });
-  return { ...layout, showBrowserHome };
-}
-
-function applyLayout(): void {
-  const layout = currentSurfaceLayout();
-  if (!layout) return;
-  const visibleTaskId =
-    !quitInProgress && !installedUpdateAdmission && layout.pageVisible
-      ? layout.showBrowserHome
-        ? SIGN_IN_SURFACE_ID
-        : selectedTaskId
-      : null;
-  // Detach covered and unselected pages first so the host has at most one
-  // browser child, regardless of task insertion order.
-  for (const [taskId, view] of taskViews) {
-    if (taskId !== visibleTaskId || view.webContents?.isDestroyed() !== false) {
-      nativeViewVisibility.hide(view);
-      // Keep hidden documents responsive to the current host geometry without
-      // making their native input or accessibility subtree visible.
-      if (view.webContents?.isDestroyed() === false)
-        view.setBounds(layout.pageBounds);
-    }
-  }
-  if (visibleTaskId !== null) {
-    const view = taskViews.get(visibleTaskId);
-    if (view) attachTaskView(visibleTaskId, view, layout.pageBounds);
-  }
 }
 
 async function createTaskViews(): Promise<void> {

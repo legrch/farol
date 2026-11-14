@@ -10,6 +10,8 @@ import {
 } from "../../src/pkg/product-settings/contract.ts";
 
 import { deriveSurfaceLayout } from "../../src/apps/desktop/surface-layout.ts";
+import { surfaceLayout } from "../../apps/desktop/shell/navigation.ts";
+import { navigationHost } from "../support/navigation-host.ts";
 
 // Actual host code with injected route mechanics. No browser, network, state
 // writer, credential, provider or shared build output participates.
@@ -23,9 +25,7 @@ const continuityCallbacks = new Map();
 function visit(node) {
   if (
     node.type === "FunctionDeclaration" &&
-    ["currentSurfaceLayout", "applyLayout", "configureProduct"].includes(
-      node.id?.name,
-    )
+    node.id?.name === "configureProduct"
   )
     continuityFunctions.set(node.id.name, source.slice(node.start, node.end));
   if (
@@ -336,6 +336,9 @@ function continuityHarness(width = 1180, height = 760) {
     publishShellAction: vi.fn(),
     recordChatGptSignInOutcome: vi.fn(async () => undefined),
   };
+  // The extracted host code calls the navigation module's layout functions
+  // under the names main.ts binds, over this same fixture state.
+  Object.assign(context, surfaceLayout(navigationHost(context)));
   const code = `
     ${[...continuityFunctions.values()].join("\n")}
     async function command(kind) { switch(kind) {
