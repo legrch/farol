@@ -1,3 +1,4 @@
+import { admissionFixture } from "../support/desktop-admission";
 import fs from "node:fs";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
@@ -48,14 +49,14 @@ it("refuses an untracked direct command before invoking the updater", async () =
   const installedUpdateCommand = vi.fn();
   const dispatch = vm.runInNewContext(
     `(${stripTypeScriptTypes(source.slice(selected.start, selected.end))})`,
-    {
+    admissionFixture({
       isTrustedIpcSender: () => true,
       window: {},
       InstalledUpdateCommandSchema,
       installedUpdater: {},
       updatesPanel: { beginDirect, endDirect },
       installedUpdateCommand,
-    },
+    }),
   );
   expect(await dispatch({}, { kind: "check" }, "invalid")).toEqual({
     phase: "unavailable",
@@ -84,7 +85,7 @@ it.each(["rollback", "recover"])(
     };
     const command = vm.runInNewContext(
       `${body}; installedUpdateCommand`,
-      context,
+      admissionFixture(context),
     );
     for (const value of [{ kind }, { kind, staleField: true }]) {
       expect(InstalledUpdateCommandSchema.safeParse(value).success).toBe(false);

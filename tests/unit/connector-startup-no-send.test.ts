@@ -1,3 +1,4 @@
+import { admissionFixture } from "../support/desktop-admission";
 import fs from "node:fs";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
@@ -39,34 +40,36 @@ it.each(["started", "skipped", "verification-refused", "start-refused"])(
     const verifyApp = vi.fn(async () => ({ ok: true }));
     const watch = vi.fn();
     const current = { status: "ready", settings: {} };
-    const context = vm.createContext({
-      runtimeEnvironment: "production",
-      buildEnvironment: "production",
-      buildIdentity: { buildId: "a".repeat(64) },
-      previousHostAdmissionReady: true,
-      beforeConnectorResume: current,
-      configuration: { snapshot: () => current },
-      quitInProgress: false,
-      installedUpdateAdmission: false,
-      startupConnectionChecking: true,
-      startupStage: vi.fn(),
-      resumeComputerConnector: vi.fn(async () => status),
-      window: { isDestroyed: () => false, webContents: { send: vi.fn() } },
-      channels: { configurationChanged: "fixture:configuration" },
-      startConnectorTransportWatch: watch,
-      // A verified returning profile must not make a startup Send eligible.
-      resumedConnectorCheck: vi.fn(() => ({ appName: "Farol" })),
-      verifySecureMcpApp: verifyApp,
-      operationsStore: () => ({}),
-      observeOperation: vi.fn(
-        async (
-          _store: unknown,
-          _operation: unknown,
-          run: () => Promise<unknown>,
-        ) => run(),
-      ),
-      console: { warn: vi.fn() },
-    });
+    const context = vm.createContext(
+      admissionFixture({
+        runtimeEnvironment: "production",
+        buildEnvironment: "production",
+        buildIdentity: { buildId: "a".repeat(64) },
+        previousHostAdmissionReady: true,
+        beforeConnectorResume: current,
+        configuration: { snapshot: () => current },
+        quitInProgress: false,
+        installedUpdateAdmission: false,
+        startupConnectionChecking: true,
+        startupStage: vi.fn(),
+        resumeComputerConnector: vi.fn(async () => status),
+        window: { isDestroyed: () => false, webContents: { send: vi.fn() } },
+        channels: { configurationChanged: "fixture:configuration" },
+        startConnectorTransportWatch: watch,
+        // A verified returning profile must not make a startup Send eligible.
+        resumedConnectorCheck: vi.fn(() => ({ appName: "Farol" })),
+        verifySecureMcpApp: verifyApp,
+        operationsStore: () => ({}),
+        observeOperation: vi.fn(
+          async (
+            _store: unknown,
+            _operation: unknown,
+            run: () => Promise<unknown>,
+          ) => run(),
+        ),
+        console: { warn: vi.fn() },
+      }),
+    );
     vm.runInContext(stripTypeScriptTypes(startup[0]!), context);
     await context.result;
     expect(watch).toHaveBeenCalledOnce();

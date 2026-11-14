@@ -55,6 +55,22 @@ describe("DesktopAdmission", () => {
     },
   );
 
+  it("holds already-admitted Setup dispatch without reopening Quit or Update", () => {
+    const { admission } = fixture();
+    const update = admission.enterUpdate()!;
+    admission.beginQuit();
+    const setup = admission.reserveAdmitted("connector-task");
+    expect(admission.closed()).toBe(true);
+    expect(admission.acquire("chatgpt-task")).toBeNull();
+    expect(() => admission.reserveAdmitted("connector-task")).toThrow(
+      "DESKTOP_WORK_ALREADY_RESERVED",
+    );
+    setup.release();
+    expect(admission.installedUpdateAdmission).toBe(true);
+    update.release();
+    expect(admission.quitInProgress).toBe(true);
+  });
+
   it("does not let a retired handle release a successor reservation", () => {
     const { admission } = fixture();
     const first = admission.acquire("connector-task", "manual-diagnostic")!;

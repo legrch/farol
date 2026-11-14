@@ -23,21 +23,27 @@ describe("connector supervisor wiring in main", () => {
       "secureMcpConnectorRuntime",
       "desktopGoCore",
       "window",
-      "quitInProgress",
-      "installedUpdateAdmission",
-      "connectorTaskAdmission",
-      "connectorTaskAdmissionPurpose",
       "connectorStartInFlight",
-      "configurationRequests",
       "summaryFenceRecovery",
-      "workspaceMutationAdmission",
       "authorityTransitions",
       "powerMonitor",
     ])
       expect(body).toContain(`\n  ${name}: () => ${name},\n`);
-    expect(body).toMatch(
-      /\n  setConnectorTaskAdmission: \(value\) => \{\n    connectorTaskAdmission = value;\n  \},\n/,
-    );
+    for (const [name, expression] of Object.entries({
+      quitInProgress: "desktopAdmission.quitInProgress",
+      installedUpdateAdmission: "desktopAdmission.installedUpdateAdmission",
+      connectorTaskAdmission: 'desktopAdmission.occupied("connector-task")',
+      connectorTaskAdmissionPurpose:
+        "desktopAdmission.connectorTaskAdmissionPurpose",
+      configurationRequests: "desktopAdmission.configurationRequests",
+      workspaceMutationAdmission:
+        'desktopAdmission.occupied("workspace-mutation")',
+      reserveConnectorTask:
+        'desktopAdmission.reserveAdmitted("connector-task")',
+    }))
+      expect(body.replace(/\s+/g, " ")).toContain(
+        `${name}: () => ${expression},`,
+      );
     expect(body).toContain("\n  buildId: buildIdentity.buildId,\n");
     for (const name of [
       "codexAgentOperationActive",

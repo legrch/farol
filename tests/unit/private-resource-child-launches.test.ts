@@ -1,3 +1,4 @@
+import { admissionFixture } from "../support/desktop-admission";
 import { windowHost } from "../support/window-host";
 import fs from "node:fs";
 import path from "node:path";
@@ -83,7 +84,7 @@ it("selects private MCP, safe-open and renderer resources from actual callers", 
   );
   const configured = vm.runInNewContext(
     `${getter}; const resources = desktopExecutionResources(); ${stripTypeScriptTypes(mcp)}`,
-    {
+    admissionFixture({
       ...context,
       connector: {
         tunnelClient: { executablePath: "/selected/tunnel-client" },
@@ -92,7 +93,7 @@ it("selects private MCP, safe-open and renderer resources from actual callers", 
       credentialReference: "private-reference",
       launchFile: "/private/contract.json",
       secureMcpConnectorRuntime: { configure: (value: object) => value },
-    },
+    }),
   );
   expect(configured.mcp).toEqual({
     electronPath: privateExecutable,
@@ -107,13 +108,13 @@ it("selects private MCP, safe-open and renderer resources from actual callers", 
   );
   const workspace = vm.runInNewContext(
     `${getter}; ${stripTypeScriptTypes(helper)}`,
-    {
+    admissionFixture({
       ...context,
       SAFE_OPEN_HELPER: {},
       NativeReadonlyWorkspace: class {
         constructor(readonly options: object) {}
       },
-    },
+    }),
   );
   expect(workspace.options.helperPath).toBe(
     path.join(privateDirectory, "computer-safe-open.py"),
@@ -126,7 +127,7 @@ it("selects private MCP, safe-open and renderer resources from actual callers", 
     initialWindowSize: { width: 800, height: 600 },
     desktopExecutionResources: vm.runInNewContext(
       `${getter}; desktopExecutionResources`,
-      context,
+      admissionFixture(context),
     ),
     BrowserWindow: class {
       constructor(options: { webPreferences: { preload: string } }) {
@@ -175,7 +176,7 @@ it("starts the actual local runtime through private executable and Node IPC afte
   };
   await vm.runInNewContext(
     `${stripTypeScriptTypes(declaration("desktopExecutionResources"))}; ${stripTypeScriptTypes(declaration("startRuntime"))}; startRuntime()`,
-    context,
+    admissionFixture(context),
   );
   expect(order).toEqual(["recheck", "spawn"]);
   expect(spawn.mock.calls[0]![0]).toBe(privateExecutable);
@@ -212,7 +213,7 @@ it("reports a native runtime spawn refusal without an unhandled process error", 
   };
   await vm.runInNewContext(
     `${stripTypeScriptTypes(declaration("desktopExecutionResources"))}; ${stripTypeScriptTypes(declaration("startRuntime"))}; startRuntime()`,
-    context,
+    admissionFixture(context),
   );
   expect(context.runtimeState).toBe("failed");
   expect(context.runtimeError).toBe("RUNTIME_PROCESS_NOT_STARTED");
@@ -233,7 +234,7 @@ it("refuses local-runtime dispatch on failed authenticated resource recheck", as
   await expect(
     vm.runInNewContext(
       `${stripTypeScriptTypes(declaration("desktopExecutionResources"))}; ${stripTypeScriptTypes(declaration("startRuntime"))}; startRuntime()`,
-      context,
+      admissionFixture(context),
     ),
   ).rejects.toThrow("INTEGRITY_CHANGED");
   expect(spawn).not.toHaveBeenCalled();
@@ -259,7 +260,7 @@ it.each([false, true])(
     class Refusal extends Error {}
     const start = vm.runInNewContext(
       `${stripTypeScriptTypes(select(connector, (node) => node.type === "FunctionDeclaration" && (node.id as { name?: string })?.name === "assertConnectorDispatch"))}; const ${stripTypeScriptTypes(code)}; startProcess`,
-      {
+      admissionFixture({
         process: {
           platform: "darwin",
           execPath: "/Applications/replaced/Electron",
@@ -269,7 +270,7 @@ it.each([false, true])(
         CONNECTOR_GROUP_ANCHOR: "controlled-anchor",
         ConnectorProcessNotStarted: Refusal,
         observedConnectorChild: (value: object) => value,
-      },
+      }),
     );
     const result = start(
       {
@@ -327,7 +328,7 @@ it.each(["runtimeStopping", "quitInProgress", "installedUpdateAdmission"])(
     };
     const original = vm.runInNewContext(
       `${stripTypeScriptTypes(declaration("desktopExecutionResources"))}; ${stripTypeScriptTypes(declaration("startRuntime"))}; startRuntime()`,
-      context,
+      admissionFixture(context),
     );
     await reached.promise;
     Object.assign(context, { [flag]: true });
@@ -351,7 +352,7 @@ it.each(["quitInProgress", "installedUpdateAdmission"])(
     };
     await vm.runInNewContext(
       `${stripTypeScriptTypes(declaration("desktopExecutionResources"))}; ${stripTypeScriptTypes(declaration("startRuntime"))}; startRuntime()`,
-      context,
+      admissionFixture(context),
     );
     expect(recheck).not.toHaveBeenCalled();
     expect(spawn).not.toHaveBeenCalled();
@@ -379,12 +380,12 @@ it("refuses the actual connector anchor after withdrawal during its inner rechec
   class NotStarted extends Error {}
   const start = vm.runInNewContext(
     `${stripTypeScriptTypes(guard)}; const ${stripTypeScriptTypes(code)}; startProcess`,
-    {
+    admissionFixture({
       process: { platform: "darwin" },
       fs: { access: vi.fn(async () => undefined), constants: { X_OK: 1 } },
       spawn,
       ConnectorProcessNotStarted: NotStarted,
-    },
+    }),
   );
   const original = start(
     {
@@ -426,7 +427,7 @@ it.each(["quit", "update", "recovery"])(
     };
     const guard = vm.runInNewContext(
       `const ${stripTypeScriptTypes(declaration)}; beforeConnectorEffect`,
-      context,
+      admissionFixture(context),
     );
     expect(() => guard()).not.toThrow();
     if (kind === "quit") context.quitInProgress = true;

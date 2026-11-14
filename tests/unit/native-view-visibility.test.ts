@@ -1,3 +1,4 @@
+import { admissionFixture } from "../support/desktop-admission";
 import type { BrowserWindow } from "electron";
 import { windowHost } from "../support/window-host";
 import { readFileSync } from "node:fs";
@@ -425,7 +426,7 @@ function desktopFixture() {
   Object.assign(context, windows);
   const api = vm.runInNewContext(
     `${callbacks}\n({${[...callbackNames, ...navigationNames].join(",")}, onLoadStateChanged: ${routeLoadCallback}})`,
-    context,
+    admissionFixture(context),
   ) as {
     applyLayout(): void;
     onLoadStateChanged(state: "loading" | "loaded" | "failed"): void;

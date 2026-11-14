@@ -1,3 +1,4 @@
+import { admissionFixture } from "../support/desktop-admission";
 import fs from "node:fs";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
@@ -52,7 +53,7 @@ function harness() {
     stripTypeScriptTypes(
       `async function handle() { switch(command.kind) { ${branch} } } handle`,
     ),
-    context,
+    admissionFixture(context),
   );
   return { context, handle, snapshot };
 }

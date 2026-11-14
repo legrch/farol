@@ -85,8 +85,13 @@ function fixture() {
     quitInProgress: () => state.quitInProgress,
     installedUpdateAdmission: () => false,
     connectorTaskAdmission: () => state.connectorTaskAdmission,
-    setConnectorTaskAdmission: (value: boolean) => {
-      state.connectorTaskAdmission = value;
+    reserveConnectorTask: () => {
+      state.connectorTaskAdmission = true;
+      return {
+        release: () => {
+          state.connectorTaskAdmission = false;
+        },
+      };
     },
     connectorTaskAdmissionPurpose: () => state.connectorTaskAdmissionPurpose,
     connectorStartInFlight: () => null,

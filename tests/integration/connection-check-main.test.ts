@@ -1,3 +1,4 @@
+import { admissionFixture } from "../support/desktop-admission";
 import fs from "node:fs";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
@@ -247,47 +248,49 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap", empty = false) {
     return { ok: true, snapshot: snapshot() };
   });
   const legacyExists = vi.fn(async () => false);
-  const context = vm.createContext({
-    runExplicitConnectionCheck,
-    ConnectionCheckRefusal,
-    connectionCheckDigest,
-    connectionCheckRuntimeReady,
-    prepareConnectorCheckDocument,
-    connectorVerificationProof,
-    currentConnectorAttachment,
-    randomUUID: () => originalId,
-    selectedConnectorApp,
-    connectorWorkspaceSelection,
-    ProductConfigurationResultSchema,
-    desktopGoCore: core,
-    configuration: { snapshot },
-    chatGptRoute: route,
-    window: { isDestroyed: () => false },
-    selectedTaskId: "",
-    liveTaskRoutes: new Map(),
-    embeddedBrowserEnabled: () => true,
-    chatGptTaskAdmissionReady: () => true,
-    chatGptTaskAdmission: false,
-    connectorTaskAdmission: false,
-    quitInProgress: false,
-    installedUpdateAdmission: false,
-    buildIdentity: { buildId: fixtureBuildId },
-    runtimeEnvironment: "test",
-    secureMcpConnectorRuntime: {
-      isRunning: () => true,
-      hasUnresolvedEffect: () => false,
-    },
-    statePaths: () => ({ secureMcpLaunch: "/synthetic-c8-no-filesystem" }),
-    connectorAppVerificationAttemptExists: legacyExists,
-    connectorConnection: { sample: async () => {} },
-    currentConnectionStatus: () => {},
-    checkSecureMcpAttachment: publish,
-    configurationFailure: (error: string) => ({
-      ok: false,
-      error,
-      snapshot: snapshot(),
+  const context = vm.createContext(
+    admissionFixture({
+      runExplicitConnectionCheck,
+      ConnectionCheckRefusal,
+      connectionCheckDigest,
+      connectionCheckRuntimeReady,
+      prepareConnectorCheckDocument,
+      connectorVerificationProof,
+      currentConnectorAttachment,
+      randomUUID: () => originalId,
+      selectedConnectorApp,
+      connectorWorkspaceSelection,
+      ProductConfigurationResultSchema,
+      desktopGoCore: core,
+      configuration: { snapshot },
+      chatGptRoute: route,
+      window: { isDestroyed: () => false },
+      selectedTaskId: "",
+      liveTaskRoutes: new Map(),
+      embeddedBrowserEnabled: () => true,
+      chatGptTaskAdmissionReady: () => true,
+      chatGptTaskAdmission: false,
+      connectorTaskAdmission: false,
+      quitInProgress: false,
+      installedUpdateAdmission: false,
+      buildIdentity: { buildId: fixtureBuildId },
+      runtimeEnvironment: "test",
+      secureMcpConnectorRuntime: {
+        isRunning: () => true,
+        hasUnresolvedEffect: () => false,
+      },
+      statePaths: () => ({ secureMcpLaunch: "/synthetic-c8-no-filesystem" }),
+      connectorAppVerificationAttemptExists: legacyExists,
+      connectorConnection: { sample: async () => {} },
+      currentConnectionStatus: () => {},
+      checkSecureMcpAttachment: publish,
+      configurationFailure: (error: string) => ({
+        ok: false,
+        error,
+        snapshot: snapshot(),
+      }),
     }),
-  });
+  );
   const run = vm.runInContext(
     stripTypeScriptTypes(declaration + "\ntestConnectionCommand;", {
       mode: "strip",

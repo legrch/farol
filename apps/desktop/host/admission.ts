@@ -59,6 +59,17 @@ export class DesktopAdmission {
     purpose: ConnectorPurpose = null,
   ): DesktopReservation | null {
     if (this.closed() || this.work.has(kind)) return null;
+    return this.reserveAdmitted(kind, purpose);
+  }
+
+  // The caller has already selected its operation-specific admission/refusal
+  // order. In particular combined Setup reserves dispatch before its existing
+  // closed-desktop check. Holding dispatch grants no effect authority.
+  reserveAdmitted(
+    kind: DesktopWork,
+    purpose: ConnectorPurpose = null,
+  ): DesktopReservation {
+    if (this.work.has(kind)) throw new Error("DESKTOP_WORK_ALREADY_RESERVED");
     const reservation = {
       release: () => {
         if (this.work.get(kind) !== reservation) return;

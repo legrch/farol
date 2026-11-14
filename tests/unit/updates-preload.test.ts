@@ -1,3 +1,4 @@
+import { admissionFixture } from "../support/desktop-admission";
 import { build, transform } from "esbuild";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
@@ -22,23 +23,29 @@ async function exposed(args: string[]) {
     on: vi.fn(),
     removeListener: vi.fn(),
   };
-  vm.runInNewContext(result.outputFiles[0]!.text, {
-    require: (name: string) => {
-      if (name !== "electron")
-        throw Error(`UNEXPECTED_PRELOAD_REQUIRE:${name}`);
-      return {
-        ipcRenderer: ipc,
-        contextBridge: {
-          exposeInMainWorld: (key: string, value: Record<string, unknown>) => {
-            worlds[key] = value;
+  vm.runInNewContext(
+    result.outputFiles[0]!.text,
+    admissionFixture({
+      require: (name: string) => {
+        if (name !== "electron")
+          throw Error(`UNEXPECTED_PRELOAD_REQUIRE:${name}`);
+        return {
+          ipcRenderer: ipc,
+          contextBridge: {
+            exposeInMainWorld: (
+              key: string,
+              value: Record<string, unknown>,
+            ) => {
+              worlds[key] = value;
+            },
           },
-        },
-      };
-    },
-    process: { argv: args },
-    module: { exports: {} },
-    exports: {},
-  });
+        };
+      },
+      process: { argv: args },
+      module: { exports: {} },
+      exports: {},
+    }),
+  );
   return { worlds, ipc };
 }
 it("exposes only the narrow Updates API in the Updates renderer", async () => {
@@ -107,7 +114,7 @@ it("wires the actual host handlers with shell-only opening and panel-only observ
     UPDATES_PANEL_SIZE: { width: 480, height: 560 },
     console: { error: vi.fn() },
   };
-  vm.runInNewContext(code.code, context);
+  vm.runInNewContext(code.code, admissionFixture(context));
   const event = { sender: owner.webContents, senderFrame: frame };
   handlers.get(updatesChannels.projection)!(
     { sender: {}, senderFrame: frame },
@@ -128,9 +135,6 @@ it("wires the actual host handlers with shell-only opening and panel-only observ
   handlers.get(updatesChannels.open)!(event);
   expect(panel.open).not.toHaveBeenCalled();
   panel.isOwner.mockReturnValue(true);
-  context.quitInProgress = true;
-  handlers.get(updatesChannels.open)!(event);
-  context.quitInProgress = false;
   context.installedUpdateAdmission = true;
   handlers.get(updatesChannels.open)!(event);
   expect(panel.open).not.toHaveBeenCalled();
@@ -140,5 +144,10 @@ it("wires the actual host handlers with shell-only opening and panel-only observ
   const options = panel.open.mock.calls[0]![0] as { admitted(): boolean };
   expect(options.admitted()).toBe(true);
   context.installedUpdateAdmission = true;
+  expect(options.admitted()).toBe(false);
+  context.installedUpdateAdmission = false;
+  context.quitInProgress = true;
+  handlers.get(updatesChannels.open)!(event);
+  expect(panel.open).toHaveBeenCalledOnce();
   expect(options.admitted()).toBe(false);
 });

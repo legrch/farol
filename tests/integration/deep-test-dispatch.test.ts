@@ -1,3 +1,4 @@
+import { admissionFixture } from "../support/desktop-admission";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -144,7 +145,7 @@ async function fixture(stale = false) {
   };
   const run = vm.runInNewContext(
     `${javascript}\nrunManualDeepTest`,
-    context,
+    admissionFixture(context),
   ) as (
     id: string,
     taskId: string,

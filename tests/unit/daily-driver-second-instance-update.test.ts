@@ -1,3 +1,4 @@
+import { admissionFixture } from "../support/desktop-admission";
 import {
   windowAdmission,
   type WindowAdmissionState,
@@ -130,7 +131,7 @@ function host({
     stripTypeScriptTypes(
       `${callbacks.join("\n")}\n({ handle: handleSecondInstance, ready: isPrimaryReady })`,
     ),
-    context,
+    admissionFixture(context),
   ) as { handle(candidate: unknown): Promise<void>; ready(): boolean };
   return {
     ...actions,

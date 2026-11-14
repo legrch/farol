@@ -1,3 +1,4 @@
+import { admissionFixture } from "../support/desktop-admission";
 import fs from "node:fs";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
@@ -81,38 +82,40 @@ function fixture(honoursCancellation = false, startupAdmission = false) {
     closeComputerConnector: vi.fn(async () => {}),
     observeOriginalStop: vi.fn(async () => ({ restricted: false })),
   };
-  const context = vm.createContext({
-    AbortController,
-    Date,
-    setTimeout,
-    clearTimeout,
-    goCoreQuitClosers,
-    drainComputerConnector,
-    observeOperation,
-    operationsStore: () => ({ record() {} }),
-    connectorStartInFlight: null,
-    connectorStartCancellation: null,
-    startupConnectionChecking: startupAdmission,
-    CONNECTOR_START_QUIT_BUDGET_MS: 8_000,
-    secureMcpConnectorRuntime: connector,
-    desktopGoCore: core,
-    savedChatBridgeRuntime: null,
-    computerMcpLifecycle: () => ({ beginStop, waitForStop, confirmStop }),
-    installedUpdater: null,
-    installedUpdaterInitialization: null,
-    pendingChatGptAttachmentTask: null,
-    activeCodexAgentCheck: null,
-    activeProductAgentSession: null,
-    persistedProductAgentExpiry: null,
-    hostCheckClients: [],
-    modelLifecycle: null,
-    routeBRuntime: null,
-    callerRelayRuntime: null,
-    disposeChatGptRoutes() {},
-    disposeTaskViews() {},
-    ownedLocalRuntimes: new Map(),
-    stopRuntime() {},
-  });
+  const context = vm.createContext(
+    admissionFixture({
+      AbortController,
+      Date,
+      setTimeout,
+      clearTimeout,
+      goCoreQuitClosers,
+      drainComputerConnector,
+      observeOperation,
+      operationsStore: () => ({ record() {} }),
+      connectorStartInFlight: null,
+      connectorStartCancellation: null,
+      startupConnectionChecking: startupAdmission,
+      CONNECTOR_START_QUIT_BUDGET_MS: 8_000,
+      secureMcpConnectorRuntime: connector,
+      desktopGoCore: core,
+      savedChatBridgeRuntime: null,
+      computerMcpLifecycle: () => ({ beginStop, waitForStop, confirmStop }),
+      installedUpdater: null,
+      installedUpdaterInitialization: null,
+      pendingChatGptAttachmentTask: null,
+      activeCodexAgentCheck: null,
+      activeProductAgentSession: null,
+      persistedProductAgentExpiry: null,
+      hostCheckClients: [],
+      modelLifecycle: null,
+      routeBRuntime: null,
+      callerRelayRuntime: null,
+      disposeChatGptRoutes() {},
+      disposeTaskViews() {},
+      ownedLocalRuntimes: new Map(),
+      stopRuntime() {},
+    }),
+  );
   vm.runInContext(
     stripTypeScriptTypes(
       declaration("observeConnectorStart") +
@@ -236,21 +239,23 @@ it("cancelled Main admission does not continue into connector effects after its 
   const admitted = deferred<{ restricted: boolean }>();
   const cancellation = new AbortController();
   const snapshot = vi.fn(() => ({ status: "unavailable" }));
-  const context = vm.createContext({
-    connectorStartCancellation: cancellation,
-    connectorTaskAdmission: true,
-    authorityTransitions: { current: () => true },
-    quitInProgress: false,
-    installedUpdateAdmission: false,
-    desktopGoCore: { observeOriginalStop: () => admitted.promise },
-    configuration: { snapshot },
-    connectorCredentialStore: {},
-    secureMcpConnectorRuntime: { hasUnresolvedEffect: () => false },
-    computerConnectorAdmission: () => ({ admissible: false, code: "FENCE" }),
-    summaryFenceRecovery: {},
-    transitionRefusal: () => ({ ok: false, error: "TRANSITION" }),
-    configurationFailure: (error: string) => ({ ok: false, error }),
-  });
+  const context = vm.createContext(
+    admissionFixture({
+      connectorStartCancellation: cancellation,
+      connectorTaskAdmission: true,
+      authorityTransitions: { current: () => true },
+      quitInProgress: false,
+      installedUpdateAdmission: false,
+      desktopGoCore: { observeOriginalStop: () => admitted.promise },
+      configuration: { snapshot },
+      connectorCredentialStore: {},
+      secureMcpConnectorRuntime: { hasUnresolvedEffect: () => false },
+      computerConnectorAdmission: () => ({ admissible: false, code: "FENCE" }),
+      summaryFenceRecovery: {},
+      transitionRefusal: () => ({ ok: false, error: "TRANSITION" }),
+      configurationFailure: (error: string) => ({ ok: false, error }),
+    }),
+  );
   const start = vm.runInContext(
     stripTypeScriptTypes(
       declaration("startAdmittedSecureMcpConnector") +
@@ -282,4 +287,29 @@ it("Quit reserves Go-core budget while the startup check is still awaiting works
   expect(f.quit).toHaveBeenCalledOnce();
   expect(f.start).not.toHaveBeenCalled();
   expect(f.confirmStop).not.toHaveBeenCalled();
+});
+
+it("releases configuration admission after settled Setup work even when its IPC reply is dropped", async () => {
+  const work = deferred<{ admitted: true; value: { ok: true } }>();
+  const deliverConfigurationReply = vi.fn(() => new Promise(() => {}));
+  const context = admissionFixture({
+    authorityTransitions: { withReservation: () => work.promise },
+    deliverConfigurationReply,
+  });
+  const configure = vm.runInNewContext(
+    stripTypeScriptTypes(
+      declaration("configureSaveAndConnect") + "\nconfigureSaveAndConnect;",
+    ),
+    context,
+  ) as (command: { kind: string }) => Promise<unknown>;
+  void configure({ kind: "connector.save-and-connect" });
+  expect(context.desktopAdmission.configurationRequests).toBe(1);
+  expect(context.desktopAdmission.updateBlocker(true)).toBe(
+    "UPDATE_WORK_PENDING",
+  );
+  work.resolve({ admitted: true, value: { ok: true } });
+  for (let n = 0; n < 10; n += 1) await Promise.resolve();
+  expect(deliverConfigurationReply).toHaveBeenCalledOnce();
+  expect(context.desktopAdmission.configurationRequests).toBe(0);
+  expect(context.desktopAdmission.updateBlocker(true)).toBeNull();
 });

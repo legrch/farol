@@ -1,3 +1,4 @@
+import { admissionFixture } from "../support/desktop-admission";
 import fs from "node:fs";
 import vm from "node:vm";
 import { createHash } from "node:crypto";
@@ -241,7 +242,7 @@ function harness() {
   };
   const execute = vm.runInNewContext(
     implementation + "\nconfigureDrainedWorkspaceChange;",
-    sandbox,
+    admissionFixture(sandbox),
   ) as (
     input: Omit<typeof command, "workspaceId"> & { workspaceId: string },
   ) => Promise<{ ok: boolean; error?: string }>;

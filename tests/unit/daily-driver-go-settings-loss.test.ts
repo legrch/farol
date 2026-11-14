@@ -1,3 +1,4 @@
+import { admissionFixture } from "../support/desktop-admission";
 import fs from "node:fs";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
@@ -205,7 +206,7 @@ async function fixture(withWindow = true) {
     installedUpdateAdmission: false,
     channels: { configurationChanged: "configuration-changed" },
   };
-  vm.runInNewContext(compiled, context);
+  vm.runInNewContext(compiled, admissionFixture(context));
   expect(requests).toContain("computer.settings.store.next");
   const savedBeforeLoss = save.mock.calls.length;
   async function lose() {

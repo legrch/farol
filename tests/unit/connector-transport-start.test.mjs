@@ -1,3 +1,4 @@
+import { admissionFixture } from "../support/desktop-admission";
 import { connectorRuntimeUncertain } from "../../src/pkg/product-settings/connector-uncertainty.ts";
 import {
   restartedConnectorAppSelection,
@@ -293,7 +294,10 @@ function fixture({ pause, startResult = originalStart, openError } = {}) {
   // and the supervisor reaches the extracted functions through its ports.
   const transport = connectorTransport(connectorHost(context));
   context.connectorAttemptGeneration = transport.connectorAttemptGeneration;
-  const actual = { ...vm.runInNewContext(compiled, context), ...transport };
+  const actual = {
+    ...vm.runInNewContext(compiled, admissionFixture(context)),
+    ...transport,
+  };
   let recoveryResult;
   const watch = new ConnectorTransportWatch({
     capture: actual.captureConnectorTransport,

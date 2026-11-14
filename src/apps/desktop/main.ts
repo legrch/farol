@@ -1,3 +1,4 @@
+import { DesktopAdmission } from "../../../apps/desktop/host/admission";
 import "../../../apps/desktop/bridge/e2e-window-bootstrap.ts";
 import { mainWindow } from "../../../apps/desktop/window/main";
 import { taskSurfaces } from "../../../apps/desktop/window/surface";
@@ -914,8 +915,8 @@ let window: BrowserWindow | null = null;
 let aboutPanel: DesktopAboutPanel | null = null;
 const updatesPanel = new DesktopUpdatesPanel(
   () =>
-    !quitInProgress &&
-    !installedUpdateAdmission &&
+    !desktopAdmission.quitInProgress &&
+    !desktopAdmission.installedUpdateAdmission &&
     (buildEnvironment !== "preview" ||
       (installedUpdater !== null && installedUpdater.ownerHandoffSafe())),
 );
@@ -939,10 +940,17 @@ let configuration: ProductConfigurationService | null = null;
 let connectorCredentialStore: PrivateConnectorKeyStore | null = null;
 let secureMcpConnectorRuntime: SecureMcpConnectorRuntime | null = null;
 let modelLifecycle: FarolModelLifecycle | null = null;
-let connectorTaskAdmission = false;
-// Manual owner checks (Ping ChatGPT, Full check) reserve dispatch, but do not
-// alter the connector or the sidebar connection status.
-let connectorTaskAdmissionPurpose: "manual-diagnostic" | null = null;
+// Pending owners are read lazily; construction does not observe later state.
+const desktopAdmission = new DesktopAdmission({
+  chatGptReadonlyTask: () => pendingChatGptReadonlyTask !== null,
+  directChatStart: () => directChatStart !== null,
+  chatGptAttachmentTask: () => pendingChatGptAttachmentTask !== null,
+  workspaceEdit: () => pendingWorkspaceEdit !== null,
+  computer: () => pendingComputer.size > 0,
+  codexAgent: () => codexAgentOperationActive(),
+  hostCheck: () => hostCheckClients.size > 0,
+  connectorStart: () => connectorStartInFlight !== null,
+});
 // Presentation spans workspace admission, tunnel startup and the app check.
 // It conveys no authority and is never restored from Activity or saved settings.
 let startupConnectionChecking = true;
@@ -971,17 +979,18 @@ const {
   secureMcpConnectorRuntime: () => secureMcpConnectorRuntime,
   desktopGoCore: () => desktopGoCore,
   window: () => window,
-  quitInProgress: () => quitInProgress,
-  installedUpdateAdmission: () => installedUpdateAdmission,
-  connectorTaskAdmission: () => connectorTaskAdmission,
-  setConnectorTaskAdmission: (value) => {
-    connectorTaskAdmission = value;
-  },
-  connectorTaskAdmissionPurpose: () => connectorTaskAdmissionPurpose,
+  quitInProgress: () => desktopAdmission.quitInProgress,
+  installedUpdateAdmission: () => desktopAdmission.installedUpdateAdmission,
+  connectorTaskAdmission: () => desktopAdmission.occupied("connector-task"),
+  reserveConnectorTask: () =>
+    desktopAdmission.reserveAdmitted("connector-task"),
+  connectorTaskAdmissionPurpose: () =>
+    desktopAdmission.connectorTaskAdmissionPurpose,
   connectorStartInFlight: () => connectorStartInFlight,
-  configurationRequests: () => configurationRequests,
+  configurationRequests: () => desktopAdmission.configurationRequests,
   summaryFenceRecovery: () => summaryFenceRecovery,
-  workspaceMutationAdmission: () => workspaceMutationAdmission,
+  workspaceMutationAdmission: () =>
+    desktopAdmission.occupied("workspace-mutation"),
   codexAgentOperationActive,
   authorityTransitions: () => authorityTransitions,
   operationsStore,
@@ -1021,8 +1030,6 @@ const quitUpdatePreparation = createQuitUpdatePreparation(
 );
 let installedUpdaterInitialization: Promise<void> | null = null;
 let installedUpdateTimer: NodeJS.Timeout | null = null;
-let installedUpdateAdmission = false;
-let configurationRequests = 0;
 let installedUpdateView: InstalledUpdateView = {
   phase: "unavailable",
   code: "UPDATE_NOT_INSTALLED",
@@ -1038,7 +1045,7 @@ async function installedUpdateCommand(
   if (isRetiredInstalledUpdateCommand(value))
     return { phase: "unavailable", code: "UPDATE_FORWARD_ONLY" };
   const command = InstalledUpdateCommandSchema.safeParse(value);
-  if (!command.success || !installedUpdater || quitInProgress)
+  if (!command.success || !installedUpdater || desktopAdmission.quitInProgress)
     return installedUpdateView;
   if (command.data.kind === "check") await installedUpdater.manualCheck();
   else if (command.data.kind === "download") await installedUpdater.download();
@@ -1094,7 +1101,8 @@ async function initializeInstalledUpdater(): Promise<void> {
       publish: publishInstalledUpdate,
       quit: () => app.quit(),
       canStartNormalQuitEffect: () =>
-        quitInProgress && quitUpdatePreparation.effectAllowed(),
+        desktopAdmission.quitInProgress &&
+        quitUpdatePreparation.effectAllowed(),
       acquireAdmission: async (
         desktopWorkSettled,
         quit?: NormalQuitApplyContext,
@@ -1104,26 +1112,11 @@ async function initializeInstalledUpdater(): Promise<void> {
         // New IPC work remains fenced by quitInProgress throughout preparation.
         const admissionCurrent = () =>
           quit === undefined
-            ? !quitInProgress
-            : quitInProgress && quitUpdatePreparation.admissionAllowed(quit);
-        if (
-          installedUpdateAdmission ||
-          !admissionCurrent() ||
-          configurationRequests > 0 ||
-          chatGptTaskAdmission ||
-          pendingChatGptReadonlyTask ||
-          directChatStart ||
-          pendingChatGptAttachmentTask ||
-          pendingWorkspaceEdit ||
-          workspaceMutationAdmission ||
-          pendingComputer.size > 0 ||
-          codexHostTaskAdmission ||
-          codexAgentOperationActive() ||
-          hostCheckClients.size > 0
-        )
-          return { ok: false, code: "UPDATE_WORK_PENDING" };
-        if (connectorTaskAdmission || connectorStartInFlight)
-          return { ok: false, code: "UPDATE_CONNECTOR_ACTIVE" };
+            ? !desktopAdmission.quitInProgress
+            : desktopAdmission.quitInProgress &&
+              quitUpdatePreparation.admissionAllowed(quit);
+        const blocker = desktopAdmission.updateBlocker(admissionCurrent());
+        if (blocker) return { ok: false, code: blocker };
         const snapshot = configuration?.snapshot();
         if (!snapshot || snapshot.status !== "ready")
           return { ok: false, code: "UPDATE_STATE_UNREADABLE" };
@@ -1134,7 +1127,12 @@ async function initializeInstalledUpdater(): Promise<void> {
           transition.release();
           return { ok: false, code: "UPDATE_WORK_PENDING" };
         }
-        installedUpdateAdmission = true;
+        const updateAdmission = desktopAdmission.enterUpdate();
+        if (!updateAdmission) {
+          taskClaim.release();
+          transition.release();
+          return { ok: false, code: "UPDATE_WORK_PENDING" };
+        }
         // Hide embedded input before any asynchronous probe; IPC and configuration
         // admission above stay reserved through the final helper handoff.
         applyLayout();
@@ -1168,11 +1166,11 @@ async function initializeInstalledUpdater(): Promise<void> {
             if (lease) await releasePromotionLease(lease);
             taskClaim.release();
             transition.release();
-            installedUpdateAdmission = false;
+            updateAdmission.release();
             applyLayout();
           },
           resumeConnector: async () => {
-            if (quitInProgress) return;
+            if (desktopAdmission.quitInProgress) return;
             try {
               const result = await startSecureMcpConnector(false, true);
               startupStage(
@@ -1183,7 +1181,11 @@ async function initializeInstalledUpdater(): Promise<void> {
             } catch {
               startupStage("update-abort-connector-resume-failed");
             }
-            if (!quitInProgress && window && !window.isDestroyed())
+            if (
+              !desktopAdmission.quitInProgress &&
+              window &&
+              !window.isDestroyed()
+            )
               window.webContents.send(channels.configurationChanged);
           },
         });
@@ -1274,13 +1276,13 @@ async function initializeInstalledUpdater(): Promise<void> {
       },
     });
     if (!installedUpdater) return;
-    if (quitInProgress) {
+    if (desktopAdmission.quitInProgress) {
       await installedUpdater.close();
       return;
     }
     publishInstalledUpdate(installedUpdater.snapshot());
     await installedUpdater.initialize();
-    if (quitInProgress) {
+    if (desktopAdmission.quitInProgress) {
       await installedUpdater.close();
       return;
     }
@@ -1448,8 +1450,8 @@ const {
     },
   },
   window: () => window,
-  quitInProgress: () => quitInProgress,
-  installedUpdateAdmission: () => installedUpdateAdmission,
+  quitInProgress: () => desktopAdmission.quitInProgress,
+  installedUpdateAdmission: () => desktopAdmission.installedUpdateAdmission,
   runtimeState: () => runtimeState,
   taskViews: () => taskViews,
   taskViewKinds: () => taskViewKinds,
@@ -1478,7 +1480,6 @@ let liveTaskPersistence: Promise<void> = Promise.resolve();
 const taskMutations = new TaskMutationGate();
 let chatGptHomeUrl = CHATGPT_HOME;
 let chatGptE2eOrigin: string | null = null;
-let chatGptTaskAdmission = false;
 type ChatGptVerification = NonNullable<
   ProductSettings["setup"]["chatgpt"]["verified"]
 >;
@@ -1562,9 +1563,7 @@ let recoverableChatGptObservationPersisted = false;
 let chatGptConversationStore: PrivateChatGptConversationStore | null = null;
 let chatGptConversation: ChatGptConversationRecord | null = null;
 let pendingWorkspaceEdit: PendingWorkspaceEdit | null = null;
-let workspaceMutationAdmission = false;
 let windowPresentationReady = false;
-let codexHostTaskAdmission = false;
 type ActiveCodexAgentCheck = Readonly<{
   key: string;
   client: Awaited<ReturnType<typeof launchCodexAppServer>>;
@@ -1810,10 +1809,10 @@ const desktopWindowState = {
     return runtimeState;
   },
   get quitInProgress() {
-    return quitInProgress;
+    return desktopAdmission.quitInProgress;
   },
   get installedUpdateAdmission() {
-    return installedUpdateAdmission;
+    return desktopAdmission.installedUpdateAdmission;
   },
   get selectedTaskId() {
     return selectedTaskId;
@@ -2705,7 +2704,11 @@ async function initializeLiveTaskState(): Promise<void> {
 }
 
 async function openLiveTaskSurface(taskId: string): Promise<boolean> {
-  if (quitInProgress || installedUpdateAdmission) return false;
+  if (
+    desktopAdmission.quitInProgress ||
+    desktopAdmission.installedUpdateAdmission
+  )
+    return false;
   const route = liveTaskRoutes.get(taskId);
   const task = liveTaskRegistry.get(taskId);
   if (!route || !task) return false;
@@ -3475,7 +3478,10 @@ async function runProductTaskCommandObserved(
 ): Promise<ProductTaskCommandResult> {
   const command = ProductTaskCommandSchema.safeParse(value);
   if (!command.success) return taskFailure("TASK_COMMAND_INVALID");
-  if (quitInProgress || installedUpdateAdmission)
+  if (
+    desktopAdmission.quitInProgress ||
+    desktopAdmission.installedUpdateAdmission
+  )
     return taskFailure("TASK_OPERATION_IN_PROGRESS");
   if (demoMode) {
     return taskFailure("TASKS_UNAVAILABLE");
@@ -4776,17 +4782,17 @@ async function startSecureMcpConnectorObserved(
   repair: boolean,
   resumeAfterQuit = false,
 ): Promise<ProductConfigurationResult> {
-  if (connectorTaskAdmission)
+  if (desktopAdmission.occupied("connector-task"))
     return configurationFailure("CONNECTOR_ALREADY_RUNNING");
   const transition = authorityTransitions.tryReserve("connector-start");
   if (!transition) return transitionRefusal();
-  connectorTaskAdmission = true;
+  const connectorAdmission = desktopAdmission.reserveAdmitted("connector-task");
   try {
     return await observeConnectorStart(() =>
       startAdmittedSecureMcpConnector(repair, resumeAfterQuit),
     );
   } finally {
-    connectorTaskAdmission = false;
+    connectorAdmission.release();
     transition.release();
   }
 }
@@ -4826,17 +4832,23 @@ async function startAdmittedSecureMcpConnector(
   const cancellation = connectorStartCancellation?.signal;
   const startPermitted = () =>
     !cancellation?.aborted &&
-    !quitInProgress &&
-    !installedUpdateAdmission &&
+    !desktopAdmission.quitInProgress &&
+    !desktopAdmission.installedUpdateAdmission &&
     recoveryPermitted();
   const startRefusal = () =>
     recoveryPermitted()
       ? configurationFailure("CONNECTOR_START_FAILED")
       : transitionRefusal();
   if (!recoveryPermitted()) return transitionRefusal();
-  if (!connectorTaskAdmission || !authorityTransitions.current())
+  if (
+    !desktopAdmission.occupied("connector-task") ||
+    !authorityTransitions.current()
+  )
     return transitionRefusal();
-  if (quitInProgress || installedUpdateAdmission)
+  if (
+    desktopAdmission.quitInProgress ||
+    desktopAdmission.installedUpdateAdmission
+  )
     return configurationFailure("CONNECTOR_START_FAILED");
   // C7 can be pending before any C4 WAL exists. No new Start, repair,
   // credential-associated Open or restoration may cross that custody.
@@ -5051,7 +5063,11 @@ async function startAdmittedSecureMcpConnector(
 
   const beforeConnectorEffect = () => {
     // Quit latches admission closed before aborting the captured start signal.
-    if (quitInProgress || installedUpdateAdmission || !recoveryPermitted()) {
+    if (
+      desktopAdmission.quitInProgress ||
+      desktopAdmission.installedUpdateAdmission ||
+      !recoveryPermitted()
+    ) {
       throw new Error("CONNECTOR_ADMISSION_WITHDRAWN");
     }
   };
@@ -5233,10 +5249,10 @@ async function checkSecureMcpAttachment(
   if (!configuration || !secureMcpConnectorRuntime) {
     return configurationFailure("SETTINGS_UNAVAILABLE");
   }
-  if (connectorTaskAdmission) {
+  if (desktopAdmission.occupied("connector-task")) {
     return configurationFailure("CONNECTOR_ALREADY_RUNNING");
   }
-  connectorTaskAdmission = true;
+  const connectorAdmission = desktopAdmission.reserveAdmitted("connector-task");
   try {
     const snapshot = configuration.snapshot();
     if (snapshot.status !== "ready") {
@@ -5342,7 +5358,7 @@ async function checkSecureMcpAttachment(
       },
     });
   } finally {
-    connectorTaskAdmission = false;
+    connectorAdmission.release();
   }
 }
 
@@ -5361,13 +5377,18 @@ async function testConnectionCommand(
   // Admission is therefore checked and reserved synchronously BEFORE that
   // claim: a second check while one is live (for example after a renderer
   // reload) is refused here and never reaches Go to settle the live one.
-  if (chatGptTaskAdmission || connectorTaskAdmission)
+  if (
+    desktopAdmission.occupied("chatgpt-task") ||
+    desktopAdmission.occupied("connector-task")
+  )
     return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
-  chatGptTaskAdmission = true;
-  connectorTaskAdmission = true;
+  const chatAdmission = desktopAdmission.reserveAdmitted("chatgpt-task");
+  const connectorAdmission = desktopAdmission.reserveAdmitted(
+    "connector-task",
+    origin !== "setup" ? "manual-diagnostic" : null,
+  );
   // An owner's own toolbar check is a manual diagnostic: it must not
   // flip the sidebar to "Checking connection…". Setup keeps its state.
-  if (origin !== "setup") connectorTaskAdmissionPurpose = "manual-diagnostic";
   let expected: ConnectorAppVerificationBinding | null = null;
   let workspace: string | null | undefined;
   let outcome: ConnectionCheckCommandResult;
@@ -5386,8 +5407,8 @@ async function testConnectionCommand(
         // Desktop admission is already reserved for this command above.
         if (
           !embeddedBrowserEnabled() ||
-          quitInProgress ||
-          installedUpdateAdmission ||
+          desktopAdmission.quitInProgress ||
+          desktopAdmission.installedUpdateAdmission ||
           !chatGptTaskAdmissionReady() ||
           desktopGoCore !== core ||
           configuration !== config ||
@@ -5468,8 +5489,8 @@ async function testConnectionCommand(
         const current = () => {
           const latest = config.snapshot();
           return (
-            !quitInProgress &&
-            !installedUpdateAdmission &&
+            !desktopAdmission.quitInProgress &&
+            !desktopAdmission.installedUpdateAdmission &&
             desktopGoCore === core &&
             configuration === config &&
             window === owner &&
@@ -5556,9 +5577,8 @@ async function testConnectionCommand(
       },
     );
   } finally {
-    chatGptTaskAdmission = false;
-    connectorTaskAdmission = false;
-    connectorTaskAdmissionPurpose = null;
+    chatAdmission.release();
+    connectorAdmission.release();
     void connectorConnection
       .sample()
       .then(currentConnectionStatus)
@@ -5606,7 +5626,10 @@ async function verifySecureMcpApp(
   if (!configuration || !chatGptRoute || !secureMcpConnectorRuntime) {
     return configurationFailure("SETTINGS_UNAVAILABLE");
   }
-  if (chatGptTaskAdmission || connectorTaskAdmission) {
+  if (
+    desktopAdmission.occupied("chatgpt-task") ||
+    desktopAdmission.occupied("connector-task")
+  ) {
     return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
   }
   const verificationCore = desktopGoCore;
@@ -5634,8 +5657,8 @@ async function verifySecureMcpApp(
   }
   // Reserve both routes before the first await so concurrent IPC calls cannot
   // both pass the check and race to claim or release the same verification.
-  chatGptTaskAdmission = true;
-  connectorTaskAdmission = true;
+  const chatAdmission = desktopAdmission.reserveAdmitted("chatgpt-task");
+  const connectorAdmission = desktopAdmission.reserveAdmitted("connector-task");
   let requestedWorkspaceId: string | null | undefined;
   let receiptPending = false;
   let expectedBinding: ConnectorAppVerificationBinding | null = null;
@@ -5655,8 +5678,8 @@ async function verifySecureMcpApp(
     const proofScope = challenge;
     if (
       !chatGptTaskAdmissionReady() ||
-      quitInProgress ||
-      installedUpdateAdmission ||
+      desktopAdmission.quitInProgress ||
+      desktopAdmission.installedUpdateAdmission ||
       !secureMcpConnectorRuntime.isRunning() ||
       connector.tunnelId === null ||
       runtime?.state !== "ready" ||
@@ -5820,8 +5843,8 @@ async function verifySecureMcpApp(
       () => {
         const latest = configuration!.snapshot();
         return (
-          !quitInProgress &&
-          !installedUpdateAdmission &&
+          !desktopAdmission.quitInProgress &&
+          !desktopAdmission.installedUpdateAdmission &&
           desktopGoCore === verificationCore &&
           latest.status === "ready" &&
           expectedBinding !== null &&
@@ -5886,8 +5909,8 @@ async function verifySecureMcpApp(
           if (claimed) return;
           const admitted = configuration!.snapshot();
           if (
-            quitInProgress ||
-            installedUpdateAdmission ||
+            desktopAdmission.quitInProgress ||
+            desktopAdmission.installedUpdateAdmission ||
             desktopGoCore !== verificationCore ||
             admitted.status !== "ready" ||
             expectedBinding === null ||
@@ -5970,8 +5993,8 @@ async function verifySecureMcpApp(
       return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
     }
   } finally {
-    chatGptTaskAdmission = false;
-    connectorTaskAdmission = false;
+    chatAdmission.release();
+    connectorAdmission.release();
     // Join any observation started before the fence ended, then take a fresh
     // passive sample. The observer owns identity, expiry and shutdown checks.
     void connectorConnection
@@ -6059,7 +6082,8 @@ async function prepareDevMcpProof(): Promise<ProductConfigurationResult> {
   const readmitted = configurationAdmission("dev-proof.prepare", {
     agentActive: codexAgentOperationActive(),
     connectorRunning:
-      connectorTaskAdmission || secureMcpConnectorRuntime?.isRunning() === true,
+      desktopAdmission.occupied("connector-task") ||
+      secureMcpConnectorRuntime?.isRunning() === true,
   });
   if (readmitted !== "admitted") {
     return configurationFailure(
@@ -6172,7 +6196,7 @@ async function runDevMcpProof(): Promise<ProductConfigurationResult> {
   if (!configuration || !chatGptRoute || !secureMcpConnectorRuntime) {
     return configurationFailure("SETTINGS_UNAVAILABLE");
   }
-  if (chatGptTaskAdmission) {
+  if (desktopAdmission.occupied("chatgpt-task")) {
     return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
   }
   const snapshot = configuration.snapshot();
@@ -6236,7 +6260,7 @@ async function runDevMcpProof(): Promise<ProductConfigurationResult> {
     `Then attempt the same tool and workspaceId at relativePath ${preparation.deniedPath}; it must be refused because it leaves the grant through a link.`,
     "If and only if the first read succeeds and the second is refused, reply with exactly the first file's text and nothing else.",
   ].join(" ");
-  chatGptTaskAdmission = true;
+  const chatAdmission = desktopAdmission.reserveAdmitted("chatgpt-task");
   try {
     const result = await chatGptRoute.runReadonlyTask(prompt);
     if (result.state !== "completed" || typeof result.outputText !== "string") {
@@ -6308,7 +6332,7 @@ async function runDevMcpProof(): Promise<ProductConfigurationResult> {
       },
     });
   } finally {
-    chatGptTaskAdmission = false;
+    chatAdmission.release();
   }
 }
 
@@ -6597,91 +6621,104 @@ function connectorSetupRefusal(
 async function configureSaveAndConnect(
   command: ConnectorSetupCommand,
 ): Promise<ProductConfigurationResult> {
-  configurationRequests += 1;
-  try {
-    const reserved = await authorityTransitions.withReservation(
-      "authority-change",
-      async () => {
-        if (connectorTaskAdmission)
-          return connectorSetupRefusal(command, "CONNECTOR_ALREADY_RUNNING");
-        connectorTaskAdmission = true;
-        activeAuthorityChangeKind = command.kind;
-        try {
-          // The combined Save+Connect writes credentials before Start. Fence
-          // it against a pending original Stop before either effect starts.
+  const { reply } = await desktopAdmission.withConfigurationRequest(
+    async () => {
+      const reserved = await authorityTransitions.withReservation(
+        "authority-change",
+        async () => {
+          if (desktopAdmission.occupied("connector-task"))
+            return connectorSetupRefusal(command, "CONNECTOR_ALREADY_RUNNING");
+          const connectorAdmission =
+            desktopAdmission.reserveAdmitted("connector-task");
+          activeAuthorityChangeKind = command.kind;
           try {
-            const custody = await desktopGoCore?.observeOriginalStop();
-            if (!custody || custody.restricted)
+            // The combined Save+Connect writes credentials before Start. Fence
+            // it against a pending original Stop before either effect starts.
+            try {
+              const custody = await desktopGoCore?.observeOriginalStop();
+              if (!custody || custody.restricted)
+                return connectorSetupRefusal(
+                  command,
+                  "AUTHORITY_CHANGE_IN_PROGRESS",
+                );
+            } catch {
               return connectorSetupRefusal(
                 command,
                 "AUTHORITY_CHANGE_IN_PROGRESS",
               );
-          } catch {
-            return connectorSetupRefusal(
-              command,
-              "AUTHORITY_CHANGE_IN_PROGRESS",
-            );
-          }
-          return await observeConnectorStart(() =>
-            runAdmittedConnectorSetup(
-              { operationId: command.operationId, buildId: command.buildId },
-              command.tunnelId,
-              {
-                admission: () => {
-                  if (command.buildId !== buildIdentity.buildId)
-                    return configurationFailure(
-                      "CONNECTOR_SETUP_BINDING_CHANGED",
-                    );
-                  if (quitInProgress || installedUpdateAdmission)
-                    return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
-                  if (
-                    !configuration ||
-                    !connectorCredentialStore ||
-                    !secureMcpConnectorRuntime
-                  )
-                    return configurationFailure("SETTINGS_UNAVAILABLE");
-                  const current = configuration.snapshot();
-                  if (current.status !== "ready")
-                    return configurationFailure("SETTINGS_UNAVAILABLE");
-                  if (
-                    secureMcpConnectorRuntime.hasUnresolvedEffect() ||
-                    current.settings.setup.connect.outcomeUnknown ||
-                    current.settings.connectors.secureMcp.runtime?.state ===
-                      "outcome_unknown"
-                  )
-                    return configurationFailure(
-                      "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
-                    );
-                  if (secureMcpConnectorRuntime.isRunning())
-                    return configurationFailure("CONNECTOR_STOP_REQUIRED");
-                  return { ok: true, snapshot: current };
+            }
+            return await observeConnectorStart(() =>
+              runAdmittedConnectorSetup(
+                { operationId: command.operationId, buildId: command.buildId },
+                command.tunnelId,
+                {
+                  admission: () => {
+                    if (command.buildId !== buildIdentity.buildId)
+                      return configurationFailure(
+                        "CONNECTOR_SETUP_BINDING_CHANGED",
+                      );
+                    if (
+                      desktopAdmission.quitInProgress ||
+                      desktopAdmission.installedUpdateAdmission
+                    )
+                      return configurationFailure(
+                        "AUTHORITY_CHANGE_IN_PROGRESS",
+                      );
+                    if (
+                      !configuration ||
+                      !connectorCredentialStore ||
+                      !secureMcpConnectorRuntime
+                    )
+                      return configurationFailure("SETTINGS_UNAVAILABLE");
+                    const current = configuration.snapshot();
+                    if (current.status !== "ready")
+                      return configurationFailure("SETTINGS_UNAVAILABLE");
+                    if (
+                      secureMcpConnectorRuntime.hasUnresolvedEffect() ||
+                      current.settings.setup.connect.outcomeUnknown ||
+                      current.settings.connectors.secureMcp.runtime?.state ===
+                        "outcome_unknown"
+                    )
+                      return configurationFailure(
+                        "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+                      );
+                    if (secureMcpConnectorRuntime.isRunning())
+                      return configurationFailure("CONNECTOR_STOP_REQUIRED");
+                    return { ok: true, snapshot: current };
+                  },
+                  current: () => configuration!.snapshot(),
+                  save: () =>
+                    configureAdmittedProduct({
+                      kind: "connector.configure",
+                      tunnelId: command.tunnelId,
+                      runtimeKey: command.runtimeKey,
+                    }),
+                  start: () => startAdmittedSecureMcpConnector(false),
                 },
-                current: () => configuration!.snapshot(),
-                save: () =>
-                  configureAdmittedProduct({
-                    kind: "connector.configure",
-                    tunnelId: command.tunnelId,
-                    runtimeKey: command.runtimeKey,
-                  }),
-                start: () => startAdmittedSecureMcpConnector(false),
-              },
-            ),
-          );
-        } finally {
-          connectorTaskAdmission = false;
-          activeAuthorityChangeKind = null;
-        }
-      },
-    );
-    return deliverConfigurationReply(
-      command.kind,
-      reserved.admitted
-        ? reserved.value
-        : await connectorSetupRefusal(command, "AUTHORITY_CHANGE_IN_PROGRESS"),
-    );
-  } finally {
-    configurationRequests -= 1;
-  }
+              ),
+            );
+          } finally {
+            connectorAdmission.release();
+            activeAuthorityChangeKind = null;
+          }
+        },
+      );
+      // A deliberately dropped IPC reply must not retain configuration admission.
+      // Return a value wrapper so the counter follows work, not reply delivery.
+      return {
+        reply: deliverConfigurationReply(
+          command.kind,
+          reserved.admitted
+            ? reserved.value
+            : await connectorSetupRefusal(
+                command,
+                "AUTHORITY_CHANGE_IN_PROGRESS",
+              ),
+        ),
+      };
+    },
+  );
+  return reply;
 }
 
 let operationsLog: OperationsStore | undefined;
@@ -6830,14 +6867,14 @@ async function configureProductObserved(
 async function configureNewProductRequest(
   value: unknown,
 ): Promise<ProductConfigurationResult> {
-  if (quitInProgress || installedUpdateAdmission)
+  if (
+    desktopAdmission.quitInProgress ||
+    desktopAdmission.installedUpdateAdmission
+  )
     return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
-  configurationRequests += 1;
-  try {
+  return desktopAdmission.withConfigurationRequest(async () => {
     return await configureUnfencedProduct(value);
-  } finally {
-    configurationRequests -= 1;
-  }
+  });
 }
 
 async function configureUnfencedProduct(
@@ -6854,9 +6891,11 @@ async function configureUnfencedProduct(
   const admission = configurationAdmission(command.kind, {
     agentActive: codexAgentOperationActive(),
     connectorRunning:
-      connectorTaskAdmission || secureMcpConnectorRuntime?.isRunning() === true,
+      desktopAdmission.occupied("connector-task") ||
+      secureMcpConnectorRuntime?.isRunning() === true,
     workspaceDrainAvailable:
-      !connectorTaskAdmission && connectorStartInFlight === null,
+      !desktopAdmission.occupied("connector-task") &&
+      connectorStartInFlight === null,
   });
   if (admission !== "admitted") return configurationFailure(admission);
   if (command.kind === "connector.configure") {
@@ -6866,9 +6905,10 @@ async function configureUnfencedProduct(
     const reserved = await authorityTransitions.withReservation(
       "authority-change",
       async () => {
-        if (connectorTaskAdmission)
+        if (desktopAdmission.occupied("connector-task"))
           return configurationFailure("CONNECTOR_ALREADY_RUNNING");
-        connectorTaskAdmission = true;
+        const connectorAdmission =
+          desktopAdmission.reserveAdmitted("connector-task");
         activeAuthorityChangeKind = command.kind;
         try {
           // Credential replacement is a durable Settings/private-file
@@ -6882,7 +6922,7 @@ async function configureUnfencedProduct(
           }
           return await configureAdmittedProduct(command);
         } finally {
-          connectorTaskAdmission = false;
+          connectorAdmission.release();
           activeAuthorityChangeKind = null;
         }
       },
@@ -6980,7 +7020,7 @@ async function configureDrainedWorkspaceChange(
     !connector ||
     !core ||
     original?.status !== "ready" ||
-    connectorTaskAdmission ||
+    desktopAdmission.occupied("connector-task") ||
     connectorStartInFlight !== null
   )
     return transitionRefusal();
@@ -7051,7 +7091,7 @@ async function configureDrainedWorkspaceChange(
   const connectorGeneration = original.settings.connectors.secureMcp.generation;
   let revision = original.settings.revision;
   let phaseFailure: ProductConfigurationResult | null = null;
-  connectorTaskAdmission = true;
+  const connectorAdmission = desktopAdmission.reserveAdmitted("connector-task");
   try {
     const current = () => {
       const snapshot = owner.snapshot();
@@ -7061,9 +7101,9 @@ async function configureDrainedWorkspaceChange(
         desktopGoCore === core &&
         authorityTransitions.current() === "authority-change" &&
         activeAuthorityChangeKind === command.kind &&
-        connectorTaskAdmission &&
-        !quitInProgress &&
-        !installedUpdateAdmission &&
+        desktopAdmission.occupied("connector-task") &&
+        !desktopAdmission.quitInProgress &&
+        !desktopAdmission.installedUpdateAdmission &&
         !codexAgentOperationActive() &&
         !connector.hasUnresolvedEffect() &&
         snapshot.status === "ready" &&
@@ -7136,9 +7176,9 @@ async function configureDrainedWorkspaceChange(
             secureMcpConnectorRuntime === connector &&
             desktopGoCore === core &&
             authorityTransitions.current() === "authority-change" &&
-            connectorTaskAdmission &&
-            !quitInProgress &&
-            !installedUpdateAdmission &&
+            desktopAdmission.occupied("connector-task") &&
+            !desktopAdmission.quitInProgress &&
+            !desktopAdmission.installedUpdateAdmission &&
             !codexAgentOperationActive() &&
             !connector.hasUnresolvedEffect() &&
             snap.status === "ready" &&
@@ -7233,7 +7273,7 @@ async function configureDrainedWorkspaceChange(
       );
     return transitionRefusal();
   } finally {
-    connectorTaskAdmission = false;
+    connectorAdmission.release();
   }
 }
 
@@ -7282,8 +7322,8 @@ async function runManualDeepTest(
     shellOverlay === "task-menu" &&
     selectedTaskId === expectedTaskId &&
     section === "browser" &&
-    !quitInProgress &&
-    !installedUpdateAdmission &&
+    !desktopAdmission.quitInProgress &&
+    !desktopAdmission.installedUpdateAdmission &&
     performance.now() < deadline
   ) {
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -7304,10 +7344,10 @@ async function runManualDeepTest(
     !binding ||
     snapshot?.status !== "ready" ||
     !deepTestRecoveryReady ||
-    quitInProgress ||
-    installedUpdateAdmission ||
-    chatGptTaskAdmission ||
-    connectorTaskAdmission ||
+    desktopAdmission.quitInProgress ||
+    desktopAdmission.installedUpdateAdmission ||
+    desktopAdmission.occupied("chatgpt-task") ||
+    desktopAdmission.occupied("connector-task") ||
     pendingChatGptReadonlyTask !== null ||
     pendingChatGptAttachmentTask !== null ||
     recoverableChatGptTask !== null ||
@@ -7370,8 +7410,8 @@ async function runManualDeepTest(
       targetCurrent() &&
       !connector.hasUnresolvedEffect() &&
       core.currentComputerConnectorBinding() === binding &&
-      !quitInProgress &&
-      !installedUpdateAdmission &&
+      !desktopAdmission.quitInProgress &&
+      !desktopAdmission.installedUpdateAdmission &&
       selectedTaskId === routeTaskId &&
       (routeTaskId === ""
         ? chatGptRoute === route && browserHomeSurfaceOpen
@@ -7391,9 +7431,11 @@ async function runManualDeepTest(
         null
     );
   };
-  chatGptTaskAdmission = true;
-  connectorTaskAdmissionPurpose = "manual-diagnostic";
-  connectorTaskAdmission = true;
+  const chatAdmission = desktopAdmission.reserveAdmitted("chatgpt-task");
+  const connectorAdmission = desktopAdmission.reserveAdmitted(
+    "connector-task",
+    "manual-diagnostic",
+  );
   let prepared = false;
   let intent = false;
   try {
@@ -7474,9 +7516,8 @@ async function runManualDeepTest(
         : "CHATGPT_TASK_JOURNAL_FAILED",
     );
   } finally {
-    chatGptTaskAdmission = false;
-    connectorTaskAdmission = false;
-    connectorTaskAdmissionPurpose = null;
+    chatAdmission.release();
+    connectorAdmission.release();
   }
 }
 
@@ -7526,8 +7567,8 @@ async function configureAdmittedProduct(
   if (command.kind === "chatgpt.deep-test-status") return deepTestStatus();
   if (command.kind === "chatgpt.ack-deep-test") {
     if (
-      chatGptTaskAdmission ||
-      connectorTaskAdmission ||
+      desktopAdmission.occupied("chatgpt-task") ||
+      desktopAdmission.occupied("connector-task") ||
       !deepTestRecoveryReady
     )
       return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
@@ -7566,13 +7607,13 @@ async function configureAdmittedProduct(
       if (
         directChatStart ||
         goReadonlyConversation ||
-        chatGptTaskAdmission ||
+        desktopAdmission.occupied("chatgpt-task") ||
         pendingChatGptReadonlyTask ||
         pendingChatGptAttachmentTask ||
         recoverableChatGptTask ||
         snapshot.settings.setup.chatgpt.outcomeUnknown ||
-        installedUpdateAdmission ||
-        quitInProgress
+        desktopAdmission.installedUpdateAdmission ||
+        desktopAdmission.quitInProgress
       )
         return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
       const revision = snapshot.settings.revision;
@@ -7603,8 +7644,8 @@ async function configureAdmittedProduct(
           desktopGoCore === core &&
           chatGptRoute === route &&
           goChatStartupProfile === profile &&
-          !installedUpdateAdmission &&
-          !quitInProgress &&
+          !desktopAdmission.installedUpdateAdmission &&
+          !desktopAdmission.quitInProgress &&
           now?.status === "ready" &&
           now.settings.revision === revision &&
           !now.settings.setup.chatgpt.outcomeUnknown
@@ -7632,7 +7673,7 @@ async function configureAdmittedProduct(
           },
         });
       const inspection = Promise.resolve().then(async () => {
-        chatGptTaskAdmission = true;
+        const chatAdmission = desktopAdmission.reserveAdmitted("chatgpt-task");
         try {
           const inspected = await confirmation.inspect();
           return ProductConfigurationResultSchema.parse({
@@ -7652,7 +7693,7 @@ async function configureAdmittedProduct(
               : "CHATGPT_CONVERSATION_UNCONFIRMED",
           );
         } finally {
-          chatGptTaskAdmission = false;
+          chatAdmission.release();
         }
       });
       directChatStart = {
@@ -7672,13 +7713,13 @@ async function configureAdmittedProduct(
         command.operationId !== pending.operationId ||
         pending.start ||
         goReadonlyConversation ||
-        chatGptTaskAdmission ||
+        desktopAdmission.occupied("chatgpt-task") ||
         desktopGoCore !== pending.core
       )
         return configurationFailure("CHATGPT_CONVERSATION_REFUSED");
       const captured = structuredClone(command);
       const start = Promise.resolve().then(async () => {
-        chatGptTaskAdmission = true;
+        const chatAdmission = desktopAdmission.reserveAdmitted("chatgpt-task");
         try {
           const projection = await pending.confirmation.confirm(
             captured.confirmationId,
@@ -7695,7 +7736,7 @@ async function configureAdmittedProduct(
               : "CHATGPT_CONVERSATION_UNCONFIRMED",
           );
         } finally {
-          chatGptTaskAdmission = false;
+          chatAdmission.release();
         }
       });
       pending.start = { command: captured, promise: start };
@@ -7874,9 +7915,13 @@ async function configureAdmittedProduct(
       }
     }
     case "connector.select-chatgpt-app": {
-      if (chatGptTaskAdmission || connectorTaskAdmission)
+      if (
+        desktopAdmission.occupied("chatgpt-task") ||
+        desktopAdmission.occupied("connector-task")
+      )
         return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
-      connectorTaskAdmission = true;
+      const connectorAdmission =
+        desktopAdmission.reserveAdmitted("connector-task");
       try {
         return ProductConfigurationResultSchema.parse(
           await configuration.selectSecureMcpChatGptApp({
@@ -7886,7 +7931,7 @@ async function configureAdmittedProduct(
           }),
         );
       } finally {
-        connectorTaskAdmission = false;
+        connectorAdmission.release();
       }
     }
     case "connector.start":
@@ -7896,9 +7941,10 @@ async function configureAdmittedProduct(
     case "connector.check-health": {
       if (!secureMcpConnectorRuntime)
         return configurationFailure("SETTINGS_UNAVAILABLE");
-      if (connectorTaskAdmission)
+      if (desktopAdmission.occupied("connector-task"))
         return configurationFailure("CONNECTOR_ALREADY_RUNNING");
-      connectorTaskAdmission = true;
+      const connectorAdmission =
+        desktopAdmission.reserveAdmitted("connector-task");
       const originalConnector = secureMcpConnectorRuntime;
       const originalCore = desktopGoCore;
       const originalOwner = configuration;
@@ -8018,7 +8064,7 @@ async function configureAdmittedProduct(
           },
         });
       } finally {
-        connectorTaskAdmission = false;
+        connectorAdmission.release();
       }
     }
     case "connector.check-attachment":
@@ -8041,7 +8087,7 @@ async function configureAdmittedProduct(
       if (!secureMcpConnectorRuntime) {
         return configurationFailure("SETTINGS_UNAVAILABLE");
       }
-      if (connectorTaskAdmission) {
+      if (desktopAdmission.occupied("connector-task")) {
         return configurationFailure("CONNECTOR_ALREADY_RUNNING");
       }
       const stopping = captureConnectorStop();
@@ -8052,7 +8098,8 @@ async function configureAdmittedProduct(
           : null;
       completedOwnerStop.current = null;
       connectorConnection.invalidate();
-      connectorTaskAdmission = true;
+      const connectorAdmission =
+        desktopAdmission.reserveAdmitted("connector-task");
       try {
         try {
           await stopAndConfirmComputerMcp(
@@ -8091,7 +8138,7 @@ async function configureAdmittedProduct(
         }
         return ProductConfigurationResultSchema.parse(stopped);
       } finally {
-        connectorTaskAdmission = false;
+        connectorAdmission.release();
         // Observe the acknowledged stop now. The passive transport timer runs
         // every 30 seconds; presentation must not wait for its next tick.
         void connectorConnection
@@ -8174,7 +8221,10 @@ async function configureAdmittedProduct(
       );
     }
     case "host.refresh-codex-task-models": {
-      if (codexHostTaskAdmission || codexAgentOperationActive())
+      if (
+        desktopAdmission.occupied("codex-host-task") ||
+        codexAgentOperationActive()
+      )
         return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
       const snapshot = configuration.snapshot();
       if (snapshot.status !== "ready")
@@ -8190,7 +8240,8 @@ async function configureAdmittedProduct(
         route.computerGeneration !== settings.computer.generation
       )
         return configurationFailure("CODEX_TASK_ROUTE_UNAVAILABLE");
-      codexHostTaskAdmission = true;
+      const codexAdmission =
+        desktopAdmission.reserveAdmitted("codex-host-task");
       let proxy: SharedCodexProxyHost | null = null;
       let scratch: string | null = null;
       let result: CodexModelCatalogueResult = {
@@ -8230,7 +8281,7 @@ async function configureAdmittedProduct(
           await rm(scratch, { recursive: true, force: true }).catch(() => {
             cleaned = false;
           });
-        codexHostTaskAdmission = false;
+        codexAdmission.release();
       }
       const current = configuration.snapshot();
       if (
@@ -8293,7 +8344,10 @@ async function configureAdmittedProduct(
         );
         return configurationFailure("CODEX_TASK_ROUTE_REFUSED");
       };
-      if (codexHostTaskAdmission || codexAgentOperationActive()) {
+      if (
+        desktopAdmission.occupied("codex-host-task") ||
+        codexAgentOperationActive()
+      ) {
         return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
       }
       const snapshot = configuration.snapshot();
@@ -8331,9 +8385,13 @@ async function configureAdmittedProduct(
       }
       // Go policy awaited above. Claim the host lane synchronously so a later
       // reply cannot enter alongside an admitted setup or a newly active Agent.
-      if (codexHostTaskAdmission || codexAgentOperationActive())
+      if (
+        desktopAdmission.occupied("codex-host-task") ||
+        codexAgentOperationActive()
+      )
         return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
-      codexHostTaskAdmission = true;
+      const codexAdmission =
+        desktopAdmission.reserveAdmitted("codex-host-task");
       let proxy: SharedCodexProxyHost | null = null;
       let scratch: string | null = null;
       try {
@@ -8446,18 +8504,21 @@ async function configureAdmittedProduct(
             () => undefined,
           );
         }
-        codexHostTaskAdmission = false;
+        codexAdmission.release();
       }
     }
     case "host.clear-codex-tasks":
-      if (codexHostTaskAdmission) {
+      if (desktopAdmission.occupied("codex-host-task")) {
         return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
       }
       return ProductConfigurationResultSchema.parse(
         await configuration.clearCodexTaskRoute(),
       );
     case "host.run-route-b-check": {
-      if (codexHostTaskAdmission || codexAgentOperationActive()) {
+      if (
+        desktopAdmission.occupied("codex-host-task") ||
+        codexAgentOperationActive()
+      ) {
         return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
       }
       const snapshot = configuration.snapshot();
@@ -8466,7 +8527,8 @@ async function configureAdmittedProduct(
       }
       const selected = snapshot.settings.nativeHosts.codex;
       if (!selected) return configurationFailure("CODEX_HOST_NOT_CONFIGURED");
-      codexHostTaskAdmission = true;
+      const codexAdmission =
+        desktopAdmission.reserveAdmitted("codex-host-task");
       // The check closes its host itself; quit reaches it meanwhile.
       const routeBCheckClients: Awaited<
         ReturnType<typeof launchCodexAppServer>
@@ -8539,11 +8601,14 @@ async function configureAdmittedProduct(
       } finally {
         for (const client of routeBCheckClients)
           hostCheckClients.delete(client);
-        codexHostTaskAdmission = false;
+        codexAdmission.release();
       }
     }
     case "host.run-codex-smoke": {
-      if (codexHostTaskAdmission || codexAgentOperationActive()) {
+      if (
+        desktopAdmission.occupied("codex-host-task") ||
+        codexAgentOperationActive()
+      ) {
         return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
       }
       const snapshot = configuration.snapshot();
@@ -8554,7 +8619,8 @@ async function configureAdmittedProduct(
       if (!selected) {
         return configurationFailure("CODEX_HOST_NOT_CONFIGURED");
       }
-      codexHostTaskAdmission = true;
+      const codexAdmission =
+        desktopAdmission.reserveAdmitted("codex-host-task");
       let client: Awaited<ReturnType<typeof launchCodexAppServer>> | null =
         null;
       try {
@@ -8649,12 +8715,12 @@ async function configureAdmittedProduct(
       } finally {
         await client?.close().catch(() => undefined);
         if (client) hostCheckClients.delete(client);
-        codexHostTaskAdmission = false;
+        codexAdmission.release();
       }
     }
     case "host.run-codex-agent-check": {
       if (
-        codexHostTaskAdmission ||
+        desktopAdmission.occupied("codex-host-task") ||
         activeProductAgentSession ||
         pendingProductAgentTaskId()
       ) {
@@ -8729,7 +8795,8 @@ async function configureAdmittedProduct(
         return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
       }
 
-      codexHostTaskAdmission = true;
+      const codexAdmission =
+        desktopAdmission.reserveAdmitted("codex-host-task");
       let session = activeCodexAgentCheck;
       let closeSession = false;
       try {
@@ -8903,7 +8970,7 @@ async function configureAdmittedProduct(
             activeCodexAgentCheck = null;
           }
         }
-        codexHostTaskAdmission = false;
+        codexAdmission.release();
         agentAdmission.release();
       }
     }
@@ -8996,7 +9063,7 @@ async function configureAdmittedProduct(
       });
     }
     case "chatgpt.reset-conversation": {
-      if (chatGptTaskAdmission) {
+      if (desktopAdmission.occupied("chatgpt-task")) {
         return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
       }
       if (pendingChatGptReadonlyTask || pendingChatGptAttachmentTask) {
@@ -9103,8 +9170,8 @@ async function configureAdmittedProduct(
         try {
           observation = await original.observeSignInStatus();
           if (
-            quitInProgress ||
-            installedUpdateAdmission ||
+            desktopAdmission.quitInProgress ||
+            desktopAdmission.installedUpdateAdmission ||
             chatGptRoute !== original ||
             !original.isCurrentSignInStatus(observation)
           )
@@ -9128,7 +9195,7 @@ async function configureAdmittedProduct(
       if (!embeddedBrowserEnabled() || !chatGptRoute)
         return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
       applyLayout();
-      if (chatGptTaskAdmission)
+      if (desktopAdmission.occupied("chatgpt-task"))
         return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
       // Task and sign-in surfaces already have their own retained identities.
       // Navigation must reveal them, never replace them with the home route.
@@ -9162,7 +9229,10 @@ async function configureAdmittedProduct(
       if (chatGptSignInOpenGeneration !== null) {
         return configurationFailure("CHATGPT_SIGN_IN_IN_PROGRESS");
       }
-      if (chatGptTaskAdmission || connectorTaskAdmission) {
+      if (
+        desktopAdmission.occupied("chatgpt-task") ||
+        desktopAdmission.occupied("connector-task")
+      ) {
         return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
       }
       browserHomeSurfaceOpen = true;
@@ -9253,7 +9323,7 @@ async function configureAdmittedProduct(
       if (!chatGptRoute) {
         return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
       }
-      if (chatGptTaskAdmission) {
+      if (desktopAdmission.occupied("chatgpt-task")) {
         return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
       }
       const conversationFailure = chatGptConversationAdmissionFailure();
@@ -9369,7 +9439,7 @@ async function configureAdmittedProduct(
       if (!chatGptRoute) {
         return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
       }
-      if (chatGptTaskAdmission) {
+      if (desktopAdmission.occupied("chatgpt-task")) {
         return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
       }
       const pending = pendingChatGptAttachmentTask;
@@ -9445,7 +9515,7 @@ async function configureAdmittedProduct(
         );
       }
       pendingChatGptAttachmentTask = null;
-      chatGptTaskAdmission = true;
+      const chatAdmission = desktopAdmission.reserveAdmitted("chatgpt-task");
       let task: Awaited<ReturnType<ChatGptRoute["runReadonlyTask"]>>;
       let stagingCleanup: "removed" | "pending_startup_cleanup" = "removed";
       try {
@@ -9472,7 +9542,7 @@ async function configureAdmittedProduct(
           attachmentStagingReady = false;
           stagingCleanup = "pending_startup_cleanup";
         }
-        chatGptTaskAdmission = false;
+        chatAdmission.release();
       }
       const journalResult = {
         state: task.state,
@@ -9566,7 +9636,7 @@ async function configureAdmittedProduct(
       });
     }
     case "chatgpt.cancel-attachment-task": {
-      if (chatGptTaskAdmission) {
+      if (desktopAdmission.occupied("chatgpt-task")) {
         return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
       }
       const pending = pendingChatGptAttachmentTask;
@@ -9597,7 +9667,7 @@ async function configureAdmittedProduct(
       if (!chatGptRoute) {
         return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
       }
-      if (chatGptTaskAdmission) {
+      if (desktopAdmission.occupied("chatgpt-task")) {
         return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
       }
       const conversationFailure = chatGptConversationAdmissionFailure();
@@ -9605,7 +9675,7 @@ async function configureAdmittedProduct(
       if (pendingChatGptAttachmentTask) {
         return configurationFailure("CHATGPT_TASK_PREVIEW_PENDING");
       }
-      chatGptTaskAdmission = true;
+      const chatAdmission = desktopAdmission.reserveAdmitted("chatgpt-task");
       try {
         const snapshot = configuration.snapshot();
         if (snapshot.status !== "ready") {
@@ -9768,7 +9838,7 @@ async function configureAdmittedProduct(
           evidence: chatGptReadonlyTaskPreview(pendingChatGptReadonlyTask),
         });
       } finally {
-        chatGptTaskAdmission = false;
+        chatAdmission.release();
       }
     }
     case "chatgpt.inspect-readonly-account":
@@ -9776,7 +9846,7 @@ async function configureAdmittedProduct(
       const pending = pendingChatGptReadonlyTask;
       const route = chatGptRoute;
       const core = desktopGoCore;
-      if (chatGptTaskAdmission)
+      if (desktopAdmission.occupied("chatgpt-task"))
         return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
       if (!pending || pending.operationId !== command.operationId)
         return configurationFailure("CHATGPT_TASK_PREVIEW_NOT_FOUND");
@@ -9802,7 +9872,7 @@ async function configureAdmittedProduct(
       }
       if (!confirmation)
         return configurationFailure("CHATGPT_ACCOUNT_CONFIRMATION_INVALID");
-      chatGptTaskAdmission = true;
+      const chatAdmission = desktopAdmission.reserveAdmitted("chatgpt-task");
       try {
         if (command.kind === "chatgpt.inspect-readonly-account")
           await confirmation.inspect();
@@ -9821,14 +9891,14 @@ async function configureAdmittedProduct(
       } catch (error) {
         return configurationFailure(readAccountFailure(command, error));
       } finally {
-        chatGptTaskAdmission = false;
+        chatAdmission.release();
       }
     }
     case "chatgpt.submit-readonly-task": {
       if (!chatGptRoute) {
         return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
       }
-      if (chatGptTaskAdmission) {
+      if (desktopAdmission.occupied("chatgpt-task")) {
         return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
       }
       const pending = pendingChatGptReadonlyTask;
@@ -9915,7 +9985,8 @@ async function configureAdmittedProduct(
         const admission = pending.goAdmission;
         const start = Promise.resolve().then(
           async (): Promise<ProductConfigurationResult> => {
-            chatGptTaskAdmission = true;
+            const chatAdmission =
+              desktopAdmission.reserveAdmitted("chatgpt-task");
             try {
               const projection = await client.start(
                 {
@@ -9941,7 +10012,7 @@ async function configureAdmittedProduct(
                   : "CHATGPT_CONVERSATION_UNCONFIRMED",
               );
             } finally {
-              chatGptTaskAdmission = false;
+              chatAdmission.release();
             }
           },
         );
@@ -9971,7 +10042,7 @@ async function configureAdmittedProduct(
             : "CHATGPT_TASK_JOURNAL_FAILED",
         );
       }
-      chatGptTaskAdmission = true;
+      const chatAdmission = desktopAdmission.reserveAdmitted("chatgpt-task");
       pendingChatGptReadonlyTask = null;
       let task: Awaited<ReturnType<ChatGptRoute["runReadonlyTask"]>>;
       try {
@@ -9986,7 +10057,7 @@ async function configureAdmittedProduct(
           };
         }
       } finally {
-        chatGptTaskAdmission = false;
+        chatAdmission.release();
       }
       const journalResult = {
         state: task.state,
@@ -10082,7 +10153,7 @@ async function configureAdmittedProduct(
         !conversation.client.canWithdrawAdmission()
       )
         return configurationFailure("CHATGPT_CONVERSATION_REFUSED");
-      if (chatGptTaskAdmission) {
+      if (desktopAdmission.occupied("chatgpt-task")) {
         return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
       }
       if (
@@ -10092,7 +10163,7 @@ async function configureAdmittedProduct(
         return configurationFailure("CHATGPT_TASK_PREVIEW_NOT_FOUND");
       }
       const pending = pendingChatGptReadonlyTask;
-      chatGptTaskAdmission = true;
+      const chatAdmission = desktopAdmission.reserveAdmitted("chatgpt-task");
       try {
         if (!(await discardPreparedReadonlyTask(pending)))
           return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
@@ -10102,7 +10173,7 @@ async function configureAdmittedProduct(
         )
           goReadonlyConversation = null;
       } finally {
-        chatGptTaskAdmission = false;
+        chatAdmission.release();
       }
       return ProductConfigurationResultSchema.parse({
         ok: true,
@@ -10300,7 +10371,7 @@ async function configureAdmittedProduct(
         const bindingAdmission = configurationAdmission(command.kind, {
           agentActive: codexAgentOperationActive(),
           connectorRunning:
-            connectorTaskAdmission ||
+            desktopAdmission.occupied("connector-task") ||
             secureMcpConnectorRuntime?.isRunning() === true,
         });
         if (bindingAdmission !== "admitted")
@@ -10344,7 +10415,7 @@ async function configureAdmittedProduct(
       const readmitted = configurationAdmission(command.kind, {
         agentActive: codexAgentOperationActive(),
         connectorRunning:
-          connectorTaskAdmission ||
+          desktopAdmission.occupied("connector-task") ||
           secureMcpConnectorRuntime?.isRunning() === true,
       });
       if (readmitted !== "admitted") return configurationFailure(readmitted);
@@ -10534,7 +10605,7 @@ async function configureAdmittedProduct(
       });
     }
     case "computer.prepare-workspace-edit": {
-      if (workspaceMutationAdmission) {
+      if (desktopAdmission.occupied("workspace-mutation")) {
         return configurationFailure("WORKSPACE_MUTATION_IN_PROGRESS");
       }
       const core = compiledGoCore === null ? null : desktopGoCore;
@@ -10643,7 +10714,7 @@ async function configureAdmittedProduct(
       });
     }
     case "computer.apply-workspace-edit": {
-      if (workspaceMutationAdmission) {
+      if (desktopAdmission.occupied("workspace-mutation")) {
         return configurationFailure("WORKSPACE_MUTATION_IN_PROGRESS");
       }
       const pending = pendingWorkspaceEdit;
@@ -10685,7 +10756,8 @@ async function configureAdmittedProduct(
         pendingWorkspaceEdit = null;
         return configurationFailure("WORKSPACE_MUTATION_RESULT_PENDING");
       }
-      workspaceMutationAdmission = true;
+      const workspaceAdmission =
+        desktopAdmission.reserveAdmitted("workspace-mutation");
       pendingWorkspaceEdit = null;
       try {
         // Go owns durable pending admission, one executor call and the offer.
@@ -10712,11 +10784,11 @@ async function configureAdmittedProduct(
           configuration.releaseWorkspaceEditLease.bind(configuration),
         );
       } finally {
-        workspaceMutationAdmission = false;
+        workspaceAdmission.release();
       }
     }
     case "computer.observe-workspace-edit": {
-      if (workspaceMutationAdmission) {
+      if (desktopAdmission.occupied("workspace-mutation")) {
         return configurationFailure("WORKSPACE_MUTATION_IN_PROGRESS");
       }
       const snapshot = configuration.snapshot();
@@ -10787,7 +10859,7 @@ async function configureAdmittedProduct(
       break;
     }
     case "computer.ack-workspace-edit": {
-      if (workspaceMutationAdmission)
+      if (desktopAdmission.occupied("workspace-mutation"))
         return configurationFailure("WORKSPACE_MUTATION_IN_PROGRESS");
       const snapshot = configuration.snapshot();
       if (snapshot.status !== "ready")
@@ -10840,10 +10912,10 @@ async function configureAdmittedProduct(
               buildId: buildIdentity.buildId,
               current:
                 runtimeState === "ready" &&
-                !quitInProgress &&
-                !installedUpdateAdmission &&
-                !connectorTaskAdmission &&
-                !workspaceMutationAdmission &&
+                !desktopAdmission.quitInProgress &&
+                !desktopAdmission.installedUpdateAdmission &&
+                !desktopAdmission.occupied("connector-task") &&
+                !desktopAdmission.occupied("workspace-mutation") &&
                 activeAuthorityChangeKind === null &&
                 chatGptRoute === route &&
                 setupSignInCheck === check &&
@@ -11076,7 +11148,9 @@ function desktopBrandImage() {
 }
 
 const requestAbout = aboutCommand({
-  closed: () => quitInProgress || installedUpdateAdmission,
+  closed: () =>
+    desktopAdmission.quitInProgress ||
+    desktopAdmission.installedUpdateAdmission,
   openWindow: () =>
     containWindowOpenFailure(ensureWindow, recoverWindowOpenFailure),
   window: () => window,
@@ -11090,12 +11164,16 @@ const requestAbout = aboutCommand({
 });
 
 function requestUpdates(): void {
-  if (quitInProgress || installedUpdateAdmission) return;
+  if (
+    desktopAdmission.quitInProgress ||
+    desktopAdmission.installedUpdateAdmission
+  )
+    return;
   void containWindowOpenFailure(async () => {
     await ensureWindow();
     if (
-      quitInProgress ||
-      installedUpdateAdmission ||
+      desktopAdmission.quitInProgress ||
+      desktopAdmission.installedUpdateAdmission ||
       !window ||
       window.isDestroyed()
     )
@@ -11106,7 +11184,11 @@ function requestUpdates(): void {
 }
 
 function requestSettings(): void {
-  if (quitInProgress || installedUpdateAdmission) return;
+  if (
+    desktopAdmission.quitInProgress ||
+    desktopAdmission.installedUpdateAdmission
+  )
+    return;
   if (!window) return;
   publishShellAction("open-settings", "settings-command");
   window.webContents.focus();
@@ -11163,14 +11245,23 @@ function handleRuntimeExit(code: number | null): void {
 }
 
 async function startRuntime(): Promise<void> {
-  if (quitInProgress || installedUpdateAdmission) return;
+  if (
+    desktopAdmission.quitInProgress ||
+    desktopAdmission.installedUpdateAdmission
+  )
+    return;
   if (runtimeChild !== null || ownedLocalRuntimes.size !== 0) {
     throw new Error("LOCAL_RUNTIME_ALREADY_OWNED");
   }
   runtimeStopping = false;
   const resources = desktopExecutionResources();
   await resources.recheck();
-  if (runtimeStopping || quitInProgress || installedUpdateAdmission) return;
+  if (
+    runtimeStopping ||
+    desktopAdmission.quitInProgress ||
+    desktopAdmission.installedUpdateAdmission
+  )
+    return;
   const child = spawn(
     resources.executable,
     [path.join(resources.directory, "runtime.cjs")],
@@ -11461,8 +11552,8 @@ function installIpc(): void {
     if (
       !updatesPanel.isOwner(event) ||
       !window ||
-      quitInProgress ||
-      installedUpdateAdmission
+      desktopAdmission.quitInProgress ||
+      desktopAdmission.installedUpdateAdmission
     )
       return;
     const owner = window;
@@ -11475,8 +11566,8 @@ function installIpc(): void {
         admitted: () =>
           window === owner &&
           !owner.isDestroyed() &&
-          !quitInProgress &&
-          !installedUpdateAdmission,
+          !desktopAdmission.quitInProgress &&
+          !desktopAdmission.installedUpdateAdmission,
       })
       .catch(() => console.error("DESKTOP_UPDATES_PRESENTATION_FAILED"));
   });
@@ -11498,7 +11589,9 @@ function installIpc(): void {
     event.senderFrame === event.sender.mainFrame
       ? runSelfTestCommand(
           () => desktopGoCore,
-          () => !quitInProgress && !installedUpdateAdmission,
+          () =>
+            !desktopAdmission.quitInProgress &&
+            !desktopAdmission.installedUpdateAdmission,
           value,
         )
       : { ok: false, code: "SELF_TEST_UNAVAILABLE" },
@@ -11560,7 +11653,11 @@ function installIpc(): void {
   );
   ipcMain.handle(channels.navigationShortcuts, (event, value: unknown) => {
     if (!isTrustedIpcSender(event, window)) return { ok: false };
-    if (quitInProgress || installedUpdateAdmission) return { ok: false };
+    if (
+      desktopAdmission.quitInProgress ||
+      desktopAdmission.installedUpdateAdmission
+    )
+      return { ok: false };
     const parsed = parseNavigationShortcuts(value);
     if (!parsed) return { ok: false };
     navigationShortcuts = parsed;
@@ -11568,7 +11665,10 @@ function installIpc(): void {
     return { ok: true };
   });
   ipcMain.handle(channels.control, async (event, value: unknown) => {
-    if (quitInProgress || installedUpdateAdmission)
+    if (
+      desktopAdmission.quitInProgress ||
+      desktopAdmission.installedUpdateAdmission
+    )
       return { error: "UPDATE_IN_PROGRESS" };
     if (!isTrustedIpcSender(event, window))
       return { error: "IPC_SENDER_DENIED" };
@@ -11624,8 +11724,8 @@ function installIpc(): void {
       .safeParse(value);
     if (
       !request.success ||
-      quitInProgress ||
-      installedUpdateAdmission ||
+      desktopAdmission.quitInProgress ||
+      desktopAdmission.installedUpdateAdmission ||
       !isTrustedIpcSender(event, window) ||
       section !== "browser" ||
       setupOpen ||
@@ -11646,8 +11746,8 @@ function installIpc(): void {
   });
   ipcMain.on(channels.layout, (event, value: unknown) => {
     if (
-      quitInProgress ||
-      installedUpdateAdmission ||
+      desktopAdmission.quitInProgress ||
+      desktopAdmission.installedUpdateAdmission ||
       !isTrustedIpcSender(event, window)
     )
       return;
@@ -11667,12 +11767,14 @@ function nativeMenuBarEnabled(): boolean {
 }
 
 // Set when a quit begins; a quit drain always ends in the real quit.
-let quitInProgress = false;
 let startupRecovery: StartupRecoveryWindow | null = null;
 
 function isPrimaryReady(): boolean {
   return primaryStartupReady({
-    stopping: quitInProgress || runtimeStopping || installedUpdateAdmission,
+    stopping:
+      desktopAdmission.quitInProgress ||
+      runtimeStopping ||
+      desktopAdmission.installedUpdateAdmission,
     runtimeState,
     windowReady: window !== null && !window.isDestroyed(),
     taskViewCount: [...taskViewKinds.values()].filter(
@@ -11688,7 +11790,9 @@ async function handleSecondInstance(candidate: unknown): Promise<void> {
   let status = decision.status;
   if (
     status === "reopened" &&
-    (quitInProgress || runtimeStopping || installedUpdateAdmission)
+    (desktopAdmission.quitInProgress ||
+      runtimeStopping ||
+      desktopAdmission.installedUpdateAdmission)
   ) {
     // Quit/update owns admission: acknowledge that it cannot take this launch
     // instead of reopening a window that is about to close.
@@ -11708,7 +11812,11 @@ async function handleSecondInstance(candidate: unknown): Promise<void> {
       await primaryStartup.whenReady();
       // Quit/update may have begun while this launch waited for startup: check
       // again before opening a window that is about to close.
-      if (quitInProgress || runtimeStopping || installedUpdateAdmission) {
+      if (
+        desktopAdmission.quitInProgress ||
+        runtimeStopping ||
+        desktopAdmission.installedUpdateAdmission
+      ) {
         status = "reopen-failed";
       } else {
         const outcome = await containWindowOpenFailure(
@@ -11846,7 +11954,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
             if (
               !primaryInstanceLock ||
               !app.hasSingleInstanceLock() ||
-              quitInProgress ||
+              desktopAdmission.quitInProgress ||
               runtimeStopping ||
               !(await verify())
             )
@@ -11859,7 +11967,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
           if (
             !primaryInstanceLock ||
             !app.hasSingleInstanceLock() ||
-            quitInProgress ||
+            desktopAdmission.quitInProgress ||
             runtimeStopping ||
             desktopGoCore !== null ||
             configuration !== null ||
@@ -11994,7 +12102,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
                 ? {
                     menuBar: (actions) =>
                       createMenuBar(actions, () => ({
-                        label: quitInProgress
+                        label: desktopAdmission.quitInProgress
                           ? "Farol · Closing recovery"
                           : "Farol · Startup recovery required",
                         current: null,
@@ -12008,7 +12116,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
                   .bounds,
               quitSignals,
               onQuitting: () => {
-                quitInProgress = true;
+                desktopAdmission.beginQuit();
               },
             });
             await startupRecovery.ready;
@@ -12328,8 +12436,8 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
             if (
               configuration === settingsOwner &&
               desktopGoCore === settingsCore &&
-              !quitInProgress &&
-              !installedUpdateAdmission &&
+              !desktopAdmission.quitInProgress &&
+              !desktopAdmission.installedUpdateAdmission &&
               window === observationWindow &&
               observationWindow &&
               !observationWindow.isDestroyed()
@@ -12586,7 +12694,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
             capture?.kind === "running" &&
             connectionStatusCurrent(capture) &&
             snapshot?.status === "ready" &&
-            !workspaceMutationAdmission &&
+            !desktopAdmission.occupied("workspace-mutation") &&
             !connectorRuntimeUncertain(snapshot.settings) &&
             snapshot.settings.computer.pendingEdit === null &&
             !snapshot.settings.setup.computer.outcomeUnknown &&
@@ -12812,7 +12920,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     },
   });
   app.on("before-quit", (event) => {
-    quitInProgress = true;
+    desktopAdmission.beginQuit();
     startupConnectorResumeCancelled = true;
     // Cancel before optional Quit preparation can wait. Abort is idempotent;
     // re-entrant Quit cannot create a new start, Stop, drain or cancellation.
@@ -12847,8 +12955,8 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       current: () => configuration!.snapshot(),
       mayContinue: () =>
         !startupConnectorResumeCancelled &&
-        !quitInProgress &&
-        !installedUpdateAdmission,
+        !desktopAdmission.quitInProgress &&
+        !desktopAdmission.installedUpdateAdmission,
       // The normal command retains authority reservation, physical-root and
       // Go inspection checks. No synthetic verification receipt is written.
       verifyWorkspace: (workspaceId) =>
@@ -12865,7 +12973,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
               ? "connector-resume-skipped"
               : "connector-resume-refused",
         );
-        if (!quitInProgress && window && !window.isDestroyed())
+        if (!desktopAdmission.quitInProgress && window && !window.isDestroyed())
           window.webContents.send(channels.configurationChanged);
         startConnectorTransportWatch();
         // Restore only the local connection. ChatGPT verification sends are
@@ -12879,7 +12987,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     )
     .finally(() => {
       startupConnectionChecking = false;
-      if (!quitInProgress && window && !window.isDestroyed())
+      if (!desktopAdmission.quitInProgress && window && !window.isDestroyed())
         window.webContents.send(channels.configurationChanged);
     });
 }
@@ -12937,7 +13045,7 @@ if (
   const quitSignals = createGracefulQuitSignals({
     signals: process,
     requestQuit: () => app.quit(),
-    isQuitting: () => quitInProgress,
+    isQuitting: () => desktopAdmission.quitInProgress,
   });
   const initialization = main(quitSignals);
   const readiness = initialization.then(() => {

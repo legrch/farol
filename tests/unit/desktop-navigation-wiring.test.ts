@@ -55,14 +55,14 @@ describe("surface navigation wiring in main", () => {
     }
     for (const name of [
       "window",
-      "quitInProgress",
-      "installedUpdateAdmission",
       "runtimeState",
       "taskViews",
       "taskViewKinds",
       "nativeViewVisibility",
     ])
       expect(body).toContain(`\n  ${name}: () => ${name},\n`);
+    for (const name of ["quitInProgress", "installedUpdateAdmission"])
+      expect(body).toContain(`\n  ${name}: () => desktopAdmission.${name},\n`);
     expect(body).toContain("\n  signInSurfaceId: SIGN_IN_SURFACE_ID,\n");
     expect(body).toMatch(
       /attachTaskView: \(taskId, view, bounds\) =>\s+attachTaskView\(taskId, view, bounds\)/,
