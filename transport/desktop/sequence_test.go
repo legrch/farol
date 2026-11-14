@@ -93,7 +93,7 @@ func TestOrdinarySequenceRefusals(t *testing.T) {
 		{"zero", "desktop-call:" + testNonce + ":0", "unsequenced request ID"},
 		{"leading-zero", "desktop-call:" + testNonce + ":03", "unsequenced request ID"},
 		{"overflow", "desktop-call:" + testNonce + ":18446744073709551616", "invalid request sequence"},
-		{"foreign-nonce", SequencedRequestID(other, 3), "invalid request sequence"},
+		{"foreign-nonce", sequenced(other, 3), "invalid request sequence"},
 		{"malformed-nonce", "desktop-call:not-a-nonce:3", "unsequenced request ID"},
 		{"uuid", "4f1c6c8e-8d1e-4c4e-9a52-6c1b7e9f0a11", "unsequenced request ID"},
 		{"poll-lane-for-ordinary-call", "desktop-poll-browser:" + testNonce + ":1", "invalid ordered poll"},
@@ -185,10 +185,7 @@ func TestReconnectStartsAFreshSequence(t *testing.T) {
 			t.Fatal("first connection refused")
 		}
 	}
-	nonce, err := NewRequestNonce()
-	if err != nil || !orderedRequest.MatchString(SequencedRequestID(nonce, 1)) || nonce == testNonce {
-		t.Fatalf("fresh nonce %q: %v", nonce, err)
-	}
+	const nonce = "a0000000-0000-4000-8000-000000000003"
 	second := server(t)
 	for _, id := range []string{seq(5), seq(1)} {
 		// The old nonce cannot continue on the new connection; the first
@@ -202,13 +199,13 @@ func TestReconnectStartsAFreshSequence(t *testing.T) {
 		}
 	}
 	third := server(t)
-	if response := third.dispatch(context.Background(), request(SequencedRequestID(nonce, 1), "core.handshake", helloBody, nil)); response.Result == nil {
+	if response := third.dispatch(context.Background(), request(sequenced(nonce, 1), "core.handshake", helloBody, nil)); response.Result == nil {
 		t.Fatal("fresh nonce refused")
 	}
 	if response := third.dispatch(context.Background(), request(seq(2), "core.status", `{}`, &ctx)); response.Error == nil || response.Error.Message != "invalid request sequence" {
 		t.Fatalf("previous connection's nonce admitted: %+v", response)
 	}
-	if response := third.dispatch(context.Background(), request(SequencedRequestID(nonce, 2), "core.status", `{}`, &ctx)); response.Result == nil {
+	if response := third.dispatch(context.Background(), request(sequenced(nonce, 2), "core.status", `{}`, &ctx)); response.Result == nil {
 		t.Fatal("fresh connection did not continue its own sequence")
 	}
 }

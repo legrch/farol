@@ -12,11 +12,15 @@ import (
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	"github.com/legrch/farol/pkg/ipc"
-	"github.com/legrch/farol/transport/desktop"
 )
 
 // Every ordinary request on the fixture connection carries the next sequence.
 const fixtureNonce = "d0000000-0000-4000-8000-000000000001"
+
+// fixtureID names the n-th ordinary request on the fixture connection.
+func fixtureID(sequence int) string {
+	return "desktop-call:" + fixtureNonce + ":" + strconv.Itoa(sequence)
+}
 
 func TestControlledFixtureUsesRealGoWireAndClassifiesLostSend(t *testing.T) {
 	for _, scenario := range []string{"text", "lost-send-reply"} {
@@ -45,7 +49,7 @@ func TestControlledFixtureUsesRealGoWireAndClassifiesLostSend(t *testing.T) {
 			call := func(method string, body any, effect bool) wire.Response {
 				t.Helper()
 				sequence++
-				id := desktop.SequencedRequestID(fixtureNonce, uint64(sequence))
+				id := fixtureID(sequence)
 				raw, err := json.Marshal(body)
 				if err != nil {
 					t.Fatal(err)
@@ -188,7 +192,7 @@ func TestControlledReadinessDoesNotGrantProtocolAdmission(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		request := wire.Request{Jsonrpc: "2.0", Id: desktop.SequencedRequestID(fixtureNonce, uint64(sequence)), Method: method, Params: wire.Call{Body: raw}}
+		request := wire.Request{Jsonrpc: "2.0", Id: fixtureID(sequence), Method: method, Params: wire.Call{Body: raw}}
 		if method != "core.handshake" {
 			request.Params.Context = &wire.Context{ProfileId: "profile", BackendGeneration: "backend"}
 		}

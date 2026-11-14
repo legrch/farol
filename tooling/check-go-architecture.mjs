@@ -162,7 +162,8 @@ const words = new Set(
   retirement session
   descriptor digest exchange failure fake fence limit profile root
   contract doc server service unsupported
-  cleanup custody remove stable stage`
+  cleanup custody remove stable stage
+  host macho measure mount namespace path platform python scope spawn watchdog`
     .trim()
     .split(/\s+/u),
 );
