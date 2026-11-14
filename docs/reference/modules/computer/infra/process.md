@@ -84,6 +84,14 @@ and approved Node 24.20.0. It passed: 251 tests PASS and one SKIP
 (`TestNativeDrainLeafHelper`), with only the documented legacy credential-alias
 test excluded. The same acceptance limits apply.
 
+Platform record `macos-26A434-arm64-installed-runtime-v24` records the toolchain
+move to Go 1.27.3; the compiler inputs are unchanged from v23. On 2026-11-14 the
+Lead ran the same native command outside the sandbox against clean source
+`1f29e4c8d048aea8f3c78b13e7aa5e5bdf0dd0cb` on macOS 27.0.1 build `26A434` arm64
+with Go 1.27.3, `GOTOOLCHAIN=local` and approved Node 24.20.0. It passed: 251
+tests PASS and one SKIP (`TestNativeDrainLeafHelper`), with only the documented
+legacy credential-alias test excluded. The same acceptance limits apply.
+
 Source registration is not release qualification. Disposable packaged MCP checks
 cover bounded Bash, synthetic Git and observation of an original result after
 MCP reconnect. Ordinary Git configuration/hooks, external Shell, cancellation and
