@@ -1095,6 +1095,7 @@ async function native(selected, inputs, report, save) {
     !selected.settingsEditMutation &&
     !selected.settingsIdleDelay &&
     !selected.chatHistoryReopen;
+  const freshContext = freshReopen || selected.windowCloseReopen;
   // Explicit dependency location uses installed bytes; never install or link.
   assert.equal(
     await fs.realpath(selected.dependencyRoot),
@@ -1475,7 +1476,7 @@ async function native(selected, inputs, report, save) {
     const coreRoot = await physicalDirectory(path.join(stateRoot, "go-core"));
     const chatParent = path.join(coreRoot.path, "chat");
     const chatRoot = await physicalDirectory(
-      freshReopen
+      freshContext
         ? freshChatRootPath(chatParent, launch.historyContext)
         : chatParent,
     );
@@ -1547,7 +1548,7 @@ async function native(selected, inputs, report, save) {
         previous.scope.BackendGeneration,
         "BACKEND_GENERATION_REUSED",
       );
-    if (freshReopen)
+    if (freshContext)
       assert.deepEqual(
         journal.value.scope,
         {
@@ -1730,7 +1731,11 @@ async function native(selected, inputs, report, save) {
       ledgerWitness(launch.terminalLedger);
       if (selected.chatTyped)
         await observeTypedComputer("confirmed-quit-zero-authority");
-      if (selected.reopen || selected.chatHistoryReopen) {
+      if (
+        selected.reopen ||
+        selected.chatHistoryReopen ||
+        selected.windowCloseReopen
+      ) {
         await captureJournal(
           "confirmed-quit",
           launch.ordinal === 2
@@ -1738,7 +1743,7 @@ async function native(selected, inputs, report, save) {
             : undefined,
           true,
         );
-        if (!freshReopen) await captureHandoff();
+        if (!freshContext) await captureHandoff();
       }
       cleanLaunchClosure(launch.cleanup);
       if (typedAuthorityError) throw typedAuthorityError;
@@ -1872,7 +1877,7 @@ async function native(selected, inputs, report, save) {
       exited.catch(() => undefined);
       const window = await application.firstWindow({ timeout: 15000 });
       const bootstrap = await ready(window, active);
-      if (freshReopen) launch.historyContext = bootstrap.chatHistoryContext;
+      if (freshContext) launch.historyContext = bootstrap.chatHistoryContext;
       const settings =
         (hasWorkspace || selected.chatTyped) && ordinal === 2
           ? bootstrap.configuration.settings
@@ -2147,6 +2152,11 @@ async function native(selected, inputs, report, save) {
       });
       window = await reopened;
       const bootstrap = await ready(window, active);
+      assert.deepEqual(
+        bootstrap.chatHistoryContext,
+        launch.historyContext,
+        "WINDOW_REOPEN_GO_CONTEXT_CHANGED",
+      );
       assert.deepEqual(
         bootstrap.configuration.settings,
         savedSettings.value,
