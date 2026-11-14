@@ -11,6 +11,12 @@ import {
 import { deriveSurfaceLayout } from "../../src/apps/desktop/surface-layout";
 import { preventEmbeddedWindowDrag } from "../../src/apps/desktop/embedded-web-drag";
 import { ShellLayoutSchema } from "../../src/pkg/ipc/shell-state";
+import {
+  shellCommands,
+  surfaceFocus,
+  surfaceLayout,
+} from "../../apps/desktop/shell/navigation";
+import { navigationHost } from "../support/navigation-host";
 
 // Native-interface fakes and extracted production callbacks only. These tests
 // prove attachment/focus calls, not Electron pixels, macOS AX, or provider state.
@@ -289,14 +295,18 @@ const callbackNames = [
   "attachTaskViews",
   "detachTaskViews",
   "disposeTaskView",
-  "currentSurfaceLayout",
-  "applyLayout",
-  "applyRendererLayout",
-  "focusForLayout",
   "liveChatGptSurfaceFactory",
   "signInChatGptSurfaceFactory",
   "createTaskViews",
   "openLiveTaskSurface",
+] as const;
+// The layout and focus functions come from the navigation module; the
+// extracted main.ts callbacks call them under the names main.ts binds.
+const navigationNames = [
+  "currentSurfaceLayout",
+  "applyLayout",
+  "applyRendererLayout",
+  "focusForLayout",
 ] as const;
 const source = readFileSync(
   new URL("../../src/apps/desktop/main.ts", import.meta.url),
@@ -423,8 +433,24 @@ function desktopFixture() {
     },
     handleShortcut: () => false,
   };
+  const host = navigationHost(context);
+  const layout = surfaceLayout(host);
+  const focus = surfaceFocus(host, layout);
+  const commands = shellCommands(host, {
+    ...layout,
+    focusForLayout: focus.focusForLayout,
+    focusForLayoutAfterRendererCommit: () =>
+      context.focusForLayoutAfterRendererCommit(),
+    publishShellAction: () => {
+      throw Error("UNEXPECTED_SHELL_ACTION");
+    },
+  });
+  Object.assign(context, layout, {
+    focusForLayout: focus.focusForLayout,
+    applyRendererLayout: commands.applyRendererLayout,
+  });
   const api = vm.runInNewContext(
-    `${callbacks}\n({${callbackNames.join(",")}, onLoadStateChanged: ${routeLoadCallback}})`,
+    `${callbacks}\n({${[...callbackNames, ...navigationNames].join(",")}, onLoadStateChanged: ${routeLoadCallback}})`,
     context,
   ) as {
     applyLayout(): void;

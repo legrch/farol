@@ -1,14 +1,13 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import vm from "node:vm";
-import { stripTypeScriptTypes } from "node:module";
-import { parse } from "@babel/parser";
 import { describe, expect, it } from "vitest";
-import {
-  defaultNavigationShortcuts,
-  sectionForShortcut,
-} from "../../src/pkg/ipc/navigation-shortcuts";
+import { defaultNavigationShortcuts } from "../../src/pkg/ipc/navigation-shortcuts";
 
+import {
+  shellCommands,
+  type ShellPublisher,
+} from "../../apps/desktop/shell/navigation";
+import { navigationHost } from "../support/navigation-host";
 import {
   ShellActionSchema,
   ShellActionSourceSchema,
@@ -26,6 +25,27 @@ const mainSource = path.resolve(
   import.meta.dirname,
   "../../src/apps/desktop/main.ts",
 );
+const navigationSource = path.resolve(
+  import.meta.dirname,
+  "../../apps/desktop/shell/navigation.ts",
+);
+// The publisher and the navigation commands live in the navigation module;
+// the other publishers are still in main.ts. Provenance is checked over both.
+async function publisherSources(): Promise<string> {
+  return (
+    (await readFile(mainSource, "utf8")) +
+    (await readFile(navigationSource, "utf8"))
+  );
+}
+// `handleShortcut` as written in the navigation module.
+async function shortcutHandlerSource(): Promise<string> {
+  const source = await readFile(navigationSource, "utf8");
+  const begin = source.indexOf("  function handleShortcut(input: Input)");
+  const end = source.indexOf("\n  }\n", begin);
+  if (begin < 0 || end < 0)
+    throw new Error("Shortcut handler source boundary missing");
+  return source.slice(begin, end);
+}
 
 function envelope(overrides: Record<string, unknown> = {}) {
   return {
@@ -110,7 +130,7 @@ describe("shell action provenance", () => {
   // publisher stamps is checked at the source, the technique
   // ipc-registration-contract already uses for this file.
   it("S35-TA-16 every publisher stamps its true source", async () => {
-    const source = await readFile(mainSource, "utf8");
+    const source = await publisherSources();
     const calls = [...source.matchAll(/publishShellAction\(\s*([^;]*?)\)/gsu)]
       .map((match) => match[1] ?? "")
       .filter((body) => !body.includes("action:"));
@@ -202,20 +222,7 @@ describe("shell action provenance", () => {
     ).toBe(false);
   });
   it("R35 native shortcuts publish navigation without changing presentation or retrying updates", async () => {
-    const source = await readFile(mainSource, "utf8");
-    const handlers = parse(source, {
-      sourceType: "module",
-      plugins: ["typescript"],
-    }).program.body.filter(
-      (node) =>
-        node.type === "FunctionDeclaration" &&
-        node.id?.name === "handleShortcut",
-    );
-    expect(handlers).toHaveLength(1);
-    const handlerNode = handlers[0];
-    if (handlerNode?.start == null || handlerNode.end == null)
-      throw new Error("Shortcut handler source boundary missing");
-    const handler = source.slice(handlerNode.start, handlerNode.end);
+    const handler = await shortcutHandlerSource();
     expect(
       handler.match(/publishShellAction\(\s*"navigate-section"/gu),
     ).toHaveLength(2);
@@ -224,25 +231,14 @@ describe("shell action provenance", () => {
       handler.match(/sequence: \+\+sectionNavigationSequence/gu),
     ).toHaveLength(2);
     expect(
-      handler.match(/if \(installedUpdateAdmission\) return true;/gu),
+      handler.match(/if \(host\.installedUpdateAdmission\(\)\) return true;/gu),
     ).toHaveLength(2);
     expect(handler).not.toMatch(
       /(?:section|shellOverlay|sidebarMode)\s*=(?!=)|applyLayout\(\)|publishLayout\(\)/u,
     );
     expect(handler).toContain("input.isComposing || input.isAutoRepeat");
   });
-  it("routes Cmd brackets once and leaves modified keys and modal input alone", async () => {
-    const source = await readFile(mainSource, "utf8");
-    const node = parse(source, {
-      sourceType: "module",
-      plugins: ["typescript"],
-    }).program.body.find(
-      (item) =>
-        item.type === "FunctionDeclaration" &&
-        item.id?.name === "handleShortcut",
-    );
-    if (!node || node.start == null || node.end == null)
-      throw new Error("Missing shortcut handler");
+  it("routes Cmd brackets once and leaves modified keys and modal input alone", () => {
     const calls: unknown[][] = [];
     const context = {
       shellOverlay: "none",
@@ -250,18 +246,23 @@ describe("shell action provenance", () => {
       installedUpdateAdmission: false,
       setupOpen: true,
       navigationShortcuts: defaultNavigationShortcuts,
-      sectionForShortcut,
       liveTaskRoutes: new Map(),
       selectedTaskId: "",
-      sectionNavigationSequence: 0,
-      focusForLayout: () => {},
       requestSettings: () => calls.push(["settings"]),
-      publishShellAction: (...args: unknown[]) => calls.push(args),
     };
-    const handler = vm.runInNewContext(
-      `(${stripTypeScriptTypes(source.slice(node.start, node.end))})`,
-      context,
-    ) as (input: object) => boolean;
+    const unexpected = (name: string) => () => {
+      throw Error(`UNEXPECTED_${name}`);
+    };
+    const handleShortcut = shellCommands(navigationHost(context), {
+      publishShellAction: ((...args: unknown[]) => {
+        calls.push(args);
+      }) as ShellPublisher["publishShellAction"],
+      applyLayout: unexpected("LAYOUT"),
+      focusForLayout: () => {},
+      focusForLayoutAfterRendererCommit: unexpected("DEFERRED_FOCUS"),
+    }).handleShortcut;
+    const handler = (input: object) =>
+      handleShortcut(input as Parameters<typeof handleShortcut>[0]);
     const input = {
       type: "keyDown",
       meta: true,
@@ -293,7 +294,7 @@ describe("shell action provenance", () => {
     expect(calls.at(-1)).toEqual(["settings"]);
   });
   it("S35-TA-16 a fresh eventId is minted per publish, not reused", async () => {
-    const source = await readFile(mainSource, "utf8");
+    const source = await publisherSources();
     expect(source).toContain("eventId: randomUUID()");
     // One mint inside the publisher means every send differs; a constant or
     // a hoisted id would make two publishes indistinguishable.
@@ -301,7 +302,7 @@ describe("shell action provenance", () => {
   });
 
   it("S35-TA-16 the auth-window path carries the generation of the window that closed", async () => {
-    const source = await readFile(mainSource, "utf8");
+    const source = await publisherSources();
     // Stamped when the window opens...
     expect(source).toContain("chatGptSignInGeneration += 1");
     expect(source).toContain(

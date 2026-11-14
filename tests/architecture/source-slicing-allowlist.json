@@ -42,7 +42,6 @@
     "tests/unit/retired-codex-model-admission.test.ts": ["vm"],
     "tests/unit/settings-search-go-cutover.test.ts": ["vm"],
     "tests/unit/setup-journey.test.ts": ["vm"],
-    "tests/unit/shell-action-provenance.test.ts": ["vm"],
     "tests/unit/updates-preload.test.ts": ["vm"]
   }
 }
