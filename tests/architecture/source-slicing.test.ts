@@ -278,6 +278,22 @@ describe("the source-slicing ban", () => {
       expect(listed(dir)).toEqual({ [entry]: ["vm"] });
     });
 
+    it("--write-allowlist leaves a file Prettier accepts", async () => {
+      const dir = temporaryRoot(vmOnly, { [entry]: ["vm", "function"] });
+      const result = run(dir, ["--write-allowlist"]);
+      expect(result.status, result.stderr).toBe(0);
+      const written = fs.readFileSync(
+        path.join(dir, "tests/architecture/source-slicing-allowlist.json"),
+        "utf8",
+      );
+      const prettier = await import("prettier");
+      expect(await prettier.format(written, { parser: "json" })).toBe(written);
+      // Plain JSON.stringify output, which the writer used to leave, is not it.
+      expect(written).not.toBe(
+        `${JSON.stringify(JSON.parse(written), null, 2)}\n`,
+      );
+    });
+
     it("--write-allowlist refuses a new mechanism on a listed file", () => {
       const dir = temporaryRoot(vmAndFunction, { [entry]: ["vm"] });
       const result = run(dir, ["--write-allowlist"]);
