@@ -1,5 +1,5 @@
-import { DesktopAdmission } from "../../../apps/desktop/host/admission";
 import "../../../apps/desktop/bridge/e2e-window-bootstrap.ts";
+import { DesktopAdmission } from "../../../apps/desktop/host/admission";
 import { mainWindow } from "../../../apps/desktop/window/main";
 import { taskSurfaces } from "../../../apps/desktop/window/surface";
 import { guardDiagnosticPipes } from "./diagnostic-pipes";
@@ -915,8 +915,7 @@ let window: BrowserWindow | null = null;
 let aboutPanel: DesktopAboutPanel | null = null;
 const updatesPanel = new DesktopUpdatesPanel(
   () =>
-    !desktopAdmission.quitInProgress &&
-    !desktopAdmission.installedUpdateAdmission &&
+    !desktopAdmission.closed() &&
     (buildEnvironment !== "preview" ||
       (installedUpdater !== null && installedUpdater.ownerHandoffSafe())),
 );
@@ -2704,11 +2703,7 @@ async function initializeLiveTaskState(): Promise<void> {
 }
 
 async function openLiveTaskSurface(taskId: string): Promise<boolean> {
-  if (
-    desktopAdmission.quitInProgress ||
-    desktopAdmission.installedUpdateAdmission
-  )
-    return false;
+  if (desktopAdmission.closed()) return false;
   const route = liveTaskRoutes.get(taskId);
   const task = liveTaskRegistry.get(taskId);
   if (!route || !task) return false;
@@ -3478,10 +3473,7 @@ async function runProductTaskCommandObserved(
 ): Promise<ProductTaskCommandResult> {
   const command = ProductTaskCommandSchema.safeParse(value);
   if (!command.success) return taskFailure("TASK_COMMAND_INVALID");
-  if (
-    desktopAdmission.quitInProgress ||
-    desktopAdmission.installedUpdateAdmission
-  )
+  if (desktopAdmission.closed())
     return taskFailure("TASK_OPERATION_IN_PROGRESS");
   if (demoMode) {
     return taskFailure("TASKS_UNAVAILABLE");
@@ -4831,10 +4823,7 @@ async function startAdmittedSecureMcpConnector(
     recoveryFrom === undefined || recoveryCurrent?.() === true;
   const cancellation = connectorStartCancellation?.signal;
   const startPermitted = () =>
-    !cancellation?.aborted &&
-    !desktopAdmission.quitInProgress &&
-    !desktopAdmission.installedUpdateAdmission &&
-    recoveryPermitted();
+    !cancellation?.aborted && !desktopAdmission.closed() && recoveryPermitted();
   const startRefusal = () =>
     recoveryPermitted()
       ? configurationFailure("CONNECTOR_START_FAILED")
@@ -4845,10 +4834,7 @@ async function startAdmittedSecureMcpConnector(
     !authorityTransitions.current()
   )
     return transitionRefusal();
-  if (
-    desktopAdmission.quitInProgress ||
-    desktopAdmission.installedUpdateAdmission
-  )
+  if (desktopAdmission.closed())
     return configurationFailure("CONNECTOR_START_FAILED");
   // C7 can be pending before any C4 WAL exists. No new Start, repair,
   // credential-associated Open or restoration may cross that custody.
@@ -5063,11 +5049,7 @@ async function startAdmittedSecureMcpConnector(
 
   const beforeConnectorEffect = () => {
     // Quit latches admission closed before aborting the captured start signal.
-    if (
-      desktopAdmission.quitInProgress ||
-      desktopAdmission.installedUpdateAdmission ||
-      !recoveryPermitted()
-    ) {
+    if (desktopAdmission.closed() || !recoveryPermitted()) {
       throw new Error("CONNECTOR_ADMISSION_WITHDRAWN");
     }
   };
@@ -5407,8 +5389,7 @@ async function testConnectionCommand(
         // Desktop admission is already reserved for this command above.
         if (
           !embeddedBrowserEnabled() ||
-          desktopAdmission.quitInProgress ||
-          desktopAdmission.installedUpdateAdmission ||
+          desktopAdmission.closed() ||
           !chatGptTaskAdmissionReady() ||
           desktopGoCore !== core ||
           configuration !== config ||
@@ -5489,8 +5470,7 @@ async function testConnectionCommand(
         const current = () => {
           const latest = config.snapshot();
           return (
-            !desktopAdmission.quitInProgress &&
-            !desktopAdmission.installedUpdateAdmission &&
+            !desktopAdmission.closed() &&
             desktopGoCore === core &&
             configuration === config &&
             window === owner &&
@@ -5678,8 +5658,7 @@ async function verifySecureMcpApp(
     const proofScope = challenge;
     if (
       !chatGptTaskAdmissionReady() ||
-      desktopAdmission.quitInProgress ||
-      desktopAdmission.installedUpdateAdmission ||
+      desktopAdmission.closed() ||
       !secureMcpConnectorRuntime.isRunning() ||
       connector.tunnelId === null ||
       runtime?.state !== "ready" ||
@@ -5843,8 +5822,7 @@ async function verifySecureMcpApp(
       () => {
         const latest = configuration!.snapshot();
         return (
-          !desktopAdmission.quitInProgress &&
-          !desktopAdmission.installedUpdateAdmission &&
+          !desktopAdmission.closed() &&
           desktopGoCore === verificationCore &&
           latest.status === "ready" &&
           expectedBinding !== null &&
@@ -5909,8 +5887,7 @@ async function verifySecureMcpApp(
           if (claimed) return;
           const admitted = configuration!.snapshot();
           if (
-            desktopAdmission.quitInProgress ||
-            desktopAdmission.installedUpdateAdmission ||
+            desktopAdmission.closed() ||
             desktopGoCore !== verificationCore ||
             admitted.status !== "ready" ||
             expectedBinding === null ||
@@ -6657,10 +6634,7 @@ async function configureSaveAndConnect(
                       return configurationFailure(
                         "CONNECTOR_SETUP_BINDING_CHANGED",
                       );
-                    if (
-                      desktopAdmission.quitInProgress ||
-                      desktopAdmission.installedUpdateAdmission
-                    )
+                    if (desktopAdmission.closed())
                       return configurationFailure(
                         "AUTHORITY_CHANGE_IN_PROGRESS",
                       );
@@ -6867,10 +6841,7 @@ async function configureProductObserved(
 async function configureNewProductRequest(
   value: unknown,
 ): Promise<ProductConfigurationResult> {
-  if (
-    desktopAdmission.quitInProgress ||
-    desktopAdmission.installedUpdateAdmission
-  )
+  if (desktopAdmission.closed())
     return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
   return desktopAdmission.withConfigurationRequest(async () => {
     return await configureUnfencedProduct(value);
@@ -7102,8 +7073,7 @@ async function configureDrainedWorkspaceChange(
         authorityTransitions.current() === "authority-change" &&
         activeAuthorityChangeKind === command.kind &&
         desktopAdmission.occupied("connector-task") &&
-        !desktopAdmission.quitInProgress &&
-        !desktopAdmission.installedUpdateAdmission &&
+        !desktopAdmission.closed() &&
         !codexAgentOperationActive() &&
         !connector.hasUnresolvedEffect() &&
         snapshot.status === "ready" &&
@@ -7177,8 +7147,7 @@ async function configureDrainedWorkspaceChange(
             desktopGoCore === core &&
             authorityTransitions.current() === "authority-change" &&
             desktopAdmission.occupied("connector-task") &&
-            !desktopAdmission.quitInProgress &&
-            !desktopAdmission.installedUpdateAdmission &&
+            !desktopAdmission.closed() &&
             !codexAgentOperationActive() &&
             !connector.hasUnresolvedEffect() &&
             snap.status === "ready" &&
@@ -7322,8 +7291,7 @@ async function runManualDeepTest(
     shellOverlay === "task-menu" &&
     selectedTaskId === expectedTaskId &&
     section === "browser" &&
-    !desktopAdmission.quitInProgress &&
-    !desktopAdmission.installedUpdateAdmission &&
+    !desktopAdmission.closed() &&
     performance.now() < deadline
   ) {
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -7344,8 +7312,7 @@ async function runManualDeepTest(
     !binding ||
     snapshot?.status !== "ready" ||
     !deepTestRecoveryReady ||
-    desktopAdmission.quitInProgress ||
-    desktopAdmission.installedUpdateAdmission ||
+    desktopAdmission.closed() ||
     desktopAdmission.occupied("chatgpt-task") ||
     desktopAdmission.occupied("connector-task") ||
     pendingChatGptReadonlyTask !== null ||
@@ -7410,8 +7377,7 @@ async function runManualDeepTest(
       targetCurrent() &&
       !connector.hasUnresolvedEffect() &&
       core.currentComputerConnectorBinding() === binding &&
-      !desktopAdmission.quitInProgress &&
-      !desktopAdmission.installedUpdateAdmission &&
+      !desktopAdmission.closed() &&
       selectedTaskId === routeTaskId &&
       (routeTaskId === ""
         ? chatGptRoute === route && browserHomeSurfaceOpen
@@ -9170,8 +9136,7 @@ async function configureAdmittedProduct(
         try {
           observation = await original.observeSignInStatus();
           if (
-            desktopAdmission.quitInProgress ||
-            desktopAdmission.installedUpdateAdmission ||
+            desktopAdmission.closed() ||
             chatGptRoute !== original ||
             !original.isCurrentSignInStatus(observation)
           )
@@ -10912,8 +10877,7 @@ async function configureAdmittedProduct(
               buildId: buildIdentity.buildId,
               current:
                 runtimeState === "ready" &&
-                !desktopAdmission.quitInProgress &&
-                !desktopAdmission.installedUpdateAdmission &&
+                !desktopAdmission.closed() &&
                 !desktopAdmission.occupied("connector-task") &&
                 !desktopAdmission.occupied("workspace-mutation") &&
                 activeAuthorityChangeKind === null &&
@@ -11148,9 +11112,7 @@ function desktopBrandImage() {
 }
 
 const requestAbout = aboutCommand({
-  closed: () =>
-    desktopAdmission.quitInProgress ||
-    desktopAdmission.installedUpdateAdmission,
+  closed: () => desktopAdmission.closed(),
   openWindow: () =>
     containWindowOpenFailure(ensureWindow, recoverWindowOpenFailure),
   window: () => window,
@@ -11164,31 +11126,17 @@ const requestAbout = aboutCommand({
 });
 
 function requestUpdates(): void {
-  if (
-    desktopAdmission.quitInProgress ||
-    desktopAdmission.installedUpdateAdmission
-  )
-    return;
+  if (desktopAdmission.closed()) return;
   void containWindowOpenFailure(async () => {
     await ensureWindow();
-    if (
-      desktopAdmission.quitInProgress ||
-      desktopAdmission.installedUpdateAdmission ||
-      !window ||
-      window.isDestroyed()
-    )
-      return;
+    if (desktopAdmission.closed() || !window || window.isDestroyed()) return;
     publishShellAction("open-updates", "update-command");
     window.webContents.focus();
   }, recoverWindowOpenFailure);
 }
 
 function requestSettings(): void {
-  if (
-    desktopAdmission.quitInProgress ||
-    desktopAdmission.installedUpdateAdmission
-  )
-    return;
+  if (desktopAdmission.closed()) return;
   if (!window) return;
   publishShellAction("open-settings", "settings-command");
   window.webContents.focus();
@@ -11245,23 +11193,14 @@ function handleRuntimeExit(code: number | null): void {
 }
 
 async function startRuntime(): Promise<void> {
-  if (
-    desktopAdmission.quitInProgress ||
-    desktopAdmission.installedUpdateAdmission
-  )
-    return;
+  if (desktopAdmission.closed()) return;
   if (runtimeChild !== null || ownedLocalRuntimes.size !== 0) {
     throw new Error("LOCAL_RUNTIME_ALREADY_OWNED");
   }
   runtimeStopping = false;
   const resources = desktopExecutionResources();
   await resources.recheck();
-  if (
-    runtimeStopping ||
-    desktopAdmission.quitInProgress ||
-    desktopAdmission.installedUpdateAdmission
-  )
-    return;
+  if (runtimeStopping || desktopAdmission.closed()) return;
   const child = spawn(
     resources.executable,
     [path.join(resources.directory, "runtime.cjs")],
@@ -11549,12 +11488,7 @@ function installIpc(): void {
       : { status: "unavailable" },
   );
   ipcMain.on(updatesChannels.open, (event) => {
-    if (
-      !updatesPanel.isOwner(event) ||
-      !window ||
-      desktopAdmission.quitInProgress ||
-      desktopAdmission.installedUpdateAdmission
-    )
+    if (!updatesPanel.isOwner(event) || !window || desktopAdmission.closed())
       return;
     const owner = window;
     void updatesPanel
@@ -11566,8 +11500,7 @@ function installIpc(): void {
         admitted: () =>
           window === owner &&
           !owner.isDestroyed() &&
-          !desktopAdmission.quitInProgress &&
-          !desktopAdmission.installedUpdateAdmission,
+          !desktopAdmission.closed(),
       })
       .catch(() => console.error("DESKTOP_UPDATES_PRESENTATION_FAILED"));
   });
@@ -11589,9 +11522,7 @@ function installIpc(): void {
     event.senderFrame === event.sender.mainFrame
       ? runSelfTestCommand(
           () => desktopGoCore,
-          () =>
-            !desktopAdmission.quitInProgress &&
-            !desktopAdmission.installedUpdateAdmission,
+          () => !desktopAdmission.closed(),
           value,
         )
       : { ok: false, code: "SELF_TEST_UNAVAILABLE" },
@@ -11653,11 +11584,7 @@ function installIpc(): void {
   );
   ipcMain.handle(channels.navigationShortcuts, (event, value: unknown) => {
     if (!isTrustedIpcSender(event, window)) return { ok: false };
-    if (
-      desktopAdmission.quitInProgress ||
-      desktopAdmission.installedUpdateAdmission
-    )
-      return { ok: false };
+    if (desktopAdmission.closed()) return { ok: false };
     const parsed = parseNavigationShortcuts(value);
     if (!parsed) return { ok: false };
     navigationShortcuts = parsed;
@@ -11665,11 +11592,7 @@ function installIpc(): void {
     return { ok: true };
   });
   ipcMain.handle(channels.control, async (event, value: unknown) => {
-    if (
-      desktopAdmission.quitInProgress ||
-      desktopAdmission.installedUpdateAdmission
-    )
-      return { error: "UPDATE_IN_PROGRESS" };
+    if (desktopAdmission.closed()) return { error: "UPDATE_IN_PROGRESS" };
     if (!isTrustedIpcSender(event, window))
       return { error: "IPC_SENDER_DENIED" };
     const parsed = controlSchema.safeParse(value);
@@ -11724,8 +11647,7 @@ function installIpc(): void {
       .safeParse(value);
     if (
       !request.success ||
-      desktopAdmission.quitInProgress ||
-      desktopAdmission.installedUpdateAdmission ||
+      desktopAdmission.closed() ||
       !isTrustedIpcSender(event, window) ||
       section !== "browser" ||
       setupOpen ||
@@ -11745,12 +11667,7 @@ function installIpc(): void {
     };
   });
   ipcMain.on(channels.layout, (event, value: unknown) => {
-    if (
-      desktopAdmission.quitInProgress ||
-      desktopAdmission.installedUpdateAdmission ||
-      !isTrustedIpcSender(event, window)
-    )
-      return;
+    if (desktopAdmission.closed() || !isTrustedIpcSender(event, window)) return;
     applyRendererLayout(value);
   });
 }
@@ -12436,8 +12353,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
             if (
               configuration === settingsOwner &&
               desktopGoCore === settingsCore &&
-              !desktopAdmission.quitInProgress &&
-              !desktopAdmission.installedUpdateAdmission &&
+              !desktopAdmission.closed() &&
               window === observationWindow &&
               observationWindow &&
               !observationWindow.isDestroyed()
@@ -12954,9 +12870,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     {
       current: () => configuration!.snapshot(),
       mayContinue: () =>
-        !startupConnectorResumeCancelled &&
-        !desktopAdmission.quitInProgress &&
-        !desktopAdmission.installedUpdateAdmission,
+        !startupConnectorResumeCancelled && !desktopAdmission.closed(),
       // The normal command retains authority reservation, physical-root and
       // Go inspection checks. No synthetic verification receipt is written.
       verifyWorkspace: (workspaceId) =>
