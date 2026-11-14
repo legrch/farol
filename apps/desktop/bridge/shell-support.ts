@@ -48,7 +48,7 @@ const invalid = "invalid_shell_support_declaration";
 const idPattern = /^[A-Za-z0-9._:/-]{1,128}$/u;
 // Go's release support uses process.bindingID, unlike the core build ID.
 const releaseIdPattern = /^[A-Za-z0-9._:-]{1,160}$/u;
-// Keep identical to process/platformqualification.go's platformBuildPattern.
+// Keep identical to process/platform.go's platformBuildPattern.
 const osBuildPattern = /^[0-9]{1,3}[A-Z][0-9]{1,6}[a-z]?$/u;
 const watchdogPath =
   "Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron";
