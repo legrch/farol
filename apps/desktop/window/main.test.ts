@@ -1,28 +1,10 @@
-import fs from "node:fs";
-import vm from "node:vm";
-import { stripTypeScriptTypes } from "node:module";
-import { parse } from "@babel/parser";
 import { expect, it, vi } from "vitest";
-import {
-  WindowOpenCoordinator,
-  containWindowOpenFailure,
-} from "../../src/apps/desktop/lifecycle-policy";
+import { WindowOpenCoordinator } from "../../../src/apps/desktop/lifecycle-policy";
 
-// Execute the actual main-process admission functions with the real portable
-// coordinator and controlled native counters. No Electron, provider or profile.
-const source = fs.readFileSync(
-  new URL("../../src/apps/desktop/main.ts", import.meta.url),
-  "utf8",
-);
-const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
-const callbacks = ["ensureWindow", "reopenWindow"].map((name) => {
-  const node = tree.program.body.find(
-    (node) => node.type === "FunctionDeclaration" && node.id?.name === name,
-  );
-  if (!node || node.start === null || node.end === null)
-    throw new Error(`WINDOW_ADMISSION_CALLBACK_MISSING:${name}`);
-  return source.slice(node.start, node.end);
-});
+import { windowAdmission, type WindowAdmissionState } from "./main";
+
+// Real portable admission and coordinator; native creation and recovery are
+// controlled ports. No Electron, provider or profile is exercised.
 
 function host({
   hasWindow = false,
@@ -34,14 +16,13 @@ function host({
   pendingOpen = Promise.resolve(),
 } = {}) {
   const window = { isDestroyed: () => false };
-  const context: Record<string, unknown> = {
+  const context = {
     window: hasWindow ? window : null,
     quitInProgress: quitting,
     installedUpdateAdmission: applying,
     runtimeStopping: stopping,
     runtimeState: failedRuntime ? "failed" : "ready",
     windowOpenCoordinator: new WindowOpenCoordinator(),
-    containWindowOpenFailure,
   };
   const create = vi.fn(async () => {
     if (openFails) throw new Error("controlled window load failure");
@@ -52,17 +33,17 @@ function host({
   const recover = vi.fn(() => {
     context.window = null;
   });
-  Object.assign(context, {
+  const admission = windowAdmission({
+    state: context as unknown as WindowAdmissionState,
+    coordinator: context.windowOpenCoordinator,
     createWindow: create,
     revealWindow: reveal,
     recoverWindowOpenFailure: recover,
   });
-  const actions = vm.runInNewContext(
-    stripTypeScriptTypes(
-      `${callbacks.join("\n")}\n({ ensure: ensureWindow, reopen: reopenWindow })`,
-    ),
-    context,
-  ) as { ensure(): Promise<void>; reopen(): void };
+  const actions = {
+    ensure: admission.ensureWindow,
+    reopen: admission.reopenWindow,
+  };
   return { ...actions, create, reveal, recover, context, window };
 }
 
@@ -82,7 +63,7 @@ it.each([
   expect(h.recover).not.toHaveBeenCalled();
 });
 
-it.each(["quitInProgress", "installedUpdateAdmission"])(
+it.each(["quitInProgress", "installedUpdateAdmission"] as const)(
   "does not create when %s closes after the coordinator queued an open",
   async (flag) => {
     const h = host();
@@ -159,3 +140,24 @@ it("contains a failed normal reopen and preserves its existing recovery", async 
   expect(h.reveal).not.toHaveBeenCalled();
   expect(h.context.window).toBeNull();
 });
+
+it.each(["quitInProgress", "installedUpdateAdmission"] as const)(
+  "contains the original pending open failure after %s closes admission",
+  async (flag) => {
+    let fail!: (error: Error) => void;
+    const pendingOpen = new Promise<void>((_resolve, reject) => {
+      fail = reject;
+    });
+    const h = host({ pendingOpen });
+    h.reopen();
+    await Promise.resolve();
+    expect(h.create).toHaveBeenCalledTimes(1);
+    h.context[flag] = true;
+    fail(new Error("controlled late window load failure"));
+    await settle();
+    expect(h.create).toHaveBeenCalledTimes(1);
+    expect(h.reveal).not.toHaveBeenCalled();
+    expect(h.recover).toHaveBeenCalledTimes(1);
+    expect(h.context.window).toBeNull();
+  },
+);

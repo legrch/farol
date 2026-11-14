@@ -1,3 +1,5 @@
+import type { BrowserWindow } from "electron";
+import { windowHost } from "../support/window-host";
 import { readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import vm from "node:vm";
@@ -335,43 +337,13 @@ function findRouteLoadCallback(node: unknown): void {
 nodes.forEach(findRouteLoadCallback);
 if (!routeLoadCallback) throw Error("MISSING_ROUTE_LOAD_CALLBACK");
 const callbacks = callbackNames
+  .filter((name) => name === "openLiveTaskSurface")
   .map((name) => {
     const node = nodes.find(
       (node) => node.type === "FunctionDeclaration" && node.id?.name === name,
     );
     if (!node || node.start == null || node.end == null)
       throw Error(`MISSING_CALLBACK:${name}`);
-    return stripTypeScriptTypes(source.slice(node.start, node.end));
-  })
-  .join("\n");
-
-const createWindow = nodes.find(
-  (node) =>
-    node.type === "FunctionDeclaration" && node.id?.name === "createWindow",
-);
-if (!createWindow || createWindow.type !== "FunctionDeclaration")
-  throw Error("MISSING_CREATE_WINDOW");
-const closeCallbacks = createWindow.body.body
-  .filter((node) => {
-    if (
-      node.type !== "ExpressionStatement" ||
-      node.expression.type !== "CallExpression"
-    )
-      return false;
-    const { callee, arguments: args } = node.expression;
-    return (
-      callee.type === "MemberExpression" &&
-      callee.object.type === "Identifier" &&
-      callee.object.name === "window" &&
-      callee.property.type === "Identifier" &&
-      callee.property.name === "on" &&
-      args[0]?.type === "StringLiteral" &&
-      ["close", "closed"].includes(args[0].value)
-    );
-  })
-  .map((node) => {
-    if (node.start == null || node.end == null)
-      throw Error("MISSING_CLOSE_CALLBACK_RANGE");
     return stripTypeScriptTypes(source.slice(node.start, node.end));
   })
   .join("\n");
@@ -449,6 +421,8 @@ function desktopFixture() {
     focusForLayout: focus.focusForLayout,
     applyRendererLayout: commands.applyRendererLayout,
   });
+  const windows = windowHost(context);
+  Object.assign(context, windows);
   const api = vm.runInNewContext(
     `${callbacks}\n({${[...callbackNames, ...navigationNames].join(",")}, onLoadStateChanged: ${routeLoadCallback}})`,
     context,
@@ -475,10 +449,7 @@ function desktopFixture() {
       destroy(): void;
     };
   };
-  vm.runInNewContext(
-    `const taskViewHost = window;\n${closeCallbacks}`,
-    context,
-  );
+  windows.bindWindowLifetime(context.window as unknown as BrowserWindow);
   return { ...f, context, api, taskViews, taskViewKinds };
 }
 

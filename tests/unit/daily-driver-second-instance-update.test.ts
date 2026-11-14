@@ -1,3 +1,7 @@
+import {
+  windowAdmission,
+  type WindowAdmissionState,
+} from "../../apps/desktop/window/main";
 import fs from "node:fs";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
@@ -21,11 +25,7 @@ const source = fs.readFileSync(
   "utf8",
 );
 const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
-const callbacks = [
-  "ensureWindow",
-  "isPrimaryReady",
-  "handleSecondInstance",
-].map((name) => {
+const callbacks = ["isPrimaryReady", "handleSecondInstance"].map((name) => {
   const node = tree.program.body.find(
     (node) => node.type === "FunctionDeclaration" && node.id?.name === name,
   );
@@ -116,6 +116,16 @@ function host({
     },
     writeInstanceAcknowledgement: acknowledge,
   });
+  Object.assign(
+    context,
+    windowAdmission({
+      state: context as unknown as WindowAdmissionState,
+      coordinator: context.windowOpenCoordinator as WindowOpenCoordinator,
+      createWindow: () => create(),
+      revealWindow: reveal,
+      recoverWindowOpenFailure: context.recoverWindowOpenFailure as () => void,
+    }),
+  );
   const actions = vm.runInNewContext(
     stripTypeScriptTypes(
       `${callbacks.join("\n")}\n({ handle: handleSecondInstance, ready: isPrimaryReady })`,

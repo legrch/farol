@@ -1,14 +1,11 @@
+import { windowHost } from "../support/window-host";
 import { EventEmitter } from "node:events";
-import fs from "node:fs";
-import { stripTypeScriptTypes } from "node:module";
-import { parse } from "@babel/parser";
 import vm from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { StagedChatGptAttachment } from "../../src/apps/desktop/chatgpt-attachment-staging";
 import { channels } from "../../src/pkg/ipc/channels";
 import { WindowController } from "../../src/ui/renderer/controller";
-import { selectPreviewWindowPlacement } from "../../src/apps/desktop/window-placement";
 import type { PreloadApi } from "../../src/ui/renderer/contract";
 
 const electronMock = vi.hoisted(() => ({
@@ -66,19 +63,6 @@ import {
 } from "../../src/apps/desktop/chatgpt/scripts";
 
 describe("main auth presentation composes automatic primary fitting", () => {
-  const source = fs.readFileSync(
-    new URL("../../src/apps/desktop/main.ts", import.meta.url),
-    "utf8",
-  );
-  const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
-  const node = tree.program.body.find(
-    (n) =>
-      n.type === "FunctionDeclaration" &&
-      n.id?.name === "chatGptWindowPresentation",
-  );
-  if (!node || node.start == null || node.end == null)
-    throw Error("AUTH_PRESENTATION_SOURCE_MISSING");
-  const declaration = source.slice(node.start, node.end);
   const display = {
     id: 1,
     internal: true,
@@ -86,22 +70,19 @@ describe("main auth presentation composes automatic primary fitting", () => {
     workArea: { x: 0, y: 30, width: 1000, height: 650 },
   };
   function presentation(buildEnvironment: string) {
-    const context = vm.createContext({
+    return windowHost({
       buildEnvironment,
       windowMode: "secondary-visible",
       devSecondaryDisplay: false,
       explicitPreviewWindowSize: false,
       sidecarDisplayOnly: false,
-      selectedVisibleTestPlacement: (requested: {
-        width: number;
-        height: number;
-      }) => selectPreviewWindowPlacement([display], 1, requested, false),
-    });
-    vm.runInContext(
-      stripTypeScriptTypes(declaration, { mode: "strip" }),
-      context,
-    );
-    return vm.runInContext("chatGptWindowPresentation()", context);
+      allowPrimaryDisplay: false,
+      builtInDisplayOnly: false,
+      screen: {
+        getAllDisplays: () => [display],
+        getPrimaryDisplay: () => display,
+      },
+    }).chatGptWindowPresentation();
   }
   it.each([720, 1080])(
     "fits the actual %i auth caller on a sole small Dev display",
