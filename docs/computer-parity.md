@@ -205,7 +205,7 @@ Shell activation and any stronger descendant-lifetime guarantee remain separate
 qualification gates; the result-format change alone did not register a
 normal-startup producer.
 
-Controlled regressions in `process/supervision_test.go`,
+Controlled regressions in `process/confinement_test.go`,
 `mutation/processsupervision_test.go` and
 `boot/connectorprocesssupervision_test.go` cover independent cleanup facts,
 version compatibility, original collection, current-authority cold reads and
