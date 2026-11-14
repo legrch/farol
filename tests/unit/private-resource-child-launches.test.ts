@@ -1,3 +1,4 @@
+import { windowHost } from "../support/window-host";
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
@@ -64,7 +65,7 @@ function resources(
   };
 }
 
-it("selects private MCP, safe-open and renderer resources from actual callers", () => {
+it("selects private MCP, safe-open and renderer resources from actual callers", async () => {
   const getter = stripTypeScriptTypes(declaration("desktopExecutionResources"));
   const context = resources();
   const mcp = select(
@@ -117,18 +118,28 @@ it("selects private MCP, safe-open and renderer resources from actual callers", 
   expect(workspace.options.helperPath).toBe(
     path.join(privateDirectory, "computer-safe-open.py"),
   );
-  const preload = select(
-    main,
-    (node) =>
-      node.type === "ObjectProperty" &&
-      (node.key as { name?: string })?.name === "preload",
-  );
-  expect(
-    vm.runInNewContext(
-      `${getter}; ({${stripTypeScriptTypes(preload)}}).preload`,
+  const preload = vi.fn();
+  const stop = new Error("controlled constructor boundary");
+  const host = windowHost({
+    ...context,
+    windowMode: "hidden",
+    initialWindowSize: { width: 800, height: 600 },
+    desktopExecutionResources: vm.runInNewContext(
+      `${getter}; desktopExecutionResources`,
       context,
     ),
-  ).toBe(path.join(privateDirectory, "preload.cjs"));
+    BrowserWindow: class {
+      constructor(options: { webPreferences: { preload: string } }) {
+        preload(options.webPreferences.preload);
+        // Inspect the real factory's constructor input without a native window.
+        throw stop;
+      }
+    },
+  });
+  await expect(host.createWindow()).rejects.toBe(stop);
+  expect(preload).toHaveBeenCalledExactlyOnceWith(
+    path.join(privateDirectory, "preload.cjs"),
+  );
 });
 
 it("starts the actual local runtime through private executable and Node IPC after recheck", async () => {

@@ -8,6 +8,8 @@ import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness
  * node tests/e2e/go-core-startup.e2e.mjs [--check|--run-native]
  *   --candidate-root /absolute/_output/build/app --source-sha <SHA>
  *   --build-id <buildId> [--dependency-root /absolute/node_modules] [--reopen] [--read-discard] [--read-account] [--edit-snapshot] [--settings-edit-mutation]
+ * --window-close-reopen adds a hidden same-process window close/activate/reopen
+ * to the fresh zero-authority startup; it excludes other journey flags.
  * --chat-two-turn requires Dev --candidate-root and excludes all other journey
  * flags. Actual React Prepare/Inspect/Confirm/Send -> early text -> retained
  * result -> explicit ACK + Go settle/release -> same conversation second Send.
@@ -165,6 +167,8 @@ const contract = Object.freeze({
     "Actual production-built src/apps/desktop/main.ts (main.cjs)",
   scenario:
     "Fresh unconfigured normal startup -> ready -> configuration rename with no grant -> Settings/Appearance -> Quit",
+  windowCloseReopen:
+    "Fresh zero-authority Settings/Appearance -> hidden shell close -> zero windows with desktop process alive -> existing activate handler -> a different hidden shell with retained settings and unchanged Go journal generation -> ordinary confirmed Quit. No native focus or signed-in provider proof",
   backendWitness:
     "Production-created go-core/profile.json and computer/computer-access.json, read independently; unchanged zero authority through closure",
   providerWitness:
@@ -223,6 +227,7 @@ function selection(args) {
     readAccount: false,
     editSnapshot: false,
     settingsEditMutation: false,
+    windowCloseReopen: false,
     settingsIdleDelay: false,
     chatTwoTurn: false,
     chatTyped: false,
@@ -241,6 +246,16 @@ function selection(args) {
   const seen = new Set();
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
+    if (argument === "--window-close-reopen") {
+      assert.equal(
+        seen.has("windowCloseReopen"),
+        false,
+        "WINDOW_REOPEN_REPEATED",
+      );
+      seen.add("windowCloseReopen");
+      result.windowCloseReopen = true;
+      continue;
+    }
     if (argument === "--settings-idle-delay") {
       assert.equal(
         seen.has("settingsIdleDelay"),
@@ -327,6 +342,22 @@ function selection(args) {
     true,
     "SELECT_ONE_ARTIFACT",
   );
+  if (result.windowCloseReopen)
+    assert.equal(
+      Boolean(
+        result.reopen ||
+        result.chatTwoTurn ||
+        result.chatHistoryReopen ||
+        result.chatTyped ||
+        result.settingsIdleDelay ||
+        result.readDiscard ||
+        result.readAccount ||
+        result.editSnapshot ||
+        result.settingsEditMutation,
+      ),
+      false,
+      "WINDOW_REOPEN_EXCLUDES_OTHER_JOURNEYS",
+    );
   if (result.chatHistoryReopen)
     assert.equal(result.chatTwoTurn, true, "CHAT_HISTORY_REQUIRES_TWO_TURN");
   if (result.chatTyped)
@@ -2000,7 +2031,9 @@ async function native(selected, inputs, report, save) {
       await save();
       return { window, settings, hidden };
     };
-    const { window, settings, hidden } = await start(1);
+    const first = await start(1);
+    let window = first.window;
+    const { settings, hidden } = first;
     await hidden();
     if (selected.reopen || selected.chatTwoTurn)
       await captureJournal("fresh-ready");
@@ -2063,6 +2096,95 @@ async function native(selected, inputs, report, save) {
     report.settingsSHA = savedSettings.sha256;
     launch.settings = savedSettings;
     await capture("settings-ui-zero-authority", settings.computer.computerId);
+    if (selected.windowCloseReopen) {
+      const projection = () =>
+        bounded(
+          application.evaluate(({ BrowserWindow }) => ({
+            pid: process.pid,
+            windows: BrowserWindow.getAllWindows().map((value) => ({
+              id: value.id,
+              contentsId: value.webContents.id,
+              visible: value.isVisible(),
+              focused: value.isFocused(),
+            })),
+          })),
+          3000,
+          "WINDOW_LIFETIME_PROJECTION_UNKNOWN",
+        );
+      const before = await projection();
+      assert.equal(before.windows.length, 1, "WINDOW_LIFETIME_SHELL_COUNT");
+      const journal = await captureJournal("before-window-close");
+      const lifetime = (launch.windowLifetime = {
+        status: "close-requested",
+        before,
+        journal,
+      });
+      await hidden();
+      await save();
+      const closed = window.waitForEvent("close", { timeout: 5000 });
+      closed.catch(() => undefined);
+      await window.close();
+      await closed;
+      let empty;
+      const deadline = performance.now() + 5000;
+      do {
+        active();
+        empty = await projection();
+        if (empty.windows.length === 0) break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      } while (performance.now() < deadline);
+      assert.equal(empty.windows.length, 0, "WINDOW_CLOSE_NOT_OBSERVED");
+      assert.equal(empty.pid, before.pid, "DESKTOP_CHANGED_ON_WINDOW_CLOSE");
+      lifetime.closed = empty;
+      lifetime.status = "reopen-requested";
+      await save();
+      const reopened = application.waitForEvent("window", { timeout: 15000 });
+      reopened.catch(() => undefined);
+      // Exercise the registered production callback without native focus or a
+      // second process. An unknown close or reopen never reaches another attempt.
+      await application.evaluate(({ app }) => {
+        app.emit("activate");
+      });
+      window = await reopened;
+      const bootstrap = await ready(window, active);
+      assert.deepEqual(
+        bootstrap.configuration.settings,
+        savedSettings.value,
+        "WINDOW_REOPEN_SETTINGS_CHANGED",
+      );
+      await hidden();
+      const after = await projection();
+      assert.equal(after.pid, before.pid, "DESKTOP_CHANGED_ON_WINDOW_REOPEN");
+      assert.equal(after.windows.length, 1, "WINDOW_REOPEN_SHELL_COUNT");
+      assert.notEqual(
+        after.windows[0].id,
+        before.windows[0].id,
+        "WINDOW_REOPEN_REUSED_DESTROYED_SHELL",
+      );
+      assert.notEqual(
+        after.windows[0].contentsId,
+        before.windows[0].contentsId,
+        "WINDOW_REOPEN_REUSED_DESTROYED_CONTENTS",
+      );
+      assert.deepEqual(
+        await captureJournal("after-window-reopen"),
+        journal,
+        "GO_JOURNAL_CHANGED_ON_WINDOW_REOPEN",
+      );
+      assert.deepEqual(
+        await document(path.join(stateRoot, "config.json"), 256 * 1024),
+        savedSettings,
+        "WINDOW_REOPEN_PERSISTED_SETTINGS_CHANGED",
+      );
+      await capture(
+        "window-reopen-zero-authority",
+        settings.computer.computerId,
+      );
+      ledgerWitness(site.driver.snapshot());
+      lifetime.after = after;
+      lifetime.status = "passed-hidden-close-reopen-same-go-generation";
+      await save();
+    }
     if (selected.chatTyped) {
       await observeTypedComputer("settings-ui-before-typed-chat");
       const configure = async (command) => {
@@ -3519,6 +3641,19 @@ function selfTest() {
   ];
   pass(() => assert.equal(selection(args).mode, "--check"));
   pass(() =>
+    assert.equal(
+      selection(["--window-close-reopen", ...args]).windowCloseReopen,
+      true,
+    ),
+  );
+  reject(() =>
+    selection(["--window-close-reopen", "--window-close-reopen", ...args]),
+  );
+  reject(() =>
+    selection(["--window-close-reopen", "--chat-two-turn", ...args]),
+  );
+  reject(() => selection(["--window-close-reopen", "--reopen", ...args]));
+  pass(() =>
     assert.equal(selection(["--run-native", ...args]).mode, "--run-native"),
   );
   for (const extra of [
@@ -4093,23 +4228,25 @@ async function main(args) {
   }
   const report = {
     contract,
-    scenario: selected.settingsIdleDelay
-      ? contract.settingsIdleDelay
-      : selected.chatHistoryReopen
-        ? `${selected.chatTyped ? `${contract.chatTyped}; ` : ""}${contract.chatHistoryReopen}`
-        : selected.chatTyped
-          ? contract.chatTyped
-          : selected.chatTwoTurn
-            ? contract.chatTwoTurn
-            : selected.settingsEditMutation
-              ? contract.settingsEditMutation
-              : selected.editSnapshot
-                ? `${contract.editSnapshot}; ${selected.readAccount ? contract.readAccount : contract.readDiscard}`
-                : selected.readAccount
-                  ? contract.readAccount
-                  : selected.readDiscard
-                    ? contract.readDiscard
-                    : contract.scenario,
+    scenario: selected.windowCloseReopen
+      ? contract.windowCloseReopen
+      : selected.settingsIdleDelay
+        ? contract.settingsIdleDelay
+        : selected.chatHistoryReopen
+          ? `${selected.chatTyped ? `${contract.chatTyped}; ` : ""}${contract.chatHistoryReopen}`
+          : selected.chatTyped
+            ? contract.chatTyped
+            : selected.chatTwoTurn
+              ? contract.chatTwoTurn
+              : selected.settingsEditMutation
+                ? contract.settingsEditMutation
+                : selected.editSnapshot
+                  ? `${contract.editSnapshot}; ${selected.readAccount ? contract.readAccount : contract.readDiscard}`
+                  : selected.readAccount
+                    ? contract.readAccount
+                    : selected.readDiscard
+                      ? contract.readDiscard
+                      : contract.scenario,
     missingWitnesses: selected.chatHistoryReopen
       ? [
           ...historyLimits,
@@ -4254,7 +4391,9 @@ async function main(args) {
                     ? "passed-read-preview-discard-reopen-fixture-readiness-only"
                     : selected.reopen
                       ? "passed-reopen-startup-zero-authority-only"
-                      : "passed-fresh-startup-zero-authority-only";
+                      : selected.windowCloseReopen
+                        ? "passed-hidden-window-close-reopen-zero-authority-and-confirmed-quit"
+                        : "passed-fresh-startup-zero-authority-only";
     }
   } catch (error) {
     report.status =
