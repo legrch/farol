@@ -1,57 +1,16 @@
-import fs from "node:fs";
-import vm from "node:vm";
-import { stripTypeScriptTypes } from "node:module";
-import { parse } from "@babel/parser";
 import { expect, it } from "vitest";
 import {
   ClientEventSchema,
   type ClientEventDto,
-} from "../../src/modules/chat/contract/client-event";
+} from "../../../src/modules/chat/contract/client-event";
 
-// Actual stream/projection callbacks, actual caller loop and runtime codec.
-// Fetch/read settlements and host sends are controlled, with no I/O or native
-// lifecycle, provider, durable Computer authority or effect qualification.
-const source = fs.readFileSync(
-  new URL("../../src/apps/desktop/main.ts", import.meta.url),
-  "utf8",
-);
-const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
-function functionNode(name: string) {
-  const node = tree.program.body.find(
-    (node) => node.type === "FunctionDeclaration" && node.id?.name === name,
-  );
-  if (!node || node.type !== "FunctionDeclaration" || !node.body)
-    throw new Error(`STREAM_FUNCTION_MISSING:${name}`);
-  return node;
-}
-function bytes(node: { start?: number | null; end?: number | null }) {
-  if (node.start == null || node.end == null)
-    throw new Error("STREAM_SOURCE_RANGE_MISSING");
-  return source.slice(node.start, node.end);
-}
-const callbacks = [
-  "consumeSse",
-  "stopStreams",
-  "failTaskSurface",
-  "publishTaskSurfaceStatus",
-].map((name) => bytes(functionNode(name)));
-const create = functionNode("createWindow");
-const callerLoop = create.body.body.find(
-  (node) =>
-    node.type === "ForOfStatement" && bytes(node).includes("consumeSse("),
-);
-const hostFence = create.body.body.find(
-  (node) =>
-    node.type === "VariableDeclaration" &&
-    node.declarations.some(
-      (declaration) =>
-        declaration.id.type === "Identifier" &&
-        declaration.id.name === "startupIsCurrent",
-    ),
-);
-if (!callerLoop || !hostFence) throw new Error("STREAM_CALLER_SOURCE_MISSING");
-const callerLoopSource = bytes(callerLoop);
-const hostFenceSource = bytes(hostFence);
+import type { BrowserWindow } from "electron";
+import { channels as runtimeChannels } from "../../../src/pkg/ipc/channels";
+import { surfacePorts } from "../../../tests/support/window-host";
+import { taskSurfaces } from "./surface";
+
+// Actual stream callbacks and caller loop with controlled fetch/read settlements.
+// No native lifecycle, provider, durable authority or effect is qualified here.
 
 type Task = {
   ownerId: string;
@@ -171,7 +130,6 @@ function host() {
     };
   }
   const channels: ReturnType<typeof channel>[] = [];
-  const promises: Promise<void>[] = [];
   const context = {
     runtime: { port: 1, tasks: [task] },
     runtimeState: "ready",
@@ -187,37 +145,23 @@ function host() {
     Error,
     encodeURIComponent,
     channels: {
-      runtimeEvent: "controlled-event",
-      taskSurfaceState: "controlled-status",
+      runtimeEvent: runtimeChannels.runtimeEvent,
+      taskSurfaceState: runtimeChannels.taskSurfaceState,
     },
-    admittedPromises: promises,
     fetch: (_url: string, options: { signal: AbortSignal }) => {
       const pending = channel(options.signal);
       channels.push(pending);
       return pending.fetched.promise;
     },
   };
-  const api = vm.runInNewContext(
-    stripTypeScriptTypes(`
-    ${callbacks.join("\n")}
-    const originalConsume = consumeSse;
-    consumeSse = (...args) => {
-      const promise = originalConsume(...args);
-      admittedPromises.push(promise);
-      return promise;
-    };
-    ({ consume: consumeSse, stop: stopStreams, start: () => {
-      const taskViewHost = window;
-      ${hostFenceSource}
-      ${callerLoopSource}
-    } })
-  `),
-    context,
-  ) as {
-    consume(identity: Task): Promise<void>;
-    stop(): void;
-    start(): void;
+  const actions = taskSurfaces(surfacePorts(context));
+  const api = {
+    consume: actions.consumeSse,
+    stop: actions.stopStreams,
+    start: () =>
+      actions.startStreams(context.window as unknown as BrowserWindow),
   };
+
   function observe(promise: Promise<void>) {
     return promise.then(
       () => ({ status: "fulfilled" as const }),
@@ -239,8 +183,7 @@ function host() {
     return started(api.consume(identity), identity);
   }
   function startCaller() {
-    api.start();
-    const admitted = promises.at(-1);
+    const admitted = api.start().at(-1);
     if (!admitted) throw new Error("CONTROLLED_CALLER_NOT_DISPATCHED");
     return started(admitted);
   }
@@ -574,7 +517,7 @@ it("retains current generic read failure classification", async () => {
   );
   expect(h.sends.at(-1)).toMatchObject({
     host: "original-window",
-    channel: "controlled-status",
+    channel: runtimeChannels.taskSurfaceState,
   });
 });
 
@@ -609,7 +552,7 @@ it.each(
       pendingCall: h.context.pendingComputer.get(task.taskId)?.callId ?? null,
       failure: h.context.taskSurfaceFailures.get(task.taskId) ?? null,
       statuses: h.sends
-        .filter((send) => send.channel === "controlled-status")
+        .filter((send) => send.channel === runtimeChannels.taskSurfaceState)
         .map((send) => send.value),
     });
     const duringHold = snapshot();

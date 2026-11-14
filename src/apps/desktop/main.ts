@@ -1,4 +1,6 @@
 import "../../../apps/desktop/bridge/e2e-window-bootstrap.ts";
+import { mainWindow } from "../../../apps/desktop/window/main";
+import { taskSurfaces } from "../../../apps/desktop/window/surface";
 import { guardDiagnosticPipes } from "./diagnostic-pipes";
 import { openStartupSplash, type StartupSplash } from "./startup-splash";
 import { preventEmbeddedWindowDrag } from "./embedded-web-drag";
@@ -268,7 +270,6 @@ import {
   type NavigationShortcuts,
 } from "../../pkg/ipc/navigation-shortcuts";
 import type { RuntimeStatus } from "../../pkg/ipc/runtime-status";
-import type { TaskSurfaceStatus } from "../../pkg/ipc/task-surface-status";
 import {
   ProductConfigurationCommandSchema,
   ProductConfigurationResultSchema,
@@ -287,11 +288,9 @@ import {
   type ShellOverlay,
   type SidebarMode,
   type SurfaceSection,
-  type WindowState,
 } from "../../pkg/ipc/shell-state";
 import {
   containWindowOpenFailure,
-  presentationAction,
   WindowOpenCoordinator,
   windowAllClosedAction,
 } from "./lifecycle-policy";
@@ -308,13 +307,11 @@ import {
 } from "./single-instance";
 import {
   parseDevDisplay,
-  selectDevWindowPlacement,
   parseAllowPrimaryDisplay,
   parseBuiltInDisplayOnly,
   parseSidecarDisplayOnly,
   parsePreviewWindowSize,
   parsePreviewWindowMode,
-  selectPreviewWindowPlacement,
 } from "./window-placement";
 import {
   PrimaryStartup,
@@ -352,9 +349,6 @@ import {
   ChatGptRoute,
   ChatGptSignInBlockLedger,
   type ChatGptRouteOptions,
-  type ChatGptWindowPresentation,
-  type ChatGptRouteSurface,
-  type ChatGptRouteSurfaceFactory,
   type ChatGptSignInOutcomeDiagnostic,
   type ChatGptSignInStatus,
 } from "./chatgpt-route";
@@ -1469,7 +1463,8 @@ const {
       legacySetupTestMode,
     }),
   productTasksState,
-  attachTaskView,
+  attachTaskView: (taskId, view, bounds) =>
+    attachTaskView(taskId, view, bounds),
   openLiveTaskSurface,
   requestSettings,
 });
@@ -1793,6 +1788,113 @@ const pendingComputer = new Map<
   string,
   Extract<z.infer<typeof ClientEventSchema>, { kind: "computer.requested" }>
 >();
+
+// Window and task-surface adapters borrow their owners through live accessors.
+const desktopWindowState = {
+  get window() {
+    return window;
+  },
+  set window(value) {
+    window = value;
+  },
+  get windowPresentationReady() {
+    return windowPresentationReady;
+  },
+  set windowPresentationReady(value) {
+    windowPresentationReady = value;
+  },
+  get runtime() {
+    return runtime;
+  },
+  get runtimeState() {
+    return runtimeState;
+  },
+  get quitInProgress() {
+    return quitInProgress;
+  },
+  get installedUpdateAdmission() {
+    return installedUpdateAdmission;
+  },
+  get selectedTaskId() {
+    return selectedTaskId;
+  },
+  get browserHomeSurfaceOpen() {
+    return browserHomeSurfaceOpen;
+  },
+  set browserHomeSurfaceOpen(value) {
+    browserHomeSurfaceOpen = value;
+  },
+};
+const windowSurfaces = taskSurfaces({
+  state: desktopWindowState,
+  WebContentsView,
+  taskViews,
+  taskViewKinds,
+  nativeViewVisibility,
+  streamControllers,
+  taskSurfaceFailures,
+  pendingComputer,
+  runtimePartition: activeDesktopIdentity.runtimePartition,
+  signInSurfaceId: SIGN_IN_SURFACE_ID,
+  session,
+  runtimeBase,
+  currentSurfaceLayout,
+  applyLayout,
+  handleShortcut,
+  preventEmbeddedWindowDrag,
+  operationsStore,
+  fetch,
+});
+const {
+  attachTaskView,
+  liveChatGptSurfaceFactory,
+  signInChatGptSurfaceFactory,
+  disposeTaskViews,
+  stopStreams,
+  publishTaskSurfaceStatus,
+} = windowSurfaces;
+const {
+  currentWindowState,
+  selectedVisibleTestPlacement,
+  chatGptWindowPresentationOption,
+  reconcileVisibleTestDisplay,
+  recoverWindowOpenFailure,
+  ensureWindow,
+  reopenWindow,
+} = mainWindow({
+  state: desktopWindowState,
+  BrowserWindow,
+  surfaces: windowSurfaces,
+  pendingComputer,
+  taskSurfaceFailures,
+  coordinator: windowOpenCoordinator,
+  nativeViewVisibility,
+  buildEnvironment,
+  buildIdentity,
+  displayWindowTitle,
+  initialWindowSize,
+  windowMode,
+  devSecondaryDisplay,
+  allowPrimaryDisplay,
+  builtInDisplayOnly,
+  sidecarDisplayOnly,
+  explicitPreviewWindowSize,
+  screen,
+  managedChatGptRoutes,
+  aboutPanel: () => aboutPanel,
+  updatesPanel: () => updatesPanel,
+  liveTaskRoutes,
+  demoMode,
+  platform: process.platform,
+  writeLog: (line) => process.stderr.write(line),
+  desktopExecutionResources,
+  observeRendererLifecycle,
+  handleShortcut,
+  applyLayout,
+  focusForLayoutAfterRendererCommit,
+  openLiveTaskSurface,
+  closeStartupSplash,
+});
 
 function demoShellTasks(): readonly ProductTask[] {
   return (runtime?.tasks ?? expectedTasks).map((task) => ({
@@ -10958,26 +11060,6 @@ function publishRuntimeStatus(): void {
   window?.webContents.send(channels.runtimeState, currentRuntimeStatus());
 }
 
-function currentWindowState(): WindowState {
-  let trafficLightPosition: WindowState["trafficLightPosition"] = null;
-  if (window && !window.isDestroyed() && process.platform === "darwin") {
-    try {
-      trafficLightPosition = window.getWindowButtonPosition();
-    } catch {
-      trafficLightPosition = null;
-    }
-  }
-  return {
-    focused: window?.isFocused() ?? false,
-    fullScreen: window?.isFullScreen() ?? false,
-    trafficLightPosition,
-  };
-}
-
-function publishWindowState(): void {
-  window?.webContents.send(channels.windowState, currentWindowState());
-}
-
 function desktopBrandImage() {
   const icon = nativeImage.createFromPath(
     path.join(
@@ -11049,163 +11131,12 @@ function installApplicationMenu(): void {
   );
 }
 
-function attachTaskView(
-  taskId: string,
-  view: WebContentsView,
-  bounds: Electron.Rectangle,
-): void {
-  if (
-    !window ||
-    window.isDestroyed() ||
-    view.webContents?.isDestroyed() !== false ||
-    taskViews.get(taskId) !== view
-  ) {
-    return;
-  }
-  nativeViewVisibility.show(window, view, bounds);
-}
-
-function attachTaskViews(): void {
-  applyLayout();
-}
-
-function detachTaskViews(): void {
-  if (window) nativeViewVisibility.detachHost(window);
-}
-
-function liveChatGptSurfaceFactory(taskId: string): ChatGptRouteSurfaceFactory {
-  return ({ webPreferences }): ChatGptRouteSurface => {
-    const existing = taskViews.get(taskId);
-    if (existing && !existing.webContents.isDestroyed()) {
-      throw new Error("CHATGPT_TASK_SURFACE_ALREADY_EXISTS");
-    }
-    const view = new WebContentsView({
-      webPreferences: {
-        ...webPreferences,
-        backgroundThrottling: false,
-      },
-    });
-    const contents = view.webContents;
-    preventEmbeddedWindowDrag(contents);
-    const closingListeners = new Set<() => void>();
-    const closedListeners = new Set<() => void>();
-    let closingNotified = false;
-    let closedNotified = false;
-    const notifyClosing = () => {
-      if (closingNotified) return;
-      closingNotified = true;
-      for (const listener of closingListeners) listener();
-    };
-    const notifyClosed = () => {
-      if (closedNotified) return;
-      closedNotified = true;
-      for (const listener of closedListeners) listener();
-    };
-    view.setVisible(false);
-    // A background document needs a real viewport before its first load. This
-    // does not attach, reveal or focus the retained browser surface.
-    const layout = currentSurfaceLayout();
-    if (layout) view.setBounds(layout.pageBounds);
-    taskViews.set(taskId, view);
-    taskViewKinds.set(taskId, "chatgpt");
-    contents.on("before-input-event", (event, input) => {
-      if (handleShortcut(input)) event.preventDefault();
-    });
-    contents.once("destroyed", () => {
-      disposeTaskView(taskId, view);
-      notifyClosed();
-    });
-    return {
-      kind: "embedded",
-      webContents: contents,
-      isDestroyed: () => contents.isDestroyed(),
-      loadURL: (url) => contents.loadURL(url),
-      hide: () => nativeViewVisibility.hide(view),
-      reveal: () => {
-        if (taskViews.get(taskId) !== view || contents.isDestroyed()) {
-          return;
-        }
-        applyLayout();
-      },
-      focus: () => {
-        if (window && taskViews.get(taskId) === view) {
-          nativeViewVisibility.focus(window, view);
-        }
-      },
-      setTitle: () => undefined,
-      destroy: () => {
-        if (!contents.isDestroyed()) notifyClosing();
-        disposeTaskView(taskId, view);
-        notifyClosed();
-      },
-      onPageTitleUpdated: (listener) => {
-        contents.on("page-title-updated", (event) => listener(event));
-      },
-      onClosing: (listener) => closingListeners.add(listener),
-      onClosed: (listener) => closedListeners.add(listener),
-    };
-  };
-}
-
 function embeddedBrowserEnabled(): boolean {
   return embeddedBrowserSelected({
     environment: runtimeEnvironment,
     demoMode,
     legacySetupTestMode,
   });
-}
-
-function signInChatGptSurfaceFactory(): ChatGptRouteSurfaceFactory {
-  const create = liveChatGptSurfaceFactory(SIGN_IN_SURFACE_ID);
-  return (options) => {
-    const surface = create(options);
-    browserHomeSurfaceOpen = true;
-    return {
-      ...surface,
-      focus: () => {
-        if (window?.isFocused()) surface.focus();
-      },
-      close: () => surface.destroy(),
-    };
-  };
-}
-
-function disposeTaskView(taskId: string, view: WebContentsView): void {
-  if (taskViews.get(taskId) === view) {
-    taskViews.delete(taskId);
-    taskViewKinds.delete(taskId);
-  }
-  nativeViewVisibility.hide(view);
-  const contents = view.webContents;
-  if (contents && !contents.isDestroyed()) {
-    contents.close({ waitForBeforeUnload: false });
-  }
-}
-
-function disposeTaskViews(kind?: "runtime" | "chatgpt"): void {
-  for (const [taskId, view] of [...taskViews]) {
-    if (kind && taskViewKinds.get(taskId) !== kind) continue;
-    disposeTaskView(taskId, view);
-  }
-}
-
-function stopStreams(): void {
-  for (const controller of streamControllers.values()) controller.abort();
-  streamControllers.clear();
-}
-
-function publishTaskSurfaceStatus(status: TaskSurfaceStatus): void {
-  window?.webContents.send(channels.taskSurfaceState, status);
-}
-
-function failTaskSurface(taskId: string): void {
-  const controller = streamControllers.get(taskId);
-  controller?.abort();
-  streamControllers.delete(taskId);
-  pendingComputer.delete(taskId);
-  const error = "TASK_STREAM_FAILED";
-  taskSurfaceFailures.set(taskId, error);
-  publishTaskSurfaceStatus({ taskId, state: "failed", error });
 }
 
 function handleRuntimeExit(code: number | null): void {
@@ -11347,196 +11278,6 @@ async function startRuntime(): Promise<void> {
     runtimeStopping = true;
     child.kill();
     runtimeChild = null;
-  }
-}
-
-function partitionName(): string {
-  return activeDesktopIdentity.runtimePartition;
-}
-
-function installNetworkFence(): Electron.Session | null {
-  const base = runtimeBase();
-  if (!base) return null;
-  const isolated = session.fromPartition(partitionName(), { cache: false });
-  isolated.setPermissionRequestHandler((_contents, _permission, callback) =>
-    callback(false),
-  );
-  isolated.setPermissionCheckHandler(() => false);
-  isolated.webRequest.onBeforeRequest((details, callback) => {
-    callback({ cancel: !details.url.startsWith(`${base}/`) });
-  });
-  return isolated;
-}
-
-async function createTaskViews(): Promise<void> {
-  if (!window || !runtime) return;
-  const taskViewHost = window;
-  const activeRuntime = runtime;
-  const startupIsCurrent = () =>
-    window === taskViewHost &&
-    !taskViewHost.isDestroyed() &&
-    !quitInProgress &&
-    !installedUpdateAdmission &&
-    runtimeState === "ready" &&
-    runtime === activeRuntime;
-  if (!startupIsCurrent()) return;
-  const base = runtimeBase();
-  if (!base || !installNetworkFence()) return;
-  for (const task of activeRuntime.tasks) {
-    if (!startupIsCurrent()) return;
-    const retained = taskViews.get(task.taskId);
-    if (retained && retained.webContents?.isDestroyed() === false) {
-      continue;
-    }
-    const view = new WebContentsView({
-      webPreferences: {
-        partition: partitionName(),
-        sandbox: true,
-        contextIsolation: true,
-        nodeIntegration: false,
-        backgroundThrottling: false,
-      },
-    });
-    view.setVisible(false);
-    taskViews.set(task.taskId, view);
-    taskViewKinds.set(task.taskId, "runtime");
-    view.webContents.once("destroyed", () => {
-      disposeTaskView(task.taskId, view);
-    });
-    view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-    view.webContents.on("will-navigate", (event, url) => {
-      if (!url.startsWith(`${base}/`)) event.preventDefault();
-    });
-    view.webContents.on("before-input-event", (event, input) => {
-      if (handleShortcut(input)) event.preventDefault();
-    });
-    try {
-      await view.webContents.loadURL(
-        `${base}/task/${encodeURIComponent(task.taskId)}`,
-        {
-          extraHeaders: `Authorization: Bearer ${task.readToken}\n`,
-        },
-      );
-      if (
-        !startupIsCurrent() ||
-        taskViews.get(task.taskId) !== view ||
-        view.webContents?.isDestroyed() !== false
-      )
-        return;
-      taskSurfaceFailures.delete(task.taskId);
-      publishTaskSurfaceStatus({
-        taskId: task.taskId,
-        state: "ready",
-        error: null,
-      });
-    } catch (error) {
-      if (taskViews.get(task.taskId) === view) {
-        disposeTaskView(task.taskId, view);
-      }
-      if (runtimeState !== "ready" || runtime !== activeRuntime) return;
-      throw error;
-    }
-  }
-  if (startupIsCurrent()) applyLayout();
-}
-
-async function consumeSse(
-  task: RuntimeReady["tasks"][number],
-  controller = new AbortController(),
-): Promise<void> {
-  const activeRuntime = runtime;
-  const taskViewHost = window;
-  if (
-    !activeRuntime ||
-    !taskViewHost ||
-    taskViewHost.isDestroyed() ||
-    runtimeState !== "ready" ||
-    quitInProgress ||
-    installedUpdateAdmission
-  )
-    return;
-  streamControllers.get(task.taskId)?.abort();
-  streamControllers.set(task.taskId, controller);
-  const streamIsCurrent = () =>
-    !controller.signal.aborted &&
-    streamControllers.get(task.taskId) === controller &&
-    runtime === activeRuntime &&
-    runtimeState === "ready" &&
-    window === taskViewHost &&
-    !taskViewHost.isDestroyed();
-  const response = await fetch(
-    `http://127.0.0.1:${activeRuntime.port}/events/${encodeURIComponent(task.taskId)}`,
-    {
-      headers: { authorization: `Bearer ${task.readToken}` },
-      signal: controller.signal,
-    },
-  );
-  if (!streamIsCurrent()) {
-    if (streamControllers.get(task.taskId) === controller) {
-      streamControllers.delete(task.taskId);
-    }
-    return;
-  }
-  if (!response.ok || !response.body)
-    throw new Error("RUNTIME_STREAM_UNAVAILABLE");
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let carry = "";
-  while (streamIsCurrent()) {
-    const part = await reader.read();
-    // A dispatched read may still settle after its controller or host was
-    // replaced. Its bytes cannot update the replacement's projection.
-    if (!streamIsCurrent()) break;
-    if (part.done) {
-      throw new Error("RUNTIME_STREAM_ENDED");
-    }
-    carry += decoder.decode(part.value, { stream: true });
-    const frames = carry.split("\n\n");
-    carry = frames.pop() ?? "";
-    for (const frame of frames) {
-      if (!streamIsCurrent()) break;
-      const data = frame
-        .split("\n")
-        .find((line) => line.startsWith("data: "))
-        ?.slice(6);
-      if (!data) continue;
-      const parsed = ClientEventSchema.safeParse(JSON.parse(data));
-      if (!parsed.success) throw new Error("RUNTIME_EVENT_INVALID");
-      if (
-        parsed.data.ownerId !== task.ownerId ||
-        parsed.data.sessionId !== task.sessionId ||
-        parsed.data.taskId !== task.taskId ||
-        parsed.data.turnId !== task.turnId ||
-        parsed.data.generation !== task.generation
-      ) {
-        throw new Error("RUNTIME_EVENT_CORRELATION");
-      }
-      if (parsed.data.kind === "computer.requested") {
-        pendingComputer.set(task.taskId, parsed.data);
-      } else if (
-        parsed.data.kind === "computer.completed" ||
-        parsed.data.kind === "turn.terminal"
-      ) {
-        pendingComputer.delete(task.taskId);
-      }
-      if (parsed.data.kind === "turn.terminal") {
-        const event = parsed.data;
-        operationsStore().record(
-          { source: "Codex", kind: "chat.turn", target: {} },
-          event.phase === "completed"
-            ? "done"
-            : event.phase === "outcome_unknown"
-              ? "unknown"
-              : "failed",
-          event.code,
-          0,
-        );
-      }
-      taskViewHost.webContents.send(channels.runtimeEvent, parsed.data);
-    }
-  }
-  if (streamControllers.get(task.taskId) === controller) {
-    streamControllers.delete(task.taskId);
   }
 }
 
@@ -11914,177 +11655,6 @@ function installIpc(): void {
   });
 }
 
-async function createWindow(): Promise<void> {
-  if (quitInProgress || installedUpdateAdmission) return;
-  const testPlacement =
-    windowMode === "secondary-visible"
-      ? selectedVisibleTestPlacement(initialWindowSize)
-      : null;
-  window = new BrowserWindow({
-    title: displayWindowTitle,
-    width: initialWindowSize.width,
-    height: initialWindowSize.height,
-    ...(testPlacement?.bounds ?? {}),
-    minWidth: 640,
-    minHeight: 520,
-    backgroundColor: "#111216",
-    titleBarStyle: "hiddenInset",
-    ...(process.platform === "darwin"
-      ? { trafficLightPosition: { x: 14, y: 18 } }
-      : {}),
-    show: false,
-    webPreferences: {
-      preload: path.join(desktopExecutionResources().directory, "preload.cjs"),
-      sandbox: true,
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-  observeRendererLifecycle(window.webContents, buildIdentity.buildId, (line) =>
-    process.stderr.write(line),
-  );
-  // The renderer's neutral HTML title must not replace the Dev window identity.
-  if (buildEnvironment === "dev")
-    window.on("page-title-updated", (event) => event.preventDefault());
-  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  window.webContents.on("will-navigate", (event) => event.preventDefault());
-  window.webContents.on("before-input-event", (event, input) => {
-    if (handleShortcut(input)) event.preventDefault();
-  });
-  window.on("resize", () => {
-    applyLayout();
-    publishWindowState();
-  });
-  window.on("focus", () => {
-    publishWindowState();
-    focusForLayoutAfterRendererCommit();
-  });
-  window.on("blur", publishWindowState);
-  window.on("enter-full-screen", () => {
-    applyLayout();
-    publishWindowState();
-  });
-  window.on("leave-full-screen", () => {
-    applyLayout();
-    publishWindowState();
-  });
-  const taskViewHost = window;
-  const startupIsCurrent = () =>
-    window === taskViewHost &&
-    !taskViewHost.isDestroyed() &&
-    !quitInProgress &&
-    !installedUpdateAdmission;
-  window.on("close", () => nativeViewVisibility.detachHost(taskViewHost));
-  window.on("closed", () => {
-    nativeViewVisibility.detachHost(taskViewHost);
-    if (window !== taskViewHost) return;
-    stopStreams();
-    window = null;
-    windowPresentationReady = false;
-  });
-  if (!startupIsCurrent()) return;
-  await taskViewHost.loadFile(
-    path.join(desktopExecutionResources().directory, "shell.html"),
-  );
-  // Keep the admitted load's outcome, but a withdrawn host cannot dispatch
-  // another startup stage or publish readiness for its replacement.
-  if (!startupIsCurrent()) return;
-  publishWindowState();
-  if (!startupIsCurrent()) return;
-  attachTaskViews();
-  if (!startupIsCurrent()) return;
-  await createTaskViews();
-  if (!startupIsCurrent()) return;
-  if (!demoMode && selectedTaskId) {
-    await openLiveTaskSurface(selectedTaskId);
-    if (!startupIsCurrent()) return;
-    // Restore the other retained ChatGPT views behind the selected one. A
-    // tab switch can then show its already loaded page in the same frame;
-    // embedded surfaces only focus when they are actually visible.
-    void Promise.allSettled(
-      [...liveTaskRoutes.entries()]
-        .filter(([taskId]) => taskId !== selectedTaskId)
-        .map(([, route]) => {
-          if (!startupIsCurrent()) return;
-          return route.open();
-        }),
-    );
-  }
-  for (const task of runtime?.tasks ?? []) {
-    if (!startupIsCurrent()) return;
-    const activeRuntime = runtime;
-    const controller = new AbortController();
-    void consumeSse(task, controller).catch((error: unknown) => {
-      if (error instanceof Error && error.name === "AbortError") return;
-      if (
-        window !== taskViewHost ||
-        taskViewHost.isDestroyed() ||
-        runtimeState !== "ready" ||
-        runtime !== activeRuntime ||
-        controller.signal.aborted ||
-        streamControllers.get(task.taskId) !== controller
-      )
-        return;
-      failTaskSurface(task.taskId);
-    });
-  }
-  if (!startupIsCurrent()) return;
-  windowPresentationReady = true;
-  revealWindow();
-}
-
-function selectedVisibleTestPlacement(
-  requested: Readonly<{ width: number; height: number }>,
-) {
-  if (devSecondaryDisplay)
-    return selectDevWindowPlacement(
-      screen.getAllDisplays(),
-      screen.getPrimaryDisplay().id,
-      requested,
-    );
-  return selectPreviewWindowPlacement(
-    screen.getAllDisplays(),
-    screen.getPrimaryDisplay().id,
-    requested,
-    allowPrimaryDisplay,
-    builtInDisplayOnly,
-    sidecarDisplayOnly,
-    sidecarDisplayOnly && !explicitPreviewWindowSize,
-  );
-}
-
-function chatGptWindowPresentation(): ChatGptWindowPresentation | undefined {
-  if (windowMode === "default") return undefined;
-  if (windowMode === "hidden") return { mode: "hidden" };
-  return {
-    mode: "secondary-visible",
-    // Fixed test viewports stay exact. An explicit interactive viewport and
-    // ordinary Dev may fit auth windows within their selected display.
-    size:
-      buildEnvironment === "dev" ||
-      explicitPreviewWindowSize ||
-      sidecarDisplayOnly
-        ? "fit"
-        : "exact",
-    place: (requested) =>
-      selectedVisibleTestPlacement(
-        explicitPreviewWindowSize
-          ? {
-              width: Math.min(requested.width, initialWindowSize.width),
-              height: Math.min(requested.height, initialWindowSize.height),
-            }
-          : requested,
-      ).bounds,
-  };
-}
-
-function chatGptWindowPresentationOption(): Readonly<{
-  windowPresentation?: ChatGptWindowPresentation;
-}> {
-  const presentation = chatGptWindowPresentation();
-  return presentation === undefined ? {} : { windowPresentation: presentation };
-}
-
 let startupSplash: StartupSplash | null = null;
 function closeStartupSplash(): void {
   const splash = startupSplash;
@@ -12092,70 +11662,8 @@ function closeStartupSplash(): void {
   splash?.close();
 }
 
-function revealWindow(): void {
-  if (!window || window.isDestroyed()) return;
-  if (window.isMinimized()) window.restore();
-  const action = presentationAction(windowMode);
-  if (action === "show-inactive") {
-    window.setBounds(selectedVisibleTestPlacement(initialWindowSize).bounds);
-    window.showInactive();
-  } else if (action === "show-and-focus") window.show();
-  closeStartupSplash();
-}
-
-function reconcileVisibleTestDisplay(): void {
-  if (windowMode !== "secondary-visible") return;
-  aboutPanel?.reconcile();
-  updatesPanel.reconcile();
-  if (windowPresentationReady && window !== null && !window.isDestroyed()) {
-    window.hide();
-    try {
-      window.setBounds(selectedVisibleTestPlacement(initialWindowSize).bounds);
-      window.showInactive();
-    } catch {
-      // An unavailable permitted display keeps this window hidden until the
-      // next topology event. Sidecar has no implicit primary fallback.
-    }
-  }
-  for (const route of managedChatGptRoutes) {
-    route.reconcileWindowPresentation();
-  }
-}
-
-function ensureWindow(): Promise<void> {
-  if (quitInProgress || installedUpdateAdmission) return Promise.resolve();
-  return windowOpenCoordinator.ensure({
-    hasWindow: () => window !== null && !window.isDestroyed(),
-    reveal: () => {
-      if (quitInProgress || installedUpdateAdmission) return;
-      revealWindow();
-    },
-    open: () => {
-      // The coordinator defers creation. Quit/update may close admission
-      // after this request was queued, before the native callback runs.
-      if (quitInProgress || installedUpdateAdmission) return Promise.resolve();
-      return createWindow();
-    },
-  });
-}
-
-function recoverWindowOpenFailure(): void {
-  stopStreams();
-  disposeTaskViews("runtime");
-  detachTaskViews();
-  pendingComputer.clear();
-  taskSurfaceFailures.clear();
-  const failedWindow = window;
-  window = null;
-  if (failedWindow && !failedWindow.isDestroyed()) failedWindow.destroy();
-}
-
 function nativeMenuBarEnabled(): boolean {
   return process.env.FAROL_E2E !== "1" && process.platform === "darwin";
-}
-
-function reopenWindow(): void {
-  void containWindowOpenFailure(ensureWindow, recoverWindowOpenFailure);
 }
 
 // Set when a quit begins; a quit drain always ends in the real quit.

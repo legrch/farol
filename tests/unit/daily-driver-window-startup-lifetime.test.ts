@@ -1,3 +1,4 @@
+import { windowHost } from "../support/window-host";
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
@@ -14,15 +15,7 @@ const source = fs.readFileSync(
   "utf8",
 );
 const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
-const callbacks = [
-  "createWindow",
-  "createTaskViews",
-  "openLiveTaskSurface",
-  "consumeSse",
-  "revealWindow",
-  "attachTaskViews",
-  "disposeTaskView",
-].map((name) => {
+const callbacks = ["openLiveTaskSurface"].map((name) => {
   const node = tree.program.body.find(
     (node) => node.type === "FunctionDeclaration" && node.id?.name === name,
   );
@@ -140,7 +133,15 @@ function host({
   class FakeWindow {
     destroyed = false;
     listeners = new Map<string, (event?: { preventDefault(): void }) => void>();
-    webContents = { setWindowOpenHandler() {}, on() {} };
+    webContents = {
+      setWindowOpenHandler() {},
+      on() {},
+      send(channel: string, value: { taskId?: string }) {
+        if (channel === "farol:window-state") record("publish-window");
+        if (channel === "farol:task-surface-state")
+          record("publish-task", value.taskId);
+      },
+    };
     constructor() {
       record("window-create");
     }
@@ -153,6 +154,12 @@ function host({
     }
     isDestroyed() {
       return this.destroyed;
+    }
+    isFocused() {
+      return false;
+    }
+    isFullScreen() {
+      return false;
     }
     isMinimized() {
       return false;
@@ -270,6 +277,7 @@ function host({
         : []),
     ]),
   });
+  Object.assign(context, windowHost(context));
   const actions = vm.runInNewContext(
     stripTypeScriptTypes(
       `${callbacks.join("\n")}\n({ create: createWindow, views: createTaskViews })`,
@@ -558,11 +566,13 @@ it.each(["preview", "owner-preview", "dev"] as const)(
 
 it("surfaces startup rejection before the controlled shell stage", async () => {
   const h = host();
-  Reflect.deleteProperty(h.context, "buildEnvironment");
+  h.context.observeRendererLifecycle = () => {
+    throw new Error("controlled early window failure");
+  };
   const creating = h.create();
   await expect(h.reached(creating)).rejects.toMatchObject({
-    name: "ReferenceError",
-    message: "buildEnvironment is not defined",
+    name: "Error",
+    message: "controlled early window failure",
   });
   expect(h.count("window-create")).toBe(1);
   expect(h.count("shell-load")).toBe(0);

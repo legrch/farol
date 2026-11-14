@@ -65,12 +65,14 @@ describe("surface navigation wiring in main", () => {
       expect(body).toContain(`\n  ${name}: () => ${name},\n`);
     expect(body).toContain("\n  signInSurfaceId: SIGN_IN_SURFACE_ID,\n");
     expect(body).toMatch(
+      /attachTaskView: \(taskId, view, bounds\) =>\s+attachTaskView\(taskId, view, bounds\)/,
+    );
+    expect(body).toMatch(
       /\n  compactBrowser: \(\) =>\n    compactBrowserSelected\(\{\n      environment: runtimeEnvironment,\n      demoMode,\n      legacySetupTestMode,\n    \}\),\n/,
     );
     for (const name of [
       "liveTaskRoutes",
       "productTasksState",
-      "attachTaskView",
       "openLiveTaskSurface",
       "requestSettings",
     ])
@@ -91,7 +93,7 @@ describe("surface navigation wiring in main", () => {
       );
     expect(source).not.toMatch(/\nlet sectionNavigationSequence\b/);
     // The window hands native input and the renderer's layout report to it.
-    expect(source).toContain("handleShortcut(");
+    expect(source).toContain("\n  handleShortcut,\n");
     expect(source).toContain("applyRendererLayout(");
   });
 });

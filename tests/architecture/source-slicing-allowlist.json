@@ -2,7 +2,6 @@
   "schema": 1,
   "files": {
     "tests/e2e/deep-test-ipc-order.e2e.mjs": ["esbuild"],
-    "tests/integration/chatgpt-route.test.ts": ["vm"],
     "tests/integration/connection-check-main.test.ts": ["vm"],
     "tests/integration/connector-quit-start.test.ts": ["vm"],
     "tests/integration/deep-test-dispatch.test.ts": ["vm"],
@@ -23,9 +22,7 @@
     "tests/unit/daily-driver-backend-lifecycle-report.test.ts": ["vm"],
     "tests/unit/daily-driver-go-settings-loss.test.ts": ["vm"],
     "tests/unit/daily-driver-live-surface-lifecycle.test.ts": ["vm"],
-    "tests/unit/daily-driver-runtime-stream-lifetime.test.ts": ["vm"],
     "tests/unit/daily-driver-second-instance-update.test.ts": ["vm"],
-    "tests/unit/daily-driver-window-reopen.test.ts": ["vm"],
     "tests/unit/daily-driver-window-startup-lifetime.test.ts": ["vm"],
     "tests/unit/desktop-build-defines.test.mjs": ["vm"],
     "tests/unit/desktop-environment.test.ts": ["vm"],

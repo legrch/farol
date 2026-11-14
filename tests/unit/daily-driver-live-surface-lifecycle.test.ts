@@ -1,3 +1,6 @@
+import { taskSurfaces } from "../../apps/desktop/window/surface";
+import { surfacePorts } from "../support/window-host";
+import { channels as runtimeChannels } from "../../src/pkg/ipc/channels";
 import fs from "node:fs";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
@@ -37,7 +40,6 @@ const functions = [
   "setLiveTaskLifecycle",
   "surfaceLiveTaskPersistenceFailure",
   "publishTasksState",
-  "publishTaskSurfaceStatus",
 ].map((name) => bytes(functionNode(name)));
 const activity = functionNode("createLiveChatGptRoute")
   .body.body.filter((node) => node.type === "VariableDeclaration")
@@ -129,7 +131,7 @@ function host(lifecycle: ProductTaskLifecycle = "idle") {
     },
     channels: {
       tasksState: "controlled-tasks",
-      taskSurfaceState: "controlled-surface",
+      taskSurfaceState: runtimeChannels.taskSurfaceState,
     },
     persistLiveTaskState: () => {
       persisted.push(registry.snapshot());
@@ -138,6 +140,10 @@ function host(lifecycle: ProductTaskLifecycle = "idle") {
     applyLayout: () => presentation.push("layout"),
     focusForLayoutAfterRendererCommit: () => presentation.push("focus-port"),
   };
+  Object.assign(context, {
+    publishTaskSurfaceStatus: taskSurfaces(surfacePorts(context))
+      .publishTaskSurfaceStatus,
+  });
   const api = vm.runInNewContext(
     stripTypeScriptTypes(
       functions.join("\n") +
@@ -198,7 +204,7 @@ async function expectOriginal(h: ReturnType<typeof host>, outcome: Outcome) {
 
 function surfaceStatuses(h: ReturnType<typeof host>) {
   return h.sends
-    .filter((send) => send.channel === "controlled-surface")
+    .filter((send) => send.channel === runtimeChannels.taskSurfaceState)
     .map((send) => TaskSurfaceStatusSchema.parse(send.value));
 }
 const failedSurface = {
@@ -318,7 +324,7 @@ it("retains healthy failed-to-idle recovery with current shallow-copy registry v
   expect(h.persisted).toHaveLength(1);
   expect(h.context.taskSurfaceFailures.has(taskId)).toBe(false);
   expect(h.sends[0]).toMatchObject({
-    channel: "controlled-surface",
+    channel: runtimeChannels.taskSurfaceState,
     value: { taskId, state: "ready", error: null },
   });
   expect(h.presentation).toEqual(["layout", "focus-port"]);
@@ -398,7 +404,7 @@ it("rechecks current route after a synchronous ready publication replaces it", a
   const h = host("failed");
   const opening = h.api.open(taskId);
   h.onSend((channel) => {
-    if (channel === "controlled-surface")
+    if (channel === runtimeChannels.taskSurfaceState)
       h.context.liveTaskRoutes.delete(taskId);
   });
   h.settle("opened");
@@ -466,7 +472,7 @@ it("rechecks current binding after a failed surface publication withdraws its ro
   const h = host();
   const opening = h.api.open(taskId);
   h.onSend((channel) => {
-    if (channel === "controlled-surface")
+    if (channel === runtimeChannels.taskSurfaceState)
       h.context.liveTaskRoutes.delete(taskId);
   });
   h.settle("unreachable");
@@ -495,7 +501,7 @@ it.each(
     const opening = h.api.open(taskId);
     const observerError = new Error("CONTROLLED_SURFACE_OBSERVER_FAILURE");
     h.onSend((channel) => {
-      if (channel === "controlled-surface") throw observerError;
+      if (channel === runtimeChannels.taskSurfaceState) throw observerError;
     });
     h.settle(outcome);
     await expect(opening).resolves.toBe(false);
