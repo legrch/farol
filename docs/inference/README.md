@@ -114,19 +114,10 @@ Later catalogue, context or settings changes cannot alter the captured intent.
 
 ## App Server follow-on
 
-`AppServerConfig` and `AppServerLifecycle` validate inert configuration and
-metadata-only lifecycle values for a separately owned future integration. They
-require the public plan resource, stdio, Responses wire API, `ACCESS_TOKEN` key,
-matched real registered app/initialize name and explicit account-bound
-model/effort evidence. Configuration arguments contain no credential value.
-
-Renewal requires app-owned atomic token-generation evidence, exact clean joined
-stop of the original process, a new initialized process and same-thread resume.
-Refused/unknown lifetimes stay fenced; old epochs cannot publish. These values
-perform no launch, RPC, socket discovery, credential access or provider work.
-The current Task proxy client targets a selected existing host; wiring a new
-plan process is a distinct future Task/process-owner decision, not a constructor
-option added to that client here.
+The inert `AppServerConfig` and `AppServerLifecycle` values that once lived in
+`planresponses` had no caller and were removed. A future App Server integration
+is a distinct Task/process-owner decision and starts from a new design; the
+current Task proxy client targets a selected existing host.
 
 ## Portable verification
 

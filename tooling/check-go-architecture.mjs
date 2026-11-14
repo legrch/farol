@@ -161,7 +161,8 @@ const words = new Set(
   activation chat cli computer delegation install ledger publication read relay
   retirement session
   descriptor digest exchange failure fake fence limit profile root
-  contract doc server service unsupported`
+  contract doc server service unsupported
+  cleanup custody remove stable stage`
     .trim()
     .split(/\s+/u),
 );

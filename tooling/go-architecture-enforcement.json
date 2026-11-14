@@ -4720,11 +4720,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/chat/app/port/historypredecessor.go",
-      "detail": "File name outside the admitted vocabulary: historypredecessor"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/chat/app/port/interruptedretirement.go",
       "detail": "File name outside the admitted vocabulary: interruptedretirement"
     },
@@ -4740,11 +4735,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/chat/app/port/resultstore.go",
-      "detail": "File name outside the admitted vocabulary: resultstore"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/chat/app/port/retention.go",
       "detail": "File name outside the admitted vocabulary: retention"
     },
@@ -4752,11 +4742,6 @@
       "code": "GO_FILE_WORD",
       "file": "modules/chat/app/port/selection.go",
       "detail": "File name outside the admitted vocabulary: selection"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/app/port/sendauthorization.go",
-      "detail": "File name outside the admitted vocabulary: sendauthorization"
     },
     {
       "code": "GO_FILE_WORD",
@@ -4815,11 +4800,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/chat/app/services/lifecycle/readintent.go",
-      "detail": "File name outside the admitted vocabulary: readintent"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/chat/app/services/lifecycle/retained.go",
       "detail": "File name outside the admitted vocabulary: retained"
     },
@@ -4830,18 +4810,8 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/chat/app/services/lifecycle/sendauthorization.go",
-      "detail": "File name outside the admitted vocabulary: sendauthorization"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/chat/app/services/lifecycle/submission.go",
       "detail": "File name outside the admitted vocabulary: submission"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/app/services/lifecycle/transitions.go",
-      "detail": "File name outside the admitted vocabulary: transitions"
     },
     {
       "code": "GO_FILE_WORD",
@@ -4855,18 +4825,8 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/chat/contracts/conversation/readintent.go",
-      "detail": "File name outside the admitted vocabulary: readintent"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/chat/contracts/conversation/retained.go",
       "detail": "File name outside the admitted vocabulary: retained"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/contracts/conversation/sendauthorization.go",
-      "detail": "File name outside the admitted vocabulary: sendauthorization"
     },
     {
       "code": "GO_FILE_WORD",
@@ -4972,11 +4932,6 @@
       "code": "GO_FILE_WORD",
       "file": "modules/chat/infra/clients/planresponses/deadline.go",
       "detail": "File name outside the admitted vocabulary: deadline"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/clients/planresponses/followon.go",
-      "detail": "File name outside the admitted vocabulary: followon"
     },
     {
       "code": "GO_FILE_WORD",
@@ -5500,23 +5455,8 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/boot/darwin.go",
-      "detail": "File name outside the admitted vocabulary: darwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/darwin.go",
-      "detail": "File name outside the admitted vocabulary: darwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/computer/infra/filesystem/edit.go",
       "detail": "File name outside the admitted vocabulary: edit"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/linux.go",
-      "detail": "File name outside the admitted vocabulary: linux"
     },
     {
       "code": "GO_FILE_WORD",
@@ -5530,73 +5470,13 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/mutationdarwin.go",
-      "detail": "File name outside the admitted vocabulary: mutationdarwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/mutationunsupported.go",
-      "detail": "File name outside the admitted vocabulary: mutationunsupported"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/computer/infra/filesystem/observe.go",
       "detail": "File name outside the admitted vocabulary: observe"
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/publicationguard.go",
-      "detail": "File name outside the admitted vocabulary: publicationguard"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/computer/infra/filesystem/publish.go",
       "detail": "File name outside the admitted vocabulary: publish"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/remove.go",
-      "detail": "File name outside the admitted vocabulary: remove"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/scratchcleanupdarwin.go",
-      "detail": "File name outside the admitted vocabulary: scratchcleanupdarwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/scratchcleanupunsupported.go",
-      "detail": "File name outside the admitted vocabulary: scratchcleanupunsupported"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/scratchdirectorydarwin.go",
-      "detail": "File name outside the admitted vocabulary: scratchdirectorydarwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/scratchfilecleanupdarwin.go",
-      "detail": "File name outside the admitted vocabulary: scratchfilecleanupdarwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/scratchfiledarwin.go",
-      "detail": "File name outside the admitted vocabulary: scratchfiledarwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/scratchreadbinding.go",
-      "detail": "File name outside the admitted vocabulary: scratchreadbinding"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/scratchstagedarwin.go",
-      "detail": "File name outside the admitted vocabulary: scratchstagedarwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/scratchstageunsupported.go",
-      "detail": "File name outside the admitted vocabulary: scratchstageunsupported"
     },
     {
       "code": "GO_FILE_WORD",
@@ -5830,11 +5710,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/repos/access/cleanup.go",
-      "detail": "File name outside the admitted vocabulary: cleanup"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/computer/infra/repos/access/closedinspection.go",
       "detail": "File name outside the admitted vocabulary: closedinspection"
     },
@@ -5862,11 +5737,6 @@
       "code": "GO_FILE_WORD",
       "file": "modules/computer/infra/repos/access/qualification.go",
       "detail": "File name outside the admitted vocabulary: qualification"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/repos/access/stage.go",
-      "detail": "File name outside the admitted vocabulary: stage"
     },
     {
       "code": "GO_FILE_WORD",
@@ -6192,11 +6062,6 @@
       "code": "GO_FILE_WORD",
       "file": "modules/release/infra/native/appidentity/xml.go",
       "detail": "File name outside the admitted vocabulary: xml"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/apptree/cleanup.go",
-      "detail": "File name outside the admitted vocabulary: cleanup"
     },
     {
       "code": "GO_FILE_WORD",
@@ -6625,16 +6490,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "transport/desktop/connectordarwin.go",
-      "detail": "File name outside the admitted vocabulary: connectordarwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "transport/desktop/connectorunsupported.go",
-      "detail": "File name outside the admitted vocabulary: connectorunsupported"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "transport/desktop/discovery.go",
       "detail": "File name outside the admitted vocabulary: discovery"
     },
@@ -6671,11 +6526,6 @@
     {
       "code": "GO_INFRA_SERVICE",
       "file": "modules/chat/infra/clients/planresponses/deadline.go",
-      "detail": "github.com/legrch/farol/modules/chat/app/services/inference"
-    },
-    {
-      "code": "GO_INFRA_SERVICE",
-      "file": "modules/chat/infra/clients/planresponses/followon.go",
       "detail": "github.com/legrch/farol/modules/chat/app/services/inference"
     },
     {
@@ -7005,6 +6855,11 @@
     },
     {
       "code": "GO_OPERATION_SHAPE",
+      "file": "modules/chat/app/services/lifecycle/authority.go",
+      "detail": "Service.CreateConversationAuthorized must take (context.Context, CreateConversationAuthorizedCommand or CreateConversationAuthorizedQuery) and return (*CreateConversationAuthorizedResult, error)"
+    },
+    {
+      "code": "GO_OPERATION_SHAPE",
       "file": "modules/chat/app/services/lifecycle/browser.go",
       "detail": "Service.PrepareNext must take (context.Context, PrepareNextCommand or PrepareNextQuery) and return (*PrepareNextResult, error)"
     },
@@ -7030,17 +6885,17 @@
     },
     {
       "code": "GO_OPERATION_SHAPE",
-      "file": "modules/chat/app/services/lifecycle/readintent.go",
+      "file": "modules/chat/app/services/lifecycle/intent.go",
       "detail": "Service.PromoteConversation must take (context.Context, PromoteConversationCommand or PromoteConversationQuery) and return (*PromoteConversationResult, error)"
     },
     {
       "code": "GO_OPERATION_SHAPE",
-      "file": "modules/chat/app/services/lifecycle/readintent.go",
+      "file": "modules/chat/app/services/lifecycle/intent.go",
       "detail": "Service.PromoteConversationAuthorized must take (context.Context, PromoteConversationAuthorizedCommand or PromoteConversationAuthorizedQuery) and return (*PromoteConversationAuthorizedResult, error)"
     },
     {
       "code": "GO_OPERATION_SHAPE",
-      "file": "modules/chat/app/services/lifecycle/readintent.go",
+      "file": "modules/chat/app/services/lifecycle/intent.go",
       "detail": "Service.WithdrawReadIntent must take (context.Context, WithdrawReadIntentCommand or WithdrawReadIntentQuery) and return (*WithdrawReadIntentResult, error)"
     },
     {
@@ -7057,11 +6912,6 @@
       "code": "GO_OPERATION_SHAPE",
       "file": "modules/chat/app/services/lifecycle/retirement.go",
       "detail": "Service.Retire must take (context.Context, RetireCommand or RetireQuery) and return (*RetireResult, error)"
-    },
-    {
-      "code": "GO_OPERATION_SHAPE",
-      "file": "modules/chat/app/services/lifecycle/sendauthorization.go",
-      "detail": "Service.CreateConversationAuthorized must take (context.Context, CreateConversationAuthorizedCommand or CreateConversationAuthorizedQuery) and return (*CreateConversationAuthorizedResult, error)"
     },
     {
       "code": "GO_OPERATION_SHAPE",
@@ -8165,18 +8015,18 @@
     },
     {
       "code": "GO_TEST_MISSING",
-      "file": "modules/chat/app/services/lifecycle/transitions.go",
-      "detail": "Behavior without transitions_test.go"
+      "file": "modules/chat/app/services/lifecycle/turn.go",
+      "detail": "Behavior without turn_test.go"
+    },
+    {
+      "code": "GO_TEST_MISSING",
+      "file": "modules/chat/contracts/conversation/authority.go",
+      "detail": "Behavior without authority_test.go"
     },
     {
       "code": "GO_TEST_MISSING",
       "file": "modules/chat/contracts/conversation/history.go",
       "detail": "Behavior without history_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/chat/contracts/conversation/sendauthorization.go",
-      "detail": "Behavior without sendauthorization_test.go"
     },
     {
       "code": "GO_TEST_MISSING",
@@ -8495,8 +8345,8 @@
     },
     {
       "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/boot/darwin.go",
-      "detail": "Behavior without darwin_test.go"
+      "file": "modules/computer/infra/boot/boot_darwin.go",
+      "detail": "Behavior without boot_darwin_test.go"
     },
     {
       "code": "GO_TEST_MISSING",
@@ -8505,53 +8355,13 @@
     },
     {
       "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/filesystem/darwin.go",
-      "detail": "Behavior without darwin_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/filesystem/linux.go",
-      "detail": "Behavior without linux_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
       "file": "modules/computer/infra/filesystem/mutate.go",
       "detail": "Behavior without mutate_test.go"
     },
     {
       "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/filesystem/mutationdarwin.go",
-      "detail": "Behavior without mutationdarwin_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
       "file": "modules/computer/infra/filesystem/remove.go",
       "detail": "Behavior without remove_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/filesystem/scratchcleanupunsupported.go",
-      "detail": "Behavior without scratchcleanupunsupported_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/filesystem/scratchdirectorydarwin.go",
-      "detail": "Behavior without scratchdirectorydarwin_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/filesystem/scratchfiledarwin.go",
-      "detail": "Behavior without scratchfiledarwin_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/filesystem/scratchreadbinding.go",
-      "detail": "Behavior without scratchreadbinding_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/computer/infra/filesystem/scratchstageunsupported.go",
-      "detail": "Behavior without scratchstageunsupported_test.go"
     },
     {
       "code": "GO_TEST_MISSING",
@@ -9160,13 +8970,8 @@
     },
     {
       "code": "GO_TEST_MISSING",
-      "file": "transport/desktop/connectordarwin.go",
-      "detail": "Behavior without connectordarwin_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "transport/desktop/connectorunsupported.go",
-      "detail": "Behavior without connectorunsupported_test.go"
+      "file": "transport/desktop/unsupported.go",
+      "detail": "Behavior without unsupported_test.go"
     },
     {
       "code": "GO_TEST_ORPHAN",
@@ -9205,31 +9010,6 @@
     },
     {
       "code": "GO_TEST_ORPHAN",
-      "file": "modules/chat/app/services/lifecycle/bytebounds_test.go",
-      "detail": "No bytebounds.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/chat/app/services/lifecycle/followstate_test.go",
-      "detail": "No followstate.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/chat/app/services/lifecycle/freezesend_test.go",
-      "detail": "No freezesend.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/chat/app/services/lifecycle/publication_test.go",
-      "detail": "No publication.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/chat/contracts/conversation/followstate_test.go",
-      "detail": "No followstate.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
       "file": "modules/chat/domain/contextbudget/policy_test.go",
       "detail": "No policy.go beside this test"
     },
@@ -9252,16 +9032,6 @@
       "code": "GO_TEST_ORPHAN",
       "file": "modules/chat/domain/modelselection/usageboundaries_test.go",
       "detail": "No usageboundaries.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/chat/domain/stream/clone_test.go",
-      "detail": "No clone.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/chat/domain/turn/provider_test.go",
-      "detail": "No provider.go beside this test"
     },
     {
       "code": "GO_TEST_ORPHAN",
@@ -9515,11 +9285,6 @@
     },
     {
       "code": "GO_TEST_ORPHAN",
-      "file": "modules/computer/infra/filesystem/scratchmutationdarwin_test.go",
-      "detail": "No scratchmutationdarwin.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
       "file": "modules/computer/infra/filesystem/scratchpublicationnative_test.go",
       "detail": "No scratchpublicationnative.go beside this test"
     },
@@ -9527,11 +9292,6 @@
       "code": "GO_TEST_ORPHAN",
       "file": "modules/computer/infra/filesystem/scratchread_test.go",
       "detail": "No scratchread.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "modules/computer/infra/filesystem/scratchreaddarwin_test.go",
-      "detail": "No scratchreaddarwin.go beside this test"
     },
     {
       "code": "GO_TEST_ORPHAN",
@@ -10207,11 +9967,6 @@
       "code": "GO_TEST_ORPHAN",
       "file": "transport/desktop/connectorcloseassertion_test.go",
       "detail": "No connectorcloseassertion.go beside this test"
-    },
-    {
-      "code": "GO_TEST_ORPHAN",
-      "file": "transport/desktop/connectornative_test.go",
-      "detail": "No connectornative.go beside this test"
     },
     {
       "code": "GO_TEST_ORPHAN",

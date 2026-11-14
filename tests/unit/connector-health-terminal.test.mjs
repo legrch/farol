@@ -1,4 +1,5 @@
-import { observeOperation } from "../../apps/desktop/operations/observe";
+import { connectorHealth } from "../../apps/desktop/connector/supervisor.ts";
+import { connectorHost } from "../support/connector-host.ts";
 import fs from "node:fs";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
@@ -25,16 +26,6 @@ function visit(node) {
 }
 visit(tree);
 if (!branch) throw new Error("CONNECTOR_HEALTH_CASE_MISSING");
-const healthObserver = parse(source, {
-  sourceType: "module",
-  plugins: ["typescript"],
-}).program.body.find(
-  (node) =>
-    node.type === "FunctionDeclaration" &&
-    node.id?.name === "observedConnectorHealth",
-);
-if (!healthObserver) throw Error("CONNECTOR_HEALTH_OBSERVER_MISSING");
-const healthSource = source.slice(healthObserver.start, healthObserver.end);
 const generation = "a".repeat(64);
 function harness(observation, healthy = false) {
   const snapshot = {
@@ -56,7 +47,6 @@ function harness(observation, healthy = false) {
     },
   };
   const context = {
-    observeOperation,
     operationsStore: () => ({ record() {} }),
     command: { kind: "connector.check-health" },
     secureMcpConnectorRuntime: {
@@ -103,10 +93,13 @@ function harness(observation, healthy = false) {
     },
     ProductConfigurationResultSchema: { parse: (value) => value },
   };
+  // The branch calls the supervisor's observer under the name main.ts binds.
+  context.observedConnectorHealth = connectorHealth(
+    connectorHost(context),
+  ).observedConnectorHealth;
   const handle = vm.runInNewContext(
     stripTypeScriptTypes(
-      `${healthSource}
-async function handle() { switch(command.kind) { ${branch} } } handle`,
+      `async function handle() { switch(command.kind) { ${branch} } } handle`,
     ),
     context,
   );

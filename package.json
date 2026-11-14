@@ -1,9 +1,9 @@
 {
   "name": "farol",
-  "version": "0.5.24",
+  "version": "0.5.25",
   "farolRelease": {
     "updateChannel": "github-stable",
-    "buildVersion": "80"
+    "buildVersion": "81"
   },
   "private": true,
   "description": "Isolated local preview of the Farol modular monolith.",
@@ -19,7 +19,7 @@
     "lint": "node tooling/lint.mjs && node tooling/lint-renderer.mjs",
     "format": "prettier --write . !.claude/worktrees",
     "format:check": "prettier --check . !.claude/worktrees",
-    "architecture": "node tooling/check-architecture.mjs",
+    "architecture": "node tooling/check-architecture.mjs && node tooling/check-source-slicing.mjs",
     "runtime:check": "node tooling/check-runtime-launches.mjs",
     "docs:check": "python3 -B docs/tools/check.py && python3 -B -m unittest discover -s docs/tools -p 'test_*.py'",
     "test": "vitest run",

@@ -107,7 +107,6 @@ jobs:
       - name: Run the hermetic hidden Electron e2e lanes
         run: |
           task test:e2e:chatgpt-startup-readiness
-          /usr/bin/python3 -I scripts/assert-owner-untouched.py -- node tests/e2e/chatgpt-update-idle.e2e.mjs
           /usr/bin/python3 -I scripts/assert-owner-untouched.py -- node tests/e2e/deep-test-ipc-order.e2e.mjs
       - name: Show the failed native cases
         if: failure()

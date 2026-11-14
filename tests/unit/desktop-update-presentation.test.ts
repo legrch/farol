@@ -2,6 +2,11 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import vm from "node:vm";
 import { describe, expect, it } from "vitest";
+import {
+  shellCommands,
+  type ShellPublisher,
+} from "../../apps/desktop/shell/navigation";
+import { navigationHost } from "../support/navigation-host";
 
 const names = [
   "requestQuickSwitcher",
@@ -11,8 +16,12 @@ const names = [
   "closeShellOverlay",
 ] as const;
 
+// The publishers main.ts still owns, extracted from its source.
+const sliced = ["requestUpdates", "requestSettings"] as const;
+
 // Execute the actual small native publisher callbacks with injected window/IO
-// ports. These source fixtures prove no Electron window, updater or native focus.
+// ports: the navigation commands by import, the two main.ts keeps from its
+// source. These fixtures prove no Electron window, updater or native focus.
 async function publishers({
   applying = false,
   quitting = false,
@@ -23,7 +32,7 @@ async function publishers({
     path.resolve(import.meta.dirname, "../../src/apps/desktop/main.ts"),
     "utf8",
   );
-  const callbacks = names.map((name) => {
+  const callbacks = sliced.map((name) => {
     const signature = `function ${name}(): void {`;
     const begin = source.indexOf(signature);
     if (begin < 0) throw Error(`NATIVE_PUBLISHER_MISSING:${name}`);
@@ -60,10 +69,27 @@ async function publishers({
       throw Error("UNEXPECTED_RECOVERY");
     },
   };
-  const exports = vm.runInNewContext(
-    `${callbacks.join("\n")}\n({${names.join(",")}})`,
-    context,
-  ) as Record<(typeof names)[number], () => void>;
+  const publishShellAction = ((...args: unknown[]) =>
+    (context.publishShellAction as (...values: unknown[]) => void)(
+      ...args,
+    )) as ShellPublisher["publishShellAction"];
+  const commands = shellCommands(navigationHost(context), {
+    publishShellAction,
+    applyLayout: () => (context.applyLayout as () => void)(),
+    focusForLayout: () => (context.focusForLayout as () => void)(),
+    focusForLayoutAfterRendererCommit: () => {
+      throw Error("UNEXPECTED_DEFERRED_FOCUS");
+    },
+  });
+  const exports: Record<(typeof names)[number], () => void> = {
+    ...(vm.runInNewContext(
+      `${callbacks.join("\n")}\n({${sliced.join(",")}})`,
+      context,
+    ) as Record<(typeof sliced)[number], () => void>),
+    requestQuickSwitcher: commands.requestQuickSwitcher,
+    requestSidebarToggle: commands.requestSidebarToggle,
+    closeShellOverlay: commands.closeShellOverlay,
+  };
   return {
     effects,
     publications,

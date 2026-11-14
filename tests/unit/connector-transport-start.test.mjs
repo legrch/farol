@@ -15,20 +15,34 @@ import { ConnectorTransportWatch } from "../../apps/desktop/connector-transport-
 import { ConnectorHostError } from "../../apps/desktop/bridge/connector-host.ts";
 import { TUNNEL_CLIENT } from "../../apps/desktop/tunnel-client-contract.ts";
 import { ConnectorRuntimeEffectUnknown } from "../../src/apps/desktop/secure-mcp-connector-runtime.ts";
+import { connectorTransport } from "../../apps/desktop/connector/supervisor.ts";
+import { connectorHost } from "../support/connector-host.ts";
 
-// Source-level host sequencing only. The actual AST-extracted start and recovery
-// join execute; IO ports and Settings publications are controlled doubles. A
+// Partial Settings fixtures: the supervisor's schema parse is outside this
+// sequencing test, and the summary fence answers as the fixture says.
+const admission = vi.hoisted(() => ({ computerConnectorAdmission: null }));
+vi.mock("../../src/pkg/product-settings/contract.ts", async (original) => ({
+  ...(await original()),
+  ProductConfigurationResultSchema: { parse: (result) => result },
+}));
+vi.mock(
+  "../../src/apps/desktop/summary-fence-recovery.ts",
+  async (original) => ({
+    ...(await original()),
+    computerConnectorAdmission: (...values) =>
+      admission.computerConnectorAdmission(...values),
+  }),
+);
+
+// Source-level host sequencing only. The actual AST-extracted start joins the
+// imported supervisor recovery; IO ports and Settings publications are controlled doubles. A
 // known fixture Open/Close/Start is not Go, native, filesystem or provider proof.
 // The real watcher supplies its observation epoch, never launch authority.
 const source = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
 const wanted = new Set([
   "startAdmittedSecureMcpConnector",
-  "captureConnectorTransport",
-  "connectorTransportCurrent",
-  "recoverConnectorTransport",
   "observeConnectorStart",
   "recordConnectorRuntime",
-  "connectorAttemptGeneration",
 ]);
 const declarations = parse(source, {
   sourceType: "module",
@@ -274,7 +288,12 @@ function fixture({ pause, startResult = originalStart, openError } = {}) {
       recheck: port("resources"),
     }),
   };
-  const actual = vm.runInNewContext(compiled, context);
+  admission.computerConnectorAdmission = context.computerConnectorAdmission;
+  // The extracted start reads the supervisor's attempt key as main.ts does,
+  // and the supervisor reaches the extracted functions through its ports.
+  const transport = connectorTransport(connectorHost(context));
+  context.connectorAttemptGeneration = transport.connectorAttemptGeneration;
+  const actual = { ...vm.runInNewContext(compiled, context), ...transport };
   let recoveryResult;
   const watch = new ConnectorTransportWatch({
     capture: actual.captureConnectorTransport,

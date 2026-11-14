@@ -1,8 +1,3 @@
-import { connectorRuntimeUncertain } from "../../src/pkg/product-settings/connector-uncertainty.ts";
-import fs from "node:fs";
-import vm from "node:vm";
-import { stripTypeScriptTypes } from "node:module";
-import { parse } from "@babel/parser";
 import { ConnectionStatusTracker } from "../../apps/desktop/connection-status";
 import { expect, it } from "vitest";
 import {
@@ -10,6 +5,11 @@ import {
   type OwnerStopPresentation,
   type OwnerStopPresentationFrame,
 } from "../../apps/desktop/owner-stop-presentation";
+import {
+  connectorHealth,
+  type OwnerStoppedCapture,
+} from "../../apps/desktop/connector/supervisor";
+import { connectorHost } from "../support/connector-host";
 // Pure presentation correlation only, not Go authority or native drain evidence.
 function fixture() {
   const original: OwnerStopPresentation = {
@@ -127,32 +127,8 @@ it("rejects a missing or reconstructed receipt and ordinary close", () => {
   ).toBe(false);
 });
 
-// Exercise the actual main-process joins with injected settings/Go ports. This
+// Exercise the actual supervisor joins with injected settings/Go ports. This
 // proves presentation fencing, not native Settings delivery or process cleanup.
-const mainSource = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
-const mainDeclarations = parse(mainSource, {
-  sourceType: "module",
-  plugins: ["typescript"],
-}).program.body.filter(
-  (node) =>
-    node.type === "FunctionDeclaration" &&
-    ["captureConnectorStop", "ownerStoppedCurrent"].includes(
-      node.id?.name ?? "",
-    ),
-);
-if (mainDeclarations.length !== 2)
-  throw Error("OWNER_STOP_MAIN_PRESENTATION_SOURCE_MISSING");
-const mainCompiled = stripTypeScriptTypes(
-  mainDeclarations
-    .map((node) => {
-      if (node.start == null || node.end == null)
-        throw Error("OWNER_STOP_MAIN_PRESENTATION_RANGE_MISSING");
-      return mainSource.slice(node.start, node.end);
-    })
-    .join("\n") +
-    "; ({ capture: captureConnectorStop, current: ownerStoppedCurrent });",
-);
-
 const settingsFences = [
   "pending-edit",
   "unknown-delivery",
@@ -190,21 +166,23 @@ function mainFixture() {
   };
   const saved = { ...original, owner, connector, core };
   const context = {
-    connectorRuntimeUncertain,
     configuration: owner,
     secureMcpConnectorRuntime: connector,
     desktopGoCore: core,
     buildIdentity: { buildId: original.receipt.result.binding.buildId },
-    completedOwnerStop: saved,
-    ownerStopPresentationCurrent,
     connectorTaskAdmission: false,
     workspaceMutationAdmission: false,
     quitInProgress: false,
     installedUpdateAdmission: false,
   };
-  const actual = vm.runInNewContext(mainCompiled, context) as {
-    capture(): unknown;
-    current(value: OwnerStopPresentation): boolean;
+  const health = connectorHealth(connectorHost(context));
+  // The fixture's doubles stand in for the Settings, helper and Go owners.
+  const completed = saved as unknown as OwnerStoppedCapture;
+  health.completedOwnerStop.current = completed;
+  const actual = {
+    capture: health.captureConnectorStop,
+    current: (value: OwnerStopPresentation) =>
+      health.ownerStoppedCurrent(value as OwnerStoppedCapture),
   };
   return {
     actual,

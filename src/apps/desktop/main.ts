@@ -18,7 +18,7 @@ import {
   recordedModelTurn,
   recordedCompaction,
 } from "../../../apps/desktop/operations/model-turn";
-import { desktopStatePaths } from "../../../apps/desktop/host/state-paths";
+import { desktopStatePaths } from "../../../apps/desktop/host/paths";
 import { OperationsStore } from "../../../apps/desktop/operations/store";
 import {
   ProcessAuditCollector,
@@ -34,17 +34,7 @@ import {
   setupCompletionAllowed,
   type SetupCompletionContext,
 } from "../../ui/setup-completion";
-import {
-  ownerStopPresentationCurrent,
-  type OwnerStopPresentation,
-} from "../../../apps/desktop/owner-stop-presentation";
 
-import { ConnectionStatusTracker } from "../../../apps/desktop/connection-status";
-import { passiveHealthObserver } from "../../../apps/desktop/operations/passive-health";
-import {
-  unavailableConnectionStatus,
-  type ConnectionStatusView,
-} from "../../../apps/desktop/renderer/connection-status";
 import { startDesktopGoRecovery } from "../../../apps/desktop/recovery/core-host";
 import { createStartupRecoverySession } from "../../../apps/desktop/recovery/session";
 import { beginStartupMaintenanceAttempt } from "../../../apps/desktop/recovery/receipt";
@@ -86,7 +76,10 @@ import type {
   SettingsDeliveryResult,
   ComputerConnectorBinding,
 } from "../../../apps/desktop/bridge/wire";
-import { ConnectorTransportWatch } from "../../../apps/desktop/connector-transport-watch";
+import {
+  connectorSupervisor,
+  type ConnectorTransportCapture,
+} from "../../../apps/desktop/connector/supervisor";
 import { createDesktopChatBrowser } from "../../../apps/desktop/go-chat-host";
 import { GoChatBrowserDriver } from "../../../apps/desktop/go-chat-browser";
 import {
@@ -131,6 +124,11 @@ declare const __FAROL_GO_SHELL__: {
 } | null;
 import { createMenuBar, menuBarIconState } from "./menu-bar";
 import {
+  aboutCommand,
+  applicationMenu,
+} from "../../../apps/desktop/shell/menu";
+import { surfaceNavigation } from "../../../apps/desktop/shell/navigation";
+import {
   desktopCoreArtifactRoot,
   desktopDevShellImageMatches,
 } from "../../../apps/desktop/dev-core-layout";
@@ -173,8 +171,6 @@ import {
   session,
   shell,
   WebContentsView,
-  type Input,
-  type MenuItemConstructorOptions,
   type SaveDialogOptions,
 } from "electron";
 import {
@@ -269,11 +265,8 @@ import { channels } from "../../pkg/ipc/channels";
 import {
   defaultNavigationShortcuts,
   parseNavigationShortcuts,
-  sidebarShortcutMatches,
-  sectionForShortcut,
   type NavigationShortcuts,
 } from "../../pkg/ipc/navigation-shortcuts";
-import type { ShellAction, ShellActionSource } from "../../pkg/ipc/shell-state";
 import type { RuntimeStatus } from "../../pkg/ipc/runtime-status";
 import type { TaskSurfaceStatus } from "../../pkg/ipc/task-surface-status";
 import {
@@ -291,7 +284,6 @@ import {
   embeddedBrowserSelected,
 } from "../../pkg/product-settings/browser-presentation";
 import {
-  ShellLayoutSchema,
   type ShellOverlay,
   type SidebarMode,
   type SurfaceSection,
@@ -341,7 +333,7 @@ import {
   ProductConfigurationService,
   ProductSettingsStore,
 } from "./product-configuration";
-import { deriveSurfaceLayout, shellGeometry } from "./surface-layout";
+import { shellGeometry } from "./surface-layout";
 import {
   NativeReadonlyWorkspace,
   SAFE_OPEN_HELPER,
@@ -925,7 +917,6 @@ if (process.platform === "darwin") {
 }
 
 let window: BrowserWindow | null = null;
-let aboutOpen = false;
 let aboutPanel: DesktopAboutPanel | null = null;
 const updatesPanel = new DesktopUpdatesPanel(
   () =>
@@ -958,57 +949,60 @@ let connectorTaskAdmission = false;
 // Manual owner checks (Ping ChatGPT, Full check) reserve dispatch, but do not
 // alter the connector or the sidebar connection status.
 let connectorTaskAdmissionPurpose: "manual-diagnostic" | null = null;
-
-function connectionAdmissionInProgress(): boolean {
-  return (
-    connectorTaskAdmission &&
-    connectorTaskAdmissionPurpose !== "manual-diagnostic"
-  );
-}
 // Presentation spans workspace admission, tunnel startup and the app check.
 // It conveys no authority and is never restored from Activity or saved settings.
 let startupConnectionChecking = true;
 let connectorStartInFlight: Promise<void> | null = null;
 let connectorStartCancellation: AbortController | null = null;
 let startupConnectorResumeCancelled = false;
-let connectorTransportWatch: ConnectorTransportWatch<ConnectorTransportCapture> | null =
-  null;
-let connectorTransportTimer: NodeJS.Timeout | null = null;
-let connectorStatusTimer: NodeJS.Timeout | null = null;
-let completedOwnerStop: OwnerStoppedCapture | null = null;
-let connectionStatusRevision = 0;
-let connectionStatusBody = "";
-let retainedConnectionView: ConnectionStatusView = unavailableConnectionStatus;
-const connectorConnection =
-  new ConnectionStatusTracker<ConnectionStatusCapture>({
-    capture: captureConnectionStatus,
-    current: connectionStatusCurrent,
-    observe: async (capture) => {
-      if (capture.kind === "owner-stopped") {
-        const original = capture.original;
-        const result =
-          await original.core.observeComputerConnectorOwnerStoppedHealth(
-            original.receipt,
-          );
-        return connectionStatusCurrent(capture) ? result : null;
-      }
-      const original = capture.original;
-      const health = await original.connector.observeHealth();
-      if (
-        !health ||
-        health.runtimeGeneration !== original.runtimeGeneration ||
-        !connectorHealthCurrent(original)
-      )
-        return null;
-      const result = await original.core.observeComputerConnectorHealth(
-        health.expectedInstanceId,
-        health.snapshot,
-      );
-      return connectorHealthCurrent(original) ? result : null;
-    },
-    now: Date.now,
-    monotonic: () => performance.now(),
-  });
+// Connector supervision reads each owner below when a predicate runs. It is
+// built where its status tracker always was; see apps/desktop/connector.
+const {
+  connectorAttemptGeneration,
+  captureConnectorStop,
+  ownerStoppedCurrent,
+  completedOwnerStop,
+  connectionAdmissionInProgress,
+  connectorConnection,
+  captureConnectionStatus,
+  connectionStatusCurrent,
+  currentConnectionStatus,
+  observedConnectorHealth,
+  connectorTransportWatch,
+  connectorTransportTimer,
+  connectorStatusTimer,
+  startConnectorTransportWatch,
+} = connectorSupervisor({
+  configuration: () => configuration,
+  secureMcpConnectorRuntime: () => secureMcpConnectorRuntime,
+  desktopGoCore: () => desktopGoCore,
+  window: () => window,
+  quitInProgress: () => quitInProgress,
+  installedUpdateAdmission: () => installedUpdateAdmission,
+  connectorTaskAdmission: () => connectorTaskAdmission,
+  setConnectorTaskAdmission: (value) => {
+    connectorTaskAdmission = value;
+  },
+  connectorTaskAdmissionPurpose: () => connectorTaskAdmissionPurpose,
+  connectorStartInFlight: () => connectorStartInFlight,
+  configurationRequests: () => configurationRequests,
+  summaryFenceRecovery: () => summaryFenceRecovery,
+  workspaceMutationAdmission: () => workspaceMutationAdmission,
+  codexAgentOperationActive,
+  authorityTransitions: () => authorityTransitions,
+  operationsStore,
+  buildId: buildIdentity.buildId,
+  isolatedE2EHome,
+  powerMonitor: () => powerMonitor,
+  computerMcpLifecycle,
+  stopAndConfirmComputerMcp,
+  observeConnectorStart,
+  startAdmittedSecureMcpConnector,
+  recordConnectorRuntime,
+  reportConnectorTransport,
+  transitionRefusal,
+  configurationFailure,
+});
 
 // F3-1b: one authority transition at a time. A command that changes Computer
 // authority holds it through its commit; a connector start and an Agent
@@ -1396,6 +1390,89 @@ const managedChatGptRoutes = new Set<ChatGptRoute>();
 const SIGN_IN_SURFACE_ID = "farol-sign-in";
 let browserHomeSurfaceOpen = false;
 let checkFeedbackVisible = false;
+// Surface navigation writes the layout state above and reads each owner when
+// a function runs; see apps/desktop/shell/navigation.ts.
+const {
+  publishLayout,
+  publishShellAction,
+  focusForLayoutAfterRendererCommit,
+  requestQuickSwitcher,
+  requestSidebarToggle,
+  handleShortcut,
+  applyRendererLayout,
+  currentSurfaceLayout,
+  applyLayout,
+} = surfaceNavigation({
+  state: {
+    get section() {
+      return section;
+    },
+    set section(value) {
+      section = value;
+    },
+    get selectedTaskId() {
+      return selectedTaskId;
+    },
+    set selectedTaskId(value) {
+      selectedTaskId = value;
+    },
+    get setupOpen() {
+      return setupOpen;
+    },
+    set setupOpen(value) {
+      setupOpen = value;
+    },
+    get checkFeedbackVisible() {
+      return checkFeedbackVisible;
+    },
+    set checkFeedbackVisible(value) {
+      checkFeedbackVisible = value;
+    },
+    get sidebarMode() {
+      return sidebarMode;
+    },
+    set sidebarMode(value) {
+      sidebarMode = value;
+    },
+    get sidebarWidth() {
+      return sidebarWidth;
+    },
+    set sidebarWidth(value) {
+      sidebarWidth = value;
+    },
+    get shellOverlay() {
+      return shellOverlay;
+    },
+    set shellOverlay(value) {
+      shellOverlay = value;
+    },
+    get browserHomeSurfaceOpen() {
+      return browserHomeSurfaceOpen;
+    },
+    get navigationShortcuts() {
+      return navigationShortcuts;
+    },
+  },
+  window: () => window,
+  quitInProgress: () => quitInProgress,
+  installedUpdateAdmission: () => installedUpdateAdmission,
+  runtimeState: () => runtimeState,
+  taskViews: () => taskViews,
+  taskViewKinds: () => taskViewKinds,
+  nativeViewVisibility: () => nativeViewVisibility,
+  liveTaskRoutes,
+  signInSurfaceId: SIGN_IN_SURFACE_ID,
+  compactBrowser: () =>
+    compactBrowserSelected({
+      environment: runtimeEnvironment,
+      demoMode,
+      legacySetupTestMode,
+    }),
+  productTasksState,
+  attachTaskView,
+  openLiveTaskSurface,
+  requestSettings,
+});
 const liveTaskConversationUrls = new Map<string, string | null>();
 let liveTaskStore: PrivateLiveTaskStore | null = null;
 let productAgentStore: PrivateProductAgentStore | null = null;
@@ -4425,604 +4502,6 @@ async function verifyTunnelClientExecutable(
   }
 }
 
-function connectorAttemptGeneration(
-  input: Readonly<{
-    connectorGeneration: number;
-    computerGeneration: number;
-    launchContractSha256: string;
-    phase: string;
-  }>,
-): string {
-  return createHash("sha256")
-    .update(
-      [
-        String(input.connectorGeneration),
-        String(input.computerGeneration),
-        buildIdentity.buildId,
-        input.launchContractSha256,
-        input.phase,
-      ].join("\0"),
-    )
-    .digest("hex");
-}
-
-type ConnectorTransportCapture = Readonly<{
-  key: string;
-  owner: ProductConfigurationService;
-  connector: SecureMcpConnectorRuntime;
-  core: DesktopGoCore;
-  binding: Readonly<ComputerConnectorBinding>;
-  revision: number;
-  computerGeneration: number;
-  connectorGeneration: number;
-  runtimeGeneration: string;
-}>;
-
-function captureConnectorTransport(): ConnectorTransportCapture | null {
-  const owner = configuration;
-  const connector = secureMcpConnectorRuntime;
-  const core = desktopGoCore;
-  const snapshot = owner?.snapshot();
-  const binding = core?.currentComputerConnectorBinding();
-  if (!owner || !connector || !core || !binding || snapshot?.status !== "ready")
-    return null;
-  const settings = snapshot.settings;
-  const selected = settings.connectors.secureMcp;
-  const runtime = selected.runtime;
-  if (
-    quitInProgress ||
-    installedUpdateAdmission ||
-    connectorTaskAdmission ||
-    connectorStartInFlight ||
-    configurationRequests ||
-    authorityTransitions.current() ||
-    codexAgentOperationActive() ||
-    connector.hasUnresolvedEffect() ||
-    settings.computer.pendingEdit ||
-    settings.setup.computer.outcomeUnknown ||
-    connectorRuntimeUncertain(settings) ||
-    selected.credential !== "stored" ||
-    !runtime ||
-    runtime.state === "outcome_unknown" ||
-    runtime.buildId !== buildIdentity.buildId ||
-    binding.buildId !== buildIdentity.buildId ||
-    runtime.computerGeneration !== settings.computer.generation ||
-    runtime.connectorGeneration !== selected.generation ||
-    binding.connectorGeneration !== String(selected.generation) ||
-    !computerConnectorAdmission(summaryFenceRecovery).admissible
-  )
-    return null;
-  return Object.freeze({
-    key: [
-      binding.profileId,
-      binding.backendGeneration,
-      binding.runtimeId,
-      runtime.runtimeGeneration,
-    ].join("/"),
-    owner,
-    connector,
-    core,
-    binding,
-    revision: settings.revision,
-    computerGeneration: settings.computer.generation,
-    connectorGeneration: selected.generation,
-    runtimeGeneration: runtime.runtimeGeneration,
-  });
-}
-
-function connectorTransportCurrent(
-  original: ConnectorTransportCapture,
-  revision = original.revision,
-  stopped = false,
-  admitted = false,
-): boolean {
-  const snapshot = original.owner.snapshot();
-  if (
-    configuration !== original.owner ||
-    secureMcpConnectorRuntime !== original.connector ||
-    desktopGoCore !== original.core ||
-    snapshot.status !== "ready" ||
-    quitInProgress ||
-    installedUpdateAdmission ||
-    configurationRequests ||
-    codexAgentOperationActive() ||
-    original.connector.hasUnresolvedEffect() ||
-    snapshot.settings.revision !== revision ||
-    snapshot.settings.computer.generation !== original.computerGeneration ||
-    snapshot.settings.connectors.secureMcp.generation !==
-      original.connectorGeneration ||
-    snapshot.settings.computer.pendingEdit ||
-    snapshot.settings.setup.computer.outcomeUnknown ||
-    connectorRuntimeUncertain(snapshot.settings) ||
-    snapshot.settings.connectors.secureMcp.credential !== "stored" ||
-    !computerConnectorAdmission(summaryFenceRecovery).admissible ||
-    (admitted
-      ? !connectorTaskAdmission ||
-        authorityTransitions.current() !== "connector-start"
-      : connectorTaskAdmission ||
-        connectorStartInFlight !== null ||
-        authorityTransitions.current() !== null)
-  )
-    return false;
-  const runtime = snapshot.settings.connectors.secureMcp.runtime;
-  return stopped
-    ? runtime === null &&
-        original.core.currentComputerConnectorBinding() === undefined
-    : runtime !== null &&
-        runtime.state !== "outcome_unknown" &&
-        runtime.runtimeGeneration === original.runtimeGeneration &&
-        runtime.buildId === buildIdentity.buildId &&
-        original.core.currentComputerConnectorBinding() === original.binding;
-}
-
-async function recoverConnectorTransport(
-  original: ConnectorTransportCapture,
-  observationCurrent: () => boolean,
-  afterKnownClosure?: () => Promise<(() => boolean) | null>,
-): Promise<ProductConfigurationResult> {
-  if (!observationCurrent() || !connectorTransportCurrent(original))
-    return transitionRefusal();
-  const transition = authorityTransitions.tryReserve("connector-start");
-  if (!transition) return transitionRefusal();
-  connectorTaskAdmission = true;
-  try {
-    return await observeConnectorStart(async () => {
-      let revision = original.revision;
-      let stopped = false;
-      let continuationCurrent = observationCurrent;
-      const current = () =>
-        continuationCurrent() &&
-        connectorTransportCurrent(original, revision, stopped, true);
-      if (!current()) return transitionRefusal();
-      try {
-        if (await computerMcpLifecycle().hasUnconfirmedStop())
-          return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
-        if (!current()) return transitionRefusal();
-        // All original MCP leases, tunnel group and this exact Go slot must
-        // acknowledge closure. A missing/no-op Close is not recovery evidence.
-        await stopAndConfirmComputerMcp(
-          original.connector,
-          null,
-          original.core,
-        );
-      } catch {
-        return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
-      }
-      const closure = original.core.computerConnectorClosureReceipt();
-      if (
-        !closure ||
-        closure.result.closed !== true ||
-        Object.entries(original.binding).some(
-          ([key, value]) =>
-            closure.result.binding[key as keyof ComputerConnectorBinding] !==
-            value,
-        )
-      )
-        return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
-      // Close cleared the exact slot. Recheck the unchanged Settings owner
-      // before its stopped publication, then advance only from that original ACK.
-      const snapshot = original.owner.snapshot();
-      if (
-        configuration !== original.owner ||
-        secureMcpConnectorRuntime !== original.connector ||
-        desktopGoCore !== original.core ||
-        quitInProgress ||
-        installedUpdateAdmission ||
-        snapshot.status !== "ready" ||
-        snapshot.settings.revision !== revision ||
-        snapshot.settings.computer.generation !== original.computerGeneration ||
-        snapshot.settings.connectors.secureMcp.generation !==
-          original.connectorGeneration
-      )
-        return transitionRefusal();
-      const result = ProductConfigurationResultSchema.parse(
-        await original.owner.recordSecureMcpStopped(
-          undefined,
-          "stop",
-          revision,
-        ),
-      );
-      if (!result.ok) return result;
-      if (result.snapshot.status !== "ready")
-        return configurationFailure("SETTINGS_WRITE_FAILED");
-      revision = result.snapshot.settings.revision;
-      stopped = true;
-      if (!connectorTransportCurrent(original, revision, stopped, true))
-        return transitionRefusal();
-      if (closure.result.recovery !== "settled")
-        return configurationFailure(
-          closure.result.recovery === "pending_operation"
-            ? "CONNECTOR_RECOVERY_PENDING_OPERATION"
-            : closure.result.recovery === "operation_unknown"
-              ? "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"
-              : closure.result.recovery === "authority_unknown"
-                ? "CONNECTOR_RECOVERY_AUTHORITY_UNAVAILABLE"
-                : "CONNECTOR_RECOVERY_UNAVAILABLE",
-        );
-      if (!continuationCurrent()) {
-        // Only ordinary sleep may pause this SAME original operation here:
-        // exact settled Close and stopped publication are known, and successor
-        // Open/Prepare/Start have not been dispatched. Permanent invalidation
-        // returns null; no phase, ACK, lease or operation deadline is renewed.
-        const resumed = await afterKnownClosure?.();
-        if (!resumed) return transitionRefusal();
-        continuationCurrent = resumed;
-      }
-      if (!current()) return transitionRefusal();
-      // The existing owner handles executable/credential rechecks, Go admission,
-      // new challenge and original result. No Verify or provider prompt is sent.
-      return startAdmittedSecureMcpConnector(
-        false,
-        false,
-        original.binding,
-        continuationCurrent,
-      );
-    });
-  } finally {
-    connectorTaskAdmission = false;
-    transition.release();
-  }
-}
-
-type ConnectorHealthCapture = Readonly<{
-  owner: ProductConfigurationService;
-  connector: SecureMcpConnectorRuntime;
-  core: DesktopGoCore;
-  binding: Readonly<ComputerConnectorBinding>;
-  runtimeGeneration: string;
-  computerGeneration: number;
-  connectorGeneration: number;
-}>;
-
-// Passive diagnostics do not reserve the effect-admission lane or block UI.
-function captureConnectorHealth(): ConnectorHealthCapture | null {
-  const owner = configuration,
-    connector = secureMcpConnectorRuntime,
-    core = desktopGoCore;
-  const state = owner?.snapshot(),
-    binding = core?.currentComputerConnectorBinding();
-  if (
-    !owner ||
-    !connector ||
-    !core?.backendAvailable ||
-    !binding ||
-    state?.status !== "ready" ||
-    quitInProgress ||
-    installedUpdateAdmission
-  )
-    return null;
-  const selected = state.settings.connectors.secureMcp,
-    runtime = selected.runtime;
-  if (
-    !runtime ||
-    runtime.state === "outcome_unknown" ||
-    !connector.isRunning() ||
-    connector.getTunnelObservation() !== null ||
-    connector.hasUnresolvedEffect() ||
-    runtime.buildId !== buildIdentity.buildId ||
-    binding.buildId !== buildIdentity.buildId ||
-    runtime.computerGeneration !== state.settings.computer.generation ||
-    runtime.connectorGeneration !== selected.generation ||
-    binding.connectorGeneration !== String(selected.generation)
-  )
-    return null;
-  return {
-    owner,
-    connector,
-    core,
-    binding,
-    runtimeGeneration: runtime.runtimeGeneration,
-    computerGeneration: runtime.computerGeneration,
-    connectorGeneration: runtime.connectorGeneration,
-  };
-}
-
-function connectorHealthCurrent(original: ConnectorHealthCapture): boolean {
-  const current = captureConnectorHealth();
-  return (
-    current !== null &&
-    current.owner === original.owner &&
-    current.connector === original.connector &&
-    current.core === original.core &&
-    current.runtimeGeneration === original.runtimeGeneration &&
-    current.computerGeneration === original.computerGeneration &&
-    current.connectorGeneration === original.connectorGeneration &&
-    Object.entries(original.binding).every(
-      ([key, value]) =>
-        current.binding[key as keyof typeof current.binding] === value,
-    )
-  );
-}
-
-// Stop correlation does not require a positive health sample or a running
-// helper: an already exited helper can still have an admitted Go owner to close.
-function captureConnectorStop(): Pick<
-  ConnectorHealthCapture,
-  | "owner"
-  | "connector"
-  | "core"
-  | "binding"
-  | "computerGeneration"
-  | "connectorGeneration"
-> | null {
-  const owner = configuration,
-    connector = secureMcpConnectorRuntime,
-    core = desktopGoCore;
-  const state = owner?.snapshot(),
-    binding = core?.currentComputerConnectorBinding();
-  if (
-    !owner ||
-    !connector ||
-    !core?.backendAvailable ||
-    !binding ||
-    state?.status !== "ready" ||
-    quitInProgress ||
-    installedUpdateAdmission ||
-    connectorRuntimeUncertain(state.settings) ||
-    state.settings.computer.pendingEdit !== null ||
-    state.settings.setup.computer.outcomeUnknown ||
-    workspaceMutationAdmission ||
-    connector.hasUnresolvedEffect()
-  )
-    return null;
-  const selected = state.settings.connectors.secureMcp,
-    runtime = selected.runtime;
-  if (
-    binding.buildId !== buildIdentity.buildId ||
-    binding.connectorGeneration !== String(selected.generation) ||
-    (runtime &&
-      (runtime.state === "outcome_unknown" ||
-        runtime.buildId !== buildIdentity.buildId ||
-        runtime.computerGeneration !== state.settings.computer.generation ||
-        runtime.connectorGeneration !== selected.generation))
-  )
-    return null;
-  return {
-    owner,
-    connector,
-    core,
-    binding,
-    computerGeneration: state.settings.computer.generation,
-    connectorGeneration: selected.generation,
-  };
-}
-
-type OwnerStoppedCapture = OwnerStopPresentation &
-  Readonly<{
-    owner: ProductConfigurationService;
-    connector: SecureMcpConnectorRuntime;
-    core: DesktopGoCore;
-  }>;
-type ConnectionStatusCapture =
-  | Readonly<{ kind: "running"; original: ConnectorHealthCapture }>
-  | Readonly<{ kind: "owner-stopped"; original: OwnerStoppedCapture }>;
-
-function ownerStoppedCurrent(original: OwnerStoppedCapture): boolean {
-  const owner = configuration,
-    connector = secureMcpConnectorRuntime,
-    core = desktopGoCore;
-  const state = owner?.snapshot();
-  if (
-    !owner ||
-    !connector ||
-    !core ||
-    state?.status !== "ready" ||
-    completedOwnerStop !== original
-  )
-    return false;
-  return ownerStopPresentationCurrent(original, {
-    owner,
-    connector,
-    core,
-    receipt: core.computerConnectorOwnerStoppedReceipt(),
-    computerGeneration: state.settings.computer.generation,
-    connectorGeneration: state.settings.connectors.secureMcp.generation,
-    backendAvailable: core.backendAvailable,
-    stoppedSettings: state.settings.connectors.secureMcp.runtime === null,
-    setupOutcomeUnknown: connectorRuntimeUncertain(state.settings),
-    settingsEditPending: state.settings.computer.pendingEdit !== null,
-    settingsOutcomeUnknown: state.settings.setup.computer.outcomeUnknown,
-    workspaceMutationInProgress: workspaceMutationAdmission,
-    helperRunning: connector.isRunning(),
-    helperOutcomeUnknown: connector.hasUnresolvedEffect(),
-    tunnelObserved: connector.getTunnelObservation() !== null,
-    currentBinding: core.currentComputerConnectorBinding() !== undefined,
-    admissionInProgress: connectorTaskAdmission,
-    quitting: quitInProgress,
-    updating: installedUpdateAdmission,
-  });
-}
-
-function captureConnectionStatus(): ConnectionStatusCapture | null {
-  if (connectionAdmissionInProgress()) return null;
-  const running = captureConnectorHealth();
-  if (running) return { kind: "running", original: running };
-  const stopped = completedOwnerStop;
-  return stopped && ownerStoppedCurrent(stopped)
-    ? { kind: "owner-stopped", original: stopped }
-    : null;
-}
-
-function connectionStatusCurrent(capture: ConnectionStatusCapture): boolean {
-  if (connectionAdmissionInProgress()) return false;
-  return capture.kind === "running"
-    ? connectorHealthCurrent(capture.original)
-    : ownerStoppedCurrent(capture.original);
-}
-
-function currentConnectionStatus(): ConnectionStatusView {
-  const value = connectorConnection.view();
-  const body = JSON.stringify({ ...value, revision: 0 });
-  if (body !== connectionStatusBody) {
-    connectionStatusBody = body;
-    retainedConnectionView = Object.freeze({
-      ...value,
-      revision: ++connectionStatusRevision,
-    });
-    if (window && !window.isDestroyed()) {
-      try {
-        window.webContents.send(
-          channels.connectionStatus,
-          retainedConnectionView,
-        );
-      } catch {
-        /* A projection cannot change original lifecycle or admission. */
-      }
-    }
-  }
-  return retainedConnectionView;
-}
-
-function observedConnectorHealth(
-  connector: SecureMcpConnectorRuntime,
-): Promise<boolean> {
-  return observeOperation(
-    operationsStore(),
-    { source: "Setup", kind: "connection.health", target: {} },
-    () => connector.checkHealth(),
-  );
-}
-function startConnectorTransportWatch(): void {
-  if (connectorTransportWatch || quitInProgress) return;
-  const observePassiveHealth =
-    passiveHealthObserver<SecureMcpConnectorRuntime>(operationsStore());
-  connectorTransportWatch = new ConnectorTransportWatch({
-    capture: captureConnectorTransport,
-    current: connectorTransportCurrent,
-    observe: async (original) => {
-      // Tunnel HTTP readiness cannot stand in for the original Go owner.
-      // Lost backend settlement fences recovery; never respawn it here.
-      if (!original.core.backendAvailable) return "unknown";
-      const healthy = await observePassiveHealth(
-        original.connector,
-        () => original.connector.checkHealth(),
-        () => connectorTransportCurrent(original),
-      );
-      if (!original.core.backendAvailable) return "unknown";
-      const terminal = original.connector.getTunnelObservation();
-      if (terminal && terminal.runtimeGeneration !== original.runtimeGeneration)
-        return "unknown";
-      return terminal?.state === "outcome_unknown"
-        ? "unknown"
-        : terminal?.state === "exited"
-          ? "exited"
-          : healthy
-            ? "healthy"
-            : "unreachable";
-    },
-    unknown: async (original) => {
-      if (!connectorTransportCurrent(original)) return;
-      const transition = authorityTransitions.tryReserve("connector-start");
-      if (!transition) return;
-      connectorTaskAdmission = true;
-      try {
-        if (
-          !connectorTransportCurrent(original, original.revision, false, true)
-        )
-          return;
-        const observationWindow = window;
-        const failure = await recordConnectorRuntime(
-          "outcome_unknown",
-          original.runtimeGeneration,
-          original.computerGeneration,
-        );
-        if (
-          !failure &&
-          !quitInProgress &&
-          !installedUpdateAdmission &&
-          configuration === original.owner &&
-          secureMcpConnectorRuntime === original.connector &&
-          desktopGoCore === original.core &&
-          window === observationWindow &&
-          observationWindow &&
-          !observationWindow.isDestroyed()
-        )
-          observationWindow.webContents.send(channels.configurationChanged);
-      } finally {
-        connectorTaskAdmission = false;
-        transition.release();
-      }
-    },
-    recover: async (original, observationCurrent, afterKnownClosure) => {
-      const result = await recoverConnectorTransport(
-        original,
-        observationCurrent,
-        afterKnownClosure,
-      );
-      reportConnectorTransport(
-        original,
-        result.ok ? "recovered_attachment_check_needed" : result.error,
-      );
-      if (!quitInProgress && window && !window.isDestroyed())
-        window.webContents.send(channels.configurationChanged);
-    },
-    wait: (milliseconds) =>
-      new Promise((resolve) => setTimeout(resolve, milliseconds)),
-  });
-  const observeStatus = () => {
-    void connectorConnection
-      .sample()
-      .then(currentConnectionStatus)
-      .catch(() => undefined);
-  };
-  const check = () => {
-    observeStatus();
-    void connectorTransportWatch?.check().catch(() => {
-      console.warn("FAROL_CONNECTOR_TRANSPORT_OBSERVATION_FAILED");
-    });
-  };
-  connectorTransportTimer = setInterval(check, 30_000);
-  connectorTransportTimer.unref();
-  connectorStatusTimer = setInterval(currentConnectionStatus, 1000);
-  connectorStatusTimer.unref();
-  // Starting a status projection does not eagerly enter recovery observation.
-  observeStatus();
-  // The existing isolated-home proof is checked before this join starts.
-  // This native-test seam invokes only the same passive observer as the timer;
-  // it publishes no authority and is absent from ordinary owner launches.
-  if (isolatedE2EHome !== undefined)
-    process.addListener("farol-e2e-observe-connection", (reply: unknown) => {
-      if (typeof reply !== "function") return;
-      void (async () => {
-        const original = captureConnectionStatus();
-        if (!original) return { settled: false };
-        let interrupted = false;
-        const interrupt = () => {
-          interrupted = true;
-        };
-        powerMonitor.on("suspend", interrupt);
-        powerMonitor.on("resume", interrupt);
-        try {
-          // Settle any earlier read, then perform one after the test selected
-          // its producer response. Coalescing cannot certify an older mode.
-          await connectorConnection.sample();
-          await connectorConnection.sample();
-          return interrupted || !connectionStatusCurrent(original)
-            ? { settled: false }
-            : { settled: true, view: currentConnectionStatus() };
-        } finally {
-          powerMonitor.removeListener("suspend", interrupt);
-          powerMonitor.removeListener("resume", interrupt);
-        }
-      })()
-        .then(
-          (value) => reply(value),
-          () => reply({ settled: false }),
-        )
-        .catch(() => undefined);
-    });
-  powerMonitor.on("suspend", () => {
-    connectorConnection.suspend();
-    currentConnectionStatus();
-    connectorTransportWatch?.suspend();
-  });
-  powerMonitor.on("resume", () => {
-    connectorConnection.resume();
-    connectorTransportWatch?.resume();
-    check();
-  });
-}
-
 function startObservedDesktopGoCore(
   ...args: Parameters<typeof startDesktopGoCore>
 ): ReturnType<typeof startDesktopGoCore> {
@@ -7196,13 +6675,13 @@ async function configureProductObserved(
     (changesComputerAuthority(parsed.data.kind) ||
       parsed.data.kind === "connector.stop")
   )
-    connectorTransportWatch?.suppressCurrent();
+    connectorTransportWatch.current?.suppressCurrent();
   else if (
     parsed.success &&
     (parsed.data.kind === "connector.start" ||
       parsed.data.kind === "connector.repair")
   )
-    connectorTransportWatch?.invalidate();
+    connectorTransportWatch.current?.invalidate();
   if (parsed.success && parsed.data.kind === "connector.save-and-connect") {
     const command = parsed.data;
     const fingerprint = createHash("sha256")
@@ -8465,10 +7944,11 @@ async function configureAdmittedProduct(
       }
       const stopping = captureConnectorStop();
       const previousStop =
-        completedOwnerStop && ownerStoppedCurrent(completedOwnerStop)
-          ? completedOwnerStop
+        completedOwnerStop.current &&
+        ownerStoppedCurrent(completedOwnerStop.current)
+          ? completedOwnerStop.current
           : null;
-      completedOwnerStop = null;
+      completedOwnerStop.current = null;
       connectorConnection.invalidate();
       connectorTaskAdmission = true;
       try {
@@ -8501,11 +7981,11 @@ async function configureAdmittedProduct(
               ] === value,
           )
         ) {
-          completedOwnerStop = Object.freeze({ ...stopping, receipt });
+          completedOwnerStop.current = Object.freeze({ ...stopping, receipt });
         } else if (previousStop && receipt === previousStop.receipt) {
           // A no-op Stop retains the exact previous acknowledged stop; it
           // neither creates a new receipt nor promotes a generic Close.
-          completedOwnerStop = previousStop;
+          completedOwnerStop.current = previousStop;
         }
         return ProductConfigurationResultSchema.parse(stopped);
       } finally {
@@ -11498,93 +10978,6 @@ function publishWindowState(): void {
   window?.webContents.send(channels.windowState, currentWindowState());
 }
 
-function publishLayout(): void {
-  window?.webContents.send(channels.layout, {
-    section,
-    taskId: selectedTaskId,
-    setupOpen,
-    checkFeedbackVisible,
-    sidebar: sidebarMode,
-    sidebarWidth,
-    overlay: shellOverlay,
-  });
-}
-
-let sectionNavigationSequence = 0;
-type SectionNavigationTarget = Pick<
-  Extract<ShellAction, { action: "navigate-section" }>,
-  "section" | "taskId" | "sequence"
->;
-
-function publishShellAction(
-  action: Exclude<ShellAction["action"], "navigate-section">,
-  source: Exclude<ShellActionSource, "section-shortcut-command">,
-  authWindowGeneration?: number | null,
-): void;
-function publishShellAction(
-  action: "navigate-section",
-  source: "section-shortcut-command",
-  authWindowGeneration: null,
-  navigation: SectionNavigationTarget,
-): void;
-function publishShellAction(
-  action: ShellAction["action"],
-  source: ShellActionSource,
-  authWindowGeneration: number | null = null,
-  navigation?: SectionNavigationTarget,
-): void {
-  window?.webContents.send(channels.shellAction, {
-    action,
-    eventId: randomUUID(),
-    source,
-    authWindowGeneration,
-    ...navigation,
-  });
-}
-
-function focusForLayout(): void {
-  if (
-    !window ||
-    window.isDestroyed() ||
-    !window.isFocused() ||
-    window.webContents.isDestroyed()
-  ) {
-    return;
-  }
-  if (setupOpen || shellOverlay !== "none" || section !== "browser") {
-    window.webContents.focus();
-    return;
-  }
-  const layout = currentSurfaceLayout();
-  const selected = layout?.pageVisible
-    ? taskViews.get(
-        layout.showBrowserHome ? SIGN_IN_SURFACE_ID : selectedTaskId,
-      )
-    : undefined;
-  if (!selected || !nativeViewVisibility.focus(window, selected)) {
-    if (!window.webContents.isDestroyed()) window.webContents.focus();
-  }
-}
-
-function focusForLayoutAfterRendererCommit(): void {
-  setImmediate(focusForLayout);
-}
-
-function requestQuickSwitcher(): void {
-  if (quitInProgress || installedUpdateAdmission) return;
-  if (!window || setupOpen) return;
-  shellOverlay = "quick-switcher";
-  applyLayout();
-  publishShellAction("open-quick-switcher", "quick-switcher-command");
-  window.webContents.focus();
-}
-
-function requestSidebarToggle(): void {
-  if (quitInProgress || installedUpdateAdmission) return;
-  if (!window || window.isDestroyed()) return;
-  publishShellAction("toggle-sidebar", "sidebar-command");
-}
-
 function desktopBrandImage() {
   const icon = nativeImage.createFromPath(
     path.join(
@@ -11600,40 +10993,19 @@ function desktopBrandImage() {
   return icon;
 }
 
-function requestAbout(): void {
-  if (quitInProgress || installedUpdateAdmission || aboutOpen) return;
-  aboutOpen = true;
-  // A dedicated panel uses the verified Farol artwork without inheriting the
-  // vendor runtime icon or exposing technical release identity in the UI.
-  void containWindowOpenFailure(ensureWindow, recoverWindowOpenFailure)
-    .then(async (outcome) => {
-      if (outcome !== "opened") return;
-      try {
-        if (
-          quitInProgress ||
-          installedUpdateAdmission ||
-          !window ||
-          window.isDestroyed()
-        )
-          return;
-        aboutPanel ??= new DesktopAboutPanel();
-        await aboutPanel.open({
-          owner: window,
-          name: displayProductName,
-          version: buildIdentity.version,
-          builtAt: buildIdentity.builtAt,
-          icon: desktopBrandImage().toDataURL(),
-          mode: windowMode,
-          place: () => selectedVisibleTestPlacement(ABOUT_PANEL_SIZE).bounds,
-        });
-      } catch {
-        console.error("DESKTOP_ABOUT_PRESENTATION_FAILED");
-      }
-    })
-    .finally(() => {
-      aboutOpen = false;
-    });
-}
+const requestAbout = aboutCommand({
+  closed: () => quitInProgress || installedUpdateAdmission,
+  openWindow: () =>
+    containWindowOpenFailure(ensureWindow, recoverWindowOpenFailure),
+  window: () => window,
+  panel: () => (aboutPanel ??= new DesktopAboutPanel()),
+  name: displayProductName,
+  version: buildIdentity.version,
+  builtAt: buildIdentity.builtAt,
+  mode: windowMode,
+  icon: () => desktopBrandImage().toDataURL(),
+  place: () => selectedVisibleTestPlacement(ABOUT_PANEL_SIZE).bounds,
+});
 
 function requestUpdates(): void {
   if (quitInProgress || installedUpdateAdmission) return;
@@ -11658,105 +11030,23 @@ function requestSettings(): void {
   window.webContents.focus();
 }
 
-function closeShellOverlay(): void {
-  if (quitInProgress || installedUpdateAdmission) return;
-  if (shellOverlay === "none") return;
-  // Keep native input hidden until the renderer acknowledges the complete
-  // dismissal, including an active resize or compact page-list overlay.
-  publishShellAction("close-overlay", "overlay-dismissed");
-  window?.webContents.focus();
-}
-
 function installApplicationMenu(): void {
-  const template: MenuItemConstructorOptions[] = [
-    ...(process.platform === "darwin"
-      ? ([
-          {
-            label: displayProductName,
-            submenu: [
-              {
-                id: "app.about",
-                label: `About ${displayProductName}`,
-                click: requestAbout,
-              },
-              {
-                id: "app.updates",
-                label: "Check for Updates…",
-                click: () => {
-                  requestUpdates();
-                },
-              },
-              { type: "separator" },
-              {
-                id: "app.settings",
-                label: "Settings…",
-                accelerator: "CommandOrControl+,",
-                click: requestSettings,
-              },
-              { type: "separator" },
-              { role: "services" },
-              { type: "separator" },
-              { role: "hide" },
-              { role: "hideOthers" },
-              { role: "unhide" },
-              { type: "separator" },
-              { role: "quit" },
-            ],
-          },
-        ] satisfies MenuItemConstructorOptions[])
-      : ([
-          {
-            label: "File",
-            submenu: [
-              {
-                id: "app.settings",
-                label: "Settings",
-                accelerator: "CommandOrControl+,",
-                click: requestSettings,
-              },
-              { type: "separator" },
-              { role: "quit" },
-            ],
-          },
-        ] satisfies MenuItemConstructorOptions[])),
-    {
-      label: "Edit",
-      submenu: [
-        { role: "undo" },
-        { role: "redo" },
-        { type: "separator" },
-        { role: "cut" },
-        { role: "copy" },
-        { role: "paste" },
-        { role: "selectAll" },
-      ],
-    },
-    {
-      label: "View",
-      submenu: [
-        {
-          id: "view.toggle-sidebar",
-          label: "Show/Hide Sidebar",
-          ...(navigationShortcuts.sidebar === "off"
-            ? {}
-            : {
-                accelerator: `Control+Command+${navigationShortcuts.sidebar.toUpperCase()}`,
-              }),
-          click: requestSidebarToggle,
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate(
+      applicationMenu({
+        platform: process.platform,
+        productName: displayProductName,
+        sidebarShortcut: navigationShortcuts.sidebar,
+        actions: {
+          about: requestAbout,
+          updates: requestUpdates,
+          settings: requestSettings,
+          toggleSidebar: requestSidebarToggle,
+          quickSwitcher: requestQuickSwitcher,
         },
-        {
-          id: "view.quick-switcher",
-          label: "Quick Switcher",
-          accelerator: "CommandOrControl+K",
-          click: requestQuickSwitcher,
-        },
-        { type: "separator" },
-        { role: "togglefullscreen" },
-      ],
-    },
-    { role: "windowMenu" },
-  ];
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+      }),
+    ),
+  );
 }
 
 function attachTaskView(
@@ -12076,183 +11366,6 @@ function installNetworkFence(): Electron.Session | null {
     callback({ cancel: !details.url.startsWith(`${base}/`) });
   });
   return isolated;
-}
-
-function handleShortcut(input: Input): boolean {
-  if (input.isComposing || input.isAutoRepeat) return false;
-  const key = input.key.toLowerCase();
-  if (
-    input.type === "keyDown" &&
-    input.meta &&
-    !input.control &&
-    !input.alt &&
-    !input.shift &&
-    (input.key === "[" || input.key === "]") &&
-    shellOverlay === "none"
-  ) {
-    if (!quitInProgress && !installedUpdateAdmission)
-      publishShellAction(
-        input.key === "[" ? "history-back" : "history-forward",
-        "history-shortcut-command",
-      );
-    return true;
-  }
-  if (input.meta && input.key === ",") {
-    requestSettings();
-    return true;
-  }
-  const shortcut =
-    input.type === "keyDown" &&
-    input.meta &&
-    !input.control &&
-    !input.alt &&
-    !input.shift
-      ? sectionForShortcut(navigationShortcuts, input.key)
-      : null;
-  if (setupOpen && !shortcut) return false;
-  if (
-    input.control &&
-    input.meta &&
-    sidebarShortcutMatches(navigationShortcuts, key)
-  ) {
-    requestSidebarToggle();
-    return true;
-  }
-  if (input.meta && key === "k") {
-    requestQuickSwitcher();
-    return true;
-  }
-  if (input.key === "Escape" && shellOverlay !== "none") {
-    closeShellOverlay();
-    return true;
-  }
-  if (input.control && input.key === "Tab") {
-    if (installedUpdateAdmission) return true;
-    const tasks = productTasksState().tasks;
-    if (tasks.length === 0) return false;
-    const index = tasks.findIndex((task) => task.taskId === selectedTaskId);
-    const direction = input.shift ? -1 : 1;
-    const next = (index + direction + tasks.length) % tasks.length;
-    // Retain the native task cursor for consecutive Tab presses. Presentation
-    // and overlay closure are acknowledged by the single renderer owner.
-    selectedTaskId = tasks[next]?.taskId ?? selectedTaskId;
-    publishShellAction("navigate-section", "section-shortcut-command", null, {
-      section: "browser",
-      taskId: selectedTaskId,
-      sequence: ++sectionNavigationSequence,
-    });
-    if (liveTaskRoutes.has(selectedTaskId)) {
-      void openLiveTaskSurface(selectedTaskId);
-    } else {
-      focusForLayout();
-    }
-    return true;
-  }
-  if (shortcut) {
-    if (installedUpdateAdmission) return true;
-    publishShellAction("navigate-section", "section-shortcut-command", null, {
-      section: shortcut,
-      taskId: selectedTaskId,
-      sequence: ++sectionNavigationSequence,
-    });
-    if (shortcut === "browser" && liveTaskRoutes.has(selectedTaskId)) {
-      void openLiveTaskSurface(selectedTaskId);
-    } else {
-      focusForLayout();
-    }
-    return true;
-  }
-  return false;
-}
-
-function applyRendererLayout(value: unknown): void {
-  const parsed = ShellLayoutSchema.safeParse(value);
-  if (!parsed.success) return;
-  const tasks = productTasksState().tasks;
-  const knownTask =
-    parsed.data.taskId === "" ||
-    tasks.some((task) => task.taskId === parsed.data.taskId);
-  // Shell navigation can conceal a browser even if its retained task selection
-  // is missing or stale. It cannot select a replacement or reveal an unknown
-  // conversation. An explicit blank ID selects only the retained home page,
-  // never an incidental previously selected task.
-  const concealsBrowser =
-    parsed.data.section !== "browser" ||
-    parsed.data.setupOpen ||
-    parsed.data.overlay !== "none";
-  if (!knownTask && !concealsBrowser) return;
-  const focusTargetChanged =
-    section !== parsed.data.section ||
-    (knownTask && selectedTaskId !== parsed.data.taskId) ||
-    setupOpen !== parsed.data.setupOpen ||
-    shellOverlay !== parsed.data.overlay;
-  section = parsed.data.section;
-  if (knownTask) {
-    selectedTaskId = parsed.data.taskId;
-  }
-  setupOpen = parsed.data.setupOpen;
-  checkFeedbackVisible = parsed.data.checkFeedbackVisible;
-  sidebarMode = parsed.data.sidebar;
-  sidebarWidth = parsed.data.sidebarWidth;
-  shellOverlay = parsed.data.overlay;
-  applyLayout();
-  if (focusTargetChanged) focusForLayoutAfterRendererCommit();
-}
-
-function currentSurfaceLayout() {
-  if (!window || window.isDestroyed()) return null;
-  const [width = 1, height = 1] = window.getContentSize();
-  const showBrowserHome = browserHomeSurfaceOpen && selectedTaskId === "";
-  const selectedViewKind = showBrowserHome
-    ? "chatgpt"
-    : taskViewKinds.get(selectedTaskId);
-  const layout = deriveSurfaceLayout({
-    width,
-    height,
-    sidebar: sidebarMode,
-    sidebarWidth,
-    overlay: shellOverlay,
-    section,
-    setupOpen,
-    runtimeReady: runtimeState === "ready",
-    browserDocumentPresent: selectedViewKind === "chatgpt",
-    selectedTaskPresent: showBrowserHome || taskViews.has(selectedTaskId),
-    browserChromeVisible:
-      showBrowserHome || productTasksState().tasks.length > 0,
-    compactBrowser: compactBrowserSelected({
-      environment: runtimeEnvironment,
-      demoMode,
-      legacySetupTestMode,
-    }),
-    checkFeedbackVisible,
-  });
-  return { ...layout, showBrowserHome };
-}
-
-function applyLayout(): void {
-  const layout = currentSurfaceLayout();
-  if (!layout) return;
-  const visibleTaskId =
-    !quitInProgress && !installedUpdateAdmission && layout.pageVisible
-      ? layout.showBrowserHome
-        ? SIGN_IN_SURFACE_ID
-        : selectedTaskId
-      : null;
-  // Detach covered and unselected pages first so the host has at most one
-  // browser child, regardless of task insertion order.
-  for (const [taskId, view] of taskViews) {
-    if (taskId !== visibleTaskId || view.webContents?.isDestroyed() !== false) {
-      nativeViewVisibility.hide(view);
-      // Keep hidden documents responsive to the current host geometry without
-      // making their native input or accessibility subtree visible.
-      if (view.webContents?.isDestroyed() === false)
-        view.setBounds(layout.pageBounds);
-    }
-  }
-  if (visibleTaskId !== null) {
-    const view = taskViews.get(visibleTaskId);
-    if (view) attachTaskView(visibleTaskId, view, layout.pageBounds);
-  }
 }
 
 async function createTaskViews(): Promise<void> {
@@ -14197,12 +13310,14 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     // re-entrant Quit cannot create a new start, Stop, drain or cancellation.
     connectorStartCancellation?.abort();
     processAuditObserver?.stop();
-    connectorTransportWatch?.close();
-    if (connectorTransportTimer) clearInterval(connectorTransportTimer);
+    connectorTransportWatch.current?.close();
+    if (connectorTransportTimer.current)
+      clearInterval(connectorTransportTimer.current);
     connectorConnection.close();
     if (isolatedE2EHome !== undefined)
       process.removeAllListeners("farol-e2e-observe-connection");
-    if (connectorStatusTimer) clearInterval(connectorStatusTimer);
+    if (connectorStatusTimer.current)
+      clearInterval(connectorStatusTimer.current);
     if (installedUpdateTimer) clearInterval(installedUpdateTimer);
     quitDrain.onBeforeQuit(event);
   });

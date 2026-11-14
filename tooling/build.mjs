@@ -38,6 +38,7 @@ import {
   verifyNativeHelper,
 } from "./native-helper-contract.mjs";
 import { sourceSnapshot } from "./source-identity.mjs";
+import { assertNotTestInput } from "./test-placement.mjs";
 import { BRAND_RESOURCES, verifyBrandAssets } from "./brand-contract.mjs";
 import {
   assertNativeArchiveBytes,
@@ -124,6 +125,8 @@ async function readBuildInput(file) {
   ) {
     throw new Error(`BUILD_INPUT_ESCAPES_ROOT:${absolute}`);
   }
+  // Co-located tests sit beside production source; none may reach a bundle.
+  assertNotTestInput(relative);
   const stat = await fs.lstat(absolute);
   if (!stat.isFile() || stat.isSymbolicLink()) {
     throw new Error(`BUILD_INPUT_TYPE_INVALID:${relative}`);

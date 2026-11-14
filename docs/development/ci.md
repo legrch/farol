@@ -30,15 +30,18 @@ native-selection runner in `tooling/ci-native.mjs`, then runs that selection,
 portable overlap avoids brittle inverse test-name filters. This preserves native coverage for the files excluded or partially
 selected by the Cloud profile.
 
-After those commands the `native` job runs three hermetic hidden-Electron e2e
+After those commands the `native` job runs two hermetic hidden-Electron e2e
 lanes, reusing the Electron runtime that the setup action installed (no build
 and no package step): `task test:e2e:chatgpt-startup-readiness` (the readiness
-run plus its `--cleanup-failure-fixture` run), `tests/e2e/chatgpt-update-idle.e2e.mjs`
-and `tests/e2e/deep-test-ipc-order.e2e.mjs`. Each creates only `show:false`
+run plus its `--cleanup-failure-fixture` run) and
+`tests/e2e/deep-test-ipc-order.e2e.mjs`. Each creates only `show:false`
 windows over loopback or `data:` pages and disposable state, and needs no
-network, account or built app. Measured locally these take about 12, 2 and 3
-seconds; on the macOS runner expect roughly one to two extra minutes including
-Electron start-up. They run whenever `native` runs, so the docs-only skip covers
+network, account or built app. Measured locally these take about 12 and 3
+seconds; on the macOS runner expect roughly one extra minute including
+Electron start-up. `tests/e2e/chatgpt-update-idle.e2e.mjs` ran here for three
+pull requests and was removed: on its third hosted run its detached hidden view
+did not commit a viewport resize within five seconds
+(`fixture viewport not committed`), so it is not reliable on a hosted runner. They run whenever `native` runs, so the docs-only skip covers
 them. All other `tests/e2e` entries stay outside pull request checks: they need
 `_output/build` or a packaged app, a visible or secondary display, a Codex
 binary, the system clipboard, or are not green on `main` today

@@ -7,6 +7,7 @@ import {
   cloudDeferredFiles,
   cloudMixedFiles,
 } from "./cloud-test-prerequisites.mjs";
+import { isColocatedRendererTest, isColocatedTest } from "./test-placement.mjs";
 
 export const scopes = Object.freeze([
   "unit",
@@ -116,6 +117,13 @@ export function classifyTests(files) {
       continue;
     } else if (/^tests\/renderer\/.+\.test\.tsx?$/u.test(file)) {
       renderer.push(file);
+    } else if (isColocatedTest(file)) {
+      // A co-located test runs where its tests/unit equivalent ran: renderer
+      // folders under jsdom, everything else as a Node unit test unless it is
+      // reviewed into integrationUnitFiles like any legacy unit file.
+      if (isColocatedRendererTest(file)) renderer.push(file);
+      else if (integrationUnitFiles.includes(file)) integration.push(file);
+      else nodeUnit.push(file);
     } else if (/^tests\/.+\.test\.(ts|tsx|mjs)$/u.test(file)) {
       if (integrationUnitFiles.includes(file)) integration.push(file);
       else if (

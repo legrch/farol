@@ -20,7 +20,8 @@ try {
 import assert from 'node:assert/strict';
 import { app, BrowserWindow, WebContentsView } from 'electron';
 import { chatGptUpdateIdleProbe } from './src/apps/desktop/chatgpt-update-idle.ts';
-import { ChatGptRoute, activateTaskScript, bindChatGptAppScript, prepareTaskScript, taskProbeScript } from './src/apps/desktop/chatgpt-route.ts';
+import { ChatGptRoute } from './src/apps/desktop/chatgpt-route.ts';
+import { activateTaskScript, bindChatGptAppScript, prepareTaskScript, taskProbeScript } from './src/apps/desktop/chatgpt/scripts.ts';
 import { NativeViewVisibility } from './apps/desktop/bridge/native-view-visibility.ts';
 import { deriveSurfaceLayout } from './src/apps/desktop/surface-layout.ts';
 app.setPath('userData', ${JSON.stringify(path.join(scratch, "profile"))});

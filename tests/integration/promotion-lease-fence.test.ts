@@ -20,7 +20,7 @@ import {
   journalUnderPromotionLease,
   PromotionPendingRefusal,
 } from "../../src/apps/desktop/chatgpt-journal-lease";
-import { desktopStatePaths } from "../../apps/desktop/host/state-paths";
+import { desktopStatePaths } from "../../apps/desktop/host/paths";
 import { PrivateChatGptTaskJournal } from "../../src/apps/desktop/chatgpt-task-journal";
 import type {
   ProductTask,

@@ -11,7 +11,7 @@ import {
   dismissInstantPowerPickerScript,
   openTemporaryPersonalizationScript,
   selectTemporaryPersonalizationScript,
-} from "../../src/apps/desktop/chatgpt-route";
+} from "../../src/apps/desktop/chatgpt/scripts";
 
 // DOM event contract only; real provider handling is a separate Dev witness.
 afterEach(() => {
