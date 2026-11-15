@@ -1,3 +1,4 @@
+import type { DesktopAdmission } from "../../apps/desktop/host/admission";
 import { admissionFixture } from "../support/desktop-admission";
 import fs from "node:fs";
 import vm from "node:vm";
@@ -431,4 +432,33 @@ describe("main.ts original Stop prerequisite integration", () => {
     expect(f.events).not.toContain("go-cleanup_ack");
     expect(f.events).not.toContain("go-prerequisite_complete");
   });
+});
+
+it("holds connector admission while awaiting the original continuity observation", async () => {
+  const f = harness();
+  let resume!: () => void;
+  const continuity = new Promise<{
+    restricted: boolean;
+    pendingOperationId: string | undefined;
+  }>((resolve) => {
+    resume = () =>
+      resolve({ restricted: false, pendingOperationId: undefined });
+  });
+  vi.mocked(f.core.observeComputerContinuity).mockImplementation(
+    () => continuity,
+  );
+  const first = f.execute(command);
+  expect(f.core.observeComputerContinuity).toHaveBeenCalledOnce();
+  const admission = f.sandbox.desktopAdmission as DesktopAdmission;
+  const competingHealth = admission.acquire("connector-task");
+  try {
+    expect(competingHealth).toBeNull();
+    expect(f.nativeCalls).toBe(0);
+    expect(f.settingsCalls).toBe(0);
+  } finally {
+    competingHealth?.release();
+    resume();
+    await first;
+  }
+  expect(admission.occupied("connector-task")).toBe(false);
 });

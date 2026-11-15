@@ -1,3 +1,5 @@
+import { parse } from "@babel/parser";
+import { isDeepStrictEqual } from "node:util";
 import { admissionFixture } from "../support/desktop-admission";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -463,3 +465,121 @@ it("retains an unknown result without re-sending", async () => {
     }).load(),
   ).toMatchObject({ result: { state: "outcome_unknown" } });
 });
+
+// Existing Main characterization seam: controlled journal refusal and no Send.
+function submissionCase(kind: string): string {
+  const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
+  let selected: { start?: number | null; end?: number | null } | undefined;
+  const visit = (value: unknown): void => {
+    if (!value || typeof value !== "object") return;
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    const node = value as Record<string, unknown>;
+    if (
+      node.type === "SwitchCase" &&
+      (node.test as { value?: string })?.value === kind
+    )
+      selected = node;
+    Object.values(node).forEach(visit);
+  };
+  visit(tree);
+  if (selected?.start == null || selected.end == null)
+    throw Error("Missing submission fixture seam");
+  return transformSync(
+    `async function submit(command) { switch(command.kind) { ${source.slice(selected.start, selected.end)} } } submit;`,
+    { loader: "ts" },
+  ).code;
+}
+
+it.each(["chatgpt.submit-attachment-task", "chatgpt.submit-readonly-task"])(
+  "reserves the chat lane before dispatch-intent preparation for %s",
+  async (kind) => {
+    let reached!: () => void;
+    const journalReached = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    let reject!: (error: Error) => void;
+    const journalWait = new Promise<void>((_resolve, fail) => {
+      reject = fail;
+    });
+    const verification = { controlled: true };
+    const pending = {
+      operationId: "controlled-operation",
+      expiresAt: Date.now() + 60_000,
+      chatGptVerification: verification,
+      workspaceId: "controlled-workspace",
+      computerGeneration: 1,
+      prompt: "controlled prompt",
+      attachments: { attachments: [] },
+    };
+    const route = { runReadonlyTask: vi.fn() };
+    const context = admissionFixture({
+      chatGptRoute: route,
+      pendingChatGptAttachmentTask:
+        kind === "chatgpt.submit-attachment-task" ? pending : null,
+      pendingChatGptReadonlyTask:
+        kind === "chatgpt.submit-readonly-task" ? pending : null,
+      configuration: {
+        snapshot: () => ({
+          status: "ready",
+          settings: {
+            setup: {
+              chatgpt: { outcomeUnknown: false, verified: verification },
+              computer: {
+                verified: {
+                  workspaceId: pending.workspaceId,
+                  configRevision: 1,
+                },
+              },
+            },
+            computer: {
+              generation: 1,
+              workspaces: [{ workspaceId: pending.workspaceId }],
+            },
+          },
+        }),
+      },
+      isDeepStrictEqual,
+      verifyStagedChatGptAttachments: async () => {},
+      chatGptTaskJournal: {
+        markDispatchIntent: () => {
+          reached();
+          return journalWait;
+        },
+      },
+      journalUnderPromotionLease: async (
+        _owner: unknown,
+        work: () => Promise<unknown>,
+      ) => work(),
+      liveTaskRegistry: {},
+      configurationFailure: (error: string) => ({ ok: false, error }),
+      PromotionPendingRefusal: class extends Error {},
+    });
+    const submit = vm.runInNewContext(
+      submissionCase(kind),
+      context,
+    ) as (command: { kind: string; operationId: string }) => Promise<unknown>;
+    const first = submit({ kind, operationId: pending.operationId });
+    await Promise.race([
+      journalReached,
+      first.then(() => {
+        throw Error("Journal barrier not reached");
+      }),
+    ]);
+    const competingCheck = context.desktopAdmission.acquire("chatgpt-task");
+    try {
+      expect(competingCheck).toBeNull();
+    } finally {
+      competingCheck?.release();
+      reject(new Error("controlled journal refusal"));
+      await expect(first).resolves.toEqual({
+        ok: false,
+        error: "CHATGPT_TASK_JOURNAL_FAILED",
+      });
+    }
+    expect(route.runReadonlyTask).not.toHaveBeenCalled();
+    expect(context.desktopAdmission.occupied("chatgpt-task")).toBe(false);
+  },
+);
