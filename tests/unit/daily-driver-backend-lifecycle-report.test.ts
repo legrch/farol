@@ -266,7 +266,7 @@ it("passes compiled Shell and the protected root through the actual desktop call
           compiledGoShell,
           runtimeEnvironment,
           directory,
-          installedResourcesOrigin: undefined,
+          installedUpdates: { resourcesOrigin: undefined },
         },
       );
       expect(actual.compiledShell).toBe(
@@ -318,7 +318,9 @@ it("uses the authenticated private image for the actual Go and Shell caller", ()
         compiledGoShell,
         runtimeEnvironment,
         directory: "/Applications/Farol.app/Contents/Resources/app",
-        installedResourcesOrigin: { execution: { directory: privateRoot } },
+        installedUpdates: {
+          resourcesOrigin: { execution: { directory: privateRoot } },
+        },
       },
     );
     expect(value.artifactRoot).toBe(privateRoot);
