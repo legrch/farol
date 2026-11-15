@@ -1,40 +1,10 @@
 import type { DesktopAdmission } from "../../apps/desktop/host/admission";
 import { admissionFixture } from "../support/desktop-admission";
-import fs from "node:fs";
-import vm from "node:vm";
 import { createHash } from "node:crypto";
-import { parse } from "@babel/parser";
-import { transformSync } from "esbuild";
 import { describe, expect, it, vi } from "vitest";
+import { createConfigurationDrain } from "../../apps/desktop/configuration/drain";
 import { WorkspaceConfigurationDrain } from "../../src/apps/desktop/workspace-configuration-drain";
 import { ownerComputerConsentDigest } from "../../src/modules/computer/infra/repo/owner-computer-consent";
-
-// Execute the ACTUAL main.ts function body against effect-owner doubles.
-// These are source-bound ordering tests, not a packaged Electron/native/Go test.
-// A fake ACK is accepted only by the doubles; real Go verifies protected state.
-const source = fs.readFileSync(
-  new URL("../../src/apps/desktop/main.ts", import.meta.url),
-  "utf8",
-);
-const parsed = parse(source, {
-  sourceType: "module",
-  plugins: ["typescript", "jsx"],
-});
-const selected = parsed.program.body.find(
-  (node) =>
-    node.type === "FunctionDeclaration" &&
-    node.id?.name === "configureDrainedWorkspaceChange",
-);
-if (!selected || selected.start == null || selected.end == null)
-  throw new Error("actual workspace drain function missing");
-const implementation = transformSync(
-  source.slice(selected.start, selected.end),
-  {
-    loader: "ts",
-    target: "es2022",
-    format: "cjs",
-  },
-).code;
 
 const command = {
   kind: "computer.update-access",
@@ -241,12 +211,46 @@ function harness() {
       return { ok: true, original: true };
     }),
   };
-  const execute = vm.runInNewContext(
-    implementation + "\nconfigureDrainedWorkspaceChange;",
-    admissionFixture(sandbox),
-  ) as (
-    input: Omit<typeof command, "workspaceId"> & { workspaceId: string },
-  ) => Promise<{ ok: boolean; error?: string }>;
+  const sandboxWithAdmission = admissionFixture(sandbox);
+  const ports = {
+    configuration: () => (sandboxWithAdmission as any).configuration,
+    secureMcpConnectorRuntime: () =>
+      (sandboxWithAdmission as any).secureMcpConnectorRuntime,
+    desktopGoCore: () => (sandboxWithAdmission as any).desktopGoCore,
+    desktopAdmission: sandboxWithAdmission.desktopAdmission,
+    connectorStartInFlight: () => sandboxWithAdmission.connectorStartInFlight,
+    transitionRefusal: () => (sandboxWithAdmission as any).transitionRefusal(),
+    configurationFailure: (code: unknown) =>
+      (sandboxWithAdmission as any).configurationFailure(code),
+    authorityTransitions: (sandboxWithAdmission as any).authorityTransitions,
+    activeAuthorityChangeKind: () =>
+      (sandboxWithAdmission as any).activeAuthorityChangeKind,
+    setActiveAuthorityChangeKind: (value: unknown) => {
+      (sandboxWithAdmission as any).activeAuthorityChangeKind = value;
+    },
+    codexAgentOperationActive: () =>
+      (sandboxWithAdmission as any).codexAgentOperationActive(),
+    computerMcpLifecycle: () =>
+      (sandboxWithAdmission as any).computerMcpLifecycle(),
+    stopAndConfirmComputerMcp: (...args: unknown[]) =>
+      (sandboxWithAdmission as any).stopAndConfirmComputerMcp(...args),
+    savedChatBridgeRuntime: () =>
+      (sandboxWithAdmission as any).savedChatBridgeRuntime,
+    configureAdmittedProduct: (cmd: unknown) =>
+      (sandboxWithAdmission as any).configureAdmittedProduct(cmd),
+    statePaths: () => (sandboxWithAdmission as any).statePaths(),
+    ownerComputerConsentDigest: (s: unknown) =>
+      (sandboxWithAdmission as any).ownerComputerConsentDigest(s),
+    connectorRuntimeUncertain: (s: unknown) =>
+      (sandboxWithAdmission as any).connectorRuntimeUncertain(s),
+    clearAndConfirmOriginalConnectorVerificationReceipt: (...args: unknown[]) =>
+      (
+        sandboxWithAdmission as any
+      ).clearAndConfirmOriginalConnectorVerificationReceipt(...args),
+  };
+  const drain = createConfigurationDrain(ports as never);
+  const execute = (input: unknown) =>
+    drain.configureDrainedWorkspaceChange(input as never);
   return {
     events,
     core,

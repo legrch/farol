@@ -8,7 +8,6 @@
     "tests/integration/dev-review-profile.test.mjs": ["vm"],
     "tests/integration/fresh-chatgpt-journal-startup.test.ts": ["vm"],
     "tests/integration/go-build-without-safe-open.test.ts": ["vm"],
-    "tests/integration/original-stop-main.test.ts": ["vm"],
     "tests/integration/secure-mcp-connector-runtime.test.ts": ["vm"],
     "tests/unit/bundled-tunnel-selection.test.ts": ["vm"],
     "tests/unit/chatgpt-presentation-host.test.mjs": ["vm"],

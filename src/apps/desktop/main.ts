@@ -62,7 +62,7 @@ import {
 } from "../../../apps/desktop/updates-panel";
 import { updatesChannels } from "../../../apps/desktop/renderer/updates/contract";
 import { connectorRuntimeUncertain } from "../../pkg/product-settings/connector-uncertainty";
-import { ownerComputerConsentDigest } from "../../modules/computer/infra/repo/owner-computer-consent";
+
 import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
 import { connectorVerificationProof } from "./connector-verification-proof";
 import {
@@ -366,15 +366,14 @@ import {
   startCodexCallerRelay,
   type CodexCallerRelayRuntime,
 } from "./codex-caller-relay";
-import {
-  changesComputerAuthority,
-  configurationAdmission,
-} from "./configuration-admission";
+import { configurationAdmission } from "./configuration-admission";
+import { ownerComputerConsentDigest } from "../../modules/computer/infra/repo/owner-computer-consent";
+import { clearAndConfirmOriginalConnectorVerificationReceipt } from "../../modules/computer/infra/mcp/connector-verification-receipt";
 import { createConfigurationPipeline } from "../../../apps/desktop/configuration/pipeline";
-import {
-  WorkspaceConfigurationDrain,
-  type WorkspaceConfigurationCommand,
-} from "./workspace-configuration-drain";
+import { createConfigurationObserved } from "../../../apps/desktop/configuration/observed";
+import { createConfigurationDrain } from "../../../apps/desktop/configuration/drain";
+import type { ConfigurationDrainPorts } from "../../../apps/desktop/configuration/drain";
+import { type WorkspaceConfigurationCommand } from "./workspace-configuration-drain";
 import {
   confirmSeparateAppVerificationAttempt,
   connectorAppVerificationAttemptExists,
@@ -538,10 +537,7 @@ import {
   SecureMcpConnectorRuntime,
   type ConnectorRuntimeLifecycleObservation,
 } from "./secure-mcp-connector-runtime";
-import {
-  clearConnectorVerificationReceipt,
-  clearAndConfirmOriginalConnectorVerificationReceipt,
-} from "../../modules/computer/infra/mcp/connector-verification-receipt";
+import { clearConnectorVerificationReceipt } from "../../modules/computer/infra/mcp/connector-verification-receipt";
 import { PrivateExecutionFence } from "../../modules/computer/infra/mcp/execution-fence";
 import { PrivateMcpLifecycle } from "../../modules/computer/infra/mcp/private-mcp-lifecycle";
 import {
@@ -6476,115 +6472,6 @@ function configureProduct(value: unknown): Promise<ProductConfigurationResult> {
     return original;
   });
 }
-async function configureProductObserved(
-  value: unknown,
-): Promise<ProductConfigurationResult> {
-  const parsed = ProductConfigurationCommandSchema.safeParse(value);
-  if (parsed.success && parsed.data.kind === "chatgpt.ack-deep-test") {
-    const id = parsed.data.operationId;
-    const existing = deepTestAcknowledgements.get(id);
-    if (existing) return existing;
-    const attempt = Promise.resolve().then(() =>
-      configureNewProductRequest(parsed.data),
-    );
-    deepTestAcknowledgements.set(id, attempt);
-    void attempt.then(
-      (result) => {
-        if (
-          !result.ok &&
-          result.error !== "CHATGPT_CONVERSATION_UNCONFIRMED" &&
-          deepTestAcknowledgements.get(id) === attempt
-        )
-          deepTestAcknowledgements.delete(id);
-      },
-      () => {},
-    );
-    return attempt;
-  }
-  if (parsed.success && parsed.data.kind === "chatgpt.run-deep-test") {
-    const id = parsed.data.operationId;
-    const existing = deepTestRequests.get(id);
-    if (existing)
-      return existing.taskId === parsed.data.taskId &&
-        existing.test === (parsed.data.test ?? "deep")
-        ? existing.promise
-        : configurationFailure("CHATGPT_CONVERSATION_REFUSED");
-    const attempt = Promise.resolve().then(() =>
-      configureNewProductRequest(parsed.data),
-    );
-    deepTestRequests.set(id, {
-      taskId: parsed.data.taskId,
-      test: parsed.data.test ?? "deep",
-      promise: attempt,
-    });
-    return attempt;
-  }
-  if (
-    parsed.success &&
-    [
-      "connector.stop",
-      "connector.start",
-      "connector.repair",
-      "connector.save-and-connect",
-    ].includes(parsed.data.kind)
-  )
-    startupConnectorResumeCancelled = true;
-  // Capture the original runtime before the request counter closes background
-  // admission. An explicit Stop must never be undone by a later timer tick.
-  if (
-    parsed.success &&
-    (changesComputerAuthority(parsed.data.kind) ||
-      parsed.data.kind === "connector.stop")
-  )
-    connectorTransportWatch.current?.suppressCurrent();
-  else if (
-    parsed.success &&
-    (parsed.data.kind === "connector.start" ||
-      parsed.data.kind === "connector.repair")
-  )
-    connectorTransportWatch.current?.invalidate();
-  if (parsed.success && parsed.data.kind === "connector.save-and-connect") {
-    const command = parsed.data;
-    const fingerprint = createHash("sha256")
-      .update(JSON.stringify(command))
-      .digest("hex");
-    return connectorSetupReplies.run(
-      command.operationId,
-      fingerprint,
-      () => configureSaveAndConnect(command),
-      (code) => connectorSetupRefusal(command, code),
-    );
-  }
-  if (parsed.success && directChatStart) {
-    const command = parsed.data;
-    if (command.kind === "chatgpt.inspect-chat-account")
-      return command.operationId === directChatStart.operationId
-        ? directChatStart.inspection
-        : configurationFailure("CHATGPT_CONVERSATION_REFUSED");
-    if (command.kind === "chatgpt.start-conversation" && directChatStart.start)
-      return isDeepStrictEqual(command, directChatStart.start.command)
-        ? directChatStart.start.promise
-        : configurationFailure("CHATGPT_CONVERSATION_REFUSED");
-  }
-  if (
-    parsed.success &&
-    parsed.data.kind === "chatgpt.submit-readonly-task" &&
-    goReadonlyConversation?.pending?.operationId === parsed.data.operationId
-  )
-    return goReadonlyConversation.start;
-  if (
-    parsed.success &&
-    (parsed.data.kind === "chatgpt.inspect-readonly-account" ||
-      parsed.data.kind === "chatgpt.approve-readonly-account")
-  ) {
-    return readonlyAccountCommands.run(
-      parsed.data,
-      () => configureNewProductRequest(parsed.data),
-      configurationFailure,
-    );
-  }
-  return configureNewProductRequest(value);
-}
 
 function configurationPipeline() {
   return (configurationPipelineCache ??= createConfigurationPipeline({
@@ -6611,6 +6498,73 @@ let configurationPipelineCache: ReturnType<
   typeof createConfigurationPipeline
 > | null = null;
 
+function configurationDrain() {
+  return (configurationDrainCache ??= createConfigurationDrain({
+    configuration: () => configuration,
+    secureMcpConnectorRuntime: () => secureMcpConnectorRuntime,
+    desktopGoCore: () => desktopGoCore,
+    desktopAdmission,
+    connectorStartInFlight: () => connectorStartInFlight,
+    transitionRefusal,
+    configurationFailure,
+    authorityTransitions,
+    activeAuthorityChangeKind: () => activeAuthorityChangeKind,
+    setActiveAuthorityChangeKind: (value) => {
+      activeAuthorityChangeKind = value;
+    },
+    codexAgentOperationActive,
+    computerMcpLifecycle,
+    stopAndConfirmComputerMcp:
+      stopAndConfirmComputerMcp as ConfigurationDrainPorts["stopAndConfirmComputerMcp"],
+    savedChatBridgeRuntime: () => savedChatBridgeRuntime,
+    statePaths,
+    configureAdmittedProduct,
+    ownerComputerConsentDigest,
+    connectorRuntimeUncertain,
+    clearAndConfirmOriginalConnectorVerificationReceipt,
+  }));
+}
+let configurationDrainCache: ReturnType<
+  typeof createConfigurationDrain
+> | null = null;
+
+function configurationObserved() {
+  return (configurationObservedCache ??= createConfigurationObserved({
+    deepTestAcknowledgements,
+    deepTestRequests,
+    configureNewProductRequest,
+    configurationFailure,
+    cancelStartupConnectorResume: () => {
+      startupConnectorResumeCancelled = true;
+    },
+    suppressConnectorTransportCurrent: () =>
+      connectorTransportWatch.current?.suppressCurrent(),
+    invalidateConnectorTransport: () =>
+      connectorTransportWatch.current?.invalidate(),
+    connectorSetupReplies,
+    configureSaveAndConnect,
+    connectorSetupRefusal,
+    directChatStart: () => directChatStart,
+    goReadonlyConversation: () => goReadonlyConversation,
+    readonlyAccountCommands,
+  }));
+}
+let configurationObservedCache: ReturnType<
+  typeof createConfigurationObserved
+> | null = null;
+
+async function configureProductObserved(
+  value: unknown,
+): Promise<ProductConfigurationResult> {
+  return configurationObserved().configureProductObserved(value);
+}
+
+async function configureDrainedWorkspaceChange(
+  command: WorkspaceConfigurationCommand,
+): Promise<ProductConfigurationResult> {
+  return configurationDrain().configureDrainedWorkspaceChange(command);
+}
+
 async function configureNewProductRequest(
   value: unknown,
 ): Promise<ProductConfigurationResult> {
@@ -6625,282 +6579,6 @@ async function configureUnfencedProduct(
   return configurationPipeline().configureUnfencedProduct(value);
 }
 void configureUnfencedProduct;
-
-async function configureDrainedWorkspaceChange(
-  command: WorkspaceConfigurationCommand,
-): Promise<ProductConfigurationResult> {
-  const owner = configuration;
-  const connector = secureMcpConnectorRuntime;
-  const core = desktopGoCore;
-  const original = owner?.snapshot();
-  if (
-    !owner ||
-    !connector ||
-    !core ||
-    original?.status !== "ready" ||
-    desktopAdmission.occupied("connector-task") ||
-    connectorStartInFlight !== null
-  )
-    return transitionRefusal();
-  const connectorAdmission = desktopAdmission.acquire("connector-task");
-  if (!connectorAdmission) return transitionRefusal();
-  try {
-    // Ask the existing Go WAL owner BEFORE invoking any new connector drain.
-    // A lost stop ACK or pending continuity transition cannot be discharged by
-    // a second ordinary command with equal visible Settings bytes. No fallback
-    // to a missing old core/status method is permitted.
-    try {
-      const custody = await core.observeComputerContinuity();
-      if (custody.restricted || custody.pendingOperationId !== undefined)
-        return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
-    } catch {
-      return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
-    }
-    // C7 fixes the original command scope BEFORE Stop. An add-workspace or
-    // global commands/file-policy edit has no selected existing workspace; it
-    // binds the entire owner-consent projection instead of borrowing a random
-    // workspace root or claiming the to-be-added directory is already approved.
-    const requestedId =
-      "workspaceId" in command ? command.workspaceId : undefined;
-    const target =
-      requestedId === undefined
-        ? undefined
-        : original.settings.computer.workspaces.find(
-            (item) => item.workspaceId === requestedId,
-          );
-    const connectorBinding = core.currentComputerConnectorBinding();
-    if (
-      (requestedId !== undefined && !target) ||
-      !connectorBinding ||
-      !connector.isRunning()
-    )
-      return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
-    const sha = (value: unknown) =>
-      createHash("sha256").update(JSON.stringify(value)).digest("hex");
-    const originalStopId = randomUUID();
-    const stopEffectId = randomUUID();
-    const settingsEffectId = randomUUID();
-    const cleanupEffectId = randomUUID();
-    // Immutable complete OWNER-CONSENT scope: access, exclusions, selected
-    // commands, file/Git choices and capability ceilings. Excludes binding,
-    // revision, transient verification and other native observations.
-    const originalConsent = ownerComputerConsentDigest(original.settings);
-    const request = {
-      operationId: originalStopId,
-      requestDigest: sha({
-        command,
-        revision: original.settings.revision,
-        computerGeneration: original.settings.computer.generation,
-        connectorGeneration: original.settings.connectors.secureMcp.generation,
-      }),
-      commandKind: command.kind,
-      commandDigest: sha(command),
-      purpose: "workspace-change" as const,
-      ...(target ? { workspaceId: target.workspaceId, root: target.root } : {}),
-      consentDigest: originalConsent,
-      expectedRevision: String(original.settings.revision),
-      computerGeneration: String(original.settings.computer.generation),
-      connectorGeneration: String(
-        original.settings.connectors.secureMcp.generation,
-      ),
-      settingsDigest: sha(original.settings),
-      stopEffectId,
-      settingsEffectId,
-      cleanupEffectId,
-    };
-    const computerGeneration = original.settings.computer.generation;
-    const connectorGeneration =
-      original.settings.connectors.secureMcp.generation;
-    let revision = original.settings.revision;
-    let phaseFailure: ProductConfigurationResult | null = null;
-
-    try {
-      const current = () => {
-        const snapshot = owner.snapshot();
-        return (
-          configuration === owner &&
-          secureMcpConnectorRuntime === connector &&
-          desktopGoCore === core &&
-          authorityTransitions.current() === "authority-change" &&
-          activeAuthorityChangeKind === command.kind &&
-          desktopAdmission.occupied("connector-task") &&
-          !desktopAdmission.closed() &&
-          !codexAgentOperationActive() &&
-          !connector.hasUnresolvedEffect() &&
-          snapshot.status === "ready" &&
-          snapshot.settings.revision === revision &&
-          snapshot.settings.computer.generation === computerGeneration &&
-          snapshot.settings.connectors.secureMcp.generation ===
-            connectorGeneration &&
-          ownerComputerConsentDigest(snapshot.settings) === originalConsent &&
-          !connectorRuntimeUncertain(snapshot.settings)
-        );
-      };
-      const drain = new WorkspaceConfigurationDrain(command, {
-        current,
-        stop: async () => {
-          // The Go owner must durably admit the ORIGINAL stop_intent before
-          // lifecycle.beginStop, connector.stop, or connector-close effects.
-          if (await computerMcpLifecycle().hasUnconfirmedStop())
-            throw new Error("CONNECTOR_STOP_UNCONFIRMED");
-          if (!current()) return false;
-          const admitted = await core.beginOriginalStop(request);
-          if (
-            admitted.runtimeId !== connectorBinding.runtimeId ||
-            admitted.backendGeneration !== connectorBinding.backendGeneration ||
-            admitted.buildId !== connectorBinding.buildId
-          )
-            throw new Error("CONNECTOR_STOP_UNCONFIRMED");
-          await stopAndConfirmComputerMcp(
-            connector,
-            null,
-            core,
-            savedChatBridgeRuntime,
-            undefined,
-            originalStopId,
-          );
-          const lifecycle = computerMcpLifecycle().confirmedOriginalStop();
-          const closure = core.computerConnectorClosureReceipt();
-          if (
-            !lifecycle ||
-            !closure ||
-            !closure.result.closed ||
-            closure.result.binding.runtimeId !== admitted.runtimeId ||
-            closure.result.binding.backendGeneration !==
-              admitted.backendGeneration
-          )
-            throw new Error("CONNECTOR_STOP_UNCONFIRMED");
-          await core.advanceOriginalStop({
-            parentOperationId: originalStopId,
-            phase: "stop_ack",
-            closure: {
-              effectId: stopEffectId,
-              backendGeneration: admitted.backendGeneration,
-              runtimeId: admitted.runtimeId,
-              lifecycleId: lifecycle.lifecycleId,
-              stopRevision: lifecycle.stopRevision,
-              preparationRevision: lifecycle.preparationRevision,
-              closureOperationId: closure.operationId,
-              closureDigest: sha(closure.result),
-            },
-          });
-          return true;
-        },
-        recordStopped: async () => {
-          // The retained sole Settings writer confirms the Go settings_intent
-          // before its ONE conditional save/readback. A lost reply is UNKNOWN,
-          // never a new save or an equal-byte inferred ACK.
-          const originalCurrent = () => {
-            const snap = owner.snapshot();
-            return (
-              configuration === owner &&
-              secureMcpConnectorRuntime === connector &&
-              desktopGoCore === core &&
-              authorityTransitions.current() === "authority-change" &&
-              desktopAdmission.occupied("connector-task") &&
-              !desktopAdmission.closed() &&
-              !codexAgentOperationActive() &&
-              !connector.hasUnresolvedEffect() &&
-              snap.status === "ready" &&
-              snap.settings.computer.generation === computerGeneration &&
-              snap.settings.connectors.secureMcp.generation ===
-                connectorGeneration &&
-              !connectorRuntimeUncertain(snap.settings)
-            );
-          };
-          const stopped = await owner.commitOriginalStoppedSettings(
-            {
-              effectId: settingsEffectId,
-              expectedRevision: revision,
-              expectedDigest: request.settingsDigest,
-              computerGeneration,
-              connectorGeneration,
-              consentDigest: request.consentDigest,
-            },
-            async (plan) => {
-              await core.advanceOriginalStop({
-                parentOperationId: originalStopId,
-                phase: "settings_intent",
-                settingsIntent: plan,
-              });
-            },
-            originalCurrent,
-          );
-          if (stopped.status !== "committed") {
-            phaseFailure = configurationFailure("SETTINGS_WRITE_FAILED");
-            return "unknown";
-          }
-          await core.advanceOriginalStop({
-            parentOperationId: originalStopId,
-            phase: "settings_ack",
-            settingsAck: stopped.receipt,
-          });
-          revision = stopped.settings.revision;
-          if (!current()) return "unknown";
-          // Connector verification cleanup is a distinct one-shot effect with
-          // its own durable intent; failure retains the original pending phase.
-          await core.advanceOriginalStop({
-            parentOperationId: originalStopId,
-            phase: "cleanup_intent",
-          });
-          const cleanupProof =
-            await clearAndConfirmOriginalConnectorVerificationReceipt(
-              statePaths().secureMcpLaunch,
-              originalStopId,
-              cleanupEffectId,
-            );
-          // A separate held-directory readback proved receipt absence after
-          // the original deletion and sync. Go independently rechecks that
-          // its retained original connector closure still belongs to this parent.
-          if (
-            cleanupProof.parentOperationId !== originalStopId ||
-            cleanupProof.effectId !== cleanupEffectId ||
-            cleanupProof.readback !== "verified-absent"
-          )
-            throw new Error("CONNECTOR_ATTACHMENT_INVALID");
-          await core.advanceOriginalStop({
-            parentOperationId: originalStopId,
-            phase: "cleanup_ack",
-            cleanupAck: {
-              effectId: cleanupEffectId,
-              backendGeneration: connectorBinding.backendGeneration,
-              runtimeId: connectorBinding.runtimeId,
-              digest: cleanupProof.digest,
-            },
-          });
-          await core.advanceOriginalStop({
-            parentOperationId: originalStopId,
-            phase: "prerequisite_complete",
-          });
-          return true;
-        },
-        apply: configureAdmittedProduct,
-      });
-      const outcome = await drain.run();
-      // A completed configuration owns its original reply, even if a later
-      // projection/Quit won the race. No further phase borrows that reply.
-      if (
-        outcome.status === "completed" ||
-        (outcome.status === "stale" && outcome.phase === "apply")
-      )
-        return outcome.result;
-      if (phaseFailure) return phaseFailure;
-      if (outcome.status === "unknown")
-        return configurationFailure(
-          outcome.phase === "stop"
-            ? "CONNECTOR_STOP_UNCONFIRMED"
-            : "SETTINGS_WRITE_FAILED",
-        );
-      return transitionRefusal();
-    } finally {
-      connectorAdmission.release();
-    }
-  } finally {
-    // Also covers preparation exits before the existing dispatch finalizer.
-    // Release is identity-bound: a repeated release cannot clear a successor.
-    connectorAdmission.release();
-  }
-}
 
 // The reply's last step before Electron carries it to the renderer. The
 // command itself has fully completed here — its edit, receipt and durable
