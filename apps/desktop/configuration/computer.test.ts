@@ -19,35 +19,32 @@ function pending() {
 }
 
 function makePorts(
-  overrides: Partial<ConfigurationComputerPorts> = {},
+  overrides: Partial<Record<string, unknown>> = {},
 ): ConfigurationComputerPorts {
   const admission = new DesktopAdmission(pending());
   const configuration = {
     snapshot: () => ({ status: "ready" as const, settings: {} }),
     renameComputer: vi.fn(async () => ({ ok: true })),
   };
-  const ports: ConfigurationComputerPorts = {
-    configuration: () => configuration as never,
+  const ports = {
+    configuration: () => configuration,
     codexAgentOperationActive: () => false,
-    configurationFailure: vi.fn(
-      (error: string) => ({ ok: false, error }) as never,
-    ),
+    configurationFailure: vi.fn((error: string) => ({ ok: false, error })),
     getPendingWorkspacePick: () => null,
     setPendingWorkspacePick: vi.fn(),
-    selectedWorkspace: vi.fn(async () => "cancelled" as never),
+    selectedWorkspace: vi.fn(async () => "cancelled"),
     measuredRootIdentity: vi.fn(async () => null),
-    inspectOwnerWorkspace: vi.fn(async () => ({ ok: true }) as never),
+    inspectOwnerWorkspace: vi.fn(async () => ({ ok: true })),
     buildIdentity: () => ({ buildId: "build" }),
-    workspaceReadFailure: vi.fn(
-      (code: string) => ({ ok: false, error: code }) as never,
-    ),
+    workspaceReadFailure: vi.fn((code: string) => ({ ok: false, error: code })),
     desktopAdmission: admission,
     secureMcpConnectorRuntime: () => null,
     runtime: () => ({ identity: "runtime" }),
-    verifiedProductWorkspace: vi.fn(() => ({ status: "not_found" }) as never),
-    listOwnerWorkspace: vi.fn(
-      async () => ({ ok: false, code: "WORKSPACE_READ_FAILED" }) as never,
-    ),
+    verifiedProductWorkspace: vi.fn(() => ({ status: "not_found" })),
+    listOwnerWorkspace: vi.fn(async () => ({
+      ok: false,
+      code: "WORKSPACE_READ_FAILED",
+    })),
     desktopGoCore: () => null,
     compiledGoCore: () => null,
     discoverWorkspaceGitMetadata: vi.fn(async () => null),
@@ -55,17 +52,19 @@ function makePorts(
     getPendingWorkspaceEdit: () => null,
     setPendingWorkspaceEdit: vi.fn(),
     selectedWorkspaceFile: vi.fn(async () => "cancelled"),
-    goWorkspaceEditResult: vi.fn(() => ({ ok: true }) as never),
+    goWorkspaceEditResult: vi.fn(() => ({ ok: true })),
     statePaths: () => ({ workspaceMutations: "/tmp/mutations" }),
-    workspaceMutationFailure: vi.fn(
-      (code: string) => ({ ok: false, error: code }) as never,
-    ),
-    workspaceCommandFailure: vi.fn(
-      (code: string) => ({ ok: false, error: code }) as never,
-    ),
+    workspaceMutationFailure: vi.fn((code: string) => ({
+      ok: false,
+      error: code,
+    })),
+    workspaceCommandFailure: vi.fn((code: string) => ({
+      ok: false,
+      error: code,
+    })),
     ...overrides,
   };
-  return ports;
+  return ports as unknown as ConfigurationComputerPorts;
 }
 
 describe("configuration computer", () => {
@@ -127,19 +126,19 @@ describe("configuration computer", () => {
       beforeSha256: "before",
       expiresAt: Date.now() + 60_000,
     };
+    const cfg = {
+      snapshot: () => ({
+        status: "ready" as const,
+        settings: {
+          computer: { pendingEdit },
+        },
+      }),
+    };
     const ports = makePorts({
-      getPendingWorkspaceEdit: () => pendingEdit as never,
-      configuration: () =>
-        ({
-          snapshot: () => ({
-            status: "ready",
-            settings: {
-              computer: { pendingEdit },
-            },
-          }),
-        }) as never,
-      compiledGoCore: () => ({}) as never,
-      desktopGoCore: () => ({}) as never,
+      getPendingWorkspaceEdit: () => pendingEdit,
+      configuration: () => cfg,
+      compiledGoCore: () => ({}),
+      desktopGoCore: () => ({}),
     });
     const computer = createConfigurationComputer(ports);
     const result = await computer.configureAdmittedComputer({
@@ -147,6 +146,52 @@ describe("configuration computer", () => {
       operationId: "edit-1",
     } as ComputerConfigurationCommand);
     expect(result).toBeDefined();
+  });
+
+  it("retains pending mutation outcome unknown without clearing", async () => {
+    const pendingEdit = {
+      operationId: "edit-2",
+      workspaceId: "workspace-2",
+      computerGeneration: 4,
+      relativePath: "file.txt",
+      bytes: 1,
+      beforeSha256: "before",
+      expiresAt: Date.now() + 60_000,
+      backend: { id: "backend" },
+      profileId: "profile",
+      submittedAt: Date.now(),
+    };
+    const recordComputerMutationOutcomeUnknown = vi.fn();
+    const cfg = {
+      snapshot: () => ({
+        status: "ready" as const,
+        settings: {
+          computer: { pendingEdit },
+        },
+      }),
+      recordComputerMutationOutcomeUnknown,
+    };
+    const ports = makePorts({
+      configuration: () =>
+        cfg as unknown as ReturnType<
+          ConfigurationComputerPorts["configuration"]
+        >,
+      compiledGoCore: () => ({}),
+      desktopGoCore: () => ({
+        observeSettingsMutation: vi.fn(async () => {
+          throw new Error("boom");
+        }),
+      }),
+    });
+    const computer = createConfigurationComputer(ports);
+    const result = await computer.configureAdmittedComputer({
+      kind: "computer.observe-workspace-edit",
+      operationId: "edit-2",
+    } as ComputerConfigurationCommand);
+    expect(result).toMatchObject({
+      ok: false,
+      error: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN",
+    });
   });
 
   it("routes run-git-status through the verification action port", async () => {
@@ -246,12 +291,13 @@ describe("configuration computer", () => {
       })),
     };
     const ports = makePorts({
-      configuration: () =>
-        ({
-          snapshot: () => ({ status: "ready" as const, settings }),
-        }) as never,
-      verifiedProductWorkspace: () =>
-        ({ status: "verified" as const, workspace }) as never,
+      configuration: () => ({
+        snapshot: () => ({ status: "ready" as const, settings }),
+      }),
+      verifiedProductWorkspace: () => ({
+        status: "verified" as const,
+        workspace,
+      }),
       compiledGoCore: () => null,
       verificationWorkspaceAction: vi.fn(() => action),
     });
@@ -266,5 +312,107 @@ describe("configuration computer", () => {
     });
     expect(ports.verificationWorkspaceAction).toHaveBeenCalledTimes(1);
     expect(action.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses run-git-status before building legacy verification action when Go is available", async () => {
+    const workspace = {
+      workspaceId: "00000000-0000-4000-8000-000000000001",
+      root: "/tmp/project",
+      label: "project",
+      access: "read" as const,
+      excludedPaths: [],
+      rootIdentity: { device: "1", inode: "2" },
+    };
+    const settings = ProductSettingsSchema.parse({
+      schema: 1,
+      revision: 1,
+      general: {
+        openAtLaunch: "browser",
+        sidebarDefault: "full",
+        activityDetail: "summary",
+      },
+      computer: {
+        computerId: "00000000-0000-4000-8000-000000000002",
+        generation: 1,
+        name: "This Mac",
+        commands: "verification",
+        workspaces: [workspace],
+      },
+      setup: {
+        journey: { currentStep: "verify", dismissed: false },
+        chatgpt: {
+          visited: true,
+          skipped: false,
+          configured: true,
+          reachable: "reachable",
+          verified: null,
+          needsAction: null,
+          unavailable: null,
+          outcomeUnknown: false,
+        },
+        computer: {
+          visited: true,
+          skipped: false,
+          configured: true,
+          reachable: "reachable",
+          verified: null,
+          needsAction: null,
+          unavailable: null,
+          outcomeUnknown: false,
+        },
+        connect: {
+          visited: true,
+          skipped: false,
+          configured: true,
+          reachable: "reachable",
+          verified: null,
+          needsAction: null,
+          unavailable: null,
+          outcomeUnknown: false,
+        },
+        hosts: {
+          visited: true,
+          skipped: false,
+          configured: true,
+          reachable: "reachable",
+          verified: null,
+          needsAction: null,
+          unavailable: null,
+          outcomeUnknown: false,
+        },
+        verify: {
+          visited: true,
+          skipped: false,
+          configured: true,
+          reachable: "reachable",
+          verified: null,
+          needsAction: null,
+          unavailable: null,
+          outcomeUnknown: false,
+        },
+      },
+    });
+    const verificationWorkspaceAction = vi.fn(() => null);
+    const ports = makePorts({
+      configuration: () => ({
+        snapshot: () => ({ status: "ready" as const, settings }),
+      }),
+      verifiedProductWorkspace: () => ({
+        status: "verified" as const,
+        workspace,
+      }),
+      compiledGoCore: () => ({}),
+      verificationWorkspaceAction,
+    });
+    const computer = createConfigurationComputer(ports);
+    const result = await computer.configureAdmittedComputer({
+      kind: "computer.run-git-status",
+      workspaceId: workspace.workspaceId,
+    } as ComputerConfigurationCommand);
+    expect(result).toMatchObject({
+      ok: false,
+      error: "WORKSPACE_COMMAND_UNAVAILABLE",
+    });
+    expect(verificationWorkspaceAction).not.toHaveBeenCalled();
   });
 });

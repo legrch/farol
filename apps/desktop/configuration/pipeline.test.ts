@@ -3,11 +3,7 @@ import { DesktopAdmission } from "../host/admission";
 import { AuthorityTransitionReservation } from "../../../src/apps/desktop/authority-transition";
 import { createConfigurationPipeline } from "./pipeline";
 import type { ConfigurationPipelinePorts } from "./pipeline";
-import type { DesktopGoCore } from "../go-core-host";
-import type {
-  ProductConfigurationCommand,
-  ProductConfigurationResult,
-} from "../../../src/pkg/product-settings/contract";
+import type { ProductConfigurationCommand } from "../../../src/pkg/product-settings/contract";
 
 function pending() {
   return {
@@ -22,17 +18,20 @@ function pending() {
   };
 }
 
-function makePorts(
-  overrides: Partial<Parameters<typeof createConfigurationPipeline>[0]> = {},
-) {
+function makePorts(overrides: Partial<Record<string, unknown>> = {}) {
   const admission = new DesktopAdmission(pending());
   const authorityTransitions = new AuthorityTransitionReservation();
   let active: ProductConfigurationCommand["kind"] | null = null;
-  const configuration = { snapshot: () => ({ status: "ready" }) } as unknown;
+  const configuration = { snapshot: () => ({ status: "ready" }) };
   const ports = {
     configuration: () => configuration,
     desktopGoCore: () => ({
-      observeOriginalStop: vi.fn(async () => ({ restricted: false })),
+      observeOriginalStop: vi.fn(async () => ({
+        present: false,
+        restricted: false,
+        entryCount: 0,
+        delivery: "not_recorded",
+      })),
     }),
     connectorRunning: () => false,
     connectorStartInFlight: () => null,
@@ -46,12 +45,11 @@ function makePorts(
     },
     codexAgentOperationActive: () => false,
     configurationFailure: vi.fn((error: string) => ({ ok: false, error })),
-    computerMcpLifecycle: () =>
-      ({
-        hasUnconfirmedStop: vi.fn(async () => false),
-        beginStop: vi.fn(async () => undefined),
-        confirmStop: vi.fn(async () => undefined),
-      }) as unknown,
+    computerMcpLifecycle: () => ({
+      hasUnconfirmedStop: vi.fn(async () => false),
+      beginStop: vi.fn(async () => undefined),
+      confirmStop: vi.fn(async () => undefined),
+    }),
     configureDrainedWorkspaceChange: vi.fn(async () => ({
       ok: true,
       drained: true,
@@ -59,9 +57,9 @@ function makePorts(
     deliverConfigurationReply: vi.fn(
       (_kind: string, result: unknown) => result,
     ),
-    configureAdmittedProduct: vi.fn(async (command: unknown) => ({
+    configureAdmittedProduct: vi.fn(async () => ({
       ok: true,
-      kind: (command as { kind: string }).kind,
+      snapshot: { status: "error", error: "SETTINGS_READ_FAILED" },
     })),
     transitionRefusal: vi.fn(() => ({
       ok: false,
@@ -83,7 +81,7 @@ describe("configuration pipeline", () => {
       kind: "chatgpt.observe-sign-in",
       observationId: "o",
       buildId: "a".repeat(64),
-    } as unknown);
+    });
     expect(result).toEqual({
       ok: false,
       error: "AUTHORITY_CHANGE_IN_PROGRESS",
@@ -100,7 +98,7 @@ describe("configuration pipeline", () => {
       kind: "chatgpt.observe-sign-in",
       observationId: "o",
       buildId: "a".repeat(64),
-    } as unknown);
+    });
     expect(result).toEqual({ ok: false, error: "SETTINGS_UNAVAILABLE" });
   });
 
@@ -116,17 +114,18 @@ describe("configuration pipeline", () => {
   it("reserves and releases connector task during connector.configure custody", async () => {
     const { ports, admission } = makePorts();
     const core = {
-      observeOriginalStop: vi.fn(async () => ({ restricted: false })),
+      observeOriginalStop: vi.fn(async () => ({
+        present: false,
+        restricted: false,
+        entryCount: 0,
+        delivery: "not_recorded",
+      })),
     };
-    ports.desktopGoCore = () =>
-      core as unknown as Pick<DesktopGoCore, "observeOriginalStop">;
-    ports.configureAdmittedProduct = vi.fn(
-      async () =>
-        ({
-          ok: true,
-          snapshot: { status: "error", error: "SETTINGS_READ_FAILED" },
-        }) as unknown as ProductConfigurationResult,
-    );
+    ports.desktopGoCore = () => core;
+    ports.configureAdmittedProduct = vi.fn(async () => ({
+      ok: true,
+      snapshot: { status: "error", error: "SETTINGS_READ_FAILED" },
+    }));
     const pipeline = createConfigurationPipeline(
       ports as unknown as ConfigurationPipelinePorts,
     );
@@ -134,7 +133,7 @@ describe("configuration pipeline", () => {
       kind: "connector.configure",
       tunnelId: "t",
       runtimeKey: null,
-    } as unknown);
+    });
     expect(result.ok).toBe(true);
     expect(admission.occupied("connector-task")).toBe(false);
     expect(core.observeOriginalStop).toHaveBeenCalled();
@@ -143,10 +142,14 @@ describe("configuration pipeline", () => {
   it("refuses connector.configure when original stop is restricted", async () => {
     const { ports } = makePorts();
     const core = {
-      observeOriginalStop: vi.fn(async () => ({ restricted: true })),
+      observeOriginalStop: vi.fn(async () => ({
+        present: false,
+        restricted: true,
+        entryCount: 0,
+        delivery: "not_recorded",
+      })),
     };
-    ports.desktopGoCore = () =>
-      core as unknown as Pick<DesktopGoCore, "observeOriginalStop">;
+    ports.desktopGoCore = () => core;
     const pipeline = createConfigurationPipeline(
       ports as unknown as ConfigurationPipelinePorts,
     );
@@ -154,7 +157,7 @@ describe("configuration pipeline", () => {
       kind: "connector.configure",
       tunnelId: "t",
       runtimeKey: null,
-    } as unknown);
+    });
     expect(result).toEqual({
       ok: false,
       error: "AUTHORITY_CHANGE_IN_PROGRESS",
@@ -171,7 +174,7 @@ describe("configuration pipeline", () => {
       return {
         ok: true,
         snapshot: { status: "error", error: "SETTINGS_READ_FAILED" },
-      } as unknown as ProductConfigurationResult;
+      };
     });
     ports.deliverConfigurationReply = vi.fn((_k: string, r: unknown) => r);
     const pipeline = createConfigurationPipeline(
@@ -179,7 +182,7 @@ describe("configuration pipeline", () => {
     );
     const result = await pipeline.configureUnfencedProduct({
       kind: "chatgpt.toggle-sidebar",
-    } as unknown);
+    });
     expect(admittedResolved).toBe(true);
     expect(result.ok).toBe(true);
     expect(ports.deliverConfigurationReply).toHaveBeenCalled();
@@ -190,9 +193,7 @@ describe("configuration pipeline", () => {
     // Hold the reservation first so withReservation refuses.
     const holder = authorityTransitions.tryReserve("connector-start")!;
     // Make activeAuthorityChangeKind non-null to capture.
-    ports.setActiveAuthorityChangeKind(
-      "connector.start" as unknown as ProductConfigurationCommand["kind"],
-    );
+    ports.setActiveAuthorityChangeKind("connector.start");
     // Force configureAdmittedProduct to throw? Instead test holder capture via console.warn.
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const pipeline = createConfigurationPipeline(
@@ -201,7 +202,7 @@ describe("configuration pipeline", () => {
     const result = await pipeline.configureUnfencedProduct({
       kind: "computer.rename",
       name: "x",
-    } as unknown);
+    });
     expect(result).toEqual({
       ok: false,
       error: "AUTHORITY_CHANGE_IN_PROGRESS",
@@ -218,28 +219,31 @@ describe("configuration pipeline", () => {
   it("resets active authority change kind on error inside reservation", async () => {
     const { ports, getActive } = makePorts();
     ports.connectorRunning = () => false;
-    ports.desktopGoCore = () =>
-      ({
-        observeOriginalStop: vi.fn(async () => ({ restricted: false })),
-      }) as unknown as Pick<DesktopGoCore, "observeOriginalStop">;
+    ports.desktopGoCore = () => ({
+      observeOriginalStop: vi.fn(async () => ({
+        present: false,
+        restricted: false,
+        entryCount: 0,
+        delivery: "not_recorded",
+      })),
+    });
     ports.configureAdmittedProduct = vi.fn(async () => {
       throw new Error("boom");
     });
-    ports.computerMcpLifecycle = () =>
-      ({
-        hasUnconfirmedStop: vi.fn(async () => false),
-        beginStop: vi.fn(async () => {
-          throw new Error("stop failed");
-        }),
-        confirmStop: vi.fn(async () => undefined),
-      }) as unknown;
+    ports.computerMcpLifecycle = () => ({
+      hasUnconfirmedStop: vi.fn(async () => false),
+      beginStop: vi.fn(async () => {
+        throw new Error("stop failed");
+      }),
+      confirmStop: vi.fn(async () => undefined),
+    });
     const pipeline = createConfigurationPipeline(
       ports as unknown as ConfigurationPipelinePorts,
     );
     const result = await pipeline.configureUnfencedProduct({
       kind: "computer.rename",
       name: "x",
-    } as unknown);
+    });
     expect(result).toEqual({ ok: false, error: "CONNECTOR_STOP_UNCONFIRMED" });
     expect(getActive()).toBeNull();
   });
