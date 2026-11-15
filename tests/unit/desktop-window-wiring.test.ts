@@ -19,13 +19,15 @@ it("lends current window/runtime state to both window adapters", async () => {
     "windowPresentationReady",
     "runtime",
     "runtimeState",
-    "quitInProgress",
-    "installedUpdateAdmission",
     "selectedTaskId",
     "browserHomeSurfaceOpen",
   ]) {
     expect(state).toContain(`get ${name}() {\n    return ${name};\n  }`);
   }
+  for (const name of ["quitInProgress", "installedUpdateAdmission"])
+    expect(state).toContain(
+      `get ${name}() {\n    return desktopAdmission.${name};\n  }`,
+    );
   for (const name of [
     "window",
     "windowPresentationReady",

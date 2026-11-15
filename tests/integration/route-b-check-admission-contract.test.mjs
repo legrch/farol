@@ -16,10 +16,12 @@ describe("Route B check admission contract", () => {
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
     const branch = source.slice(start, end);
-    const reservation = branch.indexOf("codexHostTaskAdmission = true");
+    const reservation = branch.indexOf(
+      'desktopAdmission.reserveAdmitted("codex-host-task")',
+    );
     const firstAwait = branch.indexOf("await ");
     const protectedTry = branch.indexOf("try {");
-    const release = branch.indexOf("codexHostTaskAdmission = false");
+    const release = branch.indexOf("codexAdmission.release()");
     const finalizer = branch.indexOf("finally {");
 
     expect(reservation).toBeGreaterThanOrEqual(0);

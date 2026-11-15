@@ -1,3 +1,4 @@
+import { admissionFixture } from "../support/desktop-admission";
 import { taskSurfaces } from "../../apps/desktop/window/surface";
 import { surfacePorts } from "../support/window-host";
 import { channels as runtimeChannels } from "../../src/pkg/ipc/channels";
@@ -151,7 +152,7 @@ function host(lifecycle: ProductTaskLifecycle = "idle") {
         activitySource +
         ";\n({open:openLiveTaskSurface, activity:recordTaskActivity, persistenceFailure:surfaceLiveTaskPersistenceFailure});",
     ),
-    context,
+    admissionFixture(context),
   ) as {
     open(id: string): Promise<boolean>;
     activity(state: "idle" | "running" | "outcome_unknown"): void;

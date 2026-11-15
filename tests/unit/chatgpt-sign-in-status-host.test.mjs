@@ -1,3 +1,4 @@
+import { admissionFixture } from "../support/desktop-admission";
 import fs from "node:fs";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
@@ -98,11 +99,11 @@ function harness(state = "authenticated") {
     stripTypeScriptTypes(
       `async function handle() { switch(command.kind) { ${branch} } } handle`,
     ),
-    context,
+    admissionFixture(context),
   );
   const returned = vm.runInNewContext(
     stripTypeScriptTypes(`${returnCallback}\nrecordChatGptSignInOutcome`),
-    context,
+    admissionFixture(context),
   );
   return { context, observation, handle, returned };
 }
@@ -130,12 +131,12 @@ describe("bounded Sign in status host disclosure", () => {
       stripTypeScriptTypes(
         `${continuityFunctions.get("configureProduct")}\nconfigureProduct`,
       ),
-      {
+      admissionFixture({
         ProductConfigurationCommandSchema,
         configureProductObserved,
         configurationOperation,
         operationsStore,
-      },
+      }),
     );
     expect(await handle(command)).toBe(reply);
     expect(configureProductObserved).toHaveBeenCalledExactlyOnceWith(command);
@@ -349,7 +350,10 @@ function continuityHarness(width = 1180, height = 760) {
     ({ layout: currentSurfaceLayout, apply: applyLayout, command,
       load: ${continuityCallbacks.get("onLoadStateChanged")},
       outcome: ${continuityCallbacks.get("onSignInOutcome")} })`;
-  const api = vm.runInNewContext(stripTypeScriptTypes(code), context);
+  const api = vm.runInNewContext(
+    stripTypeScriptTypes(code),
+    admissionFixture(context),
+  );
   return { context, view, api };
 }
 

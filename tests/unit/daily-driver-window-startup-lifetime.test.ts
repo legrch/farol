@@ -1,3 +1,4 @@
+import { admissionFixture } from "../support/desktop-admission";
 import { windowHost } from "../support/window-host";
 import fs from "node:fs";
 import path from "node:path";
@@ -282,7 +283,7 @@ function host({
     stripTypeScriptTypes(
       `${callbacks.join("\n")}\n({ create: createWindow, views: createTaskViews })`,
     ),
-    context,
+    admissionFixture(context),
   ) as { create(): Promise<void>; views(): Promise<void> };
   const count = (kind: string, lateOnly = false) =>
     events.filter((event) => event.kind === kind && (!lateOnly || event.late))

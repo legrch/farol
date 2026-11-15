@@ -1,3 +1,4 @@
+import { admissionFixture } from "../support/desktop-admission";
 import fs from "node:fs";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
@@ -148,7 +149,7 @@ function fixture() {
   admission.computerConnectorAdmission = context.computerConnectorAdmission;
   context.observeConnectorStart = vm.runInNewContext(
     stripTypeScriptTypes(`${code}; observeConnectorStart`),
-    context,
+    admissionFixture(context),
   );
   const actual = connectorTransport(connectorHost(context));
   const entry = {

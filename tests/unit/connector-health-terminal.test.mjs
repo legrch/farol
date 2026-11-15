@@ -1,3 +1,4 @@
+import { admissionFixture } from "../support/desktop-admission";
 import { connectorHealth } from "../../apps/desktop/connector/supervisor.ts";
 import { connectorHost } from "../support/connector-host.ts";
 import fs from "node:fs";
@@ -101,7 +102,7 @@ function harness(observation, healthy = false) {
     stripTypeScriptTypes(
       `async function handle() { switch(command.kind) { ${branch} } } handle`,
     ),
-    context,
+    admissionFixture(context),
   );
   return { handle, context, snapshot };
 }

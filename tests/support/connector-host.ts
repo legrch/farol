@@ -23,8 +23,13 @@ export function connectorHost(
     quitInProgress: read("quitInProgress"),
     installedUpdateAdmission: read("installedUpdateAdmission"),
     connectorTaskAdmission: read("connectorTaskAdmission"),
-    setConnectorTaskAdmission: (value: boolean) => {
-      fixture.connectorTaskAdmission = value;
+    reserveConnectorTask: () => {
+      fixture.connectorTaskAdmission = true;
+      return {
+        release: () => {
+          fixture.connectorTaskAdmission = false;
+        },
+      };
     },
     connectorTaskAdmissionPurpose: read("connectorTaskAdmissionPurpose"),
     connectorStartInFlight: read("connectorStartInFlight"),

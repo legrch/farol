@@ -1,3 +1,4 @@
+import { admissionFixture } from "../support/desktop-admission";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import vm from "node:vm";
@@ -84,7 +85,7 @@ async function publishers({
   const exports: Record<(typeof names)[number], () => void> = {
     ...(vm.runInNewContext(
       `${callbacks.join("\n")}\n({${sliced.join(",")}})`,
-      context,
+      admissionFixture(context),
     ) as Record<(typeof sliced)[number], () => void>),
     requestQuickSwitcher: commands.requestQuickSwitcher,
     requestSidebarToggle: commands.requestSidebarToggle,

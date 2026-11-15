@@ -1,3 +1,4 @@
+import type { DesktopReservation } from "../host/admission";
 import { createHash } from "node:crypto";
 import type { BrowserWindow, PowerMonitor } from "electron";
 import type { AuthorityTransitionReservation } from "../../../src/apps/desktop/authority-transition";
@@ -47,7 +48,7 @@ export type ConnectorSupervisorPorts = Readonly<{
   quitInProgress(): boolean;
   installedUpdateAdmission(): boolean;
   connectorTaskAdmission(): boolean;
-  setConnectorTaskAdmission(value: boolean): void;
+  reserveConnectorTask(): DesktopReservation;
   connectorTaskAdmissionPurpose(): "manual-diagnostic" | null;
   connectorStartInFlight(): Promise<void> | null;
   configurationRequests(): number;
@@ -260,8 +261,9 @@ export function connectorTransport(host: ConnectorSupervisorPorts) {
       .authorityTransitions()
       .tryReserve("connector-start");
     if (!transition) return host.transitionRefusal();
-    host.setConnectorTaskAdmission(true);
+    let admission: DesktopReservation | null = null;
     try {
+      admission = host.reserveConnectorTask();
       return await host.observeConnectorStart(async () => {
         let revision = original.revision;
         let stopped = false;
@@ -356,7 +358,7 @@ export function connectorTransport(host: ConnectorSupervisorPorts) {
         );
       });
     } finally {
-      host.setConnectorTaskAdmission(false);
+      admission?.release();
       transition.release();
     }
   }
@@ -729,8 +731,9 @@ export function connectorWatch(
           .authorityTransitions()
           .tryReserve("connector-start");
         if (!transition) return;
-        host.setConnectorTaskAdmission(true);
+        let admission: DesktopReservation | null = null;
         try {
+          admission = host.reserveConnectorTask();
           if (
             !connectorTransportCurrent(original, original.revision, false, true)
           )
@@ -754,7 +757,7 @@ export function connectorWatch(
           )
             observationWindow.webContents.send(channels.configurationChanged);
         } finally {
-          host.setConnectorTaskAdmission(false);
+          admission?.release();
           transition.release();
         }
       },
