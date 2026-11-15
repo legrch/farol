@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { settleFixtureCleanup } from "./fixture-cleanup.mjs";
+import { settleFixtureCleanup } from "../support/fixture-cleanup.mjs";
 
 function ports() {
   let time = 0;
