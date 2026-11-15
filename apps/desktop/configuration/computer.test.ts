@@ -5,6 +5,7 @@ import { createConfigurationComputer } from "./computer";
 import type { ConfigurationComputerPorts } from "./computer";
 import type { ComputerConfigurationCommand } from "./computer";
 import { ProductSettingsSchema } from "../../../src/pkg/product-settings/contract";
+import type { ProductSettings } from "../../../src/pkg/product-settings/contract";
 
 function settingsWithWorkspace(workspace: unknown) {
   return ProductSettingsSchema.parse({
@@ -423,3 +424,200 @@ it.each([false, true])(
     expect(snapshotSettingsWorkspace).toHaveBeenCalledTimes(1);
   },
 );
+
+type FakeLease = { release: () => Promise<void> };
+interface FakeService {
+  pendingEditLeases: Map<string, FakeLease>;
+  released: string[];
+  leaseRelease: ReturnType<typeof vi.fn>;
+  snapshot: () => { status: "ready"; settings: ProductSettings };
+  releaseWorkspaceEditLease?: (this: unknown, id: string) => Promise<void>;
+}
+
+// Scripted Go receipt and picker only: no native filesystem or provider witness.
+describe("apply-workspace-edit lease cleanup", () => {
+  const workspace = {
+    workspaceId: "00000000-0000-4000-8000-000000000001",
+    root: "/tmp/project",
+    label: "project",
+    access: "write" as const,
+    excludedPaths: [],
+    rootIdentity: { device: "1", inode: "2" },
+  };
+  const generation = 1;
+  const operationId = "lease-op-1";
+
+  function makeService() {
+    const released: string[] = [];
+    const leaseRelease = vi.fn(async () => {});
+    const pendingEditLeases = new Map<
+      string,
+      { release: () => Promise<void> }
+    >();
+    pendingEditLeases.set(operationId, { release: leaseRelease });
+    const baseSettings = settingsWithWorkspace(workspace);
+    const settings = {
+      ...baseSettings,
+      setup: {
+        ...baseSettings.setup,
+        computer: {
+          ...baseSettings.setup.computer,
+          verified: {
+            profile: "computer.local.write/1",
+            configRevision: generation,
+            workspaceId: workspace.workspaceId,
+            runtimeGeneration: "runtime:build",
+            buildId: "0".repeat(64),
+            protocol: "mutable-workspace/1",
+            verifiedAt: new Date().toISOString(),
+          },
+        },
+      },
+    };
+    const service: FakeService = {
+      pendingEditLeases,
+      released,
+      leaseRelease,
+      snapshot: () => ({ status: "ready" as const, settings }),
+    };
+    service.releaseWorkspaceEditLease = async function (
+      this: unknown,
+      id: string,
+    ) {
+      const self = this as {
+        pendingEditLeases: Map<string, { release: () => Promise<void> }>;
+      };
+      const lease = self.pendingEditLeases.get(id);
+      if (!lease) return;
+      self.pendingEditLeases.delete(id);
+      await lease.release();
+      released.push(id);
+    };
+    return service;
+  }
+
+  function makePendingEdit() {
+    return {
+      operationId,
+      workspaceId: workspace.workspaceId,
+      computerGeneration: generation,
+      relativePath: "file.txt",
+      bytes: 1,
+      beforeSha256: "before",
+      expiresAt: Date.now() + 60_000,
+    };
+  }
+
+  it("releases the lease exactly once on success", async () => {
+    const service = makeService();
+    const pendingEdit = makePendingEdit();
+    const editSettingsWorkspace = vi.fn(async () => ({ ok: true }));
+    const goCore = {
+      settingsMutationProfile: vi.fn(),
+      editSettingsWorkspace,
+    };
+    const admission = new DesktopAdmission(pending());
+    const ports = makePorts({
+      configuration: () => service,
+      desktopAdmission: admission,
+      compiledGoCore: () => ({}),
+      desktopGoCore: () => goCore,
+      getPendingWorkspaceEdit: () => pendingEdit,
+      setPendingWorkspaceEdit: vi.fn(),
+      verifiedProductWorkspace: () => ({ status: "verified", workspace }),
+      goWorkspaceEditResult: vi.fn(() => ({ ok: true })),
+    });
+    const computer = createConfigurationComputer(ports);
+    const result = await computer.configureAdmittedComputer({
+      kind: "computer.apply-workspace-edit",
+      operationId,
+      oldText: "a",
+      newText: "b",
+    } as unknown as ComputerConfigurationCommand);
+    expect(result).toMatchObject({ ok: true });
+    expect(service.released).toEqual([operationId]);
+    expect(service.pendingEditLeases.has(operationId)).toBe(false);
+    expect(service.leaseRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the lease exactly once when the mutation outcome is unknown", async () => {
+    const service = makeService();
+    const pendingEdit = makePendingEdit();
+    const editSettingsWorkspace = vi.fn(async () => {
+      throw new Error("boom");
+    });
+    const goCore = {
+      settingsMutationProfile: vi.fn(),
+      editSettingsWorkspace,
+    };
+    const admission = new DesktopAdmission(pending());
+    const ports = makePorts({
+      configuration: () => service,
+      desktopAdmission: admission,
+      compiledGoCore: () => ({}),
+      desktopGoCore: () => goCore,
+      getPendingWorkspaceEdit: () => pendingEdit,
+      setPendingWorkspaceEdit: vi.fn(),
+      verifiedProductWorkspace: () => ({ status: "verified", workspace }),
+      goWorkspaceEditResult: vi.fn(() => ({ ok: true })),
+    });
+    const computer = createConfigurationComputer(ports);
+    const result = await computer.configureAdmittedComputer({
+      kind: "computer.apply-workspace-edit",
+      operationId,
+      oldText: "a",
+      newText: "b",
+    } as unknown as ComputerConfigurationCommand);
+    expect(result).toMatchObject({
+      ok: false,
+      error: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN",
+    });
+    expect(service.released).toEqual([operationId]);
+    expect(service.leaseRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases on the original owner when the configuration owner is replaced mid-flight", async () => {
+    const originalService = makeService();
+    const replacementService = makeService();
+    let currentService: unknown = originalService;
+    const pendingEdit = makePendingEdit();
+    let resolveMutation!: (value: unknown) => void;
+    const editSettingsWorkspace = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          currentService = replacementService;
+          resolveMutation = resolve;
+        }),
+    );
+    const goCore = {
+      settingsMutationProfile: vi.fn(),
+      editSettingsWorkspace,
+    };
+    const admission = new DesktopAdmission(pending());
+    const ports = makePorts({
+      configuration: () => currentService,
+      desktopAdmission: admission,
+      compiledGoCore: () => ({}),
+      desktopGoCore: () => goCore,
+      getPendingWorkspaceEdit: () => pendingEdit,
+      setPendingWorkspaceEdit: vi.fn(),
+      verifiedProductWorkspace: () => ({ status: "verified", workspace }),
+      goWorkspaceEditResult: vi.fn(() => ({ ok: true })),
+    });
+    const computer = createConfigurationComputer(ports);
+    const promise = computer.configureAdmittedComputer({
+      kind: "computer.apply-workspace-edit",
+      operationId,
+      oldText: "a",
+      newText: "b",
+    } as unknown as ComputerConfigurationCommand);
+    await vi.waitFor(() => expect(editSettingsWorkspace).toHaveBeenCalled());
+    resolveMutation({ ok: true });
+    const result = await promise;
+    expect(result).toMatchObject({ ok: true });
+    expect(originalService.released).toEqual([operationId]);
+    expect(originalService.leaseRelease).toHaveBeenCalledTimes(1);
+    expect(replacementService.released).toEqual([]);
+    expect(replacementService.leaseRelease).not.toHaveBeenCalled();
+  });
+});

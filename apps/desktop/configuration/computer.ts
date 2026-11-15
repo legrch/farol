@@ -771,6 +771,10 @@ export function createConfigurationComputer(
         const workspaceAdmission =
           desktopAdmission.reserveAdmitted("workspace-mutation");
         setPendingWorkspaceEdit(null);
+        // Settle invariant: bind cleanup to the exact service object obtained
+        // at this wrapper setup point, before awaiting the mutation. Do not
+        // re-fetch another owner in finally or after owner replacement.
+        const editLeaseOwner = configuration();
         try {
           // Go owns durable pending admission, one executor call and the offer.
           return await withSettingsEditLease(
@@ -795,7 +799,7 @@ export function createConfigurationComputer(
                 );
               }
             },
-            configuration()!.releaseWorkspaceEditLease.bind(configuration),
+            editLeaseOwner!.releaseWorkspaceEditLease.bind(editLeaseOwner),
           );
         } finally {
           workspaceAdmission.release();
