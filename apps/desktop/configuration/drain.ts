@@ -12,6 +12,7 @@ import type { ProductConfigurationService } from "../../../src/apps/desktop/prod
 import type { SecureMcpConnectorRuntime } from "../../../src/apps/desktop/secure-mcp-connector-runtime";
 import type { DesktopGoCore } from "../go-core-host";
 import type { DesktopAdmission } from "../host/admission";
+import type { startSavedChatBridge } from "../../../src/apps/desktop/saved-chat-bridge";
 import type { AuthorityTransitionReservation } from "../../../src/apps/desktop/authority-transition";
 
 type ComputerMcpLifecycle = Readonly<{
@@ -55,12 +56,14 @@ export type ConfigurationDrainPorts = Readonly<{
     connector: SecureMcpConnectorRuntime | null,
     inFlightStart: Promise<void> | null,
     core: DesktopGoCore | null,
-    savedChat: unknown,
+    savedChat: Awaited<ReturnType<typeof startSavedChatBridge>> | null,
     reason?: "owner_stop",
     originalStopParent?: string,
     quitStartDeadlineAt?: number,
   ) => Promise<void>;
-  savedChatBridgeRuntime: () => unknown;
+  savedChatBridgeRuntime: () => Awaited<
+    ReturnType<typeof startSavedChatBridge>
+  > | null;
   statePaths: () => Readonly<{ secureMcpLaunch: string }>;
   configureAdmittedProduct: (
     command: ProductConfigurationCommand,

@@ -116,8 +116,7 @@ import {
   refuseComputerSettingsList,
 } from "./computer-check-diagnostic";
 import { NativeViewVisibility } from "../../../apps/desktop/bridge/native-view-visibility";
-import { withSettingsEditLease } from "../../../apps/desktop/with-settings-edit-lease";
-import { readGoWorkspaceSnapshot } from "../../../apps/desktop/go-workspace-snapshot";
+
 import { ReadAccountConfirmation } from "../../../apps/desktop/read-account-confirmation";
 import { AccountObservationConfirmation } from "../../../apps/desktop/account-observation-confirmation";
 import {
@@ -327,7 +326,6 @@ import {
   NativeReadonlyWorkspace,
   SAFE_OPEN_HELPER,
 } from "../../modules/computer/infra/native/native-readonly-workspace";
-import { discoverWorkspaceGitMetadata } from "../../modules/computer/infra/native/native-verification-command";
 import {
   CHATGPT_HOME,
   canonicalChatGptConversationUrl,
@@ -372,7 +370,11 @@ import { clearAndConfirmOriginalConnectorVerificationReceipt } from "../../modul
 import { createConfigurationPipeline } from "../../../apps/desktop/configuration/pipeline";
 import { createConfigurationObserved } from "../../../apps/desktop/configuration/observed";
 import { createConfigurationDrain } from "../../../apps/desktop/configuration/drain";
-import type { ConfigurationDrainPorts } from "../../../apps/desktop/configuration/drain";
+import { createConfigurationComputer } from "../../../apps/desktop/configuration/computer";
+import type {
+  ComputerConfigurationCommand,
+  PendingWorkspacePickValue,
+} from "../../../apps/desktop/configuration/computer";
 import { type WorkspaceConfigurationCommand } from "./workspace-configuration-drain";
 import {
   confirmSeparateAppVerificationAttempt,
@@ -426,11 +428,7 @@ import {
   type RouteBSurfaceAdmission,
   type RouteBTaskSurfaces,
 } from "./route-b-runtime";
-import {
-  observeWorkspaceEdit,
-  workspaceEditPreview,
-  type PendingWorkspaceEdit,
-} from "./workspace-edit";
+import { type PendingWorkspaceEdit } from "./workspace-edit";
 import {
   createSupportExport,
   writeSupportExport,
@@ -4131,14 +4129,7 @@ async function selectedWorkspace(): Promise<
 
 // A native choice is held only in this process. The renderer receives an
 // opaque short-lived reference, so cancellation never stops a live connector.
-let pendingWorkspacePick: Readonly<{
-  id: string;
-  selected: Exclude<
-    Awaited<ReturnType<typeof selectedWorkspace>>,
-    "cancelled" | "invalid"
-  >;
-  expiresAt: number;
-}> | null = null;
+let pendingWorkspacePick: PendingWorkspacePickValue | null = null;
 
 // A renderer-chosen discovery candidate is never trusted at face value: the
 // main process re-runs discovery itself and only accepts a path that is
@@ -6514,8 +6505,7 @@ function configurationDrain() {
     },
     codexAgentOperationActive,
     computerMcpLifecycle,
-    stopAndConfirmComputerMcp:
-      stopAndConfirmComputerMcp as ConfigurationDrainPorts["stopAndConfirmComputerMcp"],
+    stopAndConfirmComputerMcp,
     savedChatBridgeRuntime: () => savedChatBridgeRuntime,
     statePaths,
     configureAdmittedProduct,
@@ -6526,6 +6516,43 @@ function configurationDrain() {
 }
 let configurationDrainCache: ReturnType<
   typeof createConfigurationDrain
+> | null = null;
+
+function configurationComputer() {
+  return (configurationComputerCache ??= createConfigurationComputer({
+    configuration: () => configuration,
+    codexAgentOperationActive,
+    configurationFailure,
+    getPendingWorkspacePick: () => pendingWorkspacePick,
+    setPendingWorkspacePick: (value) => {
+      pendingWorkspacePick = value;
+    },
+    selectedWorkspace,
+    measuredRootIdentity,
+    inspectOwnerWorkspace,
+    buildIdentity: () => buildIdentity,
+    workspaceReadFailure,
+    desktopAdmission,
+    secureMcpConnectorRuntime: () => secureMcpConnectorRuntime,
+    runtime: () => runtime,
+    verifiedProductWorkspace,
+    listOwnerWorkspace,
+    desktopGoCore: () => desktopGoCore,
+    compiledGoCore: () => compiledGoCore,
+    verificationWorkspaceAction,
+    getPendingWorkspaceEdit: () => pendingWorkspaceEdit,
+    setPendingWorkspaceEdit: (value) => {
+      pendingWorkspaceEdit = value;
+    },
+    selectedWorkspaceFile,
+    goWorkspaceEditResult,
+    statePaths,
+    workspaceMutationFailure,
+    workspaceCommandFailure,
+  }));
+}
+let configurationComputerCache: ReturnType<
+  typeof createConfigurationComputer
 > | null = null;
 
 function configurationObserved() {
@@ -6570,15 +6597,6 @@ async function configureNewProductRequest(
 ): Promise<ProductConfigurationResult> {
   return configurationPipeline().configureNewProductRequest(value);
 }
-
-// Retained as a thin forwarding seam for legacy characterization callers that
-// invoke the unfenced pipeline by its original main.ts name.
-async function configureUnfencedProduct(
-  value: unknown,
-): Promise<ProductConfigurationResult> {
-  return configurationPipeline().configureUnfencedProduct(value);
-}
-void configureUnfencedProduct;
 
 // The reply's last step before Electron carries it to the renderer. The
 // command itself has fully completed here — its edit, receipt and durable
@@ -6895,6 +6913,11 @@ async function configureAdmittedProduct(
       deepTestRecoveryReady = false;
       return configurationFailure("CHATGPT_CONVERSATION_UNCONFIRMED");
     }
+  }
+  if (command.kind.startsWith("computer.")) {
+    return configurationComputer().configureAdmittedComputer(
+      command as ComputerConfigurationCommand,
+    );
   }
   switch (command.kind) {
     case "chatgpt.inspect-chat-account": {
@@ -9499,715 +9522,6 @@ async function configureAdmittedProduct(
           activityDetail: command.activityDetail,
         }),
       );
-    case "computer.rename":
-      return ProductConfigurationResultSchema.parse(
-        await configuration.renameComputer(command.name),
-      );
-    case "computer.choose-workspace": {
-      if (codexAgentOperationActive())
-        return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
-      pendingWorkspacePick = null;
-      const selected = await selectedWorkspace();
-      if (selected === "cancelled")
-        return configurationFailure("WORKSPACE_PICKER_CANCELLED");
-      if (selected === "invalid")
-        return configurationFailure("WORKSPACE_SELECTION_INVALID");
-      if (codexAgentOperationActive())
-        return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
-      const selectionId = randomUUID();
-      pendingWorkspacePick = {
-        id: selectionId,
-        selected,
-        expiresAt: Date.now() + 300_000,
-      };
-      return ProductConfigurationResultSchema.parse({
-        ok: true,
-        snapshot: configuration.snapshot(),
-        evidence: {
-          kind: "computer.workspace-pick",
-          selectionId,
-          displayPath: selected.root,
-        },
-      });
-    }
-    case "computer.add-workspace": {
-      if (codexAgentOperationActive())
-        return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
-      const picked = pendingWorkspacePick;
-      if (command.selectionId) pendingWorkspacePick = null;
-      const selected = command.selectionId
-        ? picked?.id === command.selectionId && picked.expiresAt > Date.now()
-          ? picked.selected
-          : "invalid"
-        : await selectedWorkspace();
-      if (selected === "cancelled") {
-        return configurationFailure("WORKSPACE_PICKER_CANCELLED");
-      }
-      if (selected === "invalid") {
-        return configurationFailure("WORKSPACE_SELECTION_INVALID");
-      }
-      const currentIdentity = await measuredRootIdentity(selected.root);
-      if (
-        !currentIdentity ||
-        currentIdentity.device !== selected.rootIdentity.device ||
-        currentIdentity.inode !== selected.rootIdentity.inode
-      ) {
-        return configurationFailure("WORKSPACE_ROOT_CHANGED");
-      }
-      const added = await configuration.addWorkspace(
-        selected,
-        command.access ?? "read",
-      );
-      if (!added.ok || added.snapshot.status !== "ready")
-        return ProductConfigurationResultSchema.parse(added);
-      // Report the native pick even when it is an already approved folder.
-      // Inferring it from a snapshot diff fails on that no-op path.
-      const workspace = added.snapshot.settings.computer.workspaces.find(
-        (candidate) => candidate.root === selected.root,
-      );
-      if (!workspace)
-        return configurationFailure("WORKSPACE_SELECTION_INVALID");
-      return ProductConfigurationResultSchema.parse({
-        ...added,
-        evidence: {
-          kind: "computer.workspace-selection",
-          workspaceId: workspace.workspaceId,
-        },
-      });
-    }
-    case "computer.remove-workspace":
-      return ProductConfigurationResultSchema.parse(
-        await configuration.removeWorkspace(command.workspaceId),
-      );
-    case "computer.update-exclusions": {
-      const snapshot = configuration.snapshot();
-      const workspace =
-        snapshot.status === "ready"
-          ? snapshot.settings.computer.workspaces.find(
-              (candidate) => candidate.workspaceId === command.workspaceId,
-            )
-          : undefined;
-      if (!workspace) return configurationFailure("WORKSPACE_NOT_FOUND");
-      return ProductConfigurationResultSchema.parse(
-        await configuration.updateWorkspaceExclusions(
-          workspace.workspaceId,
-          command.excludedPaths.map((relative) =>
-            path.join(workspace.root, ...relative.split("/")),
-          ),
-        ),
-      );
-    }
-    case "computer.update-access":
-      return ProductConfigurationResultSchema.parse(
-        await configuration.updateWorkspaceAccess(
-          command.workspaceId,
-          command.access,
-        ),
-      );
-    case "computer.update-git-history":
-      return ProductConfigurationResultSchema.parse(
-        await configuration.updateWorkspaceGitHistory(
-          command.workspaceId,
-          command.approved,
-        ),
-      );
-    case "computer.update-commands":
-      return ProductConfigurationResultSchema.parse(
-        await configuration.updateComputerCommands(command.commands),
-      );
-    case "computer.update-file-policy":
-      return ProductConfigurationResultSchema.parse(
-        await configuration.updateComputerFilePolicy(command.filePolicy),
-      );
-    case "computer.check-folder": {
-      const snapshot = configuration.snapshot();
-      if (snapshot.status !== "ready")
-        return configurationFailure("SETTINGS_UNAVAILABLE");
-      const workspace = snapshot.settings.computer.workspaces.find(
-        (item) => item.workspaceId === command.workspaceId,
-      );
-      if (!workspace) return configurationFailure("WORKSPACE_NOT_FOUND");
-      const identity = workspace.rootIdentity;
-      if (!identity)
-        return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
-      // Recheck only the already approved root through the same descriptor.
-      // No child names/content are returned and no selected-folder binding changes.
-      const checked = await inspectOwnerWorkspace(
-        snapshot.settings.computer.generation,
-        workspace,
-        identity,
-        `settings:computer.check-folder:${workspace.workspaceId}`,
-      );
-      const reachable = checked.ok;
-      const recorded = await configuration.recordFolderAccessCheck(
-        workspace.workspaceId,
-        snapshot.settings.computer.generation,
-        buildIdentity.buildId,
-        identity,
-        reachable,
-        command.checkId,
-      );
-      if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
-      return reachable
-        ? ProductConfigurationResultSchema.parse(recorded)
-        : workspaceReadFailure(checked.code);
-    }
-    case "computer.verify-workspace": {
-      let snapshot = configuration.snapshot();
-      let workspace =
-        snapshot.status === "ready"
-          ? snapshot.settings.computer.workspaces.find(
-              (candidate) => candidate.workspaceId === command.workspaceId,
-            )
-          : undefined;
-      if (!workspace) return configurationFailure("WORKSPACE_NOT_FOUND");
-      // Verifying is the owner's explicit act that binds the folder. The folder
-      // at the path now is measured; one already bound must still be that
-      // object, and one saved before identities existed is bound to what is
-      // measured here only because the owner asked for this verification.
-      const measured = await measuredRootIdentity(workspace.root);
-      if (measured === null) {
-        return configurationFailure("WORKSPACE_VERIFICATION_FAILED");
-      }
-      const bound = workspace.rootIdentity;
-      if (
-        bound &&
-        (bound.device !== measured.device || bound.inode !== measured.inode)
-      ) {
-        return configurationFailure("WORKSPACE_ROOT_CHANGED");
-      }
-      if (!bound) {
-        if (snapshot.status !== "ready")
-          return configurationFailure("SETTINGS_UNAVAILABLE");
-        const bindingAdmission = configurationAdmission(command.kind, {
-          agentActive: codexAgentOperationActive(),
-          connectorRunning:
-            desktopAdmission.occupied("connector-task") ||
-            secureMcpConnectorRuntime?.isRunning() === true,
-        });
-        if (bindingAdmission !== "admitted")
-          return configurationFailure(bindingAdmission);
-        const binding = await configuration.bindWorkspaceRootIdentity(
-          workspace.workspaceId,
-          snapshot.settings.revision,
-          workspace.root,
-          measured,
-        );
-        if (!binding.ok) return ProductConfigurationResultSchema.parse(binding);
-        snapshot = configuration.snapshot();
-        workspace =
-          snapshot.status === "ready"
-            ? snapshot.settings.computer.workspaces.find(
-                (item) => item.workspaceId === command.workspaceId,
-              )
-            : undefined;
-      }
-      if (!workspace || snapshot.status !== "ready")
-        return configurationFailure("WORKSPACE_NOT_FOUND");
-      // Go performs bounded content-free inspection under the exact published
-      // approval. Native binding and final current authority are both checked.
-      const generation = snapshot.settings.computer.generation;
-      const result = await inspectOwnerWorkspace(
-        generation,
-        workspace,
-        measured,
-        `settings:computer.verify-workspace:${workspace.workspaceId}`,
-      );
-      if (!result.ok) return workspaceReadFailure(result.code);
-      // Preserve the measured layout for task selection. Primary metadata is
-      // bound only with explicit full-Git approval; linked grants stay exact.
-      const gitMetadata = await discoverWorkspaceGitMetadata(
-        workspace.root,
-        workspace.gitHistoryApproved === true,
-      );
-      // The inspection takes a moment, and a connector or Agent may have started
-      // meanwhile; a re-verification rebinds the authority either would carry,
-      // so it is admitted again right before it commits.
-      const readmitted = configurationAdmission(command.kind, {
-        agentActive: codexAgentOperationActive(),
-        connectorRunning:
-          desktopAdmission.occupied("connector-task") ||
-          secureMcpConnectorRuntime?.isRunning() === true,
-      });
-      if (readmitted !== "admitted") return configurationFailure(readmitted);
-      const recorded = await configuration.recordComputerVerification(
-        workspace.workspaceId,
-        {
-          profile: `computer.local.${workspace.access}/1`,
-          runtimeGeneration: `${runtime?.identity ?? "runtime-offline"}:${buildIdentity.buildId}`,
-          buildId: buildIdentity.buildId,
-          protocol:
-            workspace.access === "write"
-              ? "mutable-workspace/1"
-              : "readonly-workspace/1",
-        },
-        {
-          rootIdentity: measured,
-          ...(command.checkId === undefined
-            ? {}
-            : { checkId: command.checkId }),
-          gitMetadata,
-          expectedGeneration: generation,
-          expectedRoot: workspace.root,
-        },
-      );
-      if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
-      return ProductConfigurationResultSchema.parse({
-        ...recorded,
-        evidence: {
-          kind: "computer.workspace-inspection",
-          workspaceId: workspace.workspaceId,
-          relativePath: ".",
-        },
-      });
-    }
-    case "computer.list-workspace": {
-      const selected = verifiedProductWorkspace(command.workspaceId);
-      if (selected.status === "not_found") {
-        return configurationFailure("WORKSPACE_NOT_FOUND");
-      }
-      if (selected.status === "not_verified") {
-        return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
-      }
-      const snapshot = configuration.snapshot();
-      if (snapshot.status !== "ready")
-        return configurationFailure("SETTINGS_UNAVAILABLE");
-      const result = await listOwnerWorkspace(
-        snapshot.settings.computer.generation,
-        selected.workspace,
-        selected.workspace.rootIdentity,
-        command.relativePath,
-      );
-      if (!result.ok) return workspaceReadFailure(result.code);
-      return ProductConfigurationResultSchema.parse({
-        ok: true,
-        snapshot: configuration.snapshot(),
-        evidence: {
-          kind: "computer.workspace-list",
-          workspaceId: selected.workspace.workspaceId,
-          relativePath: command.relativePath,
-          entries: result.entries,
-          truncated: result.truncated,
-        },
-      });
-    }
-    case "computer.search-workspace": {
-      const selected = verifiedProductWorkspace(command.workspaceId);
-      if (selected.status === "not_found")
-        return configurationFailure("WORKSPACE_NOT_FOUND");
-      if (selected.status === "not_verified")
-        return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
-      const snapshot = configuration.snapshot();
-      if (snapshot.status !== "ready")
-        return configurationFailure("SETTINGS_UNAVAILABLE");
-      if (!desktopGoCore) return configurationFailure("WORKSPACE_READ_FAILED");
-      try {
-        const result = await desktopGoCore.searchSettingsWorkspace(
-          snapshot.settings.computer.generation,
-          selected.workspace.workspaceId,
-          command.relativePath,
-          command.pattern,
-        );
-        const current = configuration.snapshot();
-        const identity = selected.workspace.rootIdentity;
-        if (
-          result.root.path !== selected.workspace.root ||
-          result.root.device !== identity.device ||
-          result.root.inode !== identity.inode ||
-          current.status !== "ready" ||
-          current.settings.computer.generation !==
-            snapshot.settings.computer.generation
-        )
-          return configurationFailure("WORKSPACE_ROOT_CHANGED");
-        return ProductConfigurationResultSchema.parse({
-          ok: true,
-          snapshot: current,
-          evidence: {
-            kind: "computer.workspace-search",
-            workspaceId: selected.workspace.workspaceId,
-            relativePath: command.relativePath,
-            pattern: command.pattern,
-            matches: result.matches.map((match) => ({
-              ...match,
-              line: Number(match.line),
-            })),
-            resultLimited: result.resultLimited,
-            scanLimited: result.scanLimited,
-          },
-        });
-      } catch (error) {
-        // A failed selected Go read never dispatches the legacy Python helper.
-        return workspaceReadFailure(
-          error instanceof BridgeError && error.state === "refused"
-            ? error.code
-            : "WORKSPACE_READ_FAILED",
-        );
-      }
-    }
-    case "computer.run-git-status":
-    case "computer.run-git-head": {
-      const verificationCommand =
-        command.kind === "computer.run-git-status" ? "git.status" : "git.head";
-      const snapshot = configuration.snapshot();
-      if (snapshot.status !== "ready") {
-        return configurationFailure("SETTINGS_UNAVAILABLE");
-      }
-      if (snapshot.settings.computer.commands === "none") {
-        return configurationFailure("WORKSPACE_COMMAND_APPROVAL_REQUIRED");
-      }
-      const selected = verifiedProductWorkspace(command.workspaceId);
-      if (selected.status === "not_found") {
-        return configurationFailure("WORKSPACE_NOT_FOUND");
-      }
-      if (selected.status === "not_verified") {
-        return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
-      }
-      // Owner decision 2026-10-20: the fixed Git verifiers run the Python
-      // safe-open snapshot and the Command Line Tools Git, and only the
-      // explicit legacy build keeps them. A Go build refuses with the closed
-      // product code before any authority or helper is built, never retries,
-      // and never reaches Python or git.
-      if (compiledGoCore !== null) {
-        return configurationFailure("WORKSPACE_COMMAND_UNAVAILABLE");
-      }
-      const action = verificationWorkspaceAction(
-        snapshot.settings,
-        selected.workspace,
-        Date.now() + 30_000,
-      );
-      if (!action) {
-        return configurationFailure("WORKSPACE_COMMAND_APPROVAL_REQUIRED");
-      }
-      const result = await action.execute({
-        ownerId: "owner-desktop",
-        sessionId: "desktop-command-session",
-        taskId: "desktop-command-task",
-        taskEpoch: snapshot.settings.computer.generation,
-        participantId: "desktop-command-main",
-        turnId: `desktop-command-${snapshot.settings.computer.generation}`,
-        generation: snapshot.settings.computer.generation,
-        callId: randomUUID(),
-        workspaceId: selected.workspace.workspaceId,
-        operation: {
-          kind: "verification.run",
-          command: verificationCommand,
-          relativePath: ".",
-        },
-      });
-      if (!result.ok) return workspaceCommandFailure(result.error.code);
-      if (result.value.output.kind !== "workspace.command") {
-        return configurationFailure("WORKSPACE_COMMAND_FAILED");
-      }
-      return ProductConfigurationResultSchema.parse({
-        ok: true,
-        snapshot: configuration.snapshot(),
-        evidence: {
-          kind: "computer.workspace-command",
-          workspaceId: selected.workspace.workspaceId,
-          command: result.value.output.command,
-          exitCode: result.value.output.exitCode,
-          stdout: result.value.output.stdout,
-          stderr: result.value.output.stderr,
-          outputBytes: result.value.output.outputBytes,
-          network: result.value.output.network,
-          coverage: result.value.output.coverage,
-          layout: result.value.output.layout,
-        },
-      });
-    }
-    case "computer.prepare-workspace-edit": {
-      if (desktopAdmission.occupied("workspace-mutation")) {
-        return configurationFailure("WORKSPACE_MUTATION_IN_PROGRESS");
-      }
-      const core = compiledGoCore === null ? null : desktopGoCore;
-      if (!core) return configurationFailure("WORKSPACE_READ_FAILED");
-      const snapshot = configuration.snapshot();
-      if (snapshot.status !== "ready") {
-        return configurationFailure("SETTINGS_UNAVAILABLE");
-      }
-      const selected = verifiedProductWorkspace(command.workspaceId);
-      if (selected.status === "not_found") {
-        return configurationFailure("WORKSPACE_NOT_FOUND");
-      }
-      if (selected.status === "not_verified") {
-        return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
-      }
-      if (selected.workspace.access !== "write") {
-        return configurationFailure("WORKSPACE_WRITE_APPROVAL_REQUIRED");
-      }
-      // A new edit waits until the outcome of the last one was delivered, so
-      // an unknown result is observed instead of being buried under a retry.
-      if (snapshot.settings.computer.pendingEdit !== null) {
-        return configurationFailure("WORKSPACE_MUTATION_RESULT_PENDING");
-      }
-      const pending = pendingWorkspaceEdit;
-      if (pending) {
-        const pendingStillCurrent =
-          Date.now() < pending.expiresAt &&
-          pending.computerGeneration === snapshot.settings.computer.generation;
-        if (pendingStillCurrent) {
-          if (pending.workspaceId !== selected.workspace.workspaceId) {
-            return configurationFailure("WORKSPACE_MUTATION_IN_PROGRESS");
-          }
-          return ProductConfigurationResultSchema.parse({
-            ok: true,
-            snapshot,
-            evidence: workspaceEditPreview(pending),
-          });
-        }
-        pendingWorkspaceEdit = null;
-      }
-      const relativePath = await selectedWorkspaceFile(selected.workspace, {
-        title: "Choose a text file for a guarded edit",
-        buttonLabel: "Review Edit",
-      });
-      if (relativePath === "cancelled") {
-        return configurationFailure("WORKSPACE_FILE_PICKER_CANCELLED");
-      }
-      if (relativePath === "invalid") {
-        return configurationFailure("WORKSPACE_FILE_SELECTION_INVALID");
-      }
-      const operationId = randomUUID();
-      const expiresAt = Date.now() + 10 * 60_000;
-      const binding = {
-        generation: snapshot.settings.computer.generation,
-        workspaceId: selected.workspace.workspaceId,
-        relativePath,
-        root: {
-          path: selected.workspace.root,
-          ...selected.workspace.rootIdentity,
-        },
-      };
-      const observed = await readGoWorkspaceSnapshot({
-        binding,
-        current: () => {
-          const now = configuration?.snapshot();
-          const folder =
-            now?.status === "ready"
-              ? now.settings.computer.workspaces.find(
-                  (item) => item.workspaceId === binding.workspaceId,
-                )
-              : undefined;
-          if (
-            desktopGoCore !== core ||
-            now?.status !== "ready" ||
-            !folder?.rootIdentity
-          )
-            return null;
-          return {
-            generation: now.settings.computer.generation,
-            workspaceId: folder.workspaceId,
-            relativePath,
-            root: { path: folder.root, ...folder.rootIdentity },
-          };
-        },
-        read: (value) =>
-          core.snapshotSettingsWorkspace(
-            value.generation,
-            value.workspaceId,
-            value.relativePath,
-          ),
-      });
-      if (!observed.ok) return workspaceReadFailure(observed.code);
-      pendingWorkspaceEdit = {
-        operationId,
-        workspaceId: binding.workspaceId,
-        computerGeneration: binding.generation,
-        relativePath,
-        bytes: observed.bytes,
-        beforeSha256: observed.sha256,
-        expiresAt,
-      };
-      return ProductConfigurationResultSchema.parse({
-        ok: true,
-        snapshot,
-        evidence: workspaceEditPreview(pendingWorkspaceEdit),
-      });
-    }
-    case "computer.apply-workspace-edit": {
-      if (desktopAdmission.occupied("workspace-mutation")) {
-        return configurationFailure("WORKSPACE_MUTATION_IN_PROGRESS");
-      }
-      const pending = pendingWorkspaceEdit;
-      if (!pending || pending.operationId !== command.operationId) {
-        return configurationFailure("WORKSPACE_MUTATION_PREVIEW_NOT_FOUND");
-      }
-      if (Date.now() >= pending.expiresAt) {
-        pendingWorkspaceEdit = null;
-        return configurationFailure("WORKSPACE_MUTATION_PREVIEW_EXPIRED");
-      }
-      const snapshot = configuration.snapshot();
-      if (snapshot.status !== "ready") {
-        pendingWorkspaceEdit = null;
-        return configurationFailure("SETTINGS_UNAVAILABLE");
-      }
-      const workspace = snapshot.settings.computer.workspaces.find(
-        (candidate) => candidate.workspaceId === pending.workspaceId,
-      );
-      const verification = snapshot.settings.setup.computer.verified;
-      if (
-        !workspace ||
-        workspace.access !== "write" ||
-        snapshot.settings.computer.generation !== pending.computerGeneration ||
-        verification?.workspaceId !== pending.workspaceId ||
-        verification.configRevision !== pending.computerGeneration
-      ) {
-        pendingWorkspaceEdit = null;
-        return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
-      }
-      const goCore = compiledGoCore === null ? null : desktopGoCore;
-      try {
-        if (!goCore) throw new Error("GO_MUTATION_HOST_UNAVAILABLE");
-        goCore.settingsMutationProfile();
-      } catch {
-        pendingWorkspaceEdit = null;
-        return configurationFailure("WORKSPACE_MUTATION_FAILED");
-      }
-      if (snapshot.settings.computer.pendingEdit !== null) {
-        pendingWorkspaceEdit = null;
-        return configurationFailure("WORKSPACE_MUTATION_RESULT_PENDING");
-      }
-      const workspaceAdmission =
-        desktopAdmission.reserveAdmitted("workspace-mutation");
-      pendingWorkspaceEdit = null;
-      try {
-        // Go owns durable pending admission, one executor call and the offer.
-        return await withSettingsEditLease(
-          pending.operationId,
-          async () => {
-            try {
-              const result = await goCore.editSettingsWorkspace(
-                pending.operationId,
-                pending.computerGeneration,
-                pending.workspaceId,
-                pending.relativePath,
-                pending.beforeSha256,
-                command.oldText,
-                command.newText,
-              );
-              return goWorkspaceEditResult(result, false);
-            } catch {
-              // No retry and no host-side ACK/invalidation decision. The exact
-              // retained pending remains observable through the Go service.
-              return configurationFailure("WORKSPACE_MUTATION_OUTCOME_UNKNOWN");
-            }
-          },
-          configuration.releaseWorkspaceEditLease.bind(configuration),
-        );
-      } finally {
-        workspaceAdmission.release();
-      }
-    }
-    case "computer.observe-workspace-edit": {
-      if (desktopAdmission.occupied("workspace-mutation")) {
-        return configurationFailure("WORKSPACE_MUTATION_IN_PROGRESS");
-      }
-      const snapshot = configuration.snapshot();
-      if (snapshot.status !== "ready") {
-        return configurationFailure("SETTINGS_UNAVAILABLE");
-      }
-      const pendingEdit = snapshot.settings.computer.pendingEdit;
-      if (pendingEdit?.operationId !== command.operationId) {
-        return configurationFailure("WORKSPACE_MUTATION_NOT_PENDING");
-      }
-      if ("backend" in pendingEdit) {
-        try {
-          const core = desktopGoCore;
-          if (compiledGoCore === null || !core)
-            throw new Error("GO_MUTATION_HOST_UNAVAILABLE");
-          const result = await core.observeSettingsMutation({
-            backend: pendingEdit.backend,
-            operationId: pendingEdit.operationId,
-            profileId: pendingEdit.profileId,
-            workspaceId: pendingEdit.workspaceId,
-            relativePath: pendingEdit.relativePath,
-            computerGeneration: String(pendingEdit.computerGeneration),
-            beforeSHA256: pendingEdit.beforeSha256,
-            submittedAt: pendingEdit.submittedAt,
-          });
-          return goWorkspaceEditResult(result, true);
-        } catch {
-          return configurationFailure("WORKSPACE_MUTATION_OUTCOME_UNKNOWN");
-        }
-      }
-      // Observation reads the durable operation record only: it executes
-      // nothing and needs no write authority.
-      const observed = await observeWorkspaceEdit(
-        { mutationStateRoot: statePaths().workspaceMutations },
-        pendingEdit,
-      );
-      switch (observed.status) {
-        case "completed":
-          return ProductConfigurationResultSchema.parse({
-            ok: true,
-            snapshot: configuration.snapshot(),
-            evidence: {
-              kind: "computer.workspace-mutation",
-              operationId: observed.operationId,
-              workspaceId: pendingEdit.workspaceId,
-              relativePath: observed.receipt.relativePath,
-              operation: observed.receipt.operation,
-              bytes: observed.receipt.bytes,
-              replacements: observed.receipt.replacements,
-              beforeSha256: observed.receipt.beforeSha256,
-              afterSha256: observed.receipt.afterSha256,
-              resultRetention: "durable",
-              redelivered: observed.redelivered,
-            },
-          });
-        case "failed":
-          return workspaceMutationFailure(observed.code);
-        case "not_admitted":
-          return configurationFailure("WORKSPACE_MUTATION_NOT_ADMITTED");
-        case "outcome_unknown":
-          await configuration.recordComputerMutationOutcomeUnknown(
-            pendingEdit.workspaceId,
-          );
-          return configurationFailure("WORKSPACE_MUTATION_OUTCOME_UNKNOWN");
-        case "unavailable":
-          return configurationFailure("WORKSPACE_MUTATION_OUTCOME_UNKNOWN");
-      }
-      break;
-    }
-    case "computer.ack-workspace-edit": {
-      if (desktopAdmission.occupied("workspace-mutation"))
-        return configurationFailure("WORKSPACE_MUTATION_IN_PROGRESS");
-      const snapshot = configuration.snapshot();
-      if (snapshot.status !== "ready")
-        return configurationFailure("SETTINGS_UNAVAILABLE");
-      const pending = snapshot.settings.computer.pendingEdit;
-      if (pending?.operationId !== command.operationId)
-        return configurationFailure("WORKSPACE_MUTATION_NOT_PENDING");
-      if ("backend" in pending) {
-        try {
-          if (compiledGoCore === null || !desktopGoCore)
-            throw new Error("GO_MUTATION_HOST_UNAVAILABLE");
-          await desktopGoCore.acknowledgeSettingsMutation(command.operationId);
-          return ProductConfigurationResultSchema.parse({
-            ok: true,
-            snapshot: configuration.snapshot(),
-          });
-        } catch {
-          return configurationFailure("WORKSPACE_MUTATION_OUTCOME_UNKNOWN");
-        }
-      }
-      // Existing-only legacy delivery remains separate until migration is qualified.
-      return ProductConfigurationResultSchema.parse(
-        await configuration.clearPendingWorkspaceEdit(command.operationId),
-      );
-    }
-    case "computer.cancel-workspace-edit":
-      if (
-        !pendingWorkspaceEdit ||
-        pendingWorkspaceEdit.operationId !== command.operationId
-      ) {
-        return configurationFailure("WORKSPACE_MUTATION_PREVIEW_NOT_FOUND");
-      }
-      pendingWorkspaceEdit = null;
-      return ProductConfigurationResultSchema.parse({
-        ok: true,
-        snapshot: configuration.snapshot(),
-      });
     case "setup.progress": {
       const route = chatGptRoute;
       const check = setupSignInCheck;
@@ -10426,6 +9740,7 @@ async function configureAdmittedProduct(
       }
     }
   }
+  return configurationFailure("SETTINGS_INPUT_INVALID");
 }
 
 function currentRuntimeStatus(): RuntimeStatus {

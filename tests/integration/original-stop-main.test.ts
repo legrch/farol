@@ -3,6 +3,8 @@ import { admissionFixture } from "../support/desktop-admission";
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { createConfigurationDrain } from "../../apps/desktop/configuration/drain";
+import type { ConfigurationDrainPorts } from "../../apps/desktop/configuration/drain";
+import type { WorkspaceConfigurationCommand } from "../../src/apps/desktop/workspace-configuration-drain";
 import { WorkspaceConfigurationDrain } from "../../src/apps/desktop/workspace-configuration-drain";
 import { ownerComputerConsentDigest } from "../../src/modules/computer/infra/repo/owner-computer-consent";
 
@@ -212,45 +214,63 @@ function harness() {
     }),
   };
   const sandboxWithAdmission = admissionFixture(sandbox);
-  const ports = {
-    configuration: () => (sandboxWithAdmission as any).configuration,
-    secureMcpConnectorRuntime: () =>
-      (sandboxWithAdmission as any).secureMcpConnectorRuntime,
-    desktopGoCore: () => (sandboxWithAdmission as any).desktopGoCore,
-    desktopAdmission: sandboxWithAdmission.desktopAdmission,
-    connectorStartInFlight: () => sandboxWithAdmission.connectorStartInFlight,
-    transitionRefusal: () => (sandboxWithAdmission as any).transitionRefusal(),
-    configurationFailure: (code: unknown) =>
-      (sandboxWithAdmission as any).configurationFailure(code),
-    authorityTransitions: (sandboxWithAdmission as any).authorityTransitions,
-    activeAuthorityChangeKind: () =>
-      (sandboxWithAdmission as any).activeAuthorityChangeKind,
-    setActiveAuthorityChangeKind: (value: unknown) => {
-      (sandboxWithAdmission as any).activeAuthorityChangeKind = value;
-    },
-    codexAgentOperationActive: () =>
-      (sandboxWithAdmission as any).codexAgentOperationActive(),
-    computerMcpLifecycle: () =>
-      (sandboxWithAdmission as any).computerMcpLifecycle(),
-    stopAndConfirmComputerMcp: (...args: unknown[]) =>
-      (sandboxWithAdmission as any).stopAndConfirmComputerMcp(...args),
-    savedChatBridgeRuntime: () =>
-      (sandboxWithAdmission as any).savedChatBridgeRuntime,
-    configureAdmittedProduct: (cmd: unknown) =>
-      (sandboxWithAdmission as any).configureAdmittedProduct(cmd),
-    statePaths: () => (sandboxWithAdmission as any).statePaths(),
-    ownerComputerConsentDigest: (s: unknown) =>
-      (sandboxWithAdmission as any).ownerComputerConsentDigest(s),
-    connectorRuntimeUncertain: (s: unknown) =>
-      (sandboxWithAdmission as any).connectorRuntimeUncertain(s),
-    clearAndConfirmOriginalConnectorVerificationReceipt: (...args: unknown[]) =>
-      (
-        sandboxWithAdmission as any
-      ).clearAndConfirmOriginalConnectorVerificationReceipt(...args),
+  const fixture = sandboxWithAdmission as unknown as {
+    configuration: unknown;
+    secureMcpConnectorRuntime: unknown;
+    desktopGoCore: unknown;
+    desktopAdmission: DesktopAdmission;
+    connectorStartInFlight: unknown;
+    transitionRefusal: () => unknown;
+    configurationFailure: (code: unknown) => unknown;
+    authorityTransitions: unknown;
+    activeAuthorityChangeKind: unknown;
+    codexAgentOperationActive: () => unknown;
+    computerMcpLifecycle: () => unknown;
+    stopAndConfirmComputerMcp: (...args: unknown[]) => unknown;
+    savedChatBridgeRuntime: unknown;
+    configureAdmittedProduct: (cmd: unknown) => unknown;
+    statePaths: () => unknown;
+    ownerComputerConsentDigest: (s: unknown) => unknown;
+    connectorRuntimeUncertain: (s: unknown) => unknown;
+    clearAndConfirmOriginalConnectorVerificationReceipt: (
+      ...args: unknown[]
+    ) => unknown;
   };
-  const drain = createConfigurationDrain(ports as never);
+  const ports = {
+    configuration: () => fixture.configuration,
+    secureMcpConnectorRuntime: () => fixture.secureMcpConnectorRuntime,
+    desktopGoCore: () => fixture.desktopGoCore,
+    desktopAdmission: fixture.desktopAdmission,
+    connectorStartInFlight: () => fixture.connectorStartInFlight,
+    transitionRefusal: () => fixture.transitionRefusal(),
+    configurationFailure: (code: unknown) => fixture.configurationFailure(code),
+    authorityTransitions: fixture.authorityTransitions,
+    activeAuthorityChangeKind: () => fixture.activeAuthorityChangeKind,
+    setActiveAuthorityChangeKind: (value: unknown) => {
+      fixture.activeAuthorityChangeKind = value;
+    },
+    codexAgentOperationActive: () => fixture.codexAgentOperationActive(),
+    computerMcpLifecycle: () => fixture.computerMcpLifecycle(),
+    stopAndConfirmComputerMcp: (...args: unknown[]) =>
+      fixture.stopAndConfirmComputerMcp(...args),
+    savedChatBridgeRuntime: () => fixture.savedChatBridgeRuntime,
+    configureAdmittedProduct: (cmd: unknown) =>
+      fixture.configureAdmittedProduct(cmd),
+    statePaths: () => fixture.statePaths(),
+    ownerComputerConsentDigest: (s: unknown) =>
+      fixture.ownerComputerConsentDigest(s),
+    connectorRuntimeUncertain: (s: unknown) =>
+      fixture.connectorRuntimeUncertain(s),
+    clearAndConfirmOriginalConnectorVerificationReceipt: (...args: unknown[]) =>
+      fixture.clearAndConfirmOriginalConnectorVerificationReceipt(...args),
+  };
+  const drain = createConfigurationDrain(
+    ports as unknown as ConfigurationDrainPorts,
+  );
   const execute = (input: unknown) =>
-    drain.configureDrainedWorkspaceChange(input as never);
+    drain.configureDrainedWorkspaceChange(
+      input as unknown as WorkspaceConfigurationCommand,
+    );
   return {
     events,
     core,
