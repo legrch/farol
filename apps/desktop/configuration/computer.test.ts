@@ -241,7 +241,7 @@ describe("configuration computer", () => {
             network: "none",
             coverage: "tracked-files-only",
             layout: "primary",
-          },
+          } as const,
         },
       })),
     };

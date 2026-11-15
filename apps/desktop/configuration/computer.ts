@@ -1,3 +1,4 @@
+import type { ReadonlyComputerCallResponse } from "../../../src/modules/computer/contract/readonly-computer-contract";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 
@@ -44,31 +45,47 @@ export type ComputerConfigurationCommand = Extract<
   { kind: `computer.${string}` }
 >;
 
-export type VerificationWorkspaceAction = Readonly<{
-  execute(request: unknown): Promise<VerificationWorkspaceActionResult>;
-}>;
-
-export type VerificationWorkspaceActionResult =
+type PublishedVerificationOutput = Extract<
+  ReadonlyComputerCallResponse,
+  { ok: true }
+>["value"]["output"];
+type VerificationOutput =
+  | Omit<
+      Extract<PublishedVerificationOutput, { kind: "workspace.command" }>,
+      "relativePath"
+    >
   | Readonly<{
-      ok: true;
-      value: Readonly<{
-        output: Readonly<{
-          kind: "workspace.command";
-          command: "git.status" | "git.head";
-          exitCode: number;
-          stdout: string;
-          stderr: string;
-          outputBytes: number;
-          network: string;
-          coverage: string;
-          layout: string;
-        }>;
-      }>;
-    }>
-  | Readonly<{
-      ok: false;
-      error: Readonly<{ code: string }>;
+      kind: Exclude<PublishedVerificationOutput["kind"], "workspace.command">;
     }>;
+
+export type VerificationWorkspaceAction = Readonly<{
+  execute(
+    request: Readonly<{
+      ownerId: string;
+      sessionId: string;
+      taskId: string;
+      taskEpoch: number;
+      participantId: string;
+      turnId: string;
+      generation: number;
+      callId: string;
+      workspaceId: string;
+      operation: Readonly<{
+        kind: "verification.run";
+        command: "git.status" | "git.head";
+        relativePath: ".";
+      }>;
+    }>,
+  ): Promise<
+    | Readonly<{
+        ok: true;
+        value: Readonly<{
+          output: VerificationOutput;
+        }>;
+      }>
+    | Readonly<{ ok: false; error: Readonly<{ code: string }> }>
+  >;
+}>;
 
 export type ConfigurationComputerPorts = Readonly<{
   configuration: () => ProductConfigurationService | null;

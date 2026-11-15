@@ -1508,7 +1508,7 @@ function verificationWorkspaceAction(
     new InMemoryComputerApprovalRepository([approval]),
     nativeWorkspace,
     { now: () => Date.now() },
-  ) as unknown as VerificationWorkspaceAction;
+  );
 }
 
 const windowOpenCoordinator = new WindowOpenCoordinator();
