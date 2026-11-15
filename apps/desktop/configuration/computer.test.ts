@@ -533,8 +533,10 @@ describe("apply-workspace-edit lease cleanup", () => {
       operationId,
       oldText: "a",
       newText: "b",
-    } as unknown as ComputerConfigurationCommand);
+    });
     expect(result).toMatchObject({ ok: true });
+    expect(editSettingsWorkspace).toHaveBeenCalledTimes(1);
+    expect(admission.occupied("workspace-mutation")).toBe(false);
     expect(service.released).toEqual([operationId]);
     expect(service.pendingEditLeases.has(operationId)).toBe(false);
     expect(service.leaseRelease).toHaveBeenCalledTimes(1);
@@ -567,11 +569,13 @@ describe("apply-workspace-edit lease cleanup", () => {
       operationId,
       oldText: "a",
       newText: "b",
-    } as unknown as ComputerConfigurationCommand);
+    });
     expect(result).toMatchObject({
       ok: false,
       error: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN",
     });
+    expect(editSettingsWorkspace).toHaveBeenCalledTimes(1);
+    expect(admission.occupied("workspace-mutation")).toBe(false);
     expect(service.released).toEqual([operationId]);
     expect(service.leaseRelease).toHaveBeenCalledTimes(1);
   });
@@ -610,11 +614,13 @@ describe("apply-workspace-edit lease cleanup", () => {
       operationId,
       oldText: "a",
       newText: "b",
-    } as unknown as ComputerConfigurationCommand);
+    });
     await vi.waitFor(() => expect(editSettingsWorkspace).toHaveBeenCalled());
     resolveMutation({ ok: true });
     const result = await promise;
     expect(result).toMatchObject({ ok: true });
+    expect(editSettingsWorkspace).toHaveBeenCalledTimes(1);
+    expect(admission.occupied("workspace-mutation")).toBe(false);
     expect(originalService.released).toEqual([operationId]);
     expect(originalService.leaseRelease).toHaveBeenCalledTimes(1);
     expect(replacementService.released).toEqual([]);
