@@ -198,6 +198,7 @@ describe("Git status and Git HEAD in a Go-aware build", () => {
       overrides.verified === false
         ? { status: "not_verified" as const }
         : { status: "verified" as const, workspace: primaryWorkspace };
+    // This fake owner implements only the branch collaborators exercised below.
     const ports = {
       configuration: () => ({
         snapshot: () => ({ status: "ready" as const, settings: s }),
@@ -248,10 +249,29 @@ describe("Git status and Git HEAD in a Go-aware build", () => {
     return ports;
   }
 
-  it("extracts the one case that serves both commands", () => {
-    // The Git case now lives in createConfigurationComputer; smoke the module.
-    expect(typeof createConfigurationComputer).toBe("function");
-  });
+  it.each(["computer.run-git-status", "computer.run-git-head"] as const)(
+    "%s refuses a non-command verifier output",
+    async (kind) => {
+      const execute = vi.fn(async () => ({
+        ok: true,
+        value: {
+          output: { kind: "workspace.entries", entries: [], truncated: false },
+        },
+      }));
+      const ports = gitPorts({
+        compiledGoCore: null,
+        verificationAction: { execute },
+      });
+      const computer = createConfigurationComputer(ports);
+      await expect(
+        computer.configureAdmittedComputer({ kind, workspaceId }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: "WORKSPACE_COMMAND_FAILED",
+      });
+      expect(execute).toHaveBeenCalledTimes(1);
+    },
+  );
 
   for (const kind of [
     "computer.run-git-status",
@@ -263,7 +283,7 @@ describe("Git status and Git HEAD in a Go-aware build", () => {
       const result = await computer.configureAdmittedComputer({
         kind,
         workspaceId,
-      } as Parameters<typeof computer.configureAdmittedComputer>[0]);
+      });
       expect(result).toMatchObject({
         ok: false,
         error: "WORKSPACE_COMMAND_UNAVAILABLE",
@@ -279,7 +299,7 @@ describe("Git status and Git HEAD in a Go-aware build", () => {
       offComputer.configureAdmittedComputer({
         kind: "computer.run-git-status",
         workspaceId,
-      } as Parameters<typeof offComputer.configureAdmittedComputer>[0]),
+      }),
     ).resolves.toMatchObject({
       error: "WORKSPACE_COMMAND_APPROVAL_REQUIRED",
     });
@@ -290,7 +310,7 @@ describe("Git status and Git HEAD in a Go-aware build", () => {
       unverifiedComputer.configureAdmittedComputer({
         kind: "computer.run-git-head",
         workspaceId,
-      } as Parameters<typeof unverifiedComputer.configureAdmittedComputer>[0]),
+      }),
     ).resolves.toMatchObject({ error: "WORKSPACE_VERIFICATION_REQUIRED" });
 
     for (const ports of [off, unverified]) {
@@ -319,19 +339,15 @@ describe("Git status and Git HEAD in a Go-aware build", () => {
           },
         },
       }));
-      const action = { execute };
       const ports = gitPorts({
         compiledGoCore: null,
         verificationAction: { execute },
       });
-      (
-        ports.verificationWorkspaceAction as ReturnType<typeof vi.fn>
-      ).mockReturnValue(action);
       const computer = createConfigurationComputer(ports);
       const result = await computer.configureAdmittedComputer({
         kind,
         workspaceId,
-      } as Parameters<typeof computer.configureAdmittedComputer>[0]);
+      });
       expect(ports.verificationWorkspaceAction).toHaveBeenCalledTimes(1);
       expect(execute).toHaveBeenCalledTimes(1);
       expect(execute.mock.calls[0]![0]).toMatchObject({

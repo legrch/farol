@@ -123,6 +123,7 @@ function fixture(mode: string) {
       settings: makeSettings(generation),
     }),
   };
+  // This fake owner implements only the branch collaborators exercised below.
   const ports = {
     configuration: () => configuration,
     codexAgentOperationActive: () => false,
@@ -175,7 +176,7 @@ function fixture(mode: string) {
       workspaceId,
       relativePath: ".",
       pattern: "match",
-    } as Parameters<typeof computer.configureAdmittedComputer>[0]);
+    });
 
   return { run, search };
 }
