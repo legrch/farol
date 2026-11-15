@@ -1,9 +1,82 @@
+import type { PendingWorkspaceEdit } from "../../../src/apps/desktop/workspace-edit";
 import { describe, expect, it, vi } from "vitest";
 import { DesktopAdmission } from "../host/admission";
 import { createConfigurationComputer } from "./computer";
 import type { ConfigurationComputerPorts } from "./computer";
 import type { ComputerConfigurationCommand } from "./computer";
 import { ProductSettingsSchema } from "../../../src/pkg/product-settings/contract";
+
+function settingsWithWorkspace(workspace: unknown) {
+  return ProductSettingsSchema.parse({
+    schema: 1,
+    revision: 1,
+    general: {
+      openAtLaunch: "browser",
+      sidebarDefault: "full",
+      activityDetail: "summary",
+    },
+    computer: {
+      computerId: "00000000-0000-4000-8000-000000000002",
+      generation: 1,
+      name: "This Mac",
+      commands: "verification",
+      workspaces: [workspace],
+    },
+    setup: {
+      journey: { currentStep: "verify", dismissed: false },
+      chatgpt: {
+        visited: true,
+        skipped: false,
+        configured: true,
+        reachable: "reachable",
+        verified: null,
+        needsAction: null,
+        unavailable: null,
+        outcomeUnknown: false,
+      },
+      computer: {
+        visited: true,
+        skipped: false,
+        configured: true,
+        reachable: "reachable",
+        verified: null,
+        needsAction: null,
+        unavailable: null,
+        outcomeUnknown: false,
+      },
+      connect: {
+        visited: true,
+        skipped: false,
+        configured: true,
+        reachable: "reachable",
+        verified: null,
+        needsAction: null,
+        unavailable: null,
+        outcomeUnknown: false,
+      },
+      hosts: {
+        visited: true,
+        skipped: false,
+        configured: true,
+        reachable: "reachable",
+        verified: null,
+        needsAction: null,
+        unavailable: null,
+        outcomeUnknown: false,
+      },
+      verify: {
+        visited: true,
+        skipped: false,
+        configured: true,
+        reachable: "reachable",
+        verified: null,
+        needsAction: null,
+        unavailable: null,
+        outcomeUnknown: false,
+      },
+    },
+  });
+}
 
 function pending() {
   return {
@@ -203,75 +276,7 @@ describe("configuration computer", () => {
       excludedPaths: [],
       rootIdentity: { device: "1", inode: "2" },
     };
-    const settings = ProductSettingsSchema.parse({
-      schema: 1,
-      revision: 1,
-      general: {
-        openAtLaunch: "browser",
-        sidebarDefault: "full",
-        activityDetail: "summary",
-      },
-      computer: {
-        computerId: "00000000-0000-4000-8000-000000000002",
-        generation: 1,
-        name: "This Mac",
-        commands: "verification",
-        workspaces: [workspace],
-      },
-      setup: {
-        journey: { currentStep: "verify", dismissed: false },
-        chatgpt: {
-          visited: true,
-          skipped: false,
-          configured: true,
-          reachable: "reachable",
-          verified: null,
-          needsAction: null,
-          unavailable: null,
-          outcomeUnknown: false,
-        },
-        computer: {
-          visited: true,
-          skipped: false,
-          configured: true,
-          reachable: "reachable",
-          verified: null,
-          needsAction: null,
-          unavailable: null,
-          outcomeUnknown: false,
-        },
-        connect: {
-          visited: true,
-          skipped: false,
-          configured: true,
-          reachable: "reachable",
-          verified: null,
-          needsAction: null,
-          unavailable: null,
-          outcomeUnknown: false,
-        },
-        hosts: {
-          visited: true,
-          skipped: false,
-          configured: true,
-          reachable: "reachable",
-          verified: null,
-          needsAction: null,
-          unavailable: null,
-          outcomeUnknown: false,
-        },
-        verify: {
-          visited: true,
-          skipped: false,
-          configured: true,
-          reachable: "reachable",
-          verified: null,
-          needsAction: null,
-          unavailable: null,
-          outcomeUnknown: false,
-        },
-      },
-    });
+    const settings = settingsWithWorkspace(workspace);
     const action = {
       execute: vi.fn(async () => ({
         ok: true as const,
@@ -323,75 +328,7 @@ describe("configuration computer", () => {
       excludedPaths: [],
       rootIdentity: { device: "1", inode: "2" },
     };
-    const settings = ProductSettingsSchema.parse({
-      schema: 1,
-      revision: 1,
-      general: {
-        openAtLaunch: "browser",
-        sidebarDefault: "full",
-        activityDetail: "summary",
-      },
-      computer: {
-        computerId: "00000000-0000-4000-8000-000000000002",
-        generation: 1,
-        name: "This Mac",
-        commands: "verification",
-        workspaces: [workspace],
-      },
-      setup: {
-        journey: { currentStep: "verify", dismissed: false },
-        chatgpt: {
-          visited: true,
-          skipped: false,
-          configured: true,
-          reachable: "reachable",
-          verified: null,
-          needsAction: null,
-          unavailable: null,
-          outcomeUnknown: false,
-        },
-        computer: {
-          visited: true,
-          skipped: false,
-          configured: true,
-          reachable: "reachable",
-          verified: null,
-          needsAction: null,
-          unavailable: null,
-          outcomeUnknown: false,
-        },
-        connect: {
-          visited: true,
-          skipped: false,
-          configured: true,
-          reachable: "reachable",
-          verified: null,
-          needsAction: null,
-          unavailable: null,
-          outcomeUnknown: false,
-        },
-        hosts: {
-          visited: true,
-          skipped: false,
-          configured: true,
-          reachable: "reachable",
-          verified: null,
-          needsAction: null,
-          unavailable: null,
-          outcomeUnknown: false,
-        },
-        verify: {
-          visited: true,
-          skipped: false,
-          configured: true,
-          reachable: "reachable",
-          verified: null,
-          needsAction: null,
-          unavailable: null,
-          outcomeUnknown: false,
-        },
-      },
-    });
+    const settings = settingsWithWorkspace(workspace);
     const verificationWorkspaceAction = vi.fn(() => null);
     const ports = makePorts({
       configuration: () => ({
@@ -416,3 +353,73 @@ describe("configuration computer", () => {
     expect(verificationWorkspaceAction).not.toHaveBeenCalled();
   });
 });
+
+// Scripted Go receipt and picker only: no native filesystem or provider witness.
+it.each([false, true])(
+  "publishes the newly prepared preview after expired=%s",
+  async (expired) => {
+    const workspace = {
+      workspaceId: "00000000-0000-4000-8000-000000000001",
+      root: "/tmp/project",
+      label: "project",
+      access: "write" as const,
+      excludedPaths: [],
+      rootIdentity: { device: "1", inode: "2" },
+    };
+    const settings = settingsWithWorkspace(workspace);
+    let preview: PendingWorkspaceEdit | null = expired
+      ? {
+          operationId: "00000000-0000-4000-8000-000000000099",
+          workspaceId: workspace.workspaceId,
+          computerGeneration: settings.computer.generation,
+          relativePath: "old.txt",
+          bytes: 999,
+          beforeSha256: "b".repeat(64),
+          expiresAt: Date.now() - 1,
+        }
+      : null;
+    const previousId = preview?.operationId;
+    const snapshotSettingsWorkspace = vi.fn(async () => ({
+      workspaceId: workspace.workspaceId,
+      relativePath: "new.txt",
+      root: { path: workspace.root, ...workspace.rootIdentity },
+      bytes: 3,
+      sha256: "a".repeat(64),
+    }));
+    const core = { snapshotSettingsWorkspace };
+    const configuration = {
+      snapshot: () => ({ status: "ready" as const, settings }),
+    };
+    const ports = makePorts({
+      configuration: () => configuration,
+      desktopGoCore: () => core,
+      compiledGoCore: () => ({}),
+      verifiedProductWorkspace: () => ({ status: "verified", workspace }),
+      selectedWorkspaceFile: vi.fn(async () => "new.txt"),
+      getPendingWorkspaceEdit: () => preview,
+      setPendingWorkspaceEdit: (value: PendingWorkspaceEdit | null) => {
+        preview = value;
+      },
+    });
+    const result = await createConfigurationComputer(
+      ports,
+    ).configureAdmittedComputer({
+      kind: "computer.prepare-workspace-edit",
+      workspaceId: workspace.workspaceId,
+    });
+    const prepared = ports.getPendingWorkspaceEdit();
+    expect(prepared).not.toBeNull();
+    expect(prepared?.operationId).not.toBe(previousId);
+    expect(result).toMatchObject({
+      ok: true,
+      evidence: {
+        kind: "computer.workspace-edit-preview",
+        operationId: prepared?.operationId,
+        relativePath: "new.txt",
+        bytes: 3,
+        beforeSha256: "a".repeat(64),
+      },
+    });
+    expect(snapshotSettingsWorkspace).toHaveBeenCalledTimes(1);
+  },
+);

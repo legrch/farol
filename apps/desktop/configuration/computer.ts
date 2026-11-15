@@ -708,7 +708,7 @@ export function createConfigurationComputer(
             ),
         });
         if (!observed.ok) return workspaceReadFailure(observed.code);
-        setPendingWorkspaceEdit({
+        const prepared: PendingWorkspaceEdit = {
           operationId,
           workspaceId: binding.workspaceId,
           computerGeneration: binding.generation,
@@ -716,11 +716,12 @@ export function createConfigurationComputer(
           bytes: observed.bytes,
           beforeSha256: observed.sha256,
           expiresAt,
-        });
+        };
+        setPendingWorkspaceEdit(prepared);
         return ProductConfigurationResultSchema.parse({
           ok: true,
           snapshot,
-          evidence: workspaceEditPreview(pending!),
+          evidence: workspaceEditPreview(prepared),
         });
       }
       case "computer.apply-workspace-edit": {
