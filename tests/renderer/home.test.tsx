@@ -808,3 +808,69 @@ it.each(["expired", "withdrawn"])(
     expect(h.f.api.configure).not.toHaveBeenCalled();
   },
 );
+
+// Scripted renderer state only; no app, provider or production profile is used.
+it.each(["unobserved", "unavailable", "stopped", "expired"] as const)(
+  "does not present saved Setup as connected with %s transport",
+  async (mode) => {
+    const restored = restoredSetup();
+    restored.value.connectionStatus = {
+      ...unavailableConnectionStatus,
+      revision: 1,
+      state: mode === "expired" ? "recent_transport" : mode,
+      validUntilMillis: mode === "expired" ? Date.now() - 1 : null,
+    };
+    const h = await mount(restored.value);
+    const presentation = connectionPresentation({
+      ...h.c.getSnapshot(),
+      ...restored.value,
+    });
+    expect(presentation.connected).toBe(false);
+    expect(presentation.attention).toBe(true);
+    expect(presentation.text).toBe(
+      mode === "unavailable" || mode === "stopped"
+        ? "Connection needs attention"
+        : "Connection not confirmed",
+    );
+    expect(h.host.querySelector(".home-status-card h2")?.textContent).not.toBe(
+      "Setup complete",
+    );
+    expect(h.host.querySelector(".home-status-card h2")?.textContent).not.toBe(
+      "Connected",
+    );
+    expect(
+      h.host
+        .querySelector(".home-working-mark")
+        ?.getAttribute("data-attention"),
+    ).toBe("true");
+    expect(h.host.querySelector(".home-working-mark")?.textContent).toBe("!");
+    expect(h.f.api.configure).not.toHaveBeenCalled();
+    await h.click("Review connection");
+    expect(h.c.getSnapshot().destination).toMatchObject({
+      area: "setup",
+      setupStep: "connection",
+    });
+    expect(h.f.api.configure).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps saved Setup checking neutral until current transport is confirmed", async () => {
+  const restored = restoredSetup();
+  restored.value.connectionStatus = {
+    ...unavailableConnectionStatus,
+    state: "unobserved",
+    validUntilMillis: null,
+  };
+  const h = await mount(restored.value);
+  const presentation = connectionPresentation({
+    ...h.c.getSnapshot(),
+    ...restored.value,
+    connectionChecking: true,
+  });
+  expect(presentation).toMatchObject({
+    checking: true,
+    connected: false,
+    attention: false,
+    text: "Checking connection…",
+  });
+});
