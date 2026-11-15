@@ -11,6 +11,7 @@ import {
   verifyRuntimeExecutableClosure,
 } from "../../tooling/runtime-launch-manifest.mjs";
 import { inspectRuntimeLaunches } from "../../tooling/check-runtime-launches.mjs";
+import { readFileSync } from "node:fs";
 
 // Synthetic source/files only. Fixture hashes are local test expectations, never
 // compiler, native, shipped-package, provider or independently trusted evidence.
@@ -384,6 +385,135 @@ describe("selected Settings Go route", () => {
     expect(
       issue(
         inspect(source.replace("return await", "return"), m),
+        "SELECTED_ROUTE_NOT_TERMINAL",
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("actual computer settings search Go route", () => {
+  const actualFile = "apps/desktop/configuration/computer.ts";
+  const actualSource = readFileSync(
+    new URL("../../" + actualFile, import.meta.url),
+    "utf8",
+  );
+  const allowedCalls = [
+    "verifiedProductWorkspace",
+    "configurationFailure",
+    "configuration().snapshot",
+    "configuration",
+    "desktopGoCore",
+    "desktopGoCore().searchSettingsWorkspace",
+    "ProductConfigurationResultSchema.parse",
+    "result.matches.map",
+    "Number",
+    "workspaceReadFailure",
+  ];
+  const commandManifest = (changes = {}) =>
+    manifest({
+      commands: [
+        {
+          id: "computer.settings.search",
+          file: actualFile,
+          symbol: "createConfigurationComputer.configureAdmittedComputer",
+          command: "computer.search-workspace",
+          classification: "selected-go",
+          requiredCall: "desktopGoCore().searchSettingsWorkspace",
+          allowedCalls,
+          ...changes,
+        },
+      ],
+    });
+
+  it("accepts the actual moved owner", () => {
+    const result = inspect(actualSource, commandManifest(), actualFile);
+    expect(result.ok).toBe(true);
+    expect(result.issues).toEqual([]);
+  });
+
+  it("rejects missing dispatch", () => {
+    const source = actualSource.replace(
+      "desktopGoCore()!.searchSettingsWorkspace",
+      "desktopGoCore()!.searchSettingsWorkspaceDisabled",
+    );
+    expect(
+      issue(
+        inspect(source, commandManifest(), actualFile),
+        "SELECTED_ROUTE_CHANGED",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects duplicate dispatch", () => {
+    const source = actualSource.replace(
+      '        if (!desktopGoCore())\n          return configurationFailure("WORKSPACE_READ_FAILED");',
+      '        if (!desktopGoCore())\n          return configurationFailure("WORKSPACE_READ_FAILED");\n        desktopGoCore()!.searchSettingsWorkspace(\n          snapshot.settings.computer.generation,\n          selected.workspace.workspaceId,\n          command.relativePath,\n          command.pattern,\n        );',
+    );
+    expect(
+      issue(
+        inspect(source, commandManifest(), actualFile),
+        "SELECTED_ROUTE_CHANGED",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects wrong owner", () => {
+    expect(
+      issue(
+        inspect(
+          actualSource,
+          commandManifest({ symbol: "configureAdmittedProduct" }),
+          actualFile,
+        ),
+        "SELECTED_ROUTE_CHANGED",
+      ),
+    ).toBe(true);
+    expect(
+      issue(
+        inspect(
+          actualSource,
+          commandManifest({ file: "src/apps/desktop/main.ts" }),
+          actualFile,
+        ),
+        "SELECTED_ROUTE_CHANGED",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects fallback in catch", () => {
+    const source = actualSource.replace(
+      "          // A failed selected Go read never dispatches the legacy Python helper.\n          return workspaceReadFailure(",
+      "          // A failed selected Go read never dispatches the legacy Python helper.\n          return fallback(",
+    );
+    expect(
+      issue(
+        inspect(source, commandManifest(), actualFile),
+        "SELECTED_ROUTE_CHANGED",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects nonterminal catch", () => {
+    const source = actualSource.replace(
+      "          // A failed selected Go read never dispatches the legacy Python helper.\n          return workspaceReadFailure(",
+      "          // A failed selected Go read never dispatches the legacy Python helper.\n          workspaceReadFailure(",
+    );
+    expect(
+      issue(
+        inspect(source, commandManifest(), actualFile),
+        "SELECTED_ROUTE_NOT_TERMINAL",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects missing await", () => {
+    const source = actualSource.replace(
+      "const result = await desktopGoCore()!.searchSettingsWorkspace(",
+      "const result = desktopGoCore()!.searchSettingsWorkspace(",
+    );
+    expect(
+      issue(
+        inspect(source, commandManifest(), actualFile),
         "SELECTED_ROUTE_NOT_TERMINAL",
       ),
     ).toBe(true);
