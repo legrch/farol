@@ -1,3 +1,7 @@
+import {
+  createInstalledUpdateHost,
+  type InstalledUpdateHostPorts,
+} from "../../apps/desktop/update/host";
 import { admissionFixture } from "../support/desktop-admission";
 import { windowHost } from "../support/window-host";
 import fs from "node:fs";
@@ -48,7 +52,16 @@ const privateExecutable = "/private/accepted/Electron";
 function resources(
   recheck: () => Promise<void> = vi.fn(async () => undefined),
 ) {
+  const installedUpdates = createInstalledUpdateHost({
+    directory: "/Applications/Farol.app/Contents/Resources/app",
+  } as InstalledUpdateHostPorts);
+  installedUpdates.resourcesOrigin = {
+    execution: { directory: privateDirectory, executable: privateExecutable },
+    recheck,
+  } as NonNullable<typeof installedUpdates.resourcesOrigin>;
   return {
+    installedUpdates,
+    desktopExecutionResources: installedUpdates.resources,
     quitInProgress: false,
     installedUpdateAdmission: false,
     ownedLocalRuntimes: new Map(),
@@ -58,16 +71,11 @@ function resources(
     beforeConnectorEffect: vi.fn(),
     directory: "/Applications/Farol.app/Contents/Resources/app",
     process: { execPath: "/Applications/replaced/Electron", argv: [], env: {} },
-    installedResourcesOrigin: {
-      execution: { directory: privateDirectory, executable: privateExecutable },
-      recheck,
-    },
     path,
   };
 }
 
 it("selects private MCP, safe-open and renderer resources from actual callers", async () => {
-  const getter = stripTypeScriptTypes(declaration("desktopExecutionResources"));
   const context = resources();
   const mcp = select(
     main,
@@ -83,7 +91,7 @@ it("selects private MCP, safe-open and renderer resources from actual callers", 
         "configure",
   );
   const configured = vm.runInNewContext(
-    `${getter}; const resources = desktopExecutionResources(); ${stripTypeScriptTypes(mcp)}`,
+    `const resources = desktopExecutionResources(); ${stripTypeScriptTypes(mcp)}`,
     admissionFixture({
       ...context,
       connector: {
@@ -107,7 +115,7 @@ it("selects private MCP, safe-open and renderer resources from actual callers", 
       (node.callee as { name?: string })?.name === "NativeReadonlyWorkspace",
   );
   const workspace = vm.runInNewContext(
-    `${getter}; ${stripTypeScriptTypes(helper)}`,
+    `${stripTypeScriptTypes(helper)}`,
     admissionFixture({
       ...context,
       SAFE_OPEN_HELPER: {},
@@ -125,10 +133,7 @@ it("selects private MCP, safe-open and renderer resources from actual callers", 
     ...context,
     windowMode: "hidden",
     initialWindowSize: { width: 800, height: 600 },
-    desktopExecutionResources: vm.runInNewContext(
-      `${getter}; desktopExecutionResources`,
-      admissionFixture(context),
-    ),
+    desktopExecutionResources: context.installedUpdates.resources,
     BrowserWindow: class {
       constructor(options: { webPreferences: { preload: string } }) {
         preload(options.webPreferences.preload);
@@ -175,7 +180,7 @@ it("starts the actual local runtime through private executable and Node IPC afte
     handleRuntimeExit: vi.fn(),
   };
   await vm.runInNewContext(
-    `${stripTypeScriptTypes(declaration("desktopExecutionResources"))}; ${stripTypeScriptTypes(declaration("startRuntime"))}; startRuntime()`,
+    `${stripTypeScriptTypes(declaration("startRuntime"))}; startRuntime()`,
     admissionFixture(context),
   );
   expect(order).toEqual(["recheck", "spawn"]);
@@ -212,7 +217,7 @@ it("reports a native runtime spawn refusal without an unhandled process error", 
     handleRuntimeExit: vi.fn(),
   };
   await vm.runInNewContext(
-    `${stripTypeScriptTypes(declaration("desktopExecutionResources"))}; ${stripTypeScriptTypes(declaration("startRuntime"))}; startRuntime()`,
+    `${stripTypeScriptTypes(declaration("startRuntime"))}; startRuntime()`,
     admissionFixture(context),
   );
   expect(context.runtimeState).toBe("failed");
@@ -233,7 +238,7 @@ it("refuses local-runtime dispatch on failed authenticated resource recheck", as
   };
   await expect(
     vm.runInNewContext(
-      `${stripTypeScriptTypes(declaration("desktopExecutionResources"))}; ${stripTypeScriptTypes(declaration("startRuntime"))}; startRuntime()`,
+      `${stripTypeScriptTypes(declaration("startRuntime"))}; startRuntime()`,
       admissionFixture(context),
     ),
   ).rejects.toThrow("INTEGRITY_CHANGED");
@@ -327,7 +332,7 @@ it.each(["runtimeStopping", "quitInProgress", "installedUpdateAdmission"])(
       runtimeChild: null,
     };
     const original = vm.runInNewContext(
-      `${stripTypeScriptTypes(declaration("desktopExecutionResources"))}; ${stripTypeScriptTypes(declaration("startRuntime"))}; startRuntime()`,
+      `${stripTypeScriptTypes(declaration("startRuntime"))}; startRuntime()`,
       admissionFixture(context),
     );
     await reached.promise;
@@ -351,7 +356,7 @@ it.each(["quitInProgress", "installedUpdateAdmission"])(
       spawn,
     };
     await vm.runInNewContext(
-      `${stripTypeScriptTypes(declaration("desktopExecutionResources"))}; ${stripTypeScriptTypes(declaration("startRuntime"))}; startRuntime()`,
+      `${stripTypeScriptTypes(declaration("startRuntime"))}; startRuntime()`,
       admissionFixture(context),
     );
     expect(recheck).not.toHaveBeenCalled();

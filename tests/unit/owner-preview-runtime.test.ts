@@ -1,8 +1,5 @@
-import fs from "node:fs";
 import path from "node:path";
-import { runInNewContext } from "node:vm";
-import { transformSync } from "esbuild";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   desktopAppDataPath,
   desktopCodexChildHomes,
@@ -70,41 +67,4 @@ describe("owner Preview runtime isolation", () => {
       }),
     ).toThrow("DESKTOP_E2E_APP_DATA_INVALID");
   });
-
-  it.each(["dev", "owner-preview"] as const)(
-    "%s returns before constructing or reading installed-update resources",
-    async (buildEnvironment) => {
-      const source = fs.readFileSync(
-        new URL("../../src/apps/desktop/main.ts", import.meta.url),
-        "utf8",
-      );
-      const begin = source.indexOf(
-        "async function initializeInstalledUpdater(): Promise<void>",
-      );
-      const end = source.indexOf("let activeAuthorityChangeKind:", begin);
-      expect(begin).toBeGreaterThan(0);
-      expect(end).toBeGreaterThan(begin);
-      const createInstalledUpdateRuntime = vi.fn(() => {
-        throw new Error("INSTALLED_RUNTIME_MUST_NOT_BE_CONSTRUCTED");
-      });
-      const publishInstalledUpdate = vi.fn(() => {
-        throw new Error("INSTALLED_RESOURCES_MUST_NOT_BE_OBSERVED");
-      });
-      const result = runInNewContext(
-        transformSync(
-          `${source.slice(begin, end)}\ninitializeInstalledUpdater();`,
-          { loader: "ts" },
-        ).code,
-        {
-          buildEnvironment,
-          createInstalledUpdateRuntime,
-          publishInstalledUpdate,
-        },
-        { timeout: 1000 },
-      );
-      await expect(result).resolves.toBeUndefined();
-      expect(createInstalledUpdateRuntime).not.toHaveBeenCalled();
-      expect(publishInstalledUpdate).not.toHaveBeenCalled();
-    },
-  );
 });

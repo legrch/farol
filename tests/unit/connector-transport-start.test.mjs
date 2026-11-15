@@ -283,11 +283,13 @@ function fixture({ pause, startResult = originalStart, openError } = {}) {
     path,
     process: { execPath: "/controlled/electron" },
     directory: "/controlled/app",
-    desktopExecutionResources: () => ({
-      directory: "/controlled/app",
-      executable: "/controlled/electron",
-      recheck: port("resources"),
-    }),
+    installedUpdates: {
+      resources: () => ({
+        directory: "/controlled/app",
+        executable: "/controlled/electron",
+        recheck: port("resources"),
+      }),
+    },
   };
   admission.computerConnectorAdmission = context.computerConnectorAdmission;
   // The extracted start reads the supervisor's attempt key as main.ts does,

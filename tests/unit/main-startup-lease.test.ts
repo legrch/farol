@@ -1,8 +1,8 @@
+import { withInstalledStartupFence } from "../../apps/desktop/update/host";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { readFileSync } from "node:fs";
-import { transformSync } from "esbuild";
 import { describe, expect, it, vi } from "vitest";
 import { withStartupPromotionLease } from "../../src/apps/desktop/startup-promotion-lease";
 import type { PromotionLeaseHandle } from "../../src/apps/desktop/promotion-lease";
@@ -10,11 +10,6 @@ import type { PromotionLeaseHandle } from "../../src/apps/desktop/promotion-leas
 // Execute the actual main.ts orchestration without loading Electron or touching
 // an installed profile. The lease itself uses disposable state and fake ports.
 const source = readFileSync(path.resolve("src/apps/desktop/main.ts"), "utf8");
-const declaration = source.match(
-  /async function withInstalledStartupFence<T>\([\s\S]*?\n}\n\n(?=async function main\()/,
-);
-if (!declaration) throw new Error("STARTUP_FENCE_NOT_FOUND");
-const javascript = transformSync(declaration[0], { loader: "ts" }).code;
 
 type Guard = { recheck(): Promise<void> } | null;
 type Fence = <T>(
@@ -59,10 +54,16 @@ async function fixture(
     generation,
     critical,
   ) => withStartupPromotionLease(userData, generation, critical, ports);
-  const fence = new Function(
-    "withStartupPromotionLease",
-    `${javascript}; return withInstalledStartupFence;`,
-  )(wrapper) as Fence;
+  const fence: Fence = (args, userData, generation, observe, start) =>
+    withInstalledStartupFence(
+      args,
+      userData,
+      generation,
+      observe,
+      start,
+      wrapper,
+    );
+
   try {
     await run({
       fence,
