@@ -312,3 +312,42 @@ it("releases configuration admission after settled Setup work even when its IPC 
   expect(context.desktopAdmission.configurationRequests).toBe(0);
   expect(context.desktopAdmission.updateBlocker(true)).toBeNull();
 });
+
+it("holds chat admission before awaiting Dev proof preparation", async () => {
+  const preparation = deferred<null>();
+  const context = admissionFixture({
+    isolatedDevMcpProofAllowed: () => true,
+    buildEnvironment: "dev",
+    runtimeEnvironment: "dev",
+    configuration: {
+      snapshot: () => ({
+        status: "ready",
+        settings: {
+          connectors: {
+            secureMcp: { runtime: { state: "ready" }, attachment: {} },
+          },
+        },
+      }),
+    },
+    chatGptRoute: {},
+    secureMcpConnectorRuntime: { isRunning: () => true },
+    chatGptTaskAdmissionReady: () => true,
+    readDevMcpProofPreparation: () => preparation.promise,
+    statePaths: () => ({ devMcpProof: "/scripted-proof" }),
+    configurationFailure: (error: string) => ({ ok: false, error }),
+  });
+  const run = vm.runInNewContext(
+    stripTypeScriptTypes(declaration("runDevMcpProof") + "\nrunDevMcpProof;"),
+    context,
+  ) as () => Promise<unknown>;
+  const first = run();
+  const competingCheck = context.desktopAdmission.acquire("chatgpt-task");
+  try {
+    expect(competingCheck).toBeNull();
+  } finally {
+    competingCheck?.release();
+    preparation.resolve(null);
+    await first;
+  }
+  expect(context.desktopAdmission.occupied("chatgpt-task")).toBe(false);
+});

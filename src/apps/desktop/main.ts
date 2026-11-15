@@ -5913,142 +5913,151 @@ async function runDevMcpProof(): Promise<ProductConfigurationResult> {
   if (!configuration || !chatGptRoute || !secureMcpConnectorRuntime) {
     return configurationFailure("SETTINGS_UNAVAILABLE");
   }
-  if (desktopAdmission.occupied("chatgpt-task")) {
-    return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
-  }
-  const snapshot = configuration.snapshot();
-  if (snapshot.status !== "ready") {
-    return configurationFailure("SETTINGS_UNAVAILABLE");
-  }
-  const connector = snapshot.settings.connectors.secureMcp;
-  const runtimeProof = connector.runtime;
-  if (
-    runtimeProof?.state !== "ready" ||
-    connector.attachment === null ||
-    !secureMcpConnectorRuntime.isRunning() ||
-    !chatGptTaskAdmissionReady()
-  ) {
-    return configurationFailure("DEV_MCP_PROOF_CONNECTOR_NOT_READY");
-  }
-  const preparation = await readDevMcpProofPreparation(
-    statePaths().devMcpProof,
-  ).catch(() => null);
-  if (preparation === null) {
-    return configurationFailure("DEV_MCP_PROOF_NOT_PREPARED");
-  }
-  if (
-    preparation.environment !== "dev" ||
-    preparation.buildId !== buildIdentity.buildId ||
-    preparation.computerGeneration !== snapshot.settings.computer.generation ||
-    runtimeProof.computerGeneration !== preparation.computerGeneration ||
-    runtimeProof.buildId !== preparation.buildId ||
-    !snapshot.settings.computer.workspaces.some(
-      (workspace) =>
-        workspace.workspaceId === preparation.workspaceId &&
-        workspace.root === preparation.workspaceRoot &&
-        workspace.rootIdentity !== undefined,
-    )
-  ) {
-    return configurationFailure("DEV_MCP_PROOF_STALE");
-  }
-  if (
-    (await readDevMcpProofReceipt(statePaths().devMcpProof).catch(
-      () => null,
-    )) !== null
-  ) {
-    // A prior live attempt exists. Its outcome must never be overwritten or
-    // retried as though nothing happened; prepare a fresh fixture instead.
-    return configurationFailure("DEV_MCP_PROOF_STALE");
-  }
-  let attemptedAt: string;
+  const chatAdmission = desktopAdmission.acquire("chatgpt-task");
+  if (!chatAdmission) return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
   try {
-    attemptedAt = await claimDevMcpProofAttempt(
-      statePaths().devMcpProof,
-      preparation.proofId,
-    );
-  } catch {
-    // The claim is exclusive and durable. Any previous attempt, including one
-    // whose provider outcome is unknown, requires a newly prepared fixture.
-    return configurationFailure("DEV_MCP_PROOF_STALE");
-  }
-  const prompt = [
-    "Use the selected app's Computer tool computer_workspace_read.",
-    `First read workspaceId ${preparation.workspaceId} at relativePath ${preparation.allowedPath}.`,
-    `Then attempt the same tool and workspaceId at relativePath ${preparation.deniedPath}; it must be refused because it leaves the grant through a link.`,
-    "If and only if the first read succeeds and the second is refused, reply with exactly the first file's text and nothing else.",
-  ].join(" ");
-  const chatAdmission = desktopAdmission.reserveAdmitted("chatgpt-task");
-  try {
-    const result = await chatGptRoute.runReadonlyTask(prompt);
-    if (result.state !== "completed" || typeof result.outputText !== "string") {
-      return configurationFailure("DEV_MCP_PROOF_CHATGPT_FAILED");
+    const snapshot = configuration.snapshot();
+    if (snapshot.status !== "ready") {
+      return configurationFailure("SETTINGS_UNAVAILABLE");
     }
-    const answerSha256 = createHash("sha256")
-      .update(result.outputText.trim())
-      .digest("hex");
-    if (answerSha256 !== preparation.sentinelSha256) {
-      return configurationFailure("DEV_MCP_PROOF_ANSWER_MISMATCH");
+    const connector = snapshot.settings.connectors.secureMcp;
+    const runtimeProof = connector.runtime;
+    if (
+      runtimeProof?.state !== "ready" ||
+      connector.attachment === null ||
+      !secureMcpConnectorRuntime.isRunning() ||
+      !chatGptTaskAdmissionReady()
+    ) {
+      return configurationFailure("DEV_MCP_PROOF_CONNECTOR_NOT_READY");
     }
-    const receipt = await readDevMcpProofReceipt(
+    const preparation = await readDevMcpProofPreparation(
       statePaths().devMcpProof,
     ).catch(() => null);
-    if (
-      receipt === null ||
-      receipt.allowed === null ||
-      receipt.denied === null
-    ) {
-      return configurationFailure("DEV_MCP_PROOF_RECEIPT_MISSING");
+    if (preparation === null) {
+      return configurationFailure("DEV_MCP_PROOF_NOT_PREPARED");
     }
-    const sameProofBinding =
-      receipt.allowed.ownerId === receipt.denied.ownerId &&
-      receipt.allowed.sessionId === receipt.denied.sessionId &&
-      receipt.allowed.taskId === receipt.denied.taskId &&
-      receipt.allowed.taskEpoch === receipt.denied.taskEpoch &&
-      receipt.allowed.participantId === receipt.denied.participantId &&
-      receipt.allowed.turnId === receipt.denied.turnId &&
-      receipt.allowed.generation === receipt.denied.generation;
     if (
-      receipt.proofId !== preparation.proofId ||
-      receipt.environment !== "dev" ||
-      receipt.buildId !== preparation.buildId ||
-      receipt.computerGeneration !== preparation.computerGeneration ||
-      receipt.workspaceId !== preparation.workspaceId ||
-      receipt.sentinelSha256 !== preparation.sentinelSha256 ||
-      receipt.allowed.outputSha256 !== preparation.sentinelSha256 ||
-      receipt.allowed.generation !== preparation.computerGeneration ||
-      receipt.allowed.taskEpoch !== preparation.computerGeneration ||
-      receipt.denied.generation !== preparation.computerGeneration ||
-      receipt.denied.taskEpoch !== preparation.computerGeneration ||
-      receipt.denied.errorCode !== "WORKSPACE_PATH_REFUSED" ||
-      receipt.allowed.ownerId !== "owner-desktop" ||
-      receipt.allowed.callIdSha256 === receipt.denied.callIdSha256 ||
-      receipt.allowed.recordedAt < attemptedAt ||
-      receipt.denied.recordedAt < receipt.allowed.recordedAt ||
-      !sameProofBinding
+      preparation.environment !== "dev" ||
+      preparation.buildId !== buildIdentity.buildId ||
+      preparation.computerGeneration !==
+        snapshot.settings.computer.generation ||
+      runtimeProof.computerGeneration !== preparation.computerGeneration ||
+      runtimeProof.buildId !== preparation.buildId ||
+      !snapshot.settings.computer.workspaces.some(
+        (workspace) =>
+          workspace.workspaceId === preparation.workspaceId &&
+          workspace.root === preparation.workspaceRoot &&
+          workspace.rootIdentity !== undefined,
+      )
     ) {
-      return configurationFailure("DEV_MCP_PROOF_RECEIPT_INVALID");
+      return configurationFailure("DEV_MCP_PROOF_STALE");
     }
-    const receiptSha256 = createHash("sha256")
-      .update(`${JSON.stringify(receipt, null, 2)}\n`)
-      .digest("hex");
-    return ProductConfigurationResultSchema.parse({
-      ok: true,
-      snapshot: configuration.snapshot(),
-      evidence: {
-        kind: "dev-proof.verified",
-        proofId: preparation.proofId,
-        workspaceId: preparation.workspaceId,
-        environment: "dev",
-        runtimeGeneration: runtimeProof.runtimeGeneration,
-        computerGeneration: preparation.computerGeneration,
-        buildId: preparation.buildId,
-        sentinelSha256: preparation.sentinelSha256,
-        answerSha256,
-        receiptSha256,
-        outsideGrantError: receipt.denied.errorCode,
-      },
-    });
+    if (
+      (await readDevMcpProofReceipt(statePaths().devMcpProof).catch(
+        () => null,
+      )) !== null
+    ) {
+      // A prior live attempt exists. Its outcome must never be overwritten or
+      // retried as though nothing happened; prepare a fresh fixture instead.
+      return configurationFailure("DEV_MCP_PROOF_STALE");
+    }
+    let attemptedAt: string;
+    try {
+      attemptedAt = await claimDevMcpProofAttempt(
+        statePaths().devMcpProof,
+        preparation.proofId,
+      );
+    } catch {
+      // The claim is exclusive and durable. Any previous attempt, including one
+      // whose provider outcome is unknown, requires a newly prepared fixture.
+      return configurationFailure("DEV_MCP_PROOF_STALE");
+    }
+    const prompt = [
+      "Use the selected app's Computer tool computer_workspace_read.",
+      `First read workspaceId ${preparation.workspaceId} at relativePath ${preparation.allowedPath}.`,
+      `Then attempt the same tool and workspaceId at relativePath ${preparation.deniedPath}; it must be refused because it leaves the grant through a link.`,
+      "If and only if the first read succeeds and the second is refused, reply with exactly the first file's text and nothing else.",
+    ].join(" ");
+
+    try {
+      const result = await chatGptRoute.runReadonlyTask(prompt);
+      if (
+        result.state !== "completed" ||
+        typeof result.outputText !== "string"
+      ) {
+        return configurationFailure("DEV_MCP_PROOF_CHATGPT_FAILED");
+      }
+      const answerSha256 = createHash("sha256")
+        .update(result.outputText.trim())
+        .digest("hex");
+      if (answerSha256 !== preparation.sentinelSha256) {
+        return configurationFailure("DEV_MCP_PROOF_ANSWER_MISMATCH");
+      }
+      const receipt = await readDevMcpProofReceipt(
+        statePaths().devMcpProof,
+      ).catch(() => null);
+      if (
+        receipt === null ||
+        receipt.allowed === null ||
+        receipt.denied === null
+      ) {
+        return configurationFailure("DEV_MCP_PROOF_RECEIPT_MISSING");
+      }
+      const sameProofBinding =
+        receipt.allowed.ownerId === receipt.denied.ownerId &&
+        receipt.allowed.sessionId === receipt.denied.sessionId &&
+        receipt.allowed.taskId === receipt.denied.taskId &&
+        receipt.allowed.taskEpoch === receipt.denied.taskEpoch &&
+        receipt.allowed.participantId === receipt.denied.participantId &&
+        receipt.allowed.turnId === receipt.denied.turnId &&
+        receipt.allowed.generation === receipt.denied.generation;
+      if (
+        receipt.proofId !== preparation.proofId ||
+        receipt.environment !== "dev" ||
+        receipt.buildId !== preparation.buildId ||
+        receipt.computerGeneration !== preparation.computerGeneration ||
+        receipt.workspaceId !== preparation.workspaceId ||
+        receipt.sentinelSha256 !== preparation.sentinelSha256 ||
+        receipt.allowed.outputSha256 !== preparation.sentinelSha256 ||
+        receipt.allowed.generation !== preparation.computerGeneration ||
+        receipt.allowed.taskEpoch !== preparation.computerGeneration ||
+        receipt.denied.generation !== preparation.computerGeneration ||
+        receipt.denied.taskEpoch !== preparation.computerGeneration ||
+        receipt.denied.errorCode !== "WORKSPACE_PATH_REFUSED" ||
+        receipt.allowed.ownerId !== "owner-desktop" ||
+        receipt.allowed.callIdSha256 === receipt.denied.callIdSha256 ||
+        receipt.allowed.recordedAt < attemptedAt ||
+        receipt.denied.recordedAt < receipt.allowed.recordedAt ||
+        !sameProofBinding
+      ) {
+        return configurationFailure("DEV_MCP_PROOF_RECEIPT_INVALID");
+      }
+      const receiptSha256 = createHash("sha256")
+        .update(`${JSON.stringify(receipt, null, 2)}\n`)
+        .digest("hex");
+      return ProductConfigurationResultSchema.parse({
+        ok: true,
+        snapshot: configuration.snapshot(),
+        evidence: {
+          kind: "dev-proof.verified",
+          proofId: preparation.proofId,
+          workspaceId: preparation.workspaceId,
+          environment: "dev",
+          runtimeGeneration: runtimeProof.runtimeGeneration,
+          computerGeneration: preparation.computerGeneration,
+          buildId: preparation.buildId,
+          sentinelSha256: preparation.sentinelSha256,
+          answerSha256,
+          receiptSha256,
+          outsideGrantError: receipt.denied.errorCode,
+        },
+      });
+    } finally {
+      chatAdmission.release();
+    }
   } finally {
+    // Also covers preparation exits before the existing dispatch finalizer.
+    // Release is identity-bound: a repeated release cannot clear a successor.
     chatAdmission.release();
   }
 }
@@ -6735,253 +6744,262 @@ async function configureDrainedWorkspaceChange(
     connectorStartInFlight !== null
   )
     return transitionRefusal();
-  // Ask the existing Go WAL owner BEFORE invoking any new connector drain.
-  // A lost stop ACK or pending continuity transition cannot be discharged by
-  // a second ordinary command with equal visible Settings bytes. No fallback
-  // to a missing old core/status method is permitted.
+  const connectorAdmission = desktopAdmission.acquire("connector-task");
+  if (!connectorAdmission) return transitionRefusal();
   try {
-    const custody = await core.observeComputerContinuity();
-    if (custody.restricted || custody.pendingOperationId !== undefined)
+    // Ask the existing Go WAL owner BEFORE invoking any new connector drain.
+    // A lost stop ACK or pending continuity transition cannot be discharged by
+    // a second ordinary command with equal visible Settings bytes. No fallback
+    // to a missing old core/status method is permitted.
+    try {
+      const custody = await core.observeComputerContinuity();
+      if (custody.restricted || custody.pendingOperationId !== undefined)
+        return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
+    } catch {
       return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
-  } catch {
-    return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
-  }
-  // C7 fixes the original command scope BEFORE Stop. An add-workspace or
-  // global commands/file-policy edit has no selected existing workspace; it
-  // binds the entire owner-consent projection instead of borrowing a random
-  // workspace root or claiming the to-be-added directory is already approved.
-  const requestedId =
-    "workspaceId" in command ? command.workspaceId : undefined;
-  const target =
-    requestedId === undefined
-      ? undefined
-      : original.settings.computer.workspaces.find(
-          (item) => item.workspaceId === requestedId,
-        );
-  const connectorBinding = core.currentComputerConnectorBinding();
-  if (
-    (requestedId !== undefined && !target) ||
-    !connectorBinding ||
-    !connector.isRunning()
-  )
-    return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
-  const sha = (value: unknown) =>
-    createHash("sha256").update(JSON.stringify(value)).digest("hex");
-  const originalStopId = randomUUID();
-  const stopEffectId = randomUUID();
-  const settingsEffectId = randomUUID();
-  const cleanupEffectId = randomUUID();
-  // Immutable complete OWNER-CONSENT scope: access, exclusions, selected
-  // commands, file/Git choices and capability ceilings. Excludes binding,
-  // revision, transient verification and other native observations.
-  const originalConsent = ownerComputerConsentDigest(original.settings);
-  const request = {
-    operationId: originalStopId,
-    requestDigest: sha({
-      command,
-      revision: original.settings.revision,
-      computerGeneration: original.settings.computer.generation,
-      connectorGeneration: original.settings.connectors.secureMcp.generation,
-    }),
-    commandKind: command.kind,
-    commandDigest: sha(command),
-    purpose: "workspace-change" as const,
-    ...(target ? { workspaceId: target.workspaceId, root: target.root } : {}),
-    consentDigest: originalConsent,
-    expectedRevision: String(original.settings.revision),
-    computerGeneration: String(original.settings.computer.generation),
-    connectorGeneration: String(
-      original.settings.connectors.secureMcp.generation,
-    ),
-    settingsDigest: sha(original.settings),
-    stopEffectId,
-    settingsEffectId,
-    cleanupEffectId,
-  };
-  const computerGeneration = original.settings.computer.generation;
-  const connectorGeneration = original.settings.connectors.secureMcp.generation;
-  let revision = original.settings.revision;
-  let phaseFailure: ProductConfigurationResult | null = null;
-  const connectorAdmission = desktopAdmission.reserveAdmitted("connector-task");
-  try {
-    const current = () => {
-      const snapshot = owner.snapshot();
-      return (
-        configuration === owner &&
-        secureMcpConnectorRuntime === connector &&
-        desktopGoCore === core &&
-        authorityTransitions.current() === "authority-change" &&
-        activeAuthorityChangeKind === command.kind &&
-        desktopAdmission.occupied("connector-task") &&
-        !desktopAdmission.closed() &&
-        !codexAgentOperationActive() &&
-        !connector.hasUnresolvedEffect() &&
-        snapshot.status === "ready" &&
-        snapshot.settings.revision === revision &&
-        snapshot.settings.computer.generation === computerGeneration &&
-        snapshot.settings.connectors.secureMcp.generation ===
-          connectorGeneration &&
-        ownerComputerConsentDigest(snapshot.settings) === originalConsent &&
-        !connectorRuntimeUncertain(snapshot.settings)
-      );
-    };
-    const drain = new WorkspaceConfigurationDrain(command, {
-      current,
-      stop: async () => {
-        // The Go owner must durably admit the ORIGINAL stop_intent before
-        // lifecycle.beginStop, connector.stop, or connector-close effects.
-        if (await computerMcpLifecycle().hasUnconfirmedStop())
-          throw new Error("CONNECTOR_STOP_UNCONFIRMED");
-        if (!current()) return false;
-        const admitted = await core.beginOriginalStop(request);
-        if (
-          admitted.runtimeId !== connectorBinding.runtimeId ||
-          admitted.backendGeneration !== connectorBinding.backendGeneration ||
-          admitted.buildId !== connectorBinding.buildId
-        )
-          throw new Error("CONNECTOR_STOP_UNCONFIRMED");
-        await stopAndConfirmComputerMcp(
-          connector,
-          null,
-          core,
-          savedChatBridgeRuntime,
-          undefined,
-          originalStopId,
-        );
-        const lifecycle = computerMcpLifecycle().confirmedOriginalStop();
-        const closure = core.computerConnectorClosureReceipt();
-        if (
-          !lifecycle ||
-          !closure ||
-          !closure.result.closed ||
-          closure.result.binding.runtimeId !== admitted.runtimeId ||
-          closure.result.binding.backendGeneration !==
-            admitted.backendGeneration
-        )
-          throw new Error("CONNECTOR_STOP_UNCONFIRMED");
-        await core.advanceOriginalStop({
-          parentOperationId: originalStopId,
-          phase: "stop_ack",
-          closure: {
-            effectId: stopEffectId,
-            backendGeneration: admitted.backendGeneration,
-            runtimeId: admitted.runtimeId,
-            lifecycleId: lifecycle.lifecycleId,
-            stopRevision: lifecycle.stopRevision,
-            preparationRevision: lifecycle.preparationRevision,
-            closureOperationId: closure.operationId,
-            closureDigest: sha(closure.result),
-          },
-        });
-        return true;
-      },
-      recordStopped: async () => {
-        // The retained sole Settings writer confirms the Go settings_intent
-        // before its ONE conditional save/readback. A lost reply is UNKNOWN,
-        // never a new save or an equal-byte inferred ACK.
-        const originalCurrent = () => {
-          const snap = owner.snapshot();
-          return (
-            configuration === owner &&
-            secureMcpConnectorRuntime === connector &&
-            desktopGoCore === core &&
-            authorityTransitions.current() === "authority-change" &&
-            desktopAdmission.occupied("connector-task") &&
-            !desktopAdmission.closed() &&
-            !codexAgentOperationActive() &&
-            !connector.hasUnresolvedEffect() &&
-            snap.status === "ready" &&
-            snap.settings.computer.generation === computerGeneration &&
-            snap.settings.connectors.secureMcp.generation ===
-              connectorGeneration &&
-            !connectorRuntimeUncertain(snap.settings)
+    }
+    // C7 fixes the original command scope BEFORE Stop. An add-workspace or
+    // global commands/file-policy edit has no selected existing workspace; it
+    // binds the entire owner-consent projection instead of borrowing a random
+    // workspace root or claiming the to-be-added directory is already approved.
+    const requestedId =
+      "workspaceId" in command ? command.workspaceId : undefined;
+    const target =
+      requestedId === undefined
+        ? undefined
+        : original.settings.computer.workspaces.find(
+            (item) => item.workspaceId === requestedId,
           );
-        };
-        const stopped = await owner.commitOriginalStoppedSettings(
-          {
-            effectId: settingsEffectId,
-            expectedRevision: revision,
-            expectedDigest: request.settingsDigest,
-            computerGeneration,
-            connectorGeneration,
-            consentDigest: request.consentDigest,
-          },
-          async (plan) => {
-            await core.advanceOriginalStop({
-              parentOperationId: originalStopId,
-              phase: "settings_intent",
-              settingsIntent: plan,
-            });
-          },
-          originalCurrent,
-        );
-        if (stopped.status !== "committed") {
-          phaseFailure = configurationFailure("SETTINGS_WRITE_FAILED");
-          return "unknown";
-        }
-        await core.advanceOriginalStop({
-          parentOperationId: originalStopId,
-          phase: "settings_ack",
-          settingsAck: stopped.receipt,
-        });
-        revision = stopped.settings.revision;
-        if (!current()) return "unknown";
-        // Connector verification cleanup is a distinct one-shot effect with
-        // its own durable intent; failure retains the original pending phase.
-        await core.advanceOriginalStop({
-          parentOperationId: originalStopId,
-          phase: "cleanup_intent",
-        });
-        const cleanupProof =
-          await clearAndConfirmOriginalConnectorVerificationReceipt(
-            statePaths().secureMcpLaunch,
-            originalStopId,
-            cleanupEffectId,
-          );
-        // A separate held-directory readback proved receipt absence after
-        // the original deletion and sync. Go independently rechecks that
-        // its retained original connector closure still belongs to this parent.
-        if (
-          cleanupProof.parentOperationId !== originalStopId ||
-          cleanupProof.effectId !== cleanupEffectId ||
-          cleanupProof.readback !== "verified-absent"
-        )
-          throw new Error("CONNECTOR_ATTACHMENT_INVALID");
-        await core.advanceOriginalStop({
-          parentOperationId: originalStopId,
-          phase: "cleanup_ack",
-          cleanupAck: {
-            effectId: cleanupEffectId,
-            backendGeneration: connectorBinding.backendGeneration,
-            runtimeId: connectorBinding.runtimeId,
-            digest: cleanupProof.digest,
-          },
-        });
-        await core.advanceOriginalStop({
-          parentOperationId: originalStopId,
-          phase: "prerequisite_complete",
-        });
-        return true;
-      },
-      apply: configureAdmittedProduct,
-    });
-    const outcome = await drain.run();
-    // A completed configuration owns its original reply, even if a later
-    // projection/Quit won the race. No further phase borrows that reply.
+    const connectorBinding = core.currentComputerConnectorBinding();
     if (
-      outcome.status === "completed" ||
-      (outcome.status === "stale" && outcome.phase === "apply")
+      (requestedId !== undefined && !target) ||
+      !connectorBinding ||
+      !connector.isRunning()
     )
-      return outcome.result;
-    if (phaseFailure) return phaseFailure;
-    if (outcome.status === "unknown")
-      return configurationFailure(
-        outcome.phase === "stop"
-          ? "CONNECTOR_STOP_UNCONFIRMED"
-          : "SETTINGS_WRITE_FAILED",
-      );
-    return transitionRefusal();
+      return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
+    const sha = (value: unknown) =>
+      createHash("sha256").update(JSON.stringify(value)).digest("hex");
+    const originalStopId = randomUUID();
+    const stopEffectId = randomUUID();
+    const settingsEffectId = randomUUID();
+    const cleanupEffectId = randomUUID();
+    // Immutable complete OWNER-CONSENT scope: access, exclusions, selected
+    // commands, file/Git choices and capability ceilings. Excludes binding,
+    // revision, transient verification and other native observations.
+    const originalConsent = ownerComputerConsentDigest(original.settings);
+    const request = {
+      operationId: originalStopId,
+      requestDigest: sha({
+        command,
+        revision: original.settings.revision,
+        computerGeneration: original.settings.computer.generation,
+        connectorGeneration: original.settings.connectors.secureMcp.generation,
+      }),
+      commandKind: command.kind,
+      commandDigest: sha(command),
+      purpose: "workspace-change" as const,
+      ...(target ? { workspaceId: target.workspaceId, root: target.root } : {}),
+      consentDigest: originalConsent,
+      expectedRevision: String(original.settings.revision),
+      computerGeneration: String(original.settings.computer.generation),
+      connectorGeneration: String(
+        original.settings.connectors.secureMcp.generation,
+      ),
+      settingsDigest: sha(original.settings),
+      stopEffectId,
+      settingsEffectId,
+      cleanupEffectId,
+    };
+    const computerGeneration = original.settings.computer.generation;
+    const connectorGeneration =
+      original.settings.connectors.secureMcp.generation;
+    let revision = original.settings.revision;
+    let phaseFailure: ProductConfigurationResult | null = null;
+
+    try {
+      const current = () => {
+        const snapshot = owner.snapshot();
+        return (
+          configuration === owner &&
+          secureMcpConnectorRuntime === connector &&
+          desktopGoCore === core &&
+          authorityTransitions.current() === "authority-change" &&
+          activeAuthorityChangeKind === command.kind &&
+          desktopAdmission.occupied("connector-task") &&
+          !desktopAdmission.closed() &&
+          !codexAgentOperationActive() &&
+          !connector.hasUnresolvedEffect() &&
+          snapshot.status === "ready" &&
+          snapshot.settings.revision === revision &&
+          snapshot.settings.computer.generation === computerGeneration &&
+          snapshot.settings.connectors.secureMcp.generation ===
+            connectorGeneration &&
+          ownerComputerConsentDigest(snapshot.settings) === originalConsent &&
+          !connectorRuntimeUncertain(snapshot.settings)
+        );
+      };
+      const drain = new WorkspaceConfigurationDrain(command, {
+        current,
+        stop: async () => {
+          // The Go owner must durably admit the ORIGINAL stop_intent before
+          // lifecycle.beginStop, connector.stop, or connector-close effects.
+          if (await computerMcpLifecycle().hasUnconfirmedStop())
+            throw new Error("CONNECTOR_STOP_UNCONFIRMED");
+          if (!current()) return false;
+          const admitted = await core.beginOriginalStop(request);
+          if (
+            admitted.runtimeId !== connectorBinding.runtimeId ||
+            admitted.backendGeneration !== connectorBinding.backendGeneration ||
+            admitted.buildId !== connectorBinding.buildId
+          )
+            throw new Error("CONNECTOR_STOP_UNCONFIRMED");
+          await stopAndConfirmComputerMcp(
+            connector,
+            null,
+            core,
+            savedChatBridgeRuntime,
+            undefined,
+            originalStopId,
+          );
+          const lifecycle = computerMcpLifecycle().confirmedOriginalStop();
+          const closure = core.computerConnectorClosureReceipt();
+          if (
+            !lifecycle ||
+            !closure ||
+            !closure.result.closed ||
+            closure.result.binding.runtimeId !== admitted.runtimeId ||
+            closure.result.binding.backendGeneration !==
+              admitted.backendGeneration
+          )
+            throw new Error("CONNECTOR_STOP_UNCONFIRMED");
+          await core.advanceOriginalStop({
+            parentOperationId: originalStopId,
+            phase: "stop_ack",
+            closure: {
+              effectId: stopEffectId,
+              backendGeneration: admitted.backendGeneration,
+              runtimeId: admitted.runtimeId,
+              lifecycleId: lifecycle.lifecycleId,
+              stopRevision: lifecycle.stopRevision,
+              preparationRevision: lifecycle.preparationRevision,
+              closureOperationId: closure.operationId,
+              closureDigest: sha(closure.result),
+            },
+          });
+          return true;
+        },
+        recordStopped: async () => {
+          // The retained sole Settings writer confirms the Go settings_intent
+          // before its ONE conditional save/readback. A lost reply is UNKNOWN,
+          // never a new save or an equal-byte inferred ACK.
+          const originalCurrent = () => {
+            const snap = owner.snapshot();
+            return (
+              configuration === owner &&
+              secureMcpConnectorRuntime === connector &&
+              desktopGoCore === core &&
+              authorityTransitions.current() === "authority-change" &&
+              desktopAdmission.occupied("connector-task") &&
+              !desktopAdmission.closed() &&
+              !codexAgentOperationActive() &&
+              !connector.hasUnresolvedEffect() &&
+              snap.status === "ready" &&
+              snap.settings.computer.generation === computerGeneration &&
+              snap.settings.connectors.secureMcp.generation ===
+                connectorGeneration &&
+              !connectorRuntimeUncertain(snap.settings)
+            );
+          };
+          const stopped = await owner.commitOriginalStoppedSettings(
+            {
+              effectId: settingsEffectId,
+              expectedRevision: revision,
+              expectedDigest: request.settingsDigest,
+              computerGeneration,
+              connectorGeneration,
+              consentDigest: request.consentDigest,
+            },
+            async (plan) => {
+              await core.advanceOriginalStop({
+                parentOperationId: originalStopId,
+                phase: "settings_intent",
+                settingsIntent: plan,
+              });
+            },
+            originalCurrent,
+          );
+          if (stopped.status !== "committed") {
+            phaseFailure = configurationFailure("SETTINGS_WRITE_FAILED");
+            return "unknown";
+          }
+          await core.advanceOriginalStop({
+            parentOperationId: originalStopId,
+            phase: "settings_ack",
+            settingsAck: stopped.receipt,
+          });
+          revision = stopped.settings.revision;
+          if (!current()) return "unknown";
+          // Connector verification cleanup is a distinct one-shot effect with
+          // its own durable intent; failure retains the original pending phase.
+          await core.advanceOriginalStop({
+            parentOperationId: originalStopId,
+            phase: "cleanup_intent",
+          });
+          const cleanupProof =
+            await clearAndConfirmOriginalConnectorVerificationReceipt(
+              statePaths().secureMcpLaunch,
+              originalStopId,
+              cleanupEffectId,
+            );
+          // A separate held-directory readback proved receipt absence after
+          // the original deletion and sync. Go independently rechecks that
+          // its retained original connector closure still belongs to this parent.
+          if (
+            cleanupProof.parentOperationId !== originalStopId ||
+            cleanupProof.effectId !== cleanupEffectId ||
+            cleanupProof.readback !== "verified-absent"
+          )
+            throw new Error("CONNECTOR_ATTACHMENT_INVALID");
+          await core.advanceOriginalStop({
+            parentOperationId: originalStopId,
+            phase: "cleanup_ack",
+            cleanupAck: {
+              effectId: cleanupEffectId,
+              backendGeneration: connectorBinding.backendGeneration,
+              runtimeId: connectorBinding.runtimeId,
+              digest: cleanupProof.digest,
+            },
+          });
+          await core.advanceOriginalStop({
+            parentOperationId: originalStopId,
+            phase: "prerequisite_complete",
+          });
+          return true;
+        },
+        apply: configureAdmittedProduct,
+      });
+      const outcome = await drain.run();
+      // A completed configuration owns its original reply, even if a later
+      // projection/Quit won the race. No further phase borrows that reply.
+      if (
+        outcome.status === "completed" ||
+        (outcome.status === "stale" && outcome.phase === "apply")
+      )
+        return outcome.result;
+      if (phaseFailure) return phaseFailure;
+      if (outcome.status === "unknown")
+        return configurationFailure(
+          outcome.phase === "stop"
+            ? "CONNECTOR_STOP_UNCONFIRMED"
+            : "SETTINGS_WRITE_FAILED",
+        );
+      return transitionRefusal();
+    } finally {
+      connectorAdmission.release();
+    }
   } finally {
+    // Also covers preparation exits before the existing dispatch finalizer.
+    // Release is identity-bound: a repeated release cannot clear a successor.
     connectorAdmission.release();
   }
 }
@@ -9144,201 +9162,208 @@ async function configureAdmittedProduct(
       if (!chatGptRoute) {
         return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
       }
-      if (desktopAdmission.occupied("chatgpt-task")) {
+      const chatAdmission = desktopAdmission.acquire("chatgpt-task");
+      if (!chatAdmission)
         return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
-      }
-      const pending = pendingChatGptAttachmentTask;
-      if (!pending || pending.operationId !== command.operationId) {
-        return configurationFailure("CHATGPT_ATTACHMENT_PREVIEW_NOT_FOUND");
-      }
-      if (Date.now() >= pending.expiresAt) {
-        pendingChatGptAttachmentTask = null;
-        await discardChatGptAttachments(
-          statePaths().attachmentStaging,
-          pending.operationId,
-        ).catch(() => {
-          attachmentStagingReady = false;
-        });
-        if (!(await discardPreparedChatGptTask(pending.operationId))) {
-          return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
-        }
-        return configurationFailure("CHATGPT_ATTACHMENT_PREVIEW_EXPIRED");
-      }
-      const snapshot = configuration.snapshot();
-      if (snapshot.status !== "ready") {
-        return configurationFailure("SETTINGS_UNAVAILABLE");
-      }
-      if (snapshot.settings.setup.chatgpt.outcomeUnknown) {
-        return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
-      }
-      if (
-        !isDeepStrictEqual(
-          snapshot.settings.setup.chatgpt.verified,
-          pending.chatGptVerification,
-        )
-      ) {
-        pendingChatGptAttachmentTask = null;
-        await discardChatGptAttachments(
-          statePaths().attachmentStaging,
-          pending.operationId,
-        ).catch(() => {
-          attachmentStagingReady = false;
-        });
-        if (!(await discardPreparedChatGptTask(pending.operationId))) {
-          return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
-        }
-        return configurationFailure("CHATGPT_CONNECTION_NOT_VERIFIED");
-      }
       try {
-        await verifyStagedChatGptAttachments(pending.attachments);
-      } catch (error) {
-        pendingChatGptAttachmentTask = null;
-        await discardChatGptAttachments(
-          statePaths().attachmentStaging,
-          pending.operationId,
-        ).catch(() => {
-          attachmentStagingReady = false;
-        });
-        if (!(await discardPreparedChatGptTask(pending.operationId))) {
-          return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
+        const pending = pendingChatGptAttachmentTask;
+        if (!pending || pending.operationId !== command.operationId) {
+          return configurationFailure("CHATGPT_ATTACHMENT_PREVIEW_NOT_FOUND");
         }
-        return attachmentStagingFailure(error);
-      }
-      if (!chatGptTaskJournal) {
-        return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
-      }
-      try {
-        const journal = chatGptTaskJournal;
-        await journalUnderPromotionLease(liveTaskRegistry, () =>
-          journal.markDispatchIntent(pending.operationId),
-        );
-      } catch (error) {
-        return configurationFailure(
-          error instanceof PromotionPendingRefusal
-            ? "CHATGPT_TASK_PROMOTION_PENDING"
-            : "CHATGPT_TASK_JOURNAL_FAILED",
-        );
-      }
-      pendingChatGptAttachmentTask = null;
-      const chatAdmission = desktopAdmission.reserveAdmitted("chatgpt-task");
-      let task: Awaited<ReturnType<ChatGptRoute["runReadonlyTask"]>>;
-      let stagingCleanup: "removed" | "pending_startup_cleanup" = "removed";
-      try {
-        try {
-          task = await chatGptRoute.runReadonlyTask(
-            pending.prompt,
-            pending.attachments.attachments,
-          );
-        } catch {
-          task = {
-            state: "outcome_unknown",
-            code: "CHATGPT_TASK_ERROR",
-            deltaCount: 0,
-            observedCharacters: 0,
-          };
-        }
-      } finally {
-        try {
+        if (Date.now() >= pending.expiresAt) {
+          pendingChatGptAttachmentTask = null;
           await discardChatGptAttachments(
             statePaths().attachmentStaging,
             pending.operationId,
+          ).catch(() => {
+            attachmentStagingReady = false;
+          });
+          if (!(await discardPreparedChatGptTask(pending.operationId))) {
+            return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
+          }
+          return configurationFailure("CHATGPT_ATTACHMENT_PREVIEW_EXPIRED");
+        }
+        const snapshot = configuration.snapshot();
+        if (snapshot.status !== "ready") {
+          return configurationFailure("SETTINGS_UNAVAILABLE");
+        }
+        if (snapshot.settings.setup.chatgpt.outcomeUnknown) {
+          return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
+        }
+        if (
+          !isDeepStrictEqual(
+            snapshot.settings.setup.chatgpt.verified,
+            pending.chatGptVerification,
+          )
+        ) {
+          pendingChatGptAttachmentTask = null;
+          await discardChatGptAttachments(
+            statePaths().attachmentStaging,
+            pending.operationId,
+          ).catch(() => {
+            attachmentStagingReady = false;
+          });
+          if (!(await discardPreparedChatGptTask(pending.operationId))) {
+            return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
+          }
+          return configurationFailure("CHATGPT_CONNECTION_NOT_VERIFIED");
+        }
+        try {
+          await verifyStagedChatGptAttachments(pending.attachments);
+        } catch (error) {
+          pendingChatGptAttachmentTask = null;
+          await discardChatGptAttachments(
+            statePaths().attachmentStaging,
+            pending.operationId,
+          ).catch(() => {
+            attachmentStagingReady = false;
+          });
+          if (!(await discardPreparedChatGptTask(pending.operationId))) {
+            return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
+          }
+          return attachmentStagingFailure(error);
+        }
+        if (!chatGptTaskJournal) {
+          return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
+        }
+        try {
+          const journal = chatGptTaskJournal;
+          await journalUnderPromotionLease(liveTaskRegistry, () =>
+            journal.markDispatchIntent(pending.operationId),
           );
-        } catch {
-          attachmentStagingReady = false;
-          stagingCleanup = "pending_startup_cleanup";
+        } catch (error) {
+          return configurationFailure(
+            error instanceof PromotionPendingRefusal
+              ? "CHATGPT_TASK_PROMOTION_PENDING"
+              : "CHATGPT_TASK_JOURNAL_FAILED",
+          );
         }
-        chatAdmission.release();
-      }
-      const journalResult = {
-        state: task.state,
-        code: task.code,
-        deltaCount: task.deltaCount,
-        observedCharacters: task.observedCharacters,
-        attachmentCount: pending.attachments.attachments.length,
-        totalBytes: pending.attachments.attachments.reduce(
-          (total, attachment) => total + attachment.bytes,
-          0,
-        ),
-        stagingCleanup,
-      } as const;
-      const conversationContinuity = await retainChatGptConversation(
-        pending.operationId,
-        task.state,
-      );
-      try {
-        await chatGptTaskJournal.retainResult(
-          pending.operationId,
-          journalResult,
-        );
-        recoverableChatGptTask = await chatGptTaskJournal.load();
-      } catch {
-        const unknown = await configuration.recordChatGptObservation({
-          state: "outcome_unknown",
-        });
-        if (!unknown.ok) {
-          return ProductConfigurationResultSchema.parse(unknown);
+        pendingChatGptAttachmentTask = null;
+
+        let task: Awaited<ReturnType<ChatGptRoute["runReadonlyTask"]>>;
+        let stagingCleanup: "removed" | "pending_startup_cleanup" = "removed";
+        try {
+          try {
+            task = await chatGptRoute.runReadonlyTask(
+              pending.prompt,
+              pending.attachments.attachments,
+            );
+          } catch {
+            task = {
+              state: "outcome_unknown",
+              code: "CHATGPT_TASK_ERROR",
+              deltaCount: 0,
+              observedCharacters: 0,
+            };
+          }
+        } finally {
+          try {
+            await discardChatGptAttachments(
+              statePaths().attachmentStaging,
+              pending.operationId,
+            );
+          } catch {
+            attachmentStagingReady = false;
+            stagingCleanup = "pending_startup_cleanup";
+          }
+          chatAdmission.release();
         }
-        return ProductConfigurationResultSchema.parse({
-          ...unknown,
-          evidence: {
-            kind: "chatgpt.task-recovery",
-            operationId: pending.operationId,
-            taskKind: "attachment",
-            state: "outcome_unknown",
-            code: "CHATGPT_TASK_RESULT_PERSIST_FAILED",
-            deltaCount: task.deltaCount,
-            observedCharacters: task.observedCharacters,
-            attachmentCount: journalResult.attachmentCount,
-            totalBytes: journalResult.totalBytes,
-            stagingCleanup,
-            conversationContinuity,
-            redelivered: false,
-            deliveryAckRequired: false,
-          },
-        });
-      }
-      const observation =
-        task.state === "completed"
-          ? {
-              state: "authenticated" as const,
-              profile: "chatgpt.app-partition/1",
-              runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
-              buildId: buildIdentity.buildId,
-              protocol: "chatgpt-page-attachment-task/1",
-            }
-          : task.state === "not_authenticated"
-            ? { state: "signed_out" as const }
-            : task.state === "outcome_unknown"
-              ? { state: "outcome_unknown" as const }
-              : task.code === "CHATGPT_PAGE_UNREACHABLE"
-                ? { state: "unreachable" as const }
-                : (chatGptAppPreSubmitObservation(task.code) ?? {
-                    state: "unsupported" as const,
-                  });
-      const recorded =
-        await configuration.recordChatGptObservation(observation);
-      if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
-      recoverableChatGptObservationPersisted = true;
-      return ProductConfigurationResultSchema.parse({
-        ...recorded,
-        evidence: {
-          kind: "chatgpt.attachment-task",
-          operationId: pending.operationId,
+        const journalResult = {
           state: task.state,
           code: task.code,
+          deltaCount: task.deltaCount,
+          observedCharacters: task.observedCharacters,
           attachmentCount: pending.attachments.attachments.length,
           totalBytes: pending.attachments.attachments.reduce(
             (total, attachment) => total + attachment.bytes,
             0,
           ),
-          deltaCount: task.deltaCount,
-          observedCharacters: task.observedCharacters,
           stagingCleanup,
-          conversationContinuity,
-          redelivered: false,
-          deliveryAckRequired: true,
-        },
-      });
+        } as const;
+        const conversationContinuity = await retainChatGptConversation(
+          pending.operationId,
+          task.state,
+        );
+        try {
+          await chatGptTaskJournal.retainResult(
+            pending.operationId,
+            journalResult,
+          );
+          recoverableChatGptTask = await chatGptTaskJournal.load();
+        } catch {
+          const unknown = await configuration.recordChatGptObservation({
+            state: "outcome_unknown",
+          });
+          if (!unknown.ok) {
+            return ProductConfigurationResultSchema.parse(unknown);
+          }
+          return ProductConfigurationResultSchema.parse({
+            ...unknown,
+            evidence: {
+              kind: "chatgpt.task-recovery",
+              operationId: pending.operationId,
+              taskKind: "attachment",
+              state: "outcome_unknown",
+              code: "CHATGPT_TASK_RESULT_PERSIST_FAILED",
+              deltaCount: task.deltaCount,
+              observedCharacters: task.observedCharacters,
+              attachmentCount: journalResult.attachmentCount,
+              totalBytes: journalResult.totalBytes,
+              stagingCleanup,
+              conversationContinuity,
+              redelivered: false,
+              deliveryAckRequired: false,
+            },
+          });
+        }
+        const observation =
+          task.state === "completed"
+            ? {
+                state: "authenticated" as const,
+                profile: "chatgpt.app-partition/1",
+                runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
+                buildId: buildIdentity.buildId,
+                protocol: "chatgpt-page-attachment-task/1",
+              }
+            : task.state === "not_authenticated"
+              ? { state: "signed_out" as const }
+              : task.state === "outcome_unknown"
+                ? { state: "outcome_unknown" as const }
+                : task.code === "CHATGPT_PAGE_UNREACHABLE"
+                  ? { state: "unreachable" as const }
+                  : (chatGptAppPreSubmitObservation(task.code) ?? {
+                      state: "unsupported" as const,
+                    });
+        const recorded =
+          await configuration.recordChatGptObservation(observation);
+        if (!recorded.ok)
+          return ProductConfigurationResultSchema.parse(recorded);
+        recoverableChatGptObservationPersisted = true;
+        return ProductConfigurationResultSchema.parse({
+          ...recorded,
+          evidence: {
+            kind: "chatgpt.attachment-task",
+            operationId: pending.operationId,
+            state: task.state,
+            code: task.code,
+            attachmentCount: pending.attachments.attachments.length,
+            totalBytes: pending.attachments.attachments.reduce(
+              (total, attachment) => total + attachment.bytes,
+              0,
+            ),
+            deltaCount: task.deltaCount,
+            observedCharacters: task.observedCharacters,
+            stagingCleanup,
+            conversationContinuity,
+            redelivered: false,
+            deliveryAckRequired: true,
+          },
+        });
+      } finally {
+        // Also covers preparation exits before the existing dispatch finalizer.
+        // Release is identity-bound: a repeated release cannot clear a successor.
+        chatAdmission.release();
+      }
     }
     case "chatgpt.cancel-attachment-task": {
       if (desktopAdmission.occupied("chatgpt-task")) {
@@ -9603,253 +9628,258 @@ async function configureAdmittedProduct(
       if (!chatGptRoute) {
         return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
       }
-      if (desktopAdmission.occupied("chatgpt-task")) {
+      const chatAdmission = desktopAdmission.acquire("chatgpt-task");
+      if (!chatAdmission)
         return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
-      }
-      const pending = pendingChatGptReadonlyTask;
-      if (!pending || pending.operationId !== command.operationId) {
-        return configurationFailure("CHATGPT_TASK_PREVIEW_NOT_FOUND");
-      }
-      if (Date.now() >= pending.expiresAt) {
-        if (!(await discardPreparedReadonlyTask(pending))) {
-          return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
+      try {
+        const pending = pendingChatGptReadonlyTask;
+        if (!pending || pending.operationId !== command.operationId) {
+          return configurationFailure("CHATGPT_TASK_PREVIEW_NOT_FOUND");
         }
-        return configurationFailure("CHATGPT_TASK_PREVIEW_EXPIRED");
-      }
-      const snapshot = configuration.snapshot();
-      if (snapshot.status !== "ready") {
-        return configurationFailure("SETTINGS_UNAVAILABLE");
-      }
-      if (snapshot.settings.setup.chatgpt.outcomeUnknown) {
-        if (!(await discardPreparedReadonlyTask(pending))) {
-          return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
+        if (Date.now() >= pending.expiresAt) {
+          if (!(await discardPreparedReadonlyTask(pending))) {
+            return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
+          }
+          return configurationFailure("CHATGPT_TASK_PREVIEW_EXPIRED");
         }
-        return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
-      }
-      if (
-        !isDeepStrictEqual(
-          snapshot.settings.setup.chatgpt.verified,
-          pending.chatGptVerification,
-        )
-      ) {
-        if (!(await discardPreparedReadonlyTask(pending))) {
-          return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
+        const snapshot = configuration.snapshot();
+        if (snapshot.status !== "ready") {
+          return configurationFailure("SETTINGS_UNAVAILABLE");
         }
-        return configurationFailure("CHATGPT_CONNECTION_NOT_VERIFIED");
-      }
-      const workspace = snapshot.settings.computer.workspaces.find(
-        (candidate) => candidate.workspaceId === pending.workspaceId,
-      );
-      const computerVerification = snapshot.settings.setup.computer.verified;
-      if (
-        !workspace ||
-        snapshot.settings.computer.generation !== pending.computerGeneration ||
-        computerVerification?.workspaceId !== pending.workspaceId ||
-        computerVerification.configRevision !== pending.computerGeneration
-      ) {
-        if (!(await discardPreparedReadonlyTask(pending))) {
+        if (snapshot.settings.setup.chatgpt.outcomeUnknown) {
+          if (!(await discardPreparedReadonlyTask(pending))) {
+            return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
+          }
           return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
-        }
-        return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
-      }
-      if (pending.goAdmission) {
-        if (!ReadConversationPromptSchema.safeParse(pending.prompt).success)
-          return configurationFailure("CHATGPT_PROMPT_TOO_LARGE");
-        const core = desktopGoCore;
-        const profile = goChatStartupProfile;
-        if (!core || !profile)
-          return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
-        if (
-          readonlyAccountConfirmations.get(pending)?.projection()?.state !==
-          "approved"
-        )
-          return configurationFailure("CHATGPT_ACCOUNT_CONFIRMATION_INVALID");
-        let current: ReturnType<typeof captureChatStartupProfile>;
-        try {
-          current = captureChatStartupProfile({
-            environment: runtimeEnvironment,
-            e2e: process.env.FAROL_E2E === "1",
-            origin: chatGptE2eOrigin,
-            tasks: snapshot.settings.tasks,
-          });
-        } catch {
-          return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
         }
         if (
-          !current ||
-          current.snapshot.configSHA256 !== profile.snapshot.configSHA256
-        )
-          return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
-        const client = new ReadConversationClient(
-          {
-            resolve: (input) => core.resolveReadIntent(input),
-            promote: (input) => core.promoteReadIntent(input),
-          },
-          core.chat,
-        );
-        const admission = pending.goAdmission;
-        const start = Promise.resolve().then(
-          async (): Promise<ProductConfigurationResult> => {
-            const chatAdmission =
-              desktopAdmission.reserveAdmitted("chatgpt-task");
-            try {
-              const projection = await client.start(
-                {
-                  admission,
-                  policy: current.snapshot.policy,
-                  profiles: current.snapshot.profiles,
-                  requested: {},
-                },
-                pending.prompt,
-              );
-              return ProductConfigurationResultSchema.parse({
-                ok: true,
-                snapshot: configuration!.snapshot(),
-                evidence: projectReadConversation(
-                  pending.operationId,
-                  projection,
-                ),
-              });
-            } catch (error) {
-              return configurationFailure(
-                error instanceof BridgeError && error.state === "refused"
-                  ? "CHATGPT_CONVERSATION_REFUSED"
-                  : "CHATGPT_CONVERSATION_UNCONFIRMED",
-              );
-            } finally {
-              chatAdmission.release();
-            }
-          },
-        );
-        // Publish the original attempt before any await so repeated IPC cannot
-        // mint another promotion or Send after a lost renderer reply.
-        goReadonlyConversation = {
-          pending,
-          operationId: pending.operationId,
-          core,
-          client,
-          start,
-        };
-        return start;
-      }
-      if (!chatGptTaskJournal) {
-        return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
-      }
-      try {
-        const journal = chatGptTaskJournal;
-        await journalUnderPromotionLease(liveTaskRegistry, () =>
-          journal.markDispatchIntent(pending.operationId),
-        );
-      } catch (error) {
-        return configurationFailure(
-          error instanceof PromotionPendingRefusal
-            ? "CHATGPT_TASK_PROMOTION_PENDING"
-            : "CHATGPT_TASK_JOURNAL_FAILED",
-        );
-      }
-      const chatAdmission = desktopAdmission.reserveAdmitted("chatgpt-task");
-      pendingChatGptReadonlyTask = null;
-      let task: Awaited<ReturnType<ChatGptRoute["runReadonlyTask"]>>;
-      try {
-        try {
-          task = await chatGptRoute.runReadonlyTask(pending.prompt);
-        } catch {
-          task = {
-            state: "outcome_unknown",
-            code: "CHATGPT_TASK_ERROR",
-            deltaCount: 0,
-            observedCharacters: 0,
-          };
+          !isDeepStrictEqual(
+            snapshot.settings.setup.chatgpt.verified,
+            pending.chatGptVerification,
+          )
+        ) {
+          if (!(await discardPreparedReadonlyTask(pending))) {
+            return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
+          }
+          return configurationFailure("CHATGPT_CONNECTION_NOT_VERIFIED");
         }
-      } finally {
-        chatAdmission.release();
-      }
-      const journalResult = {
-        state: task.state,
-        code: task.code,
-        deltaCount: task.deltaCount,
-        observedCharacters: task.observedCharacters,
-      } as const;
-      const conversationContinuity = await retainChatGptConversation(
-        pending.operationId,
-        task.state,
-      );
-      try {
-        await chatGptTaskJournal.retainResult(
-          pending.operationId,
-          journalResult,
+        const workspace = snapshot.settings.computer.workspaces.find(
+          (candidate) => candidate.workspaceId === pending.workspaceId,
         );
-        recoverableChatGptTask = await chatGptTaskJournal.load();
-      } catch {
-        const unknown = await configuration.recordChatGptObservation({
-          state: "outcome_unknown",
-        });
-        if (!unknown.ok) {
-          return ProductConfigurationResultSchema.parse(unknown);
+        const computerVerification = snapshot.settings.setup.computer.verified;
+        if (
+          !workspace ||
+          snapshot.settings.computer.generation !==
+            pending.computerGeneration ||
+          computerVerification?.workspaceId !== pending.workspaceId ||
+          computerVerification.configRevision !== pending.computerGeneration
+        ) {
+          if (!(await discardPreparedReadonlyTask(pending))) {
+            return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
+          }
+          return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
         }
-        return ProductConfigurationResultSchema.parse({
-          ...unknown,
-          evidence: {
-            kind: "chatgpt.task-recovery",
+        if (pending.goAdmission) {
+          if (!ReadConversationPromptSchema.safeParse(pending.prompt).success)
+            return configurationFailure("CHATGPT_PROMPT_TOO_LARGE");
+          const core = desktopGoCore;
+          const profile = goChatStartupProfile;
+          if (!core || !profile)
+            return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
+          if (
+            readonlyAccountConfirmations.get(pending)?.projection()?.state !==
+            "approved"
+          )
+            return configurationFailure("CHATGPT_ACCOUNT_CONFIRMATION_INVALID");
+          let current: ReturnType<typeof captureChatStartupProfile>;
+          try {
+            current = captureChatStartupProfile({
+              environment: runtimeEnvironment,
+              e2e: process.env.FAROL_E2E === "1",
+              origin: chatGptE2eOrigin,
+              tasks: snapshot.settings.tasks,
+            });
+          } catch {
+            return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
+          }
+          if (
+            !current ||
+            current.snapshot.configSHA256 !== profile.snapshot.configSHA256
+          )
+            return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
+          const client = new ReadConversationClient(
+            {
+              resolve: (input) => core.resolveReadIntent(input),
+              promote: (input) => core.promoteReadIntent(input),
+            },
+            core.chat,
+          );
+          const admission = pending.goAdmission;
+          const start = Promise.resolve().then(
+            async (): Promise<ProductConfigurationResult> => {
+              try {
+                const projection = await client.start(
+                  {
+                    admission,
+                    policy: current.snapshot.policy,
+                    profiles: current.snapshot.profiles,
+                    requested: {},
+                  },
+                  pending.prompt,
+                );
+                return ProductConfigurationResultSchema.parse({
+                  ok: true,
+                  snapshot: configuration!.snapshot(),
+                  evidence: projectReadConversation(
+                    pending.operationId,
+                    projection,
+                  ),
+                });
+              } catch (error) {
+                return configurationFailure(
+                  error instanceof BridgeError && error.state === "refused"
+                    ? "CHATGPT_CONVERSATION_REFUSED"
+                    : "CHATGPT_CONVERSATION_UNCONFIRMED",
+                );
+              } finally {
+                chatAdmission.release();
+              }
+            },
+          );
+          // Publish the original attempt before any await so repeated IPC cannot
+          // mint another promotion or Send after a lost renderer reply.
+          goReadonlyConversation = {
+            pending,
             operationId: pending.operationId,
-            taskKind: "readonly",
-            state: "outcome_unknown",
-            code: "CHATGPT_TASK_RESULT_PERSIST_FAILED",
-            deltaCount: task.deltaCount,
-            observedCharacters: task.observedCharacters,
-            attachmentCount: 0,
-            totalBytes: 0,
-            stagingCleanup: null,
-            conversationContinuity,
-            redelivered: false,
-            deliveryAckRequired: false,
-          },
-        });
-      }
-      const observation =
-        task.state === "completed"
-          ? {
-              state: "authenticated" as const,
-              profile: "chatgpt.app-partition/1",
-              runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
-              buildId: buildIdentity.buildId,
-              protocol: "chatgpt-page-readonly-task/1",
-            }
-          : task.state === "not_authenticated"
-            ? { state: "signed_out" as const }
-            : task.state === "outcome_unknown"
-              ? { state: "outcome_unknown" as const }
-              : task.code === "CHATGPT_PAGE_UNREACHABLE"
-                ? { state: "unreachable" as const }
-                : (chatGptAppPreSubmitObservation(task.code) ?? {
-                    state: "unsupported" as const,
-                  });
-      const recorded =
-        await configuration.recordChatGptObservation(observation);
-      if (!recorded.ok) {
-        return ProductConfigurationResultSchema.parse(recorded);
-      }
-      recoverableChatGptObservationPersisted = true;
-      return ProductConfigurationResultSchema.parse({
-        ...recorded,
-        evidence: {
-          kind: "chatgpt.readonly-task",
-          operationId: pending.operationId,
+            core,
+            client,
+            start,
+          };
+          return await start;
+        }
+        if (!chatGptTaskJournal) {
+          return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
+        }
+        try {
+          const journal = chatGptTaskJournal;
+          await journalUnderPromotionLease(liveTaskRegistry, () =>
+            journal.markDispatchIntent(pending.operationId),
+          );
+        } catch (error) {
+          return configurationFailure(
+            error instanceof PromotionPendingRefusal
+              ? "CHATGPT_TASK_PROMOTION_PENDING"
+              : "CHATGPT_TASK_JOURNAL_FAILED",
+          );
+        }
+
+        pendingChatGptReadonlyTask = null;
+        let task: Awaited<ReturnType<ChatGptRoute["runReadonlyTask"]>>;
+        try {
+          try {
+            task = await chatGptRoute.runReadonlyTask(pending.prompt);
+          } catch {
+            task = {
+              state: "outcome_unknown",
+              code: "CHATGPT_TASK_ERROR",
+              deltaCount: 0,
+              observedCharacters: 0,
+            };
+          }
+        } finally {
+          chatAdmission.release();
+        }
+        const journalResult = {
           state: task.state,
           code: task.code,
-          workspaceId: pending.workspaceId,
-          relativePath: pending.relativePath,
-          bytes: pending.bytes,
-          contextCharacters: pending.contextCharacters,
-          contextLimit: MAX_CHATGPT_CONTEXT_CHARACTERS,
-          contextTruncated: pending.contextTruncated,
           deltaCount: task.deltaCount,
           observedCharacters: task.observedCharacters,
-          conversationContinuity,
-          redelivered: false,
-          deliveryAckRequired: true,
-        },
-      });
+        } as const;
+        const conversationContinuity = await retainChatGptConversation(
+          pending.operationId,
+          task.state,
+        );
+        try {
+          await chatGptTaskJournal.retainResult(
+            pending.operationId,
+            journalResult,
+          );
+          recoverableChatGptTask = await chatGptTaskJournal.load();
+        } catch {
+          const unknown = await configuration.recordChatGptObservation({
+            state: "outcome_unknown",
+          });
+          if (!unknown.ok) {
+            return ProductConfigurationResultSchema.parse(unknown);
+          }
+          return ProductConfigurationResultSchema.parse({
+            ...unknown,
+            evidence: {
+              kind: "chatgpt.task-recovery",
+              operationId: pending.operationId,
+              taskKind: "readonly",
+              state: "outcome_unknown",
+              code: "CHATGPT_TASK_RESULT_PERSIST_FAILED",
+              deltaCount: task.deltaCount,
+              observedCharacters: task.observedCharacters,
+              attachmentCount: 0,
+              totalBytes: 0,
+              stagingCleanup: null,
+              conversationContinuity,
+              redelivered: false,
+              deliveryAckRequired: false,
+            },
+          });
+        }
+        const observation =
+          task.state === "completed"
+            ? {
+                state: "authenticated" as const,
+                profile: "chatgpt.app-partition/1",
+                runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
+                buildId: buildIdentity.buildId,
+                protocol: "chatgpt-page-readonly-task/1",
+              }
+            : task.state === "not_authenticated"
+              ? { state: "signed_out" as const }
+              : task.state === "outcome_unknown"
+                ? { state: "outcome_unknown" as const }
+                : task.code === "CHATGPT_PAGE_UNREACHABLE"
+                  ? { state: "unreachable" as const }
+                  : (chatGptAppPreSubmitObservation(task.code) ?? {
+                      state: "unsupported" as const,
+                    });
+        const recorded =
+          await configuration.recordChatGptObservation(observation);
+        if (!recorded.ok) {
+          return ProductConfigurationResultSchema.parse(recorded);
+        }
+        recoverableChatGptObservationPersisted = true;
+        return ProductConfigurationResultSchema.parse({
+          ...recorded,
+          evidence: {
+            kind: "chatgpt.readonly-task",
+            operationId: pending.operationId,
+            state: task.state,
+            code: task.code,
+            workspaceId: pending.workspaceId,
+            relativePath: pending.relativePath,
+            bytes: pending.bytes,
+            contextCharacters: pending.contextCharacters,
+            contextLimit: MAX_CHATGPT_CONTEXT_CHARACTERS,
+            contextTruncated: pending.contextTruncated,
+            deltaCount: task.deltaCount,
+            observedCharacters: task.observedCharacters,
+            conversationContinuity,
+            redelivered: false,
+            deliveryAckRequired: true,
+          },
+        });
+      } finally {
+        // Also covers preparation exits before the existing dispatch finalizer.
+        // Release is identity-bound: a repeated release cannot clear a successor.
+        chatAdmission.release();
+      }
     }
     case "chatgpt.cancel-readonly-task": {
       const conversation = goReadonlyConversation;

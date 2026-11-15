@@ -117,7 +117,7 @@ function fixture() {
   const supervisor = connectorSupervisor(
     ports as unknown as ConnectorSupervisorPorts,
   );
-  return { supervisor, state, settings, runtime, connector, core, sent };
+  return { supervisor, state, settings, runtime, connector, core, sent, ports };
 }
 
 afterEach(() => {
@@ -276,4 +276,16 @@ describe("transport watch", () => {
     expect(f.supervisor.connectorTransportWatch.current).toBeNull();
     expect(f.state.power.listenerCount("resume")).toBe(0);
   });
+});
+
+it("releases the transition if acquiring the connector reservation throws", async () => {
+  const f = fixture();
+  const original = f.supervisor.captureConnectorTransport()!;
+  vi.spyOn(f.ports, "reserveConnectorTask").mockImplementation(() => {
+    throw new Error("controlled reservation failure");
+  });
+  await expect(
+    f.supervisor.recoverConnectorTransport(original, () => true),
+  ).rejects.toThrow("controlled reservation failure");
+  expect(f.state.transitions.current()).toBeNull();
 });

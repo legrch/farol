@@ -261,8 +261,9 @@ export function connectorTransport(host: ConnectorSupervisorPorts) {
       .authorityTransitions()
       .tryReserve("connector-start");
     if (!transition) return host.transitionRefusal();
-    const admission = host.reserveConnectorTask();
+    let admission: DesktopReservation | null = null;
     try {
+      admission = host.reserveConnectorTask();
       return await host.observeConnectorStart(async () => {
         let revision = original.revision;
         let stopped = false;
@@ -357,7 +358,7 @@ export function connectorTransport(host: ConnectorSupervisorPorts) {
         );
       });
     } finally {
-      admission.release();
+      admission?.release();
       transition.release();
     }
   }
@@ -730,8 +731,9 @@ export function connectorWatch(
           .authorityTransitions()
           .tryReserve("connector-start");
         if (!transition) return;
-        const admission = host.reserveConnectorTask();
+        let admission: DesktopReservation | null = null;
         try {
+          admission = host.reserveConnectorTask();
           if (
             !connectorTransportCurrent(original, original.revision, false, true)
           )
@@ -755,7 +757,7 @@ export function connectorWatch(
           )
             observationWindow.webContents.send(channels.configurationChanged);
         } finally {
-          admission.release();
+          admission?.release();
           transition.release();
         }
       },
