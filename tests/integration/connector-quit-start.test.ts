@@ -1,3 +1,8 @@
+import {
+  createConfigurationConnector,
+  type ConfigurationConnectorPorts,
+  type ConnectorSetupCommand,
+} from "../../apps/desktop/configuration/connector";
 import { admissionFixture } from "../support/desktop-admission";
 import fs from "node:fs";
 import vm from "node:vm";
@@ -295,13 +300,18 @@ it("releases configuration admission after settled Setup work even when its IPC 
     authorityTransitions: { withReservation: () => work.promise },
     deliverConfigurationReply,
   });
-  const configure = vm.runInNewContext(
-    stripTypeScriptTypes(
-      declaration("configureSaveAndConnect") + "\nconfigureSaveAndConnect;",
-    ),
-    context,
-  ) as (command: { kind: string }) => Promise<unknown>;
-  void configure({ kind: "connector.save-and-connect" });
+  // This fixture scripts only the settled authority result and reply port;
+  // the imported wrapper still owns the real configuration request counter.
+  const configure = createConfigurationConnector(
+    context as unknown as ConfigurationConnectorPorts,
+  ).configureSaveAndConnect;
+  void configure({
+    kind: "connector.save-and-connect",
+    operationId: "11111111-1111-4111-8111-111111111111",
+    buildId: "a".repeat(64),
+    tunnelId: "fixture",
+    runtimeKey: "fixture-runtime-key-000000000000",
+  } satisfies ConnectorSetupCommand);
   expect(context.desktopAdmission.configurationRequests).toBe(1);
   expect(context.desktopAdmission.updateBlocker(true)).toBe(
     "UPDATE_WORK_PENDING",

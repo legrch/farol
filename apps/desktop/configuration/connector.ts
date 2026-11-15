@@ -1,3 +1,5 @@
+import { runAdmittedConnectorSetup } from "../connector-setup-host";
+import type { AuthorityTransitionReservation } from "../../../src/apps/desktop/authority-transition";
 import path from "node:path";
 import type { ProductConfigurationService } from "../../../src/apps/desktop/product-configuration";
 import type { SecureMcpConnectorRuntime } from "../../../src/apps/desktop/secure-mcp-connector-runtime";
@@ -17,6 +19,11 @@ import type {
   ConnectorHealth,
   connectorSupervisor,
 } from "../connector/supervisor";
+
+export type ConnectorSetupCommand = Extract<
+  ProductConfigurationCommand,
+  { kind: "connector.save-and-connect" }
+>;
 
 type Supervisor = ReturnType<typeof connectorSupervisor>;
 export type ConnectorConfigurationCommand = Exclude<
@@ -39,7 +46,27 @@ export type ConfigurationConnectorPorts = Pick<
     secureMcpConnectorRuntime: () => SecureMcpConnectorRuntime | null;
     desktopGoCore: () => DesktopGoCore | null;
     buildIdentity: () => Readonly<{ buildId: string }>;
-    desktopAdmission: Pick<DesktopAdmission, "occupied" | "reserveAdmitted">;
+    desktopAdmission: Pick<
+      DesktopAdmission,
+      "occupied" | "reserveAdmitted" | "closed" | "withConfigurationRequest"
+    >;
+    authorityTransitions: AuthorityTransitionReservation;
+    setActiveAuthorityChangeKind: (
+      value: ProductConfigurationCommand["kind"] | null,
+    ) => void;
+    observeConnectorStart: (
+      work: () => Promise<ProductConfigurationResult>,
+    ) => Promise<ProductConfigurationResult>;
+    startAdmittedSecureMcpConnector: (
+      repair: boolean,
+    ) => Promise<ProductConfigurationResult>;
+    configureAdmittedProduct: (
+      command: ProductConfigurationCommand,
+    ) => Promise<ProductConfigurationResult>;
+    deliverConfigurationReply: (
+      kind: string,
+      result: ProductConfigurationResult,
+    ) => ProductConfigurationResult | Promise<ProductConfigurationResult>;
     configurationFailure: (
       code: Extract<ProductConfigurationResult, { ok: false }>["error"],
     ) => ProductConfigurationResult;
@@ -83,6 +110,12 @@ export function createConfigurationConnector(
   ports: ConfigurationConnectorPorts,
 ) {
   const {
+    authorityTransitions,
+    setActiveAuthorityChangeKind,
+    observeConnectorStart,
+    startAdmittedSecureMcpConnector,
+    configureAdmittedProduct,
+    deliverConfigurationReply,
     configuration,
     connectorCredentialStore,
     secureMcpConnectorRuntime,
@@ -475,5 +508,131 @@ export function createConfigurationConnector(
     }
     return configurationFailure("SETTINGS_INPUT_INVALID");
   }
-  return Object.freeze({ configureAdmittedConnector });
+  function connectorSetupRefusal(
+    command: ConnectorSetupCommand,
+    code: Extract<ProductConfigurationResult, { ok: false }>["error"],
+  ): Promise<ProductConfigurationResult> {
+    return runAdmittedConnectorSetup(
+      { operationId: command.operationId, buildId: command.buildId },
+      command.tunnelId,
+      {
+        admission: () => configurationFailure(code),
+        current: () => configurationFailure(code).snapshot,
+        save: async () => configurationFailure(code),
+        start: async () => configurationFailure(code),
+      },
+    );
+  }
+
+  async function configureSaveAndConnect(
+    command: ConnectorSetupCommand,
+  ): Promise<ProductConfigurationResult> {
+    const { reply } = await desktopAdmission.withConfigurationRequest(
+      async () => {
+        const reserved = await authorityTransitions.withReservation(
+          "authority-change",
+          async () => {
+            if (desktopAdmission.occupied("connector-task"))
+              return connectorSetupRefusal(
+                command,
+                "CONNECTOR_ALREADY_RUNNING",
+              );
+            const connectorAdmission =
+              desktopAdmission.reserveAdmitted("connector-task");
+            setActiveAuthorityChangeKind(command.kind);
+            try {
+              // The combined Save+Connect writes credentials before Start. Fence
+              // it against a pending original Stop before either effect starts.
+              try {
+                const custody = await desktopGoCore()?.observeOriginalStop();
+                if (!custody || custody.restricted)
+                  return connectorSetupRefusal(
+                    command,
+                    "AUTHORITY_CHANGE_IN_PROGRESS",
+                  );
+              } catch {
+                return connectorSetupRefusal(
+                  command,
+                  "AUTHORITY_CHANGE_IN_PROGRESS",
+                );
+              }
+              return await observeConnectorStart(() =>
+                runAdmittedConnectorSetup(
+                  {
+                    operationId: command.operationId,
+                    buildId: command.buildId,
+                  },
+                  command.tunnelId,
+                  {
+                    admission: () => {
+                      if (command.buildId !== buildIdentity().buildId)
+                        return configurationFailure(
+                          "CONNECTOR_SETUP_BINDING_CHANGED",
+                        );
+                      if (desktopAdmission.closed())
+                        return configurationFailure(
+                          "AUTHORITY_CHANGE_IN_PROGRESS",
+                        );
+                      if (
+                        !configuration()! ||
+                        !connectorCredentialStore()! ||
+                        !secureMcpConnectorRuntime()!
+                      )
+                        return configurationFailure("SETTINGS_UNAVAILABLE");
+                      const current = configuration()!.snapshot();
+                      if (current.status !== "ready")
+                        return configurationFailure("SETTINGS_UNAVAILABLE");
+                      if (
+                        secureMcpConnectorRuntime()!.hasUnresolvedEffect() ||
+                        current.settings.setup.connect.outcomeUnknown ||
+                        current.settings.connectors.secureMcp.runtime?.state ===
+                          "outcome_unknown"
+                      )
+                        return configurationFailure(
+                          "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+                        );
+                      if (secureMcpConnectorRuntime()!.isRunning())
+                        return configurationFailure("CONNECTOR_STOP_REQUIRED");
+                      return { ok: true, snapshot: current };
+                    },
+                    current: () => configuration()!!.snapshot(),
+                    save: () =>
+                      configureAdmittedProduct({
+                        kind: "connector.configure",
+                        tunnelId: command.tunnelId,
+                        runtimeKey: command.runtimeKey,
+                      }),
+                    start: () => startAdmittedSecureMcpConnector(false),
+                  },
+                ),
+              );
+            } finally {
+              connectorAdmission.release();
+              setActiveAuthorityChangeKind(null);
+            }
+          },
+        );
+        // A deliberately dropped IPC reply must not retain configuration admission.
+        // Return a value wrapper so the counter follows work, not reply delivery.
+        return {
+          reply: deliverConfigurationReply(
+            command.kind,
+            reserved.admitted
+              ? reserved.value
+              : await connectorSetupRefusal(
+                  command,
+                  "AUTHORITY_CHANGE_IN_PROGRESS",
+                ),
+          ),
+        };
+      },
+    );
+    return reply;
+  }
+
+  return Object.freeze({
+    configureAdmittedConnector,
+    connectorSetupRefusal,
+    configureSaveAndConnect,
+  });
 }
