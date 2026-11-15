@@ -22,10 +22,9 @@ import {
   type ProductSettings,
   type WorkspaceRootIdentity,
   type ApprovedProductWorkspace,
+  type WorkspaceGitMetadata,
 } from "../../../src/pkg/product-settings/contract";
 import { configurationAdmission } from "../../../src/apps/desktop/configuration-admission";
-import { discoverWorkspaceGitMetadata } from "../../../src/modules/computer/infra/native/native-verification-command";
-import { RunReadonlyComputerAction } from "../../../src/modules/computer/app/service/run-readonly-computer-action";
 import type { VerifiedProductWorkspaceResult } from "../../../src/apps/desktop/workspace-descriptor";
 
 export type SelectedWorkspace = Readonly<{
@@ -44,6 +43,32 @@ export type ComputerConfigurationCommand = Extract<
   ProductConfigurationCommand,
   { kind: `computer.${string}` }
 >;
+
+export type VerificationWorkspaceAction = Readonly<{
+  execute(request: unknown): Promise<VerificationWorkspaceActionResult>;
+}>;
+
+export type VerificationWorkspaceActionResult =
+  | Readonly<{
+      ok: true;
+      value: Readonly<{
+        output: Readonly<{
+          kind: "workspace.command";
+          command: "git.status" | "git.head";
+          exitCode: number;
+          stdout: string;
+          stderr: string;
+          outputBytes: number;
+          network: string;
+          coverage: string;
+          layout: string;
+        }>;
+      }>;
+    }>
+  | Readonly<{
+      ok: false;
+      error: Readonly<{ code: string }>;
+    }>;
 
 export type ConfigurationComputerPorts = Readonly<{
   configuration: () => ProductConfigurationService | null;
@@ -84,11 +109,15 @@ export type ConfigurationComputerPorts = Readonly<{
   >;
   desktopGoCore: () => DesktopGoCore | null;
   compiledGoCore: () => unknown;
+  discoverWorkspaceGitMetadata: (
+    root: string,
+    gitHistoryApproved: boolean,
+  ) => Promise<WorkspaceGitMetadata | null>;
   verificationWorkspaceAction: (
     settings: ProductSettings,
     workspace: ApprovedProductWorkspace,
     expiresAt: number,
-  ) => RunReadonlyComputerAction | null;
+  ) => VerificationWorkspaceAction | null;
   getPendingWorkspaceEdit: () => PendingWorkspaceEdit | null;
   setPendingWorkspaceEdit: (value: PendingWorkspaceEdit | null) => void;
   selectedWorkspaceFile: (
@@ -129,6 +158,7 @@ export function createConfigurationComputer(
     listOwnerWorkspace,
     desktopGoCore,
     compiledGoCore,
+    discoverWorkspaceGitMetadata,
     verificationWorkspaceAction,
     getPendingWorkspaceEdit,
     setPendingWorkspaceEdit,

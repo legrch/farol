@@ -326,6 +326,7 @@ import {
   NativeReadonlyWorkspace,
   SAFE_OPEN_HELPER,
 } from "../../modules/computer/infra/native/native-readonly-workspace";
+import { discoverWorkspaceGitMetadata } from "../../modules/computer/infra/native/native-verification-command";
 import {
   CHATGPT_HOME,
   canonicalChatGptConversationUrl,
@@ -374,6 +375,7 @@ import { createConfigurationComputer } from "../../../apps/desktop/configuration
 import type {
   ComputerConfigurationCommand,
   PendingWorkspacePickValue,
+  VerificationWorkspaceAction,
 } from "../../../apps/desktop/configuration/computer";
 import { type WorkspaceConfigurationCommand } from "./workspace-configuration-drain";
 import {
@@ -1428,7 +1430,7 @@ function verificationWorkspaceAction(
   settings: ProductSettings,
   workspace: ApprovedProductWorkspace,
   expiresAt: number,
-): RunReadonlyComputerAction | null {
+): VerificationWorkspaceAction | null {
   if (settings.computer.commands === "none") return null;
   const ownerId = "owner-desktop";
   const sessionId = "desktop-command-session";
@@ -1506,7 +1508,7 @@ function verificationWorkspaceAction(
     new InMemoryComputerApprovalRepository([approval]),
     nativeWorkspace,
     { now: () => Date.now() },
-  );
+  ) as unknown as VerificationWorkspaceAction;
 }
 
 const windowOpenCoordinator = new WindowOpenCoordinator();
@@ -6539,6 +6541,7 @@ function configurationComputer() {
     listOwnerWorkspace,
     desktopGoCore: () => desktopGoCore,
     compiledGoCore: () => compiledGoCore,
+    discoverWorkspaceGitMetadata,
     verificationWorkspaceAction,
     getPendingWorkspaceEdit: () => pendingWorkspaceEdit,
     setPendingWorkspaceEdit: (value) => {
