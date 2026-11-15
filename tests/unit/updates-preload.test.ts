@@ -1,3 +1,6 @@
+import { parse } from "@babel/parser";
+import { stripTypeScriptTypes } from "node:module";
+import { InstalledUpdateCommandSchema } from "../../src/modules/release/contract/installed-update";
 import { admissionFixture } from "../support/desktop-admission";
 import { build, transform } from "esbuild";
 import { readFile } from "node:fs/promises";
@@ -106,7 +109,7 @@ it("wires the actual host handlers with shell-only opening and panel-only observ
     updatesPanel: panel,
     window: owner,
     isTrustedIpcSender,
-    desktopExecutionResources: () => ({ directory: "/app" }),
+    installedUpdates: { resources: () => ({ directory: "/app" }) },
     quitInProgress: false,
     installedUpdateAdmission: false,
     windowMode: "hidden",
@@ -150,4 +153,48 @@ it("wires the actual host handlers with shell-only opening and panel-only observ
   handlers.get(updatesChannels.open)!(event);
   expect(panel.open).toHaveBeenCalledOnce();
   expect(options.admitted()).toBe(false);
+});
+
+it("refuses an untracked direct command before invoking the updater", async () => {
+  const source = await readFile("src/apps/desktop/main.ts", "utf8");
+  const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
+  let handler: { start: number; end: number } | undefined;
+  const visit = (node: any): void => {
+    if (!node || typeof node !== "object") return;
+    if (
+      node.type === "CallExpression" &&
+      node.callee?.object?.name === "ipcMain" &&
+      node.callee?.property?.name === "handle" &&
+      node.arguments?.[0]?.object?.name === "channels" &&
+      node.arguments?.[0]?.property?.name === "installedUpdate"
+    )
+      handler = node.arguments[1];
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) value.forEach(visit);
+      else if (value && typeof value === "object") visit(value);
+    }
+  };
+  visit(tree);
+  expect(handler).toBeDefined();
+  const selected = handler!;
+  const beginDirect = vi.fn(() => false);
+  const endDirect = vi.fn();
+  const installedUpdateCommand = vi.fn();
+  const dispatch = vm.runInNewContext(
+    `(${stripTypeScriptTypes(source.slice(selected.start, selected.end))})`,
+    admissionFixture({
+      isTrustedIpcSender: () => true,
+      window: {},
+      InstalledUpdateCommandSchema,
+      installedUpdates: { updater: {}, command: installedUpdateCommand },
+      updatesPanel: { beginDirect, endDirect },
+    }),
+  );
+  expect(await dispatch({}, { kind: "check" }, "invalid")).toEqual({
+    phase: "unavailable",
+    code: "UPDATE_ACTION_INVALID",
+  });
+  expect(beginDirect).toHaveBeenCalledOnce();
+  expect(installedUpdateCommand).not.toHaveBeenCalled();
+  expect(endDirect).not.toHaveBeenCalled();
 });

@@ -1,4 +1,9 @@
 import "../../../apps/desktop/bridge/e2e-window-bootstrap.ts";
+import {
+  createInstalledUpdateHost,
+  withInstalledStartupFence,
+} from "../../../apps/desktop/update/host";
+import { UPDATE_IDLE_CHECK_MS } from "../../modules/release/app/installed-updater";
 import { DesktopAdmission } from "../../../apps/desktop/host/admission";
 import { mainWindow } from "../../../apps/desktop/window/main";
 import { taskSurfaces } from "../../../apps/desktop/window/surface";
@@ -141,20 +146,8 @@ import { publishManualInstallStartupProof } from "./manual-install-startup-proof
 import {
   createInstalledUpdateRuntime,
   waitForInstalledUpdateRelaunch,
-  type InstalledUpdateResourcesOrigin,
 } from "./installed-update-runtime";
-import { drainInstalledComputer } from "./installed-computer-drain";
-import {
-  InstalledUpdateCommandSchema,
-  isRetiredInstalledUpdateCommand,
-  type InstalledUpdateView,
-  type NormalQuitApplyContext,
-} from "../../modules/release/contract/installed-update";
-import {
-  UPDATE_IDLE_CHECK_MS,
-  type ConfirmedUpdateRestart,
-  type InstalledUpdater,
-} from "../../modules/release/app/installed-updater";
+import { InstalledUpdateCommandSchema } from "../../modules/release/contract/installed-update";
 import {
   selectedConnectorApp,
   restartedConnectorAppSelection,
@@ -253,9 +246,7 @@ import {
   acquirePromotionLease,
   releasePromotionLease,
   verifyPromotionLease,
-  type PromotionLeaseHandle,
 } from "./promotion-lease";
-import { withStartupPromotionLease } from "./startup-promotion-lease";
 import {
   reconcileTaskContexts,
   toProductTaskContext,
@@ -406,7 +397,6 @@ import {
   type GracefulQuitSignals,
 } from "./quit-signal";
 import { writeQuitReceipt } from "./quit-receipt-store";
-import { createQuitUpdatePreparation } from "./quit-update-preparation";
 import { drainComputerConnector } from "./computer-connector-drain";
 import { isTrustedIpcSender } from "./ipc-sender";
 import {
@@ -541,10 +531,7 @@ import {
   probeTunnelClient,
   verifySelectedTunnelClient,
 } from "./tunnel-client-probe";
-import {
-  createUpdateAbortConnectorRecovery,
-  resumeComputerConnector,
-} from "./connector-resume-policy";
+import { resumeComputerConnector } from "./connector-resume-policy";
 import { identityBoundWorkspaces } from "./identity-bound-workspaces";
 import { AuthorityTransitionReservation } from "./authority-transition";
 import {
@@ -730,7 +717,7 @@ const launchIdentity = readBuildLaunchIdentity(
 const nativeWorkspace = new NativeReadonlyWorkspace({
   get helperPath() {
     return path.join(
-      desktopExecutionResources().directory,
+      installedUpdates.resources().directory,
       "computer-safe-open.py",
     );
   },
@@ -917,7 +904,8 @@ const updatesPanel = new DesktopUpdatesPanel(
   () =>
     !desktopAdmission.closed() &&
     (buildEnvironment !== "preview" ||
-      (installedUpdater !== null && installedUpdater.ownerHandoffSafe())),
+      (installedUpdates.updater !== null &&
+        installedUpdates.updater.ownerHandoffSafe())),
 );
 let runtimeChild: ChildProcess | null = null;
 let localRuntimeGeneration = 0;
@@ -1011,293 +999,45 @@ const {
 // admission hold it from reading the settings until they run, so neither can
 // start with authority that a concurrent change is about to replace.
 const authorityTransitions = new AuthorityTransitionReservation();
-let installedUpdater: InstalledUpdater | null = null;
-let installedResourcesOrigin: InstalledUpdateResourcesOrigin | undefined;
-
-// Every delayed bundled execution keeps the independently authenticated image.
-function desktopExecutionResources() {
-  return {
-    directory: installedResourcesOrigin?.execution.directory ?? directory,
-    executable:
-      installedResourcesOrigin?.execution.executable ?? process.execPath,
-    recheck: installedResourcesOrigin?.recheck ?? (async () => undefined),
-  };
-}
-
-const quitUpdatePreparation = createQuitUpdatePreparation(
-  () => installedUpdater,
-);
-let installedUpdaterInitialization: Promise<void> | null = null;
-let installedUpdateTimer: NodeJS.Timeout | null = null;
-let installedUpdateView: InstalledUpdateView = {
-  phase: "unavailable",
-  code: "UPDATE_NOT_INSTALLED",
-};
-
-function publishInstalledUpdate(view: InstalledUpdateView): void {
-  installedUpdateView = view;
-  window?.webContents.send(channels.installedUpdateState, view);
-}
-async function installedUpdateCommand(
-  value: unknown,
-): Promise<InstalledUpdateView> {
-  if (isRetiredInstalledUpdateCommand(value))
-    return { phase: "unavailable", code: "UPDATE_FORWARD_ONLY" };
-  const command = InstalledUpdateCommandSchema.safeParse(value);
-  if (!command.success || !installedUpdater || desktopAdmission.quitInProgress)
-    return installedUpdateView;
-  if (command.data.kind === "check") await installedUpdater.manualCheck();
-  else if (command.data.kind === "download") await installedUpdater.download();
-  else if (command.data.kind === "skip") await installedUpdater.skip();
-  else if (command.data.kind === "later") await installedUpdater.later();
-  else if (command.data.kind === "notice-seen")
-    await installedUpdater.acknowledgeNotice(command.data.noticeKey);
-  else if (command.data.kind === "set-automatic-update-preference") {
-    await installedUpdater.setAutomaticUpdatePreference(
-      command.data.enabled,
-      command.data.scope,
-    );
-    return installedUpdater.snapshot();
-  } else if (command.data.kind === "set-install-on-quit-preference") {
-    await installedUpdater.setInstallOnQuitPreference(command.data.enabled);
-    return installedUpdater.snapshot();
-  } else if (command.data.kind === "restart-confirmed")
-    await installedUpdater.restartConfirmed(command.data.version);
-  else if (command.data.kind === "restart") await installedUpdater.restart();
-  return installedUpdateView;
-}
-async function initializeInstalledUpdater(): Promise<void> {
-  // Owner Preview is an on-demand artifact, never an installed update owner.
-  // Refuse before constructing a runtime or inspecting installed resources.
-  if (buildEnvironment !== "preview") return;
-  try {
-    installedUpdater = await createInstalledUpdateRuntime({
-      ...(windowMode === "secondary-visible" &&
-      sidecarDisplayOnly &&
-      !allowPrimaryDisplay
-        ? { relaunchPresentation: "sidecar-only" as const }
-        : {}),
-      helperLifetime: createDesktopHelperLifetime(),
-      operations: operationsStore(),
-      directory,
-      userData: app.getPath("userData"),
-      build: buildIdentity,
-      ...(compiledGoCore === null ? {} : { goCoreArtifact: compiledGoCore }),
-      physicalFiles: rawFs,
-      ...(installedResourcesOrigin
-        ? { resourcesOrigin: installedResourcesOrigin }
-        : {}),
-      copyApp: (source, destination) =>
-        rawFs.cp(source, destination, {
-          recursive: true,
-          force: false,
-          errorOnExist: true,
-          verbatimSymlinks: true,
-          preserveTimestamps: true,
-        }),
-      removeDirectory: (directory, force) =>
-        rawFs.rm(directory, { recursive: true, force }),
-      publish: publishInstalledUpdate,
-      quit: () => app.quit(),
-      canStartNormalQuitEffect: () =>
-        desktopAdmission.quitInProgress &&
-        quitUpdatePreparation.effectAllowed(),
-      acquireAdmission: async (
-        desktopWorkSettled,
-        quit?: NormalQuitApplyContext,
-        confirmation?: ConfirmedUpdateRestart,
-      ) => {
-        // Only the host's original preparation may borrow the Quit admission.
-        // New IPC work remains fenced by quitInProgress throughout preparation.
-        const admissionCurrent = () =>
-          quit === undefined
-            ? !desktopAdmission.quitInProgress
-            : desktopAdmission.quitInProgress &&
-              quitUpdatePreparation.admissionAllowed(quit);
-        const blocker = desktopAdmission.updateBlocker(admissionCurrent());
-        if (blocker) return { ok: false, code: blocker };
-        const snapshot = configuration?.snapshot();
-        if (!snapshot || snapshot.status !== "ready")
-          return { ok: false, code: "UPDATE_STATE_UNREADABLE" };
-        const transition = authorityTransitions.tryReserve("authority-change");
-        if (!transition) return { ok: false, code: "UPDATE_WORK_PENDING" };
-        const taskClaim = taskMutations.tryEnter();
-        if (!taskClaim) {
-          transition.release();
-          return { ok: false, code: "UPDATE_WORK_PENDING" };
-        }
-        const updateAdmission = desktopAdmission.enterUpdate();
-        if (!updateAdmission) {
-          taskClaim.release();
-          transition.release();
-          return { ok: false, code: "UPDATE_WORK_PENDING" };
-        }
-        // Hide embedded input before any asynchronous probe; IPC and configuration
-        // admission above stay reserved through the final helper handoff.
-        applyLayout();
-        const browserAdmissions: Array<
-          Extract<
-            Awaited<ReturnType<ChatGptRoute["acquireUpdateIdle"]>>,
-            { ok: true }
-          >
-        > = [];
-        const recheck = async () => {
-          if (!admissionCurrent())
-            return { ok: false as const, code: "UPDATE_WORK_PENDING" };
-          for (const browser of browserAdmissions) {
-            const result = await browser.recheck();
-            if (!result.ok) return result;
-            if (!admissionCurrent())
-              return { ok: false as const, code: "UPDATE_WORK_PENDING" };
-          }
-          return { ok: true as const };
-        };
-        let lease: Awaited<ReturnType<typeof acquirePromotionLease>> = null;
-        let browserReleaseUnconfirmed = false;
-        const recovery = createUpdateAbortConnectorRecovery({
-          before: snapshot,
-          wasRunning: secureMcpConnectorRuntime?.isRunning() ?? false,
-          current: () => configuration?.snapshot() ?? null,
-          releaseAdmission: async () => {
-            for (const browser of browserAdmissions) await browser.release();
-            if (browserReleaseUnconfirmed)
-              throw new Error("UPDATE_BROWSER_RELEASE_UNCONFIRMED");
-            if (lease) await releasePromotionLease(lease);
-            taskClaim.release();
-            transition.release();
-            updateAdmission.release();
-            applyLayout();
-          },
-          resumeConnector: async () => {
-            if (desktopAdmission.quitInProgress) return;
-            try {
-              const result = await startSecureMcpConnector(false, true);
-              startupStage(
-                result.ok
-                  ? "update-abort-connector-resumed"
-                  : "update-abort-connector-resume-refused",
-              );
-            } catch {
-              startupStage("update-abort-connector-resume-failed");
-            }
-            if (
-              !desktopAdmission.quitInProgress &&
-              window &&
-              !window.isDestroyed()
-            )
-              window.webContents.send(channels.configurationChanged);
-          },
-        });
-        const release = recovery.release;
-        const abort = async (code: string) => {
-          try {
-            await release();
-            return { ok: false as const, code };
-          } catch {
-            return {
-              ok: false as const,
-              code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
-            };
-          }
-        };
-        try {
-          const routes = new Set([
-            ...managedChatGptRoutes,
-            ...(chatGptRoute ? [chatGptRoute] : []),
-          ]);
-          for (const route of routes) {
-            if (!admissionCurrent()) return abort("UPDATE_WORK_PENDING");
-            const browser = confirmation
-              ? await route.acquireUpdateClose()
-              : await route.acquireUpdateIdle(
-                  quit
-                    ? {
-                        deadlineAt: quit.deadlineAt,
-                        canStartEffect: admissionCurrent,
-                      }
-                    : undefined,
-                );
-            if (!browser.ok) {
-              browserReleaseUnconfirmed =
-                browser.code === "UPDATE_BROWSER_RELEASE_UNCONFIRMED";
-              return abort(browser.code);
-            }
-            browserAdmissions.push(browser);
-            if (!admissionCurrent()) return abort("UPDATE_WORK_PENDING");
-          }
-          if (!admissionCurrent()) return abort("UPDATE_WORK_PENDING");
-          lease = await acquirePromotionLease(
-            app.getPath("userData"),
-            buildIdentity.buildId,
-            "promotion",
-          );
-          if (!lease || !(await verifyPromotionLease(lease))) {
-            return abort("UPDATE_WORK_PENDING");
-          }
-          await liveTaskPersistence;
-          if (!admissionCurrent()) return abort("UPDATE_WORK_PENDING");
-          const drained = await drainInstalledComputer({
-            root: statePaths().secureMcpLaunch,
-            settings: snapshot.settings,
-            ...(quit ? { deadlineAt: quit.deadlineAt } : {}),
-            desktopWorkSettled,
-            stillCurrent: () => {
-              const current = configuration?.snapshot();
-              return (
-                admissionCurrent() &&
-                current?.status === "ready" &&
-                current.settings.revision === snapshot.settings.revision
-              );
-            },
-            stopOwnedClients: async () => {
-              if (!admissionCurrent())
-                throw new Error("UPDATE_QUIT_DEADLINE_EXPIRED");
-              await stopAndConfirmComputerMcp();
-              if (!admissionCurrent())
-                throw new Error("UPDATE_QUIT_DEADLINE_EXPIRED");
-              // Preserve route, grants, selected app and credentials. Only the
-              // runtime attachment becomes stopped after a verified drain.
-              const recorded =
-                await configuration?.recordSecureMcpDrainedForUpdate();
-              if (!recorded?.ok)
-                throw new Error("UPDATE_CONNECTOR_DRAIN_UNCONFIRMED");
-              recovery.recordDrained(recorded.snapshot);
-            },
-          });
-          if (!drained.ok) {
-            return abort(drained.code);
-          }
-          if (!admissionCurrent()) return abort("UPDATE_WORK_PENDING");
-          return { ok: true, release, recheck };
-        } catch {
-          return abort("UPDATE_STATE_UNREADABLE");
-        }
-      },
-    });
-    if (!installedUpdater) return;
-    if (desktopAdmission.quitInProgress) {
-      await installedUpdater.close();
-      return;
-    }
-    publishInstalledUpdate(installedUpdater.snapshot());
-    await installedUpdater.initialize();
-    if (desktopAdmission.quitInProgress) {
-      await installedUpdater.close();
-      return;
-    }
-    void installedUpdater.scheduledCheck();
-    installedUpdateTimer = setInterval(() => {
-      void installedUpdater?.scheduledCheck();
-    }, UPDATE_IDLE_CHECK_MS);
-    installedUpdateTimer.unref();
-  } catch {
-    publishInstalledUpdate({
-      phase: "failed",
-      code: "UPDATE_INITIALIZATION_FAILED",
-      recoveryRequired: true,
-    });
-  }
-}
+const installedUpdates = createInstalledUpdateHost({
+  buildEnvironment,
+  sidecarOnly:
+    windowMode === "secondary-visible" &&
+    sidecarDisplayOnly &&
+    !allowPrimaryDisplay,
+  directory,
+  build: buildIdentity,
+  goCoreArtifact: compiledGoCore,
+  physicalFiles: rawFs,
+  createRuntime: createInstalledUpdateRuntime,
+  idleCheckMs: UPDATE_IDLE_CHECK_MS,
+  createHelperLifetime: createDesktopHelperLifetime,
+  operations: operationsStore,
+  userData: () => app.getPath("userData"),
+  quit: () => app.quit(),
+  publish: (view) => {
+    window?.webContents.send(channels.installedUpdateState, view);
+  },
+  configurationChanged: () => {
+    if (window && !window.isDestroyed())
+      window.webContents.send(channels.configurationChanged);
+  },
+  admission: desktopAdmission,
+  configuration: () => configuration,
+  authorityTransitions,
+  taskMutations: () => taskMutations,
+  connector: () => secureMcpConnectorRuntime,
+  routes: () => [
+    ...managedChatGptRoutes,
+    ...(chatGptRoute ? [chatGptRoute] : []),
+  ],
+  persistence: () => liveTaskPersistence,
+  launchRoot: () => statePaths().secureMcpLaunch,
+  stopConnector: stopAndConfirmComputerMcp,
+  startConnector: startSecureMcpConnector,
+  stage: startupStage,
+  applyLayout: () => applyLayout(),
+});
 let activeAuthorityChangeKind: ProductConfigurationCommand["kind"] | null =
   null;
 
@@ -1885,7 +1625,7 @@ const {
   demoMode,
   platform: process.platform,
   writeLog: (line) => process.stderr.write(line),
-  desktopExecutionResources,
+  desktopExecutionResources: installedUpdates.resources,
   observeRendererLifecycle,
   handleShortcut,
   applyLayout,
@@ -5062,7 +4802,7 @@ async function startAdmittedSecureMcpConnector(
     });
   if (!startPermitted()) return startRefusal();
   try {
-    const resources = desktopExecutionResources();
+    const resources = installedUpdates.resources();
     await resources.recheck();
     if (!startPermitted()) return startRefusal();
     await secureMcpConnectorRuntime.configure({
@@ -11228,7 +10968,7 @@ async function startRuntime(): Promise<void> {
     throw new Error("LOCAL_RUNTIME_ALREADY_OWNED");
   }
   runtimeStopping = false;
-  const resources = desktopExecutionResources();
+  const resources = installedUpdates.resources();
   await resources.recheck();
   if (runtimeStopping || desktopAdmission.closed()) return;
   const child = spawn(
@@ -11499,7 +11239,7 @@ function installIpc(): void {
       event.senderFrame !== window.webContents.mainFrame
     )
       return;
-    updatesPanel.bindOwner(window, desktopExecutionResources().directory);
+    updatesPanel.bindOwner(window, installedUpdates.resources().directory);
     updatesPanel.publish(event, value);
   });
   ipcMain.on(updatesChannels.settled, (event, value: unknown) =>
@@ -11524,7 +11264,7 @@ function installIpc(): void {
     void updatesPanel
       .open({
         owner,
-        directory: desktopExecutionResources().directory,
+        directory: installedUpdates.resources().directory,
         mode: windowMode,
         place: () => selectedVisibleTestPlacement(UPDATES_PANEL_SIZE).bounds,
         admitted: () =>
@@ -11564,7 +11304,7 @@ function installIpc(): void {
         return { error: "IPC_SENDER_DENIED" };
       const parsed = InstalledUpdateCommandSchema.safeParse(value);
       const tracked =
-        installedUpdater !== null &&
+        installedUpdates.updater !== null &&
         parsed.success &&
         parsed.data.kind !== "status";
       if (tracked && !updatesPanel.beginDirect(event, operationId))
@@ -11572,7 +11312,7 @@ function installIpc(): void {
       let returned = false;
       let hostResult: unknown;
       try {
-        const result = await installedUpdateCommand(value);
+        const result = await installedUpdates.command(value);
         hostResult = result;
         returned = true;
         return result;
@@ -11811,32 +11551,6 @@ function disposeChatGptRoutes(): void {
   liveTaskRoutes.clear();
 }
 
-async function withInstalledStartupFence<T>(
-  args: readonly string[],
-  userData: string,
-  generation: string,
-  observe: () => ReturnType<typeof waitForInstalledUpdateRelaunch>,
-  start: (
-    update: Awaited<ReturnType<typeof waitForInstalledUpdateRelaunch>>,
-    verify: () => Promise<boolean>,
-    lease: PromotionLeaseHandle,
-  ) => Promise<T>,
-): Promise<T> {
-  // Match the updater's hint detection, including malformed hints: its parser
-  // must reject those before a lease can block an explicit helper relaunch.
-  const hint = "--farol-installed-update-relaunch";
-  const explicit = args.some(
-    (arg) => arg === hint || arg.startsWith(hint + "="),
-  );
-  const relaunch = explicit ? await observe() : undefined;
-  return withStartupPromotionLease(
-    userData,
-    generation,
-    async (verify, lease) =>
-      start(explicit ? relaunch! : await observe(), verify, lease),
-  );
-}
-
 async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   app.on(
     "second-instance",
@@ -11868,7 +11582,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     buildIdentity.buildId,
     observeUpdateRelaunch,
     async (updateRelaunch, verify, lease) => {
-      installedResourcesOrigin = updateRelaunch?.resourcesOrigin;
+      installedUpdates.resourcesOrigin = updateRelaunch?.resourcesOrigin;
       await updateRelaunch?.recheck();
       startupStage("before-ready");
       await app.whenReady();
@@ -11975,7 +11689,8 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
               computerId: savedSettings.computer.computerId,
               build: buildIdentity,
               artifactRoot: desktopCoreArtifactRoot(
-                installedResourcesOrigin?.execution.directory ?? directory,
+                installedUpdates.resourcesOrigin?.execution.directory ??
+                  directory,
                 runtimeEnvironment,
               ),
               compiledArtifact: compiledGoCore,
@@ -12032,7 +11747,8 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
                 compiledResources: compiledGoResources,
                 build: buildIdentity,
                 artifactRoot: desktopCoreArtifactRoot(
-                  installedResourcesOrigin?.execution.directory ?? directory,
+                  installedUpdates.resourcesOrigin?.execution.directory ??
+                    directory,
                   runtimeEnvironment,
                 ),
                 stateRoot,
@@ -12043,7 +11759,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
           });
           try {
             startupRecovery = openStartupRecoveryWindow({
-              directory: desktopExecutionResources().directory,
+              directory: installedUpdates.resources().directory,
               session,
               ...(nativeMenuBarEnabled()
                 ? {
@@ -12277,7 +11993,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         // The attested path must remain immutable through spawn and lifetime.
         // Shared installation paths are writable by other administrator accounts.
         artifactRoot: desktopCoreArtifactRoot(
-          installedResourcesOrigin?.execution.directory ?? directory,
+          installedUpdates.resourcesOrigin?.execution.directory ?? directory,
           runtimeEnvironment,
         ),
         stateRoot,
@@ -12413,8 +12129,8 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       root: statePaths().secureMcpConnector,
       homePath: await codexHostProcessHomePath(),
       tempPath: app.getPath("temp"),
-      electronPath: desktopExecutionResources().executable,
-      recheckExecution: desktopExecutionResources().recheck,
+      electronPath: installedUpdates.resources().executable,
+      recheckExecution: installedUpdates.resources().recheck,
     },
     { onLifecycleObservation: reportOwnedBackendLifecycle },
   );
@@ -12678,7 +12394,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     deadlineMs: QUIT_DRAIN_DEADLINE_MS,
     preparationMs: QUIT_PREPARATION_MS,
     recordReserveMs: QUIT_RECORD_RESERVE_MS,
-    prepare: quitUpdatePreparation.prepare,
+    prepare: installedUpdates.quitPreparation.prepare,
     // The receipt first, then — only for a confirmed drain — the run marker
     // written at start (N03/D2). An undrained quit, or a receipt that could
     // not be written, leaves the marker in place, and the next promotion
@@ -12739,13 +12455,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       const closers: OwnedCloser[] = [
         {
           name: "installed-updater",
-          close: async () => {
-            await installedUpdater?.close();
-            // Creation can still be reading its private state when Quit starts.
-            // initializeInstalledUpdater closes that late lifetime without checking.
-            await installedUpdaterInitialization;
-            await installedUpdater?.close();
-          },
+          close: () => installedUpdates.close(),
         },
       ];
       const attachmentTask = pendingChatGptAttachmentTask;
@@ -12880,14 +12590,14 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       process.removeAllListeners("farol-e2e-observe-connection");
     if (connectorStatusTimer.current)
       clearInterval(connectorStatusTimer.current);
-    if (installedUpdateTimer) clearInterval(installedUpdateTimer);
+    installedUpdates.stopTimer();
     quitDrain.onBeforeQuit(event);
   });
   app.on("window-all-closed", () => {
     if (windowAllClosedAction(process.platform) === "quit") app.quit();
   });
   quitSignals.ready();
-  installedUpdaterInitialization = initializeInstalledUpdater();
+  void installedUpdates.initialize();
   const beforeConnectorResume = configuration.snapshot();
   void resumeComputerConnector(
     {
