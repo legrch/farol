@@ -8,15 +8,12 @@ import type { DelegatedAgentAuthority } from "../../src/modules/agent/app/port/e
 import type { ReadonlyWorkspace } from "../../src/modules/computer/app/port/readonly-workspace";
 import { CodexAgentWorkspaceProbe } from "../../src/apps/desktop/codex-agent-workspace-probe";
 import { GoSettingsListWorkspace } from "../../src/apps/desktop/go-settings-workspace";
-import {
-  ProductConfigurationResultSchema,
-  ProductSettingsSchema,
-} from "../../src/pkg/product-settings/contract";
+import { createConfigurationComputer } from "../../apps/desktop/configuration/computer";
+import type { ConfigurationComputerPorts } from "../../apps/desktop/configuration/computer";
+import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
 import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
-// Actual main.ts source composition with controlled producers, not a native
-// host: the Go-aware gates are extracted from the source and run in a context
-// whose Python-backed collaborators are spies.
+// Actual main.ts source composition for the unmoved Codex agent check workspace.
 const main = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
 
 function select(predicate: (node: Record<string, unknown>) => boolean) {
@@ -36,169 +33,13 @@ function select(predicate: (node: Record<string, unknown>) => boolean) {
   return main.slice(match.start as number, match.end as number);
 }
 
-const gitCase = select(
-  (node) =>
-    node.type === "SwitchCase" &&
-    (node.test as { value?: string } | null)?.value === "computer.run-git-head",
-);
 const checkWorkspace = select(
   (node) =>
     node.type === "FunctionDeclaration" &&
     (node.id as { name?: string })?.name === "codexAgentCheckWorkspace",
 );
 
-const unavailableSnapshot = { status: "error", error: "SETTINGS_READ_FAILED" };
-
-function configurationFailure(error: string) {
-  return ProductConfigurationResultSchema.parse({
-    ok: false,
-    error,
-    snapshot: unavailableSnapshot,
-  });
-}
-
 const workspaceId = "00000000-0000-4000-8000-000000000001";
-
-function gitContext(
-  overrides: Readonly<{
-    compiledGoCore: unknown;
-    commands?: "none" | "verification";
-    verified?: boolean;
-  }>,
-) {
-  const spies = {
-    verificationWorkspaceAction: vi.fn(),
-    nativeWorkspaceExecute: vi.fn(),
-    spawnSnapshotHelper: vi.fn(),
-    runHelper: vi.fn(),
-    randomUUID: vi.fn(() => "call-id"),
-  };
-  const settings = {
-    computer: {
-      commands: overrides.commands ?? "verification",
-      generation: 7,
-    },
-  };
-  const context = {
-    compiledGoCore: overrides.compiledGoCore,
-    configuration: {
-      snapshot: () => ({ status: "ready", settings }),
-    },
-    configurationFailure,
-    verifiedProductWorkspace: () =>
-      overrides.verified === false
-        ? { status: "not_verified" }
-        : {
-            status: "verified",
-            workspace: { workspaceId, root: "/workspace/primary" },
-          },
-    verificationWorkspaceAction: spies.verificationWorkspaceAction,
-    nativeWorkspace: { execute: spies.nativeWorkspaceExecute },
-    spawnSnapshotHelper: spies.spawnSnapshotHelper,
-    runHelper: spies.runHelper,
-    randomUUID: spies.randomUUID,
-    workspaceCommandFailure: (code: string) => configurationFailure(code),
-    ProductConfigurationResultSchema: {
-      parse: (value: unknown) => value,
-    },
-    Date,
-  };
-  return { context, spies };
-}
-
-function runGitCommand(
-  context: object,
-  kind: "computer.run-git-status" | "computer.run-git-head",
-): Promise<{ ok: boolean; error?: string; evidence?: { command: string } }> {
-  // The head case carries the body shared with the status label above it.
-  const source = stripTypeScriptTypes(
-    `async function run(command: any) { switch (command.kind) { case "computer.run-git-status": ${gitCase} } }`,
-  );
-  return vm.runInNewContext(
-    `${source}; run({ kind: ${JSON.stringify(kind)}, workspaceId: ${JSON.stringify(workspaceId)} })`,
-    context,
-  );
-}
-
-describe("Git status and Git HEAD in a Go-aware build", () => {
-  it("extracts the one case that serves both commands", () => {
-    expect(gitCase).toContain("verificationWorkspaceAction(");
-    expect(gitCase).toContain("compiledGoCore !== null");
-  });
-
-  for (const kind of [
-    "computer.run-git-status",
-    "computer.run-git-head",
-  ] as const) {
-    it(`${kind} refuses with the closed unavailable code and reaches neither Python nor git`, async () => {
-      const { context, spies } = gitContext({ compiledGoCore: { go: true } });
-      const result = await runGitCommand(context, kind);
-      expect(result).toMatchObject({
-        ok: false,
-        error: "WORKSPACE_COMMAND_UNAVAILABLE",
-      });
-      expect(spies.verificationWorkspaceAction).not.toHaveBeenCalled();
-      expect(spies.nativeWorkspaceExecute).not.toHaveBeenCalled();
-      expect(spies.spawnSnapshotHelper).not.toHaveBeenCalled();
-      expect(spies.runHelper).not.toHaveBeenCalled();
-      expect(spies.randomUUID).not.toHaveBeenCalled();
-    });
-  }
-
-  it("keeps the earlier owner-facing refusals in front of the unavailable one", async () => {
-    const off = gitContext({ compiledGoCore: {}, commands: "none" });
-    await expect(
-      runGitCommand(off.context, "computer.run-git-status"),
-    ).resolves.toMatchObject({
-      error: "WORKSPACE_COMMAND_APPROVAL_REQUIRED",
-    });
-    const unverified = gitContext({ compiledGoCore: {}, verified: false });
-    await expect(
-      runGitCommand(unverified.context, "computer.run-git-head"),
-    ).resolves.toMatchObject({ error: "WORKSPACE_VERIFICATION_REQUIRED" });
-    for (const { spies } of [off, unverified]) {
-      expect(spies.verificationWorkspaceAction).not.toHaveBeenCalled();
-    }
-  });
-
-  for (const [kind, command] of [
-    ["computer.run-git-status", "git.status"],
-    ["computer.run-git-head", "git.head"],
-  ] as const) {
-    it(`a legacy build still runs ${kind} through the native verifier unchanged`, async () => {
-      const { context, spies } = gitContext({ compiledGoCore: null });
-      const execute = vi.fn(async (_request: unknown) => ({
-        ok: true,
-        value: {
-          output: {
-            kind: "workspace.command",
-            command,
-            exitCode: 0,
-            stdout: "out",
-            stderr: "",
-            outputBytes: 3,
-            network: "none",
-            coverage: "tracked-files-only",
-            layout: "primary",
-          },
-        },
-      }));
-      spies.verificationWorkspaceAction.mockReturnValue({ execute });
-      const result = await runGitCommand(context, kind);
-      expect(spies.verificationWorkspaceAction).toHaveBeenCalledTimes(1);
-      expect(execute).toHaveBeenCalledTimes(1);
-      expect(execute.mock.calls[0]![0]).toMatchObject({
-        workspaceId,
-        operation: { kind: "verification.run", command, relativePath: "." },
-      });
-      expect(result).toMatchObject({
-        ok: true,
-        evidence: { command },
-      });
-    });
-  }
-});
-
 const referenceId = "00000000-0000-4000-8000-000000000002";
 
 function readiness() {
@@ -255,6 +96,19 @@ const settings = ProductSettingsSchema.parse({
     verify: readiness(),
   },
 });
+
+// Ensure setup.computer.verified names the primary workspace for Git tests.
+(
+  settings as { setup: { computer: { verified: unknown } } }
+).setup.computer.verified = {
+  profile: "computer.local.read/1",
+  configRevision: 7,
+  workspaceId,
+  runtimeGeneration: "runtime:build",
+  buildId: "0".repeat(64),
+  protocol: "readonly-workspace/1",
+  verifiedAt: "2026-01-01T00:00:00.000Z",
+};
 
 const authority: DelegatedAgentAuthority = {
   authorityId: "authority-a",
@@ -316,6 +170,198 @@ function checkContext(
   return { chosen, nativeExecute, nativeWorkspace };
 }
 
+describe("Git status and Git HEAD in a Go-aware build", () => {
+  const primaryWorkspace = {
+    workspaceId,
+    root: "/workspace/primary",
+    label: "Primary",
+    access: "read" as const,
+    excludedPaths: ["/workspace/primary/private"],
+    rootIdentity: SYNTHETIC_ROOT_IDENTITY,
+  };
+
+  function gitSettings(commands: "none" | "verification" = "verification") {
+    return ProductSettingsSchema.parse({
+      ...settings,
+      computer: { ...settings.computer, commands },
+    });
+  }
+
+  function gitPorts(overrides: {
+    compiledGoCore: unknown;
+    commands?: "none" | "verification";
+    verified?: boolean;
+    verificationAction?: unknown;
+  }) {
+    const s = gitSettings(overrides.commands ?? "verification");
+    const verifiedWorkspace =
+      overrides.verified === false
+        ? { status: "not_verified" as const }
+        : { status: "verified" as const, workspace: primaryWorkspace };
+    // This fake owner implements only the branch collaborators exercised below.
+    const ports = {
+      configuration: () => ({
+        snapshot: () => ({ status: "ready" as const, settings: s }),
+      }),
+      codexAgentOperationActive: () => false,
+      configurationFailure: vi.fn((error: string) => ({ ok: false, error })),
+      getPendingWorkspacePick: () => null,
+      setPendingWorkspacePick: vi.fn(),
+      selectedWorkspace: vi.fn(async () => "cancelled" as const),
+      measuredRootIdentity: vi.fn(async () => null),
+      inspectOwnerWorkspace: vi.fn(async () => ({ ok: true })),
+      buildIdentity: () => ({ buildId: "build" }),
+      workspaceReadFailure: vi.fn((code: string) => ({
+        ok: false,
+        error: code,
+      })),
+      desktopAdmission: {
+        occupied: () => false,
+        reserveAdmitted: () => ({ release: vi.fn() }),
+      },
+      secureMcpConnectorRuntime: () => null,
+      runtime: () => ({ identity: "runtime" }),
+      verifiedProductWorkspace: vi.fn(() => verifiedWorkspace),
+      listOwnerWorkspace: vi.fn(async () => ({
+        ok: false as const,
+        code: "WORKSPACE_READ_FAILED",
+      })),
+      desktopGoCore: () => null,
+      compiledGoCore: () => overrides.compiledGoCore,
+      discoverWorkspaceGitMetadata: vi.fn(async () => null),
+      verificationWorkspaceAction: vi.fn(
+        () => overrides.verificationAction ?? null,
+      ),
+      getPendingWorkspaceEdit: () => null,
+      setPendingWorkspaceEdit: vi.fn(),
+      selectedWorkspaceFile: vi.fn(async () => "cancelled" as const),
+      goWorkspaceEditResult: vi.fn(() => ({ ok: true })),
+      statePaths: () => ({ workspaceMutations: "/tmp/mutations" }),
+      workspaceMutationFailure: vi.fn((code: string) => ({
+        ok: false,
+        error: code,
+      })),
+      workspaceCommandFailure: vi.fn((code: string) => ({
+        ok: false,
+        error: code,
+      })),
+    } as unknown as ConfigurationComputerPorts;
+    return ports;
+  }
+
+  it.each(["computer.run-git-status", "computer.run-git-head"] as const)(
+    "%s refuses a non-command verifier output",
+    async (kind) => {
+      const execute = vi.fn(async () => ({
+        ok: true,
+        value: {
+          output: { kind: "workspace.entries", entries: [], truncated: false },
+        },
+      }));
+      const ports = gitPorts({
+        compiledGoCore: null,
+        verificationAction: { execute },
+      });
+      const computer = createConfigurationComputer(ports);
+      await expect(
+        computer.configureAdmittedComputer({ kind, workspaceId }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: "WORKSPACE_COMMAND_FAILED",
+      });
+      expect(execute).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  for (const kind of [
+    "computer.run-git-status",
+    "computer.run-git-head",
+  ] as const) {
+    it(`${kind} refuses with the closed unavailable code and reaches neither Python nor git`, async () => {
+      const ports = gitPorts({ compiledGoCore: { go: true } });
+      const computer = createConfigurationComputer(ports);
+      const result = await computer.configureAdmittedComputer({
+        kind,
+        workspaceId,
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        error: "WORKSPACE_COMMAND_UNAVAILABLE",
+      });
+      expect(ports.verificationWorkspaceAction).not.toHaveBeenCalled();
+    });
+  }
+
+  it("keeps the earlier owner-facing refusals in front of the unavailable one", async () => {
+    const off = gitPorts({ compiledGoCore: {}, commands: "none" });
+    const offComputer = createConfigurationComputer(off);
+    await expect(
+      offComputer.configureAdmittedComputer({
+        kind: "computer.run-git-status",
+        workspaceId,
+      }),
+    ).resolves.toMatchObject({
+      error: "WORKSPACE_COMMAND_APPROVAL_REQUIRED",
+    });
+
+    const unverified = gitPorts({ compiledGoCore: {}, verified: false });
+    const unverifiedComputer = createConfigurationComputer(unverified);
+    await expect(
+      unverifiedComputer.configureAdmittedComputer({
+        kind: "computer.run-git-head",
+        workspaceId,
+      }),
+    ).resolves.toMatchObject({ error: "WORKSPACE_VERIFICATION_REQUIRED" });
+
+    for (const ports of [off, unverified]) {
+      expect(ports.verificationWorkspaceAction).not.toHaveBeenCalled();
+    }
+  });
+
+  for (const [kind, command] of [
+    ["computer.run-git-status", "git.status"],
+    ["computer.run-git-head", "git.head"],
+  ] as const) {
+    it(`a legacy build still runs ${kind} through the native verifier unchanged`, async () => {
+      const execute = vi.fn(async (_request: unknown) => ({
+        ok: true,
+        value: {
+          output: {
+            kind: "workspace.command",
+            command,
+            exitCode: 0,
+            stdout: "out",
+            stderr: "",
+            outputBytes: 3,
+            network: "none",
+            coverage: "tracked-files-only",
+            layout: "primary",
+          },
+        },
+      }));
+      const ports = gitPorts({
+        compiledGoCore: null,
+        verificationAction: { execute },
+      });
+      const computer = createConfigurationComputer(ports);
+      const result = await computer.configureAdmittedComputer({
+        kind,
+        workspaceId,
+      });
+      expect(ports.verificationWorkspaceAction).toHaveBeenCalledTimes(1);
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(execute.mock.calls[0]![0]).toMatchObject({
+        workspaceId,
+        operation: { kind: "verification.run", command, relativePath: "." },
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        evidence: { command },
+      });
+    });
+  }
+});
+
 describe("Codex agent check workspace in a Go-aware build", () => {
   it("lists through the Go settings list and never dispatches the Python workspace", async () => {
     const list = vi.fn(async () => ({
@@ -330,8 +376,6 @@ describe("Codex agent check workspace in a Go-aware build", () => {
     await expect(probe.verify(probeRequest)).resolves.toEqual({
       status: "verified",
     });
-    // One allowed list; the foreign scope and the exclusion are denied before
-    // any workspace access.
     expect(list).toHaveBeenCalledTimes(1);
     expect(list).toHaveBeenCalledWith(
       7,
