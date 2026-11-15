@@ -1,3 +1,5 @@
+import { setTimeout as delay } from "node:timers/promises";
+import { settleFixtureCleanup } from "../support/fixture-cleanup.mjs";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
@@ -221,19 +223,40 @@ app.whenReady().then(async () => {
     throw error;
   injectedFailure = true;
 } finally {
-  // Record what the one observation actually saw, so a retained fixture
-  // names its reason instead of leaving three causes behind one sentence.
-  const tables = [];
-  const observation = observeProcesses((command, args, options) => {
-    const result = spawnSync(command, args, options);
-    tables.push({ command, result });
-    return result;
-  });
+  // Allow transient system readers to drain before making the first cleanup
+  // decision. Incomplete observations stop immediately; persistent holders
+  // still retain this fixture. Never revisit an already retained UNKNOWN.
   const inScratch = (file) =>
     file === scratch || file.startsWith(scratch + path.sep);
-  const holders =
-    observation?.processes.filter((p) => p.command.includes(scratch)) ?? [];
-  const openFiles = observation?.open.filter(inScratch) ?? [];
+  const { observation, tables, holders, openFiles } =
+    await settleFixtureCleanup(
+      () => {
+        const tables = [];
+        const observation = observeProcesses((command, args, options) => {
+          const result = spawnSync(command, args, options);
+          tables.push({ command, result });
+          return result;
+        });
+        return {
+          observation,
+          tables,
+          holders:
+            observation?.processes.filter((p) => p.command.includes(scratch)) ??
+            [],
+          openFiles: observation?.open.filter(inScratch) ?? [],
+        };
+      },
+      {
+        now: () => performance.now(),
+        delay,
+        budgetMs: 5_000,
+        clear: (state) =>
+          Boolean(state.observation) &&
+          state.holders.length === 0 &&
+          state.openFiles.length === 0,
+        complete: (state) => Boolean(state.observation),
+      },
+    );
   if (
     (!issued || terminalObserved) &&
     observation &&

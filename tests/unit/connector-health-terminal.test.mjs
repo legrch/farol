@@ -1,44 +1,32 @@
 import { admissionFixture } from "../support/desktop-admission";
+import { createConfigurationConnector } from "../../apps/desktop/configuration/connector";
 import { connectorHealth } from "../../apps/desktop/connector/supervisor.ts";
 import { connectorHost } from "../support/connector-host.ts";
-import fs from "node:fs";
-import vm from "node:vm";
-import { stripTypeScriptTypes } from "node:module";
-import { parse } from "@babel/parser";
 import { expect, it, vi } from "vitest";
+import {
+  fixtureBuildId,
+  guidedSettingsFixture,
+} from "../fixtures/guided-onboarding";
 import { ProductConfigurationResultSchema } from "../../src/pkg/product-settings/contract.ts";
 
-// Execute the actual host branch with injected mechanics; no native child,
-// tunnel, state writer or provider is reached by this regression fixture.
-const source = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
-const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
-let branch;
-function visit(node) {
-  if (
-    node.type === "SwitchCase" &&
-    node.test?.value === "connector.check-health"
-  )
-    branch = source.slice(node.start, node.end);
-  for (const value of Object.values(node)) {
-    if (Array.isArray(value)) {
-      for (const child of value) if (child?.type) visit(child);
-    } else if (value?.type) visit(value);
-  }
-}
-visit(tree);
-if (!branch) throw new Error("CONNECTOR_HEALTH_CASE_MISSING");
+// Call the actual imported handler and supervisor with scripted mechanics.
+// These partial JS ports exercise health only; no native child, tunnel,
+// state writer or provider is reached by this regression fixture.
 const generation = "a".repeat(64);
 function harness(observation, healthy = false) {
   const snapshot = {
     status: "ready",
     settings: {
-      computer: { generation: 7 },
+      ...guidedSettingsFixture(),
+      computer: { ...guidedSettingsFixture().computer, generation: 7 },
       connectors: {
         secureMcp: {
+          ...guidedSettingsFixture().connectors.secureMcp,
           generation: 3,
           runtime: {
+            ...guidedSettingsFixture().connectors.secureMcp.runtime,
             state: "ready",
-            buildId: "build",
+            buildId: fixtureBuildId,
             computerGeneration: 7,
             connectorGeneration: 3,
             runtimeGeneration: generation,
@@ -67,7 +55,7 @@ function harness(observation, healthy = false) {
       backendAvailable: true,
       observeComputerConnectorPolling: vi.fn(async (samples) => ({
         binding: {
-          buildId: "build",
+          buildId: fixtureBuildId,
           profileId: "profile",
           backendGeneration: "backend-generation",
           runtimeId: "runtime",
@@ -80,7 +68,7 @@ function harness(observation, healthy = false) {
     },
     connectorTaskAdmission: false,
     configuration: { snapshot: vi.fn(() => snapshot) },
-    buildIdentity: { buildId: "build" },
+    buildIdentity: { buildId: fixtureBuildId },
     recordConnectorRuntime: vi.fn(async () => null),
     configurationFailure: (error) => {
       // The host branch uses a deliberately partial snapshot double. Validate
@@ -92,18 +80,23 @@ function harness(observation, healthy = false) {
       });
       return { ok: result.ok, error: result.error };
     },
-    ProductConfigurationResultSchema: { parse: (value) => value },
   };
   // The branch calls the supervisor's observer under the name main.ts binds.
   context.observedConnectorHealth = connectorHealth(
     connectorHost(context),
   ).observedConnectorHealth;
-  const handle = vm.runInNewContext(
-    stripTypeScriptTypes(
-      `async function handle() { switch(command.kind) { ${branch} } } handle`,
-    ),
-    admissionFixture(context),
-  );
+  const ports = admissionFixture(context);
+  const handler = createConfigurationConnector({
+    ...ports,
+    configuration: () => context.configuration,
+    secureMcpConnectorRuntime: () => context.secureMcpConnectorRuntime,
+    desktopGoCore: () => context.desktopGoCore,
+    buildIdentity: () => context.buildIdentity,
+  });
+  const handle = () =>
+    handler.configureAdmittedConnector({
+      kind: "connector.check-health",
+    });
   return { handle, context, snapshot };
 }
 
@@ -215,7 +208,7 @@ it("does not turn a healthy current endpoint into a terminal operation", async (
       runtimeGeneration: generation,
       connectorGeneration: "3",
       computerGeneration: 7,
-      buildId: "build",
+      buildId: fixtureBuildId,
     },
   });
   expect(h.context.recordConnectorRuntime).not.toHaveBeenCalled();

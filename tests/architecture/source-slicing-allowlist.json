@@ -13,7 +13,6 @@
     "tests/unit/chatgpt-presentation-host.test.mjs": ["vm"],
     "tests/unit/chatgpt-sign-in-status-host.test.mjs": ["vm"],
     "tests/unit/codex-read-selection-host.test.mjs": ["vm"],
-    "tests/unit/connector-health-terminal.test.mjs": ["vm"],
     "tests/unit/connector-separate-main.test.ts": ["vm"],
     "tests/unit/connector-startup-no-send.test.ts": ["vm"],
     "tests/unit/connector-transport-host.test.mjs": ["vm"],
