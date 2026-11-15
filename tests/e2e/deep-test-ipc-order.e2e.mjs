@@ -37,6 +37,7 @@ import { ChatGptTaskJournalOperationIdSchema, MAX_CHATGPT_TASK_JOURNAL_BYTES, MA
 import { readFlatDeepTestRecords } from './src/apps/desktop/legacy-activation-obligations.ts';
 import os from 'node:os';
 import { desktopStatePaths } from './apps/desktop/host/paths.ts';
+import { DesktopAdmission } from './apps/desktop/host/admission.ts';
 const root = ${JSON.stringify(scratch)};
 app.setPath('userData', root); app.dock?.hide();
 const statePaths = () => desktopStatePaths({ userData: app.getPath('userData'), tmpdir: os.tmpdir() });
@@ -48,7 +49,14 @@ const configuration = {snapshot:()=>snapshot};
 let sends=0, observedOverlay='';
 const chatGptRoute = {captureManualTaskTarget:()=>()=>true,runReadonlyTask:async(prompt,_attachments,observer)=>{ observedOverlay=shellOverlay; await observer.onDispatchIntent(); assert.equal(observer.beforeSend(),true); assert.equal(observer.manualSubmissionOnly,true); sends++; return {state:'send_requested',code:null,deltaCount:0,observedCharacters:0}; }};
 const liveTaskRoutes=new Map(), buildIdentity={buildId:'build'}, liveTaskRegistry={};
-let selectedTaskId='', deepTestRecoveryReady=true, recoverableDeepTests=[], quitInProgress=false, installedUpdateAdmission=false, chatGptTaskAdmission=false, connectorTaskAdmission=false, connectorTaskAdmissionPurpose=null, connectorStartInFlight=null, browserHomeSurfaceOpen=true, section='browser', shellOverlay='task-menu', pendingChatGptReadonlyTask=null, pendingChatGptAttachmentTask=null, recoverableChatGptTask=null;
+let selectedTaskId='', deepTestRecoveryReady=true, recoverableDeepTests=[], connectorStartInFlight=null, browserHomeSurfaceOpen=true, section='browser', shellOverlay='task-menu', pendingChatGptReadonlyTask=null, pendingChatGptAttachmentTask=null, recoverableChatGptTask=null;
+const desktopAdmission = new DesktopAdmission({
+  chatGptReadonlyTask:()=>pendingChatGptReadonlyTask!==null,
+  directChatStart:()=>false,
+  chatGptAttachmentTask:()=>pendingChatGptAttachmentTask!==null,
+  workspaceEdit:()=>false, computer:()=>false, codexAgent:()=>false,
+  hostCheck:()=>false, connectorStart:()=>connectorStartInFlight!==null,
+});
 const chatGptConversationAdmissionFailure=()=>null;
 const connectorRuntimeUncertain=()=>false, computerConnectorAdmission=()=>({admissible:true}), summaryFenceRecovery={};
 const chatGptTaskAdmissionReady=()=>true, currentSurfaceLayout=()=>({pageVisible:shellOverlay==='none'}), currentConnectorAttachment=()=>({challengeSha256:'hash',workspaceId:null}), selectedConnectorApp=()=> ${JSON.stringify(productName)}, connectorAppBindingCurrent=()=>true;
@@ -63,6 +71,7 @@ app.whenReady().then(async()=>{
     await win.loadURL('data:text/html,<html><body>fixture</body></html>');
     const result=await win.webContents.executeJavaScript(\`(async()=>{const {ipcRenderer}=require('electron');ipcRenderer.send('fixture-layout');return ipcRenderer.invoke('fixture-run',\${JSON.stringify(randomUUID())});})()\`);
     assert.equal(result.ok,true); assert.equal(result.evidence.state,'send_requested'); assert.equal(observedOverlay,'none'); assert.equal(sends,1);
+    assert.equal(desktopAdmission.occupied('chatgpt-task'),false); assert.equal(desktopAdmission.occupied('connector-task'),false); assert.equal(desktopAdmission.closed(),false);
     assert.equal(win.isVisible(),false); win.destroy(); process.stdout.write('DEEP_TEST_IPC_ORDER_OK\\n'); app.exit(0);
   } catch(e) { console.error(e); app.exit(1); }
 });
