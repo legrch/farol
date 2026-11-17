@@ -5805,17 +5805,25 @@ async function testConnectionCommand(
         // This callback is reached only after FIRST durable admission. A replay
         // observes its original Go result without rebinding to today's page.
         // Desktop admission is already reserved for this command above.
+        // A saved sign-in checkpoint is not the page. Ping sends from the
+        // live ChatGPT document; prepareConnectorCheckDocument still requires
+        // that document to read as signed in.
+        const refusePrerequisites = (reason: string): never => {
+          console.error(`FAROL_CONNECTION_CHECK_REFUSED ${reason}`);
+          throw new ConnectionCheckRefusal(
+            "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+          );
+        };
         if (
           !embeddedBrowserEnabled() ||
           quitInProgress ||
           installedUpdateAdmission ||
-          !chatGptTaskAdmissionReady() ||
           desktopGoCore !== core ||
           configuration !== config ||
           (selectedTaskId ?? "") !== command.taskId
         ) {
-          throw new ConnectionCheckRefusal(
-            "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+          refusePrerequisites(
+            `host embedded=${embeddedBrowserEnabled()} quit=${quitInProgress} update=${installedUpdateAdmission} core=${desktopGoCore === core} config=${configuration === config} task=${selectedTaskId ?? ""}/${command.taskId}`,
           );
         }
         const route =
@@ -5825,14 +5833,12 @@ async function testConnectionCommand(
         const owner = window;
         const originalDocument = route?.captureManualTaskTarget();
         if (!route || !owner || owner.isDestroyed() || !originalDocument)
-          throw new ConnectionCheckRefusal(
-            "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+          refusePrerequisites(
+            `document route=${Boolean(route)} owner=${Boolean(owner)} destroyed=${owner?.isDestroyed() ?? true} target=${Boolean(originalDocument)}`,
           );
         const snapshot = config.snapshot();
         if (snapshot.status !== "ready")
-          throw new ConnectionCheckRefusal(
-            "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
-          );
+          refusePrerequisites(`settings status=${snapshot.status}`);
         let settings = snapshot.settings;
         const connector = settings.connectors.secureMcp;
         const runtime = connector.runtime;
@@ -5860,8 +5866,8 @@ async function testConnectionCommand(
           runtime.connectorGeneration !== connector.generation ||
           !connectionCheckRuntimeReady(secureMcpConnectorRuntime)
         )
-          throw new ConnectionCheckRefusal(
-            "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+          refusePrerequisites(
+            `runtime app=${appName !== null} workspace=${workspace !== undefined} tunnel=${connector.tunnelId !== null} state=${runtime?.state ?? "missing"}`,
           );
         // A persistent Setup uncertainty, not a check that is still running:
         // it never clears by pinging again, so it has its own code.
@@ -5892,9 +5898,7 @@ async function testConnectionCommand(
             buildId: runtime.buildId,
           });
           if (!issued.ok || issued.snapshot.status !== "ready")
-            throw new ConnectionCheckRefusal(
-              "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
-            );
+            refusePrerequisites("challenge-mint");
           settings = issued.snapshot.settings;
           challenge = settings.connectors.secureMcp.challenge;
           if (
@@ -5903,9 +5907,7 @@ async function testConnectionCommand(
             challenge.runtimeGeneration !== runtime.runtimeGeneration ||
             challenge.computerGeneration !== runtime.computerGeneration
           )
-            throw new ConnectionCheckRefusal(
-              "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
-            );
+            refusePrerequisites("challenge-stale");
         }
         const challengeSha256 =
           proof?.receipt.challengeSha256 ?? challenge!.challengeSha256;
@@ -5990,9 +5992,7 @@ async function testConnectionCommand(
             // A failed document probe can mean draft, attachments, activity or
             // an unrecognized layout. Do not invent a more specific observation.
             if (!prepared.ready)
-              throw new ConnectionCheckRefusal(
-                "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
-              );
+              refusePrerequisites(`prepare stage=${prepared.stage}`);
             const document = route.captureConnectionCheckDocument();
             if (!document || !current())
               throw new ConnectionCheckRefusal(
