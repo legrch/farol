@@ -187,17 +187,14 @@ export function Home({ snapshot, facade }: Props) {
       checking ||
       snapshot.connectionChecking === true ||
       appChecking ||
-      (checklist.completed &&
-        (connectionPending || snapshot.signInObservation?.pending === true)));
+      (checklist.completed && connectionPending));
   const progressTitle = restoring
     ? "Starting Farol…"
     : appChecking
       ? "Checking ChatGPT connection…"
       : connectionPending && !computer.localConnectionCurrent
         ? "Connecting to this Mac…"
-        : snapshot.signInObservation?.pending === true
-          ? "Checking ChatGPT sign-in…"
-          : "Checking connection…";
+        : "Checking connection…";
   const progressDetail = restoring
     ? "Loading your saved setup and connection."
     : appChecking

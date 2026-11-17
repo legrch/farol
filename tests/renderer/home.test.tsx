@@ -279,12 +279,19 @@ it.each(["stale", "unavailable"] as const)(
     );
   },
 );
-it("never claims working from saved connection evidence without the required sign-in check", async () => {
+it("keeps a completed setup connected without a fresh sign-in check", async () => {
   const value = working();
-  const h = await mount({ ...value, setupSignInCheck: null });
-  // Tunnel can stay Connected; missing sign-in is a separate Setup fact.
-  expect(h.host.textContent).toContain(
-    "Connected · workspace needs attention",
+  const h = await mount({
+    ...value,
+    setupSignInCheck: null,
+    signInObservation: null,
+  });
+  expect(h.host.textContent).not.toContain("workspace needs attention");
+  expect(h.host.textContent).not.toContain("no current confirmed check");
+  expect(h.host.textContent).not.toContain("Checking ChatGPT sign-in");
+  expect(h.host.querySelector(".home-health-warning")).toBeNull();
+  expect(h.host.querySelector(".home-status-card h2")?.textContent).toBe(
+    "Connected",
   );
   expect(connectionPresentation({ ...h.c.getSnapshot(), ...value }).connected).toBe(
     true,
@@ -500,7 +507,7 @@ it("keeps host startup work calm through unavailable journal reads and transient
   expect(h.f.api.configure).not.toHaveBeenCalled();
 });
 
-it("reveals a real sign-in problem only after host checking settles", async () => {
+it("does not turn an unread sign-in into attention after the connection check settles", async () => {
   const saved = working();
   const value: Partial<WindowSnapshot> = {
     ...saved,
@@ -514,7 +521,11 @@ it("reveals a real sign-in problem only after host checking settles", async () =
   const h = await mount(value);
   expect(h.host.textContent).not.toContain("needs attention");
   await h.set({ ...value, connectionChecking: false });
-  expect(h.host.textContent).toContain("needs attention");
+  expect(h.host.querySelector(".home-status-card h2")?.textContent).toBe(
+    "Connected",
+  );
+  expect(h.host.textContent).not.toContain("needs attention");
+  expect(h.host.textContent).not.toContain("no current confirmed check");
   expect(h.host.querySelector('[aria-busy="true"]')).toBeNull();
 });
 
@@ -579,7 +590,8 @@ it("shows automatic ChatGPT check progress and reveals the same browser without 
     setupSignInCheck: null,
   });
   expect(h.host.querySelector(".home-connection-progress")).toBeNull();
-  expect(h.host.querySelector(".home-health-warning")).not.toBeNull();
+  expect(h.host.querySelector(".home-health-warning")).toBeNull();
+  expect(h.host.textContent).not.toContain("no current confirmed check");
 });
 
 it.each(["unobserved", "expired", "fresh"] as const)(
