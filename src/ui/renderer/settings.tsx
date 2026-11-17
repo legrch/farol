@@ -3,6 +3,7 @@ import {
   runFreshConnectionTest,
   useConnectionTest,
 } from "../../../apps/desktop/renderer/connection-test";
+import { connectionPresentation } from "../../../apps/desktop/renderer/connection-presentation";
 import { separateAppVerificationScopeCurrent } from "../../pkg/product-settings/separate-app-verification";
 import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
 import { unresolvedActions } from "../../../apps/desktop/renderer/unresolved-actions";
@@ -1368,12 +1369,9 @@ function ConnectMac({
     draftChanged,
     retainedSetupIntents(facade, snapshot),
   ).allowed;
-  // Setup is historical; only a current server observation describes a
-  // connected transport. Never turn a saved runtime into live evidence.
-  const transportConnected =
-    snapshot.connectionStatus?.state === "recent_transport" &&
-    snapshot.connectionStatus.validUntilMillis != null &&
-    snapshot.connectionStatus.validUntilMillis > Date.now();
+  // The same live-tunnel light as the sidebar. A saved ready runtime stays
+  // connected without a fresh server poll or a user Ping.
+  const transportConnected = connectionPresentation(snapshot).connected;
   const valid =
     key.length > 0
       ? ProductConfigurationCommandSchema.safeParse({
@@ -2185,9 +2183,11 @@ function AddToChatGPT({
               <p className="description">
                 {nameChanged
                   ? "Save the app name above before preparing a new test."
-                  : setup.canVerifyEmbeddedApp
-                    ? "Create the app above, then run the check once."
-                    : "Finish sign-in, workspace and connection checks before testing in ChatGPT."}
+                  : settings.setup.journey.dismissed
+                    ? "This test is optional. It does not change the connection status."
+                    : setup.canVerifyEmbeddedApp
+                      ? "Create the app above, then run the check once."
+                      : "Finish sign-in, workspace and connection checks before testing in ChatGPT."}
               </p>
             )}
             {setupStep !== "attachment" ? testAction : null}

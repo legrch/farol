@@ -29,13 +29,7 @@ export function connectionPresentation(
     connector.appVerificationPending !== true,
   );
   const verifying = connectorVerificationInFlight(snapshot, local);
-  const status = snapshot.connectionStatus;
-  const transportState = status?.state ?? null;
-  const transportExpiry = status?.validUntilMillis ?? null;
-  const recentTransport =
-    transportState === "recent_transport" &&
-    transportExpiry != null &&
-    transportExpiry > Date.now();
+  const transportState = snapshot.connectionStatus?.state ?? null;
   // Failed transport stays attention even after the original expiry is gone.
   const transportNeedsAttention = [
     "reconnecting",
@@ -43,16 +37,17 @@ export function connectionPresentation(
     "action_required",
     "stopped",
   ].includes(transportState ?? "");
-  // Saved setup is not current proof. Expired or missing observation must not
-  // render as Setup complete / Connected.
-  const transportUnconfirmed =
-    !recentTransport &&
-    !transportNeedsAttention &&
-    (transportState === "unobserved" ||
-      transportState === "checking" ||
-      transportState === "recent_transport" ||
-      transportState === null);
+  // The green light is the live tunnel runtime. A missing or expired server
+  // poll is not a user problem. Ping and the ChatGPT test must not be what
+  // turns the light on, and sign-in or workspace checks must not turn it off.
+  const windowCurrent =
+    snapshot.status === "current" && snapshot.runtime === "ready";
+  const tunnelLive =
+    windowCurrent &&
+    computer.facts.runtimeCurrent &&
+    !transportNeedsAttention;
   const checking =
+    !tunnelLive &&
     !snapshot.independentSession &&
     snapshot.status !== "unavailable" &&
     snapshot.status !== "incompatible" &&
@@ -67,24 +62,9 @@ export function connectionPresentation(
     computer.localConnectionCurrent &&
     !dependencyFences(snapshot, "computer", local).unknown &&
     setupRemembered;
-  const savedSetupReady =
-    !checking && !transportNeedsAttention && !transportUnconfirmed && setupFactsReady;
-  // Connected tracks the live tunnel only. Workspace and ChatGPT attachment
-  // proofs are separate Setup facts; they must not hide a live transport.
-  // Stale/failed window snapshots still cannot claim Connected.
-  const windowCurrent =
-    snapshot.status === "current" && snapshot.runtime === "ready";
-  const connected =
-    !checking &&
-    !transportNeedsAttention &&
-    recentTransport &&
-    windowCurrent;
-  const unconfirmedSavedSetup =
-    !checking &&
-    !transportNeedsAttention &&
-    !connected &&
-    transportUnconfirmed &&
-    setupFactsReady;
+  const savedSetupReady = tunnelLive && setupFactsReady;
+  const connected = tunnelLive;
+  const unconfirmedSavedSetup = false;
   const label = checking
     ? "Checking connection…"
     : transportNeedsAttention

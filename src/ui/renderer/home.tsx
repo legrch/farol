@@ -408,10 +408,13 @@ export function Home({ snapshot, facade }: Props) {
                   <>
                     {connection.connected && computer.externalAccessVerified
                       ? "ChatGPT can reach this Mac"
-                      : connection.unconfirmedSavedSetup ||
-                          connection.savedSetupReady
+                      : connection.connected && connection.savedSetupReady
                         ? "Your ChatGPT setup is saved"
-                        : "Connection available · Check the ChatGPT app connection"}{" "}
+                        : connection.connected
+                          ? "The tunnel is live"
+                          : connection.savedSetupReady
+                            ? "Your ChatGPT setup is saved"
+                            : "Connection available · Check the ChatGPT app connection"}{" "}
                     · {workspaceCount}{" "}
                     {workspaceCount === 1 ? "workspace" : "workspaces"}
                   </>
@@ -449,25 +452,13 @@ export function Home({ snapshot, facade }: Props) {
                   )}
               </details>
             </div>
-            {connection.transportNeedsAttention ||
-            connection.unconfirmedSavedSetup ? (
+            {connection.transportNeedsAttention ? (
               <button
                 onClick={() =>
                   facade.navigate({ area: "setup", setupStep: "connection" })
                 }
               >
                 Review connection
-              </button>
-            ) : connection.connected &&
-              !computer.externalAccessVerified &&
-              !connection.savedSetupReady &&
-              !checking ? (
-              <button
-                onClick={() =>
-                  facade.navigate({ area: "setup", setupStep: "attachment" })
-                }
-              >
-                Review ChatGPT connection
               </button>
             ) : connection.connected ||
               connection.savedSetupReady ||

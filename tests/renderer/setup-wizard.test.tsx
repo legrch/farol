@@ -541,7 +541,7 @@ describe("Add to ChatGPT", () => {
       expect(
         h.host.querySelectorAll(".setup-wizard-footer .primary"),
       ).toHaveLength(1);
-      expect(test.disabled).toBe(unknown);
+      expect(test.disabled).toBe(false);
       expect(h.button("Start using Farol")).toBeUndefined();
       expect(h.configuration().settings.setup.journey.dismissed).toBe(true);
       expect(h.f.api.configure).not.toHaveBeenCalledWith(
@@ -1068,10 +1068,10 @@ describe("always-open Setup instructions", () => {
   });
   it.each([
     ["recent_transport", 60_000, true],
-    ["recent_transport", -60_000, false],
+    ["recent_transport", -60_000, true],
     ["unavailable", 60_000, false],
   ] as const)(
-    "shows a live connection only for current server evidence: %s",
+    "shows a live tunnel as connected unless transport failed: %s",
     async (state, offset, live) => {
       const h = await mount({
         step: "connection",
@@ -1101,8 +1101,7 @@ describe("always-open Setup instructions", () => {
     expect(key.value).toBe("");
     expect(key.placeholder).toBe("••••••••");
     expect(h.button("Connect")).toBeUndefined();
-    expect(h.host.textContent).toContain("Connection saved");
-    expect(h.host.textContent).not.toContain("✓ Connected");
+    expect(h.host.textContent).toContain("✓ Connected");
     await h.remount();
     expect(h.button("Connect")).toBeUndefined();
     expect(h.f.api.configure).not.toHaveBeenCalled();
