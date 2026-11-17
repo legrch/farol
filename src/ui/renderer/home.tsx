@@ -378,9 +378,11 @@ export function Home({ snapshot, facade }: Props) {
                     ? "Connection needs attention"
                     : connection.connected
                       ? "Connected"
-                      : connection.savedSetupReady
-                        ? "Setup complete"
-                        : "ChatGPT connection needs a check"}
+                      : connection.unconfirmedSavedSetup
+                        ? "Connection not confirmed"
+                        : connection.savedSetupReady
+                          ? "Setup complete"
+                          : "ChatGPT connection needs a check"}
               </h2>
               <p>
                 {checking ? (
@@ -391,7 +393,8 @@ export function Home({ snapshot, facade }: Props) {
                   <>
                     {connection.connected && computer.externalAccessVerified
                       ? "ChatGPT can reach this Mac"
-                      : connection.savedSetupReady
+                      : connection.unconfirmedSavedSetup ||
+                          connection.savedSetupReady
                         ? "Your ChatGPT setup is saved"
                         : "Connection available · Check the ChatGPT app connection"}{" "}
                     · {workspaceCount}{" "}
@@ -412,6 +415,7 @@ export function Home({ snapshot, facade }: Props) {
                     </p>
                   )}
                 {!connection.transportNeedsAttention &&
+                  !connection.unconfirmedSavedSetup &&
                   (connection.connected || connection.savedSetupReady) && (
                     <button
                       disabled={
@@ -430,7 +434,8 @@ export function Home({ snapshot, facade }: Props) {
                   )}
               </details>
             </div>
-            {connection.transportNeedsAttention ? (
+            {connection.transportNeedsAttention ||
+            connection.unconfirmedSavedSetup ? (
               <button
                 onClick={() =>
                   facade.navigate({ area: "setup", setupStep: "connection" })

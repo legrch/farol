@@ -29,11 +29,29 @@ export function connectionPresentation(
     connector.appVerificationPending !== true,
   );
   const verifying = connectorVerificationInFlight(snapshot, local);
-  const transportNeedsAttention =
-    snapshot.connectionStatus?.validUntilMillis != null &&
-    ["reconnecting", "unavailable", "action_required", "stopped"].includes(
-      snapshot.connectionStatus.state,
-    );
+  const status = snapshot.connectionStatus;
+  const transportState = status?.state ?? null;
+  const transportExpiry = status?.validUntilMillis ?? null;
+  const recentTransport =
+    transportState === "recent_transport" &&
+    transportExpiry != null &&
+    transportExpiry > Date.now();
+  // Failed transport stays attention even after the original expiry is gone.
+  const transportNeedsAttention = [
+    "reconnecting",
+    "unavailable",
+    "action_required",
+    "stopped",
+  ].includes(transportState ?? "");
+  // Saved setup is not current proof. Expired or missing observation must not
+  // render as Setup complete / Connected.
+  const transportUnconfirmed =
+    !recentTransport &&
+    !transportNeedsAttention &&
+    (transportState === "unobserved" ||
+      transportState === "checking" ||
+      transportState === "recent_transport" ||
+      transportState === null);
   const checking =
     !snapshot.independentSession &&
     snapshot.status !== "unavailable" &&
@@ -45,21 +63,23 @@ export function connectionPresentation(
       snapshot.runtime === "starting" ||
       verifying) &&
     !(verifying && computer.externalAccessVerified && !transportNeedsAttention);
-  const savedSetupReady =
-    !checking &&
-    !transportNeedsAttention &&
+  const setupFactsReady =
     computer.localConnectionCurrent &&
     !dependencyFences(snapshot, "computer", local).unknown &&
     setupRemembered;
-  const recentTransport =
-    snapshot.connectionStatus?.state === "recent_transport" &&
-    snapshot.connectionStatus.validUntilMillis != null &&
-    snapshot.connectionStatus.validUntilMillis > Date.now();
+  const savedSetupReady =
+    !checking && !transportNeedsAttention && !transportUnconfirmed && setupFactsReady;
   const connected =
     !checking &&
     !transportNeedsAttention &&
     recentTransport &&
     (computer.externalAccessVerified || savedSetupReady);
+  const unconfirmedSavedSetup =
+    !checking &&
+    !transportNeedsAttention &&
+    !connected &&
+    transportUnconfirmed &&
+    setupFactsReady;
   const label = checking
     ? "Checking connection…"
     : transportNeedsAttention
@@ -68,8 +88,8 @@ export function connectionPresentation(
         ? "Connected — ChatGPT can reach this Mac"
         : connected
           ? "Connected — ChatGPT setup is saved"
-          : savedSetupReady
-            ? "ChatGPT setup is saved"
+          : unconfirmedSavedSetup
+            ? "Connection not confirmed — ChatGPT setup is saved"
             : computer.localConnectionCurrent
               ? "Connection available — ChatGPT connection needs a check"
               : "Not connected yet";
@@ -79,8 +99,8 @@ export function connectionPresentation(
       ? "Connection needs attention"
       : connected
         ? "Connected"
-        : savedSetupReady
-          ? "Setup complete"
+        : unconfirmedSavedSetup
+          ? "Connection not confirmed"
           : computer.localConnectionCurrent
             ? "Connection available"
             : "Not connected yet";
@@ -90,7 +110,9 @@ export function connectionPresentation(
     label,
     text,
     savedSetupReady,
-    attention: !checking && !connected && !savedSetupReady,
+    attention:
+      !checking && !connected && !savedSetupReady,
     transportNeedsAttention,
+    unconfirmedSavedSetup,
   };
 }

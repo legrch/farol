@@ -767,11 +767,13 @@ it.each(["unobserved", "expired"])(
     });
     expect(presentation).toMatchObject({
       connected: false,
-      attention: false,
-      savedSetupReady: true,
-      text: "Setup complete",
+      attention: true,
+      savedSetupReady: false,
+      unconfirmedSavedSetup: true,
+      text: "Connection not confirmed",
     });
     expect(h.host.textContent).toContain("Your ChatGPT setup is saved");
+    expect(h.host.textContent).toContain("Review connection");
     expect(h.host.textContent).not.toContain("Review ChatGPT connection");
     expect(h.host.textContent).not.toContain("ChatGPT can reach this Mac");
     expect(h.f.api.configure).not.toHaveBeenCalled();
@@ -800,7 +802,7 @@ it.each(["expired", "withdrawn"])(
           : unavailableConnectionStatus,
     });
     expect(h.host.querySelector(".home-status-card h2")?.textContent).toBe(
-      "Setup complete",
+      "Connection not confirmed",
     );
     expect(h.host.textContent).toContain("Your ChatGPT setup is saved");
     expect(h.host.textContent).not.toContain("ChatGPT can reach this Mac");
@@ -814,16 +816,22 @@ it.each(["unobserved", "unavailable", "stopped", "expired"] as const)(
   "does not present saved Setup as connected with %s transport",
   async (mode) => {
     const restored = restoredSetup();
-    restored.value.connectionStatus = {
-      ...unavailableConnectionStatus,
-      revision: 1,
-      state: mode === "expired" ? "recent_transport" : mode,
-      validUntilMillis: mode === "expired" ? Date.now() - 1 : null,
+    const value = {
+      ...restored.value,
+      connectionStatus: {
+        ...unavailableConnectionStatus,
+        revision: 1,
+        state:
+          mode === "expired"
+            ? ("recent_transport" as const)
+            : mode,
+        validUntilMillis: mode === "expired" ? Date.now() - 1 : null,
+      },
     };
-    const h = await mount(restored.value);
+    const h = await mount(value);
     const presentation = connectionPresentation({
       ...h.c.getSnapshot(),
-      ...restored.value,
+      ...value,
     });
     expect(presentation.connected).toBe(false);
     expect(presentation.attention).toBe(true);
@@ -856,15 +864,18 @@ it.each(["unobserved", "unavailable", "stopped", "expired"] as const)(
 
 it("keeps saved Setup checking neutral until current transport is confirmed", async () => {
   const restored = restoredSetup();
-  restored.value.connectionStatus = {
-    ...unavailableConnectionStatus,
-    state: "unobserved",
-    validUntilMillis: null,
+  const value = {
+    ...restored.value,
+    connectionStatus: {
+      ...unavailableConnectionStatus,
+      state: "unobserved" as const,
+      validUntilMillis: null,
+    },
   };
-  const h = await mount(restored.value);
+  const h = await mount(value);
   const presentation = connectionPresentation({
     ...h.c.getSnapshot(),
-    ...restored.value,
+    ...value,
     connectionChecking: true,
   });
   expect(presentation).toMatchObject({

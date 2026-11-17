@@ -8406,34 +8406,49 @@ async function configureAdmittedProduct(
         };
         const metrics = await originalConnector.observePolling();
         if (
-          !metrics ||
-          metrics.runtimeGeneration !== current.runtimeGeneration ||
-          !sameObservation()
-        )
-          return configurationFailure(
-            "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
-          );
-        const polling = await originalCore
-          .observeComputerConnectorPolling(metrics.samples)
-          .catch((error: unknown) => {
-            if (error instanceof PollingObservationExpiredError) return null;
-            throw error;
+          metrics &&
+          metrics.runtimeGeneration === current.runtimeGeneration &&
+          sameObservation()
+        ) {
+          const polling = await originalCore
+            .observeComputerConnectorPolling(metrics.samples)
+            .catch((error: unknown) => {
+              if (error instanceof PollingObservationExpiredError) return null;
+              throw error;
+            });
+          if (!sameObservation())
+            return configurationFailure(
+              "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
+            );
+          if (polling === null)
+            return configurationFailure("CONNECTOR_POLLING_EXPIRED");
+          return ProductConfigurationResultSchema.parse({
+            ok: true,
+            snapshot: configuration.snapshot(),
+            evidence: {
+              kind: "connector.polling",
+              state: polling.state,
+              observedAtMillis: polling.observedAtMillis,
+              runtimeGeneration: current.runtimeGeneration,
+              connectorGeneration: polling.binding.connectorGeneration,
+              computerGeneration: current.computerGeneration,
+              buildId: current.buildId,
+            },
           });
+        }
+        // Local /readyz already succeeded. Missing nascent polling samples
+        // right after Start must not refuse the owner health check.
         if (!sameObservation())
           return configurationFailure(
             "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
           );
-        if (polling === null)
-          return configurationFailure("CONNECTOR_POLLING_EXPIRED");
         return ProductConfigurationResultSchema.parse({
           ok: true,
           snapshot: configuration.snapshot(),
           evidence: {
-            kind: "connector.polling",
-            state: polling.state,
-            observedAtMillis: polling.observedAtMillis,
+            kind: "connector.runtime",
+            state: "ready",
             runtimeGeneration: current.runtimeGeneration,
-            connectorGeneration: polling.binding.connectorGeneration,
             computerGeneration: current.computerGeneration,
             buildId: current.buildId,
           },

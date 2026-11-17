@@ -146,12 +146,13 @@ export const instantModelLabelPattern =
 // ChatGPT localizes accessibility labels and personalization controls. Keep
 // every fallback bound to a unique visible control; unknown layouts still
 // refuse the connection check before Send.
-const temporaryToggleLabels = [
+export const chatgptTemporaryToggleLabels = [
   "Turn off temporary chat",
   "Отключить временный чат",
   "Выключить временный чат",
   "Выйти из режима временного чата",
 ] as const;
+const temporaryToggleLabels = chatgptTemporaryToggleLabels;
 const personalizedLabels = [
   "Personalized",
   "С персонализацией",
@@ -165,7 +166,20 @@ const sendControlSelectors = [
   'button[aria-label="Send"]',
   'button[aria-label="Отправить"]',
   'button[aria-label="Отправить сообщение"]',
+  'button[aria-label="Отправить запрос"]',
 ] as const;
+const stopControlSelectors = [
+  '[data-testid="stop-button"]',
+  'button[aria-label="Stop generating"]',
+  'button[aria-label="Stop"]',
+  'button[aria-label="Остановить генерацию"]',
+  'button[aria-label="Остановить"]',
+] as const;
+const labelledSignInPattern =
+  /^(log in|sign in|sign up|войти|войти в аккаунт|регистрация)$/iu;
+const pluginSectionLabels = ["Plugins", "Плагины"] as const;
+const filesSectionLabels = ["Files", "Файлы"] as const;
+const stopControlSelectorList = stopControlSelectors.join(",");
 const selectedModelControlPredicate = `((button) => {
   const label = (button.innerText || "").trim();
   const aria = button.getAttribute("aria-label");
@@ -295,11 +309,8 @@ export const activityProbe = `(() => {
     const box = element.getBoundingClientRect();
     return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
   };
-  const running = [
-    document.querySelector('[data-testid="stop-button"]'),
-    document.querySelector('button[aria-label="Stop generating"]'),
-    document.querySelector('button[aria-label="Stop"]')
-  ].some(visible);
+  const running = ${JSON.stringify([...stopControlSelectors])}
+    .map((selector) => document.querySelector(selector)).some(visible);
   return { running };
 })()`;
 
@@ -310,11 +321,9 @@ export const cancelTaskScript = `(() => {
     const box = element.getBoundingClientRect();
     return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
   };
-  const stop = [
-    document.querySelector('[data-testid="stop-button"]'),
-    document.querySelector('button[aria-label="Stop generating"]'),
-    document.querySelector('button[aria-label="Stop"]')
-  ].find((element) => visible(element) && element instanceof HTMLButtonElement && !element.disabled);
+  const stop = ${JSON.stringify([...stopControlSelectors])}
+    .map((selector) => document.querySelector(selector))
+    .find((element) => visible(element) && element instanceof HTMLButtonElement && !element.disabled);
   if (!(stop instanceof HTMLButtonElement)) return { activated: false };
   stop.click();
   return { activated: true };
@@ -336,7 +345,7 @@ export const readinessProbe = `(() => {
     document.querySelector('button[name="login"]')
   ].some(visible);
   const labelledSignIn = [...document.querySelectorAll("a,button")]
-    .some((element) => visible(element) && /^(log in|sign in|sign up)$/iu.test((element.textContent || "").trim()));
+    .some((element) => visible(element) && ${labelledSignInPattern}.test((element.textContent || "").trim()));
   return { composerVisible: composer, signInVisible: explicitSignIn || labelledSignIn };
 })()`;
 
@@ -368,7 +377,7 @@ function appSelectionPrelude(appName: string): string {
         ""
       ).trim();
       return raw
-        .replace(/^remove\\s+/iu, "")
+        .replace(/^(?:remove|удалить)\\s+/iu, "")
         .replace(/^app:\\s*/iu, "")
         .replace(/^@/u, "")
         .replace(/\\s+button$/iu, "")
@@ -556,9 +565,12 @@ export function bindChatGptAppScript(
         }
         return false;
       };
-      const headings = labels.filter((element) => normalizedLabel(element) === "Plugins" &&
+      const pluginHeadings = ${JSON.stringify([...pluginSectionLabels])};
+      const fileSectionHeadings = ${JSON.stringify([...filesSectionLabels])};
+      const headings = labels.filter((element) => pluginHeadings.includes(normalizedLabel(element)) &&
         pickerRootFor(element) !== null);
-      const fileHeadings = labels.filter((element) => normalizedLabel(element) === "Files");
+      const fileHeadings = labels.filter((element) =>
+        fileSectionHeadings.includes(normalizedLabel(element)));
       optionCandidates = labels.filter((element) =>
         normalizedLabel(element) === requiredAppName &&
         ![...element.children].some((child) => normalizedLabel(child) === requiredAppName) &&
@@ -707,7 +719,7 @@ export function installManualAppGateScript(appName: string): string {
       const button = target.closest("button");
       const form = button?.closest("form");
       const knownSend = target.closest(${JSON.stringify(sendControlSelectors.join(","))});
-      const knownCancel = target.closest('[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]');
+      const knownCancel = target.closest(${JSON.stringify(stopControlSelectorList)});
       const formComposer = form instanceof HTMLFormElement
         ? submissionComposerIn(form)
         : null;
@@ -804,7 +816,7 @@ function manualDeepTestDraftGuard(
       '[data-testid="attachment-preview"],[data-testid="composer-attachment"],[data-testid*="file-chip"],[data-testid*="attachment-chip"]'
     )].some(manualVisible) || [...manualForm.querySelectorAll('[aria-label]')].some((element) =>
       manualVisible(element) && /remove file|remove attachment|удалить файл|удалить вложение/iu.test(element.getAttribute('aria-label') || '')) : true;
-    const manualAllowedLabels = new Set(['Add files', 'Add files and more', 'Select ChatGPT model', 'Dictate', 'Start Voice', 'Start voice mode', 'Start Voice Mode', 'Expand', 'Send prompt', 'Send message', 'Send', 'Добавить файлы', 'Добавить файлы и другое', 'Выбрать модель ChatGPT', 'Диктовка', 'Диктовать', 'Начать голосовой режим', 'Развернуть', 'Отправить', 'Отправить сообщение']);
+    const manualAllowedLabels = new Set(['Add files', 'Add files and more', 'Select ChatGPT model', 'Dictate', 'Start Voice', 'Start voice mode', 'Start Voice Mode', 'Expand', 'Send prompt', 'Send message', 'Send', 'Добавить файлы', 'Добавить файлы и другое', 'Выбрать модель ChatGPT', 'Диктовка', 'Диктовать', 'Начать голосовой режим', 'Развернуть', 'Отправить', 'Отправить сообщение', 'Отправить запрос']);
     const manualControlSelector = 'button,[role="button"],input[type="button"],input[type="submit"]';
     const manualUnknownControls = manualForm ? [...new Set([
       ...manualForm.querySelectorAll(manualControlSelector),
@@ -859,7 +871,7 @@ export function connectionCheckDocumentProbe(
     if (location.href !== ${JSON.stringify(expectedHref)}) return false;
     ${appSelectionPrelude(appName)}
     ${manualDeepTestDraftGuard("", "return false;")}
-    return ![...document.querySelectorAll('[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]')]
+    return ![...document.querySelectorAll(${JSON.stringify(stopControlSelectorList)})]
       .some((element) => appElementVisible(element));
   })()`;
 }
@@ -1014,7 +1026,7 @@ export function activateTaskScript(
       .find((element) => visible(element) && element instanceof HTMLButtonElement && !element.disabled);
     if (!(send instanceof HTMLButtonElement)) return { activated: false };
     ${manualDeepTestPrompt !== undefined && requiredAppName ? "if (send.form !== manualForm) return { draftPresent: true };" : ""}
-    ${explicitConnectionCheck ? `if ([...document.querySelectorAll('[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]')].some(visible)) return { activated: false };` : ""}
+    ${explicitConnectionCheck ? `if ([...document.querySelectorAll(${JSON.stringify(stopControlSelectorList)})].some(visible)) return { activated: false };` : ""}
     send.click();
     return { activated: true };
   })()`;
@@ -1092,12 +1104,9 @@ export function taskProbeScript(
       document.querySelector('button[name="login"]')
     ].some(visible);
     const labelledSignIn = [...document.querySelectorAll("a,button")]
-      .some((element) => visible(element) && /^(log in|sign in|sign up)$/iu.test((element.textContent || "").trim()));
-    const busy = [
-      document.querySelector('[data-testid="stop-button"]'),
-      document.querySelector('button[aria-label="Stop generating"]'),
-      document.querySelector('button[aria-label="Stop"]')
-    ].some(visible);
+      .some((element) => visible(element) && ${labelledSignInPattern}.test((element.textContent || "").trim()));
+    const busy = ${JSON.stringify([...stopControlSelectors])}
+      .map((selector) => document.querySelector(selector)).some(visible);
     const sendVisible = ${JSON.stringify(sendControlSelectors)}.map((selector) => document.querySelector(selector)).some(visible);
     const errors = [
       document.querySelector('[data-testid="conversation-turn-error"]'),
