@@ -541,7 +541,7 @@ describe("Add to ChatGPT", () => {
       expect(
         h.host.querySelectorAll(".setup-wizard-footer .primary"),
       ).toHaveLength(1);
-      expect(test.disabled).toBe(false);
+      expect(test.disabled).toBe(unknown);
       expect(h.button("Start using Farol")).toBeUndefined();
       expect(h.configuration().settings.setup.journey.dismissed).toBe(true);
       expect(h.f.api.configure).not.toHaveBeenCalledWith(
@@ -1027,8 +1027,14 @@ describe("always-open Setup instructions", () => {
       return { ok: true, snapshot: { status: "ready", settings: ready } };
     });
     await h.click("Test in ChatGPT");
+    expect(h.c.getSnapshot().destination).toMatchObject({
+      area: "chatgpt",
+      connectionCheckReturn: true,
+    });
     await h.navigate("attachment");
-    expect(h.button("Back to Home")?.disabled).toBe(false);
+    const footer = h.host.querySelector(".setup-wizard-footer")!;
+    expect(footer.contains(h.button("Test in ChatGPT")!)).toBe(true);
+    expect(h.button("Back to Home")).toBeUndefined();
     expect(h.host.textContent).toContain("✓ Everything works");
   });
 
@@ -1284,7 +1290,7 @@ it("retains completed ChatGPT setup without granting stale attachment authority"
     ".setup-wizard-footer .primary",
   );
   expect(exit?.disabled).toBe(false);
-  expect(exit?.textContent).toMatch(/^Back to /);
+  expect(exit?.textContent).toBe("Test in ChatGPT");
 });
 
 it("completed Setup keeps Next and returns to Activity rather than forcing Home", async () => {
@@ -1303,6 +1309,7 @@ it("completed Setup keeps Next and returns to Activity rather than forcing Home"
     );
     expect(h.c.getSnapshot().destination.setupStep).toBe(expected);
   }
-  await h.click("Back to Activity");
-  expect(h.c.getSnapshot().destination.area).toBe("activity");
+  expect(
+    h.host.querySelector(".setup-wizard-footer .primary")?.textContent,
+  ).toBe("Test in ChatGPT");
 });
