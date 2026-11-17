@@ -5,11 +5,19 @@ import {
   publicContentVisible,
 } from "./chatgpt-public-turn";
 import { publicMarkdownBlock } from "./chatgpt-public-markdown";
-import { chatgptTemporaryToggleLabels } from "./chatgpt/scripts";
 
 // These scripts run only in the isolated Farol ChatGPT partition. First-message
 // helpers return content-free metadata. Follow-up observation returns only the
 // bounded public frame of the caller-bound turn, never account text or full history.
+
+// Keep labels local. Follow-up page helpers are .toString()'d into a page VM and
+// must not close over module imports (Vite rewrites them to SSR helpers).
+const chatgptTemporaryToggleLabels = [
+  "Turn off temporary chat",
+  "Отключить временный чат",
+  "Выключить временный чат",
+  "Выйти из режима временного чата",
+] as const;
 
 const visible = `const visible = (element) => {
   if (!(element instanceof HTMLElement)) return false;
@@ -306,7 +314,12 @@ async function savedChatFollowUpPage(
   const controls = (selector: string, root: ParentNode = document) =>
     [...root.querySelectorAll(selector)].filter(visible);
   const href = new URL(location.href);
-  const temporaryToggleSelector = chatgptTemporaryToggleLabels
+  const temporaryToggleSelector = [
+    "Turn off temporary chat",
+    "Отключить временный чат",
+    "Выключить временный чат",
+    "Выйти из режима временного чата",
+  ]
     .map((label) => `button[aria-label="${label}"]`)
     .join(",");
   const normal = () =>
