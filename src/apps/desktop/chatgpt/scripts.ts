@@ -159,6 +159,15 @@ const personalizedLabels = [
   "Персонализированный",
 ] as const;
 const unpersonalizedLabels = ["Unpersonalized", "Без персонализации"] as const;
+// ChatGPT's home composer is still one visible text box, but it is no longer
+// always #prompt-textarea inside a <form> that owns input[type=file].
+const composerSelectors = [
+  "#prompt-textarea",
+  '[data-testid="prompt-textarea"]',
+  '[contenteditable="true"][data-virtualkeyboard="true"]',
+  '[contenteditable="true"][role="textbox"]',
+] as const;
+const composerSelectorList = composerSelectors.join(",");
 const sendControlSelectors = [
   '[data-testid="send-button"]',
   'button[aria-label="Send prompt"]',
@@ -199,9 +208,7 @@ export const temporaryInstantProfileProbe = `(() => {
     return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
   };
   const composer = [
-    document.querySelector("#prompt-textarea"),
-    document.querySelector('[data-testid="prompt-textarea"]'),
-    document.querySelector('[contenteditable="true"][data-virtualkeyboard="true"]')
+    ${composerSelectors.map((selector) => `document.querySelector(${JSON.stringify(selector)})`).join(",\n    ")}
   ].find(visible);
   const draft = composer instanceof HTMLTextAreaElement
     ? composer.value
@@ -338,9 +345,7 @@ export const readinessProbe = `(() => {
     const box = element.getBoundingClientRect();
     return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
   };
-  const composer = [...document.querySelectorAll(
-    '#prompt-textarea,[data-testid="prompt-textarea"],[contenteditable="true"][data-virtualkeyboard="true"]'
-  )].some(visible);
+  const composer = [...document.querySelectorAll(${JSON.stringify(composerSelectorList)})].some(visible);
   const explicitSignIn = [
     document.querySelector('[data-testid="login-button"]'),
     document.querySelector('a[href*="/auth/login"]'),
@@ -361,9 +366,7 @@ function appSelectionPrelude(appName: string): string {
       return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
     };
     const findComposer = () => [
-      document.querySelector("#prompt-textarea"),
-      document.querySelector('[data-testid="prompt-textarea"]'),
-      document.querySelector('[contenteditable="true"][data-virtualkeyboard="true"]')
+      ${composerSelectors.map((selector) => `document.querySelector(${JSON.stringify(selector)})`).join(",\n      ")}
     ].find(appElementVisible);
     const selectedSelector = [
       '[data-testid="composer-app-chip"]',
@@ -453,6 +456,15 @@ function appSelectionPrelude(appName: string): string {
         if (exactLinks.length === 1) return "";
       }
       return text;
+    };
+    const composerPlaceholderText = (input) => {
+      if (!(input instanceof HTMLElement)) return "";
+      return (
+        input.getAttribute("placeholder") ||
+        input.getAttribute("aria-placeholder") ||
+        input.querySelector("[data-placeholder]")?.getAttribute("data-placeholder") ||
+        ""
+      ).trim();
     };
   `;
 }
@@ -809,19 +821,34 @@ function manualDeepTestDraftGuard(
   return `
     const manualComposer = findComposer();
     const manualForm = manualComposer instanceof HTMLElement ? manualComposer.closest('form') : null;
+    // Ping may run on the home composer, which has no <form> and no file input.
+    // Walk up to the toolbar that holds the add-files button and look there.
+    const manualShell = manualForm || ${
+      relaxUnknownControls
+        ? `(manualComposer instanceof HTMLElement ? (() => {
+      let node = manualComposer.parentElement;
+      for (let depth = 0; node && depth < 8; depth += 1) {
+        if (node.querySelector('button,input[type="file"]')) return node;
+        node = node.parentElement;
+      }
+      return manualComposer.parentElement;
+    })() : null)`
+        : "null"
+    };
+    const manualScope = ${relaxUnknownControls ? "manualShell" : "manualForm"};
     const manualVisible = (element) => {
       if (!(element instanceof HTMLElement)) return false;
       const style = getComputedStyle(element), box = element.getBoundingClientRect();
       return style.display !== 'none' && style.visibility !== 'hidden' && box.width > 0 && box.height > 0;
     };
-    const manualInputs = manualForm ? [...document.querySelectorAll('input[type="file"]')]
-      .filter((element) => manualForm.contains(element) || element.form === manualForm) : [];
-    const manualComposers = [...new Set(document.querySelectorAll('#prompt-textarea,[data-testid="prompt-textarea"],[contenteditable="true"][data-virtualkeyboard="true"]'))].filter(manualVisible);
-    const manualAttachments = manualForm ? [...manualForm.querySelectorAll(
+    const manualInputs = manualScope ? [...document.querySelectorAll('input[type="file"]')]
+      .filter((element) => manualScope.contains(element) || element.form === manualForm) : [];
+    const manualComposers = [...new Set(document.querySelectorAll(${JSON.stringify(composerSelectorList)}))].filter(manualVisible);
+    const manualAttachments = manualScope ? [...manualScope.querySelectorAll(
       '[data-testid="attachment-preview"],[data-testid="composer-attachment"],[data-testid*="file-chip"],[data-testid*="attachment-chip"]'
-    )].some(manualVisible) || [...manualForm.querySelectorAll('[aria-label]')].some((element) =>
+    )].some(manualVisible) || [...manualScope.querySelectorAll('[aria-label]')].some((element) =>
       manualVisible(element) && /remove file|remove attachment|удалить файл|удалить вложение/iu.test(element.getAttribute('aria-label') || '')) : true;
-    const manualAllowedLabels = new Set(['Add files', 'Add files and more', 'Select ChatGPT model', 'Thinking effort', 'Reasoning effort', 'Dictate', 'Start Voice', 'Start voice mode', 'Start Voice Mode', 'Expand', 'Send prompt', 'Send message', 'Send', 'Добавить файлы', 'Добавить файлы и другое', 'Выбрать модель ChatGPT', 'Уровень рассуждения', 'Уровень усилий рассуждения', 'Диктовка', 'Диктовать', 'Начать голосовой режим', 'Развернуть', 'Отправить', 'Отправить сообщение', 'Отправить запрос']);
+    const manualAllowedLabels = new Set(['Add files', 'Add files and more', 'Select ChatGPT model', 'Thinking effort', 'Reasoning effort', 'Dictate', 'Start Voice', 'Start voice mode', 'Start Voice Mode', 'Start voice conversation', 'Expand', 'Send prompt', 'Send message', 'Send', 'Добавить файлы', 'Добавить файлы и другое', 'Выбрать модель ChatGPT', 'Уровень рассуждения', 'Уровень усилий рассуждения', 'Диктовка', 'Диктовать', 'Начать голосовой режим', 'Начать голосовой разговор', 'Развернуть', 'Отправить', 'Отправить сообщение', 'Отправить запрос']);
     const manualControlSelector = 'button,[role="button"],input[type="button"],input[type="submit"]';
     const manualUnknownControls = ${
       relaxUnknownControls
@@ -835,9 +862,14 @@ function manualDeepTestDraftGuard(
         element.getAttribute('data-testid') !== 'send-button' &&
         !manualAllowedLabels.has(element.getAttribute('aria-label'))) : true`
     };
-    const manualUnknownImage = manualForm ? [...manualForm.querySelectorAll('img,video,audio')]
+    const manualUnknownImage = manualScope ? [...manualScope.querySelectorAll('img,video,audio')]
       .filter(manualVisible).some((element) => !element.closest(selectedSelector)) : true;
     let manualText = composerDraftText(manualComposer);
+    ${
+      relaxUnknownControls
+        ? `if (manualText.trim() === composerPlaceholderText(manualComposer) && composerPlaceholderText(manualComposer) !== "") manualText = "";`
+        : ""
+    }
     const manualExpected = ${expectedExpression ?? JSON.stringify(expectedText)};
     if (manualComposer instanceof HTMLElement && !(manualComposer instanceof HTMLTextAreaElement) &&
         appSelectionFor(manualComposer).state === 'bound') {
@@ -854,7 +886,7 @@ function manualDeepTestDraftGuard(
         }
       }
     }
-    if (!(manualComposer instanceof HTMLElement) || !manualForm || manualComposers.length !== 1 || manualComposers[0] !== manualComposer || manualInputs.length === 0 || manualAttachments || manualUnknownControls || manualUnknownImage ||
+    if (!(manualComposer instanceof HTMLElement) || !manualScope || manualComposers.length !== 1 || manualComposers[0] !== manualComposer || ${relaxUnknownControls ? "false" : "manualInputs.length === 0"} || manualAttachments || manualUnknownControls || manualUnknownImage ||
         manualInputs.some((input) => !(input instanceof HTMLInputElement) || !input.files || input.files.length > 0) ||
         ${
           mode === "initial"
@@ -919,9 +951,7 @@ export function prepareTaskScript(
       return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
     };
     const composer = [
-      document.querySelector("#prompt-textarea"),
-      document.querySelector('[data-testid="prompt-textarea"]'),
-      document.querySelector('[contenteditable="true"][data-virtualkeyboard="true"]')
+      ${composerSelectors.map((selector) => `document.querySelector(${JSON.stringify(selector)})`).join(",\n      ")}
     ].find(visible);
     const baselineAssistantCount = document.querySelectorAll('[data-message-author-role="assistant"]').length;
     const baselineUserCount = document.querySelectorAll('[data-message-author-role="user"]').length;

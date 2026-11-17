@@ -112,7 +112,6 @@ it.each([
   "unknown-image",
   "two-composers",
   "active-generation",
-  "no-file-input",
 ])("original %s is preserved and refuses navigation admission", (kind) => {
   const form = document.querySelector("form")!;
   if (kind === "text") composer().value = "owner's unfinished message";
@@ -143,14 +142,35 @@ it.each([
       "beforeend",
       '<button data-testid="stop-button">Stop</button>',
     );
-  if (kind === "no-file-input")
-    document.querySelector('input[type="file"]')!.remove();
   const before = document.body.innerHTML,
     draft = composer().value;
   expect(originalProbe()).toBe(false);
   expect(composer().value).toBe(draft);
   expect(document.body.innerHTML).toBe(before);
   expect(sends).toBe(0);
+});
+it("lets a connection probe pass the home composer without a form or file input", () => {
+  document.body.innerHTML = `
+    <div id="home-composer">
+      <div contenteditable="true" role="textbox">
+        <p data-placeholder="Спросить ChatGPT">Спросить ChatGPT</p>
+      </div>
+      <button type="button" aria-label="Добавить файлы и другое">+</button>
+      <button type="button" aria-label="Выбрать модель ChatGPT">6 Instant</button>
+      <button type="button" aria-label="Диктовать"></button>
+      <button type="button" aria-label="Начать голосовой разговор"></button>
+    </div>`;
+  const before = document.body.innerHTML;
+  expect(originalProbe()).toBe(true);
+  expect(document.body.innerHTML).toBe(before);
+  expect(sends).toBe(0);
+  document
+    .querySelector("#home-composer")!
+    .insertAdjacentHTML(
+      "beforeend",
+      '<span data-testid="attachment-preview">owner.pdf</span>',
+    );
+  expect(originalProbe()).toBe(false);
 });
 it("lets a connection probe pass renamed composer chrome without editing the page", () => {
   const form = document.querySelector("form")!;
