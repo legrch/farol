@@ -5115,12 +5115,12 @@ async function testConnectionCommand(
         // A saved sign-in checkpoint is not the page. Ping sends from the
         // live ChatGPT document; prepareConnectorCheckDocument still requires
         // that document to read as signed in.
-        const refusePrerequisites = (reason: string): never => {
+        function refusePrerequisites(reason: string): never {
           console.error(`FAROL_CONNECTION_CHECK_REFUSED ${reason}`);
           throw new ConnectionCheckRefusal(
             "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
           );
-        };
+        }
         if (
           !embeddedBrowserEnabled() ||
           desktopAdmission.closed() ||
@@ -5128,7 +5128,7 @@ async function testConnectionCommand(
           configuration !== config ||
           (selectedTaskId ?? "") !== command.taskId
         ) {
-          refusePrerequisites(
+          return refusePrerequisites(
             `host embedded=${embeddedBrowserEnabled()} quit=${desktopAdmission.quitInProgress} update=${desktopAdmission.installedUpdateAdmission} core=${desktopGoCore === core} config=${configuration === config} task=${selectedTaskId ?? ""}/${command.taskId}`,
           );
         }
@@ -5138,13 +5138,15 @@ async function testConnectionCommand(
             : chatGptRoute;
         const owner = window;
         const originalDocument = route?.captureManualTaskTarget();
-        if (!route || !owner || owner.isDestroyed() || !originalDocument)
-          refusePrerequisites(
+        if (!route || !owner || owner.isDestroyed() || !originalDocument) {
+          return refusePrerequisites(
             `document route=${Boolean(route)} owner=${Boolean(owner)} destroyed=${owner?.isDestroyed() ?? true} target=${Boolean(originalDocument)}`,
           );
+        }
         const snapshot = config.snapshot();
-        if (snapshot.status !== "ready")
-          refusePrerequisites(`settings status=${snapshot.status}`);
+        if (snapshot.status !== "ready") {
+          return refusePrerequisites(`settings status=${snapshot.status}`);
+        }
         let settings = snapshot.settings;
         const connector = settings.connectors.secureMcp;
         const runtime = connector.runtime;
@@ -5171,10 +5173,11 @@ async function testConnectionCommand(
           runtime.computerGeneration !== settings.computer.generation ||
           runtime.connectorGeneration !== connector.generation ||
           !connectionCheckRuntimeReady(secureMcpConnectorRuntime)
-        )
-          refusePrerequisites(
+        ) {
+          return refusePrerequisites(
             `runtime app=${appName !== null} workspace=${workspace !== undefined} tunnel=${connector.tunnelId !== null} state=${runtime?.state ?? "missing"}`,
           );
+        }
         // A persistent Setup uncertainty, not a check that is still running:
         // it never clears by pinging again, so it has its own code.
         if (
@@ -5203,8 +5206,9 @@ async function testConnectionCommand(
             computerGeneration: runtime.computerGeneration,
             buildId: runtime.buildId,
           });
-          if (!issued.ok || issued.snapshot.status !== "ready")
-            refusePrerequisites("challenge-mint");
+          if (!issued.ok || issued.snapshot.status !== "ready") {
+            return refusePrerequisites("challenge-mint");
+          }
           settings = issued.snapshot.settings;
           challenge = settings.connectors.secureMcp.challenge;
           if (
@@ -5212,8 +5216,9 @@ async function testConnectionCommand(
             challenge.buildId !== runtime.buildId ||
             challenge.runtimeGeneration !== runtime.runtimeGeneration ||
             challenge.computerGeneration !== runtime.computerGeneration
-          )
-            refusePrerequisites("challenge-stale");
+          ) {
+            return refusePrerequisites("challenge-stale");
+          }
         }
         const challengeSha256 =
           proof?.receipt.challengeSha256 ?? challenge!.challengeSha256;
@@ -5296,8 +5301,9 @@ async function testConnectionCommand(
             );
             // A failed document probe can mean draft, attachments, activity or
             // an unrecognized layout. Do not invent a more specific observation.
-            if (!prepared.ready)
-              refusePrerequisites(`prepare stage=${prepared.stage}`);
+            if (!prepared.ready) {
+              return refusePrerequisites(`prepare stage=${prepared.stage}`);
+            }
             const document = route.captureConnectionCheckDocument();
             if (!document || !current())
               throw new ConnectionCheckRefusal(

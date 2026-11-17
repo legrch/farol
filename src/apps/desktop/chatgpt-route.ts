@@ -2598,7 +2598,7 @@ export class ChatGptRoute {
     // reasoning-effort control. That screen has no separate power slider.
     // Opening one and refusing the test leaves an empty temporary chat.
     const alreadyInstant = profile.success && profile.data.instant === true;
-    let selected = profile;
+    let selected: Awaited<ReturnType<typeof read>> = profile;
     if (!alreadyInstant) {
     stage = "picker";
     try {
