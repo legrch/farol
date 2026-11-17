@@ -2,7 +2,6 @@ import { useEffect, useRef, useSyncExternalStore } from "react";
 import type { RendererFacade, Intent } from "../../../src/ui/renderer/contract";
 import { commandAllowed } from "../../../src/ui/renderer/command-eligibility";
 import { chatGptPreSubmitRemedy } from "../../../src/ui/chatgpt-pre-submit-remedy";
-import { connectionPresentation } from "./connection-presentation";
 
 type State = Readonly<{
   phase: "idle" | "preparing" | "testing" | "done" | "refused" | "unknown";
@@ -145,29 +144,12 @@ export function useConnectionTest(facade: RendererFacade) {
     () => active.state,
     () => idle,
   );
-  const snapshot = facade.getSnapshot();
-  const connected = connectionPresentation(snapshot).connected;
-  // A prior "needs Connected tunnel" refusal must not linger after the tunnel
-  // is live again — Ping is available; clear the stale prerequisite copy.
-  useEffect(() => {
-    if (
-      !connected ||
-      active.state.phase !== "refused" ||
-      active.state.code !== "CONNECTION_CHECK_PREREQUISITES_REQUIRED"
-    )
-      return;
-    active.state = idle;
-    for (const listener of active.listeners) listener();
-  }, [connected, active, state.phase, state.code]);
+  // Keep refused/done/unknown copy until the next Ping. Clearing it while
+  // Connected hid the only explanation when Send was refused in one second.
   return {
     state,
     busy: state.phase === "preparing" || state.phase === "testing",
-    message:
-      connected &&
-      state.phase === "refused" &&
-      state.code === "CONNECTION_CHECK_PREREQUISITES_REQUIRED"
-        ? ""
-        : text(state),
+    message: text(state),
   };
 }
 export function ConnectionTestButton({

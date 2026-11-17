@@ -7793,28 +7793,90 @@ async function runManualDeepTest(
     buildIdentity.buildId,
   );
   const appName = selectedConnectorApp(selected);
+  const runtime = selected.runtime;
+  // Full check must send when the tunnel/runtime are live. A consumed
+  // attachment is preferred; otherwise use (or mint) the same one-time
+  // challenge Ping already uses. Missing attachment alone is not "not ready".
+  let challenge = selected.challenge;
+  const challengeCurrent =
+    challenge != null &&
+    runtime?.state === "ready" &&
+    challenge.buildId === runtime.buildId &&
+    challenge.runtimeGeneration === runtime.runtimeGeneration &&
+    challenge.computerGeneration === runtime.computerGeneration;
   if (
-    !attachment ||
     !appName ||
-    !selected.runtime ||
+    !runtime ||
+    runtime.state !== "ready" ||
     !selected.tunnelId ||
     selected.appVerificationPending === true ||
     binding.buildId !== buildIdentity.buildId ||
-    binding.connectorGeneration !== String(selected.generation)
+    binding.connectorGeneration !== String(selected.generation) ||
+    (!attachment && !challengeCurrent)
+  ) {
+    if (
+      !appName ||
+      !runtime ||
+      runtime.state !== "ready" ||
+      !selected.tunnelId ||
+      selected.appVerificationPending === true ||
+      binding.buildId !== buildIdentity.buildId ||
+      binding.connectorGeneration !== String(selected.generation)
+    )
+      return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
+    const issued = await owner.recordSecureMcpChallenge({
+      challenge: randomUUID(),
+      runtimeGeneration: runtime.runtimeGeneration,
+      computerGeneration: runtime.computerGeneration,
+      buildId: runtime.buildId,
+    });
+    if (!issued.ok || issued.snapshot.status !== "ready")
+      return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
+    challenge = issued.snapshot.settings.connectors.secureMcp.challenge;
+    if (
+      !challenge ||
+      challenge.buildId !== runtime.buildId ||
+      challenge.runtimeGeneration !== runtime.runtimeGeneration ||
+      challenge.computerGeneration !== runtime.computerGeneration
+    )
+      return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
+  }
+  if (
+    !appName ||
+    !runtime ||
+    runtime.state !== "ready" ||
+    !selected.tunnelId
   )
+    return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
+  let workspaceId =
+    attachment?.workspaceId ?? connectorWorkspaceSelection(settings);
+  if (workspaceId === undefined) {
+    const verifiedId = settings.setup.computer.verified?.workspaceId;
+    workspaceId =
+      verifiedId &&
+      settings.computer.workspaces.some(
+        (item) => item.workspaceId === verifiedId,
+      )
+        ? verifiedId
+        : (settings.computer.workspaces[0]?.workspaceId ?? null);
+  }
+  const challengeSha256 =
+    attachment?.challengeSha256 ?? challenge?.challengeSha256;
+  if (!challengeSha256)
     return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
   const expected: ConnectorAppVerificationBinding = {
     tunnelId: selected.tunnelId,
     connectorGeneration: selected.generation,
     computerGeneration: settings.computer.generation,
-    runtimeGeneration: selected.runtime.runtimeGeneration,
-    challengeSha256: attachment.challengeSha256,
+    runtimeGeneration: runtime.runtimeGeneration,
+    challengeSha256,
     buildId: buildIdentity.buildId,
-    workspaceId: attachment.workspaceId,
+    workspaceId,
     appName,
   };
   const isCurrent = () => {
     const latest = owner.snapshot();
+    // connectorAppBindingCurrent already accepts live challenge or attachment.
     return (
       configuration === owner &&
       desktopGoCore === core &&
@@ -7841,9 +7903,7 @@ async function runManualDeepTest(
       computerConnectorAdmission(summaryFenceRecovery).admissible &&
       !latest.settings.setup.chatgpt.outcomeUnknown &&
       latest.settings.connectors.secureMcp.appVerificationPending !== true &&
-      connectorAppBindingCurrent(latest.settings, expected) &&
-      currentConnectorAttachment(latest.settings, buildIdentity.buildId) !==
-        null
+      connectorAppBindingCurrent(latest.settings, expected)
     );
   };
   chatGptTaskAdmission = true;
