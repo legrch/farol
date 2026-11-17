@@ -2343,6 +2343,64 @@ export class ProductConfigurationService {
     });
   }
 
+  // Owner Verify after an ordinary remount: same directory inode, new device
+  // number. Path and inode must still match the approved folder; a different
+  // inode remains WORKSPACE_ROOT_CHANGED and needs a fresh picker.
+  async rebindWorkspaceRootIdentity(
+    workspaceId: string,
+    expectedRevision: number,
+    expectedRoot: string,
+    rootIdentity: WorkspaceRootIdentity,
+  ): Promise<MutationResult> {
+    const identity = WorkspaceRootIdentitySchema.safeParse(rootIdentity);
+    if (!identity.success) return this.failure("SETTINGS_INPUT_INVALID");
+    return this.exclusive(async () => {
+      if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
+      const workspace = this.current.computer.workspaces.find(
+        (item) => item.workspaceId === workspaceId,
+      );
+      if (!workspace) return this.failure("WORKSPACE_NOT_FOUND");
+      const bound = workspace.rootIdentity;
+      if (
+        this.current.revision !== expectedRevision ||
+        workspace.root !== expectedRoot ||
+        !bound ||
+        bound.inode !== identity.data.inode
+      )
+        return this.failure("WORKSPACE_ROOT_CHANGED");
+      if (
+        bound.device === identity.data.device &&
+        bound.inode === identity.data.inode
+      )
+        return { ok: true, snapshot: this.snapshot() };
+      return this.commitComputerEvidence((settings) => ({
+        ...settings,
+        revision: settings.revision + 1,
+        computer: {
+          ...settings.computer,
+          workspaces: settings.computer.workspaces.map((item) =>
+            item.workspaceId === workspaceId
+              ? {
+                  ...item,
+                  rootIdentity: { ...identity.data },
+                  accessCheck: null,
+                }
+              : item,
+          ),
+        },
+        setup: {
+          ...settings.setup,
+          computer: {
+            ...settings.setup.computer,
+            verified: null,
+            needsAction: "Check this workspace's access again.",
+            reachable: "unknown",
+          },
+        },
+      }));
+    });
+  }
+
   async recordComputerVerification(
     workspaceId: string,
     input: unknown,

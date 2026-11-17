@@ -5833,11 +5833,23 @@ async function testConnectionCommand(
           throw new ConnectionCheckRefusal(
             "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
           );
-        const settings = snapshot.settings;
+        let settings = snapshot.settings;
         const connector = settings.connectors.secureMcp;
         const runtime = connector.runtime;
         const appName = selectedConnectorApp(connector);
+        // Stale folder access must not block a tunnel ping. Prefer the current
+        // selection; otherwise the saved verification target or empty consent.
         workspace = connectorWorkspaceSelection(settings);
+        if (workspace === undefined) {
+          const verifiedId = settings.setup.computer.verified?.workspaceId;
+          workspace =
+            verifiedId &&
+            settings.computer.workspaces.some(
+              (item) => item.workspaceId === verifiedId,
+            )
+              ? verifiedId
+              : (settings.computer.workspaces[0]?.workspaceId ?? null);
+        }
         if (
           appName === null ||
           workspace === undefined ||
@@ -5862,17 +5874,39 @@ async function testConnectionCommand(
         const proof = connectorVerificationProof(observed);
         if (proof && proof.workspaceId !== workspace)
           throw new ConnectionCheckRefusal("CONNECTION_CHECK_OWNER_CHANGED");
-        const challenge = connector.challenge;
-        if (
-          !proof &&
-          (!challenge ||
+        let challenge = connector.challenge;
+        const challengeCurrent =
+          challenge &&
+          challenge.buildId === runtime.buildId &&
+          challenge.runtimeGeneration === runtime.runtimeGeneration &&
+          challenge.computerGeneration === runtime.computerGeneration;
+        // Toolbar/setup ping is the @Farol challenge send. When the previous
+        // one-time challenge was consumed and Go has no retained proof yet,
+        // mint a fresh challenge against the live ready runtime instead of
+        // refusing Send.
+        if (!proof && !challengeCurrent) {
+          const issued = await config.recordSecureMcpChallenge({
+            challenge: randomUUID(),
+            runtimeGeneration: runtime.runtimeGeneration,
+            computerGeneration: runtime.computerGeneration,
+            buildId: runtime.buildId,
+          });
+          if (!issued.ok || issued.snapshot.status !== "ready")
+            throw new ConnectionCheckRefusal(
+              "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+            );
+          settings = issued.snapshot.settings;
+          challenge = settings.connectors.secureMcp.challenge;
+          if (
+            !challenge ||
             challenge.buildId !== runtime.buildId ||
             challenge.runtimeGeneration !== runtime.runtimeGeneration ||
-            challenge.computerGeneration !== runtime.computerGeneration)
-        )
-          throw new ConnectionCheckRefusal(
-            "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
-          );
+            challenge.computerGeneration !== runtime.computerGeneration
+          )
+            throw new ConnectionCheckRefusal(
+              "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+            );
+        }
         const challengeSha256 =
           proof?.receipt.challengeSha256 ?? challenge!.challengeSha256;
         const binding: ConnectorAppVerificationBinding = {
@@ -10723,13 +10757,38 @@ async function configureAdmittedProduct(
         return configurationFailure("WORKSPACE_VERIFICATION_FAILED");
       }
       const bound = workspace.rootIdentity;
-      if (
-        bound &&
-        (bound.device !== measured.device || bound.inode !== measured.inode)
-      ) {
+      // Ordinary remount/reboot often renumbers the device while the directory
+      // inode stays. Owner Verify may rebind that pair; a different inode is
+      // still a different folder and needs a fresh picker.
+      if (bound && bound.inode !== measured.inode) {
         return configurationFailure("WORKSPACE_ROOT_CHANGED");
       }
-      if (!bound) {
+      if (bound && bound.device !== measured.device) {
+        if (snapshot.status !== "ready")
+          return configurationFailure("SETTINGS_UNAVAILABLE");
+        const rebindAdmission = configurationAdmission(command.kind, {
+          agentActive: codexAgentOperationActive(),
+          connectorRunning:
+            connectorTaskAdmission ||
+            secureMcpConnectorRuntime?.isRunning() === true,
+        });
+        if (rebindAdmission !== "admitted")
+          return configurationFailure(rebindAdmission);
+        const rebound = await configuration.rebindWorkspaceRootIdentity(
+          workspace.workspaceId,
+          snapshot.settings.revision,
+          workspace.root,
+          measured,
+        );
+        if (!rebound.ok) return ProductConfigurationResultSchema.parse(rebound);
+        snapshot = configuration.snapshot();
+        workspace =
+          snapshot.status === "ready"
+            ? snapshot.settings.computer.workspaces.find(
+                (item) => item.workspaceId === command.workspaceId,
+              )
+            : undefined;
+      } else if (!bound) {
         if (snapshot.status !== "ready")
           return configurationFailure("SETTINGS_UNAVAILABLE");
         const bindingAdmission = configurationAdmission(command.kind, {
