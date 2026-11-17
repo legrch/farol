@@ -5134,7 +5134,9 @@ describe("automatic Setup sign-in after the owner login flow", () => {
       f.emit("route", { state: "loaded" });
       expect(f.api.configure).not.toHaveBeenCalled();
       expect(c.getSnapshot().signInObservation).toBeNull();
-      expect(c.getSnapshot().intents["settings:chatgpt.verify:"]).toBeUndefined();
+      expect(
+        c.getSnapshot().intents["settings:chatgpt.verify:"],
+      ).toBeUndefined();
       const configuration = c.getSnapshot().configuration;
       expect(
         configuration?.status === "ready" &&

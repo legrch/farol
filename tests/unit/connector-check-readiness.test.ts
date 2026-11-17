@@ -139,49 +139,48 @@ it("gives the temporary page a fresh readiness budget after navigation", async (
   ).toEqual({ ready: true });
   expect(route.openTemporaryChat).toHaveBeenCalledOnce();
 });
-it.each([
-  "permanent-negative",
-  "invalidated",
-  "protected-opener",
-])("refuses %s without another temporary navigation", async (scenario) => {
-  let now = 0,
-    live = true;
-  const positive: ChatGptSignInStatusObservation = {
-    state: "authenticated",
-    binding: { sequence: 1, documentGeneration: 1 },
-  };
-  const route = {
-    open: vi.fn(async () => ({
-      status:
-        scenario === "protected-opener"
-          ? ("unreachable" as const)
-          : ("opened" as const),
-    })),
-    hasPendingReadinessDocument: () => false,
-    observeSignInStatus: vi.fn(async () =>
-      scenario === "permanent-negative"
-        ? { state: "signed_out" as const, binding: null }
-        : positive,
-    ),
-    isCurrentSignInStatus: (v: ChatGptSignInStatusObservation) =>
-      v === positive,
-    openTemporaryChat: vi.fn(async () => {
-      if (scenario === "invalidated") live = false;
-      return { status: "opened" as const };
-    }),
-  };
-  expect(
-    (
-      await prepareConnectorCheckDocument(route, () => live, {
-        now: () => now,
-        wait: async (ms) => {
-          now += ms;
-        },
-        timeoutMs: 300,
-      })
-    ).ready,
-  ).toBe(false);
-  expect(route.openTemporaryChat).toHaveBeenCalledTimes(
-    ["permanent-negative", "protected-opener"].includes(scenario) ? 0 : 1,
-  );
-});
+it.each(["permanent-negative", "invalidated", "protected-opener"])(
+  "refuses %s without another temporary navigation",
+  async (scenario) => {
+    let now = 0,
+      live = true;
+    const positive: ChatGptSignInStatusObservation = {
+      state: "authenticated",
+      binding: { sequence: 1, documentGeneration: 1 },
+    };
+    const route = {
+      open: vi.fn(async () => ({
+        status:
+          scenario === "protected-opener"
+            ? ("unreachable" as const)
+            : ("opened" as const),
+      })),
+      hasPendingReadinessDocument: () => false,
+      observeSignInStatus: vi.fn(async () =>
+        scenario === "permanent-negative"
+          ? { state: "signed_out" as const, binding: null }
+          : positive,
+      ),
+      isCurrentSignInStatus: (v: ChatGptSignInStatusObservation) =>
+        v === positive,
+      openTemporaryChat: vi.fn(async () => {
+        if (scenario === "invalidated") live = false;
+        return { status: "opened" as const };
+      }),
+    };
+    expect(
+      (
+        await prepareConnectorCheckDocument(route, () => live, {
+          now: () => now,
+          wait: async (ms) => {
+            now += ms;
+          },
+          timeoutMs: 300,
+        })
+      ).ready,
+    ).toBe(false);
+    expect(route.openTemporaryChat).toHaveBeenCalledTimes(
+      ["permanent-negative", "protected-opener"].includes(scenario) ? 0 : 1,
+    );
+  },
+);

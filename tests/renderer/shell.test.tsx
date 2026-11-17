@@ -3319,9 +3319,7 @@ it("keeps the tunnel Connected while a challenge-scoped connection test is in fl
   expect(
     host.querySelector('.rail-connection[data-checking="true"]'),
   ).toBeNull();
-  expect(host.querySelector(".rail-connection")?.textContent).toBe(
-    "Connected",
-  );
+  expect(host.querySelector(".rail-connection")?.textContent).toBe("Connected");
   await act(async () => {
     wait.resolve({ ok: true, snapshot: data.configuration });
     await pending;

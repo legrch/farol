@@ -43,9 +43,7 @@ export function connectionPresentation(
   const windowCurrent =
     snapshot.status === "current" && snapshot.runtime === "ready";
   const tunnelLive =
-    windowCurrent &&
-    computer.facts.runtimeCurrent &&
-    !transportNeedsAttention;
+    windowCurrent && computer.facts.runtimeCurrent && !transportNeedsAttention;
   const checking =
     !tunnelLive &&
     !snapshot.independentSession &&
@@ -97,8 +95,7 @@ export function connectionPresentation(
     label,
     text,
     savedSetupReady,
-    attention:
-      !checking && !connected && !savedSetupReady,
+    attention: !checking && !connected && !savedSetupReady,
     transportNeedsAttention,
     unconfirmedSavedSetup,
   };

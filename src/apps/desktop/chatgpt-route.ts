@@ -2600,97 +2600,99 @@ export class ChatGptRoute {
     const alreadyInstant = profile.success && profile.data.instant === true;
     let selected: Awaited<ReturnType<typeof read>> = profile;
     if (!alreadyInstant) {
-    stage = "picker";
-    try {
-      // A false result guarantees the opener did not click. Wait for a
-      // temporarily disabled/replaced control, but never repeat an action
-      // after an acknowledged click, exception or changed document identity.
-      const openDeadline = Date.now() + 2_000;
-      let opened = false;
-      for (let attempt = 0; attempt < 20 && !opened; attempt += 1) {
-        if (Date.now() >= openDeadline || profileIdentityLost())
-          return refuseInstant();
-        const result = await execute(openInstantPowerPickerScript, true);
-        if (profileIdentityLost()) return refuseInstant();
-        if (result === true) {
-          opened = true;
-          break;
-        }
-        if (result !== false || Date.now() >= openDeadline)
-          return refuseInstant();
-        await delay(100);
-        if (profileIdentityLost()) return refuseInstant();
-      }
-      if (!opened) return refuseInstant();
-      // Opening a provider menu does not acknowledge that its controls have
-      // rendered. Observe the same opened picker for a bounded interval; never
-      // click it again or reinterpret an unrecognized result as readiness.
-      stage = "slider";
-      const pickerDeadline = Date.now() + 2_000;
-      let minimumObserved = false;
-      for (let attempt = 0; attempt < 8; attempt += 1) {
-        if (profileIdentityLost()) return refuseInstant();
-        let slider = instantPowerSliderSchema.safeParse(
-          await execute(focusInstantPowerSliderScript, true),
-        );
-        while (
-          slider.success &&
-          !slider.data.ready &&
-          Date.now() < pickerDeadline
-        ) {
+      stage = "picker";
+      try {
+        // A false result guarantees the opener did not click. Wait for a
+        // temporarily disabled/replaced control, but never repeat an action
+        // after an acknowledged click, exception or changed document identity.
+        const openDeadline = Date.now() + 2_000;
+        let opened = false;
+        for (let attempt = 0; attempt < 20 && !opened; attempt += 1) {
+          if (Date.now() >= openDeadline || profileIdentityLost())
+            return refuseInstant();
+          const result = await execute(openInstantPowerPickerScript, true);
+          if (profileIdentityLost()) return refuseInstant();
+          if (result === true) {
+            opened = true;
+            break;
+          }
+          if (result !== false || Date.now() >= openDeadline)
+            return refuseInstant();
           await delay(100);
           if (profileIdentityLost()) return refuseInstant();
-          slider = instantPowerSliderSchema.safeParse(
+        }
+        if (!opened) return refuseInstant();
+        // Opening a provider menu does not acknowledge that its controls have
+        // rendered. Observe the same opened picker for a bounded interval; never
+        // click it again or reinterpret an unrecognized result as readiness.
+        stage = "slider";
+        const pickerDeadline = Date.now() + 2_000;
+        let minimumObserved = false;
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          if (profileIdentityLost()) return refuseInstant();
+          let slider = instantPowerSliderSchema.safeParse(
             await execute(focusInstantPowerSliderScript, true),
           );
+          while (
+            slider.success &&
+            !slider.data.ready &&
+            Date.now() < pickerDeadline
+          ) {
+            await delay(100);
+            if (profileIdentityLost()) return refuseInstant();
+            slider = instantPowerSliderSchema.safeParse(
+              await execute(focusInstantPowerSliderScript, true),
+            );
+          }
+          sliderReady = slider.success && slider.data.ready;
+          sliderAtMinimum =
+            slider.success &&
+            slider.data.ready &&
+            slider.data.atMinimum === true;
+          if (profileIdentityLost() || !slider.success || !slider.data.ready)
+            return refuseInstant();
+          if (slider.data.atMinimum) {
+            minimumObserved = true;
+            break;
+          }
+          if (
+            (await execute(lowerInstantPowerSliderScript, true)) !== true ||
+            profileIdentityLost()
+          )
+            return refuseInstant();
+          await delay(80);
         }
-        sliderReady = slider.success && slider.data.ready;
-        sliderAtMinimum =
-          slider.success && slider.data.ready && slider.data.atMinimum === true;
-        if (profileIdentityLost() || !slider.success || !slider.data.ready)
-          return refuseInstant();
-        if (slider.data.atMinimum) {
-          minimumObserved = true;
-          break;
-        }
+        if (!minimumObserved) return refuseInstant();
         if (
-          (await execute(lowerInstantPowerSliderScript, true)) !== true ||
+          (await execute(dismissInstantPowerPickerScript, true)) !== true ||
           profileIdentityLost()
         )
           return refuseInstant();
-        await delay(80);
+      } catch {
+        return refuseInstant();
       }
-      if (!minimumObserved) return refuseInstant();
+      stage = "selected-model";
+      selected = await read();
+      const selectedDeadline = Date.now() + 2_000;
+      while (
+        selected.success &&
+        !selected.data.instant &&
+        Date.now() < selectedDeadline
+      ) {
+        await delay(100);
+        if (profileIdentityLost()) return refuseInstant();
+        selected = await read();
+      }
       if (
-        (await execute(dismissInstantPowerPickerScript, true)) !== true ||
-        profileIdentityLost()
+        profileIdentityLost() ||
+        !selected.success ||
+        !selected.data.composerReady ||
+        selected.data.draftPresent ||
+        selected.data.temporary !== temporary ||
+        !selected.data.modelReady ||
+        !selected.data.instant
       )
         return refuseInstant();
-    } catch {
-      return refuseInstant();
-    }
-    stage = "selected-model";
-    selected = await read();
-    const selectedDeadline = Date.now() + 2_000;
-    while (
-      selected.success &&
-      !selected.data.instant &&
-      Date.now() < selectedDeadline
-    ) {
-      await delay(100);
-      if (profileIdentityLost()) return refuseInstant();
-      selected = await read();
-    }
-    if (
-      profileIdentityLost() ||
-      !selected.success ||
-      !selected.data.composerReady ||
-      selected.data.draftPresent ||
-      selected.data.temporary !== temporary ||
-      !selected.data.modelReady ||
-      !selected.data.instant
-    )
-      return refuseInstant();
     }
 
     // An explicitly requested ordinary Instant profile needs no temporary-chat

@@ -26,7 +26,9 @@ const composer = `const composer = [
 const composerText = () => composer instanceof HTMLTextAreaElement
   ? composer.value : (composer?.innerText ?? composer?.textContent ?? "");`;
 
-const temporaryToggleLabelsLiteral = JSON.stringify([...chatgptTemporaryToggleLabels]);
+const temporaryToggleLabelsLiteral = JSON.stringify([
+  ...chatgptTemporaryToggleLabels,
+]);
 const emptyNormal = `const temporaryToggleLabels = ${temporaryToggleLabelsLiteral};
 const normalEmpty = () =>
   location.href === expectedHref &&

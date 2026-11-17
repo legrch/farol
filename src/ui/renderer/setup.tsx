@@ -288,8 +288,7 @@ export function Setup({ snapshot, facade, onInputsChanged }: Props) {
             Back
           </button>
           {step === "attachment" &&
-          (checklist.completed ||
-            (!checklist.ready && !finishPending)) ? (
+          (checklist.completed || (!checklist.ready && !finishPending)) ? (
             <div ref={setTestActionHost} className="setup-test-action-slot" />
           ) : (
             <button

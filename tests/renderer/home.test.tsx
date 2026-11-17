@@ -293,9 +293,9 @@ it("keeps a completed setup connected without a fresh sign-in check", async () =
   expect(h.host.querySelector(".home-status-card h2")?.textContent).toBe(
     "Connected",
   );
-  expect(connectionPresentation({ ...h.c.getSnapshot(), ...value }).connected).toBe(
-    true,
-  );
+  expect(
+    connectionPresentation({ ...h.c.getSnapshot(), ...value }).connected,
+  ).toBe(true);
 });
 it("on-demand local diagnostics use the existing command once and stay fenced while pending", async () => {
   const h = await mount(working());
@@ -713,28 +713,31 @@ it.each([
   "different app",
   "no app choice",
   "unknown check",
-])("does not reuse saved setup for %s while tunnel stays Connected", async (scenario) => {
-  const { value, settings, connector } = restoredSetup();
-  if (scenario === "different tunnel")
-    connector.lastVerifiedAttachment!.tunnelId = "other";
-  if (scenario === "different app") connector.lastVerifiedAttachment = null;
-  if (scenario === "no app choice") connector.chatgptApp = null;
-  if (scenario === "unknown check") {
-    connector.appVerificationPending = true;
-    settings.setup.connect.outcomeUnknown = true;
-  }
-  const h = await mount(value);
-  const presentation = connectionPresentation({
-    ...h.c.getSnapshot(),
-    ...value,
-  });
-  // Live tunnel is Connected regardless of mismatched saved ChatGPT facts.
-  expect(presentation.connected).toBe(true);
-  expect(presentation.savedSetupReady).toBe(false);
-  expect(h.host.textContent).not.toContain("Your ChatGPT setup is saved");
-  expect(h.host.textContent).not.toContain("ChatGPT can reach this Mac");
-  expect(h.f.api.configure).not.toHaveBeenCalled();
-});
+])(
+  "does not reuse saved setup for %s while tunnel stays Connected",
+  async (scenario) => {
+    const { value, settings, connector } = restoredSetup();
+    if (scenario === "different tunnel")
+      connector.lastVerifiedAttachment!.tunnelId = "other";
+    if (scenario === "different app") connector.lastVerifiedAttachment = null;
+    if (scenario === "no app choice") connector.chatgptApp = null;
+    if (scenario === "unknown check") {
+      connector.appVerificationPending = true;
+      settings.setup.connect.outcomeUnknown = true;
+    }
+    const h = await mount(value);
+    const presentation = connectionPresentation({
+      ...h.c.getSnapshot(),
+      ...value,
+    });
+    // Live tunnel is Connected regardless of mismatched saved ChatGPT facts.
+    expect(presentation.connected).toBe(true);
+    expect(presentation.savedSetupReady).toBe(false);
+    expect(h.host.textContent).not.toContain("Your ChatGPT setup is saved");
+    expect(h.host.textContent).not.toContain("ChatGPT can reach this Mac");
+    expect(h.f.api.configure).not.toHaveBeenCalled();
+  },
+);
 
 it("keeps a current transport failure visible instead of claiming the app works", async () => {
   const h = await mount({
@@ -836,10 +839,7 @@ it.each(["unobserved", "unavailable", "stopped", "expired"] as const)(
       connectionStatus: {
         ...unavailableConnectionStatus,
         revision: 1,
-        state:
-          mode === "expired"
-            ? ("recent_transport" as const)
-            : mode,
+        state: mode === "expired" ? ("recent_transport" as const) : mode,
         validUntilMillis: mode === "expired" ? Date.now() - 1 : null,
       },
     };

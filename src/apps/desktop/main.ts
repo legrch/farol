@@ -6714,12 +6714,7 @@ async function runManualDeepTest(
     )
       return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
   }
-  if (
-    !appName ||
-    !runtime ||
-    runtime.state !== "ready" ||
-    !selected.tunnelId
-  )
+  if (!appName || !runtime || runtime.state !== "ready" || !selected.tunnelId)
     return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
   let workspaceId =
     attachment?.workspaceId ?? connectorWorkspaceSelection(settings);
