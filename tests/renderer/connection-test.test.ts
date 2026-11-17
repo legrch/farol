@@ -267,8 +267,10 @@ it("scoped unknown cannot release another writer fence", async () => {
       },
     });
     expect(commandAllowed(h.snapshot, "connector.repair")).toBe(false);
-    expect((await runFreshConnectionTest(h.facade)).state).toBe("refused");
-    expect(h.configure).not.toHaveBeenCalled();
+    // Ping is not gated by writer fences; a live tunnel ping must still send.
+    expect(commandAllowed(h.snapshot, "connector.test-connection")).toBe(true);
+    expect((await runFreshConnectionTest(h.facade)).state).toBe("applied");
+    expect(h.configure).toHaveBeenCalledOnce();
     expect(h.snapshot.intents[key]!.state).toBe("unknown");
   } finally {
     h.cleanup();

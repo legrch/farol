@@ -283,26 +283,44 @@ export function Home({ snapshot, facade }: Props) {
         !snapshot.independentSession ? (
         <section
           className="home-status-card home-health-warning"
-          aria-label="Connection needs attention"
+          aria-label={
+            connection.connected
+              ? "Workspace needs attention"
+              : "Connection needs attention"
+          }
           role="status"
         >
           <div>
-            <h2>Setup complete · connection needs attention</h2>
+            <h2>
+              {connection.connected
+                ? "Connected · workspace needs attention"
+                : "Setup complete · connection needs attention"}
+            </h2>
             <p>
-              Your setup is saved.{" "}
+              {connection.connected
+                ? "The tunnel is live. "
+                : "Your setup is saved. "}
               {first?.description.replace("Completed during setup. ", "") ??
-                "Checking the current connection."}
+                (connection.connected
+                  ? "Review workspace access when you need folders or commands."
+                  : "Checking the current connection.")}
             </p>
           </div>
           <button
             onClick={() =>
               facade.navigate({
                 area: "setup",
-                setupStep: first?.step ?? "connection",
+                setupStep:
+                  first?.step ??
+                  (connection.connected ? "attachment" : "connection"),
               })
             }
           >
-            Review connection
+            {connection.connected
+              ? first?.step === "attachment"
+                ? "Review workspaces"
+                : "Review setup"
+              : "Review connection"}
           </button>
         </section>
       ) : !working &&
@@ -442,6 +460,17 @@ export function Home({ snapshot, facade }: Props) {
                 }
               >
                 Review connection
+              </button>
+            ) : connection.connected &&
+              !computer.externalAccessVerified &&
+              !connection.savedSetupReady &&
+              !checking ? (
+              <button
+                onClick={() =>
+                  facade.navigate({ area: "setup", setupStep: "attachment" })
+                }
+              >
+                Review ChatGPT connection
               </button>
             ) : connection.connected ||
               connection.savedSetupReady ||

@@ -282,8 +282,12 @@ it.each(["stale", "unavailable"] as const)(
 it("never claims working from saved connection evidence without the required sign-in check", async () => {
   const value = working();
   const h = await mount({ ...value, setupSignInCheck: null });
+  // Tunnel can stay Connected; missing sign-in is a separate Setup fact.
   expect(h.host.textContent).toContain(
-    "Setup complete · connection needs attention",
+    "Connected · workspace needs attention",
+  );
+  expect(connectionPresentation({ ...h.c.getSnapshot(), ...value }).connected).toBe(
+    true,
   );
 });
 it("on-demand local diagnostics use the existing command once and stay fenced while pending", async () => {
@@ -367,14 +371,13 @@ it("routes unresolved update evidence to the existing sheet from working Home", 
   );
 });
 
-it("shows that ChatGPT needs checking when the tunnel is connected but attachment is unconfirmed", async () => {
+it("keeps Connected when the tunnel is live but ChatGPT attachment is unconfirmed", async () => {
   const value = working();
   if (value.configuration?.status !== "ready")
     throw Error("fixture settings missing");
   value.configuration.settings.connectors.secureMcp.attachment = null;
   const h = await mount(value);
-  expect(h.host.textContent).toContain("ChatGPT connection needs a check");
-  expect(h.host.querySelector(".home-status-card h2")?.textContent).not.toBe(
+  expect(h.host.querySelector(".home-status-card h2")?.textContent).toBe(
     "Connected",
   );
   expect(h.host.textContent).toContain(
@@ -634,7 +637,7 @@ function restoredSetup() {
 }
 
 it.each(["fresh", "expired"])(
-  "shows attention for an unretained unknown action with %s transport",
+  "keeps tunnel Connected despite an unretained unknown action with %s transport",
   async (transport) => {
     const restored = restoredSetup();
     const value = {
@@ -649,10 +652,11 @@ it.each(["fresh", "expired"])(
     const local = [
       { id: "setup:unretained", state: "unknown" as const, code: null },
     ];
+    const fresh = transport === "fresh";
     expect(connectionPresentation(snapshot, local)).toMatchObject({
-      connected: false,
+      connected: fresh,
       savedSetupReady: false,
-      attention: true,
+      attention: !fresh,
     });
   },
 );
@@ -704,7 +708,7 @@ it.each([
   "different app",
   "no app choice",
   "unknown check",
-])("does not reuse saved setup for %s", async (scenario) => {
+])("does not reuse saved setup for %s while tunnel stays Connected", async (scenario) => {
   const { value, settings, connector } = restoredSetup();
   if (scenario === "different tunnel")
     connector.lastVerifiedAttachment!.tunnelId = "other";
@@ -715,9 +719,13 @@ it.each([
     settings.setup.connect.outcomeUnknown = true;
   }
   const h = await mount(value);
-  expect(
-    connectionPresentation({ ...h.c.getSnapshot(), ...value }).connected,
-  ).toBe(false);
+  const presentation = connectionPresentation({
+    ...h.c.getSnapshot(),
+    ...value,
+  });
+  // Live tunnel is Connected regardless of mismatched saved ChatGPT facts.
+  expect(presentation.connected).toBe(true);
+  expect(presentation.savedSetupReady).toBe(false);
   expect(h.host.textContent).not.toContain("Your ChatGPT setup is saved");
   expect(h.host.textContent).not.toContain("ChatGPT can reach this Mac");
   expect(h.f.api.configure).not.toHaveBeenCalled();

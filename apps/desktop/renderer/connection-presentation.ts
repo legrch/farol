@@ -69,11 +69,16 @@ export function connectionPresentation(
     setupRemembered;
   const savedSetupReady =
     !checking && !transportNeedsAttention && !transportUnconfirmed && setupFactsReady;
+  // Connected tracks the live tunnel only. Workspace and ChatGPT attachment
+  // proofs are separate Setup facts; they must not hide a live transport.
+  // Stale/failed window snapshots still cannot claim Connected.
+  const windowCurrent =
+    snapshot.status === "current" && snapshot.runtime === "ready";
   const connected =
     !checking &&
     !transportNeedsAttention &&
     recentTransport &&
-    (computer.externalAccessVerified || savedSetupReady);
+    windowCurrent;
   const unconfirmedSavedSetup =
     !checking &&
     !transportNeedsAttention &&
@@ -86,13 +91,15 @@ export function connectionPresentation(
       ? "Connection needs attention"
       : connected && computer.externalAccessVerified
         ? "Connected — ChatGPT can reach this Mac"
-        : connected
+        : connected && setupRemembered
           ? "Connected — ChatGPT setup is saved"
-          : unconfirmedSavedSetup
-            ? "Connection not confirmed — ChatGPT setup is saved"
-            : computer.localConnectionCurrent
-              ? "Connection available — ChatGPT connection needs a check"
-              : "Not connected yet";
+          : connected
+            ? "Connected — tunnel is live"
+            : unconfirmedSavedSetup
+              ? "Connection not confirmed — ChatGPT setup is saved"
+              : computer.localConnectionCurrent
+                ? "Connection available — ChatGPT connection needs a check"
+                : "Not connected yet";
   const text = checking
     ? "Checking connection…"
     : transportNeedsAttention
