@@ -19,7 +19,6 @@ import {
   publicContentVisible,
 } from "./chatgpt-public-turn";
 import { publicMarkdownBlock } from "./chatgpt-public-markdown";
-import { chatgptTemporaryToggleLabels } from "./chatgpt/scripts";
 
 // Serialized with the physical page adapter; only public composer DOM is read.
 export function physicalComposerDraft(composer: HTMLElement): string {
@@ -405,7 +404,14 @@ async function physicalPage(
   const equal = (a: unknown, b: unknown) => stable(a) === stable(b);
   const controls = (selector: string, root: ParentNode = document) =>
     [...root.querySelectorAll(selector)].filter(contentVisible);
-  const temporaryToggleSelector = chatgptTemporaryToggleLabels
+  // Keep these labels inline. physicalPage is .toString()'d into a page VM and
+  // must not close over module imports (Vite rewrites them to SSR helpers).
+  const temporaryToggleSelector = [
+    "Turn off temporary chat",
+    "Отключить временный чат",
+    "Выключить временный чат",
+    "Выйти из режима временного чата",
+  ]
     .map((label) => `button[aria-label="${label}"]`)
     .join(",");
   const blocked = () =>
