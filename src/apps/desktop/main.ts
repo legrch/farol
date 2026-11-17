@@ -7771,7 +7771,6 @@ async function runManualDeepTest(
     pendingChatGptAttachmentTask !== null ||
     recoverableChatGptTask !== null ||
     connectorStartInFlight !== null ||
-    !chatGptTaskAdmissionReady() ||
     !connector.isRunning() ||
     connector.getTunnelObservation() !== null ||
     connector.hasUnresolvedEffect() ||
@@ -7779,8 +7778,12 @@ async function runManualDeepTest(
     section !== "browser" ||
     shellOverlay !== "none" ||
     (routeTaskId === "" && !browserHomeSurfaceOpen)
-  )
+  ) {
+    console.error(
+      `FAROL_DEEP_TEST_REFUSED admission=${chatGptTaskAdmission} connectorAdmission=${connectorTaskAdmission} running=${connector?.isRunning() ?? false} page=${currentSurfaceLayout()?.pageVisible === true} section=${section} overlay=${shellOverlay} home=${browserHomeSurfaceOpen} task=${routeTaskId}`,
+    );
     return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+  }
   const conversationFailure = chatGptConversationAdmissionFailure();
   if (conversationFailure) return conversationFailure;
   const settings = snapshot.settings;

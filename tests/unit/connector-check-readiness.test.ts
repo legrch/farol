@@ -111,9 +111,36 @@ it("joins retained loading and negative hydration within one preflight", async (
   expect(route.observeSignInStatus).toHaveBeenCalledTimes(4);
 });
 
+it("gives the temporary page a fresh readiness budget after navigation", async () => {
+  let now = 0;
+  const positive: ChatGptSignInStatusObservation = {
+    state: "authenticated",
+    binding: { sequence: 1, documentGeneration: 1 },
+  };
+  const route = {
+    open: vi.fn(async () => ({ status: "opened" as const })),
+    hasPendingReadinessDocument: () => false,
+    observeSignInStatus: vi.fn(async () => positive),
+    isCurrentSignInStatus: (v: ChatGptSignInStatusObservation) =>
+      v === positive,
+    openTemporaryChat: vi.fn(async () => {
+      now = 1000;
+      return { status: "opened" as const };
+    }),
+  };
+  expect(
+    await prepareConnectorCheckDocument(route, () => true, {
+      now: () => now,
+      wait: async (ms) => {
+        now += ms;
+      },
+      timeoutMs: 300,
+    }),
+  ).toEqual({ ready: true });
+  expect(route.openTemporaryChat).toHaveBeenCalledOnce();
+});
 it.each([
   "permanent-negative",
-  "expired-after-navigation",
   "invalidated",
   "protected-opener",
 ])("refuses %s without another temporary navigation", async (scenario) => {
@@ -139,7 +166,6 @@ it.each([
     isCurrentSignInStatus: (v: ChatGptSignInStatusObservation) =>
       v === positive,
     openTemporaryChat: vi.fn(async () => {
-      if (scenario === "expired-after-navigation") now = 1000;
       if (scenario === "invalidated") live = false;
       return { status: "opened" as const };
     }),
