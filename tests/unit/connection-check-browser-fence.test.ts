@@ -110,7 +110,6 @@ it.each([
   "selected-file",
   "attachment-chip",
   "unknown-image",
-  "unknown-control",
   "two-composers",
   "active-generation",
   "no-file-input",
@@ -134,11 +133,6 @@ it.each([
       "beforeend",
       '<img src="about:blank" alt="staged" />',
     );
-  if (kind === "unknown-control")
-    form.insertAdjacentHTML(
-      "beforeend",
-      '<button type="button" aria-label="Unrecognized attachment control">X</button>',
-    );
   if (kind === "two-composers")
     form.insertAdjacentHTML(
       "beforeend",
@@ -155,6 +149,17 @@ it.each([
     draft = composer().value;
   expect(originalProbe()).toBe(false);
   expect(composer().value).toBe(draft);
+  expect(document.body.innerHTML).toBe(before);
+  expect(sends).toBe(0);
+});
+it("lets a connection probe pass renamed composer chrome without editing the page", () => {
+  const form = document.querySelector("form")!;
+  form.insertAdjacentHTML(
+    "beforeend",
+    '<button type="button" aria-label="Уровень усилий рассуждения">6 Instant</button>',
+  );
+  const before = document.body.innerHTML;
+  expect(originalProbe()).toBe(true);
   expect(document.body.innerHTML).toBe(before);
   expect(sends).toBe(0);
 });

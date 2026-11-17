@@ -141,7 +141,7 @@ export const toggleChatGptSidebarScript = `(() => {
 // only the whole Instant label, never a menu option or a Pro/Thinking label.
 // The selected control can prefix that label with its "Thinking effort" heading.
 export const instantModelLabelPattern =
-  /^(?:(?:Thinking\s+effort|Уровень\s+рассуждения)\s+)?(?:(?:GPT[- ]?)?\d+(?:\.\d+)?\s+)?Instant$/iu;
+  /^(?:(?:Thinking\s+effort|Reasoning\s+effort|Уровень\s+рассуждения|Уровень\s+усилий\s+рассуждения)\s+)?(?:(?:GPT[- ]?)?\d+(?:\.\d+)?\s+)?Instant$/iu;
 
 // ChatGPT localizes accessibility labels and personalization controls. Keep
 // every fallback bound to a unique visible control; unknown layouts still
@@ -184,9 +184,11 @@ const selectedModelControlPredicate = `((button) => {
   const label = (button.innerText || "").trim();
   const aria = button.getAttribute("aria-label");
   return aria === "Select ChatGPT model" || aria === "Выбрать модель ChatGPT" ||
+    aria === "Thinking effort" || aria === "Reasoning effort" ||
+    aria === "Уровень рассуждения" || aria === "Уровень усилий рассуждения" ||
     button.getAttribute("data-testid") === "model-switcher-dropdown-button" ||
     (button.getAttribute("aria-haspopup") === "menu" &&
-      /^(?:(?:Thinking\\s+effort|Уровень\\s+рассуждения)\\s+)?(?:(?:GPT[- ]?)?\\d+(?:\\.\\d+)?\\s+)?(?:Instant|Thinking|Medium|High|Extra High|Pro(?: Standard| Extended)?)$/iu.test(label));
+      /^(?:(?:Thinking\\s+effort|Reasoning\\s+effort|Уровень\\s+рассуждения|Уровень\\s+усилий\\s+рассуждения)\\s+)?(?:(?:GPT[- ]?)?\\d+(?:\\.\\d+)?\\s+)?(?:Instant|Thinking|Medium|High|Extra High|Pro(?: Standard| Extended)?)$/iu.test(label));
 })`;
 
 export const temporaryInstantProfileProbe = `(() => {
@@ -800,6 +802,9 @@ function manualDeepTestDraftGuard(
   refusal = "return { draftPresent: true };",
   mode: "initial" | "exact" = "initial",
   expectedExpression?: string,
+  // Connection Ping must survive ChatGPT renaming composer chrome. Draft text,
+  // attachments and a missing composer still refuse. Deep test stays strict.
+  relaxUnknownControls = false,
 ): string {
   return `
     const manualComposer = findComposer();
@@ -816,16 +821,20 @@ function manualDeepTestDraftGuard(
       '[data-testid="attachment-preview"],[data-testid="composer-attachment"],[data-testid*="file-chip"],[data-testid*="attachment-chip"]'
     )].some(manualVisible) || [...manualForm.querySelectorAll('[aria-label]')].some((element) =>
       manualVisible(element) && /remove file|remove attachment|удалить файл|удалить вложение/iu.test(element.getAttribute('aria-label') || '')) : true;
-    const manualAllowedLabels = new Set(['Add files', 'Add files and more', 'Select ChatGPT model', 'Dictate', 'Start Voice', 'Start voice mode', 'Start Voice Mode', 'Expand', 'Send prompt', 'Send message', 'Send', 'Добавить файлы', 'Добавить файлы и другое', 'Выбрать модель ChatGPT', 'Диктовка', 'Диктовать', 'Начать голосовой режим', 'Развернуть', 'Отправить', 'Отправить сообщение', 'Отправить запрос']);
+    const manualAllowedLabels = new Set(['Add files', 'Add files and more', 'Select ChatGPT model', 'Thinking effort', 'Reasoning effort', 'Dictate', 'Start Voice', 'Start voice mode', 'Start Voice Mode', 'Expand', 'Send prompt', 'Send message', 'Send', 'Добавить файлы', 'Добавить файлы и другое', 'Выбрать модель ChatGPT', 'Уровень рассуждения', 'Уровень усилий рассуждения', 'Диктовка', 'Диктовать', 'Начать голосовой режим', 'Развернуть', 'Отправить', 'Отправить сообщение', 'Отправить запрос']);
     const manualControlSelector = 'button,[role="button"],input[type="button"],input[type="submit"]';
-    const manualUnknownControls = manualForm ? [...new Set([
+    const manualUnknownControls = ${
+      relaxUnknownControls
+        ? "false"
+        : `manualForm ? [...new Set([
       ...manualForm.querySelectorAll(manualControlSelector),
       ...[...document.querySelectorAll(manualControlSelector)].filter((element) => element.form === manualForm)
     ])]
       .filter(manualVisible).some((element) =>
         !element.closest(selectedSelector) &&
         element.getAttribute('data-testid') !== 'send-button' &&
-        !manualAllowedLabels.has(element.getAttribute('aria-label'))) : true;
+        !manualAllowedLabels.has(element.getAttribute('aria-label'))) : true`
+    };
     const manualUnknownImage = manualForm ? [...manualForm.querySelectorAll('img,video,audio')]
       .filter(manualVisible).some((element) => !element.closest(selectedSelector)) : true;
     let manualText = composerDraftText(manualComposer);
@@ -870,7 +879,7 @@ export function connectionCheckDocumentProbe(
   return `(() => {
     if (location.href !== ${JSON.stringify(expectedHref)}) return false;
     ${appSelectionPrelude(appName)}
-    ${manualDeepTestDraftGuard("", "return false;")}
+    ${manualDeepTestDraftGuard("", "return false;", "initial", undefined, true)}
     return ![...document.querySelectorAll(${JSON.stringify(stopControlSelectorList)})]
       .some((element) => appElementVisible(element));
   })()`;
@@ -882,6 +891,7 @@ export function prepareTaskScript(
   requiredAppName?: string,
   deadlineAt?: number,
   manualDeepTest = false,
+  relaxUnknownControls = false,
 ): string {
   if (
     deadlineAt !== undefined &&
@@ -895,7 +905,7 @@ export function prepareTaskScript(
     const prompt = ${JSON.stringify(prompt)};
     ${requiredAppName ? appSelectionPrelude(requiredAppName) : ""}
     ${requiredAppName ? 'if (appSelection().state !== "bound") return { appSelectionLost: true };' : ""}
-    ${manualDeepTest && requiredAppName ? manualDeepTestDraftGuard("") : ""}
+    ${manualDeepTest && requiredAppName ? manualDeepTestDraftGuard("", undefined, "initial", undefined, relaxUnknownControls) : ""}
     ${
       manualDeepTest && requiredAppName
         ? `const manualInitialText = manualText;
@@ -967,7 +977,7 @@ export function prepareTaskScript(
       manualDeepTest && requiredAppName
         ? `{
       if (appSelection().state !== "bound") return { appSelectionLost: true };
-      ${manualDeepTestDraftGuard("", undefined, "exact", "manualInitialText + prompt")}
+      ${manualDeepTestDraftGuard("", undefined, "exact", "manualInitialText + prompt", relaxUnknownControls)}
       return { ready: true, baselineAssistantCount, baselineUserCount, baselineMessageIds, preparedComposerText: manualText };
     }`
         : ""
@@ -1015,7 +1025,7 @@ export function activateTaskScript(
     }
     ${requiredAppName ? appSelectionPrelude(requiredAppName) : ""}
     ${requiredAppName ? 'if (appSelection().state !== "bound") return { appSelectionLost: true };' : ""}
-    ${manualDeepTestPrompt !== undefined && requiredAppName ? manualDeepTestDraftGuard(manualDeepTestPrompt, undefined, "exact") : ""}
+    ${manualDeepTestPrompt !== undefined && requiredAppName ? manualDeepTestDraftGuard(manualDeepTestPrompt, undefined, "exact", undefined, explicitConnectionCheck) : ""}
     const visible = (element) => {
       if (!(element instanceof HTMLElement)) return false;
       const style = getComputedStyle(element);

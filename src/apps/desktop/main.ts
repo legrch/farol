@@ -7730,6 +7730,10 @@ async function runManualDeepTest(
   const originalRoute =
     expectedTaskId === "" ? chatGptRoute : liveTaskRoutes.get(expectedTaskId);
   const targetCurrent = originalRoute?.captureManualTaskTarget();
+  // The ChatGPT home document can already be on screen without the open-browser
+  // flag. Treat that loaded page as the home surface instead of reporting a
+  // phantom in-progress task.
+  if (expectedTaskId === "" && targetCurrent) browserHomeSurfaceOpen = true;
   if (selectedTaskId !== expectedTaskId || !originalRoute || !targetCurrent)
     return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
   const deadline = performance.now() + 1500;

@@ -3215,6 +3215,7 @@ export class ChatGptRoute {
             deadline,
             observer.manualDeepTest === true ||
               observer.connectionCheck === true,
+            observer.connectionCheck === true,
           ),
           true,
         ),

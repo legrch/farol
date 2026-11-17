@@ -17,19 +17,19 @@ const exportedText: Readonly<Record<string, string>> = {
   focusInstantPowerSliderScript:
     "ae8aeccf259a258e89ec817fdf41bda43dd053e68284deab5dd0a036086745ad",
   instantModelLabelPattern:
-    "fb71e4fd5a9f91023fa61552b447ba46ba62e4eae686d5d03825f5ca8966bc17",
+    "943e8e6f467c1c76e5aa90957ade135275a250036c2382718be51aa4934184ce",
   lowerInstantPowerSliderScript:
     "f9beeeed37222bd172e0357a76db9c365ac983a1381c697c4bdf61851c732cdd",
   openInstantPowerPickerScript:
-    "35d478bec310d848eee8d20d0b738deaf1b95a1cde830fdba05ef7e8a8d7932d",
+    "e6d934185bf457a79b1e9e476380682783477d1af228b465746548bcb9012b38",
   openTemporaryPersonalizationScript:
     "92ad5a2d24aafa0e1a440640c46fc2977e896334082ce5633b153b66f888de42",
   readinessProbe:
-    "82cdd7f15ec2419ac3be52aa5aed83b1283959d5b4283a2d30d29641db9f299d",
+    "469d68ebb42d45916ec3130fde45ce92f510d91a7447f08a7f3390888de18809",
   selectTemporaryPersonalizationScript:
     "f55e8364781ff44ae5c9d0de341bbc89bfab313104b1a8f53c5421598771084f",
   temporaryInstantProfileProbe:
-    "5bb04585c39a0eb0b14118066372570d3a0acfe14e940edb17ceb797e4a5beee",
+    "9bf8f38b17543aa6635b8ea09df7f7335379513bca9baa93ee1d1f187bbb9a08",
   toggleChatGptSidebarScript:
     "ed50835e8df388cf5cbb28ee5c57937318b7f3223a7c56d23cef0460e52d5be2",
 };
@@ -59,17 +59,17 @@ const builtText: Readonly<Record<string, () => string>> = {
 
 const builtDigests: Readonly<Record<string, string>> = {
   collapse: "1e54a77ba9d64ad187edc5b25b56cf35ef4f016c4b3b8da154b502e42e5aa524",
-  bind1: "5930fefdc98bce2d1c7d842331c1857ed41863b70d1daf8517be422ff276b3c8",
-  bind2: "b3d199238ed7b13c2afd189608b5b66136e73029e45803029baaa38bcb11bc7a",
-  verify: "159e6784dc1da3764f570e2ae4af6190dbbe2753f803bd05acc50461c6aedeb7",
-  gate: "5895b4344e7668fdf4169b8e9daeb71f3708c24b18045c6ca75e4de378be2ee6",
-  cdp: "83ee9736a998ddbcc620cfc4abfb8547ed6409e2edb3d2040eeb1e87c8fdea29",
+  bind1: "1c138fb6865e1d6a84469f3a78e30b9cf8a7df3b6b9de6ff4a693b199f6a5907",
+  bind2: "fa3c3ae2a6ca7480cbf57a34e2d0ffcd130f32c33fe7618bbdbccbbeb75c9b2e",
+  verify: "c0e37668f1d3974f3f82ae07f19c2843bff9e2b1da6e2cdf0f0bcbeb65460750",
+  gate: "127945a82ee99a6c2f12a6a87734d544a367c10e0a32b75f89308f12e643fbd8",
+  cdp: "784f7d96676e57ebd587ecf263f93e0c337dac767a0fe4b3da75371edba0e801",
   prep1: "667cd2f20d37c865de54a73c907cbb651ccd0eb5a91abf55733152e89b247dc1",
-  prep2: "be828f90e5c33ebb6730c839b3b80357a8416909e26dd24e46125513e9855b0a",
-  act1: "f8c2ca251e3a8f83f6fd6e08d3879e8c0b61e7afb1d8a43fbe3f93eac20588b5",
-  act2: "9fbd680d3e46a027db462515e595c4f5844529429a1c73c6d62e964fcd754ea8",
-  probe1: "f27ef5f5333b4e08da7f6a7b2e5c1c92881a219b94dc4f7b2da17cc4f9342b30",
-  probe2: "ed170d2560bcd2e1f03cf1fe9542ec894324c10d5dac9152a785a58f1333a5b8",
+  prep2: "5971358efba5ae1d476b4c1cc6b017770f53923c2ff6adf5aa2f5f784335bbda",
+  act1: "ab292fe777377bc25c8eb9f949d6280651b2fda2c3b021678fb69645ec3e7e51",
+  act2: "82b50b35208460b51e7b074c58e404b815055fa2b7fa28e4a1309684dba13e9e",
+  probe1: "636d4d065f23242cfecae36c46d19dfc9c76172140be3bfa0d54def7f26dbaff",
+  probe2: "fce32d97548d3bdcd8447683eb3083ad79aff73859fe8cd6f9ab89a8ace55eb0",
 };
 
 describe("page scripts", () => {

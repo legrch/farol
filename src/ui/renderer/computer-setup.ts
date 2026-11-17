@@ -124,10 +124,10 @@ export function computerSetup(snapshot: WindowSnapshot) {
       folderCurrent &&
       challengeCurrent &&
       embedded === "ready",
+    // Workspace access is internal. It must not block the optional ChatGPT test.
     canVerifyEmbeddedApp:
       admissible &&
       !facts.outcomeUnknown &&
-      folderCurrent &&
       challengeCurrent &&
       embedded === "ready",
     next: unknown
