@@ -112,6 +112,16 @@ export function setupStepCheck(
   const observation = snapshot.signInObservation;
   const check = snapshot.setupSignInCheck;
   const saved = settings?.setup.chatgpt;
+  // Sign-in is a first-run setup step. Once setup is finished, a missing or
+  // stale check is not a connection problem and must not be renewed.
+  if (step === "signin" && settings?.setup.journey.dismissed === true)
+    return {
+      state: "success",
+      allowed: true,
+      cause: "Signed in during setup.",
+      action: null,
+      actionError: null,
+    };
   const connector = settings?.connectors.secureMcp;
   const confirmed = setupCompletionChecks(settings, {
     buildId: snapshot.buildId ?? "",

@@ -3293,7 +3293,7 @@ it("does not reopen completed Setup when the saved connection is offline", async
   expect(setup.querySelector(".setup-count")).toBeNull();
   expect(setup.getAttribute("title")).toBe("Setup · Open page");
 });
-it("labels a challenge-scoped connection test as checking while it is in flight", async () => {
+it("keeps the tunnel Connected while a challenge-scoped connection test is in flight", async () => {
   const data = completedBootstrap();
   data.configuration.settings = readySettings();
   const { host, c, f } = await mount(data);
@@ -3314,8 +3314,14 @@ it("labels a challenge-scoped connection test as checking while it is in flight"
   expect(setup.querySelector(".setup-count")).toBeNull();
   expect(setup.getAttribute("title")).toBe("Setup · Open page");
   expect(
-    host.querySelector('.rail-connection[data-checking="true"]'),
+    host.querySelector('.rail-connection[data-connected="true"]'),
   ).toBeTruthy();
+  expect(
+    host.querySelector('.rail-connection[data-checking="true"]'),
+  ).toBeNull();
+  expect(host.querySelector(".rail-connection")?.textContent).toBe(
+    "Connected",
+  );
   await act(async () => {
     wait.resolve({ ok: true, snapshot: data.configuration });
     await pending;
@@ -3479,11 +3485,11 @@ it("shows a connected local tunnel separately from an uncertain app check", asyn
   data.configuration.settings = settings;
   const h = await mount(data);
   expect(h.host.querySelector(".rail-connection")?.textContent).toBe(
-    "Connection available",
+    "Connected",
   );
   expect(
     h.host.querySelector('.rail-connection[data-connected="true"]'),
-  ).toBeNull();
+  ).toBeTruthy();
   expect(h.host.textContent).not.toContain(
     "Connected — ChatGPT can reach this Mac",
   );

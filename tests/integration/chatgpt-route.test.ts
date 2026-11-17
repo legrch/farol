@@ -262,6 +262,21 @@ describe("temporary Instant connector profile", () => {
     );
   });
 
+  it("keeps an already selected Instant model without opening the power slider", async () => {
+    const instant = { ...temporary, instant: true };
+    const route = profileRoute(instant, instant);
+    await expect(route.prepare()).resolves.toBeNull();
+    expect(route.pickerOpens()).toBe(0);
+    expect(route.executeJavaScript).not.toHaveBeenCalledWith(
+      openInstantPowerPickerScript,
+      true,
+    );
+    expect(route.executeJavaScript).not.toHaveBeenCalledWith(
+      focusInstantPowerSliderScript,
+      true,
+    );
+  });
+
   it("opens a fresh temporary chat and actively lowers the model before continuing", async () => {
     const route = profileRoute();
     await expect(route.prepare()).resolves.toBeNull();

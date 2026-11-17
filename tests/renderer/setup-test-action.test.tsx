@@ -32,8 +32,8 @@ describe("step four primary action", () => {
       h.c.navigate({ area: "setup", setupStep: "attachment" });
     });
     const footer = h.host.querySelector(".setup-wizard-footer")!;
-    expect(footer.contains(h.button("Test in ChatGPT")!)).toBe(false);
-    expect(h.button("Back to Home")?.disabled).toBe(false);
+    expect(footer.contains(h.button("Test in ChatGPT")!)).toBe(true);
+    expect(h.button("Back to Home")).toBeUndefined();
     expect(h.host.textContent).toContain("App added and tested");
   });
   it("keeps one admitted request per mounted binding even on pre-submit refusal", async () => {
@@ -93,9 +93,9 @@ describe("step four primary action", () => {
     expect(h.button("Test in ChatGPT")?.disabled).toBe(false);
     await h.publish(readySettings(true));
     expect(h.configuration().settings.setup.journey.dismissed).toBe(true);
-    expect(h.button("Back to Home")?.disabled).toBe(false);
-    await h.click("Back to Home");
-    expect(h.c.getSnapshot().destination.area).toBe("home");
+    const footer = h.host.querySelector(".setup-wizard-footer")!;
+    expect(footer.contains(h.button("Test in ChatGPT")!)).toBe(true);
+    expect(h.button("Back to Home")).toBeUndefined();
   });
 
   it.each([false, true])(

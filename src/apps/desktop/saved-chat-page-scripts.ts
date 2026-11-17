@@ -5,6 +5,7 @@ import {
   publicContentVisible,
 } from "./chatgpt-public-turn";
 import { publicMarkdownBlock } from "./chatgpt-public-markdown";
+import { chatgptTemporaryToggleLabels } from "./chatgpt/scripts";
 
 // These scripts run only in the isolated Farol ChatGPT partition. First-message
 // helpers return content-free metadata. Follow-up observation returns only the
@@ -25,11 +26,13 @@ const composer = `const composer = [
 const composerText = () => composer instanceof HTMLTextAreaElement
   ? composer.value : (composer?.innerText ?? composer?.textContent ?? "");`;
 
-const emptyNormal = `const normalEmpty = () =>
+const temporaryToggleLabelsLiteral = JSON.stringify([...chatgptTemporaryToggleLabels]);
+const emptyNormal = `const temporaryToggleLabels = ${temporaryToggleLabelsLiteral};
+const normalEmpty = () =>
   location.href === expectedHref &&
   new URL(location.href).searchParams.get("temporary-chat") !== "true" &&
   ![...document.querySelectorAll("button")].some((button) =>
-    visible(button) && button.getAttribute("aria-label") === "Turn off temporary chat") &&
+    visible(button) && temporaryToggleLabels.includes(button.getAttribute("aria-label"))) &&
   document.querySelectorAll('[data-message-author-role="user"],[data-message-author-role="assistant"]').length === 0 &&
   composer instanceof HTMLElement && composerText() === "";`;
 
@@ -83,13 +86,14 @@ export function savedChatSubmitScript(
   return `(async () => {
     const expectedHref = ${JSON.stringify(expectedHref)};
     const expectedDigest = ${JSON.stringify(expectedDigest)};
+    const temporaryToggleLabels = ${temporaryToggleLabelsLiteral};
     ${visible}
     ${composer}
     ${digest}
     const safe = () => location.href === expectedHref &&
       new URL(location.href).searchParams.get("temporary-chat") !== "true" &&
       ![...document.querySelectorAll("button")].some((button) =>
-        visible(button) && button.getAttribute("aria-label") === "Turn off temporary chat") &&
+        visible(button) && temporaryToggleLabels.includes(button.getAttribute("aria-label"))) &&
       document.querySelectorAll('[data-message-author-role="user"],[data-message-author-role="assistant"]').length === 0 &&
       composer instanceof HTMLElement;
     if (!safe()) return { clicked: false };
@@ -99,7 +103,7 @@ export function savedChatSubmitScript(
     if (location.href !== expectedHref ||
         new URL(location.href).searchParams.get("temporary-chat") === "true" ||
         [...document.querySelectorAll("button")].some((button) =>
-          visible(button) && button.getAttribute("aria-label") === "Turn off temporary chat") ||
+          visible(button) && temporaryToggleLabels.includes(button.getAttribute("aria-label"))) ||
         document.querySelectorAll('[data-message-author-role="user"],[data-message-author-role="assistant"]').length !== 0 ||
         !(composer instanceof HTMLElement))
       return { clicked: false };
@@ -107,7 +111,9 @@ export function savedChatSubmitScript(
       document.querySelector('[data-testid="send-button"]'),
       document.querySelector('button[aria-label="Send prompt"]'),
       document.querySelector('button[aria-label="Send message"]'),
-      document.querySelector('button[aria-label="Send"]')
+      document.querySelector('button[aria-label="Send"]'),
+      document.querySelector('button[aria-label="Отправить"]'),
+      document.querySelector('button[aria-label="Отправить сообщение"]')
     ].find((element) => visible(element) && element instanceof HTMLButtonElement && !element.disabled);
     if (!(send instanceof HTMLButtonElement)) return { clicked: false };
     send.click();
@@ -298,6 +304,9 @@ async function savedChatFollowUpPage(
   const controls = (selector: string, root: ParentNode = document) =>
     [...root.querySelectorAll(selector)].filter(visible);
   const href = new URL(location.href);
+  const temporaryToggleSelector = chatgptTemporaryToggleLabels
+    .map((label) => `button[aria-label="${label}"]`)
+    .join(",");
   const normal = () =>
     location.href === input.binding.conversationUrl &&
     (href.pathname === `/c/${input.binding.conversationId}` ||
@@ -305,7 +314,7 @@ async function savedChatFollowUpPage(
     !new URL(location.href).search &&
     !new URL(location.href).hash &&
     controls(
-      'button[aria-label="Turn off temporary chat"],[data-testid="login-button"],a[href*="/auth/login"],button[name="login"]',
+      `${temporaryToggleSelector},[data-testid="login-button"],a[href*="/auth/login"],button[name="login"]`,
     ).length === 0;
   if (!normal()) return refuse("SAVED_CHAT_BINDING_STALE");
   const sha256 = async (value: string) =>

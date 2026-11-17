@@ -187,17 +187,14 @@ export function Home({ snapshot, facade }: Props) {
       checking ||
       snapshot.connectionChecking === true ||
       appChecking ||
-      (checklist.completed &&
-        (connectionPending || snapshot.signInObservation?.pending === true)));
+      (checklist.completed && connectionPending));
   const progressTitle = restoring
     ? "Starting Farol…"
     : appChecking
       ? "Checking ChatGPT connection…"
       : connectionPending && !computer.localConnectionCurrent
         ? "Connecting to this Mac…"
-        : snapshot.signInObservation?.pending === true
-          ? "Checking ChatGPT sign-in…"
-          : "Checking connection…";
+        : "Checking connection…";
   const progressDetail = restoring
     ? "Loading your saved setup and connection."
     : appChecking
@@ -283,26 +280,44 @@ export function Home({ snapshot, facade }: Props) {
         !snapshot.independentSession ? (
         <section
           className="home-status-card home-health-warning"
-          aria-label="Connection needs attention"
+          aria-label={
+            connection.connected
+              ? "Workspace needs attention"
+              : "Connection needs attention"
+          }
           role="status"
         >
           <div>
-            <h2>Setup complete · connection needs attention</h2>
+            <h2>
+              {connection.connected
+                ? "Connected · workspace needs attention"
+                : "Setup complete · connection needs attention"}
+            </h2>
             <p>
-              Your setup is saved.{" "}
+              {connection.connected
+                ? "The tunnel is live. "
+                : "Your setup is saved. "}
               {first?.description.replace("Completed during setup. ", "") ??
-                "Checking the current connection."}
+                (connection.connected
+                  ? "Review workspace access when you need folders or commands."
+                  : "Checking the current connection.")}
             </p>
           </div>
           <button
             onClick={() =>
               facade.navigate({
                 area: "setup",
-                setupStep: first?.step ?? "connection",
+                setupStep:
+                  first?.step ??
+                  (connection.connected ? "attachment" : "connection"),
               })
             }
           >
-            Review connection
+            {connection.connected
+              ? first?.step === "attachment"
+                ? "Review workspaces"
+                : "Review setup"
+              : "Review connection"}
           </button>
         </section>
       ) : !working &&
@@ -378,9 +393,11 @@ export function Home({ snapshot, facade }: Props) {
                     ? "Connection needs attention"
                     : connection.connected
                       ? "Connected"
-                      : connection.savedSetupReady
-                        ? "Setup complete"
-                        : "ChatGPT connection needs a check"}
+                      : connection.unconfirmedSavedSetup
+                        ? "Connection not confirmed"
+                        : connection.savedSetupReady
+                          ? "Setup complete"
+                          : "ChatGPT connection needs a check"}
               </h2>
               <p>
                 {checking ? (
@@ -391,9 +408,13 @@ export function Home({ snapshot, facade }: Props) {
                   <>
                     {connection.connected && computer.externalAccessVerified
                       ? "ChatGPT can reach this Mac"
-                      : connection.savedSetupReady
+                      : connection.connected && connection.savedSetupReady
                         ? "Your ChatGPT setup is saved"
-                        : "Connection available · Check the ChatGPT app connection"}{" "}
+                        : connection.connected
+                          ? "The tunnel is live"
+                          : connection.savedSetupReady
+                            ? "Your ChatGPT setup is saved"
+                            : "Connection available · Check the ChatGPT app connection"}{" "}
                     · {workspaceCount}{" "}
                     {workspaceCount === 1 ? "workspace" : "workspaces"}
                   </>
@@ -412,6 +433,7 @@ export function Home({ snapshot, facade }: Props) {
                     </p>
                   )}
                 {!connection.transportNeedsAttention &&
+                  !connection.unconfirmedSavedSetup &&
                   (connection.connected || connection.savedSetupReady) && (
                     <button
                       disabled={

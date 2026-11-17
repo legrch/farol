@@ -2594,6 +2594,12 @@ export class ChatGptRoute {
     )
       return refuseInstant();
 
+    // ChatGPT already shows Instant, including the "6 Instant" label and the
+    // reasoning-effort control. That screen has no separate power slider.
+    // Opening one and refusing the test leaves an empty temporary chat.
+    const alreadyInstant = profile.success && profile.data.instant === true;
+    let selected = profile;
+    if (!alreadyInstant) {
     stage = "picker";
     try {
       // A false result guarantees the opener did not click. Wait for a
@@ -2664,7 +2670,7 @@ export class ChatGptRoute {
       return refuseInstant();
     }
     stage = "selected-model";
-    let selected = await read();
+    selected = await read();
     const selectedDeadline = Date.now() + 2_000;
     while (
       selected.success &&
@@ -2685,6 +2691,7 @@ export class ChatGptRoute {
       !selected.data.instant
     )
       return refuseInstant();
+    }
 
     // An explicitly requested ordinary Instant profile needs no temporary-chat
     // personalization controls. Preserve the owner's account preferences.
@@ -3215,6 +3222,7 @@ export class ChatGptRoute {
             deadline,
             observer.manualDeepTest === true ||
               observer.connectionCheck === true,
+            observer.connectionCheck === true,
           ),
           true,
         ),

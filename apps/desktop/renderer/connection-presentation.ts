@@ -29,12 +29,25 @@ export function connectionPresentation(
     connector.appVerificationPending !== true,
   );
   const verifying = connectorVerificationInFlight(snapshot, local);
-  const transportNeedsAttention =
-    snapshot.connectionStatus?.validUntilMillis != null &&
-    ["reconnecting", "unavailable", "action_required", "stopped"].includes(
-      snapshot.connectionStatus.state,
-    );
+  const transportState = snapshot.connectionStatus?.state ?? null;
+  // Failed transport stays attention even after the original expiry is gone.
+  const transportNeedsAttention = [
+    "reconnecting",
+    "unavailable",
+    "action_required",
+    "stopped",
+  ].includes(transportState ?? "");
+  // The green light is the live tunnel runtime. A missing or expired server
+  // poll is not a user problem. Ping and the ChatGPT test must not be what
+  // turns the light on, and sign-in or workspace checks must not turn it off.
+  const windowCurrent =
+    snapshot.status === "current" && snapshot.runtime === "ready";
+  const tunnelLive =
+    windowCurrent &&
+    computer.facts.runtimeCurrent &&
+    !transportNeedsAttention;
   const checking =
+    !tunnelLive &&
     !snapshot.independentSession &&
     snapshot.status !== "unavailable" &&
     snapshot.status !== "incompatible" &&
@@ -45,42 +58,36 @@ export function connectionPresentation(
       snapshot.runtime === "starting" ||
       verifying) &&
     !(verifying && computer.externalAccessVerified && !transportNeedsAttention);
-  const savedSetupReady =
-    !checking &&
-    !transportNeedsAttention &&
+  const setupFactsReady =
     computer.localConnectionCurrent &&
     !dependencyFences(snapshot, "computer", local).unknown &&
     setupRemembered;
-  const recentTransport =
-    snapshot.connectionStatus?.state === "recent_transport" &&
-    snapshot.connectionStatus.validUntilMillis != null &&
-    snapshot.connectionStatus.validUntilMillis > Date.now();
-  const connected =
-    !checking &&
-    !transportNeedsAttention &&
-    recentTransport &&
-    (computer.externalAccessVerified || savedSetupReady);
+  const savedSetupReady = tunnelLive && setupFactsReady;
+  const connected = tunnelLive;
+  const unconfirmedSavedSetup = false;
   const label = checking
     ? "Checking connection…"
     : transportNeedsAttention
       ? "Connection needs attention"
       : connected && computer.externalAccessVerified
         ? "Connected — ChatGPT can reach this Mac"
-        : connected
+        : connected && setupRemembered
           ? "Connected — ChatGPT setup is saved"
-          : savedSetupReady
-            ? "ChatGPT setup is saved"
-            : computer.localConnectionCurrent
-              ? "Connection available — ChatGPT connection needs a check"
-              : "Not connected yet";
+          : connected
+            ? "Connected — tunnel is live"
+            : unconfirmedSavedSetup
+              ? "Connection not confirmed — ChatGPT setup is saved"
+              : computer.localConnectionCurrent
+                ? "Connection available — ChatGPT connection needs a check"
+                : "Not connected yet";
   const text = checking
     ? "Checking connection…"
     : transportNeedsAttention
       ? "Connection needs attention"
       : connected
         ? "Connected"
-        : savedSetupReady
-          ? "Setup complete"
+        : unconfirmedSavedSetup
+          ? "Connection not confirmed"
           : computer.localConnectionCurrent
             ? "Connection available"
             : "Not connected yet";
@@ -90,7 +97,9 @@ export function connectionPresentation(
     label,
     text,
     savedSetupReady,
-    attention: !checking && !connected && !savedSetupReady,
+    attention:
+      !checking && !connected && !savedSetupReady,
     transportNeedsAttention,
+    unconfirmedSavedSetup,
   };
 }

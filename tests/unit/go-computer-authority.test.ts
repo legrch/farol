@@ -663,6 +663,37 @@ describe("Go Computer host authority mapping", () => {
     expect(f.request).not.toHaveBeenCalled();
   });
 
+  it("rebinds device on owner Verify when the directory inode is unchanged", async () => {
+    const f = await fixture();
+    const added = await f.add();
+    if (!added.ok || added.snapshot.status !== "ready") throw Error("fixture");
+    const before = added.snapshot.settings;
+    const workspace = before.computer.workspaces[0]!;
+    expect(workspace.rootIdentity).toEqual({ device: "1", inode: "2" });
+    f.request.mockClear();
+    const rebound = await f.service.rebindWorkspaceRootIdentity(
+      workspace.workspaceId,
+      before.revision,
+      workspace.root,
+      { device: "9", inode: "2" },
+    );
+    if (!rebound.ok || rebound.snapshot.status !== "ready")
+      throw Error("rebind refused");
+    expect(rebound.snapshot.settings.computer.workspaces[0]).toMatchObject({
+      rootIdentity: { device: "9", inode: "2" },
+      accessCheck: null,
+    });
+    expect(rebound.snapshot.settings.setup.computer.verified).toBeNull();
+    await expect(
+      f.service.rebindWorkspaceRootIdentity(
+        workspace.workspaceId,
+        rebound.snapshot.settings.revision,
+        workspace.root,
+        { device: "9", inode: "3" },
+      ),
+    ).resolves.toMatchObject({ ok: false, error: "WORKSPACE_ROOT_CHANGED" });
+  });
+
   it("refuses binding and verification evidence from a stale configuration", async () => {
     const f = await fixture();
     const added = await f.add();

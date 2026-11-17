@@ -5112,16 +5112,24 @@ async function testConnectionCommand(
         // This callback is reached only after FIRST durable admission. A replay
         // observes its original Go result without rebinding to today's page.
         // Desktop admission is already reserved for this command above.
+        // A saved sign-in checkpoint is not the page. Ping sends from the
+        // live ChatGPT document; prepareConnectorCheckDocument still requires
+        // that document to read as signed in.
+        const refusePrerequisites = (reason: string): never => {
+          console.error(`FAROL_CONNECTION_CHECK_REFUSED ${reason}`);
+          throw new ConnectionCheckRefusal(
+            "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+          );
+        };
         if (
           !embeddedBrowserEnabled() ||
           desktopAdmission.closed() ||
-          !chatGptTaskAdmissionReady() ||
           desktopGoCore !== core ||
           configuration !== config ||
           (selectedTaskId ?? "") !== command.taskId
         ) {
-          throw new ConnectionCheckRefusal(
-            "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+          refusePrerequisites(
+            `host embedded=${embeddedBrowserEnabled()} quit=${desktopAdmission.quitInProgress} update=${desktopAdmission.installedUpdateAdmission} core=${desktopGoCore === core} config=${configuration === config} task=${selectedTaskId ?? ""}/${command.taskId}`,
           );
         }
         const route =
@@ -5131,19 +5139,29 @@ async function testConnectionCommand(
         const owner = window;
         const originalDocument = route?.captureManualTaskTarget();
         if (!route || !owner || owner.isDestroyed() || !originalDocument)
-          throw new ConnectionCheckRefusal(
-            "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+          refusePrerequisites(
+            `document route=${Boolean(route)} owner=${Boolean(owner)} destroyed=${owner?.isDestroyed() ?? true} target=${Boolean(originalDocument)}`,
           );
         const snapshot = config.snapshot();
         if (snapshot.status !== "ready")
-          throw new ConnectionCheckRefusal(
-            "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
-          );
-        const settings = snapshot.settings;
+          refusePrerequisites(`settings status=${snapshot.status}`);
+        let settings = snapshot.settings;
         const connector = settings.connectors.secureMcp;
         const runtime = connector.runtime;
         const appName = selectedConnectorApp(connector);
+        // Stale folder access must not block a tunnel ping. Prefer the current
+        // selection; otherwise the saved verification target or empty consent.
         workspace = connectorWorkspaceSelection(settings);
+        if (workspace === undefined) {
+          const verifiedId = settings.setup.computer.verified?.workspaceId;
+          workspace =
+            verifiedId &&
+            settings.computer.workspaces.some(
+              (item) => item.workspaceId === verifiedId,
+            )
+              ? verifiedId
+              : (settings.computer.workspaces[0]?.workspaceId ?? null);
+        }
         if (
           appName === null ||
           workspace === undefined ||
@@ -5154,8 +5172,8 @@ async function testConnectionCommand(
           runtime.connectorGeneration !== connector.generation ||
           !connectionCheckRuntimeReady(secureMcpConnectorRuntime)
         )
-          throw new ConnectionCheckRefusal(
-            "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+          refusePrerequisites(
+            `runtime app=${appName !== null} workspace=${workspace !== undefined} tunnel=${connector.tunnelId !== null} state=${runtime?.state ?? "missing"}`,
           );
         // A persistent Setup uncertainty, not a check that is still running:
         // it never clears by pinging again, so it has its own code.
@@ -5168,17 +5186,35 @@ async function testConnectionCommand(
         const proof = connectorVerificationProof(observed);
         if (proof && proof.workspaceId !== workspace)
           throw new ConnectionCheckRefusal("CONNECTION_CHECK_OWNER_CHANGED");
-        const challenge = connector.challenge;
-        if (
-          !proof &&
-          (!challenge ||
+        let challenge = connector.challenge;
+        const challengeCurrent =
+          challenge &&
+          challenge.buildId === runtime.buildId &&
+          challenge.runtimeGeneration === runtime.runtimeGeneration &&
+          challenge.computerGeneration === runtime.computerGeneration;
+        // Toolbar/setup ping is the @Farol challenge send. When the previous
+        // one-time challenge was consumed and Go has no retained proof yet,
+        // mint a fresh challenge against the live ready runtime instead of
+        // refusing Send.
+        if (!proof && !challengeCurrent) {
+          const issued = await config.recordSecureMcpChallenge({
+            challenge: randomUUID(),
+            runtimeGeneration: runtime.runtimeGeneration,
+            computerGeneration: runtime.computerGeneration,
+            buildId: runtime.buildId,
+          });
+          if (!issued.ok || issued.snapshot.status !== "ready")
+            refusePrerequisites("challenge-mint");
+          settings = issued.snapshot.settings;
+          challenge = settings.connectors.secureMcp.challenge;
+          if (
+            !challenge ||
             challenge.buildId !== runtime.buildId ||
             challenge.runtimeGeneration !== runtime.runtimeGeneration ||
-            challenge.computerGeneration !== runtime.computerGeneration)
-        )
-          throw new ConnectionCheckRefusal(
-            "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
-          );
+            challenge.computerGeneration !== runtime.computerGeneration
+          )
+            refusePrerequisites("challenge-stale");
+        }
         const challengeSha256 =
           proof?.receipt.challengeSha256 ?? challenge!.challengeSha256;
         const binding: ConnectorAppVerificationBinding = {
@@ -5261,9 +5297,7 @@ async function testConnectionCommand(
             // A failed document probe can mean draft, attachments, activity or
             // an unrecognized layout. Do not invent a more specific observation.
             if (!prepared.ready)
-              throw new ConnectionCheckRefusal(
-                "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
-              );
+              refusePrerequisites(`prepare stage=${prepared.stage}`);
             const document = route.captureConnectionCheckDocument();
             if (!document || !current())
               throw new ConnectionCheckRefusal(
@@ -6558,6 +6592,10 @@ async function runManualDeepTest(
   const originalRoute =
     expectedTaskId === "" ? chatGptRoute : liveTaskRoutes.get(expectedTaskId);
   const targetCurrent = originalRoute?.captureManualTaskTarget();
+  // The ChatGPT home document can already be on screen without the open-browser
+  // flag. Treat that loaded page as the home surface instead of reporting a
+  // phantom in-progress task.
+  if (expectedTaskId === "" && targetCurrent) browserHomeSurfaceOpen = true;
   if (selectedTaskId !== expectedTaskId || !originalRoute || !targetCurrent)
     return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
   const deadline = performance.now() + 1500;
@@ -6593,7 +6631,6 @@ async function runManualDeepTest(
     pendingChatGptAttachmentTask !== null ||
     recoverableChatGptTask !== null ||
     connectorStartInFlight !== null ||
-    !chatGptTaskAdmissionReady() ||
     !connector.isRunning() ||
     connector.getTunnelObservation() !== null ||
     connector.hasUnresolvedEffect() ||
@@ -6601,8 +6638,12 @@ async function runManualDeepTest(
     section !== "browser" ||
     shellOverlay !== "none" ||
     (routeTaskId === "" && !browserHomeSurfaceOpen)
-  )
+  ) {
+    console.error(
+      `FAROL_DEEP_TEST_REFUSED chatgpt=${desktopAdmission.occupied("chatgpt-task")} connector=${desktopAdmission.occupied("connector-task")} running=${connector?.isRunning() ?? false} page=${currentSurfaceLayout()?.pageVisible === true} section=${section} overlay=${shellOverlay} home=${browserHomeSurfaceOpen} task=${routeTaskId}`,
+    );
     return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+  }
   const conversationFailure = chatGptConversationAdmissionFailure();
   if (conversationFailure) return conversationFailure;
   const settings = snapshot.settings;
@@ -6619,28 +6660,90 @@ async function runManualDeepTest(
     buildIdentity.buildId,
   );
   const appName = selectedConnectorApp(selected);
+  const runtime = selected.runtime;
+  // Full check must send when the tunnel/runtime are live. A consumed
+  // attachment is preferred; otherwise use (or mint) the same one-time
+  // challenge Ping already uses. Missing attachment alone is not "not ready".
+  let challenge = selected.challenge;
+  const challengeCurrent =
+    challenge != null &&
+    runtime?.state === "ready" &&
+    challenge.buildId === runtime.buildId &&
+    challenge.runtimeGeneration === runtime.runtimeGeneration &&
+    challenge.computerGeneration === runtime.computerGeneration;
   if (
-    !attachment ||
     !appName ||
-    !selected.runtime ||
+    !runtime ||
+    runtime.state !== "ready" ||
     !selected.tunnelId ||
     selected.appVerificationPending === true ||
     binding.buildId !== buildIdentity.buildId ||
-    binding.connectorGeneration !== String(selected.generation)
+    binding.connectorGeneration !== String(selected.generation) ||
+    (!attachment && !challengeCurrent)
+  ) {
+    if (
+      !appName ||
+      !runtime ||
+      runtime.state !== "ready" ||
+      !selected.tunnelId ||
+      selected.appVerificationPending === true ||
+      binding.buildId !== buildIdentity.buildId ||
+      binding.connectorGeneration !== String(selected.generation)
+    )
+      return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
+    const issued = await owner.recordSecureMcpChallenge({
+      challenge: randomUUID(),
+      runtimeGeneration: runtime.runtimeGeneration,
+      computerGeneration: runtime.computerGeneration,
+      buildId: runtime.buildId,
+    });
+    if (!issued.ok || issued.snapshot.status !== "ready")
+      return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
+    challenge = issued.snapshot.settings.connectors.secureMcp.challenge;
+    if (
+      !challenge ||
+      challenge.buildId !== runtime.buildId ||
+      challenge.runtimeGeneration !== runtime.runtimeGeneration ||
+      challenge.computerGeneration !== runtime.computerGeneration
+    )
+      return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
+  }
+  if (
+    !appName ||
+    !runtime ||
+    runtime.state !== "ready" ||
+    !selected.tunnelId
   )
+    return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
+  let workspaceId =
+    attachment?.workspaceId ?? connectorWorkspaceSelection(settings);
+  if (workspaceId === undefined) {
+    const verifiedId = settings.setup.computer.verified?.workspaceId;
+    workspaceId =
+      verifiedId &&
+      settings.computer.workspaces.some(
+        (item) => item.workspaceId === verifiedId,
+      )
+        ? verifiedId
+        : (settings.computer.workspaces[0]?.workspaceId ?? null);
+  }
+  const challengeSha256 =
+    attachment?.challengeSha256 ?? challenge?.challengeSha256;
+  if (!challengeSha256)
     return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
   const expected: ConnectorAppVerificationBinding = {
     tunnelId: selected.tunnelId,
     connectorGeneration: selected.generation,
     computerGeneration: settings.computer.generation,
-    runtimeGeneration: selected.runtime.runtimeGeneration,
-    challengeSha256: attachment.challengeSha256,
+    runtimeGeneration: runtime.runtimeGeneration,
+    challengeSha256,
     buildId: buildIdentity.buildId,
-    workspaceId: attachment.workspaceId,
+    workspaceId,
     appName,
   };
   const isCurrent = () => {
     const latest = owner.snapshot();
+    // connectorAppBindingCurrent already accepts live challenge or attachment.
     return (
       configuration === owner &&
       desktopGoCore === core &&
@@ -6666,9 +6769,7 @@ async function runManualDeepTest(
       computerConnectorAdmission(summaryFenceRecovery).admissible &&
       !latest.settings.setup.chatgpt.outcomeUnknown &&
       latest.settings.connectors.secureMcp.appVerificationPending !== true &&
-      connectorAppBindingCurrent(latest.settings, expected) &&
-      currentConnectorAttachment(latest.settings, buildIdentity.buildId) !==
-        null
+      connectorAppBindingCurrent(latest.settings, expected)
     );
   };
   const chatAdmission = desktopAdmission.reserveAdmitted("chatgpt-task");

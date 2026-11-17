@@ -68,7 +68,7 @@ it("keeps an existing current connection visible while a new verification is in 
   ).toBe("Connected");
   expect(
     connectionPresentation({ ...snapshot, connectionChecking: true }).text,
-  ).toBe("Checking connection…");
+  ).toBe("Connected");
   expect(
     connectionPresentation({ ...snapshot, runtime: "failed" }, [pending]).text,
   ).not.toBe("Connected");
@@ -279,11 +279,22 @@ it.each(["stale", "unavailable"] as const)(
     );
   },
 );
-it("never claims working from saved connection evidence without the required sign-in check", async () => {
+it("keeps a completed setup connected without a fresh sign-in check", async () => {
   const value = working();
-  const h = await mount({ ...value, setupSignInCheck: null });
-  expect(h.host.textContent).toContain(
-    "Setup complete · connection needs attention",
+  const h = await mount({
+    ...value,
+    setupSignInCheck: null,
+    signInObservation: null,
+  });
+  expect(h.host.textContent).not.toContain("workspace needs attention");
+  expect(h.host.textContent).not.toContain("no current confirmed check");
+  expect(h.host.textContent).not.toContain("Checking ChatGPT sign-in");
+  expect(h.host.querySelector(".home-health-warning")).toBeNull();
+  expect(h.host.querySelector(".home-status-card h2")?.textContent).toBe(
+    "Connected",
+  );
+  expect(connectionPresentation({ ...h.c.getSnapshot(), ...value }).connected).toBe(
+    true,
   );
 });
 it("on-demand local diagnostics use the existing command once and stay fenced while pending", async () => {
@@ -367,27 +378,19 @@ it("routes unresolved update evidence to the existing sheet from working Home", 
   );
 });
 
-it("shows that ChatGPT needs checking when the tunnel is connected but attachment is unconfirmed", async () => {
+it("keeps Connected when the tunnel is live but ChatGPT attachment is unconfirmed", async () => {
   const value = working();
   if (value.configuration?.status !== "ready")
     throw Error("fixture settings missing");
   value.configuration.settings.connectors.secureMcp.attachment = null;
   const h = await mount(value);
-  expect(h.host.textContent).toContain("ChatGPT connection needs a check");
-  expect(h.host.querySelector(".home-status-card h2")?.textContent).not.toBe(
+  expect(h.host.querySelector(".home-status-card h2")?.textContent).toBe(
     "Connected",
   );
-  expect(h.host.textContent).toContain(
-    "Connection available · Check the ChatGPT app connection",
-  );
+  expect(h.host.textContent).toContain("The tunnel is live");
   expect(h.host.textContent).not.toContain("ChatGPT can reach this Mac");
   expect(h.host.textContent).not.toContain("Review connection");
-  expect(h.f.api.configure).not.toHaveBeenCalled();
-  await h.click("Review ChatGPT connection");
-  expect(h.c.getSnapshot().destination).toMatchObject({
-    area: "setup",
-    setupStep: "attachment",
-  });
+  expect(h.host.textContent).not.toContain("Review ChatGPT connection");
   expect(h.f.api.configure).not.toHaveBeenCalled();
 });
 it("remembers a matching earlier ChatGPT verification without claiming current readiness", async () => {
@@ -497,7 +500,7 @@ it("keeps host startup work calm through unavailable journal reads and transient
   expect(h.f.api.configure).not.toHaveBeenCalled();
 });
 
-it("reveals a real sign-in problem only after host checking settles", async () => {
+it("does not turn an unread sign-in into attention after the connection check settles", async () => {
   const saved = working();
   const value: Partial<WindowSnapshot> = {
     ...saved,
@@ -511,7 +514,11 @@ it("reveals a real sign-in problem only after host checking settles", async () =
   const h = await mount(value);
   expect(h.host.textContent).not.toContain("needs attention");
   await h.set({ ...value, connectionChecking: false });
-  expect(h.host.textContent).toContain("needs attention");
+  expect(h.host.querySelector(".home-status-card h2")?.textContent).toBe(
+    "Connected",
+  );
+  expect(h.host.textContent).not.toContain("needs attention");
+  expect(h.host.textContent).not.toContain("no current confirmed check");
   expect(h.host.querySelector('[aria-busy="true"]')).toBeNull();
 });
 
@@ -576,7 +583,8 @@ it("shows automatic ChatGPT check progress and reveals the same browser without 
     setupSignInCheck: null,
   });
   expect(h.host.querySelector(".home-connection-progress")).toBeNull();
-  expect(h.host.querySelector(".home-health-warning")).not.toBeNull();
+  expect(h.host.querySelector(".home-health-warning")).toBeNull();
+  expect(h.host.textContent).not.toContain("no current confirmed check");
 });
 
 it.each(["unobserved", "expired", "fresh"] as const)(
@@ -600,7 +608,8 @@ it.each(["unobserved", "expired", "fresh"] as const)(
       },
     };
     expect(computerSetup(snapshot).externalAccessVerified).toBe(true);
-    expect(connectionPresentation(snapshot).connected).toBe(mode === "fresh");
+    expect(connectionPresentation(snapshot).connected).toBe(true);
+    expect(connectionPresentation(snapshot).text).toBe("Connected");
   },
 );
 
@@ -634,7 +643,7 @@ function restoredSetup() {
 }
 
 it.each(["fresh", "expired"])(
-  "shows attention for an unretained unknown action with %s transport",
+  "keeps tunnel Connected despite an unretained unknown action with %s transport",
   async (transport) => {
     const restored = restoredSetup();
     const value = {
@@ -650,9 +659,9 @@ it.each(["fresh", "expired"])(
       { id: "setup:unretained", state: "unknown" as const, code: null },
     ];
     expect(connectionPresentation(snapshot, local)).toMatchObject({
-      connected: false,
+      connected: true,
       savedSetupReady: false,
-      attention: true,
+      attention: false,
     });
   },
 );
@@ -704,7 +713,7 @@ it.each([
   "different app",
   "no app choice",
   "unknown check",
-])("does not reuse saved setup for %s", async (scenario) => {
+])("does not reuse saved setup for %s while tunnel stays Connected", async (scenario) => {
   const { value, settings, connector } = restoredSetup();
   if (scenario === "different tunnel")
     connector.lastVerifiedAttachment!.tunnelId = "other";
@@ -715,9 +724,13 @@ it.each([
     settings.setup.connect.outcomeUnknown = true;
   }
   const h = await mount(value);
-  expect(
-    connectionPresentation({ ...h.c.getSnapshot(), ...value }).connected,
-  ).toBe(false);
+  const presentation = connectionPresentation({
+    ...h.c.getSnapshot(),
+    ...value,
+  });
+  // Live tunnel is Connected regardless of mismatched saved ChatGPT facts.
+  expect(presentation.connected).toBe(true);
+  expect(presentation.savedSetupReady).toBe(false);
   expect(h.host.textContent).not.toContain("Your ChatGPT setup is saved");
   expect(h.host.textContent).not.toContain("ChatGPT can reach this Mac");
   expect(h.f.api.configure).not.toHaveBeenCalled();
@@ -750,7 +763,7 @@ it("keeps a current transport failure visible instead of claiming the app works"
 });
 
 it.each(["unobserved", "expired"])(
-  "shows saved setup without a connection claim for %s transport",
+  "keeps a live tunnel Connected when the server poll is %s",
   async (scenario) => {
     const { value: restored } = restoredSetup();
     const value = {
@@ -766,13 +779,17 @@ it.each(["unobserved", "expired"])(
       ...value,
     });
     expect(presentation).toMatchObject({
-      connected: false,
+      connected: true,
       attention: false,
-      savedSetupReady: true,
-      text: "Setup complete",
+      text: "Connected",
+      unconfirmedSavedSetup: false,
     });
+    expect(h.host.querySelector(".home-status-card h2")?.textContent).toBe(
+      "Connected",
+    );
     expect(h.host.textContent).toContain("Your ChatGPT setup is saved");
-    expect(h.host.textContent).not.toContain("Review ChatGPT connection");
+    expect(h.host.textContent).not.toContain("Connection not confirmed");
+    expect(h.host.textContent).not.toContain("Review connection");
     expect(h.host.textContent).not.toContain("ChatGPT can reach this Mac");
     expect(h.f.api.configure).not.toHaveBeenCalled();
   },
@@ -800,11 +817,85 @@ it.each(["expired", "withdrawn"])(
           : unavailableConnectionStatus,
     });
     expect(h.host.querySelector(".home-status-card h2")?.textContent).toBe(
-      "Setup complete",
+      "Connected",
     );
-    expect(h.host.textContent).toContain("Your ChatGPT setup is saved");
-    expect(h.host.textContent).not.toContain("ChatGPT can reach this Mac");
-    expect(h.host.textContent).toContain("Last ChatGPT verification:");
+    expect(h.host.textContent).toContain("ChatGPT can reach this Mac");
+    expect(h.host.textContent).not.toContain("Connection not confirmed");
     expect(h.f.api.configure).not.toHaveBeenCalled();
   },
 );
+
+// Scripted renderer state only; no app, provider or production profile is used.
+it.each(["unobserved", "unavailable", "stopped", "expired"] as const)(
+  "keeps a live tunnel green unless transport is %s",
+  async (mode) => {
+    const restored = restoredSetup();
+    const failed = mode === "unavailable" || mode === "stopped";
+    const value = {
+      ...restored.value,
+      connectionStatus: {
+        ...unavailableConnectionStatus,
+        revision: 1,
+        state:
+          mode === "expired"
+            ? ("recent_transport" as const)
+            : mode,
+        validUntilMillis: mode === "expired" ? Date.now() - 1 : null,
+      },
+    };
+    const h = await mount(value);
+    const presentation = connectionPresentation({
+      ...h.c.getSnapshot(),
+      ...value,
+    });
+    expect(presentation.connected).toBe(!failed);
+    expect(presentation.attention).toBe(failed);
+    expect(presentation.text).toBe(
+      failed ? "Connection needs attention" : "Connected",
+    );
+    expect(h.host.querySelector(".home-status-card h2")?.textContent).toBe(
+      failed ? "Connection needs attention" : "Connected",
+    );
+    expect(
+      h.host
+        .querySelector(".home-working-mark")
+        ?.getAttribute("data-attention"),
+    ).toBe(failed ? "true" : null);
+    expect(h.host.querySelector(".home-working-mark")?.textContent).toBe(
+      failed ? "!" : "✓",
+    );
+    expect(h.f.api.configure).not.toHaveBeenCalled();
+    if (failed) {
+      await h.click("Review connection");
+      expect(h.c.getSnapshot().destination).toMatchObject({
+        area: "setup",
+        setupStep: "connection",
+      });
+      expect(h.f.api.configure).not.toHaveBeenCalled();
+    }
+  },
+);
+
+it("keeps saved Setup checking neutral until current transport is confirmed", async () => {
+  const restored = restoredSetup();
+  const value = {
+    ...restored.value,
+    connectionStatus: {
+      ...unavailableConnectionStatus,
+      state: "unobserved" as const,
+      validUntilMillis: null,
+    },
+  };
+  const h = await mount(value);
+  const presentation = connectionPresentation({
+    ...h.c.getSnapshot(),
+    ...value,
+    connectionChecking: true,
+  });
+  expect(presentation).toMatchObject({
+    checking: false,
+    connected: true,
+    attention: false,
+    text: "Connected",
+  });
+});

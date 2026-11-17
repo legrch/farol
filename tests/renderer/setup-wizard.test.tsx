@@ -1027,8 +1027,14 @@ describe("always-open Setup instructions", () => {
       return { ok: true, snapshot: { status: "ready", settings: ready } };
     });
     await h.click("Test in ChatGPT");
+    expect(h.c.getSnapshot().destination).toMatchObject({
+      area: "chatgpt",
+      connectionCheckReturn: true,
+    });
     await h.navigate("attachment");
-    expect(h.button("Back to Home")?.disabled).toBe(false);
+    const footer = h.host.querySelector(".setup-wizard-footer")!;
+    expect(footer.contains(h.button("Test in ChatGPT")!)).toBe(true);
+    expect(h.button("Back to Home")).toBeUndefined();
     expect(h.host.textContent).toContain("✓ Everything works");
   });
 
@@ -1068,10 +1074,10 @@ describe("always-open Setup instructions", () => {
   });
   it.each([
     ["recent_transport", 60_000, true],
-    ["recent_transport", -60_000, false],
+    ["recent_transport", -60_000, true],
     ["unavailable", 60_000, false],
   ] as const)(
-    "shows a live connection only for current server evidence: %s",
+    "shows a live tunnel as connected unless transport failed: %s",
     async (state, offset, live) => {
       const h = await mount({
         step: "connection",
@@ -1101,8 +1107,7 @@ describe("always-open Setup instructions", () => {
     expect(key.value).toBe("");
     expect(key.placeholder).toBe("••••••••");
     expect(h.button("Connect")).toBeUndefined();
-    expect(h.host.textContent).toContain("Connection saved");
-    expect(h.host.textContent).not.toContain("✓ Connected");
+    expect(h.host.textContent).toContain("✓ Connected");
     await h.remount();
     expect(h.button("Connect")).toBeUndefined();
     expect(h.f.api.configure).not.toHaveBeenCalled();
@@ -1285,7 +1290,7 @@ it("retains completed ChatGPT setup without granting stale attachment authority"
     ".setup-wizard-footer .primary",
   );
   expect(exit?.disabled).toBe(false);
-  expect(exit?.textContent).toMatch(/^Back to /);
+  expect(exit?.textContent).toBe("Test in ChatGPT");
 });
 
 it("completed Setup keeps Next and returns to Activity rather than forcing Home", async () => {
@@ -1304,6 +1309,7 @@ it("completed Setup keeps Next and returns to Activity rather than forcing Home"
     );
     expect(h.c.getSnapshot().destination.setupStep).toBe(expected);
   }
-  await h.click("Back to Activity");
-  expect(h.c.getSnapshot().destination.area).toBe("activity");
+  expect(
+    h.host.querySelector(".setup-wizard-footer .primary")?.textContent,
+  ).toBe("Test in ChatGPT");
 });

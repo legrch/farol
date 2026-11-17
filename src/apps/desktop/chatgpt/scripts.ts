@@ -141,23 +141,33 @@ export const toggleChatGptSidebarScript = `(() => {
 // only the whole Instant label, never a menu option or a Pro/Thinking label.
 // The selected control can prefix that label with its "Thinking effort" heading.
 export const instantModelLabelPattern =
-  /^(?:(?:Thinking\s+effort|Уровень\s+рассуждения)\s+)?(?:(?:GPT[- ]?)?\d+(?:\.\d+)?\s+)?Instant$/iu;
+  /^(?:(?:Thinking\s+effort|Reasoning\s+effort|Уровень\s+рассуждения|Уровень\s+усилий\s+рассуждения)\s+)?(?:(?:GPT[- ]?)?\d+(?:\.\d+)?\s+)?Instant$/iu;
 
 // ChatGPT localizes accessibility labels and personalization controls. Keep
 // every fallback bound to a unique visible control; unknown layouts still
 // refuse the connection check before Send.
-const temporaryToggleLabels = [
+export const chatgptTemporaryToggleLabels = [
   "Turn off temporary chat",
   "Отключить временный чат",
   "Выключить временный чат",
   "Выйти из режима временного чата",
 ] as const;
+const temporaryToggleLabels = chatgptTemporaryToggleLabels;
 const personalizedLabels = [
   "Personalized",
   "С персонализацией",
   "Персонализированный",
 ] as const;
 const unpersonalizedLabels = ["Unpersonalized", "Без персонализации"] as const;
+// ChatGPT's home composer is still one visible text box, but it is no longer
+// always #prompt-textarea inside a <form> that owns input[type=file].
+const composerSelectors = [
+  "#prompt-textarea",
+  '[data-testid="prompt-textarea"]',
+  '[contenteditable="true"][data-virtualkeyboard="true"]',
+  '[contenteditable="true"][role="textbox"]',
+] as const;
+const composerSelectorList = composerSelectors.join(",");
 const sendControlSelectors = [
   '[data-testid="send-button"]',
   'button[aria-label="Send prompt"]',
@@ -165,14 +175,29 @@ const sendControlSelectors = [
   'button[aria-label="Send"]',
   'button[aria-label="Отправить"]',
   'button[aria-label="Отправить сообщение"]',
+  'button[aria-label="Отправить запрос"]',
 ] as const;
+const stopControlSelectors = [
+  '[data-testid="stop-button"]',
+  'button[aria-label="Stop generating"]',
+  'button[aria-label="Stop"]',
+  'button[aria-label="Остановить генерацию"]',
+  'button[aria-label="Остановить"]',
+] as const;
+const labelledSignInPattern =
+  /^(log in|sign in|sign up|войти|войти в аккаунт|регистрация)$/iu;
+const pluginSectionLabels = ["Plugins", "Плагины"] as const;
+const filesSectionLabels = ["Files", "Файлы"] as const;
+const stopControlSelectorList = stopControlSelectors.join(",");
 const selectedModelControlPredicate = `((button) => {
   const label = (button.innerText || "").trim();
   const aria = button.getAttribute("aria-label");
   return aria === "Select ChatGPT model" || aria === "Выбрать модель ChatGPT" ||
+    aria === "Thinking effort" || aria === "Reasoning effort" ||
+    aria === "Уровень рассуждения" || aria === "Уровень усилий рассуждения" ||
     button.getAttribute("data-testid") === "model-switcher-dropdown-button" ||
     (button.getAttribute("aria-haspopup") === "menu" &&
-      /^(?:(?:Thinking\\s+effort|Уровень\\s+рассуждения)\\s+)?(?:(?:GPT[- ]?)?\\d+(?:\\.\\d+)?\\s+)?(?:Instant|Thinking|Medium|High|Extra High|Pro(?: Standard| Extended)?)$/iu.test(label));
+      /^(?:(?:Thinking\\s+effort|Reasoning\\s+effort|Уровень\\s+рассуждения|Уровень\\s+усилий\\s+рассуждения)\\s+)?(?:(?:GPT[- ]?)?\\d+(?:\\.\\d+)?\\s+)?(?:Instant|Thinking|Medium|High|Extra High|Pro(?: Standard| Extended)?)$/iu.test(label));
 })`;
 
 export const temporaryInstantProfileProbe = `(() => {
@@ -183,9 +208,7 @@ export const temporaryInstantProfileProbe = `(() => {
     return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
   };
   const composer = [
-    document.querySelector("#prompt-textarea"),
-    document.querySelector('[data-testid="prompt-textarea"]'),
-    document.querySelector('[contenteditable="true"][data-virtualkeyboard="true"]')
+    ${composerSelectors.map((selector) => `document.querySelector(${JSON.stringify(selector)})`).join(",\n    ")}
   ].find(visible);
   const draft = composer instanceof HTMLTextAreaElement
     ? composer.value
@@ -295,11 +318,8 @@ export const activityProbe = `(() => {
     const box = element.getBoundingClientRect();
     return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
   };
-  const running = [
-    document.querySelector('[data-testid="stop-button"]'),
-    document.querySelector('button[aria-label="Stop generating"]'),
-    document.querySelector('button[aria-label="Stop"]')
-  ].some(visible);
+  const running = ${JSON.stringify([...stopControlSelectors])}
+    .map((selector) => document.querySelector(selector)).some(visible);
   return { running };
 })()`;
 
@@ -310,11 +330,9 @@ export const cancelTaskScript = `(() => {
     const box = element.getBoundingClientRect();
     return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
   };
-  const stop = [
-    document.querySelector('[data-testid="stop-button"]'),
-    document.querySelector('button[aria-label="Stop generating"]'),
-    document.querySelector('button[aria-label="Stop"]')
-  ].find((element) => visible(element) && element instanceof HTMLButtonElement && !element.disabled);
+  const stop = ${JSON.stringify([...stopControlSelectors])}
+    .map((selector) => document.querySelector(selector))
+    .find((element) => visible(element) && element instanceof HTMLButtonElement && !element.disabled);
   if (!(stop instanceof HTMLButtonElement)) return { activated: false };
   stop.click();
   return { activated: true };
@@ -327,16 +345,14 @@ export const readinessProbe = `(() => {
     const box = element.getBoundingClientRect();
     return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
   };
-  const composer = [...document.querySelectorAll(
-    '#prompt-textarea,[data-testid="prompt-textarea"],[contenteditable="true"][data-virtualkeyboard="true"]'
-  )].some(visible);
+  const composer = [...document.querySelectorAll(${JSON.stringify(composerSelectorList)})].some(visible);
   const explicitSignIn = [
     document.querySelector('[data-testid="login-button"]'),
     document.querySelector('a[href*="/auth/login"]'),
     document.querySelector('button[name="login"]')
   ].some(visible);
   const labelledSignIn = [...document.querySelectorAll("a,button")]
-    .some((element) => visible(element) && /^(log in|sign in|sign up)$/iu.test((element.textContent || "").trim()));
+    .some((element) => visible(element) && ${labelledSignInPattern}.test((element.textContent || "").trim()));
   return { composerVisible: composer, signInVisible: explicitSignIn || labelledSignIn };
 })()`;
 
@@ -350,9 +366,7 @@ function appSelectionPrelude(appName: string): string {
       return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
     };
     const findComposer = () => [
-      document.querySelector("#prompt-textarea"),
-      document.querySelector('[data-testid="prompt-textarea"]'),
-      document.querySelector('[contenteditable="true"][data-virtualkeyboard="true"]')
+      ${composerSelectors.map((selector) => `document.querySelector(${JSON.stringify(selector)})`).join(",\n      ")}
     ].find(appElementVisible);
     const selectedSelector = [
       '[data-testid="composer-app-chip"]',
@@ -368,7 +382,7 @@ function appSelectionPrelude(appName: string): string {
         ""
       ).trim();
       return raw
-        .replace(/^remove\\s+/iu, "")
+        .replace(/^(?:remove|удалить)\\s+/iu, "")
         .replace(/^app:\\s*/iu, "")
         .replace(/^@/u, "")
         .replace(/\\s+button$/iu, "")
@@ -442,6 +456,15 @@ function appSelectionPrelude(appName: string): string {
         if (exactLinks.length === 1) return "";
       }
       return text;
+    };
+    const composerPlaceholderText = (input) => {
+      if (!(input instanceof HTMLElement)) return "";
+      return (
+        input.getAttribute("placeholder") ||
+        input.getAttribute("aria-placeholder") ||
+        input.querySelector("[data-placeholder]")?.getAttribute("data-placeholder") ||
+        ""
+      ).trim();
     };
   `;
 }
@@ -556,9 +579,12 @@ export function bindChatGptAppScript(
         }
         return false;
       };
-      const headings = labels.filter((element) => normalizedLabel(element) === "Plugins" &&
+      const pluginHeadings = ${JSON.stringify([...pluginSectionLabels])};
+      const fileSectionHeadings = ${JSON.stringify([...filesSectionLabels])};
+      const headings = labels.filter((element) => pluginHeadings.includes(normalizedLabel(element)) &&
         pickerRootFor(element) !== null);
-      const fileHeadings = labels.filter((element) => normalizedLabel(element) === "Files");
+      const fileHeadings = labels.filter((element) =>
+        fileSectionHeadings.includes(normalizedLabel(element)));
       optionCandidates = labels.filter((element) =>
         normalizedLabel(element) === requiredAppName &&
         ![...element.children].some((child) => normalizedLabel(child) === requiredAppName) &&
@@ -707,7 +733,7 @@ export function installManualAppGateScript(appName: string): string {
       const button = target.closest("button");
       const form = button?.closest("form");
       const knownSend = target.closest(${JSON.stringify(sendControlSelectors.join(","))});
-      const knownCancel = target.closest('[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]');
+      const knownCancel = target.closest(${JSON.stringify(stopControlSelectorList)});
       const formComposer = form instanceof HTMLFormElement
         ? submissionComposerIn(form)
         : null;
@@ -788,35 +814,62 @@ function manualDeepTestDraftGuard(
   refusal = "return { draftPresent: true };",
   mode: "initial" | "exact" = "initial",
   expectedExpression?: string,
+  // Connection Ping must survive ChatGPT renaming composer chrome. Draft text,
+  // attachments and a missing composer still refuse. Deep test stays strict.
+  relaxUnknownControls = false,
 ): string {
   return `
     const manualComposer = findComposer();
     const manualForm = manualComposer instanceof HTMLElement ? manualComposer.closest('form') : null;
+    // Ping may run on the home composer, which has no <form> and no file input.
+    // Walk up to the toolbar that holds the add-files button and look there.
+    const manualShell = manualForm || ${
+      relaxUnknownControls
+        ? `(manualComposer instanceof HTMLElement ? (() => {
+      let node = manualComposer.parentElement;
+      for (let depth = 0; node && depth < 8; depth += 1) {
+        if (node.querySelector('button,input[type="file"]')) return node;
+        node = node.parentElement;
+      }
+      return manualComposer.parentElement;
+    })() : null)`
+        : "null"
+    };
+    const manualScope = ${relaxUnknownControls ? "manualShell" : "manualForm"};
     const manualVisible = (element) => {
       if (!(element instanceof HTMLElement)) return false;
       const style = getComputedStyle(element), box = element.getBoundingClientRect();
       return style.display !== 'none' && style.visibility !== 'hidden' && box.width > 0 && box.height > 0;
     };
-    const manualInputs = manualForm ? [...document.querySelectorAll('input[type="file"]')]
-      .filter((element) => manualForm.contains(element) || element.form === manualForm) : [];
-    const manualComposers = [...new Set(document.querySelectorAll('#prompt-textarea,[data-testid="prompt-textarea"],[contenteditable="true"][data-virtualkeyboard="true"]'))].filter(manualVisible);
-    const manualAttachments = manualForm ? [...manualForm.querySelectorAll(
+    const manualInputs = manualScope ? [...document.querySelectorAll('input[type="file"]')]
+      .filter((element) => manualScope.contains(element) || element.form === manualForm) : [];
+    const manualComposers = [...new Set(document.querySelectorAll(${JSON.stringify(composerSelectorList)}))].filter(manualVisible);
+    const manualAttachments = manualScope ? [...manualScope.querySelectorAll(
       '[data-testid="attachment-preview"],[data-testid="composer-attachment"],[data-testid*="file-chip"],[data-testid*="attachment-chip"]'
-    )].some(manualVisible) || [...manualForm.querySelectorAll('[aria-label]')].some((element) =>
+    )].some(manualVisible) || [...manualScope.querySelectorAll('[aria-label]')].some((element) =>
       manualVisible(element) && /remove file|remove attachment|удалить файл|удалить вложение/iu.test(element.getAttribute('aria-label') || '')) : true;
-    const manualAllowedLabels = new Set(['Add files', 'Add files and more', 'Select ChatGPT model', 'Dictate', 'Start Voice', 'Start voice mode', 'Start Voice Mode', 'Expand', 'Send prompt', 'Send message', 'Send', 'Добавить файлы', 'Добавить файлы и другое', 'Выбрать модель ChatGPT', 'Диктовка', 'Диктовать', 'Начать голосовой режим', 'Развернуть', 'Отправить', 'Отправить сообщение']);
+    const manualAllowedLabels = new Set(['Add files', 'Add files and more', 'Select ChatGPT model', 'Thinking effort', 'Reasoning effort', 'Dictate', 'Start Voice', 'Start voice mode', 'Start Voice Mode', 'Start voice conversation', 'Expand', 'Send prompt', 'Send message', 'Send', 'Добавить файлы', 'Добавить файлы и другое', 'Выбрать модель ChatGPT', 'Уровень рассуждения', 'Уровень усилий рассуждения', 'Диктовка', 'Диктовать', 'Начать голосовой режим', 'Начать голосовой разговор', 'Развернуть', 'Отправить', 'Отправить сообщение', 'Отправить запрос']);
     const manualControlSelector = 'button,[role="button"],input[type="button"],input[type="submit"]';
-    const manualUnknownControls = manualForm ? [...new Set([
+    const manualUnknownControls = ${
+      relaxUnknownControls
+        ? "false"
+        : `manualForm ? [...new Set([
       ...manualForm.querySelectorAll(manualControlSelector),
       ...[...document.querySelectorAll(manualControlSelector)].filter((element) => element.form === manualForm)
     ])]
       .filter(manualVisible).some((element) =>
         !element.closest(selectedSelector) &&
         element.getAttribute('data-testid') !== 'send-button' &&
-        !manualAllowedLabels.has(element.getAttribute('aria-label'))) : true;
-    const manualUnknownImage = manualForm ? [...manualForm.querySelectorAll('img,video,audio')]
+        !manualAllowedLabels.has(element.getAttribute('aria-label'))) : true`
+    };
+    const manualUnknownImage = manualScope ? [...manualScope.querySelectorAll('img,video,audio')]
       .filter(manualVisible).some((element) => !element.closest(selectedSelector)) : true;
     let manualText = composerDraftText(manualComposer);
+    ${
+      relaxUnknownControls
+        ? `if (manualText.trim() === composerPlaceholderText(manualComposer) && composerPlaceholderText(manualComposer) !== "") manualText = "";`
+        : ""
+    }
     const manualExpected = ${expectedExpression ?? JSON.stringify(expectedText)};
     if (manualComposer instanceof HTMLElement && !(manualComposer instanceof HTMLTextAreaElement) &&
         appSelectionFor(manualComposer).state === 'bound') {
@@ -833,7 +886,7 @@ function manualDeepTestDraftGuard(
         }
       }
     }
-    if (!(manualComposer instanceof HTMLElement) || !manualForm || manualComposers.length !== 1 || manualComposers[0] !== manualComposer || manualInputs.length === 0 || manualAttachments || manualUnknownControls || manualUnknownImage ||
+    if (!(manualComposer instanceof HTMLElement) || !manualScope || manualComposers.length !== 1 || manualComposers[0] !== manualComposer || ${relaxUnknownControls ? "false" : "manualInputs.length === 0"} || manualAttachments || manualUnknownControls || manualUnknownImage ||
         manualInputs.some((input) => !(input instanceof HTMLInputElement) || !input.files || input.files.length > 0) ||
         ${
           mode === "initial"
@@ -858,8 +911,8 @@ export function connectionCheckDocumentProbe(
   return `(() => {
     if (location.href !== ${JSON.stringify(expectedHref)}) return false;
     ${appSelectionPrelude(appName)}
-    ${manualDeepTestDraftGuard("", "return false;")}
-    return ![...document.querySelectorAll('[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]')]
+    ${manualDeepTestDraftGuard("", "return false;", "initial", undefined, true)}
+    return ![...document.querySelectorAll(${JSON.stringify(stopControlSelectorList)})]
       .some((element) => appElementVisible(element));
   })()`;
 }
@@ -870,6 +923,7 @@ export function prepareTaskScript(
   requiredAppName?: string,
   deadlineAt?: number,
   manualDeepTest = false,
+  relaxUnknownControls = false,
 ): string {
   if (
     deadlineAt !== undefined &&
@@ -883,7 +937,7 @@ export function prepareTaskScript(
     const prompt = ${JSON.stringify(prompt)};
     ${requiredAppName ? appSelectionPrelude(requiredAppName) : ""}
     ${requiredAppName ? 'if (appSelection().state !== "bound") return { appSelectionLost: true };' : ""}
-    ${manualDeepTest && requiredAppName ? manualDeepTestDraftGuard("") : ""}
+    ${manualDeepTest && requiredAppName ? manualDeepTestDraftGuard("", undefined, "initial", undefined, relaxUnknownControls) : ""}
     ${
       manualDeepTest && requiredAppName
         ? `const manualInitialText = manualText;
@@ -897,9 +951,7 @@ export function prepareTaskScript(
       return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
     };
     const composer = [
-      document.querySelector("#prompt-textarea"),
-      document.querySelector('[data-testid="prompt-textarea"]'),
-      document.querySelector('[contenteditable="true"][data-virtualkeyboard="true"]')
+      ${composerSelectors.map((selector) => `document.querySelector(${JSON.stringify(selector)})`).join(",\n      ")}
     ].find(visible);
     const baselineAssistantCount = document.querySelectorAll('[data-message-author-role="assistant"]').length;
     const baselineUserCount = document.querySelectorAll('[data-message-author-role="user"]').length;
@@ -955,7 +1007,7 @@ export function prepareTaskScript(
       manualDeepTest && requiredAppName
         ? `{
       if (appSelection().state !== "bound") return { appSelectionLost: true };
-      ${manualDeepTestDraftGuard("", undefined, "exact", "manualInitialText + prompt")}
+      ${manualDeepTestDraftGuard("", undefined, "exact", "manualInitialText + prompt", relaxUnknownControls)}
       return { ready: true, baselineAssistantCount, baselineUserCount, baselineMessageIds, preparedComposerText: manualText };
     }`
         : ""
@@ -1003,7 +1055,7 @@ export function activateTaskScript(
     }
     ${requiredAppName ? appSelectionPrelude(requiredAppName) : ""}
     ${requiredAppName ? 'if (appSelection().state !== "bound") return { appSelectionLost: true };' : ""}
-    ${manualDeepTestPrompt !== undefined && requiredAppName ? manualDeepTestDraftGuard(manualDeepTestPrompt, undefined, "exact") : ""}
+    ${manualDeepTestPrompt !== undefined && requiredAppName ? manualDeepTestDraftGuard(manualDeepTestPrompt, undefined, "exact", undefined, explicitConnectionCheck) : ""}
     const visible = (element) => {
       if (!(element instanceof HTMLElement)) return false;
       const style = getComputedStyle(element);
@@ -1014,7 +1066,7 @@ export function activateTaskScript(
       .find((element) => visible(element) && element instanceof HTMLButtonElement && !element.disabled);
     if (!(send instanceof HTMLButtonElement)) return { activated: false };
     ${manualDeepTestPrompt !== undefined && requiredAppName ? "if (send.form !== manualForm) return { draftPresent: true };" : ""}
-    ${explicitConnectionCheck ? `if ([...document.querySelectorAll('[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]')].some(visible)) return { activated: false };` : ""}
+    ${explicitConnectionCheck ? `if ([...document.querySelectorAll(${JSON.stringify(stopControlSelectorList)})].some(visible)) return { activated: false };` : ""}
     send.click();
     return { activated: true };
   })()`;
@@ -1092,12 +1144,9 @@ export function taskProbeScript(
       document.querySelector('button[name="login"]')
     ].some(visible);
     const labelledSignIn = [...document.querySelectorAll("a,button")]
-      .some((element) => visible(element) && /^(log in|sign in|sign up)$/iu.test((element.textContent || "").trim()));
-    const busy = [
-      document.querySelector('[data-testid="stop-button"]'),
-      document.querySelector('button[aria-label="Stop generating"]'),
-      document.querySelector('button[aria-label="Stop"]')
-    ].some(visible);
+      .some((element) => visible(element) && ${labelledSignInPattern}.test((element.textContent || "").trim()));
+    const busy = ${JSON.stringify([...stopControlSelectors])}
+      .map((selector) => document.querySelector(selector)).some(visible);
     const sendVisible = ${JSON.stringify(sendControlSelectors)}.map((selector) => document.querySelector(selector)).some(visible);
     const errors = [
       document.querySelector('[data-testid="conversation-turn-error"]'),

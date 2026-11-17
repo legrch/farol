@@ -19,6 +19,7 @@ import {
   publicContentVisible,
 } from "./chatgpt-public-turn";
 import { publicMarkdownBlock } from "./chatgpt-public-markdown";
+import { chatgptTemporaryToggleLabels } from "./chatgpt/scripts";
 
 // Serialized with the physical page adapter; only public composer DOM is read.
 export function physicalComposerDraft(composer: HTMLElement): string {
@@ -404,9 +405,12 @@ async function physicalPage(
   const equal = (a: unknown, b: unknown) => stable(a) === stable(b);
   const controls = (selector: string, root: ParentNode = document) =>
     [...root.querySelectorAll(selector)].filter(contentVisible);
+  const temporaryToggleSelector = chatgptTemporaryToggleLabels
+    .map((label) => `button[aria-label="${label}"]`)
+    .join(",");
   const blocked = () =>
     controls(
-      'button[aria-label="Turn off temporary chat"],[data-testid="login-button"],a[href*="/auth/login"],button[name="login"]',
+      `${temporaryToggleSelector},[data-testid="login-button"],a[href*="/auth/login"],button[name="login"]`,
     ).length > 0;
   const canonical = (binding: PhysicalBinding) => {
     try {
@@ -671,7 +675,7 @@ async function physicalPage(
   const stopSelector =
     '[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]';
   const sendSelector =
-    '[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label="Send message"],button[aria-label="Send"]';
+    '[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label="Send message"],button[aria-label="Send"],button[aria-label="Отправить"],button[aria-label="Отправить сообщение"]';
   const sendControl = (form: Element) => {
     const sends = controls(sendSelector, form);
     if (

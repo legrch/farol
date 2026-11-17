@@ -1,8 +1,8 @@
 import {
   ConnectionTestButton,
-  runFreshConnectionTest,
   useConnectionTest,
 } from "../../../apps/desktop/renderer/connection-test";
+import { connectionPresentation } from "../../../apps/desktop/renderer/connection-presentation";
 import { separateAppVerificationScopeCurrent } from "../../pkg/product-settings/separate-app-verification";
 import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
 import { unresolvedActions } from "../../../apps/desktop/renderer/unresolved-actions";
@@ -1368,12 +1368,9 @@ function ConnectMac({
     draftChanged,
     retainedSetupIntents(facade, snapshot),
   ).allowed;
-  // Setup is historical; only a current server observation describes a
-  // connected transport. Never turn a saved runtime into live evidence.
-  const transportConnected =
-    snapshot.connectionStatus?.state === "recent_transport" &&
-    snapshot.connectionStatus.validUntilMillis != null &&
-    snapshot.connectionStatus.validUntilMillis > Date.now();
+  // The same live-tunnel light as the sidebar. A saved ready runtime stays
+  // connected without a fresh server poll or a user Ping.
+  const transportConnected = connectionPresentation(snapshot).connected;
   const valid =
     key.length > 0
       ? ProductConfigurationCommandSchema.safeParse({
@@ -1815,19 +1812,17 @@ function AddToChatGPT({
     });
   }
   async function test() {
-    if (settings.setup.journey.dismissed && !nameChanged) {
-      await runFreshConnectionTest(facade);
-      return;
-    }
+    const dismissedSetup = settings.setup.journey.dismissed && !nameChanged;
     if (
       busy.current ||
       !nameValid ||
-      !(
-        computerSetup(facade.getSnapshot()).canVerifyEmbeddedApp ||
-        (separateAvailable &&
-          separateExpected &&
-          computerSetup(facade.getSnapshot()).canVerifySeparateEmbeddedApp)
-      )
+      (!dismissedSetup &&
+        !(
+          computerSetup(facade.getSnapshot()).canVerifyEmbeddedApp ||
+          (separateAvailable &&
+            separateExpected &&
+            computerSetup(facade.getSnapshot()).canVerifySeparateEmbeddedApp)
+        ))
     )
       return;
     busy.current = true;
@@ -1887,8 +1882,11 @@ function AddToChatGPT({
               command.expected,
               current.buildId ?? "",
             )
-          : computerSetup(current).canVerifyEmbeddedApp,
+          : settings.setup.journey.dismissed ||
+            computerSetup(current).canVerifyEmbeddedApp,
       );
+      // Stamp the return before the host navigation microtask. The person
+      // lands on ChatGPT and can come back to this step.
       if (
         facade.getSnapshot().intents[intention(command.kind)]?.state ===
         "pending"
@@ -1906,9 +1904,10 @@ function AddToChatGPT({
   }
   const testDisabled =
     settings.setup.journey.dismissed && !nameChanged
-      ? freshTest.busy ||
-        !computerSetup(snapshot).canReconnect ||
-        !actions.allowed("connector.repair")
+      ? checking ||
+        !nameValid ||
+        (waitingForConfirmation && !separateAvailable) ||
+        !actions.allowed("connector.verify-app")
       : checking ||
         (waitingForConfirmation && !separateAvailable) ||
         needsNewTest ||
@@ -1942,9 +1941,7 @@ function AddToChatGPT({
   );
   return (
     <>
-      {setupStep === "attachment" &&
-      setupTestActionHost &&
-      !settings.setup.journey.dismissed
+      {setupStep === "attachment" && setupTestActionHost
         ? createPortal(testAction, setupTestActionHost)
         : null}
       <section aria-label="Create the ChatGPT app">
@@ -2122,21 +2119,12 @@ function AddToChatGPT({
           )}
         </div>
         {settings.setup.journey.dismissed &&
-          (setupStep === "attachment" && setupTestActionHost ? (
-            createPortal(
-              <ConnectionTestButton
-                facade={facade}
-                disabled={nameChanged || !nameValid}
-                primary
-              />,
-              setupTestActionHost,
-            )
-          ) : (
-            <ConnectionTestButton
-              facade={facade}
-              disabled={nameChanged || !nameValid}
-            />
-          ))}
+        !(setupStep === "attachment" && setupTestActionHost) ? (
+          <ConnectionTestButton
+            facade={facade}
+            disabled={nameChanged || !nameValid}
+          />
+        ) : null}
         {gate.allowed ? (
           <div className="setup-success" role="status">
             <strong>✓ Everything works</strong>
@@ -2185,9 +2173,11 @@ function AddToChatGPT({
               <p className="description">
                 {nameChanged
                   ? "Save the app name above before preparing a new test."
-                  : setup.canVerifyEmbeddedApp
-                    ? "Create the app above, then run the check once."
-                    : "Finish sign-in, workspace and connection checks before testing in ChatGPT."}
+                  : settings.setup.journey.dismissed
+                    ? "This test is optional. It does not change the connection status."
+                    : setup.canVerifyEmbeddedApp
+                      ? "Create the app above, then run the check once."
+                      : "Finish sign-in, workspace and connection checks before testing in ChatGPT."}
               </p>
             )}
             {setupStep !== "attachment" ? testAction : null}

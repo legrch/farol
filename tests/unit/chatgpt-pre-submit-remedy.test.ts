@@ -24,6 +24,14 @@ describe("ChatGPT pre-submit remedies for the owner-selected app", () => {
     );
   });
 
+  it("keeps Ping prerequisites about the ChatGPT page, not folder access", () => {
+    const message = chatGptPreSubmitRemedy(
+      "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+    );
+    expect(message).toContain("ChatGPT page");
+    expect(message).toContain("Folder access problems do not block Ping");
+  });
+
   it.each([
     null,
     "CHATGPT_TASK_OUTCOME_UNKNOWN",

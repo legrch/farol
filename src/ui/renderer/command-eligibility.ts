@@ -204,6 +204,10 @@ export function commandAllowed(
     )
   )
     return false;
+  // Owner Ping is a tunnel diagnostic (@Farol + challenge). Workspace
+  // continuity and unrelated Computer pending edits must not disable Send;
+  // main still validates the live runtime before the prompt leaves.
+  if (kind === "connector.test-connection") return true;
   const fences = dependencyFences(
     snapshot,
     commandDependency(kind),

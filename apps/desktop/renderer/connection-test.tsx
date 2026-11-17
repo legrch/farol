@@ -144,6 +144,8 @@ export function useConnectionTest(facade: RendererFacade) {
     () => active.state,
     () => idle,
   );
+  // Keep refused/done/unknown copy until the next Ping. Clearing it while
+  // Connected hid the only explanation when Send was refused in one second.
   return {
     state,
     busy: state.phase === "preparing" || state.phase === "testing",

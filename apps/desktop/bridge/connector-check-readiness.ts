@@ -85,7 +85,13 @@ export async function prepareConnectorCheckDocument(
     return { ready: false, stage: "initial-readiness" };
   if ((await route.openTemporaryChat()).status !== "opened")
     return { ready: false, stage: "temporary-navigation" };
-  return (await waitForConnectorCheckReadiness(route, current, bounded))
+  // Navigation can spend the original preflight. The temporary page gets its
+  // own budget, otherwise a slow open reports the ready page as not ready.
+  const temporaryBudget = {
+    ...timing,
+    deadlineAt: timing.now() + timing.timeoutMs,
+  };
+  return (await waitForConnectorCheckReadiness(route, current, temporaryBudget))
     ? { ready: true }
     : {
         ready: false,

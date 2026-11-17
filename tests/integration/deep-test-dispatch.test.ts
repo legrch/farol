@@ -55,17 +55,35 @@ async function fixture(stale = false) {
       chatgpt: { outcomeUnknown: false },
       computer: { outcomeUnknown: false },
     },
-    computer: { generation: 1, pendingEdit: null },
+    computer: {
+      generation: 1,
+      pendingEdit: null,
+      workspaces: [{ workspaceId: null }],
+    },
     connectors: {
       secureMcp: {
         tunnelId: "tunnel",
         generation: 1,
-        runtime: { runtimeGeneration: "runtime" },
+        appVerificationPending: false,
+        challenge: null,
+        runtime: {
+          state: "ready",
+          buildId: "build",
+          runtimeGeneration: "runtime",
+          computerGeneration: 1,
+          connectorGeneration: 1,
+        },
       },
     },
   };
   const snapshot = { status: "ready", settings };
-  const owner = { snapshot: () => snapshot };
+  const owner = {
+    snapshot: () => snapshot,
+    recordSecureMcpChallenge: async () => ({
+      ok: false,
+      error: "SETTINGS_UNAVAILABLE",
+    }),
+  };
   let changed = false;
   let targetValid = true;
   const send = vi.fn();
@@ -132,8 +150,10 @@ async function fixture(stale = false) {
       challengeSha256: "hash",
       workspaceId: null,
     }),
+    connectorWorkspaceSelection: () => null,
     selectedConnectorApp: () => "Farol",
     connectorAppBindingCurrent: () => !changed,
+    randomUUID: () => "00000000-0000-4000-8000-000000000000",
     buildIdentity: { buildId: "build" },
     journalUnderPromotionLease: async (
       _registry: unknown,
