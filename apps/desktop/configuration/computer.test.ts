@@ -2,6 +2,7 @@ import type { PendingWorkspaceEdit } from "../../../src/apps/desktop/workspace-e
 import { describe, expect, it, vi } from "vitest";
 import { DesktopAdmission } from "../host/admission";
 import { createConfigurationComputer } from "./computer";
+import { workspaceCheckEvidence } from "../../../src/apps/desktop/product-configuration";
 import type { ConfigurationComputerPorts } from "./computer";
 import type { ComputerConfigurationCommand } from "./computer";
 import { ProductSettingsSchema } from "../../../src/pkg/product-settings/contract";
@@ -320,6 +321,7 @@ describe("configuration computer", () => {
         workspaceId: workspace.workspaceId,
         root: workspace.root,
         rootIdentity: workspace.rootIdentity,
+        observed: workspaceCheckEvidence(settings, workspace.workspaceId),
       },
     ]);
     // A live connector still carries the grant: refuse without writing.
@@ -329,7 +331,52 @@ describe("configuration computer", () => {
       error: "WORKSPACE_ROOT_CHANGED",
     });
     expect(configuration.withdrawDriftedWorkspaceChecks).not.toHaveBeenCalled();
+    // An unconfirmed withdrawal write is surfaced, not hidden.
+    configuration.withdrawDriftedWorkspaceChecks.mockResolvedValueOnce({
+      ok: false,
+      error: "SETTINGS_WRITE_FAILED",
+    } as never);
+    await expect(run(false)).resolves.toMatchObject({
+      ok: false,
+      error: "SETTINGS_WRITE_FAILED",
+    });
   });
+
+  it.each(["WORKSPACE_ROOT_CHANGED", "WORKSPACE_NOT_FOUND"])(
+    "withdraws the stale check when Go inspection refuses with %s",
+    async (code) => {
+      const workspace = {
+        workspaceId: "00000000-0000-4000-8000-000000000001",
+        root: "/tmp/project",
+        label: "project",
+        access: "read" as const,
+        excludedPaths: [],
+        rootIdentity: { device: "1", inode: "2" },
+      };
+      const settings = settingsWithWorkspace(workspace);
+      const configuration = {
+        snapshot: () => ({ status: "ready" as const, settings }),
+        recordComputerVerification: vi.fn(),
+        withdrawDriftedWorkspaceChecks: vi.fn(async () => ({ ok: true })),
+      };
+      const ports = makePorts({
+        configuration: () => configuration,
+        // The folder matched when measured, then changed before Go opened it.
+        measuredRootIdentity: vi.fn(async () => ({ device: "1", inode: "2" })),
+        inspectOwnerWorkspace: vi.fn(async () => ({ ok: false, code })),
+      });
+      await expect(
+        createConfigurationComputer(ports).configureAdmittedComputer({
+          kind: "computer.verify-workspace",
+          workspaceId: workspace.workspaceId,
+        } as ComputerConfigurationCommand),
+      ).resolves.toMatchObject({ ok: false, error: code });
+      expect(
+        configuration.withdrawDriftedWorkspaceChecks,
+      ).toHaveBeenCalledOnce();
+      expect(configuration.recordComputerVerification).not.toHaveBeenCalled();
+    },
+  );
 
   it("routes run-git-status through the verification action port", async () => {
     const workspace = {

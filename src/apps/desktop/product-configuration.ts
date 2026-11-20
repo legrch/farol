@@ -68,7 +68,22 @@ const FILE_NAME = "config.json";
 const LEGACY_FILE_NAME = "product-settings.json";
 const MAXIMUM_BYTES = 256 * 1024;
 export const WORKSPACE_DRIFT_NEEDS_ACTION =
-  "A folder no longer matches the one you approved (a restart can renumber its disk, or the folder changed). Remove it and add it again, then connect.";
+  "Farol withdrew a folder check because that folder no longer matches the one you approved. Check each folder; remove and add again any that keeps refusing, then connect.";
+
+// The check evidence a drift observation is conditioned on: the folder's own
+// saved check and the Computer step's current verification.
+export function workspaceCheckEvidence(
+  settings: ProductSettings,
+  workspaceId: string,
+): string {
+  const workspace = settings.computer.workspaces.find(
+    (item) => item.workspaceId === workspaceId,
+  );
+  return JSON.stringify({
+    accessCheck: workspace?.accessCheck ?? null,
+    verified: settings.setup.computer.verified ?? null,
+  });
+}
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const CLOSE_ON_EXEC =
   (fsConstants as typeof fsConstants & { O_CLOEXEC?: number }).O_CLOEXEC ?? 0;
@@ -2409,13 +2424,16 @@ export class ProductConfigurationService {
   // withdraw the saved connector runtime that carried that grant: the sidebar
   // must not claim Connected and nothing may resume or restart with it. This
   // only reduces authority. It never rebinds and keeps the approval and ID.
-  // Each folder's identity is compared inside this turn instead of a whole-
-  // document revision, so an unrelated save cannot discard detected drift.
+  // The withdrawal is conditioned on exactly what the caller observed: the
+  // folder's stored identity AND its check evidence (`observed`, from
+  // workspaceCheckEvidence). An unrelated save cannot discard detected drift,
+  // and a newer successful check cannot be erased by an older observation.
   async withdrawDriftedWorkspaceChecks(
     drifted: readonly Readonly<{
       workspaceId: string;
       root: string;
       rootIdentity: WorkspaceRootIdentity;
+      observed: string;
     }>[],
   ): Promise<MutationResult> {
     if (drifted.length === 0) return this.failure("SETTINGS_INPUT_INVALID");
@@ -2429,7 +2447,9 @@ export class ProductConfigurationService {
           !workspace ||
           workspace.root !== item.root ||
           workspace.rootIdentity?.device !== item.rootIdentity.device ||
-          workspace.rootIdentity?.inode !== item.rootIdentity.inode
+          workspace.rootIdentity?.inode !== item.rootIdentity.inode ||
+          workspaceCheckEvidence(this.current, item.workspaceId) !==
+            item.observed
         )
           return this.failure("WORKSPACE_ROOT_CHANGED");
       }

@@ -316,6 +316,7 @@ import {
 import {
   ProductConfigurationService,
   ProductSettingsStore,
+  workspaceCheckEvidence,
 } from "./product-configuration";
 import { shellGeometry } from "./surface-layout";
 import {
@@ -4093,9 +4094,16 @@ async function withdrawDriftedWorkspaceChecksAtLaunch(): Promise<boolean> {
     workspaceId: string;
     root: string;
     rootIdentity: WorkspaceRootIdentity;
+    observed: string;
   }[] = [];
   for (const workspace of snapshot.settings.computer.workspaces) {
     if (!workspace.rootIdentity) continue;
+    // Capture the check evidence BEFORE measuring, so a newer check made
+    // while this scan waits is never erased by it.
+    const observed = workspaceCheckEvidence(
+      snapshot.settings,
+      workspace.workspaceId,
+    );
     const measured = await measuredRootIdentity(workspace.root);
     const drift = classifyWorkspaceRootDrift(workspace.rootIdentity, measured);
     // A vanished folder refuses every call just like a changed one.
@@ -4104,6 +4112,7 @@ async function withdrawDriftedWorkspaceChecksAtLaunch(): Promise<boolean> {
         workspaceId: workspace.workspaceId,
         root: workspace.root,
         rootIdentity: workspace.rootIdentity,
+        observed,
       });
   }
   if (drifted.length === 0) return true;
@@ -4115,11 +4124,14 @@ async function withdrawDriftedWorkspaceChecksAtLaunch(): Promise<boolean> {
   const reserved = await authorityTransitions.withReservation(
     "authority-change",
     async () => {
+      // A connector or an active Agent still carries the grant; leave its
+      // settings alone (Go's per-call root guard keeps refusing the root).
       if (
+        codexAgentOperationActive() ||
         desktopAdmission.occupied("connector-task") ||
         secureMcpConnectorRuntime?.isRunning() === true
       ) {
-        code = "CONNECTOR_ALREADY_RUNNING";
+        code = "CONNECTOR_STOP_REQUIRED";
         return;
       }
       try {

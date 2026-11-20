@@ -5,7 +5,10 @@ import path from "node:path";
 import { DesktopAdmission } from "../host/admission";
 import { DesktopGoCore } from "../go-core-host";
 import { SecureMcpConnectorRuntime } from "../../../src/apps/desktop/secure-mcp-connector-runtime";
-import { ProductConfigurationService } from "../../../src/apps/desktop/product-configuration";
+import {
+  ProductConfigurationService,
+  workspaceCheckEvidence,
+} from "../../../src/apps/desktop/product-configuration";
 import { BridgeError } from "../bridge/client";
 import type { SettingsDeliveryResult } from "../bridge/wire";
 import {
@@ -359,40 +362,56 @@ export function createConfigurationComputer(
         // at the path now is measured; one already bound must still be that
         // object, and one saved before identities existed is bound to what is
         // measured here only because the owner asked for this verification.
+        // Check evidence as it was before measuring; a withdrawal never
+        // erases a newer check made meanwhile.
+        const observed =
+          snapshot.status === "ready"
+            ? workspaceCheckEvidence(snapshot.settings, workspace.workspaceId)
+            : null;
         const measured = await measuredRootIdentity(workspace.root);
         const bound = workspace.rootIdentity;
         // A refused check of a bound folder also withdraws its stale "Works"
         // evidence, so the row cannot keep claiming access Go will refuse.
-        // This only reduces authority; it waits for no connector or Agent to
-        // hold the grant, otherwise it simply refuses as before.
-        const withdrawStale = async () => {
+        // This only reduces authority. It never runs while a connector or an
+        // Agent holds the grant (then it simply refuses as before), and an
+        // unconfirmed write surfaces as SETTINGS_WRITE_FAILED.
+        const refuseStale = async (
+          code:
+            | "WORKSPACE_VERIFICATION_FAILED"
+            | "WORKSPACE_ROOT_CHANGED"
+            | "WORKSPACE_NOT_FOUND"
+            | "WORKSPACE_PATH_REFUSED",
+        ) => {
           if (
             !bound ||
+            observed === null ||
             codexAgentOperationActive() ||
             desktopAdmission.occupied("connector-task") ||
             secureMcpConnectorRuntime()?.isRunning() === true
           )
-            return;
+            return configurationFailure(code);
           try {
-            await configuration()!.withdrawDriftedWorkspaceChecks([
-              {
-                workspaceId: workspace!.workspaceId,
-                root: workspace!.root,
-                rootIdentity: bound,
-              },
-            ]);
+            const result =
+              await configuration()!.withdrawDriftedWorkspaceChecks([
+                {
+                  workspaceId: workspace!.workspaceId,
+                  root: workspace!.root,
+                  rootIdentity: bound,
+                  observed,
+                },
+              ]);
+            if (!result.ok && result.error === "SETTINGS_WRITE_FAILED")
+              return configurationFailure("SETTINGS_WRITE_FAILED");
           } catch {
-            // The refusal below stands; Go keeps refusing the stale root.
+            return configurationFailure("SETTINGS_WRITE_FAILED");
           }
+          return configurationFailure(code);
         };
-        if (measured === null) {
-          await withdrawStale();
-          return configurationFailure("WORKSPACE_VERIFICATION_FAILED");
-        }
+        if (measured === null)
+          return refuseStale("WORKSPACE_VERIFICATION_FAILED");
         if (classifyWorkspaceRootDrift(bound, measured) !== "same" && bound) {
           // Never rebind here: path + inode cannot prove the same folder.
-          await withdrawStale();
-          return configurationFailure("WORKSPACE_ROOT_CHANGED");
+          return refuseStale("WORKSPACE_ROOT_CHANGED");
         }
         if (!bound) {
           if (snapshot.status !== "ready")
@@ -433,9 +452,15 @@ export function createConfigurationComputer(
           `settings:computer.verify-workspace:${workspace.workspaceId}`,
         );
         if (!result.ok) {
-          // The root can change between the measurement and Go's descriptor
-          // inspection; withdraw the stale evidence then too.
-          if (result.code === "WORKSPACE_ROOT_CHANGED") await withdrawStale();
+          // The root can change, vanish or become unsafe between the
+          // measurement and Go's descriptor inspection; withdraw the stale
+          // evidence for those refusals too. Other failures leave it alone.
+          if (
+            result.code === "WORKSPACE_ROOT_CHANGED" ||
+            result.code === "WORKSPACE_NOT_FOUND" ||
+            result.code === "WORKSPACE_PATH_REFUSED"
+          )
+            return refuseStale(result.code);
           return workspaceReadFailure(result.code);
         }
         // Preserve the measured layout for task selection. Primary metadata is

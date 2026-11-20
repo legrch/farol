@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ProductConfigurationService,
   ProductSettingsStore,
+  workspaceCheckEvidence,
 } from "../../src/apps/desktop/product-configuration";
 import { PrivateConnectorKeyStore } from "../../src/apps/desktop/connector-key-store";
 import {
@@ -676,7 +677,12 @@ describe("launch drift withdrawal", () => {
     expect(
       (
         await service.withdrawDriftedWorkspaceChecks([
-          { workspaceId, root: "/Users/example/project", rootIdentity },
+          {
+            workspaceId,
+            root: "/Users/example/project",
+            rootIdentity,
+            observed: workspaceCheckEvidence(before.settings, workspaceId),
+          },
         ])
       ).ok,
     ).toBe(true);

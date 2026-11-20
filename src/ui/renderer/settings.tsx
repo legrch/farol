@@ -1248,9 +1248,6 @@ function Folders(props: PageProps) {
                   <>
                     <span>
                       {actions.computerPauseReason ??
-                        // Launch saves the recovery for a folder whose
-                        // identity no longer matches; show it on the row.
-                        settings.setup.computer.needsAction ??
                         "Workspace access has not passed its check."}
                     </span>
                     <button

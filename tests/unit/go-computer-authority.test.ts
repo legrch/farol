@@ -4,6 +4,7 @@ import { GoComputerAuthority } from "../../apps/desktop/go-computer-authority";
 import {
   ProductConfigurationService,
   ProductSettingsStore,
+  workspaceCheckEvidence,
 } from "../../src/apps/desktop/product-configuration";
 import {
   ProductSettingsSchema,
@@ -722,12 +723,26 @@ describe("Go Computer host authority mapping", () => {
         workspaceId: workspace.workspaceId,
         root: workspace.root,
         rootIdentity: workspace.rootIdentity!,
+        observed: workspaceCheckEvidence(before, workspace.workspaceId),
       },
     ];
     // The identity the caller measured against must still be the saved one.
     await expect(
       f.service.withdrawDriftedWorkspaceChecks([
         { ...drifted[0]!, rootIdentity: { device: "9", inode: "2" } },
+      ]),
+    ).resolves.toMatchObject({ ok: false, error: "WORKSPACE_ROOT_CHANGED" });
+    // An observation older than the saved check (a Re-check that succeeded
+    // while the launch scan waited) cannot erase it.
+    await expect(
+      f.service.withdrawDriftedWorkspaceChecks([
+        {
+          ...drifted[0]!,
+          observed: workspaceCheckEvidence(
+            added.snapshot.settings,
+            workspace.workspaceId,
+          ),
+        },
       ]),
     ).resolves.toMatchObject({ ok: false, error: "WORKSPACE_ROOT_CHANGED" });
     // An unrelated save between measurement and withdrawal does not discard
@@ -749,7 +764,7 @@ describe("Go Computer host authority mapping", () => {
       accessCheck: null,
     });
     expect(after.setup.computer.verified).toBeNull();
-    expect(after.setup.computer.needsAction).toMatch(/Remove it and add it/u);
+    expect(after.setup.computer.needsAction).toMatch(/remove and add again/u);
     // An unknown reachability and no saved runtime keep the launch resume,
     // the sidebar and a later Re-check from treating the old grant as live.
     expect(after.setup.computer.reachable).toBe("unknown");
