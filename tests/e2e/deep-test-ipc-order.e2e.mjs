@@ -44,7 +44,7 @@ const statePaths = () => desktopStatePaths({ userData: app.getPath('userData'), 
 const binding = { buildId:'build', connectorGeneration:'1' };
 const desktopGoCore = { backendAvailable:true, currentComputerConnectorBinding: () => binding };
 const secureMcpConnectorRuntime = { isRunning: () => true, hasUnresolvedEffect: () => false, getTunnelObservation:()=>null };
-const snapshot = { status:'ready', settings:{ setup:{chatgpt:{outcomeUnknown:false},computer:{outcomeUnknown:false}}, computer:{generation:1,pendingEdit:null}, connectors:{secureMcp:{tunnelId:'tunnel',generation:1,runtime:{runtimeGeneration:'runtime'}}}} };
+const snapshot = { status:'ready', settings:{ setup:{chatgpt:{outcomeUnknown:false},computer:{outcomeUnknown:false}}, computer:{generation:1,pendingEdit:null}, connectors:{secureMcp:{tunnelId:'tunnel',generation:1,runtime:{state:'ready',runtimeGeneration:'runtime',buildId:'build',computerGeneration:1}}}} };
 const configuration = {snapshot:()=>snapshot};
 let sends=0, observedOverlay='';
 const chatGptRoute = {captureManualTaskTarget:()=>()=>true,runReadonlyTask:async(prompt,_attachments,observer)=>{ observedOverlay=shellOverlay; await observer.onDispatchIntent(); assert.equal(observer.beforeSend(),true); assert.equal(observer.manualSubmissionOnly,true); sends++; return {state:'send_requested',code:null,deltaCount:0,observedCharacters:0}; }};
@@ -59,6 +59,7 @@ const desktopAdmission = new DesktopAdmission({
 });
 const chatGptConversationAdmissionFailure=()=>null;
 const connectorRuntimeUncertain=()=>false, computerConnectorAdmission=()=>({admissible:true}), summaryFenceRecovery={};
+const connectorWorkspaceSelection=()=>null;
 const chatGptTaskAdmissionReady=()=>true, currentSurfaceLayout=()=>({pageVisible:shellOverlay==='none'}), currentConnectorAttachment=()=>({challengeSha256:'hash',workspaceId:null}), selectedConnectorApp=()=> ${JSON.stringify(productName)}, connectorAppBindingCurrent=()=>true;
 const journalUnderPromotionLease=async(_owner,work)=>work(), configurationFailure=(error)=>({ok:false,error}), ProductConfigurationResultSchema={parse:(v)=>v};
 ${source.slice(begin, end)}
