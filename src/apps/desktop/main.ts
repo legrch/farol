@@ -4147,8 +4147,10 @@ async function withdrawDriftedWorkspaceChecksAtLaunch(): Promise<boolean> {
         return;
       }
       try {
-        const result =
-          await configuration!.withdrawDriftedWorkspaceChecks(found);
+        const result = await configuration!.withdrawDriftedWorkspaceChecks(
+          found,
+          () => !desktopAdmission.closed(),
+        );
         withdrawn = result.ok;
         code = result.ok ? null : result.error;
       } catch {

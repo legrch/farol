@@ -113,7 +113,10 @@ export type ConfigurationComputerPorts = Readonly<{
   ) => Promise<{ ok: true } | { ok: false; code: string }>;
   buildIdentity: () => Readonly<{ buildId: string }>;
   workspaceReadFailure: (code: string) => ProductConfigurationResult;
-  desktopAdmission: Pick<DesktopAdmission, "occupied" | "reserveAdmitted">;
+  desktopAdmission: Pick<
+    DesktopAdmission,
+    "occupied" | "reserveAdmitted" | "closed"
+  >;
   secureMcpConnectorRuntime: () => SecureMcpConnectorRuntime | null;
   runtime: () => { identity: string | null } | null;
   verifiedProductWorkspace: (
@@ -392,16 +395,23 @@ export function createConfigurationComputer(
             return configurationFailure(code);
           try {
             const result =
-              await configuration()!.withdrawDriftedWorkspaceChecks([
-                {
-                  workspaceId: workspace!.workspaceId,
-                  root: workspace!.root,
-                  rootIdentity: bound,
-                  observed,
-                },
-              ]);
-            if (!result.ok && result.error === "SETTINGS_WRITE_FAILED")
-              return configurationFailure("SETTINGS_WRITE_FAILED");
+              await configuration()!.withdrawDriftedWorkspaceChecks(
+                [
+                  {
+                    workspaceId: workspace!.workspaceId,
+                    root: workspace!.root,
+                    rootIdentity: bound,
+                    observed,
+                  },
+                ],
+                () => !desktopAdmission.closed(),
+              );
+            // WORKSPACE_ROOT_CHANGED here means the saved evidence moved on
+            // (a newer check or edit); keep the original refusal. Any other
+            // unsuccessful outcome (write failure, uncertain runtime, Quit)
+            // is reported instead of hidden behind it.
+            if (!result.ok && result.error !== "WORKSPACE_ROOT_CHANGED")
+              return ProductConfigurationResultSchema.parse(result);
           } catch {
             return configurationFailure("SETTINGS_WRITE_FAILED");
           }

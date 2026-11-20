@@ -2435,6 +2435,9 @@ export class ProductConfigurationService {
       rootIdentity: WorkspaceRootIdentity;
       observed: string;
     }>[],
+    // The caller's admission (Quit) fence, checked again right before the
+    // write and its publication, after this call may have waited its turn.
+    admissionOpen: () => boolean = () => true,
   ): Promise<MutationResult> {
     if (drifted.length === 0) return this.failure("SETTINGS_INPUT_INVALID");
     return this.exclusive(async () => {
@@ -2453,32 +2456,42 @@ export class ProductConfigurationService {
         )
           return this.failure("WORKSPACE_ROOT_CHANGED");
       }
+      if (!admissionOpen()) return this.failure("AUTHORITY_CHANGE_IN_PROGRESS");
       const ids = new Set(drifted.map((item) => item.workspaceId));
       const verifiedId = this.current.setup.computer.verified?.workspaceId;
       const verifiedDrifted = verifiedId != null && ids.has(verifiedId);
-      return this.commitComputerEvidence((settings) => ({
-        ...settings,
-        revision: settings.revision + 1,
-        computer: {
-          ...settings.computer,
-          workspaces: settings.computer.workspaces.map((item) =>
-            ids.has(item.workspaceId) ? { ...item, accessCheck: null } : item,
-          ),
-        },
-        connectors: {
-          ...settings.connectors,
-          secureMcp: { ...settings.connectors.secureMcp, runtime: null },
-        },
-        setup: {
-          ...settings.setup,
+      const quitFence = () => {
+        if (!admissionOpen()) throw new Error("AUTHORITY_CHANGE_IN_PROGRESS");
+      };
+      return this.commitComputerEvidence(
+        (settings) => ({
+          ...settings,
+          revision: settings.revision + 1,
           computer: {
-            ...settings.setup.computer,
-            ...(verifiedDrifted ? { verified: null } : {}),
-            needsAction: WORKSPACE_DRIFT_NEEDS_ACTION,
-            reachable: "unknown",
+            ...settings.computer,
+            workspaces: settings.computer.workspaces.map((item) =>
+              ids.has(item.workspaceId) ? { ...item, accessCheck: null } : item,
+            ),
           },
+          connectors: {
+            ...settings.connectors,
+            secureMcp: { ...settings.connectors.secureMcp, runtime: null },
+          },
+          setup: {
+            ...settings.setup,
+            computer: {
+              ...settings.setup.computer,
+              ...(verifiedDrifted ? { verified: null } : {}),
+              needsAction: WORKSPACE_DRIFT_NEEDS_ACTION,
+              reachable: "unknown",
+            },
+          },
+        }),
+        {
+          beforeWrite: async () => quitFence(),
+          assertBeforePublication: quitFence,
         },
-      }));
+      );
     });
   }
 
@@ -3480,13 +3493,16 @@ export class ProductConfigurationService {
 
   private commitComputerEvidence(
     transform: (settings: ProductSettings) => ProductSettings,
+    fence: StoreWriteFence = {},
   ): Promise<MutationResult> {
-    return this.commit((settings) =>
-      advanceComputerApprovalGeneration(
-        settings,
-        transform(settings),
-        (approved) => ownerSettingsComputerApproval(approved, 0),
-      ),
+    return this.commit(
+      (settings) =>
+        advanceComputerApprovalGeneration(
+          settings,
+          transform(settings),
+          (approved) => ownerSettingsComputerApproval(approved, 0),
+        ),
+      fence,
     );
   }
 

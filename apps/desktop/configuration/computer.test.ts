@@ -316,14 +316,17 @@ describe("configuration computer", () => {
     expect(configuration.bindWorkspaceRootIdentity).not.toHaveBeenCalled();
     expect(configuration.recordComputerVerification).not.toHaveBeenCalled();
     // The refused check withdraws the stale "Works" evidence for that folder.
-    expect(configuration.withdrawDriftedWorkspaceChecks).toHaveBeenCalledWith([
-      {
-        workspaceId: workspace.workspaceId,
-        root: workspace.root,
-        rootIdentity: workspace.rootIdentity,
-        observed: workspaceCheckEvidence(settings, workspace.workspaceId),
-      },
-    ]);
+    expect(configuration.withdrawDriftedWorkspaceChecks).toHaveBeenCalledWith(
+      [
+        {
+          workspaceId: workspace.workspaceId,
+          root: workspace.root,
+          rootIdentity: workspace.rootIdentity,
+          observed: workspaceCheckEvidence(settings, workspace.workspaceId),
+        },
+      ],
+      expect.any(Function),
+    );
     // A live connector still carries the grant: refuse without writing.
     configuration.withdrawDriftedWorkspaceChecks.mockClear();
     await expect(run(true)).resolves.toMatchObject({

@@ -753,6 +753,18 @@ describe("Go Computer host authority mapping", () => {
         before.general.sidebarDefault === "full" ? "rail" : "full",
     });
     expect(unrelated.ok).toBe(true);
+    // Quit closed admission while the call waited its turn: nothing is written.
+    await expect(
+      f.service.withdrawDriftedWorkspaceChecks(drifted, () => false),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: "AUTHORITY_CHANGE_IN_PROGRESS",
+    });
+    const stillVerified = f.service.snapshot();
+    if (stillVerified.status !== "ready") throw Error("fixture");
+    expect(
+      stillVerified.settings.computer.workspaces[0]!.accessCheck,
+    ).not.toBeNull();
     const withdrawn = await f.service.withdrawDriftedWorkspaceChecks(drifted);
     if (!withdrawn.ok || withdrawn.snapshot.status !== "ready")
       throw Error("withdraw refused");
