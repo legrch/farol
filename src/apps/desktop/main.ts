@@ -429,6 +429,10 @@ import {
 } from "./route-b-runtime";
 import { type PendingWorkspaceEdit } from "./workspace-edit";
 import {
+  classifyWorkspaceRootDrift,
+  startupDataDevice,
+} from "../../../apps/desktop/configuration/drift";
+import {
   createSupportExport,
   writeSupportExport,
   type SupportRuntimeErrorCode,
@@ -4080,6 +4084,49 @@ async function measuredRootIdentity(
   }
 }
 
+// Read-only measurement plus an authority-reducing write; it never rebinds.
+// A failure keeps today's behavior (the Go guard still refuses the stale root).
+async function withdrawDriftedWorkspaceChecksAtLaunch(): Promise<void> {
+  if (!configuration) return;
+  const snapshot = configuration.snapshot();
+  if (snapshot.status !== "ready") return;
+  const drifted: {
+    workspaceId: string;
+    root: string;
+    rootIdentity: WorkspaceRootIdentity;
+  }[] = [];
+  for (const workspace of snapshot.settings.computer.workspaces) {
+    if (!workspace.rootIdentity || !workspace.accessCheck) continue;
+    const drift = classifyWorkspaceRootDrift(
+      workspace.rootIdentity,
+      await measuredRootIdentity(workspace.root),
+    );
+    if (drift === "device-renumbered" || drift === "different-object")
+      drifted.push({
+        workspaceId: workspace.workspaceId,
+        root: workspace.root,
+        rootIdentity: workspace.rootIdentity,
+      });
+  }
+  if (drifted.length === 0) return;
+  try {
+    const result = await configuration.withdrawDriftedWorkspaceChecks(
+      snapshot.settings.revision,
+      drifted,
+    );
+    console.warn(
+      "FAROL_WORKSPACE_ROOT_DRIFT:" +
+        JSON.stringify({
+          workspaces: drifted.length,
+          withdrawn: result.ok,
+          ...(result.ok ? {} : { code: result.error }),
+        }),
+    );
+  } catch {
+    // The stale check stays; Go's per-call root guard keeps refusing access.
+  }
+}
+
 async function selectedWorkspace(): Promise<
   | Readonly<{
       root: string;
@@ -6448,6 +6495,7 @@ function configurationComputer() {
     },
     selectedWorkspace,
     measuredRootIdentity,
+    startupDataDevice: () => startupDataDevice(),
     inspectOwnerWorkspace,
     buildIdentity: () => buildIdentity,
     workspaceReadFailure,
@@ -11187,6 +11235,10 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   });
   quitSignals.ready();
   void installedUpdates.initialize();
+  // A reboot can renumber the startup volume. A saved folder whose identity no
+  // longer matches would make every connector call refuse while the sidebar
+  // still says Connected, so withdraw its stale check before any resume.
+  await withdrawDriftedWorkspaceChecksAtLaunch();
   const beforeConnectorResume = configuration.snapshot();
   void resumeComputerConnector(
     {

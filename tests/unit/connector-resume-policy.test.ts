@@ -507,6 +507,18 @@ describe("configured Computer connector resume", () => {
       expect(settings).toEqual(before);
     },
   );
+  it("does not resume after launch withdrew a drifted folder's check", () => {
+    // withdrawDriftedWorkspaceChecks leaves the runtime record but marks the
+    // Computer step unknown and clears the drifted selection's verification.
+    const settings = configured();
+    settings.computer.workspaces[0]!.accessCheck = null;
+    settings.setup.computer.reachable = "unknown";
+    settings.setup.computer.verified = null;
+    expect(check(settings)).toBe(false);
+    const secondary = configured();
+    secondary.setup.computer.reachable = "unknown";
+    expect(check(secondary)).toBe(false);
+  });
   it("resumes a confirmed update drain without accepting the stopped runtime as live", () => {
     const settings = configured();
     settings.connectors.secureMcp.runtime!.state = "unreachable";

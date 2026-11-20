@@ -67,6 +67,8 @@ import type { TaskSelectionRequest } from "../../pkg/owner-config/contract";
 const FILE_NAME = "config.json";
 const LEGACY_FILE_NAME = "product-settings.json";
 const MAXIMUM_BYTES = 256 * 1024;
+export const WORKSPACE_DRIFT_NEEDS_ACTION =
+  "macOS gave this folder's disk a new number after a restart. Check access to reconnect it.";
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const CLOSE_ON_EXEC =
   (fsConstants as typeof fsConstants & { O_CLOEXEC?: number }).O_CLOEXEC ?? 0;
@@ -2394,6 +2396,61 @@ export class ProductConfigurationService {
             ...settings.setup.computer,
             verified: null,
             needsAction: "Check this workspace's access again.",
+            reachable: "unknown",
+          },
+        },
+      }));
+    });
+  }
+
+  // Launch found a saved folder whose directory identity no longer matches its
+  // binding (typically macOS renumbered the startup volume at boot). Its last
+  // check described the old binding, so withdraw that check: this only reduces
+  // authority, never rebinds, and leaves the folder's approval and ID intact.
+  // The owner's next Check access measures and rebinds it explicitly.
+  async withdrawDriftedWorkspaceChecks(
+    expectedRevision: number,
+    drifted: readonly Readonly<{
+      workspaceId: string;
+      root: string;
+      rootIdentity: WorkspaceRootIdentity;
+    }>[],
+  ): Promise<MutationResult> {
+    if (drifted.length === 0) return this.failure("SETTINGS_INPUT_INVALID");
+    return this.exclusive(async () => {
+      if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
+      if (this.current.revision !== expectedRevision)
+        return this.failure("WORKSPACE_ROOT_CHANGED");
+      for (const item of drifted) {
+        const workspace = this.current.computer.workspaces.find(
+          (candidate) => candidate.workspaceId === item.workspaceId,
+        );
+        if (
+          !workspace ||
+          workspace.root !== item.root ||
+          workspace.rootIdentity?.device !== item.rootIdentity.device ||
+          workspace.rootIdentity?.inode !== item.rootIdentity.inode
+        )
+          return this.failure("WORKSPACE_ROOT_CHANGED");
+      }
+      const ids = new Set(drifted.map((item) => item.workspaceId));
+      const verifiedId = this.current.setup.computer.verified?.workspaceId;
+      const verifiedDrifted = verifiedId != null && ids.has(verifiedId);
+      return this.commitComputerEvidence((settings) => ({
+        ...settings,
+        revision: settings.revision + 1,
+        computer: {
+          ...settings.computer,
+          workspaces: settings.computer.workspaces.map((item) =>
+            ids.has(item.workspaceId) ? { ...item, accessCheck: null } : item,
+          ),
+        },
+        setup: {
+          ...settings.setup,
+          computer: {
+            ...settings.setup.computer,
+            ...(verifiedDrifted ? { verified: null } : {}),
+            needsAction: WORKSPACE_DRIFT_NEEDS_ACTION,
             reachable: "unknown",
           },
         },

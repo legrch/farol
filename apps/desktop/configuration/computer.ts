@@ -27,6 +27,7 @@ import {
 } from "../../../src/pkg/product-settings/contract";
 import { configurationAdmission } from "../../../src/apps/desktop/configuration-admission";
 import type { VerifiedProductWorkspaceResult } from "../../../src/apps/desktop/workspace-descriptor";
+import { classifyWorkspaceRootDrift, ownerRebindAllowed } from "./drift";
 
 export type SelectedWorkspace = Readonly<{
   root: string;
@@ -101,6 +102,8 @@ export type ConfigurationComputerPorts = Readonly<{
   setPendingWorkspacePick: (value: PendingWorkspacePickValue | null) => void;
   selectedWorkspace: () => Promise<SelectedWorkspace | "cancelled" | "invalid">;
   measuredRootIdentity: (root: string) => Promise<WorkspaceRootIdentity | null>;
+  // Device of the current macOS startup Data volume, or null when unknown.
+  startupDataDevice: () => Promise<string | null>;
   inspectOwnerWorkspace: (
     generation: number,
     workspace: Pick<ApprovedProductWorkspace, "workspaceId" | "root">,
@@ -165,6 +168,7 @@ export function createConfigurationComputer(
     setPendingWorkspacePick,
     selectedWorkspace,
     measuredRootIdentity,
+    startupDataDevice,
     inspectOwnerWorkspace,
     buildIdentity,
     workspaceReadFailure,
@@ -363,13 +367,42 @@ export function createConfigurationComputer(
           return configurationFailure("WORKSPACE_VERIFICATION_FAILED");
         }
         const bound = workspace.rootIdentity;
-        if (
-          bound &&
-          (bound.device !== measured.device || bound.inode !== measured.inode)
-        ) {
+        const drift = classifyWorkspaceRootDrift(bound, measured);
+        if (drift === "different-object")
           return configurationFailure("WORKSPACE_ROOT_CHANGED");
-        }
-        if (!bound) {
+        if (drift === "device-renumbered") {
+          // macOS renumbers the startup Data volume at boot while the folder
+          // keeps its inode. Owner Verify may move the binding to the new
+          // number only when the folder now lives on that startup volume; a
+          // disk image or external volume at the same path still refuses.
+          if (!ownerRebindAllowed(bound, measured, await startupDataDevice()))
+            return configurationFailure("WORKSPACE_ROOT_CHANGED");
+          if (snapshot.status !== "ready")
+            return configurationFailure("SETTINGS_UNAVAILABLE");
+          const rebindAdmission = configurationAdmission(command.kind, {
+            agentActive: codexAgentOperationActive(),
+            connectorRunning:
+              desktopAdmission.occupied("connector-task") ||
+              secureMcpConnectorRuntime()?.isRunning() === true,
+          });
+          if (rebindAdmission !== "admitted")
+            return configurationFailure(rebindAdmission);
+          const rebound = await configuration()!.rebindWorkspaceRootIdentity(
+            workspace.workspaceId,
+            snapshot.settings.revision,
+            workspace.root,
+            measured,
+          );
+          if (!rebound.ok)
+            return ProductConfigurationResultSchema.parse(rebound);
+          snapshot = configuration()!.snapshot();
+          workspace =
+            snapshot.status === "ready"
+              ? snapshot.settings.computer.workspaces.find(
+                  (item) => item.workspaceId === command.workspaceId,
+                )
+              : undefined;
+        } else if (!bound) {
           if (snapshot.status !== "ready")
             return configurationFailure("SETTINGS_UNAVAILABLE");
           const bindingAdmission = configurationAdmission(command.kind, {

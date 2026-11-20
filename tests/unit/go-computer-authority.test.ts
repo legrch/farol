@@ -694,6 +694,64 @@ describe("Go Computer host authority mapping", () => {
     ).resolves.toMatchObject({ ok: false, error: "WORKSPACE_ROOT_CHANGED" });
   });
 
+  it("withdraws a drifted folder's stale check at launch without rebinding it", async () => {
+    const f = await fixture();
+    const added = await f.add();
+    if (!added.ok || added.snapshot.status !== "ready") throw Error("fixture");
+    const workspace = added.snapshot.settings.computer.workspaces[0]!;
+    const verified = await f.service.recordComputerVerification(
+      workspace.workspaceId,
+      {
+        profile: "computer.local.read/1",
+        runtimeGeneration: "runtime-1",
+        buildId: "c".repeat(64),
+        protocol: "readonly-workspace/1",
+      },
+      {
+        rootIdentity: workspace.rootIdentity!,
+        expectedGeneration: added.snapshot.settings.computer.generation,
+        expectedRoot: workspace.root,
+      },
+    );
+    if (!verified.ok || verified.snapshot.status !== "ready")
+      throw Error("verify refused");
+    const before = verified.snapshot.settings;
+    expect(before.computer.workspaces[0]!.accessCheck).not.toBeNull();
+    const drifted = [
+      {
+        workspaceId: workspace.workspaceId,
+        root: workspace.root,
+        rootIdentity: workspace.rootIdentity!,
+      },
+    ];
+    await expect(
+      f.service.withdrawDriftedWorkspaceChecks(before.revision - 1, drifted),
+    ).resolves.toMatchObject({ ok: false, error: "WORKSPACE_ROOT_CHANGED" });
+    await expect(
+      f.service.withdrawDriftedWorkspaceChecks(before.revision, [
+        { ...drifted[0]!, rootIdentity: { device: "9", inode: "2" } },
+      ]),
+    ).resolves.toMatchObject({ ok: false, error: "WORKSPACE_ROOT_CHANGED" });
+    const withdrawn = await f.service.withdrawDriftedWorkspaceChecks(
+      before.revision,
+      drifted,
+    );
+    if (!withdrawn.ok || withdrawn.snapshot.status !== "ready")
+      throw Error("withdraw refused");
+    const after = withdrawn.snapshot.settings;
+    expect(after.computer.workspaces[0]).toMatchObject({
+      workspaceId: workspace.workspaceId,
+      root: workspace.root,
+      rootIdentity: workspace.rootIdentity,
+      accessCheck: null,
+    });
+    expect(after.setup.computer.verified).toBeNull();
+    expect(after.setup.computer.needsAction).toMatch(/Check access/u);
+    // An unknown reachability keeps the launch resume from starting a
+    // connector that would refuse every call.
+    expect(after.setup.computer.reachable).toBe("unknown");
+  });
+
   it("refuses binding and verification evidence from a stale configuration", async () => {
     const f = await fixture();
     const added = await f.add();

@@ -210,7 +210,7 @@ Start with the state Farol actually shows, and note the version and exact error.
 | **Tunnel or key refused**                           | Check the intended ChatGPT workspace and tunnel ID. Use a Restricted key with Tunnels Read + Use. If **Key saved** appears, the blank field is intentional.                      |
 | **Farol is connected, but ChatGPT cannot reach it** | Select the plugin attached to the same tunnel and Farol instance, and reuse it rather than creating another. A local Connected status does not establish the ChatGPT attachment. |
 | **Workspace access refused**                        | Review the saved path, Access choice, exclusions and **✓ Works**. Use **Check access** if offered. Broader access is not a fix for an unavailable tool.                          |
-| **A folder moved** (`WORKSPACE_ROOT_CHANGED`)       | Preserve pending work, then deliberately remove and re-add the folder and review its new grant.                                                                                  |
+| **A folder moved** (`WORKSPACE_ROOT_CHANGED`)       | After a restart, press **Check access** on the folder in Settings. If the folder really moved or is on another disk, remove and re-add it and review its new grant.              |
 | **A result is pending or unknown**                  | Open **Review unresolved actions**, then **Refresh status** to observe the original operation. Do not repeat Connect, Test or an edit, delete state, or change tunnels.          |
 | **An update is blocked**                            | Read the stated blocker. Pending work or an active session can block an update. Settle the original work; do not replace the app or delete its journals.                         |
 

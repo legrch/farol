@@ -1223,7 +1223,28 @@ function Folders(props: PageProps) {
               </label>
               <div className="workspace-row-result" role="status">
                 {checked ? (
-                  <span className="setup-success">✓ Works</span>
+                  <>
+                    <span className="setup-success">✓ Works</span>
+                    {/* A saved check can go stale (a disk renumbered or
+                        remounted). Re-check stops the connection, measures the
+                        folder again and reconnects; it never widens access. */}
+                    <button
+                      type="button"
+                      className="text-button"
+                      disabled={
+                        paused ||
+                        !actions.allowed(
+                          "computer.verify-workspace",
+                          workspace.workspaceId,
+                        )
+                      }
+                      onClick={() =>
+                        void update(workspace.workspaceId, {}, true)
+                      }
+                    >
+                      Re-check
+                    </button>
+                  </>
                 ) : (
                   <>
                     <span>
@@ -1240,7 +1261,9 @@ function Folders(props: PageProps) {
                           workspace.workspaceId,
                         )
                       }
-                      onClick={() => void update(workspace.workspaceId)}
+                      onClick={() =>
+                        void update(workspace.workspaceId, {}, true)
+                      }
                     >
                       Check access
                     </button>
