@@ -48,6 +48,9 @@ export type ConfigurationPipelinePorts = Readonly<{
   configureDrainedWorkspaceChange: (
     command: WorkspaceConfigurationCommand,
   ) => Promise<ProductConfigurationResult>;
+  enrollWorkspaceRecovery: (
+    workspaceId: string,
+  ) => Promise<ProductConfigurationResult>;
   deliverConfigurationReply: (
     commandKind: string,
     result: ProductConfigurationResult,
@@ -81,6 +84,7 @@ export function createConfigurationPipeline(
     configurationFailure,
     computerMcpLifecycle,
     configureDrainedWorkspaceChange,
+    enrollWorkspaceRecovery,
     deliverConfigurationReply,
     configureAdmittedProduct,
     transitionRefusal,
@@ -117,6 +121,21 @@ export function createConfigurationPipeline(
         connectorStartInFlight() === null,
     });
     if (admission !== "admitted") return configurationFailure(admission);
+    if (command.kind === "computer.enroll-workspace-recovery") {
+      // Continuity owns its reservation and the original Stop prerequisite.
+      // Verify enters this pipeline again after that reservation is released.
+      if (
+        desktopAdmission.occupied("connector-task") ||
+        connectorStartInFlight()
+      )
+        return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
+      if (!connectorRunning())
+        return configurationFailure("CONNECTOR_RUNTIME_UNREACHABLE");
+      return deliverConfigurationReply(
+        command.kind,
+        await enrollWorkspaceRecovery(command.workspaceId),
+      );
+    }
     if (command.kind === "connector.configure") {
       // Credential replacement crosses the Settings and private-file writers.
       // Serialize it with connector start and authority changes from admission

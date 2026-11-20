@@ -44,6 +44,7 @@ export const operationKinds = [
   "computer.cancel-workspace-edit",
   "computer.check-folder",
   "computer.choose-workspace",
+  "computer.enroll-workspace-recovery",
   "computer.list-workspace",
   "computer.observe-workspace-edit",
   "computer.prepare-workspace-edit",

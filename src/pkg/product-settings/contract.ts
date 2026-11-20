@@ -862,6 +862,10 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
     workspaceId: IdentifierSchema,
   }),
   z.strictObject({
+    kind: z.literal("computer.enroll-workspace-recovery"),
+    workspaceId: IdentifierSchema,
+  }),
+  z.strictObject({
     kind: z.literal("computer.update-exclusions"),
     workspaceId: IdentifierSchema,
     excludedPaths: z
@@ -1605,6 +1609,7 @@ export const ProductConfigurationResultSchema = z
         "WORKSPACE_SELECTION_INVALID",
         "WORKSPACE_SELECTION_PROTECTED",
         "WORKSPACE_VERIFICATION_FAILED",
+        "WORKSPACE_CONFIGURATION_PHASE_UNCONFIRMED",
         "WORKSPACE_FILE_PICKER_CANCELLED",
         "WORKSPACE_FILE_SELECTION_INVALID",
         "WORKSPACE_PATH_REFUSED",

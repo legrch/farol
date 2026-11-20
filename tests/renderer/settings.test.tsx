@@ -113,6 +113,85 @@ describe("Settings", () => {
 });
 
 describe("Workspace rows", () => {
+  it("offers one-time automatic recovery for a bound folder and shows saved enrollment", async () => {
+    const value = readySettings();
+    const h = await mount({ step: "folders", value, connectorRunning: true });
+    expect(h.button("Turn on automatic recovery")?.disabled).toBe(false);
+    expect(h.host.textContent).toContain(
+      "Confirm this folder once so Farol can reconnect it after a restart",
+    );
+    const next = structuredClone(value);
+    next.revision++;
+    const workspace = next.computer.workspaces[0]!;
+    workspace.continuity = {
+      schema: "farol.workspace-continuity/1",
+      computerId: next.computer.computerId,
+      workspaceId,
+      root: workspace.root,
+      filesystem: "apfs",
+      volumeUuid: "11111111-2222-3333-4444-555555555555",
+      fileId: workspace.rootIdentity!.inode,
+      birthSeconds: "1700000000",
+      birthNanoseconds: "0",
+      enrollment: {
+        operationId: selectionId,
+        selectedAt: "2026-10-02T20:00:00.000Z",
+        policySha256: "f".repeat(64),
+      },
+    };
+    h.reply(() => ({
+      ok: true,
+      snapshot: { status: "ready", settings: next },
+    }));
+    await h.click("Turn on automatic recovery");
+    expect(h.f.api.configure).toHaveBeenCalledExactlyOnceWith({
+      kind: "computer.enroll-workspace-recovery",
+      workspaceId,
+    });
+    expect(h.host.textContent).toContain("Automatic recovery enabled.");
+    expect(h.host.textContent).toContain("Automatic recovery on");
+    expect(h.button("Turn on automatic recovery")).toBeUndefined();
+  });
+
+  it("requires a live connector even with saved readiness and omits enrollment for unbound folders", async () => {
+    const value = readySettings();
+    const h = await mount({ step: "folders", value });
+    expect(h.button("Turn on automatic recovery")?.disabled).toBe(true);
+    expect(h.host.textContent).toContain("Connect first");
+    await h.click("Turn on automatic recovery");
+    expect(h.f.api.configure).not.toHaveBeenCalled();
+    value.revision++;
+    delete value.computer.workspaces[0]!.rootIdentity;
+    value.computer.workspaces[0]!.accessCheck = null;
+    await h.publish(value);
+    expect(h.button("Turn on automatic recovery")).toBeUndefined();
+  });
+
+  it.each([
+    [
+      "WORKSPACE_PICKER_CANCELLED",
+      "Automatic recovery setup cancelled.",
+      false,
+    ],
+    [
+      "WORKSPACE_SELECTION_INVALID",
+      "Select the originally approved folder.",
+      false,
+    ],
+    ["WORKSPACE_CONFIGURATION_PHASE_UNCONFIRMED", "do not repeat it.", true],
+  ])("shows %s enrollment feedback", async (error, message, fenced) => {
+    const value = readySettings();
+    const h = await mount({ step: "folders", value, connectorRunning: true });
+    h.reply(() => ({
+      ok: false,
+      error,
+      snapshot: { status: "ready", settings: value },
+    }));
+    await h.click("Turn on automatic recovery");
+    expect(h.host.textContent).toContain(message);
+    expect(h.button("Turn on automatic recovery")?.disabled).toBe(fenced);
+  });
+
   it("removes a workspace from its row after the connection is stopped", async () => {
     const value = readySettings();
     value.connectors.secureMcp.runtime = null;

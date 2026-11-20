@@ -212,6 +212,13 @@ export type WindowSnapshot = Readonly<{
   activity: readonly ActivityEntry[];
   /** Current host work, independent of journal reads; never connection proof. */
   connectionChecking?: boolean;
+  connectorRunning?: boolean;
+  launchWorkspaceRecoveryIssue?:
+    | Readonly<{
+        workspaceIds: readonly string[];
+        outcomeUnknown: boolean;
+      }>
+    | undefined;
   activityDiagnostics?: Readonly<{
     readPending?: boolean;
     corruptLines: number;

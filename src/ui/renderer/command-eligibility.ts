@@ -87,19 +87,21 @@ export function dependencyFences(
     signInCheck: snapshot.setupSignInCheck ?? null,
   }).attachment;
   let pending = false;
-  let unknown = Boolean(
-    settings &&
-    (settings.computer.pendingEdit ||
-      settings.setup.computer.outcomeUnknown ||
-      connectorRuntimeUncertain(settings) ||
-      (target === "attachment" &&
-        !observingAttachment &&
-        settings.setup.connect.outcomeUnknown) ||
-      settings.setup.hosts.outcomeUnknown ||
-      settings.setup.verify.outcomeUnknown ||
-      settings.connectors.secureMcp.runtime?.state === "outcome_unknown" ||
-      (settings.setup.chatgpt.outcomeUnknown && conflicts("chat", target))),
-  );
+  let unknown =
+    snapshot.launchWorkspaceRecoveryIssue?.outcomeUnknown === true ||
+    Boolean(
+      settings &&
+      (settings.computer.pendingEdit ||
+        settings.setup.computer.outcomeUnknown ||
+        connectorRuntimeUncertain(settings) ||
+        (target === "attachment" &&
+          !observingAttachment &&
+          settings.setup.connect.outcomeUnknown) ||
+        settings.setup.hosts.outcomeUnknown ||
+        settings.setup.verify.outcomeUnknown ||
+        settings.connectors.secureMcp.runtime?.state === "outcome_unknown" ||
+        (settings.setup.chatgpt.outcomeUnknown && conflicts("chat", target))),
+    );
   const inspect = (intent: Intent, key = intent.id, retained = true) => {
     // A writer may return a refusal after an uncertain save/read-back. A
     // refused receipt is not proof that its publication never happened.
@@ -204,6 +206,18 @@ export function commandAllowed(
     )
   )
     return false;
+  if (kind === "computer.enroll-workspace-recovery") {
+    const workspace = snapshot.configuration.settings.computer.workspaces.find(
+      (item) => item.workspaceId === workspaceId,
+    );
+    if (
+      snapshot.connectorRunning !== true ||
+      !workspace?.rootIdentity ||
+      workspace.continuity ||
+      snapshot.tasks.tasks.some((task) => task.agent?.phase === "running")
+    )
+      return false;
+  }
   // Owner Ping is a tunnel diagnostic (@Farol + challenge). Workspace
   // continuity and unrelated Computer pending edits must not disable Send;
   // main still validates the live runtime before the prompt leaves.

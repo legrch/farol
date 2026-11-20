@@ -295,6 +295,7 @@ export const OperationsSnapshotSchema = z.strictObject({
   activeLifecycleIds: z.array(z.string().uuid()).max(20000).optional(),
   // Current host presentation only; never journal evidence or launch authority.
   connectionChecking: z.boolean().optional(),
+  connectorRunning: z.boolean().optional(),
   // A bounded read has not finished; cached rows may be stale.
   readPending: z.boolean().optional(),
   // A current segment could not be read completely; historical diagnostics

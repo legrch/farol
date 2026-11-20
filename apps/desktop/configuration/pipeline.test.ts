@@ -54,6 +54,7 @@ function makePorts(overrides: Partial<Record<string, unknown>> = {}) {
       ok: true,
       drained: true,
     })),
+    enrollWorkspaceRecovery: vi.fn(async () => ({ ok: true })),
     deliverConfigurationReply: vi.fn(
       (_kind: string, result: unknown) => result,
     ),
@@ -71,6 +72,39 @@ function makePorts(overrides: Partial<Record<string, unknown>> = {}) {
 }
 
 describe("configuration pipeline", () => {
+  it.each([
+    [false, false, "CONNECTOR_RUNTIME_UNREACHABLE"],
+    [true, true, "CODEX_HOST_TASK_IN_PROGRESS"],
+    [true, false, null],
+  ] as const)(
+    "admits enrollment only with a running connector and idle Agent",
+    async (running, active, error) => {
+      const { ports } = makePorts({
+        connectorRunning: () => running,
+        codexAgentOperationActive: () => active,
+      });
+      const pipeline = createConfigurationPipeline(
+        ports as unknown as ConfigurationPipelinePorts,
+      );
+      const workspaceId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+      const result = await pipeline.configureNewProductRequest({
+        kind: "computer.enroll-workspace-recovery",
+        workspaceId,
+      });
+      if (error) {
+        expect(result).toMatchObject({ ok: false, error });
+        expect(ports.enrollWorkspaceRecovery).not.toHaveBeenCalled();
+      } else {
+        expect(result.ok).toBe(true);
+        expect(ports.enrollWorkspaceRecovery).toHaveBeenCalledExactlyOnceWith(
+          workspaceId,
+        );
+      }
+      expect(ports.configureAdmittedProduct).not.toHaveBeenCalled();
+      expect(ports.configureDrainedWorkspaceChange).not.toHaveBeenCalled();
+    },
+  );
+
   it("refuses before config work when desktop admission is closed", async () => {
     const { ports, admission } = makePorts();
     admission.beginQuit();

@@ -198,6 +198,9 @@
   flex-basis: 100%;
   font-size: 12px;
 }
+.workspace-row-recovery {
+  flex-basis: 100%;
+}
 .setup-success {
   color: var(--good);
 }

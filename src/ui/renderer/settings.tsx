@@ -39,6 +39,7 @@ import {
 } from "../../pkg/product-settings/contract";
 import { folderAccessChecked, folderDisplayName } from "../folder-access-state";
 import { GuidedWorkspaceAccess } from "../guided-workspace-access";
+import { workspaceRootChangeRemedy } from "../workspace-root-remedy";
 import { onboardingFacts } from "../guided-onboarding";
 import { signInPresentation } from "./sign-in-presentation";
 import { computerSetup } from "./computer-setup";
@@ -186,13 +187,26 @@ export function useSettingsAttention(
     ),
   );
 }
+const unconfirmedActionFeedback =
+  "Farol could not confirm the last action. Refresh its saved result before continuing; do not repeat it.";
+
 function actionFeedback(result: Intent): string {
   if (result.state === "pending") return "Saving or checking…";
   if (result.state === "unknown" || result.code === "SETTINGS_WRITE_FAILED")
-    return "Farol could not confirm the last action. Refresh its saved result before continuing; do not repeat it.";
+    return unconfirmedActionFeedback;
   if (result.state === "refused")
     return "The action could not be completed. Check the setup guide before trying again.";
   return "Saved.";
+}
+function enrollmentFeedback(result: Intent): string {
+  if (result.state === "applied") return "Automatic recovery enabled.";
+  if (result.state !== "refused") return actionFeedback(result);
+  if (result.code === "WORKSPACE_PICKER_CANCELLED")
+    return "Automatic recovery setup cancelled.";
+  if (result.code === "WORKSPACE_SELECTION_INVALID")
+    return "Automatic recovery was refused. Select the originally approved folder.";
+  if (result.code === "CONNECTOR_RUNTIME_UNREACHABLE") return "Connect first";
+  return "Farol could not confirm this folder for automatic recovery.";
 }
 // Evidence carries a revision, but no request ID. If another facade intent
 // changed during a picker/preview, do not attribute its evidence to our action.
@@ -482,7 +496,9 @@ export function Settings({
         report(
           command.kind === "onboarding.open-help" && result.state === "applied"
             ? "Opened in your default browser. Return to Farol to continue setup."
-            : actionFeedback(result),
+            : command.kind === "computer.enroll-workspace-recovery"
+              ? enrollmentFeedback(result)
+              : actionFeedback(result),
           result,
         );
         return { state: "attempted", result };
@@ -570,6 +586,14 @@ export function Settings({
           ) : (
             <Connection {...props} />
           )}
+          {setupStep === "folders" &&
+            pageFeedback?.result?.id.startsWith(
+              "settings:computer.enroll-workspace-recovery:",
+            ) && (
+              <p className="description" role="status">
+                {pageFeedback.text}
+              </p>
+            )}
           {gate && setupStep !== "attachment" && (
             <div
               className="setup-gate-status setup-result"
@@ -1156,13 +1180,28 @@ function Folders(props: PageProps) {
     settings.computer.workspaces.every(
       (workspace) => workspace.gitHistoryApproved === true,
     );
+  const recoveryIssue = snapshot.launchWorkspaceRecoveryIssue;
+  const recoveryAffected = settings.computer.workspaces.some((workspace) =>
+    recoveryIssue?.workspaceIds.includes(workspace.workspaceId),
+  );
   return (
     <>
+      {recoveryAffected && (
+        <p className="notice" role="status">
+          {recoveryIssue?.outcomeUnknown
+            ? unconfirmedActionFeedback
+            : workspaceRootChangeRemedy("WORKSPACE_ROOT_CHANGED")}
+        </p>
+      )}
+      {!recoveryAffected && settings.setup.computer.needsAction && (
+        <p className="description">{settings.setup.computer.needsAction}</p>
+      )}
       <div className="setup-workspaces" aria-label="Approved workspaces">
         {settings.computer.workspaces.map((workspace) => {
           const checked =
             workspaceChecked(snapshot, workspace) &&
-            !actions.computerPauseReason;
+            !actions.computerPauseReason &&
+            !recoveryIssue?.workspaceIds.includes(workspace.workspaceId);
           return (
             <article
               className="setup-workspace-row"
@@ -1267,6 +1306,38 @@ function Folders(props: PageProps) {
                   </>
                 )}
               </div>
+              {workspace.continuity ? (
+                <p className="description">Automatic recovery on</p>
+              ) : workspace.rootIdentity ? (
+                <div className="workspace-row-recovery">
+                  <button
+                    type="button"
+                    className="text-button"
+                    disabled={
+                      paused ||
+                      !actions.allowed(
+                        "computer.enroll-workspace-recovery",
+                        workspace.workspaceId,
+                      )
+                    }
+                    onClick={() =>
+                      void actions.run({
+                        kind: "computer.enroll-workspace-recovery",
+                        workspaceId: workspace.workspaceId,
+                      })
+                    }
+                  >
+                    Turn on automatic recovery
+                  </button>
+                  <p className="description">
+                    Confirm this folder once so Farol can reconnect it after a
+                    restart
+                  </p>
+                  {snapshot.connectorRunning !== true && (
+                    <p className="description">Connect first</p>
+                  )}
+                </div>
+              ) : null}
               <button
                 type="button"
                 className="text-button"

@@ -20,19 +20,19 @@ one-time explicit enrollment for folders saved before continuity existed.
 
 ## What already exists (unwired)
 
-| Piece | Where |
-|---|---|
-| Read-only observation (volume UUID, file ID, birth time) | `modules/computer/infra/observation` |
-| Trusted startup-Data anchor (C1) | `modules/computer/infra/lease` |
-| Boot UUID reader | `modules/computer/infra/boot` |
-| Held candidate chain (C3) | `observation.Holder` |
-| Transition WAL, stage, certify, current qualification | `modules/computer/infra/repos/access` |
-| Transition owner (Begin, Confirm, WithdrawOnce, Record, Finish) | `modules/computer/app/services/migration/owner.go` |
-| Boot-only withdraw effect | `boot/computercontinuitywithdraw.go` |
-| Diagnostic status RPC (`computer.continuity.status`) | `boot/computercontinuitystatus.go` |
-| Stop prerequisite with child kinds `computer.confirm-workspace` (legacy-confirm) and `computer.rebind-workspace` (enrolled-rebind) | `modules/computer/domain/journal/prerequisite.go` |
-| Settings continuity reader and writer | `src/pkg/product-settings/workspace-continuity.ts`, `src/apps/desktop/workspace-continuity-writer.ts` |
-| Desktop sequence driver | `src/apps/desktop/workspace-continuity-sequence.ts` |
+| Piece                                                                                                                              | Where                                                                                                 |
+| ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Read-only observation (volume UUID, file ID, birth time)                                                                           | `modules/computer/infra/observation`                                                                  |
+| Trusted startup-Data anchor (C1)                                                                                                   | `modules/computer/infra/lease`                                                                        |
+| Boot UUID reader                                                                                                                   | `modules/computer/infra/boot`                                                                         |
+| Held candidate chain (C3)                                                                                                          | `observation.Holder`                                                                                  |
+| Transition WAL, stage, certify, current qualification                                                                              | `modules/computer/infra/repos/access`                                                                 |
+| Transition owner (Begin, Confirm, WithdrawOnce, Record, Finish)                                                                    | `modules/computer/app/services/migration/owner.go`                                                    |
+| Boot-only withdraw effect                                                                                                          | `boot/computercontinuitywithdraw.go`                                                                  |
+| Diagnostic status RPC (`computer.continuity.status`)                                                                               | `boot/computercontinuitystatus.go`                                                                    |
+| Stop prerequisite with child kinds `computer.confirm-workspace` (legacy-confirm) and `computer.rebind-workspace` (enrolled-rebind) | `modules/computer/domain/journal/prerequisite.go`                                                     |
+| Settings continuity reader and writer                                                                                              | `src/pkg/product-settings/workspace-continuity.ts`, `src/apps/desktop/workspace-continuity-writer.ts` |
+| Desktop sequence driver                                                                                                            | `src/apps/desktop/workspace-continuity-sequence.ts`                                                   |
 
 ## Slices
 
@@ -51,19 +51,24 @@ candidate, R4.
    the confirm/rebind command kinds; Settings goes through
    `nextContinuitySettings`; every Go call maps to the RPCs of slice 1. No
    renderer supplies a receipt, picker result or predicate.
-3. **Legacy enrollment (explicit).** A "Confirm folder" action for a bound
-   folder without continuity: drained stop, native picker that must return the
-   same fixed root, then the legacy-confirm sequence. A successful add-workspace
-   enrolls in the same way.
-4. **Launch self-heal (automatic).** Before connector resume, for an enrolled
-   folder whose device changed and whose observation compares as a remount
-   candidate on the current startup Data anchor, run the enrolled-rebind
-   sequence with no picker; on any refusal or unknown, fall back to the stage-1
-   withdrawal and no resume.
+3. **Legacy enrollment (explicit).** A "Turn on automatic recovery" action for
+   a bound folder without continuity, while the connector runs. The original
+   Stop and legacy-confirm sequence require the native picker to return the
+   same fixed root. Run Verify after current qualification.
+4. **Launch self-heal (automatic).** Keep qualified, enrolled device-renumbering
+   candidates out of the stage-1 withdrawal. Let the regular connector resume
+   complete first because the original Stop requires a running connector. Run
+   enrolled-rebind sequentially, Verify each qualified folder, and restore the
+   connector once after the drain when needed. On failure, withdraw stale
+   checks when the protected owners permit a Settings write. For restricted
+   outcomes, withhold the checks in the UI and retain the original custody.
 5. **Qualification.** The decision's oracle list as tests (replacement, clone
    with different filesystem instance, symlink/ancestor race, unknown at every
    boundary, Quit, restart); a native Dev run; a real reboot on an installed
-   build.
+   build. Production activation requires a qualified current Settings reader
+   and qualification of retained continuity before the initial Go authority
+   publication. The desktop must keep continuity writes closed until both are
+   available.
 
 ## Out of scope
 

@@ -135,6 +135,13 @@ export const BootstrapProjectionSchema = z.object({
   runtimeState: z.enum(["starting", "ready", "offline", "failed"]),
   independentSession: z.boolean().optional(),
   connectionStatus: ConnectionStatusViewSchema.optional(),
+  connectorRunning: z.boolean().optional(),
+  launchWorkspaceRecoveryIssue: z
+    .strictObject({
+      workspaceIds: z.array(z.string()),
+      outcomeUnknown: z.boolean(),
+    })
+    .optional(),
   browserRouteState: BrowserRouteStatusSchema.optional(),
   browserHistoryState: BrowserHistoryStateSchema.optional(),
   selectedTaskId: z.string().default(""),
@@ -484,6 +491,8 @@ export class WindowController implements RendererFacade {
             ? { browserHistory: data.browserHistoryState }
             : {}),
           independentSession: data.independentSession === true,
+          connectorRunning: data.connectorRunning === true,
+          launchWorkspaceRecoveryIssue: data.launchWorkspaceRecoveryIssue,
           ...(this.browserRouteRevision === browserRouteAtStart &&
           data.browserRouteState
             ? { route: data.browserRouteState.state }
@@ -714,6 +723,9 @@ export class WindowController implements RendererFacade {
       if (this.disposed) return;
       this.patch({
         connectionChecking: result.connectionChecking === true,
+        ...(result.connectorRunning === undefined
+          ? {}
+          : { connectorRunning: result.connectorRunning }),
         activity: result.entries.map((entry) => ({
           ...entry,
           ...(entry.lifecycle?.phase === "started" &&
@@ -882,6 +894,8 @@ export class WindowController implements RendererFacade {
       this.patch({
         status,
         runtime,
+        connectorRunning: parsed.data.connectorRunning === true,
+        launchWorkspaceRecoveryIssue: parsed.data.launchWorkspaceRecoveryIssue,
       });
       this.reconcileSavedSignIn();
       if (this.disposed) return { status: "unqualified", reason: "disposed" };

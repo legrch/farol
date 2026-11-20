@@ -6,6 +6,7 @@
 const agentGuardedCommands = new Set<string>([
   "computer.rename",
   "computer.add-workspace",
+  "computer.enroll-workspace-recovery",
   "computer.remove-workspace",
   "computer.update-exclusions",
   "computer.update-access",

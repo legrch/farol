@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  healWorkspaceDriftAfterResume,
+  scanWorkspaceRootDrift,
+  type WorkspaceDriftObservation,
+} from "../../apps/desktop/configuration/drift";
+import type { ContinuitySequenceResult } from "../../src/apps/desktop/workspace-continuity-sequence";
+import {
   createUpdateAbortConnectorRecovery,
   shouldResumeComputerConnector,
   resumeComputerConnector,
@@ -838,4 +844,250 @@ it("resumes known local runtime without replaying an uncertain external app chec
   expect(settings.setup.connect.outcomeUnknown).toBe(true);
   settings.connectors.secureMcp.runtime!.state = "outcome_unknown";
   expect(check(settings)).toBe(false);
+});
+
+describe("launch workspace self-heal", () => {
+  function fixture() {
+    const settings = configured();
+    const workspace = settings.computer.workspaces[0]!;
+    workspace.continuity = {
+      schema: "farol.workspace-continuity/1",
+      computerId: settings.computer.computerId,
+      workspaceId,
+      root: workspace.root,
+      filesystem: "apfs",
+      volumeUuid: "11111111-2222-3333-4444-555555555555",
+      fileId: "98",
+      birthSeconds: "1700000000",
+      birthNanoseconds: "0",
+      enrollment: {
+        operationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        selectedAt: at,
+        policySha256: "e".repeat(64),
+      },
+    };
+    const snapshot = (): ProductConfigurationSnapshot => ({
+      status: "ready",
+      settings,
+    });
+    const events: string[] = [];
+    let running = false;
+    const guards = { quit: false, agent: false };
+    const mayContinue = () => !guards.quit && !guards.agent;
+    const scanPorts = {
+      measure: vi.fn(async () => ({ device: "6", inode: "98" })),
+      recoveryQualified: vi.fn(async (): Promise<true | "unavailable"> => true),
+    };
+    const withdraw = vi.fn(
+      async (items: readonly WorkspaceDriftObservation[]) => {
+        events.push("withdraw");
+        for (const item of items) {
+          const affected = settings.computer.workspaces.find(
+            (workspace) => workspace.workspaceId === item.workspaceId,
+          );
+          if (affected) affected.accessCheck = null;
+        }
+        settings.setup.computer.verified = null;
+        settings.connectors.secureMcp.runtime = null;
+      },
+    );
+    const start = vi.fn(async () => {
+      events.push(running ? "second-start-while-running" : "start");
+      running = true;
+      return { ok: true };
+    });
+    const heal = vi.fn(
+      async (_id: string): Promise<ContinuitySequenceResult> => {
+        expect(running).toBe(true);
+        events.push("rebind");
+        running = false;
+        return { state: "current-qualified", operationId: "qualified" };
+      },
+    );
+    const verify = vi.fn(async () => {
+      events.push("verify");
+      return { ok: true };
+    });
+    const fallback = vi.fn(
+      async (items: readonly WorkspaceDriftObservation[]) => {
+        expect(running).toBe(false);
+        await withdraw(items);
+      },
+    );
+    const run = async () => {
+      const { withdraw: stale, candidates } = await scanWorkspaceRootDrift(
+        settings,
+        scanPorts,
+      );
+      if (stale.length > 0) await withdraw(stale);
+      const status = await resumeComputerConnector(
+        {
+          environment: "dev",
+          buildEnvironment: "dev",
+          previousRunClean: true,
+          snapshot: snapshot(),
+          buildId: "a".repeat(64),
+        },
+        { current: snapshot, mayContinue, verifyWorkspace: verify, start },
+      );
+      await healWorkspaceDriftAfterResume(status, candidates, {
+        mayContinue,
+        current: snapshot,
+        connectorRunning: () => running,
+        heal,
+        verify,
+        start,
+        fallback,
+      });
+      return status;
+    };
+    return {
+      events,
+      guards,
+      workspace,
+      settings,
+      scanPorts,
+      start,
+      heal,
+      verify,
+      fallback,
+      run,
+      stopped: () => {
+        running = false;
+      },
+      running: () => running,
+    };
+  }
+
+  it("resumes normally, then rebinds, verifies and starts once after the drain", async () => {
+    const f = fixture();
+    expect(await f.run()).toBe("started");
+    expect(f.events).toEqual(["start", "rebind", "verify", "start"]);
+    expect(f.heal).toHaveBeenCalledExactlyOnceWith(
+      workspaceId,
+      "enrolled-rebind",
+    );
+    expect(f.verify).toHaveBeenCalledExactlyOnceWith(workspaceId);
+    expect(f.running()).toBe(true);
+  });
+
+  it("keeps a running connector after Verify without another start", async () => {
+    const f = fixture();
+    f.heal.mockResolvedValueOnce({
+      state: "current-qualified",
+      operationId: "qualified",
+    });
+    await f.run();
+    expect(f.start).toHaveBeenCalledTimes(1);
+    expect(f.verify).toHaveBeenCalledTimes(1);
+  });
+
+  it("heals multiple candidates sequentially with a fresh running prerequisite", async () => {
+    const f = fixture();
+    const second = structuredClone(f.workspace);
+    second.workspaceId = "00000000-0000-4000-8000-000000000003";
+    second.root = "/approved/second";
+    second.continuity = {
+      ...second.continuity!,
+      workspaceId: second.workspaceId,
+      root: second.root,
+    };
+    f.settings.computer.workspaces.push(second);
+    await f.run();
+    expect(f.events).toEqual([
+      "start",
+      "rebind",
+      "verify",
+      "start",
+      "rebind",
+      "verify",
+      "start",
+    ]);
+    expect(f.heal.mock.calls).toEqual([
+      [workspaceId, "enrolled-rebind"],
+      [second.workspaceId, "enrolled-rebind"],
+    ]);
+  });
+
+  it("does not Verify or restart when Quit begins during a heal", async () => {
+    const f = fixture();
+    f.heal.mockImplementationOnce(async () => {
+      f.guards.quit = true;
+      f.stopped();
+      return { state: "unknown", phase: "current-qualification" };
+    });
+    await f.run();
+    expect(f.verify).not.toHaveBeenCalled();
+    expect(f.fallback).not.toHaveBeenCalled();
+    expect(f.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a newer workspace check alone after the launch observation", async () => {
+    const f = fixture();
+    f.start.mockImplementationOnce(async () => {
+      f.workspace.accessCheck = {
+        buildId: "a".repeat(64),
+        computerGeneration: f.settings.computer.generation,
+        verifiedAt: at,
+        rootIdentity: f.workspace.rootIdentity!,
+      };
+      return { ok: true };
+    });
+    expect(await f.run()).toBe("started");
+    expect(f.heal).not.toHaveBeenCalled();
+    expect(f.fallback).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ state: "refused", phase: "confirm" }, "refused"],
+    [{ state: "unknown", phase: "settings" }, "unknown"],
+    [{ state: "committed-not-active", operationId: "id" }, "unavailable"],
+  ] as const)(
+    "withdraws stale evidence after a %o heal and leaves the drain stopped",
+    async (outcome, state) => {
+      const f = fixture();
+      f.heal.mockImplementationOnce(async () => {
+        f.events.push("rebind");
+        f.stopped();
+        return outcome;
+      });
+      expect(await f.run()).toBe("started");
+      expect(f.events).toEqual(["start", "rebind", "withdraw"]);
+      expect(f.fallback).toHaveBeenCalledExactlyOnceWith(
+        [expect.objectContaining({ workspaceId })],
+        state,
+      );
+      expect(f.running()).toBe(false);
+    },
+  );
+
+  it.each(["unenrolled", "different-object", "unqualified"] as const)(
+    "withdraws %s drift before resume",
+    async (reason) => {
+      const f = fixture();
+      if (reason === "unenrolled") delete f.workspace.continuity;
+      else if (reason === "different-object")
+        f.scanPorts.measure.mockResolvedValueOnce({ device: "6", inode: "99" });
+      else f.scanPorts.recoveryQualified.mockResolvedValueOnce("unavailable");
+      expect(await f.run()).toBe("skipped");
+      expect(f.events).toEqual(["withdraw"]);
+      expect(f.heal).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["quit", "agent", "no-start"] as const)(
+    "does no launch heal after %s",
+    async (reason) => {
+      const f = fixture();
+      f.start.mockImplementationOnce(async () => {
+        if (reason === "no-start") return { ok: false };
+        f.guards[reason] = true;
+        return { ok: true };
+      });
+      await f.run();
+      expect(f.heal).not.toHaveBeenCalled();
+      expect(f.verify).not.toHaveBeenCalled();
+      expect(f.fallback).not.toHaveBeenCalled();
+    },
+  );
 });

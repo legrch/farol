@@ -14,6 +14,7 @@ import type {
 import { DesktopAdmission } from "../host/admission";
 import {
   createWorkspaceContinuityHost,
+  enrollWorkspaceRecovery,
   type ContinuityPicker,
 } from "./continuity";
 import {
@@ -101,6 +102,7 @@ const continuitySteps = [
   "record.close_intent",
   "finish.committed",
   "qualify",
+  "publishCurrent",
 ];
 
 // Real desktop composition, drain and wire parsing. Connector, Go pipe and
@@ -279,6 +281,10 @@ function fixture(options: Options = {}) {
   let stopRequest: ComputerStopAdmitRequest | undefined;
   const core = {
     workspaceContinuity: new ContinuityBridge(client as unknown as Client),
+    publishCurrent: async () => {
+      if (enter("publishCurrent"))
+        throw Error("authority publication reply lost");
+    },
     observeOriginalStop: vi.fn(async () => ({
       restricted: options.pendingStop === true,
     })),
@@ -482,12 +488,65 @@ function fixture(options: Options = {}) {
     baseRevision,
     baseGeneration,
     picker,
+    host,
     authority,
     admission,
     core,
     drain,
   };
 }
+
+describe("workspace recovery enrollment", () => {
+  it.each([
+    [{}, null],
+    [{ cancel: true }, "WORKSPACE_PICKER_CANCELLED"],
+    [{ selectOther: true }, "WORKSPACE_SELECTION_INVALID"],
+    [
+      { cancel: true, failAt: "finish.refused" },
+      "WORKSPACE_CONFIGURATION_PHASE_UNCONFIRMED",
+    ],
+    [{ failAt: "settings.save" }, "WORKSPACE_CONFIGURATION_PHASE_UNCONFIRMED"],
+    [
+      { failAt: "qualify", failure: "refused" },
+      "WORKSPACE_VERIFICATION_FAILED",
+    ],
+  ] as const)(
+    "reports the original enrollment result (%o)",
+    async (options, error) => {
+      const f = fixture(options);
+      const result = await enrollWorkspaceRecovery(workspaceId, {
+        run: f.host.runWorkspaceContinuity,
+        pick: f.picker,
+        mayVerify: () => true,
+        verify: async (id) => {
+          expect(id).toBe(workspaceId);
+          expect(f.authority.current()).toBeNull();
+          expect(f.settings().computer.workspaces[0]?.continuity).toBeDefined();
+          expect(f.events.slice(-2)).toEqual(["qualify", "publishCurrent"]);
+          f.events.push("computer.verify-workspace");
+          return {
+            ok: true,
+            snapshot: { status: "ready", settings: f.settings() },
+          };
+        },
+        failure: (error) => ({
+          ok: false,
+          error,
+          snapshot: { status: "ready", settings: f.settings() },
+        }),
+      });
+      if (error === null) {
+        expect(result.ok).toBe(true);
+        expect(f.events.at(-1)).toBe("computer.verify-workspace");
+      } else {
+        expect(result).toMatchObject({ ok: false, error });
+        expect(f.events).not.toContain("computer.verify-workspace");
+        if ("cancel" in options || "selectOther" in options)
+          expect(f.events).not.toContain("withdraw");
+      }
+    },
+  );
+});
 
 describe("desktop workspace continuity host", () => {
   it("has no launch prerequisite before the connector is started", async () => {
@@ -501,7 +560,7 @@ describe("desktop workspace continuity host", () => {
     // qualification; gating qualify on an unrestricted journal deadlocked.
     const f = fixture({ restrictedAfterCommit: true });
     const result = await f.run();
-    expect(f.events.at(-1)).toBe("qualify");
+    expect(f.events.slice(-2)).toEqual(["qualify", "publishCurrent"]);
     expect(result).toEqual({
       state: "current-qualified",
       operationId: f.state.operationId,
@@ -614,6 +673,7 @@ describe("desktop workspace continuity host", () => {
     ["plan.close_intent", "close"],
     ["record.close_intent", "close"],
     ["finish.committed", "close"],
+    ["publishCurrent", "current-qualification"],
   ] as const;
 
   it.each(faults)(

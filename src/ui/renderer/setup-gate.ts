@@ -188,6 +188,7 @@ export function setupStepCheck(
   const refusals = intents.filter(
     (intent) =>
       intent.state === "refused" &&
+      !intent.id.startsWith("settings:computer.enroll-workspace-recovery:") &&
       // Missing order cannot establish that a refusal predates this check.
       (!snapshot.setupCheckOrder?.[intent.id] ||
         snapshot.setupCheckOrder[intent.id]! >= latestConfirmation),

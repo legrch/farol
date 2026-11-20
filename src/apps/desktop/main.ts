@@ -316,7 +316,6 @@ import {
 import {
   ProductConfigurationService,
   ProductSettingsStore,
-  workspaceCheckEvidence,
 } from "./product-configuration";
 import { shellGeometry } from "./surface-layout";
 import {
@@ -371,7 +370,10 @@ import {
   createConfigurationDrain,
   type WorkspaceAuthorityChangeKind,
 } from "../../../apps/desktop/configuration/drain";
-import { createWorkspaceContinuityHost } from "../../../apps/desktop/configuration/continuity";
+import {
+  createWorkspaceContinuityHost,
+  enrollWorkspaceRecovery,
+} from "../../../apps/desktop/configuration/continuity";
 import { qualifyContinuityRecovery } from "../../../apps/desktop/configuration/recovery";
 import { createConfigurationConnector } from "../../../apps/desktop/configuration/connector";
 import { createConfigurationComputer } from "../../../apps/desktop/configuration/computer";
@@ -434,7 +436,11 @@ import {
   type RouteBTaskSurfaces,
 } from "./route-b-runtime";
 import { type PendingWorkspaceEdit } from "./workspace-edit";
-import { classifyWorkspaceRootDrift } from "../../../apps/desktop/configuration/drift";
+import {
+  healWorkspaceDriftAfterResume,
+  scanWorkspaceRootDrift,
+  type WorkspaceDriftObservation,
+} from "../../../apps/desktop/configuration/drift";
 import {
   createSupportExport,
   writeSupportExport,
@@ -940,6 +946,12 @@ const desktopAdmission = new DesktopAdmission({
 // Presentation spans workspace admission, tunnel startup and the app check.
 // It conveys no authority and is never restored from Activity or saved settings.
 let startupConnectionChecking = true;
+let launchWorkspaceRecoveryIssue:
+  | Readonly<{
+      workspaceIds: readonly string[];
+      outcomeUnknown: boolean;
+    }>
+  | undefined;
 let connectorStartInFlight: Promise<void> | null = null;
 let connectorStartCancellation: AbortController | null = null;
 let startupConnectorResumeCancelled = false;
@@ -1693,6 +1705,8 @@ function bootstrap() {
       )?.navigationHistory(),
     },
     connectionStatus: currentConnectionStatus(),
+    connectorRunning: connectorRunningForWorkspaceEnrollment(),
+    launchWorkspaceRecoveryIssue,
     runtimeError,
     runtimeIdentity: runtime?.identity ?? null,
     embeddedNode: runtime?.embeddedNode ?? null,
@@ -4086,95 +4100,151 @@ async function measuredRootIdentity(
   }
 }
 
-// Read-only measurement of every identity-bound folder (a legacy record with no
-// saved check can still count as verified), then one authority-reducing write.
-// Returns false when drift was found but could not be withdrawn: the caller
-// must then not resume a connector that would carry the stale grant.
-async function withdrawDriftedWorkspaceChecksAtLaunch(): Promise<boolean> {
-  if (!configuration) return true;
-  let drifted = 0;
-  let withdrawn = false;
-  let code: string | null = null;
-  // The window and Settings IPC are already open. Hold the authority
-  // reservation across the WHOLE scan (measurement and write), so a manual
-  // Connect or Agent admission cannot start with the stale grant meanwhile.
+function connectorRunningForWorkspaceEnrollment(): boolean {
+  return (
+    secureMcpConnectorRuntime?.isRunning() === true &&
+    !secureMcpConnectorRuntime.hasUnresolvedEffect() &&
+    connectorStartInFlight === null
+  );
+}
+
+function launchWorkspaceRecoveryMayContinue(): boolean {
+  return (
+    !startupConnectorResumeCancelled &&
+    !desktopAdmission.closed() &&
+    !codexAgentOperationActive()
+  );
+}
+
+function launchWorkspaceWithdrawalMayRun(): boolean {
+  return (
+    launchWorkspaceRecoveryMayContinue() &&
+    !desktopAdmission.occupied("connector-task") &&
+    secureMcpConnectorRuntime?.isRunning() !== true
+  );
+}
+
+function reportLaunchWorkspaceDrift(
+  workspaces: number,
+  withdrawn: boolean,
+  code?: string,
+) {
+  if (workspaces > 0 || code)
+    console.warn(
+      "FAROL_WORKSPACE_ROOT_DRIFT:" +
+        JSON.stringify({ workspaces, withdrawn, ...(code ? { code } : {}) }),
+    );
+}
+
+async function withdrawLaunchWorkspaceDrift(
+  observations: readonly WorkspaceDriftObservation[],
+): Promise<boolean> {
+  const owner = configuration;
+  if (!owner || !launchWorkspaceWithdrawalMayRun()) {
+    reportLaunchWorkspaceDrift(
+      observations.length,
+      false,
+      "CONNECTOR_STOP_REQUIRED",
+    );
+    return false;
+  }
+  try {
+    const result = await owner.withdrawDriftedWorkspaceChecks(
+      observations,
+      () => configuration === owner && launchWorkspaceWithdrawalMayRun(),
+    );
+    reportLaunchWorkspaceDrift(
+      observations.length,
+      result.ok,
+      result.ok ? undefined : result.error,
+    );
+    return result.ok;
+  } catch {
+    reportLaunchWorkspaceDrift(
+      observations.length,
+      false,
+      "SETTINGS_WRITE_FAILED",
+    );
+    return false;
+  }
+}
+
+async function scanLaunchWorkspaceDrift() {
+  // Keep manual Connect and Agent admission out of the entire scan and any
+  // stage-1 Settings write. Continuity takes its own reservation after Start.
   const reserved = await authorityTransitions.withReservation(
     "authority-change",
     async () => {
-      const snapshot = configuration!.snapshot();
-      if (snapshot.status !== "ready") return;
-      const found: {
-        workspaceId: string;
-        root: string;
-        rootIdentity: WorkspaceRootIdentity;
-        observed: string;
-      }[] = [];
-      for (const workspace of snapshot.settings.computer.workspaces) {
-        if (!workspace.rootIdentity) continue;
-        // Evidence before measuring: a newer check is never erased by it.
-        const observed = workspaceCheckEvidence(
-          snapshot.settings,
-          workspace.workspaceId,
-        );
-        const measured = await measuredRootIdentity(workspace.root);
-        const drift = classifyWorkspaceRootDrift(
-          workspace.rootIdentity,
-          measured,
-        );
-        // A vanished folder refuses every call just like a changed one.
-        if (measured === null || drift !== "same")
-          found.push({
-            workspaceId: workspace.workspaceId,
-            root: workspace.root,
-            rootIdentity: workspace.rootIdentity,
-            observed,
-          });
-      }
-      drifted = found.length;
-      if (found.length === 0) {
-        withdrawn = true;
-        return;
-      }
-      // Quit may have closed admission while the folders were measured, and a
-      // connector or an active Agent may still carry the grant; then leave
-      // settings alone (Go's per-call root guard keeps refusing the root).
-      if (desktopAdmission.closed()) {
-        code = "AUTHORITY_CHANGE_IN_PROGRESS";
-        return;
-      }
-      if (
-        codexAgentOperationActive() ||
-        desktopAdmission.occupied("connector-task") ||
-        secureMcpConnectorRuntime?.isRunning() === true
-      ) {
-        code = "CONNECTOR_STOP_REQUIRED";
-        return;
-      }
-      try {
-        const result = await configuration!.withdrawDriftedWorkspaceChecks(
-          found,
-          () => !desktopAdmission.closed(),
-        );
-        withdrawn = result.ok;
-        code = result.ok ? null : result.error;
-      } catch {
-        code = "SETTINGS_WRITE_FAILED";
-      }
+      const snapshot = configuration?.snapshot();
+      if (!launchWorkspaceRecoveryMayContinue() || snapshot?.status !== "ready")
+        return { settled: false, candidates: [] };
+      const drift = await scanWorkspaceRootDrift(snapshot.settings, {
+        measure: measuredRootIdentity,
+        recoveryQualified: workspaceRecoveryQualified,
+      });
+      const settled =
+        launchWorkspaceRecoveryMayContinue() &&
+        (drift.withdraw.length === 0 ||
+          (await withdrawLaunchWorkspaceDrift(drift.withdraw)));
+      return { settled, candidates: drift.candidates };
     },
   );
-  // A competing authority change owns this moment; do not resume on top of
-  // an unmeasured grant. The owner's own operation proceeds as before.
-  if (!reserved.admitted) code = "AUTHORITY_CHANGE_IN_PROGRESS";
-  if (drifted > 0 || !reserved.admitted)
-    console.warn(
-      "FAROL_WORKSPACE_ROOT_DRIFT:" +
-        JSON.stringify({
-          workspaces: drifted,
-          withdrawn,
-          ...(code ? { code } : {}),
-        }),
-    );
-  return reserved.admitted && withdrawn;
+  if (reserved.admitted) return reserved.value;
+  reportLaunchWorkspaceDrift(0, false, "AUTHORITY_CHANGE_IN_PROGRESS");
+  return { settled: false, candidates: [] };
+}
+
+async function fallbackLaunchWorkspaceDrift(
+  observations: readonly WorkspaceDriftObservation[],
+  state: "refused" | "unknown" | "unavailable",
+): Promise<void> {
+  let stopUnconfirmed = false;
+  const reserved = await authorityTransitions.withReservation(
+    "authority-change",
+    async () => {
+      if (!launchWorkspaceRecoveryMayContinue()) return false;
+      if (secureMcpConnectorRuntime?.isRunning()) {
+        // A known pre-Stop refusal can leave the launch runtime running.
+        // Never repeat a potentially dispatched Stop after an unknown result.
+        if (state === "unknown" || connectorStartInFlight) return false;
+        const connectorAdmission = desktopAdmission.acquire("connector-task");
+        if (!connectorAdmission) return false;
+        connectorConnection.invalidate();
+        try {
+          await stopAndConfirmComputerMcp();
+        } catch {
+          stopUnconfirmed = true;
+          return false;
+        } finally {
+          connectorAdmission.release();
+        }
+      }
+      // An original Go transition whose Store is restricted still owns its
+      // Settings evidence. Keep presentation blocked until its custody settles.
+      try {
+        const core = desktopGoCore;
+        if (!core) return false;
+        const [continuity, stop] = await Promise.all([
+          core.observeComputerContinuity(),
+          core.observeOriginalStop(),
+        ]);
+        if (desktopGoCore !== core || continuity.restricted || stop.restricted)
+          return false;
+      } catch {
+        return false;
+      }
+      return withdrawLaunchWorkspaceDrift(observations);
+    },
+  );
+  if (
+    launchWorkspaceRecoveryMayContinue() &&
+    (!reserved.admitted || !reserved.value || state === "unknown")
+  ) {
+    launchWorkspaceRecoveryIssue = {
+      workspaceIds: observations.map(({ workspaceId }) => workspaceId),
+      outcomeUnknown: state === "unknown" || stopUnconfirmed,
+    };
+  }
 }
 
 async function selectedWorkspace(): Promise<
@@ -6496,6 +6566,7 @@ function configurationPipeline() {
     configurationFailure,
     computerMcpLifecycle,
     configureDrainedWorkspaceChange,
+    enrollWorkspaceRecovery: configureWorkspaceRecoveryEnrollment,
     deliverConfigurationReply,
     configureAdmittedProduct,
     transitionRefusal,
@@ -6534,6 +6605,40 @@ let configurationDrainCache: ReturnType<
   typeof createConfigurationDrain
 > | null = null;
 
+async function workspaceRecoveryQualified(): Promise<true | "unavailable"> {
+  const core = desktopGoCore;
+  const managedBuild =
+    (app.isPackaged || buildEnvironment === "dev") &&
+    runtimeEnvironment === buildEnvironment &&
+    compiledGoCore != null;
+  // Boot currently composes HeldCurrentQualifier with a nil Settings reader.
+  // Keep the writer closed until that reader and launch restore are qualified.
+  const currentReaderAndRestoreWired: boolean = false;
+  if (
+    !currentReaderAndRestoreWired ||
+    process.platform !== "darwin" ||
+    !managedBuild ||
+    !core
+  )
+    return "unavailable";
+  try {
+    const [continuity, stop] = await Promise.all([
+      core.observeComputerContinuity(),
+      core.observeOriginalStop(),
+    ]);
+    if (desktopGoCore !== core || !core.backendAvailable) return "unavailable";
+    return qualifyContinuityRecovery({
+      platform: process.platform,
+      managedBuild,
+      capabilities: core.continuityCapabilities,
+      continuity,
+      stop,
+    });
+  } catch {
+    return "unavailable";
+  }
+}
+
 export const { runWorkspaceContinuity } = createWorkspaceContinuityHost({
   configuration: () => configuration,
   desktopGoCore: () => desktopGoCore,
@@ -6549,33 +6654,40 @@ export const { runWorkspaceContinuity } = createWorkspaceContinuityHost({
   drainContinuityPrerequisite: (command) =>
     configurationDrain().drainContinuityPrerequisite(command),
   ownerComputerConsentDigest,
-  recoveryQualified: async () => {
-    const core = desktopGoCore;
-    const managedBuild =
-      (app.isPackaged || buildEnvironment === "dev") &&
-      runtimeEnvironment === buildEnvironment &&
-      compiledGoCore != null;
-    if (process.platform !== "darwin" || !managedBuild || !core)
-      return "unavailable";
-    try {
-      const [continuity, stop] = await Promise.all([
-        core.observeComputerContinuity(),
-        core.observeOriginalStop(),
-      ]);
-      if (desktopGoCore !== core || !core.backendAvailable)
-        return "unavailable";
-      return qualifyContinuityRecovery({
-        platform: process.platform,
-        managedBuild,
-        capabilities: core.continuityCapabilities,
-        continuity,
-        stop,
-      });
-    } catch {
-      return "unavailable";
-    }
-  },
+  recoveryQualified: workspaceRecoveryQualified,
 });
+
+function configureWorkspaceRecoveryEnrollment(workspaceId: string) {
+  if (!connectorRunningForWorkspaceEnrollment())
+    return Promise.resolve(
+      configurationFailure("CONNECTOR_RUNTIME_UNREACHABLE"),
+    );
+  return enrollWorkspaceRecovery(workspaceId, {
+    run: runWorkspaceContinuity,
+    pick: async (operationId, root) => {
+      const owner = window;
+      if (!owner || owner.isDestroyed() || desktopAdmission.closed())
+        return { state: "cancelled", operationId };
+      const selected = await dialog.showOpenDialog(owner, {
+        title: "Confirm this workspace",
+        buttonLabel: "Confirm Folder",
+        defaultPath: root,
+        properties: ["openDirectory"],
+        securityScopedBookmarks: false,
+      });
+      const pickedRoot = selected.filePaths[0];
+      return selected.canceled ||
+        selected.filePaths.length !== 1 ||
+        pickedRoot === undefined
+        ? { state: "cancelled", operationId }
+        : { state: "selected", operationId, root: pickedRoot };
+    },
+    mayVerify: () => !desktopAdmission.closed() && !codexAgentOperationActive(),
+    verify: (id) =>
+      configureProduct({ kind: "computer.verify-workspace", workspaceId: id }),
+    failure: configurationFailure,
+  });
+}
 
 function configurationComputer() {
   return (configurationComputerCache ??= createConfigurationComputer({
@@ -10014,6 +10126,7 @@ function installIpc(): void {
       ...snapshot,
       connectionChecking:
         startupConnectionChecking || connectionAdmissionInProgress(),
+      connectorRunning: connectorRunningForWorkspaceEnrollment(),
     };
   });
   ipcMain.handle(channels.selfTest, (event, value: unknown) =>
@@ -11327,11 +11440,9 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   });
   quitSignals.ready();
   void installedUpdates.initialize();
-  // A reboot can renumber the startup volume. A saved folder whose identity no
-  // longer matches would make every connector call refuse while the sidebar
-  // still says Connected, so withdraw its stale check before any resume. If
-  // drift was found but could not be withdrawn, do not resume at all.
-  const driftSettled = await withdrawDriftedWorkspaceChecksAtLaunch();
+  // Unenrolled or replaced roots lose stale checks before resume. An
+  // enrolled candidate needs a running connector for its original Stop.
+  const drift = await scanLaunchWorkspaceDrift();
   const beforeConnectorResume = configuration.snapshot();
   void resumeComputerConnector(
     {
@@ -11343,10 +11454,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     },
     {
       current: () => configuration!.snapshot(),
-      mayContinue: () =>
-        driftSettled &&
-        !startupConnectorResumeCancelled &&
-        !desktopAdmission.closed(),
+      mayContinue: () => drift.settled && launchWorkspaceRecoveryMayContinue(),
       // The normal command retains authority reservation, physical-root and
       // Go inspection checks. No synthetic verification receipt is written.
       verifyWorkspace: (workspaceId) =>
@@ -11354,6 +11462,19 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       start: () => startSecureMcpConnector(false, true),
     },
   )
+    .then(async (status) => {
+      await healWorkspaceDriftAfterResume(status, drift.candidates, {
+        mayContinue: launchWorkspaceRecoveryMayContinue,
+        current: () => configuration!.snapshot(),
+        connectorRunning: () => secureMcpConnectorRuntime?.isRunning() === true,
+        heal: runWorkspaceContinuity,
+        verify: (workspaceId) =>
+          configureProduct({ kind: "computer.verify-workspace", workspaceId }),
+        start: () => startSecureMcpConnector(false),
+        fallback: fallbackLaunchWorkspaceDrift,
+      });
+      return status;
+    })
     .then(
       (status) => {
         startupStage(

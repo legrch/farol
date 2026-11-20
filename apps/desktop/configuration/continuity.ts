@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type { ProductSettings } from "../../../src/pkg/product-settings/contract";
+import type {
+  ProductConfigurationResult,
+  ProductSettings,
+} from "../../../src/pkg/product-settings/contract";
 import {
   ContinuitySequence,
   type ContinuityEffectReceipt,
@@ -34,7 +37,10 @@ type SettingsOwner = Pick<
 >;
 type Core = Pick<
   DesktopGoCore,
-  "workspaceContinuity" | "observeComputerContinuity" | "observeOriginalStop"
+  | "workspaceContinuity"
+  | "observeComputerContinuity"
+  | "observeOriginalStop"
+  | "publishCurrent"
 >;
 
 // Caller is the trusted desktop host. It may only return the original native
@@ -421,7 +427,11 @@ export function createWorkspaceContinuityHost(ports: HostPorts) {
         if (!current()) return "unavailable";
         const reply = await go.qualify(id);
         if (reply.state === "unknown") return "unknown";
-        return reply.state === "acknowledged" ? true : "unavailable";
+        if (reply.state !== "acknowledged" || !current()) return "unavailable";
+        // Go qualified the Store's staged approval. The desktop's normal
+        // inspection path still needs a current authority publication receipt.
+        await core.publishCurrent();
+        return true;
       },
     };
 
@@ -433,4 +443,44 @@ export function createWorkspaceContinuityHost(ports: HostPorts) {
   }
 
   return Object.freeze({ runWorkspaceContinuity });
+}
+
+export async function enrollWorkspaceRecovery(
+  workspaceId: string,
+  ports: Readonly<{
+    run(
+      workspaceId: string,
+      mode: "legacy-confirm",
+      picker: ContinuityPicker,
+    ): Promise<ContinuitySequenceResult>;
+    pick: ContinuityPicker;
+    mayVerify(): boolean;
+    verify(workspaceId: string): Promise<ProductConfigurationResult>;
+    failure(
+      error: Extract<ProductConfigurationResult, { ok: false }>["error"],
+    ): ProductConfigurationResult;
+  }>,
+): Promise<ProductConfigurationResult> {
+  let pickerRefusal:
+    "WORKSPACE_PICKER_CANCELLED" | "WORKSPACE_SELECTION_INVALID" | undefined;
+  const result = await ports.run(
+    workspaceId,
+    "legacy-confirm",
+    async (id, root) => {
+      const picked = await ports.pick(id, root);
+      if (picked.state === "cancelled")
+        pickerRefusal = "WORKSPACE_PICKER_CANCELLED";
+      else if (picked.root !== root)
+        pickerRefusal = "WORKSPACE_SELECTION_INVALID";
+      return picked;
+    },
+  );
+  if (result.state === "unknown")
+    return ports.failure("WORKSPACE_CONFIGURATION_PHASE_UNCONFIRMED");
+  if (result.state === "refused" && result.phase === "confirm" && pickerRefusal)
+    return ports.failure(pickerRefusal);
+  if (result.state !== "current-qualified")
+    return ports.failure("WORKSPACE_VERIFICATION_FAILED");
+  if (!ports.mayVerify()) return ports.failure("AUTHORITY_CHANGE_IN_PROGRESS");
+  return ports.verify(workspaceId);
 }
