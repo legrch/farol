@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 
 	"github.com/legrch/farol/modules/computer/domain/journal"
 	"github.com/legrch/farol/pkg/kernel/domain/digest"
@@ -26,6 +27,17 @@ func (o *Owner) Plan(ctx context.Context, id string, phase journal.Phase) (journ
 	a := o.active
 	if o.poisoned || a == nil || a.request.OperationID != id || ctx == nil || ctx.Err() != nil {
 		return journal.Receipt{}, journal.ErrRefused
+	}
+	// The strict Settings writer observes this same plan while the retained
+	// Settings intent is current. Recheck both held chains before it saves
+	// and at the last asynchronous boundary before publication.
+	if phase == journal.SettingsIntent && a.phase == journal.SettingsIntent {
+		if err := a.anchor.Requalify(ctx); err != nil {
+			return journal.Receipt{}, errors.Join(journal.ErrUnknown, err)
+		}
+		if err := a.candidate.Requalify(ctx); err != nil {
+			return journal.Receipt{}, errors.Join(journal.ErrUnknown, err)
+		}
 	}
 	return planReceipt(a.request, phase), nil
 }

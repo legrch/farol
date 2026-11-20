@@ -1,3 +1,4 @@
+import type { WorkspaceAuthorityChangeKind } from "./drain";
 import { DesktopAdmission } from "../host/admission";
 import { AuthorityTransitionReservation } from "../../../src/apps/desktop/authority-transition";
 import { DesktopGoCore } from "../go-core-host";
@@ -27,7 +28,7 @@ export type ConfigurationPipelinePorts = Readonly<{
     "closed" | "withConfigurationRequest" | "occupied" | "reserveAdmitted"
   >;
   authorityTransitions: AuthorityTransitionReservation;
-  activeAuthorityChangeKind: () => ProductConfigurationCommand["kind"] | null;
+  activeAuthorityChangeKind: () => WorkspaceAuthorityChangeKind | null;
   setActiveAuthorityChangeKind: (
     value: ProductConfigurationCommand["kind"] | null,
   ) => void;

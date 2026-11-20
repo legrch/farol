@@ -1,5 +1,11 @@
 import type { ProductConfigurationCommand } from "../../pkg/product-settings/contract";
 
+export type ContinuityDrainCommand = Readonly<{
+  kind: "computer.confirm-workspace" | "computer.rebind-workspace";
+  workspaceId: string;
+  childOperationId: string;
+}>;
+
 export type WorkspaceConfigurationCommand = Readonly<
   Extract<
     ProductConfigurationCommand,
@@ -20,11 +26,14 @@ export type WorkspaceConfigurationConfirmation = true | false | "unknown";
 export type WorkspaceConfigurationDrainPhase =
   "admission" | "stop" | "record-stopped" | "apply";
 
-export type WorkspaceConfigurationDrainPorts<Result> = Readonly<{
+export type WorkspaceConfigurationDrainPorts<
+  Result,
+  Command = WorkspaceConfigurationCommand,
+> = Readonly<{
   current(): boolean;
   stop(): Promise<WorkspaceConfigurationConfirmation>;
   recordStopped(): Promise<WorkspaceConfigurationConfirmation>;
-  apply(command: WorkspaceConfigurationCommand): Promise<Result>;
+  apply(command: Command): Promise<Result>;
 }>;
 
 type CurrentRefusal = Readonly<{
@@ -78,12 +87,16 @@ export type WorkspaceConfigurationDrainResult<Result> =
  * reset or restart belongs here. Completed means a current original reply was
  * received, including any refusal in that opaque reply, not mutation success.
  */
-export class WorkspaceConfigurationDrain<Result> {
+export class WorkspaceConfigurationDrain<
+  Result,
+  Command extends WorkspaceConfigurationCommand | ContinuityDrainCommand =
+    WorkspaceConfigurationCommand,
+> {
   private consumed = false;
 
   constructor(
-    private readonly command: WorkspaceConfigurationCommand,
-    private readonly ports: WorkspaceConfigurationDrainPorts<Result>,
+    private readonly command: Command,
+    private readonly ports: WorkspaceConfigurationDrainPorts<Result, Command>,
   ) {}
 
   async run(): Promise<WorkspaceConfigurationDrainResult<Result>> {
@@ -104,6 +117,8 @@ export class WorkspaceConfigurationDrain<Result> {
         "computer.update-commands",
         "computer.update-file-policy",
         "computer.remove-workspace",
+        "computer.confirm-workspace",
+        "computer.rebind-workspace",
       ].includes(this.command.kind) ||
       typeof this.ports?.stop !== "function" ||
       typeof this.ports.recordStopped !== "function" ||

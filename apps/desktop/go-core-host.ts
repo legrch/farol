@@ -64,6 +64,7 @@ import { attestShellRuntime } from "./bridge/shell-runtime.ts";
 import type { QualificationObserver } from "./bridge/qualification-metrics.ts";
 import { encodeShellLaunch } from "./bridge/shell-launch.ts";
 import { GoComputerAuthority } from "./go-computer-authority.ts";
+import { ContinuityBridge } from "./bridge/continuity.ts";
 import { ContinuityStatusBridge } from "./bridge/continuity-status.ts";
 import { OriginalStopBridge } from "./bridge/original-stop.ts";
 import { ConnectionCheckBridge } from "./bridge/connection-check.ts";
@@ -118,6 +119,7 @@ export class DesktopGoCore {
   readonly processAudit: ProcessAuditBridge;
   private readonly authority: GoComputerAuthority;
   private readonly continuity: ContinuityStatusBridge;
+  private readonly continuityBridge: ContinuityBridge;
   private readonly originalStop: OriginalStopBridge;
   private readonly connectionCheck: ConnectionCheckBridge;
   private readonly computer: ComputerBridge;
@@ -154,6 +156,7 @@ export class DesktopGoCore {
     this.processAudit = new ProcessAuditBridge(client);
     this.authority = new GoComputerAuthority(client, client.verifiedContext);
     this.continuity = new ContinuityStatusBridge(client);
+    this.continuityBridge = new ContinuityBridge(client);
     this.originalStop = new OriginalStopBridge(client);
     this.connectionCheck = new ConnectionCheckBridge(client);
     this.computer = new ComputerBridge(client);
@@ -260,6 +263,12 @@ export class DesktopGoCore {
     if (this.closeResult)
       throw new BridgeError("unavailable", "host_core_closing");
     return this.continuity.observe();
+  }
+  // Trusted host composition only. No renderer or connector receives this bridge.
+  get workspaceContinuity(): ContinuityBridge {
+    if (this.closeResult)
+      throw new BridgeError("unavailable", "host_core_closing");
+    return this.continuityBridge;
   }
   // The trusted Desktop owns original effect calls; protected C7 Go custody
   // owns the phases. These methods are never exposed to the renderer.

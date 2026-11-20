@@ -58,3 +58,27 @@ describe("C7 exact canonical Stop scope", () => {
     ).toBe(false);
   });
 });
+
+it.each([
+  ["computer.confirm-workspace", "legacy-confirm"],
+  ["computer.rebind-workspace", "enrolled-rebind"],
+])(
+  "passes the child identity for %s to Go without a caller digest",
+  (commandKind, childMode) => {
+    const body = {
+      ...base,
+      commandKind,
+      workspaceId: "existing",
+      root: "/Users/example/project",
+      childOperationId: "55555555-5555-4555-8555-555555555555",
+      childMode,
+    };
+    expect(validate("ComputerStopAdmitRequest", body)).toBe(true);
+    expect(
+      validate("ComputerStopAdmitRequest", {
+        ...body,
+        childIntentDigest: "e".repeat(64),
+      }),
+    ).toBe(false);
+  },
+);

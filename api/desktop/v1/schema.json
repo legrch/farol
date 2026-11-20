@@ -1055,11 +1055,6 @@
           "type": "text",
           "values": ["legacy-confirm", "enrolled-rebind"],
           "optional": true
-        },
-        "childIntentDigest": {
-          "type": "string",
-          "pattern": "^[a-f0-9]{64}$",
-          "optional": true
         }
       }
     },

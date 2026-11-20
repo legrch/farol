@@ -290,3 +290,37 @@ func TestOriginalCleanupAndTerminalRequireFreshGoConnectorClosureWitness(t *test
 		t.Fatal("known cleanup and original Go closure failed terminal", err)
 	}
 }
+
+func TestOriginalStopOwnerComputesContinuityChildDigest(t *testing.T) {
+	for _, mode := range []string{"legacy-confirm", "enrolled-rebind"} {
+		t.Run(mode, func(t *testing.T) {
+			owner, store, _ := originalStopService()
+			req := originalStopSelection()
+			req.CommandKind = journal.ContinuityCommandKind(mode)
+			req.ChildMode = mode
+			req.ChildOperationID = "77777777-7777-4777-8777-777777777777"
+			req.Root = "/Users/example/approved & <selected>"
+			req.ProfileID = "caller-profile"
+			req.ChildIntentDigest = strings.Repeat("1", 64)
+			if _, first, err := owner.Begin(context.Background(), req); !errors.Is(err, journal.ErrStopRefused) || first || store.begins != 0 {
+				t.Fatal("caller supplied a child digest", first, err)
+			}
+			req.ChildIntentDigest = ""
+			entry, first, err := owner.Begin(context.Background(), req)
+			if err != nil || !first || entry.Request.ProfileID != "profile" {
+				t.Fatal("Go did not install trusted child scope", first, err)
+			}
+			want, err := journal.StopChildIntentDigest(entry.Request)
+			if err != nil || want == "" || entry.Request.ChildIntentDigest != want ||
+				store.ledger.Entries[0].Request.ChildIntentDigest != want {
+				t.Fatal("protected admission omitted the Go-owned child digest", err)
+			}
+			original := entry.Request
+			original.ProfileID = "caller-profile"
+			foreign, err := journal.StopChildIntentDigest(original)
+			if err != nil || foreign == want {
+				t.Fatal("child digest did not bind the trusted profile", err)
+			}
+		})
+	}
+}

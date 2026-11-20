@@ -367,7 +367,11 @@ import { ownerComputerConsentDigest } from "../../modules/computer/infra/repo/ow
 import { clearAndConfirmOriginalConnectorVerificationReceipt } from "../../modules/computer/infra/mcp/connector-verification-receipt";
 import { createConfigurationPipeline } from "../../../apps/desktop/configuration/pipeline";
 import { createConfigurationObserved } from "../../../apps/desktop/configuration/observed";
-import { createConfigurationDrain } from "../../../apps/desktop/configuration/drain";
+import {
+  createConfigurationDrain,
+  type WorkspaceAuthorityChangeKind,
+} from "../../../apps/desktop/configuration/drain";
+import { createWorkspaceContinuityHost } from "../../../apps/desktop/configuration/continuity";
 import { createConfigurationConnector } from "../../../apps/desktop/configuration/connector";
 import { createConfigurationComputer } from "../../../apps/desktop/configuration/computer";
 import type {
@@ -1032,8 +1036,7 @@ const installedUpdates = createInstalledUpdateHost({
   stage: startupStage,
   applyLayout: () => applyLayout(),
 });
-let activeAuthorityChangeKind: ProductConfigurationCommand["kind"] | null =
-  null;
+let activeAuthorityChangeKind: WorkspaceAuthorityChangeKind | null = null;
 
 // Whichever of an authority change, a connector start or an Agent admission
 // holds the reservation, the loser is told that a transition is in progress
@@ -6529,6 +6532,23 @@ function configurationDrain() {
 let configurationDrainCache: ReturnType<
   typeof createConfigurationDrain
 > | null = null;
+
+export const { runWorkspaceContinuity } = createWorkspaceContinuityHost({
+  configuration: () => configuration,
+  desktopGoCore: () => desktopGoCore,
+  desktopAdmission,
+  authorityTransitions,
+  setActiveAuthorityChangeKind: (kind) => {
+    activeAuthorityChangeKind = kind;
+  },
+  codexAgentOperationActive,
+  conflictingWorkspaceWork: () =>
+    pendingWorkspaceEdit !== null || pendingComputer.size > 0,
+  computerMcpLifecycle,
+  drainContinuityPrerequisite: (command) =>
+    configurationDrain().drainContinuityPrerequisite(command),
+  ownerComputerConsentDigest,
+});
 
 function configurationComputer() {
   return (configurationComputerCache ??= createConfigurationComputer({

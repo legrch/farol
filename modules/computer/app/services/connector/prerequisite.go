@@ -80,6 +80,16 @@ func (o *OriginalStopOwner) Begin(ctx context.Context, proposed journal.StopRequ
 	proposed.RuntimeID = binding.RuntimeID
 	proposed.ConnectorGeneration = binding.ConnectorGeneration
 	proposed.BuildID = binding.BuildID
+	// Only Go provides the stable digest, after installing trusted identities.
+	if proposed.ChildIntentDigest != "" {
+		return journal.StopEntry{}, false, journal.ErrStopRefused
+	}
+	if proposed.ChildOperationID != "" {
+		proposed.ChildIntentDigest, err = journal.StopChildIntentDigest(proposed)
+		if err != nil {
+			return journal.StopEntry{}, false, err
+		}
+	}
 	if !journal.ValidStopRequest(proposed) {
 		return journal.StopEntry{}, false, journal.ErrStopRefused
 	}

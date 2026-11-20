@@ -1,6 +1,9 @@
 package journal
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strconv"
 
@@ -209,6 +212,51 @@ func ValidStopRequest(r StopRequest) bool {
 	}
 	return r.Purpose == "workspace-change" && r.WorkspaceID != "" && uuid.MatchString(r.ChildOperationID) && !ids[r.ChildOperationID] &&
 		childMode != "" && r.ChildMode == childMode && digest.Valid(r.ChildIntentDigest)
+}
+
+// ContinuityCommandKind is the immutable mapping shared by Stop admission and
+// child WAL admission. The empty string selects no continuity command.
+func ContinuityCommandKind(mode string) string {
+	switch mode {
+	case "legacy-confirm":
+		return "computer.confirm-workspace"
+	case "enrolled-rebind":
+		return "computer.rebind-workspace"
+	default:
+		return ""
+	}
+}
+
+// StopChildIntentDigest binds only the original consent and fixed child scope.
+// The counters and native observations belong to later protocol steps.
+func StopChildIntentDigest(request StopRequest) (string, error) {
+	if request.ChildOperationID == "" || request.CommandKind == "" || ContinuityCommandKind(request.ChildMode) != request.CommandKind {
+		return "", ErrStopRefused
+	}
+	projection := struct {
+		Schema           int    `json:"schema"`
+		CommandKind      string `json:"commandKind"`
+		Mode             string `json:"mode"`
+		ChildOperationID string `json:"childOperationId"`
+		ProfileID        string `json:"profileId"`
+		OwnerID          string `json:"ownerId"`
+		ComputerID       string `json:"computerId"`
+		WorkspaceID      string `json:"workspaceId"`
+		Root             string `json:"root"`
+		ConsentDigest    string `json:"consentDigest"`
+	}{
+		Schema: 1, CommandKind: request.CommandKind, Mode: request.ChildMode,
+		ChildOperationID: request.ChildOperationID,
+		ProfileID:        request.ProfileID, OwnerID: request.OwnerID,
+		ComputerID: request.ComputerID, WorkspaceID: request.WorkspaceID,
+		Root: request.Root, ConsentDigest: request.ConsentDigest,
+	}
+	raw, err := json.Marshal(projection)
+	if err != nil {
+		return "", ErrStopRefused
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func validStopRoot(root string) bool {

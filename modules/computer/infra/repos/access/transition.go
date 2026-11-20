@@ -161,49 +161,18 @@ func (s *Store) BeginTransition(ctx context.Context, request transition.Request)
 	return current, true, nil
 }
 
-// stableChildIntentDigest is the canonical, immutable BEFORE-Stop projection.
-// Do not include Settings revision/generation, current native observation,
-// backend lifetime, or a post-Stop journal request digest. The retained parent
-// fixes exactly one child, one explicit mode, one root and one consent scope.
-// Any future desktop preparation must use this exact closed projection, not a
-// caller-defined hash of arbitrary bytes or the full future C4 request.
+// stableChildIntentDigest checks the exact same projection Go retained at stop
+// admission, using the independently validated child request.
 func stableChildIntentDigest(request transition.Request, mode string) (string, error) {
-	var kind string
-	switch mode {
-	case "legacy-confirm":
-		kind = "computer.confirm-workspace"
-	case "enrolled-rebind":
-		kind = "computer.rebind-workspace"
-	default:
-		return "", transition.ErrRefused
-	}
 	if !transition.ValidRequest(request) || request.RecoveryParent != "" {
 		return "", transition.ErrRefused
 	}
-	projection := struct {
-		Schema           int    `json:"schema"`
-		CommandKind      string `json:"commandKind"`
-		Mode             string `json:"mode"`
-		ChildOperationID string `json:"childOperationId"`
-		ProfileID        string `json:"profileId"`
-		OwnerID          string `json:"ownerId"`
-		ComputerID       string `json:"computerId"`
-		WorkspaceID      string `json:"workspaceId"`
-		Root             string `json:"root"`
-		ConsentDigest    string `json:"consentDigest"`
-	}{
-		Schema: 1, CommandKind: kind, Mode: mode,
-		ChildOperationID: request.OperationID,
-		ProfileID:        request.ProfileID, OwnerID: request.OwnerID,
-		ComputerID: request.ComputerID, WorkspaceID: request.WorkspaceID,
+	return transition.StopChildIntentDigest(transition.StopRequest{
+		CommandKind: transition.ContinuityCommandKind(mode), ChildMode: mode,
+		ChildOperationID: request.OperationID, ProfileID: request.ProfileID,
+		OwnerID: request.OwnerID, ComputerID: request.ComputerID, WorkspaceID: request.WorkspaceID,
 		Root: request.Root, ConsentDigest: request.ConsentDigest,
-	}
-	raw, err := json.Marshal(projection)
-	if err != nil {
-		return "", transition.ErrRefused
-	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:]), nil
+	})
 }
 
 // BeginLinkedTransition is the only C7 certificate-to-child consumption path.

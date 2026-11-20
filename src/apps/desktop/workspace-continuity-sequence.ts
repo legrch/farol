@@ -109,7 +109,9 @@ export type ContinuitySequencePorts = Readonly<{
   closeAndCertify(operationId: string): Promise<true | "unknown">;
   // Requires host-only compatible-reader/recovery/native qualification;
   // without it a committed certificate remains unavailable to Computer.
-  qualifyCurrent(operationId: string): Promise<true | "unavailable">;
+  qualifyCurrent(
+    operationId: string,
+  ): Promise<true | "unavailable" | "unknown">;
 }>;
 
 export class ContinuitySequence {
@@ -198,6 +200,13 @@ export class ContinuitySequence {
       }
     }
     const prepared = await invoke(() => this.ports.confirm(id, legacy));
+    if (
+      prepared?.state === "refused" &&
+      this.isCurrent() &&
+      (await invoke(() => this.ports.refuseBeforeWithdraw(id))) === true &&
+      this.isCurrent()
+    )
+      return refusal("confirm");
     if (prepared?.state !== "prepared" || !this.isCurrent())
       return fail("confirm");
 
@@ -263,7 +272,12 @@ export class ContinuitySequence {
       return fail("close");
     if (!this.isCurrent()) return fail("current-qualification");
     const qualified = await invoke(() => this.ports.qualifyCurrent(id));
-    return qualified === true && this.isCurrent()
+    if (
+      !this.isCurrent() ||
+      (qualified !== true && qualified !== "unavailable")
+    )
+      return fail("current-qualification");
+    return qualified === true
       ? { state: "current-qualified", operationId: id }
       : { state: "committed-not-active", operationId: id };
   }
