@@ -1226,8 +1226,9 @@ function Folders(props: PageProps) {
                   <>
                     <span className="setup-success">✓ Works</span>
                     {/* A saved check can go stale (a disk renumbered or
-                        remounted). Re-check stops the connection, measures the
-                        folder again and reconnects; it never widens access. */}
+                        remounted). Re-check measures the folder again; a live
+                        connection is stopped and restored around it, a stopped
+                        one stays stopped. It never widens access. */}
                     <button
                       type="button"
                       className="text-button"
@@ -1238,9 +1239,7 @@ function Folders(props: PageProps) {
                           workspace.workspaceId,
                         )
                       }
-                      onClick={() =>
-                        void update(workspace.workspaceId, {}, true)
-                      }
+                      onClick={() => void update(workspace.workspaceId)}
                     >
                       Re-check
                     </button>
@@ -1261,9 +1260,7 @@ function Folders(props: PageProps) {
                           workspace.workspaceId,
                         )
                       }
-                      onClick={() =>
-                        void update(workspace.workspaceId, {}, true)
-                      }
+                      onClick={() => void update(workspace.workspaceId)}
                     >
                       Check access
                     </button>

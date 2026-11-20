@@ -175,11 +175,8 @@ and read back separately.
 - A workspace reports `WORKSPACE_ROOT_CHANGED`: Farol cannot establish that the
   current folder is the one previously approved. A different folder or volume, or
   a changed macOS device number, can cause this; the error alone does not identify
-  the cause. Access stays blocked. Changing login or connection keys does not help.
-  When only the device number changed and the folder is on the startup Data
-  volume (the usual case after a restart), **Check access** or **Re-check**
-  rebinds it to the new number and reconnects; any other mismatch keeps
-  refusing. Preserve unknown-outcome evidence and follow its original owner
+  the cause. Access stays blocked. Changing login or connection keys and repeatedly
+  selecting `Verify` do not rebind this saved approval. Preserve unknown-outcome evidence and follow its original owner
   recovery; preservation alone does not settle an operation or permit reapproval.
   Stop tasks using that workspace and wait for its normal admission to allow
   changes. For an explicitly approved replacement, note this workspace's permissions and exclusions, remove

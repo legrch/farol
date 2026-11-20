@@ -268,104 +268,47 @@ describe("configuration computer", () => {
     });
   });
 
-  describe("owner Verify after the device number moved", () => {
-    const workspaceId = "00000000-0000-4000-8000-000000000001";
-    function verifyFixture(measured: { device: string; inode: string }) {
-      const workspace = {
-        workspaceId,
-        root: "/tmp/project",
-        label: "project",
-        access: "read" as const,
-        excludedPaths: [],
-        rootIdentity: { device: "16777231", inode: "335036" },
-      };
-      let settings: ProductSettings = settingsWithWorkspace(workspace);
-      const recorded = {
-        ok: true,
-        snapshot: { status: "ready", settings },
-      };
-      const configuration = {
-        snapshot: () => ({ status: "ready" as const, settings }),
-        rebindWorkspaceRootIdentity: vi.fn(
-          async (
-            _id: string,
-            _revision: number,
-            _root: string,
-            identity: { device: string; inode: string },
-          ) => {
-            settings = structuredClone(settings);
-            settings.revision += 1;
-            settings.computer.workspaces[0]!.rootIdentity = identity;
-            return { ok: true, snapshot: { status: "ready", settings } };
-          },
-        ),
-        recordComputerVerification: vi.fn(async () => recorded),
-      };
-      const ports = makePorts({
-        configuration: () => configuration,
-        measuredRootIdentity: vi.fn(async () => measured),
-        startupDataDevice: vi.fn(async () => "16777233"),
-        inspectOwnerWorkspace: vi.fn(async () => ({ ok: true })),
-      });
-      return { ports, configuration };
-    }
-    const verify = (ports: ConfigurationComputerPorts) =>
-      createConfigurationComputer(ports).configureAdmittedComputer({
-        kind: "computer.verify-workspace",
-        workspaceId,
-      } as ComputerConfigurationCommand);
-
-    it("rebinds a folder that is now on the startup Data volume, then verifies it", async () => {
-      // The 2026-11-20 incident: same inode, startup volume renumbered at boot.
-      const f = verifyFixture({ device: "16777233", inode: "335036" });
-      await expect(verify(f.ports)).resolves.toMatchObject({ ok: true });
-      expect(f.configuration.rebindWorkspaceRootIdentity).toHaveBeenCalledWith(
-        workspaceId,
-        1,
-        "/tmp/project",
-        { device: "16777233", inode: "335036" },
-      );
-      expect(f.ports.inspectOwnerWorkspace).toHaveBeenCalledOnce();
-      expect(f.configuration.recordComputerVerification).toHaveBeenCalledOnce();
+  it("never rebinds a same-inode folder whose device number moved", async () => {
+    // Path + inode cannot prove the same folder (a mounted copy or a
+    // same-inode directory under a removed mount). Only enrolled continuity
+    // evidence may move a binding; ordinary Verify keeps refusing.
+    const workspace = {
+      workspaceId: "00000000-0000-4000-8000-000000000001",
+      root: "/tmp/project",
+      label: "project",
+      access: "read" as const,
+      excludedPaths: [],
+      rootIdentity: { device: "16777231", inode: "335036" },
+    };
+    const settings = settingsWithWorkspace(workspace);
+    const configuration = {
+      snapshot: () => ({ status: "ready" as const, settings }),
+      rebindWorkspaceRootIdentity: vi.fn(),
+      bindWorkspaceRootIdentity: vi.fn(),
+      recordComputerVerification: vi.fn(),
+    };
+    const ports = makePorts({
+      configuration: () => configuration,
+      measuredRootIdentity: vi.fn(async () => ({
+        device: "16777233",
+        inode: "335036",
+      })),
+      inspectOwnerWorkspace: vi.fn(async () => ({ ok: true })),
     });
-
-    it("refuses a same-inode folder on another volume, such as a mounted copy", async () => {
-      const f = verifyFixture({ device: "16777250", inode: "335036" });
-      await expect(verify(f.ports)).resolves.toMatchObject({
-        ok: false,
-        error: "WORKSPACE_ROOT_CHANGED",
-      });
-      expect(
-        f.configuration.rebindWorkspaceRootIdentity,
-      ).not.toHaveBeenCalled();
-      expect(f.ports.inspectOwnerWorkspace).not.toHaveBeenCalled();
+    const result = await createConfigurationComputer(
+      ports,
+    ).configureAdmittedComputer({
+      kind: "computer.verify-workspace",
+      workspaceId: workspace.workspaceId,
+    } as ComputerConfigurationCommand);
+    expect(result).toMatchObject({
+      ok: false,
+      error: "WORKSPACE_ROOT_CHANGED",
     });
-
-    it("refuses a different directory at the saved path", async () => {
-      const f = verifyFixture({ device: "16777233", inode: "1" });
-      await expect(verify(f.ports)).resolves.toMatchObject({
-        ok: false,
-        error: "WORKSPACE_ROOT_CHANGED",
-      });
-      expect(
-        f.configuration.rebindWorkspaceRootIdentity,
-      ).not.toHaveBeenCalled();
-    });
-
-    it("does not rebind while a connector carries the old grant", async () => {
-      const f = verifyFixture({ device: "16777233", inode: "335036" });
-      const ports = {
-        ...f.ports,
-        secureMcpConnectorRuntime: () => ({ isRunning: () => true }),
-      } as unknown as ConfigurationComputerPorts;
-      await expect(verify(ports)).resolves.toMatchObject({
-        ok: false,
-        error: "CONNECTOR_STOP_REQUIRED",
-      });
-      expect(
-        f.configuration.rebindWorkspaceRootIdentity,
-      ).not.toHaveBeenCalled();
-    });
+    expect(configuration.rebindWorkspaceRootIdentity).not.toHaveBeenCalled();
+    expect(configuration.bindWorkspaceRootIdentity).not.toHaveBeenCalled();
+    expect(configuration.recordComputerVerification).not.toHaveBeenCalled();
+    expect(ports.inspectOwnerWorkspace).not.toHaveBeenCalled();
   });
 
   it("routes run-git-status through the verification action port", async () => {

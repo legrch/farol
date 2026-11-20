@@ -6,7 +6,7 @@ export function workspaceRootChangeRemedy(
   code: string | null | undefined,
 ): string | null {
   return code === "WORKSPACE_ROOT_CHANGED"
-    ? "Farol cannot confirm that this is the folder you approved. Access remains blocked. Usually macOS gave the disk a new device number after a restart: press Check access (or Re-check) on this folder in Settings to confirm it and reconnect. If the folder may have changed or now lives on another disk, remove it and add it again. Changing your login or connection key will not fix it. Resolve any unknown operation first, and do not repeat its effect."
+    ? "Farol cannot confirm that this is the folder you approved. Access remains blocked. Often macOS gave the disk a new device number after a restart, but the folder may have changed or be on another disk, and Farol cannot tell which. Remove this folder in Settings and add it again with the folder picker, then review its access. Changing your login or connection key will not fix it. Resolve any unknown operation first, and do not repeat its effect."
     : null;
 }
 

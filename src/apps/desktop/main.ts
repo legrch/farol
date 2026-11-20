@@ -428,10 +428,7 @@ import {
   type RouteBTaskSurfaces,
 } from "./route-b-runtime";
 import { type PendingWorkspaceEdit } from "./workspace-edit";
-import {
-  classifyWorkspaceRootDrift,
-  startupDataDevice,
-} from "../../../apps/desktop/configuration/drift";
+import { classifyWorkspaceRootDrift } from "../../../apps/desktop/configuration/drift";
 import {
   createSupportExport,
   writeSupportExport,
@@ -6495,7 +6492,6 @@ function configurationComputer() {
     },
     selectedWorkspace,
     measuredRootIdentity,
-    startupDataDevice: () => startupDataDevice(),
     inspectOwnerWorkspace,
     buildIdentity: () => buildIdentity,
     workspaceReadFailure,
