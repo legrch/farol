@@ -316,6 +316,7 @@ import {
 import {
   ProductConfigurationService,
   ProductSettingsStore,
+  workspaceCheckEvidence,
 } from "./product-configuration";
 import { shellGeometry } from "./surface-layout";
 import {
@@ -428,6 +429,7 @@ import {
   type RouteBTaskSurfaces,
 } from "./route-b-runtime";
 import { type PendingWorkspaceEdit } from "./workspace-edit";
+import { classifyWorkspaceRootDrift } from "../../../apps/desktop/configuration/drift";
 import {
   createSupportExport,
   writeSupportExport,
@@ -4078,6 +4080,97 @@ async function measuredRootIdentity(
   } catch {
     return null;
   }
+}
+
+// Read-only measurement of every identity-bound folder (a legacy record with no
+// saved check can still count as verified), then one authority-reducing write.
+// Returns false when drift was found but could not be withdrawn: the caller
+// must then not resume a connector that would carry the stale grant.
+async function withdrawDriftedWorkspaceChecksAtLaunch(): Promise<boolean> {
+  if (!configuration) return true;
+  let drifted = 0;
+  let withdrawn = false;
+  let code: string | null = null;
+  // The window and Settings IPC are already open. Hold the authority
+  // reservation across the WHOLE scan (measurement and write), so a manual
+  // Connect or Agent admission cannot start with the stale grant meanwhile.
+  const reserved = await authorityTransitions.withReservation(
+    "authority-change",
+    async () => {
+      const snapshot = configuration!.snapshot();
+      if (snapshot.status !== "ready") return;
+      const found: {
+        workspaceId: string;
+        root: string;
+        rootIdentity: WorkspaceRootIdentity;
+        observed: string;
+      }[] = [];
+      for (const workspace of snapshot.settings.computer.workspaces) {
+        if (!workspace.rootIdentity) continue;
+        // Evidence before measuring: a newer check is never erased by it.
+        const observed = workspaceCheckEvidence(
+          snapshot.settings,
+          workspace.workspaceId,
+        );
+        const measured = await measuredRootIdentity(workspace.root);
+        const drift = classifyWorkspaceRootDrift(
+          workspace.rootIdentity,
+          measured,
+        );
+        // A vanished folder refuses every call just like a changed one.
+        if (measured === null || drift !== "same")
+          found.push({
+            workspaceId: workspace.workspaceId,
+            root: workspace.root,
+            rootIdentity: workspace.rootIdentity,
+            observed,
+          });
+      }
+      drifted = found.length;
+      if (found.length === 0) {
+        withdrawn = true;
+        return;
+      }
+      // Quit may have closed admission while the folders were measured, and a
+      // connector or an active Agent may still carry the grant; then leave
+      // settings alone (Go's per-call root guard keeps refusing the root).
+      if (desktopAdmission.closed()) {
+        code = "AUTHORITY_CHANGE_IN_PROGRESS";
+        return;
+      }
+      if (
+        codexAgentOperationActive() ||
+        desktopAdmission.occupied("connector-task") ||
+        secureMcpConnectorRuntime?.isRunning() === true
+      ) {
+        code = "CONNECTOR_STOP_REQUIRED";
+        return;
+      }
+      try {
+        const result = await configuration!.withdrawDriftedWorkspaceChecks(
+          found,
+          () => !desktopAdmission.closed(),
+        );
+        withdrawn = result.ok;
+        code = result.ok ? null : result.error;
+      } catch {
+        code = "SETTINGS_WRITE_FAILED";
+      }
+    },
+  );
+  // A competing authority change owns this moment; do not resume on top of
+  // an unmeasured grant. The owner's own operation proceeds as before.
+  if (!reserved.admitted) code = "AUTHORITY_CHANGE_IN_PROGRESS";
+  if (drifted > 0 || !reserved.admitted)
+    console.warn(
+      "FAROL_WORKSPACE_ROOT_DRIFT:" +
+        JSON.stringify({
+          workspaces: drifted,
+          withdrawn,
+          ...(code ? { code } : {}),
+        }),
+    );
+  return reserved.admitted && withdrawn;
 }
 
 async function selectedWorkspace(): Promise<
@@ -11187,6 +11280,11 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   });
   quitSignals.ready();
   void installedUpdates.initialize();
+  // A reboot can renumber the startup volume. A saved folder whose identity no
+  // longer matches would make every connector call refuse while the sidebar
+  // still says Connected, so withdraw its stale check before any resume. If
+  // drift was found but could not be withdrawn, do not resume at all.
+  const driftSettled = await withdrawDriftedWorkspaceChecksAtLaunch();
   const beforeConnectorResume = configuration.snapshot();
   void resumeComputerConnector(
     {
@@ -11199,7 +11297,9 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     {
       current: () => configuration!.snapshot(),
       mayContinue: () =>
-        !startupConnectorResumeCancelled && !desktopAdmission.closed(),
+        driftSettled &&
+        !startupConnectorResumeCancelled &&
+        !desktopAdmission.closed(),
       // The normal command retains authority reservation, physical-root and
       // Go inspection checks. No synthetic verification receipt is written.
       verifyWorkspace: (workspaceId) =>

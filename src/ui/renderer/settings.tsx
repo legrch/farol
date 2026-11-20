@@ -1223,7 +1223,27 @@ function Folders(props: PageProps) {
               </label>
               <div className="workspace-row-result" role="status">
                 {checked ? (
-                  <span className="setup-success">✓ Works</span>
+                  <>
+                    <span className="setup-success">✓ Works</span>
+                    {/* A saved check can go stale (a disk renumbered or
+                        remounted). Re-check measures the folder again; a live
+                        connection is stopped and restored around it, a stopped
+                        one stays stopped. It never widens access. */}
+                    <button
+                      type="button"
+                      className="text-button"
+                      disabled={
+                        paused ||
+                        !actions.allowed(
+                          "computer.verify-workspace",
+                          workspace.workspaceId,
+                        )
+                      }
+                      onClick={() => void update(workspace.workspaceId)}
+                    >
+                      Re-check
+                    </button>
+                  </>
                 ) : (
                   <>
                     <span>

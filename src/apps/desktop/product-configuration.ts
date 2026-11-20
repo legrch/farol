@@ -67,6 +67,23 @@ import type { TaskSelectionRequest } from "../../pkg/owner-config/contract";
 const FILE_NAME = "config.json";
 const LEGACY_FILE_NAME = "product-settings.json";
 const MAXIMUM_BYTES = 256 * 1024;
+export const WORKSPACE_DRIFT_NEEDS_ACTION =
+  "Farol withdrew a folder check because that folder no longer matches the one you approved. Check each folder; remove and add again any that keeps refusing, then connect.";
+
+// The check evidence a drift observation is conditioned on: the folder's own
+// saved check and the Computer step's current verification.
+export function workspaceCheckEvidence(
+  settings: ProductSettings,
+  workspaceId: string,
+): string {
+  const workspace = settings.computer.workspaces.find(
+    (item) => item.workspaceId === workspaceId,
+  );
+  return JSON.stringify({
+    accessCheck: workspace?.accessCheck ?? null,
+    verified: settings.setup.computer.verified ?? null,
+  });
+}
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const CLOSE_ON_EXEC =
   (fsConstants as typeof fsConstants & { O_CLOEXEC?: number }).O_CLOEXEC ?? 0;
@@ -2401,6 +2418,96 @@ export class ProductConfigurationService {
     });
   }
 
+  // A saved folder's directory identity no longer matches its binding (for
+  // example macOS renumbered the startup volume at boot, or the folder was
+  // replaced). Its last check described the old binding, so withdraw it, and
+  // withdraw the saved connector runtime that carried that grant: the sidebar
+  // must not claim Connected and nothing may resume or restart with it. This
+  // only reduces authority. It never rebinds and keeps the approval and ID.
+  // The withdrawal is conditioned on exactly what the caller observed: the
+  // folder's stored identity AND its check evidence (`observed`, from
+  // workspaceCheckEvidence). An unrelated save cannot discard detected drift,
+  // and a newer successful check cannot be erased by an older observation.
+  async withdrawDriftedWorkspaceChecks(
+    drifted: readonly Readonly<{
+      workspaceId: string;
+      root: string;
+      rootIdentity: WorkspaceRootIdentity;
+      observed: string;
+    }>[],
+    // The caller's admission (Quit) fence, checked again right before the
+    // write and its publication, after this call may have waited its turn.
+    admissionOpen: () => boolean = () => true,
+  ): Promise<MutationResult> {
+    if (drifted.length === 0) return this.failure("SETTINGS_INPUT_INVALID");
+    return this.exclusive(async () => {
+      if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
+      for (const item of drifted) {
+        const workspace = this.current.computer.workspaces.find(
+          (candidate) => candidate.workspaceId === item.workspaceId,
+        );
+        if (
+          !workspace ||
+          workspace.root !== item.root ||
+          workspace.rootIdentity?.device !== item.rootIdentity.device ||
+          workspace.rootIdentity?.inode !== item.rootIdentity.inode ||
+          workspaceCheckEvidence(this.current, item.workspaceId) !==
+            item.observed
+        )
+          return this.failure("WORKSPACE_ROOT_CHANGED");
+      }
+      if (!admissionOpen()) return this.failure("AUTHORITY_CHANGE_IN_PROGRESS");
+      const ids = new Set(drifted.map((item) => item.workspaceId));
+      const verifiedId = this.current.setup.computer.verified?.workspaceId;
+      const verifiedDrifted = verifiedId != null && ids.has(verifiedId);
+      // Already withdrawn (a folder still missing on every launch): nothing
+      // left to reduce, so do not write again.
+      const current = this.current;
+      if (
+        !verifiedDrifted &&
+        current.connectors.secureMcp.runtime === null &&
+        current.setup.computer.reachable === "unknown" &&
+        current.setup.computer.needsAction === WORKSPACE_DRIFT_NEEDS_ACTION &&
+        current.computer.workspaces.every(
+          (item) => !ids.has(item.workspaceId) || item.accessCheck == null,
+        )
+      )
+        return { ok: true, snapshot: this.snapshot() };
+      const quitFence = () => {
+        if (!admissionOpen()) throw new Error("AUTHORITY_CHANGE_IN_PROGRESS");
+      };
+      return this.commitComputerEvidence(
+        (settings) => ({
+          ...settings,
+          revision: settings.revision + 1,
+          computer: {
+            ...settings.computer,
+            workspaces: settings.computer.workspaces.map((item) =>
+              ids.has(item.workspaceId) ? { ...item, accessCheck: null } : item,
+            ),
+          },
+          connectors: {
+            ...settings.connectors,
+            secureMcp: { ...settings.connectors.secureMcp, runtime: null },
+          },
+          setup: {
+            ...settings.setup,
+            computer: {
+              ...settings.setup.computer,
+              ...(verifiedDrifted ? { verified: null } : {}),
+              needsAction: WORKSPACE_DRIFT_NEEDS_ACTION,
+              reachable: "unknown",
+            },
+          },
+        }),
+        {
+          beforeWrite: async () => quitFence(),
+          assertBeforePublication: quitFence,
+        },
+      );
+    });
+  }
+
   async recordComputerVerification(
     workspaceId: string,
     input: unknown,
@@ -3399,13 +3506,16 @@ export class ProductConfigurationService {
 
   private commitComputerEvidence(
     transform: (settings: ProductSettings) => ProductSettings,
+    fence: StoreWriteFence = {},
   ): Promise<MutationResult> {
-    return this.commit((settings) =>
-      advanceComputerApprovalGeneration(
-        settings,
-        transform(settings),
-        (approved) => ownerSettingsComputerApproval(approved, 0),
-      ),
+    return this.commit(
+      (settings) =>
+        advanceComputerApprovalGeneration(
+          settings,
+          transform(settings),
+          (approved) => ownerSettingsComputerApproval(approved, 0),
+        ),
+      fence,
     );
   }
 

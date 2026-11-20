@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ProductConfigurationService,
   ProductSettingsStore,
+  workspaceCheckEvidence,
 } from "../../src/apps/desktop/product-configuration";
 import { PrivateConnectorKeyStore } from "../../src/apps/desktop/connector-key-store";
 import {
@@ -27,7 +28,10 @@ import { ownerSettingsComputerApproval } from "../../src/modules/computer/infra/
 import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
 import { taskPolicy, fixtureTaskModelPolicy } from "../fixtures/task-policy";
-import { resumeComputerConnector } from "../../src/apps/desktop/connector-resume-policy";
+import {
+  resumeComputerConnector,
+  shouldResumeComputerConnector,
+} from "../../src/apps/desktop/connector-resume-policy";
 import { GuidedWorkspaceAccess } from "../../src/ui/guided-workspace-access";
 import { onboardingFacts } from "../../src/ui/guided-onboarding";
 const roots: string[] = [];
@@ -626,6 +630,84 @@ async function computerEvidenceFixture(
     },
   };
 }
+
+describe("launch drift withdrawal", () => {
+  it("withdraws a verified folder's check and the saved ready runtime so resume skips", async () => {
+    const { service, workspaceId, rootIdentity, verification } =
+      await computerEvidenceFixture("none");
+    await service.recordSecureMcpTunnelClient({
+      executablePath: "/opt/homebrew/bin/tunnel-client",
+      executableSha256: "a".repeat(64),
+      version: "0.0.14+0f870e50a973fa820d4c409000059e181e8d242b",
+      protocol: "openai-tunnel-client/v1",
+    });
+    await service.configureSecureMcpTunnel({ tunnelId: "synthetic" });
+    await service.recordSecureMcpCredential("stored");
+    const verified = await service.recordComputerVerification(
+      workspaceId,
+      verification,
+      { rootIdentity },
+    );
+    expect(verified.ok).toBe(true);
+    const beforeRuntime = service.snapshot();
+    if (beforeRuntime.status !== "ready") throw new Error("settings missing");
+    expect(
+      (
+        await service.recordSecureMcpRuntime({
+          state: "ready",
+          runtimeGeneration: "b".repeat(64),
+          computerGeneration: beforeRuntime.settings.computer.generation,
+          buildId: "c".repeat(64),
+        })
+      ).ok,
+    ).toBe(true);
+    const before = service.snapshot();
+    if (before.status !== "ready") throw new Error("settings missing");
+    const input = {
+      environment: "preview" as const,
+      buildEnvironment: "preview" as const,
+      previousRunClean: true,
+      buildId: "c".repeat(64),
+    };
+    // The same saved state would resume before drift is withdrawn.
+    expect(before.settings.connectors.secureMcp.runtime?.state).toBe("ready");
+    expect(shouldResumeComputerConnector({ ...input, snapshot: before })).toBe(
+      true,
+    );
+    expect(
+      (
+        await service.withdrawDriftedWorkspaceChecks([
+          {
+            workspaceId,
+            root: "/Users/example/project",
+            rootIdentity,
+            observed: workspaceCheckEvidence(before.settings, workspaceId),
+          },
+        ])
+      ).ok,
+    ).toBe(true);
+    const after = service.snapshot();
+    if (after.status !== "ready") throw new Error("settings missing");
+    expect(after.settings.connectors.secureMcp.runtime).toBeNull();
+    expect(after.settings.computer.workspaces[0]!.accessCheck).toBeNull();
+    expect(after.settings.computer.workspaces[0]!.rootIdentity).toEqual(
+      rootIdentity,
+    );
+    const start = vi.fn(async () => ({ ok: true }));
+    await expect(
+      resumeComputerConnector(
+        { ...input, snapshot: after },
+        {
+          current: () => service.snapshot(),
+          mayContinue: () => true,
+          verifyWorkspace: vi.fn(async () => ({ ok: true })),
+          start,
+        },
+      ),
+    ).resolves.toBe("skipped");
+    expect(start).not.toHaveBeenCalled();
+  });
+});
 
 describe("Computer evidence approval generations", () => {
   it.each(["ready", "update-drained"] as const)(
