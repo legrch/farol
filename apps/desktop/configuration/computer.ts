@@ -432,7 +432,12 @@ export function createConfigurationComputer(
           measured,
           `settings:computer.verify-workspace:${workspace.workspaceId}`,
         );
-        if (!result.ok) return workspaceReadFailure(result.code);
+        if (!result.ok) {
+          // The root can change between the measurement and Go's descriptor
+          // inspection; withdraw the stale evidence then too.
+          if (result.code === "WORKSPACE_ROOT_CHANGED") await withdrawStale();
+          return workspaceReadFailure(result.code);
+        }
         // Preserve the measured layout for task selection. Primary metadata is
         // bound only with explicit full-Git approval; linked grants stay exact.
         const gitMetadata = await discoverWorkspaceGitMetadata(

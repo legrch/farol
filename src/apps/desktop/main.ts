@@ -4109,13 +4109,30 @@ async function withdrawDriftedWorkspaceChecksAtLaunch(): Promise<boolean> {
   if (drifted.length === 0) return true;
   let withdrawn = false;
   let code: string | null = null;
-  try {
-    const result = await configuration.withdrawDriftedWorkspaceChecks(drifted);
-    withdrawn = result.ok;
-    code = result.ok ? null : result.error;
-  } catch {
-    code = "SETTINGS_WRITE_FAILED";
-  }
+  // The window and Settings IPC are already open: hold the authority
+  // reservation so a manual Connect cannot interleave, and never clear the
+  // runtime record of a connector that is already running.
+  const reserved = await authorityTransitions.withReservation(
+    "authority-change",
+    async () => {
+      if (
+        desktopAdmission.occupied("connector-task") ||
+        secureMcpConnectorRuntime?.isRunning() === true
+      ) {
+        code = "CONNECTOR_ALREADY_RUNNING";
+        return;
+      }
+      try {
+        const result =
+          await configuration!.withdrawDriftedWorkspaceChecks(drifted);
+        withdrawn = result.ok;
+        code = result.ok ? null : result.error;
+      } catch {
+        code = "SETTINGS_WRITE_FAILED";
+      }
+    },
+  );
+  if (!reserved.admitted) code = "AUTHORITY_CHANGE_IN_PROGRESS";
   console.warn(
     "FAROL_WORKSPACE_ROOT_DRIFT:" +
       JSON.stringify({
