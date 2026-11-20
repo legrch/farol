@@ -724,18 +724,21 @@ describe("Go Computer host authority mapping", () => {
         rootIdentity: workspace.rootIdentity!,
       },
     ];
+    // The identity the caller measured against must still be the saved one.
     await expect(
-      f.service.withdrawDriftedWorkspaceChecks(before.revision - 1, drifted),
-    ).resolves.toMatchObject({ ok: false, error: "WORKSPACE_ROOT_CHANGED" });
-    await expect(
-      f.service.withdrawDriftedWorkspaceChecks(before.revision, [
+      f.service.withdrawDriftedWorkspaceChecks([
         { ...drifted[0]!, rootIdentity: { device: "9", inode: "2" } },
       ]),
     ).resolves.toMatchObject({ ok: false, error: "WORKSPACE_ROOT_CHANGED" });
-    const withdrawn = await f.service.withdrawDriftedWorkspaceChecks(
-      before.revision,
-      drifted,
-    );
+    // An unrelated save between measurement and withdrawal does not discard
+    // the detected drift (no whole-document revision fence).
+    const unrelated = await f.service.updateGeneral({
+      ...before.general,
+      sidebarDefault:
+        before.general.sidebarDefault === "full" ? "rail" : "full",
+    });
+    expect(unrelated.ok).toBe(true);
+    const withdrawn = await f.service.withdrawDriftedWorkspaceChecks(drifted);
     if (!withdrawn.ok || withdrawn.snapshot.status !== "ready")
       throw Error("withdraw refused");
     const after = withdrawn.snapshot.settings;
@@ -746,10 +749,11 @@ describe("Go Computer host authority mapping", () => {
       accessCheck: null,
     });
     expect(after.setup.computer.verified).toBeNull();
-    expect(after.setup.computer.needsAction).toMatch(/Check access/u);
-    // An unknown reachability keeps the launch resume from starting a
-    // connector that would refuse every call.
+    expect(after.setup.computer.needsAction).toMatch(/Remove it and add it/u);
+    // An unknown reachability and no saved runtime keep the launch resume,
+    // the sidebar and a later Re-check from treating the old grant as live.
     expect(after.setup.computer.reachable).toBe("unknown");
+    expect(after.connectors.secureMcp.runtime).toBeNull();
   });
 
   it("refuses binding and verification evidence from a stale configuration", async () => {

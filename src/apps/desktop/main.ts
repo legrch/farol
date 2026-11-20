@@ -4081,47 +4081,50 @@ async function measuredRootIdentity(
   }
 }
 
-// Read-only measurement plus an authority-reducing write; it never rebinds.
-// A failure keeps today's behavior (the Go guard still refuses the stale root).
-async function withdrawDriftedWorkspaceChecksAtLaunch(): Promise<void> {
-  if (!configuration) return;
+// Read-only measurement of every identity-bound folder (a legacy record with no
+// saved check can still count as verified), then one authority-reducing write.
+// Returns false when drift was found but could not be withdrawn: the caller
+// must then not resume a connector that would carry the stale grant.
+async function withdrawDriftedWorkspaceChecksAtLaunch(): Promise<boolean> {
+  if (!configuration) return true;
   const snapshot = configuration.snapshot();
-  if (snapshot.status !== "ready") return;
+  if (snapshot.status !== "ready") return true;
   const drifted: {
     workspaceId: string;
     root: string;
     rootIdentity: WorkspaceRootIdentity;
   }[] = [];
   for (const workspace of snapshot.settings.computer.workspaces) {
-    if (!workspace.rootIdentity || !workspace.accessCheck) continue;
-    const drift = classifyWorkspaceRootDrift(
-      workspace.rootIdentity,
-      await measuredRootIdentity(workspace.root),
-    );
-    if (drift === "device-renumbered" || drift === "different-object")
+    if (!workspace.rootIdentity) continue;
+    const measured = await measuredRootIdentity(workspace.root);
+    const drift = classifyWorkspaceRootDrift(workspace.rootIdentity, measured);
+    // A vanished folder refuses every call just like a changed one.
+    if (measured === null || drift !== "same")
       drifted.push({
         workspaceId: workspace.workspaceId,
         root: workspace.root,
         rootIdentity: workspace.rootIdentity,
       });
   }
-  if (drifted.length === 0) return;
+  if (drifted.length === 0) return true;
+  let withdrawn = false;
+  let code: string | null = null;
   try {
-    const result = await configuration.withdrawDriftedWorkspaceChecks(
-      snapshot.settings.revision,
-      drifted,
-    );
-    console.warn(
-      "FAROL_WORKSPACE_ROOT_DRIFT:" +
-        JSON.stringify({
-          workspaces: drifted.length,
-          withdrawn: result.ok,
-          ...(result.ok ? {} : { code: result.error }),
-        }),
-    );
+    const result = await configuration.withdrawDriftedWorkspaceChecks(drifted);
+    withdrawn = result.ok;
+    code = result.ok ? null : result.error;
   } catch {
-    // The stale check stays; Go's per-call root guard keeps refusing access.
+    code = "SETTINGS_WRITE_FAILED";
   }
+  console.warn(
+    "FAROL_WORKSPACE_ROOT_DRIFT:" +
+      JSON.stringify({
+        workspaces: drifted.length,
+        withdrawn,
+        ...(code ? { code } : {}),
+      }),
+  );
+  return withdrawn;
 }
 
 async function selectedWorkspace(): Promise<
@@ -11233,8 +11236,9 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   void installedUpdates.initialize();
   // A reboot can renumber the startup volume. A saved folder whose identity no
   // longer matches would make every connector call refuse while the sidebar
-  // still says Connected, so withdraw its stale check before any resume.
-  await withdrawDriftedWorkspaceChecksAtLaunch();
+  // still says Connected, so withdraw its stale check before any resume. If
+  // drift was found but could not be withdrawn, do not resume at all.
+  const driftSettled = await withdrawDriftedWorkspaceChecksAtLaunch();
   const beforeConnectorResume = configuration.snapshot();
   void resumeComputerConnector(
     {
@@ -11247,7 +11251,9 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     {
       current: () => configuration!.snapshot(),
       mayContinue: () =>
-        !startupConnectorResumeCancelled && !desktopAdmission.closed(),
+        driftSettled &&
+        !startupConnectorResumeCancelled &&
+        !desktopAdmission.closed(),
       // The normal command retains authority reservation, physical-root and
       // Go inspection checks. No synthetic verification receipt is written.
       verifyWorkspace: (workspaceId) =>

@@ -286,29 +286,49 @@ describe("configuration computer", () => {
       rebindWorkspaceRootIdentity: vi.fn(),
       bindWorkspaceRootIdentity: vi.fn(),
       recordComputerVerification: vi.fn(),
+      withdrawDriftedWorkspaceChecks: vi.fn(async () => ({ ok: true })),
     };
-    const ports = makePorts({
-      configuration: () => configuration,
-      measuredRootIdentity: vi.fn(async () => ({
-        device: "16777233",
-        inode: "335036",
-      })),
-      inspectOwnerWorkspace: vi.fn(async () => ({ ok: true })),
-    });
-    const result = await createConfigurationComputer(
-      ports,
-    ).configureAdmittedComputer({
-      kind: "computer.verify-workspace",
-      workspaceId: workspace.workspaceId,
-    } as ComputerConfigurationCommand);
-    expect(result).toMatchObject({
+    const run = async (running: boolean) => {
+      const ports = makePorts({
+        configuration: () => configuration,
+        measuredRootIdentity: vi.fn(async () => ({
+          device: "16777233",
+          inode: "335036",
+        })),
+        inspectOwnerWorkspace: vi.fn(async () => ({ ok: true })),
+        secureMcpConnectorRuntime: () => ({ isRunning: () => running }),
+      });
+      const result = await createConfigurationComputer(
+        ports,
+      ).configureAdmittedComputer({
+        kind: "computer.verify-workspace",
+        workspaceId: workspace.workspaceId,
+      } as ComputerConfigurationCommand);
+      expect(ports.inspectOwnerWorkspace).not.toHaveBeenCalled();
+      return result;
+    };
+    await expect(run(false)).resolves.toMatchObject({
       ok: false,
       error: "WORKSPACE_ROOT_CHANGED",
     });
     expect(configuration.rebindWorkspaceRootIdentity).not.toHaveBeenCalled();
     expect(configuration.bindWorkspaceRootIdentity).not.toHaveBeenCalled();
     expect(configuration.recordComputerVerification).not.toHaveBeenCalled();
-    expect(ports.inspectOwnerWorkspace).not.toHaveBeenCalled();
+    // The refused check withdraws the stale "Works" evidence for that folder.
+    expect(configuration.withdrawDriftedWorkspaceChecks).toHaveBeenCalledWith([
+      {
+        workspaceId: workspace.workspaceId,
+        root: workspace.root,
+        rootIdentity: workspace.rootIdentity,
+      },
+    ]);
+    // A live connector still carries the grant: refuse without writing.
+    configuration.withdrawDriftedWorkspaceChecks.mockClear();
+    await expect(run(true)).resolves.toMatchObject({
+      ok: false,
+      error: "WORKSPACE_ROOT_CHANGED",
+    });
+    expect(configuration.withdrawDriftedWorkspaceChecks).not.toHaveBeenCalled();
   });
 
   it("routes run-git-status through the verification action port", async () => {

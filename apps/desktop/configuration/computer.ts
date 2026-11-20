@@ -27,6 +27,7 @@ import {
 } from "../../../src/pkg/product-settings/contract";
 import { configurationAdmission } from "../../../src/apps/desktop/configuration-admission";
 import type { VerifiedProductWorkspaceResult } from "../../../src/apps/desktop/workspace-descriptor";
+import { classifyWorkspaceRootDrift } from "./drift";
 
 export type SelectedWorkspace = Readonly<{
   root: string;
@@ -359,14 +360,38 @@ export function createConfigurationComputer(
         // object, and one saved before identities existed is bound to what is
         // measured here only because the owner asked for this verification.
         const measured = await measuredRootIdentity(workspace.root);
+        const bound = workspace.rootIdentity;
+        // A refused check of a bound folder also withdraws its stale "Works"
+        // evidence, so the row cannot keep claiming access Go will refuse.
+        // This only reduces authority; it waits for no connector or Agent to
+        // hold the grant, otherwise it simply refuses as before.
+        const withdrawStale = async () => {
+          if (
+            !bound ||
+            codexAgentOperationActive() ||
+            desktopAdmission.occupied("connector-task") ||
+            secureMcpConnectorRuntime()?.isRunning() === true
+          )
+            return;
+          try {
+            await configuration()!.withdrawDriftedWorkspaceChecks([
+              {
+                workspaceId: workspace!.workspaceId,
+                root: workspace!.root,
+                rootIdentity: bound,
+              },
+            ]);
+          } catch {
+            // The refusal below stands; Go keeps refusing the stale root.
+          }
+        };
         if (measured === null) {
+          await withdrawStale();
           return configurationFailure("WORKSPACE_VERIFICATION_FAILED");
         }
-        const bound = workspace.rootIdentity;
-        if (
-          bound &&
-          (bound.device !== measured.device || bound.inode !== measured.inode)
-        ) {
+        if (classifyWorkspaceRootDrift(bound, measured) !== "same" && bound) {
+          // Never rebind here: path + inode cannot prove the same folder.
+          await withdrawStale();
           return configurationFailure("WORKSPACE_ROOT_CHANGED");
         }
         if (!bound) {

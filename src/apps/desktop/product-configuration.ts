@@ -68,7 +68,7 @@ const FILE_NAME = "config.json";
 const LEGACY_FILE_NAME = "product-settings.json";
 const MAXIMUM_BYTES = 256 * 1024;
 export const WORKSPACE_DRIFT_NEEDS_ACTION =
-  "macOS gave this folder's disk a new number after a restart. Check access to reconnect it.";
+  "A folder no longer matches the one you approved (a restart can renumber its disk, or the folder changed). Remove it and add it again, then connect.";
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const CLOSE_ON_EXEC =
   (fsConstants as typeof fsConstants & { O_CLOEXEC?: number }).O_CLOEXEC ?? 0;
@@ -2403,13 +2403,15 @@ export class ProductConfigurationService {
     });
   }
 
-  // Launch found a saved folder whose directory identity no longer matches its
-  // binding (typically macOS renumbered the startup volume at boot). Its last
-  // check described the old binding, so withdraw that check: this only reduces
-  // authority, never rebinds, and leaves the folder's approval and ID intact.
-  // The owner's next Check access measures and rebinds it explicitly.
+  // A saved folder's directory identity no longer matches its binding (for
+  // example macOS renumbered the startup volume at boot, or the folder was
+  // replaced). Its last check described the old binding, so withdraw it, and
+  // withdraw the saved connector runtime that carried that grant: the sidebar
+  // must not claim Connected and nothing may resume or restart with it. This
+  // only reduces authority. It never rebinds and keeps the approval and ID.
+  // Each folder's identity is compared inside this turn instead of a whole-
+  // document revision, so an unrelated save cannot discard detected drift.
   async withdrawDriftedWorkspaceChecks(
-    expectedRevision: number,
     drifted: readonly Readonly<{
       workspaceId: string;
       root: string;
@@ -2419,8 +2421,6 @@ export class ProductConfigurationService {
     if (drifted.length === 0) return this.failure("SETTINGS_INPUT_INVALID");
     return this.exclusive(async () => {
       if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-      if (this.current.revision !== expectedRevision)
-        return this.failure("WORKSPACE_ROOT_CHANGED");
       for (const item of drifted) {
         const workspace = this.current.computer.workspaces.find(
           (candidate) => candidate.workspaceId === item.workspaceId,
@@ -2444,6 +2444,10 @@ export class ProductConfigurationService {
           workspaces: settings.computer.workspaces.map((item) =>
             ids.has(item.workspaceId) ? { ...item, accessCheck: null } : item,
           ),
+        },
+        connectors: {
+          ...settings.connectors,
+          secureMcp: { ...settings.connectors.secureMcp, runtime: null },
         },
         setup: {
           ...settings.setup,
