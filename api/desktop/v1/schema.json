@@ -21,6 +21,14 @@
     "computer.authority.deactivate": "effect",
     "computer.authority.publish": "effect",
     "computer.continuity.status": "read",
+    "computer.continuity.begin": "effect",
+    "computer.continuity.confirm": "effect",
+    "computer.continuity.plan": "read",
+    "computer.continuity.record": "effect",
+    "computer.continuity.withdraw": "effect",
+    "computer.continuity.stage": "effect",
+    "computer.continuity.finish": "effect",
+    "computer.continuity.qualify": "effect",
     "computer.check.claim": "effect",
     "computer.check.prepare": "effect",
     "computer.check.advance": "effect",
@@ -1219,6 +1227,255 @@
             "close_intent",
             "close_ack"
           ]
+        }
+      }
+    },
+    "ComputerContinuityRootIdentity": {
+      "type": "object",
+      "fields": {
+        "device": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$"
+        },
+        "inode": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$"
+        }
+      }
+    },
+    "ComputerContinuitySavedEvidence": {
+      "type": "object",
+      "fields": {
+        "schema": {
+          "type": "text",
+          "values": [
+            "farol.workspace-continuity/1"
+          ]
+        },
+        "volumeUuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "fileId": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$"
+        },
+        "birthSeconds": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$"
+        },
+        "birthNanoseconds": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,8})$"
+        }
+      }
+    },
+    "ComputerContinuityReceipt": {
+      "type": "object",
+      "fields": {
+        "effectId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,119}$"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "ComputerContinuityBeginRequest": {
+      "type": "object",
+      "fields": {
+        "operationId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "mode": {
+          "type": "text",
+          "values": [
+            "legacy-confirm",
+            "enrolled-rebind"
+          ]
+        },
+        "savedBinding": {
+          "type": "ComputerContinuityRootIdentity"
+        },
+        "savedEvidence": {
+          "type": "ComputerContinuitySavedEvidence",
+          "optional": true
+        }
+      }
+    },
+    "ComputerContinuityBeginResponse": {
+      "type": "object",
+      "fields": {
+        "operationId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "admitted": {
+          "type": "boolean"
+        },
+        "priorPhase": {
+          "type": "text",
+          "values": [
+            "intent"
+          ]
+        }
+      }
+    },
+    "ComputerContinuityConfirmRequest": {
+      "type": "object",
+      "fields": {
+        "operationId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "ownerPicked": {
+          "type": "boolean"
+        },
+        "selectedRoot": {
+          "type": "string",
+          "maxBytes": 4096
+        }
+      }
+    },
+    "ComputerContinuityConfirmResponse": {
+      "type": "object",
+      "fields": {
+        "operationId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "computerId": {
+          "type": "id"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "root": {
+          "type": "string",
+          "maxBytes": 4096
+        },
+        "rootIdentity": {
+          "type": "ComputerContinuityRootIdentity"
+        },
+        "expectedRevision": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$"
+        },
+        "expectedGeneration": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$"
+        },
+        "expectedConsentSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "continuity": {
+          "type": "ComputerContinuitySavedEvidence"
+        }
+      }
+    },
+    "ComputerContinuityPlanRequest": {
+      "type": "object",
+      "fields": {
+        "operationId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "type": "text",
+          "values": [
+            "withdraw_intent",
+            "settings_intent",
+            "publish_intent",
+            "close_intent"
+          ]
+        }
+      }
+    },
+    "ComputerContinuityRecordRequest": {
+      "type": "object",
+      "fields": {
+        "operationId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "type": "text",
+          "values": [
+            "withdraw_intent",
+            "settings_intent",
+            "publish_intent",
+            "close_intent",
+            "withdraw_ack",
+            "settings_ack",
+            "publish_ack"
+          ]
+        },
+        "receipt": {
+          "type": "ComputerContinuityReceipt"
+        }
+      }
+    },
+    "ComputerContinuityFinishRequest": {
+      "type": "object",
+      "fields": {
+        "operationId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "kind": {
+          "type": "text",
+          "values": [
+            "committed",
+            "refused"
+          ]
+        }
+      }
+    },
+    "ComputerContinuityOperationRequest": {
+      "type": "object",
+      "fields": {
+        "operationId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        }
+      }
+    },
+    "ComputerContinuityPhaseResponse": {
+      "type": "object",
+      "fields": {
+        "operationId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "phase": {
+          "type": "text",
+          "values": [
+            "withdraw_intent",
+            "settings_intent",
+            "publish_intent",
+            "close_intent",
+            "withdraw_ack",
+            "settings_ack",
+            "publish_ack",
+            "committed",
+            "refused"
+          ]
+        }
+      }
+    },
+    "ComputerContinuityQualifyResponse": {
+      "type": "object",
+      "fields": {
+        "operationId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "qualified": {
+          "type": "boolean"
         }
       }
     },

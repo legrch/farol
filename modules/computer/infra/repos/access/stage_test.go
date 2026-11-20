@@ -2,12 +2,18 @@ package access
 
 import (
 	"context"
+	"errors"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/legrch/farol/modules/computer/app/services/migration"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	transition "github.com/legrch/farol/modules/computer/domain/journal"
+	obs "github.com/legrch/farol/modules/computer/domain/observation"
+	"github.com/legrch/farol/modules/computer/infra/observation"
 )
 
 func TestContinuityStagedPublicationIsNotAuthority(t *testing.T) {
@@ -143,5 +149,143 @@ func TestStageContinuityOnlySelectedRootCanRebindAndNeverExtendsExpiry(t *testin
 	}
 	if _, err := f.store.StageContinuityApproval(ctx, request.OperationID, transitionProof, prior.Revision, base); err != nil {
 		t.Fatal("exact selected root refused", err)
+	}
+}
+
+type continuityBoot string
+
+func (b continuityBoot) Current(context.Context) (string, error) { return string(b), nil }
+
+// Both modes use the protected C7 and C4 WAL and real Go staging. Boot, anchor,
+// held observation, Settings and withdrawal receipts are disposable fixtures.
+func TestLinkedContinuityStagesAndQualifiesBothModes(t *testing.T) {
+	cases := []struct {
+		mode    migration.Mode
+		command string
+	}{
+		{migration.Legacy, "computer.confirm-workspace"},
+		{migration.Rebind, "computer.rebind-workspace"},
+	}
+	ctx := context.Background()
+	for _, tc := range cases {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			f := fixtureState(t)
+			request := linkedChildRequest(f)
+			stop := completeLinkedStopModeFixture(t, f, request, string(tc.mode), tc.command)
+			old := f.approval.Workspaces[0].RootIdentity
+			device, err := strconv.ParseUint(old.Device, 10, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			inode, err := strconv.ParseUint(old.Inode, 10, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			measured := obs.Observation{
+				Binding: obs.Binding{Path: f.workspace, Device: strconv.FormatUint(device+1, 10), Inode: old.Inode},
+				Evidence: obs.Evidence{Schema: obs.EvidenceSchema, Filesystem: "apfs",
+					VolumeUUID: "11111111-2222-3333-4444-555555555555", FileID: old.Inode, BirthSeconds: "10", BirthNanoseconds: "7"},
+			}
+			saved := obs.Saved{Binding: obs.Binding{Device: old.Device, Inode: old.Inode}}
+			if tc.mode == migration.Rebind {
+				saved.Evidence = &measured.Evidence
+			}
+			parents := migration.NewParent(f.store.ObserveStopLedger, stop.HostLifetimeID, stop.BackendGeneration)
+			selection, err := parents.Select(ctx, request.OperationID, tc.mode, saved)
+			if err != nil {
+				t.Fatal(err)
+			}
+			native := &candidateNative{device: device + 1, inode: inode, observed: measured}
+			owner := migration.New(f.store, continuityBoot(request.BootUUID), parents, native, native, &sync.Mutex{}, observation.Digester{})
+			t.Cleanup(func() {
+				if err := owner.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			id := request.OperationID
+			if first, err := owner.Begin(ctx, selection); err != nil || !first.Admitted || first.PriorPhase != transition.Intent {
+				t.Fatal("admission", first, err)
+			}
+			if _, err := owner.Begin(ctx, selection); !errors.Is(err, transition.ErrRefused) || native.acquired != 1 || native.held != 1 {
+				t.Fatal("second begin acquired custody", err)
+			}
+			root := ""
+			if tc.mode == migration.Legacy {
+				root = f.workspace
+				if _, err := owner.Confirm(ctx, id, "/different/root", true); !errors.Is(err, transition.ErrRefused) {
+					t.Fatal("different picker root accepted", err)
+				}
+			}
+			prepared, err := owner.Confirm(ctx, id, root, tc.mode == migration.Legacy)
+			if err != nil || prepared.Observation != measured || prepared.Request != selection.Request {
+				t.Fatal("prepared result differs from parent and native measurement", prepared, err)
+			}
+			record := func(phase transition.Phase, receipt transition.Receipt) {
+				t.Helper()
+				if err := owner.Record(ctx, id, phase, receipt); err != nil {
+					t.Fatal(phase, err)
+				}
+			}
+			intent := func(phase transition.Phase) transition.Receipt {
+				t.Helper()
+				plan, err := owner.Plan(ctx, id, phase)
+				if err != nil {
+					t.Fatal(phase, err)
+				}
+				record(phase, plan)
+				return plan
+			}
+			withdraw := intent(transition.WithdrawIntent)
+			calls := 0
+			withdrawEffect := func(ctx context.Context, id string, planned transition.Receipt) (transition.Receipt, error) {
+				calls++
+				_, err := f.store.TransitionEffectSnapshot(ctx, id, transition.WithdrawIntent, planned)
+				return transition.Receipt{EffectID: planned.EffectID, Digest: strings.Repeat("1", 64)}, err
+			}
+			ack, err := owner.WithdrawOnce(ctx, id, withdrawEffect)
+			if err != nil || ack.EffectID != withdraw.EffectID {
+				t.Fatal("withdrawal did not bind original intent", ack, err)
+			}
+			if _, err := owner.WithdrawOnce(ctx, id, withdrawEffect); !errors.Is(err, transition.ErrRefused) || calls != 1 {
+				t.Fatal("second withdrawal dispatched", err)
+			}
+			record(transition.WithdrawAcknowledged, ack)
+			settings := intent(transition.SettingsIntent)
+			record(transition.SettingsAcknowledged, transition.Receipt{EffectID: settings.EffectID, Digest: strings.Repeat("2", 64)})
+			publish := intent(transition.PublishIntent)
+			ack, err = owner.StageOnce(ctx, id, f.store.StageMeasuredContinuity)
+			if err != nil || ack.EffectID != publish.EffectID || ack.Digest == publish.Digest {
+				t.Fatal("stage receipt invalid", ack, err)
+			}
+			if _, err := owner.StageOnce(ctx, id, f.store.StageMeasuredContinuity); !errors.Is(err, transition.ErrRefused) {
+				t.Fatal("second stage accepted", err)
+			}
+			record(transition.PublishAcknowledged, ack)
+			cleanup := intent(transition.CloseIntent)
+			if err := owner.Finish(ctx, id, transition.Committed, cleanup); err != nil {
+				t.Fatal("finish", err)
+			}
+			if err := owner.Finish(ctx, id, transition.Committed, cleanup); !errors.Is(err, transition.ErrRefused) || native.released != 2 {
+				t.Fatal("finish replayed close", err)
+			}
+			if _, err := f.store.Status(ctx); err == nil {
+				t.Fatal("staged or committed bytes activated without qualification")
+			}
+			reader := &qualifiedReader{proof: CurrentReaderProof{
+				Saved:         obs.Saved{Binding: measured.Binding, Evidence: &measured.Evidence},
+				ConsentDigest: request.ConsentDigest, SettingsRevision: 3, ComputerGeneration: 4,
+			}}
+			qualifier := NewHeldCurrentQualifier(reader, native, native)
+			if qualified, err := f.store.QualifyContinuityOperation(ctx, stop.OperationID, qualifier); err != nil || qualified || reader.calls != 0 {
+				t.Fatal("qualification invoked for wrong operation", qualified, err)
+			}
+			if qualified, err := f.store.QualifyContinuityOperation(ctx, id, qualifier); err != nil || !qualified || native.released != 4 {
+				t.Fatal("current qualification", qualified, err)
+			}
+			if value := status(t, f.store); value.Generation != f.approval.Generation+1 ||
+				f.store.current.Approval.Workspaces[0].RootIdentity.Device != measured.Binding.Device {
+				t.Fatal("measured binding not staged and qualified", value)
+			}
+		})
 	}
 }

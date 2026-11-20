@@ -31,14 +31,19 @@ func linkedChildRequest(f stateFixture) journal.Request {
 
 func completeLinkedStopFixture(t *testing.T, f stateFixture, child journal.Request) journal.StopRequest {
 	t.Helper()
+	return completeLinkedStopModeFixture(t, f, child, "legacy-confirm", "computer.confirm-workspace")
+}
+
+func completeLinkedStopModeFixture(t *testing.T, f stateFixture, child journal.Request, mode, command string) journal.StopRequest {
+	t.Helper()
 	// C4 admission now requires an actual current qualified Go approval,
 	// independently of the historical ProductSettings ACK. This fixture
 	// creates one before C7 original Stop custody is admitted.
 	approve(t, f)
 	r := stopStoreRequest(f, 1)
-	r.CommandKind = "computer.confirm-workspace"
+	r.CommandKind = command
 	r.ChildOperationID = child.OperationID
-	r.ChildMode = "legacy-confirm"
+	r.ChildMode = mode
 	stable, err := stableChildIntentDigest(child, r.ChildMode)
 	if err != nil {
 		t.Fatal(err)

@@ -3,15 +3,22 @@ package boot
 import (
 	"context"
 	"errors"
+	"sync"
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	chatct "github.com/legrch/farol/modules/chat/contracts/admission"
 	computerport "github.com/legrch/farol/modules/computer/app/port"
+	connectorsvc "github.com/legrch/farol/modules/computer/app/services/connector"
 	execution "github.com/legrch/farol/modules/computer/app/services/execution"
+	"github.com/legrch/farol/modules/computer/app/services/migration"
 	workspacesvc "github.com/legrch/farol/modules/computer/app/services/workspace"
 	workspacect "github.com/legrch/farol/modules/computer/contracts/workspace"
+	migrationdesktop "github.com/legrch/farol/modules/computer/desktop/migration"
 	"github.com/legrch/farol/modules/computer/domain/authority"
+	nativeboot "github.com/legrch/farol/modules/computer/infra/boot"
 	filesystem "github.com/legrch/farol/modules/computer/infra/filesystem"
+	"github.com/legrch/farol/modules/computer/infra/lease"
+	"github.com/legrch/farol/modules/computer/infra/observation"
 	admissionpeer "github.com/legrch/farol/modules/computer/infra/peer/admission"
 	accessrepo "github.com/legrch/farol/modules/computer/infra/repos/access"
 	taskct "github.com/legrch/farol/modules/task/contracts/admission"
@@ -166,4 +173,33 @@ func (r *ComputerRoute) Methods(peer wire.Context) map[string]desktop.Method {
 			return r.selectContract(ctx, operationBinding(in.OwnerID, in.SessionID, in.TaskID, in.TaskEpoch, in.ParticipantID, in.TurnID), authority.Read)
 		}, peer),
 	}
+}
+
+func (runtime *NativeRuntime) composeComputerOwners(scope connectorsvc.StopScope) {
+	// Root-selected Go owner and native boot reader. No renderer can construct
+	// a Stop admission; an unqualified empty host lifetime fails closed.
+	runtime.ingress.stopOwner = connectorsvc.NewOriginalStopOwner(
+		runtime.store, nativeboot.New(), runtime.connector,
+		scope,
+	)
+	continuityParent := migration.NewParent(runtime.store.ObserveStopLedger, scope.HostLifetimeID, scope.BackendGeneration)
+	anchor, holder := lease.New(), &observation.Holder{}
+	runtime.continuity = migration.New(runtime.store, nativeboot.New(), continuityParent, anchor, holder, &sync.Mutex{}, observation.Digester{})
+	// The accepted recovery and compatible Settings witnesses are not yet
+	// wired. A missing current reader leaves a committed transition inactive.
+	qualifier := accessrepo.NewHeldCurrentQualifier(nil, anchor, holder)
+	runtime.continuityMethods = migrationdesktop.Methods(runtime.continuity, continuityParent,
+		runtime.ingress.withdrawForContinuity, runtime.store.StageMeasuredContinuity,
+		func(ctx context.Context, id string) (bool, error) {
+			return runtime.store.QualifyContinuityOperation(ctx, id, qualifier)
+		})
+	// One Go owner for the explicitly clicked connection check. It shares
+	// the existing Access Store lifetime lock and native connector instance;
+	// no startup/browser Send is performed by composition.
+	runtime.ingress.checkOwner = connectorsvc.NewConnectionCheckOwner(
+		runtime.store, runtime.connector, connectorsvc.ConnectionCheckScope{
+			ProfileID: scope.ProfileID, OwnerID: scope.OwnerID,
+			ComputerID: scope.ComputerID,
+		},
+	)
 }

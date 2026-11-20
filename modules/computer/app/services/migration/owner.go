@@ -13,6 +13,7 @@ import (
 	observationport "github.com/legrch/farol/modules/computer/app/port/observation"
 	journal "github.com/legrch/farol/modules/computer/domain/journal"
 	observation "github.com/legrch/farol/modules/computer/domain/observation"
+	"github.com/legrch/farol/pkg/kernel/domain/digest"
 )
 
 // JournalStore is implemented by the existing protected Go access owner. The
@@ -57,7 +58,7 @@ type BeginResult struct {
 }
 
 type held struct {
-	id                string
+	request           journal.Request
 	root              string
 	mode              Mode
 	saved             observation.Saved
@@ -65,9 +66,13 @@ type held struct {
 	candidate         observationport.HeldObservation
 	phase             journal.Phase
 	closeAttempted    bool
+	closeErr          error
 	withdrawAttempted bool
 	withdrawIntent    journal.Receipt
 	withdrawAck       *journal.Receipt
+	measured          observation.Observation
+	stageAttempted    bool
+	stageAck          journal.Receipt
 }
 
 type Owner struct {
@@ -97,11 +102,17 @@ func (o *Owner) Begin(ctx context.Context, selection Selection) (BeginResult, er
 	// protected Store verifies its certificate under its own lock; this read
 	// alone is not an admission or evidence of historical RPC delivery.
 	parentID, err := o.prerequisite.OriginalParent(ctx, selection)
-	if err != nil || parentID == "" || ctx.Err() != nil {
+	if err != nil {
+		return BeginResult{}, err
+	}
+	if parentID == "" || ctx.Err() != nil {
 		return BeginResult{}, journal.ErrRefused
 	}
 	boot, err := o.boot.Current(ctx)
-	if err != nil || ctx.Err() != nil {
+	if err != nil {
+		return BeginResult{}, err
+	}
+	if ctx.Err() != nil {
 		return BeginResult{}, journal.ErrRefused
 	}
 	o.mu.Lock()
@@ -138,79 +149,93 @@ func (o *Owner) Begin(ctx context.Context, selection Selection) (BeginResult, er
 	anchor, err := o.anchor.Acquire(ctx)
 	if err != nil {
 		o.poisoned = true
-		return result, err
+		return result, errors.Join(journal.ErrUnknown, err)
 	}
 	observed, err := o.candidate.Hold(ctx, req.Root)
 	if err != nil {
 		if closeErr := anchor.Close(); closeErr != nil {
 			o.poisoned = true
-			return result, closeErr
+			return result, errors.Join(journal.ErrUnknown, err, closeErr)
 		}
 		o.poisoned = true // No persisted cleanup receipt: intentionally restricted.
-		return result, err
+		return result, errors.Join(journal.ErrUnknown, err)
 	}
-	o.active = &held{id: req.OperationID, root: req.Root, mode: selection.Mode, saved: selection.Saved, anchor: anchor, candidate: observed, phase: journal.Intent}
+	o.active = &held{request: req, root: req.Root, mode: selection.Mode, saved: selection.Saved, anchor: anchor, candidate: observed, phase: journal.Intent}
 	return result, nil
+}
+
+type ConfirmResult struct {
+	observation.Observation
+	Request journal.Request
 }
 
 // Confirm checks the current startup Data instance and the ORIGINAL retained
 // directory chain. Legacy requires a separate native picker confirmation whose
 // fixed original root and operation ID are identical. It never trusts an inode.
-func (o *Owner) Confirm(ctx context.Context, operationID, selectedRoot string, ownerPicked bool) (observation.Observation, error) {
+func (o *Owner) Confirm(ctx context.Context, operationID, selectedRoot string, ownerPicked bool) (ConfirmResult, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	a := o.active
-	if o.poisoned || a == nil || a.id != operationID || ctx == nil || ctx.Err() != nil || a.phase != journal.Intent {
-		return observation.Observation{}, journal.ErrRefused
+	if o.poisoned || a == nil || a.request.OperationID != operationID || ctx == nil || ctx.Err() != nil || a.phase != journal.Intent {
+		return ConfirmResult{}, journal.ErrRefused
 	}
 	if a.mode == Legacy && (!ownerPicked || selectedRoot != a.root) {
-		return observation.Observation{}, journal.ErrRefused
+		return ConfirmResult{}, journal.ErrRefused
 	}
 	if a.mode == Rebind && ownerPicked {
-		return observation.Observation{}, journal.ErrRefused
+		return ConfirmResult{}, journal.ErrRefused
 	}
 	if err := a.anchor.Requalify(ctx); err != nil {
 		o.poisoned = true
-		return observation.Observation{}, err
+		return ConfirmResult{}, err
 	}
 	if err := a.candidate.Requalify(ctx); err != nil {
 		o.poisoned = true
-		return observation.Observation{}, err
+		return ConfirmResult{}, err
 	}
 	candidate, err := a.anchor.Check(ctx, a.root)
-	if err != nil || candidate.Kind != "current-data-candidate" || candidate.Authority != "not-established" || candidate.Path != a.root {
+	if err != nil {
 		o.poisoned = true
-		return observation.Observation{}, journal.ErrRefused
+		return ConfirmResult{}, err
+	}
+	if candidate.Kind != "current-data-candidate" || candidate.Authority != "not-established" || candidate.Path != a.root {
+		o.poisoned = true
+		return ConfirmResult{}, journal.ErrRefused
 	}
 	measured, err := a.candidate.Snapshot()
-	if err != nil || !measured.Valid() || measured.Binding.Path != a.root {
+	if err != nil {
 		o.poisoned = true
-		return observation.Observation{}, journal.ErrRefused
+		return ConfirmResult{}, err
+	}
+	if !measured.Valid() || measured.Binding.Path != a.root {
+		o.poisoned = true
+		return ConfirmResult{}, journal.ErrRefused
 	}
 	device, e1 := strconv.ParseUint(measured.Binding.Device, 10, 64)
 	inode, e2 := strconv.ParseUint(measured.Binding.Inode, 10, 64)
 	if e1 != nil || e2 != nil || device != candidate.Device || inode != candidate.Inode {
 		o.poisoned = true
-		return observation.Observation{}, journal.ErrRefused
+		return ConfirmResult{}, journal.ErrRefused
 	}
 	if a.mode == Rebind {
 		assessment := observation.Compare(a.saved, measured, observation.Settled)
 		if assessment != observation.SameMountCandidate && assessment != observation.RemountCandidate {
 			o.poisoned = true
-			return observation.Observation{}, journal.ErrRefused
+			return ConfirmResult{}, journal.ErrRefused
 		}
 	}
 	digest, err := o.digester.Digest(measured)
 	if err != nil {
-		return observation.Observation{}, journal.ErrRefused
+		return ConfirmResult{}, journal.ErrRefused
 	}
-	proof := journal.Receipt{EffectID: a.id, Digest: digest}
-	if err = o.store.AdvanceTransition(ctx, a.id, journal.Prepared, proof); err != nil {
+	proof := journal.Receipt{EffectID: a.request.OperationID, Digest: digest}
+	if err = o.store.AdvanceTransition(ctx, a.request.OperationID, journal.Prepared, proof); err != nil {
 		o.poisoned = true
-		return observation.Observation{}, err
+		return ConfirmResult{}, err
 	}
+	a.measured = measured
 	a.phase = journal.Prepared
-	return measured, nil
+	return ConfirmResult{Observation: measured, Request: a.request}, nil
 }
 
 // WithdrawEffect is one trusted Go-native effect, never a desktop/TS callback.
@@ -228,7 +253,7 @@ func (o *Owner) WithdrawOnce(ctx context.Context, id string, effect WithdrawEffe
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	a := o.active
-	if o.poisoned || a == nil || a.id != id || a.phase != journal.WithdrawIntent || a.withdrawAttempted || a.withdrawIntent.EffectID == "" {
+	if o.poisoned || a == nil || a.request.OperationID != id || a.phase != journal.WithdrawIntent || a.withdrawAttempted || a.withdrawIntent.EffectID == "" {
 		return journal.Receipt{}, journal.ErrRefused
 	}
 	if err := a.anchor.Requalify(ctx); err != nil {
@@ -244,7 +269,7 @@ func (o *Owner) WithdrawOnce(ctx context.Context, id string, effect WithdrawEffe
 	// WithdrawAcknowledged with the returned original effect receipt.
 	a.withdrawAttempted = true
 	receipt, err := effect(ctx, id, a.withdrawIntent)
-	if err != nil || receipt.EffectID != a.withdrawIntent.EffectID || receipt.Digest == "" || ctx.Err() != nil {
+	if err != nil || receipt.EffectID != a.withdrawIntent.EffectID || !digest.Valid(receipt.Digest) || ctx.Err() != nil {
 		o.poisoned = true
 		return journal.Receipt{}, journal.ErrUnknown
 	}
@@ -258,18 +283,13 @@ func (o *Owner) WithdrawOnce(ctx context.Context, id string, effect WithdrawEffe
 // performs its effect only AFTER a returned intent, and never asks Go to call
 // back into TS while any Go access/activation mutex is held.
 func (o *Owner) Record(ctx context.Context, id string, phase journal.Phase, receipt journal.Receipt) error {
-	switch phase {
-	case journal.WithdrawIntent, journal.WithdrawAcknowledged, journal.SettingsIntent, journal.SettingsAcknowledged, journal.PublishIntent, journal.PublishAcknowledged, journal.CloseIntent:
-	default:
-		return journal.ErrRefused
-	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	a := o.active
-	if o.poisoned || a == nil || a.id != id || ctx == nil || ctx.Err() != nil {
+	if o.poisoned || a == nil || a.request.OperationID != id || ctx == nil || ctx.Err() != nil {
 		return journal.ErrRefused
 	}
-	if phase == journal.WithdrawAcknowledged && (!a.withdrawAttempted || a.withdrawAck == nil || *a.withdrawAck != receipt) {
+	if !a.canRecord(phase, receipt) {
 		return journal.ErrRefused
 	}
 	if err := a.anchor.Requalify(ctx); err != nil {
@@ -295,7 +315,13 @@ func (o *Owner) Finish(ctx context.Context, id string, kind journal.Phase, clean
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	a := o.active
-	if o.poisoned || a == nil || a.id != id || ctx == nil || ctx.Err() != nil || a.closeAttempted {
+	if o.poisoned || a == nil || a.request.OperationID != id || ctx == nil || ctx.Err() != nil || a.closeAttempted {
+		return journal.ErrRefused
+	}
+	if cleanup != planReceipt(a.request, journal.CloseIntent) {
+		return journal.ErrRefused
+	}
+	if kind != journal.Committed && kind != journal.Refused {
 		return journal.ErrRefused
 	}
 	if kind == journal.Committed && a.phase != journal.CloseIntent {
@@ -318,17 +344,9 @@ func (o *Owner) Finish(ctx context.Context, id string, kind journal.Phase, clean
 	}
 	// The close-intent phase is already durable for COMMITTED. An early known
 	// refusal has no covered withdrawal effect and must still observe cleanup.
-	a.closeAttempted = true
-	var failures error
-	if err := a.candidate.Close(); err != nil {
-		failures = errors.Join(failures, err)
-	}
-	if err := a.anchor.Close(); err != nil {
-		failures = errors.Join(failures, err)
-	}
-	if failures != nil {
+	if err := a.close(); err != nil {
 		o.poisoned = true
-		return failures
+		return errors.Join(journal.ErrUnknown, err)
 	}
 	if kind == journal.Committed {
 		// Native close is a one-shot effect. Retain its ACK only after both

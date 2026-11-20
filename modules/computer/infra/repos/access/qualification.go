@@ -80,6 +80,10 @@ func (q *HeldCurrentQualifier) PrepareCurrent(ctx context.Context, entry journal
 		return nil, errUnqualifiedCurrent
 	}
 	proof, err := q.reader.ReadQualified(ctx, entry, proposed)
+	if err != nil && !errors.Is(err, journal.ErrRefused) && !errors.Is(err, errUnqualifiedCurrent) {
+		q.finish(true)
+		return nil, errors.Join(journal.ErrUnknown, err)
+	}
 	if err != nil || ctx.Err() != nil || proof.ConsentDigest != entry.Request.ConsentDigest || proof.SettingsRevision == 0 ||
 		proof.ComputerGeneration != proposed.Generation || proof.Saved.Binding.Path != entry.Request.Root ||
 		observation.Preflight(proof.Saved, observation.Settled) != "" {
@@ -146,13 +150,16 @@ func (w *heldCurrentWitness) RequalifyCurrent(ctx context.Context) error {
 		return errUnqualifiedCurrent
 	}
 	if err := w.anchor.Requalify(ctx); err != nil {
-		return errUnqualifiedCurrent
+		return err
 	}
 	if err := w.candidate.Requalify(ctx); err != nil {
-		return errUnqualifiedCurrent
+		return err
 	}
 	current, err := w.candidate.Snapshot()
-	if err != nil || !current.Valid() || current.Binding.Path != w.root ||
+	if err != nil {
+		return err
+	}
+	if !current.Valid() || current.Binding.Path != w.root ||
 		current.Binding.Device != w.proposedIdentity.Device || current.Binding.Inode != w.proposedIdentity.Inode {
 		return errUnqualifiedCurrent
 	}
@@ -161,7 +168,10 @@ func (w *heldCurrentWitness) RequalifyCurrent(ctx context.Context) error {
 		return errUnqualifiedCurrent
 	}
 	candidate, err := w.anchor.Check(ctx, w.root)
-	if err != nil || candidate.Kind != "current-data-candidate" || candidate.Authority != "not-established" || candidate.Path != w.root {
+	if err != nil {
+		return err
+	}
+	if candidate.Kind != "current-data-candidate" || candidate.Authority != "not-established" || candidate.Path != w.root {
 		return errUnqualifiedCurrent
 	}
 	device, e1 := strconv.ParseUint(current.Binding.Device, 10, 64)

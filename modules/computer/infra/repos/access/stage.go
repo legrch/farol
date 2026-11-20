@@ -2,10 +2,15 @@ package access
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"reflect"
+	"strconv"
 
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	transition "github.com/legrch/farol/modules/computer/domain/journal"
+	"github.com/legrch/farol/modules/computer/domain/observation"
 )
 
 // StageContinuityApproval is a narrow protected snapshot CAS for the original
@@ -18,6 +23,76 @@ func (s *Store) StageContinuityApproval(ctx context.Context, id string, planned 
 	if err := s.checkStorage(ctx); err != nil {
 		return Status{}, err
 	}
+	return s.stageContinuityApproval(ctx, id, planned, revision, proposed)
+}
+
+// StageMeasuredContinuity derives the next effective approval under the same
+// protected lock that verifies the original WAL and performs the staging CAS.
+func (s *Store) StageMeasuredContinuity(ctx context.Context, id string, planned transition.Receipt, measured observation.Observation) (transition.Receipt, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	if err := s.checkStorage(ctx); err != nil {
+		return transition.Receipt{}, err
+	}
+	entry, ok := s.journal.Find(id)
+	expected, parseErr := strconv.ParseUint(entry.Request.ExpectedGeneration, 10, 64)
+	if !ok || parseErr != nil || expected != s.current.Generation || entry.Parent == nil || entry.Phase != transition.PublishIntent ||
+		entry.Request.Root != measured.Binding.Path || !measured.Valid() ||
+		s.current.Approval == nil || s.current.Generation == ^uint64(0) {
+		return transition.Receipt{}, transition.ErrRefused
+	}
+	raw, err := json.Marshal(measured)
+	if err != nil {
+		return transition.Receipt{}, err
+	}
+	nativeDigest := sha256.Sum256(raw)
+	if entry.Native.EffectID != id || entry.Native.Digest != hex.EncodeToString(nativeDigest[:]) {
+		return transition.Receipt{}, transition.ErrRefused
+	}
+
+	proposed := approval(*s.current.Approval)
+	proposed.Generation++
+	// Invalidate generation-bound readiness for every workspace. All stable
+	// settings, and every other workspace's binding, are preserved.
+	for i := range proposed.Workspaces {
+		workspace := &proposed.Workspaces[i]
+		workspace.ShellVerified = false
+		if workspace.WorkspaceID == entry.Request.WorkspaceID {
+			workspace.RootIdentity = authority.RootIdentity{Device: measured.Binding.Device, Inode: measured.Binding.Inode}
+		}
+	}
+	proposed.Capabilities = withoutShell(proposed.Capabilities)
+	if proposed.Commands == authority.WorkspaceCommands {
+		proposed.Commands = authority.VerificationCommands
+	}
+	status, err := s.stageContinuityApproval(ctx, id, planned, s.current.Revision, proposed)
+	if err != nil {
+		return transition.Receipt{}, err
+	}
+	// The actual protected state digest binds the ACK to the effective
+	// approval and Store counters from the confirmed publication.
+	ack, err := json.Marshal(struct {
+		Operation, Plan, State string
+		Revision, Generation   uint64
+	}{id, planned.Digest, hex.EncodeToString(s.digest[:]), status.Revision, status.Generation})
+	if err != nil {
+		return transition.Receipt{}, err
+	}
+	digest := sha256.Sum256(append([]byte("farol.continuity-publish/1\x00"), ack...))
+	return transition.Receipt{EffectID: planned.EffectID, Digest: hex.EncodeToString(digest[:])}, nil
+}
+
+func withoutShell(capabilities []authority.Capability) []authority.Capability {
+	kept := capabilities[:0]
+	for _, capability := range capabilities {
+		if capability != authority.Shell {
+			kept = append(kept, capability)
+		}
+	}
+	return kept
+}
+
+func (s *Store) stageContinuityApproval(ctx context.Context, id string, planned transition.Receipt, revision uint64, proposed authority.Approval) (Status, error) {
 	entry, ok := s.journal.Find(id)
 	if !s.journalPresent || !ok || entry.Phase != transition.PublishIntent || entry.Publication != planned ||
 		!validApproval(proposed, s.binding) || s.current.Approval == nil {

@@ -20,7 +20,7 @@ import (
 	"github.com/legrch/farol/modules/chat/infra/gate"
 	chatrepo "github.com/legrch/farol/modules/chat/infra/repos/lifecycle"
 	connectorsvc "github.com/legrch/farol/modules/computer/app/services/connector"
-	nativeboot "github.com/legrch/farol/modules/computer/infra/boot"
+	"github.com/legrch/farol/modules/computer/app/services/migration"
 	"github.com/legrch/farol/modules/computer/infra/filesystem"
 	accessrepo "github.com/legrch/farol/modules/computer/infra/repos/access"
 	mutationrepo "github.com/legrch/farol/modules/computer/infra/repos/mutation"
@@ -45,6 +45,8 @@ type NativeLaunch struct {
 }
 type NativeRuntime struct {
 	cancel                   context.CancelFunc
+	continuity               *migration.Owner
+	continuityMethods        map[string]desktop.Method
 	browser                  *BrowserExchange
 	conversations            *ChatIngress
 	chatComputer             *ChatComputerIngress
@@ -189,23 +191,10 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 	if err != nil {
 		return fail(err)
 	}
-	// Root-selected Go owner and native boot reader. No renderer can construct
-	// a Stop admission; an unqualified empty host lifetime fails closed.
-	runtime.ingress.stopOwner = connectorsvc.NewOriginalStopOwner(
-		runtime.store, nativeboot.New(), runtime.connector,
-		connectorsvc.StopScope{ProfileID: launch.Profile.ProfileID, OwnerID: launch.OwnerID,
-			ComputerID: launch.ComputerID, BackendGeneration: generation,
-			HostLifetimeID: launch.HostLifetimeID},
-	)
-	// One Go owner for the explicitly clicked connection check. It shares
-	// the existing Access Store lifetime lock and native connector instance;
-	// no startup/browser Send is performed by composition.
-	runtime.ingress.checkOwner = connectorsvc.NewConnectionCheckOwner(
-		runtime.store, runtime.connector, connectorsvc.ConnectionCheckScope{
-			ProfileID: launch.Profile.ProfileID, OwnerID: launch.OwnerID,
-			ComputerID: launch.ComputerID,
-		},
-	)
+	runtime.composeComputerOwners(connectorsvc.StopScope{
+		ProfileID: launch.Profile.ProfileID, OwnerID: launch.OwnerID, ComputerID: launch.ComputerID,
+		BackendGeneration: generation, HostLifetimeID: launch.HostLifetimeID,
+	})
 	runtime.chatComputer, err = NewChatComputerIngress(runtime.conversations, runtime.ingress)
 	if err != nil {
 		return fail(err)
@@ -347,6 +336,7 @@ func (r *NativeRuntime) closeResources() error {
 	if r.journal != nil {
 		failures = append(failures, r.journal.Close())
 	}
+	failures = append(failures, r.continuity.Close())
 	if r.store != nil {
 		failures = append(failures, r.store.Close())
 	}
@@ -384,7 +374,7 @@ func (r *NativeRuntime) Methods() (map[string]desktop.Method, error) {
 			merged[name] = method
 		}
 	}
-	for _, source := range []map[string]desktop.Method{r.ingress.Methods(), r.connector.Methods(), r.browser.Methods(), r.conversations.Methods(), r.chatComputer.Methods(), r.retirementMethods(), r.freshSessionMethods()} {
+	for _, source := range []map[string]desktop.Method{r.ingress.Methods(), r.continuityMethods, r.connector.Methods(), r.browser.Methods(), r.conversations.Methods(), r.chatComputer.Methods(), r.retirementMethods(), r.freshSessionMethods()} {
 		for name, method := range source {
 			if _, exists := merged[name]; exists {
 				return nil, errors.New("native_method_conflict")

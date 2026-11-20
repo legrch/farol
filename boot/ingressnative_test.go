@@ -4,6 +4,7 @@ package boot
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	"github.com/legrch/farol/pkg/ipc"
+	"github.com/legrch/farol/transport/desktop"
 	"golang.org/x/sys/unix"
 )
 
@@ -209,5 +211,34 @@ func TestNativeCLIComputerPublicationAdmissionAndRead(t *testing.T) {
 	read.CallId = "read-after-withdrawal"
 	if r := invoke("computer.workspace.read", read, ""); r.Status == "ok" {
 		t.Fatal("withdrawn authority disclosed content")
+	}
+}
+
+// This exercises the real disposable runtime registry. It does not invoke
+// startup-volume native acquisition or perform any provider work.
+func TestNativeRuntimeRegistersOwnerContinuityOnlyOnHostPipe(t *testing.T) {
+	// The shared native fixture skips outside the exclusive -ingress-native
+	// lane and owns the runtime's disposable profile and cleanup.
+	_, runtime := retirementStorageFixture(t, false)
+	ctx := context.Background()
+	host, err := runtime.Methods()
+	if err != nil || runtime.continuity == nil {
+		t.Fatal("runtime continuity not composed", err)
+	}
+	closedRoutes := runtime.connector.Methods()
+	for _, suffix := range []string{"begin", "confirm", "plan", "record", "withdraw", "stage", "finish", "qualify"} {
+		name := "computer.continuity." + suffix
+		_, connectorVisible := closedRoutes[name]
+		if host[name].Handle == nil || connectorVisible || !wire.KnownMethod(name) ||
+			wire.RequiresOperationID(name) != (suffix != "plan") {
+			t.Fatalf("unexpected host/connector method or effect registration for %s", name)
+		}
+	}
+	out, err := host["computer.continuity.begin"].Handle(ctx, desktop.Request{
+		OperationID: "11111111-1111-4111-8111-111111111111",
+		Body:        json.RawMessage(`{"operationId":"11111111-1111-4111-8111-111111111111","mode":"legacy-confirm","savedBinding":{"device":"1","inode":"1"}}`),
+	})
+	if err != nil || out == nil || out.Status != "refused" {
+		t.Fatal("native dispatch admitted a child without its original Stop", out, err)
 	}
 }

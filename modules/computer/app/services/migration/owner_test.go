@@ -246,6 +246,65 @@ func TestRebindRemountIsCandidateNotPermission(t *testing.T) {
 		t.Fatal("different current mount accepted")
 	}
 }
+func mustPlan(t *testing.T, owner *Owner, phase journal.Phase) journal.Receipt {
+	t.Helper()
+	receipt, err := owner.Plan(context.Background(), one, phase)
+	if err != nil {
+		t.Fatal(phase, err)
+	}
+	return receipt
+}
+
+func recordToClose(t *testing.T, owner *Owner) journal.Receipt {
+	t.Helper()
+	ctx := context.Background()
+	record := func(phase journal.Phase, receipt journal.Receipt) {
+		t.Helper()
+		if err := owner.Record(ctx, one, phase, receipt); err != nil {
+			t.Fatal(phase, err)
+		}
+	}
+	planned := mustPlan(t, owner, journal.WithdrawIntent)
+	record(journal.WithdrawIntent, planned)
+	if err := owner.Record(ctx, one, journal.WithdrawAcknowledged, planned); err != journal.ErrRefused {
+		t.Fatal("forged withdrawal acknowledgement accepted", err)
+	}
+	makeAck := func(planned journal.Receipt) journal.Receipt {
+		return journal.Receipt{EffectID: planned.EffectID, Digest: goodDigest}
+	}
+	ack, err := owner.WithdrawOnce(ctx, one, func(_ context.Context, id string, receipt journal.Receipt) (journal.Receipt, error) {
+		if id != one || receipt != planned {
+			t.Fatal("lost original intent")
+		}
+		return makeAck(receipt), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record(journal.WithdrawAcknowledged, ack)
+	settings := mustPlan(t, owner, journal.SettingsIntent)
+	record(journal.SettingsIntent, settings)
+	record(journal.SettingsAcknowledged, makeAck(settings))
+	publish := mustPlan(t, owner, journal.PublishIntent)
+	record(journal.PublishIntent, publish)
+	if err := owner.Record(ctx, one, journal.PublishAcknowledged, makeAck(publish)); err != journal.ErrRefused {
+		t.Fatal("forged publication acknowledgement accepted", err)
+	}
+	staged, err := owner.StageOnce(ctx, one, func(_ context.Context, id string, planned journal.Receipt, measured obs.Observation) (journal.Receipt, error) {
+		if id != one || planned != publish || measured != measuredFixture {
+			t.Fatal("staging lost original measurement or intent")
+		}
+		return makeAck(planned), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record(journal.PublishAcknowledged, staged)
+	close := mustPlan(t, owner, journal.CloseIntent)
+	record(journal.CloseIntent, close)
+	return close
+}
+
 func TestCompleteUsesOriginalCloseOnceAfterIntent(t *testing.T) {
 	ctx := context.Background()
 	o, s, n := makeOwner(true)
@@ -255,26 +314,7 @@ func TestCompleteUsesOriginalCloseOnceAfterIntent(t *testing.T) {
 	if _, e := o.Confirm(ctx, one, "/Users/test", true); e != nil {
 		t.Fatal(e)
 	}
-	proof := journal.Receipt{EffectID: "effect-1", Digest: strings.Repeat("c", 64)}
-	if err := o.Record(ctx, one, journal.WithdrawIntent, proof); err != nil {
-		t.Fatal(err)
-	}
-	if err := o.Record(ctx, one, journal.WithdrawAcknowledged, proof); err == nil {
-		t.Fatal("forged withdrawal acknowledgement accepted")
-	}
-	if _, err := o.WithdrawOnce(ctx, one, func(_ context.Context, id string, intent journal.Receipt) (journal.Receipt, error) {
-		if id != one || intent != proof {
-			t.Fatal("lost original intent")
-		}
-		return proof, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	for _, phase := range []journal.Phase{journal.WithdrawAcknowledged, journal.SettingsIntent, journal.SettingsAcknowledged, journal.PublishIntent, journal.PublishAcknowledged, journal.CloseIntent} {
-		if e := o.Record(ctx, one, phase, proof); e != nil {
-			t.Fatal(phase, e)
-		}
-	}
+	proof := recordToClose(t, o)
 	if e := o.Finish(ctx, one, journal.Committed, proof); e != nil {
 		t.Fatal(e)
 	}
@@ -285,11 +325,12 @@ func TestCompleteUsesOriginalCloseOnceAfterIntent(t *testing.T) {
 		t.Fatal("repeated close")
 	}
 }
+
 func TestKnownRefusalVsUnknownCleanup(t *testing.T) {
 	ctx := context.Background()
 	o, s, n := makeOwner(true)
 	o.Begin(ctx, intent())
-	proof := journal.Receipt{EffectID: "cleanup", Digest: goodDigest}
+	proof := mustPlan(t, o, journal.CloseIntent)
 	if e := o.Finish(ctx, one, journal.Refused, proof); e != nil || s.journal.Unresolved() {
 		t.Fatal("known pre-withdraw refusal", e)
 	}
@@ -329,7 +370,7 @@ func TestWithdrawOnceOriginalHeldOwnerAndUnknownNoReplay(t *testing.T) {
 	if _, err := owner.Confirm(ctx, one, "/Users/test", true); err != nil {
 		t.Fatal(err)
 	}
-	planned := journal.Receipt{EffectID: "withdraw-1", Digest: goodDigest}
+	planned := mustPlan(t, owner, journal.WithdrawIntent)
 	if err := owner.Record(ctx, one, journal.WithdrawIntent, planned); err != nil {
 		t.Fatal(err)
 	}
@@ -400,18 +441,7 @@ func TestCloseIntentCannotCertifyStaleOriginalNativeChain(t *testing.T) {
 	if _, err := owner.Confirm(ctx, one, "/Users/test", true); err != nil {
 		t.Fatal(err)
 	}
-	proof := journal.Receipt{EffectID: "effect-1", Digest: goodDigest}
-	if err := owner.Record(ctx, one, journal.WithdrawIntent, proof); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := owner.WithdrawOnce(ctx, one, func(context.Context, string, journal.Receipt) (journal.Receipt, error) { return proof, nil }); err != nil {
-		t.Fatal(err)
-	}
-	for _, phase := range []journal.Phase{journal.WithdrawAcknowledged, journal.SettingsIntent, journal.SettingsAcknowledged, journal.PublishIntent, journal.PublishAcknowledged, journal.CloseIntent} {
-		if err := owner.Record(ctx, one, phase, proof); err != nil {
-			t.Fatal(err)
-		}
-	}
+	proof := recordToClose(t, owner)
 	// A changed mount/ancestor after staging invalidates the original C1+C3
 	// held descriptors; a historical effect ACK is not a native witness.
 	native.allowed = false

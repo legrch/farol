@@ -75,14 +75,38 @@ type CurrentTransitionReceipt struct {
 // ActivateCurrentTransition qualifies CURRENT authorization, separately from
 // the historical committed certificate. Native handles cannot survive restart.
 // A missing host-qualified source keeps this gate CLOSED; this is NOT exposed
-// as an IPC method and does not activate ComputerIngress's separate route fence.
+// as an unrestricted IPC method and does not activate the separate route fence.
 func (s *Store) ActivateCurrentTransition(ctx context.Context, qualifier CurrentQualification) (CurrentTransitionReceipt, error) {
+	return s.activateCurrentTransition(ctx, "", qualifier)
+}
+
+// QualifyContinuityOperation excludes every other operation before invoking
+// the current witness owner. Only the exact latest committed child qualifies.
+func (s *Store) QualifyContinuityOperation(ctx context.Context, id string, qualifier CurrentQualification) (bool, error) {
+	if id == "" {
+		return false, journal.ErrRefused
+	}
+	_, err := s.activateCurrentTransition(ctx, id, qualifier)
+	if _, unavailable := err.(*authority.Failure); unavailable {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func (s *Store) activateCurrentTransition(ctx context.Context, id string, qualifier CurrentQualification) (CurrentTransitionReceipt, error) {
 	if qualifier == nil || ctx == nil || ctx.Err() != nil {
 		return CurrentTransitionReceipt{}, unavailable()
 	}
 	s.mutex.Lock()
-	if s.closed || s.poisoned || s.currentContinuity != nil || s.currentActivating || s.checkStorage(ctx) != nil ||
-		!s.journalPresent || s.journal.Unresolved() || s.current.Approval == nil {
+	if s.closed || s.poisoned || s.currentContinuity != nil || s.currentActivating {
+		s.mutex.Unlock()
+		return CurrentTransitionReceipt{}, unavailable()
+	}
+	if err := s.checkStorage(ctx); err != nil {
+		s.mutex.Unlock()
+		return CurrentTransitionReceipt{}, err
+	}
+	if !s.journalPresent || s.journal.Unresolved() || s.stops.Pending() || s.current.Approval == nil {
 		s.mutex.Unlock()
 		return CurrentTransitionReceipt{}, unavailable()
 	}
@@ -93,7 +117,7 @@ func (s *Store) ActivateCurrentTransition(ctx context.Context, qualifier Current
 			latest = e
 		}
 	}
-	if latest == nil || latest.Certificate == nil || latest.Certificate.Kind != journal.Committed ||
+	if latest == nil || (id != "" && (latest.Request.OperationID != id || latest.Parent == nil)) || latest.Certificate == nil || latest.Certificate.Kind != journal.Committed ||
 		latest.Request.ProfileID != s.binding.ProfileID || latest.Request.OwnerID != s.binding.OwnerID ||
 		latest.Request.ComputerID != s.binding.ComputerID {
 		s.mutex.Unlock()
@@ -137,27 +161,41 @@ func (s *Store) ActivateCurrentTransition(ctx context.Context, qualifier Current
 	if err != nil || witness == nil {
 		if errors.Is(err, ErrCurrentCustodyUnknown) || (err == nil && witness == nil) {
 			s.poisoned = true
+			return CurrentTransitionReceipt{}, errors.Join(journal.ErrUnknown, err)
+		}
+		if errors.Is(err, journal.ErrUnknown) {
+			return CurrentTransitionReceipt{}, err
 		}
 		return CurrentTransitionReceipt{}, unavailable()
 	}
 	// Every returned native witness is consumed exactly once, including when
 	// an intervening mutation has invalidated the original Store snapshot.
-	same := ctx.Err() == nil && !s.closed && !s.poisoned && s.checkStorage(ctx) == nil &&
+	storageErr := s.checkStorage(ctx)
+	same := ctx.Err() == nil && !s.closed && !s.poisoned && storageErr == nil &&
 		s.digest == originalDigest && s.journalDigest == originalJournal &&
 		s.current.Revision == rev && s.current.Generation == generation &&
-		!s.journal.Unresolved() && s.currentContinuity == nil
+		!s.journal.Unresolved() && !s.stops.Pending() && s.currentContinuity == nil
 	if !same {
-		if witness.Close() != nil {
+		if err := witness.Close(); err != nil {
 			s.poisoned = true
+			return CurrentTransitionReceipt{}, errors.Join(journal.ErrUnknown, err, storageErr)
+		}
+		if storageErr != nil {
+			return CurrentTransitionReceipt{}, storageErr
 		}
 		return CurrentTransitionReceipt{}, unavailable()
 	}
-	valid := witness.RequalifyCurrent(ctx) == nil && ctx.Err() == nil
+	nativeErr := witness.RequalifyCurrent(ctx)
 	closed := witness.Close() // exactly one Close, including a failed native check
 	if closed != nil {
 		s.poisoned = true
+		return CurrentTransitionReceipt{}, errors.Join(journal.ErrUnknown, closed, nativeErr)
 	}
-	if !valid || closed != nil {
+	if nativeErr != nil && !errors.Is(nativeErr, errUnqualifiedCurrent) {
+		s.poisoned = true
+		return CurrentTransitionReceipt{}, errors.Join(journal.ErrUnknown, nativeErr)
+	}
+	if nativeErr != nil || ctx.Err() != nil {
 		return CurrentTransitionReceipt{}, unavailable()
 	}
 	s.currentContinuity = &activeContinuity{

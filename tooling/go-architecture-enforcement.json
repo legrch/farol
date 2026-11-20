@@ -1805,7 +1805,7 @@
       "code": "GO_BOOT_LOGIC",
       "file": "boot/nativeruntime.go",
       "detail": "lines beyond the 400-line budget",
-      "amount": 27
+      "amount": 17
     },
     {
       "code": "GO_BOOT_LOGIC",
