@@ -372,6 +372,7 @@ import {
   type WorkspaceAuthorityChangeKind,
 } from "../../../apps/desktop/configuration/drain";
 import { createWorkspaceContinuityHost } from "../../../apps/desktop/configuration/continuity";
+import { qualifyContinuityRecovery } from "../../../apps/desktop/configuration/recovery";
 import { createConfigurationConnector } from "../../../apps/desktop/configuration/connector";
 import { createConfigurationComputer } from "../../../apps/desktop/configuration/computer";
 import type {
@@ -6548,6 +6549,32 @@ export const { runWorkspaceContinuity } = createWorkspaceContinuityHost({
   drainContinuityPrerequisite: (command) =>
     configurationDrain().drainContinuityPrerequisite(command),
   ownerComputerConsentDigest,
+  recoveryQualified: async () => {
+    const core = desktopGoCore;
+    const managedBuild =
+      (app.isPackaged || buildEnvironment === "dev") &&
+      runtimeEnvironment === buildEnvironment &&
+      compiledGoCore != null;
+    if (process.platform !== "darwin" || !managedBuild || !core)
+      return "unavailable";
+    try {
+      const [continuity, stop] = await Promise.all([
+        core.observeComputerContinuity(),
+        core.observeOriginalStop(),
+      ]);
+      if (desktopGoCore !== core || !core.backendAvailable)
+        return "unavailable";
+      return qualifyContinuityRecovery({
+        platform: process.platform,
+        managedBuild,
+        capabilities: core.continuityCapabilities,
+        continuity,
+        stop,
+      });
+    } catch {
+      return "unavailable";
+    }
+  },
 });
 
 function configurationComputer() {

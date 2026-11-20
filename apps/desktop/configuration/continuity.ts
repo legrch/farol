@@ -68,8 +68,8 @@ type HostPorts = Readonly<{
     command: ContinuityDrainCommand,
   ): Promise<ContinuityDrainResult>;
   ownerComputerConsentDigest: ConfigurationDrainPorts["ownerComputerConsentDigest"];
-  // Deliberately absent until the host can attest compatible readers, update
-  // recovery and the current native route. There is no renderer setting.
+  // Missing qualification keeps the sequence closed. The renderer has no
+  // authority to supply build or recovery facts.
   recoveryQualified?(): Promise<true | "unavailable">;
 }>;
 
@@ -414,8 +414,11 @@ export function createWorkspaceContinuityHost(ports: HostPorts) {
           ? true
           : "unknown",
       qualifyCurrent: async (id) => {
-        if ((await sequencePorts.recoveryQualified()) !== true || !current())
-          return "unavailable";
+        // This operation's own commit makes the Store restricted until it is
+        // currently qualified, so recoveryQualified (which requires an
+        // unrestricted journal) would always refuse here. Go's qualify admits
+        // only the exact latest committed child of this operation.
+        if (!current()) return "unavailable";
         const reply = await go.qualify(id);
         if (reply.state === "unknown") return "unknown";
         return reply.state === "acknowledged" ? true : "unavailable";

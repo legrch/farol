@@ -264,6 +264,11 @@ export class DesktopGoCore {
       throw new BridgeError("unavailable", "host_core_closing");
     return this.continuity.observe();
   }
+  get continuityCapabilities(): readonly string[] {
+    if (this.closeResult)
+      throw new BridgeError("unavailable", "host_core_closing");
+    return this.client.verifiedCapabilities;
+  }
   // Trusted host composition only. No renderer or connector receives this bridge.
   get workspaceContinuity(): ContinuityBridge {
     if (this.closeResult)

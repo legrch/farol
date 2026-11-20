@@ -56,6 +56,8 @@ type Writer = NonNullable<
 
 type Options = {
   enrolled?: boolean;
+  initiallyStopped?: boolean;
+  restrictedAfterCommit?: boolean;
   active?: boolean;
   unqualified?: boolean;
   pendingStop?: boolean;
@@ -148,7 +150,12 @@ function fixture(options: Options = {}) {
   ) => {
     activeKind = kind;
   };
-  const state = { operationId: "", stopDone: false, withdrawAck: false };
+  const state = {
+    operationId: "",
+    stopDone: false,
+    withdrawAck: false,
+    committed: false,
+  };
   const plans = new Map<string, { effectId: string; digest: string }>();
 
   let failuresSeen = 0;
@@ -257,6 +264,7 @@ function fixture(options: Options = {}) {
           };
           break;
         case "finish":
+          state.committed = phase === "committed";
           data = { operationId, phase };
           break;
         case "qualify":
@@ -267,7 +275,7 @@ function fixture(options: Options = {}) {
     },
   };
 
-  let running = true;
+  let running = options.initiallyStopped !== true;
   let stopRequest: ComputerStopAdmitRequest | undefined;
   const core = {
     workspaceContinuity: new ContinuityBridge(client as unknown as Client),
@@ -441,7 +449,12 @@ function fixture(options: Options = {}) {
     ownerComputerConsentDigest,
     ...(options.unqualified
       ? {}
-      : { recoveryQualified: async () => true as const }),
+      : {
+          recoveryQualified: async () =>
+            options.restrictedAfterCommit && state.committed
+              ? ("unavailable" as const)
+              : (true as const),
+        }),
   });
 
   const picker = vi.fn<ContinuityPicker>(async (operationId, requestedRoot) => {
@@ -461,7 +474,7 @@ function fixture(options: Options = {}) {
       host.runWorkspaceContinuity(
         workspaceId,
         options.enrolled ? "enrolled-rebind" : "legacy-confirm",
-        picker,
+        options.enrolled ? undefined : picker,
       ),
     events,
     state,
@@ -477,6 +490,24 @@ function fixture(options: Options = {}) {
 }
 
 describe("desktop workspace continuity host", () => {
+  it("has no launch prerequisite before the connector is started", async () => {
+    const f = fixture({ enrolled: true, initiallyStopped: true });
+    expect(await f.run()).toEqual({ state: "refused", phase: "stop" });
+    expect(f.events).toEqual([]);
+  });
+
+  it("qualifies its own fresh commit even though that commit restricts the journal", async () => {
+    // The commit itself makes the Store restricted until current
+    // qualification; gating qualify on an unrestricted journal deadlocked.
+    const f = fixture({ restrictedAfterCommit: true });
+    const result = await f.run();
+    expect(f.events.at(-1)).toBe("qualify");
+    expect(result).toEqual({
+      state: "current-qualified",
+      operationId: f.state.operationId,
+    });
+  });
+
   it.each([false, true])(
     "runs the full owned sequence (enrolled=%s)",
     async (enrolled) => {
