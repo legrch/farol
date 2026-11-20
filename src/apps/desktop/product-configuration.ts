@@ -2460,6 +2460,19 @@ export class ProductConfigurationService {
       const ids = new Set(drifted.map((item) => item.workspaceId));
       const verifiedId = this.current.setup.computer.verified?.workspaceId;
       const verifiedDrifted = verifiedId != null && ids.has(verifiedId);
+      // Already withdrawn (a folder still missing on every launch): nothing
+      // left to reduce, so do not write again.
+      const current = this.current;
+      if (
+        !verifiedDrifted &&
+        current.connectors.secureMcp.runtime === null &&
+        current.setup.computer.reachable === "unknown" &&
+        current.setup.computer.needsAction === WORKSPACE_DRIFT_NEEDS_ACTION &&
+        current.computer.workspaces.every(
+          (item) => !ids.has(item.workspaceId) || item.accessCheck == null,
+        )
+      )
+        return { ok: true, snapshot: this.snapshot() };
       const quitFence = () => {
         if (!admissionOpen()) throw new Error("AUTHORITY_CHANGE_IN_PROGRESS");
       };

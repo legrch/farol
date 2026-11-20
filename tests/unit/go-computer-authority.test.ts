@@ -781,6 +781,17 @@ describe("Go Computer host authority mapping", () => {
     // the sidebar and a later Re-check from treating the old grant as live.
     expect(after.setup.computer.reachable).toBe("unknown");
     expect(after.connectors.secureMcp.runtime).toBeNull();
+    // A folder that stays missing is found again on the next launch; with
+    // nothing left to reduce, the owner does not write again.
+    const again = await f.service.withdrawDriftedWorkspaceChecks([
+      {
+        ...drifted[0]!,
+        observed: workspaceCheckEvidence(after, workspace.workspaceId),
+      },
+    ]);
+    if (!again.ok || again.snapshot.status !== "ready")
+      throw Error("repeat refused");
+    expect(again.snapshot.settings.revision).toBe(after.revision);
   });
 
   it("refuses binding and verification evidence from a stale configuration", async () => {

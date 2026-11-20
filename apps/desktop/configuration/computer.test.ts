@@ -334,11 +334,21 @@ describe("configuration computer", () => {
       error: "WORKSPACE_ROOT_CHANGED",
     });
     expect(configuration.withdrawDriftedWorkspaceChecks).not.toHaveBeenCalled();
-    // An unconfirmed withdrawal write is surfaced, not hidden.
+    // An unsuccessful withdrawal is surfaced with the owner's own result,
+    // not hidden behind the root refusal (and not via the exception path,
+    // which would report SETTINGS_WRITE_FAILED instead).
     configuration.withdrawDriftedWorkspaceChecks.mockResolvedValueOnce({
       ok: false,
-      error: "SETTINGS_WRITE_FAILED",
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+      snapshot: { status: "ready", settings },
     } as never);
+    await expect(run(false)).resolves.toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+    configuration.withdrawDriftedWorkspaceChecks.mockRejectedValueOnce(
+      new Error("lost write"),
+    );
     await expect(run(false)).resolves.toMatchObject({
       ok: false,
       error: "SETTINGS_WRITE_FAILED",
