@@ -4088,44 +4088,56 @@ async function measuredRootIdentity(
 // must then not resume a connector that would carry the stale grant.
 async function withdrawDriftedWorkspaceChecksAtLaunch(): Promise<boolean> {
   if (!configuration) return true;
-  const snapshot = configuration.snapshot();
-  if (snapshot.status !== "ready") return true;
-  const drifted: {
-    workspaceId: string;
-    root: string;
-    rootIdentity: WorkspaceRootIdentity;
-    observed: string;
-  }[] = [];
-  for (const workspace of snapshot.settings.computer.workspaces) {
-    if (!workspace.rootIdentity) continue;
-    // Capture the check evidence BEFORE measuring, so a newer check made
-    // while this scan waits is never erased by it.
-    const observed = workspaceCheckEvidence(
-      snapshot.settings,
-      workspace.workspaceId,
-    );
-    const measured = await measuredRootIdentity(workspace.root);
-    const drift = classifyWorkspaceRootDrift(workspace.rootIdentity, measured);
-    // A vanished folder refuses every call just like a changed one.
-    if (measured === null || drift !== "same")
-      drifted.push({
-        workspaceId: workspace.workspaceId,
-        root: workspace.root,
-        rootIdentity: workspace.rootIdentity,
-        observed,
-      });
-  }
-  if (drifted.length === 0) return true;
+  let drifted = 0;
   let withdrawn = false;
   let code: string | null = null;
-  // The window and Settings IPC are already open: hold the authority
-  // reservation so a manual Connect cannot interleave, and never clear the
-  // runtime record of a connector that is already running.
+  // The window and Settings IPC are already open. Hold the authority
+  // reservation across the WHOLE scan (measurement and write), so a manual
+  // Connect or Agent admission cannot start with the stale grant meanwhile.
   const reserved = await authorityTransitions.withReservation(
     "authority-change",
     async () => {
-      // A connector or an active Agent still carries the grant; leave its
+      const snapshot = configuration!.snapshot();
+      if (snapshot.status !== "ready") return;
+      const found: {
+        workspaceId: string;
+        root: string;
+        rootIdentity: WorkspaceRootIdentity;
+        observed: string;
+      }[] = [];
+      for (const workspace of snapshot.settings.computer.workspaces) {
+        if (!workspace.rootIdentity) continue;
+        // Evidence before measuring: a newer check is never erased by it.
+        const observed = workspaceCheckEvidence(
+          snapshot.settings,
+          workspace.workspaceId,
+        );
+        const measured = await measuredRootIdentity(workspace.root);
+        const drift = classifyWorkspaceRootDrift(
+          workspace.rootIdentity,
+          measured,
+        );
+        // A vanished folder refuses every call just like a changed one.
+        if (measured === null || drift !== "same")
+          found.push({
+            workspaceId: workspace.workspaceId,
+            root: workspace.root,
+            rootIdentity: workspace.rootIdentity,
+            observed,
+          });
+      }
+      drifted = found.length;
+      if (found.length === 0) {
+        withdrawn = true;
+        return;
+      }
+      // Quit may have closed admission while the folders were measured, and a
+      // connector or an active Agent may still carry the grant; then leave
       // settings alone (Go's per-call root guard keeps refusing the root).
+      if (desktopAdmission.closed()) {
+        code = "AUTHORITY_CHANGE_IN_PROGRESS";
+        return;
+      }
       if (
         codexAgentOperationActive() ||
         desktopAdmission.occupied("connector-task") ||
@@ -4136,7 +4148,7 @@ async function withdrawDriftedWorkspaceChecksAtLaunch(): Promise<boolean> {
       }
       try {
         const result =
-          await configuration!.withdrawDriftedWorkspaceChecks(drifted);
+          await configuration!.withdrawDriftedWorkspaceChecks(found);
         withdrawn = result.ok;
         code = result.ok ? null : result.error;
       } catch {
@@ -4144,16 +4156,19 @@ async function withdrawDriftedWorkspaceChecksAtLaunch(): Promise<boolean> {
       }
     },
   );
+  // A competing authority change owns this moment; do not resume on top of
+  // an unmeasured grant. The owner's own operation proceeds as before.
   if (!reserved.admitted) code = "AUTHORITY_CHANGE_IN_PROGRESS";
-  console.warn(
-    "FAROL_WORKSPACE_ROOT_DRIFT:" +
-      JSON.stringify({
-        workspaces: drifted.length,
-        withdrawn,
-        ...(code ? { code } : {}),
-      }),
-  );
-  return withdrawn;
+  if (drifted > 0 || !reserved.admitted)
+    console.warn(
+      "FAROL_WORKSPACE_ROOT_DRIFT:" +
+        JSON.stringify({
+          workspaces: drifted,
+          withdrawn,
+          ...(code ? { code } : {}),
+        }),
+    );
+  return reserved.admitted && withdrawn;
 }
 
 async function selectedWorkspace(): Promise<
