@@ -55,6 +55,7 @@ type ComputerIngress struct {
 	renewal             *connectorRenewalScope
 	route               *ComputerRoute
 	taskCurrentSource   taskCurrentSourceResolver
+	startupContinuity   accessrepo.StartupQualification
 }
 type knownComputerPublication struct {
 	receipt       wire.ComputerAuthorityPublication
@@ -112,8 +113,7 @@ func randomIngressID() (string, error) {
 }
 
 // The claim set records every consumed operation ID for this backend lifetime
-// and is never pruned; a durable operation-ID record is deferred. Ordinary
-// claims stop short of capacity so the last slots stay with the calls that
+// and is never pruned. Ordinary claims reserve slots for calls that
 // only REMOVE authority (connector Close, read-intent withdrawal, and an
 // authority Deactivate that withdraws a live fence): a full set can refuse
 // new authority, never its withdrawal. A reserved claim grants nothing, and
@@ -175,7 +175,7 @@ func (s *ComputerIngress) Deactivate(ctx context.Context, operation string) (*wi
 	if e != nil {
 		return nil, e
 	}
-	status, e := s.store.Status(ctx)
+	status, e := s.startupContinuity.Status(ctx, s.store.Status)
 	if e != nil {
 		return nil, e
 	}

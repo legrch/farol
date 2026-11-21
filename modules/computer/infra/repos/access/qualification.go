@@ -24,8 +24,7 @@ type CurrentReaderProof struct {
 	ComputerGeneration uint64
 }
 
-// CurrentReader is deliberately absent from production boot composition until
-// compatible-reader, recovery/update and owner policy witnesses are qualified.
+// CurrentReader reads the protected owner Settings for an exact journal entry.
 // Implementations MUST refuse unsettled or unknown dependent operations and
 // must read exact owner settings under their protected readback. This interface
 // is never registered on desktop RPC. Its call occurs outside the Store mutex.

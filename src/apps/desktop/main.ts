@@ -375,6 +375,7 @@ import {
   enrollWorkspaceRecovery,
 } from "../../../apps/desktop/configuration/continuity";
 import { qualifyContinuityRecovery } from "../../../apps/desktop/configuration/recovery";
+import { settingsContinuitySettled } from "../../../apps/desktop/settings-store-document";
 import { createConfigurationConnector } from "../../../apps/desktop/configuration/connector";
 import { createConfigurationComputer } from "../../../apps/desktop/configuration/computer";
 import type {
@@ -6611,11 +6612,16 @@ async function workspaceRecoveryQualified(): Promise<true | "unavailable"> {
     (app.isPackaged || buildEnvironment === "dev") &&
     runtimeEnvironment === buildEnvironment &&
     compiledGoCore != null;
-  // Boot currently composes HeldCurrentQualifier with a nil Settings reader.
-  // Keep the writer closed until that reader and launch restore are qualified.
-  const currentReaderAndRestoreWired: boolean = false;
+  // Kept closed in every build. After a reboot renumbers an enrolled folder's
+  // volume, startup current-qualification fails (live binding != stored
+  // approval), the Store stays restricted, the connector cannot start, and
+  // the enrolled-rebind needs a running connector for its Stop prerequisite.
+  // Enabling enrollment now would make a rebooted, enrolled folder worse than
+  // stage 1. Opening this needs a decided startup rebind path (no live
+  // connector), not just the wiring below.
+  const startupRebindDecided: boolean = false;
   if (
-    !currentReaderAndRestoreWired ||
+    !startupRebindDecided ||
     process.platform !== "darwin" ||
     !managedBuild ||
     !core
@@ -6627,9 +6633,13 @@ async function workspaceRecoveryQualified(): Promise<true | "unavailable"> {
       core.observeOriginalStop(),
     ]);
     if (desktopGoCore !== core || !core.backendAvailable) return "unavailable";
+    const settings = configuration?.snapshot();
     return qualifyContinuityRecovery({
       platform: process.platform,
       managedBuild,
+      settingsSettled:
+        settings?.status === "ready" &&
+        settingsContinuitySettled(settings.settings),
       capabilities: core.continuityCapabilities,
       continuity,
       stop,
@@ -10802,8 +10812,9 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   // configured Computer identity, do not provision or start a Go profile.
   // Selected Go operations still refuse when their host is unavailable.
   if (compiledGoCore !== null && configuration.snapshot().status === "ready") {
+    const settingsOwner = configuration;
     const currentSettings = () => {
-      const snapshot = configuration!.snapshot();
+      const snapshot = settingsOwner.snapshot();
       if (snapshot.status !== "ready") throw new Error("SETTINGS_UNAVAILABLE");
       return snapshot.settings;
     };
@@ -10841,6 +10852,39 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         stateRoot,
         home: app.getPath("home"),
         settings: currentSettings,
+        settingsStore: (profileId, settingsCore) => {
+          const store = settingsOwner.attachSettingsDeliveryStore({
+            profileId,
+            ownerId: "owner-desktop",
+          });
+          return {
+            read: (input) =>
+              store.read(input.deadlineMillis, input.continuityWorkspaceId),
+            replace: (input) =>
+              store.replace(input.change, input.deadlineMillis),
+            fence: () => {
+              const observationWindow = window;
+              const outcome = store.fence();
+              if (
+                configuration === settingsOwner &&
+                desktopGoCore === settingsCore &&
+                !desktopAdmission.closed() &&
+                window === observationWindow &&
+                observationWindow &&
+                !observationWindow.isDestroyed()
+              ) {
+                try {
+                  observationWindow.webContents.send(
+                    channels.configurationChanged,
+                  );
+                } catch {
+                  // Renderer delivery must not replace the original fence outcome.
+                }
+              }
+              return outcome;
+            },
+          };
+        },
         onLifecycleObservation: reportOwnedBackendLifecycle,
         ...(runtimeEnvironment === "dev" || process.env.FAROL_E2E === "1"
           ? { onQualificationObservation: reportQualificationObservation }
@@ -10924,40 +10968,8 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
           }),
       );
     await runDesktopStartupBoundary("go-settings", () => {
-      const settingsOwner = configuration!;
       const settingsCore = desktopGoCore!;
-      settingsOwner.attachComputerAuthority(() => settingsCore.withdraw());
-      settingsCore.connectSettingsStore((profileId) => {
-        const store = settingsOwner.attachSettingsDeliveryStore({
-          profileId,
-          ownerId: "owner-desktop",
-        });
-        return {
-          read: (input) => store.read(input.deadlineMillis),
-          replace: (input) => store.replace(input.change, input.deadlineMillis),
-          fence: () => {
-            const observationWindow = window;
-            const outcome = store.fence();
-            if (
-              configuration === settingsOwner &&
-              desktopGoCore === settingsCore &&
-              !desktopAdmission.closed() &&
-              window === observationWindow &&
-              observationWindow &&
-              !observationWindow.isDestroyed()
-            ) {
-              try {
-                observationWindow.webContents.send(
-                  channels.configurationChanged,
-                );
-              } catch {
-                // Renderer delivery must not replace the original fence outcome.
-              }
-            }
-            return outcome;
-          },
-        };
-      });
+      configuration!.attachComputerAuthority(() => settingsCore.withdraw());
     });
   }
   productAgentStore = new PrivateProductAgentStore({

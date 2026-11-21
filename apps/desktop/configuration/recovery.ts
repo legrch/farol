@@ -15,6 +15,8 @@ const requiredCapabilities = [
   "computer.continuity.finish",
   "computer.continuity.qualify",
   "computer.stop.status",
+  "computer.settings.store.next",
+  "computer.settings.store.reply",
 ];
 
 function settled(
@@ -34,6 +36,7 @@ export function qualifyContinuityRecovery(
   input: Readonly<{
     platform: string;
     managedBuild: boolean;
+    settingsSettled: boolean;
     capabilities: readonly string[] | undefined;
     continuity?: unknown;
     stop?: unknown;
@@ -42,6 +45,7 @@ export function qualifyContinuityRecovery(
   if (
     input.platform !== "darwin" ||
     input.managedBuild !== true ||
+    input.settingsSettled !== true ||
     !requiredCapabilities.every((method) =>
       input.capabilities?.includes(method),
     ) ||

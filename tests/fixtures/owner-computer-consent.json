@@ -1,0 +1,30 @@
+{
+  "computer": {
+    "computerId": "77000000-0000-4000-8000-000000000003",
+    "commands": "workspace",
+    "filePolicy": "approved-roots-v1",
+    "workspaces": [
+      {
+        "workspaceId": "77000000-0000-4000-8000-000000000002",
+        "root": "/Users/fixture/Reading & Research",
+        "access": "read",
+        "excludedPaths": []
+      },
+      {
+        "workspaceId": "77000000-0000-4000-8000-000000000001",
+        "root": "/Users/fixture/🪔 <workspace>",
+        "access": "write",
+        "excludedPaths": [
+          "/Users/fixture/🪔 <workspace>/z-last",
+          "/Users/fixture/🪔 <workspace>/",
+          "/Users/fixture/🪔 <workspace>/🪔",
+          "/Users/fixture/🪔 <workspace>/line separator",
+          "/Users/fixture/🪔 <workspace>/\"quoted\""
+        ],
+        "gitHistoryApproved": true
+      }
+    ]
+  },
+  "projection": "{\"schema\":1,\"ownerId\":\"owner-desktop\",\"computerId\":\"77000000-0000-4000-8000-000000000003\",\"workspaces\":[{\"workspaceId\":\"77000000-0000-4000-8000-000000000001\",\"root\":\"/Users/fixture/🪔 <workspace>\",\"access\":\"write\",\"excludedPaths\":[\"/Users/fixture/🪔 <workspace>/\\\"quoted\\\"\",\"/Users/fixture/🪔 <workspace>/line separator\",\"/Users/fixture/🪔 <workspace>/z-last\",\"/Users/fixture/🪔 <workspace>/🪔\",\"/Users/fixture/🪔 <workspace>/\"],\"gitHistoryApproved\":true},{\"workspaceId\":\"77000000-0000-4000-8000-000000000002\",\"root\":\"/Users/fixture/Reading & Research\",\"access\":\"read\",\"excludedPaths\":[],\"gitHistoryApproved\":false}],\"capabilityLimits\":[\"workspace.list\",\"workspace.read\",\"workspace.search\",\"verification.run\",\"workspace.shell\",\"workspace.write\"],\"network\":\"none\",\"commands\":\"workspace\",\"filePolicy\":\"approved-roots-v1\"}",
+  "sha256": "ea051ef272304ee928ae420c410a5912c4288157f0e58ebd72804e0cfb7f5c55"
+}

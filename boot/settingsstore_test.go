@@ -3,6 +3,7 @@ package boot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	delivery "github.com/legrch/farol/modules/computer/app/services/settingsdelivery"
+	"github.com/legrch/farol/modules/computer/domain/journal"
 )
 
 // In-memory reciprocal transport and canonical mapping only. Host storage,
@@ -34,6 +36,59 @@ func nextSettingsStoreCall(t *testing.T, s *SettingsStoreExchange) *wire.Setting
 		t.Fatalf("missing command: %v", err)
 	}
 	return c
+}
+
+func TestSettingsStoreExchangeContinuityReadIsScopedAndOneShot(t *testing.T) {
+	for _, lost := range []bool{false, true} {
+		s, _, snapshot, pending := settingsStoreExchangeFixture(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		type result struct {
+			snapshot delivery.Snapshot
+			proof    *wire.SettingsStoreContinuity
+			err      error
+		}
+		done := make(chan result, 1)
+		go func() {
+			read, proof, err := s.loadContinuity(ctx, pending.WorkspaceID)
+			done <- result{read, proof, err}
+		}()
+		call := nextSettingsStoreCall(t, s)
+		var body wire.SettingsStoreRead
+		if call.Kind != "read" || json.Unmarshal(call.Body, &body) != nil ||
+			body.ContinuityWorkspaceId == nil || *body.ContinuityWorkspaceId != pending.WorkspaceID {
+			t.Fatal("continuity did not select the exact workspace")
+		}
+		wireSnapshot := settingsSnapshotToWire(snapshot)
+		reply := wire.SettingsStoreReadResult{Status: "ok", Snapshot: &wireSnapshot}
+		if lost {
+			cancel()
+		} else {
+			reply.Continuity = &wire.SettingsStoreContinuity{
+				RootIdentity:      wire.ComputerContinuityRootIdentity{Device: "17", Inode: "50"},
+				ConsentProjection: "serialized projection",
+				Evidence: wire.SettingsStoreContinuityEvidence{
+					Schema: "farol.workspace-continuity/1", ComputerId: snapshot.Current.ComputerID, WorkspaceId: pending.WorkspaceID,
+					Root: "/Users/fixture", Filesystem: "apfs", VolumeUuid: "11111111-2222-3333-4444-555555555555",
+					FileId: "50", BirthSeconds: "10", BirthNanoseconds: "7",
+					Enrollment: wire.SettingsStoreContinuityEnrollment{
+						OperationId: pending.OperationID, SelectedAt: "2026-10-04T22:00:00.123Z", PolicySha256: pending.BeforeSHA256,
+					},
+				},
+			}
+			if err := finishSettingsStoreCall(t, s, call, reply); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got := <-done
+		cancel()
+		if lost {
+			if !errors.Is(got.err, journal.ErrUnknown) || finishSettingsStoreCall(t, s, call, reply) == nil {
+				t.Fatal("lost original was settled by later reply", got.err)
+			}
+		} else if got.err != nil || !reflect.DeepEqual(got.snapshot, snapshot) || !reflect.DeepEqual(got.proof, reply.Continuity) {
+			t.Fatal("selected proof did not round trip", got.err, got.proof)
+		}
+	}
 }
 func finishSettingsStoreCall(t *testing.T, s *SettingsStoreExchange, c *wire.SettingsStoreCommand, value any) error {
 	t.Helper()

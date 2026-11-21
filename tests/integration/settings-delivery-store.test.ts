@@ -1,4 +1,6 @@
 import { fixtureTaskSettingsCompare } from "../fixtures/task-settings-projection.ts";
+import { ownerComputerConsentDigest } from "../../src/modules/computer/infra/repo/owner-computer-consent";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -83,6 +85,72 @@ async function current(
   return result.snapshot!;
 }
 describe("typed mechanical Settings delivery store", () => {
+  it.each([false, true])(
+    "returns continuity only for an exact settled Settings readback (unknown=%s)",
+    async (unknown) => {
+      const f = await fixture({
+        seed: (settings) => {
+          settings.setup.computer.outcomeUnknown = unknown;
+          settings.computer.workspaces = [
+            {
+              workspaceId,
+              root: "/Users/fixture",
+              label: "Fixture",
+              access: "read",
+              excludedPaths: [],
+              rootIdentity: { device: "17", inode: "50" },
+              continuity: {
+                schema: "farol.workspace-continuity/1",
+                computerId: settings.computer.computerId,
+                workspaceId,
+                root: "/Users/fixture",
+                filesystem: "apfs",
+                volumeUuid: "11111111-2222-3333-4444-555555555555",
+                fileId: "50",
+                birthSeconds: "10",
+                birthNanoseconds: "7",
+                enrollment: {
+                  operationId,
+                  selectedAt: "2026-10-04T22:00:00.000Z",
+                  policySha256: "b".repeat(64),
+                },
+              },
+            },
+          ];
+        },
+      });
+      expect(await f.adapter.read()).toEqual({
+        status: "ok",
+        snapshot: f.snapshot,
+      });
+      expect(await f.adapter.read(undefined, operationId)).toEqual({
+        status: "ok",
+        snapshot: f.snapshot,
+      });
+      const result = await f.adapter.read(undefined, workspaceId);
+      if (unknown) {
+        expect(result).toEqual({ status: "ok", snapshot: f.snapshot });
+        return;
+      }
+      expect(result.continuity?.rootIdentity).toEqual({
+        device: "17",
+        inode: "50",
+      });
+      expect(result.continuity?.evidence).toEqual(
+        f.before.computer.workspaces[0]?.continuity,
+      );
+      expect(
+        createHash("sha256")
+          .update(result.continuity!.consentProjection)
+          .digest("hex"),
+      ).toBe(ownerComputerConsentDigest(f.before));
+      await f.adapter.fence();
+      expect(await f.adapter.read(undefined, workspaceId)).toEqual({
+        status: "unavailable",
+      });
+    },
+  );
+
   it("awaits the Go Task decision before conditional persistence", async () => {
     let resolve!: (changed: boolean) => void;
     const answer = new Promise<boolean>((done) => {

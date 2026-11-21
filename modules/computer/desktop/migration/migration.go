@@ -50,7 +50,7 @@ func Methods(o owner, p parent, withdraw migration.WithdrawEffect, stage migrati
 		"computer.continuity.withdraw": method("ComputerContinuityOperationRequest", followupEffect, a.withdrawOnce),
 		"computer.continuity.stage":    method("ComputerContinuityOperationRequest", followupEffect, a.stageOnce),
 		"computer.continuity.finish":   method("ComputerContinuityFinishRequest", followupEffect, a.finish),
-		"computer.continuity.qualify":  method("ComputerContinuityOperationRequest", followupEffect, a.qualifyCurrent),
+		"computer.continuity.qualify":  method("ComputerContinuityOperationRequest", reciprocalEffect, a.qualifyCurrent),
 	}
 }
 
@@ -59,11 +59,13 @@ type dispatchKind uint8
 const (
 	beginEffect dispatchKind = iota
 	followupEffect
+	reciprocalEffect
 	readOnly
 )
 
 func method[T any](shape string, kind dispatchKind, handle func(context.Context, T) (any, error)) desktop.Method {
-	return desktop.Method{Handle: func(ctx context.Context, req desktop.Request) (*desktop.Outcome, error) {
+	// Current qualification awaits a reply on this same pipe.
+	return desktop.Method{Concurrent: kind == reciprocalEffect, Handle: func(ctx context.Context, req desktop.Request) (*desktop.Outcome, error) {
 		if ipc.ValidateJSON(req.Body) != nil || wire.Validate(shape, req.Body) != nil {
 			return invalid()
 		}
@@ -80,7 +82,7 @@ func method[T any](shape string, kind dispatchKind, handle func(context.Context,
 			if req.OperationID != scope.OperationId {
 				return invalid()
 			}
-		case followupEffect:
+		case followupEffect, reciprocalEffect:
 			if req.OperationID == "" || req.OperationID == scope.OperationId {
 				return invalid()
 			}

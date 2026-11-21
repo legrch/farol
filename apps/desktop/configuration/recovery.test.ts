@@ -12,6 +12,7 @@ const pending = { ...present, restricted: true, pendingOperationId: "pending" };
 const qualified = {
   platform: "darwin",
   managedBuild: true,
+  settingsSettled: true,
   capabilities: [
     ...[
       "status",
@@ -25,6 +26,8 @@ const qualified = {
       "qualify",
     ].map((name) => `computer.continuity.${name}`),
     "computer.stop.status",
+    "computer.settings.store.next",
+    "computer.settings.store.reply",
   ],
   continuity: { ...absent, currentQualified: false },
   stop: absent,
@@ -49,12 +52,20 @@ describe("workspace continuity recovery qualification", () => {
     { platform: "linux" },
     { platform: "" },
     { managedBuild: false },
+    { settingsSettled: false },
     { capabilities: undefined },
     {
       capabilities: qualified.capabilities.filter(
         (method) => method !== "computer.continuity.qualify",
       ),
     },
+    ...["computer.settings.store.next", "computer.settings.store.reply"].map(
+      (missing) => ({
+        capabilities: qualified.capabilities.filter(
+          (method) => method !== missing,
+        ),
+      }),
+    ),
     { continuity: undefined },
     { continuity: { ...qualified.continuity, present: undefined } },
     { continuity: { ...present, currentQualified: false, restricted: true } },

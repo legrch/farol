@@ -175,7 +175,7 @@ func (r *ComputerRoute) Methods(peer wire.Context) map[string]desktop.Method {
 	}
 }
 
-func (runtime *NativeRuntime) composeComputerOwners(scope connectorsvc.StopScope) {
+func (runtime *NativeRuntime) composeComputerOwners(scope connectorsvc.StopScope, reader accessrepo.CurrentReader) {
 	// Root-selected Go owner and native boot reader. No renderer can construct
 	// a Stop admission; an unqualified empty host lifetime fails closed.
 	runtime.ingress.stopOwner = connectorsvc.NewOriginalStopOwner(
@@ -185,9 +185,8 @@ func (runtime *NativeRuntime) composeComputerOwners(scope connectorsvc.StopScope
 	continuityParent := migration.NewParent(runtime.store.ObserveStopLedger, scope.HostLifetimeID, scope.BackendGeneration)
 	anchor, holder := lease.New(), &observation.Holder{}
 	runtime.continuity = migration.New(runtime.store, nativeboot.New(), continuityParent, anchor, holder, &sync.Mutex{}, observation.Digester{})
-	// The accepted recovery and compatible Settings witnesses are not yet
-	// wired. A missing current reader leaves a committed transition inactive.
-	qualifier := accessrepo.NewHeldCurrentQualifier(nil, anchor, holder)
+	qualifier := accessrepo.NewHeldCurrentQualifier(reader, anchor, holder)
+	runtime.ingress.startupContinuity = runtime.store.StartupContinuity(qualifier)
 	runtime.continuityMethods = migrationdesktop.Methods(runtime.continuity, continuityParent,
 		runtime.ingress.withdrawForContinuity, runtime.store.StageMeasuredContinuity,
 		func(ctx context.Context, id string) (bool, error) {

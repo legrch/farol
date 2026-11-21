@@ -23,9 +23,19 @@ import type { ProductSettings } from "../../src/pkg/product-settings/contract";
 const source = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
 const ast = parse(source, { sourceType: "module", plugins: ["typescript"] });
 const callbacks: string[] = [];
+const storeFactories: string[] = [];
 function visit(value: unknown): void {
   if (!value || typeof value !== "object") return;
   const node = value as Record<string, unknown>;
+  // The Settings store pump is composed as the Go core's settingsStore option
+  // so Go can read Settings before its first authority publication.
+  if (
+    node.type === "ObjectProperty" &&
+    (node.key as { name?: string })?.name === "settingsStore"
+  ) {
+    const fn = node.value as { start: number; end: number };
+    storeFactories.push(source.slice(fn.start, fn.end));
+  }
   if (node.type === "CallExpression") {
     const callee = node.callee as { name?: string };
     const args = node.arguments as {
@@ -46,9 +56,16 @@ function visit(value: unknown): void {
   }
 }
 visit(ast);
-if (callbacks.length !== 1)
+if (callbacks.length !== 1 || storeFactories.length !== 1)
   throw Error("GO_SETTINGS_COMPOSITION_SOURCE_MISSING");
-const compiled = `(${stripTypeScriptTypes(callbacks[0]!)})()`;
+// Same order as startup: the core connects the store pump through its
+// settingsStore option, then the go-settings boundary attaches authority.
+const compiled = `(() => {
+  const settingsOwner = configuration;
+  const settingsStore = (${stripTypeScriptTypes(storeFactories[0]!)});
+  desktopGoCore.connectSettingsStore((profileId) => settingsStore(profileId, desktopGoCore));
+  (${stripTypeScriptTypes(callbacks[0]!)})();
+})()`;
 const build = "b".repeat(64);
 const generation = "a".repeat(64);
 const peer = { profileId: "profile", backendGeneration: "backend" };

@@ -38,6 +38,7 @@ type Store struct {
 	activeCheckID     string   // only a successful first original claim; never restored
 	currentContinuity *activeContinuity
 	currentActivating bool
+	startup           *launchQualification
 	poisoned, closed  bool
 }
 

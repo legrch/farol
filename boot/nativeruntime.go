@@ -21,6 +21,7 @@ import (
 	chatrepo "github.com/legrch/farol/modules/chat/infra/repos/lifecycle"
 	connectorsvc "github.com/legrch/farol/modules/computer/app/services/connector"
 	"github.com/legrch/farol/modules/computer/app/services/migration"
+	migrationdesktop "github.com/legrch/farol/modules/computer/desktop/migration"
 	"github.com/legrch/farol/modules/computer/infra/filesystem"
 	accessrepo "github.com/legrch/farol/modules/computer/infra/repos/access"
 	mutationrepo "github.com/legrch/farol/modules/computer/infra/repos/mutation"
@@ -31,11 +32,10 @@ import (
 // Root qualification owns no approval or live membership. HOME is independent
 // from the physical profile and selects only the already trusted filesystem port.
 type NativeLaunch struct {
-	Profile                   ProfileBinding
-	OwnerID, ComputerID, Home string
-	StoreMode                 string
-	// Recovery is an explicit existing-store route, never a constructor fallback.
-	StartupMode                   string
+	Profile                       ProfileBinding
+	OwnerID, ComputerID, Home     string
+	StoreMode                     string
+	StartupMode                   string // Explicit existing-store recovery only.
 	HostLifetimeID, ChildLaunchID string
 	PreviousHostDrainConfirmed    bool
 	SettingsMutations             bool
@@ -191,14 +191,11 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 	if err != nil {
 		return fail(err)
 	}
-	runtime.composeComputerOwners(connectorsvc.StopScope{
-		ProfileID: launch.Profile.ProfileID, OwnerID: launch.OwnerID, ComputerID: launch.ComputerID,
-		BackendGeneration: generation, HostLifetimeID: launch.HostLifetimeID,
-	})
 	runtime.chatComputer, err = NewChatComputerIngress(runtime.conversations, runtime.ingress)
 	if err != nil {
 		return fail(err)
 	}
+	var currentReader accessrepo.CurrentReader
 	if launch.SettingsMutations {
 		runtime.mutationStore, err = mutationrepo.New(ctx, mutationrepo.Root{Path: computer.Path, Device: computer.Device, Inode: computer.Inode, OwnerUID: computer.OwnerUID})
 		if err != nil {
@@ -229,6 +226,7 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 		if err != nil {
 			return fail(err)
 		}
+		currentReader = accessrepo.SettingsCurrentReader(migrationdesktop.SettingsReader(runtime.settingsStore.loadContinuity))
 		runtime.settingsDelivery, err = NewSettingsDeliveryIngress(runtime.mutations, runtime.settingsStore)
 		if err != nil {
 			return fail(err)
@@ -248,6 +246,10 @@ func NewNativeRuntime(ctx context.Context, launch NativeLaunch, generation strin
 			}
 		}
 	}
+	runtime.composeComputerOwners(connectorsvc.StopScope{
+		ProfileID: launch.Profile.ProfileID, OwnerID: launch.OwnerID, ComputerID: launch.ComputerID,
+		BackendGeneration: generation, HostLifetimeID: launch.HostLifetimeID,
+	}, currentReader)
 	if runtime.retirement != nil || runtime.fresh != nil {
 		runtime.historyAuthority, err = newHistoryReadAuthority(lifetime, chatport.HistoryReadScope{ProfileID: scope.ProfileID, BackendGeneration: scope.BackendGeneration, OwnerID: launch.OwnerID}, func() error {
 			_, _, err := qualified.Roots()
@@ -355,9 +357,7 @@ func (r *NativeRuntime) closeResources() error {
 	return errors.Join(failures...)
 }
 
-// Real time is read only in composition; the Chat application receives a port.
-type browserClock struct{}
-
+type browserClock struct{}             // Real time stays in composition.
 func (browserClock) NowMillis() uint64 { return uint64(time.Now().UnixMilli()) }
 func (r *NativeRuntime) Methods() (map[string]desktop.Method, error) {
 	if r == nil || r.closed.Load() || r.ingress == nil || r.browser == nil || r.conversations == nil || r.chatComputer == nil {

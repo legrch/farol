@@ -29,6 +29,7 @@ const BRIDGE_FAILURE_CODES = new Set([
   "crossed_computer_publication",
   "computer_publication_unavailable",
   "host_settings_store_unavailable",
+  "WORKSPACE_STARTUP_CONTINUITY_REFUSED",
   "backend_unavailable",
   "backend_cleanup_unconfirmed",
   "profile_cleanup_unconfirmed",

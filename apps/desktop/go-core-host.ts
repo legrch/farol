@@ -64,7 +64,10 @@ import { attestShellRuntime } from "./bridge/shell-runtime.ts";
 import type { QualificationObserver } from "./bridge/qualification-metrics.ts";
 import { encodeShellLaunch } from "./bridge/shell-launch.ts";
 import { GoComputerAuthority } from "./go-computer-authority.ts";
-import { ContinuityBridge } from "./bridge/continuity.ts";
+import {
+  CONTINUITY_QUALIFICATION_TIMEOUT_MS,
+  ContinuityBridge,
+} from "./bridge/continuity.ts";
 import { ContinuityStatusBridge } from "./bridge/continuity-status.ts";
 import { OriginalStopBridge } from "./bridge/original-stop.ts";
 import { ConnectionCheckBridge } from "./bridge/connection-check.ts";
@@ -108,6 +111,10 @@ export type DesktopCoreSelection = Readonly<{
   stateRoot: string;
   home: string;
   settings: () => ProductSettings;
+  settingsStore?: (
+    profileId: string,
+    core: DesktopGoCore,
+  ) => SettingsStoreDriver;
   browser: (context: Readonly<Context>) => DesktopBrowserConnection;
   onLifecycleObservation?: (observation: BackendLifecycleObservation) => void;
   onQualificationObservation?: QualificationObserver;
@@ -267,7 +274,9 @@ export class DesktopGoCore {
   get continuityCapabilities(): readonly string[] {
     if (this.closeResult)
       throw new BridgeError("unavailable", "host_core_closing");
-    return this.client.verifiedCapabilities;
+    return this.settingsStorePump?.state === "running"
+      ? this.client.verifiedCapabilities
+      : [];
   }
   // Trusted host composition only. No renderer or connector receives this bridge.
   get workspaceContinuity(): ContinuityBridge {
@@ -319,8 +328,10 @@ export class DesktopGoCore {
       throw new BridgeError("unavailable", "host_original_stop_unavailable");
     return this.originalStop.refuse(id);
   }
-  async publishCurrent(): Promise<void> {
-    const publication = await this.withdraw();
+  async publishCurrent(startup = false): Promise<void> {
+    const publication = await this.authority.withdraw(
+      startup ? CONTINUITY_QUALIFICATION_TIMEOUT_MS : undefined,
+    );
     // Re-read only after withdrawal. A settings mutation withdraws the same
     // fence before its durable save; racing old publication cannot activate it.
     await publication.publish(this.settings());
@@ -1013,7 +1024,13 @@ async function startSelectedDesktopGoCore(
     fresh,
   );
   try {
-    await host.publishCurrent();
+    // The first authority withdrawal may await a Go-selected protected read.
+    const settingsStore = selection.settingsStore;
+    if (settingsStore)
+      host.connectSettingsStore((profileId) => settingsStore(profileId, host));
+    await host.publishCurrent(
+      settingsStore !== undefined && storage.settingsMutations,
+    );
     host.connectBrowser(selection.browser(client.verifiedContext));
     return host;
   } catch (error) {

@@ -3,9 +3,11 @@ import {
   ProductSettingsSchema,
   type ProductSettings,
 } from "../../src/pkg/product-settings/contract.ts";
+import { ownerComputerConsentProjection } from "../../src/modules/computer/contract/consent.ts";
 import {
   validate,
   type SettingsStoreChange,
+  type SettingsStoreContinuity,
   type SettingsStorePending,
   type SettingsStoreSnapshot,
 } from "./bridge/wire.ts";
@@ -76,6 +78,38 @@ export function settingsStoreSnapshot(
   if (!validate("SettingsStoreSnapshot", snapshot))
     throw new SettingsStoreUnsupported();
   return snapshot;
+}
+
+// Only a targeted Go read receives evidence. The owner Settings document and
+// its normal pending-edit exchange never expose the rest of the profile.
+export function settingsStoreContinuity(
+  settings: ProductSettings,
+  workspaceId: string,
+): SettingsStoreContinuity | undefined {
+  if (!settingsContinuitySettled(settings)) return undefined;
+  const workspaces = settings.computer.workspaces.filter(
+    (workspace) => workspace.workspaceId === workspaceId,
+  );
+  const workspace = workspaces[0];
+  if (
+    workspaces.length !== 1 ||
+    !workspace?.rootIdentity ||
+    !workspace.continuity
+  )
+    return undefined;
+  const proof = {
+    rootIdentity: workspace.rootIdentity,
+    evidence: workspace.continuity,
+    consentProjection: JSON.stringify(ownerComputerConsentProjection(settings)),
+  };
+  return validate("SettingsStoreContinuity", proof) ? proof : undefined;
+}
+
+export function settingsContinuitySettled(settings: ProductSettings): boolean {
+  return (
+    settings.computer.pendingEdit === null &&
+    !settings.setup.computer.outcomeUnknown
+  );
 }
 
 function pendingKey(p: SettingsStorePending | undefined): unknown {

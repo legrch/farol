@@ -46,7 +46,7 @@ func (s *ComputerIngress) ownerMethods() map[string]desktop.Method {
 			value, err := s.continuityStatus(ctx)
 			return ingressOutcome(value, err)
 		}},
-		"computer.authority.deactivate": {Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
+		"computer.authority.deactivate": {Concurrent: s.startupContinuity != nil, Handle: func(ctx context.Context, r desktop.Request) (*desktop.Outcome, error) {
 			if r.OperationID == "" || ipc.ValidateJSON(r.Body) != nil || wire.Validate("ComputerAuthorityDeactivateRequest", r.Body) != nil {
 				return invalidIngress()
 			}

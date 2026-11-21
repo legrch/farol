@@ -9,6 +9,7 @@ import (
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	delivery "github.com/legrch/farol/modules/computer/app/services/settingsdelivery"
+	"github.com/legrch/farol/modules/computer/domain/journal"
 	"github.com/legrch/farol/pkg/exchange"
 	"github.com/legrch/farol/pkg/ipc"
 	"github.com/legrch/farol/transport/desktop"
@@ -42,19 +43,37 @@ func NewSettingsStoreExchange(ctx context.Context, peer wire.Context) (*Settings
 }
 
 func (s *SettingsStoreExchange) Load(ctx context.Context) (delivery.Snapshot, error) {
-	raw, err := s.exchange(ctx, "read", nil)
+	result, err := s.load(ctx, nil)
 	if err != nil {
 		return delivery.Snapshot{}, err
-	}
-	var result wire.SettingsStoreReadResult
-	if json.Unmarshal(raw, &result) != nil || result.Status != "ok" || result.Snapshot == nil {
-		return delivery.Snapshot{}, errSettingsStoreExchange
 	}
 	return settingsSnapshotFromWire(*result.Snapshot)
 }
 
+func (s *SettingsStoreExchange) load(ctx context.Context, workspace *string) (wire.SettingsStoreReadResult, error) {
+	raw, err := s.exchange(ctx, "read", nil, workspace)
+	if err != nil {
+		return wire.SettingsStoreReadResult{}, err
+	}
+	var result wire.SettingsStoreReadResult
+	if json.Unmarshal(raw, &result) != nil || result.Status != "ok" || result.Snapshot == nil ||
+		(workspace == nil && result.Continuity != nil) {
+		return wire.SettingsStoreReadResult{}, errSettingsStoreExchange
+	}
+	return result, nil
+}
+
+func (s *SettingsStoreExchange) loadContinuity(ctx context.Context, workspace string) (delivery.Snapshot, *wire.SettingsStoreContinuity, error) {
+	result, err := s.load(ctx, &workspace)
+	if err != nil {
+		return delivery.Snapshot{}, nil, err
+	}
+	snapshot, err := settingsSnapshotFromWire(*result.Snapshot)
+	return snapshot, result.Continuity, err
+}
+
 func (s *SettingsStoreExchange) CompareAndSet(ctx context.Context, change delivery.Change) (delivery.SaveResult, error) {
-	raw, err := s.exchange(ctx, "replace", &change)
+	raw, err := s.exchange(ctx, "replace", &change, nil)
 	if err != nil {
 		return delivery.SaveResult{Publication: delivery.PublicationUnknown}, err
 	}
@@ -80,7 +99,7 @@ func (s *SettingsStoreExchange) CompareAndSet(ctx context.Context, change delive
 
 func (s *SettingsStoreExchange) fence() { s.queue.Fence() }
 
-func (s *SettingsStoreExchange) exchange(ctx context.Context, kind string, change *delivery.Change) (answer json.RawMessage, err error) {
+func (s *SettingsStoreExchange) exchange(ctx context.Context, kind string, change *delivery.Change, workspace *string) (answer json.RawMessage, err error) {
 	if ctx == nil || ctx.Err() != nil || s.ctx.Err() != nil {
 		return nil, errSettingsStoreExchange
 	}
@@ -93,7 +112,7 @@ func (s *SettingsStoreExchange) exchange(ctx context.Context, kind string, chang
 	shape := ""
 	switch kind {
 	case "read":
-		body, shape = wire.SettingsStoreRead{DeadlineMillis: deadline}, "SettingsStoreRead"
+		body, shape = wire.SettingsStoreRead{DeadlineMillis: deadline, ContinuityWorkspaceId: workspace}, "SettingsStoreRead"
 	case "replace":
 		if change == nil || change.Expected.Current.ProfileID != s.peer.ProfileId {
 			return nil, errSettingsStoreExchange
@@ -119,6 +138,7 @@ func (s *SettingsStoreExchange) exchange(ctx context.Context, kind string, chang
 	defer func() {
 		if err != nil {
 			call.Fence()
+			err = errors.Join(journal.ErrUnknown, err)
 		} else {
 			call.Release()
 		}
@@ -212,7 +232,9 @@ func validSettingsStoreReply(kind string, raw json.RawMessage, profile string) b
 	switch kind {
 	case "read":
 		var result wire.SettingsStoreReadResult
-		if wire.Validate("SettingsStoreReadResult", raw) != nil || json.Unmarshal(raw, &result) != nil || (result.Status == "ok") != (result.Snapshot != nil) {
+		if wire.Validate("SettingsStoreReadResult", raw) != nil || json.Unmarshal(raw, &result) != nil ||
+			(result.Status == "ok") != (result.Snapshot != nil) ||
+			(result.Continuity != nil && result.Status != "ok") {
 			return false
 		}
 		snapshot = result.Snapshot

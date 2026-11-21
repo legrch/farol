@@ -3,6 +3,7 @@ package access
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -105,6 +106,145 @@ func TestCurrentCertificateNeedsTrustedQualificationNotEqualSavedBytes(t *testin
 	if _, err := reopened.Status(ctx); err == nil {
 		t.Fatal("restart reused ephemeral native qualification")
 	}
+}
+
+func TestStartupQualifiesCommittedContinuityBeforePublication(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name   string
+		err    error
+		wanted string
+	}{
+		{name: "qualified"},
+		{name: "reader refusal", err: journal.ErrRefused, wanted: "WORKSPACE_STARTUP_CONTINUITY_REFUSED"},
+		{name: "reader outcome unknown", err: journal.ErrUnknown, wanted: ErrStartupContinuityUnknown.Error()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, request := committedCurrentFixture(t)
+			reopened := restored(t, f)
+			if _, err := reopened.Status(ctx); err == nil {
+				t.Fatal("startup exposed the persisted Store without qualification")
+			}
+			proposed := reopened.current.Approval.Clone()
+			binding := proposed.Workspaces[0].RootIdentity
+			inode, err := strconv.ParseUint(binding.Inode, 10, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			device, err := strconv.ParseUint(binding.Device, 10, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _, reader, native := nativeCurrentFixture()
+			reader.err = tc.err
+			reader.proof.ConsentDigest = request.ConsentDigest
+			reader.proof.Saved.Binding.Path = request.Root
+			reader.proof.Saved.Binding.Inode = binding.Inode
+			reader.proof.Saved.Evidence.FileID = binding.Inode
+			native.observed.Binding = reader.proof.Saved.Binding
+			native.observed.Binding.Device = binding.Device
+			native.observed.Evidence = *reader.proof.Saved.Evidence
+			native.inode, native.device = inode, device
+			qualifier := NewHeldCurrentQualifier(reader, native, native)
+			startup := reopened.StartupContinuity(qualifier)
+			if ok, err := reopened.QualifyContinuityOperation(ctx, request.OperationID, qualifier); ok || err != nil || reader.calls != 0 {
+				t.Fatal("desktop reached the retained commit before startup", ok, err)
+			}
+			for i := 0; i < 2; i++ {
+				startup = reopened.StartupContinuity(qualifier)
+				current, err := startup.Status(ctx, reopened.Status)
+				if tc.wanted != "" {
+					var refused *authority.Failure
+					classified := errors.Is(err, ErrStartupContinuityUnknown) && err.Error() == tc.wanted ||
+						errors.As(err, &refused) && refused.Code == tc.wanted
+					if !classified || current != (Status{}) {
+						t.Fatal("startup failure returned an authority receipt", current, err)
+					}
+					if state, err := reopened.TransitionStatus(ctx); err != nil || !state.Restricted {
+						t.Fatal("startup failure lifted the fence", state, err)
+					}
+					continue
+				}
+				if err != nil || !current.ApprovalPresent {
+					t.Fatal("qualification did not release normal publication", current, err)
+				}
+				if err := reopened.UpdateApproval(ctx, current.Revision, proposed); err != nil {
+					t.Fatal("first ordinary authority publication was refused", err)
+				}
+			}
+			if ok, err := reopened.QualifyContinuityOperation(ctx, request.OperationID, qualifier); ok || err != nil || reader.calls != 1 {
+				t.Fatal("retained commit qualification was replayed", ok, err, reader.calls)
+			}
+			if tc.err != nil && native.acquired != 0 || tc.err == nil && native.released != 2 {
+				t.Fatal("startup did not retain and close its original native custody", native)
+			}
+		})
+	}
+}
+
+func TestStartupQualificationLeavesEmptyAndUnknownHistoryUntouched(t *testing.T) {
+	ctx := context.Background()
+	for _, unknown := range []bool{false, true} {
+		f := fixtureState(t)
+		approve(t, f)
+		before, err := f.store.Status(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if unknown {
+			if _, _, err := f.store.BeginTransition(ctx, transitionIntent); err != nil {
+				t.Fatal(err)
+			}
+		}
+		reopened := restored(t, f)
+		qualifier := &currentQualifierFixture{}
+		startup := reopened.StartupContinuity(qualifier)
+		for i := 0; i < 2; i++ {
+			after, err := startup.Status(ctx, reopened.Status)
+			if unknown {
+				if !errors.Is(err, ErrStartupContinuityUnknown) {
+					t.Fatal("original unknown WAL was not reported", err)
+				}
+			} else if err != nil || after != before {
+				t.Fatal("empty history changed startup", before, after, err)
+			}
+		}
+		if state, err := reopened.TransitionStatus(ctx); err != nil || state.Restricted != unknown || qualifier.calls != 0 {
+			t.Fatal("startup attempted qualification without a committed transition", state, err, qualifier.calls)
+		}
+	}
+}
+
+func TestStartupQualificationUsesLaterVerifiedGeneration(t *testing.T) {
+	ctx := context.Background()
+	f, _ := committedCurrentFixture(t)
+	if _, err := f.store.ActivateCurrentTransition(ctx, &currentQualifierFixture{}); err != nil {
+		t.Fatal(err)
+	}
+	proposed := f.store.current.Approval.Clone()
+	proposed.Generation++
+	if err := f.store.UpdateApproval(ctx, f.store.current.Revision, proposed); err != nil {
+		t.Fatal(err)
+	}
+	reopened := restored(t, f)
+	calls := 0
+	qualifier := currentQualifierFunc(func(_ context.Context, _ journal.Entry, approval authority.Approval) (CurrentWitness, error) {
+		calls++
+		if approval.Generation != proposed.Generation {
+			t.Fatalf("qualification used historical generation %d", approval.Generation)
+		}
+		return &currentWitnessFixture{}, nil
+	})
+	startup := reopened.StartupContinuity(qualifier)
+	if status, err := startup.Status(ctx, reopened.Status); err != nil || status.Generation != proposed.Generation || calls != 1 {
+		t.Fatal("later verified generation was fenced", status, err, calls)
+	}
+}
+
+type currentQualifierFunc func(context.Context, journal.Entry, authority.Approval) (CurrentWitness, error)
+
+func (f currentQualifierFunc) PrepareCurrent(ctx context.Context, entry journal.Entry, proposed authority.Approval) (CurrentWitness, error) {
+	return f(ctx, entry, proposed)
 }
 
 func TestCurrentTicketRequiresExactStoreAndJournalBytes(t *testing.T) {

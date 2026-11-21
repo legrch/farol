@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/legrch/farol/modules/computer/domain/authority"
 	journal "github.com/legrch/farol/modules/computer/domain/journal"
@@ -65,6 +67,77 @@ func currentRootBindingDigest(a *authority.Approval) [32]byte {
 // trying another set of numeric descriptors.
 var ErrCurrentCustodyUnknown = errors.New("WORKSPACE_CURRENT_NATIVE_CUSTODY_UNKNOWN")
 
+// ErrStartupContinuityUnknown carries no workspace, operation or native detail.
+var ErrStartupContinuityUnknown = errors.New("WORKSPACE_STARTUP_CONTINUITY_UNKNOWN")
+
+type StartupQualification func(context.Context) error
+
+type launchQualification struct {
+	once        sync.Once
+	result      error
+	pending     bool   // Protected by the Store mutex.
+	operationID string // Protected by the Store mutex.
+}
+
+// Status supplies the Store revision for the authority withdrawal receipt only
+// after the launch attempt. An ingress without this route still reads Status.
+func (start StartupQualification) Status(ctx context.Context, read func(context.Context) (Status, error)) (Status, error) {
+	if start != nil {
+		if err := start(ctx); err != nil {
+			return Status{}, err
+		}
+	}
+	return read(ctx)
+}
+
+// StartupContinuity binds the one launch attempt before any publication fence
+// can be delivered. The resulting callback runs once, after the reciprocal
+// Settings reader can answer. Explicit qualification remains for new commits.
+func (s *Store) StartupContinuity(qualifier CurrentQualification) StartupQualification {
+	s.mutex.Lock()
+	if s.startup == nil {
+		s.startup = &launchQualification{pending: true}
+	}
+	startup := s.startup
+	s.mutex.Unlock()
+	return func(ctx context.Context) error {
+		startup.once.Do(func() { startup.result = s.qualifyStartupContinuity(ctx, qualifier) })
+		return startup.result
+	}
+}
+
+func (s *Store) qualifyStartupContinuity(ctx context.Context, qualifier CurrentQualification) error {
+	needed, err := s.selectStartupContinuity(ctx)
+	if err == nil && needed {
+		_, err = s.ActivateCurrentTransition(ctx, qualifier)
+	}
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, journal.ErrUnknown), OutcomeUnknown(err):
+		return ErrStartupContinuityUnknown
+	default:
+		return authority.Fail("WORKSPACE_STARTUP_CONTINUITY_REFUSED", "authority-store")
+	}
+}
+
+func (s *Store) selectStartupContinuity(ctx context.Context) (bool, error) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	if err := s.checkStorage(ctx); err != nil {
+		return false, err
+	}
+	if s.journal.Unresolved() || s.stops.Pending() {
+		return false, journal.ErrUnknown
+	}
+	s.startup.pending = false
+	if !s.transitionRestricted() {
+		return false, nil
+	}
+	s.startup.operationID = s.latestCommittedTransition().Request.OperationID
+	return true, nil
+}
+
 type CurrentTransitionReceipt struct {
 	OperationID               string
 	StoreRevision, Generation uint64
@@ -97,8 +170,13 @@ func (s *Store) activateCurrentTransition(ctx context.Context, id string, qualif
 	if qualifier == nil || ctx == nil || ctx.Err() != nil {
 		return CurrentTransitionReceipt{}, unavailable()
 	}
+	// Leave room for native cleanup and the reply before the host's 30 s
+	// deadline. Settings readback and all held checks share this budget.
+	ctx, cancel := context.WithTimeout(ctx, 27*time.Second)
+	defer cancel()
 	s.mutex.Lock()
-	if s.closed || s.poisoned || s.currentContinuity != nil || s.currentActivating {
+	if s.closed || s.poisoned || s.currentContinuity != nil || s.currentActivating ||
+		(id != "" && s.startup != nil && (s.startup.pending || id == s.startup.operationID)) {
 		s.mutex.Unlock()
 		return CurrentTransitionReceipt{}, unavailable()
 	}
@@ -110,13 +188,7 @@ func (s *Store) activateCurrentTransition(ctx context.Context, id string, qualif
 		s.mutex.Unlock()
 		return CurrentTransitionReceipt{}, unavailable()
 	}
-	var latest *journal.Entry
-	for i := range s.journal.Entries {
-		e := &s.journal.Entries[i]
-		if e.Phase == journal.Committed && e.DischargedBy == "" {
-			latest = e
-		}
-	}
+	latest := s.latestCommittedTransition()
 	if latest == nil || (id != "" && (latest.Request.OperationID != id || latest.Parent == nil)) || latest.Certificate == nil || latest.Certificate.Kind != journal.Committed ||
 		latest.Request.ProfileID != s.binding.ProfileID || latest.Request.OwnerID != s.binding.OwnerID ||
 		latest.Request.ComputerID != s.binding.ComputerID {
@@ -125,19 +197,27 @@ func (s *Store) activateCurrentTransition(ctx context.Context, id string, qualif
 	}
 	proposed := approval(*s.current.Approval)
 	expected, parseErr := strconv.ParseUint(latest.Request.ExpectedGeneration, 10, 64)
-	if parseErr != nil || expected == ^uint64(0) || proposed.Generation != expected+1 ||
+	// Only startup can requalify a later approval generation. An explicit
+	// Verify after the commit can advance it without changing owner consent.
+	freshCommit := id != "" || s.startup == nil || latest.Request.OperationID != s.startup.operationID
+	if parseErr != nil || expected == ^uint64(0) || proposed.Generation <= expected ||
+		(freshCommit && proposed.Generation != expected+1) ||
 		proposed.Generation != s.current.Generation || !validApproval(proposed, s.binding) {
 		s.mutex.Unlock()
 		return CurrentTransitionReceipt{}, unavailable()
 	}
 	found := false
-	for _, root := range proposed.Workspaces {
-		if root.WorkspaceID == latest.Request.WorkspaceID && root.Root == latest.Request.Root && !root.ShellVerified {
+	for i, root := range proposed.Workspaces {
+		if root.WorkspaceID == latest.Request.WorkspaceID && root.Root == latest.Request.Root &&
+			(!root.ShellVerified || (!freshCommit && proposed.Generation > expected+1)) {
 			if found {
 				s.mutex.Unlock()
 				return CurrentTransitionReceipt{}, unavailable()
 			}
 			found = true
+			// The witness qualifies a root binding. Its narrowed input never
+			// attests Shell readiness, even after an ordinary later Verify.
+			proposed.Workspaces[i].ShellVerified = false
 		}
 	}
 	if !found {

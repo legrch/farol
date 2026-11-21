@@ -31,6 +31,8 @@ type Method =
 
 const unknown: Failure = { state: "unknown" };
 const refused: Failure = { state: "refused" };
+// Go bounds the combined Settings read and held native qualification at 27 s.
+export const CONTINUITY_QUALIFICATION_TIMEOUT_MS = 30_000;
 
 function boundedDecimal(value: string, limit: bigint): boolean {
   return BigInt(value) <= limit; // generated shape already validates syntax
@@ -94,7 +96,8 @@ export class ContinuityBridge {
         {
           id,
           ...(operationId === undefined ? {} : { operationId }),
-          timeoutMs: 8_000,
+          timeoutMs:
+            method === "qualify" ? CONTINUITY_QUALIFICATION_TIMEOUT_MS : 8_000,
         },
       );
       if (

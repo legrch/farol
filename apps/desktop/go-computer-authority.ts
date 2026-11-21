@@ -66,7 +66,7 @@ export class GoComputerAuthority {
     this.context = Object.freeze({ ...context });
   }
 
-  async withdraw(): Promise<ComputerSettingsPublication> {
+  async withdraw(timeoutMs?: number): Promise<ComputerSettingsPublication> {
     if (this.blocked || this.pending)
       throw new BridgeError("unavailable", "computer_publication_unavailable");
     this.pending = true;
@@ -76,6 +76,8 @@ export class GoComputerAuthority {
       "computer.authority.deactivate",
       {},
       "ComputerAuthorityDeactivateResponse",
+      undefined,
+      timeoutMs,
     );
     let consumed = false;
     return Object.freeze({
@@ -436,12 +438,14 @@ export class GoComputerAuthority {
     body: Json,
     schema: string,
     operation = randomUUID(),
+    timeoutMs?: number,
   ): Promise<T> {
     const id = randomUUID();
     try {
       const outcome = await this.client.request(method, body, {
         id,
         operationId: operation,
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
       });
       if (
         !validate("Outcome", outcome) ||

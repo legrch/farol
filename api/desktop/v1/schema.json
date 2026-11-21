@@ -4302,6 +4302,82 @@
       "fields": {
         "deadlineMillis": {
           "type": "decimal"
+        },
+        "continuityWorkspaceId": {
+          "type": "id",
+          "optional": true
+        }
+      }
+    },
+    "SettingsStoreContinuity": {
+      "type": "object",
+      "fields": {
+        "rootIdentity": {
+          "type": "ComputerContinuityRootIdentity"
+        },
+        "evidence": {
+          "type": "SettingsStoreContinuityEvidence"
+        },
+        "consentProjection": {
+          "type": "string",
+          "minBytes": 1,
+          "maxBytes": 524288
+        }
+      }
+    },
+    "SettingsStoreContinuityEvidence": {
+      "type": "object",
+      "fields": {
+        "schema": {
+          "type": "text",
+          "values": ["farol.workspace-continuity/1"]
+        },
+        "computerId": {
+          "type": "id"
+        },
+        "workspaceId": {
+          "type": "id"
+        },
+        "root": {
+          "type": "string",
+          "minBytes": 2,
+          "maxBytes": 4096
+        },
+        "filesystem": {
+          "type": "text",
+          "values": ["apfs"]
+        },
+        "volumeUuid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "fileId": {
+          "type": "decimal"
+        },
+        "birthSeconds": {
+          "type": "decimal"
+        },
+        "birthNanoseconds": {
+          "type": "decimal"
+        },
+        "enrollment": {
+          "type": "SettingsStoreContinuityEnrollment"
+        }
+      }
+    },
+    "SettingsStoreContinuityEnrollment": {
+      "type": "object",
+      "fields": {
+        "operationId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "selectedAt": {
+          "type": "utc"
+        },
+        "policySha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         }
       }
     },
@@ -4325,6 +4401,10 @@
         },
         "snapshot": {
           "type": "SettingsStoreSnapshot",
+          "optional": true
+        },
+        "continuity": {
+          "type": "SettingsStoreContinuity",
           "optional": true
         }
       }

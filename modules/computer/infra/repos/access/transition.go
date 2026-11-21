@@ -37,13 +37,7 @@ func (s *Store) transitionRestricted() bool {
 	// Earlier committed certificates are historical; only the most recent
 	// effective committed transition needs CURRENT native qualification. A
 	// later settled transition cannot revive an old admission/descriptor.
-	var latest *transition.Entry
-	for i := range s.journal.Entries {
-		e := &s.journal.Entries[i]
-		if e.Phase == transition.Committed && e.DischargedBy == "" {
-			latest = e
-		}
-	}
+	latest := s.latestCommittedTransition()
 	if latest == nil {
 		return false
 	}
@@ -52,6 +46,17 @@ func (s *Store) transitionRestricted() bool {
 		a.journalDigest != s.journalDigest || s.current.Approval == nil ||
 		a.minGeneration > s.current.Generation ||
 		a.bindingDigest != currentRootBindingDigest(s.current.Approval)
+}
+
+// Must be called under the Store mutex.
+func (s *Store) latestCommittedTransition() *transition.Entry {
+	for i := len(s.journal.Entries) - 1; i >= 0; i-- {
+		entry := &s.journal.Entries[i]
+		if entry.Phase == transition.Committed && entry.DischargedBy == "" {
+			return entry
+		}
+	}
+	return nil
 }
 
 // checkStorage is the same exact protected-state check for the journal owner.

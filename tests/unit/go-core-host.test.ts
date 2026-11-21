@@ -665,6 +665,35 @@ describe("normal Go host startup", () => {
     await host.close();
   });
 
+  it("starts the owner Settings poll before the first Computer authority publication", async () => {
+    const f = transport();
+    start.mockResolvedValue(f.client);
+    const settingsStore = vi.fn(() => ({
+      read: vi.fn(async () => ({ status: "unavailable" as const })),
+      replace: vi.fn(async () => ({ status: "not_written" as const })),
+      fence: vi.fn(async () => undefined),
+    }));
+    const host = await startDesktopGoCore({ ...selection, settingsStore });
+    try {
+      expect(settingsStore).toHaveBeenCalledExactlyOnceWith(
+        context.profileId,
+        host,
+      );
+      expect(f.events.slice(0, 3)).toEqual([
+        "computer.settings.store.next",
+        "computer.authority.deactivate",
+        "computer.authority.publish",
+      ]);
+      expect(f.request).toHaveBeenCalledWith(
+        "computer.authority.deactivate",
+        {},
+        expect.objectContaining({ timeoutMs: 30_000 }),
+      );
+    } finally {
+      await host.close();
+    }
+  });
+
   it("copies the trusted read pair before awaited qualification", async () => {
     const codexRead = { hostId: "codex" as const, trustedTemp: "/app/tmp" };
     const input = { ...selection, compiledResources: {}, codexRead };

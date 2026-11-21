@@ -49,6 +49,7 @@ import {
 import type { TaskSettingsComparator } from "../../../apps/desktop/bridge/task-current-settings";
 import {
   SettingsStoreUnsupported,
+  settingsStoreContinuity,
   settingsStoreSnapshot,
   settingsStoreReplacement,
   type SettingsStoreScope,
@@ -158,7 +159,10 @@ export type OriginalStopSettingsResult =
 // Trusted host storage port; Go owns all delivery transitions. The retained
 // service queue serializes these calls with ordinary Settings commands.
 export type SettingsDeliveryStore = Readonly<{
-  read(deadlineMillis?: string): Promise<SettingsStoreReadResult>;
+  read(
+    deadlineMillis?: string,
+    continuityWorkspaceId?: string,
+  ): Promise<SettingsStoreReadResult>;
   replace(
     change: unknown,
     deadlineMillis?: string,
@@ -814,7 +818,7 @@ export class ProductConfigurationService {
     this.settingsDeliveryAttached = true;
     const selected = structuredClone(scope);
     return {
-      read: (deadlineMillis) =>
+      read: (deadlineMillis, continuityWorkspaceId) =>
         this.exclusive(async () => {
           if (this.settingsDeliveryFenced || !this.current)
             return { status: "unavailable" };
@@ -822,11 +826,19 @@ export class ProductConfigurationService {
             this.assertSettingsDeliveryDeadline(deadlineMillis);
             const readback = await this.store.load();
             this.assertSettingsDeliveryDeadline(deadlineMillis);
-            if (JSON.stringify(readback) !== JSON.stringify(this.current))
+            if (
+              !readback ||
+              JSON.stringify(readback) !== JSON.stringify(this.current)
+            )
               return { status: "unavailable" };
+            const continuity =
+              continuityWorkspaceId === undefined
+                ? undefined
+                : settingsStoreContinuity(readback, continuityWorkspaceId);
             return {
               status: "ok",
-              snapshot: settingsStoreSnapshot(this.current, selected),
+              snapshot: settingsStoreSnapshot(readback, selected),
+              ...(continuity ? { continuity } : {}),
             };
           } catch (error) {
             return {
