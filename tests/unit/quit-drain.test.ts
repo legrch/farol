@@ -1454,11 +1454,122 @@ describe("Quit claim steps and stage observation (0.5.27 stabilization)", () => 
         unconfirmed: ["connector"],
       });
       expect(stages.filter((s) => s.startsWith("closer-"))).toEqual([
+        "closer-begin",
         "closer-end:timed-out",
         "closer-late",
       ]);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("reads the preparation status exactly once", async () => {
+    let reads = 0;
+    const quit = vi.fn();
+    const drain = createQuitDrain({
+      deadlineMs: 1_000,
+      prepare: () =>
+        Promise.resolve({
+          get status() {
+            reads++;
+            return "accepted" as const;
+          },
+        }),
+      collect: () => [],
+      record: async () => undefined,
+      quit,
+    });
+    drain.onBeforeQuit({ preventDefault: () => undefined });
+    await vi.waitFor(() => expect(quit).toHaveBeenCalledOnce());
+    expect(reads).toBe(1);
+  });
+
+  it("treats a throwing status getter as an unconfirmed preparation without an unhandled rejection", async () => {
+    const receipts: QuitDrainReceipt[] = [];
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      const quit = vi.fn();
+      const drain = createQuitDrain({
+        deadlineMs: 1_000,
+        prepare: () =>
+          Promise.resolve({
+            get status(): "accepted" {
+              throw new Error("getter");
+            },
+          }),
+        collect: () => [],
+        record: async (receipt) => void receipts.push(receipt),
+        quit,
+      });
+      drain.onBeforeQuit({ preventDefault: () => undefined });
+      await vi.waitFor(() => expect(quit).toHaveBeenCalledOnce());
+      await new Promise((r) => setImmediate(r));
+      expect(receipts[0]?.unconfirmed).toContain("preparation");
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+  });
+
+  it("closes the preparation fence before the terminal event is observed", async () => {
+    let fenceAtEnd: boolean | undefined;
+    let context!: QuitPreparationContext;
+    const quit = vi.fn();
+    const drain = createQuitDrain({
+      deadlineMs: 1_000,
+      prepare: (value) => {
+        context = value;
+        return Promise.resolve({ status: "skipped" });
+      },
+      collect: () => [],
+      record: async () => undefined,
+      quit,
+      observe: (stage) => {
+        if (stage.stage === "preparation-end")
+          fenceAtEnd = context.canStartEffect();
+      },
+    });
+    drain.onBeforeQuit({ preventDefault: () => undefined });
+    await vi.waitFor(() => expect(quit).toHaveBeenCalledOnce());
+    expect(fenceAtEnd).toBe(false);
+  });
+
+  it("starts recording in the drain's own continuation, without an extra turn", async () => {
+    const order: string[] = [];
+    let releaseCloser!: () => void;
+    const quit = vi.fn();
+    const drain = createQuitDrain({
+      deadlineMs: 1_000,
+      onClaim: [
+        {
+          name: "watch",
+          run: () => {
+            throw new Error("claim");
+          },
+        },
+      ],
+      collect: () => [
+        {
+          name: "connector",
+          close: () => new Promise<void>((r) => (releaseCloser = r)),
+        },
+      ],
+      record: async () => void order.push("record"),
+      quit,
+    });
+    drain.onBeforeQuit({ preventDefault: () => undefined });
+    await Promise.resolve();
+    releaseCloser();
+    // Count the turns between the drain settling and recording starting.
+    let turns = 0;
+    while (!order.includes("record") && turns < 20) {
+      await Promise.resolve();
+      turns++;
+    }
+    expect(order).toContain("record");
+    // The same number of turns as the baseline drain: recording begins in
+    // the continuation that receives the drain result.
+    expect(turns).toBe(5);
   });
 });

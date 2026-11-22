@@ -343,6 +343,13 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
                 expired: () => true,
               }),
             );
+            closers.forEach((closer, index) =>
+              emit(ports.observe, {
+                stage: "closer-begin",
+                closer: index,
+                name: closer.name,
+              }),
+            );
             terminals.forEach((terminal) => terminal.timeout());
             void Promise.allSettled(
               closers.map(async (closer, index) => {
@@ -387,7 +394,9 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
           let decided:
             QuitPreparationResult["status"] | "failed" | "timed-out" | null =
             null;
-          let settled: QuitPreparationResult["status"] | "failed" | null = null;
+          // Only whether the original attempt settled; its status is read
+          // once, in the guarded race continuation below.
+          let settled = false;
           let lateReported = false;
           const reportLate = () => {
             if (lateReported) return;
@@ -398,9 +407,11 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
             result: QuitPreparationResult["status"] | "failed" | "timed-out",
           ) => {
             if (decided !== null) return;
+            // Close the generic fence before anyone observes the decision.
+            preparing = false;
             decided = result;
             emit(ports.observe, { stage: "preparation-end", result });
-            if (result === "timed-out" && settled !== null) reportLate();
+            if (result === "timed-out" && settled) reportLate();
           };
           const expired = new Promise<QuitPreparationResult>((resolve) => {
             // Referenced: pending preparation must not strand normal Quit.
@@ -419,26 +430,21 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
               }),
             );
             // Observe the original attempt without settling or cancelling it.
-            const observe = (
-              result: QuitPreparationResult["status"] | "failed",
-            ) => {
-              if (settled !== null) return;
-              settled = result;
+            const observe = () => {
+              if (settled) return;
+              settled = true;
               if (decided !== null) reportLate();
             };
-            void originalAttempt.then(
-              (result) => observe(result.status),
-              () => observe("failed"),
-            );
+            void originalAttempt.then(observe, observe);
             if (preparationRemaining() === 0) {
               // Synchronous hook work also spends the original budget.
               decide("timed-out");
             } else {
               const result = await Promise.race([originalAttempt, expired]);
-              // The baseline deadline check at the continuation.
-              decide(
-                preparationRemaining() === 0 ? "timed-out" : result.status,
-              );
+              // Read the status once, then apply the baseline deadline check
+              // after that read.
+              const status = result.status;
+              decide(preparationRemaining() === 0 ? "timed-out" : status);
             }
           } catch {
             // A throwing hook cannot prove whether it dispatched an effect.
@@ -464,29 +470,27 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
       };
       // Preserve synchronous collection and child-close invocation when the
       // optional hook is absent, including reentrant before-quit behavior.
-      const drained = prepare ? prepareAndDrain() : collectAndDrain();
-      // A claim step that could not be established is an unconfirmed stop.
-      const draining = drained.then((receipt): QuitDrainReceipt => {
-        const result =
-          claimFailures.length === 0
-            ? receipt
-            : {
-                drained: false,
-                unconfirmed: [
-                  ...claimFailures.map((name) => `claim:${name}`),
-                  ...receipt.unconfirmed,
-                ],
-              };
-        emit(ports.observe, {
-          stage: "drain-end",
-          drained: result.drained,
-          unconfirmed: result.unconfirmed.length,
-        });
-        return result;
-      });
+      const draining = prepare ? prepareAndDrain() : collectAndDrain();
       let recordTimer: NodeJS.Timeout | undefined;
       void draining
-        .then((receipt) => {
+        .then((drainedReceipt) => {
+          // In the same continuation that starts recording, as before: a
+          // claim step that could not be established is an unconfirmed stop.
+          const receipt: QuitDrainReceipt =
+            claimFailures.length === 0
+              ? drainedReceipt
+              : {
+                  drained: false,
+                  unconfirmed: [
+                    ...claimFailures.map((name) => `claim:${name}`),
+                    ...drainedReceipt.unconfirmed,
+                  ],
+                };
+          emit(ports.observe, {
+            stage: "drain-end",
+            drained: receipt.drained,
+            unconfirmed: receipt.unconfirmed.length,
+          });
           // Recording is bounded by the same absolute deadline that bounds
           // the drain (the elapsed drain time counts against it): a
           // `record` that never settles must not delay quit past it.
