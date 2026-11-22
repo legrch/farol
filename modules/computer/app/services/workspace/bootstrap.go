@@ -122,7 +122,7 @@ func (s *Service) Bootstrap(ctx context.Context, request BootstrapRequest) (*Boo
 	if err != nil {
 		return nil, err
 	}
-	if !binding.validContext(last, request.WorkspaceID, request.RelativeDirectory) || last.Root != first.Root || last.ApprovedRoot != first.ApprovedRoot || last.Scope != first.Scope {
+	if !binding.validContext(last, request.WorkspaceID, request.RelativeDirectory) || last.Root != first.Root || last.ApprovedRoot != first.ApprovedRoot || last.Scope != first.Scope || last.Physical != first.Physical {
 		return nil, contractInvalid("COMPUTER_WORKSPACE_CONTEXT_CHANGED")
 	}
 	var response *BootstrapResponse

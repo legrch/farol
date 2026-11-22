@@ -296,8 +296,12 @@ func TestReadRootReplacementAndSnapshotRace(t *testing.T) {
 		t.Fatal(err)
 	}
 	put(t, d, "note.md", []byte("replacement"))
-	_, err = New(d.Root+"-home").Read(context.Background(), port.ReadRequest{Workspace: d, RelativePath: "note.md"})
-	expectCode(t, err, "WORKSPACE_ROOT_CHANGED")
+	// Path-bound approval (owner decision 2026-11-22): the folder now at the
+	// approved path is the workspace; the stale saved pair no longer refuses.
+	replaced, err := New(d.Root+"-home").Read(context.Background(), port.ReadRequest{Workspace: d, RelativePath: "note.md"})
+	if err != nil || replaced == nil || replaced.Text != "replacement" {
+		t.Fatalf("folder at the approved path not read: %v", err)
+	}
 }
 func TestReadRechecksNamedRootAfterNativeYield(t *testing.T) {
 	d := fixture(t)

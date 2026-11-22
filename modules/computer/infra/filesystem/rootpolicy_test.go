@@ -84,9 +84,10 @@ func TestRootFilePolicyStillEnforcesExplicitScopeAndPhysicalBoundary(t *testing.
 	if _, err = w.Read(context.Background(), port.ReadRequest{Workspace: d, RelativePath: "link"}); err == nil {
 		t.Fatal("unsandboxed File API followed a link")
 	}
+	// A stale saved pair is diagnostic only; links stay refused above.
 	d.ApprovedRoot.Inode = "0"
-	if _, err = w.Read(context.Background(), port.ReadRequest{Workspace: d, RelativePath: ".env"}); err == nil {
-		t.Fatal("physical root identity ignored")
+	if _, err = w.Read(context.Background(), port.ReadRequest{Workspace: d, RelativePath: ".env"}); err != nil {
+		t.Fatalf("stale saved identity refused: %v", err)
 	}
 }
 
@@ -128,7 +129,7 @@ func TestRootFilePolicyMutationPreservesCASAndPublicationGuard(t *testing.T) {
 			}
 		})
 	}
-	for _, reason := range []string{"write-exclusion", "no-guard", "wrong-root"} {
+	for _, reason := range []string{"write-exclusion", "no-guard"} {
 		t.Run(reason, func(t *testing.T) {
 			m, f := fakeMutable()
 			m.filePolicy = authority.RootScopedFiles
@@ -139,8 +140,6 @@ func TestRootFilePolicyMutationPreservesCASAndPublicationGuard(t *testing.T) {
 				request.Workspace.WriteDeniedPaths = []string{".env"}
 			case "no-guard":
 				request.BeforePublish = nil
-			case "wrong-root":
-				request.Workspace.ApprovedRoot.Inode = "9999"
 			}
 			if _, err := m.Mutate(context.Background(), request); err == nil {
 				t.Fatal("mutation guard bypassed")

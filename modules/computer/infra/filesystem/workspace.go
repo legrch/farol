@@ -227,12 +227,16 @@ func openedRoot(d port.Descriptor) (int, *port.DirectoryBinding, error) {
 			}
 		}
 	}
-	dev, err := strconv.ParseUint(d.ApprovedRoot.Device, 10, 64)
-	if err != nil || len(d.ApprovedRoot.Device) > 20 {
+	// The saved pair is the approval record's diagnostic observation, not an
+	// authority input: an approved workspace is the folder at its path (owner
+	// decision 2026-11-22). It must stay well formed, but a reboot that
+	// renumbers the volume no longer refuses. Physical continuity within one
+	// operation is still enforced by the held no-follow descriptors and the
+	// caller's live before/after root recheck.
+	if _, err := strconv.ParseUint(d.ApprovedRoot.Device, 10, 64); err != nil || len(d.ApprovedRoot.Device) > 20 {
 		return -1, nil, refusal("WORKSPACE_INVALID_REQUEST")
 	}
-	ino, err := strconv.ParseUint(d.ApprovedRoot.Inode, 10, 64)
-	if err != nil || len(d.ApprovedRoot.Inode) > 20 {
+	if _, err := strconv.ParseUint(d.ApprovedRoot.Inode, 10, 64); err != nil || len(d.ApprovedRoot.Inode) > 20 {
 		return -1, nil, refusal("WORKSPACE_INVALID_REQUEST")
 	}
 	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
@@ -247,14 +251,10 @@ func openedRoot(d port.Descriptor) (int, *port.DirectoryBinding, error) {
 		}
 		fd = child
 		if i == len(approved)-1 {
-			s, err := stat(fd)
-			if err != nil {
+			// The approved ancestor must still be a real, statable directory.
+			if _, err := stat(fd); err != nil {
 				unix.Close(fd)
 				return -1, nil, refusal("WORKSPACE_PATH_REFUSED")
-			}
-			if uint64(s.Dev) != dev || uint64(s.Ino) != ino {
-				unix.Close(fd)
-				return -1, nil, refusal("WORKSPACE_ROOT_CHANGED")
 			}
 		}
 	}
@@ -270,6 +270,7 @@ func openedRoot(d port.Descriptor) (int, *port.DirectoryBinding, error) {
 	return fd, &port.DirectoryBinding{
 		Root:         "/" + strings.Join(parts, "/"),
 		ApprovedRoot: port.Root{Path: "/" + strings.Join(approved, "/"), Device: d.ApprovedRoot.Device, Inode: d.ApprovedRoot.Inode},
+		Physical:     port.Root{Path: "/" + strings.Join(parts, "/"), Device: strconv.FormatUint(uint64(s.Dev), 10), Inode: strconv.FormatUint(s.Ino, 10)},
 	}, nil
 }
 

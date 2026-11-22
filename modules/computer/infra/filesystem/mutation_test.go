@@ -464,12 +464,13 @@ func TestMutationInjectedExclusionsRootParentAndGuard(t *testing.T) {
 	}
 	m, f := fakeMutable()
 	r := fakeRequest(mutation.Write{RelativePath: "note.md", Content: "new"})
-	r.Workspace.ApprovedRoot.Inode = "99"
+	// A stale saved pair no longer refuses a write at the approved path.
+	r.Workspace.ApprovedRoot.Device, r.Workspace.ApprovedRoot.Inode = "1", "99"
 	_, err := m.Mutate(context.Background(), r)
-	nativeCode(t, err, "WORKSPACE_ROOT_CHANGED")
-	if f.mkdirs != 0 {
-		t.Fatal("changed root effect")
+	if err != nil {
+		t.Fatalf("stale saved identity refused: %v", err)
 	}
+	_ = f
 	m, f = fakeMutable()
 	r = fakeRequest(mutation.Write{RelativePath: "note.md", Content: "new"})
 	r.BeforePublish = nil

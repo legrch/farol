@@ -250,7 +250,11 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 	if command.RootIdentity.Device == "" || command.RootIdentity.Inode == "" || launch.scratchIdentity.Device == "" || launch.scratchIdentity.Inode == "" {
 		return refuse()
 	}
-	root := add(command.Root, command.RootIdentity, false, nil, "", processsvc.RefusalWorkspaceRootIdentity)
+	// Path-bound approval (owner decision 2026-11-22): the workspace root's
+	// identity is captured live here, like a subdirectory's, and every later
+	// check (including the watchdog release) compares against that capture.
+	// The saved pair stays a well-formed diagnostic only.
+	root := add(command.Root, authority.RootIdentity{}, false, nil, "", processsvc.RefusalWorkspaceRootIdentity)
 	if root == nil {
 		return nil, refusalAt(nil, processsvc.RefusalWorkspaceRootIdentity)
 	}
@@ -301,7 +305,7 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 			!insidePolicy(binding.ApprovedRoot, binding.ScopeRoot) || binding.RootIdentity.Device == "" || binding.RootIdentity.Inode == "" {
 			return refuse()
 		}
-		approved := add(binding.ApprovedRoot, binding.RootIdentity, false, nil, "", processsvc.RefusalWorkspaceRootIdentity)
+		approved := add(binding.ApprovedRoot, authority.RootIdentity{}, false, nil, "", processsvc.RefusalWorkspaceRootIdentity)
 		if approved == nil {
 			return nil, refusalAt(nil, processsvc.RefusalWorkspaceRootIdentity)
 		}

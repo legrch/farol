@@ -50,7 +50,13 @@ type ListRequest struct {
 type DirectoryBinding struct {
 	RelativePath string
 	Root         string
+	// ApprovedRoot is the approval record (path plus its saved, diagnostic
+	// device/inode); it is not a native measurement.
 	ApprovedRoot Root
+	// Physical is the effective root's live identity measured when this
+	// operation opened it. Internal only: callers compare it across the phases
+	// of one operation to keep them on one directory.
+	Physical Root
 }
 
 type ListResponse struct {
