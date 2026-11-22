@@ -74,9 +74,9 @@ export function selectedCodexTaskRouteLaunch(
     grant: {
       workspaceId: workspace.workspaceId,
       writerRoot: workspace.root,
-      // Retained legacy builder (normal startup uses Go): it validates the
-      // writer against the approval's saved pair, so it keeps sending it.
-      writerIdentity: workspace.rootIdentity,
+      // The route's frozen live witness (path-bound approval); routes saved
+      // before it fall back to the saved pair. Update drains observe it.
+      writerIdentity: selected.writerIdentity ?? workspace.rootIdentity,
       projectId: selected.projectId,
       ...(selected.observeThreadId === undefined
         ? {}
@@ -161,8 +161,22 @@ export function createSecureMcpLaunchContract(
   if (shellEnabled && !input.gitSettingsHome) {
     launchError("SECURE_MCP_OWNER_HOME_REQUIRED");
   }
-  const codexTasks =
+  const routeLaunch =
     input.codexTasks ?? selectedCodexTaskRouteLaunch(settings, input.now);
+  // Retained legacy builder (normal startup uses Go): its validator binds the
+  // writer to the approval's saved pair, so only this payload sends that pair.
+  const legacyWriter = routeLaunch
+    ? workspaces.find(
+        (workspace) => workspace.workspaceId === routeLaunch.grant.workspaceId,
+      )?.rootIdentity
+    : undefined;
+  const codexTasks =
+    routeLaunch && legacyWriter
+      ? {
+          ...routeLaunch,
+          grant: { ...routeLaunch.grant, writerIdentity: legacyWriter },
+        }
+      : routeLaunch;
   const participantId = `secure-mcp-main-${input.runtimeId}`;
   const scopedWorkspaces = workspaces.map((workspace) => ({
     workspaceId: workspace.workspaceId,

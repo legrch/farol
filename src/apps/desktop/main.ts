@@ -7621,7 +7621,8 @@ async function configureAdmittedProduct(
           !writerNow.isDirectory() ||
           writerNow.isSymbolicLink() ||
           writerNow.dev !== writerStat.dev ||
-          writerNow.ino !== writerStat.ino
+          writerNow.ino !== writerStat.ino ||
+          (await realpath(workspace.root).catch(() => null)) !== workspace.root
         )
           return refuseRoute("workspace_identity");
         const approvedAt = new Date().toISOString();
