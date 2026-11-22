@@ -7,6 +7,7 @@ import (
 
 	wire "github.com/legrch/farol/gen/desktop/v1"
 	mutationct "github.com/legrch/farol/modules/computer/contracts/mutation"
+	"github.com/legrch/farol/modules/computer/domain/authority"
 	state "github.com/legrch/farol/modules/computer/domain/mutation"
 	"github.com/legrch/farol/pkg/ipc"
 	"github.com/legrch/farol/transport/desktop"
@@ -120,7 +121,11 @@ func (s *computerConnector) mutationMethods(slot *connectorSlot) map[string]desk
 		}
 		out, err := s.mutate(ctx, slot, r.OperationID, call, mutationct.ConnectorRequest{WorkspaceID: workspace, Operation: op})
 		if err != nil {
-			return connectorMutationOutcome(nil, err)
+			outcome, failure := connectorMutationOutcome(nil, err)
+			path, _ := connectorMutationTarget(op)
+			return outcome.WithRefusalReason(func(code string) string {
+				return authority.WriteRefusalReason(code, slot.route.sealed, workspace, path)
+			}), failure
 		}
 		path, _ := connectorMutationTarget(op)
 		result, err := connectorMutationWireResult(slot, call, r.OperationID, workspace, path, op, out)

@@ -246,6 +246,11 @@
             "helper_preflight",
             "unclassified"
           ]
+        },
+        "refusalReason": {
+          "type": "text",
+          "optional": true,
+          "values": ["workspace_read_only"]
         }
       }
     },

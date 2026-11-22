@@ -655,3 +655,39 @@ describe("pure handshake capability gate", () => {
     }
   });
 });
+
+it("keeps the Read only explanation only on Go's own refused authority codes", async () => {
+  const refused = (code: string, extra: object = {}) => ({
+    status: "refused",
+    requestId: call.requestId,
+    context,
+    operationId: "operation",
+    code,
+    ...extra,
+  });
+  for (const code of ["AUTHORITY_CAPABILITY_DENIED", "AUTHORITY_PATH_DENIED"]) {
+    const out = await setup(
+      refused(code, { refusalReason: "workspace_read_only" }),
+    ).bridge.write(input, "operation", call);
+    expect(out).toMatchObject({
+      status: "refused",
+      code,
+      retry: "never",
+      refusalReason: "workspace_read_only",
+    });
+  }
+  // A reason on any other code is not an owner remedy; it is dropped.
+  const other = await setup(
+    refused("WORKSPACE_PATH_REFUSED", { refusalReason: "workspace_read_only" }),
+  ).bridge.write(input, "operation", call);
+  expect(other).toMatchObject({
+    status: "refused",
+    code: "WORKSPACE_PATH_REFUSED",
+  });
+  expect(other).not.toHaveProperty("refusalReason");
+  // An unknown reason fails the closed wire schema: the envelope is UNKNOWN.
+  const invented = await setup(
+    refused("AUTHORITY_CAPABILITY_DENIED", { refusalReason: "grant_write" }),
+  ).bridge.write(input, "operation", call);
+  expect(invented.status).toBe("unknown");
+});

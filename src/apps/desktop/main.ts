@@ -397,6 +397,12 @@ import {
   type GracefulQuitSignals,
 } from "./quit-signal";
 import { writeQuitReceipt } from "./quit-receipt-store";
+import {
+  createQuitTrace,
+  type QuitTrace,
+  type QuitTracePhase,
+} from "../../../apps/desktop/quit/trace";
+import { createQuitProgressWindow } from "../../../apps/desktop/quit/panel";
 import { drainComputerConnector } from "./computer-connector-drain";
 import { isTrustedIpcSender } from "./ipc-sender";
 import {
@@ -2135,6 +2141,10 @@ async function recordSummaryFenceRecovery(
 // nothing and no test loads it. The bytes still come from the shared
 // `quit-receipt.ts` contract, so writer and reader cannot disagree about a
 // field the way they once did about `at`.
+// Diagnostic only: the last stage a Quit reached, never authority.
+let quitTrace: QuitTrace | null = null;
+let quitTracePhase: QuitTracePhase = "startup";
+
 async function recordQuitReceipt(receipt: QuitDrainReceipt): Promise<void> {
   await writeQuitReceipt(statePaths().state, receipt, new Date().toISOString());
 }
@@ -10234,6 +10244,19 @@ function disposeChatGptRoutes(): void {
 }
 
 async function main(quitSignals: GracefulQuitSignals): Promise<void> {
+  // First listener of the process, so startup and recovery Quits are traced
+  // too. Observational: it never prevents, delays or changes a Quit.
+  try {
+    quitTrace = createQuitTrace({
+      directory: statePaths().state,
+      pid: process.pid,
+    });
+    app.prependListener("before-quit", () =>
+      quitTrace?.record({ stage: "before-quit", during: quitTracePhase }),
+    );
+  } catch {
+    quitTrace = null;
+  }
   app.on(
     "second-instance",
     (_event, _commandLine, _workingDirectory, candidate) => {
@@ -10440,6 +10463,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
               }),
           });
           try {
+            quitTracePhase = "recovery";
             startupRecovery = openStartupRecoveryWindow({
               directory: installedUpdates.resources().directory,
               session,
@@ -10500,6 +10524,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     },
   );
   if (startupRecovery !== null) {
+    quitTracePhase = "recovery";
     // Only the UI's startup lease was released. The predecessor remains
     // unconfirmed, so normal Quit receipts and marker removal are forbidden.
     app.quit();
@@ -11072,8 +11097,67 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   // Quit waits, up to one deadline, for every owned child to confirm it
   // stopped, then quits for real; what did not confirm is recorded instead
   // of being reported as drained.
+  const quitProgress = createQuitProgressWindow({
+    deadlineMs: QUIT_DRAIN_DEADLINE_MS,
+    visible: () => windowMode !== "hidden",
+    ...(windowMode === "secondary-visible"
+      ? {
+          placement: () =>
+            selectedVisibleTestPlacement({ width: 380, height: 220 }).bounds,
+        }
+      : {}),
+  });
   const quitDrain = createQuitDrain({
     deadlineMs: QUIT_DRAIN_DEADLINE_MS,
+    observe: (stage) => {
+      quitTrace?.record(stage);
+      quitProgress.observe(stage);
+    },
+    // Latched once, after the attempt is claimed and before the first
+    // synchronous preparation step: the updater's effect fence and every
+    // closer then see Quit in progress. A throwing step is an unconfirmed
+    // stop, never a skipped drain.
+    onClaim: [
+      { name: "admission", run: () => desktopAdmission.beginQuit() },
+      {
+        name: "connector-resume",
+        run: () => {
+          startupConnectorResumeCancelled = true;
+        },
+      },
+      {
+        name: "connector-start",
+        run: () => connectorStartCancellation?.abort(),
+      },
+      { name: "process-audit", run: () => processAuditObserver?.stop() },
+      {
+        name: "transport-watch",
+        run: () => connectorTransportWatch.current?.close(),
+      },
+      {
+        name: "transport-timer",
+        run: () => {
+          if (connectorTransportTimer.current)
+            clearInterval(connectorTransportTimer.current);
+        },
+      },
+      { name: "connection", run: () => connectorConnection.close() },
+      {
+        name: "e2e-observer",
+        run: () => {
+          if (isolatedE2EHome !== undefined)
+            process.removeAllListeners("farol-e2e-observe-connection");
+        },
+      },
+      {
+        name: "status-timer",
+        run: () => {
+          if (connectorStatusTimer.current)
+            clearInterval(connectorStatusTimer.current);
+        },
+      },
+      { name: "update-timer", run: () => installedUpdates.stopTimer() },
+    ],
     preparationMs: QUIT_PREPARATION_MS,
     recordReserveMs: QUIT_RECORD_RESERVE_MS,
     prepare: installedUpdates.quitPreparation.prepare,
@@ -11119,7 +11203,18 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       }
       await recordQuitReceipt(receipt);
       if (receipt.drained) {
-        await removeRunMarker(statePaths().state, process.pid);
+        try {
+          const marker = await removeRunMarker(statePaths().state, process.pid);
+          quitTrace?.record({
+            stage: "marker",
+            result: marker?.removed === true ? "removed" : "kept",
+          });
+        } catch (error) {
+          quitTrace?.record({ stage: "marker", result: "failed" });
+          throw error;
+        }
+      } else {
+        quitTrace?.record({ stage: "marker", result: "kept" });
       }
     },
     // QuitDrain has already waited for owned children and recorded the result.
@@ -11127,7 +11222,8 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     // finish this exact attempt without reopening the drain or another update.
     quit: () => {
       try {
-        // app.exit skips will-quit; release the owned tray explicitly.
+        // app.exit skips will-quit; release the owned tray explicitly. The
+        // progress window is destroyed by the terminal exit itself.
         disposeMenuBarOnQuit?.();
       } finally {
         app.exit(0);
@@ -11257,24 +11353,11 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       return closers;
     },
   });
-  app.on("before-quit", (event) => {
-    desktopAdmission.beginQuit();
-    startupConnectorResumeCancelled = true;
-    // Cancel before optional Quit preparation can wait. Abort is idempotent;
-    // re-entrant Quit cannot create a new start, Stop, drain or cancellation.
-    connectorStartCancellation?.abort();
-    processAuditObserver?.stop();
-    connectorTransportWatch.current?.close();
-    if (connectorTransportTimer.current)
-      clearInterval(connectorTransportTimer.current);
-    connectorConnection.close();
-    if (isolatedE2EHome !== undefined)
-      process.removeAllListeners("farol-e2e-observe-connection");
-    if (connectorStatusTimer.current)
-      clearInterval(connectorStatusTimer.current);
-    installedUpdates.stopTimer();
-    quitDrain.onBeforeQuit(event);
-  });
+  // The pre-drain steps run once as the drain's claim steps, before
+  // preparation can wait (see onClaim above). Abort is idempotent;
+  // re-entrant Quit cannot create a new start, Stop, drain or cancellation.
+  app.on("before-quit", (event) => quitDrain.onBeforeQuit(event));
+  quitTracePhase = "running";
   app.on("window-all-closed", () => {
     if (windowAllClosedAction(process.platform) === "quit") app.quit();
   });
@@ -11389,6 +11472,8 @@ if (
     signals: process,
     requestQuit: () => app.quit(),
     isQuitting: () => desktopAdmission.quitInProgress,
+    observe: (signal, ignored) =>
+      quitTrace?.record({ stage: "signal", signal, ignored }),
   });
   const initialization = main(quitSignals);
   const readiness = initialization.then(() => {

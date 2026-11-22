@@ -76,7 +76,13 @@ export function declaredOperationOutcomes(): Map<string, Set<string>> {
       const file = path.posix.join(root, entry.name);
       if (
         entry.isDirectory() &&
-        !["apps/desktop/renderer", "apps/desktop/operations"].includes(file)
+        // Quit trace/progress stages are content-free diagnostics, never
+        // operation results; their records are not Activity outcomes.
+        ![
+          "apps/desktop/renderer",
+          "apps/desktop/operations",
+          "apps/desktop/quit",
+        ].includes(file)
       )
         discover(file);
       else if (

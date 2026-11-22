@@ -157,6 +157,7 @@ describe("actual Quit record composition flushes final operation observations", 
         statePaths: () => ({ state: "/fixture/farol-state" }),
         process: { pid: 123 },
         console: { warn },
+        quitTrace: null,
       },
     ) as (receipt: {
       drained: boolean;

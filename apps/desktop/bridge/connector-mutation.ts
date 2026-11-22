@@ -65,6 +65,8 @@ export type ConnectorMutationResult = Readonly<{
   data?: ComputerConnectorMutationResponse;
   code?: string;
   retry?: "never";
+  // A closed explanation of a refused authority code; never a replacement.
+  refusalReason?: "workspace_read_only";
 }>;
 
 // Detached, bounded JSON only. Never call an accessor or retain mutable peer data.
@@ -199,6 +201,17 @@ const failureSources = new Set([
   "native-host",
   "authority-store",
 ]);
+
+// Go adds this explanation only to its own refused write authority codes.
+// Anything else keeps the plain code: the reason never upgrades a refusal.
+function readOnlyReason(out: Outcome): "workspace_read_only" | undefined {
+  return out.status === "refused" &&
+    (out.code === "AUTHORITY_CAPABILITY_DENIED" ||
+      out.code === "AUTHORITY_PATH_DENIED") &&
+    out.refusalReason === "workspace_read_only"
+    ? "workspace_read_only"
+    : undefined;
+}
 
 // Codec only; the selected SocketConnectorClient and Go owner execute/retain work.
 export class ConnectorMutationBridge {
@@ -356,6 +369,7 @@ export class ConnectorMutationBridge {
     const failure = (
       status: Outcome["status"],
       code: string,
+      refusalReason?: "workspace_read_only",
     ): ConnectorMutationResult =>
       Object.freeze({
         status,
@@ -364,6 +378,7 @@ export class ConnectorMutationBridge {
         operationId,
         code,
         retry: "never",
+        ...(refusalReason === undefined ? {} : { refusalReason }),
       });
     try {
       const out = snapshot(
@@ -390,7 +405,7 @@ export class ConnectorMutationBridge {
         throw Error();
       if (out.status !== "ok") {
         if (out.data !== undefined || !safeCode(out.code)) throw Error();
-        return failure(out.status, out.code);
+        return failure(out.status, out.code, readOnlyReason(out));
       }
       if (
         out.code !== undefined ||

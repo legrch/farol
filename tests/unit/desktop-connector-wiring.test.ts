@@ -91,9 +91,9 @@ describe("connector supervisor wiring in main", () => {
       expect(source).not.toMatch(new RegExp(`\\n(?:let|const) ${name}\\b`));
     }
     // Quit closes the watch and both timers the supervisor holds.
-    expect(source).toContain("connectorTransportWatch.current?.close();");
+    expect(source).toContain("connectorTransportWatch.current?.close()");
     expect(source).toContain("clearInterval(connectorTransportTimer.current);");
     expect(source).toContain("clearInterval(connectorStatusTimer.current);");
-    expect(source).toContain("connectorConnection.close();");
+    expect(source).toContain("connectorConnection.close()");
   });
 });
