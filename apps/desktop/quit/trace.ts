@@ -152,7 +152,21 @@ export function retainQuitTrace(lines: readonly string[]): string[] {
       (sum, line) => sum + Buffer.byteLength(line, "utf8") + 1,
       0,
     );
-    if (bytes + size > QUIT_TRACE_MAX_BYTES) break;
+    if (bytes + size > QUIT_TRACE_MAX_BYTES) {
+      // The newest attempt alone is too large: keep its newest stages rather
+      // than erasing the whole history.
+      if (kept.length === 0) {
+        const tail: string[] = [];
+        for (const line of [...group].reverse()) {
+          const lineBytes = Buffer.byteLength(line, "utf8") + 1;
+          if (bytes + lineBytes > QUIT_TRACE_MAX_BYTES) break;
+          bytes += lineBytes;
+          tail.unshift(line);
+        }
+        kept.push(tail);
+      }
+      break;
+    }
     bytes += size;
     kept.push(group);
   }

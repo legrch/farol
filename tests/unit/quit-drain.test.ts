@@ -1244,4 +1244,97 @@ describe("Quit claim steps and stage observation (0.5.27 stabilization)", () => 
       }
     },
   );
+
+  it.each(["fulfilled", "rejected"] as const)(
+    "keeps the late preparation event when the timer wins and the attempt then %s",
+    async (settlement) => {
+      vi.useFakeTimers();
+      try {
+        const stages: string[] = [];
+        const receipts: QuitDrainReceipt[] = [];
+        let fulfil!: (value: { status: "accepted" }) => void;
+        let reject!: (error: Error) => void;
+        const drain = createQuitDrain({
+          deadlineMs: 1_000,
+          preparationMs: 100,
+          prepare: () =>
+            new Promise((resolve, no) => {
+              fulfil = resolve;
+              reject = no;
+            }),
+          collect: () => [],
+          record: async (receipt) => void receipts.push(receipt),
+          quit: () => undefined,
+          observe: (stage) =>
+            stages.push(
+              stage.stage === "preparation-end"
+                ? `preparation-end:${stage.result}`
+                : stage.stage,
+            ),
+        });
+        drain.onBeforeQuit({ preventDefault: () => undefined });
+        // Fire the timer, then settle before the race continuation runs.
+        vi.advanceTimersByTime(100);
+        if (settlement === "fulfilled") fulfil({ status: "accepted" });
+        else reject(new Error("late"));
+        await vi.advanceTimersByTimeAsync(10);
+        expect(stages.filter((s) => s.startsWith("preparation-"))).toEqual([
+          "preparation-begin",
+          "preparation-end:timed-out",
+          "preparation-late",
+        ]);
+        expect(receipts[0]?.unconfirmed).toContain("preparation");
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["fulfilled", "rejected"] as const)(
+    "reports a closer %s after the deadline as one timeout plus closer-late while the timer is pending",
+    async (settlement) => {
+      vi.useFakeTimers();
+      try {
+        const stages: string[] = [];
+        let fulfil!: () => void;
+        let reject!: (error: Error) => void;
+        const pending = drainOwnedChildren(
+          [
+            {
+              name: "connector",
+              close: () =>
+                new Promise<void>((resolve, no) => {
+                  fulfil = resolve;
+                  reject = no;
+                }),
+            },
+          ],
+          1_000,
+          Date.now() + 100,
+          (stage) =>
+            stages.push(
+              stage.stage === "closer-end"
+                ? `closer-end:${stage.result}`
+                : stage.stage,
+            ),
+        );
+        vi.setSystemTime(Date.now() + 150);
+        if (settlement === "fulfilled") fulfil();
+        else reject(new Error("late"));
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(await pending).toEqual({
+          drained: false,
+          unconfirmed: ["connector"],
+        });
+        expect(stages).toEqual([
+          "closer-begin",
+          "closer-end:timed-out",
+          "closer-late",
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });

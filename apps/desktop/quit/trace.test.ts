@@ -38,6 +38,16 @@ describe("Quit trace: diagnostic, bounded, never in the Quit path", () => {
     expect(kept.at(-1)).toContain('"a14"');
     const huge = line("p", "big", "x".repeat(70 * 1024));
     expect(retainQuitTrace([line("p", "small"), huge])).toEqual([]);
+    // A large newest attempt keeps its newest stages instead of nothing.
+    const many = Array.from({ length: 800 }, (_, i) =>
+      line("p", "loud", `signal-${i}-${"y".repeat(80)}`),
+    );
+    const tail = retainQuitTrace([line("p", "older"), ...many]);
+    expect(tail.length).toBeGreaterThan(0);
+    expect(tail.at(-1)).toBe(many.at(-1));
+    expect(
+      tail.reduce((sum, l) => sum + Buffer.byteLength(l, "utf8") + 1, 0),
+    ).toBeLessThanOrEqual(64 * 1024);
   });
 
   it("records content-free stages of one attempt and writes a private file", async () => {
