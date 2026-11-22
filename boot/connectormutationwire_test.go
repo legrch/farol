@@ -305,3 +305,70 @@ func TestConnectorMutationWireUnapprovedTargetRefusesBeforeIntent(t *testing.T) 
 		t.Fatal("known pre-intent target refusal blocked ordinary retirement")
 	}
 }
+
+func readOnlyConnectorFixture(t *testing.T, change func(*authority.Approval)) (*computerConnector, *chatMutationJournal, *chatMutationNative) {
+	t.Helper()
+	s, access, _, _, in := newConnectorFixture(t)
+	access.approval.Capabilities = []authority.Capability{authority.List, authority.Read}
+	access.approval.Workspaces[0].Access = authority.ReadAccess
+	if change != nil {
+		change(&access.approval)
+	}
+	access.PutApproval(access.approval)
+	s.root.publication.approval = access.approval.Clone()
+	deps, journal, native := chatMutationDependencies()
+	var err error
+	if s.mutations, err = settingsMutationIngress(s.root, deps); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Open(context.Background(), "open", in); err != nil {
+		t.Fatal(err)
+	}
+	return s, journal, native
+}
+
+// The owner's Read only setting is the one refusal with an owner remedy. It keeps
+// the original code and never-retry semantics, and nothing reaches the owner.
+func TestConnectorMutationWireExplainsReadOnlyWorkspace(t *testing.T) {
+	remove := func(s *computerConnector) (string, any) {
+		return "computer.workspace.remove", wire.ComputerConnectorRemove{Execution: s.current.opened.Execution, CallId: "remove", WorkspaceId: "work", RelativePath: "note.md", ExpectedSHA256: strings.Repeat("a", 64)}
+	}
+	edit := func(s *computerConnector) (string, any) {
+		return "computer.workspace.edit", wire.ComputerConnectorEdit{Execution: s.current.opened.Execution, CallId: "edit", WorkspaceId: "work", RelativePath: "note.md", ExpectedSHA256: strings.Repeat("a", 64), Edits: []wire.ComputerTextEdit{{OldText: "a", NewText: "b"}}}
+	}
+	write := func(s *computerConnector) (string, any) { return "computer.workspace.write", connectorWireWrite(s) }
+	unapproved := func(s *computerConnector) (string, any) {
+		in := connectorWireWrite(s)
+		in.WorkspaceId = "unapproved"
+		return "computer.workspace.write", in
+	}
+	excluded := func(a *authority.Approval) {
+		a.Capabilities = append(a.Capabilities, authority.Write)
+		a.Workspaces[0].Access = authority.WriteAccess
+		a.ExcludedPaths = []authority.Exclusion{{WorkspaceID: "work", Path: a.Workspaces[0].Root + "/note.md"}}
+	}
+	cases := []struct {
+		name, code, reason string
+		change             func(*authority.Approval)
+		request            func(*computerConnector) (string, any)
+	}{
+		{"write with every workspace read only", "AUTHORITY_CAPABILITY_DENIED", "workspace_read_only", nil, write},
+		{"edit with every workspace read only", "AUTHORITY_CAPABILITY_DENIED", "workspace_read_only", nil, edit},
+		{"remove with every workspace read only", "AUTHORITY_CAPABILITY_DENIED", "workspace_read_only", nil, remove},
+		{"unapproved workspace is not Read only", "AUTHORITY_CAPABILITY_DENIED", "", nil, unapproved},
+		{"excluded path in a writable workspace", "AUTHORITY_PATH_DENIED", "", excluded, write},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, journal, native := readOnlyConnectorFixture(t, tc.change)
+			method, in := tc.request(s)
+			out := connectorMutationInvoke(t, s, method, "read-only-"+strings.ReplaceAll(tc.name, " ", "-"), in)
+			if out.Status != "refused" || out.Code != tc.code || out.RefusalReason != tc.reason {
+				t.Fatalf("got %s/%s/%q, want refused/%s/%q", out.Status, out.Code, out.RefusalReason, tc.code, tc.reason)
+			}
+			if native.calls != 0 || journal.admits != 0 || journal.saves != 0 {
+				t.Fatal("refused write reached the mutation owner")
+			}
+		})
+	}
+}

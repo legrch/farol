@@ -13,6 +13,8 @@ Use each row's **Access** control to choose:
 | **Read only**    | Allows supported listing, search and reads in the approved scope.                                                                           |
 | **Read & write** | Allows supported guarded file changes. ChatGPT confirmations depend on its permissions; this does not grant unrestricted command execution. |
 
+When ChatGPT tries to change a file in a **Read only** workspace, nothing is written and the refusal names that workspace and this control. Only you can switch it to **Read & write**; Farol never widens access on its own, and the refused change is not repeated. Other refusals, such as an excluded path, a hard-linked file or an unknown result, have their own reasons and are not fixed by this setting.
+
 A changed choice saves and checks access immediately; wait for the confirmed result. There is no separate save or cancel action for this control. Navigating away does not undo an already submitted or uncertain change.
 
 **✓ Works** must apply to the current saved scope and build. Use **Check access** when offered. Changing access can invalidate other rows' checks; check those rows before continuing. A returning, current workspace can simply continue. The guided flow requires at least one workspace and current checks for every listed workspace.

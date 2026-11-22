@@ -146,6 +146,7 @@ async function setup(
     mutations?: GoComputerMcpOptions["mutations"];
     removal?: GoComputerMcpOptions["removal"];
     processes?: GoComputerMcpOptions["processes"];
+    workspaceLabel?: GoComputerMcpOptions["workspaceLabel"];
     onEffectUnknown?: () => void;
     respond?: (method: string, params: Json, id: string) => unknown;
   } = {},
@@ -187,6 +188,9 @@ async function setup(
       ...(options.mutations ? { mutations: options.mutations } : {}),
       ...(options.removal ? { removal: options.removal } : {}),
       ...(options.processes ? { processes: options.processes } : {}),
+      ...(options.workspaceLabel
+        ? { workspaceLabel: options.workspaceLabel }
+        : {}),
       ...(options.onEffectUnknown
         ? { onEffectUnknown: options.onEffectUnknown }
         : {}),
@@ -2561,3 +2565,112 @@ it.each([
     }
   },
 );
+
+describe("Read only write refusal (pure/in-memory only)", () => {
+  const target = {
+    workspaceId: "workspace",
+    relativePath: "note.md",
+    operationId: "caller-operation",
+  };
+  const refusal =
+    (code: string, refusalReason?: "workspace_read_only") =>
+    async (
+      _input: unknown,
+      operationId: string,
+      call: { requestId: string; context: Context },
+    ) => ({
+      status: "refused" as const,
+      operationId,
+      requestId: call.requestId,
+      context: call.context,
+      code,
+      retry: "never" as const,
+      ...(refusalReason ? { refusalReason } : {}),
+    });
+  const selected = (code: string, reason?: "workspace_read_only") => ({
+    write: vi.fn(refusal(code, reason)),
+    edit: vi.fn(refusal(code, reason)),
+    read: vi.fn(),
+  });
+  it("names the Read only workspace and its owner remedy without retrying", async () => {
+    const mutations = selected(
+      "AUTHORITY_CAPABILITY_DENIED",
+      "workspace_read_only",
+    );
+    const removal = {
+      remove: vi.fn(refusal("AUTHORITY_PATH_DENIED", "workspace_read_only")),
+    };
+    const { client } = await setup({
+      mutations,
+      removal,
+      workspaceLabel: (id) => (id === "workspace" ? "brain" : undefined),
+    });
+    for (const [name, args, effect] of [
+      [
+        "computer_workspace_write",
+        { ...target, content: "text", expectedSha256: null },
+        "written",
+      ],
+      [
+        "computer_workspace_edit",
+        {
+          ...target,
+          expectedSha256: "a".repeat(64),
+          edits: [{ oldText: "a", newText: "b" }],
+        },
+        "written",
+      ],
+      [
+        "computer_workspace_remove",
+        { ...target, expectedSha256: "a".repeat(64) },
+        "removed",
+      ],
+    ] as const) {
+      const out = await client.callTool({ name, arguments: args });
+      expect(out.isError).toBe(true);
+      expect(out.structuredContent).toMatchObject({
+        status: "refused",
+        refusalReason: "workspace_read_only",
+        operationId: target.operationId,
+        retry: "never",
+        message: `Nothing was ${effect}. Workspace brain is Read only. If writing is needed, the owner can enable Setup → Workspaces → brain → Access → Read & write. Do not repeat this operation; after the owner changes access, use a new operationId.`,
+      });
+    }
+    expect(mutations.write).toHaveBeenCalledTimes(1);
+    expect(mutations.edit).toHaveBeenCalledTimes(1);
+    expect(removal.remove).toHaveBeenCalledTimes(1);
+  });
+  it("falls back to the workspace ID when no owner label is known", async () => {
+    const { client } = await setup({
+      mutations: selected("AUTHORITY_CAPABILITY_DENIED", "workspace_read_only"),
+    });
+    const out = await client.callTool({
+      name: "computer_workspace_write",
+      arguments: { ...target, content: "text", expectedSha256: null },
+    });
+    expect(out.structuredContent).toMatchObject({
+      message: expect.stringContaining("Workspace workspace is Read only"),
+    });
+  });
+  it("gives no Read & write advice for path, hardlink or other refusals", async () => {
+    for (const code of [
+      "AUTHORITY_PATH_DENIED",
+      "AUTHORITY_CAPABILITY_DENIED",
+      "WORKSPACE_PATH_REFUSED",
+      "AUTHORITY_MUTATION_OWNERSHIP_DENIED",
+    ]) {
+      const { client } = await setup({ mutations: selected(code) });
+      const out = await client.callTool({
+        name: "computer_workspace_write",
+        arguments: { ...target, content: "text", expectedSha256: null },
+      });
+      expect(out.structuredContent).toMatchObject({
+        status: "refused",
+        code,
+        retry: "never",
+      });
+      expect(JSON.stringify(out)).not.toContain("Read & write");
+      expect(out.structuredContent).not.toHaveProperty("message");
+    }
+  });
+});

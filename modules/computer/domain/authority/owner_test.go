@@ -2,6 +2,8 @@ package authority
 
 import (
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -159,5 +161,80 @@ func TestAuthorizeOwnerWriteRequiresExactWriteAuthority(t *testing.T) {
 	}
 	if err := AuthorizeOwnerWrite(a, "work", "/work/file", a.ExpiresAt); err == nil {
 		t.Fatal("expired write granted")
+	}
+}
+
+func readOnlyFixture() Approval {
+	return Approval{OwnerID: "owner", ComputerID: "computer", Generation: 7,
+		Workspaces: []ApprovedWorkspace{
+			{WorkspaceID: "brain", Root: "/brain", Access: ReadAccess, RootIdentity: RootIdentity{Device: "12", Inode: "34"}},
+			{WorkspaceID: "code", Root: "/code", Access: ReadAccess, RootIdentity: RootIdentity{Device: "12", Inode: "35"}},
+		},
+		Capabilities: []Capability{List, Read, Search}, Network: NoNetwork, Commands: NoCommands, ExpiresAt: time.UnixMilli(1800000060000)}
+}
+
+func TestReadOnlyWorkspaceWrite(t *testing.T) {
+	cases := []struct {
+		name, workspace, path string
+		change                func(*Approval)
+		want                  bool
+	}{
+		// Every workspace is Read only, so the approval carries no Write at all.
+		{"all workspaces read only", "brain", "notes/a.md", nil, true},
+		// Another workspace is writable: the refusal is the target's access alone.
+		{"target read only beside a writable one", "brain", "notes/a.md", func(a *Approval) {
+			a.Workspaces[1].Access = WriteAccess
+			a.Capabilities = append(a.Capabilities, Write)
+		}, true},
+		{"target already writable", "brain", "notes/a.md", func(a *Approval) {
+			a.Workspaces[0].Access = WriteAccess
+			a.Capabilities = append(a.Capabilities, Write)
+		}, false},
+		{"excluded path stays a path refusal", "brain", "secret/a.md", func(a *Approval) {
+			a.ExcludedPaths = []Exclusion{{WorkspaceID: "brain", Path: "/brain/secret"}}
+		}, false},
+		{"unknown workspace", "other", "a.md", nil, false},
+		{"traversal is not classified", "brain", "../code/a.md", nil, false},
+		{"absolute path is not classified", "brain", "/brain/a.md", nil, false},
+		{"empty path", "brain", "", nil, false},
+		{"invalid approval", "brain", "a.md", func(a *Approval) { a.OwnerID = "" }, false},
+		{"expired ceiling still classifies its structure", "brain", "a.md", func(a *Approval) { a.ExpiresAt = time.UnixMilli(1000) }, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := readOnlyFixture()
+			if tc.change != nil {
+				tc.change(&a)
+			}
+			before := a.Clone()
+			if got := ReadOnlyWorkspaceWrite(a, tc.workspace, tc.path); got != tc.want {
+				t.Fatalf("ReadOnlyWorkspaceWrite = %v, want %v", got, tc.want)
+			}
+			// The explanation never mutates the approval it was given.
+			if !SameApprovalPolicy(a, before) || !slices.Equal(a.Capabilities, before.Capabilities) || a.Workspaces[0].Access != before.Workspaces[0].Access {
+				t.Fatal("approval changed")
+			}
+		})
+	}
+}
+
+func TestWriteRefusalReason(t *testing.T) {
+	a := readOnlyFixture()
+	for _, code := range []string{"AUTHORITY_CAPABILITY_DENIED", "AUTHORITY_PATH_DENIED"} {
+		if got := WriteRefusalReason(Fail(code, "task-grant"), a, "brain", "a.md"); got != "workspace_read_only" {
+			t.Fatalf("%s: got %q", code, got)
+		}
+		wrapped := fmt.Errorf("unsettled: %w", Fail(code, "task-grant"))
+		if got := WriteRefusalReason(wrapped, a, "brain", "a.md"); got != "workspace_read_only" {
+			t.Fatalf("wrapped %s: got %q", code, got)
+		}
+	}
+	for _, err := range []error{nil, errors.New("private"), Fail("AUTHORITY_MUTATION_OWNERSHIP_DENIED", "role"), Fail("WORKSPACE_PATH_REFUSED", "native-workspace")} {
+		if got := WriteRefusalReason(err, a, "brain", "a.md"); got != "" {
+			t.Fatalf("%v explained as %q", err, got)
+		}
+	}
+	if got := WriteRefusalReason(Fail("AUTHORITY_PATH_DENIED", "task-grant"), a, "brain", "../a.md"); got != "" {
+		t.Fatalf("outside path explained as %q", got)
 	}
 }

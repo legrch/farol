@@ -468,3 +468,21 @@ func TestMalformedOwnerOutputIsContained(t *testing.T) {
 		}
 	}
 }
+
+func TestOutcomeRefusalReasonOnlyExplainsRefusals(t *testing.T) {
+	if got := (&Outcome{Status: "refused", Code: "AUTHORITY_CAPABILITY_DENIED"}).WithRefusalReason("workspace_read_only"); got.RefusalReason != "workspace_read_only" || got.Code != "AUTHORITY_CAPABILITY_DENIED" {
+		t.Fatal("refusal lost its explanation or code", got)
+	}
+	for _, status := range []string{"ok", "unknown", "unavailable"} {
+		if got := (&Outcome{Status: status}).WithRefusalReason("workspace_read_only"); got.RefusalReason != "" {
+			t.Fatal("non-refused outcome explained", status)
+		}
+	}
+	if got := (&Outcome{Status: "refused"}).WithRefusalReason(""); got.RefusalReason != "" {
+		t.Fatal("empty reason attached")
+	}
+	var missing *Outcome
+	if missing.WithRefusalReason("workspace_read_only") != nil {
+		t.Fatal("nil outcome replaced")
+	}
+}

@@ -220,6 +220,12 @@ export class OperationsStore implements OperationsRecorder {
       return [];
     }
   }
+  /** The current owner label of one workspace, without IO. Unknown is undefined. */
+  workspaceLabel(workspaceId: string): string | undefined {
+    return this.currentLabels?.find(
+      (entry) => entry.workspaceId === workspaceId,
+    )?.label;
+  }
   /** Load the private owner index before a separate MCP writer serves requests.
    * Missing/unreadable configuration leaves all workspace targets unresolved. */
   async loadWorkspaceLabels(deadlineMs = 100, refresh = false): Promise<void> {

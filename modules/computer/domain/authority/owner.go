@@ -1,6 +1,8 @@
 package authority
 
 import (
+	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -141,4 +143,49 @@ func ownerPath(v string, absolute bool) bool {
 		}
 	}
 	return true
+}
+
+// ReadOnlyWorkspaceWrite reports whether the owner's Read only access setting
+// for one workspace is the sole reason the approval refuses a file write at
+// relativePath. It holds only when the current approval refuses the write and
+// the same approval, with exactly that workspace switched to Read & write,
+// admits it: a path outside the root, an excluded path, an invalid approval or
+// any other refusal stays unclassified. Expiry is not part of the question, so
+// the structural check runs inside the approval's own lifetime.
+//
+// It is a pure explanation of a refusal that already happened. It grants,
+// stores and retries nothing; callers keep the original code and never act on
+// the upgraded approval.
+func ReadOnlyWorkspaceWrite(a Approval, workspaceID, relativePath string) bool {
+	if !ownerPath(relativePath, false) {
+		return false
+	}
+	index := slices.IndexFunc(a.Workspaces, func(w ApprovedWorkspace) bool { return w.WorkspaceID == workspaceID })
+	if index < 0 || a.Workspaces[index].Access != ReadAccess {
+		return false
+	}
+	at := a.ExpiresAt.Add(-time.Millisecond)
+	path := strings.TrimSuffix(a.Workspaces[index].Root, "/") + "/" + relativePath
+	if AuthorizeOwnerWrite(a, workspaceID, path, at) == nil {
+		return false
+	}
+	upgraded := a.Clone()
+	upgraded.Workspaces[index].Access = WriteAccess
+	if !slices.Contains(upgraded.Capabilities, Write) {
+		// Owner consent derives Write exactly when one workspace is writable.
+		upgraded.Capabilities = append(upgraded.Capabilities, Write)
+	}
+	return AuthorizeOwnerWrite(upgraded, workspaceID, path, at) == nil
+}
+
+// WriteRefusalReason returns the closed workspace_read_only explanation for err
+// only when err is the refused write authority code that the approval's Read
+// only setting for workspaceID alone explains. Otherwise it returns "": every
+// other refusal, an unknown outcome and an unclassified error stay plain.
+func WriteRefusalReason(err error, a Approval, workspaceID, relativePath string) string {
+	var f *Failure
+	if !errors.As(err, &f) || (f.Code != "AUTHORITY_CAPABILITY_DENIED" && f.Code != "AUTHORITY_PATH_DENIED") || !ReadOnlyWorkspaceWrite(a, workspaceID, relativePath) {
+		return ""
+	}
+	return "workspace_read_only"
 }

@@ -35,6 +35,8 @@ export type GoComputerMcpFence = Readonly<{
 export type GoComputerMcpOptions = Readonly<{
   operations?: OperationsRecorder;
   refreshWorkspaceLabels?: () => Promise<void>;
+  /** The owner-visible Setup name of an approved workspace, if known. */
+  workspaceLabel?: (workspaceId: string) => string | undefined;
   executionOrigin?: Readonly<{
     buildId: string;
     runtimeId: string;
@@ -266,6 +268,27 @@ function operationTarget(input: {
     ...(command && /^[A-Za-z0-9._-]{1,80}$/u.test(command) ? { command } : {}),
   };
 }
+// Only Go's exact Read only explanation earns an owner remedy. Path, hardlink,
+// other authority refusals and UNKNOWN keep their own codes without this advice,
+// and the original refusal is never retried or upgraded by the text.
+export function explainReadOnlyRefusal<
+  T extends { readonly status: string; readonly refusalReason?: string },
+>(
+  result: T,
+  workspace: string,
+  effect: "written" | "removed" = "written",
+): T | (T & { message: string }) {
+  if (
+    result.status !== "refused" ||
+    result.refusalReason !== "workspace_read_only"
+  )
+    return result;
+  return {
+    ...result,
+    message: `Nothing was ${effect}. Workspace ${workspace} is Read only. If writing is needed, the owner can enable Setup → Workspaces → ${workspace} → Access → Read & write. Do not repeat this operation; after the owner changes access, use a new operationId.`,
+  };
+}
+
 export function createGoComputerMcpServer(
   bridge: ComputerBridge,
   binding: ComputerConnectorExecution,
@@ -282,6 +305,16 @@ export function createGoComputerMcpServer(
     name: "farol-computer",
     version: "0.1.0-preview.0",
   });
+  const workspaceName = (workspaceId: string): string => {
+    try {
+      const label = options.workspaceLabel?.(workspaceId);
+      return typeof label === "string" && /^[^\p{Cc}]{1,120}$/u.test(label)
+        ? label
+        : workspaceId;
+    } catch {
+      return workspaceId;
+    }
+  };
   const stopping = async (): Promise<boolean> => {
     try {
       return lifecycle ? (await lifecycle.isStopping()) !== false : false;
@@ -669,16 +702,19 @@ export function createGoComputerMcpServer(
             target: operationTarget(input),
           },
           ctx.mcpReq.signal,
-          (call) =>
-            mutations.write(
-              {
-                ...input,
-                ...(expectedSha256 === null
-                  ? {}
-                  : { expectedSHA256: expectedSha256 }),
-              },
-              operationId,
-              call,
+          async (call) =>
+            explainReadOnlyRefusal(
+              await mutations.write(
+                {
+                  ...input,
+                  ...(expectedSha256 === null
+                    ? {}
+                    : { expectedSHA256: expectedSha256 }),
+                },
+                operationId,
+                call,
+              ),
+              workspaceName(input.workspaceId),
             ),
           operationId,
           undefined,
@@ -702,11 +738,14 @@ export function createGoComputerMcpServer(
             target: operationTarget(input),
           },
           ctx.mcpReq.signal,
-          (call) =>
-            mutations.edit(
-              { ...input, expectedSHA256: expectedSha256 },
-              operationId,
-              call,
+          async (call) =>
+            explainReadOnlyRefusal(
+              await mutations.edit(
+                { ...input, expectedSHA256: expectedSha256 },
+                operationId,
+                call,
+              ),
+              workspaceName(input.workspaceId),
             ),
           operationId,
           undefined,
@@ -753,11 +792,15 @@ export function createGoComputerMcpServer(
               target: operationTarget(input),
             },
             ctx.mcpReq.signal,
-            (call) =>
-              removal.remove(
-                { ...input, expectedSHA256: expectedSha256 },
-                operationId,
-                call,
+            async (call) =>
+              explainReadOnlyRefusal(
+                await removal.remove(
+                  { ...input, expectedSHA256: expectedSha256 },
+                  operationId,
+                  call,
+                ),
+                workspaceName(input.workspaceId),
+                "removed",
               ),
             operationId,
             undefined,

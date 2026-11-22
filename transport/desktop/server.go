@@ -26,10 +26,23 @@ type Request struct {
 }
 type Outcome struct {
 	NativeRefusalReason string
-	Status              string
-	Code                string
-	Data                json.RawMessage
+	// RefusalReason is a closed explanation of a refused Code, never a
+	// replacement for it: callers keep the code and its never-retry semantics.
+	RefusalReason string
+	Status        string
+	Code          string
+	Data          json.RawMessage
 }
+
+// WithRefusalReason attaches a closed explanation to a refused outcome only.
+// Any other status, a nil outcome and an empty reason are returned unchanged.
+func (o *Outcome) WithRefusalReason(reason string) *Outcome {
+	if o != nil && o.Status == "refused" && reason != "" {
+		o.RefusalReason = reason
+	}
+	return o
+}
+
 type Method struct {
 	// Trusted boot opts in only for handlers that await a reciprocal desktop
 	// capability. All existing owners remain serialized by default.
@@ -358,7 +371,7 @@ func (s *Server) context() wire.Context {
 	return wire.Context{ProfileId: s.config.ProfileID, BackendGeneration: s.config.Generation}
 }
 func (s *Server) result(req wire.Request, outcome *Outcome) wire.Response {
-	return wire.Response{Jsonrpc: "2.0", Id: &req.Id, Result: &wire.Outcome{Status: outcome.Status, RequestId: req.Id, Context: s.context(), OperationId: req.Params.OperationId, Data: outcome.Data, Code: optional(outcome.Code), NativeRefusalReason: optional(outcome.NativeRefusalReason)}}
+	return wire.Response{Jsonrpc: "2.0", Id: &req.Id, Result: &wire.Outcome{Status: outcome.Status, RequestId: req.Id, Context: s.context(), OperationId: req.Params.OperationId, Data: outcome.Data, Code: optional(outcome.Code), NativeRefusalReason: optional(outcome.NativeRefusalReason), RefusalReason: optional(outcome.RefusalReason)}}
 }
 func fault(id string, code int32, message string) wire.Response {
 	return wire.Response{Jsonrpc: "2.0", Id: optional(id), Error: &wire.Fault{Code: code, Message: message}}

@@ -22,7 +22,10 @@ import (
 // live Task/Chat owner and native Computer owner; wire IDs select neither.
 // It owns no positive admission cache and never opens, restores or repairs state.
 type ComputerRoute struct {
-	issuer          *execution.Service
+	issuer *execution.Service
+	// sealed is the issuer's own approval ceiling, kept only to explain a
+	// refusal it already made; it never admits, renews or widens anything.
+	sealed          authority.Approval
 	workspace       computerport.Workspace
 	clock           computerport.Clock
 	beforeAdmission func(context.Context) error
@@ -65,7 +68,7 @@ func computerRoute(access computerport.AccessRepository, current computerport.Cu
 	if err != nil {
 		return nil, computerFailure(err)
 	}
-	return &ComputerRoute{issuer: issuer, workspace: native, clock: clock}, nil
+	return &ComputerRoute{issuer: issuer, sealed: seal.Approval.Clone(), workspace: native, clock: clock}, nil
 }
 func computerUnavailable() error {
 	return &workspacect.Failure{Code: "COMPUTER_AUTHORITY_STORE_UNAVAILABLE", Source: "authority-store", Retry: "never"}
