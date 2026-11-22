@@ -211,4 +211,15 @@ describe("Quit trace: diagnostic, bounded, never in the Quit path", () => {
     expect(reads).toBe(0);
     expect((await fs.readFile(target, "utf8")).trim()).toBe(line("p", "fresh"));
   });
+
+  it("reclaims a temporary file left by an interrupted earlier write", async () => {
+    const state = await root();
+    const stale = path.join(state, `.${QUIT_TRACE_FILE_NAME}.dead.tmp`);
+    await fs.writeFile(stale, "partial", { mode: 0o600 });
+    await writeQuitTrace(state, [line("p", "a")]);
+    await expect(fs.lstat(stale)).rejects.toThrow();
+    expect((await fs.readdir(state)).filter((n) => n.endsWith(".tmp"))).toEqual(
+      [],
+    );
+  });
 });

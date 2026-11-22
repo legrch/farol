@@ -3,7 +3,7 @@ import { BrowserWindow, screen, type Rectangle } from "electron";
 
 import type { QuitStage } from "../../../src/apps/desktop/quit-drain";
 import {
-  initialQuitProgress,
+  createQuitProgress,
   presentQuitProgress,
   reduceQuitProgress,
   type QuitProgressState,
@@ -69,7 +69,7 @@ export function createQuitProgressWindow(
   options: QuitProgressWindowOptions,
 ): QuitProgressWindow {
   const now = options.now ?? (() => Date.now());
-  let state: QuitProgressState = initialQuitProgress;
+  let state: QuitProgressState = createQuitProgress();
   let deadlineAt: number | null = null;
   let disposed = false;
   let panel: BrowserWindow | null = null;

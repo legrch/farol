@@ -180,6 +180,15 @@ export async function writeQuitTrace(
 ): Promise<void> {
   await privateRoot(directory);
   const target = path.join(directory, QUIT_TRACE_FILE_NAME);
+  // A Quit can exit between creating a temporary file and its rename. Writes
+  // are serialized per process, so any earlier trace temporary is stale.
+  try {
+    for (const name of await fs.readdir(directory))
+      if (name.startsWith(`.${QUIT_TRACE_FILE_NAME}.`) && name.endsWith(".tmp"))
+        await fs.rm(path.join(directory, name), { force: true });
+  } catch {
+    // Reclaiming old temporaries never blocks the new trace.
+  }
   const lines = retainQuitTrace([...(await readExisting(target)), ...records]);
   const temporary = path.join(
     directory,

@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import type { QuitStage } from "../../../src/apps/desktop/quit-drain";
 import {
-  initialQuitProgress,
+  createQuitProgress,
   presentQuitProgress,
   reduceQuitProgress,
 } from "./progress";
 
 const run = (stages: QuitStage[]) =>
-  stages.reduce(reduceQuitProgress, initialQuitProgress);
+  stages.reduce(reduceQuitProgress, createQuitProgress());
 
 describe("Quit progress shows only what the drain reports", () => {
   it("groups still-running owners in plain words", () => {
@@ -53,5 +53,23 @@ describe("Quit progress shows only what the drain reports", () => {
     expect(presentQuitProgress(state, 10).lines).toEqual([
       "Local helper is stopping",
     ]);
+  });
+
+  it("updates one closer per event without copying the model", () => {
+    const state = createQuitProgress();
+    const closers = state.closers;
+    reduceQuitProgress(state, {
+      stage: "closer-begin",
+      closer: 0,
+      name: "connector",
+    });
+    reduceQuitProgress(state, {
+      stage: "closer-end",
+      closer: 0,
+      name: "connector",
+      result: "confirmed",
+    });
+    expect(state.closers).toBe(closers);
+    expect(presentQuitProgress(state, 1).lines).toEqual(["Finishing up"]);
   });
 });

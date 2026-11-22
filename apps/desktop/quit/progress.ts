@@ -16,38 +16,60 @@ export type QuitProgressState = Readonly<{
   >;
 }>;
 
-export const initialQuitProgress: QuitProgressState = Object.freeze({
-  step: "idle",
-  closers: new Map(),
-});
+type MutableQuitProgress = {
+  step: QuitProgressState["step"];
+  closers: Map<
+    number,
+    { name: string; progress: "pending" | "confirmed" | "failed" | "timed-out" }
+  >;
+};
 
+/** A fresh progress model owned by one window; never shared. */
+export function createQuitProgress(): QuitProgressState {
+  const state: MutableQuitProgress = { step: "idle", closers: new Map() };
+  return state;
+}
+
+/**
+ * Applies one stage in constant time by updating the window's own model in
+ * place; the display snapshot is built only when the window renders.
+ */
 export function reduceQuitProgress(
-  state: QuitProgressState,
+  current: QuitProgressState,
   stage: QuitStage,
 ): QuitProgressState {
+  const state = current as MutableQuitProgress;
   switch (stage.stage) {
     case "preparation-begin":
-      return { ...state, step: "preparing" };
+      state.step = "preparing";
+      break;
     case "preparation-end":
     case "collect-end":
-      return { ...state, step: "stopping" };
-    case "closer-begin": {
-      const closers = new Map(state.closers);
-      closers.set(stage.closer, { name: stage.name, progress: "pending" });
-      return { step: "stopping", closers };
-    }
-    case "closer-end": {
-      const closers = new Map(state.closers);
-      closers.set(stage.closer, { name: stage.name, progress: stage.result });
-      return { ...state, closers };
-    }
+      state.step = "stopping";
+      break;
+    case "closer-begin":
+      state.step = "stopping";
+      state.closers.set(stage.closer, {
+        name: stage.name,
+        progress: "pending",
+      });
+      break;
+    case "closer-end":
+      state.closers.set(stage.closer, {
+        name: stage.name,
+        progress: stage.result,
+      });
+      break;
     case "record-begin":
-      return { ...state, step: "recording" };
+      state.step = "recording";
+      break;
     case "exit-requested":
-      return { ...state, step: "exiting" };
+      state.step = "exiting";
+      break;
     default:
-      return state;
+      break;
   }
+  return state;
 }
 
 const CATEGORY: Readonly<Record<string, string>> = {
