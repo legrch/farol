@@ -275,7 +275,7 @@ func TestRootMeasurementsAllBindingsHeldThroughOneDispatch(t *testing.T) {
 }
 
 func TestRootMeasurementsMismatchClosesAllPinsAndNeverDispatches(t *testing.T) {
-	for _, mode := range []string{"secondary-alias", "scope-alias", "scope-not-directory", "scope-partial-error", "late-root-replacement", "late-scope-replacement", "cwd-alias", "scratch-identity", "scratch-mode", "scratch-owner", "executable-partial-error"} {
+	for _, mode := range []string{"primary-identity", "secondary-alias", "scope-alias", "scope-not-directory", "scope-partial-error", "late-root-replacement", "late-scope-replacement", "cwd-alias", "scratch-identity", "scratch-mode", "scratch-owner", "executable-partial-error"} {
 		t.Run(mode, func(t *testing.T) {
 			selected, c, launch, fs := rootMeasurementFixture(t)
 			change := func(path string, f func(*directoryFacts)) {
@@ -385,7 +385,7 @@ func (p *measurementExecutableDouble) recheck(ctx context.Context) error {
 // longer matches the live directory (a reboot renumbered the volume) is
 // diagnostic only. Measurement captures the live identity and dispatches.
 func TestRootMeasurementsAcceptStaleSavedIdentity(t *testing.T) {
-	for _, mode := range []string{"secondary-device", "secondary-inode", "last-secondary", "primary-identity"} {
+	for _, mode := range []string{"secondary-device", "secondary-inode", "last-secondary"} {
 		t.Run(mode, func(t *testing.T) {
 			selected, c, launch, fs := rootMeasurementFixture(t)
 			_ = launch
@@ -401,8 +401,6 @@ func TestRootMeasurementsAcceptStaleSavedIdentity(t *testing.T) {
 				change("/approved/git", func(f *directoryFacts) { f.identity.Inode = "30" })
 			case "last-secondary":
 				change("/approved/tools", func(f *directoryFacts) { f.identity.Inode = "30" })
-			case "primary-identity":
-				change(c.Root, func(f *directoryFacts) { f.identity.Inode = "30" })
 			}
 			dispatch := &measurementDispatchDouble{}
 			err := measureThenDispatch(t, selected, c, fs, func(context.Context) error { return nil }, dispatch)

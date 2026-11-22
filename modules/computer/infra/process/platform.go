@@ -513,9 +513,19 @@ func (s *platformSelection) inspectDirectories(ctx context.Context) ([]platformD
 		state := s.policy.ProtectedState
 		directories = append(directories, directory{state.Path, state.Identity, state.Identity.Device})
 	}
+	// Path-bound approval (owner decision 2026-11-22): each approved root is
+	// measured live here; its scope must be on that live device. The primary
+	// root above still compares with the command's live preparation witness.
 	for _, root := range plan.roots {
-		directories = append(directories, directory{root.ApprovedRoot, root.RootIdentity, root.RootIdentity.Device},
-			directory{root.ScopeRoot, authority.RootIdentity{}, root.RootIdentity.Device})
+		if ctx == nil || ctx.Err() != nil {
+			return refuse()
+		}
+		approved, err := s.strategy.frozen.facts.directory(ctx, root.ApprovedRoot)
+		if err != nil || approved.path != root.ApprovedRoot || approved.identity.Device == "" {
+			return nil, refusalAt(nil, processsvc.RefusalDirectoryPolicy)
+		}
+		directories = append(directories, directory{root.ApprovedRoot, authority.RootIdentity{}, approved.identity.Device},
+			directory{root.ScopeRoot, authority.RootIdentity{}, approved.identity.Device})
 	}
 	out := make([]platformDirectoryBinding, 0, len(directories))
 	for _, d := range directories {

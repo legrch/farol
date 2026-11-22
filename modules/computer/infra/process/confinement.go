@@ -336,7 +336,7 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 	workspace, found := authority.FindApproved(*a, s.WorkspaceID)
 	scope, scoped := authority.FindScope(p.Grant, s.WorkspaceID)
 	if !found || !scoped || !absolutePolicyPath(workspace.Root) || !workspace.ShellVerified || (scope.Access != authority.ReadAccess && scope.Access != authority.WriteAccess) || (workspace.Access != authority.ReadAccess && workspace.Access != authority.WriteAccess) || scope.Mode != authority.Subtree || len(scope.Paths) != 0 || !absolutePolicyPath(scope.Root) ||
-		workspace.Root != command.Root || workspace.RootIdentity != command.RootIdentity || !insidePolicy(workspace.Root, scope.Root) || !insidePolicy(scope.Root, command.Cwd) ||
+		workspace.Root != command.Root || !insidePolicy(workspace.Root, scope.Root) || !insidePolicy(scope.Root, command.Cwd) ||
 		(s.FilePolicy == authority.LegacyProtectedFiles && protectedScope(scope.Root, s.Home)) || comparableOverlap(scope.Root, s.Scratch) ||
 		p.Grant.ComputerID != a.ComputerID || p.Grant.ComputerGeneration != a.Generation || p.Grant.OwnerID != a.OwnerID ||
 		p.Grant.Commands != authority.WorkspaceCommands || a.Commands != authority.WorkspaceCommands || !slices.Contains(p.Grant.Capabilities, authority.Shell) || !slices.Contains(a.Capabilities, authority.Shell) ||
@@ -381,7 +381,9 @@ func compileSeatbelt(s SeatbeltSelection, command Command) (*seatbeltPlan, error
 		}
 	}
 
-	selectedScopes := []rootScopeBinding{{scope.WorkspaceID, workspace.Root, scope.Root, workspace.RootIdentity, scope.Access}}
+	// The approval joins by path; the primary root's identity is the
+	// command's live witness (path-bound approval).
+	selectedScopes := []rootScopeBinding{{scope.WorkspaceID, workspace.Root, scope.Root, command.RootIdentity, scope.Access}}
 	var sealedRoots []rootScopeBinding
 	if s.FilePolicy == authority.RootScopedFiles || s.Git == QualifiedGitRead {
 		var err error

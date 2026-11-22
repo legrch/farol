@@ -226,7 +226,7 @@ func TestNativeRetainedMeasurementRejectsBetweenCheckDrift(t *testing.T) {
 }
 
 func TestNativeProcessMeasurementRefusesChangedPhysicalInputs(t *testing.T) {
-	for _, mode := range []string{"current", "root-identity-stale", "root-link", "cwd-link", "scratch-identity", "scratch-mode", "scratch-link", "image-digest", "image-link", "image-hardlink", "image-writable", "image-not-executable", "cancelled"} {
+	for _, mode := range []string{"current", "root-identity", "root-link", "cwd-link", "scratch-identity", "scratch-mode", "scratch-link", "image-digest", "image-link", "image-hardlink", "image-writable", "image-not-executable", "cancelled"} {
 		t.Run(mode, func(t *testing.T) {
 			command, launch := measurementFixture(t)
 			ctx, cancel := context.WithCancel(context.Background())
@@ -243,8 +243,9 @@ func TestNativeProcessMeasurementRefusesChangedPhysicalInputs(t *testing.T) {
 				return path
 			}
 			switch mode {
-			case "root-identity-stale":
-				// Path-bound approval: a stale saved pair is diagnostic only.
+			case "root-identity":
+				// The command carries the live preparation witness; a root
+				// that differs from it at launch was replaced after preparation.
 				command.RootIdentity.Inode = "1"
 			case "root-link":
 				command.Root = link(command.Root)
@@ -273,7 +274,7 @@ func TestNativeProcessMeasurementRefusesChangedPhysicalInputs(t *testing.T) {
 			if close != nil {
 				defer close()
 			}
-			if mode == "current" || mode == "root-identity-stale" {
+			if mode == "current" {
 				if err != nil || close == nil {
 					t.Fatal("current measured fixture refused", err)
 				}

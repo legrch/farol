@@ -83,6 +83,10 @@ func newShellFactoryFixtureWithApproval(t *testing.T, configure func(*authority.
 			Mechanism: pin("/usr/bin/sandbox-exec"), Executables: []nativeprocess.ExecutablePin{pin("/bin/bash"), pin("/usr/bin/git")},
 			ProtectedBundle: &nativeprocess.ProtectedBundle{Path: "/app/Farol.app", Identity: authority.RootIdentity{Device: "1", Inode: "8"}},
 		}}}
+	// Synthetic roots do not exist on disk; the live witness equals the saved pair.
+	f.rootIdentity = func(string) (authority.RootIdentity, error) {
+		return authority.RootIdentity{Device: "1", Inode: "2"}, nil
+	}
 	f.scratch = func(ctx context.Context) (connectorShellScratch, error) {
 		if !native.unlocked() {
 			t.Fatal("scratch allocation under an owner lock")
@@ -288,5 +292,29 @@ func TestConnectorShellRefusesMissingStateBeforeAllocation(t *testing.T) {
 	selected, observer, err := f.factory.selectShell(context.Background(), f.lease, shellFactoryRequest())
 	if err == nil || selected != nil || observer != nil || f.allocations != 0 || f.preparations != 0 {
 		t.Fatal("missing state reached native preparation")
+	}
+}
+
+func TestConnectorShellCommandCarriesLiveRootWitnessNotSavedPair(t *testing.T) {
+	f := newShellFactoryFixture(t)
+	live := authority.RootIdentity{Device: "16777233", Inode: "2"}
+	measured := ""
+	f.factory.rootIdentity = func(path string) (authority.RootIdentity, error) {
+		measured = path
+		return live, nil
+	}
+	selected, observer, err := f.factory.selectShell(context.Background(), f.lease, shellFactoryRequest())
+	if err != nil || selected == nil || observer == nil {
+		t.Fatal("renumbered device refused Shell selection", err)
+	}
+	if measured != "/disposable" || f.command.RootIdentity != live {
+		t.Fatal("Shell command used the saved pair instead of the live witness")
+	}
+	f = newShellFactoryFixture(t)
+	f.factory.rootIdentity = func(string) (authority.RootIdentity, error) {
+		return authority.RootIdentity{}, connectorProcessRefusal("PROCESS_WORKSPACE_ROOT_IDENTITY")
+	}
+	if selected, _, err := f.factory.selectShell(context.Background(), f.lease, shellFactoryRequest()); err == nil || selected != nil || f.preparations != 0 {
+		t.Fatal("unmeasurable root reached preparation")
 	}
 }
