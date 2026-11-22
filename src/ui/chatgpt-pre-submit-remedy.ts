@@ -21,7 +21,7 @@ export function chatGptPreSubmitRemedy(code: string | null): string | null {
     return "Message blocked before send because the composer already had text. Your draft was preserved; finish or clear it, then retry.";
   }
   if (code === "CHATGPT_TEMPORARY_CHAT_REQUIRED") {
-    return "Nothing was sent. This check runs in a Temporary Chat in Farol's ChatGPT window, and Farol could not confirm one was ready: the page was still loading or changed during the check. Your history and draft were left unchanged. Wait until ChatGPT has finished loading in Farol, then try again.";
+    return "Nothing was sent. Farol could not confirm the Temporary Chat this check needs in its ChatGPT window. Your history and draft were left unchanged. If ChatGPT is still loading in Farol, wait until it has finished, then try again.";
   }
   if (code === "CHATGPT_INSTANT_MODEL_REQUIRED") {
     return "Nothing was sent. Farol could not confirm Instant as the selected model for this check.";

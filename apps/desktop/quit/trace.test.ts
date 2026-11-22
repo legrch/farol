@@ -120,4 +120,37 @@ describe("Quit trace: diagnostic, bounded, never in the Quit path", () => {
       "QUIT_TRACE_STATE_UNSAFE",
     );
   });
+
+  it("counts the byte cap in UTF-8 bytes", () => {
+    const wide = (attempt: string) =>
+      JSON.stringify({
+        lifetime: "p",
+        attempt,
+        ms: 0,
+        stage: "é".repeat(4_000),
+      });
+    const kept = retainQuitTrace(
+      Array.from({ length: 10 }, (_, i) => wide(`a${i}`)),
+    );
+    const bytes = kept.reduce(
+      (sum, l) => sum + Buffer.byteLength(l, "utf8") + 1,
+      0,
+    );
+    expect(bytes).toBeLessThanOrEqual(64 * 1024);
+    expect(kept.length).toBeLessThan(10);
+  });
+
+  it("does not hang on a FIFO and starts fresh over an oversized trace", async () => {
+    const state = await root();
+    const target = path.join(state, QUIT_TRACE_FILE_NAME);
+    const { execFileSync } = await import("node:child_process");
+    execFileSync("/usr/bin/mkfifo", ["-m", "600", target]);
+    await expect(writeQuitTrace(state, [line("p", "a")])).rejects.toThrow(
+      "QUIT_TRACE_STATE_UNSAFE",
+    );
+    await fs.rm(target);
+    await fs.writeFile(target, "x".repeat(200 * 1024), { mode: 0o600 });
+    await writeQuitTrace(state, [line("p", "fresh")]);
+    expect((await fs.readFile(target, "utf8")).trim()).toBe(line("p", "fresh"));
+  });
 });

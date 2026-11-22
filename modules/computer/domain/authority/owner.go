@@ -1,7 +1,6 @@
 package authority
 
 import (
-	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -178,13 +177,13 @@ func ReadOnlyWorkspaceWrite(a Approval, workspaceID, relativePath string) bool {
 	return AuthorizeOwnerWrite(upgraded, workspaceID, path, at) == nil
 }
 
-// WriteRefusalReason returns the closed workspace_read_only explanation for err
-// only when err is the refused write authority code that the approval's Read
-// only setting for workspaceID alone explains. Otherwise it returns "": every
-// other refusal, an unknown outcome and an unclassified error stay plain.
-func WriteRefusalReason(err error, a Approval, workspaceID, relativePath string) string {
-	var f *Failure
-	if !errors.As(err, &f) || (f.Code != "AUTHORITY_CAPABILITY_DENIED" && f.Code != "AUTHORITY_PATH_DENIED") || !ReadOnlyWorkspaceWrite(a, workspaceID, relativePath) {
+// WriteRefusalReason returns the closed workspace_read_only explanation for a
+// refused write code only when it is a write authority code that the
+// approval's Read only setting for workspaceID alone explains. The code is
+// taken as reported, whichever contract carried it. Otherwise it returns "":
+// every other refusal, an unknown outcome and an unclassified code stay plain.
+func WriteRefusalReason(code string, a Approval, workspaceID, relativePath string) string {
+	if (code != "AUTHORITY_CAPABILITY_DENIED" && code != "AUTHORITY_PATH_DENIED") || !ReadOnlyWorkspaceWrite(a, workspaceID, relativePath) {
 		return ""
 	}
 	return "workspace_read_only"

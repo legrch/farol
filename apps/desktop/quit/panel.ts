@@ -76,11 +76,15 @@ export function createQuitProgressWindow(
   let showTimer: NodeJS.Timeout | undefined;
   let refreshTimer: NodeJS.Timeout | undefined;
 
-  const bounds = (): Rectangle => {
-    try {
-      if (options.placement) return options.placement();
-    } catch {
-      // Fall back to the active display below.
+  // A supplied placement policy that cannot select a display means no panel:
+  // the optional window never falls back onto a display the policy excludes.
+  const bounds = (): Rectangle | null => {
+    if (options.placement) {
+      try {
+        return options.placement();
+      } catch {
+        return null;
+      }
     }
     const area = screen.getDisplayNearestPoint(
       screen.getCursorScreenPoint(),
@@ -105,8 +109,10 @@ export function createQuitProgressWindow(
     if (disposed || panel || state.step === "exiting") return;
     try {
       if (options.visible && !options.visible()) return;
+      const selected = bounds();
+      if (!selected) return;
       panel = new BrowserWindow({
-        ...bounds(),
+        ...selected,
         title: "Farol is quitting",
         show: false,
         resizable: false,

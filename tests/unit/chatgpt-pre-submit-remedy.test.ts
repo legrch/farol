@@ -29,7 +29,8 @@ describe("ChatGPT pre-submit remedies for the owner-selected app", () => {
     expect(message).toMatch(/^Nothing was sent\./u);
     expect(message).toContain("Temporary Chat");
     expect(message).toContain("history and draft were left unchanged");
-    expect(message).toContain("finished loading in Farol");
+    expect(message).toContain("could not confirm the Temporary Chat");
+    expect(message).toContain("If ChatGPT is still loading");
   });
 
   it("keeps Ping prerequisites about the ChatGPT page, not folder access", () => {

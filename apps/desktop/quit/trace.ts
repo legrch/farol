@@ -90,15 +90,28 @@ const openFlags =
 async function readExisting(target: string): Promise<string[]> {
   let handle;
   try {
-    handle = await fs.open(target, fsConstants.O_RDONLY | openFlags);
+    // Nonblocking: a stale FIFO or device in place of the trace cannot leave
+    // this open pending and strand the trace queue.
+    handle = await fs.open(
+      target,
+      fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0) | openFlags,
+    );
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw error;
   }
   try {
-    assertPrivateFile(await handle.stat());
-    const text = await handle.readFile("utf8");
-    return text.split("\n").filter((line) => line.length > 0);
+    const info = await handle.stat();
+    assertPrivateFile(info);
+    // An oversized trace is not ours to parse; start a fresh one.
+    if (info.size > QUIT_TRACE_MAX_BYTES * 2) return [];
+    const buffer = Buffer.alloc(info.size);
+    const { bytesRead } = await handle.read(buffer, 0, info.size, 0);
+    return buffer
+      .subarray(0, bytesRead)
+      .toString("utf8")
+      .split("\n")
+      .filter((line) => line.length > 0);
   } finally {
     await handle.close();
   }
@@ -134,7 +147,11 @@ export function retainQuitTrace(lines: readonly string[]): string[] {
   for (const key of order.reverse()) {
     if (kept.length >= QUIT_TRACE_MAX_ATTEMPTS) break;
     const group = byAttempt.get(key)!;
-    const size = group.reduce((sum, line) => sum + line.length + 1, 0);
+    // Bytes on disk, not UTF-16 code units.
+    const size = group.reduce(
+      (sum, line) => sum + Buffer.byteLength(line, "utf8") + 1,
+      0,
+    );
     if (bytes + size > QUIT_TRACE_MAX_BYTES) break;
     bytes += size;
     kept.push(group);

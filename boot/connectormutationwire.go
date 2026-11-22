@@ -123,7 +123,9 @@ func (s *computerConnector) mutationMethods(slot *connectorSlot) map[string]desk
 		if err != nil {
 			outcome, failure := connectorMutationOutcome(nil, err)
 			path, _ := connectorMutationTarget(op)
-			return outcome.WithRefusalReason(authority.WriteRefusalReason(err, slot.route.sealed, workspace, path)), failure
+			return outcome.WithRefusalReason(func(code string) string {
+				return authority.WriteRefusalReason(code, slot.route.sealed, workspace, path)
+			}), failure
 		}
 		path, _ := connectorMutationTarget(op)
 		result, err := connectorMutationWireResult(slot, call, r.OperationID, workspace, path, op, out)

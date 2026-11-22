@@ -11,7 +11,7 @@ export type QuitProgressState = Readonly<{
     number,
     Readonly<{
       name: string;
-      progress: "pending" | "confirmed" | "failed" | "late";
+      progress: "pending" | "confirmed" | "failed" | "timed-out";
     }>
   >;
 }>;

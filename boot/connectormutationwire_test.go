@@ -347,11 +347,20 @@ func TestConnectorMutationWireExplainsReadOnlyWorkspace(t *testing.T) {
 		a.Workspaces[0].Access = authority.WriteAccess
 		a.ExcludedPaths = []authority.Exclusion{{WorkspaceID: "work", Path: a.Workspaces[0].Root + "/note.md"}}
 	}
+	// Another workspace is writable, so the connector holds Write and the
+	// refusal comes from the mutation contract's own policy check.
+	mixed := func(a *authority.Approval) {
+		a.Capabilities = append(a.Capabilities, authority.Write)
+		a.Workspaces = append(a.Workspaces, authority.ApprovedWorkspace{WorkspaceID: "notes", Root: "/notes", Access: authority.WriteAccess, RootIdentity: authority.RootIdentity{Device: "1", Inode: "3"}})
+	}
 	cases := []struct {
 		name, code, reason string
 		change             func(*authority.Approval)
 		request            func(*computerConnector) (string, any)
 	}{
+		{"write in a Read only workspace beside a writable one", "AUTHORITY_PATH_DENIED", "workspace_read_only", mixed, write},
+		{"edit in a Read only workspace beside a writable one", "AUTHORITY_PATH_DENIED", "workspace_read_only", mixed, edit},
+		{"remove in a Read only workspace beside a writable one", "AUTHORITY_PATH_DENIED", "workspace_read_only", mixed, remove},
 		{"write with every workspace read only", "AUTHORITY_CAPABILITY_DENIED", "workspace_read_only", nil, write},
 		{"edit with every workspace read only", "AUTHORITY_CAPABILITY_DENIED", "workspace_read_only", nil, edit},
 		{"remove with every workspace read only", "AUTHORITY_CAPABILITY_DENIED", "workspace_read_only", nil, remove},

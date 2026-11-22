@@ -34,11 +34,14 @@ type Outcome struct {
 	Data          json.RawMessage
 }
 
-// WithRefusalReason attaches a closed explanation to a refused outcome only.
-// Any other status, a nil outcome and an empty reason are returned unchanged.
-func (o *Outcome) WithRefusalReason(reason string) *Outcome {
-	if o != nil && o.Status == "refused" && reason != "" {
-		o.RefusalReason = reason
+// WithRefusalReason attaches a closed explanation, derived from the outcome's
+// own code, to a refused outcome only. Any other status, a nil outcome and an
+// empty explanation are returned unchanged.
+func (o *Outcome) WithRefusalReason(explain func(code string) string) *Outcome {
+	if o != nil && o.Status == "refused" && explain != nil {
+		if reason := explain(o.Code); reason != "" {
+			o.RefusalReason = reason
+		}
 	}
 	return o
 }

@@ -2,7 +2,6 @@ package authority
 
 import (
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -221,20 +220,16 @@ func TestReadOnlyWorkspaceWrite(t *testing.T) {
 func TestWriteRefusalReason(t *testing.T) {
 	a := readOnlyFixture()
 	for _, code := range []string{"AUTHORITY_CAPABILITY_DENIED", "AUTHORITY_PATH_DENIED"} {
-		if got := WriteRefusalReason(Fail(code, "task-grant"), a, "brain", "a.md"); got != "workspace_read_only" {
+		if got := WriteRefusalReason(code, a, "brain", "a.md"); got != "workspace_read_only" {
 			t.Fatalf("%s: got %q", code, got)
 		}
-		wrapped := fmt.Errorf("unsettled: %w", Fail(code, "task-grant"))
-		if got := WriteRefusalReason(wrapped, a, "brain", "a.md"); got != "workspace_read_only" {
-			t.Fatalf("wrapped %s: got %q", code, got)
+	}
+	for _, code := range []string{"", "AUTHORITY_MUTATION_OWNERSHIP_DENIED", "WORKSPACE_PATH_REFUSED", "WORKSPACE_MUTATION_OUTCOME_UNKNOWN"} {
+		if got := WriteRefusalReason(code, a, "brain", "a.md"); got != "" {
+			t.Fatalf("%q explained as %q", code, got)
 		}
 	}
-	for _, err := range []error{nil, errors.New("private"), Fail("AUTHORITY_MUTATION_OWNERSHIP_DENIED", "role"), Fail("WORKSPACE_PATH_REFUSED", "native-workspace")} {
-		if got := WriteRefusalReason(err, a, "brain", "a.md"); got != "" {
-			t.Fatalf("%v explained as %q", err, got)
-		}
-	}
-	if got := WriteRefusalReason(Fail("AUTHORITY_PATH_DENIED", "task-grant"), a, "brain", "../a.md"); got != "" {
+	if got := WriteRefusalReason("AUTHORITY_PATH_DENIED", a, "brain", "../a.md"); got != "" {
 		t.Fatalf("outside path explained as %q", got)
 	}
 }

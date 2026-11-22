@@ -470,19 +470,28 @@ func TestMalformedOwnerOutputIsContained(t *testing.T) {
 }
 
 func TestOutcomeRefusalReasonOnlyExplainsRefusals(t *testing.T) {
-	if got := (&Outcome{Status: "refused", Code: "AUTHORITY_CAPABILITY_DENIED"}).WithRefusalReason("workspace_read_only"); got.RefusalReason != "workspace_read_only" || got.Code != "AUTHORITY_CAPABILITY_DENIED" {
+	explain := func(code string) string {
+		if code == "AUTHORITY_PATH_DENIED" {
+			return "workspace_read_only"
+		}
+		return ""
+	}
+	if got := (&Outcome{Status: "refused", Code: "AUTHORITY_PATH_DENIED"}).WithRefusalReason(explain); got.RefusalReason != "workspace_read_only" || got.Code != "AUTHORITY_PATH_DENIED" {
 		t.Fatal("refusal lost its explanation or code", got)
 	}
 	for _, status := range []string{"ok", "unknown", "unavailable"} {
-		if got := (&Outcome{Status: status}).WithRefusalReason("workspace_read_only"); got.RefusalReason != "" {
+		if got := (&Outcome{Status: status, Code: "AUTHORITY_PATH_DENIED"}).WithRefusalReason(explain); got.RefusalReason != "" {
 			t.Fatal("non-refused outcome explained", status)
 		}
 	}
-	if got := (&Outcome{Status: "refused"}).WithRefusalReason(""); got.RefusalReason != "" {
-		t.Fatal("empty reason attached")
+	if got := (&Outcome{Status: "refused", Code: "OTHER"}).WithRefusalReason(explain); got.RefusalReason != "" {
+		t.Fatal("unexplained code attached a reason")
+	}
+	if got := (&Outcome{Status: "refused"}).WithRefusalReason(nil); got.RefusalReason != "" {
+		t.Fatal("nil explanation attached a reason")
 	}
 	var missing *Outcome
-	if missing.WithRefusalReason("workspace_read_only") != nil {
+	if missing.WithRefusalReason(explain) != nil {
 		t.Fatal("nil outcome replaced")
 	}
 }

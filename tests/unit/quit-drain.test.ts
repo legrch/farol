@@ -1093,4 +1093,76 @@ describe("Quit claim steps and stage observation (0.5.27 stabilization)", () => 
       vi.useRealTimers();
     }
   });
+
+  it("gives a hung closer one terminal timeout before recording and reports a late finish separately", async () => {
+    vi.useFakeTimers();
+    try {
+      const stages: string[] = [];
+      let release!: () => void;
+      const quit = vi.fn();
+      const drain = createQuitDrain({
+        deadlineMs: 100,
+        collect: () => [
+          {
+            name: "connector",
+            close: () => new Promise<void>((r) => (release = r)),
+          },
+        ],
+        record: async () => undefined,
+        quit,
+        observe: (stage) =>
+          stages.push(
+            stage.stage === "closer-end"
+              ? `closer-end:${stage.result}`
+              : stage.stage,
+          ),
+      });
+      drain.onBeforeQuit({ preventDefault: () => undefined });
+      await vi.advanceTimersByTimeAsync(150);
+      expect(quit).toHaveBeenCalledOnce();
+      const timedOut = stages.indexOf("closer-end:timed-out");
+      expect(timedOut).toBeGreaterThan(-1);
+      expect(timedOut).toBeLessThan(stages.indexOf("record-begin"));
+      release();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(stages.filter((s) => s.startsWith("closer-end"))).toEqual([
+        "closer-end:timed-out",
+      ]);
+      expect(stages.at(-1)).toBe("closer-late");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps one terminal recorder result when the recorder finishes after the budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const stages: string[] = [];
+      let release!: () => void;
+      const quit = vi.fn();
+      const drain = createQuitDrain({
+        deadlineMs: 100,
+        collect: () => [],
+        record: () => new Promise<void>((r) => (release = r)),
+        quit,
+        observe: (stage) =>
+          stages.push(
+            stage.stage === "record-end"
+              ? `record-end:${stage.result}`
+              : stage.stage,
+          ),
+      });
+      drain.onBeforeQuit({ preventDefault: () => undefined });
+      await vi.advanceTimersByTimeAsync(150);
+      release();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(stages.filter((s) => s.startsWith("record-end"))).toEqual([
+        "record-end:timed-out",
+      ]);
+      expect(stages).toContain("record-late");
+      expect(quit).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
