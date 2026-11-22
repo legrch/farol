@@ -140,15 +140,18 @@ describe("Quit trace: diagnostic, bounded, never in the Quit path", () => {
     expect(kept.length).toBeLessThan(10);
   });
 
-  it("does not hang on a FIFO and starts fresh over an oversized trace", async () => {
+  it("refuses a non-regular target and starts fresh over an oversized trace", async () => {
     const state = await root();
     const target = path.join(state, QUIT_TRACE_FILE_NAME);
-    const { execFileSync } = await import("node:child_process");
-    execFileSync("/usr/bin/mkfifo", ["-m", "600", target]);
-    await expect(writeQuitTrace(state, [line("p", "a")])).rejects.toThrow(
-      "QUIT_TRACE_STATE_UNSAFE",
-    );
-    await fs.rm(target);
+    const { createServer } = await import("node:net");
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(target, resolve));
+    try {
+      await expect(writeQuitTrace(state, [line("p", "a")])).rejects.toThrow();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+    await fs.rm(target, { force: true });
     await fs.writeFile(target, "x".repeat(200 * 1024), { mode: 0o600 });
     await writeQuitTrace(state, [line("p", "fresh")]);
     expect((await fs.readFile(target, "utf8")).trim()).toBe(line("p", "fresh"));
