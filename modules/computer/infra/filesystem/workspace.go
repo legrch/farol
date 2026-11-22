@@ -243,6 +243,7 @@ func openedRoot(d port.Descriptor) (int, *port.DirectoryBinding, error) {
 	if err != nil {
 		return -1, nil, openAtError(err, "root")
 	}
+	var ancestor unix.Stat_t
 	for i, part := range parts {
 		child, err := directory(fd, part)
 		unix.Close(fd)
@@ -251,11 +252,14 @@ func openedRoot(d port.Descriptor) (int, *port.DirectoryBinding, error) {
 		}
 		fd = child
 		if i == len(approved)-1 {
-			// The approved ancestor must still be a real, statable directory.
-			if _, err := stat(fd); err != nil {
+			// The approved ancestor must still be a real, statable directory;
+			// its live identity is this operation's witness of it.
+			a, err := stat(fd)
+			if err != nil {
 				unix.Close(fd)
 				return -1, nil, refusal("WORKSPACE_PATH_REFUSED")
 			}
+			ancestor = a
 		}
 	}
 	s, err := stat(fd)
@@ -268,9 +272,10 @@ func openedRoot(d port.Descriptor) (int, *port.DirectoryBinding, error) {
 		return -1, nil, pathRefusal("root", "unsafe_root")
 	}
 	return fd, &port.DirectoryBinding{
-		Root:         "/" + strings.Join(parts, "/"),
-		ApprovedRoot: port.Root{Path: "/" + strings.Join(approved, "/"), Device: d.ApprovedRoot.Device, Inode: d.ApprovedRoot.Inode},
-		Physical:     port.Root{Path: "/" + strings.Join(parts, "/"), Device: strconv.FormatUint(uint64(s.Dev), 10), Inode: strconv.FormatUint(s.Ino, 10)},
+		Root:             "/" + strings.Join(parts, "/"),
+		ApprovedRoot:     port.Root{Path: "/" + strings.Join(approved, "/"), Device: d.ApprovedRoot.Device, Inode: d.ApprovedRoot.Inode},
+		Physical:         port.Root{Path: "/" + strings.Join(parts, "/"), Device: strconv.FormatUint(uint64(s.Dev), 10), Inode: strconv.FormatUint(s.Ino, 10)},
+		ApprovedPhysical: port.Root{Path: "/" + strings.Join(approved, "/"), Device: strconv.FormatUint(uint64(ancestor.Dev), 10), Inode: strconv.FormatUint(ancestor.Ino, 10)},
 	}, nil
 }
 

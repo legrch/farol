@@ -6278,10 +6278,12 @@ function codexAgentCheckWorkspace(
   );
 }
 
+// `identity` is a live measurement taken by the same verification attempt
+// (path-bound approval: never the saved pair); null compares path only.
 async function inspectOwnerWorkspace(
   generation: number,
   workspace: Pick<ApprovedProductWorkspace, "workspaceId" | "root">,
-  identity: WorkspaceRootIdentity,
+  identity: WorkspaceRootIdentity | null,
   diagnosticAction: string,
 ): Promise<{ ok: true } | { ok: false; code: string }> {
   if (!desktopGoCore) return { ok: false, code: "WORKSPACE_READ_FAILED" };
@@ -6294,8 +6296,9 @@ async function inspectOwnerWorkspace(
     const current = configuration?.snapshot();
     if (
       result.root.path !== workspace.root ||
-      result.root.device !== identity.device ||
-      result.root.inode !== identity.inode ||
+      (identity !== null &&
+        (result.root.device !== identity.device ||
+          result.root.inode !== identity.inode)) ||
       current?.status !== "ready" ||
       current.settings.computer.generation !== generation
     )
@@ -6311,10 +6314,12 @@ async function inspectOwnerWorkspace(
   }
 }
 
+// Path-bound approval: a list is bound by path and generation; the Go root
+// identity is a live measurement and is not compared with the saved pair.
 async function listOwnerWorkspace(
   generation: number,
   workspace: Pick<ApprovedProductWorkspace, "workspaceId" | "root">,
-  identity: WorkspaceRootIdentity,
+  _savedIdentity: unknown,
   relativePath: string,
   diagnosticAction?: string,
 ): Promise<
@@ -6340,8 +6345,6 @@ async function listOwnerWorkspace(
     const current = configuration?.snapshot();
     if (
       result.root.path !== workspace.root ||
-      result.root.device !== identity.device ||
-      result.root.inode !== identity.inode ||
       current?.status !== "ready" ||
       current.settings.computer.generation !== generation
     ) {

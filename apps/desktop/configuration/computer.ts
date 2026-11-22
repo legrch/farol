@@ -331,12 +331,18 @@ export function createConfigurationComputer(
           return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
         // Recheck only the already approved root through the same descriptor.
         // No child names/content are returned and no selected-folder binding changes.
-        const checked = await inspectOwnerWorkspace(
-          snapshot.settings.computer.generation,
-          workspace,
-          identity,
-          `settings:computer.check-folder:${workspace.workspaceId}`,
-        );
+        // Path-bound approval: Go's live root is compared with this check's
+        // own live measurement, never with the saved pair.
+        const measuredNow = await measuredRootIdentity(workspace.root);
+        const checked =
+          measuredNow === null
+            ? ({ ok: false, code: "WORKSPACE_NOT_FOUND" } as const)
+            : await inspectOwnerWorkspace(
+                snapshot.settings.computer.generation,
+                workspace,
+                measuredNow,
+                `settings:computer.check-folder:${workspace.workspaceId}`,
+              );
         const reachable = checked.ok;
         const recorded = await configuration()!.recordFolderAccessCheck(
           workspace.workspaceId,

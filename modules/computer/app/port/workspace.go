@@ -57,6 +57,9 @@ type DirectoryBinding struct {
 	// operation opened it. Internal only: callers compare it across the phases
 	// of one operation to keep them on one directory.
 	Physical Root
+	// ApprovedPhysical is the approved ancestor's live identity measured when
+	// this operation opened it (internal; see Physical).
+	ApprovedPhysical Root
 }
 
 type ListResponse struct {

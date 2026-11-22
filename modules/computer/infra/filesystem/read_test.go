@@ -338,3 +338,23 @@ func TestReadCancellationAndNarrowedRoot(t *testing.T) {
 	_, err := New(d.Root+"-home").Read(ctx, port.ReadRequest{Workspace: d, RelativePath: "note.md"})
 	expectCode(t, err, "WORKSPACE_REQUEST_CANCELLED")
 }
+
+// Path-bound approval (owner decision 2026-11-22): with a saved pair from
+// before a renumbering reboot, Inspect still succeeds and reports the
+// approved root's live identity as this operation's witness, keeping the
+// saved pair only as the approval record.
+func TestInspectReportsLiveApprovedRootWitnessForStaleSavedPair(t *testing.T) {
+	d := fixture(t)
+	live := d.ApprovedRoot
+	d.ApprovedRoot.Device, d.ApprovedRoot.Inode = "1", "1"
+	binding, err := New(d.Root+"-home").Inspect(context.Background(), port.ListRequest{Workspace: d, RelativePath: "."})
+	if err != nil || binding == nil {
+		t.Fatalf("stale saved pair refused: %v", err)
+	}
+	if binding.ApprovedRoot != d.ApprovedRoot {
+		t.Fatalf("approval record changed: %+v", binding.ApprovedRoot)
+	}
+	if binding.ApprovedPhysical != live || binding.Physical != live {
+		t.Fatalf("live witness missing: approved %+v, physical %+v, want %+v", binding.ApprovedPhysical, binding.Physical, live)
+	}
+}
