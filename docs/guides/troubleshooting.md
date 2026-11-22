@@ -46,7 +46,7 @@ Follow [ChatGPT app connection](chatgpt-connection.md) for the current verificat
 
 In **Setup → Workspaces**, review the physical path, the row's **Access** choice, exclusions and current **✓ Works** state. Use **Check access** when offered for a changed or stale scope. Every listed workspace needs a current check before continuing. A connection with no workspace grants no file access.
 
-For `WORKSPACE_ROOT_CHANGED`, such as after a Mac restart or reconnecting a volume, preserve any pending operation first. macOS can give the startup disk a new device number at boot; Farol notices a saved folder whose identity no longer matches when it launches, withdraws that folder's stale **✓ Works** check and does not resume the connection with it. The documented owner path is still to remove and re-add the folder deliberately; verification alone does not renew its changed physical identity. Review saved access again after adding it. **Re-check** on a working folder measures it again at any time. See [Workspace access](folder-access.md).
+An approved folder is the folder at its path. After a Mac restart, macOS can give the startup disk a new device number; Farol keeps working with the folder at the same path and resumes the connection normally. `WORKSPACE_ROOT_CHANGED` now means the folder at the path was replaced while one operation was using it: that operation stopped without using the new folder. Preserve any pending operation first, check the folder in Settings, then try again. A folder that is gone at launch has its **✓ Works** check withdrawn. See [Workspace access](folder-access.md).
 
 Shell/Git or Tasks being unavailable is not a reason to approve broader file access. Check [capability status](../reference/status.md).
 

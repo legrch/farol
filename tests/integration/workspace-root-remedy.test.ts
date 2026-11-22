@@ -16,13 +16,12 @@ const verified = {
 };
 
 describe("workspace root change presentation (not native authority)", () => {
-  it("reports an uncertain cause, blocked access and no credential reset", () => {
+  it("says the operation stopped on a mid-operation folder change, without a re-add ritual", () => {
     const message = workspaceRootChangeRemedy("WORKSPACE_ROOT_CHANGED");
-    expect(message).toContain("cannot confirm");
-    expect(message).toContain("may have changed");
-    expect(message).toContain("Access remains blocked");
-    expect(message).toContain("login or connection key will not fix");
+    expect(message).toContain("changed while Farol was using it");
+    expect(message).toContain("without using the new folder");
     expect(message).toContain("unknown operation");
+    expect(message).not.toContain("Remove this folder");
     expect(workspaceRootChangeRemedy("OTHER_ERROR")).toBeNull();
     expect(workspaceRootChangeRemedy(null)).toBeNull();
   });

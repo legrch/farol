@@ -4092,10 +4092,12 @@ async function measuredRootIdentity(
   }
 }
 
-// Read-only measurement of every identity-bound folder (a legacy record with no
-// saved check can still count as verified), then one authority-reducing write.
-// Returns false when drift was found but could not be withdrawn: the caller
-// must then not resume a connector that would carry the stale grant.
+// Read-only measurement of every identity-bound folder, then one
+// authority-reducing write for folders that are no longer there. Path-bound
+// approval (owner decision 2026-11-22): a changed device or inode at the same
+// path is diagnostic only and keeps the check; only a vanished or unreachable
+// folder withdraws it. Returns false when a vanished folder could not be
+// withdrawn: the caller must then not resume.
 async function withdrawDriftedWorkspaceChecksAtLaunch(): Promise<boolean> {
   if (!configuration) return true;
   let drifted = 0;
@@ -4127,8 +4129,14 @@ async function withdrawDriftedWorkspaceChecksAtLaunch(): Promise<boolean> {
           workspace.rootIdentity,
           measured,
         );
-        // A vanished folder refuses every call just like a changed one.
-        if (measured === null || drift !== "same")
+        // Numeric drift (a reboot renumbered the volume) and a recreated
+        // folder at the same path keep their check: the folder at the path
+        // is the workspace. Only a vanished folder withdraws it.
+        if (drift !== "same")
+          console.warn(
+            `FAROL_WORKSPACE_ROOT_OBSERVED:${JSON.stringify({ drift })}`,
+          );
+        if (measured === null)
           found.push({
             workspaceId: workspace.workspaceId,
             root: workspace.root,
@@ -11363,10 +11371,10 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   });
   quitSignals.ready();
   void installedUpdates.initialize();
-  // A reboot can renumber the startup volume. A saved folder whose identity no
-  // longer matches would make every connector call refuse while the sidebar
-  // still says Connected, so withdraw its stale check before any resume. If
-  // drift was found but could not be withdrawn, do not resume at all.
+  // A reboot can renumber the startup volume; with path-bound approval that no
+  // longer refuses calls, so the connector resumes normally. A folder that is
+  // gone has its check withdrawn first; if that withdrawal fails, do not
+  // resume at all.
   const driftSettled = await withdrawDriftedWorkspaceChecksAtLaunch();
   const beforeConnectorResume = configuration.snapshot();
   void resumeComputerConnector(

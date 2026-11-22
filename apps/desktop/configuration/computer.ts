@@ -419,10 +419,14 @@ export function createConfigurationComputer(
         };
         if (measured === null)
           return refuseStale("WORKSPACE_VERIFICATION_FAILED");
-        if (classifyWorkspaceRootDrift(bound, measured) !== "same" && bound) {
-          // Never rebind here: path + inode cannot prove the same folder.
-          return refuseStale("WORKSPACE_ROOT_CHANGED");
-        }
+        // Path-bound approval (owner decision 2026-11-22): a changed device
+        // or inode at the same path is diagnostic only, so verification
+        // proceeds against the folder now at the path. The saved pair is not
+        // rewritten here.
+        if (classifyWorkspaceRootDrift(bound, measured) !== "same" && bound)
+          console.warn(
+            `FAROL_WORKSPACE_ROOT_OBSERVED:${JSON.stringify({ drift: classifyWorkspaceRootDrift(bound, measured) })}`,
+          );
         if (!bound) {
           if (snapshot.status !== "ready")
             return configurationFailure("SETTINGS_UNAVAILABLE");

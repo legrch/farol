@@ -376,12 +376,13 @@ describe("optional workspace continuity reader (non-authorizing)", () => {
       { device: "999", inode: "18446744073709551615" },
       true,
     );
-    expect(mismatch).toMatchObject({
-      ok: false,
-      error: "WORKSPACE_ROOT_CHANGED",
-    });
+    // Path-bound approval: the measured pair is diagnostic, so the check is
+    // recorded, keyed to the saved pair, never to the parsed continuity.
+    expect(mismatch).toMatchObject({ ok: true });
     const persisted = await f.store.loadExisting();
-    expect(persisted!.computer.workspaces[0]!.accessCheck).toBeUndefined();
+    expect(
+      persisted!.computer.workspaces[0]!.accessCheck?.rootIdentity,
+    ).toEqual(valid.computer.workspaces[0]!.rootIdentity);
     expect(persisted!.connectors.secureMcp.attachment).toBeNull();
   });
 });
