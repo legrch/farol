@@ -24,6 +24,14 @@ describe("ChatGPT pre-submit remedies for the owner-selected app", () => {
     );
   });
 
+  it("says nothing was sent and what to wait for when no Temporary Chat was confirmed", () => {
+    const message = chatGptPreSubmitRemedy("CHATGPT_TEMPORARY_CHAT_REQUIRED");
+    expect(message).toMatch(/^Nothing was sent\./u);
+    expect(message).toContain("Temporary Chat");
+    expect(message).toContain("history and draft were left unchanged");
+    expect(message).toContain("finished loading in Farol");
+  });
+
   it("keeps Ping prerequisites about the ChatGPT page, not folder access", () => {
     const message = chatGptPreSubmitRemedy(
       "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
