@@ -269,9 +269,6 @@ describe("configuration computer", () => {
   });
 
   it("verifies a folder whose device number moved without rebinding it", async () => {
-    // Path + inode cannot prove the same folder (a mounted copy or a
-    // same-inode directory under a removed mount). Only enrolled continuity
-    // evidence may move a binding; ordinary Verify keeps refusing.
     const workspace = {
       workspaceId: "00000000-0000-4000-8000-000000000001",
       root: "/tmp/project",
@@ -313,6 +310,46 @@ describe("configuration computer", () => {
     expect(configuration.rebindWorkspaceRootIdentity).not.toHaveBeenCalled();
     expect(configuration.bindWorkspaceRootIdentity).not.toHaveBeenCalled();
     expect(configuration.recordComputerVerification).toHaveBeenCalledOnce();
+  });
+
+  it("refuses evidence when the folder is replaced during Git discovery", async () => {
+    const workspace = {
+      workspaceId: "00000000-0000-4000-8000-000000000001",
+      root: "/tmp/project",
+      label: "project",
+      access: "read" as const,
+      excludedPaths: [],
+      rootIdentity: { device: "16777231", inode: "335036" },
+    };
+    const settings = settingsWithWorkspace(workspace);
+    const configuration = {
+      snapshot: () => ({ status: "ready" as const, settings }),
+      rebindWorkspaceRootIdentity: vi.fn(),
+      bindWorkspaceRootIdentity: vi.fn(),
+      recordComputerVerification: vi.fn(async () => ({
+        ok: true,
+        snapshot: { status: "ready" as const, settings },
+      })),
+      withdrawDriftedWorkspaceChecks: vi.fn(async () => ({ ok: true })),
+    };
+    const measured = vi
+      .fn()
+      .mockResolvedValue({ device: "16777233", inode: "999" })
+      .mockResolvedValueOnce({ device: "16777233", inode: "335036" });
+    const ports = makePorts({
+      configuration: () => configuration,
+      measuredRootIdentity: measured,
+      inspectOwnerWorkspace: vi.fn(async () => ({ ok: true })),
+      secureMcpConnectorRuntime: () => ({ isRunning: () => false }),
+    });
+    const result = await createConfigurationComputer(
+      ports,
+    ).configureAdmittedComputer({
+      kind: "computer.verify-workspace",
+      workspaceId: workspace.workspaceId,
+    } as ComputerConfigurationCommand);
+    expect(result).toMatchObject({ ok: false });
+    expect(configuration.recordComputerVerification).not.toHaveBeenCalled();
   });
 
   it.each(["WORKSPACE_ROOT_CHANGED", "WORKSPACE_NOT_FOUND"])(

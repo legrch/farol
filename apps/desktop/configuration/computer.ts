@@ -489,6 +489,16 @@ export function createConfigurationComputer(
           workspace.root,
           workspace.gitHistoryApproved === true,
         );
+        // Git discovery reads by pathname; the evidence is published only if
+        // the folder is still the one measured and inspected above, so a
+        // green check and its Git metadata come from the same tree.
+        const afterDiscovery = await measuredRootIdentity(workspace.root);
+        if (
+          afterDiscovery === null ||
+          afterDiscovery.device !== measured.device ||
+          afterDiscovery.inode !== measured.inode
+        )
+          return refuseStale("WORKSPACE_ROOT_CHANGED");
         // The inspection takes a moment, and a connector or Agent may have started
         // meanwhile; a re-verification rebinds the authority either would carry,
         // so it is admitted again right before it commits.

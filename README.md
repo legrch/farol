@@ -203,16 +203,16 @@ The other ChatGPT choices are **Always ask**, **Allow read-only tools** and **Al
 
 Start with the state Farol actually shows, and note the version and exact error.
 
-| What you see                                                        | What to do first                                                                                                                                                                 |
-| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **macOS refuses to open Farol**                                     | Keep the warning. The app is unsigned and not notarized; do not remove quarantine or disable Gatekeeper.                                                                         |
-| **Connection helper needed**                                        | Read the cause in **Connect this Mac**. Farol uses its bundled helper; installing an unrelated tunnel-client does not repair it.                                                 |
-| **Tunnel or key refused**                                           | Check the intended ChatGPT workspace and tunnel ID. Use a Restricted key with Tunnels Read + Use. If **Key saved** appears, the blank field is intentional.                      |
-| **Farol is connected, but ChatGPT cannot reach it**                 | Select the plugin attached to the same tunnel and Farol instance, and reuse it rather than creating another. A local Connected status does not establish the ChatGPT attachment. |
-| **Workspace access refused**                                        | Review the saved path, Access choice, exclusions and **✓ Works**. Use **Check access** if offered. Broader access is not a fix for an unavailable tool.                          |
-| **A folder changed during an operation** (`WORKSPACE_ROOT_CHANGED`) | The folder or its saved settings changed while a check ran, so it stopped. Check the folder in Settings and try again; resolve any unknown operation first.                      |
-| **A result is pending or unknown**                                  | Open **Review unresolved actions**, then **Refresh status** to observe the original operation. Do not repeat Connect, Test or an edit, delete state, or change tunnels.          |
-| **An update is blocked**                                            | Read the stated blocker. Pending work or an active session can block an update. Settle the original work; do not replace the app or delete its journals.                         |
+| What you see                                                    | What to do first                                                                                                                                                                 |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **macOS refuses to open Farol**                                 | Keep the warning. The app is unsigned and not notarized; do not remove quarantine or disable Gatekeeper.                                                                         |
+| **Connection helper needed**                                    | Read the cause in **Connect this Mac**. Farol uses its bundled helper; installing an unrelated tunnel-client does not repair it.                                                 |
+| **Tunnel or key refused**                                       | Check the intended ChatGPT workspace and tunnel ID. Use a Restricted key with Tunnels Read + Use. If **Key saved** appears, the blank field is intentional.                      |
+| **Farol is connected, but ChatGPT cannot reach it**             | Select the plugin attached to the same tunnel and Farol instance, and reuse it rather than creating another. A local Connected status does not establish the ChatGPT attachment. |
+| **Workspace access refused**                                    | Review the saved path, Access choice, exclusions and **✓ Works**. Use **Check access** if offered. Broader access is not a fix for an unavailable tool.                          |
+| **Workspace changed during a check** (`WORKSPACE_ROOT_CHANGED`) | The folder or its saved settings changed while a check ran, so it stopped. Check the folder in Settings and try again; resolve any unknown operation first.                      |
+| **A result is pending or unknown**                              | Open **Review unresolved actions**, then **Refresh status** to observe the original operation. Do not repeat Connect, Test or an edit, delete state, or change tunnels.          |
+| **An update is blocked**                                        | Read the stated blocker. Pending work or an active session can block an update. Settle the original work; do not replace the app or delete its journals.                         |
 
 More in [Connection troubleshooting](docs/guides/troubleshooting.md).
 
