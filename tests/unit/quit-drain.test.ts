@@ -1003,6 +1003,8 @@ describe("Quit claim steps and stage observation (0.5.27 stabilization)", () => 
     drain.onBeforeQuit({ preventDefault: () => undefined });
     drain.onBeforeQuit({ preventDefault: () => undefined });
     expect(admission).toHaveBeenCalledOnce();
+    // Diagnostics are delivered after the deadline-sensitive work.
+    await new Promise((resolve) => setImmediate(resolve));
     expect(stages).toContain("second-quit");
     release();
     await vi.waitFor(() => expect(quit).toHaveBeenCalledOnce());
@@ -1185,11 +1187,13 @@ describe("Quit claim steps and stage observation (0.5.27 stabilization)", () => 
       });
       drain.onBeforeQuit({ preventDefault: () => undefined });
       for (let i = 0; i < 20; i++) await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
       expect(stages).toContain("record-begin");
       // Move the clock past the deadline without running the overdue timer.
       vi.setSystemTime(Date.now() + 101);
       release();
       for (let i = 0; i < 20; i++) await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(0);
       expect(stages.filter((s) => s.startsWith("record-end"))).toEqual([
         "record-end:timed-out",
       ]);
@@ -1234,6 +1238,7 @@ describe("Quit claim steps and stage observation (0.5.27 stabilization)", () => 
         if (settlement === "fulfilled") fulfil({ status: "accepted" });
         else reject(new Error("late"));
         for (let i = 0; i < 20; i++) await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(0);
         expect(stages.filter((s) => s.startsWith("preparation-"))).toEqual([
           "preparation-begin",
           "preparation-end:timed-out",
@@ -1571,5 +1576,41 @@ describe("Quit claim steps and stage observation (0.5.27 stabilization)", () => 
     // The same number of turns as the baseline drain: recording begins in
     // the continuation that receives the drain result.
     expect(turns).toBe(5);
+  });
+
+  it("keeps the receipt and fence identical when diagnostics are slow", async () => {
+    const run = async (slow: boolean) => {
+      vi.useFakeTimers();
+      try {
+        const receipts: QuitDrainReceipt[] = [];
+        let fenceAtStart: boolean | undefined;
+        const quit = vi.fn();
+        const drain = createQuitDrain({
+          deadlineMs: 100,
+          preparationMs: 10,
+          recordReserveMs: 10,
+          prepare: (context) => {
+            fenceAtStart = context.canStartEffect();
+            return Promise.resolve({ status: "skipped" });
+          },
+          collect: () => [{ name: "connector", close: async () => undefined }],
+          record: async (receipt) => void receipts.push(receipt),
+          quit,
+          // A slow sink spends 30 ms of wall clock on every stage.
+          ...(slow
+            ? { observe: () => void vi.setSystemTime(Date.now() + 30) }
+            : {}),
+        });
+        drain.onBeforeQuit({ preventDefault: () => undefined });
+        await vi.advanceTimersByTimeAsync(200);
+        return { receipts, fenceAtStart, quit: quit.mock.calls.length };
+      } finally {
+        vi.useRealTimers();
+      }
+    };
+    const fast = await run(false);
+    const slow = await run(true);
+    expect(fast.receipts).toEqual([{ drained: true, unconfirmed: [] }]);
+    expect(slow).toEqual(fast);
   });
 });
