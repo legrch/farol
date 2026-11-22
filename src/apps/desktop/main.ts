@@ -7538,10 +7538,24 @@ async function configureAdmittedProduct(
         ) {
           return refuseRoute("project_root");
         }
+        // Path-bound approval: freeze the writer folder's live identity now;
+        // the saved pair is diagnostic and goes stale when a reboot renumbers
+        // the volume. Every later admission re-measures against this witness.
+        const writerStat = await lstat(workspace.root, { bigint: true });
+        if (
+          !writerStat.isDirectory() ||
+          writerStat.isSymbolicLink() ||
+          (await realpath(workspace.root)) !== workspace.root
+        ) {
+          return refuseRoute("workspace_identity");
+        }
         const authority = new PhysicalCodexHandoffAuthority({
           workspaceId: command.workspaceId,
           writerRoot: workspace.root,
-          writerIdentity: workspace.rootIdentity,
+          writerIdentity: {
+            device: String(writerStat.dev),
+            inode: String(writerStat.ino),
+          },
           projectRoot: command.projectRoot,
           projectIdentity: {
             device: String(projectStat.dev),
