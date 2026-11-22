@@ -175,7 +175,30 @@ describe("Quit trace: diagnostic, bounded, never in the Quit path", () => {
     ).join("\n");
     expect(Buffer.byteLength(valid)).toBeGreaterThan(128 * 1024);
     await fs.writeFile(target, `${valid}\n`, { mode: 0o600 });
-    await writeQuitTrace(state, [line("p", "fresh")]);
+    const original = fs.open.bind(fs);
+    let reads = 0;
+    const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await original(...(args as Parameters<typeof fs.open>));
+      if (args[0] === target) {
+        const read = handle.read.bind(handle);
+        const readFile = handle.readFile.bind(handle);
+        handle.read = ((...rest: unknown[]) => {
+          reads++;
+          return (read as (...a: unknown[]) => unknown)(...rest);
+        }) as typeof handle.read;
+        handle.readFile = ((...rest: unknown[]) => {
+          reads++;
+          return (readFile as (...a: unknown[]) => unknown)(...rest);
+        }) as typeof handle.readFile;
+      }
+      return handle;
+    });
+    try {
+      await writeQuitTrace(state, [line("p", "fresh")]);
+    } finally {
+      open.mockRestore();
+    }
+    expect(reads).toBe(0);
     expect((await fs.readFile(target, "utf8")).trim()).toBe(line("p", "fresh"));
   });
 });

@@ -65,6 +65,7 @@ export type QuitStage =
   // A closer or recorder that finished after its terminal result was emitted.
   | Readonly<{ stage: "closer-late"; closer: number; name: string }>
   | Readonly<{ stage: "record-late" }>
+  | Readonly<{ stage: "preparation-late" }>
   | Readonly<{ stage: "drain-end"; drained: boolean; unconfirmed: number }>
   | Readonly<{ stage: "record-begin" }>
   | Readonly<{
@@ -317,6 +318,25 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
           let timedOut = false;
           let preparing = true;
           let preparationTimer: NodeJS.Timeout | undefined;
+          // Exactly one terminal preparation-end. The original attempt's own
+          // settlement after that (fulfilled or rejected) is preparation-late.
+          let preparationTerminal = false;
+          let preparationTimedOut = false;
+          const timedOutOrLate = () => preparationTimedOut;
+          const endPreparation = (
+            result: QuitPreparationResult["status"] | "timed-out" | "failed",
+          ) => {
+            if (preparationTerminal) return;
+            preparationTerminal = true;
+            // Settling after the absolute deadline is a timeout even when its
+            // callback ran before the overdue timer did.
+            const final = preparationRemaining() === 0 ? "timed-out" : result;
+            preparationTimedOut = final === "timed-out";
+            emit(ports.observe, { stage: "preparation-end", result: final });
+            // The attempt itself settled, but only after the deadline.
+            if (final === "timed-out" && result !== "timed-out")
+              emit(ports.observe, { stage: "preparation-late" });
+          };
           const expired = new Promise<QuitPreparationResult>((resolve) => {
             // Referenced: pending preparation must not strand normal Quit.
             preparationTimer = setTimeout(() => {
@@ -332,26 +352,24 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
                   preparing && Date.now() < preparationDeadlineAt,
               }),
             );
+            // Observe the original attempt without settling or cancelling it.
+            void originalAttempt.then(
+              () => {
+                if (preparationTerminal && timedOutOrLate())
+                  emit(ports.observe, { stage: "preparation-late" });
+              },
+              () => {
+                if (preparationTerminal && timedOutOrLate())
+                  emit(ports.observe, { stage: "preparation-late" });
+              },
+            );
             if (preparationRemaining() === 0) {
               // Synchronous hook work also spends the original budget.
-              // Observe late rejection without settling/cancelling its attempt.
-              void originalAttempt.catch(() => undefined);
               unconfirmed = true;
-              emit(ports.observe, {
-                stage: "preparation-end",
-                result: "timed-out",
-              });
+              endPreparation("timed-out");
             } else {
               const result = await Promise.race([originalAttempt, expired]);
-              // Settling after the absolute deadline is a timeout even when
-              // its callback ran before the overdue timer did.
-              emit(ports.observe, {
-                stage: "preparation-end",
-                result:
-                  timedOut || preparationRemaining() === 0
-                    ? "timed-out"
-                    : result.status,
-              });
+              endPreparation(timedOut ? "timed-out" : result.status);
               switch (result.status) {
                 case "accepted":
                 case "skipped":
@@ -365,7 +383,7 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
           } catch {
             // A throwing hook cannot prove whether it dispatched an effect.
             unconfirmed = true;
-            emit(ports.observe, { stage: "preparation-end", result: "failed" });
+            endPreparation("failed");
           } finally {
             preparing = false;
             clearTimeout(preparationTimer);

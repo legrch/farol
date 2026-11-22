@@ -1166,9 +1166,8 @@ describe("Quit claim steps and stage observation (0.5.27 stabilization)", () => 
     }
   });
 
-  it("reports a recorder that settles after the deadline as timed out even before the timer fires", async () => {
-    let now = 1_000_000;
-    const spy = vi.spyOn(Date, "now").mockImplementation(() => now);
+  it("reports a recorder that settles after the deadline as timed out while the timer is still pending", async () => {
+    vi.useFakeTimers();
     try {
       const stages: string[] = [];
       let release!: () => void;
@@ -1185,42 +1184,64 @@ describe("Quit claim steps and stage observation (0.5.27 stabilization)", () => 
           ),
       });
       drain.onBeforeQuit({ preventDefault: () => undefined });
-      await vi.waitFor(() => expect(stages).toContain("record-begin"));
-      now += 101;
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      expect(stages).toContain("record-begin");
+      // Move the clock past the deadline without running the overdue timer.
+      vi.setSystemTime(Date.now() + 101);
       release();
-      await vi.waitFor(() => expect(stages).toContain("record-late"));
+      for (let i = 0; i < 20; i++) await Promise.resolve();
       expect(stages.filter((s) => s.startsWith("record-end"))).toEqual([
         "record-end:timed-out",
       ]);
+      expect(stages.slice(-3)).toEqual([
+        "record-end:timed-out",
+        "record-late",
+        "exit-requested",
+      ]);
     } finally {
-      spy.mockRestore();
+      vi.useRealTimers();
     }
   });
 
-  it("reports preparation that settles after its deadline as timed out", async () => {
-    let now = 2_000_000;
-    const spy = vi.spyOn(Date, "now").mockImplementation(() => now);
-    try {
-      const results: string[] = [];
-      let release!: (value: { status: "accepted" }) => void;
-      const drain = createQuitDrain({
-        deadlineMs: 1_000,
-        preparationMs: 100,
-        prepare: () => new Promise((r) => (release = r)),
-        collect: () => [],
-        record: async () => undefined,
-        quit: () => undefined,
-        observe: (stage) => {
-          if (stage.stage === "preparation-end") results.push(stage.result);
-        },
-      });
-      drain.onBeforeQuit({ preventDefault: () => undefined });
-      now += 150;
-      release({ status: "accepted" });
-      await vi.waitFor(() => expect(results).toHaveLength(1));
-      expect(results).toEqual(["timed-out"]);
-    } finally {
-      spy.mockRestore();
-    }
-  });
+  it.each(["fulfilled", "rejected"] as const)(
+    "reports preparation %s after its deadline as one timeout plus a late event",
+    async (settlement) => {
+      vi.useFakeTimers();
+      try {
+        const stages: string[] = [];
+        let fulfil!: (value: { status: "accepted" }) => void;
+        let reject!: (error: Error) => void;
+        const drain = createQuitDrain({
+          deadlineMs: 1_000,
+          preparationMs: 100,
+          prepare: () =>
+            new Promise((resolve, no) => {
+              fulfil = resolve;
+              reject = no;
+            }),
+          collect: () => [],
+          record: async () => undefined,
+          quit: () => undefined,
+          observe: (stage) =>
+            stages.push(
+              stage.stage === "preparation-end"
+                ? `preparation-end:${stage.result}`
+                : stage.stage,
+            ),
+        });
+        drain.onBeforeQuit({ preventDefault: () => undefined });
+        vi.setSystemTime(Date.now() + 150);
+        if (settlement === "fulfilled") fulfil({ status: "accepted" });
+        else reject(new Error("late"));
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+        expect(stages.filter((s) => s.startsWith("preparation-"))).toEqual([
+          "preparation-begin",
+          "preparation-end:timed-out",
+          "preparation-late",
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 });

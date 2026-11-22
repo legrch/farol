@@ -5,6 +5,8 @@ const constructed = vi.hoisted(() => ({
   shown: 0,
   hidden: 0,
   readyToShow: null as null | (() => void),
+  bounds: [] as { x: number }[],
+  events: [] as string[],
   displays: new Map<string, () => void>(),
 }));
 vi.mock("electron", () => ({
@@ -26,13 +28,17 @@ vi.mock("electron", () => ({
     isVisible() {
       return constructed.shown > constructed.hidden;
     }
-    setBounds() {}
+    setBounds(bounds: { x: number }) {
+      constructed.bounds.push(bounds);
+      constructed.events.push(`bounds:${bounds.x}`);
+    }
     destroy() {}
     hide() {
       constructed.hidden++;
     }
     showInactive() {
       constructed.shown++;
+      constructed.events.push("show");
     }
   },
   screen: {
@@ -179,6 +185,42 @@ describe("Quit progress panel", () => {
       available = false;
       constructed.displays.get("display-removed")?.();
       expect(constructed.hidden).toBe(1);
+      panel.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("applies fresh bounds before the first show and after a display change", () => {
+    vi.useFakeTimers();
+    Object.assign(constructed, {
+      count: 0,
+      shown: 0,
+      hidden: 0,
+      readyToShow: null,
+      bounds: [],
+      events: [],
+    });
+    constructed.displays.clear();
+    let x = 10;
+    try {
+      const panel = createQuitProgressWindow({
+        deadlineMs: 60_000,
+        delayMs: 1_500,
+        placement: () => ({ x, y: 0, width: 380, height: 220 }),
+      });
+      panel.observe({ stage: "drain-entered" });
+      vi.advanceTimersByTime(1_600);
+      x = 20;
+      constructed.readyToShow?.();
+      x = 30;
+      constructed.displays.get("display-metrics-changed")?.();
+      expect(constructed.events).toEqual([
+        "bounds:20",
+        "show",
+        "bounds:30",
+        "show",
+      ]);
       panel.dispose();
     } finally {
       vi.useRealTimers();
