@@ -52,7 +52,7 @@ export type QuitStage =
   | Readonly<{ stage: "preparation-begin" }>
   | Readonly<{
       stage: "preparation-end";
-      status: QuitPreparationResult["status"] | "timed-out" | "failed";
+      result: QuitPreparationResult["status"] | "timed-out" | "failed";
     }>
   | Readonly<{ stage: "collect-end"; closers: number }>
   | Readonly<{ stage: "closer-begin"; closer: number; name: string }>
@@ -60,13 +60,13 @@ export type QuitStage =
       stage: "closer-end";
       closer: number;
       name: string;
-      outcome: "confirmed" | "failed" | "late";
+      result: "confirmed" | "failed" | "late";
     }>
   | Readonly<{ stage: "drain-end"; drained: boolean; unconfirmed: number }>
   | Readonly<{ stage: "record-begin" }>
   | Readonly<{
       stage: "record-end";
-      outcome: "recorded" | "failed" | "timed-out";
+      result: "recorded" | "failed" | "timed-out";
     }>
   | Readonly<{ stage: "exit-requested" }>;
 
@@ -112,7 +112,7 @@ export async function drainOwnedChildren(
           stage: "closer-end",
           closer: index,
           name: closer.name,
-          outcome: "failed",
+          result: "failed",
         });
         throw error;
       }
@@ -122,7 +122,7 @@ export async function drainOwnedChildren(
         stage: "closer-end",
         closer: index,
         name: closer.name,
-        outcome: intime ? "confirmed" : "late",
+        result: intime ? "confirmed" : "late",
       });
     }),
   );
@@ -321,13 +321,13 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
               unconfirmed = true;
               emit(ports.observe, {
                 stage: "preparation-end",
-                status: "timed-out",
+                result: "timed-out",
               });
             } else {
               const result = await Promise.race([originalAttempt, expired]);
               emit(ports.observe, {
                 stage: "preparation-end",
-                status: timedOut ? "timed-out" : result.status,
+                result: timedOut ? "timed-out" : result.status,
               });
               switch (result.status) {
                 case "accepted":
@@ -342,7 +342,7 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
           } catch {
             // A throwing hook cannot prove whether it dispatched an effect.
             unconfirmed = true;
-            emit(ports.observe, { stage: "preparation-end", status: "failed" });
+            emit(ports.observe, { stage: "preparation-end", result: "failed" });
           } finally {
             preparing = false;
             clearTimeout(preparationTimer);
@@ -389,18 +389,18 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
           const recorded = ports.record(receipt).then(
             () => {
               settled = true;
-              emit(ports.observe, { stage: "record-end", outcome: "recorded" });
+              emit(ports.observe, { stage: "record-end", result: "recorded" });
             },
             () => {
               settled = true;
-              emit(ports.observe, { stage: "record-end", outcome: "failed" });
+              emit(ports.observe, { stage: "record-end", result: "failed" });
             },
           );
           const budget = remaining();
           // An exhausted preparation/drain has no fresh receipt budget. The
           // diagnostic still starts, but cannot postpone the real Quit.
           if (budget === 0) {
-            emit(ports.observe, { stage: "record-end", outcome: "timed-out" });
+            emit(ports.observe, { stage: "record-end", result: "timed-out" });
             return undefined;
           }
           return Promise.race([
@@ -410,7 +410,7 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
                 if (!settled)
                   emit(ports.observe, {
                     stage: "record-end",
-                    outcome: "timed-out",
+                    result: "timed-out",
                   });
                 resolve();
               }, budget);

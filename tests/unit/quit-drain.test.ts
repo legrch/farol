@@ -1044,9 +1044,9 @@ describe("Quit claim steps and stage observation (0.5.27 stabilization)", () => 
       observe: (stage) => {
         stages.push(
           stage.stage === "closer-end"
-            ? `closer-end:${stage.name}:${stage.outcome}`
+            ? `closer-end:${stage.name}:${stage.result}`
             : stage.stage === "record-end"
-              ? `record-end:${stage.outcome}`
+              ? `record-end:${stage.result}`
               : stage.stage,
         );
         throw new Error("observer bug");
@@ -1082,7 +1082,7 @@ describe("Quit claim steps and stage observation (0.5.27 stabilization)", () => 
         record: () => new Promise<void>(() => undefined),
         quit,
         observe: (stage) => {
-          if (stage.stage === "record-end") outcomes.push(stage.outcome);
+          if (stage.stage === "record-end") outcomes.push(stage.result);
         },
       });
       drain.onBeforeQuit({ preventDefault: () => undefined });

@@ -22,7 +22,7 @@ describe("Quit progress shows only what the drain reports", () => {
         stage: "closer-end",
         closer: 1,
         name: "host-check",
-        outcome: "confirmed",
+        result: "confirmed",
       },
     ]);
     const view = presentQuitProgress(state, 41.2);
@@ -39,7 +39,7 @@ describe("Quit progress shows only what the drain reports", () => {
     ).toEqual(["Preparing the update"]);
     const failed = run([
       { stage: "closer-begin", closer: 0, name: "go-core" },
-      { stage: "closer-end", closer: 0, name: "go-core", outcome: "failed" },
+      { stage: "closer-end", closer: 0, name: "go-core", result: "failed" },
     ]);
     expect(presentQuitProgress(failed, 3).lines).toEqual([
       "Farol core did not confirm it stopped",

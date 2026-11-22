@@ -102,7 +102,7 @@ export function createQuitProgressWindow(
       .catch(() => undefined);
   };
   const show = () => {
-    if (disposed || panel || state.phase === "exiting") return;
+    if (disposed || panel || state.step === "exiting") return;
     try {
       if (options.visible && !options.visible()) return;
       panel = new BrowserWindow({

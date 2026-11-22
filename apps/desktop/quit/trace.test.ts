@@ -47,7 +47,7 @@ describe("Quit trace: diagnostic, bounded, never in the Quit path", () => {
       pid: 42,
       now: () => (t += 5),
     });
-    trace.record({ stage: "before-quit", phase: "running" });
+    trace.record({ stage: "before-quit", during: "running" });
     trace.record({ stage: "drain-entered" });
     trace.record({ stage: "exit-requested" });
     await trace.flushed();

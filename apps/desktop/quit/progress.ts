@@ -6,18 +6,18 @@ import type { QuitStage } from "../../../src/apps/desktop/quit-drain";
 // fixed map read as "Local helper"; nothing here is guessed.
 
 export type QuitProgressState = Readonly<{
-  phase: "idle" | "preparing" | "stopping" | "recording" | "exiting";
+  step: "idle" | "preparing" | "stopping" | "recording" | "exiting";
   closers: ReadonlyMap<
     number,
     Readonly<{
       name: string;
-      state: "pending" | "confirmed" | "failed" | "late";
+      progress: "pending" | "confirmed" | "failed" | "late";
     }>
   >;
 }>;
 
 export const initialQuitProgress: QuitProgressState = Object.freeze({
-  phase: "idle",
+  step: "idle",
   closers: new Map(),
 });
 
@@ -27,24 +27,24 @@ export function reduceQuitProgress(
 ): QuitProgressState {
   switch (stage.stage) {
     case "preparation-begin":
-      return { ...state, phase: "preparing" };
+      return { ...state, step: "preparing" };
     case "preparation-end":
     case "collect-end":
-      return { ...state, phase: "stopping" };
+      return { ...state, step: "stopping" };
     case "closer-begin": {
       const closers = new Map(state.closers);
-      closers.set(stage.closer, { name: stage.name, state: "pending" });
-      return { phase: "stopping", closers };
+      closers.set(stage.closer, { name: stage.name, progress: "pending" });
+      return { step: "stopping", closers };
     }
     case "closer-end": {
       const closers = new Map(state.closers);
-      closers.set(stage.closer, { name: stage.name, state: stage.outcome });
+      closers.set(stage.closer, { name: stage.name, progress: stage.result });
       return { ...state, closers };
     }
     case "record-begin":
-      return { ...state, phase: "recording" };
+      return { ...state, step: "recording" };
     case "exit-requested":
-      return { ...state, phase: "exiting" };
+      return { ...state, step: "exiting" };
     default:
       return state;
   }
@@ -77,12 +77,12 @@ export function presentQuitProgress(
   const failed = new Set<string>();
   for (const closer of state.closers.values()) {
     const category = quitProgressCategory(closer.name);
-    if (closer.state === "pending")
+    if (closer.progress === "pending")
       waiting.set(category, (waiting.get(category) ?? 0) + 1);
-    else if (closer.state !== "confirmed") failed.add(category);
+    else if (closer.progress !== "confirmed") failed.add(category);
   }
   const lines: string[] = [];
-  if (state.phase === "preparing") lines.push("Preparing the update");
+  if (state.step === "preparing") lines.push("Preparing the update");
   for (const [category, count] of waiting)
     lines.push(
       count > 1
@@ -92,7 +92,7 @@ export function presentQuitProgress(
   for (const category of failed)
     if (!waiting.has(category))
       lines.push(`${category} did not confirm it stopped`);
-  if (state.phase === "recording") lines.push("Saving the quit record");
+  if (state.step === "recording") lines.push("Saving the quit record");
   const left = Math.max(0, Math.ceil(secondsLeft));
   return {
     title: "Farol is quitting",

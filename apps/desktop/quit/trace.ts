@@ -22,13 +22,13 @@ export type QuitTracePhase = "startup" | "recovery" | "running";
 /** Process-wide stages outside the drain itself. */
 export type QuitTraceEvent =
   | QuitStage
-  | Readonly<{ stage: "before-quit"; phase: QuitTracePhase }>
+  | Readonly<{ stage: "before-quit"; during: QuitTracePhase }>
   | Readonly<{
       stage: "signal";
       signal: "SIGINT" | "SIGTERM";
       ignored: boolean;
     }>
-  | Readonly<{ stage: "marker"; outcome: "removed" | "kept" | "failed" }>;
+  | Readonly<{ stage: "marker"; result: "removed" | "kept" | "failed" }>;
 
 export type QuitTraceRecord = Readonly<
   {

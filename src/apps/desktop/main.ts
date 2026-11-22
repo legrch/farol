@@ -10252,7 +10252,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       pid: process.pid,
     });
     app.prependListener("before-quit", () =>
-      quitTrace?.record({ stage: "before-quit", phase: quitTracePhase }),
+      quitTrace?.record({ stage: "before-quit", during: quitTracePhase }),
     );
   } catch {
     quitTrace = null;
@@ -11207,14 +11207,14 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
           const marker = await removeRunMarker(statePaths().state, process.pid);
           quitTrace?.record({
             stage: "marker",
-            outcome: marker.removed ? "removed" : "kept",
+            result: marker?.removed === true ? "removed" : "kept",
           });
         } catch (error) {
-          quitTrace?.record({ stage: "marker", outcome: "failed" });
+          quitTrace?.record({ stage: "marker", result: "failed" });
           throw error;
         }
       } else {
-        quitTrace?.record({ stage: "marker", outcome: "kept" });
+        quitTrace?.record({ stage: "marker", result: "kept" });
       }
     },
     // QuitDrain has already waited for owned children and recorded the result.
