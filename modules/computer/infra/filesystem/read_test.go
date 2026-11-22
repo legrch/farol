@@ -421,3 +421,34 @@ func TestReadReportsLiveRootWitness(t *testing.T) {
 		t.Fatalf("read witness missing or stale: %+v %v", out, err)
 	}
 }
+
+// A missing file read from a temporarily swapped tree must not be reported as
+// missing from the approved tree: the root recheck runs on negative results.
+func TestReadMissingFromSwappedTreeReportsRootChange(t *testing.T) {
+	d := fixture(t)
+	put(t, d, "AGENTS.md", []byte("rules"))
+	original, swapped := d.Root+"-original", d.Root+"-swapped"
+	t.Cleanup(func() { _ = os.RemoveAll(original); _ = os.RemoveAll(swapped) })
+	// Tree B (empty) sits at the path when the read opens its root ...
+	if err := os.Rename(d.Root, original); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(d.Root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	w := New(d.Root + "-home")
+	// ... and the approved tree A is back before the read reports.
+	w.beforeTarget = func() {
+		if err := os.Rename(d.Root, swapped); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(original, d.Root); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := w.Read(context.Background(), port.ReadRequest{Workspace: d, RelativePath: "AGENTS.md"})
+	if out != nil {
+		t.Fatal("swapped tree disclosed")
+	}
+	expectCode(t, err, "WORKSPACE_ROOT_CHANGED")
+}

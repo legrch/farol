@@ -22,6 +22,7 @@ type Workspace struct {
 	homeDirectory string
 	filePolicy    authority.FilePolicy
 	afterRead     func() // Package-private deterministic fault point; never configured by a caller.
+	beforeTarget  func() // Package-private fault point before a read opens its target.
 }
 
 // New requires the trusted host home; it is never selected by a tool request.

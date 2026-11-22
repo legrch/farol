@@ -77,14 +77,26 @@ func (w *Workspace) read(ctx context.Context, request port.ReadRequest, binding 
 		return nil, err
 	}
 	defer unix.Close(root)
+	// A negative result (missing, not a file, link) is information about the
+	// tree this read opened: report it only if that tree is still the
+	// approved one, so a temporarily swapped tree cannot hide a file.
+	negative := func(err error) error {
+		if rootErr := recheckBinding(request.Workspace, witness); rootErr != nil {
+			return rootErr
+		}
+		return err
+	}
 	parent, err := walk(root, parts[:len(parts)-1])
 	if err != nil {
-		return nil, err
+		return nil, negative(err)
 	}
 	defer unix.Close(parent)
+	if w.beforeTarget != nil {
+		w.beforeTarget()
+	}
 	fd, before, err := regular(parent, parts[len(parts)-1])
 	if err != nil {
-		return nil, err
+		return nil, negative(err)
 	}
 	defer unix.Close(fd)
 	checkScratch := func() bool { return binding == nil || scratchOpenedMatches(root, parent, fd, *binding) }
