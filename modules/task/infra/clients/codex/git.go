@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/legrch/farol/modules/task/domain"
@@ -292,9 +291,8 @@ func (r *gitMetadataReader) resolve(root task.Root) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if strconv.FormatUint(worktree.stamp.device, 10) != root.Device || strconv.FormatUint(worktree.stamp.inode, 10) != root.Inode {
-		return "", task.ErrIdentity
-	}
+	// The saved device/inode is diagnostic only (path-bound approval); the
+	// held worktree descriptor keeps this resolution on one directory.
 	dot := filepath.Join(root.Path, ".git")
 	var s unix.Stat_t
 	if unix.Fstatat(int(worktree.file.Fd()), ".git", &s, unix.AT_SYMLINK_NOFOLLOW) != nil {

@@ -101,8 +101,7 @@ func TestGitMetadataSupportedTopologies(t *testing.T) {
 
 func TestGitMetadataRefusesUnsupportedOrMalformedTopology(t *testing.T) {
 	cases := map[string]func(*testing.T, *gitMetadataFixture){
-		"wrong-root-identity": func(t *testing.T, f *gitMetadataFixture) { f.root.Inode = "1" },
-		"wrong-common":        func(t *testing.T, f *gitMetadataFixture) { f.root.GitCommonDirectory = filepath.Dir(f.common) },
+		"wrong-common": func(t *testing.T, f *gitMetadataFixture) { f.root.GitCommonDirectory = filepath.Dir(f.common) },
 		"wrong-project": func(t *testing.T, f *gitMetadataFixture) {
 			gitMetadataWrite(t, filepath.Join(f.admin, "commondir"), "../../..\n")
 		},
@@ -217,6 +216,15 @@ func TestGitMetadataRefusesUnsupportedOrMalformedTopology(t *testing.T) {
 			}
 		})
 	}
+	t.Run("stale-saved-root-identity", func(t *testing.T) {
+		// Path-bound approval (owner decision 2026-11-22): a saved pair from
+		// before a renumbering reboot no longer refuses the writer.
+		f := newGitMetadataFixture(t, true)
+		f.root.Device, f.root.Inode = "1", "1"
+		if got, err := gitCommon(context.Background(), f.root); err != nil || got == "" {
+			t.Fatalf("stale saved identity refused: %q, %v", got, err)
+		}
+	})
 	t.Run("no-ancestor-discovery", func(t *testing.T) {
 		f := newGitMetadataFixture(t, false)
 		child := filepath.Join(f.root.Path, "nested")

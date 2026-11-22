@@ -53,8 +53,11 @@ func (b *nativeBoundary) Verify(ctx context.Context, s Selection) error {
 	defer b.mu.Unlock()
 	identities := map[string]string{}
 	for _, root := range []task.Root{s.Binding.Project, s.Binding.Writer} {
-		st, n, err := metadata(root.Path)
-		if err != nil || !st.IsDir() || strconv.FormatUint(uint64(n.Dev), 10) != root.Device || strconv.FormatUint(n.Ino, 10) != root.Inode {
+		// Path-bound approval (owner decision 2026-11-22): the folder at the
+		// approved path is the workspace. metadata still refuses links and
+		// non-canonical paths; the saved device/inode is diagnostic only.
+		st, _, err := metadata(root.Path)
+		if err != nil || !st.IsDir() {
 			return task.ErrIdentity
 		}
 		common, err := gitCommon(ctx, root)
