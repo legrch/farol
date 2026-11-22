@@ -129,7 +129,7 @@ func (s *Service) Search(ctx context.Context, query SearchQuery) (*SearchResult,
 			out[i] = SearchMatch{Path: match.Path, Line: match.Line, Text: match.Text, Truncated: match.Truncated}
 		}
 		result = &SearchResult{WorkspaceID: query.WorkspaceID, RelativePath: query.RelativePath, Pattern: query.Pattern,
-			Root: binding.ApprovedRoot, Matches: out, ResultLimited: resultLimited, ScanLimited: scanLimited}
+			Root: witnessedRoot(binding), Matches: out, ResultLimited: resultLimited, ScanLimited: scanLimited}
 		return nil
 	})
 	if err != nil {

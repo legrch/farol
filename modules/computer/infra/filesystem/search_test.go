@@ -315,9 +315,12 @@ func TestSearchNativeRaceRootAndCancellation(t *testing.T) {
 	}
 	d := fixture(t)
 	put(t, d, "note.md", []byte("hit"))
-	d.ApprovedRoot.Inode = "0"
+	// A stale saved pair (a reboot renumbered the volume) no longer refuses.
+	d.ApprovedRoot.Device, d.ApprovedRoot.Inode = "1", "1"
 	_, err := New(d.Root+"-home").Search(context.Background(), port.SearchRequest{Workspace: d, RelativePath: "note.md", Pattern: "hit"})
-	expectCode(t, err, "WORKSPACE_ROOT_CHANGED")
+	if err != nil {
+		t.Fatalf("stale saved identity refused: %v", err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err = New(d.Root+"-home").Search(ctx, port.SearchRequest{Workspace: d, RelativePath: "note.md", Pattern: "hit"})

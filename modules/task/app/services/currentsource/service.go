@@ -85,10 +85,13 @@ func (s *Service) Resolve(ctx context.Context, raw []byte, nowMillis int64) (*Re
 
 func derive(f port.TaskCurrentSettingsFacts, now int64, model *port.TaskSourceModelSelection) *CodexSource {
 	r, h := f.NativeHosts.Route, f.NativeHosts.Host
-	if !closed(r, "transport socketPath expectedCodexHome workspaceId projectId projectRoot projectIdentity gitCommonDirectory execution harness computerGeneration hostGeneration approvedAt expiresAt", "observeThreadId observeTurnId") || text(r["transport"]) != "codex-shared-proxy/v1" || !validReference(r) {
+	if !closed(r, "transport socketPath expectedCodexHome workspaceId projectId projectRoot projectIdentity gitCommonDirectory execution harness computerGeneration hostGeneration approvedAt expiresAt", "observeThreadId observeTurnId writerIdentity") || text(r["transport"]) != "codex-shared-proxy/v1" || !validReference(r) {
 		return nil
 	}
 	if !identifierPattern.MatchString(text(r["workspaceId"])) || !identifierPattern.MatchString(text(r["projectId"])) || !identity(r["projectIdentity"]) {
+		return nil
+	}
+	if _, present := r["writerIdentity"]; present && !identity(r["writerIdentity"]) {
 		return nil
 	}
 	if !closed(h, "executablePath executableSha256 version protocol schemaSha256 localVerification", "verifiedAt taskSource liveVerification agentVerification") || !versionPattern.MatchString(text(h["version"])) || text(h["protocol"]) != protocol {
@@ -201,7 +204,12 @@ func derive(f port.TaskCurrentSettingsFacts, now int64, model *port.TaskSourceMo
 	if !wireIDPattern.MatchString(model.ModelAlias) || !wireIDPattern.MatchString(model.Model) {
 		return nil
 	}
+	// Path-bound approval: the route's frozen live writer witness, when
+	// recorded, replaces the saved pair a reboot can renumber.
 	projectIdentity, writerIdentity := obj(r["projectIdentity"]), obj(w.RootIdentity)
+	if frozen, present := r["writerIdentity"]; present {
+		writerIdentity = obj(frozen)
+	}
 	out := &CodexSource{
 		ProjectID:                  text(r["projectId"]),
 		WorkspaceID:                text(r["workspaceId"]),

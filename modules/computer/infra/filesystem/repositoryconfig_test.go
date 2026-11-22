@@ -197,6 +197,8 @@ func TestRepositoryConfigNativeLinksAndRootReplacement(t *testing.T) {
 	if err := os.Mkdir(repo, 0700); err != nil {
 		t.Fatal(err)
 	}
+	// The replacement directory at the approved path is the workspace now;
+	// it has no .npmrc, and the retained original is never reached.
 	_, err := New(home).Read(context.Background(), port.ReadRequest{Workspace: d, RelativePath: ".npmrc"})
-	expectCode(t, err, "WORKSPACE_ROOT_CHANGED")
+	expectCode(t, err, "WORKSPACE_NOT_FOUND")
 }

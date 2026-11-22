@@ -163,8 +163,11 @@ func (m *Mutable) root(d port.MutationDescriptor) (*mutationWalk, int, error) {
 		}
 		return strconv.ParseUint(s, 10, 64)
 	}
-	dev, e1 := parse(d.ApprovedRoot.Device)
-	ino, e2 := parse(d.ApprovedRoot.Inode)
+	// The saved pair stays a well-formed diagnostic observation only (see
+	// openedRoot); the pinned live directory versions keep one operation on
+	// one physical root.
+	_, e1 := parse(d.ApprovedRoot.Device)
+	_, e2 := parse(d.ApprovedRoot.Inode)
 	if e1 != nil || e2 != nil {
 		return nil, -1, refusal("WORKSPACE_INVALID_REQUEST")
 	}
@@ -178,16 +181,11 @@ func (m *Mutable) root(d port.MutationDescriptor) (*mutationWalk, int, error) {
 		return nil, -1, refusal("WORKSPACE_ROOT_CHANGED")
 	}
 	walk := &mutationWalk{fs: m.fs, protected: m.protected, pins: []directoryPin{{fd: fd, parent: -1, version: version}}}
-	for i, part := range parts {
+	for _, part := range parts {
 		fd, err = walk.add(fd, part)
 		if err != nil {
 			walk.close()
 			return nil, -1, err
-		}
-		v := walk.pins[len(walk.pins)-1].version
-		if i == len(approved)-1 && (v.dev != dev || v.ino != ino) {
-			walk.close()
-			return nil, -1, refusal("WORKSPACE_ROOT_CHANGED")
 		}
 	}
 	v := walk.pins[len(walk.pins)-1].version

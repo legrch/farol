@@ -170,6 +170,10 @@ describe("originalPredecessorSettingsReadable", () => {
     // 2026-11-11: compared the entire change since the pinned closure.
     // The optional workspace continuity field is incompatible with beta3's
     // strict workspace object; the predicate refuses it without mutation.
+    // 2026-11-22: compared the change since 2026-11-11. The only stored
+    // expansion is the optional taskRoute.writerIdentity (path-bound live
+    // writer witness); beta3's strict route refuses it, so the predicate
+    // refuses any presence. No validator, default or dependency changed.
     const contract = readFileSync(
       new URL("../../src/pkg/product-settings/contract.ts", import.meta.url),
       "utf8",
@@ -179,7 +183,7 @@ describe("originalPredecessorSettingsReadable", () => {
     );
     expect(sections).toHaveLength(2);
     expect(createHash("sha256").update(sections[0]!).digest("hex")).toBe(
-      "6abe091dc349af98efce0f95d9994b802a1ffc3dbe5c53e7a8771f80f5f5c986",
+      "26310e239875c4e3b532a8e0132d9d8d2fcfa18e8f8d84647ada0f174e354191",
     );
     const continuity = readFileSync(
       new URL(
@@ -359,6 +363,23 @@ describe("originalPredecessorSettingsReadable", () => {
       Object.assign(value.nativeHosts.taskRoute, { observeTurnId });
       const before = structuredClone(value);
       if (observeTurnId === "turn-exact_1" || observeTurnId === undefined)
+        expect(ProductSettingsSchema.safeParse(value).success).toBe(true);
+      expect(originalPredecessorSettingsReadable(source, value)).toBe(false);
+      expect(value).toStrictEqual(before);
+    },
+  );
+
+  it.each([{ device: "16777233", inode: "42" }, {}, null, undefined])(
+    "refuses any stored writerIdentity presence: %s",
+    (writerIdentity) => {
+      const value = fixture();
+      Object.assign(value.nativeHosts.taskRoute, { writerIdentity });
+      const before = structuredClone(value);
+      if (
+        typeof writerIdentity === "object" &&
+        writerIdentity !== null &&
+        "device" in writerIdentity
+      )
         expect(ProductSettingsSchema.safeParse(value).success).toBe(true);
       expect(originalPredecessorSettingsReadable(source, value)).toBe(false);
       expect(value).toStrictEqual(before);

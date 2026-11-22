@@ -368,3 +368,25 @@ func TestTaskPublicationCopiesCallerMetadataAndPoisonsUnknownCommit(t *testing.T
 		t.Fatal("unknown publication restored current authority", err)
 	}
 }
+
+// Path-bound approval: a reboot renumbers the volume, so the approval's saved
+// pair goes stale while the published writer tuple is the live witness frozen
+// at route setup. Publication joins by ID, path, access and Git metadata and
+// keeps the published witness for native dispatch verification.
+func TestTaskPublicationAcceptsStaleSavedPairAndKeepsLiveWriterWitness(t *testing.T) {
+	p := newTaskPublicationFixture(t)
+	var raw map[string]any
+	if err := json.Unmarshal(p.approval, &raw); err != nil {
+		t.Fatal(err)
+	}
+	raw["workspaces"].([]any)[0].(map[string]any)["rootIdentity"] = map[string]string{"device": "16777231", "inode": "1"}
+	p.approval, _ = json.Marshal(raw)
+	p.publish(t, &p.metadata)
+	got, err := p.read()
+	if err != nil {
+		t.Fatal("stale saved pair refused publication", err)
+	}
+	if got.Selection.Binding.Writer.Device != p.metadata.Writer.Device || got.Selection.Binding.Writer.Inode != p.metadata.Writer.Inode {
+		t.Fatal("published live writer witness replaced")
+	}
+}

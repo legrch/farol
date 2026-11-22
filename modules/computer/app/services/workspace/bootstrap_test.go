@@ -92,7 +92,7 @@ func TestBootstrapFullReadShapeCannotBecomeInstructions(t *testing.T) {
 	} {
 		s, _, _, n, _, r := discoveryFixture(t)
 		n.read = func(port.ReadRequest) (*port.ReadResponse, error) {
-			out := &port.ReadResponse{Text: "rules", Bytes: 5, SHA256: strings.Repeat("a", 64)}
+			out := &port.ReadResponse{Text: "rules", Bytes: 5, SHA256: strings.Repeat("a", 64), Physical: testWitness, ApprovedPhysical: testWitness}
 			change(out)
 			return out, nil
 		}
@@ -112,7 +112,7 @@ func TestBootstrapByteBudgetPerPassChargesRawBOMAndContinuesChain(t *testing.T) 
 			text = ""
 			bytes = 3
 		}
-		return &port.ReadResponse{Text: text, Bytes: bytes, SHA256: strings.Repeat("a", 64)}, nil
+		return &port.ReadResponse{Text: text, Bytes: bytes, SHA256: strings.Repeat("a", 64), Physical: testWitness, ApprovedPhysical: testWitness}, nil
 	}
 	out, err := s.Bootstrap(context.Background(), bootstrapRequest(r, "a/b"))
 	if err != nil || out == nil || out.Complete || len(n.reads) != 6 {
@@ -133,7 +133,7 @@ func TestBootstrapProjectedChangeDiscardsEntireCollection(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			s, _, _, n, _, r := discoveryFixture(t)
 			n.read = func(port.ReadRequest) (*port.ReadResponse, error) {
-				v := &port.ReadResponse{Text: "rules", Bytes: 5, SHA256: strings.Repeat("a", 64)}
+				v := &port.ReadResponse{Text: "rules", Bytes: 5, SHA256: strings.Repeat("a", 64), Physical: testWitness, ApprovedPhysical: testWitness}
 				if len(n.reads) == 2 {
 					switch kind {
 					case "text":
@@ -162,7 +162,7 @@ func TestBootstrapProjectedChangeDiscardsEntireCollection(t *testing.T) {
 		if len(n.reads) == 2 {
 			digest = "b"
 		}
-		return &port.ReadResponse{Text: "rules", Bytes: 5, SHA256: strings.Repeat(digest, 64)}, nil
+		return &port.ReadResponse{Text: "rules", Bytes: 5, SHA256: strings.Repeat(digest, 64), Physical: testWitness, ApprovedPhysical: testWitness}, nil
 	}
 	if out, err := s.Bootstrap(context.Background(), bootstrapRequest(r, ".")); err != nil || out == nil {
 		t.Fatalf("invented digest comparison: %v", err)
@@ -224,5 +224,44 @@ func TestDiscoverySubresponseCorrelationIsClosed(t *testing.T) {
 		if b.validContext(&v, "work", ".") {
 			t.Fatal("foreign subresponse accepted")
 		}
+	}
+}
+
+// Every bootstrap read must report the same physical tree as the first
+// inspection: a read from a temporarily swapped tree, a read without a
+// witness, or a final inspection over a replaced ancestor is refused even
+// when both passes saw identical instruction text.
+func TestBootstrapBindsEveryReadToOnePhysicalTree(t *testing.T) {
+	other := port.Root{Path: "/work", Device: "1", Inode: "99"}
+	for _, kind := range []string{"swapped-read", "missing-witness", "swapped-ancestor-read", "final-ancestor"} {
+		t.Run(kind, func(t *testing.T) {
+			s, _, _, n, _, r := discoveryFixture(t)
+			n.read = func(port.ReadRequest) (*port.ReadResponse, error) {
+				v := &port.ReadResponse{Text: "rules", Bytes: 5, SHA256: strings.Repeat("a", 64), Physical: testWitness, ApprovedPhysical: testWitness}
+				switch kind {
+				case "swapped-read":
+					v.Physical = other
+				case "missing-witness":
+					v.Physical, v.ApprovedPhysical = port.Root{}, port.Root{}
+				case "swapped-ancestor-read":
+					v.ApprovedPhysical = other
+				}
+				return v, nil
+			}
+			if kind == "final-ancestor" {
+				n.list = func(q port.ListRequest) (*port.ListResponse, error) {
+					b := &port.DirectoryBinding{RelativePath: q.RelativePath, Root: q.Workspace.Root, ApprovedRoot: q.Workspace.ApprovedRoot, Physical: testWitness, ApprovedPhysical: testWitness}
+					if len(n.lists) > 1 {
+						b.ApprovedPhysical = other
+					}
+					return &port.ListResponse{Binding: b}, nil
+				}
+			}
+			out, err := s.Bootstrap(context.Background(), bootstrapRequest(r, "."))
+			if out != nil {
+				t.Fatal("instructions from another physical tree disclosed")
+			}
+			expectFailure(t, err, "COMPUTER_WORKSPACE_CONTEXT_CHANGED", "contract")
+		})
 	}
 }

@@ -296,8 +296,12 @@ func TestReadRootReplacementAndSnapshotRace(t *testing.T) {
 		t.Fatal(err)
 	}
 	put(t, d, "note.md", []byte("replacement"))
-	_, err = New(d.Root+"-home").Read(context.Background(), port.ReadRequest{Workspace: d, RelativePath: "note.md"})
-	expectCode(t, err, "WORKSPACE_ROOT_CHANGED")
+	// Path-bound approval (owner decision 2026-11-22): the folder now at the
+	// approved path is the workspace; the stale saved pair no longer refuses.
+	replaced, err := New(d.Root+"-home").Read(context.Background(), port.ReadRequest{Workspace: d, RelativePath: "note.md"})
+	if err != nil || replaced == nil || replaced.Text != "replacement" {
+		t.Fatalf("folder at the approved path not read: %v", err)
+	}
 }
 func TestReadRechecksNamedRootAfterNativeYield(t *testing.T) {
 	d := fixture(t)
@@ -333,4 +337,118 @@ func TestReadCancellationAndNarrowedRoot(t *testing.T) {
 	cancel()
 	_, err := New(d.Root+"-home").Read(ctx, port.ReadRequest{Workspace: d, RelativePath: "note.md"})
 	expectCode(t, err, "WORKSPACE_REQUEST_CANCELLED")
+}
+
+// Path-bound approval (owner decision 2026-11-22): with a saved pair from
+// before a renumbering reboot, Inspect still succeeds and reports the
+// approved root's live identity as this operation's witness, keeping the
+// saved pair only as the approval record.
+func TestInspectReportsLiveApprovedRootWitnessForStaleSavedPair(t *testing.T) {
+	d := fixture(t)
+	live := d.ApprovedRoot
+	d.ApprovedRoot.Device, d.ApprovedRoot.Inode = "1", "1"
+	binding, err := New(d.Root+"-home").Inspect(context.Background(), port.ListRequest{Workspace: d, RelativePath: "."})
+	if err != nil || binding == nil {
+		t.Fatalf("stale saved pair refused: %v", err)
+	}
+	if binding.ApprovedRoot != d.ApprovedRoot {
+		t.Fatalf("approval record changed: %+v", binding.ApprovedRoot)
+	}
+	if binding.ApprovedPhysical != live || binding.Physical != live {
+		t.Fatalf("live witness missing: approved %+v, physical %+v, want %+v", binding.ApprovedPhysical, binding.Physical, live)
+	}
+}
+
+// A narrowed operation (effective root below the approved ancestor) must
+// refuse when the ancestor is replaced while the effective subtree keeps its
+// identity: the same subtree moved under a different approved directory.
+func TestNarrowedReadAndInspectRefuseReplacedApprovedAncestor(t *testing.T) {
+	for _, op := range []string{"read", "inspect"} {
+		t.Run(op, func(t *testing.T) {
+			base := fixture(t)
+			approved := filepath.Join(base.Root, "approved")
+			sub := filepath.Join(approved, "sub")
+			if err := os.MkdirAll(sub, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(sub, "AGENTS.md"), []byte("rules"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			var info unix.Stat_t
+			if err := unix.Lstat(approved, &info); err != nil {
+				t.Fatal(err)
+			}
+			d := port.Descriptor{WorkspaceID: "fixture", Root: sub, ApprovedRoot: port.Root{Path: approved, Device: strconv.FormatUint(uint64(info.Dev), 10), Inode: strconv.FormatUint(uint64(info.Ino), 10)}}
+			w := New(base.Root + "-home")
+			w.afterRead = func() {
+				previous := approved + "-previous"
+				if err := os.Rename(approved, previous); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(approved, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(filepath.Join(previous, "sub"), sub); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var err error
+			if op == "read" {
+				var out *port.ReadResponse
+				out, err = w.Read(context.Background(), port.ReadRequest{Workspace: d, RelativePath: "AGENTS.md"})
+				if out != nil {
+					t.Fatal("read over a replaced ancestor disclosed")
+				}
+			} else {
+				var out *port.DirectoryBinding
+				out, err = w.Inspect(context.Background(), port.ListRequest{Workspace: d, RelativePath: "."})
+				if out != nil {
+					t.Fatal("inspection over a replaced ancestor disclosed")
+				}
+			}
+			expectCode(t, err, "WORKSPACE_ROOT_CHANGED")
+		})
+	}
+}
+
+func TestReadReportsLiveRootWitness(t *testing.T) {
+	d := fixture(t)
+	put(t, d, "note.md", []byte("text"))
+	live := d.ApprovedRoot
+	d.ApprovedRoot.Device, d.ApprovedRoot.Inode = "1", "1"
+	out, err := New(d.Root+"-home").Read(context.Background(), port.ReadRequest{Workspace: d, RelativePath: "note.md"})
+	if err != nil || out == nil || out.Physical != live || out.ApprovedPhysical != live {
+		t.Fatalf("read witness missing or stale: %+v %v", out, err)
+	}
+}
+
+// A missing file read from a temporarily swapped tree must not be reported as
+// missing from the approved tree: the root recheck runs on negative results.
+func TestReadMissingFromSwappedTreeReportsRootChange(t *testing.T) {
+	d := fixture(t)
+	put(t, d, "AGENTS.md", []byte("rules"))
+	original, swapped := d.Root+"-original", d.Root+"-swapped"
+	t.Cleanup(func() { _ = os.RemoveAll(original); _ = os.RemoveAll(swapped) })
+	// Tree B (empty) sits at the path when the read opens its root ...
+	if err := os.Rename(d.Root, original); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(d.Root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	w := New(d.Root + "-home")
+	// ... and the approved tree A is back before the read reports.
+	w.beforeTarget = func() {
+		if err := os.Rename(d.Root, swapped); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(original, d.Root); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := w.Read(context.Background(), port.ReadRequest{Workspace: d, RelativePath: "AGENTS.md"})
+	if out != nil {
+		t.Fatal("swapped tree disclosed")
+	}
+	expectCode(t, err, "WORKSPACE_ROOT_CHANGED")
 }

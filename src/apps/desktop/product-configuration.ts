@@ -2283,10 +2283,11 @@ export class ProductConfigurationService {
         (item) => item.workspaceId === workspaceId,
       );
       if (!workspace) return this.failure("WORKSPACE_NOT_FOUND");
+      // The measured pair is diagnostic only (path-bound approval); the
+      // generation fence still binds the check to the current approval.
       if (
         this.current.computer.generation !== expectedGeneration ||
-        workspace.rootIdentity?.device !== rootIdentity.device ||
-        workspace.rootIdentity?.inode !== rootIdentity.inode
+        !workspace.rootIdentity
       )
         return this.failure("WORKSPACE_ROOT_CHANGED");
       return this.commitComputerEvidence((settings) => ({
@@ -2307,7 +2308,8 @@ export class ProductConfigurationService {
                         buildId,
                         computerGeneration: expectedGeneration,
                         verifiedAt: this.now(),
-                        rootIdentity,
+                        // Evidence stays keyed to the saved (diagnostic) pair.
+                        rootIdentity: item.rootIdentity ?? rootIdentity,
                       }
                     : null,
                 },
@@ -2552,15 +2554,13 @@ export class ProductConfigurationService {
           verified.root !== observed.expectedRoot)
       )
         return this.failure("WORKSPACE_ROOT_CHANGED");
+      // Path-bound approval (owner decision 2026-11-22): the folder at the
+      // path is the workspace. A saved pair is kept unchanged as diagnostic
+      // evidence (it is part of the published approval, so rewriting it
+      // would be a policy change); only an unbound record takes the
+      // measurement.
       const bound = verified.rootIdentity;
-      if (
-        bound &&
-        (bound.device !== identity.data.device ||
-          bound.inode !== identity.data.inode)
-      ) {
-        return this.failure("WORKSPACE_ROOT_CHANGED");
-      }
-      const rootIdentity = identity.data;
+      const rootIdentity = bound ?? identity.data;
       const bind = (
         workspace: ProductSettings["computer"]["workspaces"][number],
       ) => {

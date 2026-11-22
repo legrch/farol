@@ -38,6 +38,7 @@ type connectorShellFactory struct {
 	clock          port.Clock
 	protectedState *nativeprocess.ProtectedBundle
 	scratch        func(context.Context) (connectorShellScratch, error)
+	rootIdentity   func(string) (authority.RootIdentity, error)
 	prepare        func(context.Context, nativeprocess.Command, nativeprocess.SeatbeltSelection, processsvc.Invocation) (processsvc.Selected, error)
 }
 
@@ -77,7 +78,7 @@ func newConnectorShellFactory(ctx context.Context, config connectorShellConfig, 
 	if err != nil {
 		return nil, connectorProcessRefusal("PROCESS_PREPARATION_UNAVAILABLE")
 	}
-	f := &connectorShellFactory{config: config, lifetime: ctx, clock: clock, protectedState: &nativeprocess.ProtectedBundle{Path: state.Path, Identity: authority.RootIdentity{Device: state.Device, Inode: state.Inode}}, scratch: newConnectorShellScratch}
+	f := &connectorShellFactory{config: config, lifetime: ctx, clock: clock, protectedState: &nativeprocess.ProtectedBundle{Path: state.Path, Identity: authority.RootIdentity{Device: state.Device, Inode: state.Inode}}, scratch: newConnectorShellScratch, rootIdentity: nativeprocess.LiveRootIdentity}
 	f.prepare = func(ctx context.Context, command nativeprocess.Command, policy nativeprocess.SeatbeltSelection, invocation processsvc.Invocation) (processsvc.Selected, error) {
 		preparer, err := nativeprocess.NewRootScopedSupervisedPreparer(config.runtimeID, command, policy, strategy, config.watchdog, f.lifetime, clock)
 		if err != nil {
@@ -104,7 +105,7 @@ func (f *connectorShellFactory) selectShell(ctx context.Context, lease *executio
 	refuse := func(err error) (processsvc.Prepared, processsvc.ObservationWorkspace, error) {
 		return nil, nil, connectorPreparationFailure(err)
 	}
-	if f == nil || f.clock == nil || f.lifetime == nil || f.scratch == nil || f.prepare == nil || f.protectedState == nil || ctx == nil || lease == nil {
+	if f == nil || f.clock == nil || f.lifetime == nil || f.scratch == nil || f.rootIdentity == nil || f.prepare == nil || f.protectedState == nil || ctx == nil || lease == nil {
 		return refuse(nil)
 	}
 	// These are pre-dispatch facts, not guesses about an attempted child effect.
@@ -178,8 +179,14 @@ func (f *connectorShellFactory) selectShell(ctx context.Context, lease *executio
 	if !ok {
 		return refuse(nil)
 	}
+	// Path-bound approval: the saved pair is diagnostic; the command carries
+	// the live witness measured now, which every later native check binds to.
+	rootIdentity, err := f.rootIdentity(workspace.Root)
+	if err != nil {
+		return refuse(err)
+	}
 	command := nativeprocess.Command{WorkspaceID: workspace.WorkspaceID, Root: workspace.Root, Cwd: cwd,
-		RootIdentity: workspace.RootIdentity, Executable: bash.Path, ExecutableSHA256: bash.SHA256, Write: request.Write}
+		RootIdentity: rootIdentity, Executable: bash.Path, ExecutableSHA256: bash.SHA256, Write: request.Write}
 	var hostRuntime *nativeprocess.HostRuntimePlan
 	if f.config.support.HostRuntimePolicy == nativeprocess.InstalledHostRuntimeAssurance {
 		hostRuntime, err = nativeprocess.DiscoverInstalledHostRuntime(preparation)

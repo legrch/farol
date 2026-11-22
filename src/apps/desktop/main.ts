@@ -4092,10 +4092,12 @@ async function measuredRootIdentity(
   }
 }
 
-// Read-only measurement of every identity-bound folder (a legacy record with no
-// saved check can still count as verified), then one authority-reducing write.
-// Returns false when drift was found but could not be withdrawn: the caller
-// must then not resume a connector that would carry the stale grant.
+// Read-only measurement of every identity-bound folder, then one
+// authority-reducing write for folders that are no longer there. Path-bound
+// approval (owner decision 2026-11-22): a changed device or inode at the same
+// path is diagnostic only and keeps the check; only a vanished or unreachable
+// folder withdraws it. Returns false when a vanished folder could not be
+// withdrawn: the caller must then not resume.
 async function withdrawDriftedWorkspaceChecksAtLaunch(): Promise<boolean> {
   if (!configuration) return true;
   let drifted = 0;
@@ -4127,8 +4129,18 @@ async function withdrawDriftedWorkspaceChecksAtLaunch(): Promise<boolean> {
           workspace.rootIdentity,
           measured,
         );
-        // A vanished folder refuses every call just like a changed one.
-        if (measured === null || drift !== "same")
+        // Numeric drift (a reboot renumbered the volume) and a recreated
+        // folder at the same path keep their check: the folder at the path
+        // is the workspace. A vanished folder, or one now reached through a
+        // linked ancestor (native traversal refuses links), withdraws it.
+        if (drift !== "same")
+          console.warn(
+            `FAROL_WORKSPACE_ROOT_OBSERVED:${JSON.stringify({ drift })}`,
+          );
+        const reachable =
+          measured !== null &&
+          (await realpath(workspace.root).catch(() => null)) === workspace.root;
+        if (!reachable)
           found.push({
             workspaceId: workspace.workspaceId,
             root: workspace.root,
@@ -6270,10 +6282,12 @@ function codexAgentCheckWorkspace(
   );
 }
 
+// `identity` is a live measurement taken by the same verification attempt
+// (path-bound approval: never the saved pair); null compares path only.
 async function inspectOwnerWorkspace(
   generation: number,
   workspace: Pick<ApprovedProductWorkspace, "workspaceId" | "root">,
-  identity: WorkspaceRootIdentity,
+  identity: WorkspaceRootIdentity | null,
   diagnosticAction: string,
 ): Promise<{ ok: true } | { ok: false; code: string }> {
   if (!desktopGoCore) return { ok: false, code: "WORKSPACE_READ_FAILED" };
@@ -6286,8 +6300,9 @@ async function inspectOwnerWorkspace(
     const current = configuration?.snapshot();
     if (
       result.root.path !== workspace.root ||
-      result.root.device !== identity.device ||
-      result.root.inode !== identity.inode ||
+      (identity !== null &&
+        (result.root.device !== identity.device ||
+          result.root.inode !== identity.inode)) ||
       current?.status !== "ready" ||
       current.settings.computer.generation !== generation
     )
@@ -6303,10 +6318,12 @@ async function inspectOwnerWorkspace(
   }
 }
 
+// Path-bound approval: a list is bound by path and generation; the Go root
+// identity is a live measurement and is not compared with the saved pair.
 async function listOwnerWorkspace(
   generation: number,
   workspace: Pick<ApprovedProductWorkspace, "workspaceId" | "root">,
-  identity: WorkspaceRootIdentity,
+  _savedIdentity: unknown,
   relativePath: string,
   diagnosticAction?: string,
 ): Promise<
@@ -6332,8 +6349,6 @@ async function listOwnerWorkspace(
     const current = configuration?.snapshot();
     if (
       result.root.path !== workspace.root ||
-      result.root.device !== identity.device ||
-      result.root.inode !== identity.inode ||
       current?.status !== "ready" ||
       current.settings.computer.generation !== generation
     ) {
@@ -7527,10 +7542,24 @@ async function configureAdmittedProduct(
         ) {
           return refuseRoute("project_root");
         }
+        // Path-bound approval: freeze the writer folder's live identity now;
+        // the saved pair is diagnostic and goes stale when a reboot renumbers
+        // the volume. Every later admission re-measures against this witness.
+        const writerStat = await lstat(workspace.root, { bigint: true });
+        if (
+          !writerStat.isDirectory() ||
+          writerStat.isSymbolicLink() ||
+          (await realpath(workspace.root)) !== workspace.root
+        ) {
+          return refuseRoute("workspace_identity");
+        }
         const authority = new PhysicalCodexHandoffAuthority({
           workspaceId: command.workspaceId,
           writerRoot: workspace.root,
-          writerIdentity: workspace.rootIdentity,
+          writerIdentity: {
+            device: String(writerStat.dev),
+            inode: String(writerStat.ino),
+          },
           projectRoot: command.projectRoot,
           projectIdentity: {
             device: String(projectStat.dev),
@@ -7582,6 +7611,20 @@ async function configureAdmittedProduct(
           )
             return configurationFailure("CODEX_TASK_OBSERVATION_REFUSED");
         }
+        // The proxy and catalogue queries take time; save the route only if
+        // the writer folder is still the one measured at setup.
+        const writerNow = await lstat(workspace.root, { bigint: true }).catch(
+          () => null,
+        );
+        if (
+          writerNow === null ||
+          !writerNow.isDirectory() ||
+          writerNow.isSymbolicLink() ||
+          writerNow.dev !== writerStat.dev ||
+          writerNow.ino !== writerStat.ino ||
+          (await realpath(workspace.root).catch(() => null)) !== workspace.root
+        )
+          return refuseRoute("workspace_identity");
         const approvedAt = new Date().toISOString();
         return ProductConfigurationResultSchema.parse(
           await configuration.recordCodexTaskRoute(
@@ -7601,6 +7644,10 @@ async function configureAdmittedProduct(
               projectIdentity: {
                 device: String(projectStat.dev),
                 inode: String(projectStat.ino),
+              },
+              writerIdentity: {
+                device: String(writerStat.dev),
+                inode: String(writerStat.ino),
               },
               gitCommonDirectory: workspace.gitMetadata.commonDirectory,
               execution: {
@@ -11363,10 +11410,10 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   });
   quitSignals.ready();
   void installedUpdates.initialize();
-  // A reboot can renumber the startup volume. A saved folder whose identity no
-  // longer matches would make every connector call refuse while the sidebar
-  // still says Connected, so withdraw its stale check before any resume. If
-  // drift was found but could not be withdrawn, do not resume at all.
+  // A reboot can renumber the startup volume; with path-bound approval that no
+  // longer refuses calls, so the connector resumes normally. A folder that is
+  // gone has its check withdrawn first; if that withdrawal fails, do not
+  // resume at all.
   const driftSettled = await withdrawDriftedWorkspaceChecksAtLaunch();
   const beforeConnectorResume = configuration.snapshot();
   void resumeComputerConnector(

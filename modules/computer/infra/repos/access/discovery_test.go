@@ -373,7 +373,7 @@ func TestNativeBootstrapAbsenceDoesNotHideOverallRevocation(t *testing.T) {
 	expectContextFailure(t, err, "COMPUTER_APPROVAL_NOT_FOUND")
 }
 func TestNativeBootstrapRootReplacementAndShortenedApprovalRefuseNextPhase(t *testing.T) {
-	for _, kind := range []string{"root replacement", "approval expiry"} {
+	for _, kind := range []string{"root replacement", "identical root replacement", "approval expiry"} {
 		t.Run(kind, func(t *testing.T) {
 			f, ceiling, tasks := fixtureLeases(t)
 			writeInstruction(t, f, "AGENTS.md", "rules")
@@ -381,12 +381,17 @@ func TestNativeBootstrapRootReplacementAndShortenedApprovalRefuseNextPhase(t *te
 			n := &discoveryNative{Workspace: filesystem.New(f.home)}
 			n.hook = func(verb, _ string) {
 				if verb == "read" && len(n.reads) == 1 {
-					if kind == "root replacement" {
+					if kind != "approval expiry" {
 						if err := os.Rename(f.workspace, f.workspace+"-replaced"); err != nil {
 							t.Fatal(err)
 						}
 						if err := os.Mkdir(f.workspace, 0700); err != nil {
 							t.Fatal(err)
+						}
+						if kind == "identical root replacement" {
+							// Same instruction bytes in a different directory:
+							// only the held physical identity can tell them apart.
+							writeInstruction(t, f, "AGENTS.md", "rules")
 						}
 					} else {
 						a := f.approval.Clone()
@@ -402,10 +407,11 @@ func TestNativeBootstrapRootReplacementAndShortenedApprovalRefuseNextPhase(t *te
 			if out != nil {
 				t.Fatal("stale chain disclosed")
 			}
-			code := "WORKSPACE_ROOT_CHANGED"
-			if kind == "approval expiry" {
-				code = "AUTHORITY_EXPIRED"
-			}
+			code := map[string]string{
+				"root replacement":           "COMPUTER_INSTRUCTIONS_CHANGED",
+				"identical root replacement": "COMPUTER_WORKSPACE_CONTEXT_CHANGED",
+				"approval expiry":            "AUTHORITY_EXPIRED",
+			}[kind]
 			expectContextFailure(t, err, code)
 		})
 	}

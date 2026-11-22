@@ -48,7 +48,7 @@ that legacy helper.
 
 `tests/fixtures/shell-qualified-process.go.txt` is an immutable, non-executed
 copy of the process source natively qualified by platform record
-`macos-26A434-arm64-installed-runtime-v25`. Its SHA-256 is
+`macos-26A434-arm64-installed-runtime-v28`. Its SHA-256 is
 `37b00c06de8a3c30239299019554eb6e788550161b605e7f6ecaa29ccd56c34d`,
 the independent platform pin. It changes only with a reviewed native
 requalification. Producer/consumer contract tests use

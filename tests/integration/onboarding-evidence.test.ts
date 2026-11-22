@@ -193,7 +193,10 @@ describe("durable setup evidence, without changing workspace authority", () => {
       ),
     ).toBe(false);
   });
-  it.each(["generation", "device", "inode", "unknown-folder"])(
+  // A stale device or inode is diagnostic under path-bound approval and is
+  // covered by the renumbered-reboot tests below; generation and folder
+  // identity still refuse.
+  it.each(["generation", "unknown-folder"])(
     "refuses stale %s evidence without altering settings",
     async (field) => {
       const { service, settings } = await fixture();
@@ -283,4 +286,52 @@ describe("durable setup evidence, without changing workspace authority", () => {
       settings: { setup: { connect: { outcomeUnknown: false } } },
     });
   });
+});
+
+describe("path-bound approval keeps the saved root pair as diagnostic evidence", () => {
+  it.each(["computer.verify-workspace", "computer.check-folder"] as const)(
+    "records %s after a renumbering reboot without rewriting the saved pair",
+    async (kind) => {
+      const { service, settings } = await fixture();
+      const target = settings.computer.workspaces[0]!;
+      const saved = target.rootIdentity!;
+      // What the folder at the same path measures after the reboot.
+      const renumbered = {
+        device: String(Number(saved.device) + 2),
+        inode: saved.inode,
+      };
+      const result =
+        kind === "computer.check-folder"
+          ? await service.recordFolderAccessCheck(
+              target.workspaceId,
+              settings.computer.generation,
+              fixtureBuildId,
+              renumbered,
+              true,
+            )
+          : await service.recordComputerVerification(
+              target.workspaceId,
+              {
+                profile: "computer.local.read/1",
+                runtimeGeneration: "fixture-runtime",
+                buildId: fixtureBuildId,
+                protocol: "readonly-workspace/1",
+              },
+              {
+                rootIdentity: renumbered,
+                expectedGeneration: settings.computer.generation,
+                expectedRoot: target.root,
+              },
+            );
+      if (!result.ok || result.snapshot.status !== "ready")
+        throw new Error(
+          `renumbered ${kind} refused: ${JSON.stringify(result)}`,
+        );
+      const after = result.snapshot.settings.computer.workspaces.find(
+        (workspace) => workspace.workspaceId === target.workspaceId,
+      )!;
+      expect(after.rootIdentity).toEqual(saved);
+      expect(after.accessCheck?.rootIdentity).toEqual(saved);
+    },
+  );
 });

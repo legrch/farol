@@ -244,7 +244,9 @@ func TestNativeProcessMeasurementRefusesChangedPhysicalInputs(t *testing.T) {
 			}
 			switch mode {
 			case "root-identity":
-				command.RootIdentity.Inode = "0"
+				// The command carries the live preparation witness; a root
+				// that differs from it at launch was replaced after preparation.
+				command.RootIdentity.Inode = "1"
 			case "root-link":
 				command.Root = link(command.Root)
 			case "cwd-link":

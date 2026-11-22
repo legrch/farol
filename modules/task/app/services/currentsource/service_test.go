@@ -693,3 +693,25 @@ func TestChangedFollowupPreservesEarlierSettingsFence(t *testing.T) {
 	// requires a supported handoff.
 	absent(t, resolve(t, f, now))
 }
+
+// Path-bound approval: a route records the live writer witness frozen at
+// setup, which replaces the workspace's saved pair (renumbered by a reboot).
+// A malformed witness is refused as invalid; an old route keeps the saved pair.
+func TestRouteWriterWitnessReplacesStaleSavedPair(t *testing.T) {
+	f := fixture(t)
+	set(f, "nativeHosts.route.writerIdentity", map[string]any{"device": "16777233", "inode": "42"})
+	out := resolve(t, f, now)
+	positive(t, out)
+	if out.Source.Writer.Device != "16777233" || out.Source.Writer.Inode != "42" {
+		t.Fatalf("frozen writer witness ignored: %+v", out.Source.Writer)
+	}
+	bad := fixture(t)
+	set(bad, "nativeHosts.route.writerIdentity", map[string]any{"device": "x"})
+	o, e := service().Resolve(context.Background(), raw(t, bad), now)
+	errorCode(t, o, e, "TASK_CURRENT_SOURCE_INVALID")
+	old := resolve(t, fixture(t), now)
+	positive(t, old)
+	if old.Source.Writer.Device != "18446744073709551615" {
+		t.Fatal("route without a witness lost the saved-pair fallback")
+	}
+}

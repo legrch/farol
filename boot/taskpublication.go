@@ -54,7 +54,10 @@ func (s *ComputerIngress) parsePublishedCodex(in *wire.TaskCodexSource, approval
 			continue
 		}
 		matched++
-		if w.Root != in.Writer.Path || w.RootIdentity.Device != in.Writer.Device || w.RootIdentity.Inode != in.Writer.Inode || w.GitMetadata == nil || w.GitMetadata.CommonDirectory != in.Writer.GitCommonDirectory || !w.GitHistoryApproved || string(w.Access) != in.Access || (in.Sandbox == "workspace-write" && w.Access != authority.WriteAccess) {
+		// Path-bound approval: join by workspace ID, path, access and Git
+		// metadata. The published writer tuple is the live witness frozen at
+		// route setup; native dispatch verifies it, not the saved pair.
+		if w.Root != in.Writer.Path || !task.Text(in.Writer.Device, 20) || !task.Text(in.Writer.Inode, 20) || w.GitMetadata == nil || w.GitMetadata.CommonDirectory != in.Writer.GitCommonDirectory || !w.GitHistoryApproved || string(w.Access) != in.Access || (in.Sandbox == "workspace-write" && w.Access != authority.WriteAccess) {
 			return invalid()
 		}
 	}

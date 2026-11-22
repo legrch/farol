@@ -156,7 +156,9 @@ func TestSeatbeltRefusesUnqualifiedPolicyBeforeNativeEvidence(t *testing.T) {
 			c.Write = true
 			s.Snapshot.Participant.MutationOwnership = authority.NoOwnership
 		},
-		"root-identity": func(_ *SeatbeltSelection, c *Command) { c.RootIdentity.Inode = "foreign" },
+		// root identity: the command carries the live preparation witness,
+		// not the saved pair, so a mismatch is refused natively at launch
+		// (TestRootMeasurementsMismatchClosesAllPinsAndNeverDispatches).
 		"credential-root": func(s *SeatbeltSelection, c *Command) {
 			c.Root, c.Cwd = "/owner/home/.SSH", "/owner/home/.SSH"
 			s.Snapshot.Approval.Workspaces[0].Root = c.Root
@@ -561,8 +563,8 @@ func TestSeatbeltAgentScopesRetainRefusalsAndExclusions(t *testing.T) {
 			"no-ownership": func(s *SeatbeltSelection, _ *Command) {
 				s.Snapshot.Participant.MutationOwnership = authority.NoOwnership
 			},
-			"owner-mismatch":     func(s *SeatbeltSelection, _ *Command) { s.Snapshot.Approval.OwnerID = "other" },
-			"physical-root":      func(_ *SeatbeltSelection, c *Command) { c.RootIdentity.Inode = "other" },
+			"owner-mismatch": func(s *SeatbeltSelection, _ *Command) { s.Snapshot.Approval.OwnerID = "other" },
+			// physical-root: verified natively against the live witness.
 			"root-case-mismatch": func(_ *SeatbeltSelection, c *Command) { c.Root = strings.ToUpper(c.Root) },
 			"unclean-cwd":        func(_ *SeatbeltSelection, c *Command) { c.Cwd += "/../sessions" },
 			"broad-home": func(s *SeatbeltSelection, c *Command) {

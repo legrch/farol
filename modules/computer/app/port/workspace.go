@@ -39,6 +39,9 @@ type ReadResponse struct {
 	Bytes  uint64
 	SHA256 string
 	Page   *Page
+	// Physical and ApprovedPhysical are the live effective-root and
+	// approved-ancestor identities this read opened and rechecked (internal).
+	Physical, ApprovedPhysical Root
 }
 type ListRequest struct {
 	Workspace    Descriptor
@@ -50,7 +53,16 @@ type ListRequest struct {
 type DirectoryBinding struct {
 	RelativePath string
 	Root         string
+	// ApprovedRoot is the approval record (path plus its saved, diagnostic
+	// device/inode); it is not a native measurement.
 	ApprovedRoot Root
+	// Physical is the effective root's live identity measured when this
+	// operation opened it. Internal only: callers compare it across the phases
+	// of one operation to keep them on one directory.
+	Physical Root
+	// ApprovedPhysical is the approved ancestor's live identity measured when
+	// this operation opened it (internal; see Physical).
+	ApprovedPhysical Root
 }
 
 type ListResponse struct {

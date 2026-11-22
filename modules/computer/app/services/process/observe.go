@@ -193,7 +193,9 @@ func (g observationGuard) withAuthority(ctx context.Context, seal Seal, original
 			return reject(err)
 		}
 		workspace, ok := authority.FindApproved(a, seal.WorkspaceID)
-		if !ok || workspace.Root != seal.Root || workspace.RootIdentity != seal.RootIdentity {
+		// Path-bound approval: the seal's identity is the original execution
+		// witness, checked by the native observer; join the approval by path.
+		if !ok || workspace.Root != seal.Root {
 			return reject(authority.Fail("AUTHORITY_COMPUTER_MISMATCH", "computer-policy"))
 		}
 		// READ may be narrower than the original Shell policy, but must still

@@ -2,7 +2,6 @@ import type { PendingWorkspaceEdit } from "../../../src/apps/desktop/workspace-e
 import { describe, expect, it, vi } from "vitest";
 import { DesktopAdmission } from "../host/admission";
 import { createConfigurationComputer } from "./computer";
-import { workspaceCheckEvidence } from "../../../src/apps/desktop/product-configuration";
 import type { ConfigurationComputerPorts } from "./computer";
 import type { ComputerConfigurationCommand } from "./computer";
 import { ProductSettingsSchema } from "../../../src/pkg/product-settings/contract";
@@ -269,10 +268,7 @@ describe("configuration computer", () => {
     });
   });
 
-  it("never rebinds a same-inode folder whose device number moved", async () => {
-    // Path + inode cannot prove the same folder (a mounted copy or a
-    // same-inode directory under a removed mount). Only enrolled continuity
-    // evidence may move a binding; ordinary Verify keeps refusing.
+  it("verifies a folder whose device number moved without rebinding it", async () => {
     const workspace = {
       workspaceId: "00000000-0000-4000-8000-000000000001",
       root: "/tmp/project",
@@ -286,73 +282,74 @@ describe("configuration computer", () => {
       snapshot: () => ({ status: "ready" as const, settings }),
       rebindWorkspaceRootIdentity: vi.fn(),
       bindWorkspaceRootIdentity: vi.fn(),
-      recordComputerVerification: vi.fn(),
+      recordComputerVerification: vi.fn(async () => ({
+        ok: true,
+        snapshot: { status: "ready" as const, settings },
+      })),
       withdrawDriftedWorkspaceChecks: vi.fn(async () => ({ ok: true })),
     };
-    const run = async (running: boolean) => {
-      const ports = makePorts({
-        configuration: () => configuration,
-        measuredRootIdentity: vi.fn(async () => ({
-          device: "16777233",
-          inode: "335036",
-        })),
-        inspectOwnerWorkspace: vi.fn(async () => ({ ok: true })),
-        secureMcpConnectorRuntime: () => ({ isRunning: () => running }),
-      });
-      const result = await createConfigurationComputer(
-        ports,
-      ).configureAdmittedComputer({
-        kind: "computer.verify-workspace",
-        workspaceId: workspace.workspaceId,
-      } as ComputerConfigurationCommand);
-      expect(ports.inspectOwnerWorkspace).not.toHaveBeenCalled();
-      return result;
-    };
-    await expect(run(false)).resolves.toMatchObject({
-      ok: false,
-      error: "WORKSPACE_ROOT_CHANGED",
+    const ports = makePorts({
+      configuration: () => configuration,
+      measuredRootIdentity: vi.fn(async () => ({
+        device: "16777233",
+        inode: "335036",
+      })),
+      inspectOwnerWorkspace: vi.fn(async () => ({ ok: true })),
+      secureMcpConnectorRuntime: () => ({ isRunning: () => false }),
     });
+    await createConfigurationComputer(ports).configureAdmittedComputer({
+      kind: "computer.verify-workspace",
+      workspaceId: workspace.workspaceId,
+    } as ComputerConfigurationCommand);
+    // Path-bound approval (owner decision 2026-11-22): a reboot that
+    // renumbered the volume is diagnostic only. Verification proceeds
+    // against the folder at the path; nothing is withdrawn and the saved
+    // pair is never rebound.
+    expect(ports.inspectOwnerWorkspace).toHaveBeenCalledOnce();
+    expect(configuration.withdrawDriftedWorkspaceChecks).not.toHaveBeenCalled();
     expect(configuration.rebindWorkspaceRootIdentity).not.toHaveBeenCalled();
     expect(configuration.bindWorkspaceRootIdentity).not.toHaveBeenCalled();
+    expect(configuration.recordComputerVerification).toHaveBeenCalledOnce();
+  });
+
+  it("refuses evidence when the folder is replaced during Git discovery", async () => {
+    const workspace = {
+      workspaceId: "00000000-0000-4000-8000-000000000001",
+      root: "/tmp/project",
+      label: "project",
+      access: "read" as const,
+      excludedPaths: [],
+      rootIdentity: { device: "16777231", inode: "335036" },
+    };
+    const settings = settingsWithWorkspace(workspace);
+    const configuration = {
+      snapshot: () => ({ status: "ready" as const, settings }),
+      rebindWorkspaceRootIdentity: vi.fn(),
+      bindWorkspaceRootIdentity: vi.fn(),
+      recordComputerVerification: vi.fn(async () => ({
+        ok: true,
+        snapshot: { status: "ready" as const, settings },
+      })),
+      withdrawDriftedWorkspaceChecks: vi.fn(async () => ({ ok: true })),
+    };
+    const measured = vi
+      .fn()
+      .mockResolvedValue({ device: "16777233", inode: "999" })
+      .mockResolvedValueOnce({ device: "16777233", inode: "335036" });
+    const ports = makePorts({
+      configuration: () => configuration,
+      measuredRootIdentity: measured,
+      inspectOwnerWorkspace: vi.fn(async () => ({ ok: true })),
+      secureMcpConnectorRuntime: () => ({ isRunning: () => false }),
+    });
+    const result = await createConfigurationComputer(
+      ports,
+    ).configureAdmittedComputer({
+      kind: "computer.verify-workspace",
+      workspaceId: workspace.workspaceId,
+    } as ComputerConfigurationCommand);
+    expect(result).toMatchObject({ ok: false });
     expect(configuration.recordComputerVerification).not.toHaveBeenCalled();
-    // The refused check withdraws the stale "Works" evidence for that folder.
-    expect(configuration.withdrawDriftedWorkspaceChecks).toHaveBeenCalledWith(
-      [
-        {
-          workspaceId: workspace.workspaceId,
-          root: workspace.root,
-          rootIdentity: workspace.rootIdentity,
-          observed: workspaceCheckEvidence(settings, workspace.workspaceId),
-        },
-      ],
-      expect.any(Function),
-    );
-    // A live connector still carries the grant: refuse without writing.
-    configuration.withdrawDriftedWorkspaceChecks.mockClear();
-    await expect(run(true)).resolves.toMatchObject({
-      ok: false,
-      error: "WORKSPACE_ROOT_CHANGED",
-    });
-    expect(configuration.withdrawDriftedWorkspaceChecks).not.toHaveBeenCalled();
-    // An unsuccessful withdrawal is surfaced with the owner's own result,
-    // not hidden behind the root refusal (and not via the exception path,
-    // which would report SETTINGS_WRITE_FAILED instead).
-    configuration.withdrawDriftedWorkspaceChecks.mockResolvedValueOnce({
-      ok: false,
-      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
-      snapshot: { status: "ready", settings },
-    } as never);
-    await expect(run(false)).resolves.toMatchObject({
-      ok: false,
-      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
-    });
-    configuration.withdrawDriftedWorkspaceChecks.mockRejectedValueOnce(
-      new Error("lost write"),
-    );
-    await expect(run(false)).resolves.toMatchObject({
-      ok: false,
-      error: "SETTINGS_WRITE_FAILED",
-    });
   });
 
   it.each(["WORKSPACE_ROOT_CHANGED", "WORKSPACE_NOT_FOUND"])(

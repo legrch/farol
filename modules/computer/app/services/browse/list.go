@@ -133,7 +133,7 @@ func (s *Service) directory(ctx context.Context, query ListQuery, inspectOnly bo
 			return err
 		}
 		result = &ListResult{WorkspaceID: query.WorkspaceID, RelativePath: query.RelativePath,
-			Root: binding.ApprovedRoot, Entries: slices.Clone(entries), Truncated: truncated}
+			Root: witnessedRoot(binding), Entries: slices.Clone(entries), Truncated: truncated}
 		return nil
 	})
 	// A successful callback is insufficient: the enclosing port must also succeed.
@@ -144,4 +144,14 @@ func (s *Service) directory(ctx context.Context, query ListQuery, inspectOnly bo
 		return nil, err
 	}
 	return result, nil
+}
+
+// witnessedRoot reports the approved root's path with the identity this
+// operation measured natively (path-bound approval: the saved pair is only
+// the approval record). A native result without a witness keeps the record.
+func witnessedRoot(binding port.DirectoryBinding) port.Root {
+	if binding.ApprovedPhysical.Device == "" || binding.ApprovedPhysical.Inode == "" {
+		return binding.ApprovedRoot
+	}
+	return port.Root{Path: binding.ApprovedRoot.Path, Device: binding.ApprovedPhysical.Device, Inode: binding.ApprovedPhysical.Inode}
 }

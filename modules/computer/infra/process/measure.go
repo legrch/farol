@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"syscall"
 )
 
 // Internal doubles exercise the native measurement sequence without IO/launch.
@@ -250,6 +252,9 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 	if command.RootIdentity.Device == "" || command.RootIdentity.Inode == "" || launch.scratchIdentity.Device == "" || launch.scratchIdentity.Inode == "" {
 		return refuse()
 	}
+	// Path-bound approval (owner decision 2026-11-22): command.RootIdentity
+	// is the live witness measured when this command was prepared, so a
+	// replacement since preparation refuses here and at the watchdog release.
 	root := add(command.Root, command.RootIdentity, false, nil, "", processsvc.RefusalWorkspaceRootIdentity)
 	if root == nil {
 		return nil, refusalAt(nil, processsvc.RefusalWorkspaceRootIdentity)
@@ -301,7 +306,7 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 			!insidePolicy(binding.ApprovedRoot, binding.ScopeRoot) || binding.RootIdentity.Device == "" || binding.RootIdentity.Inode == "" {
 			return refuse()
 		}
-		approved := add(binding.ApprovedRoot, binding.RootIdentity, false, nil, "", processsvc.RefusalWorkspaceRootIdentity)
+		approved := add(binding.ApprovedRoot, authority.RootIdentity{}, false, nil, "", processsvc.RefusalWorkspaceRootIdentity)
 		if approved == nil {
 			return nil, refusalAt(nil, processsvc.RefusalWorkspaceRootIdentity)
 		}
@@ -326,4 +331,25 @@ func retainLaunchFiles(ctx context.Context, command Command, launch *confinedLau
 	}
 	retained = true
 	return measurement, nil
+}
+
+// LiveRootIdentity measures an approved workspace root by path for one Shell
+// preparation (path-bound approval, owner decision 2026-11-22). The path must
+// name a real directory, not a link, owned by this user. The result is the
+// operation's physical witness: the launch, the watchdog release and later
+// result readback all compare against it, so a replacement after this point
+// refuses and an old result stays tied to its original directory.
+func LiveRootIdentity(path string) (authority.RootIdentity, error) {
+	if !absolutePolicyPath(path) {
+		return authority.RootIdentity{}, refusalAt(nil, processsvc.RefusalWorkspaceRootIdentity)
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return authority.RootIdentity{}, refusalAt(nil, processsvc.RefusalWorkspaceRootIdentity)
+	}
+	s, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || s.Uid != uint32(os.Getuid()) || s.Ino == 0 {
+		return authority.RootIdentity{}, refusalAt(nil, processsvc.RefusalWorkspaceRootIdentity)
+	}
+	return authority.RootIdentity{Device: strconv.FormatUint(uint64(s.Dev), 10), Inode: strconv.FormatUint(uint64(s.Ino), 10)}, nil
 }

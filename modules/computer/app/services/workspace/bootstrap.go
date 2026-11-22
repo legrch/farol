@@ -70,7 +70,7 @@ func (s *Service) Bootstrap(ctx context.Context, request BootstrapRequest) (*Boo
 	if err != nil {
 		return nil, err
 	}
-	if !binding.validContext(first, request.WorkspaceID, request.RelativeDirectory) {
+	if !binding.validContext(first, request.WorkspaceID, request.RelativeDirectory) || !witnessed(first.Physical) || !witnessed(first.ApprovedPhysical) {
 		return nil, contractInvalid("COMPUTER_CONTRACT_INVALID")
 	}
 	instructions := make([]Instruction, 0, len(directories))
@@ -101,6 +101,11 @@ func (s *Service) Bootstrap(ctx context.Context, request BootstrapRequest) (*Boo
 				if !binding.validRead(read, request.WorkspaceID, path) {
 					return nil, contractInvalid("COMPUTER_CONTRACT_INVALID")
 				}
+				// Every read must have opened the same physical tree as the
+				// first inspection; a read without a witness is refused.
+				if read.Physical != first.Physical || read.ApprovedPhysical != first.ApprovedPhysical {
+					return nil, contractInvalid("COMPUTER_WORKSPACE_CONTEXT_CHANGED")
+				}
 				bytes += read.Bytes
 				if bytes > 64*1024 {
 					instruction = UnavailableInstruction{RelativePath: path, Code: "COMPUTER_INSTRUCTION_BYTE_LIMIT"}
@@ -122,7 +127,7 @@ func (s *Service) Bootstrap(ctx context.Context, request BootstrapRequest) (*Boo
 	if err != nil {
 		return nil, err
 	}
-	if !binding.validContext(last, request.WorkspaceID, request.RelativeDirectory) || last.Root != first.Root || last.ApprovedRoot != first.ApprovedRoot || last.Scope != first.Scope {
+	if !binding.validContext(last, request.WorkspaceID, request.RelativeDirectory) || last.Root != first.Root || last.ApprovedRoot != first.ApprovedRoot || last.Scope != first.Scope || last.Physical != first.Physical || last.ApprovedPhysical != first.ApprovedPhysical {
 		return nil, contractInvalid("COMPUTER_WORKSPACE_CONTEXT_CHANGED")
 	}
 	var response *BootstrapResponse
@@ -137,6 +142,8 @@ func (s *Service) Bootstrap(ctx context.Context, request BootstrapRequest) (*Boo
 	}
 	return response, nil
 }
+func witnessed(r Root) bool { return r.Path != "" && r.Device != "" && r.Inode != "" }
+
 func (b correlation) validRead(out *ReadResponse, workspaceID, path string) bool {
 	if out == nil || out.OwnerID != b.OwnerID || out.SessionID != b.SessionID || out.TaskID != b.TaskID || out.TaskEpoch != b.TaskEpoch || out.ParticipantID != b.ParticipantID || out.TurnID != b.TurnID || out.Generation != b.generation || out.CallID != b.callID || out.WorkspaceID != workspaceID || out.RelativePath != path || out.Page != nil || !utf8.ValidString(out.Text) || len(out.Text) > 256*1024 || out.Bytes > 256*1024 || out.Bytes != uint64(len(out.Text)) && out.Bytes != uint64(len(out.Text))+3 || len(out.SHA256) != 64 {
 		return false

@@ -247,7 +247,7 @@ func TestRetainedObserverRejectsHandleAndOffsetsBeforePhysical(t *testing.T) {
 }
 
 func TestRetainedObserverCurrentDenialsBeforeAndDuringPhysical(t *testing.T) {
-	for _, fault := range []string{"withdrawal", "owner", "approval-owner", "computer", "generation-pair", "stale-generation", "no-read", "approval-no-read", "grant-expiry", "approval-expiry", "binding-drift", "scope-drift", "deadline-drift", "expired", "workspace", "root", "identity", "cwd", "excluded", "raw-error", "zero", "twice", "swallowed-denial"} {
+	for _, fault := range []string{"withdrawal", "owner", "approval-owner", "computer", "generation-pair", "stale-generation", "no-read", "approval-no-read", "grant-expiry", "approval-expiry", "binding-drift", "scope-drift", "deadline-drift", "expired", "workspace", "root", "cwd", "excluded", "raw-error", "zero", "twice", "swallowed-denial"} {
 		for _, phase := range []string{"preflight", "physical"} {
 			t.Run(fault+"/"+phase, func(t *testing.T) {
 				result, current, read, workspace, c := retainedFixture([]byte("out"), []byte("err"))
@@ -290,8 +290,6 @@ func TestRetainedObserverCurrentDenialsBeforeAndDuringPhysical(t *testing.T) {
 						read.a.Workspaces[0].WorkspaceID = "foreign"
 					case "root":
 						read.a.Workspaces[0].Root = "/workspace"
-					case "identity":
-						read.a.Workspaces[0].RootIdentity.Inode = "3"
 					case "cwd":
 						read.p.Grant.Workspaces[0].Root = "/workspace/code/elsewhere"
 					case "excluded":

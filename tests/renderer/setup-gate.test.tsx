@@ -979,8 +979,8 @@ describe("workspace identity refusal takes precedence over stale green UI", () =
       );
       expect(result.state).toBe("refused");
       expect(result.allowed).toBe(false);
-      expect(result.cause).toContain("cannot confirm");
-      expect(result.cause).toContain("device number");
+      expect(result.cause).toContain("folder or its saved settings changed");
+      expect(result.cause).not.toContain("device number");
       expect(result.action).toEqual({
         kind: "guide",
         label: "Review workspace approval",
@@ -1011,7 +1011,7 @@ describe("workspace identity refusal takes precedence over stale green UI", () =
     );
     expect(result.state).toBe("refused");
     expect(result.allowed).toBe(false);
-    expect(result.cause).toContain("Access remains blocked");
+    expect(result.cause).toContain("Open Settings, check the folder");
   });
 
   it("missing event order cannot clear root refusal on the same workspace", async () => {

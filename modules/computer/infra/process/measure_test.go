@@ -275,7 +275,7 @@ func TestRootMeasurementsAllBindingsHeldThroughOneDispatch(t *testing.T) {
 }
 
 func TestRootMeasurementsMismatchClosesAllPinsAndNeverDispatches(t *testing.T) {
-	for _, mode := range []string{"secondary-device", "secondary-inode", "last-secondary", "secondary-alias", "scope-alias", "scope-not-directory", "scope-partial-error", "late-root-replacement", "late-scope-replacement", "primary-identity", "cwd-alias", "scratch-identity", "scratch-mode", "scratch-owner", "executable-partial-error"} {
+	for _, mode := range []string{"primary-identity", "secondary-alias", "scope-alias", "scope-not-directory", "scope-partial-error", "late-root-replacement", "late-scope-replacement", "cwd-alias", "scratch-identity", "scratch-mode", "scratch-owner", "executable-partial-error"} {
 		t.Run(mode, func(t *testing.T) {
 			selected, c, launch, fs := rootMeasurementFixture(t)
 			change := func(path string, f func(*directoryFacts)) {
@@ -379,4 +379,36 @@ func (p *measurementExecutableDouble) recheck(ctx context.Context) error {
 		return errors.New("changed executable measurement")
 	}
 	return nil
+}
+
+// Path-bound approval (owner decision 2026-11-22): a saved root pair that no
+// longer matches the live directory (a reboot renumbered the volume) is
+// diagnostic only. Measurement captures the live identity and dispatches.
+func TestRootMeasurementsAcceptStaleSavedIdentity(t *testing.T) {
+	for _, mode := range []string{"secondary-device", "secondary-inode", "last-secondary"} {
+		t.Run(mode, func(t *testing.T) {
+			selected, c, launch, fs := rootMeasurementFixture(t)
+			_ = launch
+			change := func(path string, f func(*directoryFacts)) {
+				facts := fs.directories[path]
+				f(&facts)
+				fs.directories[path] = facts
+			}
+			switch mode {
+			case "secondary-device":
+				change("/approved/git", func(f *directoryFacts) { f.identity.Device = "2" })
+			case "secondary-inode":
+				change("/approved/git", func(f *directoryFacts) { f.identity.Inode = "30" })
+			case "last-secondary":
+				change("/approved/tools", func(f *directoryFacts) { f.identity.Inode = "30" })
+			}
+			dispatch := &measurementDispatchDouble{}
+			err := measureThenDispatch(t, selected, c, fs, func(context.Context) error { return nil }, dispatch)
+			// The double reports UNKNOWN after a dispatch by design.
+			var failure *processsvc.NativeFailure
+			if !errors.As(err, &failure) || !failure.Unknown || dispatch.calls != 1 {
+				t.Fatalf("stale saved identity refused: %v (dispatches %d)", err, dispatch.calls)
+			}
+		})
+	}
 }

@@ -254,7 +254,7 @@ func TestRestartObservesExistingReservationOnly(t *testing.T) {
 	}
 }
 func TestRevocationGenerationAndClockExpiryBeforeEffect(t *testing.T) {
-	for _, mode := range []string{"revoked", "generation", "physical-root", "expiry", "reserve-revoke", "final-guard-revoke"} {
+	for _, mode := range []string{"revoked", "generation", "expiry", "reserve-revoke", "final-guard-revoke"} {
 		t.Run(mode, func(t *testing.T) {
 			s, c, e, r, p := setup(t)
 			switch mode {
@@ -262,8 +262,6 @@ func TestRevocationGenerationAndClockExpiryBeforeEffect(t *testing.T) {
 				e.revoked = true
 			case "generation":
 				e.a.Generation++
-			case "physical-root":
-				e.a.Workspaces[0].RootIdentity.Inode = "3"
 			case "expiry":
 				c.now = e.deadline
 			case "reserve-revoke":
@@ -439,5 +437,17 @@ func TestRootExitWithIncompleteOutputCannotBeTerminal(t *testing.T) {
 	out, err := s.Read(context.Background(), ReadRequest{Handle: "owned-child"})
 	if err != nil || out.State != Unknown {
 		t.Fatal("unqualified output drain became terminal")
+	}
+}
+
+// Path-bound approval: a reboot renumbers the volume, so the approval's saved
+// pair goes stale while the seal carries the live preparation witness. Start
+// joins the approval by workspace ID and path and still dispatches once.
+func TestStartAcceptsRenumberedSavedPairAndDispatchesOnce(t *testing.T) {
+	s, _, e, _, p := setup(t)
+	e.a.Workspaces[0].RootIdentity.Device = "16777233"
+	start(t, s)
+	if p.calls != 1 {
+		t.Fatal("renumbered saved pair did not dispatch exactly once")
 	}
 }

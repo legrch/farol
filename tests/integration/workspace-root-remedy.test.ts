@@ -16,13 +16,13 @@ const verified = {
 };
 
 describe("workspace root change presentation (not native authority)", () => {
-  it("reports an uncertain cause, blocked access and no credential reset", () => {
+  it("names both possible causes without asserting one, and asks for no re-add ritual", () => {
     const message = workspaceRootChangeRemedy("WORKSPACE_ROOT_CHANGED");
-    expect(message).toContain("cannot confirm");
-    expect(message).toContain("may have changed");
-    expect(message).toContain("Access remains blocked");
-    expect(message).toContain("login or connection key will not fix");
+    expect(message).toContain("folder or its saved settings changed");
+    expect(message).toContain("nothing continued against the changed state");
+    expect(message).not.toContain("Nothing else changed");
     expect(message).toContain("unknown operation");
+    expect(message).not.toContain("Remove this folder");
     expect(workspaceRootChangeRemedy("OTHER_ERROR")).toBeNull();
     expect(workspaceRootChangeRemedy(null)).toBeNull();
   });

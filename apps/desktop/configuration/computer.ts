@@ -331,12 +331,18 @@ export function createConfigurationComputer(
           return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
         // Recheck only the already approved root through the same descriptor.
         // No child names/content are returned and no selected-folder binding changes.
-        const checked = await inspectOwnerWorkspace(
-          snapshot.settings.computer.generation,
-          workspace,
-          identity,
-          `settings:computer.check-folder:${workspace.workspaceId}`,
-        );
+        // Path-bound approval: Go's live root is compared with this check's
+        // own live measurement, never with the saved pair.
+        const measuredNow = await measuredRootIdentity(workspace.root);
+        const checked =
+          measuredNow === null
+            ? ({ ok: false, code: "WORKSPACE_NOT_FOUND" } as const)
+            : await inspectOwnerWorkspace(
+                snapshot.settings.computer.generation,
+                workspace,
+                measuredNow,
+                `settings:computer.check-folder:${workspace.workspaceId}`,
+              );
         const reachable = checked.ok;
         const recorded = await configuration()!.recordFolderAccessCheck(
           workspace.workspaceId,
@@ -419,10 +425,14 @@ export function createConfigurationComputer(
         };
         if (measured === null)
           return refuseStale("WORKSPACE_VERIFICATION_FAILED");
-        if (classifyWorkspaceRootDrift(bound, measured) !== "same" && bound) {
-          // Never rebind here: path + inode cannot prove the same folder.
-          return refuseStale("WORKSPACE_ROOT_CHANGED");
-        }
+        // Path-bound approval (owner decision 2026-11-22): a changed device
+        // or inode at the same path is diagnostic only, so verification
+        // proceeds against the folder now at the path. The saved pair is not
+        // rewritten here.
+        if (classifyWorkspaceRootDrift(bound, measured) !== "same" && bound)
+          console.warn(
+            `FAROL_WORKSPACE_ROOT_OBSERVED:${JSON.stringify({ drift: classifyWorkspaceRootDrift(bound, measured) })}`,
+          );
         if (!bound) {
           if (snapshot.status !== "ready")
             return configurationFailure("SETTINGS_UNAVAILABLE");
@@ -479,6 +489,16 @@ export function createConfigurationComputer(
           workspace.root,
           workspace.gitHistoryApproved === true,
         );
+        // Git discovery reads by pathname; the evidence is published only if
+        // the folder is still the one measured and inspected above, so a
+        // green check and its Git metadata come from the same tree.
+        const afterDiscovery = await measuredRootIdentity(workspace.root);
+        if (
+          afterDiscovery === null ||
+          afterDiscovery.device !== measured.device ||
+          afterDiscovery.inode !== measured.inode
+        )
+          return refuseStale("WORKSPACE_ROOT_CHANGED");
         // The inspection takes a moment, and a connector or Agent may have started
         // meanwhile; a re-verification rebinds the authority either would carry,
         // so it is admitted again right before it commits.

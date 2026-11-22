@@ -22,6 +22,7 @@ type Workspace struct {
 	homeDirectory string
 	filePolicy    authority.FilePolicy
 	afterRead     func() // Package-private deterministic fault point; never configured by a caller.
+	beforeTarget  func() // Package-private fault point before a read opens its target.
 }
 
 // New requires the trusted host home; it is never selected by a tool request.
@@ -227,18 +228,23 @@ func openedRoot(d port.Descriptor) (int, *port.DirectoryBinding, error) {
 			}
 		}
 	}
-	dev, err := strconv.ParseUint(d.ApprovedRoot.Device, 10, 64)
-	if err != nil || len(d.ApprovedRoot.Device) > 20 {
+	// The saved pair is the approval record's diagnostic observation, not an
+	// authority input: an approved workspace is the folder at its path (owner
+	// decision 2026-11-22). It must stay well formed, but a reboot that
+	// renumbers the volume no longer refuses. Physical continuity within one
+	// operation is still enforced by the held no-follow descriptors and the
+	// caller's live before/after root recheck.
+	if _, err := strconv.ParseUint(d.ApprovedRoot.Device, 10, 64); err != nil || len(d.ApprovedRoot.Device) > 20 {
 		return -1, nil, refusal("WORKSPACE_INVALID_REQUEST")
 	}
-	ino, err := strconv.ParseUint(d.ApprovedRoot.Inode, 10, 64)
-	if err != nil || len(d.ApprovedRoot.Inode) > 20 {
+	if _, err := strconv.ParseUint(d.ApprovedRoot.Inode, 10, 64); err != nil || len(d.ApprovedRoot.Inode) > 20 {
 		return -1, nil, refusal("WORKSPACE_INVALID_REQUEST")
 	}
 	fd, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return -1, nil, openAtError(err, "root")
 	}
+	var ancestor unix.Stat_t
 	for i, part := range parts {
 		child, err := directory(fd, part)
 		unix.Close(fd)
@@ -247,15 +253,14 @@ func openedRoot(d port.Descriptor) (int, *port.DirectoryBinding, error) {
 		}
 		fd = child
 		if i == len(approved)-1 {
-			s, err := stat(fd)
+			// The approved ancestor must still be a real, statable directory;
+			// its live identity is this operation's witness of it.
+			a, err := stat(fd)
 			if err != nil {
 				unix.Close(fd)
 				return -1, nil, refusal("WORKSPACE_PATH_REFUSED")
 			}
-			if uint64(s.Dev) != dev || uint64(s.Ino) != ino {
-				unix.Close(fd)
-				return -1, nil, refusal("WORKSPACE_ROOT_CHANGED")
-			}
+			ancestor = a
 		}
 	}
 	s, err := stat(fd)
@@ -268,8 +273,10 @@ func openedRoot(d port.Descriptor) (int, *port.DirectoryBinding, error) {
 		return -1, nil, pathRefusal("root", "unsafe_root")
 	}
 	return fd, &port.DirectoryBinding{
-		Root:         "/" + strings.Join(parts, "/"),
-		ApprovedRoot: port.Root{Path: "/" + strings.Join(approved, "/"), Device: d.ApprovedRoot.Device, Inode: d.ApprovedRoot.Inode},
+		Root:             "/" + strings.Join(parts, "/"),
+		ApprovedRoot:     port.Root{Path: "/" + strings.Join(approved, "/"), Device: d.ApprovedRoot.Device, Inode: d.ApprovedRoot.Inode},
+		Physical:         port.Root{Path: "/" + strings.Join(parts, "/"), Device: strconv.FormatUint(uint64(s.Dev), 10), Inode: strconv.FormatUint(s.Ino, 10)},
+		ApprovedPhysical: port.Root{Path: "/" + strings.Join(approved, "/"), Device: strconv.FormatUint(uint64(ancestor.Dev), 10), Inode: strconv.FormatUint(ancestor.Ino, 10)},
 	}, nil
 }
 
@@ -322,6 +329,22 @@ func cancelled(ctx context.Context) error {
 	}
 	return nil
 }
+
+// recheckBinding reopens the root chain and requires both the effective root
+// and the approved ancestor to be the same live directories this operation
+// opened, so a narrowed operation cannot pass over a replaced ancestor.
+func recheckBinding(d port.Descriptor, opened *port.DirectoryBinding) error {
+	fd, after, err := openedRoot(d)
+	if err != nil {
+		return err
+	}
+	unix.Close(fd)
+	if opened == nil || after.Physical != opened.Physical || after.ApprovedPhysical != opened.ApprovedPhysical {
+		return refusal("WORKSPACE_ROOT_CHANGED")
+	}
+	return nil
+}
+
 func recheckRoot(d port.Descriptor, before unix.Stat_t) error {
 	fd, err := openRoot(d)
 	if err != nil {

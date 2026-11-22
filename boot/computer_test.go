@@ -41,14 +41,14 @@ func (w *computerWorkspaceFixture) Read(context.Context, port.ReadRequest) (*por
 	if w.after != nil {
 		w.after()
 	}
-	return &port.ReadResponse{Text: "test", Bytes: 4, SHA256: strings.Repeat("a", 64)}, nil
+	return &port.ReadResponse{Text: "test", Bytes: 4, SHA256: strings.Repeat("a", 64), Physical: testWitness, ApprovedPhysical: testWitness}, nil
 }
 func (w *computerWorkspaceFixture) List(_ context.Context, in port.ListRequest) (*port.ListResponse, error) {
 	w.calls++
 	if w.after != nil {
 		w.after()
 	}
-	return &port.ListResponse{Binding: &port.DirectoryBinding{RelativePath: in.RelativePath, Root: in.Workspace.Root, ApprovedRoot: in.Workspace.ApprovedRoot}}, nil
+	return &port.ListResponse{Binding: &port.DirectoryBinding{RelativePath: in.RelativePath, Root: in.Workspace.Root, ApprovedRoot: in.Workspace.ApprovedRoot, Physical: testWitness, ApprovedPhysical: testWitness}}, nil
 }
 
 // Preserve the same injected authority-change hook for discovery inspection.
@@ -223,3 +223,7 @@ func TestComputerRootCatalogueUsesListWithoutInventingRead(t *testing.T) {
 		t.Fatal("catalogue widened read permission")
 	}
 }
+
+// testWitness is the live root identity a port double reports for every
+// open, so one operation's phases agree on a single physical tree.
+var testWitness = port.Root{Path: "/work", Device: "1", Inode: "2"}

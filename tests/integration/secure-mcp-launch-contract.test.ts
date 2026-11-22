@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   PrivateSecureMcpLaunchStore,
   createSecureMcpLaunchContract,
+  selectedCodexTaskRouteLaunch,
 } from "../../src/apps/desktop/secure-mcp-launch-contract";
 import {
   loadReadonlyComputerLaunchContract,
@@ -339,6 +340,27 @@ describe("secure MCP Computer launch contract", () => {
       challengeSha256: "f".repeat(64),
     });
     expect(automatic.codexTasks).toMatchObject(codexTasks);
+    // Path-bound approval: a route that froze a live writer witness keeps it
+    // for update observation, while the retained legacy builder still sends
+    // the saved pair its validator binds.
+    const live = { device: "16777233", inode: "424242" };
+    const witnessed = ProductSettingsSchema.parse({
+      ...approved,
+      nativeHosts: {
+        ...approved.nativeHosts,
+        taskRoute: { ...approved.nativeHosts.taskRoute!, writerIdentity: live },
+      },
+    });
+    expect(
+      selectedCodexTaskRouteLaunch(witnessed, input.now)?.grant.writerIdentity,
+    ).toEqual(live);
+    expect(
+      createSecureMcpLaunchContract(witnessed, {
+        now: input.now,
+        runtimeId: "runtime-with-live-writer",
+        challengeSha256: "f".repeat(64),
+      }).codexTasks?.grant.writerIdentity,
+    ).toEqual(codexTasks.grant.writerIdentity);
     expect(automatic.codexTasks?.grant.discoverProjectTasks).toBeUndefined();
     expect(
       automatic.codexTasks?.grant.discoverCanonicalProjectTasks,

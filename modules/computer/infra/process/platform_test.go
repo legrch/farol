@@ -644,3 +644,22 @@ func TestRootScopedPlatformSystemRmHardlinkBoundary(t *testing.T) {
 		t.Fatal("link count drift accepted")
 	}
 }
+
+// Path-bound approval: no saved pair pins cwd or secondary scope roots, so a
+// directory replaced on the same device between selection and the original
+// invocation must refuse instead of being adopted by both measurements.
+func TestRootScopedPlatformInvocationRefusesDirectoryReplacedAfterSelection(t *testing.T) {
+	for _, name := range []string{"cwd", "scratch", "root"} {
+		t.Run(name, func(t *testing.T) {
+			f := platformFixtureCPU(t)
+			s := f.selectCommand(t)
+			path := map[string]string{"cwd": f.original.Cwd, "scratch": f.policy.Scratch, "root": f.original.Root}[name]
+			v := f.facts.directories[path]
+			v.identity.Inode = "replacement"
+			f.facts.directories[path] = v
+			if _, err := s.BindInvocation(context.Background(), f.original, s.WrappedCommand(), f.clock.value.Add(10*time.Second)); err == nil {
+				t.Fatal("directory replaced after selection was adopted")
+			}
+		})
+	}
+}

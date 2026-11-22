@@ -1647,14 +1647,15 @@ describe("Farol product configuration", () => {
         },
       },
     });
-    // A bound workspace is never silently rebound to another object.
+    // Path-bound approval (owner decision 2026-11-22): a later verification
+    // of the folder at the same path succeeds, and the bound pair is never
+    // rebound (it stays the diagnostic record).
     await expect(
       service.recordComputerVerification(workspace.workspaceId, verification, {
         rootIdentity: { device: "1", inode: "3" },
       }),
     ).resolves.toMatchObject({
-      ok: false,
-      error: "WORKSPACE_ROOT_CHANGED",
+      ok: true,
       snapshot: {
         settings: {
           computer: {

@@ -92,7 +92,7 @@ func (n *selfTestWorkspaceNative) Inspect(ctx context.Context, in port.ListReque
 	return n.Workspace.(port.DirectoryInspector).Inspect(ctx, in)
 }
 func (n *selfTestWorkspaceNative) List(_ context.Context, in port.ListRequest) (*port.ListResponse, error) {
-	return &port.ListResponse{Binding: &port.DirectoryBinding{RelativePath: in.RelativePath, Root: in.Workspace.Root, ApprovedRoot: in.Workspace.ApprovedRoot}, Entries: []string{"check.txt"}}, nil
+	return &port.ListResponse{Binding: &port.DirectoryBinding{RelativePath: in.RelativePath, Root: in.Workspace.Root, ApprovedRoot: in.Workspace.ApprovedRoot, Physical: testWitness, ApprovedPhysical: testWitness}, Entries: []string{"check.txt"}}, nil
 }
 func (n *selfTestWorkspaceNative) ListScratch(ctx context.Context, in port.ListRequest, _ port.ScratchReadBinding) (*port.ListResponse, error) {
 	return n.List(ctx, in)

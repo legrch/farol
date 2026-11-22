@@ -149,13 +149,13 @@ func (n *discoveryWorkspace) Inspect(ctx context.Context, r port.ListRequest) (*
 
 func (n *discoveryWorkspace) List(_ context.Context, r port.ListRequest) (*port.ListResponse, error) {
 	n.lists++
-	return &port.ListResponse{Binding: &port.DirectoryBinding{RelativePath: r.RelativePath, Root: r.Workspace.Root, ApprovedRoot: r.Workspace.ApprovedRoot}}, nil
+	return &port.ListResponse{Binding: &port.DirectoryBinding{RelativePath: r.RelativePath, Root: r.Workspace.Root, ApprovedRoot: r.Workspace.ApprovedRoot, Physical: discoveryWitness, ApprovedPhysical: discoveryWitness}}, nil
 }
 func (n *discoveryWorkspace) Read(_ context.Context, r port.ReadRequest) (*port.ReadResponse, error) {
 	n.reads++
 	switch r.RelativePath {
 	case "AGENTS.md":
-		return &port.ReadResponse{Text: "🌊", Bytes: 4, SHA256: strings.Repeat("a", 64)}, nil
+		return &port.ReadResponse{Text: "🌊", Bytes: 4, SHA256: strings.Repeat("a", 64), Physical: discoveryWitness, ApprovedPhysical: discoveryWitness}, nil
 	case "a/AGENTS.md":
 		return nil, authority.Fail("WORKSPACE_NOT_FOUND", "native-workspace")
 	case "a/b/AGENTS.md":
@@ -472,3 +472,6 @@ func TestDiscoveryBootstrapEscapingBoundAndFactoryFailureDoNotDisclose(t *testin
 		t.Fatal("cancelled selection invoked Computer")
 	}
 }
+
+// discoveryWitness is the live root a port double reports for every open.
+var discoveryWitness = port.Root{Path: "/work", Device: "1", Inode: "2"}

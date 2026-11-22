@@ -296,6 +296,10 @@ type platformSelection struct {
 	original, wrapped Command
 	binding           PlatformStrategyBinding
 	deadline          platformOriginalDeadline
+	// prepared holds the directories measured at selection. With path-bound
+	// approval no saved pair pins secondary roots or cwd, so the invocation
+	// must find exactly these live directories (no replacement in between).
+	prepared []platformDirectoryBinding
 }
 
 // This cell binds time only, not a dispatch, journal, authority store or cache.
@@ -376,9 +380,11 @@ func (s *RootScopedPlatformStrategy) Select(ctx context.Context, policy Seatbelt
 	selected := &RootScopedPlatformSelection{&platformSelection{strategy: *s, policy: policy, original: original, wrapped: wrapped, binding: binding}}
 	// Reject unsupported roots during preparation, before the caller reserves an
 	// execution. The original StartLease still repeats all native checks.
-	if _, err := selected.frozen.inspectDirectories(ctx); err != nil {
+	prepared, err := selected.frozen.inspectDirectories(ctx)
+	if err != nil {
 		return nil, err
 	}
+	selected.frozen.prepared = prepared
 	return selected, nil
 }
 
@@ -450,6 +456,9 @@ func (s *RootScopedPlatformSelection) BindInvocation(ctx context.Context, origin
 	if err != nil {
 		return nil, refusalAt(err, processsvc.RefusalConfinementPolicy)
 	}
+	if f.prepared == nil || !slices.Equal(directories, f.prepared) {
+		return nil, refusalAt(nil, processsvc.RefusalDirectoryPolicy)
+	}
 	if !f.current(ctx, deadline) {
 		return nil, refusalAt(nil, processsvc.RefusalAdmissionPolicy)
 	}
@@ -513,9 +522,19 @@ func (s *platformSelection) inspectDirectories(ctx context.Context) ([]platformD
 		state := s.policy.ProtectedState
 		directories = append(directories, directory{state.Path, state.Identity, state.Identity.Device})
 	}
+	// Path-bound approval (owner decision 2026-11-22): each approved root is
+	// measured live here; its scope must be on that live device. The primary
+	// root above still compares with the command's live preparation witness.
 	for _, root := range plan.roots {
-		directories = append(directories, directory{root.ApprovedRoot, root.RootIdentity, root.RootIdentity.Device},
-			directory{root.ScopeRoot, authority.RootIdentity{}, root.RootIdentity.Device})
+		if ctx == nil || ctx.Err() != nil {
+			return refuse()
+		}
+		approved, err := s.strategy.frozen.facts.directory(ctx, root.ApprovedRoot)
+		if err != nil || approved.path != root.ApprovedRoot || approved.identity.Device == "" {
+			return nil, refusalAt(nil, processsvc.RefusalDirectoryPolicy)
+		}
+		directories = append(directories, directory{root.ApprovedRoot, authority.RootIdentity{}, approved.identity.Device},
+			directory{root.ScopeRoot, authority.RootIdentity{}, approved.identity.Device})
 	}
 	out := make([]platformDirectoryBinding, 0, len(directories))
 	for _, d := range directories {

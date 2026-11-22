@@ -85,7 +85,7 @@ func TestRetainedReadPhysicalQualificationRequiresReadAndRechecksOwners(t *testi
 			case "policy-during-probe":
 				workspace.before = func() { read.a.Capabilities = nil }
 			case "physical-policy-during-probe":
-				workspace.before = func() { read.a.Workspaces[0].RootIdentity.Inode = "3" }
+				workspace.before = func() { read.a.Workspaces[0].Root = "/workspace" }
 			}
 			out, err := o.Read(context.Background(), ReadRequest{Handle: "owned-child"})
 			wantProbes := 1
@@ -239,8 +239,6 @@ func TestRetainedReadRechecksAuthorityBeforeReadAndAfterObservation(t *testing.T
 		"workspace-grant":    func(e *execution) { e.p.Grant.Workspaces[0].WorkspaceID = "other" },
 		"workspace-approval": func(e *execution) { e.a.Workspaces[0].WorkspaceID = "other" },
 		"root":               func(e *execution) { e.a.Workspaces[0].Root = "/workspace" },
-		"physical-device":    func(e *execution) { e.a.Workspaces[0].RootIdentity.Device = "3" },
-		"physical-inode":     func(e *execution) { e.a.Workspaces[0].RootIdentity.Inode = "3" },
 		"path-exclusion": func(e *execution) {
 			e.p.Grant.ExcludedPaths = []authority.Exclusion{{WorkspaceID: "code", Path: "/workspace/code"}}
 		},
