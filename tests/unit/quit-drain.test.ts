@@ -921,3 +921,176 @@ describe("normal Quit preparation shares the original absolute drain budget", ()
     expect(record).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("Quit claim steps and stage observation (0.5.27 stabilization)", () => {
+  const flush = async () => {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+  };
+
+  it("latches every claim step before the first synchronous preparation step", async () => {
+    const order: string[] = [];
+    const quit = vi.fn();
+    const drain = createQuitDrain({
+      deadlineMs: 1_000,
+      onClaim: [
+        { name: "admission", run: () => order.push("admission") },
+        { name: "start", run: () => order.push("start") },
+      ],
+      prepare: (context) => {
+        order.push(`prepare:${context.canStartEffect()}`);
+        return Promise.resolve({ status: "skipped" });
+      },
+      collect: () => {
+        order.push("collect");
+        return [];
+      },
+      record: async () => undefined,
+      quit,
+    });
+    const event = { preventDefault: vi.fn() };
+    drain.onBeforeQuit(event);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(order.slice(0, 3)).toEqual(["admission", "start", "prepare:true"]);
+    await vi.waitFor(() => expect(quit).toHaveBeenCalledOnce());
+    expect(order).toEqual(["admission", "start", "prepare:true", "collect"]);
+  });
+
+  it("still drains when a claim step throws and records it as unconfirmed", async () => {
+    const receipts: QuitDrainReceipt[] = [];
+    const closed = vi.fn(async () => undefined);
+    const quit = vi.fn();
+    const drain = createQuitDrain({
+      deadlineMs: 1_000,
+      onClaim: [
+        {
+          name: "transport-watch",
+          run: () => {
+            throw new Error("closed twice");
+          },
+        },
+        { name: "admission", run: () => undefined },
+      ],
+      collect: () => [{ name: "connector", close: closed }],
+      record: async (receipt) => void receipts.push(receipt),
+      quit,
+    });
+    drain.onBeforeQuit({ preventDefault: () => undefined });
+    await vi.waitFor(() => expect(quit).toHaveBeenCalledOnce());
+    expect(closed).toHaveBeenCalledOnce();
+    expect(receipts).toEqual([
+      { drained: false, unconfirmed: ["claim:transport-watch"] },
+    ]);
+  });
+
+  it("runs claim steps once and reports a re-entrant Quit without restarting", async () => {
+    const admission = vi.fn();
+    const stages: string[] = [];
+    let release!: () => void;
+    const quit = vi.fn();
+    const drain = createQuitDrain({
+      deadlineMs: 1_000,
+      onClaim: [{ name: "admission", run: admission }],
+      collect: () => [
+        {
+          name: "connector",
+          close: () => new Promise<void>((r) => (release = r)),
+        },
+      ],
+      record: async () => undefined,
+      quit,
+      observe: (stage) => stages.push(stage.stage),
+    });
+    drain.onBeforeQuit({ preventDefault: () => undefined });
+    drain.onBeforeQuit({ preventDefault: () => undefined });
+    expect(admission).toHaveBeenCalledOnce();
+    expect(stages).toContain("second-quit");
+    release();
+    await vi.waitFor(() => expect(quit).toHaveBeenCalledOnce());
+  });
+
+  it("confirms two closers that share a name separately", async () => {
+    let releaseSecond!: () => void;
+    const receipt = await drainOwnedChildren(
+      [
+        { name: "host-check", close: async () => undefined },
+        {
+          name: "host-check",
+          close: () => new Promise<void>((r) => (releaseSecond = r)),
+        },
+      ],
+      30,
+    );
+    releaseSecond?.();
+    expect(receipt).toEqual({ drained: false, unconfirmed: ["host-check"] });
+  });
+
+  it("emits the full stage sequence and survives a throwing observer", async () => {
+    const stages: string[] = [];
+    const quit = vi.fn();
+    const drain = createQuitDrain({
+      deadlineMs: 1_000,
+      prepare: async () => ({ status: "skipped" }),
+      collect: () => [
+        { name: "connector", close: async () => undefined },
+        {
+          name: "go-core",
+          close: async () => {
+            throw new Error("unconfirmed");
+          },
+        },
+      ],
+      record: async () => undefined,
+      quit,
+      observe: (stage) => {
+        stages.push(
+          stage.stage === "closer-end"
+            ? `closer-end:${stage.name}:${stage.outcome}`
+            : stage.stage === "record-end"
+              ? `record-end:${stage.outcome}`
+              : stage.stage,
+        );
+        throw new Error("observer bug");
+      },
+    });
+    drain.onBeforeQuit({ preventDefault: () => undefined });
+    await vi.waitFor(() => expect(quit).toHaveBeenCalledOnce());
+    await flush();
+    expect(stages).toEqual([
+      "drain-entered",
+      "preparation-begin",
+      "preparation-end",
+      "collect-end",
+      "closer-begin",
+      "closer-begin",
+      "closer-end:connector:confirmed",
+      "closer-end:go-core:failed",
+      "drain-end",
+      "record-begin",
+      "record-end:recorded",
+      "exit-requested",
+    ]);
+  });
+
+  it("marks a recorder that outlives the budget as timed out and still quits", async () => {
+    vi.useFakeTimers();
+    try {
+      const outcomes: string[] = [];
+      const quit = vi.fn();
+      const drain = createQuitDrain({
+        deadlineMs: 100,
+        collect: () => [],
+        record: () => new Promise<void>(() => undefined),
+        quit,
+        observe: (stage) => {
+          if (stage.stage === "record-end") outcomes.push(stage.outcome);
+        },
+      });
+      drain.onBeforeQuit({ preventDefault: () => undefined });
+      await vi.advanceTimersByTimeAsync(150);
+      expect(quit).toHaveBeenCalledOnce();
+      expect(outcomes).toEqual(["timed-out"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

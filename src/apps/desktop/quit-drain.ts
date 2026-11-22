@@ -44,6 +44,44 @@ export type QuitDrainReceipt = Readonly<{
   unconfirmed: readonly string[];
 }>;
 
+/** Fixed, content-free Quit stages. Diagnostic only: never authority. */
+export type QuitStage =
+  | Readonly<{ stage: "drain-entered" }>
+  | Readonly<{ stage: "claim-step-failed"; step: string }>
+  | Readonly<{ stage: "second-quit" }>
+  | Readonly<{ stage: "preparation-begin" }>
+  | Readonly<{
+      stage: "preparation-end";
+      status: QuitPreparationResult["status"] | "timed-out" | "failed";
+    }>
+  | Readonly<{ stage: "collect-end"; closers: number }>
+  | Readonly<{ stage: "closer-begin"; closer: number; name: string }>
+  | Readonly<{
+      stage: "closer-end";
+      closer: number;
+      name: string;
+      outcome: "confirmed" | "failed" | "late";
+    }>
+  | Readonly<{ stage: "drain-end"; drained: boolean; unconfirmed: number }>
+  | Readonly<{ stage: "record-begin" }>
+  | Readonly<{
+      stage: "record-end";
+      outcome: "recorded" | "failed" | "timed-out";
+    }>
+  | Readonly<{ stage: "exit-requested" }>;
+
+/** Must not throw or block; every call is isolated anyway. */
+export type QuitStageObserver = (stage: QuitStage) => void;
+
+function emit(observer: QuitStageObserver | undefined, stage: QuitStage) {
+  if (!observer) return;
+  try {
+    observer(stage);
+  } catch {
+    // Observation can never change Quit.
+  }
+}
+
 /**
  * Closes every owned child at quit and waits for each to confirm, up to one
  * shared deadline. Sending a signal is not a drain; only a confirmed close
@@ -55,13 +93,37 @@ export async function drainOwnedChildren(
   // Preparation may have spent part of Quit's original absolute budget.
   // Omitted by existing callers, whose relative-drain semantics are retained.
   deadlineAt?: number,
+  observer?: QuitStageObserver,
 ): Promise<QuitDrainReceipt> {
-  const confirmed = new Set<string>();
+  // Each closer is its own obligation: two closers sharing a name are
+  // confirmed separately, never by the first one to finish.
+  const confirmed = new Set<number>();
   const closing = Promise.allSettled(
-    closers.map(async (closer) => {
-      await closer.close();
-      if (deadlineAt === undefined || Date.now() < deadlineAt)
-        confirmed.add(closer.name);
+    closers.map(async (closer, index) => {
+      emit(observer, {
+        stage: "closer-begin",
+        closer: index,
+        name: closer.name,
+      });
+      try {
+        await closer.close();
+      } catch (error) {
+        emit(observer, {
+          stage: "closer-end",
+          closer: index,
+          name: closer.name,
+          outcome: "failed",
+        });
+        throw error;
+      }
+      const intime = deadlineAt === undefined || Date.now() < deadlineAt;
+      if (intime) confirmed.add(index);
+      emit(observer, {
+        stage: "closer-end",
+        closer: index,
+        name: closer.name,
+        outcome: intime ? "confirmed" : "late",
+      });
     }),
   );
   let timer: NodeJS.Timeout | undefined;
@@ -82,8 +144,8 @@ export async function drainOwnedChildren(
   ]);
   clearTimeout(timer);
   const unconfirmed = closers
-    .map((closer) => closer.name)
-    .filter((name) => !confirmed.has(name));
+    .filter((_, index) => !confirmed.has(index))
+    .map((closer) => closer.name);
   return { drained: unconfirmed.length === 0, unconfirmed };
 }
 
@@ -121,6 +183,13 @@ export type QuitDrainPorts = Readonly<{
   // The private diagnostic receipt. Its failure changes nothing about the
   // drain's outcome or the quit.
   record(receipt: QuitDrainReceipt): Promise<void>;
+  // Synchronous steps that must hold before preparation or collection can
+  // run (admission latch, start cancellation). Called once, right after the
+  // attempt is claimed. Each step is isolated: a throwing step is recorded
+  // as an unconfirmed obligation and never skips the drain.
+  onClaim?: readonly Readonly<{ name: string; run(): void }>[];
+  // Optional diagnostic sink; never awaited, never authority.
+  observe?: QuitStageObserver;
   // Quits for real, once, after the drain settled or its deadline passed.
   quit(): void;
 }>;
@@ -159,8 +228,22 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
     onBeforeQuit: (event) => {
       if (state === "done") return;
       event.preventDefault();
-      if (state === "draining") return;
+      if (state === "draining") {
+        emit(ports.observe, { stage: "second-quit" });
+        return;
+      }
       state = "draining";
+      emit(ports.observe, { stage: "drain-entered" });
+      // Latch admission before the first synchronous preparation step.
+      const claimFailures: string[] = [];
+      for (const step of ports.onClaim ?? []) {
+        try {
+          step.run();
+        } catch {
+          claimFailures.push(step.name);
+          emit(ports.observe, { stage: "claim-step-failed", step: step.name });
+        }
+      }
       const startedAt = Date.now();
       const deadlineAt = startedAt + ports.deadlineMs;
       const remaining = () => Math.max(0, deadlineAt - Date.now());
@@ -178,6 +261,10 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
           const closers = [
             ...ports.collect(Object.freeze({ deadlineAt: drainDeadlineAt })),
           ];
+          emit(ports.observe, {
+            stage: "collect-end",
+            closers: closers.length,
+          });
           const budget = drainRemaining();
           if (budget === 0) {
             // Still ask every actual closer to stop, but an exit after the
@@ -190,7 +277,12 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
               unconfirmed: closers.map((closer) => closer.name),
             });
           }
-          return drainOwnedChildren(closers, budget, drainDeadlineAt);
+          return drainOwnedChildren(
+            closers,
+            budget,
+            drainDeadlineAt,
+            ports.observe,
+          );
         } catch {
           // Collection may already have disposed some handles before throwing.
           // Their exit is unproved, so keep the run marker and still quit.
@@ -203,14 +295,16 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
       const prepareAndDrain = async (): Promise<QuitDrainReceipt> => {
         let unconfirmed = false;
         if (prepare && preparationRemaining() > 0) {
+          emit(ports.observe, { stage: "preparation-begin" });
+          let timedOut = false;
           let preparing = true;
           let preparationTimer: NodeJS.Timeout | undefined;
           const expired = new Promise<QuitPreparationResult>((resolve) => {
             // Referenced: pending preparation must not strand normal Quit.
-            preparationTimer = setTimeout(
-              () => resolve({ status: "unknown" }),
-              preparationRemaining(),
-            );
+            preparationTimer = setTimeout(() => {
+              timedOut = true;
+              resolve({ status: "unknown" });
+            }, preparationRemaining());
           });
           try {
             const originalAttempt = prepare(
@@ -225,8 +319,16 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
               // Observe late rejection without settling/cancelling its attempt.
               void originalAttempt.catch(() => undefined);
               unconfirmed = true;
+              emit(ports.observe, {
+                stage: "preparation-end",
+                status: "timed-out",
+              });
             } else {
               const result = await Promise.race([originalAttempt, expired]);
+              emit(ports.observe, {
+                stage: "preparation-end",
+                status: timedOut ? "timed-out" : result.status,
+              });
               switch (result.status) {
                 case "accepted":
                 case "skipped":
@@ -240,6 +342,7 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
           } catch {
             // A throwing hook cannot prove whether it dispatched an effect.
             unconfirmed = true;
+            emit(ports.observe, { stage: "preparation-end", status: "failed" });
           } finally {
             preparing = false;
             clearTimeout(preparationTimer);
@@ -255,22 +358,62 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
       };
       // Preserve synchronous collection and child-close invocation when the
       // optional hook is absent, including reentrant before-quit behavior.
-      const draining = prepare ? prepareAndDrain() : collectAndDrain();
+      const drained = prepare ? prepareAndDrain() : collectAndDrain();
+      // A claim step that could not be established is an unconfirmed stop.
+      const draining = drained.then((receipt): QuitDrainReceipt => {
+        const result =
+          claimFailures.length === 0
+            ? receipt
+            : {
+                drained: false,
+                unconfirmed: [
+                  ...claimFailures.map((name) => `claim:${name}`),
+                  ...receipt.unconfirmed,
+                ],
+              };
+        emit(ports.observe, {
+          stage: "drain-end",
+          drained: result.drained,
+          unconfirmed: result.unconfirmed.length,
+        });
+        return result;
+      });
       let recordTimer: NodeJS.Timeout | undefined;
       void draining
         .then((receipt) => {
           // Recording is bounded by the same absolute deadline that bounds
           // the drain (the elapsed drain time counts against it): a
           // `record` that never settles must not delay quit past it.
-          const recorded = ports.record(receipt).catch(() => undefined);
+          emit(ports.observe, { stage: "record-begin" });
+          let settled = false;
+          const recorded = ports.record(receipt).then(
+            () => {
+              settled = true;
+              emit(ports.observe, { stage: "record-end", outcome: "recorded" });
+            },
+            () => {
+              settled = true;
+              emit(ports.observe, { stage: "record-end", outcome: "failed" });
+            },
+          );
           const budget = remaining();
           // An exhausted preparation/drain has no fresh receipt budget. The
           // diagnostic still starts, but cannot postpone the real Quit.
-          if (budget === 0) return undefined;
+          if (budget === 0) {
+            emit(ports.observe, { stage: "record-end", outcome: "timed-out" });
+            return undefined;
+          }
           return Promise.race([
             recorded,
             new Promise<void>((resolve) => {
-              recordTimer = setTimeout(resolve, budget);
+              recordTimer = setTimeout(() => {
+                if (!settled)
+                  emit(ports.observe, {
+                    stage: "record-end",
+                    outcome: "timed-out",
+                  });
+                resolve();
+              }, budget);
               // The diagnostic write must not be able to strand the real
               // quit. Keep its absolute-deadline timer referenced for the
               // same reason as the child-drain deadline above.
@@ -281,6 +424,8 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
         .finally(() => {
           clearTimeout(recordTimer);
           state = "done";
+          // Never awaited: the real Quit cannot wait for any diagnostic.
+          emit(ports.observe, { stage: "exit-requested" });
           ports.quit();
         });
     },

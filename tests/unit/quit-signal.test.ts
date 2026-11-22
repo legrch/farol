@@ -142,3 +142,27 @@ describe("desktop graceful signals", () => {
     bridge.dispose();
   });
 });
+
+describe("graceful signals are observed without changing their outcome", () => {
+  it("reports the first signal as handled and a repeat as ignored", () => {
+    const signals = new EventEmitter();
+    const requestQuit = vi.fn();
+    const seen: string[] = [];
+    const quit = createGracefulQuitSignals({
+      signals,
+      requestQuit,
+      isQuitting: () => false,
+      observe: (signal, ignored) => {
+        seen.push(`${signal}:${ignored}`);
+        throw new Error("observer bug");
+      },
+    });
+    quit.ready();
+    signals.emit("SIGTERM");
+    signals.emit("SIGINT");
+    expect(requestQuit).toHaveBeenCalledOnce();
+    expect(seen).toEqual(["SIGTERM:false", "SIGINT:true"]);
+    quit.dispose();
+    expect(signals.listenerCount("SIGTERM")).toBe(0);
+  });
+});
