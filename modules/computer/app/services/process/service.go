@@ -128,9 +128,11 @@ func (s *Service) withCurrent(ctx context.Context, disclose func() error) error 
 		if inspected != nil {
 			return inspected
 		}
+		// Path-bound approval: join by workspace ID and path. The seal's root
+		// identity is the live preparation witness, verified natively.
 		matched := false
 		for _, workspace := range a.Workspaces {
-			if workspace.WorkspaceID == s.intent.Seal.WorkspaceID && workspace.Root == s.intent.Seal.Root && workspace.RootIdentity == s.intent.Seal.RootIdentity && workspace.ShellVerified {
+			if workspace.WorkspaceID == s.intent.Seal.WorkspaceID && workspace.Root == s.intent.Seal.Root && workspace.ShellVerified {
 				matched = true
 			}
 		}

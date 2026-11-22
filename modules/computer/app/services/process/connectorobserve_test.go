@@ -185,7 +185,7 @@ func TestConnectorObserveCurrentDenialsFenceProbeChildAndDisclosure(t *testing.T
 			case "generation-pair":
 				read.a.Generation++
 			case "root":
-				read.a.Workspaces[0].RootIdentity.Inode = "3"
+				read.a.Workspaces[0].Root = "/workspace"
 			case "physical-root":
 				workspace.value.RootIdentity.Inode = "3"
 				wantProbes = 1
