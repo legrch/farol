@@ -343,9 +343,14 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
               });
             } else {
               const result = await Promise.race([originalAttempt, expired]);
+              // Settling after the absolute deadline is a timeout even when
+              // its callback ran before the overdue timer did.
               emit(ports.observe, {
                 stage: "preparation-end",
-                result: timedOut ? "timed-out" : result.status,
+                result:
+                  timedOut || preparationRemaining() === 0
+                    ? "timed-out"
+                    : result.status,
               });
               switch (result.status) {
                 case "accepted":
@@ -406,10 +411,19 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
           // Exactly one terminal record-end; a recorder that settles after
           // the budget reports record-late instead of a second result.
           let terminal = false;
-          const finish = (result: "recorded" | "failed" | "timed-out") => {
+          const finish = (settled: "recorded" | "failed" | "timed-out") => {
+            // A settlement after the absolute deadline is a timeout even when
+            // its callback ran before the overdue timer did.
+            const result = remaining() === 0 ? "timed-out" : settled;
             if (terminal) {
-              if (result !== "timed-out")
+              if (settled !== "timed-out")
                 emit(ports.observe, { stage: "record-late" });
+              return;
+            }
+            if (result === "timed-out" && settled !== "timed-out") {
+              terminal = true;
+              emit(ports.observe, { stage: "record-end", result });
+              emit(ports.observe, { stage: "record-late" });
               return;
             }
             terminal = true;

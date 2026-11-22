@@ -1,3 +1,4 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -140,7 +141,7 @@ describe("Quit trace: diagnostic, bounded, never in the Quit path", () => {
     expect(kept.length).toBeLessThan(10);
   });
 
-  it("refuses a non-regular target and starts fresh over an oversized trace", async () => {
+  it("refuses a non-regular target and opens the existing trace nonblocking", async () => {
     const state = await root();
     const target = path.join(state, QUIT_TRACE_FILE_NAME);
     const { createServer } = await import("node:net");
@@ -152,7 +153,28 @@ describe("Quit trace: diagnostic, bounded, never in the Quit path", () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
     await fs.rm(target, { force: true });
-    await fs.writeFile(target, "x".repeat(200 * 1024), { mode: 0o600 });
+    await fs.writeFile(target, `${line("p", "old")}\n`, { mode: 0o600 });
+    const open = vi.spyOn(fs, "open");
+    try {
+      await writeQuitTrace(state, [line("p", "new")]);
+      const readFlags = open.mock.calls.find(([file]) => file === target)?.[1];
+      expect(typeof readFlags).toBe("number");
+      expect((readFlags as number) & fsConstants.O_NONBLOCK).toBe(
+        fsConstants.O_NONBLOCK,
+      );
+    } finally {
+      open.mockRestore();
+    }
+  });
+
+  it("never reads an oversized trace, even one made of valid records", async () => {
+    const state = await root();
+    const target = path.join(state, QUIT_TRACE_FILE_NAME);
+    const valid = Array.from({ length: 2_000 }, (_, i) =>
+      line("old", `a${i % 5}`, "x".repeat(60)),
+    ).join("\n");
+    expect(Buffer.byteLength(valid)).toBeGreaterThan(128 * 1024);
+    await fs.writeFile(target, `${valid}\n`, { mode: 0o600 });
     await writeQuitTrace(state, [line("p", "fresh")]);
     expect((await fs.readFile(target, "utf8")).trim()).toBe(line("p", "fresh"));
   });

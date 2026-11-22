@@ -1165,4 +1165,62 @@ describe("Quit claim steps and stage observation (0.5.27 stabilization)", () => 
       vi.useRealTimers();
     }
   });
+
+  it("reports a recorder that settles after the deadline as timed out even before the timer fires", async () => {
+    let now = 1_000_000;
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const stages: string[] = [];
+      let release!: () => void;
+      const drain = createQuitDrain({
+        deadlineMs: 100,
+        collect: () => [],
+        record: () => new Promise<void>((r) => (release = r)),
+        quit: () => undefined,
+        observe: (stage) =>
+          stages.push(
+            stage.stage === "record-end"
+              ? `record-end:${stage.result}`
+              : stage.stage,
+          ),
+      });
+      drain.onBeforeQuit({ preventDefault: () => undefined });
+      await vi.waitFor(() => expect(stages).toContain("record-begin"));
+      now += 101;
+      release();
+      await vi.waitFor(() => expect(stages).toContain("record-late"));
+      expect(stages.filter((s) => s.startsWith("record-end"))).toEqual([
+        "record-end:timed-out",
+      ]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("reports preparation that settles after its deadline as timed out", async () => {
+    let now = 2_000_000;
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const results: string[] = [];
+      let release!: (value: { status: "accepted" }) => void;
+      const drain = createQuitDrain({
+        deadlineMs: 1_000,
+        preparationMs: 100,
+        prepare: () => new Promise((r) => (release = r)),
+        collect: () => [],
+        record: async () => undefined,
+        quit: () => undefined,
+        observe: (stage) => {
+          if (stage.stage === "preparation-end") results.push(stage.result);
+        },
+      });
+      drain.onBeforeQuit({ preventDefault: () => undefined });
+      now += 150;
+      release({ status: "accepted" });
+      await vi.waitFor(() => expect(results).toHaveLength(1));
+      expect(results).toEqual(["timed-out"]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

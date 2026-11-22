@@ -105,6 +105,40 @@ export function createQuitProgressWindow(
       )
       .catch(() => undefined);
   };
+  // Placement is checked again before the first show and whenever displays
+  // change: a panel whose display went away is hidden, never moved onto a
+  // display the policy excludes.
+  const reconcile = (first: boolean) => {
+    if (disposed || !panel || panel.isDestroyed()) return;
+    try {
+      const selected = bounds();
+      if (!selected) {
+        panel.hide();
+        return;
+      }
+      panel.setBounds(selected);
+      if (first || panel.isVisible()) panel.showInactive();
+    } catch {
+      try {
+        panel.hide();
+      } catch {
+        // Terminal exit destroys the window anyway.
+      }
+    }
+  };
+  const onDisplays = () => reconcile(false);
+  let watchingDisplays = false;
+  const unwatchDisplays = () => {
+    if (!watchingDisplays) return;
+    watchingDisplays = false;
+    try {
+      screen.removeListener("display-removed", onDisplays);
+      screen.removeListener("display-added", onDisplays);
+      screen.removeListener("display-metrics-changed", onDisplays);
+    } catch {
+      // Nothing else depends on these listeners.
+    }
+  };
   const show = () => {
     if (disposed || panel || state.step === "exiting") return;
     try {
@@ -137,10 +171,13 @@ export function createQuitProgressWindow(
       });
       panel.once("closed", () => {
         panel = null;
+        unwatchDisplays();
       });
-      panel.once("ready-to-show", () => {
-        if (!disposed && panel && !panel.isDestroyed()) panel.showInactive();
-      });
+      panel.once("ready-to-show", () => reconcile(true));
+      screen.on("display-removed", onDisplays);
+      screen.on("display-added", onDisplays);
+      screen.on("display-metrics-changed", onDisplays);
+      watchingDisplays = true;
       render();
       refreshTimer = setInterval(render, 1_000);
       // Never keeps the process alive on its own.
@@ -172,6 +209,7 @@ export function createQuitProgressWindow(
     dispose() {
       if (disposed) return;
       disposed = true;
+      unwatchDisplays();
       clearTimeout(showTimer);
       clearInterval(refreshTimer);
       try {

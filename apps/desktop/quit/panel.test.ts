@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
-const constructed = vi.hoisted(() => ({ count: 0 }));
+const constructed = vi.hoisted(() => ({
+  count: 0,
+  shown: 0,
+  hidden: 0,
+  readyToShow: null as null | (() => void),
+  displays: new Map<string, () => void>(),
+}));
 vi.mock("electron", () => ({
   BrowserWindow: class {
     webContents = {
@@ -11,14 +17,28 @@ vi.mock("electron", () => ({
     constructor() {
       constructed.count++;
     }
-    once() {}
+    once(event: string, listener: () => void) {
+      if (event === "ready-to-show") constructed.readyToShow = listener;
+    }
     isDestroyed() {
       return false;
     }
+    isVisible() {
+      return constructed.shown > constructed.hidden;
+    }
+    setBounds() {}
     destroy() {}
-    showInactive() {}
+    hide() {
+      constructed.hidden++;
+    }
+    showInactive() {
+      constructed.shown++;
+    }
   },
   screen: {
+    on: (event: string, listener: () => void) =>
+      constructed.displays.set(event, listener),
+    removeListener: (event: string) => constructed.displays.delete(event),
     getCursorScreenPoint: () => ({ x: 0, y: 0 }),
     getDisplayNearestPoint: () => ({
       workArea: { x: 0, y: 0, width: 1000, height: 800 },
@@ -91,6 +111,74 @@ describe("Quit progress panel", () => {
       panel.observe({ stage: "drain-entered" });
       vi.advanceTimersByTime(5_000);
       expect(constructed.count).toBe(0);
+      panel.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("revalidates placement before the first show and hides when the display goes away", () => {
+    vi.useFakeTimers();
+    Object.assign(constructed, {
+      count: 0,
+      shown: 0,
+      hidden: 0,
+      readyToShow: null,
+    });
+    constructed.displays.clear();
+    let available = true;
+    try {
+      const panel = createQuitProgressWindow({
+        deadlineMs: 60_000,
+        delayMs: 1_500,
+        placement: () => {
+          if (!available) throw new Error("DISPLAY_GONE");
+          return { x: 0, y: 0, width: 380, height: 220 };
+        },
+      });
+      panel.observe({ stage: "drain-entered" });
+      vi.advanceTimersByTime(1_600);
+      expect(constructed.count).toBe(1);
+      available = false;
+      constructed.readyToShow?.();
+      expect(constructed.shown).toBe(0);
+      expect(constructed.hidden).toBe(1);
+      available = true;
+      constructed.displays.get("display-added")?.();
+      expect(constructed.shown).toBe(0);
+      panel.dispose();
+      expect(constructed.displays.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("hides an already visible panel when its display is removed", () => {
+    vi.useFakeTimers();
+    Object.assign(constructed, {
+      count: 0,
+      shown: 0,
+      hidden: 0,
+      readyToShow: null,
+    });
+    constructed.displays.clear();
+    let available = true;
+    try {
+      const panel = createQuitProgressWindow({
+        deadlineMs: 60_000,
+        delayMs: 1_500,
+        placement: () => {
+          if (!available) throw new Error("DISPLAY_GONE");
+          return { x: 0, y: 0, width: 380, height: 220 };
+        },
+      });
+      panel.observe({ stage: "drain-entered" });
+      vi.advanceTimersByTime(1_600);
+      constructed.readyToShow?.();
+      expect(constructed.shown).toBe(1);
+      available = false;
+      constructed.displays.get("display-removed")?.();
+      expect(constructed.hidden).toBe(1);
       panel.dispose();
     } finally {
       vi.useRealTimers();
