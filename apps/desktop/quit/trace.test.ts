@@ -90,7 +90,7 @@ describe("Quit trace: diagnostic, bounded, never in the Quit path", () => {
     const trace = createQuitTrace({ directory: "/unused", pid: 1, write });
     for (let i = 0; i < QUIT_TRACE_MAX_PENDING + 50; i++)
       expect(() => trace.record({ stage: "second-quit" })).not.toThrow();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(write).toHaveBeenCalled());
     release();
     await trace.flushed();
     expect(trace.dropped()).toBeGreaterThan(0);

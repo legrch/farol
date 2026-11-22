@@ -11222,12 +11222,8 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     // finish this exact attempt without reopening the drain or another update.
     quit: () => {
       try {
-        quitProgress.dispose();
-      } catch {
-        // The progress window can never hold the real Quit.
-      }
-      try {
-        // app.exit skips will-quit; release the owned tray explicitly.
+        // app.exit skips will-quit; release the owned tray explicitly. The
+        // progress window is destroyed by the terminal exit itself.
         disposeMenuBarOnQuit?.();
       } finally {
         app.exit(0);

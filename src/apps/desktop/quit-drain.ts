@@ -87,36 +87,10 @@ function emit(observer: QuitStageObserver | undefined, stage: QuitStage) {
 }
 
 /**
- * Quit's own deadlines must never pay for diagnostics. Stages are captured in
- * order at constant cost and handed to the real observer on a later macrotask,
- * after the deadline-sensitive work they describe has already started. Stages
- * still queued when the process exits are lost; the trace is best effort.
+ * Diagnostics are delivered synchronously at the event's source, so their
+ * order and time are the event's own. Sinks must be constant-time captures
+ * (the trace enqueues; serialization and I/O happen later off this path).
  */
-export function deferQuitObserver(
-  observer: QuitStageObserver | undefined,
-  schedule: (run: () => void) => void = (run) => void setImmediate(run),
-): QuitStageObserver | undefined {
-  if (!observer) return undefined;
-  let queue: QuitStage[] = [];
-  let scheduled = false;
-  const flush = () => {
-    scheduled = false;
-    const batch = queue;
-    queue = [];
-    for (const stage of batch) emit(observer, stage);
-  };
-  return (stage) => {
-    queue.push(stage);
-    if (scheduled) return;
-    scheduled = true;
-    try {
-      schedule(flush);
-    } catch {
-      scheduled = false;
-    }
-  };
-}
-
 /**
  * One Quit phase's terminal report. Whichever comes first, the phase's own
  * settlement or its deadline timer, decides the single terminal result; a
@@ -309,7 +283,7 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
   )
     throw new Error("QUIT_BUDGET_INVALID");
   let state: QuitDrainState = "idle";
-  const observe = deferQuitObserver(ports.observe);
+  const observe = ports.observe;
   return {
     state: () => state,
     onBeforeQuit: (event) => {

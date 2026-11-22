@@ -215,7 +215,8 @@ export function createQuitTrace(options: QuitTraceOptions): QuitTrace {
   const write = options.write ?? writeQuitTrace;
   const lifetime = `${options.pid}-${randomUUID().slice(0, 8)}`;
   let attempt: { id: string; startedAt: number } | null = null;
-  let pending: string[] = [];
+  // Captured at the source in constant time; serialized only by the writer.
+  let pending: QuitTraceRecord[] = [];
   let droppedCount = 0;
   let chain: Promise<void> = Promise.resolve();
   let scheduled = false;
@@ -224,7 +225,14 @@ export function createQuitTrace(options: QuitTraceOptions): QuitTrace {
     const batch = pending;
     pending = [];
     if (batch.length === 0) return Promise.resolve();
-    return write(options.directory, batch).catch(() => undefined);
+    return Promise.resolve()
+      .then(() =>
+        write(
+          options.directory,
+          batch.map((record) => JSON.stringify(record)),
+        ),
+      )
+      .catch(() => undefined);
   };
   return {
     record(event) {
@@ -237,7 +245,7 @@ export function createQuitTrace(options: QuitTraceOptions): QuitTrace {
           ms: Math.max(0, Math.round(now() - attempt.startedAt)),
           ...event,
         };
-        pending.push(JSON.stringify(record));
+        pending.push(record);
         if (pending.length > QUIT_TRACE_MAX_PENDING) {
           droppedCount += pending.length - QUIT_TRACE_MAX_PENDING;
           pending = pending.slice(-QUIT_TRACE_MAX_PENDING);
