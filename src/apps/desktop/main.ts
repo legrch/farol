@@ -4131,12 +4131,16 @@ async function withdrawDriftedWorkspaceChecksAtLaunch(): Promise<boolean> {
         );
         // Numeric drift (a reboot renumbered the volume) and a recreated
         // folder at the same path keep their check: the folder at the path
-        // is the workspace. Only a vanished folder withdraws it.
+        // is the workspace. A vanished folder, or one now reached through a
+        // linked ancestor (native traversal refuses links), withdraws it.
         if (drift !== "same")
           console.warn(
             `FAROL_WORKSPACE_ROOT_OBSERVED:${JSON.stringify({ drift })}`,
           );
-        if (measured === null)
+        const reachable =
+          measured !== null &&
+          (await realpath(workspace.root).catch(() => null)) === workspace.root;
+        if (!reachable)
           found.push({
             workspaceId: workspace.workspaceId,
             root: workspace.root,
@@ -7607,6 +7611,19 @@ async function configureAdmittedProduct(
           )
             return configurationFailure("CODEX_TASK_OBSERVATION_REFUSED");
         }
+        // The proxy and catalogue queries take time; save the route only if
+        // the writer folder is still the one measured at setup.
+        const writerNow = await lstat(workspace.root, { bigint: true }).catch(
+          () => null,
+        );
+        if (
+          writerNow === null ||
+          !writerNow.isDirectory() ||
+          writerNow.isSymbolicLink() ||
+          writerNow.dev !== writerStat.dev ||
+          writerNow.ino !== writerStat.ino
+        )
+          return refuseRoute("workspace_identity");
         const approvedAt = new Date().toISOString();
         return ProductConfigurationResultSchema.parse(
           await configuration.recordCodexTaskRoute(

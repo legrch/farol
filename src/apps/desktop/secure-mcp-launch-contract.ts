@@ -74,7 +74,9 @@ export function selectedCodexTaskRouteLaunch(
     grant: {
       workspaceId: workspace.workspaceId,
       writerRoot: workspace.root,
-      writerIdentity: selected.writerIdentity ?? workspace.rootIdentity,
+      // Retained legacy builder (normal startup uses Go): it validates the
+      // writer against the approval's saved pair, so it keeps sending it.
+      writerIdentity: workspace.rootIdentity,
       projectId: selected.projectId,
       ...(selected.observeThreadId === undefined
         ? {}
