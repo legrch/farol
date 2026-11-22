@@ -177,11 +177,19 @@ export async function drainOwnedChildren(
     }),
   );
   let timer: NodeJS.Timeout | undefined;
+  const expire = () => {
+    // Latched in the timer itself, before any settlement in the same turn.
+    expired = true;
+    terminals.forEach((terminal) => terminal.timeout());
+  };
   await Promise.race([
     closing,
     new Promise<void>((resolve) => {
       timer = setTimeout(
-        resolve,
+        () => {
+          expire();
+          resolve();
+        },
         deadlineAt === undefined
           ? deadlineMs
           : Math.max(0, deadlineAt - Date.now()),
@@ -189,8 +197,7 @@ export async function drainOwnedChildren(
     }),
   ]);
   clearTimeout(timer);
-  expired = true;
-  terminals.forEach((terminal) => terminal.timeout());
+  expire();
   const unconfirmed = closers
     .filter((_, index) => !confirmed.has(index))
     .map((closer) => closer.name);
@@ -316,16 +323,35 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
           const budget = drainRemaining();
           if (budget === 0) {
             // Still ask every actual closer to stop, but an exit after the
-            // deadline is not confirmed within this Quit's budget.
-            void Promise.allSettled(
-              closers.map(async (closer) => closer.close()),
+            // deadline is not confirmed within this Quit's budget. The same
+            // terminal rule reports each as timed out, then late if it ends.
+            const terminals = closers.map((closer, index) =>
+              phaseTerminal<"confirmed" | "failed">({
+                end: (result) =>
+                  emit(ports.observe, {
+                    stage: "closer-end",
+                    closer: index,
+                    name: closer.name,
+                    result,
+                  }),
+                late: () =>
+                  emit(ports.observe, {
+                    stage: "closer-late",
+                    closer: index,
+                    name: closer.name,
+                  }),
+                expired: () => true,
+              }),
             );
-            closers.forEach((closer, index) =>
-              emit(ports.observe, {
-                stage: "closer-end",
-                closer: index,
-                name: closer.name,
-                result: "timed-out",
+            terminals.forEach((terminal) => terminal.timeout());
+            void Promise.allSettled(
+              closers.map(async (closer, index) => {
+                try {
+                  await closer.close();
+                  terminals[index]!.settle("confirmed");
+                } catch {
+                  terminals[index]!.settle("failed");
+                }
               }),
             );
             return Promise.resolve({
@@ -354,21 +380,34 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
           emit(ports.observe, { stage: "preparation-begin" });
           let preparing = true;
           let preparationTimer: NodeJS.Timeout | undefined;
-          // One classification feeds both the trace and the receipt.
-          const preparation = phaseTerminal<
-            QuitPreparationResult["status"] | "failed"
-          >({
-            end: (result) =>
-              emit(ports.observe, { stage: "preparation-end", result }),
-            late: () => emit(ports.observe, { stage: "preparation-late" }),
-            expired: () => preparationRemaining() === 0,
-          });
-          const expired = new Promise<void>((resolve) => {
+          // The decision is made where the baseline made it: at the race's
+          // continuation, against the absolute deadline, or by the timer. The
+          // same decision feeds both the trace and the receipt. The attempt's
+          // own settlement after that decision is a separate late event.
+          let decided:
+            QuitPreparationResult["status"] | "failed" | "timed-out" | null =
+            null;
+          let settled: QuitPreparationResult["status"] | "failed" | null = null;
+          let lateReported = false;
+          const reportLate = () => {
+            if (lateReported) return;
+            lateReported = true;
+            emit(ports.observe, { stage: "preparation-late" });
+          };
+          const decide = (
+            result: QuitPreparationResult["status"] | "failed" | "timed-out",
+          ) => {
+            if (decided !== null) return;
+            decided = result;
+            emit(ports.observe, { stage: "preparation-end", result });
+            if (result === "timed-out" && settled !== null) reportLate();
+          };
+          const expired = new Promise<QuitPreparationResult>((resolve) => {
             // Referenced: pending preparation must not strand normal Quit.
-            // The timeout is final before the race continues.
+            // The timeout is decided before the race continues.
             preparationTimer = setTimeout(() => {
-              preparation.timeout();
-              resolve();
+              decide("timed-out");
+              resolve({ status: "unknown" });
             }, preparationRemaining());
           });
           try {
@@ -380,21 +419,33 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
               }),
             );
             // Observe the original attempt without settling or cancelling it.
-            const observed = originalAttempt.then(
-              (result) => void preparation.settle(result.status),
-              () => void preparation.settle("failed"),
+            const observe = (
+              result: QuitPreparationResult["status"] | "failed",
+            ) => {
+              if (settled !== null) return;
+              settled = result;
+              if (decided !== null) reportLate();
+            };
+            void originalAttempt.then(
+              (result) => observe(result.status),
+              () => observe("failed"),
             );
             if (preparationRemaining() === 0) {
               // Synchronous hook work also spends the original budget.
-              preparation.timeout();
+              decide("timed-out");
             } else {
-              await Promise.race([observed, expired]);
+              const result = await Promise.race([originalAttempt, expired]);
+              // The baseline deadline check at the continuation.
+              decide(
+                preparationRemaining() === 0 ? "timed-out" : result.status,
+              );
             }
           } catch {
             // A throwing hook cannot prove whether it dispatched an effect.
-            preparation.settle("failed");
+            decide(preparationRemaining() === 0 ? "timed-out" : "failed");
           }
-          const final = preparation.final();
+          const final = decided as
+            QuitPreparationResult["status"] | "failed" | "timed-out" | null;
           unconfirmed = !(
             final === "accepted" ||
             final === "skipped" ||

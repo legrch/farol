@@ -1337,4 +1337,128 @@ describe("Quit claim steps and stage observation (0.5.27 stabilization)", () => 
       }
     },
   );
+
+  it.each(["accepted", "skipped", "blocked"] as const)(
+    "keeps preparation unconfirmed when %s settles before the deadline but the drain resumes after it",
+    async (status) => {
+      vi.useFakeTimers();
+      try {
+        const stages: string[] = [];
+        const receipts: QuitDrainReceipt[] = [];
+        let fulfil!: (value: { status: typeof status }) => void;
+        const drain = createQuitDrain({
+          deadlineMs: 1_000,
+          preparationMs: 100,
+          prepare: () => new Promise((resolve) => (fulfil = resolve)),
+          collect: () => [],
+          record: async (receipt) => void receipts.push(receipt),
+          quit: () => undefined,
+          observe: (stage) =>
+            stages.push(
+              stage.stage === "preparation-end"
+                ? `preparation-end:${stage.result}`
+                : stage.stage,
+            ),
+        });
+        drain.onBeforeQuit({ preventDefault: () => undefined });
+        vi.setSystemTime(Date.now() + 90);
+        fulfil({ status });
+        // Let the settlement be observed, then cross the deadline before the
+        // drain's continuation runs.
+        await Promise.resolve();
+        vi.setSystemTime(Date.now() + 20);
+        await vi.advanceTimersByTimeAsync(10);
+        expect(receipts[0]?.unconfirmed).toContain("preparation");
+        expect(stages).toContain("preparation-end:timed-out");
+        expect(stages).not.toContain(`preparation-end:${status}`);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["fulfilled", "rejected"] as const)(
+    "times out a closer whose timer fires in the same turn it %s (relative deadline)",
+    async (settlement) => {
+      vi.useFakeTimers();
+      try {
+        const results: string[] = [];
+        let fulfil!: () => void;
+        let reject!: (error: Error) => void;
+        const pending = drainOwnedChildren(
+          [
+            {
+              name: "connector",
+              close: () =>
+                new Promise<void>((resolve, no) => {
+                  fulfil = resolve;
+                  reject = no;
+                }),
+            },
+          ],
+          100,
+          undefined,
+          (stage) => {
+            if (stage.stage === "closer-end") results.push(stage.result);
+            if (stage.stage === "closer-late") results.push("late");
+          },
+        );
+        vi.advanceTimersByTime(100);
+        if (settlement === "fulfilled") fulfil();
+        else reject(new Error("late"));
+        await vi.advanceTimersByTimeAsync(1);
+        expect(await pending).toEqual({
+          drained: false,
+          unconfirmed: ["connector"],
+        });
+        expect(results).toEqual(["timed-out", "late"]);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("reports zero-budget closers as timed out and then late when they finish", async () => {
+    vi.useFakeTimers();
+    try {
+      const stages: string[] = [];
+      const receipts: QuitDrainReceipt[] = [];
+      let release!: () => void;
+      const drain = createQuitDrain({
+        deadlineMs: 100,
+        collect: () => {
+          // Collection spends the whole remaining budget.
+          vi.setSystemTime(Date.now() + 200);
+          return [
+            {
+              name: "connector",
+              close: () => new Promise<void>((r) => (release = r)),
+            },
+          ];
+        },
+        record: async (receipt) => void receipts.push(receipt),
+        quit: () => undefined,
+        observe: (stage) =>
+          stages.push(
+            stage.stage === "closer-end"
+              ? `closer-end:${stage.result}`
+              : stage.stage,
+          ),
+      });
+      drain.onBeforeQuit({ preventDefault: () => undefined });
+      await vi.advanceTimersByTimeAsync(1);
+      release();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(receipts[0]).toEqual({
+        drained: false,
+        unconfirmed: ["connector"],
+      });
+      expect(stages.filter((s) => s.startsWith("closer-"))).toEqual([
+        "closer-end:timed-out",
+        "closer-late",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
