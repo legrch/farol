@@ -6,7 +6,7 @@ export function workspaceRootChangeRemedy(
   code: string | null | undefined,
 ): string | null {
   return code === "WORKSPACE_ROOT_CHANGED"
-    ? "The folder at this path changed while Farol was using it, so this operation stopped without using the new folder. Nothing else changed. Check the folder in Settings, then try again. Resolve any unknown operation first, and do not repeat its effect."
+    ? "Farol stopped this check because the workspace folder or its saved settings changed while it ran, so nothing continued against the changed state. Open Settings, check the folder, then try again. Resolve any unknown operation first, and do not repeat its effect."
     : null;
 }
 

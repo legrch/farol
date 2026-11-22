@@ -16,10 +16,11 @@ const verified = {
 };
 
 describe("workspace root change presentation (not native authority)", () => {
-  it("says the operation stopped on a mid-operation folder change, without a re-add ritual", () => {
+  it("names both possible causes without asserting one, and asks for no re-add ritual", () => {
     const message = workspaceRootChangeRemedy("WORKSPACE_ROOT_CHANGED");
-    expect(message).toContain("changed while Farol was using it");
-    expect(message).toContain("without using the new folder");
+    expect(message).toContain("folder or its saved settings changed");
+    expect(message).toContain("nothing continued against the changed state");
+    expect(message).not.toContain("Nothing else changed");
     expect(message).toContain("unknown operation");
     expect(message).not.toContain("Remove this folder");
     expect(workspaceRootChangeRemedy("OTHER_ERROR")).toBeNull();
