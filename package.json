@@ -1,6 +1,6 @@
 {
   "name": "farol",
-  "version": "0.5.26",
+  "version": "0.5.27",
   "farolRelease": {
     "updateChannel": "github-stable",
     "buildVersion": "82"
