@@ -7627,6 +7627,10 @@ async function configureAdmittedProduct(
                 device: String(projectStat.dev),
                 inode: String(projectStat.ino),
               },
+              writerIdentity: {
+                device: String(writerStat.dev),
+                inode: String(writerStat.ino),
+              },
               gitCommonDirectory: workspace.gitMetadata.commonDirectory,
               execution: {
                 sandbox: command.sandbox,

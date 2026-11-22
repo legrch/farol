@@ -74,7 +74,7 @@ export function selectedCodexTaskRouteLaunch(
     grant: {
       workspaceId: workspace.workspaceId,
       writerRoot: workspace.root,
-      writerIdentity: workspace.rootIdentity,
+      writerIdentity: selected.writerIdentity ?? workspace.rootIdentity,
       projectId: selected.projectId,
       ...(selected.observeThreadId === undefined
         ? {}

@@ -426,6 +426,9 @@ export const CodexTaskSelectionSchema = z
     ...CodexReadSelectionShape,
     projectRoot: CanonicalAbsolutePathSchema,
     projectIdentity: WorkspaceRootIdentitySchema,
+    // Live writer witness frozen at route setup (path-bound approval).
+    // Routes saved before it fall back to the workspace's saved pair.
+    writerIdentity: WorkspaceRootIdentitySchema.optional(),
     gitCommonDirectory: CanonicalAbsolutePathSchema,
     execution: z.strictObject({
       sandbox: z.enum(["read-only", "workspace-write"]),

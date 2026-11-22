@@ -110,8 +110,13 @@ func route(v any) bool {
 	if v == nil {
 		return true
 	}
-	o, ok := object(v, "transport socketPath expectedCodexHome workspaceId projectId projectRoot projectIdentity gitCommonDirectory execution harness computerGeneration hostGeneration approvedAt expiresAt", "observeThreadId observeTurnId")
+	o, ok := object(v, "transport socketPath expectedCodexHome workspaceId projectId projectRoot projectIdentity gitCommonDirectory execution harness computerGeneration hostGeneration approvedAt expiresAt", "observeThreadId observeTurnId writerIdentity")
 	if !ok || !texts(o, "transport socketPath expectedCodexHome workspaceId projectId projectRoot gitCommonDirectory harness approvedAt") || !identity(o["projectIdentity"], false) {
+		return false
+	}
+	// writerIdentity is the live writer witness frozen at route setup
+	// (path-bound approval); routes saved before it fall back to the saved pair.
+	if _, present := o["writerIdentity"]; present && !identity(o["writerIdentity"], false) {
 		return false
 	}
 	if !oneOf(o["transport"], "codex-shared-proxy/v1") || !oneOf(o["harness"], "codex") {
