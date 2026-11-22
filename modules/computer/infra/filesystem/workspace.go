@@ -328,6 +328,22 @@ func cancelled(ctx context.Context) error {
 	}
 	return nil
 }
+
+// recheckBinding reopens the root chain and requires both the effective root
+// and the approved ancestor to be the same live directories this operation
+// opened, so a narrowed operation cannot pass over a replaced ancestor.
+func recheckBinding(d port.Descriptor, opened *port.DirectoryBinding) error {
+	fd, after, err := openedRoot(d)
+	if err != nil {
+		return err
+	}
+	unix.Close(fd)
+	if opened == nil || after.Physical != opened.Physical || after.ApprovedPhysical != opened.ApprovedPhysical {
+		return refusal("WORKSPACE_ROOT_CHANGED")
+	}
+	return nil
+}
+
 func recheckRoot(d port.Descriptor, before unix.Stat_t) error {
 	fd, err := openRoot(d)
 	if err != nil {

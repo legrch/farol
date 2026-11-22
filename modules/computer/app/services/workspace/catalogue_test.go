@@ -36,11 +36,11 @@ func (n *discoveryNative) Read(_ context.Context, r port.ReadRequest) (*port.Rea
 	if n.read != nil {
 		return n.read(r)
 	}
-	return &port.ReadResponse{Text: "rules", Bytes: 5, SHA256: strings.Repeat("a", 64)}, nil
+	return &port.ReadResponse{Text: "rules", Bytes: 5, SHA256: strings.Repeat("a", 64), Physical: testWitness, ApprovedPhysical: testWitness}, nil
 }
 func (n *discoveryNative) List(_ context.Context, r port.ListRequest) (*port.ListResponse, error) {
 	n.lists = append(n.lists, r.Workspace.WorkspaceID+":"+r.RelativePath)
-	out := &port.ListResponse{Binding: &port.DirectoryBinding{RelativePath: r.RelativePath, Root: r.Workspace.Root, ApprovedRoot: r.Workspace.ApprovedRoot}}
+	out := &port.ListResponse{Binding: &port.DirectoryBinding{RelativePath: r.RelativePath, Root: r.Workspace.Root, ApprovedRoot: r.Workspace.ApprovedRoot, Physical: testWitness, ApprovedPhysical: testWitness}}
 	if n.list != nil {
 		return n.list(r)
 	}
@@ -268,3 +268,7 @@ func TestCatalogueRequiresInspectionRatherThanFallingBackToList(t *testing.T) {
 	}
 	expectFailure(t, err, "WORKSPACE_HELPER_FAILED", "native-workspace")
 }
+
+// testWitness is the live root identity a port double reports for every
+// open, so one operation's phases agree on a single physical tree.
+var testWitness = port.Root{Path: "/work", Device: "1", Inode: "2"}

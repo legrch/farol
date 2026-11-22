@@ -30,10 +30,6 @@ func (w *Workspace) Inspect(ctx context.Context, request port.ListRequest) (*por
 		return nil, err
 	}
 	defer unix.Close(root)
-	rootInfo, err := stat(root)
-	if err != nil {
-		return nil, refusal("WORKSPACE_PATH_REFUSED")
-	}
 	selected, err := walk(root, parts)
 	if err != nil {
 		return nil, err
@@ -55,7 +51,7 @@ func (w *Workspace) Inspect(ctx context.Context, request port.ListRequest) (*por
 	if err != nil || before.Dev != after.Dev || before.Ino != after.Ino || before.Mode != after.Mode {
 		return nil, refusal("WORKSPACE_ROOT_CHANGED")
 	}
-	if err := recheckRoot(request.Workspace, rootInfo); err != nil {
+	if err := recheckBinding(request.Workspace, binding); err != nil {
 		return nil, err
 	}
 	if err := cancelled(ctx); err != nil {

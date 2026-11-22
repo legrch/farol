@@ -46,10 +46,6 @@ func (w *Workspace) list(ctx context.Context, request port.ListRequest, scratch 
 		return nil, err
 	}
 	defer unix.Close(root)
-	rootInfo, err := stat(root)
-	if err != nil {
-		return nil, refusal("WORKSPACE_PATH_REFUSED")
-	}
 	fd, err := walk(root, parts)
 	if err != nil {
 		return nil, err
@@ -126,7 +122,7 @@ func (w *Workspace) list(ctx context.Context, request port.ListRequest, scratch 
 	if err != nil || !stable(before, after) || scratch != nil && !scratchOpenedMatches(root, fd, fixtureFD, *scratch) {
 		return nil, refusal("WORKSPACE_RACE_DETECTED")
 	}
-	if err := recheckRoot(request.Workspace, rootInfo); err != nil {
+	if err := recheckBinding(request.Workspace, binding); err != nil {
 		return nil, err
 	}
 	if err := cancelled(ctx); err != nil {

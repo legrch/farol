@@ -70,12 +70,12 @@ func (f *workspaceFixture) Read(_ context.Context, r port.ReadRequest) (*port.Re
 	if r.Workspace.Root != "/work" {
 		f.t.Fatal("foreign descriptor")
 	}
-	return &port.ReadResponse{Text: "fixture rules", Bytes: 13, SHA256: strings.Repeat("a", 64)}, nil
+	return &port.ReadResponse{Text: "fixture rules", Bytes: 13, SHA256: strings.Repeat("a", 64), Physical: testWitness, ApprovedPhysical: testWitness}, nil
 }
 func (f *workspaceFixture) List(_ context.Context, r port.ListRequest) (*port.ListResponse, error) {
 	f.observe()
 	return &port.ListResponse{Binding: &port.DirectoryBinding{
-		RelativePath: r.RelativePath, Root: r.Workspace.Root, ApprovedRoot: r.Workspace.ApprovedRoot}}, nil
+		RelativePath: r.RelativePath, Root: r.Workspace.Root, ApprovedRoot: r.Workspace.ApprovedRoot, Physical: testWitness, ApprovedPhysical: testWitness}}, nil
 }
 
 // Preserve the same injected authority-change hook for discovery inspection.
@@ -298,3 +298,7 @@ func TestAnotherReissueCannotExtendFirstPeerBoundLease(t *testing.T) {
 		})
 	}
 }
+
+// testWitness is the live root identity a port double reports for every
+// open, so one operation's phases agree on a single physical tree.
+var testWitness = port.Root{Path: "/work", Device: "1", Inode: "2"}

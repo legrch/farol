@@ -358,3 +358,66 @@ func TestInspectReportsLiveApprovedRootWitnessForStaleSavedPair(t *testing.T) {
 		t.Fatalf("live witness missing: approved %+v, physical %+v, want %+v", binding.ApprovedPhysical, binding.Physical, live)
 	}
 }
+
+// A narrowed operation (effective root below the approved ancestor) must
+// refuse when the ancestor is replaced while the effective subtree keeps its
+// identity: the same subtree moved under a different approved directory.
+func TestNarrowedReadAndInspectRefuseReplacedApprovedAncestor(t *testing.T) {
+	for _, op := range []string{"read", "inspect"} {
+		t.Run(op, func(t *testing.T) {
+			base := fixture(t)
+			approved := filepath.Join(base.Root, "approved")
+			sub := filepath.Join(approved, "sub")
+			if err := os.MkdirAll(sub, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(sub, "AGENTS.md"), []byte("rules"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			var info unix.Stat_t
+			if err := unix.Lstat(approved, &info); err != nil {
+				t.Fatal(err)
+			}
+			d := port.Descriptor{WorkspaceID: "fixture", Root: sub, ApprovedRoot: port.Root{Path: approved, Device: strconv.FormatUint(uint64(info.Dev), 10), Inode: strconv.FormatUint(uint64(info.Ino), 10)}}
+			w := New(base.Root + "-home")
+			w.afterRead = func() {
+				previous := approved + "-previous"
+				if err := os.Rename(approved, previous); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(approved, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(filepath.Join(previous, "sub"), sub); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var err error
+			if op == "read" {
+				var out *port.ReadResponse
+				out, err = w.Read(context.Background(), port.ReadRequest{Workspace: d, RelativePath: "AGENTS.md"})
+				if out != nil {
+					t.Fatal("read over a replaced ancestor disclosed")
+				}
+			} else {
+				var out *port.DirectoryBinding
+				out, err = w.Inspect(context.Background(), port.ListRequest{Workspace: d, RelativePath: "."})
+				if out != nil {
+					t.Fatal("inspection over a replaced ancestor disclosed")
+				}
+			}
+			expectCode(t, err, "WORKSPACE_ROOT_CHANGED")
+		})
+	}
+}
+
+func TestReadReportsLiveRootWitness(t *testing.T) {
+	d := fixture(t)
+	put(t, d, "note.md", []byte("text"))
+	live := d.ApprovedRoot
+	d.ApprovedRoot.Device, d.ApprovedRoot.Inode = "1", "1"
+	out, err := New(d.Root+"-home").Read(context.Background(), port.ReadRequest{Workspace: d, RelativePath: "note.md"})
+	if err != nil || out == nil || out.Physical != live || out.ApprovedPhysical != live {
+		t.Fatalf("read witness missing or stale: %+v %v", out, err)
+	}
+}

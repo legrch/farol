@@ -45,7 +45,7 @@ func (n *settingsNativeFixture) List(_ context.Context, request port.ListRequest
 	if n.after != nil {
 		n.after()
 	}
-	return &port.ListResponse{Binding: &port.DirectoryBinding{Root: request.Workspace.Root, ApprovedRoot: request.Workspace.ApprovedRoot, RelativePath: request.RelativePath}, Entries: []string{"note.md", "folder/"}}, nil
+	return &port.ListResponse{Binding: &port.DirectoryBinding{Root: request.Workspace.Root, ApprovedRoot: request.Workspace.ApprovedRoot, RelativePath: request.RelativePath, Physical: testWitness, ApprovedPhysical: testWitness}, Entries: []string{"note.md", "folder/"}}, nil
 }
 
 func (n *settingsNativeFixture) Inspect(_ context.Context, request port.ListRequest) (*port.DirectoryBinding, error) {
@@ -53,7 +53,7 @@ func (n *settingsNativeFixture) Inspect(_ context.Context, request port.ListRequ
 	if n.after != nil {
 		n.after()
 	}
-	return &port.DirectoryBinding{Root: request.Workspace.Root, ApprovedRoot: request.Workspace.ApprovedRoot, RelativePath: request.RelativePath}, nil
+	return &port.DirectoryBinding{Root: request.Workspace.Root, ApprovedRoot: request.Workspace.ApprovedRoot, RelativePath: request.RelativePath, Physical: testWitness, ApprovedPhysical: testWitness}, nil
 }
 
 func settingsFixture(t *testing.T) (*ComputerIngress, *settingsStoreFixture, *settingsNativeFixture, wire.ComputerSettingsListRequest) {

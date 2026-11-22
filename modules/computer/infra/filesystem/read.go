@@ -72,15 +72,11 @@ func (w *Workspace) read(ctx context.Context, request port.ReadRequest, binding 
 	if request.Range != nil && (request.Range.Length < 4 || request.Range.Length > maxReadBytes || request.Range.Offset > 9007199254740991) {
 		return nil, refusal("WORKSPACE_INVALID_REQUEST")
 	}
-	root, err := openRoot(request.Workspace)
+	root, witness, err := openedRoot(request.Workspace)
 	if err != nil {
 		return nil, err
 	}
 	defer unix.Close(root)
-	rootInfo, err := stat(root)
-	if err != nil {
-		return nil, refusal("WORKSPACE_PATH_REFUSED")
-	}
 	parent, err := walk(root, parts[:len(parts)-1])
 	if err != nil {
 		return nil, err
@@ -140,7 +136,7 @@ func (w *Workspace) read(ctx context.Context, request port.ReadRequest, binding 
 	if !stable(before, after) || after.Nlink != 1 || !checkScratch() {
 		return nil, refusal("WORKSPACE_RACE_DETECTED")
 	}
-	if err := recheckRoot(request.Workspace, rootInfo); err != nil {
+	if err := recheckBinding(request.Workspace, witness); err != nil {
 		return nil, err
 	}
 	if err := cancelled(ctx); err != nil {
@@ -183,7 +179,7 @@ func (w *Workspace) read(ctx context.Context, request port.ReadRequest, binding 
 	if offset+uint64(start) == 0 {
 		text = bytes.TrimPrefix(text, []byte{0xef, 0xbb, 0xbf})
 	}
-	response := &port.ReadResponse{Text: string(text), Bytes: uint64(len(payload))}
+	response := &port.ReadResponse{Text: string(text), Bytes: uint64(len(payload)), Physical: witness.Physical, ApprovedPhysical: witness.ApprovedPhysical}
 	if request.Range == nil {
 		digest := sha256.Sum256(raw)
 		response.SHA256 = hex.EncodeToString(digest[:])

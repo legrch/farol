@@ -30,6 +30,8 @@ type ContextResponse struct {
 	// Physical is the live root measured for this inspection; internal to
 	// the service so one operation's phases stay on one directory.
 	Physical Root
+	// ApprovedPhysical is the approved ancestor's live identity (internal).
+	ApprovedPhysical Root
 }
 
 func (s *Service) Context(ctx context.Context, request ContextRequest) (*ContextResponse, error) {
@@ -80,7 +82,8 @@ func (s *Service) directoryContext(ctx context.Context, request ContextRequest, 
 	err = s.disclose(ctx, caller, *admitted, func() {
 		response = &ContextResponse{OwnerID: request.OwnerID, SessionID: request.SessionID, TaskID: request.TaskID, TaskEpoch: request.TaskEpoch, ParticipantID: request.ParticipantID, TurnID: request.TurnID, Generation: request.Generation, CallID: request.CallID, WorkspaceID: request.WorkspaceID, RelativePath: request.RelativePath,
 			Root: binding.Root, ApprovedRoot: Root{Path: binding.ApprovedRoot.Path, Device: binding.ApprovedRoot.Device, Inode: binding.ApprovedRoot.Inode}, Scope: "subtree",
-			Physical: Root{Path: binding.Physical.Path, Device: binding.Physical.Device, Inode: binding.Physical.Inode}}
+			Physical:         Root{Path: binding.Physical.Path, Device: binding.Physical.Device, Inode: binding.Physical.Inode},
+			ApprovedPhysical: Root{Path: binding.ApprovedPhysical.Path, Device: binding.ApprovedPhysical.Device, Inode: binding.ApprovedPhysical.Inode}}
 	})
 	if err != nil {
 		return nil, err

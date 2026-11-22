@@ -75,10 +75,6 @@ func (w *Workspace) search(ctx context.Context, request port.SearchRequest, scra
 		return nil, err
 	}
 	defer unix.Close(root)
-	rootInfo, err := stat(root)
-	if err != nil {
-		return nil, refusal("WORKSPACE_PATH_REFUSED")
-	}
 	binding.RelativePath = request.RelativePath
 	scan := searchScan{ctx: ctx, deadline: time.Now().Add(5 * time.Second), workspace: w, root: root, policy: p, expression: expression, result: &port.SearchResponse{Binding: binding, Matches: make([]port.SearchMatch, 0)}, scratch: scratch}
 	if len(parts) == 0 {
@@ -152,12 +148,12 @@ func (w *Workspace) search(ctx context.Context, request port.SearchRequest, scra
 		}
 	}
 	if err != nil {
-		if rootErr := recheckRoot(request.Workspace, rootInfo); rootErr != nil {
+		if rootErr := recheckBinding(request.Workspace, binding); rootErr != nil {
 			return nil, rootErr
 		}
 		return nil, err
 	}
-	if err := recheckRoot(request.Workspace, rootInfo); err != nil {
+	if err := recheckBinding(request.Workspace, binding); err != nil {
 		return nil, err
 	}
 	if err := cancelled(ctx); err != nil {

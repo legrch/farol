@@ -39,6 +39,9 @@ type ReadResponse struct {
 	Bytes  uint64
 	SHA256 string
 	Page   *Page
+	// Physical and ApprovedPhysical are the live effective-root and
+	// approved-ancestor identities this read opened and rechecked (internal).
+	Physical, ApprovedPhysical Root
 }
 type ListRequest struct {
 	Workspace    Descriptor

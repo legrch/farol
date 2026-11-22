@@ -37,6 +37,9 @@ type ReadResponse struct {
 	Bytes                             uint64
 	SHA256                            string
 	Page                              *Page
+	// Physical and ApprovedPhysical are the live roots this read opened;
+	// internal, so one operation's phases stay on one directory tree.
+	Physical, ApprovedPhysical Root
 }
 
 // AuthorizeReadDiagnostic checks the current read grant without opening a file.
@@ -120,7 +123,9 @@ func (s *Service) Read(ctx context.Context, request ReadRequest) (*ReadResponse,
 	}
 	var response *ReadResponse
 	err = s.disclose(ctx, caller, *admitted, func() {
-		response = &ReadResponse{OwnerID: request.OwnerID, SessionID: request.SessionID, TaskID: request.TaskID, TaskEpoch: request.TaskEpoch, ParticipantID: request.ParticipantID, TurnID: request.TurnID, Generation: request.Generation, CallID: request.CallID, WorkspaceID: request.WorkspaceID, RelativePath: request.RelativePath, Text: result.Text, Bytes: result.Bytes, SHA256: result.SHA256}
+		response = &ReadResponse{OwnerID: request.OwnerID, SessionID: request.SessionID, TaskID: request.TaskID, TaskEpoch: request.TaskEpoch, ParticipantID: request.ParticipantID, TurnID: request.TurnID, Generation: request.Generation, CallID: request.CallID, WorkspaceID: request.WorkspaceID, RelativePath: request.RelativePath, Text: result.Text, Bytes: result.Bytes, SHA256: result.SHA256,
+			Physical:         Root{Path: result.Physical.Path, Device: result.Physical.Device, Inode: result.Physical.Inode},
+			ApprovedPhysical: Root{Path: result.ApprovedPhysical.Path, Device: result.ApprovedPhysical.Device, Inode: result.ApprovedPhysical.Inode}}
 		if result.Page != nil {
 			response.Page = &Page{Offset: result.Page.Offset, Size: result.Page.Size}
 			if result.Page.NextOffset != nil {
