@@ -296,6 +296,10 @@ type platformSelection struct {
 	original, wrapped Command
 	binding           PlatformStrategyBinding
 	deadline          platformOriginalDeadline
+	// prepared holds the directories measured at selection. With path-bound
+	// approval no saved pair pins secondary roots or cwd, so the invocation
+	// must find exactly these live directories (no replacement in between).
+	prepared []platformDirectoryBinding
 }
 
 // This cell binds time only, not a dispatch, journal, authority store or cache.
@@ -376,9 +380,11 @@ func (s *RootScopedPlatformStrategy) Select(ctx context.Context, policy Seatbelt
 	selected := &RootScopedPlatformSelection{&platformSelection{strategy: *s, policy: policy, original: original, wrapped: wrapped, binding: binding}}
 	// Reject unsupported roots during preparation, before the caller reserves an
 	// execution. The original StartLease still repeats all native checks.
-	if _, err := selected.frozen.inspectDirectories(ctx); err != nil {
+	prepared, err := selected.frozen.inspectDirectories(ctx)
+	if err != nil {
 		return nil, err
 	}
+	selected.frozen.prepared = prepared
 	return selected, nil
 }
 
@@ -449,6 +455,9 @@ func (s *RootScopedPlatformSelection) BindInvocation(ctx context.Context, origin
 	directories, err := f.inspectDirectories(ctx)
 	if err != nil {
 		return nil, refusalAt(err, processsvc.RefusalConfinementPolicy)
+	}
+	if f.prepared == nil || !slices.Equal(directories, f.prepared) {
+		return nil, refusalAt(nil, processsvc.RefusalDirectoryPolicy)
 	}
 	if !f.current(ctx, deadline) {
 		return nil, refusalAt(nil, processsvc.RefusalAdmissionPolicy)
