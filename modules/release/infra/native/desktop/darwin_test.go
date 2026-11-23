@@ -162,7 +162,14 @@ func TestLifetimeActor(t *testing.T) {
 		}
 		// Witness for the test clock: written after the frame (or its absence).
 		_ = os.WriteFile(filepath.Join(root, "announced"), nil, 0600)
-		if role == "quit-desktop-hang" || role == "quit-desktop-truncated" || role == "quit-desktop-crlf" {
+		if role == "quit-desktop-hang" {
+			// Proof of survival through most of the 1 s grace, written by the
+			// desktop itself rather than inferred from guardian timing.
+			time.Sleep(900 * time.Millisecond)
+			_ = os.WriteFile(filepath.Join(root, "alive"), nil, 0600)
+			time.Sleep(time.Hour)
+		}
+		if role == "quit-desktop-truncated" || role == "quit-desktop-crlf" {
 			time.Sleep(time.Hour)
 		}
 		// Announced: exit well inside the grace. Silent: outlive the grace, which
@@ -443,8 +450,10 @@ func TestLifetimeNativeEnrollmentRefusesBirthAndPredecessorDrift(t *testing.T) {
 // and a silent hang is never touched by elapsed time alone.
 func TestLifetimeNativeQuitExitWatchdog(t *testing.T) {
 	executable, _ := os.Executable()
+	var lastRoot string
 	run := func(role string, limit time.Duration) (string, error, time.Duration) {
 		root := t.TempDir()
+		lastRoot = root
 		c := exec.Command(executable, "-test.run=^TestLifetimeActor$")
 		c.Env = append(os.Environ(), "FAROL_LIFETIME_TEST_ACTOR="+role, "FAROL_LIFETIME_TEST_ROOT="+root)
 		// Own group: the timeout path ends guardian and desktop together and
@@ -485,6 +494,13 @@ func TestLifetimeNativeQuitExitWatchdog(t *testing.T) {
 		case err := <-done:
 			return out.String(), err, announced()
 		case <-time.After(limit):
+			// Prefer a result that is already ready, which narrows the window
+			// in which the group could have emptied and been recycled.
+			select {
+			case err := <-done:
+				return out.String(), err, announced()
+			default:
+			}
 			// Kill the whole guardian group: the silent hang must survive.
 			_ = syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
 			_ = c.Process.Kill()
@@ -493,11 +509,13 @@ func TestLifetimeNativeQuitExitWatchdog(t *testing.T) {
 		}
 	}
 	out, err, took := run("quit-guardian-hang", 10*time.Second)
+	hangRoot := lastRoot
 	if err != nil || !strings.Contains(out, "desktop_launcher_quit_watchdog") || !strings.Contains(out, "desktop_launcher_desktop_exit pid=") {
 		t.Fatalf("hung drained desktop was not finished: %v\n%s", err, out)
 	}
-	if took < 900*time.Millisecond {
-		t.Fatalf("killed before the grace measured from the frame: %v", took)
+	_ = took
+	if _, err := os.Stat(filepath.Join(hangRoot, "alive")); err != nil {
+		t.Fatalf("the desktop was killed before most of the grace had passed: %v\n%s", err, out)
 	}
 	out, err, _ = run("quit-guardian-exit", 10*time.Second)
 	if err != nil || strings.Contains(out, "quit_watchdog") {
