@@ -8,7 +8,7 @@ const root = path.resolve(import.meta.dirname, "../..");
 describe("Route B check admission contract", () => {
   it("reserves the shared host-check admission before the first await and releases it in finally", async () => {
     const source = await fs.readFile(
-      path.join(root, "src/apps/desktop/main.ts"),
+      path.join(root, "apps/desktop/configuration/host.ts"),
       "utf8",
     );
     const start = source.indexOf('case "host.run-route-b-check"');
@@ -34,7 +34,7 @@ describe("Route B check admission contract", () => {
 
   it("invalidates local host readiness when the preflight contract no longer matches", async () => {
     const source = await fs.readFile(
-      path.join(root, "src/apps/desktop/main.ts"),
+      path.join(root, "apps/desktop/configuration/host.ts"),
       "utf8",
     );
     const start = source.indexOf('case "host.run-route-b-check"');
@@ -46,7 +46,7 @@ describe("Route B check admission contract", () => {
       'configurationFailure("CODEX_HOST_RECHECK_REQUIRED")',
     );
     const invalidation = branch.indexOf(
-      'configuration.recordCodexHostFailure("unreachable")',
+      'configuration()!.recordCodexHostFailure("unreachable")',
     );
 
     expect(invalidation).toBeGreaterThanOrEqual(0);

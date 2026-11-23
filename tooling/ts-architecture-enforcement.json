@@ -531,11 +531,6 @@
     {
       "code": "TS_APP_MODULE_INTERNAL",
       "file": "src/apps/desktop/main.ts",
-      "detail": "Imports module internals: src/modules/chat/app/port/codex-model-catalogue.ts"
-    },
-    {
-      "code": "TS_APP_MODULE_INTERNAL",
-      "file": "src/apps/desktop/main.ts",
       "detail": "Imports module internals: src/modules/chat/app/service/persistent-chatgpt-handoff.ts"
     },
     {
