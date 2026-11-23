@@ -176,7 +176,7 @@ func TestLifetimeActor(t *testing.T) {
 		time.Sleep(time.Hour)
 	}
 	if strings.HasPrefix(role, "quit-guardian-") {
-		quitExitGrace = 200 * time.Millisecond
+		quitExitGrace = time.Second
 		if role == "quit-guardian-exit" {
 			// Ample margin: a race-instrumented child exits slowly.
 			quitExitGrace = 3 * time.Second
@@ -466,6 +466,21 @@ func TestLifetimeNativeQuitExitWatchdog(t *testing.T) {
 			return time.Since(info.ModTime())
 		}
 		_ = start
+		if limit == 0 {
+			// Negative case: once the desktop has spoken (or stayed silent),
+			// give the armed launcher three graces to misbehave, then end it.
+			deadline := time.Now().Add(10 * time.Second)
+			for {
+				if _, err := os.Stat(filepath.Join(root, "announced")); err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			limit = time.Until(time.Now().Add(3 * time.Second))
+		}
 		select {
 		case err := <-done:
 			return out.String(), err, announced()
@@ -478,19 +493,19 @@ func TestLifetimeNativeQuitExitWatchdog(t *testing.T) {
 		}
 	}
 	out, err, took := run("quit-guardian-hang", 10*time.Second)
-	if err != nil || !strings.Contains(out, "watchdog=true") {
+	if err != nil || !strings.Contains(out, "desktop_launcher_quit_watchdog") || !strings.Contains(out, "desktop_launcher_desktop_exit pid=") {
 		t.Fatalf("hung drained desktop was not finished: %v\n%s", err, out)
 	}
-	if took < 200*time.Millisecond {
+	if took < 900*time.Millisecond {
 		t.Fatalf("killed before the grace measured from the frame: %v", took)
 	}
 	out, err, _ = run("quit-guardian-exit", 10*time.Second)
-	if err != nil || strings.Contains(out, "watchdog=true") {
+	if err != nil || strings.Contains(out, "quit_watchdog") {
 		t.Fatalf("a desktop that exited on its own was killed: %v\n%s", err, out)
 	}
 	for _, role := range []string{"quit-guardian-silent", "quit-guardian-truncated", "quit-guardian-crlf"} {
-		out, err, _ = run(role, 1500*time.Millisecond)
-		if err == nil || err.Error() != "timeout" || strings.Contains(out, "watchdog=true") {
+		out, err, _ = run(role, 0)
+		if err == nil || err.Error() != "timeout" || strings.Contains(out, "quit_watchdog") {
 			t.Fatalf("%s: a desktop without an exact frame was killed: %v\n%s", role, err, out)
 		}
 	}

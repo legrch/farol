@@ -38,8 +38,9 @@ export const DRAINED_QUIT_FRAME =
 
 /** Tells the launcher that this Quit drained, just before `app.exit`. If the
  * process then hangs in Electron's exit teardown, the launcher, which owns
- * the unreaped child, ends it after a short grace. Best effort: without the
- * launcher channel nothing is sent and nothing changes. */
+ * the unreaped child, ends it after a short grace. Only when this process
+ * acquired the launcher channel and it is still open; otherwise nothing is
+ * sent and nothing changes. */
 let launcherSend: Socket | null = null;
 
 export function announceDrainedQuit(
@@ -49,7 +50,8 @@ export function announceDrainedQuit(
 ): boolean {
   try {
     if (
-      launcherSend?.destroyed === true ||
+      launcherSend === null ||
+      launcherSend.destroyed ||
       process.platform !== "darwin" ||
       process.env.FAROL_DESKTOP_LIFETIME !== "1" ||
       !fstatSync(7).isFIFO()

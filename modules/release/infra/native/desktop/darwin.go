@@ -195,6 +195,11 @@ func nonFatalDiagnostics(writer io.Writer) (io.Writer, func()) {
 func hold(command *exec.Cmd, desktop identity, queue int, metadata, ack *os.File, diagnostics io.Writer, validate func(port.DesktopLifetimeBinding, int, int64) bool) int {
 	diagnostics, releaseDiagnostics := nonFatalDiagnostics(diagnostics)
 	defer releaseDiagnostics()
+	// The lifetime loop never blocks on stderr: a full pipe with a live but
+	// stalled reader must not delay signalling, reaping or return.
+	async := newAsyncDiagnostics(diagnostics, 64)
+	defer async.close(time.Second)
+	diagnostics = async
 	frames := make(chan []byte)
 	done := make(chan struct{})
 	readerDone := make(chan struct{})
@@ -307,7 +312,10 @@ func hold(command *exec.Cmd, desktop identity, queue int, metadata, ack *os.File
 						status = command.ProcessState.ExitCode()
 					}
 				}
-				_, _ = fmt.Fprintf(diagnostics, "desktop_launcher_desktop_exit pid=%d code=%d watchdog=%t\n", pid, status, killed)
+				if killed {
+					_, _ = fmt.Fprintf(diagnostics, "desktop_launcher_quit_watchdog pid=%d\n", pid)
+				}
+				_, _ = fmt.Fprintf(diagnostics, "desktop_launcher_desktop_exit pid=%d code=%d\n", pid, status)
 			} else if operation := helpers[pid]; operation != "" {
 				_, _ = fmt.Fprintf(diagnostics, "desktop_launcher_helper_exit operation=%s pid=%d waitStatus=%d\n", operation, pid, event.Data)
 				delete(helpers, pid)
@@ -326,6 +334,40 @@ func hold(command *exec.Cmd, desktop identity, queue int, metadata, ack *os.File
 			}
 			return status
 		}
+	}
+}
+
+// asyncDiagnostics hands lines to one writer goroutine through a bounded
+// queue and drops them when it is full. close waits a bounded time to flush.
+type asyncDiagnostics struct {
+	lines chan []byte
+	done  chan struct{}
+}
+
+func newAsyncDiagnostics(w io.Writer, depth int) *asyncDiagnostics {
+	a := &asyncDiagnostics{lines: make(chan []byte, depth), done: make(chan struct{})}
+	go func() {
+		defer close(a.done)
+		for line := range a.lines {
+			_, _ = w.Write(line)
+		}
+	}()
+	return a
+}
+
+func (a *asyncDiagnostics) Write(p []byte) (int, error) {
+	select {
+	case a.lines <- append([]byte(nil), p...):
+	default:
+	}
+	return len(p), nil
+}
+
+func (a *asyncDiagnostics) close(limit time.Duration) {
+	close(a.lines)
+	select {
+	case <-a.done:
+	case <-time.After(limit):
 	}
 }
 
