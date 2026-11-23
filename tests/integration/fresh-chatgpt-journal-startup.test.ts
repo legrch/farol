@@ -6,8 +6,11 @@ import vm from "node:vm";
 import { afterEach, expect, it, vi } from "vitest";
 import { PrivateChatGptTaskJournal } from "../../src/apps/desktop/chatgpt-task-journal";
 import type { ChatGptTaskJournalRecord } from "../../src/apps/desktop/chatgpt-task-journal-record";
+import { createConfigurationChatgpt } from "../../apps/desktop/configuration/chatgpt";
+import { scriptedChatgptPorts } from "../support/chatgpt-configuration-ports";
 
-// Execute the actual main startup composition with the real private journal.
+// Execute the actual main startup composition with the real private journal,
+// then the production acknowledgement handler over its resulting state.
 // Disposable files only: no Electron, Go runtime, provider or live recovery.
 const main = await fs.readFile("src/apps/desktop/main.ts", "utf8");
 const rootCall = main.indexOf("root: statePaths().chatGptTaskJournal");
@@ -16,11 +19,6 @@ const end = main.indexOf("  let chatGptInitialUrl", rootCall);
 if (rootCall < 0 || start < 0 || end < 0)
   throw Error("CHATGPT_JOURNAL_STARTUP_COMPOSITION_MISSING");
 const composition = main.slice(start, end);
-const ackStart = main.indexOf('    case "chatgpt.ack-task-result": {');
-const ackEnd = main.indexOf('    case "chatgpt.open-sign-in": {', ackStart);
-if (ackStart < 0 || ackEnd < 0)
-  throw Error("CHATGPT_JOURNAL_ACK_COMPOSITION_MISSING");
-const acknowledgement = main.slice(ackStart, ackEnd);
 const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(
@@ -39,18 +37,21 @@ async function root() {
 }
 async function startup(directory: string, freshStartup = true) {
   const recordObservation = vi.fn(async () => ({ ok: true }));
-  const state = (await vm.runInNewContext(
+  const started = (await vm.runInNewContext(
     `(async () => {
       let chatGptTaskJournal = null;
       let recoverableChatGptTask = null;
       let recoverableChatGptObservationPersisted = false;
       ${composition}
-      return { journal: chatGptTaskJournal, retained: recoverableChatGptTask,
-        observationPersisted: recoverableChatGptObservationPersisted,
-        acknowledge: async (operationId) => {
-          const command = { kind: "chatgpt.ack-task-result", operationId };
-          switch (command.kind) { ${acknowledgement} }
-        } };
+      return {
+        journal: () => chatGptTaskJournal,
+        retained: () => recoverableChatGptTask,
+        setRetained: (value) => { recoverableChatGptTask = value; },
+        observationPersisted: () => recoverableChatGptObservationPersisted,
+        setObservationPersisted: (value) => {
+          recoverableChatGptObservationPersisted = value;
+        },
+      };
     })()`,
     {
       PrivateChatGptTaskJournal,
@@ -61,14 +62,43 @@ async function startup(directory: string, freshStartup = true) {
       chatGptJournalObservation: (result: unknown) => result,
     },
   )) as {
-    journal: PrivateChatGptTaskJournal | null;
-    retained: ChatGptTaskJournalRecord | null;
-    observationPersisted: boolean;
-    acknowledge: (
-      operationId: string,
-    ) => Promise<{ ok: boolean; code: string }>;
+    journal: () => PrivateChatGptTaskJournal | null;
+    retained: () => ChatGptTaskJournalRecord | null;
+    setRetained: (value: ChatGptTaskJournalRecord | null) => void;
+    observationPersisted: () => boolean;
+    setObservationPersisted: (value: boolean) => void;
   };
-  return { ...state, recordObservation };
+  const handler = createConfigurationChatgpt(
+    scriptedChatgptPorts({
+      configuration: () =>
+        ({ recordChatGptObservation: recordObservation }) as never,
+      chatGptTaskJournal: started.journal,
+      recoverableChatGptTask: started.retained,
+      setRecoverableChatGptTask: started.setRetained,
+      recoverableChatGptObservationPersisted: started.observationPersisted,
+      setRecoverableChatGptObservationPersisted:
+        started.setObservationPersisted,
+      configurationFailure: (code) => ({ ok: false, code }) as never,
+      chatGptJournalObservation: (result) => result,
+    }),
+  );
+  return {
+    recordObservation,
+    get journal() {
+      return started.journal();
+    },
+    get retained() {
+      return started.retained();
+    },
+    get observationPersisted() {
+      return started.observationPersisted();
+    },
+    acknowledge: (operationId: string) =>
+      handler.configureAdmittedChatgpt({
+        kind: "chatgpt.ack-task-result",
+        operationId,
+      }) as unknown as Promise<{ ok: boolean; code: string }>,
+  };
 }
 
 it.each([

@@ -1,4 +1,5 @@
 import { admissionFixture } from "../support/desktop-admission";
+import { scriptedChatgptPorts } from "../support/chatgpt-configuration-ports";
 import fs from "node:fs";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
@@ -13,15 +14,16 @@ import {
 import { deriveSurfaceLayout } from "../../src/apps/desktop/surface-layout.ts";
 import { surfaceLayout } from "../../apps/desktop/shell/navigation.ts";
 import { navigationHost } from "../support/navigation-host.ts";
+import { createConfigurationChatgpt } from "../../apps/desktop/configuration/chatgpt.ts";
 
-// Actual host code with injected route mechanics. No browser, network, state
-// writer, credential, provider or shared build output participates.
+// Actual host code with injected route mechanics. The ChatGPT command handler
+// is the production module; the callbacks and navigation functions are sliced
+// from main.ts. No browser, network, state writer, credential, provider or
+// shared build output participates.
 const source = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
 const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
-let branch;
 let returnCallback;
 const continuityFunctions = new Map();
-const continuityBranches = new Map();
 const continuityCallbacks = new Map();
 function visit(node) {
   if (
@@ -30,15 +32,6 @@ function visit(node) {
   )
     continuityFunctions.set(node.id.name, source.slice(node.start, node.end));
   if (
-    node.type === "SwitchCase" &&
-    [
-      "chatgpt.open-sign-in",
-      "chatgpt.open-browser",
-      "chatgpt.verification-return",
-    ].includes(node.test?.value)
-  )
-    continuityBranches.set(node.test.value, source.slice(node.start, node.end));
-  if (
     node.type === "ObjectProperty" &&
     ["onLoadStateChanged", "onSignInOutcome"].includes(node.key?.name)
   )
@@ -46,11 +39,6 @@ function visit(node) {
       node.key.name,
       source.slice(node.value.start, node.value.end),
     );
-  if (
-    node.type === "SwitchCase" &&
-    node.test?.value === "chatgpt.observe-sign-in"
-  )
-    branch = source.slice(node.start, node.end);
   if (
     node.type === "FunctionDeclaration" &&
     node.id?.name === "recordChatGptSignInOutcome"
@@ -63,8 +51,7 @@ function visit(node) {
   }
 }
 visit(tree);
-if (!branch || !returnCallback)
-  throw new Error("SIGN_IN_STATUS_HOST_CODE_MISSING");
+if (!returnCallback) throw new Error("SIGN_IN_STATUS_HOST_CODE_MISSING");
 const buildId = "3".repeat(64);
 const observationId = "11111111-1111-4111-8111-111111111111";
 const binding = { documentGeneration: 7, sequence: 2 };
@@ -95,12 +82,16 @@ function harness(state = "authenticated") {
     section: "computer",
     publishShellAction: vi.fn(),
   };
-  const handle = vm.runInNewContext(
-    stripTypeScriptTypes(
-      `async function handle() { switch(command.kind) { ${branch} } } handle`,
-    ),
-    admissionFixture(context),
+  admissionFixture(context);
+  const handler = createConfigurationChatgpt(
+    scriptedChatgptPorts({
+      buildIdentity: context.buildIdentity,
+      chatGptRoute: () => context.chatGptRoute,
+      desktopAdmission: context.desktopAdmission,
+      configuration: () => context.configuration,
+    }),
   );
+  const handle = () => handler.configureAdmittedChatgpt(context.command);
   const returned = vm.runInNewContext(
     stripTypeScriptTypes(`${returnCallback}\nrecordChatGptSignInOutcome`),
     admissionFixture(context),
@@ -340,20 +331,47 @@ function continuityHarness(width = 1180, height = 760) {
   // The extracted host code calls the navigation module's layout functions
   // under the names main.ts binds, over this same fixture state.
   Object.assign(context, surfaceLayout(navigationHost(context)));
+  admissionFixture(context);
+  // The production handler over the same fixture state; the layout functions
+  // above are the ones main.ts binds.
+  const handler = createConfigurationChatgpt(
+    scriptedChatgptPorts({
+      chatGptRoute: () => context.chatGptRoute,
+      embeddedBrowserEnabled: () => context.embeddedBrowserEnabled(),
+      applyLayout: () => context.applyLayout(),
+      desktopAdmission: context.desktopAdmission,
+      chatGptSignInBlocked: context.chatGptSignInBlocked,
+      setChatGptSignInOutcome: (value) => {
+        context.chatGptSignInOutcome = value;
+      },
+      chatGptSignInGeneration: () => context.chatGptSignInGeneration,
+      setChatGptSignInGeneration: (value) => {
+        context.chatGptSignInGeneration = value;
+      },
+      chatGptSignInOpenGeneration: () => context.chatGptSignInOpenGeneration,
+      setChatGptSignInOpenGeneration: (value) => {
+        context.chatGptSignInOpenGeneration = value;
+      },
+      SIGN_IN_WINDOW_TITLE: context.SIGN_IN_WINDOW_TITLE,
+      configuration: () => context.configuration,
+      configurationFailure: (error) => context.configurationFailure(error),
+      browserHomeSurfaceOpen: () => context.browserHomeSurfaceOpen,
+      setBrowserHomeSurfaceOpen: (value) => {
+        context.browserHomeSurfaceOpen = value;
+      },
+      selectedTaskId: () => context.selectedTaskId,
+    }),
+  );
   const code = `
     ${[...continuityFunctions.values()].join("\n")}
-    async function command(kind) { switch(kind) {
-      ${continuityBranches.get("chatgpt.open-sign-in")}
-      ${continuityBranches.get("chatgpt.open-browser")}
-      ${continuityBranches.get("chatgpt.verification-return")}
-    } }
-    ({ layout: currentSurfaceLayout, apply: applyLayout, command,
+    ({ layout: currentSurfaceLayout, apply: applyLayout,
       load: ${continuityCallbacks.get("onLoadStateChanged")},
       outcome: ${continuityCallbacks.get("onSignInOutcome")} })`;
   const api = vm.runInNewContext(
     stripTypeScriptTypes(code),
     admissionFixture(context),
   );
+  api.command = (kind) => handler.configureAdmittedChatgpt({ kind });
   return { context, view, api };
 }
 

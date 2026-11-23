@@ -1,31 +1,11 @@
 import { admissionFixture } from "../support/desktop-admission";
-import fs from "node:fs";
-import vm from "node:vm";
-import { stripTypeScriptTypes } from "node:module";
-import { parse } from "@babel/parser";
+import { scriptedChatgptPorts } from "../support/chatgpt-configuration-ports";
 import { describe, expect, it, vi } from "vitest";
 import { ProductConfigurationCommandSchema } from "../../src/pkg/product-settings/contract.ts";
+import { createConfigurationChatgpt } from "../../apps/desktop/configuration/chatgpt.ts";
 
-// Run the production host case with controlled mechanics. No Electron, app,
+// Run the production handler with controlled mechanics. No Electron, app,
 // credential store, provider, task, network or shared build output is used.
-const source = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
-const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
-let branch;
-function visit(node) {
-  if (
-    node.type === "SwitchCase" &&
-    node.test?.value === "chatgpt.present-browser"
-  )
-    branch = source.slice(node.start, node.end);
-  for (const value of Object.values(node)) {
-    if (Array.isArray(value)) {
-      for (const child of value) if (child?.type) visit(child);
-    } else if (value?.type) visit(value);
-  }
-}
-visit(tree);
-if (!branch) throw new Error("CHATGPT_PRESENT_CASE_MISSING");
-
 function harness() {
   const snapshot = { status: "error", error: "SETTINGS_READ_FAILED" };
   const context = {
@@ -47,14 +27,22 @@ function harness() {
     applyLayout: vi.fn(),
     publishLayout: vi.fn(),
     configurationFailure: (error) => ({ ok: false, error, snapshot }),
-    ProductConfigurationResultSchema: { parse: (value) => value },
   };
-  const handle = vm.runInNewContext(
-    stripTypeScriptTypes(
-      `async function handle() { switch(command.kind) { ${branch} } } handle`,
-    ),
-    admissionFixture(context),
+  admissionFixture(context);
+  const handler = createConfigurationChatgpt(
+    scriptedChatgptPorts({
+      embeddedBrowserEnabled: () => context.embeddedBrowserEnabled(),
+      chatGptRoute: () => context.chatGptRoute,
+      desktopAdmission: context.desktopAdmission,
+      chatGptSignInOpenGeneration: () => context.chatGptSignInOpenGeneration,
+      selectedTaskId: () => context.selectedTaskId,
+      configuration: () => context.configuration,
+      browserHomeSurfaceOpen: () => context.browserHomeSurfaceOpen,
+      applyLayout: () => context.applyLayout(),
+      configurationFailure: (error) => context.configurationFailure(error),
+    }),
   );
+  const handle = () => handler.configureAdmittedChatgpt(context.command);
   return { context, handle, snapshot };
 }
 
