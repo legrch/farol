@@ -7,6 +7,23 @@ repository is published separately under the owner-approved source policy.
 A successful preparation is evidence for Lead's publication decision; it does not authorize publication or establish installed
 OTA acceptance.
 
+## Version bump
+
+A new release changes four values in one commit: `version` in `package.json`,
+the root `version` (twice) in `package-lock.json`, `product.version` in
+`resources.json`, **and `farolRelease.buildVersion` in `package.json`**. The
+build number must be strictly greater than every earlier release of the same
+channel. An installed updater accepts a newer release only when its build number
+is greater than its own: 0.5.27 shipped with 0.5.26's build 82, every installed
+0.5.26 refused it with `UPDATE_RELEASE_MISMATCH`, and 0.5.28 (build 83) had to be
+released to reach them. A published tag is never moved, so a release with a
+wrong build number is fixed only by the next version.
+
+`task release:preflight` enforces this: it reads every reachable `v*` release tag
+of the channel and refuses a new version whose build number does not exceed the
+highest of them (`RELEASE_BUILD_VERSION_NOT_ADVANCED`), and it refuses a shallow
+checkout instead of skipping the comparison.
+
 ## Fast candidate loop
 
 Run `task release:preflight` after changing a version. It checks the package,
