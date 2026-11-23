@@ -447,7 +447,7 @@ func newLiveHelperAdmission(files helperroutes.Files, r releaseport.HelperReques
 	if err != nil {
 		return nil, liveHelperCtorFail(err, probe)
 	}
-	live, err := handoff.NewLive(r.Home, files.Home, files.State, handoff.Identity(files.StateIdentity), int(r.PID), r.ProcessStart, waiter, processwait.Stopper(waiter), files.SharedParent, until)
+	live, err := handoff.NewLive(r.Home, files.Home, files.State, handoff.Identity(files.StateIdentity), int(r.PID), r.ProcessStart, waiter, until)
 	if err != nil {
 		return nil, liveHelperCtorFail(err, probe)
 	}
@@ -528,7 +528,7 @@ func (a *liveHelperNativeAdmission) Wait(ctx context.Context, until time.Time) e
 	if a.phase.Load() != liveHelperPhaseMarked {
 		return closedHelperFail(false)
 	}
-	return a.live.WaitOrFinish(ctx, until, time.Now().Add(10*time.Second))
+	return a.live.WaitExit(ctx, until)
 }
 
 func (a *liveHelperNativeAdmission) Quit(ctx context.Context) error {

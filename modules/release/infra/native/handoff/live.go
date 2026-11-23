@@ -5,14 +5,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"io"
 	"math"
 	"os"
 	"time"
 
 	"github.com/legrch/farol/modules/release/app/port"
-	"github.com/legrch/farol/modules/release/infra/native/stop"
 )
 
 // Live is the original running-marker/Quit owner for live and offline helpers.
@@ -21,7 +19,6 @@ import (
 type Live struct {
 	route *Verifier
 	wait  port.ProcessWaiter
-	stop  port.ProcessStopper
 	until time.Time
 	state *liveState
 }
@@ -29,24 +26,20 @@ type Live struct {
 // Copies retain the same one-shot attempts and receipt/marker witnesses. The
 // original route gate serializes this state with borrowed native operations.
 type liveState struct {
-	markerAttempt, markerCaptured, waitAttempt, stopped, finishAttempt bool
-	started                                                            string
-	quitDigest                                                         [32]byte
-	quitBound                                                          bool
-	markerDigest                                                       [32]byte
+	markerAttempt, markerCaptured, waitAttempt, stopped bool
+	started                                             string
+	quitDigest                                          [32]byte
+	quitBound                                           bool
+	markerDigest                                        [32]byte
 }
 
 const errRunMarkerMismatch Code = "run_marker_mismatch"
 
-func NewLive(homePath string, home, state *os.File, identity Identity, pid int, start string, wait port.ProcessWaiter, stopper func(port.ProcessTerminator) port.ProcessStopper, shared bool, until time.Time) (*Live, error) {
-	if home == nil || state == nil || !validHome(homePath) || !validIdentity(identity) || until.IsZero() || pid <= 1 || !validText(start, 128) || wait == nil || stopper == nil {
+func NewLive(homePath string, home, state *os.File, identity Identity, pid int, start string, wait port.ProcessWaiter, until time.Time) (*Live, error) {
+	if home == nil || state == nil || !validHome(homePath) || !validIdentity(identity) || until.IsZero() || pid <= 1 || !validText(start, 128) || wait == nil {
 		return nil, ErrInput
 	}
-	term, err := stop.New(pid, stop.Slot(homePath, shared))
-	if err != nil {
-		return nil, ErrInput
-	}
-	return &Live{stop: stopper(term), state: &liveState{}, route: &Verifier{homePath: homePath, home: home, state: state, expected: Expected{StateIdentity: identity, PID: pid, ProcessStart: start}, now: time.Now, gate: make(chan struct{}, 1), reopen: openRoute}, wait: wait, until: until}, nil
+	return &Live{state: &liveState{}, route: &Verifier{homePath: homePath, home: home, state: state, expected: Expected{StateIdentity: identity, PID: pid, ProcessStart: start}, now: time.Now, gate: make(chan struct{}, 1), reopen: openRoute}, wait: wait, until: until}, nil
 }
 
 func (l *Live) run(ctx context.Context, fn func(context.Context, int, int) error) error {
@@ -164,76 +157,6 @@ func (l *Live) WaitExit(ctx context.Context, originalUntil time.Time) error {
 			until = originalUntil
 		}
 		if err := l.wait.WaitExit(ctx, until); err != nil {
-			return err
-		}
-		if err := canceled(ctx); err != nil {
-			return err
-		}
-		l.state.stopped = true
-		return nil
-	})
-}
-
-// FinishDrained terminates the exact original process only when its own
-// drained Quit receipt proves it has nothing left to lose: the sole wait ended
-// with that process still running, its running marker is gone, and a strict
-// drained receipt (drained true, no unconfirmed children) was written after
-// it started. The bound stopper re-observes identity before each signal and returns
-// nil only after a positively observed exit. Any other state stays a refusal
-// of the finish, joined with the original wait failure (waited).
-// WaitOrFinish is the live helper's wait: WaitExit, and when it ends with the
-// original process still running, FinishDrained bounded by finishUntil.
-func (l *Live) WaitOrFinish(ctx context.Context, until, finishUntil time.Time) error {
-	err := l.WaitExit(ctx, until)
-	if err != nil {
-		err = l.FinishDrained(ctx, finishUntil, err)
-	}
-	return err
-}
-
-func (l *Live) FinishDrained(ctx context.Context, until time.Time, waited error) error {
-	if err := l.finishDrained(ctx, until); err != nil {
-		return errors.Join(waited, err)
-	}
-	return nil
-}
-
-func (l *Live) finishDrained(ctx context.Context, until time.Time) error {
-	if ctx == nil || l.stop == nil {
-		return ErrDependency
-	}
-	ctx, cancel := context.WithDeadline(ctx, until)
-	defer cancel()
-	return l.run(ctx, func(ctx context.Context, _ int, state int) error {
-		if !l.state.markerCaptured || !l.state.waitAttempt || l.state.stopped || l.state.finishAttempt {
-			return ErrProcessUnknown
-		}
-		l.state.finishAttempt = true
-		if _, present, err := named(ctx, state, "running.json", ErrProcessUnknown); err != nil {
-			return err
-		} else if present {
-			return ErrRunningMarker
-		}
-		data, err := readQuit(ctx, state)
-		if err != nil {
-			return err
-		}
-		at, err := quitTimestamp(data)
-		if err != nil {
-			return err
-		}
-		started, ok := timestamp(l.state.started)
-		if !ok || l.route.now == nil {
-			return ErrDependency
-		}
-		if err := verifyQuitTime(at, &started, l.route.now()); err != nil {
-			return err
-		}
-		end := l.until
-		if until.Before(end) {
-			end = until
-		}
-		if err := l.stop.Stop(ctx, end); err != nil {
 			return err
 		}
 		if err := canceled(ctx); err != nil {

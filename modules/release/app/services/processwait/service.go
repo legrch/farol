@@ -34,11 +34,6 @@ type session struct {
 	confirm  bool
 	witness  bool
 	wait     bool
-	// running records that the sole wait ended at its deadline while the
-	// exact identified process was still present. Only that state admits one
-	// Terminate attempt.
-	running   bool
-	terminate bool
 }
 
 // New requires trusted, non-panicking ports without typed-nil implementations.
@@ -134,19 +129,6 @@ func (s *Service) WaitExit(ctx context.Context, until time.Time) error {
 	}
 	p.wait = true
 	<-p.gate
-	err := p.waitAbsent(ctx, until)
-	var f *Failure
-	if errors.As(err, &f) && f.Code == "process_running" && !f.Uncertain {
-		p.gate <- struct{}{}
-		p.running = true
-		<-p.gate
-	}
-	return err
-}
-
-// waitAbsent polls the bound probe until a positively observed absence. A
-// different start token is reuse; unknown is never absence.
-func (p *session) waitAbsent(ctx context.Context, until time.Time) error {
 	op, err := operationFor(ctx, until, p.clock)
 	if err != nil {
 		return err
