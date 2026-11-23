@@ -1,4 +1,4 @@
-import { fstatSync } from "node:fs";
+import { fstatSync, writeSync } from "node:fs";
 import { Socket } from "node:net";
 import type {
   InstalledHelperLifetime,
@@ -22,9 +22,45 @@ export function createDesktopHelperLifetime(): InstalledHelperLifetime {
     const receive = new Socket({ fd: 8, readable: true, writable: false });
     send.unref();
     receive.unref();
+    // Once the channel fails it destroys fd 7, which may then be reused: the
+    // Quit announcement must never write that number again. `destroyed` is
+    // set synchronously, before libuv closes the descriptor.
+    launcherSend = send;
     return lifetimeChannel(send, receive);
   } catch {
     return unavailable;
+  }
+}
+
+/** The exact launcher announcement of a drained Quit (Go `quitFrame`). */
+export const DRAINED_QUIT_FRAME =
+  '{"schema":"farol.desktop-quit/1","drained":true}\n';
+
+/** Tells the launcher that this Quit drained, just before `app.exit`. If the
+ * process then hangs in Electron's exit teardown, the launcher, which owns
+ * the unreaped child, ends it after a short grace. Only when this process
+ * acquired the launcher channel and it is still open; otherwise nothing is
+ * sent and nothing changes. */
+let launcherSend: Socket | null = null;
+
+export function announceDrainedQuit(
+  write: (fd: number, frame: string) => void = (fd, frame) => {
+    writeSync(fd, frame);
+  },
+): boolean {
+  try {
+    if (
+      launcherSend === null ||
+      launcherSend.destroyed ||
+      process.platform !== "darwin" ||
+      process.env.FAROL_DESKTOP_LIFETIME !== "1" ||
+      !fstatSync(7).isFIFO()
+    )
+      return false;
+    write(7, DRAINED_QUIT_FRAME);
+    return true;
+  } catch {
+    return false;
   }
 }
 

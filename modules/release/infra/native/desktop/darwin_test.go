@@ -6,10 +6,12 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -139,6 +141,74 @@ func TestLifetimeActor(t *testing.T) {
 			os.Exit(79)
 		}
 		os.Exit(0)
+	}
+	if strings.HasPrefix(role, "quit-desktop-") {
+		// A desktop that announces (or not) a drained Quit, then either hangs
+		// ignoring SIGTERM like a stuck exit teardown, or exits on its own.
+		signal.Ignore(syscall.SIGTERM)
+		metadata := os.NewFile(7, "metadata")
+		switch role {
+		case "quit-desktop-silent":
+		case "quit-desktop-truncated":
+			// Body without its newline, then the channel closes: never a frame.
+			_, _ = metadata.Write(quitFrame)
+			metadata.Close()
+		case "quit-desktop-crlf":
+			_, _ = metadata.Write(append(append([]byte(nil), quitFrame...), '\r', '\n'))
+		default:
+			if _, err := metadata.Write(append(quitFrame, '\n')); err != nil {
+				os.Exit(85)
+			}
+		}
+		// Witness for the test clock: written after the frame (or its absence).
+		_ = os.WriteFile(filepath.Join(root, "announced"), nil, 0600)
+		if role == "quit-desktop-hang" {
+			// Proof of survival through most of the 1 s grace, written by the
+			// desktop itself rather than inferred from guardian timing.
+			time.Sleep(900 * time.Millisecond)
+			_ = os.WriteFile(filepath.Join(root, "alive"), nil, 0600)
+			time.Sleep(time.Hour)
+		}
+		if role == "quit-desktop-truncated" || role == "quit-desktop-crlf" {
+			time.Sleep(time.Hour)
+		}
+		// Announced: exit well inside the grace. Silent: outlive the grace, which
+		// alone never authorizes a kill.
+		if role == "quit-desktop-exit" {
+			time.Sleep(50 * time.Millisecond)
+			os.Exit(0)
+		}
+		// Silent: a stuck child that never announced a drained Quit. Elapsed
+		// time alone must not kill it; the test ends it via the group.
+		time.Sleep(time.Hour)
+	}
+	if strings.HasPrefix(role, "quit-guardian-") {
+		quitExitGrace = time.Second
+		if role == "quit-guardian-exit" {
+			// Ample margin: a race-instrumented child exits slowly.
+			quitExitGrace = 3 * time.Second
+		}
+		q, err := unix.Kqueue()
+		if err != nil {
+			os.Exit(80)
+		}
+		defer unix.Close(q)
+		r, w, _ := os.Pipe()
+		ar, aw, _ := os.Pipe()
+		c := actor("quit-desktop-" + strings.TrimPrefix(role, "quit-guardian-"))
+		c.ExtraFiles = []*os.File{nil, nil, nil, nil, w, ar}
+		if c.Start() != nil {
+			os.Exit(81)
+		}
+		w.Close()
+		ar.Close()
+		desktop, err := snapshot(c.Process.Pid)
+		if err != nil || arm(q, c.Process.Pid) != nil {
+			c.Process.Kill()
+			c.Wait()
+			os.Exit(82)
+		}
+		os.Exit(hold(c, desktop, q, r, aw, os.Stderr, desktopapp.Valid))
 	}
 	if role == "guardian" || role == "guardian-lost-ack" || role == "guardian-closed-diagnostics" {
 		q, err := unix.Kqueue()
@@ -372,5 +442,89 @@ func TestLifetimeNativeEnrollmentRefusesBirthAndPredecessorDrift(t *testing.T) {
 	desktop.micros++
 	if enroll(queue, desktop, b) == nil {
 		t.Fatal("kernel predecessor drift accepted")
+	}
+}
+
+// A drained desktop that hangs in exit is killed by its own launcher after the
+// grace; an announced or silent desktop that exits by itself is never killed,
+// and a silent hang is never touched by elapsed time alone.
+func TestLifetimeNativeQuitExitWatchdog(t *testing.T) {
+	executable, _ := os.Executable()
+	var lastRoot string
+	run := func(role string, limit time.Duration) (string, error, time.Duration) {
+		root := t.TempDir()
+		lastRoot = root
+		c := exec.Command(executable, "-test.run=^TestLifetimeActor$")
+		c.Env = append(os.Environ(), "FAROL_LIFETIME_TEST_ACTOR="+role, "FAROL_LIFETIME_TEST_ROOT="+root)
+		// Own group: the timeout path ends guardian and desktop together and
+		// releases the inherited output pipe.
+		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		var out bytes.Buffer
+		c.Stdout, c.Stderr = &out, &out
+		start := time.Now()
+		if err := c.Start(); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, 1)
+		go func() { done <- c.Wait() }()
+		announced := func() time.Duration {
+			info, err := os.Stat(filepath.Join(root, "announced"))
+			if err != nil {
+				t.Fatalf("%s: desktop never reached its announcement: %s", role, out.String())
+			}
+			return time.Since(info.ModTime())
+		}
+		_ = start
+		if limit == 0 {
+			// Negative case: once the desktop has spoken (or stayed silent),
+			// give the armed launcher three graces to misbehave, then end it.
+			deadline := time.Now().Add(10 * time.Second)
+			for {
+				if _, err := os.Stat(filepath.Join(root, "announced")); err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			limit = time.Until(time.Now().Add(3 * time.Second))
+		}
+		select {
+		case err := <-done:
+			return out.String(), err, announced()
+		case <-time.After(limit):
+			// Prefer a result that is already ready, which narrows the window
+			// in which the group could have emptied and been recycled.
+			select {
+			case err := <-done:
+				return out.String(), err, announced()
+			default:
+			}
+			// Kill the whole guardian group: the silent hang must survive.
+			_ = syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
+			_ = c.Process.Kill()
+			<-done
+			return out.String(), errors.New("timeout"), announced()
+		}
+	}
+	out, err, took := run("quit-guardian-hang", 10*time.Second)
+	hangRoot := lastRoot
+	if err != nil || !strings.Contains(out, "desktop_launcher_quit_watchdog") || !strings.Contains(out, "desktop_launcher_desktop_exit pid=") {
+		t.Fatalf("hung drained desktop was not finished: %v\n%s", err, out)
+	}
+	_ = took
+	if _, err := os.Stat(filepath.Join(hangRoot, "alive")); err != nil {
+		t.Fatalf("the desktop was killed before most of the grace had passed: %v\n%s", err, out)
+	}
+	out, err, _ = run("quit-guardian-exit", 10*time.Second)
+	if err != nil || strings.Contains(out, "quit_watchdog") {
+		t.Fatalf("a desktop that exited on its own was killed: %v\n%s", err, out)
+	}
+	for _, role := range []string{"quit-guardian-silent", "quit-guardian-truncated", "quit-guardian-crlf"} {
+		out, err, _ = run(role, 0)
+		if err == nil || err.Error() != "timeout" || strings.Contains(out, "quit_watchdog") {
+			t.Fatalf("%s: a desktop without an exact frame was killed: %v\n%s", role, err, out)
+		}
 	}
 }

@@ -26,6 +26,15 @@ import (
 const frameLimit = 4096
 const bindingLimit = 64
 
+// quitFrame is the desktop's exact announcement, written after its drained
+// Quit receipt and just before app.exit. Only these bytes are recognized.
+var quitFrame = []byte(`{"schema":"farol.desktop-quit/1","drained":true}`)
+
+// quitExitGrace bounds how long a drained desktop may stay alive inside its
+// exit teardown. Electron 44 can hang there forever (2026-11-23,
+// uv_thread_join); the drain already recorded that nothing is left to lose.
+var quitExitGrace = 20 * time.Second
+
 type identity struct {
 	pid     int
 	parent  int
@@ -186,6 +195,11 @@ func nonFatalDiagnostics(writer io.Writer) (io.Writer, func()) {
 func hold(command *exec.Cmd, desktop identity, queue int, metadata, ack *os.File, diagnostics io.Writer, validate func(port.DesktopLifetimeBinding, int, int64) bool) int {
 	diagnostics, releaseDiagnostics := nonFatalDiagnostics(diagnostics)
 	defer releaseDiagnostics()
+	// The lifetime loop never blocks on stderr: a full pipe with a live but
+	// stalled reader must not delay signalling, reaping or return.
+	async := newAsyncDiagnostics(diagnostics, 64)
+	defer async.close(time.Second)
+	diagnostics = async
 	frames := make(chan []byte)
 	done := make(chan struct{})
 	readerDone := make(chan struct{})
@@ -195,6 +209,7 @@ func hold(command *exec.Cmd, desktop identity, queue int, metadata, ack *os.File
 		defer close(frames)
 		s := bufio.NewScanner(metadata)
 		s.Buffer(make([]byte, frameLimit+1), frameLimit+1)
+		s.Split(exactLines)
 		for s.Scan() {
 			line := append([]byte(nil), s.Bytes()...)
 			select {
@@ -210,6 +225,10 @@ func hold(command *exec.Cmd, desktop identity, queue int, metadata, ack *os.File
 	seen := make(map[string]bool)
 	helpers := make(map[int]string)
 	exited, status := false, 0
+	// The retained child is not reaped until its exit event, so its PID cannot
+	// be reused: this owner alone may signal it, unlike an outside helper.
+	var quitAt time.Time
+	killed := false
 	for {
 		select {
 		case sig := <-signals:
@@ -223,6 +242,14 @@ func hold(command *exec.Cmd, desktop identity, queue int, metadata, ack *os.File
 		case line, ok := <-frames:
 			if !ok {
 				frames = nil
+				break
+			}
+			if bytes.Equal(line, quitFrame) {
+				// No diagnostic write here: a blocked stderr must never delay
+				// the watchdog on this sole event loop.
+				if !exited && quitAt.IsZero() {
+					quitAt = time.Now()
+				}
 				break
 			}
 			b, err := parse(line, desktop.pid, time.Now().UnixMilli(), validate)
@@ -285,16 +312,83 @@ func hold(command *exec.Cmd, desktop identity, queue int, metadata, ack *os.File
 						status = command.ProcessState.ExitCode()
 					}
 				}
+				if killed {
+					_, _ = fmt.Fprintf(diagnostics, "desktop_launcher_quit_watchdog pid=%d\n", pid)
+				}
 				_, _ = fmt.Fprintf(diagnostics, "desktop_launcher_desktop_exit pid=%d code=%d\n", pid, status)
 			} else if operation := helpers[pid]; operation != "" {
 				_, _ = fmt.Fprintf(diagnostics, "desktop_launcher_helper_exit operation=%s pid=%d waitStatus=%d\n", operation, pid, event.Data)
 				delete(helpers, pid)
 			}
 		}
+		if !exited && !killed && !quitAt.IsZero() && time.Since(quitAt) >= quitExitGrace {
+			// Same owner, before the sole Wait. No diagnostic write on this
+			// path: a blocked stderr must not stall signalling or reaping.
+			killed = command.Process.Kill() == nil
+			quitAt = time.Time{}
+		}
 		if exited && len(helpers) == 0 {
+			if killed && killedByWatchdog(command) {
+				// The desktop finished a drained Quit; only its teardown hung.
+				return 0
+			}
 			return status
 		}
 	}
+}
+
+// asyncDiagnostics hands lines to one writer goroutine through a bounded
+// queue and drops them when it is full. close waits a bounded time to flush.
+type asyncDiagnostics struct {
+	lines chan []byte
+	done  chan struct{}
+}
+
+func newAsyncDiagnostics(w io.Writer, depth int) *asyncDiagnostics {
+	a := &asyncDiagnostics{lines: make(chan []byte, depth), done: make(chan struct{})}
+	go func() {
+		defer close(a.done)
+		for line := range a.lines {
+			_, _ = w.Write(line)
+		}
+	}()
+	return a
+}
+
+func (a *asyncDiagnostics) Write(p []byte) (int, error) {
+	select {
+	case a.lines <- append([]byte(nil), p...):
+	default:
+	}
+	return len(p), nil
+}
+
+func (a *asyncDiagnostics) close(limit time.Duration) {
+	close(a.lines)
+	select {
+	case <-a.done:
+	case <-time.After(limit):
+	}
+}
+
+// exactLines yields only complete newline-terminated lines, byte for byte: no
+// carriage-return stripping and no unterminated final token at EOF, so a
+// truncated or noncanonical frame never matches.
+func exactLines(data []byte, atEOF bool) (int, []byte, error) {
+	if i := bytes.IndexByte(data, '\n'); i >= 0 {
+		return i + 1, data[:i], nil
+	}
+	if atEOF {
+		return len(data), nil, nil
+	}
+	return 0, nil, nil
+}
+
+// killedByWatchdog reports whether the reaped child ended by SIGKILL, so an
+// independent failure in the same instant keeps its own status.
+func killedByWatchdog(command *exec.Cmd) bool {
+	ws, ok := command.ProcessState.Sys().(syscall.WaitStatus)
+	return ok && ws.Signaled() && ws.Signal() == syscall.SIGKILL
 }
 
 func holdUncertain(command *exec.Cmd, reaped bool, signals <-chan os.Signal, diagnostics io.Writer) int {

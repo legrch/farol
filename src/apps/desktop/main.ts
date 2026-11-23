@@ -136,7 +136,10 @@ import {
   desktopDevShellImageMatches,
 } from "../../../apps/desktop/dev-core-layout";
 import { promises as rawFs } from "original-fs";
-import { createDesktopHelperLifetime } from "../../modules/release/infra/native/desktop-helper-lifetime";
+import {
+  announceDrainedQuit,
+  createDesktopHelperLifetime,
+} from "../../modules/release/infra/native/desktop-helper-lifetime";
 import { publishManualInstallStartupProof } from "./manual-install-startup-proof";
 import {
   createInstalledUpdateRuntime,
@@ -2144,6 +2147,9 @@ async function recordSummaryFenceRecovery(
 // Diagnostic only: the last stage a Quit reached, never authority.
 let quitTrace: QuitTrace | null = null;
 let quitTracePhase: QuitTracePhase = "startup";
+// Set once the drain receipt says nothing is left; lets the launcher end an
+// exit teardown that hangs (Electron 44, 2026-11-23).
+let quitDrained = false;
 
 async function recordQuitReceipt(receipt: QuitDrainReceipt): Promise<void> {
   await writeQuitReceipt(statePaths().state, receipt, new Date().toISOString());
@@ -11249,6 +11255,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         }
       }
       await recordQuitReceipt(receipt);
+      quitDrained = receipt.drained;
       if (receipt.drained) {
         try {
           const marker = await removeRunMarker(statePaths().state, process.pid);
@@ -11273,6 +11280,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         // progress window is destroyed by the terminal exit itself.
         disposeMenuBarOnQuit?.();
       } finally {
+        if (quitDrained) announceDrainedQuit();
         app.exit(0);
       }
     },
