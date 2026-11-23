@@ -66,3 +66,27 @@ type ProcessWaiter interface {
 	ConfirmIdentity(context.Context, time.Time) error
 	WaitExit(context.Context, time.Time) error
 }
+
+// ProcessSignal names the only two termination signals a drained-predecessor
+// finish may send. It grants nothing by itself.
+type ProcessSignal uint8
+
+const (
+	ProcessSignalTerminate ProcessSignal = iota + 1
+	ProcessSignalKill
+)
+
+// ProcessTerminator is bound by trusted composition to exactly one PID and one
+// installed application slot. Each Signal re-reads the kernel executable path
+// of that PID and refuses unless it lies inside the bound slot. A signal error
+// never establishes absence; only the waiter's own probe does.
+type ProcessTerminator interface {
+	Signal(context.Context, ProcessSignal) error
+}
+
+// ProcessStopper finishes the one process a waiter already identified, after
+// its wait reached the deadline with that process still running. It returns
+// nil only after a positively observed exit.
+type ProcessStopper interface {
+	Stop(context.Context, time.Time) error
+}

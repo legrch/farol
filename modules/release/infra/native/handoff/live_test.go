@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/legrch/farol/modules/release/app/port"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,7 +88,7 @@ func TestLiveWaitExitNativeKeepsWrapperBound(t *testing.T) {
 		t.Run(boundary, func(t *testing.T) {
 			f := newFixture(t)
 			waiter := &liveBoundWaiter{}
-			live, err := NewLive(f.homePath, f.home, f.state, f.v.expected.StateIdentity, 42, f.v.expected.ProcessStart, waiter, time.Now().Add(time.Hour))
+			live, err := NewLive(f.homePath, f.home, f.state, f.v.expected.StateIdentity, 42, f.v.expected.ProcessStart, waiter, noStop(nil), false, time.Now().Add(time.Hour))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -176,7 +177,7 @@ func TestLiveQuitNativeKeepsFirstReceiptAcrossRefusal(t *testing.T) {
 			t.Run(fmt.Sprint(offline, "/", replacement), func(t *testing.T) {
 				f := newFixture(t)
 				waiter := &liveBoundWaiter{}
-				live, err := NewLive(f.homePath, f.home, f.state, f.v.expected.StateIdentity, 42, f.v.expected.ProcessStart, waiter, time.Now().Add(time.Minute))
+				live, err := NewLive(f.homePath, f.home, f.state, f.v.expected.StateIdentity, 42, f.v.expected.ProcessStart, waiter, noStop(nil), false, time.Now().Add(time.Minute))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -224,7 +225,7 @@ func TestLiveNativeCallbacksKeepOriginalDeadline(t *testing.T) {
 	for _, kind := range []string{"marker", "quit"} {
 		t.Run(kind, func(t *testing.T) {
 			f := newFixture(t)
-			live, err := NewLive(f.homePath, f.home, f.state, f.v.expected.StateIdentity, 42, f.v.expected.ProcessStart, &liveBoundWaiter{}, time.Now().Add(time.Minute))
+			live, err := NewLive(f.homePath, f.home, f.state, f.v.expected.StateIdentity, 42, f.v.expected.ProcessStart, &liveBoundWaiter{}, noStop(nil), false, time.Now().Add(time.Minute))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -269,7 +270,7 @@ func TestLiveNativeCopiesShareObservationConsumption(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			f := newFixture(t)
 			waiter := &liveBoundWaiter{}
-			live, err := NewLive(f.homePath, f.home, f.state, f.v.expected.StateIdentity, 42, f.v.expected.ProcessStart, waiter, time.Now().Add(time.Minute))
+			live, err := NewLive(f.homePath, f.home, f.state, f.v.expected.StateIdentity, 42, f.v.expected.ProcessStart, waiter, noStop(nil), false, time.Now().Add(time.Minute))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -315,7 +316,7 @@ func TestUpdateQuitProceedsAfterNonCleanDrain(t *testing.T) {
 			running := filepath.Join(f.statePath, "running.json")
 			marker := `{"schema":1,"pid":42,"startedAt":"2026-10-15T12:00:00.000Z","bootTime":null,"processStart":"Thu Oct 15 12:00:00 2026"}`
 			must(t, os.WriteFile(running, []byte(marker), 0600))
-			l, err := NewLive(f.homePath, f.home, f.state, f.v.expected.StateIdentity, 42, f.v.expected.ProcessStart, &liveBoundWaiter{}, time.Now().Add(time.Minute))
+			l, err := NewLive(f.homePath, f.home, f.state, f.v.expected.StateIdentity, 42, f.v.expected.ProcessStart, &liveBoundWaiter{}, noStop(nil), false, time.Now().Add(time.Minute))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -348,7 +349,7 @@ func TestUpdateQuitRejectsSuccessorMarkerAfterPredecessorExit(t *testing.T) {
 			running := filepath.Join(f.statePath, "running.json")
 			marker := `{"schema":1,"pid":42,"startedAt":"2026-10-15T12:00:00.000Z","bootTime":null,"processStart":"Thu Oct 15 12:00:00 2026"}`
 			must(t, os.WriteFile(running, []byte(marker), 0600))
-			l, err := NewLive(f.homePath, f.home, f.state, f.v.expected.StateIdentity, 42, f.v.expected.ProcessStart, &liveBoundWaiter{}, time.Now().Add(time.Minute))
+			l, err := NewLive(f.homePath, f.home, f.state, f.v.expected.StateIdentity, 42, f.v.expected.ProcessStart, &liveBoundWaiter{}, noStop(nil), false, time.Now().Add(time.Minute))
 			must(t, err)
 			l.route.reopen = fixtureRoute
 			must(t, l.CaptureMarker(context.Background()))
@@ -376,6 +377,87 @@ func TestUpdateQuitRejectsSuccessorMarkerAfterPredecessorExit(t *testing.T) {
 			}
 			if err := l.CheckUpdateStopped(context.Background()); err == nil {
 				t.Fatal("effect fence accepted a successor or unreadable marker")
+			}
+		})
+	}
+}
+
+// stuckWaiter models a predecessor that recorded its Quit but hung in exit: the
+// wait reaches its deadline, and Terminate records whether it was reached.
+type stuckWaiter struct{ terminated int }
+
+func (w *stuckWaiter) ConfirmIdentity(context.Context, time.Time) error { return nil }
+func (w *stuckWaiter) WaitExit(context.Context, time.Time) error {
+	return errors.New("process_running")
+}
+func (w *stuckWaiter) Stop(context.Context, time.Time) error {
+	w.terminated++
+	return nil
+}
+
+// noStop returns a stopper factory; a nil target stopper refuses.
+func noStop(s port.ProcessStopper) func(port.ProcessTerminator) port.ProcessStopper {
+	return func(port.ProcessTerminator) port.ProcessStopper {
+		if s == nil {
+			return refuseStop{}
+		}
+		return s
+	}
+}
+
+type refuseStop struct{}
+
+func (refuseStop) Stop(context.Context, time.Time) error { return errors.New("no_stop") }
+
+// A hung exit is finished only with the process's own strict drained receipt,
+// written after it started, and its running marker gone. Everything else is
+// refused without reaching the terminator.
+func TestFinishDrainedRequiresTheOriginalDrainedReceipt(t *testing.T) {
+	const marker = `{"schema":1,"pid":42,"startedAt":"2026-10-15T12:00:00.000Z","bootTime":null,"processStart":"Thu Oct 15 12:00:00 2026"}`
+	const drained = `{"schema":1,"at":"2026-10-15T12:00:01Z","drained":true,"unconfirmed":[]}`
+	for _, tc := range []struct {
+		name, quit string
+		keepMarker bool
+		noWait     bool
+		ok         bool
+	}{
+		{name: "drained", quit: drained, ok: true},
+		{name: "not drained", quit: `{"schema":1,"at":"2026-10-15T12:00:01Z","drained":false,"unconfirmed":["work"]}`},
+		{name: "unconfirmed child", quit: `{"schema":1,"at":"2026-10-15T12:00:01Z","drained":true,"unconfirmed":["codex"]}`},
+		{name: "receipt before start", quit: `{"schema":1,"at":"2026-10-15T11:59:59Z","drained":true,"unconfirmed":[]}`},
+		{name: "marker still present", quit: drained, keepMarker: true},
+		{name: "no receipt"},
+		{name: "never waited", quit: drained, noWait: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			running := filepath.Join(f.statePath, "running.json")
+			must(t, os.WriteFile(running, []byte(marker), 0600))
+			w := &stuckWaiter{}
+			l, err := NewLive(f.homePath, f.home, f.state, f.v.expected.StateIdentity, 42, f.v.expected.ProcessStart, w, noStop(w), false, time.Now().Add(time.Minute))
+			must(t, err)
+			l.route.reopen = fixtureRoute
+			must(t, l.CaptureMarker(context.Background()))
+			if tc.quit != "" {
+				f.writeQuit(tc.quit)
+			} else {
+				_ = os.Remove(filepath.Join(f.statePath, "last-quit.json"))
+			}
+			if !tc.keepMarker {
+				must(t, os.Remove(running))
+			}
+			if !tc.noWait && l.WaitExit(context.Background(), time.Now().Add(time.Second)) == nil {
+				t.Fatal("stuck wait succeeded")
+			}
+			err = l.FinishDrained(context.Background(), time.Now().Add(10*time.Second), errors.New("process_running"))
+			if tc.ok != (err == nil) || tc.ok != (w.terminated == 1) {
+				t.Fatalf("err %v terminated %d", err, w.terminated)
+			}
+			if tc.ok {
+				must(t, l.CheckUpdateStopped(context.Background()))
+				if l.FinishDrained(context.Background(), time.Now().Add(10*time.Second), errors.New("process_running")) == nil || w.terminated != 1 {
+					t.Fatal("finish was not one-shot")
+				}
 			}
 		})
 	}
