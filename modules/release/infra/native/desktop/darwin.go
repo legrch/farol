@@ -239,9 +239,10 @@ func hold(command *exec.Cmd, desktop identity, queue int, metadata, ack *os.File
 				break
 			}
 			if bytes.Equal(line, quitFrame) {
+				// No diagnostic write here: a blocked stderr must never delay
+				// the watchdog on this sole event loop.
 				if !exited && quitAt.IsZero() {
 					quitAt = time.Now()
-					_, _ = io.WriteString(diagnostics, "desktop_launcher_quit_drained\n")
 				}
 				break
 			}
@@ -312,18 +313,26 @@ func hold(command *exec.Cmd, desktop identity, queue int, metadata, ack *os.File
 			}
 		}
 		if !exited && !killed && !quitAt.IsZero() && time.Since(quitAt) >= quitExitGrace {
-			killed = true
+			// Same owner, before the sole Wait. Signal first, then log.
+			killed = command.Process.Kill() == nil
+			quitAt = time.Time{}
 			_, _ = io.WriteString(diagnostics, "desktop_launcher_quit_exit_timeout\n")
-			_ = command.Process.Kill() // same owner, before the sole Wait
 		}
 		if exited && len(helpers) == 0 {
-			if killed {
+			if killed && killedByWatchdog(command) {
 				// The desktop finished a drained Quit; only its teardown hung.
 				return 0
 			}
 			return status
 		}
 	}
+}
+
+// killedByWatchdog reports whether the reaped child ended by SIGKILL, so an
+// independent failure in the same instant keeps its own status.
+func killedByWatchdog(command *exec.Cmd) bool {
+	ws, ok := command.ProcessState.Sys().(syscall.WaitStatus)
+	return ok && ws.Signaled() && ws.Signal() == syscall.SIGKILL
 }
 
 func holdUncertain(command *exec.Cmd, reaped bool, signals <-chan os.Signal, diagnostics io.Writer) int {

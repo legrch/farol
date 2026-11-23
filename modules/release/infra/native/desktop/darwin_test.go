@@ -158,10 +158,11 @@ func TestLifetimeActor(t *testing.T) {
 		// alone never authorizes a kill.
 		if role == "quit-desktop-exit" {
 			time.Sleep(50 * time.Millisecond)
-		} else {
-			time.Sleep(600 * time.Millisecond)
+			os.Exit(0)
 		}
-		os.Exit(0)
+		// Silent: a stuck child that never announced a drained Quit. Elapsed
+		// time alone must not kill it; the test ends it via the group.
+		time.Sleep(time.Hour)
 	}
 	if strings.HasPrefix(role, "quit-guardian-") {
 		quitExitGrace = 200 * time.Millisecond
@@ -434,6 +435,9 @@ func TestLifetimeNativeQuitExitWatchdog(t *testing.T) {
 	run := func(role string, limit time.Duration) (string, error, time.Duration) {
 		c := exec.Command(executable, "-test.run=^TestLifetimeActor$")
 		c.Env = append(os.Environ(), "FAROL_LIFETIME_TEST_ACTOR="+role, "FAROL_LIFETIME_TEST_ROOT="+t.TempDir())
+		// Own group: the timeout path ends guardian and desktop together and
+		// releases the inherited output pipe.
+		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		var out bytes.Buffer
 		c.Stdout, c.Stderr = &out, &out
 		start := time.Now()
@@ -453,16 +457,19 @@ func TestLifetimeNativeQuitExitWatchdog(t *testing.T) {
 			return out.String(), errors.New("timeout"), time.Since(start)
 		}
 	}
-	out, err, _ := run("quit-guardian-hang", 10*time.Second)
-	if err != nil || !strings.Contains(out, "desktop_launcher_quit_drained") || !strings.Contains(out, "desktop_launcher_quit_exit_timeout") {
+	out, err, took := run("quit-guardian-hang", 10*time.Second)
+	if err != nil || !strings.Contains(out, "desktop_launcher_quit_exit_timeout") {
 		t.Fatalf("hung drained desktop was not finished: %v\n%s", err, out)
+	}
+	if took < 200*time.Millisecond {
+		t.Fatalf("killed before the grace: %v", took)
 	}
 	out, err, _ = run("quit-guardian-exit", 10*time.Second)
 	if err != nil || strings.Contains(out, "desktop_launcher_quit_exit_timeout") {
 		t.Fatalf("a desktop that exited on its own was killed: %v\n%s", err, out)
 	}
-	out, err, _ = run("quit-guardian-silent", 10*time.Second)
-	if err != nil || strings.Contains(out, "quit_") {
-		t.Fatalf("an unannounced desktop was affected: %v\n%s", err, out)
+	out, err, _ = run("quit-guardian-silent", 1500*time.Millisecond)
+	if err == nil || err.Error() != "timeout" || strings.Contains(out, "quit_exit_timeout") {
+		t.Fatalf("an unannounced stuck desktop was killed: %v\n%s", err, out)
 	}
 }
