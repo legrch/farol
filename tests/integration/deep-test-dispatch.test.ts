@@ -1,6 +1,5 @@
-import { parse } from "@babel/parser";
-import { isDeepStrictEqual } from "node:util";
 import { admissionFixture } from "../support/desktop-admission";
+import { scriptedChatgptPorts } from "../support/chatgpt-configuration-ports";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -17,6 +16,7 @@ import {
   MAX_DEEP_TEST_OUTSTANDING,
 } from "../../src/apps/desktop/chatgpt-task-journal-record";
 import { readFlatDeepTestRecords } from "../../src/apps/desktop/legacy-activation-obligations";
+import { createConfigurationChatgpt } from "../../apps/desktop/configuration/chatgpt";
 
 // Exercises the actual main-process orchestration with disposable state and a scripted route.
 // This does not qualify an Electron view, provider, native connector or installation.
@@ -486,33 +486,7 @@ it("retains an unknown result without re-sending", async () => {
   ).toMatchObject({ result: { state: "outcome_unknown" } });
 });
 
-// Existing Main characterization seam: controlled journal refusal and no Send.
-function submissionCase(kind: string): string {
-  const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
-  let selected: { start?: number | null; end?: number | null } | undefined;
-  const visit = (value: unknown): void => {
-    if (!value || typeof value !== "object") return;
-    if (Array.isArray(value)) {
-      value.forEach(visit);
-      return;
-    }
-    const node = value as Record<string, unknown>;
-    if (
-      node.type === "SwitchCase" &&
-      (node.test as { value?: string })?.value === kind
-    )
-      selected = node;
-    Object.values(node).forEach(visit);
-  };
-  visit(tree);
-  if (selected?.start == null || selected.end == null)
-    throw Error("Missing submission fixture seam");
-  return transformSync(
-    `async function submit(command) { switch(command.kind) { ${source.slice(selected.start, selected.end)} } } submit;`,
-    { loader: "ts" },
-  ).code;
-}
-
+// The production ChatGPT command handler with a controlled journal refusal: no Send.
 it.each(["chatgpt.submit-attachment-task", "chatgpt.submit-readonly-task"])(
   "reserves the chat lane before dispatch-intent preparation for %s",
   async (kind) => {
@@ -536,51 +510,60 @@ it.each(["chatgpt.submit-attachment-task", "chatgpt.submit-readonly-task"])(
     };
     const route = { runReadonlyTask: vi.fn() };
     const context = admissionFixture({
-      chatGptRoute: route,
       pendingChatGptAttachmentTask:
         kind === "chatgpt.submit-attachment-task" ? pending : null,
       pendingChatGptReadonlyTask:
         kind === "chatgpt.submit-readonly-task" ? pending : null,
-      configuration: {
-        snapshot: () => ({
-          status: "ready",
-          settings: {
-            setup: {
-              chatgpt: { outcomeUnknown: false, verified: verification },
-              computer: {
-                verified: {
-                  workspaceId: pending.workspaceId,
-                  configRevision: 1,
-                },
-              },
-            },
-            computer: {
-              generation: 1,
-              workspaces: [{ workspaceId: pending.workspaceId }],
+    });
+    const snapshot = {
+      status: "ready",
+      settings: {
+        setup: {
+          chatgpt: { outcomeUnknown: false, verified: verification },
+          computer: {
+            verified: {
+              workspaceId: pending.workspaceId,
+              configRevision: 1,
             },
           },
-        }),
-      },
-      isDeepStrictEqual,
-      verifyStagedChatGptAttachments: async () => {},
-      chatGptTaskJournal: {
-        markDispatchIntent: () => {
-          reached();
-          return journalWait;
+        },
+        computer: {
+          generation: 1,
+          workspaces: [{ workspaceId: pending.workspaceId }],
         },
       },
-      journalUnderPromotionLease: async (
-        _owner: unknown,
-        work: () => Promise<unknown>,
-      ) => work(),
-      liveTaskRegistry: {},
-      configurationFailure: (error: string) => ({ ok: false, error }),
-      PromotionPendingRefusal: class extends Error {},
-    });
-    const submit = vm.runInNewContext(
-      submissionCase(kind),
-      context,
-    ) as (command: { kind: string; operationId: string }) => Promise<unknown>;
+    };
+    const journal = {
+      markDispatchIntent: () => {
+        reached();
+        return journalWait;
+      },
+    };
+    const handler = createConfigurationChatgpt(
+      scriptedChatgptPorts({
+        chatGptRoute: () => route as never,
+        desktopAdmission: context.desktopAdmission,
+        pendingChatGptAttachmentTask: () =>
+          (kind === "chatgpt.submit-attachment-task" ? pending : null) as never,
+        pendingChatGptReadonlyTask: () =>
+          (kind === "chatgpt.submit-readonly-task" ? pending : null) as never,
+        configuration: () => ({ snapshot: () => snapshot }) as never,
+        verifyStagedChatGptAttachments: async () => {},
+        chatGptTaskJournal: () => journal as never,
+        liveTaskRegistry: {
+          withPromotionLease: async (
+            work: (fence: () => Promise<void>) => Promise<unknown>,
+          ) => ({
+            ok: true,
+            value: await work(async () => {}),
+          }),
+        } as never,
+        configurationFailure: (error: string) =>
+          ({ ok: false, error }) as never,
+      }),
+    );
+    const submit = (command: { kind: string; operationId: string }) =>
+      handler.configureAdmittedChatgpt(command as never);
     const first = submit({ kind, operationId: pending.operationId });
     await Promise.race([
       journalReached,

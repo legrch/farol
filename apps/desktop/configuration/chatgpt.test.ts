@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { scriptedChatgptPorts } from "../../../tests/support/chatgpt-configuration-ports";
 import {
   fixtureBuildId,
+  fixtureWorkspaceId,
   guidedSettingsFixture,
 } from "../../../tests/fixtures/guided-onboarding";
 import {
@@ -13,6 +14,9 @@ import type { AccountObservationConfirmation } from "../account-observation-conf
 import { BridgeError } from "../bridge/client";
 import type { ReadConversationClient } from "../bridge/read-conversation";
 import { DesktopAdmission } from "../host/admission";
+// <task-import>
+import type { ReadAccountConfirmation } from "../read-account-confirmation";
+// </task-import>
 import {
   createConfigurationChatgpt,
   type ChatgptConfigurationCommand,
@@ -40,6 +44,7 @@ const operationId = uuid(1);
 const sessionId = uuid(2);
 const confirmationId = uuid(3);
 const handleId = uuid(4);
+const attachmentPath = "/fixture/staging/notes.txt";
 const verifiedDigest = "c".repeat(64);
 
 type Settings = ReturnType<typeof guidedSettingsFixture>;
@@ -146,7 +151,7 @@ function journalFake(events: string[]) {
 
 // One scene scripts every port; a test changes only what its branch reads.
 // `events` records the order of the effects that matter.
-function scene() {
+function scene(options: { legacy?: boolean } = {}) {
   const events: string[] = [];
   const admission = new DesktopAdmission({
     chatGptReadonlyTask: () => false,
@@ -249,6 +254,7 @@ function scene() {
     selectedTaskId: "",
     browserHome: false,
     setupSignInCheck: "untouched" as unknown,
+    stagingReady: true,
     embedded: true,
     conversationFailure: null as ProductConfigurationResult | null,
     liveRoutes: new Map<string, unknown>(),
@@ -321,6 +327,85 @@ function scene() {
       return okResult();
     }),
   };
+  // <task-state>
+  const staged = {
+    operationId: uuid(20),
+    attachments: [
+      {
+        name: "notes.txt",
+        mimeType: "text/plain",
+        bytes: 5,
+        sha256: "a".repeat(64),
+        stagedPath: attachmentPath,
+      },
+      {
+        name: "plan.md",
+        mimeType: "text/markdown",
+        bytes: 7,
+        sha256: "b".repeat(64),
+        stagedPath: "/fixture/staging/plan.md",
+      },
+    ],
+  };
+  const task = {
+    staged,
+    selected: ["/fixture/a.txt"] as readonly string[] | "cancelled" | "invalid",
+    select: vi.fn(),
+    stage: vi.fn(async (_input: unknown) => staged),
+    verifyStaged: vi.fn(async (..._arguments: unknown[]) => undefined),
+    discardAttachments: vi.fn(async (root: string, id: string) => {
+      events.push(`discardAttachments:${root}:${id}`);
+    }),
+    discardPrepared: vi.fn(async (id: string) => {
+      events.push(`discardPrepared:${id}`);
+      return true;
+    }),
+    discardReadonly: vi.fn(async (pending: { operationId: string }) => {
+      events.push(`discardReadonly:${pending.operationId}`);
+      return true;
+    }),
+    withdraw: vi.fn(async (_admission: unknown) => true),
+    current: vi.fn((..._arguments: unknown[]) => true),
+    readonlyFile: "docs/readme.md" as string | "cancelled" | "invalid",
+    pick: vi.fn(),
+    native: vi.fn(
+      async (_request: unknown): Promise<Record<string, unknown>> => ({
+        ok: true,
+        value: { kind: "workspace.text", text: "legacy text", bytes: 11 },
+      }),
+    ),
+    lease: vi.fn(
+      async (..._arguments: unknown[]): Promise<{ ok: boolean }> => ({
+        ok: true,
+      }),
+    ),
+    accountConfirmations: new WeakMap<object, unknown>(),
+    confirmations: [] as {
+      input: {
+        admission: unknown;
+        current(): boolean;
+        read(): Promise<unknown>;
+        approve(input: unknown): Promise<unknown>;
+      };
+      inspect: ReturnType<typeof vi.fn>;
+      confirm: ReturnType<typeof vi.fn>;
+    }[],
+    inspectAccount: async (): Promise<unknown> => undefined,
+    confirmAccount: async (_id: string): Promise<unknown> => undefined,
+  };
+  class FakeAccountConfirmation {
+    readonly input: (typeof task.confirmations)[number]["input"];
+    readonly inspect = vi.fn(async () => task.inspectAccount());
+    readonly confirm = vi.fn(async (id: string) => task.confirmAccount(id));
+    constructor(input: (typeof task.confirmations)[number]["input"]) {
+      this.input = input;
+      task.confirmations.push(this);
+    }
+    projection() {
+      return { confirmationId, state: "observed" };
+    }
+  }
+  // </task-state>
   const ports = scriptedChatgptPorts({
     configuration: () => configuration as never,
     chatGptRoute: () => state.route as never,
@@ -340,7 +425,19 @@ function scene() {
       );
     },
     pendingChatGptReadonlyTask: () => state.pendingReadonly,
+    setPendingChatGptReadonlyTask: (value) => {
+      state.pendingReadonly = value;
+      events.push(
+        `setPendingChatGptReadonlyTask:${value === null ? "null" : "value"}`,
+      );
+    },
     pendingChatGptAttachmentTask: () => state.pendingAttachment,
+    setPendingChatGptAttachmentTask: (value) => {
+      state.pendingAttachment = value;
+      events.push(
+        `setPendingChatGptAttachmentTask:${value === null ? "null" : "value"}`,
+      );
+    },
     recoverableChatGptTask: () => state.recoverable as never,
     setRecoverableChatGptTask: (value) => {
       state.recoverable = value;
@@ -383,6 +480,11 @@ function scene() {
       state.setupSignInCheck = value;
       events.push(`setSetupSignInCheck:${value === null ? "null" : "value"}`);
     },
+    attachmentStagingReady: () => state.stagingReady,
+    setAttachmentStagingReady: (value) => {
+      state.stagingReady = value;
+      events.push(`setAttachmentStagingReady:${value}`);
+    },
     desktopAdmission: admission,
     chatGptSignInBlocked: {
       beginAttempt: () => {
@@ -398,10 +500,96 @@ function scene() {
       events.push("applyLayout");
     },
     chatGptConversationContinuity: () => "not_observed",
+    chatGptConversationAdmissionFailure: () => state.conversationFailure,
     chatGptJournalObservation: (result) => ({ journal: result }),
     captureChatStartupProfile: state.capture as never,
     ReadConversationClient:
       FakeClient as unknown as typeof ReadConversationClient,
+    // <task-ports>
+    liveTaskRegistry: {
+      withPromotionLease: (async (
+        work: (fence: () => Promise<void>) => Promise<unknown>,
+      ) => {
+        const outcome = await task.lease();
+        return outcome.ok
+          ? { ok: true, value: await work(async () => undefined) }
+          : { ok: false };
+      }) as never,
+    },
+    readonlyAccountConfirmations: task.accountConfirmations as never,
+    compiledGoCore: options.legacy ? null : { go: true },
+    nativeWorkspace: {
+      execute: async (request) => {
+        const result = await task.native(request);
+        return result as never;
+      },
+    },
+    statePaths: () => ({ attachmentStaging: "/fixture/staging" }),
+    retainChatGptConversation: async (id, state) => {
+      events.push(
+        `retain:${id}:${state}:lane=${admission.occupied("chatgpt-task") ? "held" : "free"}`,
+      );
+      return "retained";
+    },
+    chatGptAppPreSubmitObservation: (code) =>
+      code === "CHATGPT_APP_SELECTION_MISSING"
+        ? { state: "authenticated", binding: "blocked" }
+        : null,
+    chatGptAttachmentTaskPreview: (pending) => ({
+      kind: "chatgpt.attachment-task-preview",
+      operationId: pending.operationId,
+      attachments: pending.attachments.attachments.map(
+        ({ stagedPath: _stagedPath, ...attachment }) => attachment,
+      ),
+      totalBytes: pending.attachments.attachments.reduce(
+        (total, attachment) => total + attachment.bytes,
+        0,
+      ),
+      expiresAt: new Date(pending.expiresAt).toISOString(),
+    }),
+    chatGptReadonlyTaskPreview: (pending) => ({
+      kind: "chatgpt.readonly-task-preview",
+      operationId: pending.operationId,
+      workspaceId: pending.workspaceId,
+      workspaceLabel: pending.workspaceLabel,
+      relativePath: pending.relativePath,
+      bytes: pending.bytes,
+      contextCharacters: pending.contextCharacters,
+      contextLimit: 24_000,
+      contextTruncated: pending.contextTruncated,
+      excludedPaths: pending.excludedPaths,
+      expiresAt: new Date(pending.expiresAt).toISOString(),
+    }),
+    attachmentStagingFailure: (error) =>
+      error instanceof Error && error.message === "ATTACHMENT_TOO_LARGE"
+        ? failure("CHATGPT_ATTACHMENT_TOO_LARGE")
+        : failure("CHATGPT_ATTACHMENT_STAGING_FAILED"),
+    discardPreparedChatGptTask: task.discardPrepared,
+    discardPreparedReadonlyTask: task.discardReadonly,
+    withdrawGoReadonlyAdmission: task.withdraw,
+    readonlyAccountCurrent: (...args) => task.current(...args),
+    selectedChatGptAttachmentPaths: async () => {
+      events.push("select");
+      task.select();
+      return task.selected;
+    },
+    selectedWorkspaceFile: async () => {
+      events.push("pick");
+      task.pick();
+      return task.readonlyFile;
+    },
+    workspaceReadFailure: (code) =>
+      failure(
+        code === "WORKSPACE_PATH_REFUSED"
+          ? "WORKSPACE_PATH_REFUSED"
+          : "WORKSPACE_READ_FAILED",
+      ),
+    stageChatGptAttachments: task.stage as never,
+    verifyStagedChatGptAttachments: task.verifyStaged as never,
+    discardChatGptAttachments: task.discardAttachments as never,
+    ReadAccountConfirmation:
+      FakeAccountConfirmation as unknown as typeof ReadAccountConfirmation,
+    // </task-ports>
     AccountObservationConfirmation:
       FakeObservation as unknown as typeof AccountObservationConfirmation,
   });
@@ -418,6 +606,9 @@ function scene() {
     ports,
     failure,
     clientScript: state.clientScript,
+    // <task-return>
+    task,
+    // </task-return>
     run: (value: object) => handler.configureAdmittedChatgpt(command(value)),
   };
 }
@@ -1677,5 +1868,1674 @@ describe("chatgpt return commands", () => {
     });
     expect(s.state.signInOpenGeneration).toBeNull();
     expect(s.events).toContain("setChatGptSignInOpenGeneration:null");
+  });
+});
+
+// ==== task group
+function snapshotSettings(s: Scene): Settings {
+  if (s.state.snapshot.status !== "ready")
+    throw new Error("settings unavailable");
+  return s.state.snapshot.settings;
+}
+
+function pendingAttachment(
+  s: Scene,
+  extra: Partial<PendingChatGptAttachmentTask> = {},
+): PendingChatGptAttachmentTask {
+  return {
+    operationId,
+    attachments: s.task.staged as never,
+    prompt: "prompt text",
+    chatGptVerification: snapshotSettings(s).setup.chatgpt.verified!,
+    expiresAt: Date.now() + 60_000,
+    ...extra,
+  };
+}
+
+function pendingReadonly(
+  s: Scene,
+  extra: Partial<PendingChatGptReadonlyTask> = {},
+): PendingChatGptReadonlyTask {
+  return {
+    operationId,
+    workspaceId: fixtureWorkspaceId,
+    workspaceLabel: "Demo project",
+    computerGeneration: 1,
+    relativePath: "docs/readme.md",
+    bytes: 9,
+    contextCharacters: 9,
+    contextTruncated: false,
+    excludedPaths: [],
+    prompt: "prompt text",
+    chatGptVerification: snapshotSettings(s).setup.chatgpt.verified!,
+    expiresAt: Date.now() + 60_000,
+    ...extra,
+  };
+}
+
+// How a finished task becomes the Settings observation, by outcome.
+function observationTable(protocol: string) {
+  return [
+    {
+      name: "a completed task",
+      task: { state: "completed", code: null },
+      observation: () => ({
+        state: "authenticated",
+        profile: "chatgpt.app-partition/1",
+        runtimeGeneration: `fixture-partition:${fixtureBuildId}`,
+        buildId: fixtureBuildId,
+        protocol,
+      }),
+    },
+    {
+      name: "a signed-out task",
+      task: { state: "not_authenticated", code: "CHATGPT_SIGN_IN_REQUIRED" },
+      observation: () => ({ state: "signed_out" }),
+    },
+    {
+      name: "an unknown outcome",
+      task: { state: "outcome_unknown", code: "CHATGPT_TASK_TIMEOUT" },
+      observation: () => ({ state: "outcome_unknown" }),
+    },
+    {
+      name: "an unreachable page",
+      task: { state: "failed_before_submit", code: "CHATGPT_PAGE_UNREACHABLE" },
+      observation: () => ({ state: "unreachable" }),
+    },
+    {
+      name: "an app binding block",
+      task: {
+        state: "failed_before_submit",
+        code: "CHATGPT_APP_SELECTION_MISSING",
+      },
+      observation: () => ({ state: "authenticated", binding: "blocked" }),
+    },
+    {
+      name: "an unrecognised page",
+      task: { state: "failed_before_submit", code: "CHATGPT_UI_UNRECOGNIZED" },
+      observation: () => ({ state: "unsupported" }),
+    },
+  ];
+}
+
+describe("chatgpt.prepare-attachment-task", () => {
+  const prepare = { kind: "chatgpt.prepare-attachment-task" };
+
+  it("refuses a missing route before any other check", async () => {
+    const s = scene();
+    s.state.route = null;
+    s.admission.reserveAdmitted("chatgpt-task");
+    expect(failureOf(await s.run(prepare))).toBe("CHATGPT_ROUTE_UNAVAILABLE");
+  });
+
+  it("refuses an occupied chat lane before the conversation admission", async () => {
+    const s = scene();
+    s.admission.reserveAdmitted("chatgpt-task");
+    s.state.conversationFailure = s.failure(
+      "CHATGPT_CONVERSATION_REVIEW_REQUIRED",
+    );
+    expect(failureOf(await s.run(prepare))).toBe("CHATGPT_TASK_IN_PROGRESS");
+  });
+
+  it("returns the conversation admission failure as is", async () => {
+    const s = scene();
+    s.state.conversationFailure = s.failure(
+      "CHATGPT_CONVERSATION_REVIEW_REQUIRED",
+    );
+    expect(failureOf(await s.run(prepare))).toBe(
+      "CHATGPT_CONVERSATION_REVIEW_REQUIRED",
+    );
+  });
+
+  it("refuses unavailable staging, then a pending readonly preview", async () => {
+    const s = scene();
+    s.state.stagingReady = false;
+    s.state.pendingReadonly = {} as never;
+    expect(failureOf(await s.run(prepare))).toBe(
+      "CHATGPT_ATTACHMENT_STAGING_FAILED",
+    );
+    s.state.stagingReady = true;
+    expect(failureOf(await s.run(prepare))).toBe(
+      "CHATGPT_ATTACHMENT_PREVIEW_PENDING",
+    );
+  });
+
+  it.each([
+    ["settings are unavailable", unavailable, "SETTINGS_UNAVAILABLE"],
+    [
+      "the outcome is unknown",
+      ready({ chatgpt: { outcomeUnknown: true } }),
+      "CHATGPT_TASK_REQUIRES_REVIEW",
+    ],
+    [
+      "the connection is not verified",
+      ready({ chatgpt: { verified: null } }),
+      "CHATGPT_CONNECTION_NOT_VERIFIED",
+    ],
+  ])("refuses when %s", async (_name, snapshot, code) => {
+    const s = scene();
+    s.state.snapshot = snapshot;
+    expect(failureOf(await s.run(prepare))).toBe(code);
+    expect(s.task.select).not.toHaveBeenCalled();
+  });
+
+  it("returns a current existing preview without picking or staging", async () => {
+    const s = scene();
+    const existing = pendingAttachment(s);
+    s.state.pendingAttachment = existing;
+    expect(await s.run(prepare)).toMatchObject({
+      ok: true,
+      evidence: { kind: "chatgpt.attachment-task-preview", operationId },
+    });
+    expect(s.task.select).not.toHaveBeenCalled();
+    expect(s.task.stage).not.toHaveBeenCalled();
+    expect(s.state.pendingAttachment).toBe(existing);
+  });
+
+  it.each([
+    [
+      "has expired",
+      (s: Scene) => pendingAttachment(s, { expiresAt: Date.now() }),
+    ],
+    [
+      "was bound to another verification",
+      (s: Scene) =>
+        pendingAttachment(s, { chatGptVerification: { other: true } as never }),
+    ],
+  ])(
+    "discards a stale preview that %s before staging a new one",
+    async (_name, make) => {
+      const s = scene();
+      s.state.pendingAttachment = make(s);
+      expect(await s.run(prepare)).toMatchObject({ ok: true });
+      expect(s.events.slice(0, 4)).toEqual([
+        "setPendingChatGptAttachmentTask:null",
+        `discardAttachments:/fixture/staging:${operationId}`,
+        `discardPrepared:${operationId}`,
+        "select",
+      ]);
+    },
+  );
+
+  it("fails and stops using staging when a stale preview cannot be discarded", async () => {
+    const s = scene();
+    s.state.pendingAttachment = pendingAttachment(s, { expiresAt: Date.now() });
+    s.task.discardAttachments.mockRejectedValue(new Error("disk"));
+    expect(failureOf(await s.run(prepare))).toBe(
+      "CHATGPT_ATTACHMENT_STAGING_FAILED",
+    );
+    expect(s.state.stagingReady).toBe(false);
+    expect(s.task.discardPrepared).not.toHaveBeenCalled();
+    expect(s.task.select).not.toHaveBeenCalled();
+  });
+
+  it("fails when the journal cannot discard a stale prepared task", async () => {
+    const s = scene();
+    s.state.pendingAttachment = pendingAttachment(s, { expiresAt: Date.now() });
+    s.task.discardPrepared.mockResolvedValue(false);
+    expect(failureOf(await s.run(prepare))).toBe("CHATGPT_TASK_JOURNAL_FAILED");
+    expect(s.task.select).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["cancelled", "CHATGPT_ATTACHMENT_PICKER_CANCELLED"],
+    ["invalid", "CHATGPT_ATTACHMENT_SELECTION_INVALID"],
+  ] as const)("maps a %s picker", async (selected, code) => {
+    const s = scene();
+    s.task.selected = selected;
+    expect(failureOf(await s.run(prepare))).toBe(code);
+    expect(s.task.stage).not.toHaveBeenCalled();
+  });
+
+  it("returns the staging failure without touching the journal", async () => {
+    const s = scene();
+    s.task.stage.mockRejectedValue(new Error("ATTACHMENT_TOO_LARGE"));
+    expect(failureOf(await s.run(prepare))).toBe(
+      "CHATGPT_ATTACHMENT_TOO_LARGE",
+    );
+    expect(s.state.journal!.prepare).not.toHaveBeenCalled();
+    expect(s.state.pendingAttachment).toBeNull();
+  });
+
+  it.each([
+    ["the discard succeeds", false, true],
+    ["the discard also fails", true, false],
+  ])(
+    "fails without a journal when %s",
+    async (_name, discardFails, stagingStaysReady) => {
+      const s = scene();
+      s.state.journal = null;
+      if (discardFails)
+        s.task.discardAttachments.mockRejectedValue(new Error("disk"));
+      expect(failureOf(await s.run(prepare))).toBe(
+        "CHATGPT_TASK_JOURNAL_FAILED",
+      );
+      expect(s.state.stagingReady).toBe(stagingStaysReady);
+      expect(s.state.pendingAttachment).toBeNull();
+    },
+  );
+
+  it.each([
+    ["a promotion lease refusal", "refuse", "CHATGPT_TASK_PROMOTION_PENDING"],
+    ["a journal failure", "journal", "CHATGPT_TASK_JOURNAL_FAILED"],
+  ])("discards the staged files after %s", async (_name, how, code) => {
+    const s = scene();
+    if (how === "refuse") s.task.lease.mockResolvedValue({ ok: false });
+    else s.state.journal!.prepare.mockRejectedValue(new Error("disk"));
+    expect(failureOf(await s.run(prepare))).toBe(code);
+    expect(s.task.discardAttachments).toHaveBeenCalledWith(
+      "/fixture/staging",
+      expect.any(String),
+    );
+    expect(s.state.pendingAttachment).toBeNull();
+  });
+
+  it("stages, prepares the journal under the lease and publishes a ten minute preview", async () => {
+    const s = scene();
+    const result = await s.run(prepare);
+    expect(result).toMatchObject({
+      ok: true,
+      evidence: { kind: "chatgpt.attachment-task-preview", totalBytes: 12 },
+    });
+    expect(s.task.stage).toHaveBeenCalledWith({
+      root: "/fixture/staging",
+      operationId: expect.any(String),
+      paths: ["/fixture/a.txt"],
+    });
+    expect(s.task.lease).toHaveBeenCalledTimes(1);
+    expect(s.state.journal!.prepare).toHaveBeenCalledWith({
+      operationId: expect.any(String),
+      kind: "attachment",
+    });
+    expect(s.state.pendingAttachment).toMatchObject({
+      attachments: s.task.staged,
+      chatGptVerification: (s.state.snapshot as { settings: Settings }).settings
+        .setup.chatgpt.verified,
+      expiresAt: Date.now() + 10 * 60_000,
+    });
+    expect(s.state.pendingAttachment!.prompt).toContain("notes.txt");
+  });
+});
+
+describe("chatgpt.submit-attachment-task", () => {
+  const submit = { kind: "chatgpt.submit-attachment-task", operationId };
+
+  it("refuses a missing route before reserving the lane", async () => {
+    const s = scene();
+    s.state.route = null;
+    expect(failureOf(await s.run(submit))).toBe("CHATGPT_ROUTE_UNAVAILABLE");
+    expect(s.admission.occupied("chatgpt-task")).toBe(false);
+  });
+
+  it.each([
+    [
+      "occupied",
+      (s: Scene) => void s.admission.reserveAdmitted("chatgpt-task"),
+    ],
+    ["closed", (s: Scene) => s.admission.beginQuit()],
+  ])("refuses when the chat lane is %s", async (_name, set) => {
+    const s = scene();
+    set(s);
+    s.state.pendingAttachment = pendingAttachment(s);
+    expect(failureOf(await s.run(submit))).toBe("CHATGPT_TASK_IN_PROGRESS");
+    expect(s.state.pendingAttachment).not.toBeNull();
+  });
+
+  it.each([
+    ["no preview", null],
+    ["another operation", "other"],
+  ])("refuses %s and releases the lane", async (_name, which) => {
+    const s = scene();
+    if (which)
+      s.state.pendingAttachment = pendingAttachment(s, {
+        operationId: uuid(77),
+      });
+    expect(failureOf(await s.run(submit))).toBe(
+      "CHATGPT_ATTACHMENT_PREVIEW_NOT_FOUND",
+    );
+    expect(s.admission.occupied("chatgpt-task")).toBe(false);
+  });
+
+  it("expires the preview, tolerating a failed staging discard", async () => {
+    const s = scene();
+    s.state.pendingAttachment = pendingAttachment(s, { expiresAt: Date.now() });
+    s.task.discardAttachments.mockRejectedValue(new Error("disk"));
+    expect(failureOf(await s.run(submit))).toBe(
+      "CHATGPT_ATTACHMENT_PREVIEW_EXPIRED",
+    );
+    expect(s.state.pendingAttachment).toBeNull();
+    expect(s.state.stagingReady).toBe(false);
+    expect(s.task.discardPrepared).toHaveBeenCalledWith(operationId);
+    expect(s.admission.occupied("chatgpt-task")).toBe(false);
+  });
+
+  it("fails an expired preview whose journal entry cannot be discarded", async () => {
+    const s = scene();
+    s.state.pendingAttachment = pendingAttachment(s, { expiresAt: Date.now() });
+    s.task.discardPrepared.mockResolvedValue(false);
+    expect(failureOf(await s.run(submit))).toBe("CHATGPT_TASK_JOURNAL_FAILED");
+  });
+
+  it.each([
+    ["settings are unavailable", unavailable, "SETTINGS_UNAVAILABLE"],
+    [
+      "the outcome is unknown",
+      ready({ chatgpt: { outcomeUnknown: true } }),
+      "CHATGPT_TASK_REQUIRES_REVIEW",
+    ],
+  ])(
+    "refuses when %s without discarding the preview",
+    async (_name, snapshot, code) => {
+      const s = scene();
+      s.state.pendingAttachment = pendingAttachment(s);
+      s.state.snapshot = snapshot;
+      expect(failureOf(await s.run(submit))).toBe(code);
+      expect(s.state.pendingAttachment).not.toBeNull();
+      expect(s.task.discardAttachments).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    [
+      "the journal accepts the discard",
+      true,
+      "CHATGPT_CONNECTION_NOT_VERIFIED",
+    ],
+    ["the journal cannot discard", false, "CHATGPT_TASK_JOURNAL_FAILED"],
+  ])(
+    "discards a preview bound to another verification when %s",
+    async (_name, discarded, code) => {
+      const s = scene();
+      s.state.pendingAttachment = pendingAttachment(s, {
+        chatGptVerification: { other: true } as never,
+      });
+      s.task.discardPrepared.mockResolvedValue(discarded);
+      expect(failureOf(await s.run(submit))).toBe(code);
+      expect(s.state.pendingAttachment).toBeNull();
+      expect(s.task.discardAttachments).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    ["the journal accepts the discard", true],
+    ["the journal cannot discard", false],
+  ])(
+    "discards the preview when its staged files changed and %s",
+    async (_name, discarded) => {
+      const s = scene();
+      s.state.pendingAttachment = pendingAttachment(s);
+      s.task.verifyStaged.mockRejectedValue(
+        new Error("ATTACHMENT_REFERENCE_MISSING"),
+      );
+      s.task.discardPrepared.mockResolvedValue(discarded);
+      const code = failureOf(await s.run(submit));
+      expect(code).toBe(
+        discarded
+          ? "CHATGPT_ATTACHMENT_STAGING_FAILED"
+          : "CHATGPT_TASK_JOURNAL_FAILED",
+      );
+      expect(s.state.pendingAttachment).toBeNull();
+      expect(s.route.runReadonlyTask).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses without a journal and keeps the preview", async () => {
+    const s = scene();
+    s.state.pendingAttachment = pendingAttachment(s);
+    s.state.journal = null;
+    expect(failureOf(await s.run(submit))).toBe("CHATGPT_TASK_JOURNAL_FAILED");
+    expect(s.state.pendingAttachment).not.toBeNull();
+    expect(s.route.runReadonlyTask).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a promotion lease refusal", "refuse", "CHATGPT_TASK_PROMOTION_PENDING"],
+    ["a journal failure", "journal", "CHATGPT_TASK_JOURNAL_FAILED"],
+  ])(
+    "keeps the preview and sends nothing after %s",
+    async (_name, how, code) => {
+      const s = scene();
+      s.state.pendingAttachment = pendingAttachment(s);
+      if (how === "refuse") s.task.lease.mockResolvedValue({ ok: false });
+      else
+        s.state.journal!.markDispatchIntent.mockRejectedValue(
+          new Error("disk"),
+        );
+      expect(failureOf(await s.run(submit))).toBe(code);
+      expect(s.state.pendingAttachment).not.toBeNull();
+      expect(s.route.runReadonlyTask).not.toHaveBeenCalled();
+      expect(s.admission.occupied("chatgpt-task")).toBe(false);
+    },
+  );
+
+  it("sends once with the staged attachments and records the retained result", async () => {
+    const s = scene();
+    s.state.pendingAttachment = pendingAttachment(s);
+    const result = await s.run(submit);
+    expect(result).toMatchObject({
+      ok: true,
+      evidence: {
+        kind: "chatgpt.attachment-task",
+        operationId,
+        state: "completed",
+        code: null,
+        attachmentCount: 2,
+        totalBytes: 12,
+        deltaCount: 3,
+        observedCharacters: 42,
+        stagingCleanup: "removed",
+        conversationContinuity: "retained",
+        redelivered: false,
+        deliveryAckRequired: true,
+      },
+    });
+    expect(s.route.runReadonlyTask).toHaveBeenCalledExactlyOnceWith(
+      "prompt text",
+      s.task.staged.attachments,
+    );
+    expect(s.events).toEqual([
+      `journal.markDispatchIntent:${operationId}`,
+      "setPendingChatGptAttachmentTask:null",
+      "route.runReadonlyTask",
+      `discardAttachments:/fixture/staging:${operationId}`,
+      `retain:${operationId}:completed:lane=free`,
+      `journal.retainResult:${operationId}:${JSON.stringify({
+        state: "completed",
+        code: null,
+        deltaCount: 3,
+        observedCharacters: 42,
+        attachmentCount: 2,
+        totalBytes: 12,
+        stagingCleanup: "removed",
+      })}`,
+      "journal.load",
+      "setRecoverableChatGptTask:value",
+      `recordChatGptObservation:${JSON.stringify({
+        state: "authenticated",
+        profile: "chatgpt.app-partition/1",
+        runtimeGeneration: `fixture-partition:${fixtureBuildId}`,
+        buildId: fixtureBuildId,
+        protocol: "chatgpt-page-attachment-task/1",
+      })}`,
+      "setRecoverableChatGptObservationPersisted:true",
+    ]);
+    expect(s.admission.occupied("chatgpt-task")).toBe(false);
+  });
+
+  it("never retries a thrown send: the outcome is unknown", async () => {
+    const s = scene();
+    s.state.pendingAttachment = pendingAttachment(s);
+    s.route.runReadonlyTask.mockRejectedValue(new Error("lost"));
+    expect(await s.run(submit)).toMatchObject({
+      ok: true,
+      evidence: {
+        state: "outcome_unknown",
+        code: "CHATGPT_TASK_ERROR",
+        deltaCount: 0,
+        observedCharacters: 0,
+      },
+    });
+    expect(s.route.runReadonlyTask).toHaveBeenCalledTimes(1);
+    expect(s.configuration.recordChatGptObservation).toHaveBeenCalledWith({
+      state: "outcome_unknown",
+    });
+  });
+
+  it("reports pending startup cleanup when the staging discard fails", async () => {
+    const s = scene();
+    s.state.pendingAttachment = pendingAttachment(s);
+    s.task.discardAttachments.mockRejectedValue(new Error("disk"));
+    expect(await s.run(submit)).toMatchObject({
+      ok: true,
+      evidence: { stagingCleanup: "pending_startup_cleanup" },
+    });
+    expect(s.state.stagingReady).toBe(false);
+    expect(s.admission.occupied("chatgpt-task")).toBe(false);
+  });
+
+  it("records an unknown outcome and a persist-failed recovery when the result cannot be retained", async () => {
+    const s = scene();
+    s.state.pendingAttachment = pendingAttachment(s);
+    s.state.journal!.retainResult.mockRejectedValue(new Error("disk"));
+    expect(await s.run(submit)).toMatchObject({
+      ok: true,
+      evidence: {
+        kind: "chatgpt.task-recovery",
+        taskKind: "attachment",
+        state: "outcome_unknown",
+        code: "CHATGPT_TASK_RESULT_PERSIST_FAILED",
+        attachmentCount: 2,
+        totalBytes: 12,
+        redelivered: false,
+        deliveryAckRequired: false,
+      },
+    });
+    expect(
+      s.configuration.recordChatGptObservation,
+    ).toHaveBeenCalledExactlyOnceWith({ state: "outcome_unknown" });
+    expect(s.state.recoverable).toBeNull();
+    expect(s.state.observationPersisted).toBe(false);
+  });
+
+  it("returns a failed outcome record instead of retaining it", async () => {
+    const s = scene();
+    s.state.pendingAttachment = pendingAttachment(s);
+    s.state.journal!.retainResult.mockRejectedValue(new Error("disk"));
+    s.configuration.recordChatGptObservation.mockResolvedValue({
+      ok: false,
+      error: "SETTINGS_WRITE_FAILED",
+      snapshot: s.state.snapshot,
+    } as never);
+    expect(failureOf(await s.run(submit))).toBe("SETTINGS_WRITE_FAILED");
+  });
+
+  it("returns a failed observation record without marking it persisted", async () => {
+    const s = scene();
+    s.state.pendingAttachment = pendingAttachment(s);
+    s.configuration.recordChatGptObservation.mockResolvedValue({
+      ok: false,
+      error: "SETTINGS_WRITE_FAILED",
+      snapshot: s.state.snapshot,
+    } as never);
+    expect(failureOf(await s.run(submit))).toBe("SETTINGS_WRITE_FAILED");
+    expect(s.state.observationPersisted).toBe(false);
+  });
+
+  it.each(observationTable("chatgpt-page-attachment-task/1"))(
+    "records $name as the observation",
+    async ({ task, observation }) => {
+      const s = scene();
+      s.state.pendingAttachment = pendingAttachment(s);
+      s.route.runReadonlyTask.mockResolvedValue({
+        deltaCount: 0,
+        observedCharacters: 0,
+        ...task,
+      });
+      expect(await s.run(submit)).toMatchObject({ ok: true });
+      expect(s.configuration.recordChatGptObservation).toHaveBeenLastCalledWith(
+        observation(),
+      );
+    },
+  );
+});
+
+describe("chatgpt.cancel-attachment-task", () => {
+  const cancel = { kind: "chatgpt.cancel-attachment-task", operationId };
+
+  it("refuses an occupied chat lane before looking at the preview", async () => {
+    const s = scene();
+    s.admission.reserveAdmitted("chatgpt-task");
+    expect(failureOf(await s.run(cancel))).toBe("CHATGPT_TASK_IN_PROGRESS");
+  });
+
+  it.each([
+    ["no preview", null],
+    ["another operation", "other"],
+  ])("refuses %s", async (_name, which) => {
+    const s = scene();
+    if (which)
+      s.state.pendingAttachment = pendingAttachment(s, {
+        operationId: uuid(77),
+      });
+    expect(failureOf(await s.run(cancel))).toBe(
+      "CHATGPT_ATTACHMENT_PREVIEW_NOT_FOUND",
+    );
+    expect(s.state.pendingAttachment === null).toBe(!which);
+  });
+
+  it("clears the preview, then the staged files, then the journal entry", async () => {
+    const s = scene();
+    s.state.pendingAttachment = pendingAttachment(s);
+    expect(await s.run(cancel)).toMatchObject({ ok: true });
+    expect(s.events).toEqual([
+      "setPendingChatGptAttachmentTask:null",
+      `discardAttachments:/fixture/staging:${operationId}`,
+      `discardPrepared:${operationId}`,
+    ]);
+  });
+
+  it("stops using staging when the files cannot be removed", async () => {
+    const s = scene();
+    s.state.pendingAttachment = pendingAttachment(s);
+    s.task.discardAttachments.mockRejectedValue(new Error("disk"));
+    expect(failureOf(await s.run(cancel))).toBe(
+      "CHATGPT_ATTACHMENT_STAGING_FAILED",
+    );
+    expect(s.state.stagingReady).toBe(false);
+    expect(s.state.pendingAttachment).toBeNull();
+    expect(s.task.discardPrepared).not.toHaveBeenCalled();
+  });
+
+  it("fails when the journal cannot discard the prepared task", async () => {
+    const s = scene();
+    s.state.pendingAttachment = pendingAttachment(s);
+    s.task.discardPrepared.mockResolvedValue(false);
+    expect(failureOf(await s.run(cancel))).toBe("CHATGPT_TASK_JOURNAL_FAILED");
+  });
+});
+
+describe("chatgpt.prepare-readonly-task", () => {
+  const prepare = {
+    kind: "chatgpt.prepare-readonly-task",
+    workspaceId: fixtureWorkspaceId,
+  };
+
+  it("refuses an active readonly conversation first", async () => {
+    const s = scene();
+    activeConversation(s);
+    s.state.route = null;
+    expect(failureOf(await s.run(prepare))).toBe("CHATGPT_TASK_IN_PROGRESS");
+  });
+
+  it("refuses a missing route, then an occupied lane, then the conversation admission", async () => {
+    const s = scene();
+    s.state.route = null;
+    expect(failureOf(await s.run(prepare))).toBe("CHATGPT_ROUTE_UNAVAILABLE");
+    s.state.route = s.route;
+    s.admission.reserveAdmitted("chatgpt-task");
+    expect(failureOf(await s.run(prepare))).toBe("CHATGPT_TASK_IN_PROGRESS");
+    const open = scene();
+    open.state.conversationFailure = open.failure(
+      "CHATGPT_CONVERSATION_REVIEW_REQUIRED",
+    );
+    expect(failureOf(await open.run(prepare))).toBe(
+      "CHATGPT_CONVERSATION_REVIEW_REQUIRED",
+    );
+  });
+
+  it("refuses a pending attachment preview without reserving the lane", async () => {
+    const s = scene();
+    s.state.pendingAttachment = {} as never;
+    expect(failureOf(await s.run(prepare))).toBe(
+      "CHATGPT_TASK_PREVIEW_PENDING",
+    );
+    expect(s.admission.occupied("chatgpt-task")).toBe(false);
+  });
+
+  it.each([
+    ["settings are unavailable", unavailable, "SETTINGS_UNAVAILABLE"],
+    [
+      "the outcome is unknown",
+      ready({ chatgpt: { outcomeUnknown: true } }),
+      "CHATGPT_TASK_REQUIRES_REVIEW",
+    ],
+    [
+      "the connection is not verified",
+      ready({ chatgpt: { verified: null } }),
+      "CHATGPT_CONNECTION_NOT_VERIFIED",
+    ],
+    [
+      "the computer is verified for another workspace",
+      ready({
+        computerSetup: {
+          verified: {
+            ...guidedSettingsFixture().setup.computer.verified!,
+            workspaceId: uuid(77),
+          },
+        },
+      }),
+      "WORKSPACE_NOT_FOUND",
+    ],
+    [
+      "the computer verification is stale",
+      ready({
+        computerSetup: {
+          verified: {
+            ...guidedSettingsFixture().setup.computer.verified!,
+            configRevision: 7,
+          },
+        },
+      }),
+      "WORKSPACE_NOT_FOUND",
+    ],
+  ])("refuses when %s and releases the lane", async (_name, snapshot, code) => {
+    const s = scene();
+    s.state.snapshot = snapshot;
+    expect(failureOf(await s.run(prepare))).toBe(code);
+    expect(s.admission.occupied("chatgpt-task")).toBe(false);
+    expect(s.task.readonlyFile).toBeDefined();
+    expect(s.task.pick).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unknown workspace", async () => {
+    const s = scene();
+    expect(failureOf(await s.run({ ...prepare, workspaceId: uuid(77) }))).toBe(
+      "WORKSPACE_NOT_FOUND",
+    );
+  });
+
+  it("requires a measured root identity", async () => {
+    const s = scene();
+    const base = guidedSettingsFixture();
+    const workspace = {
+      ...base.computer.workspaces[0]!,
+      rootIdentity: undefined,
+    };
+    s.state.snapshot = {
+      status: "ready",
+      settings: {
+        ...(s.state.snapshot.status === "ready"
+          ? s.state.snapshot.settings
+          : base),
+        computer: { ...base.computer, workspaces: [workspace] },
+      },
+    } as never;
+    expect(failureOf(await s.run(prepare))).toBe(
+      "WORKSPACE_VERIFICATION_REQUIRED",
+    );
+  });
+
+  it("returns a current preview for the same workspace without picking", async () => {
+    const s = scene();
+    s.state.pendingReadonly = pendingReadonly(s);
+    expect(await s.run(prepare)).toMatchObject({
+      ok: true,
+      evidence: { kind: "chatgpt.readonly-task-preview", operationId },
+    });
+    expect(s.task.pick).not.toHaveBeenCalled();
+    expect(s.admission.occupied("chatgpt-task")).toBe(false);
+  });
+
+  it("refuses a current preview bound to another workspace", async () => {
+    const s = scene();
+    s.state.pendingReadonly = pendingReadonly(s, { workspaceId: uuid(77) });
+    expect(failureOf(await s.run(prepare))).toBe(
+      "CHATGPT_TASK_PREVIEW_PENDING",
+    );
+  });
+
+  it.each([
+    ["expired", (s: Scene) => pendingReadonly(s, { expiresAt: Date.now() })],
+    [
+      "from an older computer generation",
+      (s: Scene) => pendingReadonly(s, { computerGeneration: 0 }),
+    ],
+    [
+      "bound to another verification",
+      (s: Scene) =>
+        pendingReadonly(s, { chatGptVerification: { other: true } as never }),
+    ],
+  ])(
+    "discards a stale preview that is %s before picking",
+    async (_name, make) => {
+      const s = scene();
+      s.state.pendingReadonly = make(s);
+      expect(await s.run(prepare)).toMatchObject({ ok: true });
+      expect(s.events.slice(0, 2)).toEqual([
+        `discardReadonly:${operationId}`,
+        "pick",
+      ]);
+    },
+  );
+
+  it("requires review when a stale preview cannot be discarded", async () => {
+    const s = scene();
+    s.state.pendingReadonly = pendingReadonly(s, { expiresAt: Date.now() });
+    s.task.discardReadonly.mockResolvedValue(false);
+    expect(failureOf(await s.run(prepare))).toBe(
+      "CHATGPT_TASK_REQUIRES_REVIEW",
+    );
+    expect(s.task.pick).not.toHaveBeenCalled();
+    expect(s.admission.occupied("chatgpt-task")).toBe(false);
+  });
+
+  it.each([
+    ["cancelled", "WORKSPACE_FILE_PICKER_CANCELLED"],
+    ["invalid", "WORKSPACE_FILE_SELECTION_INVALID"],
+  ] as const)("maps a %s file picker", async (picked, code) => {
+    const s = scene();
+    s.task.readonlyFile = picked;
+    expect(failureOf(await s.run(prepare))).toBe(code);
+    expect(s.core.readForIntent).not.toHaveBeenCalled();
+  });
+
+  describe("on a Go build", () => {
+    it("refuses a missing Go core before reading", async () => {
+      const s = scene();
+      s.state.core = null;
+      expect(failureOf(await s.run(prepare))).toBe("WORKSPACE_READ_FAILED");
+    });
+
+    it("reads for the intent and publishes a preview bound to the Go admission, not the legacy journal", async () => {
+      const s = scene();
+      const result = await s.run(prepare);
+      expect(result).toMatchObject({
+        ok: true,
+        evidence: {
+          kind: "chatgpt.readonly-task-preview",
+          relativePath: "docs/readme.md",
+          bytes: 9,
+        },
+      });
+      expect(s.core.readForIntent).toHaveBeenCalledExactlyOnceWith(
+        expect.any(String),
+        fixtureWorkspaceId,
+        "docs/readme.md",
+      );
+      expect(s.state.journal!.prepare).not.toHaveBeenCalled();
+      expect(s.state.pendingReadonly).toMatchObject({
+        goAdmission: { admission: "go" },
+        operationId: s.core.readForIntent.mock.calls[0]![0],
+        workspaceId: fixtureWorkspaceId,
+        workspaceLabel: "Demo project",
+        computerGeneration: 1,
+        relativePath: "docs/readme.md",
+        bytes: 9,
+        expiresAt: Date.now() + 10 * 60_000,
+        excludedPaths: expect.any(Array),
+      });
+      expect(s.admission.occupied("chatgpt-task")).toBe(false);
+    });
+
+    it.each([
+      [
+        "the owner withdraws the refused intent",
+        true,
+        "WORKSPACE_PATH_REFUSED",
+      ],
+      ["the withdrawal also fails", false, "CHATGPT_TASK_REQUIRES_REVIEW"],
+    ])("handles a refused read when %s", async (_name, withdrawn, code) => {
+      const s = scene();
+      s.core.readForIntent.mockResolvedValue({
+        admission: { admission: "go" },
+        result: { status: "refused", code: "WORKSPACE_PATH_REFUSED" },
+      });
+      s.task.withdraw.mockResolvedValue(withdrawn);
+      expect(failureOf(await s.run(prepare))).toBe(code);
+      expect(s.task.withdraw).toHaveBeenCalledWith({ admission: "go" });
+      expect(s.state.pendingReadonly).toBeNull();
+    });
+
+    it("uses the generic read failure when the refusal carries no code", async () => {
+      const s = scene();
+      s.core.readForIntent.mockResolvedValue({
+        admission: { admission: "go" },
+        result: { status: "refused" },
+      });
+      expect(failureOf(await s.run(prepare))).toBe("WORKSPACE_READ_FAILED");
+    });
+
+    it("keeps the Go owner fenced and requires review when the read throws", async () => {
+      const s = scene();
+      s.core.readForIntent.mockRejectedValue(new Error("lost"));
+      expect(failureOf(await s.run(prepare))).toBe(
+        "CHATGPT_TASK_REQUIRES_REVIEW",
+      );
+      expect(s.task.withdraw).not.toHaveBeenCalled();
+      expect(s.state.pendingReadonly).toBeNull();
+    });
+
+    it.each([
+      ["withdraws the intent", true, "CHATGPT_PROMPT_TOO_LARGE"],
+      [
+        "requires review when the withdrawal fails",
+        false,
+        "CHATGPT_TASK_REQUIRES_REVIEW",
+      ],
+    ])("%s when the prompt is too large", async (_name, withdrawn, code) => {
+      const s = scene();
+      s.core.readForIntent.mockResolvedValue({
+        admission: { admission: "go" },
+        result: {
+          status: "ok",
+          data: { text: "x".repeat(9_000), bytes: 9_000n },
+        },
+      });
+      s.task.withdraw.mockResolvedValue(withdrawn);
+      expect(failureOf(await s.run(prepare))).toBe(code);
+      expect(s.task.withdraw).toHaveBeenCalledTimes(1);
+      expect(s.state.pendingReadonly).toBeNull();
+    });
+  });
+
+  describe("on a legacy build", () => {
+    it("refuses a failed native read", async () => {
+      const s = scene({ legacy: true });
+      s.task.native.mockResolvedValue({
+        ok: false,
+        error: { code: "WORKSPACE_PATH_REFUSED" },
+      });
+      expect(failureOf(await s.run(prepare))).toBe("WORKSPACE_PATH_REFUSED");
+      expect(s.core.readForIntent).not.toHaveBeenCalled();
+    });
+
+    it("refuses a result that is not text", async () => {
+      const s = scene({ legacy: true });
+      s.task.native.mockResolvedValue({
+        ok: true,
+        value: { kind: "workspace.other" },
+      });
+      expect(failureOf(await s.run(prepare))).toBe(
+        "WORKSPACE_VERIFICATION_FAILED",
+      );
+    });
+
+    it("reads natively, prepares the journal and publishes the preview", async () => {
+      const s = scene({ legacy: true });
+      expect(await s.run(prepare)).toMatchObject({
+        ok: true,
+        evidence: { kind: "chatgpt.readonly-task-preview", bytes: 11 },
+      });
+      expect(s.task.native).toHaveBeenCalledWith(
+        expect.objectContaining({
+          operation: { kind: "workspace.read", relativePath: "docs/readme.md" },
+        }),
+      );
+      expect(s.core.readForIntent).not.toHaveBeenCalled();
+      expect(s.task.lease).toHaveBeenCalledTimes(1);
+      expect(s.state.journal!.prepare).toHaveBeenCalledWith({
+        operationId: expect.any(String),
+        kind: "readonly",
+      });
+      expect(s.state.pendingReadonly).toMatchObject({ bytes: 11 });
+      expect(s.state.pendingReadonly!.goAdmission).toBeUndefined();
+    });
+
+    it.each([
+      ["no journal", "none"],
+      ["a promotion lease refusal", "refuse"],
+      ["a journal failure", "journal"],
+    ])(
+      "refuses on %s, requiring review when the withdrawal fails",
+      async (_name, how) => {
+        for (const withdrawn of [true, false]) {
+          const s = scene({ legacy: true });
+          if (how === "none") s.state.journal = null;
+          else if (how === "refuse")
+            s.task.lease.mockResolvedValue({ ok: false });
+          else s.state.journal!.prepare.mockRejectedValue(new Error("disk"));
+          s.task.withdraw.mockResolvedValue(withdrawn);
+          const expected = !withdrawn
+            ? "CHATGPT_TASK_REQUIRES_REVIEW"
+            : how === "refuse"
+              ? "CHATGPT_TASK_PROMOTION_PENDING"
+              : "CHATGPT_TASK_JOURNAL_FAILED";
+          expect(failureOf(await s.run(prepare))).toBe(expected);
+          expect(s.task.withdraw).toHaveBeenCalledWith(undefined);
+          expect(s.state.pendingReadonly).toBeNull();
+          expect(s.admission.occupied("chatgpt-task")).toBe(false);
+        }
+      },
+    );
+  });
+});
+
+describe("chatgpt readonly account commands", () => {
+  const inspect = { kind: "chatgpt.inspect-readonly-account", operationId };
+  const approve = {
+    kind: "chatgpt.approve-readonly-account",
+    operationId,
+    confirmationId,
+  };
+
+  function prepared(s: Scene) {
+    const pending = pendingReadonly(s, {
+      goAdmission: { admission: "go" } as never,
+    });
+    s.state.pendingReadonly = pending;
+    return pending;
+  }
+
+  it.each([inspect, approve])(
+    "$kind refuses an occupied chat lane first",
+    async (value) => {
+      const s = scene();
+      prepared(s);
+      s.admission.reserveAdmitted("chatgpt-task");
+      expect(failureOf(await s.run(value))).toBe("CHATGPT_TASK_IN_PROGRESS");
+    },
+  );
+
+  it.each([inspect, approve])(
+    "$kind refuses a missing or other preview",
+    async (value) => {
+      const s = scene();
+      expect(failureOf(await s.run(value))).toBe(
+        "CHATGPT_TASK_PREVIEW_NOT_FOUND",
+      );
+      s.state.pendingReadonly = pendingReadonly(s, { operationId: uuid(77) });
+      expect(failureOf(await s.run(value))).toBe(
+        "CHATGPT_TASK_PREVIEW_NOT_FOUND",
+      );
+    },
+  );
+
+  it.each([
+    ["no route", (s: Scene) => (s.state.route = null)],
+    ["no core", (s: Scene) => (s.state.core = null)],
+    [
+      "no Go admission",
+      (s: Scene) => (s.state.pendingReadonly = pendingReadonly(s)),
+    ],
+    [
+      "a preview that is no longer current",
+      (s: Scene) => s.task.current.mockReturnValue(false),
+    ],
+  ])("refuses %s", async (_name, set) => {
+    const s = scene();
+    prepared(s);
+    set(s);
+    expect(failureOf(await s.run(inspect))).toBe(
+      "CHATGPT_ACCOUNT_CONFIRMATION_INVALID",
+    );
+    expect(s.task.confirmations).toHaveLength(0);
+  });
+
+  it("refuses an approval without a prior inspection", async () => {
+    const s = scene();
+    prepared(s);
+    expect(failureOf(await s.run(approve))).toBe(
+      "CHATGPT_ACCOUNT_CONFIRMATION_INVALID",
+    );
+    expect(s.task.confirmations).toHaveLength(0);
+    expect(s.admission.occupied("chatgpt-task")).toBe(false);
+  });
+
+  it("creates one confirmation bound to the Go admission and reuses it", async () => {
+    const s = scene();
+    const pending = prepared(s);
+    expect(await s.run(inspect)).toMatchObject({
+      ok: true,
+      evidence: { kind: "chatgpt.readonly-task-preview", operationId },
+    });
+    expect(s.task.confirmations).toHaveLength(1);
+    expect(s.task.confirmations[0]!.input.admission).toBe(pending.goAdmission);
+    expect(s.task.accountConfirmations.get(pending)).toBe(
+      s.task.confirmations[0],
+    );
+    await s.run(inspect);
+    expect(s.task.confirmations).toHaveLength(1);
+    expect(s.task.confirmations[0]!.inspect).toHaveBeenCalledTimes(2);
+    expect(s.admission.occupied("chatgpt-task")).toBe(false);
+  });
+
+  it("holds the chat lane while inspecting and wires the confirmation to the route and core", async () => {
+    const s = scene();
+    prepared(s);
+    let held = false;
+    s.task.inspectAccount = async () => {
+      held = s.admission.occupied("chatgpt-task");
+    };
+    await s.run(inspect);
+    expect(held).toBe(true);
+    const input = s.task.confirmations[0]!.input;
+    expect(input.current()).toBe(true);
+    await input.read();
+    expect(s.route.observeAccount).toHaveBeenCalledTimes(1);
+    await input.approve({ approve: true });
+    expect(s.core.approveReadAccount).toHaveBeenCalledWith({ approve: true });
+  });
+
+  it("approves the observed confirmation", async () => {
+    const s = scene();
+    prepared(s);
+    await s.run(inspect);
+    expect(await s.run(approve)).toMatchObject({ ok: true });
+    expect(s.task.confirmations[0]!.confirm).toHaveBeenCalledExactlyOnceWith(
+      confirmationId,
+    );
+  });
+
+  it.each([
+    ["inspect", inspect, "CHATGPT_ACCOUNT_CONFIRMATION_INVALID"],
+    ["approve", approve, "CHATGPT_ACCOUNT_APPROVAL_UNCONFIRMED"],
+  ])("reports a preview that lapsed during %s", async (_name, value, code) => {
+    const s = scene();
+    prepared(s);
+    await s.run(inspect);
+    s.task.current.mockReturnValueOnce(true);
+    s.task.inspectAccount = async () => {
+      s.task.current.mockReturnValue(false);
+    };
+    s.task.confirmAccount = async () => {
+      s.task.current.mockReturnValue(false);
+    };
+    expect(failureOf(await s.run(value))).toBe(code);
+    expect(s.admission.occupied("chatgpt-task")).toBe(false);
+  });
+
+  it.each([
+    [
+      "inspect",
+      inspect,
+      new BridgeError("refused", "CHATGPT_ACCOUNT_CHANGED"),
+      "CHATGPT_ACCOUNT_CHANGED",
+    ],
+    ["inspect", inspect, new Error("lost"), "CHATGPT_ACCOUNT_UNAVAILABLE"],
+    [
+      "approve",
+      approve,
+      new BridgeError("unavailable", "x"),
+      "CHATGPT_ACCOUNT_UNAVAILABLE",
+    ],
+    [
+      "approve",
+      approve,
+      new Error("lost"),
+      "CHATGPT_ACCOUNT_APPROVAL_UNCONFIRMED",
+    ],
+  ])(
+    "classifies a failed %s and releases the lane",
+    async (_name, value, error, code) => {
+      const s = scene();
+      prepared(s);
+      await s.run(inspect);
+      s.task.inspectAccount = async () => {
+        throw error;
+      };
+      s.task.confirmAccount = async () => {
+        throw error;
+      };
+      expect(failureOf(await s.run(value))).toBe(code);
+      expect(s.admission.occupied("chatgpt-task")).toBe(false);
+    },
+  );
+});
+
+describe("chatgpt.submit-readonly-task", () => {
+  const submit = { kind: "chatgpt.submit-readonly-task", operationId };
+
+  function approved(s: Scene, extra: Partial<PendingChatGptReadonlyTask> = {}) {
+    const pending = pendingReadonly(s, {
+      goAdmission: { admission: "go" } as never,
+      ...extra,
+    });
+    s.state.pendingReadonly = pending;
+    s.task.accountConfirmations.set(pending, {
+      projection: () => ({ state: "approved" }),
+    });
+    return pending;
+  }
+
+  it("refuses a missing route before reserving the lane", async () => {
+    const s = scene();
+    s.state.route = null;
+    expect(failureOf(await s.run(submit))).toBe("CHATGPT_ROUTE_UNAVAILABLE");
+  });
+
+  it.each([
+    [
+      "occupied",
+      (s: Scene) => void s.admission.reserveAdmitted("chatgpt-task"),
+    ],
+    ["closed", (s: Scene) => s.admission.beginQuit()],
+  ])("refuses when the chat lane is %s", async (_name, set) => {
+    const s = scene();
+    s.state.pendingReadonly = pendingReadonly(s);
+    set(s);
+    expect(failureOf(await s.run(submit))).toBe("CHATGPT_TASK_IN_PROGRESS");
+  });
+
+  it.each([
+    ["no preview", null],
+    ["another operation", "other"],
+  ])("refuses %s and releases the lane", async (_name, which) => {
+    const s = scene();
+    if (which)
+      s.state.pendingReadonly = pendingReadonly(s, { operationId: uuid(77) });
+    expect(failureOf(await s.run(submit))).toBe(
+      "CHATGPT_TASK_PREVIEW_NOT_FOUND",
+    );
+    expect(s.admission.occupied("chatgpt-task")).toBe(false);
+  });
+
+  it.each([
+    ["the preview was discarded", true, "CHATGPT_TASK_PREVIEW_EXPIRED"],
+    ["the discard needs review", false, "CHATGPT_TASK_REQUIRES_REVIEW"],
+  ])("expires the preview when %s", async (_name, discarded, code) => {
+    const s = scene();
+    s.state.pendingReadonly = pendingReadonly(s, { expiresAt: Date.now() });
+    s.task.discardReadonly.mockResolvedValue(discarded);
+    expect(failureOf(await s.run(submit))).toBe(code);
+    expect(s.route.runReadonlyTask).not.toHaveBeenCalled();
+  });
+
+  it("refuses unavailable settings without discarding the preview", async () => {
+    const s = scene();
+    s.state.pendingReadonly = pendingReadonly(s);
+    s.state.snapshot = unavailable;
+    expect(failureOf(await s.run(submit))).toBe("SETTINGS_UNAVAILABLE");
+    expect(s.task.discardReadonly).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "the outcome is unknown",
+      { chatgpt: { outcomeUnknown: true } },
+      "CHATGPT_TASK_REQUIRES_REVIEW",
+    ],
+    [
+      "the verification changed",
+      {
+        chatgpt: {
+          verified: {
+            ...guidedSettingsFixture().setup.chatgpt.verified!,
+            protocol: "other/1",
+          },
+        },
+      },
+      "CHATGPT_CONNECTION_NOT_VERIFIED",
+    ],
+    [
+      "the computer generation moved",
+      { computer: { generation: 2 } },
+      "WORKSPACE_VERIFICATION_REQUIRED",
+    ],
+    [
+      "the workspace vanished",
+      {
+        computer: {
+          workspaces: [
+            {
+              ...guidedSettingsFixture().computer.workspaces[0]!,
+              workspaceId: uuid(77),
+            },
+          ],
+        },
+      },
+      "WORKSPACE_VERIFICATION_REQUIRED",
+    ],
+  ])("discards the preview when %s", async (_name, patch, code) => {
+    for (const discarded of [true, false]) {
+      const s = scene();
+      s.state.pendingReadonly = pendingReadonly(s);
+      s.state.snapshot = ready(patch as Patch);
+      s.task.discardReadonly.mockResolvedValue(discarded);
+      expect(failureOf(await s.run(submit))).toBe(
+        discarded ? code : "CHATGPT_TASK_REQUIRES_REVIEW",
+      );
+      expect(s.task.discardReadonly).toHaveBeenCalledTimes(1);
+      expect(s.route.runReadonlyTask).not.toHaveBeenCalled();
+    }
+  });
+
+  describe("on a Go admission", () => {
+    it("refuses an oversize prompt", async () => {
+      const s = scene();
+      approved(s, { prompt: "x".repeat(9_000) });
+      expect(failureOf(await s.run(submit))).toBe("CHATGPT_PROMPT_TOO_LARGE");
+    });
+
+    it.each([
+      ["the core is missing", (s: Scene) => (s.state.core = null)],
+      ["the profile is missing", (s: Scene) => (s.state.profile = null)],
+    ])("refuses when %s", async (_name, set) => {
+      const s = scene();
+      approved(s);
+      set(s);
+      expect(failureOf(await s.run(submit))).toBe("CHATGPT_ROUTE_UNAVAILABLE");
+    });
+
+    it("refuses an account that was never approved", async () => {
+      const s = scene();
+      const pending = approved(s);
+      s.task.accountConfirmations.set(pending, {
+        projection: () => ({ state: "observed" }),
+      });
+      expect(failureOf(await s.run(submit))).toBe(
+        "CHATGPT_ACCOUNT_CONFIRMATION_INVALID",
+      );
+      s.task.accountConfirmations.delete(pending);
+      expect(failureOf(await s.run(submit))).toBe(
+        "CHATGPT_ACCOUNT_CONFIRMATION_INVALID",
+      );
+    });
+
+    it.each([
+      [
+        "throws",
+        (s: Scene) =>
+          s.state.capture.mockImplementation(() => {
+            throw new Error("x");
+          }),
+      ],
+      ["finds no profile", (s: Scene) => s.state.capture.mockReturnValue(null)],
+      [
+        "finds another digest",
+        (s: Scene) =>
+          s.state.capture.mockReturnValue({
+            snapshot: { configSHA256: "d".repeat(64) },
+          }),
+      ],
+    ])("refuses when the profile capture %s", async (_name, set) => {
+      const s = scene();
+      approved(s);
+      set(s);
+      expect(failureOf(await s.run(submit))).toBe("CHATGPT_ROUTE_UNAVAILABLE");
+      expect(s.state.goReadonlyConversation).toBeNull();
+    });
+
+    it("pins the original attempt before any await and starts through the Go owner", async () => {
+      const s = scene();
+      const pending = approved(s);
+      const running = s.run(submit);
+      expect(s.state.goReadonlyConversation).toMatchObject({
+        pending,
+        operationId,
+        core: s.core,
+      });
+      expect(s.admission.occupied("chatgpt-task")).toBe(true);
+      const result = await running;
+      expect(result).toMatchObject({
+        ok: true,
+        evidence: {
+          kind: "chatgpt.readonly-conversation",
+          operationId,
+          cursor: "5",
+        },
+      });
+      expect(s.clientScript.start).toHaveBeenCalledExactlyOnceWith(
+        {
+          admission: pending.goAdmission,
+          policy: { policy: true },
+          profiles: [{ profile: true }],
+          requested: {},
+        },
+        "prompt text",
+      );
+      expect(s.clients[0]!.args).toHaveLength(2);
+      expect(s.clients[0]!.args[1]).toBe(s.core.chat);
+      expect(s.admission.occupied("chatgpt-task")).toBe(false);
+      // The legacy path is never touched.
+      expect(s.state.journal!.markDispatchIntent).not.toHaveBeenCalled();
+      expect(s.route.runReadonlyTask).not.toHaveBeenCalled();
+      expect(s.state.pendingReadonly).toBe(pending);
+    });
+
+    it("lets the client resolve and promote through the Go owner", async () => {
+      const s = scene();
+      approved(s);
+      await s.run(submit);
+      const resolver = s.clients[0]!.args[0] as {
+        resolve(input: unknown): unknown;
+        promote(input: unknown): unknown;
+      };
+      resolver.resolve({ resolve: true });
+      resolver.promote({ promote: true });
+      expect(s.core.resolveReadIntent).toHaveBeenCalledWith({ resolve: true });
+      expect(s.core.promoteReadIntent).toHaveBeenCalledWith({ promote: true });
+    });
+
+    it.each([
+      [
+        "a refused start",
+        new BridgeError("refused", "x"),
+        "CHATGPT_CONVERSATION_REFUSED",
+      ],
+      [
+        "an unknown start",
+        new BridgeError("unknown", "x"),
+        "CHATGPT_CONVERSATION_UNCONFIRMED",
+      ],
+      ["a plain failure", new Error("x"), "CHATGPT_CONVERSATION_UNCONFIRMED"],
+    ])(
+      "classifies %s and keeps the attempt pinned",
+      async (_name, error, code) => {
+        const s = scene();
+        approved(s);
+        s.clientScript.start.mockRejectedValue(error);
+        expect(failureOf(await s.run(submit))).toBe(code);
+        expect(s.state.goReadonlyConversation).not.toBeNull();
+        expect(s.admission.occupied("chatgpt-task")).toBe(false);
+      },
+    );
+  });
+
+  describe("on the legacy path", () => {
+    function legacy(s: Scene) {
+      const pending = pendingReadonly(s);
+      s.state.pendingReadonly = pending;
+      return pending;
+    }
+
+    it("refuses without a journal and keeps the preview", async () => {
+      const s = scene();
+      legacy(s);
+      s.state.journal = null;
+      expect(failureOf(await s.run(submit))).toBe(
+        "CHATGPT_TASK_JOURNAL_FAILED",
+      );
+      expect(s.state.pendingReadonly).not.toBeNull();
+    });
+
+    it.each([
+      ["a promotion lease refusal", "refuse", "CHATGPT_TASK_PROMOTION_PENDING"],
+      ["a journal failure", "journal", "CHATGPT_TASK_JOURNAL_FAILED"],
+    ])(
+      "keeps the preview and sends nothing after %s",
+      async (_name, how, code) => {
+        const s = scene();
+        legacy(s);
+        if (how === "refuse") s.task.lease.mockResolvedValue({ ok: false });
+        else
+          s.state.journal!.markDispatchIntent.mockRejectedValue(
+            new Error("disk"),
+          );
+        expect(failureOf(await s.run(submit))).toBe(code);
+        expect(s.state.pendingReadonly).not.toBeNull();
+        expect(s.route.runReadonlyTask).not.toHaveBeenCalled();
+        expect(s.admission.occupied("chatgpt-task")).toBe(false);
+      },
+    );
+
+    it("sends the prompt once and records the retained result", async () => {
+      const s = scene();
+      legacy(s);
+      expect(await s.run(submit)).toMatchObject({
+        ok: true,
+        evidence: {
+          kind: "chatgpt.readonly-task",
+          operationId,
+          state: "completed",
+          code: null,
+          workspaceId: fixtureWorkspaceId,
+          relativePath: "docs/readme.md",
+          bytes: 9,
+          contextCharacters: 9,
+          contextLimit: 24_000,
+          contextTruncated: false,
+          deltaCount: 3,
+          observedCharacters: 42,
+          conversationContinuity: "retained",
+          redelivered: false,
+          deliveryAckRequired: true,
+        },
+      });
+      expect(s.route.runReadonlyTask).toHaveBeenCalledExactlyOnceWith(
+        "prompt text",
+      );
+      expect(s.events).toEqual([
+        `journal.markDispatchIntent:${operationId}`,
+        "setPendingChatGptReadonlyTask:null",
+        "route.runReadonlyTask",
+        `retain:${operationId}:completed:lane=free`,
+        `journal.retainResult:${operationId}:${JSON.stringify({ state: "completed", code: null, deltaCount: 3, observedCharacters: 42 })}`,
+        "journal.load",
+        "setRecoverableChatGptTask:value",
+        `recordChatGptObservation:${JSON.stringify({
+          state: "authenticated",
+          profile: "chatgpt.app-partition/1",
+          runtimeGeneration: `fixture-partition:${fixtureBuildId}`,
+          buildId: fixtureBuildId,
+          protocol: "chatgpt-page-readonly-task/1",
+        })}`,
+        "setRecoverableChatGptObservationPersisted:true",
+      ]);
+    });
+
+    it("never retries a thrown send: the outcome is unknown", async () => {
+      const s = scene();
+      legacy(s);
+      s.route.runReadonlyTask.mockRejectedValue(new Error("lost"));
+      expect(await s.run(submit)).toMatchObject({
+        ok: true,
+        evidence: { state: "outcome_unknown", code: "CHATGPT_TASK_ERROR" },
+      });
+      expect(s.route.runReadonlyTask).toHaveBeenCalledTimes(1);
+      expect(s.admission.occupied("chatgpt-task")).toBe(false);
+    });
+
+    it("records an unknown outcome and a persist-failed recovery when the result cannot be retained", async () => {
+      const s = scene();
+      legacy(s);
+      s.state.journal!.retainResult.mockRejectedValue(new Error("disk"));
+      expect(await s.run(submit)).toMatchObject({
+        ok: true,
+        evidence: {
+          kind: "chatgpt.task-recovery",
+          taskKind: "readonly",
+          code: "CHATGPT_TASK_RESULT_PERSIST_FAILED",
+          attachmentCount: 0,
+          totalBytes: 0,
+          stagingCleanup: null,
+          deliveryAckRequired: false,
+        },
+      });
+      expect(
+        s.configuration.recordChatGptObservation,
+      ).toHaveBeenCalledExactlyOnceWith({ state: "outcome_unknown" });
+      expect(s.state.observationPersisted).toBe(false);
+    });
+
+    it.each(["persist", "observation"])(
+      "returns a failed %s record as is",
+      async (which) => {
+        const s = scene();
+        legacy(s);
+        if (which === "persist")
+          s.state.journal!.retainResult.mockRejectedValue(new Error("disk"));
+        s.configuration.recordChatGptObservation.mockResolvedValue({
+          ok: false,
+          error: "SETTINGS_WRITE_FAILED",
+          snapshot: s.state.snapshot,
+        } as never);
+        expect(failureOf(await s.run(submit))).toBe("SETTINGS_WRITE_FAILED");
+        expect(s.state.observationPersisted).toBe(false);
+      },
+    );
+
+    it.each(observationTable("chatgpt-page-readonly-task/1"))(
+      "records $name as the observation",
+      async ({ task, observation }) => {
+        const s = scene();
+        legacy(s);
+        s.route.runReadonlyTask.mockResolvedValue({
+          deltaCount: 0,
+          observedCharacters: 0,
+          ...task,
+        });
+        expect(await s.run(submit)).toMatchObject({ ok: true });
+        expect(
+          s.configuration.recordChatGptObservation,
+        ).toHaveBeenLastCalledWith(observation());
+      },
+    );
+  });
+});
+
+describe("chatgpt.cancel-readonly-task", () => {
+  const cancel = { kind: "chatgpt.cancel-readonly-task", operationId };
+
+  it("refuses first when the pinned conversation cannot withdraw its admission", async () => {
+    const s = scene();
+    const pending = pendingReadonly(s);
+    s.state.pendingReadonly = pending;
+    activeConversation(s, { pending });
+    s.clientScript.canWithdrawAdmission.mockReturnValue(false);
+    s.admission.reserveAdmitted("chatgpt-task");
+    expect(failureOf(await s.run(cancel))).toBe("CHATGPT_CONVERSATION_REFUSED");
+    expect(s.task.discardReadonly).not.toHaveBeenCalled();
+  });
+
+  it("ignores the withdrawal check of a conversation for another operation", async () => {
+    const s = scene();
+    activeConversation(s, {
+      pending: pendingReadonly(s, { operationId: uuid(77) }),
+    });
+    s.clientScript.canWithdrawAdmission.mockReturnValue(false);
+    expect(failureOf(await s.run(cancel))).toBe(
+      "CHATGPT_TASK_PREVIEW_NOT_FOUND",
+    );
+  });
+
+  it("refuses an occupied chat lane", async () => {
+    const s = scene();
+    s.state.pendingReadonly = pendingReadonly(s);
+    s.admission.reserveAdmitted("chatgpt-task");
+    expect(failureOf(await s.run(cancel))).toBe("CHATGPT_TASK_IN_PROGRESS");
+    expect(s.task.discardReadonly).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["no preview", null],
+    ["another operation", "other"],
+  ])("refuses %s", async (_name, which) => {
+    const s = scene();
+    if (which)
+      s.state.pendingReadonly = pendingReadonly(s, { operationId: uuid(77) });
+    expect(failureOf(await s.run(cancel))).toBe(
+      "CHATGPT_TASK_PREVIEW_NOT_FOUND",
+    );
+    expect(s.task.discardReadonly).not.toHaveBeenCalled();
+  });
+
+  it("requires review and keeps the pinned conversation when the discard fails", async () => {
+    const s = scene();
+    const pending = pendingReadonly(s);
+    s.state.pendingReadonly = pending;
+    const active = activeConversation(s, { pending });
+    s.task.discardReadonly.mockResolvedValue(false);
+    expect(failureOf(await s.run(cancel))).toBe("CHATGPT_TASK_REQUIRES_REVIEW");
+    expect(s.state.goReadonlyConversation).toBe(active);
+    expect(s.admission.occupied("chatgpt-task")).toBe(false);
+  });
+
+  it("discards the preview under the lane and unpins its own conversation", async () => {
+    const s = scene();
+    const pending = pendingReadonly(s);
+    s.state.pendingReadonly = pending;
+    activeConversation(s, { pending });
+    let held = false;
+    s.task.discardReadonly.mockImplementation(async () => {
+      held = s.admission.occupied("chatgpt-task");
+      return true;
+    });
+    expect(await s.run(cancel)).toMatchObject({ ok: true });
+    expect(held).toBe(true);
+    expect(s.state.goReadonlyConversation).toBeNull();
+    expect(s.admission.occupied("chatgpt-task")).toBe(false);
+  });
+
+  it.each([
+    [
+      "it belongs to another preview",
+      (s: Scene, pending: PendingChatGptReadonlyTask) =>
+        activeConversation(s, { pending: { ...pending } }),
+    ],
+    [
+      "it was replaced while discarding",
+      (s: Scene, pending: PendingChatGptReadonlyTask) => {
+        const first = activeConversation(s, { pending });
+        s.task.discardReadonly.mockImplementation(async () => {
+          s.state.goReadonlyConversation = { ...first };
+          return true;
+        });
+      },
+    ],
+  ])("keeps a conversation when %s", async (_name, set) => {
+    const s = scene();
+    const pending = pendingReadonly(s);
+    s.state.pendingReadonly = pending;
+    set(s, pending);
+    expect(await s.run(cancel)).toMatchObject({ ok: true });
+    expect(s.state.goReadonlyConversation).not.toBeNull();
+    expect(s.events).not.toContain("setGoReadonlyConversation:null");
+  });
+
+  it("succeeds without a pinned conversation", async () => {
+    const s = scene();
+    s.state.pendingReadonly = pendingReadonly(s);
+    expect(await s.run(cancel)).toMatchObject({ ok: true });
+    expect(s.task.discardReadonly).toHaveBeenCalledTimes(1);
   });
 });
