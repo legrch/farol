@@ -1,42 +1,14 @@
 import { admissionFixture } from "../support/desktop-admission";
-import fs from "node:fs";
-import path from "node:path";
-import os from "node:os";
-import vm from "node:vm";
-import { stripTypeScriptTypes } from "node:module";
-import { parse } from "@babel/parser";
 import { describe, expect, it, vi } from "vitest";
+import { createConfigurationHost } from "../../apps/desktop/configuration/host";
 import {
   ProductConfigurationCommandSchema,
-  ProductConfigurationResultSchema,
   ProductSettingsSchema,
 } from "../../src/pkg/product-settings/contract.ts";
-import {
-  codexTaskRouteFailureCode,
-  codexTaskRouteFailureRecord,
-  codexTaskRouteRefusalRecord,
-} from "../../src/apps/desktop/codex-task-route-error.ts";
 
-// Execute the production host branch with injected IO ports. No real filesystem,
+// Call the imported host handler with injected IO ports. No real filesystem,
 // App Server, child, task, grant, profile, credential or build is involved. Saving
 // a selected turn is not a provider membership or current-authority proof.
-const source = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
-const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
-let branch;
-function visit(node) {
-  if (
-    node.type === "SwitchCase" &&
-    node.test?.value === "host.configure-codex-tasks"
-  )
-    branch = source.slice(node.start, node.end);
-  for (const value of Object.values(node)) {
-    if (Array.isArray(value)) {
-      for (const child of value) if (child?.type) visit(child);
-    } else if (value?.type) visit(value);
-  }
-}
-visit(tree);
-if (!branch) throw new Error("CODEX_READ_SELECTION_HOST_CODE_MISSING");
 const threadId = "0e4b2463-5506-47d5-a1a0-b4b84e941301";
 const workspaceId = "00000000-0000-4000-8000-000000000002";
 const projectId = "00000000-0000-4000-8000-000000000003";
@@ -162,20 +134,27 @@ function harness(
     },
     SharedCodexProxyHost: { attach: vi.fn(async () => proxy) },
     exactProject: vi.fn(async () => true),
-    ProductConfigurationResultSchema,
-    codexTaskRouteRefusalRecord,
-    codexTaskRouteFailureCode,
-    codexTaskRouteFailureRecord,
-    process: { stderr: { write: vi.fn() } },
-    path,
-    os,
+    writeStderr: vi.fn(),
   };
-  const handle = vm.runInNewContext(
-    stripTypeScriptTypes(
-      `async function handle() { switch(command.kind) { ${branch} } } handle`,
-    ),
-    admissionFixture(context),
-  );
+  const ports = admissionFixture(context);
+  const handler = createConfigurationHost({
+    configuration: () => context.configuration,
+    configurationFailure: context.configurationFailure,
+    codexAgentOperationActive: context.codexAgentOperationActive,
+    desktopAdmission: ports.desktopAdmission,
+    SharedCodexProxyHost: context.SharedCodexProxyHost,
+    PhysicalCodexHandoffAuthority: context.PhysicalCodexHandoffAuthority,
+    exactProject: context.exactProject,
+    fileSystem: {
+      lstat: context.lstat,
+      realpath: context.realpath,
+      mkdtemp: context.mkdtemp,
+      chmod: context.chmod,
+      rm: context.rm,
+    },
+    writeStderr: context.writeStderr,
+  });
+  const handle = () => handler.configureAdmittedHost(command);
   return { context, snapshot, proxy, resolve, handle };
 }
 

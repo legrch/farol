@@ -168,13 +168,16 @@ describe("S35-Q1 native Agent check authority admission", () => {
     expect(productAgentOpenAdmitted(transitions)).toBe(true);
   });
 
-  // The arm itself stays inline in `main.ts`, which exports nothing and
-  // which no test loads. This guards that it still routes both paths through
+  // The arm itself stays inline in `apps/desktop/configuration/host.ts`. This
+  // guards that it still routes both paths through
   // the function above rather than releasing on one of them, in the same
   // style `product-agent-rejoin.test.ts` guards the start branch's ordering.
   it("routes the check's two paths through one activation", async () => {
     const source = await readFile(
-      path.resolve(import.meta.dirname, "../../src/apps/desktop/main.ts"),
+      path.resolve(
+        import.meta.dirname,
+        "../../apps/desktop/configuration/host.ts",
+      ),
       "utf8",
     );
     const start = source.indexOf('case "host.run-codex-agent-check": {');
