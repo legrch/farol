@@ -15,6 +15,10 @@ import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
 // Actual main.ts source composition for the unmoved Codex agent check workspace.
 const main = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
+const configurationHost = fs.readFileSync(
+  "apps/desktop/configuration/host.ts",
+  "utf8",
+);
 
 function select(predicate: (node: Record<string, unknown>) => boolean) {
   const matches: Record<string, unknown>[] = [];
@@ -466,7 +470,7 @@ describe("main process and renderer wiring", () => {
   const flat = main.replace(/\s+/gu, " ");
 
   it("builds the Codex agent check probe from the Go-aware selection", () => {
-    expect(flat).toContain(
+    expect(configurationHost.replace(/\s+/gu, " ")).toContain(
       "new CodexAgentWorkspaceProbe( settings, codexAgentCheckWorkspace(settings), () => Date.now(), )",
     );
   });
