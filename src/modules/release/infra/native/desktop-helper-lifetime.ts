@@ -1,4 +1,4 @@
-import { fstatSync } from "node:fs";
+import { fstatSync, writeSync } from "node:fs";
 import { Socket } from "node:net";
 import type {
   InstalledHelperLifetime,
@@ -25,6 +25,33 @@ export function createDesktopHelperLifetime(): InstalledHelperLifetime {
     return lifetimeChannel(send, receive);
   } catch {
     return unavailable;
+  }
+}
+
+/** The exact launcher announcement of a drained Quit (Go `quitFrame`). */
+export const DRAINED_QUIT_FRAME =
+  '{"schema":"farol.desktop-quit/1","drained":true}\n';
+
+/** Tells the launcher that this Quit drained, just before `app.exit`. If the
+ * process then hangs in Electron's exit teardown, the launcher, which owns
+ * the unreaped child, ends it after a short grace. Best effort: without the
+ * launcher channel nothing is sent and nothing changes. */
+export function announceDrainedQuit(
+  write: (fd: number, frame: string) => void = (fd, frame) => {
+    writeSync(fd, frame);
+  },
+): boolean {
+  try {
+    if (
+      process.platform !== "darwin" ||
+      process.env.FAROL_DESKTOP_LIFETIME !== "1" ||
+      !fstatSync(7).isFIFO()
+    )
+      return false;
+    write(7, DRAINED_QUIT_FRAME);
+    return true;
+  } catch {
+    return false;
   }
 }
 

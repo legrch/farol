@@ -1,7 +1,12 @@
 import { PassThrough } from "node:stream";
 import type { Socket } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { lifetimeChannel } from "../../src/modules/release/infra/native/desktop-helper-lifetime";
+import { readFileSync } from "node:fs";
+import {
+  announceDrainedQuit,
+  DRAINED_QUIT_FRAME,
+  lifetimeChannel,
+} from "../../src/modules/release/infra/native/desktop-helper-lifetime";
 import type { InstalledUpdateRequest } from "../../src/modules/release/infra/native/installed-update-helper";
 
 const request: InstalledUpdateRequest = {
@@ -119,5 +124,32 @@ describe("desktop helper lifetime custody", () => {
     await rejected;
     expect(f.channel.available()).toBe(false);
     expect(frame.endsWith("\n")).toBe(true);
+  });
+});
+
+describe("drained Quit announcement", () => {
+  it("sends exactly the bytes the Go launcher recognizes", () => {
+    const go = readFileSync(
+      new URL(
+        "../../modules/release/infra/native/desktop/darwin.go",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const literal = /var quitFrame = \[\]byte\(`([^`]+)`\)/u.exec(go)?.[1];
+    expect(literal).toBeDefined();
+    expect(DRAINED_QUIT_FRAME).toBe(`${literal}\n`);
+  });
+
+  it("sends nothing outside the launcher lifetime", () => {
+    const previous = process.env.FAROL_DESKTOP_LIFETIME;
+    delete process.env.FAROL_DESKTOP_LIFETIME;
+    try {
+      const write = vi.fn();
+      expect(announceDrainedQuit(write)).toBe(false);
+      expect(write).not.toHaveBeenCalled();
+    } finally {
+      if (previous !== undefined) process.env.FAROL_DESKTOP_LIFETIME = previous;
+    }
   });
 });

@@ -26,6 +26,15 @@ import (
 const frameLimit = 4096
 const bindingLimit = 64
 
+// quitFrame is the desktop's exact announcement, written after its drained
+// Quit receipt and just before app.exit. Only these bytes are recognized.
+var quitFrame = []byte(`{"schema":"farol.desktop-quit/1","drained":true}`)
+
+// quitExitGrace bounds how long a drained desktop may stay alive inside its
+// exit teardown. Electron 44 can hang there forever (2026-11-23,
+// uv_thread_join); the drain already recorded that nothing is left to lose.
+var quitExitGrace = 10 * time.Second
+
 type identity struct {
 	pid     int
 	parent  int
@@ -210,6 +219,10 @@ func hold(command *exec.Cmd, desktop identity, queue int, metadata, ack *os.File
 	seen := make(map[string]bool)
 	helpers := make(map[int]string)
 	exited, status := false, 0
+	// The retained child is not reaped until its exit event, so its PID cannot
+	// be reused: this owner alone may signal it, unlike an outside helper.
+	var quitAt time.Time
+	killed := false
 	for {
 		select {
 		case sig := <-signals:
@@ -223,6 +236,13 @@ func hold(command *exec.Cmd, desktop identity, queue int, metadata, ack *os.File
 		case line, ok := <-frames:
 			if !ok {
 				frames = nil
+				break
+			}
+			if bytes.Equal(line, quitFrame) {
+				if !exited && quitAt.IsZero() {
+					quitAt = time.Now()
+					_, _ = io.WriteString(diagnostics, "desktop_launcher_quit_drained\n")
+				}
 				break
 			}
 			b, err := parse(line, desktop.pid, time.Now().UnixMilli(), validate)
@@ -291,7 +311,16 @@ func hold(command *exec.Cmd, desktop identity, queue int, metadata, ack *os.File
 				delete(helpers, pid)
 			}
 		}
+		if !exited && !killed && !quitAt.IsZero() && time.Since(quitAt) >= quitExitGrace {
+			killed = true
+			_, _ = io.WriteString(diagnostics, "desktop_launcher_quit_exit_timeout\n")
+			_ = command.Process.Kill() // same owner, before the sole Wait
+		}
 		if exited && len(helpers) == 0 {
+			if killed {
+				// The desktop finished a drained Quit; only its teardown hung.
+				return 0
+			}
 			return status
 		}
 	}
