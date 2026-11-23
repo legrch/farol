@@ -22,12 +22,10 @@ export function createDesktopHelperLifetime(): InstalledHelperLifetime {
     const receive = new Socket({ fd: 8, readable: true, writable: false });
     send.unref();
     receive.unref();
-    // Once the channel fails it closes fd 7, which may then be reused: the
-    // Quit announcement must never write that number again.
-    for (const event of ["close", "error"] as const)
-      send.on(event, () => {
-        launcherChannelClosed = true;
-      });
+    // Once the channel fails it destroys fd 7, which may then be reused: the
+    // Quit announcement must never write that number again. `destroyed` is
+    // set synchronously, before libuv closes the descriptor.
+    launcherSend = send;
     return lifetimeChannel(send, receive);
   } catch {
     return unavailable;
@@ -42,7 +40,7 @@ export const DRAINED_QUIT_FRAME =
  * process then hangs in Electron's exit teardown, the launcher, which owns
  * the unreaped child, ends it after a short grace. Best effort: without the
  * launcher channel nothing is sent and nothing changes. */
-let launcherChannelClosed = false;
+let launcherSend: Socket | null = null;
 
 export function announceDrainedQuit(
   write: (fd: number, frame: string) => void = (fd, frame) => {
@@ -51,7 +49,7 @@ export function announceDrainedQuit(
 ): boolean {
   try {
     if (
-      launcherChannelClosed ||
+      launcherSend?.destroyed === true ||
       process.platform !== "darwin" ||
       process.env.FAROL_DESKTOP_LIFETIME !== "1" ||
       !fstatSync(7).isFIFO()

@@ -33,7 +33,7 @@ var quitFrame = []byte(`{"schema":"farol.desktop-quit/1","drained":true}`)
 // quitExitGrace bounds how long a drained desktop may stay alive inside its
 // exit teardown. Electron 44 can hang there forever (2026-11-23,
 // uv_thread_join); the drain already recorded that nothing is left to lose.
-var quitExitGrace = 10 * time.Second
+var quitExitGrace = 20 * time.Second
 
 type identity struct {
 	pid     int
@@ -204,6 +204,7 @@ func hold(command *exec.Cmd, desktop identity, queue int, metadata, ack *os.File
 		defer close(frames)
 		s := bufio.NewScanner(metadata)
 		s.Buffer(make([]byte, frameLimit+1), frameLimit+1)
+		s.Split(exactLines)
 		for s.Scan() {
 			line := append([]byte(nil), s.Bytes()...)
 			select {
@@ -306,17 +307,17 @@ func hold(command *exec.Cmd, desktop identity, queue int, metadata, ack *os.File
 						status = command.ProcessState.ExitCode()
 					}
 				}
-				_, _ = fmt.Fprintf(diagnostics, "desktop_launcher_desktop_exit pid=%d code=%d\n", pid, status)
+				_, _ = fmt.Fprintf(diagnostics, "desktop_launcher_desktop_exit pid=%d code=%d watchdog=%t\n", pid, status, killed)
 			} else if operation := helpers[pid]; operation != "" {
 				_, _ = fmt.Fprintf(diagnostics, "desktop_launcher_helper_exit operation=%s pid=%d waitStatus=%d\n", operation, pid, event.Data)
 				delete(helpers, pid)
 			}
 		}
 		if !exited && !killed && !quitAt.IsZero() && time.Since(quitAt) >= quitExitGrace {
-			// Same owner, before the sole Wait. Signal first, then log.
+			// Same owner, before the sole Wait. No diagnostic write on this
+			// path: a blocked stderr must not stall signalling or reaping.
 			killed = command.Process.Kill() == nil
 			quitAt = time.Time{}
-			_, _ = io.WriteString(diagnostics, "desktop_launcher_quit_exit_timeout\n")
 		}
 		if exited && len(helpers) == 0 {
 			if killed && killedByWatchdog(command) {
@@ -326,6 +327,19 @@ func hold(command *exec.Cmd, desktop identity, queue int, metadata, ack *os.File
 			return status
 		}
 	}
+}
+
+// exactLines yields only complete newline-terminated lines, byte for byte: no
+// carriage-return stripping and no unterminated final token at EOF, so a
+// truncated or noncanonical frame never matches.
+func exactLines(data []byte, atEOF bool) (int, []byte, error) {
+	if i := bytes.IndexByte(data, '\n'); i >= 0 {
+		return i + 1, data[:i], nil
+	}
+	if atEOF {
+		return len(data), nil, nil
+	}
+	return 0, nil, nil
 }
 
 // killedByWatchdog reports whether the reaped child ended by SIGKILL, so an

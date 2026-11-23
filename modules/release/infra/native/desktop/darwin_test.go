@@ -146,12 +146,23 @@ func TestLifetimeActor(t *testing.T) {
 		// A desktop that announces (or not) a drained Quit, then either hangs
 		// ignoring SIGTERM like a stuck exit teardown, or exits on its own.
 		signal.Ignore(syscall.SIGTERM)
-		if role != "quit-desktop-silent" {
-			if _, err := os.NewFile(7, "metadata").Write(append(quitFrame, '\n')); err != nil {
+		metadata := os.NewFile(7, "metadata")
+		switch role {
+		case "quit-desktop-silent":
+		case "quit-desktop-truncated":
+			// Body without its newline, then the channel closes: never a frame.
+			_, _ = metadata.Write(quitFrame)
+			metadata.Close()
+		case "quit-desktop-crlf":
+			_, _ = metadata.Write(append(append([]byte(nil), quitFrame...), '\r', '\n'))
+		default:
+			if _, err := metadata.Write(append(quitFrame, '\n')); err != nil {
 				os.Exit(85)
 			}
 		}
-		if role == "quit-desktop-hang" {
+		// Witness for the test clock: written after the frame (or its absence).
+		_ = os.WriteFile(filepath.Join(root, "announced"), nil, 0600)
+		if role == "quit-desktop-hang" || role == "quit-desktop-truncated" || role == "quit-desktop-crlf" {
 			time.Sleep(time.Hour)
 		}
 		// Announced: exit well inside the grace. Silent: outlive the grace, which
@@ -433,8 +444,9 @@ func TestLifetimeNativeEnrollmentRefusesBirthAndPredecessorDrift(t *testing.T) {
 func TestLifetimeNativeQuitExitWatchdog(t *testing.T) {
 	executable, _ := os.Executable()
 	run := func(role string, limit time.Duration) (string, error, time.Duration) {
+		root := t.TempDir()
 		c := exec.Command(executable, "-test.run=^TestLifetimeActor$")
-		c.Env = append(os.Environ(), "FAROL_LIFETIME_TEST_ACTOR="+role, "FAROL_LIFETIME_TEST_ROOT="+t.TempDir())
+		c.Env = append(os.Environ(), "FAROL_LIFETIME_TEST_ACTOR="+role, "FAROL_LIFETIME_TEST_ROOT="+root)
 		// Own group: the timeout path ends guardian and desktop together and
 		// releases the inherited output pipe.
 		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -446,30 +458,40 @@ func TestLifetimeNativeQuitExitWatchdog(t *testing.T) {
 		}
 		done := make(chan error, 1)
 		go func() { done <- c.Wait() }()
+		announced := func() time.Duration {
+			info, err := os.Stat(filepath.Join(root, "announced"))
+			if err != nil {
+				t.Fatalf("%s: desktop never reached its announcement: %s", role, out.String())
+			}
+			return time.Since(info.ModTime())
+		}
+		_ = start
 		select {
 		case err := <-done:
-			return out.String(), err, time.Since(start)
+			return out.String(), err, announced()
 		case <-time.After(limit):
 			// Kill the whole guardian group: the silent hang must survive.
 			_ = syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
 			_ = c.Process.Kill()
 			<-done
-			return out.String(), errors.New("timeout"), time.Since(start)
+			return out.String(), errors.New("timeout"), announced()
 		}
 	}
 	out, err, took := run("quit-guardian-hang", 10*time.Second)
-	if err != nil || !strings.Contains(out, "desktop_launcher_quit_exit_timeout") {
+	if err != nil || !strings.Contains(out, "watchdog=true") {
 		t.Fatalf("hung drained desktop was not finished: %v\n%s", err, out)
 	}
 	if took < 200*time.Millisecond {
-		t.Fatalf("killed before the grace: %v", took)
+		t.Fatalf("killed before the grace measured from the frame: %v", took)
 	}
 	out, err, _ = run("quit-guardian-exit", 10*time.Second)
-	if err != nil || strings.Contains(out, "desktop_launcher_quit_exit_timeout") {
+	if err != nil || strings.Contains(out, "watchdog=true") {
 		t.Fatalf("a desktop that exited on its own was killed: %v\n%s", err, out)
 	}
-	out, err, _ = run("quit-guardian-silent", 1500*time.Millisecond)
-	if err == nil || err.Error() != "timeout" || strings.Contains(out, "quit_exit_timeout") {
-		t.Fatalf("an unannounced stuck desktop was killed: %v\n%s", err, out)
+	for _, role := range []string{"quit-guardian-silent", "quit-guardian-truncated", "quit-guardian-crlf"} {
+		out, err, _ = run(role, 1500*time.Millisecond)
+		if err == nil || err.Error() != "timeout" || strings.Contains(out, "watchdog=true") {
+			t.Fatalf("%s: a desktop without an exact frame was killed: %v\n%s", role, err, out)
+		}
 	}
 }
