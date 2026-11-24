@@ -110,6 +110,44 @@ describe("connector supervisor wiring in main", () => {
     expect(source).toContain("let connectorStartCache");
   });
 
+  it("lends the connector check each main-process owner, late for every let", async () => {
+    const source = await readFile(mainSource, "utf8");
+    const begin = source.indexOf("function connectorCheck() {");
+    expect(begin).toBeGreaterThanOrEqual(0);
+    const body = source
+      .slice(begin, source.indexOf("\n}\n", begin) + 2)
+      .replace(/\s+/g, " ");
+    // Each `let` in main is a getter, read afresh at every use across each await.
+    for (const name of [
+      "configuration",
+      "secureMcpConnectorRuntime",
+      "desktopGoCore",
+      "chatGptRoute",
+      "window",
+      "selectedTaskId",
+    ])
+      expect(body).toContain(`${name}: () => ${name},`);
+    // Each `const` owner is shared by reference, never copied.
+    for (const name of [
+      "liveTaskRoutes",
+      "desktopAdmission",
+      "buildIdentity",
+      "connectorConnection",
+      "currentConnectionStatus",
+    ])
+      expect(body).toContain(` ${name},`);
+    expect(source).toContain("let connectorCheckCache");
+    // Every caller reaches the check through the one lazily built instance.
+    for (const call of [
+      "connectorCheck().testConnectionCommand(",
+      "connectorCheck().checkSecureMcpAttachment(",
+    ])
+      expect(source).toContain(call);
+    expect(source).not.toMatch(
+      /\n(?:async )?function (?:testConnectionCommand|checkSecureMcpAttachment)\(/,
+    );
+  });
+
   it("uses the supervisor's own state and functions, not a local copy", async () => {
     const source = await readFile(mainSource, "utf8");
     const begin = source.indexOf("// Connector supervision reads each owner");

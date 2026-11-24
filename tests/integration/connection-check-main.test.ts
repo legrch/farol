@@ -14,6 +14,11 @@ import {
   type ExplicitConnectionCheck,
 } from "../../apps/desktop/connection-check-command.ts";
 import { prepareConnectorCheckDocument } from "../../apps/desktop/bridge/connector-check-readiness.ts";
+import {
+  connectorAppBindingCurrent,
+  createConnectorCheck,
+} from "../../apps/desktop/connector/check.ts";
+import { connectorCheckHost } from "../support/connector-check-ports.ts";
 import { connectorVerificationProof } from "../../src/apps/desktop/connector-verification-proof.ts";
 import { currentConnectorAttachment } from "../../src/apps/desktop/connector-app-receipt-wait.ts";
 import { ComputerBridge } from "../../apps/desktop/bridge/computer.ts";
@@ -36,24 +41,18 @@ import {
   guidedSettingsFixture,
 } from "../fixtures/guided-onboarding.ts";
 
-// Execute the ACTUAL Main function plus actual coordinator/readiness/parser
-// seams. Go IPC, Electron and Settings persistence are scripted ports here;
+// Execute the ACTUAL connector check module and Main's Setup function, plus
+// actual coordinator/readiness/parser seams. Go IPC, Electron and Settings persistence are scripted ports here;
 // native Store and real public socket qualification remain separate gates.
 const source = fs.readFileSync(
   new URL("../../src/apps/desktop/main.ts", import.meta.url),
   "utf8",
 );
 const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
-const declaration = ["connectorAppBindingCurrent", "testConnectionCommand"]
-  .map((name) => {
-    const node = tree.program.body.find(
-      (x) => x.type === "FunctionDeclaration" && x.id?.name === name,
-    );
-    if (!node || node.start == null || node.end == null)
-      throw Error(`Missing actual Main seam: ${name}`);
-    return source.slice(node.start, node.end);
-  })
-  .join("\n");
+const checkSource = fs.readFileSync(
+  new URL("../../apps/desktop/connector/check.ts", import.meta.url),
+  "utf8",
+);
 const setupNode = tree.program.body.find(
   (node) =>
     node.type === "FunctionDeclaration" &&
@@ -156,8 +155,30 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap", empty = false) {
     runtimeId: "runtime",
     connectorGeneration: "1",
   };
+  // The proof Go holds once the check is verified; a bootstrap check holds none
+  // before that.
+  const retained = {
+    binding,
+    receiptSha256: "e".repeat(64),
+    ...(empty
+      ? {
+          catalogueReceipt: {
+            binding,
+            challengeSha256: connector.challenge.challengeSha256,
+            workspaceCount: 0,
+          },
+        }
+      : {
+          receipt: {
+            binding,
+            challengeSha256: connector.challenge.challengeSha256,
+            workspaceId: fixtureWorkspaceId,
+          },
+        }),
+  };
   const proof = {
     binding,
+    receiptSha256: "e".repeat(64),
     ...(mode === "bootstrap"
       ? {}
       : empty
@@ -177,7 +198,9 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap", empty = false) {
           }),
   };
   const core = {
-    observeComputerConnectorVerification: vi.fn(async () => proof),
+    observeComputerConnectorVerification: vi.fn(async () =>
+      phase === "verified" ? retained : proof,
+    ),
     claimConnectionCheck: vi.fn(async () => {
       events.push("claim");
       const fresh = first;
@@ -242,7 +265,7 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap", empty = false) {
     ),
   };
   const snapshot = () => ({ status: "ready" as const, settings });
-  const publish = vi.fn(async () => {
+  const recordSecureMcpAttachment = vi.fn(async () => {
     events.push("settings");
     expect(phase).toBe("verified");
     return { ok: true, snapshot: snapshot() };
@@ -262,7 +285,7 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap", empty = false) {
       connectorWorkspaceSelection,
       ProductConfigurationResultSchema,
       desktopGoCore: core,
-      configuration: { snapshot },
+      configuration: { snapshot, recordSecureMcpAttachment },
       chatGptRoute: route,
       window: { isDestroyed: () => false },
       selectedTaskId: "",
@@ -283,7 +306,6 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap", empty = false) {
       connectorAppVerificationAttemptExists: legacyExists,
       connectorConnection: { sample: async () => {} },
       currentConnectionStatus: () => {},
-      checkSecureMcpAttachment: publish,
       configurationFailure: (error: string) => ({
         ok: false,
         error,
@@ -291,12 +313,26 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap", empty = false) {
       }),
     }),
   );
-  const run = vm.runInContext(
-    stripTypeScriptTypes(declaration + "\ntestConnectionCommand;", {
-      mode: "strip",
-    }),
-    context,
-  ) as (input: ExplicitConnectionCheck) => Promise<ProductConfigurationResult>;
+  // The module reads Main's state from the same fixture, as Main lends it. The
+  // attachment publication is the module's own: it is counted by the connector
+  // admission it reserves after the check released its own two.
+  const reservations: string[] = [];
+  const reserve = context.desktopAdmission.reserveAdmitted.bind(
+    context.desktopAdmission,
+  );
+  context.desktopAdmission.reserveAdmitted = (
+    kind: string,
+    purpose?: unknown,
+  ) => {
+    reservations.push(kind);
+    return reserve(kind, purpose);
+  };
+  const check = createConnectorCheck(connectorCheckHost(context));
+  context.connectorAppBindingCurrent = connectorAppBindingCurrent;
+  context.connectorCheck = () => check;
+  const run = check.testConnectionCommand as (
+    input: ExplicitConnectionCheck,
+  ) => Promise<ProductConfigurationResult>;
   return {
     run: () => run(command),
     context,
@@ -304,7 +340,10 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap", empty = false) {
     core,
     settings,
     events,
-    publish,
+    published: () =>
+      reservations.filter((kind) => kind === "connector-task").length -
+      reservations.filter((kind) => kind === "chatgpt-task").length,
+    recordSecureMcpAttachment,
     legacyExists,
     sends: () => sends,
     runSetup: () =>
@@ -404,7 +443,7 @@ it.each(["exact", "wrong", "missing"] as const)(
           : { ok: false, error: "CONNECTION_CHECK_OUTCOME_UNKNOWN" },
       );
       expect(sends).toBe(1);
-      expect(f.publish).toHaveBeenCalledTimes(correlation === "exact" ? 1 : 0);
+      expect(f.published()).toBe(correlation === "exact" ? 1 : 0);
       expect(f.core.prepareConnectionCheck).toHaveBeenCalledWith(
         expect.objectContaining({ mode: "status" }),
       );
@@ -428,7 +467,7 @@ it("Setup verification keeps its main browser route while a task is selected", a
   // No task browser is available: Setup must retain its own route.
   expect(await f.runSetup()).toMatchObject({ ok: true });
   expect(f.sends()).toBe(1);
-  expect(f.publish).toHaveBeenCalledTimes(1);
+  expect(f.published()).toBe(1);
 });
 it("real Main dispatch selects the new explicit handler, not Deep Test or repair", () => {
   const node = tree.program.body.find(
@@ -439,10 +478,10 @@ it("real Main dispatch selects the new explicit handler, not Deep Test or repair
   if (!node || node.start == null || node.end == null)
     throw Error("Missing active configuration dispatcher");
   expect(source.slice(node.start, node.end)).toContain(
-    'if (command.kind === "connector.test-connection")\n    return testConnectionCommand(command);',
+    'if (command.kind === "connector.test-connection")\n    return connectorCheck().testConnectionCommand(command);',
   );
-  expect(declaration).not.toContain("verifySecureMcpApp(");
-  expect(declaration).not.toContain('kind: "connector.repair"');
+  expect(checkSource).not.toContain("verifySecureMcpApp(");
+  expect(checkSource).not.toContain('kind: "connector.repair"');
 });
 it("Main refuses before Send when connector start remains unresolved", async () => {
   const f = fixture("bootstrap");
@@ -455,7 +494,7 @@ it("Main refuses before Send when connector start remains unresolved", async () 
     error: "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
   });
   expect(f.sends()).toBe(0);
-  expect(f.publish).not.toHaveBeenCalled();
+  expect(f.published()).toBe(0);
 });
 it.each([false, true])(
   "Main bootstraps without attachment, empty catalogue=%s, one Send and later Settings",
@@ -472,7 +511,7 @@ it.each([false, true])(
       },
     });
     expect(f.sends()).toBe(1);
-    expect(f.publish).toHaveBeenCalledTimes(1);
+    expect(f.published()).toBe(1);
     expect(f.events.indexOf("claim")).toBeLessThan(
       f.events.indexOf("temporary-document"),
     );
@@ -532,7 +571,7 @@ it.each([
         : {}),
   });
   expect(f.sends()).toBe(0);
-  expect(f.publish).not.toHaveBeenCalled();
+  expect(f.published()).toBe(0);
   expect(f.context.chatGptTaskAdmission).toBe(false);
   expect(f.context.connectorTaskAdmission).toBe(false);
 });
@@ -546,7 +585,7 @@ it("lost Main reply observes original result without resolving a new page or pub
     evidence: { retained: true, operationId: originalId },
   });
   expect(f.sends()).toBe(1);
-  expect(f.publish).toHaveBeenCalledTimes(1);
+  expect(f.published()).toBe(1);
   expect(f.route.openConnectionCheckChat).toHaveBeenCalledTimes(1);
 });
 // Go's claim supersedes every unsettled earlier attempt, so Main must refuse a
