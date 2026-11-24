@@ -22,7 +22,17 @@ const source = fs.readFileSync(
   new URL("../../src/apps/desktop/main.ts", import.meta.url),
   "utf8",
 );
+// The activity owner moved with the route builders into the task route
+// factory; the lifecycle and persistence callbacks stay in main.
+const routeSource = fs.readFileSync(
+  new URL("../../apps/desktop/task/route.ts", import.meta.url),
+  "utf8",
+);
 const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
+const routeTree = parse(routeSource, {
+  sourceType: "module",
+  plugins: ["typescript"],
+});
 function functionNode(name: string) {
   const node = tree.program.body.find(
     (node) => node.type === "FunctionDeclaration" && node.id?.name === name,
@@ -31,10 +41,33 @@ function functionNode(name: string) {
     throw new Error("LIVE_SURFACE_FUNCTION_MISSING:" + name);
   return node;
 }
-function bytes(node: { start?: number | null; end?: number | null }) {
+function routeFunctionNode(name: string) {
+  const factory = routeTree.program.body.find(
+    (node) =>
+      node.type === "ExportNamedDeclaration" &&
+      node.declaration?.type === "FunctionDeclaration" &&
+      node.declaration.id?.name === "createTaskRoutes",
+  );
+  if (
+    !factory ||
+    factory.type !== "ExportNamedDeclaration" ||
+    factory.declaration?.type !== "FunctionDeclaration"
+  )
+    throw new Error("LIVE_SURFACE_FUNCTION_MISSING:createTaskRoutes");
+  const node = factory.declaration.body.body.find(
+    (node) => node.type === "FunctionDeclaration" && node.id?.name === name,
+  );
+  if (!node || node.type !== "FunctionDeclaration" || !node.body)
+    throw new Error("LIVE_SURFACE_FUNCTION_MISSING:" + name);
+  return node;
+}
+function bytes(
+  node: { start?: number | null; end?: number | null },
+  text = source,
+) {
   if (node.start == null || node.end == null)
     throw new Error("LIVE_SURFACE_SOURCE_RANGE_MISSING");
-  return source.slice(node.start, node.end);
+  return text.slice(node.start, node.end);
 }
 const functions = [
   "openLiveTaskSurface",
@@ -42,7 +75,7 @@ const functions = [
   "surfaceLiveTaskPersistenceFailure",
   "publishTasksState",
 ].map((name) => bytes(functionNode(name)));
-const activity = functionNode("createLiveChatGptRoute")
+const activity = routeFunctionNode("createLiveChatGptRoute")
   .body.body.filter((node) => node.type === "VariableDeclaration")
   .flatMap((node) => node.declarations)
   .find(
@@ -50,7 +83,7 @@ const activity = functionNode("createLiveChatGptRoute")
       node.id.type === "Identifier" && node.id.name === "recordTaskActivity",
   )?.init;
 if (!activity) throw new Error("LIVE_SURFACE_ACTIVITY_CALLBACK_MISSING");
-const activitySource = bytes(activity);
+const activitySource = bytes(activity, routeSource);
 
 type OpenResult = { status: "opened" | "unreachable" };
 type Route = { open(): Promise<OpenResult> };

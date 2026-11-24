@@ -78,6 +78,7 @@ import {
   reportConnectorTransport,
 } from "../../../apps/desktop/connector/start";
 import { createTaskPersist } from "../../../apps/desktop/task/persist";
+import { createTaskRoutes } from "../../../apps/desktop/task/route";
 import { connectorSupervisor } from "../../../apps/desktop/connector/supervisor";
 import { createCoreReporters } from "../../../apps/desktop/core/report";
 import { startGoCore } from "../../../apps/desktop/core/start";
@@ -1705,97 +1706,15 @@ function persistLiveTaskState(): Promise<void> {
 }
 
 function createManagedChatGptRoute(options: ChatGptRouteOptions): ChatGptRoute {
-  let route: ChatGptRoute;
-  route = new ChatGptRoute({
-    ...options,
-    partition: activeDesktopIdentity.chatGptPartition,
-    ...(runtimeEnvironment === "dev"
-      ? {
-          requiredAppName: activeDesktopIdentity.displayName,
-          title:
-            options.title ?? `ChatGPT · ${activeDesktopIdentity.displayName}`,
-        }
-      : {}),
-    onUpdateAdmissionDiagnostic: (diagnostic) => {
-      // Fixed classifications only. The browser route contains observer errors,
-      // so diagnostics cannot alter an update admission or release outcome.
-      process.stderr.write(
-        `FAROL_UPDATE_ADMISSION_DIAGNOSTIC ${diagnostic.stage}:${diagnostic.reason}\n`,
-      );
-      options.onUpdateAdmissionDiagnostic?.(diagnostic);
-    },
-    onProfilePreparationDiagnostic: (diagnostic) => {
-      if (runtimeEnvironment === "dev")
-        process.stderr.write(
-          `FAROL_PROFILE_PREPARATION_DIAGNOSTIC ${JSON.stringify(diagnostic)}\n`,
-        );
-      options.onProfilePreparationDiagnostic?.(diagnostic);
-    },
-    onDisposed: () => managedChatGptRoutes.delete(route),
-  });
-  managedChatGptRoutes.add(route);
-  return route;
+  return taskRoutes().managed(options);
 }
 
 function createLiveChatGptRoute(
   taskId: string,
   label: string,
-  initialUrl = chatGptHomeUrl,
+  initialUrl?: string,
 ): ChatGptRoute {
-  let routeHomeUrl = chatGptHomeUrl;
-  let routeInitialUrl = initialUrl;
-  if (chatGptE2eOrigin !== null) {
-    const fixtureUrl = new URL(chatGptHomeUrl);
-    fixtureUrl.searchParams.set("farol-e2e-task", taskId);
-    routeHomeUrl = fixtureUrl.href;
-    if (initialUrl === chatGptHomeUrl) routeInitialUrl = routeHomeUrl;
-  }
-  const recordConversationUrl = (conversationUrl: string | null) => {
-    if (!liveTaskRegistry.get(taskId)) return;
-    if (liveTaskConversationUrls.get(taskId) === conversationUrl) return;
-    liveTaskConversationUrls.set(taskId, conversationUrl);
-    void persistLiveTaskState().catch(() =>
-      surfaceLiveTaskPersistenceFailure(taskId),
-    );
-  };
-  const recordTaskActivity = (
-    state: "idle" | "running" | "outcome_unknown",
-  ) => {
-    const task = liveTaskRegistry.get(taskId);
-    if (!task) return;
-    const lifecycle =
-      state === "running"
-        ? "running"
-        : state === "outcome_unknown"
-          ? "outcome_unknown"
-          : task.lifecycle === "running"
-            ? "completed"
-            : task.lifecycle;
-    setLiveTaskLifecycle(taskId, lifecycle);
-  };
-  return createManagedChatGptRoute({
-    homeUrl: routeHomeUrl,
-    initialUrl: routeInitialUrl,
-    e2eOrigin: chatGptE2eOrigin,
-    parent: () => window,
-    ...chatGptWindowPresentationOption(),
-    surfaceFactory: liveChatGptSurfaceFactory(taskId),
-    onNavigationHistoryChanged: (state) =>
-      window?.webContents.send(channels.browserHistoryState, {
-        taskId,
-        ...state,
-      }),
-    title: `${label} · ${displayProductName}`,
-    onClosed: (conversationUrl, taskRunning) => {
-      recordConversationUrl(conversationUrl);
-      recordTaskActivity(taskRunning ? "outcome_unknown" : "idle");
-    },
-    onConversationChanged: recordConversationUrl,
-    onTaskActivityChanged: recordTaskActivity,
-    ...(process.env.FAROL_E2E === "1" && chatGptE2eOrigin !== null
-      ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
-      : {}),
-  });
+  return taskRoutes().live(taskId, label, initialUrl);
 }
 
 function contextBinding(taskId: string): ContextBinding {
@@ -1814,23 +1733,7 @@ function createContextSummaryFallbackRoute(
   binding: ContextBinding,
   recoveredConversationUrl?: string,
 ): ChatGptRoute {
-  let initialUrl = recoveredConversationUrl ?? chatGptHomeUrl;
-  if (recoveredConversationUrl === undefined && chatGptE2eOrigin !== null) {
-    const fixtureUrl = new URL(initialUrl);
-    fixtureUrl.searchParams.set("farol-e2e-task", `context-${binding.taskId}`);
-    initialUrl = fixtureUrl.href;
-  }
-  return createManagedChatGptRoute({
-    homeUrl: chatGptHomeUrl,
-    initialUrl,
-    e2eOrigin: chatGptE2eOrigin,
-    parent: () => window,
-    ...chatGptWindowPresentationOption(),
-    title: `Context recovery · ${displayProductName}`,
-    ...(process.env.FAROL_E2E === "1" && chatGptE2eOrigin !== null
-      ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
-      : {}),
-  });
+  return taskRoutes().contextSummaryFallback(binding, recoveredConversationUrl);
 }
 
 // The sign-in surface (chatgpt-route.ts) reports its outcome exactly once,
@@ -4737,6 +4640,33 @@ function taskPersist() {
   }));
 }
 let taskPersistCache: ReturnType<typeof createTaskPersist> | null = null;
+
+function taskRoutes() {
+  return (taskRoutesCache ??= createTaskRoutes({
+    window: () => window,
+    chatGptHomeUrl: () => chatGptHomeUrl,
+    chatGptE2eOrigin: () => chatGptE2eOrigin,
+    managedChatGptRoutes,
+    liveTaskRegistry,
+    liveTaskConversationUrls,
+    activeDesktopIdentity,
+    channels,
+    displayProductName,
+    runtimeEnvironment,
+    persistLiveTaskState,
+    surfaceLiveTaskPersistenceFailure,
+    setLiveTaskLifecycle,
+    chatGptWindowPresentationOption,
+    liveChatGptSurfaceFactory,
+    openRoute: (options) => new ChatGptRoute(options),
+    writeStderr: (text) => {
+      process.stderr.write(text);
+    },
+    env: process.env,
+  }));
+}
+let taskRoutesCache: ReturnType<typeof createTaskRoutes<ChatGptRoute>> | null =
+  null;
 
 function connectorCheck() {
   return (connectorCheckCache ??= createConnectorCheck({
