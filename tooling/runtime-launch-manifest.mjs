@@ -161,8 +161,8 @@ export const RUNTIME_LAUNCH_MANIFEST = freeze({
     ),
     launch(
       "desktop.preview-runtime",
-      desktop + "main.ts",
-      "startRuntime",
+      "apps/desktop/runtime/host.ts",
+      "createPreviewRuntime.startRuntime",
       "spawn",
       "resources.executable",
       "app-bundled-electron",
