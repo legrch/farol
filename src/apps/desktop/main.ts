@@ -76,6 +76,7 @@ import {
   createConnectorStart,
   reportConnectorTransport,
 } from "../../../apps/desktop/connector/start";
+import { createConnectorStop } from "../../../apps/desktop/connector/stop";
 import {
   createProductAgentHost,
   type ProductAgentSession,
@@ -359,7 +360,6 @@ import {
   type QuitTracePhase,
 } from "../../../apps/desktop/quit/trace";
 import { createQuitProgressWindow } from "../../../apps/desktop/quit/panel";
-import { drainComputerConnector } from "./computer-connector-drain";
 import {
   currentBootTimeMs,
   removeRunMarker,
@@ -2036,78 +2036,16 @@ async function farolModelCodexHostPresence(): Promise<
   return modelHost.farolModelCodexHostPresence();
 }
 
-let desktopComputerMcpLifecycle: PrivateMcpLifecycle | null = null;
 function computerMcpLifecycle(): PrivateMcpLifecycle {
-  // Boot owns one lifecycle so concurrent Start/Stop share stop admission.
-  desktopComputerMcpLifecycle ??= new PrivateMcpLifecycle(
-    statePaths().secureMcpLaunch,
-  );
-  return desktopComputerMcpLifecycle;
+  return connectorStop().computerMcpLifecycle();
 }
 
 async function stopAndConfirmComputerMcp(
-  connector = secureMcpConnectorRuntime,
-  inFlightStart: Promise<void> | null = null,
-  core = desktopGoCore,
-  savedChat = bridge.saved.get(),
-  reason?: "owner_stop",
-  originalStopParent?: string,
-  quitStartDeadlineAt?: number,
+  ...args: Parameters<
+    ReturnType<typeof connectorStop>["stopAndConfirmComputerMcp"]
+  >
 ): Promise<void> {
-  if (!connector) throw new Error("CONNECTOR_STOP_UNCONFIRMED");
-  // Ordinary Stop is forbidden while C7 owns an unresolved original. Only
-  // the already-admitted original parent may execute its single native effect.
-  if (core && originalStopParent === undefined) {
-    const custody = await core.observeOriginalStop();
-    if (custody.restricted) throw new Error("CONNECTOR_STOP_UNCONFIRMED");
-  }
-  if (
-    core?.independentSession &&
-    inFlightStart === null &&
-    !connector.isRunning()
-  ) {
-    if (originalStopParent !== undefined)
-      throw new Error("CONNECTOR_STOP_UNCONFIRMED");
-    // This run never owned the retained legacy tunnel. Close only its current
-    // native connector/account ports; old lifecycle markers remain history.
-    await savedChat?.close();
-    await core.closeComputerConnector(reason);
-    return;
-  }
-  const lifecycle = computerMcpLifecycle();
-  await observeOperation(
-    operationsStore(),
-    { source: "You", kind: "connection.stop", target: {} },
-    () =>
-      connector.observeStopAttempt(() =>
-        drainComputerConnector({
-          beginStop: () => lifecycle.beginStop(),
-          startInFlight: inFlightStart,
-          startDeadlineAt: quitStartDeadlineAt,
-          waitForMcpStop: () => lifecycle.waitForStop(),
-          stopConnector: () => connector.stop(),
-          closeSavedChat: async () => {
-            // Wait for admitted account work before closing its Browser endpoint.
-            try {
-              if (savedChat) {
-                await savedChat.close();
-                if (bridge.saved.get() === savedChat) bridge.saved.set(null);
-              }
-            } finally {
-              // Withdraw the original Go owner even when the old adapter drain fails.
-              // A failure remains unconfirmed; it cannot authorize a new launch.
-              if (
-                quitStartDeadlineAt !== undefined &&
-                Date.now() >= quitStartDeadlineAt
-              )
-                throw new Error("CONNECTOR_STOP_UNCONFIRMED");
-              await core?.closeComputerConnector(reason, originalStopParent);
-            }
-          },
-          confirmStop: () => lifecycle.confirmStop(),
-        }),
-      ),
-  );
+  return connectorStop().stopAndConfirmComputerMcp(...args);
 }
 
 async function codexHostRuntimeRoot(): Promise<string> {
@@ -3084,6 +3022,21 @@ function connectorStart() {
   }));
 }
 let connectorStartCache: ReturnType<typeof createConnectorStart> | null = null;
+
+function connectorStop() {
+  return (connectorStopCache ??= createConnectorStop({
+    secureMcpConnectorRuntime: () => secureMcpConnectorRuntime,
+    desktopGoCore: () => desktopGoCore,
+    saved: bridge.saved,
+    operationsStore,
+    statePaths,
+    createLifecycle: (secureMcpLaunch) =>
+      new PrivateMcpLifecycle(secureMcpLaunch),
+  }));
+}
+let connectorStopCache: ReturnType<
+  typeof createConnectorStop<PrivateMcpLifecycle>
+> | null = null;
 
 function taskPersist() {
   return (taskPersistCache ??= createTaskPersist({
