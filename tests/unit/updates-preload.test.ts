@@ -1,13 +1,11 @@
-import { parse } from "@babel/parser";
-import { stripTypeScriptTypes } from "node:module";
 import { InstalledUpdateCommandSchema } from "../../src/modules/release/contract/installed-update";
 import { admissionFixture } from "../support/desktop-admission";
-import { build, transform } from "esbuild";
-import { readFile } from "node:fs/promises";
+import { build } from "esbuild";
 import vm from "node:vm";
 import { expect, it, vi } from "vitest";
 import { updatesChannels } from "../../apps/desktop/renderer/updates/contract";
-import { isTrustedIpcSender } from "../../src/apps/desktop/ipc-sender";
+import { createIpc, type IpcPorts } from "../../apps/desktop/shell/ipc";
+import { channels } from "../../src/pkg/ipc/channels";
 
 // Execute the bundled real preload with controlled Electron ports, never an app.
 async function exposed(args: string[]) {
@@ -74,17 +72,6 @@ it("keeps recovery separately selected and the shell API in the shell only", asy
 });
 
 it("wires the actual host handlers with shell-only opening and panel-only observation", async () => {
-  const source = await readFile("src/apps/desktop/main.ts", "utf8");
-  const start = source.indexOf("function installIpc(): void {");
-  const end = source.indexOf(
-    "  const settings = configuration?.snapshot();",
-    start,
-  );
-  expect(start).toBeGreaterThan(0);
-  const code = await transform(
-    source.slice(start, end) + "\n}\ninstallIpc();",
-    { loader: "ts" },
-  );
   const handlers = new Map<string, (...args: any[]) => any>();
   const frame = { url: "file:///app/shell.html" };
   const owner = { webContents: { mainFrame: frame }, isDestroyed: () => false };
@@ -100,24 +87,25 @@ it("wires the actual host handlers with shell-only opening and panel-only observ
     open: vi.fn(async (_value: unknown) => {}),
   };
   const context: Record<string, unknown> = {
+    quitInProgress: false,
+    installedUpdateAdmission: false,
+  };
+  const { desktopAdmission } = admissionFixture(context);
+  createIpc({
     ipcMain: {
       on: (key: string, run: (...args: any[]) => any) => handlers.set(key, run),
       handle: (key: string, run: (...args: any[]) => any) =>
         handlers.set(key, run),
     },
-    updatesChannels,
+    window: () => owner,
     updatesPanel: panel,
-    window: owner,
-    isTrustedIpcSender,
     installedUpdates: { resources: () => ({ directory: "/app" }) },
-    quitInProgress: false,
-    installedUpdateAdmission: false,
+    desktopAdmission,
     windowMode: "hidden",
-    selectedVisibleTestPlacement: vi.fn(),
     UPDATES_PANEL_SIZE: { width: 480, height: 560 },
-    console: { error: vi.fn() },
-  };
-  vm.runInNewContext(code.code, admissionFixture(context));
+    selectedVisibleTestPlacement: vi.fn(),
+    configuration: () => null,
+  } as unknown as IpcPorts).install();
   const event = { sender: owner.webContents, senderFrame: frame };
   handlers.get(updatesChannels.projection)!(
     { sender: {}, senderFrame: frame },
@@ -156,41 +144,35 @@ it("wires the actual host handlers with shell-only opening and panel-only observ
 });
 
 it("refuses an untracked direct command before invoking the updater", async () => {
-  const source = await readFile("src/apps/desktop/main.ts", "utf8");
-  const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
-  let handler: { start: number; end: number } | undefined;
-  const visit = (node: any): void => {
-    if (!node || typeof node !== "object") return;
-    if (
-      node.type === "CallExpression" &&
-      node.callee?.object?.name === "ipcMain" &&
-      node.callee?.property?.name === "handle" &&
-      node.arguments?.[0]?.object?.name === "channels" &&
-      node.arguments?.[0]?.property?.name === "installedUpdate"
-    )
-      handler = node.arguments[1];
-    for (const value of Object.values(node)) {
-      if (Array.isArray(value)) value.forEach(visit);
-      else if (value && typeof value === "object") visit(value);
-    }
-  };
-  visit(tree);
-  expect(handler).toBeDefined();
-  const selected = handler!;
+  const handlers = new Map<string, (...args: any[]) => any>();
   const beginDirect = vi.fn(() => false);
   const endDirect = vi.fn();
   const installedUpdateCommand = vi.fn();
-  const dispatch = vm.runInNewContext(
-    `(${stripTypeScriptTypes(source.slice(selected.start, selected.end))})`,
-    admissionFixture({
-      isTrustedIpcSender: () => true,
-      window: {},
-      InstalledUpdateCommandSchema,
-      installedUpdates: { updater: {}, command: installedUpdateCommand },
-      updatesPanel: { beginDirect, endDirect },
-    }),
-  );
-  expect(await dispatch({}, { kind: "check" }, "invalid")).toEqual({
+  const sender = {};
+  createIpc({
+    ipcMain: {
+      on: (key: string, run: (...args: any[]) => any) => handlers.set(key, run),
+      handle: (key: string, run: (...args: any[]) => any) =>
+        handlers.set(key, run),
+    },
+    window: () => ({ webContents: sender }),
+    updatesPanel: { beginDirect, endDirect },
+    installedUpdates: { updater: {}, command: installedUpdateCommand },
+    installedUpdateCommandSchema: InstalledUpdateCommandSchema,
+    configuration: () => null,
+  } as unknown as IpcPorts).install();
+  const dispatch = handlers.get(channels.installedUpdate)!;
+  expect(
+    await dispatch(
+      { sender: {}, senderFrame: {} },
+      { kind: "check" },
+      "invalid",
+    ),
+  ).toEqual({ error: "IPC_SENDER_DENIED" });
+  expect(beginDirect).not.toHaveBeenCalled();
+  expect(
+    await dispatch({ sender, senderFrame: {} }, { kind: "check" }, "invalid"),
+  ).toEqual({
     phase: "unavailable",
     code: "UPDATE_ACTION_INVALID",
   });
