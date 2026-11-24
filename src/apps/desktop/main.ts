@@ -83,6 +83,7 @@ import {
 } from "../../../apps/desktop/task/agent";
 import { createTaskCommands } from "../../../apps/desktop/task/command";
 import { createChatGptSession } from "../../../apps/desktop/chat/session";
+import { createPreviewRuntime } from "../../../apps/desktop/runtime/host";
 import { createTaskPersist } from "../../../apps/desktop/task/persist";
 import { createTaskRoutes } from "../../../apps/desktop/task/route";
 import { connectorSupervisor } from "../../../apps/desktop/connector/supervisor";
@@ -170,7 +171,7 @@ import {
   unlinkSync,
   writeSync,
 } from "node:fs";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import {
   observeLocalRuntime,
   type LocalRuntimeLifetime,
@@ -846,8 +847,6 @@ const updatesPanel = new DesktopUpdatesPanel(
       (installedUpdates.updater !== null &&
         installedUpdates.updater.ownerHandoffSafe())),
 );
-let runtimeChild: ChildProcess | null = null;
-let localRuntimeGeneration = 0;
 const ownedLocalRuntimes = new Map<LocalRuntimeLifetime, string>();
 let runtime: RuntimeReady | null = null;
 let runtimeState: "starting" | "ready" | "offline" | "failed" = "starting";
@@ -3590,6 +3589,49 @@ let chatGptSessionCache: ReturnType<
   typeof createChatGptSession<ProductConfigurationResult>
 > | null = null;
 
+function previewRuntime() {
+  return (previewRuntimeCache ??= createPreviewRuntime<RuntimeReady>({
+    desktopAdmission,
+    ownedLocalRuntimes,
+    runtimeStopping: () => runtimeStopping,
+    setRuntimeStopping: (value) => {
+      runtimeStopping = value;
+    },
+    setRuntime: (value) => {
+      runtime = value;
+    },
+    setRuntimeState: (value) => {
+      runtimeState = value;
+    },
+    setRuntimeError: (value) => {
+      runtimeError = value;
+    },
+    setTaskCountsBeforeRuntimeExit: (value) => {
+      taskCountsBeforeRuntimeExit = value;
+    },
+    installedUpdates,
+    activeDesktopIdentity,
+    demoMode,
+    expectedTasks,
+    readySchema,
+    streamControllers,
+    pendingComputer,
+    taskSurfaceFailures,
+    stopStreams,
+    disposeTaskViews,
+    publishRuntimeStatus,
+    observeLocalRuntime,
+    spawn,
+    setTimeout,
+    clearTimeout,
+    env: process.env,
+    argv: process.argv,
+  }));
+}
+let previewRuntimeCache: ReturnType<
+  typeof createPreviewRuntime<RuntimeReady>
+> | null = null;
+
 function taskCommands() {
   return (taskCommandsCache ??= createTaskCommands<ProductTaskCommandResult>({
     parseCommand: (value) => ProductTaskCommandSchema.safeParse(value),
@@ -4716,146 +4758,8 @@ function embeddedBrowserEnabled(): boolean {
   });
 }
 
-function handleRuntimeExit(code: number | null): void {
-  if (runtimeStopping) {
-    runtimeChild = null;
-    runtime = null;
-    return;
-  }
-  taskCountsBeforeRuntimeExit = {
-    running: streamControllers.size,
-    waiting: pendingComputer.size,
-    failed: taskSurfaceFailures.size,
-  };
-  runtimeChild = null;
-  runtime = null;
-  runtimeState = "failed";
-  runtimeError =
-    code === 0 ? "RUNTIME_PROCESS_EXITED" : "RUNTIME_PROCESS_FAILED";
-  stopStreams();
-  taskSurfaceFailures.clear();
-  pendingComputer.clear();
-  disposeTaskViews("runtime");
-  publishRuntimeStatus();
-}
-
-async function startRuntime(): Promise<void> {
-  if (desktopAdmission.closed()) return;
-  if (runtimeChild !== null || ownedLocalRuntimes.size !== 0) {
-    throw new Error("LOCAL_RUNTIME_ALREADY_OWNED");
-  }
-  runtimeStopping = false;
-  const resources = installedUpdates.resources();
-  await resources.recheck();
-  if (runtimeStopping || desktopAdmission.closed()) return;
-  const child = spawn(
-    resources.executable,
-    [path.join(resources.directory, "runtime.cjs")],
-    {
-      env: {
-        ELECTRON_RUN_AS_NODE: "1",
-        LANG: process.env.LANG ?? "en_US.UTF-8",
-        FAROL_RUNTIME_IDENTITY: activeDesktopIdentity.runtimeIdentity,
-        FAROL_PREVIEW_SCENARIO: process.argv.includes(
-          "--preview-stream-failure",
-        )
-          ? "stream-failure"
-          : process.env.FAROL_E2E === "1" &&
-              process.argv.includes("--preview-runtime-start-failure")
-            ? "startup-failure"
-            : process.argv.includes("--preview-failure")
-              ? "failure"
-              : "normal",
-        FAROL_PREVIEW_MODE: demoMode ? "demo" : "empty",
-      },
-      stdio: ["ignore", "ignore", "ignore", "ipc"],
-      serialization: "advanced",
-      windowsHide: true,
-    },
-  );
-  runtimeChild = child;
-  // runtime.cjs is the build-qualified in-memory preview service. Real Go,
-  // connector and command owners keep their independent shutdown obligations.
-  const lifetime = observeLocalRuntime(child, "in-memory-preview");
-  ownedLocalRuntimes.set(lifetime, `local-runtime-${++localRuntimeGeneration}`);
-  void lifetime.closed.then(
-    () => ownedLocalRuntimes.delete(lifetime),
-    () => {
-      /* A failed shutdown remains an unconfirmed Quit obligation. */
-    },
-  );
-  try {
-    runtime = await new Promise<RuntimeReady>((resolve, reject) => {
-      let settled = false;
-      const timer = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        reject(new Error("RUNTIME_START_TIMEOUT"));
-      }, 10_000);
-      child.once("error", () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        reject(new Error("RUNTIME_PROCESS_NOT_STARTED"));
-      });
-      child.once("exit", (code) => {
-        clearTimeout(timer);
-        if (settled) {
-          handleRuntimeExit(code);
-          return;
-        }
-        settled = true;
-        reject(
-          new Error(
-            code === 0 ? "RUNTIME_EXITED" : `RUNTIME_START_FAILED_${code}`,
-          ),
-        );
-      });
-      child.on("message", (message) => {
-        const parsed = readySchema.safeParse(message);
-        if (!parsed.success || settled) return;
-        if (parsed.data.identity !== activeDesktopIdentity.runtimeIdentity) {
-          settled = true;
-          clearTimeout(timer);
-          reject(new Error("RUNTIME_IDENTITY_MISMATCH"));
-          return;
-        }
-        const exactTasks =
-          parsed.data.tasks.length === expectedTasks.length &&
-          parsed.data.tasks.every((task, index) => {
-            const expected = expectedTasks[index];
-            return (
-              expected !== undefined &&
-              task.ownerId === expected.ownerId &&
-              task.sessionId === expected.sessionId &&
-              task.taskId === expected.taskId &&
-              task.turnId === expected.turnId &&
-              task.generation === expected.generation &&
-              task.label === expected.label &&
-              task.hasComputer === expected.hasComputer
-            );
-          });
-        if (!exactTasks) {
-          settled = true;
-          clearTimeout(timer);
-          reject(new Error("RUNTIME_TASK_MANIFEST_MISMATCH"));
-          return;
-        }
-        settled = true;
-        clearTimeout(timer);
-        resolve(parsed.data);
-      });
-    });
-    runtimeState = "ready";
-    taskCountsBeforeRuntimeExit = null;
-  } catch (error) {
-    runtimeState = "failed";
-    runtimeError =
-      error instanceof Error ? error.message : "RUNTIME_START_FAILED";
-    runtimeStopping = true;
-    child.kill();
-    runtimeChild = null;
-  }
+function startRuntime(): Promise<void> {
+  return previewRuntime().start();
 }
 
 async function runtimeJson(

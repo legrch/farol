@@ -1592,7 +1592,7 @@ function environmentRecord(
 // The extra HOME / CODEX_HOME requirements, on top of the classifier. HOME must
 // be set and inside THIS instance's disposable root; the one exception is the
 // Node runtime child, which the shell spawns with an explicit minimal
-// environment that never includes HOME (startRuntime in main.ts) and is
+// environment that never includes HOME (startRuntime in apps/desktop/runtime/host.ts) and is
 // recorded as a finding. CODEX_HOME, if present, must lie inside this
 // instance's own profile.
 function assertProcessEnvironment(entry) {

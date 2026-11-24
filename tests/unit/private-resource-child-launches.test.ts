@@ -12,9 +12,17 @@ import { EventEmitter } from "node:events";
 import { parse } from "@babel/parser";
 import { expect, it, vi } from "vitest";
 import { observeLocalRuntime } from "../../src/apps/desktop/local-runtime-lifetime";
+import {
+  createPreviewRuntime,
+  type PreviewRuntimePorts,
+  type PreviewRuntimeReady,
+  type PreviewRuntimeTask,
+} from "../../apps/desktop/runtime/host";
 
 // Actual source composition with controlled IPC/process producers, not a native host.
 const main = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
+// The local runtime start lives in apps/desktop/runtime/host.ts; main only
+// builds it. Its launch is exercised through the real factory below.
 // The connector start lives in its own module; main only builds it.
 const connectorStart = fs.readFileSync(
   "apps/desktop/connector/start.ts",
@@ -44,14 +52,6 @@ function select(
   if (!match) throw Error("CHILD_COMPOSITION_MISSING");
   return source.slice(match.start as number, match.end as number);
 }
-function declaration(name: string) {
-  return select(
-    main,
-    (node) =>
-      node.type === "FunctionDeclaration" &&
-      (node.id as { name?: string })?.name === name,
-  );
-}
 const privateDirectory = "/private/accepted/Farol.app/Contents/Resources/app";
 const privateExecutable = "/private/accepted/Electron";
 function resources(
@@ -70,14 +70,74 @@ function resources(
     quitInProgress: false,
     installedUpdateAdmission: false,
     ownedLocalRuntimes: new Map(),
-    localRuntimeGeneration: 0,
-    runtimeChild: null,
     observeLocalRuntime,
     beforeConnectorEffect: vi.fn(),
     directory: "/Applications/Farol.app/Contents/Resources/app",
     process: { execPath: "/Applications/replaced/Electron", argv: [], env: {} },
     path,
   };
+}
+
+type RuntimeContext = ReturnType<typeof resources> & {
+  spawn: ReturnType<typeof vi.fn>;
+  runtimeStopping?: boolean;
+  runtimeState?: string;
+  runtimeError?: string | null;
+  runtime?: PreviewRuntimeReady | null;
+  taskCountsBeforeRuntimeExit?: object | null;
+  activeDesktopIdentity?: { runtimeIdentity: string };
+  demoMode?: boolean;
+  expectedTasks?: readonly PreviewRuntimeTask[];
+  readySchema?: PreviewRuntimePorts<PreviewRuntimeReady>["readySchema"];
+};
+
+// The real factory over the same private-resource context. The runtime child
+// and its generation are owned by the factory, so a test observes them through
+// what a second start does and what the spawn mock saw.
+function previewRuntime(context: RuntimeContext) {
+  const fixture = admissionFixture(context);
+  return createPreviewRuntime<PreviewRuntimeReady>({
+    desktopAdmission: fixture.desktopAdmission,
+    ownedLocalRuntimes: fixture.ownedLocalRuntimes,
+    runtimeStopping: () => fixture.runtimeStopping ?? false,
+    setRuntimeStopping: (value) => {
+      fixture.runtimeStopping = value;
+    },
+    setRuntime: (value) => {
+      fixture.runtime = value;
+    },
+    setRuntimeState: (value) => {
+      fixture.runtimeState = value;
+    },
+    setRuntimeError: (value) => {
+      fixture.runtimeError = value;
+    },
+    setTaskCountsBeforeRuntimeExit: (value) => {
+      fixture.taskCountsBeforeRuntimeExit = value;
+    },
+    installedUpdates: fixture.installedUpdates,
+    activeDesktopIdentity: fixture.activeDesktopIdentity ?? {
+      runtimeIdentity: "controlled-runtime",
+    },
+    demoMode: fixture.demoMode ?? false,
+    expectedTasks: fixture.expectedTasks ?? [],
+    readySchema: fixture.readySchema ?? {
+      safeParse: () => ({ success: false }),
+    },
+    streamControllers: new Map(),
+    pendingComputer: new Map(),
+    taskSurfaceFailures: new Map(),
+    stopStreams: vi.fn(),
+    disposeTaskViews: vi.fn(),
+    publishRuntimeStatus: vi.fn(),
+    observeLocalRuntime: fixture.observeLocalRuntime,
+    spawn:
+      fixture.spawn as unknown as PreviewRuntimePorts<PreviewRuntimeReady>["spawn"],
+    setTimeout,
+    clearTimeout,
+    env: fixture.process.env,
+    argv: fixture.process.argv,
+  });
 }
 
 it("selects private MCP, safe-open and renderer resources from actual callers", async () => {
@@ -173,7 +233,6 @@ it("starts the actual local runtime through private executable and Node IPC afte
     setTimeout,
     clearTimeout,
     runtimeStopping: false,
-    runtimeChild: null,
     runtime: null,
     runtimeState: "starting",
     runtimeError: null,
@@ -182,14 +241,13 @@ it("starts the actual local runtime through private executable and Node IPC afte
     demoMode: false,
     expectedTasks: [],
     readySchema: {
-      safeParse: (message: unknown) => ({ success: true, data: message }),
+      safeParse: (message: unknown) => ({
+        success: true as const,
+        data: message as PreviewRuntimeReady,
+      }),
     },
-    handleRuntimeExit: vi.fn(),
   };
-  await vm.runInNewContext(
-    `${stripTypeScriptTypes(declaration("startRuntime"))}; startRuntime()`,
-    admissionFixture(context),
-  );
+  await previewRuntime(context).start();
   expect(order).toEqual(["recheck", "spawn"]);
   expect(spawn.mock.calls[0]![0]).toBe(privateExecutable);
   expect(spawn.mock.calls[0]![1]).toEqual([
@@ -214,22 +272,23 @@ it("reports a native runtime spawn refusal without an unhandled process error", 
     setTimeout,
     clearTimeout,
     runtimeStopping: false,
-    runtimeChild: null,
     runtime: null,
     runtimeState: "starting",
     runtimeError: null,
     taskCountsBeforeRuntimeExit: null,
     activeDesktopIdentity: { runtimeIdentity: "controlled-runtime" },
     demoMode: false,
-    handleRuntimeExit: vi.fn(),
   };
-  await vm.runInNewContext(
-    `${stripTypeScriptTypes(declaration("startRuntime"))}; startRuntime()`,
-    admissionFixture(context),
-  );
+  const host = previewRuntime(context);
+  await host.start();
   expect(context.runtimeState).toBe("failed");
   expect(context.runtimeError).toBe("RUNTIME_PROCESS_NOT_STARTED");
-  expect(context.runtimeChild).toBeNull();
+  // The failed start released its child slot: once the owned lifetime is gone
+  // a second start is not refused as already owned and reaches spawn again.
+  expect(context.spawn).toHaveBeenCalledTimes(1);
+  context.ownedLocalRuntimes.clear();
+  await host.start();
+  expect(context.spawn).toHaveBeenCalledTimes(2);
 });
 
 it("refuses local-runtime dispatch on failed authenticated resource recheck", async () => {
@@ -243,12 +302,9 @@ it("refuses local-runtime dispatch on failed authenticated resource recheck", as
     spawn,
     runtimeStopping: false,
   };
-  await expect(
-    vm.runInNewContext(
-      `${stripTypeScriptTypes(declaration("startRuntime"))}; startRuntime()`,
-      admissionFixture(context),
-    ),
-  ).rejects.toThrow("INTEGRITY_CHANGED");
+  await expect(previewRuntime(context).start()).rejects.toThrow(
+    "INTEGRITY_CHANGED",
+  );
   expect(spawn).not.toHaveBeenCalled();
 });
 
@@ -336,18 +392,14 @@ it.each(["runtimeStopping", "quitInProgress", "installedUpdateAdmission"])(
       ),
       spawn,
       runtimeStopping: false,
-      runtimeChild: null,
     };
-    const original = vm.runInNewContext(
-      `${stripTypeScriptTypes(declaration("startRuntime"))}; startRuntime()`,
-      admissionFixture(context),
-    );
+    const original = previewRuntime(context).start();
     await reached.promise;
     Object.assign(context, { [flag]: true });
     release.resolve();
     await original;
     expect(spawn).not.toHaveBeenCalled();
-    expect(context.runtimeChild).toBeNull();
+    expect(context.ownedLocalRuntimes.size).toBe(0);
   },
 );
 
@@ -362,10 +414,7 @@ it.each(["quitInProgress", "installedUpdateAdmission"])(
       runtimeStopping: true,
       spawn,
     };
-    await vm.runInNewContext(
-      `${stripTypeScriptTypes(declaration("startRuntime"))}; startRuntime()`,
-      admissionFixture(context),
-    );
+    await previewRuntime(context).start();
     expect(recheck).not.toHaveBeenCalled();
     expect(spawn).not.toHaveBeenCalled();
     expect(context.runtimeStopping).toBe(true);
