@@ -77,6 +77,7 @@ import {
   createConnectorStart,
   reportConnectorTransport,
 } from "../../../apps/desktop/connector/start";
+import { createTaskPersist } from "../../../apps/desktop/task/persist";
 import { connectorSupervisor } from "../../../apps/desktop/connector/supervisor";
 import { createCoreReporters } from "../../../apps/desktop/core/report";
 import { startGoCore } from "../../../apps/desktop/core/start";
@@ -306,11 +307,7 @@ import {
 import { SavedChatBrowser } from "./saved-chat-browser";
 import { startSavedChatBridge } from "./saved-chat-bridge";
 import { savedChatPreviewQualified } from "./saved-chat-preview-admission";
-import {
-  PrivateLiveTaskStore,
-  type LiveTaskStoreRecord,
-  type StoredLiveTask,
-} from "./live-task-store";
+import { PrivateLiveTaskStore } from "./live-task-store";
 import { RunReadonlyComputerAction } from "../../modules/computer/app/service/run-readonly-computer-action";
 import {
   createParticipantAuthority,
@@ -1688,14 +1685,7 @@ function setLiveTaskLifecycle(
 // one this call site runs. What stays here is what only `main.ts` can do:
 // publish the surface and surface a persistence failure.
 async function markLiveTaskRunningDurable(taskId: string): Promise<boolean> {
-  return liveTaskRegistry.markRunningDurable(
-    taskId,
-    () => persistLiveTaskState(),
-    {
-      onPublish: () => publishTasksState(),
-      onPersistFailure: () => surfaceLiveTaskPersistenceFailure(taskId),
-    },
-  );
+  return taskPersist().markRunningDurable(taskId);
 }
 
 function chatGptTaskAdmissionReady(): boolean {
@@ -1710,28 +1700,8 @@ function chatGptTaskAdmissionReady(): boolean {
   );
 }
 
-function storedLiveTaskState(): Readonly<{
-  revision: number;
-  tasks: StoredLiveTask[];
-}> {
-  const snapshot = liveTaskRegistry.snapshot();
-  return {
-    revision: snapshot.revision,
-    tasks: snapshot.tasks.map((task) => ({
-      ...task,
-      provider: "chatgpt" as const,
-      conversationUrl: liveTaskConversationUrls.get(task.taskId) ?? null,
-    })),
-  };
-}
-
 function persistLiveTaskState(): Promise<void> {
-  const store = liveTaskStore;
-  if (!store) return Promise.reject(new Error("LIVE_TASK_STATE_UNAVAILABLE"));
-  const state = storedLiveTaskState();
-  const write = liveTaskPersistence.then(() => store.save(state));
-  liveTaskPersistence = write.catch(() => undefined);
-  return write;
+  return taskPersist().persist();
 }
 
 function createManagedChatGptRoute(options: ChatGptRouteOptions): ChatGptRoute {
@@ -2276,83 +2246,7 @@ async function reconcileContextAfterRestart(): Promise<void> {
 }
 
 async function initializeLiveTaskState(): Promise<void> {
-  let e2eSaveAttempts = 0;
-  const e2eSuccessfulSaves =
-    process.env.FAROL_E2E === "1"
-      ? process.env.FAROL_E2E_LIVE_TASK_SAVE_SUCCESSES
-      : undefined;
-  const store = new PrivateLiveTaskStore(
-    { root: statePaths().liveTasks },
-    e2eSuccessfulSaves === undefined
-      ? {}
-      : {
-          beforeCommit: async () => {
-            const successfulSaves = Number(e2eSuccessfulSaves);
-            if (!Number.isSafeInteger(successfulSaves) || successfulSaves < 0) {
-              throw new Error("LIVE_TASK_E2E_SAVE_FAULT_INVALID");
-            }
-            e2eSaveAttempts += 1;
-            if (e2eSaveAttempts > successfulSaves) {
-              throw new Error("LIVE_TASK_E2E_SAVE_FAULT");
-            }
-          },
-        },
-  );
-  const stagedRoutes = new Map<string, ChatGptRoute>();
-  const stagedConversationUrls = new Map<string, string | null>();
-  let record: LiveTaskStoreRecord | null;
-  try {
-    record = await store.load();
-  } catch {
-    liveTaskStore = null;
-    return;
-  }
-  liveTaskStore = store;
-  if (!record) return;
-
-  let reconciled = false;
-  try {
-    const tasks = record.tasks.map(({ conversationUrl, ...task }) => {
-      stagedConversationUrls.set(task.taskId, conversationUrl);
-      const lifecycle =
-        task.lifecycle === "running" ? "outcome_unknown" : task.lifecycle;
-      reconciled ||= lifecycle !== task.lifecycle;
-      stagedRoutes.set(
-        task.taskId,
-        createLiveChatGptRoute(
-          task.taskId,
-          task.label,
-          conversationUrl ?? chatGptHomeUrl,
-        ),
-      );
-      return { ...task, lifecycle };
-    });
-    liveTaskRegistry.restore({
-      revision: record.revision + (reconciled ? 1 : 0),
-      tasks,
-    });
-    liveTaskRegistryRestored = true;
-    for (const [taskId, route] of stagedRoutes) {
-      liveTaskRoutes.set(taskId, route);
-    }
-    for (const [taskId, conversationUrl] of stagedConversationUrls) {
-      liveTaskConversationUrls.set(taskId, conversationUrl);
-    }
-    selectedTaskId = tasks[0]?.taskId ?? "";
-  } catch {
-    for (const route of stagedRoutes.values()) route.dispose();
-    liveTaskStore = null;
-    liveTaskConversationUrls.clear();
-    return;
-  }
-
-  if (reconciled) {
-    try {
-      await persistLiveTaskState();
-    } catch {
-      liveTaskStore = null;
-    }
-  }
+  return taskPersist().initialize();
 }
 
 async function openLiveTaskSurface(taskId: string): Promise<boolean> {
@@ -4813,6 +4707,36 @@ function connectorStart() {
   }));
 }
 let connectorStartCache: ReturnType<typeof createConnectorStart> | null = null;
+
+function taskPersist() {
+  return (taskPersistCache ??= createTaskPersist({
+    liveTaskStore: () => liveTaskStore,
+    setLiveTaskStore: (value) => {
+      liveTaskStore = value;
+    },
+    liveTaskPersistence: () => liveTaskPersistence,
+    setLiveTaskPersistence: (value) => {
+      liveTaskPersistence = value;
+    },
+    setLiveTaskRegistryRestored: (value) => {
+      liveTaskRegistryRestored = value;
+    },
+    setSelectedTaskId: (value) => {
+      selectedTaskId = value;
+    },
+    chatGptHomeUrl: () => chatGptHomeUrl,
+    liveTaskRegistry,
+    liveTaskRoutes,
+    liveTaskConversationUrls,
+    statePaths,
+    createLiveChatGptRoute,
+    openStore: (root, hooks) => new PrivateLiveTaskStore({ root }, hooks),
+    publishTasksState,
+    surfaceLiveTaskPersistenceFailure,
+    env: process.env,
+  }));
+}
+let taskPersistCache: ReturnType<typeof createTaskPersist> | null = null;
 
 function connectorCheck() {
   return (connectorCheckCache ??= createConnectorCheck({
