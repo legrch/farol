@@ -82,6 +82,7 @@ import {
   type ProductAgentSession,
 } from "../../../apps/desktop/task/agent";
 import { createTaskCommands } from "../../../apps/desktop/task/command";
+import { createChatGptSession } from "../../../apps/desktop/chat/session";
 import { createTaskPersist } from "../../../apps/desktop/task/persist";
 import { createTaskRoutes } from "../../../apps/desktop/task/route";
 import { connectorSupervisor } from "../../../apps/desktop/connector/supervisor";
@@ -2546,50 +2547,23 @@ async function codexHostProcessHomePath(): Promise<string> {
 
 function chatGptConversationState():
   "new" | "retained" | "review_required" | "unavailable" {
-  if (!chatGptConversationStore) return "unavailable";
-  if (chatGptConversation?.state === "retained") return "retained";
-  if (chatGptConversation?.state === "unresolved") return "review_required";
-  return "new";
+  return chatGptSession().conversationState();
 }
 
 function chatGptConversationAdmissionFailure(): ProductConfigurationResult | null {
-  if (goReadonlyConversation || directChatStart)
-    return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
-  if (!chatGptConversationStore) {
-    return configurationFailure("CHATGPT_CONVERSATION_STATE_FAILED");
-  }
-  if (chatGptConversation?.state === "unresolved") {
-    return configurationFailure("CHATGPT_CONVERSATION_REVIEW_REQUIRED");
-  }
-  return null;
+  return chatGptSession().admissionFailure();
 }
 
 function chatGptConversationContinuity():
   "retained" | "not_observed" | "review_required" | "unavailable" {
-  const state = chatGptConversationState();
-  return state === "new" ? "not_observed" : state;
+  return chatGptSession().continuity();
 }
-
-const chatGptAppPreSubmitCodes = new Set([
-  "CHATGPT_APP_SELECTION_MISSING",
-  "CHATGPT_APP_SELECTION_AMBIGUOUS",
-  "CHATGPT_APP_SELECTION_CONFLICT",
-  "CHATGPT_APP_SELECTION_LOST",
-  "CHATGPT_COMPOSER_DRAFT_PRESENT",
-]);
 
 function chatGptAppPreSubmitObservation(code: string | null) {
-  if (code === null || !chatGptAppPreSubmitCodes.has(code)) return null;
-  return {
-    state: "authenticated" as const,
-    profile: "chatgpt.app-partition/1",
-    runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
-    buildId: buildIdentity.buildId,
-    protocol: "chatgpt-page-app-binding-block/1",
-  };
+  return chatGptSession().preSubmitObservation(code);
 }
 
-async function retainChatGptConversation(
+function retainChatGptConversation(
   operationId: string,
   taskState:
     | "completed"
@@ -2597,63 +2571,15 @@ async function retainChatGptConversation(
     | "failed_before_submit"
     | "outcome_unknown",
 ): Promise<"retained" | "not_observed" | "review_required" | "unavailable"> {
-  if (
-    taskState === "not_authenticated" ||
-    taskState === "failed_before_submit"
-  ) {
-    return chatGptConversationContinuity();
-  }
-  if (!chatGptConversationStore || !chatGptRoute) return "unavailable";
-  const conversationUrl = chatGptRoute.currentConversationUrl();
-  try {
-    if (conversationUrl === null) {
-      await chatGptConversationStore.markUnresolved(operationId);
-      chatGptConversation = await chatGptConversationStore.load();
-      return "review_required";
-    }
-    await chatGptConversationStore.retain({ operationId, conversationUrl });
-    chatGptConversation = await chatGptConversationStore.load();
-    return "retained";
-  } catch {
-    chatGptConversationStore = null;
-    chatGptConversation = null;
-    return "unavailable";
-  }
+  return chatGptSession().retain(operationId, taskState);
 }
 
 function chatGptJournalObservation(result: ChatGptTaskJournalResult) {
-  if (result.state === "completed") {
-    return {
-      state: "authenticated" as const,
-      profile: "chatgpt.app-partition/1",
-      runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
-      buildId: buildIdentity.buildId,
-      protocol: "chatgpt-page-task-recovery/1",
-    };
-  }
-  if (result.state === "not_authenticated") {
-    return { state: "signed_out" as const };
-  }
-  if (result.state === "outcome_unknown") {
-    return { state: "outcome_unknown" as const };
-  }
-  const bindingBlock = chatGptAppPreSubmitObservation(result.code);
-  if (bindingBlock !== null) return bindingBlock;
-  return result.code === "CHATGPT_PAGE_UNREACHABLE"
-    ? { state: "unreachable" as const }
-    : { state: "unsupported" as const };
+  return chatGptSession().journalObservation(result);
 }
 
-async function discardPreparedChatGptTask(
-  operationId: string,
-): Promise<boolean> {
-  if (!chatGptTaskJournal) return false;
-  try {
-    await chatGptTaskJournal.discardPrepared(operationId);
-    return true;
-  } catch {
-    return false;
-  }
+function discardPreparedChatGptTask(operationId: string): Promise<boolean> {
+  return chatGptSession().discardPrepared(operationId);
 }
 
 async function withdrawGoReadonlyAdmission(
@@ -2692,70 +2618,14 @@ function discardPreparedReadonlyTask(
   return result;
 }
 
-async function selectedChatGptAttachmentPaths(): Promise<
+function selectedChatGptAttachmentPaths(): Promise<
   readonly string[] | "cancelled" | "invalid"
 > {
-  if (process.env.FAROL_E2E === "1") {
-    try {
-      const parsed = z
-        .array(z.string().refine((value) => path.isAbsolute(value)))
-        .min(1)
-        .max(4)
-        .safeParse(
-          JSON.parse(process.env.FAROL_E2E_ATTACHMENTS ?? "null") as unknown,
-        );
-      return parsed.success ? parsed.data : "invalid";
-    } catch {
-      return "invalid";
-    }
-  }
-  if (!window) return "invalid";
-  const selected = await dialog.showOpenDialog(window, {
-    title: "Choose up to four attachments",
-    buttonLabel: "Review Attachments",
-    properties: ["openFile", "multiSelections"],
-    filters: [
-      {
-        name: "Supported images and documents",
-        extensions: ["png", "jpg", "jpeg", "webp", "pdf", "txt", "md"],
-      },
-    ],
-    securityScopedBookmarks: false,
-  });
-  if (selected.canceled) return "cancelled";
-  if (selected.filePaths.length < 1 || selected.filePaths.length > 4) {
-    return "invalid";
-  }
-  return selected.filePaths;
+  return chatGptSession().selectedAttachmentPaths();
 }
 
 function attachmentStagingFailure(error: unknown): ProductConfigurationResult {
-  const code = error instanceof Error ? error.message : "";
-  if (code === "ATTACHMENT_TYPE_UNSUPPORTED") {
-    return configurationFailure("CHATGPT_ATTACHMENT_TYPE_UNSUPPORTED");
-  }
-  if (
-    code === "ATTACHMENT_TOO_LARGE" ||
-    code === "ATTACHMENT_TOTAL_TOO_LARGE"
-  ) {
-    return configurationFailure("CHATGPT_ATTACHMENT_TOO_LARGE");
-  }
-  if (
-    code === "ATTACHMENT_SOURCE_MISSING" ||
-    code === "ATTACHMENT_REFERENCE_MISSING" ||
-    code === "ATTACHMENT_REFERENCE_CHANGED"
-  ) {
-    return configurationFailure("CHATGPT_ATTACHMENT_REFERENCE_MISSING");
-  }
-  if (
-    code === "ATTACHMENT_SELECTION_INVALID" ||
-    code === "ATTACHMENT_DUPLICATE_NAME" ||
-    code === "ATTACHMENT_EMPTY" ||
-    code === "ATTACHMENT_SOURCE_UNSAFE"
-  ) {
-    return configurationFailure("CHATGPT_ATTACHMENT_SELECTION_INVALID");
-  }
-  return configurationFailure("CHATGPT_ATTACHMENT_STAGING_FAILED");
+  return chatGptSession().attachmentStagingFailure(error);
 }
 
 // The device and inode a folder has now, so its approval can refuse another
@@ -3692,6 +3562,33 @@ function taskRoutes() {
 }
 let taskRoutesCache: ReturnType<typeof createTaskRoutes<ChatGptRoute>> | null =
   null;
+
+function chatGptSession() {
+  return (chatGptSessionCache ??=
+    createChatGptSession<ProductConfigurationResult>({
+      chatGptConversationStore: () => chatGptConversationStore,
+      setChatGptConversationStore: (value) => {
+        chatGptConversationStore = value;
+      },
+      chatGptConversation: () => chatGptConversation,
+      setChatGptConversation: (value) => {
+        chatGptConversation = value;
+      },
+      chatGptRoute: () => chatGptRoute,
+      goReadonlyConversation: () => goReadonlyConversation,
+      directChatStart: () => directChatStart,
+      chatGptTaskJournal: () => chatGptTaskJournal,
+      window: () => window,
+      activeDesktopIdentity,
+      buildIdentity,
+      configurationFailure,
+      showOpenDialog: (owner, options) => dialog.showOpenDialog(owner, options),
+      env: process.env,
+    }));
+}
+let chatGptSessionCache: ReturnType<
+  typeof createChatGptSession<ProductConfigurationResult>
+> | null = null;
 
 function taskCommands() {
   return (taskCommandsCache ??= createTaskCommands<ProductTaskCommandResult>({
