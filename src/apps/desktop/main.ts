@@ -77,6 +77,10 @@ import {
   createConnectorStart,
   reportConnectorTransport,
 } from "../../../apps/desktop/connector/start";
+import {
+  createProductAgentHost,
+  type ProductAgentSession,
+} from "../../../apps/desktop/task/agent";
 import { createTaskCommands } from "../../../apps/desktop/task/command";
 import { createTaskPersist } from "../../../apps/desktop/task/persist";
 import { createTaskRoutes } from "../../../apps/desktop/task/route";
@@ -171,7 +175,7 @@ import {
   type LocalRuntimeLifetime,
 } from "./local-runtime-lifetime";
 import os from "node:os";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { TUNNEL_CLIENT } from "../../../apps/desktop/tunnel-client-contract";
 import { setTimeout as delay } from "node:timers/promises";
@@ -183,10 +187,7 @@ import { SharedCodexProxyHost } from "../../modules/chat/infra/native/shared-cod
 import { PersistentChatGptHandoff } from "../../modules/chat/app/service/persistent-chatgpt-handoff";
 import { PrivateSavedChatJournal } from "../../modules/chat/infra/repo/private-saved-chat-journal";
 import { Sha256SavedChatDigester } from "../../modules/chat/infra/native/sha256-saved-chat-digester";
-import {
-  CHATGPT_MODEL_ID,
-  FAROL_PROVIDER_ID,
-} from "../../pkg/model-route/contract";
+import { FAROL_PROVIDER_ID } from "../../pkg/model-route/contract";
 import { ClientEventSchema } from "../../modules/chat/contract/client-event";
 import type { ContextBinding } from "../../modules/chat/domain/context-continuity";
 import { buildHostCompactionHandoff } from "../../modules/chat/infra/client/host-compaction-codec";
@@ -397,8 +398,6 @@ import {
 } from "./task-context-cleanup";
 import { createRouteBTaskLifecycle } from "./route-b-task-lifecycle";
 import { TaskMutationGate, underTaskMutation } from "./task-mutation-gate";
-import { productAgentOpenRefusal } from "./product-agent-open-refusal";
-import { productAgentSessionKey } from "./product-agent-session-key";
 import { runCodexChatGptHostRoute } from "./codex-chatgpt-host-route";
 import { runRouteBHostCheck } from "./route-b-host-check";
 import {
@@ -447,26 +446,12 @@ import { CodexNativeAgentHost } from "../../modules/agent/infra/native/codex-nat
 import { PrivateAssignmentStore } from "../../modules/agent/infra/repo/private-assignment-store";
 import { AcknowledgeAgentResult } from "../../modules/agent/app/service/acknowledge-agent-result";
 import { CancelAgentAssignment } from "../../modules/agent/app/service/cancel-agent-assignment";
-import type { AgentHost } from "../../modules/agent/app/port/agent-host";
-import type { AgentRunReceipt } from "../../modules/agent/app/service/run-agent-assignment";
 import { runProductAgentAssignment } from "./product-agent-assignment";
-import { ProductAgentSessionReservation } from "./product-agent-session-reservation";
 import {
   PrivateProductAgentStore,
   type ProductAgentInput,
 } from "./product-agent-store";
-import {
-  productAgentContext,
-  productAgentHostContext,
-  productAgentInputMatchesContext,
-  type ProductAgentContext,
-  type ProductAgentHostContext,
-} from "./product-agent-context";
-import {
-  productAgentSessionExpiryVerdict,
-  persistedProductAgentExpiryVerdict,
-  productAgentExpiryRecoveryVerdict,
-} from "./product-agent-expiry";
+import { type ProductAgentContext } from "./product-agent-context";
 import { PrivateConnectorKeyStore } from "./connector-key-store";
 import { FarolModelLifecycle } from "./farol-model-lifecycle";
 import {
@@ -1217,25 +1202,8 @@ let activeCodexAgentCheck: ActiveCodexAgentCheck | null = null;
 const hostCheckClients = new Set<
   Awaited<ReturnType<typeof launchCodexAppServer>>
 >();
-type ActiveProductAgentSession = {
-  taskId: string;
-  key: string;
-  input: ProductAgentInput;
-  assignments: PrivateAssignmentStore;
-  client: Awaited<ReturnType<typeof launchCodexAppServer>>;
-  host: CodexNativeAgentHost;
-  expiryTimer: NodeJS.Timeout | null;
-  cancellation: Promise<ProductTaskCommandResult> | null;
-};
-type ProductAgentRoute =
-  | Readonly<{ model: "gpt-6-astra"; effort?: "low" }>
-  | Readonly<{ model: typeof CHATGPT_MODEL_ID; effort: "low" }>;
-const legacyProductAgentCleanupRoute: ProductAgentRoute = {
-  model: "gpt-6-astra",
-};
+type ActiveProductAgentSession = ProductAgentSession<ProductTaskCommandResult>;
 let activeProductAgentSession: ActiveProductAgentSession | null = null;
-const productAgentSessionReservation =
-  new ProductAgentSessionReservation<ActiveProductAgentSession>();
 let persistedProductAgentExpiry: Readonly<{
   taskId: string;
   timer: NodeJS.Timeout;
@@ -2217,658 +2185,55 @@ async function openLiveTaskSurface(taskId: string): Promise<boolean> {
 }
 
 function productAgentCapabilityAvailable(): boolean {
-  if (!FAROL_BACKED_PRODUCT_AGENT_ENABLED) return false;
-  const snapshot = configuration?.snapshot();
-  if (snapshot?.status !== "ready") return false;
-  const workspaceId = snapshot.settings.setup.computer.verified?.workspaceId;
-  return workspaceId
-    ? productAgentContext(
-        workspaceId,
-        snapshot.settings,
-        productAgentStore,
-        buildIdentity.buildId,
-      ) !== null
-    : false;
+  return productAgentHost().productAgentCapabilityAvailable();
 }
 
-async function openProductAgentSession(
-  input: ProductAgentInput,
-  context: ProductAgentHostContext,
-  route: ProductAgentRoute,
-  scheduleExpiry = true,
-): Promise<ActiveProductAgentSession> {
-  const key = productAgentSessionKey(input, scheduleExpiry);
-  if (activeProductAgentSession) {
-    if (
-      activeProductAgentSession.taskId === input.taskId &&
-      activeProductAgentSession.key === key
-    ) {
-      return activeProductAgentSession;
-    }
-    throw new Error("PRODUCT_AGENT_SESSION_BUSY");
-  }
-  return productAgentSessionReservation.open(key, async () => {
-    // Same reservation as the native check: from the settings this session
-    // was admitted with until it is active; stale settings are refused.
-    const agentAdmission = authorityTransitions.tryReserve("agent-admission");
-    if (!agentAdmission) throw new Error("AUTHORITY_CHANGE_IN_PROGRESS");
-    try {
-      return await openAdmittedProductAgentSession(
-        input,
-        context,
-        route,
-        key,
-        scheduleExpiry,
-      );
-    } finally {
-      agentAdmission.release();
-    }
-  });
-}
-
-async function openAdmittedProductAgentSession(
-  input: ProductAgentInput,
-  context: ProductAgentHostContext,
-  route: ProductAgentRoute,
-  key: string,
-  scheduleExpiry: boolean,
-): Promise<ActiveProductAgentSession> {
-  {
-    const current = configuration?.snapshot();
-    if (
-      current?.status !== "ready" ||
-      current.settings.revision !== context.settings.revision
-    ) {
-      throw new Error("AUTHORITY_CHANGE_IN_PROGRESS");
-    }
-    if (activeProductAgentSession) {
-      if (
-        activeProductAgentSession.taskId === input.taskId &&
-        activeProductAgentSession.key === key
-      ) {
-        return activeProductAgentSession;
-      }
-      throw new Error("PRODUCT_AGENT_SESSION_BUSY");
-    }
-    const probe = await probeCodexHost({
-      executablePath: context.host.executablePath,
-      scratchRoot: statePaths().codexHostProbe,
-    });
-    if (
-      probe.executableSha256 !== input.executableSha256 ||
-      probe.schemaSha256 !== input.schemaSha256 ||
-      probe.version !== context.host.version ||
-      probe.protocol !== context.host.protocol
-    ) {
-      throw new Error("PRODUCT_AGENT_HOST_CHANGED");
-    }
-    const runtimeRoot = await codexHostRuntimeRoot();
-    const client = await launchCodexAppServer({
-      executablePath: context.host.executablePath,
-      cwd: runtimeRoot,
-      homePath: await codexHostProcessHomePath(),
-      tempPath: app.getPath("temp"),
-      clientVersion: buildIdentity.version,
-      toolProfile: "native-agent",
-      ...(await codexHostHomeOption()),
-    });
-    try {
-      const computer = new CodexAgentWorkspaceProbe(
-        context.settings,
-        nativeWorkspace,
-        () => Date.now(),
-      );
-      const host = new CodexNativeAgentHost(
-        client,
-        {
-          ...route,
-          runtimeRoot,
-          spawnTimeoutMs: 120_000,
-          waitTimeoutMs: 250,
-          pollIntervalMs: 25,
-          nonce: randomUUID,
-          now: () => Date.now(),
-        },
-        computer,
-        computer,
-      );
-      const session: ActiveProductAgentSession = {
-        taskId: input.taskId,
-        key,
-        input,
-        assignments: new PrivateAssignmentStore({
-          root: statePaths().codexAgentAssignments,
-        }),
-        client,
-        host,
-        expiryTimer: null,
-        cancellation: null,
-      };
-      activeProductAgentSession = session;
-      if (scheduleExpiry) armProductAgentExpiry(session);
-      return session;
-    } catch (error) {
-      await client.close().catch(() => undefined);
-      throw error;
-    }
-  }
-}
-
-async function closeProductAgentSession(
-  session: ActiveProductAgentSession,
-): Promise<boolean> {
-  if (session.expiryTimer) {
-    clearTimeout(session.expiryTimer);
-    session.expiryTimer = null;
-  }
-  session.host.dispose();
-  let closed = true;
-  try {
-    await session.client.close();
-  } catch {
-    closed = false;
-  } finally {
-    if (activeProductAgentSession === session) {
-      activeProductAgentSession = null;
-    }
-  }
-  return closed;
-}
-
-function productAgentSummary(
-  input: ProductAgentInput,
-  receipt: Pick<
-    AgentRunReceipt,
-    "assignment" | "parentDelivery" | "resultRef" | "workspaceEnforcement"
-  > &
-    Partial<Pick<AgentRunReceipt, "observation">>,
-): ProductTaskAgent {
-  const phase = receipt.assignment.phase;
-  if (phase === "prepared") {
-    throw new Error("PRODUCT_AGENT_STATE_INVALID");
-  }
-  return {
-    assignmentBindingSha256: productAgentAssignmentBinding(input),
-    phase,
-    workspaceId: input.workspaceId,
-    parentDelivery: receipt.parentDelivery,
-    workspaceEnforcement: receipt.workspaceEnforcement ?? "not_applicable",
-    resultAvailable: receipt.resultRef !== null,
-    ...(phase === "running" && receipt.observation === "unavailable"
-      ? { observation: "unavailable" as const }
-      : {}),
-  };
-}
-
-async function persistProductAgentSummary(
+function persistProductAgentSummary(
   taskId: string,
   summary: ProductTaskAgent,
 ): Promise<boolean> {
-  if (!liveTaskRegistry.setAgent(taskId, summary)) return false;
-  await persistLiveTaskState();
-  publishTasksState();
-  return true;
-}
-
-function productAgentIdentity(input: ProductAgentInput) {
-  return {
-    assignmentId: input.assignmentId,
-    ownerId: "owner-desktop",
-    sessionId: input.sessionId,
-    taskId: input.taskId,
-    taskEpoch: input.taskEpoch,
-    generation: input.generation,
-  };
-}
-
-function productAgentUnknownSummary(
-  input: ProductAgentInput,
-): ProductTaskAgent {
-  return {
-    assignmentBindingSha256: productAgentAssignmentBinding(input),
-    phase: "outcome_unknown",
-    workspaceId: input.workspaceId,
-    parentDelivery: "not_applicable",
-    workspaceEnforcement: "not_applicable",
-    resultAvailable: false,
-  };
+  return productAgentHost().persistProductAgentSummary(taskId, summary);
 }
 
 function productAgentUnknownSummaryFromTask(
   agent: ProductTaskAgent,
 ): ProductTaskAgent {
-  return {
-    ...(agent.assignmentBindingSha256
-      ? { assignmentBindingSha256: agent.assignmentBindingSha256 }
-      : {}),
-    phase: "outcome_unknown",
-    workspaceId: agent.workspaceId,
-    parentDelivery: "not_applicable",
-    workspaceEnforcement: "not_applicable",
-    resultAvailable: false,
-  };
+  return productAgentHost().productAgentUnknownSummaryFromTask(agent);
 }
 
 function productAgentAssignmentBinding(input: ProductAgentInput): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify([
-        "farol-product-agent-binding-v1",
-        input.taskId,
-        input.sessionId,
-        input.assignmentId,
-      ]),
-    )
-    .digest("hex");
+  return productAgentHost().productAgentAssignmentBinding(input);
 }
 
 function productAgentAssignmentMatches(
   agent: ProductTaskAgent,
   input: ProductAgentInput,
 ): boolean {
-  return (
-    agent.assignmentBindingSha256 !== undefined &&
-    agent.assignmentBindingSha256 === productAgentAssignmentBinding(input)
-  );
+  return productAgentHost().productAgentAssignmentMatches(agent, input);
 }
 
-function armProductAgentExpiry(
-  session: ActiveProductAgentSession,
-  delayOverride?: number,
-): void {
-  if (persistedProductAgentExpiry?.taskId === session.taskId) {
-    clearTimeout(persistedProductAgentExpiry.timer);
-    persistedProductAgentExpiry = null;
-  }
-  if (session.expiryTimer) clearTimeout(session.expiryTimer);
-  session.expiryTimer = setTimeout(
-    () => {
-      session.expiryTimer = null;
-      const now = Date.now();
-      const verdict = productAgentSessionExpiryVerdict({
-        sessionIsActive: activeProductAgentSession === session,
-        taskPhase: liveTaskRegistry.get(session.taskId)?.agent?.phase,
-        mutationInFlight: taskMutations.inFlight(),
-        now,
-      });
-      if (verdict.action === "noop") return;
-      if (verdict.action === "reschedule") {
-        armProductAgentExpiry(session, verdict.atMs - now);
-        return;
-      }
-      const mutation = taskMutations.tryEnter();
-      if (!mutation) {
-        armProductAgentExpiry(session, 0);
-        return;
-      }
-      void cancelProductAgentSession(session).finally(() => {
-        mutation.release();
-      });
-    },
-    delayOverride ?? Math.max(0, session.input.expiresAt - Date.now()),
-  );
-  session.expiryTimer.unref?.();
+function recoverProductAgentExpiry(): Promise<void> {
+  return productAgentHost().recoverProductAgentExpiry();
 }
 
-function schedulePersistedProductAgentExpiry(
-  taskId: string,
-  input: ProductAgentInput,
-  delayOverride?: number,
-): void {
-  if (persistedProductAgentExpiry) {
-    clearTimeout(persistedProductAgentExpiry.timer);
-    persistedProductAgentExpiry = null;
-  }
-  const timer = setTimeout(
-    () => {
-      persistedProductAgentExpiry = null;
-      const task = liveTaskRegistry.get(taskId);
-      const now = Date.now();
-      const verdict = persistedProductAgentExpiryVerdict({
-        taskPhase: task?.agent?.phase,
-        mutationInFlight: taskMutations.inFlight(),
-        now,
-      });
-      if (verdict.action === "noop") return;
-      if (verdict.action === "reschedule") {
-        schedulePersistedProductAgentExpiry(taskId, input, verdict.atMs - now);
-        return;
-      }
-      // Unreachable in practice: `verdict.action === "expire"` only when
-      // `taskPhase === "running"`, which requires `task` to exist. The
-      // check narrows `task` for TypeScript rather than adding a new branch.
-      if (!task) return;
-      const mutation = taskMutations.tryEnter();
-      if (!mutation) {
-        schedulePersistedProductAgentExpiry(taskId, input, 0);
-        return;
-      }
-      void cancelProductAgentTask(task).finally(() => {
-        mutation.release();
-      });
-    },
-    delayOverride ?? Math.max(0, input.expiresAt - Date.now()),
-  );
-  timer.unref?.();
-  persistedProductAgentExpiry = { taskId, timer };
-}
-
-async function recoverProductAgentExpiry(): Promise<void> {
-  const task = liveTaskRegistry
-    .snapshot()
-    .tasks.find((candidate) => candidate.agent?.phase === "running");
-  let input: ProductAgentInput | null = null;
-  if (task && productAgentStore) {
-    try {
-      input = await productAgentStore.load(task.taskId);
-    } catch {
-      input = null;
-    }
-  }
-  const now = Date.now();
-  const verdict = productAgentExpiryRecoveryVerdict({
-    hasRunningTask: task !== undefined,
-    storeAvailable: productAgentStore !== null,
-    input,
-    assignmentMatches:
-      task !== undefined && input !== null
-        ? productAgentAssignmentMatches(task.agent!, input)
-        : false,
-    now,
-  });
-  if (verdict.action === "noop") return;
-  // Both remaining branches (`unknown` and `reschedule`) are only ever
-  // produced when `hasRunningTask` was true, which requires `task` to
-  // exist. The check narrows `task` for TypeScript rather than adding a new
-  // branch.
-  if (!task) return;
-  if (verdict.action === "unknown") {
-    await persistProductAgentSummary(
-      task.taskId,
-      productAgentUnknownSummaryFromTask(task.agent!),
-    ).catch(() => undefined);
-    return;
-  }
-  schedulePersistedProductAgentExpiry(task.taskId, input!, verdict.atMs - now);
-}
-
-async function performProductAgentCancellation(
-  session: ActiveProductAgentSession,
-): Promise<ProductTaskCommandResult> {
-  const cancelled = await new CancelAgentAssignment(
-    session.host,
-    session.assignments,
-  ).execute(productAgentIdentity(session.input));
-  const closed = await closeProductAgentSession(session);
-  if (!cancelled.ok || !closed) {
-    await persistProductAgentSummary(
-      session.taskId,
-      productAgentUnknownSummary(session.input),
-    ).catch(() => undefined);
-    return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
-  }
-  const receipt = cancelled.value;
-  const summary =
-    receipt.assignmentRetention === "durable"
-      ? productAgentSummary(session.input, receipt)
-      : productAgentUnknownSummary(session.input);
-  try {
-    if (!(await persistProductAgentSummary(session.taskId, summary))) {
-      return taskFailure("TASK_NOT_FOUND");
-    }
-  } catch {
-    return taskFailure("TASK_STATE_UNAVAILABLE");
-  }
-  if (receipt.assignmentRetention !== "durable") {
-    return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
-  }
-  if (receipt.assignment.phase === "cancelled") {
-    return taskSuccess(session.taskId);
-  }
-  if (receipt.assignment.phase === "completed") {
-    return taskFailure("AGENT_CANCEL_RACED_COMPLETION");
-  }
-  if (receipt.assignment.phase === "failed") {
-    return taskFailure("AGENT_ASSIGNMENT_FAILED");
-  }
-  return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
-}
-
-function cancelProductAgentSession(
-  session: ActiveProductAgentSession,
-): Promise<ProductTaskCommandResult> {
-  if (session.cancellation) return session.cancellation;
-  const cancellation = performProductAgentCancellation(session).finally(() => {
-    if (session.cancellation === cancellation) session.cancellation = null;
-  });
-  session.cancellation = cancellation;
-  return cancellation;
-}
-
-const unavailableProductAgentHost: AgentHost = {
-  async spawn() {
-    throw new Error("PRODUCT_AGENT_HOST_UNAVAILABLE");
-  },
-  async wait() {
-    throw new Error("PRODUCT_AGENT_HOST_UNAVAILABLE");
-  },
-  async cancel() {
-    throw new Error("PRODUCT_AGENT_HOST_UNAVAILABLE");
-  },
-};
-
-async function tombstoneUnavailableProductAgent(
-  input: ProductAgentInput,
-  assignments: PrivateAssignmentStore,
-): Promise<ProductTaskCommandResult> {
-  await new CancelAgentAssignment(
-    unavailableProductAgentHost,
-    assignments,
-  ).execute(productAgentIdentity(input));
-  await persistProductAgentSummary(
-    input.taskId,
-    productAgentUnknownSummary(input),
-  ).catch(() => undefined);
-  return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
-}
-
-async function cancelProductAgentTask(
+function cancelProductAgentTask(
   task: ProductTask,
 ): Promise<ProductTaskCommandResult> {
-  const runningAgent = task.agent?.phase === "running" ? task.agent : null;
-  if (!runningAgent) return taskFailure("TASK_NOT_RUNNING");
-  if (persistedProductAgentExpiry?.taskId === task.taskId) {
-    clearTimeout(persistedProductAgentExpiry.timer);
-    persistedProductAgentExpiry = null;
-  }
-  if (activeProductAgentSession) {
-    if (activeProductAgentSession.taskId !== task.taskId) {
-      return taskFailure("AGENT_ALREADY_RUNNING");
-    }
-    if (
-      !productAgentAssignmentMatches(
-        runningAgent,
-        activeProductAgentSession.input,
-      )
-    ) {
-      await persistProductAgentSummary(
-        task.taskId,
-        productAgentUnknownSummaryFromTask(runningAgent),
-      ).catch(() => undefined);
-      await closeProductAgentSession(activeProductAgentSession);
-      return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
-    }
-    return cancelProductAgentSession(activeProductAgentSession);
-  }
-
-  let input: ProductAgentInput | null;
-  try {
-    input = (await productAgentStore?.load(task.taskId)) ?? null;
-  } catch {
-    await persistProductAgentSummary(
-      task.taskId,
-      productAgentUnknownSummaryFromTask(runningAgent),
-    ).catch(() => undefined);
-    return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
-  }
-  if (!input || !productAgentAssignmentMatches(runningAgent, input)) {
-    await persistProductAgentSummary(
-      task.taskId,
-      productAgentUnknownSummaryFromTask(runningAgent),
-    ).catch(() => undefined);
-    return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
-  }
-
-  const assignments = new PrivateAssignmentStore({
-    root: statePaths().codexAgentAssignments,
-  });
-  const hostContextSnapshot = configuration?.snapshot();
-  const context = productAgentHostContext(
-    input,
-    hostContextSnapshot?.status === "ready"
-      ? hostContextSnapshot.settings
-      : null,
-    buildIdentity.buildId,
-  );
-  if (!context) return tombstoneUnavailableProductAgent(input, assignments);
-  let session: ActiveProductAgentSession;
-  try {
-    // Existing Astra-backed assignments may only use this route for bounded
-    // cancellation and cleanup; new work can use only the qualified route
-    // selected by `farolBackedProductAgentRoute` above.
-    session = await openProductAgentSession(
-      input,
-      context,
-      legacyProductAgentCleanupRoute,
-      false,
-    );
-  } catch {
-    return tombstoneUnavailableProductAgent(input, assignments);
-  }
-  return cancelProductAgentSession(session);
+  return productAgentHost().cancelProductAgentTask(task);
 }
 
-async function executeProductAgent(
+function executeProductAgent(
   task: ProductTask,
   input: ProductAgentInput,
   context: ProductAgentContext,
   admission: "new" | "rejoin",
 ): Promise<ProductTaskCommandResult> {
-  const route = farolBackedProductAgentRoute();
-  if (!route) return taskFailure("AGENT_NOT_READY");
-  if (!productAgentInputMatchesContext(input, context, buildIdentity.buildId)) {
-    return taskFailure("AGENT_NOT_READY");
-  }
-  let session: ActiveProductAgentSession;
-  try {
-    session = await openProductAgentSession(input, context, route);
-  } catch (error) {
-    const refusal = productAgentOpenRefusal(admission, error);
-    if (refusal.record !== "none") {
-      await persistProductAgentSummary(task.taskId, {
-        assignmentBindingSha256: productAgentAssignmentBinding(input),
-        phase: refusal.record,
-        workspaceId: input.workspaceId,
-        parentDelivery: "not_applicable",
-        workspaceEnforcement: "not_applicable",
-        resultAvailable: false,
-      }).catch(() => undefined);
-    }
-    return taskFailure(refusal.failure);
-  }
-  const assignments = session.assignments;
-  let result;
-  try {
-    result = await runProductAgentAssignment(
-      context.settings,
-      task,
-      input,
-      {
-        host: session.host,
-        assignments,
-        now: () => Date.now(),
-      },
-      admission,
-    );
-  } catch {
-    await persistProductAgentSummary(task.taskId, {
-      assignmentBindingSha256: productAgentAssignmentBinding(input),
-      phase: "outcome_unknown",
-      workspaceId: input.workspaceId,
-      parentDelivery: "not_applicable",
-      workspaceEnforcement: "not_applicable",
-      resultAvailable: false,
-    }).catch(() => undefined);
-    await closeProductAgentSession(session);
-    return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
-  }
-  if (!result.ok) {
-    const rejoinUnavailable = admission === "rejoin";
-    await persistProductAgentSummary(task.taskId, {
-      assignmentBindingSha256: productAgentAssignmentBinding(input),
-      phase: rejoinUnavailable ? "outcome_unknown" : "failed",
-      workspaceId: input.workspaceId,
-      parentDelivery: "not_applicable",
-      workspaceEnforcement: "not_applicable",
-      resultAvailable: false,
-    }).catch(() => undefined);
-    await closeProductAgentSession(session);
-    return taskFailure(
-      rejoinUnavailable
-        ? "AGENT_REJOIN_UNAVAILABLE"
-        : "AGENT_ASSIGNMENT_FAILED",
-    );
-  }
-  const receipt = result.value;
-  const summary = productAgentSummary(input, receipt);
-  try {
-    if (!(await persistProductAgentSummary(task.taskId, summary))) {
-      await closeProductAgentSession(session);
-      return taskFailure("TASK_NOT_FOUND");
-    }
-  } catch {
-    return taskFailure("TASK_STATE_UNAVAILABLE");
-  }
-  if (receipt.assignment.phase === "running") {
-    return taskSuccess(task.taskId);
-  }
-  await closeProductAgentSession(session);
-  if (receipt.assignment.phase === "outcome_unknown") {
-    return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
-  }
-  if (receipt.assignment.phase === "failed" || !receipt.resultRef) {
-    return taskFailure("AGENT_ASSIGNMENT_FAILED");
-  }
-  const assignment = receipt.assignment;
-  const acknowledged = await new AcknowledgeAgentResult(assignments).execute({
-    correlation: {
-      ...assignment.identity,
-      authorityId: assignment.authority.authorityId,
-      participantId: assignment.authority.participantId,
-      role: assignment.authority.role,
-      parentThreadId: assignment.parentThreadId!,
-      childId: assignment.childId!,
-      parentTurnId: assignment.parentTurnId!,
-      childTurnId: assignment.childTurnId!,
-      hostRole: assignment.hostRole,
-      delegationDigest: assignment.delegationDigest!,
-    },
-    parentParticipantId: assignment.authority.parentParticipantId,
-    resultRef: receipt.resultRef,
-  });
-  if (!acknowledged.ok) return taskFailure("AGENT_DELIVERY_FAILED");
-  try {
-    await persistProductAgentSummary(
-      task.taskId,
-      productAgentSummary(input, {
-        ...receipt,
-        parentDelivery: acknowledged.value.parentDelivery,
-      }),
-    );
-  } catch {
-    return taskFailure("AGENT_DELIVERY_FAILED");
-  }
-  return taskSuccess(task.taskId);
+  return productAgentHost().executeProductAgent(
+    task,
+    input,
+    context,
+    admission,
+  );
 }
 
 function runProductTaskCommand(
@@ -4388,6 +3753,55 @@ function taskCommands() {
 }
 let taskCommandsCache: ReturnType<
   typeof createTaskCommands<ProductTaskCommandResult>
+> | null = null;
+
+function productAgentHost() {
+  return (productAgentHostCache ??=
+    createProductAgentHost<ProductTaskCommandResult>({
+      taskFailure,
+      taskSuccess,
+      productAgentEnabled: FAROL_BACKED_PRODUCT_AGENT_ENABLED,
+      farolBackedProductAgentRoute: () => farolBackedProductAgentRoute(),
+      buildIdentity,
+      configuration: () => configuration,
+      productAgentStore: () => productAgentStore,
+      liveTaskRegistry,
+      taskMutations,
+      authorityTransitions,
+      activeProductAgentSession: () => activeProductAgentSession,
+      setActiveProductAgentSession: (value) => {
+        activeProductAgentSession = value;
+      },
+      persistedProductAgentExpiry: () => persistedProductAgentExpiry,
+      setPersistedProductAgentExpiry: (value) => {
+        persistedProductAgentExpiry = value;
+      },
+      persistLiveTaskState,
+      publishTasksState,
+      statePaths,
+      nativeWorkspace,
+      tempPath: () => app.getPath("temp"),
+      codexHostRuntimeRoot,
+      codexHostProcessHomePath,
+      codexHostHomeOption,
+      probeCodexHost,
+      launchCodexAppServer,
+      runProductAgentAssignment,
+      CodexNativeAgentHost,
+      CodexAgentWorkspaceProbe,
+      PrivateAssignmentStore,
+      CancelAgentAssignment,
+      AcknowledgeAgentResult,
+      randomUUID,
+      clock: () => Date.now(),
+      setTimer: (callback, delayMs) => setTimeout(callback, delayMs),
+      clearTimer: (timer) => {
+        clearTimeout(timer);
+      },
+    }));
+}
+let productAgentHostCache: ReturnType<
+  typeof createProductAgentHost<ProductTaskCommandResult>
 > | null = null;
 
 function connectorCheck() {
