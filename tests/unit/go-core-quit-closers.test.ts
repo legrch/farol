@@ -5,6 +5,7 @@ import { stripTypeScriptTypes } from "node:module";
 import { parse } from "@babel/parser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { goCoreQuitClosers } from "../../apps/desktop/go-core-quit-closers";
+import { createCell } from "../../apps/desktop/host/cell";
 import {
   createQuitDrain,
   drainOwnedChildren,
@@ -413,6 +414,10 @@ describe("actual MCP stop retains its admitted saved-chat lifetime", () => {
         operation(),
       ),
     };
+    const owner = {
+      saved: createCell<unknown>(originalBridge),
+      relay: createCell<unknown>(null),
+    };
     const context = vm.createContext({
       observeOperation,
       operationsStore: () => ({ record() {} }),
@@ -421,7 +426,7 @@ describe("actual MCP stop retains its admitted saved-chat lifetime", () => {
       drainComputerConnector,
       desktopGoCore: core,
       secureMcpConnectorRuntime: connector,
-      savedChatBridgeRuntime: originalBridge,
+      bridge: owner,
       computerMcpLifecycle: () => ({ beginStop, waitForStop, confirmStop }),
       installedUpdates: { close: async () => {} },
       pendingChatGptAttachmentTask: null,
@@ -435,7 +440,6 @@ describe("actual MCP stop retains its admitted saved-chat lifetime", () => {
       CONNECTOR_START_QUIT_BUDGET_MS: 8_000,
       modelLifecycle: null,
       routeBRuntime: null,
-      callerRelayRuntime: null,
       disposeChatGptRoutes() {},
       disposeTaskViews() {},
       ownedLocalRuntimes: new Map(),
@@ -460,6 +464,7 @@ describe("actual MCP stop retains its admitted saved-chat lifetime", () => {
     ) => Promise<void>;
     return {
       context,
+      bridge: owner,
       collect,
       stopCurrent,
       stop,
@@ -501,19 +506,17 @@ describe("actual MCP stop retains its admitted saved-chat lifetime", () => {
       const replacement = bridge();
       const h = harness(original);
       const closers = h.collect({ deadlineAt: Date.now() + 1_000 });
-      if (replacementAt === "before-dispatch")
-        h.context.savedChatBridgeRuntime = replacement;
+      if (replacementAt === "before-dispatch") h.bridge.saved.set(replacement);
       const receipt = drainOwnedChildren(closers, 1_000);
       await vi.waitFor(() => expect(h.waitForStop).toHaveBeenCalledTimes(1));
-      if (replacementAt === "pending-mcp-stop")
-        h.context.savedChatBridgeRuntime = replacement;
+      if (replacementAt === "pending-mcp-stop") h.bridge.saved.set(replacement);
       h.stop.resolve();
       await expect(receipt).resolves.toEqual({
         drained: true,
         unconfirmed: [],
       });
       expect(replacement.close).not.toHaveBeenCalled();
-      expect(h.context.savedChatBridgeRuntime).toBe(replacement);
+      expect(h.bridge.saved.get()).toBe(replacement);
       expect(original.close).toHaveBeenCalledTimes(2);
       expect(original.close.mock.results[0]?.value).toBe(
         original.close.mock.results[1]?.value,
@@ -578,12 +581,12 @@ describe("actual MCP stop retains its admitted saved-chat lifetime", () => {
     const h = harness(original);
     const stopping = h.stopCurrent();
     await vi.waitFor(() => expect(h.waitForStop).toHaveBeenCalledTimes(1));
-    h.context.savedChatBridgeRuntime = replacement;
+    h.bridge.saved.set(replacement);
     h.stop.resolve();
     await stopping;
     expect(original.close).toHaveBeenCalledTimes(1);
     expect(replacement.close).not.toHaveBeenCalled();
-    expect(h.context.savedChatBridgeRuntime).toBe(replacement);
+    expect(h.bridge.saved.get()).toBe(replacement);
   });
 
   it("preserves an explicitly absent bridge instead of falling back to a mutable global", async () => {
@@ -593,7 +596,7 @@ describe("actual MCP stop retains its admitted saved-chat lifetime", () => {
     h.stop.resolve();
     await stopping;
     expect(unrelated.close).not.toHaveBeenCalled();
-    expect(h.context.savedChatBridgeRuntime).toBe(unrelated);
+    expect(h.bridge.saved.get()).toBe(unrelated);
     expect(h.core.closeComputerConnector).toHaveBeenCalledTimes(1);
   });
 
@@ -602,11 +605,11 @@ describe("actual MCP stop retains its admitted saved-chat lifetime", () => {
     const h = harness(null);
     const stopping = h.stopCurrent();
     await vi.waitFor(() => expect(h.waitForStop).toHaveBeenCalledTimes(1));
-    h.context.savedChatBridgeRuntime = replacement;
+    h.bridge.saved.set(replacement);
     h.stop.resolve();
     await stopping;
     expect(replacement.close).not.toHaveBeenCalled();
-    expect(h.context.savedChatBridgeRuntime).toBe(replacement);
+    expect(h.bridge.saved.get()).toBe(replacement);
   });
 });
 
@@ -636,6 +639,10 @@ describe("actual desktop Quit collection", () => {
       expect(coreAlive).toBe(true);
       await stopped.promise;
     });
+    const owner = {
+      saved: createCell<unknown>(savedChat),
+      relay: createCell<unknown>(null),
+    };
     const context = vm.createContext({
       observeOperation,
       operationsStore: () => ({ record() {} }),
@@ -653,10 +660,9 @@ describe("actual desktop Quit collection", () => {
       startupConnectionChecking: false,
       CONNECTOR_START_QUIT_BUDGET_MS: 8_000,
       secureMcpConnectorRuntime: connector,
-      savedChatBridgeRuntime: savedChat,
+      bridge: owner,
       modelLifecycle: null,
       routeBRuntime: null,
-      callerRelayRuntime: null,
       stopAndConfirmComputerMcp: stop,
       disposeChatGptRoutes() {},
       disposeTaskViews() {},
@@ -669,6 +675,7 @@ describe("actual desktop Quit collection", () => {
     ) as (value: { deadlineAt: number }) => readonly OwnedCloser[];
     return {
       context,
+      bridge: owner,
       collect,
       core,
       connector,
@@ -745,7 +752,7 @@ describe("actual desktop Quit collection", () => {
     const replacementSaved = { close: vi.fn(async () => undefined) };
     const closers = h.collect({ deadlineAt: Date.now() + 1_000 });
     h.context.desktopGoCore = replacementCore;
-    h.context.savedChatBridgeRuntime = replacementSaved;
+    h.bridge.saved.set(replacementSaved);
     h.context.secureMcpConnectorRuntime = {};
     const receipt = drainOwnedChildren(closers, 1_000);
     h.stopped.resolve();
@@ -764,7 +771,7 @@ describe("actual desktop Quit collection", () => {
     expect(h.savedChat.close).toHaveBeenCalledTimes(1);
     expect(replacementCore.close).not.toHaveBeenCalled();
     expect(replacementSaved.close).not.toHaveBeenCalled();
-    expect(h.context.savedChatBridgeRuntime).toBe(replacementSaved);
+    expect(h.bridge.saved.get()).toBe(replacementSaved);
   });
 
   it("runs saved-chat cleanup after the original connector rejection and keeps it separately unconfirmed", async () => {

@@ -120,6 +120,7 @@ import {
   aboutCommand,
   applicationMenu,
 } from "../../../apps/desktop/shell/menu";
+import { createBridge } from "../../../apps/desktop/runtime/bridge";
 import { createIpc } from "../../../apps/desktop/shell/ipc";
 import {
   createInstance,
@@ -161,7 +162,6 @@ import {
   mkdir,
   realpath,
   rm,
-  unlink,
   writeFile,
 } from "node:fs/promises";
 import {
@@ -304,9 +304,7 @@ import {
   type ChatGptSignInOutcomeDiagnostic,
   type ChatGptSignInStatus,
 } from "./chatgpt-route";
-import { SavedChatBrowser } from "./saved-chat-browser";
 import { startSavedChatBridge } from "./saved-chat-bridge";
-import { savedChatPreviewQualified } from "./saved-chat-preview-admission";
 import { PrivateLiveTaskStore } from "./live-task-store";
 import { RunReadonlyComputerAction } from "../../modules/computer/app/service/run-readonly-computer-action";
 import {
@@ -318,10 +316,7 @@ import {
 } from "../../modules/computer/domain/execution-authority";
 import { InMemoryAuthorityRepository } from "../../modules/computer/infra/repo/in-memory-authorities";
 import { InMemoryComputerApprovalRepository } from "../../modules/computer/infra/repo/in-memory-computer-approvals";
-import {
-  startCodexCallerRelay,
-  type CodexCallerRelayRuntime,
-} from "./codex-caller-relay";
+import { startCodexCallerRelay } from "./codex-caller-relay";
 import { configurationAdmission } from "./configuration-admission";
 import { ownerComputerConsentDigest } from "../../modules/computer/infra/repo/owner-computer-consent";
 import { clearAndConfirmOriginalConnectorVerificationReceipt } from "../../modules/computer/infra/mcp/connector-verification-receipt";
@@ -1022,19 +1017,39 @@ let taskCountsBeforeRuntimeExit: Readonly<{
   waiting: number;
   failed: number;
 }> | null = null;
-let callerRelayRuntime: CodexCallerRelayRuntime | null = null;
-let callerRelayDirectoryWitness: ReturnType<
-  CodexCallerRelayRuntime["directoryWitness"]
-> | null = null;
+// The relay and the saved-chat bridge own their handles; main reads and clears
+// them through the cells the owner exposes.
+const bridge = createBridge({
+  statePaths,
+  isolatedE2EHome,
+  runtimeEnvironment,
+  activeDesktopIdentity,
+  buildIdentity,
+  env: process.env,
+  configuration: () => configuration,
+  summaryExecutionFence: () => summaryExecutionFence,
+  window: () => window,
+  chatGptHomeUrl: () => chatGptHomeUrl,
+  chatGptE2eOrigin: () => chatGptE2eOrigin,
+  createManagedChatGptRoute,
+  showMessageBox: (owner, options) => dialog.showMessageBox(owner, options),
+  startCodexCallerRelay,
+  startSavedChatBridge,
+  createSavedChatHandoff: (root, canonical, browser, approve) =>
+    new PersistentChatGptHandoff(
+      new PrivateSavedChatJournal(root, canonical),
+      browser,
+      new Sha256SavedChatDigester(),
+      canonical,
+      approve,
+    ),
+});
 if (process.env.FAROL_E2E === "1") {
   // Main-process metadata readback only: no token, socket client or control API.
   Object.defineProperty(app, "__farolE2ERelayDirectory", {
-    get: () => callerRelayDirectoryWitness,
+    get: () => bridge.directoryWitness.get(),
   });
 }
-let savedChatBridgeRuntime: Awaited<
-  ReturnType<typeof startSavedChatBridge>
-> | null = null;
 // S35-03/2: takes the SAME cross-process lease a promotion holds from
 // before its drain check through placement, for the whole durable admission
 // — not merely a synchronous check of it (see `live-task-registry.ts`'s
@@ -1891,122 +1906,16 @@ async function recordQuitReceipt(receipt: QuitDrainReceipt): Promise<void> {
   await writeQuitReceipt(statePaths().state, receipt, new Date().toISOString());
 }
 
-// The single-instance lock is held here, so a relay socket left in the
-// profile's short temporary directory belongs to a previous run of this same
-// profile.
-async function initializeCallerRelay(): Promise<void> {
-  if (callerRelayRuntime) return;
-  const root = statePaths().callerRelay;
-  try {
-    const stale = await lstat(path.join(root, "caller-relay.sock"));
-    if (stale.isSocket() && stale.uid === process.getuid?.()) {
-      await unlink(path.join(root, "caller-relay.sock"));
-    }
-  } catch {
-    // No previous socket.
-  }
-  try {
-    callerRelayRuntime = await startCodexCallerRelay({
-      root,
-      ...(isolatedE2EHome !== undefined
-        ? {
-            onDirectoryPrepared: (witness) => {
-              callerRelayDirectoryWitness = witness;
-            },
-          }
-        : {}),
-    });
-  } catch {
-    // Without the relay, Route B turns that offer host tools are refused.
-    callerRelayRuntime = null;
-  }
-}
-
-async function initializeSavedChatBridge(): Promise<void> {
-  if (savedChatBridgeRuntime) return;
-  // This opt-in is set by the owner when launching the disposable Dev preview.
-  // Normal builds never advertise an account-writing MCP tool by default.
-  const fence = summaryExecutionFence;
-  if (!fence) return;
-  const qualified = () => {
-    const snapshot = configuration?.snapshot();
-    if (snapshot?.status !== "ready") return false;
-    return savedChatPreviewQualified({
-      environment: runtimeEnvironment,
-      ownerOptIn: process.env.FAROL_SAVED_CHAT_PREVIEW,
-      outcomeUnknown: snapshot.settings.setup.chatgpt.outcomeUnknown,
-      verification: snapshot.settings.setup.chatgpt.verified,
-      partition: activeDesktopIdentity.chatGptPartition,
-      buildId: buildIdentity.buildId,
-    });
-  };
-  if (!qualified()) return;
-  const root = statePaths().savedChatHandoff;
-  try {
-    await mkdir(root, { recursive: true, mode: 0o700 });
-    const info = await lstat(root);
-    if (
-      !info.isDirectory() ||
-      info.isSymbolicLink() ||
-      info.uid !== process.getuid?.() ||
-      (info.mode & 0o077) !== 0 ||
-      (await realpath(root)) !== path.resolve(root)
-    )
-      return;
-    const canonical = (url: string) =>
-      canonicalChatGptConversationUrl(url, chatGptE2eOrigin);
-    const browser = new SavedChatBrowser(
-      chatGptHomeUrl,
-      chatGptE2eOrigin,
-      createManagedChatGptRoute,
-      {
-        partition: activeDesktopIdentity.chatGptPartition,
-        ...(runtimeEnvironment === "dev"
-          ? { requiredAppName: activeDesktopIdentity.displayName }
-          : {}),
-      },
-      Date.now,
-      undefined,
-      qualified,
-    );
-    savedChatBridgeRuntime = await startSavedChatBridge(
-      new PersistentChatGptHandoff(
-        new PrivateSavedChatJournal(root, canonical),
-        browser,
-        new Sha256SavedChatDigester(),
-        canonical,
-        async (request, requestDigest) => {
-          if (!qualified()) return false;
-          const owner = window;
-          if (!owner || owner.isDestroyed()) return false;
-          const { response } = await dialog.showMessageBox(owner, {
-            type: "warning",
-            buttons: ["Do not send", "Account checked — send once"],
-            defaultId: 0,
-            cancelId: 0,
-            message: "Send this first message through Farol Browser?",
-            detail: `Check the signed-in account in Farol Browser before approving. Farol cannot identify that account from this receipt.\n\nTitle: ${request.title}\nKey: ${request.key}\nDigest: ${requestDigest}\n\n${request.firstMessage}`,
-          });
-          return response === 1 && qualified();
-        },
-      ),
-      () => fence.acquireAdmission(),
-    );
-  } catch {
-    // The connector remains usable for Computer without Browser handoff.
-    savedChatBridgeRuntime = null;
-  }
-}
-
 async function initializeRouteBRuntime(): Promise<void> {
   const controller = codexContextController;
   if (!controller || routeBRuntime) return;
+  const relay = bridge.relay.get();
   try {
     routeBRuntime = await startRouteBRuntime({
       stateRoot: statePaths().state,
       surfaces: routeBTaskSurfaces,
       compaction: controller.continuity,
-      ...(callerRelayRuntime ? { relay: callerRelayRuntime } : {}),
+      ...(relay ? { relay } : {}),
     });
   } catch {
     // Route B stays unavailable; ordinary Browser tasks are unaffected.
@@ -2408,7 +2317,7 @@ async function stopAndConfirmComputerMcp(
   connector = secureMcpConnectorRuntime,
   inFlightStart: Promise<void> | null = null,
   core = desktopGoCore,
-  savedChat = savedChatBridgeRuntime,
+  savedChat = bridge.saved.get(),
   reason?: "owner_stop",
   originalStopParent?: string,
   quitStartDeadlineAt?: number,
@@ -2450,8 +2359,7 @@ async function stopAndConfirmComputerMcp(
             try {
               if (savedChat) {
                 await savedChat.close();
-                if (savedChatBridgeRuntime === savedChat)
-                  savedChatBridgeRuntime = null;
+                if (bridge.saved.get() === savedChat) bridge.saved.set(null);
               }
             } finally {
               // Withdraw the original Go owner even when the old adapter drain fails.
@@ -4130,7 +4038,7 @@ function configurationDrain() {
     codexAgentOperationActive,
     computerMcpLifecycle,
     stopAndConfirmComputerMcp,
-    savedChatBridgeRuntime: () => savedChatBridgeRuntime,
+    savedChatBridgeRuntime: () => bridge.saved.get(),
     statePaths,
     configureAdmittedProduct,
     ownerComputerConsentDigest,
@@ -5740,8 +5648,8 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   await runDesktopStartupBoundary("context", async () => {
     await initializeCodexContextController();
     await reconcileContextAfterRestart();
-    await initializeCallerRelay();
-    await initializeSavedChatBridge();
+    await bridge.initializeCallerRelay();
+    await bridge.initializeSavedChatBridge();
     await initializeRouteBRuntime();
   });
   const configured = configuration.snapshot();
@@ -6014,7 +5922,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       }
       const connector = secureMcpConnectorRuntime;
       const core = desktopGoCore;
-      const savedChat = savedChatBridgeRuntime;
+      const savedChat = bridge.saved.get();
       const quitStartDeadlineAt =
         connector && (connectorStartInFlight || startupConnectionChecking)
           ? Math.min(
@@ -6045,14 +5953,13 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
               // or turn the rejected connector close into a confirmed drain.
               if (savedChat) {
                 await savedChat.close();
-                if (savedChatBridgeRuntime === savedChat)
-                  savedChatBridgeRuntime = null;
+                if (bridge.saved.get() === savedChat) bridge.saved.set(null);
               }
             }
           },
         };
       } else if (savedChat) {
-        savedChatBridgeRuntime = null;
+        bridge.saved.set(null);
         beforeCore = {
           name: "saved-chat-bridge",
           close: () => savedChat.close(),
@@ -6082,8 +5989,8 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       routeBRuntime = null;
       if (routeB)
         closers.push({ name: "route-b", close: () => routeB.close() });
-      const relay = callerRelayRuntime;
-      callerRelayRuntime = null;
+      const relay = bridge.relay.get();
+      bridge.relay.set(null);
       if (relay)
         closers.push({ name: "caller-relay", close: () => relay.close() });
       disposeChatGptRoutes();

@@ -14,6 +14,7 @@ import { stripTypeScriptTypes } from "node:module";
 import { parse } from "@babel/parser";
 import { afterEach, expect, it, vi } from "vitest";
 import { goCoreQuitClosers } from "../../apps/desktop/go-core-quit-closers";
+import { createCell } from "../../apps/desktop/host/cell";
 import { observeOperation } from "../../apps/desktop/operations/observe";
 import { drainComputerConnector } from "../../src/apps/desktop/computer-connector-drain";
 import {
@@ -107,7 +108,10 @@ function fixture(honoursCancellation = false, startupAdmission = false) {
       CONNECTOR_START_QUIT_BUDGET_MS: 8_000,
       secureMcpConnectorRuntime: connector,
       desktopGoCore: core,
-      savedChatBridgeRuntime: null,
+      bridge: {
+        saved: createCell<unknown>(null),
+        relay: createCell<unknown>(null),
+      },
       computerMcpLifecycle: () => ({ beginStop, waitForStop, confirmStop }),
       installedUpdates: { close: async () => {} },
       pendingChatGptAttachmentTask: null,
@@ -117,7 +121,6 @@ function fixture(honoursCancellation = false, startupAdmission = false) {
       hostCheckClients: [],
       modelLifecycle: null,
       routeBRuntime: null,
-      callerRelayRuntime: null,
       disposeChatGptRoutes() {},
       disposeTaskViews() {},
       ownedLocalRuntimes: new Map(),
