@@ -29,12 +29,18 @@ const navigationSource = path.resolve(
   import.meta.dirname,
   "../../apps/desktop/shell/navigation.ts",
 );
+const chatgptSource = path.resolve(
+  import.meta.dirname,
+  "../../apps/desktop/configuration/chatgpt.ts",
+);
 // The publisher and the navigation commands live in the navigation module;
-// the other publishers are still in main.ts. Provenance is checked over both.
+// the sign-in generation is stamped by the ChatGPT command module; the other
+// publishers are still in main.ts. Provenance is checked over all three.
 async function publisherSources(): Promise<string> {
   return (
     (await readFile(mainSource, "utf8")) +
-    (await readFile(navigationSource, "utf8"))
+    (await readFile(navigationSource, "utf8")) +
+    (await readFile(chatgptSource, "utf8"))
   );
 }
 // `handleShortcut` as written in the navigation module.
@@ -304,9 +310,11 @@ describe("shell action provenance", () => {
   it("S35-TA-16 the auth-window path carries the generation of the window that closed", async () => {
     const source = await publisherSources();
     // Stamped when the window opens...
-    expect(source).toContain("chatGptSignInGeneration += 1");
     expect(source).toContain(
-      "chatGptSignInOpenGeneration = chatGptSignInGeneration",
+      "setChatGptSignInGeneration(chatGptSignInGeneration() + 1)",
+    );
+    expect(source).toContain(
+      "setChatGptSignInOpenGeneration(chatGptSignInGeneration())",
     );
     // ...and read back, then cleared, when ITS close is recorded, so a
     // delayed close from an older window reports the older number rather
