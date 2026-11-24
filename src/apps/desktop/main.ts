@@ -121,6 +121,10 @@ import {
   applicationMenu,
 } from "../../../apps/desktop/shell/menu";
 import { createIpc } from "../../../apps/desktop/shell/ipc";
+import {
+  createInstance,
+  secondInstanceResultPrefix,
+} from "../../../apps/desktop/host/instance";
 import { surfaceNavigation } from "../../../apps/desktop/shell/navigation";
 import { desktopCoreArtifactRoot } from "../../../apps/desktop/dev-core-layout";
 import { promises as rawFs } from "original-fs";
@@ -251,13 +255,9 @@ import {
   windowAllClosedAction,
 } from "./lifecycle-policy";
 import {
-  acknowledgementFailureCode,
   createInstanceRequest,
-  decideSecondInstance,
-  secondInstanceRefusalMessage,
   foreignAcknowledgementCount,
   readBuildLaunchIdentity,
-  sameLaunchIdentity,
   waitForInstanceAcknowledgement,
   writeInstanceAcknowledgement,
 } from "./single-instance";
@@ -273,7 +273,6 @@ import {
   PrimaryStartup,
   devReopenPrimaryRefused,
   emitStartupStage,
-  primaryStartupReady,
   previewStartupDelay,
   type StartupStage,
 } from "./primary-startup";
@@ -668,8 +667,6 @@ const instanceRequest = createInstanceRequest(
   launchIdentity,
   ownerBackgroundOnly,
 );
-const secondInstanceResultPrefix = "FAROL_SECOND_INSTANCE_RESULT:";
-const secondInstanceAcknowledgementPrefix = "FAROL_SECOND_INSTANCE_ACK_FAILED:";
 const startupStage = (stage: StartupStage) => {
   const enabled = process.env.FAROL_E2E === "1";
   emitStartupStage(stage, enabled, (line) => process.stderr.write(line));
@@ -4967,85 +4964,31 @@ function nativeMenuBarEnabled(): boolean {
 // Set when a quit begins; a quit drain always ends in the real quit.
 let startupRecovery: StartupRecoveryWindow | null = null;
 
-function isPrimaryReady(): boolean {
-  return primaryStartupReady({
-    stopping:
-      desktopAdmission.quitInProgress ||
-      runtimeStopping ||
-      desktopAdmission.installedUpdateAdmission,
-    runtimeState,
-    windowReady: window !== null && !window.isDestroyed(),
-    taskViewCount: [...taskViewKinds.values()].filter(
-      (kind) => kind === "runtime",
-    ).length,
-    expectedTaskViewCount: expectedTasks.length,
-  });
+function instance() {
+  return (instanceCache ??= createInstance({
+    app,
+    stderr: process.stderr,
+    desktopAdmission,
+    launchIdentity,
+    instanceRequest,
+    primaryStartup,
+    runtimeStopping: () => runtimeStopping,
+    runtimeState: () => runtimeState,
+    window: () => window,
+    taskViewKinds,
+    expectedTasks,
+    startupRecovery: () => startupRecovery,
+    ensureWindow,
+    recoverWindowOpenFailure,
+    writeInstanceAcknowledgement,
+    waitForInstanceAcknowledgement,
+    foreignAcknowledgementCount,
+  }));
 }
+let instanceCache: ReturnType<typeof createInstance> | null = null;
 
-async function handleSecondInstance(candidate: unknown): Promise<void> {
-  const decision = decideSecondInstance(launchIdentity, candidate);
-  if (!decision) return;
-  let status = decision.status;
-  if (
-    status === "reopened" &&
-    (desktopAdmission.quitInProgress ||
-      runtimeStopping ||
-      desktopAdmission.installedUpdateAdmission)
-  ) {
-    // Quit/update owns admission: acknowledge that it cannot take this launch
-    // instead of reopening a window that is about to close.
-    status = "reopen-failed";
-  }
-  if (status === "reopened" && startupRecovery !== null) {
-    try {
-      await startupRecovery.reopen();
-    } catch {
-      /* The primary owns failure cleanup. */
-    }
-    // A recovery window is available, but normal runtime readiness is not.
-    status = "reopen-failed";
-  }
-  if (status === "reopened") {
-    try {
-      await primaryStartup.whenReady();
-      // Quit/update may have begun while this launch waited for startup: check
-      // again before opening a window that is about to close.
-      if (
-        desktopAdmission.quitInProgress ||
-        runtimeStopping ||
-        desktopAdmission.installedUpdateAdmission
-      ) {
-        status = "reopen-failed";
-      } else {
-        const outcome = await containWindowOpenFailure(
-          ensureWindow,
-          recoverWindowOpenFailure,
-        );
-        if (outcome === "failed" || !isPrimaryReady()) {
-          status = "reopen-failed";
-        }
-      }
-    } catch {
-      status = "reopen-failed";
-    }
-  }
-  try {
-    await writeInstanceAcknowledgement(
-      app.getPath("userData"),
-      candidate,
-      status,
-      launchIdentity,
-    );
-  } catch (error) {
-    // The secondary process fails closed if this bounded acknowledgement is
-    // unavailable. Never reopen a mismatched build merely to make it exit 0.
-    // Say that it happened, though: without this line the secondary waits its
-    // whole deadline and reports "unverified" for a reason nothing on the
-    // primary's side ever recorded. The token is content-free by contract.
-    process.stderr.write(
-      `${secondInstanceAcknowledgementPrefix}${acknowledgementFailureCode(error)}\n`,
-    );
-  }
+function isPrimaryReady(): boolean {
+  return instance().isPrimaryReady();
 }
 
 function stopRuntime(): void {
@@ -5076,12 +5019,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   } catch {
     quitTrace = null;
   }
-  app.on(
-    "second-instance",
-    (_event, _commandLine, _workingDirectory, candidate) => {
-      void handleSecondInstance(candidate);
-    },
-  );
+  instance().listenForSecondInstance();
   const observeUpdateRelaunch = () =>
     waitForInstalledUpdateRelaunch({
       args: process.argv,
@@ -6227,50 +6165,9 @@ startupStage(primaryInstanceLock ? "lock-primary" : "lock-secondary");
 if (
   devReopenPrimaryRefused(runtimeEnvironment, process.argv, primaryInstanceLock)
 ) {
-  app.releaseSingleInstanceLock();
-  process.stderr.write(`${secondInstanceResultPrefix}reopen-failed\n`);
-  app.exit(1);
+  instance().refuseDevReopen();
 } else if (!primaryInstanceLock) {
-  void waitForInstanceAcknowledgement(app.getPath("userData"), instanceRequest)
-    .then(async (acknowledgement) => {
-      const accepted =
-        acknowledgement?.status === "reopened" &&
-        sameLaunchIdentity(launchIdentity, acknowledgement);
-      if (!accepted) {
-        const outcome =
-          acknowledgement?.status === "identity-mismatch" ||
-          acknowledgement?.status === "reopen-failed"
-            ? acknowledgement.status
-            : "unverified";
-        process.stderr.write(
-          `${secondInstanceRefusalMessage(instanceRequest, acknowledgement)}\n`,
-        );
-        process.stderr.write(`${secondInstanceResultPrefix}${outcome}\n`);
-        if (acknowledgement === null) {
-          // Nothing arrived within the deadline. Say whether the primary
-          // published nothing at all, or published for a launch that is not
-          // this one — the second is a disagreement no wait can resolve.
-          const foreign = await foreignAcknowledgementCount(
-            app.getPath("userData"),
-            instanceRequest,
-          ).catch(() => -1);
-          process.stderr.write(
-            `${secondInstanceAcknowledgementPrefix}${foreign === 0 ? "absent" : `foreign:${foreign}`}\n`,
-          );
-        }
-        app.quit();
-        return;
-      }
-      // Match Electron's graceful secondary-instance shutdown. A hard exit of
-      // the second macOS application process can hide the primary window that
-      // was just reopened.
-      process.stderr.write(`${secondInstanceResultPrefix}reopened\n`);
-      app.quit();
-    })
-    .catch(() => {
-      process.stderr.write(`${secondInstanceResultPrefix}unverified\n`);
-      app.quit();
-    });
+  instance().settleSecondInstance();
 } else {
   const quitSignals = createGracefulQuitSignals({
     signals: process,
