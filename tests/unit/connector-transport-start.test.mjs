@@ -1,23 +1,15 @@
 import { admissionFixture } from "../support/desktop-admission";
-import { connectorRuntimeUncertain } from "../../src/pkg/product-settings/connector-uncertainty.ts";
-import {
-  restartedConnectorAppSelection,
-  selectedConnectorApp,
-} from "../../src/pkg/product-settings/connector-app-selection.ts";
-import fs from "node:fs";
 import path from "node:path";
-import vm from "node:vm";
 import { createHash } from "node:crypto";
-import { stripTypeScriptTypes } from "node:module";
-import { parse } from "@babel/parser";
 import { describe, expect, it, vi } from "vitest";
 import { AuthorityTransitionReservation } from "../../src/apps/desktop/authority-transition.ts";
 import { ConnectorTransportWatch } from "../../apps/desktop/connector-transport-watch.ts";
 import { ConnectorHostError } from "../../apps/desktop/bridge/connector-host.ts";
 import { TUNNEL_CLIENT } from "../../apps/desktop/tunnel-client-contract.ts";
-import { ConnectorRuntimeEffectUnknown } from "../../src/apps/desktop/secure-mcp-connector-runtime.ts";
+import { createConnectorStart } from "../../apps/desktop/connector/start.ts";
 import { connectorTransport } from "../../apps/desktop/connector/supervisor.ts";
 import { connectorHost } from "../support/connector-host.ts";
+import { connectorStartHost } from "../support/connector-start-ports.ts";
 
 // Partial Settings fixtures: the supervisor's schema parse is outside this
 // sequencing test, and the summary fence answers as the fixture says.
@@ -35,33 +27,11 @@ vi.mock(
   }),
 );
 
-// Source-level host sequencing only. The actual AST-extracted start joins the
-// imported supervisor recovery; IO ports and Settings publications are controlled doubles. A
-// known fixture Open/Close/Start is not Go, native, filesystem or provider proof.
-// The real watcher supplies its observation epoch, never launch authority.
-const source = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
-const wanted = new Set([
-  "startAdmittedSecureMcpConnector",
-  "observeConnectorStart",
-  "recordConnectorRuntime",
-]);
-const declarations = parse(source, {
-  sourceType: "module",
-  plugins: ["typescript"],
-}).program.body.filter(
-  (node) => node.type === "FunctionDeclaration" && wanted.has(node.id?.name),
-);
-if (
-  declarations.length !== wanted.size ||
-  new Set(declarations.map((node) => node.id.name)).size !== wanted.size
-)
-  throw Error("CONNECTOR_TRANSPORT_START_SOURCE_MISSING");
-const extracted = declarations
-  .map((node) => source.slice(node.start, node.end))
-  .join("\n");
-const compiled = stripTypeScriptTypes(
-  `${extracted}; ({ ${[...wanted].join(", ")} });`,
-);
+// Source-level host sequencing only. The imported start joins the imported
+// supervisor recovery; IO ports and Settings publications are controlled
+// doubles. A known fixture Open/Close/Start is not Go, native, filesystem or
+// provider proof. The real watcher supplies its observation epoch, never
+// launch authority.
 
 const phases = [
   "verify",
@@ -219,11 +189,7 @@ function fixture({ pause, startResult = originalStart, openError } = {}) {
     ),
   };
   const context = {
-    AbortController,
     connectorStartCancellation: null,
-    connectorRuntimeUncertain,
-    restartedConnectorAppSelection,
-    selectedConnectorApp,
     configuration: owner,
     connectorCredentialStore: {
       reference: port("credential", "fixture-key-reference"),
@@ -248,15 +214,18 @@ function fixture({ pause, startResult = originalStart, openError } = {}) {
       return { ok: true };
     }),
     e2eTunnelClientExecutable: () => undefined,
-    TUNNEL_CLIENT,
     clearConnectorVerificationReceipt: port("receipt-clear"),
     statePaths: () => ({ secureMcpLaunch: "/controlled/launch" }),
     computerMcpLifecycle: () => lifecycle,
-    stopAndConfirmComputerMcp: vi.fn(async (connector, start, go) => {
+    // The start's own port takes no arguments and main binds the defaults;
+    // the supervisor's recovery passes the owners it captured.
+    stopAndConfirmComputerMcp: vi.fn(async (...args) => {
       events.push("close");
-      expect(connector).toBe(runtime);
-      expect(start).toBeNull();
-      expect(go).toBe(core);
+      if (args.length > 0) {
+        expect(args[0]).toBe(runtime);
+        expect(args[1]).toBeNull();
+        expect(args[2]).toBe(core);
+      }
       await barrier("close");
       binding = undefined;
       closure = {
@@ -274,14 +243,7 @@ function fixture({ pause, startResult = originalStart, openError } = {}) {
       error,
       ...(connectorAttempt ? { connectorAttempt } : {}),
     }),
-    // Partial Settings fixture: schema validation is outside this sequencing test.
-    ProductConfigurationResultSchema: { parse: (result) => result },
-    ConnectorHostError,
-    ConnectorRuntimeEffectUnknown,
     randomUUID: () => `fixture-uuid-${++uuid}`,
-    createHash,
-    path,
-    process: { execPath: "/controlled/electron" },
     directory: "/controlled/app",
     installedUpdates: {
       resources: () => ({
@@ -292,14 +254,17 @@ function fixture({ pause, startResult = originalStart, openError } = {}) {
     },
   };
   admission.computerConnectorAdmission = context.computerConnectorAdmission;
-  // The extracted start reads the supervisor's attempt key as main.ts does,
-  // and the supervisor reaches the extracted functions through its ports.
+  admissionFixture(context);
+  // The start reads the supervisor's attempt key as main.ts does, and the
+  // supervisor reaches the start's functions through its ports.
   const transport = connectorTransport(connectorHost(context));
   context.connectorAttemptGeneration = transport.connectorAttemptGeneration;
-  const actual = {
-    ...vm.runInNewContext(compiled, admissionFixture(context)),
-    ...transport,
-  };
+  const start = createConnectorStart(connectorStartHost(context));
+  context.observeConnectorStart = start.observeConnectorStart;
+  context.startAdmittedSecureMcpConnector =
+    start.startAdmittedSecureMcpConnector;
+  context.recordConnectorRuntime = start.recordConnectorRuntime;
+  const actual = { ...start, ...transport };
   let recoveryResult;
   const watch = new ConnectorTransportWatch({
     capture: actual.captureConnectorTransport,
@@ -390,7 +355,7 @@ describe("actual admitted transport start with controlled IO", () => {
     delete f.context.e2eTunnelClientExecutable;
     const pending = f.watch.check();
     await expect(f.waitForBarrier(pending)).rejects.toThrow(
-      "e2eTunnelClientExecutable is not defined",
+      "PORT_UNSCRIPTED:e2eTunnelClientExecutable",
     );
     expect(f.core.openComputerConnector).not.toHaveBeenCalled();
     expect(f.runtime.configure).not.toHaveBeenCalled();
@@ -561,7 +526,7 @@ describe("actual admitted transport start with controlled IO", () => {
         if (missing === "task-admission")
           f.context.connectorTaskAdmission = false;
         if (missing === "reservation")
-          f.context.authorityTransitions = { current: () => null };
+          vi.spyOn(f.reservation, "current").mockReturnValue(null);
         if (missing === "go-core") f.context.desktopGoCore = null;
         if (missing === "fence")
           f.context.computerConnectorAdmission.mockReturnValue({

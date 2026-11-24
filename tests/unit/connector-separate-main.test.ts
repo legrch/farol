@@ -10,6 +10,12 @@ import { selectedConnectorApp } from "../../src/pkg/product-settings/connector-a
 import { connectorWorkspaceSelection } from "../../src/pkg/product-settings/connector-workspace-selection";
 import { prepareConnectorCheckDocument } from "../../apps/desktop/bridge/connector-check-readiness";
 import { currentConnectorAttachment } from "../../src/apps/desktop/connector-app-receipt-wait";
+import { connectorVerificationProof } from "../../src/apps/desktop/connector-verification-proof";
+import {
+  connectorAppBindingCurrent,
+  createConnectorCheck,
+} from "../../apps/desktop/connector/check";
+import { connectorCheckHost } from "../support/connector-check-ports";
 import {
   runExplicitConnectionCheck,
   ConnectionCheckRefusal,
@@ -28,18 +34,15 @@ import {
   guidedSettingsFixture,
 } from "../fixtures/guided-onboarding";
 
-// Execute actual desktop composition with synthetic ports, not an Electron,
+// Execute the actual connector check module and Main's Setup composition with
+// synthetic ports, not an Electron,
 // native-owner-dialog or provider witness. No source-string assertion of safety.
 const source = fs.readFileSync(
   new URL("../../src/apps/desktop/main.ts", import.meta.url),
   "utf8",
 );
 const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
-const functions = [
-  "connectorAppBindingCurrent",
-  "testConnectionCommand",
-  "verifySecureMcpApp",
-]
+const functions = ["verifySecureMcpApp"]
   .map((name) => {
     const node = tree.program.body.find(
       (n) => n.type === "FunctionDeclaration" && n.id?.name === name,
@@ -140,6 +143,7 @@ function fixture() {
         snapshot: () => ({ status: "ready", settings }),
         recordSecureMcpAppPending: async () => ({ ok: true }),
         recordChatGptObservation: async () => ({ ok: true }),
+        recordSecureMcpAttachment: async () => ({ ok: true }),
         clearSecureMcpAppPendingBeforeSubmit: clearOld,
       },
       chatGptRoute: ownerRoute,
@@ -149,6 +153,7 @@ function fixture() {
       runtimeEnvironment: "owner-preview",
       randomUUID: () => "status-check-fixture",
       currentConnectorAttachment,
+      connectorVerificationProof,
       runExplicitConnectionCheck,
       ConnectionCheckRefusal,
       connectionCheckDigest,
@@ -196,9 +201,31 @@ function fixture() {
     stripTypeScriptTypes(`${functions}\nverifySecureMcpApp;`),
     context,
   ) as (scope?: typeof expected) => Promise<{ ok: false; error: string }>;
-  const testConnection = vi.fn(context.testConnectionCommand);
-  context.testConnectionCommand = testConnection;
+  // The module reads Main's state from the same fixture, as Main lends it. The
+  // attachment publication is the module's own: it is counted by the connector
+  // admission it reserves after the check released its own two.
+  const reservations: string[] = [];
+  const reserve = context.desktopAdmission.reserveAdmitted.bind(
+    context.desktopAdmission,
+  );
+  context.desktopAdmission.reserveAdmitted = (
+    kind: string,
+    purpose?: unknown,
+  ) => {
+    reservations.push(kind);
+    return reserve(kind, purpose);
+  };
+  const check = createConnectorCheck(connectorCheckHost(context));
+  const testConnection = vi.fn(check.testConnectionCommand);
+  context.connectorAppBindingCurrent = connectorAppBindingCurrent;
+  context.connectorCheck = () => ({
+    testConnectionCommand: testConnection,
+    checkSecureMcpAttachment: check.checkSecureMcpAttachment,
+  });
   return {
+    published: () =>
+      reservations.filter((kind) => kind === "connector-task").length -
+      reservations.filter((kind) => kind === "chatgpt-task").length,
     expected,
     settings,
     nativeConfirmation,
@@ -273,8 +300,6 @@ describe("actual separate-check desktop admission", () => {
       receipt: { challengeSha256: "c".repeat(64), binding: f.binding },
       workspaceId: fixtureWorkspaceId,
     });
-    const check = vi.fn(async () => ({ ok: true }));
-    f.context.checkSecureMcpAttachment = check;
     f.route.mockImplementation(async (prompt, _files, hooks) => {
       expect(prompt).toContain("computer_connection_status once.");
       expect(prompt).toContain(`checkId "${checkId}"`);
@@ -315,7 +340,8 @@ describe("actual separate-check desktop admission", () => {
       original.connectors.secureMcp.attachment,
     );
     expect(connector.challenge).toBeNull();
-    expect(check).toHaveBeenCalledTimes(1);
+    // Setup's re-check ran the module's own attachment check exactly once.
+    expect(f.published()).toBe(1);
   });
 
   it("runs an explicit fresh check by navigating the retained browser", async () => {

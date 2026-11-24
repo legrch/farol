@@ -1,13 +1,11 @@
 import { admissionFixture } from "../support/desktop-admission";
-import fs from "node:fs";
-import vm from "node:vm";
-import { stripTypeScriptTypes } from "node:module";
-import { parse } from "@babel/parser";
 import { expect, it, vi } from "vitest";
 import { connectorTransport } from "../../apps/desktop/connector/supervisor.ts";
 import { AuthorityTransitionReservation } from "../../src/apps/desktop/authority-transition.ts";
 import { ConnectorTransportWatch } from "../../apps/desktop/connector-transport-watch.ts";
+import { createConnectorStart } from "../../apps/desktop/connector/start.ts";
 import { connectorHost } from "../support/connector-host.ts";
+import { connectorStartHost } from "../support/connector-start-ports.ts";
 
 // Partial Settings fixtures: the supervisor's schema parse is outside this
 // sequencing test, and the summary fence admits. Failures still go through
@@ -30,17 +28,8 @@ const { ProductConfigurationResultSchema } = await vi.importActual(
 );
 
 // Execute the actual supervisor recovery with controlled IO, not a
-// reimplementation of its policy, joined to the start observer main.ts still
-// owns. No app, process, credentials, live profile or provider is used.
-const source = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
-const wanted = new Set(["observeConnectorStart"]);
-const nodes = parse(source, { sourceType: "module", plugins: ["typescript"] })
-  .program.body;
-const functions = nodes.filter(
-  (node) => node.type === "FunctionDeclaration" && wanted.has(node.id?.name),
-);
-if (functions.length !== wanted.size)
-  throw Error("HOST_RECOVERY_SOURCE_MISSING");
+// reimplementation of its policy, joined to the actual start observer. No app,
+// process, credentials, live profile or provider is used.
 
 function fixture() {
   const binding = Object.freeze({
@@ -92,7 +81,6 @@ function fixture() {
   const connector = { hasUnresolvedEffect: vi.fn(() => false) };
   const reservation = new AuthorityTransitionReservation();
   const context = {
-    AbortController,
     connectorStartCancellation: null,
     configuration: owner,
     secureMcpConnectorRuntime: connector,
@@ -143,14 +131,11 @@ function fixture() {
     }),
   };
   const unconfirmed = vi.fn(async () => false);
-  const code = functions
-    .map((node) => source.slice(node.start, node.end))
-    .join("\n");
   admission.computerConnectorAdmission = context.computerConnectorAdmission;
-  context.observeConnectorStart = vm.runInNewContext(
-    stripTypeScriptTypes(`${code}; observeConnectorStart`),
-    admissionFixture(context),
-  );
+  admissionFixture(context);
+  context.observeConnectorStart = createConnectorStart(
+    connectorStartHost(context),
+  ).observeConnectorStart;
   const actual = connectorTransport(connectorHost(context));
   const entry = {
     ...actual,
