@@ -3,8 +3,10 @@ import {
   type ConfigurationConnectorPorts,
   type ConnectorSetupCommand,
 } from "../../apps/desktop/configuration/connector";
+import { createConnectorStart } from "../../apps/desktop/connector/start";
 import { createDevProof } from "../../apps/desktop/dev/proof";
 import { admissionFixture } from "../support/desktop-admission";
+import { connectorStartHost } from "../support/connector-start-ports";
 import { devProofHarness } from "../support/dev-proof-ports";
 import fs from "node:fs";
 import vm from "node:vm";
@@ -19,8 +21,8 @@ import {
   type OwnedCloser,
 } from "../../src/apps/desktop/quit-drain";
 
-// Execute Main's actual start observer, stop and Quit collection with controlled
-// ports and time. No Electron, provider, process or profile evidence is claimed.
+// Execute the actual start observer with Main's actual stop and Quit collection,
+// with controlled ports and time. No Electron, provider, process or profile evidence is claimed.
 const source = fs.readFileSync(
   new URL("../../src/apps/desktop/main.ts", import.meta.url),
   "utf8",
@@ -123,17 +125,16 @@ function fixture(honoursCancellation = false, startupAdmission = false) {
     }),
   );
   vm.runInContext(
-    stripTypeScriptTypes(
-      declaration("observeConnectorStart") +
-        "\n" +
-        declaration("stopAndConfirmComputerMcp"),
-      { mode: "strip" },
-    ),
+    stripTypeScriptTypes(declaration("stopAndConfirmComputerMcp"), {
+      mode: "strip",
+    }),
     context,
   );
-  const observeStart = vm.runInContext("observeConnectorStart", context) as (
-    work: () => Promise<unknown>,
-  ) => Promise<unknown>;
+  // The module writes the start-flight fields back to the object Main's own
+  // Quit collection reads, as Main assigns its own.
+  const observeStart = createConnectorStart(
+    connectorStartHost(context as Record<string, unknown>),
+  ).observeConnectorStart as (work: () => Promise<unknown>) => Promise<unknown>;
   const start = vi.fn(() => {
     const signal = context.connectorStartCancellation?.signal as
       AbortSignal | undefined;
@@ -256,20 +257,14 @@ it("cancelled Main admission does not continue into connector effects after its 
       configuration: { snapshot },
       connectorCredentialStore: {},
       secureMcpConnectorRuntime: { hasUnresolvedEffect: () => false },
-      computerConnectorAdmission: () => ({ admissible: false, code: "FENCE" }),
       summaryFenceRecovery: {},
       transitionRefusal: () => ({ ok: false, error: "TRANSITION" }),
       configurationFailure: (error: string) => ({ ok: false, error }),
     }),
   );
-  const start = vm.runInContext(
-    stripTypeScriptTypes(
-      declaration("startAdmittedSecureMcpConnector") +
-        "\nstartAdmittedSecureMcpConnector;",
-      { mode: "strip" },
-    ),
-    context,
-  ) as (repair: boolean) => Promise<unknown>;
+  const start = createConnectorStart(
+    connectorStartHost(context as Record<string, unknown>),
+  ).startAdmittedSecureMcpConnector as (repair: boolean) => Promise<unknown>;
   const original = start(false);
   cancellation.abort();
   admitted.resolve({ restricted: false });

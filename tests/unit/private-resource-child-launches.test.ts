@@ -15,6 +15,11 @@ import { observeLocalRuntime } from "../../src/apps/desktop/local-runtime-lifeti
 
 // Actual source composition with controlled IPC/process producers, not a native host.
 const main = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
+// The connector start lives in its own module; main only builds it.
+const connectorStart = fs.readFileSync(
+  "apps/desktop/connector/start.ts",
+  "utf8",
+);
 const connector = fs.readFileSync(
   "src/apps/desktop/secure-mcp-connector-runtime.ts",
   "utf8",
@@ -78,15 +83,15 @@ function resources(
 it("selects private MCP, safe-open and renderer resources from actual callers", async () => {
   const context = resources();
   const mcp = select(
-    main,
+    connectorStart,
     (node) =>
       node.type === "CallExpression" &&
       (
         node.callee as {
-          object?: { name?: string };
+          object?: { expression?: { callee?: { name?: string } } };
           property?: { name?: string };
         }
-      )?.object?.name === "secureMcpConnectorRuntime" &&
+      )?.object?.expression?.callee?.name === "secureMcpConnectorRuntime" &&
       (node.callee as { property?: { name?: string } })?.property?.name ===
         "configure",
   );
@@ -100,7 +105,9 @@ it("selects private MCP, safe-open and renderer resources from actual callers", 
       },
       credentialReference: "private-reference",
       launchFile: "/private/contract.json",
-      secureMcpConnectorRuntime: { configure: (value: object) => value },
+      secureMcpConnectorRuntime: () => ({
+        configure: (value: object) => value,
+      }),
     }),
   );
   expect(configured.mcp).toEqual({
@@ -419,7 +426,7 @@ it.each(["quit", "update", "recovery"])(
   "uses the caller's actual synchronous guard for %s withdrawal",
   (kind) => {
     const declaration = select(
-      main,
+      connectorStart,
       (node) =>
         node.type === "VariableDeclarator" &&
         (node.id as { name?: string })?.name === "beforeConnectorEffect",

@@ -51,14 +51,63 @@ describe("connector supervisor wiring in main", () => {
       "isolatedE2EHome",
       "computerMcpLifecycle",
       "stopAndConfirmComputerMcp",
-      "observeConnectorStart",
-      "startAdmittedSecureMcpConnector",
-      "recordConnectorRuntime",
       "reportConnectorTransport",
       "transitionRefusal",
       "configurationFailure",
     ])
       expect(body).toContain(`\n  ${name},\n`);
+    // The start functions live in connector/start.ts and main builds them
+    // lazily; each port forwards to the same lazily built instance.
+    const flat = body.replace(/\s+/g, " ");
+    expect(flat).toContain(
+      "observeConnectorStart: (work) => connectorStart().observeConnectorStart(work),",
+    );
+    expect(flat).toContain(
+      "startAdmittedSecureMcpConnector: (...args) => connectorStart().startAdmittedSecureMcpConnector(...args),",
+    );
+    expect(flat).toContain(
+      "recordConnectorRuntime: (...args) => connectorStart().recordConnectorRuntime(...args),",
+    );
+  });
+
+  it("lends the connector start each main-process owner, late for every let", async () => {
+    const source = await readFile(mainSource, "utf8");
+    const begin = source.indexOf("function connectorStart() {");
+    expect(begin).toBeGreaterThanOrEqual(0);
+    const body = source
+      .slice(begin, source.indexOf("\n}\n", begin) + 2)
+      .replace(/\s+/g, " ");
+    // Each `let` in main is a getter (read afresh at every use) or a setter.
+    for (const name of [
+      "configuration",
+      "connectorCredentialStore",
+      "secureMcpConnectorRuntime",
+      "desktopGoCore",
+      "summaryFenceRecovery",
+      "connectorStartCancellation",
+    ])
+      expect(body).toContain(`${name}: () => ${name},`);
+    expect(body).toContain(
+      "setConnectorStartCancellation: (value) => { connectorStartCancellation = value; },",
+    );
+    expect(body).toContain(
+      "setConnectorStartInFlight: (value) => { connectorStartInFlight = value; },",
+    );
+    // Each `const` owner is shared by reference, never copied.
+    for (const name of [
+      "desktopAdmission",
+      "authorityTransitions",
+      "buildIdentity",
+      "directory",
+      "installedUpdates",
+      "connectorAttemptGeneration",
+    ])
+      expect(body).toContain(` ${name},`);
+    // The stop takes no arguments here, so main's own defaults are read late.
+    expect(body).toContain(
+      "stopAndConfirmComputerMcp: () => stopAndConfirmComputerMcp(),",
+    );
+    expect(source).toContain("let connectorStartCache");
   });
 
   it("uses the supervisor's own state and functions, not a local copy", async () => {
