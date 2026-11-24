@@ -77,6 +77,7 @@ import {
   createConnectorStart,
   reportConnectorTransport,
 } from "../../../apps/desktop/connector/start";
+import { createTaskCommands } from "../../../apps/desktop/task/command";
 import { createTaskPersist } from "../../../apps/desktop/task/persist";
 import { createTaskRoutes } from "../../../apps/desktop/task/route";
 import { connectorSupervisor } from "../../../apps/desktop/connector/supervisor";
@@ -193,14 +194,12 @@ import {
   ProductTaskCommandResultSchema,
   ProductTaskCommandSchema,
   ProductTasksStateSchema,
-  type ProductAgentScopeSelection,
   type ProductTask,
   type ProductTaskAgent,
   type ProductTaskCommandResult,
 } from "../../modules/chat/contract/product-task";
 import { LiveTaskRegistry, type LiveTaskAdmission } from "./live-task-registry";
 import { journalUnderPromotionLease } from "./chatgpt-journal-lease";
-import { admitProductAgentRejoin } from "./product-agent-rejoin";
 import {
   workspaceDescriptor,
   verifiedProductWorkspace as verifiedWorkspaceOf,
@@ -456,7 +455,6 @@ import {
   PrivateProductAgentStore,
   type ProductAgentInput,
 } from "./product-agent-store";
-import { resolveProductAgentScope } from "./product-agent-scope";
 import {
   productAgentContext,
   productAgentHostContext,
@@ -2233,40 +2231,6 @@ function productAgentCapabilityAvailable(): boolean {
     : false;
 }
 
-function productAgentInput(
-  task: ProductTask,
-  context: ProductAgentContext,
-  objective: string,
-  scope: ProductAgentScopeSelection,
-): ProductAgentInput | null {
-  const now = Date.now();
-  const resolved = resolveProductAgentScope(
-    context.workspace.root,
-    context.workspace.excludedPaths,
-    scope,
-  );
-  if (!resolved) return null;
-  return {
-    taskId: task.taskId,
-    sessionId: task.sessionId,
-    assignmentId: randomUUID(),
-    authorityId: randomUUID(),
-    parentParticipantId: randomUUID(),
-    agentParticipantId: randomUUID(),
-    taskEpoch: context.settings.computer.generation,
-    generation: 1,
-    workspaceId: context.workspace.workspaceId,
-    ...resolved,
-    objective,
-    computerGeneration: context.settings.computer.generation,
-    executableSha256: context.host.executableSha256,
-    schemaSha256: context.host.schemaSha256,
-    buildId: buildIdentity.buildId,
-    expiresAt: now + 30 * 60_000,
-    createdAt: new Date(now).toISOString(),
-  };
-}
-
 async function openProductAgentSession(
   input: ProductAgentInput,
   context: ProductAgentHostContext,
@@ -2918,314 +2882,10 @@ function runProductTaskCommand(
     () => runProductTaskCommandObserved(value),
   );
 }
-async function runProductTaskCommandObserved(
+function runProductTaskCommandObserved(
   value: unknown,
 ): Promise<ProductTaskCommandResult> {
-  const command = ProductTaskCommandSchema.safeParse(value);
-  if (!command.success) return taskFailure("TASK_COMMAND_INVALID");
-  if (desktopAdmission.closed())
-    return taskFailure("TASK_OPERATION_IN_PROGRESS");
-  if (demoMode) {
-    return taskFailure("TASKS_UNAVAILABLE");
-  }
-  if (taskMutations.inFlight()) {
-    return taskFailure("TASK_OPERATION_IN_PROGRESS");
-  }
-  if (command.data.kind === "task.activate") {
-    const mutation = taskMutations.tryEnter();
-    if (!mutation) return taskFailure("TASK_OPERATION_IN_PROGRESS");
-    try {
-      if (!liveTaskRegistry.get(command.data.taskId)) {
-        return taskFailure("TASK_NOT_FOUND");
-      }
-      selectedTaskId = command.data.taskId;
-      section = "browser";
-      shellOverlay = "none";
-      applyLayout();
-      publishLayout();
-      return (await openLiveTaskSurface(command.data.taskId))
-        ? taskSuccess(command.data.taskId)
-        : taskFailure("TASK_SURFACE_UNREACHABLE");
-    } finally {
-      mutation.release();
-    }
-  }
-  if (!liveTaskStore) return taskFailure("TASK_STATE_UNAVAILABLE");
-  const mutation = taskMutations.tryEnter();
-  if (!mutation) return taskFailure("TASK_OPERATION_IN_PROGRESS");
-  const before = liveTaskRegistry.snapshot();
-  try {
-    if (
-      command.data.kind === "task.start-agent" ||
-      command.data.kind === "task.rejoin-agent"
-    ) {
-      if (!FAROL_BACKED_PRODUCT_AGENT_ENABLED) {
-        return taskFailure("AGENT_NOT_READY");
-      }
-      const task = liveTaskRegistry.get(command.data.taskId);
-      if (!task || task.provider !== "chatgpt") {
-        return taskFailure("TASK_NOT_FOUND");
-      }
-      if (
-        activeProductAgentSession &&
-        activeProductAgentSession.taskId !== task.taskId
-      ) {
-        return taskFailure("AGENT_ALREADY_RUNNING");
-      }
-      const pendingTaskId = pendingProductAgentTaskId();
-      if (pendingTaskId && pendingTaskId !== task.taskId) {
-        return taskFailure("AGENT_ALREADY_RUNNING");
-      }
-
-      let input: ProductAgentInput;
-      let context: ProductAgentContext | null;
-      if (command.data.kind === "task.start-agent") {
-        if (task.agent?.phase === "outcome_unknown") {
-          return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
-        }
-        if (
-          task.agent?.phase === "running" ||
-          (task.agent?.phase === "completed" &&
-            task.agent.parentDelivery !== "acknowledged")
-        ) {
-          return taskFailure("AGENT_ALREADY_RUNNING");
-        }
-        const startAgentSnapshot = configuration?.snapshot();
-        context = productAgentContext(
-          command.data.workspaceId,
-          startAgentSnapshot?.status === "ready"
-            ? startAgentSnapshot.settings
-            : null,
-          productAgentStore,
-          buildIdentity.buildId,
-        );
-        if (!context) return taskFailure("AGENT_NOT_READY");
-        const candidate = productAgentInput(
-          task,
-          context,
-          command.data.objective,
-          command.data.scope,
-        );
-        if (!candidate) return taskFailure("AGENT_SCOPE_INVALID");
-        input = candidate;
-        try {
-          await productAgentStore!.save(input);
-        } catch {
-          return taskFailure("AGENT_INPUT_STATE_UNAVAILABLE");
-        }
-        // S35-03/4: starting a native Agent turns this task into the SAME
-        // `AGENT_RUNNING` obligation a promotion's drain check refuses on,
-        // so it takes the same cross-process lease `admitDurable` does for
-        // a brand new task — not only new admission is guarded.
-        //
-        // S35-TA-1: the leased body is `startAgentDurable`, so a
-        // stolen-lease test drives the function this call site calls
-        // rather than a copy of it.
-        const agentStart = await liveTaskRegistry.startAgentDurable(
-          task.taskId,
-          {
-            assignmentBindingSha256: productAgentAssignmentBinding(input),
-            phase: "running",
-            workspaceId: input.workspaceId,
-            parentDelivery: "not_applicable",
-            workspaceEnforcement: "not_applicable",
-            resultAvailable: false,
-          },
-          () => persistLiveTaskState(),
-          before,
-          () => productAgentStore!.remove(task.taskId).catch(() => undefined),
-        );
-        if (!agentStart.ok) {
-          // A lease a live promotion holds is the one refusal that leaves
-          // the Agent input saved: the other two have already compensated.
-          if (agentStart.code === "TASK_ROUTE_UNAVAILABLE") {
-            await productAgentStore!.remove(task.taskId).catch(() => undefined);
-          }
-          return taskFailure(agentStart.code);
-        }
-        publishTasksState();
-      } else {
-        // S35-TA-11: the admission itself is `admitProductAgentRejoin`, so
-        // the one thing that matters here — that the settings are read AFTER
-        // the awaited load, not before — is exercised by tests rather than
-        // asserted in a comment. `readSettings` is passed as a thunk for
-        // exactly that reason: the module, not this call site, decides when
-        // it runs.
-        const admitted = await admitProductAgentRejoin({
-          agent: task.agent,
-          loadInput: () => productAgentStore!.load(task.taskId),
-          readSettings: () => {
-            const snapshot = configuration?.snapshot();
-            return snapshot?.status === "ready" ? snapshot.settings : null;
-          },
-          store: productAgentStore,
-          buildId: buildIdentity.buildId,
-          assignmentMatches: productAgentAssignmentMatches,
-        });
-        if (!admitted.ok) {
-          if (admitted.recordUnknownSummary) {
-            await persistProductAgentSummary(
-              task.taskId,
-              productAgentUnknownSummaryFromTask(task.agent!),
-            ).catch(() => undefined);
-          }
-          return taskFailure(admitted.refusal);
-        }
-        input = admitted.input;
-        context = admitted.context;
-      }
-      return executeProductAgent(
-        task,
-        input,
-        context,
-        command.data.kind === "task.rejoin-agent" ? "rejoin" : "new",
-      );
-    }
-    if (command.data.kind === "task.rename") {
-      if (!liveTaskRegistry.rename(command.data.taskId, command.data.label)) {
-        return taskFailure("TASK_NOT_FOUND");
-      }
-      try {
-        await persistLiveTaskState();
-      } catch {
-        liveTaskRegistry.rollback(before);
-        return taskFailure("TASK_STATE_UNAVAILABLE");
-      }
-      liveTaskRoutes
-        .get(command.data.taskId)
-        ?.setTitle(`${command.data.label.trim()} · Farol`);
-      publishTasksState();
-      return taskSuccess(command.data.taskId);
-    }
-    if (command.data.kind === "task.pin") {
-      if (
-        !liveTaskRegistry.setPinned(command.data.taskId, command.data.pinned)
-      ) {
-        return taskFailure("TASK_NOT_FOUND");
-      }
-      try {
-        await persistLiveTaskState();
-      } catch {
-        liveTaskRegistry.rollback(before);
-        return taskFailure("TASK_STATE_UNAVAILABLE");
-      }
-      publishTasksState();
-      return taskSuccess(command.data.taskId);
-    }
-    if (command.data.kind === "task.close") {
-      const task = liveTaskRegistry.get(command.data.taskId);
-      if (
-        task?.agent?.phase === "running" ||
-        (task?.agent?.phase === "completed" &&
-          task.agent.parentDelivery !== "acknowledged")
-      ) {
-        return taskFailure("AGENT_ALREADY_RUNNING");
-      }
-      if (persistedProductAgentExpiry?.taskId === command.data.taskId) {
-        clearTimeout(persistedProductAgentExpiry.timer);
-        persistedProductAgentExpiry = null;
-      }
-      const closed = await routeBTaskLifecycle.close(command.data.taskId);
-      if (!closed.ok) return taskFailure(closed.code);
-      const tasks = liveTaskRegistry.snapshot().tasks;
-      selectedTaskId =
-        selectedTaskId === command.data.taskId
-          ? (tasks[0]?.taskId ?? "")
-          : selectedTaskId;
-      shellOverlay = "none";
-      publishTasksState();
-      applyLayout();
-      publishLayout();
-      return taskSuccess(selectedTaskId || null);
-    }
-    if (command.data.kind === "task.cancel") {
-      const task = liveTaskRegistry.get(command.data.taskId);
-      if (!task) return taskFailure("TASK_NOT_FOUND");
-      if (task.agent?.phase === "running") {
-        return cancelProductAgentTask(task);
-      }
-      if (
-        task.agent?.phase === "completed" &&
-        task.agent.parentDelivery !== "acknowledged"
-      ) {
-        return taskFailure("AGENT_ALREADY_RUNNING");
-      }
-      const route = liveTaskRoutes.get(command.data.taskId);
-      if (!route) return taskFailure("TASK_NOT_FOUND");
-      const result = await route.cancelActiveTask();
-      if (result === "not_running") return taskFailure("TASK_NOT_RUNNING");
-      const lifecycle =
-        result === "cancelled" ? "cancelled" : "outcome_unknown";
-      liveTaskRegistry.setLifecycle(command.data.taskId, lifecycle);
-      publishTasksState();
-      try {
-        await persistLiveTaskState();
-      } catch {
-        liveTaskStore = null;
-        surfaceLiveTaskPersistenceFailure(command.data.taskId);
-        return taskFailure("TASK_STATE_UNAVAILABLE");
-      }
-      return result === "cancelled"
-        ? taskSuccess(command.data.taskId)
-        : taskFailure("TASK_CANCEL_FAILED");
-    }
-    if (!chatGptTaskAdmissionReady()) {
-      return taskFailure("CHATGPT_CONNECTION_NOT_VERIFIED");
-    }
-    if (!chatGptRoute) return taskFailure("TASK_ROUTE_UNAVAILABLE");
-
-    const labels = new Set(
-      liveTaskRegistry.snapshot().tasks.map((candidate) => candidate.label),
-    );
-    let ordinal = 1;
-    while (labels.has(`ChatGPT task ${ordinal}`)) ordinal += 1;
-    const task: ProductTask = {
-      taskId: randomUUID(),
-      sessionId: randomUUID(),
-      turnId: randomUUID(),
-      label: `ChatGPT task ${ordinal}`,
-      provider: "chatgpt",
-      requestedModel: "Account default",
-      observedModel: null,
-      requestedMode: "Account default",
-      observedMode: null,
-      hasComputer: false,
-      pinned: false,
-      lifecycle: "idle",
-    };
-    // S35-03/2: see `admitRouteBTask` above — admits and persists under the
-    // same cross-process lease a promotion holds through placement.
-    let admitted: LiveTaskAdmission;
-    try {
-      admitted = await liveTaskRegistry.admitDurable(
-        task,
-        persistLiveTaskState,
-      );
-    } catch {
-      return taskFailure("TASK_STATE_UNAVAILABLE");
-    }
-    if (admitted.status === "capacity") {
-      return taskFailure("TASK_CAPACITY_REACHED");
-    }
-    if (admitted.status !== "admitted") {
-      return taskFailure("TASK_ROUTE_UNAVAILABLE");
-    }
-    const route = createLiveChatGptRoute(task.taskId, task.label);
-    liveTaskConversationUrls.set(task.taskId, null);
-    liveTaskRoutes.set(task.taskId, route);
-    selectedTaskId = task.taskId;
-    section = "browser";
-    setupOpen = false;
-    shellOverlay = "none";
-    publishTasksState();
-    publishLayout();
-    if (!(await openLiveTaskSurface(task.taskId))) {
-      return taskFailure("TASK_SURFACE_UNREACHABLE");
-    }
-    return taskSuccess(task.taskId);
-  } finally {
-    mutation.release();
-  }
+  return taskCommands().run(value);
 }
 
 function configurationFailure(
@@ -4667,6 +4327,68 @@ function taskRoutes() {
 }
 let taskRoutesCache: ReturnType<typeof createTaskRoutes<ChatGptRoute>> | null =
   null;
+
+function taskCommands() {
+  return (taskCommandsCache ??= createTaskCommands<ProductTaskCommandResult>({
+    parseCommand: (value) => ProductTaskCommandSchema.safeParse(value),
+    taskFailure,
+    taskSuccess,
+    desktopAdmission,
+    demoMode,
+    taskMutations,
+    liveTaskRegistry,
+    liveTaskRoutes,
+    liveTaskConversationUrls,
+    selectedTaskId: () => selectedTaskId,
+    setSelectedTaskId: (value) => {
+      selectedTaskId = value;
+    },
+    setSection: (value) => {
+      section = value;
+    },
+    setShellOverlay: (value) => {
+      shellOverlay = value;
+    },
+    setSetupOpen: (value) => {
+      setupOpen = value;
+    },
+    liveTaskStore: () => liveTaskStore,
+    setLiveTaskStore: (value) => {
+      liveTaskStore = value;
+    },
+    productAgentEnabled: FAROL_BACKED_PRODUCT_AGENT_ENABLED,
+    activeProductAgentSession: () => activeProductAgentSession,
+    persistedProductAgentExpiry: () => persistedProductAgentExpiry,
+    setPersistedProductAgentExpiry: (value) => {
+      persistedProductAgentExpiry = value;
+    },
+    configuration: () => configuration,
+    productAgentStore: () => productAgentStore,
+    chatGptRoute: () => chatGptRoute,
+    routeBTaskLifecycle,
+    buildId: buildIdentity.buildId,
+    randomUUID,
+    now: () => Date.now(),
+    applyLayout,
+    publishLayout,
+    publishTasksState,
+    openLiveTaskSurface,
+    persistLiveTaskState,
+    surfaceLiveTaskPersistenceFailure,
+    chatGptTaskAdmissionReady,
+    createLiveChatGptRoute,
+    pendingProductAgentTaskId,
+    productAgentAssignmentBinding,
+    productAgentAssignmentMatches,
+    productAgentUnknownSummaryFromTask,
+    persistProductAgentSummary,
+    executeProductAgent,
+    cancelProductAgentTask,
+  }));
+}
+let taskCommandsCache: ReturnType<
+  typeof createTaskCommands<ProductTaskCommandResult>
+> | null = null;
 
 function connectorCheck() {
   return (connectorCheckCache ??= createConnectorCheck({
