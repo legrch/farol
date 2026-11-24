@@ -92,7 +92,6 @@ import { ReadConversationClient } from "../../../apps/desktop/bridge/read-conver
 import { readChatHistoryView } from "../../../apps/desktop/chat-history-view";
 import { runSelfTestCommand } from "../../../apps/desktop/self-test-ipc";
 import { recoverDeepTestAttempts } from "./deep-test-recovery";
-import { readFlatDeepTestRecords } from "./legacy-activation-obligations";
 import { readRetiredRepliesView } from "../../../apps/desktop/retired-replies-view";
 import {
   BridgeError,
@@ -352,6 +351,7 @@ import {
 import { createConfigurationComputer } from "../../../apps/desktop/configuration/computer";
 import { createConfigurationModel } from "../../../apps/desktop/configuration/model";
 import { createConfigurationSupport } from "../../../apps/desktop/configuration/support";
+import { createConfigurationDeep } from "../../../apps/desktop/configuration/deep";
 import {
   createConfigurationChatgpt,
   type DirectChatStart,
@@ -436,13 +436,6 @@ import {
   type ChatGptTaskJournalRecord,
   type ChatGptTaskJournalResult,
 } from "./chatgpt-task-journal";
-import {
-  ChatGptTaskJournalOperationIdSchema,
-  MAX_CHATGPT_TASK_JOURNAL_BYTES,
-  MAX_DEEP_TEST_HISTORY_BYTES,
-  MAX_DEEP_TEST_HISTORY_RECORDS,
-  MAX_DEEP_TEST_OUTSTANDING,
-} from "./chatgpt-task-journal-record";
 import {
   PrivateChatGptConversationStore,
   type ChatGptConversationRecord,
@@ -6615,6 +6608,51 @@ let configurationSupportCache: ReturnType<
   typeof createConfigurationSupport
 > | null = null;
 
+function configurationDeep() {
+  return (configurationDeepCache ??= createConfigurationDeep({
+    configuration: () => configuration,
+    desktopGoCore: () => desktopGoCore,
+    secureMcpConnectorRuntime: () => secureMcpConnectorRuntime,
+    chatGptRoute: () => chatGptRoute,
+    liveTaskRoutes,
+    selectedTaskId: () => selectedTaskId,
+    section: () => section,
+    shellOverlay: () => shellOverlay,
+    browserHomeSurfaceOpen: () => browserHomeSurfaceOpen,
+    setBrowserHomeSurfaceOpen: (value) => {
+      browserHomeSurfaceOpen = value;
+    },
+    deepTestRecoveryReady: () => deepTestRecoveryReady,
+    setDeepTestRecoveryReady: (value) => {
+      deepTestRecoveryReady = value;
+    },
+    recoverableDeepTests: () => recoverableDeepTests,
+    setRecoverableDeepTests: (value) => {
+      recoverableDeepTests = value;
+    },
+    pendingChatGptReadonlyTask: () => pendingChatGptReadonlyTask,
+    pendingChatGptAttachmentTask: () => pendingChatGptAttachmentTask,
+    recoverableChatGptTask: () => recoverableChatGptTask,
+    connectorStartInFlight: () => connectorStartInFlight,
+    summaryFenceRecovery: () => summaryFenceRecovery,
+    desktopAdmission,
+    liveTaskRegistry,
+    buildIdentity,
+    statePaths,
+    configurationFailure,
+    chatGptConversationAdmissionFailure,
+    currentSurfaceLayout,
+    connectorRuntimeUncertain,
+    computerConnectorAdmission,
+    currentConnectorAttachment,
+    selectedConnectorApp,
+    connectorWorkspaceSelection,
+    connectorAppBindingCurrent,
+  }));
+}
+let configurationDeepCache: ReturnType<typeof createConfigurationDeep> | null =
+  null;
+
 function configurationChatgpt() {
   return (configurationChatgptCache ??= createConfigurationChatgpt({
     configuration: () => configuration,
@@ -6803,307 +6841,6 @@ function deliverConfigurationReply(
   return new Promise<ProductConfigurationResult>(() => {});
 }
 
-async function runManualDeepTest(
-  operationId: string,
-  expectedTaskId: string,
-  test: "connection" | "deep" = "deep",
-): Promise<ProductConfigurationResult> {
-  if (!ChatGptTaskJournalOperationIdSchema.safeParse(operationId).success)
-    return configurationFailure("SETTINGS_INPUT_INVALID");
-  const owner = configuration;
-  const core = desktopGoCore;
-  const connector = secureMcpConnectorRuntime;
-  const snapshot = owner?.snapshot();
-  const originalRoute =
-    expectedTaskId === "" ? chatGptRoute : liveTaskRoutes.get(expectedTaskId);
-  const targetCurrent = originalRoute?.captureManualTaskTarget();
-  // The ChatGPT home document can already be on screen without the open-browser
-  // flag. Treat that loaded page as the home surface instead of reporting a
-  // phantom in-progress task.
-  if (expectedTaskId === "" && targetCurrent) browserHomeSurfaceOpen = true;
-  if (selectedTaskId !== expectedTaskId || !originalRoute || !targetCurrent)
-    return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
-  const deadline = performance.now() + 1500;
-  while (
-    shellOverlay === "task-menu" &&
-    selectedTaskId === expectedTaskId &&
-    section === "browser" &&
-    !desktopAdmission.closed() &&
-    performance.now() < deadline
-  ) {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  const routeTaskId = selectedTaskId;
-  const route =
-    routeTaskId === "" ? chatGptRoute : liveTaskRoutes.get(routeTaskId);
-  const binding = core?.currentComputerConnectorBinding();
-  if (
-    routeTaskId !== expectedTaskId ||
-    !owner ||
-    !core ||
-    !core.backendAvailable ||
-    !connector ||
-    !route ||
-    route !== originalRoute ||
-    !targetCurrent() ||
-    !binding ||
-    snapshot?.status !== "ready" ||
-    !deepTestRecoveryReady ||
-    desktopAdmission.closed() ||
-    desktopAdmission.occupied("chatgpt-task") ||
-    desktopAdmission.occupied("connector-task") ||
-    pendingChatGptReadonlyTask !== null ||
-    pendingChatGptAttachmentTask !== null ||
-    recoverableChatGptTask !== null ||
-    connectorStartInFlight !== null ||
-    !connector.isRunning() ||
-    connector.getTunnelObservation() !== null ||
-    connector.hasUnresolvedEffect() ||
-    !currentSurfaceLayout()?.pageVisible ||
-    section !== "browser" ||
-    shellOverlay !== "none" ||
-    (routeTaskId === "" && !browserHomeSurfaceOpen)
-  ) {
-    console.error(
-      `FAROL_DEEP_TEST_REFUSED chatgpt=${desktopAdmission.occupied("chatgpt-task")} connector=${desktopAdmission.occupied("connector-task")} running=${connector?.isRunning() ?? false} page=${currentSurfaceLayout()?.pageVisible === true} section=${section} overlay=${shellOverlay} home=${browserHomeSurfaceOpen} task=${routeTaskId}`,
-    );
-    return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
-  }
-  const conversationFailure = chatGptConversationAdmissionFailure();
-  if (conversationFailure) return conversationFailure;
-  const settings = snapshot.settings;
-  if (
-    settings.computer.pendingEdit ||
-    settings.setup.computer.outcomeUnknown ||
-    connectorRuntimeUncertain(settings) ||
-    !computerConnectorAdmission(summaryFenceRecovery).admissible
-  )
-    return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
-  const selected = settings.connectors.secureMcp;
-  const attachment = currentConnectorAttachment(
-    settings,
-    buildIdentity.buildId,
-  );
-  const appName = selectedConnectorApp(selected);
-  const runtime = selected.runtime;
-  // Full check must send when the tunnel/runtime are live. A consumed
-  // attachment is preferred; otherwise use (or mint) the same one-time
-  // challenge Ping already uses. Missing attachment alone is not "not ready".
-  let challenge = selected.challenge;
-  const challengeCurrent =
-    challenge != null &&
-    runtime?.state === "ready" &&
-    challenge.buildId === runtime.buildId &&
-    challenge.runtimeGeneration === runtime.runtimeGeneration &&
-    challenge.computerGeneration === runtime.computerGeneration;
-  if (
-    !appName ||
-    !runtime ||
-    runtime.state !== "ready" ||
-    !selected.tunnelId ||
-    selected.appVerificationPending === true ||
-    binding.buildId !== buildIdentity.buildId ||
-    binding.connectorGeneration !== String(selected.generation) ||
-    (!attachment && !challengeCurrent)
-  ) {
-    if (
-      !appName ||
-      !runtime ||
-      runtime.state !== "ready" ||
-      !selected.tunnelId ||
-      selected.appVerificationPending === true ||
-      binding.buildId !== buildIdentity.buildId ||
-      binding.connectorGeneration !== String(selected.generation)
-    )
-      return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
-    const issued = await owner.recordSecureMcpChallenge({
-      challenge: randomUUID(),
-      runtimeGeneration: runtime.runtimeGeneration,
-      computerGeneration: runtime.computerGeneration,
-      buildId: runtime.buildId,
-    });
-    if (!issued.ok || issued.snapshot.status !== "ready")
-      return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
-    challenge = issued.snapshot.settings.connectors.secureMcp.challenge;
-    if (
-      !challenge ||
-      challenge.buildId !== runtime.buildId ||
-      challenge.runtimeGeneration !== runtime.runtimeGeneration ||
-      challenge.computerGeneration !== runtime.computerGeneration
-    )
-      return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
-  }
-  if (!appName || !runtime || runtime.state !== "ready" || !selected.tunnelId)
-    return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
-  let workspaceId =
-    attachment?.workspaceId ?? connectorWorkspaceSelection(settings);
-  if (workspaceId === undefined) {
-    const verifiedId = settings.setup.computer.verified?.workspaceId;
-    workspaceId =
-      verifiedId &&
-      settings.computer.workspaces.some(
-        (item) => item.workspaceId === verifiedId,
-      )
-        ? verifiedId
-        : (settings.computer.workspaces[0]?.workspaceId ?? null);
-  }
-  const challengeSha256 =
-    attachment?.challengeSha256 ?? challenge?.challengeSha256;
-  if (!challengeSha256)
-    return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
-  const expected: ConnectorAppVerificationBinding = {
-    tunnelId: selected.tunnelId,
-    connectorGeneration: selected.generation,
-    computerGeneration: settings.computer.generation,
-    runtimeGeneration: runtime.runtimeGeneration,
-    challengeSha256,
-    buildId: buildIdentity.buildId,
-    workspaceId,
-    appName,
-  };
-  const isCurrent = () => {
-    const latest = owner.snapshot();
-    // connectorAppBindingCurrent already accepts live challenge or attachment.
-    return (
-      configuration === owner &&
-      desktopGoCore === core &&
-      core.backendAvailable &&
-      secureMcpConnectorRuntime === connector &&
-      connector.isRunning() &&
-      connector.getTunnelObservation() === null &&
-      targetCurrent() &&
-      !connector.hasUnresolvedEffect() &&
-      core.currentComputerConnectorBinding() === binding &&
-      !desktopAdmission.closed() &&
-      selectedTaskId === routeTaskId &&
-      (routeTaskId === ""
-        ? chatGptRoute === route && browserHomeSurfaceOpen
-        : liveTaskRoutes.get(routeTaskId) === route) &&
-      section === "browser" &&
-      shellOverlay === "none" &&
-      currentSurfaceLayout()?.pageVisible === true &&
-      latest.status === "ready" &&
-      !latest.settings.computer.pendingEdit &&
-      !latest.settings.setup.computer.outcomeUnknown &&
-      !connectorRuntimeUncertain(latest.settings) &&
-      computerConnectorAdmission(summaryFenceRecovery).admissible &&
-      !latest.settings.setup.chatgpt.outcomeUnknown &&
-      latest.settings.connectors.secureMcp.appVerificationPending !== true &&
-      connectorAppBindingCurrent(latest.settings, expected)
-    );
-  };
-  const chatAdmission = desktopAdmission.reserveAdmitted("chatgpt-task");
-  const connectorAdmission = desktopAdmission.reserveAdmitted(
-    "connector-task",
-    "manual-diagnostic",
-  );
-  let prepared = false;
-  let intent = false;
-  try {
-    const journal = new PrivateChatGptTaskJournal({
-      root: statePaths().state,
-      deepTestOperationId: operationId,
-    });
-    await journalUnderPromotionLease(liveTaskRegistry, async () => {
-      if (!isCurrent()) throw new Error("DEEP_TEST_CHANGED");
-      const scan = await readFlatDeepTestRecords(statePaths().state);
-      if (
-        scan.status === "unreadable" ||
-        (scan.status === "read" &&
-          (scan.value.length >= MAX_DEEP_TEST_HISTORY_RECORDS ||
-            scan.totalBytes +
-              MAX_CHATGPT_TASK_JOURNAL_BYTES * (MAX_DEEP_TEST_OUTSTANDING + 1) >
-              MAX_DEEP_TEST_HISTORY_BYTES ||
-            scan.value.filter(
-              (record) => record.phase !== "delivery_acknowledged",
-            ).length >= MAX_DEEP_TEST_OUTSTANDING)) ||
-        !isCurrent()
-      )
-        throw new Error("DEEP_TEST_UNAVAILABLE");
-      await journal.prepare({ operationId, kind: "readonly" });
-      prepared = true;
-    });
-    const prompt =
-      test === "connection"
-        ? `Use the selected ${appName} app to call computer_connection_status once. Report the observed result briefly; do not read or change files.`
-        : `Run a manual Deep test using the selected ${appName} app. List approved workspaces and choose the first available yourself; if none is available, stop. Exercise connection status and bounded file listing and reading without opening secrets or unrelated personal data. Where the existing grant permits, create only the new uniquely named root-level file farol-deep-test-${operationId}.txt with computer_workspace_write and expectedSha256: null (create-only). Do not list or read that nonexistent test path before creating it, and do not create a directory. If creation is refused, stop without changing the operation ID. After confirmed creation, read only this new file and test edit with its returned exact SHA-256. For shell smoke, where granted, run only bounded pwd and printf checks in the selected workspace. Treat cleanup as a separate case: only if this run's create and edit outcomes are known, the exact file path and current contents are confirmed, no external writer is expected, and the current write grant allows it, you may use Shell with write:true and pinned /bin/rm on that one exact path. Use a separate operation ID and observe its original result; do not use globs or recursive removal. After known success, verify the target is absent and any test canary is preserved. A pre-removal check is not an atomic compare-and-delete against external writers. If these conditions are not met, leave the file and report cleanup NOT RUN. Never modify or delete pre-existing items, bypass permissions or confirmations, or retry a refused or uncertain effect. Never clean up after an unknown effect. Stop on any unknown outcome. Report shell smoke and cleanup separately as PASS, FAIL, or NOT RUN, and report each other capability with observed evidence and limitations; do not claim full success when a case was not run.`;
-    const result = await route.runReadonlyTask(
-      prompt,
-      [],
-      {
-        manualDeepTest: true,
-        manualSubmissionOnly: true,
-        beforeSend: isCurrent,
-        onDispatchIntent: async () => {
-          if (!isCurrent()) throw new Error("DEEP_TEST_CHANGED");
-          if (!intent) {
-            await journalUnderPromotionLease(liveTaskRegistry, () =>
-              journal.markDispatchIntent(operationId),
-            );
-            intent = true;
-          }
-          if (!isCurrent()) throw new Error("DEEP_TEST_CHANGED");
-        },
-      },
-      "ordinary",
-      { name: appName },
-    );
-    const journalResult = {
-      state: result.state,
-      code: result.code,
-      deltaCount: result.deltaCount,
-      observedCharacters: result.observedCharacters,
-    };
-    if (intent) await journal.retainResult(operationId, journalResult);
-    else await journal.retainPreDispatchResult(operationId, journalResult);
-    const retained = await journal.load();
-    if (!retained) throw new Error("DEEP_TEST_RESULT_MISSING");
-    recoverableDeepTests = [...recoverableDeepTests, retained];
-    return ProductConfigurationResultSchema.parse({
-      ok: true,
-      snapshot: owner.snapshot(),
-      evidence: {
-        kind: "chatgpt.deep-test-result",
-        operationId,
-        state: result.state,
-        code: result.code,
-      },
-    });
-  } catch {
-    if (prepared) deepTestRecoveryReady = false;
-    return configurationFailure(
-      prepared
-        ? "CHATGPT_CONVERSATION_UNCONFIRMED"
-        : "CHATGPT_TASK_JOURNAL_FAILED",
-    );
-  } finally {
-    chatAdmission.release();
-    connectorAdmission.release();
-  }
-}
-
-function deepTestStatus(): ProductConfigurationResult {
-  if (!configuration || !deepTestRecoveryReady)
-    return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
-  return ProductConfigurationResultSchema.parse({
-    ok: true,
-    snapshot: configuration.snapshot(),
-    evidence: {
-      kind: "chatgpt.deep-test-status",
-      attempts: recoverableDeepTests
-        .filter(
-          (record) =>
-            record.phase === "result_retained" && record.result !== null,
-        )
-        .map((record) => ({
-          operationId: record.operationId,
-          state: record.result!.state,
-          code: record.result!.code,
-        })),
-    },
-  });
-}
-
 async function configureAdmittedProduct(
   command: ProductConfigurationCommand,
 ): Promise<ProductConfigurationResult> {
@@ -7120,43 +6857,15 @@ async function configureAdmittedProduct(
   if (command.kind === "connector.test-connection")
     return testConnectionCommand(command);
   if (command.kind === "chatgpt.run-deep-test")
-    return runManualDeepTest(
+    return configurationDeep().runManualDeepTest(
       command.operationId,
       command.taskId,
       command.test ?? "deep",
     );
-  if (command.kind === "chatgpt.deep-test-status") return deepTestStatus();
-  if (command.kind === "chatgpt.ack-deep-test") {
-    if (
-      desktopAdmission.occupied("chatgpt-task") ||
-      desktopAdmission.occupied("connector-task") ||
-      !deepTestRecoveryReady
-    )
-      return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
-    const record = recoverableDeepTests.find(
-      (item) =>
-        item.operationId === command.operationId &&
-        item.phase === "result_retained" &&
-        item.result !== null,
-    );
-    if (!record) return configurationFailure("CHATGPT_TASK_RESULT_NOT_FOUND");
-    const journal = new PrivateChatGptTaskJournal({
-      root: statePaths().state,
-      deepTestOperationId: record.operationId,
-    });
-    try {
-      await journalUnderPromotionLease(liveTaskRegistry, () =>
-        journal.acknowledgeDelivery(record.operationId),
-      );
-      recoverableDeepTests = recoverableDeepTests.filter(
-        (item) => item !== record,
-      );
-      return deepTestStatus();
-    } catch {
-      deepTestRecoveryReady = false;
-      return configurationFailure("CHATGPT_CONVERSATION_UNCONFIRMED");
-    }
-  }
+  if (command.kind === "chatgpt.deep-test-status")
+    return configurationDeep().deepTestStatus();
+  if (command.kind === "chatgpt.ack-deep-test")
+    return configurationDeep().acknowledgeDeepTest(command.operationId);
   if (command.kind.startsWith("computer.")) {
     return configurationComputer().configureAdmittedComputer(
       command as ComputerConfigurationCommand,

@@ -11,13 +11,6 @@ import { productName } from "../../tooling/harness-identity.ts";
 // scheduling and the real host function, not provider/native/install behavior.
 const root = path.resolve(import.meta.dirname, "../..");
 const scratch = await fs.mkdtemp(path.join(os.tmpdir(), "farol-deep-ipc-"));
-const source = await fs.readFile(
-  path.join(root, "src/apps/desktop/main.ts"),
-  "utf8",
-);
-const begin = source.indexOf("async function runManualDeepTest(");
-const end = source.indexOf("function deepTestStatus()", begin);
-assert.ok(begin >= 0 && end > begin);
 const entry = path.join(scratch, "entry.cjs");
 let child;
 try {
@@ -32,23 +25,23 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { app, BrowserWindow, ipcMain } from 'electron';
-import { PrivateChatGptTaskJournal } from './src/apps/desktop/chatgpt-task-journal.ts';
-import { ChatGptTaskJournalOperationIdSchema, MAX_CHATGPT_TASK_JOURNAL_BYTES, MAX_DEEP_TEST_HISTORY_BYTES, MAX_DEEP_TEST_HISTORY_RECORDS, MAX_DEEP_TEST_OUTSTANDING } from './src/apps/desktop/chatgpt-task-journal-record.ts';
-import { readFlatDeepTestRecords } from './src/apps/desktop/legacy-activation-obligations.ts';
 import os from 'node:os';
 import { desktopStatePaths } from './apps/desktop/host/paths.ts';
 import { DesktopAdmission } from './apps/desktop/host/admission.ts';
+import { createConfigurationDeep } from './apps/desktop/configuration/deep.ts';
+import { fixtureBuildId, guidedSettingsFixture } from './tests/fixtures/guided-onboarding.ts';
 const root = ${JSON.stringify(scratch)};
 app.setPath('userData', root); app.dock?.hide();
 const statePaths = () => desktopStatePaths({ userData: app.getPath('userData'), tmpdir: os.tmpdir() });
-const binding = { buildId:'build', connectorGeneration:'1' };
+const binding = { buildId:fixtureBuildId, connectorGeneration:'1' };
 const desktopGoCore = { backendAvailable:true, currentComputerConnectorBinding: () => binding };
 const secureMcpConnectorRuntime = { isRunning: () => true, hasUnresolvedEffect: () => false, getTunnelObservation:()=>null };
-const snapshot = { status:'ready', settings:{ setup:{chatgpt:{outcomeUnknown:false},computer:{outcomeUnknown:false}}, computer:{generation:1,pendingEdit:null}, connectors:{secureMcp:{tunnelId:'tunnel',generation:1,runtime:{state:'ready',runtimeGeneration:'runtime',buildId:'build',computerGeneration:1}}}} };
+const snapshot = { status:'ready', settings:guidedSettingsFixture() };
 const configuration = {snapshot:()=>snapshot};
 let sends=0, observedOverlay='';
 const chatGptRoute = {captureManualTaskTarget:()=>()=>true,runReadonlyTask:async(prompt,_attachments,observer)=>{ observedOverlay=shellOverlay; await observer.onDispatchIntent(); assert.equal(observer.beforeSend(),true); assert.equal(observer.manualSubmissionOnly,true); sends++; return {state:'send_requested',code:null,deltaCount:0,observedCharacters:0}; }};
-const liveTaskRoutes=new Map(), buildIdentity={buildId:'build'}, liveTaskRegistry={};
+const liveTaskRoutes=new Map(), buildIdentity={buildId:fixtureBuildId};
+const liveTaskRegistry={withPromotionLease:async(work)=>({ok:true,value:await work(async()=>{})})};
 let selectedTaskId='', deepTestRecoveryReady=true, recoverableDeepTests=[], connectorStartInFlight=null, browserHomeSurfaceOpen=true, section='browser', shellOverlay='task-menu', pendingChatGptReadonlyTask=null, pendingChatGptAttachmentTask=null, recoverableChatGptTask=null;
 const desktopAdmission = new DesktopAdmission({
   chatGptReadonlyTask:()=>pendingChatGptReadonlyTask!==null,
@@ -58,11 +51,30 @@ const desktopAdmission = new DesktopAdmission({
   hostCheck:()=>false, connectorStart:()=>connectorStartInFlight!==null,
 });
 const chatGptConversationAdmissionFailure=()=>null;
-const connectorRuntimeUncertain=()=>false, computerConnectorAdmission=()=>({admissible:true}), summaryFenceRecovery={};
+const connectorRuntimeUncertain=()=>false, computerConnectorAdmission=()=>({admissible:true});
 const connectorWorkspaceSelection=()=>null;
-const chatGptTaskAdmissionReady=()=>true, currentSurfaceLayout=()=>({pageVisible:shellOverlay==='none'}), currentConnectorAttachment=()=>({challengeSha256:'hash',workspaceId:null}), selectedConnectorApp=()=> ${JSON.stringify(productName)}, connectorAppBindingCurrent=()=>true;
-const journalUnderPromotionLease=async(_owner,work)=>work(), configurationFailure=(error)=>({ok:false,error}), ProductConfigurationResultSchema={parse:(v)=>v};
-${source.slice(begin, end)}
+const currentSurfaceLayout=()=>({pageVisible:shellOverlay==='none'}), currentConnectorAttachment=()=>({challengeSha256:'hash',workspaceId:null}), selectedConnectorApp=()=> ${JSON.stringify(productName)}, connectorAppBindingCurrent=()=>true;
+const configurationFailure=(error)=>({ok:false,error});
+const { runManualDeepTest } = createConfigurationDeep({
+  configuration: () => configuration, desktopGoCore: () => desktopGoCore,
+  secureMcpConnectorRuntime: () => secureMcpConnectorRuntime, chatGptRoute: () => chatGptRoute,
+  liveTaskRoutes, selectedTaskId: () => selectedTaskId, section: () => section,
+  shellOverlay: () => shellOverlay, browserHomeSurfaceOpen: () => browserHomeSurfaceOpen,
+  setBrowserHomeSurfaceOpen: (value) => { browserHomeSurfaceOpen = value; },
+  deepTestRecoveryReady: () => deepTestRecoveryReady,
+  setDeepTestRecoveryReady: (value) => { deepTestRecoveryReady = value; },
+  recoverableDeepTests: () => recoverableDeepTests,
+  setRecoverableDeepTests: (value) => { recoverableDeepTests = value; },
+  pendingChatGptReadonlyTask: () => pendingChatGptReadonlyTask,
+  pendingChatGptAttachmentTask: () => pendingChatGptAttachmentTask,
+  recoverableChatGptTask: () => recoverableChatGptTask,
+  connectorStartInFlight: () => connectorStartInFlight,
+  summaryFenceRecovery: () => null,
+  desktopAdmission, liveTaskRegistry, buildIdentity, statePaths, configurationFailure,
+  chatGptConversationAdmissionFailure, currentSurfaceLayout, connectorRuntimeUncertain,
+  computerConnectorAdmission, currentConnectorAttachment, selectedConnectorApp,
+  connectorWorkspaceSelection, connectorAppBindingCurrent,
+});
 app.whenReady().then(async()=>{
   try {
     await fs.mkdir(path.join(root,'farol-state'),{mode:0o700});

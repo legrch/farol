@@ -1,10 +1,8 @@
 {
   "schema": 1,
   "files": {
-    "tests/e2e/deep-test-ipc-order.e2e.mjs": ["esbuild"],
     "tests/integration/connection-check-main.test.ts": ["vm"],
     "tests/integration/connector-quit-start.test.ts": ["vm"],
-    "tests/integration/deep-test-dispatch.test.ts": ["vm"],
     "tests/integration/dev-review-profile.test.mjs": ["vm"],
     "tests/integration/fresh-chatgpt-journal-startup.test.ts": ["vm"],
     "tests/integration/go-build-without-safe-open.test.ts": ["vm"],
