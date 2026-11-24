@@ -3,37 +3,16 @@ import {
   windowAdmission,
   type WindowAdmissionState,
 } from "../../apps/desktop/window/main";
-import fs from "node:fs";
-import vm from "node:vm";
-import { stripTypeScriptTypes } from "node:module";
-import { parse } from "@babel/parser";
+import { createInstance } from "../../apps/desktop/host/instance";
 import { expect, it, vi } from "vitest";
-import {
-  PrimaryStartup,
-  primaryStartupReady,
-} from "../../src/apps/desktop/primary-startup";
-import {
-  WindowOpenCoordinator,
-  containWindowOpenFailure,
-} from "../../src/apps/desktop/lifecycle-policy";
-import { decideSecondInstance } from "../../src/apps/desktop/single-instance";
+import { PrimaryStartup } from "../../src/apps/desktop/primary-startup";
+import { WindowOpenCoordinator } from "../../src/apps/desktop/lifecycle-policy";
+import { createInstanceRequest } from "../../src/apps/desktop/single-instance";
 
-// Real request codec/decision, startup/readiness and coordinator, plus actual
-// host callbacks. Native window mechanics and ACK publication are controlled;
-// this does not exercise Electron, an installed update or a live launch.
-const source = fs.readFileSync(
-  new URL("../../src/apps/desktop/main.ts", import.meta.url),
-  "utf8",
-);
-const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
-const callbacks = ["isPrimaryReady", "handleSecondInstance"].map((name) => {
-  const node = tree.program.body.find(
-    (node) => node.type === "FunctionDeclaration" && node.id?.name === name,
-  );
-  if (!node || node.start === null || node.end === null)
-    throw new Error(`SECOND_INSTANCE_CALLBACK_MISSING:${name}`);
-  return source.slice(node.start, node.end);
-});
+// Real request codec/decision, startup/readiness and coordinator, plus the real
+// single-instance host over fake ports. Native window mechanics and ACK
+// publication are controlled; this does not exercise Electron, an installed
+// update or a live launch.
 
 function host({
   applying = false,
@@ -47,19 +26,17 @@ function host({
   backgroundOnly = false,
 } = {}) {
   const launchIdentity = {
-    environment: "preview",
+    environment: "preview" as const,
     sourceCommit: "a".repeat(40),
     sourceTreeDigest: "b".repeat(64),
     inputLedgerSha256: "c".repeat(64),
   };
-  const candidate = {
-    ...launchIdentity,
-    sourceCommit: foreign ? "e".repeat(40) : launchIdentity.sourceCommit,
-    nonce: "d".repeat(32),
-    ...(backgroundOnly
-      ? { schema: "farol.single-instance/3", backgroundOnly: true }
-      : { schema: "farol.single-instance/2" }),
-  };
+  const candidate = createInstanceRequest(
+    foreign
+      ? { ...launchIdentity, sourceCommit: "e".repeat(40) }
+      : launchIdentity,
+    backgroundOnly,
+  );
   let finishReady!: () => void;
   const ready = new Promise<void>((resolve) => {
     finishReady = resolve;
@@ -78,22 +55,17 @@ function host({
     beginOpen = resolve;
   });
   const window = { isDestroyed: () => false };
-  const context: Record<string, unknown> = {
-    launchIdentity,
-    primaryStartup: startup,
+  const context: Record<string, unknown> & {
+    window: typeof window | null;
+    startupRecovery: { reopen(): Promise<void> } | null;
+  } = {
     startupRecovery: null,
-    primaryStartupReady,
-    decideSecondInstance,
-    containWindowOpenFailure,
     windowOpenCoordinator: new WindowOpenCoordinator(),
     window: hasWindow ? window : null,
     runtimeState: failedRuntime ? "failed" : "ready",
     runtimeStopping: stopping,
     quitInProgress: quitting,
     installedUpdateAdmission: applying,
-    taskViewKinds: new Map(),
-    expectedTasks: [],
-    app: { getPath: () => "/controlled-user-data" },
   };
   const create = vi.fn(async () => {
     context.window = window;
@@ -103,20 +75,15 @@ function host({
   const reveal = vi.fn();
   const acknowledge = vi.fn(
     async (
-      _root: unknown,
+      _root: string,
       _candidate: unknown,
       _status: unknown,
       _identity: unknown,
     ) => undefined,
   );
-  Object.assign(context, {
-    createWindow: create,
-    revealWindow: reveal,
-    recoverWindowOpenFailure: () => {
-      throw new Error("UNEXPECTED_RECOVERY");
-    },
-    writeInstanceAcknowledgement: acknowledge,
-  });
+  const recoverWindowOpenFailure = () => {
+    throw new Error("UNEXPECTED_RECOVERY");
+  };
   Object.assign(
     context,
     windowAdmission({
@@ -124,17 +91,39 @@ function host({
       coordinator: context.windowOpenCoordinator as WindowOpenCoordinator,
       createWindow: () => create(),
       revealWindow: reveal,
-      recoverWindowOpenFailure: context.recoverWindowOpenFailure as () => void,
+      recoverWindowOpenFailure,
     }),
   );
-  const actions = vm.runInNewContext(
-    stripTypeScriptTypes(
-      `${callbacks.join("\n")}\n({ handle: handleSecondInstance, ready: isPrimaryReady })`,
-    ),
-    admissionFixture(context),
-  ) as { handle(candidate: unknown): Promise<void>; ready(): boolean };
+  const { desktopAdmission } = admissionFixture(context);
+  const actions = createInstance({
+    app: {
+      getPath: () => "/controlled-user-data",
+      on: vi.fn(),
+      releaseSingleInstanceLock: vi.fn(),
+      quit: vi.fn(),
+      exit: vi.fn(),
+    },
+    stderr: { write: vi.fn() },
+    desktopAdmission,
+    launchIdentity,
+    instanceRequest: candidate,
+    primaryStartup: startup,
+    runtimeStopping: () => context.runtimeStopping as boolean,
+    runtimeState: () =>
+      context.runtimeState as "starting" | "ready" | "offline" | "failed",
+    window: () => context.window,
+    taskViewKinds: new Map(),
+    expectedTasks: [],
+    startupRecovery: () => context.startupRecovery,
+    ensureWindow: context.ensureWindow as () => Promise<void>,
+    recoverWindowOpenFailure,
+    writeInstanceAcknowledgement: acknowledge,
+    waitForInstanceAcknowledgement: async () => null,
+    foreignAcknowledgementCount: async () => 0,
+  });
   return {
-    ...actions,
+    handle: actions.handleSecondInstance,
+    ready: actions.isPrimaryReady,
     candidate,
     context,
     create,
