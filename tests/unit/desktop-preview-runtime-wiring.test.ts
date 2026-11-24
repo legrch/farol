@@ -75,7 +75,6 @@ describe("preview runtime wiring in main", () => {
       "disposeTaskViews",
       "publishRuntimeStatus",
       "observeLocalRuntime",
-      "spawn",
     ]) {
       expect(body).toContain(` ${name},`);
       // A shared owner must stay a const or a function, not become a lent `let`.
@@ -84,6 +83,22 @@ describe("preview runtime wiring in main", () => {
     expect(source).toContain(
       "const ownedLocalRuntimes = new Map<LocalRuntimeLifetime, string>();",
     );
+  });
+
+  it("launches from the factory file, not through a port or from main", async () => {
+    const { source, body } = await factoryBody();
+    const host = await readFile(
+      path.resolve(import.meta.dirname, "../../apps/desktop/runtime/host.ts"),
+      "utf8",
+    );
+    // The runtime launch inventory only sees a launcher imported where it is
+    // called, so the one `spawn` stays imported in the file that calls it.
+    expect(host).toContain(
+      'import { spawn, type ChildProcess } from "node:child_process";',
+    );
+    expect(host).toContain("const child = spawn(");
+    expect(body).not.toContain(" spawn,");
+    expect(source).not.toContain("node:child_process");
   });
 
   it("reads the real clock, environment and arguments", async () => {

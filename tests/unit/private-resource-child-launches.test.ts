@@ -19,6 +19,14 @@ import {
   type PreviewRuntimeTask,
 } from "../../apps/desktop/runtime/host";
 
+// The runtime launch imports `spawn` itself so the runtime launch inventory
+// sees it; this replaces only that export with the context's scripted spawn.
+const runtimeSpawn = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", async (original) => ({
+  ...(await original<typeof import("node:child_process")>()),
+  spawn: runtimeSpawn,
+}));
+
 // Actual source composition with controlled IPC/process producers, not a native host.
 const main = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
 // The local runtime start lives in apps/desktop/runtime/host.ts; main only
@@ -79,7 +87,7 @@ function resources(
 }
 
 type RuntimeContext = ReturnType<typeof resources> & {
-  spawn: ReturnType<typeof vi.fn>;
+  spawn: (...args: unknown[]) => unknown;
   runtimeStopping?: boolean;
   runtimeState?: string;
   runtimeError?: string | null;
@@ -96,6 +104,10 @@ type RuntimeContext = ReturnType<typeof resources> & {
 // what a second start does and what the spawn mock saw.
 function previewRuntime(context: RuntimeContext) {
   const fixture = admissionFixture(context);
+  runtimeSpawn.mockReset();
+  runtimeSpawn.mockImplementation((...args: unknown[]) =>
+    fixture.spawn(...args),
+  );
   return createPreviewRuntime<PreviewRuntimeReady>({
     desktopAdmission: fixture.desktopAdmission,
     ownedLocalRuntimes: fixture.ownedLocalRuntimes,
@@ -131,8 +143,6 @@ function previewRuntime(context: RuntimeContext) {
     disposeTaskViews: vi.fn(),
     publishRuntimeStatus: vi.fn(),
     observeLocalRuntime: fixture.observeLocalRuntime,
-    spawn:
-      fixture.spawn as unknown as PreviewRuntimePorts<PreviewRuntimeReady>["spawn"],
     setTimeout,
     clearTimeout,
     env: fixture.process.env,

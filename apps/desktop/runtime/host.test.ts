@@ -1,4 +1,4 @@
-import type { ChildProcess, SpawnOptions } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LocalRuntimeLifetime } from "../../../src/apps/desktop/local-runtime-lifetime";
@@ -9,6 +9,14 @@ import {
   type PreviewRuntimeState,
   type PreviewRuntimeTask,
 } from "./host";
+
+// The launch imports `spawn` itself, so the runtime launch inventory sees it;
+// the test replaces that one export and keeps every other child_process export.
+const spawnMock = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", async (original) => ({
+  ...(await original<typeof import("node:child_process")>()),
+  spawn: spawnMock,
+}));
 
 // The preview runtime start and exit over scripted owners. Main's `let`s are
 // fields the ports read afresh and write through the setters, the child is an
@@ -61,8 +69,10 @@ function build(
     fail: () => void;
   }[] = [];
   const owned = new Map<LocalRuntimeLifetime, string>();
-  const spawn = vi.fn(
-    (command: string, args: readonly string[], spawnOptions: SpawnOptions) => {
+  const spawn = spawnMock;
+  spawn.mockReset();
+  spawn.mockImplementation(
+    (command: string, args: readonly string[], spawnOptions: unknown) => {
       events.push(`spawn ${command} ${args.join(" ")}`);
       const child = new FakeChild();
       children.push(child);
@@ -138,7 +148,6 @@ function build(
       lifetimes.push({ lifetime, settle, fail });
       return lifetime;
     },
-    spawn,
     setTimeout: (handler, ms) => {
       const timer = { handler, ms, cleared: false };
       timers.push(timer);

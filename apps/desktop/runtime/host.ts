@@ -1,4 +1,4 @@
-import type { ChildProcess, SpawnOptions } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import type { LocalRuntimeLifetime } from "../../../src/apps/desktop/local-runtime-lifetime";
 import type { DesktopAdmission } from "../host/admission";
@@ -9,7 +9,9 @@ import type { DesktopAdmission } from "../host/admission";
 // that arrives while the resource recheck or the ready message waits is seen at
 // the next read. The child, its generation counter and the exit handler are
 // read and written only here, so they live in this closure. Nothing here
-// retries: a failed start leaves the runtime failed, never started again.
+// retries: a failed start leaves the runtime failed, never started again. The
+// launch itself imports `spawn` here, not through a port, so the runtime launch
+// inventory keeps seeing the one place that starts this child.
 
 export type PreviewRuntimeTask = Readonly<{
   ownerId: string;
@@ -72,11 +74,6 @@ export type PreviewRuntimePorts<Ready extends PreviewRuntimeReady> = Readonly<{
     child: ChildProcess,
     scope: "in-memory-preview",
   ) => LocalRuntimeLifetime;
-  spawn: (
-    command: string,
-    args: readonly string[],
-    options: SpawnOptions,
-  ) => ChildProcess;
   setTimeout: (
     handler: () => void,
     ms: number,
@@ -110,7 +107,6 @@ export function createPreviewRuntime<Ready extends PreviewRuntimeReady>(
     disposeTaskViews,
     publishRuntimeStatus,
     observeLocalRuntime,
-    spawn,
     setTimeout,
     clearTimeout,
     env,
