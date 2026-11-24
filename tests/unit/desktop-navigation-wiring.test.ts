@@ -92,8 +92,9 @@ describe("surface navigation wiring in main", () => {
         new RegExp(`\\n(?:async )?function ${name}\\(`),
       );
     expect(source).not.toMatch(/\nlet sectionNavigationSequence\b/);
-    // The window hands native input and the renderer's layout report to it.
+    // The window hands native input to it, and the IPC table the renderer's
+    // layout report.
     expect(source).toContain("\n  handleShortcut,\n");
-    expect(source).toContain("applyRendererLayout(");
+    expect(source).toContain("\n    applyRendererLayout,\n  }).install();\n");
   });
 });

@@ -49,7 +49,6 @@ import {
   DesktopUpdatesPanel,
   UPDATES_PANEL_SIZE,
 } from "../../../apps/desktop/updates-panel";
-import { updatesChannels } from "../../../apps/desktop/renderer/updates/contract";
 import { connectorRuntimeUncertain } from "../../pkg/product-settings/connector-uncertainty";
 
 import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
@@ -121,6 +120,7 @@ import {
   aboutCommand,
   applicationMenu,
 } from "../../../apps/desktop/shell/menu";
+import { createIpc } from "../../../apps/desktop/shell/ipc";
 import { surfaceNavigation } from "../../../apps/desktop/shell/navigation";
 import { desktopCoreArtifactRoot } from "../../../apps/desktop/dev-core-layout";
 import { promises as rawFs } from "original-fs";
@@ -223,7 +223,6 @@ import {
 import { channels } from "../../pkg/ipc/channels";
 import {
   defaultNavigationShortcuts,
-  parseNavigationShortcuts,
   type NavigationShortcuts,
 } from "../../pkg/ipc/navigation-shortcuts";
 import type { RuntimeStatus } from "../../pkg/ipc/runtime-status";
@@ -381,7 +380,6 @@ import {
 } from "../../../apps/desktop/quit/trace";
 import { createQuitProgressWindow } from "../../../apps/desktop/quit/panel";
 import { drainComputerConnector } from "./computer-connector-drain";
-import { isTrustedIpcSender } from "./ipc-sender";
 import {
   currentBootTimeMs,
   removeRunMarker,
@@ -4911,214 +4909,48 @@ async function runContextFixtureControl(
 }
 
 function installIpc(): void {
-  ipcMain.on(updatesChannels.projection, (event, value: unknown) => {
-    if (
-      !isTrustedIpcSender(event, window) ||
-      !window ||
-      event.senderFrame !== window.webContents.mainFrame
-    )
-      return;
-    updatesPanel.bindOwner(window, installedUpdates.resources().directory);
-    updatesPanel.publish(event, value);
-  });
-  ipcMain.on(updatesChannels.settled, (event, value: unknown) =>
-    updatesPanel.settle(event, value),
-  );
-  ipcMain.on(updatesChannels.directSettled, (event, value: unknown) =>
-    updatesPanel.settleDirect(event, value),
-  );
-  ipcMain.on(updatesChannels.intent, (event, value: unknown) =>
-    updatesPanel.relay(event, value),
-  );
-  ipcMain.on(updatesChannels.close, (event) => updatesPanel.close(event));
-  ipcMain.handle(updatesChannels.state, (event) =>
-    updatesPanel.isPanel(event)
-      ? updatesPanel.state()
-      : { status: "unavailable" },
-  );
-  ipcMain.on(updatesChannels.open, (event) => {
-    if (!updatesPanel.isOwner(event) || !window || desktopAdmission.closed())
-      return;
-    const owner = window;
-    void updatesPanel
-      .open({
-        owner,
-        directory: installedUpdates.resources().directory,
-        mode: windowMode,
-        place: () => selectedVisibleTestPlacement(UPDATES_PANEL_SIZE).bounds,
-        admitted: () =>
-          window === owner &&
-          !owner.isDestroyed() &&
-          !desktopAdmission.closed(),
-      })
-      .catch(() => console.error("DESKTOP_UPDATES_PRESENTATION_FAILED"));
-  });
-  const settings = configuration?.snapshot();
-  if (settings?.status === "ready")
-    operationsStore().setWorkspaceLabels(settings.settings.computer.workspaces);
-  ipcMain.handle(channels.operations, async (event) => {
-    if (!isTrustedIpcSender(event, window))
-      return { entries: [], corruptLines: 0, writeFailures: 1 };
-    const snapshot = await operationsStore().snapshot();
-    return {
-      ...snapshot,
-      connectionChecking:
-        startupConnectionChecking || connectionAdmissionInProgress(),
-    };
-  });
-  ipcMain.handle(channels.selfTest, (event, value: unknown) =>
-    isTrustedIpcSender(event, window) &&
-    event.senderFrame === event.sender.mainFrame
-      ? runSelfTestCommand(
-          () => desktopGoCore,
-          () => !desktopAdmission.closed(),
-          value,
-        )
-      : { ok: false, code: "SELF_TEST_UNAVAILABLE" },
-  );
-  ipcMain.handle(
-    channels.installedUpdate,
-    async (event, value: unknown, operationId: unknown) => {
-      if (!isTrustedIpcSender(event, window))
-        return { error: "IPC_SENDER_DENIED" };
-      const parsed = InstalledUpdateCommandSchema.safeParse(value);
-      const tracked =
-        installedUpdates.updater !== null &&
-        parsed.success &&
-        parsed.data.kind !== "status";
-      if (tracked && !updatesPanel.beginDirect(event, operationId))
-        return { phase: "unavailable", code: "UPDATE_ACTION_INVALID" };
-      let returned = false;
-      let hostResult: unknown;
-      try {
-        const result = await installedUpdates.command(value);
-        hostResult = result;
-        returned = true;
-        return result;
-      } finally {
-        if (tracked)
-          updatesPanel.endDirect(event, operationId, returned, hostResult);
-      }
+  createIpc({
+    ipcMain,
+    window: () => window,
+    updatesPanel,
+    installedUpdates,
+    desktopAdmission,
+    windowMode,
+    UPDATES_PANEL_SIZE,
+    selectedVisibleTestPlacement,
+    configuration: () => configuration,
+    operationsStore,
+    startupConnectionChecking: () => startupConnectionChecking,
+    connectionAdmissionInProgress,
+    runSelfTestCommand,
+    desktopGoCore: () => desktopGoCore,
+    installedUpdateCommandSchema: InstalledUpdateCommandSchema,
+    bootstrap,
+    runtimeJson,
+    configureProduct,
+    configurationFailure,
+    readChatHistoryView,
+    readRetiredRepliesView,
+    runProductTaskCommand,
+    taskFailure,
+    setNavigationShortcuts: (value) => {
+      navigationShortcuts = value;
     },
-  );
-  ipcMain.handle(channels.bootstrap, (event) =>
-    isTrustedIpcSender(event, window)
-      ? bootstrap()
-      : { error: "IPC_SENDER_DENIED" },
-  );
-  ipcMain.handle(channels.snapshot, (event) =>
-    isTrustedIpcSender(event, window)
-      ? runtimeJson("/snapshot")
-      : { error: "IPC_SENDER_DENIED" },
-  );
-  ipcMain.handle(channels.configuration, (event, value: unknown) =>
-    isTrustedIpcSender(event, window)
-      ? configureProduct(value)
-      : configurationFailure("SETTINGS_UNAVAILABLE"),
-  );
-  ipcMain.handle(channels.chatHistory, (event, value: unknown) =>
-    isTrustedIpcSender(event, window)
-      ? readChatHistoryView(() => desktopGoCore, value)
-      : { error: "IPC_SENDER_DENIED" },
-  );
-  ipcMain.handle(channels.retiredReplies, (event, value: unknown) =>
-    isTrustedIpcSender(event, window)
-      ? readRetiredRepliesView(() => desktopGoCore, value)
-      : { error: "IPC_SENDER_DENIED" },
-  );
-  ipcMain.handle(channels.task, (event, value: unknown) =>
-    isTrustedIpcSender(event, window)
-      ? runProductTaskCommand(value)
-      : taskFailure("TASKS_UNAVAILABLE"),
-  );
-  ipcMain.handle(channels.navigationShortcuts, (event, value: unknown) => {
-    if (!isTrustedIpcSender(event, window)) return { ok: false };
-    if (desktopAdmission.closed()) return { ok: false };
-    const parsed = parseNavigationShortcuts(value);
-    if (!parsed) return { ok: false };
-    navigationShortcuts = parsed;
-    installApplicationMenu();
-    return { ok: true };
-  });
-  ipcMain.handle(channels.control, async (event, value: unknown) => {
-    if (desktopAdmission.closed()) return { error: "UPDATE_IN_PROGRESS" };
-    if (!isTrustedIpcSender(event, window))
-      return { error: "IPC_SENDER_DENIED" };
-    const parsed = controlSchema.safeParse(value);
-    if (
-      parsed.success &&
-      (parsed.data.action === "compact-context-fixture" ||
-        parsed.data.action === "confirm-context-fixture")
-    ) {
-      return runContextFixtureControl(parsed.data.taskId, parsed.data.action);
-    }
-    if (
-      !parsed.success ||
-      !expectedTasks.some((task) => task.taskId === parsed.data.taskId)
-    ) {
-      return { error: "IPC_CONTROL_INVALID" };
-    }
-    const task = runtime?.tasks.find(
-      (candidate) => candidate.taskId === parsed.data.taskId,
-    );
-    if (!task) return { error: "RUNTIME_OFFLINE" };
-    if (taskSurfaceFailures.has(task.taskId)) {
-      return { error: "TASK_STREAM_FAILED" };
-    }
-    const correlation =
-      parsed.data.action === "release-tool"
-        ? pendingComputer.get(task.taskId)
-        : { ...task, callId: null };
-    if (!correlation) return { error: "CONTROL_NOT_PENDING" };
-    return runtimeJson(
-      `/control/${encodeURIComponent(parsed.data.taskId)}/${parsed.data.action}`,
-      "POST",
-      {
-        ownerId: correlation.ownerId,
-        sessionId: correlation.sessionId,
-        taskId: correlation.taskId,
-        turnId: correlation.turnId,
-        generation: correlation.generation,
-        callId:
-          "callId" in correlation && typeof correlation.callId === "string"
-            ? correlation.callId
-            : null,
-      },
-    );
-  });
-  ipcMain.handle(channels.browserHistory, (event, value: unknown) => {
-    const request = z
-      .object({
-        taskId: z.string().max(200),
-        direction: z.union([z.literal(-1), z.literal(1)]),
-      })
-      .strict()
-      .safeParse(value);
-    if (
-      !request.success ||
-      desktopAdmission.closed() ||
-      !isTrustedIpcSender(event, window) ||
-      section !== "browser" ||
-      setupOpen ||
-      shellOverlay !== "none" ||
-      request.data.taskId !== selectedTaskId
-    )
-      return { handled: false, taskId: "", back: false, forward: false };
-    const route =
-      selectedTaskId === "" ? chatGptRoute : liveTaskRoutes.get(selectedTaskId);
-    const handled = route?.travelHistory(request.data.direction) ?? false;
-    return {
-      handled,
-      taskId: selectedTaskId,
-      back: false,
-      forward: false,
-      ...route?.navigationHistory(),
-    };
-  });
-  ipcMain.on(channels.layout, (event, value: unknown) => {
-    if (desktopAdmission.closed() || !isTrustedIpcSender(event, window)) return;
-    applyRendererLayout(value);
-  });
+    installApplicationMenu,
+    controlSchema,
+    runContextFixtureControl,
+    expectedTasks,
+    runtime: () => runtime,
+    taskSurfaceFailures,
+    pendingComputer,
+    section: () => section,
+    setupOpen: () => setupOpen,
+    shellOverlay: () => shellOverlay,
+    selectedTaskId: () => selectedTaskId,
+    chatGptRoute: () => chatGptRoute,
+    liveTaskRoutes,
+    applyRendererLayout,
+  }).install();
 }
 
 let startupSplash: StartupSplash | null = null;
