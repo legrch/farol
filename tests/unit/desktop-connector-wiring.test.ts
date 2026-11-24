@@ -24,11 +24,14 @@ describe("connector supervisor wiring in main", () => {
       "desktopGoCore",
       "window",
       "connectorStartInFlight",
-      "summaryFenceRecovery",
       "authorityTransitions",
       "powerMonitor",
     ])
       expect(body).toContain(`\n  ${name}: () => ${name},\n`);
+    // The last fence recovery lives in the context owner, read through its cell.
+    expect(body).toContain(
+      "\n  summaryFenceRecovery: () => contextHost.recovery.get(),\n",
+    );
     for (const [name, expression] of Object.entries({
       quitInProgress: "desktopAdmission.quitInProgress",
       installedUpdateAdmission: "desktopAdmission.installedUpdateAdmission",
@@ -83,10 +86,13 @@ describe("connector supervisor wiring in main", () => {
       "connectorCredentialStore",
       "secureMcpConnectorRuntime",
       "desktopGoCore",
-      "summaryFenceRecovery",
       "connectorStartCancellation",
     ])
       expect(body).toContain(`${name}: () => ${name},`);
+    // The last fence recovery lives in the context owner, read through its cell.
+    expect(body).toContain(
+      "summaryFenceRecovery: () => contextHost.recovery.get(),",
+    );
     expect(body).toContain(
       "setConnectorStartCancellation: (value) => { connectorStartCancellation = value; },",
     );

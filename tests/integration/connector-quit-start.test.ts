@@ -120,7 +120,7 @@ function fixture(honoursCancellation = false, startupAdmission = false) {
       persistedProductAgentExpiry: null,
       hostCheckClients: [],
       modelLifecycle: null,
-      routeBRuntime: null,
+      contextHost: { routeB: createCell<unknown>(null) },
       disposeChatGptRoutes() {},
       disposeTaskViews() {},
       ownedLocalRuntimes: new Map(),

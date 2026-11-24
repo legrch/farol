@@ -13,6 +13,10 @@ const mainSource = path.resolve(
   import.meta.dirname,
   "../../src/apps/desktop/main.ts",
 );
+const contextSource = path.resolve(
+  import.meta.dirname,
+  "../../apps/desktop/task/context.ts",
+);
 
 async function read(): Promise<{ source: string; block: string }> {
   const source = await readFile(mainSource, "utf8");
@@ -29,7 +33,6 @@ describe("relay and saved-chat bridge wiring in main", () => {
     const { source, block } = await read();
     for (const name of [
       "configuration",
-      "summaryExecutionFence",
       "window",
       "chatGptHomeUrl",
       "chatGptE2eOrigin",
@@ -38,6 +41,11 @@ describe("relay and saved-chat bridge wiring in main", () => {
       // A lent variable stays a `let` main owns, not a copy taken at creation.
       expect(source).toMatch(new RegExp(`\\nlet ${name}\\b`));
     }
+    // The connector's execution fence lives in the context owner, read through
+    // its cell at each use.
+    expect(block).toContain(
+      " summaryExecutionFence: () => contextHost.fence.get(),",
+    );
   });
 
   it("shares each const owner and main helper by reference, assigning nothing back", async () => {
@@ -86,9 +94,6 @@ describe("relay and saved-chat bridge wiring in main", () => {
     const { source } = await read();
     const created = source.indexOf("\nconst bridge = createBridge({");
     expect(created).toBeGreaterThan(
-      source.indexOf("\nlet summaryExecutionFence"),
-    );
-    expect(created).toBeGreaterThan(
       source.indexOf("\nlet taskCountsBeforeRuntimeExit"),
     );
     expect(created).toBeLessThan(source.indexOf("\nasync function main("));
@@ -106,7 +111,7 @@ describe("relay and saved-chat bridge wiring in main", () => {
   it("starts the relay, then the bridge, between context recovery and Route B", async () => {
     const { source } = await read();
     expect(source.replace(/\s+/g, " ")).toContain(
-      "await initializeCodexContextController(); await reconcileContextAfterRestart(); await bridge.initializeCallerRelay(); await bridge.initializeSavedChatBridge(); await initializeRouteBRuntime(); });",
+      "await contextHost.initializeCodexContextController(); await contextHost.reconcileContextAfterRestart(); await bridge.initializeCallerRelay(); await bridge.initializeSavedChatBridge(); await contextHost.initializeRouteBRuntime(); });",
     );
     expect(source.match(/bridge\.initializeCallerRelay\(/g)).toHaveLength(1);
     expect(source.match(/bridge\.initializeSavedChatBridge\(/g)).toHaveLength(
@@ -116,9 +121,14 @@ describe("relay and saved-chat bridge wiring in main", () => {
 
   it("hands Route B the relay read once, before the start", async () => {
     const { source } = await read();
-    const flat = source.replace(/\s+/g, " ");
-    expect(flat).toContain(
-      "if (!controller || routeBRuntime) return; const relay = bridge.relay.get(); try { routeBRuntime = await startRouteBRuntime({ stateRoot: statePaths().state, surfaces: routeBTaskSurfaces, compaction: controller.continuity, ...(relay ? { relay } : {}), });",
+    // Main lends the relay as a getter on its cell; the Route B start in the
+    // context owner reads it once, before the start.
+    expect(source.replace(/\s+/g, " ")).toContain(
+      "callerRelay: () => bridge.relay.get(),",
+    );
+    const context = await readFile(contextSource, "utf8");
+    expect(context.replace(/\s+/g, " ")).toContain(
+      "if (!controller || routeBRuntime.get()) return; const relay = callerRelay(); try { routeBRuntime.set( await startRouteBRuntime({ stateRoot: statePaths().state, surfaces: routeBTaskSurfaces, compaction: controller.continuity, ...(relay ? { relay } : {}), }), );",
     );
   });
 
