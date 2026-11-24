@@ -121,6 +121,7 @@ import {
   applicationMenu,
 } from "../../../apps/desktop/shell/menu";
 import { createBridge } from "../../../apps/desktop/runtime/bridge";
+import { createContextHost } from "../../../apps/desktop/task/context";
 import { createIpc } from "../../../apps/desktop/shell/ipc";
 import {
   createInstance,
@@ -155,15 +156,7 @@ import {
   WebContentsView,
   type SaveDialogOptions,
 } from "electron";
-import {
-  chmod,
-  lstat,
-  mkdtemp,
-  mkdir,
-  realpath,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, lstat, mkdtemp, mkdir, realpath, rm } from "node:fs/promises";
 import {
   closeSync,
   constants as fsConstants,
@@ -204,7 +197,7 @@ import {
   type ProductTaskAgent,
   type ProductTaskCommandResult,
 } from "../../modules/chat/contract/product-task";
-import { LiveTaskRegistry, type LiveTaskAdmission } from "./live-task-registry";
+import { LiveTaskRegistry } from "./live-task-registry";
 import { journalUnderPromotionLease } from "./chatgpt-journal-lease";
 import {
   workspaceDescriptor,
@@ -216,14 +209,7 @@ import {
   releasePromotionLease,
   verifyPromotionLease,
 } from "./promotion-lease";
-import {
-  reconcileTaskContexts,
-  toProductTaskContext,
-} from "./context-task-state";
-import {
-  createCodexContextController,
-  type CodexContextController,
-} from "./codex-context-runtime";
+import { createCodexContextController } from "./codex-context-runtime";
 import { channels } from "../../pkg/ipc/channels";
 import {
   defaultNavigationShortcuts,
@@ -380,23 +366,15 @@ import {
   readProcessStart,
   writeRunMarker,
 } from "./run-marker";
-import {
-  computerConnectorAdmission,
-  recoverSummaryExecutionFence,
-  type SummaryFenceRecovery,
-} from "./summary-fence-recovery";
-import {
-  deleteTaskContext,
-  sweepOrphanTaskContexts,
-} from "./task-context-cleanup";
+import { computerConnectorAdmission } from "./summary-fence-recovery";
+import { deleteTaskContext } from "./task-context-cleanup";
 import { createRouteBTaskLifecycle } from "./route-b-task-lifecycle";
-import { TaskMutationGate, underTaskMutation } from "./task-mutation-gate";
+import { TaskMutationGate } from "./task-mutation-gate";
 import { runCodexChatGptHostRoute } from "./codex-chatgpt-host-route";
 import { runRouteBHostCheck } from "./route-b-host-check";
 import {
   ROUTE_B_MODEL,
   startRouteBRuntime,
-  type RouteBRuntime,
   type RouteBSurfaceAdmission,
   type RouteBTaskSurfaces,
 } from "./route-b-runtime";
@@ -902,7 +880,7 @@ const {
     desktopAdmission.connectorTaskAdmissionPurpose,
   connectorStartInFlight: () => connectorStartInFlight,
   configurationRequests: () => desktopAdmission.configurationRequests,
-  summaryFenceRecovery: () => summaryFenceRecovery,
+  summaryFenceRecovery: () => contextHost.recovery.get(),
   workspaceMutationAdmission: () =>
     desktopAdmission.occupied("workspace-mutation"),
   codexAgentOperationActive,
@@ -1002,14 +980,6 @@ let setupSignInCheck: SetupCompletionContext["signInCheck"] = null;
 // from a current one without guessing from timing.
 let chatGptSignInGeneration = 0;
 let chatGptSignInOpenGeneration: number | null = null;
-let codexContextController: CodexContextController | null = null;
-// The connector's execution fence for summary-only phases, shared with the
-// MCP process through the launch root; it exists once the controller does.
-let summaryExecutionFence: PrivateExecutionFence | null = null;
-// What the last start's fence recovery concluded; the Computer connector is
-// not started while it holds nothing (or never ran).
-let summaryFenceRecovery: SummaryFenceRecovery | null = null;
-let routeBRuntime: RouteBRuntime | null = null;
 // Live counters are cleared when the runtime exits; a support report made
 // after that uses the counts taken just before the exit.
 let taskCountsBeforeRuntimeExit: Readonly<{
@@ -1027,7 +997,7 @@ const bridge = createBridge({
   buildIdentity,
   env: process.env,
   configuration: () => configuration,
-  summaryExecutionFence: () => summaryExecutionFence,
+  summaryExecutionFence: () => contextHost.fence.get(),
   window: () => window,
   chatGptHomeUrl: () => chatGptHomeUrl,
   chatGptE2eOrigin: () => chatGptE2eOrigin,
@@ -1693,15 +1663,7 @@ function createLiveChatGptRoute(
 }
 
 function contextBinding(taskId: string): ContextBinding {
-  return {
-    ownerId: contextOwnerId,
-    taskId,
-    hostThreadId: taskId,
-    sessionId: taskId,
-    providerProfileId: contextProviderProfileId,
-    modelId: contextModel,
-    mode: "chatgpt",
-  };
+  return contextHost.binding(taskId);
 }
 
 function createContextSummaryFallbackRoute(
@@ -1765,62 +1727,11 @@ async function recordChatGptSignInOutcome(
 async function admitRouteBTask(
   threadId: string,
 ): Promise<RouteBSurfaceAdmission> {
-  // `surfaceFor` read the gate free before it removed this thread's private
-  // residue; another task mutation may have claimed it in that gap.
-  return underTaskMutation(
-    taskMutations,
-    () => ({ ok: false, code: "TASK_ROUTE_BUSY" }),
-    async () => {
-      const before = liveTaskRegistry.snapshot();
-      const labels = new Set(before.tasks.map((candidate) => candidate.label));
-      let ordinal = 1;
-      while (labels.has(`Codex task ${ordinal}`)) ordinal += 1;
-      const task: ProductTask = {
-        taskId: threadId,
-        sessionId: threadId,
-        turnId: randomUUID(),
-        label: `Codex task ${ordinal}`,
-        provider: "chatgpt",
-        requestedModel: "Account default",
-        observedModel: null,
-        requestedMode: "Account default",
-        observedMode: null,
-        hasComputer: false,
-        pinned: false,
-        lifecycle: "running",
-      };
-      // S35-03/2: admits and persists under the same cross-process lease a
-      // promotion holds, so this cannot land in the gap after a promotion's
-      // drain check validated nothing running and before its placement.
-      let admitted: LiveTaskAdmission;
-      try {
-        admitted = await liveTaskRegistry.admitDurable(
-          task,
-          persistLiveTaskState,
-        );
-      } catch {
-        return { ok: false, code: "TASK_STATE_UNAVAILABLE" };
-      }
-      if (admitted.status === "capacity") {
-        return { ok: false, code: "TASK_CAPACITY_REACHED" };
-      }
-      if (admitted.status !== "admitted") {
-        return { ok: false, code: "TASK_ROUTE_UNAVAILABLE" };
-      }
-      const route = createLiveChatGptRoute(task.taskId, task.label);
-      liveTaskConversationUrls.set(task.taskId, null);
-      liveTaskRoutes.set(task.taskId, route);
-      publishTasksState();
-      if (!(await openLiveTaskSurface(task.taskId))) {
-        return { ok: false, code: "TASK_SURFACE_UNREACHABLE" };
-      }
-      return { ok: true, surface: route };
-    },
-  );
+  return contextHost.admitRouteBTask(threadId);
 }
 
 const routeBTaskLifecycle = createRouteBTaskLifecycle({
-  owns: (taskId) => routeBRuntime?.owns(taskId) ?? false,
+  owns: (taskId) => contextHost.routeB.get()?.owns(taskId) ?? false,
   existingSurface: (taskId) => liveTaskRoutes.get(taskId) ?? null,
   liveTask: (taskId) => liveTaskRegistry.get(taskId) !== null,
   markRunning: (taskId) => markLiveTaskRunningDurable(taskId),
@@ -1834,14 +1745,16 @@ const routeBTaskLifecycle = createRouteBTaskLifecycle({
   removeTask: (taskId) => liveTaskRegistry.remove(taskId) !== null,
   rollbackTasks: (snapshot) => liveTaskRegistry.rollback(snapshot),
   persist: () => persistLiveTaskState(),
-  deleteContext: (taskId) =>
-    codexContextController
+  deleteContext: (taskId) => {
+    const controller = contextHost.controller.get();
+    return controller
       ? deleteTaskContext(
-          codexContextController.store,
+          controller.store,
           contextBinding(taskId),
-          summaryExecutionFence ?? undefined,
+          contextHost.fence.get() ?? undefined,
         )
-      : Promise.resolve("none"),
+      : Promise.resolve("none");
+  },
   disposeRoute: (taskId) => {
     const route = liveTaskRoutes.get(taskId);
     liveTaskRoutes.delete(taskId);
@@ -1860,6 +1773,32 @@ const routeBTaskSurfaces: RouteBTaskSurfaces = {
   },
 };
 
+// The context controller, its execution fence, the last fence recovery and the
+// Route B runtime own their handles; main reads and clears them through the
+// cells the owner exposes.
+const contextHost = createContextHost({
+  statePaths,
+  contextOwnerId,
+  contextProviderProfileId,
+  contextModel,
+  taskMutations,
+  liveTaskRegistry,
+  liveTaskRoutes,
+  liveTaskConversationUrls,
+  liveTaskStore: () => liveTaskStore,
+  liveTaskRegistryRestored: () => liveTaskRegistryRestored,
+  routeBTaskSurfaces,
+  callerRelay: () => bridge.relay.get(),
+  persistLiveTaskState,
+  publishTasksState,
+  openLiveTaskSurface,
+  createLiveChatGptRoute,
+  createContextSummaryFallbackRoute,
+  createExecutionFence: (root) => new PrivateExecutionFence({ root }),
+  createCodexContextController,
+  startRouteBRuntime,
+});
+
 // Includes the bounded Go retirement/ACK, exact child exit and terminal recorder.
 const QUIT_DRAIN_DEADLINE_MS = 60_000;
 const QUIT_PREPARATION_MS = 10_000;
@@ -1867,21 +1806,6 @@ const QUIT_RECORD_RESERVE_MS = 2_000;
 // Leave at least 40 seconds of the normal post-preparation drain for Go core
 // and recording. This bounds the whole dependent close, not a renewed budget.
 const CONNECTOR_START_QUIT_BUDGET_MS = 8_000;
-
-// What the start did with the connector's execution fence, kept privately
-// for diagnostics: whether the store was read and how many summaries it
-// still holds as possibly running.
-async function recordSummaryFenceRecovery(
-  recovery: SummaryFenceRecovery,
-): Promise<void> {
-  const file = statePaths().summaryFenceRecovery;
-  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  await writeFile(
-    file,
-    `${JSON.stringify({ schema: 1, at: new Date().toISOString(), ...recovery })}\n`,
-    { mode: 0o600 },
-  );
-}
 
 // The outcome of the last quit's drain: F3-3's reader (the tooling-side
 // `promotion-obligations.mjs` and its `promotion-lease.ts` counterpart) both
@@ -1904,117 +1828,6 @@ let quitDrained = false;
 
 async function recordQuitReceipt(receipt: QuitDrainReceipt): Promise<void> {
   await writeQuitReceipt(statePaths().state, receipt, new Date().toISOString());
-}
-
-async function initializeRouteBRuntime(): Promise<void> {
-  const controller = codexContextController;
-  if (!controller || routeBRuntime) return;
-  const relay = bridge.relay.get();
-  try {
-    routeBRuntime = await startRouteBRuntime({
-      stateRoot: statePaths().state,
-      surfaces: routeBTaskSurfaces,
-      compaction: controller.continuity,
-      ...(relay ? { relay } : {}),
-    });
-  } catch {
-    // Route B stays unavailable; ordinary Browser tasks are unaffected.
-    routeBRuntime = null;
-  }
-}
-
-async function initializeCodexContextController(): Promise<void> {
-  // While a summary-only phase runs, the connector's Computer tools are
-  // fenced through the launch root its MCP process reads. A summary a crash
-  // interrupted may still be running on its page, so the fence a previous
-  // process raised is never cleared here: reconcileContextAfterRestart
-  // brings it in line with the private context store before any work is
-  // admitted.
-  const fence = new PrivateExecutionFence({
-    root: statePaths().secureMcpLaunch,
-  });
-  summaryExecutionFence = fence;
-  codexContextController = createCodexContextController({
-    ownerId: contextOwnerId,
-    providerProfileId: contextProviderProfileId,
-    stateRoot: statePaths().contextContinuity,
-    liveTask: (taskId) => liveTaskRegistry.get(taskId) !== null,
-    summaryFence: {
-      raise: (input) =>
-        fence.raise({
-          operationId: input.operationId,
-          taskId: input.binding.taskId,
-        }),
-      lower: (input) => fence.lower(input.operationId),
-    },
-    summaryRoutes: {
-      retained: (binding) => liveTaskRoutes.get(binding.taskId) ?? null,
-      createFallback: createContextSummaryFallbackRoute,
-      recoverFallback: (binding, conversationUrl) =>
-        createContextSummaryFallbackRoute(binding, conversationUrl),
-    },
-    onContextStateChanged: async (session) => {
-      if (
-        !liveTaskRegistry.setContext(
-          session.binding.taskId,
-          toProductTaskContext(session),
-        )
-      ) {
-        return;
-      }
-      await persistLiveTaskState();
-      publishTasksState();
-    },
-  });
-}
-
-// Before Route B or IPC can admit work, each restored task's visible context
-// is replaced by what the private context store holds.
-async function reconcileContextAfterRestart(): Promise<void> {
-  const controller = codexContextController;
-  if (!controller) return;
-  const reconciled = await reconcileTaskContexts(
-    liveTaskRegistry.snapshot().tasks.map((task) => task.taskId),
-    controller.store,
-    contextBinding,
-  );
-  let changed = false;
-  for (const entry of reconciled) {
-    const current = liveTaskRegistry.get(entry.taskId)?.context ?? null;
-    if (isDeepStrictEqual(current, entry.context)) continue;
-    changed =
-      liveTaskRegistry.setContext(entry.taskId, entry.context) || changed;
-  }
-  if (changed) {
-    await persistLiveTaskState().catch(() => undefined);
-    publishTasksState();
-  }
-  // Context a closed task left behind is removed only when the registry was
-  // really read; an unreadable registry sweeps nothing.
-  await sweepOrphanTaskContexts(
-    controller.store,
-    liveTaskStore && liveTaskRegistryRestored
-      ? {
-          status: "loaded",
-          taskIds: liveTaskRegistry.snapshot().tasks.map((task) => task.taskId),
-        }
-      : { status: "unavailable" },
-    contextBinding,
-    summaryExecutionFence ?? undefined,
-  ).catch(() => undefined);
-  // A summary a crash interrupted may still be running on its page: only an
-  // operation the store proves over, or a task the owner ended, loses its
-  // fence; a store that cannot be read keeps every record. This runs before
-  // Route B, IPC or the connector can admit work.
-  if (summaryExecutionFence) {
-    summaryFenceRecovery = await recoverSummaryExecutionFence({
-      fence: summaryExecutionFence,
-      store: controller.store,
-    });
-    await recordSummaryFenceRecovery(summaryFenceRecovery).catch(
-      () => undefined,
-    );
-  }
 }
 
 async function initializeLiveTaskState(): Promise<void> {
@@ -3378,7 +3191,7 @@ function connectorStart() {
     connectorCredentialStore: () => connectorCredentialStore,
     secureMcpConnectorRuntime: () => secureMcpConnectorRuntime,
     desktopGoCore: () => desktopGoCore,
-    summaryFenceRecovery: () => summaryFenceRecovery,
+    summaryFenceRecovery: () => contextHost.recovery.get(),
     connectorStartCancellation: () => connectorStartCancellation,
     setConnectorStartCancellation: (value) => {
       connectorStartCancellation = value;
@@ -4138,7 +3951,7 @@ function configurationHost() {
     configuration: () => configuration,
     desktopGoCore: () => desktopGoCore,
     compiledGoCore: () => compiledGoCore,
-    routeBRuntime: () => routeBRuntime,
+    routeBRuntime: () => contextHost.routeB.get(),
     activeCodexAgentCheck: () => activeCodexAgentCheck,
     setActiveCodexAgentCheck: (value) => {
       activeCodexAgentCheck = value;
@@ -4221,7 +4034,7 @@ function configurationSupport() {
     runtimeError: () => runtimeError,
     runtime: () => runtime,
     productAgentCapabilityAvailable,
-    routeBRuntime: () => routeBRuntime,
+    routeBRuntime: () => contextHost.routeB.get(),
     taskCountsBeforeRuntimeExit: () => taskCountsBeforeRuntimeExit,
     streamControllers,
     pendingComputer,
@@ -4262,7 +4075,7 @@ function configurationDeep() {
     pendingChatGptAttachmentTask: () => pendingChatGptAttachmentTask,
     recoverableChatGptTask: () => recoverableChatGptTask,
     connectorStartInFlight: () => connectorStartInFlight,
-    summaryFenceRecovery: () => summaryFenceRecovery,
+    summaryFenceRecovery: () => contextHost.recovery.get(),
     desktopAdmission,
     liveTaskRegistry,
     buildIdentity,
@@ -4729,7 +4542,7 @@ async function runContextFixtureControl(
     return { error: "IPC_CONTROL_INVALID" };
   }
   const task = liveTaskRegistry.get(taskId);
-  const controller = codexContextController;
+  const controller = contextHost.controller.get();
   if (!task || task.provider !== "chatgpt" || !controller) {
     return { error: "CONTEXT_FIXTURE_UNAVAILABLE" };
   }
@@ -5493,7 +5306,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   // host: see Decisions.md N04, item 1. The real chat-turn route (packet
   // N04c) is the already-running Route B provider: `routeBModelTurnHandler`
   // reads `routeBRuntime` at call time (it starts after this endpoint does,
-  // via `initializeRouteBRuntime()` below, and can also close before it), so
+  // via `contextHost.initializeRouteBRuntime()` below, and can also close before it), so
   // a request before start or after close still answers
   // FAROL_MODEL_ROUTE_UNAVAILABLE, never silently dropped or fabricated.
   // The one exception is this exact E2E seam: with FAROL_E2E=1 *and*
@@ -5513,11 +5326,15 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         operationsStore(),
         modelSyntheticReply
           ? syntheticModelTurnHandler(modelSyntheticReply)
-          : routeBModelTurnHandler(() => routeBRuntime?.endpoint ?? null),
+          : routeBModelTurnHandler(
+              () => contextHost.routeB.get()?.endpoint ?? null,
+            ),
       ),
       compactionHandler: recordedCompaction(
         operationsStore(),
-        routeBModelCompactionHandler(() => routeBRuntime?.endpoint ?? null),
+        routeBModelCompactionHandler(
+          () => contextHost.routeB.get()?.endpoint ?? null,
+        ),
       ),
     });
     try {
@@ -5646,11 +5463,11 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     await recoverProductAgentExpiry();
   });
   await runDesktopStartupBoundary("context", async () => {
-    await initializeCodexContextController();
-    await reconcileContextAfterRestart();
+    await contextHost.initializeCodexContextController();
+    await contextHost.reconcileContextAfterRestart();
     await bridge.initializeCallerRelay();
     await bridge.initializeSavedChatBridge();
-    await initializeRouteBRuntime();
+    await contextHost.initializeRouteBRuntime();
   });
   const configured = configuration.snapshot();
   const initialSettings =
@@ -5985,8 +5802,8 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       if (model) {
         closers.push({ name: "model-endpoint", close: () => model.stop() });
       }
-      const routeB = routeBRuntime;
-      routeBRuntime = null;
+      const routeB = contextHost.routeB.get();
+      contextHost.routeB.set(null);
       if (routeB)
         closers.push({ name: "route-b", close: () => routeB.close() });
       const relay = bridge.relay.get();
