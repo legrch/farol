@@ -27,7 +27,6 @@
     "tests/unit/known-empty-completion-cli.test.mjs": ["vm"],
     "tests/unit/manual-diagnostic-status.test.mjs": ["vm"],
     "tests/unit/native-view-visibility.test.ts": ["vm"],
-    "tests/unit/onboarding-guide-routing.test.mjs": ["vm"],
     "tests/unit/private-resource-child-launches.test.ts": ["vm"],
     "tests/unit/retired-codex-model-admission.test.ts": ["vm"],
     "tests/unit/setup-journey.test.ts": ["vm"],

@@ -38,10 +38,7 @@ import {
   configurationOperation,
   configurationResultTarget,
 } from "../../../apps/desktop/operations/configuration";
-import {
-  setupCompletionAllowed,
-  type SetupCompletionContext,
-} from "../../ui/setup-completion";
+import { type SetupCompletionContext } from "../../ui/setup-completion";
 
 import { startDesktopGoRecovery } from "../../../apps/desktop/recovery/core-host";
 import { createStartupRecoverySession } from "../../../apps/desktop/recovery/session";
@@ -213,7 +210,6 @@ import {
   type ProductTaskCommandResult,
 } from "../../modules/chat/contract/product-task";
 import { LiveTaskRegistry, type LiveTaskAdmission } from "./live-task-registry";
-import { onboardingHelpUrl } from "./onboarding-help";
 import { journalUnderPromotionLease } from "./chatgpt-journal-lease";
 import { admitProductAgentRejoin } from "./product-agent-rejoin";
 import {
@@ -354,6 +350,8 @@ import {
   type ActiveCodexAgentCheck,
 } from "../../../apps/desktop/configuration/host";
 import { createConfigurationComputer } from "../../../apps/desktop/configuration/computer";
+import { createConfigurationModel } from "../../../apps/desktop/configuration/model";
+import { createConfigurationSupport } from "../../../apps/desktop/configuration/support";
 import {
   createConfigurationChatgpt,
   type DirectChatStart,
@@ -426,11 +424,7 @@ import {
 } from "./route-b-runtime";
 import { type PendingWorkspaceEdit } from "./workspace-edit";
 import { classifyWorkspaceRootDrift } from "../../../apps/desktop/configuration/drift";
-import {
-  createSupportExport,
-  writeSupportExport,
-  type SupportRuntimeErrorCode,
-} from "./support-export";
+import { writeSupportExport } from "./support-export";
 import {
   cleanupChatGptAttachmentStaging,
   discardChatGptAttachments,
@@ -496,10 +490,7 @@ import {
   productAgentExpiryRecoveryVerdict,
 } from "./product-agent-expiry";
 import { PrivateConnectorKeyStore } from "./connector-key-store";
-import {
-  FarolModelLifecycle,
-  type FarolModelLifecycleStatus,
-} from "./farol-model-lifecycle";
+import { FarolModelLifecycle } from "./farol-model-lifecycle";
 import {
   routeBModelCompactionHandler,
   routeBModelTurnHandler,
@@ -3478,24 +3469,6 @@ function configurationFailure(
   });
 }
 
-function supportRuntimeErrorCode(
-  error: string | null,
-): SupportRuntimeErrorCode | null {
-  if (error === null) return null;
-  if (error === "RUNTIME_PROCESS_EXITED") return "process_exited";
-  if (error === "RUNTIME_PROCESS_FAILED") return "process_failed";
-  if (error === "RUNTIME_START_TIMEOUT") return "start_timeout";
-  if (error === "RUNTIME_TASK_MANIFEST_MISMATCH") return "manifest_mismatch";
-  if (
-    error === "RUNTIME_EXITED" ||
-    error === "RUNTIME_START_FAILED" ||
-    /^RUNTIME_START_FAILED_-?\d+$/u.test(error)
-  ) {
-    return "startup_failed";
-  }
-  return "other";
-}
-
 async function selectedSupportExportTarget(): Promise<string | null> {
   if (process.env.FAROL_E2E === "1") {
     const target = process.env.FAROL_E2E_SUPPORT_EXPORT;
@@ -3536,38 +3509,6 @@ function farolModelCodexConfigPath(): string {
     activeDesktopIdentity,
     os.homedir(),
   );
-}
-
-function modelStatusEvidencePayload(
-  status: FarolModelLifecycleStatus,
-): Readonly<{
-  kind: "model.status";
-  state: "port_conflict" | "listening" | "connected";
-  port: number | null;
-  requestsServed: number;
-  occupant?: "unprobed" | "farol" | "foreign" | "vacated";
-}> | null {
-  // S35-TA-2: a sealed endpoint accepts nothing, so it reports exactly
-  // what the caller of a dead endpoint gets — `MODEL_ENDPOINT_UNAVAILABLE`
-  // from the `null` below. It is deliberately not a new evidence value:
-  // `model.status` is a cross-process contract, and "unavailable" is the
-  // true statement about an endpoint that will never serve again.
-  if (status.state === "not_running" || status.state === "sealed") return null;
-  if (status.state === "port_conflict") {
-    return {
-      kind: "model.status",
-      state: "port_conflict",
-      port: status.port,
-      requestsServed: 0,
-      occupant: status.occupant,
-    };
-  }
-  return {
-    kind: "model.status",
-    state: status.state,
-    port: status.port,
-    requestsServed: status.requestsServed,
-  };
 }
 
 // E2E-only: a minimal, valid OpenAI Responses-shaped completed turn, used
@@ -6625,6 +6566,55 @@ function configurationHost() {
 let configurationHostCache: ReturnType<typeof createConfigurationHost> | null =
   null;
 
+function configurationModel() {
+  return (configurationModelCache ??= createConfigurationModel({
+    configuration: () => configuration,
+    modelLifecycle: () => modelLifecycle,
+    configurationFailure,
+    farolModelProviderSpec,
+    farolModelCodexConfigPath,
+    farolModelCodexHostPresence,
+    previewFarolModelConfigBlock,
+    previewFarolModelProviderSelection,
+    applyFarolModelConfigBlock,
+    applyFarolModelProviderSelection,
+    rollbackFarolModelConfigBlock,
+    rollbackFarolModelProviderSelection,
+  }));
+}
+let configurationModelCache: ReturnType<
+  typeof createConfigurationModel
+> | null = null;
+
+function configurationSupport() {
+  return (configurationSupportCache ??= createConfigurationSupport({
+    configuration: () => configuration,
+    configurationFailure,
+    openExternal: (url) => shell.openExternal(url),
+    selectedSupportExportTarget,
+    productTasksState,
+    operationsStore,
+    writeSupportExport,
+    buildIdentity,
+    runtimeState: () => runtimeState,
+    runtimeError: () => runtimeError,
+    runtime: () => runtime,
+    productAgentCapabilityAvailable,
+    routeBRuntime: () => routeBRuntime,
+    taskCountsBeforeRuntimeExit: () => taskCountsBeforeRuntimeExit,
+    streamControllers,
+    pendingComputer,
+    taskSurfaceFailures,
+    chatGptRoute: () => chatGptRoute,
+    setupSignInCheck: () => setupSignInCheck,
+    desktopAdmission,
+    activeAuthorityChangeKind: () => activeAuthorityChangeKind,
+  }));
+}
+let configurationSupportCache: ReturnType<
+  typeof createConfigurationSupport
+> | null = null;
+
 function configurationChatgpt() {
   return (configurationChatgptCache ??= createConfigurationChatgpt({
     configuration: () => configuration,
@@ -7198,17 +7188,11 @@ async function configureAdmittedProduct(
     case "chatgpt.submit-readonly-task":
     case "chatgpt.cancel-readonly-task":
       return configurationChatgpt().configureAdmittedChatgpt(command);
-    case "onboarding.open-help": {
-      try {
-        await shell.openExternal(onboardingHelpUrl(command.destination));
-        return ProductConfigurationResultSchema.parse({
-          ok: true,
-          snapshot: configuration.snapshot(),
-        });
-      } catch {
-        return configurationFailure("ONBOARDING_HELP_OPEN_FAILED");
-      }
-    }
+    case "onboarding.open-help":
+    case "support.export":
+    case "general.update":
+    case "setup.progress":
+      return configurationSupport().configureAdmittedSupport(command);
     case "connector.select-client":
     case "connector.discover-client":
     case "connector.select-discovered-client":
@@ -7241,293 +7225,12 @@ async function configureAdmittedProduct(
     case "host.run-codex-agent-check":
     case "host.remove-codex":
       return configurationHost().configureAdmittedHost(command);
-    case "support.export": {
-      try {
-        const target = await selectedSupportExportTarget();
-        if (target === null) {
-          return configurationFailure("SUPPORT_EXPORT_CANCELLED");
-        }
-        const tasks = productTasksState().tasks;
-        const supportConfiguration = configuration.snapshot();
-        const receipt = await writeSupportExport(
-          target,
-          createSupportExport({
-            operations: await operationsStore().snapshot(),
-            generatedAt: new Date().toISOString(),
-            build: buildIdentity,
-            configuration: supportConfiguration,
-            runtime: {
-              state: runtimeState,
-              errorCode: supportRuntimeErrorCode(runtimeError),
-              identity: runtime?.identity ?? null,
-            },
-            capabilities: {
-              nativeFilesystem: true,
-              nativeAgent: productAgentCapabilityAvailable(),
-              liveProvider: routeBRuntime !== null,
-            },
-            embedded: {
-              node: process.versions.node,
-              electron: process.versions.electron ?? null,
-              chrome: process.versions.chrome ?? null,
-            },
-            tasks:
-              runtimeState === "failed" && taskCountsBeforeRuntimeExit
-                ? {
-                    total: tasks.length,
-                    ...taskCountsBeforeRuntimeExit,
-                    countsFrom: "before_runtime_exit" as const,
-                  }
-                : {
-                    total: tasks.length,
-                    running: streamControllers.size,
-                    waiting: pendingComputer.size,
-                    failed: taskSurfaceFailures.size,
-                    countsFrom: "current" as const,
-                  },
-          }),
-          supportConfiguration.status === "ready"
-            ? supportConfiguration.settings.computer.workspaces
-            : [],
-        );
-        return ProductConfigurationResultSchema.parse({
-          ok: true,
-          snapshot: configuration.snapshot(),
-          evidence: { kind: "support.exported", ...receipt },
-        });
-      } catch (error) {
-        return configurationFailure(
-          error instanceof Error && error.message === "SUPPORT_EXPORT_TOO_LARGE"
-            ? "SUPPORT_EXPORT_TOO_LARGE"
-            : "SUPPORT_EXPORT_FAILED",
-        );
-      }
-    }
-    case "general.update":
-      return ProductConfigurationResultSchema.parse(
-        await configuration.updateGeneral({
-          openAtLaunch: command.openAtLaunch,
-          sidebarDefault: command.sidebarDefault,
-          activityDetail: command.activityDetail,
-        }),
-      );
-    case "setup.progress": {
-      const route = chatGptRoute;
-      const check = setupSignInCheck;
-      // Read only the existing document. No sign-in or provider effect is retried.
-      const observation = command.dismissed
-        ? await route?.observeSignInStatus().catch(() => null)
-        : null;
-      return ProductConfigurationResultSchema.parse(
-        await configuration.setSetupJourney(
-          { currentStep: command.currentStep, dismissed: command.dismissed },
-          (settings) =>
-            setupCompletionAllowed(settings, {
-              buildId: buildIdentity.buildId,
-              current:
-                runtimeState === "ready" &&
-                !desktopAdmission.closed() &&
-                !desktopAdmission.occupied("connector-task") &&
-                !desktopAdmission.occupied("workspace-mutation") &&
-                activeAuthorityChangeKind === null &&
-                chatGptRoute === route &&
-                setupSignInCheck === check &&
-                observation != null &&
-                route?.isCurrentSignInStatus(observation) === true,
-              signInObservation: observation
-                ? {
-                    ...observation,
-                    buildId: buildIdentity.buildId,
-                    pending: false,
-                  }
-                : null,
-              signInCheck: check,
-            }),
-        ),
-      );
-    }
-    case "model.status": {
-      if (!modelLifecycle) {
-        return configurationFailure("MODEL_ENDPOINT_UNAVAILABLE");
-      }
-      // `checkStatus()` adds one read-only loopback probe of a conflicting
-      // port so the status can say what holds it.
-      const payload = modelStatusEvidencePayload(
-        await modelLifecycle.checkStatus(),
-      );
-      if (!payload) return configurationFailure("MODEL_ENDPOINT_UNAVAILABLE");
-      return ProductConfigurationResultSchema.parse({
-        ok: true,
-        snapshot: configuration.snapshot(),
-        evidence: payload,
-      });
-    }
-    case "model.preview": {
-      const spec = await farolModelProviderSpec();
-      if (!spec) return configurationFailure("MODEL_ENDPOINT_UNAVAILABLE");
-      const configPath = farolModelCodexConfigPath();
-      const blockPreview = await previewFarolModelConfigBlock(configPath, spec);
-      const selectionPreview =
-        command.selectAsDefault &&
-        blockPreview.status !== "insecure_permissions" &&
-        blockPreview.status !== "symlink" &&
-        blockPreview.status !== "malformed"
-          ? await previewFarolModelProviderSelection(configPath, spec)
-          : null;
-      return ProductConfigurationResultSchema.parse({
-        ok: true,
-        snapshot: configuration.snapshot(),
-        evidence: {
-          kind: "model.config-preview",
-          configPath,
-          providerBlockStatus: blockPreview.status,
-          ...(blockPreview.status === "install" ||
-          blockPreview.status === "update"
-            ? {
-                providerBlockDiff: blockPreview.diff,
-                providerBlockTokenRedacted: blockPreview.tokenRedacted,
-              }
-            : {}),
-          ...(blockPreview.status === "conflict"
-            ? { providerBlockConflicts: blockPreview.conflicts }
-            : {}),
-          ...(blockPreview.status === "insecure_permissions"
-            ? { providerBlockInsecureMode: blockPreview.mode }
-            : {}),
-          providerSelectionRequested: command.selectAsDefault,
-          ...(selectionPreview
-            ? {
-                providerSelectionStatus: selectionPreview.status,
-                ...(selectionPreview.status === "install" ||
-                selectionPreview.status === "update"
-                  ? { providerSelectionDiff: selectionPreview.diff }
-                  : {}),
-                ...(selectionPreview.status === "conflict"
-                  ? { providerSelectionConflicts: selectionPreview.conflicts }
-                  : {}),
-              }
-            : {}),
-        },
-      });
-    }
-    case "model.apply": {
-      const spec = await farolModelProviderSpec();
-      if (!spec) return configurationFailure("MODEL_ENDPOINT_UNAVAILABLE");
-      const configPath = farolModelCodexConfigPath();
-      try {
-        const blockResult = await applyFarolModelConfigBlock(configPath, spec);
-        if (blockResult.status === "insecure_permissions") {
-          return configurationFailure("MODEL_CONFIG_INSECURE_PERMISSIONS");
-        }
-        if (blockResult.status === "conflict") {
-          return configurationFailure("MODEL_CONFIG_CONFLICT");
-        }
-        if (blockResult.status === "symlink") {
-          return configurationFailure("MODEL_CONFIG_SYMLINK");
-        }
-        if (blockResult.status === "malformed") {
-          return configurationFailure("MODEL_CONFIG_MALFORMED");
-        }
-        let selectionApplied = false;
-        if (command.selectAsDefault) {
-          const selectionResult = await applyFarolModelProviderSelection(
-            configPath,
-            spec,
-          );
-          if (selectionResult.status === "conflict") {
-            return configurationFailure("MODEL_CONFIG_CONFLICT");
-          }
-          if (selectionResult.status === "symlink") {
-            return configurationFailure("MODEL_CONFIG_SYMLINK");
-          }
-          if (selectionResult.status === "malformed") {
-            return configurationFailure("MODEL_CONFIG_MALFORMED");
-          }
-          selectionApplied = selectionResult.status === "applied";
-        }
-        // A host that is running read its config at start and needs a
-        // restart; one that is not picks the block up at its next start.
-        const codexHost = await farolModelCodexHostPresence();
-        return ProductConfigurationResultSchema.parse({
-          ok: true,
-          snapshot: configuration.snapshot(),
-          evidence: {
-            kind: "model.config-applied",
-            providerBlockApplied: blockResult.status === "applied",
-            providerSelectionApplied: selectionApplied,
-            restartStep: "restart_codex_to_apply",
-            codexHost,
-          },
-        });
-      } catch {
-        return configurationFailure("MODEL_CONFIG_APPLY_FAILED");
-      }
-    }
-    case "model.rollback": {
-      const configPath = farolModelCodexConfigPath();
-      try {
-        // Each rollback removes exactly its own managed region from the
-        // file's current bytes — never a backup — so the order only decides
-        // which refusal is reported first when a marker is damaged.
-        const selectionRollback =
-          await rollbackFarolModelProviderSelection(configPath);
-        if (selectionRollback.status === "symlink") {
-          return configurationFailure("MODEL_CONFIG_SYMLINK");
-        }
-        if (selectionRollback.status === "malformed") {
-          return configurationFailure("MODEL_CONFIG_MALFORMED");
-        }
-        const blockRollback = await rollbackFarolModelConfigBlock(configPath);
-        if (blockRollback.status === "symlink") {
-          return configurationFailure("MODEL_CONFIG_SYMLINK");
-        }
-        if (blockRollback.status === "malformed") {
-          return configurationFailure("MODEL_CONFIG_MALFORMED");
-        }
-        return ProductConfigurationResultSchema.parse({
-          ok: true,
-          snapshot: configuration.snapshot(),
-          evidence: {
-            kind: "model.config-rollback",
-            providerBlockRestored: blockRollback.status === "restored",
-            providerSelectionRestored: selectionRollback.status === "restored",
-          },
-        });
-      } catch {
-        return configurationFailure("MODEL_CONFIG_ROLLBACK_FAILED");
-      }
-    }
-    case "model.rotate-token": {
-      if (!modelLifecycle) {
-        return configurationFailure("MODEL_ENDPOINT_UNAVAILABLE");
-      }
-      try {
-        // S35-H2-1: one operation, not two. `rotateAndRewrite` inspects the
-        // installed block BEFORE the token moves, so a block it cannot
-        // rewrite refuses while the owner's Codex config still
-        // authenticates, and a rewrite that fails after the rotation puts
-        // the previous token back. A block that is not installed is still
-        // not installed by this action.
-        const rotated = await modelLifecycle.rotateAndRewrite({
-          configPath: farolModelCodexConfigPath(),
-          spec: farolModelProviderSpec,
-          preview: previewFarolModelConfigBlock,
-          apply: applyFarolModelConfigBlock,
-        });
-        if (!rotated.ok) return configurationFailure(rotated.code);
-        return ProductConfigurationResultSchema.parse({
-          ok: true,
-          snapshot: configuration.snapshot(),
-          evidence: {
-            kind: "model.token-rotated",
-            providerBlockUpdated: rotated.providerBlockUpdated,
-            providerBlockStatus: rotated.providerBlockStatus,
-          },
-        });
-      } catch {
-        return configurationFailure("MODEL_TOKEN_ROTATE_FAILED");
-      }
-    }
+    case "model.status":
+    case "model.preview":
+    case "model.apply":
+    case "model.rollback":
+    case "model.rotate-token":
+      return configurationModel().configureAdmittedModel(command);
   }
   return configurationFailure("SETTINGS_INPUT_INVALID");
 }
