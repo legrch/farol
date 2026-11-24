@@ -127,7 +127,7 @@ export function createChatGptSession<Failure>(
   // meantime has cleared it, and that read then throws inside the try below.
   function chatGptConversationStoreNow() {
     const store = chatGptConversationStore();
-    if (!store) throw new TypeError("CHATGPT_CONVERSATION_STORE_CLEARED");
+    if (!store) throw new TypeError("The conversation store was cleared");
     return store;
   }
 
