@@ -2,7 +2,8 @@ import fs from "node:fs";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
 import { parse } from "@babel/parser";
-import { expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { createCoreReporters } from "../../apps/desktop/core/report";
 import { createTotalOperationsRecorder } from "../../apps/desktop/operations/recorder";
 import {
   desktopCoreArtifactRoot,
@@ -38,6 +39,8 @@ function selected(
   return source.slice(node.start as number, node.end as number);
 }
 
+afterEach(() => vi.restoreAllMocks());
+
 function sink(fail = false, recordingFails = false) {
   const lines: string[] = [];
   const records: { outcome: string; code: string | null }[] = [];
@@ -47,26 +50,15 @@ function sink(fail = false, recordingFails = false) {
       records.push({ outcome, code });
     },
   });
-  const declaration = selected(
-    main,
-    mainTree,
-    (node) =>
-      node.type === "FunctionDeclaration" &&
-      (node.id as { name?: string } | undefined)?.name ===
-        "reportOwnedBackendLifecycle",
-  );
-  const report = vm.runInNewContext(
-    `${stripTypeScriptTypes(declaration)}; reportOwnedBackendLifecycle`,
-    {
-      operationsStore: () => recorder,
-      console: {
-        warn: (line: string) => {
-          if (fail) throw Error("CONTROLLED_SINK_CLOSED");
-          lines.push(line);
-        },
-      },
-    },
-  ) as (observation: unknown) => void;
+  const report = createCoreReporters({
+    runtimeEnvironment: "dev",
+    buildIdentity: { buildId: "b".repeat(64) },
+    operationsStore: () => recorder,
+  }).reportOwnedBackendLifecycle as (observation: unknown) => void;
+  vi.spyOn(console, "warn").mockImplementation((line: string) => {
+    if (fail) throw Error("CONTROLLED_SINK_CLOSED");
+    lines.push(line);
+  });
   return { report, lines, records, diagnostics: () => recorder.diagnostics() };
 }
 
