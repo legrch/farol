@@ -1,7 +1,6 @@
 import { admissionFixture } from "../support/desktop-admission";
 import fs from "node:fs";
 import vm from "node:vm";
-import { stripTypeScriptTypes } from "node:module";
 import { parse } from "@babel/parser";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
@@ -18,7 +17,9 @@ import {
   connectorAppBindingCurrent,
   createConnectorCheck,
 } from "../../apps/desktop/connector/check.ts";
+import { createConnectorVerify } from "../../apps/desktop/connector/verify.ts";
 import { connectorCheckHost } from "../support/connector-check-ports.ts";
+import { connectorVerifyHost } from "../support/connector-verify-ports.ts";
 import { connectorVerificationProof } from "../../src/apps/desktop/connector-verification-proof.ts";
 import { currentConnectorAttachment } from "../../src/apps/desktop/connector-app-receipt-wait.ts";
 import { ComputerBridge } from "../../apps/desktop/bridge/computer.ts";
@@ -41,7 +42,7 @@ import {
   guidedSettingsFixture,
 } from "../fixtures/guided-onboarding.ts";
 
-// Execute the ACTUAL connector check module and Main's Setup function, plus
+// Execute the ACTUAL connector check and verify modules, plus
 // actual coordinator/readiness/parser seams. Go IPC, Electron and Settings persistence are scripted ports here;
 // native Store and real public socket qualification remain separate gates.
 const source = fs.readFileSync(
@@ -53,12 +54,6 @@ const checkSource = fs.readFileSync(
   new URL("../../apps/desktop/connector/check.ts", import.meta.url),
   "utf8",
 );
-const setupNode = tree.program.body.find(
-  (node) =>
-    node.type === "FunctionDeclaration" &&
-    node.id?.name === "verifySecureMcpApp",
-)!;
-const setupDeclaration = source.slice(setupNode.start!, setupNode.end!);
 const originalId = "0311add3-b03c-4f89-b916-aea6a0a39242";
 const checkId = "49a0cb44-5c67-4aae-9b56-41db024507d3";
 const digest = "d".repeat(64);
@@ -330,6 +325,7 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap", empty = false) {
   const check = createConnectorCheck(connectorCheckHost(context));
   context.connectorAppBindingCurrent = connectorAppBindingCurrent;
   context.connectorCheck = () => check;
+  const verify = createConnectorVerify(connectorVerifyHost(context));
   const run = check.testConnectionCommand as (
     input: ExplicitConnectionCheck,
   ) => Promise<ProductConfigurationResult>;
@@ -347,12 +343,7 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap", empty = false) {
     legacyExists,
     sends: () => sends,
     runSetup: () =>
-      vm.runInContext(
-        stripTypeScriptTypes(setupDeclaration + "\nverifySecureMcpApp();", {
-          mode: "strip",
-        }),
-        context,
-      ) as Promise<ProductConfigurationResult>,
+      verify.verifySecureMcpApp() as Promise<ProductConfigurationResult>,
     providerStatus: (id?: string) => {
       if (id === undefined || id !== armedCheckId) {
         receiptAvailable = false;

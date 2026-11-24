@@ -1,14 +1,12 @@
 {
   "schema": 1,
   "files": {
-    "tests/integration/connection-check-main.test.ts": ["vm"],
     "tests/integration/connector-quit-start.test.ts": ["vm"],
     "tests/integration/dev-review-profile.test.mjs": ["vm"],
     "tests/integration/fresh-chatgpt-journal-startup.test.ts": ["vm"],
     "tests/integration/go-build-without-safe-open.test.ts": ["vm"],
     "tests/integration/secure-mcp-connector-runtime.test.ts": ["vm"],
     "tests/unit/chatgpt-sign-in-status-host.test.mjs": ["vm"],
-    "tests/unit/connector-separate-main.test.ts": ["vm"],
     "tests/unit/connector-startup-no-send.test.ts": ["vm"],
     "tests/unit/daily-driver-backend-lifecycle-report.test.ts": ["vm"],
     "tests/unit/daily-driver-go-settings-loss.test.ts": ["vm"],

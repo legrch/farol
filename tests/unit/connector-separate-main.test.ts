@@ -1,8 +1,5 @@
 import { admissionFixture } from "../support/desktop-admission";
-import fs from "node:fs";
-import { stripTypeScriptTypes } from "node:module";
 import vm from "node:vm";
-import { parse } from "@babel/parser";
 import { describe, expect, it, vi } from "vitest";
 import { confirmSeparateAppVerificationAttempt } from "../../src/apps/desktop/connector-app-verification-attempt";
 import { separateAppVerificationScopeCurrent } from "../../src/pkg/product-settings/separate-app-verification";
@@ -15,7 +12,9 @@ import {
   connectorAppBindingCurrent,
   createConnectorCheck,
 } from "../../apps/desktop/connector/check";
+import { createConnectorVerify } from "../../apps/desktop/connector/verify";
 import { connectorCheckHost } from "../support/connector-check-ports";
+import { connectorVerifyHost } from "../support/connector-verify-ports";
 import {
   runExplicitConnectionCheck,
   ConnectionCheckRefusal,
@@ -34,25 +33,9 @@ import {
   guidedSettingsFixture,
 } from "../fixtures/guided-onboarding";
 
-// Execute the actual connector check module and Main's Setup composition with
-// synthetic ports, not an Electron,
-// native-owner-dialog or provider witness. No source-string assertion of safety.
-const source = fs.readFileSync(
-  new URL("../../src/apps/desktop/main.ts", import.meta.url),
-  "utf8",
-);
-const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
-const functions = ["verifySecureMcpApp"]
-  .map((name) => {
-    const node = tree.program.body.find(
-      (n) => n.type === "FunctionDeclaration" && n.id?.name === name,
-    );
-    if (!node || node.start == null || node.end == null)
-      throw Error("VERIFICATION_COMPOSITION_MISSING");
-    return source.slice(node.start, node.end);
-  })
-  .join("\n");
-
+// Execute the actual connector check and verify modules with synthetic ports,
+// not an Electron, native-owner-dialog or provider witness. No source-string
+// assertion of safety.
 function fixture() {
   const settings = guidedSettingsFixture(),
     connector = settings.connectors.secureMcp;
@@ -197,10 +180,6 @@ function fixture() {
       waitForConnectorAppReceipt: async () => null,
     }),
   );
-  const verify = vm.runInContext(
-    stripTypeScriptTypes(`${functions}\nverifySecureMcpApp;`),
-    context,
-  ) as (scope?: typeof expected) => Promise<{ ok: false; error: string }>;
   // The module reads Main's state from the same fixture, as Main lends it. The
   // attachment publication is the module's own: it is counted by the connector
   // admission it reserves after the check released its own two.
@@ -222,6 +201,10 @@ function fixture() {
     testConnectionCommand: testConnection,
     checkSecureMcpAttachment: check.checkSecureMcpAttachment,
   });
+  const verify = createConnectorVerify(connectorVerifyHost(context))
+    .verifySecureMcpApp as (
+    scope?: typeof expected,
+  ) => Promise<{ ok: false; error: string }>;
   return {
     published: () =>
       reservations.filter((kind) => kind === "connector-task").length -
