@@ -404,17 +404,18 @@ describe("product agent rejoin admission", () => {
   // VALIDATES it, so it is read as late as possible. A constructor reads
   // before it builds; a validator reads the freshest world it can.
   //
-  // This has to read `main.ts` as source: the start branch is still inline
-  // in a file that exports nothing and that no test loads — the same reason
-  // the rejoin branch moved out. It guards the ordering's presence, not its
-  // runtime behaviour, which the cases above cover for the extracted half.
+  // This has to read `apps/desktop/task/command.ts` as source: its own
+  // tests drive the command with injected ports, but only a source check
+  // pins where the snapshot is sampled relative to the await. It guards the
+  // ordering's presence, not its runtime behaviour, which the cases above
+  // cover for the extracted half.
   it("S35-TA-11 the start branch still samples its snapshot before its own await", async () => {
     const source = await readFile(
-      path.resolve(import.meta.dirname, "../../src/apps/desktop/main.ts"),
+      path.resolve(import.meta.dirname, "../../apps/desktop/task/command.ts"),
       "utf8",
     );
-    const sample = source.indexOf("const startAgentSnapshot = configuration");
-    const save = source.indexOf("await productAgentStore!.save(input)");
+    const sample = source.indexOf("const startAgentSnapshot = configuration()");
+    const save = source.indexOf("await productAgentStore()!.save(input)");
     expect(sample).toBeGreaterThan(-1);
     expect(save).toBeGreaterThan(-1);
     expect(sample).toBeLessThan(save);
