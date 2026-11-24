@@ -1,56 +1,37 @@
 import fs from "node:fs";
 import path from "node:path";
-import { stripTypeScriptTypes } from "node:module";
 import { fileURLToPath } from "node:url";
-import vm from "node:vm";
-import { parse } from "@babel/parser";
 import { describe, expect, it, vi } from "vitest";
+import { createConfigurationSupport } from "../../apps/desktop/configuration/support";
 import { onboardingHelpUrl } from "../../src/apps/desktop/onboarding-help";
 import { BUILD_ENTRIES } from "../../tooling/build-contract.mjs";
+import { scriptedSupportPorts } from "../support/support-configuration-ports";
 
-// Execute the actual main-process help case with only its external boundary
-// replaced. This is source routing evidence, not an Electron/package test.
-const main = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
-const tree = parse(main, { sourceType: "module", plugins: ["typescript"] });
-let helpCase;
-function visit(node) {
-  if (
-    node.type === "SwitchCase" &&
-    node.test?.type === "StringLiteral" &&
-    node.test.value === "onboarding.open-help"
-  )
-    helpCase = main.slice(node.start, node.end);
-  for (const value of Object.values(node)) {
-    if (Array.isArray(value))
-      value.forEach((child) => {
-        if (child?.type) visit(child);
-      });
-    else if (value?.type) visit(value);
-  }
-}
-visit(tree);
-if (!helpCase) throw new Error("ONBOARDING_HELP_CASE_MISSING");
-const compiled = `async function handle() { switch (command.kind) { ${helpCase} } } handle`;
-
+// Run the production help handler with only its external boundary replaced.
+// This is source routing evidence, not an Electron/package test.
 function harness(destination, { rejectOpen = false } = {}) {
   const openExternal = vi.fn(async () => {
     if (rejectOpen) throw new Error("controlled external-open refusal");
   });
-  const snapshot = vi.fn(() => ({ status: "controlled-source-test" }));
+  const snapshotValue = { status: "error", error: "SETTINGS_READ_FAILED" };
+  const snapshot = vi.fn(() => snapshotValue);
   const configurationFailure = vi.fn((code) => ({ ok: false, code }));
-  const context = {
-    command: { kind: "onboarding.open-help", destination },
-    shell: { openExternal },
-    onboardingHelpUrl,
-    configuration: { snapshot },
-    ProductConfigurationResultSchema: { parse: (value) => value },
-    configurationFailure,
-  };
+  const handler = createConfigurationSupport(
+    scriptedSupportPorts({
+      configuration: () => ({ snapshot }),
+      configurationFailure,
+      openExternal,
+    }),
+  );
   return {
-    handle: vm.runInNewContext(stripTypeScriptTypes(compiled), context),
-    context,
+    handle: () =>
+      handler.configureAdmittedSupport({
+        kind: "onboarding.open-help",
+        destination,
+      }),
     openExternal,
     snapshot,
+    snapshotValue,
     configurationFailure,
   };
 }
@@ -70,7 +51,7 @@ describe("onboarding help external routing", () => {
       const h = harness(destination);
       expect(await h.handle()).toEqual({
         ok: true,
-        snapshot: { status: "controlled-source-test" },
+        snapshot: h.snapshotValue,
       });
       expect(h.openExternal).toHaveBeenCalledExactlyOnceWith(url);
       expect(h.snapshot).toHaveBeenCalledOnce();

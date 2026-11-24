@@ -38,10 +38,7 @@ import {
   configurationOperation,
   configurationResultTarget,
 } from "../../../apps/desktop/operations/configuration";
-import {
-  setupCompletionAllowed,
-  type SetupCompletionContext,
-} from "../../ui/setup-completion";
+import { type SetupCompletionContext } from "../../ui/setup-completion";
 
 import { startDesktopGoRecovery } from "../../../apps/desktop/recovery/core-host";
 import { createStartupRecoverySession } from "../../../apps/desktop/recovery/session";
@@ -213,7 +210,6 @@ import {
   type ProductTaskCommandResult,
 } from "../../modules/chat/contract/product-task";
 import { LiveTaskRegistry, type LiveTaskAdmission } from "./live-task-registry";
-import { onboardingHelpUrl } from "./onboarding-help";
 import { journalUnderPromotionLease } from "./chatgpt-journal-lease";
 import { admitProductAgentRejoin } from "./product-agent-rejoin";
 import {
@@ -355,6 +351,7 @@ import {
 } from "../../../apps/desktop/configuration/host";
 import { createConfigurationComputer } from "../../../apps/desktop/configuration/computer";
 import { createConfigurationModel } from "../../../apps/desktop/configuration/model";
+import { createConfigurationSupport } from "../../../apps/desktop/configuration/support";
 import {
   createConfigurationChatgpt,
   type DirectChatStart,
@@ -427,11 +424,7 @@ import {
 } from "./route-b-runtime";
 import { type PendingWorkspaceEdit } from "./workspace-edit";
 import { classifyWorkspaceRootDrift } from "../../../apps/desktop/configuration/drift";
-import {
-  createSupportExport,
-  writeSupportExport,
-  type SupportRuntimeErrorCode,
-} from "./support-export";
+import { writeSupportExport } from "./support-export";
 import {
   cleanupChatGptAttachmentStaging,
   discardChatGptAttachments,
@@ -3474,24 +3467,6 @@ function configurationFailure(
       error: "SETTINGS_READ_FAILED",
     },
   });
-}
-
-function supportRuntimeErrorCode(
-  error: string | null,
-): SupportRuntimeErrorCode | null {
-  if (error === null) return null;
-  if (error === "RUNTIME_PROCESS_EXITED") return "process_exited";
-  if (error === "RUNTIME_PROCESS_FAILED") return "process_failed";
-  if (error === "RUNTIME_START_TIMEOUT") return "start_timeout";
-  if (error === "RUNTIME_TASK_MANIFEST_MISMATCH") return "manifest_mismatch";
-  if (
-    error === "RUNTIME_EXITED" ||
-    error === "RUNTIME_START_FAILED" ||
-    /^RUNTIME_START_FAILED_-?\d+$/u.test(error)
-  ) {
-    return "startup_failed";
-  }
-  return "other";
 }
 
 async function selectedSupportExportTarget(): Promise<string | null> {
@@ -6611,6 +6586,35 @@ let configurationModelCache: ReturnType<
   typeof createConfigurationModel
 > | null = null;
 
+function configurationSupport() {
+  return (configurationSupportCache ??= createConfigurationSupport({
+    configuration: () => configuration,
+    configurationFailure,
+    openExternal: (url) => shell.openExternal(url),
+    selectedSupportExportTarget,
+    productTasksState,
+    operationsStore,
+    writeSupportExport,
+    buildIdentity,
+    runtimeState: () => runtimeState,
+    runtimeError: () => runtimeError,
+    runtime: () => runtime,
+    productAgentCapabilityAvailable,
+    routeBRuntime: () => routeBRuntime,
+    taskCountsBeforeRuntimeExit: () => taskCountsBeforeRuntimeExit,
+    streamControllers,
+    pendingComputer,
+    taskSurfaceFailures,
+    chatGptRoute: () => chatGptRoute,
+    setupSignInCheck: () => setupSignInCheck,
+    desktopAdmission,
+    activeAuthorityChangeKind: () => activeAuthorityChangeKind,
+  }));
+}
+let configurationSupportCache: ReturnType<
+  typeof createConfigurationSupport
+> | null = null;
+
 function configurationChatgpt() {
   return (configurationChatgptCache ??= createConfigurationChatgpt({
     configuration: () => configuration,
@@ -7184,17 +7188,11 @@ async function configureAdmittedProduct(
     case "chatgpt.submit-readonly-task":
     case "chatgpt.cancel-readonly-task":
       return configurationChatgpt().configureAdmittedChatgpt(command);
-    case "onboarding.open-help": {
-      try {
-        await shell.openExternal(onboardingHelpUrl(command.destination));
-        return ProductConfigurationResultSchema.parse({
-          ok: true,
-          snapshot: configuration.snapshot(),
-        });
-      } catch {
-        return configurationFailure("ONBOARDING_HELP_OPEN_FAILED");
-      }
-    }
+    case "onboarding.open-help":
+    case "support.export":
+    case "general.update":
+    case "setup.progress":
+      return configurationSupport().configureAdmittedSupport(command);
     case "connector.select-client":
     case "connector.discover-client":
     case "connector.select-discovered-client":
@@ -7227,111 +7225,6 @@ async function configureAdmittedProduct(
     case "host.run-codex-agent-check":
     case "host.remove-codex":
       return configurationHost().configureAdmittedHost(command);
-    case "support.export": {
-      try {
-        const target = await selectedSupportExportTarget();
-        if (target === null) {
-          return configurationFailure("SUPPORT_EXPORT_CANCELLED");
-        }
-        const tasks = productTasksState().tasks;
-        const supportConfiguration = configuration.snapshot();
-        const receipt = await writeSupportExport(
-          target,
-          createSupportExport({
-            operations: await operationsStore().snapshot(),
-            generatedAt: new Date().toISOString(),
-            build: buildIdentity,
-            configuration: supportConfiguration,
-            runtime: {
-              state: runtimeState,
-              errorCode: supportRuntimeErrorCode(runtimeError),
-              identity: runtime?.identity ?? null,
-            },
-            capabilities: {
-              nativeFilesystem: true,
-              nativeAgent: productAgentCapabilityAvailable(),
-              liveProvider: routeBRuntime !== null,
-            },
-            embedded: {
-              node: process.versions.node,
-              electron: process.versions.electron ?? null,
-              chrome: process.versions.chrome ?? null,
-            },
-            tasks:
-              runtimeState === "failed" && taskCountsBeforeRuntimeExit
-                ? {
-                    total: tasks.length,
-                    ...taskCountsBeforeRuntimeExit,
-                    countsFrom: "before_runtime_exit" as const,
-                  }
-                : {
-                    total: tasks.length,
-                    running: streamControllers.size,
-                    waiting: pendingComputer.size,
-                    failed: taskSurfaceFailures.size,
-                    countsFrom: "current" as const,
-                  },
-          }),
-          supportConfiguration.status === "ready"
-            ? supportConfiguration.settings.computer.workspaces
-            : [],
-        );
-        return ProductConfigurationResultSchema.parse({
-          ok: true,
-          snapshot: configuration.snapshot(),
-          evidence: { kind: "support.exported", ...receipt },
-        });
-      } catch (error) {
-        return configurationFailure(
-          error instanceof Error && error.message === "SUPPORT_EXPORT_TOO_LARGE"
-            ? "SUPPORT_EXPORT_TOO_LARGE"
-            : "SUPPORT_EXPORT_FAILED",
-        );
-      }
-    }
-    case "general.update":
-      return ProductConfigurationResultSchema.parse(
-        await configuration.updateGeneral({
-          openAtLaunch: command.openAtLaunch,
-          sidebarDefault: command.sidebarDefault,
-          activityDetail: command.activityDetail,
-        }),
-      );
-    case "setup.progress": {
-      const route = chatGptRoute;
-      const check = setupSignInCheck;
-      // Read only the existing document. No sign-in or provider effect is retried.
-      const observation = command.dismissed
-        ? await route?.observeSignInStatus().catch(() => null)
-        : null;
-      return ProductConfigurationResultSchema.parse(
-        await configuration.setSetupJourney(
-          { currentStep: command.currentStep, dismissed: command.dismissed },
-          (settings) =>
-            setupCompletionAllowed(settings, {
-              buildId: buildIdentity.buildId,
-              current:
-                runtimeState === "ready" &&
-                !desktopAdmission.closed() &&
-                !desktopAdmission.occupied("connector-task") &&
-                !desktopAdmission.occupied("workspace-mutation") &&
-                activeAuthorityChangeKind === null &&
-                chatGptRoute === route &&
-                setupSignInCheck === check &&
-                observation != null &&
-                route?.isCurrentSignInStatus(observation) === true,
-              signInObservation: observation
-                ? {
-                    ...observation,
-                    buildId: buildIdentity.buildId,
-                    pending: false,
-                  }
-                : null,
-              signInCheck: check,
-            }),
-        ),
-      );
-    }
     case "model.status":
     case "model.preview":
     case "model.apply":
