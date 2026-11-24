@@ -352,6 +352,7 @@ import { createConfigurationComputer } from "../../../apps/desktop/configuration
 import { createConfigurationModel } from "../../../apps/desktop/configuration/model";
 import { createConfigurationSupport } from "../../../apps/desktop/configuration/support";
 import { createConfigurationDeep } from "../../../apps/desktop/configuration/deep";
+import { createDevProof } from "../../../apps/desktop/dev/proof";
 import {
   createConfigurationChatgpt,
   type DirectChatStart,
@@ -521,7 +522,6 @@ import { PrivateMcpLifecycle } from "../../modules/computer/infra/mcp/private-mc
 import {
   DEV_MCP_PROOF_ALLOWED_PATH,
   DEV_MCP_PROOF_DENIED_PATH,
-  type DevMcpProofPreparation,
   claimDevMcpProofAttempt,
   createDevMcpProofFixture,
   readDevMcpProofPreparation,
@@ -5797,282 +5797,35 @@ async function verifySecureMcpApp(
   return checkSecureMcpAttachment(requestedWorkspaceId, expectedBinding);
 }
 
-async function prepareDevMcpProof(): Promise<ProductConfigurationResult> {
-  if (!isolatedDevMcpProofAllowed(buildEnvironment, runtimeEnvironment)) {
-    return configurationFailure("DEV_MCP_PROOF_DEV_ONLY");
-  }
-  if (!configuration) {
-    return configurationFailure("SETTINGS_UNAVAILABLE");
-  }
-  // `configureProduct` takes the authority-transition reservation for this
-  // command, but its first admission read happens before that await. Re-read
-  // the live holders after the reservation is ours so an Agent or connector
-  // that won the race cannot have its carried grant replaced underneath it.
-  const readmitted = configurationAdmission("dev-proof.prepare", {
-    agentActive: codexAgentOperationActive(),
-    connectorRunning:
-      desktopAdmission.occupied("connector-task") ||
-      secureMcpConnectorRuntime?.isRunning() === true,
-  });
-  if (readmitted !== "admitted") {
-    return configurationFailure(
-      readmitted === "CONNECTOR_STOP_REQUIRED"
-        ? "DEV_MCP_PROOF_CONNECTOR_MUST_STOP"
-        : readmitted,
-    );
-  }
-  try {
-    const previous = await readDevMcpProofPreparation(
-      statePaths().devMcpProof,
-    ).catch(() => null);
-    let snapshot = configuration.snapshot();
-    if (snapshot.status !== "ready") {
-      return configurationFailure("SETTINGS_UNAVAILABLE");
-    }
-    if (
-      previous !== null &&
-      snapshot.settings.computer.workspaces.some(
-        (workspace) => workspace.workspaceId === previous.workspaceId,
-      )
-    ) {
-      const removed = await configuration.removeWorkspace(previous.workspaceId);
-      if (!removed.ok) return ProductConfigurationResultSchema.parse(removed);
-      snapshot = configuration.snapshot();
-      if (snapshot.status !== "ready") {
-        return configurationFailure("SETTINGS_UNAVAILABLE");
-      }
-    }
-
-    const fixture = await createDevMcpProofFixture(statePaths().devMcpProof);
-    const rootIdentity = await measuredRootIdentity(fixture.workspaceRoot);
-    if (rootIdentity === null) {
-      return configurationFailure("DEV_MCP_PROOF_PREPARE_FAILED");
-    }
-    const added = await configuration.addReadonlyWorkspace({
-      root: fixture.workspaceRoot,
-      label: "Farol Dev verification fixture",
-      rootIdentity,
-    });
-    if (!added.ok) return ProductConfigurationResultSchema.parse(added);
-    const addedSnapshot = configuration.snapshot();
-    if (addedSnapshot.status !== "ready") {
-      return configurationFailure("SETTINGS_UNAVAILABLE");
-    }
-    const workspace = addedSnapshot.settings.computer.workspaces.find(
-      (candidate) => candidate.root === fixture.workspaceRoot,
-    );
-    if (!workspace) {
-      return configurationFailure("DEV_MCP_PROOF_PREPARE_FAILED");
-    }
-    const listed = await nativeWorkspace.execute({
-      workspace: workspaceDescriptor(workspace, rootIdentity),
-      operation: { kind: "workspace.list", relativePath: "." },
-    });
-    if (!listed.ok || listed.value.kind !== "workspace.entries") {
-      return configurationFailure("DEV_MCP_PROOF_PREPARE_FAILED");
-    }
-    const recorded = await configuration.recordComputerVerification(
-      workspace.workspaceId,
-      {
-        profile: "computer.local.read/1",
-        runtimeGeneration: `${runtime?.identity ?? "runtime-offline"}:${buildIdentity.buildId}`,
-        buildId: buildIdentity.buildId,
-        protocol: "readonly-workspace/1",
-      },
-      { rootIdentity, gitMetadata: null },
-    );
-    if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
-    const verifiedSnapshot = configuration.snapshot();
-    if (verifiedSnapshot.status !== "ready") {
-      return configurationFailure("SETTINGS_UNAVAILABLE");
-    }
-    const preparation = {
-      schema: 1 as const,
-      proofId: fixture.proofId,
-      environment: "dev" as const,
-      buildId: buildIdentity.buildId,
-      workspaceId: workspace.workspaceId,
-      workspaceRoot: fixture.workspaceRoot,
-      computerGeneration: verifiedSnapshot.settings.computer.generation,
-      sentinelSha256: fixture.sentinelSha256,
-      allowedPath: DEV_MCP_PROOF_ALLOWED_PATH,
-      deniedPath: DEV_MCP_PROOF_DENIED_PATH,
-      preparedAt: new Date().toISOString(),
-    } satisfies DevMcpProofPreparation;
-    await writeDevMcpProofPreparation(statePaths().devMcpProof, preparation);
-    return ProductConfigurationResultSchema.parse({
-      ok: true,
-      snapshot: verifiedSnapshot,
-      evidence: {
-        kind: "dev-proof.prepared",
-        proofId: preparation.proofId,
-        workspaceId: preparation.workspaceId,
-        computerGeneration: preparation.computerGeneration,
-        buildId: preparation.buildId,
-        allowedPath: preparation.allowedPath,
-        deniedPath: preparation.deniedPath,
-      },
-    });
-  } catch {
-    return configurationFailure("DEV_MCP_PROOF_PREPARE_FAILED");
-  }
+function devProof() {
+  return (devProofCache ??= createDevProof({
+    buildEnvironment,
+    runtimeEnvironment,
+    isolatedDevMcpProofAllowed,
+    configuration: () => configuration,
+    chatGptRoute: () => chatGptRoute,
+    secureMcpConnectorRuntime: () => secureMcpConnectorRuntime,
+    runtime: () => runtime,
+    desktopAdmission,
+    buildIdentity,
+    statePaths,
+    configurationFailure,
+    configurationAdmission,
+    codexAgentOperationActive,
+    chatGptTaskAdmissionReady,
+    measuredRootIdentity,
+    workspaceDescriptor,
+    nativeWorkspace,
+    DEV_MCP_PROOF_ALLOWED_PATH,
+    DEV_MCP_PROOF_DENIED_PATH,
+    readDevMcpProofPreparation,
+    writeDevMcpProofPreparation,
+    createDevMcpProofFixture,
+    claimDevMcpProofAttempt,
+    readDevMcpProofReceipt,
+  }));
 }
-
-async function runDevMcpProof(): Promise<ProductConfigurationResult> {
-  if (!isolatedDevMcpProofAllowed(buildEnvironment, runtimeEnvironment)) {
-    return configurationFailure("DEV_MCP_PROOF_DEV_ONLY");
-  }
-  if (!configuration || !chatGptRoute || !secureMcpConnectorRuntime) {
-    return configurationFailure("SETTINGS_UNAVAILABLE");
-  }
-  const chatAdmission = desktopAdmission.acquire("chatgpt-task");
-  if (!chatAdmission) return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
-  try {
-    const snapshot = configuration.snapshot();
-    if (snapshot.status !== "ready") {
-      return configurationFailure("SETTINGS_UNAVAILABLE");
-    }
-    const connector = snapshot.settings.connectors.secureMcp;
-    const runtimeProof = connector.runtime;
-    if (
-      runtimeProof?.state !== "ready" ||
-      connector.attachment === null ||
-      !secureMcpConnectorRuntime.isRunning() ||
-      !chatGptTaskAdmissionReady()
-    ) {
-      return configurationFailure("DEV_MCP_PROOF_CONNECTOR_NOT_READY");
-    }
-    const preparation = await readDevMcpProofPreparation(
-      statePaths().devMcpProof,
-    ).catch(() => null);
-    if (preparation === null) {
-      return configurationFailure("DEV_MCP_PROOF_NOT_PREPARED");
-    }
-    if (
-      preparation.environment !== "dev" ||
-      preparation.buildId !== buildIdentity.buildId ||
-      preparation.computerGeneration !==
-        snapshot.settings.computer.generation ||
-      runtimeProof.computerGeneration !== preparation.computerGeneration ||
-      runtimeProof.buildId !== preparation.buildId ||
-      !snapshot.settings.computer.workspaces.some(
-        (workspace) =>
-          workspace.workspaceId === preparation.workspaceId &&
-          workspace.root === preparation.workspaceRoot &&
-          workspace.rootIdentity !== undefined,
-      )
-    ) {
-      return configurationFailure("DEV_MCP_PROOF_STALE");
-    }
-    if (
-      (await readDevMcpProofReceipt(statePaths().devMcpProof).catch(
-        () => null,
-      )) !== null
-    ) {
-      // A prior live attempt exists. Its outcome must never be overwritten or
-      // retried as though nothing happened; prepare a fresh fixture instead.
-      return configurationFailure("DEV_MCP_PROOF_STALE");
-    }
-    let attemptedAt: string;
-    try {
-      attemptedAt = await claimDevMcpProofAttempt(
-        statePaths().devMcpProof,
-        preparation.proofId,
-      );
-    } catch {
-      // The claim is exclusive and durable. Any previous attempt, including one
-      // whose provider outcome is unknown, requires a newly prepared fixture.
-      return configurationFailure("DEV_MCP_PROOF_STALE");
-    }
-    const prompt = [
-      "Use the selected app's Computer tool computer_workspace_read.",
-      `First read workspaceId ${preparation.workspaceId} at relativePath ${preparation.allowedPath}.`,
-      `Then attempt the same tool and workspaceId at relativePath ${preparation.deniedPath}; it must be refused because it leaves the grant through a link.`,
-      "If and only if the first read succeeds and the second is refused, reply with exactly the first file's text and nothing else.",
-    ].join(" ");
-
-    try {
-      const result = await chatGptRoute.runReadonlyTask(prompt);
-      if (
-        result.state !== "completed" ||
-        typeof result.outputText !== "string"
-      ) {
-        return configurationFailure("DEV_MCP_PROOF_CHATGPT_FAILED");
-      }
-      const answerSha256 = createHash("sha256")
-        .update(result.outputText.trim())
-        .digest("hex");
-      if (answerSha256 !== preparation.sentinelSha256) {
-        return configurationFailure("DEV_MCP_PROOF_ANSWER_MISMATCH");
-      }
-      const receipt = await readDevMcpProofReceipt(
-        statePaths().devMcpProof,
-      ).catch(() => null);
-      if (
-        receipt === null ||
-        receipt.allowed === null ||
-        receipt.denied === null
-      ) {
-        return configurationFailure("DEV_MCP_PROOF_RECEIPT_MISSING");
-      }
-      const sameProofBinding =
-        receipt.allowed.ownerId === receipt.denied.ownerId &&
-        receipt.allowed.sessionId === receipt.denied.sessionId &&
-        receipt.allowed.taskId === receipt.denied.taskId &&
-        receipt.allowed.taskEpoch === receipt.denied.taskEpoch &&
-        receipt.allowed.participantId === receipt.denied.participantId &&
-        receipt.allowed.turnId === receipt.denied.turnId &&
-        receipt.allowed.generation === receipt.denied.generation;
-      if (
-        receipt.proofId !== preparation.proofId ||
-        receipt.environment !== "dev" ||
-        receipt.buildId !== preparation.buildId ||
-        receipt.computerGeneration !== preparation.computerGeneration ||
-        receipt.workspaceId !== preparation.workspaceId ||
-        receipt.sentinelSha256 !== preparation.sentinelSha256 ||
-        receipt.allowed.outputSha256 !== preparation.sentinelSha256 ||
-        receipt.allowed.generation !== preparation.computerGeneration ||
-        receipt.allowed.taskEpoch !== preparation.computerGeneration ||
-        receipt.denied.generation !== preparation.computerGeneration ||
-        receipt.denied.taskEpoch !== preparation.computerGeneration ||
-        receipt.denied.errorCode !== "WORKSPACE_PATH_REFUSED" ||
-        receipt.allowed.ownerId !== "owner-desktop" ||
-        receipt.allowed.callIdSha256 === receipt.denied.callIdSha256 ||
-        receipt.allowed.recordedAt < attemptedAt ||
-        receipt.denied.recordedAt < receipt.allowed.recordedAt ||
-        !sameProofBinding
-      ) {
-        return configurationFailure("DEV_MCP_PROOF_RECEIPT_INVALID");
-      }
-      const receiptSha256 = createHash("sha256")
-        .update(`${JSON.stringify(receipt, null, 2)}\n`)
-        .digest("hex");
-      return ProductConfigurationResultSchema.parse({
-        ok: true,
-        snapshot: configuration.snapshot(),
-        evidence: {
-          kind: "dev-proof.verified",
-          proofId: preparation.proofId,
-          workspaceId: preparation.workspaceId,
-          environment: "dev",
-          runtimeGeneration: runtimeProof.runtimeGeneration,
-          computerGeneration: preparation.computerGeneration,
-          buildId: preparation.buildId,
-          sentinelSha256: preparation.sentinelSha256,
-          answerSha256,
-          receiptSha256,
-          outsideGrantError: receipt.denied.errorCode,
-        },
-      });
-    } finally {
-      chatAdmission.release();
-    }
-  } finally {
-    // Also covers preparation exits before the existing dispatch finalizer.
-    // Release is identity-bound: a repeated release cannot clear a successor.
-    chatAdmission.release();
-  }
-}
+let devProofCache: ReturnType<typeof createDevProof> | null = null;
 
 // S35-TA-4: the composition itself lives in `workspace-descriptor.ts`, so the
 // denied list, the bound identity and the verification rule are exercised by
@@ -6918,9 +6671,9 @@ async function configureAdmittedProduct(
       return configurationConnector().configureAdmittedConnector(command);
 
     case "dev-proof.prepare":
-      return prepareDevMcpProof();
+      return devProof().prepare();
     case "dev-proof.run":
-      return runDevMcpProof();
+      return devProof().run();
 
     case "host.select-codex":
     case "host.discover-codex":

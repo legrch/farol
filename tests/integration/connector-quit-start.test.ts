@@ -3,7 +3,9 @@ import {
   type ConfigurationConnectorPorts,
   type ConnectorSetupCommand,
 } from "../../apps/desktop/configuration/connector";
+import { createDevProof } from "../../apps/desktop/dev/proof";
 import { admissionFixture } from "../support/desktop-admission";
+import { devProofHarness } from "../support/dev-proof-ports";
 import fs from "node:fs";
 import vm from "node:vm";
 import { stripTypeScriptTypes } from "node:module";
@@ -325,39 +327,22 @@ it("releases configuration admission after settled Setup work even when its IPC 
 
 it("holds chat admission before awaiting Dev proof preparation", async () => {
   const preparation = deferred<null>();
-  const context = admissionFixture({
-    isolatedDevMcpProofAllowed: () => true,
-    buildEnvironment: "dev",
-    runtimeEnvironment: "dev",
-    configuration: {
-      snapshot: () => ({
-        status: "ready",
-        settings: {
-          connectors: {
-            secureMcp: { runtime: { state: "ready" }, attachment: {} },
-          },
-        },
-      }),
-    },
-    chatGptRoute: {},
-    secureMcpConnectorRuntime: { isRunning: () => true },
-    chatGptTaskAdmissionReady: () => true,
+  const harness = devProofHarness();
+  const run = createDevProof({
+    ...harness.ports,
     readDevMcpProofPreparation: () => preparation.promise,
-    statePaths: () => ({ devMcpProof: "/scripted-proof" }),
-    configurationFailure: (error: string) => ({ ok: false, error }),
-  });
-  const run = vm.runInNewContext(
-    stripTypeScriptTypes(declaration("runDevMcpProof") + "\nrunDevMcpProof;"),
-    context,
-  ) as () => Promise<unknown>;
+  }).run;
   const first = run();
-  const competingCheck = context.desktopAdmission.acquire("chatgpt-task");
+  const competingCheck = harness.admission.acquire("chatgpt-task");
   try {
     expect(competingCheck).toBeNull();
   } finally {
     competingCheck?.release();
     preparation.resolve(null);
-    await first;
+    expect(await first).toEqual({
+      ok: false,
+      error: "DEV_MCP_PROOF_NOT_PREPARED",
+    });
   }
-  expect(context.desktopAdmission.occupied("chatgpt-task")).toBe(false);
+  expect(harness.admission.occupied("chatgpt-task")).toBe(false);
 });
