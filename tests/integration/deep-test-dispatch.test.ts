@@ -1,196 +1,23 @@
 import { admissionFixture } from "../support/desktop-admission";
 import { scriptedChatgptPorts } from "../support/chatgpt-configuration-ports";
+import {
+  cleanupDeepFixtures,
+  deepFixture,
+  type DeepObserver,
+} from "../support/deep-test-fixture";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import vm from "node:vm";
-import { transformSync } from "esbuild";
 import { afterEach, expect, it, vi } from "vitest";
-import { PrivateChatGptTaskJournal } from "../../src/apps/desktop/chatgpt-task-journal";
-import {
-  ChatGptTaskJournalOperationIdSchema,
-  MAX_CHATGPT_TASK_JOURNAL_BYTES,
-  MAX_DEEP_TEST_HISTORY_BYTES,
-  MAX_DEEP_TEST_HISTORY_RECORDS,
-  MAX_DEEP_TEST_OUTSTANDING,
-} from "../../src/apps/desktop/chatgpt-task-journal-record";
 import { readFlatDeepTestRecords } from "../../src/apps/desktop/legacy-activation-obligations";
 import { createConfigurationChatgpt } from "../../apps/desktop/configuration/chatgpt";
 
-// Exercises the actual main-process orchestration with disposable state and a scripted route.
-// This does not qualify an Electron view, provider, native connector or installation.
-const source = await fs.readFile("src/apps/desktop/main.ts", "utf8");
-const start = source.indexOf("async function runManualDeepTest(");
-const end = source.indexOf("function deepTestStatus()", start);
-if (start < 0 || end < 0) throw Error("DEEP_TEST_HOST_MISSING");
-const javascript = transformSync(source.slice(start, end), {
-  loader: "ts",
-  target: "es2022",
-}).code;
-const roots: string[] = [];
-afterEach(async () => {
-  await Promise.all(
-    roots
-      .splice(0)
-      .map((root) => fs.rm(root, { recursive: true, force: true })),
-  );
-});
-async function fixture(stale = false) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-deep-dispatch-"));
-  roots.push(root);
-  await fs.mkdir(path.join(root, "farol-state"), { mode: 0o700 });
-  const binding = { buildId: "build", connectorGeneration: "1" };
-  const core = {
-    backendAvailable: true,
-    currentComputerConnectorBinding: () => binding,
-  };
-  const connector = {
-    isRunning: () => true,
-    hasUnresolvedEffect: () => false,
-    getTunnelObservation: () => null,
-  };
-  const settings = {
-    setup: {
-      chatgpt: { outcomeUnknown: false },
-      computer: { outcomeUnknown: false },
-    },
-    computer: {
-      generation: 1,
-      pendingEdit: null,
-      workspaces: [{ workspaceId: null }],
-    },
-    connectors: {
-      secureMcp: {
-        tunnelId: "tunnel",
-        generation: 1,
-        appVerificationPending: false,
-        challenge: null,
-        runtime: {
-          state: "ready",
-          buildId: "build",
-          runtimeGeneration: "runtime",
-          computerGeneration: 1,
-          connectorGeneration: 1,
-        },
-      },
-    },
-  };
-  const snapshot = { status: "ready", settings };
-  const owner = {
-    snapshot: () => snapshot,
-    recordSecureMcpChallenge: async () => ({
-      ok: false,
-      error: "SETTINGS_UNAVAILABLE",
-    }),
-  };
-  let changed = false;
-  let targetValid = true;
-  const send = vi.fn();
-  const route = {
-    captureManualTaskTarget: () => () => targetValid,
-    runReadonlyTask: vi.fn(async (prompt, _attachments, observer) => {
-      expect(observer.manualSubmissionOnly).toBe(true);
-      if (stale) changed = true;
-      await observer.onDispatchIntent();
-      if (!observer.beforeSend())
-        return {
-          state: "failed_before_submit",
-          code: "CHATGPT_SUBMIT_UNAVAILABLE",
-          deltaCount: 0,
-          observedCharacters: 0,
-        } as never;
-      send(prompt);
-      return {
-        state: "send_requested",
-        code: null,
-        deltaCount: 0,
-        observedCharacters: 0,
-      };
-    }),
-  };
-  const context = {
-    ChatGptTaskJournalOperationIdSchema,
-    MAX_CHATGPT_TASK_JOURNAL_BYTES,
-    MAX_DEEP_TEST_HISTORY_BYTES,
-    MAX_DEEP_TEST_HISTORY_RECORDS,
-    MAX_DEEP_TEST_OUTSTANDING,
-    PrivateChatGptTaskJournal,
-    readFlatDeepTestRecords,
-    path,
-    app: { getPath: () => root },
-    statePaths: () => ({ state: path.join(root, "farol-state") }),
-    configuration: owner,
-    desktopGoCore: core,
-    secureMcpConnectorRuntime: connector,
-    selectedTaskId: "",
-    chatGptRoute: route,
-    liveTaskRoutes: new Map(),
-    deepTestRecoveryReady: true,
-    recoverableDeepTests: [],
-    quitInProgress: false,
-    installedUpdateAdmission: false,
-    chatGptTaskAdmission: false,
-    connectorTaskAdmission: false,
-    connectorTaskAdmissionPurpose: null,
-    pendingChatGptReadonlyTask: null,
-    pendingChatGptAttachmentTask: null,
-    recoverableChatGptTask: null,
-    chatGptConversationAdmissionFailure: () => null,
-    connectorRuntimeUncertain: () => false,
-    computerConnectorAdmission: () => ({ admissible: true }),
-    summaryFenceRecovery: {},
-    connectorStartInFlight: null,
-    browserHomeSurfaceOpen: true,
-    section: "browser",
-    shellOverlay: "none",
-    chatGptTaskAdmissionReady: () => true,
-    currentSurfaceLayout: () => ({ pageVisible: true }),
-    currentConnectorAttachment: () => ({
-      challengeSha256: "hash",
-      workspaceId: null,
-    }),
-    connectorWorkspaceSelection: () => null,
-    selectedConnectorApp: () => "Farol",
-    connectorAppBindingCurrent: () => !changed,
-    randomUUID: () => "00000000-0000-4000-8000-000000000000",
-    buildIdentity: { buildId: "build" },
-    journalUnderPromotionLease: async (
-      _registry: unknown,
-      work: () => Promise<unknown>,
-    ) => work(),
-    liveTaskRegistry: {},
-    configurationFailure: (error: string) => ({ ok: false, error }),
-    ProductConfigurationResultSchema: { parse: (value: unknown) => value },
-    performance,
-    setTimeout,
-  };
-  const run = vm.runInNewContext(
-    `${javascript}\nrunManualDeepTest`,
-    admissionFixture(context),
-  ) as (
-    id: string,
-    taskId: string,
-    test?: "connection" | "deep",
-  ) => Promise<{
-    ok: boolean;
-    error?: string;
-    evidence?: { state: string; code: string | null };
-  }>;
-  return {
-    root,
-    run,
-    route,
-    send,
-    context,
-    invalidateTarget: () => {
-      targetValid = false;
-    },
-    invalidateConnector: () => {
-      changed = true;
-    },
-  };
-}
+// Exercises the production deep-test host module against a real journal in a
+// disposable directory and a scripted route. This does not qualify an Electron
+// view, provider, native connector or installation.
+afterEach(cleanupDeepFixtures);
+const fixture = deepFixture;
+
 it("sends a connection prompt without file operations", async () => {
   const f = await fixture();
   expect(await f.run(randomUUID(), "", "connection")).toMatchObject({
@@ -198,7 +25,7 @@ it("sends a connection prompt without file operations", async () => {
     evidence: { state: "send_requested" },
   });
   expect(f.send).toHaveBeenCalledTimes(1);
-  const prompt = f.send.mock.calls[0]![0] as string;
+  const prompt = f.send.mock.calls[0]![0];
   expect(prompt).toContain("computer_connection_status");
   expect(prompt).toContain("do not read or change files");
   expect(prompt).not.toContain("computer_workspace_write");
@@ -206,7 +33,7 @@ it("sends a connection prompt without file operations", async () => {
 
 it("admits a new request after 256 acknowledged records while retaining unknown history and no-replay", async () => {
   const f = await fixture();
-  const root = path.join(f.root, "farol-state");
+  const root = f.stateRoot;
   const original = randomUUID();
   const unknown = {
     state: "outcome_unknown",
@@ -256,7 +83,7 @@ it("admits a new request after 256 acknowledged records while retaining unknown 
 
 it("refuses a new send when 256 original results remain unacknowledged", async () => {
   const f = await fixture();
-  const root = path.join(f.root, "farol-state");
+  const root = f.stateRoot;
   const record = (id: string) => ({
     schema: 1,
     operationId: id,
@@ -289,32 +116,19 @@ it("sends the bounded prompt once and retains the exact result", async () => {
     evidence: { state: "send_requested" },
   });
   expect(f.send).toHaveBeenCalledTimes(1);
-  expect(f.send.mock.calls[0]![0]).toContain(`farol-deep-test-${id}.txt`);
-  expect(f.send.mock.calls[0]![0]).toContain(
-    "expectedSha256: null (create-only)",
-  );
-  expect(f.send.mock.calls[0]![0]).toContain(
+  const prompt = f.send.mock.calls[0]![0];
+  expect(prompt).toContain(`farol-deep-test-${id}.txt`);
+  expect(prompt).toContain("expectedSha256: null (create-only)");
+  expect(prompt).toContain(
     "Do not list or read that nonexistent test path before creating it",
   );
-  expect(f.send.mock.calls[0]![0]).toContain(
-    "Never clean up after an unknown effect",
-  );
-  expect(f.send.mock.calls[0]![0]).toContain("For shell smoke");
-  expect(f.send.mock.calls[0]![0]).toContain(
-    "Treat cleanup as a separate case",
-  );
-  expect(f.send.mock.calls[0]![0]).toContain("write:true and pinned /bin/rm");
-  expect(f.send.mock.calls[0]![0]).toContain(
-    "do not use globs or recursive removal",
-  );
-  expect(f.send.mock.calls[0]![0]).toContain(
-    "not an atomic compare-and-delete",
-  );
-  const journal = new PrivateChatGptTaskJournal({
-    root: path.join(f.root, "farol-state"),
-    deepTestOperationId: id,
-  });
-  expect(await journal.load()).toMatchObject({
+  expect(prompt).toContain("Never clean up after an unknown effect");
+  expect(prompt).toContain("For shell smoke");
+  expect(prompt).toContain("Treat cleanup as a separate case");
+  expect(prompt).toContain("write:true and pinned /bin/rm");
+  expect(prompt).toContain("do not use globs or recursive removal");
+  expect(prompt).toContain("not an atomic compare-and-delete");
+  expect(await f.journal(id).load()).toMatchObject({
     phase: "result_retained",
     result: { state: "send_requested" },
   });
@@ -322,9 +136,18 @@ it("sends the bounded prompt once and retains the exact result", async () => {
   expect(f.send).toHaveBeenCalledTimes(1);
 });
 it("refuses a changed connector binding before any send", async () => {
-  const f = await fixture(true);
-  const id = randomUUID();
-  expect((await f.run(id, "")).ok).toBe(false);
+  const f = await fixture();
+  f.route.runReadonlyTask.mockImplementationOnce(async (_p, _a, observer) => {
+    f.state.bindingCurrent = false;
+    await (observer as DeepObserver).onDispatchIntent();
+    return {
+      state: "send_requested",
+      code: null,
+      deltaCount: 0,
+      observedCharacters: 0,
+    };
+  });
+  expect((await f.run(randomUUID(), "")).ok).toBe(false);
   expect(f.send).not.toHaveBeenCalled();
 });
 it("retains a known refusal when the connector changes after intent but before click", async () => {
@@ -332,14 +155,14 @@ it("retains a known refusal when the connector changes after intent but before c
   f.route.runReadonlyTask.mockImplementationOnce(
     async (_prompt, _attachments, observer) => {
       await observer.onDispatchIntent();
-      f.invalidateConnector();
+      f.state.bindingCurrent = false;
       if (!observer.beforeSend())
         return {
           state: "failed_before_submit",
           code: "CHATGPT_SUBMIT_UNAVAILABLE",
           deltaCount: 0,
           observedCharacters: 0,
-        } as never;
+        };
       throw Error("unexpected send");
     },
   );
@@ -349,20 +172,17 @@ it("retains a known refusal when the connector changes after intent but before c
     evidence: { state: "failed_before_submit" },
   });
   expect(f.send).not.toHaveBeenCalled();
-  expect(
-    await new PrivateChatGptTaskJournal({
-      root: path.join(f.root, "farol-state"),
-      deepTestOperationId: id,
-    }).load(),
-  ).toMatchObject({ result: { state: "failed_before_submit" } });
+  expect(await f.journal(id).load()).toMatchObject({
+    result: { state: "failed_before_submit" },
+  });
 });
 it("waits for the original overlay dismissal before sending exactly once", async () => {
   const f = await fixture();
-  f.context.shellOverlay = "task-menu";
+  f.state.shellOverlay = "task-menu";
   const pending = f.run(randomUUID(), "");
   expect(f.send).not.toHaveBeenCalled();
   setTimeout(() => {
-    f.context.shellOverlay = "none";
+    f.state.shellOverlay = "none";
   }, 30);
   expect(await pending).toMatchObject({
     ok: true,
@@ -372,10 +192,10 @@ it("waits for the original overlay dismissal before sending exactly once", async
 });
 it("refuses if the captured document changes while waiting for layout", async () => {
   const f = await fixture();
-  f.context.shellOverlay = "task-menu";
+  f.state.shellOverlay = "task-menu";
   const pending = f.run(randomUUID(), "");
-  f.invalidateTarget();
-  f.context.shellOverlay = "none";
+  f.state.targetValid = false;
+  f.state.shellOverlay = "none";
   expect((await pending).ok).toBe(false);
   expect(f.route.runReadonlyTask).not.toHaveBeenCalled();
 });
@@ -404,12 +224,12 @@ it("holds both host admissions through the original in-flight request", async ()
   );
   const pending = f.run(randomUUID(), "");
   await entered;
-  expect(f.context.chatGptTaskAdmission).toBe(true);
-  expect(f.context.connectorTaskAdmission).toBe(true);
+  expect(f.admission.occupied("chatgpt-task")).toBe(true);
+  expect(f.admission.occupied("connector-task")).toBe(true);
   release();
   await pending;
-  expect(f.context.chatGptTaskAdmission).toBe(false);
-  expect(f.context.connectorTaskAdmission).toBe(false);
+  expect(f.admission.occupied("chatgpt-task")).toBe(false);
+  expect(f.admission.occupied("connector-task")).toBe(false);
 });
 it.each([false, true])(
   "retains a known pre-submit refusal after intent=%s without claiming a send",
@@ -423,7 +243,7 @@ it.each([false, true])(
           code: "CHATGPT_COMPOSER_DRAFT_PRESENT",
           deltaCount: 0,
           observedCharacters: 0,
-        } as never;
+        };
       },
     );
     const id = randomUUID();
@@ -435,12 +255,7 @@ it.each([false, true])(
       },
     });
     expect(f.send).not.toHaveBeenCalled();
-    expect(
-      await new PrivateChatGptTaskJournal({
-        root: path.join(f.root, "farol-state"),
-        deepTestOperationId: id,
-      }).load(),
-    ).toMatchObject({
+    expect(await f.journal(id).load()).toMatchObject({
       phase: "result_retained",
       result: { state: "failed_before_submit" },
     });
@@ -456,7 +271,7 @@ it("retains an unknown result without re-sending", async () => {
         code: "CHATGPT_TASK_ERROR",
         deltaCount: 0,
         observedCharacters: 0,
-      } as never;
+      };
     },
   );
   const id = randomUUID();
@@ -464,12 +279,9 @@ it("retains an unknown result without re-sending", async () => {
     ok: true,
     evidence: { state: "outcome_unknown" },
   });
-  expect(
-    await new PrivateChatGptTaskJournal({
-      root: path.join(f.root, "farol-state"),
-      deepTestOperationId: id,
-    }).load(),
-  ).toMatchObject({ result: { state: "outcome_unknown" } });
+  expect(await f.journal(id).load()).toMatchObject({
+    result: { state: "outcome_unknown" },
+  });
   expect((await f.run(id, "")).ok).toBe(false);
   expect(f.route.runReadonlyTask).toHaveBeenCalledTimes(1);
   const freshId = randomUUID();
@@ -478,12 +290,9 @@ it("retains an unknown result without re-sending", async () => {
     evidence: { state: "send_requested" },
   });
   expect(f.route.runReadonlyTask).toHaveBeenCalledTimes(2);
-  expect(
-    await new PrivateChatGptTaskJournal({
-      root: path.join(f.root, "farol-state"),
-      deepTestOperationId: id,
-    }).load(),
-  ).toMatchObject({ result: { state: "outcome_unknown" } });
+  expect(await f.journal(id).load()).toMatchObject({
+    result: { state: "outcome_unknown" },
+  });
 });
 
 // The production ChatGPT command handler with a controlled journal refusal: no Send.
