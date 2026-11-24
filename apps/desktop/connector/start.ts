@@ -78,7 +78,14 @@ export type ConnectorStartPorts = Readonly<{
     >["connectorAttempt"],
   ) => ProductConfigurationResult;
   transitionRefusal: () => ProductConfigurationResult;
-  stopAndConfirmComputerMcp: () => Promise<void>;
+  // Main's stop: every argument is optional and defaults to main's live owner
+  // at call time. The start paths call it with none, as main did; the
+  // supervisor passes its captured connector and core through its own port.
+  stopAndConfirmComputerMcp: (
+    connector?: SecureMcpConnectorRuntime,
+    inFlightStart?: Promise<void> | null,
+    core?: DesktopGoCore,
+  ) => Promise<void>;
   computerMcpLifecycle: () => Readonly<{
     prepare: (launchContractSha256: string) => Promise<void>;
   }>;

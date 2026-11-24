@@ -4902,7 +4902,7 @@ function connectorStart() {
     statePaths,
     configurationFailure,
     transitionRefusal,
-    stopAndConfirmComputerMcp: () => stopAndConfirmComputerMcp(),
+    stopAndConfirmComputerMcp,
     computerMcpLifecycle,
     e2eTunnelClientExecutable,
     verifyTunnelClientExecutable,

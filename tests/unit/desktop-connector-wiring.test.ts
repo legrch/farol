@@ -103,10 +103,10 @@ describe("connector supervisor wiring in main", () => {
       "connectorAttemptGeneration",
     ])
       expect(body).toContain(` ${name},`);
-    // The stop takes no arguments here, so main's own defaults are read late.
-    expect(body).toContain(
-      "stopAndConfirmComputerMcp: () => stopAndConfirmComputerMcp(),",
-    );
+    // Main's own stop is lent directly: the start paths pass no arguments,
+    // so its defaults still read the live owners at call time.
+    expect(body).toContain(" stopAndConfirmComputerMcp,");
+    expect(body).not.toContain("stopAndConfirmComputerMcp: (");
     expect(source).toContain("let connectorStartCache");
   });
 
