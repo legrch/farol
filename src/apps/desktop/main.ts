@@ -77,6 +77,7 @@ import {
   reportConnectorTransport,
 } from "../../../apps/desktop/connector/start";
 import { createConnectorStop } from "../../../apps/desktop/connector/stop";
+import { createWorkspaceHost } from "../../../apps/desktop/configuration/workspace";
 import {
   createProductAgentHost,
   type ProductAgentSession,
@@ -379,7 +380,6 @@ import {
   type RouteBTaskSurfaces,
 } from "./route-b-runtime";
 import { type PendingWorkspaceEdit } from "./workspace-edit";
-import { classifyWorkspaceRootDrift } from "../../../apps/desktop/configuration/drift";
 import { writeSupportExport } from "./support-export";
 import {
   cleanupChatGptAttachmentStaging,
@@ -401,12 +401,6 @@ import {
   discoverExecutables,
   type DiscoveryCandidate,
 } from "./executable-discovery";
-import {
-  UNTRUSTED_CANDIDATE_DIALOG,
-  reverifyDiscoveredCandidate as reverifyDiscoveredCandidateImpl,
-  untrustedCandidateDialogDecision,
-  type ConfirmUntrustedCandidate,
-} from "./reverify-discovered-candidate";
 import { launchCodexAppServer } from "./codex-app-server-process";
 import { runCodexHostSmoke } from "./codex-host-smoke";
 import { runCodexNativeAgentCheck } from "./codex-native-agent-check";
@@ -2145,214 +2139,34 @@ function attachmentStagingFailure(error: unknown): ProductConfigurationResult {
   return chatGptSession().attachmentStagingFailure(error);
 }
 
-// The device and inode a folder has now, so its approval can refuse another
-// object that later takes the same path.
-async function measuredRootIdentity(
+// The workspace selection and launch-drift code lives in
+// apps/desktop/configuration/workspace.ts; these wrappers keep the names every
+// consumer already calls.
+function measuredRootIdentity(
   root: string,
 ): Promise<WorkspaceRootIdentity | null> {
-  try {
-    const measured = await lstat(root, { bigint: true });
-    return measured.isDirectory()
-      ? { device: String(measured.dev), inode: String(measured.ino) }
-      : null;
-  } catch {
-    return null;
-  }
+  return workspaceHost().measuredRootIdentity(root);
 }
 
-// Read-only measurement of every identity-bound folder, then one
-// authority-reducing write for folders that are no longer there. Path-bound
-// approval (owner decision 2026-11-22): a changed device or inode at the same
-// path is diagnostic only and keeps the check; only a vanished or unreachable
-// folder withdraws it. Returns false when a vanished folder could not be
-// withdrawn: the caller must then not resume.
-async function withdrawDriftedWorkspaceChecksAtLaunch(): Promise<boolean> {
-  if (!configuration) return true;
-  let drifted = 0;
-  let withdrawn = false;
-  let code: string | null = null;
-  // The window and Settings IPC are already open. Hold the authority
-  // reservation across the WHOLE scan (measurement and write), so a manual
-  // Connect or Agent admission cannot start with the stale grant meanwhile.
-  const reserved = await authorityTransitions.withReservation(
-    "authority-change",
-    async () => {
-      const snapshot = configuration!.snapshot();
-      if (snapshot.status !== "ready") return;
-      const found: {
-        workspaceId: string;
-        root: string;
-        rootIdentity: WorkspaceRootIdentity;
-        observed: string;
-      }[] = [];
-      for (const workspace of snapshot.settings.computer.workspaces) {
-        if (!workspace.rootIdentity) continue;
-        // Evidence before measuring: a newer check is never erased by it.
-        const observed = workspaceCheckEvidence(
-          snapshot.settings,
-          workspace.workspaceId,
-        );
-        const measured = await measuredRootIdentity(workspace.root);
-        const drift = classifyWorkspaceRootDrift(
-          workspace.rootIdentity,
-          measured,
-        );
-        // Numeric drift (a reboot renumbered the volume) and a recreated
-        // folder at the same path keep their check: the folder at the path
-        // is the workspace. A vanished folder, or one now reached through a
-        // linked ancestor (native traversal refuses links), withdraws it.
-        if (drift !== "same")
-          console.warn(
-            `FAROL_WORKSPACE_ROOT_OBSERVED:${JSON.stringify({ drift })}`,
-          );
-        const reachable =
-          measured !== null &&
-          (await realpath(workspace.root).catch(() => null)) === workspace.root;
-        if (!reachable)
-          found.push({
-            workspaceId: workspace.workspaceId,
-            root: workspace.root,
-            rootIdentity: workspace.rootIdentity,
-            observed,
-          });
-      }
-      drifted = found.length;
-      if (found.length === 0) {
-        withdrawn = true;
-        return;
-      }
-      // Quit may have closed admission while the folders were measured, and a
-      // connector or an active Agent may still carry the grant; then leave
-      // settings alone (Go's per-call root guard keeps refusing the root).
-      if (desktopAdmission.closed()) {
-        code = "AUTHORITY_CHANGE_IN_PROGRESS";
-        return;
-      }
-      if (
-        codexAgentOperationActive() ||
-        desktopAdmission.occupied("connector-task") ||
-        secureMcpConnectorRuntime?.isRunning() === true
-      ) {
-        code = "CONNECTOR_STOP_REQUIRED";
-        return;
-      }
-      try {
-        const result = await configuration!.withdrawDriftedWorkspaceChecks(
-          found,
-          () => !desktopAdmission.closed(),
-        );
-        withdrawn = result.ok;
-        code = result.ok ? null : result.error;
-      } catch {
-        code = "SETTINGS_WRITE_FAILED";
-      }
-    },
-  );
-  // A competing authority change owns this moment; do not resume on top of
-  // an unmeasured grant. The owner's own operation proceeds as before.
-  if (!reserved.admitted) code = "AUTHORITY_CHANGE_IN_PROGRESS";
-  if (drifted > 0 || !reserved.admitted)
-    console.warn(
-      "FAROL_WORKSPACE_ROOT_DRIFT:" +
-        JSON.stringify({
-          workspaces: drifted,
-          withdrawn,
-          ...(code ? { code } : {}),
-        }),
-    );
-  return reserved.admitted && withdrawn;
+function withdrawDriftedWorkspaceChecksAtLaunch(): Promise<boolean> {
+  return workspaceHost().withdrawDriftedWorkspaceChecksAtLaunch();
 }
 
-async function selectedWorkspace(): Promise<
-  | Readonly<{
-      root: string;
-      label: string;
-      rootIdentity: WorkspaceRootIdentity;
-    }>
-  | "cancelled"
-  | "invalid"
+function selectedWorkspace(): ReturnType<
+  ReturnType<typeof workspaceHost>["selectedWorkspace"]
 > {
-  if (
-    process.env.FAROL_E2E === "1" &&
-    process.env.FAROL_E2E_CANCEL_WORKSPACE_PICKER === "1"
-  )
-    return "cancelled";
-  let selected: string | undefined;
-  const testRoot =
-    process.env.FAROL_E2E === "1"
-      ? process.env.FAROL_E2E_WORKSPACE_ROOT
-      : undefined;
-  if (testRoot) {
-    selected = testRoot;
-  } else {
-    if (!window) return "invalid";
-    const result = await dialog.showOpenDialog(window, {
-      title: "Choose a workspace",
-      buttonLabel: "Add Workspace",
-      properties: ["openDirectory"],
-      securityScopedBookmarks: false,
-    });
-    if (result.canceled || result.filePaths.length !== 1) return "cancelled";
-    selected = result.filePaths[0];
-  }
-  if (!selected || !path.isAbsolute(selected)) return "invalid";
-  try {
-    const listed = await lstat(selected);
-    if (!listed.isDirectory() || listed.isSymbolicLink()) return "invalid";
-    const root = await realpath(selected);
-    if (!path.isAbsolute(root)) return "invalid";
-    const rootIdentity = await measuredRootIdentity(root);
-    if (!rootIdentity) return "invalid";
-    return { root, label: path.basename(root) || root, rootIdentity };
-  } catch {
-    return "invalid";
-  }
+  return workspaceHost().selectedWorkspace();
 }
 
 // A native choice is held only in this process. The renderer receives an
 // opaque short-lived reference, so cancellation never stops a live connector.
 let pendingWorkspacePick: PendingWorkspacePickValue | null = null;
 
-// A renderer-chosen discovery candidate is never trusted at face value: the
-// main process re-runs discovery itself and only accepts a path that is
-// still a current, non-refused candidate before handing it to the existing
-// execution probes (`verifyCodexExecutable` / `verifyTunnelClientExecutable`,
-// which remain the sole authority on whether a path may actually run). This
-// closes the gap between "the owner clicked a card that was true a moment
-// ago" and "this exact path is still what discovery would offer right now".
-//
-// The decision logic itself lives in `reverify-discovered-candidate.ts`,
-// injectable and unit-tested there; this wrapper supplies the real
-// discovery function and the real owner-facing confirmation dialog.
-async function reverifyDiscoveredCandidate(
+function reverifyDiscoveredCandidate(
   kind: "codex" | "tunnel-client",
   requestedPath: string,
 ): Promise<DiscoveryCandidate | "stale" | "declined"> {
-  return reverifyDiscoveredCandidateImpl(kind, requestedPath, {
-    discover: (discoverKind) => discoverExecutables(discoverKind),
-    // Resolved lazily: the helper reads this only after discovery has
-    // finished, so it asks about the window that exists at that moment. A
-    // window destroyed while discovery ran yields null here, and a missing
-    // window can never confirm an untrusted candidate.
-    get confirm(): ConfirmUntrustedCandidate | null {
-      const owner = window;
-      if (!owner || owner.isDestroyed()) return null;
-      return async ({ kind: dialogKind, path }) => {
-        const { response } = await dialog.showMessageBox(owner, {
-          type: "warning",
-          buttons: [...UNTRUSTED_CANDIDATE_DIALOG.buttons],
-          defaultId: UNTRUSTED_CANDIDATE_DIALOG.defaultId,
-          cancelId: UNTRUSTED_CANDIDATE_DIALOG.cancelId,
-          message:
-            dialogKind === "codex"
-              ? "Use a Codex that is not confirmed as signed by OpenAI?"
-              : "Use a tunnel-client that does not match the reviewed build?",
-          detail: `${path}\n\nFarol could not confirm where this file came from. Continue only if you placed it there yourself.`,
-        });
-        return untrustedCandidateDialogDecision(response);
-      };
-    },
-  });
+  return workspaceHost().reverifyDiscoveredCandidate(kind, requestedPath);
 }
 
 function e2eCodexExecutable(): string | "invalid" | undefined {
@@ -3037,6 +2851,23 @@ function connectorStop() {
 let connectorStopCache: ReturnType<
   typeof createConnectorStop<PrivateMcpLifecycle>
 > | null = null;
+
+function workspaceHost() {
+  return (workspaceHostCache ??= createWorkspaceHost({
+    configuration: () => configuration,
+    authorityTransitions,
+    desktopAdmission,
+    codexAgentOperationActive,
+    secureMcpConnectorRuntime: () => secureMcpConnectorRuntime,
+    workspaceCheckEvidence,
+    window: () => window,
+    showOpenDialog: (owner, options) => dialog.showOpenDialog(owner, options),
+    showMessageBox: (owner, options) => dialog.showMessageBox(owner, options),
+    discoverExecutables,
+    env: process.env,
+  }));
+}
+let workspaceHostCache: ReturnType<typeof createWorkspaceHost> | null = null;
 
 function taskPersist() {
   return (taskPersistCache ??= createTaskPersist({
