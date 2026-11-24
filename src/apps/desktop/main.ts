@@ -79,6 +79,7 @@ import {
 } from "../../../apps/desktop/connector/start";
 import { connectorSupervisor } from "../../../apps/desktop/connector/supervisor";
 import { createCoreReporters } from "../../../apps/desktop/core/report";
+import { startGoCore } from "../../../apps/desktop/core/start";
 import { createDesktopChatBrowser } from "../../../apps/desktop/go-chat-host";
 import { GoChatBrowserDriver } from "../../../apps/desktop/go-chat-browser";
 import {
@@ -112,10 +113,7 @@ import {
   applicationMenu,
 } from "../../../apps/desktop/shell/menu";
 import { surfaceNavigation } from "../../../apps/desktop/shell/navigation";
-import {
-  desktopCoreArtifactRoot,
-  desktopDevShellImageMatches,
-} from "../../../apps/desktop/dev-core-layout";
+import { desktopCoreArtifactRoot } from "../../../apps/desktop/dev-core-layout";
 import { promises as rawFs } from "original-fs";
 import {
   announceDrainedQuit,
@@ -4303,15 +4301,6 @@ async function verifyTunnelClientExecutable(
   }
 }
 
-function startObservedDesktopGoCore(
-  ...args: Parameters<typeof startDesktopGoCore>
-): ReturnType<typeof startDesktopGoCore> {
-  return observeOperation(
-    operationsStore(),
-    { source: "Setup", kind: "hub.start", target: {} },
-    () => startDesktopGoCore(...args),
-  );
-}
 function reportMaintenanceObservation(
   observation: MaintenanceObservation,
 ): void {
@@ -6882,43 +6871,26 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       return snapshot.settings;
     };
     desktopGoCore = await runDesktopStartupBoundary("go-core", () =>
-      startObservedDesktopGoCore({
+      startGoCore({
+        startDesktopGoCore,
+        operationsStore,
         compiledArtifact: compiledGoCore,
         compiledResources: compiledGoResources,
-        // Legacy preview entrypoints retain File tools, but never qualify Shell
-        // against a different copy of the code actually executing this host.
-        compiledShell:
-          runtimeEnvironment === "dev" &&
-          !desktopDevShellImageMatches(
-            realpathSync(directory),
-            realpathSync(process.execPath),
-          )
-            ? undefined
-            : compiledGoShell,
-        previousHostDrainConfirmed: freshStartup
-          ? false
-          : previousHostAdmissionReady,
-        ...(freshStartup
-          ? {
-              startupPurpose: "fresh" as const,
-              withInactiveMcp: <T>(start: () => Promise<T>) =>
-                computerMcpLifecycle().withInactiveForFreshStart(start),
-            }
-          : {}),
-        build: buildIdentity,
-        // The attested path must remain immutable through spawn and lifetime.
-        // Shared installation paths are writable by other administrator accounts.
-        artifactRoot: desktopCoreArtifactRoot(
-          installedUpdates.resourcesOrigin?.execution.directory ?? directory,
-          runtimeEnvironment,
-        ),
+        compiledShell: compiledGoShell,
+        runtimeEnvironment,
+        directory,
+        executablePath: () => process.execPath,
+        realpathSync,
+        freshStartup: () => freshStartup,
+        previousHostAdmissionReady,
+        computerMcpLifecycle,
+        buildIdentity,
+        installedUpdates,
         stateRoot,
-        home: app.getPath("home"),
+        home: () => app.getPath("home"),
         settings: currentSettings,
-        onLifecycleObservation: reportOwnedBackendLifecycle,
-        ...(runtimeEnvironment === "dev" || process.env.FAROL_E2E === "1"
-          ? { onQualificationObservation: reportQualificationObservation }
-          : {}),
+        reportOwnedBackendLifecycle,
+        reportQualificationObservation,
         browser: (context) =>
           createDesktopChatBrowser({
             context,

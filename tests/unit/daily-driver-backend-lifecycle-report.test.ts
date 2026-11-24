@@ -5,10 +5,15 @@ import { parse } from "@babel/parser";
 import { afterEach, expect, it, vi } from "vitest";
 import { createCoreReporters } from "../../apps/desktop/core/report";
 import { createTotalOperationsRecorder } from "../../apps/desktop/operations/recorder";
+import { desktopCoreArtifactRoot } from "../../apps/desktop/dev-core-layout";
+import type {
+  DesktopCoreSelection,
+  DesktopGoCore,
+} from "../../apps/desktop/go-core-host";
 import {
-  desktopCoreArtifactRoot,
-  desktopDevShellImageMatches,
-} from "../../apps/desktop/dev-core-layout";
+  startGoCore,
+  type GoCoreStartPorts,
+} from "../../apps/desktop/core/start";
 
 // Execute the actual desktop diagnostic sink and its selected callback values.
 // Child/native mechanics are covered separately with controlled producers;
@@ -116,38 +121,77 @@ it("isolates a closed diagnostic sink from original child settlement", () => {
   expect(() => sink(true).report(backend)).not.toThrow();
 });
 
-for (const route of ["go", "connector"] as const) {
-  it(`selects the same diagnostic sink for the actual ${route} launch`, () => {
-    const expression = selected(main, mainTree, (node) => {
-      if (route === "go")
-        return (
-          node.type === "CallExpression" &&
-          (node.callee as { name?: string }).name ===
-            "startObservedDesktopGoCore"
-        );
-      return (
-        node.type === "NewExpression" &&
-        (node.callee as { name?: string }).name === "SecureMcpConnectorRuntime"
-      );
-    });
-    const tree = parse(expression, {
-      sourceType: "module",
-      plugins: ["typescript"],
-    });
-    const callback = selected(expression, tree, (node) => {
-      return (
-        node.type === "ObjectProperty" &&
-        (node.key as { name?: string }).name === "onLifecycleObservation"
-      );
-    });
-    const report = sink().report;
-    const selectedCallback = vm.runInNewContext(
-      `({${stripTypeScriptTypes(callback)}}).onLifecycleObservation`,
-      { reportOwnedBackendLifecycle: report },
-    );
-    expect(selectedCallback).toBe(report);
+// Main builds the sinks once and hands the same binding to both launches.
+it("builds the sinks once and hands the same binding to the Go and connector launches", () => {
+  const builders = selected(
+    main,
+    mainTree,
+    (node) =>
+      node.type === "VariableDeclarator" &&
+      (node.init as { callee?: { name?: string } } | null)?.callee?.name ===
+        "createCoreReporters",
+  );
+  expect(builders).toMatch(/reportOwnedBackendLifecycle/);
+  const goCall = selected(
+    main,
+    mainTree,
+    (node) =>
+      node.type === "CallExpression" &&
+      (node.callee as { name?: string }).name === "startGoCore",
+  );
+  const goProperty = parse(goCall, {
+    sourceType: "module",
+    plugins: ["typescript"],
   });
-}
+  const goSink = selected(
+    goCall,
+    goProperty,
+    (node) =>
+      node.type === "ObjectProperty" &&
+      (node.key as { name?: string }).name === "reportOwnedBackendLifecycle",
+  );
+  // Shorthand: the property names the very binding built above.
+  expect(goSink).toBe("reportOwnedBackendLifecycle");
+  const connectorCall = selected(
+    main,
+    mainTree,
+    (node) =>
+      node.type === "NewExpression" &&
+      (node.callee as { name?: string }).name === "SecureMcpConnectorRuntime",
+  );
+  const connectorTree = parse(connectorCall, {
+    sourceType: "module",
+    plugins: ["typescript"],
+  });
+  const callback = selected(
+    connectorCall,
+    connectorTree,
+    (node) =>
+      node.type === "ObjectProperty" &&
+      (node.key as { name?: string }).name === "onLifecycleObservation",
+  );
+  const report = sink().report;
+  const selectedCallback = vm.runInNewContext(
+    `({${stripTypeScriptTypes(callback)}}).onLifecycleObservation`,
+    { reportOwnedBackendLifecycle: report },
+  );
+  expect(selectedCallback).toBe(report);
+});
+
+it("forwards the supplied sink unchanged to the actual Go launch", async () => {
+  const report = sink().report as never;
+  const selections: DesktopCoreSelection[] = [];
+  await startGoCore({
+    ...startPorts({
+      launch: async (selection) => {
+        selections.push(selection);
+        return {} as DesktopGoCore;
+      },
+    }),
+    reportOwnedBackendLifecycle: report,
+  });
+  expect(selections[0]!.onLifecycleObservation).toBe(report);
+});
 
 it("forwards the selected original observer through the actual attested launch", () => {
   const property = selected(host, hostTree, (node) => {
@@ -209,34 +253,91 @@ it.each([false, true])(
   },
 );
 
-it("passes compiled Shell and the protected root through the actual desktop caller", () => {
+// The Go start, driven through the module main calls, over scripted ports.
+function startPorts(
+  options: {
+    launch?: (selection: DesktopCoreSelection) => Promise<DesktopGoCore>;
+    runtimeEnvironment?: "dev" | "preview" | "owner-preview";
+    directory?: string;
+    executable?: string;
+    compiledShell?: DesktopCoreSelection["compiledShell"];
+    resourcesOrigin?: { execution: { directory: string } };
+  } = {},
+): GoCoreStartPorts {
+  return {
+    startDesktopGoCore: options.launch ?? (async () => ({}) as DesktopGoCore),
+    operationsStore: () => ({ record: () => undefined as never }),
+    compiledArtifact: "artifact",
+    compiledResources: "resources",
+    compiledShell: options.compiledShell,
+    runtimeEnvironment: options.runtimeEnvironment ?? "preview",
+    directory: options.directory ?? "/synthetic/repo/_output/build/app",
+    executablePath: () => options.executable ?? "/synthetic/Electron",
+    realpathSync: (value: string) => value,
+    freshStartup: () => false,
+    previousHostAdmissionReady: true,
+    computerMcpLifecycle: () => ({
+      withInactiveForFreshStart: (start) => start(),
+    }),
+    buildIdentity: { buildId: "b".repeat(64) } as never,
+    installedUpdates: { resourcesOrigin: options.resourcesOrigin } as never,
+    stateRoot: "/synthetic/state",
+    home: () => "/synthetic/home",
+    settings: (() => {
+      throw Error("NOT_CALLED");
+    }) as never,
+    reportOwnedBackendLifecycle: () => undefined,
+    reportQualificationObservation: () => undefined,
+    browser: (() => {
+      throw Error("NOT_CALLED");
+    }) as never,
+  };
+}
+
+async function launched(
+  options: Parameters<typeof startPorts>[0],
+): Promise<DesktopCoreSelection> {
+  const selections: DesktopCoreSelection[] = [];
+  await startGoCore(
+    startPorts({
+      ...options,
+      launch: async (selection) => {
+        selections.push(selection);
+        return {} as DesktopGoCore;
+      },
+    }),
+  );
+  return selections[0]!;
+}
+
+it("passes the shell-owning directory and executable through the actual desktop caller", () => {
+  // Main hands the module its own directory, update host and environment.
   const call = selected(
     main,
     mainTree,
     (node) =>
       node.type === "CallExpression" &&
-      (node.callee as { name?: string }).name === "startObservedDesktopGoCore",
+      (node.callee as { name?: string }).name === "startGoCore",
   );
-  const tree = parse(call, { sourceType: "module", plugins: ["typescript"] });
-  const root = selected(
-    call,
-    tree,
-    (node) =>
-      node.type === "ObjectProperty" &&
-      (node.key as { name?: string }).name === "artifactRoot",
-  );
-  const shell = selected(
-    call,
-    tree,
-    (node) =>
-      node.type === "ObjectProperty" &&
-      (node.key as { name?: string }).name === "compiledShell",
-  );
-  const compiledGoShell = {
+  for (const shorthand of [
+    "directory,",
+    "installedUpdates,",
+    "runtimeEnvironment,",
+    "compiledShell: compiledGoShell,",
+  ])
+    expect(call).toContain(shorthand);
+});
+
+it("passes compiled Shell and the protected root through the actual desktop caller", async () => {
+  const compiledShell = {
     support: "controlled",
-    watchdogSource: new Uint8Array(),
+    watchdogSource: new Uint8Array([1]),
   };
-  for (const runtimeEnvironment of ["dev", "preview", "owner-preview"]) {
+  for (const runtimeEnvironment of [
+    "dev",
+    "preview",
+    "owner-preview",
+  ] as const) {
     for (const layout of ["raw", "packaged", "protected"] as const) {
       const directory =
         layout === "packaged"
@@ -248,76 +349,49 @@ it("passes compiled Shell and the protected root through the actual desktop call
         layout === "protected"
           ? "/synthetic/repo/_output/dev-core/Contents/Frameworks/Farol Dev.app/Contents/MacOS/Electron"
           : "/synthetic/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron";
-      const actual = vm.runInNewContext(
-        `({${stripTypeScriptTypes(root)},${stripTypeScriptTypes(shell)}})`,
-        {
-          desktopCoreArtifactRoot,
-          desktopDevShellImageMatches,
-          realpathSync: (value: string) => value,
-          process: { execPath: executable },
-          compiledGoShell,
-          runtimeEnvironment,
-          directory,
-          installedUpdates: { resourcesOrigin: undefined },
-        },
-      );
+      const actual = await launched({
+        runtimeEnvironment,
+        directory,
+        executable,
+        compiledShell,
+      });
       expect(actual.compiledShell).toBe(
         runtimeEnvironment === "dev" && layout !== "protected"
           ? undefined
-          : compiledGoShell,
+          : compiledShell,
+      );
+      expect(actual.artifactRoot).toBe(
+        desktopCoreArtifactRoot(directory, runtimeEnvironment),
       );
       expect(actual.artifactRoot).toBe(directory);
     }
   }
 });
 
-it("uses the authenticated private image for the actual Go and Shell caller", () => {
-  const call = selected(
-    main,
-    mainTree,
-    (node) =>
-      node.type === "CallExpression" &&
-      (node.callee as { name?: string }).name === "startObservedDesktopGoCore",
-  );
-  const tree = parse(call, { sourceType: "module", plugins: ["typescript"] });
-  const root = selected(
-    call,
-    tree,
-    (node) =>
-      node.type === "ObjectProperty" &&
-      (node.key as { name?: string }).name === "artifactRoot",
-  );
-  const shell = selected(
-    call,
-    tree,
-    (node) =>
-      node.type === "ObjectProperty" &&
-      (node.key as { name?: string }).name === "compiledShell",
-  );
+it("uses the authenticated private image for the actual Go and Shell caller", async () => {
   const privateRoot = "/owner-private/Farol.app/Contents/Resources/app";
-  const compiledGoShell = {
+  const compiledShell = {
     support: "controlled",
-    watchdogSource: new Uint8Array(),
+    watchdogSource: new Uint8Array([1]),
   };
-  for (const runtimeEnvironment of ["dev", "preview", "owner-preview"]) {
-    const value = vm.runInNewContext(
-      `({${stripTypeScriptTypes(root)},${stripTypeScriptTypes(shell)}})`,
-      {
-        desktopCoreArtifactRoot,
-        desktopDevShellImageMatches,
-        realpathSync: (value: string) => value,
-        process: { execPath: "/owner-private/Farol.app/Contents/MacOS/Farol" },
-        compiledGoShell,
-        runtimeEnvironment,
-        directory: "/Applications/Farol.app/Contents/Resources/app",
-        installedUpdates: {
-          resourcesOrigin: { execution: { directory: privateRoot } },
-        },
-      },
+  for (const runtimeEnvironment of [
+    "dev",
+    "preview",
+    "owner-preview",
+  ] as const) {
+    const value = await launched({
+      runtimeEnvironment,
+      directory: "/Applications/Farol.app/Contents/Resources/app",
+      executable: "/owner-private/Farol.app/Contents/MacOS/Farol",
+      compiledShell,
+      resourcesOrigin: { execution: { directory: privateRoot } },
+    });
+    expect(value.artifactRoot).toBe(
+      desktopCoreArtifactRoot(privateRoot, runtimeEnvironment),
     );
     expect(value.artifactRoot).toBe(privateRoot);
     expect(value.compiledShell).toBe(
-      runtimeEnvironment === "dev" ? undefined : compiledGoShell,
+      runtimeEnvironment === "dev" ? undefined : compiledShell,
     );
   }
 });
