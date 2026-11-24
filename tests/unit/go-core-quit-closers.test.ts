@@ -5,6 +5,7 @@ import { stripTypeScriptTypes } from "node:module";
 import { parse } from "@babel/parser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { goCoreQuitClosers } from "../../apps/desktop/go-core-quit-closers";
+import { createConnectorStop } from "../../apps/desktop/connector/stop";
 import { createCell } from "../../apps/desktop/host/cell";
 import {
   createQuitDrain,
@@ -71,14 +72,6 @@ const recordSource = source.slice(
   recordProperty.value.start,
   recordProperty.value.end,
 );
-const stopNode = tree.program.body.find(
-  (node) =>
-    node.type === "FunctionDeclaration" &&
-    node.id?.name === "stopAndConfirmComputerMcp",
-);
-if (!stopNode || stopNode.start == null || stopNode.end == null)
-  throw new Error("QUIT_STOP_SOURCE_MISSING");
-const stopSource = source.slice(stopNode.start, stopNode.end);
 const bridgeSource = fs.readFileSync(
   new URL("../../src/apps/desktop/saved-chat-bridge.ts", import.meta.url),
   "utf8",
@@ -445,10 +438,17 @@ describe("actual MCP stop retains its admitted saved-chat lifetime", () => {
       ownedLocalRuntimes: new Map(),
       stopRuntime() {},
     });
-    vm.runInContext(
-      stripTypeScriptTypes(stopSource, { mode: "strip" }),
-      context,
-    );
+    // The stop lives in the connector module now; the same live owners are read
+    // through the context at call time, as main's late getters read its own.
+    const stopHost = createConnectorStop({
+      secureMcpConnectorRuntime: () => context.secureMcpConnectorRuntime,
+      desktopGoCore: () => context.desktopGoCore,
+      saved: owner.saved as never,
+      operationsStore: () => context.operationsStore(),
+      statePaths: () => ({ secureMcpLaunch: "launch" }),
+      createLifecycle: () => context.computerMcpLifecycle(),
+    });
+    context.stopAndConfirmComputerMcp = stopHost.stopAndConfirmComputerMcp;
     const collect = vm.runInContext(
       stripTypeScriptTypes(`(${collectSource})`, { mode: "strip" }),
       context,

@@ -13,6 +13,10 @@ const mainSource = path.resolve(
   import.meta.dirname,
   "../../src/apps/desktop/main.ts",
 );
+const stopSource = path.resolve(
+  import.meta.dirname,
+  "../../apps/desktop/connector/stop.ts",
+);
 const contextSource = path.resolve(
   import.meta.dirname,
   "../../apps/desktop/task/context.ts",
@@ -133,16 +137,23 @@ describe("relay and saved-chat bridge wiring in main", () => {
   });
 
   it("captures the default bridge at stop entry and clears only the one it closed", async () => {
+    // The stop lives in the connector module; it reads the bridge's own cell,
+    // which main lends by reference, at the same two places as before.
+    const stop = (await readFile(stopSource, "utf8")).replace(/\s+/g, " ");
+    expect(stop).toContain("core = desktopGoCore(), savedChat = saved.get(),");
+    expect(
+      stop.match(
+        /await savedChat\.close\(\); if \(saved\.get\(\) === savedChat\) saved\.set\(null\);/g,
+      ),
+    ).toHaveLength(1);
+    // Quit keeps its own compare-and-clear in main.
     const { source } = await read();
     const flat = source.replace(/\s+/g, " ");
-    expect(flat).toContain(
-      "core = desktopGoCore, savedChat = bridge.saved.get(),",
-    );
     expect(
       flat.match(
         /await savedChat\.close\(\); if \(bridge\.saved\.get\(\) === savedChat\) bridge\.saved\.set\(null\);/g,
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
   });
 
   it("reads the bridge once at Quit and clears the relay as it is collected", async () => {

@@ -4,6 +4,7 @@ import {
   type ConnectorSetupCommand,
 } from "../../apps/desktop/configuration/connector";
 import { createConnectorStart } from "../../apps/desktop/connector/start";
+import { createConnectorStop } from "../../apps/desktop/connector/stop";
 import { createDevProof } from "../../apps/desktop/dev/proof";
 import { admissionFixture } from "../support/desktop-admission";
 import { connectorStartHost } from "../support/connector-start-ports";
@@ -29,14 +30,6 @@ const source = fs.readFileSync(
   "utf8",
 );
 const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
-function declaration(name: string): string {
-  const node = tree.program.body.find(
-    (value) => value.type === "FunctionDeclaration" && value.id?.name === name,
-  );
-  if (!node || node.start == null || node.end == null)
-    throw Error(`Missing Main function: ${name}`);
-  return source.slice(node.start, node.end);
-}
 const main = tree.program.body.find(
   (value) => value.type === "FunctionDeclaration" && value.id?.name === "main",
 );
@@ -127,12 +120,16 @@ function fixture(honoursCancellation = false, startupAdmission = false) {
       stopRuntime() {},
     }),
   );
-  vm.runInContext(
-    stripTypeScriptTypes(declaration("stopAndConfirmComputerMcp"), {
-      mode: "strip",
-    }),
-    context,
-  );
+  // The stop lives in the connector module now; the same live owners are read
+  // through the context at call time, as main's late getters read its own.
+  context.stopAndConfirmComputerMcp = createConnectorStop({
+    secureMcpConnectorRuntime: () => context.secureMcpConnectorRuntime,
+    desktopGoCore: () => context.desktopGoCore,
+    saved: context.bridge.saved,
+    operationsStore: () => context.operationsStore(),
+    statePaths: () => ({ secureMcpLaunch: "launch" }),
+    createLifecycle: () => context.computerMcpLifecycle(),
+  }).stopAndConfirmComputerMcp;
   // The module writes the start-flight fields back to the object Main's own
   // Quit collection reads, as Main assigns its own.
   const observeStart = createConnectorStart(
