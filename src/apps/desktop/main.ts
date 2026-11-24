@@ -59,7 +59,6 @@ import {
   startDesktopGoCore,
   type DesktopGoCore,
 } from "../../../apps/desktop/go-core-host";
-import type { QualificationObservation } from "../../../apps/desktop/bridge/qualification-metrics";
 import {
   maintenanceFailureCode,
   type MaintenanceObservation,
@@ -79,6 +78,8 @@ import {
   reportConnectorTransport,
 } from "../../../apps/desktop/connector/start";
 import { connectorSupervisor } from "../../../apps/desktop/connector/supervisor";
+import { createCoreReporters } from "../../../apps/desktop/core/report";
+import { startGoCore } from "../../../apps/desktop/core/start";
 import { createDesktopChatBrowser } from "../../../apps/desktop/go-chat-host";
 import { GoChatBrowserDriver } from "../../../apps/desktop/go-chat-browser";
 import {
@@ -90,10 +91,7 @@ import { readChatHistoryView } from "../../../apps/desktop/chat-history-view";
 import { runSelfTestCommand } from "../../../apps/desktop/self-test-ipc";
 import { recoverDeepTestAttempts } from "./deep-test-recovery";
 import { readRetiredRepliesView } from "../../../apps/desktop/retired-replies-view";
-import {
-  BridgeError,
-  type BackendLifecycleObservation,
-} from "../../../apps/desktop/bridge/client";
+import { BridgeError } from "../../../apps/desktop/bridge/client";
 import {
   reportComputerCheckDiagnostic,
   refuseComputerSettingsList,
@@ -115,10 +113,7 @@ import {
   applicationMenu,
 } from "../../../apps/desktop/shell/menu";
 import { surfaceNavigation } from "../../../apps/desktop/shell/navigation";
-import {
-  desktopCoreArtifactRoot,
-  desktopDevShellImageMatches,
-} from "../../../apps/desktop/dev-core-layout";
+import { desktopCoreArtifactRoot } from "../../../apps/desktop/dev-core-layout";
 import { promises as rawFs } from "original-fs";
 import {
   announceDrainedQuit,
@@ -504,10 +499,7 @@ import {
 import { resumeComputerConnector } from "./connector-resume-policy";
 import { identityBoundWorkspaces } from "./identity-bound-workspaces";
 import { AuthorityTransitionReservation } from "./authority-transition";
-import {
-  SecureMcpConnectorRuntime,
-  type ConnectorRuntimeLifecycleObservation,
-} from "./secure-mcp-connector-runtime";
+import { SecureMcpConnectorRuntime } from "./secure-mcp-connector-runtime";
 import { clearConnectorVerificationReceipt } from "../../modules/computer/infra/mcp/connector-verification-receipt";
 import { PrivateExecutionFence } from "../../modules/computer/infra/mcp/execution-fence";
 import { PrivateMcpLifecycle } from "../../modules/computer/infra/mcp/private-mcp-lifecycle";
@@ -4309,15 +4301,6 @@ async function verifyTunnelClientExecutable(
   }
 }
 
-function startObservedDesktopGoCore(
-  ...args: Parameters<typeof startDesktopGoCore>
-): ReturnType<typeof startDesktopGoCore> {
-  return observeOperation(
-    operationsStore(),
-    { source: "Setup", kind: "hub.start", target: {} },
-    () => startDesktopGoCore(...args),
-  );
-}
 function reportMaintenanceObservation(
   observation: MaintenanceObservation,
 ): void {
@@ -4337,93 +4320,11 @@ function reportMaintenanceObservation(
     /* Diagnostics never grant recovery or retry. */
   }
 }
-function reportQualificationObservation(
-  observation: QualificationObservation,
-): void {
-  if (runtimeEnvironment !== "dev" && process.env.FAROL_E2E !== "1") return;
-  try {
-    process.stderr.write(
-      "FAROL_QUALIFICATION_METRICS:" +
-        JSON.stringify({
-          schema: 1,
-          buildId: buildIdentity.buildId,
-          pid: process.pid,
-          ...observation,
-        }) +
-        "\n",
-    );
-  } catch {
-    // Diagnostics never supply a positive qualification or a retry.
-  }
-}
-function reportOwnedBackendLifecycle(
-  observation:
-    BackendLifecycleObservation | ConnectorRuntimeLifecycleObservation,
-): void {
-  try {
-    // Child notifications during an admitted connector Stop are diagnostics,
-    // not separate actions. The enclosing connection.stop records the final
-    // drain result; cleanup-unknown remains independently durable if it fails.
-    const connectorStopNotification =
-      observation.source !== "go-backend" &&
-      observation.phase === "closing" &&
-      observation.event !== "cleanup-unknown";
-    if (!connectorStopNotification)
-      operationsStore().record(
-        {
-          source: "Setup",
-          kind:
-            observation.source === "go-backend"
-              ? "hub.lifecycle"
-              : "connection.lifecycle",
-          target: {},
-        },
-        observation.state === "outcome_unknown" ||
-          observation.event === "cleanup-unknown"
-          ? "unknown"
-          : observation.event === "failure"
-            ? "failed"
-            : observation.state === "observed" &&
-                observation.phase === "closing" &&
-                observation.event === "child-close" &&
-                observation.exitCode === 0 &&
-                observation.signal === null &&
-                !observation.forced
-              ? "done"
-              : "unknown",
-        observation.code,
-        0,
-      );
-  } catch {
-    // Optional operations projection cannot suppress the original diagnostic.
-  }
-  // Project only the original producer's closed terminal facts. This sink never
-  // looks up mutable host state or changes admission, recovery or drain results.
-  try {
-    console.warn(
-      "FAROL_BACKEND_LIFECYCLE:" +
-        JSON.stringify({
-          at: new Date().toISOString(),
-          source: observation.source,
-          phase: observation.phase,
-          event: observation.event,
-          code: observation.code,
-          state: observation.state,
-          exitCode: observation.exitCode,
-          signal: observation.signal,
-          forced: observation.forced,
-          ...(observation.source === "go-backend"
-            ? {
-                hostLifetimeId: observation.hostLifetimeId,
-                childLaunchId: observation.childLaunchId,
-              }
-            : { runtimeGeneration: observation.runtimeGeneration }),
-        }),
-    );
-  } catch {
-    // A closed diagnostic output cannot replace the original lifetime outcome.
-  }
-}
+// Built once, here, where the function declarations they replace stood. Every
+// call site is inside main() or a later closure, and main() is first called
+// near the end of this module, so each one reads the same built functions.
+const { reportQualificationObservation, reportOwnedBackendLifecycle } =
+  createCoreReporters({ runtimeEnvironment, buildIdentity, operationsStore });
 
 // Bootstrap and separate-app recovery retain their existing challenge workflow.
 // Already-attached Setup checks use the same Go owner as the explicit toolbar.
@@ -6970,43 +6871,26 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       return snapshot.settings;
     };
     desktopGoCore = await runDesktopStartupBoundary("go-core", () =>
-      startObservedDesktopGoCore({
+      startGoCore({
+        startDesktopGoCore,
+        operationsStore,
         compiledArtifact: compiledGoCore,
         compiledResources: compiledGoResources,
-        // Legacy preview entrypoints retain File tools, but never qualify Shell
-        // against a different copy of the code actually executing this host.
-        compiledShell:
-          runtimeEnvironment === "dev" &&
-          !desktopDevShellImageMatches(
-            realpathSync(directory),
-            realpathSync(process.execPath),
-          )
-            ? undefined
-            : compiledGoShell,
-        previousHostDrainConfirmed: freshStartup
-          ? false
-          : previousHostAdmissionReady,
-        ...(freshStartup
-          ? {
-              startupPurpose: "fresh" as const,
-              withInactiveMcp: <T>(start: () => Promise<T>) =>
-                computerMcpLifecycle().withInactiveForFreshStart(start),
-            }
-          : {}),
-        build: buildIdentity,
-        // The attested path must remain immutable through spawn and lifetime.
-        // Shared installation paths are writable by other administrator accounts.
-        artifactRoot: desktopCoreArtifactRoot(
-          installedUpdates.resourcesOrigin?.execution.directory ?? directory,
-          runtimeEnvironment,
-        ),
+        compiledShell: compiledGoShell,
+        runtimeEnvironment,
+        directory,
+        executablePath: () => process.execPath,
+        realpathSync,
+        freshStartup: () => freshStartup,
+        previousHostAdmissionReady,
+        computerMcpLifecycle,
+        buildIdentity,
+        installedUpdates,
         stateRoot,
-        home: app.getPath("home"),
+        home: () => app.getPath("home"),
         settings: currentSettings,
-        onLifecycleObservation: reportOwnedBackendLifecycle,
-        ...(runtimeEnvironment === "dev" || process.env.FAROL_E2E === "1"
-          ? { onQualificationObservation: reportQualificationObservation }
-          : {}),
+        reportOwnedBackendLifecycle,
+        reportQualificationObservation,
         browser: (context) =>
           createDesktopChatBrowser({
             context,
