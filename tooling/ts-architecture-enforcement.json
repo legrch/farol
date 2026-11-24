@@ -501,22 +501,12 @@
     {
       "code": "TS_APP_MODULE_INTERNAL",
       "file": "src/apps/desktop/main.ts",
-      "detail": "Imports module internals: src/modules/agent/app/port/agent-host.ts"
-    },
-    {
-      "code": "TS_APP_MODULE_INTERNAL",
-      "file": "src/apps/desktop/main.ts",
       "detail": "Imports module internals: src/modules/agent/app/service/acknowledge-agent-result.ts"
     },
     {
       "code": "TS_APP_MODULE_INTERNAL",
       "file": "src/apps/desktop/main.ts",
       "detail": "Imports module internals: src/modules/agent/app/service/cancel-agent-assignment.ts"
-    },
-    {
-      "code": "TS_APP_MODULE_INTERNAL",
-      "file": "src/apps/desktop/main.ts",
-      "detail": "Imports module internals: src/modules/agent/app/service/run-agent-assignment.ts"
     },
     {
       "code": "TS_APP_MODULE_INTERNAL",
