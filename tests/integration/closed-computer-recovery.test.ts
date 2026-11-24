@@ -17,10 +17,16 @@ async function desktopRoots(userData: string) {
     path.resolve(import.meta.dirname, "../../src/apps/desktop/main.ts"),
     "utf8",
   );
-  // Desktop must build its lifecycle from the launch root this module names.
+  // Desktop must build its lifecycle from the launch root this module names:
+  // main builds the concrete lifecycle, the connector stop reads the root.
   expect(source).toMatch(
-    /new PrivateMcpLifecycle\(\s*statePaths\(\)\.secureMcpLaunch/u,
+    /createLifecycle: \(secureMcpLaunch\) =>\s*new PrivateMcpLifecycle\(secureMcpLaunch\)/u,
   );
+  const stop = await fs.readFile(
+    path.resolve(import.meta.dirname, "../../apps/desktop/connector/stop.ts"),
+    "utf8",
+  );
+  expect(stop).toMatch(/createLifecycle\(\s*statePaths\(\)\.secureMcpLaunch/u);
   const paths = desktopStatePaths({ userData, tmpdir: os.tmpdir() });
   return {
     root: paths.secureMcpLaunch,
