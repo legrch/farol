@@ -14,8 +14,10 @@ const object = (v: unknown): Record<string, unknown> =>
     : {};
 
 /** Node errno codes and the AbortError name, mapped to codes the journal
- * already knows. Connection and timing errors can follow a delivered request,
- * so they stay uncertain; only a local file error is a definite failure. */
+ * already knows. Only a local file error is a definite failure. Every
+ * transport, timing or abort error can follow a delivered request, so each
+ * maps to a code in the unknown bucket (ECONNREFUSED too: a refusal before
+ * connect is likely safe, but the journal cannot prove it from the code). */
 const systemErrorCodes: Readonly<Record<string, string>> = {
   ENOENT: "OPERATION_IO_FAILED",
   EACCES: "OPERATION_IO_FAILED",
@@ -24,7 +26,8 @@ const systemErrorCodes: Readonly<Record<string, string>> = {
   ECONNRESET: "transport_closed",
   EPIPE: "transport_closed",
   ETIMEDOUT: "timeout",
-  AbortError: "aborted",
+  // An abort can arrive after the request was delivered.
+  AbortError: "unconfirmed",
 };
 const systemErrorCode = (code: unknown): unknown =>
   typeof code === "string" &&

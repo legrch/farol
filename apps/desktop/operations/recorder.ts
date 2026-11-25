@@ -29,6 +29,9 @@ import {
 const maxRecentRejections = 5;
 const maxRejectionIssues = 4;
 const maxRejectionPath = 8;
+// Must not exceed OperationRejectionSchema's path bound, or persisted
+// diagnostics would fail to parse on the next read.
+const maxRejectionPathLength = 120;
 const identifier = /^[A-Za-z_][A-Za-z0-9_]{0,39}$/u;
 
 /** Non-sensitive facts only: a kind from the closed vocabulary, schema paths
@@ -48,10 +51,14 @@ function describeRejection(
   } catch {
     // A hostile getter leaves the kind unparsed.
   }
+  const clamp = (path: string) =>
+    path.length <= maxRejectionPathLength
+      ? path
+      : `${path.slice(0, maxRejectionPathLength - 1)}…`;
   return {
     kind,
     issues: error.issues.slice(0, maxRejectionIssues).map((issue) => ({
-      path:
+      path: clamp(
         issue.path
           .slice(0, maxRejectionPath)
           .map((part) =>
@@ -62,6 +69,7 @@ function describeRejection(
                 : "?",
           )
           .join(".") || "(root)",
+      ),
       code: String(issue.code).slice(0, 40),
     })),
   };
