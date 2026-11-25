@@ -1046,6 +1046,107 @@ describe("real read-only Computer action", () => {
     },
   );
 
+  describe("final workspace verification", () => {
+    const identity = {
+      ownerId: "owner-preview",
+      sessionId: "session-a",
+      taskId: "task-a",
+      taskEpoch: 3,
+      participantId: "main-a",
+    };
+    const unused = {
+      async execute(): Promise<never> {
+        throw new Error("no native work");
+      },
+    };
+    function service(approvals: ComputerApprovalRepository) {
+      return new RunReadonlyComputerAction(
+        new InMemoryAuthorityRepository(Object.values(participants())),
+        approvals,
+        unused,
+        clock,
+      );
+    }
+
+    it("accepts a usable root and a refused entry that are still granted", async () => {
+      const bound = approvedRootOf(root);
+      await expect(
+        service(
+          new InMemoryComputerApprovalRepository([approval()]),
+        ).verifyWorkspaces({
+          ...identity,
+          workspaces: [{ workspaceId: "farol", root, approvedRoot: bound }],
+        }),
+      ).resolves.toEqual({ ok: true });
+      await expect(
+        service(
+          new InMemoryComputerApprovalRepository([approval()]),
+        ).verifyWorkspaces({
+          ...identity,
+          workspaces: [{ workspaceId: "farol" }],
+        }),
+      ).resolves.toEqual({ ok: true });
+    });
+
+    it.each([
+      [
+        "an unknown workspace",
+        { workspaceId: "gone" },
+        "AUTHORITY_PATH_DENIED",
+      ],
+      [
+        "a changed root",
+        {
+          workspaceId: "farol",
+          root: "/elsewhere",
+          approvedRoot: { path: "/elsewhere", device: "1", inode: "2" },
+        },
+        "WORKSPACE_ROOT_CHANGED",
+      ],
+    ])("fails for %s", async (_label, workspace, code) => {
+      await expect(
+        service(
+          new InMemoryComputerApprovalRepository([approval()]),
+        ).verifyWorkspaces({
+          ...identity,
+          workspaces: [workspace],
+        }),
+      ).resolves.toMatchObject({ ok: false, error: { code } });
+    });
+
+    it("fails when the call is cancelled", async () => {
+      const controller = new AbortController();
+      controller.abort();
+      await expect(
+        service(
+          new InMemoryComputerApprovalRepository([approval()]),
+        ).verifyWorkspaces(
+          { ...identity, workspaces: [{ workspaceId: "farol" }] },
+          { signal: controller.signal },
+        ),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "WORKSPACE_REQUEST_CANCELLED" },
+      });
+    });
+
+    it("fails when the approval is gone", async () => {
+      await expect(
+        service({
+          async get() {
+            return null;
+          },
+        }).verifyWorkspaces({
+          ...identity,
+          workspaces: [{ workspaceId: "farol" }],
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "COMPUTER_APPROVAL_NOT_FOUND" },
+      });
+    });
+  });
+
   it("still reports a native refusal when the call holds", async () => {
     const action = new RunReadonlyComputerAction(
       new InMemoryAuthorityRepository(Object.values(participants())),

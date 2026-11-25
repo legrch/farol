@@ -33,6 +33,10 @@ async function connect(
     // The approval disappears while the refused trial folder's second-pass
     // request runs (the third native call).
     revokeDuringSecondRefusal?: boolean;
+    // The code folder is refused, and the usable trial folder's approval is
+    // withdrawn while the code folder's second-pass request runs (the fourth
+    // native call): only the final whole-answer check can notice it.
+    revokeUsableDuringRefusal?: boolean;
   } = {},
 ) {
   const approval: ComputerApproval = {
@@ -107,6 +111,15 @@ async function connect(
     async (nativeRequest: { workspace: { workspaceId: string } }) => {
       reads++;
       const id = nativeRequest.workspace.workspaceId;
+      if (id === "code-uuid" && options.revokeUsableDuringRefusal) {
+        return {
+          ok: false as const,
+          error: {
+            code: "WORKSPACE_PATH_REFUSED" as const,
+            retry: "never" as const,
+          },
+        };
+      }
       if (
         id === "trial-uuid" &&
         (options.refuseTrial ||
@@ -141,6 +154,13 @@ async function connect(
       new InMemoryAuthorityRepository([participant.value]),
       {
         async get() {
+          if (options.revokeUsableDuringRefusal && reads >= 4)
+            return {
+              ...approval,
+              workspaces: approval.workspaces.filter(
+                (workspace) => workspace.workspaceId !== "trial-uuid",
+              ),
+            };
           return (options.revoke && reads >= 2) ||
             (options.revokeDuringSecondRefusal && reads >= 3)
             ? null
@@ -333,6 +353,28 @@ describe("authority-bound workspace discovery through MCP", () => {
     expect(JSON.stringify(catalogue.structuredContent)).not.toContain(
       "code-uuid",
     );
+  });
+
+  it("discloses nothing when a usable entry's approval is withdrawn during a later refused request", async () => {
+    const { client, native } = await connect({
+      revokeUsableDuringRefusal: true,
+    });
+    const catalogue = await client.callTool({
+      name: "computer_workspace_catalogue",
+      arguments: {},
+    });
+    // trial, code (refused), trial, code (refused): the refusal's own recheck
+    // still passes, so the final whole-answer check must catch the trial entry.
+    expect(native).toHaveBeenCalledTimes(4);
+    expect(catalogue.isError).toBe(true);
+    expect(catalogue.structuredContent).toMatchObject({
+      ok: false,
+      error: { code: "AUTHORITY_PATH_DENIED" },
+    });
+    const encoded = JSON.stringify(catalogue.structuredContent);
+    expect(encoded).not.toContain("/approved/");
+    expect(encoded).not.toContain("trial-uuid");
+    expect(encoded).not.toContain("workspaces");
   });
 
   it("still fails the whole call on any other native failure", async () => {
