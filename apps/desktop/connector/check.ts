@@ -344,8 +344,9 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
             runtime.connectorGeneration !== connector.generation ||
             !connectionCheckRuntimeReady(secureMcpConnectorRuntime())
           ) {
+            const live = secureMcpConnectorRuntime();
             return refusePrerequisites(
-              `runtime app=${appName !== null} workspace=${workspace !== undefined} tunnel=${connector.tunnelId !== null} state=${runtime?.state ?? "missing"}`,
+              `runtime app=${appName !== null} workspace=${workspace !== undefined} tunnel=${connector.tunnelId !== null} state=${runtime?.state ?? "missing"} build=${runtime?.buildId === buildIdentity.buildId} computer=${runtime?.computerGeneration === settings.computer.generation} connector=${runtime?.connectorGeneration === connector.generation} running=${live?.isRunning() ?? "missing"} unresolved=${live?.hasUnresolvedEffect() ?? "missing"}`,
             );
           }
           // A persistent Setup uncertainty, not a check that is still running:

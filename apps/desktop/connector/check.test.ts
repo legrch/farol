@@ -875,6 +875,38 @@ describe("testConnectionCommand prerequisites inside the first claim", () => {
     expect(f.core.observeComputerConnectorVerification).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      "build=false",
+      (f: Fixture) => void (f.connector.runtime!.buildId = "e".repeat(64)),
+    ],
+    [
+      "computer=false",
+      (f: Fixture) => void (f.connector.runtime!.computerGeneration += 1),
+    ],
+    [
+      "connector=false",
+      (f: Fixture) => void (f.connector.runtime!.connectorGeneration += 1),
+    ],
+    [
+      "running=false",
+      (f: Fixture) => void f.runtime.isRunning.mockReturnValue(false),
+    ],
+    [
+      "unresolved=true",
+      (f: Fixture) => void f.runtime.hasUnresolvedEffect.mockReturnValue(true),
+    ],
+  ])("names %s in a ready runtime's refusal", async (field, change) => {
+    const f = build();
+    change(f);
+    const { logged } = await refused(f);
+    const line = logged.find((entry) =>
+      entry.startsWith("FAROL_CONNECTION_CHECK_REFUSED runtime "),
+    );
+    expect(line).toContain("state=ready");
+    expect(line).toContain(field);
+  });
+
   it("uses the selected task's own browser route, not the Setup route", async () => {
     const f = build();
     const taskRoute = {
