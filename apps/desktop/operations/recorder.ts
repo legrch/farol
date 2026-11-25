@@ -149,8 +149,15 @@ export function createTotalOperationsRecorder(
   const recentRejections: OperationRejection[] = [];
   // A schema rejection is not a disk problem: it is counted on its own, while
   // the entry is still recorded as not persisted.
-  const failed = (outcome?: Outcome, error?: unknown, metadata?: unknown) => {
-    if (error instanceof z.ZodError) {
+  // Workspace labels are not operation metadata, so their ZodError stays a
+  // write failure (`metadataRejection` false).
+  const failed = (
+    outcome?: Outcome,
+    error?: unknown,
+    metadata?: unknown,
+    metadataRejection = true,
+  ) => {
+    if (metadataRejection && error instanceof z.ZodError) {
       rejectedMetadata++;
       recentRejections.push(describeRejection(error, metadata));
       if (recentRejections.length > maxRecentRejections)
@@ -173,12 +180,14 @@ export function createTotalOperationsRecorder(
     action: () => unknown,
     outcome: Outcome | (() => Outcome) | undefined,
     metadata?: unknown,
+    metadataRejection = true,
   ): void => {
     const unavailable = (error?: unknown) =>
       failed(
         typeof outcome === "function" ? outcome() : outcome,
         error,
         metadata,
+        metadataRejection,
       );
     try {
       void Promise.resolve(action()).catch(unavailable);
@@ -333,12 +342,20 @@ export function createTotalOperationsRecorder(
       );
     },
     setWorkspaceLabels(workspaces) {
-      observe(() => {
-        labels = OperationWorkspaceLabelsSchema.parse(
-          workspaces.map(({ workspaceId, label }) => ({ workspaceId, label })),
-        );
-        return sink.setWorkspaceLabels?.(labels);
-      }, undefined);
+      observe(
+        () => {
+          labels = OperationWorkspaceLabelsSchema.parse(
+            workspaces.map(({ workspaceId, label }) => ({
+              workspaceId,
+              label,
+            })),
+          );
+          return sink.setWorkspaceLabels?.(labels);
+        },
+        undefined,
+        undefined,
+        false,
+      );
     },
     diagnostics: () => ({
       writeFailures,

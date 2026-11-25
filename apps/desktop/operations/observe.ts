@@ -28,6 +28,8 @@ const systemErrorCodes: Readonly<Record<string, string>> = {
   ETIMEDOUT: "timeout",
   // An abort can arrive after the request was delivered.
   AbortError: "unconfirmed",
+  // Node's AbortError also carries this own `code`.
+  ABORT_ERR: "unconfirmed",
 };
 const systemErrorCode = (code: unknown): unknown =>
   typeof code === "string" &&
