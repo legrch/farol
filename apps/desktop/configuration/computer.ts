@@ -110,7 +110,9 @@ export type ConfigurationComputerPorts = Readonly<{
     workspace: Pick<ApprovedProductWorkspace, "workspaceId" | "root">,
     identity: WorkspaceRootIdentity,
     diagnosticAction: string,
-  ) => Promise<{ ok: true } | { ok: false; code: string }>;
+  ) => Promise<
+    { ok: true; writableByOthers?: true } | { ok: false; code: string }
+  >;
   buildIdentity: () => Readonly<{ buildId: string }>;
   workspaceReadFailure: (code: string) => ProductConfigurationResult;
   desktopAdmission: Pick<
@@ -538,6 +540,7 @@ export function createConfigurationComputer(
             kind: "computer.workspace-inspection",
             workspaceId: workspace.workspaceId,
             relativePath: ".",
+            ...(result.writableByOthers ? { writableByOthers: true } : {}),
           },
         });
       }

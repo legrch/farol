@@ -147,7 +147,9 @@ export function createWorkspaceCommands(ports: WorkspaceCommandPorts) {
     workspace: Pick<ApprovedProductWorkspace, "workspaceId" | "root">,
     identity: WorkspaceRootIdentity | null,
     diagnosticAction: string,
-  ): Promise<{ ok: true } | { ok: false; code: string }> {
+  ): Promise<
+    { ok: true; writableByOthers?: true } | { ok: false; code: string }
+  > {
     const core = desktopGoCore();
     if (!core) return { ok: false, code: "WORKSPACE_READ_FAILED" };
     try {
@@ -166,7 +168,9 @@ export function createWorkspaceCommands(ports: WorkspaceCommandPorts) {
         current.settings.computer.generation !== generation
       )
         return { ok: false, code: "WORKSPACE_ROOT_CHANGED" };
-      return { ok: true };
+      return result.writableByOthers === true
+        ? { ok: true, writableByOthers: true }
+        : { ok: true };
     } catch (error) {
       return refuseComputerSettingsList(
         error,
