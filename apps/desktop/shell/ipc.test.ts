@@ -547,8 +547,8 @@ describe("updates channels", () => {
     expect(options.mode).toBe("hidden");
     expect(options.place()).toEqual({ x: 1, y: 2, width: 3, height: 4 });
     expect(h.calls.selectedVisibleTestPlacement).toHaveBeenCalledWith({
-      width: 480,
-      height: 560,
+      width: 400,
+      height: 340,
     });
     expect(options.admitted()).toBe(true);
     h.state.closed = true;
