@@ -13,19 +13,12 @@ import {
   cancelTaskScript,
   collapseChatGptSidebarScript,
   connectionCheckDocumentProbe,
-  dismissInstantPowerPickerScript,
-  focusInstantPowerSliderScript,
   installManualAppGateScript,
-  lowerInstantPowerSliderScript,
-  openInstantPowerPickerScript,
-  openTemporaryPersonalizationScript,
   prepareTaskScript,
   readinessProbe,
-  selectTemporaryPersonalizationScript,
   signInBannerRemovalScript,
   signInBannerScript,
   taskProbeScript,
-  temporaryInstantProfileProbe,
   toggleChatGptSidebarScript,
   verifyChatGptAppScript,
 } from "./chatgpt/scripts";
@@ -68,11 +61,9 @@ import {
   activatedControlSchema,
   activatedTaskSchema,
   appBindingSchema,
-  instantPowerSliderSchema,
   preparedTaskSchema,
   probeSchema,
   taskProbeSchema,
-  temporaryInstantProfileSchema,
 } from "../../../apps/desktop/chat/probe";
 import {
   appBindingFailureCode,
@@ -83,6 +74,11 @@ import {
   type ChatGptWindowPresentation,
   type ResolvedChatGptWindowPresentation,
 } from "../../../apps/desktop/chat/policy";
+import {
+  createInstantProfilePreparer,
+  type ChatGptProfilePreparationDiagnostic,
+  type InstantProfileRefusal,
+} from "../../../apps/desktop/chat/instant";
 import {
   createBoundedSignInObservation,
   unreadSignInOutcome,
@@ -117,6 +113,8 @@ export {
   type ChatGptWindowPresentation,
   type ResolvedChatGptWindowPresentation,
 } from "../../../apps/desktop/chat/policy";
+
+export type { ChatGptProfilePreparationDiagnostic } from "../../../apps/desktop/chat/instant";
 
 export {
   ChatGptSignInBlockLedger,
@@ -220,31 +218,6 @@ type DiagnosticBrowserUpdateCheck =
 export type ChatGptUpdateIdleEffectGuard = Readonly<{
   deadlineAt: number;
   canStartEffect(): boolean;
-}>;
-
-/** Pre-submission evidence; only the allowlisted public model label is text. */
-export type ChatGptProfilePreparationDiagnostic = Readonly<{
-  stage: "hydrate" | "picker" | "slider" | "selected-model";
-  expectedTemporary: boolean;
-  logicalDocumentChanged: boolean;
-  physicalDocumentChanged: boolean;
-  urlChanged: boolean;
-  operationChanged: boolean;
-  surfaceChanged: boolean;
-  probe: Readonly<{
-    composerReady: boolean;
-    draftPresent: boolean;
-    temporary: boolean;
-    modelReady: boolean;
-    instant: boolean;
-    visibleModelLabel: string | null;
-    modelControlCount: number;
-    labelHasInstant: boolean;
-    labelHasThinkingEffort: boolean;
-    labelHasFormatMarks: boolean;
-  }> | null;
-  sliderReady: boolean;
-  sliderAtMinimum: boolean;
 }>;
 
 export type ChatGptRouteOptions = Readonly<{
@@ -2019,391 +1992,59 @@ export class ChatGptRoute {
     }
   }
 
-  private async prepareTemporaryInstantProfile(
+  private prepareTemporaryInstantProfile(
     candidate: ChatGptRouteSurface,
     temporary = true,
     taskDeadline = Date.now() + 180_000,
     operationGeneration = this.taskObservationGeneration,
     originalDocumentCurrent?: () => boolean,
-  ): Promise<
-    | "CHATGPT_COMPOSER_DRAFT_PRESENT"
-    | "CHATGPT_TEMPORARY_CHAT_REQUIRED"
-    | "CHATGPT_INSTANT_MODEL_REQUIRED"
-    | null
-  > {
+  ): Promise<InstantProfileRefusal | null> {
     const contents = candidate.webContents;
-    const execute = (
-      script: string,
-      gesture: boolean,
-      deadline = taskDeadline,
-    ) => {
-      if (originalDocumentCurrent && !originalDocumentCurrent())
-        throw new Error("ChatGPT preparation document changed");
-      return this.executeTaskDocumentScript(
-        contents,
-        script,
-        gesture,
-        deadline,
-        operationGeneration,
-      );
-    };
-    let observed: ChatGptProfilePreparationDiagnostic["probe"] = null;
-    const read = async (deadline = taskDeadline) => {
-      try {
-        const result = temporaryInstantProfileSchema.safeParse(
-          await execute(temporaryInstantProfileProbe, true, deadline),
-        );
-        observed = result.success
-          ? {
-              composerReady: result.data.composerReady,
-              draftPresent: result.data.draftPresent,
-              temporary: result.data.temporary,
-              modelReady: result.data.modelReady,
-              instant: result.data.instant,
-              visibleModelLabel: result.data.visibleModelLabel ?? null,
-              modelControlCount: result.data.modelControlCount ?? 0,
-              labelHasInstant: result.data.labelHasInstant ?? false,
-              labelHasThinkingEffort:
-                result.data.labelHasThinkingEffort ?? false,
-              labelHasFormatMarks: result.data.labelHasFormatMarks ?? false,
-            }
-          : null;
-        return result;
-      } catch {
-        observed = null;
-        return temporaryInstantProfileSchema.safeParse(null);
-      }
-    };
-    const temporaryUrl = new URL(this.options.homeUrl);
-    if (temporary) temporaryUrl.searchParams.set("temporary-chat", "true");
-    else temporaryUrl.searchParams.delete("temporary-chat");
-    const waitForExistingTemporary =
-      temporary && contents.getURL() === temporaryUrl.href;
-    const initialDocumentGeneration = this.routeDocumentGeneration;
-    const initialPhysicalGeneration = this.chatPhysicalDocumentGeneration;
-    const initialFrame = contents.mainFrame;
-    const initialIdentityLost = () =>
-      (originalDocumentCurrent !== undefined && !originalDocumentCurrent()) ||
-      this.routeWindow !== candidate ||
-      candidate.isDestroyed() ||
-      this.disposing ||
-      this.routeDocumentLoadFailed ||
-      this.routeDocumentAwaitingCommit ||
-      this.routeDocumentGeneration !== initialDocumentGeneration ||
-      this.chatPhysicalDocumentGeneration !== initialPhysicalGeneration ||
-      this.taskObservationGeneration !== operationGeneration ||
-      contents.getURL() !== temporaryUrl.href ||
-      contents.mainFrame !== initialFrame ||
-      (initialFrame &&
-        (initialFrame.isDestroyed() || initialFrame.url !== temporaryUrl.href));
-    const initialDeadline = Math.min(taskDeadline, Date.now() + 12_000);
-    if (
-      waitForExistingTemporary &&
-      (initialIdentityLost() || Date.now() >= initialDeadline)
-    )
-      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    let initial = await read(
-      waitForExistingTemporary ? initialDeadline : taskDeadline,
-    );
-    if (waitForExistingTemporary && initialIdentityLost())
-      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    if (!initial.success) return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    if (initial.data.draftPresent) return "CHATGPT_COMPOSER_DRAFT_PRESENT";
-    if (!initial.data.composerReady) return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    if (waitForExistingTemporary) {
-      while (!initial.data.temporary && Date.now() < initialDeadline) {
-        await delay(Math.min(200, Math.max(0, initialDeadline - Date.now())));
-        if (initialIdentityLost() || Date.now() >= initialDeadline)
-          return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-        initial = await read(initialDeadline);
-        if (initialIdentityLost() || !initial.success)
-          return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-        if (initial.data.draftPresent) return "CHATGPT_COMPOSER_DRAFT_PRESENT";
-        if (!initial.data.composerReady)
-          return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-      }
-      if (
-        !initial.data.temporary ||
-        Date.now() >= initialDeadline ||
-        initialIdentityLost()
-      )
-        return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    }
-
-    try {
-      if (originalDocumentCurrent && !originalDocumentCurrent())
-        return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-      if (
-        !temporary ||
-        contents.getURL() !== temporaryUrl.href ||
-        initial.data.temporary !== temporary
-      )
-        await this.navigateRouteDocument(
+    return createInstantProfilePreparer({
+      execute: (script, gesture, deadline) =>
+        this.executeTaskDocumentScript(
+          contents,
+          script,
+          gesture,
+          deadline,
+          operationGeneration,
+        ),
+      navigate: (url, deadline) =>
+        this.navigateRouteDocument(
           candidate,
-          temporaryUrl.href,
-          Math.min(taskDeadline, Date.now() + ROUTE_OPEN_DEADLINE_MS),
-        );
-    } catch {
-      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    }
-    if (this.routeWindow !== candidate || candidate.isDestroyed())
-      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    const profileUrl = contents.getURL();
-    let profileDocumentGeneration = this.routeDocumentGeneration;
-    const profilePhysicalDocumentGeneration =
-      this.chatPhysicalDocumentGeneration;
-    const profileObservationGeneration = this.taskObservationGeneration;
-    const profileIdentityLost = () =>
-      (originalDocumentCurrent !== undefined && !originalDocumentCurrent()) ||
-      this.routeWindow !== candidate ||
-      candidate.isDestroyed() ||
-      this.routeDocumentGeneration !== profileDocumentGeneration ||
-      this.taskObservationGeneration !== profileObservationGeneration ||
-      contents.getURL() !== profileUrl;
-    let stage: ChatGptProfilePreparationDiagnostic["stage"] = "hydrate";
-    let sliderReady = false;
-    let sliderAtMinimum = false;
-    const refuseInstant = (): "CHATGPT_INSTANT_MODEL_REQUIRED" => {
-      try {
-        this.options.onProfilePreparationDiagnostic?.({
-          stage,
-          expectedTemporary: temporary,
-          logicalDocumentChanged:
-            this.routeDocumentGeneration !== profileDocumentGeneration,
-          physicalDocumentChanged:
-            this.chatPhysicalDocumentGeneration !==
-            profilePhysicalDocumentGeneration,
-          urlChanged: contents.getURL() !== profileUrl,
-          operationChanged:
-            this.taskObservationGeneration !== profileObservationGeneration,
-          surfaceChanged:
-            this.routeWindow !== candidate || candidate.isDestroyed(),
-          probe: observed,
-          sliderReady,
-          sliderAtMinimum,
-        });
-      } catch {
-        // Observers cannot change admission or make a refused action retryable.
-      }
-      return "CHATGPT_INSTANT_MODEL_REQUIRED";
-    };
-    const deadline = Math.min(taskDeadline, Date.now() + 12_000);
-    let profile = await read();
-    while (
-      Date.now() < deadline &&
-      (!profile.success ||
-        !profile.data.composerReady ||
-        profile.data.temporary !== temporary ||
-        !profile.data.modelReady)
-    ) {
-      await delay(200);
-      if (this.routeWindow !== candidate || candidate.isDestroyed())
-        return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-      profile = await read();
-    }
-    if (
-      !profile.success ||
-      !profile.data.composerReady ||
-      profile.data.temporary !== temporary ||
-      !profile.data.modelReady ||
-      profile.data.draftPresent
-    )
-      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    // Hydration can emit an in-place navigation before we interact with the
-    // page. Bind the subsequent picker to the newly observed document only
-    // when the physical document, URL, operation and surface are unchanged.
-    // Once interaction begins, every later navigation still fences the action.
-    if (
-      this.routeWindow === candidate &&
-      !candidate.isDestroyed() &&
-      this.chatPhysicalDocumentGeneration ===
-        profilePhysicalDocumentGeneration &&
-      this.taskObservationGeneration === profileObservationGeneration &&
-      contents.getURL() === profileUrl &&
-      this.routeDocumentGeneration !== profileDocumentGeneration
-    ) {
-      profileDocumentGeneration = this.routeDocumentGeneration;
-      profile = await read();
-    }
-    if (
-      !profile.success ||
-      !profile.data.composerReady ||
-      profile.data.draftPresent ||
-      profile.data.temporary !== temporary ||
-      !profile.data.modelReady ||
-      profileIdentityLost()
-    )
-      return refuseInstant();
-
-    // ChatGPT already shows Instant, including the "6 Instant" label and the
-    // reasoning-effort control. That screen has no separate power slider.
-    // Opening one and refusing the test leaves an empty temporary chat.
-    const alreadyInstant = profile.success && profile.data.instant === true;
-    let selected: Awaited<ReturnType<typeof read>> = profile;
-    if (!alreadyInstant) {
-      stage = "picker";
-      try {
-        // A false result guarantees the opener did not click. Wait for a
-        // temporarily disabled/replaced control, but never repeat an action
-        // after an acknowledged click, exception or changed document identity.
-        const openDeadline = Date.now() + 2_000;
-        let opened = false;
-        for (let attempt = 0; attempt < 20 && !opened; attempt += 1) {
-          if (Date.now() >= openDeadline || profileIdentityLost())
-            return refuseInstant();
-          const result = await execute(openInstantPowerPickerScript, true);
-          if (profileIdentityLost()) return refuseInstant();
-          if (result === true) {
-            opened = true;
-            break;
-          }
-          if (result !== false || Date.now() >= openDeadline)
-            return refuseInstant();
-          await delay(100);
-          if (profileIdentityLost()) return refuseInstant();
-        }
-        if (!opened) return refuseInstant();
-        // Opening a provider menu does not acknowledge that its controls have
-        // rendered. Observe the same opened picker for a bounded interval; never
-        // click it again or reinterpret an unrecognized result as readiness.
-        stage = "slider";
-        const pickerDeadline = Date.now() + 2_000;
-        let minimumObserved = false;
-        for (let attempt = 0; attempt < 8; attempt += 1) {
-          if (profileIdentityLost()) return refuseInstant();
-          let slider = instantPowerSliderSchema.safeParse(
-            await execute(focusInstantPowerSliderScript, true),
-          );
-          while (
-            slider.success &&
-            !slider.data.ready &&
-            Date.now() < pickerDeadline
-          ) {
-            await delay(100);
-            if (profileIdentityLost()) return refuseInstant();
-            slider = instantPowerSliderSchema.safeParse(
-              await execute(focusInstantPowerSliderScript, true),
-            );
-          }
-          sliderReady = slider.success && slider.data.ready;
-          sliderAtMinimum =
-            slider.success &&
-            slider.data.ready &&
-            slider.data.atMinimum === true;
-          if (profileIdentityLost() || !slider.success || !slider.data.ready)
-            return refuseInstant();
-          if (slider.data.atMinimum) {
-            minimumObserved = true;
-            break;
-          }
-          if (
-            (await execute(lowerInstantPowerSliderScript, true)) !== true ||
-            profileIdentityLost()
-          )
-            return refuseInstant();
-          await delay(80);
-        }
-        if (!minimumObserved) return refuseInstant();
-        if (
-          (await execute(dismissInstantPowerPickerScript, true)) !== true ||
-          profileIdentityLost()
-        )
-          return refuseInstant();
-      } catch {
-        return refuseInstant();
-      }
-      stage = "selected-model";
-      selected = await read();
-      const selectedDeadline = Date.now() + 2_000;
-      while (
-        selected.success &&
-        !selected.data.instant &&
-        Date.now() < selectedDeadline
-      ) {
-        await delay(100);
-        if (profileIdentityLost()) return refuseInstant();
-        selected = await read();
-      }
-      if (
-        profileIdentityLost() ||
-        !selected.success ||
-        !selected.data.composerReady ||
-        selected.data.draftPresent ||
-        selected.data.temporary !== temporary ||
-        !selected.data.modelReady ||
-        !selected.data.instant
-      )
-        return refuseInstant();
-    }
-
-    // An explicitly requested ordinary Instant profile needs no temporary-chat
-    // personalization controls. Preserve the owner's account preferences.
-    if (!temporary) return null;
-
-    // Personalization controls may depend on the selected provider model.
-    // Confirm Instant before waiting for or selecting Personalized; neither
-    // state alone authorizes preparation of a message or submission.
-    const personalizationDeadline = Date.now() + 2_000;
-    profile = selected;
-    while (
-      profile.success &&
-      !profile.data.personalizationReady &&
-      Date.now() < personalizationDeadline
-    ) {
-      await delay(100);
-      if (profileIdentityLost()) return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-      profile = await read();
-    }
-    if (
-      profileIdentityLost() ||
-      !profile.success ||
-      !profile.data.composerReady ||
-      profile.data.draftPresent ||
-      profile.data.temporary !== temporary ||
-      !profile.data.instant ||
-      !profile.data.personalizationReady
-    )
-      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    if (!profile.data.personalized) {
-      try {
-        if (
-          (await execute(openTemporaryPersonalizationScript, true)) !== true ||
-          profileIdentityLost()
-        )
-          return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-        let selected = false;
-        for (let attempt = 0; attempt < 10; attempt += 1) {
-          if (profileIdentityLost()) return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-          if (
-            (await execute(selectTemporaryPersonalizationScript, true)) === true
-          ) {
-            selected = true;
-            break;
-          }
-          await delay(100);
-        }
-        if (!selected) return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-        profile = await read();
-        if (!profile.success || !profile.data.personalized)
-          return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-      } catch {
-        return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-      }
-    }
-    const ready = await read();
-    if (ready.success && (!ready.data.modelReady || !ready.data.instant))
-      return "CHATGPT_INSTANT_MODEL_REQUIRED";
-    return !profileIdentityLost() &&
-      ready.success &&
-      ready.data.composerReady &&
-      !ready.data.draftPresent &&
-      ready.data.temporary &&
-      ready.data.personalizationReady &&
-      ready.data.personalized &&
-      ready.data.modelReady &&
-      ready.data.instant
-      ? null
-      : "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+          url,
+          Math.min(deadline, Date.now() + ROUTE_OPEN_DEADLINE_MS),
+        ),
+      snapshot: () => {
+        const frame = contents.mainFrame;
+        return {
+          surfaceCurrent:
+            this.routeWindow === candidate && !candidate.isDestroyed(),
+          disposing: this.disposing,
+          documentLoadFailed: this.routeDocumentLoadFailed,
+          documentAwaitingCommit: this.routeDocumentAwaitingCommit,
+          documentGeneration: this.routeDocumentGeneration,
+          physicalDocumentGeneration: this.chatPhysicalDocumentGeneration,
+          operationGeneration: this.taskObservationGeneration,
+          url: contents.getURL(),
+          frame: frame
+            ? {
+                identity: frame,
+                isDestroyed: () => frame.isDestroyed(),
+                url: frame.url,
+              }
+            : null,
+        };
+      },
+      now: Date.now,
+      delay: (ms) => delay(ms),
+      report: this.options.onProfilePreparationDiagnostic,
+    })({
+      homeUrl: this.options.homeUrl,
+      temporary,
+      taskDeadline,
+      originalDocumentCurrent,
+    });
   }
 
   async runReadonlyTask(
