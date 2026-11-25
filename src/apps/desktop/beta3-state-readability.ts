@@ -50,7 +50,7 @@ function isStoredJson(value: unknown, ancestors = new Set<object>()): boolean {
  * 681fe120af801f406569b0e068b2e638fbc5d29e plus the reader bridge. The
  * complete stored-schema closure has these incompatible expansions:
  * general.openAtLaunch="home", nativeHosts.taskRoute.observeTurnId, workspace
- * accessCheck.checkId and nullable retained Secure MCP attachment workspaceId
+ * accessCheck.checkId, accessCheck.writableByOthers and nullable retained Secure MCP attachment workspaceId
  * (both attachment and lastVerifiedAttachment), and connector
  * appVerificationPending, workspace continuity evidence, and
  * nativeHosts.taskRoute.writerIdentity (path-bound live writer witness).
@@ -110,7 +110,8 @@ export function originalPredecessorSettingsReadable(
       (workspace) =>
         !Object.hasOwn(workspace, "continuity") &&
         (workspace.accessCheck == null ||
-          !Object.hasOwn(workspace.accessCheck, "checkId")),
+          (!Object.hasOwn(workspace.accessCheck, "checkId") &&
+            !Object.hasOwn(workspace.accessCheck, "writableByOthers"))),
     );
   } catch {
     return false;

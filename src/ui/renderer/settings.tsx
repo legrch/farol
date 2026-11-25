@@ -1267,15 +1267,13 @@ function Folders(props: PageProps) {
                   </>
                 )}
               </div>
-              {snapshot.evidence?.revision === settings.revision &&
-                snapshot.evidence.value.kind ===
-                  "computer.workspace-inspection" &&
-                snapshot.evidence.value.workspaceId === workspace.workspaceId &&
-                snapshot.evidence.value.writableByOthers === true && (
-                  <p className="description workspace-row-note" role="note">
-                    Other users of this Mac can change files in this folder.
-                  </p>
-                )}
+              {/* From this folder's own saved check, so it survives other
+                  configuration results and each folder shows its own note. */}
+              {checked && workspace.accessCheck?.writableByOthers === true && (
+                <p className="description workspace-row-note" role="note">
+                  Other users of this Mac can change files in this folder.
+                </p>
+              )}
               <button
                 type="button"
                 className="text-button"
