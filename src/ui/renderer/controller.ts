@@ -748,6 +748,7 @@ export class WindowController implements RendererFacade {
           droppedEntries: result.droppedEntries,
           unrecordedUncertainEntries: result.unrecordedUncertainEntries,
           unmappedCodes: result.unmappedCodes,
+          rejectedMetadata: result.rejectedMetadata,
         },
       });
     } catch {

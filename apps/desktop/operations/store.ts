@@ -14,6 +14,7 @@ import {
   OperationReferenceSchema,
   OperationsDiagnosticsSchema,
   type OperationMetadata,
+  type OperationRejection,
   type OperationEntry,
   type OperationsRecorder,
   type OperationsSnapshot,
@@ -74,6 +75,8 @@ export class OperationsStore implements OperationsRecorder {
     droppedEntries: 0,
     unrecordedUncertainEntries: 0,
     unmappedCodes: 0,
+    rejectedMetadata: 0,
+    recentRejections: [],
   };
   private reading: Promise<OperationsSnapshot> | undefined;
   private terminalWrites: Promise<void> = Promise.resolve();
@@ -644,6 +647,8 @@ export class OperationsStore implements OperationsRecorder {
     const recorder = this.recorder.diagnostics();
     return {
       unmappedCodes: recorder.unmappedCodes,
+      rejectedMetadata: recorder.rejectedMetadata,
+      recentRejections: recorder.recentRejections,
       writeFailures: this.writeFailures + recorder.writeFailures,
       droppedEntries: this.droppedEntries + recorder.droppedEntries,
       unrecordedUncertainEntries:
@@ -981,6 +986,11 @@ export class OperationsStore implements OperationsRecorder {
     const current = this.diagnostics();
     return {
       unmappedCodes: snapshot.unmappedCodes + current.unmappedCodes,
+      rejectedMetadata: snapshot.rejectedMetadata + current.rejectedMetadata,
+      recentRejections: [
+        ...snapshot.recentRejections,
+        ...current.recentRejections,
+      ].slice(-5),
       writeFailures: snapshot.writeFailures + current.writeFailures,
       droppedEntries: snapshot.droppedEntries + current.droppedEntries,
       unrecordedUncertainEntries:
@@ -1007,6 +1017,8 @@ export class OperationsStore implements OperationsRecorder {
       droppedEntries: 0,
       unrecordedUncertainEntries: 0,
       unmappedCodes: 0,
+      rejectedMetadata: 0,
+      recentRejections: [] as OperationRejection[],
     };
     try {
       await this.validateDirectory();
@@ -1075,6 +1087,11 @@ export class OperationsStore implements OperationsRecorder {
           if (diagnosticsName.test(name)) {
             const parsed = OperationsDiagnosticsSchema.parse(JSON.parse(text));
             diagnostics.unmappedCodes += parsed.unmappedCodes;
+            diagnostics.rejectedMetadata += parsed.rejectedMetadata;
+            diagnostics.recentRejections = [
+              ...diagnostics.recentRejections,
+              ...parsed.recentRejections,
+            ].slice(-5);
             diagnostics.writeFailures += parsed.writeFailures;
             diagnostics.droppedEntries += parsed.droppedEntries;
             diagnostics.unrecordedUncertainEntries +=
