@@ -283,8 +283,7 @@ export function createStartup(ports: StartupPorts) {
         // cleanup. Existing Settings and owner reads have their own narrow
         // composition; no old marker, operation or handoff is retired here.
         await updateRelaunch?.recheck();
-        if (!(await verify()))
-          throw new Error("STARTUP_PROMOTION_LEASE_LOST");
+        if (!(await verify())) throw new Error("STARTUP_PROMOTION_LEASE_LOST");
         const assertRecoveryCurrent = async () => {
           await updateRelaunch?.recheck();
           if (!(await verify()))
@@ -328,8 +327,7 @@ export function createStartup(ports: StartupPorts) {
               : {}),
             mode: windowMode,
             placement: () =>
-              selectedVisibleTestPlacement({ width: 640, height: 520 })
-                .bounds,
+              selectedVisibleTestPlacement({ width: 640, height: 520 }).bounds,
             quitSignals,
             onQuitting: () => {
               desktopAdmission.beginQuit();
