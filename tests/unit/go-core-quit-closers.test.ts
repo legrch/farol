@@ -5,6 +5,7 @@ import { stripTypeScriptTypes } from "node:module";
 import { parse } from "@babel/parser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { goCoreQuitClosers } from "../../apps/desktop/go-core-quit-closers";
+import { recordQuit } from "../../apps/desktop/host/record";
 import { createConnectorStop } from "../../apps/desktop/connector/stop";
 import { createCell } from "../../apps/desktop/host/cell";
 import {
@@ -14,8 +15,9 @@ import {
 } from "../../src/apps/desktop/quit-drain";
 import { drainComputerConnector } from "../../src/apps/desktop/computer-connector-drain";
 
-// Real helper and extracted Quit collection; resource lifetimes and clock are
-// controlled. No Electron, process, account, provider or retirement effects.
+// Real helper, the real Quit record step and the extracted Quit collection;
+// resource lifetimes and clock are controlled. No Electron, process, account,
+// provider or retirement effects.
 const source = fs.readFileSync(
   new URL("../../src/apps/desktop/main.ts", import.meta.url),
   "utf8",
@@ -55,23 +57,6 @@ if (
 )
   throw new Error("QUIT_COLLECTION_SOURCE_MISSING");
 const collectSource = source.slice(collect.value.start, collect.value.end);
-const recordProperty = composition.properties.find(
-  (p) =>
-    p.type === "ObjectProperty" &&
-    p.key.type === "Identifier" &&
-    p.key.name === "record",
-);
-if (
-  !recordProperty ||
-  recordProperty.type !== "ObjectProperty" ||
-  recordProperty.value.start == null ||
-  recordProperty.value.end == null
-)
-  throw new Error("QUIT_RECORD_SOURCE_MISSING");
-const recordSource = source.slice(
-  recordProperty.value.start,
-  recordProperty.value.end,
-);
 const bridgeSource = fs.readFileSync(
   new URL("../../src/apps/desktop/saved-chat-bridge.ts", import.meta.url),
   "utf8",
@@ -139,24 +124,16 @@ describe("actual Quit record composition flushes final operation observations", 
     const receipt = vi.fn(async () => undefined),
       marker = vi.fn(async () => undefined),
       warn = vi.fn();
-    const record = vm.runInNewContext(
-      stripTypeScriptTypes(`(${recordSource})`, { mode: "strip" }),
-      {
-        operationsLog: shutdown ? { shutdown } : undefined,
-        QUIT_RECORD_RESERVE_MS: 2_000,
-        recordQuitReceipt: receipt,
-        removeRunMarker: marker,
-        path: { join: (...parts: string[]) => parts.join("/") },
-        app: { getPath: () => "/fixture" },
-        statePaths: () => ({ state: "/fixture/farol-state" }),
-        process: { pid: 123 },
-        console: { warn },
-        quitTrace: null,
-      },
-    ) as (receipt: {
-      drained: boolean;
-      unconfirmed: string[];
-    }) => Promise<void>;
+    const record = recordQuit({
+      operationsLog: () => (shutdown ? { shutdown } : undefined),
+      processAuditCollector: () => undefined,
+      recordReserveMs: 2_000,
+      warn,
+      recordQuitReceipt: receipt,
+      setQuitDrained: () => {},
+      removeMarker: marker,
+      quitTrace: () => null,
+    });
     return { record, receipt, marker, warn };
   }
   it("waits for the existing journal shutdown before recording Quit/removing marker", async () => {

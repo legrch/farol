@@ -338,6 +338,8 @@ import {
 } from "../../../apps/desktop/quit/trace";
 import { createQuitProgressWindow } from "../../../apps/desktop/quit/panel";
 import { removeRunMarker } from "./run-marker";
+import { quitClaim } from "../../../apps/desktop/host/claim";
+import { recordQuit } from "../../../apps/desktop/host/record";
 import { computerConnectorAdmission } from "./summary-fence-recovery";
 import { deleteTaskContext } from "./task-context-cleanup";
 import { createRouteBTaskLifecycle } from "./route-b-task-lifecycle";
@@ -3674,107 +3676,38 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     // synchronous preparation step: the updater's effect fence and every
     // closer then see Quit in progress. A throwing step is an unconfirmed
     // stop, never a skipped drain.
-    onClaim: [
-      { name: "admission", run: () => desktopAdmission.beginQuit() },
-      {
-        name: "connector-resume",
-        run: () => {
-          startupConnectorResumeCancelled = true;
-        },
+    onClaim: quitClaim({
+      desktopAdmission,
+      cancelConnectorResume: () => {
+        startupConnectorResumeCancelled = true;
       },
-      {
-        name: "connector-start",
-        run: () => connectorStartCancellation?.abort(),
-      },
-      { name: "process-audit", run: () => processAuditObserver?.stop() },
-      {
-        name: "transport-watch",
-        run: () => connectorTransportWatch.current?.close(),
-      },
-      {
-        name: "transport-timer",
-        run: () => {
-          if (connectorTransportTimer.current)
-            clearInterval(connectorTransportTimer.current);
-        },
-      },
-      { name: "connection", run: () => connectorConnection.close() },
-      {
-        name: "e2e-observer",
-        run: () => {
-          if (isolatedE2EHome !== undefined)
-            process.removeAllListeners("farol-e2e-observe-connection");
-        },
-      },
-      {
-        name: "status-timer",
-        run: () => {
-          if (connectorStatusTimer.current)
-            clearInterval(connectorStatusTimer.current);
-        },
-      },
-      { name: "update-timer", run: () => installedUpdates.stopTimer() },
-    ],
+      connectorStartCancellation: () => connectorStartCancellation,
+      processAuditObserver: () => processAuditObserver,
+      connectorTransportWatch,
+      connectorTransportTimer,
+      connectorConnection,
+      isolatedE2EHome,
+      process,
+      connectorStatusTimer,
+      installedUpdates,
+    }),
     preparationMs: QUIT_PREPARATION_MS,
     recordReserveMs: QUIT_RECORD_RESERVE_MS,
     prepare: installedUpdates.quitPreparation.prepare,
     // The receipt first, then — only for a confirmed drain — the run marker
-    // written at start (N03/D2). An undrained quit, or a receipt that could
-    // not be written, leaves the marker in place, and the next promotion
-    // reads that as a stop that never confirmed, never as a clean quit.
-    record: async (receipt) => {
-      // Child close observers have settled. Flush their final metadata before
-      // real Quit can truncate the asynchronous writer, inside the existing
-      // absolute recording deadline. Logging supplies no child-drain authority.
-      if (operationsLog) {
-        let flushed = false;
-        try {
-          if (
-            processAuditCollector &&
-            !(await processAuditCollector.drain(QUIT_RECORD_RESERVE_MS / 4))
-          ) {
-            try {
-              console.warn("FAROL_PROCESS_AUDIT_DRAIN_UNCONFIRMED");
-            } catch {
-              // Diagnostics cannot prevent the remaining journal flush.
-            }
-          }
-        } catch {
-          // An unavailable audit observer must not suppress the journal flush.
-        }
-        try {
-          // Reserve half of Quit's existing recording budget for final metadata.
-          // A populated Activity journal can need more than 250 ms to fsync and
-          // prune; a stalled writer still times out before the receipt reserve.
-          flushed = await operationsLog.shutdown(QUIT_RECORD_RESERVE_MS / 2);
-        } catch {
-          // Preserve the original child-drain result even on journal failure.
-        }
-        if (!flushed) {
-          try {
-            console.warn("FAROL_OPERATIONS_LOG_FLUSH_UNCONFIRMED");
-          } catch {
-            // A closed diagnostic sink cannot suppress the Quit receipt.
-          }
-        }
-      }
-      await recordQuitReceipt(receipt);
-      quitDrained = receipt.drained;
-      if (receipt.drained) {
-        try {
-          const marker = await removeRunMarker(statePaths().state, process.pid);
-          quitTrace?.record({
-            stage: "marker",
-            result: marker?.removed === true ? "removed" : "kept",
-          });
-        } catch (error) {
-          quitTrace?.record({ stage: "marker", result: "failed" });
-          throw error;
-        }
-      } else {
-        quitTrace?.record({ stage: "marker", result: "kept" });
-      }
-    },
+    // written at start (N03/D2); see apps/desktop/host/record.
+    record: recordQuit({
+      operationsLog: () => operationsLog,
+      processAuditCollector: () => processAuditCollector,
+      recordReserveMs: QUIT_RECORD_RESERVE_MS,
+      warn: (message) => console.warn(message),
+      recordQuitReceipt,
+      setQuitDrained: (drained) => {
+        quitDrained = drained;
+      },
+      removeMarker: () => removeRunMarker(statePaths().state, process.pid),
+      quitTrace: () => quitTrace,
+    }),
     // QuitDrain has already waited for owned children and recorded the result.
     // A second soft Quit can remain held by Electron windows/native handlers;
     // finish this exact attempt without reopening the drain or another update.
