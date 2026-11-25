@@ -11,6 +11,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SettingsDeliveryResult } from "../bridge/wire";
 import {
+  ProductConfigurationResultSchema,
   ProductSettingsSchema,
   type ApprovedProductWorkspace,
   type ProductSettings,
@@ -276,6 +277,32 @@ describe("failure mappers", () => {
       ok: false,
       error: expected,
     });
+  });
+
+  // The stub above only records the code. In main, configurationFailure parses
+  // it through the real result schema, which throws on a code outside its
+  // closed enum, so every code a mapper can emit must be one it accepts.
+  it("emits only codes the real configuration result accepts", () => {
+    const failure = ProductConfigurationResultSchema.options.find(
+      (option) => option.shape.ok.value === false,
+    );
+    if (!failure || !("error" in failure.shape)) {
+      throw new Error("The configuration result has no failure variant");
+    }
+    const accepted = new Set<string>(failure.shape.error.options);
+    const { commands } = build();
+    const emitted = [
+      ...read.map((code) => commands.workspaceReadFailure(code)),
+      ...["", "WORKSPACE_MUTATION_CONFLICT", "anything"].map((code) =>
+        commands.workspaceReadFailure(code),
+      ),
+      ...command.map(([code]) => commands.workspaceCommandFailure(code)),
+      ...mutation.map(([code]) => commands.workspaceMutationFailure(code)),
+    ];
+    for (const result of emitted) {
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(accepted).toContain(result.error);
+    }
   });
 });
 
