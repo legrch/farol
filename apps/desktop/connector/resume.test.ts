@@ -178,14 +178,18 @@ describe("connector resume", () => {
     });
     await startConnectorResume(ports);
     expect(verdicts).toEqual([true, false, false, true]);
+    // Recorded, not asserted, inside the policy: startConnectorResume swallows
+    // a rejected resume, so an expectation thrown there could never fail.
+    const unsettledVerdicts: boolean[] = [];
     const unsettled = build({
       driftSettled: false,
       resume: async (_input, policyPorts) => {
-        expect(policyPorts.mayContinue()).toBe(false);
+        unsettledVerdicts.push(policyPorts.mayContinue());
         return "skipped";
       },
     });
     await startConnectorResume(unsettled.ports);
+    expect(unsettledVerdicts).toEqual([false]);
   });
 
   it.each([
