@@ -5,6 +5,7 @@ import {
 } from "../../../apps/desktop/update/host";
 import { createStartup } from "../../../apps/desktop/host/startup";
 import { readLaunchArguments } from "../../../apps/desktop/host/launch";
+import { selectBootIdentity } from "../../../apps/desktop/host/identity";
 import { UPDATE_IDLE_CHECK_MS } from "../../modules/release/app/installed-updater";
 import { DesktopAdmission } from "../../../apps/desktop/host/admission";
 import { mainWindow } from "../../../apps/desktop/window/main";
@@ -426,12 +427,6 @@ import {
 import {
   desktopCodexChildHomes,
   desktopCodexConfigPath,
-  desktopAppDataPath,
-  desktopUserDataPath,
-  desktopEnvironment,
-  desktopIdentity,
-  prepareOwnerPreviewProfile,
-  desktopProfileEnvironment,
   isolatedDevMcpProofAllowed,
 } from "./desktop-environment";
 import {
@@ -439,7 +434,6 @@ import {
   startupNoticeAllowed,
   terminateDesktopStartup,
 } from "./desktop-startup-failure";
-import { resolvePhysicalDevDataDirectoryName } from "./dev-profile-directory";
 import { observeRendererLifecycle } from "../../../apps/desktop/renderer-lifecycle-observation";
 
 guardDiagnosticPipes([process.stdout, process.stderr]);
@@ -464,86 +458,21 @@ let desktopGoCore: DesktopGoCore | null = null;
 const buildIdentity = readRuntimeBuildIdentity(directory);
 const productName = buildIdentity.product;
 const bundleId = buildIdentity.bundleId;
-const buildEnvironment = desktopEnvironment(process.env.FAROL_ENVIRONMENT);
-const runtimeEnvironment = (() => {
-  try {
-    return desktopProfileEnvironment(
-      buildEnvironment,
-      process.env.FAROL_PROFILE_MODE,
-      process.env.FAROL_ACCEPTANCE_PROFILE,
-    );
-  } catch (error) {
-    terminateDesktopStartup(error, buildEnvironment, {
-      write: (message) => process.stderr.write(message),
-      exit: (code) => process.exit(code),
-    });
-    throw error;
-  }
-})();
-const isolatedE2EHome =
-  process.env.FAROL_E2E === "1" ? process.env.HOME : undefined;
-const desktopAppData = (() => {
-  try {
-    return desktopAppDataPath(buildEnvironment, app.getPath("appData"), {
-      enabled: process.env.FAROL_E2E === "1",
-      override: process.env.FAROL_E2E_APP_DATA,
-      acceptanceProfile: process.env.FAROL_ACCEPTANCE_PROFILE,
-      testRoot: process.env.FAROL_E2E_TEST_ROOT,
-      testHome: isolatedE2EHome,
-      testProof: process.env.FAROL_E2E_TEST_PROOF,
-    });
-  } catch (error) {
-    // An invalid E2E profile must fail before Electron selects any owner path
-    // or shows an uncaught-exception dialog.
-    terminateDesktopStartup(error, runtimeEnvironment, {
-      write: (message) => process.stderr.write(message),
-      exit: (code) => process.exit(code),
-    });
-    throw error;
-  }
-})();
-// On macOS Electron's native home may ignore the child's HOME environment.
-// The existing app-data proof has already validated this exact private HOME;
-// select it before Go/native child composition can observe the owner's home.
-if (isolatedE2EHome !== undefined) app.setPath("home", isolatedE2EHome);
-const declaredDesktopIdentity = (() => {
-  try {
-    if (runtimeEnvironment === "owner-preview")
-      prepareOwnerPreviewProfile(desktopAppData);
-    return desktopIdentity(
-      runtimeEnvironment,
-      desktopAppData,
-      runtimeEnvironment === "dev"
-        ? resolvePhysicalDevDataDirectoryName(desktopAppData)
-        : undefined,
-    );
-  } catch (error) {
-    terminateDesktopStartup(error, runtimeEnvironment, {
-      write: (message) => process.stderr.write(message),
-      exit: (code) => process.exit(code),
-    });
-    throw error;
-  }
-})();
-const selectedDesktopUserData = (() => {
-  try {
-    return desktopUserDataPath(declaredDesktopIdentity, {
-      enabled: process.env.FAROL_E2E === "1",
-      override: app.commandLine.getSwitchValue("user-data-dir"),
-      devProfileArguments: process.argv,
-    });
-  } catch (error) {
-    terminateDesktopStartup(error, runtimeEnvironment, {
-      write: (message) => process.stderr.write(message),
-      exit: (code) => process.exit(code),
-    });
-    throw error;
-  }
-})();
-// Visible product names must not select storage. Pin both paths before any
-// profile read, instance lock or browser session; E2E keeps its proven root.
-app.setPath("userData", selectedDesktopUserData);
-app.setPath("sessionData", selectedDesktopUserData);
+const {
+  buildEnvironment,
+  runtimeEnvironment,
+  isolatedE2EHome,
+  activeDesktopIdentity,
+  displayProductName,
+  displayEdition,
+  displayWindowTitle,
+} = selectBootIdentity({
+  app,
+  env: process.env,
+  argv: process.argv,
+  stderr: process.stderr,
+  exit: (code) => process.exit(code),
+});
 // The profile's state layout, read at call time because the identity setup
 // above redirects `userData` before any state path is used.
 function statePaths() {
@@ -552,28 +481,6 @@ function statePaths() {
     tmpdir: os.tmpdir(),
   });
 }
-const activeDesktopIdentity = {
-  ...declaredDesktopIdentity,
-  // Storage selection does not change development build admission or edition.
-  displayEdition:
-    buildEnvironment === "dev"
-      ? "Development"
-      : declaredDesktopIdentity.displayEdition,
-  userData: app.getPath("userData"),
-  sessionData: app.getPath("sessionData"),
-  codexHome: path.join(app.getPath("userData"), "farol-private", "codex-home"),
-} as const;
-// `buildIdentity.product` ("Farol") is the release identity —
-// it is validated against the packaged app name, the bundle ID, and the
-// build digest, and stays exactly that everywhere those checks read it.
-// Everywhere the app is only naming itself to the owner (the window title,
-// the macOS app menu, the About panel), it reads "Farol" with a
-// development edition only for Task Dev. Release identity remains unchanged.
-const displayProductName = activeDesktopIdentity.displayName;
-const displayEdition = activeDesktopIdentity.displayEdition;
-const displayWindowTitle = [displayProductName, displayEdition]
-  .filter(Boolean)
-  .join(" · ");
 // UX34-08: a dedicated, clearly-Farol-owned sign-in surface. DEV embeds it in
 // the main window; Preview keeps its existing window presentation.
 const SIGN_IN_WINDOW_TITLE = `Sign in to ChatGPT — ${displayProductName}`;

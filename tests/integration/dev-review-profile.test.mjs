@@ -1,8 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { runInNewContext } from "node:vm";
-import { transformSync } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createFreshReviewProfile,
@@ -12,9 +10,8 @@ import {
 import {
   desktopAppDataPath,
   desktopIdentity,
-  desktopEnvironment,
-  desktopProfileEnvironment,
 } from "../../src/apps/desktop/desktop-environment";
+import { selectBootIdentity } from "../../apps/desktop/host/identity";
 
 // Disposable filesystem fixtures only. Never resolves the real owner appData,
 // launches Electron, builds Go, reads host credentials, or makes provider calls.
@@ -85,40 +82,33 @@ describe("fresh disposable review profile producer/consumer", () => {
   it("admits the existing main.ts call shape with real HOME retained and no E2E marker", () => {
     const root = fixture();
     const review = createFreshReviewProfile(root, token);
-    const source = fs.readFileSync(
-      new URL("../../src/apps/desktop/main.ts", import.meta.url),
-      "utf8",
-    );
-    const begin = source.indexOf("const buildEnvironment =");
-    const end = source.indexOf("const declaredDesktopIdentity =", begin);
-    expect(begin).toBeGreaterThan(0);
-    expect(end).toBeGreaterThan(begin);
     const env = {
       HOME: "/Users/fixture-owner",
       FAROL_ENVIRONMENT: "dev",
       FAROL_ACCEPTANCE_PROFILE: review.marker,
     };
-    const selected = runInNewContext(
-      transformSync(`${source.slice(begin, end)}\ndesktopAppData;`, {
-        loader: "ts",
-      }).code,
-      {
-        process: { env },
-        desktopEnvironment,
-        desktopProfileEnvironment,
-        desktopAppDataPath,
-        app: {
-          getPath: (name) => {
-            expect(name).toBe("appData");
-            return root;
-          },
+    const paths = { appData: root };
+    const setPaths = [];
+    const identity = selectBootIdentity({
+      app: {
+        getPath: (name) => paths[name],
+        setPath: (name, value) => {
+          setPaths.push(name);
+          paths[name] = value;
         },
-        terminateDesktopStartup: (error) => {
-          throw error;
-        },
+        commandLine: { getSwitchValue: () => "" },
       },
-      { timeout: 1000 },
-    );
+      env,
+      argv: [],
+      stderr: { write: () => {} },
+      exit: (code) => {
+        throw new Error(`BOOT_EXIT:${code}`);
+      },
+    });
+    // The review marker selects the disposable app-data; userData lives in it
+    // and the real HOME is neither replaced nor redirected.
+    const selected = path.dirname(identity.activeDesktopIdentity.userData);
+    expect(setPaths).not.toContain("home");
     expect(selected).toBe(review.appData);
     expect(env.HOME).toBe("/Users/fixture-owner");
   });

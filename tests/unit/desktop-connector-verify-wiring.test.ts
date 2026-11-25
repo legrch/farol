@@ -52,12 +52,12 @@ describe("connector verify wiring in main", () => {
     expect(body).toContain(
       " connectorCheck, connectorConnection, currentConnectionStatus, connectorVerificationProof, connectorAppVerificationAttemptExists, confirmSeparateAppVerificationAttempt, prepareConnectorAppVerificationAttempt, prepareConnectorCheckDocument, waitForConnectorAppReceipt, }",
     );
-    for (const owner of [
-      "desktopAdmission",
-      "buildIdentity",
-      "runtimeEnvironment",
-    ])
+    for (const owner of ["desktopAdmission", "buildIdentity"])
       expect(source).toMatch(new RegExp(`\\nconst ${owner}\\b`));
+    // The boot identity fixes the runtime environment once, at import time.
+    expect(source).toMatch(
+      /\nconst \{[^}]*\bruntimeEnvironment,[^}]*\} = selectBootIdentity\(/,
+    );
     for (const fn of [
       "statePaths",
       "configurationFailure",
