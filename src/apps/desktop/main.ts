@@ -29,7 +29,6 @@ import { observeOperation } from "../../../apps/desktop/operations/observe";
 import { recordInterruptedCommand } from "../../../apps/desktop/operations/interrupted-command";
 import { type SetupCompletionContext } from "../../ui/setup-completion";
 
-import { type StartupRecoveryWindow } from "../../../apps/desktop/recovery/host";
 import {
   ABOUT_PANEL_SIZE,
   DesktopAboutPanel,
@@ -3089,9 +3088,6 @@ function nativeMenuBarEnabled(): boolean {
   return process.env.FAROL_E2E !== "1" && process.platform === "darwin";
 }
 
-// Set when a quit begins; a quit drain always ends in the real quit.
-let startupRecovery: StartupRecoveryWindow | null = null;
-
 function instance() {
   return (instanceCache ??= createInstance({
     app,
@@ -3105,7 +3101,6 @@ function instance() {
     window: () => window,
     taskViewKinds,
     expectedTasks,
-    startupRecovery: () => startupRecovery,
     ensureWindow,
     recoverWindowOpenFailure,
     writeInstanceAcknowledgement,
@@ -3184,13 +3179,6 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     startup.admit,
   );
   const freshStartup = startup.freshStartup();
-  if (startupRecovery !== null) {
-    quitTracePhase = "recovery";
-    // Only the UI's startup lease was released. The predecessor remains
-    // unconfirmed, so normal Quit receipts and marker removal are forbidden.
-    app.quit();
-    return;
-  }
   if (process.platform === "darwin") {
     app.dock?.setIcon(desktopBrandImage());
   }
@@ -4090,7 +4078,6 @@ if (
   primaryStartup.begin(readiness);
   void initialization
     .then(() => {
-      if (startupRecovery !== null) return;
       if (isPrimaryReady()) {
         try {
           publishManualInstallStartupProof(

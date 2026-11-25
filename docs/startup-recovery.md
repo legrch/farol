@@ -1,5 +1,13 @@
 # Startup recovery availability
 
+> **Retired window.** Since 2026-10-27 every start with a compiled Go core is
+> fresh, so the startup recovery window (`#farol-startup-recovery`, its host,
+> session and preload bridge) is never opened and its TypeScript was removed.
+> Sections below that describe that window, its `state`/`read`/Quit API and the
+> recovery-mode Go route are historical. Still live: independent fresh admission
+> and the stored-reply archive reader (`apps/desktop/recovery/archive.ts`,
+> `apps/desktop/renderer/recovery/archive.tsx`) shown from the chat history.
+
 An unconfirmed predecessor still fences consumption of its Chat journal and
 replay of its effects. Independent fresh admission, described below, creates a
 separate current Chat session without consuming that predecessor. The earlier

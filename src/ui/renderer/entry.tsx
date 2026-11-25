@@ -1,8 +1,4 @@
 import {
-  isStartupRecoveryDocument,
-  startStartupRecovery,
-} from "../../../apps/desktop/renderer/recovery/entry";
-import {
   attachUpdatesOwner,
   startUpdatesWindow,
 } from "../../../apps/desktop/renderer/updates/entry";
@@ -133,9 +129,7 @@ function startApplication(): void {
 }
 
 const documentUrl = new URL(window.location.href);
-if (isStartupRecoveryDocument(documentUrl)) {
-  startStartupRecovery();
-} else if (isUpdatesDocument(documentUrl)) {
+if (isUpdatesDocument(documentUrl)) {
   startUpdatesWindow();
 } else if (documentUrl.hash !== "") {
   if (!isGuideDocument(documentUrl)) {

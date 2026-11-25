@@ -1200,11 +1200,6 @@
     },
     {
       "code": "TS_FILE_WORD",
-      "file": "apps/desktop/recovery/core-host.ts",
-      "detail": "File name is not one lowercase word: core-host"
-    },
-    {
-      "code": "TS_FILE_WORD",
       "file": "apps/desktop/recovery/fresh-admission.ts",
       "detail": "File name is not one lowercase word: fresh-admission"
     },
@@ -3575,11 +3570,6 @@
     },
     {
       "code": "TS_TEST_MISSING",
-      "file": "apps/desktop/recovery/core-host.ts",
-      "detail": "File with behavior has no co-located test: core-host.test.ts"
-    },
-    {
-      "code": "TS_TEST_MISSING",
       "file": "apps/desktop/recovery/diagnostics.ts",
       "detail": "File with behavior has no co-located test: diagnostics.test.ts"
     },
@@ -3587,11 +3577,6 @@
       "code": "TS_TEST_MISSING",
       "file": "apps/desktop/recovery/fresh-admission.ts",
       "detail": "File with behavior has no co-located test: fresh-admission.test.ts"
-    },
-    {
-      "code": "TS_TEST_MISSING",
-      "file": "apps/desktop/recovery/host.ts",
-      "detail": "File with behavior has no co-located test: host.test.ts"
     },
     {
       "code": "TS_TEST_MISSING",
@@ -3617,11 +3602,6 @@
       "code": "TS_TEST_MISSING",
       "file": "apps/desktop/recovery/selection.ts",
       "detail": "File with behavior has no co-located test: selection.test.ts"
-    },
-    {
-      "code": "TS_TEST_MISSING",
-      "file": "apps/desktop/recovery/session.ts",
-      "detail": "File with behavior has no co-located test: session.test.ts"
     },
     {
       "code": "TS_TEST_MISSING",
@@ -3682,16 +3662,6 @@
       "code": "TS_TEST_MISSING",
       "file": "apps/desktop/renderer/recovery/contract.ts",
       "detail": "File with behavior has no co-located test: contract.test.ts"
-    },
-    {
-      "code": "TS_TEST_MISSING",
-      "file": "apps/desktop/renderer/recovery/entry.tsx",
-      "detail": "File with behavior has no co-located test: entry.test.tsx"
-    },
-    {
-      "code": "TS_TEST_MISSING",
-      "file": "apps/desktop/renderer/recovery/view.tsx",
-      "detail": "File with behavior has no co-located test: view.test.tsx"
     },
     {
       "code": "TS_TEST_MISSING",

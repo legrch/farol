@@ -63,7 +63,6 @@ export type InstancePorts = Readonly<{
   window: () => Readonly<{ isDestroyed: () => boolean }> | null;
   taskViewKinds: Pick<Map<string, "runtime" | "chatgpt">, "values">;
   expectedTasks: Readonly<{ length: number }>;
-  startupRecovery: () => Readonly<{ reopen: () => Promise<void> }> | null;
   ensureWindow: () => Promise<void>;
   recoverWindowOpenFailure: () => void;
   writeInstanceAcknowledgement: typeof writeInstanceAcknowledgement;
@@ -84,7 +83,6 @@ export function createInstance(ports: InstancePorts) {
     window,
     taskViewKinds,
     expectedTasks,
-    startupRecovery,
     ensureWindow,
     recoverWindowOpenFailure,
     writeInstanceAcknowledgement,
@@ -120,16 +118,6 @@ export function createInstance(ports: InstancePorts) {
     ) {
       // Quit/update owns admission: acknowledge that it cannot take this launch
       // instead of reopening a window that is about to close.
-      status = "reopen-failed";
-    }
-    const recovery = startupRecovery();
-    if (status === "reopened" && recovery !== null) {
-      try {
-        await recovery.reopen();
-      } catch {
-        /* The primary owns failure cleanup. */
-      }
-      // A recovery window is available, but normal runtime readiness is not.
       status = "reopen-failed";
     }
     if (status === "reopened") {
