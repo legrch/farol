@@ -8,6 +8,7 @@ import { createStartup } from "../../../apps/desktop/host/startup";
 import { readLaunchArguments } from "../../../apps/desktop/host/launch";
 import { selectBootIdentity } from "../../../apps/desktop/host/identity";
 import { selectChatGptHome } from "../../../apps/desktop/chat/home";
+import { chatStartupProfile } from "../../../apps/desktop/chat/profile";
 import { admissionLease } from "../../../apps/desktop/host/lease";
 import { createConfigurationService } from "../../../apps/desktop/configuration/service";
 import { UPDATE_IDLE_CHECK_MS } from "../../modules/release/app/installed-updater";
@@ -3235,21 +3236,16 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   );
   chatGptHomeUrl = chatGptUrl;
   chatGptE2eOrigin = e2eChatGptOrigin;
-  try {
-    const snapshot = configuration.snapshot();
-    goChatStartupProfile =
-      snapshot.status === "ready"
-        ? captureChatStartupProfile({
-            environment: runtimeEnvironment,
-            e2e: process.env.FAROL_E2E === "1",
-            origin: chatGptE2eOrigin,
-            tasks: snapshot.settings.tasks,
-          })
-        : null;
-  } catch (error) {
-    if (!(error instanceof BridgeError)) throw error;
-    goChatStartupProfile = null;
-  }
+  goChatStartupProfile = chatStartupProfile({
+    environment: runtimeEnvironment,
+    e2e: process.env.FAROL_E2E === "1",
+    origin: chatGptE2eOrigin,
+    settings: () => {
+      const snapshot = configuration!.snapshot();
+      return snapshot.status === "ready" ? snapshot.settings : null;
+    },
+    capture: captureChatStartupProfile,
+  });
   // Configuration faults remain observable in the recovery UI. Without the
   // configured Computer identity, do not provision or start a Go profile.
   // Selected Go operations still refuse when their host is unavailable.
