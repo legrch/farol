@@ -2945,6 +2945,7 @@ function requestUpdates(): void {
     if (desktopAdmission.closed() || !window || window.isDestroyed()) return;
     publishShellAction("open-updates", "update-command");
     window.webContents.focus();
+    void installedUpdates.requestCheck();
   }, recoverWindowOpenFailure);
 }
 
