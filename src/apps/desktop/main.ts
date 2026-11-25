@@ -39,12 +39,12 @@ import {
 } from "../../../apps/desktop/operations/model-turn";
 import { desktopStatePaths } from "../../../apps/desktop/host/paths";
 import { OperationsStore } from "../../../apps/desktop/operations/store";
-import {
+import type {
   ProcessAuditCollector,
   ProcessAuditObserver,
 } from "../../../apps/desktop/operations/process-audit-collector";
 import { observeOperation } from "../../../apps/desktop/operations/observe";
-import { recordInterruptedCommand } from "../../../apps/desktop/operations/interrupted-command";
+import { startProcessAudit } from "../../../apps/desktop/operations/audit";
 import { type SetupCompletionContext } from "../../ui/setup-completion";
 
 import {
@@ -3221,32 +3221,18 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
           }),
       }),
     );
-    try {
-      await recordInterruptedCommand(
-        desktopGoCore,
-        operationsStore(),
-        computerMcpLifecycle().hasInterruptedShellHistory,
-      );
-    } catch {
-      // Observation failure cannot turn old uncertainty into a startup fence.
-      console.warn("The interrupted command notice is unavailable.");
-    }
-    const auditCore = desktopGoCore;
-    const auditContext = auditCore.historyContext;
-    if (auditContext) {
-      processAuditCollector = new ProcessAuditCollector(
-        operationsStore(),
-        Date.now,
-        auditContext.backendGeneration,
-      );
-      processAuditObserver = new ProcessAuditObserver(
-        processAuditCollector,
-        () => operationsStore().snapshot(),
-        auditCore.processAudit,
-        () => desktopGoCore === auditCore,
-      );
-      processAuditObserver.start();
-    }
+    await startProcessAudit({
+      core: () => desktopGoCore,
+      operationsStore,
+      archivedShell: () => computerMcpLifecycle().hasInterruptedShellHistory,
+      warn: (message) => console.warn(message),
+      setCollector: (collector) => {
+        processAuditCollector = collector;
+      },
+      setObserver: (observer) => {
+        processAuditObserver = observer;
+      },
+    });
     if (runtimeEnvironment === "dev")
       console.info(
         "FAROL_DEV_SHELL:" +
