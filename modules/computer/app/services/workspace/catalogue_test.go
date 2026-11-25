@@ -107,7 +107,7 @@ func TestCatalogueReportsRefusedWorkspaceBesideUsableOne(t *testing.T) {
 		t.Fatalf("refused workspace hid the catalogue: %+v %v", out, err)
 	}
 	refused, usable := out.Workspaces[0], out.Workspaces[1]
-	if refused.WorkspaceID != "second" || refused.Refusal != (CatalogueRefusal{Code: "WORKSPACE_PATH_REFUSED", Source: "native-workspace", Stage: "root", Reason: "unsafe_root"}) || refused.Root != "/second" || refused.ApprovedRoot != (Root{Path: "/second", Device: "1", Inode: "3"}) || refused.WritableByOthers {
+	if refused.WorkspaceID != "second" || refused.Refusal != (CatalogueRefusal{Code: "WORKSPACE_PATH_REFUSED", Source: "native-workspace", Stage: "root", Reason: "unsafe_root"}) || refused.Root != "" || refused.ApprovedRoot != (Root{}) || refused.WritableByOthers {
 		t.Fatalf("wrong refused entry: %+v", refused)
 	}
 	if usable.WorkspaceID != "work" || usable.Refusal.Refused() || usable.Root != "/work" || !usable.WritableByOthers {

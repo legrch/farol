@@ -213,7 +213,7 @@ func TestDiscoveryOwningContractMapsExactCorrelationAndVariants(t *testing.T) {
 		}
 		if i == 0 {
 			var entries []wire.ComputerCatalogueEntry
-			if json.Unmarshal(result["workspaces"], &entries) != nil || len(entries) != 1 || entries[0].WorkspaceId != "workspace" || entries[0].Root != "/disposable" || entries[0].ApprovedRoot.Device != "18446744073709551615" || entries[0].ApprovedRoot.Inode != "9007199254740993" || native.reads != 0 || native.lists != 2 {
+			if json.Unmarshal(result["workspaces"], &entries) != nil || len(entries) != 1 || entries[0].WorkspaceId != "workspace" || entries[0].Root == nil || *entries[0].Root != "/disposable" || entries[0].ApprovedRoot.Device != "18446744073709551615" || entries[0].ApprovedRoot.Inode != "9007199254740993" || native.reads != 0 || native.lists != 2 {
 				t.Fatal("catalogue mapping or defined two-pass observation lost")
 			}
 		} else {
@@ -312,6 +312,15 @@ func TestCatalogueResultMapsRefusalAndWritableMarkAdditively(t *testing.T) {
 	var raw []map[string]json.RawMessage
 	if json.Unmarshal(result.Workspaces, &raw) != nil || len(raw) != 4 {
 		t.Fatal("entries lost")
+	}
+	// A refused entry publishes no root, even if the service handed one over.
+	for _, i := range []int{2, 3} {
+		if raw[i]["root"] != nil || raw[i]["approvedRoot"] != nil {
+			t.Fatalf("refused entry published a root: %v", raw[i])
+		}
+	}
+	if raw[0]["root"] == nil || raw[0]["approvedRoot"] == nil {
+		t.Fatalf("usable entry lost its root: %v", raw[0])
 	}
 	// A usable entry stays byte-compatible with the earlier shape.
 	if _, present := raw[0]["writableByOthers"]; present || raw[0]["refusal"] != nil {
