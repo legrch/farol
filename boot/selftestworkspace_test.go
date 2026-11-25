@@ -17,6 +17,7 @@ import (
 type selfTestWorkspaceNative struct {
 	*selfTestReadNative
 	scanLimited bool
+	refuseRoot  bool
 	afterSearch func()
 }
 
@@ -89,6 +90,9 @@ func (n *selfTestWorkspaceNative) Read(context.Context, port.ReadRequest) (*port
 	return nil, authority.Fail("WORKSPACE_NOT_FOUND", "native-workspace")
 }
 func (n *selfTestWorkspaceNative) Inspect(ctx context.Context, in port.ListRequest) (*port.DirectoryBinding, error) {
+	if n.refuseRoot {
+		return nil, authority.Fail("WORKSPACE_PATH_REFUSED", "native-workspace")
+	}
 	return n.Workspace.(port.DirectoryInspector).Inspect(ctx, in)
 }
 func (n *selfTestWorkspaceNative) List(_ context.Context, in port.ListRequest) (*port.ListResponse, error) {
@@ -147,6 +151,24 @@ func TestSelfTestWorkspaceCallsAreBoundToCurrentConnector(t *testing.T) {
 		if out.Status != "fail" || out.Code != "AUTHORITY_CAPABILITY_DENIED" {
 			t.Fatal("search authority widened", name, out)
 		}
+	}
+}
+
+func TestSelfTestCatalogueFailsWhenItsWorkspaceIsRefused(t *testing.T) {
+	s, run, _, _ := selfTestFileFixture(t)
+	run.scratchIdentity = state.DirectoryIdentity{Device: "1", Inode: "10"}
+	run.scratchCustody = &fileWorkspaceHold{}
+	run.fixtureFileIdentity = state.DirectoryIdentity{Device: "1", Inode: "20"}
+	run.fixtureCustody = &fileWorkspaceHold{}
+	run.fixtureFileHash = selfTestFileHash(selfTestFileAfter)
+	run.fixtureEditStarted, run.fixtureOperation = true, "original-edit"
+	native := &selfTestWorkspaceNative{selfTestReadNative: &selfTestReadNative{Workspace: s.current.route.workspace}, refuseRoot: true}
+	s.current.route.workspace = native
+	ids, _ := selfTestIDsV2(run.operation)
+	plan := &connectorSelfTestPlan{connector: s, slot: s.current, workspace: run.workspace, ids: ids, run: run}
+	out := plan.workspaceCheck(context.Background(), "catalogue", ids.catalogue)
+	if out.Status != "fail" || out.Code != "WORKSPACE_PATH_REFUSED" {
+		t.Fatal("refused catalogue entry passed the self-test", out)
 	}
 }
 
