@@ -219,6 +219,7 @@ export type WindowSnapshot = Readonly<{
     droppedEntries?: number;
     unrecordedUncertainEntries?: number;
     unmappedCodes?: number;
+    rejectedMetadata?: number;
   }>;
   runtime: "starting" | "ready" | "offline" | "failed";
   independentSession?: boolean;

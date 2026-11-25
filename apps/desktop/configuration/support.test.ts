@@ -74,6 +74,8 @@ const emptyOperations = {
   unmappedCodes: 0,
   droppedEntries: 0,
   unrecordedUncertainEntries: 0,
+  rejectedMetadata: 0,
+  recentRejections: [],
 };
 
 function command(value: object): SupportConfigurationCommand {

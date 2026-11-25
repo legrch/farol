@@ -1,3 +1,4 @@
+import { z } from "zod";
 import {
   nativeRefusalReason,
   type NativeRefusalReason,
@@ -5,6 +6,7 @@ import {
 import type {
   OperationEntry,
   OperationMetadata,
+  OperationRejection,
   OperationsRecorder,
 } from "../renderer/operations-contract";
 import {
@@ -19,7 +21,59 @@ import {
   type OperationWorkspaceLabels,
 } from "./target";
 import { mappedOperationOutcome } from "../renderer/operation-outcomes";
-import { recordableOperationCode } from "../renderer/operations-vocabulary";
+import {
+  operationKinds,
+  recordableOperationCode,
+} from "../renderer/operations-vocabulary";
+
+const maxRecentRejections = 5;
+const maxRejectionIssues = 4;
+const maxRejectionPath = 8;
+// Must not exceed OperationRejectionSchema's path bound, or persisted
+// diagnostics would fail to parse on the next read.
+const maxRejectionPathLength = 120;
+const identifier = /^[A-Za-z_][A-Za-z0-9_]{0,39}$/u;
+
+/** Non-sensitive facts only: a kind from the closed vocabulary, schema paths
+ * (property names from the schema, never data values) and issue codes. */
+function describeRejection(
+  error: z.ZodError,
+  metadata: unknown,
+): OperationRejection {
+  let kind = "unparsed";
+  try {
+    const candidate = (metadata as { kind?: unknown } | null)?.kind;
+    if (
+      typeof candidate === "string" &&
+      (operationKinds as readonly string[]).includes(candidate)
+    )
+      kind = candidate;
+  } catch {
+    // A hostile getter leaves the kind unparsed.
+  }
+  const clamp = (path: string) =>
+    path.length <= maxRejectionPathLength
+      ? path
+      : `${path.slice(0, maxRejectionPathLength - 1)}…`;
+  return {
+    kind,
+    issues: error.issues.slice(0, maxRejectionIssues).map((issue) => ({
+      path: clamp(
+        issue.path
+          .slice(0, maxRejectionPath)
+          .map((part) =>
+            typeof part === "number"
+              ? "#"
+              : typeof part === "string" && identifier.test(part)
+                ? part
+                : "?",
+          )
+          .join(".") || "(root)",
+      ),
+      code: String(issue.code).slice(0, 40),
+    })),
+  };
+}
 
 function recordableMetadata(
   metadata: OperationMetadata,
@@ -72,6 +126,8 @@ export interface TotalOperationsRecorder extends OperationsRecorder {
     writeFailures: number;
     droppedEntries: number;
     unrecordedUncertainEntries: number;
+    rejectedMetadata: number;
+    recentRejections: OperationRejection[];
   };
 }
 
@@ -89,8 +145,20 @@ export function createTotalOperationsRecorder(
   let writeFailures = 0;
   let droppedEntries = 0;
   let unrecordedUncertainEntries = 0;
-  const failed = (outcome?: Outcome) => {
-    writeFailures++;
+  let rejectedMetadata = 0;
+  const recentRejections: OperationRejection[] = [];
+  // A schema rejection is not a disk problem: it is counted on its own, while
+  // the entry is still recorded as not persisted.
+  const failed = (outcome?: Outcome, error?: unknown, metadata?: unknown) => {
+    if (error instanceof z.ZodError) {
+      rejectedMetadata++;
+      recentRejections.push(describeRejection(error, metadata));
+      if (recentRejections.length > maxRecentRejections)
+        recentRejections.splice(
+          0,
+          recentRejections.length - maxRecentRejections,
+        );
+    } else writeFailures++;
     if (outcome !== undefined) droppedEntries++;
     if (outcome === "pending" || outcome === "unknown")
       unrecordedUncertainEntries++;
@@ -103,14 +171,19 @@ export function createTotalOperationsRecorder(
   };
   const observe = (
     action: () => unknown,
-    outcome?: Outcome | (() => Outcome),
+    outcome: Outcome | (() => Outcome) | undefined,
+    metadata?: unknown,
   ): void => {
-    const unavailable = () =>
-      failed(typeof outcome === "function" ? outcome() : outcome);
+    const unavailable = (error?: unknown) =>
+      failed(
+        typeof outcome === "function" ? outcome() : outcome,
+        error,
+        metadata,
+      );
     try {
       void Promise.resolve(action()).catch(unavailable);
-    } catch {
-      unavailable();
+    } catch (error) {
+      unavailable(error);
     }
   };
   const classification = (outcome: Outcome, code: string | null) => {
@@ -172,10 +245,11 @@ export function createTotalOperationsRecorder(
               );
             },
             () => recordedOutcome,
+            metadata,
           );
         };
-      } catch {
-        failed("pending");
+      } catch (error) {
+        failed("pending", error, metadata);
         return inert;
       }
     },
@@ -232,10 +306,11 @@ export function createTotalOperationsRecorder(
               );
             },
             () => recordedOutcome,
+            metadata,
           );
         };
-      } catch {
-        failed("pending");
+      } catch (error) {
+        failed("pending", error, metadata);
         return inert;
       }
     },
@@ -254,6 +329,7 @@ export function createTotalOperationsRecorder(
           );
         },
         () => recordedOutcome,
+        metadata,
       );
     },
     setWorkspaceLabels(workspaces) {
@@ -262,13 +338,18 @@ export function createTotalOperationsRecorder(
           workspaces.map(({ workspaceId, label }) => ({ workspaceId, label })),
         );
         return sink.setWorkspaceLabels?.(labels);
-      });
+      }, undefined);
     },
     diagnostics: () => ({
       writeFailures,
       droppedEntries,
       unrecordedUncertainEntries,
       unmappedCodes,
+      rejectedMetadata,
+      recentRejections: recentRejections.map((entry) => ({
+        kind: entry.kind,
+        issues: entry.issues.map((issue) => ({ ...issue })),
+      })),
     }),
   };
   return recorder;

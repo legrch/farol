@@ -200,7 +200,8 @@ export function OperationsActivity({
     (diagnostics?.corruptLines ?? 0) > 0 ||
     (diagnostics?.writeFailures ?? 0) > 0 ||
     (diagnostics?.droppedEntries ?? 0) > 0 ||
-    (diagnostics?.unrecordedUncertainEntries ?? 0) > 0;
+    (diagnostics?.unrecordedUncertainEntries ?? 0) > 0 ||
+    (diagnostics?.rejectedMetadata ?? 0) > 0;
   const logDetails = logGaps || (diagnostics?.unmappedCodes ?? 0) > 0;
   return (
     <section className="operations-activity" aria-label="Operations log">
@@ -302,6 +303,8 @@ export function OperationsActivity({
               `${diagnostics.corruptLines} unreadable log lines skipped. `}
             {diagnostics.writeFailures > 0 &&
               `${diagnostics.writeFailures} log reads or writes unavailable. `}
+            {(diagnostics.rejectedMetadata ?? 0) > 0 &&
+              `${diagnostics.rejectedMetadata} entries were rejected by the journal schema (not a disk problem). `}
             {(diagnostics.droppedEntries ?? 0) > 0 &&
               `${diagnostics.droppedEntries} entries were not recorded. `}
             {(diagnostics.unrecordedUncertainEntries ?? 0) > 0 &&

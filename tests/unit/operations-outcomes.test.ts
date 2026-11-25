@@ -1,4 +1,6 @@
 import { expect, it, vi } from "vitest";
+import { z } from "zod";
+import { OperationsDiagnosticsSchema } from "../../apps/desktop/renderer/operations-contract";
 import {
   operationCodesByOutcome,
   mappedOperationOutcome,
@@ -311,7 +313,143 @@ it("counts lost unknown observations after normalizing an unlisted code", async 
     writeFailures: 1,
     droppedEntries: 1,
     unrecordedUncertainEntries: 1,
+    rejectedMetadata: 0,
+    recentRejections: [],
   });
+});
+
+it("counts a schema rejection apart from a write failure, with facts only", async () => {
+  const recorder = createTotalOperationsRecorder({ record: vi.fn() });
+  recorder.record(
+    { ...metadata, prompt: "PRIVATE_TEXT" } as never,
+    "unknown",
+    null,
+    1,
+  );
+  recorder.record(
+    { source: "You", kind: "PRIVATE_KIND", target: {} } as never,
+    "done",
+    null,
+    1,
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const diagnostics = recorder.diagnostics();
+  expect(diagnostics).toMatchObject({
+    writeFailures: 0,
+    rejectedMetadata: 2,
+    droppedEntries: 2,
+    unrecordedUncertainEntries: 1,
+  });
+  expect(diagnostics.recentRejections[0]!.kind).toBe("general.update");
+  expect(diagnostics.recentRejections[1]!.kind).toBe("unparsed");
+  expect(diagnostics.recentRejections[1]!.issues[0]).toEqual({
+    path: "kind",
+    code: "invalid_value",
+  });
+  expect(JSON.stringify(diagnostics)).not.toContain("PRIVATE");
+});
+
+it("keeps only the last five rejections and still counts a real write failure", async () => {
+  const recorder = createTotalOperationsRecorder({
+    record: () => Promise.reject(Error("disk unavailable")),
+  });
+  for (let index = 0; index < 7; index++)
+    recorder.record(
+      { source: "You", kind: "x", target: {} } as never,
+      "done",
+      null,
+      1,
+    );
+  recorder.record(metadata, "done", null, 1);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const diagnostics = recorder.diagnostics();
+  expect(diagnostics.rejectedMetadata).toBe(7);
+  expect(diagnostics.recentRejections).toHaveLength(5);
+  expect(diagnostics.writeFailures).toBe(1);
+});
+
+it.each([
+  ["ENOENT", "failed", "OPERATION_IO_FAILED"],
+  ["EACCES", "failed", "OPERATION_IO_FAILED"],
+  ["EPERM", "failed", "OPERATION_IO_FAILED"],
+  ["ECONNREFUSED", "unknown", "unreachable"],
+  ["ECONNRESET", "unknown", "transport_closed"],
+  ["EPIPE", "unknown", "transport_closed"],
+  ["ETIMEDOUT", "unknown", "timeout"],
+] as const)("maps the errno %s to a known code", (errno, outcome, code) => {
+  for (const value of [
+    { code: errno },
+    { error: { code: errno } },
+    { error: errno },
+    { ok: false, error: Object.assign(new Error("PRIVATE"), { code: errno }) },
+  ])
+    expect(operationResult(value), JSON.stringify(value)).toEqual({
+      outcome,
+      code,
+    });
+});
+
+it("keeps an AbortError uncertain without reading its message", () => {
+  const abort = Object.assign(new Error("PRIVATE"), { name: "AbortError" });
+  expect(operationResult({ ok: false, error: abort })).toEqual({
+    outcome: "unknown",
+    code: "unconfirmed",
+  });
+});
+
+it("clamps a long rejection path to the persisted schema bound", async () => {
+  const long = "a".repeat(39);
+  const issue = {
+    code: "custom" as const,
+    path: Array.from({ length: 20 }, () => long),
+    message: "PRIVATE",
+  };
+  const recorder = createTotalOperationsRecorder({
+    record: () => {
+      throw new z.ZodError([issue]);
+    },
+  });
+  recorder.record(metadata, "done", null, 1);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const diagnostics = recorder.diagnostics();
+  const path = diagnostics.recentRejections[0]!.issues[0]!.path;
+  expect(path.length).toBeLessThanOrEqual(120);
+  expect(path.endsWith("…")).toBe(true);
+  // The store re-parses its persisted diagnostics with this schema.
+  expect(() => OperationsDiagnosticsSchema.parse(diagnostics)).not.toThrow();
+});
+
+it("never leaves an errno or a model response status unmapped", () => {
+  const unmapped = (value: unknown) => {
+    const result = operationResult(value);
+    return (
+      result.code === "OPERATION_CODE_UNMAPPED" ||
+      result.code === "provider_error"
+    );
+  };
+  for (const errno of [
+    "ENOENT",
+    "EACCES",
+    "ECONNREFUSED",
+    "ECONNRESET",
+    "EPIPE",
+    "ETIMEDOUT",
+  ])
+    expect(unmapped({ error: { code: errno } }), errno).toBe(false);
+  for (const status of ["incomplete", "in_progress", "queued"])
+    expect(unmapped({ status }), status).toBe(false);
+  expect(operationResult({ status: "incomplete" }).outcome).toBe("unknown");
+  expect(operationResult({ status: "in_progress" }).outcome).toBe("pending");
+  expect(operationResult({ status: "queued" }).outcome).toBe("pending");
+  // A pending or uncertain status never turns a completed event into success.
+  expect(
+    operationResult({ outcome: "response.completed", status: "in_progress" })
+      .outcome,
+  ).toBe("pending");
+  expect(
+    operationResult({ outcome: "response.completed", status: "completed" })
+      .outcome,
+  ).toBe("done");
 });
 
 it("cannot complete a model turn after conflicting terminal frames or a lost stream", async () => {
