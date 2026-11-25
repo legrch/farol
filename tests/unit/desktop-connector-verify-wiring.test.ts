@@ -75,7 +75,7 @@ describe("connector verify wiring in main", () => {
     );
   });
 
-  it("reaches the dialog, the standard error and the environment at the call, through main's own modules", async () => {
+  it("reaches the dialog through main's own module and no longer takes stderr or the environment", async () => {
     const { body } = await read();
     expect(body).toContain(
       "showMessageBox: (owner, options) => dialog.showMessageBox(owner, options),",

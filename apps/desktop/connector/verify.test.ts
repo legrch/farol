@@ -96,8 +96,6 @@ function build(options: Options = {}) {
     taskId: "",
     embedded: true,
     ready: true,
-    env: {} as Record<string, string | undefined>,
-    stderr: [] as string[],
   };
   const snapshot = () =>
     state.status === "ready"
