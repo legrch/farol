@@ -1124,17 +1124,120 @@ describe("testConnectionCommand prerequisites inside the first claim", () => {
     expect(browser!.selection).not.toHaveProperty("challenge");
   });
 
-  // Characterization, not endorsement: with no current selection the capture
-  // falls back to the saved verification target, but the binding it builds is
-  // compared with the selection itself (undefined), so its own currency check
-  // refuses. This preserves what main did; see the report.
-  it("refuses as owner-changed when the selection is undefined and only a fallback target exists", async () => {
-    const f = build();
-    f.settings.setup.computer.verified!.configRevision = 999;
-    expect(await f.check.testConnectionCommand(command)).toEqual(
-      failure("CONNECTION_CHECK_OWNER_CHANGED"),
+  // Deliberately changed from the earlier characterization, which pinned the
+  // defect: with folders configured but none currently verified, the capture
+  // fell back to a workspace yet compared its binding with the strict selection
+  // (undefined), so the check's own currency test always refused as
+  // owner-changed and no explicit check could ever be sent. The capture and the
+  // currency test now share one fallback (connectorCheckWorkspace).
+  describe("folders configured but none currently verified", () => {
+    /** Runs the capture, then reports the check's own currency over time. */
+    async function observe(
+      f: Fixture,
+      afterCapture?: () => void,
+    ): Promise<{
+      selection: Record<string, unknown>;
+      before: boolean;
+      after: boolean;
+    }> {
+      let seen: {
+        selection: Record<string, unknown>;
+        before: boolean;
+        after: boolean;
+      } | null = null;
+      run.impl = async (...values: unknown[]) => {
+        const browser = (await (values as RunArguments)[2]()) as {
+          selection: Record<string, unknown>;
+          current: () => boolean;
+        };
+        const before = browser.current();
+        afterCapture?.();
+        seen = {
+          selection: browser.selection,
+          before,
+          after: browser.current(),
+        };
+        return {
+          state: "refused",
+          operationId,
+          code: "CONNECTION_CHECK_BLOCKED",
+        };
+      };
+      const result = await f.check.testConnectionCommand(command);
+      expect(result).toEqual(failure("CONNECTION_CHECK_BLOCKED"));
+      return seen!;
+    }
+    const unverified = (f: Fixture) =>
+      void (f.settings.setup.computer.verified!.configRevision = 999);
+
+    it("passes the currency check and reaches dispatch with the fallback workspace", async () => {
+      const f = build();
+      unverified(f);
+      const seen = await observe(f);
+      expect(seen.before).toBe(true);
+      expect(seen.after).toBe(true);
+      expect(seen.selection).toMatchObject({ workspaceId: fixtureWorkspaceId });
+      expect(f.route.runReadonlyTask).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the first configured folder when the verified one is gone", async () => {
+      const f = build();
+      f.settings.setup.computer.verified = null;
+      const seen = await observe(f);
+      expect(seen.before).toBe(true);
+      expect(seen.selection).toMatchObject({ workspaceId: fixtureWorkspaceId });
+    });
+
+    it.each([
+      [
+        "the tunnel",
+        (next: Fixture["settings"]) =>
+          void (next.connectors.secureMcp.tunnelId = "changed-tunnel"),
+      ],
+      [
+        "the connector generation",
+        (next: Fixture["settings"]) =>
+          void (next.connectors.secureMcp.generation += 1),
+      ],
+      [
+        "the computer generation",
+        (next: Fixture["settings"]) => void (next.computer.generation += 1),
+      ],
+      [
+        "the selected app",
+        (next: Fixture["settings"]) =>
+          void (next.connectors.secureMcp.chatgptApp!.name = "Another App"),
+      ],
+      [
+        "the runtime build",
+        (next: Fixture["settings"]) =>
+          void (next.connectors.secureMcp.runtime!.buildId = "e".repeat(64)),
+      ],
+    ])(
+      "still refuses as owner-changed when %s changes mid-check",
+      async (_name, change) => {
+        const f = build();
+        unverified(f);
+        const seen = await observe(f, () => f.replaceSettings(change));
+        expect(seen.before).toBe(true);
+        expect(seen.after).toBe(false);
+      },
     );
-    expect(f.route.runReadonlyTask).not.toHaveBeenCalled();
+
+    it("refuses as owner-changed when the fallback workspace itself changes mid-check", async () => {
+      const f = build();
+      f.settings.setup.computer.verified = null;
+      f.settings.computer.workspaces.push({
+        ...structuredClone(f.settings.computer.workspaces[0]!),
+        workspaceId: "second-workspace",
+      });
+      const seen = await observe(f, () =>
+        f.replaceSettings((next) => void next.computer.workspaces.shift()),
+      );
+      expect(seen.selection).toMatchObject({ workspaceId: fixtureWorkspaceId });
+      expect(seen.before).toBe(true);
+      expect(seen.after).toBe(false);
+    });
   });
 
   it("selects an empty catalogue without a workspace id", async () => {
@@ -1218,6 +1321,97 @@ describe("testConnectionCommand after the coordinator", () => {
     });
     expect(f.owner.recordSecureMcpAttachment).toHaveBeenCalledOnce();
     expect(publications(f)).toBe(1);
+  });
+
+  it("reports success without recording an attachment when no folder is currently verified", async () => {
+    const f = build();
+    f.settings.setup.computer.verified!.configRevision = 999;
+    const result = await f.check.testConnectionCommand(command);
+    expect(result).toMatchObject({
+      ok: true,
+      evidence: {
+        kind: "connector.connection-check",
+        operationId,
+        retained: false,
+        attachmentRecorded: false,
+      },
+    });
+    expect(f.owner.recordSecureMcpAttachment).not.toHaveBeenCalled();
+    expect(publications(f)).toBe(0);
+  });
+
+  it("records the attachment as before when the strict selection exists", async () => {
+    const f = build();
+    const result = await f.check.testConnectionCommand(command);
+    expect(result).toMatchObject({ ok: true });
+    expect(result).not.toHaveProperty("evidence.attachmentRecorded");
+    expect(f.owner.recordSecureMcpAttachment).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ workspaceId: fixtureWorkspaceId }),
+    );
+    expect(publications(f)).toBe(1);
+  });
+
+  it("answers unknown, not success, when the fallback workspace changes before publication", async () => {
+    const f = build();
+    f.settings.setup.computer.verified = null;
+    f.settings.computer.workspaces.push({
+      ...structuredClone(f.settings.computer.workspaces[0]!),
+      workspaceId: "second-workspace",
+    });
+    const dispatch = run.impl!;
+    run.impl = async (...values: unknown[]) => {
+      const verified = await dispatch(...values);
+      // The first folder is removed after Go verified it: the fallback is now
+      // another folder, so the verified workspace is no longer the owner's.
+      f.replaceSettings((next) => void next.computer.workspaces.shift());
+      return verified;
+    };
+    expect(await f.check.testConnectionCommand(command)).toEqual(
+      failure("CONNECTION_CHECK_OUTCOME_UNKNOWN"),
+    );
+    expect(f.owner.recordSecureMcpAttachment).not.toHaveBeenCalled();
+  });
+
+  it("records nothing when a folder is inserted before the captured fallback", async () => {
+    const f = build();
+    f.settings.setup.computer.verified = null;
+    const dispatch = run.impl!;
+    run.impl = async (...values: unknown[]) => {
+      const verified = await dispatch(...values);
+      f.replaceSettings((next) =>
+        next.computer.workspaces.unshift({
+          ...structuredClone(next.computer.workspaces[0]!),
+          workspaceId: "inserted-workspace",
+        }),
+      );
+      return verified;
+    };
+    expect(await f.check.testConnectionCommand(command)).toEqual(
+      failure("CONNECTION_CHECK_OUTCOME_UNKNOWN"),
+    );
+    expect(f.owner.recordSecureMcpAttachment).not.toHaveBeenCalled();
+  });
+
+  it("records nothing when the verification is repointed to another folder before publication", async () => {
+    const f = build();
+    f.settings.setup.computer.verified!.configRevision = 999;
+    f.settings.computer.workspaces.push({
+      ...structuredClone(f.settings.computer.workspaces[0]!),
+      workspaceId: "second-workspace",
+    });
+    const dispatch = run.impl!;
+    run.impl = async (...values: unknown[]) => {
+      const verified = await dispatch(...values);
+      f.replaceSettings((next) => {
+        next.setup.computer.verified!.configRevision = next.computer.generation;
+        next.setup.computer.verified!.workspaceId = "second-workspace";
+      });
+      return verified;
+    };
+    expect(await f.check.testConnectionCommand(command)).toEqual(
+      failure("CONNECTION_CHECK_OUTCOME_UNKNOWN"),
+    );
+    expect(f.owner.recordSecureMcpAttachment).not.toHaveBeenCalled();
   });
 
   it("never publishes again for a retained result of an earlier check", async () => {
