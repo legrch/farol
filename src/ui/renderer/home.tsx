@@ -3,7 +3,7 @@ import { commandAllowed } from "./command-eligibility";
 import { computerSetup } from "./computer-setup";
 import { connectionPresentation } from "../../../apps/desktop/renderer/connection-presentation";
 import { setupChecklist } from "./setup-navigation";
-import { connectorVerificationInFlight } from "./setup-gate";
+import { connectorVerificationInFlight, setupStepCheck } from "./setup-gate";
 import { useSetupIntents, retainedSetupIntents } from "./settings";
 import { unresolvedActions } from "../../../apps/desktop/renderer/unresolved-actions";
 import {
@@ -137,6 +137,13 @@ export function Home({ snapshot, facade }: Props) {
     snapshot.configuration?.status === "ready" &&
     snapshot.configuration.settings.setup.journey.dismissed &&
     (checklist.ready || (computer.localConnectionCurrent && !first));
+  // A workspace step that needs attention is a workspace problem, not a
+  // connection problem, unless the transport itself needs attention.
+  const foldersRefused =
+    setupStepCheck(snapshot, "folders", false, local).state === "refused";
+  const workspaceFocus =
+    !connection.transportNeedsAttention &&
+    (connection.connected || foldersRefused);
   const [checking, setChecking] = useState(false);
   const [checkResult, setCheckResult] = useState<string | null>(null);
   const unresolved = unresolvedActions(snapshot, local).filter(
@@ -281,7 +288,7 @@ export function Home({ snapshot, facade }: Props) {
         <section
           className="home-status-card home-health-warning"
           aria-label={
-            connection.connected
+            workspaceFocus
               ? "Workspace needs attention"
               : "Connection needs attention"
           }
@@ -291,7 +298,9 @@ export function Home({ snapshot, facade }: Props) {
             <h2>
               {connection.connected
                 ? "Connected · workspace needs attention"
-                : "Setup complete · connection needs attention"}
+                : workspaceFocus
+                  ? "Setup complete · workspace needs attention"
+                  : "Setup complete · connection needs attention"}
             </h2>
             <p>
               {connection.connected
@@ -309,7 +318,11 @@ export function Home({ snapshot, facade }: Props) {
                 area: "setup",
                 setupStep:
                   first?.step ??
-                  (connection.connected ? "attachment" : "connection"),
+                  (connection.connected
+                    ? "attachment"
+                    : workspaceFocus
+                      ? "folders"
+                      : "connection"),
               })
             }
           >
@@ -317,7 +330,9 @@ export function Home({ snapshot, facade }: Props) {
               ? first?.step === "attachment"
                 ? "Review workspaces"
                 : "Review setup"
-              : "Review connection"}
+              : workspaceFocus
+                ? "Review workspaces"
+                : "Review connection"}
           </button>
         </section>
       ) : !working &&
