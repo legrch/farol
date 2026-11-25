@@ -83,6 +83,8 @@ export type InstalledUpdateHostPorts = Readonly<{
   userData(): string;
   quit(): void;
   publish(view: InstalledUpdateView): void;
+  /** Optional: a background cue for a newly available or ready update. */
+  attention?(view: InstalledUpdateView): void;
   configurationChanged(): void;
   admission: Pick<
     DesktopAdmission,
@@ -138,6 +140,7 @@ export function createInstalledUpdateHost(host: InstalledUpdateHostPorts) {
   function publishInstalledUpdate(view: InstalledUpdateView): void {
     installedUpdateView = view;
     host.publish(view);
+    host.attention?.(view);
   }
   async function installedUpdateCommand(
     value: unknown,
