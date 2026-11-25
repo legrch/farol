@@ -130,7 +130,11 @@ function host() {
     };
   }
   const channels: ReturnType<typeof channel>[] = [];
+  const records: unknown[][] = [];
   const context = {
+    operationsStore: () => ({
+      record: (...args: unknown[]) => void records.push(args),
+    }),
     runtime: { port: 1, tasks: [task] },
     runtimeState: "ready",
     window: window("original-window"),
@@ -203,6 +207,7 @@ function host() {
     toRead,
     finish,
     sends,
+    records,
     channels,
     context,
     window,
@@ -572,3 +577,21 @@ it.each(
     expect(afterRelease).toEqual(duringHold);
   },
 );
+
+it.each([
+  ["provider_not_dispatched", "provider_not_dispatched"],
+  ["native-host:SOME_FUTURE_CODE", "CHAT_TERMINAL_CODE_UNRECOGNIZED"],
+  ["TURN_FINISHED", "CHAT_TERMINAL_CODE_UNRECOGNIZED"],
+] as const)("journals the terminal code %s as %s", async (code, recorded) => {
+  const h = host();
+  const current = h.start();
+  await h.toRead(current);
+  current.channel.reads[0]!.resolve(
+    packet({ ...event("turn.terminal"), phase: "failed", code }),
+  );
+  await flush();
+  expect(h.records).toEqual([
+    [{ source: "Codex", kind: "chat.turn", target: {} }, "failed", recorded, 0],
+  ]);
+  await h.finish(current);
+});
