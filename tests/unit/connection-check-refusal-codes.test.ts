@@ -7,11 +7,11 @@ import { mappedOperationOutcome } from "../../apps/desktop/renderer/operation-ou
 import { ProductConfigurationResultSchema } from "../../src/pkg/product-settings/contract";
 import { chatGptPreSubmitRemedy } from "../../src/ui/chatgpt-pre-submit-remedy";
 
-const ready = {
+const ready: Parameters<typeof connectionCheckRuntimeRefusal>[0] = {
   appSelected: true,
   workspaceKnown: true,
   tunnelPresent: true,
-  runtimeState: "ready" as const,
+  runtimeState: "ready",
   buildCurrent: true,
   generationsCurrent: true,
   running: true,
