@@ -2,23 +2,6 @@ import { z } from "zod";
 
 // A renderer projection only. No saved configuration, credential, publication,
 // participant, process handle or normal desktop action crosses this boundary.
-const folder = z.strictObject({
-  workspaceId: z.string().uuid(),
-  label: z.string().max(160),
-  root: z.string().max(4096),
-});
-export const RecoveryStateSchema = z.discriminatedUnion("status", [
-  z.strictObject({ status: z.literal("settings_unavailable") }),
-  z.strictObject({ status: z.literal("closing") }),
-  z.strictObject({
-    status: z.literal("ready"),
-    revision: z.number().int().nonnegative(),
-    folders: z.array(folder).max(128),
-    computer: z.enum(["starting", "available", "unavailable"]),
-    archive: z.enum(["starting", "available", "unavailable"]),
-  }),
-]);
-export type RecoveryState = z.infer<typeof RecoveryStateSchema>;
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
 const cursor = z.string().regex(/^(?:[a-f0-9]{64})?$/u);
 const text = (bytes: number) =>
@@ -91,12 +74,5 @@ export const RecoveryReadResultSchema = z.discriminatedUnion("status", [
 ]);
 export type RecoveryReadResult = z.infer<typeof RecoveryReadResultSchema>;
 export type StartupRecoveryAPI = Readonly<{
-  state(): Promise<unknown>;
   read(request: unknown): Promise<unknown>;
-  quit(): void;
 }>;
-export const recoveryChannels = Object.freeze({
-  state: "farol:startup-recovery:state",
-  read: "farol:startup-recovery:read",
-  quit: "farol:startup-recovery:quit",
-});

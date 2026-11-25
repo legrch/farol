@@ -1,14 +1,7 @@
 import fs from "node:fs";
 import { expect, it } from "vitest";
 import { ABOUT_PANEL_CSS } from "../../src/ui/about-panel-document";
-it.each([
-  ["shell", "src/ui/renderer/shell.tsx", "src/ui/renderer/shell.css"],
-  [
-    "recovery",
-    "apps/desktop/renderer/recovery/view.tsx",
-    "apps/desktop/renderer/recovery/view.css",
-  ],
-])(
+it.each([["shell", "src/ui/renderer/shell.tsx", "src/ui/renderer/shell.css"]])(
   "%s declares a title drag region with interactive controls excluded",
   (kind, view, css) => {
     expect(fs.readFileSync(view!, "utf8")).toContain(

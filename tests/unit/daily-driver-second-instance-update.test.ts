@@ -57,9 +57,7 @@ function host({
   const window = { isDestroyed: () => false };
   const context: Record<string, unknown> & {
     window: typeof window | null;
-    startupRecovery: { reopen(): Promise<void> } | null;
   } = {
-    startupRecovery: null,
     windowOpenCoordinator: new WindowOpenCoordinator(),
     window: hasWindow ? window : null,
     runtimeState: failedRuntime ? "failed" : "ready",
@@ -114,7 +112,6 @@ function host({
     window: () => context.window,
     taskViewKinds: new Map(),
     expectedTasks: [],
-    startupRecovery: () => context.startupRecovery,
     ensureWindow: context.ensureWindow as () => Promise<void>,
     recoverWindowOpenFailure,
     writeInstanceAcknowledgement: acknowledge,
@@ -228,25 +225,10 @@ it("keeps an unavailable runtime classified without hiding its diagnostic window
   expect(h.reveal).toHaveBeenCalledTimes(1);
 });
 
-it("reveals only the recovery window without acknowledging normal runtime readiness", async () => {
-  const h = host({ holdReady: true });
-  const reopen = vi.fn(async () => undefined);
-  h.context.startupRecovery = { reopen };
-  await h.handle(h.candidate);
-  expect(reopen).toHaveBeenCalledOnce();
-  expect(h.waitReady).not.toHaveBeenCalled();
-  expect(h.create).not.toHaveBeenCalled();
-  expect(h.reveal).not.toHaveBeenCalled();
-  expectAck(h, "reopen-failed");
-});
-
-it("does not open recovery for foreign or background-only launches", async () => {
+it("acknowledges foreign and background-only launches without waiting for readiness", async () => {
   for (const options of [{ foreign: true }, { backgroundOnly: true }]) {
-    const h = host(options),
-      reopen = vi.fn(async () => undefined);
-    h.context.startupRecovery = { reopen };
+    const h = host(options);
     await h.handle(h.candidate);
-    expect(reopen).not.toHaveBeenCalled();
     expect(h.waitReady).not.toHaveBeenCalled();
     expectAck(h, options.foreign ? "identity-mismatch" : "reopen-failed");
   }
