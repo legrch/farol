@@ -25,7 +25,7 @@ const browserCommands = new Set<Kind>([
 ]);
 
 // This is presentation admission, never owner authority. Dependency proof:
-// main.ts configureAdmittedProduct's model cases touch the model endpoint or
+// configuration/dispatch.ts configureAdmittedProduct's model cases touch the model endpoint or
 // Codex config only; browser presentation/toggle do not save ProductSettings.
 // Sign-in/verify DO call markSetupVisited/recordChatGptObservation -> commit,
 // so their uncertain replies stay shared, even though ChatGPT is optional.

@@ -22,15 +22,35 @@ import { createConfigurationChatgpt } from "../../apps/desktop/configuration/cha
 // shared build output participates.
 const source = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
 const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
+// configureProduct is the configuration dispatch's own function now; main only
+// keeps a wrapper under the same name.
+const dispatchSource = fs.readFileSync(
+  "apps/desktop/configuration/dispatch.ts",
+  "utf8",
+);
+const dispatchTree = parse(dispatchSource, {
+  sourceType: "module",
+  plugins: ["typescript"],
+});
 let returnCallback;
 const continuityFunctions = new Map();
 const continuityCallbacks = new Map();
-function visit(node) {
+function visitDispatch(node) {
   if (
     node.type === "FunctionDeclaration" &&
     node.id?.name === "configureProduct"
   )
-    continuityFunctions.set(node.id.name, source.slice(node.start, node.end));
+    continuityFunctions.set(
+      node.id.name,
+      dispatchSource.slice(node.start, node.end),
+    );
+  for (const value of Object.values(node)) {
+    if (Array.isArray(value)) {
+      for (const child of value) if (child?.type) visitDispatch(child);
+    } else if (value?.type) visitDispatch(value);
+  }
+}
+function visit(node) {
   if (
     node.type === "ObjectProperty" &&
     ["onLoadStateChanged", "onSignInOutcome"].includes(node.key?.name)
@@ -51,6 +71,7 @@ function visit(node) {
   }
 }
 visit(tree);
+visitDispatch(dispatchTree);
 if (!returnCallback) throw new Error("SIGN_IN_STATUS_HOST_CODE_MISSING");
 const buildId = "3".repeat(64);
 const observationId = "11111111-1111-4111-8111-111111111111";

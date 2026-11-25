@@ -11,6 +11,10 @@ const mainSource = path.resolve(
   import.meta.dirname,
   "../../src/apps/desktop/main.ts",
 );
+const dispatchSource = path.resolve(
+  import.meta.dirname,
+  "../../apps/desktop/configuration/dispatch.ts",
+);
 
 describe("connector supervisor wiring in main", () => {
   it("lends each port its own main-process owner", async () => {
@@ -144,11 +148,12 @@ describe("connector supervisor wiring in main", () => {
       expect(body).toContain(` ${name},`);
     expect(source).toContain("let connectorCheckCache");
     // Every caller reaches the check through the one lazily built instance.
-    for (const call of [
+    // The configuration dispatch holds the explicit check's call; main lends
+    // it the accessor.
+    expect(await readFile(dispatchSource, "utf8")).toContain(
       "connectorCheck().testConnectionCommand(",
-      "connectorCheck().checkSecureMcpAttachment(",
-    ])
-      expect(source).toContain(call);
+    );
+    expect(source).toContain("connectorCheck().checkSecureMcpAttachment(");
     expect(source).not.toMatch(
       /\n(?:async )?function (?:testConnectionCommand|checkSecureMcpAttachment)\(/,
     );
