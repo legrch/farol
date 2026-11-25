@@ -2268,6 +2268,7 @@ export class ProductConfigurationService {
     rootIdentity: WorkspaceRootIdentity,
     success: boolean,
     issuedCheckId?: string,
+    writableByOthers?: true,
   ): Promise<MutationResult> {
     const checkId =
       WorkspaceAccessCheckIdSchema.optional().safeParse(issuedCheckId);
@@ -2310,6 +2311,9 @@ export class ProductConfigurationService {
                         verifiedAt: this.now(),
                         // Evidence stays keyed to the saved (diagnostic) pair.
                         rootIdentity: item.rootIdentity ?? rootIdentity,
+                        ...(writableByOthers === true
+                          ? { writableByOthers: true as const }
+                          : {}),
                       }
                     : null,
                 },
@@ -2517,6 +2521,7 @@ export class ProductConfigurationService {
       rootIdentity: WorkspaceRootIdentity;
       checkId?: string;
       gitMetadata?: WorkspaceGitMetadata | null;
+      writableByOthers?: true;
       expectedGeneration?: number;
       expectedRoot?: string;
     }>,
@@ -2594,6 +2599,9 @@ export class ProductConfigurationService {
             computerGeneration: this.current!.computer.generation,
             verifiedAt: this.now(),
             rootIdentity,
+            ...(observed.writableByOthers === true
+              ? { writableByOthers: true as const }
+              : {}),
           },
           ...(gitMetadata.data ? { gitMetadata: gitMetadata.data } : {}),
         };

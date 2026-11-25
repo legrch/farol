@@ -119,7 +119,7 @@ declare const __FAROL_GO_SHELL__: {
   readonly support: unknown;
   readonly watchdogSourceBase64: string;
 } | null;
-import { createMenuBar, menuBarIconState } from "./menu-bar";
+import { createMenuBar } from "./menu-bar";
 import {
   aboutCommand,
   applicationMenu,
@@ -129,6 +129,8 @@ import { createModelHost } from "../../../apps/desktop/runtime/model";
 import { createRuntimeStatus } from "../../../apps/desktop/runtime/status";
 import { createContextFixture } from "../../../apps/desktop/dev/fixture";
 import { createContextHost } from "../../../apps/desktop/task/context";
+import { startupEntry } from "../../../apps/desktop/shell/entry";
+import { startMenuBar } from "../../../apps/desktop/shell/menubar";
 import { createIpc } from "../../../apps/desktop/shell/ipc";
 import {
   createInstance,
@@ -211,7 +213,6 @@ import {
   type ProductSettings,
   type WorkspaceRootIdentity,
 } from "../../pkg/product-settings/contract";
-import { initialSetupPresentation } from "../../pkg/product-settings/setup-entry";
 import {
   compactBrowserSelected,
   embeddedBrowserSelected,
@@ -330,6 +331,8 @@ import {
 } from "../../../apps/desktop/quit/trace";
 import { createQuitProgressWindow } from "../../../apps/desktop/quit/panel";
 import { removeRunMarker } from "./run-marker";
+import { quitClaim } from "../../../apps/desktop/host/claim";
+import { recordQuit } from "../../../apps/desktop/host/record";
 import { computerConnectorAdmission } from "./summary-fence-recovery";
 import { deleteTaskContext } from "./task-context-cleanup";
 import { createRouteBTaskLifecycle } from "./route-b-task-lifecycle";
@@ -3451,17 +3454,15 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   const configured = configuration.snapshot();
   const initialSettings =
     configured.status === "ready" ? configured.settings : null;
-  const initialSetup = initialSetupPresentation({
+  const entry = startupEntry({
     environment: activeDesktopIdentity.environment,
     demoMode,
     legacySetupTestMode,
-    dismissed: initialSettings?.setup.journey.dismissed ?? false,
-    currentStep: initialSettings?.setup.journey.currentStep ?? "chatgpt",
-    openAtLaunch: initialSettings?.general.openAtLaunch ?? "home",
+    settings: initialSettings,
   });
-  section = initialSetup.section;
-  setupOpen = initialSetup.setupOpen;
-  if (initialSettings) sidebarMode = initialSettings.general.sidebarDefault;
+  section = entry.section;
+  setupOpen = entry.setupOpen;
+  if (entry.sidebarMode !== null) sidebarMode = entry.sidebarMode;
   if (startupDelayMs > 0) {
     startupStage("before-delay");
     await delay(startupDelayMs);
@@ -3471,61 +3472,48 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   installApplicationMenu();
   // Hidden tests own no visible status item. Ordinary owner launch gets one.
   let disposeMenuBarOnQuit: (() => void) | null = null;
-  if (nativeMenuBarEnabled()) {
-    const disposeMenuBar = await runDesktopStartupBoundary("native-menu", () =>
-      createMenuBar(
-        {
-          open: () => {
-            void reopenWindow();
-          },
-          current: () => {
-            const task = productTasksState().tasks.find(
-              (item) => item.lifecycle === "running",
-            );
-            if (task) {
-              selectedTaskId = task.taskId;
-              section = "browser";
-              shellOverlay = "none";
-              applyLayout();
-              publishLayout();
-            }
-            void reopenWindow();
-          },
-          updates: () => {
-            requestUpdates();
-          },
-          quit: () => {
-            app.quit();
-          },
-        },
-        () => {
-          const status = currentConnectionStatus();
-          const capture = captureConnectionStatus();
-          const snapshot = configuration?.snapshot();
-          const attached =
-            status.state === "recent_transport" &&
-            capture?.kind === "running" &&
-            connectionStatusCurrent(capture) &&
-            snapshot?.status === "ready" &&
-            !desktopAdmission.occupied("workspace-mutation") &&
-            !connectorRuntimeUncertain(snapshot.settings) &&
-            snapshot.settings.computer.pendingEdit === null &&
-            !snapshot.settings.setup.computer.outcomeUnknown &&
-            currentConnectorAttachment(
-              snapshot.settings,
-              buildIdentity.buildId,
-            ) !== null;
-          return {
-            label: "Farol · " + status.label,
-            icon: menuBarIconState(status.state, attached),
-            current:
-              productTasksState().tasks.find(
-                (task) => task.lifecycle === "running",
-              )?.label ?? null,
-          };
-        },
-      ),
-    );
+  const disposeMenuBar = await startMenuBar({
+    enabled: nativeMenuBarEnabled(),
+    boundary: (create) => runDesktopStartupBoundary("native-menu", create),
+    create: createMenuBar,
+    reopen: () => {
+      void reopenWindow();
+    },
+    runningTask: () =>
+      productTasksState().tasks.find((item) => item.lifecycle === "running") ??
+      null,
+    showTask: (taskId) => {
+      selectedTaskId = taskId;
+      section = "browser";
+      shellOverlay = "none";
+      applyLayout();
+      publishLayout();
+    },
+    requestUpdates: () => {
+      requestUpdates();
+    },
+    quit: () => {
+      app.quit();
+    },
+    connection: currentConnectionStatus,
+    attached: (state) => {
+      const capture = captureConnectionStatus();
+      const snapshot = configuration?.snapshot();
+      return (
+        state === "recent_transport" &&
+        capture?.kind === "running" &&
+        connectionStatusCurrent(capture) &&
+        snapshot?.status === "ready" &&
+        !desktopAdmission.occupied("workspace-mutation") &&
+        !connectorRuntimeUncertain(snapshot.settings) &&
+        snapshot.settings.computer.pendingEdit === null &&
+        !snapshot.settings.setup.computer.outcomeUnknown &&
+        currentConnectorAttachment(snapshot.settings, buildIdentity.buildId) !==
+          null
+      );
+    },
+  });
+  if (disposeMenuBar) {
     disposeMenuBarOnQuit = disposeMenuBar;
     app.once("will-quit", disposeMenuBar);
   }
@@ -3561,107 +3549,38 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     // synchronous preparation step: the updater's effect fence and every
     // closer then see Quit in progress. A throwing step is an unconfirmed
     // stop, never a skipped drain.
-    onClaim: [
-      { name: "admission", run: () => desktopAdmission.beginQuit() },
-      {
-        name: "connector-resume",
-        run: () => {
-          startupConnectorResumeCancelled = true;
-        },
+    onClaim: quitClaim({
+      desktopAdmission,
+      cancelConnectorResume: () => {
+        startupConnectorResumeCancelled = true;
       },
-      {
-        name: "connector-start",
-        run: () => connectorStartCancellation?.abort(),
-      },
-      { name: "process-audit", run: () => processAuditObserver?.stop() },
-      {
-        name: "transport-watch",
-        run: () => connectorTransportWatch.current?.close(),
-      },
-      {
-        name: "transport-timer",
-        run: () => {
-          if (connectorTransportTimer.current)
-            clearInterval(connectorTransportTimer.current);
-        },
-      },
-      { name: "connection", run: () => connectorConnection.close() },
-      {
-        name: "e2e-observer",
-        run: () => {
-          if (isolatedE2EHome !== undefined)
-            process.removeAllListeners("farol-e2e-observe-connection");
-        },
-      },
-      {
-        name: "status-timer",
-        run: () => {
-          if (connectorStatusTimer.current)
-            clearInterval(connectorStatusTimer.current);
-        },
-      },
-      { name: "update-timer", run: () => installedUpdates.stopTimer() },
-    ],
+      connectorStartCancellation: () => connectorStartCancellation,
+      processAuditObserver: () => processAuditObserver,
+      connectorTransportWatch,
+      connectorTransportTimer,
+      connectorConnection,
+      isolatedE2EHome,
+      process,
+      connectorStatusTimer,
+      installedUpdates,
+    }),
     preparationMs: QUIT_PREPARATION_MS,
     recordReserveMs: QUIT_RECORD_RESERVE_MS,
     prepare: installedUpdates.quitPreparation.prepare,
     // The receipt first, then — only for a confirmed drain — the run marker
-    // written at start (N03/D2). An undrained quit, or a receipt that could
-    // not be written, leaves the marker in place, and the next promotion
-    // reads that as a stop that never confirmed, never as a clean quit.
-    record: async (receipt) => {
-      // Child close observers have settled. Flush their final metadata before
-      // real Quit can truncate the asynchronous writer, inside the existing
-      // absolute recording deadline. Logging supplies no child-drain authority.
-      if (operationsLog) {
-        let flushed = false;
-        try {
-          if (
-            processAuditCollector &&
-            !(await processAuditCollector.drain(QUIT_RECORD_RESERVE_MS / 4))
-          ) {
-            try {
-              console.warn("FAROL_PROCESS_AUDIT_DRAIN_UNCONFIRMED");
-            } catch {
-              // Diagnostics cannot prevent the remaining journal flush.
-            }
-          }
-        } catch {
-          // An unavailable audit observer must not suppress the journal flush.
-        }
-        try {
-          // Reserve half of Quit's existing recording budget for final metadata.
-          // A populated Activity journal can need more than 250 ms to fsync and
-          // prune; a stalled writer still times out before the receipt reserve.
-          flushed = await operationsLog.shutdown(QUIT_RECORD_RESERVE_MS / 2);
-        } catch {
-          // Preserve the original child-drain result even on journal failure.
-        }
-        if (!flushed) {
-          try {
-            console.warn("FAROL_OPERATIONS_LOG_FLUSH_UNCONFIRMED");
-          } catch {
-            // A closed diagnostic sink cannot suppress the Quit receipt.
-          }
-        }
-      }
-      await recordQuitReceipt(receipt);
-      quitDrained = receipt.drained;
-      if (receipt.drained) {
-        try {
-          const marker = await removeRunMarker(statePaths().state, process.pid);
-          quitTrace?.record({
-            stage: "marker",
-            result: marker?.removed === true ? "removed" : "kept",
-          });
-        } catch (error) {
-          quitTrace?.record({ stage: "marker", result: "failed" });
-          throw error;
-        }
-      } else {
-        quitTrace?.record({ stage: "marker", result: "kept" });
-      }
-    },
+    // written at start (N03/D2); see apps/desktop/host/record.
+    record: recordQuit({
+      operationsLog: () => operationsLog,
+      processAuditCollector: () => processAuditCollector,
+      recordReserveMs: QUIT_RECORD_RESERVE_MS,
+      warn: (message) => console.warn(message),
+      recordQuitReceipt,
+      setQuitDrained: (drained) => {
+        quitDrained = drained;
+      },
+      removeMarker: () => removeRunMarker(statePaths().state, process.pid),
+      quitTrace: () => quitTrace,
+    }),
     // QuitDrain has already waited for owned children and recorded the result.
     // A second soft Quit can remain held by Electron windows/native handlers;
     // finish this exact attempt without reopening the drain or another update.

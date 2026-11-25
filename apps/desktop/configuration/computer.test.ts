@@ -358,6 +358,98 @@ describe("configuration computer", () => {
     },
   );
 
+  it.each([true, false])(
+    "records writableByOthers=%s on the verified workspace check only from the inspection",
+    async (writable) => {
+      const workspace = {
+        workspaceId: "00000000-0000-4000-8000-000000000001",
+        root: "/tmp/project",
+        label: "project",
+        access: "read" as const,
+        excludedPaths: [],
+        rootIdentity: { device: "1", inode: "2" },
+      };
+      const settings = settingsWithWorkspace(workspace);
+      const configuration = {
+        snapshot: () => ({ status: "ready" as const, settings }),
+        rebindWorkspaceRootIdentity: vi.fn(),
+        bindWorkspaceRootIdentity: vi.fn(),
+        recordComputerVerification: vi.fn(async () => ({
+          ok: true,
+          snapshot: { status: "ready" as const, settings },
+        })),
+        recordFolderAccessCheck: vi.fn(async () => ({
+          ok: true,
+          snapshot: { status: "ready" as const, settings },
+        })),
+        withdrawDriftedWorkspaceChecks: vi.fn(async () => ({ ok: true })),
+      };
+      const ports = makePorts({
+        configuration: () => configuration,
+        measuredRootIdentity: vi.fn(async () => ({ device: "1", inode: "2" })),
+        inspectOwnerWorkspace: vi.fn(async () =>
+          writable
+            ? { ok: true as const, writableByOthers: true as const }
+            : { ok: true as const },
+        ),
+        secureMcpConnectorRuntime: () => ({ isRunning: () => false }),
+      });
+      const computer = createConfigurationComputer(ports);
+      await computer.configureAdmittedComputer({
+        kind: "computer.verify-workspace",
+        workspaceId: workspace.workspaceId,
+      } as ComputerConfigurationCommand);
+      await computer.configureAdmittedComputer({
+        kind: "computer.check-folder",
+        workspaceId: workspace.workspaceId,
+      } as ComputerConfigurationCommand);
+      const verification = (
+        configuration.recordComputerVerification.mock.calls[0] as unknown[]
+      )[2];
+      if (writable)
+        expect(verification).toHaveProperty("writableByOthers", true);
+      else expect(verification).not.toHaveProperty("writableByOthers");
+      expect(
+        (configuration.recordFolderAccessCheck.mock.calls[0] as unknown[])[6],
+      ).toBe(writable ? true : undefined);
+    },
+  );
+
+  it("never records writableByOthers when the inspection refuses", async () => {
+    const workspace = {
+      workspaceId: "00000000-0000-4000-8000-000000000001",
+      root: "/tmp/project",
+      label: "project",
+      access: "read" as const,
+      excludedPaths: [],
+      rootIdentity: { device: "1", inode: "2" },
+    };
+    const settings = settingsWithWorkspace(workspace);
+    const configuration = {
+      snapshot: () => ({ status: "ready" as const, settings }),
+      recordFolderAccessCheck: vi.fn(async () => ({
+        ok: true,
+        snapshot: { status: "ready" as const, settings },
+      })),
+    };
+    const ports = makePorts({
+      configuration: () => configuration,
+      measuredRootIdentity: vi.fn(async () => ({ device: "1", inode: "2" })),
+      inspectOwnerWorkspace: vi.fn(async () => ({
+        ok: false as const,
+        code: "WORKSPACE_READ_FAILED",
+      })),
+    });
+    await createConfigurationComputer(ports).configureAdmittedComputer({
+      kind: "computer.check-folder",
+      workspaceId: workspace.workspaceId,
+    } as ComputerConfigurationCommand);
+    const call = configuration.recordFolderAccessCheck.mock
+      .calls[0] as unknown[];
+    expect(call[4]).toBe(false);
+    expect(call[6]).toBeUndefined();
+  });
+
   it("refuses evidence when the folder is replaced during Git discovery", async () => {
     const workspace = {
       workspaceId: "00000000-0000-4000-8000-000000000001",
