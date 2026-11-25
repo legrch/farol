@@ -143,8 +143,8 @@ describe("ChatGPT session wiring in main", () => {
     );
     // The call sites that remain in main still reach them by the same names,
     // and the configuration ports are still given the main wrappers.
-    expect(source).toContain(
-      "chatGptJournalObservation(recoverableChatGptTask.result),",
+    expect(source.replace(/\s+/g, " ")).toContain(
+      "recordObservation: (result) => startupConfiguration.recordChatGptObservation( chatGptJournalObservation(result), ),",
     );
     for (const port of [
       "chatGptConversationContinuity,",

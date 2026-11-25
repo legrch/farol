@@ -2,7 +2,6 @@
   "schema": 1,
   "files": {
     "tests/integration/connector-quit-start.test.ts": ["vm"],
-    "tests/integration/fresh-chatgpt-journal-startup.test.ts": ["vm"],
     "tests/integration/go-build-without-safe-open.test.ts": ["vm"],
     "tests/integration/secure-mcp-connector-runtime.test.ts": ["vm"],
     "tests/unit/chatgpt-sign-in-status-host.test.mjs": ["vm"],

@@ -11,6 +11,11 @@ import { selectChatGptHome } from "../../../apps/desktop/chat/home";
 import { chatStartupProfile } from "../../../apps/desktop/chat/profile";
 import { cleanupAttachmentStaging } from "../../../apps/desktop/chat/staging";
 import {
+  recoverChatGptConversation,
+  recoverChatGptTaskJournal,
+  recoverDeepTests,
+} from "../../../apps/desktop/chat/recover";
+import {
   createModelEndpoint,
   startModelEndpoint,
 } from "../../../apps/desktop/runtime/endpoint";
@@ -3464,61 +3469,57 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   } catch {
     connectorCredentialStore = null;
   }
-  try {
-    const journal = new PrivateChatGptTaskJournal({
-      root: statePaths().chatGptTaskJournal,
-    });
-    const retained = freshStartup
-      ? await journal.load()
-      : await journal.reconcileAfterRestart();
-    // Fresh Go generations keep legacy history read-only, without redelivery
-    // or a writer that could acknowledge or replace an earlier operation.
-    chatGptTaskJournal = freshStartup && retained !== null ? null : journal;
-    recoverableChatGptTask = freshStartup ? null : retained;
-    if (!freshStartup && recoverableChatGptTask?.result) {
-      const recorded = await configuration.recordChatGptObservation(
-        chatGptJournalObservation(recoverableChatGptTask.result),
-      );
-      recoverableChatGptObservationPersisted = recorded.ok;
-    }
-  } catch {
-    chatGptTaskJournal = null;
-    recoverableChatGptTask = null;
-    recoverableChatGptObservationPersisted = false;
-  }
-  let chatGptInitialUrl = chatGptUrl;
-  try {
-    recoverableDeepTests = await recoverDeepTestAttempts(
-      statePaths().state,
-      (work) => journalUnderPromotionLease(liveTaskRegistry, work),
-    );
-    deepTestRecoveryReady = true;
-  } catch {
-    deepTestRecoveryReady = false;
-  }
-  try {
-    chatGptConversationStore = new PrivateChatGptConversationStore({
-      root: statePaths().chatGptConversation,
-    });
-    chatGptConversation = await chatGptConversationStore.load();
-    if (chatGptConversation?.state === "retained") {
-      const conversationUrl = chatGptConversation.conversationUrl;
-      if (conversationUrl === null) {
-        throw new Error("CHATGPT_CONVERSATION_STATE_CORRUPT");
-      }
-      const canonical = canonicalChatGptConversationUrl(
-        conversationUrl,
-        e2eChatGptOrigin,
-      );
-      if (canonical !== conversationUrl) {
-        throw new Error("CHATGPT_CONVERSATION_STATE_CORRUPT");
-      }
-      chatGptInitialUrl = canonical;
-    }
-  } catch {
-    chatGptConversationStore = null;
-    chatGptConversation = null;
-  }
+  // Assigned once at startup, so the narrowed value is safe to keep.
+  const startupConfiguration = configuration;
+  await recoverChatGptTaskJournal<
+    PrivateChatGptTaskJournal,
+    ChatGptTaskJournalRecord,
+    ChatGptTaskJournalResult
+  >({
+    freshStartup,
+    create: () =>
+      new PrivateChatGptTaskJournal({
+        root: statePaths().chatGptTaskJournal,
+      }),
+    recordObservation: (result) =>
+      startupConfiguration.recordChatGptObservation(
+        chatGptJournalObservation(result),
+      ),
+    setJournal: (value) => {
+      chatGptTaskJournal = value;
+    },
+    setRecoverableTask: (value) => {
+      recoverableChatGptTask = value;
+    },
+    setObservationPersisted: (value) => {
+      recoverableChatGptObservationPersisted = value;
+    },
+  });
+  const deepTests = await recoverDeepTests(() =>
+    recoverDeepTestAttempts(statePaths().state, (work) =>
+      journalUnderPromotionLease(liveTaskRegistry, work),
+    ),
+  );
+  if (deepTests.ready) recoverableDeepTests = deepTests.tests;
+  deepTestRecoveryReady = deepTests.ready;
+  const retainedConversation = await recoverChatGptConversation<
+    PrivateChatGptConversationStore,
+    ChatGptConversationRecord
+  >({
+    create: () =>
+      new PrivateChatGptConversationStore({
+        root: statePaths().chatGptConversation,
+      }),
+    canonicalUrl: (url) =>
+      canonicalChatGptConversationUrl(url, e2eChatGptOrigin),
+    setStore: (value) => {
+      chatGptConversationStore = value;
+    },
+    setConversation: (value) => {
+      chatGptConversation = value;
+    },
+  });
+  const chatGptInitialUrl = retainedConversation.retainedUrl ?? chatGptUrl;
   chatGptRoute = createManagedChatGptRoute({
     homeUrl: chatGptUrl,
     initialUrl: chatGptInitialUrl,
