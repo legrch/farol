@@ -539,7 +539,24 @@ describe("nested DTOs and bounded JSON", () => {
     },
   );
 
-  it.each(["workspaceId", "root", "approvedRoot"])(
+  it("accepts a refused catalogue entry that carries no root", async () => {
+    const {
+      root: _root,
+      approvedRoot: _approved,
+      ...rest
+    } = catalogueData.workspaces[0] as Record<string, unknown>;
+    const entry = {
+      ...rest,
+      refusal: { code: "WORKSPACE_PATH_REFUSED", source: "native-workspace" },
+    };
+    expect(
+      await fixture(
+        ok({ ...catalogueData, workspaces: [entry] }),
+      ).bridge.catalogue(correlation, call),
+    ).not.toMatchObject({ status: "unknown" });
+  });
+
+  it.each(["workspaceId"])(
     "rejects missing catalogue entry member %s",
     async (key) => {
       const entry: Record<string, unknown> = { ...catalogueData.workspaces[0] };
