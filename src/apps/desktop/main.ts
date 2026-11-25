@@ -76,6 +76,7 @@ import {
 import { createConnectorStop } from "../../../apps/desktop/connector/stop";
 import { createConnectorVerify } from "../../../apps/desktop/connector/verify";
 import { createWorkspaceHost } from "../../../apps/desktop/configuration/workspace";
+import { createWorkspaceCommands } from "../../../apps/desktop/configuration/files";
 import { createExecutableHost } from "../../../apps/desktop/host/executable";
 import {
   createProductAgentHost,
@@ -102,10 +103,6 @@ import { runSelfTestCommand } from "../../../apps/desktop/self-test-ipc";
 import { recoverDeepTestAttempts } from "./deep-test-recovery";
 import { readRetiredRepliesView } from "../../../apps/desktop/retired-replies-view";
 import { BridgeError } from "../../../apps/desktop/bridge/client";
-import {
-  reportComputerCheckDiagnostic,
-  refuseComputerSettingsList,
-} from "./computer-check-diagnostic";
 import { NativeViewVisibility } from "../../../apps/desktop/bridge/native-view-visibility";
 
 import { ReadAccountConfirmation } from "../../../apps/desktop/read-account-confirmation";
@@ -204,7 +201,6 @@ import { LiveTaskRegistry } from "./live-task-registry";
 import { journalUnderPromotionLease } from "./chatgpt-journal-lease";
 import {
   workspaceDescriptor,
-  verifiedProductWorkspace as verifiedWorkspaceOf,
   type VerifiedProductWorkspaceResult,
 } from "./workspace-descriptor";
 import {
@@ -404,7 +400,6 @@ import { launchCodexAppServer } from "./codex-app-server-process";
 import { runCodexHostSmoke } from "./codex-host-smoke";
 import { runCodexNativeAgentCheck } from "./codex-native-agent-check";
 import { CodexAgentWorkspaceProbe } from "./codex-agent-workspace-probe";
-import { GoSettingsListWorkspace } from "./go-settings-workspace";
 import type { ReadonlyWorkspace } from "../../modules/computer/app/port/readonly-workspace";
 import { CodexNativeAgentHost } from "../../modules/agent/infra/native/codex-native-agent-host";
 import { PrivateAssignmentStore } from "../../modules/agent/infra/repo/private-assignment-store";
@@ -2574,267 +2569,95 @@ function devProof() {
 }
 let devProofCache: ReturnType<typeof createDevProof> | null = null;
 
-// S35-TA-4: the composition itself lives in `workspace-descriptor.ts`, so the
-// denied list, the bound identity and the verification rule are exercised by
-// tests rather than restated in them. What stays here is reading the current
-// snapshot, which only `main.ts` can do.
+// The owner-workspace read, list, inspect, file-pick and failure-mapping code
+// lives in apps/desktop/configuration/files.ts; these wrappers keep the names
+// every configuration factory already takes as ports. The composition of the
+// verified workspace itself is `workspace-descriptor.ts` (S35-TA-4); what main
+// supplies is each current owner, read at the moment it is needed.
+function workspaceCommands() {
+  return (workspaceCommandsCache ??= createWorkspaceCommands({
+    configuration: () => configuration,
+    configurationFailure,
+    desktopGoCore: () => desktopGoCore,
+    compiledGoCore: () => compiledGoCore,
+    nativeWorkspace,
+    window: () => window,
+    showOpenDialog: (owner, options) => dialog.showOpenDialog(owner, options),
+    env: process.env,
+  }));
+}
+let workspaceCommandsCache: ReturnType<typeof createWorkspaceCommands> | null =
+  null;
+
 function verifiedProductWorkspace(
   workspaceId: string,
 ): VerifiedProductWorkspaceResult {
-  const snapshot = configuration?.snapshot();
-  if (!snapshot || snapshot.status !== "ready") return { status: "not_found" };
-  return verifiedWorkspaceOf(snapshot.settings, workspaceId);
+  return workspaceCommands().verifiedProductWorkspace(workspaceId);
 }
 
-async function selectedWorkspaceFile(
+function selectedWorkspaceFile(
   workspace: ApprovedProductWorkspace,
   labels: Readonly<{ title: string; buttonLabel: string }>,
 ): Promise<string | "cancelled" | "invalid"> {
-  let selected: string | undefined;
-  const testFile =
-    process.env.FAROL_E2E === "1"
-      ? process.env.FAROL_E2E_WORKSPACE_FILE
-      : undefined;
-  if (testFile) {
-    selected = testFile;
-  } else {
-    if (!window) return "invalid";
-    const result = await dialog.showOpenDialog(window, {
-      title: labels.title,
-      buttonLabel: labels.buttonLabel,
-      defaultPath: workspace.root,
-      properties: ["openFile"],
-      securityScopedBookmarks: false,
-    });
-    if (result.canceled || result.filePaths.length !== 1) return "cancelled";
-    selected = result.filePaths[0];
-  }
-  if (!selected || !path.isAbsolute(selected)) return "invalid";
-  const relative = path.relative(workspace.root, selected);
-  if (
-    relative === "" ||
-    relative === ".." ||
-    relative.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relative)
-  ) {
-    return "invalid";
-  }
-  return relative.split(path.sep).join("/");
+  return workspaceCommands().selectedWorkspaceFile(workspace, labels);
 }
 
 function workspaceReadFailure(code: string): ProductConfigurationResult {
-  switch (code) {
-    case "WORKSPACE_PATH_REFUSED":
-    case "WORKSPACE_ROOT_CHANGED":
-    case "WORKSPACE_NOT_FOUND":
-    case "WORKSPACE_NOT_A_FILE":
-    case "WORKSPACE_FILE_TOO_LARGE":
-    case "WORKSPACE_NOT_TEXT":
-    case "WORKSPACE_SEARCH_TIMEOUT":
-      return configurationFailure(code);
-    default:
-      return configurationFailure("WORKSPACE_READ_FAILED");
-  }
+  return workspaceCommands().workspaceReadFailure(code);
 }
 
-// The workspace the Codex agent check lists through. A Go build asks the Go
-// settings list and a Go failure is the check's failure: it never dispatches
-// the Python helper. Only the explicit legacy build keeps the native one.
 function codexAgentCheckWorkspace(
   settings: ProductSettings,
 ): ReadonlyWorkspace {
-  if (compiledGoCore === null) return nativeWorkspace;
-  return new GoSettingsListWorkspace((workspace, relativePath) =>
-    listOwnerWorkspace(
-      settings.computer.generation,
-      workspace,
-      workspace.approvedRoot,
-      relativePath,
-    ),
-  );
+  return workspaceCommands().codexAgentCheckWorkspace(settings);
 }
 
-// `identity` is a live measurement taken by the same verification attempt
-// (path-bound approval: never the saved pair); null compares path only.
-async function inspectOwnerWorkspace(
+function inspectOwnerWorkspace(
   generation: number,
   workspace: Pick<ApprovedProductWorkspace, "workspaceId" | "root">,
   identity: WorkspaceRootIdentity | null,
   diagnosticAction: string,
 ): Promise<{ ok: true } | { ok: false; code: string }> {
-  if (!desktopGoCore) return { ok: false, code: "WORKSPACE_READ_FAILED" };
-  try {
-    const result = await desktopGoCore.inspectSettingsWorkspace(
-      generation,
-      workspace.workspaceId,
-      ".",
-    );
-    const current = configuration?.snapshot();
-    if (
-      result.root.path !== workspace.root ||
-      (identity !== null &&
-        (result.root.device !== identity.device ||
-          result.root.inode !== identity.inode)) ||
-      current?.status !== "ready" ||
-      current.settings.computer.generation !== generation
-    )
-      return { ok: false, code: "WORKSPACE_ROOT_CHANGED" };
-    return { ok: true };
-  } catch (error) {
-    return refuseComputerSettingsList(
-      error,
-      console.warn,
-      diagnosticAction,
-      "go-settings-inspect",
-    );
-  }
+  return workspaceCommands().inspectOwnerWorkspace(
+    generation,
+    workspace,
+    identity,
+    diagnosticAction,
+  );
 }
 
-// Path-bound approval: a list is bound by path and generation; the Go root
-// identity is a live measurement and is not compared with the saved pair.
-async function listOwnerWorkspace(
+function listOwnerWorkspace(
   generation: number,
   workspace: Pick<ApprovedProductWorkspace, "workspaceId" | "root">,
-  _savedIdentity: unknown,
+  savedIdentity: unknown,
   relativePath: string,
   diagnosticAction?: string,
 ): Promise<
   | { ok: true; entries: string[]; truncated: boolean }
   | { ok: false; code: string }
 > {
-  if (!desktopGoCore) {
-    if (diagnosticAction)
-      reportComputerCheckDiagnostic(
-        console.warn,
-        diagnosticAction,
-        "go-unavailable",
-        null,
-      );
-    return { ok: false, code: "WORKSPACE_READ_FAILED" };
-  }
-  try {
-    const result = await desktopGoCore.listSettingsWorkspace(
-      generation,
-      workspace.workspaceId,
-      relativePath,
-    );
-    const current = configuration?.snapshot();
-    if (
-      result.root.path !== workspace.root ||
-      current?.status !== "ready" ||
-      current.settings.computer.generation !== generation
-    ) {
-      if (diagnosticAction)
-        reportComputerCheckDiagnostic(
-          console.warn,
-          diagnosticAction,
-          "root-recheck",
-          { code: "WORKSPACE_ROOT_CHANGED" },
-        );
-      return { ok: false, code: "WORKSPACE_ROOT_CHANGED" };
-    }
-    return { ok: true, entries: result.entries, truncated: result.truncated };
-  } catch (error) {
-    // A refused/unknown Go call never selects the legacy executor.
-    return refuseComputerSettingsList(error, console.warn, diagnosticAction);
-  }
+  return workspaceCommands().listOwnerWorkspace(
+    generation,
+    workspace,
+    savedIdentity,
+    relativePath,
+    diagnosticAction,
+  );
 }
 
 function workspaceCommandFailure(code: string): ProductConfigurationResult {
-  switch (code) {
-    case "AUTHORITY_CAPABILITY_DENIED":
-    case "AUTHORITY_COMMAND_DENIED":
-    case "AUTHORITY_PATH_DENIED":
-      return configurationFailure("WORKSPACE_COMMAND_APPROVAL_REQUIRED");
-    case "WORKSPACE_COMMAND_UNSUPPORTED":
-    case "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE":
-    case "WORKSPACE_COMMAND_EXECUTABLE_UNTRUSTED":
-      return configurationFailure("WORKSPACE_COMMAND_UNAVAILABLE");
-    case "WORKSPACE_COMMAND_CANCELLED":
-      return configurationFailure("WORKSPACE_COMMAND_CANCELLED");
-    case "WORKSPACE_COMMAND_TIMEOUT":
-      return configurationFailure("WORKSPACE_COMMAND_TIMEOUT");
-    case "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE":
-      return configurationFailure("WORKSPACE_COMMAND_OUTPUT_TOO_LARGE");
-    case "WORKSPACE_NOT_GIT_REPOSITORY":
-      return configurationFailure("WORKSPACE_NOT_GIT_REPOSITORY");
-    case "WORKSPACE_GIT_HEAD_UNBORN":
-      return configurationFailure("WORKSPACE_GIT_HEAD_UNBORN");
-    case "WORKSPACE_ROOT_CHANGED":
-      return configurationFailure("WORKSPACE_ROOT_CHANGED");
-    case "WORKSPACE_GIT_METADATA_NOT_APPROVED":
-      return configurationFailure("WORKSPACE_GIT_METADATA_NOT_APPROVED");
-    // N02: the snapshot route's own closed refusals, surfaced one for one.
-    case "WORKSPACE_GIT_ALTERNATES_UNSUPPORTED":
-    case "WORKSPACE_INDEX_CHANGED_DURING_SNAPSHOT":
-    case "WORKSPACE_CHANGED_DURING_SNAPSHOT":
-    case "WORKSPACE_TRACKED_LIST_TOO_LARGE":
-    case "WORKSPACE_TRACKED_PATH_UNSUPPORTED":
-    case "WORKSPACE_SNAPSHOT_TOO_LARGE":
-    case "WORKSPACE_SNAPSHOT_CROSS_VOLUME":
-    case "WORKSPACE_SNAPSHOT_CLONE_UNSUPPORTED":
-    case "WORKSPACE_PATH_REFUSED":
-    case "WORKSPACE_NOT_FOUND":
-      return configurationFailure(code);
-    default:
-      return configurationFailure("WORKSPACE_COMMAND_FAILED");
-  }
+  return workspaceCommands().workspaceCommandFailure(code);
 }
 
 function workspaceMutationFailure(code: string): ProductConfigurationResult {
-  switch (code) {
-    case "WORKSPACE_PATH_REFUSED":
-    case "WORKSPACE_ROOT_CHANGED":
-    case "WORKSPACE_NOT_FOUND":
-    case "WORKSPACE_NOT_A_FILE":
-    case "WORKSPACE_FILE_TOO_LARGE":
-    case "WORKSPACE_NOT_TEXT":
-    case "WORKSPACE_MUTATION_CONFLICT":
-    case "WORKSPACE_EDIT_NO_MATCH":
-    case "WORKSPACE_EDIT_NOT_UNIQUE":
-    case "WORKSPACE_MUTATION_OUTCOME_UNKNOWN":
-      return configurationFailure(code);
-    case "COMPUTER_MUTATION_OPERATION_CONFLICT":
-      return configurationFailure("WORKSPACE_MUTATION_CONFLICT");
-    case "AUTHORITY_CAPABILITY_DENIED":
-    case "AUTHORITY_MUTATION_OWNERSHIP_DENIED":
-    case "AUTHORITY_PATH_DENIED":
-      return configurationFailure("WORKSPACE_WRITE_APPROVAL_REQUIRED");
-    default:
-      return configurationFailure("WORKSPACE_MUTATION_FAILED");
-  }
+  return workspaceCommands().workspaceMutationFailure(code);
 }
 
 function goWorkspaceEditResult(
   delivery: SettingsDeliveryResult,
   redelivered: boolean,
 ): ProductConfigurationResult {
-  if (!configuration) return configurationFailure("SETTINGS_UNAVAILABLE");
-  if (delivery.state === "pending")
-    return configurationFailure("WORKSPACE_MUTATION_IN_PROGRESS");
-  const result = delivery.result!;
-  // The Go offer has already performed any required uncertainty invalidation.
-  // This adapter only projects the retained result for the React surface.
-  if (result.phase !== "completed")
-    return workspaceMutationFailure(result.failure!.code);
-  const receipt = result.receipt!;
-  return ProductConfigurationResultSchema.parse({
-    ok: true,
-    snapshot: configuration.snapshot(),
-    evidence: {
-      kind: "computer.workspace-mutation",
-      operationId: result.operationId,
-      workspaceId: result.workspaceId,
-      relativePath: receipt.relativePath,
-      operation: receipt.operation,
-      bytes: Number(receipt.bytes),
-      replacements: receipt.replacements,
-      beforeSha256: receipt.beforeSHA256,
-      afterSha256: receipt.afterSHA256,
-      resultRetention: delivery.retention,
-      redelivered,
-    },
-  });
+  return workspaceCommands().goWorkspaceEditResult(delivery, redelivered);
 }
 
 const connectorSetupReplies = new ConnectorSetupReplies();
