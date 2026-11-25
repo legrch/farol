@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { z } from "zod";
 import { OperationsDiagnosticsSchema } from "../../apps/desktop/renderer/operations-contract";
@@ -14,7 +15,10 @@ import {
 import { createTotalOperationsRecorder } from "../../apps/desktop/operations/recorder";
 import { recordedModelTurn } from "../../apps/desktop/operations/model-turn";
 import { declaredOperationOutcomes } from "./operations-outcome-inventory";
-import { recordableOperationCode } from "../../apps/desktop/renderer/operations-vocabulary";
+import {
+  chatTerminalOperationCode,
+  recordableOperationCode,
+} from "../../apps/desktop/renderer/operations-vocabulary";
 import type { ProductConfigurationResult } from "../../src/pkg/product-settings/contract";
 import type { ProductTaskCommandResult } from "../../src/modules/chat/contract/product-task";
 import type { ReadonlyComputerCallResponse } from "../../src/modules/computer/contract/readonly-computer-contract";
@@ -771,4 +775,91 @@ it("does not turn a nondispatch assessment into a successful operation", () => {
     });
     expect(operationResult({ code })).toEqual({ outcome: "unknown", code });
   }
+});
+
+// The chat `turn.terminal` code is an open string on the wire. The runtime that
+// builds it is TypeScript (src/modules/chat), not Go: these are the reasons its
+// turn state machine, run-turn service and fixture provider produce themselves.
+function chatTerminalReasons(): Set<string> {
+  const read = (file: string) => fs.readFileSync(file, "utf8");
+  const turn = read("src/modules/chat/domain/turn.ts");
+  const run = read("src/modules/chat/app/service/run-turn.ts");
+  const fixture = read("src/modules/chat/infra/client/scripted-provider.ts");
+  const port = read("src/modules/chat/app/port/provider.ts");
+  const reasons = new Set<string>();
+  for (const [text, pattern] of [
+    [turn, /terminalReason:\s*"([^"]+)"/gu],
+    [turn, /\|\s*"(TURN_[A-Z_]+)"/gu],
+    [turn, /markOutcomeUnknown\(\s*\w+,\s*"([^"]+)"/gu],
+    [run, /(?:failTurn|markOutcomeUnknown)\(\s*\w+,\s*"([^"]+)"/gu],
+    [fixture, /code:\s*"([A-Z_]+)"/gu],
+    [port, /"(PROVIDER_RESULT_REJECTED)"/gu],
+  ] as const)
+    for (const match of text.matchAll(pattern)) reasons.add(match[1]!);
+  return reasons;
+}
+
+it("maps every fixed chat terminal reason the runtime produces", () => {
+  const reasons = chatTerminalReasons();
+  // Guard the extraction itself so a source refactor cannot empty this check.
+  for (const known of [
+    "completed",
+    "not_dispatched",
+    "cancel_after_dispatch",
+    "local_persistence_failed_before_dispatch",
+    "provider_not_dispatched",
+    "provider_outcome_unknown",
+    "provider_stream_ended_without_terminal",
+    "TURN_NO_DELTA",
+    "PROVIDER_RESULT_REJECTED",
+    "FIXTURE_PROVIDER_FAILURE",
+  ])
+    expect(reasons.has(known), known).toBe(true);
+  for (const reason of reasons) {
+    expect(mappedOperationOutcome(reason), reason).toBeDefined();
+    expect(chatTerminalOperationCode(reason), reason).toBe(reason);
+    expect(recordableOperationCode(reason), reason).toBe(reason);
+  }
+  expect(mappedOperationOutcome("provider_stream_ended_without_terminal")).toBe(
+    "unknown",
+  );
+  expect(mappedOperationOutcome("provider_not_dispatched")).toBe("refused");
+});
+
+it("records an open or composite chat terminal code as one mapped code under the phase outcome", () => {
+  const record = vi.fn();
+  const recorder = createTotalOperationsRecorder({ record });
+  for (const open of [
+    "native-host:SOME_FUTURE_CODE",
+    "contract:PRIVATE_DETAIL",
+    "UPSTREAM_PROVIDER_CODE",
+  ]) {
+    const code = chatTerminalOperationCode(open);
+    expect(code).toBe("CHAT_TERMINAL_CODE_UNRECOGNIZED");
+    recorder.record(metadata, "failed", code, 0);
+  }
+  recorder.record(
+    metadata,
+    "unknown",
+    chatTerminalOperationCode("native-host:SOME_FUTURE_CODE"),
+    0,
+  );
+  expect(mappedOperationOutcome("CHAT_TERMINAL_CODE_UNRECOGNIZED")).toBe(
+    "failed",
+  );
+  expect(recorder.diagnostics().unmappedCodes).toBe(0);
+  expect(record.mock.calls.map(([, outcome, code]) => [outcome, code])).toEqual(
+    [
+      ...Array.from({ length: 3 }, () => [
+        "failed",
+        "CHAT_TERMINAL_CODE_UNRECOGNIZED",
+      ]),
+      ["unknown", "CHAT_TERMINAL_CODE_UNRECOGNIZED"],
+    ],
+  );
+  expect(JSON.stringify(record.mock.calls)).not.toContain("PRIVATE_DETAIL");
+  // The old raw recording counted each of these as an unmapped code.
+  const raw = createTotalOperationsRecorder({ record: vi.fn() });
+  raw.record(metadata, "failed", "native-host:SOME_FUTURE_CODE", 0);
+  expect(raw.diagnostics().unmappedCodes).toBe(1);
 });

@@ -166,3 +166,16 @@ export function recordableOperationCode(
     ? "provider_error"
     : (value as RecordableOperationCode);
 }
+
+/** The journal code for a chat `turn.terminal` event. The wire `code` is an
+ * open string (provider failures, `source:code` computer failures), so a value
+ * the desktop does not declare is recorded under one mapped code instead of
+ * being counted as an unmapped operation code. The raw text is not retained:
+ * the journal has no bounded diagnostic field for it. */
+export function chatTerminalOperationCode(
+  code: string,
+): RecordableOperationCode {
+  return mappedOperationOutcome(code) === undefined
+    ? "CHAT_TERMINAL_CODE_UNRECOGNIZED"
+    : (code as RecordableOperationCode);
+}
