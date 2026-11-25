@@ -1,7 +1,6 @@
 import { admissionFixture } from "../support/desktop-admission";
 import fs from "node:fs";
 import vm from "node:vm";
-import { parse } from "@babel/parser";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { expect, it, vi } from "vitest";
@@ -45,11 +44,6 @@ import {
 // Execute the ACTUAL connector check and verify modules, plus
 // actual coordinator/readiness/parser seams. Go IPC, Electron and Settings persistence are scripted ports here;
 // native Store and real public socket qualification remain separate gates.
-const source = fs.readFileSync(
-  new URL("../../src/apps/desktop/main.ts", import.meta.url),
-  "utf8",
-);
-const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
 const checkSource = fs.readFileSync(
   new URL("../../apps/desktop/connector/check.ts", import.meta.url),
   "utf8",
@@ -461,15 +455,23 @@ it("Setup verification keeps its main browser route while a task is selected", a
   expect(f.published()).toBe(1);
 });
 it("real Main dispatch selects the new explicit handler, not Deep Test or repair", () => {
-  const node = tree.program.body.find(
-    (x) =>
-      x.type === "FunctionDeclaration" &&
-      x.id?.name === "configureAdmittedProduct",
+  // The dispatcher lives in apps/desktop/configuration/dispatch.ts, inside its
+  // factory; Main keeps a thin wrapper under the same name.
+  const dispatchSource = fs.readFileSync(
+    "apps/desktop/configuration/dispatch.ts",
+    "utf8",
   );
-  if (!node || node.start == null || node.end == null)
+  const start = dispatchSource.indexOf(
+    "async function configureAdmittedProduct(",
+  );
+  const end = dispatchSource.indexOf(
+    "\n  return {\n    configureProduct",
+    start,
+  );
+  if (start < 0 || end < 0)
     throw Error("Missing active configuration dispatcher");
-  expect(source.slice(node.start, node.end)).toContain(
-    'if (command.kind === "connector.test-connection")\n    return connectorCheck().testConnectionCommand(command);',
+  expect(dispatchSource.slice(start, end)).toContain(
+    'if (command.kind === "connector.test-connection")\n      return connectorCheck().testConnectionCommand(command);',
   );
   expect(checkSource).not.toContain("verifySecureMcpApp(");
   expect(checkSource).not.toContain('kind: "connector.repair"');

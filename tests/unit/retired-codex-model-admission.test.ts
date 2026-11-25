@@ -4,11 +4,19 @@ import { transformSync } from "esbuild";
 import { expect, it, vi } from "vitest";
 
 // Exercise the actual admission prefix without starting an app or model.
-const source = await fs.readFile("src/apps/desktop/main.ts", "utf8");
+// The dispatch lives in apps/desktop/configuration/dispatch.ts: the prefix is
+// sliced from there, together with the helper it narrows computer commands by.
+const source = await fs.readFile(
+  "apps/desktop/configuration/dispatch.ts",
+  "utf8",
+);
+const helperStart = source.indexOf("function isComputerCommand(");
+const helperEnd = source.indexOf("export function createConfigurationDispatch");
 const start = source.indexOf("async function configureAdmittedProduct(");
-const end = source.indexOf("  switch (command.kind)", start);
-if (start < 0 || end < 0) throw Error("CONFIGURATION_ADMISSION_MISSING");
-const prefix = `${source.slice(start, end)}\nreturn { allowed: true };\n}`;
+const end = source.indexOf("    switch (command.kind)", start);
+if (helperStart < 0 || helperEnd < 0 || start < 0 || end < 0)
+  throw Error("CONFIGURATION_ADMISSION_MISSING");
+const prefix = `${source.slice(helperStart, helperEnd)}\n${source.slice(start, end)}\nreturn { allowed: true };\n}`;
 const code = transformSync(prefix, { loader: "ts", target: "es2022" }).code;
 
 it.each(["host.run-codex-smoke", "host.run-codex-agent-check"])(
@@ -24,7 +32,7 @@ it.each(["host.run-codex-smoke", "host.run-codex-agent-check"])(
       },
     );
     const run = vm.runInNewContext(`${code}\nconfigureAdmittedProduct`, {
-      configuration,
+      configuration: () => configuration,
       configurationFailure,
     }) as (command: { kind: string }) => Promise<unknown>;
     await expect(run({ kind })).resolves.toEqual({
@@ -39,7 +47,7 @@ it.each(["host.run-codex-smoke", "host.run-codex-agent-check"])(
 
 it("leaves the separate ChatGPT route eligible for its normal checks", async () => {
   const run = vm.runInNewContext(`${code}\nconfigureAdmittedProduct`, {
-    configuration: {},
+    configuration: () => ({}),
     configurationFailure: () => {
       throw Error("UNEXPECTED_REFUSAL");
     },
