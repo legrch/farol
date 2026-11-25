@@ -1323,6 +1323,42 @@ describe("testConnectionCommand after the coordinator", () => {
     expect(publications(f)).toBe(1);
   });
 
+  it("publishes a verified check when folders are configured but none is currently verified", async () => {
+    const f = build();
+    f.settings.setup.computer.verified!.configRevision = 999;
+    const result = await f.check.testConnectionCommand(command);
+    expect(result).toMatchObject({
+      ok: true,
+      evidence: { kind: "connector.connection-check", retained: false },
+    });
+    expect(f.owner.recordSecureMcpAttachment).toHaveBeenCalledOnce();
+    expect(f.owner.recordSecureMcpAttachment).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: fixtureWorkspaceId }),
+    );
+    expect(publications(f)).toBe(1);
+  });
+
+  it("answers unknown, not success, when the fallback workspace changes before publication", async () => {
+    const f = build();
+    f.settings.setup.computer.verified = null;
+    f.settings.computer.workspaces.push({
+      ...structuredClone(f.settings.computer.workspaces[0]!),
+      workspaceId: "second-workspace",
+    });
+    const dispatch = run.impl!;
+    run.impl = async (...values: unknown[]) => {
+      const verified = await dispatch(...values);
+      // The first folder is removed after Go verified it: the fallback is now
+      // another folder, so the verified workspace is no longer the owner's.
+      f.replaceSettings((next) => void next.computer.workspaces.shift());
+      return verified;
+    };
+    expect(await f.check.testConnectionCommand(command)).toEqual(
+      failure("CONNECTION_CHECK_OUTCOME_UNKNOWN"),
+    );
+    expect(f.owner.recordSecureMcpAttachment).not.toHaveBeenCalled();
+  });
+
   it("never publishes again for a retained result of an earlier check", async () => {
     const f = build();
     run.impl = async () => ({
