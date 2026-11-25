@@ -1071,7 +1071,7 @@ describe("workspace identity refusal takes precedence over stale green UI", () =
 describe("a refused workspace check names its reason", () => {
   it.each([
     ["WORKSPACE_NOT_FOUND", "no longer exists or was moved"],
-    ["WORKSPACE_PATH_REFUSED", "belong to you"],
+    ["WORKSPACE_PATH_REFUSED", "may belong to another user of this Mac"],
     ["WORKSPACE_READ_FAILED", "Farol could not check this workspace"],
   ])("%s", async (code, text) => {
     const h = await mount({ step: "folders" });
