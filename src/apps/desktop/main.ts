@@ -77,6 +77,7 @@ import {
   createConnectorStart,
   reportConnectorTransport,
 } from "../../../apps/desktop/connector/start";
+import { startConnectorResume } from "../../../apps/desktop/connector/resume";
 import { createConnectorStop } from "../../../apps/desktop/connector/stop";
 import { createConnectorVerify } from "../../../apps/desktop/connector/verify";
 import { createWorkspaceHost } from "../../../apps/desktop/configuration/workspace";
@@ -132,10 +133,8 @@ import { createContextHost } from "../../../apps/desktop/task/context";
 import { startupEntry } from "../../../apps/desktop/shell/entry";
 import { startMenuBar } from "../../../apps/desktop/shell/menubar";
 import { createIpc } from "../../../apps/desktop/shell/ipc";
-import {
-  createInstance,
-  secondInstanceResultPrefix,
-} from "../../../apps/desktop/host/instance";
+import { createInstance } from "../../../apps/desktop/host/instance";
+import { runPrimaryStartup } from "../../../apps/desktop/host/primary";
 import { surfaceNavigation } from "../../../apps/desktop/shell/navigation";
 import { promises as rawFs } from "original-fs";
 import {
@@ -234,7 +233,7 @@ import {
   waitForInstanceAcknowledgement,
   writeInstanceAcknowledgement,
 } from "./single-instance";
-import { PrimaryStartup, devReopenPrimaryRefused } from "./primary-startup";
+import { PrimaryStartup } from "./primary-startup";
 import { readRuntimeBuildIdentity } from "./build-identity";
 import {
   currentConnectorAttachment,
@@ -428,11 +427,7 @@ import {
   desktopCodexConfigPath,
   isolatedDevMcpProofAllowed,
 } from "./desktop-environment";
-import {
-  runDesktopStartupBoundary,
-  startupNoticeAllowed,
-  terminateDesktopStartup,
-} from "./desktop-startup-failure";
+import { runDesktopStartupBoundary } from "./desktop-startup-failure";
 import { observeRendererLifecycle } from "../../../apps/desktop/renderer-lifecycle-observation";
 
 guardDiagnosticPipes([process.stdout, process.stderr]);
@@ -3021,10 +3016,6 @@ function instance() {
 }
 let instanceCache: ReturnType<typeof createInstance> | null = null;
 
-function isPrimaryReady(): boolean {
-  return instance().isPrimaryReady();
-}
-
 function stopRuntime(): void {
   runtimeStopping = true;
   stopStreams();
@@ -3732,115 +3723,52 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   // gone has its check withdrawn first; if that withdrawal fails, do not
   // resume at all.
   const driftSettled = await withdrawDriftedWorkspaceChecksAtLaunch();
-  const beforeConnectorResume = configuration.snapshot();
-  void resumeComputerConnector(
-    {
+  void startConnectorResume({
+    resume: resumeComputerConnector,
+    launch: {
       environment: runtimeEnvironment,
       buildEnvironment,
       buildId: buildIdentity.buildId,
       previousRunClean: previousHostAdmissionReady,
-      snapshot: beforeConnectorResume,
     },
-    {
-      current: () => configuration!.snapshot(),
-      mayContinue: () =>
-        driftSettled &&
-        !startupConnectorResumeCancelled &&
-        !desktopAdmission.closed(),
-      // The normal command retains authority reservation, physical-root and
-      // Go inspection checks. No synthetic verification receipt is written.
-      verifyWorkspace: (workspaceId) =>
-        configureProduct({ kind: "computer.verify-workspace", workspaceId }),
-      start: () => connectorStart().startSecureMcpConnector(false, true),
-    },
-  )
-    .then(
-      (status) => {
-        startupStage(
-          status === "started"
-            ? "connector-resumed"
-            : status === "skipped"
-              ? "connector-resume-skipped"
-              : "connector-resume-refused",
-        );
-        if (!desktopAdmission.quitInProgress && window && !window.isDestroyed())
-          window.webContents.send(channels.configurationChanged);
-        startConnectorTransportWatch();
-        // Restore only the local connection. ChatGPT verification sends are
-        // explicit owner actions; a routine restart never repeats onboarding.
-        return undefined;
-      },
-      () => {
-        startupStage("connector-resume-failed");
-        startConnectorTransportWatch();
-      },
-    )
-    .finally(() => {
+    driftSettled,
+    snapshot: () => configuration!.snapshot(),
+    cancelled: () => startupConnectorResumeCancelled,
+    desktopAdmission,
+    verifyWorkspace: (workspaceId) =>
+      configureProduct({ kind: "computer.verify-workspace", workspaceId }),
+    start: () => connectorStart().startSecureMcpConnector(false, true),
+    startupStage,
+    window: () => window,
+    startConnectorTransportWatch,
+    finishConnectionCheck: () => {
       startupConnectionChecking = false;
-      if (!desktopAdmission.quitInProgress && window && !window.isDestroyed())
-        window.webContents.send(channels.configurationChanged);
-    });
+    },
+  });
 }
 
 const primaryInstanceLock = app.requestSingleInstanceLock(instanceRequest);
-startupStage(primaryInstanceLock ? "lock-primary" : "lock-secondary");
-if (
-  devReopenPrimaryRefused(runtimeEnvironment, process.argv, primaryInstanceLock)
-) {
-  instance().refuseDevReopen();
-} else if (!primaryInstanceLock) {
-  instance().settleSecondInstance();
-} else {
-  const quitSignals = createGracefulQuitSignals({
-    signals: process,
-    requestQuit: () => app.quit(),
-    isQuitting: () => desktopAdmission.quitInProgress,
-    observe: (signal, ignored) =>
-      quitTrace?.record({ stage: "signal", signal, ignored }),
-  });
-  const initialization = main(quitSignals);
-  const readiness = initialization.then(() => {
-    if (!isPrimaryReady()) throw new Error("PRIMARY_STARTUP_INCOMPLETE");
-  });
-  primaryStartup.begin(readiness);
-  void initialization
-    .then(() => {
-      if (isPrimaryReady()) {
-        try {
-          publishManualInstallStartupProof(
-            process.argv,
-            buildIdentity,
-            process.pid,
-          );
-        } catch {
-          process.stderr.write("INSTALL_STARTUP_PROOF_UNCONFIRMED\n");
-        }
-      }
-      closeStartupSplash();
-      startupStage("startup-complete");
-      process.stderr.write(
-        `${secondInstanceResultPrefix}${isPrimaryReady() ? "primary-started" : "reopen-failed"}\n`,
-      );
-    })
-    .catch(async (error: unknown) => {
-      closeStartupSplash();
-      try {
-        await desktopGoCore?.abortStartup();
-      } catch {
-        error = new Error("GO_CORE_STARTUP_CLEANUP_UNCONFIRMED");
-      }
-      terminateDesktopStartup(error, runtimeEnvironment, {
-        write: (message) => process.stderr.write(message),
-        exit: (code) => app.exit(code),
-        // A recipient who just opened the app sees nothing else: this is the
-        // only window-less surface Electron allows before ready. It is modal,
-        // so a non-interactive launch never gets it and exits at once.
-        ...(startupNoticeAllowed(process.env)
-          ? {
-              notify: (title: string, message: string) =>
-                dialog.showErrorBox(title, message),
-            }
-          : {}),
-      });
-    });
-}
+runPrimaryStartup({
+  primaryInstanceLock,
+  runtimeEnvironment,
+  process,
+  app,
+  dialog,
+  startupStage,
+  instance,
+  initialize: () =>
+    main(
+      createGracefulQuitSignals({
+        signals: process,
+        requestQuit: () => app.quit(),
+        isQuitting: () => desktopAdmission.quitInProgress,
+        observe: (signal, ignored) =>
+          quitTrace?.record({ stage: "signal", signal, ignored }),
+      }),
+    ),
+  primaryStartup,
+  publishInstallProof: () =>
+    publishManualInstallStartupProof(process.argv, buildIdentity, process.pid),
+  closeStartupSplash,
+  desktopGoCore: () => desktopGoCore,
+});
