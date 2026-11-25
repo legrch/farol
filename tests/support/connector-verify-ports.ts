@@ -55,9 +55,6 @@ export function connectorVerifyHost(
       return owner("connectorConnection");
     },
     runtimeEnvironment: String(fixture.runtimeEnvironment ?? "test"),
-    env: {},
-    pid: 1,
-    writeStderr: () => {},
     randomUUID: call("randomUUID"),
     statePaths: call("statePaths"),
     configurationFailure: call("configurationFailure"),
