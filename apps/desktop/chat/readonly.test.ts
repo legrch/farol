@@ -1,13 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { RunReadonlyComputerAction } from "../../../src/modules/computer/app/service/run-readonly-computer-action";
-import {
-  createParticipantAuthority,
-  deriveTaskGrant,
-} from "../../../src/modules/computer/domain/execution-authority";
-import { InMemoryAuthorityRepository } from "../../../src/modules/computer/infra/repo/in-memory-authorities";
-import { InMemoryComputerApprovalRepository } from "../../../src/modules/computer/infra/repo/in-memory-computer-approvals";
-import { ProductSettingsSchema } from "../../../src/pkg/product-settings/contract";
-import type { ApprovedProductWorkspace } from "../../../src/pkg/product-settings/contract";
 import type { ChatComputerAdmissionResponse } from "../bridge/wire";
 import type {
   PendingChatGptAttachmentTask,
@@ -18,8 +9,7 @@ import { createReadonlyHost } from "./readonly";
 // The read-only and attachment pending-task helpers over scripted owners. The
 // pending task is a field the getter reads afresh and the setter clears, the
 // confirmations are one real WeakMap shared by reference, the Go core and the
-// legacy journal are fakes, and every effect appends to one ordered log. The
-// authority constructors are the real ones; only the native workspace is fake.
+// legacy journal are fakes, and every effect appends to one ordered log.
 // No window, provider, helper process or installed profile runs.
 
 const admission: ChatComputerAdmissionResponse = {
@@ -111,12 +101,13 @@ function build(
   const confirmations =
     options.confirmations ??
     new WeakMap<PendingChatGptReadonlyTask, Confirmation>();
-  const workspaceRequests: unknown[] = [];
+  const attempts = new WeakMap<PendingChatGptReadonlyTask, Promise<boolean>>();
   const ports = {
     goChatStartupProfile: () =>
       options.profile === undefined ? {} : options.profile,
     desktopGoCore: () => (options.core === undefined ? null : options.core),
     readonlyAccountConfirmations: confirmations,
+    readonlyDiscardAttempts: attempts,
     pendingChatGptReadonlyTask: () => state.pending,
     setPendingChatGptReadonlyTask: vi.fn(
       (value: PendingChatGptReadonlyTask | null) => {
@@ -131,27 +122,10 @@ function build(
           return Promise.resolve(true);
         }),
     ),
-    nativeWorkspace: {
-      execute: vi.fn((request: unknown) => {
-        workspaceRequests.push(request);
-        return Promise.resolve({
-          ok: false as const,
-          error: {
-            code: "WORKSPACE_HELPER_FAILED" as const,
-            retry: "never" as const,
-          },
-        });
-      }),
-    },
-    deriveTaskGrant: vi.fn(deriveTaskGrant),
-    createParticipantAuthority: vi.fn(createParticipantAuthority),
-    InMemoryAuthorityRepository,
-    InMemoryComputerApprovalRepository,
-    RunReadonlyComputerAction,
   };
   // The port types are the real classes', so a mismatch fails to compile.
   const host = createReadonlyHost(ports);
-  return { host, ports, state, events, confirmations, workspaceRequests };
+  return { host, ports, state, events, confirmations, attempts };
 }
 
 function core(events: string[], failure?: Error) {
@@ -452,6 +426,23 @@ describe("discardPreparedReadonlyTask", () => {
     expect(calls).toBe(1);
   });
 
+  it("remembers the attempt in main's own WeakMap, keyed by the task", async () => {
+    const pending = readonlyTask();
+    const s = build({ pending });
+    const result = s.host.discardPreparedReadonlyTask(pending);
+    expect(s.attempts.get(pending)).toBe(result);
+    await result;
+  });
+
+  it("answers from an attempt main's WeakMap already holds, without a new one", async () => {
+    const pending = readonlyTask();
+    const s = build({ pending });
+    const held = Promise.resolve(false);
+    s.attempts.set(pending, held);
+    expect(s.host.discardPreparedReadonlyTask(pending)).toBe(held);
+    expect(s.ports.discardPreparedChatGptTask).not.toHaveBeenCalled();
+  });
+
   it("keeps each task's attempt apart", async () => {
     const one = readonlyTask({ operationId: "one" });
     const two = readonlyTask({ operationId: "two" });
@@ -459,285 +450,5 @@ describe("discardPreparedReadonlyTask", () => {
     await s.host.discardPreparedReadonlyTask(one);
     await s.host.discardPreparedReadonlyTask(two);
     expect(s.ports.discardPreparedChatGptTask).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe("verificationWorkspaceAction", () => {
-  const workspaceId = "11111111-1111-4111-8111-111111111111";
-  const other = "22222222-2222-4222-8222-222222222222";
-  const writable = "33333333-3333-4333-8333-333333333333";
-  const unknown = "44444444-4444-4444-8444-444444444444";
-  const computerId = "00000000-0000-4000-8000-000000000002";
-  const root = "/work/project";
-  const identity = { device: "16777233", inode: "335036" };
-
-  function workspace(
-    extra: Record<string, unknown> = {},
-  ): ApprovedProductWorkspace {
-    return {
-      workspaceId,
-      root,
-      label: "Project",
-      access: "read",
-      excludedPaths: [`${root}/.env`],
-      rootIdentity: identity,
-      ...extra,
-    } as ApprovedProductWorkspace;
-  }
-
-  function settings(
-    commands: "none" | "verification" | "workspace",
-    workspaces: readonly ApprovedProductWorkspace[],
-  ) {
-    const step = {
-      visited: true,
-      skipped: false,
-      configured: true,
-      reachable: "reachable",
-      verified: null,
-      needsAction: null,
-      unavailable: null,
-      outcomeUnknown: false,
-    };
-    return ProductSettingsSchema.parse({
-      schema: 1,
-      revision: 1,
-      general: {
-        openAtLaunch: "browser",
-        sidebarDefault: "full",
-        activityDetail: "summary",
-      },
-      computer: {
-        computerId,
-        generation: 4,
-        name: "This Mac",
-        commands,
-        workspaces,
-      },
-      setup: {
-        journey: { currentStep: "verify", dismissed: false },
-        chatgpt: step,
-        computer: step,
-        connect: step,
-        hosts: step,
-        verify: step,
-      },
-    });
-  }
-
-  const future = () => Date.now() + 60_000;
-
-  it("has no action when commands are off, and derives nothing", () => {
-    const s = build();
-    const value = settings("none", [workspace()]);
-    expect(
-      s.host.verificationWorkspaceAction(
-        value,
-        value.computer.workspaces[0]!,
-        future(),
-      ),
-    ).toBeNull();
-    expect(s.ports.deriveTaskGrant).not.toHaveBeenCalled();
-  });
-
-  it("approves read capabilities only, over the identity-bound folders", () => {
-    const s = build();
-    const value = settings("verification", [
-      workspace(),
-      workspace({ workspaceId: other, rootIdentity: undefined }),
-    ]);
-    const until = future();
-    const action = s.host.verificationWorkspaceAction(
-      value,
-      value.computer.workspaces[0]!,
-      until,
-    );
-    expect(action).not.toBeNull();
-    const [approval, admission] = s.ports.deriveTaskGrant.mock.calls[0]!;
-    expect(approval).toEqual({
-      ownerId: "owner-desktop",
-      computerId,
-      generation: 4,
-      workspaces: [
-        {
-          workspaceId,
-          root,
-          access: "read",
-          rootIdentity: identity,
-        },
-      ],
-      excludedPaths: [{ workspaceId, path: `${root}/.env` }],
-      capabilities: [
-        "workspace.list",
-        "workspace.read",
-        "workspace.search",
-        "verification.run",
-      ],
-      network: "none",
-      commands: "verification",
-      expiresAt: until,
-    });
-    expect(admission).toEqual({
-      authorityId: "desktop-command-authority-4",
-      ownerId: "owner-desktop",
-      sessionId: "desktop-command-session",
-      taskId: "desktop-command-task",
-      taskEpoch: 4,
-      computerId,
-      computerGeneration: 4,
-      workspaces: [{ workspaceId, mode: "subtree", root, access: "read" }],
-      excludedPaths: [{ workspaceId, path: `${root}/.env` }],
-      capabilities: ["verification.run"],
-      network: "none",
-      commands: "verification",
-      expiresAt: until,
-    });
-    expect(s.ports.createParticipantAuthority).toHaveBeenCalledWith(
-      expect.objectContaining({ authorityId: "desktop-command-authority-4" }),
-      {
-        participantId: "desktop-command-main",
-        role: "main",
-        mutationOwnership: "none",
-      },
-    );
-  });
-
-  it("adds the write capability to the approval when any approved folder is writable", () => {
-    const s = build();
-    const value = settings("workspace", [
-      workspace(),
-      workspace({ workspaceId: writable, access: "write" }),
-    ]);
-    s.host.verificationWorkspaceAction(
-      value,
-      value.computer.workspaces[0]!,
-      future(),
-    );
-    const [approval, admission] = s.ports.deriveTaskGrant.mock.calls[0]!;
-    expect(approval.capabilities).toEqual([
-      "workspace.list",
-      "workspace.read",
-      "workspace.search",
-      "verification.run",
-      "workspace.write",
-    ]);
-    expect(approval.commands).toBe("workspace");
-    // The task itself is never wider than reading and verifying.
-    expect(admission.capabilities).toEqual(["verification.run"]);
-  });
-
-  it("carries a linked worktree's Git metadata into the approval", () => {
-    const s = build();
-    const gitMetadata = {
-      gitDirectory: "/work/project.git/worktrees/a",
-      commonDirectory: "/work/project.git",
-    };
-    const value = settings("verification", [workspace({ gitMetadata })]);
-    s.host.verificationWorkspaceAction(
-      value,
-      value.computer.workspaces[0]!,
-      future(),
-    );
-    expect(
-      s.ports.deriveTaskGrant.mock.calls[0]![0].workspaces[0],
-    ).toMatchObject({ gitMetadata });
-  });
-
-  it("has no action when the grant cannot be derived", () => {
-    const s = build();
-    const value = settings("verification", [workspace()]);
-    expect(
-      s.host.verificationWorkspaceAction(
-        value,
-        value.computer.workspaces[0]!,
-        Date.now() - 1,
-      ),
-    ).toBeNull();
-    expect(s.ports.createParticipantAuthority).not.toHaveBeenCalled();
-  });
-
-  it("has no action when the participant cannot be created", () => {
-    const s = build();
-    const failing = createReadonlyHost({
-      ...s.ports,
-      createParticipantAuthority: vi.fn(() => ({ ok: false as const })),
-    });
-    const value = settings("verification", [workspace()]);
-    expect(
-      failing.verificationWorkspaceAction(
-        value,
-        value.computer.workspaces[0]!,
-        future(),
-      ),
-    ).toBeNull();
-  });
-
-  it("runs the verification through the one native workspace, for the folder approved", async () => {
-    const s = build();
-    const value = settings("verification", [workspace()]);
-    const action = s.host.verificationWorkspaceAction(
-      value,
-      value.computer.workspaces[0]!,
-      future(),
-    );
-    const result = await action!.execute({
-      ownerId: "owner-desktop",
-      sessionId: "desktop-command-session",
-      taskId: "desktop-command-task",
-      taskEpoch: 4,
-      participantId: "desktop-command-main",
-      turnId: "turn",
-      generation: 4,
-      callId: "call",
-      workspaceId,
-      operation: {
-        kind: "verification.run",
-        command: "git.status",
-        relativePath: ".",
-      },
-    });
-    expect(s.workspaceRequests).toHaveLength(1);
-    expect(s.workspaceRequests[0]).toMatchObject({
-      workspace: {
-        workspaceId,
-        root,
-        deniedPaths: [".env"],
-        approvedRoot: { path: root, ...identity },
-      },
-      operation: { kind: "verification.run", command: "git.status" },
-    });
-    // The fake helper failed, and that failure is the action's own answer.
-    expect(result).toMatchObject({ ok: false });
-  });
-
-  it("refuses a folder the task was not admitted for", async () => {
-    const s = build();
-    const value = settings("verification", [workspace()]);
-    const action = s.host.verificationWorkspaceAction(
-      value,
-      value.computer.workspaces[0]!,
-      future(),
-    );
-    const result = await action!.execute({
-      ownerId: "owner-desktop",
-      sessionId: "desktop-command-session",
-      taskId: "desktop-command-task",
-      taskEpoch: 4,
-      participantId: "desktop-command-main",
-      turnId: "turn",
-      generation: 4,
-      callId: "call",
-      workspaceId: unknown,
-      operation: {
-        kind: "verification.run",
-        command: "git.head",
-        relativePath: ".",
-      },
-    });
-    expect(result).toMatchObject({
-      ok: false,
-      error: { code: "AUTHORITY_PATH_DENIED" },
-    });
-    expect(s.workspaceRequests).toHaveLength(0);
   });
 });

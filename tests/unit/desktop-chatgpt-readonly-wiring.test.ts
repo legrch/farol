@@ -57,48 +57,54 @@ describe("ChatGPT read-only host wiring in main", () => {
     expect(body).not.toContain("pendingChatGptAttachmentTask");
   });
 
-  it("shares the one WeakMap of confirmations by reference and never copies it", async () => {
-    const { source, body } = await factoryBody();
-    expect(body).toContain(" readonlyAccountConfirmations,");
-    expect(source).toMatch(
-      /\nconst readonlyAccountConfirmations = new WeakMap</,
-    );
-    // It is keyed by the pending task's identity, so exactly one is built.
-    expect(
-      flat(source).match(/new WeakMap< PendingChatGptReadonlyTask,/g),
-    ).toHaveLength(1);
-    expect(source.match(/const readonlyAccountConfirmations = /g)).toHaveLength(
-      1,
-    );
-    // The configuration ports are lent the same instance, by the same name.
-    expect(source).toContain("\n    readonlyAccountConfirmations,\n");
-    expect(source).not.toMatch(/new WeakMap\(\s*readonlyAccountConfirmations/);
-    expect(source).not.toMatch(/\.\.\.readonlyAccountConfirmations/);
-    // The discard memory is the host's alone: no second copy remains in main.
-    expect(source).not.toContain("readonlyDiscardAttempts");
-  });
-
-  it("shares each const owner, constructor and main helper by reference", async () => {
+  it("shares each WeakMap by reference, one instance of each, and never copies it", async () => {
     const { source, body } = await factoryBody();
     expect(body).toContain(
-      " discardPreparedChatGptTask, nativeWorkspace, deriveTaskGrant, createParticipantAuthority, InMemoryAuthorityRepository, InMemoryComputerApprovalRepository, RunReadonlyComputerAction, }",
+      " readonlyAccountConfirmations, readonlyDiscardAttempts,",
     );
-    expect(source).toMatch(
-      /\nconst nativeWorkspace = new NativeReadonlyWorkspace\(/,
-    );
+    // Each is keyed by the pending task's identity, so exactly one is built.
+    for (const name of [
+      "readonlyAccountConfirmations",
+      "readonlyDiscardAttempts",
+    ]) {
+      expect(
+        source.match(new RegExp(`\\nconst ${name} = new WeakMap<`, "g")),
+      ).toHaveLength(1);
+      expect(source.match(new RegExp(`${name} = `, "g"))).toHaveLength(1);
+      expect(source).not.toMatch(new RegExp(`new WeakMap\\(\\s*${name}`));
+      expect(source).not.toMatch(new RegExp(`\\.\\.\\.${name}`));
+    }
+    expect(
+      flat(source).match(/new WeakMap< PendingChatGptReadonlyTask,/g),
+    ).toHaveLength(2);
+    // The configuration ports are lent the same confirmations, by the same name.
+    expect(source).toContain("\n    readonlyAccountConfirmations,\n");
+    // Main only declares it and lends it: only the host reads or writes it.
+    expect(source.match(/readonlyDiscardAttempts/g)).toHaveLength(2);
+  });
+
+  it("shares the discard helper by reference and keeps the authority construction in main", async () => {
+    const { source, body } = await factoryBody();
+    expect(body).toContain(" discardPreparedChatGptTask, }");
     expect(source).toMatch(/\nfunction discardPreparedChatGptTask\(/);
-    // The authority constructors are still main's own imports, never a copy.
+    // The host holds no authority port: the read-only verification authority is
+    // still built in main, against the real authority types.
+    for (const name of [
+      "nativeWorkspace",
+      "deriveTaskGrant",
+      "createParticipantAuthority",
+      "InMemoryAuthorityRepository",
+      "InMemoryComputerApprovalRepository",
+      "RunReadonlyComputerAction",
+    ])
+      expect(body).not.toContain(name);
     expect(source).toContain(
-      'import { RunReadonlyComputerAction } from "../../modules/computer/app/service/run-readonly-computer-action";',
+      "const approvalCapabilities: AuthorityCapability[] = [",
     );
+    expect(source).toContain("const approval: ComputerApproval = {");
+    expect(source).toContain("const admission: TaskAdmission = {");
     expect(source).toContain(
-      'import { InMemoryAuthorityRepository } from "../../modules/computer/infra/repo/in-memory-authorities";',
-    );
-    expect(source).toContain(
-      'import { InMemoryComputerApprovalRepository } from "../../modules/computer/infra/repo/in-memory-computer-approvals";',
-    );
-    expect(flat(source)).toContain(
-      'import { createParticipantAuthority, deriveTaskGrant, } from "../../modules/computer/domain/execution-authority";',
+      "const grant = deriveTaskGrant(approval, admission, Date.now());",
     );
     expect(source).toContain(
       'import { createReadonlyHost } from "../../../apps/desktop/chat/readonly";',
@@ -115,10 +121,6 @@ describe("ChatGPT read-only host wiring in main", () => {
       [
         "function chatGptAttachmentTaskPreview( pending: PendingChatGptAttachmentTask, ): Readonly<Record<string, unknown>> {",
         "readonlyHost().chatGptAttachmentTaskPreview(pending)",
-      ],
-      [
-        "function verificationWorkspaceAction( settings: ProductSettings, workspace: ApprovedProductWorkspace, expiresAt: number, ): VerificationWorkspaceAction | null {",
-        "readonlyHost().verificationWorkspaceAction( settings, workspace, expiresAt, )",
       ],
       [
         "function withdrawGoReadonlyAdmission( admission: ChatComputerAdmissionResponse | undefined, ): Promise<boolean> {",
@@ -153,15 +155,7 @@ describe("ChatGPT read-only host wiring in main", () => {
     for (const fragment of [
       "chatgpt.readonly-task-preview",
       "chatgpt.attachment-task-preview",
-      'const ownerId = "owner-desktop";',
-      "desktop-command-session",
-      "desktop-command-task",
-      "desktop-command-main",
-      "desktop-command-authority-",
       "withdrawReadIntent",
-      "approvalCapabilities",
-      "identityBoundWorkspaces",
-      "deriveTaskGrant(approval",
       "MAX_CHATGPT_CONTEXT_CHARACTERS",
     ])
       expect(source).not.toContain(fragment);
