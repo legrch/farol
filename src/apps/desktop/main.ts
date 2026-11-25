@@ -121,6 +121,7 @@ import { createModelHost } from "../../../apps/desktop/runtime/model";
 import { createRuntimeStatus } from "../../../apps/desktop/runtime/status";
 import { createContextFixture } from "../../../apps/desktop/dev/fixture";
 import { createContextHost } from "../../../apps/desktop/task/context";
+import { startupEntry } from "../../../apps/desktop/shell/entry";
 import { createIpc } from "../../../apps/desktop/shell/ipc";
 import {
   createInstance,
@@ -213,7 +214,6 @@ import {
   type ProductSettings,
   type WorkspaceRootIdentity,
 } from "../../pkg/product-settings/contract";
-import { initialSetupPresentation } from "../../pkg/product-settings/setup-entry";
 import {
   compactBrowserSelected,
   embeddedBrowserSelected,
@@ -3578,17 +3578,15 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   const configured = configuration.snapshot();
   const initialSettings =
     configured.status === "ready" ? configured.settings : null;
-  const initialSetup = initialSetupPresentation({
+  const entry = startupEntry({
     environment: activeDesktopIdentity.environment,
     demoMode,
     legacySetupTestMode,
-    dismissed: initialSettings?.setup.journey.dismissed ?? false,
-    currentStep: initialSettings?.setup.journey.currentStep ?? "chatgpt",
-    openAtLaunch: initialSettings?.general.openAtLaunch ?? "home",
+    settings: initialSettings,
   });
-  section = initialSetup.section;
-  setupOpen = initialSetup.setupOpen;
-  if (initialSettings) sidebarMode = initialSettings.general.sidebarDefault;
+  section = entry.section;
+  setupOpen = entry.setupOpen;
+  if (entry.sidebarMode !== null) sidebarMode = entry.sidebarMode;
   if (startupDelayMs > 0) {
     startupStage("before-delay");
     await delay(startupDelayMs);
