@@ -111,7 +111,7 @@ declare const __FAROL_GO_SHELL__: {
   readonly support: unknown;
   readonly watchdogSourceBase64: string;
 } | null;
-import { createMenuBar, menuBarIconState } from "./menu-bar";
+import { createMenuBar } from "./menu-bar";
 import {
   aboutCommand,
   applicationMenu,
@@ -121,6 +121,8 @@ import { createModelHost } from "../../../apps/desktop/runtime/model";
 import { createRuntimeStatus } from "../../../apps/desktop/runtime/status";
 import { createContextFixture } from "../../../apps/desktop/dev/fixture";
 import { createContextHost } from "../../../apps/desktop/task/context";
+import { startupEntry } from "../../../apps/desktop/shell/entry";
+import { startMenuBar } from "../../../apps/desktop/shell/menubar";
 import { createIpc } from "../../../apps/desktop/shell/ipc";
 import {
   createInstance,
@@ -213,7 +215,6 @@ import {
   type ProductSettings,
   type WorkspaceRootIdentity,
 } from "../../pkg/product-settings/contract";
-import { initialSetupPresentation } from "../../pkg/product-settings/setup-entry";
 import {
   compactBrowserSelected,
   embeddedBrowserSelected,
@@ -3578,17 +3579,15 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   const configured = configuration.snapshot();
   const initialSettings =
     configured.status === "ready" ? configured.settings : null;
-  const initialSetup = initialSetupPresentation({
+  const entry = startupEntry({
     environment: activeDesktopIdentity.environment,
     demoMode,
     legacySetupTestMode,
-    dismissed: initialSettings?.setup.journey.dismissed ?? false,
-    currentStep: initialSettings?.setup.journey.currentStep ?? "chatgpt",
-    openAtLaunch: initialSettings?.general.openAtLaunch ?? "home",
+    settings: initialSettings,
   });
-  section = initialSetup.section;
-  setupOpen = initialSetup.setupOpen;
-  if (initialSettings) sidebarMode = initialSettings.general.sidebarDefault;
+  section = entry.section;
+  setupOpen = entry.setupOpen;
+  if (entry.sidebarMode !== null) sidebarMode = entry.sidebarMode;
   if (startupDelayMs > 0) {
     startupStage("before-delay");
     await delay(startupDelayMs);
@@ -3598,61 +3597,48 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   installApplicationMenu();
   // Hidden tests own no visible status item. Ordinary owner launch gets one.
   let disposeMenuBarOnQuit: (() => void) | null = null;
-  if (nativeMenuBarEnabled()) {
-    const disposeMenuBar = await runDesktopStartupBoundary("native-menu", () =>
-      createMenuBar(
-        {
-          open: () => {
-            void reopenWindow();
-          },
-          current: () => {
-            const task = productTasksState().tasks.find(
-              (item) => item.lifecycle === "running",
-            );
-            if (task) {
-              selectedTaskId = task.taskId;
-              section = "browser";
-              shellOverlay = "none";
-              applyLayout();
-              publishLayout();
-            }
-            void reopenWindow();
-          },
-          updates: () => {
-            requestUpdates();
-          },
-          quit: () => {
-            app.quit();
-          },
-        },
-        () => {
-          const status = currentConnectionStatus();
-          const capture = captureConnectionStatus();
-          const snapshot = configuration?.snapshot();
-          const attached =
-            status.state === "recent_transport" &&
-            capture?.kind === "running" &&
-            connectionStatusCurrent(capture) &&
-            snapshot?.status === "ready" &&
-            !desktopAdmission.occupied("workspace-mutation") &&
-            !connectorRuntimeUncertain(snapshot.settings) &&
-            snapshot.settings.computer.pendingEdit === null &&
-            !snapshot.settings.setup.computer.outcomeUnknown &&
-            currentConnectorAttachment(
-              snapshot.settings,
-              buildIdentity.buildId,
-            ) !== null;
-          return {
-            label: "Farol · " + status.label,
-            icon: menuBarIconState(status.state, attached),
-            current:
-              productTasksState().tasks.find(
-                (task) => task.lifecycle === "running",
-              )?.label ?? null,
-          };
-        },
-      ),
-    );
+  const disposeMenuBar = await startMenuBar({
+    enabled: nativeMenuBarEnabled(),
+    boundary: (create) => runDesktopStartupBoundary("native-menu", create),
+    create: createMenuBar,
+    reopen: () => {
+      void reopenWindow();
+    },
+    runningTask: () =>
+      productTasksState().tasks.find((item) => item.lifecycle === "running") ??
+      null,
+    showTask: (taskId) => {
+      selectedTaskId = taskId;
+      section = "browser";
+      shellOverlay = "none";
+      applyLayout();
+      publishLayout();
+    },
+    requestUpdates: () => {
+      requestUpdates();
+    },
+    quit: () => {
+      app.quit();
+    },
+    connection: currentConnectionStatus,
+    attached: (state) => {
+      const capture = captureConnectionStatus();
+      const snapshot = configuration?.snapshot();
+      return (
+        state === "recent_transport" &&
+        capture?.kind === "running" &&
+        connectionStatusCurrent(capture) &&
+        snapshot?.status === "ready" &&
+        !desktopAdmission.occupied("workspace-mutation") &&
+        !connectorRuntimeUncertain(snapshot.settings) &&
+        snapshot.settings.computer.pendingEdit === null &&
+        !snapshot.settings.setup.computer.outcomeUnknown &&
+        currentConnectorAttachment(snapshot.settings, buildIdentity.buildId) !==
+          null
+      );
+    },
+  });
+  if (disposeMenuBar) {
     disposeMenuBarOnQuit = disposeMenuBar;
     app.once("will-quit", disposeMenuBar);
   }
