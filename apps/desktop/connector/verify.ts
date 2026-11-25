@@ -32,7 +32,7 @@ import {
 import type { connectorSupervisor } from "./supervisor";
 
 // Verifying the ChatGPT app or connector attachment for the one Secure MCP
-// connector, and reporting a startup maintenance observation. Main keeps every
+// connector. Main keeps every
 // owner; each `let` there is a late getter here, read afresh after every await
 // at the same place the original read it. A check that is already attached is
 // handed to the connection check; a first verification reserves both task
