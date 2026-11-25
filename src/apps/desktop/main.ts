@@ -10,7 +10,10 @@ import { selectBootIdentity } from "../../../apps/desktop/host/identity";
 import { selectChatGptHome } from "../../../apps/desktop/chat/home";
 import { chatStartupProfile } from "../../../apps/desktop/chat/profile";
 import { cleanupAttachmentStaging } from "../../../apps/desktop/chat/staging";
-import { startModelEndpoint } from "../../../apps/desktop/runtime/endpoint";
+import {
+  createModelEndpoint,
+  startModelEndpoint,
+} from "../../../apps/desktop/runtime/endpoint";
 import { admissionLease } from "../../../apps/desktop/host/lease";
 import { createConfigurationService } from "../../../apps/desktop/configuration/service";
 import { UPDATE_IDLE_CHECK_MS } from "../../modules/release/app/installed-updater";
@@ -3426,7 +3429,7 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     process.env.FAROL_E2E === "1"
       ? process.env.FAROL_MODEL_E2E_SYNTHETIC_REPLY
       : undefined;
-  modelLifecycle = await startModelEndpoint({
+  modelLifecycle = createModelEndpoint({
     enabled: FAROL_MODEL_ENABLED,
     syntheticReply: modelSyntheticReply,
     stateRoot: statePaths().modelEndpoint,
@@ -3443,6 +3446,9 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         () => contextHost.routeB.get()?.endpoint ?? null,
       ),
   });
+  // Published to the owner above, before the start is awaited: a Quit during
+  // the start still sees and closes it.
+  if (modelLifecycle) await startModelEndpoint(modelLifecycle);
   try {
     const credential = await connectorCredentialStore.status();
     const snapshot = configuration.snapshot();

@@ -34,11 +34,11 @@ export type ModelEndpointPorts<
   routeBCompaction: () => FarolModelCompactionHandler;
 }>;
 
-export async function startModelEndpoint<
+export function createModelEndpoint<
   Lifecycle extends { start(): Promise<unknown> },
->(ports: ModelEndpointPorts<Lifecycle>): Promise<Lifecycle | null> {
+>(ports: ModelEndpointPorts<Lifecycle>): Lifecycle | null {
   if (!ports.enabled) return null;
-  const lifecycle = ports.createLifecycle({
+  return ports.createLifecycle({
     stateRoot: ports.stateRoot,
     model: ports.model,
     handler: ports.recordTurn(
@@ -48,10 +48,17 @@ export async function startModelEndpoint<
     ),
     compactionHandler: ports.recordCompaction(ports.routeBCompaction()),
   });
+}
+
+// Separate from the build so the caller can publish the lifecycle to its
+// owner before the start is awaited: a Quit during the start must still see
+// and close it.
+export async function startModelEndpoint(lifecycle: {
+  start(): Promise<unknown>;
+}): Promise<void> {
   try {
     await lifecycle.start();
   } catch {
     // Model failure does not abort unrelated app startup.
   }
-  return lifecycle;
 }
