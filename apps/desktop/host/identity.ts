@@ -14,8 +14,9 @@ import { resolvePhysicalDevDataDirectoryName } from "../../../src/apps/desktop/d
 // E2E) and where its data lives. It runs once, at import time, before any
 // profile read, instance lock or browser session, and it redirects Electron's
 // `home`, `userData` and `sessionData` paths itself, in the same order main did
-// inline. An invalid environment or profile ends startup through the existing
-// failure writer; nothing here retries or repairs a profile.
+// inline. An unknown build environment throws before any path is chosen; an
+// invalid profile or app-data selection ends startup through the existing
+// failure writer. Nothing here retries or repairs a profile.
 
 export type BootIdentityApp = Readonly<{
   getPath: (name: "appData" | "userData" | "sessionData") => string;
