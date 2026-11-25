@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { InstalledUpdateView } from "../../../src/modules/release/contract/installed-update";
-import { createUpdateDockAttention } from "./dock-attention";
+import { createUpdateDockAttention } from "./attention";
 
 const view = (phase: string, version = "1.2.3") =>
   ({ phase, version, deferred: false }) as unknown as InstalledUpdateView;

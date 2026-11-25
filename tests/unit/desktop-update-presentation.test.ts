@@ -42,11 +42,13 @@ async function publishers({
     return source.slice(begin, end).replace(signature, `function ${name}() {`);
   });
   const effects: string[] = [];
+  const checks: string[] = [];
   const publications: unknown[][] = [];
   let opening: Promise<void> | undefined;
   const context: Record<string, unknown> = {
     quitInProgress: quitting,
     installedUpdateAdmission: applying,
+    installedUpdates: { requestCheck: () => checks.push("check") },
     setupOpen: false,
     shellOverlay: "task-menu",
     sidebarMode: "overlay",
@@ -93,6 +95,7 @@ async function publishers({
   };
   return {
     effects,
+    checks,
     publications,
     context,
     async invoke(name: (typeof names)[number]) {
@@ -129,6 +132,16 @@ describe("native Quit and applying-update presentation ownership", () => {
     const host = await publishers();
     await host.invoke(name);
     expect(host.publications).toHaveLength(1);
+  });
+  it("asks for one explicit update check when Updates opens", async () => {
+    const host = await publishers();
+    await host.invoke("requestUpdates");
+    expect(host.checks).toEqual(["check"]);
+  });
+  it("does not check when Quit starts during window opening", async () => {
+    const host = await publishers({ quitWhileOpening: true });
+    await host.invoke("requestUpdates");
+    expect(host.checks).toEqual([]);
   });
   it("does not publish Updates when admission changes during window opening", async () => {
     const host = await publishers({ admitWhileOpening: true });

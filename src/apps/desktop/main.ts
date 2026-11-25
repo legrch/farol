@@ -3,7 +3,7 @@ import {
   createInstalledUpdateHost,
   withInstalledStartupFence,
 } from "../../../apps/desktop/update/host";
-import { createUpdateDockAttention } from "../../../apps/desktop/update/dock-attention";
+import { createUpdateDockAttention } from "../../../apps/desktop/update/attention";
 import { createStartup } from "../../../apps/desktop/host/startup";
 import { readLaunchArguments } from "../../../apps/desktop/host/launch";
 import { selectBootIdentity } from "../../../apps/desktop/host/identity";

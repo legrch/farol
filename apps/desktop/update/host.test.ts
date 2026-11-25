@@ -188,7 +188,7 @@ describe("installed update host", () => {
   it("offers each published view to the attention port", async () => {
     const f = fixture();
     const attention = vi.fn();
-    f.ports.attention = attention;
+    (f.ports as { attention?: typeof attention }).attention = attention;
     await f.host.initialize();
     const view = { phase: "available", version: "2", deferred: false };
     f.runtime().publish(view as unknown as InstalledUpdateView);
