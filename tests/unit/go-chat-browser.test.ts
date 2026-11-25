@@ -1896,8 +1896,11 @@ it.each(recorderCases)(
     expect(dispatched).toBe(1);
     const calls = adapter === "browser" ? 3 : 2; // Label + send + terminal, or label + operation.
     expect(fail).toHaveBeenCalledTimes(calls);
+    // A schema rejection from the sink is counted apart from a write failure.
+    const rejected = fault === "invalid-metadata";
     expect(operations.diagnostics()).toMatchObject({
-      writeFailures: calls,
+      writeFailures: rejected ? 0 : calls,
+      rejectedMetadata: rejected ? calls : 0,
       droppedEntries: calls - 1,
     });
     if (phase === "begin")
