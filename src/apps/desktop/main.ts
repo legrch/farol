@@ -83,6 +83,7 @@ import {
 } from "../../../apps/desktop/task/agent";
 import { createTaskCommands } from "../../../apps/desktop/task/command";
 import { createChatGptSession } from "../../../apps/desktop/chat/session";
+import { createReadonlyHost } from "../../../apps/desktop/chat/readonly";
 import { createPreviewRuntime } from "../../../apps/desktop/runtime/host";
 import { createTaskPersist } from "../../../apps/desktop/task/persist";
 import { createTaskRoutes } from "../../../apps/desktop/task/route";
@@ -282,7 +283,6 @@ import {
   CHATGPT_HOME,
   canonicalChatGptConversationUrl,
 } from "./chatgpt-page-policy";
-import { MAX_CHATGPT_CONTEXT_CHARACTERS } from "./chatgpt-readonly-task";
 import {
   ChatGptRoute,
   ChatGptSignInBlockLedger,
@@ -1204,22 +1204,7 @@ function codexAgentOperationActive(): boolean {
 function chatGptReadonlyTaskPreview(
   pending: PendingChatGptReadonlyTask,
 ): Readonly<Record<string, unknown>> {
-  const account = readonlyAccountConfirmations.get(pending)?.projection();
-  return {
-    kind: "chatgpt.readonly-task-preview",
-    sendAvailable: Boolean(pending.goAdmission && goChatStartupProfile),
-    operationId: pending.operationId,
-    workspaceId: pending.workspaceId,
-    workspaceLabel: pending.workspaceLabel,
-    relativePath: pending.relativePath,
-    bytes: pending.bytes,
-    contextCharacters: pending.contextCharacters,
-    contextLimit: MAX_CHATGPT_CONTEXT_CHARACTERS,
-    contextTruncated: pending.contextTruncated,
-    excludedPaths: pending.excludedPaths,
-    expiresAt: new Date(pending.expiresAt).toISOString(),
-    ...(account ? { account } : {}),
-  };
+  return readonlyHost().chatGptReadonlyTaskPreview(pending);
 }
 
 function readonlyAccountCurrent(
@@ -1258,18 +1243,7 @@ function readonlyAccountCurrent(
 function chatGptAttachmentTaskPreview(
   pending: PendingChatGptAttachmentTask,
 ): Readonly<Record<string, unknown>> {
-  return {
-    kind: "chatgpt.attachment-task-preview",
-    operationId: pending.operationId,
-    attachments: pending.attachments.attachments.map(
-      ({ stagedPath: _stagedPath, ...attachment }) => attachment,
-    ),
-    totalBytes: pending.attachments.attachments.reduce(
-      (total, attachment) => total + attachment.bytes,
-      0,
-    ),
-    expiresAt: new Date(pending.expiresAt).toISOString(),
-  };
+  return readonlyHost().chatGptAttachmentTaskPreview(pending);
 }
 
 function verificationWorkspaceAction(
@@ -2091,40 +2065,16 @@ function discardPreparedChatGptTask(operationId: string): Promise<boolean> {
   return chatGptSession().discardPrepared(operationId);
 }
 
-async function withdrawGoReadonlyAdmission(
+function withdrawGoReadonlyAdmission(
   admission: ChatComputerAdmissionResponse | undefined,
 ): Promise<boolean> {
-  if (!admission) return true;
-  if (!desktopGoCore) return false;
-  try {
-    await desktopGoCore.withdrawReadIntent(admission);
-    return true;
-  } catch {
-    return false;
-  }
+  return readonlyHost().withdrawGoReadonlyAdmission(admission);
 }
 
 function discardPreparedReadonlyTask(
   pending: PendingChatGptReadonlyTask,
 ): Promise<boolean> {
-  const previous = readonlyDiscardAttempts.get(pending);
-  if (previous) return previous;
-  // The selected Go owner confirms its own cancellation/ACK. Only a legacy
-  // preview owns a legacy journal entry; never create or clear a Go mirror.
-  // Retain either failure; UI repetition is not a retry.
-  const result = Promise.resolve().then(async () => {
-    if (!(await withdrawGoReadonlyAdmission(pending.goAdmission))) return false;
-    if (
-      pending.goAdmission === undefined &&
-      !(await discardPreparedChatGptTask(pending.operationId))
-    )
-      return false;
-    if (pendingChatGptReadonlyTask === pending)
-      pendingChatGptReadonlyTask = null;
-    return true;
-  });
-  readonlyDiscardAttempts.set(pending, result);
-  return result;
+  return readonlyHost().discardPreparedReadonlyTask(pending);
 }
 
 function selectedChatGptAttachmentPaths(): Promise<
@@ -2392,6 +2342,21 @@ function chatGptSession() {
 let chatGptSessionCache: ReturnType<
   typeof createChatGptSession<ProductConfigurationResult>
 > | null = null;
+
+function readonlyHost() {
+  return (readonlyHostCache ??= createReadonlyHost({
+    goChatStartupProfile: () => goChatStartupProfile,
+    desktopGoCore: () => desktopGoCore,
+    readonlyAccountConfirmations,
+    readonlyDiscardAttempts,
+    pendingChatGptReadonlyTask: () => pendingChatGptReadonlyTask,
+    setPendingChatGptReadonlyTask: (value) => {
+      pendingChatGptReadonlyTask = value;
+    },
+    discardPreparedChatGptTask,
+  }));
+}
+let readonlyHostCache: ReturnType<typeof createReadonlyHost> | null = null;
 
 function previewRuntime() {
   return (previewRuntimeCache ??= createPreviewRuntime<RuntimeReady>({
