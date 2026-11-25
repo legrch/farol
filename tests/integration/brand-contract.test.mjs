@@ -159,7 +159,8 @@ it("embeds exact approved native template pixels without expanding the package c
   expect(development?.sha256).not.toBe(standard?.sha256);
   expect(bundle?.source).toBe("sunrise-dock/farol-sunrise.icns");
 
-  const desktop = await fs.readFile("src/apps/desktop/main.ts", "utf8");
+  // The mark is chosen in the runtime status module, which main builds.
+  const desktop = await fs.readFile("apps/desktop/runtime/status.ts", "utf8");
   expect(desktop).toContain('activeDesktopIdentity.environment === "dev"');
   expect(desktop).toContain('"farol-dev-mark.png"');
   expect(desktop).toContain('"farol-mark.png"');

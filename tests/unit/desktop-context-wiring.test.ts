@@ -14,6 +14,11 @@ const mainSource = path.resolve(
   "../../src/apps/desktop/main.ts",
 );
 
+const fixtureSource = path.resolve(
+  import.meta.dirname,
+  "../../apps/desktop/dev/fixture.ts",
+);
+
 async function read(): Promise<{
   source: string;
   block: string;
@@ -187,8 +192,17 @@ describe("Route B and context host wiring in main", () => {
   });
 
   it("reads the controller for the E2E context fixture at the start of the call", async () => {
+    // The fixture moved to apps/desktop/dev/fixture.ts; main lends it the same
+    // owners by reference and the call still reads the cell at its start.
     const { flat } = await read();
+    const fixture = (await readFile(fixtureSource, "utf8")).replace(
+      /\s+/g,
+      " ",
+    );
     expect(flat).toContain(
+      " liveTaskRegistry, contextHost, contextBinding, contextModel, buildHostCompactionHandoff, }",
+    );
+    expect(fixture).toContain(
       'const task = liveTaskRegistry.get(taskId); const controller = contextHost.controller.get(); if (!task || task.provider !== "chatgpt" || !controller) { return { error: "CONTEXT_FIXTURE_UNAVAILABLE" }; } const binding = contextBinding(taskId);',
     );
   });

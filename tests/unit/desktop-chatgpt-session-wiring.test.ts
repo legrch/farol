@@ -12,6 +12,11 @@ const mainSource = path.resolve(
   "../../src/apps/desktop/main.ts",
 );
 
+const statusSource = path.resolve(
+  import.meta.dirname,
+  "../../apps/desktop/runtime/status.ts",
+);
+
 async function factoryBody(): Promise<{ source: string; body: string }> {
   const source = await readFile(mainSource, "utf8");
   const begin = source.indexOf("function chatGptSession() {");
@@ -127,11 +132,17 @@ describe("ChatGPT session wiring in main", () => {
         `${header}\n  return ${call};\n}\n`,
       );
     }
-    // The call sites that remain in main still reach them by the same names,
-    // and the configuration ports are still given the main wrappers.
-    expect(source).toContain(
+    // The bootstrap payload moved with the runtime status; it still reads the
+    // state through the main wrapper that is lent to it by its old name.
+    const status = await readFile(statusSource, "utf8");
+    expect(status).toContain(
       "chatgptConversationState: chatGptConversationState(),",
     );
+    expect(source.replace(/\s+/g, " ")).toContain(
+      " productTasksState, currentConnectionStatus, chatGptConversationState,",
+    );
+    // The call sites that remain in main still reach them by the same names,
+    // and the configuration ports are still given the main wrappers.
     expect(source).toContain(
       "chatGptJournalObservation(recoverableChatGptTask.result),",
     );

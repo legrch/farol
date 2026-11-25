@@ -124,6 +124,8 @@ import {
 } from "../../../apps/desktop/shell/menu";
 import { createBridge } from "../../../apps/desktop/runtime/bridge";
 import { createModelHost } from "../../../apps/desktop/runtime/model";
+import { createRuntimeStatus } from "../../../apps/desktop/runtime/status";
+import { createContextFixture } from "../../../apps/desktop/dev/fixture";
 import { createContextHost } from "../../../apps/desktop/task/context";
 import { createIpc } from "../../../apps/desktop/shell/ipc";
 import {
@@ -216,7 +218,6 @@ import {
   defaultNavigationShortcuts,
   type NavigationShortcuts,
 } from "../../pkg/ipc/navigation-shortcuts";
-import type { RuntimeStatus } from "../../pkg/ipc/runtime-status";
 import {
   ProductConfigurationCommandSchema,
   ProductConfigurationResultSchema,
@@ -1472,77 +1473,50 @@ function productTasksState() {
     : liveTaskRegistry.snapshot();
 }
 
+function runtimeStatus() {
+  return (runtimeStatusCache ??= createRuntimeStatus({
+    runtime: () => runtime,
+    runtimeState: () => runtimeState,
+    runtimeError: () => runtimeError,
+    window: () => window,
+    desktopGoCore: () => desktopGoCore,
+    configuration: () => configuration,
+    selectedTaskId: () => selectedTaskId,
+    chatGptRoute: () => chatGptRoute,
+    liveTaskRoutes,
+    recoverableChatGptTask: () => recoverableChatGptTask,
+    chatGptSignInOutcome: () => chatGptSignInOutcome,
+    chatGptSignInBlocked,
+    nativeImage,
+    fetch: (input, init) => fetch(input, init),
+    directory,
+    env: process.env,
+    versions: process.versions,
+    productName,
+    bundleId,
+    activeDesktopIdentity,
+    buildIdentity,
+    demoMode,
+    legacySetupTestMode,
+    compiledGoCore,
+    WORKSPACE_EDIT_ACK_HOLD_ENV,
+    WORKSPACE_EDIT_ACK_HOLD_INVALID,
+    e2eBudget,
+    productTasksState,
+    currentConnectionStatus,
+    chatGptConversationState,
+    productAgentCapabilityAvailable,
+    currentWindowState,
+  }));
+}
+let runtimeStatusCache: ReturnType<typeof createRuntimeStatus> | null = null;
+
 function runtimeBase(): string | null {
-  return runtime ? `http://127.0.0.1:${runtime.port}` : null;
+  return runtimeStatus().runtimeBase();
 }
 
 function bootstrap() {
-  const taskState = productTasksState();
-  return {
-    schema: 3,
-    chatHistoryContext: desktopGoCore?.historyContext ?? null,
-    productName,
-    bundleId,
-    environment: activeDesktopIdentity.environment,
-    displayName: activeDesktopIdentity.displayName,
-    displayEdition: activeDesktopIdentity.displayEdition,
-    applicationId: activeDesktopIdentity.applicationId,
-    build: buildIdentity,
-    demoMode,
-    legacySetupTestMode,
-    configuration: configuration?.snapshot() ?? {
-      status: "error",
-      error: "SETTINGS_READ_FAILED",
-    },
-    runtimeState,
-    independentSession: desktopGoCore?.limitedSession === true,
-    browserRouteState:
-      selectedTaskId === ""
-        ? { state: chatGptRoute?.loadState() ?? "loading" }
-        : undefined,
-    browserHistoryState: {
-      taskId: selectedTaskId,
-      back: false,
-      forward: false,
-      ...(selectedTaskId === ""
-        ? chatGptRoute
-        : liveTaskRoutes.get(selectedTaskId)
-      )?.navigationHistory(),
-    },
-    connectionStatus: currentConnectionStatus(),
-    runtimeError,
-    runtimeIdentity: runtime?.identity ?? null,
-    embeddedNode: runtime?.embeddedNode ?? null,
-    embeddedElectron: runtime?.embeddedElectron ?? process.versions.electron,
-    taskRevision: taskState.revision,
-    tasks: taskState.tasks,
-    selectedTaskId,
-    partition: activeDesktopIdentity.runtimePartition,
-    chatgptPartition: activeDesktopIdentity.chatGptPartition,
-    chatgptRecoveryPending: recoverableChatGptTask !== null,
-    chatgptConversationState: chatGptConversationState(),
-    updateChannel: buildIdentity.updateChannel,
-    nativeFilesystem: true,
-    nativeAgent: productAgentCapabilityAvailable(),
-    // The fixed Git verifiers exist only in the explicit legacy build.
-    gitVerificationAvailable: compiledGoCore === null,
-    liveProvider: false,
-    windowState: currentWindowState(),
-    chatgptSignInBlocked: chatGptSignInBlocked.current(),
-    chatgptSignInOutcome: chatGptSignInOutcome,
-    // The renderer cannot read this process's environment, and one E2E
-    // scenario needs it to: the acknowledgement of a guarded edit is sent
-    // from the renderer, so only the renderer can fail to send it. This is
-    // the one number that seam needs, under the same double gate as the
-    // reply fault, and it is null in every production build because the
-    // lane variable is unset. It carries no authority and names nothing
-    // else. See configuration-reply-fault.ts for the family.
-    e2eWorkspaceEditAckHold: e2eBudget(
-      process.env,
-      WORKSPACE_EDIT_ACK_HOLD_ENV,
-      WORKSPACE_EDIT_ACK_HOLD_INVALID,
-    ),
-  };
+  return runtimeStatus().bootstrap();
 }
 
 function publishTasksState(): void {
@@ -3475,33 +3449,12 @@ async function configureAdmittedProduct(
   return configurationFailure("SETTINGS_INPUT_INVALID");
 }
 
-function currentRuntimeStatus(): RuntimeStatus {
-  return {
-    state: runtimeState,
-    error: runtimeError,
-    identity: runtime?.identity ?? null,
-    embeddedNode: runtime?.embeddedNode ?? null,
-    embeddedElectron: runtime?.embeddedElectron ?? process.versions.electron,
-  };
-}
-
 function publishRuntimeStatus(): void {
-  window?.webContents.send(channels.runtimeState, currentRuntimeStatus());
+  runtimeStatus().publishRuntimeStatus();
 }
 
 function desktopBrandImage() {
-  const icon = nativeImage.createFromPath(
-    path.join(
-      directory,
-      activeDesktopIdentity.environment === "dev"
-        ? "farol-dev-mark.png"
-        : activeDesktopIdentity.environment === "owner-preview"
-          ? "farol-preview-mark.png"
-          : "farol-mark.png",
-    ),
-  );
-  if (icon.isEmpty()) throw new Error("DESKTOP_BRAND_IMAGE_INVALID");
-  return icon;
+  return runtimeStatus().desktopBrandImage();
 }
 
 const requestAbout = aboutCommand({
@@ -3566,154 +3519,32 @@ function startRuntime(): Promise<void> {
   return previewRuntime().start();
 }
 
-async function runtimeJson(
+function runtimeJson(
   pathname: string,
   method = "GET",
   body?: unknown,
 ): Promise<unknown> {
-  if (!runtime) return { error: "RUNTIME_OFFLINE" };
-  const options: RequestInit = {
-    method,
-    headers: {
-      authorization: `Bearer ${runtime.token}`,
-      ...(body === undefined ? {} : { "content-type": "application/json" }),
-    },
-  };
-  if (body !== undefined) options.body = JSON.stringify(body);
-  const response = await fetch(
-    `http://127.0.0.1:${runtime.port}${pathname}`,
-    options,
-  );
-  if (response.status === 204) return { ok: true };
-  const value = (await response.json()) as unknown;
-  return response.ok ? value : { ok: false, status: response.status, value };
+  return runtimeStatus().runtimeJson(pathname, method, body);
 }
 
-function contextFixtureHistory(epoch: number): readonly unknown[] {
-  return [
-    {
-      type: "message",
-      role: "user",
-      content: [
-        {
-          type: "input_text",
-          text: "Keep every change local until owner review.",
-        },
-      ],
-    },
-    {
-      type: "function_call_output",
-      call_id: `context-receipt-${epoch}`,
-      output: `receipt-context-epoch-${epoch}`,
-    },
-    {
-      type: "function_call_output",
-      call_id: `context-unknown-${epoch}`,
-      output: "outcome_unknown",
-    },
-    {
-      type: "message",
-      role: "user",
-      content: [
-        {
-          type: "input_text",
-          text: "Use report-v2.md; report-v1.md is obsolete. Never publish, push, sign, or release.",
-        },
-      ],
-    },
-  ];
+function contextFixture() {
+  return (contextFixtureCache ??= createContextFixture({
+    env: process.env,
+    demoMode,
+    liveTaskRegistry,
+    contextHost,
+    contextBinding,
+    contextModel,
+    buildHostCompactionHandoff,
+  }));
 }
+let contextFixtureCache: ReturnType<typeof createContextFixture> | null = null;
 
-async function runContextFixtureControl(
+function runContextFixtureControl(
   taskId: string,
   action: "compact-context-fixture" | "confirm-context-fixture",
 ): Promise<unknown> {
-  if (process.env.FAROL_E2E !== "1" || demoMode) {
-    return { error: "IPC_CONTROL_INVALID" };
-  }
-  const task = liveTaskRegistry.get(taskId);
-  const controller = contextHost.controller.get();
-  if (!task || task.provider !== "chatgpt" || !controller) {
-    return { error: "CONTEXT_FIXTURE_UNAVAILABLE" };
-  }
-  const binding = contextBinding(taskId);
-  if (action === "compact-context-fixture") {
-    const epoch = task.context?.phase === "active" ? task.context.epoch : 1;
-    const compacted = await controller.continuity.compact({
-      endpoint: "responses_compact",
-      body: {
-        model: contextModel,
-        input: contextFixtureHistory(epoch),
-      },
-      metadataHeader: JSON.stringify({
-        thread_id: taskId,
-        turn_id: `${task.turnId}-context-compact-${epoch}`,
-      }),
-    });
-    return compacted.ok
-      ? {
-          ok: true,
-          phase: liveTaskRegistry.get(taskId)?.context?.phase ?? null,
-        }
-      : { error: compacted.error.code };
-  }
-
-  const session = await controller.store.load(binding);
-  const operation = session?.operation;
-  if (
-    !session ||
-    session.phase !== "handoff_offered" ||
-    !operation?.checkpointId
-  ) {
-    return { error: "CONTEXT_FIXTURE_CONFIRMATION_UNAVAILABLE" };
-  }
-  const [checkpoint, source] = await Promise.all([
-    controller.store.get(binding, operation.checkpointId),
-    controller.store.getSource(binding, operation.operationId),
-  ]);
-  if (!checkpoint || !source) {
-    return { error: "CONTEXT_FIXTURE_CONFIRMATION_UNAVAILABLE" };
-  }
-  const handoff = buildHostCompactionHandoff(
-    {
-      variant: source.variant,
-      identity: {
-        threadId: taskId,
-        turnId: `${task.turnId}-context-compact-${session.epoch}`,
-        modelId: contextModel,
-      },
-      sourceBoundary: source.sourceBoundary,
-      history: source.history,
-    },
-    checkpoint,
-    {
-      maximumCheckpointContentBytes: 256 * 1_024,
-      retainedTailMaximumBytes: 64 * 1_024,
-      maximumHandoffBytes: 128 * 1_024,
-    },
-  );
-  if (!handoff.ok) return { error: handoff.error.code };
-  const input =
-    handoff.value.variant === "unary_replacement_history"
-      ? handoff.value.response.output
-      : [handoff.value.item];
-  const confirmed = await controller.continuity.prepareTurn({
-    body: {
-      model: contextModel,
-      input,
-      client_metadata: {
-        session_id: taskId,
-        thread_id: taskId,
-        turn_id: `${task.turnId}-context-confirm-${session.epoch}`,
-      },
-    },
-  });
-  return confirmed.ok
-    ? {
-        ok: true,
-        phase: liveTaskRegistry.get(taskId)?.context?.phase ?? null,
-      }
-    : { error: confirmed.error.code };
+  return contextFixture().runContextFixtureControl(taskId, action);
 }
 
 function installIpc(): void {
