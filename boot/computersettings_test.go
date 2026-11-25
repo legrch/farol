@@ -33,8 +33,9 @@ func (s *settingsStoreFixture) WithOwnerApproval(ctx context.Context, inspect fu
 }
 
 type settingsNativeFixture struct {
-	calls int
-	after func()
+	calls    int
+	writable bool
+	after    func()
 }
 
 func (*settingsNativeFixture) Read(context.Context, port.ReadRequest) (*port.ReadResponse, error) {
@@ -53,7 +54,7 @@ func (n *settingsNativeFixture) Inspect(_ context.Context, request port.ListRequ
 	if n.after != nil {
 		n.after()
 	}
-	return &port.DirectoryBinding{Root: request.Workspace.Root, ApprovedRoot: request.Workspace.ApprovedRoot, RelativePath: request.RelativePath, Physical: testWitness, ApprovedPhysical: testWitness}, nil
+	return &port.DirectoryBinding{Root: request.Workspace.Root, ApprovedRoot: request.Workspace.ApprovedRoot, RelativePath: request.RelativePath, Physical: testWitness, ApprovedPhysical: testWitness, WritableByOthers: n.writable}, nil
 }
 
 func settingsFixture(t *testing.T) (*ComputerIngress, *settingsStoreFixture, *settingsNativeFixture, wire.ComputerSettingsListRequest) {
@@ -263,6 +264,26 @@ func TestSettingsInspectUsesPublishedOwnerWithoutChatAdmission(t *testing.T) {
 	}
 	if root.chat != nil || store.admits != 0 || len(root.tasks) != 0 || len(root.turns) != 0 || store.revision != 5 || root.readFacade != nil {
 		t.Fatal("Settings fabricated Chat/Task membership or changed authority")
+	}
+}
+
+func TestSettingsInspectReportsWritableByOthersOnlyWhenTrue(t *testing.T) {
+	for _, writable := range []bool{false, true} {
+		root, _, native, request := settingsFixture(t)
+		native.writable = writable
+		root.guard.active = true
+		body, _ := json.Marshal(request)
+		out, err := root.Methods()["computer.settings.inspect"].Handle(context.Background(), desktop.Request{RequestID: "request", Body: body})
+		if err != nil || out == nil || out.Status != "ok" || wire.Validate("ComputerSettingsInspectResponse", out.Data) != nil {
+			t.Fatalf("inspect: %+v %v", out, err)
+		}
+		var result wire.ComputerSettingsInspectResponse
+		if err := json.Unmarshal(out.Data, &result); err != nil {
+			t.Fatal(err)
+		}
+		if writable != (result.WritableByOthers != nil && *result.WritableByOthers) || (!writable && result.WritableByOthers != nil) || strings.Contains(string(out.Data), "writableByOthers") == !writable {
+			t.Fatalf("writable=%v data=%s", writable, out.Data)
+		}
 	}
 }
 
