@@ -2429,13 +2429,7 @@
       "code": "GO_BOOT_LOGIC",
       "file": "boot/selftestworkspace.go",
       "detail": "conditions other than err != nil",
-      "amount": 22
-    },
-    {
-      "code": "GO_BOOT_LOGIC",
-      "file": "boot/selftestworkspace.go",
-      "detail": "for statements",
-      "amount": 1
+      "amount": 20
     },
     {
       "code": "GO_BOOT_LOGIC",
@@ -8097,11 +8091,6 @@
       "code": "GO_TEST_MISSING",
       "file": "modules/computer/app/services/workspace/read.go",
       "detail": "Behavior without read_test.go"
-    },
-    {
-      "code": "GO_TEST_MISSING",
-      "file": "modules/computer/contracts/browse/inspect.go",
-      "detail": "Behavior without inspect_test.go"
     },
     {
       "code": "GO_TEST_MISSING",
