@@ -68,9 +68,6 @@ export type ConnectorVerifyPorts = Readonly<{
   >;
   buildIdentity: Readonly<{ buildId: string }>;
   runtimeEnvironment: string;
-  env: Readonly<Record<string, string | undefined>>;
-  pid: number;
-  writeStderr: (text: string) => void;
   randomUUID: () => string;
   statePaths: () => Readonly<{ secureMcpLaunch: string }>;
   configurationFailure: (
