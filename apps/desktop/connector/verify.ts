@@ -24,7 +24,6 @@ import { separateAppVerificationScopeCurrent } from "../../../src/pkg/product-se
 import type { prepareConnectorCheckDocument } from "../bridge/connector-check-readiness";
 import type { DesktopGoCore } from "../go-core-host";
 import type { DesktopAdmission } from "../host/admission";
-import type { MaintenanceObservation } from "../recovery/diagnostics";
 import {
   connectorAppBindingCurrent,
   type ConnectorAppVerificationBinding,
@@ -108,9 +107,6 @@ export function createConnectorVerify(ports: ConnectorVerifyPorts) {
     desktopAdmission,
     buildIdentity,
     runtimeEnvironment,
-    env,
-    pid,
-    writeStderr,
     randomUUID,
     statePaths,
     configurationFailure,
@@ -127,26 +123,6 @@ export function createConnectorVerify(ports: ConnectorVerifyPorts) {
     prepareConnectorCheckDocument,
     waitForConnectorAppReceipt,
   } = ports;
-
-  function reportMaintenanceObservation(
-    observation: MaintenanceObservation,
-  ): void {
-    if (runtimeEnvironment !== "dev" && env.FAROL_E2E !== "1") return;
-    try {
-      writeStderr(
-        "FAROL_STARTUP_MAINTENANCE:" +
-          JSON.stringify({
-            schema: 1,
-            buildId: buildIdentity.buildId,
-            pid,
-            ...observation,
-          }) +
-          "\n",
-      );
-    } catch {
-      /* Diagnostics never grant recovery or retry. */
-    }
-  }
 
   // Bootstrap and separate-app recovery retain their existing challenge workflow.
   // Already-attached Setup checks use the same Go owner as the explicit toolbar.
@@ -617,5 +593,5 @@ export function createConnectorVerify(ports: ConnectorVerifyPorts) {
       expectedBinding,
     );
   }
-  return { reportMaintenanceObservation, verifySecureMcpApp };
+  return { verifySecureMcpApp };
 }
