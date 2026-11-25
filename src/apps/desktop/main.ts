@@ -125,10 +125,8 @@ import { createContextHost } from "../../../apps/desktop/task/context";
 import { startupEntry } from "../../../apps/desktop/shell/entry";
 import { startMenuBar } from "../../../apps/desktop/shell/menubar";
 import { createIpc } from "../../../apps/desktop/shell/ipc";
-import {
-  createInstance,
-  secondInstanceResultPrefix,
-} from "../../../apps/desktop/host/instance";
+import { createInstance } from "../../../apps/desktop/host/instance";
+import { runPrimaryStartup } from "../../../apps/desktop/host/primary";
 import { surfaceNavigation } from "../../../apps/desktop/shell/navigation";
 import { promises as rawFs } from "original-fs";
 import {
@@ -239,7 +237,6 @@ import {
 } from "./single-instance";
 import {
   PrimaryStartup,
-  devReopenPrimaryRefused,
   emitStartupStage,
   type StartupStage,
 } from "./primary-startup";
@@ -436,11 +433,7 @@ import {
   desktopCodexConfigPath,
   isolatedDevMcpProofAllowed,
 } from "./desktop-environment";
-import {
-  runDesktopStartupBoundary,
-  startupNoticeAllowed,
-  terminateDesktopStartup,
-} from "./desktop-startup-failure";
+import { runDesktopStartupBoundary } from "./desktop-startup-failure";
 import { observeRendererLifecycle } from "../../../apps/desktop/renderer-lifecycle-observation";
 
 guardDiagnosticPipes([process.stdout, process.stderr]);
@@ -3115,10 +3108,6 @@ function instance() {
 }
 let instanceCache: ReturnType<typeof createInstance> | null = null;
 
-function isPrimaryReady(): boolean {
-  return instance().isPrimaryReady();
-}
-
 function stopRuntime(): void {
   runtimeStopping = true;
   stopStreams();
@@ -3885,64 +3874,27 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
 }
 
 const primaryInstanceLock = app.requestSingleInstanceLock(instanceRequest);
-startupStage(primaryInstanceLock ? "lock-primary" : "lock-secondary");
-if (
-  devReopenPrimaryRefused(runtimeEnvironment, process.argv, primaryInstanceLock)
-) {
-  instance().refuseDevReopen();
-} else if (!primaryInstanceLock) {
-  instance().settleSecondInstance();
-} else {
-  const quitSignals = createGracefulQuitSignals({
-    signals: process,
-    requestQuit: () => app.quit(),
-    isQuitting: () => desktopAdmission.quitInProgress,
-    observe: (signal, ignored) =>
-      quitTrace?.record({ stage: "signal", signal, ignored }),
-  });
-  const initialization = main(quitSignals);
-  const readiness = initialization.then(() => {
-    if (!isPrimaryReady()) throw new Error("PRIMARY_STARTUP_INCOMPLETE");
-  });
-  primaryStartup.begin(readiness);
-  void initialization
-    .then(() => {
-      if (isPrimaryReady()) {
-        try {
-          publishManualInstallStartupProof(
-            process.argv,
-            buildIdentity,
-            process.pid,
-          );
-        } catch {
-          process.stderr.write("INSTALL_STARTUP_PROOF_UNCONFIRMED\n");
-        }
-      }
-      closeStartupSplash();
-      startupStage("startup-complete");
-      process.stderr.write(
-        `${secondInstanceResultPrefix}${isPrimaryReady() ? "primary-started" : "reopen-failed"}\n`,
-      );
-    })
-    .catch(async (error: unknown) => {
-      closeStartupSplash();
-      try {
-        await desktopGoCore?.abortStartup();
-      } catch {
-        error = new Error("GO_CORE_STARTUP_CLEANUP_UNCONFIRMED");
-      }
-      terminateDesktopStartup(error, runtimeEnvironment, {
-        write: (message) => process.stderr.write(message),
-        exit: (code) => app.exit(code),
-        // A recipient who just opened the app sees nothing else: this is the
-        // only window-less surface Electron allows before ready. It is modal,
-        // so a non-interactive launch never gets it and exits at once.
-        ...(startupNoticeAllowed(process.env)
-          ? {
-              notify: (title: string, message: string) =>
-                dialog.showErrorBox(title, message),
-            }
-          : {}),
-      });
-    });
-}
+runPrimaryStartup({
+  primaryInstanceLock,
+  runtimeEnvironment,
+  process,
+  app,
+  dialog,
+  startupStage,
+  instance,
+  initialize: () =>
+    main(
+      createGracefulQuitSignals({
+        signals: process,
+        requestQuit: () => app.quit(),
+        isQuitting: () => desktopAdmission.quitInProgress,
+        observe: (signal, ignored) =>
+          quitTrace?.record({ stage: "signal", signal, ignored }),
+      }),
+    ),
+  primaryStartup,
+  publishInstallProof: () =>
+    publishManualInstallStartupProof(process.argv, buildIdentity, process.pid),
+  closeStartupSplash,
+  desktopGoCore: () => desktopGoCore,
+});
