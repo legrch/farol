@@ -75,6 +75,10 @@ import {
   temporaryInstantProfileSchema,
 } from "../../../apps/desktop/chat/probe";
 import {
+  ACTIVITY_PROBE_DEADLINE_MS,
+  createActivityWatch,
+} from "../../../apps/desktop/chat/activity";
+import {
   appBindingFailureCode,
   createRoutePermissions,
   hostOf,
@@ -124,8 +128,6 @@ export {
   type ChatGptSignInOutcomeDiagnostic,
 } from "../../../apps/desktop/chat/signin";
 
-// How long one page activity probe may take before activity is unknown.
-const ACTIVITY_PROBE_DEADLINE_MS = 2_000;
 const ROUTE_OPEN_DEADLINE_MS = 30_000;
 const READINESS_OBSERVATION_MS = 2_000;
 
@@ -473,11 +475,34 @@ export class ChatGptRoute {
   private opening: Promise<ChatGptOpenResult> | null = null;
   private entryUrl: string;
   private displayTitle: string;
-  private activityTimer: ReturnType<typeof setInterval> | null = null;
-  private activityPollInFlight = false;
-  private activityProbeStale = false;
-  private activityGeneration = 0;
-  private observedTaskRunning: boolean | null = null;
+  // The task-activity poll and what it last observed live in the watch; every
+  // callback reads the route's state when it runs, not when it is built.
+  private readonly activity = createActivityWatch<WebContents>({
+    timers: {
+      every: (callback, ms) => {
+        const timer = setInterval(callback, ms);
+        timer.unref?.();
+        return () => clearInterval(timer);
+      },
+      after: (callback, ms) => {
+        const timer = setTimeout(callback, ms);
+        timer.unref?.();
+        return () => clearTimeout(timer);
+      },
+    },
+    page: {
+      isDestroyed: (contents) => contents.isDestroyed(),
+      probe: (contents) => contents.executeJavaScript(activityProbe, true),
+    },
+    route: {
+      updateAdmitted: () => this.updateAdmission,
+      loaded: () => this.load === "loaded",
+    },
+    report: {
+      activity: (state) => this.options.onTaskActivityChanged?.(state),
+      conversation: (contents) => this.reportConversationUrl(contents),
+    },
+  });
   private updateAdmission = false;
   private signInMode = false;
   private signInAttempt = 0;
@@ -545,7 +570,7 @@ export class ChatGptRoute {
     const surface = this.routeWindow;
     const popups = [...this.popupWindows];
     try {
-      this.stopTaskActivityWatch();
+      this.activity.stop();
       if (surface && !surface.isDestroyed()) {
         this.entryUrl =
           this.captureConversationUrl(surface.webContents) ?? this.entryUrl;
@@ -1430,8 +1455,8 @@ export class ChatGptRoute {
       closingConversationUrl = this.captureConversationUrl(
         candidate.webContents,
       );
-      closingTaskRunning = this.observedTaskRunning === true;
-      this.stopTaskActivityWatch();
+      closingTaskRunning = this.activity.running() === true;
+      this.activity.stop();
       // The page is still alive here (this fires before teardown); a
       // `destroy()` skips it entirely, which is exactly why
       // `requestSignInReturn` prefers a real `close()`. Reading it now is
@@ -1444,7 +1469,7 @@ export class ChatGptRoute {
       }
     });
     candidate.onClosed(() => {
-      this.stopTaskActivityWatch();
+      this.activity.stop();
       const ownsRoute = this.routeWindow === candidate;
       if (ownsRoute) this.routeWindow = null;
       if (ownsRoute && this.signInMode) {
@@ -2773,7 +2798,7 @@ export class ChatGptRoute {
           outputText: observedText,
         };
       }
-      this.recordTaskActivity(activity.data.running);
+      this.activity.record(activity.data.running);
       if (activity.data.running) {
         return {
           state: "failed_before_submit",
@@ -3794,7 +3819,7 @@ export class ChatGptRoute {
       return "not_running";
     }
     try {
-      const wasObservedRunning = this.observedTaskRunning === true;
+      const wasObservedRunning = this.activity.running() === true;
       const activationAttempts = wasObservedRunning ? 5 : 1;
       let stopActivated = false;
       for (let attempt = 0; attempt < activationAttempts; attempt += 1) {
@@ -3819,9 +3844,9 @@ export class ChatGptRoute {
         if (!observed.success) return "outcome_unknown";
         if (!observed.data.running) {
           if (this.options.onTaskActivityChanged) {
-            this.startTaskActivityWatch(candidate.webContents);
+            this.activity.start(candidate.webContents);
           }
-          this.recordTaskActivity(false);
+          this.activity.record(false);
           return "cancelled";
         }
       }
@@ -3866,7 +3891,7 @@ export class ChatGptRoute {
   resetConversation(): void {
     this.entryUrl = this.options.homeUrl;
     this.disposing = true;
-    this.stopTaskActivityWatch();
+    this.activity.stop();
     for (const popup of this.popupWindows) {
       if (!popup.isDestroyed()) popup.destroy();
     }
@@ -4439,7 +4464,7 @@ export class ChatGptRoute {
 
   dispose(): void {
     this.disposing = true;
-    this.stopTaskActivityWatch();
+    this.activity.stop();
     for (const popup of this.popupWindows) {
       if (!popup.isDestroyed()) popup.destroy();
     }
@@ -4737,7 +4762,7 @@ export class ChatGptRoute {
           this.reportConversationUrl(contents);
           this.routeWindow?.reveal();
           if (this.options.onTaskActivityChanged) {
-            this.startTaskActivityWatch(contents);
+            this.activity.start(contents);
           }
           if (
             this.signInMode &&
@@ -4782,10 +4807,10 @@ export class ChatGptRoute {
       });
       contents.on("render-process-gone", () => {
         if (!this.ownsRouteContents(contents)) return;
-        if (this.observedTaskRunning === true) {
+        if (this.activity.running() === true) {
           this.options.onTaskActivityChanged?.("outcome_unknown");
         }
-        this.stopTaskActivityWatch();
+        this.activity.stop();
         this.chatPhysicalDocumentGeneration += 1;
         this.routeDocumentGeneration += 1;
         this.load = "failed";
@@ -5046,90 +5071,9 @@ export class ChatGptRoute {
     if (!this.ownsRouteContents(contents)) return;
     this.load = "failed";
     this.options.onLoadStateChanged?.("failed");
-    this.stopTaskActivityWatch();
+    this.activity.stop();
     const candidate = this.routeWindow;
     if (candidate && !candidate.isDestroyed()) candidate.destroy();
-  }
-
-  private startTaskActivityWatch(contents: WebContents): void {
-    this.stopTaskActivityWatch();
-    const generation = this.activityGeneration;
-    const poll = () => void this.pollTaskActivity(contents, generation);
-    poll();
-    this.activityTimer = setInterval(poll, 250);
-    this.activityTimer.unref?.();
-  }
-
-  private stopTaskActivityWatch(): void {
-    this.activityGeneration += 1;
-    if (this.activityTimer) clearInterval(this.activityTimer);
-    this.activityTimer = null;
-    this.activityPollInFlight = false;
-    this.activityProbeStale = false;
-    this.observedTaskRunning = null;
-  }
-
-  private async pollTaskActivity(
-    contents: WebContents,
-    generation: number,
-  ): Promise<void> {
-    if (
-      this.updateAdmission ||
-      generation !== this.activityGeneration ||
-      this.activityPollInFlight ||
-      contents.isDestroyed() ||
-      this.load !== "loaded"
-    ) {
-      return;
-    }
-    this.activityPollInFlight = true;
-    // A probe that never settles must not silence the watcher: past its
-    // deadline the task's activity is reported unknown once, no further
-    // probe starts while this one hangs, and its late answer is discarded.
-    // When it finally settles, the next poll measures afresh.
-    let late = false;
-    const deadline = setTimeout(() => {
-      if (generation !== this.activityGeneration || this.updateAdmission)
-        return;
-      late = true;
-      if (!this.activityProbeStale) {
-        this.activityProbeStale = true;
-        this.observedTaskRunning = null;
-        this.options.onTaskActivityChanged?.("outcome_unknown");
-      }
-    }, ACTIVITY_PROBE_DEADLINE_MS);
-    deadline.unref?.();
-    try {
-      const observed = activityProbeSchema.safeParse(
-        await contents.executeJavaScript(activityProbe, true),
-      );
-      if (
-        !late &&
-        !this.updateAdmission &&
-        generation === this.activityGeneration &&
-        !contents.isDestroyed() &&
-        this.load === "loaded" &&
-        observed.success
-      ) {
-        this.activityProbeStale = false;
-        this.reportConversationUrl(contents);
-        this.recordTaskActivity(observed.data.running);
-      }
-    } catch {
-      // A navigation can invalidate an in-flight probe. Navigation lifecycle
-      // events own readiness and the next bounded poll remeasures activity.
-    } finally {
-      clearTimeout(deadline);
-      if (generation === this.activityGeneration) {
-        this.activityPollInFlight = false;
-      }
-    }
-  }
-
-  private recordTaskActivity(running: boolean): void {
-    if (this.observedTaskRunning === running) return;
-    this.observedTaskRunning = running;
-    this.options.onTaskActivityChanged?.(running ? "running" : "idle");
   }
 
   private remoteWebPreferences(): Electron.WebPreferences {
