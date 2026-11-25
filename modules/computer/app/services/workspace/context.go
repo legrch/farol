@@ -37,22 +37,26 @@ type ContextResponse struct {
 }
 
 func (s *Service) Context(ctx context.Context, request ContextRequest) (*ContextResponse, error) {
-	return s.directoryContext(ctx, request, false, false)
+	return s.directoryContext(ctx, request, contextOptions{})
 }
 
 // Inspect checks directory access without enumerating children. It retains the
 // same execution lease, descriptor binding and disclosure policy as Context.
 func (s *Service) Inspect(ctx context.Context, request ContextRequest) (*ContextResponse, error) {
-	return s.directoryContext(ctx, request, true, false)
+	return s.directoryContext(ctx, request, contextOptions{inspectOnly: true})
 }
+
+// contextOptions selects how directoryContext observes the directory and how
+// much native failure detail it keeps.
+type contextOptions struct{ inspectOnly, keepDiagnostic bool }
 
 // directoryContext keeps native failures coarse unless the caller is the
 // catalogue, which discloses a refusal beside usable entries and therefore also
 // retains the allowlisted path-free stage/reason pair. The catalogue's final
 // discovery disclosure rechecks authority before anything is published.
-func (s *Service) directoryContext(ctx context.Context, request ContextRequest, inspectOnly, keepDiagnostic bool) (*ContextResponse, error) {
+func (s *Service) directoryContext(ctx context.Context, request ContextRequest, opts contextOptions) (*ContextResponse, error) {
 	classify := nativeFailure
-	if keepDiagnostic {
+	if opts.keepDiagnostic {
 		classify = nativeReadFailure
 	}
 	caller := caller{identity: authority.Identity{OwnerID: request.OwnerID, SessionID: request.SessionID, TaskID: request.TaskID, TaskEpoch: request.TaskEpoch}, participantID: request.ParticipantID, workspaceID: request.WorkspaceID, relativePath: request.RelativePath}
@@ -62,7 +66,7 @@ func (s *Service) directoryContext(ctx context.Context, request ContextRequest, 
 	}
 	query := port.ListRequest{Workspace: cloneDescriptor(admitted.descriptor), RelativePath: request.RelativePath}
 	var checked *port.ListResponse
-	if inspectOnly {
+	if opts.inspectOnly {
 		inspector, ok := s.workspace.(port.DirectoryInspector)
 		if !ok {
 			return nil, authority.Fail("WORKSPACE_HELPER_FAILED", "native-workspace")

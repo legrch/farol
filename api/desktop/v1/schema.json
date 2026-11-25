@@ -594,10 +594,14 @@
         "root": {
           "type": "string",
           "minBytes": 1,
-          "maxBytes": 4096
+          "maxBytes": 4096,
+          "optional": true,
+          "description": "The verified root. Absent when refusal is present."
         },
         "approvedRoot": {
-          "type": "ComputerApprovedRoot"
+          "type": "ComputerApprovedRoot",
+          "optional": true,
+          "description": "The verified approved root. Absent when refusal is present."
         },
         "writableByOthers": {
           "type": "boolean",
@@ -607,7 +611,7 @@
         "refusal": {
           "type": "ComputerCatalogueEntryRefusal",
           "optional": true,
-          "description": "Present when this workspace's folder was refused; root and approvedRoot are then the unverified grant and approval records."
+          "description": "Present when this workspace's folder was refused; root and approvedRoot are then absent, because no root was verified."
         }
       }
     },

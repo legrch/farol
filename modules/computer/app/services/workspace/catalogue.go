@@ -24,8 +24,8 @@ type CatalogueRefusal struct{ Code, Source, Stage, Reason string }
 func (r CatalogueRefusal) Refused() bool { return r.Code != "" }
 
 // CatalogueEntry is comparable so the two passes can be checked for equality.
-// A refused entry keeps the grant's root and the approval's record for the same
-// workspace (already disclosed for usable entries); neither was verified.
+// A refused entry carries only the workspace ID and its refusal: no root was
+// verified, so none is published.
 // WritableByOthers is meaningful only for a verified entry.
 type CatalogueEntry struct {
 	WorkspaceID, Root string
@@ -74,7 +74,7 @@ func (s *Service) Catalogue(ctx context.Context, request CatalogueRequest) (*Cat
 	for pass := 0; pass < 2; pass++ {
 		for index, id := range ids {
 			var entry CatalogueEntry
-			out, err := s.directoryContext(ctx, binding.contextRequest(id, "."), true, true)
+			out, err := s.directoryContext(ctx, binding.contextRequest(id, "."), contextOptions{inspectOnly: true, keepDiagnostic: true})
 			if err != nil {
 				refused, ok := refusedEntry(seal, id, err)
 				if !ok {
@@ -119,21 +119,15 @@ func refusedEntry(seal discoverySeal, id string, err error) (CatalogueEntry, boo
 	if failure.Code != "WORKSPACE_PATH_REFUSED" && failure.Code != "WORKSPACE_NOT_FOUND" {
 		return CatalogueEntry{}, false
 	}
-	scope, found := authority.FindScope(seal.participant.Grant, id)
-	if !found {
+	if _, found := authority.FindScope(seal.participant.Grant, id); !found {
 		return CatalogueEntry{}, false
 	}
-	approved, found := authority.FindApproved(seal.approval, id)
-	if !found {
-		return CatalogueEntry{}, false
-	}
-	record := Root{Path: approved.Root, Device: approved.RootIdentity.Device, Inode: approved.RootIdentity.Inode}
-	if !validContextBinding(port.DirectoryBinding{RelativePath: ".", Root: scope.Root, ApprovedRoot: port.Root{Path: record.Path, Device: record.Device, Inode: record.Inode}}) {
+	if _, found := authority.FindApproved(seal.approval, id); !found {
 		return CatalogueEntry{}, false
 	}
 	refusal := CatalogueRefusal{Code: failure.Code, Source: failure.Source}
 	if failure.Code == "WORKSPACE_PATH_REFUSED" && authority.SafeWorkspaceReadDiagnostic(failure.Stage, failure.Reason) {
 		refusal.Stage, refusal.Reason = failure.Stage, failure.Reason
 	}
-	return CatalogueEntry{WorkspaceID: id, Root: scope.Root, ApprovedRoot: record, Refusal: refusal}, true
+	return CatalogueEntry{WorkspaceID: id, Refusal: refusal}, true
 }
