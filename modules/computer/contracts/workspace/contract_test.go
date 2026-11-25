@@ -55,3 +55,23 @@ func TestCatalogueRefusalIsReallowlistedAtTheBoundary(t *testing.T) {
 		}
 	}
 }
+
+func TestCatalogueMatchReportsRefusalAndMissing(t *testing.T) {
+	r := &CatalogueResponse{Workspaces: []CatalogueEntry{
+		{WorkspaceID: "ok"},
+		{WorkspaceID: "bad", Refusal: &CatalogueRefusal{Code: "WORKSPACE_PATH_REFUSED"}},
+	}}
+	for _, c := range []struct {
+		id    string
+		match bool
+		code  string
+	}{{"ok", true, "fb"}, {"bad", false, "WORKSPACE_PATH_REFUSED"}, {"gone", false, "fb"}} {
+		if match, code := r.Match(c.id, "fb"); match != c.match || code != c.code {
+			t.Fatalf("%s: %v %q", c.id, match, code)
+		}
+	}
+	var none *CatalogueResponse
+	if match, code := none.Match("ok", "fb"); match || code != "fb" {
+		t.Fatal("nil receiver")
+	}
+}
