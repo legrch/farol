@@ -37,8 +37,20 @@ Catalogue candidates are only the selected participant's materialized `subtree`
 grant scopes, in original order. Approval-only roots and exact-file scopes do not
 become candidates. The limit is 32 unique nonempty IDs of at most 120 UTF-16 code
 units. Duplicate/bound errors precede native IO. Two complete context passes check
-all candidates; a refusal/change discards the whole collection. Empty is explicit,
-with zero native calls and a final current-owner gate.
+all candidates. A native refusal about one folder (`WORKSPACE_PATH_REFUSED`,
+`WORKSPACE_NOT_FOUND`) no longer hides the others: that entry carries an additive
+`refusal` (code, source, and the allowlisted path-free stage/reason) and the
+grant/approval records for its root, which were not verified. Any other failure,
+or a change between the two passes (including a refusal that appears or
+disappears), discards the whole collection. Empty is explicit, with zero native
+calls and a final current-owner gate.
+
+A verified root that group or other users can write to (mode bits `0022`) is
+allowed when the current user owns it (owner decision D49, 2026-11-25) and its
+entry carries `writableByOthers: true`, absent otherwise, so a client can warn
+"writable by other users of this Mac". A root owned by another user stays refused
+(`root`/`unsafe_root`). Farol's own private scratch and state directories keep
+their stricter mode checks.
 
 Bootstrap inspects `AGENTS.md` at the task scope root and each prefix through the
 selected directory, with depth 32. It never inspects ancestors outside the scope

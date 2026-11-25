@@ -598,6 +598,57 @@
         },
         "approvedRoot": {
           "type": "ComputerApprovedRoot"
+        },
+        "writableByOthers": {
+          "type": "boolean",
+          "optional": true,
+          "description": "Present and true when the verified root is writable by other users of this Mac (mode bits 0022)."
+        },
+        "refusal": {
+          "type": "ComputerCatalogueEntryRefusal",
+          "optional": true,
+          "description": "Present when this workspace's folder was refused; root and approvedRoot are then the unverified grant and approval records."
+        }
+      }
+    },
+    "ComputerCatalogueEntryRefusal": {
+      "type": "object",
+      "fields": {
+        "code": {
+          "type": "text"
+        },
+        "source": {
+          "type": "text",
+          "values": [
+            "computer-approval",
+            "task-admission",
+            "task-grant",
+            "owner-restriction",
+            "unverified-provenance",
+            "role",
+            "computer-policy",
+            "native-host",
+            "authority-store",
+            "native-workspace",
+            "contract",
+            "transport"
+          ]
+        },
+        "stage": {
+          "type": "text",
+          "values": ["policy", "root", "ancestor", "target"],
+          "optional": true
+        },
+        "reason": {
+          "type": "text",
+          "values": [
+            "policy_denied",
+            "unsafe_root",
+            "link_not_supported",
+            "hardlink_not_supported",
+            "os_permission_denied"
+          ],
+          "optional": true
         }
       }
     },

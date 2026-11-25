@@ -32,19 +32,29 @@ type ContextResponse struct {
 	Physical Root
 	// ApprovedPhysical is the approved ancestor's live identity (internal).
 	ApprovedPhysical Root
+	// WritableByOthers marks a root that other local users can write to.
+	WritableByOthers bool
 }
 
 func (s *Service) Context(ctx context.Context, request ContextRequest) (*ContextResponse, error) {
-	return s.directoryContext(ctx, request, false)
+	return s.directoryContext(ctx, request, false, false)
 }
 
 // Inspect checks directory access without enumerating children. It retains the
 // same execution lease, descriptor binding and disclosure policy as Context.
 func (s *Service) Inspect(ctx context.Context, request ContextRequest) (*ContextResponse, error) {
-	return s.directoryContext(ctx, request, true)
+	return s.directoryContext(ctx, request, true, false)
 }
 
-func (s *Service) directoryContext(ctx context.Context, request ContextRequest, inspectOnly bool) (*ContextResponse, error) {
+// directoryContext keeps native failures coarse unless the caller is the
+// catalogue, which discloses a refusal beside usable entries and therefore also
+// retains the allowlisted path-free stage/reason pair. The catalogue's final
+// discovery disclosure rechecks authority before anything is published.
+func (s *Service) directoryContext(ctx context.Context, request ContextRequest, inspectOnly, keepDiagnostic bool) (*ContextResponse, error) {
+	classify := nativeFailure
+	if keepDiagnostic {
+		classify = nativeReadFailure
+	}
 	caller := caller{identity: authority.Identity{OwnerID: request.OwnerID, SessionID: request.SessionID, TaskID: request.TaskID, TaskEpoch: request.TaskEpoch}, participantID: request.ParticipantID, workspaceID: request.WorkspaceID, relativePath: request.RelativePath}
 	admitted, err := s.admit(ctx, caller, authority.List)
 	if err != nil {
@@ -64,7 +74,7 @@ func (s *Service) directoryContext(ctx context.Context, request ContextRequest, 
 		checked, err = s.workspace.List(ctx, query)
 	}
 	if err != nil {
-		return nil, nativeFailure(err)
+		return nil, classify(err)
 	}
 	if checked == nil || checked.Binding == nil {
 		return nil, authority.Fail("WORKSPACE_HELPER_FAILED", "native-workspace")
@@ -83,7 +93,8 @@ func (s *Service) directoryContext(ctx context.Context, request ContextRequest, 
 		response = &ContextResponse{OwnerID: request.OwnerID, SessionID: request.SessionID, TaskID: request.TaskID, TaskEpoch: request.TaskEpoch, ParticipantID: request.ParticipantID, TurnID: request.TurnID, Generation: request.Generation, CallID: request.CallID, WorkspaceID: request.WorkspaceID, RelativePath: request.RelativePath,
 			Root: binding.Root, ApprovedRoot: Root{Path: binding.ApprovedRoot.Path, Device: binding.ApprovedRoot.Device, Inode: binding.ApprovedRoot.Inode}, Scope: "subtree",
 			Physical:         Root{Path: binding.Physical.Path, Device: binding.Physical.Device, Inode: binding.Physical.Inode},
-			ApprovedPhysical: Root{Path: binding.ApprovedPhysical.Path, Device: binding.ApprovedPhysical.Device, Inode: binding.ApprovedPhysical.Inode}}
+			ApprovedPhysical: Root{Path: binding.ApprovedPhysical.Path, Device: binding.ApprovedPhysical.Device, Inode: binding.ApprovedPhysical.Inode},
+			WritableByOthers: binding.WritableByOthers}
 	})
 	if err != nil {
 		return nil, err

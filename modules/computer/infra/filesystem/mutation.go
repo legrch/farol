@@ -189,7 +189,10 @@ func (m *Mutable) root(d port.MutationDescriptor) (*mutationWalk, int, error) {
 		}
 	}
 	v := walk.pins[len(walk.pins)-1].version
-	if v.uid != m.fs.uid() || v.mode&0022 != 0 {
+	// Same root rule as openedRoot (owner decision D49): the root must belong to
+	// the current user; group/other write on it is allowed. Scratch directories
+	// keep their own private-mode (0700) checks elsewhere.
+	if v.uid != m.fs.uid() {
 		walk.close()
 		return nil, -1, refusal("WORKSPACE_PATH_REFUSED")
 	}

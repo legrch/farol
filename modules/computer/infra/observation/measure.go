@@ -151,7 +151,10 @@ func measureHeld(ctx context.Context, path string, held chain, ops nativeOperati
 		return result, err
 	}
 	target := held[len(held)-1]
-	if target.identity.UID != ops.uid() || target.identity.Mode&0022 != 0 {
+	// Same root rule as the filesystem adapter (owner decision D49): owned by the
+	// current user; group/other write on the root is allowed. Any mode change
+	// during the operation is still caught by the descriptor identity rechecks.
+	if target.identity.UID != ops.uid() {
 		return result, fail("WORKSPACE_PATH_REFUSED")
 	}
 	before, err := ops.facts(ctx, target.fd)
