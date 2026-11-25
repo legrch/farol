@@ -17,6 +17,7 @@ import type {
 } from "../../../src/apps/desktop/chatgpt-route";
 import type { NativeViewVisibility } from "../bridge/native-view-visibility";
 import type { OperationsStore } from "../operations/store";
+import { chatTerminalOperationCode } from "../renderer/operations-vocabulary";
 
 export type SurfaceTask = Readonly<{
   taskId: string;
@@ -411,7 +412,7 @@ export function taskSurfaces(host: TaskSurfacePorts) {
                 : event.phase === "outcome_unknown"
                   ? "unknown"
                   : "failed",
-              event.code,
+              chatTerminalOperationCode(event.code),
               0,
             );
         }

@@ -59,6 +59,9 @@ export const operationCodesByOutcome = {
     "supported",
   ],
   refused: [
+    // Chat turn terminals reached before any provider dispatch.
+    "not_dispatched",
+    "provider_not_dispatched",
     // Proven admission/validation refusals and known pre-effect terminals.
     "WORKSPACE_IDENTITY_INVALID",
     "WORKSPACE_IDENTITY_UNSUPPORTED",
@@ -1848,6 +1851,16 @@ export const operationCodesByOutcome = {
     "wrong-owner",
   ],
   failed: [
+    // Chat turn terminals owned by the TypeScript turn state machine. A
+    // dispatched turn is recorded as unknown by its phase, not by these codes.
+    "local_persistence_failed_before_dispatch",
+    "TURN_INVALID_TRANSITION",
+    "TURN_TERMINAL",
+    "TURN_SEQUENCE",
+    "TURN_NO_DELTA",
+    "TURN_CORRELATION",
+    "FIXTURE_PROVIDER_FAILURE",
+    "FIXTURE_TOOL_RESULT_MISSING",
     "fail",
     "AGENT_ASSIGNMENT_FAILED",
     "AGENT_DELIVERY_FAILED",
@@ -1973,6 +1986,14 @@ export const operationCodesByOutcome = {
     "write-failed",
   ],
   unknown: [
+    // A chat turn terminal reason the desktop does not own: the runtime builds
+    // it from provider, computer-capability and source:code text, so it is an
+    // open string on the wire. It is recorded under this one code.
+    "CHAT_TERMINAL_CODE_UNRECOGNIZED",
+    "cancel_after_dispatch",
+    "provider_outcome_unknown",
+    "provider_stream_ended_without_terminal",
+    "PROVIDER_RESULT_REJECTED",
     // A dispatch or effect intent may already have produced an external effect.
     // An unqualified receipt, lost closure, or post-commit observation never
     // permits replay or an inferred terminal success.
