@@ -3,6 +3,7 @@ import {
   createInstalledUpdateHost,
   withInstalledStartupFence,
 } from "../../../apps/desktop/update/host";
+import { createUpdateDockAttention } from "../../../apps/desktop/update/attention";
 import { createStartup } from "../../../apps/desktop/host/startup";
 import { readLaunchArguments } from "../../../apps/desktop/host/launch";
 import { selectBootIdentity } from "../../../apps/desktop/host/identity";
@@ -752,6 +753,17 @@ const installedUpdates = createInstalledUpdateHost({
   publish: (view) => {
     window?.webContents.send(channels.installedUpdateState, view);
   },
+  attention: createUpdateDockAttention({
+    // Ordinary owner launch on macOS only; never hidden, secondary or E2E runs.
+    enabled:
+      process.platform === "darwin" &&
+      windowMode === "default" &&
+      process.env.FAROL_E2E !== "1",
+    focused: () => BrowserWindow.getFocusedWindow() !== null,
+    bounce: () => {
+      app.dock?.bounce("informational");
+    },
+  }),
   configurationChanged: () => {
     if (window && !window.isDestroyed())
       window.webContents.send(channels.configurationChanged);
@@ -2945,6 +2957,7 @@ function requestUpdates(): void {
     if (desktopAdmission.closed() || !window || window.isDestroyed()) return;
     publishShellAction("open-updates", "update-command");
     window.webContents.focus();
+    void installedUpdates.requestCheck();
   }, recoverWindowOpenFailure);
 }
 

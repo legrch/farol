@@ -99,7 +99,7 @@ it("wires the actual host handlers with shell-only opening and panel-only observ
     installedUpdates: { resources: () => ({ directory: "/app" }) },
     desktopAdmission,
     windowMode: "hidden",
-    UPDATES_PANEL_SIZE: { width: 480, height: 560 },
+    UPDATES_PANEL_SIZE: { width: 400, height: 340 },
     selectedVisibleTestPlacement: vi.fn(),
     configuration: () => null,
   } as unknown as IpcPorts).install();

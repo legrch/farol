@@ -72,7 +72,11 @@ vi.mock("electron", () => {
   };
 });
 import { BrowserWindow } from "electron";
-import { DesktopUpdatesPanel } from "../../apps/desktop/updates-panel";
+import fs from "node:fs";
+import {
+  DesktopUpdatesPanel,
+  UPDATES_PANEL_SIZE,
+} from "../../apps/desktop/updates-panel";
 
 const projection: UpdatesProjection = {
   update: { phase: "idle", checkedAt: null },
@@ -585,5 +589,21 @@ describe("Updates panel native fixture (no Electron process or installed updater
     await expect(f.panel.open(f.options)).rejects.toThrow("load failure");
     expect(harness.windows[2].destroyed).toBe(true);
     expect(f.panel.state()).toMatchObject({ pending: true });
+  });
+});
+
+describe("updates panel layout", () => {
+  const css = fs.readFileSync(
+    new URL("../../src/ui/renderer/shell.css", import.meta.url),
+    "utf8",
+  );
+  it("is compact, close to the About panel", () => {
+    expect(UPDATES_PANEL_SIZE).toEqual({ width: 400, height: 340 });
+    expect(css).toMatch(/\.native-updates \{[^}]*max-width: 400px;/u);
+  });
+  it("scrolls expanded notes instead of growing the panel", () => {
+    expect(css).toMatch(
+      /\.native-updates \.update-notes \{[^}]*max-height: 96px;[^}]*overflow: auto;/u,
+    );
   });
 });

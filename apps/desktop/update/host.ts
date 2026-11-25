@@ -83,6 +83,8 @@ export type InstalledUpdateHostPorts = Readonly<{
   userData(): string;
   quit(): void;
   publish(view: InstalledUpdateView): void;
+  /** Optional: a background cue for a newly available or ready update. */
+  attention?(view: InstalledUpdateView): void;
   configurationChanged(): void;
   admission: Pick<
     DesktopAdmission,
@@ -129,6 +131,7 @@ export function createInstalledUpdateHost(host: InstalledUpdateHostPorts) {
   );
   let installedUpdaterInitialization: Promise<void> | null = null;
   let installedUpdateTimer: NodeJS.Timeout | null = null;
+  let explicitCheck: Promise<void> | null = null;
   let installedUpdateView: InstalledUpdateView = {
     phase: "unavailable",
     code: "UPDATE_NOT_INSTALLED",
@@ -137,6 +140,7 @@ export function createInstalledUpdateHost(host: InstalledUpdateHostPorts) {
   function publishInstalledUpdate(view: InstalledUpdateView): void {
     installedUpdateView = view;
     host.publish(view);
+    host.attention?.(view);
   }
   async function installedUpdateCommand(
     value: unknown,
@@ -412,6 +416,24 @@ export function createInstalledUpdateHost(host: InstalledUpdateHostPorts) {
     quitPreparation: quitUpdatePreparation,
     resources: desktopExecutionResources,
     command: installedUpdateCommand,
+    /** An explicit "Check for Updates…" must discover, not only show the cache. */
+    requestCheck(): Promise<void> {
+      if (explicitCheck) return explicitCheck;
+      if (
+        !installedUpdater ||
+        host.admission.quitInProgress ||
+        (installedUpdateView.phase !== "idle" &&
+          installedUpdateView.phase !== "failed")
+      )
+        return Promise.resolve();
+      explicitCheck = installedUpdater
+        .manualCheck()
+        .catch(() => {})
+        .finally(() => {
+          explicitCheck = null;
+        });
+      return explicitCheck;
+    },
     initialize(): Promise<void> {
       return (installedUpdaterInitialization ??= initializeInstalledUpdater());
     },

@@ -121,7 +121,7 @@ function table(): ReadonlyArray<Registered> {
     },
     desktopAdmission: { closed: () => false },
     windowMode: "hidden",
-    UPDATES_PANEL_SIZE: { width: 480, height: 560 },
+    UPDATES_PANEL_SIZE: { width: 400, height: 340 },
     selectedVisibleTestPlacement: unused,
     configuration: () => null,
     operationsStore: () => ({ setWorkspaceLabels: unused, snapshot: unused }),

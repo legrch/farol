@@ -19,7 +19,7 @@ import {
   type UpdatesState,
 } from "./renderer/updates/contract";
 
-export const UPDATES_PANEL_SIZE = { width: 480, height: 560 } as const;
+export const UPDATES_PANEL_SIZE = { width: 400, height: 340 } as const;
 type Sender = Pick<IpcMainEvent | IpcMainInvokeEvent, "sender" | "senderFrame">;
 type Options = {
   owner: BrowserWindow;
