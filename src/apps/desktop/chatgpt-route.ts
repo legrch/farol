@@ -42,14 +42,9 @@ import {
 } from "./chatgpt-update-idle";
 import { ChatGptPublicTurn } from "./chatgpt-public-turn";
 import {
-  SavedChatFollowUpActionSchema,
   SavedChatPhysicalBindingSchema,
-  SavedChatFollowUpRequestSchema,
-  SavedChatFollowUpResultSchema,
-  savedChatFollowUpScript,
   type SavedChatPhysicalBinding,
   type SavedChatFollowUpResult,
-  type SavedChatFollowUpCode,
   savedChatInsertScript,
   savedChatProofScript,
   savedChatReadinessScript,
@@ -87,6 +82,10 @@ import {
   type SignInObservation,
   type SignInRead,
 } from "../../../apps/desktop/chat/signin";
+import {
+  createSavedChatFollowUp,
+  createSavedChatProbes,
+} from "../../../apps/desktop/chat/saved";
 import { ChatGptPhysical } from "../../../apps/desktop/chatgpt-physical";
 import { chatGptAccountProbeScript } from "../../../apps/desktop/chatgpt-account-probe";
 import { observeBoundChatGptAccount } from "../../../apps/desktop/chatgpt-account-observation";
@@ -3619,11 +3618,6 @@ export class ChatGptRoute {
   // Physical generations only. No queue, turn state, journal or retry decision.
   private savedChatPhysicalView: ChatGptRouteSurface | null = null;
   private savedChatViewGeneration = 0;
-  private savedChatMutationInFlight = false;
-  private savedChatSubmitFuse: Readonly<{
-    operationId: string;
-    previousUserId: string;
-  }> | null = null;
 
   private chatPhysicalApi: ChatGptPhysicalApi | null = null;
   // A same-document provider CID adoption is not document replacement. Legacy
@@ -3829,149 +3823,30 @@ export class ChatGptRoute {
     return parsed.success ? parsed.data : null;
   }
 
-  /**
-   * Internal adapter seam, never a wire grant. The trusted Chat caller must
-   * recheck its original operation, Go lease/profile/partition and authority.
-   * Literal selection values and physical DTOs supply evidence only.
-   */
-  async savedChatFollowUp(
+  // The guarded follow-up; its dispatch fuse and in-flight flag live in it.
+  private readonly savedChatFollowUpRun = createSavedChatFollowUp({
+    qualified: () => this.options.publicOutputProfile === "message-anchors-v1",
+    requiredAppName: () => this.options.requiredAppName,
+    binding: () => this.savedChatFollowUpBinding(),
+    acquire: () => {
+      const surface = this.routeWindow;
+      return {
+        execute: (script, gesture) => {
+          if (!surface) throw new Error("Saved chat surface unavailable");
+          return surface.webContents.executeJavaScript(script, gesture);
+        },
+        isCurrent: () => this.routeWindow === surface,
+      };
+    },
+  });
+
+  /** Internal adapter seam, never a wire grant; see `chat/saved`. */
+  savedChatFollowUp(
     candidate: unknown,
     action: "prepare" | "submit" | "observe",
     stillBound: (binding: SavedChatPhysicalBinding) => boolean,
   ): Promise<SavedChatFollowUpResult> {
-    const parsed = SavedChatFollowUpRequestSchema.safeParse(candidate);
-    const refused = (code: SavedChatFollowUpCode): SavedChatFollowUpResult => ({
-      state: action === "observe" ? "awaiting-owner" : "not-sent",
-      code,
-    });
-    if (
-      !parsed.success ||
-      !SavedChatFollowUpActionSchema.safeParse(action).success
-    )
-      return refused("SAVED_CHAT_INVALID");
-    if (this.options.publicOutputProfile !== "message-anchors-v1")
-      return {
-        state: "awaiting-owner",
-        code: "SAVED_CHAT_BINDING_UNQUALIFIED",
-      };
-    const input = parsed.data;
-    const binding = this.savedChatFollowUpBinding();
-    const authorized = () => {
-      try {
-        return (
-          typeof stillBound === "function" &&
-          stillBound(Object.freeze({ ...input.binding })) === true
-        );
-      } catch {
-        return false;
-      }
-    };
-    if (!binding || JSON.stringify(binding) !== JSON.stringify(input.binding))
-      return refused("SAVED_CHAT_BINDING_STALE");
-    if (!authorized())
-      return {
-        state: "awaiting-owner",
-        code: "SAVED_CHAT_BINDING_UNQUALIFIED",
-      };
-    if (
-      this.options.requiredAppName &&
-      this.options.requiredAppName !== input.selection.connector.label
-    )
-      return refused("SAVED_CHAT_SELECTION_MISMATCH");
-    if (this.savedChatMutationInFlight && action !== "observe")
-      return refused("SAVED_CHAT_OPERATION_UNSETTLED");
-    if (action !== "observe" && input.operation.state !== "not-sent")
-      return refused("SAVED_CHAT_OPERATION_UNSETTLED");
-    if (
-      action === "submit" &&
-      this.savedChatSubmitFuse !== null &&
-      (this.savedChatSubmitFuse.operationId === input.operation.id ||
-        this.savedChatSubmitFuse.previousUserId === input.previous.userId)
-    )
-      return refused("SAVED_CHAT_OPERATION_UNSETTLED");
-    const surface = this.routeWindow!;
-    if (action !== "observe") this.savedChatMutationInFlight = true;
-    const lost = () =>
-      this.routeWindow !== surface ||
-      JSON.stringify(this.savedChatFollowUpBinding()) !==
-        JSON.stringify(binding) ||
-      !authorized();
-    // One in-memory physical dispatch fuse survives transport loss. The Go caller
-    // still owns durable settlement; a new route/process cannot recover it here.
-    if (action === "submit")
-      this.savedChatSubmitFuse = {
-        operationId: input.operation.id,
-        previousUserId: input.previous.userId,
-      };
-    try {
-      const result: unknown = await surface.webContents.executeJavaScript(
-        savedChatFollowUpScript(input, action),
-        true,
-      );
-      if (lost())
-        return action === "submit"
-          ? { state: "unknown", code: "SAVED_CHAT_SEND_UNKNOWN" }
-          : refused("SAVED_CHAT_BINDING_STALE");
-      const response = SavedChatFollowUpResultSchema.safeParse(result);
-      if (!response.success)
-        return action === "submit"
-          ? { state: "unknown", code: "SAVED_CHAT_SEND_UNKNOWN" }
-          : { state: "awaiting-owner", code: "SAVED_CHAT_SOURCE_UNSUPPORTED" };
-      const responseState = response.data.state;
-      const expectedState =
-        action === "prepare"
-          ? "prepared"
-          : action === "submit"
-            ? "submitted"
-            : "observed";
-      if (
-        ["prepared", "submitted", "observed"].includes(responseState) &&
-        responseState !== expectedState
-      )
-        return action === "submit"
-          ? { state: "unknown", code: "SAVED_CHAT_SEND_UNKNOWN" }
-          : { state: "awaiting-owner", code: "SAVED_CHAT_SOURCE_UNSUPPORTED" };
-      if (
-        (response.data.state === "prepared" ||
-          response.data.state === "submitted") &&
-        JSON.stringify(response.data.selection) !==
-          JSON.stringify(input.selection)
-      )
-        return action === "submit"
-          ? { state: "unknown", code: "SAVED_CHAT_SEND_UNKNOWN" }
-          : { state: "awaiting-owner", code: "SAVED_CHAT_SOURCE_UNSUPPORTED" };
-      if (
-        response.data.state === "submitted" &&
-        response.data.evidenceId !== input.evidenceId
-      )
-        return { state: "unknown", code: "SAVED_CHAT_SEND_UNKNOWN" };
-      if (
-        response.data.state === "observed" &&
-        (response.data.frame.userId !== response.data.userId ||
-          response.data.userId === input.previous.userId ||
-          response.data.assistantId === input.previous.assistantId ||
-          response.data.frame.messages.some(
-            (message) => message.id === input.previous.assistantId,
-          ) ||
-          (input.correlation !== null &&
-            (input.correlation.userId !== response.data.userId ||
-              (input.correlation.assistantId !== null &&
-                input.correlation.assistantId !== response.data.assistantId))))
-      )
-        return {
-          state: "awaiting-owner",
-          code: "SAVED_CHAT_CORRELATION_UNAVAILABLE",
-        };
-      if (action === "submit" && response.data.state === "not-sent")
-        this.savedChatSubmitFuse = null;
-      return response.data;
-    } catch {
-      return action === "submit"
-        ? { state: "unknown", code: "SAVED_CHAT_SEND_UNKNOWN" }
-        : { state: "awaiting-owner", code: "SAVED_CHAT_SOURCE_UNSUPPORTED" };
-    } finally {
-      if (action !== "observe") this.savedChatMutationInFlight = false;
-    }
+    return this.savedChatFollowUpRun(candidate, action, stillBound);
   }
 
   /** Restricted saved-chat probes on this route's own isolated page only. */
@@ -4011,28 +3886,8 @@ export class ChatGptRoute {
     );
   }
 
-  async savedChatLoad(conversationUrl: string): Promise<boolean> {
-    if (
-      canonicalChatGptConversationUrl(
-        conversationUrl,
-        this.options.e2eOrigin,
-      ) !== conversationUrl
-    )
-      return false;
-    const candidate = this.routeWindow;
-    if (!candidate || candidate.isDestroyed() || this.load !== "loaded")
-      return false;
-    try {
-      await candidate.loadURL(conversationUrl);
-      return (
-        this.routeWindow === candidate &&
-        !candidate.isDestroyed() &&
-        this.load === "loaded" &&
-        candidate.webContents.getURL() === conversationUrl
-      );
-    } catch {
-      return false;
-    }
+  savedChatLoad(conversationUrl: string): Promise<boolean> {
+    return this.savedChatProbes.load(conversationUrl);
   }
 
   currentSavedChatUrl(): string | null {
@@ -4044,38 +3899,31 @@ export class ChatGptRoute {
     );
   }
 
-  private async savedChatScript(
+  private readonly savedChatProbes = createSavedChatProbes({
+    snapshot: () => {
+      const surface = this.routeWindow;
+      if (!surface) return null;
+      return {
+        surface,
+        destroyed: surface.isDestroyed(),
+        loaded: this.load === "loaded",
+        url: surface.webContents.getURL(),
+        documentGeneration: this.routeDocumentGeneration,
+        execute: (script, gesture) =>
+          surface.webContents.executeJavaScript(script, gesture),
+        load: (url) => surface.loadURL(url),
+      };
+    },
+    canonicalConversationUrl: (url) =>
+      canonicalChatGptConversationUrl(url, this.options.e2eOrigin),
+  });
+
+  private savedChatScript(
     script: string,
     expectedUrl: string,
     allowNavigation = false,
   ): Promise<unknown> {
-    const candidate = this.routeWindow;
-    const documentGeneration = this.routeDocumentGeneration;
-    if (
-      !candidate ||
-      candidate.isDestroyed() ||
-      this.load !== "loaded" ||
-      candidate.webContents.getURL() !== expectedUrl
-    )
-      return null;
-    try {
-      const result: unknown = await candidate.webContents.executeJavaScript(
-        script,
-        true,
-      );
-      if (this.routeWindow !== candidate || candidate.isDestroyed())
-        return null;
-      if (
-        !allowNavigation &&
-        (candidate.webContents.getURL() !== expectedUrl ||
-          this.routeDocumentGeneration !== documentGeneration ||
-          this.load !== "loaded")
-      )
-        return null;
-      return result;
-    } catch {
-      return null;
-    }
+    return this.savedChatProbes.run(script, expectedUrl, allowNavigation);
   }
 
   dispose(): void {
