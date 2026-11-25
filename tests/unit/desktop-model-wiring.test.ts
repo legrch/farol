@@ -172,8 +172,8 @@ describe("model route host wiring in main", () => {
     const created = source.indexOf("\nconst modelHost = createModelHost({");
     for (const earlier of [
       "\nconst buildIdentity = ",
-      "\nconst buildEnvironment = ",
-      "\nconst activeDesktopIdentity = {",
+      // The boot identity provides buildEnvironment and activeDesktopIdentity.
+      "\n} = selectBootIdentity({",
       "\nlet window: ",
       "\nlet configuration: ",
       "\nlet modelLifecycle: ",

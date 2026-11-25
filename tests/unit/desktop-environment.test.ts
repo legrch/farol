@@ -3,14 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
-import { transformSync } from "esbuild";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   codexChildHomePath,
   ownerPreviewIdentity,
   assertOwnerPreviewProfileSeparation,
-  prepareOwnerPreviewProfile,
   desktopCodexChildHomes,
   desktopCodexConfigPath,
   desktopAppDataPath,
@@ -21,7 +19,7 @@ import {
   isolatedDevMcpProofAllowed,
 } from "../../src/apps/desktop/desktop-environment";
 
-import { terminateDesktopStartup } from "../../src/apps/desktop/desktop-startup-failure";
+import { selectBootIdentity } from "../../apps/desktop/host/identity";
 
 const isolatedHomes: string[] = [];
 function ordinaryBootProfile(
@@ -29,58 +27,32 @@ function ordinaryBootProfile(
   appDataPath = "/Users/example/Library/Application Support",
   calls: string[] = [],
 ) {
-  const source = fs.readFileSync(
-    new URL("../../src/apps/desktop/main.ts", import.meta.url),
-    "utf8",
-  );
-  const begin = source.indexOf("const buildEnvironment =");
-  const end = source.indexOf("// `buildIdentity.product`", begin);
-  expect(begin).toBeGreaterThan(0);
-  expect(end).toBeGreaterThan(begin);
-  // Model Electron's new productName default, then execute only the actual
-  // profile-selection boot statements. No Electron or owner state is loaded.
+  // Model Electron's new productName default, then run the real boot identity.
+  // No Electron or owner state is loaded; the app and process are recorders.
   const paths: Record<string, string> = {
     appData: appDataPath,
     userData: "/Users/example/Library/Application Support/Farol",
     sessionData: "/Users/example/Library/Application Support/Farol",
   };
-  const result = runInNewContext(
-    transformSync(`${source.slice(begin, end)}\nactiveDesktopIdentity;`, {
-      loader: "ts",
-    }).code,
-    {
-      process: {
-        env: environment ? { FAROL_ENVIRONMENT: environment } : {},
-        stderr: {
-          write: (message: string) => calls.push(`startup:${message}`),
-        },
-        exit: (code: number) => {
-          throw new Error(`BOOT_EXIT:${code}`);
-        },
+  const result = selectBootIdentity({
+    app: {
+      commandLine: { getSwitchValue: () => "" },
+      getPath(name) {
+        calls.push(`get:${name}`);
+        return paths[name]!;
       },
-      path,
-      desktopEnvironment,
-      desktopProfileEnvironment,
-      desktopAppDataPath,
-      desktopUserDataPath,
-      desktopIdentity,
-      assertOwnerPreviewProfileSeparation,
-      prepareOwnerPreviewProfile,
-      terminateDesktopStartup,
-      app: {
-        commandLine: { getSwitchValue: () => "" },
-        getPath(name: string) {
-          calls.push(`get:${name}`);
-          return paths[name];
-        },
-        setPath(name: string, value: string) {
-          calls.push(`set:${name}`);
-          paths[name] = value;
-        },
+      setPath(name, value) {
+        calls.push(`set:${name}`);
+        paths[name] = value;
       },
     },
-    { timeout: 1000 },
-  );
+    env: environment ? { FAROL_ENVIRONMENT: environment } : {},
+    argv: [],
+    stderr: { write: (message) => calls.push(`startup:${message}`) },
+    exit: (code) => {
+      throw new Error(`BOOT_EXIT:${code}`);
+    },
+  }).activeDesktopIdentity;
   return { result, calls };
 }
 function isolatedAppData() {
