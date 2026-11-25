@@ -82,7 +82,14 @@ describe("main startup update ordering", () => {
   it("wires main's real observer and startup callback through the fence", () => {
     const main = source.slice(source.indexOf("async function main("));
     expect(main).toMatch(
-      /withInstalledStartupFence\(\s*process\.argv,[\s\S]*?observeUpdateRelaunch,\s*async \(updateRelaunch, verify, lease\)/,
+      /withInstalledStartupFence\(\s*process\.argv,[\s\S]*?observeUpdateRelaunch,\s*startup\.admit,\s*\)/,
+    );
+    const startup = readFileSync(
+      path.resolve("apps/desktop/host/startup.ts"),
+      "utf8",
+    );
+    expect(startup).toMatch(
+      /async function admit\(\s*updateRelaunch: UpdateRelaunch,\s*verify: \(\) => Promise<boolean>,\s*lease: PromotionLeaseHandle,/,
     );
     expect(main).toMatch(
       /const observeUpdateRelaunch = \(\) =>\s*waitForInstalledUpdateRelaunch\(/,
