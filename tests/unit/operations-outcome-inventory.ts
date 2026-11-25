@@ -153,7 +153,9 @@ export function declaredOperationOutcomes(): Map<string, Set<string>> {
           nonOutcomeProperties.push({ start: node.start, end: node.end });
         if (
           node.type === "TSInterfaceDeclaration" &&
-          (node.id as Node)?.name === "ComputerReadRefusal"
+          ["ComputerReadRefusal", "ComputerCatalogueEntryRefusal"].includes(
+            (node.id as Node)?.name as string,
+          )
         )
           walk(node.body, (property) => {
             if (
