@@ -9,6 +9,7 @@ import { readLaunchArguments } from "../../../apps/desktop/host/launch";
 import { selectBootIdentity } from "../../../apps/desktop/host/identity";
 import { selectChatGptHome } from "../../../apps/desktop/chat/home";
 import { chatStartupProfile } from "../../../apps/desktop/chat/profile";
+import { cleanupAttachmentStaging } from "../../../apps/desktop/chat/staging";
 import { admissionLease } from "../../../apps/desktop/host/lease";
 import { createConfigurationService } from "../../../apps/desktop/configuration/service";
 import { UPDATE_IDLE_CHECK_MS } from "../../modules/release/app/installed-updater";
@@ -3215,11 +3216,12 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   // unnoticed.
   // The startup lease has been released before configuration and ordinary
   // admission take the same lease. No nested owner or second lock is used.
-  try {
-    await cleanupChatGptAttachmentStaging(statePaths().attachmentStaging);
-  } catch {
+  if (
+    !(await cleanupAttachmentStaging(() =>
+      cleanupChatGptAttachmentStaging(statePaths().attachmentStaging),
+    ))
+  )
     attachmentStagingReady = false;
-  }
   configuration = createConfigurationService({
     root: statePaths().state,
     desktopGoCore: () => desktopGoCore,
