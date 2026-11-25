@@ -703,7 +703,7 @@ describe("testConnectionCommand refusals before any claim", () => {
       f.fixture[name] = null;
       run.impl = vi.fn();
       expect(await f.check.testConnectionCommand(command)).toEqual(
-        failure("CONNECTION_CHECK_PREREQUISITES_REQUIRED"),
+        failure("CONNECTION_CHECK_HOST_NOT_READY"),
       );
       expect(run.impl).not.toHaveBeenCalled();
       expect(f.reservations).toEqual([]);
@@ -818,56 +818,84 @@ describe("testConnectionCommand prerequisites inside the first claim", () => {
     [
       "the embedded browser is off",
       (f: Fixture) => void (f.fixture.embeddedBrowserEnabled = () => false),
+      "CONNECTION_CHECK_HOST_NOT_READY",
     ],
-    ["the desktop is closing", (f: Fixture) => void f.admission.beginQuit()],
+    [
+      "the desktop is closing",
+      (f: Fixture) => void f.admission.beginQuit(),
+      "CONNECTION_CHECK_HOST_NOT_READY",
+    ],
     [
       "the selected task changed",
       (f: Fixture) => void (f.fixture.selectedTaskId = "other-task"),
+      "CONNECTION_CHECK_HOST_NOT_READY",
     ],
     [
       "there is no browser route",
       (f: Fixture) => void (f.fixture.chatGptRoute = null),
+      "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
     ],
-    ["the window is gone", (f: Fixture) => void (f.fixture.window = null)],
+    [
+      "the window is gone",
+      (f: Fixture) => void (f.fixture.window = null),
+      "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+    ],
     [
       "the window is destroyed",
       (f: Fixture) => void f.window.isDestroyed.mockReturnValue(true),
+      "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
     ],
     [
       "no original document can be captured",
       (f: Fixture) =>
         void f.route.captureManualTaskTarget.mockReturnValue(null as never),
+      "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
     ],
     [
       "Settings are unavailable",
       (f: Fixture) => void (f.state.snapshotStatus = "error"),
+      "CONNECTION_CHECK_HOST_NOT_READY",
     ],
     [
       "no app is selected",
       (f: Fixture) => void (f.connector.chatgptApp = undefined as never),
+      "CONNECTION_CHECK_CONNECTOR_NOT_SET_UP",
     ],
-    ["there is no tunnel", (f: Fixture) => void (f.connector.tunnelId = null)],
     [
-      "the runtime is not ready",
+      "there is no tunnel",
+      (f: Fixture) => void (f.connector.tunnelId = null),
+      "CONNECTION_CHECK_CONNECTOR_NOT_SET_UP",
+    ],
+    [
+      "the runtime is unreachable",
       (f: Fixture) => void (f.connector.runtime!.state = "unreachable"),
+      "CONNECTION_CHECK_RUNTIME_NOT_RUNNING",
+    ],
+    [
+      "the runtime outcome is unknown",
+      (f: Fixture) => void (f.connector.runtime!.state = "outcome_unknown"),
+      "CONNECTION_CHECK_SETUP_UNRESOLVED",
     ],
     [
       "the runtime is another build",
       (f: Fixture) => void (f.connector.runtime!.buildId = "e".repeat(64)),
+      "CONNECTION_CHECK_CONNECTOR_NOT_SET_UP",
     ],
     [
       "the runtime is not running",
       (f: Fixture) => void f.runtime.isRunning.mockReturnValue(false),
+      "CONNECTION_CHECK_RUNTIME_NOT_RUNNING",
     ],
     [
       "the runtime has an unresolved effect",
       (f: Fixture) => void f.runtime.hasUnresolvedEffect.mockReturnValue(true),
+      "CONNECTION_CHECK_SETUP_UNRESOLVED",
     ],
-  ])("refuses with prerequisites when %s", async (_name, change) => {
+  ])("refuses with the matching cause when %s", async (_name, change, code) => {
     const f = build();
     change(f);
     const { result, logged } = await refused(f);
-    expect(result).toEqual(prerequisites);
+    expect(result).toEqual(failure(code));
     expect(
       logged.some((line) => line.startsWith("FAROL_CONNECTION_CHECK_REFUSED")),
     ).toBe(true);

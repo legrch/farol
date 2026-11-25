@@ -73,13 +73,13 @@ export async function runExplicitConnectionTest(
   if (!commandAllowed(snapshot, "connector.test-connection")) {
     publish({
       phase: "refused",
-      code: "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+      code: "CONNECTION_CHECK_HOST_NOT_READY",
       operationId: null,
     });
     return {
       id,
       state: "refused",
-      code: "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+      code: "CONNECTION_CHECK_HOST_NOT_READY",
     };
   }
   active.running = true;
