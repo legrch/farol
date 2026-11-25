@@ -28,7 +28,6 @@ import {
 import type { QuitTracePhase } from "../quit/trace";
 import type { DesktopAdmission } from "./admission";
 import type { Cell } from "./cell";
-import { secondInstanceResultPrefix } from "./instance";
 
 // Startup admission: what happens inside the installed-update startup fence,
 // between Electron readiness and the run marker. It selects an ordinary fresh
@@ -89,6 +88,8 @@ export type StartupPorts = Readonly<{
   reportOwnedBackendLifecycle: NonNullable<
     RecoveryStart["onLifecycleObservation"]
   >;
+  /** Tells the launcher that this primary opened the recovery window. */
+  reportRecoveryStarted: () => void;
   computerMcpLifecycle: () => Readonly<{
     confirmCleanHostStop: (admissionReady: boolean) => Promise<unknown>;
   }>;
@@ -123,6 +124,7 @@ export function createStartup(ports: StartupPorts) {
     reportMaintenanceObservation,
     reportQualificationObservation,
     reportOwnedBackendLifecycle,
+    reportRecoveryStarted,
     computerMcpLifecycle,
   } = ports;
   const buildIdentity = ports.build;
@@ -335,9 +337,7 @@ export function createStartup(ports: StartupPorts) {
           });
           startupRecovery.set(opened);
           await opened.ready;
-          process.stderr.write(
-            `${secondInstanceResultPrefix}primary-recovery\n`,
-          );
+          reportRecoveryStarted();
           await opened.quitRequested;
         } finally {
           try {

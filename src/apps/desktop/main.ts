@@ -3343,6 +3343,9 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     reportMaintenanceObservation,
     reportQualificationObservation,
     reportOwnedBackendLifecycle,
+    reportRecoveryStarted: () => {
+      process.stderr.write(`${secondInstanceResultPrefix}primary-recovery\n`);
+    },
     computerMcpLifecycle,
   });
   const previousHostAdmissionReady = await withInstalledStartupFence(
