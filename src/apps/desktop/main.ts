@@ -7,6 +7,8 @@ import { createStartup } from "../../../apps/desktop/host/startup";
 import { readLaunchArguments } from "../../../apps/desktop/host/launch";
 import { selectBootIdentity } from "../../../apps/desktop/host/identity";
 import { selectChatGptHome } from "../../../apps/desktop/chat/home";
+import { admissionLease } from "../../../apps/desktop/host/lease";
+import { createConfigurationService } from "../../../apps/desktop/configuration/service";
 import { UPDATE_IDLE_CHECK_MS } from "../../modules/release/app/installed-updater";
 import { DesktopAdmission } from "../../../apps/desktop/host/admission";
 import { mainWindow } from "../../../apps/desktop/window/main";
@@ -190,11 +192,6 @@ import {
   workspaceDescriptor,
   type VerifiedProductWorkspaceResult,
 } from "./workspace-descriptor";
-import {
-  acquirePromotionLease,
-  releasePromotionLease,
-  verifyPromotionLease,
-} from "./promotion-lease";
 import { createCodexContextController } from "./codex-context-runtime";
 import { channels } from "../../pkg/ipc/channels";
 import {
@@ -244,7 +241,6 @@ import {
 } from "./connector-app-receipt-wait";
 import {
   ProductConfigurationService,
-  ProductSettingsStore,
   workspaceCheckEvidence,
 } from "./product-configuration";
 import { shellGeometry } from "./surface-layout";
@@ -857,20 +853,10 @@ if (process.env.FAROL_E2E === "1") {
 // `PromotionLeaseGuard`). An unsafe or unreadable lease state refuses
 // admission rather than surfacing the lease error as an unrelated crash;
 // `verify` fences the durable write against a lease file replaced by hand.
-const liveTaskRegistry = new LiveTaskRegistry(5, {
-  acquireForAdmission: async () => {
-    const handle = await acquirePromotionLease(
-      app.getPath("userData"),
-      buildIdentity.buildId,
-      "admission",
-    ).catch(() => null);
-    if (!handle) return null;
-    return {
-      release: () => releasePromotionLease(handle),
-      verify: () => verifyPromotionLease(handle),
-    };
-  },
-});
+const liveTaskRegistry = new LiveTaskRegistry(
+  5,
+  admissionLease(() => app.getPath("userData"), buildIdentity.buildId),
+);
 const liveTaskRoutes = new Map<string, ChatGptRoute>();
 const managedChatGptRoutes = new Set<ChatGptRoute>();
 const SIGN_IN_SURFACE_ID = "farol-sign-in";
@@ -3220,60 +3206,14 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   } catch {
     attachmentStagingReady = false;
   }
-  configuration = new ProductConfigurationService(
-    new ProductSettingsStore({
-      root: statePaths().state,
-    }),
-    {
-      taskModelPolicy: async (revision, tasks, selection) => {
-        const core = desktopGoCore;
-        if (!core)
-          throw new BridgeError(
-            "unavailable",
-            "host_task_model_policy_unavailable",
-          );
-        const result = await core.resolveTaskModel(revision, tasks, selection);
-        if (desktopGoCore !== core)
-          throw new BridgeError(
-            "unavailable",
-            "host_task_model_policy_changed",
-          );
-        return result;
-      },
-      taskSettingsCompare: async (before, candidate) => {
-        const core = desktopGoCore;
-        if (!core)
-          throw new BridgeError(
-            "unavailable",
-            "host_task_settings_unavailable",
-          );
-        const changed = await core.compareTaskSettings(before, candidate);
-        if (desktopGoCore !== core)
-          throw new BridgeError("unavailable", "host_task_settings_changed");
-        return changed;
-      },
-      // S35-N03d: the same cross-process lease `liveTaskRegistry` takes for
-      // admission (same lease file, same "admission" role — see the guard
-      // above), so a guarded edit's durable critical phase excludes a live
-      // promotion exactly the way a Chat turn or a native Agent start
-      // already does. An unsafe or unreadable lease state refuses the edit
-      // with its own readable code rather than surfacing a crash.
-      promotionLease: {
-        acquireForAdmission: async () => {
-          const handle = await acquirePromotionLease(
-            app.getPath("userData"),
-            buildIdentity.buildId,
-            "admission",
-          ).catch(() => null);
-          if (!handle) return null;
-          return {
-            release: () => releasePromotionLease(handle),
-            verify: () => verifyPromotionLease(handle),
-          };
-        },
-      },
-    },
-  );
+  configuration = createConfigurationService({
+    root: statePaths().state,
+    desktopGoCore: () => desktopGoCore,
+    promotionLease: admissionLease(
+      () => app.getPath("userData"),
+      buildIdentity.buildId,
+    ),
+  });
   await runDesktopStartupBoundary("configuration", () =>
     configuration!.initialize(),
   );

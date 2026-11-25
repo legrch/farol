@@ -11,8 +11,8 @@ import {
 import {
   acquirePromotionLease,
   releasePromotionLease,
-  verifyPromotionLease,
 } from "../../src/apps/desktop/promotion-lease";
+import { admissionLease } from "../../apps/desktop/host/lease";
 import { withSettingsEditLease } from "../../apps/desktop/with-settings-edit-lease";
 import type { PendingWorkspaceEditDelivery } from "../../src/pkg/product-settings/contract";
 import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
@@ -84,28 +84,13 @@ async function userData(): Promise<string> {
   return root;
 }
 
-// Structurally identical to the object literal `main.ts` now passes as
-// `ProductConfigurationDependencies.promotionLease` when it constructs
-// `ProductConfigurationService` in `main()`: same primitives, same
-// "admission" role, same swallow-and-refuse behaviour on contention.
+// The real adapter main passes as `promotionLease` (and to the live-task
+// registry): one shared admissionLease, not a copy of its literal.
 function desktopPromotionLeaseGuard(
   root: string,
   buildId: string,
 ): WorkspaceEditLeaseGuard {
-  return {
-    acquireForAdmission: async () => {
-      const handle = await acquirePromotionLease(
-        root,
-        buildId,
-        "admission",
-      ).catch(() => null);
-      if (!handle) return null;
-      return {
-        release: () => releasePromotionLease(handle),
-        verify: () => verifyPromotionLease(handle),
-      };
-    },
-  };
+  return admissionLease(() => root, buildId);
 }
 
 async function verifiedWriteWorkspace(
