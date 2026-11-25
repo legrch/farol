@@ -2293,11 +2293,6 @@ function connectorVerify() {
     desktopAdmission,
     buildIdentity,
     runtimeEnvironment,
-    env: process.env,
-    pid: process.pid,
-    writeStderr: (text) => {
-      process.stderr.write(text);
-    },
     randomUUID,
     statePaths,
     configurationFailure,

@@ -96,8 +96,6 @@ function build(options: Options = {}) {
     taskId: "",
     embedded: true,
     ready: true,
-    env: {} as Record<string, string | undefined>,
-    stderr: [] as string[],
   };
   const snapshot = () =>
     state.status === "ready"
@@ -240,11 +238,6 @@ function build(options: Options = {}) {
     desktopAdmission: admission,
     buildIdentity: { buildId: fixtureBuildId },
     runtimeEnvironment: "test",
-    env: state.env,
-    pid: 4242,
-    writeStderr: (text: string) => {
-      state.stderr.push(text);
-    },
     randomUUID: () => state.uuid,
     statePaths: () => ({ secureMcpLaunch: "/synthetic-no-filesystem" }),
     configurationFailure: (error: string) => ({ ok: false, error }),
@@ -315,71 +308,6 @@ const free = (f: Built) =>
     f.admission.occupied("chatgpt-task"),
     f.admission.occupied("connector-task"),
   ]).toEqual([false, false]);
-
-describe("maintenance observation reporting", () => {
-  const observation = {
-    stage: "preparation",
-    event: "end",
-    result: "returned",
-    code: null,
-    monotonicMs: 12,
-    elapsedMs: 3,
-  } as const;
-
-  it("reports nothing outside the dev profile and the E2E run", () => {
-    const f = build();
-    f.reportMaintenanceObservation(observation);
-    expect(f.state.stderr).toEqual([]);
-  });
-
-  it("writes one marked line with the build, the process and the observation", () => {
-    const f = build();
-    f.state.env.FAROL_E2E = "1";
-    f.reportMaintenanceObservation(observation);
-    expect(f.state.stderr).toEqual([
-      `FAROL_STARTUP_MAINTENANCE:${JSON.stringify({
-        schema: 1,
-        buildId: fixtureBuildId,
-        pid: 4242,
-        ...observation,
-      })}\n`,
-    ]);
-  });
-
-  it("reads the environment at the call, not when it is built", () => {
-    const f = build();
-    f.reportMaintenanceObservation(observation);
-    f.state.env.FAROL_E2E = "1";
-    f.reportMaintenanceObservation(observation);
-    f.state.env.FAROL_E2E = "0";
-    f.reportMaintenanceObservation(observation);
-    expect(f.state.stderr).toHaveLength(1);
-  });
-
-  it("reports in the dev profile without the E2E flag", () => {
-    const f = build();
-    const dev = createConnectorVerify({
-      ...f.ports,
-      runtimeEnvironment: "dev",
-    } as unknown as ConnectorVerifyPorts);
-    dev.reportMaintenanceObservation(observation);
-    expect(f.state.stderr).toHaveLength(1);
-  });
-
-  it("never lets a failed write grant recovery or retry", () => {
-    const f = build();
-    f.state.env.FAROL_E2E = "1";
-    const broken = createConnectorVerify({
-      ...f.ports,
-      writeStderr: () => {
-        throw new Error("closed pipe");
-      },
-    } as unknown as ConnectorVerifyPorts);
-    expect(() =>
-      broken.reportMaintenanceObservation(observation),
-    ).not.toThrow();
-  });
-});
 
 describe("refusals before any ChatGPT message", () => {
   const refusals: ReadonlyArray<readonly [string, string, (f: Built) => void]> =

@@ -44,7 +44,7 @@ describe("connector verify wiring in main", () => {
   it("shares the const owners and the function ports by reference", async () => {
     const { source, body } = await read();
     expect(body).toContain(
-      " desktopAdmission, buildIdentity, runtimeEnvironment, env: process.env, pid: process.pid,",
+      " desktopAdmission, buildIdentity, runtimeEnvironment, randomUUID, statePaths,",
     );
     expect(body).toContain(
       " randomUUID, statePaths, configurationFailure, embeddedBrowserEnabled, chatGptTaskAdmissionReady,",
@@ -75,16 +75,15 @@ describe("connector verify wiring in main", () => {
     );
   });
 
-  it("reaches the dialog, the standard error and the environment at the call, through main's own modules", async () => {
+  it("reaches the dialog through main's own module and no longer takes stderr or the environment", async () => {
     const { body } = await read();
     expect(body).toContain(
       "showMessageBox: (owner, options) => dialog.showMessageBox(owner, options),",
     );
-    expect(body).toContain(
-      "writeStderr: (text) => { process.stderr.write(text); },",
-    );
-    // The live environment object, so a seam set after start is still seen.
-    expect(body).toContain("env: process.env,");
+    // The startup maintenance report and its stderr and environment ports
+    // are retired; the verification no longer receives them.
+    expect(body).not.toContain("writeStderr");
+    expect(body).not.toContain("env: process.env");
   });
 
   it("builds the verification lazily and caches it", async () => {

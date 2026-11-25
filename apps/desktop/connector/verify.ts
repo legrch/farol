@@ -24,7 +24,6 @@ import { separateAppVerificationScopeCurrent } from "../../../src/pkg/product-se
 import type { prepareConnectorCheckDocument } from "../bridge/connector-check-readiness";
 import type { DesktopGoCore } from "../go-core-host";
 import type { DesktopAdmission } from "../host/admission";
-import type { MaintenanceObservation } from "../recovery/diagnostics";
 import {
   connectorAppBindingCurrent,
   type ConnectorAppVerificationBinding,
@@ -33,7 +32,7 @@ import {
 import type { connectorSupervisor } from "./supervisor";
 
 // Verifying the ChatGPT app or connector attachment for the one Secure MCP
-// connector, and reporting a startup maintenance observation. Main keeps every
+// connector. Main keeps every
 // owner; each `let` there is a late getter here, read afresh after every await
 // at the same place the original read it. A check that is already attached is
 // handed to the connection check; a first verification reserves both task
@@ -69,9 +68,6 @@ export type ConnectorVerifyPorts = Readonly<{
   >;
   buildIdentity: Readonly<{ buildId: string }>;
   runtimeEnvironment: string;
-  env: Readonly<Record<string, string | undefined>>;
-  pid: number;
-  writeStderr: (text: string) => void;
   randomUUID: () => string;
   statePaths: () => Readonly<{ secureMcpLaunch: string }>;
   configurationFailure: (
@@ -108,9 +104,6 @@ export function createConnectorVerify(ports: ConnectorVerifyPorts) {
     desktopAdmission,
     buildIdentity,
     runtimeEnvironment,
-    env,
-    pid,
-    writeStderr,
     randomUUID,
     statePaths,
     configurationFailure,
@@ -127,26 +120,6 @@ export function createConnectorVerify(ports: ConnectorVerifyPorts) {
     prepareConnectorCheckDocument,
     waitForConnectorAppReceipt,
   } = ports;
-
-  function reportMaintenanceObservation(
-    observation: MaintenanceObservation,
-  ): void {
-    if (runtimeEnvironment !== "dev" && env.FAROL_E2E !== "1") return;
-    try {
-      writeStderr(
-        "FAROL_STARTUP_MAINTENANCE:" +
-          JSON.stringify({
-            schema: 1,
-            buildId: buildIdentity.buildId,
-            pid,
-            ...observation,
-          }) +
-          "\n",
-      );
-    } catch {
-      /* Diagnostics never grant recovery or retry. */
-    }
-  }
 
   // Bootstrap and separate-app recovery retain their existing challenge workflow.
   // Already-attached Setup checks use the same Go owner as the explicit toolbar.
@@ -617,5 +590,5 @@ export function createConnectorVerify(ports: ConnectorVerifyPorts) {
       expectedBinding,
     );
   }
-  return { reportMaintenanceObservation, verifySecureMcpApp };
+  return { verifySecureMcpApp };
 }
