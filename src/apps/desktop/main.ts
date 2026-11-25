@@ -45,7 +45,6 @@ import {
   startDesktopGoCore,
   type DesktopGoCore,
 } from "../../../apps/desktop/go-core-host";
-import { type MaintenanceObservation } from "../../../apps/desktop/recovery/diagnostics";
 import { goCoreQuitClosers } from "../../../apps/desktop/go-core-quit-closers";
 import type {
   ChatComputerAdmissionResponse,
@@ -2029,11 +2028,6 @@ function verifyTunnelClientExecutable(
   );
 }
 
-function reportMaintenanceObservation(
-  observation: MaintenanceObservation,
-): void {
-  connectorVerify().reportMaintenanceObservation(observation);
-}
 // Built once, here, where the function declarations they replace stood. Every
 // call site is inside main() or a later closure, and main() is first called
 // near the end of this module, so each one reads the same built functions.
@@ -3310,44 +3304,14 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   const startup = createStartup({
     app,
     stateRoot,
-    directory,
-    runtimeEnvironment,
-    windowMode,
-    quitSignals,
-    build: buildIdentity,
     compiledGoCore,
-    compiledGoResources,
     installedUpdates,
     desktopAdmission,
     primaryInstanceLock: () => primaryInstanceLock,
     runtimeStopping: () => runtimeStopping,
-    desktopGoCore: () => desktopGoCore,
-    configuration: () => configuration,
-    secureMcpConnectorRuntime: () => secureMcpConnectorRuntime,
-    connectorStartInFlight: () => connectorStartInFlight,
-    modelLifecycle: () => modelLifecycle,
-    pendingComputer,
-    ownedLocalRuntimes,
-    startupRecovery: {
-      get: () => startupRecovery,
-      set: (opened) => {
-        startupRecovery = opened;
-      },
-    },
-    quitTracePhase: (phase) => {
-      quitTracePhase = phase;
-    },
     startupStage,
-    nativeMenuBarEnabled,
-    selectedVisibleTestPlacement,
-    reportMaintenanceObservation,
-    reportQualificationObservation,
-    reportOwnedBackendLifecycle,
-    reportRecoveryStarted: () => {
-      process.stderr.write(`${secondInstanceResultPrefix}primary-recovery\n`);
-    },
-    computerMcpLifecycle,
   });
+
   const previousHostAdmissionReady = await withInstalledStartupFence(
     process.argv,
     app.getPath("userData"),
