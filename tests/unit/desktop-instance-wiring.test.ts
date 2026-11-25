@@ -17,6 +17,11 @@ const factorySource = path.resolve(
   "../../apps/desktop/host/instance.ts",
 );
 
+const primarySource = path.resolve(
+  import.meta.dirname,
+  "../../apps/desktop/host/primary.ts",
+);
+
 async function factoryBody(): Promise<{ source: string; body: string }> {
   const source = await readFile(mainSource, "utf8");
   const header = "function instance() {";
@@ -94,12 +99,21 @@ describe("single-instance host wiring in main", () => {
     );
   });
 
-  it("keeps the stage, the dev-reopen refusal, the secondary wait and the primary branch in this order", async () => {
+  it("hands the lock answer to the primary startup right after the request", async () => {
     const { source } = await factoryBody();
     const tail = source.slice(source.indexOf("\nconst primaryInstanceLock"));
     expect(tail.replace(/\s+/g, " ")).toMatch(
-      /^ const primaryInstanceLock = app\.requestSingleInstanceLock\(instanceRequest\); startupStage\(primaryInstanceLock \? "lock-primary" : "lock-secondary"\); if \( devReopenPrimaryRefused\(runtimeEnvironment, process\.argv, primaryInstanceLock\) \) \{ instance\(\)\.refuseDevReopen\(\); \} else if \(!primaryInstanceLock\) \{ instance\(\)\.settleSecondInstance\(\); \} else \{ const quitSignals = createGracefulQuitSignals\(/u,
+      /^ const primaryInstanceLock = app\.requestSingleInstanceLock\(instanceRequest\); runPrimaryStartup\(\{ primaryInstanceLock, runtimeEnvironment, process, app, dialog, startupStage, instance, initialize: \(\) => main\( createGracefulQuitSignals\(/u,
     );
+    // The stage, refusal and result handling live in the primary startup host.
+    for (const fragment of [
+      "startupStage(primaryInstanceLock",
+      "devReopenPrimaryRefused",
+      "terminateDesktopStartup",
+      "PRIMARY_STARTUP_INCOMPLETE",
+      "startup-complete",
+    ])
+      expect(source).not.toContain(fragment);
   });
 
   it("registers the second-instance listener where main always did", async () => {
@@ -115,20 +129,16 @@ describe("single-instance host wiring in main", () => {
     expect(source).not.toContain('"second-instance"');
   });
 
-  it("keeps only a thin readiness wrapper in main and the primary-started line", async () => {
+  it("keeps no readiness wrapper in main and lets the primary startup read the host", async () => {
     const { source } = await factoryBody();
-    const header = "function isPrimaryReady(): boolean {";
-    const begin = source.indexOf(header);
-    expect(begin).toBeGreaterThanOrEqual(0);
-    expect(source.slice(begin, source.indexOf("\n}\n", begin) + 3)).toBe(
-      `${header}\n  return instance().isPrimaryReady();\n}\n`,
-    );
-    // The primary still writes its own result line with the shared prefix.
+    expect(source).not.toContain("function isPrimaryReady");
+    expect(source).not.toContain("isPrimaryReady()");
     expect(source).toContain(
-      '`${secondInstanceResultPrefix}${isPrimaryReady() ? "primary-started" : "reopen-failed"}\\n`',
+      'import { createInstance } from "../../../apps/desktop/host/instance";',
     );
-    expect(source).toContain(
-      'import {\n  createInstance,\n  secondInstanceResultPrefix,\n} from "../../../apps/desktop/host/instance";',
+    const primary = await readFile(primarySource, "utf8");
+    expect(primary).toContain(
+      '`${secondInstanceResultPrefix}${ports.instance().isPrimaryReady() ? "primary-started" : "reopen-failed"}\\n`',
     );
   });
 

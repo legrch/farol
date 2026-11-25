@@ -143,8 +143,28 @@ describe("ChatGPT session wiring in main", () => {
     );
     // The call sites that remain in main still reach them by the same names,
     // and the configuration ports are still given the main wrappers.
-    expect(source).toContain(
-      "chatGptJournalObservation(recoverableChatGptTask.result),",
+    expect(source.replace(/\s+/g, " ")).toContain(
+      "recordObservation: (result) => startupConfiguration.recordChatGptObservation( chatGptJournalObservation(result), ),",
+    );
+    // Startup recovery writes each main-owned let through its own setter:
+    // a swapped or dropped mapping would publish state to the wrong owner.
+    const flat = source.replace(/\s+/g, " ");
+    for (const [setter, owner] of [
+      ["setJournal", "chatGptTaskJournal"],
+      ["setRecoverableTask", "recoverableChatGptTask"],
+      ["setObservationPersisted", "recoverableChatGptObservationPersisted"],
+      ["setStore", "chatGptConversationStore"],
+      ["setConversation", "chatGptConversation"],
+    ])
+      expect(flat).toContain(`${setter}: (value) => { ${owner} = value; },`);
+    expect(flat).toContain(
+      "freshStartup, create: () => new PrivateChatGptTaskJournal(",
+    );
+    expect(flat).toContain(
+      "if (deepTests.ready) recoverableDeepTests = deepTests.tests; deepTestRecoveryReady = deepTests.ready;",
+    );
+    expect(flat).toContain(
+      "const chatGptInitialUrl = retainedConversation.retainedUrl ?? chatGptUrl;",
     );
     for (const port of [
       "chatGptConversationContinuity,",
