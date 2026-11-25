@@ -61,8 +61,13 @@ export function isChatGptPage(url: string, homeUrl: string): boolean {
 
 // The contents the route currently owns, as the permission generation its
 // owner reports. The route keeps the map: a copy would never find a contents.
+export type RouteContents = Pick<
+  WebContents,
+  "isDestroyed" | "isFocused" | "getURL"
+>;
+
 export type RoutePermissionOwners = Pick<
-  WeakMap<WebContents, () => number | null>,
+  WeakMap<RouteContents, () => number | null>,
   "get"
 >;
 
@@ -72,20 +77,20 @@ export type RouteDownloadItem = Readonly<{
 }>;
 
 export type RoutePermissions = Readonly<{
-  generation(contents: WebContents | null): number | null;
+  generation(contents: RouteContents | null): number | null;
   downloadAllowed(
-    contents: WebContents | null | undefined,
+    contents: RouteContents | null | undefined,
     item: RouteDownloadItem | null | undefined,
     frame?: Readonly<{ origin: string }> | null,
   ): boolean;
   clipboardWriteAllowed(
-    contents: WebContents | null,
+    contents: RouteContents | null,
     permission: string,
     requestingUrl: string,
     isMainFrame: boolean,
   ): boolean;
   microphoneAllowed(
-    contents: WebContents | null,
+    contents: RouteContents | null,
     permission: string,
     requestingUrl: string,
     isMainFrame: boolean,
@@ -96,7 +101,7 @@ export type RoutePermissions = Readonly<{
 export function createRoutePermissions(
   owners: RoutePermissionOwners,
 ): RoutePermissions {
-  function generation(contents: WebContents | null): number | null {
+  function generation(contents: RouteContents | null): number | null {
     try {
       return contents && !contents.isDestroyed()
         ? (owners.get(contents)?.() ?? null)
@@ -112,7 +117,7 @@ export function createRoutePermissions(
   // user gesture, the initiating document's origin, and (while it still
   // exists) the initiating frame, all equal to the managed page's own origin.
   function downloadAllowed(
-    contents: WebContents | null | undefined,
+    contents: RouteContents | null | undefined,
     item: RouteDownloadItem | null | undefined,
     frame?: Readonly<{ origin: string }> | null,
   ): boolean {
@@ -138,7 +143,7 @@ export function createRoutePermissions(
   }
 
   function clipboardWriteAllowed(
-    contents: WebContents | null,
+    contents: RouteContents | null,
     permission: string,
     requestingUrl: string,
     isMainFrame: boolean,
@@ -157,7 +162,7 @@ export function createRoutePermissions(
   }
 
   function microphoneAllowed(
-    contents: WebContents | null,
+    contents: RouteContents | null,
     permission: string,
     requestingUrl: string,
     isMainFrame: boolean,
