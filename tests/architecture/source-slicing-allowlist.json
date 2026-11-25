@@ -7,7 +7,6 @@
     "tests/integration/fresh-chatgpt-journal-startup.test.ts": ["vm"],
     "tests/integration/go-build-without-safe-open.test.ts": ["vm"],
     "tests/integration/secure-mcp-connector-runtime.test.ts": ["vm"],
-    "tests/unit/bundled-tunnel-selection.test.ts": ["vm"],
     "tests/unit/chatgpt-sign-in-status-host.test.mjs": ["vm"],
     "tests/unit/connector-separate-main.test.ts": ["vm"],
     "tests/unit/connector-startup-no-send.test.ts": ["vm"],

@@ -1,23 +1,15 @@
-import fs from "node:fs";
 import path from "node:path";
-import vm from "node:vm";
-import { stripTypeScriptTypes } from "node:module";
-import { parse } from "@babel/parser";
 import { expect, it, vi } from "vitest";
+import {
+  createExecutableHost,
+  type ExecutableHostPorts,
+} from "../../apps/desktop/host/executable";
 import { TUNNEL_CLIENT } from "../../apps/desktop/tunnel-client-contract";
 
 // Executes the actual composition functions with controlled ports. This is
 // selection/refusal evidence, not native execution or upstream qualification.
-const source = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
-const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
-function declaration(name: string) {
-  const node = tree.program.body.find(
-    (n) => n.type === "FunctionDeclaration" && n.id?.name === name,
-  );
-  if (!node || node.start === null || node.end === null)
-    throw Error("TUNNEL_COMPOSITION_MISSING");
-  return source.slice(node.start, node.end);
-}
+// The composition lives in apps/desktop/host/executable.ts; the wiring that
+// reaches it from main is pinned in desktop-executable-wiring.test.ts.
 function harness(fixture?: string, running = false) {
   const directory = "/qualified/app/resources";
   const probe = {
@@ -26,30 +18,25 @@ function harness(fixture?: string, running = false) {
     version: TUNNEL_CLIENT.version,
     protocol: "openai-tunnel-client/v1",
   };
-  const probeTunnelClient = vi.fn(async () => probe);
-  const recordSecureMcpTunnelClient = vi.fn(async () => ({ ok: true }));
-  const globals = {
+  const probeTunnelClient = vi.fn(async (..._input: unknown[]) => probe);
+  const recordSecureMcpTunnelClient = vi.fn(async () => ({
+    ok: true,
+    snapshot: { status: "error", error: "SETTINGS_READ_FAILED" },
+  }));
+  const ports = {
     directory,
-    path,
-    TUNNEL_CLIENT,
-    e2eTunnelClientExecutable: () => fixture,
-    configuration: { recordSecureMcpTunnelClient },
+    env:
+      fixture === undefined
+        ? {}
+        : { FAROL_E2E: "1", FAROL_E2E_TUNNEL_CLIENT: fixture },
+    configuration: () => ({ recordSecureMcpTunnelClient }),
     probeTunnelClient,
-    secureMcpConnectorRuntime: { isRunning: () => running },
+    secureMcpConnectorRuntime: () => ({ isRunning: () => running }),
     configurationFailure: (code: string) => ({ ok: false, code }),
-    ProductConfigurationResultSchema: { parse: (result: unknown) => result },
   };
-  const select = vm.runInNewContext(
-    `${stripTypeScriptTypes(declaration("selectedTunnelClientExecutable"))}; selectedTunnelClientExecutable`,
-    globals,
-  ) as () => Promise<string>;
-  const verify = vm.runInNewContext(
-    `${stripTypeScriptTypes(declaration("verifyTunnelClientExecutable"))}; verifyTunnelClientExecutable`,
-    globals,
-  ) as (
-    selected: string,
-    expected?: { canonicalPath: string; sha256: string },
-  ) => Promise<unknown>;
+  const host = createExecutableHost(ports as unknown as ExecutableHostPorts);
+  const select = host.selectedTunnelClientExecutable;
+  const verify = host.verifyTunnelClientExecutable;
   return {
     select,
     verify,

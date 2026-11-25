@@ -78,6 +78,7 @@ import {
 } from "../../../apps/desktop/connector/start";
 import { createConnectorStop } from "../../../apps/desktop/connector/stop";
 import { createWorkspaceHost } from "../../../apps/desktop/configuration/workspace";
+import { createExecutableHost } from "../../../apps/desktop/host/executable";
 import {
   createProductAgentHost,
   type ProductAgentSession,
@@ -177,7 +178,6 @@ import {
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { TUNNEL_CLIENT } from "../../../apps/desktop/tunnel-client-contract";
 import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
@@ -2169,159 +2169,45 @@ function reverifyDiscoveredCandidate(
   return workspaceHost().reverifyDiscoveredCandidate(kind, requestedPath);
 }
 
+// The Codex and tunnel-client selection and verification live in
+// apps/desktop/host/executable.ts; these wrappers keep the names every consumer
+// already calls.
 function e2eCodexExecutable(): string | "invalid" | undefined {
-  const testExecutable =
-    process.env.FAROL_E2E === "1"
-      ? process.env.FAROL_E2E_CODEX_EXECUTABLE
-      : undefined;
-  if (testExecutable === undefined) return undefined;
-  return path.isAbsolute(testExecutable) && !testExecutable.includes("\0")
-    ? testExecutable
-    : "invalid";
+  return executableHost().e2eCodexExecutable();
 }
 
-async function selectedCodexExecutable(): Promise<
-  string | "cancelled" | "invalid"
-> {
-  const testExecutable = e2eCodexExecutable();
-  if (testExecutable !== undefined) return testExecutable;
-  if (!window) return "invalid";
-  const result = await dialog.showOpenDialog(window, {
-    title: "Choose the Codex executable",
-    buttonLabel: "Verify Codex",
-    properties: ["openFile"],
-    securityScopedBookmarks: false,
-  });
-  if (result.canceled || result.filePaths.length !== 1) return "cancelled";
-  const selected = result.filePaths[0];
-  return selected && path.isAbsolute(selected) && !selected.includes("\0")
-    ? selected
-    : "invalid";
+function selectedCodexExecutable(): Promise<string | "cancelled" | "invalid"> {
+  return executableHost().selectedCodexExecutable();
 }
 
-async function verifyCodexExecutable(
+function verifyCodexExecutable(
   executablePath: string,
   expectedDiscovery?: Readonly<{ canonicalPath: string; sha256: string }>,
 ): Promise<ProductConfigurationResult> {
-  if (!configuration) return configurationFailure("SETTINGS_UNAVAILABLE");
-  try {
-    const probe = await probeCodexHost({
-      executablePath,
-      scratchRoot: statePaths().codexHostProbe,
-      ...(expectedDiscovery ? { expectedDiscovery } : {}),
-    });
-    const recorded = await configuration.recordCodexHost({
-      executablePath: probe.executablePath,
-      executableSha256: probe.executableSha256,
-      version: probe.version,
-      protocol: probe.protocol,
-      schemaSha256: probe.schemaSha256,
-      taskSource: probe.taskSource,
-      buildId: buildIdentity.buildId,
-    });
-    if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
-    return ProductConfigurationResultSchema.parse({
-      ...recorded,
-      evidence: {
-        kind: "host.codex-probe",
-        version: probe.version,
-        protocol: probe.protocol,
-        executableSha256: probe.executableSha256,
-        schemaSha256: probe.schemaSha256,
-        capabilities: probe.capabilities,
-      },
-    });
-  } catch (error) {
-    const code = error instanceof Error ? error.message : "";
-    if (code === "CODEX_HOST_DISCOVERY_CANDIDATE_STALE") {
-      return configurationFailure("CODEX_HOST_DISCOVERY_CANDIDATE_STALE");
-    }
-    const unsupported = code === "CODEX_HOST_INCOMPATIBLE";
-    const recorded = await configuration.recordCodexHostFailure(
-      unsupported ? "unsupported" : "unreachable",
-    );
-    if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
-    if (code === "CODEX_HOST_SELECTION_INVALID") {
-      return configurationFailure("CODEX_HOST_SELECTION_INVALID");
-    }
-    if (code === "CODEX_HOST_EXECUTABLE_UNSAFE") {
-      return configurationFailure("CODEX_HOST_EXECUTABLE_UNSAFE");
-    }
-    if (unsupported) return configurationFailure("CODEX_HOST_INCOMPATIBLE");
-    return configurationFailure("CODEX_HOST_PROBE_FAILED");
-  }
+  return executableHost().verifyCodexExecutable(
+    executablePath,
+    expectedDiscovery,
+  );
 }
 
 function e2eTunnelClientExecutable(): string | "invalid" | undefined {
-  const testExecutable =
-    process.env.FAROL_E2E === "1"
-      ? process.env.FAROL_E2E_TUNNEL_CLIENT
-      : undefined;
-  if (testExecutable === undefined) return undefined;
-  return path.isAbsolute(testExecutable) && !testExecutable.includes("\0")
-    ? testExecutable
-    : "invalid";
+  return executableHost().e2eTunnelClientExecutable();
 }
 
-async function selectedTunnelClientExecutable(): Promise<
+function selectedTunnelClientExecutable(): Promise<
   string | "cancelled" | "invalid"
 > {
-  const testExecutable = e2eTunnelClientExecutable();
-  if (testExecutable !== undefined) return testExecutable;
-  return path.join(directory, TUNNEL_CLIENT.entry);
+  return executableHost().selectedTunnelClientExecutable();
 }
 
-async function verifyTunnelClientExecutable(
+function verifyTunnelClientExecutable(
   executablePath: string,
   expectedDiscovery?: Readonly<{ canonicalPath: string; sha256: string }>,
 ): Promise<ProductConfigurationResult> {
-  if (!configuration) return configurationFailure("SETTINGS_UNAVAILABLE");
-  try {
-    const fixture = e2eTunnelClientExecutable();
-    const bundledPath = path.join(directory, TUNNEL_CLIENT.entry);
-    const fixtureSelected =
-      fixture !== undefined &&
-      fixture !== "invalid" &&
-      fixture === executablePath;
-    if (!fixtureSelected && executablePath !== bundledPath)
-      return configurationFailure("TUNNEL_CLIENT_EXECUTABLE_UNSAFE");
-    const expected = fixtureSelected
-      ? expectedDiscovery
-      : { canonicalPath: bundledPath, sha256: TUNNEL_CLIENT.sha256 };
-    const probe = await probeTunnelClient({
-      executablePath,
-      ...(expected ? { expectedDiscovery: expected } : {}),
-    });
-    if (secureMcpConnectorRuntime?.isRunning()) {
-      return configurationFailure("CONNECTOR_STOP_REQUIRED");
-    }
-    const recorded = await configuration.recordSecureMcpTunnelClient(probe);
-    if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
-    return ProductConfigurationResultSchema.parse({
-      ...recorded,
-      evidence: {
-        kind: "connector.client-probe",
-        version: probe.version,
-        protocol: probe.protocol,
-        executableSha256: probe.executableSha256,
-      },
-    });
-  } catch (error) {
-    const code = error instanceof Error ? error.message : "";
-    if (code === "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE") {
-      return configurationFailure("TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE");
-    }
-    if (code === "TUNNEL_CLIENT_SELECTION_INVALID") {
-      return configurationFailure("TUNNEL_CLIENT_SELECTION_INVALID");
-    }
-    if (code === "TUNNEL_CLIENT_EXECUTABLE_UNSAFE") {
-      return configurationFailure("TUNNEL_CLIENT_EXECUTABLE_UNSAFE");
-    }
-    if (code === "TUNNEL_CLIENT_INCOMPATIBLE") {
-      return configurationFailure("TUNNEL_CLIENT_INCOMPATIBLE");
-    }
-    return configurationFailure("TUNNEL_CLIENT_PROBE_FAILED");
-  }
+  return executableHost().verifyTunnelClientExecutable(
+    executablePath,
+    expectedDiscovery,
+  );
 }
 
 function reportMaintenanceObservation(
@@ -2868,6 +2754,23 @@ function workspaceHost() {
   }));
 }
 let workspaceHostCache: ReturnType<typeof createWorkspaceHost> | null = null;
+
+function executableHost() {
+  return (executableHostCache ??= createExecutableHost({
+    configuration: () => configuration,
+    secureMcpConnectorRuntime: () => secureMcpConnectorRuntime,
+    window: () => window,
+    showOpenDialog: (owner, options) => dialog.showOpenDialog(owner, options),
+    statePaths,
+    buildIdentity,
+    directory,
+    configurationFailure,
+    probeCodexHost,
+    probeTunnelClient,
+    env: process.env,
+  }));
+}
+let executableHostCache: ReturnType<typeof createExecutableHost> | null = null;
 
 function taskPersist() {
   return (taskPersistCache ??= createTaskPersist({
