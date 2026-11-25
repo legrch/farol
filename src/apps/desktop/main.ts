@@ -5,6 +5,7 @@ import {
 } from "../../../apps/desktop/update/host";
 import { createUpdateDockAttention } from "../../../apps/desktop/update/attention";
 import { createStartup } from "../../../apps/desktop/host/startup";
+import { connectGoSettings } from "../../../apps/desktop/core/settings";
 import { createUpdateRelaunchObserver } from "../../../apps/desktop/update/relaunch";
 import { createStartupStage } from "../../../apps/desktop/runtime/stage";
 import {
@@ -3258,42 +3259,16 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
             available: desktopGoCore.shellAvailable,
           }),
       );
-    await runDesktopStartupBoundary("go-settings", () => {
-      const settingsOwner = configuration!;
-      const settingsCore = desktopGoCore!;
-      settingsOwner.attachComputerAuthority(() => settingsCore.withdraw());
-      settingsCore.connectSettingsStore((profileId) => {
-        const store = settingsOwner.attachSettingsDeliveryStore({
-          profileId,
-          ownerId: "owner-desktop",
-        });
-        return {
-          read: (input) => store.read(input.deadlineMillis),
-          replace: (input) => store.replace(input.change, input.deadlineMillis),
-          fence: () => {
-            const observationWindow = window;
-            const outcome = store.fence();
-            if (
-              configuration === settingsOwner &&
-              desktopGoCore === settingsCore &&
-              !desktopAdmission.closed() &&
-              window === observationWindow &&
-              observationWindow &&
-              !observationWindow.isDestroyed()
-            ) {
-              try {
-                observationWindow.webContents.send(
-                  channels.configurationChanged,
-                );
-              } catch {
-                // Renderer delivery must not replace the original fence outcome.
-              }
-            }
-            return outcome;
-          },
-        };
-      });
-    });
+    await runDesktopStartupBoundary("go-settings", () =>
+      connectGoSettings({
+        configuration: () => configuration,
+        core: () => desktopGoCore,
+        window: () => window,
+        admissionClosed: () => desktopAdmission.closed(),
+        ownerId: "owner-desktop",
+        configurationChanged: channels.configurationChanged,
+      }),
+    );
   }
   productAgentStore = new PrivateProductAgentStore({
     root: statePaths().productAgentInputs,
