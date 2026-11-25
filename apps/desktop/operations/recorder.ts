@@ -342,12 +342,20 @@ export function createTotalOperationsRecorder(
       );
     },
     setWorkspaceLabels(workspaces) {
-      observe(() => {
-        labels = OperationWorkspaceLabelsSchema.parse(
-          workspaces.map(({ workspaceId, label }) => ({ workspaceId, label })),
-        );
-        return sink.setWorkspaceLabels?.(labels);
-      }, undefined, undefined, false);
+      observe(
+        () => {
+          labels = OperationWorkspaceLabelsSchema.parse(
+            workspaces.map(({ workspaceId, label }) => ({
+              workspaceId,
+              label,
+            })),
+          );
+          return sink.setWorkspaceLabels?.(labels);
+        },
+        undefined,
+        undefined,
+        false,
+      );
     },
     diagnostics: () => ({
       writeFailures,
