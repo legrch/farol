@@ -34,12 +34,11 @@ describe("context fixture wiring in main", () => {
     expect(body).toContain(
       " env: process.env, demoMode, liveTaskRegistry, contextHost, contextBinding, contextModel, buildHostCompactionHandoff, }",
     );
-    for (const owner of [
-      "demoMode",
-      "liveTaskRegistry",
-      "contextHost",
-      "contextModel",
-    ])
+    // The demo flag is fixed at launch by the launch host.
+    expect(source).toMatch(
+      /\nconst \{[^}]*\bdemoMode,[^}]*\} = readLaunchArguments\(/,
+    );
+    for (const owner of ["liveTaskRegistry", "contextHost", "contextModel"])
       expect(source).toMatch(new RegExp(`\\nconst ${owner}\\b`));
     expect(source).toMatch(/\nfunction contextBinding\(/);
     // The codec is the chat module's own, never a copy in main.
