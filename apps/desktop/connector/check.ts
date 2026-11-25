@@ -251,7 +251,7 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
     const core = desktopGoCore();
     const config = configuration();
     if (!core || !config)
-      return configurationFailure("CONNECTION_CHECK_PREREQUISITES_REQUIRED");
+      return configurationFailure("CONNECTION_CHECK_HOST_NOT_READY");
     // Go's first claim supersedes every unsettled earlier attempt as unknown.
     // Admission is therefore checked and reserved synchronously BEFORE that
     // claim: a second check while one is live (for example after a renderer
@@ -358,7 +358,7 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
                 appSelected: appName !== null,
                 workspaceKnown: workspace !== undefined,
                 tunnelPresent: connector.tunnelId !== null,
-                stateReady: runtime?.state === "ready",
+                runtimeState: runtime?.state ?? "missing",
                 buildCurrent: runtime?.buildId === buildIdentity.buildId,
                 generationsCurrent:
                   runtime?.computerGeneration ===

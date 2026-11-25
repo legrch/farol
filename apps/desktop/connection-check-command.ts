@@ -79,12 +79,13 @@ export function connectionCheckRuntimeReady(
 
 /** Why the connector runtime cannot carry a Ping. PREREQUISITES_REQUIRED stays
  * the ChatGPT page; this names the connector causes so the owner is not sent to
- * the wrong place. Order: not set up, then an unresolved effect, then stopped. */
+ * the wrong place. Order: not set up, then an unresolved effect (including an unknown runtime outcome),
+ * then a set-up connection that is down. */
 export function connectionCheckRuntimeRefusal(input: {
   appSelected: boolean;
   workspaceKnown: boolean;
   tunnelPresent: boolean;
-  stateReady: boolean;
+  runtimeState: "ready" | "unreachable" | "outcome_unknown" | "missing";
   buildCurrent: boolean;
   generationsCurrent: boolean;
   running: boolean;
@@ -94,12 +95,13 @@ export function connectionCheckRuntimeRefusal(input: {
     !input.appSelected ||
     !input.workspaceKnown ||
     !input.tunnelPresent ||
-    !input.stateReady ||
+    input.runtimeState === "missing" ||
     !input.buildCurrent ||
     !input.generationsCurrent
   )
     return "CONNECTION_CHECK_CONNECTOR_NOT_SET_UP";
-  if (input.unresolvedEffect) return "CONNECTION_CHECK_SETUP_UNRESOLVED";
+  if (input.unresolvedEffect || input.runtimeState === "outcome_unknown")
+    return "CONNECTION_CHECK_SETUP_UNRESOLVED";
   return "CONNECTION_CHECK_RUNTIME_NOT_RUNNING";
 }
 
