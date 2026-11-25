@@ -96,9 +96,6 @@ describe("connector verify wiring in main", () => {
   it("keeps thin wrappers that delegate to the one verification under the old names", async () => {
     const { flat } = await read();
     expect(flat).toContain(
-      "function reportMaintenanceObservation( observation: MaintenanceObservation, ): void { connectorVerify().reportMaintenanceObservation(observation); }",
-    );
-    expect(flat).toContain(
       "function verifySecureMcpApp( separate?: SeparateAppVerificationScope, ): Promise<ProductConfigurationResult> { return connectorVerify().verifySecureMcpApp(separate); }",
     );
   });
@@ -125,18 +122,8 @@ describe("connector verify wiring in main", () => {
     const { flat } = await read();
     // The configuration connector takes the verification.
     expect(flat).toContain(" verifySecureMcpApp,");
-    // The startup host takes the observation report and hands it to the
-    // preserving maintenance run.
-    const ports = flat.slice(
-      flat.indexOf("const startup = createStartup({"),
-      flat.indexOf("const previousHostAdmissionReady"),
-    );
-    expect(ports).toContain(" reportMaintenanceObservation,");
-    const startup = (
-      await readFile(path.resolve("apps/desktop/host/startup.ts"), "utf8")
-    ).replace(/\s+/g, " ");
-    expect(startup).toContain(
-      "onMaintenanceObservation: reportMaintenanceObservation,",
-    );
+    // Startup no longer runs a preserving maintenance, so nothing in main
+    // reports its observations.
+    expect(flat).not.toContain("reportMaintenanceObservation");
   });
 });

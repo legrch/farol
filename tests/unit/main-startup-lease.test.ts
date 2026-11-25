@@ -89,7 +89,7 @@ describe("main startup update ordering", () => {
       "utf8",
     );
     expect(startup).toMatch(
-      /async function admit\(\s*updateRelaunch: UpdateRelaunch,\s*verify: \(\) => Promise<boolean>,\s*lease: PromotionLeaseHandle,/,
+      /async function admit\(\s*updateRelaunch: UpdateRelaunch,\s*verify: \(\) => Promise<boolean>,\s*_lease: PromotionLeaseHandle,/,
     );
     expect(main).toMatch(
       /const observeUpdateRelaunch = \(\) =>\s*waitForInstalledUpdateRelaunch\(/,
