@@ -397,6 +397,40 @@ it("keeps an AbortError uncertain without reading its message", () => {
   });
 });
 
+it("maps Node's AbortError code the same way as its name", () => {
+  const abort = Object.assign(new Error("PRIVATE"), {
+    name: "AbortError",
+    code: "ABORT_ERR",
+  });
+  for (const value of [
+    { ok: false, error: abort },
+    { error: { code: "ABORT_ERR" } },
+  ])
+    expect(operationResult(value)).toEqual({
+      outcome: "unknown",
+      code: "unconfirmed",
+    });
+});
+
+it("keeps an invalid workspace label a write failure, not a metadata rejection", async () => {
+  const labels = vi.fn();
+  const recorder = createTotalOperationsRecorder({
+    record: () => {},
+    setWorkspaceLabels: labels,
+  });
+  recorder.setWorkspaceLabels([{ workspaceId: "", label: "a" }]);
+  recorder.setWorkspaceLabels(
+    Array.from({ length: 129 }, () => ({ workspaceId: "w", label: "a" })),
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(recorder.diagnostics()).toMatchObject({
+    writeFailures: 2,
+    rejectedMetadata: 0,
+    recentRejections: [],
+  });
+  expect(labels).not.toHaveBeenCalled();
+});
+
 it("clamps a long rejection path to the persisted schema bound", async () => {
   const long = "a".repeat(39);
   const issue = {
@@ -434,6 +468,7 @@ it("never leaves an errno or a model response status unmapped", () => {
     "ECONNRESET",
     "EPIPE",
     "ETIMEDOUT",
+    "ABORT_ERR",
   ])
     expect(unmapped({ error: { code: errno } }), errno).toBe(false);
   for (const status of ["incomplete", "in_progress", "queued"])
