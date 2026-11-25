@@ -1,10 +1,9 @@
 import { admissionFixture } from "../support/desktop-admission";
 import fs from "node:fs";
-import vm from "node:vm";
-import { stripTypeScriptTypes } from "node:module";
 import { parse } from "@babel/parser";
 import { expect, it, vi, type MockInstance } from "vitest";
 import { DesktopGoCore } from "../../apps/desktop/go-core-host.ts";
+import { connectGoSettings } from "../../apps/desktop/core/settings.ts";
 import { BridgeError, type Client } from "../../apps/desktop/bridge/client.ts";
 import type { ConnectorHostBridge } from "../../apps/desktop/bridge/connector-host.ts";
 import type {
@@ -48,7 +47,19 @@ function visit(value: unknown): void {
 visit(ast);
 if (callbacks.length !== 1)
   throw Error("GO_SETTINGS_COMPOSITION_SOURCE_MISSING");
-const compiled = `(${stripTypeScriptTypes(callbacks[0]!)})()`;
+// Main hands the boundary exactly these late getters; the test supplies the
+// same owners through a mutable scope so identity checks run at call time.
+const wiring = callbacks[0]!.replace(/\s+/g, " ");
+for (const part of [
+  "connectGoSettings({",
+  "configuration: () => configuration,",
+  "core: () => desktopGoCore,",
+  "window: () => window,",
+  "admissionClosed: () => desktopAdmission.closed(),",
+  'ownerId: "owner-desktop",',
+  "configurationChanged: channels.configurationChanged,",
+])
+  if (!wiring.includes(part)) throw Error("GO_SETTINGS_WIRING_CHANGED");
 const build = "b".repeat(64);
 const generation = "a".repeat(64);
 const peer = { profileId: "profile", backendGeneration: "backend" };
@@ -206,7 +217,15 @@ async function fixture(withWindow = true) {
     installedUpdateAdmission: false,
     channels: { configurationChanged: "configuration-changed" },
   };
-  vm.runInNewContext(compiled, admissionFixture(context));
+  const scope = admissionFixture(context);
+  connectGoSettings({
+    configuration: () => scope.configuration,
+    core: () => scope.desktopGoCore,
+    window: () => scope.window,
+    admissionClosed: () => scope.desktopAdmission.closed(),
+    ownerId: "owner-desktop",
+    configurationChanged: scope.channels.configurationChanged,
+  });
   expect(requests).toContain("computer.settings.store.next");
   const savedBeforeLoss = save.mock.calls.length;
   async function lose() {
