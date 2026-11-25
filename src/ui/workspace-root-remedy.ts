@@ -22,7 +22,7 @@ export function workspaceCheckRefusalReason(
     case "WORKSPACE_NOT_FOUND":
       return "This folder no longer exists or was moved.";
     case "WORKSPACE_PATH_REFUSED":
-      return "Farol only opens folders that belong to you. This folder belongs to another user of this Mac, or it is not a plain folder you own.";
+      return "Farol could not open this folder. It may belong to another user of this Mac, be reached through a link, or macOS may be blocking access. Choose a folder you own, or allow access in System Settings › Privacy & Security.";
     default:
       return null;
   }
