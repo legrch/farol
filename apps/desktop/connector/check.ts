@@ -47,14 +47,36 @@ export type ConnectorAppVerificationBinding = Readonly<{
   appName?: string;
 }>;
 
+// The explicit connection check must not be blocked by stale folder access, so
+// it tolerates configured folders with no current verification: the current
+// selection, else the saved verification target while it is still configured,
+// else the first configured folder, else the empty selection. Capturing the
+// binding and re-checking it use this one choice.
+export function connectorCheckWorkspace(
+  settings: ProductSettings,
+): string | null {
+  const selection = connectorWorkspaceSelection(settings);
+  if (selection !== undefined) return selection;
+  const verifiedId = settings.setup.computer.verified?.workspaceId;
+  return verifiedId &&
+    settings.computer.workspaces.some((item) => item.workspaceId === verifiedId)
+    ? verifiedId
+    : (settings.computer.workspaces[0]?.workspaceId ?? null);
+}
+
+// `workspaceOf` defaults to the strict selection every other caller relies on;
+// only the explicit connection check passes its own fallback.
 export function connectorAppBindingCurrent(
   settings: ProductSettings,
   expected: ConnectorAppVerificationBinding,
+  workspaceOf: (
+    settings: ProductSettings,
+  ) => string | null | undefined = connectorWorkspaceSelection,
 ): boolean {
   const connector = settings.connectors.secureMcp;
   return (
     settings.computer.generation === expected.computerGeneration &&
-    connectorWorkspaceSelection(settings) === expected.workspaceId &&
+    workspaceOf(settings) === expected.workspaceId &&
     connector.tunnelId === expected.tunnelId &&
     connector.generation === expected.connectorGeneration &&
     connector.runtime?.runtimeGeneration === expected.runtimeGeneration &&
@@ -328,19 +350,9 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
           const connector = settings.connectors.secureMcp;
           const runtime = connector.runtime;
           const appName = selectedConnectorApp(connector);
-          // Stale folder access must not block a tunnel ping. Prefer the current
-          // selection; otherwise the saved verification target or empty consent.
-          workspace = connectorWorkspaceSelection(settings);
-          if (workspace === undefined) {
-            const verifiedId = settings.setup.computer.verified?.workspaceId;
-            workspace =
-              verifiedId &&
-              settings.computer.workspaces.some(
-                (item) => item.workspaceId === verifiedId,
-              )
-                ? verifiedId
-                : (settings.computer.workspaces[0]?.workspaceId ?? null);
-          }
+          // Stale folder access must not block a tunnel ping: see
+          // connectorCheckWorkspace. The currency check below uses it too.
+          workspace = connectorCheckWorkspace(settings);
           if (
             appName === null ||
             workspace === undefined ||
@@ -440,7 +452,11 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
                 : chatGptRoute()) === route &&
               connectionCheckRuntimeReady(secureMcpConnectorRuntime()) &&
               latest.status === "ready" &&
-              connectorAppBindingCurrent(latest.settings, binding)
+              connectorAppBindingCurrent(
+                latest.settings,
+                binding,
+                connectorCheckWorkspace,
+              )
             );
           };
           if (!current() || !originalDocument())
