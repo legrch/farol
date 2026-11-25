@@ -110,6 +110,13 @@ function withoutRootMark(
   return rest;
 }
 
+function unverified(
+  code: ReadonlyComputerActionErrorCode,
+  source: ReadonlyComputerActionFailureSource,
+): Extract<ReadonlyComputerActionResult, { ok: false }> {
+  return { ok: false, error: { code, source, retry: "never" } };
+}
+
 function workspaceScope(
   scopes: readonly WorkspaceScope[],
   workspaceId: string,
@@ -159,6 +166,22 @@ function relativeExactFilePaths(scope: ExactWorkspaceScope): readonly string[] {
   );
 }
 
+export type ReadonlyWorkspaceVerificationRequest = Readonly<{
+  ownerId: string;
+  sessionId: string;
+  taskId: string;
+  taskEpoch: number;
+  participantId: string;
+  workspaces: readonly Readonly<{
+    workspaceId: string;
+    root?: string | undefined;
+    approvedRoot?: WorkspaceApprovedRoot | undefined;
+  }>[];
+}>;
+
+export type ReadonlyWorkspaceVerificationResult =
+  Readonly<{ ok: true }> | Extract<ReadonlyComputerActionResult, { ok: false }>;
+
 export class RunReadonlyComputerAction {
   constructor(
     private readonly authorities: AuthorityRepository,
@@ -166,6 +189,85 @@ export class RunReadonlyComputerAction {
     private readonly workspace: ReadonlyWorkspace,
     private readonly clock: Clock,
   ) {}
+
+  // The one final check over every workspace a multi-workspace answer names,
+  // run immediately before it is disclosed and with no native work in between.
+  // A per-call recheck only covers its own workspace, so a grant or approval
+  // withdrawn for an earlier entry while a later call ran would otherwise go
+  // unnoticed. Mirrors the Go catalogue's whole-seal disclosure check.
+  async verifyWorkspaces(
+    request: ReadonlyWorkspaceVerificationRequest,
+    context: ReadonlyWorkspaceExecutionContext = {},
+  ): Promise<ReadonlyWorkspaceVerificationResult> {
+    if (context.signal?.aborted)
+      return unverified("WORKSPACE_REQUEST_CANCELLED", "native-workspace");
+    let participant;
+    try {
+      participant = await this.authorities.get(request.participantId);
+    } catch {
+      return unverified(
+        "COMPUTER_AUTHORITY_STORE_UNAVAILABLE",
+        "authority-store",
+      );
+    }
+    if (participant === null)
+      return unverified("COMPUTER_PARTICIPANT_NOT_FOUND", "authority-store");
+    const identity = authorizeTaskIdentity(participant, request);
+    if (!identity.ok) return identity;
+    let approval;
+    try {
+      approval = await this.approvals.get(participant.grant.computerId);
+    } catch {
+      return unverified(
+        "COMPUTER_APPROVAL_STORE_UNAVAILABLE",
+        "authority-store",
+      );
+    }
+    if (approval === null)
+      return unverified("COMPUTER_APPROVAL_NOT_FOUND", "computer-policy");
+    for (const expected of request.workspaces) {
+      const scope = workspaceScope(
+        participant.grant.workspaces,
+        expected.workspaceId,
+      );
+      if (scope === null || scope.mode !== "subtree")
+        return unverified("AUTHORITY_PATH_DENIED", "task-grant");
+      const decision = authorizeComputerAction(
+        participant,
+        approval,
+        {
+          ownerId: request.ownerId,
+          sessionId: request.sessionId,
+          taskId: request.taskId,
+          taskEpoch: request.taskEpoch,
+          operation: {
+            kind: "workspace.list",
+            workspaceId: expected.workspaceId,
+            path: scope.root,
+          },
+        },
+        this.clock.now(),
+      );
+      if (!decision.ok) return decision;
+      const binding = approvedWorkspaceBinding(approval, expected.workspaceId);
+      if (!binding)
+        return unverified("AUTHORITY_PATH_DENIED", "computer-approval");
+      // A usable entry must still sit where it was found. A refused one has
+      // no verified root; its grant and approval just have to still exist.
+      if (
+        expected.root !== undefined &&
+        (scope.root !== expected.root ||
+          expected.approvedRoot === undefined ||
+          binding.approvedRoot.path !== expected.approvedRoot.path ||
+          binding.approvedRoot.device !== expected.approvedRoot.device ||
+          binding.approvedRoot.inode !== expected.approvedRoot.inode)
+      )
+        return unverified("WORKSPACE_ROOT_CHANGED", "native-workspace");
+    }
+    if (context.signal?.aborted)
+      return unverified("WORKSPACE_REQUEST_CANCELLED", "native-workspace");
+    return { ok: true };
+  }
 
   async execute(
     request: ReadonlyComputerActionRequest,

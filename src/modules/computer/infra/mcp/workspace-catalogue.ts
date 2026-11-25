@@ -22,7 +22,7 @@ function invalid(code: string): CallToolResult {
   };
 }
 
-type CatalogueEntry = Readonly<{
+export type CatalogueEntry = Readonly<{
   workspaceId: string;
   root?: string;
   approvedRoot?: { path: string; device: string; inode: string };
@@ -60,6 +60,13 @@ function entryRefusal(response: CallToolResult): CatalogueEntry["refusal"] {
 export async function discoverWorkspaces(
   workspaceIds: readonly string[],
   execute: Execute,
+  // The final disclosure check over every collected entry, usable and refused
+  // alike. A per-call recheck covers only its own workspace, so this is what
+  // stops an earlier entry being published after its grant was withdrawn while
+  // a later call ran. A failure discards the whole collection.
+  verify?: (
+    entries: readonly CatalogueEntry[],
+  ) => Promise<CallToolResult | null>,
 ): Promise<CallToolResult> {
   if (
     workspaceIds.length > MAX_WORKSPACES ||
@@ -111,6 +118,8 @@ export async function discoverWorkspaces(
         return invalid("COMPUTER_WORKSPACE_CONTEXT_CHANGED");
     }
   }
+  const refusedFinal = await verify?.(workspaces);
+  if (refusedFinal) return refusedFinal;
   const value = {
     ok: true,
     workspaces,
