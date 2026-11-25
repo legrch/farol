@@ -5,6 +5,7 @@ import {
 } from "../../../apps/desktop/update/host";
 import { createUpdateDockAttention } from "../../../apps/desktop/update/attention";
 import { createStartup } from "../../../apps/desktop/host/startup";
+import { createUpdateRelaunchObserver } from "../../../apps/desktop/update/relaunch";
 import { createStartupStage } from "../../../apps/desktop/runtime/stage";
 import {
   readySchema,
@@ -3049,22 +3050,14 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     quitTrace = null;
   }
   instance().listenForSecondInstance();
-  const observeUpdateRelaunch = () =>
-    waitForInstalledUpdateRelaunch({
-      args: process.argv,
-      directory,
-      userData: app.getPath("userData"),
-      build: buildIdentity,
-      physicalFiles: rawFs,
-      copyApp: (source, destination) =>
-        rawFs.cp(source, destination, {
-          recursive: true,
-          force: false,
-          errorOnExist: true,
-          verbatimSymlinks: true,
-          preserveTimestamps: true,
-        }),
-    });
+  const observeUpdateRelaunch = createUpdateRelaunchObserver({
+    wait: waitForInstalledUpdateRelaunch,
+    args: process.argv,
+    directory,
+    userData: () => app.getPath("userData"),
+    build: buildIdentity,
+    files: rawFs,
+  });
   const stateRoot = statePaths().state;
   const startup = createStartup({
     app,
