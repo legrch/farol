@@ -210,10 +210,10 @@ describe("Route B and context host wiring in main", () => {
   it("serves the model endpoint from the runtime read at call time", async () => {
     const { flat } = await read();
     expect(flat).toContain(
-      "routeBModelTurnHandler( () => contextHost.routeB.get()?.endpoint ?? null, )",
+      "routeBTurn: () => routeBModelTurnHandler(() => contextHost.routeB.get()?.endpoint ?? null),",
     );
     expect(flat).toContain(
-      "routeBModelCompactionHandler( () => contextHost.routeB.get()?.endpoint ?? null, )",
+      "routeBCompaction: () => routeBModelCompactionHandler( () => contextHost.routeB.get()?.endpoint ?? null, ),",
     );
   });
 

@@ -162,9 +162,10 @@ describe("model route host wiring in main", () => {
       'const modelSyntheticReply = process.env.FAROL_E2E === "1" ? process.env.FAROL_MODEL_E2E_SYNTHETIC_REPLY : undefined;',
     );
     expect(flat).toContain(
-      "modelSyntheticReply ? syntheticModelTurnHandler(modelSyntheticReply) : routeBModelTurnHandler(",
+      "syntheticReply: modelSyntheticReply, stateRoot: statePaths().modelEndpoint,",
     );
-    expect(flat.match(/syntheticModelTurnHandler\(/g)).toHaveLength(3);
+    expect(flat).toContain("syntheticTurn: syntheticModelTurnHandler,");
+    expect(flat.match(/syntheticModelTurnHandler\(/g)).toHaveLength(2);
   });
 
   it("creates the owner at module level after the constants it copies and before main", async () => {
