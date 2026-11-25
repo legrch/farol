@@ -83,6 +83,7 @@ import {
 } from "../../../apps/desktop/task/agent";
 import { createTaskCommands } from "../../../apps/desktop/task/command";
 import { createChatGptSession } from "../../../apps/desktop/chat/session";
+import { createReadonlyHost } from "../../../apps/desktop/chat/readonly";
 import { createPreviewRuntime } from "../../../apps/desktop/runtime/host";
 import { createTaskPersist } from "../../../apps/desktop/task/persist";
 import { createTaskRoutes } from "../../../apps/desktop/task/route";
@@ -282,7 +283,6 @@ import {
   CHATGPT_HOME,
   canonicalChatGptConversationUrl,
 } from "./chatgpt-page-policy";
-import { MAX_CHATGPT_CONTEXT_CHARACTERS } from "./chatgpt-readonly-task";
 import {
   ChatGptRoute,
   ChatGptSignInBlockLedger,
@@ -296,9 +296,6 @@ import { RunReadonlyComputerAction } from "../../modules/computer/app/service/ru
 import {
   createParticipantAuthority,
   deriveTaskGrant,
-  type AuthorityCapability,
-  type ComputerApproval,
-  type TaskAdmission,
 } from "../../modules/computer/domain/execution-authority";
 import { InMemoryAuthorityRepository } from "../../modules/computer/infra/repo/in-memory-authorities";
 import { InMemoryComputerApprovalRepository } from "../../modules/computer/infra/repo/in-memory-computer-approvals";
@@ -441,7 +438,6 @@ import {
   verifySelectedTunnelClient,
 } from "./tunnel-client-probe";
 import { resumeComputerConnector } from "./connector-resume-policy";
-import { identityBoundWorkspaces } from "./identity-bound-workspaces";
 import { AuthorityTransitionReservation } from "./authority-transition";
 import { SecureMcpConnectorRuntime } from "./secure-mcp-connector-runtime";
 import { clearConnectorVerificationReceipt } from "../../modules/computer/infra/mcp/connector-verification-receipt";
@@ -1140,10 +1136,6 @@ const readonlyAccountConfirmations = new WeakMap<
   PendingChatGptReadonlyTask,
   ReadAccountConfirmation
 >();
-const readonlyDiscardAttempts = new WeakMap<
-  PendingChatGptReadonlyTask,
-  Promise<boolean>
->();
 let pendingChatGptAttachmentTask: PendingChatGptAttachmentTask | null = null;
 let attachmentStagingReady = true;
 let chatGptTaskJournal: PrivateChatGptTaskJournal | null = null;
@@ -1204,22 +1196,7 @@ function codexAgentOperationActive(): boolean {
 function chatGptReadonlyTaskPreview(
   pending: PendingChatGptReadonlyTask,
 ): Readonly<Record<string, unknown>> {
-  const account = readonlyAccountConfirmations.get(pending)?.projection();
-  return {
-    kind: "chatgpt.readonly-task-preview",
-    sendAvailable: Boolean(pending.goAdmission && goChatStartupProfile),
-    operationId: pending.operationId,
-    workspaceId: pending.workspaceId,
-    workspaceLabel: pending.workspaceLabel,
-    relativePath: pending.relativePath,
-    bytes: pending.bytes,
-    contextCharacters: pending.contextCharacters,
-    contextLimit: MAX_CHATGPT_CONTEXT_CHARACTERS,
-    contextTruncated: pending.contextTruncated,
-    excludedPaths: pending.excludedPaths,
-    expiresAt: new Date(pending.expiresAt).toISOString(),
-    ...(account ? { account } : {}),
-  };
+  return readonlyHost().chatGptReadonlyTaskPreview(pending);
 }
 
 function readonlyAccountCurrent(
@@ -1258,18 +1235,7 @@ function readonlyAccountCurrent(
 function chatGptAttachmentTaskPreview(
   pending: PendingChatGptAttachmentTask,
 ): Readonly<Record<string, unknown>> {
-  return {
-    kind: "chatgpt.attachment-task-preview",
-    operationId: pending.operationId,
-    attachments: pending.attachments.attachments.map(
-      ({ stagedPath: _stagedPath, ...attachment }) => attachment,
-    ),
-    totalBytes: pending.attachments.attachments.reduce(
-      (total, attachment) => total + attachment.bytes,
-      0,
-    ),
-    expiresAt: new Date(pending.expiresAt).toISOString(),
-  };
+  return readonlyHost().chatGptAttachmentTaskPreview(pending);
 }
 
 function verificationWorkspaceAction(
@@ -1277,83 +1243,10 @@ function verificationWorkspaceAction(
   workspace: ApprovedProductWorkspace,
   expiresAt: number,
 ): VerificationWorkspaceAction | null {
-  if (settings.computer.commands === "none") return null;
-  const ownerId = "owner-desktop";
-  const sessionId = "desktop-command-session";
-  const taskId = "desktop-command-task";
-  const participantId = "desktop-command-main";
-  const approvalCapabilities: AuthorityCapability[] = [
-    "workspace.list",
-    "workspace.read",
-    "workspace.search",
-    "verification.run",
-    ...(settings.computer.workspaces.some(
-      (candidate) => candidate.access === "write",
-    )
-      ? (["workspace.write"] as const)
-      : []),
-  ];
-  const bound = identityBoundWorkspaces(settings.computer.workspaces);
-  const approval: ComputerApproval = {
-    ownerId,
-    computerId: settings.computer.computerId,
-    generation: settings.computer.generation,
-    workspaces: bound.map((candidate) => ({
-      workspaceId: candidate.workspaceId,
-      root: candidate.root,
-      access: candidate.access,
-      rootIdentity: candidate.rootIdentity,
-      ...(candidate.gitMetadata ? { gitMetadata: candidate.gitMetadata } : {}),
-    })),
-    excludedPaths: bound.flatMap((candidate) =>
-      candidate.excludedPaths.map((excluded) => ({
-        workspaceId: candidate.workspaceId,
-        path: excluded,
-      })),
-    ),
-    capabilities: approvalCapabilities,
-    network: "none",
-    commands: settings.computer.commands,
+  return readonlyHost().verificationWorkspaceAction(
+    settings,
+    workspace,
     expiresAt,
-  };
-  const admission: TaskAdmission = {
-    authorityId: `desktop-command-authority-${settings.computer.generation}`,
-    ownerId,
-    sessionId,
-    taskId,
-    taskEpoch: settings.computer.generation,
-    computerId: settings.computer.computerId,
-    computerGeneration: settings.computer.generation,
-    workspaces: [
-      {
-        workspaceId: workspace.workspaceId,
-        mode: "subtree",
-        root: workspace.root,
-        access: "read",
-      },
-    ],
-    excludedPaths: workspace.excludedPaths.map((excluded) => ({
-      workspaceId: workspace.workspaceId,
-      path: excluded,
-    })),
-    capabilities: ["verification.run"],
-    network: "none",
-    commands: settings.computer.commands,
-    expiresAt,
-  };
-  const grant = deriveTaskGrant(approval, admission, Date.now());
-  if (!grant.ok) return null;
-  const participant = createParticipantAuthority(grant.value, {
-    participantId,
-    role: "main",
-    mutationOwnership: "none",
-  });
-  if (!participant.ok) return null;
-  return new RunReadonlyComputerAction(
-    new InMemoryAuthorityRepository([participant.value]),
-    new InMemoryComputerApprovalRepository([approval]),
-    nativeWorkspace,
-    { now: () => Date.now() },
   );
 }
 
@@ -2091,40 +1984,16 @@ function discardPreparedChatGptTask(operationId: string): Promise<boolean> {
   return chatGptSession().discardPrepared(operationId);
 }
 
-async function withdrawGoReadonlyAdmission(
+function withdrawGoReadonlyAdmission(
   admission: ChatComputerAdmissionResponse | undefined,
 ): Promise<boolean> {
-  if (!admission) return true;
-  if (!desktopGoCore) return false;
-  try {
-    await desktopGoCore.withdrawReadIntent(admission);
-    return true;
-  } catch {
-    return false;
-  }
+  return readonlyHost().withdrawGoReadonlyAdmission(admission);
 }
 
 function discardPreparedReadonlyTask(
   pending: PendingChatGptReadonlyTask,
 ): Promise<boolean> {
-  const previous = readonlyDiscardAttempts.get(pending);
-  if (previous) return previous;
-  // The selected Go owner confirms its own cancellation/ACK. Only a legacy
-  // preview owns a legacy journal entry; never create or clear a Go mirror.
-  // Retain either failure; UI repetition is not a retry.
-  const result = Promise.resolve().then(async () => {
-    if (!(await withdrawGoReadonlyAdmission(pending.goAdmission))) return false;
-    if (
-      pending.goAdmission === undefined &&
-      !(await discardPreparedChatGptTask(pending.operationId))
-    )
-      return false;
-    if (pendingChatGptReadonlyTask === pending)
-      pendingChatGptReadonlyTask = null;
-    return true;
-  });
-  readonlyDiscardAttempts.set(pending, result);
-  return result;
+  return readonlyHost().discardPreparedReadonlyTask(pending);
 }
 
 function selectedChatGptAttachmentPaths(): Promise<
@@ -2392,6 +2261,26 @@ function chatGptSession() {
 let chatGptSessionCache: ReturnType<
   typeof createChatGptSession<ProductConfigurationResult>
 > | null = null;
+
+function readonlyHost() {
+  return (readonlyHostCache ??= createReadonlyHost({
+    goChatStartupProfile: () => goChatStartupProfile,
+    desktopGoCore: () => desktopGoCore,
+    readonlyAccountConfirmations,
+    pendingChatGptReadonlyTask: () => pendingChatGptReadonlyTask,
+    setPendingChatGptReadonlyTask: (value) => {
+      pendingChatGptReadonlyTask = value;
+    },
+    discardPreparedChatGptTask,
+    nativeWorkspace,
+    deriveTaskGrant,
+    createParticipantAuthority,
+    InMemoryAuthorityRepository,
+    InMemoryComputerApprovalRepository,
+    RunReadonlyComputerAction,
+  }));
+}
+let readonlyHostCache: ReturnType<typeof createReadonlyHost> | null = null;
 
 function previewRuntime() {
   return (previewRuntimeCache ??= createPreviewRuntime<RuntimeReady>({
