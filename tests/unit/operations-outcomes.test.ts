@@ -791,7 +791,7 @@ it("maps every fixed chat terminal reason the runtime produces", () => {
   expect(mappedOperationOutcome("provider_not_dispatched")).toBe("refused");
 });
 
-it("records an open or composite chat terminal code as one mapped unknown code", () => {
+it("records an open or composite chat terminal code as one mapped code under the phase outcome", () => {
   const record = vi.fn();
   const recorder = createTotalOperationsRecorder({ record });
   for (const open of [
@@ -803,15 +803,24 @@ it("records an open or composite chat terminal code as one mapped unknown code",
     expect(code).toBe("CHAT_TERMINAL_CODE_UNRECOGNIZED");
     recorder.record(metadata, "failed", code, 0);
   }
-  expect(mappedOperationOutcome("CHAT_TERMINAL_CODE_UNRECOGNIZED")).toBe(
+  recorder.record(
+    metadata,
     "unknown",
+    chatTerminalOperationCode("native-host:SOME_FUTURE_CODE"),
+    0,
+  );
+  expect(mappedOperationOutcome("CHAT_TERMINAL_CODE_UNRECOGNIZED")).toBe(
+    "failed",
   );
   expect(recorder.diagnostics().unmappedCodes).toBe(0);
   expect(record.mock.calls.map(([, outcome, code]) => [outcome, code])).toEqual(
-    Array.from({ length: 3 }, () => [
-      "unknown",
-      "CHAT_TERMINAL_CODE_UNRECOGNIZED",
-    ]),
+    [
+      ...Array.from({ length: 3 }, () => [
+        "failed",
+        "CHAT_TERMINAL_CODE_UNRECOGNIZED",
+      ]),
+      ["unknown", "CHAT_TERMINAL_CODE_UNRECOGNIZED"],
+    ],
   );
   expect(JSON.stringify(record.mock.calls)).not.toContain("PRIVATE_DETAIL");
   // The old raw recording counted each of these as an unmapped code.

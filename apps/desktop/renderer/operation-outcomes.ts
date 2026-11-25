@@ -1861,6 +1861,12 @@ export const operationCodesByOutcome = {
     "TURN_CORRELATION",
     "FIXTURE_PROVIDER_FAILURE",
     "FIXTURE_TOOL_RESULT_MISSING",
+    // A chat turn terminal reason the desktop does not own: the runtime builds
+    // it from provider, computer-capability and source:code text, so it is an
+    // open string on the wire. It is recorded under this one code. It sits in
+    // the failed bucket so the turn phase keeps deciding the outcome: a failed
+    // phase stays failed and an outcome_unknown phase stays unknown.
+    "CHAT_TERMINAL_CODE_UNRECOGNIZED",
     "fail",
     "AGENT_ASSIGNMENT_FAILED",
     "AGENT_DELIVERY_FAILED",
@@ -1986,10 +1992,6 @@ export const operationCodesByOutcome = {
     "write-failed",
   ],
   unknown: [
-    // A chat turn terminal reason the desktop does not own: the runtime builds
-    // it from provider, computer-capability and source:code text, so it is an
-    // open string on the wire. It is recorded under this one code.
-    "CHAT_TERMINAL_CODE_UNRECOGNIZED",
     "cancel_after_dispatch",
     "provider_outcome_unknown",
     "provider_stream_ended_without_terminal",
