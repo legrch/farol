@@ -185,6 +185,48 @@ describe("installed update host", () => {
     expect(f.updater.manualCheck).toHaveBeenCalledOnce();
   });
 
+  describe("explicit Check for Updates", () => {
+    const idle = {
+      phase: "idle",
+      checkedAt: 1,
+    } as unknown as InstalledUpdateView;
+    const failed = {
+      phase: "failed",
+      code: "UPDATE_CHECK_FAILED",
+      recoveryRequired: false,
+    } as unknown as InstalledUpdateView;
+    it.each([idle, failed])("runs one manual check when %#", async (view) => {
+      const f = fixture();
+      await f.host.initialize();
+      f.runtime().publish(view);
+      const first = f.host.requestCheck();
+      expect(f.host.requestCheck()).toBe(first);
+      await first;
+      expect(f.updater.manualCheck).toHaveBeenCalledOnce();
+    });
+    it.each(["checking", "downloading", "ready", "applying", "available"])(
+      "does not check while %s",
+      async (phase) => {
+        const f = fixture();
+        await f.host.initialize();
+        f.runtime().publish({
+          phase,
+          version: "1",
+        } as unknown as InstalledUpdateView);
+        await f.host.requestCheck();
+        expect(f.updater.manualCheck).not.toHaveBeenCalled();
+      },
+    );
+    it("does not check after Quit begins", async () => {
+      const f = fixture();
+      await f.host.initialize();
+      f.runtime().publish(idle);
+      f.admission.beginQuit();
+      await f.host.requestCheck();
+      expect(f.updater.manualCheck).not.toHaveBeenCalled();
+    });
+  });
+
   it.each(["rollback", "recover"])(
     "refuses retired %s without changing retained state",
     async (kind) => {
