@@ -500,11 +500,6 @@
     },
     {
       "code": "GO_BOOT_FILE",
-      "file": "boot/recovery.go",
-      "detail": "Boot holds only boot.go, chat.go, computer.go, release.go, task.go"
-    },
-    {
-      "code": "GO_BOOT_FILE",
       "file": "boot/releasehelperclosed.go",
       "detail": "Boot holds only boot.go, chat.go, computer.go, release.go, task.go"
     },
@@ -1995,30 +1990,6 @@
     },
     {
       "code": "GO_BOOT_LOGIC",
-      "file": "boot/recovery.go",
-      "detail": "conditions other than err != nil",
-      "amount": 17
-    },
-    {
-      "code": "GO_BOOT_LOGIC",
-      "file": "boot/recovery.go",
-      "detail": "for statements",
-      "amount": 2
-    },
-    {
-      "code": "GO_BOOT_LOGIC",
-      "file": "boot/recovery.go",
-      "detail": "switch statements",
-      "amount": 1
-    },
-    {
-      "code": "GO_BOOT_LOGIC",
-      "file": "boot/recovery.go",
-      "detail": "top-level types beyond one namespace type",
-      "amount": 1
-    },
-    {
-      "code": "GO_BOOT_LOGIC",
       "file": "boot/releasehelperclosed.go",
       "detail": "conditions other than err != nil",
       "amount": 87
@@ -3385,21 +3356,6 @@
     {
       "code": "GO_BOOT_TEST",
       "file": "boot/readintentselection_test.go",
-      "detail": "Boot has no tests; whole-graph tests live under tests/"
-    },
-    {
-      "code": "GO_BOOT_TEST",
-      "file": "boot/recovery_test.go",
-      "detail": "Boot has no tests; whole-graph tests live under tests/"
-    },
-    {
-      "code": "GO_BOOT_TEST",
-      "file": "boot/recoveryindependent_test.go",
-      "detail": "Boot has no tests; whole-graph tests live under tests/"
-    },
-    {
-      "code": "GO_BOOT_TEST",
-      "file": "boot/recoveryindependentnative_test.go",
       "detail": "Boot has no tests; whole-graph tests live under tests/"
     },
     {
