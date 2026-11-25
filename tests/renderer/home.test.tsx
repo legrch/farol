@@ -279,6 +279,25 @@ it.each(["stale", "unavailable"] as const)(
     );
   },
 );
+it("names a refused workspace check as a workspace problem, not a connection problem", async () => {
+  const value = working();
+  const id = `settings:computer.verify-workspace:${
+    (value.configuration as { settings: ReturnType<typeof readySettings> })
+      .settings.computer.workspaces[0]!.workspaceId
+  }`;
+  const h = await mount({
+    ...value,
+    status: "stale",
+    intents: { [id]: { id, state: "refused", code: "WORKSPACE_PATH_REFUSED" } },
+  });
+  expect(h.host.textContent).toContain(
+    "Setup complete · workspace needs attention",
+  );
+  expect(
+    h.host.querySelector(".home-health-warning")?.getAttribute("aria-label"),
+  ).toBe("Workspace needs attention");
+  expect(h.host.textContent).not.toContain("connection needs attention");
+});
 it("keeps a completed setup connected without a fresh sign-in check", async () => {
   const value = working();
   const h = await mount({
