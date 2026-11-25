@@ -145,6 +145,11 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
   async function checkSecureMcpAttachment(
     expectedWorkspaceId?: string | null,
     expectedBinding?: ConnectorAppVerificationBinding,
+    // Only the explicit connection check passes its own fallback; every other
+    // caller keeps the strict selection.
+    workspaceOf: (
+      settings: ProductSettings,
+    ) => string | null | undefined = connectorWorkspaceSelection,
   ): Promise<ProductConfigurationResult> {
     if (!configuration() || !secureMcpConnectorRuntime()) {
       return configurationFailure("SETTINGS_UNAVAILABLE");
@@ -161,7 +166,11 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
       }
       if (
         expectedBinding &&
-        !connectorAppBindingCurrent(snapshot.settings, expectedBinding)
+        !connectorAppBindingCurrent(
+          snapshot.settings,
+          expectedBinding,
+          workspaceOf,
+        )
       ) {
         return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
       }
@@ -189,7 +198,7 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
       }
       if (
         expectedWorkspaceId !== undefined &&
-        connectorWorkspaceSelection(snapshot.settings) !== expectedWorkspaceId
+        workspaceOf(snapshot.settings) !== expectedWorkspaceId
       ) {
         return configurationFailure("CONNECTOR_ATTACHMENT_INVALID");
       }
@@ -218,7 +227,7 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
         receipt.binding.connectorGeneration !== String(connector.generation) ||
         (expectedWorkspaceId !== undefined &&
           workspaceId !== expectedWorkspaceId) ||
-        connectorWorkspaceSelection(snapshot.settings) !== workspaceId
+        workspaceOf(snapshot.settings) !== workspaceId
       )
         return configurationFailure("CONNECTOR_ATTACHMENT_INVALID");
       const latest = configuration()!.snapshot();
@@ -234,7 +243,11 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
         latest.settings.connectors.secureMcp.challenge?.challengeSha256 !==
           challenge.challengeSha256 ||
         (expectedBinding &&
-          !connectorAppBindingCurrent(latest.settings, expectedBinding))
+          !connectorAppBindingCurrent(
+            latest.settings,
+            expectedBinding,
+            workspaceOf,
+          ))
       )
         return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
       const receiptSha256 = observed.receiptSha256;
@@ -553,7 +566,11 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
         return configurationFailure("CONNECTION_CHECK_OUTCOME_UNKNOWN");
       // Only the existing sole Settings writer publishes attachment/setup state.
       // A historical replay never repeats this possibly unacknowledged write.
-      const published = await checkSecureMcpAttachment(workspace, expected);
+      const published = await checkSecureMcpAttachment(
+        workspace,
+        expected,
+        connectorCheckWorkspace,
+      );
       if (!published.ok)
         return configurationFailure(
           published.error === "SETTINGS_WRITE_FAILED"
