@@ -84,6 +84,7 @@ import { createReadonlyHost } from "../../../apps/desktop/chat/readonly";
 import { createPreviewRuntime } from "../../../apps/desktop/runtime/host";
 import { createTaskPersist } from "../../../apps/desktop/task/persist";
 import { createTaskRoutes } from "../../../apps/desktop/task/route";
+import { createTaskSurface } from "../../../apps/desktop/task/surface";
 import { connectorSupervisor } from "../../../apps/desktop/connector/supervisor";
 import { createCoreReporters } from "../../../apps/desktop/core/report";
 import { startGoCore } from "../../../apps/desktop/core/start";
@@ -1510,44 +1511,28 @@ function bootstrap() {
 }
 
 function publishTasksState(): void {
-  if (demoMode) return;
-  window?.webContents.send(channels.tasksState, liveTaskRegistry.snapshot());
+  taskSurface().publishTasksState();
 }
 
 function taskFailure(
   error: Extract<ProductTaskCommandResult, { ok: false }>["error"],
 ): ProductTaskCommandResult {
-  return ProductTaskCommandResultSchema.parse({
-    ok: false,
-    error,
-    state: liveTaskRegistry.snapshot(),
-  });
+  return taskSurface().taskFailure(error);
 }
 
 function taskSuccess(taskId: string | null): ProductTaskCommandResult {
-  return ProductTaskCommandResultSchema.parse({
-    ok: true,
-    state: liveTaskRegistry.snapshot(),
-    selectedTaskId: taskId,
-  });
+  return taskSurface().taskSuccess(taskId);
 }
 
 function surfaceLiveTaskPersistenceFailure(taskId: string): void {
-  if (!liveTaskRegistry.get(taskId)) return;
-  liveTaskRegistry.setLifecycle(taskId, "outcome_unknown");
-  publishTasksState();
+  taskSurface().surfaceLiveTaskPersistenceFailure(taskId);
 }
 
 function setLiveTaskLifecycle(
   taskId: string,
   lifecycle: ProductTask["lifecycle"],
 ): void {
-  if (liveTaskRegistry.get(taskId)?.lifecycle === lifecycle) return;
-  if (!liveTaskRegistry.setLifecycle(taskId, lifecycle)) return;
-  publishTasksState();
-  void persistLiveTaskState().catch(() =>
-    surfaceLiveTaskPersistenceFailure(taskId),
-  );
+  taskSurface().setLiveTaskLifecycle(taskId, lifecycle);
 }
 
 // S35-03: a later turn of an existing task becomes the `TASK_RUNNING`
@@ -1765,69 +1750,7 @@ async function initializeLiveTaskState(): Promise<void> {
 }
 
 async function openLiveTaskSurface(taskId: string): Promise<boolean> {
-  if (desktopAdmission.closed()) return false;
-  const route = liveTaskRoutes.get(taskId);
-  const task = liveTaskRegistry.get(taskId);
-  if (!route || !task) return false;
-  const currentTask = () => {
-    const current = liveTaskRegistry.get(taskId);
-    return liveTaskRoutes.get(taskId) === route &&
-      current?.sessionId === task.sessionId &&
-      current.turnId === task.turnId
-      ? current
-      : null;
-  };
-  const recordSurfaceFailure = () => {
-    if (!currentTask()) return;
-    const error = "TASK_SURFACE_UNREACHABLE";
-    taskSurfaceFailures.set(taskId, error);
-    try {
-      publishTaskSurfaceStatus({ taskId, state: "failed", error });
-    } catch {
-      // An unavailable observer cannot replace the classified load failure.
-    }
-    const current = currentTask();
-    // Loading a surface does not resolve an existing Task obligation or
-    // replace a completion already observed by the activity owner.
-    if (
-      !current ||
-      current.lifecycle === "running" ||
-      current.lifecycle === "outcome_unknown" ||
-      current.lifecycle === "completed"
-    )
-      return;
-    try {
-      setLiveTaskLifecycle(taskId, "failed");
-    } catch {
-      // Keep the original route outcome and recorded surface failure when
-      // the existing lifecycle owner's synchronous publication cannot finish.
-    }
-  };
-  try {
-    const opened = await route.open();
-    if (!currentTask()) return false;
-    if (opened.status !== "opened") {
-      recordSurfaceFailure();
-      return false;
-    }
-    // Live ChatGPT surfaces also publish their observed load result. Without
-    // this, renderer controls requiring a ready selected page never appear.
-    taskSurfaceFailures.delete(taskId);
-    publishTaskSurfaceStatus({ taskId, state: "ready", error: null });
-    const current = currentTask();
-    if (!current) return false;
-    if (current.lifecycle === "failed") {
-      setLiveTaskLifecycle(taskId, "idle");
-    }
-    if (!currentTask()) return false;
-    applyLayout();
-    if (!currentTask()) return false;
-    focusForLayoutAfterRendererCommit();
-    return currentTask() !== null;
-  } catch {
-    recordSurfaceFailure();
-    return false;
-  }
+  return taskSurface().openLiveTaskSurface(taskId);
 }
 
 function productAgentCapabilityAvailable(): boolean {
@@ -2279,6 +2202,26 @@ function taskRoutes() {
 }
 let taskRoutesCache: ReturnType<typeof createTaskRoutes<ChatGptRoute>> | null =
   null;
+
+function taskSurface() {
+  return (taskSurfaceCache ??= createTaskSurface<ProductTaskCommandResult>({
+    currentWindow: () => window,
+    demoMode,
+    channels,
+    desktopAdmission,
+    liveTaskRegistry,
+    liveTaskRoutes,
+    taskSurfaceFailures,
+    parseResult: (candidate) => ProductTaskCommandResultSchema.parse(candidate),
+    persistLiveTaskState,
+    publishTaskSurfaceStatus,
+    applyLayout,
+    focusForLayoutAfterRendererCommit,
+  }));
+}
+let taskSurfaceCache: ReturnType<
+  typeof createTaskSurface<ProductTaskCommandResult>
+> | null = null;
 
 function chatGptSession() {
   return (chatGptSessionCache ??=

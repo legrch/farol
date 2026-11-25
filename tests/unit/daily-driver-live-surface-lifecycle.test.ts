@@ -18,42 +18,42 @@ import type {
 // Actual helper, lifecycle/persistence callbacks and activity owner with the
 // real registry/schema. Route settlements, persistence and host presentation
 // ports are controlled: no provider, native disposal or durable acceptance.
-const source = fs.readFileSync(
-  new URL("../../src/apps/desktop/main.ts", import.meta.url),
-  "utf8",
-);
 // The activity owner moved with the route builders into the task route
-// factory; the lifecycle and persistence callbacks stay in main.
+// factory; the surface helpers, the lifecycle and persistence callbacks moved
+// into the task surface factory.
 const routeSource = fs.readFileSync(
   new URL("../../apps/desktop/task/route.ts", import.meta.url),
   "utf8",
 );
-const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
+const surfaceSource = fs.readFileSync(
+  new URL("../../apps/desktop/task/surface.ts", import.meta.url),
+  "utf8",
+);
 const routeTree = parse(routeSource, {
   sourceType: "module",
   plugins: ["typescript"],
 });
-function functionNode(name: string) {
-  const node = tree.program.body.find(
-    (node) => node.type === "FunctionDeclaration" && node.id?.name === name,
-  );
-  if (!node || node.type !== "FunctionDeclaration" || !node.body)
-    throw new Error("LIVE_SURFACE_FUNCTION_MISSING:" + name);
-  return node;
-}
-function routeFunctionNode(name: string) {
-  const factory = routeTree.program.body.find(
+const surfaceTree = parse(surfaceSource, {
+  sourceType: "module",
+  plugins: ["typescript"],
+});
+function factoryFunctionNode(
+  factoryTree: typeof routeTree,
+  factoryName: string,
+  name: string,
+) {
+  const factory = factoryTree.program.body.find(
     (node) =>
       node.type === "ExportNamedDeclaration" &&
       node.declaration?.type === "FunctionDeclaration" &&
-      node.declaration.id?.name === "createTaskRoutes",
+      node.declaration.id?.name === factoryName,
   );
   if (
     !factory ||
     factory.type !== "ExportNamedDeclaration" ||
     factory.declaration?.type !== "FunctionDeclaration"
   )
-    throw new Error("LIVE_SURFACE_FUNCTION_MISSING:createTaskRoutes");
+    throw new Error("LIVE_SURFACE_FUNCTION_MISSING:" + factoryName);
   const node = factory.declaration.body.body.find(
     (node) => node.type === "FunctionDeclaration" && node.id?.name === name,
   );
@@ -61,9 +61,15 @@ function routeFunctionNode(name: string) {
     throw new Error("LIVE_SURFACE_FUNCTION_MISSING:" + name);
   return node;
 }
+function routeFunctionNode(name: string) {
+  return factoryFunctionNode(routeTree, "createTaskRoutes", name);
+}
+function surfaceFunctionNode(name: string) {
+  return factoryFunctionNode(surfaceTree, "createTaskSurface", name);
+}
 function bytes(
   node: { start?: number | null; end?: number | null },
-  text = source,
+  text: string,
 ) {
   if (node.start == null || node.end == null)
     throw new Error("LIVE_SURFACE_SOURCE_RANGE_MISSING");
@@ -74,7 +80,7 @@ const functions = [
   "setLiveTaskLifecycle",
   "surfaceLiveTaskPersistenceFailure",
   "publishTasksState",
-].map((name) => bytes(functionNode(name)));
+].map((name) => bytes(surfaceFunctionNode(name), surfaceSource));
 const activity = routeFunctionNode("createLiveChatGptRoute")
   .body.body.filter((node) => node.type === "VariableDeclaration")
   .flatMap((node) => node.declarations)
@@ -180,7 +186,11 @@ function host(lifecycle: ProductTaskLifecycle = "idle") {
   });
   const api = vm.runInNewContext(
     stripTypeScriptTypes(
-      functions.join("\n") +
+      // The factory reads the window through a late getter port; main binds
+      // it as `() => window`, so the controlled context's window is read at
+      // each call, never captured.
+      "const currentWindow = () => window;\n" +
+        functions.join("\n") +
         "\nconst recordTaskActivity = " +
         activitySource +
         ";\n({open:openLiveTaskSurface, activity:recordTaskActivity, persistenceFailure:surfaceLiveTaskPersistenceFailure});",
