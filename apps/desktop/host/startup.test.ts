@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,7 +8,7 @@ import { createStartup, type StartupPorts } from "./startup";
 // `let`s are fields the ports read afresh; the lease, the update relaunch and
 // the host-stop confirmation are recorders. The run-marker writer is the real
 // one, so a marker on disk is the evidence that admission completed. These
-// cases cover the fresh, no-core, lost-lease and unclean-fresh paths; the
+// cases cover the fresh, no-core, lost-lease and unclean-without-Settings paths; the
 // preserving maintenance and the recovery window keep their own suites.
 
 const roots: string[] = [];
@@ -69,6 +69,7 @@ function ports(
     reportMaintenanceObservation: () => {},
     reportQualificationObservation: () => {},
     reportOwnedBackendLifecycle: () => {},
+    reportRecoveryStarted: () => log.push("recovery-started"),
     computerMcpLifecycle: () => ({
       confirmCleanHostStop: async (ready) => {
         log.push(`confirm:${ready}`);
@@ -131,16 +132,18 @@ describe("startup admission", () => {
     await expect(stat(marker(root))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("refuses a fresh start after an unclean predecessor before readiness work continues", async () => {
+  it("refuses a fresh start after an unclean predecessor when saved Settings cannot be loaded", async () => {
     const root = await stateRoot();
     await writeFile(marker(root), "{}");
     const log: string[] = [];
     const host = createStartup(ports(root, {}, log));
-    // Saved Settings are mandatory here; this disposable root has none, so the
-    // store refuses and admission stops without a new marker or a later stage.
+    // Saved Settings are mandatory after an unclean predecessor. This root has
+    // none, so loading refuses or finds nothing, admission throws, and the old
+    // marker is left exactly as it was: no history move, no new marker.
     await expect(
       host.admit(undefined as never, async () => true, lease),
     ).rejects.toThrow();
     expect(log).toEqual(["stage:before-ready", "ready", "stage:ready"]);
+    await expect(readFile(marker(root), "utf8")).resolves.toBe("{}");
   });
 });
