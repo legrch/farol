@@ -15,6 +15,7 @@ import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
 // Actual main.ts source composition for the unmoved Codex agent check workspace.
 const main = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
+const runtimeStatus = fs.readFileSync("apps/desktop/runtime/status.ts", "utf8");
 const configurationHost = fs.readFileSync(
   "apps/desktop/configuration/host.ts",
   "utf8",
@@ -476,6 +477,10 @@ describe("main process and renderer wiring", () => {
   });
 
   it("publishes whether the Git checks exist", () => {
-    expect(flat).toContain("gitVerificationAvailable: compiledGoCore === null");
+    expect(runtimeStatus.replace(/\s+/gu, " ")).toContain(
+      "gitVerificationAvailable: compiledGoCore === null",
+    );
+    // Main still lends the compiled declaration it reads that from.
+    expect(flat).toContain("compiledGoCore, WORKSPACE_EDIT_ACK_HOLD_ENV,");
   });
 });

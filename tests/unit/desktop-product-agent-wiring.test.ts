@@ -13,6 +13,11 @@ const mainSource = path.resolve(
   "../../src/apps/desktop/main.ts",
 );
 
+const statusSource = path.resolve(
+  import.meta.dirname,
+  "../../apps/desktop/runtime/status.ts",
+);
+
 async function factoryBody(): Promise<{ source: string; body: string }> {
   const source = await readFile(mainSource, "utf8");
   const begin = source.indexOf("function productAgentHost() {");
@@ -143,8 +148,14 @@ describe("product agent host wiring in main", () => {
     expect(source.slice(begin, source.indexOf("\n}\n", begin) + 3)).toBe(
       `${execute}\n  return productAgentHost().executeProductAgent(\n    task,\n    input,\n    context,\n    admission,\n  );\n}\n`,
     );
+    // The bootstrap payload moved with the runtime status; it still reads the
+    // capability through the main wrapper that is lent to it by its old name.
+    const status = await readFile(statusSource, "utf8");
+    expect(status).toContain("nativeAgent: productAgentCapabilityAvailable(),");
+    expect(source.replace(/\s+/g, " ")).toContain(
+      " chatGptConversationState, productAgentCapabilityAvailable, currentWindowState,",
+    );
     // The call sites that remain in main still reach them by the same names.
-    expect(source).toContain("nativeAgent: productAgentCapabilityAvailable(),");
     expect(source).toContain("await recoverProductAgentExpiry();");
   });
 
