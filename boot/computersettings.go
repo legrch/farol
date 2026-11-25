@@ -185,11 +185,7 @@ func (s *ComputerIngress) settingsInspect(ctx context.Context, in wire.ComputerS
 		Publication: in.Publication, WorkspaceId: result.WorkspaceID, RelativePath: result.RelativePath,
 		Root: wire.ComputerSettingsRoot{Path: result.Root.Path, Device: result.Root.Device, Inode: result.Root.Inode},
 	}
-	// Absent means "no warning": the flag is emitted only when it is true.
-	if result.WritableByOthers {
-		writable := true
-		out.WritableByOthers = &writable
-	}
+	out.WritableByOthers = result.WritableFlag()
 	return out, nil
 }
 

@@ -55,6 +55,25 @@ func (c *Contract) Catalogue(ctx context.Context, request CatalogueRequest) (*Ca
 	return &CatalogueResponse{OwnerID: out.OwnerID, SessionID: out.SessionID, TaskID: out.TaskID, TaskEpoch: out.TaskEpoch, ParticipantID: out.ParticipantID, TurnID: out.TurnID, Generation: out.Generation, CallID: out.CallID, Workspaces: entries, Consistency: out.Consistency, Next: out.Next}, nil
 }
 
+// Match reports whether workspaceID is listed and usable. A listed entry that
+// carries a refusal is not a match and yields the refusal's code; a missing
+// workspace yields fallback. Safe on a nil receiver.
+func (r *CatalogueResponse) Match(workspaceID, fallback string) (bool, string) {
+	if r == nil {
+		return false, fallback
+	}
+	for _, entry := range r.Workspaces {
+		if entry.WorkspaceID != workspaceID {
+			continue
+		}
+		if entry.Refusal != nil {
+			return false, entry.Refusal.Code
+		}
+		return true, fallback
+	}
+	return false, fallback
+}
+
 // catalogueRefusal re-allowlists the code, source and the stage/reason pair at
 // the module boundary. An unknown code or source degrades to the opaque helper
 // failure; an unsafe pair is dropped, as for read failures.

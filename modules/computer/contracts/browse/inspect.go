@@ -15,6 +15,16 @@ type InspectResponse struct {
 	WritableByOthers bool
 }
 
+// WritableFlag is the wire form of WritableByOthers: nil unless true, so an
+// absent field means "no warning". Safe on a nil receiver.
+func (r *InspectResponse) WritableFlag() *bool {
+	if r == nil || !r.WritableByOthers {
+		return nil
+	}
+	writable := true
+	return &writable
+}
+
 func (c *Contract) Inspect(ctx context.Context, request InspectRequest) (*InspectResponse, error) {
 	if c == nil || c.service == nil {
 		return nil, failure(authority.Fail("COMPUTER_AUTHORITY_STORE_UNAVAILABLE", "authority-store"))
