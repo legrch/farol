@@ -191,9 +191,9 @@ func TestReadPathRefusalReportsSafeReason(t *testing.T) {
 				}
 				name = "alias/note.md"
 			case "unsafe-root":
-				if err := os.Chmod(d.Root, 0770); err != nil {
-					t.Fatal(err)
-				}
+				// Owner decision D49: a root other users can write to is allowed; a
+				// root that another user owns is the unsafe one.
+				d = foreignOwnedRoot(t)
 			}
 			out, err := New(d.Root+"-home").Read(context.Background(), port.ReadRequest{Workspace: d, RelativePath: name})
 			var failure *authority.Failure
@@ -451,4 +451,76 @@ func TestReadMissingFromSwappedTreeReportsRootChange(t *testing.T) {
 		t.Fatal("swapped tree disclosed")
 	}
 	expectCode(t, err, "WORKSPACE_ROOT_CHANGED")
+}
+
+// foreignOwnedRoot describes /usr, a directory the current user does not own on
+// any supported host. It is unavailable to a process that runs as root.
+func foreignOwnedRoot(t *testing.T) port.Descriptor {
+	t.Helper()
+	if os.Getuid() == 0 {
+		t.Skip("running as root: no system directory is foreign-owned")
+	}
+	var info unix.Stat_t
+	if err := unix.Lstat("/usr", &info); err != nil || info.Uid == uint32(os.Getuid()) || info.Mode&unix.S_IFMT != unix.S_IFDIR {
+		t.Skip("/usr is not a foreign-owned directory on this host")
+	}
+	return port.Descriptor{WorkspaceID: "foreign", Root: "/usr", ApprovedRoot: port.Root{Path: "/usr", Device: strconv.FormatUint(uint64(info.Dev), 10), Inode: strconv.FormatUint(info.Ino, 10)}}
+}
+
+// Owner decision D49 (2026-11-25): a workspace root owned by the current user is
+// allowed even when other local users can write to it, and is marked so the UI
+// can warn. Ownership by another user stays refused.
+func TestWorkspaceRootWritableByOthersIsAllowedAndMarked(t *testing.T) {
+	for _, test := range []struct {
+		mode     os.FileMode
+		writable bool
+	}{{0700, false}, {0755, false}, {0770, true}, {0775, true}, {0707, true}, {0777, true}} {
+		t.Run(test.mode.String(), func(t *testing.T) {
+			d := fixture(t)
+			put(t, d, "note.md", []byte("disposable"))
+			if err := os.Chmod(d.Root, test.mode); err != nil {
+				t.Fatal(err)
+			}
+			w := New(d.Root + "-home")
+			binding, err := w.Inspect(context.Background(), port.ListRequest{Workspace: d, RelativePath: "."})
+			if err != nil || binding == nil || binding.WritableByOthers != test.writable {
+				t.Fatalf("inspect: %+v %v", binding, err)
+			}
+			listed, err := w.List(context.Background(), port.ListRequest{Workspace: d, RelativePath: "."})
+			if err != nil || listed.Binding == nil || listed.Binding.WritableByOthers != test.writable {
+				t.Fatalf("list: %+v %v", listed, err)
+			}
+			read, err := w.Read(context.Background(), port.ReadRequest{Workspace: d, RelativePath: "note.md"})
+			if err != nil || read.Text != "disposable" {
+				t.Fatalf("read: %+v %v", read, err)
+			}
+		})
+	}
+}
+
+func TestWorkspaceRootOwnedByAnotherUserIsStillRefused(t *testing.T) {
+	d := foreignOwnedRoot(t)
+	w := New(d.Root + "-home")
+	for name, call := range map[string]func() error{
+		"inspect": func() error {
+			_, err := w.Inspect(context.Background(), port.ListRequest{Workspace: d, RelativePath: "."})
+			return err
+		},
+		"list": func() error {
+			_, err := w.List(context.Background(), port.ListRequest{Workspace: d, RelativePath: "."})
+			return err
+		},
+		"read": func() error {
+			_, err := w.Read(context.Background(), port.ReadRequest{Workspace: d, RelativePath: "note.md"})
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var failure *authority.Failure
+			err := call()
+			if !errors.As(err, &failure) || failure.Code != "WORKSPACE_PATH_REFUSED" || failure.Stage != "root" || failure.Reason != "unsafe_root" {
+				t.Fatalf("foreign-owned root accepted or misclassified: %v", err)
+			}
+		})
+	}
 }

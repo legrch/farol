@@ -125,6 +125,20 @@ func TestObservationUsesHeldDescriptorsAndClosesAll(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Owner decision D49: a root that group or other users can write to is measured
+// like any other; only ownership by another user is refused (see
+// TestNegativeNativeBoundaries). A mode change during the measurement is still a
+// race (see "permissions change during operation").
+func TestObservationAcceptsRootWritableByOthers(t *testing.T) {
+	for _, bits := range []uint32{0020, 0002, 0022} {
+		o := newFake()
+		o.target().identity.Mode |= bits
+		if got, err := observe(context.Background(), "/approved/work", o); err != nil || !got.Valid() {
+			t.Fatalf("mode bits %o refused: %v %v", bits, got, err)
+		}
+	}
+}
 func TestNegativeNativeBoundaries(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -135,8 +149,6 @@ func TestNegativeNativeBoundaries(t *testing.T) {
 		{"symlink ancestor", func(o *fakeOperations) { o.root.children["approved"].symlink = true }, "WORKSPACE_PATH_REFUSED"},
 		{"not directory", func(o *fakeOperations) { o.target().identity.Mode = 0100600 }, "WORKSPACE_PATH_REFUSED"},
 		{"different owner", func(o *fakeOperations) { o.target().identity.UID = 502 }, "WORKSPACE_PATH_REFUSED"},
-		{"writable by group", func(o *fakeOperations) { o.target().identity.Mode |= 0020 }, "WORKSPACE_PATH_REFUSED"},
-		{"writable by other", func(o *fakeOperations) { o.target().identity.Mode |= 0002 }, "WORKSPACE_PATH_REFUSED"},
 		{"named folder substitution", func(o *fakeOperations) {
 			o.hook = func(o *fakeOperations) {
 				n := *o.target()

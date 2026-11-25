@@ -296,6 +296,46 @@ func TestDiscoveryInstructionClosureAndDecimalPrecision(t *testing.T) {
 	}
 }
 
+func TestCatalogueResultMapsRefusalAndWritableMarkAdditively(t *testing.T) {
+	input, output, _, _ := discoveryResults()
+	root := workspacect.Root{Path: "/disposable", Device: "1", Inode: "2"}
+	output.Workspaces = []workspacect.CatalogueEntry{
+		{WorkspaceID: "plain", Root: "/disposable", ApprovedRoot: root},
+		{WorkspaceID: "shared", Root: "/disposable", ApprovedRoot: root, WritableByOthers: true},
+		{WorkspaceID: "refused", Root: "/disposable", ApprovedRoot: root, Refusal: &workspacect.CatalogueRefusal{Code: "WORKSPACE_PATH_REFUSED", Source: "native-workspace", Stage: "root", Reason: "unsafe_root"}},
+		{WorkspaceID: "gone", Root: "/disposable", ApprovedRoot: root, Refusal: &workspacect.CatalogueRefusal{Code: "WORKSPACE_NOT_FOUND", Source: "native-workspace"}},
+	}
+	result, err := catalogueResult(input, &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw []map[string]json.RawMessage
+	if json.Unmarshal(result.Workspaces, &raw) != nil || len(raw) != 4 {
+		t.Fatal("entries lost")
+	}
+	// A usable entry stays byte-compatible with the earlier shape.
+	if _, present := raw[0]["writableByOthers"]; present || raw[0]["refusal"] != nil {
+		t.Fatalf("plain entry gained fields: %v", raw[0])
+	}
+	if string(raw[1]["writableByOthers"]) != "true" || raw[1]["refusal"] != nil {
+		t.Fatalf("writable mark lost: %v", raw[1])
+	}
+	if string(raw[2]["refusal"]) != `{"code":"WORKSPACE_PATH_REFUSED","source":"native-workspace","stage":"root","reason":"unsafe_root"}` || string(raw[3]["refusal"]) != `{"code":"WORKSPACE_NOT_FOUND","source":"native-workspace"}` {
+		t.Fatalf("refusal lost: %s %s", raw[2]["refusal"], raw[3]["refusal"])
+	}
+	// A refusal never claims a verified, shared root, and unknown values never cross.
+	output.Workspaces = output.Workspaces[2:3]
+	output.Workspaces[0].WritableByOthers = true
+	if _, err := catalogueResult(input, &output); err == nil {
+		t.Fatal("refused entry marked writable")
+	}
+	output.Workspaces[0].WritableByOthers = false
+	output.Workspaces[0].Refusal.Reason = "/Users/private"
+	if _, err := catalogueResult(input, &output); err == nil {
+		t.Fatal("unknown refusal reason crossed the wire")
+	}
+}
+
 func TestDiscoveryCompleteReplyBoundBeforeFrame(t *testing.T) {
 	input, output, _, _ := discoveryResults()
 	path := "/" + strings.Repeat("<", 4095)

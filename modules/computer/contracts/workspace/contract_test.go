@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	workspacesvc "github.com/legrch/farol/modules/computer/app/services/workspace"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 )
 
@@ -36,6 +37,21 @@ func TestPathDiagnosticAllowsOnlyBoundedPairs(t *testing.T) {
 		out := failure(&authority.Failure{Code: tc.code, Source: tc.source, Stage: tc.stage, Reason: tc.reason}).(*Failure)
 		if out.Stage != tc.wantStage || out.Reason != tc.wantReason || out.Retry != "never" {
 			t.Fatalf("unsafe or lost diagnostic: %+v", out)
+		}
+	}
+}
+
+func TestCatalogueRefusalIsReallowlistedAtTheBoundary(t *testing.T) {
+	for _, tc := range []struct{ in, want CatalogueRefusal }{
+		{CatalogueRefusal{"WORKSPACE_PATH_REFUSED", "native-workspace", "root", "unsafe_root"}, CatalogueRefusal{"WORKSPACE_PATH_REFUSED", "native-workspace", "root", "unsafe_root"}},
+		{CatalogueRefusal{"WORKSPACE_PATH_REFUSED", "native-workspace", "root", "/private/path"}, CatalogueRefusal{"WORKSPACE_PATH_REFUSED", "native-workspace", "", ""}},
+		{CatalogueRefusal{"WORKSPACE_NOT_FOUND", "native-workspace", "root", "unsafe_root"}, CatalogueRefusal{"WORKSPACE_NOT_FOUND", "native-workspace", "", ""}},
+		{CatalogueRefusal{"PRIVATE_NATIVE_DETAIL", "native-workspace", "", ""}, CatalogueRefusal{"WORKSPACE_HELPER_FAILED", "native-workspace", "", ""}},
+		{CatalogueRefusal{"WORKSPACE_NOT_FOUND", "private-setting", "", ""}, CatalogueRefusal{"WORKSPACE_HELPER_FAILED", "native-workspace", "", ""}},
+	} {
+		in := workspacesvc.CatalogueRefusal(tc.in)
+		if got := catalogueRefusal(in); got == nil || *got != tc.want {
+			t.Fatalf("%+v became %+v, want %+v", tc.in, got, tc.want)
 		}
 	}
 }
