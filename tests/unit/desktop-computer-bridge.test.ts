@@ -539,25 +539,8 @@ describe("nested DTOs and bounded JSON", () => {
     },
   );
 
-  it("accepts a refused catalogue entry that carries no root", async () => {
-    const {
-      root: _root,
-      approvedRoot: _approved,
-      ...rest
-    } = catalogueData.workspaces[0] as Record<string, unknown>;
-    const entry = {
-      ...rest,
-      refusal: { code: "WORKSPACE_PATH_REFUSED", source: "native-workspace" },
-    };
-    expect(
-      await fixture(
-        ok({ ...catalogueData, workspaces: [entry] }),
-      ).bridge.catalogue(correlation, call),
-    ).not.toMatchObject({ status: "unknown" });
-  });
-
-  it.each(["workspaceId"])(
-    "rejects missing catalogue entry member %s",
+  it.each(["workspaceId", "root", "approvedRoot"])(
+    "rejects a verified catalogue entry missing member %s",
     async (key) => {
       const entry: Record<string, unknown> = { ...catalogueData.workspaces[0] };
       delete entry[key];
@@ -568,6 +551,39 @@ describe("nested DTOs and bounded JSON", () => {
       ).toMatchObject({ status: "unknown" });
     },
   );
+
+  describe("refused catalogue entries", () => {
+    const refusal = {
+      code: "WORKSPACE_PATH_REFUSED",
+      source: "native-workspace",
+    };
+    const base = catalogueData.workspaces[0] as Record<string, unknown>;
+    const { root, approvedRoot, ...bare } = base;
+    const attempt = async (entry: Record<string, unknown>) =>
+      fixture(ok({ ...catalogueData, workspaces: [entry] })).bridge.catalogue(
+        correlation,
+        call,
+      );
+    it("accepts a clean refused entry", async () => {
+      expect(await attempt({ ...bare, refusal })).not.toMatchObject({
+        status: "unknown",
+      });
+    });
+    it.each([
+      ["a root", { root }],
+      ["an approved root", { approvedRoot }],
+      ["a writable mark", { writableByOthers: true }],
+    ])("rejects a refused entry with %s", async (_name, extra) => {
+      expect(await attempt({ ...bare, refusal, ...extra })).toMatchObject({
+        status: "unknown",
+      });
+    });
+    it("rejects a verified entry carrying a refusal", async () => {
+      expect(await attempt({ ...base, refusal })).toMatchObject({
+        status: "unknown",
+      });
+    });
+  });
 
   it("does not cache successes or use instruction text to mint permission", async () => {
     const first = {
