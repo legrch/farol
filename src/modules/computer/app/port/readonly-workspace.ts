@@ -84,6 +84,9 @@ export type WorkspaceEntries = Readonly<{
   kind: "workspace.entries";
   entries: readonly string[];
   truncated: boolean;
+  // Present and true when the workspace root, which this listing is taken
+  // under, can be changed by group or other users of this Mac.
+  writableByOthers?: true;
 }>;
 
 export type WorkspaceMatch = Readonly<{

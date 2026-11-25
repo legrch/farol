@@ -4,8 +4,8 @@ import fs from "node:fs/promises";
 export const NATIVE_SAFE_OPEN_HELPER = Object.freeze({
   source: "resources/native/safe_open.py",
   output: "computer-safe-open.py",
-  sha256: "b4b5adc34fea7ee7caa9f5e0400a5f862e61a5d2db8f7b86f381fd1f850e580a",
-  size: 133092,
+  sha256: "9a94b5947e8cea02f32a28b3488bf8bc8e8fcdb767c755840054710ba0ea207c",
+  size: 133611,
   mode: 0o644,
 });
 

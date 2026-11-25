@@ -37,8 +37,8 @@ export type SafeOpenHelperRecord = Readonly<{
 }>;
 
 export const SAFE_OPEN_HELPER: SafeOpenHelperRecord = Object.freeze({
-  sha256: "b4b5adc34fea7ee7caa9f5e0400a5f862e61a5d2db8f7b86f381fd1f850e580a",
-  size: 133092,
+  sha256: "9a94b5947e8cea02f32a28b3488bf8bc8e8fcdb767c755840054710ba0ea207c",
+  size: 133611,
   mode: 0o644,
 });
 
@@ -1183,7 +1183,7 @@ function validEntry(value: unknown): value is string {
 
 function parseEntries(raw: Buffer): ReadonlyWorkspaceResult {
   const parsed = parseJson(raw);
-  if (!exactKeys(parsed, ["entries", "truncated"])) {
+  if (!exactKeys(parsed, ["entries", "truncated", "writableByOthers"])) {
     throw new WorkspaceRefusal("WORKSPACE_HELPER_FAILED");
   }
   const value = parsed as Readonly<Record<string, unknown>>;
@@ -1191,14 +1191,18 @@ function parseEntries(raw: Buffer): ReadonlyWorkspaceResult {
     !Array.isArray(value.entries) ||
     value.entries.length > 500 ||
     !value.entries.every(validEntry) ||
-    typeof value.truncated !== "boolean"
+    typeof value.truncated !== "boolean" ||
+    typeof value.writableByOthers !== "boolean"
   ) {
     throw new WorkspaceRefusal("WORKSPACE_HELPER_FAILED");
   }
+  // The root is writable by group or other users of this Mac. Like the Go
+  // route, the mark is present only when true.
   return success({
     kind: "workspace.entries",
     entries: [...value.entries] as string[],
     truncated: value.truncated,
+    ...(value.writableByOthers ? { writableByOthers: true as const } : {}),
   });
 }
 

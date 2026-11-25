@@ -127,6 +127,8 @@ const WorkspaceOutputSchema = z.union([
         inode: z.string().regex(/^[0-9]+$/u),
       }),
       scope: z.literal("subtree"),
+      // Present and true when other users of this Mac can change the root.
+      writableByOthers: z.literal(true).optional(),
     })
     .refine(
       (value) =>
@@ -335,9 +337,61 @@ export type ReadonlyComputerExecutionContext = Readonly<{
   signal?: AbortSignal;
 }>;
 
+// The final disclosure check of a multi-workspace answer: the task identity of
+// a call plus every workspace the answer would name, with the physical root a
+// usable one was found at. It does no native work.
+export const ReadonlyComputerWorkspaceVerificationRequestSchema =
+  z.strictObject({
+    ownerId: z.string().min(1).max(80),
+    sessionId: IdentifierSchema,
+    taskId: IdentifierSchema,
+    taskEpoch: z.number().int().nonnegative(),
+    participantId: IdentifierSchema,
+    turnId: IdentifierSchema,
+    generation: z.number().int().nonnegative(),
+    callId: IdentifierSchema,
+    workspaces: z
+      .array(
+        z.strictObject({
+          workspaceId: IdentifierSchema,
+          root: AbsolutePathSchema.optional(),
+          approvedRoot: z
+            .strictObject({
+              path: AbsolutePathSchema,
+              device: z.string().regex(/^[0-9]+$/u),
+              inode: z.string().regex(/^[0-9]+$/u),
+            })
+            .optional(),
+        }),
+      )
+      .max(32),
+  });
+
+export type ReadonlyComputerWorkspaceVerificationRequest = z.infer<
+  typeof ReadonlyComputerWorkspaceVerificationRequestSchema
+>;
+
+export type ReadonlyComputerWorkspaceVerification =
+  | Readonly<{ ok: true }>
+  | Readonly<{
+      ok: false;
+      error: Readonly<{
+        code: z.infer<typeof ComputerErrorCodeSchema>;
+        source: z.infer<typeof FailureSourceSchema>;
+        retry: "never";
+      }>;
+    }>;
+
 export interface ReadonlyComputerContract {
   execute(
     request: unknown,
     context?: ReadonlyComputerExecutionContext,
   ): Promise<ReadonlyComputerCallResponse>;
+  // Re-verifies, against current authority and approval and without native
+  // work, that every named workspace is still granted and approved at the
+  // given root, and that the call was not cancelled.
+  verifyWorkspaces?(
+    request: unknown,
+    context?: ReadonlyComputerExecutionContext,
+  ): Promise<ReadonlyComputerWorkspaceVerification>;
 }

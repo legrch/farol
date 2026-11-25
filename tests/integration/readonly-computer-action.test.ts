@@ -1006,6 +1006,174 @@ describe("real read-only Computer action", () => {
     },
   );
 
+  it.each([
+    ["cancelled", "WORKSPACE_REQUEST_CANCELLED"],
+    ["revoked", "COMPUTER_APPROVAL_NOT_FOUND"],
+  ])(
+    "does not report a native refusal as such after the call was %s during native work",
+    async (mode, code) => {
+      const chain = participants();
+      const approved = approval();
+      const controller = new AbortController();
+      let afterRead = false;
+      const action = new RunReadonlyComputerAction(
+        new InMemoryAuthorityRepository(Object.values(chain)),
+        {
+          async get() {
+            return afterRead && mode === "revoked" ? null : approved;
+          },
+        },
+        {
+          async execute() {
+            afterRead = true;
+            if (mode === "cancelled") controller.abort();
+            return {
+              ok: false as const,
+              error: {
+                code: "WORKSPACE_PATH_REFUSED" as const,
+                retry: "never" as const,
+              },
+            };
+          },
+        },
+        clock,
+      );
+      const result = await action.execute(
+        request({ kind: "workspace.list", relativePath: "." }),
+        { signal: controller.signal },
+      );
+      expect(result).toMatchObject({ ok: false, error: { code } });
+    },
+  );
+
+  describe("final workspace verification", () => {
+    const identity = {
+      ownerId: "owner-preview",
+      sessionId: "session-a",
+      taskId: "task-a",
+      taskEpoch: 3,
+      participantId: "main-a",
+    };
+    const unused = {
+      async execute(): Promise<never> {
+        throw new Error("no native work");
+      },
+    };
+    function service(approvals: ComputerApprovalRepository) {
+      return new RunReadonlyComputerAction(
+        new InMemoryAuthorityRepository(Object.values(participants())),
+        approvals,
+        unused,
+        clock,
+      );
+    }
+
+    it("accepts a usable root and a refused entry that are still granted", async () => {
+      const bound = approvedRootOf(root);
+      await expect(
+        service(
+          new InMemoryComputerApprovalRepository([approval()]),
+        ).verifyWorkspaces({
+          ...identity,
+          workspaces: [{ workspaceId: "farol", root, approvedRoot: bound }],
+        }),
+      ).resolves.toEqual({ ok: true });
+      await expect(
+        service(
+          new InMemoryComputerApprovalRepository([approval()]),
+        ).verifyWorkspaces({
+          ...identity,
+          workspaces: [{ workspaceId: "farol" }],
+        }),
+      ).resolves.toEqual({ ok: true });
+    });
+
+    it.each([
+      [
+        "an unknown workspace",
+        { workspaceId: "gone" },
+        "AUTHORITY_PATH_DENIED",
+      ],
+      [
+        "a changed root",
+        {
+          workspaceId: "farol",
+          root: "/elsewhere",
+          approvedRoot: { path: "/elsewhere", device: "1", inode: "2" },
+        },
+        "WORKSPACE_ROOT_CHANGED",
+      ],
+    ])("fails for %s", async (_label, workspace, code) => {
+      await expect(
+        service(
+          new InMemoryComputerApprovalRepository([approval()]),
+        ).verifyWorkspaces({
+          ...identity,
+          workspaces: [workspace],
+        }),
+      ).resolves.toMatchObject({ ok: false, error: { code } });
+    });
+
+    it("fails when the call is cancelled", async () => {
+      const controller = new AbortController();
+      controller.abort();
+      await expect(
+        service(
+          new InMemoryComputerApprovalRepository([approval()]),
+        ).verifyWorkspaces(
+          { ...identity, workspaces: [{ workspaceId: "farol" }] },
+          { signal: controller.signal },
+        ),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "WORKSPACE_REQUEST_CANCELLED" },
+      });
+    });
+
+    it("fails when the approval is gone", async () => {
+      await expect(
+        service({
+          async get() {
+            return null;
+          },
+        }).verifyWorkspaces({
+          ...identity,
+          workspaces: [{ workspaceId: "farol" }],
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "COMPUTER_APPROVAL_NOT_FOUND" },
+      });
+    });
+  });
+
+  it("still reports a native refusal when the call holds", async () => {
+    const action = new RunReadonlyComputerAction(
+      new InMemoryAuthorityRepository(Object.values(participants())),
+      new InMemoryComputerApprovalRepository([approval()]),
+      {
+        async execute() {
+          return {
+            ok: false as const,
+            error: {
+              code: "WORKSPACE_PATH_REFUSED" as const,
+              retry: "never" as const,
+            },
+          };
+        },
+      },
+      clock,
+    );
+    expect(
+      await action.execute(
+        request({ kind: "workspace.list", relativePath: "." }),
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_PATH_REFUSED", source: "native-workspace" },
+    });
+  });
+
   it("discards output when cancellation arrives during the final approval lookup", async () => {
     const chain = participants();
     const approved = approval();
