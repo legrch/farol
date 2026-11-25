@@ -1943,13 +1943,17 @@ body.native-updates-document {
   height: auto;
   min-height: 100vh;
   overflow: auto;
-  padding: 44px 28px 24px;
-  max-width: 480px;
+  padding: 36px 24px 20px;
+  max-width: 400px;
   margin: 0 auto;
 }
 .native-updates h1 {
-  font-size: 22px;
+  font-size: 18px;
   line-height: 1.25;
+}
+.native-updates .update-notes {
+  max-height: 96px;
+  overflow: auto;
 }
 .native-updates::before {
   content: "";
@@ -1959,11 +1963,11 @@ body.native-updates-document {
   -webkit-app-region: drag;
 }
 .native-updates p {
-  margin: 14px 0;
+  margin: 10px 0;
 }
 .native-updates-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 24px;
+  margin-top: 16px;
 }
