@@ -60,11 +60,13 @@ describe("runtime status wiring in main", () => {
       "productName",
       "bundleId",
       "buildIdentity",
-      "demoMode",
-      "legacySetupTestMode",
       "compiledGoCore",
     ])
       expect(source).toMatch(new RegExp(`\\nconst ${owner}\\b`));
+    // The launch flags are read once, at import time, by the launch host.
+    expect(source).toMatch(
+      /\nconst \{[^}]*\bdemoMode,[^}]*\blegacySetupTestMode,[^}]*\} = readLaunchArguments\(process\.argv, process\.env, buildEnvironment\);/,
+    );
     for (const fn of [
       "productTasksState",
       "chatGptConversationState",
