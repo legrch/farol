@@ -25,6 +25,11 @@ async function connect(
     revoke?: boolean;
     stopping?: boolean;
     fenced?: boolean;
+    // The native workspace marks the code root writable by others, or refuses
+    // the trial folder (its root is not owned by this user).
+    writableCode?: boolean;
+    refuseTrial?: boolean;
+    failTrial?: boolean;
   } = {},
 ) {
   const approval: ComputerApproval = {
@@ -95,17 +100,34 @@ async function connect(
   });
   if (!participant.ok) throw Error(participant.error.code);
   let reads = 0;
-  const native = vi.fn(async () => {
-    reads++;
-    return {
-      ok: true as const,
-      value: {
-        kind: "workspace.entries" as const,
-        entries: ["must-not-leak.txt"],
-        truncated: false,
-      },
-    };
-  });
+  const native = vi.fn(
+    async (nativeRequest: { workspace: { workspaceId: string } }) => {
+      reads++;
+      const id = nativeRequest.workspace.workspaceId;
+      if (id === "trial-uuid" && (options.refuseTrial || options.failTrial)) {
+        return {
+          ok: false as const,
+          error: {
+            code: options.failTrial
+              ? ("WORKSPACE_HELPER_FAILED" as const)
+              : ("WORKSPACE_PATH_REFUSED" as const),
+            retry: "never" as const,
+          },
+        };
+      }
+      return {
+        ok: true as const,
+        value: {
+          kind: "workspace.entries" as const,
+          entries: ["must-not-leak.txt"],
+          truncated: false,
+          ...(id === "code-uuid" && options.writableCode
+            ? { writableByOthers: true as const }
+            : {}),
+        },
+      };
+    },
+  );
   const contract = new ReadonlyComputerContractHandler(
     new RunReadonlyComputerAction(
       new InMemoryAuthorityRepository([participant.value]),
@@ -228,6 +250,71 @@ describe("authority-bound workspace discovery through MCP", () => {
         retry: "never",
       },
     });
+  });
+
+  it("marks a root other users can change and keeps a plain listing unmarked", async () => {
+    const { client } = await connect({ writableCode: true });
+    const catalogue = await client.callTool({
+      name: "computer_workspace_catalogue",
+      arguments: {},
+    });
+    expect(catalogue.isError).not.toBe(true);
+    const workspaces = (
+      catalogue.structuredContent as { workspaces: Record<string, unknown>[] }
+    ).workspaces;
+    expect(workspaces[0]).not.toHaveProperty("writableByOthers");
+    expect(workspaces[1]).toMatchObject({
+      workspaceId: "code-uuid",
+      writableByOthers: true,
+    });
+    const listed = await client.callTool({
+      name: "computer_workspace_list",
+      arguments: { workspaceId: "code-uuid", relativePath: "." },
+    });
+    expect(listed.isError).not.toBe(true);
+    expect(JSON.stringify(listed.structuredContent)).not.toContain(
+      "writableByOthers",
+    );
+  });
+
+  it("reports a refused folder on its own entry and keeps the usable one", async () => {
+    const { client } = await connect({ refuseTrial: true });
+    const catalogue = await client.callTool({
+      name: "computer_workspace_catalogue",
+      arguments: {},
+    });
+    expect(catalogue.isError).not.toBe(true);
+    expect(catalogue.structuredContent).toMatchObject({
+      ok: true,
+      workspaces: [
+        {
+          workspaceId: "trial-uuid",
+          refusal: {
+            code: "WORKSPACE_PATH_REFUSED",
+            source: "native-workspace",
+          },
+        },
+        { workspaceId: "code-uuid", root: "/approved/code/project" },
+      ],
+    });
+    const encoded = JSON.stringify(catalogue.structuredContent);
+    expect(encoded).not.toContain("/approved/trial");
+  });
+
+  it("still fails the whole call on any other native failure", async () => {
+    const { client } = await connect({ failTrial: true });
+    const catalogue = await client.callTool({
+      name: "computer_workspace_catalogue",
+      arguments: {},
+    });
+    expect(catalogue.isError).toBe(true);
+    expect(catalogue.structuredContent).toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_HELPER_FAILED" },
+    });
+    expect(JSON.stringify(catalogue.structuredContent)).not.toContain(
+      "/approved/",
+    );
   });
 
   it.each([{ expired: true }, { wrongTask: true }])(
