@@ -131,6 +131,7 @@ import { createContextFixture } from "../../../apps/desktop/dev/fixture";
 import { createContextHost } from "../../../apps/desktop/task/context";
 import { startupEntry } from "../../../apps/desktop/shell/entry";
 import { startMenuBar } from "../../../apps/desktop/shell/menubar";
+import { openOwnerStartupSplash } from "../../../apps/desktop/shell/splash";
 import { createIpc } from "../../../apps/desktop/shell/ipc";
 import {
   createInstance,
@@ -3088,29 +3089,22 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   // Ordinary owner launch only: show a window at once while Go core,
   // settings, journals and task state start. Tests and background
   // launches keep their existing window policy.
-  if (
-    windowMode !== "hidden" &&
-    !ownerBackgroundOnly &&
-    process.env.FAROL_E2E !== "1"
-  ) {
-    try {
-      startupSplash = openStartupSplash({
-        title: displayWindowTitle,
-        width: initialWindowSize.width,
-        height: initialWindowSize.height,
-        iconDataUrl: desktopBrandImage().toDataURL(),
-        ...(windowMode === "secondary-visible"
-          ? {
-              bounds: selectedVisibleTestPlacement(initialWindowSize).bounds,
-              inactive: true,
-            }
-          : {}),
-      });
+  openOwnerStartupSplash({
+    windowMode,
+    ownerBackgroundOnly,
+    e2e: () => process.env.FAROL_E2E === "1",
+    title: displayWindowTitle,
+    size: initialWindowSize,
+    iconDataUrl: () => desktopBrandImage().toDataURL(),
+    placement: selectedVisibleTestPlacement,
+    open: openStartupSplash,
+    setSplash: (splash) => {
+      startupSplash = splash;
+    },
+    closeOnBeforeQuit: () => {
       app.once("before-quit", closeStartupSplash);
-    } catch {
-      startupSplash = null;
-    }
-  }
+    },
+  });
   // N03/D2: the run marker is this generation's first durable runtime obligation and the
   // last thing it removes — only after a quit whose drain was confirmed (see
   // the quit drain's `record` below and `run-marker.ts`). A promotion that
