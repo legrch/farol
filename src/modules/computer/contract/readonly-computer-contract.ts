@@ -127,6 +127,8 @@ const WorkspaceOutputSchema = z.union([
         inode: z.string().regex(/^[0-9]+$/u),
       }),
       scope: z.literal("subtree"),
+      // Present and true when other users of this Mac can change the root.
+      writableByOthers: z.literal(true).optional(),
     })
     .refine(
       (value) =>

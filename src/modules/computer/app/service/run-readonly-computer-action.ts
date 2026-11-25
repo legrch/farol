@@ -37,6 +37,8 @@ export type WorkspaceContext = Readonly<{
   root: string;
   approvedRoot: WorkspaceApprovedRoot;
   scope: "subtree";
+  // Present and true when other users of this Mac can change the root.
+  writableByOthers?: true;
 }>;
 
 export type ReadonlyComputerActionRequest = Readonly<{
@@ -95,6 +97,17 @@ function failure(
   source: ReadonlyComputerActionFailureSource,
 ): ReadonlyComputerActionResult {
   return { ok: false, error: { code, source, retry: "never" } };
+}
+
+// The root's "writable by others" mark belongs to the context answer. A plain
+// listing keeps the shape it always had.
+function withoutRootMark(
+  value: ReadonlyWorkspaceOutput,
+): ReadonlyWorkspaceOutput {
+  if (value.kind !== "workspace.entries" || !value.writableByOthers)
+    return value;
+  const { writableByOthers: _mark, ...rest } = value;
+  return rest;
 }
 
 function workspaceScope(
@@ -352,8 +365,12 @@ export class RunReadonlyComputerAction {
                 root: scope.root,
                 approvedRoot: binding.approvedRoot,
                 scope: "subtree",
+                ...(result.value.kind === "workspace.entries" &&
+                result.value.writableByOthers
+                  ? { writableByOthers: true as const }
+                  : {}),
               }
-            : result.value,
+            : withoutRootMark(result.value),
       },
     };
   }
