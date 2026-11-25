@@ -144,9 +144,16 @@ func (p *connectorSelfTestPlan) workspaceCheck(ctx context.Context, name, call s
 		out, err = contract.Catalogue(ctx, workspacect.CatalogueRequest{OwnerID: e.OwnerId, SessionID: e.SessionId, TaskID: e.TaskId, TaskEpoch: epoch, ParticipantID: e.ParticipantId, TurnID: e.TurnId, Generation: generation, CallID: call})
 		if out != nil {
 			for _, entry := range out.Workspaces {
-				if entry.WorkspaceID == p.workspace {
-					match = true
+				if entry.WorkspaceID != p.workspace {
+					continue
 				}
+				// A refused entry is the catalogue's report that this very
+				// folder cannot be opened; it is not a match.
+				if entry.Refusal != nil {
+					step.Status, step.Code = "fail", entry.Refusal.Code
+					return step
+				}
+				match = true
 			}
 		}
 	case "bootstrap":
