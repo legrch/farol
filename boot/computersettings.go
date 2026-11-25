@@ -181,10 +181,16 @@ func (s *ComputerIngress) settingsInspect(ctx context.Context, in wire.ComputerS
 	if result == nil {
 		return nil, computerUnavailable()
 	}
-	return &wire.ComputerSettingsInspectResponse{
+	out := &wire.ComputerSettingsInspectResponse{
 		Publication: in.Publication, WorkspaceId: result.WorkspaceID, RelativePath: result.RelativePath,
 		Root: wire.ComputerSettingsRoot{Path: result.Root.Path, Device: result.Root.Device, Inode: result.Root.Inode},
-	}, nil
+	}
+	// Absent means "no warning": the flag is emitted only when it is true.
+	if result.WritableByOthers {
+		writable := true
+		out.WritableByOthers = &writable
+	}
+	return out, nil
 }
 
 func (s *ComputerIngress) settingsInspectMethod() desktop.Method {

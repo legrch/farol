@@ -15,8 +15,10 @@ type ListQuery struct{ WorkspaceID, RelativePath string }
 type ListResult struct {
 	WorkspaceID, RelativePath string
 	Root                      port.Root
-	Entries                   []string
-	Truncated                 bool
+	// WritableByOthers marks a root that other local users can write to (D49).
+	WritableByOthers bool
+	Entries          []string
+	Truncated        bool
 }
 
 // List dispatches exactly one native listing between two current-approval reads.
@@ -133,7 +135,7 @@ func (s *Service) directory(ctx context.Context, query ListQuery, inspectOnly bo
 			return err
 		}
 		result = &ListResult{WorkspaceID: query.WorkspaceID, RelativePath: query.RelativePath,
-			Root: witnessedRoot(binding), Entries: slices.Clone(entries), Truncated: truncated}
+			Root: witnessedRoot(binding), WritableByOthers: binding.WritableByOthers, Entries: slices.Clone(entries), Truncated: truncated}
 		return nil
 	})
 	// A successful callback is insufficient: the enclosing port must also succeed.

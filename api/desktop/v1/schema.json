@@ -6452,6 +6452,11 @@
         },
         "root": {
           "type": "ComputerSettingsRoot"
+        },
+        "writableByOthers": {
+          "type": "boolean",
+          "optional": true,
+          "description": "Present and true when the inspected root is writable by other users of this Mac (mode bits 0022)."
         }
       }
     },

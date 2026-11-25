@@ -11,6 +11,8 @@ type InspectRequest struct{ WorkspaceID, RelativePath string }
 type InspectResponse struct {
 	WorkspaceID, RelativePath string
 	Root                      Root
+	// WritableByOthers marks a root that other local users can write to.
+	WritableByOthers bool
 }
 
 func (c *Contract) Inspect(ctx context.Context, request InspectRequest) (*InspectResponse, error) {
@@ -25,5 +27,5 @@ func (c *Contract) Inspect(ctx context.Context, request InspectRequest) (*Inspec
 		return nil, failure(nil)
 	}
 	return &InspectResponse{WorkspaceID: out.WorkspaceID, RelativePath: out.RelativePath,
-		Root: Root{Path: out.Root.Path, Device: out.Root.Device, Inode: out.Root.Inode}}, nil
+		Root: Root{Path: out.Root.Path, Device: out.Root.Device, Inode: out.Root.Inode}, WritableByOthers: out.WritableByOthers}, nil
 }
