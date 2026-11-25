@@ -999,6 +999,9 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
     receiptSha256: z.string().regex(/^[a-f0-9]{64}$/u),
     // A replay observes a historical result; it never claims a new current test.
     retained: z.boolean(),
+    // Present and false only when the check ran with no currently verified
+    // folder: the tunnel is proven, but no attachment was recorded.
+    attachmentRecorded: z.literal(false).optional(),
   }),
   z.strictObject({
     kind: z.literal("chatgpt.deep-test-result"),

@@ -52,6 +52,12 @@ export type ConnectorAppVerificationBinding = Readonly<{
 // selection, else the saved verification target while it is still configured,
 // else the first configured folder, else the empty selection. Capturing the
 // binding and re-checking it use this one choice.
+//
+// The verified-id branch deliberately ignores `computer.generation` staleness
+// that the strict selection enforces. That is safe because the fallback only
+// scopes the tunnel check (the Go selection and the retained-proof comparison,
+// which stay on the folder an earlier check verified); nothing is ever recorded
+// for it. The attachment is published only when the strict selection exists.
 export function connectorCheckWorkspace(
   settings: ProductSettings,
 ): string | null {
@@ -145,11 +151,6 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
   async function checkSecureMcpAttachment(
     expectedWorkspaceId?: string | null,
     expectedBinding?: ConnectorAppVerificationBinding,
-    // Only the explicit connection check passes its own fallback; every other
-    // caller keeps the strict selection.
-    workspaceOf: (
-      settings: ProductSettings,
-    ) => string | null | undefined = connectorWorkspaceSelection,
   ): Promise<ProductConfigurationResult> {
     if (!configuration() || !secureMcpConnectorRuntime()) {
       return configurationFailure("SETTINGS_UNAVAILABLE");
@@ -166,11 +167,7 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
       }
       if (
         expectedBinding &&
-        !connectorAppBindingCurrent(
-          snapshot.settings,
-          expectedBinding,
-          workspaceOf,
-        )
+        !connectorAppBindingCurrent(snapshot.settings, expectedBinding)
       ) {
         return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
       }
@@ -198,7 +195,7 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
       }
       if (
         expectedWorkspaceId !== undefined &&
-        workspaceOf(snapshot.settings) !== expectedWorkspaceId
+        connectorWorkspaceSelection(snapshot.settings) !== expectedWorkspaceId
       ) {
         return configurationFailure("CONNECTOR_ATTACHMENT_INVALID");
       }
@@ -227,7 +224,7 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
         receipt.binding.connectorGeneration !== String(connector.generation) ||
         (expectedWorkspaceId !== undefined &&
           workspaceId !== expectedWorkspaceId) ||
-        workspaceOf(snapshot.settings) !== workspaceId
+        connectorWorkspaceSelection(snapshot.settings) !== workspaceId
       )
         return configurationFailure("CONNECTOR_ATTACHMENT_INVALID");
       const latest = configuration()!.snapshot();
@@ -243,11 +240,7 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
         latest.settings.connectors.secureMcp.challenge?.challengeSha256 !==
           challenge.challengeSha256 ||
         (expectedBinding &&
-          !connectorAppBindingCurrent(
-            latest.settings,
-            expectedBinding,
-            workspaceOf,
-          ))
+          !connectorAppBindingCurrent(latest.settings, expectedBinding))
       )
         return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
       const receiptSha256 = observed.receiptSha256;
@@ -305,6 +298,9 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
     // flip the sidebar to "Checking connection…". Setup keeps its state.
     let expected: ConnectorAppVerificationBinding | null = null;
     let workspace: string | null | undefined;
+    // True when the check ran on connectorCheckWorkspace's fallback because no
+    // folder is currently verified: a tunnel check that records no attachment.
+    let fallbackWorkspace = false;
     let outcome: ConnectionCheckCommandResult;
     try {
       outcome = await runExplicitConnectionCheck(
@@ -366,6 +362,8 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
           // Stale folder access must not block a tunnel ping: see
           // connectorCheckWorkspace. The currency check below uses it too.
           workspace = connectorCheckWorkspace(settings);
+          fallbackWorkspace =
+            connectorWorkspaceSelection(settings) === undefined;
           if (
             appName === null ||
             workspace === undefined ||
@@ -564,13 +562,38 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
         configuration() !== config
       )
         return configurationFailure("CONNECTION_CHECK_OUTCOME_UNKNOWN");
+      if (fallbackWorkspace) {
+        const latest = config.snapshot();
+        // Still the same fallback owner: the strict selection stayed undefined
+        // and every other binding field is unchanged. Anything else (including
+        // a verification that now selects a folder) is not this check's owner.
+        if (
+          latest.status !== "ready" ||
+          connectorWorkspaceSelection(latest.settings) !== undefined ||
+          !connectorAppBindingCurrent(
+            latest.settings,
+            expected,
+            connectorCheckWorkspace,
+          )
+        )
+          return configurationFailure("CONNECTION_CHECK_OUTCOME_UNKNOWN");
+        // The tunnel check succeeded, but the attachment is recorded only for
+        // the strict selection, never for a fallback folder.
+        return ProductConfigurationResultSchema.parse({
+          ok: true,
+          snapshot: latest,
+          evidence: {
+            kind: "connector.connection-check",
+            operationId: command.operationId,
+            receiptSha256: outcome.receiptDigest,
+            retained: false,
+            attachmentRecorded: false,
+          },
+        });
+      }
       // Only the existing sole Settings writer publishes attachment/setup state.
       // A historical replay never repeats this possibly unacknowledged write.
-      const published = await checkSecureMcpAttachment(
-        workspace,
-        expected,
-        connectorCheckWorkspace,
-      );
+      const published = await checkSecureMcpAttachment(workspace, expected);
       if (!published.ok)
         return configurationFailure(
           published.error === "SETTINGS_WRITE_FAILED"
