@@ -13,15 +13,23 @@ import type { ConfigurationComputerPorts } from "../../apps/desktop/configuratio
 import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
 import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
-// Actual main.ts source composition for the unmoved Codex agent check workspace.
+// Actual source composition of the Codex agent check workspace selection. The
+// selection lives in the workspace commands owner; main lends its inputs.
 const main = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
+const workspaceCommands = fs.readFileSync(
+  "apps/desktop/configuration/files.ts",
+  "utf8",
+);
 const runtimeStatus = fs.readFileSync("apps/desktop/runtime/status.ts", "utf8");
 const configurationHost = fs.readFileSync(
   "apps/desktop/configuration/host.ts",
   "utf8",
 );
 
-function select(predicate: (node: Record<string, unknown>) => boolean) {
+function select(
+  predicate: (node: Record<string, unknown>) => boolean,
+  source = main,
+) {
   const matches: Record<string, unknown>[] = [];
   function visit(value: unknown): void {
     if (!value || typeof value !== "object") return;
@@ -32,16 +40,17 @@ function select(predicate: (node: Record<string, unknown>) => boolean) {
       else if (child && typeof child === "object") visit(child);
     }
   }
-  visit(parse(main, { sourceType: "module", plugins: ["typescript"] }));
+  visit(parse(source, { sourceType: "module", plugins: ["typescript"] }));
   if (matches.length !== 1) throw Error("COMPOSITION_MISSING");
   const match = matches[0]!;
-  return main.slice(match.start as number, match.end as number);
+  return source.slice(match.start as number, match.end as number);
 }
 
 const checkWorkspace = select(
   (node) =>
     node.type === "FunctionDeclaration" &&
     (node.id as { name?: string })?.name === "codexAgentCheckWorkspace",
+  workspaceCommands,
 );
 
 const workspaceId = "00000000-0000-4000-8000-000000000001";
@@ -165,7 +174,7 @@ function checkContext(
   const chosen: ReadonlyWorkspace = vm.runInNewContext(
     `${stripTypeScriptTypes(checkWorkspace)}; codexAgentCheckWorkspace(settings)`,
     {
-      compiledGoCore,
+      compiledGoCore: () => compiledGoCore,
       nativeWorkspace,
       GoSettingsListWorkspace,
       listOwnerWorkspace,
