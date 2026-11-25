@@ -57,11 +57,9 @@ describe("boot identity", () => {
     expect(identity.activeDesktopIdentity.codexHome).toBe(
       path.join(h.paths.userData!, "farol-private", "codex-home"),
     );
-    expect(identity.displayWindowTitle).toBe(
-      [identity.displayProductName, identity.displayEdition]
-        .filter(Boolean)
-        .join(" · "),
-    );
+    // The production build names itself plainly: no edition in the title.
+    expect(identity.displayProductName).toBe("Farol");
+    expect(identity.displayWindowTitle).toBe("Farol");
   });
 
   it("refuses an unknown build environment before choosing any path", async () => {

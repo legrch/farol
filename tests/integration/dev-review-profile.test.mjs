@@ -10,8 +10,6 @@ import {
 import {
   desktopAppDataPath,
   desktopIdentity,
-  desktopEnvironment,
-  desktopProfileEnvironment,
 } from "../../src/apps/desktop/desktop-environment";
 import { selectBootIdentity } from "../../apps/desktop/host/identity";
 
