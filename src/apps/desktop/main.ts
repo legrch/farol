@@ -95,19 +95,16 @@ import { createTaskRoutes } from "../../../apps/desktop/task/route";
 import { createTaskSurface } from "../../../apps/desktop/task/surface";
 import { connectorSupervisor } from "../../../apps/desktop/connector/supervisor";
 import { createCoreReporters } from "../../../apps/desktop/core/report";
+import { createCoreBrowser } from "../../../apps/desktop/core/browser";
 import { startGoCore } from "../../../apps/desktop/core/start";
 import { createDesktopChatBrowser } from "../../../apps/desktop/go-chat-host";
 import { GoChatBrowserDriver } from "../../../apps/desktop/go-chat-browser";
-import {
-  captureChatStartupProfile,
-  chatWorkerInitialUrl,
-} from "../../../apps/desktop/go-chat-startup-profile";
+import { captureChatStartupProfile } from "../../../apps/desktop/go-chat-startup-profile";
 import { ReadConversationClient } from "../../../apps/desktop/bridge/read-conversation";
 import { readChatHistoryView } from "../../../apps/desktop/chat-history-view";
 import { runSelfTestCommand } from "../../../apps/desktop/self-test-ipc";
 import { recoverDeepTestAttempts } from "./deep-test-recovery";
 import { readRetiredRepliesView } from "../../../apps/desktop/retired-replies-view";
-import { BridgeError } from "../../../apps/desktop/bridge/client";
 import { NativeViewVisibility } from "../../../apps/desktop/bridge/native-view-visibility";
 
 import { ReadAccountConfirmation } from "../../../apps/desktop/read-account-confirmation";
@@ -3178,47 +3175,17 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         settings: currentSettings,
         reportOwnedBackendLifecycle,
         reportQualificationObservation,
-        browser: (context) =>
-          createDesktopChatBrowser({
-            context,
-            partition: activeDesktopIdentity.chatGptPartition,
-            // Public control profiles still require native qualification before a
-            // production model may be admitted. The normal host owns this adapter;
-            // a missing profile cannot select the legacy browser executor instead.
-            driver: (lookup) =>
-              new GoChatBrowserDriver({
-                operations: operationsStore(),
-                lookup,
-                translations: goChatStartupProfile?.snapshot.translations ?? [],
-                ...(goChatStartupProfile
-                  ? { e2eOrigin: goChatStartupProfile.origin }
-                  : {}),
-              }),
-            create: async (input) => {
-              const initialUrl = chatWorkerInitialUrl(
-                chatGptHomeUrl,
-                input.target.mode === "owned-saved"
-                  ? input.target.conversationId
-                  : undefined,
-              );
-              const route = createManagedChatGptRoute({
-                ...(goChatStartupProfile?.route ?? {}),
-                homeUrl: chatGptHomeUrl,
-                initialUrl,
-                e2eOrigin: chatGptE2eOrigin,
-                parent: () => null,
-                windowPresentation: { mode: "hidden" },
-                title: `ChatGPT · ${displayProductName}`,
-              });
-              const opened = await route.open();
-              if (opened.status !== "opened")
-                throw new BridgeError(
-                  "unknown",
-                  "host_chat_browser_open_unconfirmed",
-                );
-              return route.chatPhysical();
-            },
-          }),
+        browser: createCoreBrowser({
+          createBrowser: createDesktopChatBrowser,
+          createDriver: (dependencies) => new GoChatBrowserDriver(dependencies),
+          partition: activeDesktopIdentity.chatGptPartition,
+          operationsStore,
+          startupProfile: () => goChatStartupProfile,
+          homeUrl: () => chatGptHomeUrl,
+          e2eOrigin: () => chatGptE2eOrigin,
+          createRoute: createManagedChatGptRoute,
+          displayProductName,
+        }),
       }),
     );
     await startProcessAudit({
