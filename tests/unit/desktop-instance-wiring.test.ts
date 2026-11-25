@@ -33,13 +33,11 @@ describe("single-instance host wiring in main", () => {
     const { source, body } = await factoryBody();
     for (const name of ["runtimeStopping", "runtimeState", "window"])
       expect(body).toContain(` ${name}: () => ${name},`);
-    expect(body).toContain(" startupRecovery: () => startupRecovery,");
     // The lets stay declared in main: Quit, status and startup read them too.
     for (const declaration of [
       "let runtimeStopping = false;",
       'let runtimeState: "starting" | "ready" | "offline" | "failed" = "starting";',
       "let window: BrowserWindow | null = null;",
-      "let startupRecovery: StartupRecoveryWindow | null = null;",
     ])
       expect(source).toContain(declaration);
     expect(source).toContain("let instanceCache");
@@ -157,7 +155,6 @@ describe("single-instance host wiring in main", () => {
       "primaryStartupReady",
       "releaseSingleInstanceLock",
       "Quit/update owns admission",
-      "A recovery window is available",
     ])
       expect(source).not.toContain(fragment);
   });

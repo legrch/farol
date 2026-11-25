@@ -239,10 +239,6 @@ const ready=${JSON.stringify(bootstrap)};
 const unfinished=${JSON.stringify(shellRailFixture(false))};
 const listeners=new Map();const calls=[];let sequence=0;let lastLayout=[];let snapshot=localStorage.getItem("shell-rail-fixture") === "unfinished" ? unfinished : ready;
 const listen=name=>fn=>{listeners.set(name,fn);return ()=>listeners.delete(name)};
-contextBridge.exposeInMainWorld('farolRecovery',{
- state:async()=>({status:"ready",revision:1,folders:[{workspaceId:"22222222-2222-4222-8222-222222222222",label:"Synthetic workspace",root:"/synthetic/workspace"}],computer:"available",archive:"available"}),
- read:async()=>({status:"refused"}),quit:()=>{}
-});
 contextBridge.exposeInMainWorld('farol',{
  bootstrap:async()=>snapshot,snapshot:async()=>snapshot,
  ...(localStorage.getItem('notification-fixture')==='on'?{operations:async()=>({entries:[{id:'55555555-5555-4555-8555-555555555555',at:1,source:'Setup',kind:'hub.stop',target:{workspace:'Fixture'},outcome:'unknown',code:null,durationMs:1}],corruptLines:0,writeFailures:0,unmappedCodes:0})}:{}),
@@ -611,19 +607,6 @@ app.whenReady().then(async()=>{const w=new BrowserWindow({width:1100,height:760,
     await page.locator(".rail-connection").getAttribute("data-connected"),
     "false",
   );
-  await page.goto(page.url().split("#")[0] + "#farol-startup-recovery");
-  await page.reload();
-  await page
-    .getByRole("button", { name: "Check previous operations", exact: true })
-    .waitFor();
-  await capture(page, "b2-recovery-fixture");
-  await page
-    .getByRole("button", { name: "Check previous operations", exact: true })
-    .click();
-  await page
-    .getByRole("button", { name: "Open with commands paused", exact: true })
-    .click();
-  await capture(page, "b2-recovery-paused-fixture");
   report.windows = await app.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows().map((w) => ({
       visible: w.isVisible(),

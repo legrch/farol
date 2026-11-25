@@ -62,10 +62,7 @@ it("exposes only the narrow Updates API in the Updates renderer", async () => {
   expect(f.worlds.farolUpdates!.configure).toBeUndefined();
   expect(f.ipc.send).not.toHaveBeenCalled();
 });
-it("keeps recovery separately selected and the shell API in the shell only", async () => {
-  expect(
-    Object.keys((await exposed(["--farol-startup-recovery"])).worlds),
-  ).toEqual(["farolRecovery"]);
+it("keeps the shell API in the shell only", async () => {
   const shell = await exposed([]);
   expect(Object.keys(shell.worlds)).toEqual(["farol"]);
   expect(shell.worlds.farol!.openUpdates).toBeTypeOf("function");

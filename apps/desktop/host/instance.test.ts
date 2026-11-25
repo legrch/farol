@@ -43,8 +43,6 @@ type Options = Readonly<{
   expectedViews?: number;
   holdReady?: boolean;
   startupFails?: boolean;
-  recovery?: boolean;
-  recoveryFails?: boolean;
   openFails?: boolean;
   recoveryThrows?: boolean;
   writeFails?: unknown;
@@ -67,7 +65,6 @@ function build(options: Options = {}) {
     runtimeViews: options.runtimeViews ?? 0,
     otherViews: options.otherViews ?? 0,
     expectedViews: options.expectedViews ?? 0,
-    recovery: options.recovery ?? false,
   };
   const startup = new PrimaryStartup();
   let finishReady!: () => void;
@@ -116,10 +113,6 @@ function build(options: Options = {}) {
       return true;
     }),
   };
-  const reopen = vi.fn(async () => {
-    log.push("recovery-reopen");
-    if (options.recoveryFails) throw new Error("RECOVERY");
-  });
   const ensureWindow = vi.fn(async () => {
     log.push("ensure-window");
     if (options.openFails) throw new Error("OPEN");
@@ -191,7 +184,6 @@ function build(options: Options = {}) {
     get expectedTasks() {
       return { length: state.expectedViews };
     },
-    startupRecovery: () => (state.recovery ? { reopen } : null),
     ensureWindow,
     recoverWindowOpenFailure,
     writeInstanceAcknowledgement: write,
@@ -208,7 +200,6 @@ function build(options: Options = {}) {
     app,
     stderr,
     listeners,
-    reopen,
     ensureWindow,
     recoverWindowOpenFailure,
     write,
@@ -312,7 +303,6 @@ describe("second launch reaching the primary", () => {
     expect(acknowledged(h)).toEqual(["ack:identity-mismatch"]);
     expect(h.whenReady).not.toHaveBeenCalled();
     expect(h.ensureWindow).not.toHaveBeenCalled();
-    expect(h.reopen).not.toHaveBeenCalled();
   });
 
   it("refuses a background-only launch without opening anything", async () => {
@@ -336,7 +326,6 @@ describe("second launch reaching the primary", () => {
         expect(acknowledged(h)).toEqual(["ack:reopen-failed"]);
         expect(h.whenReady).not.toHaveBeenCalled();
         expect(h.ensureWindow).not.toHaveBeenCalled();
-        expect(h.reopen).not.toHaveBeenCalled();
       },
     );
 
@@ -407,33 +396,6 @@ describe("second launch reaching the primary", () => {
       await h.instance.handleSecondInstance(h.request);
       expect(h.recoverWindowOpenFailure).toHaveBeenCalledTimes(1);
       expect(acknowledged(h)).toEqual(["ack:reopen-failed"]);
-    });
-
-    it("reopens only the recovery window and never reports normal readiness", async () => {
-      const h = build({ recovery: true, holdReady: true });
-      await h.instance.handleSecondInstance(h.request);
-      expect(h.reopen).toHaveBeenCalledTimes(1);
-      expect(h.whenReady).not.toHaveBeenCalled();
-      expect(h.ensureWindow).not.toHaveBeenCalled();
-      expect(acknowledged(h)).toEqual(["ack:reopen-failed"]);
-    });
-
-    it("refuses even when the recovery window fails to reopen", async () => {
-      const h = build({ recovery: true, recoveryFails: true });
-      await h.instance.handleSecondInstance(h.request);
-      expect(h.reopen).toHaveBeenCalledTimes(1);
-      expect(acknowledged(h)).toEqual(["ack:reopen-failed"]);
-    });
-
-    it("does not open recovery for a foreign or background-only launch", async () => {
-      for (const options of [
-        { requestIdentity: foreignIdentity },
-        { backgroundOnly: true },
-      ]) {
-        const h = build({ recovery: true, ...options });
-        await h.instance.handleSecondInstance(h.request);
-        expect(h.reopen).not.toHaveBeenCalled();
-      }
     });
   });
 
