@@ -89,6 +89,7 @@ export const operationKinds = [
   "connector.select-discovered-client",
   "connector.start",
   "connector.stop",
+  "connector.test-connection",
   "connector.verify-app",
   "connector.verify-separate-app",
   "dev-proof.prepare",
