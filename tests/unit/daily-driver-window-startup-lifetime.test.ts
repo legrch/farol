@@ -11,16 +11,31 @@ import type { DesktopEnvironment } from "../../src/apps/desktop/desktop-environm
 // Actual host startup functions and existing route/stream helpers. Native
 // mechanics, route settlements and fetch dispatches are controlled; this does
 // not exercise Electron, native load ordering or a provider connection.
+// The surface load moved out of main into the task surface factory; its
+// function is read from there under the name main binds.
 const source = fs.readFileSync(
-  new URL("../../src/apps/desktop/main.ts", import.meta.url),
+  new URL("../../apps/desktop/task/surface.ts", import.meta.url),
   "utf8",
 );
 const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
+const factory = tree.program.body.find(
+  (node) =>
+    node.type === "ExportNamedDeclaration" &&
+    node.declaration?.type === "FunctionDeclaration" &&
+    node.declaration.id?.name === "createTaskSurface",
+);
+if (
+  !factory ||
+  factory.type !== "ExportNamedDeclaration" ||
+  factory.declaration?.type !== "FunctionDeclaration"
+)
+  throw new Error("WINDOW_STARTUP_CALLBACK_MISSING:createTaskSurface");
+const factoryBody = factory.declaration.body.body;
 const callbacks = ["openLiveTaskSurface"].map((name) => {
-  const node = tree.program.body.find(
+  const node = factoryBody.find(
     (node) => node.type === "FunctionDeclaration" && node.id?.name === name,
   );
-  if (!node || node.start === null || node.end === null)
+  if (!node || node.start == null || node.end == null)
     throw new Error(`WINDOW_STARTUP_CALLBACK_MISSING:${name}`);
   return source.slice(node.start, node.end);
 });

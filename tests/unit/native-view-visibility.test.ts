@@ -337,15 +337,38 @@ function findRouteLoadCallback(node: unknown): void {
 }
 nodes.forEach(findRouteLoadCallback);
 if (!routeLoadCallback) throw Error("MISSING_ROUTE_LOAD_CALLBACK");
+// The surface load moved out of main into the task surface factory; its
+// function is read from there under the name main binds.
+const surfaceSource = readFileSync(
+  new URL("../../apps/desktop/task/surface.ts", import.meta.url),
+  "utf8",
+);
+const surfaceNodes = parse(surfaceSource, {
+  sourceType: "module",
+  plugins: ["typescript"],
+}).program.body;
+const surfaceFactory = surfaceNodes.find(
+  (node) =>
+    node.type === "ExportNamedDeclaration" &&
+    node.declaration?.type === "FunctionDeclaration" &&
+    node.declaration.id?.name === "createTaskSurface",
+);
+if (
+  !surfaceFactory ||
+  surfaceFactory.type !== "ExportNamedDeclaration" ||
+  surfaceFactory.declaration?.type !== "FunctionDeclaration"
+)
+  throw Error("MISSING_CALLBACK:createTaskSurface");
+const surfaceBody = surfaceFactory.declaration.body.body;
 const callbacks = callbackNames
   .filter((name) => name === "openLiveTaskSurface")
   .map((name) => {
-    const node = nodes.find(
+    const node = surfaceBody.find(
       (node) => node.type === "FunctionDeclaration" && node.id?.name === name,
     );
     if (!node || node.start == null || node.end == null)
       throw Error(`MISSING_CALLBACK:${name}`);
-    return stripTypeScriptTypes(source.slice(node.start, node.end));
+    return stripTypeScriptTypes(surfaceSource.slice(node.start, node.end));
   })
   .join("\n");
 
