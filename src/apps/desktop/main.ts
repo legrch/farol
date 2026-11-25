@@ -3,6 +3,7 @@ import {
   createInstalledUpdateHost,
   withInstalledStartupFence,
 } from "../../../apps/desktop/update/host";
+import { createStartup } from "../../../apps/desktop/host/startup";
 import { UPDATE_IDLE_CHECK_MS } from "../../modules/release/app/installed-updater";
 import { DesktopAdmission } from "../../../apps/desktop/host/admission";
 import { mainWindow } from "../../../apps/desktop/window/main";
@@ -26,15 +27,7 @@ import { observeOperation } from "../../../apps/desktop/operations/observe";
 import { recordInterruptedCommand } from "../../../apps/desktop/operations/interrupted-command";
 import { type SetupCompletionContext } from "../../ui/setup-completion";
 
-import { startDesktopGoRecovery } from "../../../apps/desktop/recovery/core-host";
-import { createStartupRecoverySession } from "../../../apps/desktop/recovery/session";
-import { beginStartupMaintenanceAttempt } from "../../../apps/desktop/recovery/receipt";
-import { preserveFreshStartHistory } from "../../../apps/desktop/recovery/fresh-admission";
-import { runStartupPreservedMaintenance } from "../../../apps/desktop/recovery/maintenance";
-import {
-  openStartupRecoveryWindow,
-  type StartupRecoveryWindow,
-} from "../../../apps/desktop/recovery/host";
+import { type StartupRecoveryWindow } from "../../../apps/desktop/recovery/host";
 import {
   ABOUT_PANEL_SIZE,
   DesktopAboutPanel,
@@ -52,10 +45,7 @@ import {
   startDesktopGoCore,
   type DesktopGoCore,
 } from "../../../apps/desktop/go-core-host";
-import {
-  maintenanceFailureCode,
-  type MaintenanceObservation,
-} from "../../../apps/desktop/recovery/diagnostics";
+import { type MaintenanceObservation } from "../../../apps/desktop/recovery/diagnostics";
 import { goCoreQuitClosers } from "../../../apps/desktop/go-core-quit-closers";
 import type {
   ChatComputerAdmissionResponse,
@@ -127,7 +117,6 @@ import {
   secondInstanceResultPrefix,
 } from "../../../apps/desktop/host/instance";
 import { surfaceNavigation } from "../../../apps/desktop/shell/navigation";
-import { desktopCoreArtifactRoot } from "../../../apps/desktop/dev-core-layout";
 import { promises as rawFs } from "original-fs";
 import {
   announceDrainedQuit,
@@ -352,12 +341,7 @@ import {
   type QuitTracePhase,
 } from "../../../apps/desktop/quit/trace";
 import { createQuitProgressWindow } from "../../../apps/desktop/quit/panel";
-import {
-  currentBootTimeMs,
-  removeRunMarker,
-  readProcessStart,
-  writeRunMarker,
-} from "./run-marker";
+import { removeRunMarker } from "./run-marker";
 import { computerConnectorAdmission } from "./summary-fence-recovery";
 import { deleteTaskContext } from "./task-context-cleanup";
 import { createRouteBTaskLifecycle } from "./route-b-task-lifecycle";
@@ -3323,249 +3307,55 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         }),
     });
   const stateRoot = statePaths().state;
-  let freshStartup = false;
+  const startup = createStartup({
+    app,
+    stateRoot,
+    directory,
+    runtimeEnvironment,
+    windowMode,
+    quitSignals,
+    build: buildIdentity,
+    compiledGoCore,
+    compiledGoResources,
+    installedUpdates,
+    desktopAdmission,
+    primaryInstanceLock: () => primaryInstanceLock,
+    runtimeStopping: () => runtimeStopping,
+    desktopGoCore: () => desktopGoCore,
+    configuration: () => configuration,
+    secureMcpConnectorRuntime: () => secureMcpConnectorRuntime,
+    connectorStartInFlight: () => connectorStartInFlight,
+    modelLifecycle: () => modelLifecycle,
+    pendingComputer,
+    ownedLocalRuntimes,
+    startupRecovery: {
+      get: () => startupRecovery,
+      set: (opened) => {
+        startupRecovery = opened;
+      },
+    },
+    quitTracePhase: (phase) => {
+      quitTracePhase = phase;
+    },
+    startupStage,
+    nativeMenuBarEnabled,
+    selectedVisibleTestPlacement,
+    reportMaintenanceObservation,
+    reportQualificationObservation,
+    reportOwnedBackendLifecycle,
+    reportRecoveryStarted: () => {
+      process.stderr.write(`${secondInstanceResultPrefix}primary-recovery\n`);
+    },
+    computerMcpLifecycle,
+  });
   const previousHostAdmissionReady = await withInstalledStartupFence(
     process.argv,
     app.getPath("userData"),
     buildIdentity.buildId,
     observeUpdateRelaunch,
-    async (updateRelaunch, verify, lease) => {
-      installedUpdates.resourcesOrigin = updateRelaunch?.resourcesOrigin;
-      await updateRelaunch?.recheck();
-      startupStage("before-ready");
-      await app.whenReady();
-      startupStage("ready");
-      // Startup participates in the updater's existing exclusion before
-      // readiness and until its durable runtime obligation is published.
-      // A busy promotion refuses this launch; it never waits to resurrect
-      // potentially displaced code or modifies the predecessor's marker.
-      // Presence is inspected without reading or repairing an old marker.
-      // An access error is never treated as absence.
-      const clean = await lstat(path.join(stateRoot, "running.json")).then(
-        () => false,
-        (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT",
-      );
-      let admissionReady = clean;
-      // Ordinary Go startup creates current work independently of old sessions.
-      // Permanent lock files exclude owners; their presence selects no mode.
-      freshStartup = compiledGoCore !== null;
-      if (freshStartup) {
-        if (!clean) {
-          // Current Settings integrity remains mandatory; no default/repair path.
-          const saved = await new ProductSettingsStore({
-            root: stateRoot,
-          }).loadExisting();
-          if (!saved) throw Error("FRESH_START_SETTINGS_UNAVAILABLE");
-        }
-        if (!clean)
-          await preserveFreshStartHistory(stateRoot, async () => {
-            await updateRelaunch?.recheck();
-            if (
-              !primaryInstanceLock ||
-              !app.hasSingleInstanceLock() ||
-              desktopAdmission.quitInProgress ||
-              runtimeStopping ||
-              !(await verify())
-            )
-              throw Error("FRESH_START_CURRENT_OWNER_UNCONFIRMED");
-          });
-      }
-      if (!freshStartup && compiledGoCore !== null && !clean) {
-        const assertMaintenanceCurrent = async () => {
-          await updateRelaunch?.recheck();
-          if (
-            !primaryInstanceLock ||
-            !app.hasSingleInstanceLock() ||
-            desktopAdmission.quitInProgress ||
-            runtimeStopping ||
-            desktopGoCore !== null ||
-            configuration !== null ||
-            startupRecovery !== null ||
-            secureMcpConnectorRuntime !== null ||
-            connectorStartInFlight !== null ||
-            modelLifecycle !== null ||
-            pendingComputer.size !== 0 ||
-            ownedLocalRuntimes.size !== 0
-          )
-            throw Error("STARTUP_RECOVERY_HOST_UNCONFIRMED");
-          if (!(await verify())) throw Error("STARTUP_PROMOTION_LEASE_LOST");
-        };
-        // Select maintenance before launching any current read-only child.
-        // There is no child terminal fact to invent or infer from old receipts.
-        // Saved Settings are loaded once and retained for the independent read
-        // surface if this one attempt cannot qualify a fresh cold start.
-        const savedSettings = await new ProductSettingsStore({
-          root: stateRoot,
-        })
-          .loadExisting()
-          .catch(() => null);
-        if (savedSettings !== null) {
-          try {
-            const attempt =
-              runtimeEnvironment === "dev" || process.env.FAROL_E2E === "1"
-                ? await beginStartupMaintenanceAttempt({
-                    stateRoot,
-                    buildId: buildIdentity.buildId,
-                    report: (notice) => {
-                      try {
-                        process.stderr.write(
-                          "FAROL_STARTUP_MAINTENANCE_RECEIPT:" +
-                            JSON.stringify({
-                              schema: 1,
-                              buildId: buildIdentity.buildId,
-                              pid: process.pid,
-                              ...notice,
-                            }) +
-                            "\n",
-                        );
-                      } catch {
-                        /* Receipt output is not admission evidence. */
-                      }
-                    },
-                  })
-                : undefined;
-            await runStartupPreservedMaintenance({
-              ...(attempt ? { attempt } : {}),
-              ...(runtimeEnvironment === "dev" || process.env.FAROL_E2E === "1"
-                ? {
-                    onMaintenanceObservation: reportMaintenanceObservation,
-                    onQualificationObservation: reportQualificationObservation,
-                  }
-                : {}),
-              userData: app.getPath("userData"),
-              home: app.getPath("home"),
-              computerId: savedSettings.computer.computerId,
-              build: buildIdentity,
-              artifactRoot: desktopCoreArtifactRoot(
-                installedUpdates.resourcesOrigin?.execution.directory ??
-                  directory,
-                runtimeEnvironment,
-              ),
-              compiledArtifact: compiledGoCore,
-              compiledResources: compiledGoResources,
-              startup: {
-                lease,
-                verify,
-                assertCurrent: assertMaintenanceCurrent,
-              },
-            });
-            await assertMaintenanceCurrent();
-            admissionReady = true;
-            startupStage("preserved-recovery-prepared");
-          } catch (error) {
-            if (runtimeEnvironment === "dev" || process.env.FAROL_E2E === "1") {
-              try {
-                process.stderr.write(
-                  "FAROL_STARTUP_MAINTENANCE_FAILURE:" +
-                    JSON.stringify({
-                      schema: 1,
-                      buildId: buildIdentity.buildId,
-                      pid: process.pid,
-                      code: maintenanceFailureCode(error),
-                    }) +
-                    "\n",
-                );
-              } catch {
-                /* The original unconfirmed branch remains selected. */
-              }
-            }
-            // No retry or marker repair. The existing read-only composition
-            // can still expose saved Settings and independently safe reads.
-            startupStage("preserved-recovery-unconfirmed");
-          }
-        }
-        if (!admissionReady) {
-          // Keep the original exclusion through recovery and its exact child
-          // cleanup. Existing Settings and owner reads have their own narrow
-          // composition; no old marker, operation or handoff is retired here.
-          await updateRelaunch?.recheck();
-          if (!(await verify()))
-            throw new Error("STARTUP_PROMOTION_LEASE_LOST");
-          const assertRecoveryCurrent = async () => {
-            await updateRelaunch?.recheck();
-            if (!(await verify()))
-              throw new Error("STARTUP_PROMOTION_LEASE_LOST");
-          };
-          const session = createStartupRecoverySession({
-            load: async () => savedSettings,
-            assertCurrent: assertRecoveryCurrent,
-            start: (settings) =>
-              startDesktopGoRecovery({
-                compiledArtifact: compiledGoCore,
-                compiledResources: compiledGoResources,
-                build: buildIdentity,
-                artifactRoot: desktopCoreArtifactRoot(
-                  installedUpdates.resourcesOrigin?.execution.directory ??
-                    directory,
-                  runtimeEnvironment,
-                ),
-                stateRoot,
-                home: app.getPath("home"),
-                settings,
-                onLifecycleObservation: reportOwnedBackendLifecycle,
-              }),
-          });
-          try {
-            quitTracePhase = "recovery";
-            startupRecovery = openStartupRecoveryWindow({
-              directory: installedUpdates.resources().directory,
-              session,
-              ...(nativeMenuBarEnabled()
-                ? {
-                    menuBar: (actions) =>
-                      createMenuBar(actions, () => ({
-                        label: desktopAdmission.quitInProgress
-                          ? "Farol · Closing recovery"
-                          : "Farol · Startup recovery required",
-                        current: null,
-                        icon: "attention",
-                      })),
-                  }
-                : {}),
-              mode: windowMode,
-              placement: () =>
-                selectedVisibleTestPlacement({ width: 640, height: 520 })
-                  .bounds,
-              quitSignals,
-              onQuitting: () => {
-                desktopAdmission.beginQuit();
-              },
-            });
-            await startupRecovery.ready;
-            process.stderr.write(
-              `${secondInstanceResultPrefix}primary-recovery\n`,
-            );
-            await startupRecovery.quitRequested;
-          } finally {
-            try {
-              await session.close();
-            } finally {
-              startupRecovery?.dispose();
-            }
-          }
-          return false;
-        }
-      }
-      if (compiledGoCore !== null && !freshStartup) {
-        // Admission is either a confirmed predecessor Quit or the separate
-        // qualified preserving-maintenance handoff. The latter keeps the old
-        // ACK/terminal unobserved; it never manufactures a clean Quit receipt.
-        await computerMcpLifecycle().confirmCleanHostStop(admissionReady);
-      }
-      await updateRelaunch?.recheck();
-      if (!(await verify())) {
-        throw new Error("STARTUP_PROMOTION_LEASE_LOST");
-      }
-      await writeRunMarker(stateRoot, {
-        pid: process.pid,
-        now: Date.now(),
-        bootTime: currentBootTimeMs(),
-        processStart: readProcessStart(process.pid),
-      });
-      startupStage("run-marker");
-      return admissionReady;
-    },
+    startup.admit,
   );
+  const freshStartup = startup.freshStartup();
   if (startupRecovery !== null) {
     quitTracePhase = "recovery";
     // Only the UI's startup lease was released. The predecessor remains
