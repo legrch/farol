@@ -11,7 +11,7 @@ const ready = {
   appSelected: true,
   workspaceKnown: true,
   tunnelPresent: true,
-  stateReady: true,
+  runtimeState: "ready" as const,
   buildCurrent: true,
   generationsCurrent: true,
   running: true,
@@ -27,9 +27,19 @@ describe("Ping runtime refusal causes", () => {
       "CONNECTION_CHECK_CONNECTOR_NOT_SET_UP",
     ],
     [
-      "state not ready",
-      { stateReady: false },
+      "no runtime record",
+      { runtimeState: "missing" },
       "CONNECTION_CHECK_CONNECTOR_NOT_SET_UP",
+    ],
+    [
+      "unreachable runtime",
+      { runtimeState: "unreachable" },
+      "CONNECTION_CHECK_RUNTIME_NOT_RUNNING",
+    ],
+    [
+      "unknown runtime outcome",
+      { runtimeState: "outcome_unknown" },
+      "CONNECTION_CHECK_SETUP_UNRESOLVED",
     ],
     [
       "other build",
@@ -79,6 +89,7 @@ describe("Ping refusal codes", () => {
     expect(messages[3]).toContain("not running");
     expect(messages[3]).toContain("Connect this Mac");
     expect(messages[3]).not.toContain("ChatGPT page");
-    expect(messages[1]).toContain("try Ping again");
+    expect(messages[1]).toContain("Try again in a moment");
+    expect(messages[1]).toContain("open Setup");
   });
 });

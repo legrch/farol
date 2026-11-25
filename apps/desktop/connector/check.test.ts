@@ -703,7 +703,7 @@ describe("testConnectionCommand refusals before any claim", () => {
       f.fixture[name] = null;
       run.impl = vi.fn();
       expect(await f.check.testConnectionCommand(command)).toEqual(
-        failure("CONNECTION_CHECK_PREREQUISITES_REQUIRED"),
+        failure("CONNECTION_CHECK_HOST_NOT_READY"),
       );
       expect(run.impl).not.toHaveBeenCalled();
       expect(f.reservations).toEqual([]);
@@ -867,9 +867,14 @@ describe("testConnectionCommand prerequisites inside the first claim", () => {
       "CONNECTION_CHECK_CONNECTOR_NOT_SET_UP",
     ],
     [
-      "the runtime is not ready",
+      "the runtime is unreachable",
       (f: Fixture) => void (f.connector.runtime!.state = "unreachable"),
-      "CONNECTION_CHECK_CONNECTOR_NOT_SET_UP",
+      "CONNECTION_CHECK_RUNTIME_NOT_RUNNING",
+    ],
+    [
+      "the runtime outcome is unknown",
+      (f: Fixture) => void (f.connector.runtime!.state = "outcome_unknown"),
+      "CONNECTION_CHECK_SETUP_UNRESOLVED",
     ],
     [
       "the runtime is another build",

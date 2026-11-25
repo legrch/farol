@@ -484,7 +484,7 @@ it("Main refuses before Send when connector start remains unresolved", async () 
   };
   expect(await f.run()).toMatchObject({
     ok: false,
-    error: "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+    error: "CONNECTION_CHECK_SETUP_UNRESOLVED",
   });
   expect(f.sends()).toBe(0);
   expect(f.published()).toBe(0);
