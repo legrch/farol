@@ -92,6 +92,18 @@ export function renewingReadonlyComputerContract(
             error: admissionError(new Error("AUTHORITY_COMPUTER_MISMATCH")),
           };
         }
+        // The execution re-check above awaited; a cancellation that arrived
+        // meanwhile must still stop the catalogue before anything is disclosed.
+        if (context?.signal?.aborted) {
+          return {
+            ok: false as const,
+            error: {
+              code: "WORKSPACE_REQUEST_CANCELLED",
+              source: "native-workspace",
+              retry: "never",
+            },
+          };
+        }
         return result;
       });
     },
