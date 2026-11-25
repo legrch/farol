@@ -193,30 +193,87 @@ describe("Workspace rows", () => {
     expect(h.host.querySelectorAll("details")).toHaveLength(0);
     expect(h.f.api.configure).not.toHaveBeenCalled();
   });
+  const othersNote = "Other users of this Mac can change files in this folder.";
+  const rowNote = (host: HTMLElement, label: string) =>
+    host
+      .querySelector(`[aria-label="Workspace ${label}"]`)
+      ?.textContent?.includes(othersNote);
+  const withSecond = (flagFirst: boolean, flagSecond: boolean) => {
+    const value = readySettings();
+    const first = value.computer.workspaces[0]!;
+    value.computer.workspaces = [
+      {
+        ...first,
+        accessCheck: {
+          ...first.accessCheck!,
+          ...(flagFirst ? { writableByOthers: true as const } : {}),
+        },
+      },
+      {
+        ...first,
+        workspaceId: selectionId,
+        root: "/approved/second",
+        accessCheck: {
+          ...first.accessCheck!,
+          ...(flagSecond ? { writableByOthers: true as const } : {}),
+        },
+      },
+    ];
+    return value;
+  };
   it.each([true, false])(
-    "shows the neutral writable-by-others note only when reported (%s)",
+    "shows the neutral writable-by-others note from the saved check only when set (%s)",
     async (writable) => {
       const value = readySettings();
+      if (writable)
+        value.computer.workspaces[0]!.accessCheck!.writableByOthers = true;
       const h = await mount({ step: "folders", value });
-      h.reply(() => ({
-        ok: true,
-        snapshot: { status: "ready", settings: value },
-        evidence: {
-          kind: "computer.workspace-inspection",
-          workspaceId,
-          relativePath: ".",
-          ...(writable ? { writableByOthers: true } : {}),
-        },
-      }));
-      await h.click("Re-check");
       expect(h.host.textContent).toContain("✓ Works");
-      expect(
-        h.host.textContent?.includes(
-          "Other users of this Mac can change files in this folder.",
-        ),
-      ).toBe(writable);
+      expect(h.host.textContent?.includes(othersNote)).toBe(writable);
     },
   );
+  it("shows the note per workspace, each from its own saved check", async () => {
+    const h = await mount({
+      step: "folders",
+      value: withSecond(false, true),
+    });
+    expect(rowNote(h.host, "project")).toBe(false);
+    expect(rowNote(h.host, "second")).toBe(true);
+  });
+  it("keeps the note across an unrelated configuration result", async () => {
+    const value = withSecond(true, true);
+    const h = await mount({ step: "folders", value });
+    expect(h.host.querySelectorAll(".workspace-row-note")).toHaveLength(2);
+    // A later result about something else replaces the transient evidence and
+    // advances the revision; the saved checks are unchanged.
+    h.reply(() => ({
+      ok: true,
+      snapshot: {
+        status: "ready",
+        settings: { ...structuredClone(value), revision: value.revision + 1 },
+      },
+      evidence: {
+        kind: "computer.workspace-inspection",
+        workspaceId: selectionId,
+        relativePath: ".",
+      },
+    }));
+    await h.click("Re-check");
+    expect(h.host.querySelectorAll(".workspace-row-note")).toHaveLength(2);
+  });
+  it("drops the note only when the next saved check no longer has the flag", async () => {
+    const value = withSecond(true, true);
+    const h = await mount({ step: "folders", value });
+    h.reply(() => {
+      const next = structuredClone(value);
+      next.revision++;
+      delete next.computer.workspaces[0]!.accessCheck!.writableByOthers;
+      return { ok: true, snapshot: { status: "ready", settings: next } };
+    });
+    await h.click("Re-check");
+    expect(rowNote(h.host, "project")).toBe(false);
+    expect(rowNote(h.host, "second")).toBe(true);
+  });
   it("does not promote an unchecked second workspace", async () => {
     const value = readySettings();
     value.computer.workspaces.push({

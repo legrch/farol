@@ -1065,6 +1065,91 @@ describe("Computer evidence approval generations", () => {
     expect(before).toEqual(sealed);
   });
 
+  it("persists writableByOthers per folder from successful checks and clears it on the next", async () => {
+    const { service, workspaceId, rootIdentity, verification } =
+      await computerEvidenceFixture();
+    const secondIdentity = { device: "1", inode: "3" };
+    const added = await service.addReadonlyWorkspace({
+      root: "/Users/example/second",
+      label: "Second",
+      rootIdentity: secondIdentity,
+    });
+    const secondId = approval(added.snapshot).workspaces[1]!.workspaceId;
+    const flags = () => {
+      const snapshot = service.snapshot();
+      if (snapshot.status !== "ready") throw new Error("settings missing");
+      return snapshot.settings.computer.workspaces.map((workspace) => ({
+        id: workspace.workspaceId,
+        flag: workspace.accessCheck?.writableByOthers,
+        checked: workspace.accessCheck != null,
+      }));
+    };
+    // A check that saw the flag records it for that folder only.
+    await service.recordComputerVerification(workspaceId, verification, {
+      rootIdentity,
+      writableByOthers: true,
+    });
+    expect(flags()).toEqual([
+      { id: workspaceId, flag: true, checked: true },
+      { id: secondId, flag: undefined, checked: false },
+    ]);
+    // A second folder's check, with and without the flag, leaves the first.
+    const generation = () => approval(service.snapshot()).generation;
+    await service.recordFolderAccessCheck(
+      secondId,
+      generation(),
+      verification.buildId,
+      secondIdentity,
+      true,
+      undefined,
+      true,
+    );
+    expect(flags()).toEqual([
+      { id: workspaceId, flag: true, checked: true },
+      { id: secondId, flag: true, checked: true },
+    ]);
+    // An unrelated configuration change that seals a new generation keeps both.
+    await service.updateComputerCommands("verification");
+    expect(flags().map((item) => item.flag)).toEqual([true, true]);
+    // The next successful check without the flag clears it, for that folder.
+    await service.recordComputerVerification(workspaceId, verification, {
+      rootIdentity,
+    });
+    expect(flags().map((item) => item.flag)).toEqual([undefined, true]);
+    // A failed check withdraws the record, flag included.
+    await service.recordFolderAccessCheck(
+      secondId,
+      generation(),
+      verification.buildId,
+      secondIdentity,
+      false,
+      undefined,
+      true,
+    );
+    expect(flags()).toEqual([
+      { id: workspaceId, flag: undefined, checked: true },
+      { id: secondId, flag: undefined, checked: false },
+    ]);
+  });
+
+  it("reads settings saved without writableByOthers", async () => {
+    const { service, workspaceId, rootIdentity, verification, root } =
+      await computerEvidenceFixture();
+    await service.recordComputerVerification(workspaceId, verification, {
+      rootIdentity,
+    });
+    const restarted = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await restarted.initialize();
+    const snapshot = restarted.snapshot();
+    if (snapshot.status !== "ready") throw new Error("settings missing");
+    const check = snapshot.settings.computer.workspaces[0]!.accessCheck!;
+    expect(check).toBeTruthy();
+    expect(check).not.toHaveProperty("writableByOthers");
+  });
+
   it("keeps stale sibling checks stale when verification advances policy", async () => {
     const { service, workspaceId, rootIdentity, verification } =
       await computerEvidenceFixture();
