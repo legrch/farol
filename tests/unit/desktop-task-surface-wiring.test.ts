@@ -31,8 +31,8 @@ describe("task surface wiring in main", () => {
     expect(source).toContain("let taskSurfaceCache");
     // The flag is a const fixed at launch, so the value is the owner.
     expect(body).toContain(" demoMode,");
-    expect(source).toContain(
-      'const demoMode = process.argv.includes("--demo");',
+    expect(source).toMatch(
+      /\nconst \{[^}]*\bdemoMode,[^}]*\} = readLaunchArguments\(/,
     );
   });
 
