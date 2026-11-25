@@ -174,9 +174,25 @@ function catalogue(value: unknown): ComputerCatalogue {
   );
   if (!Array.isArray(data.workspaces) || data.workspaces.length > 32)
     throw Error("invalid_computer_result");
-  const entries = data.workspaces.map((entry: unknown) =>
-    dto<ComputerCatalogueEntry>("ComputerCatalogueEntry", entry),
-  );
+  const entries = data.workspaces.map((entry: unknown) => {
+    const checked = dto<ComputerCatalogueEntry>(
+      "ComputerCatalogueEntry",
+      entry,
+    );
+    // Exactly one shape: verified (both roots, no refusal) or refused
+    // (refusal only: no roots and no writable mark).
+    const verified =
+      checked.refusal === undefined &&
+      checked.root !== undefined &&
+      checked.approvedRoot !== undefined;
+    const refused =
+      checked.refusal !== undefined &&
+      checked.root === undefined &&
+      checked.approvedRoot === undefined &&
+      checked.writableByOthers === undefined;
+    if (!verified && !refused) throw Error("invalid_computer_result");
+    return checked;
+  });
   if (
     new Set(entries.map((entry) => entry.workspaceId)).size !== entries.length
   )

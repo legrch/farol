@@ -17,9 +17,10 @@ type CatalogueRequest struct {
 // are the same allowlisted, path-free code/source/stage/reason as read failures.
 type CatalogueRefusal struct{ Code, Source, Stage, Reason string }
 
-// CatalogueEntry is either verified (Refusal nil) or refused (Refusal set, root
-// fields are the unverified grant and approval records). WritableByOthers marks
-// a verified root that group or other users can write to.
+// CatalogueEntry is either verified (Refusal nil, root fields set) or refused
+// (Refusal set, only WorkspaceID otherwise: no root was verified, so none is
+// published). WritableByOthers marks a verified root that group or other users
+// can write to.
 type CatalogueEntry struct {
 	WorkspaceID, Root string
 	ApprovedRoot      Root
