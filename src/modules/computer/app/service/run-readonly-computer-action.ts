@@ -264,13 +264,14 @@ export class RunReadonlyComputerAction {
     } catch {
       return failure("WORKSPACE_HELPER_FAILED", "native-workspace");
     }
-    if (!result.ok) {
-      return failure(result.error.code, "native-workspace");
-    }
     if (context.signal?.aborted)
       return failure("WORKSPACE_REQUEST_CANCELLED", "native-workspace");
     // The helper may have yielded to native work. Do not disclose its output
     // after a revoked grant or approval, even when the read itself succeeded.
+    // A native refusal takes the same checks before it is returned: a caller
+    // such as the catalogue turns a refusal into an entry and discloses the
+    // entries collected so far, so a revoked or cancelled call must fail
+    // instead of reporting that refusal.
     let currentParticipant;
     let currentApproval;
     try {
@@ -344,6 +345,7 @@ export class RunReadonlyComputerAction {
     }
     if (context.signal?.aborted)
       return failure("WORKSPACE_REQUEST_CANCELLED", "native-workspace");
+    if (!result.ok) return failure(result.error.code, "native-workspace");
     return {
       ok: true,
       value: {
