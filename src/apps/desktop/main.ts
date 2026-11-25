@@ -6,6 +6,7 @@ import {
 import { createStartup } from "../../../apps/desktop/host/startup";
 import { readLaunchArguments } from "../../../apps/desktop/host/launch";
 import { selectBootIdentity } from "../../../apps/desktop/host/identity";
+import { selectChatGptHome } from "../../../apps/desktop/chat/home";
 import { UPDATE_IDLE_CHECK_MS } from "../../modules/release/app/installed-updater";
 import { DesktopAdmission } from "../../../apps/desktop/host/admission";
 import { mainWindow } from "../../../apps/desktop/window/main";
@@ -3276,20 +3277,9 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   await runDesktopStartupBoundary("configuration", () =>
     configuration!.initialize(),
   );
-  const e2eChatGptUrl =
-    process.env.FAROL_E2E === "1"
-      ? process.env.FAROL_E2E_CHATGPT_URL
-      : undefined;
-  let chatGptUrl = CHATGPT_HOME;
-  let e2eChatGptOrigin: string | null = null;
-  if (e2eChatGptUrl) {
-    const parsed = new URL(e2eChatGptUrl);
-    if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1") {
-      throw new Error("CHATGPT_E2E_URL_INVALID");
-    }
-    chatGptUrl = parsed.href;
-    e2eChatGptOrigin = parsed.origin;
-  }
+  const { url: chatGptUrl, e2eOrigin: e2eChatGptOrigin } = selectChatGptHome(
+    process.env,
+  );
   chatGptHomeUrl = chatGptUrl;
   chatGptE2eOrigin = e2eChatGptOrigin;
   try {
