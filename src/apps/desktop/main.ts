@@ -10,6 +10,7 @@ import { selectBootIdentity } from "../../../apps/desktop/host/identity";
 import { selectChatGptHome } from "../../../apps/desktop/chat/home";
 import { chatStartupProfile } from "../../../apps/desktop/chat/profile";
 import { cleanupAttachmentStaging } from "../../../apps/desktop/chat/staging";
+import { startModelEndpoint } from "../../../apps/desktop/runtime/endpoint";
 import { admissionLease } from "../../../apps/desktop/host/lease";
 import { createConfigurationService } from "../../../apps/desktop/configuration/service";
 import { UPDATE_IDLE_CHECK_MS } from "../../modules/release/app/installed-updater";
@@ -3425,31 +3426,23 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     process.env.FAROL_E2E === "1"
       ? process.env.FAROL_MODEL_E2E_SYNTHETIC_REPLY
       : undefined;
-  if (FAROL_MODEL_ENABLED) {
-    modelLifecycle = new FarolModelLifecycle({
-      stateRoot: statePaths().modelEndpoint,
-      model: ROUTE_B_MODEL,
-      handler: recordedModelTurn(
-        operationsStore(),
-        modelSyntheticReply
-          ? syntheticModelTurnHandler(modelSyntheticReply)
-          : routeBModelTurnHandler(
-              () => contextHost.routeB.get()?.endpoint ?? null,
-            ),
+  modelLifecycle = await startModelEndpoint({
+    enabled: FAROL_MODEL_ENABLED,
+    syntheticReply: modelSyntheticReply,
+    stateRoot: statePaths().modelEndpoint,
+    model: ROUTE_B_MODEL,
+    createLifecycle: (options) => new FarolModelLifecycle(options),
+    recordTurn: (handler) => recordedModelTurn(operationsStore(), handler),
+    recordCompaction: (handler) =>
+      recordedCompaction(operationsStore(), handler),
+    syntheticTurn: syntheticModelTurnHandler,
+    routeBTurn: () =>
+      routeBModelTurnHandler(() => contextHost.routeB.get()?.endpoint ?? null),
+    routeBCompaction: () =>
+      routeBModelCompactionHandler(
+        () => contextHost.routeB.get()?.endpoint ?? null,
       ),
-      compactionHandler: recordedCompaction(
-        operationsStore(),
-        routeBModelCompactionHandler(
-          () => contextHost.routeB.get()?.endpoint ?? null,
-        ),
-      ),
-    });
-    try {
-      await modelLifecycle.start();
-    } catch {
-      // Model failure does not abort unrelated app startup.
-    }
-  }
+  });
   try {
     const credential = await connectorCredentialStore.status();
     const snapshot = configuration.snapshot();
