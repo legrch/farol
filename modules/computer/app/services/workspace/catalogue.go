@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"errors"
 
 	"github.com/legrch/farol/modules/computer/app/port"
 	"github.com/legrch/farol/modules/computer/domain/authority"
@@ -14,9 +15,23 @@ type CatalogueRequest struct {
 	Generation                 uint64
 	CallID                     string
 }
+
+// CatalogueRefusal is the allowlisted, path-free reason one workspace could not
+// be inspected. The zero value means the workspace was usable.
+type CatalogueRefusal struct{ Code, Source, Stage, Reason string }
+
+// Refused reports whether the entry carries a refusal instead of a verified root.
+func (r CatalogueRefusal) Refused() bool { return r.Code != "" }
+
+// CatalogueEntry is comparable so the two passes can be checked for equality.
+// A refused entry carries only the workspace ID and its refusal: no root was
+// verified, so none is published.
+// WritableByOthers is meaningful only for a verified entry.
 type CatalogueEntry struct {
 	WorkspaceID, Root string
 	ApprovedRoot      Root
+	WritableByOthers  bool
+	Refusal           CatalogueRefusal
 }
 type CatalogueResponse struct {
 	OwnerID, SessionID, TaskID string
@@ -30,6 +45,9 @@ type CatalogueResponse struct {
 
 // Catalogue obtains candidates only from the selected participant's sealed
 // subtree scopes. Each native context is checked in two complete ordered passes.
+// A workspace whose folder the native boundary refuses (policy, ownership,
+// missing, unreadable) is reported on its own entry and no longer hides the
+// usable ones; any other failure still discards the whole collection.
 func (s *Service) Catalogue(ctx context.Context, request CatalogueRequest) (*CatalogueResponse, error) {
 	binding := correlation{TaskBinding: port.TaskBinding{Identity: authority.Identity{OwnerID: request.OwnerID, SessionID: request.SessionID, TaskID: request.TaskID, TaskEpoch: request.TaskEpoch}, ParticipantID: request.ParticipantID, TurnID: request.TurnID}, generation: request.Generation, callID: request.CallID}
 	seal, err := s.captureDiscovery(ctx, binding)
@@ -55,14 +73,20 @@ func (s *Service) Catalogue(ctx context.Context, request CatalogueRequest) (*Cat
 	entries := make([]CatalogueEntry, 0, len(ids))
 	for pass := 0; pass < 2; pass++ {
 		for index, id := range ids {
-			out, err := s.Inspect(ctx, binding.contextRequest(id, "."))
+			var entry CatalogueEntry
+			out, err := s.directoryContext(ctx, binding.contextRequest(id, "."), contextOptions{inspectOnly: true, keepDiagnostic: true})
 			if err != nil {
-				return nil, err
+				refused, ok := refusedEntry(seal, id, err)
+				if !ok {
+					return nil, err
+				}
+				entry = refused
+			} else {
+				if !binding.validContext(out, id, ".") {
+					return nil, contractInvalid("COMPUTER_CONTRACT_INVALID")
+				}
+				entry = CatalogueEntry{WorkspaceID: id, Root: out.Root, ApprovedRoot: out.ApprovedRoot, WritableByOthers: out.WritableByOthers}
 			}
-			if !binding.validContext(out, id, ".") {
-				return nil, contractInvalid("COMPUTER_CONTRACT_INVALID")
-			}
-			entry := CatalogueEntry{WorkspaceID: id, Root: out.Root, ApprovedRoot: out.ApprovedRoot}
 			if pass == 0 {
 				entries = append(entries, entry)
 			} else if entries[index] != entry {
@@ -80,4 +104,30 @@ func (s *Service) Catalogue(ctx context.Context, request CatalogueRequest) (*Cat
 		return nil, err
 	}
 	return response, nil
+}
+
+// refusedEntry maps a per-workspace native refusal to its entry. Only refusals
+// about this one folder qualify; authority, contract, cancellation, race and
+// helper failures keep failing the whole call. The grant and approval sealed at
+// the start supply the root, and the entry is dropped to the original error when
+// they do not form a well-formed context.
+func refusedEntry(seal discoverySeal, id string, err error) (CatalogueEntry, bool) {
+	var failure *authority.Failure
+	if !errors.As(err, &failure) || failure == nil || failure.Source != "native-workspace" {
+		return CatalogueEntry{}, false
+	}
+	if failure.Code != "WORKSPACE_PATH_REFUSED" && failure.Code != "WORKSPACE_NOT_FOUND" {
+		return CatalogueEntry{}, false
+	}
+	if _, found := authority.FindScope(seal.participant.Grant, id); !found {
+		return CatalogueEntry{}, false
+	}
+	if _, found := authority.FindApproved(seal.approval, id); !found {
+		return CatalogueEntry{}, false
+	}
+	refusal := CatalogueRefusal{Code: failure.Code, Source: failure.Source}
+	if failure.Code == "WORKSPACE_PATH_REFUSED" && authority.SafeWorkspaceReadDiagnostic(failure.Stage, failure.Reason) {
+		refusal.Stage, refusal.Reason = failure.Stage, failure.Reason
+	}
+	return CatalogueEntry{WorkspaceID: id, Refusal: refusal}, true
 }

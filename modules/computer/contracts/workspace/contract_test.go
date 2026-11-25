@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	workspacesvc "github.com/legrch/farol/modules/computer/app/services/workspace"
 	"github.com/legrch/farol/modules/computer/domain/authority"
 )
 
@@ -37,5 +38,40 @@ func TestPathDiagnosticAllowsOnlyBoundedPairs(t *testing.T) {
 		if out.Stage != tc.wantStage || out.Reason != tc.wantReason || out.Retry != "never" {
 			t.Fatalf("unsafe or lost diagnostic: %+v", out)
 		}
+	}
+}
+
+func TestCatalogueRefusalIsReallowlistedAtTheBoundary(t *testing.T) {
+	for _, tc := range []struct{ in, want CatalogueRefusal }{
+		{CatalogueRefusal{"WORKSPACE_PATH_REFUSED", "native-workspace", "root", "unsafe_root"}, CatalogueRefusal{"WORKSPACE_PATH_REFUSED", "native-workspace", "root", "unsafe_root"}},
+		{CatalogueRefusal{"WORKSPACE_PATH_REFUSED", "native-workspace", "root", "/private/path"}, CatalogueRefusal{"WORKSPACE_PATH_REFUSED", "native-workspace", "", ""}},
+		{CatalogueRefusal{"WORKSPACE_NOT_FOUND", "native-workspace", "root", "unsafe_root"}, CatalogueRefusal{"WORKSPACE_NOT_FOUND", "native-workspace", "", ""}},
+		{CatalogueRefusal{"PRIVATE_NATIVE_DETAIL", "native-workspace", "", ""}, CatalogueRefusal{"WORKSPACE_HELPER_FAILED", "native-workspace", "", ""}},
+		{CatalogueRefusal{"WORKSPACE_NOT_FOUND", "private-setting", "", ""}, CatalogueRefusal{"WORKSPACE_HELPER_FAILED", "native-workspace", "", ""}},
+	} {
+		in := workspacesvc.CatalogueRefusal(tc.in)
+		if got := catalogueRefusal(in); got == nil || *got != tc.want {
+			t.Fatalf("%+v became %+v, want %+v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestCatalogueMatchReportsRefusalAndMissing(t *testing.T) {
+	r := &CatalogueResponse{Workspaces: []CatalogueEntry{
+		{WorkspaceID: "ok"},
+		{WorkspaceID: "bad", Refusal: &CatalogueRefusal{Code: "WORKSPACE_PATH_REFUSED"}},
+	}}
+	for _, c := range []struct {
+		id    string
+		match bool
+		code  string
+	}{{"ok", true, "fb"}, {"bad", false, "WORKSPACE_PATH_REFUSED"}, {"gone", false, "fb"}} {
+		if match, code := r.Match(c.id, "fb"); match != c.match || code != c.code {
+			t.Fatalf("%s: %v %q", c.id, match, code)
+		}
+	}
+	var none *CatalogueResponse
+	if match, code := none.Match("ok", "fb"); match || code != "fb" {
+		t.Fatal("nil receiver")
 	}
 }

@@ -213,7 +213,7 @@ func TestDiscoveryOwningContractMapsExactCorrelationAndVariants(t *testing.T) {
 		}
 		if i == 0 {
 			var entries []wire.ComputerCatalogueEntry
-			if json.Unmarshal(result["workspaces"], &entries) != nil || len(entries) != 1 || entries[0].WorkspaceId != "workspace" || entries[0].Root != "/disposable" || entries[0].ApprovedRoot.Device != "18446744073709551615" || entries[0].ApprovedRoot.Inode != "9007199254740993" || native.reads != 0 || native.lists != 2 {
+			if json.Unmarshal(result["workspaces"], &entries) != nil || len(entries) != 1 || entries[0].WorkspaceId != "workspace" || entries[0].Root == nil || *entries[0].Root != "/disposable" || entries[0].ApprovedRoot.Device != "18446744073709551615" || entries[0].ApprovedRoot.Inode != "9007199254740993" || native.reads != 0 || native.lists != 2 {
 				t.Fatal("catalogue mapping or defined two-pass observation lost")
 			}
 		} else {
@@ -293,6 +293,55 @@ func TestDiscoveryInstructionClosureAndDecimalPrecision(t *testing.T) {
 	}
 	if _, err := bootstrapResult(selected, &bootstrap); err == nil {
 		t.Fatal("instruction owner bound widened")
+	}
+}
+
+func TestCatalogueResultMapsRefusalAndWritableMarkAdditively(t *testing.T) {
+	input, output, _, _ := discoveryResults()
+	root := workspacect.Root{Path: "/disposable", Device: "1", Inode: "2"}
+	output.Workspaces = []workspacect.CatalogueEntry{
+		{WorkspaceID: "plain", Root: "/disposable", ApprovedRoot: root},
+		{WorkspaceID: "shared", Root: "/disposable", ApprovedRoot: root, WritableByOthers: true},
+		{WorkspaceID: "refused", Root: "/disposable", ApprovedRoot: root, Refusal: &workspacect.CatalogueRefusal{Code: "WORKSPACE_PATH_REFUSED", Source: "native-workspace", Stage: "root", Reason: "unsafe_root"}},
+		{WorkspaceID: "gone", Root: "/disposable", ApprovedRoot: root, Refusal: &workspacect.CatalogueRefusal{Code: "WORKSPACE_NOT_FOUND", Source: "native-workspace"}},
+	}
+	result, err := catalogueResult(input, &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw []map[string]json.RawMessage
+	if json.Unmarshal(result.Workspaces, &raw) != nil || len(raw) != 4 {
+		t.Fatal("entries lost")
+	}
+	// A refused entry publishes no root, even if the service handed one over.
+	for _, i := range []int{2, 3} {
+		if raw[i]["root"] != nil || raw[i]["approvedRoot"] != nil {
+			t.Fatalf("refused entry published a root: %v", raw[i])
+		}
+	}
+	if raw[0]["root"] == nil || raw[0]["approvedRoot"] == nil {
+		t.Fatalf("usable entry lost its root: %v", raw[0])
+	}
+	// A usable entry stays byte-compatible with the earlier shape.
+	if _, present := raw[0]["writableByOthers"]; present || raw[0]["refusal"] != nil {
+		t.Fatalf("plain entry gained fields: %v", raw[0])
+	}
+	if string(raw[1]["writableByOthers"]) != "true" || raw[1]["refusal"] != nil {
+		t.Fatalf("writable mark lost: %v", raw[1])
+	}
+	if string(raw[2]["refusal"]) != `{"code":"WORKSPACE_PATH_REFUSED","source":"native-workspace","stage":"root","reason":"unsafe_root"}` || string(raw[3]["refusal"]) != `{"code":"WORKSPACE_NOT_FOUND","source":"native-workspace"}` {
+		t.Fatalf("refusal lost: %s %s", raw[2]["refusal"], raw[3]["refusal"])
+	}
+	// A refusal never claims a verified, shared root, and unknown values never cross.
+	output.Workspaces = output.Workspaces[2:3]
+	output.Workspaces[0].WritableByOthers = true
+	if _, err := catalogueResult(input, &output); err == nil {
+		t.Fatal("refused entry marked writable")
+	}
+	output.Workspaces[0].WritableByOthers = false
+	output.Workspaces[0].Refusal.Reason = "/Users/private"
+	if _, err := catalogueResult(input, &output); err == nil {
+		t.Fatal("unknown refusal reason crossed the wire")
 	}
 }
 

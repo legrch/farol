@@ -268,7 +268,11 @@ func openedRoot(d port.Descriptor) (int, *port.DirectoryBinding, error) {
 		unix.Close(fd)
 		return -1, nil, refusal("WORKSPACE_PATH_REFUSED")
 	}
-	if s.Uid != uint32(os.Getuid()) || s.Mode&0022 != 0 {
+	// Owner decision D49 (2026-11-25): the root must belong to the current user,
+	// but a root that other local users can write to (mode&0022) is allowed and
+	// marked, so the UI can warn. Security boundaries live in the sandbox, as in
+	// the agent tools this product sits beside; a foreign-owned root stays refused.
+	if s.Uid != uint32(os.Getuid()) {
 		unix.Close(fd)
 		return -1, nil, pathRefusal("root", "unsafe_root")
 	}
@@ -277,6 +281,7 @@ func openedRoot(d port.Descriptor) (int, *port.DirectoryBinding, error) {
 		ApprovedRoot:     port.Root{Path: "/" + strings.Join(approved, "/"), Device: d.ApprovedRoot.Device, Inode: d.ApprovedRoot.Inode},
 		Physical:         port.Root{Path: "/" + strings.Join(parts, "/"), Device: strconv.FormatUint(uint64(s.Dev), 10), Inode: strconv.FormatUint(s.Ino, 10)},
 		ApprovedPhysical: port.Root{Path: "/" + strings.Join(approved, "/"), Device: strconv.FormatUint(uint64(ancestor.Dev), 10), Inode: strconv.FormatUint(ancestor.Ino, 10)},
+		WritableByOthers: s.Mode&0022 != 0,
 	}, nil
 }
 

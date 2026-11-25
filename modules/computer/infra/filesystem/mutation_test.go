@@ -527,3 +527,23 @@ func TestMutationInjectedParentSubstitutionBeforePublication(t *testing.T) {
 		t.Fatal("published under displaced root")
 	}
 }
+
+func TestMutationRootWritableByOthersIsAllowedButForeignOwnerRefused(t *testing.T) {
+	for _, mode := range []uint32{0775, 0777} {
+		m, f := fakeMutable()
+		f.work.v.mode = unix.S_IFDIR | mode
+		if _, err := m.Mutate(context.Background(), fakeRequest(mutation.Write{RelativePath: "note.md", Content: "old"})); err != nil || string(f.work.children["note.md"].data) != "old" {
+			t.Fatalf("mode %o root refused: %v", mode, err)
+		}
+		if len(f.handles) != 0 {
+			t.Fatal("leaked descriptors")
+		}
+	}
+	m, f := fakeMutable()
+	f.work.v.uid = 7
+	_, err := m.Mutate(context.Background(), fakeRequest(mutation.Write{RelativePath: "note.md", Content: "old"}))
+	nativeCode(t, err, "WORKSPACE_PATH_REFUSED")
+	if len(f.handles) != 0 || f.work.children["note.md"] != nil {
+		t.Fatal("foreign-owned mutation root wrote or leaked")
+	}
+}

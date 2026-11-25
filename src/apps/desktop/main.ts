@@ -2390,7 +2390,7 @@ function inspectOwnerWorkspace(
   workspace: Pick<ApprovedProductWorkspace, "workspaceId" | "root">,
   identity: WorkspaceRootIdentity | null,
   diagnosticAction: string,
-): Promise<{ ok: true } | { ok: false; code: string }> {
+): ReturnType<ReturnType<typeof workspaceCommands>["inspectOwnerWorkspace"]> {
   return workspaceCommands().inspectOwnerWorkspace(
     generation,
     workspace,

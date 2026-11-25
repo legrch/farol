@@ -147,10 +147,32 @@ func catalogueResult(input workspacect.CatalogueRequest, output *workspacect.Cat
 	}
 	entries := make([]wire.ComputerCatalogueEntry, 0, len(output.Workspaces))
 	for _, entry := range output.Workspaces {
-		if !discoveryStrings(entry.Root, entry.ApprovedRoot.Path, entry.ApprovedRoot.Device, entry.ApprovedRoot.Inode) {
-			return nil, errors.New("invalid Computer catalogue strings")
+		mapped := wire.ComputerCatalogueEntry{WorkspaceId: entry.WorkspaceID}
+		// A refused entry has no verified root, and none is published.
+		if entry.Refusal == nil {
+			if !discoveryStrings(entry.Root, entry.ApprovedRoot.Path, entry.ApprovedRoot.Device, entry.ApprovedRoot.Inode) {
+				return nil, errors.New("invalid Computer catalogue strings")
+			}
+			approved := discoveryRoot(entry.ApprovedRoot)
+			mapped.Root, mapped.ApprovedRoot = &entry.Root, &approved
 		}
-		mapped := wire.ComputerCatalogueEntry{WorkspaceId: entry.WorkspaceID, Root: entry.Root, ApprovedRoot: discoveryRoot(entry.ApprovedRoot)}
+		// Absent means "no warning": the flag is emitted only when it is true.
+		if entry.WritableByOthers {
+			writable := true
+			mapped.WritableByOthers = &writable
+		}
+		if refusal := entry.Refusal; refusal != nil {
+			if entry.WritableByOthers || !discoveryStrings(refusal.Code, refusal.Source, refusal.Stage, refusal.Reason) {
+				return nil, errors.New("invalid Computer catalogue refusal")
+			}
+			mapped.Refusal = &wire.ComputerCatalogueEntryRefusal{Code: refusal.Code, Source: refusal.Source}
+			if refusal.Stage != "" {
+				mapped.Refusal.Stage = &refusal.Stage
+			}
+			if refusal.Reason != "" {
+				mapped.Refusal.Reason = &refusal.Reason
+			}
+		}
 		if validate("ComputerCatalogueEntry", mapped) != nil {
 			return nil, errors.New("invalid Computer catalogue entry")
 		}

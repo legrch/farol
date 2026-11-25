@@ -137,18 +137,14 @@ func (p *connectorSelfTestPlan) workspaceCheck(ctx context.Context, name, call s
 		return selfTestReadFailure(name, call, err)
 	}
 	leaf := state.ScratchPath(p.ids.run)
-	match := false
+	match, mismatch := false, "SELF_TEST_RESULT_MISMATCH"
 	switch name {
 	case "catalogue":
 		var out *workspacect.CatalogueResponse
 		out, err = contract.Catalogue(ctx, workspacect.CatalogueRequest{OwnerID: e.OwnerId, SessionID: e.SessionId, TaskID: e.TaskId, TaskEpoch: epoch, ParticipantID: e.ParticipantId, TurnID: e.TurnId, Generation: generation, CallID: call})
-		if out != nil {
-			for _, entry := range out.Workspaces {
-				if entry.WorkspaceID == p.workspace {
-					match = true
-				}
-			}
-		}
+		// A refused entry is the catalogue's report that this very folder
+		// cannot be opened; it is not a match and reports its refusal code.
+		match, mismatch = out.Match(p.workspace, mismatch)
 	case "bootstrap":
 		var out *workspacect.BootstrapResponse
 		out, err = contract.Bootstrap(ctx, workspacect.BootstrapRequest{OwnerID: e.OwnerId, SessionID: e.SessionId, TaskID: e.TaskId, TaskEpoch: epoch, ParticipantID: e.ParticipantId, TurnID: e.TurnId, Generation: generation, CallID: call, WorkspaceID: p.workspace, RelativeDirectory: "."})
@@ -182,7 +178,7 @@ func (p *connectorSelfTestPlan) workspaceCheck(ctx context.Context, name, call s
 	if match {
 		step.Status = "pass"
 	} else {
-		step.Status, step.Code = "fail", "SELF_TEST_RESULT_MISMATCH"
+		step.Status, step.Code = "fail", mismatch
 	}
 	return step
 }

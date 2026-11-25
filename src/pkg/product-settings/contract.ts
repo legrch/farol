@@ -1372,6 +1372,8 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
     kind: z.literal("computer.workspace-inspection"),
     workspaceId: IdentifierSchema,
     relativePath: ProductScopeRelativePathSchema,
+    // Present only when true: other users of this Mac can change files here.
+    writableByOthers: z.literal(true).optional(),
   }),
   z.strictObject({
     kind: z.literal("computer.workspace-list"),

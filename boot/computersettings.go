@@ -181,10 +181,12 @@ func (s *ComputerIngress) settingsInspect(ctx context.Context, in wire.ComputerS
 	if result == nil {
 		return nil, computerUnavailable()
 	}
-	return &wire.ComputerSettingsInspectResponse{
+	out := &wire.ComputerSettingsInspectResponse{
 		Publication: in.Publication, WorkspaceId: result.WorkspaceID, RelativePath: result.RelativePath,
 		Root: wire.ComputerSettingsRoot{Path: result.Root.Path, Device: result.Root.Device, Inode: result.Root.Inode},
-	}, nil
+	}
+	out.WritableByOthers = result.WritableFlag()
+	return out, nil
 }
 
 func (s *ComputerIngress) settingsInspectMethod() desktop.Method {

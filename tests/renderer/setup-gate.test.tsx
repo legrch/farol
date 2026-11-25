@@ -1067,3 +1067,25 @@ describe("workspace identity refusal takes precedence over stale green UI", () =
     },
   );
 });
+
+describe("a refused workspace check names its reason", () => {
+  it.each([
+    ["WORKSPACE_NOT_FOUND", "no longer exists or was moved"],
+    ["WORKSPACE_PATH_REFUSED", "may belong to another user of this Mac"],
+    ["WORKSPACE_READ_FAILED", "Farol could not check this workspace"],
+  ])("%s", async (code, text) => {
+    const h = await mount({ step: "folders" });
+    const snapshot = syntheticSnapshot(
+      h.c.getSnapshot(),
+      "folders",
+      "success-current",
+    );
+    const id = `settings:computer.verify-workspace:${workspaceId}`;
+    const result = setupStepCheck(
+      { ...snapshot, intents: { [id]: { id, state: "refused", code } } },
+      "folders",
+    );
+    expect(result.state).toBe("refused");
+    expect(result.cause).toContain(text);
+  });
+});

@@ -560,6 +560,19 @@ describe("inspect and list", () => {
     ).resolves.toEqual({ ok: true });
   });
 
+  it("inspects: passes writableByOthers through only when true", async () => {
+    const root = await scratch();
+    const fake = core(root);
+    const { commands } = build({ core: fake, settings: settingsAt(root) });
+    fake.inspectSettingsWorkspace.mockImplementation(async () => ({
+      root: { path: root, device: "1", inode: "2" },
+      writableByOthers: true,
+    }));
+    await expect(
+      commands.inspectOwnerWorkspace(5, target(root), null, "act"),
+    ).resolves.toEqual({ ok: true, writableByOthers: true });
+  });
+
   it("inspects: no Go core is a read failure", async () => {
     const root = await scratch();
     const { commands } = build({ settings: settingsAt(root) });

@@ -63,6 +63,11 @@ type DirectoryBinding struct {
 	// ApprovedPhysical is the approved ancestor's live identity measured when
 	// this operation opened it (internal; see Physical).
 	ApprovedPhysical Root
+	// WritableByOthers reports that the effective root's mode grants write to
+	// its group or to everyone (mode&0022), observed when this operation opened
+	// it. Owner decision D49 allows such a root when the current user owns it;
+	// the fact is carried so a caller can warn. It is never an authority input.
+	WritableByOthers bool
 }
 
 type ListResponse struct {

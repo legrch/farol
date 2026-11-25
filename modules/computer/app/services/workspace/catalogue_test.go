@@ -83,6 +83,93 @@ func TestCatalogueSealedSubtreeIDsOnlyAndTwoCompletePasses(t *testing.T) {
 		t.Fatal("lost labels/correlation")
 	}
 }
+func twoWorkspaceCatalogue(t *testing.T) (*Service, *discoveryNative, CatalogueRequest) {
+	t.Helper()
+	s, p, a, n, _, r := discoveryFixture(t)
+	p.p.Grant.Workspaces = []authority.Scope{{WorkspaceID: "second", Root: "/second", Mode: authority.Subtree, Access: authority.ReadAccess}, p.p.Grant.Workspaces[0]}
+	a.a.Workspaces = append(a.a.Workspaces, authority.ApprovedWorkspace{WorkspaceID: "second", Root: "/second", Access: authority.ReadAccess, RootIdentity: authority.RootIdentity{Device: "1", Inode: "3"}})
+	return s, n, r
+}
+
+// A refused workspace must not hide the usable ones (owner report 2026-11-25):
+// it is reported on its own entry, with the grant's root, while the usable entry
+// keeps its verified root and the writable-by-others mark.
+func TestCatalogueReportsRefusedWorkspaceBesideUsableOne(t *testing.T) {
+	s, n, r := twoWorkspaceCatalogue(t)
+	n.list = func(q port.ListRequest) (*port.ListResponse, error) {
+		if q.Workspace.WorkspaceID == "second" {
+			return nil, &authority.Failure{Code: "WORKSPACE_PATH_REFUSED", Source: "native-workspace", Retry: "never", Stage: "root", Reason: "unsafe_root"}
+		}
+		return &port.ListResponse{Binding: &port.DirectoryBinding{RelativePath: q.RelativePath, Root: q.Workspace.Root, ApprovedRoot: q.Workspace.ApprovedRoot, WritableByOthers: true}}, nil
+	}
+	out, err := s.Catalogue(context.Background(), r)
+	if err != nil || out == nil || len(out.Workspaces) != 2 {
+		t.Fatalf("refused workspace hid the catalogue: %+v %v", out, err)
+	}
+	refused, usable := out.Workspaces[0], out.Workspaces[1]
+	if refused.WorkspaceID != "second" || refused.Refusal != (CatalogueRefusal{Code: "WORKSPACE_PATH_REFUSED", Source: "native-workspace", Stage: "root", Reason: "unsafe_root"}) || refused.Root != "" || refused.ApprovedRoot != (Root{}) || refused.WritableByOthers {
+		t.Fatalf("wrong refused entry: %+v", refused)
+	}
+	if usable.WorkspaceID != "work" || usable.Refusal.Refused() || usable.Root != "/work" || !usable.WritableByOthers {
+		t.Fatalf("wrong usable entry: %+v", usable)
+	}
+	if !slices.Equal(n.lists, []string{"second:.", "work:.", "second:.", "work:."}) {
+		t.Fatalf("catalogue skipped the twice-checked passes: %v", n.lists)
+	}
+}
+
+func TestCatalogueRefusalWithoutSafeDiagnosticDropsStageAndReason(t *testing.T) {
+	s, n, r := twoWorkspaceCatalogue(t)
+	n.list = func(q port.ListRequest) (*port.ListResponse, error) {
+		if q.Workspace.WorkspaceID == "second" {
+			return nil, &authority.Failure{Code: "WORKSPACE_PATH_REFUSED", Source: "native-workspace", Retry: "never", Stage: "root", Reason: "/Users/private/path"}
+		}
+		return &port.ListResponse{Binding: &port.DirectoryBinding{RelativePath: q.RelativePath, Root: q.Workspace.Root, ApprovedRoot: q.Workspace.ApprovedRoot}}, nil
+	}
+	out, err := s.Catalogue(context.Background(), r)
+	if err != nil || out == nil || out.Workspaces[0].Refusal != (CatalogueRefusal{Code: "WORKSPACE_PATH_REFUSED", Source: "native-workspace"}) {
+		t.Fatalf("unsafe diagnostic crossed: %+v %v", out, err)
+	}
+}
+
+// A refusal that changes between the two complete passes is as unstable as a
+// changed root: the whole collection is discarded.
+func TestCatalogueRefusalChangingBetweenPassesDiscardsCollection(t *testing.T) {
+	s, n, r := twoWorkspaceCatalogue(t)
+	calls := 0
+	n.list = func(q port.ListRequest) (*port.ListResponse, error) {
+		if q.Workspace.WorkspaceID == "second" {
+			if calls++; calls == 1 {
+				return nil, authority.Fail("WORKSPACE_NOT_FOUND", "native-workspace")
+			}
+		}
+		return &port.ListResponse{Binding: &port.DirectoryBinding{RelativePath: q.RelativePath, Root: q.Workspace.Root, ApprovedRoot: q.Workspace.ApprovedRoot}}, nil
+	}
+	out, err := s.Catalogue(context.Background(), r)
+	if out != nil {
+		t.Fatal("unstable refusal published")
+	}
+	expectFailure(t, err, "COMPUTER_WORKSPACE_CONTEXT_CHANGED", "contract")
+}
+
+// Only a refusal about the one folder is per entry. A helper failure or a lost
+// authority still fails the call, as before.
+func TestCatalogueOtherFailuresStillFailTheWholeCall(t *testing.T) {
+	for _, code := range []string{"WORKSPACE_HELPER_FAILED", "WORKSPACE_RACE_DETECTED", "WORKSPACE_INVALID_REQUEST"} {
+		s, n, r := twoWorkspaceCatalogue(t)
+		n.list = func(q port.ListRequest) (*port.ListResponse, error) {
+			if q.Workspace.WorkspaceID == "second" {
+				return nil, authority.Fail(code, "native-workspace")
+			}
+			return &port.ListResponse{Binding: &port.DirectoryBinding{RelativePath: q.RelativePath, Root: q.Workspace.Root, ApprovedRoot: q.Workspace.ApprovedRoot}}, nil
+		}
+		out, err := s.Catalogue(context.Background(), r)
+		if out != nil {
+			t.Fatalf("%s: partial catalogue", code)
+		}
+		expectFailure(t, err, code, "native-workspace")
+	}
+}
 func TestCatalogueBoundsBeforeAnyNativeIO(t *testing.T) {
 	for _, test := range []struct {
 		name string

@@ -25,6 +25,8 @@ type ContextResponse struct {
 	Root                              string
 	ApprovedRoot                      Root
 	Scope                             string
+	// WritableByOthers marks a root that group or other users can write to.
+	WritableByOthers bool
 }
 
 func (c *Contract) Context(ctx context.Context, request ContextRequest) (*ContextResponse, error) {
@@ -50,5 +52,5 @@ func (c *Contract) directoryContext(ctx context.Context, request ContextRequest,
 	}
 	return &ContextResponse{OwnerID: out.OwnerID, SessionID: out.SessionID, TaskID: out.TaskID, TaskEpoch: out.TaskEpoch, ParticipantID: out.ParticipantID, TurnID: out.TurnID,
 		Generation: out.Generation, CallID: out.CallID, WorkspaceID: out.WorkspaceID, RelativePath: out.RelativePath, Root: out.Root,
-		ApprovedRoot: Root{Path: out.ApprovedRoot.Path, Device: out.ApprovedRoot.Device, Inode: out.ApprovedRoot.Inode}, Scope: out.Scope}, nil
+		ApprovedRoot: Root{Path: out.ApprovedRoot.Path, Device: out.ApprovedRoot.Device, Inode: out.ApprovedRoot.Inode}, Scope: out.Scope, WritableByOthers: out.WritableByOthers}, nil
 }
