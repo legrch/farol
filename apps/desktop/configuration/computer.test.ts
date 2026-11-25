@@ -312,6 +312,52 @@ describe("configuration computer", () => {
     expect(configuration.recordComputerVerification).toHaveBeenCalledOnce();
   });
 
+  it.each([true, false])(
+    "publishes writableByOthers=%s on the inspection evidence only when true",
+    async (writable) => {
+      const workspace = {
+        workspaceId: "00000000-0000-4000-8000-000000000001",
+        root: "/tmp/project",
+        label: "project",
+        access: "read" as const,
+        excludedPaths: [],
+        rootIdentity: { device: "1", inode: "2" },
+      };
+      const settings = settingsWithWorkspace(workspace);
+      const configuration = {
+        snapshot: () => ({ status: "ready" as const, settings }),
+        rebindWorkspaceRootIdentity: vi.fn(),
+        bindWorkspaceRootIdentity: vi.fn(),
+        recordComputerVerification: vi.fn(async () => ({
+          ok: true,
+          snapshot: { status: "ready" as const, settings },
+        })),
+        withdrawDriftedWorkspaceChecks: vi.fn(async () => ({ ok: true })),
+      };
+      const ports = makePorts({
+        configuration: () => configuration,
+        measuredRootIdentity: vi.fn(async () => ({ device: "1", inode: "2" })),
+        inspectOwnerWorkspace: vi.fn(async () =>
+          writable
+            ? { ok: true as const, writableByOthers: true as const }
+            : { ok: true as const },
+        ),
+        secureMcpConnectorRuntime: () => ({ isRunning: () => false }),
+      });
+      const result = await createConfigurationComputer(
+        ports,
+      ).configureAdmittedComputer({
+        kind: "computer.verify-workspace",
+        workspaceId: workspace.workspaceId,
+      } as ComputerConfigurationCommand);
+      expect(result).toMatchObject({ ok: true });
+      const evidence = (result as { evidence: Record<string, unknown> })
+        .evidence;
+      expect(evidence.kind).toBe("computer.workspace-inspection");
+      expect("writableByOthers" in evidence).toBe(writable);
+    },
+  );
+
   it("refuses evidence when the folder is replaced during Git discovery", async () => {
     const workspace = {
       workspaceId: "00000000-0000-4000-8000-000000000001",

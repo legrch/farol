@@ -193,6 +193,30 @@ describe("Workspace rows", () => {
     expect(h.host.querySelectorAll("details")).toHaveLength(0);
     expect(h.f.api.configure).not.toHaveBeenCalled();
   });
+  it.each([true, false])(
+    "shows the neutral writable-by-others note only when reported (%s)",
+    async (writable) => {
+      const value = readySettings();
+      const h = await mount({ step: "folders", value });
+      h.reply(() => ({
+        ok: true,
+        snapshot: { status: "ready", settings: value },
+        evidence: {
+          kind: "computer.workspace-inspection",
+          workspaceId,
+          relativePath: ".",
+          ...(writable ? { writableByOthers: true } : {}),
+        },
+      }));
+      await h.click("Re-check");
+      expect(h.host.textContent).toContain("✓ Works");
+      expect(
+        h.host.textContent?.includes(
+          "Other users of this Mac can change files in this folder.",
+        ),
+      ).toBe(writable);
+    },
+  );
   it("does not promote an unchecked second workspace", async () => {
     const value = readySettings();
     value.computer.workspaces.push({
