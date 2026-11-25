@@ -163,7 +163,7 @@ function harness(
     },
     desktopAdmission: { closed: () => state.closed },
     windowMode: "hidden",
-    UPDATES_PANEL_SIZE: { width: 480, height: 560 },
+    UPDATES_PANEL_SIZE: { width: 400, height: 340 },
     selectedVisibleTestPlacement: calls.selectedVisibleTestPlacement,
     configuration: () =>
       overrides.snapshot === undefined
