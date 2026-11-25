@@ -201,6 +201,13 @@ describe("content-free support export", () => {
         droppedEntries: 3,
         unrecordedUncertainEntries: 1,
         unmappedCodes: 2,
+        rejectedMetadata: 3,
+        recentRejections: [
+          {
+            kind: "general.update",
+            issues: [{ path: "target.relativePath", code: "invalid_type" }],
+          },
+        ],
       },
       generatedAt: "2026-09-16T11:00:00.000Z",
       build: {
@@ -243,6 +250,13 @@ describe("content-free support export", () => {
         droppedEntries: 3,
         unrecordedUncertainEntries: 1,
         unmappedCodes: 2,
+        rejectedMetadata: 3,
+        recentRejections: [
+          {
+            kind: "general.update",
+            issues: [{ path: "target.relativePath", code: "invalid_type" }],
+          },
+        ],
       },
       schema: 2,
       kind: "farol_support",
@@ -412,6 +426,8 @@ describe("content-free support export", () => {
         droppedEntries: 0,
         unrecordedUncertainEntries: 0,
         unmappedCodes: 0,
+        rejectedMetadata: 0,
+        recentRejections: [],
       };
       const report = createSupportExport({ ...input(), operations });
       const file = path.join(root, "Farol-Support.json");

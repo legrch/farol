@@ -283,11 +283,27 @@ export const OperationWorkspaceLabelsSchema = z
     }),
   )
   .max(128);
+/** What the journal schema refused, as facts only: never values or paths. */
+export const OperationRejectionSchema = z.strictObject({
+  kind: z.string().max(80),
+  issues: z
+    .array(
+      z.strictObject({
+        path: z.string().max(120),
+        code: z.string().max(40),
+      }),
+    )
+    .max(4),
+});
+export type OperationRejection = z.infer<typeof OperationRejectionSchema>;
 export const OperationsDiagnosticsSchema = z.strictObject({
   unmappedCodes: z.number().int().nonnegative().safe().default(0),
   writeFailures: z.number().int().nonnegative().safe(),
   droppedEntries: z.number().int().nonnegative().safe().default(0),
   unrecordedUncertainEntries: z.number().int().nonnegative().safe().default(0),
+  // Entries the journal schema rejected; not a write failure.
+  rejectedMetadata: z.number().int().nonnegative().safe().default(0),
+  recentRejections: z.array(OperationRejectionSchema).max(5).default([]),
 });
 export const OperationsSnapshotSchema = z.strictObject({
   ...OperationsDiagnosticsSchema.shape,

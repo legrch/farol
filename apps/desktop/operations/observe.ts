@@ -13,6 +13,28 @@ const object = (v: unknown): Record<string, unknown> =>
     ? (v as Record<string, unknown>)
     : {};
 
+/** Node errno codes and the AbortError name, mapped to codes the journal
+ * already knows. Only a local file error is a definite failure. Every
+ * transport, timing or abort error can follow a delivered request, so each
+ * maps to a code in the unknown bucket (ECONNREFUSED too: a refusal before
+ * connect is likely safe, but the journal cannot prove it from the code). */
+const systemErrorCodes: Readonly<Record<string, string>> = {
+  ENOENT: "OPERATION_IO_FAILED",
+  EACCES: "OPERATION_IO_FAILED",
+  EPERM: "OPERATION_IO_FAILED",
+  ECONNREFUSED: "unreachable",
+  ECONNRESET: "transport_closed",
+  EPIPE: "transport_closed",
+  ETIMEDOUT: "timeout",
+  // An abort can arrive after the request was delivered.
+  AbortError: "unconfirmed",
+};
+const systemErrorCode = (code: unknown): unknown =>
+  typeof code === "string" &&
+  Object.prototype.hasOwnProperty.call(systemErrorCodes, code)
+    ? systemErrorCodes[code]
+    : code;
+
 /** ConnectorProcessBridge validates this diagnostic cohort against Go process
  * Read/completedState. An exited READ confirms an observation even for nonzero
  * exits or signals; it does not establish command success or durable retention.
@@ -75,7 +97,13 @@ export function operationResult(value: unknown): {
     object(data.failure).code,
     object(v.failure).code,
     setup.code,
-  ].filter((code) => code !== undefined && code !== null && code !== "");
+    // The name of an abort, never its message.
+    error.name === "AbortError" || v.name === "AbortError"
+      ? "AbortError"
+      : undefined,
+  ]
+    .filter((code) => code !== undefined && code !== null && code !== "")
+    .map(systemErrorCode);
   const states = [
     v.status,
     v.state,
