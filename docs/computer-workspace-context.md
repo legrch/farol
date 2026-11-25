@@ -10,7 +10,10 @@ It returns exact workspace IDs and task scope roots from the selected participan
 materialized grant, including delegated narrowing. Owner-approved folders outside
 that task are not candidates. Every candidate passes the existing authority-bound
 native context operation, then all contexts are checked again before disclosure.
-A refusal, expiry, revocation or changed root discards the entire collected catalogue.
+A workspace whose root is refused (`WORKSPACE_PATH_REFUSED`) or missing
+(`WORKSPACE_NOT_FOUND`) is reported as its own entry with that refusal, and the
+other workspaces are still listed. Any other failure, an expiry, a revocation, a
+cancellation or a changed root discards the entire collected catalogue.
 The catalogue never reads file contents, lists filenames in its response, grants
 permissions or invents aliases. Exact-file-only scopes cannot browse a directory and
 are omitted. This is a bounded twice-checked observation of at most 32 roots, not an

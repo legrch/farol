@@ -123,4 +123,113 @@ describe("workspace catalogue boundary", () => {
     });
     expect(JSON.stringify(result)).not.toContain("/fixture");
   });
+
+  const refused = (code: string, source: string): CallToolResult => {
+    const value = { ok: false, error: { code, source, retry: "never" } };
+    return {
+      content: [{ type: "text", text: JSON.stringify(value) }],
+      structuredContent: value,
+      isError: true,
+    };
+  };
+
+  it("reports a refused folder on its own entry beside the usable ones", async () => {
+    const result = await discoverWorkspaces(
+      ["good", "bad", "gone"],
+      async (id, operation) =>
+        id === "bad"
+          ? refused("WORKSPACE_PATH_REFUSED", "native-workspace")
+          : id === "gone"
+            ? refused("WORKSPACE_NOT_FOUND", "native-workspace")
+            : response(id, operation),
+    );
+    expect(result.isError).toBeUndefined();
+    expect(result.structuredContent).toMatchObject({
+      ok: true,
+      workspaces: [
+        { workspaceId: "good", root: "/fixture/project" },
+        {
+          workspaceId: "bad",
+          refusal: {
+            code: "WORKSPACE_PATH_REFUSED",
+            source: "native-workspace",
+          },
+        },
+        {
+          workspaceId: "gone",
+          refusal: { code: "WORKSPACE_NOT_FOUND", source: "native-workspace" },
+        },
+      ],
+    });
+    const entries = (
+      result.structuredContent as { workspaces: Record<string, unknown>[] }
+    ).workspaces;
+    // A refused entry carries no root: the unverified records are not here.
+    expect(entries[1]).not.toHaveProperty("root");
+    expect(entries[1]).not.toHaveProperty("approvedRoot");
+  });
+
+  it.each([
+    ["authority", refused("AUTHORITY_PATH_DENIED", "task-grant")],
+    ["helper failure", refused("WORKSPACE_HELPER_FAILED", "native-workspace")],
+    ["race", refused("WORKSPACE_RACE_DETECTED", "native-workspace")],
+    [
+      "refusal from another source",
+      refused("WORKSPACE_PATH_REFUSED", "contract"),
+    ],
+  ])("still fails the whole call on %s", async (_label, failure) => {
+    const result = await discoverWorkspaces(
+      ["good", "bad"],
+      async (id, operation) =>
+        id === "bad" ? failure : response(id, operation),
+    );
+    expect(result).toBe(failure);
+  });
+
+  it("discards the catalogue when a refusal appears only on the second pass", async () => {
+    let calls = 0;
+    const result = await discoverWorkspaces(["a"], async (id, operation) =>
+      ++calls === 1
+        ? response(id, operation)
+        : refused("WORKSPACE_PATH_REFUSED", "native-workspace"),
+    );
+    expect(result).toMatchObject({
+      isError: true,
+      structuredContent: {
+        error: { code: "COMPUTER_WORKSPACE_CONTEXT_CHANGED" },
+      },
+    });
+  });
+
+  it("discards the catalogue when a refusal changes its reason on the second pass", async () => {
+    let calls = 0;
+    const result = await discoverWorkspaces(["a"], async () =>
+      ++calls === 1
+        ? refused("WORKSPACE_NOT_FOUND", "native-workspace")
+        : refused("WORKSPACE_PATH_REFUSED", "native-workspace"),
+    );
+    expect(result).toMatchObject({
+      isError: true,
+      structuredContent: {
+        error: { code: "COMPUTER_WORKSPACE_CONTEXT_CHANGED" },
+      },
+    });
+  });
+
+  it("marks a root that other users can change", async () => {
+    const result = await discoverWorkspaces(["a", "b"], async (id, operation) =>
+      response(id, operation, {
+        kind: "workspace.context",
+        root: "/fixture/project",
+        approvedRoot: { path: "/fixture", device: "1", inode: "2" },
+        scope: "subtree",
+        ...(id === "b" ? { writableByOthers: true } : {}),
+      }),
+    );
+    const entries = (
+      result.structuredContent as { workspaces: Record<string, unknown>[] }
+    ).workspaces;
+    expect(entries[0]).not.toHaveProperty("writableByOthers");
+    expect(entries[1]).toMatchObject({ writableByOthers: true });
+  });
 });

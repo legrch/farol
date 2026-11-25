@@ -5,6 +5,8 @@ import {
   type ReadonlyComputerCallRequest,
   type ReadonlyComputerContract,
   type ReadonlyComputerExecutionContext,
+  type ReadonlyComputerWorkspaceVerification,
+  ReadonlyComputerWorkspaceVerificationRequestSchema,
 } from "../contract/readonly-computer-contract";
 
 export function readonlyComputerCallCorrelation(
@@ -27,6 +29,26 @@ export function readonlyComputerCallCorrelation(
 
 export class ReadonlyComputerContractHandler implements ReadonlyComputerContract {
   constructor(private readonly service: RunReadonlyComputerAction) {}
+
+  async verifyWorkspaces(
+    request: unknown,
+    context: ReadonlyComputerExecutionContext = {},
+  ): Promise<ReadonlyComputerWorkspaceVerification> {
+    const parsed =
+      ReadonlyComputerWorkspaceVerificationRequestSchema.safeParse(request);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "COMPUTER_INVALID_REQUEST",
+          source: "contract",
+          retry: "never",
+        },
+      };
+    }
+    const result = await this.service.verifyWorkspaces(parsed.data, context);
+    return result.ok ? { ok: true } : { ok: false, error: result.error };
+  }
 
   async execute(
     request: unknown,

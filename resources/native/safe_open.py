@@ -330,12 +330,21 @@ def _open_root(request):
                 _refuse_if_replaced(descriptor, approved[1])
             _test_hook(request, "after-directory", index)
         opened = os.fstat(descriptor)
-        if opened.st_uid != os.getuid() or opened.st_mode & 0o022:
+        # A root owned by another user is refused.  One owned by this user but
+        # writable by group or others is accepted: the owner decided (D49) that
+        # such a folder is usable and must be marked rather than refused, and
+        # ``list-directory`` reports the mark as ``writableByOthers``.
+        if opened.st_uid != os.getuid():
             refuse(EXIT_PATH_REFUSED)
         return descriptor
     except BaseException:
         os.close(descriptor)
         raise
+
+
+def _writable_by_others(descriptor):
+    """Whether group or other users of this Mac can change this directory."""
+    return bool(os.fstat(descriptor).st_mode & 0o022)
 
 
 def _walk_parent(request, root_fd):
@@ -1713,6 +1722,7 @@ def _list_directory(request, root_fd):
             {
                 "entries": entries[:MAX_LIST_RESULTS],
                 "truncated": overflowed or len(entries) > MAX_LIST_RESULTS,
+                "writableByOthers": _writable_by_others(root_fd),
             },
             ensure_ascii=True,
             allow_nan=False,

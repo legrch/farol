@@ -1530,15 +1530,53 @@ export function createReadonlyComputerMcpServer(
         annotations: READONLY_ANNOTATIONS,
       },
       guarded(async (_arguments, context) =>
-        discoverWorkspaces(workspaceIds, (workspaceId, operation) =>
-          execute(
-            contract,
-            binding,
-            String(context.mcpReq.id),
-            workspaceId,
-            operation,
-            context.mcpReq.signal,
-          ),
+        discoverWorkspaces(
+          workspaceIds,
+          (workspaceId, operation) =>
+            execute(
+              contract,
+              binding,
+              String(context.mcpReq.id),
+              workspaceId,
+              operation,
+              context.mcpReq.signal,
+            ),
+          async (entries) => {
+            if (!contract.verifyWorkspaces)
+              return failure("COMPUTER_CONTRACT_UNAVAILABLE");
+            let verified;
+            try {
+              verified = await contract.verifyWorkspaces(
+                {
+                  ...binding,
+                  callId: String(context.mcpReq.id),
+                  workspaces: entries.map((entry) => ({
+                    workspaceId: entry.workspaceId,
+                    ...(entry.root !== undefined && entry.approvedRoot
+                      ? { root: entry.root, approvedRoot: entry.approvedRoot }
+                      : {}),
+                  })),
+                },
+                context.mcpReq.signal ? { signal: context.mcpReq.signal } : {},
+              );
+            } catch {
+              return failure("COMPUTER_CONTRACT_UNAVAILABLE");
+            }
+            if (verified.ok) return null;
+            const value = {
+              ok: false,
+              error: {
+                code: verified.error.code,
+                source: verified.error.source,
+                retry: "never",
+              },
+            };
+            return {
+              content: [{ type: "text", text: JSON.stringify(value) }],
+              structuredContent: value,
+              isError: true,
+            };
+          },
         ),
       ),
     );
