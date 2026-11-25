@@ -69,6 +69,7 @@ import {
   createConnectorStart,
   reportConnectorTransport,
 } from "../../../apps/desktop/connector/start";
+import { startConnectorResume } from "../../../apps/desktop/connector/resume";
 import { createConnectorStop } from "../../../apps/desktop/connector/stop";
 import { createConnectorVerify } from "../../../apps/desktop/connector/verify";
 import { createWorkspaceHost } from "../../../apps/desktop/configuration/workspace";
@@ -3859,54 +3860,28 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   // gone has its check withdrawn first; if that withdrawal fails, do not
   // resume at all.
   const driftSettled = await withdrawDriftedWorkspaceChecksAtLaunch();
-  const beforeConnectorResume = configuration.snapshot();
-  void resumeComputerConnector(
-    {
+  void startConnectorResume({
+    resume: resumeComputerConnector,
+    launch: {
       environment: runtimeEnvironment,
       buildEnvironment,
       buildId: buildIdentity.buildId,
       previousRunClean: previousHostAdmissionReady,
-      snapshot: beforeConnectorResume,
     },
-    {
-      current: () => configuration!.snapshot(),
-      mayContinue: () =>
-        driftSettled &&
-        !startupConnectorResumeCancelled &&
-        !desktopAdmission.closed(),
-      // The normal command retains authority reservation, physical-root and
-      // Go inspection checks. No synthetic verification receipt is written.
-      verifyWorkspace: (workspaceId) =>
-        configureProduct({ kind: "computer.verify-workspace", workspaceId }),
-      start: () => connectorStart().startSecureMcpConnector(false, true),
-    },
-  )
-    .then(
-      (status) => {
-        startupStage(
-          status === "started"
-            ? "connector-resumed"
-            : status === "skipped"
-              ? "connector-resume-skipped"
-              : "connector-resume-refused",
-        );
-        if (!desktopAdmission.quitInProgress && window && !window.isDestroyed())
-          window.webContents.send(channels.configurationChanged);
-        startConnectorTransportWatch();
-        // Restore only the local connection. ChatGPT verification sends are
-        // explicit owner actions; a routine restart never repeats onboarding.
-        return undefined;
-      },
-      () => {
-        startupStage("connector-resume-failed");
-        startConnectorTransportWatch();
-      },
-    )
-    .finally(() => {
+    driftSettled,
+    snapshot: () => configuration!.snapshot(),
+    cancelled: () => startupConnectorResumeCancelled,
+    desktopAdmission,
+    verifyWorkspace: (workspaceId) =>
+      configureProduct({ kind: "computer.verify-workspace", workspaceId }),
+    start: () => connectorStart().startSecureMcpConnector(false, true),
+    startupStage,
+    window: () => window,
+    startConnectorTransportWatch,
+    finishConnectionCheck: () => {
       startupConnectionChecking = false;
-      if (!desktopAdmission.quitInProgress && window && !window.isDestroyed())
-        window.webContents.send(channels.configurationChanged);
-    });
+    },
+  });
 }
 
 const primaryInstanceLock = app.requestSingleInstanceLock(instanceRequest);
