@@ -5,11 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStartup, type StartupPorts } from "./startup";
 
 // Startup admission over scripted owners and a disposable state root. Main's
-// `let`s are fields the ports read afresh; the lease, the update relaunch and
-// the host-stop confirmation are recorders. The run-marker writer is the real
-// one, so a marker on disk is the evidence that admission completed. These
-// cases cover the fresh, no-core, lost-lease and unclean-without-Settings paths; the
-// preserving maintenance and the recovery window keep their own suites.
+// `let`s are fields the ports read afresh; the lease and the update relaunch
+// are recorders. The run-marker writer is the real one, so a marker on disk is
+// the evidence that admission completed. These cases cover the fresh, no-core,
+// lost-lease and unclean-without-Settings paths.
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -34,47 +33,15 @@ function ports(
       whenReady: async () => {
         log.push("ready");
       },
-      getPath: (name) => path.join(root, name),
       hasSingleInstanceLock: () => true,
     },
     stateRoot: root,
-    directory: root,
-    runtimeEnvironment: "preview",
-    windowMode: "hidden",
-    quitSignals: {} as StartupPorts["quitSignals"],
-    build: { buildId: "build" } as StartupPorts["build"],
-    compiledGoCore: {} as StartupPorts["compiledGoCore"],
-    compiledGoResources: undefined,
-    installedUpdates: {
-      resourcesOrigin: undefined,
-      resources: () => ({ directory: root }),
-    },
-    desktopAdmission: { quitInProgress: false, beginQuit: () => {} },
+    compiledGoCore: {},
+    installedUpdates: { resourcesOrigin: undefined },
+    desktopAdmission: { quitInProgress: false },
     primaryInstanceLock: () => true,
     runtimeStopping: () => false,
-    desktopGoCore: () => null,
-    configuration: () => null,
-    secureMcpConnectorRuntime: () => null,
-    connectorStartInFlight: () => null,
-    modelLifecycle: () => null,
-    pendingComputer: { size: 0 },
-    ownedLocalRuntimes: { size: 0 },
-    startupRecovery: { get: () => null, set: () => {} },
-    quitTracePhase: (phase) => log.push(`phase:${phase}`),
     startupStage: (stage) => log.push(`stage:${stage}`),
-    nativeMenuBarEnabled: () => false,
-    selectedVisibleTestPlacement: () => ({
-      bounds: { x: 0, y: 0, width: 640, height: 520 },
-    }),
-    reportMaintenanceObservation: () => {},
-    reportQualificationObservation: () => {},
-    reportOwnedBackendLifecycle: () => {},
-    reportRecoveryStarted: () => log.push("recovery-started"),
-    computerMcpLifecycle: () => ({
-      confirmCleanHostStop: async (ready) => {
-        log.push(`confirm:${ready}`);
-      },
-    }),
     ...overrides,
   };
 }
@@ -109,7 +76,7 @@ describe("startup admission", () => {
     await expect(stat(marker(root))).resolves.toBeTruthy();
   });
 
-  it("without a compiled core admits a clean predecessor without a host-stop confirmation", async () => {
+  it("without a compiled core admits a clean predecessor as an ordinary start", async () => {
     const root = await stateRoot();
     const log: string[] = [];
     const host = createStartup(ports(root, { compiledGoCore: null }, log));
@@ -117,7 +84,6 @@ describe("startup admission", () => {
       host.admit(undefined as never, async () => true, lease),
     ).resolves.toBe(true);
     expect(host.freshStartup()).toBe(false);
-    expect(log).not.toContain("confirm:true");
     expect(log.at(-1)).toBe("stage:run-marker");
   });
 
