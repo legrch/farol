@@ -6,6 +6,11 @@ import {
 import { createUpdateDockAttention } from "../../../apps/desktop/update/attention";
 import { createStartup } from "../../../apps/desktop/host/startup";
 import { createStartupStage } from "../../../apps/desktop/runtime/stage";
+import {
+  readySchema,
+  type RuntimeReady,
+} from "../../../apps/desktop/runtime/ready";
+import { controlSchema } from "../../../apps/desktop/shell/control";
 import { readLaunchArguments } from "../../../apps/desktop/host/launch";
 import { selectBootIdentity } from "../../../apps/desktop/host/identity";
 import { selectChatGptHome } from "../../../apps/desktop/chat/home";
@@ -519,41 +524,6 @@ const contextOwnerId = "owner-desktop";
 const contextProviderProfileId = "profile-isolated-farol";
 const contextModel = ROUTE_B_MODEL;
 
-const readySchema = z.strictObject({
-  kind: z.literal("runtime.ready"),
-  identity: z.enum([
-    "farol-runtime",
-    "farol-dev-runtime",
-    "farol-owner-preview-runtime",
-  ]),
-  port: z.number().int().min(1).max(65_535),
-  token: z.string().min(32),
-  tasks: z.array(
-    z.strictObject({
-      taskId: z.string(),
-      ownerId: z.string(),
-      sessionId: z.string(),
-      turnId: z.string(),
-      generation: z.number().int().nonnegative(),
-      label: z.string(),
-      hasComputer: z.boolean(),
-      readToken: z.string().min(32),
-    }),
-  ),
-  embeddedNode: z.string(),
-  embeddedElectron: z.string(),
-});
-const controlSchema = z.strictObject({
-  taskId: z.string(),
-  action: z.enum([
-    "release-tool",
-    "finish-demo",
-    "compact-context-fixture",
-    "confirm-context-fixture",
-  ]),
-});
-
-type RuntimeReady = z.infer<typeof readySchema>;
 app.setName(activeDesktopIdentity.applicationName);
 // Darwin process.title erases argv. Dev stop authorization needs its original
 // entrypoint and explicit profile assertion; the Dev-only bundle owns display naming.
