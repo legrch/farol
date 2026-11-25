@@ -5,6 +5,14 @@ import {
 } from "../../../apps/desktop/update/host";
 import { createUpdateDockAttention } from "../../../apps/desktop/update/attention";
 import { createStartup } from "../../../apps/desktop/host/startup";
+import { connectGoSettings } from "../../../apps/desktop/core/settings";
+import { createUpdateRelaunchObserver } from "../../../apps/desktop/update/relaunch";
+import { createStartupStage } from "../../../apps/desktop/runtime/stage";
+import {
+  readySchema,
+  type RuntimeReady,
+} from "../../../apps/desktop/runtime/ready";
+import { controlSchema } from "../../../apps/desktop/shell/control";
 import { readLaunchArguments } from "../../../apps/desktop/host/launch";
 import { selectBootIdentity } from "../../../apps/desktop/host/identity";
 import { selectChatGptHome } from "../../../apps/desktop/chat/home";
@@ -156,17 +164,7 @@ import {
   WebContentsView,
 } from "electron";
 import { chmod, lstat, mkdtemp, realpath, rm } from "node:fs/promises";
-import {
-  closeSync,
-  constants as fsConstants,
-  fsyncSync,
-  lstatSync,
-  openSync,
-  realpathSync,
-  renameSync,
-  unlinkSync,
-  writeSync,
-} from "node:fs";
+import { realpathSync } from "node:fs";
 import {
   observeLocalRuntime,
   type LocalRuntimeLifetime,
@@ -236,12 +234,7 @@ import {
   waitForInstanceAcknowledgement,
   writeInstanceAcknowledgement,
 } from "./single-instance";
-import {
-  PrimaryStartup,
-  devReopenPrimaryRefused,
-  emitStartupStage,
-  type StartupStage,
-} from "./primary-startup";
+import { PrimaryStartup, devReopenPrimaryRefused } from "./primary-startup";
 import { readRuntimeBuildIdentity } from "./build-identity";
 import {
   currentConnectorAttachment,
@@ -522,106 +515,20 @@ const instanceRequest = createInstanceRequest(
   launchIdentity,
   ownerBackgroundOnly,
 );
-const startupStage = (stage: StartupStage) => {
-  const enabled = process.env.FAROL_E2E === "1";
-  emitStartupStage(stage, enabled, (line) => process.stderr.write(line));
-  // Playwright can attach after early stderr tokens have passed. Persist only
-  // fixed stage tokens in this run's private disposable E2E home.
-  if (!enabled) return;
-  try {
-    const home = process.env.HOME;
-    if (!home || !/^farol-e2e-home-[A-Za-z0-9]{6,}$/u.test(path.basename(home)))
-      return;
-    if (realpathSync(path.dirname(home)) !== realpathSync(os.tmpdir())) return;
-    const info = lstatSync(home);
-    if (
-      !info.isDirectory() ||
-      info.isSymbolicLink() ||
-      (info.mode & 0o077) !== 0 ||
-      info.uid !== process.getuid?.()
-    )
-      return;
-    const marker =
-      stage === "lock-secondary"
-        ? ".farol-secondary-lock-stage"
-        : stage === "delay-complete"
-          ? ".farol-delay-complete-stage"
-          : stage.startsWith("connector-resume") ||
-              stage === "connector-resumed"
-            ? ".farol-connector-resume-stage"
-            : ".farol-startup-stage";
-    const target = path.join(home, marker);
-    const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
-    const file = openSync(
-      temporary,
-      fsConstants.O_WRONLY |
-        fsConstants.O_CREAT |
-        fsConstants.O_EXCL |
-        fsConstants.O_NOFOLLOW |
-        fsConstants.O_NONBLOCK,
-      0o600,
-    );
-    try {
-      writeSync(
-        file,
-        stage === "lock-secondary" || stage === "delay-complete"
-          ? `${stage}:${process.hrtime.bigint()}\n`
-          : `${stage}\n`,
-      );
-      fsyncSync(file);
-    } finally {
-      closeSync(file);
-    }
-    try {
-      renameSync(temporary, target);
-    } catch (error) {
-      unlinkSync(temporary);
-      throw error;
-    }
-  } catch {
-    // Missing diagnostic evidence must not change startup behavior.
-  }
-};
+const startupStage = createStartupStage({
+  env: process.env,
+  writeStderr: (line) => process.stderr.write(line),
+  pid: process.pid,
+  uid: () => process.getuid?.(),
+  tmpdir: () => os.tmpdir(),
+  hrtime: () => process.hrtime.bigint(),
+  uuid: randomUUID,
+});
 const primaryStartup = new PrimaryStartup();
 const contextOwnerId = "owner-desktop";
 const contextProviderProfileId = "profile-isolated-farol";
 const contextModel = ROUTE_B_MODEL;
 
-const readySchema = z.strictObject({
-  kind: z.literal("runtime.ready"),
-  identity: z.enum([
-    "farol-runtime",
-    "farol-dev-runtime",
-    "farol-owner-preview-runtime",
-  ]),
-  port: z.number().int().min(1).max(65_535),
-  token: z.string().min(32),
-  tasks: z.array(
-    z.strictObject({
-      taskId: z.string(),
-      ownerId: z.string(),
-      sessionId: z.string(),
-      turnId: z.string(),
-      generation: z.number().int().nonnegative(),
-      label: z.string(),
-      hasComputer: z.boolean(),
-      readToken: z.string().min(32),
-    }),
-  ),
-  embeddedNode: z.string(),
-  embeddedElectron: z.string(),
-});
-const controlSchema = z.strictObject({
-  taskId: z.string(),
-  action: z.enum([
-    "release-tool",
-    "finish-demo",
-    "compact-context-fixture",
-    "confirm-context-fixture",
-  ]),
-});
-
-type RuntimeReady = z.infer<typeof readySchema>;
 app.setName(activeDesktopIdentity.applicationName);
 // Darwin process.title erases argv. Dev stop authorization needs its original
 // entrypoint and explicit profile assertion; the Dev-only bundle owns display naming.
@@ -3147,22 +3054,14 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     quitTrace = null;
   }
   instance().listenForSecondInstance();
-  const observeUpdateRelaunch = () =>
-    waitForInstalledUpdateRelaunch({
-      args: process.argv,
-      directory,
-      userData: app.getPath("userData"),
-      build: buildIdentity,
-      physicalFiles: rawFs,
-      copyApp: (source, destination) =>
-        rawFs.cp(source, destination, {
-          recursive: true,
-          force: false,
-          errorOnExist: true,
-          verbatimSymlinks: true,
-          preserveTimestamps: true,
-        }),
-    });
+  const observeUpdateRelaunch = createUpdateRelaunchObserver({
+    wait: waitForInstalledUpdateRelaunch,
+    args: process.argv,
+    directory,
+    userData: () => app.getPath("userData"),
+    build: buildIdentity,
+    files: rawFs,
+  });
   const stateRoot = statePaths().state;
   const startup = createStartup({
     app,
@@ -3363,42 +3262,16 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
             available: desktopGoCore.shellAvailable,
           }),
       );
-    await runDesktopStartupBoundary("go-settings", () => {
-      const settingsOwner = configuration!;
-      const settingsCore = desktopGoCore!;
-      settingsOwner.attachComputerAuthority(() => settingsCore.withdraw());
-      settingsCore.connectSettingsStore((profileId) => {
-        const store = settingsOwner.attachSettingsDeliveryStore({
-          profileId,
-          ownerId: "owner-desktop",
-        });
-        return {
-          read: (input) => store.read(input.deadlineMillis),
-          replace: (input) => store.replace(input.change, input.deadlineMillis),
-          fence: () => {
-            const observationWindow = window;
-            const outcome = store.fence();
-            if (
-              configuration === settingsOwner &&
-              desktopGoCore === settingsCore &&
-              !desktopAdmission.closed() &&
-              window === observationWindow &&
-              observationWindow &&
-              !observationWindow.isDestroyed()
-            ) {
-              try {
-                observationWindow.webContents.send(
-                  channels.configurationChanged,
-                );
-              } catch {
-                // Renderer delivery must not replace the original fence outcome.
-              }
-            }
-            return outcome;
-          },
-        };
-      });
-    });
+    await runDesktopStartupBoundary("go-settings", () =>
+      connectGoSettings({
+        configuration: () => configuration,
+        core: () => desktopGoCore,
+        window: () => window,
+        admissionClosed: () => desktopAdmission.closed(),
+        ownerId: "owner-desktop",
+        configurationChanged: channels.configurationChanged,
+      }),
+    );
   }
   productAgentStore = new PrivateProductAgentStore({
     root: statePaths().productAgentInputs,

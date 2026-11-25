@@ -77,10 +77,14 @@ describe("context fixture wiring in main", () => {
   });
 
   it("still lends the wrapper to the IPC table by its old name, behind the same control schema", async () => {
-    const { source, flat } = await read();
+    const { flat } = await read();
     expect(flat).toContain(" controlSchema, runContextFixtureControl,");
-    expect(source).toContain('"compact-context-fixture",');
-    expect(source).toContain('"confirm-context-fixture",');
+    const control = await readFile(
+      path.resolve(import.meta.dirname, "../../apps/desktop/shell/control.ts"),
+      "utf8",
+    );
+    expect(control).toContain('"compact-context-fixture",');
+    expect(control).toContain('"confirm-context-fixture",');
   });
 
   it("keeps the E2E gate and the demo refusal at the first statement of the control", async () => {
