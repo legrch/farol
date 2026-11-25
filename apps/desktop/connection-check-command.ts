@@ -11,6 +11,9 @@ export type ExplicitConnectionCheck = Readonly<{
 }>;
 export type ConnectionCheckCode =
   | "CONNECTION_CHECK_PREREQUISITES_REQUIRED"
+  | "CONNECTION_CHECK_HOST_NOT_READY"
+  | "CONNECTION_CHECK_CONNECTOR_NOT_SET_UP"
+  | "CONNECTION_CHECK_RUNTIME_NOT_RUNNING"
   | "CONNECTION_CHECK_SETUP_UNRESOLVED"
   | "CONNECTION_CHECK_BLOCKED"
   | "CONNECTION_CHECK_OUTCOME_UNKNOWN"
@@ -72,6 +75,32 @@ export function connectionCheckRuntimeReady(
     { isRunning(): boolean; hasUnresolvedEffect(): boolean } | null | undefined,
 ): boolean {
   return Boolean(runtime?.isRunning() && !runtime.hasUnresolvedEffect());
+}
+
+/** Why the connector runtime cannot carry a Ping. PREREQUISITES_REQUIRED stays
+ * the ChatGPT page; this names the connector causes so the owner is not sent to
+ * the wrong place. Order: not set up, then an unresolved effect, then stopped. */
+export function connectionCheckRuntimeRefusal(input: {
+  appSelected: boolean;
+  workspaceKnown: boolean;
+  tunnelPresent: boolean;
+  stateReady: boolean;
+  buildCurrent: boolean;
+  generationsCurrent: boolean;
+  running: boolean;
+  unresolvedEffect: boolean;
+}): ConnectionCheckCode {
+  if (
+    !input.appSelected ||
+    !input.workspaceKnown ||
+    !input.tunnelPresent ||
+    !input.stateReady ||
+    !input.buildCurrent ||
+    !input.generationsCurrent
+  )
+    return "CONNECTION_CHECK_CONNECTOR_NOT_SET_UP";
+  if (input.unresolvedEffect) return "CONNECTION_CHECK_SETUP_UNRESOLVED";
+  return "CONNECTION_CHECK_RUNTIME_NOT_RUNNING";
 }
 
 // Mechanical Desktop adapter only: Go retains identity, mode, nonce, phases and

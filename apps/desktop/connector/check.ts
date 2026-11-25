@@ -15,8 +15,10 @@ import {
 import { prepareConnectorCheckDocument } from "../bridge/connector-check-readiness";
 import {
   ConnectionCheckRefusal,
+  type ConnectionCheckCode,
   connectionCheckDigest,
   connectionCheckRuntimeReady,
+  connectionCheckRuntimeRefusal,
   runExplicitConnectionCheck,
   type ConnectionCheckCommandResult,
   type ExplicitConnectionCheck,
@@ -285,11 +287,12 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
           // A saved sign-in checkpoint is not the page. Ping sends from the
           // live ChatGPT document; prepareConnectorCheckDocument still requires
           // that document to read as signed in.
-          function refusePrerequisites(reason: string): never {
+          function refusePrerequisites(
+            reason: string,
+            code: ConnectionCheckCode = "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
+          ): never {
             console.error(`FAROL_CONNECTION_CHECK_REFUSED ${reason}`);
-            throw new ConnectionCheckRefusal(
-              "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
-            );
+            throw new ConnectionCheckRefusal(code);
           }
           if (
             !embeddedBrowserEnabled() ||
@@ -300,6 +303,7 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
           ) {
             return refusePrerequisites(
               `host embedded=${embeddedBrowserEnabled()} quit=${desktopAdmission.quitInProgress} update=${desktopAdmission.installedUpdateAdmission} core=${desktopGoCore() === core} config=${configuration() === config} task=${selectedTaskId() ?? ""}/${command.taskId}`,
+              "CONNECTION_CHECK_HOST_NOT_READY",
             );
           }
           const route =
@@ -315,7 +319,10 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
           }
           const snapshot = config.snapshot();
           if (snapshot.status !== "ready") {
-            return refusePrerequisites(`settings status=${snapshot.status}`);
+            return refusePrerequisites(
+              `settings status=${snapshot.status}`,
+              "CONNECTION_CHECK_HOST_NOT_READY",
+            );
           }
           let settings = snapshot.settings;
           const connector = settings.connectors.secureMcp;
@@ -347,6 +354,19 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
             const live = secureMcpConnectorRuntime();
             return refusePrerequisites(
               `runtime app=${appName !== null} workspace=${workspace !== undefined} tunnel=${connector.tunnelId !== null} state=${runtime?.state ?? "missing"} build=${runtime?.buildId === buildIdentity.buildId} computer=${runtime?.computerGeneration === settings.computer.generation} connector=${runtime?.connectorGeneration === connector.generation} running=${live?.isRunning() ?? "missing"} unresolved=${live?.hasUnresolvedEffect() ?? "missing"}`,
+              connectionCheckRuntimeRefusal({
+                appSelected: appName !== null,
+                workspaceKnown: workspace !== undefined,
+                tunnelPresent: connector.tunnelId !== null,
+                stateReady: runtime?.state === "ready",
+                buildCurrent: runtime?.buildId === buildIdentity.buildId,
+                generationsCurrent:
+                  runtime?.computerGeneration ===
+                    settings.computer.generation &&
+                  runtime?.connectorGeneration === connector.generation,
+                running: live?.isRunning() ?? false,
+                unresolvedEffect: live?.hasUnresolvedEffect() ?? false,
+              }),
             );
           }
           // A persistent Setup uncertainty, not a check that is still running:

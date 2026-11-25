@@ -2,6 +2,15 @@ export function chatGptPreSubmitRemedy(code: string | null): string | null {
   if (code === "CONNECTION_CHECK_PREREQUISITES_REQUIRED") {
     return "Ping was not sent: open the ChatGPT page in Farol (composer ready), then try Ping again. A Connected tunnel alone is not enough if the page is not ready. Folder access problems do not block Ping.";
   }
+  if (code === "CONNECTION_CHECK_HOST_NOT_READY") {
+    return "Ping was not sent: Farol is busy or still starting. Wait a moment, then try Ping again.";
+  }
+  if (code === "CONNECTION_CHECK_CONNECTOR_NOT_SET_UP") {
+    return "Ping was not sent: this Mac is not set up for ChatGPT yet. Finish Connect this Mac in Setup, then try Ping again.";
+  }
+  if (code === "CONNECTION_CHECK_RUNTIME_NOT_RUNNING") {
+    return "Ping was not sent: the connection to this Mac is not running. Use Connect this Mac in Setup to start it, then try Ping again.";
+  }
   if (code === "CONNECTOR_APP_VERIFICATION_NOT_READY") {
     return "This test was refused before Send because Farol could not confirm all current app, tunnel, runtime and Computer prerequisites. Setup can be complete while a current attachment is missing. Nothing was sent. Check the connection, then try again.";
   }
