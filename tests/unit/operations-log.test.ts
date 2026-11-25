@@ -717,7 +717,16 @@ it("refuses unsafe files and extraneous metadata without following symlinks", as
     1,
   );
   expect((await store.snapshot(5000)).entries).toEqual([]);
-  expect((await store.snapshot(5000)).writeFailures).toBe(1);
+  // A schema rejection is not a disk failure, and names no value.
+  const rejected = await store.snapshot(5000);
+  expect(rejected).toMatchObject({ writeFailures: 0, rejectedMetadata: 1 });
+  expect(rejected.recentRejections).toEqual([
+    {
+      kind: "computer_workspace_read",
+      issues: [{ path: "(root)", code: "unrecognized_keys" }],
+    },
+  ]);
+  expect(JSON.stringify(rejected)).not.toContain("PRIVATE-CANARY");
   const target = path.join(directory, "outside");
   fs.writeFileSync(target, "secret");
   fs.symlinkSync(
@@ -1092,6 +1101,8 @@ it("counts an open-time prune failure without throwing or busy retries", async (
       droppedEntries: 0,
       unrecordedUncertainEntries: 0,
       unmappedCodes: 0,
+      rejectedMetadata: 0,
+      recentRejections: [],
     });
   expect(
     unlink.mock.calls.filter(([file]) => String(file).endsWith(".jsonl")),
@@ -2011,18 +2022,24 @@ it.each(["begin", "finish", "record", "labels"] as const)(
     } else if (method === "finish") store.begin(metadata)("done", null, NaN);
     else if (method === "record") store.record(invalid, "unknown", null, 1);
     else store.setWorkspaceLabels(undefined as never);
-    expect((await store.snapshot(5000)).writeFailures).toBe(1);
+    // Invalid metadata is a schema rejection; invalid labels fail inside the
+    // observer and keep counting as a write failure.
+    const rejection = method === "labels" ? 0 : 1;
+    expect((await store.snapshot(5000)).writeFailures).toBe(1 - rejection);
     expect(await store.flush(5000)).toBe(true);
     const snapshot = await store.snapshot(5000);
     expect(snapshot).toMatchObject({
-      writeFailures: 1,
+      writeFailures: 1 - rejection,
+      rejectedMetadata: rejection,
       droppedEntries: method === "labels" ? 0 : 1,
       unrecordedUncertainEntries:
         method === "begin" || method === "record" ? 1 : 0,
     });
     const restarted = new OperationsStore(directory, () => 1792670400000);
     stores.push(restarted);
-    expect((await restarted.snapshot(5000)).writeFailures).toBe(1);
+    const again = await restarted.snapshot(5000);
+    expect(again.writeFailures).toBe(1 - rejection);
+    expect(again.rejectedMetadata).toBe(rejection);
   },
 );
 it.each(["begin", "finish", "record", "labels"] as const)(
@@ -2198,8 +2215,10 @@ it.each(hostileText)(
         target: { command: "other", handle: "unrecognized", start: "unknown" },
       },
     ]);
-    expect(snapshot.writeFailures).toBe(5);
+    expect(snapshot.writeFailures).toBe(0);
+    expect(snapshot.rejectedMetadata).toBe(5);
     expect(JSON.stringify(supportWith(snapshot))).not.toContain("PRIVATE_");
+    expect(JSON.stringify(snapshot.recentRejections)).not.toContain("PRIVATE_");
     const disk = fs
       .readdirSync(directory)
       .map((file) => fs.readFileSync(path.join(directory, file), "utf8"))

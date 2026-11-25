@@ -51,6 +51,8 @@ const snapshot: OperationsSnapshot = {
   droppedEntries: 0,
   unrecordedUncertainEntries: 0,
   unmappedCodes: 0,
+  rejectedMetadata: 0,
+  recentRejections: [],
 };
 
 it("observes only the original backend generation, including after tunnel changes", async () => {
