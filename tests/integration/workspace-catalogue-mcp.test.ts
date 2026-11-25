@@ -30,6 +30,9 @@ async function connect(
     writableCode?: boolean;
     refuseTrial?: boolean;
     failTrial?: boolean;
+    // The approval disappears while the refused trial folder's second-pass
+    // request runs (the third native call).
+    revokeDuringSecondRefusal?: boolean;
   } = {},
 ) {
   const approval: ComputerApproval = {
@@ -104,7 +107,12 @@ async function connect(
     async (nativeRequest: { workspace: { workspaceId: string } }) => {
       reads++;
       const id = nativeRequest.workspace.workspaceId;
-      if (id === "trial-uuid" && (options.refuseTrial || options.failTrial)) {
+      if (
+        id === "trial-uuid" &&
+        (options.refuseTrial ||
+          options.failTrial ||
+          options.revokeDuringSecondRefusal)
+      ) {
         return {
           ok: false as const,
           error: {
@@ -133,7 +141,10 @@ async function connect(
       new InMemoryAuthorityRepository([participant.value]),
       {
         async get() {
-          return options.revoke && reads >= 2 ? null : approval;
+          return (options.revoke && reads >= 2) ||
+            (options.revokeDuringSecondRefusal && reads >= 3)
+            ? null
+            : approval;
         },
       },
       { execute: native },
@@ -299,6 +310,29 @@ describe("authority-bound workspace discovery through MCP", () => {
     });
     const encoded = JSON.stringify(catalogue.structuredContent);
     expect(encoded).not.toContain("/approved/trial");
+  });
+
+  it("discloses nothing when the approval is revoked during a refused folder's second pass", async () => {
+    const { client, native } = await connect({
+      revokeDuringSecondRefusal: true,
+    });
+    const catalogue = await client.callTool({
+      name: "computer_workspace_catalogue",
+      arguments: {},
+    });
+    // trial, code, then trial again: the refusal must not skip the final check.
+    expect(native).toHaveBeenCalledTimes(3);
+    expect(catalogue.isError).toBe(true);
+    expect(catalogue.structuredContent).toMatchObject({
+      ok: false,
+      error: { code: "COMPUTER_APPROVAL_NOT_FOUND" },
+    });
+    expect(JSON.stringify(catalogue.structuredContent)).not.toContain(
+      "/approved/",
+    );
+    expect(JSON.stringify(catalogue.structuredContent)).not.toContain(
+      "code-uuid",
+    );
   });
 
   it("still fails the whole call on any other native failure", async () => {

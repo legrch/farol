@@ -1006,6 +1006,73 @@ describe("real read-only Computer action", () => {
     },
   );
 
+  it.each([
+    ["cancelled", "WORKSPACE_REQUEST_CANCELLED"],
+    ["revoked", "COMPUTER_APPROVAL_NOT_FOUND"],
+  ])(
+    "does not report a native refusal as such after the call was %s during native work",
+    async (mode, code) => {
+      const chain = participants();
+      const approved = approval();
+      const controller = new AbortController();
+      let afterRead = false;
+      const action = new RunReadonlyComputerAction(
+        new InMemoryAuthorityRepository(Object.values(chain)),
+        {
+          async get() {
+            return afterRead && mode === "revoked" ? null : approved;
+          },
+        },
+        {
+          async execute() {
+            afterRead = true;
+            if (mode === "cancelled") controller.abort();
+            return {
+              ok: false as const,
+              error: {
+                code: "WORKSPACE_PATH_REFUSED" as const,
+                retry: "never" as const,
+              },
+            };
+          },
+        },
+        clock,
+      );
+      const result = await action.execute(
+        request({ kind: "workspace.list", relativePath: "." }),
+        { signal: controller.signal },
+      );
+      expect(result).toMatchObject({ ok: false, error: { code } });
+    },
+  );
+
+  it("still reports a native refusal when the call holds", async () => {
+    const action = new RunReadonlyComputerAction(
+      new InMemoryAuthorityRepository(Object.values(participants())),
+      new InMemoryComputerApprovalRepository([approval()]),
+      {
+        async execute() {
+          return {
+            ok: false as const,
+            error: {
+              code: "WORKSPACE_PATH_REFUSED" as const,
+              retry: "never" as const,
+            },
+          };
+        },
+      },
+      clock,
+    );
+    expect(
+      await action.execute(
+        request({ kind: "workspace.list", relativePath: "." }),
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_PATH_REFUSED", source: "native-workspace" },
+    });
+  });
+
   it("discards output when cancellation arrives during the final approval lookup", async () => {
     const chain = participants();
     const approved = approval();
