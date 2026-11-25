@@ -4,6 +4,7 @@ import {
   withInstalledStartupFence,
 } from "../../../apps/desktop/update/host";
 import { createStartup } from "../../../apps/desktop/host/startup";
+import { readLaunchArguments } from "../../../apps/desktop/host/launch";
 import { UPDATE_IDLE_CHECK_MS } from "../../modules/release/app/installed-updater";
 import { DesktopAdmission } from "../../../apps/desktop/host/admission";
 import { mainWindow } from "../../../apps/desktop/window/main";
@@ -230,18 +231,9 @@ import {
   writeInstanceAcknowledgement,
 } from "./single-instance";
 import {
-  parseDevDisplay,
-  parseAllowPrimaryDisplay,
-  parseBuiltInDisplayOnly,
-  parseSidecarDisplayOnly,
-  parsePreviewWindowSize,
-  parsePreviewWindowMode,
-} from "./window-placement";
-import {
   PrimaryStartup,
   devReopenPrimaryRefused,
   emitStartupStage,
-  previewStartupDelay,
   type StartupStage,
 } from "./primary-startup";
 import { readRuntimeBuildIdentity } from "./build-identity";
@@ -599,10 +591,20 @@ const nativeWorkspace = new NativeReadonlyWorkspace({
   },
   helper: SAFE_OPEN_HELPER,
 });
-const ownerBackgroundOnly = process.argv.includes("--owner-background-only");
-if (ownerBackgroundOnly && parsePreviewWindowMode(process.argv) !== "hidden") {
-  throw new Error("OWNER_BACKGROUND_PRESENTATION_INVALID");
-}
+const {
+  ownerBackgroundOnly,
+  startupDelayMs,
+  demoMode,
+  legacySetupTestMode,
+  devSecondaryDisplay,
+  windowMode,
+  allowPrimaryDisplay,
+  builtInDisplayOnly,
+  sidecarDisplayOnly,
+  initialWindowSize,
+  explicitPreviewWindowSize,
+  expectedTasks,
+} = readLaunchArguments(process.argv, process.env, buildEnvironment);
 const instanceRequest = createInstanceRequest(
   launchIdentity,
   ownerBackgroundOnly,
@@ -668,54 +670,9 @@ const startupStage = (stage: StartupStage) => {
   }
 };
 const primaryStartup = new PrimaryStartup();
-const startupDelayMs = previewStartupDelay(
-  process.argv,
-  process.env.FAROL_E2E === "1",
-);
-const demoMode = process.argv.includes("--demo");
-// Only the fixture lane can exercise the retained legacy journey explicitly.
-// A normal packaged preview always selects the integrated Setup.
-const legacySetupTestMode =
-  process.env.FAROL_E2E === "1" && process.env.FAROL_E2E_LEGACY_SETUP === "1";
 const contextOwnerId = "owner-desktop";
 const contextProviderProfileId = "profile-isolated-farol";
 const contextModel = ROUTE_B_MODEL;
-const devSecondaryDisplay = parseDevDisplay(process.argv);
-if (devSecondaryDisplay && buildEnvironment !== "dev")
-  throw new Error("DEV_DISPLAY_ARGUMENT_INVALID");
-const windowMode = devSecondaryDisplay
-  ? "secondary-visible"
-  : parsePreviewWindowMode(process.argv);
-// Explicit-only: the owner-handed overnight run passes this itself. Its
-// absence keeps every display-selection outcome exactly as before.
-const allowPrimaryDisplay = parseAllowPrimaryDisplay(process.argv);
-const builtInDisplayOnly = parseBuiltInDisplayOnly(process.argv);
-const sidecarDisplayOnly = parseSidecarDisplayOnly(process.argv);
-const initialWindowSize = parsePreviewWindowSize(process.argv, windowMode);
-const explicitPreviewWindowSize = process.argv.some((argument) =>
-  argument.startsWith("--preview-window-size="),
-);
-const demoTasks = [
-  {
-    ownerId: "demo-local-preview",
-    taskId: "task-atlantic",
-    sessionId: "session-atlantic",
-    turnId: "turn-atlantic-1",
-    generation: 1,
-    label: "Demo · Atlantic workspace check",
-    hasComputer: true,
-  },
-  {
-    ownerId: "demo-local-preview",
-    taskId: "task-harbor",
-    sessionId: "session-harbor",
-    turnId: "turn-harbor-1",
-    generation: 1,
-    label: "Demo · Harbor research stream",
-    hasComputer: false,
-  },
-] as const;
-const expectedTasks = demoMode ? demoTasks : [];
 
 const readySchema = z.strictObject({
   kind: z.literal("runtime.ready"),
