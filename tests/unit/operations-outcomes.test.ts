@@ -1,4 +1,6 @@
 import { expect, it, vi } from "vitest";
+import { z } from "zod";
+import { OperationsDiagnosticsSchema } from "../../apps/desktop/renderer/operations-contract";
 import {
   operationCodesByOutcome,
   mappedOperationOutcome,
@@ -387,12 +389,34 @@ it.each([
     });
 });
 
-it("maps an AbortError name without reading its message", () => {
+it("keeps an AbortError uncertain without reading its message", () => {
   const abort = Object.assign(new Error("PRIVATE"), { name: "AbortError" });
   expect(operationResult({ ok: false, error: abort })).toEqual({
-    outcome: "refused",
-    code: "aborted",
+    outcome: "unknown",
+    code: "unconfirmed",
   });
+});
+
+it("clamps a long rejection path to the persisted schema bound", async () => {
+  const long = "a".repeat(39);
+  const issue = {
+    code: "custom" as const,
+    path: Array.from({ length: 20 }, () => long),
+    message: "PRIVATE",
+  };
+  const recorder = createTotalOperationsRecorder({
+    record: () => {
+      throw new z.ZodError([issue]);
+    },
+  });
+  recorder.record(metadata, "done", null, 1);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const diagnostics = recorder.diagnostics();
+  const path = diagnostics.recentRejections[0]!.issues[0]!.path;
+  expect(path.length).toBeLessThanOrEqual(120);
+  expect(path.endsWith("…")).toBe(true);
+  // The store re-parses its persisted diagnostics with this schema.
+  expect(() => OperationsDiagnosticsSchema.parse(diagnostics)).not.toThrow();
 });
 
 it("never leaves an errno or a model response status unmapped", () => {
