@@ -10,7 +10,7 @@ const base = {
 const settings = (
   dismissed: boolean,
   openAtLaunch: "home" | "activity",
-  sidebarDefault: "full" | "rail" | "overlay",
+  sidebarDefault: "full" | "rail",
 ) =>
   ({
     setup: { journey: { dismissed, currentStep: "verify" } },
@@ -43,8 +43,8 @@ describe("startup entry", () => {
       startupEntry({
         ...base,
         demoMode: true,
-        settings: settings(false, "activity", "overlay"),
+        settings: settings(false, "activity", "rail"),
       }),
-    ).toEqual({ section: "activity", setupOpen: true, sidebarMode: "overlay" });
+    ).toEqual({ section: "activity", setupOpen: true, sidebarMode: "rail" });
   });
 });

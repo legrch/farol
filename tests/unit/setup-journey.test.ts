@@ -94,6 +94,9 @@ describe("persisted startup entry", () => {
       expect(text).toMatch(/settings: initialSettings,/u);
       expect(text).toMatch(/section = entry\.section;/u);
       expect(text).toMatch(/setupOpen = entry\.setupOpen;/u);
+      expect(text).toMatch(
+        /if \(entry\.sidebarMode !== null\) sidebarMode = entry\.sidebarMode;/u,
+      );
       const result = startupEntry({
         environment: "preview",
         demoMode: false,

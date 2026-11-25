@@ -1,7 +1,4 @@
-import type {
-  SidebarMode,
-  SurfaceSection,
-} from "../../../src/pkg/ipc/shell-state";
+import type { SurfaceSection } from "../../../src/pkg/ipc/shell-state";
 import type {
   ProductGeneralSettings,
   SetupStepId,
@@ -24,7 +21,7 @@ export type StartupEntryPorts = Readonly<{
     }>;
     general: Readonly<{
       openAtLaunch: ProductGeneralSettings["openAtLaunch"];
-      sidebarDefault: SidebarMode;
+      sidebarDefault: ProductGeneralSettings["sidebarDefault"];
     }>;
   }> | null;
 }>;
@@ -32,7 +29,7 @@ export type StartupEntryPorts = Readonly<{
 export function startupEntry(ports: StartupEntryPorts): Readonly<{
   section: SurfaceSection;
   setupOpen: boolean;
-  sidebarMode: SidebarMode | null;
+  sidebarMode: ProductGeneralSettings["sidebarDefault"] | null;
 }> {
   const settings = ports.settings;
   const presentation = initialSetupPresentation({
