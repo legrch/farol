@@ -10,6 +10,24 @@ export function workspaceRootChangeRemedy(
     : null;
 }
 
+/**
+ * The reason a refused workspace check gives, in plain words. Only a closed
+ * code is read; an unknown code returns null so the caller keeps its generic
+ * text. Presentation only: it never grants or retries anything.
+ */
+export function workspaceCheckRefusalReason(
+  code: string | null | undefined,
+): string | null {
+  switch (code) {
+    case "WORKSPACE_NOT_FOUND":
+      return "This folder no longer exists or was moved.";
+    case "WORKSPACE_PATH_REFUSED":
+      return "Farol only opens folders that belong to you. This folder belongs to another user of this Mac, or it is not a plain folder you own.";
+    default:
+      return null;
+  }
+}
+
 type WorkspaceCheckIntent = Readonly<{
   id: string;
   state: string;

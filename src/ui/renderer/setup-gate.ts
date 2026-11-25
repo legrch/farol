@@ -2,6 +2,7 @@ import { setupCompletionChecks } from "../setup-completion";
 import { chatGptPreSubmitRemedy } from "../chatgpt-pre-submit-remedy";
 import {
   unresolvedWorkspaceRootChange,
+  workspaceCheckRefusalReason,
   workspaceRootChangeRemedy,
 } from "../workspace-root-remedy";
 import { dependencyFences } from "./command-eligibility";
@@ -260,7 +261,8 @@ export function setupStepCheck(
             : confirmed && !blockingRefusal
               ? "The action could not be completed. Check the setup guide before trying again."
               : step === "folders"
-                ? "Farol could not check this workspace. Make sure it still exists and this account can open it."
+                ? (workspaceCheckRefusalReason(refusal?.code) ??
+                  "Farol could not check this workspace. Make sure it still exists and this account can open it.")
                 : step === "attachment"
                   ? "The ChatGPT check did not finish. Check that the app name below matches the app you added in ChatGPT and that it uses this tunnel."
                   : `${label} could not be checked. Review this step before continuing.`);
