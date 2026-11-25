@@ -463,6 +463,10 @@ export const ApprovedProductWorkspaceSchema = z
         computerGeneration: z.number().int().positive(),
         verifiedAt: CanonicalTimestampSchema,
         rootIdentity: WorkspaceRootIdentitySchema,
+        // Written only by a successful check that saw the folder writable by
+        // other users of this Mac; absent otherwise. Display evidence only: it
+        // never widens or narrows access, and the next check replaces it.
+        writableByOthers: z.literal(true).optional(),
       })
       .nullable()
       .optional(),
