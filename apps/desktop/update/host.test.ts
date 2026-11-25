@@ -185,6 +185,16 @@ describe("installed update host", () => {
     expect(f.updater.manualCheck).toHaveBeenCalledOnce();
   });
 
+  it("offers each published view to the attention port", async () => {
+    const f = fixture();
+    const attention = vi.fn();
+    f.ports.attention = attention;
+    await f.host.initialize();
+    const view = { phase: "available", version: "2", deferred: false };
+    f.runtime().publish(view as unknown as InstalledUpdateView);
+    expect(attention).toHaveBeenCalledWith(view);
+  });
+
   describe("explicit Check for Updates", () => {
     const idle = {
       phase: "idle",
