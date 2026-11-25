@@ -240,11 +240,6 @@ function build(options: Options = {}) {
     desktopAdmission: admission,
     buildIdentity: { buildId: fixtureBuildId },
     runtimeEnvironment: "test",
-    env: state.env,
-    pid: 4242,
-    writeStderr: (text: string) => {
-      state.stderr.push(text);
-    },
     randomUUID: () => state.uuid,
     statePaths: () => ({ secureMcpLaunch: "/synthetic-no-filesystem" }),
     configurationFailure: (error: string) => ({ ok: false, error }),
