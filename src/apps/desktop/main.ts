@@ -8,6 +8,12 @@ import { createStartup } from "../../../apps/desktop/host/startup";
 import { readLaunchArguments } from "../../../apps/desktop/host/launch";
 import { selectBootIdentity } from "../../../apps/desktop/host/identity";
 import { selectChatGptHome } from "../../../apps/desktop/chat/home";
+import { chatStartupProfile } from "../../../apps/desktop/chat/profile";
+import { cleanupAttachmentStaging } from "../../../apps/desktop/chat/staging";
+import {
+  createModelEndpoint,
+  startModelEndpoint,
+} from "../../../apps/desktop/runtime/endpoint";
 import { admissionLease } from "../../../apps/desktop/host/lease";
 import { createConfigurationService } from "../../../apps/desktop/configuration/service";
 import { UPDATE_IDLE_CHECK_MS } from "../../modules/release/app/installed-updater";
@@ -3214,11 +3220,12 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   // unnoticed.
   // The startup lease has been released before configuration and ordinary
   // admission take the same lease. No nested owner or second lock is used.
-  try {
-    await cleanupChatGptAttachmentStaging(statePaths().attachmentStaging);
-  } catch {
+  if (
+    !(await cleanupAttachmentStaging(() =>
+      cleanupChatGptAttachmentStaging(statePaths().attachmentStaging),
+    ))
+  )
     attachmentStagingReady = false;
-  }
   configuration = createConfigurationService({
     root: statePaths().state,
     desktopGoCore: () => desktopGoCore,
@@ -3235,21 +3242,16 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   );
   chatGptHomeUrl = chatGptUrl;
   chatGptE2eOrigin = e2eChatGptOrigin;
-  try {
-    const snapshot = configuration.snapshot();
-    goChatStartupProfile =
-      snapshot.status === "ready"
-        ? captureChatStartupProfile({
-            environment: runtimeEnvironment,
-            e2e: process.env.FAROL_E2E === "1",
-            origin: chatGptE2eOrigin,
-            tasks: snapshot.settings.tasks,
-          })
-        : null;
-  } catch (error) {
-    if (!(error instanceof BridgeError)) throw error;
-    goChatStartupProfile = null;
-  }
+  goChatStartupProfile = chatStartupProfile({
+    environment: runtimeEnvironment,
+    e2e: process.env.FAROL_E2E === "1",
+    origin: chatGptE2eOrigin,
+    settings: () => {
+      const snapshot = configuration!.snapshot();
+      return snapshot.status === "ready" ? snapshot.settings : null;
+    },
+    capture: captureChatStartupProfile,
+  });
   // Configuration faults remain observable in the recovery UI. Without the
   // configured Computer identity, do not provision or start a Go profile.
   // Selected Go operations still refuse when their host is unavailable.
@@ -3427,31 +3429,26 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     process.env.FAROL_E2E === "1"
       ? process.env.FAROL_MODEL_E2E_SYNTHETIC_REPLY
       : undefined;
-  if (FAROL_MODEL_ENABLED) {
-    modelLifecycle = new FarolModelLifecycle({
-      stateRoot: statePaths().modelEndpoint,
-      model: ROUTE_B_MODEL,
-      handler: recordedModelTurn(
-        operationsStore(),
-        modelSyntheticReply
-          ? syntheticModelTurnHandler(modelSyntheticReply)
-          : routeBModelTurnHandler(
-              () => contextHost.routeB.get()?.endpoint ?? null,
-            ),
+  modelLifecycle = createModelEndpoint({
+    enabled: FAROL_MODEL_ENABLED,
+    syntheticReply: modelSyntheticReply,
+    stateRoot: statePaths().modelEndpoint,
+    model: ROUTE_B_MODEL,
+    createLifecycle: (options) => new FarolModelLifecycle(options),
+    recordTurn: (handler) => recordedModelTurn(operationsStore(), handler),
+    recordCompaction: (handler) =>
+      recordedCompaction(operationsStore(), handler),
+    syntheticTurn: syntheticModelTurnHandler,
+    routeBTurn: () =>
+      routeBModelTurnHandler(() => contextHost.routeB.get()?.endpoint ?? null),
+    routeBCompaction: () =>
+      routeBModelCompactionHandler(
+        () => contextHost.routeB.get()?.endpoint ?? null,
       ),
-      compactionHandler: recordedCompaction(
-        operationsStore(),
-        routeBModelCompactionHandler(
-          () => contextHost.routeB.get()?.endpoint ?? null,
-        ),
-      ),
-    });
-    try {
-      await modelLifecycle.start();
-    } catch {
-      // Model failure does not abort unrelated app startup.
-    }
-  }
+  });
+  // Published to the owner above, before the start is awaited: a Quit during
+  // the start still sees and closes it.
+  if (modelLifecycle) await startModelEndpoint(modelLifecycle);
   try {
     const credential = await connectorCredentialStore.status();
     const snapshot = configuration.snapshot();

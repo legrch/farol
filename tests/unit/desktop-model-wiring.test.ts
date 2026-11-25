@@ -30,6 +30,18 @@ async function read(): Promise<{
 }
 
 describe("model route host wiring in main", () => {
+  it("publishes the model endpoint to main before its start is awaited", async () => {
+    const { source } = await read();
+    const created = source.indexOf(
+      "\n  modelLifecycle = createModelEndpoint({",
+    );
+    const started = source.indexOf(
+      "\n  if (modelLifecycle) await startModelEndpoint(modelLifecycle);",
+    );
+    expect(created).toBeGreaterThan(0);
+    expect(started).toBeGreaterThan(created);
+  });
+
   it("lends each main let as a late getter and keeps every let declared", async () => {
     const { source, block } = await read();
     for (const name of ["window", "configuration", "modelLifecycle"]) {
@@ -162,9 +174,10 @@ describe("model route host wiring in main", () => {
       'const modelSyntheticReply = process.env.FAROL_E2E === "1" ? process.env.FAROL_MODEL_E2E_SYNTHETIC_REPLY : undefined;',
     );
     expect(flat).toContain(
-      "modelSyntheticReply ? syntheticModelTurnHandler(modelSyntheticReply) : routeBModelTurnHandler(",
+      "syntheticReply: modelSyntheticReply, stateRoot: statePaths().modelEndpoint,",
     );
-    expect(flat.match(/syntheticModelTurnHandler\(/g)).toHaveLength(3);
+    expect(flat).toContain("syntheticTurn: syntheticModelTurnHandler,");
+    expect(flat.match(/syntheticModelTurnHandler\(/g)).toHaveLength(2);
   });
 
   it("creates the owner at module level after the constants it copies and before main", async () => {
