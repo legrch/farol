@@ -9,7 +9,6 @@ import type { ComputerConnectorPollingSamples } from "../../../apps/desktop/brid
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import path from "node:path";
 import {
   absolutePath,
   commandBase,
@@ -19,6 +18,15 @@ import {
   runtimeError,
   type ConnectorCommand,
 } from "../../../apps/desktop/connector/command";
+import {
+  ensureRoots,
+  healthUrlFile,
+  pidFile,
+  profileRoot,
+  readHealthBaseUrl,
+  removeRuntimeFile,
+  stateRoot,
+} from "../../../apps/desktop/connector/layout";
 import {
   observedConnectorChild,
   type ConnectorChild,
@@ -41,9 +49,6 @@ export type {
   ConnectorChild,
   ConnectorTunnelObservation,
 } from "../../../apps/desktop/connector/observe";
-
-const HEALTH_URL_FILE = "health.url";
-const PID_FILE = "tunnel-client.pid";
 
 export type ConnectorCommandRunner = (
   command: ConnectorCommand,
@@ -339,7 +344,7 @@ export class SecureMcpConnectorRuntime {
     if (!absolutePath(credentialPath)) {
       runtimeError("CONNECTOR_CREDENTIAL_REFERENCE_INVALID");
     }
-    await this.ensureRoots();
+    await ensureRoots(this.options.root);
     const command: ConnectorCommand = {
       ...this.commandBase(input.executablePath),
       arguments: configureArguments({
@@ -376,7 +381,7 @@ export class SecureMcpConnectorRuntime {
   ): Promise<void> {
     assertConnectorDispatch(input.beforeEffect);
     this.validateExecutable(input.executablePath);
-    await this.ensureRoots();
+    await ensureRoots(this.options.root);
     assertConnectorDispatch(input.beforeEffect);
     try {
       await this.run({
@@ -398,10 +403,10 @@ export class SecureMcpConnectorRuntime {
     if (this.child?.exitCode === null) {
       runtimeError("CONNECTOR_ALREADY_RUNNING");
     }
-    await this.ensureRoots();
+    await ensureRoots(this.options.root);
     this.healthBaseUrl = null;
-    await this.removeRuntimeFile(this.healthUrlFile());
-    await this.removeRuntimeFile(this.pidFile());
+    await removeRuntimeFile(this.healthUrlFile());
+    await removeRuntimeFile(this.pidFile());
     const runtimeGeneration = createHash("sha256")
       .update(
         [
@@ -806,108 +811,24 @@ export class SecureMcpConnectorRuntime {
     }
   }
 
-  private async ensureRoots(): Promise<void> {
-    for (const root of [
-      this.options.root,
-      this.profileRoot(),
-      this.stateRoot(),
-      this.runtimeRoot(),
-    ]) {
-      await fs.mkdir(root, { recursive: true, mode: 0o700 });
-      const info = await fs.lstat(root);
-      const effectiveUser = process.geteuid?.();
-      if (
-        !info.isDirectory() ||
-        info.isSymbolicLink() ||
-        (effectiveUser !== undefined && info.uid !== effectiveUser)
-      ) {
-        runtimeError("CONNECTOR_RUNTIME_UNSAFE");
-      }
-      if ((info.mode & 0o077) !== 0) await fs.chmod(root, 0o700);
-    }
-  }
-
-  private async removeRuntimeFile(file: string): Promise<void> {
-    try {
-      const info = await fs.lstat(file);
-      const effectiveUser = process.geteuid?.();
-      if (
-        !info.isFile() ||
-        info.isSymbolicLink() ||
-        info.nlink !== 1 ||
-        (effectiveUser !== undefined && info.uid !== effectiveUser)
-      ) {
-        runtimeError("CONNECTOR_RUNTIME_UNSAFE");
-      }
-      await fs.unlink(file);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw error;
-    }
-  }
-
-  private async readHealthBaseUrl(): Promise<string | null> {
-    try {
-      const info = await fs.lstat(this.healthUrlFile());
-      const effectiveUser = process.geteuid?.();
-      if (
-        !info.isFile() ||
-        info.isSymbolicLink() ||
-        info.nlink !== 1 ||
-        info.size < 1 ||
-        info.size > 256 ||
-        (effectiveUser !== undefined && info.uid !== effectiveUser)
-      ) {
-        runtimeError("CONNECTOR_RUNTIME_UNSAFE");
-      }
-      const value = (await fs.readFile(this.healthUrlFile(), "utf8")).trim();
-      const parsed = new URL(value);
-      if (
-        parsed.protocol !== "http:" ||
-        parsed.hostname !== "127.0.0.1" ||
-        parsed.username !== "" ||
-        parsed.password !== "" ||
-        parsed.pathname !== "/" ||
-        parsed.search !== "" ||
-        parsed.hash !== "" ||
-        parsed.port === ""
-      ) {
-        return null;
-      }
-      const port = Number(parsed.port);
-      if (!Number.isInteger(port) || port < 1 || port > 65_535) return null;
-      if ((info.mode & 0o077) !== 0) {
-        await fs.chmod(this.healthUrlFile(), 0o600);
-      }
-      return `http://127.0.0.1:${port}`;
-    } catch (error) {
-      if (
-        (error as NodeJS.ErrnoException).code === "ENOENT" ||
-        error instanceof TypeError
-      ) {
-        return null;
-      }
-      throw error;
-    }
+  // A seam the runtime tests spy on; the checked read lives in the layout.
+  private readHealthBaseUrl(): Promise<string | null> {
+    return readHealthBaseUrl(this.healthUrlFile());
   }
 
   private profileRoot(): string {
-    return path.join(this.options.root, "profiles");
+    return profileRoot(this.options.root);
   }
 
   private stateRoot(): string {
-    return path.join(this.options.root, "state");
-  }
-
-  private runtimeRoot(): string {
-    return path.join(this.options.root, "runtime");
+    return stateRoot(this.options.root);
   }
 
   private healthUrlFile(): string {
-    return path.join(this.runtimeRoot(), HEALTH_URL_FILE);
+    return healthUrlFile(this.options.root);
   }
 
   private pidFile(): string {
-    return path.join(this.runtimeRoot(), PID_FILE);
+    return pidFile(this.options.root);
   }
 }
