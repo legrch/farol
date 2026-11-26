@@ -738,8 +738,17 @@ stage or did not cover it), `UPDATE_DOWNLOAD_STAGE_CHANGED` and
 
 Every recursive removal of a stage or its tombstone goes through one function
 (`removeDownloadStage`), and a test guards that no other path calls the
-recursive remove for one. That function first runs the extraction reclaim, for
-either phase, and deletes only a directory that pass scanned and cleared. The
+recursive remove for one. That function takes exactly one of two authorizations.
+The default is the extraction reclaim, which it runs first for either phase: it
+deletes only a directory that pass scanned and cleared, and that is required for
+recovery, startup and any leftover tombstone. The other is an in-process
+settlement proof, passed only by the call that created the stage (this lifetime
+allocated it) on its own known-failure cleanup: the producer returned a result
+and its extraction was discarded, so no child of that call can still be writing.
+It is what lets the supervised controller, which never runs the reclaim, clean up
+a known import or verification failure and a failed Ready write whose absence is
+confirmed. It still does the tombstone rename and the identity comparison, and a
+call that cannot prove settlement (an unknown verifier outcome) never passes it. The
 one window left is between the tombstone's last identity comparison and the
 removal call on its Farol-private name: a process of the same user that can win
 that race can already write the stage itself, so same-user tampering is outside

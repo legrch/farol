@@ -1743,6 +1743,9 @@ async function createRuntime(
     const status = await observeInstalledHelper(record.helper);
     return status === "ended";
   };
+  // Download stages this lifetime allocated, by id. Only a call that created a
+  // stage may claim `settled` for it.
+  const createdStages = new Set<string>();
   const lstatOrNull = async (file: string) => {
     try {
       return await fs.lstat(file, { bigint: true });
@@ -1789,20 +1792,41 @@ async function createRuntime(
   // tombstone's Farol-private name, is the same-user residual: a process of the
   // same user that can race there can already write the stage itself, which is
   // out of this design's scope.
+  //
+  // There are two authorizations, and exactly one applies:
+  //  - the reclaim scan above, required for any stage this process did not
+  //    create in the call that is removing it: recovery, startup, a leftover
+  //    tombstone;
+  //  - `settled`, the in-process proof that the call which created this stage
+  //    is cleaning it up after a known failure and every verifier or extraction
+  //    it started for it has settled (its promise resolved, the extraction
+  //    discarded), so no child of that call can still be writing. It is honored
+  //    only for a stage this lifetime created (`createdStages`), never for
+  //    recovery or a tombstone, and it still does the rename and the identity
+  //    comparison. A call that cannot prove settlement (an unknown verifier
+  //    outcome, a timed out child) never passes it.
   const removeDownloadStage = async (
     download: z.infer<typeof DownloadStage>,
+    authorization: "scan" | "settled" = "scan",
   ) => {
     const stage = downloadDirectory(download.id);
     const tombstone = `${stage}.removing`;
+    const proven =
+      authorization === "settled" && createdStages.has(download.id);
     // Before anything is looked at: a directory that is absent now but present
-    // when it is reached was not scanned, and `authorized` says so.
-    const scan = await reclaimStagedExtractions();
+    // when it is reached was not scanned, and `authorized` says so. A proven
+    // call has nothing left to scan for; a leftover tombstone still needs it.
+    let scan = proven ? undefined : await reclaimStagedExtractions();
     // The judgment for one existing directory: the identity the pass scanned,
     // which must still be what is on disk. Unknown, kept, skipped, or a
     // directory the pass never listed is not authorization.
     const authorized = async (target: string) => {
       const metadata = await lstatOrNull(target);
       if (!metadata) return null;
+      // The settled proof stands for this call's own stage, not for a tombstone.
+      if (proven && target === stage)
+        return { dev: metadata.dev, ino: metadata.ino };
+      scan ??= await reclaimStagedExtractions();
       const judged = downloadStageScan(scan, root, target);
       if (
         judged === null ||
@@ -2039,6 +2063,7 @@ async function createRuntime(
       birthtimeNs: String(metadata.birthtimeNs),
     };
     await writeRecord(pendingDownloadFile, intent);
+    createdStages.add(download.id);
     await selectDownload(download.id);
     if (downloadsCancelled) {
       // No request or extraction has begun. Do not revive a cancelled lifetime
@@ -2084,9 +2109,10 @@ async function createRuntime(
           };
         }
       }
-      // A known failed request has drained all its native work. Reclaim this
-      // attempt before clearing its intent; uncertainty keeps recovery fenced.
-      await removeDownloadStage(download);
+      // A known failed request has drained all its native work: the producer
+      // returned a result (an unknown or lost one returned above) and any
+      // staged extraction was discarded. That is the settlement proof.
+      await removeDownloadStage(download, "settled");
       await fs.unlink(pendingDownloadFile);
       return known(downloadFailureCode(downloaded.code));
     }
@@ -3152,7 +3178,10 @@ async function createRuntime(
           throw new Error("UPDATE_STAGING_OUTCOME_UNKNOWN");
         const cleanup = await transport.discard(update.handle);
         if (!cleanup.ok) throw new Error("UPDATE_STAGING_OUTCOME_UNKNOWN");
-        if (pending.download) await removeDownloadStage(pending.download);
+        // The verified stage's extraction was just discarded and its archive
+        // released above: this lifetime's own call has settled.
+        if (pending.download)
+          await removeDownloadStage(pending.download, "settled");
         await fs.unlink(pendingDownloadFile);
         stagedDownloadHandle = null;
         retained = null;

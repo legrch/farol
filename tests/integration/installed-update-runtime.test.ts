@@ -870,6 +870,140 @@ describe("supervised installed updater (native files/lease, mocked package/proce
     });
   });
 
+  // The supervised controller never runs the extraction reclaim, so a stage its
+  // own call created and settled is cleaned up on that call's own proof.
+  describe("a supervised preparation that fails with a known result cleans its own stage", () => {
+    const pendingFile = () =>
+      path.join(userData, "installed-updates/download-pending.json");
+    const stages = async () =>
+      (await fs.readdir(path.join(userData, "installed-updates"))).filter(
+        (name) => /^download-[0-9a-f]{32}(\.removing)?$/u.test(name),
+      );
+    const knownFailures: [string, () => void, string][] = [
+      [
+        "an import checksum mismatch",
+        () =>
+          mocks.importLocal.mockResolvedValue({
+            ok: true,
+            value: {
+              handle: path.join(root, "local-archive.zip"),
+              size: manifest.archiveSize,
+              sha256: "0".repeat(64),
+            },
+          }),
+        "UPDATE_CHECKSUM_MISMATCH",
+      ],
+      [
+        "a known verification failure",
+        () =>
+          mocks.verify.mockResolvedValue({
+            ok: false,
+            kind: "interrupted",
+            reason: "stage_capacity",
+            certainty: "known",
+          }),
+        "UPDATE_INTERRUPTED",
+      ],
+    ];
+    it.each(knownFailures)(
+      "after %s, removes the stage and the intent with no recovery fence",
+      async (_name, arrange, code) => {
+        arrange();
+        const input = await selected();
+        const controller = await createSupervisedInstalledUpdateRuntime(input);
+        await controller!.initialize();
+        await controller!.prepareLocal();
+        expect(controller!.snapshot()).toMatchObject({
+          phase: "failed",
+          code,
+          recoveryRequired: false,
+        });
+        await expect(fs.lstat(pendingFile())).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        expect(await stages()).toEqual([]);
+        await expect(fs.lstat(ready)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(mocks.helper).not.toHaveBeenCalled();
+        await controller!.close();
+      },
+    );
+    it("keeps the original Ready when a replacing preparation fails with a known result", async () => {
+      const input = await selected();
+      const controller = await createSupervisedInstalledUpdateRuntime(input);
+      await controller!.initialize();
+      await controller!.prepareLocal();
+      expect(controller!.snapshot().phase).toBe("ready");
+      const original = await fs.readFile(ready);
+      mocks.importLocal.mockResolvedValueOnce({
+        ok: true,
+        value: {
+          handle: path.join(root, "local-archive.zip"),
+          size: manifest.archiveSize,
+          sha256: "0".repeat(64),
+        },
+      });
+      await controller!.prepareLocal(manifest.buildId);
+      expect(controller!.snapshot()).toMatchObject({
+        phase: "ready",
+        blockedBy: "UPDATE_CHECKSUM_MISMATCH",
+      });
+      expect(await fs.readFile(ready)).toEqual(original);
+      await expect(fs.lstat(pendingFile())).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      // Only the original Ready's own stage is left.
+      expect(await stages()).toEqual([
+        `download-${JSON.parse(original.toString()).downloadId}`,
+      ]);
+      await controller!.close();
+    });
+    it("after a failed Ready write with confirmed absence, removes the stage and the intent", async () => {
+      const input = await selected();
+      const rename = fs.rename.bind(fs);
+      const spy = vi
+        .spyOn(fs, "rename")
+        .mockImplementation(async (from, to) => {
+          if (to === ready) throw new Error("fixture ready commit failure");
+          return rename(from, to);
+        });
+      const controller = await createSupervisedInstalledUpdateRuntime(input);
+      await controller!.initialize();
+      await controller!.prepareLocal();
+      spy.mockRestore();
+      expect(controller!.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_READY_PERSIST_FAILED",
+        recoveryRequired: false,
+      });
+      await expect(fs.lstat(pendingFile())).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(await stages()).toEqual([]);
+      await expect(fs.lstat(ready)).rejects.toMatchObject({ code: "ENOENT" });
+      await controller!.close();
+    });
+    it("keeps the stage and the fence when the verifier outcome is unknown", async () => {
+      mocks.verify.mockResolvedValue({
+        ok: false,
+        kind: "interrupted",
+        reason: "stage_cleanup",
+        certainty: "unknown",
+      });
+      const input = await selected();
+      const controller = await createSupervisedInstalledUpdateRuntime(input);
+      await controller!.initialize();
+      await controller!.prepareLocal();
+      expect(controller!.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        recoveryRequired: true,
+      });
+      await expect(fs.lstat(pendingFile())).resolves.toBeDefined();
+      expect(await stages()).toHaveLength(1);
+      await controller!.close();
+    });
+  });
+
   it("refuses a supervised package without a Go declaration before any helper", async () => {
     const { goCoreArtifact: _omitted, ...input } = await selected();
     const controller = await createSupervisedInstalledUpdateRuntime(input);
