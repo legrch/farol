@@ -28,11 +28,16 @@ import type {
   CodexContextSummaryDriver,
   CodexContextSummaryInput,
 } from "./codex-context-continuity";
+import { summaryAttemptRecord } from "../../../apps/desktop/chat/attempt";
 import {
   conversationSourceCursor,
   operationKey,
   summaryProviderOperationId,
 } from "../../../apps/desktop/chat/cursor";
+import {
+  notSubmittedCode,
+  unknownAfterSendCode,
+} from "../../../apps/desktop/chat/error";
 import { composeSummaryPrompt } from "../../../apps/desktop/chat/prompt";
 import {
   DEFAULT_MAXIMUM_PROMPT_CHARACTERS,
@@ -133,17 +138,12 @@ function summaryAttempt(
     turnAssistantId?: string | null;
   }> = {},
 ): StoredContextSummaryAttempt {
-  return {
-    schemaVersion: 1,
-    operationId: scope.operationId,
-    binding: { ...scope.binding },
-    source: scope.source.source,
-    sourceBoundary: scope.source.sourceBoundary,
+  return summaryAttemptRecord(
+    scope,
     phase,
-    conversationUrl: routeConversationUrl(route),
-    turnUserId: correlation.turnUserId ?? null,
-    turnAssistantId: correlation.turnAssistantId ?? null,
-  };
+    routeConversationUrl(route),
+    correlation,
+  );
 }
 
 function validInput(input: CodexContextSummaryInput): boolean {
@@ -411,7 +411,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       this.dispatched.delete(input.request.operationId);
       return {
         status: "not_submitted",
-        code: result.code ?? "SUMMARY_NOT_SUBMITTED",
+        code: notSubmittedCode(result.code),
       };
     }
     if (result.state === "not_authenticated") {
@@ -460,10 +460,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       }
       return {
         status: "outcome_unknown",
-        code:
-          result.code === "CHATGPT_USAGE_LIMITED"
-            ? "SUMMARY_USAGE_LIMITED_AFTER_SEND"
-            : "SUMMARY_SUBMISSION_UNRESOLVED",
+        code: unknownAfterSendCode(result.code),
       };
     }
     const accepted = await this.acceptCompletedResult(scope, lease, result);
