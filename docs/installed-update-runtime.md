@@ -428,8 +428,9 @@ extractions are released after retention, cold verification and copying into the
 helper's operation directory. Explicit Restart re-verifies that same archive.
 Unconfirmed extraction cleanup creates a durable obligation and blocks another
 verification or helper. At most two abandoned verification directories may be
-present before the verifier refuses another allocation; it never deletes an
-unreconciled stage simply to free capacity.
+present before the verifier refuses another allocation; the verifier itself
+never deletes a stage to free capacity. Abandoned stages are reclaimed at
+startup, by lease, as described under Extraction leases and startup reclaim.
 
 An interrupted unlink of the download intent is reconciled only when its exact
 build/checksum matches a durable ready record and fresh package verification
@@ -546,6 +547,78 @@ possible. Once apply starts, it continues observing the original operation.
 Final CLI reporting loss returns exit 3 without changing a known lifecycle
 terminal or launching a replacement operation.
 
+## Extraction leases and startup reclaim
+
+A verifier extraction is `farol-update-verify-XXXXXX` in a staging parent: the
+update root, or one `download-<32 hex>` directory in it. Its path used to live
+only in memory, so an owner that died first (a Quit that ran out of time, a
+crash) left it behind, and the cleanup marker `package-cleanup-pending.json`
+never named it. The marker's handle names the downloaded archive, not the
+extraction.
+
+**Lease.** Immediately after `mkdtemp` and before anything is extracted, the
+verifier writes `lease.json` (mode 0600) into the extraction. It holds the
+schema, the owner pid and its process start, the archive handle, a phase, the
+time of the last revision, and one entry per extractor child (pid and process
+start). The phase is `spawning` before each child is started and `spawned`
+once the child's identity, or its prior exit, has been read, right after the
+spawn. Every revision is a new file renamed over `lease.json`, so a reader sees
+a whole lease or none. A process start is stored as `ps` printed it and as an
+instant, so a timezone change cannot make a live child look like a reused pid.
+
+**Reclaim.** At every launch, before the updater reports its state, the
+primary desktop process reclaims abandoned extractions. The single-instance
+lock is taken before the host builds the update runtime, and a supervised
+controller never reclaims. The scan covers the update root and each
+`download-<32 hex>` directory, each checked by `lstat` as a real directory
+owned by the current user. An entry is removed only if all of this holds:
+
+- it is a real directory, not a symlink, owned by us, mode 0700, and a direct
+  child of its staging parent;
+- its lease parses;
+- the owner and every listed child have ended. A pid that is absent, or that
+  now names a process that started later than the recorded one, has ended. A
+  pid that still names the recorded process is live. A failed `ps` probe, an
+  unrecorded start for a running pid, or a start that is not later than the
+  recorded one is unknown, and unknown keeps the entry;
+- a lease left in `spawning` is also older than the extractor timeout (600 s)
+  plus a margin, because a child may exist that the lease could not list yet.
+
+An entry with no readable lease (an older build left it) is removed only when
+it is older than 24 hours and no entry in the same parent has a live or unknown
+owner. Removal is bound to the identity captured first (device and inode, rechecked
+between steps), removes the contents first and the lease last, removes the
+directory itself, and then syncs the parent. A removal that fails keeps the
+entry. Each kept entry is logged with its reason: `live owner`, `live child`,
+`unknown liveness`, `spawning window`, `identity mismatch`, `legacy entry too
+recent`, `live owner in parent` or `removal failed`. The reclaim runs again at
+the next launch; it is not retried within a session.
+
+**Startup order.** `recover()` runs, in this order: the existing preparation
+reconciliation (it removes an unfinished prepared copy that `ready.json`
+records and no journal covers, and used to sit unreachable behind the marker);
+the extraction reclaim; the marker settlement; and only then the existing
+`UPDATE_STAGING_OUTCOME_UNKNOWN` refusal, if the marker still stands.
+
+**Marker settlement.** The marker's content is untrusted. It is cleared only
+when it has exactly the known keys, its handle (and any operation root) is a
+normalized absolute path inside the update root, every `farol-update-verify-*`
+entry in every staging parent is absent or was reclaimed (a staging parent that
+cannot be scanned counts as unknown), and a named operation root holds no
+`staged.app`. A corrupt marker, a handle outside the root, or any extraction
+that cannot be proved ended keeps the fence. Marker content never selects what
+the reclaim scans.
+
+**Installs that are already fenced.** The fix runs inside the new build, so an
+install that is already fenced by an older build cannot receive it through the
+updater: it still needs the operator repair tool (see Closed Preview repair),
+and a fenced install whose marker names an operation root has no supported
+repair path in the tool today (its marker shape is rejected).
+
+**Reversibility.** Reverting the code stops future reclaims and leaves leases
+in place, ignored. Extractions already deleted were orphaned leftovers and are
+not restored, and a marker already cleared stays cleared.
+
 ## Physical staging cleanup
 
 Electron treats ASAR archives as virtual directories through its patched Node
@@ -553,7 +626,7 @@ filesystem. Main supplies the same physical `original-fs` boundary for package
 removal as for copying. The verifier removes only its own bound extraction root;
 prepared-copy and reconciled-download cleanup retain their existing ownership
 checks. A cleanup failure still writes the unknown-outcome obligation and fences
-updates; this change does not retry or clear an existing uncertain cleanup.
+updates; the fence clears only through the startup settlement above.
 
 The updater package gate includes a disposable Electron ASAR cleanup regression.
 Its verifier response is synthetic, so it proves physical removal semantics and

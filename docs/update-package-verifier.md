@@ -40,6 +40,9 @@ runtime identity. It returns measured `PackageIdentity` including
 path for the install helper. On rejection, the disposable extraction is
 removed. The caller discards a successful extraction after use; after a
 restart it must reverify the private handle rather than trust a saved path.
+Each extraction carries a `lease.json` naming its owner process and extractor
+children, so a launch after a crash can reclaim it; see
+[Extraction leases and startup reclaim](installed-update-runtime.md#extraction-leases-and-startup-reclaim).
 
 The focused tests use synthetic ZIPs and mock package claims. They do not
 prove a real package, installed N-to-N+1 update, or Gatekeeper behavior.
