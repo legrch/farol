@@ -3664,6 +3664,31 @@ describe("ChatGPT route submission boundary", () => {
     ).toBe(false);
   });
 
+  it("does not Send after a cancellation during the last asynchronous app verification even when the bind and click stall", async () => {
+    // The Cancel's own page calls never answer: whether the turn Sends cannot
+    // depend on them.
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({ state: "bound" })
+      .mockResolvedValueOnce(prepared)
+      .mockImplementationOnce(async () => {
+        void candidate.cancelActiveTask();
+        return { state: "bound" };
+      })
+      .mockImplementation((script: string) =>
+        script.includes("bound: true") || script.includes("stop.click()")
+          ? new Promise<unknown>(() => undefined)
+          : Promise.resolve({ activated: false }),
+      );
+    const candidate = devTaskRoute(execute);
+    expect(await candidate.runReadonlyTask("cancel before Send")).toMatchObject(
+      { state: "failed_before_submit" },
+    );
+    expect(
+      execute.mock.calls.some(([script]) => script.includes("send.click()")),
+    ).toBe(false);
+  });
+
   it("opens the rich ChatGPT app picker through native editing", async () => {
     const expectedHref = "https://chatgpt.com/c/native-picker";
     const nativeInputs: string[] = [];

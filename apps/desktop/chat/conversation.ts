@@ -309,6 +309,13 @@ export function createTaskCanceller<
       superseded = true;
       ports.supersedeObservation(startGeneration);
     };
+    // A turn Farol itself is running on a route that is not Route B (a
+    // connector check, a summary, a manual or dev task) is ended by the Cancel
+    // as it starts, before any page call: the turn may be about to Send, and
+    // how long the bind or the click takes must not decide whether it does.
+    // Route B keeps its own rule, to end a turn only after a verified bind and
+    // click, so that a Cancel that cannot prove its page ends nothing.
+    if (!ports.admittedAsRouteB() && ports.turn() !== null) supersede();
 
     const cancelBound = async (): Promise<TaskCancelOutcome> => {
       // A turn is being admitted and has not begun: there is no turn to bind
@@ -386,13 +393,14 @@ export function createTaskCanceller<
           );
           // An unreadable or unanswered click may have happened.
           if (!activated.success || !alive()) return "outcome_unknown";
+          // The click may have happened, and what the page answered, of any
+          // shape, may be about another turn or document: only an unchanged
+          // identity can be taken at its word, and only then is the answer
+          // read at all.
+          if (!current()) return "outcome_unknown";
           // The page itself refused: no click happened on another page.
           if ("navigated" in activated.data) return "page_changed";
           if ("expired" in activated.data) return "outcome_unknown";
-          // The click may have happened, and what the page answered may be
-          // about another turn or document: only an unchanged identity can be
-          // taken at its word, in either direction.
-          if (!current()) return "outcome_unknown";
           if (activated.data.activated) {
             stopActivated = true;
             supersede();

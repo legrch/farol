@@ -950,7 +950,11 @@ describe("cancelling a task is bound when it starts, not when a script runs", ()
       expect(harness.state.clicks).toBe(0);
       expect(stamped(doc)).toBe(false);
       expect(kinds(harness.scripts)).toEqual(["bind"]);
-      expect(harness.state.generation).toBe(0);
+      // A turn Farol runs on a route that is not Route B is ended as the
+      // Cancel starts; every other route ends nothing here.
+      expect(harness.state.generation).toBe(
+        input.routeB === false && input.turn ? 1 : 0,
+      );
       expect(harness.state.stopped).toBe(0);
     },
   );
@@ -1019,7 +1023,7 @@ describe("cancelling a task never ends a turn it did not start on", () => {
     expect(harness.state.stopped).toBe(1);
   });
 
-  it("is refused by the page, with no click, when a successor turn has marked it while the script was queued", async () => {
+  it("is unknown, with no click, when a successor turn has marked the page while the script was queued", async () => {
     const running = stopping(A);
     const harness = cancelHarness({
       ...running,
@@ -1030,7 +1034,9 @@ describe("cancelling a task never ends a turn it did not start on", () => {
         return undefined;
       },
     });
-    expect(await harness.cancel()).toBe("page_changed");
+    // The page refuses, but its answer is read only after the epoch check,
+    // and the epoch moved: nothing is taken at the page's word.
+    expect(await harness.cancel()).toBe("outcome_unknown");
     expect(harness.state.clicks).toBe(0);
     expect(harness.state.generation).toBe(0);
     expect(harness.state.observation).toBe(2);
@@ -1361,7 +1367,7 @@ describe("every effect of a cancel is guarded by the page-turn epoch it started 
         return undefined;
       },
     });
-    expect(await harness.cancel()).toBe("page_changed");
+    expect(await harness.cancel()).toBe("outcome_unknown");
     expect(harness.state.clicks).toBe(0);
     expect(harness.state.stopped).toBe(0);
     expect(harness.state.generation).toBe(0);
@@ -1669,6 +1675,135 @@ describe("a cancel is bound to the document it started on and to a turn that is 
     expect(harness.state.generation).toBe(0);
     expect(harness.state.stopped).toBe(0);
   });
+});
+
+describe("a cancel of a turn Farol sends on a route that is not Route B", () => {
+  const sending = (): CancelTurn => ({
+    epoch: 0,
+    dispatchIdentityUrl: null,
+    pinnedConversationUrl: null,
+  });
+
+  it("ends the turn as it starts, before any page call, however slow the bind is", async () => {
+    // The turn may be about to Send: the bind that never answers must not
+    // decide whether it does.
+    const harness = cancelHarness({
+      doc: newDoc(A, { stop: true }),
+      turn: sending(),
+      answer: (script) => (kindOf(script) === "bind" ? HOLD : undefined),
+    });
+    const running = harness.cancel();
+    expect(harness.state.generation).toBe(1);
+    await flush();
+    expect(kinds(harness.scripts)).toEqual(["bind"]);
+    harness.timers.at(-1)!.fire();
+    expect(await running).toBe("outcome_unknown");
+    expect(harness.state.generation).toBe(1);
+  });
+
+  it("ends the turn as it starts, however slow the click is", async () => {
+    const harness = cancelHarness({
+      doc: newDoc(A, { stop: true }),
+      turn: sending(),
+      answer: (script) => (kindOf(script) === "click" ? HOLD : undefined),
+    });
+    const running = harness.cancel();
+    expect(harness.state.generation).toBe(1);
+    await flush();
+    harness.timers.at(-1)!.fire();
+    expect(await running).toBe("outcome_unknown");
+    expect(harness.state.generation).toBe(1);
+  });
+
+  it("ends the turn even when the page is refused, and still checks every page effect", async () => {
+    const doc = newDoc(B, { stop: true });
+    const harness = cancelHarness({
+      doc,
+      turn: { ...sending(), pinnedConversationUrl: `${ORIGIN}${A}` },
+    });
+    // Bound to the page shown at Cancel (not Route B), which is B: fine.
+    expect(harness.state.generation).toBe(0);
+    await harness.cancel();
+    expect(harness.state.generation).toBe(1);
+    // A document replaced before the bind answer still clicks nothing.
+    let replaced = false;
+    const second = cancelHarness({
+      doc: newDoc(A, { stop: true }),
+      turn: sending(),
+      answer: (script) => {
+        if (kindOf(script) === "bind" && !replaced) {
+          replaced = true;
+          second.state.document += 1;
+        }
+        return undefined;
+      },
+    });
+    expect(await second.cancel()).toBe("page_changed");
+    expect(second.state.clicks).toBe(0);
+    expect(second.state.generation).toBe(1);
+  });
+
+  it("leaves a Route B turn observed until its stop was clicked", async () => {
+    const harness = cancelHarness({
+      doc: newDoc(A, { stop: true }),
+      routeB: true,
+      turn: { ...sending(), epoch: 1, pinnedConversationUrl: `${ORIGIN}${A}` },
+      answer: (script) => (kindOf(script) === "bind" ? HOLD : undefined),
+    });
+    const running = harness.cancel();
+    await flush();
+    expect(harness.state.generation).toBe(0);
+    harness.timers.at(-1)!.fire();
+    await running;
+    expect(harness.state.generation).toBe(0);
+  });
+});
+
+describe("every click answer is read only against an unchanged epoch and document", () => {
+  const shapes: [string, unknown][] = [
+    ["a click", { activated: true }],
+    ["no stop control", { activated: false }],
+    ["a refusal by the page", { navigated: true }],
+    ["an expired script", { expired: true }],
+  ];
+  it.each(shapes)(
+    "is unknown, whatever the page answered, when the epoch moved meanwhile: %s",
+    async (_name, answer) => {
+      const harness = cancelHarness({
+        doc: newDoc(A, { stop: true }),
+        routeB: true,
+        turn: null,
+        epoch: 1,
+        observedRunning: true,
+        answer: (script) => {
+          if (kindOf(script) !== "click") return undefined;
+          harness.state.epoch = 2;
+          return answer;
+        },
+      });
+      expect(await harness.cancel()).toBe("outcome_unknown");
+      expect(harness.state.stopped).toBe(0);
+      expect(harness.state.generation).toBe(0);
+      expect(clickScripts(harness.scripts)).toHaveLength(1);
+    },
+  );
+  it.each(shapes)(
+    "is unknown, whatever the page answered, when the document was replaced meanwhile: %s",
+    async (_name, answer) => {
+      const harness = cancelHarness({
+        doc: newDoc(A, { stop: true }),
+        observedRunning: true,
+        answer: (script) => {
+          if (kindOf(script) !== "click") return undefined;
+          harness.state.document += 1;
+          return answer;
+        },
+      });
+      expect(await harness.cancel()).toBe("outcome_unknown");
+      expect(harness.state.stopped).toBe(0);
+      expect(clickScripts(harness.scripts)).toHaveLength(1);
+    },
+  );
 });
 
 describe("window title", () => {
