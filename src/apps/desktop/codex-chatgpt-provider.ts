@@ -3,12 +3,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import {
-  createHash,
-  randomBytes,
-  randomUUID,
-  timingSafeEqual,
-} from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { z } from "zod";
 import type { Result } from "../../pkg/kernel/domain/result";
@@ -33,9 +28,48 @@ import type { VisibleOutputItem } from "./chatgpt-visible-output";
 import {
   CHATGPT_MODEL_ID,
   FAROL_PROVIDER_ID,
-  findFarolModel,
 } from "../../pkg/model-route/contract";
 
+import {
+  currentCallEntry,
+  currentCallPrefix,
+  deferred,
+  digest,
+  outputText,
+  turnKey,
+  turnTag,
+  type Deferred,
+} from "../../../apps/desktop/provider/identity.ts";
+import { ResponseRound } from "../../../apps/desktop/provider/round.ts";
+import {
+  authorized,
+  json,
+  readBody,
+  refusal,
+  startStream,
+  writeEvent,
+} from "../../../apps/desktop/provider/http.ts";
+import { modelCatalogue } from "../../../apps/desktop/provider/catalogue.ts";
+export { modelCatalogue };
+import {
+  MAX_PROMPT_CHARACTERS,
+  promptFromInput,
+} from "../../../apps/desktop/provider/prompt.ts";
+export { MAX_PROMPT_CHARACTERS };
+import {
+  compactionMarkerKind,
+  compactionMarkerShape,
+  decodedTurnMetadata,
+  inputContentKinds,
+  inputKinds,
+  inputRoles,
+  metadataKeys,
+  record,
+  requestKindCompaction,
+  requestKindShape,
+  toolNames,
+  turnMetadataKeys,
+} from "../../../apps/desktop/provider/shape.ts";
 import {
   extractGoChatRequestSelection,
   goChatRequestIntentSHA256,
@@ -71,14 +105,10 @@ const textDeltaSchema = z.strictObject({
     .max(256 * 1_024),
 });
 
-const MAX_REQUEST_BYTES = 1 * 1_024 * 1_024;
 // The longest prompt a Route B turn sends into one ChatGPT message.
-export const MAX_PROMPT_CHARACTERS = 128 * 1_024;
 const MAX_TOOLS = 512;
 const MAX_ACTIVE_TURNS = 8;
-const MAX_TOOL_OUTPUT_CHARACTERS = 512 * 1_024;
 const TURN_LIFETIME_MS = 15 * 60 * 1_000;
-const CALL_ID_PREFIX = "farol_call_";
 
 const identitySchema = z
   .object({
@@ -217,10 +247,6 @@ type ProviderOptions = Readonly<{
   }>;
 }>;
 
-function record(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function compactionTrigger(candidate: unknown): boolean {
   return (
     record(candidate) &&
@@ -259,298 +285,11 @@ function compactionMetadataHeader(
   return typeof value === "string" ? value : undefined;
 }
 
-function inputKinds(candidate: unknown): string[] {
-  if (!record(candidate)) return [];
-  if (typeof candidate.input === "string") return ["string"];
-  if (!Array.isArray(candidate.input)) return [];
-  return candidate.input.map((item) =>
-    record(item) && typeof item.type === "string" ? item.type : "unknown",
-  );
-}
-
-function inputRoles(candidate: unknown): string[] {
-  if (!record(candidate) || !Array.isArray(candidate.input)) return [];
-  return candidate.input.map((item) =>
-    record(item) && typeof item.role === "string" ? item.role : "none",
-  );
-}
-
-function inputContentKinds(candidate: unknown): string[] {
-  if (!record(candidate) || !Array.isArray(candidate.input)) return [];
-  return candidate.input.flatMap((item, itemIndex) => {
-    if (!record(item) || !Array.isArray(item.content)) return [];
-    return item.content.map((part, partIndex) => {
-      const kind =
-        record(part) && typeof part.type === "string" ? part.type : "unknown";
-      return `${itemIndex}:${partIndex}:${kind}`;
-    });
-  });
-}
-
-function toolNames(candidate: unknown): string[] {
-  if (!record(candidate) || !Array.isArray(candidate.tools)) return [];
-  return candidate.tools.map((tool) => {
-    if (!record(tool)) return "unknown";
-    if (typeof tool.name === "string") return tool.name;
-    return typeof tool.type === "string" ? tool.type : "unknown";
-  });
-}
-
-function metadataKeys(candidate: unknown): string[] {
-  if (!record(candidate) || !record(candidate.client_metadata)) return [];
-  return Object.keys(candidate.client_metadata).sort();
-}
-
-function decodedTurnMetadata(
-  candidate: unknown,
-): Record<string, unknown> | null {
-  if (!record(candidate) || !record(candidate.client_metadata)) return null;
-  const raw = candidate.client_metadata["x-codex-turn-metadata"];
-  let decoded: unknown = raw;
-  if (typeof raw === "string") {
-    try {
-      decoded = JSON.parse(raw) as unknown;
-    } catch {
-      return null;
-    }
-  }
-  return record(decoded) ? decoded : null;
-}
-
 function embeddedCompactionRequest(candidate: unknown): boolean {
   return isHostCompactionRequestMetadata(decodedTurnMetadata(candidate));
 }
 
-function compactionMarkerKind(candidate: unknown): string {
-  const metadata = decodedTurnMetadata(candidate);
-  if (!metadata || !("compaction" in metadata)) return "absent";
-  if (metadata.compaction === true) return "true";
-  if (metadata.compaction === false) return "false";
-  return typeof metadata.compaction;
-}
-
-function requestKindCompaction(candidate: unknown): boolean {
-  return decodedTurnMetadata(candidate)?.request_kind === "compaction";
-}
-
-function controlShape(value: unknown): string[] {
-  if (
-    typeof value === "string" &&
-    /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/u.test(value)
-  ) {
-    return [`string:${value}`];
-  }
-  if (!record(value)) return [Array.isArray(value) ? "array" : typeof value];
-  return Object.entries(value)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, entry]) => {
-      if (typeof entry === "boolean") return `${key}:boolean:${entry}`;
-      if (
-        typeof entry === "string" &&
-        [
-          "implementation",
-          "kind",
-          "mode",
-          "name",
-          "phase",
-          "reason",
-          "request_type",
-          "strategy",
-          "trigger",
-          "type",
-        ].includes(key) &&
-        /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/u.test(entry)
-      ) {
-        return `${key}:string:${entry}`;
-      }
-      if (record(entry)) {
-        return `${key}:object:${Object.keys(entry).sort().join(",")}`;
-      }
-      return `${key}:${Array.isArray(entry) ? "array" : typeof entry}`;
-    });
-}
-
-function compactionMarkerShape(candidate: unknown): string[] {
-  return controlShape(decodedTurnMetadata(candidate)?.compaction);
-}
-
-function requestKindShape(candidate: unknown): string[] {
-  return controlShape(decodedTurnMetadata(candidate)?.request_kind);
-}
-
-function turnMetadataKeys(candidate: unknown): string[] {
-  const decoded = decodedTurnMetadata(candidate);
-  return decoded ? Object.keys(decoded).sort() : [];
-}
-
-function authorized(request: IncomingMessage, token: string): boolean {
-  const expected = Buffer.from(`Bearer ${token}`, "utf8");
-  const supplied = Buffer.from(request.headers.authorization ?? "", "utf8");
-  return (
-    expected.length === supplied.length && timingSafeEqual(expected, supplied)
-  );
-}
-
-function json(
-  response: ServerResponse,
-  status: number,
-  body: Readonly<Record<string, unknown>>,
-): void {
-  const encoded = JSON.stringify(body);
-  response.writeHead(status, {
-    "cache-control": "no-store",
-    "content-length": Buffer.byteLength(encoded),
-    "content-type": "application/json; charset=utf-8",
-  });
-  response.end(encoded);
-}
-
-function refusal(response: ServerResponse, status: number, code: string): void {
-  json(response, status, { error: { code } });
-}
-
-async function readBody(request: IncomingMessage): Promise<unknown> {
-  let size = 0;
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += bytes.length;
-    if (size > MAX_REQUEST_BYTES) {
-      throw new Error("FAROL_REQUEST_TOO_LARGE");
-    }
-    chunks.push(bytes);
-  }
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
-  } catch {
-    throw new Error("FAROL_REQUEST_INVALID");
-  }
-}
-
-function textFromContent(content: unknown): string[] {
-  if (typeof content === "string") return [content];
-  if (!Array.isArray(content)) return [];
-  return content.flatMap((part) => {
-    if (!record(part) || typeof part.text !== "string") return [];
-    return [part.text];
-  });
-}
-
-function promptFromInput(
-  input: string | readonly unknown[],
-  trustedContext: string | null,
-): string | null {
-  if (typeof input === "string") {
-    const prompt = trustedContext ? `${trustedContext}\n\n${input}` : input;
-    return prompt.length <= MAX_PROMPT_CHARACTERS ? prompt : null;
-  }
-  // The host resends its whole history with every turn, while the task's
-  // ChatGPT conversation already holds everything a previous turn sent. Only
-  // the user messages after the last item the conversation produced (an
-  // answer, a tool call or a compaction) are this turn's own.
-  let turnStart = input.length;
-  while (turnStart > 0) {
-    const item = input[turnStart - 1];
-    if (!record(item) || item.type !== "message" || item.role !== "user") {
-      break;
-    }
-    turnStart -= 1;
-  }
-  const messages = input.slice(turnStart).flatMap((item) => {
-    if (!record(item) || item.type !== "message") return [];
-    if (item.role !== "user") return [];
-    const content = textFromContent(item.content);
-    return content.some((text) => text.includes(HOST_CHECKPOINT_PREFIX))
-      ? []
-      : content;
-  });
-  const prompt = [trustedContext, ...messages]
-    .filter((part): part is string => part !== null)
-    .join("\n\n");
-  return prompt.length > 0 && prompt.length <= MAX_PROMPT_CHARACTERS
-    ? prompt
-    : null;
-}
-
-async function writeChunk(
-  response: ServerResponse,
-  value: string,
-): Promise<void> {
-  if (response.destroyed || response.writableEnded) {
-    throw new Error("FAROL_HOST_DELIVERY_LOST");
-  }
-  if (response.write(value)) return;
-  await Promise.race([
-    once(response, "drain"),
-    once(response, "close").then(() => {
-      throw new Error("FAROL_HOST_DELIVERY_LOST");
-    }),
-  ]);
-}
-
-async function writeEvent(
-  response: ServerResponse,
-  event: string,
-  body: Readonly<Record<string, unknown>>,
-): Promise<void> {
-  await writeChunk(
-    response,
-    `event: ${event}\ndata: ${JSON.stringify(body)}\n\n`,
-  );
-}
-
-function startStream(response: ServerResponse): void {
-  response.writeHead(200, {
-    "cache-control": "no-store",
-    connection: "keep-alive",
-    "content-type": "text/event-stream; charset=utf-8",
-    "x-accel-buffering": "no",
-  });
-  response.flushHeaders();
-}
-
-export function modelCatalogue(
-  model: string,
-): Readonly<Record<string, unknown>> {
-  const entry = findFarolModel({ provider: FAROL_PROVIDER_ID, model });
-  const displayName = entry?.displayName ?? model;
-  return {
-    id: model,
-    object: "model",
-    owned_by: FAROL_PROVIDER_ID,
-    slug: model,
-    display_name: displayName,
-    description:
-      model === CHATGPT_MODEL_ID
-        ? "ChatGPT through Farol. Stable default alias; the upstream selection is verified separately. Native tools retain the host task's permissions."
-        : "An explicitly selected Farol model route; native tools retain the host task's permissions.",
-    supported_reasoning_levels: [
-      {
-        effort: "low",
-        description:
-          "Bounded transport check. The observed ChatGPT model and mode are verified separately before a live readiness claim.",
-      },
-    ],
-    default_reasoning_level: "low",
-    shell_type: "unified_exec",
-    visibility: "list",
-    supported_in_api: true,
-    priority: 100,
-    support_verbosity: false,
-    truncation_policy: { mode: "tokens", limit: 8192 },
-    experimental_supported_tools: [],
-    base_instructions:
-      "Use the isolated Farol provider route selected for this task. Keep native tools under the host task's own sandbox, approvals, and exact registry. Never switch provider or model silently.",
-  };
-}
-
 type ResponseRequest = z.infer<typeof responseRequestSchema>;
-
-type Deferred<T> = Readonly<{
-  promise: Promise<T>;
-  resolve(value: T): void;
-  reject(error: Error): void;
-}>;
 
 type IssuedToolCall = ResolvedCodexNativeToolCall & {
   callId: string;
@@ -572,20 +311,6 @@ type TurnEvent =
       code: string | null;
     }>;
 
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((resolve_, reject_) => {
-    resolve = resolve_;
-    reject = reject_;
-  });
-  return { promise, resolve, reject };
-}
-
-function digest(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
 function identityFromRequest(
   data: ResponseRequest,
 ): CodexChatGptTurnInput["identity"] {
@@ -597,34 +322,6 @@ function identityFromRequest(
   };
 }
 
-function turnKey(identity: CodexChatGptTurnInput["identity"]): string {
-  return canonicalJson(identity);
-}
-
-function turnTag(identity: CodexChatGptTurnInput["identity"]): string {
-  return digest(turnKey(identity)).slice(0, 16);
-}
-
-function currentCallPrefix(tag: string): string {
-  return `${CALL_ID_PREFIX}${tag}`;
-}
-
-function currentCallId(value: unknown, tag: string): value is string {
-  return (
-    typeof value === "string" &&
-    value.startsWith(currentCallPrefix(tag)) &&
-    /^farol_call_[a-f0-9]{32}$/u.test(value)
-  );
-}
-
-function currentCallEntry(value: unknown, tag: string): boolean {
-  return (
-    record(value) &&
-    (value.type === "function_call" || value.type === "function_call_output") &&
-    currentCallId(value.call_id, tag)
-  );
-}
-
 function bindingFingerprint(data: ResponseRequest): string {
   return digest(
     canonicalJson({
@@ -632,286 +329,6 @@ function bindingFingerprint(data: ResponseRequest): string {
       identity: identityFromRequest(data),
     }),
   );
-}
-
-function outputText(value: unknown): string | null {
-  if (typeof value === "string") {
-    return value.length <= MAX_TOOL_OUTPUT_CHARACTERS ? value : null;
-  }
-  if (!Array.isArray(value)) return null;
-  const parts: string[] = [];
-  for (const part of value) {
-    if (
-      !record(part) ||
-      !["input_text", "output_text", "text"].includes(String(part.type)) ||
-      typeof part.text !== "string"
-    ) {
-      return null;
-    }
-    parts.push(part.text);
-  }
-  const joined = parts.join("\n");
-  return joined.length <= MAX_TOOL_OUTPUT_CHARACTERS ? joined : null;
-}
-
-class ResponseRound {
-  private readonly responseId = `resp_${randomUUID()}`;
-  private messageId = `${this.responseId}_message`;
-  private readonly output: Readonly<Record<string, unknown>>[] = [];
-  private text = "";
-  private textStarted = false;
-  private textPhase: "commentary" | "final_answer" | null = null;
-  private ended = false;
-
-  constructor(
-    private readonly response: ServerResponse,
-    private readonly model: string,
-  ) {}
-
-  async open(): Promise<void> {
-    startStream(this.response);
-    await writeEvent(this.response, "response.created", {
-      type: "response.created",
-      response: {
-        id: this.responseId,
-        model: this.model,
-        status: "in_progress",
-        output: [],
-      },
-    });
-  }
-
-  async delta(value: string): Promise<void> {
-    await this.appendText(value, null, false);
-  }
-
-  async visible(item: VisibleOutputItem): Promise<void> {
-    if (this.ended) throw new Error("FAROL_HOST_DELIVERY_LOST");
-    if (item.channel !== "status") {
-      await this.appendText(
-        item.text,
-        item.channel === "answer" ? "final_answer" : "commentary",
-        true,
-      );
-      return;
-    }
-    await this.finishText();
-    const outputIndex = this.output.length;
-    const id = `${this.responseId}_status_${outputIndex}`;
-    const itemFields = { id, type: "reasoning" } as const;
-    const eventFields = {
-      item_id: id,
-      output_index: outputIndex,
-      summary_index: 0,
-    };
-    await writeEvent(this.response, "response.output_item.added", {
-      type: "response.output_item.added",
-      output_index: outputIndex,
-      item: { ...itemFields, summary: [] },
-    });
-    await writeEvent(this.response, "response.reasoning_summary_part.added", {
-      type: "response.reasoning_summary_part.added",
-      ...eventFields,
-      part: { type: "summary_text", text: "" },
-    });
-    await writeEvent(this.response, "response.reasoning_summary_text.delta", {
-      type: "response.reasoning_summary_text.delta",
-      ...eventFields,
-      delta: item.text,
-    });
-    await writeEvent(this.response, "response.reasoning_summary_text.done", {
-      type: "response.reasoning_summary_text.done",
-      ...eventFields,
-      text: item.text,
-    });
-    const part = { type: "summary_text", text: item.text } as const;
-    await writeEvent(this.response, "response.reasoning_summary_part.done", {
-      type: "response.reasoning_summary_part.done",
-      ...eventFields,
-      part,
-    });
-    const completed = { ...itemFields, summary: [part] };
-    await writeEvent(this.response, "response.output_item.done", {
-      type: "response.output_item.done",
-      output_index: outputIndex,
-      item: completed,
-    });
-    this.output.push(completed);
-  }
-
-  private async appendText(
-    value: string,
-    phase: "commentary" | "final_answer" | null,
-    separateBlock: boolean,
-  ): Promise<void> {
-    if (this.ended) throw new Error("FAROL_HOST_DELIVERY_LOST");
-    if (this.textStarted && this.textPhase !== phase) await this.finishText();
-    const separator = separateBlock && this.textStarted ? "\n\n" : "";
-    if (!this.textStarted) {
-      this.textPhase = phase;
-      this.messageId = `${this.responseId}_message_${this.output.length}`;
-      this.textStarted = true;
-      await writeEvent(this.response, "response.output_item.added", {
-        type: "response.output_item.added",
-        output_index: this.output.length,
-        item: {
-          id: this.messageId,
-          type: "message",
-          role: "assistant",
-          status: "in_progress",
-          content: [],
-          ...(phase === null ? {} : { phase }),
-        },
-      });
-      await writeEvent(this.response, "response.content_part.added", {
-        type: "response.content_part.added",
-        item_id: this.messageId,
-        output_index: this.output.length,
-        content_index: 0,
-        part: { type: "output_text", text: "" },
-      });
-    }
-    const delta = `${separator}${value}`;
-    this.text += delta;
-    await writeEvent(this.response, "response.output_text.delta", {
-      type: "response.output_text.delta",
-      item_id: this.messageId,
-      output_index: this.output.length,
-      content_index: 0,
-      delta,
-    });
-  }
-
-  private async finishText(): Promise<void> {
-    if (!this.textStarted) return;
-    const outputIndex = this.output.length;
-    const item = {
-      id: this.messageId,
-      type: "message",
-      role: "assistant",
-      status: "completed",
-      content: [{ type: "output_text", text: this.text }],
-      ...(this.textPhase === null ? {} : { phase: this.textPhase }),
-    } as const;
-    await writeEvent(this.response, "response.output_text.done", {
-      type: "response.output_text.done",
-      item_id: this.messageId,
-      output_index: outputIndex,
-      content_index: 0,
-      text: this.text,
-    });
-    await writeEvent(this.response, "response.content_part.done", {
-      type: "response.content_part.done",
-      item_id: this.messageId,
-      output_index: outputIndex,
-      content_index: 0,
-      part: { type: "output_text", text: this.text },
-    });
-    await writeEvent(this.response, "response.output_item.done", {
-      type: "response.output_item.done",
-      output_index: outputIndex,
-      item,
-    });
-    this.output.push(item);
-    this.text = "";
-    this.textStarted = false;
-    this.textPhase = null;
-  }
-
-  async completeTool(
-    call: IssuedToolCall,
-    current: () => boolean,
-  ): Promise<void> {
-    const requireCurrent = () => {
-      if (!current()) throw new Error("FAROL_HOST_DELIVERY_LOST");
-    };
-    requireCurrent();
-    await this.finishText();
-    requireCurrent();
-    const outputIndex = this.output.length;
-    const opening = {
-      id: call.itemId,
-      type: "function_call",
-      call_id: call.callId,
-      name: call.name,
-      arguments: "",
-      ...(call.namespace === null ? {} : { namespace: call.namespace }),
-    } as const;
-    await writeEvent(this.response, "response.output_item.added", {
-      type: "response.output_item.added",
-      output_index: outputIndex,
-      item: opening,
-    });
-    requireCurrent();
-    await writeEvent(this.response, "response.function_call_arguments.delta", {
-      type: "response.function_call_arguments.delta",
-      item_id: call.itemId,
-      output_index: outputIndex,
-      delta: call.encodedArguments,
-    });
-    requireCurrent();
-    await writeEvent(this.response, "response.function_call_arguments.done", {
-      type: "response.function_call_arguments.done",
-      item_id: call.itemId,
-      output_index: outputIndex,
-      arguments: call.encodedArguments,
-    });
-    requireCurrent();
-    const item = {
-      ...opening,
-      arguments: call.encodedArguments,
-      status: "completed",
-    } as const;
-    await writeEvent(this.response, "response.output_item.done", {
-      type: "response.output_item.done",
-      output_index: outputIndex,
-      item,
-    });
-    requireCurrent();
-    this.output.push(item);
-    await this.complete();
-  }
-
-  async completeFinal(): Promise<void> {
-    await this.finishText();
-    if (this.output.length < 1) {
-      await this.fail("FAROL_PROVIDER_RESULT_INVALID");
-      return;
-    }
-    await this.complete();
-  }
-
-  private async complete(): Promise<void> {
-    await writeEvent(this.response, "response.completed", {
-      type: "response.completed",
-      response: {
-        id: this.responseId,
-        model: this.model,
-        status: "completed",
-        output: this.output,
-      },
-    });
-    this.end();
-  }
-
-  async fail(code: string): Promise<void> {
-    if (this.ended) return;
-    await writeEvent(this.response, "response.failed", {
-      type: "response.failed",
-      response: {
-        id: this.responseId,
-        model: this.model,
-        status: "failed",
-        error: { code },
-      },
-    });
-    this.end();
-  }
-
-  private end(): void {
-    this.ended = true;
-    this.response.end();
-  }
 }
 
 class ActiveProviderTurn {
@@ -1469,7 +886,11 @@ async function prepareInitialInput(
     trustedContext = prepared.value.trustedContext;
     contextDelivered = prepared.value.delivered;
   }
-  const prompt = promptFromInput(data.input, trustedContext);
+  const prompt = promptFromInput(
+    data.input,
+    trustedContext,
+    HOST_CHECKPOINT_PREFIX,
+  );
   if (prompt === null) {
     refusal(response, 422, "FAROL_INPUT_UNSUPPORTED");
     return null;
