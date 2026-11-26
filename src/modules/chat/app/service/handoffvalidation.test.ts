@@ -6,8 +6,10 @@ import type {
 } from "../port/handoff";
 import {
   identifier,
+  isUuid,
   object,
   samePhysicalWorkspace,
+  sameProject,
   sameWorkspace,
   validMessage,
   validRequest,
@@ -206,6 +208,34 @@ describe("workspace identity", () => {
         base,
         workspace({ project: { ...base.project, inode: "9" } }),
       ),
+    ).toBe(false);
+  });
+});
+
+describe("isUuid", () => {
+  it("accepts versions 1 to 8 with an RFC variant, in either case", () => {
+    expect(isUuid(KEY)).toBe(true);
+    expect(isUuid(KEY.toUpperCase())).toBe(true);
+  });
+
+  it("refuses other versions, variants and shapes", () => {
+    expect(isUuid("5f7c2b0e-3a1d-0e8b-9c6a-0d4f1e2b3a45")).toBe(false);
+    expect(isUuid("5f7c2b0e-3a1d-9e8b-9c6a-0d4f1e2b3a45")).toBe(false);
+    expect(isUuid("5f7c2b0e-3a1d-4e8b-7c6a-0d4f1e2b3a45")).toBe(false);
+    expect(isUuid(`${KEY}x`)).toBe(false);
+    expect(isUuid("")).toBe(false);
+  });
+});
+
+describe("sameProject", () => {
+  it("compares root, device, inode and git directory", () => {
+    const { project } = workspace();
+    expect(sameProject(project, { ...project })).toBe(true);
+    expect(sameProject(project, { ...project, root: "/x" })).toBe(false);
+    expect(sameProject(project, { ...project, device: "9" })).toBe(false);
+    expect(sameProject(project, { ...project, inode: "9" })).toBe(false);
+    expect(
+      sameProject(project, { ...project, gitCommonDirectory: "/x/.git" }),
     ).toBe(false);
   });
 });

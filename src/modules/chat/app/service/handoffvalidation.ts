@@ -4,6 +4,13 @@ import type {
   HandoffWorkspace,
 } from "../port/handoff";
 
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+export function isUuid(value: string): boolean {
+  return UUID.test(value);
+}
+
 export function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -29,9 +36,7 @@ export function validRequest(request: HandoffRequest): boolean {
       return false;
   }
   return (
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
-      request.key,
-    ) &&
+    isUuid(request.key) &&
     identifier(request.workspaceId) &&
     identifier(request.projectId) &&
     request.message.length > 0 &&
@@ -45,12 +50,8 @@ export function validRequest(request: HandoffRequest): boolean {
 
 export function validMessage(request: HandoffMessage): boolean {
   return (
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
-      request.key,
-    ) &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
-      request.dispatchId,
-    ) &&
+    isUuid(request.key) &&
+    isUuid(request.dispatchId) &&
     identifier(request.workspaceId) &&
     identifier(request.projectId) &&
     request.message.length > 0 &&
@@ -87,6 +88,18 @@ export function validWorkspace(value: unknown): value is HandoffWorkspace {
   );
 }
 
+export function sameProject(
+  left: HandoffWorkspace["project"],
+  right: HandoffWorkspace["project"],
+): boolean {
+  return (
+    left.root === right.root &&
+    left.device === right.device &&
+    left.inode === right.inode &&
+    left.gitCommonDirectory === right.gitCommonDirectory
+  );
+}
+
 export function samePhysicalWorkspace(
   left: HandoffWorkspace,
   right: HandoffWorkspace,
@@ -96,10 +109,7 @@ export function samePhysicalWorkspace(
     left.device === right.device &&
     left.inode === right.inode &&
     left.gitCommonDirectory === right.gitCommonDirectory &&
-    left.project.root === right.project.root &&
-    left.project.device === right.project.device &&
-    left.project.inode === right.project.inode &&
-    left.project.gitCommonDirectory === right.project.gitCommonDirectory
+    sameProject(left.project, right.project)
   );
 }
 

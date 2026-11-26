@@ -48,8 +48,10 @@ import type {
 import { exactProject } from "./exactproject";
 import {
   identifier,
+  isUuid,
   object,
   samePhysicalWorkspace,
+  sameProject,
   sameWorkspace,
   validMessage,
   validRequest,
@@ -190,11 +192,7 @@ export class PersistentCodexHandoff {
       await verify();
       if (!latest)
         return result("missing", "HANDOFF_PROJECT_PREFERENCE_NOT_RECORDED");
-      if (
-        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
-          latest.key,
-        )
-      )
+      if (!isUuid(latest.key))
         return result(
           "unavailable",
           "HANDOFF_PROJECT_PREFERENCE_LOOKUP_INVALID",
@@ -202,11 +200,7 @@ export class PersistentCodexHandoff {
       const matches = (value: LatestProjectPreference) =>
         value.key === latest.key &&
         value.record.projectId === request.projectId &&
-        value.record.project.root === workspace.project.root &&
-        value.record.project.device === workspace.project.device &&
-        value.record.project.inode === workspace.project.inode &&
-        value.record.project.gitCommonDirectory ===
-          workspace.project.gitCommonDirectory;
+        sameProject(value.record.project, workspace.project);
       if (!matches(latest))
         return result(
           "stale_preference",
@@ -277,9 +271,7 @@ export class PersistentCodexHandoff {
     const admitted = () =>
       !context.signal?.aborted && this.now() < this.mutationExpiresAt;
     if (
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
-        request.key,
-      ) ||
+      !isUuid(request.key) ||
       !identifier(request.workspaceId) ||
       !identifier(request.projectId) ||
       !["remember", "read"].includes(request.operation)
@@ -316,10 +308,7 @@ export class PersistentCodexHandoff {
       };
       const sameRecord = (value: ProjectPreferenceRecord) =>
         value.projectId === record.projectId &&
-        value.project.root === record.project.root &&
-        value.project.device === record.project.device &&
-        value.project.inode === record.project.inode &&
-        value.project.gitCommonDirectory === record.project.gitCommonDirectory;
+        sameProject(value.project, record.project);
       if (prior && !sameRecord(prior))
         return result(
           request.operation === "read" ? "stale_preference" : "refused",
@@ -551,11 +540,7 @@ export class PersistentCodexHandoff {
       status: "outcome_unknown",
       dispatchId: request.dispatchId,
     };
-    const uuid = (value: unknown) =>
-      typeof value === "string" &&
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
-        value,
-      );
+    const uuid = (value: unknown) => typeof value === "string" && isUuid(value);
     const name = (value: unknown): value is string =>
       typeof value === "string" &&
       value.length <= 1000 &&
@@ -781,12 +766,8 @@ export class PersistentCodexHandoff {
     });
     if (
       request.threadId !== this.selectedOwnerThreadId ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
-        request.threadId,
-      ) ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
-        request.turnId,
-      ) ||
+      !isUuid(request.threadId) ||
+      !isUuid(request.turnId) ||
       !identifier(request.workspaceId) ||
       !identifier(request.projectId) ||
       (request.cursor !== undefined && !historyCursor(request.cursor)) ||
@@ -876,9 +857,7 @@ export class PersistentCodexHandoff {
     if (!this.readStillAllowed(context)) return denied();
     const host = this.readHost(context);
     if (
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
-        request.threadId,
-      ) ||
+      !isUuid(request.threadId) ||
       !identifier(request.workspaceId) ||
       !identifier(request.projectId)
     )
@@ -1005,9 +984,7 @@ export class PersistentCodexHandoff {
     };
     if (
       request.threadId !== this.selectedOwnerThreadId ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
-        request.turnId,
-      ) ||
+      !isUuid(request.turnId) ||
       !this.digester.digestAdopt
     )
       return { status: "refused" as const, code: "HANDOFF_ADOPT_DENIED" };
@@ -1276,12 +1253,8 @@ export class PersistentCodexHandoff {
       dispatchId: request.key,
     };
     if (
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
-        request.key,
-      ) ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
-        request.dispatchId,
-      ) ||
+      !isUuid(request.key) ||
+      !isUuid(request.dispatchId) ||
       request.key.toLowerCase() === request.dispatchId.toLowerCase() ||
       typeof request.message !== "string" ||
       request.message.trim().length === 0 ||
