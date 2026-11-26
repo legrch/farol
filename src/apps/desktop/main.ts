@@ -70,7 +70,7 @@ import {
   startDesktopGoCore,
   type DesktopGoCore,
 } from "../../../apps/desktop/go-core-host";
-import { goCoreQuitClosers } from "../../../apps/desktop/go-core-quit-closers";
+import { quitCollect } from "../../../apps/desktop/host/collect";
 import type {
   ChatComputerAdmissionResponse,
   SettingsDeliveryResult,
@@ -317,11 +317,7 @@ import {
   createConfigurationReplyFault,
   e2eBudget,
 } from "./configuration-reply-fault";
-import {
-  createQuitDrain,
-  type OwnedCloser,
-  type QuitDrainReceipt,
-} from "./quit-drain";
+import { createQuitDrain, type QuitDrainReceipt } from "./quit-drain";
 import {
   createGracefulQuitSignals,
   type GracefulQuitSignals,
@@ -3527,128 +3523,60 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         app.exit(0);
       }
     },
-    collect: (context) => {
-      const closers: OwnedCloser[] = [
-        {
-          name: "installed-updater",
-          close: () => installedUpdates.close(),
-        },
-      ];
-      const attachmentTask = pendingChatGptAttachmentTask;
-      pendingChatGptAttachmentTask = null;
-      if (attachmentTask) {
-        void discardChatGptAttachments(
-          statePaths().attachmentStaging,
-          attachmentTask.operationId,
-        );
-      }
-      const agentCheck = activeCodexAgentCheck;
-      activeCodexAgentCheck = null;
-      agentCheck?.host.dispose();
-      if (agentCheck) {
-        closers.push({
-          name: "agent-check",
-          close: () => agentCheck.client.close(),
-        });
-      }
-      const productAgent = activeProductAgentSession;
-      activeProductAgentSession = null;
-      if (persistedProductAgentExpiry) {
-        clearTimeout(persistedProductAgentExpiry.timer);
+    collect: quitCollect({
+      installedUpdates,
+      statePaths,
+      takeAttachmentTask: () => {
+        const task = pendingChatGptAttachmentTask;
+        pendingChatGptAttachmentTask = null;
+        return task;
+      },
+      takeAgentCheck: () => {
+        const check = activeCodexAgentCheck;
+        activeCodexAgentCheck = null;
+        return check;
+      },
+      takeProductAgent: () => {
+        const session = activeProductAgentSession;
+        activeProductAgentSession = null;
+        return session;
+      },
+      takePersistedProductAgentExpiry: () => {
+        const expiry = persistedProductAgentExpiry;
         persistedProductAgentExpiry = null;
-      }
-      if (productAgent?.expiryTimer) clearTimeout(productAgent.expiryTimer);
-      productAgent?.host.dispose();
-      if (productAgent) {
-        closers.push({
-          name: "product-agent",
-          close: () => productAgent.client.close(),
-        });
-      }
-      for (const client of hostCheckClients) {
-        closers.push({ name: "host-check", close: () => client.close() });
-      }
-      const connector = secureMcpConnectorRuntime;
-      const core = desktopGoCore;
-      const savedChat = bridge.saved.get();
-      const quitStartDeadlineAt =
-        connector && (connectorStartInFlight || startupConnectionChecking)
-          ? Math.min(
-              context.deadlineAt,
-              Date.now() + CONNECTOR_START_QUIT_BUDGET_MS,
-            )
-          : undefined;
-      connectorStartCancellation?.abort();
-      let beforeCore: OwnedCloser | null = null;
-      if (connector) {
-        const inFlightStart = connectorStartInFlight;
-        beforeCore = {
-          name: "connector",
-          close: async () => {
-            try {
-              await stopAndConfirmComputerMcp(
-                connector,
-                inFlightStart,
-                core,
-                savedChat,
-                undefined,
-                undefined,
-                quitStartDeadlineAt,
-              );
-            } finally {
-              // Even an unconfirmed MCP drain must close account admission.
-              // close() waits for already admitted work; it does not cancel Send
-              // or turn the rejected connector close into a confirmed drain.
-              if (savedChat) {
-                await savedChat.close();
-                if (bridge.saved.get() === savedChat) bridge.saved.set(null);
-              }
-            }
-          },
-        };
-      } else if (savedChat) {
-        bridge.saved.set(null);
-        beforeCore = {
-          name: "saved-chat-bridge",
-          close: () => savedChat.close(),
-        };
-      }
-      closers.push(
-        ...goCoreQuitClosers(
-          beforeCore,
-          core
-            ? () =>
-                observeOperation(
-                  operationsStore(),
-                  { source: "You", kind: "hub.stop", target: {} },
-                  () => core.close(),
-                )
-            : null,
-          () => Date.now() < context.deadlineAt,
-          quitStartDeadlineAt,
-        ),
-      );
-      const model = modelLifecycle;
-      modelLifecycle = null;
-      if (model) {
-        closers.push({ name: "model-endpoint", close: () => model.stop() });
-      }
-      const routeB = contextHost.routeB.get();
-      contextHost.routeB.set(null);
-      if (routeB)
-        closers.push({ name: "route-b", close: () => routeB.close() });
-      const relay = bridge.relay.get();
-      bridge.relay.set(null);
-      if (relay)
-        closers.push({ name: "caller-relay", close: () => relay.close() });
-      disposeChatGptRoutes();
-      disposeTaskViews("runtime");
-      for (const [lifetime, name] of ownedLocalRuntimes) {
-        closers.push({ name, close: () => lifetime.close() });
-      }
-      stopRuntime();
-      return closers;
-    },
+        return expiry;
+      },
+      hostCheckClients,
+      secureMcpConnectorRuntime: () => secureMcpConnectorRuntime,
+      desktopGoCore: () => desktopGoCore,
+      savedBridge: bridge.saved,
+      connectorStartInFlight: () => connectorStartInFlight,
+      startupConnectionChecking: () => startupConnectionChecking,
+      connectorStartCancellation: () => connectorStartCancellation,
+      connectorStartQuitBudgetMs: CONNECTOR_START_QUIT_BUDGET_MS,
+      stopAndConfirmComputerMcp,
+      operationsStore,
+      takeModelLifecycle: () => {
+        const model = modelLifecycle;
+        modelLifecycle = null;
+        return model;
+      },
+      takeRouteB: () => {
+        const routeB = contextHost.routeB.get();
+        contextHost.routeB.set(null);
+        return routeB;
+      },
+      takeRelay: () => {
+        const relay = bridge.relay.get();
+        bridge.relay.set(null);
+        return relay;
+      },
+      disposeChatGptRoutes,
+      disposeRuntimeTaskViews: () => disposeTaskViews("runtime"),
+      ownedLocalRuntimes,
+      stopRuntime,
+      now: () => Date.now(),
+    }),
   });
   // The pre-drain steps run once as the drain's claim steps, before
   // preparation can wait (see onClaim above). Abort is idempotent;
