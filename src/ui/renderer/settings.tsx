@@ -19,14 +19,7 @@ import {
   parseNavigationShortcuts,
   type NavigationShortcuts,
 } from "../../pkg/ipc/navigation-shortcuts";
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -42,13 +35,24 @@ import { GuidedWorkspaceAccess } from "../guided-workspace-access";
 import { onboardingFacts } from "../guided-onboarding";
 import { signInPresentation } from "./sign-in-presentation";
 import { computerSetup } from "./computer-setup";
-import { visibleSetupSection, type SetupSection } from "./setup-checklist";
 import { commandAllowed, dependencyFences } from "./command-eligibility";
+import {
+  actionFeedback,
+  feedbackPage,
+  intention,
+  retainedSetupIntents,
+  settledEdit,
+  soleIntent,
+  useSettingsFeedback,
+  useSetupIntents,
+  useSettingsAttention,
+  type FeedbackPage,
+} from "../../../apps/desktop/renderer/intents";
+export { retainedSetupIntents, useSetupIntents, useSettingsAttention };
 import type {
   Destination,
   Intent,
   RendererFacade,
-  SettingsPage,
   WindowSnapshot,
 } from "./contract";
 
@@ -85,127 +89,6 @@ type PageProps = SettingsProps & {
   settings: ProductSettings;
   actions: Actions;
 };
-const intention = (kind: string, workspaceId = "") =>
-  `settings:${kind}:${workspaceId}`;
-type PageFeedback = Readonly<{
-  request: object;
-  text: string;
-  result: Intent | null;
-  origin: Destination;
-}>;
-type FeedbackPage = SettingsPage | `setup:${SetupSection}`;
-function feedbackPage(destination: Destination): FeedbackPage {
-  return destination.area === "setup"
-    ? `setup:${visibleSetupSection(destination.setupStep)}`
-    : destination.page;
-}
-function createFeedback() {
-  let revision = 0;
-  const listeners = new Set<() => void>();
-  return {
-    pages: {} as Partial<Record<FeedbackPage, PageFeedback>>,
-    intents: {} as Record<string, Intent>,
-    unretained: false,
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
-    getSnapshot: () => revision,
-    changed() {
-      revision++;
-      listeners.forEach((listener) => listener());
-    },
-  };
-}
-// Window-owned presentation receipts survive page dismissal. No command bodies,
-// credentials or authority are cached; the facade still owns operation outcomes.
-const feedbackByWindow = new WeakMap<
-  RendererFacade,
-  ReturnType<typeof createFeedback>
->();
-function useSettingsFeedback(facade: RendererFacade) {
-  let feedback = feedbackByWindow.get(facade);
-  if (!feedback) {
-    feedback = createFeedback();
-    feedbackByWindow.set(facade, feedback);
-  }
-  useSyncExternalStore(feedback.subscribe, feedback.getSnapshot);
-  return feedback;
-}
-function settledEdit(
-  result: Intent | "unretained" | null,
-  snapshot: WindowSnapshot,
-) {
-  if (
-    !result ||
-    result === "unretained" ||
-    !result.id.startsWith("settings:computer.apply-workspace-edit:")
-  )
-    return null;
-  const current = snapshot.intents[result.id];
-  return current &&
-    current !== result &&
-    (current.state === "applied" || current.state === "refused")
-    ? current
-    : null;
-}
-/** Retained transport outcomes also fence Setup when the facade lost its receipt. */
-export function retainedSetupIntents(
-  facade: RendererFacade,
-  snapshot: WindowSnapshot,
-): readonly Intent[] {
-  const feedback = feedbackByWindow.get(facade);
-  if (!feedback) return [];
-  return [
-    ...Object.values(feedback.intents).map(
-      (intent) => settledEdit(intent, snapshot) ?? intent,
-    ),
-    ...(feedback.unretained
-      ? [{ id: "setup:unretained", state: "unknown" as const, code: null }]
-      : []),
-  ];
-}
-export function useSetupIntents(
-  facade: RendererFacade,
-  snapshot: WindowSnapshot,
-) {
-  useSettingsFeedback(facade);
-  return retainedSetupIntents(facade, snapshot);
-}
-export function useSettingsAttention(
-  facade: RendererFacade,
-  snapshot: WindowSnapshot,
-) {
-  const feedback = useSettingsFeedback(facade);
-  return Boolean(
-    feedback.unretained ||
-    Object.values(feedback.intents).some(
-      (intent) => intent.state === "unknown" && !settledEdit(intent, snapshot),
-    ),
-  );
-}
-function actionFeedback(result: Intent): string {
-  if (result.state === "pending") return "Saving or checking…";
-  if (result.state === "unknown" || result.code === "SETTINGS_WRITE_FAILED")
-    return "Farol could not confirm the last action. Refresh its saved result before continuing; do not repeat it.";
-  if (result.state === "refused")
-    return "The action could not be completed. Check the setup guide before trying again.";
-  return "Saved.";
-}
-// Evidence carries a revision, but no request ID. If another facade intent
-// changed during a picker/preview, do not attribute its evidence to our action.
-function soleIntent(
-  before: WindowSnapshot,
-  after: WindowSnapshot,
-  kind: string,
-  id = intention(kind),
-): boolean {
-  return Object.entries(after.intents).every(
-    ([key, value]) => key === id || before.intents[key] === value,
-  );
-}
 function Group({
   title,
   children,
