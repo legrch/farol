@@ -5652,8 +5652,11 @@ describe("ChatGPT route streaming observation", () => {
   });
 
   it("waits through an interim missing stop control before cancelling", async () => {
+    // The bind, the missing control, the activation; the confirmation probe
+    // is answered by the activity reader.
     const executeJavaScript = vi
       .fn()
+      .mockResolvedValueOnce({ bound: true, path: "https://chatgpt.com" })
       .mockResolvedValueOnce({ activated: false })
       .mockResolvedValueOnce({ activated: true })
       .mockResolvedValueOnce({ running: false });
@@ -5666,7 +5669,7 @@ describe("ChatGPT route streaming observation", () => {
     ).record(true);
 
     await expect(candidate.cancelActiveTask()).resolves.toBe("cancelled");
-    expect(executeJavaScript).toHaveBeenCalledTimes(2);
+    expect(executeJavaScript).toHaveBeenCalledTimes(3);
   });
 });
 

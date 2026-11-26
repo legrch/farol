@@ -72,6 +72,27 @@ export const taskProbeSchema = z.strictObject({
 
 export const activityProbeSchema = z.strictObject({ running: z.boolean() });
 
+// What the cancellation scripts answer. Each one checks inside the page that it
+// is still the document the cancellation was bound to, and otherwise touches
+// nothing and says so: `navigated` for another path or a replaced document,
+// `expired` for a click script that arrived after its deadline.
+export const cancelBoundSchema = z.union([
+  navigatedTaskSchema,
+  z.strictObject({
+    bound: z.literal(true),
+    path: z.string().min(1).max(2_048),
+  }),
+]);
+export const cancelActivationSchema = z.union([
+  navigatedTaskSchema,
+  z.strictObject({ expired: z.literal(true) }),
+  activatedControlSchema,
+]);
+export const cancelConfirmationSchema = z.union([
+  navigatedTaskSchema,
+  activityProbeSchema,
+]);
+
 export const appBindingSchema = z.discriminatedUnion("state", [
   z.strictObject({ state: z.literal("bound") }),
   z.strictObject({ state: z.literal("navigated") }),

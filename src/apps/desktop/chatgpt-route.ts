@@ -17,6 +17,7 @@ import {
   toggleChatGptSidebarScript,
   verifyChatGptAppScript,
 } from "./chatgpt/scripts";
+import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   CHATGPT_PARTITION,
@@ -148,6 +149,7 @@ import {
   type ConnectionCheckDocument,
   type ConversationUrls,
   type ManualTargets,
+  type TaskCancelOutcome,
 } from "../../../apps/desktop/chat/conversation";
 import {
   createSavedChatFollowUp,
@@ -251,6 +253,10 @@ export type ChatGptRouteOptions = Readonly<{
   windowPresentation?: ChatGptWindowPresentation;
   surfaceFactory?: ChatGptRouteSurfaceFactory;
   title?: string;
+  // The task was admitted as a Codex host thread (Route B): Farol itself
+  // submits its turns, so a Cancel binds the conversation the turn in flight
+  // pinned. Absent for an owner Browser task and for a restored task.
+  routeBTask?: boolean;
   onClosed?: (conversationUrl: string | null, taskRunning: boolean) => void;
   onConversationChanged?: (conversationUrl: string | null) => void;
   onTaskActivityChanged?: (
@@ -459,6 +465,12 @@ export class ChatGptRoute {
   private routeDocumentGeneration = 0;
   private disposing = false;
   private taskInFlight = false;
+  // The identity the turn in flight relies on, while one runs; see
+  // `TaskCancelTurn`. Written only by `runReadonlyTask`.
+  private activeTurn: {
+    dispatchIdentityUrl: string;
+    pinnedConversationUrl: string | null;
+  } | null = null;
   private taskObservationGeneration = 0;
   private opening: Promise<ChatGptOpenResult> | null = null;
   private entryUrl: string;
@@ -622,6 +634,14 @@ export class ChatGptRoute {
         ++this.taskObservationGeneration;
       },
       observedRunning: () => this.activity.running() === true,
+      admittedAsRouteB: () => this.options.routeBTask === true,
+      turn: () => (this.activeTurn === null ? null : { ...this.activeTurn }),
+      now: () => Date.now(),
+      newToken: () => randomUUID(),
+      after: (callback, ms) => {
+        const timer = setTimeout(callback, ms);
+        return () => clearTimeout(timer);
+      },
       delay: (ms) => delay(ms),
       recordStopped: (contents) => {
         if (this.options.onTaskActivityChanged) {
@@ -1739,6 +1759,16 @@ export class ChatGptRoute {
       // acknowledged, the page is already committed and the poll loop below
       // owns tracking it from there.
       const dispatchIdentityUrl = candidate.webContents.getURL();
+      // A Cancel of this turn binds this identity, so it is published as soon
+      // as it exists and follows the pin below.
+      const activeTurn = {
+        dispatchIdentityUrl,
+        pinnedConversationUrl: canonicalChatGptConversationUrl(
+          dispatchIdentityUrl,
+          this.options.e2eOrigin,
+        ),
+      };
+      this.activeTurn = activeTurn;
       const dispatchDocumentGeneration = this.routeDocumentGeneration;
       const dispatchIdentityLost = (): boolean => {
         const active = this.routeWindow;
@@ -2162,6 +2192,7 @@ export class ChatGptRoute {
           };
         }
         pinnedConversationUrl = pinning.pinned;
+        activeTurn.pinnedConversationUrl = pinnedConversationUrl;
         if (
           (profile === "temporary-instant" ||
             profile === "connector-instant") &&
@@ -2230,7 +2261,10 @@ export class ChatGptRoute {
               ...correlation(),
             };
           }
-          if (createdByReceipt) pinnedConversationUrl = createdConversation;
+          if (createdByReceipt) {
+            pinnedConversationUrl = createdConversation;
+            activeTurn.pinnedConversationUrl = pinnedConversationUrl;
+          }
           currentUrl = afterReceiptUrl;
           if (receipt === true) {
             timing("receipt_confirmed");
@@ -2306,7 +2340,10 @@ export class ChatGptRoute {
             ...correlation(),
           };
         }
-        if (createdBySubmission) pinnedConversationUrl = createdConversation;
+        if (createdBySubmission) {
+          pinnedConversationUrl = createdConversation;
+          activeTurn.pinnedConversationUrl = pinnedConversationUrl;
+        }
         if (!probe.success) {
           return {
             state: "outcome_unknown",
@@ -2492,6 +2529,7 @@ export class ChatGptRoute {
       };
     } finally {
       timing("finished");
+      this.activeTurn = null;
       this.taskInFlight = false;
     }
   }
@@ -2722,7 +2760,7 @@ export class ChatGptRoute {
     return this.conversationUrls.retained();
   }
 
-  cancelActiveTask(): Promise<"cancelled" | "not_running" | "outcome_unknown"> {
+  cancelActiveTask(): Promise<TaskCancelOutcome> {
     return this.cancelTask();
   }
 

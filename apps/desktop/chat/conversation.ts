@@ -3,11 +3,17 @@ import {
   canonicalChatGptConversationUrl,
 } from "../../../src/apps/desktop/chatgpt-page-policy";
 import {
+  cancelBindScript,
+  cancelBindingPath,
+  cancelConfirmationProbe,
   cancelTaskScript,
-  activityProbe,
   connectionCheckDocumentProbe,
 } from "../../../src/apps/desktop/chatgpt/scripts";
-import { activatedControlSchema, activityProbeSchema } from "./probe";
+import {
+  cancelActivationSchema,
+  cancelBoundSchema,
+  cancelConfirmationSchema,
+} from "./probe";
 import { temporaryChatUrl } from "./open";
 
 // What the ChatGPT route says about the conversation it holds: which address
@@ -133,7 +139,10 @@ export function createConversationUrls<Contents extends ConversationContents>(
 
 // Cancelling a task --------------------------------------------------------
 
-export type TaskCancelOutcome = "cancelled" | "not_running" | "outcome_unknown";
+// `page_changed`: the page shown is not the one this Cancel is bound to, and
+// nothing was clicked, superseded or recorded.
+export type TaskCancelOutcome =
+  "cancelled" | "not_running" | "outcome_unknown" | "page_changed";
 
 export type TaskCancelContents = Readonly<{
   executeJavaScript: (script: string, gesture?: boolean) => Promise<unknown>;
@@ -142,6 +151,14 @@ export type TaskCancelContents = Readonly<{
 export type TaskCancelSurface<Contents extends TaskCancelContents> = Readonly<{
   webContents: Contents;
   isDestroyed: () => boolean;
+}>;
+
+// The identity a Route B turn in flight relies on for its own answer: the
+// address it was sent from, and the conversation it pinned once the page showed
+// the one it created.
+export type TaskCancelTurn = Readonly<{
+  dispatchIdentityUrl: string;
+  pinnedConversationUrl: string | null;
 }>;
 
 export type TaskCancelPorts<
@@ -154,6 +171,17 @@ export type TaskCancelPorts<
   supersedeObservation: () => void;
   // The activity watch last saw the task running.
   observedRunning: () => boolean;
+  // Farol submitted this task's turns: it was admitted as a Codex host thread.
+  // A restored task and a Browser task the owner typed into are not.
+  admittedAsRouteB: () => boolean;
+  // The turn Farol itself has in flight on this route, if any.
+  turn: () => TaskCancelTurn | null;
+  // The wall clock the page shares: click scripts carry an absolute expiry.
+  now: () => number;
+  // A fresh, unpredictable token, for the document and for each click.
+  newToken: () => string;
+  // Arms one timer and returns what cancels it.
+  after: (callback: () => void, ms: number) => () => void;
   delay: (ms: number) => Promise<void>;
   // The route's own write: the task is observed stopped on these contents.
   recordStopped: (contents: Contents) => void;
@@ -166,35 +194,112 @@ const STOP_ACTIVATION_GAP_MS = 100;
 // After the stop, the page is asked this many times, this far apart.
 const STOP_CONFIRMATION_POLLS = 20;
 const STOP_CONFIRMATION_GAP_MS = 100;
+// Every call into the page may take this long. A call that stalls past it is
+// outcome-unknown, so a stuck renderer cannot hold the route's task gate.
+export const STOP_PAGE_CALL_DEADLINE_MS = 5_000;
+// A click script stops being valid this long after it was issued, strictly
+// before the deadline above, so a script that was queued behind a stalled
+// call and runs after the canceller gave up refuses to click.
+export const STOP_SCRIPT_EXPIRY_MS = 4_000;
+const PAGE_CALL_TIMED_OUT = Symbol("page-call-timed-out");
 
 /**
  * Activates the page's own stop control and then waits for the page to say the
  * task stopped. An unreadable answer, a lost page or a control that never
  * activated for a running task is `outcome_unknown`, never `cancelled`.
+ *
+ * A Cancel is bound to one document, and its binding key is the page's whole
+ * main-frame path. A turn Farol itself has in flight on a Codex host thread
+ * (Route B) binds the path of the conversation the turn pinned, otherwise the
+ * address it was sent from: the identity the turn relies on for its own
+ * answer, so the Cancel is never weaker than the turn. Every other task (an
+ * owner Browser task, a restored task, a turn the owner typed) binds the page
+ * shown when the Cancel starts. One script reads that path and stamps the
+ * window together; every click and every confirmation then requires both in
+ * the page, so a page that moved (the path) or was replaced (the stamp) is
+ * never clicked and never answers for the task. Each click is a script of its
+ * own with a token it spends first and an expiry before the page-call
+ * deadline.
+ *
+ * A page that moved before any click is `page_changed`: nothing was clicked,
+ * and the observation is not superseded. After a click may have happened, a
+ * moved page is `outcome_unknown`. A call that stalls past its deadline is
+ * `outcome_unknown` too. Cancel is single-flight: a second call while one runs
+ * is that one's result.
  */
 export function createTaskCanceller<
   Contents extends TaskCancelContents,
   Surface extends TaskCancelSurface<Contents>,
 >(ports: TaskCancelPorts<Contents, Surface>): () => Promise<TaskCancelOutcome> {
-  return async () => {
-    ports.supersedeObservation();
+  const cancelBound = async (
+    supersede: () => void,
+  ): Promise<TaskCancelOutcome> => {
     const candidate = ports.surface();
     if (!candidate || candidate.isDestroyed() || !ports.loaded()) {
       return "not_running";
     }
+    const turn = ports.admittedAsRouteB() ? ports.turn() : null;
+    let expectedPath: string | null = null;
+    if (turn !== null) {
+      expectedPath = cancelBindingPath(
+        turn.pinnedConversationUrl ?? turn.dispatchIdentityUrl,
+      );
+      if (expectedPath === null) return "page_changed";
+    }
+    const alive = (): boolean =>
+      ports.surface() === candidate && !candidate.isDestroyed();
+    const pageCall = async (script: string): Promise<unknown> => {
+      let cancelTimer: (() => void) | undefined;
+      try {
+        return await Promise.race([
+          candidate.webContents.executeJavaScript(script, true),
+          new Promise<typeof PAGE_CALL_TIMED_OUT>((resolve) => {
+            cancelTimer = ports.after(
+              () => resolve(PAGE_CALL_TIMED_OUT),
+              STOP_PAGE_CALL_DEADLINE_MS,
+            );
+          }),
+        ]);
+      } finally {
+        cancelTimer?.();
+      }
+    };
     try {
+      const documentToken = ports.newToken();
+      const bound = cancelBoundSchema.safeParse(
+        await pageCall(cancelBindScript(expectedPath, documentToken)),
+      );
+      if (!bound.success || !alive()) return "outcome_unknown";
+      // The page is not the one the turn relies on: nothing was touched.
+      if ("navigated" in bound.data) return "page_changed";
+      const path = bound.data.path;
       const wasObservedRunning = ports.observedRunning();
       const activationAttempts = wasObservedRunning
         ? STOP_ACTIVATION_ATTEMPTS
         : 1;
       let stopActivated = false;
       for (let attempt = 0; attempt < activationAttempts; attempt += 1) {
-        const activated = activatedControlSchema.safeParse(
-          await candidate.webContents.executeJavaScript(cancelTaskScript, true),
+        if (!alive()) return "outcome_unknown";
+        const activated = cancelActivationSchema.safeParse(
+          await pageCall(
+            cancelTaskScript(
+              path,
+              documentToken,
+              ports.newToken(),
+              ports.now() + STOP_SCRIPT_EXPIRY_MS,
+            ),
+          ),
         );
-        if (!activated.success) return "outcome_unknown";
+        // An unreadable or unanswered click may have happened.
+        if (!activated.success || !alive()) return "outcome_unknown";
+        // The page itself refused: no click happened on another page.
+        if ("navigated" in activated.data) return "page_changed";
+        if ("expired" in activated.data) return "outcome_unknown";
         if (activated.data.activated) {
           stopActivated = true;
+          // The click is verified and spent: only now is the turn's
+          // observation ended.
+          supersede();
           break;
         }
         if (!wasObservedRunning) return "not_running";
@@ -203,11 +308,13 @@ export function createTaskCanceller<
       if (!stopActivated) return "outcome_unknown";
       for (let attempt = 0; attempt < STOP_CONFIRMATION_POLLS; attempt += 1) {
         await ports.delay(STOP_CONFIRMATION_GAP_MS);
-        if (candidate.isDestroyed()) return "outcome_unknown";
-        const observed = activityProbeSchema.safeParse(
-          await candidate.webContents.executeJavaScript(activityProbe, true),
+        if (!alive()) return "outcome_unknown";
+        const observed = cancelConfirmationSchema.safeParse(
+          await pageCall(cancelConfirmationProbe(path, documentToken)),
         );
-        if (!observed.success) return "outcome_unknown";
+        if (!observed.success || !alive()) return "outcome_unknown";
+        // Another document is never an answer about this task.
+        if ("navigated" in observed.data) return "outcome_unknown";
         if (!observed.data.running) {
           ports.recordStopped(candidate.webContents);
           return "cancelled";
@@ -217,6 +324,29 @@ export function createTaskCanceller<
     } catch {
       return "outcome_unknown";
     }
+  };
+
+  const run = async (): Promise<TaskCancelOutcome> => {
+    let superseded = false;
+    const supersede = (): void => {
+      if (superseded) return;
+      superseded = true;
+      ports.supersedeObservation();
+    };
+    const outcome = await cancelBound(supersede);
+    // A refusal leaves a turn in flight observed; every other answer ends it.
+    if (outcome !== "page_changed") supersede();
+    return outcome;
+  };
+
+  let inFlight: Promise<TaskCancelOutcome> | null = null;
+  return () => {
+    if (inFlight !== null) return inFlight;
+    const started = run().finally(() => {
+      inFlight = null;
+    });
+    inFlight = started;
+    return started;
   };
 }
 

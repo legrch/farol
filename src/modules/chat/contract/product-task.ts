@@ -178,6 +178,7 @@ export const ProductTaskCommandResultSchema = z.discriminatedUnion("ok", [
       "TASK_STATE_UNAVAILABLE",
       "TASK_NOT_RUNNING",
       "TASK_CANCEL_FAILED",
+      "TASK_CANCEL_PAGE_CHANGED",
       "AGENT_NOT_READY",
       "AGENT_SCOPE_INVALID",
       "AGENT_ALREADY_RUNNING",

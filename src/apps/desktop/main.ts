@@ -1317,8 +1317,9 @@ function createLiveChatGptRoute(
   taskId: string,
   label: string,
   initialUrl?: string,
+  routeBTask?: boolean,
 ): ChatGptRoute {
-  return taskRoutes().live(taskId, label, initialUrl);
+  return taskRoutes().live(taskId, label, initialUrl, routeBTask);
 }
 
 function contextBinding(taskId: string): ContextBinding {

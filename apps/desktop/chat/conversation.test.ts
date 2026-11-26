@@ -731,7 +731,7 @@ describe("cancelling a task is single-flight", () => {
     const running = stopping(A);
     const harness = cancelHarness({
       ...running,
-      answer: (script, call) =>
+      answer: (_script, call) =>
         call === 1
           ? new Promise((resolve) => {
               gate.release = resolve;

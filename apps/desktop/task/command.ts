@@ -46,6 +46,7 @@ export type TaskCommandError =
   | "TASK_STATE_UNAVAILABLE"
   | "TASK_NOT_RUNNING"
   | "TASK_CANCEL_FAILED"
+  | "TASK_CANCEL_PAGE_CHANGED"
   | "AGENT_NOT_READY"
   | "AGENT_SCOPE_INVALID"
   | "AGENT_ALREADY_RUNNING"
@@ -232,7 +233,26 @@ export function createTaskCommands<Result>(ports: TaskCommandsPorts<Result>) {
     };
   }
 
+  // A Cancel in flight, by task: a second Cancel of the same task is the
+  // first one's result, and never a second click.
+  const cancelsInFlight = new Map<string, Promise<Result>>();
+
   async function run(value: unknown): Promise<Result> {
+    const parsed = parseCommand(value);
+    if (parsed.success && parsed.data.kind === "task.cancel") {
+      const taskId = parsed.data.taskId;
+      const held = cancelsInFlight.get(taskId);
+      if (held) return held;
+      const started = runCommand(value).finally(() => {
+        cancelsInFlight.delete(taskId);
+      });
+      cancelsInFlight.set(taskId, started);
+      return started;
+    }
+    return runCommand(value);
+  }
+
+  async function runCommand(value: unknown): Promise<Result> {
     const command = parseCommand(value);
     if (!command.success) return taskFailure("TASK_COMMAND_INVALID");
     if (desktopAdmission.closed())
@@ -471,6 +491,11 @@ export function createTaskCommands<Result>(ports: TaskCommandsPorts<Result>) {
         if (!route) return taskFailure("TASK_NOT_FOUND");
         const result = await route.cancelActiveTask();
         if (result === "not_running") return taskFailure("TASK_NOT_RUNNING");
+        // The page is not the one this Cancel is bound to: nothing was
+        // clicked, so the task and its record stay exactly as they were.
+        if (result === "page_changed") {
+          return taskFailure("TASK_CANCEL_PAGE_CHANGED");
+        }
         const lifecycle =
           result === "cancelled" ? "cancelled" : "outcome_unknown";
         liveTaskRegistry.setLifecycle(command.data.taskId, lifecycle);
