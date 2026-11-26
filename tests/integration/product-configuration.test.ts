@@ -714,7 +714,9 @@ describe("launch drift withdrawal", () => {
 describe("legacy live-only attachment capture at launch", () => {
   // A resume-eligible profile saved by an older build: the live attachment is
   // valid but `lastVerifiedAttachment` was never written.
-  async function liveOnlyProfile(options: { missingWorkspace?: boolean } = {}) {
+  async function liveOnlyProfile(
+    options: { missingWorkspace?: boolean; shell?: boolean } = {},
+  ) {
     const workspaceRoot = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "farol-legacy-workspace-")),
     );
@@ -751,6 +753,39 @@ describe("legacy live-only attachment capture at launch", () => {
       buildId: "c".repeat(64),
       protocol: "readonly-workspace/1",
     };
+    // Two intact folders with Shell evidence: a new build must re-verify both.
+    const identities = new Map([[workspaceId, rootIdentity]]);
+    if (options.shell) {
+      const secondRoot = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "farol-legacy-second-")),
+      );
+      roots.push(secondRoot);
+      const secondMeasured = await fs.lstat(secondRoot, { bigint: true });
+      const secondIdentity = {
+        device: String(secondMeasured.dev),
+        inode: String(secondMeasured.ino),
+      };
+      const second = await service.addReadonlyWorkspace({
+        root: secondRoot,
+        label: "Second",
+        rootIdentity: secondIdentity,
+      });
+      const secondId = approval(second.snapshot).workspaces[1]!.workspaceId;
+      identities.set(secondId, secondIdentity);
+      await service.updateComputerFilePolicy("approved-roots-v1");
+      await service.updateComputerCommands("workspace");
+      for (const [id, identity] of [
+        ...identities,
+        [workspaceId, rootIdentity],
+      ] as const)
+        expect(
+          (
+            await service.recordComputerVerification(id, verification, {
+              rootIdentity: identity,
+            })
+          ).ok,
+        ).toBe(true);
+    }
     await service.recordSecureMcpTunnelClient({
       executablePath: "/opt/homebrew/bin/tunnel-client",
       executableSha256: "a".repeat(64),
@@ -759,13 +794,14 @@ describe("legacy live-only attachment capture at launch", () => {
     });
     await service.configureSecureMcpTunnel({ tunnelId: "tunnel_farol" });
     await service.recordSecureMcpCredential("stored");
-    expect(
-      (
-        await service.recordComputerVerification(workspaceId, verification, {
-          rootIdentity,
-        })
-      ).ok,
-    ).toBe(true);
+    if (!options.shell)
+      expect(
+        (
+          await service.recordComputerVerification(workspaceId, verification, {
+            rootIdentity,
+          })
+        ).ok,
+      ).toBe(true);
     const computerGeneration = approval(service.snapshot()).generation;
     expect(
       (
@@ -800,7 +836,7 @@ describe("legacy live-only attachment capture at launch", () => {
     if (saved.status !== "ready") throw new Error("settings missing");
     saved.settings.connectors.secureMcp.lastVerifiedAttachment = null;
     await store.save(saved.settings);
-    return { root, store, workspaceRoot };
+    return { root, store, workspaceRoot, verification, identities };
   }
 
   function secureMcp(snapshot: ProductConfigurationSnapshot) {
@@ -812,7 +848,14 @@ describe("legacy live-only attachment capture at launch", () => {
   // that main hands to the resume as `driftSettled`, then the resume itself.
   // `start` stands in for the connector start, whose first owner write on a
   // resume is the stopped record that clears the live attachment.
-  async function launch(service: ProductConfigurationService) {
+  async function launch(
+    service: ProductConfigurationService,
+    options: {
+      buildId?: string;
+      verifyWorkspace?: (id: string) => Promise<{ ok: boolean }>;
+    } = {},
+  ) {
+    const stages: string[] = [];
     const withReservation = async (
       _kind: string,
       work: () => Promise<unknown>,
@@ -840,21 +883,21 @@ describe("legacy live-only attachment capture at launch", () => {
       launch: {
         environment: "preview",
         buildEnvironment: "preview",
-        buildId: "c".repeat(64),
+        buildId: options.buildId ?? "c".repeat(64),
         previousRunClean: true,
       },
       driftSettled,
       snapshot: () => service.snapshot(),
       cancelled: () => false,
       desktopAdmission: { closed: () => false, quitInProgress: false },
-      verifyWorkspace: async () => ({ ok: false }),
+      verifyWorkspace: options.verifyWorkspace ?? (async () => ({ ok: false })),
       start,
-      startupStage: () => undefined,
+      startupStage: (stage) => void stages.push(stage),
       window: () => null,
       startConnectorTransportWatch: () => undefined,
       finishConnectionCheck: () => undefined,
     });
-    return start;
+    return Object.assign(start, { stages });
   }
 
   // The first capture attempt at initialize fails once.
@@ -959,6 +1002,57 @@ describe("legacy live-only attachment capture at launch", () => {
     const after = secureMcp(service.snapshot());
     expect(after.attachment).toBeNull();
     expect(after.lastVerifiedAttachment).toBeNull();
+  });
+
+  it("does not carry a proof across an app change", async () => {
+    const { root } = await liveOnlyProfile();
+    const unsaved = await unsavedCapture(root);
+    const connector = secureMcp(unsaved.snapshot());
+    expect(connector.attachment).not.toBeNull();
+
+    expect(
+      (
+        await unsaved.selectSecureMcpChatGptApp({
+          name: "Farol",
+          tunnelId: connector.tunnelId!,
+          connectorGeneration: connector.generation,
+        })
+      ).ok,
+    ).toBe(true);
+
+    const after = secureMcp(unsaved.snapshot());
+    expect(after.chatgptApp?.name).toBe("Farol");
+    expect(after.attachment).toBeNull();
+    expect(after.lastVerifiedAttachment).toBeNull();
+  });
+
+  it("accepts its own verification refresh when the guard keeps the proof on a new build", async () => {
+    const { root, verification, identities } = await liveOnlyProfile({
+      shell: true,
+    });
+    const unsaved = await unsavedCapture(root);
+    const live = secureMcp(unsaved.snapshot()).attachment;
+    expect(live).not.toBeNull();
+    const buildId = "d".repeat(64);
+
+    const start = await launch(unsaved, {
+      buildId,
+      verifyWorkspace: (id) =>
+        unsaved.recordComputerVerification(
+          id,
+          { ...verification, buildId },
+          {
+            rootIdentity: identities.get(id)!,
+            expectedGeneration: approval(unsaved.snapshot()).generation,
+          },
+        ),
+    });
+
+    expect(start.stages).toEqual(["connector-resumed"]);
+    expect(start).toHaveBeenCalledOnce();
+    const after = secureMcp(unsaved.snapshot());
+    expect(after.attachment).toBeNull();
+    expect(after.lastVerifiedAttachment).toEqual(live);
   });
 
   it("resumes normally once the capture is saved", async () => {
