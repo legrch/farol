@@ -443,6 +443,60 @@ describe("observe", () => {
   });
 });
 
+describe("a stalled page read", () => {
+  const flush = async () => {
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+  };
+  const fire = (clock: ReturnType<typeof rig>["clock"], ms: number) => {
+    clock.t += ms;
+    for (const timer of clock.timers)
+      if (!timer.cancelled && timer.ms <= ms) timer.callback();
+  };
+
+  it.each([true, false])(
+    "settles observe() to the unrecognized observation at the readiness deadline (frame=%s)",
+    async (withFrame) => {
+      const gate = deferred<unknown>();
+      const fake = fakeSurface({ answer: () => gate.promise, withFrame });
+      const { observer, clock } = rig(fake);
+      const settled = vi.fn();
+      const pending = observer.observe().then((value) => {
+        settled(value);
+        return value;
+      });
+      await flush();
+      expect(settled).not.toHaveBeenCalled();
+      fire(clock, READINESS_OBSERVATION_MS);
+      await flush();
+      expect(settled).toHaveBeenCalledWith(UNRECOGNIZED);
+      // A late positive answer changes nothing and publishes no readiness.
+      gate.resolve(AUTHENTICATED);
+      await flush();
+      expect(await pending).toEqual(UNRECOGNIZED);
+      expect(observer.latest()).not.toMatchObject({ observation: READY });
+    },
+  );
+
+  it("never answers authenticated for a probe that resolves after the deadline", async () => {
+    const gate = deferred<unknown>();
+    const { observer, clock } = rig(
+      fakeSurface({ answer: () => gate.promise }),
+    );
+    const pending = observer.observe();
+    await flush();
+    clock.t += READINESS_OBSERVATION_MS + 1;
+    gate.resolve(AUTHENTICATED);
+    await flush();
+    await expect(pending).resolves.toEqual(UNRECOGNIZED);
+  });
+
+  it("cancels the deadline timer once the probe answered", async () => {
+    const { observer, clock } = rig();
+    await expect(observer.observe()).resolves.toEqual(READY);
+    expect(clock.timers.every((timer) => timer.cancelled)).toBe(true);
+  });
+});
+
 describe("observeSignInStatus", () => {
   it("reports authenticated and signed_out with a frozen binding and nothing published", async () => {
     for (const [answer, state] of [

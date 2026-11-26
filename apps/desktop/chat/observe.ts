@@ -4,6 +4,7 @@ import {
   type ChatGptPageObservation,
 } from "../../../src/apps/desktop/chatgpt-page-policy";
 import { readinessProbe } from "../../../src/apps/desktop/chatgpt/scripts";
+import { boundedProbe } from "./bounded";
 import { probeSchema } from "./probe";
 import type { SignInRead } from "./signin";
 
@@ -154,7 +155,13 @@ export function createReadinessObserver<Surface extends ObservedSurface>(
     read.surface.webContents.getURL() === read.url &&
     ports.route.loaded();
 
-  const readPage = async (userGesture: boolean): Promise<SignInRead> => {
+  // `deadlineAt` bounds the page script itself. The sign-in status read and
+  // the sign-in close already race this read against their own timers, so they
+  // pass none; `observe` has no other bound and always passes one.
+  const readPageUntil = async (
+    userGesture: boolean,
+    deadlineAt: number | null,
+  ): Promise<SignInRead> => {
     const unreachable = classifyChatGptPage({
       load: "failed",
       composerVisible: false,
@@ -183,12 +190,22 @@ export function createReadinessObserver<Surface extends ObservedSurface>(
       const frame = candidate.webContents.mainFrame;
       if (frame && (frame.isDestroyed() || frame.url !== currentUrl))
         return { observation: unrecognized, reason: "probe-threw" };
-      answer = frame
-        ? await frame.executeJavaScript(readinessProbe, userGesture)
-        : await candidate.webContents.executeJavaScript(
-            readinessProbe,
-            userGesture,
-          );
+      const run = () =>
+        frame
+          ? frame.executeJavaScript(readinessProbe, userGesture)
+          : candidate.webContents.executeJavaScript(
+              readinessProbe,
+              userGesture,
+            );
+      if (deadlineAt === null) {
+        answer = await run();
+      } else {
+        // A page that never answers, or answers late, is an unreadable page.
+        const read = await boundedProbe(ports.clock, run, deadlineAt);
+        if (read.status === "timeout")
+          return { observation: unrecognized, reason: "probe-threw" };
+        answer = read.value;
+      }
       if (
         frame &&
         (candidate.webContents.mainFrame !== frame ||
@@ -209,10 +226,16 @@ export function createReadinessObserver<Surface extends ObservedSurface>(
     };
   };
 
+  const readPage = (userGesture: boolean): Promise<SignInRead> =>
+    readPageUntil(userGesture, null);
+
   const observe = async (): Promise<ChatGptPageObservation> => {
     const document = capture();
     const { sequence, surface, documentGeneration, url } = document;
-    const read = await readPage(true);
+    const read = await readPageUntil(
+      true,
+      ports.clock.now() + READINESS_OBSERVATION_MS,
+    );
     const unknown: ChatGptPageObservation = {
       state: "unsupported",
       code: "CHATGPT_UI_UNRECOGNIZED",

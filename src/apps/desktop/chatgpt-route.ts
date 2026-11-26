@@ -115,9 +115,11 @@ import {
   type SignInObservation,
   type SignInRead,
 } from "../../../apps/desktop/chat/signin";
+import { boundedProbe } from "../../../apps/desktop/chat/bounded";
 import {
   createReadinessObserver,
   createTaskScriptRunner,
+  READINESS_OBSERVATION_MS,
   type ChatGptSignInStatusObservation,
 } from "../../../apps/desktop/chat/observe";
 import {
@@ -195,10 +197,23 @@ export type {
   ChatGptSignInStatusObservation,
 } from "../../../apps/desktop/chat/observe";
 
+// The window a saved-chat send polls for its proof; a proof is bounded by it.
+const SAVED_CHAT_WINDOW_MS = 30_000;
+
 const hardenedRouteSessions = new WeakSet<Session>();
 const routePermissionOwners = new WeakMap<WebContents, () => number | null>();
 const routePermissions = createRoutePermissions(routePermissionOwners);
 export const routeDownloadAllowed = routePermissions.downloadAllowed;
+
+// Task probes are bounded against the task deadline, which is a wall-clock
+// reading, with a real timer.
+const wallClock = {
+  now: () => Date.now(),
+  after: (callback: () => void, ms: number) => {
+    const timer = setTimeout(callback, ms);
+    return () => clearTimeout(timer);
+  },
+};
 
 // The sign-in close read is bounded by the real clock and a real timer.
 const boundedSignInObservation = createBoundedSignInObservation({
@@ -261,6 +276,9 @@ export type ChatGptRouteOptions = Readonly<{
   physicalContentProfile?: PhysicalPageContentProfile;
   taskTimeoutMs?: number;
   taskPollMs?: number;
+  // Waits between task polls. Defaults to a real timer; tests drive it with a
+  // fake clock so no ordering depends on host load.
+  taskPollDelay?: (ms: number) => Promise<void>;
   // Reported exactly once per `openForSignIn` call, when its window closes
   // (native close, the in-page "Return to Farol" control, or programmatic
   // shutdown) — never while it stays open, so a caller cannot race the
@@ -2389,7 +2407,7 @@ export class ChatGptRoute {
               outputText: observedText,
               ...correlation(),
             };
-          await delay(pollMs);
+          await this.pollDelay(pollMs);
           continue;
         }
         const growth = correlated
@@ -2397,7 +2415,7 @@ export class ChatGptRoute {
           : "unchanged";
         if (growth === "regressed") {
           stablePolls = 0;
-          await delay(pollMs);
+          await this.pollDelay(pollMs);
           continue;
         }
         if (growth === "diverged") {
@@ -2447,7 +2465,7 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
-        await delay(pollMs);
+        await this.pollDelay(pollMs);
       }
       return {
         state: "outcome_unknown",
@@ -2473,6 +2491,10 @@ export class ChatGptRoute {
       timing("finished");
       this.taskInFlight = false;
     }
+  }
+
+  private pollDelay(ms: number): Promise<void> {
+    return (this.options.taskPollDelay ?? delay)(ms);
   }
 
   async observeReadonlyTask(
@@ -2557,21 +2579,26 @@ export class ChatGptRoute {
         ) {
           return result("CHATGPT_TASK_PAGE_LOST");
         }
-        const probe = taskProbeSchema.safeParse(
-          await active.webContents.executeJavaScript(
-            taskProbeScript(
-              input.prompt,
-              [],
-              {
-                semantic: semanticOutput,
-                userId: input.turnUserId,
-                assistantId: correlatedAssistantId,
-              },
-              this.options.requiredAppName,
-            ),
-            true,
-          ),
+        // Each probe gets only the time left to the task deadline; a probe
+        // that stalls or answers after it ends the observation unknown.
+        const probeScript = taskProbeScript(
+          input.prompt,
+          [],
+          {
+            semantic: semanticOutput,
+            userId: input.turnUserId,
+            assistantId: correlatedAssistantId,
+          },
+          this.options.requiredAppName,
         );
+        const answered = await boundedProbe(
+          wallClock,
+          () => active.webContents.executeJavaScript(probeScript, true),
+          deadline,
+        );
+        if (answered.status === "timeout")
+          return result("CHATGPT_TASK_TIMEOUT");
+        const probe = taskProbeSchema.safeParse(answered.value);
         if (active.webContents.getURL() !== currentUrl)
           return result("CHATGPT_TASK_PAGE_LOST");
         if (!probe.success) return result("CHATGPT_TASK_ERROR");
@@ -2585,7 +2612,7 @@ export class ChatGptRoute {
         );
         if (turn.kind === "wait") {
           stablePolls = 0;
-          await delay(pollMs);
+          await this.pollDelay(pollMs);
           continue;
         }
         if (turn.kind === "changed") {
@@ -2627,7 +2654,7 @@ export class ChatGptRoute {
               turnUserId: input.turnUserId,
               turnAssistantId: correlatedAssistantId,
             };
-          await delay(pollMs);
+          await this.pollDelay(pollMs);
           continue;
         }
         const growth = textGrowth(observedText, probe.data.assistantText);
@@ -2674,7 +2701,7 @@ export class ChatGptRoute {
             turnAssistantId: correlatedAssistantId,
           };
         }
-        await delay(pollMs);
+        await this.pollDelay(pollMs);
       }
       return result("CHATGPT_TASK_TIMEOUT");
     } catch {
@@ -2990,7 +3017,12 @@ export class ChatGptRoute {
 
   /** Restricted saved-chat probes on this route's own isolated page only. */
   async savedChatReady(homeUrl: string): Promise<unknown> {
-    return this.savedChatScript(savedChatReadinessScript(homeUrl), homeUrl);
+    return this.savedChatScript(
+      savedChatReadinessScript(homeUrl),
+      homeUrl,
+      false,
+      READINESS_OBSERVATION_MS,
+    );
   }
 
   async savedChatInsert(homeUrl: string, message: string): Promise<unknown> {
@@ -3013,6 +3045,9 @@ export class ChatGptRoute {
     firstMessageDigest: string,
     titleDigest: string,
     requireHistory: boolean,
+    // What the caller has left of its own window. A proof that finishes inside
+    // it is never cut short; the default is the saved-chat send window.
+    budgetMs: number = SAVED_CHAT_WINDOW_MS,
   ): Promise<unknown> {
     return this.savedChatScript(
       savedChatProofScript(
@@ -3022,6 +3057,8 @@ export class ChatGptRoute {
         requireHistory,
       ),
       conversationUrl,
+      false,
+      budgetMs,
     );
   }
 
@@ -3056,14 +3093,21 @@ export class ChatGptRoute {
     },
     canonicalConversationUrl: (url) =>
       canonicalChatGptConversationUrl(url, this.options.e2eOrigin),
+    clock: wallClock,
   });
 
   private savedChatScript(
     script: string,
     expectedUrl: string,
     allowNavigation = false,
+    budgetMs?: number,
   ): Promise<unknown> {
-    return this.savedChatProbes.run(script, expectedUrl, allowNavigation);
+    return this.savedChatProbes.run(
+      script,
+      expectedUrl,
+      allowNavigation,
+      budgetMs,
+    );
   }
 
   dispose(): void {
