@@ -22,6 +22,13 @@ import {
   type ChildTerminalObservation,
   type LifecycleIdentity,
 } from "./lifecycle.ts";
+import {
+  laneOf,
+  reservedRequestId,
+  validCallBody,
+  validCallDeadline,
+  wireRequestId,
+} from "./lane.ts";
 import { qualifyHandshake } from "./handshake.ts";
 import { createSequencer } from "./sequence.ts";
 import {
@@ -350,16 +357,7 @@ export class Client {
       return Promise.reject(
         new BridgeError("unavailable", "backend_unavailable"),
       );
-    const readLane =
-      method === "chat.browser.next"
-        ? "browser"
-        : method === "computer.settings.store.next"
-          ? "settings"
-          : method === "computer.connector.health"
-            ? "health"
-            : method === "computer.process.audit"
-              ? "audit"
-              : undefined;
+    const readLane = laneOf(method);
     const pollingObservation = method === "computer.connector.polling";
     const pendingDiagnostics = [...this.pending.values()].filter(
       (item) => item.healthObservation || item.observation,
@@ -374,36 +372,22 @@ export class Client {
         : this.pending.size - pendingDiagnostics >= 32)
     )
       return Promise.reject(new RequestNotSentError());
-    if (id.startsWith("desktop-poll-") || id.startsWith("desktop-call:"))
+    if (reservedRequestId(id))
       return Promise.reject(new BridgeError("refused", "reserved_request_id"));
     // A caller ID correlates one live call; wire replay protection is the
     // sequence and effect fences are module operation IDs.
     if ([...this.pending.values()].some((item) => item.callerId === id))
       return Promise.reject(new BridgeError("refused", "duplicate_request_id"));
-    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 30000)
+    if (!validCallDeadline(timeoutMs, deadlineAtMillis))
       return Promise.reject(new BridgeError("refused", "invalid_deadline"));
     if (
-      deadlineAtMillis !== undefined &&
-      !Number.isSafeInteger(deadlineAtMillis)
-    )
-      return Promise.reject(new BridgeError("refused", "invalid_deadline"));
-    if (
-      !validate("id", id) ||
-      (pollingObservation &&
-        (operationId !== undefined ||
-          !validate("ComputerConnectorPollingRequest", body))) ||
-      (readLane !== undefined &&
-        (operationId !== undefined ||
-          !validate(
-            readLane === "browser"
-              ? "BrowserNext"
-              : readLane === "settings"
-                ? "SettingsStoreNext"
-                : readLane === "audit"
-                  ? "ComputerProcessAuditRequest"
-                  : "ComputerConnectorHealthRequest",
-            body,
-          )))
+      !validCallBody({
+        id,
+        body,
+        operationId,
+        lane: readLane,
+        polling: pollingObservation,
+      })
     )
       return Promise.reject(new BridgeError("refused", "invalid_request"));
     const params = {
@@ -417,10 +401,7 @@ export class Client {
         : (this.polls.get(readLane) ?? 0n) + 1n;
     if (sequence > 18446744073709551615n)
       return Promise.reject(new RequestNotSentError());
-    const wireId =
-      readLane === undefined
-        ? `desktop-call:${this.pollNonce}:${sequence}`
-        : `desktop-poll-${readLane}:${this.pollNonce}:${sequence}`;
+    const wireId = wireRequestId(readLane, this.pollNonce, sequence);
     const request: Request = { jsonrpc: "2.0", id: wireId, method, params };
     if (!validate("Request", request))
       return Promise.reject(new BridgeError("refused", "invalid_request"));
