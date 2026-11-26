@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { constants as fsConstants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -52,6 +52,22 @@ import {
   sessionRecordSchema,
   sessionSchema,
 } from "./records";
+import {
+  admissionLeaseFile,
+  bindingKey,
+  boundaryKey,
+  checkpointDirectory,
+  checkpointKey,
+  completionFile,
+  digest,
+  ownerOperationKey,
+  publicationFile,
+  sessionFile,
+  sourceDirectory,
+  summaryAttemptDirectory,
+  summaryDirectory,
+  taskDirectory,
+} from "./layout";
 import type {
   ContextPublicationObservation,
   ContextPublicationPolicy,
@@ -130,23 +146,6 @@ type ParsedRecord = Readonly<{
   serialized: string;
 }>;
 
-function digest(value: unknown): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
-}
-
-function bindingKey(binding: ContextBinding): string {
-  return digest([
-    binding.ownerId,
-    binding.taskId,
-    binding.hostThreadId,
-    binding.sessionId,
-  ]);
-}
-
-function boundaryKey(request: CompactionRequest): string {
-  return digest([request.source, request.sourceBoundary]);
-}
-
 function admissionConflict(
   admission: ContextAdmission,
   binding: ContextBinding,
@@ -163,10 +162,6 @@ function admissionConflict(
     return { status: "conflict", reason: "request" };
   }
   return null;
-}
-
-function checkpointKey(checkpointId: string): string {
-  return digest([checkpointId]);
 }
 
 function positiveInteger(value: number, code: string): number {
@@ -344,10 +339,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
   }
 
   private completionFile(binding: ContextBinding, operationId: string): string {
-    return path.join(
-      this.taskDirectory(binding),
-      `completion-${checkpointKey(operationId)}.json`,
-    );
+    return completionFile(this.options.root, binding, operationId);
   }
 
   private async assertCompletionAdmission(
@@ -662,19 +654,14 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
   }
 
   private ownerOperationKey(sessionKey: string): string {
-    if (!/^[a-f0-9]{64}$/u.test(sessionKey))
-      throw new Error("CONTEXT_ADMISSION_LEASE_INVALID");
-    return path.join(this.options.root, "tasks", sessionKey, ".context-owner");
+    return ownerOperationKey(this.options.root, sessionKey);
   }
 
   private publicationFile(
     binding: ContextBinding,
     operationId: string,
   ): string {
-    return path.join(
-      this.checkpointDirectory(binding),
-      `publication-${checkpointKey(operationId)}.json`,
-    );
+    return publicationFile(this.options.root, binding, operationId);
   }
 
   private validatePublicationRequest(
@@ -2110,33 +2097,30 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
   }
 
   private taskDirectory(binding: ContextBinding): string {
-    return path.join(this.options.root, "tasks", bindingKey(binding));
+    return taskDirectory(this.options.root, binding);
   }
 
   private admissionLeaseFile(sessionKey: string): string {
-    if (!/^[a-f0-9]{64}$/u.test(sessionKey)) {
-      throw new Error("CONTEXT_ADMISSION_LEASE_KEY_INVALID");
-    }
-    return path.join(this.options.root, "tasks", sessionKey, "admission.lock");
+    return admissionLeaseFile(this.options.root, sessionKey);
   }
 
   private checkpointDirectory(binding: ContextBinding): string {
-    return path.join(this.taskDirectory(binding), "checkpoints");
+    return checkpointDirectory(this.options.root, binding);
   }
 
   private sourceDirectory(binding: ContextBinding): string {
-    return path.join(this.taskDirectory(binding), "sources");
+    return sourceDirectory(this.options.root, binding);
   }
 
   private summaryDirectory(binding: ContextBinding): string {
-    return path.join(this.taskDirectory(binding), "summaries");
+    return summaryDirectory(this.options.root, binding);
   }
 
   private summaryAttemptDirectory(binding: ContextBinding): string {
-    return path.join(this.taskDirectory(binding), "summary-attempts");
+    return summaryAttemptDirectory(this.options.root, binding);
   }
 
   private sessionFile(binding: ContextBinding): string {
-    return path.join(this.taskDirectory(binding), "session.json");
+    return sessionFile(this.options.root, binding);
   }
 }
