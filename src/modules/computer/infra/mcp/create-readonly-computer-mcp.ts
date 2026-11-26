@@ -55,7 +55,6 @@ import { correlationMatches, mutationCorrelationMatches } from "./correlation";
 import {
   BootstrapInputSchema,
   ConnectorVerificationInputSchema,
-  DEFAULT_READ_WINDOW_BYTES,
   EditInputSchema,
   GuidanceFetchInputSchema,
   GuidanceSearchInputSchema,
@@ -70,6 +69,43 @@ import {
   WriteInputSchema,
 } from "./fileinput";
 import { failure, fenced, shellResult } from "./results";
+import { guidanceResult, refusalResult, taskResponse } from "./envelope";
+import {
+  admissionRefused,
+  admissionUnavailable,
+  catalogueUnavailable,
+  historyUnavailable,
+  lookupUnavailable,
+  observeUnknown,
+  preferenceUnavailable,
+  resolveRefused,
+  tasksUnavailable,
+} from "./fallbacks";
+import {
+  gitOperation,
+  listOperation,
+  readOperation,
+  searchOperation,
+} from "./operations";
+import { mutationReceiptMatches, readonlyOutputMatches } from "./outputmatch";
+import {
+  connectorReceiptValue,
+  connectorRecordFailureCode,
+} from "./connectorvalue";
+import { RELAY_UNAVAILABLE, relayResult } from "./relayresult";
+import {
+  workspaceVerificationRefusal,
+  workspaceVerificationRequest,
+} from "./workspacecheck";
+import {
+  isRefusedOrUnknown,
+  publicDispatch,
+  publicResult,
+  publicStatus,
+  publicSteer,
+  safeChatCreate,
+  unknownOutcome,
+} from "./projections";
 import {
   CodexProjectPreferenceInputSchema,
   CodexProjectResolveInputSchema,
@@ -169,30 +205,13 @@ async function execute(
         response: { ok: false, errorCode: parsed.data.error.code },
       })
       .catch(() => undefined);
-    return {
-      content: [{ type: "text", text: JSON.stringify(parsed.data) }],
-      structuredContent: { ...parsed.data },
-      isError: true,
-    };
+    return refusalResult(parsed.data);
   }
   const value = parsed.data.value;
-  // A page answers a ranged read and only a ranged read: text without one
-  // would read as the whole file.
-  const outputMatchesOperation =
-    (request.operation.kind === "workspace.context" &&
-      value.output.kind === "workspace.context") ||
-    (request.operation.kind === "workspace.read" &&
-      value.output.kind === "workspace.text" &&
-      (request.operation.range === undefined) ===
-        (value.output.page === undefined)) ||
-    (request.operation.kind === "workspace.list" &&
-      value.output.kind === "workspace.entries") ||
-    (request.operation.kind === "workspace.search" &&
-      value.output.kind === "workspace.matches") ||
-    (request.operation.kind === "verification.run" &&
-      value.output.kind === "workspace.command" &&
-      value.output.command === request.operation.command);
-  if (!correlationMatches(request, value) || !outputMatchesOperation) {
+  if (
+    !correlationMatches(request, value) ||
+    !readonlyOutputMatches(request.operation, value.output)
+  ) {
     return failure("COMPUTER_CONTRACT_CORRELATION");
   }
   await proofRecorder
@@ -238,19 +257,12 @@ async function executeMutation(
     ) {
       return failure("COMPUTER_CONTRACT_CORRELATION");
     }
-    return {
-      content: [{ type: "text", text: JSON.stringify(parsed.data) }],
-      structuredContent: { ...parsed.data },
-      isError: true,
-    };
+    return refusalResult(parsed.data);
   }
   const value = parsed.data.value;
-  const expectedOperation =
-    operation.kind === "workspace.write" ? "write" : "edit";
   if (
     !mutationCorrelationMatches(request, value) ||
-    value.receipt.operation !== expectedOperation ||
-    value.receipt.relativePath !== operation.relativePath
+    !mutationReceiptMatches(operation, value.receipt)
   ) {
     return failure("COMPUTER_CONTRACT_CORRELATION");
   }
@@ -305,34 +317,19 @@ async function executeConnectorVerification(
       entryCount: output.entries.length,
       truncated: output.truncated,
     });
-    const value = {
-      ok: true,
-      challengeSha256: recorded.receipt.challengeSha256,
-      receiptSha256: recorded.receiptSha256,
+    const value = connectorReceiptValue({
+      recorded,
+      binding,
       workspaceId,
-      operation: "workspace.list" as const,
       entryCount: output.entries.length,
       truncated: output.truncated,
-      correlation: {
-        taskId: binding.taskId,
-        participantId: binding.participantId,
-        turnId: binding.turnId,
-        generation: binding.generation,
-      },
-    };
+    });
     return {
       content: [{ type: "text", text: JSON.stringify(value) }],
       structuredContent: value,
     };
   } catch (error) {
-    const code = error instanceof Error ? error.message : "";
-    if (code === "CONNECTOR_VERIFICATION_ALREADY_RECORDED") {
-      return failure("CONNECTOR_VERIFICATION_ALREADY_RECORDED");
-    }
-    if (code === "CONNECTOR_VERIFICATION_CHALLENGE_MISMATCH") {
-      return failure("CONNECTOR_VERIFICATION_CHALLENGE_MISMATCH");
-    }
-    return failure("CONNECTOR_VERIFICATION_RECEIPT_FAILED");
+    return failure(connectorRecordFailureCode(error));
   }
 }
 
@@ -344,30 +341,9 @@ async function executeCallerRelay(
   try {
     response = await relay.request(operation);
   } catch {
-    response = {
-      ok: false,
-      error: { code: "CALLER_RELAY_UNAVAILABLE", retry: "never" },
-    };
+    response = RELAY_UNAVAILABLE;
   }
-  if (!response.ok) {
-    return {
-      content: [{ type: "text", text: JSON.stringify(response) }],
-      structuredContent: response,
-      isError: true,
-    };
-  }
-  return {
-    content: [
-      {
-        type: "text",
-        text:
-          response.operation === "invoke"
-            ? response.output
-            : JSON.stringify(response.catalogue),
-      },
-    ],
-    structuredContent: response,
-  };
+  return relayResult(response);
 }
 
 export function createReadonlyComputerMcpServer(
@@ -449,11 +425,6 @@ export function createReadonlyComputerMcpServer(
       return afterRelease?.(...arguments_) ?? result;
     });
 
-  const taskResponse = (value: object, isError = false): CallToolResult => ({
-    content: [{ type: "text", text: JSON.stringify(value) }],
-    structuredContent: value,
-    ...(isError ? { isError: true } : {}),
-  });
   const codexReadAdmitted = (signal: AbortSignal): boolean => {
     try {
       return (
@@ -526,11 +497,7 @@ export function createReadonlyComputerMcpServer(
   }
 
   if (savedChat) {
-    const result = (value: object, isError: boolean): CallToolResult => ({
-      content: [{ type: "text", text: JSON.stringify(value) }],
-      structuredContent: value,
-      ...(isError ? { isError: true } : {}),
-    });
+    const result = taskResponse;
     server.registerTool(
       "chatgpt_chat_create",
       {
@@ -546,16 +513,10 @@ export function createReadonlyComputerMcpServer(
             operation: "create",
             request,
           });
-          const safe =
-            response.status === "unknown" || response.dispatchId !== request.key
-              ? { status: "outcome_unknown", dispatchId: request.key }
-              : response;
+          const safe = safeChatCreate(response, request.key);
           return result(safe, safe.status !== "verified");
         } catch {
-          return result(
-            { status: "outcome_unknown", dispatchId: request.key },
-            true,
-          );
+          return result(unknownOutcome(request.key), true);
         }
       }),
     );
@@ -579,10 +540,10 @@ export function createReadonlyComputerMcpServer(
             response.status !== "unknown" &&
             response.dispatchId !== dispatchId
           )
-            return result({ status: "outcome_unknown", dispatchId }, true);
+            return result(unknownOutcome(dispatchId), true);
           return result(response, response.status === "outcome_unknown");
         } catch {
-          return result({ status: "outcome_unknown", dispatchId }, true);
+          return result(unknownOutcome(dispatchId), true);
         }
       }),
     );
@@ -618,14 +579,7 @@ export function createReadonlyComputerMcpServer(
               result.status !== "resolved" && result.status !== "missing",
             );
           } catch {
-            return taskResponse(
-              {
-                status: "unavailable",
-                ...request,
-                code: "HANDOFF_PROJECT_PREFERENCE_LOOKUP_UNAVAILABLE",
-              },
-              true,
-            );
+            return taskResponse(lookupUnavailable(request), true);
           }
         }),
       );
@@ -656,19 +610,7 @@ export function createReadonlyComputerMcpServer(
               !["remembered", "resolved"].includes(result.status),
             );
           } catch {
-            return taskResponse(
-              {
-                status:
-                  request.operation === "remember"
-                    ? "outcome_unknown"
-                    : "unavailable",
-                key: request.key,
-                workspaceId: request.workspaceId,
-                projectId: request.projectId,
-                code: "HANDOFF_PROJECT_PREFERENCE_UNAVAILABLE",
-              },
-              true,
-            );
+            return taskResponse(preferenceUnavailable(request), true);
           }
         }),
       );
@@ -692,15 +634,7 @@ export function createReadonlyComputerMcpServer(
             );
             return taskResponse(result, result.status !== "tasks");
           } catch {
-            return taskResponse(
-              {
-                status: "unavailable",
-                workspaceId: request.workspaceId,
-                projectId: request.projectId,
-                code: "HANDOFF_PROJECT_TASKS_UNAVAILABLE",
-              },
-              true,
-            );
+            return taskResponse(tasksUnavailable(request), true);
           }
         }),
       );
@@ -727,14 +661,7 @@ export function createReadonlyComputerMcpServer(
               value.status === "refused" || value.status === "unavailable",
             );
           } catch {
-            return taskResponse(
-              {
-                status: "refused",
-                workspaceId: request.workspaceId,
-                code: "HANDOFF_PROJECT_RESOLVE_UNAVAILABLE",
-              },
-              true,
-            );
+            return taskResponse(resolveRefused(request.workspaceId), true);
           }
         }),
       );
@@ -761,25 +688,16 @@ export function createReadonlyComputerMcpServer(
                 return taskResponse(result, true);
               const threadRuntime = parseThreadRuntime(result.threadRuntime);
               if (!threadRuntime)
-                return taskResponse(
-                  { status: "outcome_unknown", threadId: request.threadId },
-                  true,
-                );
+                return taskResponse(observeUnknown(request.threadId), true);
               return taskResponse({ ...result, threadRuntime }, false);
             } catch {
-              return taskResponse(
-                { status: "outcome_unknown", threadId: request.threadId },
-                true,
-              );
+              return taskResponse(observeUnknown(request.threadId), true);
             }
           },
           (_request, context) =>
             codexReadAdmitted(context.mcpReq.signal)
               ? null
-              : taskResponse(
-                  { status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" },
-                  true,
-                ),
+              : taskResponse(admissionRefused(), true),
         ),
       );
     if (codexTasks.observeEnabled === true && codexTasks.history)
@@ -802,15 +720,7 @@ export function createReadonlyComputerMcpServer(
             );
             return taskResponse(result, result.status !== "history");
           } catch {
-            return taskResponse(
-              {
-                status: "unavailable",
-                threadId: request.threadId,
-                turnId: request.turnId,
-                code: "HANDOFF_HISTORY_UNAVAILABLE",
-              },
-              true,
-            );
+            return taskResponse(historyUnavailable(request), true);
           }
         }),
       );
@@ -832,10 +742,7 @@ export function createReadonlyComputerMcpServer(
             );
             return taskResponse(result, result.status !== "adopted");
           } catch {
-            return taskResponse(
-              { status: "outcome_unknown", dispatchId: request.turnId },
-              true,
-            );
+            return taskResponse(unknownOutcome(request.turnId), true);
           }
         }),
       );
@@ -853,28 +760,16 @@ export function createReadonlyComputerMcpServer(
           async ({ fresh }, context) => {
             const signal = context.mcpReq.signal;
             if (!codexReadAdmitted(signal))
-              return taskResponse(
-                {
-                  status: "unavailable",
-                  code: "HANDOFF_TASK_ADMISSION_DENIED",
-                },
-                true,
-              );
+              return taskResponse(admissionUnavailable(), true);
             try {
               const parsed = TaskModelCatalogueViewSchema.safeParse(
                 await codexTasks.models!(fresh ?? false, { signal }),
               );
               if (!codexReadAdmitted(signal))
-                return taskResponse(
-                  {
-                    status: "unavailable",
-                    code: "HANDOFF_TASK_ADMISSION_DENIED",
-                  },
-                  true,
-                );
+                return taskResponse(admissionUnavailable(), true);
               if (!parsed.success)
                 return taskResponse(
-                  { status: "unavailable", code: "TASK_MODEL_CATALOG_INVALID" },
+                  catalogueUnavailable("TASK_MODEL_CATALOG_INVALID"),
                   true,
                 );
               return taskResponse(
@@ -883,10 +778,7 @@ export function createReadonlyComputerMcpServer(
               );
             } catch {
               return taskResponse(
-                {
-                  status: "unavailable",
-                  code: "TASK_MODEL_CATALOG_UNAVAILABLE",
-                },
+                catalogueUnavailable("TASK_MODEL_CATALOG_UNAVAILABLE"),
                 true,
               );
             }
@@ -894,13 +786,7 @@ export function createReadonlyComputerMcpServer(
           (_input, context) =>
             codexReadAdmitted(context.mcpReq.signal)
               ? null
-              : taskResponse(
-                  {
-                    status: "unavailable",
-                    code: "HANDOFF_TASK_ADMISSION_DENIED",
-                  },
-                  true,
-                ),
+              : taskResponse(admissionUnavailable(), true),
         ),
       );
     server.registerTool(
@@ -918,19 +804,12 @@ export function createReadonlyComputerMcpServer(
             await codexTasks.create(request, { signal: context.mcpReq.signal }),
             request.key,
           );
-          const publicResult =
-            result.status === "dispatched"
-              ? { status: "dispatched", dispatchId: result.dispatchId }
-              : result;
           return taskResponse(
-            publicResult,
-            result.status === "refused" || result.status === "outcome_unknown",
+            publicDispatch(result),
+            isRefusedOrUnknown(result.status),
           );
         } catch {
-          return taskResponse(
-            { status: "outcome_unknown", dispatchId: request.key },
-            true,
-          );
+          return taskResponse(unknownOutcome(request.key), true);
         }
       }),
     );
@@ -957,10 +836,7 @@ export function createReadonlyComputerMcpServer(
               result.status !== "renamed" && result.status !== "recorded",
             );
           } catch {
-            return taskResponse(
-              { status: "outcome_unknown", dispatchId: request.dispatchId },
-              true,
-            );
+            return taskResponse(unknownOutcome(request.dispatchId), true);
           }
         }),
       );
@@ -981,17 +857,11 @@ export function createReadonlyComputerMcpServer(
               request.dispatchId,
             );
             return taskResponse(
-              result.status === "steered"
-                ? { status: "steered", dispatchId: result.dispatchId }
-                : result,
-              result.status === "refused" ||
-                result.status === "outcome_unknown",
+              publicSteer(result),
+              isRefusedOrUnknown(result.status),
             );
           } catch {
-            return taskResponse(
-              { status: "outcome_unknown", dispatchId: request.dispatchId },
-              true,
-            );
+            return taskResponse(unknownOutcome(request.dispatchId), true);
           }
         }),
       );
@@ -1017,17 +887,11 @@ export function createReadonlyComputerMcpServer(
               request.key,
             );
             return taskResponse(
-              result.status === "dispatched"
-                ? { status: "dispatched", dispatchId: result.dispatchId }
-                : result,
-              result.status === "refused" ||
-                result.status === "outcome_unknown",
+              publicDispatch(result),
+              isRefusedOrUnknown(result.status),
             );
           } catch {
-            return taskResponse(
-              { status: "outcome_unknown", dispatchId: request.key },
-              true,
-            );
+            return taskResponse(unknownOutcome(request.key), true);
           }
         }),
       );
@@ -1054,34 +918,19 @@ export function createReadonlyComputerMcpServer(
                 ? parseThreadRuntime(result.threadRuntime)
                 : null;
             if (result.status === "known" && !threadRuntime)
-              return taskResponse(
-                { status: "outcome_unknown", dispatchId },
-                true,
-              );
-            const publicResult =
-              result.status === "known"
-                ? {
-                    status: "known",
-                    dispatchId,
-                    turnStatus: result.turnStatus,
-                    threadRuntime,
-                  }
-                : result;
+              return taskResponse(unknownOutcome(dispatchId), true);
             return taskResponse(
-              publicResult,
+              publicStatus(result, dispatchId, threadRuntime),
               result.status === "outcome_unknown",
             );
           } catch {
-            return taskResponse(
-              { status: "outcome_unknown", dispatchId },
-              true,
-            );
+            return taskResponse(unknownOutcome(dispatchId), true);
           }
         },
         ({ dispatchId }, context) =>
           codexReadAdmitted(context.mcpReq.signal)
             ? null
-            : taskResponse({ status: "outcome_unknown", dispatchId }, true),
+            : taskResponse(unknownOutcome(dispatchId), true),
       ),
     );
     server.registerTool(
@@ -1107,34 +956,19 @@ export function createReadonlyComputerMcpServer(
                 ? parseThreadRuntime(result.threadRuntime)
                 : null;
             if (result.status === "running" && !threadRuntime)
-              return taskResponse(
-                { status: "outcome_unknown", dispatchId },
-                true,
-              );
-            const publicResult =
-              result.status === "completed"
-                ? { status: "completed", dispatchId, text: result.text }
-                : result.status === "running"
-                  ? { status: result.status, dispatchId, threadRuntime }
-                  : result.status === "failed" ||
-                      result.status === "interrupted"
-                    ? { status: result.status, dispatchId }
-                    : result;
+              return taskResponse(unknownOutcome(dispatchId), true);
             return taskResponse(
-              publicResult,
+              publicResult(result, dispatchId, threadRuntime),
               result.status === "outcome_unknown",
             );
           } catch {
-            return taskResponse(
-              { status: "outcome_unknown", dispatchId },
-              true,
-            );
+            return taskResponse(unknownOutcome(dispatchId), true);
           }
         },
         ({ dispatchId }, context) =>
           codexReadAdmitted(context.mcpReq.signal)
             ? null
-            : taskResponse({ status: "outcome_unknown", dispatchId }, true),
+            : taskResponse(unknownOutcome(dispatchId), true),
       ),
     );
   }
@@ -1168,35 +1002,18 @@ export function createReadonlyComputerMcpServer(
             let verified;
             try {
               verified = await contract.verifyWorkspaces(
-                {
-                  ...binding,
-                  callId: String(context.mcpReq.id),
-                  workspaces: entries.map((entry) => ({
-                    workspaceId: entry.workspaceId,
-                    ...(entry.root !== undefined && entry.approvedRoot
-                      ? { root: entry.root, approvedRoot: entry.approvedRoot }
-                      : {}),
-                  })),
-                },
+                workspaceVerificationRequest(
+                  binding,
+                  String(context.mcpReq.id),
+                  entries,
+                ),
                 context.mcpReq.signal ? { signal: context.mcpReq.signal } : {},
               );
             } catch {
               return failure("COMPUTER_CONTRACT_UNAVAILABLE");
             }
             if (verified.ok) return null;
-            const value = {
-              ok: false,
-              error: {
-                code: verified.error.code,
-                source: verified.error.source,
-                retry: "never",
-              },
-            };
-            return {
-              content: [{ type: "text", text: JSON.stringify(value) }],
-              structuredContent: value,
-              isError: true,
-            };
+            return workspaceVerificationRefusal(verified);
           },
         ),
       ),
@@ -1225,15 +1042,6 @@ export function createReadonlyComputerMcpServer(
     ),
   );
   const guidance = new PublishedGuidance();
-  const guidanceResult = (
-    value:
-      | ReturnType<PublishedGuidance["search"]>
-      | ReturnType<PublishedGuidance["fetch"]>,
-  ): CallToolResult => ({
-    content: [{ type: "text", text: JSON.stringify(value) }],
-    structuredContent: value,
-    ...(value.ok ? {} : { isError: true }),
-  });
   server.registerTool(
     "computer_guidance_search",
     {
@@ -1273,10 +1081,7 @@ export function createReadonlyComputerMcpServer(
         binding,
         String(context.mcpReq.id),
         workspaceId,
-        {
-          kind: "workspace.list",
-          relativePath,
-        },
+        listOperation(relativePath),
         context.mcpReq.signal,
       ),
     ),
@@ -1296,18 +1101,7 @@ export function createReadonlyComputerMcpServer(
         binding,
         String(context.mcpReq.id),
         workspaceId,
-        {
-          kind: "workspace.read",
-          relativePath,
-          ...(offset === undefined && length === undefined
-            ? {}
-            : {
-                range: {
-                  offset: offset ?? 0,
-                  length: length ?? DEFAULT_READ_WINDOW_BYTES,
-                },
-              }),
-        },
+        readOperation(relativePath, offset, length),
         context.mcpReq.signal,
         devMcpProof,
       ),
@@ -1328,11 +1122,7 @@ export function createReadonlyComputerMcpServer(
         binding,
         String(context.mcpReq.id),
         workspaceId,
-        {
-          kind: "workspace.search",
-          relativePath,
-          pattern,
-        },
+        searchOperation(relativePath, pattern),
         context.mcpReq.signal,
       ),
     ),
@@ -1352,11 +1142,7 @@ export function createReadonlyComputerMcpServer(
         binding,
         String(context.mcpReq.id),
         workspaceId,
-        {
-          kind: "verification.run",
-          command: "git.status",
-          relativePath: ".",
-        },
+        gitOperation("git.status"),
         context.mcpReq.signal,
       ),
     ),
@@ -1376,11 +1162,7 @@ export function createReadonlyComputerMcpServer(
         binding,
         String(context.mcpReq.id),
         workspaceId,
-        {
-          kind: "verification.run",
-          command: "git.head",
-          relativePath: ".",
-        },
+        gitOperation("git.head"),
         context.mcpReq.signal,
       ),
     ),
