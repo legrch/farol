@@ -134,6 +134,7 @@ describe("lease writer", () => {
       ownerPid: 4000,
       owner: { processStart: START, startedAtMs: Date.parse(START) },
       handle: "handle",
+      zone: null,
       now: () => 1_000,
     });
   const read = async () =>
@@ -211,6 +212,7 @@ describe("lease writer", () => {
         ownerStartedAtMs: 1,
         handle: "h",
         phase: "created",
+        zone: null,
         createdAt: 1,
         updatedAt: 1,
         children: [],
@@ -268,6 +270,25 @@ describe("one wall-clock start, one instant", () => {
         parse,
       ),
     ).toBe("unknown");
+  });
+  it("reads a later start as ended only under the zone the lease was written in", async () => {
+    const recorded = {
+      pid: 4000,
+      processStart: START,
+      startedAtMs: Date.parse(START),
+    };
+    expect(await observeLeaseProcess(recorded, answering(LATER))).toBe("ended");
+    expect(
+      await observeLeaseProcess(recorded, answering(LATER), undefined, false),
+    ).toBe("unknown");
+    // The same instant is the same process in any zone.
+    expect(
+      await observeLeaseProcess(recorded, answering(START), undefined, false),
+    ).toBe("live");
+    // A pid that is gone is gone in any zone.
+    expect(await observeLeaseProcess(recorded, absent, undefined, false)).toBe(
+      "ended",
+    );
   });
   it("still calls an absent pid ended whatever was recorded", async () => {
     expect(

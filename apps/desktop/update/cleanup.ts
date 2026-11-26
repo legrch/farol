@@ -38,10 +38,16 @@ export async function settleCleanupMarker(input: {
   file: string;
   marker: unknown;
   extractionsGone: boolean;
+  /**
+   * The update root as the same reclaim pass captured it. The outcome is about
+   * that directory, so it is confirmed again right before the unlink.
+   */
+  rootIdentity: Readonly<{ dev: bigint; ino: bigint }> | null;
   read(): Promise<unknown>;
 }): Promise<boolean> {
   const parsed = CleanupMarker.safeParse(input.marker);
-  if (!parsed.success || !input.extractionsGone) return false;
+  if (!parsed.success || !input.extractionsGone || input.rootIdentity === null)
+    return false;
   const { handle, operationRoot } = parsed.data;
   if (!inside(input.root, handle)) return false;
   if (operationRoot !== undefined) {
@@ -58,6 +64,15 @@ export async function settleCleanupMarker(input: {
     }
   }
   if (JSON.stringify(await input.read()) !== JSON.stringify(input.marker))
+    return false;
+  const root = await fs.lstat(input.root, { bigint: true });
+  if (
+    !root.isDirectory() ||
+    root.isSymbolicLink() ||
+    root.dev !== input.rootIdentity.dev ||
+    root.ino !== input.rootIdentity.ino ||
+    (await fs.realpath(input.root)) !== input.root
+  )
     return false;
   await fs.unlink(input.file);
   const parent = await fs.open(

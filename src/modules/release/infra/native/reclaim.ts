@@ -49,6 +49,12 @@ export type ReclaimReport = Readonly<{
   reclaimed: readonly string[];
   kept: readonly Readonly<{ entry: string; reason: KeptReason }>[];
   unscanned: readonly string[];
+  /**
+   * The update root as this pass captured it, for a caller that acts on the
+   * outcome and must confirm the root is still that directory. Null when the
+   * root itself could not be validated.
+   */
+  root: Readonly<{ dev: bigint; ino: bigint }> | null;
 }>;
 
 export type ReclaimPorts = Readonly<{
@@ -61,6 +67,11 @@ export type ReclaimPorts = Readonly<{
   removeDirectory(directory: string, force: boolean): Promise<void>;
   now(): number;
   log(message: string): void;
+  /**
+   * The `TZ` this process runs under (null when unset). A lease written under a
+   * different one is not trusted to say a pid was reused.
+   */
+  zone?: string | null;
   /**
    * Called for each staging parent after discovery and before it is read. It
    * exists so a test can change the tree at the one moment the identity checks
@@ -310,6 +321,10 @@ export async function reclaimExtractions(
         continue;
       }
       const lease = await readLease(full, ports.uid);
+      // The lease was read through the entry's path: confirm the entry is still
+      // the inode that was inspected, or what was read is not its lease.
+      const after = await fs.lstat(full, { bigint: true });
+      if (!sameDirectory(after, stat)) throw new ParentChanged();
       inspected.push({
         full,
         identity: { dev: stat.dev, ino: stat.ino },
@@ -382,13 +397,18 @@ export async function reclaimExtractions(
     reclaimed,
     kept,
     unscanned,
+    root: rootRef === null ? null : { dev: rootRef.dev, ino: rootRef.ino },
   };
 }
+
+const zoneOfProcess = (): string | null => process.env["TZ"] ?? null;
 
 async function judgeLeased(
   lease: ExtractionLease,
   ports: ReclaimPorts,
 ): Promise<Verdict> {
+  const sameZone =
+    lease.zone === (ports.zone === undefined ? zoneOfProcess() : ports.zone);
   const owner = await observeLeaseProcess(
     {
       pid: lease.ownerPid,
@@ -396,11 +416,15 @@ async function judgeLeased(
       startedAtMs: lease.ownerStartedAtMs,
     },
     ports.read,
+    undefined,
+    sameZone,
   );
   if (owner === "live") return keepFor("live owner");
   const children = [];
   for (const child of lease.children)
-    children.push(await observeLeaseProcess(child, ports.read));
+    children.push(
+      await observeLeaseProcess(child, ports.read, undefined, sameZone),
+    );
   if (children.includes("live")) return keepFor("live child");
   if (owner === "unknown" || children.includes("unknown"))
     return keepFor("unknown liveness");
@@ -429,8 +453,8 @@ async function removeExtraction(
   const unchanged = async () => {
     await verifyChain(chain);
     const now = await fs.lstat(entry.full, { bigint: true });
-    if (!sameDirectory(now, entry.identity))
-      throw new Error("extraction replaced");
+    // The extraction is a link in the same chain: a swap abandons the parent.
+    if (!sameDirectory(now, entry.identity)) throw new ParentChanged();
   };
   try {
     await unchanged();
@@ -479,7 +503,11 @@ function leaseConsistent(lease: ExtractionLease, ports: ReclaimPorts): boolean {
     lease.children.every(
       (child) =>
         child.startedAtMs === null ||
-        child.startedAtMs <= updatedAt + START_SKEW_MS,
+        // A child cannot have started before the owner that spawned it, nor
+        // after the lease was last updated.
+        (child.startedAtMs <= updatedAt + START_SKEW_MS &&
+          (ownerStartedAtMs === null ||
+            child.startedAtMs >= ownerStartedAtMs - START_SKEW_MS)),
     ) &&
     // `created` precedes every spawn; `spawned` follows the pid being listed.
     (phase !== "created" || lease.children.length === 0) &&

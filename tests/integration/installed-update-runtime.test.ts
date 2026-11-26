@@ -9370,6 +9370,7 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
           ownerProcessStart: OWNER_START,
           ownerStartedAtMs: Date.parse(OWNER_START),
           handle: handle(),
+          zone: process.env["TZ"] ?? null,
           phase: "created",
           createdAt: Date.now() - 7_200_000,
           updatedAt: Date.now() - 3_600_000,

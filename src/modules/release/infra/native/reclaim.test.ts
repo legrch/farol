@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -72,6 +72,7 @@ function ports(
     },
     now: () => NOW,
     log: (message: string) => logs.push(message),
+    zone: null,
     ...overrides,
   };
 }
@@ -96,6 +97,7 @@ type LeaseInput = Partial<{
   createdAt: number;
   handle: string;
   ownerStartedAtMs: number | null;
+  zone: string | null;
   children: Child[];
 }>;
 const HANDLE = () => path.join(root, "github-updates/archive.zip");
@@ -107,6 +109,7 @@ function leaseContent(patch: LeaseInput & Record<string, unknown> = {}) {
     ownerProcessStart: OWNER_START,
     ownerStartedAtMs: Date.parse(OWNER_START),
     handle: HANDLE(),
+    zone: null,
     phase: "created",
     createdAt: Math.min(NOW - 2 * HOUR, updatedAt),
     updatedAt,
@@ -167,6 +170,7 @@ beforeEach(async () => {
   logs = [];
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   await fs.rm(home, { recursive: true, force: true });
 });
 
@@ -417,6 +421,7 @@ describe("leaked verifier extraction reclaim: liveness", () => {
         ownerPid: process.pid,
         owner: owner!,
         handle: HANDLE(),
+        zone: process.env["TZ"] ?? null,
         now: () => Date.now(),
       }).create();
       const report = await reclaimExtractions({
@@ -589,9 +594,11 @@ describe("leaked verifier extraction reclaim: removal", () => {
         },
       }),
     );
-    expect(report.kept).toEqual([
-      { entry: directory, reason: "removal failed" },
-    ]);
+    // The extraction is a link in the chain: its swap abandons the parent.
+    expect(report.kept).toEqual([]);
+    expect(report.unscanned).toEqual([root]);
+    expect(report.complete).toBe(false);
+    expect(logs.join("\n")).toContain("parent identity changed");
     expect(await exists(path.join(directory, "replacement"))).toBe(true);
   });
   it("refuses to follow a symlink swapped in between two removal steps", async () => {
@@ -613,9 +620,11 @@ describe("leaked verifier extraction reclaim: removal", () => {
       }),
     );
     expect(calls).toBe(1);
-    expect(report.kept).toEqual([
-      { entry: directory, reason: "removal failed" },
-    ]);
+    // The extraction is a link in the chain: its swap abandons the parent.
+    expect(report.kept).toEqual([]);
+    expect(report.unscanned).toEqual([root]);
+    expect(report.complete).toBe(false);
+    expect(logs.join("\n")).toContain("parent identity changed");
     expect(await fs.readdir(outside)).toEqual(
       expect.arrayContaining([".update_archive.py", LEASE_FILE, "Farol.app"]),
     );
@@ -638,9 +647,11 @@ describe("leaked verifier extraction reclaim: removal", () => {
       }),
     );
     expect(calls).toBe(1);
-    expect(report.kept).toEqual([
-      { entry: directory, reason: "removal failed" },
-    ]);
+    // The extraction is a link in the chain: its swap abandons the parent.
+    expect(report.kept).toEqual([]);
+    expect(report.unscanned).toEqual([root]);
+    expect(report.complete).toBe(false);
+    expect(logs.join("\n")).toContain("parent identity changed");
     expect(await exists(path.join(directory, "Farol.app"))).toBe(true);
   });
   it("continues with the other entries after one removal fails", async () => {
@@ -671,6 +682,7 @@ describe("leaked verifier extraction reclaim: removal", () => {
       reclaimed: [],
       kept: [],
       unscanned: [],
+      root: expect.anything(),
     });
   });
   it("reports an unreadable staging root as incomplete", async () => {
@@ -799,6 +811,69 @@ describe("leaked verifier extraction reclaim: the identity of every directory on
   });
 });
 
+describe("leaked verifier extraction reclaim: the lease belongs to the inspected inode", () => {
+  it("abandons the parent when the extraction is swapped while its lease is read", async () => {
+    const directory = await extraction(root, "a");
+    const other = await extraction(root, "b");
+    const open = fs.open.bind(fs);
+    let swapped = false;
+    vi.spyOn(fs, "open").mockImplementation(async (file, ...rest) => {
+      if (!swapped && String(file) === path.join(directory, LEASE_FILE)) {
+        swapped = true;
+        await fs.rename(directory, `${directory}.moved`);
+        await fs.mkdir(directory, { mode: 0o700 });
+        await fs.writeFile(path.join(directory, LEASE_FILE), "{}", {
+          mode: 0o600,
+        });
+      }
+      return open(file, ...rest);
+    });
+    const report = await reclaimExtractions(ports());
+    expect(swapped).toBe(true);
+    expect(report.unscanned).toEqual([root]);
+    expect(report.reclaimed).toEqual([]);
+    expect(report.complete).toBe(false);
+    expect(removed).toEqual([]);
+    expect(await exists(other)).toBe(true);
+    expect(await exists(path.join(`${directory}.moved`, "Farol.app"))).toBe(
+      true,
+    );
+  });
+});
+
+describe("leaked verifier extraction reclaim: a TZ override", () => {
+  it("does not read a later start as a reused pid under another TZ", async () => {
+    table.set(5000, LATER_START);
+    const directory = await extraction(root, "a", {
+      lease: { zone: "America/New_York" },
+    });
+    const report = await reclaimExtractions(ports({ zone: null }));
+    expect(report.kept).toEqual([
+      { entry: directory, reason: "unknown liveness" },
+    ]);
+    expect(await exists(directory)).toBe(true);
+  });
+  it("still reads a later start as a reused pid under the same TZ", async () => {
+    table.set(5000, LATER_START);
+    const directory = await extraction(root, "a", {
+      lease: { zone: "America/New_York" },
+    });
+    await reclaimExtractions(ports({ zone: "America/New_York" }));
+    expect(await exists(directory)).toBe(false);
+  });
+  it("still keeps a live process under another TZ", async () => {
+    table.set(5000, OWNER_START);
+    const directory = await extraction(root, "a", { lease: { zone: "UTC" } });
+    const report = await reclaimExtractions(ports());
+    expect(report.kept).toEqual([{ entry: directory, reason: "live owner" }]);
+  });
+  it("reports the update root it scanned", async () => {
+    const report = await reclaimExtractions(ports());
+    const stat = await fs.lstat(root, { bigint: true });
+    expect(report.root).toEqual({ dev: stat.dev, ino: stat.ino });
+  });
+});
+
 describe("leaked verifier extraction reclaim: untrusted and uninspectable entries", () => {
   const legacy = () =>
     extraction(root, "legacy", { lease: "none", age: 48 * HOUR });
@@ -849,6 +924,24 @@ describe("leaked verifier extraction reclaim: untrusted and uninspectable entrie
       expect(report.complete).toBe(false);
     },
   );
+  it("keeps an entry whose child started before its owner", async () => {
+    const directory = await extraction(root, "a", {
+      lease: {
+        phase: "spawned",
+        children: [
+          {
+            pid: 6000,
+            processStart: EARLIER_START,
+            startedAtMs: Date.parse(EARLIER_START),
+          },
+        ],
+      },
+    });
+    const report = await reclaimExtractions(ports());
+    expect(report.kept).toEqual([
+      { entry: directory, reason: "lease untrusted" },
+    ]);
+  });
   it("accepts a lease that holds together", async () => {
     const directory = await extraction(root, "a", {
       lease: {

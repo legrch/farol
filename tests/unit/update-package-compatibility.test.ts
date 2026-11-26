@@ -695,6 +695,7 @@ describe("extraction lease", () => {
       ownerProcessStart: "Thu Nov 26 10:00:00 2026",
       ownerStartedAtMs: Date.parse("Thu Nov 26 10:00:00 2026"),
       handle: "opaque",
+      zone: process.env["TZ"] ?? null,
       phase: "created",
       createdAt: expect.any(Number),
       updatedAt: expect.any(Number),

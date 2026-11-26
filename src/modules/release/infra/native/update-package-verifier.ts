@@ -376,6 +376,7 @@ export function createUpdatePackageVerifier(
           ownerPid: process.pid,
           owner,
           handle,
+          zone: process.env["TZ"] ?? null,
         });
         await lease.create();
         // The lease is written before the first byte is extracted. Each child

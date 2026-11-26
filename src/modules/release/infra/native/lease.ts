@@ -33,6 +33,10 @@ export const ExtractionLease = z.strictObject({
   ownerProcessStart: ProcessStartText,
   ownerStartedAtMs: StartedAt.nullable(),
   handle: z.string().min(1).max(4096),
+  // The `TZ` of the writing process. `ps` prints in the system zone, which a
+  // `TZ` override does not change but does change how this process parses that
+  // text, so a reader under another `TZ` cannot trust an ordering of starts.
+  zone: z.string().max(128).nullable(),
   // `spawning` is written before a child exists; `spawned` once its pid is
   // recorded, which happens right after the spawn, before its start is read.
   // Only `spawning` can have a child the lease does not list.
@@ -150,7 +154,9 @@ export async function readProcessIdentity(
  *   the recorded one (the pid was reused).
  * `unknown`: a failed probe, a running pid whose recorded or observed start is
  *   not one unambiguous instant, or a start that is not later than the
- *   recorded one. Only `ended` permits removal.
+ *   recorded one. A later start counts as `ended` only when `sameZone`: under
+ *   another `TZ` the same process can parse as later, so it stays `unknown`.
+ *   Only `ended` permits removal.
  */
 export async function observeLeaseProcess(
   recorded: Readonly<{
@@ -160,6 +166,7 @@ export async function observeLeaseProcess(
   }>,
   read: ProcessRead,
   parse: ParseStart = parseLocalStart,
+  sameZone = true,
 ): Promise<"live" | "ended" | "unknown"> {
   let current: ProcessIdentity | null;
   try {
@@ -171,7 +178,9 @@ export async function observeLeaseProcess(
   if (recorded.startedAtMs === null || current.startedAtMs === null)
     return "unknown";
   if (current.startedAtMs === recorded.startedAtMs) return "live";
-  return current.startedAtMs > recorded.startedAtMs ? "ended" : "unknown";
+  return sameZone && current.startedAtMs > recorded.startedAtMs
+    ? "ended"
+    : "unknown";
 }
 
 /**
@@ -185,6 +194,7 @@ export function createLeaseWriter(
     ownerPid: number;
     owner: ProcessIdentity;
     handle: string;
+    zone: string | null;
     now?: () => number;
   }>,
 ) {
@@ -196,6 +206,7 @@ export function createLeaseWriter(
     ownerProcessStart: input.owner.processStart,
     ownerStartedAtMs: input.owner.startedAtMs,
     handle: input.handle,
+    zone: input.zone,
     phase: "created",
     createdAt,
     updatedAt: createdAt,

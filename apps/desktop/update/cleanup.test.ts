@@ -27,13 +27,21 @@ async function settle(
   content: unknown,
   extractionsGone = true,
   reread: () => Promise<unknown> = async () => content,
+  captured: "root" | "none" | { dev: bigint; ino: bigint } = "root",
 ) {
   await fs.writeFile(file, JSON.stringify(content), { mode: 0o600 });
+  const stat = await fs.lstat(root, { bigint: true });
   const cleared = await settleCleanupMarker({
     root,
     file,
     marker: content,
     extractionsGone,
+    rootIdentity:
+      captured === "root"
+        ? { dev: stat.dev, ino: stat.ino }
+        : captured === "none"
+          ? null
+          : captured,
     read: reread,
   });
   return {
@@ -137,5 +145,45 @@ describe("cleanup marker settlement", () => {
     expect(
       await settle(marker(), true, async () => marker({ handle: root + "/y" })),
     ).toEqual({ cleared: false, present: true });
+  });
+  describe("the root the outcome was about", () => {
+    it("keeps the fence when the reclaim captured no root", async () => {
+      expect(await settle(marker(), true, undefined, "none")).toEqual({
+        cleared: false,
+        present: true,
+      });
+    });
+    it("keeps the fence when the root is no longer the captured directory", async () => {
+      const stat = await fs.lstat(root, { bigint: true });
+      expect(
+        await settle(marker(), true, undefined, {
+          dev: stat.dev,
+          ino: stat.ino + 1n,
+        }),
+      ).toEqual({ cleared: false, present: true });
+    });
+    it("keeps the fence when the root became a symlink after the pass", async () => {
+      const content = marker();
+      await fs.writeFile(file, JSON.stringify(content), { mode: 0o600 });
+      const stat = await fs.lstat(root, { bigint: true });
+      const moved = `${root}.moved`;
+      const cleared = await settleCleanupMarker({
+        root,
+        file,
+        marker: content,
+        extractionsGone: true,
+        rootIdentity: { dev: stat.dev, ino: stat.ino },
+        read: async () => {
+          // Between the last read of the marker and the unlink.
+          await fs.rename(root, moved);
+          await fs.symlink(moved, root);
+          return content;
+        },
+      });
+      expect(cleared).toBe(false);
+      expect(
+        await fs.lstat(path.join(moved, "package-cleanup-pending.json")),
+      ).toBeDefined();
+    });
   });
 });
