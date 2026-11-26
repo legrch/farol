@@ -387,12 +387,15 @@ describe("readRecord", () => {
     await rejectsWith(readRecord(file), "UPDATE_RECORD_INVALID");
   });
 
-  it("throws on malformed JSON and on an empty file", async () => {
-    await expect(readRecord(await put("bad.json", "{"))).rejects.toThrow(
-      SyntaxError,
-    );
-    await expect(readRecord(await put("empty.json", ""))).rejects.toThrow(
-      SyntaxError,
+  it.each([
+    ["truncated JSON", "{"],
+    ["trailing garbage", '{"a":1}x'],
+    ["an empty file", ""],
+    ["whitespace only", "  \n"],
+  ])("classifies %s as an invalid record", async (_name, text) => {
+    await rejectsWith(
+      readRecord(await put("bad.json", text)),
+      "UPDATE_RECORD_INVALID",
     );
   });
 
@@ -467,7 +470,7 @@ describe("readRecord", () => {
       };
       return handle;
     });
-    await expect(readRecord(file)).rejects.toThrow(SyntaxError);
+    await rejectsWith(readRecord(file), "UPDATE_RECORD_INVALID");
     expect(close).toHaveBeenCalledOnce();
   });
 });

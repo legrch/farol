@@ -175,7 +175,6 @@ import {
   unadmittedHandoff,
   verificationHandoff,
   verificationRefusalCode,
-  type DownloadStageScan,
 } from "../../../apps/desktop/update/stage";
 
 export { installedUpdateStartupDecision };
@@ -1752,91 +1751,6 @@ async function createRuntime(
       throw error;
     }
   };
-  // `scanned` is what an extraction reclaim established about this directory:
-  // the identity it scanned, or "absent" for a directory it never listed. When
-  // given, removal acts only on exactly that.
-  //
-  // A path is not an identity: checking a directory and then removing it by
-  // name leaves a window in which another directory can take its place. So the
-  // validated stage is first renamed, atomically, to a tombstone sibling that
-  // nothing else names; the tombstone's own inode is then compared with the
-  // recorded and scanned identities, and only a match is removed. A mismatch is
-  // never deleted: it is renamed back if its old path is still free, and the
-  // removal refuses either way.
-  const removeDownloadStage = async (
-    download: z.infer<typeof DownloadStage>,
-    scanned?: Exclude<DownloadStageScan, null>,
-  ) => {
-    const directory = downloadDirectory(download.id);
-    const tombstone = `${directory}.removing`;
-    const matches = (metadata: {
-      dev: bigint;
-      ino: bigint;
-      birthtimeNs: bigint;
-    }) =>
-      download.identity !== undefined &&
-      !downloadStageIdentityChanged(metadata, download.identity) &&
-      (scanned === undefined ||
-        (scanned !== "absent" &&
-          metadata.dev === scanned.dev &&
-          metadata.ino === scanned.ino));
-    // A crash after the rename leaves the tombstone. It is this stage only if
-    // its inode is the recorded one; anything else is not ours to delete.
-    const leftover = await lstatOrNull(tombstone);
-    if (leftover) {
-      if (
-        !download.identity ||
-        downloadStageIdentityChanged(leftover, download.identity)
-      )
-        throw new Error("UPDATE_DOWNLOAD_STAGE_DISPLACED");
-      await options.removeDirectory(tombstone, false);
-    }
-    const metadata = await lstatOrNull(directory);
-    if (!metadata) return;
-    if (
-      scanned !== undefined &&
-      (scanned === "absent" ||
-        metadata.dev !== scanned.dev ||
-        metadata.ino !== scanned.ino)
-    )
-      throw new Error("UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED");
-    await canonicalOwnedDirectory(directory, true);
-    if (!download.identity) {
-      // Interrupted allocation cannot have received bytes. rmdir refuses any
-      // contents rather than claiming an unrecorded directory is disposable.
-      await fs.rmdir(directory);
-      return;
-    }
-    if (downloadStageIdentityChanged(metadata, download.identity))
-      throw new Error("UPDATE_DOWNLOAD_STAGE_CHANGED");
-    // The caller has reconciled the producer and every operation in this
-    // exclusive directory. Older retained packages and rollback stay outside.
-    try {
-      await fs.rename(directory, tombstone);
-    } catch (error) {
-      // Gone since it was checked: nothing of ours is left to remove.
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw error;
-    }
-    const moved = await fs.lstat(tombstone, { bigint: true });
-    if (!moved.isDirectory() || moved.isSymbolicLink() || !matches(moved)) {
-      let restored = false;
-      if ((await lstatOrNull(directory)) === null) {
-        try {
-          await fs.rename(tombstone, directory);
-          restored = true;
-        } catch {
-          restored = false;
-        }
-      }
-      throw new Error(
-        restored
-          ? "UPDATE_DOWNLOAD_STAGE_CHANGED"
-          : "UPDATE_DOWNLOAD_STAGE_DISPLACED",
-      );
-    }
-    await options.removeDirectory(tombstone, false);
-  };
   // Verifier extractions whose owner died are reclaimed at every launch, by
   // their lease. Only the single-instance primary runs this (the lock is taken
   // before the host builds this runtime); a supervised controller never does.
@@ -1858,6 +1772,116 @@ async function createRuntime(
       return null;
     }
   };
+  // The one place a download stage, or the tombstone it is moved to, is removed
+  // recursively. Nothing is deleted without the same judgment an extraction gets
+  // at startup: the reclaim runs first (its leases, named children and
+  // liveness), and a stage or tombstone is removed only if that pass scanned
+  // exactly that directory, kept nothing in it and found it to be the inode the
+  // intent recorded. A tombstone is just another name for the stage it came
+  // from, and the reclaim scans it as one. Anything else keeps the directory,
+  // the intent and the fence and reports why; nothing is deleted on a guess.
+  //
+  // A path is not an identity, so the validated stage is not removed by name:
+  // it is renamed, atomically, to a tombstone sibling nothing else names, the
+  // tombstone's own inode is compared again, and only then is it removed. A
+  // mismatch is never deleted: it goes back if its old path is free. The one
+  // window left, between that last comparison and the removal call by the
+  // tombstone's Farol-private name, is the same-user residual: a process of the
+  // same user that can race there can already write the stage itself, which is
+  // out of this design's scope.
+  const removeDownloadStage = async (
+    download: z.infer<typeof DownloadStage>,
+  ) => {
+    const stage = downloadDirectory(download.id);
+    const tombstone = `${stage}.removing`;
+    // Before anything is looked at: a directory that is absent now but present
+    // when it is reached was not scanned, and `authorized` says so.
+    const scan = await reclaimStagedExtractions();
+    // The judgment for one existing directory: the identity the pass scanned,
+    // which must still be what is on disk. Unknown, kept, skipped, or a
+    // directory the pass never listed is not authorization.
+    const authorized = async (target: string) => {
+      const metadata = await lstatOrNull(target);
+      if (!metadata) return null;
+      const judged = downloadStageScan(scan, root, target);
+      if (
+        judged === null ||
+        judged === "absent" ||
+        judged.dev !== metadata.dev ||
+        judged.ino !== metadata.ino
+      )
+        throw new Error("UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED");
+      return judged;
+    };
+    const matches = (
+      metadata: { dev: bigint; ino: bigint; birthtimeNs: bigint },
+      judged: { dev: bigint; ino: bigint },
+    ) =>
+      download.identity !== undefined &&
+      !downloadStageIdentityChanged(metadata, download.identity) &&
+      metadata.dev === judged.dev &&
+      metadata.ino === judged.ino;
+    // Only called with a directory `authorized` just cleared.
+    const deleteStageTree = (tree: string) =>
+      options.removeDirectory(tree, false);
+    // A crash after the rename leaves the tombstone. It is this stage only if
+    // its inode is the recorded one, and it is removed only if it is judged
+    // like the stage was.
+    const leftover = await lstatOrNull(tombstone);
+    if (leftover) {
+      if (
+        !download.identity ||
+        downloadStageIdentityChanged(leftover, download.identity)
+      )
+        throw new Error("UPDATE_DOWNLOAD_STAGE_DISPLACED");
+      await authorized(tombstone);
+      await deleteStageTree(tombstone);
+    }
+    const metadata = await lstatOrNull(stage);
+    if (!metadata) return;
+    await canonicalOwnedDirectory(stage, true);
+    if (!download.identity) {
+      // Interrupted allocation cannot have received bytes. rmdir refuses any
+      // contents rather than claiming an unrecorded directory is disposable.
+      await fs.rmdir(stage);
+      return;
+    }
+    if (downloadStageIdentityChanged(metadata, download.identity))
+      throw new Error("UPDATE_DOWNLOAD_STAGE_CHANGED");
+    // The caller has reconciled the producer and every operation in this
+    // exclusive directory. Older retained packages and rollback stay outside.
+    const judged = await authorized(stage);
+    if (judged === null) return;
+    try {
+      await fs.rename(stage, tombstone);
+    } catch (error) {
+      // Gone since it was checked: nothing of ours is left to remove.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    const moved = await fs.lstat(tombstone, { bigint: true });
+    if (
+      !moved.isDirectory() ||
+      moved.isSymbolicLink() ||
+      !matches(moved, judged)
+    ) {
+      let restored = false;
+      if ((await lstatOrNull(stage)) === null) {
+        try {
+          await fs.rename(tombstone, stage);
+          restored = true;
+        } catch {
+          restored = false;
+        }
+      }
+      throw new Error(
+        restored
+          ? "UPDATE_DOWNLOAD_STAGE_CHANGED"
+          : "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+      );
+    }
+    await deleteStageTree(tombstone);
+  };
   const reconcileInterruptedDownload = async (
     intent: z.infer<typeof DownloadIntent>,
   ) => {
@@ -1868,22 +1892,9 @@ async function createRuntime(
       !(await originalHelperEnded({ helper: download.producer }))
     )
       throw new Error("UPDATE_DOWNLOAD_PRODUCER_UNCONFIRMED");
-    // The native verifier extracts inside this directory, so a verifying stage
-    // may hold one the producer left behind. Reclaim first; the stage goes only
-    // if the pass scanned exactly this directory and kept nothing in it,
-    // otherwise it stays and so does the fence.
-    let scanned: Exclude<DownloadStageScan, null> | undefined;
-    if (download.phase === "verifying") {
-      const outcome = downloadStageScan(
-        await reclaimStagedExtractions(),
-        root,
-        downloadDirectory(download.id),
-      );
-      if (outcome === null)
-        throw new Error("UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED");
-      scanned = outcome;
-    }
-    await removeDownloadStage(download, scanned);
+    // The verifier extracts inside this directory, so a verifying stage may
+    // hold one the producer left behind: the removal below judges that first.
+    await removeDownloadStage(download);
     await writeRecord(path.join(root, "last-interrupted-download.json"), {
       schema: "farol.interrupted-download/1",
       intent,

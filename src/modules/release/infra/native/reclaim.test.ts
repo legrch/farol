@@ -1070,3 +1070,48 @@ describe("leaked verifier extraction reclaim: which parents the report says were
     expect(report.scanned.map((item) => item.path)).toEqual([root]);
   });
 });
+
+describe("leaked verifier extraction reclaim: a stage's tombstone is the same stage", () => {
+  const stageName = `download-${"a".repeat(32)}`;
+  async function tombstone() {
+    const directory = path.join(root, `${stageName}.removing`);
+    await fs.mkdir(directory, { mode: 0o700 });
+    await fs.chmod(directory, 0o700);
+    return directory;
+  }
+
+  it("scans it as a staging parent and lists it with its identity", async () => {
+    const directory = await tombstone();
+    const stat = await fs.lstat(directory, { bigint: true });
+    const report = await reclaimExtractions(ports());
+    expect(report.scanned).toEqual(
+      expect.arrayContaining([
+        { path: directory, dev: stat.dev, ino: stat.ino },
+      ]),
+    );
+  });
+  it("reclaims an extraction in it by the same lease rules", async () => {
+    const directory = await tombstone();
+    const gone = await extraction(directory, "gone");
+    const report = await reclaimExtractions(ports());
+    expect(report.reclaimed).toEqual([gone]);
+  });
+  it("keeps a spawning lease in it, however old", async () => {
+    const directory = await tombstone();
+    const stuck = await extraction(directory, "stuck", {
+      lease: { phase: "spawning", updatedAt: NOW - 3 * 24 * HOUR },
+    });
+    const report = await reclaimExtractions(ports());
+    expect(report.kept).toEqual([{ entry: stuck, reason: "spawning window" }]);
+    expect(await exists(stuck)).toBe(true);
+  });
+  it.each(["download-short.removing", `download-${"a".repeat(32)}.removing.x`])(
+    "does not take %s for a staging parent",
+    async (name) => {
+      const other = path.join(root, name);
+      await fs.mkdir(other, { mode: 0o700 });
+      const report = await reclaimExtractions(ports());
+      expect(report.scanned.map((item) => item.path)).toEqual([root]);
+    },
+  );
+});

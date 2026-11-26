@@ -725,13 +725,25 @@ the tombstone's own device and inode are compared with the scanned and recorded
 identities, and only a match is removed; this covers a `downloading` stage too.
 A mismatch is never deleted: it is renamed back if its old path is still free
 (`UPDATE_DOWNLOAD_STAGE_CHANGED`), otherwise left in its tombstone
-(`UPDATE_DOWNLOAD_STAGE_DISPLACED`). A tombstone left by a crash is removed on
-the next launch only if it is the recorded stage. The reasons the stage was kept
+(`UPDATE_DOWNLOAD_STAGE_DISPLACED`). A tombstone left by a crash is just another name for the stage: the reclaim
+scans `download-<id>.removing` as a staging parent and judges its extractions
+exactly as the stage's, and it is removed on the next launch only if it is the
+recorded stage and that scan authorizes it, otherwise it stays with the intent
+and the fence. The reasons the stage was kept
 are reported as themselves, each an outcome-unknown code:
 `UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED` (the reclaim kept an extraction in the
 stage or did not cover it), `UPDATE_DOWNLOAD_STAGE_CHANGED` and
 `UPDATE_DOWNLOAD_STAGE_DISPLACED`. A live or unobservable producer still reports
 `UPDATE_STAGING_OUTCOME_UNKNOWN`.
+
+Every recursive removal of a stage or its tombstone goes through one function
+(`removeDownloadStage`), and a test guards that no other path calls the
+recursive remove for one. That function first runs the extraction reclaim, for
+either phase, and deletes only a directory that pass scanned and cleared. The
+one window left is between the tombstone's last identity comparison and the
+removal call on its Farol-private name: a process of the same user that can win
+that race can already write the stage itself, so same-user tampering is outside
+this design, like the residual path window of the reclaim's own removals.
 
 **Installs that are already fenced.** The fix runs inside the new build, so an
 install that is already fenced by an older build cannot receive it through the

@@ -25,7 +25,10 @@ import {
 // unreadable owner.
 
 export const LEGACY_MINIMUM_AGE_MS = 24 * 3_600_000;
-const DOWNLOAD_PARENT = /^download-[0-9a-f]{32}$/u;
+// A download stage the runtime has begun to remove is renamed to
+// `download-<32 hex>.removing`. That is only another name for the same stage and
+// the same extractions, so it is scanned and judged exactly like it.
+const DOWNLOAD_PARENT = /^download-[0-9a-f]{32}(?:\.removing)?$/u;
 const SCAN_LIMIT = 65_536;
 
 export type KeptReason =

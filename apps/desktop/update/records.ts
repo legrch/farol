@@ -178,7 +178,8 @@ export async function readRecord(
 // Python's `json.loads` refuses it. A top-level JSON null is refused too: every
 // writer emits an object, and a present file that reads as `null` would be
 // indistinguishable from an absent one, which `readRecord` reports as `null`.
-// Any of these makes a present record invalid. Writers (JSON.stringify, the
+// Any of these, and any JSON syntax error (truncation, trailing bytes, an empty
+// file), makes a present record invalid. Writers (JSON.stringify, the
 // repair tool, the Go helpers) never produce one, so this only refuses damaged
 // or forged bytes.
 function parseStrictJson(bytes: Buffer): unknown {
@@ -191,7 +192,14 @@ function parseStrictJson(bytes: Buffer): unknown {
     throw new Error("UPDATE_RECORD_INVALID");
   }
   if (text.charCodeAt(0) === 0xfeff) throw new Error("UPDATE_RECORD_INVALID");
-  const value = JSON.parse(text) as unknown;
+  let value: unknown;
+  try {
+    value = JSON.parse(text) as unknown;
+  } catch {
+    // Truncated or garbled JSON, trailing bytes and an empty file are damage to
+    // a present record like any other, not an unclassified parse error.
+    throw new Error("UPDATE_RECORD_INVALID");
+  }
   if (value === null || hasDuplicateKeys(text))
     throw new Error("UPDATE_RECORD_INVALID");
   return value;

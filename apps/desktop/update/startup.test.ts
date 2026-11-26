@@ -486,9 +486,10 @@ describe("operation binding and journal under a real directory", () => {
   it("refuses a malformed journal and one of another operation", async () => {
     await bound();
     await write("journal.json", { schema: "wrong" });
-    expect(
-      await message(st.readStartupOperationJournal(dir, operation, "shared")),
-    ).toContain("invalid");
+    await rejectsWith(
+      st.readStartupOperationJournal(dir, operation, "shared"),
+      "UPDATE_OPERATION_JOURNAL_INVALID",
+    );
     await write("journal.json", {
       schema: "farol.installed-update-journal/1",
       ...operation,

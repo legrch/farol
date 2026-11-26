@@ -264,7 +264,11 @@ export function createStartup(ports: StartupPorts) {
         throw new Error("UPDATE_OPERATION_JOURNAL_INVALID");
       return null;
     }
-    const journal = Journal.parse(raw);
+    // A journal that parses as JSON but is not a journal is as invalid as one
+    // the reader refused, and is reported under the same name.
+    const parsed = Journal.safeParse(raw);
+    if (!parsed.success) throw new Error("UPDATE_OPERATION_JOURNAL_INVALID");
+    const journal = parsed.data;
     if (!sameOperation(journal, op))
       throw new Error("UPDATE_OPERATION_IDENTITY_MISMATCH");
     return journal;

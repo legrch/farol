@@ -3224,6 +3224,10 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
 
   it.each([
     ["JSON null", () => "null\n"],
+    ["truncated JSON", (text: string) => text.slice(0, text.length / 2)],
+    ["trailing garbage", (text: string) => `${text}garbage\n`],
+    ["an empty file", () => ""],
+    ["an object that is not a journal", () => '{"schema":"wrong"}\n'],
     ["a byte-order mark", (text: string) => `\ufeff${text}`],
     ["a repeated key", (text: string) => text.replace("{", '{"schema":"x",')],
   ])(
@@ -9880,6 +9884,36 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
         async () => path.join(installed(), "restore-pending.json"),
       ],
     ];
+    // Damage to the JSON itself is a present, invalid record like any other: it
+    // is classified at the reader, whichever record it is.
+    const syntaxDamage: [string, string][] = [
+      ["truncated JSON", '{"schema":"farol.'],
+      ["trailing garbage", '{"schema":"farol.x"}garbage\n'],
+      ["an empty file", ""],
+    ];
+    const syntaxRecords: [string, () => string][] = [
+      ["the update receipt", () => path.join(installed(), "last-update.json")],
+      ["the ready record", () => path.join(installed(), "ready.json")],
+      ["the download intent", () => intentFile()],
+      [
+        "the restore intent",
+        () => path.join(installed(), "restore-pending.json"),
+      ],
+      ["the cleanup marker", () => markerFile()],
+    ];
+    for (const [record, file] of syntaxRecords)
+      for (const [damage, text] of syntaxDamage)
+        it(`classifies ${record} with ${damage} as an invalid record and keeps it`, async () => {
+          await fs.writeFile(file(), text, { mode: 0o600 });
+          const controller = await lifetime();
+          expect(controller.snapshot()).toMatchObject({
+            phase: "failed",
+            code: "UPDATE_RECORD_INVALID",
+            recoveryRequired: true,
+          });
+          expect(await fs.readFile(file(), "utf8")).toBe(text);
+          await controller.close();
+        });
     it.each(rows)(
       "keeps the record and the fence for %s",
       async (_name, arrange, file) => {
@@ -10246,6 +10280,124 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
       expect(await exists(stage)).toBe(true);
       expect(await exists(pendingFile())).toBe(true);
       await controller.close();
+    });
+    describe("a tombstone is judged like the stage it came from", () => {
+      // Pass 1 (the startup reclaim) moves the stage to its tombstone after its
+      // own discovery, as a crashed removal would leave it. Pass 2 (the
+      // reconciliation's) must then judge that tombstone's extractions.
+      const toTombstone = (stage: string) => {
+        let rootPasses = 0;
+        return {
+          passes: () => rootPasses,
+          hook: async (parent: string) => {
+            if (parent !== installed()) return;
+            rootPasses += 1;
+            if (rootPasses === 1) await fs.rename(stage, `${stage}.removing`);
+          },
+        };
+      };
+      it("deletes nothing when the tombstone holds a spawning lease, and keeps the intent", async () => {
+        const stage = await interrupted();
+        const tombstone = `${stage}.removing`;
+        // The owner died between spawning a child and recording its pid.
+        const extraction = await leak("spawning", { phase: "spawning" }, stage);
+        const race = toTombstone(stage);
+        const controller = (await createInstalledUpdateRuntime({
+          ...options(),
+          reclaimAfterDiscovery: race.hook,
+        }))!;
+        await controller.initialize();
+        expect(race.passes()).toBe(2);
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+          recoveryRequired: true,
+        });
+        expect(
+          await exists(path.join(tombstone, path.basename(extraction))),
+        ).toBe(true);
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      });
+      it("deletes nothing when the tombstone holds an extraction whose owner still runs", async () => {
+        const stage = await interrupted();
+        table.set(4242, OWNER_START);
+        const extraction = await leak("live", {}, stage);
+        const race = toTombstone(stage);
+        const controller = (await createInstalledUpdateRuntime({
+          ...options(),
+          reclaimAfterDiscovery: race.hook,
+        }))!;
+        await controller.initialize();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+          recoveryRequired: true,
+        });
+        expect(
+          await exists(
+            path.join(`${stage}.removing`, path.basename(extraction)),
+          ),
+        ).toBe(true);
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      });
+      it("still removes a leftover tombstone whose extraction names its child, exited", async () => {
+        const stage = await interrupted();
+        await leak(
+          "named",
+          {
+            phase: "spawned",
+            createdAt: Date.now() - 50 * 3_600_000,
+            updatedAt: Date.now() - 49 * 3_600_000,
+            children: [
+              {
+                pid: 4343,
+                processStart: OWNER_START,
+                startedAtMs: Date.parse(OWNER_START),
+              },
+            ],
+          },
+          stage,
+        );
+        const race = toTombstone(stage);
+        const controller = (await createInstalledUpdateRuntime({
+          ...options(),
+          reclaimAfterDiscovery: race.hook,
+        }))!;
+        await controller.initialize();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_INTERRUPTED",
+          recoveryRequired: false,
+        });
+        expect(await exists(`${stage}.removing`)).toBe(false);
+        expect(await exists(stage)).toBe(false);
+        expect(await exists(pendingFile())).toBe(false);
+        await controller.close();
+      });
+    });
+    it("calls the recursive remove for a stage only from the one authorized function", async () => {
+      // Guard: every recursive removal of a stage or tombstone is judged first.
+      // Only the prepared copy's own removal and `deleteStageTree` (inside
+      // removeDownloadStage) may call it directly.
+      const source = await fs.readFile(
+        path.resolve("src/apps/desktop/installed-update-runtime.ts"),
+        "utf8",
+      );
+      const calls = [...source.matchAll(/options\.removeDirectory\(/gu)].map(
+        (match) =>
+          source.slice(Math.max(0, match.index! - 140), match.index! + 80),
+      );
+      expect(calls).toHaveLength(2);
+      expect(
+        calls.filter((text) => text.includes("deleteStageTree")),
+      ).toHaveLength(1);
+      expect(calls.filter((text) => text.includes("staged.app"))).toHaveLength(
+        1,
+      );
+      // The leftover tombstone and the renamed stage: both only after `authorized`.
+      expect(source.match(/deleteStageTree\(/gu)).toHaveLength(2);
     });
     it("removes a stage the reclaim never listed only when it is still absent", async () => {
       const stage = await interrupted();
