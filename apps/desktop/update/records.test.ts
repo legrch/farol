@@ -292,9 +292,10 @@ describe("readRecord", () => {
     await rejectsCode(readRecord(path.join(file, "r.json")), "ENOTDIR");
   });
 
-  it("returns null for a present file holding JSON null", async () => {
+  it("refuses a present file holding JSON null, which is not an absent one", async () => {
     const file = await put("r.json", "null\n");
-    expect(await readRecord(file)).toBeNull();
+    await rejectsWith(readRecord(file), "UPDATE_RECORD_INVALID");
+    expect(await readRecord(at("missing.json"))).toBeNull();
   });
 
   it("reports the sha256 and a private copy of the exact bytes", async () => {
@@ -928,6 +929,7 @@ describe.each([
     ["JSON null", "null\n"],
     ["truncated JSON", '{"schema":"farol.update-'],
     ["an empty file", ""],
+    ["a leading byte-order mark", '\ufeff{"schema":"farol.update-x"}\n'],
   ])(
     "classifies a present %s as UPDATE_RECORD_INVALID",
     async (_case, text) => {
@@ -1048,6 +1050,13 @@ describe("every reader of an update record decodes strictly", () => {
         '{"schema":"farol.update-package-cleanup/1","handle":"/r/a.zip","n":{"k":1,"k":1}}\n',
       ),
     ],
+    [
+      "a leading byte-order mark",
+      Buffer.from(
+        '\ufeff{"schema":"farol.update-package-cleanup/1","handle":"/r/a.zip"}\n',
+      ),
+    ],
+    ["a top-level JSON null", Buffer.from("null\n")],
   ];
   // The call sites that read a record and let the result authorize a cleanup,
   // an unlink or an admission (the file name each uses is the real one).

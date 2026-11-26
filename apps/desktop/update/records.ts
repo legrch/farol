@@ -172,19 +172,28 @@ export async function readRecord(
 }
 // The one decoder for every update record, which is why every reader that
 // authorizes a cleanup, an unlink or an admission decodes as strictly as the
-// repair tool's `strict_json` (fatal UTF-8, no repeated key). Invalid UTF-8 would decode
-// to U+FFFD and a repeated key would let the last one win, so a record with
-// either is present but invalid. Writers (JSON.stringify, the repair tool, the
-// Go helpers) never produce one, so this only refuses damaged or forged bytes.
+// repair tool's `strict_json` (fatal UTF-8, no repeated key). Invalid UTF-8
+// would decode to U+FFFD and a repeated key would let the last one win. A
+// leading byte-order mark is kept by the decoder (`ignoreBOM`) and refused, as
+// Python's `json.loads` refuses it. A top-level JSON null is refused too: every
+// writer emits an object, and a present file that reads as `null` would be
+// indistinguishable from an absent one, which `readRecord` reports as `null`.
+// Any of these makes a present record invalid. Writers (JSON.stringify, the
+// repair tool, the Go helpers) never produce one, so this only refuses damaged
+// or forged bytes.
 function parseStrictJson(bytes: Buffer): unknown {
   let text: string;
   try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      bytes,
+    );
   } catch {
     throw new Error("UPDATE_RECORD_INVALID");
   }
+  if (text.charCodeAt(0) === 0xfeff) throw new Error("UPDATE_RECORD_INVALID");
   const value = JSON.parse(text) as unknown;
-  if (hasDuplicateKeys(text)) throw new Error("UPDATE_RECORD_INVALID");
+  if (value === null || hasDuplicateKeys(text))
+    throw new Error("UPDATE_RECORD_INVALID");
   return value;
 }
 // The restore intent is the recovery fence, so presence is not the value the

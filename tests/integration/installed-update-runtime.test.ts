@@ -3003,35 +3003,101 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     },
   );
 
-  it("keeps the archive and its intent when a failed retention write leaves a null ready record", async () => {
-    // A ready.json holding JSON null is present, not absent: the commit is
-    // unknown, so the archive and the download intent are not reclaimed.
-    const rename = fs.rename.bind(fs);
-    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-      if (to === ready) {
-        await fs.writeFile(to as string, "null\n", { mode: 0o600 });
-        throw new Error("fixture ready commit failure");
-      }
-      return rename(from, to);
-    });
-    const first = await createInstalledUpdateRuntime(options());
-    await first!.initialize();
-    await first!.check();
-    await first!.download();
-    const state = first!.snapshot();
-    vi.mocked(fs.rename).mockImplementation(rename);
-    // The commit is unknown, reported as itself: not a success, not retryable.
-    expect(state).toMatchObject({
-      phase: "failed",
-      code: "UPDATE_READY_COMMIT_UNKNOWN",
-      recoveryRequired: true,
-    });
-    expect(mocks.discardArchive).not.toHaveBeenCalled();
-    await expect(
-      fs.stat(path.join(userData, "installed-updates/download-pending.json")),
-    ).resolves.toBeDefined();
-    await first!.close();
-  });
+  // Every way the readback after a failed ready write can fail to show that the
+  // write did not happen. Each is an unknown commit, reported as itself with
+  // recovery required, and neither reclaims the archive nor clears the intent.
+  type Leave = (
+    realRename: typeof fs.rename,
+    from: string,
+    to: string,
+    spies: { mockRestore(): void }[],
+  ) => Promise<void>;
+  const leaves =
+    (bytes: Buffer | string): Leave =>
+    async (_r, _from, to) => {
+      await fs.writeFile(to, bytes, { mode: 0o600 });
+    };
+  const uncertainCommits: [string, Leave][] = [
+    ["a null record", leaves("null\n")],
+    ["a record with a repeated key", leaves('{"a":1,"a":2}\n')],
+    ["a record with invalid UTF-8", leaves(Buffer.from([0x7b, 0xff, 0x7d]))],
+    [
+      "a record with a byte-order mark",
+      leaves(Buffer.from('\ufeff{"schema":"x"}\n')),
+    ],
+    ["a truncated record", leaves('{"schema":"farol.ready-')],
+    [
+      "a record that changes while it is read",
+      async (realRename, from, to, spies) => {
+        await realRename(from, to);
+        const lstat = fs.lstat.bind(fs) as (...a: unknown[]) => Promise<any>;
+        let seen = 0;
+        spies.push(
+          vi.spyOn(fs, "lstat").mockImplementation((async (
+            file: string,
+            ...rest: unknown[]
+          ) => {
+            const stat = await lstat(file, ...rest);
+            if (file !== to || ++seen !== 2) return stat;
+            return Object.assign(
+              Object.create(Object.getPrototypeOf(stat)),
+              stat,
+              { mtimeMs: stat.mtimeMs + 1 },
+            );
+          }) as typeof fs.lstat),
+        );
+      },
+    ],
+    [
+      "a record that cannot be opened",
+      async (realRename, from, to, spies) => {
+        await realRename(from, to);
+        const open = fs.open.bind(fs) as (...a: unknown[]) => Promise<unknown>;
+        spies.push(
+          vi.spyOn(fs, "open").mockImplementation((async (
+            file: string,
+            ...rest: unknown[]
+          ) => {
+            if (file === to)
+              throw Object.assign(new Error("fixture I/O error"), {
+                code: "EIO",
+              });
+            return open(file, ...rest);
+          }) as typeof fs.open),
+        );
+      },
+    ],
+  ];
+  it.each(uncertainCommits)(
+    "reports an unknown ready commit as itself when the readback finds %s",
+    async (_name, leave) => {
+      const rename = fs.rename.bind(fs);
+      const spies: { mockRestore(): void }[] = [];
+      spies.push(
+        vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+          if (to !== ready) return rename(from, to);
+          await leave(rename, from as string, to as string, spies);
+          throw new Error("fixture ready commit failure");
+        }),
+      );
+      const first = await createInstalledUpdateRuntime(options());
+      await first!.initialize();
+      await first!.check();
+      await first!.download();
+      const state = first!.snapshot();
+      for (const spy of spies) spy.mockRestore();
+      expect(state).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_READY_COMMIT_UNKNOWN",
+        recoveryRequired: true,
+      });
+      expect(mocks.discardArchive).not.toHaveBeenCalled();
+      await expect(
+        fs.stat(path.join(userData, "installed-updates/download-pending.json")),
+      ).resolves.toBeDefined();
+      await first!.close();
+    },
+  );
 
   it("keeps the archive and the intent when a failed retention write finds a download intent with a repeated key", async () => {
     // A last-key-wins decoder would accept this intent as valid, discard the
@@ -9013,7 +9079,10 @@ describe("first-launch adoption in the user slot (disposable files; GitHub and n
     const controller = await checked();
     expect(controller.snapshot()).toMatchObject({
       phase: "failed",
-      code: "UPDATE_SOURCE_IDENTITY_UNCONFIRMED",
+      // A null update receipt is refused by recovery itself, before adoption.
+      code: file.endsWith("last-update.json")
+        ? "UPDATE_RECORD_INVALID"
+        : "UPDATE_SOURCE_IDENTITY_UNCONFIRMED",
     });
     expect(mocks.find).not.toHaveBeenCalled();
     expect(mocks.discover).not.toHaveBeenCalled();
@@ -9672,6 +9741,32 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
         download: { phase: "downloading", id: stageId, producer: ended },
       });
     const rows: [string, () => Promise<void>, () => Promise<string>][] = [
+      [
+        "the cleanup marker with a byte-order mark",
+        async () =>
+          fs.writeFile(
+            markerFile(),
+            Buffer.from(`\ufeff${JSON.stringify(handleMarker())}\n`),
+            { mode: 0o600 },
+          ),
+        async () => markerFile(),
+      ],
+      [
+        "the update receipt holding JSON null at recovery",
+        async () =>
+          fs.writeFile(path.join(installed(), "last-update.json"), "null\n", {
+            mode: 0o600,
+          }),
+        async () => path.join(installed(), "last-update.json"),
+      ],
+      [
+        "the ready record holding JSON null at recovery",
+        async () =>
+          fs.writeFile(path.join(installed(), "ready.json"), "null\n", {
+            mode: 0o600,
+          }),
+        async () => path.join(installed(), "ready.json"),
+      ],
       [
         "the cleanup marker at startup",
         async () => writeMarker(dupKey(JSON.stringify(handleMarker()))),

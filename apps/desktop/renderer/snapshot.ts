@@ -16,6 +16,7 @@ import type {
   RendererFacade,
   WindowSnapshot,
 } from "../../../src/ui/renderer/contract";
+import { updateOutcomeUnknown } from "../../../src/ui/update-block-message";
 import { ConnectionStatusViewSchema } from "./connection-status";
 import { defaultSidebarPreference } from "./sidebar-presentation";
 
@@ -124,7 +125,7 @@ export function installOnQuitPreferenceEligible(
       update.phase === "ready" ||
       (update.phase === "failed" &&
         !update.recoveryRequired &&
-        !update.code.includes("UNKNOWN")))
+        !updateOutcomeUnknown(update.code)))
   );
 }
 export function canSetInstallOnQuitPreference(

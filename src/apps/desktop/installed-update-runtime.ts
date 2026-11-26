@@ -2491,6 +2491,21 @@ async function createRuntime(
 
   // Startup order: the unfinished-copy reconciliation, the extraction reclaim,
   // the cleanup fence's settlement, and only then the fence itself.
+  // A present record the strict reader refuses (JSON null, a repeated key,
+  // invalid UTF-8, a byte-order mark) is classified as such, whichever record
+  // it was: the updater would otherwise collapse the throw into the generic
+  // recovery-unavailable outcome. The fence stays either way.
+  const classifyInvalidRecord = async (
+    run: () => ReturnType<InstalledUpdaterPorts["recover"]>,
+  ): ReturnType<InstalledUpdaterPorts["recover"]> => {
+    try {
+      return await run();
+    } catch (error) {
+      if (error instanceof Error && error.message === "UPDATE_RECORD_INVALID")
+        return known("UPDATE_RECORD_INVALID");
+      throw error;
+    }
+  };
   const recoverAtStartup = async (): ReturnType<
     InstalledUpdaterPorts["recover"]
   > => {
@@ -2545,7 +2560,7 @@ async function createRuntime(
         return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
       }
     }
-    return recoverFromRecords(false);
+    return classifyInvalidRecord(() => recoverFromRecords(false));
   };
 
   const updaterPorts: InstalledUpdaterPorts = {
@@ -3079,7 +3094,11 @@ async function createRuntime(
         // A present ready.json, even one that is null or unreadable, may be
         // the committed record: only a verified absence reclaims the archive.
         // The commit is unknown, never a success or a retryable failure: it
-        // is returned, not thrown, so the caller publishes it as itself.
+        // is returned, not thrown, so the caller publishes it as itself. That
+        // holds for every readback that cannot show the write did not happen:
+        // a present record that is null, malformed, replaced or changed while
+        // read (UPDATE_RECORD_INVALID, UPDATE_RECORD_CHANGED) and a read that
+        // fails outright (an I/O error), as well as a readable committed one.
         const commitUnknown = {
           ok: false as const,
           code: "UPDATE_READY_COMMIT_UNKNOWN",
@@ -3092,13 +3111,8 @@ async function createRuntime(
             readRecord,
             recordAbsent,
           );
-        } catch (error) {
-          if (
-            error instanceof Error &&
-            error.message === "UPDATE_RECORD_INVALID"
-          )
-            return commitUnknown;
-          throw error;
+        } catch {
+          return commitUnknown;
         }
         if (committed !== null) return commitUnknown;
         const pending = DownloadIntent.parse(

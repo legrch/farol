@@ -247,7 +247,16 @@ export function createStartup(ports: StartupPorts) {
   ): Promise<z.infer<typeof Journal> | null> {
     await readOperationBinding(root, op, location, read, purpose);
     const file = path.join(root, op.operationId, "journal.json");
-    const raw = await read(file);
+    let raw: unknown;
+    try {
+      raw = await read(file);
+    } catch (error) {
+      // A present journal the strict reader refuses (JSON null, a repeated key,
+      // invalid UTF-8) is malformed journal evidence, as it always was.
+      if (error instanceof Error && error.message === "UPDATE_RECORD_INVALID")
+        throw new Error("UPDATE_OPERATION_JOURNAL_INVALID");
+      throw error;
+    }
     if (raw === null) {
       // JSON null is malformed journal evidence, not the pre-journal crash window.
       // Preserve it; only a separate ENOENT observation permits the none row.

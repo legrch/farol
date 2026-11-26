@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   updateBlockMessage,
+  updateOutcomeUnknown,
   updateResultMessage,
 } from "../../src/ui/update-block-message";
 
@@ -87,5 +88,32 @@ describe("update block messages", () => {
     expect(
       updateResultMessage("unavailable", false, "UPDATE_RELEASE_FORMAT_NEWER"),
     ).toMatch(/cannot confirm update availability/u);
+  });
+});
+
+describe("interrupted download recovery outcomes", () => {
+  const codes = [
+    "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+    "UPDATE_DOWNLOAD_STAGE_CHANGED",
+    "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+  ];
+  it.each(codes)(
+    "gives %s its own guidance, kept files and no retry",
+    (code) => {
+      const message = updateResultMessage("failed", true, code);
+      expect(message).toBe(updateBlockMessage(code));
+      expect(message).toMatch(/Review Diagnostics before updating again/u);
+      expect(message).not.toMatch(/did not finish/u);
+      expect(message).not.toBe(updateResultMessage("failed", true, "UPDATE_X"));
+    },
+  );
+  it.each(codes)("treats %s as an unresolved outcome", (code) => {
+    expect(updateOutcomeUnknown(code)).toBe(true);
+  });
+  it("keeps recognizing every UNKNOWN code and nothing plain", () => {
+    expect(updateOutcomeUnknown("UPDATE_STAGING_OUTCOME_UNKNOWN")).toBe(true);
+    expect(updateOutcomeUnknown("UPDATE_READY_COMMIT_UNKNOWN")).toBe(true);
+    expect(updateOutcomeUnknown("UPDATE_DOWNLOAD_INTERRUPTED")).toBe(false);
+    expect(updateOutcomeUnknown("UPDATE_NETWORK_FAILURE")).toBe(false);
   });
 });

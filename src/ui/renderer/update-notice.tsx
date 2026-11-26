@@ -4,7 +4,10 @@ import {
   isConfirmedBrowserBlock,
   updateVersionLabel,
 } from "./update-eligibility";
-import { updateBlockMessage } from "../update-block-message";
+import {
+  updateBlockMessage,
+  updateOutcomeUnknown,
+} from "../update-block-message";
 
 // The shell can remount this component while an update changes phase. A
 // dismissed popup stays hidden for this window session; the saved update and
@@ -22,7 +25,7 @@ export function acknowledgeUpdateNotice(facade: RendererFacade): void {
     snapshot.status !== "current" ||
     snapshot.intents.update?.state === "pending" ||
     snapshot.intents.update?.state === "unknown" ||
-    (update.phase === "failed" && update.code.includes("UNKNOWN")) ||
+    (update.phase === "failed" && updateOutcomeUnknown(update.code)) ||
     (update.phase === "ready" && update.blockedBy?.includes("UNKNOWN"))
   )
     return;
@@ -58,7 +61,7 @@ export function UpdateNotice({
     snapshot.intents.update?.state === "unknown" ||
     snapshot.intents["update-notice"]?.state === "pending" ||
     snapshot.intents["update-notice"]?.state === "unknown" ||
-    (update.phase === "failed" && update.code.includes("UNKNOWN")) ||
+    (update.phase === "failed" && updateOutcomeUnknown(update.code)) ||
     (update.phase === "ready" &&
       Boolean(update.blockedBy?.includes("UNKNOWN")));
   return (

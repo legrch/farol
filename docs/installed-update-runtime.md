@@ -656,8 +656,10 @@ the reclaim scans. Only a verified absence (ENOENT) is "no marker": a present
 file holding JSON `null`, like any unreadable one, is `UPDATE_RECORD_INVALID`,
 keeps the fence and is never settled, the same rule as the restore intent.
 Every update record goes through one decoder (`readRecord`) that decodes as the
-repair tool's `strict_json` does: invalid UTF-8 or a duplicate key at any depth
-makes a present record invalid (`UPDATE_RECORD_INVALID`), so no reader that
+repair tool's `strict_json` does: invalid UTF-8, a leading byte-order mark, a
+top-level JSON `null` (every writer emits an object, and a present `null` would
+be indistinguishable from an absent file) or a duplicate key at any depth makes
+a present record invalid (`UPDATE_RECORD_INVALID`), so no reader that
 authorizes a cleanup, an unlink or an admission can see a record the repair tool
 would refuse. The marker's settlement re-reads it through the same strict reader
 immediately before the unlink; a re-read that refuses keeps the marker. A NUL or
@@ -676,6 +678,15 @@ committed record (present, null or unreadable), the retention returns
 `UPDATE_READY_COMMIT_UNKNOWN` with recovery required, as itself rather than
 through the generic staging code: the archive and the intent are kept, and the
 outcome is neither a success nor a retryable failure.
+
+Recovery classifies that refusal as `UPDATE_RECORD_INVALID` whichever record
+it came from (the update receipt, an operation journal, the ready record, the
+download intent, the restore intent or the cleanup marker), and keeps the fence.
+The Updates window shows the recovery outcomes of an interrupted download
+(`UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED`, `UPDATE_DOWNLOAD_STAGE_CHANGED`,
+`UPDATE_DOWNLOAD_STAGE_DISPLACED`) as unresolved outcomes with their own
+guidance, like any `UNKNOWN` code, and the operation view classifies all three
+as unknown.
 
 **Interrupted download.** A download intent records a producer (pid and process
 start) and a phase, `downloading` and then `verifying` once the native verifier

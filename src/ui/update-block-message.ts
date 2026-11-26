@@ -32,7 +32,31 @@ const messages: Readonly<Record<string, string>> = {
   UPDATE_STATE_UNREADABLE: "Farol couldn’t read its update status.",
   UPDATE_VERIFICATION_RECOVERY_REQUIRED:
     "An earlier package check did not finish. Its files are saved. Review Diagnostics to recover that check before updating.",
+  UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED:
+    "Farol could not confirm that an interrupted update download left no unfinished package check. Its files are kept. Review Diagnostics before updating again; do not repeat the download.",
+  UPDATE_DOWNLOAD_STAGE_CHANGED:
+    "The folder of an interrupted update download changed while Farol was cleaning it up. Nothing was deleted. Review Diagnostics before updating again.",
+  UPDATE_DOWNLOAD_STAGE_DISPLACED:
+    "Farol moved an interrupted update download aside to clean it up and could not put it back. Its files are kept. Review Diagnostics before updating again.",
 };
+
+// Recovery of an interrupted download reports why it kept the download's files.
+// Each is an unresolved outcome that keeps the update fenced, so it is shown
+// and gated like any other unknown outcome, though its code has no UNKNOWN in it.
+const stageRecoveryCodes: ReadonlySet<string> = new Set([
+  "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+  "UPDATE_DOWNLOAD_STAGE_CHANGED",
+  "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+]);
+
+/**
+ * Whether an update outcome code is an unresolved one, whose result the owner
+ * must not repeat the action over: any `UNKNOWN` code, and the stage recovery
+ * outcomes above.
+ */
+export function updateOutcomeUnknown(code: string): boolean {
+  return code.includes("UNKNOWN") || stageRecoveryCodes.has(code);
+}
 
 // These failures carry their own guidance, not the generic copy: first-launch
 // adoption failures and a newer release format this version cannot read.
@@ -62,6 +86,8 @@ export function updateResultMessage(
   if (code === "UPDATE_NETWORK_FAILURE")
     return "Farol couldn't get update data from GitHub. Check your connection before trying again.";
   if (code === "UPDATE_VERIFICATION_RECOVERY_REQUIRED") return messages[code]!;
+  if (code !== undefined && stageRecoveryCodes.has(code))
+    return messages[code]!;
   if (code !== undefined && adoptionResultCodes.has(code))
     return messages[code]!;
   return recoveryRequired
