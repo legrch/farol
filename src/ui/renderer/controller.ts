@@ -6,11 +6,6 @@ import { setupCompletionAllowed } from "../setup-completion";
 import { OperationsSnapshotSchema } from "../../../apps/desktop/renderer/operations-contract";
 import { ConnectionStatusClock } from "./connection/clock";
 import {
-  automaticUpdateAvailable,
-  updateCheckAllowed,
-  confirmedRestartAllowed,
-} from "./update-eligibility";
-import {
   parseNavigationShortcuts,
   type NavigationShortcuts,
 } from "../../pkg/ipc/navigation-shortcuts";
@@ -91,8 +86,11 @@ import {
   BootstrapProjectionSchema,
   canSetInstallOnQuitPreference,
   initial,
-  installOnQuitPreferenceEligible,
 } from "../../../apps/desktop/renderer/snapshot";
+import {
+  createUpdateIntents,
+  type UpdateIntents,
+} from "../../../apps/desktop/renderer/updates/intents";
 import {
   createEditRegistry,
   settlesAcknowledgedEdit,
@@ -138,7 +136,7 @@ export class WindowController implements RendererFacade {
   private browserRouteRevision = 0;
   private browserHistoryRevision = 0;
   private updateRevision = 0;
-  private pendingUpdateCheck = false;
+  private readonly updates: UpdateIntents;
   private staleRevision = 0;
   private historyRevision = 0;
   private bufferedTasks: WindowSnapshot["tasks"] | null = null;
@@ -205,7 +203,15 @@ export class WindowController implements RendererFacade {
       value: NavigationShortcuts,
     ) => void = () => {},
     private readonly compactViewport: () => boolean = () => false,
-  ) {}
+  ) {
+    this.updates = createUpdateIntents({
+      api: this.api,
+      snapshot: () => this.state,
+      dispatch: (key, payload, run) => this.dispatch(key, payload, run),
+      adopt: (value) => this.adoptUpdate(value),
+      revision: () => this.updateRevision,
+    });
+  }
   readonly getSnapshot = (): WindowSnapshot => this.state;
   readonly subscribe = (listener: () => void): (() => void) => {
     if (this.disposed) return () => {};
@@ -517,10 +523,7 @@ export class WindowController implements RendererFacade {
         }
       }
       if (this.refreshPending || this.overflow) await this.refresh();
-      if (this.pendingUpdateCheck && !this.disposed) {
-        this.pendingUpdateCheck = false;
-        await this.checkUpdateOnOpen();
-      }
+      await this.updates.settlePendingCheck(this.disposed);
     })();
     return this.startPromise;
   }
@@ -1712,282 +1715,14 @@ export class WindowController implements RendererFacade {
       return { id: intention, state: "applied", code: null };
     });
   }
-  private dispatchUpdate(
-    key: string,
-    payload: unknown,
-    run: (operationId: string) => Promise<Intent>,
-  ): Promise<Intent> {
-    let operationId: string | undefined;
-    const result = this.dispatch(key, payload, () => {
-      operationId = crypto.randomUUID();
-      return run(operationId);
-    });
-    return result.then((intent) => {
-      if (operationId && intent.state !== "pending")
-        this.api.settleUpdateDirect?.({ operationId, outcome: intent.state });
-      return intent;
-    });
-  }
-
-  private invokeTrackedUpdate(
-    command: Parameters<PreloadApi["installedUpdate"]>[0],
-    operationId: string,
-  ): Promise<unknown> {
-    return this.api.settleUpdateDirect
-      ? this.api.installedUpdate(command, operationId)
-      : this.api.installedUpdate(command);
-  }
-
   update(action: UpdateAction, noticeKey?: string): Promise<Intent> {
-    // A retained renderer may still name the retired command. Refuse locally
-    // without replacing its current update intent or sending another effect.
-    if (action === "rollback" || action === "recover")
-      return Promise.resolve({
-        id: "update",
-        state: "refused",
-        code: "UPDATE_FORWARD_ONLY",
-      });
-    if (action === "notice-seen") {
-      const current = this.state.update;
-      const notice = "notice" in current ? current.notice : undefined;
-      if (
-        !notice ||
-        notice.key !== noticeKey ||
-        notice.seen ||
-        notice.blockedBy ||
-        this.state.intents.update?.state === "pending" ||
-        this.state.intents.update?.state === "unknown" ||
-        (current.phase === "failed" && current.code.includes("UNKNOWN")) ||
-        (current.phase === "ready" && current.blockedBy?.includes("UNKNOWN"))
-      )
-        return Promise.resolve({
-          id: "update-notice",
-          state: "refused",
-          code: "UPDATE_NOTICE_NOT_AVAILABLE",
-        });
-      return this.dispatchUpdate(
-        "update-notice",
-        { action, noticeKey },
-        async (operationId) => {
-          const revision = this.updateRevision;
-          const value = InstalledUpdateViewSchema.safeParse(
-            await this.invokeTrackedUpdate(
-              {
-                kind: "notice-seen",
-                noticeKey: notice.key,
-              },
-              operationId,
-            ),
-          );
-          if (
-            !value.success ||
-            !("notice" in value.data) ||
-            !value.data.notice ||
-            value.data.notice.key !== notice.key ||
-            JSON.stringify({ ...value.data, notice: undefined }) !==
-              JSON.stringify({ ...current, notice: undefined })
-          )
-            return {
-              id: "update-notice",
-              state: "unknown",
-              code: "UPDATE_NOTICE_OUTCOME_UNKNOWN",
-            };
-          // The reply acknowledges its bound notice, not a newer event. The
-          // command's own published event may already have supplied this state.
-          if (this.updateRevision === revision) this.adoptUpdate(value.data);
-          const blocked = value.data.notice.blockedBy;
-          return {
-            id: "update-notice",
-            state: blocked?.includes("UNKNOWN")
-              ? "unknown"
-              : blocked || !value.data.notice.seen
-                ? "refused"
-                : "applied",
-            code:
-              blocked ??
-              (value.data.notice.seen
-                ? null
-                : "UPDATE_NOTICE_NOT_ACKNOWLEDGED"),
-          };
-        },
-      );
-    }
-    if (
-      (action === "download" || action === "skip") &&
-      this.state.update.phase !== "available"
-    )
-      return Promise.resolve({
-        id: "update",
-        state: "refused",
-        code: "UPDATE_NOT_AVAILABLE",
-      });
-    if (
-      action === "restart" &&
-      (this.state.update.phase !== "ready" ||
-        this.state.update.blockedBy !== null)
-    )
-      return Promise.resolve({
-        id: "update",
-        state: "refused",
-        code: "UPDATE_NOT_READY",
-      });
-    if (
-      action === "restart-confirmed" &&
-      (!confirmedRestartAllowed(this.state.update) ||
-        this.state.update.phase !== "ready" ||
-        this.state.update.version !== noticeKey)
-    )
-      return Promise.resolve({
-        id: "update",
-        state: "refused",
-        code: "UPDATE_NOT_READY",
-      });
-    return this.dispatchUpdate(
-      "update",
-      { action, version: noticeKey },
-      async (operationId) => {
-        const revision = this.updateRevision;
-        const value = InstalledUpdateViewSchema.safeParse(
-          await this.invokeTrackedUpdate(
-            action === "restart-confirmed"
-              ? { kind: "restart-confirmed", version: noticeKey! }
-              : { kind: action },
-            operationId,
-          ),
-        );
-        if (!value.success)
-          return {
-            id: "update",
-            state: "unknown",
-            code: "UPDATE_OUTCOME_UNKNOWN",
-          };
-        // The reply settles this command, not a more recent progress observation.
-        if (this.updateRevision === revision) this.adoptUpdate(value.data);
-        return {
-          id: "update",
-          state:
-            value.data.phase === "unavailable"
-              ? "refused"
-              : value.data.phase === "failed"
-                ? value.data.code.includes("UNKNOWN")
-                  ? "unknown"
-                  : "refused"
-                : "applied",
-          code:
-            value.data.phase === "failed" || value.data.phase === "unavailable"
-              ? value.data.code
-              : null,
-        };
-      },
-    );
+    return this.updates.update(action, noticeKey);
   }
   setAutomaticDownloads(enabled: boolean): Promise<Intent> {
-    const key = "update-automatic-downloads";
-    const current = this.state;
-    const preference = current.update.automaticUpdatePreference;
-    if (!automaticUpdateAvailable(current))
-      return Promise.resolve({
-        id: key,
-        state: "refused",
-        code: "UPDATE_AUTOMATIC_PREFERENCE_UNAVAILABLE",
-      });
-    if (
-      preference?.status === "confirmed" &&
-      preference.enabled === enabled &&
-      preference.scope === "download-and-install"
-    )
-      return Promise.resolve({ id: key, state: "applied", code: null });
-    return this.dispatchUpdate(key, enabled, async (operationId) => {
-      const revision = this.updateRevision;
-      const parsed = InstalledUpdateViewSchema.safeParse(
-        await this.invokeTrackedUpdate(
-          {
-            kind: "set-automatic-update-preference",
-            enabled,
-            scope: "download-and-install",
-          },
-          operationId,
-        ),
-      );
-      if (!parsed.success || !parsed.data.automaticUpdatePreference)
-        return {
-          id: key,
-          state: "unknown",
-          code: "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
-        };
-      if (this.updateRevision === revision) this.adoptUpdate(parsed.data);
-      const result = parsed.data.automaticUpdatePreference;
-      return result.status === "confirmed" &&
-        result.enabled === enabled &&
-        result.scope === "download-and-install"
-        ? { id: key, state: "applied", code: null }
-        : result.status === "blocked"
-          ? { id: key, state: "refused", code: result.code }
-          : {
-              id: key,
-              state: "unknown",
-              code:
-                result.status === "unknown"
-                  ? result.code
-                  : "UPDATE_AUTOMATIC_PREFERENCE_ACK_MISMATCH",
-            };
-    });
+    return this.updates.setAutomaticDownloads(enabled);
   }
   setInstallOnQuitPreference(enabled: boolean): Promise<Intent> {
-    const key = "update-install-on-quit";
-    const retained = this.state.intents[key];
-    if (retained?.state === "unknown") return Promise.resolve(retained);
-    if (
-      typeof enabled !== "boolean" ||
-      !canSetInstallOnQuitPreference(this.state, this)
-    )
-      return Promise.resolve({
-        id: key,
-        state: "refused",
-        code: "UPDATE_QUIT_PREFERENCE_UNAVAILABLE",
-      });
-    if (this.state.update.installOnQuitPreference?.enabled === enabled)
-      return Promise.resolve({ id: key, state: "applied", code: null });
-    return this.dispatchUpdate(key, enabled, async (operationId) => {
-      // The digest await may have delivered a new admission fence. This
-      // command's own pending intent is a latch, not an eligibility failure.
-      if (!installOnQuitPreferenceEligible(this.state))
-        return {
-          id: key,
-          state: "refused",
-          code: "UPDATE_QUIT_PREFERENCE_UNAVAILABLE",
-        };
-      const revision = this.updateRevision;
-      const parsed = InstalledUpdateViewSchema.safeParse(
-        await this.invokeTrackedUpdate(
-          {
-            kind: "set-install-on-quit-preference",
-            enabled,
-          },
-          operationId,
-        ),
-      );
-      if (!parsed.success || !parsed.data.installOnQuitPreference)
-        return {
-          id: key,
-          state: "unknown",
-          code: "UPDATE_QUIT_PREFERENCE_OUTCOME_UNKNOWN",
-        };
-      if (this.updateRevision === revision) this.adoptUpdate(parsed.data);
-      const result = parsed.data.installOnQuitPreference;
-      return result.status === "confirmed" && result.enabled === enabled
-        ? { id: key, state: "applied", code: null }
-        : result.status === "blocked"
-          ? { id: key, state: "refused", code: result.code }
-          : {
-              id: key,
-              state: "unknown",
-              code:
-                result.status === "unknown"
-                  ? result.code
-                  : "UPDATE_QUIT_PREFERENCE_ACK_MISMATCH",
-            };
-    });
+    return this.updates.setInstallOnQuitPreference(enabled, this);
   }
   observeWorkspaceEdit(operationId: string): Promise<Intent> {
     return this.configure(
@@ -2662,18 +2397,6 @@ export class WindowController implements RendererFacade {
     }
     return true;
   }
-  private checkUpdateOnOpen(): Promise<Intent> | undefined {
-    const { update, intents } = this.state;
-    // Opening the menu observes an existing download/install or retained unknown.
-    if (
-      intents.update?.state === "pending" ||
-      intents.update?.state === "unknown" ||
-      (update.phase === "failed" && update.code.includes("UNKNOWN")) ||
-      !updateCheckAllowed(update)
-    )
-      return;
-    return this.update("check");
-  }
   private shellAction(value: unknown): void {
     const parsed = ShellActionSchema.safeParse(value);
     if (!parsed.success || this.seenActions.has(parsed.data.eventId)) return;
@@ -2702,8 +2425,7 @@ export class WindowController implements RendererFacade {
     else if (action.action === "close-overlay") this.dismissOverlay();
     else if (action.action === "open-updates") {
       this.overlay("update");
-      if (this.booting) this.pendingUpdateCheck = true;
-      else void this.checkUpdateOnOpen();
+      this.updates.requestCheckOnOpen(this.booting);
     } else {
       if (
         action.source === "auth-window-closed" &&
