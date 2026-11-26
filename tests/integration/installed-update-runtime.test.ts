@@ -83,9 +83,17 @@ vi.mock(
 );
 vi.mock(
   "../../src/modules/release/infra/native/update-package-verifier",
-  () => ({
-    createUpdatePackageVerifier: () => ({ discard: mocks.discardPackage }),
-  }),
+  async () => {
+    const { reclaimExtractions } =
+      await import("../../src/modules/release/infra/native/reclaim");
+    return {
+      createUpdatePackageVerifier: () => ({
+        discard: mocks.discardPackage,
+        // The reclaim itself is real; only its process table is doubled.
+        reclaimAbandoned: reclaimExtractions,
+      }),
+    };
+  },
 );
 vi.mock(
   "../../src/modules/release/infra/native/installed-update-helper",
@@ -7126,7 +7134,21 @@ describe("normal Quit runtime (disposable files; helper and native ports doubled
           phase: "failed",
           code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
         });
-        expect(await fs.readFile(ready, "utf8")).toBe(originalBytes);
+        // The fence stands (this fixture's archive lies outside the update
+        // root, so the marker cannot be trusted), but the unfinished copy it
+        // guards is reconciled first and nothing else in the record changes.
+        const { preparation, ...rest } = JSON.parse(originalBytes);
+        expect(await fs.readFile(ready, "utf8")).not.toBe(originalBytes);
+        expect(JSON.parse(await fs.readFile(ready, "utf8"))).toEqual(rest);
+        await expect(
+          fs.lstat(
+            path.join(
+              path.dirname(ready),
+              preparation.operationId,
+              "staged.app",
+            ),
+          ),
+        ).rejects.toMatchObject({ code: "ENOENT" });
         expect(mocks.helper).not.toHaveBeenCalled();
         await fresh.close();
       }
@@ -9198,5 +9220,370 @@ describe("attested Go update helper (no Python alternative; mocked launch seam)"
     // An ordinary installed update has no promotion lease to hand over.
     expect(launch.promotionLease).toBeUndefined();
     await controller.close();
+  });
+});
+
+describe("startup reclaim of leaked verifier extractions (disposable state, native ports doubled)", () => {
+  const installed = () => path.join(userData, "installed-updates");
+  const markerFile = () =>
+    path.join(installed(), "package-cleanup-pending.json");
+  const OWNER_START = "Thu Nov 26 10:00:00 2026";
+  const handle = () => path.join(installed(), "github-updates/archive.zip");
+  let table: Map<number, string>;
+  let warnings: unknown[][];
+  beforeEach(async () => {
+    table = new Map();
+    warnings = [];
+    vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
+      warnings.push(args);
+    });
+    // Only `ps` is answered here: an absent pid unless the test says it runs.
+    const base = mocks.exec.getMockImplementation()!;
+    mocks.exec.mockImplementation(async (file: unknown, args: string[]) => {
+      if (file !== "/bin/ps") return base(file, args);
+      const probe = table.get(Number(args[1]));
+      if (probe === "failed") throw new Error("ps unavailable");
+      if (probe === undefined)
+        throw Object.assign(new Error("exit 1"), {
+          code: 1,
+          stdout: "",
+          stderr: "",
+        });
+      return { stdout: `${probe}\n`, stderr: "" };
+    });
+    await fs.mkdir(installed(), { mode: 0o700, recursive: true });
+    await fs.chmod(installed(), 0o700);
+  });
+  const writeMarker = (content: unknown) =>
+    fs.writeFile(
+      markerFile(),
+      typeof content === "string" ? content : JSON.stringify(content),
+      { mode: 0o600 },
+    );
+  const handleMarker = () => ({
+    schema: "farol.update-package-cleanup/1",
+    handle: handle(),
+  });
+  async function leak(
+    name: string,
+    lease: Record<string, unknown> | null = {},
+    parent = installed(),
+  ) {
+    const directory = path.join(parent, `farol-update-verify-${name}`);
+    await fs.mkdir(path.join(directory, "Farol.app/Contents"), {
+      recursive: true,
+      mode: 0o700,
+    });
+    await fs.chmod(directory, 0o700);
+    await fs.writeFile(path.join(directory, "Farol.app/Contents/payload"), "x");
+    if (lease)
+      await fs.writeFile(
+        path.join(directory, "lease.json"),
+        JSON.stringify({
+          schema: "farol.update-extraction-lease/1",
+          ownerPid: 4242,
+          ownerProcessStart: OWNER_START,
+          ownerStartedAtMs: Date.parse(OWNER_START),
+          handle: handle(),
+          phase: "created",
+          updatedAt: Date.now() - 3_600_000,
+          children: [],
+          ...lease,
+        }),
+        { mode: 0o600 },
+      );
+    return directory;
+  }
+  const exists = (file: string) =>
+    fs.lstat(file).then(
+      () => true,
+      () => false,
+    );
+  const lifetime = async () => {
+    const controller = (await createInstalledUpdateRuntime(options()))!;
+    await controller.initialize();
+    return controller;
+  };
+
+  it("clears a handle-only cleanup fence once the leaked extraction is reclaimed", async () => {
+    const extraction = await leak("a");
+    await writeMarker(handleMarker());
+    const controller = await lifetime();
+    expect(controller.snapshot().phase).not.toBe("failed");
+    expect(await exists(extraction)).toBe(false);
+    expect(await exists(markerFile())).toBe(false);
+    await controller.close();
+  });
+  it("reclaims extractions in a download directory and in the root, then clears the fence", async () => {
+    const download = path.join(installed(), `download-${"c".repeat(32)}`);
+    await fs.mkdir(download, { mode: 0o700 });
+    await fs.chmod(download, 0o700);
+    const inDownload = await leak("a", {}, download);
+    const inRoot = await leak("b");
+    await writeMarker(handleMarker());
+    const controller = await lifetime();
+    expect(controller.snapshot().phase).not.toBe("failed");
+    expect(await exists(inDownload)).toBe(false);
+    expect(await exists(inRoot)).toBe(false);
+    expect(await exists(markerFile())).toBe(false);
+    await controller.close();
+  });
+  it("reclaims a leaked extraction at launch even when no marker exists", async () => {
+    const extraction = await leak("a");
+    const controller = await lifetime();
+    expect(controller.snapshot().phase).not.toBe("failed");
+    expect(await exists(extraction)).toBe(false);
+    await controller.close();
+  });
+  it.each([
+    ["a live owner", () => table.set(4242, OWNER_START), "live owner"],
+    ["unknown liveness", () => table.set(4242, "failed"), "unknown liveness"],
+  ] as const)(
+    "keeps the fence and the extraction for %s, and says why",
+    async (_name, arrange, reason) => {
+      arrange();
+      const extraction = await leak("a");
+      await writeMarker(handleMarker());
+      const controller = await lifetime();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        recoveryRequired: true,
+      });
+      expect(await exists(extraction)).toBe(true);
+      expect(await exists(markerFile())).toBe(true);
+      expect(JSON.stringify(warnings)).toContain(reason);
+      await controller.close();
+    },
+  );
+  it("keeps the fence while any one extraction in any staging parent remains", async () => {
+    table.set(4242, OWNER_START);
+    const download = path.join(installed(), `download-${"d".repeat(32)}`);
+    await fs.mkdir(download, { mode: 0o700 });
+    await fs.chmod(download, 0o700);
+    const live = await leak("live", {}, download);
+    const ended = await leak("ended", { ownerPid: 4343 });
+    await writeMarker(handleMarker());
+    const controller = await lifetime();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+    });
+    expect(await exists(live)).toBe(true);
+    // The one that provably ended is still reclaimed.
+    expect(await exists(ended)).toBe(false);
+    expect(await exists(markerFile())).toBe(true);
+    await controller.close();
+  });
+  it("keeps a lease left in its spawn window and its fence", async () => {
+    const extraction = await leak("a", {
+      phase: "spawning",
+      updatedAt: Date.now() - 30_000,
+    });
+    await writeMarker(handleMarker());
+    const controller = await lifetime();
+    expect(controller.snapshot()).toMatchObject({ phase: "failed" });
+    expect(await exists(extraction)).toBe(true);
+    expect(JSON.stringify(warnings)).toContain("spawning window");
+    await controller.close();
+  });
+  it("handles a leaseless legacy entry by the 24 hour rule", async () => {
+    const old = await leak("old", null);
+    const recent = await leak("recent", null);
+    const when = new Date(Date.now() - 30 * 3_600_000);
+    await fs.utimes(old, when, when);
+    await writeMarker(handleMarker());
+    const controller = await lifetime();
+    expect(await exists(old)).toBe(false);
+    expect(await exists(recent)).toBe(true);
+    expect(controller.snapshot()).toMatchObject({ phase: "failed" });
+    expect(await exists(markerFile())).toBe(true);
+    await controller.close();
+  });
+  it("keeps a corrupt marker's fence even after reclaiming extractions", async () => {
+    const extraction = await leak("a");
+    await writeMarker("{ not json");
+    const controller = await lifetime();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+    });
+    expect(await exists(markerFile())).toBe(true);
+    expect(await exists(extraction)).toBe(false);
+    await controller.close();
+  });
+  const unusableMarkers: [string, () => unknown][] = [
+    [
+      "a handle outside the update root",
+      () => ({
+        schema: "farol.update-package-cleanup/1",
+        handle: path.join(root, "elsewhere/archive.zip"),
+      }),
+    ],
+    [
+      "a handle that climbs out of the update root",
+      () => ({
+        schema: "farol.update-package-cleanup/1",
+        handle: `${installed()}/../elsewhere/archive.zip`,
+      }),
+    ],
+    [
+      "a relative handle",
+      () => ({
+        schema: "farol.update-package-cleanup/1",
+        handle: "archive.zip",
+      }),
+    ],
+    [
+      "an operation root outside the update root",
+      () => ({ ...handleMarker(), operationRoot: path.join(root, "x") }),
+    ],
+    ["an unknown field", () => ({ ...handleMarker(), extra: true })],
+  ];
+  it.each(unusableMarkers)(
+    "keeps the fence for a marker with %s even with no extraction",
+    async (_name, content) => {
+      await writeMarker(content());
+      const controller = await lifetime();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+      });
+      expect(await exists(markerFile())).toBe(true);
+      await controller.close();
+    },
+  );
+  it("clears an operation-root marker whose root holds no prepared copy", async () => {
+    const operationRoot = path.join(installed(), "e".repeat(32));
+    await fs.mkdir(operationRoot, { mode: 0o700 });
+    await writeMarker({ ...handleMarker(), operationRoot });
+    const controller = await lifetime();
+    expect(controller.snapshot().phase).not.toBe("failed");
+    expect(await exists(markerFile())).toBe(false);
+    await controller.close();
+  });
+  it("keeps an operation-root marker whose prepared copy nothing records", async () => {
+    const operationRoot = path.join(installed(), "e".repeat(32));
+    await fs.mkdir(path.join(operationRoot, "staged.app"), {
+      recursive: true,
+      mode: 0o700,
+    });
+    await writeMarker({ ...handleMarker(), operationRoot });
+    const controller = await lifetime();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+    });
+    expect(await exists(path.join(operationRoot, "staged.app"))).toBe(true);
+    expect(await exists(markerFile())).toBe(true);
+    await controller.close();
+  });
+
+  describe("after a Quit deadline expires mid-apply", () => {
+    let clock: number;
+    let deadlineAt: number;
+    const request = () => ({ kind: "ordinary-quit" as const, deadlineAt });
+    const optedIn = async () => {
+      const controller = (await createInstalledUpdateRuntime(options()))!;
+      await controller.initialize();
+      await controller.check();
+      await controller.download();
+      expect(await controller.setInstallOnQuitPreference(true)).toMatchObject({
+        status: "confirmed",
+      });
+      return controller;
+    };
+    beforeEach(() => {
+      clock = Date.now();
+      deadlineAt = clock + 10_000;
+      vi.spyOn(Date, "now").mockImplementation(() => clock);
+      // The retained archive sits where the transport keeps it: inside the
+      // update root, which is what a marker's handle must name.
+      mocks.download.mockResolvedValue({
+        ok: true,
+        value: {
+          handle: handle(),
+          manifest,
+          identity: { ...manifest, updateChannel: "github-owner-beta" },
+          stagedAppPath: staging,
+          stagingRoot: path.dirname(staging),
+        },
+      });
+    });
+    const preparedCopyOf = async () => {
+      const [operation] = (await fs.readdir(installed())).filter((name) =>
+        /^[0-9a-f]{32}$/u.test(name),
+      );
+      return path.join(installed(), operation!, "staged.app");
+    };
+
+    it("settles a timeout during the copy through the preparation reconciliation", async () => {
+      const controller = await optedIn();
+      const copy = mocks.copyApp.getMockImplementation()!;
+      mocks.copyApp.mockImplementation(async (...args) => {
+        await copy(...args);
+        clock = deadlineAt;
+      });
+      expect((await controller.applyOnNormalQuit(request())).status).toBe(
+        "unknown",
+      );
+      const staged = await preparedCopyOf();
+      const stale = JSON.parse(await fs.readFile(markerFile(), "utf8"));
+      expect(stale.operationRoot).toBe(path.dirname(staged));
+      expect(await exists(staged)).toBe(true);
+      await controller.close();
+      clock = deadlineAt + 60_000;
+      const next = await lifetime();
+      expect(next.snapshot().phase).toBe("ready");
+      expect(await exists(staged)).toBe(false);
+      expect(await exists(markerFile())).toBe(false);
+      await next.close();
+    });
+    it("removes that prepared copy before refusing for an extraction it cannot reclaim", async () => {
+      const controller = await optedIn();
+      const copy = mocks.copyApp.getMockImplementation()!;
+      mocks.copyApp.mockImplementation(async (...args) => {
+        await copy(...args);
+        clock = deadlineAt;
+      });
+      await controller.applyOnNormalQuit(request());
+      const staged = await preparedCopyOf();
+      await controller.close();
+      clock = deadlineAt + 60_000;
+      table.set(4242, OWNER_START);
+      const live = await leak("live");
+      const next = await lifetime();
+      expect(next.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+      });
+      expect(await exists(staged)).toBe(false);
+      expect(await exists(live)).toBe(true);
+      expect(await exists(markerFile())).toBe(true);
+      await next.close();
+    });
+    it("reclaims a verification that finished after the deadline at the next launch", async () => {
+      const controller = await optedIn();
+      let extraction = "";
+      const verify = mocks.verify.getMockImplementation()!;
+      mocks.verify.mockImplementationOnce(async (...args) => {
+        // The verifier created its extraction, then its owner ran out of time.
+        extraction = await leak("late");
+        clock = deadlineAt;
+        return verify(...args);
+      });
+      expect((await controller.applyOnNormalQuit(request())).status).toBe(
+        "unknown",
+      );
+      expect(await exists(markerFile())).toBe(true);
+      expect(await exists(extraction)).toBe(true);
+      await controller.close();
+      clock = deadlineAt + 60_000;
+      const next = await lifetime();
+      expect(next.snapshot().phase).toBe("ready");
+      expect(await exists(extraction)).toBe(false);
+      expect(await exists(markerFile())).toBe(false);
+      await next.close();
+    });
   });
 });

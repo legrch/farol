@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { captureInstalledProcessStart } from "./installed-update-helper";
+import { reclaimExtractions } from "./reclaim";
 import {
   createLeaseWriter,
   EXTRACTION_PREFIX,
@@ -529,6 +530,11 @@ export function createUpdatePackageVerifier(
         throw new PackageVerificationError("archive_refused", cause);
       }
     },
+    /**
+     * Remove extractions that a dead process left behind, by their lease. The
+     * app layer reaches the reclaim through this verifier, not past it.
+     */
+    reclaimAbandoned: reclaimExtractions,
     /** In-memory binding only. After restart, reverify the opaque handle. */
     verifiedAppPath(handle: string): string | null {
       return verified.get(handle)?.stagedAppPath ?? null;
