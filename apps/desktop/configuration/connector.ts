@@ -742,6 +742,32 @@ export function createConfigurationConnector(
     );
   }
 
+  // Whether this request may meet the credential owner's retained recovery.
+  // A request names the fence it recovers or none. One that names a fence is
+  // admitted only over that exact retained recovery (the window's statement
+  // may be stale); one that names none never settles a retained fence and
+  // follows the ordinary rules otherwise. Nothing is written on a refusal.
+  function recoveryRefusal(
+    command: ConnectorSetupCommand,
+  ): ProductConfigurationResult | null {
+    const owner = configuration();
+    const current = owner?.snapshot();
+    const retained =
+      current?.status === "ready" ? retainedFenceStillOwned(current) : null;
+    const claimed = command.recovery;
+    if (claimed === undefined)
+      return retained === null
+        ? null
+        : configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
+    const held = retained ? recoveryOf(retained) : null;
+    return held !== null &&
+      held.generation === claimed.generation &&
+      held.revision === claimed.revision &&
+      held.tunnelId === claimed.tunnelId
+      ? null
+      : configurationFailure("CONNECTOR_RECOVERY_STALE");
+  }
+
   async function configureSaveAndConnect(
     command: ConnectorSetupCommand,
   ): Promise<ProductConfigurationResult> {
@@ -774,6 +800,10 @@ export function createConfigurationConnector(
                   "AUTHORITY_CHANGE_IN_PROGRESS",
                 );
               }
+              // The identity check belongs to the first admission only: the
+              // save step settles the fence it names, so the second admission
+              // no longer finds it.
+              let identityChecked = false;
               return await observeConnectorStart(() =>
                 runAdmittedConnectorSetup(
                   {
@@ -800,6 +830,11 @@ export function createConfigurationConnector(
                       const current = configuration()!.snapshot();
                       if (current.status !== "ready")
                         return configurationFailure("SETTINGS_UNAVAILABLE");
+                      if (!identityChecked) {
+                        identityChecked = true;
+                        const refused = recoveryRefusal(command);
+                        if (refused) return refused;
+                      }
                       if (
                         secureMcpConnectorRuntime()!.hasUnresolvedEffect() ||
                         // A fence the credential owner itself still holds
@@ -818,12 +853,15 @@ export function createConfigurationConnector(
                       return { ok: true, snapshot: current };
                     },
                     current: () => configuration()!!.snapshot(),
-                    save: () =>
-                      configureAdmittedProduct({
+                    // The identity is checked again at the effect itself, with
+                    // nothing between the check and the credential owner.
+                    save: async () =>
+                      recoveryRefusal(command) ??
+                      (await configureAdmittedProduct({
                         kind: "connector.configure",
                         tunnelId: command.tunnelId,
                         runtimeKey: command.runtimeKey,
-                      }),
+                      })),
                     start: () => startAdmittedSecureMcpConnector(false),
                   },
                 ),

@@ -89,11 +89,15 @@ const recoverableAttempt = /^settings:connector\.save-and-connect:/u;
 /**
  * An uncertain save-and-connect receipt the current document has outgrown.
  * The receipt itself is never rewritten: it keeps its recorded outcome in
- * Activity. It stops fencing once the snapshot shows the fence settled and the
- * key stored, and a later save-and-connect receipt of this window ended
- * known (applied or refused). Main only accepts that later command over its
- * retained recovery, so the earlier effect is settled, whatever the later
- * Start did.
+ * Activity. It stops fencing only when all of these hold:
+ *   - a later save-and-connect of this window was a recovery retry that named
+ *     a fence identity, which main admits only over exactly that retained
+ *     recovery;
+ *   - that retry's own receipt says the credential step saved the key and the
+ *     retry ended known (applied, or refused after the save, such as a Start
+ *     refusal), so a refusal that saved nothing never counts;
+ *   - the snapshot now shows the fence settled past that identity and the key
+ *     stored.
  */
 export function attemptOutgrown(
   intent: Intent,
@@ -115,13 +119,18 @@ export function attemptOutgrown(
     !order
   )
     return false;
-  return [...Object.values(snapshot.intents), ...local].some(
-    (receipt) =>
+  return [...Object.values(snapshot.intents), ...local].some((receipt) => {
+    const retry = snapshot.recoveryRetries?.[receipt.id];
+    return (
+      retry !== undefined &&
       receipt.id !== intent.id &&
       recoverableAttempt.test(receipt.id) &&
       (receipt.state === "applied" || receipt.state === "refused") &&
-      (snapshot.setupCheckOrder?.[receipt.id] ?? 0) > order,
-  );
+      receipt.connectorSetup?.credentials === "saved" &&
+      (snapshot.setupCheckOrder?.[receipt.id] ?? 0) > order &&
+      settings.revision > retry.revision
+    );
+  });
 }
 
 export function dependencyFences(

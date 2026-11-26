@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ProductConfigurationCommandSchema } from "../../../src/pkg/product-settings/contract";
 import { credentialRecoveryMatches } from "../../../src/ui/renderer/command-eligibility";
+import type { WindowSnapshot } from "../../../src/ui/renderer/contract";
 import { computerSetup } from "../../../src/ui/renderer/computer-setup";
 import { setupStepCheck } from "../../../src/ui/renderer/setup-gate";
 import { signInPresentation } from "../../../src/ui/renderer/sign-in-presentation";
@@ -14,6 +15,13 @@ export function Connection(props: PageProps) {
   if (props.setupStep === "signin") return <SignInStep {...props} />;
   if (props.setupStep === "attachment") return <AddToChatGPT {...props} />;
   return <ConnectMac {...props} />;
+}
+// The fence identity a retry names, read at the moment of sending.
+function recoveryClaim(snapshot: WindowSnapshot) {
+  const recovery = snapshot.credentialRecovery;
+  return recovery && credentialRecoveryMatches(snapshot)
+    ? ({ recovery } as const)
+    : {};
 }
 function ConnectMac({
   settings,
@@ -125,6 +133,9 @@ function ConnectMac({
               buildId: current.buildId ?? "",
               tunnelId,
               runtimeKey: secret,
+              // Only a retry under a matching flag names the fence it recovers;
+              // main admits it solely over exactly that retained recovery.
+              ...recoveryClaim(facade.getSnapshot()),
             })
           )?.state !== "applied"
         )

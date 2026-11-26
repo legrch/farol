@@ -360,13 +360,23 @@ async function harness() {
         tunnelId,
         runtimeKey,
       }),
-    saveAndConnect: (runtimeKey: string, tunnelId = "replacement") =>
+    // `recovery` is the fence identity a retry claims; absent for a fresh save.
+    saveAndConnect: (
+      runtimeKey: string,
+      tunnelId = "replacement",
+      recovery?: {
+        generation: number;
+        revision: number;
+        tunnelId: string | null;
+      } | null,
+    ) =>
       handler.configureSaveAndConnect({
         kind: "connector.save-and-connect",
         operationId: "11111111-1111-4111-8111-111111111111",
         buildId,
         tunnelId,
         runtimeKey,
+        ...(recovery ? { recovery } : {}),
       }),
     key: () => fs.readFile(keyFile, "utf8"),
   };
@@ -631,7 +641,11 @@ describe("credential replacement fence settlement", () => {
   it("(c) settles through the Setup form's save-and-connect retry", async () => {
     const h = await failedCompletion();
 
-    await h.saveAndConnect(NEW_KEY);
+    await h.saveAndConnect(
+      NEW_KEY,
+      "replacement",
+      h.handler.credentialRecovery(),
+    );
 
     expect(h.storeSpy).toHaveBeenCalledOnce();
     expect(await h.key()).toBe(NEW_KEY);
@@ -662,7 +676,11 @@ describe("credential replacement fence settlement", () => {
     expect(connectState(failed.snapshot).outcomeUnknown).toBe(true);
     expect(h.storeSpy).not.toHaveBeenCalled();
 
-    await h.saveAndConnect(NEW_KEY);
+    await h.saveAndConnect(
+      NEW_KEY,
+      "replacement",
+      h.handler.credentialRecovery(),
+    );
 
     expect(await h.key()).toBe(NEW_KEY);
     const snapshot = h.service.snapshot();
@@ -987,7 +1005,11 @@ describe("credential recovery publication", () => {
       false,
     );
 
-    await h.saveAndConnect(NEW_KEY);
+    await h.saveAndConnect(
+      NEW_KEY,
+      "replacement",
+      h.handler.credentialRecovery(),
+    );
 
     // The retry settled the fence without writing the key a second time...
     expect(h.storeSpy).toHaveBeenCalledOnce();
@@ -995,5 +1017,116 @@ describe("credential recovery publication", () => {
     expect(h.start).toHaveBeenCalledOnce();
     // ...and main now says it holds nothing.
     expect(h.handler.credentialRecovery()).toBeNull();
+  });
+});
+
+describe("a save-and-connect retry carries the fence identity it recovers", () => {
+  const stale = (h: Awaited<ReturnType<typeof harness>>) =>
+    h.saveAndConnect(OTHER_KEY, "replacement", {
+      generation: 1,
+      revision: 1,
+      tunnelId: "replacement",
+    });
+
+  it("refuses a recovery claim after the original completion cleared the fence, and never writes the other key", async () => {
+    const h = await failedCompletion();
+    // The window shows this recovery, then reopens.
+    const shown = h.handler.credentialRecovery();
+    expect(shown).not.toBeNull();
+    // Meanwhile the original completion settles the fence.
+    expect((await h.configure(NEW_KEY)).ok).toBe(true);
+    expect(connectState(h.service.snapshot()).outcomeUnknown).toBe(false);
+
+    // The stale recovery form submits a different valid key.
+    await h.saveAndConnect(OTHER_KEY, "replacement", shown);
+
+    expect(h.storeSpy).toHaveBeenCalledOnce();
+    expect(await h.key()).toBe(NEW_KEY);
+    expect(h.start).not.toHaveBeenCalled();
+    expect(connectState(h.service.snapshot()).outcomeUnknown).toBe(false);
+  });
+
+  it("classifies that refusal as a stale recovery in the reply", async () => {
+    const h = await failedCompletion();
+    const shown = h.handler.credentialRecovery();
+    await h.configure(NEW_KEY);
+
+    const reply = await h.saveAndConnect(OTHER_KEY, "replacement", shown);
+
+    expect(reply).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RECOVERY_STALE",
+      connectorSetup: {
+        state: "refused",
+        code: "CONNECTOR_RECOVERY_STALE",
+        credentials: "not-started",
+      },
+    });
+  });
+
+  it("settles when the claimed identity is exactly the retained one", async () => {
+    const h = await failedCompletion();
+    const shown = h.handler.credentialRecovery();
+
+    const reply = await h.saveAndConnect(NEW_KEY, "replacement", shown);
+
+    expect(reply).not.toMatchObject({ error: "CONNECTOR_RECOVERY_STALE" });
+    expect(h.storeSpy).toHaveBeenCalledOnce();
+    expect(await h.key()).toBe(NEW_KEY);
+    expect(connectState(h.service.snapshot()).outcomeUnknown).toBe(false);
+    expect(h.start).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["generation", { generation: 99 }],
+    ["revision", { revision: 99 }],
+    ["tunnel", { tunnelId: "another-tunnel" }],
+    ["tunnel absence", { tunnelId: null }],
+  ])(
+    "refuses a claim that names another %s, over a held recovery",
+    async (_name, change) => {
+      const h = await failedCompletion();
+      const shown = h.handler.credentialRecovery()!;
+
+      await h.saveAndConnect(NEW_KEY, "replacement", { ...shown, ...change });
+
+      expect(h.storeSpy).toHaveBeenCalledOnce();
+      expect(h.start).not.toHaveBeenCalled();
+      // The held recovery is untouched and still settles with the right claim.
+      expect(connectState(h.service.snapshot()).outcomeUnknown).toBe(true);
+      expect(h.handler.credentialRecovery()).toEqual(shown);
+    },
+  );
+
+  it("refuses a claim when no recovery is held at all", async () => {
+    const h = await harness();
+
+    const reply = await stale(h);
+
+    expect(reply).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RECOVERY_STALE",
+    });
+    expect(h.storeSpy).not.toHaveBeenCalled();
+    expect(await h.key()).toBe(OLD_KEY);
+  });
+
+  it("never lets an unidentified request settle a held recovery", async () => {
+    const h = await failedCompletion();
+
+    await h.saveAndConnect(NEW_KEY);
+
+    expect(h.start).not.toHaveBeenCalled();
+    expect(connectState(h.service.snapshot()).outcomeUnknown).toBe(true);
+    expect(h.handler.credentialRecovery()).not.toBeNull();
+  });
+
+  it("still saves a fresh key without a claim when nothing is fenced", async () => {
+    const h = await harness();
+
+    await h.saveAndConnect(NEW_KEY);
+
+    expect(await h.key()).toBe(NEW_KEY);
+    expect(h.start).toHaveBeenCalledOnce();
   });
 });

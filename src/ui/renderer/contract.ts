@@ -231,6 +231,11 @@ export type WindowSnapshot = Readonly<{
    * never authorizes a command, and main re-validates every retry.
    */
   credentialRecovery?: CredentialRecovery | null;
+  /**
+   * Window-local: the fence identity each save-and-connect retry named when it
+   * was sent, by intent id. Never persisted, never sent back as authority.
+   */
+  recoveryRetries?: Readonly<Record<string, CredentialRecovery>>;
   route: "loading" | "loaded" | "failed";
   signInObservation: SignInObservation | null;
   /** Presentation context only; never evidence that sign-in succeeded. */
