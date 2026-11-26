@@ -507,6 +507,7 @@ export class ProductConfigurationService {
         this.durableDocumentFence(current, () => (changed = true)),
         false,
         true,
+        true,
       );
       return changed ? { ...result, durableSourceChanged: true } : result;
     });
@@ -558,6 +559,7 @@ export class ProductConfigurationService {
         withSecureMcpCredentialChangeReleased,
         this.durableDocumentFence(current, () => (changed = true)),
         false,
+        true,
         true,
       );
       return changed ? { ...result, durableSourceChanged: true } : result;
@@ -1508,6 +1510,7 @@ export class ProductConfigurationService {
     fence: StoreWriteFence = {},
     freshTaskSource = false,
     allowProvenAppPendingResolution = false,
+    adoptRecoveredReadBack = false,
   ): Promise<MutationResult> {
     if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
     const original = this.current;
@@ -1558,6 +1561,35 @@ export class ProductConfigurationService {
     )
       return this.failure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
     let storeCalled = false;
+    // True only between a completed save and a verified first readback. A
+    // failure in that window may be recovered by one exact fallback read; a
+    // failure anywhere else (the save, the publication) never is.
+    let awaitingReadBack = false;
+    let publication: ComputerSettingsPublication | undefined;
+    // Everything after a verified readback: the same steps whether the readback
+    // succeeded the first time or the fallback read recovered the exact
+    // document.
+    const finish = async (
+      readBack: ProductSettings,
+    ): Promise<MutationResult> => {
+      if (this.delivery.fenced)
+        throw new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN");
+      if (publication) {
+        this.delivery.holdWithdrawal(false);
+        try {
+          await publication.publish(structuredClone(readBack));
+        } catch (error) {
+          if (this.delivery.attached)
+            this.delivery.retainAuthorityFailure(error);
+          throw error;
+        }
+      }
+      if (this.delivery.fenced)
+        throw new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN");
+      this.current = readBack;
+      this.currentError = null;
+      return { ok: true, snapshot: this.snapshot() };
+    };
     try {
       // Compare every final policy projection, including indirect verification
       // invalidation. Command-name lists cannot cover all authority changes.
@@ -1566,7 +1598,6 @@ export class ProductConfigurationService {
         candidate,
         original,
       );
-      let publication: ComputerSettingsPublication | undefined;
       if (changed && this.withdrawComputerAuthority) {
         try {
           publication = await this.withdrawComputerAuthority();
@@ -1589,6 +1620,7 @@ export class ProductConfigurationService {
           fence.assertBeforePublication?.();
         },
       });
+      awaitingReadBack = true;
       const readBack = await this.store.load();
       if (
         readBack === null ||
@@ -1596,23 +1628,8 @@ export class ProductConfigurationService {
       ) {
         throw new Error("SETTINGS_READ_BACK_FAILED");
       }
-      if (this.delivery.fenced)
-        throw new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN");
-      if (publication) {
-        this.delivery.holdWithdrawal(false);
-        try {
-          await publication.publish(structuredClone(readBack));
-        } catch (error) {
-          if (this.delivery.attached)
-            this.delivery.retainAuthorityFailure(error);
-          throw error;
-        }
-      }
-      if (this.delivery.fenced)
-        throw new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN");
-      this.current = readBack;
-      this.currentError = null;
-      return { ok: true, snapshot: this.snapshot() };
+      awaitingReadBack = false;
+      return await finish(readBack);
     } catch (error) {
       if (this.delivery.fenced) {
         this.delivery.latchLoss();
@@ -1623,8 +1640,9 @@ export class ProductConfigurationService {
       // holds is the truth, and the snapshot taken before is only a fallback.
       // A durable mismatch already read the document the disk holds; adopt it
       // rather than the stale cache if the reload fails too.
+      const reloaded = await this.store.load().catch(() => null);
       const fallback =
-        (await this.store.load().catch(() => null)) ??
+        reloaded ??
         (error instanceof SettingsDurableSourceChanged
           ? error.durable
           : null) ??
@@ -1634,6 +1652,28 @@ export class ProductConfigurationService {
         return this.failure("SETTINGS_WRITE_FAILED");
       }
       this.current = this.fenceTaskSource(fallback);
+      // Credential settlement only: the save landed and only its first readback
+      // failed. When the fallback read returns exactly the saved document, that
+      // is the same proof the first readback would have given, so report the
+      // write as applied; the credential owner would otherwise lose the
+      // recovery identity of a fence the document no longer holds. Anything
+      // else, or a fallback that failed, keeps the failure. A write that withdrew
+      // Computer authority keeps its stricter rule: no publication after a
+      // failed first readback.
+      if (
+        adoptRecoveredReadBack &&
+        awaitingReadBack &&
+        publication === undefined &&
+        reloaded !== null &&
+        JSON.stringify(reloaded) === JSON.stringify(candidate)
+      ) {
+        try {
+          return await finish(reloaded);
+        } catch {
+          if (this.delivery.fenced) this.delivery.latchLoss();
+          return this.failure("SETTINGS_WRITE_FAILED");
+        }
+      }
       // A fence refusal is not a write failure: nothing was written at all,
       // and the caller gets the reason rather than a generic disk error.
       if (error instanceof SetupIncomplete)
