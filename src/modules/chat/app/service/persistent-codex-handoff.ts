@@ -47,6 +47,17 @@ import type {
 } from "../port/handoff";
 import { exactProject } from "./exactproject";
 import {
+  historyVerdict,
+  lookupResolved,
+  lookupVerdict,
+  preferenceStored,
+  preferenceVerdict,
+  resolveRefused,
+  sameRecord as samePreferenceRecord,
+  tasksQuery,
+  tasksVerdict,
+} from "./projectresult";
+import {
   identifier,
   isDigest,
   isUuid,
@@ -54,13 +65,55 @@ import {
   samePhysicalWorkspace,
   sameProject,
   sameWorkspace,
-  titleName,
   validContinue,
   validMessage,
   validRequest,
   validTitle,
   validWorkspace,
 } from "./handoffvalidation";
+
+import { boundedContext, mutationAdmitted, readAllowed } from "./admission";
+import {
+  adoptConflict,
+  adoptRecorded,
+  continuationExpected,
+  continuationReplay,
+  knownOrUnknown,
+  messageBindingChanged,
+  messageReplay,
+  reservationConflict,
+  reservationRaced,
+  sameContinuation,
+  replayedRequest,
+  titleBindingChanged,
+  titleReplay,
+  unsubmittedAction,
+  withResolvedEffort,
+} from "./recordbinding";
+import {
+  boundTitleName,
+  observedModel,
+  observedNameInvalid,
+  startedThreadId,
+  threadBound,
+  threadModelBound,
+} from "./threadbinding";
+import {
+  continuationFollows,
+  foldFinalAnswer,
+  itemsNextCursor,
+  latestTurnIs,
+  observedTurns,
+  statusNextCursor,
+  statusPage,
+} from "./turnpage";
+import {
+  latestTurnsParams,
+  steerParams,
+  threadReadParams,
+  threadStartParams,
+  turnStartParams,
+} from "./turnrequest";
 
 export { exactProject };
 export type {
@@ -160,9 +213,9 @@ export class PersistentCodexHandoff {
     const result = (
       status: "missing" | "refused" | "unavailable" | "stale_preference",
       code: string,
-    ): ProjectPreferenceLookupResult => ({ ...request, status, code });
+    ): ProjectPreferenceLookupResult => lookupVerdict(request, status, code);
     const admitted = () =>
-      !context.signal?.aborted && this.now() < this.mutationExpiresAt;
+      mutationAdmitted(context.signal, this.now, this.mutationExpiresAt);
     if (
       !identifier(request.workspaceId) ||
       !identifier(request.projectId) ||
@@ -240,15 +293,7 @@ export class PersistentCodexHandoff {
           "unavailable",
           "HANDOFF_PROJECT_PREFERENCE_SELECTION_CHANGED",
         );
-      return {
-        ...request,
-        status: "resolved",
-        key: latest.key,
-        persistence: "immutable-local-receipt",
-        selection: "latest-local-publication",
-        snapshot: "non-atomic",
-        controlGranted: false,
-      };
+      return lookupResolved(request, latest.key);
     } catch (error) {
       return result(
         error instanceof HandoffNotSubmittedError ? "refused" : "unavailable",
@@ -265,15 +310,9 @@ export class PersistentCodexHandoff {
       status:
         "refused" | "unavailable" | "stale_preference" | "outcome_unknown",
       code: string,
-    ): ProjectPreferenceResult => ({
-      status,
-      key: request.key,
-      workspaceId: request.workspaceId,
-      projectId: request.projectId,
-      code,
-    });
+    ): ProjectPreferenceResult => preferenceVerdict(request, status, code);
     const admitted = () =>
-      !context.signal?.aborted && this.now() < this.mutationExpiresAt;
+      mutationAdmitted(context.signal, this.now, this.mutationExpiresAt);
     if (
       !isUuid(request.key) ||
       !identifier(request.workspaceId) ||
@@ -311,8 +350,7 @@ export class PersistentCodexHandoff {
         project: workspace.project,
       };
       const sameRecord = (value: ProjectPreferenceRecord) =>
-        value.projectId === record.projectId &&
-        sameProject(value.project, record.project);
+        samePreferenceRecord(value, record);
       if (prior && !sameRecord(prior))
         return result(
           request.operation === "read" ? "stale_preference" : "refused",
@@ -372,15 +410,7 @@ export class PersistentCodexHandoff {
         // No new publication. Validate historical receipt use without a mutation.
         await verify();
       }
-      return {
-        status: request.operation === "remember" ? "remembered" : "resolved",
-        key: request.key,
-        workspaceId: request.workspaceId,
-        projectId: request.projectId,
-        persistence: "immutable-local-receipt",
-        catalogue: "current-non-atomic",
-        controlGranted: false,
-      };
+      return preferenceStored(request);
     } catch (error) {
       if (publicationPossible)
         return result(
@@ -398,14 +428,10 @@ export class PersistentCodexHandoff {
     request: ProjectTaskDiscoveryRequest,
     context: Readonly<{ signal?: AbortSignal | undefined }> = {},
   ): Promise<ProjectTaskDiscoveryResult> {
-    const refused = (code: string): ProjectTaskDiscoveryResult => ({
-      status: "refused",
-      workspaceId: request.workspaceId,
-      projectId: request.projectId,
-      code,
-    });
+    const refused = (code: string): ProjectTaskDiscoveryResult =>
+      tasksVerdict(request, "refused", code);
     const admitted = () =>
-      !context.signal?.aborted && this.now() < this.mutationExpiresAt;
+      mutationAdmitted(context.signal, this.now, this.mutationExpiresAt);
     if (
       !identifier(request.workspaceId) ||
       !identifier(request.projectId) ||
@@ -433,27 +459,18 @@ export class PersistentCodexHandoff {
         catalogue.status !== "resolved" ||
         catalogue.selectedProjectId !== request.projectId
       )
-        return {
-          status: "unavailable",
-          workspaceId: request.workspaceId,
-          projectId: request.projectId,
-          code: "HANDOFF_PROJECT_TASKS_PROJECT_UNVERIFIED",
-        };
+        return tasksVerdict(
+          request,
+          "unavailable",
+          "HANDOFF_PROJECT_TASKS_PROJECT_UNVERIFIED",
+        );
       const beforeRead = await this.authority.resolve(request.workspaceId);
       if (!validWorkspace(beforeRead) || !sameWorkspace(workspace, beforeRead))
         return refused("HANDOFF_WORKSPACE_CHANGED");
       if (!admitted()) return refused("HANDOFF_TASK_ADMISSION_DENIED");
       const result = await readCodexProjectTasks(
         this.host,
-        {
-          projectId: request.projectId,
-          writerRoot: workspace.root,
-          scope: request.scope,
-          ...(request.scope === "canonical-and-selected-writer"
-            ? { canonicalRoot: workspace.project.root }
-            : {}),
-          ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
-        },
+        tasksQuery(request, workspace),
         { deadlineAt: this.mutationExpiresAt, admitted },
       );
       const after = await this.authority.resolve(request.workspaceId);
@@ -466,12 +483,11 @@ export class PersistentCodexHandoff {
         projectId: request.projectId,
       };
     } catch {
-      return {
-        status: "unavailable",
-        workspaceId: request.workspaceId,
-        projectId: request.projectId,
-        code: "HANDOFF_PROJECT_TASKS_UNAVAILABLE",
-      };
+      return tasksVerdict(
+        request,
+        "unavailable",
+        "HANDOFF_PROJECT_TASKS_UNAVAILABLE",
+      );
     }
   }
 
@@ -482,11 +498,8 @@ export class PersistentCodexHandoff {
     }>,
     context: Readonly<{ signal?: AbortSignal | undefined }> = {},
   ): Promise<ProjectResolutionResult> {
-    const refused = (code: string): ProjectResolutionResult => ({
-      status: "refused",
-      workspaceId: request.workspaceId,
-      code,
-    });
+    const refused = (code: string): ProjectResolutionResult =>
+      resolveRefused(request.workspaceId, code);
     if (
       !identifier(request.workspaceId) ||
       (request.preferredProjectId !== undefined &&
@@ -514,7 +527,7 @@ export class PersistentCodexHandoff {
       workspace.project.root,
       request.preferredProjectId,
       this.mutationExpiresAt,
-      () => !context.signal?.aborted && this.now() < this.mutationExpiresAt,
+      () => mutationAdmitted(context.signal, this.now, this.mutationExpiresAt),
     );
     let current;
     try {
@@ -547,7 +560,7 @@ export class PersistentCodexHandoff {
     if (!validTitle(request))
       return { status: "refused", code: "HANDOFF_TITLE_INPUT_INVALID" };
     const admitted = () =>
-      !context.signal?.aborted && this.now() < this.mutationExpiresAt;
+      mutationAdmitted(context.signal, this.now, this.mutationExpiresAt);
     if (!admitted())
       return { status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" };
     if (
@@ -568,10 +581,7 @@ export class PersistentCodexHandoff {
         return { status: "refused", code: "HANDOFF_ADOPTED_READ_ONLY" };
       if (record.continuedFrom && record.continuationVerified !== true)
         return unknown;
-      if (
-        record.workspaceId !== request.workspaceId ||
-        record.projectId !== request.projectId
-      )
+      if (titleBindingChanged(record, request))
         return { status: "refused", code: "HANDOFF_DISPATCH_BINDING_CHANGED" };
       const workspace = await this.authority.resolve(record.workspaceId);
       if (
@@ -587,18 +597,7 @@ export class PersistentCodexHandoff {
       );
       if (!admitted())
         return { status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" };
-      if (prior) {
-        if (prior.digest !== digest)
-          return { status: "refused", code: "HANDOFF_KEY_CONFLICT" };
-        return prior.threadId === record.threadId
-          ? {
-              status: "recorded",
-              dispatchId: request.dispatchId,
-              title: request.title,
-              proof: "historical",
-            }
-          : unknown;
-      }
+      if (prior) return titleReplay(prior, digest, record, request, unknown);
       if (
         this.journal.hasUnconfirmedMessage &&
         (await this.journal.hasUnconfirmedMessage(request.dispatchId))
@@ -628,26 +627,21 @@ export class PersistentCodexHandoff {
         const response = object(
           await this.host.request(
             "thread/read",
-            { threadId: record.threadId, includeTurns: false },
+            threadReadParams(record.threadId),
             this.mutationExpiresAt,
           ),
         );
-        const thread = object(response?.thread);
-        if (
-          !record.model ||
-          !thread ||
-          thread?.id !== record.threadId ||
-          thread.projectId !== record.projectId ||
-          thread.cwd !== workspace.root ||
-          thread.model !== record.model ||
-          (thread.name !== undefined &&
-            thread.name !== null &&
-            !titleName(thread.name))
-        )
+        const name = boundTitleName(object(response?.thread), {
+          threadId: record.threadId!,
+          projectId: record.projectId,
+          root: workspace.root,
+          model: record.model,
+        });
+        if (name === undefined)
           throw new Error("HANDOFF_TITLE_THREAD_UNVERIFIED");
         if (!admitted())
           throw new HandoffNotSubmittedError("HANDOFF_TASK_ADMISSION_DENIED");
-        return typeof thread.name === "string" ? thread.name : null;
+        return name;
       };
       const currentName = await readName();
       const current = await this.authority.resolve(record.workspaceId);
@@ -748,12 +742,8 @@ export class PersistentCodexHandoff {
     request: TaskHistoryRequest,
     context: Readonly<{ signal?: AbortSignal | undefined }> = {},
   ): Promise<TaskHistoryResult> {
-    const refused = (code: string): TaskHistoryResult => ({
-      status: "refused",
-      threadId: request.threadId,
-      turnId: request.turnId,
-      code,
-    });
+    const refused = (code: string): TaskHistoryResult =>
+      historyVerdict(request, "refused", code);
     if (
       request.threadId !== this.selectedOwnerThreadId ||
       !isUuid(request.threadId) ||
@@ -765,7 +755,7 @@ export class PersistentCodexHandoff {
     )
       return refused("HANDOFF_HISTORY_INPUT_INVALID");
     const isAdmitted = () =>
-      !context.signal?.aborted && this.now() < this.mutationExpiresAt;
+      mutationAdmitted(context.signal, this.now, this.mutationExpiresAt);
     const revoke = () =>
       refused(
         context.signal?.aborted
@@ -787,12 +777,7 @@ export class PersistentCodexHandoff {
       );
       if (!isAdmitted()) return revoke();
       if (project.status === "unavailable")
-        return {
-          status: "unavailable",
-          threadId: request.threadId,
-          turnId: request.turnId,
-          code: project.code,
-        };
+        return historyVerdict(request, "unavailable", project.code);
       if (
         project.status !== "resolved" ||
         project.selectedProjectId !== request.projectId
@@ -822,12 +807,7 @@ export class PersistentCodexHandoff {
       return isAdmitted() ? result : revoke();
     } catch {
       return isAdmitted()
-        ? {
-            status: "unavailable",
-            threadId: request.threadId,
-            turnId: request.turnId,
-            code: "HANDOFF_HISTORY_UNAVAILABLE",
-          }
+        ? historyVerdict(request, "unavailable", "HANDOFF_HISTORY_UNAVAILABLE")
         : revoke();
     }
   }
@@ -871,28 +851,22 @@ export class PersistentCodexHandoff {
           code: "HANDOFF_PROJECT_AMBIGUOUS_OR_MISSING",
         };
       const response = object(
-        await host.request("thread/read", {
-          threadId: request.threadId,
-          includeTurns: false,
-        }),
+        await host.request("thread/read", threadReadParams(request.threadId)),
       );
       const thread = object(response?.thread);
       if (
-        thread?.id !== request.threadId ||
-        thread?.projectId !== request.projectId ||
-        thread?.cwd !== workspace.root
+        !threadBound(
+          thread,
+          request.threadId,
+          request.projectId,
+          workspace.root,
+        )
       )
         return {
           status: "refused" as const,
           code: "HANDOFF_OBSERVE_THREAD_BINDING_CHANGED",
         };
-      if (
-        thread.name !== undefined &&
-        thread.name !== null &&
-        (typeof thread.name !== "string" ||
-          thread.name.length > 1_000 ||
-          thread.name.includes("\0"))
-      )
+      if (observedNameInvalid(thread.name))
         return {
           status: "outcome_unknown" as const,
           threadId: request.threadId,
@@ -911,26 +885,8 @@ export class PersistentCodexHandoff {
           itemsView: "notLoaded",
         }),
       );
-      if (
-        !Array.isArray(page?.data) ||
-        page.data.length > 100 ||
-        (page.nextCursor !== null &&
-          (typeof page.nextCursor !== "string" || page.nextCursor.length === 0))
-      )
-        return {
-          status: "outcome_unknown" as const,
-          threadId: request.threadId,
-        };
-      const turns = page.data.map(object);
-      if (
-        turns.some(
-          (turn) =>
-            !identifier(turn?.id) ||
-            !["inProgress", "completed", "failed", "interrupted"].includes(
-              turn?.status as string,
-            ),
-        )
-      )
+      const observed = observedTurns(page);
+      if (!observed)
         return {
           status: "outcome_unknown" as const,
           threadId: request.threadId,
@@ -949,15 +905,9 @@ export class PersistentCodexHandoff {
         status: "observed" as const,
         threadId: request.threadId,
         title: typeof thread.name === "string" ? thread.name : null,
-        model:
-          typeof thread.model === "string" && thread.model.length <= 120
-            ? thread.model
-            : null,
-        turns: turns.map((turn) => ({
-          id: turn!.id as string,
-          status: turn!.status as string,
-        })),
-        hasMoreTurns: page.nextCursor !== null,
+        model: observedModel(thread),
+        turns: observed.turns,
+        hasMoreTurns: observed.hasMoreTurns,
         threadRuntime,
       };
     } catch {
@@ -1022,16 +972,7 @@ export class PersistentCodexHandoff {
           turnIntent: false,
         });
       }
-      if (
-        record.adopted !== true ||
-        record.requestDigest !== digest ||
-        record.workspaceId !== request.workspaceId ||
-        record.projectId !== request.projectId ||
-        !sameWorkspace(record.workspace, workspace) ||
-        (record.threadId !== undefined &&
-          record.threadId !== request.threadId) ||
-        (record.turnId !== undefined && record.turnId !== request.turnId)
-      )
+      if (adoptConflict(record, digest, request, workspace))
         return { status: "refused" as const, code: "HANDOFF_ADOPT_CONFLICT" };
       if (!record.threadIntent) {
         if (!(await this.journal.claimThread(request.turnId))) return unknown;
@@ -1044,13 +985,8 @@ export class PersistentCodexHandoff {
       if (!record.turnId)
         await this.journal.recordTurn(request.turnId, request.turnId);
       record = await this.journal.read(request.turnId);
-      if (
-        record?.adopted !== true ||
-        record.threadId !== request.threadId ||
-        record.turnId !== request.turnId
-      )
-        return unknown;
-      if (!(await this.adoptedReadStillAllowed(record))) return unknown;
+      if (!adoptRecorded(record, request)) return unknown;
+      if (!(await this.adoptedReadStillAllowed(record!))) return unknown;
       return { status: "adopted" as const, dispatchId: request.turnId };
     } catch {
       // The operation is local and read-only to the provider. An uncertain
@@ -1086,27 +1022,8 @@ export class PersistentCodexHandoff {
     } catch {
       return { status: "outcome_unknown", dispatchId: request.dispatchId };
     }
-    if (prior?.digest !== undefined && prior.digest !== digest)
-      return { status: "refused", code: "HANDOFF_KEY_CONFLICT" };
-    if (prior) {
-      return prior.turnId === record.turnId
-        ? {
-            status: "steered",
-            dispatchId: request.dispatchId,
-            turnId: prior.turnId,
-          }
-        : { status: "outcome_unknown", dispatchId: request.dispatchId };
-    }
-    if (
-      record.workspaceId !== request.workspaceId ||
-      record.projectId !== request.projectId ||
-      record.model !== request.model ||
-      // Steer adds input to the issued turn; it does not select another model or
-      // effort. An omitted value retains the journal's effective binding, while
-      // an explicit conflicting value must still refuse before any effect.
-      (request.reasoningEffort !== undefined &&
-        record.reasoningEffort !== request.reasoningEffort)
-    )
+    if (prior) return messageReplay(prior, digest, record, request.dispatchId);
+    if (messageBindingChanged(record, request))
       return { status: "refused", code: "HANDOFF_DISPATCH_BINDING_CHANGED" };
     const turnId = record.turnId;
     const workspace = await this.authority.resolve(record.workspaceId);
@@ -1128,18 +1045,21 @@ export class PersistentCodexHandoff {
           code: "HANDOFF_PROJECT_AMBIGUOUS_OR_MISSING",
         };
       const response = object(
-        await this.host.request("thread/read", {
-          threadId: record.threadId,
-          includeTurns: false,
-        }),
+        await this.host.request(
+          "thread/read",
+          threadReadParams(record.threadId),
+        ),
       );
       const thread = object(response?.thread);
       if (
         !record.model ||
-        thread?.id !== record.threadId ||
-        thread?.projectId !== record.projectId ||
-        thread?.cwd !== workspace.root ||
-        thread?.model !== record.model
+        !threadBound(
+          thread,
+          record.threadId,
+          record.projectId,
+          workspace.root,
+        ) ||
+        !threadModelBound(thread, record.model)
       )
         return { status: "outcome_unknown", dispatchId: request.dispatchId };
       const status = await this.status(request.dispatchId);
@@ -1201,12 +1121,12 @@ export class PersistentCodexHandoff {
           const response = object(
             await this.host.request(
               "turn/steer",
-              {
-                threadId: record.threadId,
-                expectedTurnId: turnId,
-                input: [{ type: "text", text: request.message }],
-                clientUserMessageId: request.key,
-              },
+              steerParams(
+                record.threadId,
+                turnId,
+                request.message,
+                request.key,
+              ),
               this.mutationExpiresAt,
             ),
           );
@@ -1230,13 +1150,7 @@ export class PersistentCodexHandoff {
     request: HandoffContinue,
     context: HandoffReadContext = {},
   ): Promise<HandoffCreateResult> {
-    context = {
-      ...context,
-      deadlineAt: Math.min(
-        context.deadlineAt ?? this.mutationExpiresAt,
-        this.mutationExpiresAt,
-      ),
-    };
+    context = boundedContext(context, this.mutationExpiresAt);
     const host = this.readHost(context);
     const unknown = {
       status: "outcome_unknown" as const,
@@ -1299,62 +1213,37 @@ export class PersistentCodexHandoff {
           code: "HANDOFF_PROJECT_AMBIGUOUS_OR_MISSING",
         };
       const response = object(
-        await host.request("thread/read", {
-          threadId: parent.threadId,
-          includeTurns: false,
-        }),
+        await host.request("thread/read", threadReadParams(parent.threadId)),
       );
       const thread = object(response?.thread);
       if (
-        thread?.id !== parent.threadId ||
-        thread?.projectId !== parent.projectId ||
-        thread?.cwd !== workspace.root ||
-        thread?.model !== parent.model
+        !threadBound(
+          thread,
+          parent.threadId,
+          parent.projectId,
+          workspace.root,
+        ) ||
+        !threadModelBound(thread, parent.model)
       )
         return unknown;
     } catch {
       return unknown;
     }
 
-    const expected = {
-      requestDigest: digest,
-      ...(this.supportsDispatchAttempts()
-        ? { dispatchProtocol: 1 as const }
-        : {}),
-      workspaceId: parent.workspaceId,
+    const expected = continuationExpected(
+      parent,
+      parent.model,
       workspace,
-      projectId: parent.projectId,
-      model: parent.model,
-      reasoningEffort: parent.reasoningEffort,
-      ...(parent.modelBinding ? { modelBinding: parent.modelBinding } : {}),
-      continuedFrom: request.dispatchId,
-    };
+      digest,
+      request.dispatchId,
+      this.supportsDispatchAttempts(),
+    );
     const sameChild = (record: HandoffRecord) =>
-      record.requestDigest === expected.requestDigest &&
-      record.workspaceId === expected.workspaceId &&
-      record.projectId === expected.projectId &&
-      record.model === expected.model &&
-      record.reasoningEffort === expected.reasoningEffort &&
-      record.continuedFrom === expected.continuedFrom &&
-      record.modelBinding?.configSha256 ===
-        expected.modelBinding?.configSha256 &&
-      record.modelBinding?.selection.harness ===
-        expected.modelBinding?.selection.harness &&
-      record.modelBinding?.selection.modelAlias ===
-        expected.modelBinding?.selection.modelAlias &&
-      sameWorkspace(record.workspace, workspace);
+      sameContinuation(record, expected, workspace);
     if (child && !sameChild(child))
       return { status: "refused", code: "HANDOFF_CONTINUE_KEY_CONFLICT" };
     if (child?.turnId)
-      return child.continuationVerified === true &&
-        child.threadId === parent.threadId
-        ? {
-            status: "dispatched",
-            dispatchId: request.key,
-            threadId: child.threadId,
-            turnId: child.turnId,
-          }
-        : unknown;
+      return continuationReplay(child, parent.threadId, request.key)!;
     if (child?.turnIntent) return unknown;
 
     // Revalidate the issued binding, not today's configured defaults. Replays
@@ -1380,16 +1269,12 @@ export class PersistentCodexHandoff {
 
     try {
       const latest = object(
-        await host.request("thread/turns/list", {
-          threadId: parent.threadId,
-          cursor: null,
-          limit: 1,
-          sortDirection: "desc",
-          itemsView: "notLoaded",
-        }),
+        await host.request(
+          "thread/turns/list",
+          latestTurnsParams(parent.threadId, 1),
+        ),
       );
-      const turn = object(Array.isArray(latest?.data) ? latest.data[0] : null);
-      if (turn?.id !== parent.turnId || turn?.status !== "completed")
+      if (!latestTurnIs(latest, parent.turnId, "completed"))
         return {
           status: "refused",
           code: "HANDOFF_CONTINUE_PARENT_NOT_LATEST",
@@ -1491,18 +1376,12 @@ export class PersistentCodexHandoff {
           )
             throw new HandoffNotSubmittedError("TASK_MODEL_CATALOG_CHANGED");
           const latest = object(
-            await host.request("thread/turns/list", {
-              threadId: parent.threadId,
-              cursor: null,
-              limit: 1,
-              sortDirection: "desc",
-              itemsView: "notLoaded",
-            }),
+            await host.request(
+              "thread/turns/list",
+              latestTurnsParams(parent.threadId, 1),
+            ),
           );
-          const turn = object(
-            Array.isArray(latest?.data) ? latest.data[0] : null,
-          );
-          if (turn?.id !== parent.turnId || turn?.status !== "completed")
+          if (!latestTurnIs(latest, parent.turnId, "completed"))
             throw new Error("HANDOFF_CONTINUE_PARENT_CHANGED");
           if (
             !this.modelCatalogue.isCurrent(
@@ -1537,24 +1416,13 @@ export class PersistentCodexHandoff {
           const started = object(
             await host.request(
               "turn/start",
-              {
-                threadId: parent.threadId,
-                input: [{ type: "text", text: request.message }],
-                cwd: workspace.root,
-                model: parent.model,
-                ...(parent.reasoningEffort === undefined
-                  ? {}
-                  : { effort: parent.reasoningEffort }),
-                approvalPolicy: workspace.execution.approvalPolicy,
-                sandboxPolicy:
-                  workspace.execution.sandbox === "read-only"
-                    ? { type: "readOnly", networkAccess: false }
-                    : {
-                        type: "workspaceWrite",
-                        writableRoots: [workspace.root],
-                        networkAccess: false,
-                      },
-              },
+              turnStartParams(
+                parent.threadId,
+                request.message,
+                workspace,
+                parent.model,
+                parent.reasoningEffort,
+              ),
               context.deadlineAt,
             ),
           );
@@ -1578,22 +1446,12 @@ export class PersistentCodexHandoff {
 
     try {
       const response = object(
-        await host.request("thread/turns/list", {
-          threadId: parent.threadId,
-          cursor: null,
-          limit: 2,
-          sortDirection: "desc",
-          itemsView: "notLoaded",
-        }),
+        await host.request(
+          "thread/turns/list",
+          latestTurnsParams(parent.threadId, 2),
+        ),
       );
-      const data = response?.data;
-      if (
-        !Array.isArray(data) ||
-        data.length < 2 ||
-        object(data[0])?.id !== turnId ||
-        object(data[1])?.id !== parent.turnId
-      )
-        return unknown;
+      if (!continuationFollows(response, turnId, parent.turnId)) return unknown;
       // Only the original attempt may publish this exact turn-bound verdict.
       await this.journal.confirmContinuation(request.key, turnId);
     } catch {
@@ -1611,13 +1469,7 @@ export class PersistentCodexHandoff {
     request: HandoffRequest,
     context: HandoffReadContext = {},
   ): Promise<HandoffCreateResult> {
-    context = {
-      ...context,
-      deadlineAt: Math.min(
-        context.deadlineAt ?? this.mutationExpiresAt,
-        this.mutationExpiresAt,
-      ),
-    };
+    context = boundedContext(context, this.mutationExpiresAt);
     if (!this.dispatchStillAllowed(context))
       return { status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" };
     const host = this.readHost(context);
@@ -1659,17 +1511,20 @@ export class PersistentCodexHandoff {
             dispatchAttempt = claimed;
           }
           const response = object(
-            await host.request("thread/read", {
-              threadId: current.threadId,
-              includeTurns: false,
-            }),
+            await host.request(
+              "thread/read",
+              threadReadParams(current.threadId),
+            ),
           );
           const thread = object(response?.thread);
           if (
-            thread?.id !== current.threadId ||
-            thread?.projectId !== request.projectId ||
-            thread?.cwd !== workspace.root ||
-            thread?.model !== request.model
+            !threadBound(
+              thread,
+              current.threadId,
+              request.projectId,
+              workspace.root,
+            ) ||
+            !threadModelBound(thread, request.model)
           ) {
             return { status: "outcome_unknown", dispatchId: request.key };
           }
@@ -1684,13 +1539,7 @@ export class PersistentCodexHandoff {
           );
           if (check.status === "refused") return this.unavailableModel(check);
           return this.startTurn(
-            {
-              ...request,
-              model: current.model ?? request.model,
-              reasoningEffort:
-                current.reasoningEffort ?? request.reasoningEffort,
-              modelBinding: current.modelBinding ?? request.modelBinding,
-            },
+            replayedRequest(request, current),
             current.threadId,
             workspace,
             check,
@@ -1701,7 +1550,7 @@ export class PersistentCodexHandoff {
           return { status: "outcome_unknown", dispatchId: request.key };
         }
       }
-      return this.knownOrUnknown(request.key, current);
+      return knownOrUnknown(request.key, current);
     }
 
     // A UI snapshot is never dispatch authority. Check this serving host before
@@ -1725,21 +1574,7 @@ export class PersistentCodexHandoff {
       return { status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" };
     if (modelCheck.status === "refused")
       return this.unavailableModel(modelCheck);
-    request = {
-      ...request,
-      reasoningEffort: modelCheck.effort,
-      ...(request.modelBinding
-        ? {
-            modelBinding: {
-              ...request.modelBinding,
-              selection: {
-                ...request.modelBinding.selection,
-                effort: modelCheck.effort,
-              },
-            },
-          }
-        : {}),
-    };
+    request = withResolvedEffort(request, modelCheck.effort);
 
     try {
       if (
@@ -1791,21 +1626,12 @@ export class PersistentCodexHandoff {
       // Neither a concurrent call nor a restart may guess that it owns it.
       return { status: "outcome_unknown", dispatchId: request.key };
     }
-    if (
-      reserved.requestDigest !== requestDigest ||
-      reserved.workspaceId !== request.workspaceId ||
-      reserved.projectId !== request.projectId ||
-      !sameWorkspace(reserved.workspace, workspace)
-    ) {
+    if (reservationConflict(reserved, requestDigest, request, workspace)) {
       return { status: "refused", code: "HANDOFF_RESERVATION_CONFLICT" };
     }
     // Concurrent same-key requests can observe different runtime defaults.
     // The journal winner, not the last catalogue response, owns the binding.
-    if (
-      reserved.modelCatalogue &&
-      (reserved.model !== request.model ||
-        reserved.reasoningEffort !== request.reasoningEffort)
-    )
+    if (reservationRaced(reserved, request))
       return { status: "outcome_unknown", dispatchId: request.key };
     let claimedThread: boolean;
     try {
@@ -1846,31 +1672,20 @@ export class PersistentCodexHandoff {
           "HANDOFF_DISPATCH_AUTHORITY_CHANGED",
         );
       const started = object(
-        await host.request("thread/start", {
-          projectId: request.projectId,
-          cwd: workspace.root,
-          ephemeral: false,
-          model: request.model,
-          sandbox: workspace.execution.sandbox,
-          approvalPolicy: workspace.execution.approvalPolicy,
-          allowProviderModelFallback: false,
-        }),
+        await host.request(
+          "thread/start",
+          threadStartParams(request.projectId, workspace, request.model),
+        ),
       );
-      const thread = object(started?.thread);
-      if (
-        !identifier(thread?.id) ||
-        thread?.projectId !== request.projectId ||
-        started?.cwd !== workspace.root ||
-        started?.model !== request.model ||
-        started?.approvalPolicy !== workspace.execution.approvalPolicy ||
-        object(started?.sandbox)?.type !==
-          (workspace.execution.sandbox === "read-only"
-            ? "readOnly"
-            : "workspaceWrite")
-      ) {
+      const startedId = startedThreadId(started, {
+        projectId: request.projectId,
+        model: request.model,
+        workspace,
+      });
+      if (startedId === null) {
         throw new Error("HANDOFF_THREAD_BINDING_UNVERIFIED");
       }
-      threadId = thread.id;
+      threadId = startedId;
       await this.journal.recordThread(request.key, threadId);
     } catch {
       return { status: "outcome_unknown", dispatchId: request.key };
@@ -1931,24 +1746,16 @@ export class PersistentCodexHandoff {
         );
       effectPossible = true;
       const started = object(
-        await host.request("turn/start", {
-          threadId,
-          input: [{ type: "text", text: request.message }],
-          cwd: workspace.root,
-          model: request.model,
-          ...(request.reasoningEffort === undefined
-            ? {}
-            : { effort: request.reasoningEffort }),
-          approvalPolicy: workspace.execution.approvalPolicy,
-          sandboxPolicy:
-            workspace.execution.sandbox === "read-only"
-              ? { type: "readOnly", networkAccess: false }
-              : {
-                  type: "workspaceWrite",
-                  writableRoots: [workspace.root],
-                  networkAccess: false,
-                },
-        }),
+        await host.request(
+          "turn/start",
+          turnStartParams(
+            threadId,
+            request.message,
+            workspace,
+            request.model,
+            request.reasoningEffort,
+          ),
+        ),
       );
       const turn = object(started?.turn);
       if (!identifier(turn?.id)) throw new Error("HANDOFF_TURN_UNVERIFIED");
@@ -2008,17 +1815,17 @@ export class PersistentCodexHandoff {
     }
     try {
       const response = object(
-        await host.request("thread/read", {
-          threadId: record.threadId,
-          includeTurns: false,
-        }),
+        await host.request("thread/read", threadReadParams(record.threadId)),
       );
       const thread = object(response?.thread);
       if (
-        thread?.id !== record.threadId ||
-        thread?.projectId !== record.projectId ||
-        thread?.cwd !== record.workspace.root ||
-        (record.model !== undefined && thread?.model !== record.model)
+        !threadBound(
+          thread,
+          record.threadId,
+          record.projectId,
+          record.workspace.root,
+        ) ||
+        (record.model !== undefined && !threadModelBound(thread, record.model))
       ) {
         return { status: "outcome_unknown", dispatchId };
       }
@@ -2035,22 +1842,10 @@ export class PersistentCodexHandoff {
             itemsView: "notLoaded",
           }),
         );
-        if (!turns || !Array.isArray(turns.data) || turns.data.length > 100)
+        const found = statusPage(turns, record.turnId);
+        if (found.kind === "invalid")
           return { status: "outcome_unknown", dispatchId };
-        const matches = turns.data
-          .map(object)
-          .filter((item) => item?.id === record.turnId);
-        if (matches.length > 1)
-          return { status: "outcome_unknown", dispatchId };
-        const match = matches[0];
-        if (match) {
-          if (
-            typeof match.status !== "string" ||
-            !["inProgress", "completed", "failed", "interrupted"].includes(
-              match.status,
-            )
-          )
-            return { status: "outcome_unknown", dispatchId };
+        if (found.kind === "found") {
           const current = await this.authority.resolve(record.workspaceId);
           if (
             !validWorkspace(current) ||
@@ -2066,17 +1861,13 @@ export class PersistentCodexHandoff {
             dispatchId,
             threadId: record.threadId,
             turnId: record.turnId,
-            turnStatus: match.status,
+            turnStatus: found.status,
             threadRuntime,
           };
         }
-        if (
-          turns.nextCursor === null ||
-          typeof turns.nextCursor !== "string" ||
-          seen.has(turns.nextCursor)
-        )
-          break;
-        cursor = turns.nextCursor;
+        const next = statusNextCursor(found.nextCursor, seen);
+        if (next === null) break;
+        cursor = next;
         seen.add(cursor);
       }
     } catch {
@@ -2148,28 +1939,9 @@ export class PersistentCodexHandoff {
         ) {
           break;
         }
-        for (const value of response.data) {
-          const entry = object(value);
-          const item = object(entry?.item);
-          if (
-            entry?.turnId !== status.turnId ||
-            !item ||
-            !identifier(item.id)
-          ) {
-            return { status: "outcome_unknown", dispatchId };
-          }
-          if (item.type === "agentMessage" && item.phase === "final_answer") {
-            if (
-              final !== null ||
-              typeof item.text !== "string" ||
-              item.text.length === 0 ||
-              item.text.length > 256 * 1024
-            ) {
-              return { status: "outcome_unknown", dispatchId };
-            }
-            final = { id: item.id, text: item.text };
-          }
-        }
+        const folded = foldFinalAnswer(response.data, status.turnId, final);
+        if (!folded) return { status: "outcome_unknown", dispatchId };
+        final = folded.final;
         if (response.nextCursor === null) {
           if (
             !(await this.resultReadStillAllowed(record)) ||
@@ -2185,14 +1957,11 @@ export class PersistentCodexHandoff {
               }
             : { status: "outcome_unknown", dispatchId };
         }
-        if (
-          typeof response.nextCursor !== "string" ||
-          response.nextCursor.length === 0 ||
-          seen.has(response.nextCursor)
-        ) {
+        const next = itemsNextCursor(response.nextCursor, seen);
+        if (next === null) {
           break;
         }
-        cursor = response.nextCursor;
+        cursor = next;
         seen.add(cursor);
       }
     } catch {
@@ -2215,24 +1984,28 @@ export class PersistentCodexHandoff {
     effectPossible: boolean,
     consumeCancellation = true,
   ): Promise<HandoffCreateResult> {
-    if (!effectPossible) {
-      try {
-        if (context.signal?.aborted && consumeCancellation) {
-          // The attempt was consumed before binding. Even if this write fails,
-          // cancellation has no no-effect proof and cannot authorize replay.
-          await this.journal.claimTurn(key);
-        } else if (!context.signal?.aborted && attempt !== undefined) {
-          // Only the owner of this attempt may attest a known pre-send refusal.
-          // Failed publication leaves it consumed, never silently retryable.
-          await this.journal.recordPreEffectRefusal?.(
-            key,
-            attempt,
-            () => !context.signal?.aborted,
-          );
-        }
-      } catch {
-        // No provider effect follows an unknown durable write.
+    const action = unsubmittedAction(
+      effectPossible,
+      !!context.signal?.aborted,
+      consumeCancellation,
+      attempt,
+    );
+    try {
+      if (action === "consume-turn") {
+        // The attempt was consumed before binding. Even if this write fails,
+        // cancellation has no no-effect proof and cannot authorize replay.
+        await this.journal.claimTurn(key);
+      } else if (action === "record-refusal") {
+        // Only the owner of this attempt may attest a known pre-send refusal.
+        // Failed publication leaves it consumed, never silently retryable.
+        await this.journal.recordPreEffectRefusal?.(
+          key,
+          attempt!,
+          () => !context.signal?.aborted,
+        );
       }
+    } catch {
+      // No provider effect follows an unknown durable write.
     }
     return { status: "outcome_unknown", dispatchId: key };
   }
@@ -2244,13 +2017,7 @@ export class PersistentCodexHandoff {
   }
 
   private readStillAllowed(context: HandoffReadContext): boolean {
-    return (
-      !context.signal?.aborted &&
-      (context.deadlineAt === undefined ||
-        (Number.isSafeInteger(context.deadlineAt) &&
-          context.deadlineAt >= 0 &&
-          this.now() < context.deadlineAt))
-    );
+    return readAllowed(context, this.now);
   }
 
   private readHost(context: HandoffReadContext): HandoffHost {
@@ -2296,19 +2063,5 @@ export class PersistentCodexHandoff {
       validWorkspace(current) &&
       samePhysicalWorkspace(current, record.workspace)
     );
-  }
-
-  private async knownOrUnknown(
-    key: string,
-    record: HandoffRecord | null,
-  ): Promise<HandoffCreateResult> {
-    return record?.threadId && record.turnId
-      ? {
-          status: "dispatched",
-          dispatchId: key,
-          threadId: record.threadId,
-          turnId: record.turnId,
-        }
-      : { status: "outcome_unknown", dispatchId: key };
   }
 }
