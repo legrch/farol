@@ -243,6 +243,9 @@ export type ChatGptRouteOptions = Readonly<{
   requiredAppName?: string;
   // Ordinary manual ChatGPT messages remain under the owner's control.
   // Automated app-bound tasks still check requiredAppName before submission.
+  // Production must not enable this until the route keeps every surface and
+  // popup in custody until confirmed destruction (Brain decision 31; backlog
+  // item 7). tests/architecture/protected-route-option.test.ts enforces it.
   requireAppForManualMessages?: boolean;
   collapseSidebarByDefault?: boolean;
   windowPresentation?: ChatGptWindowPresentation;
