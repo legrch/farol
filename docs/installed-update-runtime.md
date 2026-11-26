@@ -655,9 +655,14 @@ that cannot be proved ended keeps the fence. Marker content never selects what
 the reclaim scans. Only a verified absence (ENOENT) is "no marker": a present
 file holding JSON `null`, like any unreadable one, is `UPDATE_RECORD_INVALID`,
 keeps the fence and is never settled, the same rule as the restore intent.
-The marker is also read as strictly as the repair tool reads it: invalid UTF-8,
-a duplicate key at any depth, or a NUL or other control character in `handle`
-or `operationRoot` make it present but invalid (`UPDATE_RECORD_INVALID`).
+Every update record goes through one decoder (`readRecord`) that decodes as the
+repair tool's `strict_json` does: invalid UTF-8 or a duplicate key at any depth
+makes a present record invalid (`UPDATE_RECORD_INVALID`), so no reader that
+authorizes a cleanup, an unlink or an admission can see a record the repair tool
+would refuse. The marker's settlement re-reads it through the same strict reader
+immediately before the unlink; a re-read that refuses keeps the marker. A NUL or
+other control character in the marker's `handle` or `operationRoot` is invalid
+too, which is stricter than the repair tool (it refuses NUL and backslash only).
 
 **Retained-download records.** `download-pending.json` and `ready.json` follow
 the same presence rule. Only a verified absence (ENOENT) is "no download" or
@@ -681,9 +686,21 @@ the directory found at removal is the scanned one (same device and inode, then
 the intent's own identity check). A stage the report never listed counts as
 absent and is removed only if it is still absent: a directory that is there by
 then was not scanned. An extraction kept in another staging parent does not
-hold it. Otherwise the stage, the intent and the fence stay
-(`UPDATE_STAGING_OUTCOME_UNKNOWN`), as they do for a live or unobservable
-producer or a replaced stage directory.
+hold it. Otherwise the stage, the intent and the fence stay.
+
+A path is not an identity, so the validated stage is not removed by name. It is
+first renamed, atomically, to a tombstone sibling (`download-<id>.removing`),
+the tombstone's own device and inode are compared with the scanned and recorded
+identities, and only a match is removed; this covers a `downloading` stage too.
+A mismatch is never deleted: it is renamed back if its old path is still free
+(`UPDATE_DOWNLOAD_STAGE_CHANGED`), otherwise left in its tombstone
+(`UPDATE_DOWNLOAD_STAGE_DISPLACED`). A tombstone left by a crash is removed on
+the next launch only if it is the recorded stage. The reasons the stage was kept
+are reported as themselves, each an outcome-unknown code:
+`UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED` (the reclaim kept an extraction in the
+stage or did not cover it), `UPDATE_DOWNLOAD_STAGE_CHANGED` and
+`UPDATE_DOWNLOAD_STAGE_DISPLACED`. A live or unobservable producer still reports
+`UPDATE_STAGING_OUTCOME_UNKNOWN`.
 
 **Installs that are already fenced.** The fix runs inside the new build, so an
 install that is already fenced by an older build cannot receive it through the
