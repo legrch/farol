@@ -42,7 +42,14 @@ const builtText: Readonly<Record<string, () => string>> = {
   gate: () => scripts.installManualAppGateScript("Farol"),
   cdp: () => scripts.connectionCheckDocumentProbe("Farol", href),
   prep1: () => scripts.prepareTaskScript("hello `x` ${y}", href),
-  prep2: () => scripts.prepareTaskScript("hello", href, "Farol", 5000, true),
+  prep2: () =>
+    scripts.prepareTaskScript(
+      "hello",
+      href,
+      "Farol",
+      { deadlineAt: 5000, budgetMs: 5000 },
+      true,
+    ),
   act1: () => scripts.activateTaskScript(href),
   act2: () =>
     scripts.activateTaskScript(href, "Farol", true, true, "deep", true),
@@ -64,7 +71,7 @@ const builtDigests: Readonly<Record<string, string>> = {
   gate: "8a3a89332fc3f9a43861d3e50bbe5ca3aea090a6aab3208f3b444a14bcc156a9",
   cdp: "1c33e1b3dc787dabd01bdb0efac3233496ea1b17617d17d11dff79404a7907d0",
   prep1: "937957211a45635b7f799b78b17ac3a70f76363998e33384f7161357f38db20a",
-  prep2: "86e79c7ed3b419547e30ed164886faffaaf2293952aa9ca0295b057db158d009",
+  prep2: "7e984f2c6aa43dd9f8d6272f04594fc35706e5dbbd347cd5664905780431704a",
   act1: "ab292fe777377bc25c8eb9f949d6280651b2fda2c3b021678fb69645ec3e7e51",
   act2: "7b9a431a7a9a012269a97ceaa9be42ffeca0bab5cc53badda45d9ac2bc158027",
   probe1: "636d4d065f23242cfecae36c46d19dfc9c76172140be3bfa0d54def7f26dbaff",

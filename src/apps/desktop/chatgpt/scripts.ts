@@ -921,25 +921,31 @@ export function prepareTaskScript(
   prompt: string,
   expectedHref: string,
   requiredAppName?: string,
-  budgetMs?: number,
+  guard?: Readonly<{ deadlineAt: number; budgetMs: number }>,
   manualDeepTest = false,
   relaxUnknownControls = false,
 ): string {
-  // The budget is a duration on the page's own monotonic clock, counted from
-  // the instant this script starts executing, never a wall-clock instant: a
-  // wall-clock step on the page (NTP, manual change) must neither refuse a
-  // preparation early nor let a late one through. Any delay between dispatch
-  // and script start is not subtracted, so the page can only be more
-  // permissive than the main-side deadline by that delay; the main side
-  // discards a result that arrives after its own deadline and fails the task.
-  if (budgetMs !== undefined && (!Number.isFinite(budgetMs) || budgetMs < 0))
-    throw new Error("Invalid task preparation budget");
-  const budgetExpired = (): string =>
-    budgetMs === undefined
+  // Two bounds, and the script refuses when either is reached. The wall
+  // instant (main's Date.now at dispatch plus the time left) also counts the
+  // time the script waited in the page's queue before it ran; the budget, a
+  // duration on the page's own monotonic clock from the instant the script
+  // starts, still holds when the page's wall clock steps backwards while it
+  // runs. A forward wall step can only make the script refuse early, which
+  // leaves the composer untouched.
+  if (
+    guard !== undefined &&
+    (!Number.isSafeInteger(guard.deadlineAt) ||
+      guard.deadlineAt <= 0 ||
+      !Number.isFinite(guard.budgetMs) ||
+      guard.budgetMs < 0)
+  )
+    throw new Error("Invalid task preparation deadline");
+  const expired = (): string =>
+    guard === undefined
       ? ""
-      : `if (performance.now() - preparationStartedAt >= ${budgetMs}) return { ready: false };`;
+      : `if (Date.now() >= ${guard.deadlineAt} || performance.now() - preparationStartedAt >= ${guard.budgetMs}) return { ready: false };`;
   return `(() => {
-    ${budgetMs === undefined ? "" : `const preparationStartedAt = performance.now(); ${budgetExpired()}`}
+    ${guard === undefined ? "" : `const preparationStartedAt = performance.now(); ${expired()}`}
     const expectedHref = ${JSON.stringify(expectedHref)};
     if (location.href !== expectedHref) return { navigated: true };
     const prompt = ${JSON.stringify(prompt)};
@@ -972,7 +978,7 @@ export function prepareTaskScript(
       return { ready: false, baselineAssistantCount, baselineUserCount, baselineMessageIds };
     }
     ${requiredAppName ? "if (composerDraftText(composer).trim().length > 0) return { draftPresent: true };" : ""}
-    ${budgetExpired()}
+    ${expired()}
     composer.focus();
     if (composer instanceof HTMLTextAreaElement) {
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
