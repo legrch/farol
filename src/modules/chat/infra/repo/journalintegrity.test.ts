@@ -72,8 +72,8 @@ describe("journal integrity", () => {
     const a = { dev: 1, ino: 2, mtimeMs: 3, ctimeMs: 4 };
     expect(identityChanged(a, { ...a })).toBe(false);
     expect(identityChanged(a, { ...a, ctimeMs: 5 })).toBe(true);
-    expect(inodeChanged(a, { ...a, mtimeMs: 9 })).toBe(false);
-    expect(inodeChanged(a, { ...a, ino: 9 })).toBe(true);
+    expect(inodeChanged(a, { dev: 1, ino: 2 })).toBe(false);
+    expect(inodeChanged(a, { dev: 1, ino: 9 })).toBe(true);
   });
 
   it("gates attempts on an open dispatch only", () => {
