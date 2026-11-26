@@ -63,12 +63,45 @@ import {
   type UpdateClosing,
 } from "../../../apps/desktop/chat/admission";
 import {
-  appBindingFailureCode,
   createRoutePermissions,
   isChatGptPage,
   resolveChatGptWindowPresentation,
   type ChatGptWindowPresentation,
 } from "../../../apps/desktop/chat/policy";
+import {
+  DEFAULT_TASK_POLL_MS,
+  SUBMIT_WINDOW_MS,
+  activationDecision,
+  appBindingRefusal,
+  appVerificationRefusal,
+  appendAnswerItem,
+  assistantCorrelation,
+  connectorTimingElapsed,
+  conversationCreatedBySubmission,
+  initialReadinessRefusal,
+  instantProfileFailureCode,
+  isTaskDocumentUnavailable,
+  isValidAppTargetName,
+  nextStablePolls,
+  observationAdmissionRefusal,
+  observedProbeFailureCode,
+  observedReadinessCode,
+  observedTurnDecision,
+  pageLostAcrossAwait,
+  pinnedConversationAfter,
+  preparedTaskDecision,
+  probeWaitMs,
+  readinessRefusal,
+  remainingMs,
+  submittedProbeFailureCode,
+  taskCallRefusal,
+  taskDeadline,
+  taskInProgressRefusal,
+  taskThrowOutcome,
+  textGrowth,
+  textTurnCompleted,
+  userCorrelation,
+} from "../../../apps/desktop/chat/task";
 import {
   hardenRouteContents,
   hardenRouteSession,
@@ -1650,39 +1683,26 @@ export class ChatGptRoute {
     // Capture this operation's explicit target before any navigation. Never
     // mutate the route's default/manual-message binding for a one-shot check.
     const requiredAppName = appTarget?.name ?? this.options.requiredAppName;
-    if (
-      observer.connectionCheck &&
-      (profile !== "temporary-instant" ||
-        !appTarget ||
-        attachments.length !== 0 ||
-        !observer.readConnectorReceipt ||
-        observer.manualDeepTest ||
-        observer.manualSubmissionOnly)
-    ) {
+    const callRefusal = taskCallRefusal({
+      profile,
+      hasAppTarget: Boolean(appTarget),
+      attachmentCount: attachments.length,
+      connectionCheck: Boolean(observer.connectionCheck),
+      manualDeepTest: Boolean(observer.manualDeepTest),
+      manualSubmissionOnly: Boolean(observer.manualSubmissionOnly),
+      hasConnectorReceipt: Boolean(observer.readConnectorReceipt),
+    });
+    if (callRefusal !== null) {
       return {
         state: "failed_before_submit",
-        code: "CHATGPT_SUBMIT_UNAVAILABLE",
-        deltaCount: 0,
-        observedCharacters: 0,
-      };
-    }
-    if (
-      observer.manualSubmissionOnly &&
-      (!observer.manualDeepTest ||
-        !appTarget ||
-        attachments.length !== 0 ||
-        observer.readConnectorReceipt)
-    ) {
-      return {
-        state: "failed_before_submit",
-        code: "CHATGPT_SUBMIT_UNAVAILABLE",
+        code: callRefusal,
         deltaCount: 0,
         observedCharacters: 0,
       };
     }
     if (
       requiredAppName !== undefined &&
-      !/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$/u.test(requiredAppName)
+      !isValidAppTargetName(requiredAppName)
     ) {
       return {
         state: "failed_before_submit",
@@ -1694,10 +1714,14 @@ export class ChatGptRoute {
     }
     // Refuse before changing task/sign-in state, including when no browser is
     // open. An update's final idle proof remains reserved until its release.
-    if (this.updateAdmission || this.taskInFlight) {
+    const inProgressRefusal = taskInProgressRefusal({
+      updateAdmission: Boolean(this.updateAdmission),
+      taskInFlight: this.taskInFlight,
+    });
+    if (inProgressRefusal !== null) {
       return {
         state: "failed_before_submit",
-        code: "CHATGPT_TASK_IN_PROGRESS",
+        code: inProgressRefusal,
         deltaCount: 0,
         observedCharacters: 0,
         outputText: "",
@@ -1721,21 +1745,21 @@ export class ChatGptRoute {
         !observer.onConnectorTiming
       )
         return;
-      const elapsed = performance.now() - timingStart;
-      if (!Number.isFinite(elapsed) || elapsed < 0) return;
+      const elapsedMs = connectorTimingElapsed(timingStart, performance.now());
+      if (elapsedMs === null) return;
       try {
-        observer.onConnectorTiming({ stage, elapsedMs: Math.round(elapsed) });
+        observer.onConnectorTiming({ stage, elapsedMs });
       } catch {
         /* Diagnostics cannot affect the original check. */
       }
     };
     timing("started");
     const observationGeneration = ++this.taskObservationGeneration;
-    const deadline =
-      Date.now() +
-      (observer.manualSubmissionOnly
-        ? 15_000
-        : (this.options.taskTimeoutMs ?? 180_000));
+    const deadline = taskDeadline(
+      Date.now(),
+      Boolean(observer.manualSubmissionOnly),
+      this.options.taskTimeoutMs,
+    );
     const requireOriginalDocument = () => {
       if (observer.connectionCheck && observer.beforePrepare?.() !== true)
         throw new Error("ChatGPT preparation document changed");
@@ -1770,7 +1794,7 @@ export class ChatGptRoute {
                 ++this.readinessReadSequence;
                 reject(new Error("ChatGPT task deadline exceeded"));
               },
-              Math.max(0, deadline - Date.now()),
+              remainingMs(deadline, Date.now()),
             );
           }),
         ]);
@@ -1812,22 +1836,10 @@ export class ChatGptRoute {
       }
       const readiness = await observeTaskReadiness();
       requireOriginalDocument();
-      if (readiness.state === "signed_out") {
+      const readinessFailure = initialReadinessRefusal(readiness);
+      if (readinessFailure !== null) {
         return {
-          state: "not_authenticated",
-          code: "CHATGPT_SIGN_IN_REQUIRED",
-          deltaCount,
-          observedCharacters,
-          outputText: observedText,
-        };
-      }
-      if (readiness.state !== "authenticated") {
-        return {
-          state: "failed_before_submit",
-          code:
-            readiness.code === "CHATGPT_PAGE_UNREACHABLE"
-              ? "CHATGPT_PAGE_UNREACHABLE"
-              : "CHATGPT_UI_UNRECOGNIZED",
+          ...readinessFailure,
           deltaCount,
           observedCharacters,
           outputText: observedText,
@@ -1871,11 +1883,7 @@ export class ChatGptRoute {
         if (profileFailure !== null) {
           return {
             state: "failed_before_submit",
-            code:
-              profile === "connector-instant" &&
-              profileFailure === "CHATGPT_TEMPORARY_CHAT_REQUIRED"
-                ? "CHATGPT_UI_UNRECOGNIZED"
-                : profileFailure,
+            code: instantProfileFailureCode(profile, profileFailure),
             deltaCount,
             observedCharacters,
             outputText: observedText,
@@ -1890,14 +1898,7 @@ export class ChatGptRoute {
         requireOriginalDocument();
         if (currentReadiness.state !== "authenticated") {
           return {
-            state:
-              currentReadiness.state === "signed_out"
-                ? "not_authenticated"
-                : "failed_before_submit",
-            code:
-              currentReadiness.state === "signed_out"
-                ? "CHATGPT_SIGN_IN_REQUIRED"
-                : "CHATGPT_UI_UNRECOGNIZED",
+            ...readinessRefusal(currentReadiness.state),
             deltaCount,
             observedCharacters,
             outputText: observedText,
@@ -1941,14 +1942,7 @@ export class ChatGptRoute {
         )
           return null;
         return {
-          state:
-            current?.observation.state === "signed_out"
-              ? "not_authenticated"
-              : "failed_before_submit",
-          code:
-            current?.observation.state === "signed_out"
-              ? "CHATGPT_SIGN_IN_REQUIRED"
-              : "CHATGPT_UI_UNRECOGNIZED",
+          ...readinessRefusal(current?.observation.state),
           deltaCount,
           observedCharacters,
           outputText: observedText,
@@ -2032,19 +2026,11 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
-        if (appBinding.data.state === "navigated") {
+        const bindingRefusal = appBindingRefusal(appBinding.data);
+        if (bindingRefusal !== null) {
           return {
             state: "failed_before_submit",
-            code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
-            deltaCount,
-            observedCharacters,
-            outputText: observedText,
-          };
-        }
-        if (appBinding.data.state === "blocked") {
-          return {
-            state: "failed_before_submit",
-            code: appBindingFailureCode(appBinding.data.reason),
+            code: bindingRefusal,
             deltaCount,
             observedCharacters,
             outputText: observedText,
@@ -2088,35 +2074,21 @@ export class ChatGptRoute {
       // The page compared its own location against the validated identity
       // before touching the composer, and found another page: nothing was
       // typed anywhere.
-      if ("navigated" in prepared.data) {
+      const preparedDecision = preparedTaskDecision(prepared.data, {
+        requiresComposerText: Boolean(
+          observer.manualDeepTest || observer.connectionCheck,
+        ),
+      });
+      if (preparedDecision.kind === "refused") {
         return {
           state: "failed_before_submit",
-          code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+          code: preparedDecision.code,
           deltaCount,
           observedCharacters,
           outputText: observedText,
         };
       }
-      if ("appSelectionLost" in prepared.data) {
-        return {
-          state: "failed_before_submit",
-          code: "CHATGPT_APP_SELECTION_LOST",
-          deltaCount,
-          observedCharacters,
-          outputText: observedText,
-        };
-      }
-      if ("draftPresent" in prepared.data) {
-        return {
-          state: "failed_before_submit",
-          code: "CHATGPT_COMPOSER_DRAFT_PRESENT",
-          deltaCount,
-          observedCharacters,
-          outputText: observedText,
-        };
-      }
-      const preparedTask = prepared.data;
-      if (!preparedTask.ready) {
+      if (preparedDecision.kind === "unavailable") {
         return {
           state: "failed_before_submit",
           code: "CHATGPT_COMPOSER_UNAVAILABLE",
@@ -2124,17 +2096,7 @@ export class ChatGptRoute {
           observedCharacters,
         };
       }
-      if (
-        (observer.manualDeepTest || observer.connectionCheck) &&
-        preparedTask.preparedComposerText === undefined
-      ) {
-        return {
-          state: "failed_before_submit",
-          code: "CHATGPT_COMPOSER_UNAVAILABLE",
-          deltaCount,
-          observedCharacters,
-        };
-      }
+      const preparedTask = preparedDecision.task;
       if (attachments.length > 0) {
         const beforeUpload = dispatchReadinessRefusal();
         if (beforeUpload) return beforeUpload;
@@ -2161,7 +2123,7 @@ export class ChatGptRoute {
           };
         }
       }
-      const submitDeadline = Date.now() + 5_000;
+      const submitDeadline = Date.now() + SUBMIT_WINDOW_MS;
       let connectionActivationAttempted = false;
       while (Date.now() < submitDeadline) {
         if (observer.connectionCheck && connectionActivationAttempted) break;
@@ -2203,24 +2165,11 @@ export class ChatGptRoute {
               outputText: observedText,
             };
           }
-          if (selected.data.state === "navigated") {
+          const verificationRefusal = appVerificationRefusal(selected.data);
+          if (verificationRefusal !== null) {
             return {
               state: "failed_before_submit",
-              code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
-              deltaCount,
-              observedCharacters,
-              outputText: observedText,
-            };
-          }
-          if (selected.data.state === "blocked") {
-            const code =
-              selected.data.reason === "missing" ||
-              selected.data.reason === "selection_not_observed"
-                ? "CHATGPT_APP_SELECTION_LOST"
-                : appBindingFailureCode(selected.data.reason);
-            return {
-              state: "failed_before_submit",
-              code,
+              code: verificationRefusal,
               deltaCount,
               observedCharacters,
               outputText: observedText,
@@ -2272,7 +2221,7 @@ export class ChatGptRoute {
             new Promise<null>((resolve) => {
               acknowledgementTimer = setTimeout(
                 () => resolve(null),
-                Math.max(0, submitDeadline - Date.now()),
+                remainingMs(submitDeadline, Date.now()),
               );
             }),
           ]).finally(() => {
@@ -2291,47 +2240,18 @@ export class ChatGptRoute {
         }
         // The page refused to click: it was no longer showing the validated
         // identity. That is a positive statement that nothing was submitted.
-        if ("navigated" in activated.data) {
+        const activation = activationDecision(activated.data);
+        if (activation.kind === "refused") {
           submissionPhase = "not_attempted";
           return {
             state: "failed_before_submit",
-            code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+            code: activation.code,
             deltaCount,
             observedCharacters,
             outputText: observedText,
           };
         }
-        if ("appSelectionLost" in activated.data) {
-          submissionPhase = "not_attempted";
-          return {
-            state: "failed_before_submit",
-            code: "CHATGPT_APP_SELECTION_LOST",
-            deltaCount,
-            observedCharacters,
-            outputText: observedText,
-          };
-        }
-        if ("profileLost" in activated.data) {
-          submissionPhase = "not_attempted";
-          return {
-            state: "failed_before_submit",
-            code: "CHATGPT_INSTANT_MODEL_REQUIRED",
-            deltaCount,
-            observedCharacters,
-            outputText: observedText,
-          };
-        }
-        if ("draftPresent" in activated.data) {
-          submissionPhase = "not_attempted";
-          return {
-            state: "failed_before_submit",
-            code: "CHATGPT_COMPOSER_DRAFT_PRESENT",
-            deltaCount,
-            observedCharacters,
-            outputText: observedText,
-          };
-        }
-        if (activated.data.activated) {
+        if (activation.kind === "activated") {
           submissionPhase = "submitted";
           timing("send_acknowledged");
           await observer.onSendAcknowledged?.();
@@ -2370,7 +2290,7 @@ export class ChatGptRoute {
         dispatchIdentityUrl,
         this.options.e2eOrigin,
       );
-      const pollMs = this.options.taskPollMs ?? 250;
+      const pollMs = this.options.taskPollMs ?? DEFAULT_TASK_POLL_MS;
       const probePending = Symbol("probe pending");
       let connectorProbe: Promise<unknown> | null = null;
       while (Date.now() < deadline) {
@@ -2402,9 +2322,11 @@ export class ChatGptRoute {
           currentUrl,
           this.options.e2eOrigin,
         );
-        if (pinnedConversationUrl === null) {
-          pinnedConversationUrl = conversationUrl;
-        } else if (conversationUrl !== pinnedConversationUrl) {
+        const pinning = pinnedConversationAfter(
+          pinnedConversationUrl,
+          conversationUrl,
+        );
+        if (pinning.lost) {
           return {
             state: "outcome_unknown",
             code: "CHATGPT_TASK_PAGE_LOST",
@@ -2414,6 +2336,7 @@ export class ChatGptRoute {
             ...correlation(),
           };
         }
+        pinnedConversationUrl = pinning.pinned;
         if (
           (profile === "temporary-instant" ||
             profile === "connector-instant") &&
@@ -2427,7 +2350,7 @@ export class ChatGptRoute {
             new Promise<null>((resolve) => {
               timeout = setTimeout(
                 () => resolve(null),
-                Math.max(0, deadline - Date.now()),
+                remainingMs(deadline, Date.now()),
               );
             }),
             new Promise<"invalidated">((resolve) => {
@@ -2465,11 +2388,14 @@ export class ChatGptRoute {
             afterReceiptUrl,
             this.options.e2eOrigin,
           );
-          const createdByReceipt =
-            pinnedConversationUrl === null &&
-            createdConversation !== null &&
-            allowedChatGptPageUrl(afterReceiptUrl, this.options.e2eOrigin);
-          if (afterReceiptUrl !== currentUrl && !createdByReceipt) {
+          const createdByReceipt = conversationCreatedBySubmission(
+            pinnedConversationUrl,
+            createdConversation,
+            allowedChatGptPageUrl(afterReceiptUrl, this.options.e2eOrigin),
+          );
+          if (
+            pageLostAcrossAwait(currentUrl, afterReceiptUrl, createdByReceipt)
+          ) {
             return {
               state: "outcome_unknown",
               code: "CHATGPT_TASK_PAGE_LOST",
@@ -2521,7 +2447,7 @@ export class ChatGptRoute {
             new Promise<typeof probePending>((resolve) => {
               timer = setTimeout(
                 () => resolve(probePending),
-                Math.min(pollMs, Math.max(0, deadline - Date.now())),
+                probeWaitMs(pollMs, deadline, Date.now()),
               );
             }),
           ]).finally(() => {
@@ -2538,11 +2464,14 @@ export class ChatGptRoute {
           afterProbeUrl,
           this.options.e2eOrigin,
         );
-        const createdBySubmission =
-          pinnedConversationUrl === null &&
-          createdConversation !== null &&
-          allowedChatGptPageUrl(afterProbeUrl, this.options.e2eOrigin);
-        if (afterProbeUrl !== currentUrl && !createdBySubmission) {
+        const createdBySubmission = conversationCreatedBySubmission(
+          pinnedConversationUrl,
+          createdConversation,
+          allowedChatGptPageUrl(afterProbeUrl, this.options.e2eOrigin),
+        );
+        if (
+          pageLostAcrossAwait(currentUrl, afterProbeUrl, createdBySubmission)
+        ) {
           return {
             state: "outcome_unknown",
             code: "CHATGPT_TASK_PAGE_LOST",
@@ -2563,68 +2492,58 @@ export class ChatGptRoute {
             ...correlation(),
           };
         }
-        if (probe.data.signInVisible || probe.data.errorVisible) {
+        const probeFailure = submittedProbeFailureCode(probe.data);
+        if (probeFailure !== null) {
           return {
             state: "outcome_unknown",
-            code: probe.data.signInVisible
-              ? "CHATGPT_TASK_PAGE_LOST"
-              : probe.data.errorKind === "usage_limited"
-                ? "CHATGPT_USAGE_LIMITED"
-                : "CHATGPT_TASK_ERROR",
+            code: probeFailure,
             deltaCount,
             observedCharacters,
             outputText: observedText,
             ...correlation(),
           };
         }
-        if (probe.data.turnUserId !== null) {
-          if (correlatedUserId === null) {
-            correlatedUserId = probe.data.turnUserId;
-            await observer.onCorrelation?.({
-              turnUserId: correlatedUserId,
-              turnAssistantId: correlatedAssistantId,
-            });
-          } else if (probe.data.turnUserId !== correlatedUserId) {
-            return {
-              state: "outcome_unknown",
-              code: "CHATGPT_TASK_OUTPUT_CHANGED",
-              deltaCount,
-              observedCharacters,
-              outputText: observedText,
-              ...correlation(),
-            };
-          }
+        const userStep = userCorrelation(
+          probe.data.turnUserId,
+          correlatedUserId,
+        );
+        if (userStep.kind === "adopt") {
+          correlatedUserId = userStep.id;
+          await observer.onCorrelation?.({
+            turnUserId: correlatedUserId,
+            turnAssistantId: correlatedAssistantId,
+          });
+        } else if (userStep.kind === "changed") {
+          return {
+            state: "outcome_unknown",
+            code: "CHATGPT_TASK_OUTPUT_CHANGED",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+            ...correlation(),
+          };
         }
-        if (probe.data.turnAssistantId !== null) {
-          if (
-            probe.data.turnUserId === null ||
-            probe.data.turnUserId !== correlatedUserId
-          ) {
-            return {
-              state: "outcome_unknown",
-              code: "CHATGPT_TASK_OUTPUT_CHANGED",
-              deltaCount,
-              observedCharacters,
-              outputText: observedText,
-              ...correlation(),
-            };
-          }
-          if (correlatedAssistantId === null) {
-            correlatedAssistantId = probe.data.turnAssistantId;
-            await observer.onCorrelation?.({
-              turnUserId: correlatedUserId,
-              turnAssistantId: correlatedAssistantId,
-            });
-          } else if (probe.data.turnAssistantId !== correlatedAssistantId) {
-            return {
-              state: "outcome_unknown",
-              code: "CHATGPT_TASK_OUTPUT_CHANGED",
-              deltaCount,
-              observedCharacters,
-              outputText: observedText,
-              ...correlation(),
-            };
-          }
+        const assistantStep = assistantCorrelation(
+          probe.data.turnUserId,
+          probe.data.turnAssistantId,
+          correlatedUserId,
+          correlatedAssistantId,
+        );
+        if (assistantStep.kind === "adopt") {
+          correlatedAssistantId = assistantStep.id;
+          await observer.onCorrelation?.({
+            turnUserId: assistantStep.userId,
+            turnAssistantId: correlatedAssistantId,
+          });
+        } else if (assistantStep.kind === "changed") {
+          return {
+            state: "outcome_unknown",
+            code: "CHATGPT_TASK_OUTPUT_CHANGED",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+            ...correlation(),
+          };
         }
         accepted ||= correlatedUserId !== null;
         const correlated =
@@ -2649,7 +2568,7 @@ export class ChatGptRoute {
             await observer.onVisibleItem?.(item);
             deltaCount += 1;
             if (item.channel === "answer") {
-              observedText += `${observedText ? "\n\n" : ""}${item.text}`;
+              observedText = appendAnswerItem(observedText, item.text);
               observedCharacters = observedText.length;
             }
           }
@@ -2669,21 +2588,24 @@ export class ChatGptRoute {
           await delay(pollMs);
           continue;
         }
-        if (correlated && probe.data.assistantText !== observedText) {
-          if (observedText.startsWith(probe.data.assistantText)) {
-            stablePolls = 0;
-            await delay(pollMs);
-            continue;
-          }
-          if (!probe.data.assistantText.startsWith(observedText)) {
-            return {
-              state: "outcome_unknown",
-              code: "CHATGPT_TASK_OUTPUT_CHANGED",
-              deltaCount,
-              observedCharacters,
-              outputText: observedText,
-            };
-          }
+        const growth = correlated
+          ? textGrowth(observedText, probe.data.assistantText)
+          : "unchanged";
+        if (growth === "regressed") {
+          stablePolls = 0;
+          await delay(pollMs);
+          continue;
+        }
+        if (growth === "diverged") {
+          return {
+            state: "outcome_unknown",
+            code: "CHATGPT_TASK_OUTPUT_CHANGED",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
+        if (growth === "grew") {
           const delta = probe.data.assistantText.slice(observedText.length);
           observedText = probe.data.assistantText;
           observedCharacters = observedText.length;
@@ -2695,23 +2617,23 @@ export class ChatGptRoute {
             text: observedText,
             observedCharacters,
           });
-          stablePolls = 0;
-        } else if (
-          correlated &&
-          observedCharacters > 0 &&
-          !probe.data.busy &&
-          probe.data.sendVisible
-        ) {
-          stablePolls += 1;
-        } else {
-          stablePolls = 0;
         }
+        stablePolls = nextStablePolls({
+          grew: growth === "grew",
+          correlated,
+          observedCharacters,
+          busy: probe.data.busy,
+          sendVisible: probe.data.sendVisible,
+          stablePolls,
+        });
         if (
-          accepted &&
-          correlated &&
-          observedCharacters > 0 &&
-          probe.data.sendVisible &&
-          stablePolls >= 3
+          textTurnCompleted({
+            accepted,
+            correlated,
+            observedCharacters,
+            sendVisible: probe.data.sendVisible,
+            stablePolls,
+          })
         ) {
           return {
             state: "completed",
@@ -2732,23 +2654,12 @@ export class ChatGptRoute {
         ...correlation(),
       };
     } catch (error) {
-      const documentChanged =
-        error instanceof Error &&
-        error.message === "ChatGPT task document unavailable";
-      const submissionMayHaveOccurred =
-        submissionPhase === "awaiting_acknowledgement" ||
-        submissionPhase === "submitted";
+      const outcome = taskThrowOutcome({
+        phase: submissionPhase,
+        documentChanged: isTaskDocumentUnavailable(error),
+      });
       return {
-        state: submissionMayHaveOccurred
-          ? "outcome_unknown"
-          : "failed_before_submit",
-        code: submissionMayHaveOccurred
-          ? documentChanged
-            ? "CHATGPT_TASK_PAGE_LOST"
-            : "CHATGPT_TASK_ERROR"
-          : documentChanged
-            ? "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT"
-            : "CHATGPT_SUBMIT_UNAVAILABLE",
+        ...outcome,
         deltaCount,
         observedCharacters,
         outputText: observedText,
@@ -2768,18 +2679,16 @@ export class ChatGptRoute {
     }>,
     observer: ChatGptTaskObserver = {},
   ): Promise<ChatGptReadonlyTaskResult> {
-    if (
-      this.updateAdmission ||
-      this.taskInFlight ||
-      !input.turnUserId ||
-      !input.prompt
-    ) {
+    const admissionRefusal = observationAdmissionRefusal({
+      updateAdmission: Boolean(this.updateAdmission),
+      taskInFlight: this.taskInFlight,
+      turnUserId: input.turnUserId,
+      prompt: input.prompt,
+    });
+    if (admissionRefusal !== null) {
       return {
         state: "outcome_unknown",
-        code:
-          this.updateAdmission || this.taskInFlight
-            ? "CHATGPT_TASK_IN_PROGRESS"
-            : "CHATGPT_TASK_OUTPUT_CHANGED",
+        code: admissionRefusal,
         deltaCount: 0,
         observedCharacters: 0,
         outputText: "",
@@ -2816,11 +2725,7 @@ export class ChatGptRoute {
       }
       const readiness = await this.observe();
       if (readiness.state !== "authenticated") {
-        return result(
-          readiness.state === "signed_out"
-            ? "CHATGPT_SIGN_IN_REQUIRED"
-            : "CHATGPT_UI_UNRECOGNIZED",
-        );
+        return result(observedReadinessCode(readiness.state));
       }
       const candidate = this.routeWindow;
       if (!candidate || candidate.isDestroyed()) {
@@ -2828,8 +2733,12 @@ export class ChatGptRoute {
       }
       const observationUrl = candidate.webContents.getURL();
       let stablePolls = 0;
-      const pollMs = this.options.taskPollMs ?? 250;
-      const deadline = Date.now() + (this.options.taskTimeoutMs ?? 180_000);
+      const pollMs = this.options.taskPollMs ?? DEFAULT_TASK_POLL_MS;
+      const deadline = taskDeadline(
+        Date.now(),
+        false,
+        this.options.taskTimeoutMs,
+      );
       while (Date.now() < deadline) {
         if (observationGeneration !== this.taskObservationGeneration)
           throw new Error("CHATGPT_TASK_CANCELLED");
@@ -2862,30 +2771,23 @@ export class ChatGptRoute {
         if (active.webContents.getURL() !== currentUrl)
           return result("CHATGPT_TASK_PAGE_LOST");
         if (!probe.success) return result("CHATGPT_TASK_ERROR");
-        if (probe.data.signInVisible || probe.data.errorVisible) {
-          return result(
-            probe.data.signInVisible
-              ? "CHATGPT_SIGN_IN_REQUIRED"
-              : probe.data.errorKind === "usage_limited"
-                ? "CHATGPT_USAGE_LIMITED"
-                : "CHATGPT_TASK_ERROR",
-          );
-        }
-        if (probe.data.turnUserId !== input.turnUserId) {
+        const probeFailure = observedProbeFailureCode(probe.data);
+        if (probeFailure !== null) return result(probeFailure);
+        const turn = observedTurnDecision(
+          probe.data.turnUserId,
+          probe.data.turnAssistantId,
+          input.turnUserId,
+          correlatedAssistantId,
+        );
+        if (turn.kind === "wait") {
           stablePolls = 0;
           await delay(pollMs);
           continue;
         }
-        if (probe.data.turnAssistantId === null) {
-          stablePolls = 0;
-          await delay(pollMs);
-          continue;
-        }
-        if (correlatedAssistantId === null) {
-          correlatedAssistantId = probe.data.turnAssistantId;
-        } else if (probe.data.turnAssistantId !== correlatedAssistantId) {
+        if (turn.kind === "changed") {
           return result("CHATGPT_TASK_OUTPUT_CHANGED");
         }
+        correlatedAssistantId = turn.assistantId;
         if (observationGeneration !== this.taskObservationGeneration)
           throw new Error("CHATGPT_TASK_CANCELLED");
         if (semanticOutput) {
@@ -2903,7 +2805,7 @@ export class ChatGptRoute {
             await observer.onVisibleItem?.(item);
             deltaCount += 1;
             if (item.channel === "answer") {
-              observedText += `${observedText ? "\n\n" : ""}${item.text}`;
+              observedText = appendAnswerItem(observedText, item.text);
               observedCharacters = observedText.length;
             }
           }
@@ -2924,13 +2826,11 @@ export class ChatGptRoute {
           await delay(pollMs);
           continue;
         }
-        if (probe.data.assistantText !== observedText) {
-          if (
-            observedText.startsWith(probe.data.assistantText) ||
-            !probe.data.assistantText.startsWith(observedText)
-          ) {
-            return result("CHATGPT_TASK_OUTPUT_CHANGED");
-          }
+        const growth = textGrowth(observedText, probe.data.assistantText);
+        if (growth === "regressed" || growth === "diverged") {
+          return result("CHATGPT_TASK_OUTPUT_CHANGED");
+        }
+        if (growth === "grew") {
           const delta = probe.data.assistantText.slice(observedText.length);
           observedText = probe.data.assistantText;
           observedCharacters = observedText.length;
@@ -2942,20 +2842,23 @@ export class ChatGptRoute {
             text: observedText,
             observedCharacters,
           });
-          stablePolls = 0;
-        } else if (
-          observedCharacters > 0 &&
-          !probe.data.busy &&
-          probe.data.sendVisible
-        ) {
-          stablePolls += 1;
-        } else {
-          stablePolls = 0;
         }
+        stablePolls = nextStablePolls({
+          grew: growth === "grew",
+          correlated: true,
+          observedCharacters,
+          busy: probe.data.busy,
+          sendVisible: probe.data.sendVisible,
+          stablePolls,
+        });
         if (
-          observedCharacters > 0 &&
-          probe.data.sendVisible &&
-          stablePolls >= 3
+          textTurnCompleted({
+            accepted: true,
+            correlated: true,
+            observedCharacters,
+            sendVisible: probe.data.sendVisible,
+            stablePolls,
+          })
         ) {
           return {
             state: "completed",
