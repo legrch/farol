@@ -92,10 +92,11 @@ import {
   canSetInstallOnQuitPreference,
   initial,
   installOnQuitPreferenceEligible,
-  type EditReceipt,
-  type ObservedEdit,
-  type SubmittedEdit,
 } from "../../../apps/desktop/renderer/snapshot";
+import {
+  createEditRegistry,
+  settlesAcknowledgedEdit,
+} from "../../../apps/desktop/renderer/edits";
 import {
   canGoBack,
   canGoForward,
@@ -190,9 +191,7 @@ export class WindowController implements RendererFacade {
     { fingerprint: Promise<string>; promise: Promise<Intent> }
   >();
   // Window-local provenance and permanent consumption, never backend authority.
-  private readonly editPreviews = new Map<string, EditReceipt>();
-  private readonly submittedEdits = new Map<string, SubmittedEdit>();
-  private readonly observedEdits = new Map<string, ObservedEdit>();
+  private readonly edits = createEditRegistry({ snapshot: () => this.state });
   // An operation ID belongs to its original Intent even if a remount supplies
   // another label. Retain only the digest and content-free result promise.
   private readonly connectorSetupCommands = new Map<
@@ -1194,29 +1193,21 @@ export class WindowController implements RendererFacade {
             code: "CONNECTOR_SETUP_BINDING_CHANGED",
           };
         if (command.kind === "computer.apply-workspace-edit") {
-          if (this.submittedEdits.has(command.operationId))
+          if (
+            this.edits.submit(command.operationId, intention, before) ===
+            "consumed"
+          )
             return {
               id: intention,
               state: "refused",
               code: "WORKSPACE_EDIT_ALREADY_CONSUMED",
             };
-          const receipt = this.editPreviews.get(command.operationId);
-          this.submittedEdits.set(command.operationId, {
-            intention,
-            receipt:
-              receipt &&
-              before.configuration === receipt.configuration &&
-              before.evidence?.value === receipt.preview &&
-              this.sameEditOwner(receipt, before)
-                ? receipt
-                : null,
-          });
         }
         if (command.kind === "computer.observe-workspace-edit")
-          this.observedEdits.delete(command.operationId);
+          this.edits.forgetObserved(command.operationId);
         const acknowledged =
           command.kind === "computer.ack-workspace-edit"
-            ? this.observedEdits.get(command.operationId)
+            ? this.edits.observed(command.operationId)
             : undefined;
         if (
           (command.kind === "computer.verify-workspace" ||
@@ -1583,76 +1574,40 @@ export class WindowController implements RendererFacade {
             this.state.configuration.settings.computer.generation &&
           this.state.status === "current"
         ) {
-          const retained = this.editPreviews.get(value.operationId);
           if (
-            retained &&
-            (retained.buildId !== before.buildId ||
-              retained.computerId !==
-                before.configuration.settings.computer.computerId ||
-              retained.generation !==
-                before.configuration.settings.computer.generation ||
-              JSON.stringify(retained.preview) !== JSON.stringify(value))
+            this.edits.retainPreview(value, {
+              buildId: before.buildId,
+              computerId: before.configuration.settings.computer.computerId,
+              generation: before.configuration.settings.computer.generation,
+            }) === "unconfirmed"
           )
             return {
               id: intention,
               state: "unknown",
               code: "WORKSPACE_EDIT_PREVIEW_UNCONFIRMED",
             };
-          this.editPreviews.set(value.operationId, {
-            preview: value,
-            configuration: this.state.configuration,
-            buildId: before.buildId,
-            computerId: before.configuration.settings.computer.computerId,
-            generation: before.configuration.settings.computer.generation,
-          });
         }
-        if (command.kind === "computer.observe-workspace-edit") {
+        if (command.kind === "computer.observe-workspace-edit")
           // Only this parsed command reply can supply settlement evidence. Ambient
           // snapshots, delivery IDs and another intention's evidence cannot.
-          this.observedEdits.delete(command.operationId);
-          const submitted = this.submittedEdits.get(command.operationId);
-          const receipt = submitted?.receipt;
-          if (
-            submitted &&
-            receipt &&
-            delivery === command.operationId &&
-            revision !== null &&
-            this.configOrder.isLatest(order) &&
-            this.samePendingEdit(receipt, before) &&
-            this.samePendingEdit(receipt, this.state) &&
-            (result.state === "applied" || result.state === "refused") &&
-            (result.state === "refused" ||
-              (value?.kind === "computer.workspace-mutation" &&
-                value.operation === "edit" &&
-                value.operationId === receipt.preview.operationId &&
-                value.workspaceId === receipt.preview.workspaceId &&
-                value.relativePath === receipt.preview.relativePath &&
-                value.beforeSha256 === receipt.preview.beforeSha256))
-          )
-            this.observedEdits.set(command.operationId, {
-              submitted,
-              configuration: this.state.configuration,
-              evidence: this.state.evidence,
-              state: result.state,
-              code: result.code,
-            });
-        }
+          this.edits.observe(command.operationId, {
+            before,
+            delivery,
+            settled: revision !== null && this.configOrder.isLatest(order),
+            result,
+            value,
+          });
         if (
           command.kind === "computer.ack-workspace-edit" &&
           result.state === "applied" &&
           revision !== null &&
           this.configOrder.isLatest(order) &&
-          acknowledged?.submitted.receipt &&
-          before.workspaceEditDelivery === command.operationId &&
-          before.configuration === acknowledged.configuration &&
-          before.evidence === acknowledged.evidence &&
-          this.samePendingEdit(acknowledged.submitted.receipt, before) &&
-          this.sameEditOwner(acknowledged.submitted.receipt, this.state) &&
-          before.configuration?.status === "ready" &&
-          this.state.configuration?.status === "ready" &&
-          this.state.configuration.settings.revision >
-            before.configuration.settings.revision &&
-          this.state.configuration.settings.computer.pendingEdit === null
+          settlesAcknowledgedEdit(
+            acknowledged,
+            command.operationId,
+            before,
+            this.state,
+          )
         ) {
           const original = this.state.intents[acknowledged.submitted.intention];
           if (original?.state === "unknown")
@@ -1668,7 +1623,7 @@ export class WindowController implements RendererFacade {
             });
           // Retain both the submitted identity and the original dispatch latch.
           // Settlement permits a NEW operation, never another original Apply.
-          this.observedEdits.delete(command.operationId);
+          this.edits.forgetObserved(command.operationId);
         }
         return result;
       },
@@ -1693,35 +1648,6 @@ export class WindowController implements RendererFacade {
         },
       },
     });
-  }
-  private sameEditOwner(
-    receipt: EditReceipt,
-    current: WindowSnapshot,
-  ): boolean {
-    return (
-      current.status === "current" &&
-      current.buildId === receipt.buildId &&
-      current.configuration?.status === "ready" &&
-      current.configuration.settings.computer.computerId ===
-        receipt.computerId &&
-      current.configuration.settings.computer.generation === receipt.generation
-    );
-  }
-  private samePendingEdit(
-    receipt: EditReceipt,
-    current: WindowSnapshot,
-  ): boolean {
-    const pending =
-      current.configuration?.status === "ready"
-        ? current.configuration.settings.computer.pendingEdit
-        : null;
-    return (
-      this.sameEditOwner(receipt, current) &&
-      pending?.operationId === receipt.preview.operationId &&
-      pending.workspaceId === receipt.preview.workspaceId &&
-      pending.relativePath === receipt.preview.relativePath &&
-      pending.computerGeneration === receipt.generation
-    );
   }
   task(value: ProductTaskCommand, intention: string): Promise<Intent> {
     const parsed = ProductTaskCommandSchema.safeParse(value);
