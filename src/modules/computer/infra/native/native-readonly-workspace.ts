@@ -6,14 +6,11 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import type { Readable, Writable } from "node:stream";
-import { TextDecoder } from "node:util";
 
 import type {
   MutableWorkspace,
-  WorkspaceMutationErrorCode,
   WorkspaceMutationRequest,
   WorkspaceMutationResult,
-  WorkspaceMutationReceipt,
 } from "../../app/port/mutable-workspace";
 import type {
   ReadonlyWorkspace,
@@ -22,19 +19,10 @@ import type {
   ReadonlyWorkspaceRequest,
   ReadonlyWorkspaceResult,
   WorkspaceApprovedRoot,
-  WorkspaceMatch,
-  WorkspaceText,
-  WorkspaceReadRange,
 } from "../../app/port/readonly-workspace";
 import { credentialStorePolicy } from "./home-secret-stores";
 import { executeNativeVerificationCommand } from "./native-verification-command";
-import {
-  canonicalAbsolutePath,
-  canonicalRelativePath,
-  exactKeys,
-  plainString,
-  validSha256,
-} from "./paths";
+import { canonicalAbsolutePath, exactKeys, plainString } from "./paths";
 import {
   DEFAULT_DENIED_PATHS,
   MAX_HELPER_DENIED_PATHS,
@@ -42,7 +30,21 @@ import {
   verificationDeniedPaths,
   writeDeniedPaths,
 } from "./denied";
-import { MAX_MUTATION_BYTES, MAX_SOURCE_BYTES } from "./limits";
+import {
+  WorkspaceRefusal,
+  mapExitCode,
+  mutationErrorCode,
+  readonlyErrorCode,
+} from "./errors";
+import { MAX_SOURCE_BYTES } from "./limits";
+import {
+  parseEntries,
+  parseMatches,
+  parseMutationReceipt,
+  parseText,
+  parseTextWindow,
+} from "./replies";
+import { failure, mutationFailure } from "./results";
 import { validateMutationRequest, validateRequest } from "./requests";
 
 export { DEFAULT_DENIED_PATHS };
@@ -68,23 +70,6 @@ const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 512 * 1024;
 const MAX_STDERR_BYTES = 4 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
-
-const EXIT_TO_ERROR = new Map<number, NativeWorkspaceErrorCode>([
-  [20, "WORKSPACE_INVALID_REQUEST"],
-  [21, "WORKSPACE_NOT_FOUND"],
-  [22, "WORKSPACE_PATH_REFUSED"],
-  [23, "WORKSPACE_NOT_A_FILE"],
-  [24, "WORKSPACE_FILE_TOO_LARGE"],
-  [25, "WORKSPACE_RACE_DETECTED"],
-  [26, "WORKSPACE_HELPER_FAILED"],
-  [27, "WORKSPACE_SEARCH_TIMEOUT"],
-  [28, "WORKSPACE_NOT_TEXT"],
-  [29, "WORKSPACE_EDIT_NO_MATCH"],
-  [30, "WORKSPACE_EDIT_NOT_UNIQUE"],
-  [31, "WORKSPACE_EDIT_OVERLAP"],
-  [32, "WORKSPACE_MUTATION_OUTCOME_UNKNOWN"],
-  [33, "WORKSPACE_ROOT_CHANGED"],
-]);
 
 const REVIEWED_PYTHON = Object.freeze({
   selector: "/usr/bin/python3",
@@ -168,34 +153,6 @@ type SystemFileMeasurement = Readonly<{
   uid: number;
   mode: number;
 }>;
-
-type NativeWorkspaceErrorCode =
-  | ReadonlyWorkspaceErrorCode
-  | WorkspaceMutationErrorCode
-  // Internal: the caller aborted after the helper process had started.
-  | "WORKSPACE_REQUEST_INTERRUPTED";
-
-class WorkspaceRefusal extends Error {
-  constructor(readonly code: NativeWorkspaceErrorCode) {
-    super(code);
-  }
-}
-
-function success(
-  value: Extract<ReadonlyWorkspaceResult, { ok: true }>["value"],
-): ReadonlyWorkspaceResult {
-  return { ok: true, value };
-}
-
-function failure(code: ReadonlyWorkspaceErrorCode): ReadonlyWorkspaceResult {
-  return { ok: false, error: { code, retry: "never" } };
-}
-
-function mutationFailure(
-  code: WorkspaceMutationErrorCode,
-): WorkspaceMutationResult {
-  return { ok: false, error: { code, retry: "never" } };
-}
 
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -587,11 +544,6 @@ async function defaultAttestInterpreter(): Promise<string> {
   }
 }
 
-function mapExitCode(code: number | null): NativeWorkspaceErrorCode {
-  if (code === null) return "WORKSPACE_HELPER_FAILED";
-  return EXIT_TO_ERROR.get(code) ?? "WORKSPACE_HELPER_FAILED";
-}
-
 function runHelper(
   interpreter: string,
   source: Buffer,
@@ -775,317 +727,6 @@ function runHelper(
       });
     }
   });
-}
-
-function parseJson(raw: Buffer): unknown {
-  try {
-    return JSON.parse(raw.toString("ascii"));
-  } catch {
-    throw new WorkspaceRefusal("WORKSPACE_HELPER_FAILED");
-  }
-}
-
-function validEntry(value: unknown): value is string {
-  if (typeof value !== "string" || value.length === 0 || value.length > 256) {
-    return false;
-  }
-  const directory = value.endsWith("/");
-  const name = directory ? value.slice(0, -1) : value;
-  return (
-    plainString(name, 255) &&
-    !name.includes("/") &&
-    !name.includes("\\") &&
-    name !== "." &&
-    name !== ".."
-  );
-}
-
-function parseEntries(raw: Buffer): ReadonlyWorkspaceResult {
-  const parsed = parseJson(raw);
-  if (!exactKeys(parsed, ["entries", "truncated", "writableByOthers"])) {
-    throw new WorkspaceRefusal("WORKSPACE_HELPER_FAILED");
-  }
-  const value = parsed as Readonly<Record<string, unknown>>;
-  if (
-    !Array.isArray(value.entries) ||
-    value.entries.length > 500 ||
-    !value.entries.every(validEntry) ||
-    typeof value.truncated !== "boolean" ||
-    typeof value.writableByOthers !== "boolean"
-  ) {
-    throw new WorkspaceRefusal("WORKSPACE_HELPER_FAILED");
-  }
-  // The root is writable by group or other users of this Mac. Like the Go
-  // route, the mark is present only when true.
-  return success({
-    kind: "workspace.entries",
-    entries: [...value.entries] as string[],
-    truncated: value.truncated,
-    ...(value.writableByOthers ? { writableByOthers: true as const } : {}),
-  });
-}
-
-function validMatch(value: unknown): value is WorkspaceMatch {
-  if (!exactKeys(value, ["line", "path", "text", "truncated"])) {
-    return false;
-  }
-  const match = value as Readonly<Record<string, unknown>>;
-  return (
-    Number.isSafeInteger(match.line) &&
-    (match.line as number) > 0 &&
-    canonicalRelativePath(match.path) &&
-    typeof match.text === "string" &&
-    !match.text.includes("\n") &&
-    !match.text.includes("\r") &&
-    [...match.text].length <= 500 &&
-    [...match.text].every((character) => {
-      const code = character.codePointAt(0);
-      return (
-        character === "\t" || (code !== undefined && code >= 32 && code !== 127)
-      );
-    }) &&
-    typeof match.truncated === "boolean"
-  );
-}
-
-function parseMatches(raw: Buffer): ReadonlyWorkspaceResult {
-  const parsed = parseJson(raw);
-  if (!exactKeys(parsed, ["matches", "resultLimited", "scanLimited"])) {
-    throw new WorkspaceRefusal("WORKSPACE_HELPER_FAILED");
-  }
-  const value = parsed as Readonly<Record<string, unknown>>;
-  if (
-    !Array.isArray(value.matches) ||
-    value.matches.length > 100 ||
-    !value.matches.every(validMatch) ||
-    typeof value.resultLimited !== "boolean" ||
-    typeof value.scanLimited !== "boolean"
-  ) {
-    throw new WorkspaceRefusal("WORKSPACE_HELPER_FAILED");
-  }
-  return success({
-    kind: "workspace.matches",
-    matches: value.matches.map((match) => ({ ...match })) as WorkspaceMatch[],
-    resultLimited: value.resultLimited,
-    scanLimited: value.scanLimited,
-  });
-}
-
-function parseText(
-  raw: Buffer,
-):
-  | Readonly<{ ok: true; value: Extract<WorkspaceText, { sha256: string }> }>
-  | Extract<ReadonlyWorkspaceResult, { ok: false }> {
-  if (raw.includes(0))
-    return { ok: false, error: { code: "WORKSPACE_NOT_TEXT", retry: "never" } };
-  let text: string;
-  try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(raw);
-  } catch {
-    return { ok: false, error: { code: "WORKSPACE_NOT_TEXT", retry: "never" } };
-  }
-  // Hash the same descriptor-bound buffer only after text validation. Decoding
-  // drops a BOM; the edit precondition must identify the original bytes.
-  return {
-    ok: true,
-    value: {
-      kind: "workspace.text",
-      text,
-      bytes: raw.length,
-      sha256: createHash("sha256").update(raw).digest("hex"),
-    },
-  };
-}
-
-function continuationByte(byte: number | undefined): boolean {
-  return byte !== undefined && (byte & 0xc0) === 0x80;
-}
-
-// How many bytes the UTF-8 sequence that `lead` begins should span. An
-// invalid lead counts as one byte and is left for the decoder to refuse.
-function sequenceWidth(lead: number): number {
-  if (lead >= 0xf0) return 4;
-  if (lead >= 0xe0) return 3;
-  if (lead >= 0xc0) return 2;
-  return 1;
-}
-
-// The end of the last whole character in `payload`: an incomplete trailing
-// sequence is left for the next window rather than decoded as broken text.
-function wholeCharacterEnd(payload: Buffer, start: number): number {
-  for (
-    let index = payload.length - 1;
-    index >= Math.max(start, payload.length - 4);
-    index -= 1
-  ) {
-    const byte = payload[index];
-    if (byte === undefined || continuationByte(byte)) continue;
-    return index + sequenceWidth(byte) > payload.length
-      ? index
-      : payload.length;
-  }
-  return payload.length;
-}
-
-/**
- * The helper answers a window with one JSON header line, then the bytes it
- * read. A window may begin or end inside a multi-byte character, so it is
- * narrowed to whole characters: each window decodes on its own and the next
- * one begins exactly where this one's text ended. Only a window stopping short
- * of the file's end may end inside a character; one that reaches the end must
- * be complete text there, as a whole read must.
- */
-function parseTextWindow(
-  raw: Buffer,
-  range: WorkspaceReadRange,
-): ReadonlyWorkspaceResult {
-  const newline = raw.indexOf(0x0a);
-  if (newline < 0) throw new WorkspaceRefusal("WORKSPACE_HELPER_FAILED");
-  const header = parseJson(raw.subarray(0, newline));
-  if (!exactKeys(header, ["offset", "returned", "size"])) {
-    throw new WorkspaceRefusal("WORKSPACE_HELPER_FAILED");
-  }
-  const { offset, returned, size } = header as Readonly<
-    Record<string, unknown>
-  >;
-  const payload = raw.subarray(newline + 1);
-  if (
-    offset !== range.offset ||
-    returned !== payload.length ||
-    payload.length > range.length ||
-    !Number.isSafeInteger(size) ||
-    (size as number) < 0 ||
-    (payload.length > 0 && range.offset + payload.length > (size as number))
-  ) {
-    throw new WorkspaceRefusal("WORKSPACE_HELPER_FAILED");
-  }
-  const fileSize = size as number;
-  if (payload.includes(0)) return failure("WORKSPACE_NOT_TEXT");
-  let start = 0;
-  while (
-    range.offset > 0 &&
-    start < Math.min(3, payload.length) &&
-    continuationByte(payload[start])
-  ) {
-    start += 1;
-  }
-  const end =
-    range.offset + payload.length < fileSize
-      ? wholeCharacterEnd(payload, start)
-      : payload.length;
-  const bytes = payload.subarray(start, end);
-  let text: string;
-  try {
-    // A byte-order mark is dropped only where a whole read drops it: at the
-    // very start of the file.
-    text = new TextDecoder("utf-8", {
-      fatal: true,
-      ignoreBOM: range.offset + start > 0,
-    }).decode(bytes);
-  } catch {
-    return failure("WORKSPACE_NOT_TEXT");
-  }
-  const windowEnd = range.offset + end;
-  return success({
-    kind: "workspace.text",
-    text,
-    bytes: bytes.length,
-    page: {
-      offset: range.offset + start,
-      size: fileSize,
-      nextOffset: windowEnd < fileSize ? windowEnd : null,
-    },
-  });
-}
-
-function parseMutationReceipt(
-  raw: Buffer,
-  operation: WorkspaceMutationRequest["operation"],
-): WorkspaceMutationResult {
-  const parsed = parseJson(raw);
-  if (
-    !exactKeys(parsed, ["afterSha256", "beforeSha256", "bytes", "replacements"])
-  ) {
-    throw new WorkspaceRefusal("WORKSPACE_HELPER_FAILED");
-  }
-  const value = parsed as Readonly<Record<string, unknown>>;
-  if (
-    !validSha256(value.afterSha256) ||
-    !(value.beforeSha256 === null || validSha256(value.beforeSha256)) ||
-    !Number.isSafeInteger(value.bytes) ||
-    (value.bytes as number) < 0 ||
-    (value.bytes as number) > MAX_MUTATION_BYTES ||
-    !Number.isSafeInteger(value.replacements) ||
-    (value.replacements as number) < 0 ||
-    (value.replacements as number) > 256 ||
-    (operation.kind === "workspace.write" && value.replacements !== 0) ||
-    (operation.kind === "workspace.edit" && (value.replacements as number) < 1)
-  ) {
-    throw new WorkspaceRefusal("WORKSPACE_HELPER_FAILED");
-  }
-  const receipt: WorkspaceMutationReceipt = {
-    kind: "workspace.mutation",
-    operation: operation.kind === "workspace.write" ? "write" : "edit",
-    relativePath: operation.relativePath,
-    bytes: value.bytes as number,
-    replacements: value.replacements as number,
-    beforeSha256: value.beforeSha256 as string | null,
-    afterSha256: value.afterSha256,
-  };
-  return { ok: true, value: receipt };
-}
-
-function readonlyErrorCode(
-  code: NativeWorkspaceErrorCode,
-): ReadonlyWorkspaceErrorCode {
-  switch (code) {
-    case "WORKSPACE_REQUEST_INTERRUPTED":
-    case "WORKSPACE_MUTATION_CANCELLED":
-      return "WORKSPACE_REQUEST_CANCELLED";
-    case "WORKSPACE_EDIT_NO_MATCH":
-    case "WORKSPACE_EDIT_NOT_UNIQUE":
-    case "WORKSPACE_EDIT_OVERLAP":
-    case "WORKSPACE_MUTATION_CONFLICT":
-    case "WORKSPACE_MUTATION_OUTCOME_UNKNOWN":
-      return "WORKSPACE_HELPER_FAILED";
-    default:
-      return code;
-  }
-}
-
-function mutationErrorCode(
-  code: NativeWorkspaceErrorCode,
-): WorkspaceMutationErrorCode {
-  switch (code) {
-    case "WORKSPACE_RACE_DETECTED":
-      return "WORKSPACE_MUTATION_CONFLICT";
-    case "WORKSPACE_SEARCH_TIMEOUT":
-    case "WORKSPACE_HELPER_FAILED":
-    case "WORKSPACE_COMMAND_UNSUPPORTED":
-    case "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE":
-    case "WORKSPACE_COMMAND_EXECUTABLE_UNTRUSTED":
-    case "WORKSPACE_COMMAND_CANCELLED":
-    case "WORKSPACE_COMMAND_TIMEOUT":
-    case "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE":
-    case "WORKSPACE_COMMAND_FAILED":
-    case "WORKSPACE_NOT_GIT_REPOSITORY":
-    case "WORKSPACE_GIT_HEAD_UNBORN":
-    case "WORKSPACE_GIT_METADATA_NOT_APPROVED":
-    case "WORKSPACE_GIT_ALTERNATES_UNSUPPORTED":
-    case "WORKSPACE_TRACKED_LIST_TOO_LARGE":
-    case "WORKSPACE_TRACKED_PATH_UNSUPPORTED":
-    case "WORKSPACE_INDEX_CHANGED_DURING_SNAPSHOT":
-    case "WORKSPACE_CHANGED_DURING_SNAPSHOT":
-    case "WORKSPACE_SNAPSHOT_TOO_LARGE":
-    case "WORKSPACE_SNAPSHOT_CROSS_VOLUME":
-    case "WORKSPACE_SNAPSHOT_CLONE_UNSUPPORTED":
-    case "WORKSPACE_REQUEST_INTERRUPTED":
-      return "WORKSPACE_MUTATION_OUTCOME_UNKNOWN";
-    case "WORKSPACE_REQUEST_CANCELLED":
-      return "WORKSPACE_MUTATION_CANCELLED";
-    default:
-      return code;
-  }
 }
 
 export class NativeReadonlyWorkspace
