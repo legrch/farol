@@ -10313,9 +10313,28 @@ describe("ChatGPT route cancellation binding", () => {
       undefined,
       extra,
     );
-    Reflect.get(candidate, "routeWindow").webContents.getURL = () => url;
+    const contents = Reflect.get(candidate, "routeWindow").webContents;
+    contents.getURL = () => url;
+    // The marks a Route B turn leaves in its page are answered here and kept.
+    const marks: string[] = [];
+    // What reached the test's own executor, and the marks, in order.
+    const order: string[] = [];
+    const inner = contents.executeJavaScript;
+    contents.executeJavaScript = vi.fn((script: string, gesture: boolean) => {
+      if (script.includes("farol.cancel.turn")) {
+        marks.push(script);
+        order.push("mark");
+        return Promise.resolve(true);
+      }
+      const before = execute.mock.calls.length;
+      const answer = inner(script, gesture);
+      if (execute.mock.calls.length > before) order.push("task");
+      return answer;
+    });
     return {
       candidate,
+      marks,
+      order,
       setUrl: (next: string) => {
         url = next;
       },
@@ -10329,7 +10348,7 @@ describe("ChatGPT route cancellation binding", () => {
       .mockResolvedValueOnce(prepared)
       .mockResolvedValueOnce({ activated: true })
       .mockResolvedValue(pendingProbe);
-    const { candidate, setUrl } = routeWith(execute, extra);
+    const { candidate, setUrl, marks, order } = routeWith(execute, extra);
     const turn = candidate.runReadonlyTask("hello");
     await vi.waitFor(() =>
       expect(execute.mock.calls.length).toBeGreaterThan(3),
@@ -10338,6 +10357,8 @@ describe("ChatGPT route cancellation binding", () => {
       candidate,
       execute,
       turn,
+      marks,
+      order,
       moveTo: async (next: string) => {
         setUrl(next);
         const seen = execute.mock.calls.length;
@@ -10395,6 +10416,7 @@ describe("ChatGPT route cancellation binding", () => {
     const generation = Reflect.get(candidate, "taskObservationGeneration");
     expect(Reflect.get(candidate, "activeTurn")).toEqual({
       generation,
+      token: expect.any(String),
       dispatchIdentityUrl: null,
       pinnedConversationUrl: null,
     });
@@ -10404,6 +10426,30 @@ describe("ChatGPT route cancellation binding", () => {
       generation,
     );
     expect(Reflect.get(candidate, "activeTurn")).not.toBeNull();
+  });
+
+  it("marks the page with the turn before the turn's first effect and clears the mark at its end", async () => {
+    const h = await turnInFlight({ routeBTask: true });
+    const token = Reflect.get(h.candidate, "activeTurn").token as string;
+    expect(h.marks.length).toBeGreaterThanOrEqual(1);
+    expect(
+      h.marks.every((script) => script.includes(JSON.stringify(token))),
+    ).toBe(true);
+    expect(h.marks[0]).toContain("value: " + JSON.stringify(token));
+    // Before the first task script reaches the page.
+    expect(h.order.indexOf("mark")).toBeGreaterThanOrEqual(0);
+    expect(h.order.indexOf("mark")).toBeLessThan(h.order.indexOf("task"));
+    await h.candidate.cancelActiveTask();
+    await h.turn;
+    expect(h.marks.at(-1)).toContain("value: null");
+    expect(h.marks.at(-1)).toContain(JSON.stringify(token));
+  });
+
+  it("leaves no mark in the page of a task that is not a Route B task", async () => {
+    const h = await turnInFlight({});
+    await h.candidate.cancelActiveTask();
+    await h.turn;
+    expect(h.marks).toEqual([]);
   });
 
   it("clears the turn when it ends", async () => {
