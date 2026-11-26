@@ -1,18 +1,24 @@
 import { describe, expect, it } from "vitest";
 import type {
+  HandoffContinue,
   HandoffMessage,
   HandoffRequest,
+  HandoffTitleRequest,
   HandoffWorkspace,
 } from "../port/handoff";
 import {
   identifier,
+  isDigest,
   isUuid,
   object,
   samePhysicalWorkspace,
   sameProject,
+  titleName,
   sameWorkspace,
+  validContinue,
   validMessage,
   validRequest,
+  validTitle,
   validWorkspace,
 } from "./handoffvalidation";
 
@@ -237,5 +243,85 @@ describe("sameProject", () => {
     expect(
       sameProject(project, { ...project, gitCommonDirectory: "/x/.git" }),
     ).toBe(false);
+  });
+});
+
+describe("isDigest", () => {
+  it("accepts exactly 64 lowercase hex characters", () => {
+    expect(isDigest("a".repeat(64))).toBe(true);
+    expect(isDigest("a".repeat(63))).toBe(false);
+    expect(isDigest("a".repeat(65))).toBe(false);
+    expect(isDigest("A".repeat(64))).toBe(false);
+    expect(isDigest(`${"a".repeat(63)}g`)).toBe(false);
+  });
+});
+
+describe("titleName", () => {
+  it("bounds length and refuses NUL and non-strings", () => {
+    expect(titleName("ok")).toBe(true);
+    expect(titleName("x".repeat(1000))).toBe(true);
+    expect(titleName("x".repeat(1001))).toBe(false);
+    expect(titleName("a\0b")).toBe(false);
+    expect(titleName(null)).toBe(false);
+  });
+});
+
+describe("validTitle", () => {
+  const title = (
+    overrides: Partial<HandoffTitleRequest> = {},
+  ): HandoffTitleRequest => ({
+    key: KEY,
+    dispatchId: DISPATCH,
+    workspaceId: "workspace_1",
+    projectId: "project-1",
+    expectedTitle: null,
+    title: "A title",
+    ...overrides,
+  });
+
+  it("accepts a title with or without an expected one", () => {
+    expect(validTitle(title())).toBe(true);
+    expect(validTitle(title({ expectedTitle: "Old" }))).toBe(true);
+  });
+
+  it("refuses bad identifiers, blank, oversized and NUL titles", () => {
+    expect(validTitle(title({ key: "nope" }))).toBe(false);
+    expect(validTitle(title({ dispatchId: "nope" }))).toBe(false);
+    expect(validTitle(title({ workspaceId: "a b" }))).toBe(false);
+    expect(validTitle(title({ projectId: "" }))).toBe(false);
+    expect(validTitle(title({ title: "   " }))).toBe(false);
+    expect(validTitle(title({ title: "a\0" }))).toBe(false);
+    expect(validTitle(title({ expectedTitle: "a\0" }))).toBe(false);
+  });
+
+  it("measures the byte length, not the character count", () => {
+    expect(validTitle(title({ title: "é".repeat(500) }))).toBe(true);
+    expect(validTitle(title({ title: "é".repeat(501) }))).toBe(false);
+  });
+});
+
+describe("validContinue", () => {
+  const next = (overrides: Partial<HandoffContinue> = {}): HandoffContinue => ({
+    key: KEY,
+    dispatchId: DISPATCH,
+    message: "go on",
+    ...overrides,
+  });
+
+  it("accepts a distinct key and dispatch id with a bounded message", () => {
+    expect(validContinue(next())).toBe(true);
+    expect(validContinue(next({ message: "x".repeat(8_192) }))).toBe(true);
+  });
+
+  it("refuses an equal key and dispatch id in any case", () => {
+    expect(validContinue(next({ dispatchId: KEY }))).toBe(false);
+    expect(validContinue(next({ dispatchId: KEY.toUpperCase() }))).toBe(false);
+  });
+
+  it("refuses blank, NUL and oversized messages", () => {
+    expect(validContinue(next({ message: " \n" }))).toBe(false);
+    expect(validContinue(next({ message: "a\0" }))).toBe(false);
+    expect(validContinue(next({ message: "x".repeat(8_193) }))).toBe(false);
+    expect(validContinue(next({ key: "nope" }))).toBe(false);
   });
 });

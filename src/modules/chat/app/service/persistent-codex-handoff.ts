@@ -48,13 +48,17 @@ import type {
 import { exactProject } from "./exactproject";
 import {
   identifier,
+  isDigest,
   isUuid,
   object,
   samePhysicalWorkspace,
   sameProject,
   sameWorkspace,
+  titleName,
+  validContinue,
   validMessage,
   validRequest,
+  validTitle,
   validWorkspace,
 } from "./handoffvalidation";
 
@@ -540,21 +544,7 @@ export class PersistentCodexHandoff {
       status: "outcome_unknown",
       dispatchId: request.dispatchId,
     };
-    const uuid = (value: unknown) => typeof value === "string" && isUuid(value);
-    const name = (value: unknown): value is string =>
-      typeof value === "string" &&
-      value.length <= 1000 &&
-      !value.includes("\0");
-    if (
-      !uuid(request.key) ||
-      !uuid(request.dispatchId) ||
-      !identifier(request.workspaceId) ||
-      !identifier(request.projectId) ||
-      !name(request.title) ||
-      request.title.trim().length === 0 ||
-      new TextEncoder().encode(request.title).byteLength > 1000 ||
-      (request.expectedTitle !== null && !name(request.expectedTitle))
-    )
+    if (!validTitle(request))
       return { status: "refused", code: "HANDOFF_TITLE_INPUT_INVALID" };
     const admitted = () =>
       !context.signal?.aborted && this.now() < this.mutationExpiresAt;
@@ -568,7 +558,7 @@ export class PersistentCodexHandoff {
     )
       return { status: "refused", code: "HANDOFF_TITLE_UNAVAILABLE" };
     const digest = this.digester.digestTitle(request);
-    if (!/^[a-f0-9]{64}$/u.test(digest))
+    if (!isDigest(digest))
       return { status: "refused", code: "HANDOFF_DIGEST_INVALID" };
     try {
       const record = await this.journal.read(request.dispatchId);
@@ -652,7 +642,7 @@ export class PersistentCodexHandoff {
           thread.model !== record.model ||
           (thread.name !== undefined &&
             thread.name !== null &&
-            !name(thread.name))
+            !titleName(thread.name))
         )
           throw new Error("HANDOFF_TITLE_THREAD_UNVERIFIED");
         if (!admitted())
@@ -1017,7 +1007,7 @@ export class PersistentCodexHandoff {
         code: "HANDOFF_TASK_ADMISSION_DENIED",
       };
     const digest = this.digester.digestAdopt(request);
-    if (!/^[a-f0-9]{64}$/u.test(digest))
+    if (!isDigest(digest))
       return { status: "refused" as const, code: "HANDOFF_DIGEST_INVALID" };
     try {
       let record = await this.journal.read(request.turnId);
@@ -1075,7 +1065,7 @@ export class PersistentCodexHandoff {
     if (this.now() >= this.mutationExpiresAt)
       return { status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" };
     const digest = this.digester.digestMessage(request);
-    if (!/^[a-f0-9]{64}$/u.test(digest))
+    if (!isDigest(digest))
       return { status: "refused", code: "HANDOFF_DIGEST_INVALID" };
     let record: HandoffRecord | null;
     let prior: Awaited<ReturnType<HandoffJournal["readMessage"]>>;
@@ -1252,15 +1242,7 @@ export class PersistentCodexHandoff {
       status: "outcome_unknown" as const,
       dispatchId: request.key,
     };
-    if (
-      !isUuid(request.key) ||
-      !isUuid(request.dispatchId) ||
-      request.key.toLowerCase() === request.dispatchId.toLowerCase() ||
-      typeof request.message !== "string" ||
-      request.message.trim().length === 0 ||
-      request.message.includes("\0") ||
-      new TextEncoder().encode(request.message).byteLength > 8_192
-    )
+    if (!validContinue(request))
       return { status: "refused", code: "HANDOFF_CONTINUE_INPUT_INVALID" };
     if (!this.dispatchStillAllowed(context))
       return { status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" };
@@ -1272,7 +1254,7 @@ export class PersistentCodexHandoff {
     )
       return { status: "refused", code: "HANDOFF_CONTINUE_UNAVAILABLE" };
     const digest = this.digester.digestContinue(request);
-    if (!/^[a-f0-9]{64}$/u.test(digest))
+    if (!isDigest(digest))
       return { status: "refused", code: "HANDOFF_DIGEST_INVALID" };
 
     let parent: HandoffRecord | null;
@@ -1646,7 +1628,7 @@ export class PersistentCodexHandoff {
       return { status: "refused", code: "HANDOFF_WORKSPACE_UNVERIFIED" };
     }
     const requestDigest = this.digester.digest(request);
-    if (!/^[a-f0-9]{64}$/u.test(requestDigest)) {
+    if (!isDigest(requestDigest)) {
       return { status: "refused", code: "HANDOFF_DIGEST_INVALID" };
     }
     let current: HandoffRecord | null;

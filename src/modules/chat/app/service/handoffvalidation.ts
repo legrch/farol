@@ -1,6 +1,8 @@
 import type {
+  HandoffContinue,
   HandoffMessage,
   HandoffRequest,
+  HandoffTitleRequest,
   HandoffWorkspace,
 } from "../port/handoff";
 
@@ -9,6 +11,12 @@ const UUID =
 
 export function isUuid(value: string): boolean {
   return UUID.test(value);
+}
+
+const DIGEST = /^[a-f0-9]{64}$/u;
+
+export function isDigest(value: string): boolean {
+  return DIGEST.test(value);
 }
 
 export function object(value: unknown): Record<string, unknown> | null {
@@ -31,7 +39,7 @@ export function validRequest(request: HandoffRequest): boolean {
       selection.modelAlias.length > 80 ||
       selection.model !== request.model ||
       selection.effort !== request.reasoningEffort ||
-      !/^[a-f0-9]{64}$/u.test(request.modelBinding.configSha256)
+      !isDigest(request.modelBinding.configSha256)
     )
       return false;
   }
@@ -121,5 +129,38 @@ export function sameWorkspace(
     samePhysicalWorkspace(left, right) &&
     left.execution.sandbox === right.execution.sandbox &&
     left.execution.approvalPolicy === right.execution.approvalPolicy
+  );
+}
+
+export function titleName(value: unknown): value is string {
+  return (
+    typeof value === "string" && value.length <= 1000 && !value.includes("\0")
+  );
+}
+
+export function validTitle(request: HandoffTitleRequest): boolean {
+  const uuid = (value: unknown) => typeof value === "string" && isUuid(value);
+  const name = titleName;
+  return (
+    uuid(request.key) &&
+    uuid(request.dispatchId) &&
+    identifier(request.workspaceId) &&
+    identifier(request.projectId) &&
+    name(request.title) &&
+    request.title.trim().length !== 0 &&
+    new TextEncoder().encode(request.title).byteLength <= 1000 &&
+    (request.expectedTitle === null || name(request.expectedTitle))
+  );
+}
+
+export function validContinue(request: HandoffContinue): boolean {
+  return (
+    isUuid(request.key) &&
+    isUuid(request.dispatchId) &&
+    request.key.toLowerCase() !== request.dispatchId.toLowerCase() &&
+    typeof request.message === "string" &&
+    request.message.trim().length !== 0 &&
+    !request.message.includes("\0") &&
+    new TextEncoder().encode(request.message).byteLength <= 8_192
   );
 }
