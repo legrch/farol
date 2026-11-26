@@ -5432,7 +5432,17 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     ])(
       "refuses an apply before any dispatch record or helper while %s is present",
       async (_name, text) => {
-        const controller = await prepared();
+        const acquireAdmission = vi.fn(async () => ({
+          ok: true as const,
+          release,
+        }));
+        const controller = (await createInstalledUpdateRuntime({
+          ...options(),
+          acquireAdmission,
+        }))!;
+        await controller.initialize();
+        await controller.check();
+        await controller.download();
         expect(controller.snapshot().phase).toBe("ready");
         const intentPath = path.join(
           userData,
@@ -5441,6 +5451,8 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
         await fs.writeFile(intentPath, text, { mode: 0o600 });
         const readyBefore = await fs.readFile(ready);
         await controller.restart();
+        // The destructive admission (window and connector release) never runs.
+        expect(acquireAdmission).not.toHaveBeenCalled();
         expect(mocks.helper).not.toHaveBeenCalled();
         expect(quit).not.toHaveBeenCalled();
         expect(controller.snapshot()).toMatchObject({
@@ -5480,7 +5492,11 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       const next = await createInstalledUpdateRuntime(options());
       await next!.initialize();
       expect(op).toBeDefined();
-      expect(next!.snapshot().phase).not.toBe("idle");
+      expect(next!.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_RECORD_INVALID",
+        recoveryRequired: true,
+      });
       expect(await fs.readFile(intentPath, "utf8")).toBe("null\n");
       await next!.close();
     });
@@ -6796,6 +6812,49 @@ describe("normal Quit runtime (disposable files; helper and native ports doubled
       }
       expect(mocks.helper).not.toHaveBeenCalled();
       expect(quit).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["JSON null", "null\n"],
+    ["a malformed object", "{}\n"],
+    ["truncated JSON", '{"schema":"farol.update-restore-'],
+    [
+      "a valid intent",
+      JSON.stringify({
+        schema: "farol.update-restore-intent/1",
+        action: "rollback",
+        operation: {
+          operationId: "b".repeat(32),
+          source: { digest: "1".repeat(64), version: "0.0.1", buildId: "2" },
+          target: { digest: "3".repeat(64), version: "0.0.2", buildId: "4" },
+        },
+        priorPhase: "completed",
+        helper: null,
+      }) + "\n",
+    ],
+  ])(
+    "refuses a normal-Quit apply before admission while %s is present",
+    async (_name, text) => {
+      const acquireAdmission = vi.fn(async () => ({
+        ok: true as const,
+        release,
+      }));
+      const controller = await optedIn({ ...options(), acquireAdmission });
+      const intentPath = path.join(
+        userData,
+        "installed-updates/restore-pending.json",
+      );
+      await fs.writeFile(intentPath, text, { mode: 0o600 });
+      const readyBefore = await fs.readFile(ready);
+      const receipt = await controller.applyOnNormalQuit(request());
+      expect(receipt.status).not.toBe("accepted");
+      expect(acquireAdmission).not.toHaveBeenCalled();
+      expect(mocks.helper).not.toHaveBeenCalled();
+      expect(quit).not.toHaveBeenCalled();
+      expect(await fs.readFile(ready)).toEqual(readyBefore);
+      expect(await fs.readFile(intentPath, "utf8")).toBe(text);
+      await controller.close();
     },
   );
 

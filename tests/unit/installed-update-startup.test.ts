@@ -1437,9 +1437,34 @@ describe("installed updater startup correlation (pure ports only)", () => {
     );
   });
 
-  it("refuses an apply hint when the restore dispatch record holds JSON null", async () => {
-    const f = fixture();
-    f.records.set(path.join(root, "restore-pending.json"), null);
+  // A present restore record that is null or malformed is invalid evidence, so
+  // the explicit relaunch classifies it like every other restore reader. A valid
+  // one still supersedes the apply hint (UPDATE_RELAUNCH_RECEIPT_MISMATCH).
+  it.each([null, {}, { schema: "other" }])(
+    "classifies an invalid restore dispatch record %j as invalid for an apply hint",
+    async (value) => {
+      const f = fixture();
+      f.records.set(path.join(root, "restore-pending.json"), value);
+      await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+        "UPDATE_RECORD_INVALID",
+      );
+    },
+  );
+
+  it.each([null, {}, { schema: "other" }])(
+    "classifies an invalid restore receipt %j as invalid for a restore hint",
+    async (value) => {
+      const f = fixture("rollback_completed", "rollback");
+      f.records.set(path.join(root, "restore-pending.json"), value);
+      await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+        "UPDATE_RECORD_INVALID",
+      );
+    },
+  );
+
+  it("refuses a restore hint whose receipt is absent as a receipt mismatch", async () => {
+    const f = fixture("rollback_completed", "rollback");
+    f.records.delete(path.join(root, "restore-pending.json"));
     await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
       "UPDATE_RELAUNCH_RECEIPT_MISMATCH",
     );
