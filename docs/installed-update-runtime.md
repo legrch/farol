@@ -589,9 +589,14 @@ owned by the current user. An entry is removed only if all of this holds:
   running pid whose recorded or observed start is not one unambiguous instant
   (including a child recorded without its start), or a start that is not later
   than the recorded one is unknown, and unknown keeps the entry;
-- a lease left in `spawning` is also older than 24 hours. Elapsed time never
-  proves a child ended: a child that was started but not yet listed is not
-  stopped by its own timeout once its owner is gone.
+- its phase is not `spawning`. A lease left in `spawning` is never removed,
+  however old: a child that was started but not yet listed (the owner died
+  between spawning it and recording its pid) is not stopped by its own timeout
+  once its owner is gone, and a machine that slept proves nothing about it. Only
+  a lease that names every child it spawned, each proven ended above, authorizes
+  removal. Such an entry stays until its extraction is removed by hand; the
+  update stays fenced and, for a stage of an interrupted download, recovery
+  reports `UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED`.
 
 **Identity of every directory on the way.** The update root and each
 `download-<32 hex>` parent are captured at discovery as a path with its device
@@ -632,10 +637,12 @@ under the same one; otherwise it is `unknown`. An equal instant is `live` and
 a gone pid is `ended` under any `TZ`.
 
 **Residual risk.** An extractor child that an owner started and then died
-before listing its pid, and that stalls for more than 24 hours with the lease
-still in `spawning`, can have its extraction deleted. The pid is written from
-the spawn handle before anything else is awaited, so the interval is the one
-lease write that follows the spawn.
+before listing its pid leaves its lease in `spawning`, and that lease is never
+reclaimed (a machine that slept, or a child that stalls beyond any age, cannot be
+told from one that exited). Such an extraction stays on disk and keeps the
+update fenced until it is removed by hand. The pid is written from the spawn
+handle before anything else is awaited, so the interval is the one lease write
+that follows the spawn.
 
 **Startup order.** `recover()` runs, in this order: the existing preparation
 reconciliation (it removes an unfinished prepared copy that `ready.json`
@@ -686,7 +693,16 @@ The Updates window shows the recovery outcomes of an interrupted download
 (`UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED`, `UPDATE_DOWNLOAD_STAGE_CHANGED`,
 `UPDATE_DOWNLOAD_STAGE_DISPLACED`) as unresolved outcomes with their own
 guidance, like any `UNKNOWN` code, and the operation view classifies all three
-as unknown.
+as unknown. One predicate, `updateOutcomeUnresolved` (the release domain's, mirrored by
+the contract for the layers above it, with a parity test), decides this everywhere: the updater's
+notice acknowledgement, its Quit receipt and its local-preparation refusal, the
+runtime's failure notice, and the renderer's acknowledgement, command-reply and
+eligibility checks. No layer searches a code for `UNKNOWN` itself, so a
+recovery-required stage outcome never gets an acknowledgeable known-failure
+notice, a "refused" reply or a "blocked" Quit receipt. Recovery also reports a
+refused operation journal as `UPDATE_OPERATION_JOURNAL_INVALID` and a cleanup
+marker refused at its settlement re-read as `UPDATE_RECORD_INVALID`, rather than
+the generic recovery-unavailable or staging code.
 
 **Interrupted download.** A download intent records a producer (pid and process
 start) and a phase, `downloading` and then `verifying` once the native verifier

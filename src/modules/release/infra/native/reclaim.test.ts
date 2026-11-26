@@ -368,15 +368,43 @@ describe("leaked verifier extraction reclaim: liveness", () => {
     for (const entry of [minutes, hours, future])
       expect(await exists(entry)).toBe(true);
   });
-  it("reclaims a spawning lease only past 24 hours with its owner ended", async () => {
-    const old = await extraction(root, "old", {
-      lease: { phase: "spawning", updatedAt: NOW - 25 * HOUR },
+  it.each([
+    ["25 hours", 25 * HOUR],
+    ["3 days", 3 * 24 * HOUR],
+    ["5 days", 5 * 24 * HOUR],
+  ])(
+    "keeps a spawning lease whose owner ended, however old: %s",
+    async (_name, age) => {
+      // The owner died after spawning a child and before recording its pid,
+      // and the machine slept: no age shows the unlisted child exited.
+      const old = await extraction(root, "old", {
+        lease: {
+          phase: "spawning",
+          createdAt: NOW - age - HOUR,
+          updatedAt: NOW - age,
+        },
+      });
+      const report = await reclaimExtractions(ports());
+      expect(report.reclaimed).toEqual([]);
+      expect(report.kept).toEqual([{ entry: old, reason: "spawning window" }]);
+      expect(report.complete).toBe(false);
+      expect(await exists(old)).toBe(true);
+    },
+  );
+  it("still reclaims a lease that names every child it spawned once each exited", async () => {
+    // Named and exited children: the owner and both children are gone.
+    const done = await extraction(root, "done", {
+      lease: {
+        phase: "spawned",
+        updatedAt: NOW - 25 * HOUR,
+        children: [child(6000, LATER_START), child(6001, LATER_START)],
+      },
     });
     const report = await reclaimExtractions(ports());
-    expect(report.reclaimed).toEqual([old]);
-    expect(await exists(old)).toBe(false);
+    expect(report.reclaimed).toEqual([done]);
+    expect(await exists(done)).toBe(false);
   });
-  it("keeps a spawning lease past 24 hours while its owner still runs", async () => {
+  it("keeps an aged spawning lease while its owner still runs", async () => {
     table.set(5000, OWNER_START);
     const old = await extraction(root, "old", {
       lease: { phase: "spawning", updatedAt: NOW - 25 * HOUR },

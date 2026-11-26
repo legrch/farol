@@ -283,6 +283,34 @@ it.each([
   expect((await c.update("restart-confirmed", "0.2.1")).state).toBe("refused");
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
 });
+it.each([
+  "UPDATE_STAGING_OUTCOME_UNKNOWN",
+  "UPDATE_READY_COMMIT_UNKNOWN",
+  "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+  "UPDATE_DOWNLOAD_STAGE_CHANGED",
+  "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+])(
+  "reports a command reply that fails with the unresolved %s as unknown, not refused",
+  async (code) => {
+    const { c, f } = await controller({ phase: "idle", checkedAt: null });
+    vi.mocked(f.api.installedUpdate).mockResolvedValueOnce({
+      phase: "failed",
+      code,
+      recoveryRequired: true,
+    });
+    const result = await c.update("check");
+    expect(result).toMatchObject({ state: "unknown", code });
+  },
+);
+it("reports a command reply that fails with a known code as refused", async () => {
+  const { c, f } = await controller({ phase: "idle", checkedAt: null });
+  vi.mocked(f.api.installedUpdate).mockResolvedValueOnce({
+    phase: "failed",
+    code: "UPDATE_DOWNLOAD_INTERRUPTED",
+    recoveryRequired: false,
+  });
+  expect(await c.update("check")).toMatchObject({ state: "refused" });
+});
 it("rejects a stale or missing confirmed version without invoking the backend", async () => {
   const { c, f } = await controller();
   expect((await c.update("restart-confirmed", "0.2.0")).state).toBe("refused");

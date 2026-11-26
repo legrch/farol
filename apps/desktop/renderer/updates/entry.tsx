@@ -23,9 +23,9 @@ import {
 } from "../../../../src/ui/renderer/update-download";
 import {
   updateBlockMessage,
-  updateOutcomeUnknown,
   updateResultMessage,
 } from "../../../../src/ui/update-block-message";
+import { updateOutcomeUnresolved } from "../../../../src/modules/release/contract/installed-update";
 
 /** Attach once to the existing shell owner, outside React's mount lifecycle. */
 export function attachUpdatesOwner(
@@ -361,7 +361,7 @@ export function projectUpdates(snapshot: WindowSnapshot): UpdatesProjection {
   ].map((key) => snapshot.intents[key]);
   const unknown =
     intents.some((intent) => intent?.state === "unknown") ||
-    (update.phase === "failed" && updateOutcomeUnknown(update.code));
+    (update.phase === "failed" && updateOutcomeUnresolved(update.code));
   const pending = intents.some((intent) => intent?.state === "pending");
   const current =
     snapshot.status === "current" &&

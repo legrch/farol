@@ -1,3 +1,5 @@
+import { unresolvedStageCodes } from "../modules/release/contract/installed-update";
+
 const messages: Readonly<Record<string, string>> = {
   UPDATE_CONNECTOR_ACTIVE:
     "Disconnect the active connector in Connection before restarting.",
@@ -40,23 +42,7 @@ const messages: Readonly<Record<string, string>> = {
     "Farol moved an interrupted update download aside to clean it up and could not put it back. Its files are kept. Review Diagnostics before updating again.",
 };
 
-// Recovery of an interrupted download reports why it kept the download's files.
-// Each is an unresolved outcome that keeps the update fenced, so it is shown
-// and gated like any other unknown outcome, though its code has no UNKNOWN in it.
-const stageRecoveryCodes: ReadonlySet<string> = new Set([
-  "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
-  "UPDATE_DOWNLOAD_STAGE_CHANGED",
-  "UPDATE_DOWNLOAD_STAGE_DISPLACED",
-]);
-
-/**
- * Whether an update outcome code is an unresolved one, whose result the owner
- * must not repeat the action over: any `UNKNOWN` code, and the stage recovery
- * outcomes above.
- */
-export function updateOutcomeUnknown(code: string): boolean {
-  return code.includes("UNKNOWN") || stageRecoveryCodes.has(code);
-}
+const stageRecoveryCodes: ReadonlySet<string> = new Set(unresolvedStageCodes);
 
 // These failures carry their own guidance, not the generic copy: first-launch
 // adoption failures and a newer release format this version cannot read.

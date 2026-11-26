@@ -1,7 +1,7 @@
 import type { WindowSnapshot } from "./contract";
-import { updateOutcomeUnknown } from "../update-block-message";
 import {
   canRecheckUpdateAdmission,
+  updateOutcomeUnresolved,
   type InstalledUpdateView,
 } from "../../modules/release/contract/installed-update";
 
@@ -77,10 +77,10 @@ export function automaticUpdateAvailable(snapshot: WindowSnapshot): boolean {
     update.phase !== "downloading" &&
     update.phase !== "applying" &&
     update.phase !== "recovery" &&
-    !(update.phase === "failed" && updateOutcomeUnknown(update.code)) &&
+    !(update.phase === "failed" && updateOutcomeUnresolved(update.code)) &&
     !(
       update.phase === "ready" &&
-      update.blockedBy?.includes("UNKNOWN") &&
+      updateOutcomeUnresolved(update.blockedBy) &&
       !isConfirmedBrowserBlock(update.blockedBy)
     )
   );

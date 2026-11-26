@@ -4,10 +4,8 @@ import {
   isConfirmedBrowserBlock,
   updateVersionLabel,
 } from "./update-eligibility";
-import {
-  updateBlockMessage,
-  updateOutcomeUnknown,
-} from "../update-block-message";
+import { updateOutcomeUnresolved } from "../../modules/release/contract/installed-update";
+import { updateBlockMessage } from "../update-block-message";
 
 // The shell can remount this component while an update changes phase. A
 // dismissed popup stays hidden for this window session; the saved update and
@@ -25,8 +23,8 @@ export function acknowledgeUpdateNotice(facade: RendererFacade): void {
     snapshot.status !== "current" ||
     snapshot.intents.update?.state === "pending" ||
     snapshot.intents.update?.state === "unknown" ||
-    (update.phase === "failed" && updateOutcomeUnknown(update.code)) ||
-    (update.phase === "ready" && update.blockedBy?.includes("UNKNOWN"))
+    (update.phase === "failed" && updateOutcomeUnresolved(update.code)) ||
+    (update.phase === "ready" && updateOutcomeUnresolved(update.blockedBy))
   )
     return;
   void facade.update("notice-seen", update.notice.key);
@@ -61,9 +59,9 @@ export function UpdateNotice({
     snapshot.intents.update?.state === "unknown" ||
     snapshot.intents["update-notice"]?.state === "pending" ||
     snapshot.intents["update-notice"]?.state === "unknown" ||
-    (update.phase === "failed" && updateOutcomeUnknown(update.code)) ||
+    (update.phase === "failed" && updateOutcomeUnresolved(update.code)) ||
     (update.phase === "ready" &&
-      Boolean(update.blockedBy?.includes("UNKNOWN")));
+      Boolean(updateOutcomeUnresolved(update.blockedBy)));
   return (
     <section className="update-notice" aria-label="Update notice" role="status">
       <div>

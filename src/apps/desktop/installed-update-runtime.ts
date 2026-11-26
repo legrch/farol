@@ -32,6 +32,7 @@ import { legacyPredecessorRequiresStateRecovery } from "../../modules/release/do
 import {
   AutomaticUpdatePreferenceResultSchema,
   InstallOnQuitPreferenceResultSchema,
+  updateOutcomeUnresolved,
   type NormalQuitApplyContext,
   type InstalledUpdateView,
 } from "../../modules/release/contract/installed-update";
@@ -1049,6 +1050,18 @@ export async function createSupervisedInstalledUpdateRuntime(
   );
 }
 
+// A present record the strict reader refused, or an operation journal it
+// refused (startup reports that one under its own name). Both are invalid
+// evidence that keeps the fence.
+const INVALID_RECORD_CODES: ReadonlySet<string> = new Set([
+  "UPDATE_RECORD_INVALID",
+  "UPDATE_OPERATION_JOURNAL_INVALID",
+]);
+function invalidRecordCode(error: unknown): string | null {
+  return error instanceof Error && INVALID_RECORD_CODES.has(error.message)
+    ? error.message
+    : null;
+}
 // What the interrupted-download reconciliation reports for a stage it kept.
 const STAGE_OUTCOME_CODES: ReadonlySet<string> = new Set([
   "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
@@ -2501,8 +2514,8 @@ async function createRuntime(
     try {
       return await run();
     } catch (error) {
-      if (error instanceof Error && error.message === "UPDATE_RECORD_INVALID")
-        return known("UPDATE_RECORD_INVALID");
+      const code = invalidRecordCode(error);
+      if (code !== null) return known(code);
       throw error;
     }
   };
@@ -2529,6 +2542,7 @@ async function createRuntime(
     const report = await reclaimStagedExtractions();
     if (fenced) {
       let cleared = false;
+      let settlementRefusal: string | null = null;
       if (unreadable === null) {
         try {
           cleared = await settleCleanupMarker({
@@ -2541,8 +2555,11 @@ async function createRuntime(
             read: () =>
               readCleanupMarker(cleanupFile, readRecord, recordAbsent),
           });
-        } catch {
+        } catch (error) {
+          // The marker stays either way. A re-read the strict reader refused
+          // is reported as that refusal, not as a generic staging outcome.
           cleared = false;
+          settlementRefusal = invalidRecordCode(error);
         }
       }
       if (!cleared) {
@@ -2550,14 +2567,11 @@ async function createRuntime(
         if (unreadable !== null) {
           // Keep the classified code: the updater would otherwise collapse a
           // throw into the generic recovery-unavailable outcome.
-          if (
-            unreadable instanceof Error &&
-            unreadable.message === "UPDATE_RECORD_INVALID"
-          )
-            return known("UPDATE_RECORD_INVALID");
+          const code = invalidRecordCode(unreadable);
+          if (code !== null) return known(code);
           throw unreadable;
         }
-        return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
+        return known(settlementRefusal ?? "UPDATE_STAGING_OUTCOME_UNKNOWN");
       }
     }
     return classifyInvalidRecord(() => recoverFromRecords(false));
@@ -2771,7 +2785,7 @@ async function createRuntime(
     notice: (view, version, reusePreviousFailure) =>
       serializeNotice(
         async () => {
-          if (view.phase === "failed" && view.code.includes("UNKNOWN"))
+          if (view.phase === "failed" && updateOutcomeUnresolved(view.code))
             return { key: "unconfirmed", seen: false, blockedBy: view.code };
           let preferences: z.infer<typeof NoticePreferences>;
           try {

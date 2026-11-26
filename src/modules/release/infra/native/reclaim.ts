@@ -17,9 +17,9 @@ import {
 // 0700, directly inside a staging parent this scan validated; its lease parses;
 // and the owner and every extractor child it lists have positively ended. A
 // probe that fails or a start that is not one provable instant keeps the entry.
-// Elapsed time alone never proves a child ended, so a lease left in `spawning`
-// (a child that may exist but is not listed) is removed only after the same 24
-// hours as a legacy entry. A lease that is present but unreadable is kept. An
+// Elapsed time never proves a child ended, so a lease left in `spawning` (a
+// child that may exist but is not listed) is never removed, whatever its age. A
+// lease that is present but unreadable is kept. An
 // entry with no lease at all is a legacy leftover, removed only after 24 hours
 // and never while another entry in the same parent has a live, unknown or
 // unreadable owner.
@@ -441,13 +441,13 @@ async function judgeLeased(
   if (children.includes("live")) return keepFor("live child");
   if (owner === "unknown" || children.includes("unknown"))
     return keepFor("unknown liveness");
-  // A child may exist that the lease does not list. Its own timeout dies with
-  // its owner, so time proves nothing short of the legacy horizon.
-  if (
-    lease.phase === "spawning" &&
-    !(ports.now() - lease.updatedAt > LEGACY_MINIMUM_AGE_MS)
-  )
-    return keepFor("spawning window");
+  // `spawning` is written before a child exists and replaced by `spawned` once
+  // its pid is listed, so a lease still in `spawning` may have a child it does
+  // not name: the owner died between spawning it and recording its pid. Its own
+  // timeout dies with its owner and the machine may have slept, so no age
+  // proves it exited. Only a lease that names every child it spawned, each
+  // proven exited above, authorizes removal.
+  if (lease.phase === "spawning") return keepFor("spawning window");
   return { kind: "reclaim" };
 }
 

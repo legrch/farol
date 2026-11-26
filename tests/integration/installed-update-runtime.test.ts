@@ -3222,6 +3222,66 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     await second!.close();
   });
 
+  it.each([
+    ["JSON null", () => "null\n"],
+    ["a byte-order mark", (text: string) => `\ufeff${text}`],
+    ["a repeated key", (text: string) => text.replace("{", '{"schema":"x",')],
+  ])(
+    "reports a recorded operation's journal with %s as invalid, and keeps the fence",
+    async (_name, damage) => {
+      const first = await prepared();
+      let observed!: () => void;
+      const atSpawn = new Promise<void>((resolve) => {
+        observed = resolve;
+      });
+      mocks.helper.mockImplementation(async (_path, _input, launchOptions) => {
+        await launchOptions?.recordSpawn?.({
+          pid: 123,
+          completion: new Promise(() => undefined),
+          observe: () => ({}),
+        });
+        observed();
+        return new Promise(() => undefined);
+      });
+      void first.restart();
+      await atSpawn;
+      const dispatched = JSON.parse(await fs.readFile(ready, "utf8"));
+      const journalFile = path.join(
+        userData,
+        "installed-updates",
+        dispatched.operation.operationId,
+        "journal.json",
+      );
+      // The helper never wrote one before the lifetime died; give it the
+      // journal it would have, then damage it.
+      const text = `${JSON.stringify({
+        schema: "farol.installed-update-journal/1",
+        ...dispatched.operation,
+        phase: "prepared",
+      })}\n`;
+      const damaged = damage(text);
+      await fs.writeFile(journalFile, damaged, { mode: 0o600 });
+      mocks.exec.mockImplementation(async (file: string, args: string[]) => {
+        if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+        return {
+          stdout: JSON.stringify(
+            args[1]!.endsWith("staged.app") ? target : source,
+          ),
+        };
+      });
+      const second = await createInstalledUpdateRuntime(options());
+      await second!.initialize();
+      expect(second!.snapshot()).toMatchObject({
+        phase: "failed",
+        recoveryRequired: true,
+        code: "UPDATE_OPERATION_JOURNAL_INVALID",
+      });
+      expect(await fs.readFile(journalFile, "utf8")).toBe(damaged);
+      await expect(fs.stat(ready)).resolves.toBeDefined();
+      await second!.close();
+    },
+  );
+
   it("bounds abandoned extraction directories before invoking a verifier or opening an archive", async () => {
     const { createUpdatePackageVerifier } = await vi.importActual<
       typeof import("../../src/modules/release/infra/native/update-package-verifier")
@@ -4668,12 +4728,18 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     "not_started",
     "not_started_interrupted",
     "not_started_changed",
+    "not_started_damaged_null",
+    "not_started_damaged_bom",
+    "not_started_damaged_repeat",
   ])(
     "clears only a confirmed %s restore intent and preserves its original journal",
     async (scenario) => {
       const status = scenario === "refused" ? "refused" : "not_started";
+      const damaged = scenario.includes("_damaged_");
       const interrupted =
-        scenario.endsWith("interrupted") || scenario.endsWith("changed");
+        scenario.endsWith("interrupted") ||
+        scenario.endsWith("changed") ||
+        damaged;
       const first = await prepared();
       await first.restart();
       const record = JSON.parse(await fs.readFile(ready, "utf8"));
@@ -4760,10 +4826,30 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
             path.join(opRoot, "journal.json"),
             JSON.stringify({ ...journal, phase: "rollback_started" }),
           );
+        // A journal the strict reader refuses is invalid evidence, reported as
+        // such by the not-started reconciliation instead of the generic code.
+        if (damaged)
+          await fs.writeFile(
+            path.join(opRoot, "journal.json"),
+            scenario.endsWith("null")
+              ? "null\n"
+              : scenario.endsWith("bom")
+                ? `\ufeff${JSON.stringify(journal)}\n`
+                : JSON.stringify(journal).replace("{", '{"schema":"x",'),
+          );
         const recovered = await createInstalledUpdateRuntime(updatedOptions);
         await recovered!.initialize();
         expect(mocks.helper).toHaveBeenCalledTimes(2);
-        if (scenario.endsWith("changed")) {
+        if (damaged) {
+          expect(recovered!.snapshot()).toMatchObject({
+            phase: "failed",
+            recoveryRequired: true,
+            code: "UPDATE_OPERATION_JOURNAL_INVALID",
+          });
+          expect(
+            JSON.parse(await fs.readFile(intentPath, "utf8")).notStartedAt,
+          ).toEqual(target);
+        } else if (scenario.endsWith("changed")) {
           expect(recovered!.snapshot()).toMatchObject({
             phase: "failed",
             recoveryRequired: true,
@@ -9829,9 +9915,10 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
         },
       }))!;
       await controller.initialize();
+      // The re-read's refusal is the reported reason, not a generic staging one.
       expect(controller.snapshot()).toMatchObject({
         phase: "failed",
-        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        code: "UPDATE_RECORD_INVALID",
         recoveryRequired: true,
       });
       expect(await exists(markerFile())).toBe(true);
@@ -10010,17 +10097,84 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
         await controller.close();
       },
     );
-    it("keeps the fence for an inside extraction left in its spawn window", async () => {
+    // The owner died after spawning a child and before recording its pid, and
+    // the machine then slept: no age shows the unlisted child exited, so the
+    // stage, the archive and the intent stay and recovery is required.
+    it.each([
+      ["a minute", 60_000],
+      ["25 hours", 25 * 3_600_000],
+      ["5 days", 5 * 24 * 3_600_000],
+    ])(
+      "keeps the fence for an inside extraction left in its spawn window for %s",
+      async (_name, age) => {
+        const stage = await interrupted();
+        const extraction = await leak(
+          "inside",
+          {
+            phase: "spawning",
+            createdAt: Date.now() - age - 3_600_000,
+            updatedAt: Date.now() - age,
+          },
+          stage,
+        );
+        const controller = await recovered();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+          recoveryRequired: true,
+        });
+        expect(await exists(extraction)).toBe(true);
+        expect(await exists(stage)).toBe(true);
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      },
+    );
+    it("still reclaims a stage whose extraction names every child it spawned once each exited", async () => {
       const stage = await interrupted();
-      const extraction = await leak("inside", { phase: "spawning" }, stage);
+      const extraction = await leak(
+        "inside",
+        {
+          phase: "spawned",
+          createdAt: Date.now() - 50 * 3_600_000,
+          updatedAt: Date.now() - 49 * 3_600_000,
+          children: [
+            {
+              pid: 4343,
+              processStart: OWNER_START,
+              startedAtMs: Date.parse(OWNER_START),
+            },
+          ],
+        },
+        stage,
+      );
       const controller = await recovered();
       expect(controller.snapshot()).toMatchObject({
         phase: "failed",
+        code: "UPDATE_DOWNLOAD_INTERRUPTED",
+        recoveryRequired: false,
+      });
+      expect(await exists(extraction)).toBe(false);
+      expect(await exists(stage)).toBe(false);
+      expect(await exists(pendingFile())).toBe(false);
+      await controller.close();
+    });
+    // The failure notice of an unresolved stage outcome is never acknowledgeable:
+    // it is created blocked, so nothing durable records it as seen.
+    it("creates no acknowledgeable failure notice for the stage outcomes it reports", async () => {
+      const stage = await interrupted();
+      table.set(4242, OWNER_START);
+      await leak("inside", {}, stage);
+      const controller = await recovered();
+      const view = controller.snapshot();
+      expect(view).toMatchObject({
+        phase: "failed",
         code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
       });
-      expect(await exists(extraction)).toBe(true);
-      expect(await exists(stage)).toBe(true);
-      expect(await exists(pendingFile())).toBe(true);
+      expect(view).toHaveProperty("notice");
+      expect((view as { notice: unknown }).notice).toMatchObject({
+        seen: false,
+        blockedBy: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+      });
       await controller.close();
     });
     it("keeps the fence and the stage while the producer is still running", async () => {
