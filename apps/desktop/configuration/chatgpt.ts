@@ -27,6 +27,7 @@ import { projectReadConversation } from "../read-conversation-projection";
 import { createChatgptSignin } from "./signin";
 import { createChatgptBrowser } from "./browser";
 import { createChatgptConversation } from "./conversation";
+import { createChatgptAttachment } from "./attachment";
 import type {
   ChatgptConfigurationCommand,
   ConfigurationChatgptPorts,
@@ -88,7 +89,6 @@ export function createConfigurationChatgpt(ports: ConfigurationChatgptPorts) {
     workspaceReadFailure,
     captureChatStartupProfile,
     stageChatGptAttachments,
-    verifyStagedChatGptAttachments,
     discardChatGptAttachments,
     ReadConversationClient,
     ReadAccountConfirmation,
@@ -99,6 +99,8 @@ export function createConfigurationChatgpt(ports: ConfigurationChatgptPorts) {
   const browser = createChatgptBrowser(ports);
 
   const conversation = createChatgptConversation(ports);
+
+  const attachment = createChatgptAttachment(ports);
 
   // Main retains parsed-command admission, its settings-availability guard and
   // the deep-test commands.
@@ -274,239 +276,10 @@ export function createConfigurationChatgpt(ports: ConfigurationChatgptPorts) {
           ),
         });
       }
-      case "chatgpt.submit-attachment-task": {
-        if (!chatGptRoute()) {
-          return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
-        }
-        const chatAdmission = desktopAdmission.acquire("chatgpt-task");
-        if (!chatAdmission)
-          return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
-        try {
-          const pending = pendingChatGptAttachmentTask();
-          if (!pending || pending.operationId !== command.operationId) {
-            return configurationFailure("CHATGPT_ATTACHMENT_PREVIEW_NOT_FOUND");
-          }
-          if (Date.now() >= pending.expiresAt) {
-            setPendingChatGptAttachmentTask(null);
-            await discardChatGptAttachments(
-              statePaths().attachmentStaging,
-              pending.operationId,
-            ).catch(() => {
-              setAttachmentStagingReady(false);
-            });
-            if (!(await discardPreparedChatGptTask(pending.operationId))) {
-              return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
-            }
-            return configurationFailure("CHATGPT_ATTACHMENT_PREVIEW_EXPIRED");
-          }
-          const snapshot = configuration()!.snapshot();
-          if (snapshot.status !== "ready") {
-            return configurationFailure("SETTINGS_UNAVAILABLE");
-          }
-          if (snapshot.settings.setup.chatgpt.outcomeUnknown) {
-            return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
-          }
-          if (
-            !isDeepStrictEqual(
-              snapshot.settings.setup.chatgpt.verified,
-              pending.chatGptVerification,
-            )
-          ) {
-            setPendingChatGptAttachmentTask(null);
-            await discardChatGptAttachments(
-              statePaths().attachmentStaging,
-              pending.operationId,
-            ).catch(() => {
-              setAttachmentStagingReady(false);
-            });
-            if (!(await discardPreparedChatGptTask(pending.operationId))) {
-              return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
-            }
-            return configurationFailure("CHATGPT_CONNECTION_NOT_VERIFIED");
-          }
-          try {
-            await verifyStagedChatGptAttachments(pending.attachments);
-          } catch (error) {
-            setPendingChatGptAttachmentTask(null);
-            await discardChatGptAttachments(
-              statePaths().attachmentStaging,
-              pending.operationId,
-            ).catch(() => {
-              setAttachmentStagingReady(false);
-            });
-            if (!(await discardPreparedChatGptTask(pending.operationId))) {
-              return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
-            }
-            return attachmentStagingFailure(error);
-          }
-          if (!chatGptTaskJournal()) {
-            return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
-          }
-          try {
-            const journal = chatGptTaskJournal()!;
-            await journalUnderPromotionLease(liveTaskRegistry, () =>
-              journal.markDispatchIntent(pending.operationId),
-            );
-          } catch (error) {
-            return configurationFailure(
-              error instanceof PromotionPendingRefusal
-                ? "CHATGPT_TASK_PROMOTION_PENDING"
-                : "CHATGPT_TASK_JOURNAL_FAILED",
-            );
-          }
-          setPendingChatGptAttachmentTask(null);
-
-          let task: Awaited<ReturnType<ChatGptRoute["runReadonlyTask"]>>;
-          let stagingCleanup: "removed" | "pending_startup_cleanup" = "removed";
-          try {
-            try {
-              task = await chatGptRoute()!.runReadonlyTask(
-                pending.prompt,
-                pending.attachments.attachments,
-              );
-            } catch {
-              task = {
-                state: "outcome_unknown",
-                code: "CHATGPT_TASK_ERROR",
-                deltaCount: 0,
-                observedCharacters: 0,
-              };
-            }
-          } finally {
-            try {
-              await discardChatGptAttachments(
-                statePaths().attachmentStaging,
-                pending.operationId,
-              );
-            } catch {
-              setAttachmentStagingReady(false);
-              stagingCleanup = "pending_startup_cleanup";
-            }
-            chatAdmission.release();
-          }
-          const journalResult = {
-            state: task.state,
-            code: task.code,
-            deltaCount: task.deltaCount,
-            observedCharacters: task.observedCharacters,
-            attachmentCount: pending.attachments.attachments.length,
-            totalBytes: pending.attachments.attachments.reduce(
-              (total, attachment) => total + attachment.bytes,
-              0,
-            ),
-            stagingCleanup,
-          } as const;
-          const conversationContinuity = await retainChatGptConversation(
-            pending.operationId,
-            task.state,
-          );
-          try {
-            await chatGptTaskJournal()!.retainResult(
-              pending.operationId,
-              journalResult,
-            );
-            setRecoverableChatGptTask(await chatGptTaskJournal()!.load());
-          } catch {
-            const unknown = await configuration()!.recordChatGptObservation({
-              state: "outcome_unknown",
-            });
-            if (!unknown.ok) {
-              return ProductConfigurationResultSchema.parse(unknown);
-            }
-            return ProductConfigurationResultSchema.parse({
-              ...unknown,
-              evidence: {
-                kind: "chatgpt.task-recovery",
-                operationId: pending.operationId,
-                taskKind: "attachment",
-                state: "outcome_unknown",
-                code: "CHATGPT_TASK_RESULT_PERSIST_FAILED",
-                deltaCount: task.deltaCount,
-                observedCharacters: task.observedCharacters,
-                attachmentCount: journalResult.attachmentCount,
-                totalBytes: journalResult.totalBytes,
-                stagingCleanup,
-                conversationContinuity,
-                redelivered: false,
-                deliveryAckRequired: false,
-              },
-            });
-          }
-          const observation =
-            task.state === "completed"
-              ? {
-                  state: "authenticated" as const,
-                  profile: "chatgpt.app-partition/1",
-                  runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
-                  buildId: buildIdentity.buildId,
-                  protocol: "chatgpt-page-attachment-task/1",
-                }
-              : task.state === "not_authenticated"
-                ? { state: "signed_out" as const }
-                : task.state === "outcome_unknown"
-                  ? { state: "outcome_unknown" as const }
-                  : task.code === "CHATGPT_PAGE_UNREACHABLE"
-                    ? { state: "unreachable" as const }
-                    : (chatGptAppPreSubmitObservation(task.code) ?? {
-                        state: "unsupported" as const,
-                      });
-          const recorded =
-            await configuration()!.recordChatGptObservation(observation);
-          if (!recorded.ok)
-            return ProductConfigurationResultSchema.parse(recorded);
-          setRecoverableChatGptObservationPersisted(true);
-          return ProductConfigurationResultSchema.parse({
-            ...recorded,
-            evidence: {
-              kind: "chatgpt.attachment-task",
-              operationId: pending.operationId,
-              state: task.state,
-              code: task.code,
-              attachmentCount: pending.attachments.attachments.length,
-              totalBytes: pending.attachments.attachments.reduce(
-                (total, attachment) => total + attachment.bytes,
-                0,
-              ),
-              deltaCount: task.deltaCount,
-              observedCharacters: task.observedCharacters,
-              stagingCleanup,
-              conversationContinuity,
-              redelivered: false,
-              deliveryAckRequired: true,
-            },
-          });
-        } finally {
-          // Also covers preparation exits before the existing dispatch finalizer.
-          // Release is identity-bound: a repeated release cannot clear a successor.
-          chatAdmission.release();
-        }
-      }
-      case "chatgpt.cancel-attachment-task": {
-        if (desktopAdmission.occupied("chatgpt-task")) {
-          return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
-        }
-        const pending = pendingChatGptAttachmentTask();
-        if (!pending || pending.operationId !== command.operationId) {
-          return configurationFailure("CHATGPT_ATTACHMENT_PREVIEW_NOT_FOUND");
-        }
-        setPendingChatGptAttachmentTask(null);
-        try {
-          await discardChatGptAttachments(
-            statePaths().attachmentStaging,
-            pending.operationId,
-          );
-        } catch {
-          setAttachmentStagingReady(false);
-          return configurationFailure("CHATGPT_ATTACHMENT_STAGING_FAILED");
-        }
-        if (!(await discardPreparedChatGptTask(pending.operationId))) {
-          return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
-        }
-        return ProductConfigurationResultSchema.parse({
-          ok: true,
-          snapshot: configuration()!.snapshot(),
-        });
-      }
+      case "chatgpt.prepare-attachment-task":
+      case "chatgpt.submit-attachment-task":
+      case "chatgpt.cancel-attachment-task":
+        return attachment.configureAttachment(command);
       case "chatgpt.prepare-readonly-task": {
         if (goReadonlyConversation())
           return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
