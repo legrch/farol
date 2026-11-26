@@ -133,6 +133,42 @@ import {
   recheckAdmission,
   type Admission,
 } from "../../../apps/desktop/update/admission";
+import {
+  applyEntryRefusal,
+  applyRolledBack,
+  applyUnsettledCode,
+  candidateDeferred,
+  candidateSkipped,
+  claimableInterruptedDownload,
+  classifyPackageVerification,
+  confirmationStale,
+  downloadFailureCode,
+  downloadIntentConflicts,
+  downloadRecoveryAtStartup,
+  downloadStageIdentityChanged,
+  emptyRecoveryOutcome,
+  handoffAdmitted,
+  helperNoEffectCode,
+  historicalReceiptSuperseded,
+  increasingRelease,
+  prepareFailureHandoff,
+  preparationUnreconciled,
+  quitDeadlineExpired,
+  quitFailureHandoff,
+  quitTimerDelayMs,
+  readinessTimeoutMs,
+  restoreExitWitnessApplies,
+  restoreFailureHandoff,
+  restoreNotStartedMismatch,
+  retainedBuildRelation,
+  retainedReadyReclaimable,
+  rollbackVersionFor,
+  settledReceiptUnchanged,
+  startupSettlement,
+  unadmittedHandoff,
+  verificationHandoff,
+  verificationRefusalCode,
+} from "../../../apps/desktop/update/stage";
 
 export { installedUpdateStartupDecision };
 export type {
@@ -148,11 +184,10 @@ function isIncreasingUpdate(
   currentVersion: string,
   currentBuildVersion: string,
 ): boolean {
-  const order = compareReleaseVersions(manifest.version, currentVersion);
-  return (
-    order !== null &&
-    order > 0 &&
-    BigInt(manifest.buildVersion) > BigInt(currentBuildVersion)
+  return increasingRelease(
+    compareReleaseVersions(manifest.version, currentVersion),
+    manifest.buildVersion,
+    currentBuildVersion,
   );
 }
 
@@ -1675,11 +1710,7 @@ async function createRuntime(
     if (metadata) {
       await canonicalOwnedDirectory(directory, true);
       if (download.identity) {
-        if (
-          String(metadata.dev) !== download.identity.dev ||
-          String(metadata.ino) !== download.identity.ino ||
-          String(metadata.birthtimeNs) !== download.identity.birthtimeNs
-        )
+        if (downloadStageIdentityChanged(metadata, download.identity))
           throw new Error("UPDATE_DOWNLOAD_STAGE_CHANGED");
         // The caller has reconciled the producer and every operation in this
         // exclusive directory. Older retained packages and rollback stay outside.
@@ -1697,8 +1728,7 @@ async function createRuntime(
     const download = intent.download;
     // Legacy intents have no producer/stage witness. Never guess their ownership.
     if (
-      !download ||
-      download.phase !== "downloading" ||
+      !claimableInterruptedDownload(download) ||
       !(await originalHelperEnded({ helper: download.producer }))
     )
       throw new Error("UPDATE_DOWNLOAD_PRODUCER_UNCONFIRMED");
@@ -1896,7 +1926,7 @@ async function createRuntime(
       // attempt before clearing its intent; uncertainty keeps recovery fenced.
       await removeDownloadStage(download);
       await fs.unlink(pendingDownloadFile);
-      return known(`UPDATE_${downloaded.code.toUpperCase()}`);
+      return known(downloadFailureCode(downloaded.code));
     }
     verified = downloaded.value;
     return {
@@ -2212,10 +2242,16 @@ async function createRuntime(
       const raw = await readRecord(readyFile);
       const fromReady = raw !== null;
       let interruptedDownload = false;
-      if (downloadIntent && !fromReady) {
-        if (pending) return known("UPDATE_RESTORE_OUTCOME_UNKNOWN");
+      const downloadRecovery = downloadRecoveryAtStartup({
+        hasIntent: downloadIntent !== null,
+        fromReady,
+        restorePending: pending !== null,
+      });
+      if (downloadRecovery === "restore_unknown")
+        return known("UPDATE_RESTORE_OUTCOME_UNKNOWN");
+      if (downloadRecovery === "reconcile") {
         try {
-          await reconcileInterruptedDownload(downloadIntent);
+          await reconcileInterruptedDownload(downloadIntent!);
         } catch {
           return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
         }
@@ -2232,21 +2268,12 @@ async function createRuntime(
         installLocation === "shared"
       ) {
         const historical = SavedReceipt.parse(previous);
-        const settledBuild =
-          historical.phase === "completed"
-            ? historical.operation?.target
-            : historical.phase === "rolled_back"
-              ? historical.operation?.source
-              : null;
         if (
-          historical.operation &&
-          settledBuild &&
-          historical.runningBuildId === settledBuild.buildId &&
-          options.build.buildId !== historical.operation.target.buildId &&
-          compareReleaseVersions(
-            options.build.version,
-            historical.operation.target.version,
-          ) === 1
+          historicalReceiptSuperseded({
+            historical,
+            running: options.build,
+            compareVersions: compareReleaseVersions,
+          })
         ) {
           try {
             await readAcceptedSource();
@@ -2256,16 +2283,21 @@ async function createRuntime(
           }
         }
       }
-      if (raw === null && previous === null)
-        return pending
+      if (raw === null && previous === null) {
+        const empty = emptyRecoveryOutcome({
+          restorePending: pending !== null,
+          interruptedDownload,
+        });
+        return empty === "restore_unknown"
           ? known("UPDATE_RESTORE_OUTCOME_UNKNOWN")
-          : interruptedDownload
+          : empty === "download_interrupted"
             ? {
                 ok: false,
                 code: "UPDATE_DOWNLOAD_INTERRUPTED",
                 recoveryRequired: false,
               }
             : { ok: true, update: null };
+      }
       retained = fromReady
         ? Retained.parse(raw)
         : Retained.parse(
@@ -2317,20 +2349,19 @@ async function createRuntime(
 
       if (
         downloadIntent &&
-        (retained.operation !== null ||
-          downloadIntent.buildId !== parsed.value.buildId ||
-          downloadIntent.archiveSha256 !== parsed.value.archiveSha256 ||
-          downloadIntent.download?.id !== retained.downloadId)
+        downloadIntentConflicts(downloadIntent, retained, parsed.value)
       )
         return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
       if (pending?.notStartedAt) {
         const current = await readBuild(slot);
         if (
-          !retained.operation ||
-          !sameOperation(pending.operation, retained.operation) ||
-          current.buildId !== options.build.buildId ||
-          current.version !== options.build.version ||
-          !sameBuild(current, pending.notStartedAt) ||
+          restoreNotStartedMismatch({
+            pendingOperation: pending.operation,
+            retainedOperation: retained.operation,
+            notStartedAt: pending.notStartedAt,
+            current,
+            running: options.build,
+          }) ||
           (await readJournal(pending.operation)).phase !== pending.priorPhase
         )
           return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
@@ -2341,17 +2372,18 @@ async function createRuntime(
         const op = retained.preparation;
         const current = await readBuild(slot);
         if (
-          !fromReady ||
-          pending ||
-          retained.operation ||
-          retained.helper ||
-          current.buildId !== options.build.buildId ||
-          current.version !== options.build.version ||
-          !sameBuild(current, op.source) ||
-          !sameBuild(op.target, {
-            digest: parsed.value.artifactSha256,
-            version: parsed.value.version,
-            buildId: parsed.value.buildId,
+          preparationUnreconciled({
+            fromReady,
+            restorePending: pending !== null,
+            retained,
+            current,
+            running: options.build,
+            preparation: op,
+            manifestTarget: {
+              digest: parsed.value.artifactSha256,
+              version: parsed.value.version,
+              buildId: parsed.value.buildId,
+            },
           }) ||
           (await readRecord(
             path.join(root, op.operationId, "journal.json"),
@@ -2383,15 +2415,15 @@ async function createRuntime(
           running: options.build,
           operation: op,
         });
-        if (decision.action === "wait" || helper === "unknown")
-          return known("UPDATE_HELPER_EXIT_UNCONFIRMED");
-        if (decision.action === "refuse" || !decision.mayStart)
-          return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
+        const settlement = startupSettlement({ decision, helper });
+        if (!settlement.ok) return known(settlement.code);
         if (
           pending &&
-          journal?.phase === pending.priorPhase &&
-          pending.installedBefore &&
-          sameBuild(current, pending.installedBefore)
+          restoreExitWitnessApplies({
+            pending,
+            journalPhase: journal?.phase,
+            current,
+          })
         )
           await writeRecord(
             path.join(root, op.operationId, "restore-exit.json"),
@@ -2421,35 +2453,31 @@ async function createRuntime(
           // actual operation, helper and installed-build checks above.
           console.warn("Previous update receipt could not be archived.");
         }
-        if (journal?.phase !== decision.action)
+        const settledPhase = settlement.phase;
+        if (journal?.phase !== settledPhase)
           await writeRecord(journalFile, {
             ...(journal ?? {
               schema: "farol.installed-update-journal/1",
               ...op,
             }),
-            phase: decision.action,
+            phase: settledPhase,
           });
-        const settledPhase = decision.action;
-        let rollbackVersion: string | undefined;
+        let predecessor: z.infer<typeof AcceptedBuild> | null = null;
         if (settledPhase === "completed") {
-          let predecessor: z.infer<typeof AcceptedBuild> | null = null;
           try {
             predecessor = await optionalBuild(op, "previous.app");
           } catch {
             /* Preserved evidence is not installed content, on any restart. */
           }
-          if (
-            predecessor &&
-            sameBuild(predecessor, op.source) &&
-            !legacyPredecessorRequiresStateRecovery(
-              op.source.version,
-              op.target.version,
-            )
-          )
-            rollbackVersion = op.source.version;
         } else {
           declinedBuildId = op.target.buildId;
         }
+        const rollbackVersion = rollbackVersionFor({
+          phase: settledPhase,
+          predecessor,
+          operation: op,
+          requiresStateRecovery: legacyPredecessorRequiresStateRecovery,
+        });
         restorable = retained;
         restoreKind = rollbackVersion ? "rollback" : null;
         // The settled journal and installed content establish that this
@@ -2469,16 +2497,14 @@ async function createRuntime(
         // Write only when settling new evidence or when archive reclamation
         // changed the retained record; pending work keeps its existing path.
         const saved = previous === null ? null : SavedReceipt.parse(previous);
-        const unchangedReceipt =
-          !fromReady &&
-          !pending &&
-          saved !== null &&
-          JSON.stringify({
-            ...retained,
-            observedAt: saved.observedAt,
-            phase: settledPhase,
-            runningBuildId: options.build.buildId,
-          }) === JSON.stringify(saved);
+        const unchangedReceipt = settledReceiptUnchanged({
+          fromReady,
+          restorePending: pending !== null,
+          saved,
+          retained,
+          phase: settledPhase,
+          runningBuildId: options.build.buildId,
+        });
         if (unchangedReceipt) {
           // A concurrent replacement is not the historical record we just
           // verified; do not silently accept it as an unchanged settlement.
@@ -2496,8 +2522,12 @@ async function createRuntime(
           });
         if (fromReady) await fs.unlink(readyFile);
         if (pending) await fs.unlink(restoreFile);
-        const failedApply =
-          fromReady && !pending && sameBuild(current, op.source);
+        const failedApply = applyRolledBack({
+          fromReady,
+          restorePending: pending !== null,
+          current,
+          source: op.source,
+        });
         retained = null;
         if (failedApply)
           return {
@@ -2530,27 +2560,27 @@ async function createRuntime(
         parsed.value.version,
         options.build.version,
       );
-      const exactInstalledBuild =
-        retainedOrder === 0 &&
-        parsed.value.buildVersion === options.build.buildVersion &&
-        parsed.value.buildId === options.build.buildId &&
-        parsed.value.sourceCommit === options.build.sourceCommit &&
-        parsed.value.sourceTreeDigest === options.build.sourceTreeDigest &&
-        parsed.value.artifactSha256 === current.digest;
-      const olderRetainedBuild =
-        retainedOrder !== null &&
-        retainedOrder < 0 &&
-        BigInt(parsed.value.buildVersion) < BigInt(options.build.buildVersion!);
+      const relation = retainedBuildRelation({
+        order: retainedOrder,
+        manifest: parsed.value,
+        running: {
+          buildVersion: options.build.buildVersion!,
+          buildId: options.build.buildId,
+          sourceCommit: options.build.sourceCommit,
+          sourceTreeDigest: options.build.sourceTreeDigest,
+        },
+        installedDigest: current.digest,
+      });
       if (
-        fromReady &&
-        retained.operation === null &&
-        !retained.preparation &&
-        !retained.helper &&
-        !retained.archiveReleased &&
-        !downloadIntent &&
-        parsed.value.repository === "legrch/farol" &&
-        parsed.value.channel === adoptionChannel(options.build) &&
-        (exactInstalledBuild || olderRetainedBuild)
+        retainedReadyReclaimable({
+          fromReady,
+          retained,
+          hasDownloadIntent: downloadIntent !== null,
+          repository: parsed.value.repository,
+          channel: parsed.value.channel,
+          expectedChannel: adoptionChannel(options.build),
+          relation,
+        })
       ) {
         const reclaimed = await transport.reclaimRetained(
           retained.handle,
@@ -2573,15 +2603,12 @@ async function createRuntime(
         retained.handle,
         parsed.value,
       );
-      if (!check.ok && "certainty" in check && check.certainty === "unknown")
-        return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
-      if (!check.ok && "reason" in check && check.reason === "stage_capacity")
-        return known("UPDATE_VERIFICATION_RECOVERY_REQUIRED");
-      if (
-        !check.ok ||
-        !packageMatchesRelease(check.value.identity, parsed.value)
-      )
-        return known("UPDATE_RETAINED_PACKAGE_INVALID");
+      const verification = classifyPackageVerification(
+        check,
+        check.ok && packageMatchesRelease(check.value.identity, parsed.value),
+      );
+      if (verification !== "verified")
+        return known(verificationRefusalCode(verification));
       if (!(await discardVerifiedStage(retained.handle)))
         return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
       // A matching durable ready record plus fresh physical verification proves
@@ -2648,19 +2675,24 @@ async function createRuntime(
           recoveryRequired: true,
         };
       }
-      candidate =
-        found.value?.manifest.version === preferences.skipped?.version
-          ? null
-          : found.value;
+      candidate = candidateSkipped(
+        found.value?.manifest.version,
+        preferences.skipped?.version,
+      )
+        ? null
+        : found.value;
       return candidate
         ? {
             ok: true,
             available: true,
             version: candidate.manifest.version,
             buildId: candidate.manifest.buildId,
-            deferred:
-              candidate.manifest.buildId === declinedBuildId ||
-              candidate.manifest.version === preferences.deferredVersion,
+            deferred: candidateDeferred({
+              buildId: candidate.manifest.buildId,
+              version: candidate.manifest.version,
+              declinedBuildId,
+              deferredVersion: preferences.deferredVersion,
+            }),
             ...(candidate.notes ? { notes: candidate.notes } : {}),
           }
         : { ok: true, available: false };
@@ -3000,10 +3032,7 @@ async function createRuntime(
             keepAdmission = false;
             return {
               status: "blocked",
-              code:
-                handoff.status === "not_started"
-                  ? "UPDATE_HELPER_NOT_STARTED"
-                  : "UPDATE_HELPER_REFUSED",
+              code: helperNoEffectCode(handoff.status),
             };
           }
           if (handoff.status !== "ready")
@@ -3014,12 +3043,7 @@ async function createRuntime(
           options.quit();
           return { status: "accepted" };
         } catch {
-          return {
-            status: keepAdmission ? "unknown" : "blocked",
-            code: keepAdmission
-              ? "UPDATE_RESTORE_OUTCOME_UNKNOWN"
-              : "UPDATE_RESTORE_PREPARE_FAILED",
-          };
+          return restoreFailureHandoff(keepAdmission);
         }
       };
       return admissions.settle(
@@ -3041,44 +3065,40 @@ async function createRuntime(
     quitContext?: NormalQuitApplyContext,
     confirmation?: ConfirmedUpdateRestart,
   ): Promise<UpdateHandoff> => {
-    if (admissions.releaseUnconfirmed())
-      return {
-        status: "blocked",
-        code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
-      };
-    if (
-      admissions.held() ||
-      operation ||
-      retained?.operation ||
-      retained?.preparation
-    )
-      return { status: "unknown", code: "UPDATE_HANDOFF_UNRECONCILED" };
-    if (!retained || retained.handle !== update.handle)
-      return { status: "blocked", code: "UPDATE_PACKAGE_NOT_READY" };
     // The Python helper is retired. A build without its compiled Go core can
     // run no update helper, so refuse before any admission, copy or binding.
-    if (options.goCoreArtifact === undefined)
-      return { status: "blocked", code: "UPDATE_HELPER_GO_CORE_REQUIRED" };
-    if (!supervised && !options.helperLifetime?.available())
-      return { status: "blocked", code: "UPDATE_HELPER_LIFETIME_UNAVAILABLE" };
+    const entryRefusal = applyEntryRefusal({
+      releaseUnconfirmed: admissions.releaseUnconfirmed(),
+      admissionHeld: admissions.held(),
+      operationActive: !!operation,
+      retainedOperation: !!retained?.operation,
+      retainedPreparation: !!retained?.preparation,
+      packageReady: !!retained && retained.handle === update.handle,
+      goCoreRequired: options.goCoreArtifact === undefined,
+      supervised: !!supervised,
+      lifetimeAvailable: () => !!options.helperLifetime?.available(),
+    });
+    if (entryRefusal) return entryRefusal;
     const confirmedManifest = confirmation
-      ? parseRetainedGithubReleaseManifest(retained)
+      ? parseRetainedGithubReleaseManifest(retained!)
       : null;
     if (
       confirmation &&
-      (quitContext ||
-        confirmation.kind !== "interrupt-browser" ||
-        confirmation.version !== update.manifest.version ||
-        !confirmedManifest?.ok ||
-        confirmedManifest.value.version !== confirmation.version)
+      confirmationStale({
+        confirmation,
+        quitApply: !!quitContext,
+        updateVersion: update.manifest.version,
+        retainedVersion: confirmedManifest?.ok
+          ? confirmedManifest.value.version
+          : null,
+      })
     )
       return { status: "blocked", code: "UPDATE_CONFIRMATION_STALE" };
     let keepAdmission = false;
     let bindingPublicationUnknown = false;
     const expired = () =>
       quitContext !== undefined &&
-      (!Number.isFinite(Date.now()) ||
-        Date.now() >= quitContext.deadlineAt ||
+      (quitDeadlineExpired(Date.now(), quitContext.deadlineAt) ||
         options.canStartNormalQuitEffect?.() === false);
     const ensureActive = () => {
       if (expired()) throw new Error("UPDATE_QUIT_DEADLINE_EXPIRED");
@@ -3093,10 +3113,7 @@ async function createRuntime(
           new Promise<never>((_resolve, reject) => {
             timer = setTimeout(
               () => reject(new Error("UPDATE_QUIT_DEADLINE_EXPIRED")),
-              Math.max(
-                1,
-                Math.min(2_147_483_647, quitContext.deadlineAt - Date.now()),
-              ),
+              quitTimerDelayMs(Date.now(), quitContext.deadlineAt),
             );
           }),
         ]);
@@ -3170,31 +3187,16 @@ async function createRuntime(
         const check = await wait(() =>
           transport.verifyPackage(update.handle, update.manifest),
         );
-        if (
-          !check.ok ||
-          !packageMatchesRelease(check.value.identity, update.manifest)
-        ) {
-          if (quitContext)
-            keepAdmission =
-              !check.ok &&
-              "certainty" in check &&
-              check.certainty === "unknown";
+        const verification = classifyPackageVerification(
+          check,
+          check.ok &&
+            packageMatchesRelease(check.value.identity, update.manifest),
+        );
+        if (verification !== "verified" || !check.ok) {
+          if (quitContext) keepAdmission = verification === "outcome_unknown";
           if (quitContext && !keepAdmission)
             await wait(() => fs.unlink(cleanupFile));
-          return {
-            status:
-              !check.ok && "certainty" in check && check.certainty === "unknown"
-                ? "unknown"
-                : "blocked",
-            code:
-              !check.ok && "certainty" in check && check.certainty === "unknown"
-                ? "UPDATE_STAGING_OUTCOME_UNKNOWN"
-                : !check.ok &&
-                    "reason" in check &&
-                    check.reason === "stage_capacity"
-                  ? "UPDATE_VERIFICATION_RECOVERY_REQUIRED"
-                  : "UPDATE_RETAINED_PACKAGE_INVALID",
-          };
+          return verificationHandoff(verification);
         }
         if (quitContext) {
           await wait(() => fs.unlink(cleanupFile));
@@ -3383,9 +3385,9 @@ async function createRuntime(
                         return false;
                       }
                     },
-                    readinessTimeoutMs: Math.max(
-                      1,
-                      Math.min(300_000, quitContext.deadlineAt - Date.now()),
+                    readinessTimeoutMs: readinessTimeoutMs(
+                      Date.now(),
+                      quitContext.deadlineAt,
                     ),
                   }
                 : {}),
@@ -3466,10 +3468,7 @@ async function createRuntime(
           keepAdmission = false;
           return {
             status: "blocked",
-            code:
-              handoff.status === "refused"
-                ? "UPDATE_HELPER_REFUSED"
-                : "UPDATE_HELPER_NOT_STARTED",
+            code: helperNoEffectCode(handoff.status),
           };
         }
         // Keep the same operation observable even on an uncertain ACK. No substitute helper.
@@ -3478,36 +3477,15 @@ async function createRuntime(
             `farol-update-helper ${JSON.stringify({ operationId, code: result.code, phase: result.terminal?.phase ?? "unknown" })}\n`,
           );
         });
-        const admittedHandoff = supervised
-          ? handoff.status === "continued" ||
-            (handoff.status === "terminal" &&
-              handoff.result.code === 0 &&
-              handoff.result.signal === null &&
-              handoff.result.protocolError === null &&
-              handoff.result.terminal?.phase === "verified" &&
-              handoff.result.terminal.error === null)
-          : handoff.status === "ready";
-        if (!admittedHandoff)
-          return {
-            status: "unknown",
-            code:
-              handoff.status === "refused"
-                ? "UPDATE_HELPER_REFUSED"
-                : "UPDATE_HANDOFF_UNKNOWN",
-          };
+        if (!handoffAdmitted(handoff, !!supervised))
+          return unadmittedHandoff(handoff.status);
         ensureActive();
         if (!supervised && !quitContext) options.quit();
         return { status: "accepted" };
       } catch {
         if (bindingPublicationUnknown)
           return { status: "unknown", code: "UPDATE_SLOT_BINDING_UNCONFIRMED" };
-        if (quitContext && expired())
-          return {
-            status: keepAdmission ? "unknown" : "blocked",
-            code: keepAdmission
-              ? "UPDATE_QUIT_OUTCOME_UNKNOWN"
-              : "UPDATE_QUIT_DEADLINE_EXPIRED",
-          };
+        if (quitContext && expired()) return quitFailureHandoff(keepAdmission);
         if (
           verified &&
           !(await wait(() =>
@@ -3523,22 +3501,14 @@ async function createRuntime(
             status: "unknown",
             code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
           };
-        return {
-          status: keepAdmission ? "unknown" : "blocked",
-          code: keepAdmission
-            ? "UPDATE_HANDOFF_UNKNOWN"
-            : "UPDATE_PREPARE_FAILED",
-        };
+        return prepareFailureHandoff(keepAdmission);
       }
     };
     return admissions.settle(
       admission,
       () => keepAdmission,
       attempt,
-      () =>
-        keepAdmission
-          ? "UPDATE_HANDOFF_UNKNOWN"
-          : "UPDATE_STAGING_OUTCOME_UNKNOWN",
+      () => applyUnsettledCode(keepAdmission),
     );
   };
 
