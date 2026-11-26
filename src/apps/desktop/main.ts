@@ -1433,7 +1433,10 @@ const routeBTurns = createTurnLifecycle({
     setLiveTaskLifecycle(threadId, lifecycle);
   },
 });
-const routeBTaskSurfaces: RouteBTaskSurfaces = routeBTurns.surfaces;
+const routeBTaskSurfaces: RouteBTaskSurfaces = {
+  surfaceFor: (threadId) => routeBTurns.surfaces.surfaceFor(threadId),
+  settled: (threadId, state) => routeBTurns.surfaces.settled?.(threadId, state),
+};
 
 // The context controller, its execution fence, the last fence recovery and the
 // Route B runtime own their handles; main reads and clears them through the
