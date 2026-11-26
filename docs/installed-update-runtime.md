@@ -559,7 +559,7 @@ extraction.
 **Lease.** Immediately after `mkdtemp` and before anything is extracted, the
 verifier writes `lease.json` (mode 0600) into the extraction. It holds the
 schema, the owner pid and its process start, the archive handle, a phase, the
-time of the last revision, and one entry per extractor child (pid and process
+creation time and the time of the last revision, and one entry per extractor child (pid and process
 start). The phase is `spawning` before each child is started. The child's pid
 is taken from the spawn handle and written to the lease (phase `spawned`)
 before anything else is awaited; its process start is read from `ps` and filled
@@ -578,7 +578,11 @@ owned by the current user. An entry is removed only if all of this holds:
 
 - it is a real directory, not a symlink, owned by us, mode 0700, and a direct
   child of its staging parent;
-- its lease parses;
+- its lease parses and holds together: the handle is a normalized absolute
+  path inside the update root, creation is not after the last update, the last
+  update is not in the future beyond a small clock skew, neither the owner nor
+  a child started after the lease was last updated (one second of `ps`
+  resolution aside), `created` lists no child and `spawned` lists at least one;
 - the owner and every listed child have ended. A pid that is absent, or that
   now names a process that started later than the recorded one, has ended. A
   pid that still names the recorded process is live. A failed `ps` probe, a
@@ -589,22 +593,31 @@ owned by the current user. An entry is removed only if all of this holds:
   proves a child ended: a child that was started but not yet listed is not
   stopped by its own timeout once its owner is gone.
 
+**Identity of every directory on the way.** The update root and each
+`download-<32 hex>` parent are captured at discovery as a path with its device
+and inode, and the path must equal its own `realpath` (no component is a
+link). Before every directory read and before every removal step, each
+directory from the root down to the extraction is rechecked by `lstat` (links
+not followed) against what was captured. Any change in any of them abandons
+the whole parent with reason `parent identity changed`: nothing more is read or
+removed beneath it, and the outcome is unknown, so the cleanup marker stays.
+
 An entry with no lease at all (an older build left it) is removed only when it
-is older than 24 hours and no entry in the same parent has a live, unknown or
-unreadable owner. A lease that is present but unreadable or untrusted (corrupt,
+is older than 24 hours and no entry in the same parent is live, unknown,
+uninspectable or untrusted. A lease that is present but unreadable (corrupt,
 an unknown field or schema, not a regular file, owned by another user) is kept,
-reason `lease unreadable`, never treated as legacy. Removal is bound to the
-identity captured first (device and inode): it is rechecked immediately before
-each removal step and the removal stops if the path became a symlink or another
-inode. It removes the contents first and the lease last, then the directory
-itself, and then syncs the parent. A removal that fails keeps the entry. Node
-has no atomic remove-by-handle, so a path swapped inside the interval between a
-check and the single removal call that follows it is not detected; that
-interval is one `lstat` and one call. Each kept entry is logged with its
-reason: `live owner`, `live child`, `unknown liveness`, `spawning window`,
-`lease unreadable`, `identity mismatch`, `legacy entry too recent`,
-`live owner in parent` or `removal failed`. The reclaim runs again at the next
-launch; it is not retried within a session.
+reason `lease unreadable`; one that parses but is inconsistent is kept as
+`lease untrusted`; neither is ever treated as legacy. Removal also rechecks the
+extraction's own device and inode before each step. It removes the contents
+first and the lease last, then the directory itself, and then syncs the parent.
+A removal that fails keeps the entry. Node has no atomic remove-by-handle, so a
+path swapped inside the interval between a check and the single removal call
+that follows it is not detected; that interval is one `lstat` and one call.
+Each kept entry is logged with its reason: `live owner`, `live child`,
+`unknown liveness`, `spawning window`, `lease unreadable`, `lease untrusted`,
+`identity mismatch`, `legacy entry too recent`, `live owner in parent` or
+`removal failed`. The reclaim runs again at the next launch; it is not retried
+within a session.
 
 **Residual risk.** An extractor child that an owner started and then died
 before listing its pid, and that stalls for more than 24 hours with the lease
