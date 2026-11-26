@@ -655,6 +655,9 @@ that cannot be proved ended keeps the fence. Marker content never selects what
 the reclaim scans. Only a verified absence (ENOENT) is "no marker": a present
 file holding JSON `null`, like any unreadable one, is `UPDATE_RECORD_INVALID`,
 keeps the fence and is never settled, the same rule as the restore intent.
+The marker is also read as strictly as the repair tool reads it: invalid UTF-8,
+a duplicate key at any depth, or a NUL or other control character in `handle`
+or `operationRoot` make it present but invalid (`UPDATE_RECORD_INVALID`).
 
 **Retained-download records.** `download-pending.json` and `ready.json` follow
 the same presence rule. Only a verified absence (ENOENT) is "no download" or
@@ -667,11 +670,17 @@ start) and a phase, `downloading` and then `verifying` once the native verifier
 may run. At startup, with no ready record, an intent whose producer has
 provably ended has its stage directory removed, identity-bound, in either
 phase. A `verifying` stage may hold verifier extractions, so the reclaim runs
-first and the stage is removed only if that pass kept nothing directly inside
-it (live, unknown or untrusted) and scanned both the update root and the stage;
-an extraction kept in another staging parent does not hold it. Otherwise the
-stage, the intent and the fence stay (`UPDATE_STAGING_OUTCOME_UNKNOWN`), as they
-do for a live or unobservable producer or a replaced stage directory.
+first and its report is bound to the directory that is then removed. The
+report lists every staging parent it scanned with the identity it captured,
+besides those it kept or skipped. The stage is removed only if the root was
+scanned, the stage was not skipped, nothing was kept directly inside it, and
+the directory found at removal is the scanned one (same device and inode, then
+the intent's own identity check). A stage the report never listed counts as
+absent and is removed only if it is still absent: a directory that is there by
+then was not scanned. An extraction kept in another staging parent does not
+hold it. Otherwise the stage, the intent and the fence stay
+(`UPDATE_STAGING_OUTCOME_UNKNOWN`), as they do for a live or unobservable
+producer or a replaced stage directory.
 
 **Installs that are already fenced.** The fix runs inside the new build, so an
 install that is already fenced by an older build cannot receive it through the

@@ -9,10 +9,16 @@ import { z } from "zod";
 // inside the update root. Whether the fence may fall is decided elsewhere, by
 // whether every extraction is gone; this file only judges the marker itself.
 export const CLEANUP_MARKER_SCHEMA = "farol.update-package-cleanup/1";
+// A NUL or other control character in a path is never a believable name.
+const markerPath = z
+  .string()
+  .min(1)
+  .max(4096)
+  .refine((value) => !/[\u0000-\u001f\u007f]/u.test(value));
 export const CleanupMarker = z.strictObject({
   schema: z.literal(CLEANUP_MARKER_SCHEMA),
-  handle: z.string().min(1).max(4096),
-  operationRoot: z.string().min(1).max(4096).optional(),
+  handle: markerPath,
+  operationRoot: markerPath.optional(),
 });
 const OPERATION_ROOT = /^[0-9a-f]{32}$/u;
 

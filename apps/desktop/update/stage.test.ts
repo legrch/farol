@@ -12,8 +12,8 @@ import {
   downloadFailureCode,
   downloadIntentConflicts,
   downloadRecoveryAtStartup,
-  downloadStageExtractionsGone,
   downloadStageIdentityChanged,
+  downloadStageScan,
   emptyRecoveryOutcome,
   handoffAdmitted,
   helperNoEffectCode,
@@ -191,20 +191,31 @@ describe("download staging", () => {
     const root = "/u/installed-updates";
     const stage = `${root}/download-${"a".repeat(32)}`;
     const other = `${root}/download-${"b".repeat(32)}`;
+    const at = (path: string, ino = 1n) => ({ path, dev: 7n, ino });
     const scan = (
       over: Partial<{
         kept: { entry: string }[];
         unscanned: string[];
+        scanned: { path: string; dev: bigint; ino: bigint }[];
         root: object | null;
       }> = {},
-    ) => ({ kept: [], unscanned: [], root: {}, ...over });
+    ) => ({
+      kept: [],
+      unscanned: [],
+      scanned: [at(root, 5n), at(stage, 9n)],
+      root: {},
+      ...over,
+    });
 
-    it("is clear when the scan kept nothing inside it", () => {
-      expect(downloadStageExtractionsGone(scan(), root, stage)).toBe(true);
+    it("yields the identity the pass scanned when it kept nothing inside", () => {
+      expect(downloadStageScan(scan(), root, stage)).toEqual({
+        dev: 7n,
+        ino: 9n,
+      });
     });
     it("ignores what the scan kept in another staging parent", () => {
       expect(
-        downloadStageExtractionsGone(
+        downloadStageScan(
           scan({
             kept: [
               { entry: `${root}/farol-update-verify-x` },
@@ -214,26 +225,36 @@ describe("download staging", () => {
           root,
           stage,
         ),
-      ).toBe(true);
+      ).toEqual({ dev: 7n, ino: 9n });
     });
-    it("is not clear while any extraction inside it was kept", () => {
+    it("is unknown while any extraction inside it was kept", () => {
       expect(
-        downloadStageExtractionsGone(
+        downloadStageScan(
           scan({ kept: [{ entry: `${stage}/farol-update-verify-z` }] }),
           root,
           stage,
         ),
-      ).toBe(false);
+      ).toBeNull();
+    });
+    it("reports a stage the pass never listed as absent, not as clear", () => {
+      expect(
+        downloadStageScan(
+          scan({ scanned: [at(root, 5n), at(other, 3n)] }),
+          root,
+          stage,
+        ),
+      ).toBe("absent");
     });
     it.each([
-      ["the stage was not scanned", { unscanned: [stage] }],
-      ["the update root was not scanned", { unscanned: [root] }],
+      ["the stage was skipped", { unscanned: [stage] }],
+      ["the update root was skipped", { unscanned: [root] }],
+      ["the update root was never scanned", { scanned: [at(stage, 9n)] }],
       ["the update root could not be captured", { root: null }],
-    ])("is not clear when %s", (_name, over) => {
-      expect(downloadStageExtractionsGone(scan(over), root, stage)).toBe(false);
+    ])("is unknown when %s", (_name, over) => {
+      expect(downloadStageScan(scan(over), root, stage)).toBeNull();
     });
-    it("is not clear when no scan ran", () => {
-      expect(downloadStageExtractionsGone(null, root, stage)).toBe(false);
+    it("is unknown when no scan ran", () => {
+      expect(downloadStageScan(null, root, stage)).toBeNull();
     });
   });
 

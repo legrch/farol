@@ -50,6 +50,13 @@ export type ReclaimReport = Readonly<{
   kept: readonly Readonly<{ entry: string; reason: KeptReason }>[];
   unscanned: readonly string[];
   /**
+   * Each staging parent this pass actually scanned, with the directory identity
+   * it captured. A parent absent at discovery, or skipped, is not listed, so a
+   * caller that acts on one directory can tell "scanned and clear" from "never
+   * seen" and confirm the directory it later acts on is the one scanned.
+   */
+  scanned: readonly Readonly<{ path: string; dev: bigint; ino: bigint }>[];
+  /**
    * The update root as this pass captured it, for a caller that acts on the
    * outcome and must confirm the root is still that directory. Null when the
    * root itself could not be validated.
@@ -251,6 +258,7 @@ export async function reclaimExtractions(
   const reclaimed: string[] = [];
   const kept: { entry: string; reason: KeptReason }[] = [];
   const unscanned: string[] = [];
+  const scanned: { path: string; dev: bigint; ino: bigint }[] = [];
   const keep = (entry: string, reason: KeptReason) => {
     kept.push({ entry, reason });
     ports.log(`Update staging entry kept (${reason}): ${entry}`);
@@ -297,6 +305,10 @@ export async function reclaimExtractions(
         continue;
       }
       await reclaimParent(chain, entries);
+      const ref = chain[chain.length - 1]!;
+      // A parent whose removals could not be made durable was skipped above.
+      if (!unscanned.includes(parent))
+        scanned.push({ path: ref.path, dev: ref.dev, ino: ref.ino });
     } catch (error) {
       // Nothing more is removed under a parent that changed: abandon it whole.
       if (error instanceof ParentChanged) skip(parent, error.message);
@@ -397,6 +409,7 @@ export async function reclaimExtractions(
     reclaimed,
     kept,
     unscanned,
+    scanned,
     root: rootRef === null ? null : { dev: rootRef.dev, ino: rootRef.ino },
   };
 }
