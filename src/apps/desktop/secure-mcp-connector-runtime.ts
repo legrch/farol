@@ -11,6 +11,15 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  absolutePath,
+  commandBase,
+  configureArguments,
+  doctorArguments,
+  runArguments,
+  runtimeError,
+  type ConnectorCommand,
+} from "../../../apps/desktop/connector/command";
+import {
   observedConnectorChild,
   type ConnectorChild,
   type ConnectorTunnelObservation,
@@ -26,25 +35,15 @@ export type {
   ConnectorChildLifecycleObservation,
   ConnectorRuntimeLifecycleObservation,
 } from "../../../apps/desktop/connector/receipt";
+export type { ConnectorCommand } from "../../../apps/desktop/connector/command";
 export { observedConnectorChild };
 export type {
   ConnectorChild,
   ConnectorTunnelObservation,
 } from "../../../apps/desktop/connector/observe";
 
-const SAFE_PATH = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(":");
-const PROFILE = "farol";
 const HEALTH_URL_FILE = "health.url";
 const PID_FILE = "tunnel-client.pid";
-
-export type ConnectorCommand = Readonly<{
-  executablePath: string;
-  arguments: readonly string[];
-  cwd: string;
-  environment: Readonly<Record<string, string>>;
-  timeoutMs: number;
-  maxBufferBytes: number;
-}>;
 
 export type ConnectorCommandRunner = (
   command: ConnectorCommand,
@@ -118,44 +117,9 @@ export type ConnectorStartResult = Readonly<
     }
 >;
 
-function runtimeError(code: string): never {
-  throw new Error(code);
-}
-
 class ConnectorProcessNotStarted extends Error {}
 
 export class ConnectorRuntimeEffectUnknown extends Error {}
-
-function absolutePath(value: string): boolean {
-  return path.isAbsolute(value) && !value.includes("\0");
-}
-
-function shellQuote(value: string): string {
-  if (value.includes("\0") || value.includes("\n") || value.includes("\r")) {
-    runtimeError("CONNECTOR_MCP_COMMAND_INVALID");
-  }
-  return `'${value.replaceAll("'", `'\\''`)}'`;
-}
-
-function mcpCommand(input: ConfigureInput["mcp"]): string {
-  if (
-    !absolutePath(input.electronPath) ||
-    !absolutePath(input.entryPath) ||
-    !absolutePath(input.launchContractPath)
-  ) {
-    runtimeError("CONNECTOR_MCP_COMMAND_INVALID");
-  }
-  return [
-    "/usr/bin/env",
-    "ELECTRON_RUN_AS_NODE=1",
-    input.electronPath,
-    input.entryPath,
-    "--launch-contract",
-    input.launchContractPath,
-  ]
-    .map(shellQuote)
-    .join(" ");
-}
 
 const runCommand: ConnectorCommandRunner = async (command) =>
   new Promise((resolve, reject) => {
@@ -378,24 +342,12 @@ export class SecureMcpConnectorRuntime {
     await this.ensureRoots();
     const command: ConnectorCommand = {
       ...this.commandBase(input.executablePath),
-      arguments: [
-        "init",
-        "--force",
-        "--sample",
-        "sample_mcp_stdio_local",
-        "--profile",
-        PROFILE,
-        "--profile-dir",
-        this.profileRoot(),
-        "--tunnel-id",
-        input.tunnelId,
-        "--control-plane-api-key-ref",
-        input.credentialReference,
-        "--health-listen-addr",
-        "127.0.0.1:0",
-        "--mcp-command",
-        mcpCommand(input.mcp),
-      ],
+      arguments: configureArguments({
+        profileRoot: this.profileRoot(),
+        tunnelId: input.tunnelId,
+        credentialReference: input.credentialReference,
+        mcp: input.mcp,
+      }),
       timeoutMs: 15_000,
     };
     assertConnectorDispatch(input.beforeEffect);
@@ -429,15 +381,7 @@ export class SecureMcpConnectorRuntime {
     try {
       await this.run({
         ...this.commandBase(input.executablePath),
-        arguments: [
-          "doctor",
-          "--profile",
-          PROFILE,
-          "--profile-dir",
-          this.profileRoot(),
-          "--json",
-          "--explain",
-        ],
+        arguments: doctorArguments(this.profileRoot()),
         timeoutMs: 60_000,
       });
     } catch {
@@ -476,23 +420,11 @@ export class SecureMcpConnectorRuntime {
       child = await this.startProcess(
         {
           ...this.commandBase(input.executablePath),
-          arguments: [
-            "run",
-            "--profile",
-            PROFILE,
-            "--profile-dir",
-            this.profileRoot(),
-            "--health.listen-addr",
-            "127.0.0.1:0",
-            "--health.url-file",
-            this.healthUrlFile(),
-            "--pid.file",
-            this.pidFile(),
-            "--log.format",
-            "json",
-            "--log.level",
-            "info",
-          ],
+          arguments: runArguments({
+            profileRoot: this.profileRoot(),
+            healthUrlFile: this.healthUrlFile(),
+            pidFile: this.pidFile(),
+          }),
           timeoutMs: 0,
         },
         () => assertConnectorDispatch(input.beforeEffect),
@@ -842,21 +774,15 @@ export class SecureMcpConnectorRuntime {
   private commandBase(
     executablePath: string,
   ): Omit<ConnectorCommand, "arguments" | "timeoutMs"> {
-    return {
-      executablePath,
-      cwd: this.options.root,
-      environment: {
-        PATH: `${path.dirname(executablePath)}:${SAFE_PATH}`,
-        HOME: this.options.homePath,
-        TMPDIR: this.options.tempPath,
-        TUNNEL_CLIENT_STATE_DIR: this.stateRoot(),
-        NO_COLOR: "1",
-        TERM: "dumb",
-        LANG: "en_US.UTF-8",
-        LC_ALL: "en_US.UTF-8",
+    return commandBase(
+      {
+        root: this.options.root,
+        homePath: this.options.homePath,
+        tempPath: this.options.tempPath,
+        stateRoot: this.stateRoot(),
       },
-      maxBufferBytes: 256 * 1_024,
-    };
+      executablePath,
+    );
   }
 
   private validateExecutable(executablePath: string): void {
