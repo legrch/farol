@@ -10570,7 +10570,7 @@ describe("ChatGPT route cancellation binding", () => {
     candidate.admitRouteBTurn();
     Reflect.get(candidate, "routeWindow").webContents.executeJavaScript =
       executeJavaScript;
-    void candidate.runReadonlyTask("hello");
+    const turn = candidate.runReadonlyTask("hello");
     await vi.waitFor(() => expect(executeJavaScript).toHaveBeenCalled());
     const generation = Reflect.get(candidate, "taskObservationGeneration");
     const calls = executeJavaScript.mock.calls.length;
@@ -10585,6 +10585,99 @@ describe("ChatGPT route cancellation binding", () => {
     expect(Reflect.get(candidate, "taskObservationGeneration")).toBe(
       generation + 1,
     );
+    // The turn settles with the Cancel, and frees the task and the route.
+    await expect(turn).resolves.toMatchObject({
+      state: "failed_before_submit",
+    });
+    expect(Reflect.get(candidate, "taskInFlight")).toBe(false);
+    expect(Reflect.get(candidate, "activeTurn")).toBeNull();
+  });
+
+  it("takes no late readiness of a turn a Cancel ended, and never stamps its page", async () => {
+    const route = routeWith(vi.fn(), {});
+    const { candidate, marks } = route;
+    candidate.admitRouteBTurn();
+    vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
+    let late: (value: unknown) => void = () => undefined;
+    vi.spyOn(candidate, "observe").mockReturnValue(
+      new Promise((resolve) => {
+        late = resolve;
+      }) as never,
+    );
+    const turn = candidate.runReadonlyTask("hello");
+    await vi.waitFor(() => expect(candidate.observe).toHaveBeenCalled());
+    expect(await candidate.cancelActiveTask()).toBe("cancelled");
+    await turn;
+    late({ state: "authenticated" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(marks).toEqual([]);
+    expect(Reflect.get(candidate, "taskInFlight")).toBe(false);
+  });
+
+  describe("a Cancel of a turn that was not sent settles it, whatever step it waits on", () => {
+    // Each step stalls forever. The Cancel must free the task and the route in
+    // the same few ticks, with no stamp on the page and no later effect, and
+    // the next turn must be admitted at once.
+    type Route = ReturnType<typeof routeWith>;
+    const steps: [string, (route: Route) => void][] = [
+      [
+        "open",
+        ({ candidate }) => {
+          vi.spyOn(candidate, "open").mockReturnValue(
+            new Promise<never>(() => undefined),
+          );
+        },
+      ],
+      [
+        "the readiness observation",
+        ({ candidate }) => {
+          vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
+          vi.spyOn(candidate, "observe").mockReturnValue(
+            new Promise<never>(() => undefined),
+          );
+        },
+      ],
+      [
+        "a page script",
+        ({ candidate }) => {
+          vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
+          Reflect.get(candidate, "routeWindow").webContents.executeJavaScript =
+            vi.fn(() => new Promise<unknown>(() => undefined));
+        },
+      ],
+    ];
+    it.each(steps)("while it waits on %s", async (_name, stall) => {
+      const route = routeWith(vi.fn(), {});
+      const { candidate, marks } = route;
+      candidate.admitRouteBTurn();
+      stall(route);
+      const turn = candidate.runReadonlyTask("hello");
+      await vi.waitFor(() =>
+        expect(Reflect.get(candidate, "activeTurn")).not.toBeNull(),
+      );
+      // Let the turn reach its stalled step.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(Reflect.get(candidate, "taskInFlight")).toBe(true);
+      expect(await candidate.cancelActiveTask()).toBe("cancelled");
+      // Settled within a few ticks, not at the task deadline.
+      const settled = await Promise.race([
+        turn,
+        new Promise<"pending">((resolve) =>
+          setTimeout(() => resolve("pending"), 50),
+        ),
+      ]);
+      expect(settled).not.toBe("pending");
+      expect(settled).toMatchObject({ state: "failed_before_submit" });
+      expect(Reflect.get(candidate, "taskInFlight")).toBe(false);
+      expect(Reflect.get(candidate, "activeTurn")).toBeNull();
+      // Nothing was stamped on the page by the cancelled turn.
+      expect(marks).toEqual([]);
+      // The next turn is admitted at once, not refused as one in progress.
+      const next = candidate.runReadonlyTask("again");
+      expect(Reflect.get(candidate, "taskInFlight")).toBe(true);
+      await candidate.cancelActiveTask();
+      await next;
+    });
   });
 
   it("marks the page with the turn's epoch before the turn's first effect and never clears it", async () => {

@@ -48,6 +48,7 @@ import {
   preparedTaskSchema,
   taskProbeSchema,
 } from "../../../apps/desktop/chat/probe";
+import { abortable } from "../../../apps/desktop/chat/abortable";
 import { createActivityWatch } from "../../../apps/desktop/chat/activity";
 import {
   createUpdateAdmission,
@@ -474,6 +475,9 @@ export class ChatGptRoute {
     pinnedConversationUrl: string | null;
     dispatched: boolean;
   } | null = null;
+  // Ends the waits of the turn in flight when a local Cancel supersedes it
+  // before it was sent; null while no turn runs.
+  private activeTurnAbort: AbortController | null = null;
   // A Codex host thread (Route B) was admitted on this route: Farol itself
   // submits its turns from then on. It is set by the admission, however the
   // route came to exist, never by the route's creation.
@@ -653,6 +657,9 @@ export class ChatGptRoute {
       supersedeObservation: (generation) => {
         if (this.taskObservationGeneration === generation) {
           ++this.taskObservationGeneration;
+          // The turn stops waiting in the same tick, so it settles and frees
+          // the task and the route instead of waiting out a stalled step.
+          this.activeTurnAbort?.abort();
         }
       },
       observedRunning: () => this.activity.running() === true,
@@ -1636,6 +1643,16 @@ export class ChatGptRoute {
       dispatched: false,
     };
     this.activeTurn = activeTurn;
+    const abort = new AbortController();
+    this.activeTurnAbort = abort;
+    // The step of the turn that is waiting, ended when a Cancel supersedes it.
+    const unlessCancelled = <T>(work: Promise<T>): Promise<T> =>
+      abortable(work, abort.signal);
+    // Checked right before an effect on the page.
+    const throwIfCancelled = (): void => {
+      if (observationGeneration !== this.taskObservationGeneration)
+        throw new Error("CHATGPT_TASK_CANCELLED");
+    };
     const deadline = taskDeadline(
       Date.now(),
       Boolean(observer.manualSubmissionOnly),
@@ -1653,13 +1670,15 @@ export class ChatGptRoute {
       allowNavigationAfter: boolean | "response" = false,
     ) => {
       if (preparing) requireOriginalDocument();
-      return this.runTaskScript(
-        contents,
-        script,
-        gesture,
-        deadline,
-        observationGeneration,
-        allowNavigationAfter,
+      return unlessCancelled(
+        this.runTaskScript(
+          contents,
+          script,
+          gesture,
+          deadline,
+          observationGeneration,
+          allowNavigationAfter,
+        ),
       );
     };
     const observeTaskReadiness = async () => {
@@ -1667,18 +1686,24 @@ export class ChatGptRoute {
       try {
         if (Date.now() >= deadline)
           throw new Error("ChatGPT task deadline exceeded");
-        return await Promise.race([
-          this.observe(),
-          new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(
-              () => {
-                this.readiness.invalidate();
-                reject(new Error("ChatGPT task deadline exceeded"));
-              },
-              remainingMs(deadline, Date.now()),
-            );
-          }),
-        ]);
+        return await unlessCancelled(
+          Promise.race([
+            this.observe(),
+            new Promise<never>((_resolve, reject) => {
+              timer = setTimeout(
+                () => {
+                  this.readiness.invalidate();
+                  reject(new Error("ChatGPT task deadline exceeded"));
+                },
+                remainingMs(deadline, Date.now()),
+              );
+            }),
+          ]),
+        );
+      } catch (error) {
+        // A cancelled turn takes no late observation.
+        if (abort.signal.aborted) this.readiness.invalidate();
+        throw error;
       } finally {
         if (timer !== undefined) clearTimeout(timer);
       }
@@ -1704,7 +1729,8 @@ export class ChatGptRoute {
           };
     try {
       requireOriginalDocument();
-      const opened = await this.open();
+      const opened = await unlessCancelled(this.open());
+      throwIfCancelled();
       requireOriginalDocument();
       if (opened.status !== "opened") {
         return {
@@ -1716,6 +1742,7 @@ export class ChatGptRoute {
         };
       }
       const readiness = await observeTaskReadiness();
+      throwIfCancelled();
       requireOriginalDocument();
       const readinessFailure = initialReadinessRefusal(readiness);
       if (readinessFailure !== null) {
@@ -1736,6 +1763,8 @@ export class ChatGptRoute {
           outputText: observedText,
         };
       }
+      // A Cancel that ended this turn while it waited must not reach the page.
+      throwIfCancelled();
       // The page learns which turn this is before the turn's first effect on it.
       this.markTurnInPage(
         candidate.webContents,
@@ -1758,12 +1787,14 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
-        const profileFailure = await this.prepareTemporaryInstantProfile(
-          candidate,
-          profile === "temporary-instant",
-          deadline,
-          observationGeneration,
-          observer.connectionCheck ? observer.beforePrepare : undefined,
+        const profileFailure = await unlessCancelled(
+          this.prepareTemporaryInstantProfile(
+            candidate,
+            profile === "temporary-instant",
+            deadline,
+            observationGeneration,
+            observer.connectionCheck ? observer.beforePrepare : undefined,
+          ),
         );
         requireOriginalDocument();
         if (profileFailure !== null) {
@@ -1803,6 +1834,7 @@ export class ChatGptRoute {
       // A Cancel of this turn binds this identity as soon as it exists; the
       // pin below follows it.
       // Preparing the profile may have replaced the document.
+      throwIfCancelled();
       this.markTurnInPage(
         candidate.webContents,
         stampTurnScript(activeTurn.epoch),
@@ -2007,9 +2039,8 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
-        const uploaded = await uploadChatGptAttachments(
-          candidate.webContents,
-          attachments,
+        const uploaded = await unlessCancelled(
+          uploadChatGptAttachments(candidate.webContents, attachments),
         );
         if (uploaded.status === "failed") {
           return {
@@ -2034,7 +2065,7 @@ export class ChatGptRoute {
         // in-page, before it clicks.
         requireOriginalDocument();
         preparing = false;
-        await observer.onDispatchIntent?.();
+        await unlessCancelled(Promise.resolve(observer.onDispatchIntent?.()));
         const beforeAppVerification = dispatchReadinessRefusal();
         if (beforeAppVerification) return beforeAppVerification;
         if (dispatchIdentityLost()) {
@@ -2596,6 +2627,7 @@ export class ChatGptRoute {
       // The epoch is not touched: it names this turn for good, so nothing
       // that ends or follows it can look like the absence of a turn.
       if (this.activeTurn === activeTurn) this.activeTurn = null;
+      if (this.activeTurnAbort === abort) this.activeTurnAbort = null;
       this.taskInFlight = false;
     }
   }
