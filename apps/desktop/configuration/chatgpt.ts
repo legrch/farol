@@ -26,6 +26,7 @@ import type { ChatComputerAdmissionResponse } from "../bridge/wire";
 import { readAccountFailure } from "../read-account-commands";
 import { projectReadConversation } from "../read-conversation-projection";
 import { createChatgptSignin } from "./signin";
+import { createChatgptBrowser } from "./browser";
 import type {
   ChatgptConfigurationCommand,
   ConfigurationChatgptPorts,
@@ -64,12 +65,9 @@ export function createConfigurationChatgpt(ports: ConfigurationChatgptPorts) {
     chatGptTaskJournal,
     chatGptSignInOpenGeneration,
     selectedTaskId,
-    browserHomeSurfaceOpen,
-    setBrowserHomeSurfaceOpen,
     attachmentStagingReady,
     setAttachmentStagingReady,
     desktopAdmission,
-    liveTaskRoutes,
     liveTaskRegistry,
     readonlyAccountConfirmations,
     buildIdentity,
@@ -106,6 +104,8 @@ export function createConfigurationChatgpt(ports: ConfigurationChatgptPorts) {
   } = ports;
 
   const signin = createChatgptSignin(ports);
+
+  const browser = createChatgptBrowser(ports);
 
   // Main retains parsed-command admission, its settings-availability guard and
   // the deep-test commands.
@@ -428,52 +428,10 @@ export function createConfigurationChatgpt(ports: ConfigurationChatgptPorts) {
           snapshot: configuration()!.snapshot(),
         });
       }
-      case "chatgpt.open-browser": {
-        if (!embeddedBrowserEnabled() || !chatGptRoute()) {
-          return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
-        }
-        if (chatGptSignInOpenGeneration() !== null) {
-          return configurationFailure("CHATGPT_SIGN_IN_IN_PROGRESS");
-        }
-        if (
-          desktopAdmission.occupied("chatgpt-task") ||
-          desktopAdmission.occupied("connector-task")
-        ) {
-          return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
-        }
-        setBrowserHomeSurfaceOpen(true);
-        applyLayout();
-        let opened: Awaited<ReturnType<ChatGptRoute["open"]>>;
-        try {
-          opened = await chatGptRoute()!.retryFailedOpen();
-        } catch {
-          opened = { status: "unreachable" };
-        }
-        if (opened.status !== "opened") {
-          applyLayout();
-          return configurationFailure("CHATGPT_PAGE_UNREACHABLE");
-        }
-        return ProductConfigurationResultSchema.parse({
-          ok: true,
-          snapshot: configuration()!.snapshot(),
-        });
-      }
-      case "chatgpt.toggle-sidebar": {
-        const visibleRoute =
-          browserHomeSurfaceOpen() && selectedTaskId() === ""
-            ? chatGptRoute()
-            : liveTaskRoutes.get(selectedTaskId());
-        if (!embeddedBrowserEnabled() || !visibleRoute) {
-          return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
-        }
-        if (!(await visibleRoute.toggleSidebar())) {
-          return configurationFailure("CHATGPT_PAGE_UNREACHABLE");
-        }
-        return ProductConfigurationResultSchema.parse({
-          ok: true,
-          snapshot: configuration()!.snapshot(),
-        });
-      }
+      case "chatgpt.present-browser":
+      case "chatgpt.open-browser":
+      case "chatgpt.toggle-sidebar":
+        return browser.configureBrowser(command);
       case "chatgpt.prepare-attachment-task": {
         if (!chatGptRoute()) {
           return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
