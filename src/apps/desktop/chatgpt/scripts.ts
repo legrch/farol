@@ -346,21 +346,16 @@ export function cancelBindingPath(url: string): string | null {
   }
 }
 
-// Stamps the window with `token` and answers the path it is on. With an
-// expected path the page must already be on it; without one, whatever page is
-// shown now is the document the cancellation binds. A page on another path is
-// refused untouched (`navigated`).
-export function cancelBindScript(
-  expectedPath: string | null,
-  token: string,
-): string {
-  const guard =
-    expectedPath === null
-      ? ""
-      : `if (path !== ${JSON.stringify(expectedPath)}) return { navigated: true };`;
+// Stamps the window with `token` and answers the path it is on, but only
+// while the page is still on `expectedPath`: the path the caller captured when
+// the Cancel started, or the one the turn in flight relies on. A page on any
+// other path is refused untouched (`navigated`), before any stamp. The path is
+// never read from the page here, so a navigation between the start of the
+// Cancel and this script cannot become the binding.
+export function cancelBindScript(expectedPath: string, token: string): string {
   return `(() => {
   const path = ${cancelPathExpression};
-  ${guard}
+  if (path !== ${JSON.stringify(expectedPath)}) return { navigated: true };
   Object.defineProperty(window, ${cancelDocumentKey}, { value: ${JSON.stringify(token)}, configurable: true });
   return { bound: true, path };
 })()`;

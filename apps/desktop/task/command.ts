@@ -13,6 +13,7 @@ import type {
 } from "../../../src/apps/desktop/product-agent-store";
 import type { ProductConfigurationService } from "../../../src/apps/desktop/product-configuration";
 import type { RouteBTaskLifecycle } from "../../../src/apps/desktop/route-b-task-lifecycle";
+import type { TurnLifecycle } from "./turns";
 import type {
   ShellOverlay,
   SurfaceSection,
@@ -120,6 +121,7 @@ export type TaskCommandsPorts<Result> = Readonly<{
   productAgentStore: () => PrivateProductAgentStore | null;
   chatGptRoute: () => unknown;
   routeBTaskLifecycle: Pick<RouteBTaskLifecycle, "close">;
+  turnLifecycle: Pick<TurnLifecycle, "startCancel" | "finishCancel">;
   buildId: string;
   randomUUID: () => string;
   now: () => number;
@@ -179,6 +181,7 @@ export function createTaskCommands<Result>(ports: TaskCommandsPorts<Result>) {
     productAgentStore,
     chatGptRoute,
     routeBTaskLifecycle,
+    turnLifecycle,
     buildId,
     randomUUID,
     now,
@@ -489,6 +492,9 @@ export function createTaskCommands<Result>(ports: TaskCommandsPorts<Result>) {
         }
         const route = liveTaskRoutes.get(command.data.taskId);
         if (!route) return taskFailure("TASK_NOT_FOUND");
+        // The turn this Cancel is for is taken now, in the tick the route
+        // starts its own capture.
+        const ticket = turnLifecycle.startCancel(command.data.taskId);
         const result = await route.cancelActiveTask();
         if (result === "not_running") return taskFailure("TASK_NOT_RUNNING");
         // The page is not the one this Cancel is bound to: nothing was
@@ -498,14 +504,18 @@ export function createTaskCommands<Result>(ports: TaskCommandsPorts<Result>) {
         }
         const lifecycle =
           result === "cancelled" ? "cancelled" : "outcome_unknown";
-        liveTaskRegistry.setLifecycle(command.data.taskId, lifecycle);
-        publishTasksState();
-        try {
-          await persistLiveTaskState();
-        } catch {
-          setLiveTaskStore(null);
-          surfaceLiveTaskPersistenceFailure(command.data.taskId);
-          return taskFailure("TASK_STATE_UNAVAILABLE");
+        // A turn that has settled on its own, or been replaced, keeps what it
+        // has: this Cancel's result is reported but not written over it.
+        if (turnLifecycle.finishCancel(ticket, lifecycle)) {
+          liveTaskRegistry.setLifecycle(command.data.taskId, lifecycle);
+          publishTasksState();
+          try {
+            await persistLiveTaskState();
+          } catch {
+            setLiveTaskStore(null);
+            surfaceLiveTaskPersistenceFailure(command.data.taskId);
+            return taskFailure("TASK_STATE_UNAVAILABLE");
+          }
         }
         return result === "cancelled"
           ? taskSuccess(command.data.taskId)

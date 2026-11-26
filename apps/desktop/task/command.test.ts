@@ -23,6 +23,7 @@ import {
   ProductTaskCommandSchema,
   type ProductTask,
 } from "../../../src/modules/chat/contract/product-task";
+import { createTurnLifecycle } from "./turns";
 import {
   createTaskCommands,
   type TaskCommandError,
@@ -262,6 +263,18 @@ async function build(
     setTitle: (title) => log(`title:${id}:${title}`),
     cancelActiveTask: vi.fn(async () => "cancelled" as const),
   });
+  // The real turn lifecycle: the route's `settled` writes the registry, as in
+  // main, and a thread's turn is admitted through `turns.surfaces`.
+  const turns = createTurnLifecycle({
+    surfaceFor: async () => ({
+      ok: true,
+      surface: fakeRoute("thread") as never,
+    }),
+    apply: (taskId, lifecycle) => {
+      log(`settled:${lifecycle}`);
+      registry.setLifecycle(taskId, lifecycle);
+    },
+  });
   const ports: Ports = {
     parseCommand: (value) => ProductTaskCommandSchema.safeParse(value),
     taskFailure: (error) => ({ ok: false, error }),
@@ -316,6 +329,7 @@ async function build(
     }),
     productAgentStore: () => state.agentStore,
     chatGptRoute: () => state.route,
+    turnLifecycle: turns,
     routeBTaskLifecycle: {
       close: async (taskId) => {
         log(`close:${taskId}`);
@@ -378,6 +392,7 @@ async function build(
     gate,
     state,
     agentStore,
+    turns,
     failure,
     run: (value: unknown) => commands.run(value),
   };
@@ -839,6 +854,90 @@ describe("task.cancel", () => {
     // Once finished, a later Cancel is a new one.
     await h.run({ kind: "task.cancel", taskId: only.taskId });
     expect(cancelActiveTask).toHaveBeenCalledTimes(2);
+  });
+
+  describe("against a Codex thread's own turn settling", () => {
+    // A thread's turn is admitted, cancelled and settled through the real turn
+    // lifecycle. What differs per case is only the order the route reports in.
+    async function thread(
+      cancelActiveTask: (
+        h: Awaited<ReturnType<typeof build>>,
+      ) => Promise<"cancelled" | "outcome_unknown">,
+    ) {
+      const only = task(1, { lifecycle: "running" });
+      const h = await build({ tasks: [only] });
+      h.routes.set(only.taskId, {
+        setTitle: () => undefined,
+        cancelActiveTask: () => cancelActiveTask(h),
+      });
+      await h.turns.surfaces.surfaceFor(only.taskId);
+      h.events.length = 0;
+      const settle = (state: "completed" | "outcome_unknown") =>
+        h.turns.surfaces.settled?.(only.taskId, state);
+      return { h, only, settle };
+    }
+
+    it("keeps a cancelled turn cancelled when it settles afterwards", async () => {
+      const { h, only, settle } = await thread(async () => "cancelled");
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        { ok: true, selectedTaskId: only.taskId },
+      );
+      await settle("outcome_unknown");
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("cancelled");
+      expect(h.events).toEqual(["admission", "publishTasks", "persist"]);
+    });
+
+    it("ends cancelled when the aborted turn settles before the stop is confirmed", async () => {
+      const { h, only, settle } = await thread(async (target) => {
+        await settle("outcome_unknown");
+        expect(target.registry.get(only.taskId)?.lifecycle).toBe(
+          "outcome_unknown",
+        );
+        return "cancelled";
+      });
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        { ok: true, selectedTaskId: only.taskId },
+      );
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("cancelled");
+      await settle("outcome_unknown");
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("cancelled");
+    });
+
+    it("does not overwrite a turn that settled on its own with an unknown Cancel", async () => {
+      const { h, only, settle } = await thread(async () => {
+        await settle("completed");
+        return "outcome_unknown";
+      });
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure("TASK_CANCEL_FAILED"),
+      );
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("idle");
+      expect(h.events).toEqual(["admission", "settled:idle"]);
+    });
+
+    it("writes nothing for a turn that the next one has replaced, and settles the next normally", async () => {
+      const { h, only, settle } = await thread(async (target) => {
+        await settle("completed");
+        await target.turns.surfaces.surfaceFor(only.taskId);
+        return "cancelled";
+      });
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        { ok: true, selectedTaskId: only.taskId },
+      );
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("idle");
+      expect(h.events).toEqual(["admission", "settled:idle"]);
+      await settle("outcome_unknown");
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
+    });
+
+    it("settles the turn after a cancelled one as usual", async () => {
+      const { h, only, settle } = await thread(async () => "cancelled");
+      await h.run({ kind: "task.cancel", taskId: only.taskId });
+      await settle("outcome_unknown");
+      await h.turns.surfaces.surfaceFor(only.taskId);
+      await settle("completed");
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("idle");
+    });
   });
 
   it("records a cancelled turn, publishes and saves", async () => {

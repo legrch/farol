@@ -139,12 +139,13 @@ export function createConversationUrls<Contents extends ConversationContents>(
 
 // Cancelling a task --------------------------------------------------------
 
-// `page_changed`: the page shown is not the one this Cancel is bound to, and
-// nothing was clicked, superseded or recorded.
+// `page_changed`: the page shown, or the turn in flight, is not the one this
+// Cancel started on, and nothing was clicked, superseded or recorded.
 export type TaskCancelOutcome =
   "cancelled" | "not_running" | "outcome_unknown" | "page_changed";
 
 export type TaskCancelContents = Readonly<{
+  getURL: () => string;
   executeJavaScript: (script: string, gesture?: boolean) => Promise<unknown>;
 }>;
 
@@ -153,11 +154,13 @@ export type TaskCancelSurface<Contents extends TaskCancelContents> = Readonly<{
   isDestroyed: () => boolean;
 }>;
 
-// The identity a Route B turn in flight relies on for its own answer: the
-// address it was sent from, and the conversation it pinned once the page showed
-// the one it created.
+// The identity a Route B turn in flight relies on for its own answer. The
+// generation is the turn's own observation generation: no other turn has it.
+// The address it was sent from is not known while the turn still prepares, and
+// no conversation is pinned until the page shows the one the turn created.
 export type TaskCancelTurn = Readonly<{
-  dispatchIdentityUrl: string;
+  generation: number;
+  dispatchIdentityUrl: string | null;
   pinnedConversationUrl: string | null;
 }>;
 
@@ -167,8 +170,12 @@ export type TaskCancelPorts<
 > = Readonly<{
   surface: () => Surface | null;
   loaded: () => boolean;
-  // The route's own write: any observation under way is no longer current.
-  supersedeObservation: () => void;
+  // The route's observation generation, read at call time.
+  observation: () => number;
+  // The route's own write: the observation of `generation` is no longer
+  // current. It moves the route only while the route is still at `generation`,
+  // so a turn that began since is never ended by this.
+  supersedeObservation: (generation: number) => void;
   // The activity watch last saw the task running.
   observedRunning: () => boolean;
   // Farol submitted this task's turns: it was admitted as a Codex host thread.
@@ -208,132 +215,156 @@ const PAGE_CALL_TIMED_OUT = Symbol("page-call-timed-out");
  * task stopped. An unreadable answer, a lost page or a control that never
  * activated for a running task is `outcome_unknown`, never `cancelled`.
  *
- * A Cancel is bound to one document, and its binding key is the page's whole
- * main-frame path. A turn Farol itself has in flight on a Codex host thread
- * (Route B) binds the path of the conversation the turn pinned, otherwise the
- * address it was sent from: the identity the turn relies on for its own
- * answer, so the Cancel is never weaker than the turn. Every other task (an
- * owner Browser task, a restored task, a turn the owner typed) binds the page
- * shown when the Cancel starts. One script reads that path and stamps the
- * window together; every click and every confirmation then requires both in
- * the page, so a page that moved (the path) or was replaced (the stamp) is
- * never clicked and never answers for the task. Each click is a script of its
- * own with a token it spends first and an expiry before the page-call
- * deadline.
+ * Everything a Cancel binds to is captured, synchronously, when it starts: the
+ * main-frame path of the page shown (read on the main side, not by a script
+ * that runs later), the route's observation generation and, for a task Farol
+ * admitted as a Codex host thread (Route B), the turn in flight. That turn
+ * binds the path of the conversation it pinned, otherwise the address it was
+ * sent from, otherwise the page shown while it still prepares: the identity
+ * the turn relies on for its own answer, so the Cancel is never weaker than
+ * the turn. Every other task (an owner Browser task, a restored task, a turn
+ * the owner typed) binds the page shown at the start.
  *
- * A page that moved before any click is `page_changed`: nothing was clicked,
- * and the observation is not superseded. After a click may have happened, a
- * moved page is `outcome_unknown`. A call that stalls past its deadline is
- * `outcome_unknown` too. Cancel is single-flight: a second call while one runs
- * is that one's result.
+ * One script stamps the window while the page is still on that path; every
+ * click and every confirmation then requires path and stamp in the page, so a
+ * page that moved or was replaced is never clicked and never answers for the
+ * task. Each click is a script of its own with a token it spends first and an
+ * expiry before the page-call deadline. Before every click and before the
+ * observation is superseded, the same turn must still be the one in flight.
+ *
+ * A page or turn that changed before any click is `page_changed`: nothing was
+ * clicked, and the observation is not superseded. After a click may have
+ * happened, a moved page or a changed turn is `outcome_unknown`, and a turn
+ * that is no longer the one in flight is never superseded. A call that stalls
+ * past its deadline is `outcome_unknown` too. Cancel is single-flight: a
+ * second call while one runs is that one's result.
  */
 export function createTaskCanceller<
   Contents extends TaskCancelContents,
   Surface extends TaskCancelSurface<Contents>,
 >(ports: TaskCancelPorts<Contents, Surface>): () => Promise<TaskCancelOutcome> {
-  const cancelBound = async (
-    supersede: () => void,
-  ): Promise<TaskCancelOutcome> => {
+  const run = async (): Promise<TaskCancelOutcome> => {
+    // The start of this Cancel. Nothing is awaited before it is captured.
+    const startGeneration = ports.observation();
     const candidate = ports.surface();
-    if (!candidate || candidate.isDestroyed() || !ports.loaded()) {
-      return "not_running";
-    }
+    const startUrl =
+      candidate && !candidate.isDestroyed()
+        ? candidate.webContents.getURL()
+        : null;
     const turn = ports.admittedAsRouteB() ? ports.turn() : null;
-    let expectedPath: string | null = null;
-    if (turn !== null) {
-      expectedPath = cancelBindingPath(
-        turn.pinnedConversationUrl ?? turn.dispatchIdentityUrl,
+    const turnCurrent = (): boolean =>
+      turn === null || ports.turn()?.generation === turn.generation;
+    let superseded = false;
+    // Ends the observation of the turn this Cancel started on, once, and never
+    // one that has since been replaced.
+    const supersede = (): void => {
+      if (superseded || !turnCurrent()) return;
+      superseded = true;
+      ports.supersedeObservation(startGeneration);
+    };
+
+    const cancelBound = async (): Promise<TaskCancelOutcome> => {
+      if (
+        !candidate ||
+        startUrl === null ||
+        candidate.isDestroyed() ||
+        !ports.loaded()
+      ) {
+        return "not_running";
+      }
+      const expectedPath = cancelBindingPath(
+        turn === null
+          ? startUrl
+          : (turn.pinnedConversationUrl ??
+              turn.dispatchIdentityUrl ??
+              startUrl),
       );
       if (expectedPath === null) return "page_changed";
-    }
-    const alive = (): boolean =>
-      ports.surface() === candidate && !candidate.isDestroyed();
-    const pageCall = async (script: string): Promise<unknown> => {
-      let cancelTimer: (() => void) | undefined;
+      const alive = (): boolean =>
+        ports.surface() === candidate && !candidate.isDestroyed();
+      const pageCall = async (script: string): Promise<unknown> => {
+        let cancelTimer: (() => void) | undefined;
+        try {
+          return await Promise.race([
+            candidate.webContents.executeJavaScript(script, true),
+            new Promise<typeof PAGE_CALL_TIMED_OUT>((resolve) => {
+              cancelTimer = ports.after(
+                () => resolve(PAGE_CALL_TIMED_OUT),
+                STOP_PAGE_CALL_DEADLINE_MS,
+              );
+            }),
+          ]);
+        } finally {
+          cancelTimer?.();
+        }
+      };
       try {
-        return await Promise.race([
-          candidate.webContents.executeJavaScript(script, true),
-          new Promise<typeof PAGE_CALL_TIMED_OUT>((resolve) => {
-            cancelTimer = ports.after(
-              () => resolve(PAGE_CALL_TIMED_OUT),
-              STOP_PAGE_CALL_DEADLINE_MS,
-            );
-          }),
-        ]);
-      } finally {
-        cancelTimer?.();
-      }
-    };
-    try {
-      const documentToken = ports.newToken();
-      const bound = cancelBoundSchema.safeParse(
-        await pageCall(cancelBindScript(expectedPath, documentToken)),
-      );
-      if (!bound.success || !alive()) return "outcome_unknown";
-      // The page is not the one the turn relies on: nothing was touched.
-      if ("navigated" in bound.data) return "page_changed";
-      const path = bound.data.path;
-      const wasObservedRunning = ports.observedRunning();
-      const activationAttempts = wasObservedRunning
-        ? STOP_ACTIVATION_ATTEMPTS
-        : 1;
-      let stopActivated = false;
-      for (let attempt = 0; attempt < activationAttempts; attempt += 1) {
-        if (!alive()) return "outcome_unknown";
-        const activated = cancelActivationSchema.safeParse(
-          await pageCall(
-            cancelTaskScript(
-              path,
-              documentToken,
-              ports.newToken(),
-              ports.now() + STOP_SCRIPT_EXPIRY_MS,
+        if (!turnCurrent()) return "page_changed";
+        const documentToken = ports.newToken();
+        const bound = cancelBoundSchema.safeParse(
+          await pageCall(cancelBindScript(expectedPath, documentToken)),
+        );
+        if (!bound.success || !alive()) return "outcome_unknown";
+        // The page is not the one this Cancel started on: nothing was touched.
+        if ("navigated" in bound.data) return "page_changed";
+        const path = bound.data.path;
+        const wasObservedRunning = ports.observedRunning();
+        const activationAttempts = wasObservedRunning
+          ? STOP_ACTIVATION_ATTEMPTS
+          : 1;
+        let stopActivated = false;
+        for (let attempt = 0; attempt < activationAttempts; attempt += 1) {
+          if (!alive()) return "outcome_unknown";
+          // Another turn took the place of the one this Cancel was for.
+          if (!turnCurrent()) return "page_changed";
+          const activated = cancelActivationSchema.safeParse(
+            await pageCall(
+              cancelTaskScript(
+                path,
+                documentToken,
+                ports.newToken(),
+                ports.now() + STOP_SCRIPT_EXPIRY_MS,
+              ),
             ),
-          ),
-        );
-        // An unreadable or unanswered click may have happened.
-        if (!activated.success || !alive()) return "outcome_unknown";
-        // The page itself refused: no click happened on another page.
-        if ("navigated" in activated.data) return "page_changed";
-        if ("expired" in activated.data) return "outcome_unknown";
-        if (activated.data.activated) {
-          stopActivated = true;
-          // The click is verified and spent: only now is the turn's
-          // observation ended.
-          supersede();
-          break;
+          );
+          // An unreadable or unanswered click may have happened.
+          if (!activated.success || !alive()) return "outcome_unknown";
+          // The page itself refused: no click happened on another page.
+          if ("navigated" in activated.data) return "page_changed";
+          if ("expired" in activated.data) return "outcome_unknown";
+          if (activated.data.activated) {
+            // The click happened. If its turn is gone, whatever now runs is
+            // not this Cancel's to end.
+            if (!turnCurrent()) return "outcome_unknown";
+            stopActivated = true;
+            supersede();
+            break;
+          }
+          if (!wasObservedRunning) return "not_running";
+          await ports.delay(STOP_ACTIVATION_GAP_MS);
         }
-        if (!wasObservedRunning) return "not_running";
-        await ports.delay(STOP_ACTIVATION_GAP_MS);
-      }
-      if (!stopActivated) return "outcome_unknown";
-      for (let attempt = 0; attempt < STOP_CONFIRMATION_POLLS; attempt += 1) {
-        await ports.delay(STOP_CONFIRMATION_GAP_MS);
-        if (!alive()) return "outcome_unknown";
-        const observed = cancelConfirmationSchema.safeParse(
-          await pageCall(cancelConfirmationProbe(path, documentToken)),
-        );
-        if (!observed.success || !alive()) return "outcome_unknown";
-        // Another document is never an answer about this task.
-        if ("navigated" in observed.data) return "outcome_unknown";
-        if (!observed.data.running) {
-          ports.recordStopped(candidate.webContents);
-          return "cancelled";
+        if (!stopActivated) return "outcome_unknown";
+        for (let attempt = 0; attempt < STOP_CONFIRMATION_POLLS; attempt += 1) {
+          await ports.delay(STOP_CONFIRMATION_GAP_MS);
+          if (!alive()) return "outcome_unknown";
+          const observed = cancelConfirmationSchema.safeParse(
+            await pageCall(cancelConfirmationProbe(path, documentToken)),
+          );
+          if (!observed.success || !alive()) return "outcome_unknown";
+          // Another document is never an answer about this task.
+          if ("navigated" in observed.data) return "outcome_unknown";
+          if (!observed.data.running) {
+            ports.recordStopped(candidate.webContents);
+            return "cancelled";
+          }
         }
+        return "outcome_unknown";
+      } catch {
+        return "outcome_unknown";
       }
-      return "outcome_unknown";
-    } catch {
-      return "outcome_unknown";
-    }
-  };
-
-  const run = async (): Promise<TaskCancelOutcome> => {
-    let superseded = false;
-    const supersede = (): void => {
-      if (superseded) return;
-      superseded = true;
-      ports.supersedeObservation();
     };
-    const outcome = await cancelBound(supersede);
+
+    const outcome = await cancelBound();
     // A refusal leaves a turn in flight observed; every other answer ends it.
     if (outcome !== "page_changed") supersede();
     return outcome;

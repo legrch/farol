@@ -466,9 +466,11 @@ export class ChatGptRoute {
   private disposing = false;
   private taskInFlight = false;
   // The identity the turn in flight relies on, while one runs; see
-  // `TaskCancelTurn`. Written only by `runReadonlyTask`.
+  // `TaskCancelTurn`. Written only by `runReadonlyTask`, from the start of its
+  // preparation to its end.
   private activeTurn: {
-    dispatchIdentityUrl: string;
+    readonly generation: number;
+    dispatchIdentityUrl: string | null;
     pinnedConversationUrl: string | null;
   } | null = null;
   private taskObservationGeneration = 0;
@@ -630,8 +632,13 @@ export class ChatGptRoute {
     this.cancelTask = createTaskCanceller<WebContents, ChatGptRouteSurface>({
       surface: () => this.routeWindow,
       loaded: () => this.load === "loaded",
-      supersedeObservation: () => {
-        ++this.taskObservationGeneration;
+      observation: () => this.taskObservationGeneration,
+      // Only the observation the Cancel started on is ended: a turn that began
+      // since has moved the generation on and keeps running.
+      supersedeObservation: (generation) => {
+        if (this.taskObservationGeneration === generation) {
+          ++this.taskObservationGeneration;
+        }
       },
       observedRunning: () => this.activity.running() === true,
       admittedAsRouteB: () => this.options.routeBTask === true,
@@ -1600,6 +1607,14 @@ export class ChatGptRoute {
     };
     timing("started");
     const observationGeneration = ++this.taskObservationGeneration;
+    // A Cancel binds this turn from here on, before the first page effect. The
+    // address it was sent from is added once it exists.
+    const activeTurn = {
+      generation: observationGeneration,
+      dispatchIdentityUrl: null as string | null,
+      pinnedConversationUrl: null as string | null,
+    };
+    this.activeTurn = activeTurn;
     const deadline = taskDeadline(
       Date.now(),
       Boolean(observer.manualSubmissionOnly),
@@ -1759,16 +1774,13 @@ export class ChatGptRoute {
       // acknowledged, the page is already committed and the poll loop below
       // owns tracking it from there.
       const dispatchIdentityUrl = candidate.webContents.getURL();
-      // A Cancel of this turn binds this identity, so it is published as soon
-      // as it exists and follows the pin below.
-      const activeTurn = {
+      // A Cancel of this turn binds this identity as soon as it exists; the
+      // pin below follows it.
+      activeTurn.dispatchIdentityUrl = dispatchIdentityUrl;
+      activeTurn.pinnedConversationUrl = canonicalChatGptConversationUrl(
         dispatchIdentityUrl,
-        pinnedConversationUrl: canonicalChatGptConversationUrl(
-          dispatchIdentityUrl,
-          this.options.e2eOrigin,
-        ),
-      };
-      this.activeTurn = activeTurn;
+        this.options.e2eOrigin,
+      );
       const dispatchDocumentGeneration = this.routeDocumentGeneration;
       const dispatchIdentityLost = (): boolean => {
         const active = this.routeWindow;
@@ -2529,7 +2541,7 @@ export class ChatGptRoute {
       };
     } finally {
       timing("finished");
-      this.activeTurn = null;
+      if (this.activeTurn === activeTurn) this.activeTurn = null;
       this.taskInFlight = false;
     }
   }
