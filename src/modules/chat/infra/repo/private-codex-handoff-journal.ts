@@ -3,77 +3,58 @@ import { z } from "zod";
 import { constants, linkSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createHash, randomUUID } from "node:crypto";
-import { TaskModelBindingSchema } from "../../../../pkg/owner-config/contract";
+import { randomUUID } from "node:crypto";
 
 import type {
   HandoffJournal,
   HandoffRecord,
 } from "../../app/service/persistent-codex-handoff";
-
-const PreferencePath = z
-  .string()
-  .max(4096)
-  .refine(
-    (value) =>
-      value.startsWith("/") &&
-      !value.endsWith("/") &&
-      !value.includes("\\") &&
-      value
-        .split("/")
-        .slice(1)
-        .every(
-          (part) =>
-            part !== "" &&
-            part !== "." &&
-            part !== ".." &&
-            !/[\u0000-\u001f\u007f]/u.test(part),
-        ),
-  );
-const ProjectPreferenceRecordSchema = z.strictObject({
-  projectId: z.string().regex(/^[A-Za-z0-9_-]{1,120}$/u),
-  project: z.strictObject({
-    root: PreferencePath,
-    device: z.string().regex(/^[0-9]+$/u),
-    inode: z.string().regex(/^[0-9]+$/u),
-    gitCommonDirectory: PreferencePath,
-  }),
-});
-
-const ProjectPreferenceSelectionSchema = z.strictObject({
-  key: z
-    .string()
-    .regex(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-    ),
-});
-
-const CatalogueObservationSchema = z.strictObject({
-  modelId: z
-    .string()
-    .min(1)
-    .max(160)
-    .regex(/^[^\s\u0000-\u001f\u007f]+$/u),
-  observedAt: z.number().int().nonnegative().safe(),
-  scope: z
-    .string()
-    .min(1)
-    .max(240)
-    .regex(/^[^\s\u0000-\u001f\u007f]+$/u),
-});
-
-const DispatchAttemptSchema = z.strictObject({
-  attempt: z.number().int().min(0).max(31),
-});
-const MAX_DISPATCH_ATTEMPTS = 32;
+import {
+  continuationBindingMatches,
+  continuationBroken,
+  continuationUnresolved,
+  directoryUnsafe,
+  dispatchOpen,
+  fileChanged,
+  fileUnsafe,
+  hasDispatchProgress,
+  identityChanged,
+  inodeChanged,
+  intentOrderBroken,
+  selectionInventoryInvalid,
+  titleReceiptMismatch,
+} from "./journalintegrity";
+import {
+  dispatchDirectory,
+  isDispatchRecordFile,
+  isPreferenceRootEntry,
+  isTemporaryAlias,
+  MAX_DISPATCH_FILES,
+  MAX_ROOT_ENTRIES,
+  preferenceFile,
+  preferenceSelectionDirectory,
+  selectionEntryUnexpected,
+  selectionPublished,
+  selectionSlotName,
+  selectionSlots,
+  selectionWitnessName,
+  selectionWitnesses,
+  validKey,
+} from "./journallayout";
+import {
+  DispatchAttemptSchema,
+  isDigest,
+  isIntentBinding,
+  isRecordObject,
+  MAX_DISPATCH_ATTEMPTS,
+  parseReservation,
+  ProjectPreferenceRecordSchema,
+  ProjectPreferenceSelectionSchema,
+  stringRecord,
+} from "./journalrecords";
+import { buildHandoffRecord, messageState } from "./journalresults";
 
 const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
-
-function validKey(key: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
-    key,
-  );
-}
 
 async function syncDirectory(directory: string): Promise<void> {
   const handle = await fs.open(
@@ -162,12 +143,8 @@ async function readPrivate(
     if (stat.nlink === 2) {
       const directory = path.dirname(file);
       const basename = path.basename(file);
-      const aliases = (await fs.readdir(directory)).filter(
-        (name) =>
-          name.startsWith(`${basename}.`) &&
-          /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/iu.test(
-            name.slice(basename.length + 1),
-          ),
+      const aliases = (await fs.readdir(directory)).filter((name) =>
+        isTemporaryAlias(basename, name),
       );
       for (const name of aliases) {
         const alias = await fs.lstat(path.join(directory, name));
@@ -183,24 +160,13 @@ async function readPrivate(
         }
       }
     }
-    if (
-      !stat.isFile() ||
-      (stat.nlink !== 1 && !publishedPair) ||
-      (stat.mode & 0o077) !== 0 ||
-      stat.uid !== process.geteuid?.() ||
-      stat.size > 4_096
-    ) {
+    if (fileUnsafe(stat, publishedPair, process.geteuid?.())) {
       throw new Error("HANDOFF_JOURNAL_UNSAFE");
     }
     const bytes = Buffer.alloc(4_097);
     const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
     const after = await handle.stat();
-    if (
-      bytesRead !== stat.size ||
-      stat.size !== after.size ||
-      stat.mtimeMs !== after.mtimeMs ||
-      stat.ctimeMs !== after.ctimeMs
-    )
+    if (fileChanged(stat, after, bytesRead))
       throw new Error("HANDOFF_JOURNAL_CHANGED");
     const value = JSON.parse(
       bytes.subarray(0, bytesRead).toString("utf8"),
@@ -212,13 +178,6 @@ async function readPrivate(
   } finally {
     await handle.close();
   }
-}
-
-function stringRecord(value: unknown): string {
-  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,120}$/u.test(value)) {
-    throw new Error("HANDOFF_JOURNAL_INVALID");
-  }
-  return value;
 }
 
 export class PrivateCodexHandoffJournal implements HandoffJournal {
@@ -235,13 +194,9 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
     let count = 0;
     const directory = await fs.opendir(this.root);
     for await (const entry of directory) {
-      if (++count > 4096) throw new Error("HANDOFF_JOURNAL_SCAN_LIMIT");
-      if (
-        /^project-preference-(?:[a-f0-9-]{36}\.json|selections-[a-f0-9]{64})$/u.test(
-          entry.name,
-        )
-      )
-        continue;
+      if (++count > MAX_ROOT_ENTRIES)
+        throw new Error("HANDOFF_JOURNAL_SCAN_LIMIT");
+      if (isPreferenceRootEntry(entry.name)) continue;
       if (!validKey(entry.name))
         throw new Error("HANDOFF_JOURNAL_UNEXPECTED_ENTRY");
       const child = path.join(this.root, entry.name);
@@ -252,12 +207,7 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
       for await (const file of await fs.opendir(child)) {
         // Only complete published records participate. A leftover temporary or
         // unknown record may hide an interrupted dispatch and is not discarded.
-        if (
-          ++files > 80 ||
-          !/^(?:reservation|thread-intent|thread|turn-intent|turn|continuation-child|continuation-verified|message-intent|message|title-intent|title|(?:dispatch-attempt|pre-effect-proof)-(?:[0-9]|[12][0-9]|3[01]))\.json$/u.test(
-            file.name,
-          )
-        )
+        if (++files > MAX_DISPATCH_FILES || !isDispatchRecordFile(file.name))
           throw new Error("HANDOFF_JOURNAL_UNEXPECTED_ENTRY");
         if ((await readPrivate(path.join(child, file.name), true)) === null)
           throw new Error("HANDOFF_JOURNAL_CHANGED");
@@ -278,40 +228,22 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
           .strictObject({ key: z.string().uuid(), turnId: z.string() })
           .parse(continuation);
         const next = await this.read(parsed.key);
-        if (
-          parsed.turnId !== record.turnId ||
-          !next?.continuationVerified ||
-          next.continuedFrom !== entry.name ||
-          next.threadId !== record.threadId
-        )
+        if (continuationUnresolved(parsed, record, next, entry.name))
           throw new Error("HANDOFF_JOURNAL_UNRESOLVED");
       }
       // A reservation before any dispatch has no remote effect. Once an intent
       // exists, only the normal exact-identity status path may establish idle.
-      if (
-        files > 1 ||
-        record.threadIntent ||
-        record.turnIntent ||
-        record.threadId ||
-        record.turnId
-      )
-        keys.push(entry.name);
+      if (hasDispatchProgress(files, record)) keys.push(entry.name);
       const childAfter = await this.verifyPreferenceDirectory(child);
       if (
-        childBefore.dev !== childAfter.dev ||
-        childBefore.ino !== childAfter.ino ||
-        childBefore.mtimeMs !== childAfter.mtimeMs ||
-        childBefore.ctimeMs !== childAfter.ctimeMs ||
+        identityChanged(childBefore, childAfter) ||
         (await fs.realpath(child)) !== child
       )
         throw new Error("HANDOFF_JOURNAL_CHANGED");
     }
     const after = await fs.lstat(this.root);
     if (
-      before.dev !== after.dev ||
-      before.ino !== after.ino ||
-      before.mtimeMs !== after.mtimeMs ||
-      before.ctimeMs !== after.ctimeMs ||
+      identityChanged(before, after) ||
       (await fs.realpath(this.root)) !== this.root ||
       !(await this.verifyRoot())
     )
@@ -331,11 +263,7 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
   private async readExistingProjectPreference(
     key: string,
   ): Promise<ProjectPreferenceRecord | null> {
-    const value = await readPrivate(
-      path.join(this.root, `project-preference-${key.toLowerCase()}.json`),
-      true,
-      true,
-    );
+    const value = await readPrivate(preferenceFile(this.root, key), true, true);
     return value === null ? null : ProjectPreferenceRecordSchema.parse(value);
   }
 
@@ -363,24 +291,15 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
     await this.verifyPreferenceDirectory(directory);
-    const slot = path.join(
-      directory,
-      `${String(sequence).padStart(6, "0")}.json`,
-    );
+    const slot = path.join(directory, selectionSlotName(sequence));
     // Publish intent first. Missing/corrupt receipt blocks lookup and further
     // selections; it can never turn into an implicit fallback to an old choice.
     if (!(await writeOnce(slot, { key: key.toLowerCase() })))
       throw new Error("HANDOFF_PROJECT_PREFERENCE_SELECTION_CONFLICT");
-    const witness = path.join(
-      directory,
-      `witness-${String(sequence).padStart(6, "0")}.json`,
-    );
+    const witness = path.join(directory, selectionWitnessName(sequence));
     if (!(await writeOnce(witness, { key: key.toLowerCase() })))
       throw new Error("HANDOFF_PROJECT_PREFERENCE_WITNESS_CONFLICT");
-    await writeOnce(
-      path.join(this.root, `project-preference-${key.toLowerCase()}.json`),
-      parsed,
-    );
+    await writeOnce(preferenceFile(this.root, key), parsed);
     await this.readPreferenceSelection(parsed.project);
     const stored = await this.readProjectPreference(key);
     if (!stored)
@@ -405,20 +324,12 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
   ): string {
     const canonical =
       ProjectPreferenceRecordSchema.shape.project.parse(project);
-    const digest = createHash("sha256")
-      .update(JSON.stringify(canonical), "utf8")
-      .digest("hex");
-    return path.join(this.root, `project-preference-selections-${digest}`);
+    return preferenceSelectionDirectory(this.root, canonical);
   }
 
   private async verifyPreferenceDirectory(directory: string) {
     const stat = await fs.lstat(directory);
-    if (
-      !stat.isDirectory() ||
-      stat.isSymbolicLink() ||
-      (stat.mode & 0o077) !== 0 ||
-      (process.geteuid?.() !== undefined && stat.uid !== process.geteuid?.())
-    )
+    if (directoryUnsafe(stat, process.geteuid?.()))
       throw new Error("HANDOFF_PROJECT_PREFERENCE_SELECTION_UNSAFE");
     return stat;
   }
@@ -439,21 +350,14 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
       throw error;
     }
     const entries = await fs.readdir(directory);
-    const slots = entries
-      .filter((name) => /^[0-9]{6}\.json$/u.test(name))
-      .sort();
-    const witnesses = entries
-      .filter((name) => /^witness-[0-9]{6}\.json$/u.test(name))
-      .sort();
+    const slots = selectionSlots(entries);
+    const witnesses = selectionWitnesses(entries);
     if (
-      slots.length > 256 ||
-      witnesses.length !== slots.length ||
-      entries.length > 1024 ||
-      entries.some(
-        (name) =>
-          !/^(?:witness-)?[0-9]{6}\.json(?:\.[0-9a-f-]{36}\.tmp)?$/iu.test(
-            name,
-          ),
+      selectionInventoryInvalid(
+        slots,
+        witnesses,
+        entries.length,
+        entries.some(selectionEntryUnexpected),
       )
     )
       throw new Error("HANDOFF_PROJECT_PREFERENCE_SELECTION_INVALID");
@@ -461,7 +365,7 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
     let latest = null;
     for (let index = 0; index < slots.length; index++) {
       const sequence = index + 1;
-      if (slots[index] !== `${String(sequence).padStart(6, "0")}.json`)
+      if (slots[index] !== selectionSlotName(sequence))
         throw new Error("HANDOFF_PROJECT_PREFERENCE_SELECTION_GAP");
       const { key } = ProjectPreferenceSelectionSchema.parse(
         await readPrivate(path.join(directory, slots[index]!), true, true),
@@ -492,12 +396,9 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
       latest = { sequence, key, record };
     }
     const after = await this.verifyPreferenceDirectory(directory);
-    const finalSlots = (await fs.readdir(directory))
-      .filter((name) => /^(?:witness-)?[0-9]{6}\.json$/u.test(name))
-      .sort();
+    const finalSlots = selectionPublished(await fs.readdir(directory));
     if (
-      before.dev !== after.dev ||
-      before.ino !== after.ino ||
+      inodeChanged(before, after) ||
       JSON.stringify([...slots, ...witnesses].sort()) !==
         JSON.stringify(finalSlots)
     )
@@ -534,12 +435,7 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
     initial: boolean,
   ): Promise<number | null> {
     const record = await this.read(key);
-    if (
-      record?.dispatchProtocol !== 1 ||
-      !record.threadIntent ||
-      record.turnIntent
-    )
-      return null;
+    if (!dispatchOpen(record)) return null;
     const directory = this.directory(key);
     for (let attempt = 0; attempt < MAX_DISPATCH_ATTEMPTS; attempt++) {
       const file = path.join(directory, `dispatch-attempt-${attempt}.json`);
@@ -573,12 +469,7 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
   ): Promise<void> {
     DispatchAttemptSchema.parse({ attempt });
     const record = await this.read(key);
-    if (
-      record?.dispatchProtocol !== 1 ||
-      !record.threadIntent ||
-      record.turnIntent
-    )
-      return;
+    if (!dispatchOpen(record)) return;
     const directory = this.directory(key);
     const claimed = await readPrivate(
       path.join(directory, `dispatch-attempt-${attempt}.json`),
@@ -646,13 +537,7 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
     const binding = { key: key.toLowerCase(), turnId: parentTurnId };
     if (await writeOnce(file, binding)) return true;
     const previous = await readPrivate(file);
-    return (
-      previous !== null &&
-      typeof previous === "object" &&
-      !Array.isArray(previous) &&
-      (previous as { key?: unknown }).key === binding.key &&
-      (previous as { turnId?: unknown }).turnId === binding.turnId
-    );
+    return continuationBindingMatches(previous, binding);
   }
 
   async confirmContinuation(key: string, turnId: string): Promise<void> {
@@ -683,15 +568,8 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
         throw new Error("HANDOFF_MESSAGE_ORPHAN_RECEIPT");
       return false;
     }
-    if (!intent || typeof intent !== "object" || Array.isArray(intent))
-      throw new Error("HANDOFF_MESSAGE_UNVERIFIED");
-    const value = intent as Record<string, unknown>;
-    if (
-      !validKey(String(value.key)) ||
-      typeof value.digest !== "string" ||
-      !/^[a-f0-9]{64}$/u.test(value.digest)
-    )
-      throw new Error("HANDOFF_MESSAGE_UNVERIFIED");
+    if (!isRecordObject(intent)) throw new Error("HANDOFF_MESSAGE_UNVERIFIED");
+    if (!isIntentBinding(intent)) throw new Error("HANDOFF_MESSAGE_UNVERIFIED");
     const receipt = await readPrivate(path.join(directory, "message.json"));
     if (receipt === null) return true;
     const parent = await this.read(dispatchId);
@@ -715,9 +593,8 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
         throw new Error("HANDOFF_TITLE_ORPHAN_RECEIPT");
       return false;
     }
-    if (!intent || typeof intent !== "object" || Array.isArray(intent))
-      throw new Error("HANDOFF_TITLE_UNVERIFIED");
-    const value = intent as Record<string, unknown>;
+    if (!isRecordObject(intent)) throw new Error("HANDOFF_TITLE_UNVERIFIED");
+    const value = intent;
     if (typeof value.key !== "string" || !validKey(value.key))
       throw new Error("HANDOFF_TITLE_UNVERIFIED");
     const receipt = await this.readTitle(dispatchId, value.key);
@@ -735,7 +612,7 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
     key: string,
     digest: string,
   ): Promise<"claimed" | "existing" | "conflict"> {
-    if (!validKey(key) || !/^[a-f0-9]{64}$/u.test(digest))
+    if (!validKey(key) || !isDigest(digest))
       throw new Error("HANDOFF_TITLE_INVALID");
     // Validate absence before publishing an intent; an orphan receipt is not a fresh operation.
     const before = await this.readTitle(dispatchId, key);
@@ -763,26 +640,15 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
         throw new Error("HANDOFF_TITLE_ORPHAN_RECEIPT");
       return null;
     }
-    if (typeof intent !== "object" || Array.isArray(intent))
-      throw new Error("HANDOFF_TITLE_UNVERIFIED");
-    const prior = intent as Record<string, unknown>;
-    if (
-      !validKey(String(prior.key)) ||
-      typeof prior.digest !== "string" ||
-      !/^[a-f0-9]{64}$/u.test(prior.digest)
-    )
-      throw new Error("HANDOFF_TITLE_UNVERIFIED");
+    if (!isRecordObject(intent)) throw new Error("HANDOFF_TITLE_UNVERIFIED");
+    const prior = intent;
+    if (!isIntentBinding(prior)) throw new Error("HANDOFF_TITLE_UNVERIFIED");
     if (prior.key !== key) return { digest: "", threadId: null };
     const receipt = await readPrivate(path.join(directory, "title.json"), true);
     if (receipt === null) return { digest: prior.digest, threadId: null };
-    if (typeof receipt !== "object" || Array.isArray(receipt))
-      throw new Error("HANDOFF_TITLE_UNVERIFIED");
-    const confirmed = receipt as Record<string, unknown>;
-    if (
-      confirmed.key !== prior.key ||
-      confirmed.digest !== prior.digest ||
-      Object.keys(confirmed).length !== 3
-    )
+    if (!isRecordObject(receipt)) throw new Error("HANDOFF_TITLE_UNVERIFIED");
+    const confirmed = receipt;
+    if (titleReceiptMismatch(confirmed, prior))
       throw new Error("HANDOFF_TITLE_UNVERIFIED");
     return { digest: prior.digest, threadId: stringRecord(confirmed.threadId) };
   }
@@ -813,14 +679,14 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
     key: string,
     digest: string,
   ): Promise<"claimed" | "existing" | "conflict"> {
-    if (!validKey(key) || !/^[a-f0-9]{64}$/u.test(digest))
+    if (!validKey(key) || !isDigest(digest))
       throw new Error("HANDOFF_MESSAGE_INVALID");
     const file = path.join(this.directory(dispatchId), "message-intent.json");
     if (await writeOnce(file, { key, digest })) return "claimed";
     const existing = await readPrivate(file);
-    if (!existing || typeof existing !== "object" || Array.isArray(existing))
+    if (!isRecordObject(existing))
       throw new Error("HANDOFF_MESSAGE_UNVERIFIED");
-    const prior = existing as Record<string, unknown>;
+    const prior = existing;
     return prior.key === key && prior.digest === digest
       ? "existing"
       : "conflict";
@@ -836,19 +702,12 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
       path.join(directory, "message-intent.json"),
     );
     if (intent === null) return null;
-    if (typeof intent !== "object" || Array.isArray(intent))
-      throw new Error("HANDOFF_MESSAGE_UNVERIFIED");
-    const prior = intent as Record<string, unknown>;
-    if (
-      !validKey(String(prior.key)) ||
-      typeof prior.digest !== "string" ||
-      !/^[a-f0-9]{64}$/u.test(prior.digest)
-    )
-      throw new Error("HANDOFF_MESSAGE_UNVERIFIED");
+    if (!isRecordObject(intent)) throw new Error("HANDOFF_MESSAGE_UNVERIFIED");
+    const prior = intent;
+    if (!isIntentBinding(prior)) throw new Error("HANDOFF_MESSAGE_UNVERIFIED");
     if (prior.key !== key) return { digest: "", turnId: null };
     const receipt = await readPrivate(path.join(directory, "message.json"));
-    if (receipt === null) return { digest: prior.digest, turnId: null };
-    return { digest: prior.digest, turnId: stringRecord(receipt) };
+    return messageState(prior.digest, receipt);
   }
 
   async recordMessage(
@@ -872,66 +731,7 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
     const directory = this.directory(key);
     const base = await readPrivate(path.join(directory, "reservation.json"));
     if (base === null) return null;
-    if (typeof base !== "object" || Array.isArray(base)) {
-      throw new Error("HANDOFF_JOURNAL_INVALID");
-    }
-    const record = base as Partial<HandoffRecord>;
-    if (
-      typeof record.requestDigest !== "string" ||
-      !/^[a-f0-9]{64}$/u.test(record.requestDigest) ||
-      (record.adopted !== undefined && record.adopted !== true) ||
-      (record.model !== undefined &&
-        (typeof record.model !== "string" ||
-          !/^[A-Za-z0-9_.\/-]{1,120}$/u.test(record.model))) ||
-      (record.continuedFrom !== undefined &&
-        (typeof record.continuedFrom !== "string" ||
-          !validKey(record.continuedFrom))) ||
-      record.continuationVerified !== undefined ||
-      (record.dispatchProtocol !== undefined &&
-        record.dispatchProtocol !== 1) ||
-      (record.reasoningEffort !== undefined &&
-        (typeof record.reasoningEffort !== "string" ||
-          !/^[A-Za-z0-9_-]{1,40}$/u.test(record.reasoningEffort))) ||
-      typeof record.workspaceId !== "string" ||
-      typeof record.projectId !== "string" ||
-      !record.workspace ||
-      typeof record.workspace.root !== "string" ||
-      typeof record.workspace.device !== "string" ||
-      typeof record.workspace.inode !== "string" ||
-      typeof record.workspace.gitCommonDirectory !== "string" ||
-      !record.workspace.project ||
-      typeof record.workspace.project.root !== "string" ||
-      typeof record.workspace.project.device !== "string" ||
-      typeof record.workspace.project.inode !== "string" ||
-      typeof record.workspace.project.gitCommonDirectory !== "string" ||
-      record.workspace.project.gitCommonDirectory !==
-        record.workspace.gitCommonDirectory ||
-      !record.workspace.execution ||
-      !["read-only", "workspace-write"].includes(
-        record.workspace.execution.sandbox,
-      ) ||
-      !["untrusted", "on-request"].includes(
-        record.workspace.execution.approvalPolicy,
-      )
-    ) {
-      throw new Error("HANDOFF_JOURNAL_INVALID");
-    }
-    if (
-      record.modelCatalogue !== undefined &&
-      !CatalogueObservationSchema.safeParse(record.modelCatalogue).success
-    )
-      throw new Error("HANDOFF_JOURNAL_CATALOGUE_INVALID");
-    if (record.modelBinding !== undefined) {
-      const binding = TaskModelBindingSchema.safeParse(record.modelBinding);
-      if (
-        !binding.success ||
-        binding.data.selection.harness !== "codex" ||
-        binding.data.selection.model !== record.model ||
-        binding.data.selection.effort !== record.reasoningEffort
-      ) {
-        throw new Error("HANDOFF_JOURNAL_MODEL_BINDING_INVALID");
-      }
-    }
+    const record = parseReservation(base);
     let threadIntent = await readPrivate(
       path.join(directory, "thread-intent.json"),
     );
@@ -953,62 +753,26 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
     if (turn !== null && turnIntent === null) {
       turnIntent = await readPrivate(path.join(directory, "turn-intent.json"));
     }
-    if (turnIntent !== null && thread === null)
-      throw new Error("HANDOFF_JOURNAL_INVALID");
-    if (thread !== null && threadIntent === null)
-      throw new Error("HANDOFF_JOURNAL_INVALID");
-    if (turn !== null && turnIntent === null)
+    if (intentOrderBroken(thread, threadIntent, turn, turnIntent))
       throw new Error("HANDOFF_JOURNAL_INVALID");
     const continuation = await readPrivate(
       path.join(directory, "continuation-verified.json"),
     );
-    if (
-      continuation !== null &&
-      (record.continuedFrom === undefined ||
-        turn === null ||
-        continuation !== turn)
-    ) {
+    if (continuationBroken(continuation, record.continuedFrom, turn)) {
       throw new Error("HANDOFF_CONTINUATION_BINDING_INVALID");
     }
-    return {
-      requestDigest: record.requestDigest,
-      ...(record.dispatchProtocol === undefined
-        ? {}
-        : { dispatchProtocol: record.dispatchProtocol }),
-      ...(record.adopted ? { adopted: true as const } : {}),
-      ...(record.model === undefined ? {} : { model: record.model }),
-      ...(record.reasoningEffort === undefined
-        ? {}
-        : { reasoningEffort: record.reasoningEffort }),
-      workspaceId: stringRecord(record.workspaceId),
-      workspace: record.workspace,
-      projectId: stringRecord(record.projectId),
-      ...(record.model === undefined ? {} : { model: record.model }),
-      ...(record.reasoningEffort === undefined
-        ? {}
-        : { reasoningEffort: record.reasoningEffort }),
-      ...(record.modelBinding === undefined
-        ? {}
-        : { modelBinding: record.modelBinding }),
-      ...(record.modelCatalogue === undefined
-        ? {}
-        : { modelCatalogue: record.modelCatalogue }),
-      ...(record.continuedFrom === undefined
-        ? {}
-        : {
-            continuedFrom: record.continuedFrom,
-            continuationVerified: continuation !== null,
-          }),
-      threadIntent: threadIntent !== null,
-      turnIntent: turnIntent !== null,
-      ...(thread === null ? {} : { threadId: stringRecord(thread) }),
-      ...(turn === null ? {} : { turnId: stringRecord(turn) }),
-    };
+    return buildHandoffRecord(record, {
+      threadIntent,
+      thread,
+      turnIntent,
+      turn,
+      continuation,
+    });
   }
 
   private directory(key: string): string {
     if (!validKey(key)) throw new Error("HANDOFF_JOURNAL_KEY_INVALID");
-    return path.join(this.root, key.toLowerCase());
+    return dispatchDirectory(this.root, key);
   }
 
   private async ensureRoot(): Promise<void> {
@@ -1025,12 +789,7 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
       throw error;
     }
-    if (
-      !stat.isDirectory() ||
-      stat.isSymbolicLink() ||
-      (stat.mode & 0o077) !== 0 ||
-      (process.geteuid?.() !== undefined && stat.uid !== process.geteuid?.())
-    ) {
+    if (directoryUnsafe(stat, process.geteuid?.())) {
       throw new Error("HANDOFF_JOURNAL_ROOT_UNSAFE");
     }
     return true;
