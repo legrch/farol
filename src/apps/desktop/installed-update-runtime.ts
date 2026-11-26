@@ -137,7 +137,6 @@ import {
   applyEntryRefusal,
   applyRolledBack,
   applyUnsettledCode,
-  candidateDeferred,
   candidateSkipped,
   claimableInterruptedDownload,
   classifyPackageVerification,
@@ -207,6 +206,19 @@ import {
   archivePredecessorAdmitted,
   archiveUntrusted,
 } from "../../../apps/desktop/update/history";
+import {
+  deferredPreferences,
+  discoveryView,
+  preferencesUnreadable,
+  releaseChannel,
+  skippedPreferences,
+  stagingUnknown,
+  transportUnknown,
+} from "../../../apps/desktop/update/outcome";
+import {
+  restoreEntryRefusal,
+  restoreSourceMismatch,
+} from "../../../apps/desktop/update/restore";
 import {
   readyMatches,
   resourcesOriginRefused,
@@ -1269,8 +1281,7 @@ async function createRuntime(
     ) => {
       const result = await transport.download(url, maximum, onProgress);
       if (result.ok) stagedDownloadHandle = result.value.handle;
-      if (!result.ok && "certainty" in result && result.certainty === "unknown")
-        transportOutcomeUnknown = true;
+      if (transportUnknown(result)) transportOutcomeUnknown = true;
       return result;
     },
     verifyPackage: async (
@@ -1278,8 +1289,7 @@ async function createRuntime(
       manifest: Parameters<typeof transport.verifyPackage>[1],
     ) => {
       const result = await transport.verifyPackage(handle, manifest);
-      if (!result.ok && "certainty" in result && result.certainty === "unknown")
-        transportOutcomeUnknown = true;
+      if (transportUnknown(result)) transportOutcomeUnknown = true;
       return result;
     },
   };
@@ -1989,18 +1999,9 @@ async function createRuntime(
         return checkedTransport.verifyPackage(handle, expectedManifest);
       });
     } catch {
-      return {
-        ok: false,
-        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
-        recoveryRequired: true,
-      };
+      return stagingUnknown();
     }
-    if (transportOutcomeUnknown)
-      return {
-        ok: false,
-        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
-        recoveryRequired: true,
-      };
+    if (transportOutcomeUnknown) return stagingUnknown();
     if (!downloaded.ok) {
       if (stagedDownloadHandle !== null) {
         try {
@@ -2009,11 +2010,7 @@ async function createRuntime(
           if (!cleanup.ok) throw new Error("UPDATE_STAGE_CLEANUP_UNKNOWN");
           stagedDownloadHandle = null;
         } catch {
-          return {
-            ok: false,
-            code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
-            recoveryRequired: true,
-          };
+          return stagingUnknown();
         }
       }
       // A known failed request has drained all its native work: the producer
@@ -2760,9 +2757,7 @@ async function createRuntime(
           version: options.build.version,
           buildVersion: options.build.buildVersion!,
         },
-        options.build.updateChannel === "github-stable"
-          ? "stable"
-          : "owner-beta",
+        releaseChannel(options.build.updateChannel),
         transport,
       );
       if (!found.ok) return known(`UPDATE_${found.code.toUpperCase()}`);
@@ -2770,11 +2765,7 @@ async function createRuntime(
       try {
         preferences = await readPreferences();
       } catch {
-        return {
-          ok: false as const,
-          code: "UPDATE_PREFERENCES_UNREADABLE",
-          recoveryRequired: true,
-        };
+        return preferencesUnreadable();
       }
       candidate = candidateSkipped(
         found.value?.manifest.version,
@@ -2782,21 +2773,7 @@ async function createRuntime(
       )
         ? null
         : found.value;
-      return candidate
-        ? {
-            ok: true,
-            available: true,
-            version: candidate.manifest.version,
-            buildId: candidate.manifest.buildId,
-            deferred: candidateDeferred({
-              buildId: candidate.manifest.buildId,
-              version: candidate.manifest.version,
-              declinedBuildId,
-              deferredVersion: preferences.deferredVersion,
-            }),
-            ...(candidate.notes ? { notes: candidate.notes } : {}),
-          }
-        : { ok: true, available: false };
+      return discoveryView(candidate, declinedBuildId, preferences);
     },
     download: async (onProgress) => {
       if (!candidate) return known("UPDATE_CANDIDATE_MISSING");
@@ -2833,17 +2810,12 @@ async function createRuntime(
       try {
         await readPreferences();
       } catch {
-        return {
-          ok: false as const,
-          code: "UPDATE_PREFERENCES_UNREADABLE",
-          recoveryRequired: true,
-        };
+        return preferencesUnreadable();
       }
-      await writeRecord(preferencesFile, {
-        schema: "farol.installed-update-preferences/1",
-        skipped: { version: candidate.manifest.version, buildId },
-        deferredVersion: null,
-      });
+      await writeRecord(
+        preferencesFile,
+        skippedPreferences(candidate.manifest.version, buildId),
+      );
       candidate = null;
       return { ok: true as const };
     },
@@ -2854,16 +2826,12 @@ async function createRuntime(
       try {
         preferences = await readPreferences();
       } catch {
-        return {
-          ok: false as const,
-          code: "UPDATE_PREFERENCES_UNREADABLE",
-          recoveryRequired: true,
-        };
+        return preferencesUnreadable();
       }
-      await writeRecord(preferencesFile, {
-        ...preferences,
-        deferredVersion: candidate.manifest.version,
-      });
+      await writeRecord(
+        preferencesFile,
+        deferredPreferences(preferences, candidate.manifest.version),
+      );
       return { ok: true as const };
     },
     ...(localArchive
@@ -2880,10 +2848,7 @@ async function createRuntime(
             const manifest = localArchive.manifest;
             if (
               !manifest ||
-              manifest.channel !==
-                (options.build.updateChannel === "github-stable"
-                  ? "stable"
-                  : "owner-beta")
+              manifest.channel !== releaseChannel(options.build.updateChannel)
             )
               return known("UPDATE_LOCAL_MANIFEST_INVALID");
             let current: z.infer<typeof AcceptedBuild>;
@@ -3004,33 +2969,17 @@ async function createRuntime(
       return undefined;
     },
     restore: async (action) => {
-      if (supervised)
-        return {
-          status: "blocked",
-          code: "UPDATE_SUPERVISED_RESTORE_UNQUALIFIED",
-        };
-      if (options.goCoreArtifact === undefined)
-        return { status: "blocked", code: "UPDATE_HELPER_GO_CORE_REQUIRED" };
-      if (admissions.releaseUnconfirmed())
-        return {
-          status: "blocked",
-          code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
-        };
-      if (admissions.held())
-        return { status: "unknown", code: "UPDATE_RESTORE_OUTCOME_UNKNOWN" };
       const op = restorable?.operation;
-      if (
-        action === "rollback" &&
-        op &&
-        legacyPredecessorRequiresStateRecovery(
-          op.source.version,
-          op.target.version,
-        )
-      )
-        return {
-          status: "blocked",
-          code: "UPDATE_PREDECESSOR_STATE_UNQUALIFIED",
-        };
+      const entryRefusal = restoreEntryRefusal({
+        supervised: !!supervised,
+        goCoreMissing: options.goCoreArtifact === undefined,
+        releaseUnconfirmed: admissions.releaseUnconfirmed(),
+        admissionHeld: admissions.held(),
+        action,
+        operation: op,
+        requiresStateRecovery: legacyPredecessorRequiresStateRecovery,
+      });
+      if (entryRefusal) return entryRefusal;
       if (
         !op ||
         restoreKind !== action ||
@@ -3055,10 +3004,7 @@ async function createRuntime(
             return { status: "blocked", code: "UPDATE_WORK_PENDING" };
           const journal = await readJournal(op);
           const current = await readBuild(slot);
-          if (
-            current.buildId !== options.build.buildId ||
-            (!sameBuild(current, op.source) && !sameBuild(current, op.target))
-          )
+          if (restoreSourceMismatch(current, op, options.build))
             return {
               status: "blocked",
               code: "UPDATE_SOURCE_IDENTITY_MISMATCH",
