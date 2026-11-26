@@ -257,9 +257,9 @@ describe("connector Setup composition", () => {
 // Only the credential owner's ports are scripted; no installed profile, real
 // keychain or live connector is touched.
 
-const OLD_KEY = "synthetic-old-key-1234567890-aaaa";
-const NEW_KEY = "synthetic-new-key-1234567890-bbbb";
-const OTHER_KEY = "synthetic-other-key-1234567890-cccc";
+const OLD_KEY = "fixture-old-connector-key";
+const NEW_KEY = "fixture-new-connector-key";
+const OTHER_KEY = "fixture-other-connector-key";
 const roots: string[] = [];
 
 afterEach(async () => {
