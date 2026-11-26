@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
   BrowserWindow: class {},
@@ -372,6 +372,93 @@ describe("hidden Next saved-chat browser adapter", () => {
       expect(await browser.prepare()).toBe("ready");
       expect(await browser.sendOnce("One message", "0".repeat(64))).toEqual({
         status: "outcome_unknown",
+      });
+    });
+
+    describe("when the wall clock steps backward while the monotonic clock advances", () => {
+      // The browser is built with its default clock, as the bridge builds it.
+      const defaultClockBrowser = (factory: SavedChatRouteFactory) =>
+        new SavedChatBrowser(
+          "https://chatgpt.com/",
+          null,
+          factory,
+          { partition: "persist:farol-app-chatgpt" },
+          undefined,
+          async () => undefined,
+          () => true,
+        );
+
+      afterEach(() => vi.restoreAllMocks());
+
+      it("never accepts a proof observed after the monotonic 30 s window", async () => {
+        let monotonic = 1_000;
+        let wall = 50_000_000;
+        vi.spyOn(performance, "now").mockImplementation(() => monotonic);
+        vi.spyOn(Date, "now").mockImplementation(() => wall);
+        const state = stalledRoute({
+          async savedChatProof() {
+            monotonic += 31_000;
+            // The wall clock was stepped back an hour meanwhile.
+            wall -= 3_600_000;
+            return { verified: true, titleVerified: false };
+          },
+        });
+        const browser = defaultClockBrowser(state.factory);
+        expect(await browser.prepare()).toBe("ready");
+        expect(await browser.sendOnce("One message", "0".repeat(64))).toEqual({
+          status: "outcome_unknown",
+        });
+      });
+
+      it("hands the next proof what is left of the monotonic window", async () => {
+        const budgets: unknown[] = [];
+        let monotonic = 1_000;
+        let wall = 50_000_000;
+        vi.spyOn(performance, "now").mockImplementation(() => monotonic);
+        vi.spyOn(Date, "now").mockImplementation(() => wall);
+        const state = stalledRoute({
+          async savedChatProof(
+            _url: string,
+            _m: string,
+            _t: string,
+            _h: boolean,
+            budgetMs?: number,
+          ) {
+            budgets.push(budgetMs);
+            monotonic += 10_000;
+            wall -= 3_600_000;
+            return budgets.length === 1
+              ? { verified: false }
+              : { verified: true, titleVerified: false };
+          },
+        });
+        const browser = defaultClockBrowser(state.factory);
+        expect(await browser.prepare()).toBe("ready");
+        expect(await browser.sendOnce("One message", "0".repeat(64))).toEqual({
+          status: "candidate",
+          conversationUrl: url,
+        });
+        expect(budgets).toEqual([30_000, 20_000]);
+      });
+
+      it("does not end the window early when the wall clock jumps forward", async () => {
+        let monotonic = 1_000;
+        let wall = 50_000_000;
+        vi.spyOn(performance, "now").mockImplementation(() => monotonic);
+        vi.spyOn(Date, "now").mockImplementation(() => wall);
+        const state = stalledRoute({
+          async savedChatProof() {
+            monotonic += 1_000;
+            wall += 3_600_000;
+            return { verified: true, titleVerified: false };
+          },
+        });
+        const browser = defaultClockBrowser(state.factory);
+        expect(await browser.prepare()).toBe("ready");
+        expect(await browser.sendOnce("One message", "0".repeat(64))).toEqual({
+          status: "candidate",
+          conversationUrl: url,
+        });
       });
     });
 

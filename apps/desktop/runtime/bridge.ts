@@ -174,7 +174,7 @@ export function createBridge(ports: BridgePorts) {
             ? { requiredAppName: activeDesktopIdentity.displayName }
             : {}),
         },
-        Date.now,
+        undefined,
         undefined,
         qualified,
       );

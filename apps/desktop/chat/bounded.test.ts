@@ -26,6 +26,13 @@ const flush = async () => {
 };
 
 describe("boundedProbe", () => {
+  it("arms its timer with a whole-millisecond delay rounded up", async () => {
+    const { clock, state } = manualClock(100.4);
+    await boundedProbe(clock, async () => "ok", 200);
+    // 99.6 ms left: a truncated 99 ms timer would fire below the deadline.
+    expect(state.timers[0]?.ms).toBe(100);
+  });
+
   it("answers before the deadline and cancels its timer", async () => {
     const { clock, state } = manualClock();
     await expect(boundedProbe(clock, async () => "ok", 200)).resolves.toEqual({
@@ -90,10 +97,29 @@ describe("boundedProbe", () => {
       200,
     );
     await flush();
+    late.state.t = 200;
     late.state.timers[0]?.callback();
     await expect(pending).resolves.toEqual({ status: "timeout" });
     fail(new Error("late"));
     await flush();
+  });
+
+  it("does not time out on a timer that fires before the clock reaches the deadline", async () => {
+    const { clock, state } = manualClock(100);
+    let fail!: (error: Error) => void;
+    const pending = boundedProbe(
+      clock,
+      () => new Promise<never>((_resolve, reject) => (fail = reject)),
+      200,
+    );
+    await flush();
+    state.t = 199.1;
+    state.timers[0]?.callback();
+    await flush();
+    // Re-armed for what is left; a rejection now is still a pre-deadline one.
+    expect(state.timers).toHaveLength(2);
+    fail(new Error("early"));
+    await expect(pending).rejects.toThrow("early");
   });
 
   it("times out a rejection observed after the deadline before the timer ran", async () => {

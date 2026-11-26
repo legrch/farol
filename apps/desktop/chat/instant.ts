@@ -203,7 +203,7 @@ export function createInstantProfilePreparer(
     if (waitForExistingTemporary) {
       while (!initial.data.temporary && ports.now() < initialDeadline) {
         await ports.delay(
-          Math.min(200, Math.max(0, initialDeadline - ports.now())),
+          Math.min(200, Math.max(0, Math.ceil(initialDeadline - ports.now()))),
         );
         if (initialIdentityLost() || ports.now() >= initialDeadline)
           return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
