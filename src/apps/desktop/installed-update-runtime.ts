@@ -146,6 +146,7 @@ import {
   downloadRecoveryAtStartup,
   downloadStageIdentityChanged,
   downloadStageScan,
+  keptExtractionFencesVerification,
   emptyRecoveryOutcome,
   handoffAdmitted,
   helperNoEffectCode,
@@ -2032,6 +2033,8 @@ async function createRuntime(
   // not keep from running.
   const recoverFromRecords = async (
     stopAfterPreparation: boolean,
+    // The extraction reclaim of this startup pass, when it ran.
+    scan: Awaited<ReturnType<typeof reclaimStagedExtractions>> = null,
   ): ReturnType<InstalledUpdaterPorts["recover"]> => {
     // Presence, not content, decides each fence: a record holding JSON null is
     // present and invalid, and keeps recovery fenced like a corrupt one.
@@ -2393,6 +2396,15 @@ async function createRuntime(
       )
     )
       return known("UPDATE_RETAINED_VERSION_MISMATCH");
+    // An extraction the reclaim kept is an earlier verification whose outcome
+    // is unknown (an interrupted manual Restart leaves one with no cleanup
+    // marker). The verifier allows one existing extraction, so a new
+    // verification would proceed beside it: refuse instead. Nothing is deleted,
+    // and the outcome is unresolved, never retryable.
+    if (keptExtractionFencesVerification(scan)) {
+      retained = null;
+      return known("UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED");
+    }
     const check = await transport.verifyPackage(retained.handle, parsed.value);
     const verification = classifyPackageVerification(
       check,
@@ -2487,7 +2499,7 @@ async function createRuntime(
         return known(settlementRefusal ?? "UPDATE_STAGING_OUTCOME_UNKNOWN");
       }
     }
-    return classifyInvalidRecord(() => recoverFromRecords(false));
+    return classifyInvalidRecord(() => recoverFromRecords(false, report));
   };
 
   const updaterPorts: InstalledUpdaterPorts = {

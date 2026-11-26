@@ -173,6 +173,22 @@ export function downloadStageScan(
   return stage ? { dev: stage.dev, ino: stage.ino } : "absent";
 }
 
+/**
+ * Whether the startup reclaim pass kept any verifier extraction, whatever the
+ * reason (a lease left in `spawning`, a live owner or child, unknown liveness,
+ * an unreadable or untrusted lease). A kept extraction is an earlier
+ * verification whose outcome is not known, and the verifier tolerates one
+ * existing extraction, so a new verification of a retained package must not
+ * start beside it. This holds with or without a cleanup marker: only a normal
+ * Quit writes one. No pass at all (a supervised controller never reclaims, or
+ * the pass failed) says nothing and does not fence.
+ */
+export function keptExtractionFencesVerification(
+  scan: Readonly<{ kept: readonly unknown[] }> | null,
+): boolean {
+  return scan !== null && scan.kept.length > 0;
+}
+
 /** An allocated stage must still be the exact directory the intent recorded. */
 export function downloadStageIdentityChanged(
   observed: Readonly<{ dev: bigint; ino: bigint; birthtimeNs: bigint }>,

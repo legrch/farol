@@ -52,7 +52,10 @@ the update stays fenced until that extraction is removed by hand. Only a lease
 that names every child it spawned, each proven ended, authorizes removal. The
 same judgment covers the extraction wherever it sits: in the update root, in a
 download stage, or in the `.removing` tombstone a stage is renamed to while it
-is removed.
+is removed. The verifier itself still tolerates one existing extraction, so the
+fence is the caller's: startup recovery of a Ready update verifies it only when
+the reclaim kept no extraction, with or without a cleanup marker (see
+[Ready recovery and a kept extraction](installed-update-runtime.md#extraction-leases-and-startup-reclaim)).
 
 The focused tests use synthetic ZIPs and mock package claims. They do not
 prove a real package, installed N-to-N+1 update, or Gatekeeper behavior.

@@ -650,6 +650,23 @@ records and no journal covers, and used to sit unreachable behind the marker);
 the extraction reclaim; the marker settlement; and only then the existing
 `UPDATE_STAGING_OUTCOME_UNKNOWN` refusal, if the marker still stands.
 
+**Ready recovery and a kept extraction.** Only a normal Quit writes the cleanup
+marker, so a manual Restart interrupted after the verifier spawned its
+extractor, and before the child's pid was recorded, leaves a `spawning` lease
+and no marker. The verifier tolerates one existing extraction, so recovery of a
+valid Ready update would otherwise verify again beside an outcome nobody knows.
+It does not. When the reclaim of the same startup pass kept any extraction
+(whatever the reason: a lease left in `spawning`, a live owner or child,
+unknown liveness, an unreadable or untrusted lease), Ready recovery stops before
+it verifies the retained package and reports
+`UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED` with recovery required. The retained
+package is not offered for install, nothing is deleted (the extraction, the
+archive and `ready.json` stay) and the outcome is never retryable. The fence
+needs no new durable record: it is recomputed at every launch from the lease, so
+it falls only when a later reclaim removes the extraction, or by hand as above.
+An extraction the reclaim did remove (every named child ended) does not fence.
+A supervised controller never reclaims and so never raises this fence.
+
 **Marker settlement.** The marker's content is untrusted. It is cleared only
 from the reclaim result of the same startup pass, and only after the update
 root is confirmed (by `lstat` and `realpath`) to be the directory that pass
