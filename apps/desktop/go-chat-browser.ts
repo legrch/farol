@@ -13,6 +13,7 @@ import {
   validId,
   validView,
 } from "./browser/check.ts";
+import { split } from "./browser/segment.ts";
 import {
   facts,
   pin,
@@ -714,37 +715,14 @@ export class GoChatBrowserDriver implements BrowserDriver {
         item.channel === "answer" && s.answerSegments++ > 0
           ? `\n\n${item.text}`
           : item.text;
-      // One immutable provider message is one segment. Split only to obey wire
-      // byte limits; each piece has a stable segment key, never a DOM index.
-      let part = "",
-        partIndex = 0;
-      const flush = (): void => {
-        if (!part) return;
-        const segmentId =
-          Buffer.byteLength(text) <= 65536
-            ? item.id
-            : `${item.id}/part/${partIndex++}`;
-        if (!validId(segmentId))
-          fail("chat_browser_segment_id_limit", "unknown");
+      split(item.id, text, (segment) =>
         this.append(
           s,
           s.binding!,
           item.channel === "answer" ? "answer-delta" : item.channel,
-          { text: part, segmentId },
-        );
-        part = "";
-      };
-      let bytes = 0;
-      for (const character of text) {
-        const width = Buffer.byteLength(character);
-        if (bytes + width > 65536) {
-          flush();
-          bytes = 0;
-        }
-        part += character;
-        bytes += width;
-      }
-      flush();
+          segment,
+        ),
+      );
     }
     if (semantic.completed) {
       s.terminal = true;
