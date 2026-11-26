@@ -714,7 +714,7 @@ describe("launch drift withdrawal", () => {
 describe("legacy live-only attachment capture at launch", () => {
   // A resume-eligible profile saved by an older build: the live attachment is
   // valid but `lastVerifiedAttachment` was never written.
-  async function liveOnlyProfile() {
+  async function liveOnlyProfile(options: { missingWorkspace?: boolean } = {}) {
     const workspaceRoot = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "farol-legacy-workspace-")),
     );
@@ -734,6 +734,17 @@ describe("legacy live-only attachment capture at launch", () => {
       rootIdentity,
     });
     const workspaceId = approval(added.snapshot).workspaces[0]!.workspaceId;
+    // A second folder that is gone: launch drift withdrawal will commit for it.
+    if (options.missingWorkspace)
+      expect(
+        (
+          await service.addReadonlyWorkspace({
+            root: path.join(workspaceRoot, "gone"),
+            label: "Gone",
+            rootIdentity: { device: "1", inode: "9" },
+          })
+        ).ok,
+      ).toBe(true);
     const verification = {
       profile: "computer.local.read/1",
       runtimeGeneration: "runtime-1",
@@ -884,6 +895,98 @@ describe("legacy live-only attachment capture at launch", () => {
     expect(secureMcp(next.snapshot()).lastVerifiedAttachment).toMatchObject({
       workspaceId: expect.any(String),
     });
+  });
+
+  // The first capture attempt at initialize fails once.
+  async function unsavedCapture(root: string) {
+    let failNext = true;
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore(
+        { root },
+        {
+          beforeCommit: async () => {
+            if (!failNext) return;
+            failNext = false;
+            throw new Error("denied");
+          },
+        },
+      ),
+      dependencies(),
+    );
+    await service.initialize();
+    expect(failNext).toBe(false);
+    expect(secureMcp(service.snapshot()).lastVerifiedAttachment).toBeNull();
+    return service;
+  }
+
+  it("keeps the live attachment as the last verified one when launch drift withdrawal clears it first", async () => {
+    const { root } = await liveOnlyProfile({ missingWorkspace: true });
+    const unsaved = await unsavedCapture(root);
+    const live = secureMcp(unsaved.snapshot()).attachment;
+    expect(live).not.toBeNull();
+
+    await launch(unsaved);
+
+    const after = secureMcp(unsaved.snapshot());
+    expect(after.runtime).toBeNull();
+    expect(after.attachment).toBeNull();
+    expect(after.lastVerifiedAttachment).toEqual(live);
+    const next = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await next.initialize();
+    expect(secureMcp(next.snapshot()).lastVerifiedAttachment).toEqual(live);
+  });
+
+  it("keeps the live attachment as the last verified one when the credential reconcile clears it", async () => {
+    const { root } = await liveOnlyProfile();
+    const unsaved = await unsavedCapture(root);
+    const live = secureMcp(unsaved.snapshot()).attachment;
+
+    expect((await unsaved.recordSecureMcpCredential("missing")).ok).toBe(true);
+
+    const after = secureMcp(unsaved.snapshot());
+    expect(after.attachment).toBeNull();
+    expect(after.lastVerifiedAttachment).toEqual(live);
+  });
+
+  it("leaves an already saved last verified attachment untouched when a write clears the live one", async () => {
+    const { root } = await liveOnlyProfile();
+    const saved = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await saved.initialize();
+    const kept = secureMcp(saved.snapshot()).lastVerifiedAttachment;
+    expect(kept).not.toBeNull();
+
+    expect((await saved.recordSecureMcpCredential("missing")).ok).toBe(true);
+
+    const after = secureMcp(saved.snapshot());
+    expect(after.attachment).toBeNull();
+    expect(after.lastVerifiedAttachment).toEqual(kept);
+  });
+
+  it("captures nothing from a live attachment that is not a verified proof", async () => {
+    const { root, store } = await liveOnlyProfile();
+    const loaded = await store.load();
+    if (loaded === null) throw new Error("settings missing");
+    loaded.setup.connect.verified = null;
+    await store.save(loaded);
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+    expect(secureMcp(service.snapshot()).attachment).not.toBeNull();
+    expect(secureMcp(service.snapshot()).lastVerifiedAttachment).toBeNull();
+
+    expect((await service.recordSecureMcpCredential("missing")).ok).toBe(true);
+
+    const after = secureMcp(service.snapshot());
+    expect(after.attachment).toBeNull();
+    expect(after.lastVerifiedAttachment).toBeNull();
   });
 
   it("resumes normally once the capture is saved", async () => {
