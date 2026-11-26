@@ -193,6 +193,30 @@ describe("redactConfigText fails closed on values it cannot delimit", () => {
     expect(result.redacted).toBe(true);
   });
 
+  it.each([
+    [
+      "[ closed by }",
+      'experimental_bearer_token = [\n}\n"fixture-token"\n[other]\nx = 1',
+    ],
+    [
+      "{ closed by ]",
+      'experimental_bearer_token = { a = 1 ]\n"fixture-token"\n',
+    ],
+    [
+      "a nested mismatch",
+      'experimental_bearer_token = [ [ } ]\n"fixture-token" ]\n',
+    ],
+  ])(
+    "withholds to the end of the text when a closer does not match: %s",
+    (_name, input) => {
+      const result = redactConfigText(input);
+      expect(result.text).toBe(
+        'experimental_bearer_token = "' + FAROL_MODEL_TOKEN_PLACEHOLDER + '"',
+      );
+      expect(result.text).not.toContain("fixture");
+    },
+  );
+
   it("replaces a multi-line value as one span, whatever it holds", () => {
     const result = redactConfigText(
       'before = 1\nexperimental_bearer_token = """\nfixture-token\n"quoted" \\"""\n"""\nafter = 2\n',

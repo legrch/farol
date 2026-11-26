@@ -65,15 +65,18 @@ function valueEnd(
     value.kind === "punct" &&
     (text.charAt(value.start) === "[" || text.charAt(value.start) === "{")
   ) {
-    let depth = 0;
+    // Each opener expects its own closer; a closer of the wrong type means
+    // the value's extent is unknown, so it fails closed to the end of text.
+    const expected: string[] = [];
     for (let at = first; at < tokens.length; at += 1) {
       const token = tokens[at];
       if (token?.kind !== "punct") continue;
       const char = text.charAt(token.start);
-      if (char === "[" || char === "{") depth += 1;
+      if (char === "[") expected.push("]");
+      else if (char === "{") expected.push("}");
       else if (char === "]" || char === "}") {
-        depth -= 1;
-        if (depth === 0) return token.end;
+        if (expected.pop() !== char) return text.length;
+        if (expected.length === 0) return token.end;
       }
     }
     return text.length;
@@ -87,7 +90,8 @@ function valueEnd(
  * string form — with a placeholder. A value that is not a delimited string,
  * or whose string never closes, fails closed: it is withheld to the end of
  * its line (a multi-line opener, to the end of the text). A `[` or `{` value
- * is withheld through its matching closer, across lines.
+ * is withheld through its matching closer, across lines; a mismatched or
+ * missing closer withholds it to the end of the text.
  */
 export function redactConfigText(
   text: string,
