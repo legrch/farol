@@ -92,7 +92,6 @@ import {
   NoticePreferences,
   AutomaticUpdatePreferences,
   InstallOnQuitPreferences,
-  InstallOnQuitUnconfirmed,
   AcceptedBuild,
   PromotionReceipt,
   ClosedRepairReceipt,
@@ -118,6 +117,7 @@ import {
   installedUpdateStartupDecision,
   startupHelperState,
 } from "../../../apps/desktop/update/decision";
+import { createPreferences } from "../../../apps/desktop/update/preference";
 import { observeHelper } from "../../../apps/desktop/update/process";
 
 export { installedUpdateStartupDecision };
@@ -2195,16 +2195,6 @@ async function createRuntime(
   };
   const pendingDownloadFile = path.join(root, "download-pending.json");
   const preferencesFile = path.join(root, "preferences.json");
-  const readPreferences = async () => {
-    const raw = await readRecord(preferencesFile);
-    return raw === null
-      ? {
-          schema: "farol.installed-update-preferences/1" as const,
-          skipped: null,
-          deferredVersion: null,
-        }
-      : UpdatePreferences.parse(raw);
-  };
   const automaticPreferenceFile = path.join(
     root,
     "automatic-update-preference.json",
@@ -2213,92 +2203,29 @@ async function createRuntime(
     root,
     "automatic-update-unconfirmed.json",
   );
-  let automaticPreferenceUnknown = false;
-  const readAutomaticPreference = async () => {
-    try {
-      await fs.lstat(automaticUnconfirmedFile);
-      automaticPreferenceUnknown = true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    if (automaticPreferenceUnknown)
-      throw new Error("UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN");
-    await canonicalOwnedDirectory(root, true);
-    const raw = await readRecord(automaticPreferenceFile);
-    if (raw === null) {
-      // readRecord also returns JSON null. Only actual absence is default OFF.
-      try {
-        await fs.lstat(automaticPreferenceFile);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT")
-          return {
-            schema: "farol.installed-automatic-update-preference/1" as const,
-            enabled: false,
-          };
-        throw error;
-      }
-      throw new Error("UPDATE_AUTOMATIC_PREFERENCE_INVALID");
-    }
-    return AutomaticUpdatePreferences.parse(raw);
-  };
   const quitPreferenceFile = path.join(root, "install-on-quit-preference.json");
   const quitUnconfirmedFile = path.join(
     root,
     "install-on-quit-unconfirmed.json",
   );
-  let quitPreferenceUnknown = false;
-  const readQuitPreference = async () => {
-    await canonicalOwnedDirectory(root, true);
-    const unconfirmed = await readRecord(quitUnconfirmedFile);
-    if (unconfirmed !== null) {
-      InstallOnQuitUnconfirmed.parse(unconfirmed);
-      quitPreferenceUnknown = true;
-    } else {
-      try {
-        await fs.lstat(quitUnconfirmedFile);
-        throw new Error("UPDATE_QUIT_PREFERENCE_INVALID");
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-    }
-    if (quitPreferenceUnknown)
-      return {
-        status: "unknown" as const,
-        enabled: false as const,
-        code: "UPDATE_QUIT_PREFERENCE_OUTCOME_UNKNOWN",
-      };
-    const raw = await readRecord(quitPreferenceFile);
-    if (raw === null) {
-      try {
-        await fs.lstat(quitPreferenceFile);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT")
-          return {
-            status: "confirmed" as const,
-            scope: "install-on-normal-quit" as const,
-            enabled: false,
-          };
-        throw error;
-      }
-      throw new Error("UPDATE_QUIT_PREFERENCE_INVALID");
-    }
-    return {
-      status: "confirmed" as const,
-      scope: "install-on-normal-quit" as const,
-      enabled: InstallOnQuitPreferences.parse(raw).enabled,
-    };
-  };
   const noticesFile = path.join(root, "notice-preferences.json");
-  const readNoticePreferences = async () => {
-    const raw = await readRecord(noticesFile);
-    return raw === null
-      ? {
-          schema: "farol.installed-update-notices/1" as const,
-          seenVersion: null,
-          failureNotice: null,
-        }
-      : NoticePreferences.parse(raw);
-  };
+  const preferenceReaders = createPreferences({
+    files: {
+      preferences: preferencesFile,
+      notices: noticesFile,
+      automatic: automaticPreferenceFile,
+      automaticUnconfirmed: automaticUnconfirmedFile,
+      quit: quitPreferenceFile,
+      quitUnconfirmed: quitUnconfirmedFile,
+    },
+    readRecord: (file) => readRecord(file),
+    probe: (file) => fs.lstat(file),
+    ensureRoot: () => canonicalOwnedDirectory(root, true),
+  });
+  const readPreferences = preferenceReaders.readPreferences;
+  const readAutomaticPreference = preferenceReaders.readAutomatic;
+  const readQuitPreference = preferenceReaders.readQuit;
+  const readNoticePreferences = preferenceReaders.readNotices;
   // One notice persistence lane inside the existing release owner. It serializes
   // this sibling record only; update staging/handoff authority stays independent.
   let noticeQueue: Promise<void> = Promise.resolve();
@@ -3025,16 +2952,16 @@ async function createRuntime(
         };
       } catch {
         return {
-          status: automaticPreferenceUnknown ? "unknown" : "blocked",
+          status: preferenceReaders.automaticUnknown() ? "unknown" : "blocked",
           enabled: false,
-          code: automaticPreferenceUnknown
+          code: preferenceReaders.automaticUnknown()
             ? "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN"
             : "UPDATE_AUTOMATIC_PREFERENCE_UNREADABLE",
         };
       }
     },
     writeAutomaticUpdatePreference: async (enabled, scope) => {
-      if (automaticPreferenceUnknown)
+      if (preferenceReaders.automaticUnknown())
         return {
           status: "unknown",
           code: "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
@@ -3090,7 +3017,7 @@ async function createRuntime(
         if (JSON.stringify(observed) !== JSON.stringify(record.data))
           throw new Error("UPDATE_AUTOMATIC_PREFERENCE_CHANGED");
       } catch {
-        automaticPreferenceUnknown = true;
+        preferenceReaders.markAutomaticUnknown();
         return {
           status: "unknown",
           code: "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
@@ -3168,7 +3095,7 @@ async function createRuntime(
         if (observed.enabled !== enabled)
           throw new Error("UPDATE_QUIT_PREFERENCE_CHANGED");
       } catch {
-        quitPreferenceUnknown = true;
+        preferenceReaders.markQuitUnknown();
         // Never clear the prewritten witness or retry an unacknowledged choice.
         return {
           status: "unknown",
