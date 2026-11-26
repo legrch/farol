@@ -10777,8 +10777,12 @@ describe("ChatGPT route cancellation binding", () => {
     // Every page read stalls. A turn that has not been sent has no Stop of its
     // own (the one the page shows may be an older turn's): its Cancel sends no
     // script at all, and ends the turn through the observation generation.
+    const stalled: ((value: unknown) => void)[] = [];
     const executeJavaScript = vi.fn(
-      (_script: string) => new Promise<unknown>(() => undefined),
+      (_script: string) =>
+        new Promise<unknown>((resolve) => {
+          stalled.push(resolve);
+        }),
     );
     const { candidate } = routeWith(vi.fn(), {});
     candidate.admitRouteBTurn();
@@ -10799,46 +10803,34 @@ describe("ChatGPT route cancellation binding", () => {
     expect(Reflect.get(candidate, "taskObservationGeneration")).toBe(
       generation + 1,
     );
-    // The turn settles with the Cancel, and frees the task and the route.
+    // The stalled step still holds the task and the route: nothing can start
+    // beside it. It settles when the step does, and reports the cancellation.
+    expect(Reflect.get(candidate, "taskInFlight")).toBe(true);
+    for (const resolve of stalled) resolve(undefined);
     await expect(turn).resolves.toMatchObject({
       state: "failed_before_submit",
+      code: "CHATGPT_TASK_CANCELLED",
     });
+    expect(executeJavaScript).toHaveBeenCalledTimes(calls);
     expect(Reflect.get(candidate, "taskInFlight")).toBe(false);
     expect(Reflect.get(candidate, "activeTurn")).toBeNull();
   });
 
-  it("takes no late readiness of a turn a Cancel ended, and never stamps its page", async () => {
-    const route = routeWith(vi.fn(), {});
-    const { candidate, marks } = route;
-    candidate.admitRouteBTurn();
-    vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
-    let late: (value: unknown) => void = () => undefined;
-    vi.spyOn(candidate, "observe").mockReturnValue(
-      new Promise((resolve) => {
-        late = resolve;
-      }) as never,
-    );
-    const turn = candidate.runReadonlyTask("hello");
-    await vi.waitFor(() => expect(candidate.observe).toHaveBeenCalled());
-    expect(await candidate.cancelActiveTask()).toBe("cancelled");
-    await turn;
-    late({ state: "authenticated" });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(marks).toEqual([]);
-    expect(Reflect.get(candidate, "taskInFlight")).toBe(false);
-  });
-
-  describe("a Cancel of a turn that was not sent settles it, whatever step it waits on", () => {
-    // Each step stalls forever. The Cancel must free the task and the route in
-    // the same few ticks, with no stamp on the page and no later effect, and
-    // the next turn must be admitted at once.
+  describe("a Cancel of a turn that was not sent ends it without a page effect, and it settles when its stalled step does", () => {
+    // Each step stalls until the test releases it. The Cancel answers at once
+    // and touches no page; the turn keeps the task and the route until the
+    // step settles, so a successor can never overlap it; no stamp reaches the
+    // page, and the turn reports the cancellation.
     type Route = ReturnType<typeof routeWith>;
+    const release: { current: () => void } = { current: () => undefined };
     const steps: [string, (route: Route) => void][] = [
       [
         "open",
         ({ candidate }) => {
           vi.spyOn(candidate, "open").mockReturnValue(
-            new Promise<never>(() => undefined),
+            new Promise((resolve) => {
+              release.current = () => resolve({ status: "opened" });
+            }),
           );
         },
       ],
@@ -10847,7 +10839,9 @@ describe("ChatGPT route cancellation binding", () => {
         ({ candidate }) => {
           vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
           vi.spyOn(candidate, "observe").mockReturnValue(
-            new Promise<never>(() => undefined),
+            new Promise((resolve) => {
+              release.current = () => resolve({ state: "authenticated" });
+            }) as never,
           );
         },
       ],
@@ -10856,7 +10850,12 @@ describe("ChatGPT route cancellation binding", () => {
         ({ candidate }) => {
           vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
           Reflect.get(candidate, "routeWindow").webContents.executeJavaScript =
-            vi.fn(() => new Promise<unknown>(() => undefined));
+            vi.fn(
+              () =>
+                new Promise<unknown>((resolve) => {
+                  release.current = () => resolve(undefined);
+                }),
+            );
         },
       ],
     ];
@@ -10871,27 +10870,67 @@ describe("ChatGPT route cancellation binding", () => {
       );
       // Let the turn reach its stalled step.
       await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(Reflect.get(candidate, "taskInFlight")).toBe(true);
       expect(await candidate.cancelActiveTask()).toBe("cancelled");
-      // Settled within a few ticks, not at the task deadline.
-      const settled = await Promise.race([
+      // Still held by the stalled step: a second turn is refused, and the
+      // cancelled one has not settled.
+      expect(Reflect.get(candidate, "taskInFlight")).toBe(true);
+      await expect(candidate.runReadonlyTask("again")).resolves.toMatchObject({
+        code: "CHATGPT_TASK_IN_PROGRESS",
+      });
+      const pending = await Promise.race([
         turn,
         new Promise<"pending">((resolve) =>
-          setTimeout(() => resolve("pending"), 50),
+          setTimeout(() => resolve("pending"), 30),
         ),
       ]);
-      expect(settled).not.toBe("pending");
-      expect(settled).toMatchObject({ state: "failed_before_submit" });
+      expect(pending).toBe("pending");
+      release.current();
+      await expect(turn).resolves.toMatchObject({
+        state: "failed_before_submit",
+        code: "CHATGPT_TASK_CANCELLED",
+      });
       expect(Reflect.get(candidate, "taskInFlight")).toBe(false);
       expect(Reflect.get(candidate, "activeTurn")).toBeNull();
       // Nothing was stamped on the page by the cancelled turn.
       expect(marks).toEqual([]);
-      // The next turn is admitted at once, not refused as one in progress.
-      const next = candidate.runReadonlyTask("again");
-      expect(Reflect.get(candidate, "taskInFlight")).toBe(true);
-      await candidate.cancelActiveTask();
-      await next;
     });
+  });
+
+  it("never sets the files of an upload whose turn was cancelled, and reports the cancellation", async () => {
+    const execute = vi.fn().mockResolvedValueOnce(prepared);
+    const candidate = taskRoute(execute);
+    let cancelledNow: (() => boolean) | undefined;
+    let finish: (value: unknown) => void = () => undefined;
+    attachmentMock.upload.mockImplementation(
+      (
+        _contents: unknown,
+        _files: unknown,
+        options?: { cancelled?: () => boolean },
+      ) => {
+        cancelledNow = options?.cancelled;
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      },
+    );
+    const turn = candidate.runReadonlyTask("hello", [attachment]);
+    await vi.waitFor(() => expect(attachmentMock.upload).toHaveBeenCalled());
+    expect(cancelledNow?.()).toBe(false);
+    expect(await candidate.cancelActiveTask()).toBe("cancelled");
+    // The upload sees the cancellation before any further page effect.
+    expect(cancelledNow?.()).toBe(true);
+    expect(Reflect.get(candidate, "taskInFlight")).toBe(true);
+    finish({ status: "ready" });
+    await expect(turn).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TASK_CANCELLED",
+    });
+    expect(
+      execute.mock.calls.some(([script]) =>
+        String(script).includes("send.click()"),
+      ),
+    ).toBe(false);
+    expect(Reflect.get(candidate, "taskInFlight")).toBe(false);
   });
 
   it("marks the page with the turn's epoch before the turn's first effect and never clears it", async () => {

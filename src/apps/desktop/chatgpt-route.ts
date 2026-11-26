@@ -48,7 +48,6 @@ import {
   preparedTaskSchema,
   taskProbeSchema,
 } from "../../../apps/desktop/chat/probe";
-import { abortable } from "../../../apps/desktop/chat/abortable";
 import { createActivityWatch } from "../../../apps/desktop/chat/activity";
 import {
   createUpdateAdmission,
@@ -373,6 +372,7 @@ export type ChatGptReadonlyTaskResult = Readonly<{
     | "CHATGPT_TEMPORARY_CHAT_REQUIRED"
     | "CHATGPT_INSTANT_MODEL_REQUIRED"
     | "CHATGPT_TASK_PAGE_LOST"
+    | "CHATGPT_TASK_CANCELLED"
     | "CHATGPT_TASK_ERROR"
     | "CHATGPT_USAGE_LIMITED"
     | "CHATGPT_TASK_OUTPUT_CHANGED"
@@ -480,9 +480,9 @@ export class ChatGptRoute {
     pinnedConversationUrl: string | null;
     dispatched: boolean;
   } | null = null;
-  // Ends the waits of the turn in flight when a local Cancel supersedes it
-  // before it was sent; null while no turn runs.
-  private activeTurnAbort: AbortController | null = null;
+  // Set when a local Cancel ended the turn in flight before it was sent, so
+  // that the turn reports the cancellation and not an unrelated failure.
+  private activeTurnLocal: { cancelled: boolean } | null = null;
   // A Codex host thread (Route B) was admitted on this route: Farol itself
   // submits its turns from then on. It is set by the admission, however the
   // route came to exist, never by the route's creation.
@@ -662,9 +662,13 @@ export class ChatGptRoute {
       supersedeObservation: (generation) => {
         if (this.taskObservationGeneration === generation) {
           ++this.taskObservationGeneration;
-          // The turn stops waiting in the same tick, so it settles and frees
-          // the task and the route instead of waiting out a stalled step.
-          this.activeTurnAbort?.abort();
+          // An unsent turn is ended by this; it reports the cancellation. The
+          // turn itself keeps the task and the route until every step it
+          // started has settled, so nothing overlaps its successor.
+          if (this.activeTurn !== null && !this.activeTurn.dispatched) {
+            if (this.activeTurnLocal !== null)
+              this.activeTurnLocal.cancelled = true;
+          }
         }
       },
       observedRunning: () => this.activity.running() === true,
@@ -1562,6 +1566,30 @@ export class ChatGptRoute {
       "ordinary" | "temporary-instant" | "connector-instant" = "ordinary",
     appTarget?: Readonly<{ name: string }>,
   ): Promise<ChatGptConnectorCheckResult | ChatGptSubmissionResult> {
+    const local = { cancelled: false };
+    const result = await this.runReadonlyTurn(
+      prompt,
+      attachments,
+      observer,
+      profile,
+      appTarget,
+      local,
+    );
+    // A turn a local Cancel ended before it was sent reports the cancellation,
+    // whichever step noticed it and however that step classifies its failure.
+    return local.cancelled && result.state === "failed_before_submit"
+      ? { ...result, code: "CHATGPT_TASK_CANCELLED" }
+      : result;
+  }
+
+  private async runReadonlyTurn(
+    prompt: string,
+    attachments: readonly StagedChatGptAttachment[],
+    observer: ChatGptTaskObserver,
+    profile: "ordinary" | "temporary-instant" | "connector-instant",
+    appTarget: Readonly<{ name: string }> | undefined,
+    local: { cancelled: boolean },
+  ): Promise<ChatGptConnectorCheckResult | ChatGptSubmissionResult> {
     // Capture this operation's explicit target before any navigation. Never
     // mutate the route's default/manual-message binding for a one-shot check.
     const requiredAppName = appTarget?.name ?? this.options.requiredAppName;
@@ -1648,11 +1676,7 @@ export class ChatGptRoute {
       dispatched: false,
     };
     this.activeTurn = activeTurn;
-    const abort = new AbortController();
-    this.activeTurnAbort = abort;
-    // The step of the turn that is waiting, ended when a Cancel supersedes it.
-    const unlessCancelled = <T>(work: Promise<T>): Promise<T> =>
-      abortable(work, abort.signal);
+    this.activeTurnLocal = local;
     // Checked right before an effect on the page.
     const throwIfCancelled = (): void => {
       if (observationGeneration !== this.taskObservationGeneration)
@@ -1675,40 +1699,22 @@ export class ChatGptRoute {
       allowNavigationAfter: boolean | "response" = false,
     ) => {
       if (preparing) requireOriginalDocument();
-      return unlessCancelled(
-        this.runTaskScript(
-          contents,
-          script,
-          gesture,
-          deadline,
-          observationGeneration,
-          allowNavigationAfter,
-        ),
+      return this.runTaskScript(
+        contents,
+        script,
+        gesture,
+        deadline,
+        observationGeneration,
+        allowNavigationAfter,
       );
     };
     const observeTaskReadiness = async () => {
       if (monotonicNow() >= deadline)
         throw new Error("ChatGPT task deadline exceeded");
-      try {
-        // The deadline race releases its timer when the turn is cancelled, and
-        // the turn stops waiting at once.
-        return await unlessCancelled(
-          raceDeadline(
-            this.observe(),
-            deadline,
-            monotonicClock,
-            () => {
-              this.readiness.invalidate();
-              throw new Error("ChatGPT task deadline exceeded");
-            },
-            abort.signal,
-          ),
-        );
-      } catch (error) {
-        // A cancelled turn takes no late observation.
-        if (abort.signal.aborted) this.readiness.invalidate();
-        throw error;
-      }
+      return raceDeadline(this.observe(), deadline, monotonicClock, () => {
+        this.readiness.invalidate();
+        throw new Error("ChatGPT task deadline exceeded");
+      });
     };
     let publicTurn: ChatGptPublicTurn | null = null;
     const semanticOutput =
@@ -1731,7 +1737,7 @@ export class ChatGptRoute {
           };
     try {
       requireOriginalDocument();
-      const opened = await unlessCancelled(this.open());
+      const opened = await this.open();
       throwIfCancelled();
       requireOriginalDocument();
       if (opened.status !== "opened") {
@@ -1789,14 +1795,12 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
-        const profileFailure = await unlessCancelled(
-          this.prepareTemporaryInstantProfile(
-            candidate,
-            profile === "temporary-instant",
-            deadline,
-            observationGeneration,
-            observer.connectionCheck ? observer.beforePrepare : undefined,
-          ),
+        const profileFailure = await this.prepareTemporaryInstantProfile(
+          candidate,
+          profile === "temporary-instant",
+          deadline,
+          observationGeneration,
+          observer.connectionCheck ? observer.beforePrepare : undefined,
         );
         requireOriginalDocument();
         if (profileFailure !== null) {
@@ -2043,8 +2047,14 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
-        const uploaded = await unlessCancelled(
-          uploadChatGptAttachments(candidate.webContents, attachments),
+        const uploaded = await uploadChatGptAttachments(
+          candidate.webContents,
+          attachments,
+          {
+            // Checked right before every effect the upload has on the page.
+            cancelled: () =>
+              observationGeneration !== this.taskObservationGeneration,
+          },
         );
         if (uploaded.status === "failed") {
           return {
@@ -2069,7 +2079,7 @@ export class ChatGptRoute {
         // in-page, before it clicks.
         requireOriginalDocument();
         preparing = false;
-        await unlessCancelled(Promise.resolve(observer.onDispatchIntent?.()));
+        await observer.onDispatchIntent?.();
         const beforeAppVerification = dispatchReadinessRefusal();
         if (beforeAppVerification) return beforeAppVerification;
         if (dispatchIdentityLost()) {
@@ -2625,7 +2635,7 @@ export class ChatGptRoute {
       // The epoch is not touched: it names this turn for good, so nothing
       // that ends or follows it can look like the absence of a turn.
       if (this.activeTurn === activeTurn) this.activeTurn = null;
-      if (this.activeTurnAbort === abort) this.activeTurnAbort = null;
+      if (this.activeTurnLocal === local) this.activeTurnLocal = null;
       this.taskInFlight = false;
     }
   }
