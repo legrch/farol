@@ -147,13 +147,51 @@ export type RouteReadinessPorts = Readonly<{
   activity: ReadinessActivity;
 }>;
 
+// The wait of a finished load for its submission gate. Every install gets an
+// increasing id and only the latest may conclude the wait, and only while the
+// load is still pending: a result of an earlier or later-superseded install
+// does nothing, and the wait is consumed before any side effect so it ends
+// exactly once. A full navigation, a failure or a lost page ends it without
+// concluding, and the install outstanding then can never conclude it.
+function installWait() {
+  let sequence = 0;
+  let latest = 0;
+  let pending = false;
+  return {
+    // An install starts. A finished load also opens the wait.
+    begin: (opensWait: boolean): number => {
+      sequence += 1;
+      latest = sequence;
+      if (opensWait) pending = true;
+      return latest;
+    },
+    end: (): void => {
+      pending = false;
+      sequence += 1;
+      latest = sequence;
+    },
+    // The install is still the latest one and no end() came after it. A
+    // result of any other install, success or failure, describes a document or
+    // a wait that has moved on and must change nothing.
+    isLatest: (id: number): boolean => id === latest,
+    // True once, for the latest install of a load that is still pending.
+    claim: (id: number): boolean => {
+      if (!pending || id !== latest) return false;
+      pending = false;
+      return true;
+    },
+  };
+}
+
 /**
  * Registers the readiness, load-state and submission-gate listeners on the
  * route's contents, in this order: redirect, navigate, dom-ready, start,
  * fail, finish, console, in-page navigation, renderer gone. A full navigation
  * waits for its commit; a failure or a cancelled earlier navigation never
  * describes the successor's document; the submission gate is installed before
- * a finished load is trusted, and a gate that fails blocks the surface.
+ * a finished load is trusted, and a gate that fails blocks the surface. An
+ * in-page change that supersedes a pending install hands the finished load to
+ * its replacement: only that latest install's success completes it, once.
  */
 export function trackRouteReadiness(
   contents: ReadinessContents,
@@ -162,6 +200,7 @@ export function trackRouteReadiness(
   const { allowed, owns, state, surface, options, events, gate, activity } =
     ports;
   let currentNavigationUrl: string | null = null;
+  const wait = installWait();
   const trackNavigationUrl = (
     _event: unknown,
     url: string,
@@ -212,6 +251,7 @@ export function trackRouteReadiness(
     if (!inPlace) {
       currentNavigationUrl = url;
       state.setAwaitingCommit(true);
+      wait.end();
     }
     state.advanceDocument();
     if (!inPlace) state.advancePhysicalDocument();
@@ -233,6 +273,7 @@ export function trackRouteReadiness(
         // has begun. It must not poison that successor's readiness.
         if (currentNavigationUrl !== null && url !== currentNavigationUrl)
           return;
+        wait.end();
         state.advanceDocument();
         state.setLoadFailed(true);
         state.setLoad("failed");
@@ -241,42 +282,57 @@ export function trackRouteReadiness(
       }
     },
   );
+  // The finished load whose submission gate is not yet known to be installed.
+  // An in-page change can supersede that install, and the latest install then
+  // carries the same finished document to its conclusion, once.
+  const concludeInstall = (
+    id: number,
+    installed: "installed" | "failed" | "stale",
+  ) => {
+    // Stale: a replacing install keeps the wait. Only the latest install may
+    // act, on a failure as on a success.
+    if (installed === "stale" || !wait.isLatest(id)) return;
+    if (installed === "failed") {
+      wait.end();
+      gate.blockUnsafe();
+      return;
+    }
+    if (!wait.claim(id)) return;
+    if (state.loadFailed() || state.awaitingCommit()) return;
+    completeLoad();
+  };
+  const completeLoad = () => {
+    if (!owns()) return;
+    if (
+      options.collapseSidebar() &&
+      isChatGptPage(contents.getURL(), options.homeUrl())
+    ) {
+      void contents
+        .executeJavaScript(collapseChatGptSidebarScript(), true)
+        .catch(() => undefined);
+    }
+    state.setLoad("loaded");
+    events.loadState("loaded");
+    events.conversationUrl();
+    surface.reveal();
+    if (options.observesTaskActivity()) {
+      activity.start();
+    }
+    if (
+      options.signInMode() &&
+      surface.isWindow() &&
+      isChatGptPage(contents.getURL(), options.homeUrl())
+    ) {
+      void contents
+        .executeJavaScript(signInBannerScript(options.title()), true)
+        .catch(() => undefined);
+    }
+  };
   contents.on("did-finish-load", () => {
     if (!owns()) return;
     if (state.loadFailed() || state.awaitingCommit()) return;
-    void (async () => {
-      const installed = await gate.install();
-      if (installed === "stale") return;
-      if (installed === "failed") {
-        gate.blockUnsafe();
-        return;
-      }
-      if (!owns()) return;
-      if (
-        options.collapseSidebar() &&
-        isChatGptPage(contents.getURL(), options.homeUrl())
-      ) {
-        void contents
-          .executeJavaScript(collapseChatGptSidebarScript(), true)
-          .catch(() => undefined);
-      }
-      state.setLoad("loaded");
-      events.loadState("loaded");
-      events.conversationUrl();
-      surface.reveal();
-      if (options.observesTaskActivity()) {
-        activity.start();
-      }
-      if (
-        options.signInMode() &&
-        surface.isWindow() &&
-        isChatGptPage(contents.getURL(), options.homeUrl())
-      ) {
-        void contents
-          .executeJavaScript(signInBannerScript(options.title()), true)
-          .catch(() => undefined);
-      }
-    })();
+    const id = wait.begin(true);
+    void gate.install().then((installed) => concludeInstall(id, installed));
   });
   contents.on("console-message", (details) => {
     // Only the page's own top-level frame may send the return signal: an
@@ -302,12 +358,12 @@ export function trackRouteReadiness(
     state.advanceDocument();
     events.loadState(state.load());
     events.conversationUrl();
-    void gate.install().then((installed) => {
-      if (installed === "failed") gate.blockUnsafe();
-    });
+    const id = wait.begin(false);
+    void gate.install().then((installed) => concludeInstall(id, installed));
   });
   contents.on("render-process-gone", () => {
     if (!owns()) return;
+    wait.end();
     if (activity.running() === true) {
       events.taskOutcomeUnknown();
     }
@@ -324,7 +380,7 @@ export function trackRouteReadiness(
 
 export type PopupContents = Readonly<{
   on(
-    event: "did-start-navigation",
+    event: "did-start-navigation" | "did-redirect-navigation",
     listener: (
       event: unknown,
       url: string,
@@ -332,7 +388,20 @@ export type PopupContents = Readonly<{
       isMainFrame: boolean,
     ) => void,
   ): unknown;
-  on(event: "did-finish-load", listener: () => void): unknown;
+  on(
+    event: "did-finish-load" | "render-process-gone",
+    listener: () => void,
+  ): unknown;
+  on(
+    event: "did-fail-load",
+    listener: (
+      event: unknown,
+      code: number,
+      description: string,
+      url: string,
+      isMainFrame: boolean,
+    ) => void,
+  ): unknown;
   on(
     event: "did-navigate-in-page",
     listener: (event: unknown, url: string, isMainFrame: boolean) => void,
@@ -398,35 +467,68 @@ export function adoptPopupWindow<Popup extends AdoptedPopup>(
     });
   }
   if (ports.requireApp()) {
+    // A finished load whose gate is not yet installed. An in-page change can
+    // supersede that install; the latest install then gates the same document,
+    // once. A full navigation, a load failure or a lost renderer ends the wait
+    // without gating, so a superseded install never gates a document it did
+    // not describe.
+    const wait = installWait();
+    // The main-frame navigation being followed, as on the route: a failure of
+    // an earlier navigation never describes its successor's document.
+    let currentNavigationUrl: string | null = null;
+    popup.webContents.on(
+      "did-redirect-navigation",
+      (_event, url, _inPlace, isMainFrame) => {
+        if (isMainFrame) currentNavigationUrl = url;
+      },
+    );
+    const conclude = (id: number, gate: "installed" | "failed" | "stale") => {
+      if (gate === "stale" || !wait.isLatest(id)) return;
+      if (gate === "failed") {
+        wait.end();
+        if (!popup.isDestroyed()) popup.destroy();
+        return;
+      }
+      if (!wait.claim(id) || popup.isDestroyed()) return;
+      books.gate(popup);
+      ports.reconcile(popup);
+    };
     popup.webContents.on(
       "did-start-navigation",
-      (_event, _url, inPlace, isMainFrame) => {
+      (_event, url, inPlace, isMainFrame) => {
         if (!isMainFrame || inPlace || popup.isDestroyed()) return;
+        currentNavigationUrl = url;
+        wait.end();
         books.advanceGeneration(popup);
         books.ungate(popup);
         popup.hide();
       },
     );
     popup.webContents.on("did-finish-load", () => {
-      void ports.installGate(popup).then((gate) => {
-        if (gate === "stale") return;
-        if (gate === "failed") {
-          if (!popup.isDestroyed()) popup.destroy();
-          return;
-        }
-        books.gate(popup);
-        ports.reconcile(popup);
-      });
+      const id = wait.begin(true);
+      void ports.installGate(popup).then((gate) => conclude(id, gate));
     });
     popup.webContents.on(
       "did-navigate-in-page",
       (_event, _url, isMainFrame) => {
         if (!isMainFrame) return;
         books.advanceGeneration(popup);
-        void ports.installGate(popup).then((gate) => {
-          if (gate === "failed" && !popup.isDestroyed()) popup.destroy();
-        });
+        const id = wait.begin(false);
+        void ports.installGate(popup).then((gate) => conclude(id, gate));
       },
     );
+    popup.webContents.on(
+      "did-fail-load",
+      (_event, code, _description, url, isMainFrame) => {
+        // A cancellation describes no document, as on the route.
+        if (!isMainFrame || code === -3) return;
+        if (currentNavigationUrl !== null && url !== currentNavigationUrl)
+          return;
+        wait.end();
+      },
+    );
+    popup.webContents.on("render-process-gone", () => {
+      wait.end();
+    });
   }
 }
