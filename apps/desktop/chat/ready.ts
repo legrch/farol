@@ -153,7 +153,9 @@ export type RouteReadinessPorts = Readonly<{
  * fail, finish, console, in-page navigation, renderer gone. A full navigation
  * waits for its commit; a failure or a cancelled earlier navigation never
  * describes the successor's document; the submission gate is installed before
- * a finished load is trusted, and a gate that fails blocks the surface.
+ * a finished load is trusted, and a gate that fails blocks the surface. An
+ * in-page change that supersedes a pending install hands the finished load to
+ * its replacement: only that latest install's success completes it, once.
  */
 export function trackRouteReadiness(
   contents: ReadinessContents,
@@ -212,6 +214,7 @@ export function trackRouteReadiness(
     if (!inPlace) {
       currentNavigationUrl = url;
       state.setAwaitingCommit(true);
+      finishPending = false;
     }
     state.advanceDocument();
     if (!inPlace) state.advancePhysicalDocument();
@@ -233,6 +236,7 @@ export function trackRouteReadiness(
         // has begun. It must not poison that successor's readiness.
         if (currentNavigationUrl !== null && url !== currentNavigationUrl)
           return;
+        finishPending = false;
         state.advanceDocument();
         state.setLoadFailed(true);
         state.setLoad("failed");
@@ -241,41 +245,53 @@ export function trackRouteReadiness(
       }
     },
   );
+  // The finished load whose submission gate is not yet known to be installed.
+  // An in-page change can supersede that install, and the replacement then
+  // carries the same finished document to its conclusion; a full navigation,
+  // a failure or a lost page ends the wait, so a superseded install never
+  // reveals a document it did not describe.
+  let finishPending = false;
+  const completeLoad = () => {
+    if (!owns()) return;
+    if (
+      options.collapseSidebar() &&
+      isChatGptPage(contents.getURL(), options.homeUrl())
+    ) {
+      void contents
+        .executeJavaScript(collapseChatGptSidebarScript(), true)
+        .catch(() => undefined);
+    }
+    state.setLoad("loaded");
+    events.loadState("loaded");
+    events.conversationUrl();
+    surface.reveal();
+    if (options.observesTaskActivity()) {
+      activity.start();
+    }
+    if (
+      options.signInMode() &&
+      surface.isWindow() &&
+      isChatGptPage(contents.getURL(), options.homeUrl())
+    ) {
+      void contents
+        .executeJavaScript(signInBannerScript(options.title()), true)
+        .catch(() => undefined);
+    }
+  };
   contents.on("did-finish-load", () => {
     if (!owns()) return;
     if (state.loadFailed() || state.awaitingCommit()) return;
+    finishPending = true;
     void (async () => {
       const installed = await gate.install();
+      // Stale: an in-page change replaced this install and keeps the wait.
       if (installed === "stale") return;
+      finishPending = false;
       if (installed === "failed") {
         gate.blockUnsafe();
         return;
       }
-      if (!owns()) return;
-      if (
-        options.collapseSidebar() &&
-        isChatGptPage(contents.getURL(), options.homeUrl())
-      ) {
-        void contents
-          .executeJavaScript(collapseChatGptSidebarScript(), true)
-          .catch(() => undefined);
-      }
-      state.setLoad("loaded");
-      events.loadState("loaded");
-      events.conversationUrl();
-      surface.reveal();
-      if (options.observesTaskActivity()) {
-        activity.start();
-      }
-      if (
-        options.signInMode() &&
-        surface.isWindow() &&
-        isChatGptPage(contents.getURL(), options.homeUrl())
-      ) {
-        void contents
-          .executeJavaScript(signInBannerScript(options.title()), true)
-          .catch(() => undefined);
-      }
+      completeLoad();
     })();
   });
   contents.on("console-message", (details) => {
@@ -303,11 +319,26 @@ export function trackRouteReadiness(
     events.loadState(state.load());
     events.conversationUrl();
     void gate.install().then((installed) => {
-      if (installed === "failed") gate.blockUnsafe();
+      if (installed === "failed") {
+        finishPending = false;
+        gate.blockUnsafe();
+        return;
+      }
+      if (
+        installed === "installed" &&
+        finishPending &&
+        owns() &&
+        !state.loadFailed() &&
+        !state.awaitingCommit()
+      ) {
+        finishPending = false;
+        completeLoad();
+      }
     });
   });
   contents.on("render-process-gone", () => {
     if (!owns()) return;
+    finishPending = false;
     if (activity.running() === true) {
       events.taskOutcomeUnknown();
     }
@@ -398,18 +429,26 @@ export function adoptPopupWindow<Popup extends AdoptedPopup>(
     });
   }
   if (ports.requireApp()) {
+    // A finished load whose gate is not yet installed. An in-page change can
+    // supersede that install; the replacement then gates the same document.
+    // A full navigation ends the wait, so a superseded install never gates a
+    // document it did not describe.
+    let gatePending = false;
     popup.webContents.on(
       "did-start-navigation",
       (_event, _url, inPlace, isMainFrame) => {
         if (!isMainFrame || inPlace || popup.isDestroyed()) return;
+        gatePending = false;
         books.advanceGeneration(popup);
         books.ungate(popup);
         popup.hide();
       },
     );
     popup.webContents.on("did-finish-load", () => {
+      gatePending = true;
       void ports.installGate(popup).then((gate) => {
         if (gate === "stale") return;
+        gatePending = false;
         if (gate === "failed") {
           if (!popup.isDestroyed()) popup.destroy();
           return;
@@ -424,7 +463,16 @@ export function adoptPopupWindow<Popup extends AdoptedPopup>(
         if (!isMainFrame) return;
         books.advanceGeneration(popup);
         void ports.installGate(popup).then((gate) => {
-          if (gate === "failed" && !popup.isDestroyed()) popup.destroy();
+          if (gate === "failed") {
+            gatePending = false;
+            if (!popup.isDestroyed()) popup.destroy();
+            return;
+          }
+          if (gate === "installed" && gatePending && !popup.isDestroyed()) {
+            gatePending = false;
+            books.gate(popup);
+            ports.reconcile(popup);
+          }
         });
       },
     );
