@@ -208,7 +208,9 @@ describe("observation settle window", () => {
     for (const mutate of [
       (value: Record<string, unknown>) => ({
         ...value,
-        observationId: "other",
+        // A well-formed UUID that names a different observation, so the reply
+        // passes the schema and only the correlation check can refuse it.
+        observationId: "00000000-0000-4000-8000-000000000000",
       }),
       (value: Record<string, unknown>) => ({
         ...value,
