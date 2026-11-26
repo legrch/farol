@@ -113,7 +113,7 @@ export type ProductConfigurationDependencies = Readonly<{
   homeDirectory?: string;
   // Optional: when supplied, a guarded workspace edit takes this same
   // cross-process promotion lease (role "admission") for its durable
-  // critical phase — see `replaceSettingsDeliveryStore` and
+  // critical phase — see `replace` in `configuration/delivery.ts` and
   // `releaseWorkspaceEditLease`. Without this port there is no exclusion.
   promotionLease?: WorkspaceEditLeaseGuard;
 }>;
