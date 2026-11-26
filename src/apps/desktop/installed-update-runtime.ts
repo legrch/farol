@@ -1740,6 +1740,7 @@ async function createRuntime(
       };
     }
   };
+  type StartupReclaim = Awaited<ReturnType<typeof reclaimStagedExtractions>>;
   // The one place a download stage, or the tombstone it is moved to, is removed
   // recursively. Nothing is deleted without the same judgment an extraction gets
   // at startup: the reclaim runs first (its leases, named children and
@@ -1770,10 +1771,22 @@ async function createRuntime(
   //    recovery or a tombstone, and it still does the rename and the identity
   //    comparison. A call that cannot prove settlement (an unknown verifier
   //    outcome, a timed out child) never passes it.
+  //
+  // `startup` is the reclaim of the startup pass that is reconciling this
+  // download, when it ran. This call always scans again, and a second, empty
+  // census cannot see that the first one failed to finish (a removal it could
+  // not make durable, a lease it could not read), so an incomplete first pass
+  // keeps the stage as surely as an incomplete second one.
   const removeDownloadStage = async (
     download: z.infer<typeof DownloadStage>,
     authorization: "scan" | "settled" = "scan",
+    startup: StartupReclaim = null,
   ) => {
+    // Before any branch, whatever is or is not on disk: the caller records the
+    // interruption and unlinks its intent once this returns, and a startup
+    // pass that did not finish cannot say the stage was safe to leave behind.
+    if (startup?.incomplete === true)
+      throw new Error("UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED");
     const stage = downloadDirectory(download.id);
     const tombstone = `${stage}.removing`;
     const proven =
@@ -1781,7 +1794,15 @@ async function createRuntime(
     // Before anything is looked at: a directory that is absent now but present
     // when it is reached was not scanned, and `authorized` says so. A proven
     // call has nothing left to scan for; a leftover tombstone still needs it.
-    let scan = proven ? undefined : await reclaimStagedExtractions();
+    // An unfinished pass vetoes every branch below, the ones that return
+    // without judging a directory included: the caller settles the intent
+    // once this returns, and an unfinished census cannot say that is safe.
+    const finished = (pass: StartupReclaim) => {
+      if (pass?.incomplete === true)
+        throw new Error("UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED");
+      return pass;
+    };
+    let scan = proven ? undefined : finished(await reclaimStagedExtractions());
     // The judgment for one existing directory: the identity the pass scanned,
     // which must still be what is on disk. Unknown, kept, skipped, or a
     // directory the pass never listed is not authorization.
@@ -1791,7 +1812,7 @@ async function createRuntime(
       // The settled proof stands for this call's own stage, not for a tombstone.
       if (proven && target === stage)
         return { dev: metadata.dev, ino: metadata.ino };
-      scan ??= await reclaimStagedExtractions();
+      scan ??= finished(await reclaimStagedExtractions());
       const judged = downloadStageScan(scan, root, target);
       if (
         judged === null ||
@@ -1873,6 +1894,7 @@ async function createRuntime(
   };
   const reconcileInterruptedDownload = async (
     intent: z.infer<typeof DownloadIntent>,
+    startup: StartupReclaim,
   ) => {
     const download = intent.download;
     // Legacy intents have no producer/stage witness. Never guess their ownership.
@@ -1883,7 +1905,7 @@ async function createRuntime(
       throw new Error("UPDATE_DOWNLOAD_PRODUCER_UNCONFIRMED");
     // The verifier extracts inside this directory, so a verifying stage may
     // hold one the producer left behind: the removal below judges that first.
-    await removeDownloadStage(download);
+    await removeDownloadStage(download, "scan", startup);
     await writeRecord(
       path.join(root, "last-interrupted-download.json"),
       interruptedDownloadRecord(intent, new Date().toISOString()),
@@ -2087,7 +2109,7 @@ async function createRuntime(
       return known("UPDATE_RESTORE_OUTCOME_UNKNOWN");
     if (downloadRecovery === "reconcile") {
       try {
-        await reconcileInterruptedDownload(downloadIntent!);
+        await reconcileInterruptedDownload(downloadIntent!, scan);
       } catch (error) {
         // These say why the stage was kept, and each is its own unknown
         // outcome; every other failure is the generic staging one.
@@ -2445,8 +2467,9 @@ async function createRuntime(
     };
   };
 
-  // Startup order: the unfinished-copy reconciliation, the extraction reclaim,
-  // the cleanup fence's settlement, and only then the fence itself.
+  // Startup order: the extraction reclaim, once; the unfinished-copy
+  // reconciliation, which receives that report; the cleanup fence's settlement,
+  // which reads the same report; and only then the fence itself.
   // A present record the strict reader refuses (JSON null, a repeated key,
   // invalid UTF-8, a byte-order mark) is classified as such, whichever record
   // it was: the updater would otherwise collapse the throw into the generic
@@ -2475,14 +2498,18 @@ async function createRuntime(
       unreadable = error;
     }
     const fenced = marker !== null || unreadable !== null;
+    // The one startup pass, before any recovery. The fence's unfinished-copy
+    // reconciliation receives it, so an unfinished pass vetoes that removal
+    // instead of leaving it a first look of its own; the settlement below
+    // reads the same report.
+    const report = await reclaimStagedExtractions();
     if (fenced) {
       try {
-        await recoverFromRecords(true);
+        await recoverFromRecords(true, report);
       } catch {
         // The fence below still applies; nothing here settles it.
       }
     }
-    const report = await reclaimStagedExtractions();
     if (fenced) {
       let cleared = false;
       let settlementRefusal: string | null = null;

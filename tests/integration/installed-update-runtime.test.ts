@@ -10484,8 +10484,10 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
       const controller = (await createInstalledUpdateRuntime({
         ...options(),
         // The first pass (the startup reclaim) moves the stage away after its
-        // own discovery. The second (the reconciliation's) finds no stage, and
-        // the stage is back in place before anything is removed.
+        // own discovery, so it cannot finish. That alone keeps the stage, the
+        // extraction and the intent: the reconciliation refuses before it
+        // scans again, so the second pass (which would have found no stage,
+        // with the stage back in place before anything is removed) never runs.
         reclaimAfterDiscovery: async (parent) => {
           if (parent !== installed()) return;
           rootPasses += 1;
@@ -10494,21 +10496,24 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
         },
       }))!;
       await controller.initialize();
-      expect(rootPasses).toBe(2);
+      expect(rootPasses).toBe(1);
       expect(controller.snapshot()).toMatchObject({
         phase: "failed",
         code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
         recoveryRequired: true,
       });
-      expect(await exists(extraction)).toBe(true);
-      expect(await exists(stage)).toBe(true);
+      // Nothing was touched: the stage is still where the race left it.
+      expect(
+        await exists(path.join(`${stage}.away`, path.basename(extraction))),
+      ).toBe(true);
       expect(await exists(pendingFile())).toBe(true);
       await controller.close();
     });
     describe("a tombstone is judged like the stage it came from", () => {
       // Pass 1 (the startup reclaim) moves the stage to its tombstone after its
-      // own discovery, as a crashed removal would leave it. Pass 2 (the
-      // reconciliation's) must then judge that tombstone's extractions.
+      // own discovery, so it cannot finish and the reconciliation refuses
+      // before it scans again. A tombstone left by a crash before the launch is
+      // scanned by pass 1 itself, and the last test here removes it.
       const toTombstone = (stage: string) => {
         let rootPasses = 0;
         return {
@@ -10531,7 +10536,7 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
           reclaimAfterDiscovery: race.hook,
         }))!;
         await controller.initialize();
-        expect(race.passes()).toBe(2);
+        expect(race.passes()).toBe(1);
         expect(controller.snapshot()).toMatchObject({
           phase: "failed",
           code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
@@ -10566,6 +10571,37 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
         expect(await exists(pendingFile())).toBe(true);
         await controller.close();
       });
+      // The races above stop at the unfinished startup pass. These reach the
+      // tombstone's own authorization: the tombstone was left by a crash
+      // before the launch, the startup pass finishes and keeps what it holds,
+      // and only that judgment stands between it and the recursive removal.
+      it.each([
+        ["a spawning lease", "spawning"],
+        ["an extraction whose owner still runs", "live"],
+      ] as const)(
+        "deletes nothing from a leftover tombstone holding %s after a finished pass",
+        async (_name, kind) => {
+          const stage = await interrupted();
+          const tombstone = `${stage}.removing`;
+          const extraction =
+            kind === "spawning"
+              ? await leak("spawning", { phase: "spawning" }, stage)
+              : (table.set(4242, OWNER_START), await leak("live", {}, stage));
+          await fs.rename(stage, tombstone);
+          const controller = (await createInstalledUpdateRuntime(options()))!;
+          await controller.initialize();
+          expect(controller.snapshot()).toMatchObject({
+            phase: "failed",
+            code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+            recoveryRequired: true,
+          });
+          expect(
+            await exists(path.join(tombstone, path.basename(extraction))),
+          ).toBe(true);
+          expect(await exists(pendingFile())).toBe(true);
+          await controller.close();
+        },
+      );
       it("still removes a leftover tombstone whose extraction names its child, exited", async () => {
         const stage = await interrupted();
         await leak(
@@ -10584,11 +10620,11 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
           },
           stage,
         );
-        const race = toTombstone(stage);
-        const controller = (await createInstalledUpdateRuntime({
-          ...options(),
-          reclaimAfterDiscovery: race.hook,
-        }))!;
+        // A crash left the tombstone before this launch: the startup pass
+        // scans it as a stage and finishes, so it may authorize its removal. A
+        // stage moved during that pass would leave the pass unfinished.
+        await fs.rename(stage, `${stage}.removing`);
+        const controller = (await createInstalledUpdateRuntime(options()))!;
         await controller.initialize();
         expect(controller.snapshot()).toMatchObject({
           phase: "failed",
@@ -10600,6 +10636,35 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
         expect(await exists(pendingFile())).toBe(false);
         await controller.close();
       });
+    });
+    it("removes nothing from a stage that both finished passes missed and that is back before removal", async () => {
+      const stage = await interrupted();
+      const extraction = await leak("unscanned", {}, stage);
+      // Out of sight for the whole startup pass, which finishes; back in place
+      // right after the reconciliation's own pass has listed the parent. That
+      // pass finishes too, so only the per-directory judgment can refuse.
+      await fs.rename(stage, `${stage}.away`);
+      let rootPasses = 0;
+      const controller = (await createInstalledUpdateRuntime({
+        ...options(),
+        reclaimAfterDiscovery: async (parent) => {
+          if (parent !== installed()) return;
+          rootPasses += 1;
+          if (rootPasses === 2) await fs.rename(`${stage}.away`, stage);
+        },
+      }))!;
+      await controller.initialize();
+      expect(rootPasses).toBe(2);
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+        recoveryRequired: true,
+      });
+      expect(await exists(path.join(stage, path.basename(extraction)))).toBe(
+        true,
+      );
+      expect(await exists(pendingFile())).toBe(true);
+      await controller.close();
     });
     it("calls the recursive remove for a stage only from the one authorized function", async () => {
       // Guard: every recursive removal of a stage or tombstone is judged first.
@@ -10808,6 +10873,269 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
         expect(await exists(stage)).toBe(true);
         expect(await exists(pendingFile())).toBe(true);
         await controller.close();
+      });
+      it("keeps a clear stage when another parent's lease cannot be read", async () => {
+        const stage = await interrupted();
+        const other = await otherParent();
+        const broken = await leak("broken", {}, other);
+        const lease = path.join(broken, "lease.json");
+        const lstat = fs.lstat.bind(fs) as (
+          ...a: unknown[]
+        ) => Promise<unknown>;
+        const spy = vi.spyOn(fs, "lstat").mockImplementation((async (
+          file: unknown,
+          ...rest: unknown[]
+        ) => {
+          if (file === lease)
+            throw Object.assign(new Error("EIO"), { code: "EIO" });
+          return lstat(file, ...rest);
+        }) as typeof fs.lstat);
+        const controller = await recovered();
+        spy.mockRestore();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+          recoveryRequired: true,
+        });
+        expect(await exists(broken)).toBe(true);
+        expect(await exists(stage)).toBe(true);
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      });
+      it("keeps the stage when the startup pass could not make a removal durable, though the rescan is clear", async () => {
+        const stage = await interrupted();
+        const extraction = await leak("inside", {}, stage);
+        const open = fs.open.bind(fs) as (...a: unknown[]) => Promise<unknown>;
+        let failed = false;
+        // The startup pass removes the extraction and then cannot sync the
+        // stage directory; the second pass finds nothing left to look at.
+        const spy = vi.spyOn(fs, "open").mockImplementation((async (
+          file: unknown,
+          ...rest: unknown[]
+        ) => {
+          if (file === stage && !failed) {
+            failed = true;
+            throw Object.assign(new Error("EIO"), { code: "EIO" });
+          }
+          return open(file, ...rest);
+        }) as never);
+        const controller = await recovered();
+        spy.mockRestore();
+        expect(failed).toBe(true);
+        expect(await exists(extraction)).toBe(false);
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+          recoveryRequired: true,
+        });
+        expect(await exists(stage)).toBe(true);
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      });
+      describe("an incomplete startup pass vetoes every branch of the stage removal", () => {
+        const unfinishedStartup = (other: string) => ({
+          ...options(),
+          reclaimAfterDiscovery: async (parent: string) => {
+            if (parent === other)
+              throw Object.assign(new Error("EIO"), { code: "EIO" });
+          },
+        });
+        // An intent with no recorded stage identity: allocation was
+        // interrupted, so the stage may only be an empty directory.
+        const unbind = async (stage: string) => {
+          const intent = JSON.parse(await fs.readFile(pendingFile(), "utf8"));
+          delete intent.download.identity;
+          await fs.writeFile(pendingFile(), `${JSON.stringify(intent)}\n`, {
+            mode: 0o600,
+          });
+          for (const name of await fs.readdir(stage))
+            await fs.rm(path.join(stage, name), { recursive: true });
+        };
+        it("keeps the intent when the stage is already gone", async () => {
+          const stage = await interrupted();
+          await fs.rm(stage, { recursive: true });
+          const other = await otherParent();
+          const controller = (await createInstalledUpdateRuntime(
+            unfinishedStartup(other),
+          ))!;
+          await controller.initialize();
+          expect(controller.snapshot()).toMatchObject({
+            phase: "failed",
+            code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+            recoveryRequired: true,
+          });
+          expect(await exists(pendingFile())).toBe(true);
+          expect(
+            await exists(
+              path.join(installed(), "last-interrupted-download.json"),
+            ),
+          ).toBe(false);
+          await controller.close();
+        });
+        it("removes an unbound empty stage when the startup pass finished", async () => {
+          const stage = await interrupted();
+          await unbind(stage);
+          const controller = await recovered();
+          expect(controller.snapshot()).toMatchObject({
+            phase: "failed",
+            code: "UPDATE_DOWNLOAD_INTERRUPTED",
+          });
+          expect(await exists(stage)).toBe(false);
+          expect(await exists(pendingFile())).toBe(false);
+          await controller.close();
+        });
+        it("keeps an unbound empty stage and the intent when it did not", async () => {
+          const stage = await interrupted();
+          await unbind(stage);
+          const other = await otherParent();
+          const controller = (await createInstalledUpdateRuntime(
+            unfinishedStartup(other),
+          ))!;
+          await controller.initialize();
+          expect(controller.snapshot()).toMatchObject({
+            phase: "failed",
+            code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+            recoveryRequired: true,
+          });
+          expect(await exists(stage)).toBe(true);
+          expect(await exists(pendingFile())).toBe(true);
+          await controller.close();
+        });
+        // The same veto holds for the reconciliation's own pass: the startup
+        // pass finishes, the second one cannot.
+        const unfinishedSecond = (other: string) => {
+          let visits = 0;
+          return {
+            ...options(),
+            reclaimAfterDiscovery: async (parent: string) => {
+              if (parent !== other) return;
+              visits += 1;
+              if (visits === 2)
+                throw Object.assign(new Error("EIO"), { code: "EIO" });
+            },
+          };
+        };
+        it.each([
+          ["already gone", "gone"],
+          ["unbound and empty", "unbound"],
+        ] as const)(
+          "keeps the intent when the second pass did not finish and the stage is %s",
+          async (_name, shape) => {
+            const stage = await interrupted();
+            if (shape === "gone") await fs.rm(stage, { recursive: true });
+            else await unbind(stage);
+            const other = await otherParent();
+            const controller = (await createInstalledUpdateRuntime(
+              unfinishedSecond(other),
+            ))!;
+            await controller.initialize();
+            expect(controller.snapshot()).toMatchObject({
+              phase: "failed",
+              code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+              recoveryRequired: true,
+            });
+            expect(await exists(pendingFile())).toBe(true);
+            if (shape === "unbound") expect(await exists(stage)).toBe(true);
+            expect(
+              await exists(
+                path.join(installed(), "last-interrupted-download.json"),
+              ),
+            ).toBe(false);
+            await controller.close();
+          },
+        );
+        // A standing cleanup fence runs the unfinished-copy reconciliation
+        // too. It must see the one startup pass, not take a first look of its
+        // own that the pass the fence is settled by has not seen.
+        describe("under a standing cleanup fence", () => {
+          const counting = (
+            other: string,
+            failing: (visit: number) => boolean,
+          ) => {
+            const visits = { count: 0 };
+            return {
+              visits,
+              runtime: {
+                ...options(),
+                reclaimAfterDiscovery: async (parent: string) => {
+                  if (parent !== other) return;
+                  visits.count += 1;
+                  if (failing(visits.count))
+                    throw Object.assign(new Error("EIO"), { code: "EIO" });
+                },
+              },
+            };
+          };
+          it("scans once, and keeps the stage, the intent and the fence when that scan did not finish", async () => {
+            const stage = await interrupted();
+            await writeMarker(handleMarker());
+            const other = await otherParent();
+            const run = counting(other, () => true);
+            const controller = (await createInstalledUpdateRuntime(
+              run.runtime,
+            ))!;
+            await controller.initialize();
+            expect(run.visits.count).toBe(1);
+            expect(controller.snapshot()).toMatchObject({
+              phase: "failed",
+              code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+              recoveryRequired: true,
+            });
+            expect(await exists(stage)).toBe(true);
+            expect(await exists(pendingFile())).toBe(true);
+            expect(await exists(markerFile())).toBe(true);
+            expect(
+              await exists(
+                path.join(installed(), "last-interrupted-download.json"),
+              ),
+            ).toBe(false);
+            await controller.close();
+          });
+          it("does not let a later clear pass settle what the startup pass left unfinished", async () => {
+            const stage = await interrupted();
+            await writeMarker(handleMarker());
+            const other = await otherParent();
+            const run = counting(other, (visit) => visit === 1);
+            const controller = (await createInstalledUpdateRuntime(
+              run.runtime,
+            ))!;
+            await controller.initialize();
+            expect(controller.snapshot()).toMatchObject({
+              phase: "failed",
+              code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+              recoveryRequired: true,
+            });
+            expect(await exists(stage)).toBe(true);
+            expect(await exists(pendingFile())).toBe(true);
+            expect(await exists(markerFile())).toBe(true);
+            expect(
+              await exists(
+                path.join(installed(), "last-interrupted-download.json"),
+              ),
+            ).toBe(false);
+            await controller.close();
+          });
+          it("reconciles the interrupted download once the one startup pass finished", async () => {
+            const stage = await interrupted();
+            await writeMarker(handleMarker());
+            const other = await otherParent();
+            const run = counting(other, () => false);
+            const controller = (await createInstalledUpdateRuntime(
+              run.runtime,
+            ))!;
+            await controller.initialize();
+            expect(controller.snapshot().phase).not.toBe("failed");
+            expect(
+              await exists(
+                path.join(installed(), "last-interrupted-download.json"),
+              ),
+            ).toBe(true);
+            expect(await exists(stage)).toBe(false);
+            expect(await exists(pendingFile())).toBe(false);
+            expect(await exists(markerFile())).toBe(false);
+            await controller.close();
+          });
+        });
       });
       it("keeps an otherwise clear stage when the pass could not finish elsewhere", async () => {
         const stage = await interrupted();

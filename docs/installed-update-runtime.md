@@ -642,10 +642,17 @@ error with its entry (`errors`) and is `incomplete`. So is a pass that left any
 staging parent unscanned, with or without an error: a parent that was invalid,
 or changed or vanished after discovery, was never judged, and what it holds is
 unknown. The one exception is an update root that is not there at all, which is
-an empty, finished scan. A removal that cannot be made durable (the parent's
-open, sync or close fails) and a chain recheck that fails right before a removal
-are errors too, recorded even though the extraction may already be gone, or is
-kept as `removal failed`. An entry that vanishes after its lease was read is
+an empty, finished scan; "not there" means only that the root's first `lstat`
+found nothing. A root that was seen and is gone by the next step (its
+`realpath`) vanished during discovery, which leaves it unscanned. A removal that
+cannot be made durable (the parent's open, sync or close fails, ENOENT included)
+is an error, recorded even though the extraction may already be gone. So is any
+failure that keeps an entry: an `lstat`, open, stat, read or close of its lease
+that is not ENOENT (the entry is kept as `lease unreadable`), the listing of the
+extraction, a removal step, the chain recheck right before one, or the lookup
+that tells whether an extraction a removal step could not find is gone (each
+kept as `removal failed`). A lease whose bytes do not parse is a fact about the
+lease, not an I/O failure, and is kept without an error. An entry that vanishes after its lease was read is
 neither recorded nor kept: there is nothing left of it. Everything judged before and
 after the error stays in it, `kept` included, so a kept extraction is never lost
 because a later one could not be looked at. An incomplete report is never
@@ -654,6 +661,15 @@ pass that did not run at all; and it fences Ready recovery like a kept
 extraction. A pass that rejects outright (outside a supervised controller) is
 treated as an incomplete one with no root and no scanned parent. The fence is
 recomputed at every launch, so it falls when a later pass completes.
+Reconciling an interrupted download scans again before it removes the stage, and
+a second, empty census cannot see that the first one did not finish. The startup
+report is therefore passed to that reconciliation, and an incomplete startup
+pass keeps the stage and the intent (`UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED`)
+whatever the second scan finds. That refusal comes first, before any branch of
+the removal: an absent stage and an unbound empty stage (which is only
+`rmdir`ed) are refused too, since the caller would otherwise record the
+interruption and unlink the intent. A lease whose handle fails to `close` after
+a failed read records both errors; the close never replaces the read's.
 
 **Time zone.** `ps` prints start times in the system zone, and Farol does not
 pin a `TZ` for it (the launch manifest fixes that command's environment). A
@@ -673,10 +689,12 @@ update fenced until it is removed by hand. The pid is written from the spawn
 handle before anything else is awaited, so the interval is the one lease write
 that follows the spawn.
 
-**Startup order.** `recover()` runs, in this order: the existing preparation
-reconciliation (it removes an unfinished prepared copy that `ready.json`
-records and no journal covers, and used to sit unreachable behind the marker);
-the extraction reclaim; the marker settlement; and only then the existing
+**Startup order.** `recover()` runs, in this order: the extraction reclaim,
+once; the existing preparation reconciliation (it removes an unfinished prepared
+copy that `ready.json` records and no journal covers, and used to sit
+unreachable behind the marker), which receives that report, so an unfinished
+pass vetoes its stage removal and it takes no first look of its own; the marker
+settlement, from the same report; and only then the existing
 `UPDATE_STAGING_OUTCOME_UNKNOWN` refusal, if the marker still stands.
 
 **Ready recovery and a kept extraction.** Only a normal Quit writes the cleanup
