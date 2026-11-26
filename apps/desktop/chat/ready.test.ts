@@ -723,6 +723,36 @@ describe("did-navigate-in-page", () => {
     h.emit("did-navigate", {}, NEXT);
     expect(h.log).toEqual(["loadFailed=false", "awaitingCommit=false"]);
   });
+
+  it("ends the wait, without revealing, when the followed navigation fails after an in-page change", async () => {
+    const installs = pendingInstalls();
+    const h = routeHarness({ observesActivity: true, gate: installs.next });
+    h.emit("did-start-navigation", ...start(PAGE));
+    h.emit("did-navigate", {}, PAGE);
+    h.emit("did-finish-load");
+    h.emit("did-navigate-in-page", {}, NEXT, true);
+    h.emit("did-fail-load", ...failLoad(-105, PAGE));
+    installs.settle(0, "stale");
+    installs.settle(1, "installed");
+    await flush();
+    expect(h.log).not.toContain("reveal");
+    expect(h.log).not.toContain("activity-start");
+    expect(h.route.load).toBe("failed");
+  });
+
+  it("still ignores the failure of an earlier full navigation after an in-page change", async () => {
+    const h = routeHarness({ observesActivity: true });
+    h.emit("did-start-navigation", ...start(PAGE));
+    h.emit("did-start-navigation", ...start(NEXT));
+    h.emit("did-navigate", {}, NEXT);
+    h.emit("did-navigate-in-page", {}, HOME, true);
+    h.log.length = 0;
+    h.emit("did-fail-load", ...failLoad(-105, PAGE));
+    expect(h.log).toEqual([]);
+    h.emit("did-finish-load");
+    await flush();
+    expect(h.log).toContain("reveal");
+  });
 });
 
 describe("render-process-gone", () => {
@@ -1065,6 +1095,37 @@ describe("adopting a popup", () => {
     await flush();
     expect(h.log).not.toContain("books.gate");
     expect(h.log).not.toContain("reconcile");
+  });
+
+  it("ends the wait, without gating, when the followed navigation fails after an in-page change", async () => {
+    const installs = pendingInstalls();
+    const h = popupHarness({ requireApp: true, gate: installs.next });
+    h.log.length = 0;
+    h.contentsEvent("did-start-navigation", {}, PAGE, false, true);
+    h.contentsEvent("did-finish-load");
+    h.contentsEvent("did-navigate-in-page", {}, NEXT, true);
+    h.contentsEvent("did-fail-load", {}, -105, "ERR", PAGE, true);
+    installs.settle(0, "stale");
+    installs.settle(1, "installed");
+    await flush();
+    expect(h.log).not.toContain("books.gate");
+    expect(h.log).not.toContain("reconcile");
+  });
+
+  it("still ignores the failure of an earlier full popup navigation after an in-page change", async () => {
+    const installs = pendingInstalls();
+    const h = popupHarness({ requireApp: true, gate: installs.next });
+    h.log.length = 0;
+    h.contentsEvent("did-start-navigation", {}, PAGE, false, true);
+    h.contentsEvent("did-start-navigation", {}, NEXT, false, true);
+    h.contentsEvent("did-finish-load");
+    h.contentsEvent("did-navigate-in-page", {}, HOME, true);
+    h.contentsEvent("did-fail-load", {}, -105, "ERR", PAGE, true);
+    installs.settle(0, "stale");
+    installs.settle(1, "installed");
+    await flush();
+    expect(h.log).toContain("books.gate");
+    expect(h.log).toContain("reconcile");
   });
 
   it("lets only the latest install gate the popup, whichever order they resolve in", async () => {
