@@ -120,6 +120,7 @@ import {
   legacyVerificationWithdrawalPending,
   taskSourceWithdrawalFloor,
   withLastVerifiedAttachment,
+  withLastVerifiedAttachmentKept,
   withLegacyAppPendingSeparated,
   withLegacyVerificationWithdrawn,
 } from "../../../apps/desktop/configuration/legacy";
@@ -1442,9 +1443,12 @@ export class ProductConfigurationService {
       const sourceInvalidated = invalidateStaleCodexTaskSource(
         invalidateStaleAgentVerification(connectorInvalidated),
       );
-      const invalidated = freshTaskSource
+      const fenced = freshTaskSource
         ? sourceInvalidated
         : this.fenceTaskSource(sourceInvalidated);
+      // A write that clears a capturable live attachment keeps it as the
+      // last verified one, so an older profile never loses its only proof.
+      const invalidated = withLastVerifiedAttachmentKept(before, fenced);
       candidate = ProductSettingsSchema.parse(
         invalidated !== transformed && invalidated.revision === before.revision
           ? { ...invalidated, revision: before.revision + 1 }
