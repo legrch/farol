@@ -283,6 +283,14 @@ describe("originalStopCandidate", () => {
     expect(settings).toEqual(before);
   });
 
+  it("keeps a setup-level fence it does not own", () => {
+    const settings = withConnector(connected(), {}, { outcomeUnknown: true });
+    const result = originalStopCandidate(settings, selectionFor(settings));
+    expect(result.kind).toBe("candidate");
+    if (result.kind !== "candidate") return;
+    expect(result.settings.setup.connect.outcomeUnknown).toBe(true);
+  });
+
   it("stops a connector that holds only a challenge", () => {
     const settings = withConnector(connected(), { runtime: null });
     const result = originalStopCandidate(settings, selectionFor(settings));
