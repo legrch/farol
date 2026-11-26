@@ -366,20 +366,22 @@ export async function waitForInstalledUpdateRelaunch(
     };
     const correlate = async () => {
       await routes();
-      const raw = await bounded(() => reads.readRecord(receiptFile));
-      if (
-        hint.action === "apply" &&
-        !(await bounded(() =>
-          (reads.recordAbsent ?? recordAbsent)(
-            path.join(root, "restore-pending.json"),
-          ),
-        ))
-      )
-        throw new Error("UPDATE_RELAUNCH_RECEIPT_MISMATCH");
-      const receipt =
-        hint.action === "apply"
-          ? Retained.parse(raw)
-          : RestoreIntent.parse(raw);
+      const restoreAbsent = reads.recordAbsent ?? recordAbsent;
+      const restoreRecord = (file: string) =>
+        bounded(() => readRestoreIntent(file, reads.readRecord, restoreAbsent));
+      let receipt: z.infer<typeof Retained> | z.infer<typeof RestoreIntent>;
+      if (hint.action === "apply") {
+        const raw = await bounded(() => reads.readRecord(receiptFile));
+        // A restore record supersedes an apply hint; a null or malformed one is
+        // invalid evidence and is classified as such, not as a mismatch.
+        if (await restoreRecord(path.join(root, "restore-pending.json")))
+          throw new Error("UPDATE_RELAUNCH_RECEIPT_MISMATCH");
+        receipt = Retained.parse(raw);
+      } else {
+        const intent = await restoreRecord(receiptFile);
+        if (!intent) throw new Error("UPDATE_RELAUNCH_RECEIPT_MISMATCH");
+        receipt = intent;
+      }
       const op = receipt.operation;
       if (
         !op ||
@@ -2209,11 +2211,20 @@ async function createRuntime(
       const downloadRaw = await readRecord(pendingDownloadFile);
       let downloadIntent =
         downloadRaw === null ? null : DownloadIntent.parse(downloadRaw);
-      let pending = await readRestoreIntent(
-        restoreFile,
-        readRecord,
-        recordAbsent,
-      );
+      let pending: z.infer<typeof RestoreIntent> | null;
+      try {
+        pending = await readRestoreIntent(
+          restoreFile,
+          readRecord,
+          recordAbsent,
+        );
+      } catch (error) {
+        // Keep the classified code: the updater would otherwise collapse it
+        // into the generic recovery-unavailable outcome.
+        if (error instanceof Error && error.message === "UPDATE_RECORD_INVALID")
+          return known("UPDATE_RECORD_INVALID");
+        throw error;
+      }
       const raw = await readRecord(readyFile);
       const fromReady = raw !== null;
       let interruptedDownload = false;
@@ -3111,6 +3122,15 @@ async function createRuntime(
         clearTimeout(timer);
       }
     };
+    // Any restore record, valid or not, fences an apply. Admission is destructive
+    // (it releases the ChatGPT window and connector), so refuse before acquiring
+    // it, and before the dispatch record or a helper.
+    try {
+      if (!(await wait(() => recordAbsent(restoreFile))))
+        return { status: "blocked", code: "UPDATE_RESTORE_NOT_READY" };
+    } catch {
+      return { status: "blocked", code: "UPDATE_RESTORE_NOT_READY" };
+    }
     let admission: InstalledUpdateAdmission;
     try {
       admission = await wait(async () => {
@@ -3134,10 +3154,6 @@ async function createRuntime(
       if (!retained || retained.handle !== update.handle)
         return { status: "blocked", code: "UPDATE_PACKAGE_NOT_READY" };
       try {
-        // Any restore record, valid or not, fences an apply: refuse before the
-        // dispatch record is written or a helper starts.
-        if (!(await wait(() => recordAbsent(restoreFile))))
-          return { status: "blocked", code: "UPDATE_RESTORE_NOT_READY" };
         if (!(await wait(() => drained(ensureActive))))
           return { status: "blocked", code: "UPDATE_WORK_PENDING" };
         const source = await wait(() => readAcceptedSource(ensureActive));

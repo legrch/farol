@@ -6873,12 +6873,14 @@ describe("normal Quit runtime (disposable files; helper and native ports doubled
       request(original.deadlineAt + 100_000),
     );
     expect(second).toBe(first);
+    // The restore fence reads the filesystem before admission, so admission is
+    // acquired after the call returns rather than synchronously inside it.
+    expect(await first).toEqual({ status: "accepted", relaunch: false });
     expect(acquireAdmission).toHaveBeenCalledWith(expect.any(Function), {
       ...original,
       relaunch: false,
       requestQuit: false,
     });
-    expect(await first).toEqual({ status: "accepted", relaunch: false });
     expect(mocks.helper).toHaveBeenCalledOnce();
     expect(mocks.helper.mock.calls[0]![1]).toMatchObject({
       action: "apply",
