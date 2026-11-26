@@ -32,7 +32,6 @@ import { legacyPredecessorRequiresStateRecovery } from "../../modules/release/do
 import {
   AutomaticUpdatePreferenceResultSchema,
   InstallOnQuitPreferenceResultSchema,
-  updateOutcomeUnresolved,
   type NormalQuitApplyContext,
   type InstalledUpdateView,
 } from "../../modules/release/contract/installed-update";
@@ -174,6 +173,22 @@ import {
   verificationRefusalCode,
 } from "../../../apps/desktop/update/stage";
 
+import {
+  automaticChoiceCandidate,
+  automaticChoiceView,
+  automaticConfirmation,
+  automaticScopeRequired,
+  automaticUnconfirmedRecord,
+  quitChoiceCandidate,
+  quitConfirmation,
+  quitUnconfirmedRecord,
+} from "../../../apps/desktop/update/choice";
+import {
+  newFailureNotice,
+  noticeDecision,
+  noticeSeenRecord,
+  noticeUnresolved,
+} from "../../../apps/desktop/update/notice";
 import {
   manualReplacementApplies,
   promotionUnconfirmed,
@@ -2576,25 +2591,7 @@ async function createRuntime(
     readAutomaticUpdatePreference: async () => {
       try {
         const preference = await readAutomaticPreference();
-        // The stable UI has one choice. A legacy download-only record cannot
-        // leave hidden download/Quit effects enabled while that choice is OFF.
-        if (
-          options.build.updateChannel === "github-stable" &&
-          preference.schema === "farol.installed-automatic-update-preference/1"
-        )
-          return {
-            status: "confirmed",
-            enabled: false,
-            scope: "download-and-install",
-          };
-        return {
-          status: "confirmed",
-          enabled: preference.enabled,
-          ...(preference.schema ===
-          "farol.installed-automatic-update-preference/2"
-            ? { scope: preference.scope }
-            : {}),
-        };
+        return automaticChoiceView(preference, options.build.updateChannel);
       } catch {
         return {
           status: preferenceReaders.automaticUnknown() ? "unknown" : "blocked",
@@ -2611,14 +2608,9 @@ async function createRuntime(
           status: "unknown",
           code: "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
         };
-      const record = AutomaticUpdatePreferences.safeParse({
-        schema:
-          scope === "download-and-install"
-            ? "farol.installed-automatic-update-preference/2"
-            : "farol.installed-automatic-update-preference/1",
-        enabled,
-        ...(scope === undefined ? {} : { scope }),
-      });
+      const record = AutomaticUpdatePreferences.safeParse(
+        automaticChoiceCandidate(enabled, scope),
+      );
       if (!record.success)
         return {
           status: "refused",
@@ -2626,11 +2618,7 @@ async function createRuntime(
         };
       try {
         const prior = await readAutomaticPreference();
-        if (
-          (options.build.updateChannel === "github-stable" ||
-            prior.schema === "farol.installed-automatic-update-preference/2") &&
-          scope === undefined
-        )
+        if (automaticScopeRequired(options.build.updateChannel, prior, scope))
           return {
             status: "refused",
             code: "UPDATE_AUTOMATIC_PREFERENCE_SCOPE_REQUIRED",
@@ -2643,11 +2631,10 @@ async function createRuntime(
       }
       if (scope === "download-and-install")
         try {
-          await writeRecord(automaticUnconfirmedFile, {
-            schema: "farol.installed-automatic-update-unconfirmed/1",
-            enabled,
-            ...(scope === undefined ? {} : { scope }),
-          });
+          await writeRecord(
+            automaticUnconfirmedFile,
+            automaticUnconfirmedRecord(enabled, scope),
+          );
         } catch {
           return {
             status: "refused",
@@ -2683,11 +2670,9 @@ async function createRuntime(
         } catch {
           /* Exact durable preference ACK survives conservative fence cleanup. */
         }
-      return AutomaticUpdatePreferenceResultSchema.parse({
-        status: "confirmed",
-        enabled,
-        ...(scope === undefined ? {} : { scope }),
-      });
+      return AutomaticUpdatePreferenceResultSchema.parse(
+        automaticConfirmation(enabled, scope),
+      );
     },
     readInstallOnQuitPreference: async () => {
       try {
@@ -2701,11 +2686,9 @@ async function createRuntime(
       }
     },
     writeInstallOnQuitPreference: async (enabled) => {
-      const record = InstallOnQuitPreferences.safeParse({
-        schema: "farol.installed-install-on-quit-preference/1",
-        scope: "install-on-normal-quit",
-        enabled,
-      });
+      const record = InstallOnQuitPreferences.safeParse(
+        quitChoiceCandidate(enabled),
+      );
       if (!record.success)
         return { status: "refused", code: "UPDATE_QUIT_PREFERENCE_INVALID" };
       try {
@@ -2718,12 +2701,8 @@ async function createRuntime(
           code: "UPDATE_QUIT_PREFERENCE_UNREADABLE",
         };
       }
-      const fence = {
-        schema: "farol.installed-install-on-quit-unconfirmed/1",
-        enabled,
-      };
       try {
-        await writeRecord(quitUnconfirmedFile, fence);
+        await writeRecord(quitUnconfirmedFile, quitUnconfirmedRecord(enabled));
       } catch {
         // The choice write has not been dispatched. An unconfirmed fence may
         // conservatively block reload, but cannot be mistaken for a new choice.
@@ -2765,17 +2744,15 @@ async function createRuntime(
       } catch {
         /* Keep the known preference ACK; do not retry fence removal. */
       }
-      return InstallOnQuitPreferenceResultSchema.parse({
-        status: "confirmed",
-        scope: "install-on-normal-quit",
-        enabled,
-      });
+      return InstallOnQuitPreferenceResultSchema.parse(
+        quitConfirmation(enabled),
+      );
     },
     notice: (view, version, reusePreviousFailure) =>
       serializeNotice(
         async () => {
-          if (view.phase === "failed" && updateOutcomeUnresolved(view.code))
-            return { key: "unconfirmed", seen: false, blockedBy: view.code };
+          const unresolved = noticeUnresolved(view);
+          if (unresolved) return unresolved;
           let preferences: z.infer<typeof NoticePreferences>;
           try {
             preferences = await readNoticePreferences();
@@ -2786,33 +2763,20 @@ async function createRuntime(
               blockedBy: "UPDATE_PREFERENCES_UNREADABLE",
             };
           }
-          if (view.phase === "available" || view.phase === "ready")
-            return {
-              key: `version:${view.version}`,
-              seen: preferences.seenVersion === view.version,
-              blockedBy: null,
-            };
-          if (view.phase !== "failed")
-            throw new Error("UPDATE_NOTICE_NOT_AVAILABLE");
-          // Reuse only within one unresolved failure streak or on restoration.
-          // A successful check starts a new streak, even for the same code.
-          const previous = preferences.failureNotice;
-          if (
-            reusePreviousFailure &&
-            previous?.code === view.code &&
-            (version === null || previous.version === version)
-          )
-            return {
-              key: previous.key,
-              seen: previous.seen,
-              blockedBy: null,
-            };
-          const failureNotice = {
+          const decision = noticeDecision({
+            view,
             version,
-            code: view.code,
-            key: `failure:${randomBytes(12).toString("hex")}`,
-            seen: false,
-          };
+            reusePreviousFailure,
+            preferences,
+          });
+          if (decision.kind === "known") return decision.outcome;
+          if (decision.kind === "not-available" || view.phase !== "failed")
+            throw new Error("UPDATE_NOTICE_NOT_AVAILABLE");
+          const failureNotice = newFailureNotice(
+            version,
+            view.code,
+            `failure:${randomBytes(12).toString("hex")}`,
+          );
           await writeRecord(noticesFile, { ...preferences, failureNotice });
           return { key: failureNotice.key, seen: false, blockedBy: null };
         },
@@ -2845,20 +2809,9 @@ async function createRuntime(
         } catch {
           return known("UPDATE_PREFERENCES_UNREADABLE");
         }
-        if (key.startsWith("version:")) {
-          const version = key.slice("version:".length);
-          if (version.length === 0 || version.length > 128)
-            return known("UPDATE_NOTICE_CHANGED");
-          await writeRecord(noticesFile, {
-            ...preferences,
-            seenVersion: version,
-          });
-        } else if (preferences.failureNotice?.key === key) {
-          await writeRecord(noticesFile, {
-            ...preferences,
-            failureNotice: { ...preferences.failureNotice, seen: true },
-          });
-        } else return known("UPDATE_NOTICE_CHANGED");
+        const seen = noticeSeenRecord(preferences, key);
+        if (seen === null) return known("UPDATE_NOTICE_CHANGED");
+        await writeRecord(noticesFile, seen);
         return { ok: true as const };
       }, known("UPDATE_NOTICE_OUTCOME_UNKNOWN")),
     recover: recoverAtStartup,
