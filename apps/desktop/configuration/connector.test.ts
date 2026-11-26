@@ -402,6 +402,18 @@ async function newerDurableRevision(h: Awaited<ReturnType<typeof harness>>) {
   return durable;
 }
 
+// Fails only the second Settings read from now on: the settlement's durable
+// check reads once and sees the newer document, then the reload that follows
+// fails, so nothing but the classified mismatch tells the owner what happened.
+function failSecondRead(h: Awaited<ReturnType<typeof harness>>) {
+  const load = h.settings.load.bind(h.settings);
+  let reads = 0;
+  vi.spyOn(h.settings, "load").mockImplementation(async () => {
+    if (++reads === 2) throw new Error("synthetic reload failure");
+    return load();
+  });
+}
+
 function connectState(snapshot: ProductConfigurationSnapshot) {
   if (snapshot.status !== "ready") throw new Error("settings missing");
   return snapshot.settings.setup.connect;
@@ -773,5 +785,55 @@ describe("credential replacement fence settlement", () => {
       ok: false,
       error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
     });
+  });
+
+  it("(c) drops the retained completion when the reload after a durable mismatch also fails", async () => {
+    const h = await failedCompletion();
+    const durable = await newerDurableRevision(h);
+    failSecondRead(h);
+
+    const retried = await h.configure(NEW_KEY);
+
+    expect(retried.ok).toBe(false);
+    expect(await h.settings.load()).toEqual(durable);
+    // The service adopts the document the check already read, not the stale cache.
+    const cached = h.service.snapshot();
+    if (cached.status !== "ready") throw new Error("settings missing");
+    expect(cached.settings.revision).toBe(durable.revision);
+    expect(await h.configure(NEW_KEY)).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+    expect(h.storeSpy).toHaveBeenCalledOnce();
+  });
+
+  it("(b) drops the retained release when the reload after a durable mismatch also fails", async () => {
+    const h = await harness();
+    h.hooks.beforeCommit = async () => {
+      throw new Error("synthetic failure before rename");
+    };
+    const save = h.settings.save.bind(h.settings);
+    let saves = 0;
+    vi.spyOn(h.settings, "save").mockImplementation(async (...args) => {
+      if (++saves === 2) throw new Error("synthetic release save failure");
+      return save(...args);
+    });
+    await h.configure(NEW_KEY);
+    h.hooks.beforeCommit = async () => undefined;
+    const durable = await newerDurableRevision(h);
+    failSecondRead(h);
+
+    const retried = await h.configure(NEW_KEY);
+
+    expect(retried.ok).toBe(false);
+    expect(await h.settings.load()).toEqual(durable);
+    const cached = h.service.snapshot();
+    if (cached.status !== "ready") throw new Error("settings missing");
+    expect(cached.settings.revision).toBe(durable.revision);
+    expect(await h.configure(NEW_KEY)).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+    expect(await h.key()).toBe(OLD_KEY);
   });
 });
