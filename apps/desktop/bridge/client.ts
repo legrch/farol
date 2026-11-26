@@ -13,6 +13,16 @@ import {
   type HealthObservation,
   type PollingObservation,
 } from "./observation.ts";
+import {
+  lifecycleCode,
+  lifecycleIdentity,
+  lifecycleObservation,
+  safeIdentity,
+  type BackendLifecycleCode,
+  type BackendLifecycleObservation,
+  type ChildTerminalObservation,
+  type LifecycleIdentity,
+} from "./lifecycle.ts";
 import type { QualifiedProfileLaunch } from "./profile.ts";
 import {
   protocolMajor,
@@ -52,89 +62,10 @@ type Pending = {
   handshake?: Handshake;
 };
 
-// Facts observed on the original ChildProcess, not a clean-retirement decision.
-// Go must separately qualify origin retirement and the initiating host's ACK.
-export type ChildTerminalObservation = Readonly<{
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-  forced: boolean;
-}>;
-
-export type BackendLifecycleObservation = Readonly<{
-  source: "go-backend";
-  phase: "startup" | "active" | "closing";
-  event: "failure" | "child-close" | "cleanup-unknown";
-  code: BackendLifecycleCode;
-  state: "observed" | "outcome_unknown" | "unavailable";
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-  forced: boolean;
-  hostLifetimeId: string | null;
-  childLaunchId: string | null;
-}>;
-const lifecycleCodeValues = [
-  "protocol_violation",
-  "transport_ended",
-  "truncated_frame",
-  "transport_failed",
-  "backend_unavailable",
-  "response_timeout",
-  "stale_event_context",
-  "event_stream_budget",
-  "event_sequence_regression",
-  "invalid_response",
-  "crossed_response_id",
-  "crossed_response_context",
-  "invalid_backend_identity",
-  "wrong_backend_identity",
-  "handshake_refused",
-  "client_closed",
-] as const;
-type BackendLifecycleCode =
-  | (typeof lifecycleCodeValues)[number]
-  | "backend_unclassified_failure"
-  | "backend_child_closed"
-  | "backend_requested_clean_exit"
-  | "backend_cleanup_unconfirmed";
-const lifecycleCodes = new Set<string>(lifecycleCodeValues);
-const lifecycleSignals = new Set([
-  "SIGHUP",
-  "SIGINT",
-  "SIGQUIT",
-  "SIGILL",
-  "SIGTRAP",
-  "SIGABRT",
-  "SIGIOT",
-  "SIGBUS",
-  "SIGFPE",
-  "SIGKILL",
-  "SIGUSR1",
-  "SIGSEGV",
-  "SIGUSR2",
-  "SIGPIPE",
-  "SIGALRM",
-  "SIGTERM",
-  "SIGSTKFLT",
-  "SIGCHLD",
-  "SIGCONT",
-  "SIGSTOP",
-  "SIGTSTP",
-  "SIGTTIN",
-  "SIGTTOU",
-  "SIGURG",
-  "SIGXCPU",
-  "SIGXFSZ",
-  "SIGVTALRM",
-  "SIGPROF",
-  "SIGWINCH",
-  "SIGIO",
-  "SIGPOLL",
-  "SIGPWR",
-  "SIGSYS",
-  "SIGINFO",
-  "SIGEMT",
-  "SIGBREAK",
-]);
+export type {
+  BackendLifecycleObservation,
+  ChildTerminalObservation,
+} from "./lifecycle.ts";
 
 // Trusted Electron host only. No renderer IPC, endpoint discovery or automatic restart.
 export class Client {
@@ -177,8 +108,7 @@ export class Client {
     BackendLifecycleObservation["event"],
     BackendLifecycleObservation
   >();
-  private readonly lifecycleIdentity:
-    Readonly<{ hostLifetimeId: string; childLaunchId: string }> | undefined;
+  private readonly lifecycleIdentity: LifecycleIdentity | undefined;
   constructor(
     private child: ChildProcessWithoutNullStreams,
     private owned = false,
@@ -186,31 +116,12 @@ export class Client {
     private readonly onLifecycleObservation?: (
       observation: BackendLifecycleObservation,
     ) => void,
-    lifecycleIdentity?: Readonly<{
+    identity?: Readonly<{
       hostLifetimeId: string;
       childLaunchId: string;
     }>,
   ) {
-    const safeIdentity = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u;
-    try {
-      const fields: PropertyDescriptorMap = lifecycleIdentity
-        ? Object.getOwnPropertyDescriptors(lifecycleIdentity)
-        : {};
-      const host = fields.hostLifetimeId?.value;
-      const child = fields.childLaunchId?.value;
-      if (
-        typeof host === "string" &&
-        typeof child === "string" &&
-        safeIdentity.test(host) &&
-        safeIdentity.test(child)
-      )
-        this.lifecycleIdentity = Object.freeze({
-          hostLifetimeId: host,
-          childLaunchId: child,
-        });
-    } catch {
-      /* Missing diagnostic identity must not change launch behavior. */
-    }
+    this.lifecycleIdentity = lifecycleIdentity(identity);
     const onData = (data: Buffer): void => {
       try {
         this.decoder.push(data, (value) => this.receive(value));
@@ -389,34 +300,19 @@ export class Client {
     signal: unknown = null,
   ): void {
     if (this.lifecycle.has(event)) return;
-    const safeExitCode =
-      typeof exitCode === "number" &&
-      Number.isInteger(exitCode) &&
-      exitCode >= -2147483648 &&
-      exitCode <= 2147483647
-        ? exitCode
-        : null;
-    const safeSignal =
-      typeof signal === "string" && lifecycleSignals.has(signal)
-        ? (signal as NodeJS.Signals)
-        : null;
-    const terminalKnown = (safeExitCode === null) !== (safeSignal === null);
-    const observation: BackendLifecycleObservation = Object.freeze({
-      source: "go-backend",
+    const observation = lifecycleObservation({
+      event,
+      code,
+      state,
       phase: this.closeRequested
         ? "closing"
         : this.context
           ? "active"
           : "startup",
-      event,
-      code,
-      state:
-        event === "child-close" && !terminalKnown ? "outcome_unknown" : state,
-      exitCode: terminalKnown ? safeExitCode : null,
-      signal: terminalKnown ? safeSignal : null,
+      exitCode,
+      signal,
       forced: this.forcedTermination,
-      hostLifetimeId: this.lifecycleIdentity?.hostLifetimeId ?? null,
-      childLaunchId: this.lifecycleIdentity?.childLaunchId ?? null,
+      identity: this.lifecycleIdentity,
     });
     this.lifecycle.set(event, observation);
     try {
@@ -814,9 +710,7 @@ export class Client {
     )) {
       this.observeLifecycle(
         "failure",
-        lifecycleCodes.has(code)
-          ? (code as BackendLifecycleCode)
-          : "backend_unclassified_failure",
+        lifecycleCode(code),
         state === "unavailable" ? "unavailable" : "outcome_unknown",
       );
     }
@@ -1031,7 +925,7 @@ export async function spawnCore(
       throw new BridgeError("refused", "invalid_deadline");
     const args = ["serve", "--profile", profileId];
     if (native) {
-      const id = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u;
+      const id = safeIdentity;
       if (
         typeof native.ownerId !== "string" ||
         typeof native.computerId !== "string" ||
