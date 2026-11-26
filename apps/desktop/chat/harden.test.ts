@@ -688,6 +688,7 @@ function contentsHarness(options: ContentsOptions = {}) {
     generation: options.generation ?? 7,
     url: options.url ?? PAGE,
     title: options.title ?? "ChatGPT",
+    openerOwned: true,
   };
   const log: string[] = [];
   const listeners = new Map<string, Listener[]>();
@@ -745,6 +746,7 @@ function contentsHarness(options: ContentsOptions = {}) {
       requiredAppName: () => options.requiredAppName,
       title: () => state.title,
       webPreferences: () => popupPreferences,
+      openerOwned: () => state.openerOwned,
       adopt,
     },
   };
@@ -911,6 +913,15 @@ describe("hardening a route contents", () => {
   });
 
   describe("popups", () => {
+    it("denies every popup from an opener that is not the route's own surface", () => {
+      const h = contentsHarness();
+      h.state.openerOwned = false;
+      expect(h.windowOpen("https://chatgpt.com/auth")).toEqual({
+        action: "deny",
+      });
+      expect(h.blocked).toEqual([]);
+    });
+
     it("refuses a popup to an off-allowlist URL and reports its host", () => {
       const h = contentsHarness();
       expect(h.windowOpen("https://evil.example/x")).toEqual({

@@ -146,6 +146,15 @@ export function taskSurfaces(host: TaskSurfacePorts) {
         isDestroyed: () => contents.isDestroyed(),
         loadURL: (url) => contents.loadURL(url),
         hide: () => host.nativeViewVisibility.hide(view),
+        retire: () => {
+          // Layout selects a view by task id: leaving the maps takes away its
+          // only way back onto the host, and the contents stay destroyable.
+          if (host.taskViews.get(taskId) === view) {
+            host.taskViews.delete(taskId);
+            host.taskViewKinds.delete(taskId);
+          }
+          host.nativeViewVisibility.hide(view);
+        },
         reveal: () => {
           if (host.taskViews.get(taskId) !== view || contents.isDestroyed()) {
             return;

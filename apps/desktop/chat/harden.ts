@@ -248,6 +248,8 @@ export type RoutePopupPorts = Readonly<{
   requiredAppName: () => string | undefined;
   title: () => string;
   webPreferences: () => Electron.WebPreferences;
+  // The opener is the route's own surface, not a retired or displaced one.
+  openerOwned: () => boolean;
   // The popup's bookkeeping, its own hardening and its presentation.
   adopt: (popup: BrowserWindow) => void;
 }>;
@@ -307,6 +309,7 @@ export function hardenRouteContents<Contents extends RouteContentsTarget>(
   });
   if (tracking !== null) tracking.trackReadiness();
   contents.setWindowOpenHandler(({ url }) => {
+    if (!popups.openerOwned()) return { action: "deny" };
     if (!allowed(url)) {
       ports.blocked({ kind: "popup-blocked", host: hostOf(url) });
       return { action: "deny" };

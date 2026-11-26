@@ -471,6 +471,7 @@ function desktopFixture() {
       reveal(): void;
       focus(): void;
       destroy(): void;
+      retire(): void;
     };
   };
   windows.bindWindowLifetime(context.window as unknown as BrowserWindow);
@@ -883,6 +884,35 @@ describe("desktop layout attachment integration (source callbacks + fake host)",
     expect(f.events).toEqual([]);
     expect(f.taskViews.get("live")).toBe(replacement);
     expect(f.host.children).toEqual([replacement]);
+  });
+  it("a retired live surface is never attached again, frees its task id and stays destroyable", () => {
+    const f = desktopFixture();
+    const surface = f.api.liveChatGptSurfaceFactory("live")({
+      webPreferences: {},
+    });
+    f.context.selectedTaskId = "live";
+    surface.reveal();
+    const view = f.taskViews.get("live")!;
+    expect(f.host.children).toEqual([view]);
+
+    surface.retire();
+    expect(f.host.children).toEqual([]);
+    expect(f.taskViews.has("live")).toBe(false);
+    expect(f.taskViewKinds.has("live")).toBe(false);
+    f.api.applyLayout();
+    surface.reveal();
+    surface.focus();
+    expect(f.host.children).toEqual([]);
+
+    const replacement = f.api.liveChatGptSurfaceFactory("live")({
+      webPreferences: {},
+    });
+    const replacementView = f.taskViews.get("live")!;
+    expect(replacementView).not.toBe(view);
+    surface.destroy();
+    expect(view.webContents.destroyed).toBe(true);
+    expect(f.taskViews.get("live")).toBe(replacementView);
+    expect(replacement.webContents.destroyed).toBe(false);
   });
   it("independent WebContents destruction removes its attached surface", () => {
     const f = desktopFixture();

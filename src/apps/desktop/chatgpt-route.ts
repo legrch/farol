@@ -300,7 +300,20 @@ export type ChatGptRouteSurface = Readonly<{
   // `destroy`'s immediate teardown. Optional: only a real window (not an
   // embedded task view) can offer it, and only the sign-in flow needs it.
   close?: () => void;
+  // Takes every reveal path away from a surface that could not be destroyed:
+  // the host stops selecting it for layout and keeps it hidden, while
+  // `destroy` stays callable for a later retry.
+  retire?: () => void;
 }>;
+
+// A surface whose liveness cannot be read still counts as alive.
+function surfaceGone(surface: ChatGptRouteSurface): boolean {
+  try {
+    return surface.isDestroyed();
+  } catch {
+    return false;
+  }
+}
 
 export type ChatGptRouteSurfaceFactory = (input: {
   title: string;
@@ -508,9 +521,7 @@ export class ChatGptRoute {
           if (activeSignInRoute === this) activeSignInRoute = null;
         }
       },
-      disown: (candidate) => {
-        if (this.routeWindow === candidate) this.routeWindow = null;
-      },
+      disown: (candidate) => this.retireSurface(candidate),
     },
   );
   private readonly runTaskScript = createTaskScriptRunner<WebContents>({
@@ -588,12 +599,53 @@ export class ChatGptRoute {
       : this.load;
   }
 
+  // Surfaces whose teardown failed at the open deadline. They lost every
+  // reveal and callback authority but stay in custody until destroyed, so
+  // update admission still counts them and dispose, reset and a replacement
+  // open retry their destruction.
+  private readonly retiredSurfaces = new Set<ChatGptRouteSurface>();
+
+  private retireSurface(candidate: ChatGptRouteSurface): void {
+    if (this.routeWindow === candidate) this.routeWindow = null;
+    this.retiredSurfaces.add(candidate);
+    try {
+      candidate.retire?.();
+    } catch {
+      // The surface is already out of the route; the host keeps it hidden.
+    }
+  }
+
+  /** Retries every retired destroy; true once none is left alive. */
+  private destroyRetiredSurfaces(): boolean {
+    for (const retired of [...this.retiredSurfaces]) {
+      if (!surfaceGone(retired)) {
+        try {
+          retired.destroy();
+        } catch {
+          // Stays retired and counted until a later retry succeeds.
+        }
+      }
+      if (surfaceGone(retired)) this.retiredSurfaces.delete(retired);
+    }
+    return this.retiredSurfaces.size === 0;
+  }
+
+  // A surface that is retired, or that a replacement has displaced, no longer
+  // speaks for the route.
+  private surfaceDisplaced(candidate: ChatGptRouteSurface): boolean {
+    return (
+      this.retiredSurfaces.has(candidate) ||
+      (this.routeWindow !== null && this.routeWindow !== candidate)
+    );
+  }
+
   /** Open browser documents may contain work outside Farol's task journal. */
   hasOpenUpdateSurface(): boolean {
     return (
       this.opening !== null ||
       this.taskInFlight ||
       (this.routeWindow !== null && !this.routeWindow.isDestroyed()) ||
+      [...this.retiredSurfaces].some((retired) => !surfaceGone(retired)) ||
       [...this.popupWindows].some((popup) => !popup.isDestroyed())
     );
   }
@@ -614,6 +666,7 @@ export class ChatGptRoute {
   private beginUpdateClose(): UpdateClosing {
     const surface = this.routeWindow;
     const popups = [...this.popupWindows];
+    const retired = [...this.retiredSurfaces];
     this.activity.stop();
     if (surface && !surface.isDestroyed()) {
       this.entryUrl =
@@ -621,17 +674,20 @@ export class ChatGptRoute {
     }
     const contents = [
       ...(surface ? [surface.webContents] : []),
+      ...retired.map((leftover) => leftover.webContents),
       ...popups.map((popup) => popup.webContents),
     ];
     // Suppress ordinary window-close navigation while the update owns input.
     this.disposing = true;
     for (const popup of popups) if (!popup.isDestroyed()) popup.destroy();
     if (surface && !surface.isDestroyed()) surface.destroy();
+    this.destroyRetiredSurfaces();
     return {
       contents,
       settled: () =>
         !(
           (surface && !surface.isDestroyed()) ||
+          retired.some((leftover) => !surfaceGone(leftover)) ||
           popups.some((popup) => !popup.isDestroyed())
         ),
       forget: () => {
@@ -1020,6 +1076,8 @@ export class ChatGptRoute {
   }
 
   private async openRouteWindow(reveal = true): Promise<ChatGptOpenResult> {
+    // A replacement never coexists with a surface that could not be destroyed.
+    if (!this.destroyRetiredSurfaces()) return { status: "unreachable" };
     const parent = this.options.parent();
     const restoreParent = parent?.isVisible() ?? false;
     const routeSession = session.fromPartition(
@@ -1051,6 +1109,7 @@ export class ChatGptRoute {
       candidate.setTitle(this.displayTitle);
     });
     candidate.onClosing(() => {
+      if (this.surfaceDisplaced(candidate)) return;
       closingConversationObserved = true;
       closingConversationUrl = this.captureConversationUrl(
         candidate.webContents,
@@ -1069,6 +1128,10 @@ export class ChatGptRoute {
       }
     });
     candidate.onClosed(() => {
+      // A retired or displaced surface closes without touching the route.
+      const displaced = this.surfaceDisplaced(candidate);
+      this.retiredSurfaces.delete(candidate);
+      if (displaced) return;
       this.activity.stop();
       const ownsRoute = this.routeWindow === candidate;
       if (ownsRoute) this.routeWindow = null;
@@ -2701,6 +2764,7 @@ export class ChatGptRoute {
       this.routeWindow.destroy();
     }
     this.routeWindow = null;
+    this.destroyRetiredSurfaces();
     this.load = "failed";
     this.disposing = false;
     this.options.onConversationChanged?.(null);
@@ -3123,6 +3187,7 @@ export class ChatGptRoute {
       this.routeWindow.destroy();
     }
     this.routeWindow = null;
+    this.destroyRetiredSurfaces();
     this.routeSession = null;
     this.options.onDisposed?.();
   }
@@ -3195,6 +3260,8 @@ export class ChatGptRoute {
         requiredAppName: () => this.options.requiredAppName,
         title: () => this.displayTitle,
         webPreferences: () => this.remoteWebPreferences(),
+        openerOwned: () =>
+          !tracksRouteReadiness || this.ownsRouteContents(contents),
         adopt: (popup) => this.adoptPopupWindow(popup),
       },
     });
