@@ -131,6 +131,9 @@ export class SavedChatBrowser implements SavedChatBrowserPort {
             false,
             Math.max(1, deadline - this.now()),
           );
+          // The window is absolute: a proof observed after it, however the
+          // delay arose, is never accepted as the candidate.
+          if (this.now() >= deadline) return { status: "outcome_unknown" };
           if (
             proof &&
             typeof proof === "object" &&
