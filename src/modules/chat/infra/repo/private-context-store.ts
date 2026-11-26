@@ -1,8 +1,7 @@
-import { createHash, randomBytes } from "node:crypto";
-import { constants as fsConstants, type Stats } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { z } from "zod";
 import type { CheckpointStore } from "../../app/port/checkpoint-store";
 import type {
   ContextAdmission,
@@ -13,7 +12,6 @@ import type {
 import {
   validateCheckpointContent,
   validateCheckpointEnvelope,
-  type CheckpointContent,
   type CheckpointEnvelope,
 } from "../../domain/checkpoint";
 import {
@@ -25,261 +23,87 @@ import {
   type ContextSession,
 } from "../../domain/context-continuity";
 
-const bindingSchema = z.strictObject({
-  ownerId: z.string().min(1).max(160),
-  taskId: z.string().min(1).max(160),
-  hostThreadId: z.string().min(1).max(160),
-  sessionId: z.string().min(1).max(160),
-  providerProfileId: z.string().min(1).max(160),
-  modelId: z.string().min(1).max(160),
-  mode: z.string().min(1).max(160),
-});
+import {
+  DEFAULT_CHECKPOINT_CONTENT_BYTES,
+  DEFAULT_CHECKPOINT_RECORD_BYTES,
+  DEFAULT_RETENTION,
+  DEFAULT_SESSION_BYTES,
+  DEFAULT_SOURCE_RECORD_BYTES,
+  DEFAULT_SUMMARY_ATTEMPT_RECORD_BYTES,
+  DEFAULT_SUMMARY_RECORD_BYTES,
+  MAXIMUM_COMPLETION_RECORD_BYTES,
+  MAXIMUM_PUBLICATION_RECORD_BYTES,
+  MAXIMUM_RETIREMENT_RECORD_BYTES,
+  admissionLeaseRecordSchema,
+  admissionRecordSchema,
+  bindingSchema,
+  checkpointRecordSchema,
+  completionRecordSchema,
+  contextRetirementRecordSchema,
+  contextRetirementSchema,
+  contextSourceRecordSchema,
+  contextSourceSchema,
+  contextSummaryAttemptRecordSchema,
+  contextSummaryAttemptSchema,
+  contextSummaryRecordSchema,
+  contextSummarySchema,
+  publicationRecordSchema,
+  publicationRequestSchema,
+  sessionRecordSchema,
+  sessionSchema,
+} from "./records";
+import {
+  admissionConflict,
+  assertPrivateDirectory,
+  assertPrivateFile,
+  positiveInteger,
+  schemaError,
+} from "./integrity";
+import {
+  admissionLeaseFile,
+  bindingKey,
+  boundaryKey,
+  checkpointDirectory,
+  checkpointKey,
+  completionFile,
+  digest,
+  ownerOperationKey,
+  publicationFile,
+  sessionFile,
+  sourceDirectory,
+  summaryAttemptDirectory,
+  summaryDirectory,
+  taskDirectory,
+} from "./layout";
+import {
+  selectExpiredCheckpoints,
+  type StoredCheckpointFile,
+} from "./selection";
+import type {
+  ContextPublicationObservation,
+  ContextPublicationPolicy,
+  ContextPublicationRequest,
+  StoredContextRetirement,
+  StoredContextSource,
+  StoredContextSummary,
+  StoredContextSummaryAttempt,
+} from "./records";
 
-const operationSchema = z.strictObject({
-  operationId: z.string().min(1).max(160),
-  source: z.enum(["retained_agent", "canonical_history"]),
-  sourceBoundary: z.string().min(1).max(160),
-  sourceEpoch: z.number().int().positive(),
-  summaryDispatch: z.enum(["not_observed", "observed", "result_received"]),
-  checkpointId: z.string().min(1).max(160).nullable(),
-  hostContextRef: z.string().min(1).max(160).nullable(),
-});
-
-const compactionRequestSchema = z.strictObject({
-  operationId: z.string().min(1).max(160),
-  source: z.enum(["retained_agent", "canonical_history"]),
-  sourceBoundary: z.string().min(1).max(160),
-});
-
-const sessionSchema = z
-  .strictObject({
-    binding: bindingSchema,
-    epoch: z.number().int().positive(),
-    phase: z.enum([
-      "active",
-      "quiescing",
-      "checkpoint_requested",
-      "validated",
-      "durably_stored",
-      "handoff_offered",
-      "host_context_confirmed",
-      "old_epoch_retired",
-      "blocked",
-      "outcome_unknown",
-    ]),
-    operation: operationSchema.nullable(),
-    lastCheckpointId: z.string().min(1).max(160).nullable(),
-    lastCompletedOperationId: z.string().min(1).max(160).nullable(),
-    lastCompletedRequest: compactionRequestSchema.nullable().optional(),
-    blockedCode: z.string().min(1).max(160).nullable(),
-  })
-  .superRefine((session, context) => {
-    if (
-      session.lastCompletedRequest &&
-      session.lastCompletedOperationId !==
-        session.lastCompletedRequest.operationId
-    ) {
-      context.addIssue({
-        code: "custom",
-        message: "completed operation identity mismatch",
-      });
-    }
-  });
-
-const sessionRecordSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  kind: z.literal("context_session"),
-  session: sessionSchema,
-});
-
-const checkpointRecordSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  kind: z.literal("context_checkpoint"),
-  checkpoint: z.unknown(),
-});
-
-const contextSourceSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  operationId: z.string().min(1).max(160),
-  binding: bindingSchema,
-  source: z.enum(["retained_agent", "canonical_history"]),
-  sourceBoundary: z.string().min(1).max(160),
-  variant: z.enum(["unary_replacement_history", "streamed_compaction_item"]),
-  history: z.array(z.unknown()).max(4_096),
-});
-
-const contextSourceRecordSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  kind: z.literal("context_source"),
-  source: contextSourceSchema,
-});
-
-const contextSummarySchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  operationId: z.string().min(1).max(160),
-  binding: bindingSchema,
-  providerOperationId: z.string().min(1).max(160),
-  sourceCursor: z.string().min(1).max(512),
-  content: z.unknown(),
-});
-
-const contextSummaryRecordSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  kind: z.literal("context_summary"),
-  summary: contextSummarySchema,
-});
-
-const contextSummaryAttemptSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  operationId: z.string().min(1).max(160),
-  binding: bindingSchema,
-  source: z.enum(["retained_agent", "canonical_history"]),
-  sourceBoundary: z.string().min(1).max(160),
-  phase: z.enum(["prepared", "possible_send", "outcome_unknown"]),
-  conversationUrl: z.string().min(1).max(2_048).nullable(),
-  turnUserId: z.string().min(1).max(256).nullable(),
-  turnAssistantId: z.string().min(1).max(256).nullable(),
-});
-
-const contextSummaryAttemptRecordSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  kind: z.literal("context_summary_attempt"),
-  attempt: contextSummaryAttemptSchema,
-});
-
-// The durable proof that one operation committed to detaching exactly this
-// source conversation from its route, written before the route is reset. A
-// reset clears the route's identity, so without it a retry after a local
-// fault could no longer tell its own retired source from an empty route.
-const contextRetirementSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  operationId: z.string().min(1).max(160),
-  binding: bindingSchema,
-  epoch: z.number().int().positive(),
-  sourceCursor: z.string().min(1).max(512),
-});
-
-const contextRetirementRecordSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  kind: z.literal("context_retirement"),
-  retirement: contextRetirementSchema,
-});
-
-const admissionSchema = z.strictObject({
-  binding: bindingSchema,
-  sourceEpoch: z.number().int().positive(),
-  request: compactionRequestSchema,
-});
-
-const admissionRecordSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  kind: z.literal("context_admission"),
-  admission: admissionSchema,
-});
-
-// Bounded metadata per admitted operation; checkpoint payload retention is separate.
-// Written only on the exact durable retired -> active transition, never backfilled.
-const completionRecordSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  kind: z.literal("context_completion"),
-  admission: admissionSchema,
-  checkpointId: z.string().min(1).max(160),
-  checkpointSHA256: z.string().regex(/^[a-f0-9]{64}$/u),
-});
-const MAXIMUM_COMPLETION_RECORD_BYTES = 8 * 1_024;
-
-const admissionLeaseRecordSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  kind: z.literal("context_admission_lease"),
-  processId: z.number().int().positive(),
-  processInstanceId: z.string().regex(/^[a-f0-9]{32}$/u),
-  token: z.string().length(32),
-});
+export type {
+  ContextPublicationObservation,
+  ContextPublicationPolicy,
+  ContextPublicationRequest,
+  StoredContextRetirement,
+  StoredContextSource,
+  StoredContextSummary,
+  StoredContextSummaryAttempt,
+};
 
 const CLOSE_ON_EXEC =
   (fsConstants as typeof fsConstants & { O_CLOEXEC?: number }).O_CLOEXEC ?? 0;
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const DIRECTORY = fsConstants.O_DIRECTORY ?? 0;
-const DEFAULT_SESSION_BYTES = 64 * 1_024;
-const DEFAULT_CHECKPOINT_CONTENT_BYTES = 256 * 1_024;
-const DEFAULT_CHECKPOINT_RECORD_BYTES = 384 * 1_024;
-const DEFAULT_SOURCE_RECORD_BYTES = 1 * 1_024 * 1_024;
-const DEFAULT_SUMMARY_RECORD_BYTES = 384 * 1_024;
-const DEFAULT_SUMMARY_ATTEMPT_RECORD_BYTES = 16 * 1_024;
-const MAXIMUM_RETIREMENT_RECORD_BYTES = 8 * 1_024;
-const DEFAULT_RETENTION = 8;
 const PROCESS_INSTANCE_ID = randomBytes(16).toString("hex");
-const MAXIMUM_PUBLICATION_RECORD_BYTES = 2 * 1_024 * 1_024;
-
-const publicationPolicySchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  maximumSessionBytes: z.number().int().positive(),
-  maximumCheckpointContentBytes: z.number().int().positive(),
-  maximumCheckpointRecordBytes: z.number().int().positive(),
-  maximumSourceRecordBytes: z.number().int().positive(),
-  maximumSummaryRecordBytes: z.number().int().positive(),
-  maximumSummaryAttemptRecordBytes: z.number().int().positive(),
-  maxCheckpointsPerTask: z.number().int().positive(),
-  maximumPublicationRecordBytes: z.literal(MAXIMUM_PUBLICATION_RECORD_BYTES),
-});
-const publicationRequestSchema = z.strictObject({
-  checkpoint: z.unknown(),
-  expected: z.strictObject({
-    source: contextSourceSchema,
-    sourceSHA256: z.string().regex(/^[a-f0-9]{64}$/u),
-    sourceEpoch: z.number().int().positive(),
-    policy: publicationPolicySchema,
-  }),
-});
-const publicationRecordSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  kind: z.literal("context_checkpoint_publication"),
-  request: publicationRequestSchema,
-  requestSHA256: z.string().regex(/^[a-f0-9]{64}$/u),
-});
-export type ContextPublicationPolicy = Readonly<
-  z.infer<typeof publicationPolicySchema>
->;
-export type ContextPublicationRequest = Readonly<{
-  checkpoint: CheckpointEnvelope;
-  expected: Readonly<{
-    source: StoredContextSource;
-    sourceSHA256: string;
-    sourceEpoch: number;
-    policy: ContextPublicationPolicy;
-  }>;
-}>;
-export type ContextPublicationObservation =
-  | Readonly<{ status: "absent" }>
-  | Readonly<{
-      status: "outcome_unknown";
-      request: ContextPublicationRequest | null;
-      requestSHA256: string | null;
-    }>
-  | Readonly<{
-      status: "published";
-      request: ContextPublicationRequest;
-      requestSHA256: string;
-    }>;
-
-export type StoredContextSource = Readonly<z.infer<typeof contextSourceSchema>>;
-
-export type StoredContextSummary = Readonly<{
-  schemaVersion: 1;
-  operationId: string;
-  binding: ContextBinding;
-  providerOperationId: string;
-  sourceCursor: string;
-  content: CheckpointContent;
-}>;
-
-export type StoredContextSummaryAttempt = Readonly<
-  z.infer<typeof contextSummaryAttemptSchema>
->;
-
-export type StoredContextRetirement = Readonly<
-  z.infer<typeof contextRetirementSchema>
->;
 
 export type PrivateContextStoreOptions = Readonly<{
   root: string;
@@ -332,50 +156,6 @@ type ParsedRecord = Readonly<{
   value: unknown;
   serialized: string;
 }>;
-
-function digest(value: unknown): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
-}
-
-function bindingKey(binding: ContextBinding): string {
-  return digest([
-    binding.ownerId,
-    binding.taskId,
-    binding.hostThreadId,
-    binding.sessionId,
-  ]);
-}
-
-function boundaryKey(request: CompactionRequest): string {
-  return digest([request.source, request.sourceBoundary]);
-}
-
-function admissionConflict(
-  admission: ContextAdmission,
-  binding: ContextBinding,
-  sourceEpoch: number,
-  request: CompactionRequest,
-): ContextAdmissionResult | null {
-  if (!sameContextBinding(admission.binding, binding)) {
-    return { status: "conflict", reason: "binding" };
-  }
-  if (admission.sourceEpoch !== sourceEpoch) {
-    return { status: "conflict", reason: "epoch" };
-  }
-  if (!sameCompactionRequest(admission.request, request)) {
-    return { status: "conflict", reason: "request" };
-  }
-  return null;
-}
-
-function checkpointKey(checkpointId: string): string {
-  return digest([checkpointId]);
-}
-
-function positiveInteger(value: number, code: string): number {
-  if (!Number.isSafeInteger(value) || value < 1) throw new Error(code);
-  return value;
-}
 
 export class PrivateContextStore implements ContextRepository, CheckpointStore {
   private readonly maximumSessionBytes: number;
@@ -444,7 +224,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if (!record) return null;
     const parsed = sessionRecordSchema.safeParse(record.value);
     if (!parsed.success) {
-      throw this.schemaError(record.value, "CONTEXT_STATE");
+      throw schemaError(record.value, "CONTEXT_STATE");
     }
     if (!sameContextSessionIdentity(parsed.data.session.binding, binding)) {
       throw new Error("CONTEXT_STATE_IDENTITY_MISMATCH");
@@ -547,10 +327,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
   }
 
   private completionFile(binding: ContextBinding, operationId: string): string {
-    return path.join(
-      this.taskDirectory(binding),
-      `completion-${checkpointKey(operationId)}.json`,
-    );
+    return completionFile(this.options.root, binding, operationId);
   }
 
   private async assertCompletionAdmission(
@@ -585,8 +362,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     );
     if (!record) return null;
     const parsed = completionRecordSchema.safeParse(record.value);
-    if (!parsed.success)
-      throw this.schemaError(record.value, "CONTEXT_COMPLETION");
+    if (!parsed.success) throw schemaError(record.value, "CONTEXT_COMPLETION");
     if (
       !sameContextBinding(parsed.data.admission.binding, binding) ||
       parsed.data.admission.request.operationId !== operationId
@@ -700,7 +476,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if (!record) throw new Error("CONTEXT_ADMISSION_LEASE_MISSING");
     const parsed = admissionLeaseRecordSchema.safeParse(record.value);
     if (!parsed.success) {
-      throw this.schemaError(record.value, "CONTEXT_LEASE");
+      throw schemaError(record.value, "CONTEXT_LEASE");
     }
     if (parsed.data.token !== lease.token) {
       throw new Error("CONTEXT_ADMISSION_LEASE_MISMATCH");
@@ -865,19 +641,14 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
   }
 
   private ownerOperationKey(sessionKey: string): string {
-    if (!/^[a-f0-9]{64}$/u.test(sessionKey))
-      throw new Error("CONTEXT_ADMISSION_LEASE_INVALID");
-    return path.join(this.options.root, "tasks", sessionKey, ".context-owner");
+    return ownerOperationKey(this.options.root, sessionKey);
   }
 
   private publicationFile(
     binding: ContextBinding,
     operationId: string,
   ): string {
-    return path.join(
-      this.checkpointDirectory(binding),
-      `publication-${checkpointKey(operationId)}.json`,
-    );
+    return publicationFile(this.options.root, binding, operationId);
   }
 
   private validatePublicationRequest(
@@ -914,8 +685,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     );
     if (!record) return null;
     const parsed = publicationRecordSchema.safeParse(record.value);
-    if (!parsed.success)
-      throw this.schemaError(record.value, "CONTEXT_PUBLICATION");
+    if (!parsed.success) throw schemaError(record.value, "CONTEXT_PUBLICATION");
     const request = this.validatePublicationRequest(parsed.data.request);
     if (!sameContextBinding(binding, request.checkpoint.binding))
       throw new Error("CONTEXT_PUBLICATION_BINDING_MISMATCH");
@@ -1576,7 +1346,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
       throw error;
     }
-    this.assertPrivateDirectory(info, "CONTEXT_TASK_DIRECTORY_UNSAFE");
+    assertPrivateDirectory(info, "CONTEXT_TASK_DIRECTORY_UNSAFE");
     let names: string[];
     try {
       names = await fs.readdir(this.checkpointDirectory(binding));
@@ -1660,7 +1430,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       if (!record) continue;
       const parsed = admissionLeaseRecordSchema.safeParse(record.value);
       if (!parsed.success) {
-        throw this.schemaError(record.value, "CONTEXT_LEASE");
+        throw schemaError(record.value, "CONTEXT_LEASE");
       }
       if (
         parsed.data.processId === this.processId &&
@@ -1735,7 +1505,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     }
     const parsed = admissionLeaseRecordSchema.safeParse(record.value);
     if (!parsed.success) {
-      throw this.schemaError(record.value, "CONTEXT_LEASE");
+      throw schemaError(record.value, "CONTEXT_LEASE");
     }
     if (!lease) throw new Error("CONTEXT_ADMISSION_LEASE_REQUIRED");
     if (parsed.data.token !== lease.token) {
@@ -1769,7 +1539,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if (!record) return null;
     const parsed = admissionRecordSchema.safeParse(record.value);
     if (!parsed.success) {
-      throw this.schemaError(record.value, "CONTEXT_ADMISSION");
+      throw schemaError(record.value, "CONTEXT_ADMISSION");
     }
     return structuredClone(parsed.data.admission);
   }
@@ -1796,7 +1566,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if (!record) return null;
     const parsed = checkpointRecordSchema.safeParse(record.value);
     if (!parsed.success) {
-      throw this.schemaError(record.value, "CHECKPOINT_STATE");
+      throw schemaError(record.value, "CHECKPOINT_STATE");
     }
     const checkpoint = this.validateCheckpoint(parsed.data.checkpoint);
     if (!sameContextBinding(checkpoint.binding, binding)) {
@@ -1818,7 +1588,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if (!record) return null;
     const parsed = contextSourceRecordSchema.safeParse(record.value);
     if (!parsed.success) {
-      throw this.schemaError(record.value, "CONTEXT_SOURCE");
+      throw schemaError(record.value, "CONTEXT_SOURCE");
     }
     if (!sameContextBinding(parsed.data.source.binding, binding)) {
       throw new Error("CONTEXT_SOURCE_BINDING_MISMATCH");
@@ -1838,7 +1608,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if (!record) return null;
     const parsed = contextSummaryRecordSchema.safeParse(record.value);
     if (!parsed.success) {
-      throw this.schemaError(record.value, "CONTEXT_SUMMARY");
+      throw schemaError(record.value, "CONTEXT_SUMMARY");
     }
     if (!sameContextBinding(parsed.data.summary.binding, binding)) {
       throw new Error("CONTEXT_SUMMARY_BINDING_MISMATCH");
@@ -1863,7 +1633,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if (!record) return null;
     const parsed = contextRetirementRecordSchema.safeParse(record.value);
     if (!parsed.success) {
-      throw this.schemaError(record.value, "CONTEXT_RETIREMENT");
+      throw schemaError(record.value, "CONTEXT_RETIREMENT");
     }
     if (!sameContextBinding(parsed.data.retirement.binding, binding)) {
       throw new Error("CONTEXT_RETIREMENT_BINDING_MISMATCH");
@@ -1883,7 +1653,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if (!record) return null;
     const parsed = contextSummaryAttemptRecordSchema.safeParse(record.value);
     if (!parsed.success) {
-      throw this.schemaError(record.value, "CONTEXT_SUMMARY_ATTEMPT");
+      throw schemaError(record.value, "CONTEXT_SUMMARY_ATTEMPT");
     }
     if (!sameContextBinding(parsed.data.attempt.binding, binding)) {
       throw new Error("CONTEXT_SUMMARY_ATTEMPT_BINDING_MISMATCH");
@@ -1926,35 +1696,13 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
         ),
       })),
     );
-    const ordered = records
-      .filter(
-        (
-          record,
-        ): record is Readonly<{
-          name: string;
-          checkpoint: CheckpointEnvelope;
-        }> => record.checkpoint !== null,
-      )
-      .sort((left, right) => {
-        const byTime = right.checkpoint.createdAt - left.checkpoint.createdAt;
-        return byTime !== 0
-          ? byTime
-          : right.checkpoint.checkpointId.localeCompare(
-              left.checkpoint.checkpointId,
-            );
-      });
-    const protectedCount = ordered.filter((record) =>
-      protectedCheckpointIds.has(record.checkpoint.checkpointId),
-    ).length;
-    const unprotectedCapacity = Math.max(
-      0,
-      this.maxCheckpointsPerTask - protectedCount,
+    const expired = selectExpiredCheckpoints(
+      records.filter(
+        (record): record is StoredCheckpointFile => record.checkpoint !== null,
+      ),
+      protectedCheckpointIds,
+      this.maxCheckpointsPerTask,
     );
-    const expired = ordered
-      .filter(
-        (record) => !protectedCheckpointIds.has(record.checkpoint.checkpointId),
-      )
-      .slice(unprotectedCapacity);
     await Promise.all(
       expired.map((record) => fs.unlink(path.join(directory, record.name))),
     );
@@ -2004,7 +1752,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
           );
           continue;
         }
-        this.assertPrivateFile(info, maximumBytes, `${code}_UNSAFE`);
+        assertPrivateFile(info, maximumBytes, `${code}_UNSAFE`);
         const serialized = await handle.readFile("utf8");
         let value: unknown;
         try {
@@ -2039,7 +1787,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       try {
         let info = await handle.stat();
         if (info.nlink === 1) return;
-        this.assertPrivateFile(info, maximumBytes, incompleteCode, 2);
+        assertPrivateFile(info, maximumBytes, incompleteCode, 2);
         const directory = path.dirname(target);
         const prefix = `.${path.basename(target)}.tmp-`;
         const matches: string[] = [];
@@ -2077,18 +1825,6 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
         await handle.close();
       }
     });
-  }
-
-  private schemaError(value: unknown, code: string): Error {
-    if (
-      value &&
-      typeof value === "object" &&
-      "schemaVersion" in value &&
-      (value as { schemaVersion?: unknown }).schemaVersion !== 1
-    ) {
-      return new Error(`${code}_UNSUPPORTED`);
-    }
-    return new Error(`${code}_CORRUPT`);
   }
 
   private async atomicWrite(
@@ -2270,36 +2006,6 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if ((info.mode & 0o077) !== 0) await fs.chmod(directory, 0o700);
   }
 
-  private assertPrivateDirectory(info: Stats, code: string): void {
-    if (
-      !info.isDirectory() ||
-      info.isSymbolicLink() ||
-      (process.geteuid?.() !== undefined && info.uid !== process.geteuid()) ||
-      (info.mode & 0o077) !== 0
-    ) {
-      throw new Error(code);
-    }
-  }
-
-  private assertPrivateFile(
-    info: Stats,
-    maximumBytes: number,
-    code: string,
-    maximumLinks = 1,
-  ): void {
-    if (
-      !info.isFile() ||
-      info.nlink < 1 ||
-      info.nlink > maximumLinks ||
-      info.size < 1 ||
-      info.size > maximumBytes ||
-      (process.geteuid?.() !== undefined && info.uid !== process.geteuid()) ||
-      (info.mode & 0o077) !== 0
-    ) {
-      throw new Error(code);
-    }
-  }
-
   private async syncDirectory(directory: string): Promise<void> {
     const handle = await fs.open(
       directory,
@@ -2313,33 +2019,30 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
   }
 
   private taskDirectory(binding: ContextBinding): string {
-    return path.join(this.options.root, "tasks", bindingKey(binding));
+    return taskDirectory(this.options.root, binding);
   }
 
   private admissionLeaseFile(sessionKey: string): string {
-    if (!/^[a-f0-9]{64}$/u.test(sessionKey)) {
-      throw new Error("CONTEXT_ADMISSION_LEASE_KEY_INVALID");
-    }
-    return path.join(this.options.root, "tasks", sessionKey, "admission.lock");
+    return admissionLeaseFile(this.options.root, sessionKey);
   }
 
   private checkpointDirectory(binding: ContextBinding): string {
-    return path.join(this.taskDirectory(binding), "checkpoints");
+    return checkpointDirectory(this.options.root, binding);
   }
 
   private sourceDirectory(binding: ContextBinding): string {
-    return path.join(this.taskDirectory(binding), "sources");
+    return sourceDirectory(this.options.root, binding);
   }
 
   private summaryDirectory(binding: ContextBinding): string {
-    return path.join(this.taskDirectory(binding), "summaries");
+    return summaryDirectory(this.options.root, binding);
   }
 
   private summaryAttemptDirectory(binding: ContextBinding): string {
-    return path.join(this.taskDirectory(binding), "summary-attempts");
+    return summaryAttemptDirectory(this.options.root, binding);
   }
 
   private sessionFile(binding: ContextBinding): string {
-    return path.join(this.taskDirectory(binding), "session.json");
+    return sessionFile(this.options.root, binding);
   }
 }
