@@ -195,6 +195,40 @@ describe("product Agent assignment composition", () => {
     });
   });
 
+  it("admits a whole-workspace assignment for a workspace rooted at the filesystem root", async () => {
+    const base = settings();
+    const rooted = ProductSettingsSchema.parse({
+      ...base,
+      computer: {
+        ...base.computer,
+        workspaces: base.computer.workspaces.map((workspace) => ({
+          ...workspace,
+          root: "/",
+          excludedPaths: ["/work/private"],
+        })),
+      },
+    });
+    const fixture = dependencies();
+
+    await expect(
+      runProductAgentAssignment(
+        rooted,
+        task,
+        input({ scope: { mode: "subtree", root: "/" } }),
+        fixture.value,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { assignment: { phase: "completed" } },
+    });
+    const request = fixture.spawn.mock.calls[0]?.[0] as AgentSpawnRequest;
+    expect(request.focus.initialPaths).toEqual(["/"]);
+    expect(request.authority).toMatchObject({
+      workspaces: [{ workspaceId, mode: "subtree", root: "/" }],
+      excludedPaths: [{ workspaceId, path: "/work/private" }],
+    });
+  });
+
   it("C05-09 delegates a write-approved workspace to the read-only Agent as an enforced read projection", async () => {
     const fixture = dependencies();
 

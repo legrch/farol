@@ -17,6 +17,10 @@ import type {
 import { deriveTaskGrant } from "../../modules/computer/domain/execution-authority";
 import { InMemoryAuthorityRepository } from "../../modules/computer/infra/repo/in-memory-authorities";
 import { InMemoryComputerApprovalRepository } from "../../modules/computer/infra/repo/in-memory-computer-approvals";
+import {
+  containsLexically,
+  relativeBelow,
+} from "../../pkg/kernel/domain/within";
 import type { ProductSettings } from "../../pkg/product-settings/contract";
 import { productAgentApproval } from "./product-agent-approval";
 
@@ -62,14 +66,8 @@ function deniedBeforeNativeAccess(
   );
 }
 
-function inside(root: string, candidate: string): boolean {
-  return candidate === root || candidate.startsWith(`${root}/`);
-}
-
-function relativePath(root: string, candidate: string): string | null {
-  if (candidate === root) return ".";
-  return inside(root, candidate) ? candidate.slice(root.length + 1) : null;
-}
+const inside = containsLexically;
+const relativePath = relativeBelow;
 
 // The authority arriving here already crossed the public Computer contract
 // and the Agent port — both untrusted module boundaries. `restrictionSource`

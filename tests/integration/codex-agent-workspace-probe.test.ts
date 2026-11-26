@@ -196,6 +196,59 @@ describe("Codex child workspace enforcement probe", () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
+  it("verifies a workspace rooted at the filesystem root with an owner exclusion", async () => {
+    const rooted = ProductSettingsSchema.parse({
+      ...settings,
+      computer: {
+        ...settings.computer,
+        workspaces: [
+          {
+            ...settings.computer.workspaces[0],
+            root: "/",
+            excludedPaths: ["/work/private"],
+          },
+        ],
+      },
+    });
+    const execute = vi.fn<ReadonlyWorkspace["execute"]>(async (input) => {
+      expect(input.workspace.root).toBe("/");
+      expect(input.workspace.deniedPaths).toEqual(["work/private"]);
+      return {
+        ok: true,
+        value: {
+          kind: "workspace.entries",
+          entries: ["work"],
+          truncated: false,
+        },
+      };
+    });
+    const probe = new CodexAgentWorkspaceProbe(
+      rooted,
+      { execute },
+      () => 1_000,
+    );
+
+    await expect(
+      probe.verify({
+        ...request({
+          workspaces: [
+            {
+              workspaceId,
+              mode: "subtree" as const,
+              root: "/",
+              access: "read" as const,
+            },
+          ],
+          excludedPaths: [{ workspaceId, path: "/work/private" }],
+        }),
+        focusPath: "/",
+      }),
+    ).resolves.toEqual({ status: "verified" });
+    // The listing of the root reaches native access once; the excluded path
+    // and the ungranted workspace are denied before it.
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses an inflated delegated workspace before native access", async () => {
     const execute = vi.fn<ReadonlyWorkspace["execute"]>();
     const probe = new CodexAgentWorkspaceProbe(

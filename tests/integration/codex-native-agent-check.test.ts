@@ -283,6 +283,44 @@ describe("desktop native Agent lineage check", () => {
     expect(redeliveryHost.wait).not.toHaveBeenCalled();
   });
 
+  it("admits a workspace rooted at the filesystem root that carries an owner exclusion", async () => {
+    const base = settings();
+    const rooted = ProductSettingsSchema.parse({
+      ...base,
+      computer: {
+        ...base.computer,
+        workspaces: base.computer.workspaces.map((workspace) =>
+          workspace.workspaceId === selectedWorkspaceId
+            ? { ...workspace, root: "/", excludedPaths: ["/work/private"] }
+            : workspace,
+        ),
+      },
+    });
+    const native = completingHost();
+
+    const result = await runCodexNativeAgentCheck({
+      host: native.host,
+      assignments: await assignmentStore(),
+      settings: rooted,
+      workspaceId: selectedWorkspaceId,
+      executableSha256,
+      schemaSha256,
+      buildId,
+      now: () => 1_000,
+      pause: async () => undefined,
+      maximumWaitCycles: 3,
+    });
+
+    expect(result).toMatchObject({ status: "completed" });
+    const spawn = native.request();
+    if (!spawn) throw new Error("spawn missing");
+    expect(spawn.focus.initialPaths).toEqual(["/"]);
+    expect(spawn.authority.workspaces[0]).toMatchObject({ root: "/" });
+    expect(spawn.authority.excludedPaths).toMatchObject([
+      { workspaceId: selectedWorkspaceId, path: "/work/private" },
+    ]);
+  });
+
   it("C05-09 checks a write-approved workspace through its read projection only", async () => {
     const native = completingHost();
 

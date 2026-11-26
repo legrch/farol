@@ -285,3 +285,81 @@ describe("R10a which way a configured exclusion is compared", () => {
     ).toBe(true);
   });
 });
+
+// A workspace approved at the filesystem root: containment must hold for `/`
+// the way it does for any other root, and the case-insensitive exclusion
+// alias check must still bite below it.
+describe("a workspace rooted at the filesystem root", () => {
+  it("resolves the whole workspace and a subtree below it", () => {
+    expect(
+      resolveProductAgentScope("/", ["/work/private"], {
+        mode: "workspace",
+        excludedPaths: [],
+      }),
+    ).toEqual({ scope: { mode: "subtree", root: "/" }, excludedPaths: [] });
+    expect(
+      resolveProductAgentScope("/", ["/work/private"], {
+        mode: "subtree",
+        relativeRoot: "work/docs",
+        excludedPaths: ["work/docs/drafts"],
+      }),
+    ).toEqual({
+      scope: { mode: "subtree", root: "/work/docs" },
+      excludedPaths: ["/work/docs/drafts"],
+    });
+  });
+
+  it("matches the whole root scope and a narrowed one", () => {
+    expect(
+      productAgentScopeMatchesWorkspace("/", ["/work/private"], {
+        scope: { mode: "subtree", root: "/" },
+        excludedPaths: [],
+      }),
+    ).toBe(true);
+    expect(
+      productAgentScopeMatchesWorkspace("/", ["/work/private"], {
+        scope: { mode: "subtree", root: "/work/docs" },
+        excludedPaths: ["/work/docs/drafts"],
+      }),
+    ).toBe(true);
+  });
+
+  it("refuses a scope inside a configured exclusion, and its case alias", () => {
+    for (const root of ["/work/private", "/work/private/x", "/Work/Private"]) {
+      expect(
+        productAgentScopeMatchesWorkspace("/", ["/work/private"], {
+          scope: { mode: "subtree", root },
+          excludedPaths: [],
+        }),
+      ).toBe(false);
+    }
+    expect(
+      productAgentScopeMatchesWorkspace("/", ["/work/private"], {
+        scope: { mode: "exact", root: "/", paths: ["/work/PRIVATE/x.md"] },
+        excludedPaths: [],
+      }),
+    ).toBe(false);
+    expect(
+      productAgentScopeMatchesWorkspace("/", ["/work/private"], {
+        scope: { mode: "exact", root: "/", paths: ["/work/open/x.md"] },
+        excludedPaths: [],
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the non-root sibling and case rules unchanged", () => {
+    const ROOT = "/work/a";
+    expect(
+      productAgentScopeMatchesWorkspace(ROOT, [], {
+        scope: { mode: "subtree", root: "/work/ab" },
+        excludedPaths: [],
+      }),
+    ).toBe(false);
+    expect(
+      productAgentScopeMatchesWorkspace(ROOT, [], {
+        scope: { mode: "subtree", root: "/work/A" },
+        excludedPaths: [],
+      }),
+    ).toBe(false);
+  });
+});
