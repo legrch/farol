@@ -9,6 +9,7 @@ import {
   canonicalOwnedDirectory,
   privateDirectory,
   readRecord,
+  readRestoreIntent,
   repairDirectoryIdentity,
   writeRecord,
 } from "./records";
@@ -682,5 +683,35 @@ describe("writeRecord", () => {
     );
     await rejectsCode(writeRecord(file, 1), "EEXIST");
     await rejectsCode(fs.lstat(file), "ENOENT");
+  });
+});
+
+describe("readRestoreIntent", () => {
+  const absent = async (file: string) => {
+    try {
+      await fs.lstat(file);
+      return false;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ENOENT";
+    }
+  };
+
+  it("reads only a verified absence as no restore pending", async () => {
+    expect(await readRestoreIntent(at("none.json"), readRecord, absent)).toBe(
+      null,
+    );
+  });
+
+  it("refuses a present record holding JSON null as invalid, not absent", async () => {
+    const file = await put("restore-pending.json", "null\n");
+    await rejectsWith(
+      readRestoreIntent(file, readRecord, absent),
+      "UPDATE_RECORD_INVALID",
+    );
+  });
+
+  it("refuses a present record that is not an intent", async () => {
+    const file = await put("restore-pending.json", "{}\n");
+    await expect(readRestoreIntent(file, readRecord, absent)).rejects.toThrow();
   });
 });

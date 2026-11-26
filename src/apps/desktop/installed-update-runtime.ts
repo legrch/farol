@@ -112,6 +112,7 @@ import {
   canonicalOwnedDirectory,
   privateDirectory,
   readRecord,
+  readRestoreIntent,
   repairDirectoryIdentity,
   writeRecord,
 } from "../../../apps/desktop/update/records";
@@ -368,9 +369,11 @@ export async function waitForInstalledUpdateRelaunch(
       const raw = await bounded(() => reads.readRecord(receiptFile));
       if (
         hint.action === "apply" &&
-        (await bounded(() =>
-          reads.readRecord(path.join(root, "restore-pending.json")),
-        )) !== null
+        !(await bounded(() =>
+          (reads.recordAbsent ?? recordAbsent)(
+            path.join(root, "restore-pending.json"),
+          ),
+        ))
       )
         throw new Error("UPDATE_RELAUNCH_RECEIPT_MISMATCH");
       const receipt =
@@ -2206,9 +2209,11 @@ async function createRuntime(
       const downloadRaw = await readRecord(pendingDownloadFile);
       let downloadIntent =
         downloadRaw === null ? null : DownloadIntent.parse(downloadRaw);
-      const pendingRaw = await readRecord(restoreFile);
-      let pending =
-        pendingRaw === null ? null : RestoreIntent.parse(pendingRaw);
+      let pending = await readRestoreIntent(
+        restoreFile,
+        readRecord,
+        recordAbsent,
+      );
       const raw = await readRecord(readyFile);
       const fromReady = raw !== null;
       let interruptedDownload = false;
@@ -2880,7 +2885,7 @@ async function createRuntime(
         !op ||
         restoreKind !== action ||
         operation ||
-        (await readRecord(restoreFile)) !== null
+        !(await recordAbsent(restoreFile))
       )
         return { status: "blocked", code: "UPDATE_RESTORE_NOT_READY" };
       if (action === "recover" && !(await originalHelperEnded(restorable!)))

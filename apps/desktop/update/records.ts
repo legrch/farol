@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import type { z } from "zod";
-import { MAX_RECORD_BYTES, type RepairInode } from "./record";
+import { MAX_RECORD_BYTES, RestoreIntent, type RepairInode } from "./record";
 
 // The guarded filesystem layer under the update records: authentication of the
 // owned state directories, the bounded private record read and the atomic
@@ -169,6 +169,22 @@ export async function readRecord(
   observeDigest?.(digest!);
   observeBytes?.(observedBytes!);
   return value;
+}
+// The restore intent is the recovery fence, so presence is not the value the
+// reader returns: readRecord yields null both for a missing file and for a
+// present file holding JSON null. Only a verified absence (ENOENT) is "no
+// restore pending"; a present record that is not an intent is invalid.
+export async function readRestoreIntent(
+  file: string,
+  read: typeof readRecord,
+  absent: (file: string) => Promise<boolean>,
+): Promise<z.infer<typeof RestoreIntent> | null> {
+  const raw = await read(file);
+  if (raw === null) {
+    if (await absent(file)) return null;
+    throw new Error("UPDATE_RECORD_INVALID");
+  }
+  return RestoreIntent.parse(raw);
 }
 export async function writeRecord(
   file: string,

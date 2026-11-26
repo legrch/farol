@@ -29,7 +29,6 @@ import {
   Journal,
   Operation,
   PromotionReceipt,
-  RestoreIntent,
   Retained,
   SavedReceipt,
   sameBuild,
@@ -39,6 +38,7 @@ import {
   canonicalOwnedDirectory,
   privateDirectory,
   readRecord,
+  readRestoreIntent,
   writeRecord,
 } from "./records";
 import { installedUpdateStartupDecision, startupHelperState } from "./decision";
@@ -487,9 +487,11 @@ export function createStartup(ports: StartupPorts) {
       const record = active;
       expected = await operationImage(record);
       const op = record.operation!;
-      const pendingRaw = await read(path.join(root, "restore-pending.json"));
-      const pending =
-        pendingRaw === null ? null : RestoreIntent.parse(pendingRaw);
+      const pending = await readRestoreIntent(
+        path.join(root, "restore-pending.json"),
+        read,
+        options.observation?.recordAbsent ?? recordAbsent,
+      );
       if (pending && !sameOperation(pending.operation, op))
         throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
       const helper = await observeHelper(
@@ -776,9 +778,11 @@ export function createStartup(ports: StartupPorts) {
       const expected = operation.target;
       if (!sameOperation(receipt.operation, operation))
         throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-      const pendingRaw = await read(path.join(root, "restore-pending.json"));
-      const pending =
-        pendingRaw === null ? null : RestoreIntent.parse(pendingRaw);
+      const pending = await readRestoreIntent(
+        path.join(root, "restore-pending.json"),
+        read,
+        options.observation?.recordAbsent ?? recordAbsent,
+      );
       if (pending && !sameOperation(pending.operation, operation))
         throw new Error("UPDATE_OPERATION_IDENTITY_MISMATCH");
       const helper = await observeHelper(
