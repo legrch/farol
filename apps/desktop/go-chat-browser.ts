@@ -1,8 +1,25 @@
 import type { OperationsRecorder } from "./renderer/operations-contract";
 import { observeOperation, operationResult } from "./operations/observe";
 import { isDeepStrictEqual } from "node:util";
-import { ChatGptAccountObservationSchema } from "./chatgpt-account-probe.ts";
 import { BridgeError } from "./bridge/client.ts";
+import {
+  fail,
+  fixtureOrigin,
+  sameView,
+  validCode,
+  validId,
+  validView,
+} from "./browser/check.ts";
+import { account } from "./browser/account.ts";
+import { prepareGuard, sessionGuard, type GuardView } from "./browser/guard.ts";
+import { correlate } from "./browser/correlation.ts";
+import { split } from "./browser/segment.ts";
+import {
+  facts,
+  pin,
+  qualify,
+  type QualifiedControlTranslation,
+} from "./browser/control.ts";
 import type { BrowserDriver } from "./bridge/browser.ts";
 import {
   validate,
@@ -13,7 +30,6 @@ import {
   type BrowserVerifySend,
   type BrowserVerified,
   type BrowserVerification,
-  type BrowserAccountObservation,
   type BrowserSend,
   type BrowserSent,
   type BrowserObserve,
@@ -23,17 +39,12 @@ import {
   type BrowserCancelled,
   type BrowserDispose,
   type BrowserDisposed,
-  type BrowserRequiredControls,
-  type BrowserSelectionFacts,
-  type BrowserControlFact,
 } from "./bridge/wire.ts";
 import type {
   ChatGptPhysicalApi,
   PhysicalPartition,
   PhysicalBinding,
-  PhysicalView,
   PhysicalSelection,
-  PhysicalSelectionEvidence,
   PhysicalWitness,
   PhysicalGuard,
   PhysicalPrevious,
@@ -44,21 +55,11 @@ import {
   PublicTurnFrameSchema,
 } from "../../src/apps/desktop/chatgpt-public-turn.ts";
 
+export type { QualifiedControlTranslation };
 export type AssignedChatBrowser = Readonly<{
   lease: BrowserLease;
   api: ChatGptPhysicalApi;
   partition: PhysicalPartition;
-}>;
-type ControlTranslation = Readonly<{ value: string; literal: string }>;
-// Host configuration, never inferred from a requested model or a DOM label.
-export type QualifiedControlTranslation = Readonly<{
-  version: "public-controls-v1";
-  configSHA256: string;
-  translationId: string;
-  model: readonly ControlTranslation[];
-  effort: readonly ControlTranslation[];
-  mode: readonly ControlTranslation[];
-  connector: readonly ControlTranslation[];
 }>;
 export type GoChatBrowserDependencies = Readonly<{
   operations?: OperationsRecorder;
@@ -105,31 +106,6 @@ type Session = {
   floor: bigint;
   events: BrowserObservation[];
 };
-const controls = ["model", "effort", "mode", "connector"] as const;
-const id = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
-const codePattern = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$/;
-function validId(value: unknown): value is string {
-  return typeof value === "string" && id.test(value);
-}
-function validControlLiteral(value: unknown): value is string {
-  // Match Go ControlFact.Valid without trimming or normalizing the literal.
-  // Go TrimSpace includes NEL but excludes BOM; JavaScript trim differs.
-  // In Unicode mode the surrogate range matches only unpaired surrogates.
-  return (
-    typeof value === "string" &&
-    Buffer.byteLength(value, "utf8") <= 256 &&
-    !/^[\u0009-\u000d\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*$/u.test(
-      value,
-    ) &&
-    !/[\u0000-\u001f\u007f\ud800-\udfff]/u.test(value)
-  );
-}
-function validCode(value: unknown): value is string {
-  return typeof value === "string" && codePattern.test(value);
-}
-function fail(code: string, state: "refused" | "unknown" = "refused"): never {
-  throw new BridgeError(state, code);
-}
 function shape(name: string, input: unknown): void {
   if (!validate(name, input)) fail("chat_browser_invalid_boundary");
 }
@@ -156,76 +132,6 @@ function previous(userTurnId: string, replyId: string): PhysicalPrevious {
     fail("chat_browser_previous_pair");
   return userTurnId ? { userTurnId, replyId } : null;
 }
-function validView(view: PhysicalView, partition: PhysicalPartition): boolean {
-  return (
-    !!view &&
-    validId(view.viewId) &&
-    view.partition === partition &&
-    Number.isSafeInteger(view.viewGeneration) &&
-    view.viewGeneration > 0 &&
-    Number.isSafeInteger(view.documentGeneration) &&
-    view.documentGeneration > 0
-  );
-}
-function fixtureOrigin(value: string | null | undefined): string | null {
-  if (value === undefined || value === null) return null;
-  try {
-    const url = new URL(value);
-    if (
-      typeof value === "string" &&
-      url.protocol === "http:" &&
-      url.hostname === "127.0.0.1" &&
-      url.port !== "" &&
-      Number(url.port) > 0 &&
-      url.origin === value
-    )
-      return value;
-  } catch {
-    /* Invalid trusted configuration stays unavailable. */
-  }
-  return fail("chat_browser_fixture_origin_invalid");
-}
-function validBinding(
-  b: PhysicalBinding,
-  partition: PhysicalPartition,
-  e2eOrigin: string | null,
-): boolean {
-  if (!validView(b, partition)) return false;
-  try {
-    const url = new URL(b.url);
-    if (
-      url.origin !== (e2eOrigin ?? "https://chatgpt.com") ||
-      url.username ||
-      url.password ||
-      url.hash
-    )
-      return false;
-    return b.phase === "home"
-      ? b.conversationId === null &&
-          url.pathname === (e2eOrigin ? "/chatgpt" : "/")
-      : b.phase === "conversation" &&
-          validId(b.conversationId) &&
-          url.pathname ===
-            `${e2eOrigin ? "/chatgpt" : ""}/c/${b.conversationId}`;
-  } catch {
-    return false;
-  }
-}
-function sameView(a: PhysicalView, b: PhysicalView): boolean {
-  return (
-    a.viewId === b.viewId &&
-    a.viewGeneration === b.viewGeneration &&
-    a.documentGeneration === b.documentGeneration &&
-    a.partition === b.partition
-  );
-}
-function sameOwnedView(a: PhysicalView, b: PhysicalView): boolean {
-  return (
-    a.viewId === b.viewId &&
-    a.viewGeneration === b.viewGeneration &&
-    a.partition === b.partition
-  );
-}
 function wireBinding(s: Session, b: PhysicalBinding): BrowserBinding {
   return {
     lease: copy(s.lease),
@@ -236,10 +142,6 @@ function wireBinding(s: Session, b: PhysicalBinding): BrowserBinding {
     providerState: b.phase === "home" ? "home" : "bound",
   };
 }
-function unknownFact(): BrowserControlFact {
-  return { source: "unknown", value: "", literal: "" };
-}
-
 /** Mechanical physical adapter only. The host assigns routes; Go owns all
  * allocation, intent, journals, results and ACK. This map is bounded transient
  * observation paging and witness correlation, never an executor or result store.
@@ -266,38 +168,7 @@ export class GoChatBrowserDriver implements BrowserDriver {
     this.lookup = deps.lookup;
     this.translations = copy(deps.translations);
     this.now = deps.nowMillis ?? Date.now;
-    const keys = new Set<string>();
-    for (const t of this.translations) {
-      const k = `${t.configSHA256}/${t.translationId}`;
-      if (
-        t.version !== "public-controls-v1" ||
-        !/^[a-f0-9]{64}$/.test(t.configSHA256) ||
-        !validId(t.translationId) ||
-        keys.has(k)
-      )
-        fail("chat_browser_translation_unqualified");
-      keys.add(k);
-      for (const field of controls) {
-        const rows = t[field];
-        if (!Array.isArray(rows) || rows.length > 128)
-          fail("chat_browser_translation_unqualified");
-        const values = new Set<string>(),
-          literals = new Set<string>();
-        for (const row of rows) {
-          if (
-            !row ||
-            !validId(row.value) ||
-            row.value.length > 120 ||
-            !validControlLiteral(row.literal) ||
-            values.has(row.value) ||
-            literals.has(row.literal)
-          )
-            fail("chat_browser_translation_unqualified");
-          values.add(row.value);
-          literals.add(row.literal);
-        }
-      }
-    }
+    qualify(this.translations);
   }
   private time(): number {
     const n = this.now();
@@ -338,75 +209,30 @@ export class GoChatBrowserDriver implements BrowserDriver {
       return false;
     }
   }
+  private view(s: Session, deadline: number): GuardView {
+    return {
+      partition: s.assigned.partition,
+      e2eOrigin: this.e2eOrigin,
+      current: () => this.current(s, deadline),
+      origin: () => s.origin,
+      physical: () => s.physical,
+      cid: () => s.cid,
+      failed: () => s.failed,
+    };
+  }
   private guard(
     s: Session,
     deadline: number,
     transition = false,
   ): PhysicalGuard {
-    return (b) => {
-      if (
-        !this.current(s, deadline) ||
-        !validBinding(b, s.assigned.partition, this.e2eOrigin)
-      )
-        return false;
-      if (!s.origin) return false;
-      if (!sameView(s.origin, b)) return false;
-      if (s.cid) return isDeepStrictEqual(s.physical, b);
-      if (s.origin.phase === "conversation")
-        return isDeepStrictEqual(s.origin, b);
-      return (
-        isDeepStrictEqual(s.origin, b) ||
-        (transition && b.phase === "conversation")
-      );
-    };
+    return sessionGuard(this.view(s, deadline), transition);
   }
   private prepareGuard(
     s: Session,
     deadline: number,
     prior?: PhysicalBinding,
   ): PhysicalGuard {
-    let initial: PhysicalBinding | undefined = prior ? copy(prior) : undefined;
-    let rejected = false;
-    let targetEpoch: number | undefined;
-    return (b) => {
-      if (
-        rejected ||
-        s.failed ||
-        !this.current(s, deadline) ||
-        !validBinding(b, s.assigned.partition, this.e2eOrigin)
-      ) {
-        rejected = true;
-        return false;
-      }
-      if (s.origin) return isDeepStrictEqual(s.origin, b);
-      if (!initial) initial = copy(b);
-      const target =
-        s.target.mode === "new-saved"
-          ? b.phase === "home"
-          : b.phase === "conversation" &&
-            b.conversationId === s.target.conversationId;
-      // One navigation of the existing dedicated view, including its exact
-      // before-navigation binding. A URL change requires a new document epoch.
-      // No other destination/view or regressing document is permitted.
-      const unchanged = isDeepStrictEqual(b, initial);
-      const allowed =
-        sameOwnedView(initial, b) &&
-        b.documentGeneration >= initial.documentGeneration &&
-        (targetEpoch === undefined ||
-          (target && b.documentGeneration === targetEpoch)) &&
-        (unchanged ||
-          (target &&
-            (b.url === initial.url ||
-              b.documentGeneration > initial.documentGeneration)));
-      if (!allowed) rejected = true;
-      if (
-        allowed &&
-        target &&
-        b.documentGeneration !== initial.documentGeneration
-      )
-        targetEpoch = b.documentGeneration;
-      return allowed;
-    };
+    return prepareGuard(this.view(s, deadline), s.target, prior);
   }
   private session(lease: BrowserLease): Session {
     const s = this.sessions.get(key(lease));
@@ -436,118 +262,6 @@ export class GoChatBrowserDriver implements BrowserDriver {
       s.busy = false;
     }
   }
-  private label(
-    t: QualifiedControlTranslation,
-    field: (typeof controls)[number],
-    value: string,
-  ): string | null {
-    return t[field].find((row) => row.value === value)?.literal ?? null;
-  }
-  private selection(
-    input: BrowserPrepare,
-    t: QualifiedControlTranslation,
-  ): PhysicalSelection {
-    const selection = input.target.selection,
-      resolution = input.target.resolution;
-    if (
-      !isDeepStrictEqual(selection, resolution.resolved) ||
-      !input.target.required.model
-    )
-      fail("chat_browser_pinned_scope_mismatch");
-    const modelLabel = this.label(t, "model", selection.modelId);
-    if (!modelLabel) fail("chat_browser_model_translation_missing");
-    for (const field of controls) {
-      const value =
-        field === "model"
-          ? selection.modelId
-          : field === "connector"
-            ? selection.connectorId
-            : selection[field];
-      if (input.target.required[field] && !this.label(t, field, value))
-        fail("chat_browser_required_translation_missing");
-    }
-    const connectorLabel = this.label(t, "connector", selection.connectorId);
-    return {
-      requested: copy(selection),
-      admitted: copy(selection),
-      resolved: {
-        selection: copy(resolution.resolved),
-        configSHA256: resolution.configSHA256,
-        translationId: resolution.translationId,
-      },
-      controls: {
-        modelLabel,
-        effortLabel: this.label(t, "effort", selection.effort),
-        modeLabel: this.label(t, "mode", selection.mode),
-        connector: connectorLabel
-          ? { id: selection.connectorId, label: connectorLabel }
-          : null,
-      },
-      requiredControls: { ...copy(input.target.required), model: true },
-    };
-  }
-  private facts(
-    s: Session,
-    evidence: PhysicalSelectionEvidence,
-    required: BrowserRequiredControls,
-    startedAt: number,
-  ): BrowserSelectionFacts {
-    if (
-      !evidence ||
-      evidence.sourceProfile !== "message-anchors-v1" ||
-      !isDeepStrictEqual(evidence.declared, s.selection) ||
-      !evidence.observed ||
-      !Number.isSafeInteger(evidence.observedAtMillis) ||
-      evidence.observedAtMillis < startedAt ||
-      evidence.observedAtMillis > this.time()
-    )
-      fail("chat_browser_selection_evidence_invalid");
-    const observed = evidence.observed;
-    const result = {
-      model: unknownFact(),
-      effort: unknownFact(),
-      mode: unknownFact(),
-      connector: unknownFact(),
-      observedAtMillis: String(evidence.observedAtMillis),
-    };
-    for (const field of controls) {
-      const f =
-        field === "model"
-          ? observed.modelLabel
-          : field === "effort"
-            ? observed.effortLabel
-            : field === "connector"
-              ? observed.connectorLabel
-              : observed.modeLabel;
-      if (!f) fail("chat_browser_selection_fact_invalid");
-      if (f.state === "unknown") {
-        if (!["not-exposed", "unqualified"].includes(f.code) || required[field])
-          fail("chat_browser_required_control_unknown");
-        continue;
-      }
-      if (
-        f.state !== "observed" ||
-        f.source !== "public-dom" ||
-        typeof f.value !== "string"
-      )
-        fail("chat_browser_selection_fact_invalid");
-      const row = s.translation[field].find((row) => row.literal === f.value);
-      const expected =
-        field === "model"
-          ? s.selection.admitted.modelId
-          : field === "connector"
-            ? s.selection.admitted.connectorId
-            : s.selection.admitted[field];
-      if (!row || row.value !== expected)
-        fail("chat_browser_control_translation_mismatch");
-      result[field] = {
-        source: "public-control",
-        value: row.value,
-        literal: f.value,
-      };
-    }
-    return result;
-  }
   async prepare(input: BrowserPrepare): Promise<BrowserPrepared> {
     shape("BrowserPrepare", input);
     input = copy(input);
@@ -570,7 +284,7 @@ export class GoChatBrowserDriver implements BrowserDriver {
         : !validId(input.target.conversationId)
     )
       fail("chat_browser_target_invalid");
-    const selection = this.selection(input, t);
+    const selection = pin(input.target, t);
     const assigned = this.assignment(input.lease);
     let prior: PhysicalBinding | undefined;
     // The host has already assigned the validated Go Prepare. Retire only our
@@ -721,33 +435,21 @@ export class GoChatBrowserDriver implements BrowserDriver {
         this.evidenceIds.size >= 4096
       )
         fail("chat_browser_witness_mismatch");
-      let account: BrowserAccountObservation | undefined;
-      if (w.account !== undefined) {
-        const parsed = ChatGptAccountObservationSchema.safeParse(w.account);
-        if (!parsed.success || parsed.data.state !== "observed")
-          fail("chat_browser_account_unavailable");
-        const fact = parsed.data,
-          now = this.time();
-        if (
-          fact.documentUrl !== origin.url ||
-          fact.observedAtMillis < startedAt ||
-          fact.observedAtMillis > now ||
-          now - fact.observedAtMillis >= 5000 ||
-          fact.expiresAtMillis <= now
-        )
-          fail("chat_browser_account_unavailable");
-        account = {
-          state: "observed",
-          source: fact.source,
-          principalKey: fact.accountKey,
-          observedAtMillis: String(fact.observedAtMillis),
-          expiresAtMillis: String(fact.expiresAtMillis),
-        };
-      }
+      const observedAccount =
+        w.account !== undefined
+          ? account(w.account, origin.url, startedAt, () => this.time())
+          : undefined;
       const verification: BrowserVerification = {
-        ...(account ? { account } : {}),
+        ...(observedAccount ? { account: observedAccount } : {}),
         binding: copy(input.binding),
-        observed: this.facts(s, w.selection, input.required, startedAt),
+        observed: facts(
+          s.translation,
+          s.selection,
+          w.selection,
+          input.required,
+          startedAt,
+          () => this.time(),
+        ),
         pinned: copy(s.target.selection),
         required: copy(input.required),
         previousUserTurnId: input.previousUserTurnId,
@@ -900,27 +602,21 @@ export class GoChatBrowserDriver implements BrowserDriver {
     binding: PhysicalBinding,
     correlation: { userTurnId: string | null; replyId: string | null },
   ): void {
-    if (
-      !correlation ||
-      (correlation.userTurnId !== null && !validId(correlation.userTurnId)) ||
-      (correlation.replyId !== null && !validId(correlation.replyId)) ||
-      (correlation.userTurnId === null && correlation.replyId !== null)
-    )
-      fail("chat_browser_frame_correlation_unknown", "unknown");
-    if (correlation.userTurnId === null) return;
-    if (
-      binding.phase !== "conversation" ||
-      correlation.userTurnId === s.target.previousUserTurnId ||
-      correlation.replyId === s.target.previousReplyId ||
-      (s.userId && s.userId !== correlation.userTurnId) ||
-      (s.replyId && s.replyId !== correlation.replyId)
-    )
-      fail("chat_browser_frame_correlation_unknown", "unknown");
-    if (correlation.replyId !== null) s.replyId = correlation.replyId;
+    const turn = correlate(
+      binding,
+      correlation,
+      {
+        userTurnId: s.target.previousUserTurnId,
+        replyId: s.target.previousReplyId,
+      },
+      { userId: s.userId, replyId: s.replyId },
+    );
+    if (!turn) return;
+    if (turn.replyId !== null) s.replyId = turn.replyId;
     if (!s.userId) {
-      s.userId = correlation.userTurnId;
+      s.userId = turn.userTurnId;
       const prepared = copy(s.binding!);
-      s.cid = binding.conversationId;
+      s.cid = turn.conversationId;
       s.physical = copy(binding);
       this.append(s, prepared, "accepted", { providerConversationId: s.cid });
       s.binding = wireBinding(s, binding);
@@ -948,37 +644,14 @@ export class GoChatBrowserDriver implements BrowserDriver {
         item.channel === "answer" && s.answerSegments++ > 0
           ? `\n\n${item.text}`
           : item.text;
-      // One immutable provider message is one segment. Split only to obey wire
-      // byte limits; each piece has a stable segment key, never a DOM index.
-      let part = "",
-        partIndex = 0;
-      const flush = (): void => {
-        if (!part) return;
-        const segmentId =
-          Buffer.byteLength(text) <= 65536
-            ? item.id
-            : `${item.id}/part/${partIndex++}`;
-        if (!validId(segmentId))
-          fail("chat_browser_segment_id_limit", "unknown");
+      split(item.id, text, (segment) =>
         this.append(
           s,
           s.binding!,
           item.channel === "answer" ? "answer-delta" : item.channel,
-          { text: part, segmentId },
-        );
-        part = "";
-      };
-      let bytes = 0;
-      for (const character of text) {
-        const width = Buffer.byteLength(character);
-        if (bytes + width > 65536) {
-          flush();
-          bytes = 0;
-        }
-        part += character;
-        bytes += width;
-      }
-      flush();
+          segment,
+        ),
+      );
     }
     if (semantic.completed) {
       s.terminal = true;
@@ -1045,7 +718,14 @@ export class GoChatBrowserDriver implements BrowserDriver {
             !guard(reply.binding)
           )
             fail("chat_browser_observe_binding_unknown", "unknown");
-          this.facts(s, reply.selection, s.target.required, startedAt);
+          facts(
+            s.translation,
+            s.selection,
+            reply.selection,
+            s.target.required,
+            startedAt,
+            () => this.time(),
+          );
           delete s.lastSignal;
           this.accept(s, reply.binding, reply.correlation);
           if (
