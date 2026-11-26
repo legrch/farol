@@ -12,6 +12,7 @@ import {
   legacyVerificationWithdrawalPending,
   taskSourceWithdrawalFloor,
   withLastVerifiedAttachment,
+  withLastVerifiedAttachmentKept,
   withLegacyAppPendingSeparated,
   withLegacyVerificationWithdrawn,
   type SecureMcpAttachment,
@@ -546,5 +547,43 @@ describe("last verified attachment capture", () => {
     expect(next.setup).toBe(before.setup);
     ProductSettingsSchema.parse(next);
     expect(lastVerifiedAttachmentCapturable(next)).toBeNull();
+  });
+});
+
+describe("last verified attachment kept across a clearing write", () => {
+  const cleared = (settings: ProductSettings): ProductSettings => ({
+    ...settings,
+    connectors: {
+      ...settings.connectors,
+      secureMcp: {
+        ...settings.connectors.secureMcp,
+        runtime: null,
+        attachment: null,
+      },
+    },
+  });
+
+  it("keeps a capturable live attachment that the outgoing settings clear", () => {
+    const before = liveAttachmentOnly();
+    const next = withLastVerifiedAttachmentKept(before, cleared(before));
+    expect(next.connectors.secureMcp.lastVerifiedAttachment).toEqual(
+      attachmentRecord(),
+    );
+    expect(next.connectors.secureMcp.attachment).toBeNull();
+    ProductSettingsSchema.parse(next);
+  });
+
+  it("returns the outgoing settings unchanged when nothing qualifies", () => {
+    const saved = liveAttachmentOnly({
+      lastVerifiedAttachment: attachmentRecord({ buildId: "d".repeat(64) }),
+    });
+    const stillLive = liveAttachmentOnly();
+    const notCapturable = liveAttachmentOnly({ runtime: null });
+    for (const [before, after] of [
+      [saved, cleared(saved)],
+      [stillLive, stillLive],
+      [notCapturable, cleared(notCapturable)],
+    ] as const)
+      expect(withLastVerifiedAttachmentKept(before, after)).toBe(after);
   });
 });
